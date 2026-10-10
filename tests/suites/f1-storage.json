@@ -85,6 +85,20 @@
             "required_fields": [
               "sha256"
             ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "tail",
+              "lba": 1048575
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
           }
         ]
       },
@@ -842,10 +856,59 @@
               },
               "lba": {
                 "eq": 1048575
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "issued": {
+                "ge": 1
+              },
+              "next_result": {
+                "encoding": "signed",
+                "eq": -200
+              },
+              "survivor_progress": {
+                "ge": 1
+              },
+              "survivor_alive": {
+                "eq": 1
+              },
+              "deadline_ms": {
+                "eq": 30000
               }
             },
-            "missing": "not_run",
-            "subcase": "blkdebug"
+            "relations": [
+              {
+                "left": "deadline_ms",
+                "op": "ge",
+                "right": "elapsed_ms"
+              }
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "read_fault",
+              "lba": 1048575
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "owner": "ata0",
+              "case": "retained"
+            },
+            "exact_count": 1,
+            "fields": {
+              "claims": {
+                "eq": 3
+              },
+              "generation": {
+                "ge": 1
+              }
+            }
           }
         ]
       },

@@ -265,6 +265,9 @@ def blkdebug_config(case,directory):
     if event=='read_aio' and 'sector' not in fault:raise res.Refusal('read fault requires a postboot fixture sector')
     # A read filter above qcow2 sees guest LBAs (including backing reads).
     # Activate at open, but restrict both sector and I/O type; no metadata offsets.
+    # QEMU 9.2 block/blkdebug.c arms BLKDBG_NONE at open; preadv then checks
+    # the read/sector rule. This filter receives no qcow2 read_aio event.
+    # https://gitlab.com/qemu-project/qemu/-/blob/v9.2.0/block/blkdebug.c
     injected_event='none' if event=='read_aio' else event
     lines=['[inject-error]',f'event = "{injected_event}"',
            f'errno = "{fault["errno"]}"','once = "on"']
@@ -793,10 +796,30 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     return result,directory
 
 
+def record_name(records,identity,field):
+    """Decode the probe's ordered UTF-8 byte chunks, without normalization."""
+    chunks=[r for r in records if r.get('event')=='DATA' and r.get('case')=='name'
+            and r.get('id')==identity and r.get('field')==field]
+    if not chunks:raise EvidenceError('missing file name chunks')
+    data=bytearray()
+    try:
+        for chunk in chunks:
+            payload=bytes.fromhex(chunk['hex'])
+            if int(chunk['offset'])!=len(data) or int(chunk['bytes'])!=len(payload) or not 1<=len(payload)<=40:
+                raise ValueError()
+            data.extend(payload)
+        return data.decode('utf-8')
+    except (KeyError,ValueError,UnicodeError) as error:
+        raise EvidenceError('invalid file name chunks') from error
+
+
 def check_digests(host,overlay,directory,declarations,result):
     """Independently compare guest measurements after verified teardown."""
     for item in declarations:
         matches=[r for r in result['observed'] if all(r.get(k)==str(v) for k,v in item['where'].items())]
+        if item['kind']=='file' and 'drive' in item:
+            path=item['drive']+':'+item['path']
+            matches=[r for r in matches if record_name(result['observed'],r.get('id'),'path')==path]
         if len(matches)!=1:raise EvidenceError('missing or duplicate digest evidence')
         record=matches[0]
         source=item.get('source','overlay')
@@ -815,7 +838,7 @@ def check_digests(host,overlay,directory,declarations,result):
             measured=host.sector_digest(image,directory,lba,count,fmt)
         elif item['kind']=='file':
             path=item['path']
-            if not path.startswith('/') or record.get('name_hex')!=path.encode('utf-8').hex():
+            if not path.startswith('/') or ('drive' not in item and record.get('name_hex')!=path.encode('utf-8').hex()):
                 raise EvidenceError('guest digest file name mismatch')
             if source=='fixture':measured=host.file_digest(image,directory,path)
             else:

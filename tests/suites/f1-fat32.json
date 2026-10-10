@@ -20,9 +20,10 @@
           {
             "where": {
               "event": "DATA",
-              "group": "fat-read"
+              "group": "fat-read",
+              "drive": "D"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
               "fat_type": {
                 "eq": 12
@@ -47,92 +48,64 @@
           {
             "where": {
               "event": "DATA",
-              "case": "valid-lfn"
+              "drive": "D",
+              "case": "list"
             },
             "exact_count": 1,
             "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "orphan-lfn"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "bad-checksum-lfn"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "boundary-chain"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "invalid-name"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
+              "entries": {
                 "ge": 1
-              },
-              "errors": {
+              }
+            },
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "drive": "D",
+              "case": "lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "orphan_observations": {
                 "ge": 0
               },
-              "timing_domain": "icount"
+              "bad_checksum_observations": {
+                "ge": 0
+              },
+              "invalid_observations": {
+                "ge": 0
+              },
+              "handling": "short_fallback"
             }
           },
           {
             "where": {
               "event": "DATA",
-              "case": "fixture",
-              "disk": 1
+              "case": "invalid_name"
+            },
+            "exact_count": 1,
+            "fields": {
+              "invalid": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "unmappable": {
+                "encoding": "signed",
+                "eq": -84
+              },
+              "writes": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "disk": 1,
+              "case": "fixture"
             },
             "exact_count": 1,
             "fields": {
@@ -142,8 +115,8 @@
           {
             "where": {
               "event": "DATA",
-              "case": "mount",
-              "disk": 1
+              "disk": 1,
+              "case": "mount"
             },
             "exact_count": 1,
             "fields": {
@@ -158,6 +131,48 @@
                 "eq": 1
               }
             }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boundary"
+            },
+            "count": 1,
+            "fields": {
+              "eof_bytes": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "id",
+              "offset",
+              "bytes"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "exact_count": 1,
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "gate": "complete",
+              "timing_domain": "icount"
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -177,8 +192,9 @@
           "path": "/Ciuki long fixture.txt",
           "where": {
             "event": "DATA",
-            "name_hex": "2f4369756b69206c6f6e6720666978747572652e747874"
-          }
+            "case": "file"
+          },
+          "drive": "D"
         }
       ]
     },
@@ -194,9 +210,10 @@
           {
             "where": {
               "event": "DATA",
-              "group": "fat-read"
+              "group": "fat-read",
+              "drive": "D"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
               "fat_type": {
                 "eq": 16
@@ -221,92 +238,64 @@
           {
             "where": {
               "event": "DATA",
-              "case": "valid-lfn"
+              "drive": "D",
+              "case": "list"
             },
             "exact_count": 1,
             "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "orphan-lfn"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "bad-checksum-lfn"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "boundary-chain"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "invalid-name"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
+              "entries": {
                 "ge": 1
-              },
-              "errors": {
+              }
+            },
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "drive": "D",
+              "case": "lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "orphan_observations": {
                 "ge": 0
               },
-              "timing_domain": "icount"
+              "bad_checksum_observations": {
+                "ge": 0
+              },
+              "invalid_observations": {
+                "ge": 0
+              },
+              "handling": "short_fallback"
             }
           },
           {
             "where": {
               "event": "DATA",
-              "case": "fixture",
-              "disk": 1
+              "case": "invalid_name"
+            },
+            "exact_count": 1,
+            "fields": {
+              "invalid": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "unmappable": {
+                "encoding": "signed",
+                "eq": -84
+              },
+              "writes": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "disk": 1,
+              "case": "fixture"
             },
             "exact_count": 1,
             "fields": {
@@ -316,8 +305,8 @@
           {
             "where": {
               "event": "DATA",
-              "case": "mount",
-              "disk": 1
+              "disk": 1,
+              "case": "mount"
             },
             "exact_count": 1,
             "fields": {
@@ -332,6 +321,48 @@
                 "eq": 1
               }
             }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boundary"
+            },
+            "count": 1,
+            "fields": {
+              "eof_bytes": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "id",
+              "offset",
+              "bytes"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "exact_count": 1,
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "gate": "complete",
+              "timing_domain": "icount"
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -351,8 +382,9 @@
           "path": "/Ciuki long fixture.txt",
           "where": {
             "event": "DATA",
-            "name_hex": "2f4369756b69206c6f6e6720666978747572652e747874"
-          }
+            "case": "file"
+          },
+          "drive": "D"
         }
       ]
     },
@@ -368,9 +400,10 @@
           {
             "where": {
               "event": "DATA",
-              "group": "fat-read"
+              "group": "fat-read",
+              "drive": "C"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
               "fat_type": {
                 "eq": 32
@@ -395,92 +428,64 @@
           {
             "where": {
               "event": "DATA",
-              "case": "valid-lfn"
+              "drive": "C",
+              "case": "list"
             },
             "exact_count": 1,
             "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "orphan-lfn"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "bad-checksum-lfn"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "boundary-chain"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "invalid-name"
-            },
-            "exact_count": 1,
-            "fields": {
-              "errors": {
-                "eq": 0
-              }
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "group": "metadata"
-            },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
-            "fields": {
-              "generation": {
+              "entries": {
                 "ge": 1
-              },
-              "errors": {
+              }
+            },
+            "required_fields": [
+              "sha256"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "drive": "C",
+              "case": "lfn"
+            },
+            "exact_count": 1,
+            "fields": {
+              "orphan_observations": {
                 "ge": 0
               },
-              "timing_domain": "icount"
+              "bad_checksum_observations": {
+                "ge": 0
+              },
+              "invalid_observations": {
+                "ge": 0
+              },
+              "handling": "short_fallback"
             }
           },
           {
             "where": {
               "event": "DATA",
-              "case": "fixture",
-              "disk": 1
+              "case": "invalid_name"
+            },
+            "exact_count": 1,
+            "fields": {
+              "invalid": {
+                "encoding": "signed",
+                "eq": -22
+              },
+              "unmappable": {
+                "encoding": "signed",
+                "eq": -84
+              },
+              "writes": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "disk": 1,
+              "case": "fixture"
             },
             "exact_count": 1,
             "fields": {
@@ -490,8 +495,8 @@
           {
             "where": {
               "event": "DATA",
-              "case": "mount",
-              "disk": 0
+              "disk": 0,
+              "case": "mount"
             },
             "exact_count": 1,
             "fields": {
@@ -506,6 +511,48 @@
                 "eq": 1
               }
             }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boundary"
+            },
+            "count": 1,
+            "fields": {
+              "eof_bytes": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "id",
+              "offset",
+              "bytes"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "metadata"
+            },
+            "exact_count": 1,
+            "fields": {
+              "generation": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "gate": "complete",
+              "timing_domain": "icount"
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -525,8 +572,9 @@
           "path": "/Ciuki long fixture.txt",
           "where": {
             "event": "DATA",
-            "name_hex": "2f4369756b69206c6f6e6720666978747572652e747874"
-          }
+            "case": "file"
+          },
+          "drive": "D"
         }
       ]
     },
@@ -542,23 +590,21 @@
           {
             "where": {
               "event": "DATA",
-              "group": "cache"
+              "case": "writeback"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "order_errors": {
-                "eq": 0
+              "dirty_age_ms": {
+                "ge": 5000
               },
-              "writeback_ms": {
-                "le": 5000
+              "writes": {
+                "eq": 1
               },
-              "eviction_errors": {
-                "eq": 0
+              "persisted": {
+                "eq": 1
               },
-              "coherence_errors": {
-                "eq": 0
-              },
-              "barrier_errors": {
+              "result": {
+                "encoding": "signed",
                 "eq": 0
               }
             }
@@ -566,26 +612,73 @@
           {
             "where": {
               "event": "DATA",
+              "case": "eviction"
+            },
+            "exact_count": 1,
+            "fields": {
+              "issued": {
+                "ge": 2
+              },
+              "barriers": {
+                "ge": 1
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "coherence"
+            },
+            "exact_count": 1,
+            "fields": {
+              "shared_position": {
+                "eq": 4
+              },
+              "independent_bytes": {
+                "eq": 4
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "trace"
+            },
+            "count": 1,
+            "required_fields": [
+              "id",
+              "barrier",
+              "action"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       }
@@ -602,21 +695,17 @@
           {
             "where": {
               "event": "DATA",
-              "group": "cache"
+              "case": "unsupported_flush"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "error_observable": {
-                "eq": 1
+              "mode": "ro",
+              "upgrade": {
+                "encoding": "signed",
+                "eq": -30
               },
-              "clean_marked": {
-                "eq": 0
-              },
-              "successful_unmount": {
-                "eq": 0
-              },
-              "read_only": {
-                "eq": 1
+              "reasons": {
+                "mask": 2
               }
             }
           },
@@ -625,24 +714,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       }
@@ -659,18 +745,73 @@
           {
             "where": {
               "event": "DATA",
-              "group": "cache"
+              "layer": "block_driver",
+              "fault": "write",
+              "case": "error"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "error_observable": {
+              "delayed": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "flush": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "unmount": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "mounted": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fault": "write",
+              "case": "ata_error"
+            },
+            "exact_count": 1,
+            "fields": {
+              "delayed": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "flush": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "unmount": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "mounted": {
                 "eq": 1
               },
-              "clean_marked": {
+              "quarantined": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ata_quarantine"
+            },
+            "exact_count": 2,
+            "fields": {
+              "further_commands": {
                 "eq": 0
               },
-              "successful_unmount": {
+              "real_commands": {
                 "eq": 0
+              },
+              "next": {
+                "encoding": "signed",
+                "eq": -200
               }
             }
           },
@@ -679,31 +820,23 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
-      },
-      "fault": {
-        "layer": "host-block-backend",
-        "event": "write_aio",
-        "errno": 5
       }
     },
     {
@@ -718,18 +851,73 @@
           {
             "where": {
               "event": "DATA",
-              "group": "cache"
+              "layer": "block_driver",
+              "fault": "flush",
+              "case": "error"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "error_observable": {
+              "delayed": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "flush": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "unmount": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "mounted": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "fault": "flush",
+              "case": "ata_error"
+            },
+            "exact_count": 1,
+            "fields": {
+              "delayed": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "flush": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "unmount": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "mounted": {
                 "eq": 1
               },
-              "clean_marked": {
+              "quarantined": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ata_quarantine"
+            },
+            "exact_count": 2,
+            "fields": {
+              "further_commands": {
                 "eq": 0
               },
-              "successful_unmount": {
+              "real_commands": {
                 "eq": 0
+              },
+              "next": {
+                "encoding": "signed",
+                "eq": -200
               }
             }
           },
@@ -738,31 +926,23 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
-      },
-      "fault": {
-        "layer": "host-block-backend",
-        "event": "flush_to_disk",
-        "errno": 5
       }
     },
     {
@@ -777,21 +957,199 @@
           {
             "where": {
               "event": "DATA",
-              "group": "fat-write"
+              "case": "workload",
+              "workload": "zero_patch_v1"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "operation_errors": {
+              "workload": "zero_patch_v1",
+              "seed": {
+                "eq": 12689417
+              },
+              "root": "F109"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation"
+            },
+            "exact_count": 9,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "required_fields": [
+              "file",
+              "op"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "directory"
+            },
+            "exact_count": 1,
+            "fields": {
+              "entries": {
+                "ge": 1
+              },
+              "aliases": "distinct",
+              "next": {
+                "ge": 2,
+                "ne": "$first"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "workload",
+              "checker": "host_required"
+            },
+            "exact_count": 1,
+            "fields": {
+              "flush_result": {
+                "encoding": "signed",
                 "eq": 0
               },
-              "directory_grown": {
-                "eq": 1
-              },
-              "alias_errors": {
+              "checker": "host_required"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 0,
+              "op": "create_read"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
                 "eq": 0
-              },
-              "durable_unmount": {
-                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 0,
+              "op": "overwrite_read"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 0,
+              "op": "truncate_rename_delete"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 1,
+              "op": "create_read"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 1,
+              "op": "overwrite_read"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 1,
+              "op": "truncate_rename_delete"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 2,
+              "op": "create_read"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 2,
+              "op": "overwrite_read"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "operation",
+              "file": 2,
+              "op": "truncate_rename_delete"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
               }
             }
           },
@@ -800,24 +1158,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -830,9 +1185,10 @@
         "listing_contains": [
           "EMPTY",
           "CLUSTER",
-          "LARGE",
+          "FOURM",
           "4194304"
-        ]
+        ],
+        "listing_path": "::/F109"
       },
       "fixtures": [
         {
@@ -867,41 +1223,49 @@
               {
                 "where": {
                   "event": "DATA",
-                  "group": "fat-write"
+                  "case": "cold_reboot"
                 },
-                "combine": true,
+                "exact_count": 1,
                 "fields": {
-                  "cold_reopen": {
-                    "eq": 1
-                  },
-                  "hash_errors": {
+                  "flush_result": {
+                    "encoding": "signed",
                     "eq": 0
-                  }
+                  },
+                  "checker": "host_required"
                 }
+              },
+              {
+                "where": {
+                  "event": "DATA",
+                  "case": "file"
+                },
+                "exact_count": 3,
+                "required_fields": [
+                  "id",
+                  "size",
+                  "sha256"
+                ]
               },
               {
                 "where": {
                   "event": "DATA",
                   "group": "metadata"
                 },
-                "combine": true,
-                "required_fields": [
-                  "subcase",
-                  "owner",
-                  "generation",
-                  "errors",
-                  "gate",
-                  "timing_domain"
-                ],
+                "exact_count": 1,
                 "fields": {
                   "generation": {
                     "ge": 1
                   },
                   "errors": {
-                    "ge": 0
+                    "eq": 0
                   },
+                  "gate": "complete",
                   "timing_domain": "icount"
-                }
+                },
+                "required_fields": [
+                  "subcase",
+                  "owner"
+                ]
               }
             ]
           }
@@ -911,35 +1275,38 @@
         {
           "kind": "file",
           "source": "overlay",
-          "path": "/SYSTEM/TESTS/EMPTY",
+          "path": "/F109/EMPTY.BIN",
           "offset": 1048576,
           "size": 535822336,
           "where": {
             "event": "DATA",
-            "name_hex": "2f53595354454d2f54455354532f454d505459"
-          }
+            "case": "file"
+          },
+          "drive": "C"
         },
         {
           "kind": "file",
           "source": "overlay",
-          "path": "/SYSTEM/TESTS/CLUSTER",
+          "path": "/F109/CLUSTER.BIN",
           "offset": 1048576,
           "size": 535822336,
           "where": {
             "event": "DATA",
-            "name_hex": "2f53595354454d2f54455354532f434c5553544552"
-          }
+            "case": "file"
+          },
+          "drive": "C"
         },
         {
           "kind": "file",
           "source": "overlay",
-          "path": "/SYSTEM/TESTS/LARGE",
+          "path": "/F109/FOURM.BIN",
           "offset": 1048576,
           "size": 535822336,
           "where": {
             "event": "DATA",
-            "name_hex": "2f53595354454d2f54455354532f4c41524745"
-          }
+            "case": "file"
+          },
+          "drive": "C"
         }
       ]
     },
@@ -955,19 +1322,35 @@
           {
             "where": {
               "event": "DATA",
-              "group": "mount-crash"
+              "drive": "D",
+              "case": "mount"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "write_refusals": {
-                "ge": 1
+              "error": {
+                "encoding": "signed",
+                "eq": -22
               },
-              "unexpected_writes": {
+              "writes": {
                 "eq": 0
               },
-              "scan_bounded": {
-                "eq": 1
+              "write_refusal": {
+                "encoding": "signed",
+                "eq": -22
               }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "coverage"
+            },
+            "exact_count": 1,
+            "fields": {
+              "fixtures": {
+                "ge": 1
+              },
+              "checker": "host_required"
             }
           },
           {
@@ -975,24 +1358,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -1015,19 +1395,35 @@
           {
             "where": {
               "event": "DATA",
-              "group": "mount-crash"
+              "drive": "D",
+              "case": "mount"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "write_refusals": {
-                "ge": 1
-              },
-              "unexpected_writes": {
+              "mode": "ro",
+              "writes": {
                 "eq": 0
               },
-              "scan_bounded": {
-                "eq": 1
+              "reasons": {
+                "mask": 4
+              },
+              "write_refusal": {
+                "encoding": "signed",
+                "eq": -30
               }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "coverage"
+            },
+            "exact_count": 1,
+            "fields": {
+              "fixtures": {
+                "ge": 1
+              },
+              "checker": "host_required"
             }
           },
           {
@@ -1035,24 +1431,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -1075,19 +1468,35 @@
           {
             "where": {
               "event": "DATA",
-              "group": "mount-crash"
+              "drive": "D",
+              "case": "mount"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "write_refusals": {
-                "ge": 1
-              },
-              "unexpected_writes": {
+              "mode": "ro",
+              "writes": {
                 "eq": 0
               },
-              "scan_bounded": {
-                "eq": 1
+              "reasons": {
+                "mask": 8
+              },
+              "write_refusal": {
+                "encoding": "signed",
+                "eq": -30
               }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "coverage"
+            },
+            "exact_count": 1,
+            "fields": {
+              "fixtures": {
+                "ge": 1
+              },
+              "checker": "host_required"
             }
           },
           {
@@ -1095,24 +1504,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -1135,19 +1541,35 @@
           {
             "where": {
               "event": "DATA",
-              "group": "mount-crash"
+              "drive": "D",
+              "case": "mount"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "write_refusals": {
-                "ge": 1
-              },
-              "unexpected_writes": {
+              "mode": "ro",
+              "writes": {
                 "eq": 0
               },
-              "scan_bounded": {
-                "eq": 1
+              "reasons": {
+                "mask": 16
+              },
+              "write_refusal": {
+                "encoding": "signed",
+                "eq": -30
               }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "coverage"
+            },
+            "exact_count": 1,
+            "fields": {
+              "fixtures": {
+                "ge": 1
+              },
+              "checker": "host_required"
             }
           },
           {
@@ -1155,24 +1577,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -1195,19 +1614,35 @@
           {
             "where": {
               "event": "DATA",
-              "group": "mount-crash"
+              "drive": "D",
+              "case": "mount"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "write_refusals": {
-                "ge": 1
-              },
-              "unexpected_writes": {
+              "mode": "ro",
+              "writes": {
                 "eq": 0
               },
-              "scan_bounded": {
-                "eq": 1
+              "reasons": {
+                "mask": 32
+              },
+              "write_refusal": {
+                "encoding": "signed",
+                "eq": -30
               }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "coverage"
+            },
+            "exact_count": 1,
+            "fields": {
+              "fixtures": {
+                "ge": 1
+              },
+              "checker": "host_required"
             }
           },
           {
@@ -1215,24 +1650,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -1255,19 +1687,35 @@
           {
             "where": {
               "event": "DATA",
-              "group": "mount-crash"
+              "drive": "D",
+              "case": "mount"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "write_refusals": {
-                "ge": 1
-              },
-              "unexpected_writes": {
+              "mode": "ro",
+              "writes": {
                 "eq": 0
               },
-              "scan_bounded": {
-                "eq": 1
+              "reasons": {
+                "mask": 16
+              },
+              "write_refusal": {
+                "encoding": "signed",
+                "eq": -30
               }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "coverage"
+            },
+            "exact_count": 1,
+            "fields": {
+              "fixtures": {
+                "ge": 1
+              },
+              "checker": "host_required"
             }
           },
           {
@@ -1275,24 +1723,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -1315,17 +1760,30 @@
           {
             "where": {
               "event": "DATA",
-              "group": "mount-crash"
+              "case": "crash_reboot"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
-              "cross_links": {
+              "scan_corrupt": {
                 "eq": 0
               },
-              "scan_bounded": {
+              "writes": {
+                "eq": 0
+              },
+              "checker": "host_required"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "coverage"
+            },
+            "exact_count": 1,
+            "fields": {
+              "cut_selected": {
                 "eq": 1
               },
-              "discrepancies_classified": {
+              "cut_reboot": {
                 "eq": 1
               }
             }
@@ -1335,24 +1793,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -1363,7 +1818,7 @@
               "type": "cut",
               "after": {
                 "event": "ARM",
-                "cut": "directory-publication"
+                "action": "crash_cut"
               },
               "mode": "guest-termination"
             }
@@ -1374,7 +1829,7 @@
               {
                 "where": {
                   "event": "ARM",
-                  "cut": "directory-publication"
+                  "action": "crash_cut"
                 },
                 "exact_count": 1
               }
@@ -1417,53 +1872,87 @@
           {
             "where": {
               "event": "DATA",
-              "group": "bootlog"
+              "group": "bootlog",
+              "case": "before"
             },
-            "combine": true,
+            "exact_count": 1,
             "fields": {
               "prequalification_writes": {
                 "eq": 0
               },
-              "first_write_after_gate": {
-                "eq": 1
-              },
-              "log_bytes": {
-                "le": 131072
-              },
-              "reopen_errors": {
+              "storage_calls": {
                 "eq": 0
               },
-              "durable_flush": {
-                "eq": 1
-              },
-              "panic_storage_calls": {
-                "eq": 0
+              "limit": {
+                "eq": 131072
               }
             }
           },
           {
             "where": {
               "event": "DATA",
+              "case": "capture"
+            },
+            "exact_count": 1,
+            "fields": {
+              "source": "klog",
+              "connected": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "qualification"
+            },
+            "exact_count": 1,
+            "fields": {
+              "size": {
+                "ge": 1,
+                "le": 131072
+              },
+              "flush_result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "relations": [
+              {
+                "left": "first_log_write_seq",
+                "op": "ge",
+                "right": "qualified_seq",
+                "add": 1
+              }
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "cold_reboot"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },
@@ -1477,6 +1966,92 @@
           "where": {
             "event": "DATA",
             "name_hex": "2f53595354454d2f4c4f47532f424f4f542e4c4f47"
+          }
+        }
+      ],
+      "boots": [
+        {
+          "boot_kind": "cold"
+        },
+        {
+          "boot_kind": "cold",
+          "expected": {
+            "terminal": "END",
+            "predicates": [
+              {
+                "where": {
+                  "event": "DATA",
+                  "group": "bootlog",
+                  "case": "before"
+                },
+                "exact_count": 1,
+                "fields": {
+                  "prequalification_writes": {
+                    "eq": 0
+                  },
+                  "storage_calls": {
+                    "eq": 0
+                  },
+                  "limit": {
+                    "eq": 131072
+                  }
+                }
+              },
+              {
+                "where": {
+                  "event": "DATA",
+                  "case": "cold_reboot"
+                },
+                "exact_count": 1,
+                "fields": {
+                  "writes": {
+                    "eq": 0
+                  },
+                  "result": {
+                    "encoding": "signed",
+                    "eq": 0
+                  }
+                }
+              },
+              {
+                "where": {
+                  "event": "DATA",
+                  "case": "qualification"
+                },
+                "exact_count": 1,
+                "fields": {
+                  "size": {
+                    "ge": 1,
+                    "le": 131072
+                  },
+                  "flush_result": {
+                    "encoding": "signed",
+                    "eq": 0
+                  }
+                }
+              },
+              {
+                "where": {
+                  "event": "DATA",
+                  "group": "metadata"
+                },
+                "exact_count": 1,
+                "fields": {
+                  "generation": {
+                    "ge": 1
+                  },
+                  "errors": {
+                    "eq": 0
+                  },
+                  "gate": "complete",
+                  "timing_domain": "icount"
+                },
+                "required_fields": [
+                  "subcase",
+                  "owner"
+                ]
+              }
+            ]
           }
         }
       ]
@@ -1493,12 +2068,39 @@
           {
             "where": {
               "event": "DATA",
-              "group": "bootlog"
+              "group": "bootlog",
+              "case": "before"
             },
-            "combine": true,
+            "exact_count": 1,
+            "fields": {
+              "prequalification_writes": {
+                "eq": 0
+              },
+              "storage_calls": {
+                "eq": 0
+              },
+              "limit": {
+                "eq": 131072
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "bootlog",
+              "case": "readonly"
+            },
+            "exact_count": 1,
             "fields": {
               "write_count": {
                 "eq": 0
+              },
+              "storage_calls": {
+                "eq": 0
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": -30
               },
               "disk_log": "unavailable"
             }
@@ -1508,24 +2110,21 @@
               "event": "DATA",
               "group": "metadata"
             },
-            "combine": true,
-            "required_fields": [
-              "subcase",
-              "owner",
-              "generation",
-              "errors",
-              "gate",
-              "timing_domain"
-            ],
+            "exact_count": 1,
             "fields": {
               "generation": {
                 "ge": 1
               },
               "errors": {
-                "ge": 0
+                "eq": 0
               },
+              "gate": "complete",
               "timing_domain": "icount"
-            }
+            },
+            "required_fields": [
+              "subcase",
+              "owner"
+            ]
           }
         ]
       },

@@ -283,6 +283,27 @@ class RunnerTests(unittest.TestCase):
         self.case['disk_cache']='unsafe'
         with self.assertRaisesRegex(res.Refusal,'cache'):self.run_fake()
 
+    def test_blkdebug_read_builder_uses_guest_sectors_and_read_filter(self):
+        case=runner.load(ROOT/'tests/suites/f1-storage.json')['cases'][-1]
+        config=runner.blkdebug_config(case,self.root).read_text()
+        self.assertIn('event = "none"',config)
+        self.assertIn('iotype = "read"',config)
+        self.assertIn('sector = "1048575"',config)
+        self.assertIn('errno = "5"',config)
+        self.assertIn('once = "on"',config)
+        args,_=runner.qemu_args('fixture',self.profile,case,'12345678',self.root/'run.qcow2',self.firmware)
+        drive=args[args.index('-drive')+1]
+        graph=json.loads(drive.split(',format=',1)[0][10:].replace(',,',','))
+        self.assertEqual(graph['driver'],'raw')
+        self.assertEqual(graph['file']['driver'],'blkdebug')
+        self.assertEqual(graph['file']['image']['driver'],'qcow2')
+        self.assertIn('rerror=report',drive)
+        for fault in ({'layer':'guest','event':'read_aio','sector':1,'errno':5},
+                      {'layer':'host-block-backend','event':'read_aio','errno':5},
+                      {'layer':'host-block-backend','event':'read_aio','sector':-1,'errno':5}):
+            with self.subTest(fault=fault),self.assertRaises(res.Refusal):
+                runner.blkdebug_config({**case,'fault':fault},self.root)
+
     def test_overlay_boot_cfg_patch_manifest_round_trip(self):
         patch_decl=[{'file':'SYSTEM/BOOT.CFG','offset':0,'before_hex':b'safe=0'.hex(),'after_hex':b'safe=1'.hex()}]
         self.case['patches']=patch_decl;contents=bytearray(b'safe=0 serial=1\n')
@@ -382,6 +403,38 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result['outcome'],'fail');self.assertIn('guest digest mismatch',result['reason'])
         self.assertEqual(result['fixtures']['manifest'][0]['sha256'],fixture['sha256'])
         self.assertEqual(result['fixtures']['manifest'][0]['ide_index'],1)
+
+    def test_chunked_utf8_names_join_real_file_digest_records(self):
+        self.case['fixtures']=[{'generator':'mkfs.fat','fat_type':16,'seed':1}]
+        self.case['expected']={'terminal':'END','predicates':[
+            {'where':{'event':'DATA','case':'file'},'exact_count':1,'required_fields':['size','sha256']}]}
+        path='/Ciuki '+('long '*9)+'caf\u00e9.txt'
+        name=('D:'+path).encode()
+        frames=[{'event':'DATA','case':'name','id':'7','field':'path','offset':str(i),
+                 'bytes':str(len(name[i:i+40])),'hex':name[i:i+40].hex()} for i in range(0,len(name),40)]
+        records=[{'event':'BEGIN'},*frames,{'event':'DATA','case':'file','id':'7','tick':'10000',
+                 'size':'8','sha256':'a'*64},{'event':'END','status':'PASS'}]
+        self.case['digests']=[{'kind':'file','source':'fixture','fixture':0,'drive':'D','path':path,
+                              'where':{'event':'DATA','case':'file'}}]
+        image=self.root/'fixture.img';image.write_bytes(b'fixture')
+        fixture={'path':str(image),'sha256':runner.sha(image)}
+        with patch.object(FakeHost,'fat_fixture',return_value=fixture), \
+             patch.object(FakeHost,'file_digest',return_value={'size':8,'sha256':'a'*64}) as measured:
+            result,_=self.run_fake(records)
+            self.assertEqual(result['outcome'],'pass',result['reason'])
+            self.assertEqual(measured.call_args.args[-1],path)
+            for field,value in [('offset','1'),('bytes','1'),('hex','ff')]:
+                broken=copy.deepcopy(records);broken[1][field]=value
+                result,_=self.run_fake(broken)
+                with self.subTest(field=field):
+                    self.assertEqual(result['outcome'],'fail')
+                    self.assertIn('invalid file name chunks',result['reason'])
+            broken=copy.deepcopy(records);broken[-2]['size']='9'
+            result,_=self.run_fake(broken)
+            self.assertEqual(result['outcome'],'fail');self.assertIn('guest digest mismatch',result['reason'])
+            for broken in (records[:1]+records[2:],records[:2]+[records[1]]+records[2:]):
+                result,_=self.run_fake(broken)
+                self.assertEqual(result['outcome'],'fail');self.assertIn('name chunks',result['reason'])
 
     def test_sector_digests_require_stopped_guest_and_exact_measurement(self):
         self.case['digests']=[{'kind':'sector','lba':0,'where':{'event':'DATA','lba':'0'}}]
@@ -878,7 +931,7 @@ class F1RecordTests(unittest.TestCase):
     """Fabricated successful records in the production probes' actual formats."""
     def records(self, probe, bodies, terminal='END', status='PASS'):
         parser=Parser('12345678',probe)
-        records=['event=BEGIN',*['event=DATA '+b for b in bodies]]
+        records=['event=BEGIN',*[b if b.startswith('event=') else 'event=DATA '+b for b in bodies]]
         records.append('event='+terminal+' status='+status)
         for seq,record in enumerate(records,1):
             parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe={probe} {record}'.encode())
@@ -935,13 +988,99 @@ class F1RecordTests(unittest.TestCase):
                               f'fixture={name} result={error} expected={error} walk_count={2 if not error else 0} reads=3 outside=0 accepted={int(not error)} matched=1'])
         return {'registry':registry,'input-fault':faults,'input-qemu-t23':inputs['native'],
                 'input-qemu-e500':inputs['firmware'],'framebuffer':framebuffer,
-                'ata':ata,'ata-fault':ata_fault,'partition':partition}
+                'ata':ata+['event=ARM action=read_fault lba=1048575','case=tail lba=1048575 result=0'],
+                'ata-fault':ata_fault,'partition':partition,
+                **self.fat_fixtures(),
+                'ata-fault-blkdebug':ata+[
+                    'event=ARM action=read_fault lba=1048575',
+                    'group=ata-fault-blkdebug lba=1048575 result=-5 issued=1 status=41 error=04 elapsed_ms=0 deadline_ms=30000',
+                    'group=ata-fault-blkdebug next_result=-200 subsequent_commands=0 quarantine_retained=1 bios_calls=0',
+                    'case=retained owner=ata0 generation=1 claims=3',
+                    'group=ata-fault-blkdebug survivor_ticks=150 survivor_progress=300 survivor_alive=1 eio=1 deadline_met=1']}
+
+    def fat_fixtures(self):
+        # Formats captured from production probes through test_storage.c.
+        meta='group=metadata subcase=complete owner=vfs generation=1 errors=0 gate=complete timing_domain=icount'
+        result={}
+        for bits in (12,16,32):
+            drive='C' if bits==32 else 'D'
+            result[f'fat{bits}-read']=[
+                f'group=fat-read drive={drive} fat_type={bits} name_errors=0 alias_errors=0 size_errors=0 write_count=0 chain_bounded=1',
+                f'case=list drive={drive} entries=5 sha256='+'a'*64,
+                f'case=lfn drive={drive} orphan_observations=0 bad_checksum_observations=0 invalid_observations=0 handling=short_fallback',
+                'case=invalid_name invalid=-22 unmappable=-84 writes=0',
+                'case=fixture disk=1 status=present',
+                f'case=mount drive={drive} disk={0 if bits==32 else 1} type={bits} mode=ro reasons=1 writes=0 read_gate=1',
+                'case=entry id=1 drive=D size=4480 attr=32 lfn_slots=2',
+                'case=file id=1 size=4480 sha256='+'b'*64,
+                'case=name id=1 field=path offset=0 bytes=24 hex='+b'D:/Ciuki long fixture.txt'.hex(),
+                'case=name id=1 field=alias offset=0 bytes=12 hex='+b'CIUKIL~1.TXT'.hex(),
+                'case=boundary id=1 offset=511 bytes=2 eof_bytes=0 error=0',meta]
+        cache=['case=writeback dirty_age_ms=5001 writes=1 persisted=1 result=0',
+               'case=eviction blocks=2 issued=2 barriers=2 result=0',
+               'case=coherence shared_position=4 independent_bytes=4 result=0',
+               'case=unsupported_flush mode=ro upgrade=-30 reasons=3',
+               'case=trace id=1 barrier=1 action=write lba=3',
+               'case=trace id=2 barrier=1 action=persist lba=3',
+               'case=trace id=3 barrier=1 action=flush',meta]
+        for fault in ('write','flush'):
+            cache.extend([f'case=error layer=block_driver fault={fault} delayed=-5 flush=-5 unmount=-5 mounted=1',
+                          f'case=ata_error fault={fault} delayed=-5 flush=-5 unmount=-5 mounted=1 quarantined=1',
+                          'case=ata_quarantine owner=synthetic_ata generation=0 further_commands=0 real_commands=0 next=-200'])
+        for name in ('cache','cache-unsupported-flush','cache-delayed-error','cache-flush-error'):result[name]=cache
+        files=[f'case=file id={i} size={size} sha256='+'c'*64 for i,size in enumerate((0,512,4194304))]
+        write=['case=workload workload=zero_patch_v1 seed=12689417 root=F109',
+               'case=directory entries=15 first=107 next=109 aliases=distinct',
+               'case=workload flush_result=0 checker=host_required',
+               'event=ARM action=cold_reboot overlay=reuse marker=F109/DONE.BIN',*files,meta]
+        for i,size in enumerate((0,512,4194304)):
+            for op in ('create_read','overwrite_read','truncate_rename_delete'):
+                write.append(f'case=operation file={i} op={op} bytes={size} result=0')
+        result['fat-write']=write
+        result['fat-write-cold']=['case=cold_reboot flush_result=0 checker=host_required',*files,meta]
+        for name,error,reason in [('bad-bpb',-22,0),('dirty',0,5),('error-flag',0,9),
+                                  ('fat-divergence',0,17),('chain-corruption',0,33),('torn-sector',0,17)]:
+            result['mount-'+name]=[
+                'case=partition disk=1 error=0',
+                f'case=mount drive=D error={error} reasons={reason} mode={"rw" if error else "ro"} lost=0 write_refusal={error or -30} writes=0',
+                'case=coverage fixtures=1 cut_selected=0 cut_reboot=0 checker=host_required',meta]
+        result['mount-crash-reboot']=['case=crash_reboot reasons=5 lost=0 scan_corrupt=0 checker=host_required writes=0',
+                                      'case=coverage fixtures=0 cut_selected=1 cut_reboot=1 checker=host_required',meta]
+        result['mount-crash-cut']=['event=ARM action=crash_cut marker=F109CUT.ARM workload=replace_rename bytes=8192']
+        before='group=bootlog case=before prequalification_writes=0 storage_calls=0 queued=106 limit=131072'
+        log='case=file id=0 name_hex=2f53595354454d2f4c4f47532f424f4f542e4c4f47 size=106 sha256='+'d'*64
+        result['bootlog']=[before,'case=capture source=klog connected=1 captured=200',log,
+                           'case=qualification qualified_seq=2 first_log_write_seq=3 size=106 writes=1 flush_result=0',
+                           'event=ARM action=cold_reboot overlay=reuse marker=F109LOG.OK',meta]
+        result['bootlog-cold']=[before,log,'case=cold_reboot writes=0 result=0',
+                                'case=qualification qualified_seq=0 first_log_write_seq=0 size=106 writes=0 flush_result=0',meta]
+        result['bootlog-read-only']=[before,
+            'group=bootlog case=readonly disk_log=unavailable result=-30 write_count=0 storage_calls=0',meta]
+        return result
+
+    def test_fat_cold_boot_and_crash_cut_predicates(self):
+        fixtures=self.fat_fixtures()
+        for case in runner.load(ROOT/'tests/suites/f1-fat32.json')['cases']:
+            for index,boot in enumerate(case.get('boots',[])):
+                key=('mount-crash-cut' if index==0 else 'mount-crash-reboot') if case['id']=='mount-crash-reboot' else case['id']+('-cold' if index else '')
+                expected=boot.get('expected',case['expected'])
+                parser=self.records(case['probe'],fixtures[key])
+                if expected['terminal']=='ARM':parser.records.pop();parser.terminal=None
+                with self.subTest(case=case['id'],boot=index):
+                    self.assertTrue(parser.check(expected))
+                    for predicate in expected.get('predicates',[]):
+                        for field in predicate.get('fields',{}):
+                            broken=copy.copy(parser);broken.records=copy.deepcopy(parser.records)
+                            record=next(r for r in broken.records if all(r.get(k)==str(v) for k,v in predicate['where'].items()))
+                            record[field]='invalid'
+                            with self.subTest(field=field),self.assertRaises(EvidenceError):broken.check(expected)
 
     def test_actual_f1_records_and_each_predicate_violation(self):
         fixtures=self.fixtures()
-        for name in ('f1-input','f1-storage'):
+        for name in ('f1-input','f1-storage','f1-fat32'):
             for case in runner.load(ROOT/'tests/suites'/f'{name}.json')['cases']:
-                if case['id'] not in fixtures:continue
+                if name=='f1-input' and case['id'] not in fixtures:continue
+                self.assertIn(case['id'],fixtures)
                 bodies=fixtures[case['id']]
                 with self.subTest(case=case['id']):
                     self.assertTrue(self.records(case['probe'],bodies).check(case['expected']))
@@ -993,8 +1132,8 @@ class F1RecordTests(unittest.TestCase):
             self.assertEqual(parser.not_run_subcases,case['expected']['not_run_subcases'])
         case=runner.load(ROOT/'tests/suites/f1-storage.json')['cases'][-1]
         parser=self.records('ata',self.fixtures()['ata'])
-        with self.assertRaisesRegex(EvidenceError,'not_run'):parser.check(case['expected'])
-        self.assertEqual(parser.not_run_subcases,[{'subcase':'blkdebug','reason':'missing_required_record'}])
+        with self.assertRaisesRegex(EvidenceError,'missing evidence'):parser.check(case['expected'])
+        self.assertEqual(parser.not_run_subcases,[])
         # Installed-table ERROR is the actual format for every missing FAT/bootlog probe.
         for case in runner.load(ROOT/'tests/suites/f1-fat32.json')['cases']:
             parser=Parser('12345678',case['probe'])

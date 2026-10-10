@@ -7,6 +7,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/ata.h>
 #include <ciuki/blkpart.h>
+#include <ciuki/registry.h>
 #include <ciuki/sha256.h>
 
 static int verdict(const char *name, bool ok, const char *reason)
@@ -24,6 +25,57 @@ static struct ata_device *disk(void)
                 return d;
         }
     return 0;
+}
+
+static struct task *survivor_create(uint32_t *data_phys);
+
+/* The final sector is outside the loader's prerequisites. The runner's
+ * sector-filtered blkdebug view faults this read, after the ARM record. */
+static bool read_fault(struct ata_device *d, uint8_t data[512])
+{
+    uint64_t lba = d->block.capacity - 1;
+    rec_emit("ata", "ARM", "action=read_fault lba=%llu", lba);
+    uint64_t before = ata_command_count();
+    int result = d->block.read(&d->block, lba, 1, data);
+    if (!result) {
+        rec_emit("ata", "DATA", "case=tail lba=%llu result=0", lba);
+        return true;
+    }
+    uint64_t issued = ata_command_count() - before, elapsed = d->elapsed_ms;
+    uint8_t status = d->status, error = d->error;
+    before = ata_command_count();
+    int next = d->block.read(&d->block, lba, 1, data);
+    uint64_t further = ata_command_count() - before;
+    rec_emit("ata", "DATA", "group=ata-fault-blkdebug lba=%llu result=%d issued=%llu status=%02x error=%02x elapsed_ms=%llu deadline_ms=%u",
+             lba, result, issued, status, error, elapsed, ATA_COMMAND_MS);
+    uint32_t phys = 0, progress = 0, ticks = 0;
+    struct task *survivor = survivor_create(&phys);
+    bool alive = false;
+    if (survivor) {
+        volatile uint32_t *words = P2V(phys);
+        task_sleep_ms(10);
+        uint32_t count = words[0]; uint64_t start = deadline_after_ms(0);
+        task_sleep_ms(150);
+        ticks = (uint32_t)(deadline_after_ms(0) - start); progress = words[0] - count;
+        alive = task_alive(survivor) && !words[1] && words[2] == 0x5eed5eed;
+        task_kill(survivor, -1); task_reap(survivor);
+    }
+    bool retained = d->block.quarantined && d->channel->stopped;
+    unsigned claims = 0;
+    for (unsigned i = 0; i < ARRAY_SIZE(d->channel->claims); i++) {
+        int claim = d->channel->claims[i];
+        const struct resource *r = claim < 0 ? 0 : registry_get((unsigned)claim);
+        if (r && r->state == RS_QUARANTINED && r->generation == d->channel->generations[i]) claims++;
+    }
+    retained = retained && claims == ARRAY_SIZE(d->channel->claims);
+    rec_emit("ata", "DATA", "group=ata-fault-blkdebug next_result=%d subsequent_commands=%llu quarantine_retained=%u bios_calls=0",
+             next, further, retained);
+    rec_emit("ata", "DATA", "case=retained owner=ata%u generation=%u claims=%u",
+             d->channel->irq - 14, d->generation, claims);
+    rec_emit("ata", "DATA", "group=ata-fault-blkdebug survivor_ticks=%u survivor_progress=%u survivor_alive=%u eio=%u deadline_met=%u",
+             ticks, progress, alive, result == -FS_EIO, elapsed <= ATA_COMMAND_MS);
+    return result == -FS_EIO && issued && next == -FS_EQUARANTINED && !further && retained &&
+           elapsed <= ATA_COMMAND_MS && ticks >= 100 && progress && alive;
 }
 
 int probe_ata(void)
@@ -60,6 +112,7 @@ int probe_ata(void)
     rec_emit("ata", "DATA", "range_result=%d zero_result=%d overflow_result=%d boundary_commands=%llu",
              range, zero, overflow, after - before);
     ok = ok && range == -FS_EINVAL && zero == -FS_EINVAL && overflow == -FS_EINVAL && after == before;
+    if (ok) ok = read_fault(d, data);
     /* Capacity is measured here; the runner compares it with its image,
      * rather than making physical hardware pretend to be the QEMU image. */
     return verdict("ata", ok, "ata_read_or_bounds");
