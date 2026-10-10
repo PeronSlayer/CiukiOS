@@ -1298,11 +1298,11 @@ class F2EvidenceTests(unittest.TestCase):
                 probes.append(case['probe']);self.assertEqual(case['timeout'],deadlines[case['probe']])
                 profile=runner.load(ROOT/'tests/profiles'/f"{case['profile']}.json")
                 args,text=runner.qemu_args('fake',profile,case,'12345678',ROOT/'build/run.qcow2',ROOT/'build/bios.bin')
-                self.assertEqual(selector(text,'fw_cfg',True)['phase'],2)
+                self.assertEqual(runner.selector(text,'fw_cfg',True)['phase'],2)
                 self.assertIn('shift=1,sleep=on',args)
                 runner.Actions(case.get('actions',[]))
             for probe in {c['probe'] for c in suite['cases']}:
-                self.assertEqual({c['profile'] for c in suite['cases'] if c['probe']==probe},{'qemu-t23','qemu-e500','qemu-min128'})
+                self.assertEqual({c['profile'] for c in suite['cases'] if c['probe']==probe},({'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-1998','qemu-desktop-2002'} if probe=='crash-isolation' else {'qemu-t23','qemu-e500','qemu-min128'}))
         self.assertEqual(set(probes),set(F2_PROBES))
         suite=runner.load_suite('f2-all');cases=suite['cases']
         first=next(i for i,c in enumerate(cases) if c['selector'].startswith('f2:'))

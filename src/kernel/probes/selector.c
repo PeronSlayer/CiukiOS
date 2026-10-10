@@ -5,9 +5,11 @@
 #include "selector.h"
 
 static bool is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+#define SELECT_SERVER_STANDIN (1u << 30)
+#define SELECT_SERVER_DESKTOP (1u << 31)
 
 
-/* f[012]:<probe-id> run=<8-hex> [platform=e500] [safe=1]; aliases only F0/F1. */
+/* F2 crash-isolation additionally accepts [server=desktop|standin] last. */
 bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, struct probe_selection *selection)
 {
     if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1' && s[1] != '2') || s[2] != ':')
@@ -65,10 +67,29 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         parsed.flags |= CBI_F_SAFE_MODE;
         i += 7;
     }
+    if (len - i == 15 && parsed.phase == 2 && !strncmp(parsed.probe, "crash-isolation", sizeof(parsed.probe))) {
+        if (!(boot_flags & CBI_F_SMBIOS_QEMU)) return false;
+        if (!strncmp(s + i, " server=desktop", 15)) parsed.flags |= SELECT_SERVER_DESKTOP;
+        else if (!strncmp(s + i, " server=standin", 15)) parsed.flags |= SELECT_SERVER_STANDIN;
+        else return false;
+        i += 15;
+    }
     if (i != len)
         return false;
     *selection = parsed;
     return true;
+}
+
+/* Probe-only policy; no new boot-info bits or public ABI. Safe/text always
+ * retain the fallback. An explicit desktop with a missing payload fails at
+ * launch, whereas automatic selection uses payload availability. */
+int probes_crash_server(const char *s, unsigned len, uint32_t flags,
+                        bool lfb, bool payload)
+{
+    struct probe_selection selection;
+    if (!probes_parse_selector(s, len, flags, &selection)) return -EINVAL;
+    if ((flags & CBI_F_SAFE_MODE) || !lfb || (selection.flags & SELECT_SERVER_STANDIN)) return 0;
+    return !!((selection.flags & SELECT_SERVER_DESKTOP) || payload);
 }
 
 void probes_dispatch(const struct probe_selection *selection,

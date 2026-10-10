@@ -19,7 +19,7 @@ import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from evidence import Parser as RecordParser, EvidenceError, EvidenceNotRun, f2_metadata
-from loader_model import selector, F1_PROBES
+from loader_model import selector as base_selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
 
@@ -185,6 +185,18 @@ class Parser(RecordParser):
                        for op, bound in rule.items()):
                     raise EvidenceError('application report predicate failed: ' + field)
         return True
+
+
+def selector(request, source='menu', validated_fw_cfg=False):
+    """Runner extension without altering the frozen F0/F1 loader model."""
+    server = re.search(r' server=(desktop|standin)$',request) if isinstance(request,str) else None
+    if not server:return base_selector(request,source,validated_fw_cfg)
+    if source != 'fw_cfg' or not validated_fw_cfg:raise ValueError('server requires validated QEMU fw_cfg')
+    if not request.isascii() or len(request)>64:raise ValueError('selector must be at most 64 ASCII bytes')
+    selected = base_selector(request[:server.start()],source,validated_fw_cfg)
+    if selected['phase'] != 2 or selected['probe'] != 'crash-isolation':
+        raise ValueError('server selection requires f2:crash-isolation')
+    return {**selected,'server':server[1]}
 
 
 def load_suite(name):
@@ -490,6 +502,95 @@ class Actions:
         return None
 
 
+def desktop_stimulus():
+    """QMP's ordered key/relative/button unions, paced for both F1 backends."""
+    key = lambda down: {'type':'key','data':{'down':down,'key':{'type':'qcode','data':'a'}}}
+    button = lambda down: {'type':'btn','data':{'down':down,'button':'left'}}
+    return [{'type':'input','after':{'event':'ARM','action':'post_fault_input'},'batches':[
+        {'events':[key(True)],'pause_ms':50},
+        {'events':[key(False)],'pause_ms':50},
+        {'events':[{'type':'rel','data':{'axis':'x','value':-160}},
+                   {'type':'rel','data':{'axis':'y','value':120}}],'pause_ms':50},
+        {'events':[button(True)],'pause_ms':50},
+        {'events':[button(False)],'pause_ms':50}]}]
+
+
+def read_ppm(path):
+    """Read QMP's binary P6 output without treating pixel whitespace as header."""
+    data = Path(path).read_bytes()
+    tokens = []; offset = 0
+    while len(tokens) < 4:
+        while offset < len(data) and data[offset] in b' \t\r\n':offset += 1
+        if offset < len(data) and data[offset] == ord('#'):
+            end = data.find(b'\n',offset)
+            if end < 0:raise EvidenceError('unterminated PPM comment')
+            offset = end+1;continue
+        end = offset
+        while end < len(data) and data[end] not in b' \t\r\n':end += 1
+        if end == offset:raise EvidenceError('short PPM header')
+        tokens.append(data[offset:end]);offset = end
+    if tokens[0] != b'P6' or tokens[3] != b'255':raise EvidenceError('expected 8-bit P6 screendump')
+    try:width,height = map(int,tokens[1:3])
+    except ValueError as error:raise EvidenceError('invalid PPM dimensions') from error
+    if not 256 <= width <= 2048 or not 300 <= height <= 2048:raise EvidenceError('PPM geometry outside desktop bounds')
+    if offset >= len(data) or data[offset] not in b' \t\r\n':raise EvidenceError('missing PPM separator')
+    offset += 2 if data[offset:offset+2] == b'\r\n' else 1
+    pixels = data[offset:]
+    if len(pixels) != width*height*3:raise EvidenceError('PPM pixel length mismatch')
+    return width,height,pixels
+
+
+def observe_desktop_screen(before, after, root=ROOT):
+    """Independent pixels from the pinned portrait converter used by T0.
+
+    The upper-right 64x96 portrait region avoids the demo at (20,52) and
+    the initial centre cursor even at 640x480. Clock changes cannot establish
+    interaction: require changes within the old cursor's 8x16 footprint.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('screen_portrait',root/'apps/desktop/convert_portrait.py')
+    converter = importlib.util.module_from_spec(spec);spec.loader.exec_module(converter)
+    portrait = converter.convert(root/'assets/brand/ciuki-logo.png')
+    bw,bh,bp = read_ppm(before);width,height,pixels = read_ppm(after)
+    if (bw,bh) != (width,height):raise EvidenceError('desktop screen geometry changed')
+    x0 = (width-256)//2; y0 = max(32,32+(height-32-256-36)//2)
+    for y in range(96):
+        for x in range(192,256):
+            source = portrait[(y*256+x)*4:(y*256+x)*4+3][::-1]
+            off = ((y0+y)*width+x0+x)*3
+            if bp[off:off+3] != source or pixels[off:off+3] != source:
+                raise EvidenceError('approved Ciuki portrait region mismatch')
+    changed = sum(bp[(y*width+x)*3:(y*width+x)*3+3] != pixels[(y*width+x)*3:(y*width+x)*3+3]
+                  for y in range(height//2,height//2+16) for x in range(width//2,width//2+8))
+    if changed < 16:raise EvidenceError('post-fault cursor footprint did not change')
+    return {'before_ppm_sha256':sha(before),'ppm_sha256':sha(after),'width':width,'height':height,
+            'portrait_array_sha256':converter.ARRAY_SHA256,'portrait_region':[x0+192,y0,64,96],
+            'portrait_pixels_checked':6144,'cursor_changed_pixels':changed}
+
+
+def desktop_interaction(records):
+    """Cross-record checks bind the guest interaction to its stimulus ARM."""
+    def one(event, **fields):
+        rows=[r for r in records if r.get('event')==event and r.get('server')=='desktop'
+              and all(r.get(k)==v for k,v in fields.items())]
+        if len(rows)!=1:raise EvidenceError('missing/duplicate desktop interaction record')
+        return rows[0]
+    arm=one('ARM',action='post_fault_input')
+    before=one('DATA',case='interaction',stage='before')
+    after=one('DATA',case='interaction',stage='after')
+    try:
+        for key in ('presents','input_events','pixel_digest'):
+            if before[key]!=arm[key]:raise EvidenceError('desktop interaction baseline differs from ARM')
+        for key in ('presents','input_events'):
+            if int(after[key])<=int(before[key]):raise EvidenceError('desktop interaction counter did not increase')
+        if after['pixel_digest']==before['pixel_digest']:raise EvidenceError('desktop interaction digest did not change')
+        if int(after['keys'])<2 or int(after['motion'])<1 or int(after['buttons'])<2:
+            raise EvidenceError('desktop did not consume every input kind')
+    except (KeyError,ValueError) as error:raise EvidenceError('invalid desktop interaction fields') from error
+    return {'before':{k:before[k] for k in ('presents','input_events','pixel_digest')},
+            'after':{k:after[k] for k in ('presents','input_events','pixel_digest','keys','motion','buttons')}}
+
+
 class Host:
     """Production boundary; host tests substitute only this boundary."""
     def preflight(self,root): return res.preflight(root)
@@ -642,6 +743,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     platform=profile.get('platform') or requested['platform']
     if platform:request+=' platform='+platform
     if requested['safe']:request+=' safe=1'
+    if requested.get('server'):request+=' server='+requested['server']
     cache=case.get('disk_cache','writeback')
     if cache not in ('writeback','writethrough','none','directsync'):raise res.Refusal('unsafe/unknown disk cache mode forbidden')
     disk={'driver':'qcow2','file':{'driver':'file','filename':str(overlay)}}
@@ -763,6 +865,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     launched=None
     process=qmp=cgroup=None;parser=Parser(run_id,case['probe']);fd=None;dirfd=None;logs=[]
     pending=b'';panic_start=None;armed_stats=None;terminal_time=None
+    screen_before = directory/'desktop-before.ppm'
+    screen_after = directory/'desktop-after.ppm'
+    screen_armed_at = screen_interaction_at = None
     restart_performed=False;expected_resets=0
     try:
         if shared_overlay is None:
@@ -850,7 +955,21 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 result['timeout']['occurred']=True;raise EvidenceError('host monotonic deadline exceeded')
             if parser.terminal and parser.terminal.get('status')=='not_run':
                 result['outcome']='not_run';raise EvidenceError('missing phase probe: not_run')
-            cut=actions.step(parser,qmp,now)
+            if case.get('desktop_screen') and qmp:
+                arms = [r for r in parser.records if r.get('event')=='ARM' and r.get('action')=='post_fault_input']
+                if len(arms)>1:raise EvidenceError('duplicate desktop interaction ARM')
+                if arms and screen_armed_at is None:screen_armed_at=now
+                if arms and 'desktop_screen' not in result and not screen_before.exists() and now-screen_armed_at>=.1:
+                    qmp.command('screendump',{'filename':str(screen_before)})
+                interactions=[r for r in parser.records if r.get('case')=='interaction' and r.get('stage')=='after']
+                if interactions and screen_interaction_at is None:screen_interaction_at=now
+                if interactions and actions.complete and 'desktop_screen' not in result and now-screen_interaction_at>=.1:
+                    if not screen_before.exists():raise EvidenceError('desktop lacks pre-input screendump')
+                    qmp.command('screendump',{'filename':str(screen_after)})
+                    result['desktop_interaction']=desktop_interaction(parser.records)
+                    result['desktop_screen']=observe_desktop_screen(screen_before,screen_after)
+                    screen_before.unlink();screen_after.unlink()
+            cut=None if case.get('desktop_screen') and screen_armed_at is not None and not screen_before.exists() and 'desktop_screen' not in result else actions.step(parser,qmp,now)
             if cut:
                 parser.check(case['expected']);result['cut_point']=actions.observed[-1]
                 host.kill_scope(unit,'SIGKILL')
@@ -862,6 +981,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 if not actions.complete:raise EvidenceError('terminal evidence before declared stimuli completed')
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
+                if case.get('desktop_screen') and 'desktop_screen' not in result:
+                    raise EvidenceError('desktop lacks live post-input screendump')
                 if terminal_time is None:terminal_time=now
                 if parser.terminal['event']=='PANIC':
                     arms=[r for r in parser.records if r['event']=='ARM']

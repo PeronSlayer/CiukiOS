@@ -104,6 +104,16 @@ int supervisor_spawn_gate(bool supplement, struct process **out)
                              "/system/tests/lua-5.4.8-tests", false, out);
 }
 
+/* Probe entry reuses the normal payload/grants/group preparation. Tracking
+ * here makes unexpected desktop death visible through the production ledger. */
+int supervisor_spawn_desktop_probe(struct process **out)
+{
+    const char *argv[] = { "desktop", "--test=crash-isolation", "--gate", 0 };
+    int result = supervisor_spawn("/bin/desktop", argv, 0, true, out);
+    if (result > 0) desktop_pid = (*out)->pid;
+    return result;
+}
+
 void supervisor_bootstrap(void)
 {
     if (bootstrap_attempted || (g_boot.flags & CBI_F_TEST_REQUEST)) return;

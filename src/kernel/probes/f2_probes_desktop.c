@@ -56,14 +56,6 @@ static void desktop_word(struct process *p, unsigned offset, uint32_t value)
 {
     if (p && p->state == PROC_LIVE) ua_write(p->memory, DESKTOP_RESULT + offset, &value, sizeof(value));
 }
-static void desktop_remove(struct process *parent, struct process *p)
-{
-    if (!p) return;
-    if (p->state != PROC_ZOMBIE) proc_stop(p, 0, 0);
-    uint64_t deadline = g_ticks + 1000;
-    while (p->state != PROC_ZOMBIE && g_ticks < deadline) { proc_collect(); task_sleep_ms(1); }
-    if (p->state == PROC_ZOMBIE) proc_reap(parent, p);
-}
 static void desktop_activity_record(struct process *server, int32_t grant, const char *stage)
 {
     struct desktop_activity a;
@@ -89,12 +81,221 @@ static bool desktop_pause(struct process *survivor)
     }
     return false;
 }
+
+#endif
+
+static void desktop_remove(struct process *parent, struct process *p)
+{
+    if (!p) return;
+    uint32_t pid=p->pid;
+    if (p->state != PROC_ZOMBIE) proc_stop(p, 0, 0);
+    uint64_t deadline = g_ticks + 1000;
+    while ((p=proc_find(pid)) && p->state != PROC_ZOMBIE && g_ticks < deadline) { proc_collect(); task_sleep_ms(1); }
+    if (p && p->state == PROC_ZOMBIE) proc_reap(parent, p);
+}
 static bool desktop_ledgers_equal(const struct desktop_ledger *a, const struct desktop_ledger *b)
 {
     return a->descriptions == b->descriptions && a->surfaces == b->surfaces &&
         a->pages == b->pages && a->channels == b->channels && a->messages == b->messages && a->grants == b->grants;
 }
-#endif
+
+/* Native summaries enter through the existing call-3 hook below. Only the
+ * controller-selected desktop and its registered children can update state.
+ * The desktop explicitly publishes a dedicated anonymous control page. */
+#include "../../../apps/desktop/gate.h"
+extern int supervisor_spawn_desktop_probe(struct process **out);
+extern int probes_crash_server(const char *, unsigned, uint32_t, bool, bool);
+static bool report_unsigned(const char *, const char *, uint32_t *);
+static struct {
+    bool active, invalid;
+    uint32_t server, survivor, victim, control, generation, cycles, replies;
+    uint32_t survivor_stage, survivor_turns, survivor_snapshot, victim_stage, unauthorized, keys, motion, buttons;
+} native_reports;
+
+static void native_report(struct process *p, const char *line, unsigned length)
+{
+    if (!native_reports.active || !p) return;
+    bool server = p->pid == native_reports.server;
+    bool survivor = p->pid == native_reports.survivor;
+    bool victim = p->pid == native_reports.victim;
+    if (!server && !survivor && !victim) return;
+    if (!length || length > CIUKI_PROBE_REPORT_MAX) { native_reports.invalid = true; return; }
+    if (server && !strncmp(line, "case=native-desktop ", 20)) {
+        uint32_t control, generation, child, fault, cycle, replies, keys, motion, buttons;
+        bool valid = report_unsigned(line,"control",&control) && report_unsigned(line,"generation",&generation) &&
+            report_unsigned(line,"survivor",&child) && report_unsigned(line,"victim",&fault) &&
+            report_unsigned(line,"cycle",&cycle) && report_unsigned(line,"replies",&replies) &&
+            report_unsigned(line,"keys",&keys) && report_unsigned(line,"motion",&motion) && report_unsigned(line,"buttons",&buttons);
+        struct process *c = valid ? proc_find(child) : 0, *v = valid && fault ? proc_find(fault) : 0;
+        valid = valid && c && c->ppid == p->pid && c->pgid != p->pgid &&
+            (!fault || (v && v->ppid == p->pid && v->pgid != p->pgid && fault != child)) &&
+            !(control & (CIUKI_PAGE_SIZE-1)) && control >= CIUKI_MMAP_BASE &&
+            ua_range(p->memory, control, CIUKI_PAGE_SIZE, PROT_READ|PROT_WRITE) &&
+            (!native_reports.control || control == native_reports.control) &&
+            (!native_reports.survivor || child == native_reports.survivor) &&
+            generation >= native_reports.generation && cycle >= native_reports.cycles &&
+            cycle <= 100 && replies >= native_reports.replies && keys>=native_reports.keys && motion>=native_reports.motion && buttons>=native_reports.buttons;
+        if (!valid) { native_reports.invalid = true; return; }
+        native_reports.control=control; native_reports.generation=generation;
+        native_reports.survivor=child; native_reports.victim=fault;
+        native_reports.cycles=cycle; native_reports.replies=replies;
+        native_reports.keys=keys; native_reports.motion=motion; native_reports.buttons=buttons;
+    } else if (!server && !strncmp(line,"case=native-demo ",17)) {
+        uint32_t stage, turns, unauthorized, generation;
+        bool valid = report_unsigned(line,"stage",&stage) && report_unsigned(line,"turns",&turns) &&
+            report_unsigned(line,"unauthorized",&unauthorized) && report_unsigned(line,"generation",&generation) && !unauthorized &&
+            (survivor ? stage==2 && turns>=native_reports.survivor_turns : stage==1 || stage==3);
+        if (!valid) { native_reports.invalid=true; return; }
+        if (survivor) { native_reports.survivor_stage=stage; native_reports.survivor_turns=turns; native_reports.survivor_snapshot=generation; }
+        else native_reports.victim_stage=stage;
+        native_reports.unauthorized |= unauthorized;
+    } else native_reports.invalid=true;
+}
+static bool native_live(struct process *p)
+{
+    return p && p->state==PROC_LIVE && p->memory && !native_reports.invalid;
+}
+static bool native_command(struct process *server, unsigned command, uint32_t *generation)
+{
+    if (!native_live(server) || !native_reports.control) return false;
+    struct gate_control control={.command=command,.generation=++*generation};
+    if (ua_write(server->memory,native_reports.control,&control,sizeof(control))) return false;
+    uint64_t deadline=g_ticks+3000;
+    while (native_live(server) && (native_reports.generation<*generation || (command==GATE_SNAPSHOT && native_reports.survivor_snapshot<*generation)) && g_ticks<deadline) task_sleep_ms(1);
+    return native_live(server) && native_reports.generation==*generation && (command!=GATE_SNAPSHOT || native_reports.survivor_snapshot==*generation);
+}
+static uint32_t native_digest(void)
+{
+    const struct fb_device *d=fbdev_get();
+    return d->present && d->mapped ? fnv1a32(d->mapped,d->size,2166136261u) : 0;
+}
+static bool native_payload_present(void)
+{
+    const struct ciuki_file_ops *ops=proc_get_file_ops();
+    struct ciuki_file file={0};
+    if (!ops || !ops->open || ops->open(proc_supervisor()->cwd,"/bin/desktop",&file)) return false;
+    if (file.close) file.close(file.cookie);
+    return true;
+}
+static bool native_proc_equal(const struct proc_ledger *a,const struct proc_ledger *b)
+{
+    return a->processes==b->processes && a->threads==b->threads && a->zombies==b->zombies &&
+        a->handles==b->handles && a->extents==b->extents && a->backing==b->backing && a->tables==b->tables;
+}
+static int native_crash_isolation(void)
+{
+    const char *name="crash-isolation";
+    struct desktop_ledger initial,final;
+    struct proc_ledger before,after;
+    desktop_snapshot(&initial); proc_snapshot(&before);
+    struct process *owner=0,*server=0,*survivor=0;
+    uint32_t deaths=supervisor_desktop_deaths(), generation=0, cycles=0;
+    bool pass=!proc_prepare(proc_supervisor(),&owner);
+    if (!pass) goto finished;
+    proc_publish(owner,0);
+    memset(&native_reports,0,sizeof(native_reports));
+    int made=supervisor_spawn_desktop_probe(&server);
+    if (made<0) { rec_emit(name,"ERROR","server=desktop reason=desktop_launch error=%d",made); pass=false; goto cleanup; }
+    server->ppid=owner->pid;
+    native_reports.active=true; native_reports.server=server->pid;
+    rec_emit(name,"DATA","case=payload server=desktop path=/bin/desktop clients=/bin/demo");
+    uint32_t server_pid=server->pid,server_cr3=server->memory->as.pd_phys,server_pgid=server->pgid;
+    uint64_t deadline=g_ticks+10000;
+    while (native_live(server) && !native_reports.survivor_stage && g_ticks<deadline) task_sleep_ms(1);
+    survivor=proc_find(native_reports.survivor);
+    pass=native_live(server) && native_live(survivor) && native_reports.survivor_stage==2 &&
+        native_command(server,GATE_SNAPSHOT,&generation);
+    if (!pass) goto cleanup;
+    uint32_t survivor_pid=survivor->pid,survivor_cr3=survivor->memory->as.pd_phys,survivor_pgid=survivor->pgid;
+    pass=server_cr3!=survivor_cr3 && server_pgid!=survivor_pgid;
+    rec_emit(name,"DATA","case=identity server=desktop server_pid=%u survivor_pid=%u server_pgid=%u survivor_pgid=%u",
+        server_pid,survivor_pid,server_pgid,survivor_pgid);
+    rec_emit(name,"DATA","case=spaces server=desktop server_cr3=%08x survivor_cr3=%08x",server_cr3,survivor_cr3);
+    for (;pass && cycles<100;cycles++) {
+        struct desktop_ledger baseline,restored;
+        struct proc_ledger baseline_proc,restored_proc;
+        desktop_snapshot(&baseline); proc_snapshot(&baseline_proc);
+        native_reports.victim_stage=0;
+        pass=native_command(server,GATE_SPAWN,&generation);
+        struct process *victim=proc_find(native_reports.victim);
+        pass=pass && native_live(victim);
+        if (!pass) break;
+        uint32_t victim_pid=victim->pid,victim_cr3=victim->memory->as.pd_phys,victim_pgid=victim->pgid;
+        pass=victim_cr3!=server_cr3 && victim_cr3!=survivor_cr3 && victim_pgid!=server_pgid && victim_pgid!=survivor_pgid;
+        deadline=g_ticks+3000;
+        while (pass && native_live(victim) && native_reports.victim_stage!=1 && g_ticks<deadline) task_sleep_ms(1);
+        pass=pass && native_reports.victim_stage==1 && native_command(server,GATE_RELEASE,&generation);
+        deadline=g_ticks+3000;
+        while (pass && victim->state!=PROC_ZOMBIE && g_ticks<deadline) { proc_collect(); task_sleep_ms(1); }
+        int status=victim->state==PROC_ZOMBIE ? victim->status : -1;
+        unsigned expected=cycles%5==1 ? SIGPIPE : SIGSEGV;
+        pass=pass && native_reports.victim_stage==3 && status==(int)expected;
+        rec_emit(name,"DATA","case=victim server=desktop cycle=%u pid=%u cr3=%08x pgid=%u kind=%s expected=%u status=%d",
+            cycles+1,victim_pid,victim_cr3,victim_pgid,gate_faults[cycles%5],expected,status);
+        if (!pass || !native_command(server,GATE_REAP,&generation)) { pass=false; break; }
+        uint32_t start_server=native_reports.replies,start_client=native_reports.survivor_turns;
+        native_reports.survivor_stage=0;
+        uint64_t start_tick=g_ticks;
+        pass=native_command(server,GATE_RUN,&generation);
+        deadline=start_tick+3000;
+        while (pass && native_live(server) && native_live(survivor) && g_ticks<deadline &&
+               (native_reports.survivor_stage!=2 || native_reports.survivor_turns-start_client<100 || g_ticks-start_tick<100)) task_sleep_ms(1);
+        pass=pass && native_command(server,GATE_SNAPSHOT,&generation);
+        desktop_snapshot(&restored); proc_snapshot(&restored_proc);
+        pass=pass && native_live(server) && native_live(survivor) &&
+            server->pid==server_pid && survivor->pid==survivor_pid &&
+            server->memory->as.pd_phys==server_cr3 && survivor->memory->as.pd_phys==survivor_cr3 &&
+            server->pgid==server_pgid && survivor->pgid==survivor_pgid &&
+            native_reports.replies-start_server>=100 && native_reports.survivor_turns-start_client>=100 &&
+            native_reports.survivor_stage==2 && g_ticks-start_tick>=100 &&
+            !native_reports.unauthorized && desktop_ledgers_equal(&baseline,&restored) && native_proc_equal(&baseline_proc,&restored_proc) &&
+            supervisor_desktop_deaths()==deaths;
+        rec_emit(name,"DATA","case=progress server=desktop cycle=%u server_replies=%u replies=%u ticks=%llu unauthorized_access=%u desktop_restarts=%u",
+            cycles+1,native_reports.replies-start_server,native_reports.survivor_turns-start_client,g_ticks-start_tick,
+            native_reports.unauthorized,supervisor_desktop_deaths()-deaths);
+        rec_emit(name,"DATA","case=restored server=desktop cycle=%u equal=%u processes_equal=%u",cycles+1,desktop_ledgers_equal(&baseline,&restored),native_proc_equal(&baseline_proc,&restored_proc));
+    }
+    rec_emit(name,"DATA","case=cycles server=desktop cycles=%u desktop_restarts=%u",cycles,supervisor_desktop_deaths()-deaths);
+    if (pass) {
+        pass=native_command(server,GATE_INTERACT,&generation);
+        /* Let the desktop restore pixels after the command's report. */
+        task_sleep_ms(20);
+        struct desktop_activity a,b;
+        desktop_activity_snapshot(&a); uint32_t digest=native_digest();
+        rec_emit(name,"ARM","server=desktop action=post_fault_input presents=%llu input_events=%llu pixel_digest=%08x",a.presents,a.input_events,digest);
+        uint64_t start=g_ticks; deadline=start+15000;
+        do { task_sleep_ms(10); desktop_activity_snapshot(&b); }
+        while (native_live(server) && g_ticks<deadline && (native_reports.keys<2 || native_reports.motion<1 || native_reports.buttons<2 || b.presents<=a.presents || g_ticks-start<500));
+        uint32_t next_digest=native_digest();
+        pass=pass && native_live(server) && native_live(survivor) && b.input_events>a.input_events && b.presents>a.presents &&
+            next_digest!=digest && native_reports.keys>=2 && native_reports.motion>=1 && native_reports.buttons>=2 && server->pid==server_pid && survivor->pid==survivor_pid && supervisor_desktop_deaths()==deaths;
+        rec_emit(name,"DATA","case=interaction server=desktop stage=before presents=%llu input_events=%llu pixel_digest=%08x",a.presents,a.input_events,digest);
+        rec_emit(name,"DATA","case=interaction server=desktop stage=after presents=%llu input_events=%llu pixel_digest=%08x changed=%u keys=%u motion=%u buttons=%u",b.presents,b.input_events,next_digest,pass,native_reports.keys,native_reports.motion,native_reports.buttons);
+        /* Runner observes the frame while its owning desktop is still live.
+         * Capture failure/deadline cannot be turned into guest qualification. */
+        task_sleep_ms(3000);
+    }
+cleanup:
+    native_reports.active=false;
+    if (server) {
+        /* Test children belong to the production desktop. Collect them before
+         * the desktop, retaining no private result mappings after teardown. */
+        for (unsigned i=0;i<2;i++) {
+            struct process *child=proc_find(i ? native_reports.victim : native_reports.survivor);
+            if (child) desktop_remove(server,child);
+        }
+        desktop_remove(owner,server);
+    }
+    if (owner) { proc_stop(owner,0,0); proc_collect(); }
+finished:
+    desktop_snapshot(&final); proc_snapshot(&after);
+    bool objects=desktop_ledgers_equal(&initial,&final), processes=native_proc_equal(&before,&after);
+    pass=pass && objects && processes;
+    rec_emit(name,"DATA","case=ledger server=desktop objects_equal=%u processes_equal=%u descriptions=%u surfaces=%u pages=%u channels=%u messages=%u grants=%u",
+        objects,processes,final.descriptions,final.surfaces,final.pages,final.channels,final.messages,final.grants);
+    rec_emit(name,"END",pass ? "server=desktop status=PASS" : "server=desktop status=FAIL reason=desktop_contract");
+    return pass ? 0 : 1;
+}
 
 int supervisor_spawn_standin(struct process *parent, struct process **out)
 {
@@ -122,15 +323,20 @@ int supervisor_spawn_standin(struct process *parent, struct process **out)
 int probe_f2_crash_isolation(void)
 {
     const char *name = "crash-isolation";
-    rec_emit(name, "BEGIN", 0);
+    const struct fb_device *display=fbdev_get();
+    bool payload=display->present && !(g_boot.flags & CBI_F_SAFE_MODE) && native_payload_present();
+    int selected=probes_crash_server(g_boot.test_request,g_boot.test_request_len,g_boot.flags,display->present,payload);
+    rec_emit(name, "BEGIN", "server=%s",selected>0 ? "desktop" : "standin");
+    if (selected<0) { rec_emit(name,"END","status=FAIL reason=selector"); return 1; }
+    if (selected) return native_crash_isolation();
 #ifndef CIUKI_DESKTOP_PAYLOAD_BIN
-    rec_emit(name, "ERROR", "status=not_run reason=missing_standin_payload");
-    rec_emit(name, "END", "status=FAIL reason=not_run");
+    rec_emit(name, "ERROR", "server=standin status=not_run reason=missing_standin_payload");
+    rec_emit(name, "END", "server=standin status=FAIL reason=not_run");
     return 1;
 #else
     if (!ua_map_shared) {
-        rec_emit(name, "ERROR", "status=not_run reason=missing_shared_mapping_hooks");
-        rec_emit(name, "END", "status=FAIL reason=not_run");
+        rec_emit(name, "ERROR", "server=standin status=not_run reason=missing_shared_mapping_hooks");
+        rec_emit(name, "END", "server=standin status=FAIL reason=not_run");
         return 1;
     }
     uint8_t hash[32]; char hex[65];
@@ -189,7 +395,7 @@ int probe_f2_crash_isolation(void)
         desktop_close(parent, ends[1]);
         if (made < 0) { pass = false; desktop_close(server, server_fd); break; }
         uint32_t victim_pid = victim->pid, victim_cr3 = victim->memory->as.pd_phys;
-        pass = victim_cr3 != server_cr3 && victim_cr3 != survivor_cr3 && victim->pgid != server->pgid;
+        pass = victim_cr3 != server_cr3 && victim_cr3 != survivor_cr3 && victim->pgid != server->pgid && victim->pgid != survivor->pgid && server->pgid != survivor->pgid && server_cr3 != survivor_cr3;
         bool armed = false;
         struct desktop_result vr = { 0 };
         desktop_word(survivor, offsetof(struct desktop_result, ack), 0);
@@ -227,8 +433,9 @@ int probe_f2_crash_isolation(void)
             !sr.errors && !cr.errors && !cr.unauthorized && desktop_ledgers_equal(&baseline, &restored);
         rec_emit(name, "DATA", "case=victim server=standin cycle=%u pid=%u cr3=%08x mode=%u expected=%u status=%d",
                  cycles + 1, victim_pid, victim_cr3, mode, expected, status);
-        rec_emit(name, "DATA", "case=progress cycle=%u server_replies=%u replies=%u ticks=%llu unauthorized_access=%u desktop_restarts=0",
+        rec_emit(name, "DATA", "case=progress server=standin cycle=%u server_replies=%u replies=%u ticks=%llu unauthorized_access=%u desktop_restarts=0",
                  cycles + 1, sr.turns - start_server, cr.turns - start_client, g_ticks - start_tick, cr.unauthorized);
+        rec_emit(name,"DATA","case=restored server=standin cycle=%u equal=%u",cycles+1,desktop_ledgers_equal(&baseline,&restored));
         /* Survivor is paused after consuming its reply: both snapshots have
          * no ordinary request in flight, so messages are compared exactly. */
     }
@@ -246,9 +453,9 @@ finished:
     pass = pass && desktop_ledgers_equal(&initial, &final) &&
         before.processes == after.processes && before.threads == after.threads &&
         before.handles == after.handles && before.extents == after.extents && before.backing == after.backing;
-    rec_emit(name, "DATA", "case=ledger descriptions=%u surfaces=%u pages=%u channels=%u messages=%u grants=%u",
-             final.descriptions, final.surfaces, final.pages, final.channels, final.messages, final.grants);
-    rec_emit(name, "END", pass ? "status=PASS" : "status=FAIL reason=desktop_contract");
+    rec_emit(name, "DATA", "case=ledger server=standin objects_equal=%u processes_equal=%u descriptions=%u surfaces=%u pages=%u channels=%u messages=%u grants=%u",
+             desktop_ledgers_equal(&initial,&final),native_proc_equal(&before,&after),final.descriptions, final.surfaces, final.pages, final.channels, final.messages, final.grants);
+    rec_emit(name, "END", pass ? "server=standin status=PASS" : "server=standin status=FAIL reason=desktop_contract");
     return pass ? 0 : 1;
 #endif
 }
@@ -278,6 +485,7 @@ static bool report_unsigned(const char *line, const char *field, uint32_t *value
 void probe_f2_libc_report(struct task *task, const char *line, uint32_t length)
 {
     struct proc_thread *t = proc_thread_for(task);
+    if (t) native_report(t->process,line,length);
     if (!libc_reports.pid || !t || t->process->pid != libc_reports.pid) return;
     if (!length || length > CIUKI_PROBE_REPORT_MAX) { libc_reports.invalid = true; return; }
     const char *cases[] = { "case=libc-smoke ", "case=atexit ", "case=destructor " };

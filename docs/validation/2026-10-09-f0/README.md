@@ -72,6 +72,93 @@ and real hardware; the probe still verifies that a distinct control word
 and register contents survive preemption. Recorded in AGENTS.md as a known
 emulator deviation.
 
+## QEMU TCG deviation: scalar alignment checks are absent (f2-14)
+
+The supplied `signals-fault.records` from run `0704fc09` (image `a9550f04…`,
+payload SHA-256
+`dd30d235d6a93f44897db741187bc46dd0eca9cd000b654351259849fb1d8939`)
+contains six repaired faults: #PF absent, #PF protection, #UD, #DE, #GP,
+then #MF. There is no #AC between #GP and #MF. The two payload errors are
+the final `ENTRIES == 7` and `RETURNS == 7` comparisons: both observed six.
+The fault siginfo, addresses, EIPs and surviving process agree with their
+expectations. This is evidence from the supplied boot, not a new QEMU run.
+
+[Intel SDM Vol. 1](https://cdrdv2-public.intel.com/819711/253665-sdm-vol-1.pdf),
+section 3.4.3.3 (AC), enables user alignment checking with CR0.AM and
+EFLAGS.AC. CiukiOS `fpu_init` sets AM; the payload sets AC and executes
+`mov eax, [DATA + 1]` at CPL3. That doubleword operand is misaligned.
+[QEMU 11.0.0's scalar load translator](https://github.com/qemu/qemu/blob/v11.0.0/target/i386/tcg/translate.c#L467)
+emits `tcg_gen_qemu_ld_tl` with only the size and `MO_LE`, without a
+CR0.AM/EFLAGS.AC alignment check. The
+[integer operand load path](https://github.com/qemu/qemu/blob/v11.0.0/target/i386/tcg/emit.c.inc#L251)
+calls that translator. Together with the missing vector 17 in the boot,
+this establishes an emulator deviation rather than a signal-frame defect.
+
+The payload still attempts the real alignment fault first. Only if it does
+not trap and CPUID leaf `0x40000000` reports the exact `TCGTCGTCGTCG`
+signature and a maximum leaf of at least `0x40000001` does it accept the
+known omission. The signature is
+[explicitly TCG-only in QEMU](https://github.com/qemu/qemu/blob/v11.0.0/target/i386/cpu.c#L8640).
+It then triggers a real unmapped #PF with AC still set, checks handler AC
+clearing and sigreturn AC restoration, GPRs, TLS and x87 preservation, and
+still requires seven handler entries and seven returns with zero errors.
+The ordinary observed/expected fault records show vector 14 for this
+fallback; `case=fault-repair part=alignment tcg_fallback=1
+hardware_required_vector=17` explicitly identifies it. A missing #AC on
+hardware or an unidentified emulator increments the error counter. No
+synthetic #AC or SIGBUS delivery is counted. TCG PASS is therefore not
+evidence of hardware #AC generation: real #AC/SIGBUS remains a hardware
+qualification requirement. Host tests retain exact #AC/SIGBUS mapping.
+
+### x87 investigation and the independent sleep failure
+
+Intel SDM Vol. 1 sections 8.1.10 and 8.3.12 describe FNSAVE's state save
+followed by reset, and the non-waiting instructions that can inspect a
+pending exception. Section 8.1.5.2 restricts precision control to the listed
+arithmetic operations. The payload uses `FLD1`/`FLDPI`, retains its initial
+FCW precision, and checks reset FCW `037f`/FSW zero before handler x87 use.
+It repairs the saved FCW masks and clears the saved exception/summary/busy
+bits while retaining TOP/condition bits. The examined
+[TCG x87 helpers (QEMU 10.1.0)](https://github.com/qemu/qemu/blob/v10.1.0/target/i386/tcg/fpu_helper.c)
+likewise set ES/B for an unmasked exception, raise #MF at FWAIT, save the
+28-byte environment plus eight ten-byte logical registers, and reset after
+FNSAVE. These helpers explain the tested behavior; they are not claimed
+as a source audit of the pinned QEMU 11 x87 implementation. The supplied
+boot reaches and repairs #MF at its expected EIP. No new x87 deviation or
+weakened x87 comparison is justified by this failure.
+
+For `nanosleep-eintr`, the two failing checks are resumed `EAX == -EINTR`
+and context `SAVED_EAX == -EINTR`. Both are zero, as are the syscall result
+and the remainder seen by the handler. The probe posted SIGUSR1 at about
+10 ms into a 20 ms sleep, then synchronously emitted its injection record
+before yielding. That serial output can consume more than the remaining
+interval: the supplied injection line is 164 bytes including CRLF, or
+42.708 ms at 38400 baud with 8N1 framing. `file_nanosleep` checks its
+deadline before pending catchers on
+redispatch, so an expired sleep correctly completes with zero; delivery
+and sigreturn correctly preserve that completed result under
+`execution-abi.md`'s completed-syscall EAX rule. This is a probe scheduling
+defect, independent of TCG alignment and x87.
+
+The probe now snapshots injection identity/mask/result and emits the same
+record after the child exits, leaving no serial output between posting
+and yielding. The host regression uses production `file_nanosleep`, signal
+delivery and sigreturn with a fake scheduler posting at 10 ms. With a
+50 ms reporting delay it reproduces result/saved/resumed EAX all zero and
+remainder zero; without that delay all three are `-4` (`fffffffc`) and
+the remainder, including at handler entry, is 10000000 ns. Hardware FPU
+instructions and ring-3 payload execution remain outside this host test.
+
+Host validation for this change: `python3 scripts/build_kernel.py` passed
+with the FPU/SIMD audit; `ASAN_OPTIONS=detect_leaks=0 bash
+scripts/test/host_kernel_tests.sh` passed (signal: 5291 checks, zero pages,
+threads and zombies; production payload parser/load passed); and
+`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/host`
+reported `Ran 99 tests`, `OK (skipped=5)`. The new payload SHA-256 is
+`fd821d494f6fd2779a918e829744c8a386483e7ceb82e29bd189be1ec8b6d86d`.
+No QEMU validation of this payload was performed here; the three directed
+profiles and hardware #AC qualification remain with the lead.
+
 ## Runner suites
 
 - `f0-smoke` (profiles `qemu-fast` and `qemu-t23`): PASS, both cases.

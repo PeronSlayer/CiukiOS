@@ -46,10 +46,11 @@ evidence and merges.
 | [f1-19-firmware-input-delivery](f1-19-firmware-input-delivery.md) | F1 | gpt-6-astra / xhigh | delivered and merged 2026-10-11 (retained virtual-PIC IRQs); last Astra task before the Sol-first rule |
 | [f1-20-generic-pc-baseline](f1-20-generic-pc-baseline.md) | F1 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (baseline doc, two desktop profiles, loader checks; 98 runner tests) |
 | [f2-11-storage-shutdown-namespace](f2-11-storage-shutdown-namespace.md) | F2 | gpt-6.1-sol / high | delivered and merged 2026-10-11 (open descriptions preflighted under the namespace lock; cwd pins no longer block the detach; namespace-linked storage host test) |
-| [f2-12-crash-isolation-desktop](f2-12-crash-isolation-desktop.md) | F2 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (part 1 delivered: selector key, runner stimulus and screen observation; part 2 after the scope amendments) |
+| [f2-12-crash-isolation-desktop](f2-12-crash-isolation-desktop.md) | F2 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-11 (native desktop controller through call-3 reports and a control page, loader `server=` key, five desktop + six stand-in cases); QEMU evidence by the lead pending |
 | [f1-21-framebuffer-probe-fixtures](f1-21-framebuffer-probe-fixtures.md) | F1 | gpt-6-luna / medium | delivered and merged 2026-10-11 (static fixture buffers; fixture-size guard caught the 2,247-byte request) |
 | [f2-13-f2-suite-alignment](f2-13-f2-suite-alignment.md) | F2 | gpt-6.1-sol / high | in progress 2026-10-11 (f2-process/f2-runtime/f2-app predicates were written from the acceptance table; align them with the real guest records) |
-| [f2-14-signals-fault-regression](f2-14-signals-fault-regression.md) | F2 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (`fault-repair` and `nanosleep-eintr` payload exit 2, `corruption=2` on QEMU after f2-10) |
+| [f2-14-signals-fault-regression](f2-14-signals-fault-regression.md) | F2 | gpt-6.1-sol / xhigh | first delivery merged 2026-10-11 (TCG omits #AC: payload falls back by CPUID signature, hardware still requires vector 17); `nanosleep-eintr` still fails on QEMU (`elapsed_ms=40 result=0`), second Sol attempt in progress |
+| [f2-15-app-gate-probe](f2-15-app-gate-probe.md) | F2 | gpt-6.1-sol / xhigh | in progress 2026-10-11 (no `app-gate` probe was ever registered: `installed=8`, `missing_probe`) |
 
 All F1 and F2 directives are written; launches follow their prerequisites
 (f1-10 when QEMU is free; f2-03 after f1-09; f2-08 after f2-05).
