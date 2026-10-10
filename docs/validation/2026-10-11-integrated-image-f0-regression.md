@@ -92,3 +92,12 @@ limit — fixed by f1-14), `safe-fw-cfg-qemu-e500` (firmware input backend
 init `error=-5`, directive f1-15), `fat12-read` (superfloppy fixture disk not
 mounted, directive f1-16). The F2 cases were not reached because every F2
 suite repeats the F1 regressions and stops at `input-fault`.
+
+## Seventh image: `409fbf47…` (commit `4990941`, f1-14 and f2-03 merged)
+
+No suite ran: the runner's host-prerequisite step failed on two stale host
+tests (`test_records_and_manifest_include_every_payload` needs the
+`build-clock.json` the f2-03 patch introduced; `test_kernel_map_f2probes_within_rodata`
+expects the F2 probe order without `fd-table`). Fix in progress; the
+summaries left under `build/test-runs/` for this image are the previous
+batch's and carry no evidence for it.
