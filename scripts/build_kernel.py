@@ -23,8 +23,8 @@ SRC = ROOT / "src" / "kernel"
 OUT = ROOT / "build" / "f0"
 OBJ = OUT / "obj"
 
-# No individual kernel frame may exceed half an 8 KiB task stack. The app
-# controller and supervisor get a stricter 1 KiB bound, leaving room for
+# Keep the 4 KiB single-frame bound after f2-20's increase to 16 KiB task
+# stacks. The app controller and supervisor keep a stricter 1 KiB bound for
 # the existing storage frames, formatters and interrupt frames.
 # Clang measures optimized frames, including inlined callees:
 # https://clang.llvm.org/docs/DiagnosticsReference.html#wframe-larger-than

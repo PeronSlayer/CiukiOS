@@ -41,8 +41,8 @@ uint32_t vmm_kernel_pd(void);              /* physical address */
 void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached);
 uint32_t vmm_kernel_pte(uint32_t va);      /* raw PTE or 0 */
 
-/* kernel stacks: 8 KiB with an unmapped guard page below */
-#define KSTACK_SIZE 8192u
+/* kernel stacks: 16 KiB with an unmapped guard page below (f2-20) */
+#define KSTACK_SIZE 16384u
 void *kstack_alloc(void);                  /* returns lowest usable address */
 void kstack_free(void *base);
 uint32_t kstack_guard_va(void *base);
