@@ -19,6 +19,27 @@
  * the original deadline. AA is one native activation self-test, followed
  * by reapplying config (some controllers reset it); no FF device reset,
  * output-port reset, retry-on-timeout or firmware/native fallback.
+ * f1-27 research/decision (T23 capture run=22222222 only contains EIO,
+ * not the failing byte): SeaBIOS ps2port.c, __ps2_command/init_keyboard:
+ * https://github.com/coreboot/seabios/blob/master/src/hw/ps2port.c
+ * Inhibit/drain before controller replies, explicitly enable device ports.
+ * Linux v6.12 i8042.c, controller_init/check_aux/toggle_aux:
+ * stable CTR reads, internal AUX loopback can qualify a failing external
+ * interface test; verify port bits rather than trusting a write. Preserve
+ * strict nontranslation, device ACKs and quarantine, unlike Linux's x86
+ * self-test fail-open policy. i8042-acpipnpio.h has IBM 2656 NOMUX and newer
+ * ThinkPad reset quirks, no T23 quirk: do not infer a T23-specific workaround.
+ * https://github.com/torvalds/linux/blob/v6.12/drivers/input/serio/i8042-acpipnpio.h
+ * HP 361834-002, tables 5-17/18, pp. 5-21..23: AA inhibits both ports;
+ * AD/AE and A7/A8 set/clear disable bits, command-byte bit 6 translates.
+ * https://h10032.www1.hp.com/ctg/Manual/c00283274.pdf
+ * IBM T20..T23 HMM 62P9631, p. 46: TrackPoint can be disabled in setup;
+ * absence is not permission to claim complete keyboard/mouse activation.
+ * https://download.lenovo.com/pccbbs/mobiles_pdf/62p9631.pdf
+ * Keep 200 ms ordinary replies/500 ms setup: SeaBIOS permits 500 ms
+ * controller waits, but this capture supplies no evidence of a late reply.
+ * Retain bounded raw traces, log after the timed transaction so serial I/O
+ * cannot spend the setup budget. No new reset or timeout retry is qualified.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -61,6 +82,11 @@ struct controller {
     bool initialized, accepting, reply_any, reply_aux, reply_ready;
     uint8_t reply;
     int reply_error;
+    struct i8042_init_record init_records[I8042_INIT_STEPS];
+    uint64_t init_started;
+    unsigned init_count;
+    bool init_recording;
+    uint8_t init_status;
 };
 struct poll_deadline { uint64_t end; unsigned polls; };
 static struct controller native;
@@ -295,7 +321,16 @@ static const struct i8042_test_io physical_io = {
 static uint8_t read_port(struct controller *c, uint16_t port)
 {
     c->stats.reads++;
-    return c->io->read(c->io_arg, port);
+    uint8_t byte = c->io->read(c->io_arg, port);
+    if (c->init_recording && port == STATUS_PORT) c->init_status = byte;
+    else if (c->init_recording && port == DATA_PORT) {
+        struct i8042_init_record *r = &c->init_records[c->init_count];
+        if (!r->bytes) r->first = byte;
+        r->reply = byte;                /* includes discarded/error-status bytes */
+        r->status_reply = c->init_status;
+        r->bytes++;
+    }
+    return byte;
 }
 static void write_port(struct controller *c, uint16_t port, uint8_t b)
 {
@@ -329,9 +364,15 @@ static void poll_pause(struct controller *c, struct poll_deadline *d)
 
 static void capture(struct controller *c, uint8_t status, uint8_t b)
 {
+    bool aux = (status & AUX) != 0;
+    /* Boot traffic predates the configured raw set-2/three-byte protocol.
+     * It must not poison decoder state while draining for initialization. */
+    if (c->init_recording && (!c->stats.pending_command || aux != c->reply_aux)) {
+        c->stats.drained++;
+        return;
+    }
     struct input_queue *q = &c->queue;
     q->stats.bytes++;
-    bool aux = (status & AUX) != 0;
     if (status & BAD_STATUS) {
         q->stats.errors++;
         q->stats.state_lost = true;
@@ -349,6 +390,7 @@ static void capture(struct controller *c, uint8_t status, uint8_t b)
         c->reply_ready = true;
         return;
     }
+    if (c->init_recording) { c->stats.drained++; return; }
     uint64_t tick = c->io->now(c->io_arg);
     if (aux) mouse_byte(c, b, tick);
     else keyboard_byte(c, b, tick);
@@ -502,6 +544,148 @@ static int config_write(struct controller *c, uint8_t cfg, uint64_t outer)
     return err;
 }
 
+const char *i8042_init_step_name(enum i8042_init_step step)
+{
+    static const char *const names[] = {
+        "self_test", "iface_kbd", "iface_aux", "config_read", "config_write",
+        "flush", "enable", "reset_kbd", "reset_aux",
+    };
+    return (unsigned)step < ARRAY_SIZE(names) ? names[step] : "none";
+}
+
+void i8042_init_format(char out[I8042_INIT_LINE], unsigned index,
+                      const struct i8042_init_record *r)
+{
+    char reply[5] = "none", first[5] = "none";
+    if (r->bytes) {
+        ksnprintf(reply, sizeof(reply), "%02x", r->reply);
+        ksnprintf(first, sizeof(first), "%02x", r->first);
+    }
+    ksnprintf(out, I8042_INIT_LINE,
+              "step=%s index=%u command=%02x reply=%s status_before=%02x status_after=%02x elapsed_ms=%u result=%d first=%s bytes=%u status_reply=%02x",
+              i8042_init_step_name(r->step), index + 1, r->command, reply,
+              r->status_before, r->status_after, r->elapsed_ms, r->result, first, r->bytes, r->status_reply);
+}
+
+bool i8042_init_record(unsigned index, struct i8042_init_record *out)
+{
+    if (!out) return false;
+    uint32_t f = irq_save();
+    bool have = !native.stats.firmware && index < native.init_count;
+    if (have) *out = native.init_records[index];
+    irq_restore(f);
+    return have;
+}
+
+static void init_begin(struct controller *c, enum i8042_init_step step, uint8_t command)
+{
+    /* The one fixed sequence below has fifteen stages, no retry loop. */
+    if (c->init_count >= I8042_INIT_STEPS) panic("i8042 init trace capacity");
+    struct i8042_init_record *r = &c->init_records[c->init_count];
+    *r = (struct i8042_init_record){ .step = step, .command = command };
+    c->init_started = c->io->now(c->io_arg);
+    r->status_before = read_port(c, STATUS_PORT);
+    c->init_recording = true;
+}
+
+static void init_finish(struct controller *c, int result)
+{
+    struct i8042_init_record *r = &c->init_records[c->init_count];
+    r->status_after = read_port(c, STATUS_PORT);
+    r->elapsed_ms = (uint32_t)(c->io->now(c->io_arg) - c->init_started);
+    r->result = result;
+    c->init_recording = false;
+    c->init_count++;
+}
+
+/* Grouped stages retain the command and raw replies for their last attempted
+ * operation, so an ACK to an earlier command cannot disguise a missing ACK. */
+static void init_command(struct controller *c, uint8_t command)
+{
+    struct i8042_init_record *r = &c->init_records[c->init_count];
+    r->command = command;
+    r->bytes = 0;
+    r->first = r->reply = 0;
+    r->status_reply = 0;
+}
+
+static int init_ctl_write(struct controller *c, uint8_t command, uint64_t end)
+{
+    init_command(c, command);
+    return controller_write(c, command, end);
+}
+
+static int init_device(struct controller *c, bool aux, uint8_t command,
+                       uint64_t end, uint8_t *reply)
+{
+    init_command(c, command);
+    return device_exchange(c, aux, command, end, reply);
+}
+
+/* A write is not complete while IBF remains asserted. OBF alone is input to
+ * drain, not proof that the controller is unusable (Linux controller_check). */
+static int init_idle(struct controller *c, uint64_t end)
+{
+    struct poll_deadline d = limit(c, end, I8042_REPLY_MS);
+    for (;;) {
+        int err = poll_check(c, &d);
+        if (err) return err;
+        uint8_t status = read_port(c, STATUS_PORT);
+        if (status & OBF) (void)capture_one(c, true);
+        else if (!(status & IBF)) return 0;
+        poll_pause(c, &d);
+    }
+}
+
+static int init_config_read(struct controller *c, uint8_t *cfg, uint64_t end)
+{
+    uint8_t previous = 0;
+    for (unsigned i = 0; i < 10; i++) {
+        if (i) c->io->pause(c->io_arg);
+        int err = controller_reply(c, 0x20, cfg, end);
+        if (err) return err;
+        if (i && *cfg == previous) return 0;
+        previous = *cfg;
+    }
+    return -I8042_EIO;
+}
+
+static int init_config_write(struct controller *c, uint8_t cfg, uint64_t end, bool verify)
+{
+    init_command(c, 0x60);
+    int err = config_write(c, cfg, end);
+    if (!err) err = init_idle(c, end);
+    if (!err && verify) {
+        uint8_t reply;
+        /* Ports are inhibited, or both devices acknowledged F5 and the
+         * buffers were drained: no scan/packet may impersonate CTR. */
+        err = init_config_read(c, &reply, end);
+        if (!err && (reply & (TRANSLATE | DISABLED | IRQ_BITS)) !=
+                    (cfg & (TRANSLATE | DISABLED | IRQ_BITS))) err = -I8042_EIO;
+    }
+    return err;
+}
+
+static int init_aux_test(struct controller *c, uint64_t end)
+{
+    uint8_t reply = 0;
+    int err = controller_reply(c, 0xA9, &reply, end);
+    if (err || !reply) return err;
+    /* External line tests can fail on a functioning notebook AUX port.
+     * Only a correctly tagged internal loopback qualifies that result.
+     * Keep A9 as first raw byte and D3 echo as last, in the same record.
+     * Real device presence still requires every subsequent device ACK/ID. */
+    struct poll_deadline d = limit(c, end, I8042_REPLY_MS);
+    err = write_when_ready(c, &d, STATUS_PORT, 0xD3);
+    if (!err) {
+        expect_reply(c, true, true);
+        err = write_when_ready(c, &d, DATA_PORT, 0x5A);
+        if (!err) err = wait_reply(c, &d, &reply);
+    }
+    c->stats.pending_command = false;
+    return err ? err : (reply == 0x5A ? 0 : -I8042_EIO);
+}
+
 static void quarantine(struct controller *c, int err)
 {
     c->accepting = c->stats.active = false;
@@ -643,68 +827,137 @@ int i8042_init(void)
     pic_mask(1);
     pic_mask(12);
     uint8_t cfg = 0, reply = 0;
-    err = controller_write(&native, 0xAD, end);
-    if (!err) err = controller_write(&native, 0xA7, end);
-    struct poll_deadline d = limit(&native, end, I8042_REPLY_MS);
-    if (!err) err = drain(&native, &d, true);
-    if (!err) err = controller_reply(&native, 0x20, &cfg, end);
-    native.stats.initial_config = cfg;
-    cfg = (cfg | DISABLED) & ~(IRQ_BITS | TRANSLATE);
-    if (!err) err = config_write(&native, cfg, end);
-    if (!err) err = controller_reply(&native, 0xAA, &reply, end);
-    if (!err && reply != 0x55) err = -I8042_EIO;
-    /* AA may reset the command byte; inhibit again before any config reply. */
-    if (!err) err = controller_write(&native, 0xAD, end);
-    if (!err) err = controller_write(&native, 0xA7, end);
-    if (!err) err = config_write(&native, cfg, end);
-    if (!err) err = controller_reply(&native, 0xAB, &reply, end);
-    if (!err && reply) err = -I8042_EIO;
-    if (!err) err = controller_reply(&native, 0xA9, &reply, end);
-    if (!err && reply) err = -I8042_EIO;
-    if (!err) err = controller_write(&native, 0xAE, end);
-    if (!err) err = controller_write(&native, 0xA8, end);
-    cfg &= ~DISABLED;
-    if (!err) err = config_write(&native, cfg, end);
-    if (!err) err = device_command(&native, false, 0xF5, end); /* disable scanning */
-    if (!err) err = device_command(&native, false, 0xF0, end);
-    if (!err) err = device_command(&native, false, 0x02, end); /* raw scan set 2 */
-    /* F6 restores defaults without a device reset/BAT. It DOES NOT force
-     * an already negotiated wheel protocol back to ID 0 (QEMU v9.2.0:
-     * https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/input/ps2.c
-     * AUX_SET_DEFAULT vs AUX_RESET). Query ID and refuse extended packets;
-     * no IntelliMouse sample-rate detection or blind reset is performed. */
-    if (!err) err = device_command(&native, true, 0xF5, end);
-    if (!err) err = device_command(&native, true, 0xF6, end);
-    if (!err) err = device_exchange(&native, true, 0xF2, end, &reply);
-    if (!err && reply) err = -I8042_EPROTO;
-    if (!err) err = device_command(&native, true, 0xEA, end); /* stream mode */
-    if (!err) err = device_command(&native, true, 0xE6, end); /* 1:1 scaling */
-    if (!err) err = device_command(&native, false, 0xF4, end);
-    if (!err) err = device_command(&native, true, 0xF4, end);
-    /* Verify nontranslation before activating registry claims/IRQs. */
-    if (!err) err = controller_write(&native, 0xAD, end);
-    if (!err) err = controller_write(&native, 0xA7, end);
-    if (!err) err = config_write(&native, cfg | DISABLED, end);
-    if (!err) err = controller_reply(&native, 0x20, &reply, end);
-    if (!err && (reply & (TRANSLATE | DISABLED | IRQ_BITS)) != DISABLED) err = -I8042_EIO;
-    for (unsigned i = 0; !err && i < ARRAY_SIZE(native.handle); i++)
-        err = registry_activate(native.handle[i], native.claim_gen[i]);
+    init_begin(&native, I8042_INIT_FLUSH, 0xAD);
+    err = init_ctl_write(&native, 0xAD, end);
+    if (!err) err = init_ctl_write(&native, 0xA7, end);
+    if (!err) err = init_idle(&native, end);
+    init_finish(&native, err);
     if (!err) {
-        uint32_t f = irq_save();
-        native.accepting = true;
-        irq_set_handler(1, input_irq);
-        irq_set_handler(12, input_irq);
-        irq_restore(f);
-        err = config_write(&native, cfg | IRQ_BITS, end);
+        init_begin(&native, I8042_INIT_CONFIG_READ, 0x20);
+        err = init_config_read(&native, &cfg, end);
+        native.stats.initial_config = cfg;
+        init_finish(&native, err);
+    }
+    cfg = (cfg | DISABLED) & ~(IRQ_BITS | TRANSLATE);
+    if (!err) {
+        init_begin(&native, I8042_INIT_CONFIG_WRITE, 0x60);
+        err = init_config_write(&native, cfg, end, false);
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_SELF_TEST, 0xAA);
+        err = controller_reply(&native, 0xAA, &reply, end);
+        if (!err && reply != 0x55) err = -I8042_EIO;
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_CONFIG_WRITE, 0x60);
+        /* AA can reset CTR and re-enable ports. Inhibit again before reading
+         * the configuration; verify its actual nontranslated/IRQ-off state. */
+        err = init_ctl_write(&native, 0xAD, end);
+        if (!err) err = init_ctl_write(&native, 0xA7, end);
+        if (!err) err = init_config_write(&native, cfg, end, true);
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_IFACE_KBD, 0xAB);
+        err = controller_reply(&native, 0xAB, &reply, end);
+        if (!err && reply) err = -I8042_EIO;
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_IFACE_AUX, 0xA9);
+        err = init_aux_test(&native, end);
+        init_finish(&native, err);
+    }
+    cfg &= ~DISABLED;
+    if (!err) {
+        init_begin(&native, I8042_INIT_ENABLE, 0x60);
+        err = init_config_write(&native, cfg, end, false);
+        if (!err) err = init_ctl_write(&native, 0xAE, end);
+        if (!err) err = init_ctl_write(&native, 0xA8, end);
+        if (!err) err = init_idle(&native, end);
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_RESET_KBD, 0xF5);
+        err = init_device(&native, false, 0xF5, end, 0); /* disable scanning */
+        if (!err) err = init_device(&native, false, 0xF0, end, 0);
+        if (!err) err = init_device(&native, false, 0x02, end, 0); /* raw set 2 */
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_RESET_AUX, 0xF5);
+        /* F6 defaults do not undo a negotiated wheel ID (QEMU v9.2.0,
+         * https://github.com/qemu/qemu/blob/v9.2.0/hw/input/ps2.c).
+         * Require ID 0; no FF/BAT or wheel sample-rate negotiation. */
+        err = init_device(&native, true, 0xF5, end, 0);
+        if (!err) err = init_device(&native, true, 0xF6, end, 0);
+        if (!err) err = init_device(&native, true, 0xF2, end, &reply);
+        if (!err && reply) err = -I8042_EPROTO;
+        if (!err) err = init_device(&native, true, 0xEA, end, 0); /* stream */
+        if (!err) err = init_device(&native, true, 0xE6, end, 0); /* 1:1 */
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_CONFIG_WRITE, 0x60);
+        err = init_ctl_write(&native, 0xAD, end);
+        if (!err) err = init_ctl_write(&native, 0xA7, end);
+        if (!err) err = init_config_write(&native, cfg | DISABLED, end, true);
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_ENABLE, 0x60);
+        /* Both devices acknowledged F5. Enable/configure, then read back CTR
+         * BEFORE F4 allows untagged scans/packets to race that reply. The old
+         * last write was unverified and could leave an EC port inhibited. */
+        err = init_config_write(&native, cfg | IRQ_BITS, end, false);
+        if (!err) err = init_ctl_write(&native, 0xAE, end);
+        if (!err) err = init_ctl_write(&native, 0xA8, end);
+        if (!err) err = init_idle(&native, end);
+        if (!err) {
+            init_command(&native, 0x20);
+            err = init_config_read(&native, &reply, end);
+            if (!err && (reply & (TRANSLATE | DISABLED | IRQ_BITS)) != IRQ_BITS)
+                err = -I8042_EIO;
+        }
+        for (unsigned i = 0; !err && i < ARRAY_SIZE(native.handle); i++)
+            err = registry_activate(native.handle[i], native.claim_gen[i]);
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_RESET_KBD, 0xF4);
+        err = init_device(&native, false, 0xF4, end, 0);
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_RESET_AUX, 0xF4);
+        err = init_device(&native, true, 0xF4, end, 0);
+        init_finish(&native, err);
+    }
+    if (!err) {
+        init_begin(&native, I8042_INIT_FLUSH, 0x00); /* status/data only */
+        err = init_idle(&native, end);
+        init_finish(&native, err);
     }
     if (err) quarantine(&native, err);
     else {
-        native.stats.active = true;
+        uint32_t f = irq_save();
+        native.accepting = native.stats.active = true;
+        irq_set_handler(1, input_irq);
+        irq_set_handler(12, input_irq);
+        irq_restore(f);
         pic_unmask(1);
         pic_unmask(12);                 /* PIC service also enables cascade */
     }
     native.stats.last_elapsed_ms = (uint32_t)(physical_now(0) - start);
     native.stats.last_error = err;
+    /* Console/serial latency is outside the hardware transaction deadline. */
+    for (unsigned i = 0; i < native.init_count; i++) {
+        char line[I8042_INIT_LINE];
+        i8042_init_format(line, i, &native.init_records[i]);
+        klog("[i8042] %s", line);
+    }
     kmutex_unlock(&native.mutex);
     return err;
 }
