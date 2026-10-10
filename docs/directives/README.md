@@ -91,3 +91,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-31-deskui-toolkit-files](f2-31-deskui-toolkit-files.md) | F2+ | gpt-6.1-sol / xhigh | draft 2026-10-11, launch after f2-30 merges (`libdeskui` widgets, Files application, `apps/build_apps.py`, `files-qemu-t23`) |
 | [f2-32-ciuknote](f2-32-ciuknote.md) | F2+ | gpt-6.1-sol / high | draft 2026-10-11, launch after f2-31 merges (CiukNote editor on `libdeskui`) |
 | [f2-33-task-manager](f2-33-task-manager.md) | F2+ | gpt-6.1-sol / xhigh | draft 2026-10-11, launch after f2-31 merges (syscall 70 `proc_list`, termination authority, Task Manager) |
+| [f3-06-dos-workloads](f3-06-dos-workloads.md) | F3 | gpt-6.1-sol / xhigh | draft 2026-10-11, launch after f3-00…f3-05 merge (DOS/4GW probe, local DOOM and Wolf3D fixtures, starvation gate, redistribution rules) |
