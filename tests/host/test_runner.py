@@ -1340,7 +1340,15 @@ class F2EvidenceTests(unittest.TestCase):
                             if isinstance(value,str) and value.startswith('$'):record[field]=record[value[1:]]
                         if rule.get('encoding')=='hex':record[field]=f"{int(record[field]):0{rule.get('width',8)}x}"
                 for relation in predicate.get('relations',[]):
-                    record.setdefault(relation['right'],'1');record[relation['left']]=record[relation['right']]
+                    record.setdefault(relation['right'],'1')
+                    bound=int(record[relation['right']])
+                    if 'subtract' in relation:
+                        record.setdefault(relation['subtract'],'0');bound-=int(record[relation['subtract']])
+                    bound=(bound+relation.get('add',0))*relation.get('multiply',1)
+                    record[relation['left']]=str(max(int(record.get(relation['left'],bound)),bound) if relation['op']=='ge' else bound)
+                if predicate.get('unique'):
+                    key=predicate['unique']
+                    record[key]=str(predicate.get('fields',{}).get(key,{}).get('ge',0)+index)
                 matches.append(record)
             return matches
         def check(probe,predicate,records):
@@ -1371,7 +1379,7 @@ class F2EvidenceTests(unittest.TestCase):
                             value=rule.get('eq',rule.get('ge')) if isinstance(rule,dict) else rule
                             if isinstance(rule,dict):
                                 old=int(broken[0][field],16 if rule.get('encoding')=='hex' else 10)
-                                bad=rule['le']+1 if 'le' in rule else old-1 if 'ge' in rule else old+1
+                                bad=rule['le']+1 if 'le' in rule else min(old,rule['ge'])-1 if isinstance(rule.get('ge'),int) else old-1 if 'ge' in rule else old+1
                                 broken[0][field]=f'{bad:08x}' if rule.get('encoding')=='hex' else str(bad)
                             else:broken[0][field]='incorrect'
                             with self.subTest(field=field),self.assertRaises(EvidenceError):check(case['probe'],predicate,broken)

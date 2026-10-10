@@ -1,0 +1,33 @@
+CIUKI_TEST v=1 run=09b28747 seq=000001 probe=elf-load event=BEGIN
+CIUKI_TEST v=1 run=09b28747 seq=000002 probe=elf-load event=DATA case=image sha256=7493af90da15457b2e0c1a35e3c8e5eda0bfeabf2729b69539ba90d32bfc5db1 file_bytes=8196 load_bytes=12288 entry=00400000
+CIUKI_TEST v=1 run=09b28747 seq=000003 probe=elf-load event=DATA case=reject index=0 offset=0 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000004 probe=elf-load event=DATA case=reject index=1 offset=4 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000005 probe=elf-load event=DATA case=reject index=2 offset=5 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000006 probe=elf-load event=DATA case=reject index=3 offset=6 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000007 probe=elf-load event=DATA case=reject index=4 offset=7 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000008 probe=elf-load event=DATA case=reject index=5 offset=8 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000009 probe=elf-load event=DATA case=reject index=6 offset=16 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000010 probe=elf-load event=DATA case=reject index=7 offset=18 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000011 probe=elf-load event=DATA case=reject index=8 offset=20 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000012 probe=elf-load event=DATA case=reject index=9 offset=24 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000013 probe=elf-load event=DATA case=reject index=10 offset=28 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000014 probe=elf-load event=DATA case=reject index=11 offset=36 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000015 probe=elf-load event=DATA case=reject index=12 offset=40 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000016 probe=elf-load event=DATA case=reject index=13 offset=42 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000017 probe=elf-load event=DATA case=reject index=14 offset=44 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000018 probe=elf-load event=DATA case=reject index=15 offset=44 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000019 probe=elf-load event=DATA case=reject index=16 offset=52 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000020 probe=elf-load event=DATA case=reject index=17 offset=52 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000021 probe=elf-load event=DATA case=reject index=18 offset=52 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000022 probe=elf-load event=DATA case=reject index=19 offset=56 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000023 probe=elf-load event=DATA case=reject index=20 offset=60 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000024 probe=elf-load event=DATA case=reject index=21 offset=68 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000025 probe=elf-load event=DATA case=reject index=22 offset=72 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000026 probe=elf-load event=DATA case=reject index=23 offset=76 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000027 probe=elf-load event=DATA case=reject index=24 offset=80 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000028 probe=elf-load event=DATA case=reject index=25 offset=92 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000029 probe=elf-load event=DATA case=size bytes=51 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000030 probe=elf-load event=DATA case=size bytes=33554433 expected=-8 observed=-8
+CIUKI_TEST v=1 run=09b28747 seq=000031 probe=elf-load event=DATA case=e pid=3 ppid=2 pgid=1 expected=9472 observed=9472 raw=37 vector=0 errors=0
+CIUKI_TEST v=1 run=09b28747 seq=000032 probe=elf-load event=DATA case=entry pid=3 esp=bfffffa8 flags=00000202 gs=0000003b tls=20000000 argc=2 bss_register_errors=0
+CIUKI_TEST v=1 run=09b28747 seq=000033 probe=elf-load event=END status=PASS

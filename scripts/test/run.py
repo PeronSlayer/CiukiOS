@@ -18,7 +18,7 @@ import sys
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from evidence import Parser, EvidenceError, EvidenceNotRun, f2_metadata
+from evidence import Parser as RecordParser, EvidenceError, EvidenceNotRun, f2_metadata
 from loader_model import selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
@@ -27,6 +27,164 @@ ROOT=Path(__file__).resolve().parents[2]
 REGRESSION_SUITES = ('f0-smoke','f0-core','f0-panic','f0-runner',
                      'f1-input','f1-storage','f1-fat32','f1-safe')
 F2_SUITES = ('f2-process','f2-runtime','f2-desktop','f2-app')
+
+
+class Parser(RecordParser):
+    """Retain the record grammar while checking native supervisor captures.
+
+    supervisor_observe_end emits stdout/stderr with offsets local to each
+    captured stream; probe_app_output uses a cumulative live-output offset.
+    Only a preceding capture declaration authorizes the former representation.
+    Application bytes remain application output, never controller DATA records.
+    """
+    def __init__(self, run_id, probe):
+        super().__init__(run_id, probe)
+        self.captures = {}
+        self.report_bytes = bytearray()
+
+    def feed(self, raw):
+        # The base parser still validates the complete original envelope,
+        # including duplicate keys, ASCII, size, sequence and terminal order.
+        tokens = raw.split()
+        values = dict(t.split(b'=', 1) for t in tokens[1:] if b'=' in t)
+        key = (values.get(b'pid', b''), values.get(b'stream', b''))
+        capture = self.captures.get(key)
+        captured = values.get(b'group') == b'app' and capture is not None
+        if captured:
+            try:
+                if values.get(b'tid') != b'0' or not re.fullmatch(b'[0-9]+', values[b'offset']):
+                    raise ValueError()
+                offset = int(values[b'offset'])
+                data = bytes.fromhex(values[b'data_hex'].decode('ascii'))
+                end = offset + len(data)
+                # supervisor.h retains 1024-byte head/tail windows. There is
+                # exactly one permitted gap, at that declared boundary.
+                gap = capture['truncated'] and capture['end'] == 1024 and offset == capture['size'] - 1024
+                if offset != capture['end'] and not gap or end > capture['size'] or \
+                        capture['truncated'] and (offset < 1024 and end > 1024 or
+                                                 offset >= 1024 and offset < capture['size'] - 1024):
+                    raise ValueError()
+            except (KeyError, ValueError, UnicodeError) as error:
+                raise EvidenceError('invalid captured stream offset/range') from error
+            # Translate only the application capture's internal concatenation
+            # offset. The serial log and returned record keep the guest offset.
+            translated = re.sub(rb'(?<= )offset=[^ \r\n]+',
+                                b'offset=' + str(self.application.total_bytes).encode(), raw)
+            record = super().feed(translated)
+            record['offset'] = str(offset)
+            capture['end'] = end
+            capture['digest'].update(data)
+            capture['data'].extend(data)
+            return record
+        record = super().feed(raw)
+        if record and self.probe == 'libc-smoke' and record.get('group') == 'app' and record.get('stream') == 'report':
+            if len(self.report_bytes) + int(record['bytes']) > res.LOG_CAP:
+                raise EvidenceError('application reports exceed retention bound')
+            self.report_bytes.extend(bytes.fromhex(record['data_hex']))
+        if record and self.probe in ('libc-smoke', 'app-gate') and record.get('group') == 'capture':
+            if key in self.captures or record.get('stream') not in ('stdout', 'stderr') or \
+                    not re.fullmatch('[0-9]+', record.get('pid', '')) or \
+                    not re.fullmatch('[0-9]+', record.get('bytes', '')) or record.get('truncated') not in ('0', '1'):
+                raise EvidenceError('duplicate or invalid native capture')
+            truncated = record['truncated'] == '1'
+            if truncated != (int(record['bytes']) > 2048):
+                raise EvidenceError('invalid native capture retention declaration')
+            self.captures[key] = {'size': int(record['bytes']), 'end': 0,
+                                  'digest': hashlib.sha256(), 'data': bytearray(),
+                                  'truncated': truncated, 'verified': False}
+        return record
+
+    def check(self, expected):
+        for capture in self.captures.values():
+            capture['verified'] = False
+        super().check(expected)
+        for (pid, stream), capture in self.captures.items():
+            records = [r for r in self.records if r.get('group') == 'capture_digest' and
+                       r.get('pid') == pid.decode() and r.get('stream') == stream.decode()]
+            if capture['end'] != capture['size'] or len(capture['data']) != min(capture['size'], 2048) or \
+                    len(records) != 1 or not re.fullmatch('[0-9a-f]{64}', records[0].get('sha256', '')) or \
+                    not capture['truncated'] and records[0]['sha256'] != capture['digest'].hexdigest():
+                raise EvidenceError('native captured stream size/digest mismatch')
+            capture['verified'] = not capture['truncated']
+        for comparison in expected.get('comparisons', []):
+            sides = []
+            for where in (comparison['left'], comparison['right']):
+                records = [r for r in self.records if all(r.get(k) == str(v) for k, v in where.items())]
+                if len(records) != 1:
+                    raise EvidenceError('missing or duplicate comparison evidence: ' + str(where))
+                sides.append(records[0])
+            for left, right in comparison['fields'].items():
+                if left not in sides[0] or right not in sides[1] or sides[0][left] != sides[1][right]:
+                    raise EvidenceError('record comparison failed: ' + left + '/' + right)
+        if expected.get('clock_seed'):
+            def one(case):
+                matches = [r for r in self.records if r.get('event') == 'DATA' and r.get('case') == case]
+                if len(matches) != 1:
+                    raise EvidenceError('missing or duplicate clock evidence: ' + case)
+                return matches[0]
+            seed, offset, uname = one('clock-source'), one('clock-offset'), one('clock-uname')
+            source = seed['realtime_source']
+            if seed['source'] != ('rtc' if source == '1' else 'build') or \
+                    source == '1' and (seed['qualified'], seed['valid']) != ('1', '1') or \
+                    source == '0' and (seed['sample'] != '0' or (seed['qualified'], seed['valid']) == ('1', '1')) or \
+                    source != uname['realtime_source'] or source != uname['clock_source'] or \
+                    int(offset['expected_ms']) != int(seed['utc']) * 1000 - int(seed['sample']):
+                raise EvidenceError('clock seed/provider/uname mismatch')
+        # Frozen call-3 reports are framed application bytes. Check their
+        # declared fields separately; never append them to self.records.
+        reports = []
+        for body in re.split(rb'(?=case=)', bytes(self.report_bytes) if expected.get('application_reports') else b''):
+            if not body:
+                continue
+            try:
+                fields = {}
+                for token in body.decode('ascii').split():
+                    key, value = token.split('=', 1)
+                    if key in fields:
+                        raise ValueError()
+                    fields[key] = value
+                reports.append(fields)
+            except (UnicodeError, ValueError) as error:
+                raise EvidenceError('invalid framed application report') from error
+        application_checks = [(d, reports) for d in expected.get('application_reports', [])]
+        stdout_cases = []
+        for (_, stream), capture in self.captures.items():
+            if stream != b'stdout' or not expected.get('stdout_cases'):
+                continue
+            data = bytes(capture['data'])
+            if capture['truncated']:
+                # Only complete lines from either window can satisfy a case.
+                head, tail = data[:1024], data[1024:]
+                data = head[:head.rfind(b'\n') + 1] + (tail.split(b'\n', 1)[1] if b'\n' in tail else b'')
+            for line in data.splitlines():
+                if line.startswith(b'case='):
+                    try:
+                        tokens = [token.split('=', 1) for token in line.decode('ascii').split()]
+                        fields = dict(tokens)
+                        if len(fields) != len(tokens):
+                            raise ValueError()
+                        stdout_cases.append(fields)
+                    except (UnicodeError, ValueError) as error:
+                        raise EvidenceError('invalid supplement output fields') from error
+        application_checks.extend((d, stdout_cases) for d in expected.get('stdout_cases', []))
+        for declaration, candidates in application_checks:
+            matches = [r for r in candidates if r.get('case') == declaration['case']]
+            if len(matches) != 1:
+                raise EvidenceError('missing or duplicate application report: ' + declaration['case'])
+            for field, rule in declaration['fields'].items():
+                value = matches[0].get(field, '')
+                if not isinstance(rule, dict):
+                    if value != str(rule):
+                        raise EvidenceError('application output value mismatch: ' + field)
+                    continue
+                if not re.fullmatch('-?[0-9]+', value):
+                    raise EvidenceError('invalid application report field: ' + field)
+                value = int(value)
+                if any(op == 'eq' and value != bound or op == 'ge' and value < bound or
+                       op == 'le' and value > bound or op not in ('eq', 'ge', 'le')
+                       for op, bound in rule.items()):
+                    raise EvidenceError('application report predicate failed: ' + field)
+        return True
 
 
 def load_suite(name):
@@ -73,6 +231,10 @@ def record_f2_result(result, parser):
     result.update({k:v for k,v in empty.items() if k != 'missing_fields'})
     result['missing_f2_fields'] = empty['missing_fields']
     result['application_output'] = parser.application.result()
+    result['captured_streams'] = [{'pid':pid.decode(), 'stream':stream.decode(),
+                                  'bytes':c['size'], 'captured_bytes':len(c['data']),
+                                  'truncated':c['truncated'], 'full_digest_verified':c['verified']}
+                                 for (pid, stream), c in getattr(parser, 'captures', {}).items()]
     metadata = f2_metadata(parser.records)
     result.update({k:v for k,v in metadata.items() if k != 'missing_fields'})
     result['missing_f2_fields'] = metadata['missing_fields']
@@ -80,6 +242,18 @@ def record_f2_result(result, parser):
     result['payload_hash_comparisons'] = []
     manifest_path = result['build_manifest'].get('path')
     manifest = json.loads(Path(manifest_path).read_text()) if manifest_path != 'unknown' else {}
+    seeds = [r for r in parser.records if r.get('event') == 'DATA' and r.get('case') == 'clock-source']
+    if seeds and result['outcome'] == 'pass':
+        if len(seeds) != 1:
+            raise EvidenceError('duplicate clock seed evidence')
+        seed = seeds[0]
+        result['clock_seed_comparison'] = {'source':seed.get('source'), 'guest_utc':seed.get('utc')}
+        if seed.get('source') == 'build':
+            epoch = manifest.get('build_epoch')
+            match = type(epoch) is int and epoch >= 0 and seed.get('utc') == str(epoch)
+            result['clock_seed_comparison'].update(host_utc=epoch, match=match)
+            if not match:
+                raise EvidenceError('guest build clock seed differs from image manifest')
     payloads = {p['path']:p['sha256'] for p in manifest.get('payloads',[])}
     measured = []
     for record in parser.records:
@@ -827,6 +1001,20 @@ def check_digests(host,overlay,directory,declarations,result):
             matches=[r for r in matches if record_name(result['observed'],r.get('id'),'path')==path]
         if len(matches)!=1:raise EvidenceError('missing or duplicate digest evidence')
         record=matches[0]
+        if item['kind'] == 'elf':
+            # Interim controllers hash the embedded ELF, which is the exact
+            # build artifact incbin'd by build_kernel.py, not a FAT path.
+            path = (ROOT / item['path']).resolve()
+            if not path.is_relative_to((ROOT / 'build/f0').resolve()) or path.suffix != '.elf':
+                raise res.Refusal('invalid embedded ELF comparison path')
+            if not path.is_file():
+                raise EvidenceError('missing embedded ELF comparison source')
+            measured = {'size': path.stat().st_size, 'sha256': sha(path)}
+            result['digests'].append({'declaration':item,'measured':measured,'guest':record})
+            if record.get('sha256') != measured['sha256'] or \
+                    'file_bytes' in record and record['file_bytes'] != str(measured['size']):
+                raise EvidenceError('guest ELF digest/size mismatch')
+            continue
         source=item.get('source','overlay')
         if source=='fixture':
             index=item['fixture'];manifest=result['fixtures']['manifest']
