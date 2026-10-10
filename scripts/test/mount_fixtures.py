@@ -1,10 +1,67 @@
 """Mount/crash fixture support, without a writable host mount or image copy."""
 import hashlib
+import re
 import struct
 
 from evidence import EvidenceError
 from resources import Refusal
 from fat_fixtures import geometry
+
+
+def classify_crash_checker(checked, files, patterns):
+    """Declare only empty files or their nonowning orphan LFN slots.
+
+    Microsoft fatgen103 pp. 26-28: LFN slots precede their short owner and
+    have no first cluster. dosfstools 4.2 lfn_check_orphaned() proposes slot
+    deletion; fsck.fat -n records that proposal without changing the volume.
+    See the f1-24 amendment in docs/design/vfs-storage-contract.md.
+    """
+    if not isinstance(files, list) or not files or any(
+            not isinstance(path, str) or not re.fullmatch(r'::/[A-Za-z0-9._-]+', path) for path in files):
+        raise Refusal('interrupted files must be declared root file paths')
+    if len({path.casefold() for path in files}) != len(files):
+        raise Refusal('duplicate interrupted file declaration')
+    lines = [line for line in checked['output'].splitlines() if line.strip()]
+    dirty = 'Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.'
+    if checked['returncode'] != 1 or lines.count(dirty) != 1 or \
+            lines.count(' Automatically removing dirty bit.') != 1 or \
+            lines.count('Leaving filesystem unchanged.') != 1:
+        raise EvidenceError('undeclared crash dirty-bit outcome')
+    names = {path[3:]: path for path in files}; orphans = set(); remaining = []
+    i = 0
+    while i < len(lines):
+        match = re.fullmatch(r'Orphaned long file name part "([^"]+)"', lines[i])
+        if match:
+            name = match[1]
+            if name not in names or name in orphans or i+1 == len(lines) or lines[i+1] != '  Auto-deleting.':
+                raise EvidenceError('undeclared orphaned long-name outcome')
+            orphans.add(name); i += 2
+        else:
+            remaining.append(lines[i]); i += 1
+    if not patterns or any(not any(re.fullmatch(p, line) for p in patterns) for line in remaining):
+        raise EvidenceError('unclassified interrupted filesystem discrepancy')
+    return {'dirty': True, 'files': [{'path': path, 'state': 'orphan-lfn' if path[3:] in orphans else 'empty-file'}
+                                    for path in files]}
+
+
+def check_crash_files(host, volume, directory, classification, reports):
+    """Confirm absence with a successful directory listing, never a tool error."""
+    listing = host.checker(['mdir', '-b', '-i', str(volume), '::/'], directory)
+    reports.append({'kind': 'mtools-interrupted-listing', **listing})
+    names = [line.strip() for line in listing['output'].splitlines() if line.strip()]
+    if listing['returncode'] or any(not name.startswith('::/') for name in names):
+        raise EvidenceError('interrupted file listing failed')
+    empty = {'size': 0, 'sha256': hashlib.sha256(b'').hexdigest()}
+    for item in classification['files']:
+        path = item['path']; count = sum(name.rstrip('/').casefold() == path.casefold() for name in names)
+        if count != (0 if item['state'] == 'orphan-lfn' else 1):
+            raise EvidenceError('undeclared interrupted file outcome: '+path)
+        if item['state'] == 'orphan-lfn':
+            reports.append({'kind': 'mtools-interrupted-file', **item, 'absent': True})
+        else:
+            measured = host.file_digest(volume, directory, path.removeprefix('::'))
+            reports.append({'kind': 'mtools-interrupted-file', **item, **measured})
+            if measured != empty:raise EvidenceError('undeclared interrupted file outcome: '+path)
 
 
 def place_marker(host, overlay, directory, image_size, name):

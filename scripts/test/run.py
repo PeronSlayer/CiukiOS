@@ -24,7 +24,7 @@ from loader_model import selector as base_selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
 import fat_fixtures
-from mount_fixtures import place_marker, WriteGate
+from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files
 
 ROOT=Path(__file__).resolve().parents[2]
 REGRESSION_SUITES = ('f0-smoke','f0-core','f0-panic','f0-runner',
@@ -1282,10 +1282,13 @@ def check_overlay(host,overlay,directory,checks,result):
             if version['returncode']!=0:raise EvidenceError('checker version unavailable')
         checked=host.checker(['fsck.fat','-n',str(volume)],directory)
         result['checkers'].append({'kind':'version','tool':'fsck.fat','version':checked['output'].splitlines()[0] if checked['output'] else 'unknown'})
-        result['checkers'].append({'kind':'fsck.fat',**checked})
+        fsck_report={'kind':'fsck.fat',**checked};result['checkers'].append(fsck_report)
         allowed=checks.get('fsck_exit_codes',[0])
         if checked['returncode'] not in allowed:raise EvidenceError('undeclared fsck.fat result')
-        if checked['returncode']!=0 or checks.get('classify_all_output'):
+        if checks.get('interrupted_files'):
+            fsck_report['interrupted_outcomes']=classify_crash_checker(
+                checked,checks['interrupted_files'],checks.get('interrupted_patterns',[]))
+        elif checked['returncode']!=0 or checks.get('classify_all_output'):
             patterns=checks.get('interrupted_patterns',[])
             lines=[line for line in checked['output'].splitlines() if line.strip()]
             if not patterns or any(not any(re.fullmatch(p,line) for p in patterns) for line in lines):
@@ -1305,6 +1308,8 @@ def check_overlay(host,overlay,directory,checks,result):
             result['checkers'].append({'kind':'mtools-empty','path':path,**measured})
             if measured!={'size':0,'sha256':hashlib.sha256(b'').hexdigest()}:
                 raise EvidenceError('undeclared interrupted file outcome: '+path)
+        if checks.get('interrupted_files'):
+            check_crash_files(host,volume,directory,fsck_report['interrupted_outcomes'],result['checkers'])
     result['durability_observations'].append({'read_only_export':True,'qemu_stopped':True,'checker_passed':True})
 
 
