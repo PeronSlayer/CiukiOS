@@ -8,8 +8,9 @@ F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-faul
              'partition', 'fat-read', 'fat-write', 'cache', 'mount-crash', 'safe', 'bootlog')
 F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
              'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
-PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES)
-SELECTOR_RE = r'f([012]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
+F3_PROBES = ('vm-boot',)
+PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
+SELECTOR_RE = r'f([0123]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)'
 E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
@@ -57,10 +58,12 @@ def selector(request, source='menu', validated_fw_cfg=False):
     match = re.fullmatch(SELECTOR_RE, request)
     if not match:
         raise ValueError('invalid selector grammar or probe')
-    names = (F0_PROBES, F1_PROBES, F2_PROBES)[int(match[1])]
-    if match[2] not in (*names, *(('all', 'core') if match[1] != '2' else ())):
+    names = (F0_PROBES, F1_PROBES, F2_PROBES, F3_PROBES)[int(match[1])]
+    if match[2] not in (*names, *(('all', 'core') if match[1] in ('0', '1') else ())):
         raise ValueError('invalid selector grammar or probe')
     forced = bool(match[4]); safe = bool(match[5])
+    if match[1] == '3' and (forced or safe):
+        raise ValueError('F3 selector has no optional suffix')
     if (forced or safe) and not (source == 'fw_cfg' and validated_fw_cfg):
         raise ValueError('platform override and safe mode require validated QEMU fw_cfg')
     return {'phase': int(match[1]), 'probe': match[2], 'run': match[3], 'platform': 'e500' if forced else None, 'safe': safe}

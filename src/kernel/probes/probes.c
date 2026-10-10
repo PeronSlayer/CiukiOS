@@ -904,7 +904,7 @@ static void app_end(void) { app_probe[0] = 0; }
 static int sweep_checkpoint(struct storage *storage, const struct sweep_cursor *c)
 {
     char request[65], phase[4];
-    if (c->phase == 3) memcpy(phase, "all", 4);
+    if (c->phase == SWEEP_ALL_PHASE) memcpy(phase, "all", 4);
     else ksnprintf(phase, sizeof(phase), "f%u", c->phase);
     ksnprintf(request, sizeof(request), "%s:sweep run=%s step=%u state=%08x",
               phase, c->run, c->step, c->state);
@@ -1059,6 +1059,7 @@ void probes_main(void *arg)
         .f0 = probes, .f0_count = ARRAY_SIZE(probes),
         .f1 = __f1probes_start, .f1_count = (unsigned)(__f1probes_end - __f1probes_start),
         .f2 = __f2probes_start, .f2_count = (unsigned)(__f2probes_end - __f2probes_start),
+        .f3 = __f3probes_start, .f3_count = (unsigned)(__f3probes_end - __f3probes_start),
     };
     const struct probe_hooks hooks = { app_begin, app_end, probe_panic };
     struct sweep_cursor cursor;

@@ -47,7 +47,8 @@ static void selection_tests(void)
 {
     struct probe_selection s; struct sweep_cursor c;
     const char *good[] = { "f0:sweep run=12345678", "all:sweep run=abcdef12",
-        "f1:sweep run=12345678 step=16 state=00041000", "f2:sweep run=12345678 step=0" };
+        "f1:sweep run=12345678 step=16 state=00041000", "f2:sweep run=12345678 step=0",
+        "f3:sweep run=12345678 step=0" };
     for (unsigned i=0;i<sizeof(good)/sizeof(*good);i++) {
         assert(sweep_parse(good[i], strlen(good[i]), &c));
         assert(probes_parse_selector(good[i], strlen(good[i]), 0, &s));
@@ -67,12 +68,13 @@ static void order_tests(void)
     const struct probe_def f1[] = {{"registry",pass},{"input",fail},{"fat-write",pass},
         {"cache",pass},{"mount-crash",pass},{"safe",pass},{"bootlog",pass}};
     const struct ciuki_f2_probe f2[] = {{"elf-load",pass},{"fd-table",fail},{"app-gate",pass}};
-    const struct probe_tables t = {f0,f1,2,7,f2,3};
+    const struct probe_def f3[] = {{"vm-boot",pass}};
+    const struct probe_tables t = {f0,f1,2,7,f2,3,f3,1};
     const struct probe_hooks h = {app_begin,app_end,panic_probe};
     const char *expected[] = {"registry","input","cache","safe","fat-write","fat-write",
         "mount-crash","mount-crash","bootlog","bootlog"};
     struct sweep_step step; struct sweep_cursor cursor = {.run="12345678"};
-    assert(sweep_count(0,&t)==3 && sweep_count(1,&t)==10 && sweep_count(2,&t)==3 && sweep_count(3,&t)==16);
+    assert(sweep_count(0,&t)==3 && sweep_count(1,&t)==10 && sweep_count(2,&t)==3 && sweep_count(3,&t)==1 && sweep_count(SWEEP_ALL_PHASE,&t)==17);
     for (unsigned i=0;i<10;i++) {
         assert(sweep_at(1,i,&t,&step)); assert(!strcmp(step.name,expected[i]));
         assert(step.boot == (i>=4 ? (i-4)%2 : 0));
@@ -80,10 +82,14 @@ static void order_tests(void)
     }
     assert(calls==10); // failure at input did not skip following steps
     assert(sweep_at(0,2,&t,&step) && step.panic && !strcmp(step.name,"panic"));
-    assert(sweep_at(3,3,&t,&step) && !strcmp(step.name,"registry"));
+    assert(sweep_at(SWEEP_ALL_PHASE,3,&t,&step) && !strcmp(step.name,"registry"));
     for(unsigned i=0;i<3;i++) { assert(sweep_at(2,i,&t,&step)); sweep_dispatch(&step,&cursor,&t,&h); }
     assert(begins==3 && ends==3 && calls==13);
-    assert(!sweep_at(3,16,&t,&step));
+    assert(sweep_at(3,0,&t,&step) && !strcmp(step.name,"vm-boot"));
+    assert(sweep_at(SWEEP_ALL_PHASE,16,&t,&step) && step.phase==3);
+    sweep_dispatch(&step,&cursor,&t,&h);
+    assert(calls==14);
+    assert(!sweep_at(SWEEP_ALL_PHASE,17,&t,&step));
 }
 static unsigned stage, delays, polls; static bool stuck;
 static void disable(void *c) { (void)c; assert(stage==0); stage=1; }

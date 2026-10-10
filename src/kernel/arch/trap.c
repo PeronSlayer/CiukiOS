@@ -9,6 +9,7 @@
 #include <ciuki/timing.h>
 #include <ciuki/signal.h>
 #include <ciuki/biosvm.h>
+extern bool dosvm_trap(struct trap_frame *) __attribute__((weak));
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 
@@ -88,7 +89,7 @@ void trap_dispatch(struct trap_frame *tf)
             handle_irq(tf);
             crit_end();
         }
-        biosvm_trap(tf);
+        if (!dosvm_trap || !dosvm_trap(tf)) biosvm_trap(tf);
         return;
     }
     bool from_user = (tf->cs & 3) == 3;

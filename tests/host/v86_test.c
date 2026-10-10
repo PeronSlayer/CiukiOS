@@ -480,6 +480,68 @@ static void test_io_decoder(void)
     CHECK(!v86_emulate(&v, &f) && (uint16_t)f.tf.esi == 0 && physical[0x60] == 0x12);
 }
 
+/* F3 copies may span discontiguous private physical pages. A validator
+ * pointer is never permission to dereference a whole range. */
+static unsigned copied, private_io;
+static uint32_t private_value;
+static void *paged_memory(void *arg, uint32_t linear, unsigned n, bool write)
+{ return test_memory(arg,linear,n,write) ? ram + (linear ^ 0x1000) : 0; }
+static int paged_copy(void *arg, uint32_t linear, void *buffer, unsigned n, bool write)
+{
+    if (!paged_memory(arg,linear,n,write)) return -EFAULT;
+    uint8_t *b=buffer;
+    for (unsigned i=0;i<n;i++) {
+        if (write) ram[(linear+i)^0x1000]=b[i];
+        else b[i]=ram[(linear+i)^0x1000];
+    }
+    copied++; return 0;
+}
+static int private_port(void *arg, uint16_t port, unsigned width, bool write, uint32_t *value)
+{
+    (void)arg; CHECK(port==0x300 && width==4); private_io++;
+    if (write) private_value=*value; else *value=0x12345678;
+    return 0;
+}
+static int private_interrupt(void *arg, struct v86_frame *frame, uint8_t vector)
+{ (void)arg; CHECK(vector==0xFE); frame->tf.eax=0x1234; return 0; }
+static void paged_fixture(const uint8_t *code, unsigned n)
+{
+    fixture(code,n); memcpy(ram+0x21100,code,n);
+    v.ops.memory=paged_memory; v.copy=paged_copy; v.io=private_port;
+    copied=private_io=0;
+}
+static void test_dos_private_decode(void)
+{
+    static const uint8_t flags_code[]={0x66,0x9C,0x66,0x9D};
+    paged_fixture(flags_code,sizeof(flags_code)); f.tf.user_esp=0x1002;
+    CHECK(!v86_emulate(&v,&f) && f.tf.user_esp==0xFFE && copied==1);
+    uint8_t value[4]; CHECK(!paged_copy(0,0x30FFE,value,4,false) && getword(value,4)==0x202);
+    CHECK(!v86_emulate(&v,&f) && f.tf.user_esp==0x1002 && v.vif);
+    static const uint8_t out_code[]={0xF3,0x66,0x67,0x64,0x6F};
+    paged_fixture(out_code,sizeof(out_code)); f.tf.edx=0x300; f.tf.ecx=2; f.tf.esi=0xFFF;
+    putword(value,4,0xABCDEF12); CHECK(!paged_copy(0,0x60FFF,value,4,true));
+    CHECK(!v86_emulate(&v,&f) && private_value==0xABCDEF12 && private_io==1 && f.tf.esi==0x1003 && f.tf.ecx==1 && f.tf.eip==0x100);
+    permissions[0x61]=0;
+    CHECK(v86_emulate(&v,&f)==-EFAULT && private_io==1 && f.tf.esi==0x1003 && f.tf.ecx==1);
+    static const uint8_t in_code[]={0xF2,0x66,0x67,0x6D};
+    paged_fixture(in_code,sizeof(in_code)); f.tf.edx=0x300; f.tf.edi=0xFFF; f.tf.ecx=1;
+    CHECK(!v86_emulate(&v,&f) && private_io==1 && f.tf.edi==0x1003 && !f.tf.ecx && f.tf.eip==0x104);
+    CHECK(!paged_copy(0,0x50FFF,value,4,false) && getword(value,4)==0x12345678);
+    paged_fixture(in_code,sizeof(in_code)); f.tf.edx=0x300; f.tf.edi=0xFFFD; f.tf.ecx=1;
+    CHECK(v86_emulate(&v,&f)==-EFAULT && !private_io && f.tf.edi==0xFFFD && f.tf.ecx==1);
+    static const uint8_t int_code[]={0xFA,0xFB,0xCD,0xFE};
+    paged_fixture(int_code,sizeof(int_code)); v.interrupt=private_interrupt;
+    CHECK(!v86_emulate(&v,&f)); CHECK(!v86_emulate(&v,&f) && v.shadow);
+    CHECK(!v86_emulate(&v,&f) && f.tf.eax==0x1234 && f.tf.eip==0x104 && !v.shadow && !(f.tf.eflags&V86_TF));
+    /* Invalid IRET targets cannot change SP or the frame, even when all
+     * stack words are valid and span physical pages. */
+    static const uint8_t iret_code[]={0x66,0xCF};
+    paged_fixture(iret_code,sizeof(iret_code)); f.tf.user_esp=0xFFF;
+    uint8_t words[12]; putword(words,4,0x123); putword(words+4,4,0x6000); putword(words+8,4,0x202);
+    CHECK(!paged_copy(0,0x30FFF,words,12,true)); permissions[0x60]=0;
+    CHECK(v86_emulate(&v,&f)==-EFAULT && f.tf.user_esp==0xFFF && f.tf.eip==0x100);
+}
+
 static void port_write(unsigned p, unsigned x) { uint32_t value = x; CHECK(!v86_io(&v, (uint16_t)p, 1, true, &value)); }
 static unsigned port_read(unsigned p) { uint32_t value = 0; CHECK(!v86_io(&v, (uint16_t)p, 1, false, &value)); return value; }
 static void test_devices_deadline(void)
@@ -1213,6 +1275,7 @@ int main(void)
 {
     test_flags_interrupts();
     test_io_decoder();
+    test_dos_private_decode();
     test_devices_deadline();
     test_input_decoders();
     test_worker();

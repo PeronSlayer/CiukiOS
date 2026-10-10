@@ -176,6 +176,20 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/v86_test.c" -o "$out/v86_test"
 "$out/v86_test"
 
+# F3 lifecycle, BIOS/disk preflight and record channel. Keep paging production
+# functions unchanged; replace only PMM and architectural hardware operations.
+python3 - "$root" "$out" <<'PY'
+from pathlib import Path
+import sys
+root, out = map(Path, sys.argv[1:])
+source = (root / "src/kernel/core/vmm.c").read_text()
+(out / "dosvm_aspace.inc").write_text(source.split("/* ---- user address spaces ---- */", 1)[1])
+PY
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
+    "$root/src/kernel/lib/fmt.c" -o "$out/dosvm_test"
+"$out/dosvm_test"
+
 # F1 firmware queue: fake-time scheduler and the existing production VM fakes.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_test"
