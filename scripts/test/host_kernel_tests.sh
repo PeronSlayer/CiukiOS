@@ -138,11 +138,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 # physical memory/scheduling; no guest execution or host runner lock.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/proc/proc_test.c" \
-    "$root/tests/host/proc/signal_legacy.c" -o "$out/proc_test"
+    "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/proc_test"
 "$out/proc_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/proc/signal_test.c" -o "$out/signal_test"
+    -I "$root/src/kernel/include" "$root/tests/host/proc/signal_test.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/signal_test"
 # Assemble the new fixture even before the lead integrates its canonical
 # build hook. Values are target-generated from the one public ABI header.
 python3 - "$out" <<'PY'
@@ -162,3 +162,11 @@ for key, value in json.loads((out / "abi-layout.json").read_text()).items():
 PY
 nasm -f bin -I "$out/" "$root/tests/host/proc/signal_payload.asm" -o "$out/signal-payload.elf"
 "$out/signal_test" "$out/signal-payload.elf"
+
+# F2 desktop objects and supervisor. The same standalone NASM ELF is handed
+# to the lead's canonical build hook; host validation does not execute it.
+nasm -f bin -I "$out/" "$root/tests/host/proc/desktop_payload.asm" -o "$out/desktop-payload.elf"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/proc/desktop_test.c" \
+    "$root/tests/host/proc/signal_legacy.c" "$root/src/kernel/lib/sha256.c" -o "$out/desktop_test"
+"$out/desktop_test" "$out/desktop-payload.elf"
