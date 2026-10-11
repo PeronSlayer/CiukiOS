@@ -112,4 +112,33 @@ class Optical(unittest.TestCase):
         a.step(Parser,q,1); self.assertTrue(a.complete); self.assertEqual(q.calls[0][0],'blockdev-change-medium')
         self.assertEqual(runner.selector('f4:optical run=12345678','fw_cfg',True)['phase'],4)
 
+class OpticalDrives(unittest.TestCase):
+    """Campaign 12 (image e0af9210, optical-malformed-qemu-t23): with no FAT
+    peer at IDE index 2 QEMU added its default empty CD-ROM there, the probe
+    took that first packet device and reported no medium (-5, refused=0).
+    Every optical case must present exactly the declared drive: an explicit
+    ide-cd frontend on the secondary slave, which also clears QEMU's default
+    CD-ROM (system/vl.c default_list), and no legacy if=ide CD-ROM."""
+    def test_every_optical_case_declares_one_secondary_slave_ide_cd(self):
+        suite=runner.load(ROOT/'tests/suites/f4-media.json')
+        cases=[c for c in suite['cases'] if c['probe']=='optical']
+        self.assertEqual(sorted({c['profile'] for c in cases if 'malformed' in c['id']}),['qemu-desktop-2002','qemu-t23'])
+        for case in cases:
+            with self.subTest(case=case['id']):
+                profile=runner.load(ROOT/f"tests/profiles/{case['profile']}.json")
+                args,request=runner.qemu_args('fixture',profile,case,'12345678',Path('overlay'),Path('bios'))
+                self.assertEqual(request,'f4:optical run=12345678')
+                iso=[i for i,f in enumerate(case['fixtures']) if f.get('generator')=='xorriso']
+                self.assertEqual(len(iso),1)
+                drives=[args[i+1] for i,a in enumerate(args) if a=='-drive']
+                devices=[args[i+1] for i,a in enumerate(args) if a=='-device']
+                self.assertEqual([d for d in drives if 'ciuki-optical' in d],
+                                 [f'file=fixture-{iso[0]}.iso,format=raw,if=none,readonly=on,id=ciuki-optical'])
+                self.assertEqual([d for d in devices if d.startswith('ide-')],['ide-cd,drive=ciuki-optical,bus=ide.1,unit=1'])
+                self.assertFalse([d for d in drives if 'media=cdrom' in d or 'index=3' in d])
+                # Legacy fixture disks keep IDE indices 1..2 next to the CD-ROM.
+                disks=[d for d in drives if '.img,' in d]
+                self.assertEqual(len(disks),len(case['fixtures'])-1)
+                self.assertTrue(all(f'index={n},' in d for n,d in zip(range(1,3),disks)))
+
 if __name__=='__main__':unittest.main()
