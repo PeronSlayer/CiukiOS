@@ -8,6 +8,7 @@
 #include <ciuki/task.h>
 #include <ciuki/probe.h>
 #include <ciuki/registry.h>
+#include <ciuki/version.h>
 
 struct ciuki_boot_info g_boot;
 
@@ -41,6 +42,9 @@ void kmain(uint32_t magic, uint32_t bi_phys)
     if (text)
         console_init_text();
     klog("Ciuki VMM F0 build %s - CiukiOS", CIUKI_BUILD_ID);
+    /* A separate line: scripts/test/physical.py and its host fixtures match
+     * the banner above, so its text stays as it is. */
+    klog("CiukiOS %s", CIUKI_VERSION);
 
     cpu_detect();
     gdt_init();

@@ -73,7 +73,7 @@ struct desktop {
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
     int realtime_source;
-    char build_identity[65], notice[64];
+    char build_identity[65], version[65], notice[64];
     struct desk_program programs[DESK_MENU_MAX];
     unsigned program_count;
     struct desk_child children[DESK_CLIENTS];

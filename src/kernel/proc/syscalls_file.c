@@ -7,6 +7,7 @@
 #include <ciuki/clock.h>
 #include <ciuki/signal.h>
 #include <ciuki/audio.h>
+#include <ciuki/version.h>
 #pragma weak audio_write_user
 #pragma weak audio_devctl
 
@@ -17,7 +18,7 @@
 static int file_uname(uint32_t address)
 {
     struct ciuki_utsname out = { .sysname = "CiukiOS", .nodename = "ciuki",
-        .release = CIUKI_BUILD_ID, .version = CIUKI_BUILD_ID, .machine = "i686",
+        .release = CIUKI_BUILD_ID, .version = CIUKI_VERSION, .machine = "i686",
         .abi_version = CIUKI_ABI_VERSION };
     struct clock_seed seed;
     file_clock_snapshot(&seed);

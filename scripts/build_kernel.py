@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import hashlib
+import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +74,16 @@ def check_toolchain() -> None:
     for key, value in found.items():
         if pins[key] != value:
             raise SystemExit(f"toolchain mismatch: {key} is {value}, pinned {pins[key]}")
+
+
+def read_version() -> dict:
+    """{'number', 'stage', 'display'} from config/version.json (the single
+    source; scripts/ciuki_version.py validates it)."""
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("ciuki_version", ROOT / "scripts" / "ciuki_version.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.load()
 
 
 def build_id() -> tuple[str, str, int]:
@@ -148,6 +159,7 @@ def main() -> int:
     OBJ.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = str(OUT)
     bid, bhex, bdirty = build_id()
+    version = read_version()["display"]
     epoch = int(os.environ.get("SOURCE_DATE_EPOCH", str(int(time.time()))))
     if epoch < 0 or epoch > 0x7fffffffffffffff:
         raise SystemExit("invalid build epoch")
@@ -198,6 +210,7 @@ def main() -> int:
                     list((SRC / "audio").glob("*.c")) + list((SRC / "proc").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
         run(["clang", *CFLAGS, *frame_flags(c), f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
+             f'-DCIUKI_VERSION="{version}"',
              f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',
              f'-DCIUKI_SIGNAL_PAYLOAD_BIN="{signal_payload}"',
              f'-DCIUKI_DESKTOP_PAYLOAD_BIN="{desktop_payload}"',
@@ -235,10 +248,11 @@ def main() -> int:
     run(["ld.lld", "-m", "elf_i386", "-T", str(SRC / "linker.ld"), "--no-undefined",
          "-Map", str(OUT / "VMM.map"), "-o", str(elf), *map(str, objs)])
     audit(elf)
-    clock_record = {"utc_epoch": epoch, "kernel_sha256": hashlib.sha256(elf.read_bytes()).hexdigest()}
+    clock_record = {"utc_epoch": epoch, "kernel_sha256": hashlib.sha256(elf.read_bytes()).hexdigest(),
+                    "version": version}
     (OUT / "build-clock.json").write_text(json.dumps(clock_record, indent=2) + "\n")
     size = elf.stat().st_size
-    print(f"[build-kernel] {elf.relative_to(ROOT)} ({size} bytes), build {bid}")
+    print(f"[build-kernel] {elf.relative_to(ROOT)} ({size} bytes), CiukiOS {version}, build {bid}")
     return 0
 
 

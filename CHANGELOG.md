@@ -1,10 +1,32 @@
 # Changelog
 
-## Unreleased — Ciuki VMM foundations, phase F0 (`main`, from 2026-10-09)
+## 0.9.0 pre-alpha (unreleased, `main`, from 2026-10-09)
 
-The 0.8 line is frozen on branch `legacy-0.8`; prerelease 0.8.3 build 849
-(`868cac9`) is its last release. `main` now builds the new 32-bit kernel.
-Main prereleases are suspended until the F1 gate (`config/release-policy.json`).
+First version of the Ciuki VMM line. The 0.8 line is frozen on branch
+`legacy-0.8`; prerelease 0.8.3 build 849 (`868cac9`) is its last release.
+`main` builds the new 32-bit kernel and a 512 MiB FAT32 image
+(`make build-full`). Main prereleases stay suspended by
+`config/release-policy.json`; nothing of 0.9.0 is published.
+
+Evidence status. Every result below was measured on QEMU TCG for one image
+SHA-256 (`docs/validation/2026-10-11-integrated-image-f0-regression.md`)
+unless it says "hardware". Hardware qualification is open: only the ThinkPad
+T23 has run this line (unattended sweeps, see "Hardware"); the Armada E500
+and the generic 1998–2004 desktop PCs of `docs/design/hardware-baseline.md`
+have no recorded run, and F3 and F4 have no hardware evidence. A QEMU result
+never qualifies a physical PC. QEMU TCG deviations are recorded in
+`docs/validation/2026-10-09-f0/README.md` (FLD precision control; TCG does not
+raise `#AC`, so the fault probe falls back on a page fault there while
+hardware must still raise vector 17).
+
+- Version identity: `config/version.json` is the single source
+  (`0.9.0`, `pre-alpha`). The kernel logs `CiukiOS <version>` after its build
+  banner, `uname` returns it in `version` (`release` stays the build ID), the
+  desktop About window and the loader menu title show it, and
+  `build-manifest.json` records it. `tests/host/test_version.py` checks that
+  `VERSION`, this file and `README.md` agree with it.
+
+### F0 — foundations (2026-10-09)
 
 - Decide, with a second AI agent's review and the owner's mandate, to move
   to a 32-bit protected-mode kernel with Windows 95/98-class structure (dev
@@ -25,12 +47,9 @@ Main prereleases are suspended until the F1 gate (`config/release-policy.json`).
   read-only PCI inventory, and the ten embedded acceptance probes.
 - Add the test runner (`scripts/test/run.py`): shared lock, capped systemd
   scopes, qcow2 overlays, QMP, evidence parser, `result.json`; QEMU twin
-  profiles for the T23 and E500; suites `f0-smoke`, `f0-core`, `f0-panic`,
-  `f0-runner`; hardware replay fixtures and a loader reference model.
-- Evidence on QEMU TCG (`docs/validation/2026-10-09-f0/`): all ten kernel
-  probes pass; warm restarts pass after two runner corrections; a QEMU
-  deviation (FLD rounded to the x87 precision control) is documented.
-  Physical T23/E500 runs remain open.
+  profiles for the T23 and E500 (later also `qemu-min128`, `qemu-desktop-1998`
+  and `qemu-desktop-2002`); hardware replay fixtures and a loader reference
+  model.
 - Replace the Makefile: `build-full`, `test-host`, `qemu-test-full` and
   `qemu-run-full` target the new image; the 0.8 scripts stay as
   `legacy-*` targets until each component is migrated or retired.
@@ -39,6 +58,123 @@ Main prereleases are suspended until the F1 gate (`config/release-policy.json`).
   built for CiukiOS, LAN play, later Windows 95/98 games through Wine and
   3D on chosen chips. Decide a POSIX-compatible native API for F2 and a
   network step (F6); extend the plan to F0 plus eight steps (F1–F8).
+- Evidence on QEMU TCG: `f0-smoke` 2/2 and `f0-core` 92/92 on the five
+  profiles (image `33a68c43…`). On the T23 the nine non-fatal F0 probes pass
+  in the hardware sweeps; the deliberate `panic` probe halts the machine and
+  ends `not_run reason=reset_before_completion`, recovered by a power cycle.
+
+### F1 — drivers, storage, FAT32, input, safe mode
+
+- Kernel services (f1-00): sleeping mutex, wait queues, deferred work,
+  generation-checked handles, registry lifecycle with quarantine, shared PCI
+  IRQ chains.
+- Drivers: i8042 keyboard and mouse (f1-04), framebuffer device (f1-05), ATA
+  PIO (f1-06). They start at boot (f1-08); safe mode limits activations to
+  the console and input. A V86 monitor with virtual PIC/PIT/RTC and a
+  serialized BIOS VM provides the firmware-first input backend that the loader
+  selects for the Armada E500 platform (f1-07, f1-07b, f1-19).
+- Storage: FAT volumes mounted at boot, read-only first and read/write after
+  the read gate and the durability check (f1-09); 128 KiB boot log in
+  `\SYSTEM\LOGS\BOOT.LOG`; read-only RTC provider; dirty-volume recovery at
+  mount (f1-26, observed as `reason=dirty_recovered` on the T23); six
+  deterministic corrupted-FAT32 fixtures and a crash-cut reboot case
+  (f1-22, f1-24); read cases `fat12-read`, `fat16-read` and `fat32-read`.
+- Loader and test infrastructure: `BOOT.CFG` options and platform detection,
+  menu with safe-then-probe (f1-37), unattended hardware sweep
+  (`probe=<phase>:sweep`, cursor, kernel self-reboot, f1-28), importer for
+  physical captures (f1-33, f1-35).
+- Hardware baseline (f1-20, owner decision 2026-10-11): one i686 image
+  (CMOV) for the T23, the E500 and assembled desktop PCs of 1998–2004, no
+  per-machine images.
+- Evidence on QEMU: `f1-input`, `f1-storage`, `f1-fat32` and `f1-safe` pass
+  in the single `f2-all` batch on image `b9c052cd…` (186 PASS; the three
+  `uart-absent-*` cases need an operator, two `safe-menu-*` cases are
+  physical-only and stay `not_run`).
+
+### F2 — native processes, POSIX subset, libc, desktop
+
+- Processes (f2-02): separate from tasks, PID 1 supervisor, restricted
+  ELF32 loader with rollback, `spawn` with explicit inheritance, mmap arena,
+  threads with TLS, wait words; signals (f2-04); files, paths, clocks and
+  `uname` (f2-03, f2-10). The public ABI is `ciuki/abi.h`, system calls 0–68
+  from f2-01, plus 69 (`devctl`), 70 (`proc_list`), 71 (`proc_terminate`) and
+  72 (DOS VM window).
+- POSIX subset and libc (contract `docs/design/posix-subset.md`): offline
+  build of newlib 4.5.0.20241231 with the `ciuki-cc` wrapper, `crt0`,
+  `libpthread` and `libciuki` (`docs/sdk.md`); the SDK headers are MIT.
+  Lua 5.4.8 is built unmodified; its upstream test suite with `_U=true` exits
+  zero in the guest.
+- Crash isolation: the desktop runs as a ring-3 process; 100 victim cycles
+  over five fault kinds leave it and a survivor running on the five QEMU
+  profiles (`desktop_restarts=0`, post-fault input consumed, portrait region
+  checked on the screen).
+- Desktop (f2-08, f2-30): taskbar with clock, Ciuki menu built from `/bin`,
+  minimise, window protocol v2 (close requests), About window with the
+  approved Ciuki portrait, Tango icons (`desktop-shell-qemu-t23/e500` pass).
+- Applications on the `libdeskui` toolkit (f2-31, f2-32, f2-33, merged
+  2026-10-11, commit `1241de1`): Files, CiukNote (`/bin/ciuknote`) and Task
+  Manager (`/bin/tasks`, using calls 70/71 and protocol v2 opcodes 15–20
+  restricted to the launched Task Manager). QEMU evidence is pending at the
+  time of this entry: their cases (`files-qemu-t23`, `ciuknote-qemu-t23`,
+  `tasks-qemu-t23`) have not yet run on an integrated image.
+- Evidence on QEMU: `f2-process`, `f2-runtime`, `f2-desktop` and `f2-app`
+  pass in the `f2-all` batch on image `b9c052cd…`, including `app-gate`
+  (upstream Lua suite and supplement).
+
+### F3 — DOS virtual machines
+
+- VM core (f3-00) on the V86 monitor: lifecycle and admission, private FAT16
+  `DOSBOOT.IMG` with a file-backed copy-on-write overlay, virtual BIOS, the
+  CIUKIDOS personality booting to the COMMAND_COMPAT shell, record channel on
+  port E9, probe `f3:vm-boot`.
+- Memory services (f3-03): A20/HMA, XMS 3.0, UMB, EMS 4.0 (entry vector
+  `F100:0000`), synthetic INT 15h memory map, second-VM admission arithmetic.
+- Devices (f3-01): per-VM PIC, PIT, keyboard controller and mouse (INT 33h)
+  models with IRQ delivery.
+- Video (f3-02): trapped VGA at A0000h–BFFFFh, INT 10h and VBE answers, fonts,
+  the `/bin/dosbox` window and call 72, probes `vm-video` and `vm-window`.
+- Evidence on QEMU: image `fcd96d6e…` is the first on which DOS VMs boot:
+  `f3-vm` 195 PASS (F0–F2 prefix, then `vm-boot` and `vm-memory` on
+  `qemu-t23`, `qemu-e500` and `qemu-min128`), `f0-smoke` 2/2, `f2-all` 189
+  PASS (the three `uart-absent-*` operator cases excepted). `vm-devices`
+  passes on those three profiles on a worktree image; the f3-01 and f3-02 code
+  is merged and its integrated-image campaign is pending.
+- Not in this version: DPMI host (f3-04) and SB16/OPL3/DMA state (f3-05) are
+  written as directives only, and INT 2Fh AX=1687h reports no DPMI; DOS
+  workloads such as DOOM and Wolfenstein 3D (f3-06) are not started. F3 has no
+  recorded hardware run.
+
+### F4 — audio, optical media, NTFS read-only
+
+- Contract `docs/design/f4-audio-media-contract.md` approved 2026-10-11.
+- Native audio (f4-01): `/dev/audio`, `/dev/mixer`, call 69, integer mixer,
+  Intel ICH AC'97 backend for five PCI IDs, persistent master volume,
+  probe `f4:audio-native` with a WAV checker. `audio-native-qemu-t23` passes on
+  image `38a7b4e7…` (4.0 s capture, six windows at 440/880 Hz).
+- Optical media (f4-02): ATAPI PIO, ISO 9660/Joliet through the `fs_ro`
+  interface, probe `f4:optical` with eight cases; `optical-l1-qemu-t23`
+  passes on image `38a7b4e7…`.
+- NTFS read-only (f4-03, f4-04): independent `ntfs_ro` library (GPL-2.0-only,
+  no NTFS3 code) with 27 deterministic fixtures and 14 host tests; mounts
+  through `fs_ro`, cache halves and on-demand optical cache slots, probe
+  `f4:ntfs-ro` with 12 `f4-media` cases. The f4-04 code is merged; its QEMU
+  campaign is pending.
+- Not in this version: ESS Maestro-2E backend, the audio path of DOS VMs,
+  2D acceleration (deferred by the contract).
+
+### Hardware (ThinkPad T23 only)
+
+- The T23 boots the integrated image from disk, mounts C: read/write with the
+  boot log and shows the desktop with the portrait. Three unattended sweeps
+  (33, 35 and 35 boots) ran F0, F1 and F2 probes; the third (image
+  `6ed146ab…`, capture `77777777`) ended `SWEEP_END passed=29 failed=4
+  not_run=2`. `app-gate`, `fd-table` and `fat-read` pass; the four failures
+  are `input`, the `crash-isolation` interaction under an operator's event
+  stream, the `channel-eintr` subcase of `signals-fault` and the `safe` step.
+  The diary attributes them to criteria written for QEMU (exact stimulus
+  totals, a safe-mode step outside safe mode, a thread state sampled as
+  `T_READY`), addressed by f1-34, f1-36 and f2-23; their re-run on hardware is
+  not recorded here. No Armada E500 or generic desktop PC run is recorded.
 
 ## 0.8 line — final state (2026-10-09, branch `legacy-0.8`)
 
@@ -92,7 +228,7 @@ Detailed qualification and limits: current status.
 
 
 All notable project-level changes are tracked here.
-This changelog is intentionally concise. Every completed task should update `Unreleased` unless the task cuts a release section.
+This changelog is intentionally concise. Every completed task should update the topmost unreleased section (`0.9.0 pre-alpha`) unless the task cuts a release section.
 
 ## Earlier development snapshot — 2026-10-01
 

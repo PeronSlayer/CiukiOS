@@ -35,6 +35,28 @@ suites in `tests/suites/` (`docs/design/test-architecture.md`,
 Interactive runs use TCG by default; KVM is only for the `qemu-fast`
 developer profile and never for evidence.
 
+## Version
+
+`config/version.json` is the single source of the CiukiOS version
+(`0.9.0`, stage `pre-alpha`). `scripts/ciuki_version.py` validates it and:
+
+- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="0.9.0 pre-alpha"` to every
+  kernel object and records `version` in `build/f0/build-clock.json`. The kernel
+  logs `CiukiOS <version>` on the line after the `Ciuki VMM F0 build <id> - CiukiOS`
+  banner (that banner is parsed by `scripts/test/physical.py` and is unchanged)
+  and `uname` returns it in `version` (`release` stays the build ID); the desktop
+  About window shows it as `Version <version>`.
+- `scripts/build_image.py` refuses a kernel built with another version, passes
+  `-dCIUKI_VERSION='...'` to the loader (menu title `CiukiOS <version>: N Normal /
+  ...`) and writes `version` in `build/f0/build-manifest.json` (schema_version
+  stays 1).
+- `VERSION`, `CHANGELOG.md` and `README.md` are written by hand;
+  `tests/host/test_version.py` checks that they agree with the file.
+
+Bump the version by editing `config/version.json` and those three files, then
+`make build-full`. Publication of `main` prereleases stays governed by
+`config/release-policy.json`.
+
 ## NTFS host fixtures (f4-03)
 
 Install ntfs-3g's `mkntfs`, `ntfscp`, `ntfsls`, `ntfscat`, `ntfstruncate`

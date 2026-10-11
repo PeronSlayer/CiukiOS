@@ -45,6 +45,15 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def read_version():
+    """{'number', 'stage', 'display'} from config/version.json, the single
+    source of the CiukiOS version (validated by scripts/ciuki_version.py)."""
+    spec = importlib.util.spec_from_file_location("ciuki_version", ROOT / "scripts/ciuki_version.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.load()
+
+
 def desktop_payloads():
     """Validate desktop/demo ELFs and the exact converted portrait independently."""
     spec = importlib.util.spec_from_file_location("build_desktop", ROOT / "apps/desktop/build_desktop.py")
@@ -232,6 +241,12 @@ def build(kernel, out, boot_cfg):
             raise SystemExit(f"missing host tool: {tool}")
     if not kernel.is_file():
         raise SystemExit(f"kernel not found: {kernel}")
+    # Refuse a kernel compiled with another version before the long steps; the
+    # record is absent only for kernels built before the version existed.
+    built = json.loads((kernel.parent / "build-clock.json").read_text()).get("version")
+    wanted = read_version()["display"]
+    require(built in (None, wanted),
+            f"kernel built as '{built}', config/version.json says '{wanted}'; run make kernel")
     options = boot_cfg.read_bytes() if boot_cfg else DEFAULT_CONFIG
     if len(options) > 127 or b"\0" in options or any(c > 127 for c in options):
         raise SystemExit("BOOT.CFG must be <=127 ASCII bytes without NUL")
@@ -253,7 +268,10 @@ def build(kernel, out, boot_cfg):
         cfg = scratch / "BOOT.CFG"
         cfg.write_bytes(options)
         run("nasm", "-f", "bin", ROOT / "src/boot/mbr.asm", "-o", mbr_path)
-        run("nasm", "-f", "bin", ROOT / "src/boot/ciukldr.asm", "-o", loader_path)
+        # The menu title carries the version; tests assemble the loader
+        # without the define and get 'unknown'.
+        run("nasm", "-f", "bin", f"-dCIUKI_VERSION='{wanted}'",
+            ROOT / "src/boot/ciukldr.asm", "-o", loader_path)
         loader = prepare_loader(loader_path.read_bytes())
         loader_path.write_bytes(loader)
         mbr = bytearray(mbr_path.read_bytes())
@@ -330,6 +348,9 @@ def write_manifest(image, kernel, image_sha, payloads, metadata):
     require(clock_record["kernel_sha256"] == sha256(kernel), "kernel build-clock hash")
     manifest = {
         "schema_version": 1,
+        # The version the kernel was compiled with (build() has checked it
+        # against config/version.json).
+        "version": clock_record.get("version", read_version()["display"]),
         "git_revision": rev,
         "git_dirty": dirty,
         "image": image.name,
