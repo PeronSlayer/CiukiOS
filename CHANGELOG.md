@@ -139,10 +139,14 @@ hardware must still raise vector 17).
   PASS (the three `uart-absent-*` operator cases excepted). `vm-devices`
   passes on those three profiles on a worktree image; the f3-01 and f3-02 code
   is merged and its integrated-image campaign is pending.
-- Not in this version: DPMI host (f3-04) and SB16/OPL3/DMA state (f3-05) are
-  written as directives only, and INT 2Fh AX=1687h reports no DPMI; DOS
-  workloads such as DOOM and Wolfenstein 3D (f3-06) are not started. F3 has no
-  recorded hardware run.
+- Kernel-owned DPMI 0.9 host (f3-04: six stages, LDT at GDT index 8,
+  INT 2Fh AX=1687h entry, DPMI16/DPMI32 conformance clients and a DOS/4GW
+  client built with Open Watcom; `f3:dpmi` cases) and per-VM Sound Blaster
+  16, OPL3 and 8237 DMA state models with the F4 consumer interface (f3-05;
+  `f3:vm-audio-state` cases): merged with host evidence (327 host tests,
+  libx86emu guest runner DPMI16/DPMI32/DOS4GW PASS); their integrated-image
+  QEMU campaign is pending. DOS workloads such as DOOM and Wolfenstein 3D
+  (f3-06) are in progress. F3 has no recorded hardware run.
 
 ### F4 — audio, optical media, NTFS read-only
 

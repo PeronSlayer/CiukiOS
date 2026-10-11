@@ -166,6 +166,10 @@ available-memory answers MUST follow [XMS 3.0](https://www.phatcode.net/res/219/
 `C0000–C7FFF` and `F0000–FFFFF` for virtual ROM/stubs, offer at most
 `C8000–DFFFF` as UMB RAM, and reserve `E0000–EFFFF` for an EMS frame.
 This is a guest design, not a statement about T23/E500 firmware holes.
+Amendment accepted by the lead at the f3-04 merge (2026-10-11): within the
+`C0000–C7FFF` reservation, `C6000–C7FFF` is the DPMI host's real-mode
+stack (writable guest pages, `DPMI_RSTACK_PAGE`); `C8000–C8FFF` holds the
+read-only XMS entry stub, so UMB RAM starts at `C9000`.
 Conventional free memory MUST be measured after CIUKIDOS boot, not reported
 as an unconditional 640 KiB.
 
