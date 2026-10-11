@@ -440,3 +440,36 @@ F1 device behavior on the two laptops, and the later Wine host/backend version.
 **[F2]** These MUST be reported as unmeasured until tested. Source commit/archive
 digests MUST be closed by the import directive before building; measured memory
 shortfalls MUST return to the lead without automatically changing budgets.
+
+
+## F4-01 amendment: native playback extension (2026-10-11)
+
+The SDK adds MIT-licensed `ciuki/audio.h` and `ciuki_devctl(int fd,
+uint32_t op, void *record, uint32_t size)`: 0 on success, -1/errno on failure.
+It uses syscall 69 and precisely the operation numbers, sizes and fields in
+[execution-abi.md](execution-abi.md#f4-01-amendment-copied-audio-device-control-frozen-2026-10-11).
+`__CIUKI_AUDIO_VERSION__=1` advertises this extension, not POSIX ioctl support.
+
+`/dev` additionally contains audio and mixer character leaves. Audio accepts
+O_WRONLY (otherwise EACCES), fails ENODEV without a qualified runtime backend,
+and admits at most eight independent opens, each with a charged 2048-frame
+copied ring. The default is S16LE stereo 48000 Hz; U8/S16LE, mono/stereo and
+8000..48000 Hz are supported. A write must contain complete source frames,
+starts on its first nonempty transfer, blocks cancellably when full, and gives
+whole-frame short counts/EAGAIN with O_NONBLOCK. A signal before progress gives
+EINTR; partial progress wins over EINTR/EIO. Zero length returns zero. Final
+close drops uncommitted audio without drain. Dup and explicit inheritance share
+the description and ring. Reset clears phase and permits format change.
+
+Public mixer opens require O_RDONLY. Master changes require the non-inheritable
+bootstrap-delegated control description. PID 1 installs it in the trusted desktop
+before publishing that process and passes its fd as `CIUKI_MIXER_FD`; ordinary
+children do not receive it. Logical master gain is linear software
+gain before final clipping; explicit mute also sets verified codec mute paths.
+Defaults are 50/50 unmuted. SET_MASTER reports applied-but-unsaved using the
+record fields on read-only storage or durability error. Settings use two
+checksummed versioned slots in C:\SYSTEM\AUDIO.CFG, retaining a previous valid
+slot on save failure. No refill/IRQ path reads or writes a file. Both device
+leaves reject creation/truncation/directory/append flags, seek and positioned
+I/O (ESPIPE); mixer byte I/O gives EBADF. No recording, poll/select or UI is
+introduced. Earlier F2-only namespace descriptions remain historical.

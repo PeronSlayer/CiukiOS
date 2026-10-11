@@ -5,6 +5,8 @@
 #include <ciuki/files.h>
 #include <ciuki/clock.h>
 #include <ciuki/fat_native.h>
+#include <ciuki/audio.h>
+#pragma weak audio_device_open
 
 static struct px_namespace *spaces;
 
@@ -153,10 +155,13 @@ int files_attach(struct vfs *v, struct px_namespace **out)
             memcpy(s->mnt->entry.name, "mnt", 4); memcpy(s->dev->entry.name, "dev", 4);
             s->null = node_new(s, s->dev, PX_NULL);
             s->console = node_new(s, s->dev, PX_CONSOLE);
-            if (!s->null || !s->console) err = -ENOMEM;
+            s->audio = node_new(s, s->dev, PX_AUDIO);
+            s->mixer = node_new(s, s->dev, PX_MIXER);
+            if (!s->null || !s->console || !s->audio || !s->mixer) err = -ENOMEM;
         }
         if (!err) {
             memcpy(s->null->entry.name, "null", 5); memcpy(s->console->entry.name, "console", 8);
+            memcpy(s->audio->entry.name, "audio", 6); memcpy(s->mixer->entry.name, "mixer", 6);
         }
         if (err) files_detach(v);
     }
@@ -242,6 +247,8 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
     if (p == s->dev) {
         if (path_equal(name, "null")) *out = s->null;
         else if (path_equal(name, "console")) *out = s->console;
+        else if (path_equal(name, "audio")) *out = s->audio;
+        else if (path_equal(name, "mixer")) *out = s->mixer;
         else return -ENOENT;
         return 0;
     }
@@ -392,7 +399,7 @@ int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
         out->st_blksize=n->ro->dev->sector_size; out->st_blocks=(n->ro_size+511)/512;
         out->st_mode=directory(n) ? S_IFDIR|0555 : S_IFREG|0444; return 0;
     }
-    if (!n->volume) { out->st_rdev = n->kind == PX_NULL ? 1 : n->kind == PX_CONSOLE ? 2 : 0; return 0; }
+    if (!n->volume) { out->st_rdev = n->kind == PX_NULL ? 1 : n->kind == PX_CONSOLE ? 2 : n->kind == PX_AUDIO ? 3 : n->kind == PX_MIXER ? 4 : 0; return 0; }
     out->st_dev = n->drive + 1;
     out->st_size = n->kind == PX_FILE ? n->entry.size : 0;
     out->st_blksize = n->volume->spc * 512;
@@ -424,7 +431,7 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
     if (((r.node && r.node->ro) || (r.parent && r.parent->ro)) &&
         ((flags&O_ACCMODE)!=O_RDONLY || (flags&(O_CREAT|O_TRUNC)))) return -EROFS;
     if (r.node && r.node->ro && (err=px_share_locked(r.node,VFS_READ,d->deny))) return err;
-    if (r.node && (r.node->kind == PX_NULL || r.node->kind == PX_CONSOLE)) {
+    if (r.node && (r.node->kind == PX_NULL || r.node->kind == PX_CONSOLE || r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER)) {
         if ((err = device_open(r.node->kind, flags))) return err;
     } else if (r.node && directory(r.node)) {
         if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) return -EISDIR;
@@ -456,7 +463,12 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
         px_changed_locked(r.node);
         if (err) return px_error(err);
     }
-    d->node = r.node; px_retain(r.node);
+    d->node = r.node;
+    if (r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER) {
+        err = audio_device_open ? audio_device_open(d, flags) : r.node->kind == PX_AUDIO ? -ENODEV : 0;
+        if (err) { d->node = 0; return err; }
+    }
+    px_retain(r.node);
     d->next = s->descriptions; s->descriptions = d;
     return 0;
 }
@@ -600,8 +612,9 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     uint32_t cursor = d->cursor;
     if (d->position < 2) { name = d->position ? ".." : "."; n = d->position ? dir->parent : dir; }
     else if (dir == dir->space->dev) {
-        if (d->position > 3) return 0;
-        n = d->position == 2 ? dir->space->null : dir->space->console; name = n->entry.name;
+        if (d->position > 5) return 0;
+        struct px_node *devices[] = { dir->space->null, dir->space->console, dir->space->audio, dir->space->mixer };
+        n = devices[d->position - 2]; name = n->entry.name;
     } else if (dir == dir->space->mnt) {
         if (!cursor) cursor = 3;
         while (cursor < 26 && !vfs_drive_present(dir->space->vfs,cursor)) cursor++;

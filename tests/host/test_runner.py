@@ -956,7 +956,8 @@ int dispatch(const char *s,unsigned flags,unsigned count,int fail) {
     calls0=calls1=calls2=calls3=0;evidence[0]=0;failing=fail;
     struct probe_selection selection;
     if (probes_parse_selector(s,(unsigned)strlen(s),flags,&selection)) {
-        const struct probe_tables tables = { fixture_f0, fixture_f1, 9, count, fixture_f2, 2, fixture_f3, 1 };
+        const struct probe_tables tables = { .f0=fixture_f0, .f1=fixture_f1, .f0_count=9,
+            .f1_count=count, .f2=fixture_f2, .f2_count=2, .f3=fixture_f3, .f3_count=1 };
         const struct probe_hooks hooks = { app_begin, app_end, panic_probe };
         probes_dispatch(&selection,&tables,&hooks);
     }

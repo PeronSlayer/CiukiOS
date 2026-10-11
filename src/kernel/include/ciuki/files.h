@@ -6,7 +6,7 @@
 #include <ciuki/process.h>
 #include "../../fs/vfs.h"
 
-enum px_kind { PX_FILE, PX_DIRECTORY, PX_NULL, PX_CONSOLE, PX_MNT, PX_DEV };
+enum px_kind { PX_FILE, PX_DIRECTORY, PX_NULL, PX_CONSOLE, PX_MNT, PX_DEV, PX_AUDIO, PX_MIXER };
 struct px_namespace;
 struct px_node {
     struct px_namespace *space;
@@ -22,17 +22,20 @@ struct px_node {
     enum px_kind kind;
     bool linked, mountpoint;
 };
+struct audio_stream;
 struct file_description {
     struct proc_object object;
     struct file_description *next;
     struct px_node *node;
+    struct audio_stream *audio;
+    bool mixer_control;
     uint64_t position;
     uint32_t references, flags, deny, cursor, stream;
 };
 struct px_namespace {
     struct vfs *vfs;
     struct px_namespace *next;
-    struct px_node *nodes, *root, *mnt, *dev, *null, *console;
+    struct px_node *nodes, *root, *mnt, *dev, *null, *console, *audio, *mixer;
     struct file_description *descriptions;
     uint64_t next_ino;
 };

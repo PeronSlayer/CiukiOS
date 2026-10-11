@@ -1066,3 +1066,58 @@ numbers MUST fail EBADF before grant authorization; an owned descriptor of the
 correct kind without the required grant rights MUST fail EACCES. A valid
 display/input grant MAY be duplicated within the same process, but MUST NOT
 escape that process through inheritance or channel attachment.
+
+
+## F4-01 amendment: copied audio device control (frozen 2026-10-11)
+
+Syscall **69**, `CIUKI_SYS_DEVCTL`, uses B=fd, C=operation, D=buffer,
+S=byte size, returns 0 or a negative errno. No F0/F2 number changes.
+All records are little endian, four-byte aligned, version=1 at byte 0 and
+size at byte 4. Size must equal both the record size and S. Reserved words
+must be zero. Unknown operation: ENOTTY; unknown version: EOPNOTSUPP;
+wrong size/reserved/range: EINVAL. The entire record is copied and its writable
+user range pinned before mutation or waiting; getters also take a header and
+reserved zeros. No hardware address or user DMA mapping is returned.
+
+| Operation | Number | Record / bytes |
+| --- | --- | --- |
+| AUDIO_GET_CAPS | 0x4101 | ciuki_audio_caps / 80 |
+| AUDIO_SET_FORMAT | 0x4102 | ciuki_audio_format / 32 |
+| AUDIO_GET_STATUS | 0x4103 | ciuki_audio_status / 112 |
+| AUDIO_SET_GAIN | 0x4104 | ciuki_audio_gain / 24 |
+| AUDIO_DRAIN | 0x4105 | ciuki_audio_command / 16 |
+| AUDIO_RESET | 0x4106 | ciuki_audio_command / 16 |
+| MIXER_GET_MASTER | 0x4201 | ciuki_mixer_master / 32 |
+| MIXER_SET_MASTER | 0x4202 | ciuki_mixer_master / 32 |
+
+The exact fields below are consecutive u32 unless marked u64/i32. All records
+start with version,size. U8=1, S16LE=2; caps formats uses bits 0/1.
+
+| Record | Remaining fields, in byte order |
+| --- | --- |
+| caps | formats, min_rate, max_rate, output_rate, max_streams, ring_frames, period_frames, published_periods, backend (1=ICH AC97), generation, vendor, device, subsystem (sub_vendor low 16), revision, codec_id, drain_ms, reserved[2] |
+| format | rate, format, channels, output_rate (input zero), reserved[2] |
+| gain | left, right, reserved[2] |
+| command | reserved[2] |
+| status | queued_frames, state (0=idle,1=started,2=failed), output_rate, generation, u64 accepted_frames, consumed_frames, output_frames, fetched_frames, source_starvation, fifo_errors, dma_halts, deadline_misses; i32 last_error; stream_generation, max_service_us, max_irq_us, transport_frames, reserved |
+| master | left, right, mute (0/1), save_state (0=defaults,1=saved,2=applied_unsaved), i32 save_error, reserved |
+
+SET_MASTER input save_state/save_error must be zero. Volumes/gains are 0..100.
+A successful SET_MASTER applies immediately and reports an unsuccessful save
+in save_state/save_error; a codec failure returns EIO. Public mixer descriptions
+are read-only, and SET_MASTER returns EACCES. Only the bootstrap supervisor may
+install a non-inheritable O_RDWR control description into a trusted process;
+dup retains that authority in that process. Ordinary spawn and attachments
+cannot acquire it. Audio dup/inheritance share one stream, including status flags.
+Status separately exposes the unconsumed source queue and the current published
+transport queue in frames; lifetime generated/fetched counters include earlier
+runs and cannot be subtracted to infer the current queue after a stop.
+
+Complete devctl errors: EBADF, EFAULT, ENOTTY, EOPNOTSUPP, EINVAL, EACCES,
+EBUSY, ENODEV, ENOMEM, EINTR, EIO. DRAIN is I-class and waits for the snapshot
+of accepted frames and its converted/published tail plus drain_ms. RESET is
+nonblocking, discards uncommitted frames and changes stream generation; published
+periods remain owned. SET_FORMAT requires reset after the first queued frame.
+AUDIO open additionally permits ENODEV/ENOMEM; byte writes retain F2 positive
+partial-count precedence over EINTR/EIO. Device seeks/positioned I/O: ESPIPE.
+No ioctl, poll/select, recording or master authority through public opens.

@@ -1,0 +1,567 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "host_tests": true,
+  "cases": [
+    {
+      "id": "audio-native-qemu-t23",
+      "probe": "audio-native",
+      "profile": "qemu-t23",
+      "selector": "f4:audio-native run={run_id}",
+      "device_exceptions": {
+        "audio": "ac97"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory"
+            },
+            "fields": {
+              "usable_kib": {
+                "ge": 131072
+              },
+              "free_pages": {
+                "ge": 1
+              },
+              "reserved_pages": {
+                "ge": 1
+              },
+              "audio_pages": {
+                "ge": 13
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "vendor": "8086",
+              "device": "2415",
+              "generation": {
+                "ge": 1
+              },
+              "codec": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "transport"
+            },
+            "fields": {
+              "accepted_rate": {
+                "eq": 48000
+              },
+              "period_frames": {
+                "eq": 256
+              },
+              "published_periods": {
+                "eq": 8
+              },
+              "mute": {
+                "eq": 0
+              },
+              "master_left": {
+                "eq": 50
+              },
+              "master_right": {
+                "eq": 50
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock"
+            },
+            "fields": {
+              "fifo": {
+                "eq": 0
+              },
+              "halts": {
+                "eq": 0
+              },
+              "deadlines": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "source",
+              "index": "0"
+            },
+            "fields": {
+              "pid": {
+                "ge": 1
+              },
+              "accepted": {
+                "eq": 192000
+              },
+              "consumed": {
+                "eq": 192000
+              },
+              "queued": {
+                "eq": 0
+              },
+              "starvation": {
+                "eq": 0
+              },
+              "error": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "source",
+              "index": "1"
+            },
+            "fields": {
+              "pid": {
+                "ge": 1
+              },
+              "accepted": {
+                "eq": 192000
+              },
+              "consumed": {
+                "eq": 192000
+              },
+              "queued": {
+                "eq": 0
+              },
+              "starvation": {
+                "eq": 0
+              },
+              "error": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "service"
+            },
+            "fields": {
+              "max_service_us": {
+                "le": 1000
+              },
+              "max_irq_us": {
+                "le": 250
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "before_pages": {
+                "ge": 13
+              },
+              "after_pages": {
+                "eq": "$before_pages"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "codec_paths"
+            },
+            "fields": {
+              "pcm_unity": "0000",
+              "nam_bytes": {
+                "eq": 1024
+              },
+              "nabm_bytes": {
+                "eq": 256
+              }
+            }
+          }
+        ]
+      },
+      "audio_expectations": {
+        "duration": [
+          3.98,
+          4.1
+        ],
+        "quantum_frames": 256,
+        "silence_threshold": 16,
+        "windows": [
+          {
+            "seconds": [
+              0.2,
+              0.8
+            ],
+            "channel": 0,
+            "rms": [
+              4100,
+              4400
+            ],
+            "frequency": 440,
+            "frequency_tolerance": 2
+          },
+          {
+            "seconds": [
+              0.2,
+              0.8
+            ],
+            "channel": 1,
+            "rms": [
+              0,
+              8
+            ]
+          },
+          {
+            "seconds": [
+              1.2,
+              1.8
+            ],
+            "channel": 0,
+            "rms": [
+              0,
+              8
+            ]
+          },
+          {
+            "seconds": [
+              1.2,
+              1.8
+            ],
+            "channel": 1,
+            "rms": [
+              4100,
+              4400
+            ],
+            "frequency": 880,
+            "frequency_tolerance": 2
+          },
+          {
+            "seconds": [
+              2.25,
+              3.7
+            ],
+            "channel": 0,
+            "rms": [
+              2000,
+              2250
+            ],
+            "frequency": 440,
+            "frequency_tolerance": 2
+          },
+          {
+            "seconds": [
+              2.25,
+              3.7
+            ],
+            "channel": 1,
+            "rms": [
+              990,
+              1140
+            ],
+            "frequency": 880,
+            "frequency_tolerance": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "audio-native-qemu-desktop-2002",
+      "probe": "audio-native",
+      "profile": "qemu-desktop-2002",
+      "selector": "f4:audio-native run={run_id}",
+      "device_exceptions": {
+        "audio": "ac97"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory"
+            },
+            "fields": {
+              "usable_kib": {
+                "ge": 131072
+              },
+              "free_pages": {
+                "ge": 1
+              },
+              "reserved_pages": {
+                "ge": 1
+              },
+              "audio_pages": {
+                "ge": 13
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "vendor": "8086",
+              "device": "2415",
+              "generation": {
+                "ge": 1
+              },
+              "codec": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "transport"
+            },
+            "fields": {
+              "accepted_rate": {
+                "eq": 48000
+              },
+              "period_frames": {
+                "eq": 256
+              },
+              "published_periods": {
+                "eq": 8
+              },
+              "mute": {
+                "eq": 0
+              },
+              "master_left": {
+                "eq": 50
+              },
+              "master_right": {
+                "eq": 50
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock"
+            },
+            "fields": {
+              "fifo": {
+                "eq": 0
+              },
+              "halts": {
+                "eq": 0
+              },
+              "deadlines": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "source",
+              "index": "0"
+            },
+            "fields": {
+              "pid": {
+                "ge": 1
+              },
+              "accepted": {
+                "eq": 192000
+              },
+              "consumed": {
+                "eq": 192000
+              },
+              "queued": {
+                "eq": 0
+              },
+              "starvation": {
+                "eq": 0
+              },
+              "error": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "source",
+              "index": "1"
+            },
+            "fields": {
+              "pid": {
+                "ge": 1
+              },
+              "accepted": {
+                "eq": 192000
+              },
+              "consumed": {
+                "eq": 192000
+              },
+              "queued": {
+                "eq": 0
+              },
+              "starvation": {
+                "eq": 0
+              },
+              "error": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "service"
+            },
+            "fields": {
+              "max_service_us": {
+                "le": 1000
+              },
+              "max_irq_us": {
+                "le": 250
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "before_pages": {
+                "ge": 13
+              },
+              "after_pages": {
+                "eq": "$before_pages"
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "codec_paths"
+            },
+            "fields": {
+              "pcm_unity": "0000",
+              "nam_bytes": {
+                "eq": 1024
+              },
+              "nabm_bytes": {
+                "eq": 256
+              }
+            }
+          }
+        ]
+      },
+      "audio_expectations": {
+        "duration": [
+          3.98,
+          4.1
+        ],
+        "quantum_frames": 256,
+        "silence_threshold": 16,
+        "windows": [
+          {
+            "seconds": [
+              0.2,
+              0.8
+            ],
+            "channel": 0,
+            "rms": [
+              4100,
+              4400
+            ],
+            "frequency": 440,
+            "frequency_tolerance": 2
+          },
+          {
+            "seconds": [
+              0.2,
+              0.8
+            ],
+            "channel": 1,
+            "rms": [
+              0,
+              8
+            ]
+          },
+          {
+            "seconds": [
+              1.2,
+              1.8
+            ],
+            "channel": 0,
+            "rms": [
+              0,
+              8
+            ]
+          },
+          {
+            "seconds": [
+              1.2,
+              1.8
+            ],
+            "channel": 1,
+            "rms": [
+              4100,
+              4400
+            ],
+            "frequency": 880,
+            "frequency_tolerance": 2
+          },
+          {
+            "seconds": [
+              2.25,
+              3.7
+            ],
+            "channel": 0,
+            "rms": [
+              2000,
+              2250
+            ],
+            "frequency": 440,
+            "frequency_tolerance": 2
+          },
+          {
+            "seconds": [
+              2.25,
+              3.7
+            ],
+            "channel": 1,
+            "rms": [
+              990,
+              1140
+            ],
+            "frequency": 880,
+            "frequency_tolerance": 2
+          }
+        ]
+      }
+    }
+  ]
+}

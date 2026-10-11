@@ -3,6 +3,8 @@
 #include <ciuki/kernel.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/probe.h>
+#include <ciuki/audio.h>
+#pragma weak audio_mixer_delegate
 
 static const struct supervisor_io_ops *supervisor_io;
 static uint32_t desktop_pid, desktop_deaths;
@@ -81,13 +83,22 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     if (!err) err = elf_validate(&file, &image);
     if (!err) err = elf_load(&file, &image, p->memory);
     if (!err) err = proc_thread_prepare(p, image.entry, 0, 0, CIUKI_THREAD_STACK_DEFAULT, 0, 0, true, &thread);
-    if (!err) err = proc_stack_build(p->memory, strings, image.entry, thread->tls, &esp);
     if (!err) {
-        task_native_frame(thread->task, esp);
         err = supervisor_io && supervisor_io->stdio ? supervisor_io->stdio(p) : -ENODEV;
     }
     if (!err && cwd) err = supervisor_io && supervisor_io->cwd ? supervisor_io->cwd(p, cwd) : -ENODEV;
     if (!err && desktop) { int32_t grants[2]; err = grants_install(p, grants); }
+    if (!err && desktop && audio_mixer_delegate) {
+        int fd = audio_mixer_delegate(proc_supervisor(), p);
+        if (fd < 0) err = fd;
+        else {
+            char mixer_env[32];
+            int length = ksnprintf(mixer_env, sizeof(mixer_env), "CIUKI_MIXER_FD=%d", fd);
+            err = proc_strings_add(strings, mixer_env, (uint32_t)length + 1, true);
+        }
+    }
+    if (!err) err = proc_stack_build(p->memory, strings, image.entry, thread->tls, &esp);
+    if (!err) task_native_frame(thread->task, esp);
     if (file.close) file.close(file.cookie);
     proc_strings_free(strings);
     if (err) { if (p) proc_discard(p); return err; }
