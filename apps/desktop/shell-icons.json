@@ -1,8 +1,53 @@
 {
   "archive_sha256": "6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e",
   "conversion": "original 16x16 PNG RGBA8, no resizing; AARRGGBB",
-  "header_sha256": "e97593f917b83b006bb0904164e41351d9d082c305f0521d50edaefc60347cd2",
+  "header_sha256": "e607e5e73b5c287cb08631a10af526acf90930ab0d91d0e453a71854aa3fe909",
   "icons": {
+    "back": {
+      "rgba_sha256": "a6554abf5cffacd438176387b42b5ed387c6152f64b11df1461feecb23e63dae",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/go-previous.png",
+      "source_sha256": "b9a9ba572626323fb606ecff6ac6064acc8c6165add23838ae5fba0d81fc3117"
+    },
+    "copy": {
+      "rgba_sha256": "d5f268d0563930dfe4e433d48eaa04e119781b062c377c6241d98b2323185831",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/edit-copy.png",
+      "source_sha256": "5f56e58ea54cc65269e4add1cb26c66fee17031c9d491d3775aa7ccfce1ed6aa"
+    },
+    "cut": {
+      "rgba_sha256": "e63921fdb6d49f3d8db975bfd35fc98da24d7a1cad40e24a268929de786dd073",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/edit-cut.png",
+      "source_sha256": "6dd171b54051936070ec3ea3fb15eda815cee0db5338c317c05429ed03f9390a"
+    },
+    "delete": {
+      "rgba_sha256": "15488d1d7fdf3a3791aca4721b44d88c2f90c7611bf402f1b0f4fef3d19f778d",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/edit-delete.png",
+      "source_sha256": "496735792e8269a4c2688e8b297845aaac3d342f9bb01f2f1280a37e7be4a006"
+    },
+    "folder": {
+      "rgba_sha256": "26d0d0e8bfaa2aabb0ad2a2ce94d2305da3c1d910be5b90d3be0094bc4a7d8af",
+      "source": "tango-icon-theme-0.8.90/16x16/places/folder.png",
+      "source_sha256": "3d700018660d31191f0c6cf010842d4e6b41ec3c259b884a4e31439c9c355320"
+    },
+    "forward": {
+      "rgba_sha256": "a511317b31b265fc63cc7f41a634b7283dcbcebfafc0fefe77b5181f6e4fbeee",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/go-next.png",
+      "source_sha256": "4e2575f39f268b0a943530c53e9196b9a822a89a14dbf0a5e08eac580aabc232"
+    },
+    "paste": {
+      "rgba_sha256": "f35bd3a51d84584ba9ccf5d54e0d22f1602d08f7d85c3b5e41856c0c6362b1a3",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/edit-paste.png",
+      "source_sha256": "acd5f3bcfbde445897936548bf9644b54848dee383f67c67e844fe40bc0473f0"
+    },
+    "properties": {
+      "rgba_sha256": "9e76d387cbcff297b82fa5ec20f29d929ec2a2c0f61d31018ffff06e45403113",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/document-properties.png",
+      "source_sha256": "b9b138fa1d0d38a04fca373dbe5e810d6e0b04bf9c9684dec2d8a4ec9f38c681"
+    },
+    "refresh": {
+      "rgba_sha256": "e230fabc40bb8b85f1ac1a51a86eaabddbdb17863db60df5b6188e24735a24bf",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/view-refresh.png",
+      "source_sha256": "703a4a6ce68fd291029381e0aa31cd47e94c2b16924b3c84c64e9482cec90764"
+    },
     "restart": {
       "rgba_sha256": "f12e062acd693ec2661b474cf41350a01663b906b99a567fe3a080e1a1869527",
       "source": "tango-icon-theme-0.8.90/16x16/actions/system-shutdown.png",
@@ -12,6 +57,21 @@
       "rgba_sha256": "8bacf757eafe0d637b10cf4380e6dab275769ab00895d68b8b1e4ea7e732a6ae",
       "source": "tango-icon-theme-0.8.90/16x16/mimetypes/application-x-executable.png",
       "source_sha256": "21a8ff4472d9a9ae2a67dbe89603cb724e8ca0c0fae80a7e0a7ec399fb5aed76"
+    },
+    "text": {
+      "rgba_sha256": "b473c662ad17561f10cd37ec996fffae0d64f3a0465bf7b6f28182131e99059e",
+      "source": "tango-icon-theme-0.8.90/16x16/mimetypes/text-x-generic.png",
+      "source_sha256": "536b9722b4ec716fa6d409d3e0d74ecf44877405d75181fda50a0ed7645f119d"
+    },
+    "up": {
+      "rgba_sha256": "f69a7316ea3032899a07072336118e8ab52ec0e83506083bcf3a7384772993ba",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/go-up.png",
+      "source_sha256": "6d4ae7517a2914b5de787ebe33efc2915d5872f4d0c5839a0f84149adedb306e"
+    },
+    "views": {
+      "rgba_sha256": "08bb82b7ee5633954ed5ac23da8b25b9b5b0d84d8b30890c69b2104bae0dbd04",
+      "source": "tango-icon-theme-0.8.90/16x16/actions/view-fullscreen.png",
+      "source_sha256": "ea57db1ca7e73dea62f57c7a12f03443799fcabfcb18246712d0fe7ce9f8f9aa"
     }
   },
   "license": "Tango 0.8.90 Public Domain"

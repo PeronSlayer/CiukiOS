@@ -1,5 +1,46 @@
 # F2 ring-3 desktop and client protocol
 
+## f2-31 toolkit and Files decisions (2026-10-11)
+
+Research: [POSIX rename](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html),
+[short reads and EINTR](https://pubs.opengroup.org/onlinepubs/9699919799.orig/functions/read.html),
+[timestamp setting](https://pubs.opengroup.org/onlinepubs/9699919799/functions/utime.html)
+and [Wayland focus/surface coordinates](https://wayland.freedesktop.org/docs/html/apa.html)
+were compared with the SDK headers, protocol.c, compositor.c and posix-subset.md.
+Use the existing negotiated v2 protocol, explicit inherited fd 3 and
+`ciuki_spawn`. Timers and incremental jobs share a nonblocking event loop;
+no pthread, new syscall, DOS VM service or physical device grant is needed.
+Focus loss/RESYNC clears held input and capture. Damage is coalesced and
+retained across EAGAIN. Clipboard contents belong to the process.
+
+The compositor actually supplies original 5x7 glyphs, not an 8x16 font.
+Reuse those exact glyphs in 8x16 toolkit cells; do not change the existing
+compositor or its gate digests. All drawing is clipped integer XRGB8888.
+Icons extend the existing pinned Tango conversion/manifest; the approved
+portrait and boot photograph remain unchanged.
+
+Files uses absolute POSIX paths, readdir (the SDK's getdents adapter), stat,
+and a bounded history. Places enumerates /mnt, besides /, /bin and /system.
+Copy streams into an exclusive temporary sibling, fsyncs and closes before
+rename publication; cancellation/error removes the unfinished sibling and
+never removes its source. Completed items remain and are reported. Moves
+first use native rename; EXDEV alone permits copy followed by deletion.
+Replace decisions are explicit and remembered only for the current job.
+Directory merges preserve unrelated destination entries. Jobs yield between
+bounded transfers and directory steps and refuse descent into their source.
+
+**API gap for lead review:** timestamp and FAT attribute setters do not exist
+in the frozen ABI; chmod is excluded and stat exposes only informational mode
+bits. Native rename keeps existing metadata. Copy cannot preserve timestamps
+or FAT attributes on this SDK. The model has an optional metadata adapter for
+host tests/future integration and reports a visible preservation warning when
+the runtime lacks it. No copy is labelled metadata-preserving. Full f2-31
+acceptance requires a separately authorized setter or a lead-approved scope
+amendment. Properties displays the currently available informational attributes.
+
+Host and static build results, limitations and the lead's remaining QEMU work
+are recorded in build/codex/f2-31-report.md. No QEMU acceptance is inferred.
+
 ## f2-30 decisions (2026-10-11)
 
 Research precedes the shell implementation. The [POSIX spawn specification](https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_spawn.html)

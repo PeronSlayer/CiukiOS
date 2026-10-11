@@ -29,7 +29,7 @@ def digest(path):
 
 
 def inputs():
-    files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo")
+    files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/libdeskui", ROOT / "apps/files")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -44,7 +44,7 @@ def current_build(expected):
     try:
         m = json.loads((OUT / "manifest.json").read_text())
         return (m["inputs"] == expected and set(m["files"]) ==
-                {"desktop", "demo", "ciuki-portrait.xrgb"} and
+                {"desktop", "demo", "files", "libdeskui.a", "ciuki-portrait.xrgb"} and
                 all(digest(OUT / n) == h for n, h in m["files"].items()))
     except (OSError, ValueError, KeyError):
         return False
@@ -63,7 +63,7 @@ def validate_payloads():
             m["portrait"] != portrait_record(converter)):
         raise ValueError("approved Ciuki portrait provenance mismatch")
     inspect = lua.checker().inspect
-    for name in ("desktop", "demo"):
+    for name in ("desktop", "demo", "files"):
         if inspect(OUT / name) != m["elf"][name]:
             raise ValueError(f"desktop ELF evidence: {name}")
     return m
@@ -98,13 +98,28 @@ def build():
     sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "assets.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c"]}
     evidence, commands = {}, {}
+    sdk = json.loads((SDK / "manifest.json").read_text())
+    objects = []
+    for source in [*sorted((ROOT / "apps/libdeskui").glob("*.c")), ROOT / "apps/desktop/protocol.c", ROOT / "apps/desktop/compositor.c"]:
+        obj = temp / (source.stem + ".o")
+        command = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-ffunction-sections", "-fdata-sections", "-c", str(source), "-o", str(obj)]
+        subprocess.run(command, check=True, env=env)
+        if source.name in ("draw.c", "widgets.c", "compositor.c"):
+            audit_integer(obj, sdk)
+        objects.append(obj)
+    library = OUT / "libdeskui.a"
+    library.unlink(missing_ok=True)
+    archive = [sdk["tools"]["llvm-ar"]["path"], "rcsD", str(library), *(str(p) for p in objects)]
+    subprocess.run(archive, check=True, env=env)
+    commands["libdeskui"] = archive
+    sources["files"] = ["../files/files.c", "../files/model.c", "../files/vfs.c"]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
-                          *(str(ROOT / "apps/desktop" / p) for p in files), "-o", str(OUT / name)]
+                          *(str(ROOT / "apps/desktop" / p) for p in files),
+                          *([str(library)] if name == "files" else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Audit compositor code separately: integer drawing must never emit x87.
-    sdk = json.loads((SDK / "manifest.json").read_text())
     obj = temp / "compositor.o"
     subprocess.run([str(SDK / "bin/ciuki-cc"), *CFLAGS, "-c", str(ROOT / "apps/desktop/compositor.c"),
                     "-o", str(obj)], check=True, env=env)
@@ -114,11 +129,13 @@ def build():
     m = {"schema_version": 1, "application": "Ciuki desktop", "protocol_version": 1,
          "protocol_extensions": [2],
          "inputs": expected, "commands": commands, "elf": evidence,
-         "files": {name: digest(OUT / name) for name in (*sources, "ciuki-portrait.xrgb")},
+         "files": {name: digest(OUT / name) for name in (*sources, "libdeskui.a", "ciuki-portrait.xrgb")},
          "portrait": portrait_record(c), "integer_compositor_audit": "PASS",
          "build_seconds": round(time.monotonic()-start, 3), "guest_qualification": "not_run"}
     (OUT / "manifest.json").write_text(json.dumps(m, indent=2, sort_keys=True)+"\n")
-    print(f"[desktop] built/inspected desktop and demo in {m['build_seconds']} seconds; guest not_run")
+    for obj in objects:
+        obj.unlink(missing_ok=True)
+    print(f"[desktop] built/inspected desktop, demo, libdeskui and Files in {m['build_seconds']} seconds; guest not_run")
 
 
 def audit_integer(obj, sdk):

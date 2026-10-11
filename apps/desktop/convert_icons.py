@@ -16,7 +16,12 @@ ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE = ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz"
 ARCHIVE_SHA = "6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e"
 HERE = Path(__file__).resolve().parent
-MEMBERS = {"run": "mimetypes/application-x-executable", "restart": "actions/system-shutdown"}
+MEMBERS = {"run": "mimetypes/application-x-executable", "restart": "actions/system-shutdown",
+           "back": "actions/go-previous", "forward": "actions/go-next", "up": "actions/go-up",
+           "cut": "actions/edit-cut", "copy": "actions/edit-copy", "paste": "actions/edit-paste",
+           "delete": "actions/edit-delete", "properties": "actions/document-properties",
+           "views": "actions/view-fullscreen", "folder": "places/folder",
+           "text": "mimetypes/text-x-generic", "refresh": "actions/view-refresh"}
 
 
 def sha(data):

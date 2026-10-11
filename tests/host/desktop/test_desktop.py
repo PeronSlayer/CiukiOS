@@ -104,7 +104,7 @@ class DesktopTests(unittest.TestCase):
     def test_tango_icon_provenance(self):
         c = load("shell_icon_test", ROOT / "apps/desktop/convert_icons.py")
         record = c.check()
-        self.assertEqual(set(record["icons"]), {"run", "restart"})
+        self.assertEqual(set(record["icons"]), set(c.MEMBERS))
         self.assertEqual(record["archive_sha256"], c.ARCHIVE_SHA)
 
     def test_native_production_model(self):

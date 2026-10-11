@@ -1,6 +1,6 @@
 .PHONY: help build-full kernel image test-host qemu-test-full qemu-run-full clean \
         legacy-build-full legacy-build-full-cd legacy-qemu-run-full legacy-qemu-test-full \
-        fetch-costa fetch-network-stack sdk lua desktop
+        fetch-costa fetch-network-stack sdk lua desktop apps
 
 # Heavy builds run in a capped scope (see AGENTS.md).
 CAP = systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=1G --
@@ -34,8 +34,7 @@ help:
 
 # The image needs the kernel: keep the order explicit even under make -j.
 build-full: kernel
-	@$(MAKE) --no-print-directory lua
-	@$(MAKE) --no-print-directory desktop
+	@$(MAKE) --no-print-directory apps
 	@$(MAKE) --no-print-directory image
 
 sdk:
@@ -51,6 +50,9 @@ lua: $(SDK_MANIFEST)
 # Both recipes validate SDK/source/output hashes before accepting cached output.
 desktop: $(SDK_MANIFEST)
 	@$(CAP) python3 apps/desktop/build_desktop.py
+
+apps: $(SDK_MANIFEST)
+	@$(CAP) python3 apps/build_apps.py $(LUA_ARGS)
 
 kernel:
 	@python3 scripts/build_kernel.py
