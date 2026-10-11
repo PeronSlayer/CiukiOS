@@ -49,7 +49,7 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         /* Count owned backing once, including unmapped EMS-window backing. */
         if (v->as.pd_phys) out->pages += DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1;
         out->handles += v->base_open + v->overlay_open;
-        out->devices += 4; /* authoritative PIC, PIT and text/input service */
+        out->devices += 4; /* authoritative PIC, PIT, text/input service and VGA adapter */
         out->reserved += v->info.commitment;
         out->resident += v->info.resident;
     }
