@@ -165,6 +165,40 @@
           }
         ]
       }
+    },
+    {
+      "id": "normal-boot-qemu-t23",
+      "kind": "normal-boot",
+      "probe": "normal-boot",
+      "profile": "qemu-t23",
+      "timeout": 300,
+      "expected": {
+        "evidence_kind": "normal-boot",
+        "settle_seconds": 8,
+        "screen": {
+          "geometry": [
+            1024,
+            768
+          ]
+        }
+      }
+    },
+    {
+      "id": "normal-boot-qemu-desktop-2002",
+      "kind": "normal-boot",
+      "probe": "normal-boot",
+      "profile": "qemu-desktop-2002",
+      "timeout": 300,
+      "expected": {
+        "evidence_kind": "normal-boot",
+        "settle_seconds": 8,
+        "screen": {
+          "geometry": [
+            1024,
+            768
+          ]
+        }
+      }
     }
   ]
 }
