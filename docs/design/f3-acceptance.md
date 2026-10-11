@@ -184,6 +184,26 @@ claims focus. No physical controller, PIC, PIT or PS/2 access is added.
 
 Host/build and lead evidence are recorded below after implementation.
 
+### Lead findings while qualifying f3-01 on QEMU (2026-10-11)
+
+Codex stopped at its usage limit; the lead merged `main` (f3-03 services and
+the DOS VM boot fixes) into the row, gave the i8042 model sole ownership of
+ports 60h/64h (the f3-03 inline controller state was removed), named the
+VM records by the owning probe (`dosvm_config.probe = "vm-devices"`) and
+made the payload path absolute (`\VMDEV.COM`). The first QEMU runs reached
+the `cli` and `timer` stages; the `shadow` stage failed with one extra tick
+and the timer handler's interrupted IP at the `out 21h` instruction: the
+payload loaded AL *between* `mov ss` and `out`, so the MOV SS shadow ended at
+`mov al` and the pending IRQ0 was recognised before the OUT, as a real CPU
+does. The payload now loads AL before STI, so the STI shadow covers MOV SS and
+the MOV SS shadow covers the trapped OUT. The timer handler records the
+interrupted IP (`last_irq_ip` in `case=shadow`). The monitor also keeps a
+MOV SS/POP SS shadow across a single-step trap raised at the successor
+(`shadow_next`), a robustness measure for an emulator that does not suppress
+the #DB after MOV SS; real CPUs never reach that branch. A kernel-side record
+per delivered IRQ was tried and removed: its serial cost broke the timer
+stage.
+
 ## f3-03
 
 Research checked before implementation, 2026-10-11: [XMS 3.0](https://www.phatcode.net/res/219/files/xms30.txt),
