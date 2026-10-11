@@ -246,8 +246,8 @@ class HostNtfs:
         if not p: raise OSError(C.get_errno(),path)
         return p
 
-    def directory(self,name):
-        parent=self.inode("/"); utf=C.create_string_buffer(name.encode("utf-16le"))
+    def directory(self,name,where="/"):
+        parent=self.inode(where); utf=C.create_string_buffer(name.encode("utf-16le"))
         p=self.lib.ntfs_create(parent,0,utf,len(name),0o040000)
         if not p: raise OSError(C.get_errno(),name)
         assert self.lib.ntfs_inode_close(p)==0
@@ -276,6 +276,72 @@ class HostNtfs:
 
     def close(self): assert self.lib.ntfs_umount(self.volume,0)==0
 
+def disk_image(volume,out,start=2048):
+    """MBR disk holding an unmodified copy of one volume image (f4-04).
+
+    One primary partition of type 07h starts at LBA ``start`` (1 MiB, the usual
+    alignment); the volume bytes, including the NTFS boot sector, are copied
+    verbatim and sparsely, so the independent ntfs-3g oracle hashes still
+    describe the partition. No random disk signature: the result is
+    deterministic. The volume's own hidden-sectors field stays as generated
+    (0): the driver does not use it. Returns the image path.
+    """
+    volume=Path(volume); out=Path(out); size=volume.stat().st_size
+    if size%512 or start<1: raise ValueError("volume must be whole sectors, partition after the MBR")
+    sectors=size//512
+    mbr=bytearray(512)
+    mbr[446+4]=0x07                        # NTFS/HPFS/exFAT partition type
+    mbr[446+1:446+4]=bytes((0xfe,0xff,0xff)) # CHS first sector: beyond CHS, LBA only
+    mbr[446+5:446+8]=bytes((0xfe,0xff,0xff))
+    struct.pack_into("<II",mbr,446+8,start,sectors)
+    mbr[510:512]=b"\x55\xaa"
+    with volume.open("rb") as src, out.open("wb") as dst:
+        dst.truncate((start+sectors)*512)
+        dst.write(mbr)
+        offset=0
+        while offset<size:
+            chunk=src.read(1024*1024)
+            if not chunk: break
+            if chunk.count(0)!=len(chunk):   # keep holes sparse
+                dst.seek(start*512+offset); dst.write(chunk)
+            offset+=len(chunk)
+    return out
+
+def set_attributes(image,flags_by_name):
+    """f4-04 fixture: DOS attribute bits (RO 1, hidden 2, system 4) set where
+    Windows keeps them: the FILE_NAME key of the root index entries (resident
+    root and every INDEX_ALLOCATION block) and the file's own
+    $STANDARD_INFORMATION and $FILE_NAME. Fixture-only patching, as Layout."""
+    d=Layout(image); numbers={}
+    def patch(buf,header):
+        pos,end=header+get32(buf,header),header+get32(buf,header+4)
+        while pos<end:
+            length,flags=get16(buf,pos+8),get16(buf,pos+12)
+            if flags&2: break
+            key=pos+16; name=bytes(buf[key+66:key+66+buf[key+64]*2]).decode("utf-16le")
+            if name in flags_by_name:
+                put32(buf,key+56,get32(buf,key+56)|flags_by_name[name]); numbers[name]=get64(buf,pos)&MASK
+            pos+=length
+    p=d.record(5)
+    for a in attributes(p):
+        if get32(p,a)==0x90 and attr_name(p,a)=="$I30" and not p[a+8]: patch(p,a+get16(p,a+20)+16)
+        if get32(p,a)==0xa0 and attr_name(p,a)=="$I30":
+            mapping=runs(p,a)
+            for off in range(0,get64(p,a+48),4096):
+                physical=d.physical(mapping,off); d.f.seek(physical); raw=d.f.read(4096)
+                if raw[:4]!=b"INDX": continue
+                idx=unfix(raw); patch(idx,24); d.f.seek(physical); d.f.write(refix(idx))
+    d.save_record(5,p)
+    assert set(numbers)==set(flags_by_name), "attribute fixture names not found in the root index"
+    for name,number in numbers.items():
+        q=d.record(number)
+        for a in attributes(q):
+            value=a+get16(q,a+20) if not q[a+8] else 0
+            if value and get32(q,a)==0x10: put32(q,value+32,get32(q,value+32)|flags_by_name[name])
+            if value and get32(q,a)==0x30: put32(q,value+56,get32(q,value+56)|flags_by_name[name])
+        d.save_record(number,q)
+    d.close()
+
 def copy_image(src,dst):
     run(["cp","--reflink=auto","--sparse=always",src,dst])
 
@@ -299,7 +365,8 @@ def manifest(image, tools, paths=("/",), **extra):
     return {"image":image.name,"image_sha256":sha(image),"image_bytes":image.stat().st_size,
             "tools":tools,"listings":lists,"files":files,**extra}
 
-def build(out, entries=2048):
+def build(out, entries=2048, only=None):
+    """All fixture kinds, or only the named ones (with the kinds they derive from)."""
     out=Path(out).resolve()
     if not out.is_relative_to(ROOT/"build") or out==ROOT/"build":
         raise ValueError("fixtures need a subdirectory of this worktree's build/")
@@ -315,6 +382,9 @@ def build(out, entries=2048):
     libpath=Path("/usr/lib/libntfs-3g.so").resolve()
     if libpath.exists(): tools["libntfs-3g"]={"path":str(libpath),"sha256":sha(libpath)}
     temp=out/"payload.tmp"; images=[]
+    deps={"attribute-list":{"fragmented"},"index-cycle":{"large"}}
+    wanted=None if only is None else set(only).union(*(deps.get(k,set()) for k in only))
+    def want(*kinds): return wanted is None or any(k in wanted for k in kinds)
     base=out/"clean.img"; format_image(base)
     payloads={"/resident.txt":b"Ciuki NTFS resident\n", "/empty.bin":b"",
               "/allocated.bin":bytes(range(256))*257,
@@ -327,72 +397,100 @@ def build(out, entries=2048):
     images.append(manifest(base,tools,dos_listing=listing(base,dos=True),kind="clean"))
 
     for kind,sector,cluster in (("sector-4096",4096,16384),("cluster-512",512,512)):
+        if not want(kind): continue
         image=out/(kind+".img"); format_image(image,sector=sector,cluster=cluster)
         for name,data in payloads.items(): populate(image,temp,name,data)
         normalize(image)
         images.append(manifest(image,tools,kind=kind,sector_size=sector))
 
-    large=out/"large.img"; format_image(large)
-    host=HostNtfs(large); host.directory("many"); host.close()
-    for i in range(entries): populate(large,temp,f"/many/entry-{i:05d}.txt",f"entry {i:05d}\n".encode())
-    normalize(large)
-    images.append(manifest(large,tools,paths=("/","/many"),kind="large",entries=entries))
+    if want("large"):
+        large=out/"large.img"; format_image(large)
+        host=HostNtfs(large); host.directory("many"); host.close()
+        for i in range(entries): populate(large,temp,f"/many/entry-{i:05d}.txt",f"entry {i:05d}\n".encode())
+        normalize(large)
+        images.append(manifest(large,tools,paths=("/","/many"),kind="large",entries=entries))
 
-    fragmented=out/"fragmented.img"; format_image(fragmented)
-    for name in ("/fragment.bin","/blocker.bin"): populate(fragmented,temp,name,b"")
-    host=HostNtfs(fragmented); host.fragment(); host.close(); normalize(fragmented)
-    frag_inode=listing(fragmented)[0]["inode"]
-    info=run(["ntfsinfo","-f","-i",frag_inode,fragmented]).decode()
-    d=Layout(fragmented); p=d.record(frag_inode)
-    has_list=any(get32(p,a)==0x20 for a in attributes(p)); d.close()
-    if not has_list: raise RuntimeError("fragment workload did not produce ATTRIBUTE_LIST")
-    images.append(manifest(fragmented,tools,kind="fragmented",ntfsinfo=info,attribute_list=True))
+    if want("fragmented"):
+        fragmented=out/"fragmented.img"; format_image(fragmented)
+        for name in ("/fragment.bin","/blocker.bin"): populate(fragmented,temp,name,b"")
+        host=HostNtfs(fragmented); host.fragment(); host.close(); normalize(fragmented)
+        frag_inode=listing(fragmented)[0]["inode"]
+        info=run(["ntfsinfo","-f","-i",frag_inode,fragmented]).decode()
+        d=Layout(fragmented); p=d.record(frag_inode)
+        has_list=any(get32(p,a)==0x20 for a in attributes(p)); d.close()
+        if not has_list: raise RuntimeError("fragment workload did not produce ATTRIBUTE_LIST")
+        images.append(manifest(fragmented,tools,kind="fragmented",ntfsinfo=info,attribute_list=True))
 
-    # Reorder allocated clusters within the same allocation (no cross-links,
-    # new allocation or content changes) to require a signed negative LCN.
-    negative=out/"negative.img"; copy_image(base,negative)
-    d=Layout(negative)
-    inode=next(r["inode"] for r in listing(base) if r["name"]=="allocated.bin")
-    p,a=d.data_attr(inode); original=runs(p,a)
-    assert len(original)==1
-    _,lcn,length=original[0]; split=length//2
-    d.f.seek(lcn*d.cluster); content=d.f.read(length*d.cluster)
-    first=length-split
-    d.f.seek((lcn+split)*d.cluster); d.f.write(content[:first*d.cluster])
-    d.f.seek(lcn*d.cluster); d.f.write(content[first*d.cluster:])
-    mapping_attr(p,a,[(0,lcn+split,first),(first,lcn,split)]); d.save_record(inode,p); d.close()
-    images.append(manifest(negative,tools,kind="negative"))
+    if want("negative"):
+        # Reorder allocated clusters within the same allocation (no cross-links,
+        # new allocation or content changes) to require a signed negative LCN.
+        negative=out/"negative.img"; copy_image(base,negative)
+        d=Layout(negative)
+        inode=next(r["inode"] for r in listing(base) if r["name"]=="allocated.bin")
+        p,a=d.data_attr(inode); original=runs(p,a)
+        assert len(original)==1
+        _,lcn,length=original[0]; split=length//2
+        d.f.seek(lcn*d.cluster); content=d.f.read(length*d.cluster)
+        first=length-split
+        d.f.seek((lcn+split)*d.cluster); d.f.write(content[:first*d.cluster])
+        d.f.seek(lcn*d.cluster); d.f.write(content[first*d.cluster:])
+        mapping_attr(p,a,[(0,lcn+split,first),(first,lcn,split)]); d.save_record(inode,p); d.close()
+        images.append(manifest(negative,tools,kind="negative"))
 
-    # Fragment $MFT itself by rotating its already-owned clusters. Future
-    # record reads must follow this map, rather than assume boot-LCN+offset.
-    mft_fragmented=out/"mft-fragmented.img"; copy_image(base,mft_fragmented)
-    d=Layout(mft_fragmented); assert len(d.mapping)==1
-    _,lcn,length=d.mapping[0]; cut=4
-    mapping=[(0,lcn,length-cut),(length-cut,lcn+length-cut+1,cut-1),(length-1,lcn+length-cut,1)]
-    # The first segment stays in place for bootstrap. Rotate the final four
-    # clusters, updating record 0 and its mirror with the new run mapping.
-    d.f.seek((lcn+length-cut)*d.cluster); content=d.f.read(cut*d.cluster)
-    d.f.seek((lcn+length-cut+1)*d.cluster); d.f.write(content[:(cut-1)*d.cluster])
-    d.f.seek((lcn+length-cut)*d.cluster); d.f.write(content[(cut-1)*d.cluster:])
-    p,a=d.data_attr(0); mapping_attr(p,a,mapping); d.save_record(0,p); d.close()
-    images.append(manifest(mft_fragmented,tools,kind="mft-fragmented"))
+    if want("mft-fragmented"):
+        # Fragment $MFT itself by rotating its already-owned clusters. Future
+        # record reads must follow this map, rather than assume boot-LCN+offset.
+        mft_fragmented=out/"mft-fragmented.img"; copy_image(base,mft_fragmented)
+        d=Layout(mft_fragmented); assert len(d.mapping)==1
+        _,lcn,length=d.mapping[0]; cut=4
+        mapping=[(0,lcn,length-cut),(length-cut,lcn+length-cut+1,cut-1),(length-1,lcn+length-cut,1)]
+        # The first segment stays in place for bootstrap. Rotate the final four
+        # clusters, updating record 0 and its mirror with the new run mapping.
+        d.f.seek((lcn+length-cut)*d.cluster); content=d.f.read(cut*d.cluster)
+        d.f.seek((lcn+length-cut+1)*d.cluster); d.f.write(content[:(cut-1)*d.cluster])
+        d.f.seek((lcn+length-cut)*d.cluster); d.f.write(content[(cut-1)*d.cluster:])
+        p,a=d.data_attr(0); mapping_attr(p,a,mapping); d.save_record(0,p); d.close()
+        images.append(manifest(mft_fragmented,tools,kind="mft-fragmented"))
 
-    compressed=out/"compressed.img"; format_image(compressed,True)
-    populate(compressed,temp,"/compressed.bin",b"compress me\n"*10000); normalize(compressed)
-    images.append(manifest(compressed,tools,kind="compressed",file_error=-95))
+    if want("compressed"):
+        compressed=out/"compressed.img"; format_image(compressed,True)
+        populate(compressed,temp,"/compressed.bin",b"compress me\n"*10000); normalize(compressed)
+        images.append(manifest(compressed,tools,kind="compressed",file_error=-95))
 
-    sparse=out/"sparse.img"; copy_image(base,sparse)
-    populate(sparse,temp,"/huge.bin",b"initialized prefix\n"*300)
-    inode=next(r["inode"] for r in listing(sparse) if r["name"]=="huge.bin")
-    run(["ntfstruncate","-q",sparse,inode,str((1<<32)+65537)])
-    normalize(sparse)
-    images.append(manifest(sparse,tools,kind="sparse",large_inode=inode))
+    if want("sparse"):
+        sparse=out/"sparse.img"; copy_image(base,sparse)
+        populate(sparse,temp,"/huge.bin",b"initialized prefix\n"*300)
+        inode=next(r["inode"] for r in listing(sparse) if r["name"]=="huge.bin")
+        run(["ntfstruncate","-q",sparse,inode,str((1<<32)+65537)])
+        normalize(sparse)
+        images.append(manifest(sparse,tools,kind="sparse",large_inode=inode))
+
+    if want("names"):
+        # f4-04: names the VFS folds or cannot hold, and DOS attribute bits.
+        names=out/"names.img"; format_image(names)
+        host=HostNtfs(names); host.directory("Sub dir"); host.directory("deeper","/Sub dir"); host.close()
+        for name,data in {"/\u1f80.txt":b"greek collation\n","/\U0001f600 smile.txt":b"alias names the file\n",
+                          "/\U0001f600 plain.txt":b"omitted from the view\n","/plain ascii.txt":b"ascii\n",
+                          "/Sub dir/inner.txt":b"inside a directory\n","/Sub dir/Mixed Case.TXT":b"mixed case\n",
+                          "/Sub dir/deeper/leaf.txt":b"two levels down\n"}.items():
+            populate(names,temp,name,data)
+        host=HostNtfs(names); host.alias("\U0001f600 smile.txt","SMILE~1.TXT"); host.close()
+        normalize(names)
+        images.append(manifest(names,tools,paths=("/","/Sub dir","/Sub dir/deeper"),kind="names",
+                               dos_listing=listing(names,dos=True)))
+
+    if want("attributes"):
+        attributes_img=out/"attributes.img"; copy_image(base,attributes_img)
+        set_attributes(attributes_img,{"resident.txt":2,"empty.bin":4,"allocated.bin":1})
+        images.append(manifest(attributes_img,tools,kind="attributes",
+                               attributes={"resident.txt":2,"empty.bin":4,"allocated.bin":1}))
 
     # Mutations are fixture inputs, never driver repair. Reflinks/sparse copies
     # are allowed for data fixtures; canonical system images are never copied.
     for kind in ("dirty","recovery","hibernated","fixup","runlist","index","sequence",
                  "encrypted","reparse","tail","bitmap","index-cycle","attribute-list",
                  "log-recovery","log-hibernated","log-fixup","index-fixup","index-vcn"):
+        if not want(kind): continue
         image=out/(kind+".img")
         source=fragmented if kind=="attribute-list" else large if kind=="index-cycle" else base
         copy_image(source,image)
@@ -473,9 +571,113 @@ def build(out, entries=2048):
                            "reason":{"dirty":3,"recovery":4,"hibernated":5,
                                      "log-recovery":4,"log-hibernated":5}.get(kind,1)})
     temp.unlink()
+    images=[r for r in images if only is None or r["kind"] in only]
     result={"schema":1,"serial":SERIAL,"timestamp":EPOCH,"fixtures":images}
     (out/"manifest.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n")
     return result
+
+# ---- f4-04: what the VFS may show, and QEMU fixture/evidence support --------
+FORBIDDEN=set('"*/:<>?\\|')
+# Statuses the VFS must return for a listed file: EOPNOTSUPP (-95) for
+# compressed/encrypted/reparse content, EIO (-5) for damaged metadata.
+EXPECT_STATUS={"compressed":{"/compressed.bin":-95},"encrypted":{"/allocated.bin":-95},
+               "reparse":{"/allocated.bin":-95},"runlist":{"/allocated.bin":-5},
+               "attribute-list":{"/fragment.bin":-5}}
+# Mount refusal: manifest reason code -> (diagnostic, error)
+REFUSAL={3:("ntfs_dirty",-117),4:("ntfs_recovery_required",-117),5:("ntfs_hibernated",-117),1:("ntfs_malformed",-5)}
+QEMU_KINDS=("clean","fragmented","negative","mft-fragmented","tail","names","attributes","compressed",
+            "encrypted","reparse","runlist","attribute-list","sparse","dirty","recovery","hibernated",
+            "fixup","index","sequence","bitmap","log-recovery","log-hibernated","log-fixup",
+            "index-fixup","index-vcn")
+
+def representable(name):
+    """The VFS holds BMP code points, no controls or reserved characters and no
+    trailing dot or space (path_validate_name)."""
+    return bool(name) and name[-1] not in " ." and all(32<=ord(c)<=0xffff and ord(c)!=127 and c not in FORBIDDEN for c in name)
+
+def short_alias(name):
+    base,_,ext=name.partition(".")
+    return bool(name) and name==name.upper() and bool(base) and len(base)<=8 and len(ext)<=3 and "." not in ext \
+        and all(c.isascii() and (c.isalnum() or c in "_$-~") for c in base+ext)
+
+def vfs_view(row):
+    """The oracle's tree as the VFS may show it: path -> oracle hash record,
+    "directory", or None when only a listing exists, plus the names omitted because
+    the VFS cannot hold them and no valid DOS alias names the node."""
+    listings=row.get("listings",row.get("source_listings",{})); files=row.get("files",row.get("source_files",{}))
+    dos={r["inode"]:r["name"] for r in row.get("dos_listing",[])}
+    view={}; omitted=0
+    for directory,rows in listings.items():
+        for entry in rows:
+            if entry["name"] in (".",".."): continue
+            shown=entry["name"]
+            if not representable(shown):
+                alias=dos.get(entry["inode"])
+                if alias and alias!=shown and short_alias(alias): shown=alias
+                else: omitted+=1; continue
+            full=directory.rstrip("/")+"/"+entry["name"]
+            view[directory.rstrip("/")+"/"+shown]="directory" if full in listings else files.get(full)
+    return view,omitted
+
+def qemu_fixture(spec,directory,index):
+    """One declared fixture for a QEMU case: the named kind, wrapped in an MBR
+    disk (partition type 07h at LBA 2048). The oracle row stays in the manifest."""
+    kind=spec.get("kind")
+    if kind not in QEMU_KINDS or spec.get("seed")!=1: raise ValueError("unsupported NTFS fixture kind/seed")
+    work=Path(directory)/f"ntfs-fixture-{index}"
+    row=build(work,only={kind})["fixtures"][0]
+    image=Path(directory)/f"fixture-{index}.img"
+    disk_image(work/row["image"],image)
+    shutil.rmtree(work)
+    return {"path":str(image),"size":image.stat().st_size,"sha256":sha(image),"volume_sha256":row["image_sha256"],
+            "kind":kind,"partition_start":2048,"oracle":row}
+
+def verify_records(item,records):
+    """Compare the probe's records with the independent oracle (fail closed)."""
+    kind=item["kind"]; row=item["oracle"]
+    device=[r for r in records if r.get("case")=="device"]
+    if len(device)!=1: raise ValueError("NTFS probe needs exactly one device record")
+    if any(r.get("case")=="walkerr" for r in records): raise ValueError("NTFS enumeration failed")
+    if "reason" in row:
+        diagnostic,error=REFUSAL[row["reason"]]
+        refusal=[r for r in records if r.get("case")=="refusal"]
+        if device[0].get("reason")!=diagnostic or int(device[0].get("result","0"))!=error:
+            raise ValueError("NTFS device record differs from the manifest reason")
+        if len(refusal)!=1 or refusal[0].get("reason")!=diagnostic or int(refusal[0].get("result","0"))!=error \
+                or refusal[0].get("letter_absent")!="1" or refusal[0].get("writes")!="0":
+            raise ValueError("NTFS refusal differs from the manifest reason")
+        if any(r.get("case") in ("entry","file") for r in records): raise ValueError("refused NTFS volume exposed entries")
+        return
+    if device[0].get("result")!="0" or device[0].get("reason")!="ntfs": raise ValueError("NTFS fixture did not mount")
+    view,omitted=vfs_view(row); statuses=EXPECT_STATUS.get(kind,{})
+    for cycle in ("1","2"):
+        entries={r["path_sha256"]:r for r in records if r.get("case")=="entry" and r.get("cycle")==cycle}
+        if len(entries)!=len([r for r in records if r.get("case")=="entry" and r.get("cycle")==cycle]):
+            raise ValueError("duplicate NTFS entry identity")
+        expected={hashlib.sha256(path.encode()).hexdigest():path for path in view}
+        if set(entries)!=set(expected): raise ValueError("NTFS listing differs from the independent manifest, cycle "+cycle)
+        for digest,path in expected.items():
+            entry=entries[digest]; oracle=view[path]
+            if entry.get("kind")!=("directory" if oracle=="directory" else "file") or int(entry["plen"])!=len(path.encode()):
+                raise ValueError("NTFS entry type/name length differs: "+path)
+            if oracle=="directory":
+                if entry["status"]!="0": raise ValueError("NTFS directory refused: "+path)
+                continue
+            if int(entry["status"])!=statuses.get(path,0): raise ValueError("NTFS entry status differs: "+path)
+            if entry["status"]!="0":
+                state=[r for r in records if r.get("case")=="status" and r.get("cycle")==cycle and r.get("id")==entry["id"]]
+                if len(state)!=1 or state[0]["open"]!=entry["status"] or state[0]["stat"]!=entry["status"]:
+                    raise ValueError("NTFS unsupported file was not refused with its status: "+path)
+                continue
+            large=[r for r in records if r.get("case")=="large" and r.get("cycle")==cycle and r.get("id")==entry["id"]]
+            hashes=[r for r in records if r.get("case")=="file" and r.get("cycle")==cycle and r.get("id")==entry["id"]]
+            if oracle["size"]>0xffffffff:
+                if len(large)!=1 or len(hashes) or int(large[0]["size"])!=oracle["size"]: raise ValueError("NTFS large file differs: "+path)
+                continue
+            if len(hashes)!=1 or len(large) or hashes[0].get("sha256")!=oracle["sha256"] or int(hashes[0]["size"])!=oracle["size"]:
+                raise ValueError("NTFS file hash/size differs from the independent manifest: "+path)
+        names=[r for r in records if r.get("case")=="names" and r.get("cycle")==cycle]
+        if len(names)!=1 or int(names[0]["omitted"])!=omitted: raise ValueError("NTFS omitted-name count differs, cycle "+cycle)
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)

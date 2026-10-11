@@ -11,17 +11,18 @@
 static struct vfs_table optical_table;
 static char first_file[FS_PATH_BYTES];
 static unsigned entries;
-static int digest(const char *path, uint64_t *size, char hex[65])
+static int digest_in(struct vfs_table *table, const char *path, uint64_t *size, char hex[65])
 {
-    int h=vfs_open(&optical_table,path,VFS_READ,VFS_DENY_NONE,0); if (h<0) return h;
+    int h=vfs_open(table,path,VFS_READ,VFS_DENY_NONE,0); if (h<0) return h;
     struct sha256_ctx ctx; sha256_init(&ctx); *size=0; uint8_t buf[512]; int e;
     for (;;) {
-        size_t n; e=vfs_read(&optical_table,h,buf,sizeof(buf),&n);
+        size_t n; e=vfs_read(table,h,buf,sizeof(buf),&n);
         if (e || !n) break;
         sha256_update(&ctx,buf,n); *size+=n;
     }
-    vfs_close(&optical_table,h); uint8_t hash[32]; sha256_final(&ctx,hash); sha256_hex(hash,hex); return e;
+    vfs_close(table,h); uint8_t hash[32]; sha256_final(&ctx,hash); sha256_hex(hash,hex); return e;
 }
+static int digest(const char *path, uint64_t *size, char hex[65]) { return digest_in(&optical_table,path,size,hex); }
 struct walk_frame { struct walk_frame *parent; uint64_t directory; uint32_t cursor; unsigned depth; char prefix[FS_PATH_BYTES]; };
 static int listing(struct fs_ro_volume *ro, uint64_t directory, const char *prefix, unsigned drive, unsigned cycle, unsigned depth)
 {
@@ -149,3 +150,175 @@ static int probe_optical(void)
     rec_emit("optical","END","status=%s",pass ? "PASS" : "FAIL"); return pass ? 0 : 1;
 }
 CIUKI_F4_PROBE("optical",probe_optical);
+
+/* ---- f4:ntfs-ro (f4-04) ---------------------------------------------------
+ * A declared NTFS fixture disk (MBR, partition type 07h) mounted at boot by
+ * the production storage path: list and hash through the VFS, refuse every
+ * mutation, unmount and remount, compare with the host's independent ntfs-3g
+ * manifest (scripts/test/ntfs_fixtures.py verify_records). Every path is
+ * recorded as its SHA-256 (the 240-byte record envelope cannot carry a
+ * 255-unit name); sizes and hashes of files are separate records. */
+static struct vfs_table ntfs_table;
+static char ntfs_first[FS_PATH_BYTES], ntfs_target[FS_PATH_BYTES];
+static unsigned ntfs_entries;
+struct ntfs_frame { struct ntfs_frame *parent; uint64_t directory; uint32_t cursor; unsigned depth; char prefix[FS_PATH_BYTES]; };
+static void path_digest(const char *path, char hex[65]) { uint8_t hash[32]; sha256(path,strlen(path),hash); sha256_hex(hash,hex); }
+/* The walk is iterative and runs once at a time: its large scratch is static. */
+static struct fs_ro_node ntfs_root, ntfs_node;
+static char ntfs_path[FS_PATH_BYTES], ntfs_full[FS_PATH_BYTES+3];
+static int ntfs_walk(struct storage_ntfs *n, unsigned cycle)
+{
+    struct fs_ro_volume *ro=&n->ro; struct fs_ro_node *node=&ntfs_node;
+    int e=ro->ops->root(ro,&ntfs_root); if (e) return e;
+    struct ntfs_frame *top=fs_alloc(sizeof(*top)); if (!top) return -FS_ENOMEM;
+    memset(top,0,sizeof(*top)); top->directory=ntfs_root.id; ntfs_entries=0; e=0;
+    while (top) {
+        fs_lock_take(&ntfs_table.vfs->lock); e=fs_ro_next(ro,top->directory,&top->cursor,node); fs_lock_drop(&ntfs_table.vfs->lock);
+        if (e) {
+            if (e!=-FS_ENOENT) {
+                char hex[65]; path_digest(top->prefix[0] ? top->prefix : "/",hex);
+                rec_emit("ntfs-ro","DATA","case=walkerr cycle=%u result=%d path_sha256=%s",cycle,e,hex);
+            }
+            struct ntfs_frame *old=top; top=top->parent; fs_free(old); e=0; continue;
+        }
+        if (++ntfs_entries>1024) { e=-FS_ENOSPC; break; }
+        unsigned len=(unsigned)strlen(top->prefix), name=(unsigned)strlen(node->name);
+        if (len+name+2>=sizeof(ntfs_path)) { e=-FS_ENAMETOOLONG; break; }
+        memcpy(ntfs_path,top->prefix,len); ntfs_path[len++]='/'; memcpy(ntfs_path+len,node->name,name+1);
+        char hex[65]; path_digest(ntfs_path,hex); unsigned id=ntfs_entries; bool directory=node->attr&FS_RO_DIRECTORY;
+        rec_emit("ntfs-ro","DATA","case=entry cycle=%u id=%u kind=%s attr=%u status=%d plen=%u path_sha256=%s",
+                 cycle,id,directory ? "directory" : "file",node->attr,node->status,(unsigned)strlen(ntfs_path),hex);
+        ntfs_full[0]=(char)('A'+n->drive); ntfs_full[1]=':'; memcpy(ntfs_full+2,ntfs_path,strlen(ntfs_path)+1);
+        if (directory) {
+            if (top->depth>=7) { e=-FS_EIO; break; }
+            struct ntfs_frame *child=fs_alloc(sizeof(*child)); if (!child) { e=-FS_ENOMEM; break; }
+            memset(child,0,sizeof(*child)); child->parent=top; child->directory=node->id; child->depth=top->depth+1;
+            memcpy(child->prefix,ntfs_path,strlen(ntfs_path)+1); top=child;
+        } else if (node->status) {
+            struct fat_entry st; int open=vfs_open(&ntfs_table,ntfs_full,VFS_READ,VFS_DENY_NONE,0), stat=vfs_stat(&ntfs_table,ntfs_full,&st);
+            if (open>=0) vfs_close(&ntfs_table,open);
+            rec_emit("ntfs-ro","DATA","case=status cycle=%u id=%u open=%d stat=%d",cycle,id,open,stat);
+            if (!ntfs_target[0]) memcpy(ntfs_target,ntfs_full,strlen(ntfs_full)+1);
+        } else if (node->size>UINT32_MAX) {
+            int open=vfs_open(&ntfs_table,ntfs_full,VFS_READ,VFS_DENY_NONE,0); if (open>=0) vfs_close(&ntfs_table,open);
+            rec_emit("ntfs-ro","DATA","case=large cycle=%u id=%u size=%llu open=%d",cycle,id,node->size,open);
+        } else {
+            uint64_t size; char digest[65]; e=digest_in(&ntfs_table,ntfs_full,&size,digest); if (e) break;
+            rec_emit("ntfs-ro","DATA","case=file cycle=%u id=%u size=%llu sha256=%s",cycle,id,size,digest);
+            if (!ntfs_first[0]) { memcpy(ntfs_first,ntfs_full,strlen(ntfs_full)+1); memcpy(ntfs_target,ntfs_full,strlen(ntfs_full)+1); }
+        }
+    }
+    while (top) { struct ntfs_frame *old=top; top=top->parent; fs_free(old); }
+    rec_emit("ntfs-ro","DATA","case=names cycle=%u omitted=%u",cycle,ro->names_omitted);
+    return e;
+}
+static bool peer_after(struct ata_device *peer, const uint8_t expected[32])
+{
+    uint8_t data[512], hash[32];
+    if (!peer || peer->block.read(&peer->block,0,1,data)) return false;
+    sha256(data,sizeof(data),hash); return !memcmp(hash,expected,32);
+}
+static int probe_ntfs_ro(void)
+{
+    rec_emit("ntfs-ro","BEGIN",0);
+    struct storage *s=storage_get(); unsigned slot=0;
+    while (slot<STORAGE_NTFS && !s->ntfs[slot].present) slot++;
+    if (slot==STORAGE_NTFS) {
+        rec_emit("ntfs-ro","DATA","status=not_run reason=fixtures_absent");
+        rec_emit("ntfs-ro","END","status=NOT_RUN reason=fixtures_absent"); return 0;
+    }
+    struct storage_ntfs *n=&s->ntfs[slot]; unsigned drive=n->drive;
+    rec_emit("ntfs-ro","DATA","case=device slot=%u disk=%u part=%u sectors=%llu result=%d reason=%s drive=%c",
+             slot,n->disk,n->partition,n->io.capacity,n->error,n->ro.diagnostic ? n->ro.diagnostic : "unavailable",
+             n->error ? '-' : 'A'+drive);
+    if (n->error) {
+        /* A refused volume never attaches, holds no workspace and wrote nothing. */
+        bool absent=!n->ro.mounted && !vfs_drive_present(&s->vfs,drive) && !n->ro.state;
+        rec_emit("ntfs-ro","DATA","case=refusal slot=%u result=%d reason=%s letter_absent=%u writes=%llu",
+                 slot,n->error,n->ro.diagnostic ? n->ro.diagnostic : "unavailable",absent,n->writes+n->flushes);
+        bool refused=absent && !n->writes && !n->flushes && !s->cache.writes;
+        rec_emit("ntfs-ro","END","status=%s",refused ? "PASS" : "FAIL"); return refused ? 0 : 1;
+    }
+    bool pass=true;
+    /* An ATA peer (the declared FAT fixture, else the boot disk) before and after. */
+    struct ata_device *peer=0; uint8_t data[512], hash[32];
+    for (unsigned i=0; i<4 && !peer; i++) {
+        struct ata_device *candidate=ata_device_get(i/2,i%2);
+        if (candidate && !candidate->atapi && i!=n->disk) peer=candidate;
+    }
+    if (peer && !peer->block.read(&peer->block,0,1,data)) sha256(data,sizeof(data),hash); else peer=0;
+    rec_emit("ntfs-ro","DATA","case=peer stage=before result=%u",!!peer); pass &= !!peer;
+    int e=vfs_table_init(&s->vfs,&ntfs_table,2); if (e) pass=false;
+    ntfs_first[0]=0; ntfs_target[0]=0;
+    int stale=-1, native=-1; uint32_t generation=s->vfs.generation[drive];
+    if (pass) { e=ntfs_walk(n,1); rec_emit("ntfs-ro","DATA","case=cycle cycle=1 entries=%u result=%d",ntfs_entries,e); pass=!e; }
+    if (pass && ntfs_target[0]) {
+        struct fat_times times={0}; size_t done=0; uint64_t position; char ads[FS_PATH_BYTES];
+        const char *file=ntfs_target;
+        int mutation[11]; unsigned count=0;
+        mutation[count++]=vfs_open(&ntfs_table,file,VFS_WRITE,VFS_DENY_NONE,0);
+        mutation[count++]=vfs_open(&ntfs_table,file,VFS_READ|VFS_CREATE,VFS_DENY_NONE,0);
+        mutation[count++]=vfs_open(&ntfs_table,file,VFS_WRITE|VFS_TRUNCATE,VFS_DENY_NONE,0);
+        if (ntfs_first[0]) {
+            /* A regular file: open handles and the native namespace as well. */
+            stale=vfs_open(&ntfs_table,ntfs_first,VFS_READ,VFS_DENY_NONE,0); pass &= stale>=0;
+            char native_path[FS_PATH_BYTES]; ksnprintf(native_path,sizeof(native_path),"/mnt/%c%s",'a'+drive,ntfs_first+2);
+            e=files_bootstrap(&s->vfs); if (!e) native=file_open(proc_supervisor(),native_path,O_RDONLY,0); pass &= !e && native>=0;
+            if (pass) {
+                pass &= px_chdir(proc_supervisor(),native_path)==-ENOTDIR;
+                char *leaf=native_path; for (char *p=native_path; *p; p++) if (*p=='/') leaf=p;
+                *leaf=0; pass &= !px_chdir(proc_supervisor(),native_path);
+            }
+            mutation[count++]=vfs_write(&ntfs_table,stale,"x",1,&done);
+            mutation[count++]=vfs_truncate(&ntfs_table,stale,0);
+        }
+        mutation[count++]=vfs_attrib(&ntfs_table,file,0);
+        mutation[count++]=vfs_times(&ntfs_table,file,&times);
+        mutation[count++]=vfs_rename(&ntfs_table,file,file);
+        mutation[count++]=vfs_delete(&ntfs_table,file);
+        mutation[count++]=vfs_mkdir(&ntfs_table,file,0);
+        mutation[count++]=vfs_rmdir(&ntfs_table,file);
+        for (unsigned i=0; i<count; i++) { rec_emit("ntfs-ro","DATA","case=mutation operation=%u result=%d",i,mutation[i]); pass &= mutation[i]==-FS_EROFS; }
+        if (stale>=0) pass &= !vfs_seek(&ntfs_table,stale,0,VFS_SEEK_SET,&position) && !vfs_commit(&ntfs_table,stale);
+        ksnprintf(ads,sizeof(ads),"%s:stream",file);
+        int stream=vfs_open(&ntfs_table,ads,VFS_READ,VFS_DENY_NONE,0); if (stream>=0) vfs_close(&ntfs_table,stream);
+        rec_emit("ntfs-ro","DATA","case=ads result=%d",stream); pass &= stream==-FS_EOPNOTSUPP;
+        if (stale>=0) {
+            /* Open files hold the volume; the cwd pin does not. */
+            int busy=storage_ntfs_unmount(s,slot);
+            rec_emit("ntfs-ro","DATA","case=unmount stage=busy result=%d mounted=%u",busy,n->ro.mounted);
+            pass &= busy==-FS_EBUSY && n->ro.mounted;
+        }
+    }
+    bool same=peer_after(peer,hash);
+    rec_emit("ntfs-ro","DATA","case=peer stage=after result=%u",same); pass &= same;
+    if (stale>=0) vfs_close(&ntfs_table,stale);
+    if (native>=0) file_close(proc_supervisor(),native);
+    if (pass) {
+        e=storage_ntfs_unmount(s,slot);
+        bool gone=!vfs_drive_present(&s->vfs,drive) && !n->ro.mounted;
+        char cwd[CIUKI_PATH_MAX]; int expired=-1;
+        if (native>=0) { fs_lock_take(&s->vfs.lock); expired=px_getcwd_locked(proc_supervisor()->cwd,cwd); fs_lock_drop(&s->vfs.lock); }
+        rec_emit("ntfs-ro","DATA","case=unmount stage=clean result=%d letter_absent=%u generation_before=%u generation_after=%u cwd_expired=%u",
+                 e,gone,generation,s->vfs.generation[drive],native<0 || expired==-ENOENT);
+        pass &= !e && gone && s->vfs.generation[drive]>generation && (native<0 || expired==-ENOENT);
+        if (native>=0) px_chdir(proc_supervisor(),"/");
+        struct fat_entry st; int old=vfs_stat(&ntfs_table,ntfs_target[0] ? ntfs_target : "D:/",&st);
+        rec_emit("ntfs-ro","DATA","case=gone stat=%d",old); pass &= old<0;
+        e=storage_ntfs_mount(s,slot);
+        rec_emit("ntfs-ro","DATA","case=remount result=%d reason=%s generation=%u",e,n->ro.diagnostic ? n->ro.diagnostic : "unavailable",
+                 e>=3 ? s->vfs.generation[e] : 0);
+        pass &= e>=3;
+        if (e>=3) {
+            drive=(unsigned)e; ntfs_first[0]=0; ntfs_target[0]=0; e=ntfs_walk(n,2);
+            rec_emit("ntfs-ro","DATA","case=cycle cycle=2 entries=%u result=%d",ntfs_entries,e); pass &= !e;
+        }
+    }
+    if (native>=0) px_chdir(proc_supervisor(),"/");
+    if (ntfs_table.vfs) vfs_table_destroy(&ntfs_table);
+    rec_emit("ntfs-ro","DATA","case=counters reads=%llu view_writes=%llu view_flushes=%llu cache_writes=%llu",
+             n->reads,n->writes,n->flushes,s->cache.writes);
+    pass &= !n->writes && !n->flushes && !s->cache.writes;
+    rec_emit("ntfs-ro","END","status=%s",pass ? "PASS" : "FAIL"); return pass ? 0 : 1;
+}
+CIUKI_F4_PROBE("ntfs-ro",probe_ntfs_ro);

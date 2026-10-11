@@ -23,6 +23,7 @@ struct ntfs_ro_entry {
     uint64_t reference, size;
     uint32_t directory, name_space; /* 2 = DOS alias of the same reference */
     char name[1021];               /* at most 255 UTF-16 units, UTF-8 */
+    uint32_t file_attributes;      /* FILE_NAME flags (f4-04): 1 RO, 2 hidden, 4 system, 0x20 archive */
 };
 typedef int (*ntfs_ro_emit)(void *, const struct ntfs_ro_entry *);
 

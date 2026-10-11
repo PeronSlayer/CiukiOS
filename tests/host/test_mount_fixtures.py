@@ -122,7 +122,7 @@ int main(int argc, char **argv)
 }
 ''')
             sources=['fs/fs_port.c','fs/cache.c','fs/partition.c','fs/path.c',
-                     'fs/fat.c','fs/vfs.c','fs/fs_ro.c','fs/iso9660.c','core/bootlog.c','drivers/blkpart.c',
+                     'fs/fat.c','fs/vfs.c','fs/fs_ro.c','fs/iso9660.c','fs/ntfs_fs.c','fs/ntfs_ro.c','core/bootlog.c','drivers/blkpart.c',
                      'probes/fat_probes.c','lib/sha256.c','lib/fmt.c']
             executable=directory/'bootlog-safe'
             env={**os.environ,'TMPDIR':str(directory),'ASAN_OPTIONS':'detect_leaks=0'}
@@ -219,7 +219,7 @@ int main(int argc,char **argv) {
     fake_close(&media[0]); return 0;
 }
 ''')
-            sources=['fs/fs_port.c','fs/cache.c','fs/partition.c','fs/path.c','fs/fat.c','fs/vfs.c','fs/fs_ro.c','fs/iso9660.c',
+            sources=['fs/fs_port.c','fs/cache.c','fs/partition.c','fs/path.c','fs/fat.c','fs/vfs.c','fs/fs_ro.c','fs/iso9660.c','fs/ntfs_fs.c','fs/ntfs_ro.c',
                      'fs/mount.c','core/bootlog.c','drivers/blkpart.c','probes/fat_probes.c','lib/sha256.c','lib/fmt.c']
             exe=directory/'dirty-probe'
             env={**os.environ,'TMPDIR':str(directory),'ASAN_OPTIONS':'detect_leaks=0'}

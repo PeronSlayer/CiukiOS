@@ -4,6 +4,9 @@
 #include <ciuki/sync.h>
 #include <ciuki/work.h>
 #endif
+#ifdef FS_HOST
+unsigned fs_host_contig_fail, fs_host_contig_live;
+#endif
 static fs_calendar_clock calendar;
 void fs_set_calendar_clock(fs_calendar_clock clock) { calendar=clock; }
 bool fs_calendar_sample(uint16_t *date, uint16_t *time, uint8_t *tenths) {

@@ -27,6 +27,7 @@ from qmp import QMP, writes
 import resources as res
 import fat_fixtures
 import iso_fixtures
+import ntfs_fixtures
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -446,8 +447,9 @@ def expand_cases(suite):
 def fixture_disks(case):
     # Manifest ordinals also cover nondisk fixtures; IDE connector numbers
     # start after the boot disk and must agree with the kernel disk ledger.
-    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator')=='mkfs.fat']
+    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator') in ('mkfs.fat','mkntfs')]
     if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
+    if sum(f.get('generator')=='mkntfs' for f in case.get('fixtures',[]))>1:raise res.Refusal('one NTFS fixture disk per case')
     optical=[f for f in case.get('fixtures',[]) if f.get('generator')=='xorriso']
     if len(optical)>1 or optical and len(indices)>2: raise res.Refusal('optical IDE index 3 collides with FAT fixture disks')
     return list(zip(indices,range(1,len(indices)+1)))
@@ -460,6 +462,10 @@ def prepare_fixtures(host,case,directory):
         item=dict(fixture)
         if fixture.get('generator')=='mkfs.fat':
             item.update(host.fat_fixture(fixture,directory,index))
+            item['ide_index']=disks[index]
+        elif fixture.get('generator')=='mkntfs':
+            try:item.update(ntfs_fixtures.qemu_fixture(fixture,directory,index))
+            except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('NTFS fixture generation failed: '+str(e)) from e
             item['ide_index']=disks[index]
         elif fixture.get('generator')=='xorriso':
             item.update(iso_fixtures.generate(fixture,directory,index))
@@ -1064,7 +1070,9 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     elif profile.get('audio') and audio_exception != 'none':
         args += ['-device', profile['audio']+',audiodev=silent']
     for index,disk in fixture_disks(case):
-        args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache]
+        # The NTFS fixture is named so QMP block statistics can prove it was only read.
+        ident=',id=ciuki-ntfs' if case['fixtures'][index].get('generator')=='mkntfs' else ''
+        args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache+ident]
     fixture_disks(case) # collision validation also for direct command construction
     for index,fixture in enumerate(case.get('fixtures',[])):
         if fixture.get('generator')=='xorriso':
@@ -1357,6 +1365,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         parser=Parser(run_id,case['probe']);terminal_time=None
                         restart_performed=True;pending=b''
                     else:
+                        if qmp and any(f.get('generator')=='mkntfs' for f in case.get('fixtures',[])):
+                            result['observed_blockstats_final']=writes(qmp.command('query-blockstats'))
                         break
             if process.poll() is not None:
                 if case.get('sweep'):
@@ -1425,6 +1435,19 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     fixture['sha256_after']=sha(fixture['path'])
                     if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('optical fixture changed during read-only case')
                     if result['outcome']=='pass':iso_fixtures.verify_records(fixture,parser.records)
+                    fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
+                except (OSError,ValueError) as e:
+                    result['outcome']='fail';result['reason']=str(e)
+            if fixture.get('generator')=='mkntfs' and fixture.get('path'):
+                try:
+                    fixture['sha256_after']=sha(fixture['path'])
+                    if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('NTFS fixture changed during read-only case')
+                    initial=result.get('initial_blockstats',{}).get('ciuki-ntfs');final=result.get('observed_blockstats_final',{}).get('ciuki-ntfs')
+                    if initial is None or final is None:raise EvidenceError('NTFS fixture lacks QMP block statistics')
+                    if any(final[key]!=initial[key] for key in ('wr_operations','wr_bytes','flush_operations')):
+                        raise EvidenceError('NTFS fixture received block writes or flushes')
+                    fixture['blockstats']={'initial':initial,'final':final}
+                    if result['outcome']=='pass':ntfs_fixtures.verify_records(fixture,parser.records)
                     fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
                 except (OSError,ValueError) as e:
                     result['outcome']='fail';result['reason']=str(e)
