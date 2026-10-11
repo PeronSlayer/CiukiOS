@@ -422,17 +422,22 @@ static int key_event(struct ciuki_dosvm_command *c, int code, int value)
     k.event.type = CIUKI_INPUT_KEY; k.event.code = code; k.event.value = value;
     return dosvm_call(CIUKI_DOSVM_INPUT, &k, sizeof(k));
 }
+/* The guest side of a key: the synthetic INT 9 runs once per 8042 byte
+ * (f3-01 model), then INT 16h AH=01h/00h reads the BIOS buffer. */
 static uint16_t take_key(struct dosvm *v)
 {
-    CHECK(v->key_count);
-    uint16_t word = v->keyboard[v->key_head];
-    v->key_head = (v->key_head + 1) % ARRAY_SIZE(v->keyboard); v->key_count--;
-    return word;
+    while (v->kbd.count) CHECK(!dosvm_kbd_bios(v));
+    struct v86_frame f = vf(0x0100, 0, 0, 0);
+    CHECK(!dosvm_bios(v, &f, 0x16));
+    if (f.tf.eflags & V86_ZF) return 0;
+    f = vf(0x0000, 0, 0, 0);
+    CHECK(!dosvm_bios(v, &f, 0x16));
+    return (uint16_t)f.tf.eax;
 }
 static uint16_t press(struct dosvm *v, struct ciuki_dosvm_command *c, int code)
 {
     CHECK(!key_event(c, code, 1) && !key_event(c, code, 0));
-    return v->key_count ? take_key(v) : 0;
+    return take_key(v);
 }
 static void test_client_boundary(void)
 {
@@ -491,37 +496,45 @@ static void test_client_boundary(void)
     fake_current = &fake_proc[1];
     c = command_for(w.id, w.generation); CHECK(dosvm_call(CIUKI_DOSVM_PRESENT, &c, sizeof(c)) == -ESRCH);
     fake_current = &fake_proc[0];
-    /* Focus and the window keyboard adapter. */
-    CHECK(key_event(&w, 0x1E, 1) == -EACCES && !v->key_count);
+    /* Focus and the f3-01 device path: set-1 bytes, IRQ1, synthetic INT 9. */
+    CHECK(key_event(&w, 0x1E, 1) == -EACCES && !v->kbd.count && !take_key(v));
     c = command_for(w.id, w.generation); c.focused = 2; CHECK(dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) == -EINVAL);
     c = command_for(w.id, w.generation); c.focused = 1; CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)));
-    CHECK(press(v, &w, 0x1E) == 0x1E61 && press(v, &w, 0x1C) == 0x1C0D && press(v, &w, 0x2B) == 0x2B5C &&
+    CHECK(v->window_input && !key_event(&w, 0x1E, 1) && v->kbd.count == 1 && v->kbd.bytes[v->kbd.head] == 0x1E &&
+          (v->monitor.pic[0].irr & 2) && take_key(v) == 0x1E61 && !key_event(&w, 0x1E, 0) && !take_key(v));
+    CHECK(press(v, &w, 0x1C) == 0x1C0D && press(v, &w, 0x2B) == 0x2B5C &&
           press(v, &w, 0x148) == 0x4800 && press(v, &w, 0x3B) == 0x3B00 && press(v, &w, 0x0E) == 0x0E08 &&
-          press(v, &w, 0x01) == 0x011B && press(v, &w, 0x153) == 0x5300 && press(v, &w, 0x11C) == 0x1C0D);
+          press(v, &w, 0x01) == 0x011B && press(v, &w, 0x153) == 0x5300 && press(v, &w, 0x11C) == 0x1C0D &&
+          press(v, &w, 0x135) == 0x352F && press(v, &w, 0x57) == 0x8500 && press(v, &w, 0x4A) == 0x4A2D);
     CHECK(!key_event(&w, 0x2A, 1));
     CHECK(press(v, &w, 0x1E) == 0x1E41 && press(v, &w, 0x27) == 0x273A && press(v, &w, 0x03) == 0x0340 &&
           press(v, &w, 0x0F) == 0x0F00 && press(v, &w, 0x3C) == 0x5500);
     CHECK(!key_event(&w, 0x2A, 0) && press(v, &w, 0x3A) == 0);
     CHECK(press(v, &w, 0x1E) == 0x1E41 && press(v, &w, 0x02) == 0x0231);
-    CHECK(press(v, &w, 0x3A) == 0 && !key_event(&w, 0x1D, 1));
-    CHECK(press(v, &w, 0x2E) == 0x2E03 && press(v, &w, 0x14B) == 0x7300);
+    CHECK(press(v, &w, 0x3A) == 0 && press(v, &w, 0x47) == 0x4700 && press(v, &w, 0x45) == 0 &&
+          press(v, &w, 0x47) == 0x4737 && press(v, &w, 0x45) == 0 && !key_event(&w, 0x1D, 1));
+    CHECK(press(v, &w, 0x2E) == 0x2E03 && press(v, &w, 0x14B) == 0x7300 && press(v, &w, 0x1C) == 0x1C0A &&
+          press(v, &w, 0x07) == 0x071E);
     CHECK(!key_event(&w, 0x1D, 0) && !key_event(&w, 0x38, 1));
     CHECK(press(v, &w, 0x1E) == 0x1E00 && press(v, &w, 0x02) == 0x7800 && press(v, &w, 0x58) == 0x8C00);
-    CHECK(!key_event(&w, 0x38, 0));
-    CHECK(!key_event(&w, 0x1E, 2) && take_key(v) == 0x1E61);       /* typematic repeat */
+    CHECK(!key_event(&w, 0x38, 0) && !take_key(v));
+    CHECK(!key_event(&w, 0x1E, 1) && !key_event(&w, 0x1E, 2) && !key_event(&w, 0x1E, 0) &&
+          take_key(v) == 0x1E61 && take_key(v) == 0x1E61 && !take_key(v));              /* typematic repeat */
     c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_TEXT; c.event.code = 'a';
-    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && !v->key_count);
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && !v->kbd.count && !take_key(v));
     c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_MOTION; c.event.value = 5; c.event.value2 = 7;
-    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && !v->key_count);
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && !take_key(v));
     CHECK(key_event(&w, 0x201, 1) == -EINVAL && key_event(&w, 0x1E, 3) == -EINVAL);
     c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_BUTTON; c.event.code = 4; c.event.value = 1;
     CHECK(dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) == -EINVAL);
     c = command_for(w.id, w.generation); c.event.type = 9; CHECK(dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) == -EINVAL);
+    /* An undrained 8042 queue overflows: the event is refused (EAGAIN). */
     unsigned queued = 0;
-    while (!key_event(&w, 0x1E, 1)) queued++;
-    CHECK(queued == ARRAY_SIZE(v->keyboard) && key_event(&w, 0x1E, 1) == -EAGAIN);
-    v->key_count = 0;
-    /* Focus loss releases held modifiers; RESYNC likewise. */
+    while (!key_event(&w, 0x1E, 1) && !key_event(&w, 0x1E, 0)) queued++;
+    CHECK(queued > 100 && queued <= DOSVM_KBD_BYTES / 2 && v->kbd.overflows && key_event(&w, 0x30, 1) == -EAGAIN);
+    while (take_key(v)) {}                                           /* drain the BIOS buffer */
+    if (v->kbd.held[0x1E >> 3] & (1u << (0x1E & 7))) CHECK(!key_event(&w, 0x1E, 0) && !take_key(v));
+    /* Focus loss releases held keys (break codes reach INT 9); RESYNC likewise. */
     CHECK(!key_event(&w, 0x2A, 1));
     c = command_for(w.id, w.generation); CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)));
     CHECK(key_event(&w, 0x1E, 1) == -EACCES);
@@ -529,6 +542,10 @@ static void test_client_boundary(void)
     CHECK(press(v, &w, 0x1E) == 0x1E61 && !key_event(&w, 0x36, 1));
     c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_RESYNC;
     CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && press(v, &w, 0x1E) == 0x1E61);
+    /* Buttons and motion reach the INT 33h model while focused. */
+    c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_BUTTON; c.event.code = 1; c.event.value = 1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && (v->mouse.buttons & 1));
+    c.event.value = 0; CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && !(v->mouse.buttons & 1));
     /* Status reports a guest-requested stop; close does not force a stopped VM. */
     uint32_t zero = 0;
     CHECK(!v86_io(&v->monitor, DOSVM_CONTROL_PORT, 1, true, &zero) && v->info.state == DOSVM_STOPPING);

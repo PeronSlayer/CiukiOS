@@ -3,7 +3,7 @@
 ## f3-02 additions (2026-10-11)
 
 `/bin/dosbox` (apps/dosbox) is an ordinary protocol-v2 client that owns one
-DOS virtual machine through syscall 70 (execution-abi.md, F3-02 amendment);
+DOS virtual machine through syscall 72 (execution-abi.md, F3-02 amendment);
 the kernel renders the VM into the client's 640x480 surface and the desktop
 composites it unchanged. The menu lists it from `/bin` like any program and
 passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/bin` menu

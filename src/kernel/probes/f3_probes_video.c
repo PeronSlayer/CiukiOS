@@ -79,8 +79,18 @@ static bool ledger_same(const struct dosvm_ledger *a, const struct dosvm_ledger 
            a->handles == b->handles && a->devices == b->devices &&
            a->reserved == b->reserved && a->resident == b->resident;
 }
+/* Lead diagnostic: the f3-01 device view when a stage does not arrive
+ * (a lost keyboard IRQ or a masked timer shows up here first). */
+static void video_devices(const char *probe, struct dosvm *v)
+{
+    struct dosvm_device_info d = {0};
+    if (!dosvm_device_info(dosvm_key(v), &d)) return;
+    rec_emit(probe, "DATA", "group=vm_devices irr0=%02x isr0=%02x imr0=%02x queued=%u held=%u irq0=%u irq1=%u last_vector=%u base0=%02x base1=%02x",
+             d.irr[0], d.isr[0], d.imr[0], d.queued_bytes, d.held_keys, d.delivered[0], d.delivered[1],
+             d.last_vector, d.pic_base[0], d.pic_base[1]);
+}
 /* Lead diagnostic: the guest screen when a stage does not arrive. */
-static void video_screen(struct dosvm *v)
+static void video_screen(const char *probe, struct dosvm *v)
 {
     const uint16_t *text = dosvm_text(v, 0);
     for (unsigned row = 0; row < 25; row++) {
@@ -93,7 +103,7 @@ static void video_screen(struct dosvm *v)
         }
         if (!len) continue;
         line[len] = 0;
-        rec_emit(VIDEO_PROBE, "DATA", "group=screen row=%u text=%s", row, line);
+        rec_emit(probe, "DATA", "group=screen row=%u text=%s", row, line);
     }
 }
 
@@ -156,7 +166,8 @@ cleanup:
         dosvm_info(v, &info);
         rec_emit(VIDEO_PROBE, "DATA", "group=boot_state ready=%u state=%u reason=%u stage=%u",
                  info.dos_ready, info.state, info.reason, info.video_stage);
-        video_screen(v);
+        video_devices(VIDEO_PROBE, v);
+        video_screen(VIDEO_PROBE, v);
     }
     if (v) { int e = dosvm_destroy(dosvm_key(v), true); if (!error) error = e; }
     dosvm_snapshot(&after);
@@ -287,7 +298,8 @@ cleanup:
         dosvm_info(v, &info);
         rec_emit(WINDOW_PROBE, "DATA", "group=boot_state ready=%u state=%u reason=%u stage=%u",
                  info.dos_ready, info.state, info.reason, info.video_stage);
-        video_screen(v);
+        video_devices(WINDOW_PROBE, v);
+        video_screen(WINDOW_PROBE, v);
     }
     if (client) process_remove(0, client);
     if (desktop_pid) process_remove(owner, desktop_pid);

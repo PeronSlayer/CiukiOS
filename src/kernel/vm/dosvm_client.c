@@ -1,4 +1,4 @@
-/* f3-02 native owner boundary: syscall 70 (dosvm) for one DOS window VM per
+/* f3-02 native owner boundary: syscall 72 (dosvm) for one DOS window VM per
  * process, delegated only to a desktop-launched /bin/dosbox. No public VM
  * lookup, device grant or physical display access. execution-abi.md, F3-02.
  * SPDX-License-Identifier: GPL-2.0-only */
@@ -14,7 +14,6 @@ struct binding {
     uint32_t pid;
     struct surface *surface;
     bool busy, focused;
-    uint8_t mods;          /* window keyboard adapter state, see below */
 };
 static struct binding bindings[DOSVM_LIMIT];
 static uint32_t creating[DOSVM_LIMIT]; /* owners inside a sleeping create */
@@ -25,127 +24,23 @@ static bool owns_vm(uint32_t pid)
     return false;
 }
 
-/* ---- Window keyboard adapter (until the f3-01 virtual keyboard) ----
- * Focused desktop KEY events (public set-1 positions, E0 keys = 100h|code)
- * become BIOS INT 16h words (scan << 8 | ASCII), US layout, through the
- * existing dosvm_keyboard() queue. TEXT is ignored: KEY already carries the
- * key with its modifiers. MOTION/BUTTON have no consumer before the f3-01
- * INT 33h mouse. When f3-01 is merged, window_focus/window_input become
- * dosvm_input_focus(key, focused) and dosvm_input_event(key, event). */
-enum { MOD_SHIFT_L = 1, MOD_SHIFT_R = 2, MOD_CTRL = 4, MOD_ALT = 8, MOD_CAPS = 16, MOD_NUM = 32 };
-static const char key_plain[0x3A] = {
-    [0x01]=27, [0x02]='1', [0x03]='2', [0x04]='3', [0x05]='4', [0x06]='5', [0x07]='6',
-    [0x08]='7', [0x09]='8', [0x0A]='9', [0x0B]='0', [0x0C]='-', [0x0D]='=', [0x0E]=8,
-    [0x0F]=9, [0x10]='q', [0x11]='w', [0x12]='e', [0x13]='r', [0x14]='t', [0x15]='y',
-    [0x16]='u', [0x17]='i', [0x18]='o', [0x19]='p', [0x1A]='[', [0x1B]=']', [0x1C]=13,
-    [0x1E]='a', [0x1F]='s', [0x20]='d', [0x21]='f', [0x22]='g', [0x23]='h', [0x24]='j',
-    [0x25]='k', [0x26]='l', [0x27]=';', [0x28]='\'', [0x29]='`', [0x2B]='\\', [0x2C]='z',
-    [0x2D]='x', [0x2E]='c', [0x2F]='v', [0x30]='b', [0x31]='n', [0x32]='m', [0x33]=',',
-    [0x34]='.', [0x35]='/', [0x37]='*', [0x39]=' ',
-};
-static const char key_shift[0x3A] = {
-    [0x01]=27, [0x02]='!', [0x03]='@', [0x04]='#', [0x05]='$', [0x06]='%', [0x07]='^',
-    [0x08]='&', [0x09]='*', [0x0A]='(', [0x0B]=')', [0x0C]='_', [0x0D]='+', [0x0E]=8,
-    [0x10]='Q', [0x11]='W', [0x12]='E', [0x13]='R', [0x14]='T', [0x15]='Y', [0x16]='U',
-    [0x17]='I', [0x18]='O', [0x19]='P', [0x1A]='{', [0x1B]='}', [0x1C]=13, [0x1E]='A',
-    [0x1F]='S', [0x20]='D', [0x21]='F', [0x22]='G', [0x23]='H', [0x24]='J', [0x25]='K',
-    [0x26]='L', [0x27]=':', [0x28]='"', [0x29]='~', [0x2B]='|', [0x2C]='Z', [0x2D]='X',
-    [0x2E]='C', [0x2F]='V', [0x30]='B', [0x31]='N', [0x32]='M', [0x33]='<', [0x34]='>',
-    [0x35]='?', [0x37]='*', [0x39]=' ',
-};
-/* IBM PC AT BIOS keyboard words, NumLock off; grey keys use the 00h form
- * that INT 16h AH=00h returns. */
-static uint16_t navigation(unsigned scan, bool ctrl)
-{
-    static const uint8_t ctrl_scan[13] = {0x77, 0x8D, 0x84, 0x8E, 0x73, 0x8F, 0x74, 0x90,
-                                          0x75, 0x91, 0x76, 0x92, 0x93};
-    if (scan < 0x47 || scan > 0x53) return 0;
-    if (scan == 0x4A) return ctrl ? 0x8E00 : 0x4A2D;
-    if (scan == 0x4E) return ctrl ? 0x9000 : 0x4E2B;
-    return (uint16_t)((ctrl ? ctrl_scan[scan - 0x47] : scan) << 8);
-}
-static uint16_t numpad(unsigned scan)
-{
-    static const char digits[] = "789-456+1230.";
-    return scan >= 0x47 && scan <= 0x53 ? (uint16_t)(scan << 8 | (uint8_t)digits[scan - 0x47]) : 0;
-}
-/* Returns the BIOS word for a key press, or 0 for no keyboard character. */
-static uint16_t bios_word(unsigned code, uint8_t mods)
-{
-    bool shift = mods & (MOD_SHIFT_L | MOD_SHIFT_R), ctrl = mods & MOD_CTRL, alt = mods & MOD_ALT;
-    bool extended = code & 0x100;
-    unsigned scan = code & 0xFF;
-    if (extended) {
-        if (scan == 0x1C) return ctrl ? 0x1C0A : 0x1C0D;        /* keypad Enter */
-        if (scan == 0x35) return 0x352F;                        /* keypad / */
-        return navigation(scan, ctrl);
-    }
-    if (scan >= 0x3B && scan <= 0x44) {                         /* F1-F10 */
-        unsigned base = alt ? 0x68 : ctrl ? 0x5E : shift ? 0x54 : 0x3B;
-        return (uint16_t)((base + scan - 0x3B) << 8);
-    }
-    if (scan == 0x57 || scan == 0x58) {                         /* F11, F12 */
-        unsigned base = alt ? 0x8B : ctrl ? 0x89 : shift ? 0x87 : 0x85;
-        return (uint16_t)((base + scan - 0x57) << 8);
-    }
-    if (scan >= 0x47 && scan <= 0x53 && scan != 0x4A && scan != 0x4E)
-        return ((mods & MOD_NUM) != 0) != shift ? numpad(scan) : navigation(scan, ctrl);
-    if (scan == 0x4A || scan == 0x4E) return navigation(scan, ctrl);
-    if (scan >= sizeof(key_plain) || !key_plain[scan]) return 0;
-    char c = key_plain[scan];
-    if (alt) {
-        if (scan >= 0x02 && scan <= 0x0D) return (uint16_t)((scan + 0x76) << 8); /* Alt+1..= */
-        return (uint16_t)(scan << 8);
-    }
-    if (ctrl) {
-        if (c >= 'a' && c <= 'z') return (uint16_t)(scan << 8 | (c - 'a' + 1));
-        if (scan == 0x1C) return 0x1C0A;
-        if (scan == 0x0E) return 0x0E7F;
-        if (scan == 0x03) return 0x0300;
-        if (scan == 0x07) return 0x071E;
-        if (scan == 0x0C) return 0x0C1F;
-        if (scan == 0x1A) return 0x1A1B;
-        if (scan == 0x2B) return 0x2B1C;
-        if (scan == 0x1B) return 0x1B1D;
-        return 0;
-    }
-    if (scan == 0x0F) return shift ? 0x0F00 : 0x0F09;
-    bool letter = c >= 'a' && c <= 'z';
-    bool upper = letter ? shift != ((mods & MOD_CAPS) != 0) : shift;
-    return (uint16_t)(scan << 8 | (uint8_t)(upper ? key_shift[scan] : c));
-}
+/* ---- Window input: the f3-01 device path ----
+ * Focus and events go to dosvm_input_focus/dosvm_input_event: KEY reaches
+ * the virtual 8042 as set-1 bytes and IRQ1, whose synthetic INT 9 fills the
+ * BIOS buffer (dosvm_kbd.c); MOTION/BUTTON drive the INT 33h model and its
+ * callbacks; TEXT is ignored because KEY already carries the key; focus loss
+ * and RESYNC release held keys and buttons. */
 static void window_focus(struct binding *b, bool focused)
 {
     b->focused = focused;
-    /* Focus loss releases held modifiers; lock states persist. */
-    b->mods &= MOD_CAPS | MOD_NUM;
+    dosvm_input_focus(b->key, focused);
 }
 static int window_input(struct binding *b, const struct ciuki_input_event *e)
 {
-    uint8_t bit = 0;
-    switch (e->type) {
-    case CIUKI_INPUT_RESYNC: b->mods &= MOD_CAPS | MOD_NUM; return 0;
-    case CIUKI_INPUT_TEXT: case CIUKI_INPUT_MOTION: case CIUKI_INPUT_BUTTON: return 0;
-    case CIUKI_INPUT_KEY: break;
-    default: return -EINVAL;
-    }
-    switch (e->code) {
-    case 0x2A: bit = MOD_SHIFT_L; break;
-    case 0x36: bit = MOD_SHIFT_R; break;
-    case 0x1D: case 0x11D: bit = MOD_CTRL; break;
-    case 0x38: case 0x138: bit = MOD_ALT; break;
-    default: break;
-    }
-    if (bit) {
-        if (e->value) b->mods |= bit; else b->mods &= (uint8_t)~bit;
-        return 0;
-    }
-    if (!e->value) return 0;
-    if (e->code == 0x3A) { if (e->value == 1) b->mods ^= MOD_CAPS; return 0; }
-    if (e->code == 0x45) { if (e->value == 1) b->mods ^= MOD_NUM; return 0; }
-    uint16_t word = bios_word((unsigned)e->code, b->mods);
-    if (!word) return 0;
-    return dosvm_keyboard(b->key, word) ? 0 : -EAGAIN;
+    /* The record was validated; a refusal is a full guest queue (or a VM that
+     * lost the single input focus to another window: the desktop's focus
+     * message to this window follows). */
+    return dosvm_input_event(b->key, e) ? 0 : -EAGAIN;
 }
 
 /* ---- Owner lifecycle ---- */
@@ -283,7 +178,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if (e) { surface_release(surface); e = closed_error(e); goto out; }
         struct dosvm_key key = dosvm_key(v);
         b = &bindings[key.id - 1];
-        *b = (struct binding){key, p->pid, surface, true, false, 0};
+        *b = (struct binding){key, p->pid, surface, true, false};
         v->owner_pid = p->pid;
         memcpy(v->name, c.name, sizeof(v->name));
         if (p->state != PROC_LIVE) e = -EINTR;

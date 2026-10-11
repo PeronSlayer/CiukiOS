@@ -13,6 +13,11 @@
 ;   4  Mode X 320x240 (unchained), pixel (x+y)&FFh by plane
 ;   5  mode 12h, pixel colour ((x>>3)+(y>>3))&15 by plane
 ;   6  mode 03h restored, then exit 0
+; Waits (f3-01 wait-loop rule): the stage key is INT 16h AH=00h, which
+; blocks in the monitor until the BIOS buffer holds a key, and retrace is a
+; bounded poll of 3DAh with interrupts enabled. No wait sleeps in the guest
+; with HLT, so there is no test-then-HLT window for an IRQ to fall into; a
+; future interrupt-driven wait must test with IF clear and sleep with STI; HLT.
 ; SPDX-License-Identifier: GPL-2.0-only
 bits 16
 org 100h

@@ -8,6 +8,7 @@
 #include <ciuki/bootlog.h>
 #include <ciuki/init.h>
 #include <ciuki/sha256.h>
+#define FAT_PROBE_DIGEST_CAP (8u * 1024u * 1024u) /* content digest cap per file in the volume walk */
 #ifndef FS_HOST
 #include <ciuki/task.h>
 #include <ciuki/ata.h>
@@ -141,7 +142,12 @@ static int list_volume(const char *probe, struct storage_volume *v, unsigned *id
         sha256_update(&listing, walk_path, strlen(walk_path) + 1);
         sha256_update(&listing, entry.alias, strlen(entry.alias) + 1);
         sha256_update(&listing, size, 4); sha256_update(&listing, &entry.attr, 1);
-        if (!(entry.attr & FAT_ATTR_DIR)) {
+        if (!(entry.attr & FAT_ATTR_DIR) && entry.size > FAT_PROBE_DIGEST_CAP) {
+            /* Payloads above the cap (the 128 MiB DOS boot image since f3-00)
+             * would exceed the case's host deadline under TCG; T1 verifies
+             * their hashes statically. The listing takes 32 zero bytes. */
+            rec_emit(probe, "DATA", "case=large id=%u size=%u cap=%u", current, entry.size, FAT_PROBE_DIGEST_CAP);
+        } else if (!(entry.attr & FAT_ATTR_DIR)) {
             uint32_t bytes; char hex[65];
             e = storage_file_digest(&probe_table, walk_path, digest, &bytes);
             if (e) return e;

@@ -24,7 +24,7 @@ PERSONALITY = {"CIUKIDOS_EXTERNAL_XMS": 1, "STAGE1_SELFTEST_AUTORUN": 0,
                "TRACE_WIN_MEMORY": 0, "TRACE_WIN_XMS": 0,
                "STAGE1_BOOT_EXTERNAL_SHELL": 1, "STAGE2_AUTORUN": 0,
                "HARDWARE_VALIDATION_SCREEN": 0, "ENABLE_PS2_MOUSE_INIT": 0,
-               "WOLF_RUNTIME_DIAG": 0}
+               "CIUKIDOS_FIRMWARE_MOUSE": 1, "WOLF_RUNTIME_DIAG": 0}
 
 
 def digest(path):
@@ -136,7 +136,8 @@ def build(out=None):
                  "/COMMAND.COM": command, "/AUTOEXEC.BAT": b"\\DOSREADY.COM\r\n"}
         for source, name in (("dosready", "DOSREADY.COM"), ("memory", "MEMORY.COM"),
                              ("command_status", "CMDSTAT.COM"), ("exit37", "EXIT37.COM"),
-                             ("vmpriv", "VMPRIV.COM"), ("vmport", "VMPORT.COM")):
+                             ("vmpriv", "VMPRIV.COM"), ("vmport", "VMPORT.COM"),
+                             ("vmdevices", "VMDEV.COM")):
             files["/" + name] = assemble(f"src/probes/doscompat/{source}.asm", work / name)
         files["/VMMEMORY.COM"] = assemble("src/probes/dos/vm_memory.asm", work / "VMMEMORY.COM")  # f3-03 memory conformance payload
         files["/VMVIDEO.COM"] = assemble("src/probes/dos/vm_video.asm", work / "VMVIDEO.COM")  # f3-02 virtual VGA pattern payload
