@@ -14,12 +14,14 @@
 #define DESK_MENU_MAX 16
 #define DESK_MENU_ROW 28
 #define DESK_CLOSE_NS 2000000000ull
+#define DESK_FILES_CHECKPOINT 0xf2310000u
+#define DESK_FILES_CHECKPOINTS 5
 struct desk_box { int32_t x, y, w, h; };
 struct desk_damage { unsigned count; struct desk_box boxes[DESK_DAMAGE_MAX]; };
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
-    int minimized, internal, closing;
+    int minimized, internal, closing, program;
     uint32_t pid, serial, version;
     uint64_t ping_sent_ns, next_ping_ns, order;
     struct ciuki_surface_info info;
@@ -52,6 +54,9 @@ struct desktop {
     struct desk_client clients[DESK_CLIENTS];
     int shell, menu_open, menu_focus, about, action, shell_test, shell_stage;
     uint32_t shell_pid, shell_keys;
+    /* f2-31 files-qemu-t23: Files checkpoints are PINGs with these serials. */
+    int files_test, files_checkpoint, files_reported, files_done;
+    uint32_t files_pid;
     int (*launch)(struct desktop *, const struct desk_program *);
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
@@ -73,6 +78,8 @@ int32_t desk_menu_row(const struct desktop *);
 int desk_contains(struct desk_box, int32_t, int32_t);
 int desk_hit(const struct desktop *, int32_t, int32_t);
 int desk_program_add(struct desktop *, const char *name, const uint8_t *elf, size_t);
+int desk_program_graphical(const char *name);
+const char *desk_program_label(const char *name);
 void desk_shell_enable(struct desktop *);
 void desk_minimize(struct desktop *, int index);
 void desk_request_close(struct desktop *, int index);

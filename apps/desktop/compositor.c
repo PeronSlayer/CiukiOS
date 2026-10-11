@@ -227,6 +227,11 @@ static void window(struct desktop *d, int i, struct desk_box clip)
             d->pixels[(uint32_t)y*d->width+(uint32_t)x] =
                 c->pixels[(uint32_t)(y-content.y)*c->info.width+(uint32_t)(x-content.x)] & 0xffffffu;
 }
+/* Programs that open a desktop window receive their channel at fd 3. */
+int desk_program_graphical(const char *name)
+{ return !strcmp(name,"demo") || !strcmp(name,"files"); }
+const char *desk_program_label(const char *name)
+{ return !strcmp(name,"demo") ? "Ciuki Demo" : !strcmp(name,"files") ? "Files" : name; }
 void desk_shell_draw(struct desktop *d, struct desk_box clip)
 {
     struct desk_box bar=desk_taskbar(d), b;
@@ -240,11 +245,11 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
             d->focus==i ? 0x213c4cu : 0xe8d7b9u);
         if (button.w>24) {
             if (d->clients[i].internal) portrait_at(d,b,button.x+4,button.y+5,16);
-            else icon(d,b,button.x+4,button.y+5,desk_icon_run);
+            else icon(d,b,button.x+4,button.y+5,d->clients[i].program ? desk_icon_files : desk_icon_run);
             desk_text(d,b,button.x+24,button.y+9,d->clients[i].title,1,d->focus==i ? 0xffffffu : 0x213c4cu);
         }
     }
-    char clock[24]; uint64_t s=d->realtime_second;
+    char clock[24]; uint64_t s=d->files_test ? 12*3600 : d->realtime_second; /* fixed in the Files test */
     snprintf(clock,sizeof(clock),"%02u:%02u:%02u",(unsigned)(s/3600%24),(unsigned)(s/60%60),(unsigned)(s%60));
     desk_text(d,clip,(int32_t)d->width-64,bar.y+12,clock,1,0x213c4cu);
     if (!d->menu_open) return;
@@ -256,11 +261,12 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
         struct desk_box item={menu.x,menu.y+(int32_t)i*row,menu.w,row}, part;
         if (!desk_intersect(item,b,&part)) continue;
         fill(d,(struct desk_box){item.x,item.y,item.w,1},part,0xb8c9ccu);
-        const char *name=i<d->program_count ? (!strcmp(d->programs[i].name,"demo") ? "Ciuki Demo" : d->programs[i].name) :
+        const char *name=i<d->program_count ? desk_program_label(d->programs[i].name) :
             i==d->program_count ? "About CiukiOS" : "Restart (unavailable)";
         if (row>=18) {
             if (i==d->program_count) portrait_at(d,part,item.x+6,item.y+(row-16)/2,16);
-            else icon(d,part,item.x+6,item.y+(row-16)/2,i<d->program_count ? desk_icon_run : desk_icon_restart);
+            else icon(d,part,item.x+6,item.y+(row-16)/2,i<d->program_count ?
+                      (!strcmp(d->programs[i].name,"files") ? desk_icon_files : desk_icon_run) : desk_icon_restart);
         }
         desk_text(d,part,item.x+28,item.y+(row-7)/2,name,1,i==d->program_count+1 ? 0x607a85u : 0x213c4cu);
     }

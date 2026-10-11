@@ -118,7 +118,10 @@ static struct {
     uint32_t setup_step, setup_error;
     uint32_t server, survivor, victim, control, generation, cycles, replies;
     uint32_t survivor_stage, survivor_turns, survivor_snapshot, victim_stage, unauthorized, keys, motion, buttons;
+    /* f2-31 files-qemu-t23: write gate request and per-checkpoint digests. */
+    uint32_t files, checkpoint, checkpoint_digest[6];
 } native_reports;
+static uint32_t native_digest(void);
 
 static void native_invalid(const char *check)
 {
@@ -166,6 +169,21 @@ static bool native_report(struct process *p, const char *line, unsigned length)
         native_reports.survivor=child; native_reports.victim=fault;
         native_reports.cycles=cycle; native_reports.replies=replies;
         native_reports.keys=keys; native_reports.motion=motion; native_reports.buttons=buttons;
+        /* Optional Files-case fields; absent in every other desktop case.
+         * The desktop reports a checkpoint only after presenting its frame,
+         * and stays inside this call while the framebuffer is hashed. */
+        uint32_t files, checkpoint;
+        if (report_unsigned(line,"files",&files)) {
+            NATIVE_REQUIRE(files==1,"files");
+            native_reports.files=1;
+            NATIVE_REQUIRE(report_unsigned(line,"checkpoint",&checkpoint),"checkpoint");
+            NATIVE_REQUIRE(checkpoint==native_reports.checkpoint || checkpoint==native_reports.checkpoint+1,"checkpoint_order");
+            NATIVE_REQUIRE(checkpoint<ARRAY_SIZE(native_reports.checkpoint_digest),"checkpoint_range");
+            if (checkpoint>native_reports.checkpoint) {
+                native_reports.checkpoint_digest[checkpoint]=native_digest();
+                native_reports.checkpoint=checkpoint;
+            }
+        }
     } else if (!server && !strncmp(line,"case=native-demo ",17)) {
         uint32_t stage, turns, unauthorized, generation;
         NATIVE_FIELD(stage); native_reports.reported_stage=stage;
@@ -383,8 +401,28 @@ static int native_crash_isolation(void)
             }
         }
         uint64_t start=g_ticks; deadline=start+15000;
-        do { task_sleep_ms(10); desktop_activity_snapshot(&b); }
+        unsigned files_emitted=0; int files_gate=1;
+        do {
+            task_sleep_ms(10); desktop_activity_snapshot(&b);
+            /* f2-31: the Files case writes to C: and runs a longer script. */
+            if (native_reports.files && files_gate==1) {
+                files_gate=storage_enable_write(storage_get(),2);
+                rec_emit(name,"DATA","case=files-write-gate server=desktop expected=0 observed=%d",files_gate);
+                deadline=start+40000;
+            }
+            while (files_emitted<native_reports.checkpoint) {
+                files_emitted++;
+                rec_emit(name,"DATA","case=files-checkpoint server=desktop checkpoint=%u pixel_digest=%08x",
+                         files_emitted,native_reports.checkpoint_digest[files_emitted]);
+            }
+        }
         while (native_live(server) && g_ticks<deadline && (native_reports.keys<2 || native_reports.motion<1 || native_reports.buttons<2 || b.presents<=a.presents || g_ticks-start<500));
+        while (files_emitted<native_reports.checkpoint) {
+            files_emitted++;
+            rec_emit(name,"DATA","case=files-checkpoint server=desktop checkpoint=%u pixel_digest=%08x",
+                     files_emitted,native_reports.checkpoint_digest[files_emitted]);
+        }
+        if (native_reports.files) pass=pass && !files_gate && native_reports.checkpoint==5;
         uint32_t next_digest=native_digest();
         pass=pass && native_live(server) && native_live(survivor) && b.input_events>a.input_events && b.presents>a.presents &&
             next_digest!=digest && native_reports.keys>=2 && native_reports.motion>=1 && native_reports.buttons>=2 && server->pid==server_pid && survivor->pid==survivor_pid && supervisor_desktop_deaths()==deaths;
@@ -407,6 +445,12 @@ cleanup:
         desktop_remove(owner,server);
     }
     if (owner) { proc_stop(owner,0,0); proc_collect(); }
+    if (native_reports.files) {
+        /* Publish the Files case's writes cleanly for the host checker. */
+        int flushed=storage_sync();
+        rec_emit(name,"DATA","case=files-durable server=desktop flush_result=%d checker=host_required",flushed);
+        pass=pass && !flushed;
+    }
 finished:
     desktop_snapshot(&final); proc_snapshot(&after);
     bool objects=desktop_ledgers_equal(&initial,&final), processes=native_proc_equal(&before,&after);

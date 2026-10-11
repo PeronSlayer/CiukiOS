@@ -316,9 +316,12 @@ void klog(const char *f,...) {(void)f;}
         suite=runner.load(ROOT/'tests/suites/f2-desktop.json')
         normal=[c for c in suite['cases'] if '-normal-' in c['id']]
         shell=[c for c in suite['cases'] if c['id'].startswith('desktop-shell-')] # f2-30: real desktop, scripted shell actions
+        files=[c for c in suite['cases'] if c['id'].startswith('files-')] # f2-31: Files script with checkpoint digests
         self.assertEqual({c['profile'] for c in normal},{'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-1998','qemu-desktop-2002'})
         self.assertEqual({c['profile'] for c in shell},{'qemu-t23','qemu-e500'})
-        self.assertEqual(len(suite['cases']),13) # f2-30 added two desktop-shell cases
+        self.assertEqual([c['profile'] for c in files],['qemu-t23'])
+        self.assertEqual(len(suite['cases']),14) # f2-30 added two desktop-shell cases, f2-31 files-qemu-t23
+        shell=shell+files
         for case in suite['cases']:
             native=case in normal or case in shell;server='desktop' if native else 'standin'
             profile=runner.load(ROOT/'tests/profiles'/f"{case['profile']}.json")
