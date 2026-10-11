@@ -176,7 +176,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             desk_message(&reply,DESK_FOCUS,8); desk_queue(d,i,&reply);
         } else desk_focus(d, i);
         if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
-        if (d->shell_test && c->pid == d->shell_pid && d->shell_stage == 2) d->shell_stage = 3;
+        if (d->shell_test && c->pid == d->shell_pid && d->shell_stage == 2) d->shell_stage = d->shell_app ? 4 : 3; /* the app scenario has no drag step */
         break;
     }
     case DESK_DAMAGE: {
@@ -321,7 +321,7 @@ void desk_child_exited(struct desktop *d, uint32_t pid, int status)
         if (d->clients[i].pid==pid && pid) desk_drop_client(d,i);
         if (d->children[i].pid==pid && pid) { owned=1; memset(&d->children[i],0,sizeof(d->children[i])); }
     }
-    if (owned && d->shell_test && d->shell_stage==5 && pid==d->shell_pid && !status) d->shell_stage=6;
+    if (owned && d->shell_test && (d->shell_stage==5 || (d->shell_app && d->shell_stage==4)) && pid==d->shell_pid && !status) d->shell_stage=6;
 }
 void desk_about(struct desktop *d)
 {

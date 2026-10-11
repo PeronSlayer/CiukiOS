@@ -282,6 +282,11 @@ static int native_crash_isolation(void)
     bool operator_absent=false;
     uint64_t launch_start=g_ticks;
     memset(&native_reports,0,sizeof(native_reports));
+    /* f2-32: desktop applications save files (CiukNote), and test selectors start read-only like
+     * libc-smoke's; enable the write gate as the production boot does and sync at the end so a host
+     * checker can read the files back. Failure is recorded; read-only cases do not depend on it. */
+    int write_gate=storage_enable_write(storage_get(),2);
+    rec_emit(name,"DATA","case=storage server=desktop write_gate=%d",write_gate);
     bool pass=!proc_prepare(proc_supervisor(),&owner);
     if (!pass) { native_launch_record(launch_start,"controller_setup"); goto finished; }
     proc_publish(owner,0);
@@ -408,6 +413,10 @@ cleanup:
     }
     if (owner) { proc_stop(owner,0,0); proc_collect(); }
 finished:
+    if (!write_gate) {
+        int synced=storage_sync();
+        rec_emit(name,"DATA","case=storage-sync server=desktop result=%d",synced);
+    }
     desktop_snapshot(&final); proc_snapshot(&after);
     bool objects=desktop_ledgers_equal(&initial,&final), processes=native_proc_equal(&before,&after);
     if (!objects || !processes) native_step_record(0,generation,"cleanup_ledger");

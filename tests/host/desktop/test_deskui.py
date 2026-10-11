@@ -29,7 +29,7 @@ class DeskuiTests(unittest.TestCase):
         self.compile_run("files-model", ["apps/files/model.c", "tests/host/desktop/files_model_test.c"])
 
     def test_widgets_and_digests(self):
-        actual = self.compile_run("deskui", ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c",
+        actual = self.compile_run("deskui", ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/textarea.c",
                                             "apps/desktop/compositor.c", "tests/host/desktop/deskui_test.c"], True)
         # Filled from reviewed production fixture; pinned hashes catch visual regressions.
         expected = {}

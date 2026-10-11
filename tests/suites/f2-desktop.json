@@ -2788,7 +2788,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -169
+                    "value": -197
                   }
                 }
               ],
@@ -3636,7 +3636,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -169
+                    "value": -197
                   }
                 }
               ],
@@ -4052,6 +4052,2715 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ciuknote-qemu-t23",
+      "probe": "crash-isolation",
+      "profile": "qemu-t23",
+      "selector": "f2:crash-isolation run={run_id} server=desktop",
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "server": "desktop"
+            },
+            "fields": {
+              "reason": "ok",
+              "stage": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "pid",
+              "survivor",
+              "control",
+              "ticks"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_pid",
+              "survivor_pid",
+              "server_pgid",
+              "survivor_pgid"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "victim",
+              "server": "desktop"
+            },
+            "fields": {
+              "expected": {
+                "eq": "$status"
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle",
+            "required_fields": [
+              "pid",
+              "cr3",
+              "pgid",
+              "kind",
+              "status"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "server": "desktop"
+            },
+            "fields": {
+              "server_replies": {
+                "ge": 100
+              },
+              "replies": {
+                "ge": 100
+              },
+              "ticks": {
+                "ge": 100
+              },
+              "unauthorized_access": {
+                "eq": 0
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restored",
+              "server": "desktop"
+            },
+            "fields": {
+              "equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              }
+            },
+            "exact_count": 100,
+            "unique": "cycle"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles",
+              "server": "desktop"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 100
+              },
+              "desktop_restarts": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ledger",
+              "server": "desktop"
+            },
+            "fields": {
+              "objects_equal": {
+                "eq": 1
+              },
+              "processes_equal": {
+                "eq": 1
+              },
+              "descriptions": {
+                "eq": 0
+              },
+              "surfaces": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "channels": {
+                "eq": 0
+              },
+              "messages": {
+                "eq": 0
+              },
+              "grants": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "spaces",
+              "server": "desktop"
+            },
+            "fields": {},
+            "exact_count": 1,
+            "required_fields": [
+              "server_cr3",
+              "survivor_cr3"
+            ]
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "post_fault_input",
+              "server": "desktop"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "interaction",
+              "server": "desktop",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "changed": {
+                "eq": 1
+              },
+              "keys": {
+                "eq": 4
+              }
+            },
+            "required_fields": [
+              "presents",
+              "input_events",
+              "pixel_digest"
+            ]
+          }
+        ]
+      },
+      "desktop_screen": true,
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "shell-test-app-mode",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f11"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f11"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "to-bottom-left-corner",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -127
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 127
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -127
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 127
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -127
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 127
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -127
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 127
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -127
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 127
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": -127
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 127
+                  }
+                }
+              ],
+              "pause_ms": 60
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "open-ciuki-menu",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 40
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -16
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "launch-first-menu-row-ciuknote",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -225
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": false,
+                    "button": "left"
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "wait-for-window",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ],
+          "repeat": 20
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-type",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "h"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "h"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "l"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "l"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "l"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "l"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "spc"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "spc"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "c"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "c"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "u"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "u"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "k"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "k"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "n"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "n"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "c"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "c"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "u"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "u"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "k"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "k"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "spc"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "spc"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "y"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "y"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "spc"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "spc"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "w"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "w"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f5"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f5"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-save-as",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ctrl"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ctrl"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-wait-save-page",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ],
+          "repeat": 3
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-save-path",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "y"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "y"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "n"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "n"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "x"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "x"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-wait-saved",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ],
+          "repeat": 15
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-new-open",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ctrl"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "n"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "n"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ctrl"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ctrl"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ctrl"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-wait-open-page",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ],
+          "repeat": 3
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-open-path",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "y"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "y"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "s"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "slash"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "n"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "n"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "x"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "x"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "t"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 60
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-wait-opened",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ],
+          "repeat": 8
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "ciuknote-exit",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f10"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "f10"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "up"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "up"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "wait-for-exit",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ],
+          "repeat": 6
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "post_fault_input"
+          },
+          "note": "finish-key-a",
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "a"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 100
+            }
+          ]
+        }
+      ],
+      "checks": {
+        "offset": 1048576,
+        "size": 535822336,
+        "fsck_exit_codes": [
+          0
+        ],
+        "listing_path": "::/system/tests",
+        "listing_contains": [],
+        "files": [
+          {
+            "path": "::/system/tests/note.txt",
+            "sha256": "8295f4d0977502fc61022209d665ff588382b0bd1564e5e38736f022e57f807d"
+          }
+        ]
+      }
     }
   ],
   "contract": "docs/design/f2-acceptance.md",

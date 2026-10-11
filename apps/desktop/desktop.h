@@ -51,6 +51,7 @@ struct desktop {
     struct desk_damage damage;
     struct desk_client clients[DESK_CLIENTS];
     int shell, menu_open, menu_focus, about, action, shell_test, shell_stage;
+    int shell_app; /* f2-32: F11 scenario: the first program launched is the subject (menu, launch, run to exit) */
     uint32_t shell_pid, shell_keys;
     int (*launch)(struct desktop *, const struct desk_program *);
     int (*terminate)(uint32_t, int);

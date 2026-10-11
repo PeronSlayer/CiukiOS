@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "deskui.h"
+#include "textarea.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,6 +63,7 @@ void du_dialog_show(struct du_ui *u,enum du_dialog_kind kind,int id,const char *
     d->visible=1; d->kind=kind; d->id=id; d->count=2; d->buttons[0]=kind==DU_JOB?"Cancel":"OK";
     d->buttons[1]="Cancel"; if (kind==DU_JOB) d->count=1;
     snprintf(d->title,sizeof(d->title),"%s",title); snprintf(d->message,sizeof(d->message),"%s",message);
+    d->focus=kind==DU_MESSAGE?1:0; /* f2-32: message boxes start on their first button (Tab cycles the buttons) */
     d->edit.kind=DU_EDIT; snprintf(d->edit.text,sizeof(d->edit.text),"%s",initial?initial:"");
     d->edit.cursor=strlen(d->edit.text); d->edit.anchor=0; u->dirty=1;
 }
@@ -136,7 +138,17 @@ static void draw_menu(struct du_ui *u,const struct du_menu_item *items,unsigned 
     for (unsigned i=0;i<n;i++) {
         struct du_rect r={x+2,y+2+(int)i*22,220,22};
         if ((int)i==u->menu_item) du_fill(c,r,DU_SELECTED);
-        du_text(c,r.x+6,r.y+3,items[i].label,items[i].disabled?0x879399u:(int)i==u->menu_item?DU_WHITE:DU_INK);
+        uint32_t ink=items[i].disabled?0x879399u:(int)i==u->menu_item?DU_WHITE:DU_INK;
+        const char *label=items[i].label; int indent=6;
+        /* A leading \001 marks a checked item, \002 an unchecked one (the label is indented for both). */
+        if (label[0]==1 || label[0]==2) {
+            if (label[0]==1) { /* check mark */
+                du_fill(c,(struct du_rect){r.x+7,r.y+11,2,3},ink); du_fill(c,(struct du_rect){r.x+9,r.y+13,2,2},ink);
+                du_fill(c,(struct du_rect){r.x+11,r.y+9,2,4},ink); du_fill(c,(struct du_rect){r.x+13,r.y+6,2,4},ink);
+            }
+            label++; indent=22;
+        }
+        du_text(c,r.x+indent,r.y+3,label,ink);
     }
 }
 void du_render(struct du_ui *u)
@@ -161,6 +173,7 @@ void du_render(struct du_ui *u)
         case DU_PROGRESS: du_bevel(c,w->box,1); du_fill(c,(struct du_rect){w->box.x+2,w->box.y+2,w->total?(int)((uint64_t)(unsigned)(w->box.w-4)*w->value/w->total):0,w->box.h-4},DU_SELECTED); break;
         case DU_STATUS: du_bevel(c,w->box,1); du_text(c,w->box.x+4,w->box.y+4,w->text,DU_INK); break;
         case DU_LABEL: du_text(c,w->box.x,w->box.y,w->text,DU_INK); break;
+        case DU_TEXTAREA: du_ta_draw(c,w->box,(struct du_textarea *)w->data,u->focus==(int)i); break;
         }
         c->clip=clip;
     }
@@ -213,6 +226,17 @@ static void edit_key(struct du_ui *u,struct du_widget *w,unsigned code)
     }
     u->dirty=1;
 }
+static int tab_stop(const struct du_widget *w)
+{ return !w->hidden && !w->disabled && w->kind!=DU_LABEL && w->kind!=DU_STATUS && w->kind!=DU_SCROLLBAR && w->kind!=DU_SPLITTER && w->kind!=DU_PROGRESS; }
+static void tab_focus(struct du_ui *u,int step)
+{
+    if (!u->count) return;
+    for (unsigned n=0;n<u->count;n++) {
+        u->focus=(u->focus+step+(int)u->count)%(int)u->count;
+        if (tab_stop(&u->widgets[u->focus])) break;
+    }
+    u->dirty=1;
+}
 static void dialog_result(struct du_ui *u,int index)
 { int id=u->dialog.id; u->dialog.result=index; u->dialog.visible=0; emit(u,DU_ACTIVATE,id,index); }
 void du_input(struct du_ui *u,const struct ciuki_input_event *e)
@@ -222,6 +246,7 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
         u->mouse_x=e->value; u->mouse_y=e->value2;
         if (u->capture>=0) { struct du_widget *w=&u->widgets[u->capture];
             if (w->kind==DU_SPLITTER) { w->value=(unsigned)(u->mouse_x>32?u->mouse_x:32); emit(u,DU_CHANGE,w->id,(int)w->value); }
+            if (w->kind==DU_TEXTAREA && w->data && du_ta_mouse_move((struct du_textarea *)w->data,w->box,u->mouse_x,u->mouse_y)) emit(u,DU_CHANGE,w->id,0);
             if (w->kind==DU_SCROLLBAR && w->box.h>0) {
                 int y=u->mouse_y-w->box.y; if (y<0) y=0; if (y>w->box.h) y=w->box.h;
                 w->value=w->total>w->page?(unsigned)((uint64_t)(unsigned)y*(w->total-w->page)/(unsigned)w->box.h):0; emit(u,DU_CHANGE,w->id,(int)w->value);
@@ -250,8 +275,8 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
         }
         int hit=du_hit(u,u->mouse_x,u->mouse_y);
         if (e->value) {
-            if (hit<0) { if (e->code==3) emit(u,DU_CONTEXT,-1,-1); return; }
-            struct du_widget *w=&u->widgets[hit]; u->focus=hit;
+            if (hit<0) { if (e->code==2) emit(u,DU_CONTEXT,-1,-1); return; }
+            struct du_widget *w=&u->widgets[hit]; if (tab_stop(w)) u->focus=hit; /* labels, status bars and bars never take the keyboard */
             if (e->code==1) u->capture=hit;
             if (w->kind==DU_LIST || w->kind==DU_TREE) {
                 int n=du_list_hit(w,u->mouse_x,u->mouse_y);
@@ -259,11 +284,16 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
                     int x=(u->mouse_x-w->box.x)*100/(w->box.w?w->box.w:1); emit(u,DU_SORT,w->id,x<43?0:x<60?1:x<78?2:3);
                 } else {
                     if (n>=0) w->active=(unsigned)n;
-                    emit(u,e->code==3?DU_CONTEXT:DU_SELECT,w->id,n);
+                    emit(u,e->code==2?DU_CONTEXT:DU_SELECT,w->id,n);
                 }
             } else if (w->kind==DU_EDIT) { w->cursor=strlen(w->text); w->anchor=w->cursor; u->dirty=1; }
+            else if (w->kind==DU_TEXTAREA && w->data) {
+                if (e->code==2) emit(u,DU_CONTEXT,w->id,-1);
+                else if (e->code==1 && du_ta_mouse_down((struct du_textarea *)w->data,w->box,u->mouse_x,u->mouse_y,u->modifiers,e->monotonic_ns)) emit(u,DU_CHANGE,w->id,0);
+            }
         } else if (e->code==1) {
             int captured=u->capture; u->capture=-1;
+            if (captured>=0 && u->widgets[captured].kind==DU_TEXTAREA && u->widgets[captured].data) du_ta_mouse_up((struct du_textarea *)u->widgets[captured].data);
             if (captured>=0 && captured==hit && u->widgets[hit].kind==DU_BUTTON) emit(u,DU_ACTIVATE,u->widgets[hit].id,0);
             u->dirty=1;
         } return;
@@ -271,17 +301,25 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
     if (e->type==CIUKI_INPUT_KEY) {
         if (e->code<0 || e->code>512) return;
         unsigned code=(unsigned)e->code; u->keys[code]=(uint8_t)(e->value!=0);
+        if (code==0x3a && e->value==1) u->caps^=1u;
         u->modifiers=(u->keys[0x2a]||u->keys[0x36]?DU_SHIFT:0)|(u->keys[0x1d]||u->keys[0x11d]?DU_CTRL:0)|(u->keys[0x38]||u->keys[0x138]?DU_ALT:0);
         if (!e->value) return;
         if (u->dialog.visible) {
             if (code==1) dialog_result(u,(int)u->dialog.count-1);
-            else if (code==0x0f) { u->dialog.focus=(u->dialog.focus+1)%(int)(u->dialog.count+1); u->dirty=1; }
+            else if (code==0x0f) {
+                int edit=u->dialog.kind==DU_INPUT||u->dialog.kind==DU_OPEN||u->dialog.kind==DU_SAVE;
+                u->dialog.focus=edit?(u->dialog.focus+1)%(int)(u->dialog.count+1):u->dialog.focus%(int)u->dialog.count+1; u->dirty=1; /* no edit stop in message boxes */
+            }
             else if (code==0x1c) dialog_result(u,u->dialog.focus?u->dialog.focus-1:0);
             else if (!u->dialog.focus) edit_key(u,&u->dialog.edit,code);
             return;
         }
-        if (code==1) { u->menu=-1; u->context=NULL; u->dirty=1; return; }
-        if (code==0x44) { u->menu=u->menu>=0?-1:0; u->menu_item=0; u->dirty=1; return; }
+        if (code==1) {
+            int open=u->menu>=0 || u->context; u->menu=-1; u->context=NULL; u->dirty=1;
+            if (!open && u->focus>=0) emit(u,DU_CLOSE,u->widgets[u->focus].id,0);
+            return;
+        }
+        if (code==0x44) { if (u->menu_count) { u->menu=u->menu>=0?-1:0; u->menu_item=0; u->dirty=1; } return; }
         if (u->menu>=0 || u->context) {
             const struct du_menu_item *items=u->context?u->context:u->menus[u->menu].items;
             unsigned count=u->context?u->context_count:u->menus[u->menu].count;
@@ -291,21 +329,25 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
             u->dirty=1; return;
         }
         if (u->focus>=0 && u->widgets[u->focus].kind==DU_EDIT) {
-            if (code==0x1c) emit(u,DU_ACTIVATE,u->widgets[u->focus].id,0); else edit_key(u,&u->widgets[u->focus],code); return;
+            if (code==0x0f && !(u->modifiers&DU_CTRL)) tab_focus(u,(u->modifiers&DU_SHIFT)?-1:1);
+            else if (code==0x1c) emit(u,DU_ACTIVATE,u->widgets[u->focus].id,0); else edit_key(u,&u->widgets[u->focus],code);
+            return;
         }
         for (unsigned m=0;m<u->menu_count;m++) for (unsigned i=0;i<u->menus[m].count;i++) {
             const struct du_menu_item *item=&u->menus[m].items[i];
             if (!item->disabled && item->key==code && item->modifiers==u->modifiers) { emit(u,DU_ACTIVATE,item->id,0); return; }
         }
         if ((u->modifiers&DU_ALT) && code<128) {
-            static const unsigned menu_keys[]={0x21,0x12,0x2f,0x22,0x23};
-            for (unsigned i=0;i<u->menu_count && i<5;i++) if (code==menu_keys[i]) { u->menu=(int)i; u->menu_item=0; u->dirty=1; return; }
+            static const unsigned legacy_keys[]={0x21,0x12,0x2f,0x22,0x23};
+            const unsigned *menu_keys=u->menu_keys?u->menu_keys:legacy_keys;
+            for (unsigned i=0;i<u->menu_count && (u->menu_keys || i<5);i++) if (code==menu_keys[i]) { u->menu=(int)i; u->menu_item=0; u->dirty=1; return; }
         }
-        if (code==0x0f && u->count) {
-            for (unsigned n=0;n<u->count;n++) { u->focus=(u->focus+1)%(int)u->count; struct du_widget *w=&u->widgets[u->focus];
-                if (!w->hidden && !w->disabled && w->kind!=DU_LABEL && w->kind!=DU_STATUS) break; }
-            u->dirty=1; return;
+        if (u->focus>=0 && u->widgets[u->focus].kind==DU_TEXTAREA && u->widgets[u->focus].data) {
+            struct du_widget *w=&u->widgets[u->focus];
+            du_ta_fit((struct du_textarea *)w->data,w->box);
+            if (du_ta_key((struct du_textarea *)w->data,code,u->modifiers)) { emit(u,DU_CHANGE,w->id,0); return; }
         }
+        if (code==0x0f && u->count) { tab_focus(u,(u->modifiers&DU_SHIFT)?-1:1); return; }
         if (u->focus>=0) {
             struct du_widget *w=&u->widgets[u->focus];
             if ((w->kind==DU_LIST || w->kind==DU_TREE) && w->count) {
@@ -328,13 +370,17 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
         return;
     }
     if (e->type==CIUKI_INPUT_TEXT && !(u->modifiers&(DU_CTRL|DU_ALT)) && e->code>=32 && e->code!=127) {
-        char s[5]={0}; unsigned ch=(unsigned)e->code;
+        char s[5]={0}; unsigned ch=du_text_translate((unsigned)e->code,(u->modifiers&DU_SHIFT)!=0,u->caps);
         if (ch<128) s[0]=(char)ch;
         else if (ch<2048) { s[0]=(char)(0xc0|(ch>>6)); s[1]=(char)(0x80|(ch&63)); }
         else if (ch<65536) { s[0]=(char)(0xe0|(ch>>12)); s[1]=(char)(0x80|((ch>>6)&63)); s[2]=(char)(0x80|(ch&63)); }
         else return; /* FAT UCS-2 names */
         if (u->dialog.visible) { if (u->dialog.kind!=DU_MESSAGE && u->dialog.kind!=DU_JOB && !u->dialog.focus) edit_insert(&u->dialog.edit,s); }
         else if (u->focus>=0 && u->widgets[u->focus].kind==DU_EDIT) { edit_insert(&u->widgets[u->focus],s); emit(u,DU_CHANGE,u->widgets[u->focus].id,0); }
+        else if (u->focus>=0 && u->widgets[u->focus].kind==DU_TEXTAREA && u->widgets[u->focus].data) {
+            du_ta_fit((struct du_textarea *)u->widgets[u->focus].data,u->widgets[u->focus].box);
+            if (du_ta_text((struct du_textarea *)u->widgets[u->focus].data,ch)) emit(u,DU_CHANGE,u->widgets[u->focus].id,0);
+        }
         else emit(u,DU_CHANGE,-1,(int)ch);
         u->dirty=1;
     }

@@ -1,5 +1,137 @@
 # F2 ring-3 desktop and client protocol
 
+## f2-32 CiukNote decisions (2026-10-11)
+
+`/bin/ciuknote` is a Notepad-class editor on `libdeskui` (`apps/ciuknote/`: `app.c`
+commands/dialogs, `doc.c` file and text rules, `vfs.c` POSIX boundary, `main.c`
+window glue; `apps/libdeskui/textarea.{h,c}` the multi-line widget). Window 600x352,
+single bitmap font in 8x16 cells, menus File/Edit/Format/View/Help (Alt+F, E, O, V, H;
+F10), right-click menu, status bar `Ln, Col`, find/replace bar, Open/Save As page.
+Printing to LPT1 stays out (no parallel port driver); Page Setup/Print are absent.
+
+Research (2026-10-11): Microsoft's
+[Notepad help](https://support.microsoft.com/en-us/topic/how-to-use-notepad-to-create-a-log-file-dd228763-76de-a7a7-952b-d5ae203c4e12)
+describes the `.LOG` feature (first line `.LOG`, the date and time are appended at the end
+each time the file is opened); the 0.8 CiukNote description in the legacy archive
+(`docs/desktop-apps-2026-09-29.md`) fixes the scope and the 61,440-byte limit;
+[Unicode 15 chapter 3, Table 3-7](https://www.unicode.org/versions/Unicode15.0.0/ch03.pdf)
+defines the UTF-8 sequences the buffer accepts as one character (overlong forms, surrogates
+and truncated sequences are single invalid bytes); POSIX
+[rename](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html) and
+[fsync](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fsync.html) justify the
+save path; the QEMU case follows the
+[QMP input-send-event](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event)
+conventions of the desktop-shell cases. These were checked against `apps/libdeskui`, the
+`protocol.h`/`desktop.c` shell code and the kernel's `i8042.c` text path.
+
+Decisions.
+
+- **Keyboard text.** The kernel's native keyboard path (`i8042.c`, `key_transition`) reports
+  the *unshifted* US character of every key press as a TEXT event; only the BIOS path reports
+  shifted text. The toolkit therefore translates TEXT with the tracked Shift and Caps Lock
+  state (`du_text_translate`): a lowercase letter is upper-cased when Shift xor Caps is set,
+  digits and punctuation take their US shifted forms with Shift. Text that is already shifted
+  (BIOS, or any character that is not an unshifted key form) passes unchanged, so both
+  backends stay correct. This also fixes capitals and punctuation in Files' edit boxes.
+- **Text model.** One flat UTF-8 buffer with `\n` line breaks, 61,440 bytes (line breaks
+  count as one byte). Every offset lies on a character boundary; each character is one
+  cell, tabs advance to the next multiple of 8 counted from the visual line start, and
+  non-ASCII or control characters are drawn as a hollow placeholder box and saved unchanged
+  (a lone CR and NUL bytes survive). Undo has one level: it swaps with a snapshot, so a
+  second Undo redoes; consecutive typing, backspaces or forward deletes form one step and
+  any caret movement ends it. Word wrap breaks after the last blank that fits and hard-breaks
+  longer words; blanks hang past the edge; End on a soft-wrapped line keeps the caret at the
+  end of that line (affinity). Go To is disabled while Word Wrap is on. Find and Replace
+  fold ASCII case only and never match inside a character; Replace All counts on the
+  original text and is one Undo step; there is no wrap-around (the 0.8 behaviour):
+  `Cannot find "..."`.
+- **Files.** CRLF pairs read from a file become `\n`; the style of the first line break
+  is remembered and written back (new documents use CRLF, as Windows 9x Notepad). A file
+  larger than twice the limit, or longer than the limit after conversion, is refused
+  (`File too large`). Save writes `<name>.cn~`, `fsync`s, then `rename`s over the target
+  and removes the temporary on any error, so a failed save keeps the old file. The name
+  appears in the status bar: protocol v2 has no title update, so the creation title is
+  `CiukNote` (or `CiukNote - <name>` when started with a path).
+- **Open and Save As page.** The toolkit's DU_OPEN/DU_SAVE dialogs are path prompts, so the
+  application shows a page in the same window: location edit, Details list (folders first;
+  Name/Size/Type/Modified sortable; `..` row), file-name edit, `Text Documents (*.txt)` or
+  `All Files (*.*)`, Open/Save and Cancel. Typed names may be absolute or relative; a folder
+  name navigates; without an extension `.txt` is appended on Save and tried on Open; Save
+  over an existing file asks `<name> already exists. Do you want to replace it?`.
+- **Clipboard.** The editor keeps its own 61,440-byte clipboard (the toolkit's is 1,040
+  bytes) and mirrors the first line into the toolkit clipboard, so text copied in an edit
+  box or dialog can be pasted into the document and the reverse.
+- **Prompts** use the exact 0.8 text: `The text in the <name> file has changed.` / `Do you want
+  to save the changes?` (Yes/No/Cancel) on New, Open, Exit and a window close request.
+- **Command line.** `ciuknote [--channel-fd=N] [--test=ciuknote] [path]`; a missing path
+  offers to create the file. **Gap for lead review:** Files starts text files with
+  `ciuki_spawn(...)` without a channel mapping, but a graphical client needs a channel
+  whose other end the desktop owns (protocol v2 has no launch request). Opening from Files
+  therefore needs a desktop-side launch request or a lead-approved alternative; the editor
+  side accepts the path argument already.
+
+Toolkit changes (all inside `apps/libdeskui`, additive unless noted; Files rebuilds and its
+host tests still pass): `textarea.{h,c}` and the widget kind `DU_TEXTAREA` (appended to
+`enum du_kind`; `du_widget.data` appended); `du_ui.menu_keys` (per-menu Alt scan codes; NULL
+keeps the F,E,V,G,H table) and `du_ui.caps` appended; menu labels starting with `\001`/`\002`
+draw a check mark / indent (no struct change, so existing positional initialisers still
+compile under `-Wmissing-field-initializers`); Caps Lock tracking and TEXT translation;
+Esc emits `DU_CLOSE` for the focused widget when no menu is open (Files' inline rename
+expected it); Tab/Shift+Tab also leave edit widgets and skip scrollbars, splitters and
+progress bars; the right button is code 2 (`CIUKI_BUTTON_RIGHT`: the old code 3 was the
+middle button, so Files' context menus fired on the wrong button); a click on a label,
+status bar or bar no longer steals the keyboard focus; F10 does nothing without menus;
+message dialogs start on their first button and Tab cycles only the buttons. The renderer
+is unchanged for existing widgets; the build audits `textarea.c` for integer-only code.
+
+The desktop gate has one more scripted scenario, selected like the F12 shell case by an
+input at the interaction ARM: **F11** enables the shell with `shell_app`: the first
+programme started from the Ciuki menu is launched with `--test=<name>` (Files already
+accepts `--test=files`), there is no drag step, and a clean exit (status 0) completes the
+sequence (`shell_stage` 6); only then do the A key edges count, so `keys=4` (two F11
+edges plus two A edges) cannot be reached by an app that never started or exited. In
+`--test=ciuknote` mode the window moves to (24,48), Time/Date and `.LOG` use the fixed
+time 2026-10-11 09:41 UTC (`9:41 AM 10/11/2026`) and the application prints one
+`CiukNote checkpoint=N event=ready|saved|opened path=... text=... digest=XXXXXXXX` line on
+stdout after the frame that follows each event; the digest is FNV-1a 32 of the 600x352
+surface bytes (little-endian words), which contains no clock, so the host reproduces it.
+
+The crash-isolation probe now opens the storage write gate (as `libc-smoke` does; test
+selectors start read-only) before launching the desktop and calls `storage_sync()` after
+the desktop is stopped, recording `case=storage write_gate=N` and `case=storage-sync
+result=N`; without it no application could save in a gate boot and the host checker could
+not read the file back. The unmodified cases do not depend on either result.
+
+QEMU case `ciuknote-qemu-t23` (`tests/suites/f2-desktop.json`, same selector and
+predicates as `desktop-shell-qemu-t23`, `keys eq 4`): F11 down/up; cursor to the bottom-left
+corner (six paced -127/+127 moves clamp there); open the Ciuki menu; move up 225 px to
+row 0, `ciuknote` (menu rows are 28 px, anchored at the bottom: see the arithmetic test);
+wait 2 s; type `Hello CiukNote`, Enter, `Ciuki says woof.`, Enter, F5; Ctrl+S, wait, type
+`/system/tests/note.txt`, Enter, wait; Ctrl+N, Ctrl+O, wait, type the same path, Enter, wait;
+F10, Up, Enter (File > Exit); wait; A down/up. Nominal pacing 8.7 s of the kernel's 15 s
+post-fault window. After QEMU stops the host checker digests `::/system/tests/note.txt`:
+bytes `Hello CiukNote\r\nCiuki says woof.\r\n9:41 AM 10/11/2026`, SHA-256
+`8295f4d0977502fc61022209d665ff588382b0bd1564e5e38736f022e57f807d`, plus `fsck.fat -n`
+exit 0. The `desktop_screen` evidence is the runner's before/after capture of the whole
+screen (it contains the clocks and is not pinned); the deterministic screen evidence is the
+three checkpoint lines in the serial log, expected digests derived on the host:
+`ready ba7c24ab`, `saved cab5d60b`, `opened 8e0e8937`.
+The two `desktop-shell-*` cases keep selecting Demo; their upward move changed from 169 to
+197 px because `/bin` now lists six programmes (Files and CiukNote precede or follow Demo).
+
+Host evidence (this worktree; no QEMU, image build or hardware):
+`python3 -B -m unittest discover -s tests/host/desktop` (textarea model/layout/pointer
+and rendering, the application against a fake file system with 20 pinned screens, a replay
+of the committed QMP key script, case/arithmetic checks, plus the existing desktop tests)
+and the production desktop launcher test with the app scenario. Screens, checkpoint
+digests and the case's file digest are pinned in `tests/host/desktop/test_ciuknote.py`.
+
+Not done here: printing; a `Help Topics` viewer beyond a message box; menu separators
+(the toolkit has none); a dedicated Tango icon for the application (the shell reuses the
+generic executable icon; the file page uses `text-x-generic` and `folder` from the pinned
+set, and adding `accessories-text-editor` means regenerating the shared icon header);
+the Ciuki portrait in About (message dialogs carry no image).
+
 ## f2-31 toolkit and Files decisions (2026-10-11)
 
 Research: [POSIX rename](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html),

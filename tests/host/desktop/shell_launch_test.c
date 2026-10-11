@@ -39,7 +39,7 @@ int shell_close(int);
 #undef main
 #undef close
 #undef fcntl
-static int fail_mapping, fail_spawn, pid_source=100;
+static int fail_mapping, fail_spawn, pid_source=100, app_scenario;
 static char captured_report[CIUKI_PROBE_REPORT_MAX+1];
 uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,uint32_t b,uint32_t c,uint32_t e)
 {
@@ -66,7 +66,8 @@ int shell_close(int fd) { return fake_ops.close(fd); }
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
-    assert(!strcmp(path,"/bin/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2]);
+    if (app_scenario) assert(!strcmp(path,"/bin/ciuknote") && !strcmp(argv[0],"ciuknote") && !strcmp(argv[1],"--test=ciuknote") && !argv[2]);
+    else assert(!strcmp(path,"/bin/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2]);
     assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !env[5]);
     assert(count==1 && mapping[0].source==21 && mapping[0].target==3 && !flags);
     if (fail_spawn) { errno=ENOEXEC; return -1; }
@@ -123,6 +124,36 @@ int main(void)
     for (int i=0;i<DESK_CLIENTS;i++) d.children[i].pid=200+i;
     assert(launch_program(&d,&program)==-1 && errno==EAGAIN && !fake_live());
     fake_reset();
-    puts("PASS production launcher: explicit channel-only inheritance/group, CLOEXEC/spawn rollback, PID binding, menu/drag/close/reap evidence, capacity");
+    /* f2-32: the F11 app scenario launches the programme in its own --test mode and has no drag step:
+     * menu (1), launch (2), window created (4), clean exit (6). Only then do the gate's key edges count. */
+    desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    d.shell_test=1; d.shell_app=1; app_scenario=1; pid_source=300;
+    struct desk_program note={"ciuknote","/bin/ciuknote"};
+    d.mouse_x=40; d.mouse_y=464; assert(desk_shell_click(&d) && d.shell_stage==1);
+    pid=launch_program(&d,&note); assert(pid==300);
+    d.shell_pid=(unsigned)pid; d.shell_stage=2;
+    message(&d,0,DESK_HELLO,4);
+    fake_surface(23,240,160,0x112233);
+    desk_message(&m,DESK_CREATE_WINDOW,24); m.data[0]=2; m.sender_pid=300; m.fd_count=1; m.fds[0]=23;
+    desk_put32(m.data+4,240); desk_put32(m.data+8,160); desk_put32(m.data+12,8); memcpy(m.data+16,"CiukNote",8); desk_receive(&d,0,&m);
+    assert(d.clients[0].window && d.shell_stage==4);
+    gate_keys=2; d.shell_keys=2; gate_report(&d,0,1,42,0,300);
+    assert(strstr(captured_report," keys=0 "));                      /* the app is still running */
+    desk_child_exited(&d,301,0); assert(d.shell_stage==4);           /* another process */
+    desk_child_exited(&d,300,1); assert(d.shell_stage==4);           /* a failing exit does not qualify */
+    d.children[0].pid=300; d.clients[0].pid=300;
+    desk_child_exited(&d,300,0); assert(d.shell_stage==6 && !d.children[0].pid);
+    gate_report(&d,0,1,42,0,300); assert(strstr(captured_report," keys=4 "));
+    /* Without the scenario flag the demo flow is unchanged: no skipping straight to stage 4. */
+    fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d); d.shell_test=1; app_scenario=0;
+    d.mouse_x=40; d.mouse_y=464; assert(desk_shell_click(&d) && d.shell_stage==1);
+    pid=launch_program(&d,&(struct desk_program){"demo","/bin/demo"}); d.shell_pid=(unsigned)pid; d.shell_stage=2;
+    message(&d,0,DESK_HELLO,4); fake_surface(25,240,160,0x445566);
+    desk_message(&m,DESK_CREATE_WINDOW,20); m.data[0]=2; m.sender_pid=(uint32_t)pid; m.fd_count=1; m.fds[0]=25;
+    desk_put32(m.data+4,240); desk_put32(m.data+8,160); desk_put32(m.data+12,4); memcpy(m.data+16,"Demo",4); desk_receive(&d,0,&m);
+    assert(d.shell_stage==3);
+    desk_drop_client(&d,0);
+    fake_reset();
+    puts("PASS production launcher: explicit channel-only inheritance/group, CLOEXEC/spawn rollback, PID binding, menu/drag/close/reap evidence, capacity, f2-32 app scenario");
     return 0;
 }

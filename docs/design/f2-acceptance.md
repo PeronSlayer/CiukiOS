@@ -398,6 +398,48 @@ data/license hashes. Failure or absence MUST be recorded as stretch coverage
 and MUST NOT replace or weaken any mandatory row. Commercial data MUST NOT be
 included in the canonical image.
 
+### f2-32 CiukNote desktop application (2026-10-11)
+
+Contract and rationale: `docs/desktop.md` (section f2-32), directive
+`docs/directives/f2-32-ciuknote.md`. This section records the acceptance decisions only;
+it adds no mandatory F2 row and no `f2-all` probe.
+
+**[F2+, f2-32]** `/bin/ciuknote` MUST be a payload of the canonical image (builder, SDK ELF
+checks and manifest as `/bin/files`). Its host evidence is the textarea model/rendering
+test, the application test with a fake file system (20 pinned screens), the replay of the
+committed QMP key script, and the desktop launcher test of the F11 scenario; none of it is
+guest qualification.
+
+**[F2+, f2-32]** QEMU case `ciuknote-qemu-t23` (`f2-desktop`, profile `qemu-t23`) uses the
+crash-isolation selector `server=desktop` and the shell case's predicates. Its F11 input at
+the interaction ARM enables the shell test with `shell_app`; the sequence is menu (stage 1),
+launch of the first Ciuki menu row `ciuknote` with `--test=ciuknote` (2), window created (4),
+clean exit status 0 (6), then the A key edges: `keys=4`. The case MUST fail if the
+application never starts or exits uncleanly, because the key edges count only at stage 6.
+The offset from the screen bottom to menu row r of n programmes is `32+28*(n+2)-28*r-14`
+minus the 17 px the cursor already is above the bottom; `/bin` lists six programmes
+(ciuknote, demo, files, hello, libc_smoke, lua), so `ciuknote` is 225 px up and `demo`
+197 px up. A host test fails when the image builder's `/bin` inventory changes.
+
+**[F2+, f2-32]** Durability and content: the crash-isolation probe opens the storage write
+gate and syncs the volume after the desktop stops (`case=storage`, `case=storage-sync`).
+After QEMU stops the runner MUST digest `::/system/tests/note.txt` with the declared SHA-256
+(`8295f4d0977502fc61022209d665ff588382b0bd1564e5e38736f022e57f807d`, the bytes of the
+typed text with CRLF and the fixed `9:41 AM 10/11/2026` stamp) and `fsck.fat -n` MUST return
+0. The pass criterion is guest events and the host digest, not QMP success.
+
+**[F2+, f2-32]** Screen evidence: `desktop_screen` is the runner's whole-screen before/after
+capture (clocks included, never pinned). Deterministic screen evidence is the application's
+serial lines `CiukNote checkpoint=1|2|3 event=ready|saved|opened ... digest=XXXXXXXX`
+(FNV-1a 32 of its own 600x352 surface), whose expected values come from the host replay:
+`ready ba7c24ab`, `saved cab5d60b`, `opened 8e0e8937`. The lead pins or compares them from
+the first QEMU run; a mismatch with an otherwise passing case is a rendering or event-order
+difference to explain, not to overwrite.
+
+**[F2+, f2-32]** Time budget: the kernel's post-fault interaction window is 15 s from ARM;
+the script's nominal pacing is 8.7 s and `test_ciuknote.py` rejects a script above 11 s.
+Raising a wait is a case edit; the window itself belongs to the probe.
+
 ## Suites, deadlines and retained evidence
 
 **[F2]** Versioned suite definitions under `tests/suites/` MUST use the existing

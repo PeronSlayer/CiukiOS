@@ -123,7 +123,8 @@ int supervisor_spawn_standin(struct process *parent, struct process **out) { (vo
 #include "../../../src/kernel/proc/supervisor.c"
 #include "../../../src/kernel/proc/syscalls_desktop.c"
 static struct storage libc_storage;
-static int libc_gate_error;
+static int libc_gate_error, native_syncs;
+int storage_sync(void) { native_syncs++; return 0; }
 static unsigned libc_gate_calls, libc_spawn_calls;
 struct storage *storage_get(void) { return &libc_storage; }
 int storage_enable_write(struct storage *s, unsigned drive)
@@ -703,6 +704,8 @@ static void test_native_controller(void)
     }
     probes_operator_mode=false;gate_input_absent=false;
     device.present=false;device.mapped=0;device.size=0;
+    /* f2-32: every desktop run opens the write gate (as libc-smoke does) and syncs the volume once at the end. */
+    CHECK(native_syncs==4 && libc_gate_calls>=4);
     puts("native controller: 100 cycles/five kinds, counters, ticks, PID/CR3/pgid, ledgers, interaction, wrong-signal refusal PASS (fake scheduling)");
 }
 static void test_native_diagnostics(void)

@@ -14,7 +14,8 @@
 struct du_rect { int x,y,w,h; };
 struct du_canvas { uint32_t *pixels; unsigned width,height; struct du_rect clip; };
 enum du_kind { DU_BUTTON, DU_EDIT, DU_LIST, DU_TREE, DU_SCROLLBAR, DU_STATUS,
-               DU_SPLITTER, DU_PROGRESS, DU_LABEL };
+               DU_SPLITTER, DU_PROGRESS, DU_LABEL,
+               DU_TEXTAREA /* f2-32: multi-line editor; widget.data is a struct du_textarea (textarea.h) */ };
 enum du_view { DU_DETAILS, DU_ICONS, DU_LIST_MODE };
 enum du_event_kind { DU_ACTIVATE, DU_CHANGE, DU_SELECT, DU_SORT, DU_CONTEXT,
                      DU_CLOSE, DU_TICK };
@@ -30,6 +31,7 @@ struct du_widget {
     const uint32_t *icon;
     struct du_row *rows; unsigned count,first,active; enum du_view view;
     unsigned value,total,page;
+    void *data; /* f2-32: DU_TEXTAREA state, owned by the application */
 };
 struct du_menu_item { const char *label; int id; unsigned key,modifiers; int disabled; };
 struct du_menu { const char *label; const struct du_menu_item *items; unsigned count; };
@@ -46,6 +48,9 @@ struct du_ui {
     uint8_t keys[513]; unsigned buttons;
     int dirty; struct du_dialog dialog; struct du_timer timers[DU_TIMERS];
     void (*event)(struct du_ui *,const struct du_event *,void *); void *user;
+    /* f2-32 additions (zero by default): Alt+letter mnemonics, one set-1 scan code
+     * per menu (NULL keeps the legacy F,E,V,G,H table), and the Caps Lock toggle. */
+    const unsigned *menu_keys; uint8_t caps;
 };
 struct du_window {
     int channel,surface,configured,closing,closed,error; uint32_t server_pid;

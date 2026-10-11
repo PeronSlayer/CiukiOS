@@ -145,7 +145,10 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     if (ciuki_channel_pair(pair)) return -1;
     int index=-1;
     ciuki_pid_t pid=-1;
-    char *argv[]={(char *)program->name,strcmp(program->name,"demo") ? NULL : "--channel-fd=3",NULL};
+    /* The F11 gate scenario starts a programme in its own scripted test mode: --test=<name>. */
+    char test_argument[DESK_TITLE_MAX+16];
+    snprintf(test_argument,sizeof(test_argument),"--test=%.63s",program->name);
+    char *argv[]={(char *)program->name,!strcmp(program->name,"demo") ? "--channel-fd=3" : d->shell_app ? test_argument : NULL,NULL};
     char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",NULL};
     struct ciuki_spawn_fd mapping={pair[1],3};
     if (!fcntl(pair[1],F_SETFD,0)) {
@@ -301,12 +304,12 @@ int main(int argc, char **argv)
             /* Runtime-only shell case extension: old gates never send F12.
              * Keep it behind the controller's post-fault interaction stage. */
             if (gate && interaction && !d->shell && events[i].type==CIUKI_INPUT_KEY &&
-                events[i].code==0x58 && events[i].value==1) {
-                d->shell_test=1; d->shell_keys=1; shell_setup(d);
+                (events[i].code==0x58 || events[i].code==0x57) && events[i].value==1) {
+                d->shell_test=1; d->shell_keys=1; d->shell_app=events[i].code==0x57; shell_setup(d);
                 continue;
             }
             if (gate && d->shell_test && events[i].type==CIUKI_INPUT_KEY &&
-                events[i].code==0x58 && events[i].value==0) {
+                events[i].code==(d->shell_app ? 0x57 : 0x58) && events[i].value==0) {
                 d->shell_keys++; input_dirty=1; continue;
             }
             if (gate && interaction) {
@@ -324,7 +327,7 @@ int main(int argc, char **argv)
             if (pid<0) {
                 snprintf(d->notice,sizeof(d->notice),"Program could not start (error %d)",errno);
                 desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
-            } else if (d->shell_test && d->shell_stage==1 && !strcmp(d->programs[selected].name,"demo")) {
+            } else if (d->shell_test && d->shell_stage==1 && (d->shell_app || !strcmp(d->programs[selected].name,"demo"))) {
                 d->shell_pid=(uint32_t)pid; d->shell_stage=2;
             }
         }

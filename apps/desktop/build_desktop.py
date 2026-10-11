@@ -29,7 +29,7 @@ def digest(path):
 
 
 def inputs():
-    files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/libdeskui", ROOT / "apps/files")
+    files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/libdeskui", ROOT / "apps/files", ROOT / "apps/ciuknote")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -44,7 +44,7 @@ def current_build(expected):
     try:
         m = json.loads((OUT / "manifest.json").read_text())
         return (m["inputs"] == expected and set(m["files"]) ==
-                {"desktop", "demo", "files", "libdeskui.a", "ciuki-portrait.xrgb"} and
+                {"desktop", "demo", "files", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"} and
                 all(digest(OUT / n) == h for n, h in m["files"].items()))
     except (OSError, ValueError, KeyError):
         return False
@@ -63,7 +63,7 @@ def validate_payloads():
             m["portrait"] != portrait_record(converter)):
         raise ValueError("approved Ciuki portrait provenance mismatch")
     inspect = lua.checker().inspect
-    for name in ("desktop", "demo", "files"):
+    for name in ("desktop", "demo", "files", "ciuknote"):
         if inspect(OUT / name) != m["elf"][name]:
             raise ValueError(f"desktop ELF evidence: {name}")
     return m
@@ -104,7 +104,7 @@ def build():
         obj = temp / (source.stem + ".o")
         command = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-ffunction-sections", "-fdata-sections", "-c", str(source), "-o", str(obj)]
         subprocess.run(command, check=True, env=env)
-        if source.name in ("draw.c", "widgets.c", "compositor.c"):
+        if source.name in ("draw.c", "widgets.c", "textarea.c", "compositor.c"):
             audit_integer(obj, sdk)
         objects.append(obj)
     library = OUT / "libdeskui.a"
@@ -113,10 +113,11 @@ def build():
     subprocess.run(archive, check=True, env=env)
     commands["libdeskui"] = archive
     sources["files"] = ["../files/files.c", "../files/model.c", "../files/vfs.c"]
+    sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name == "files" else []), "-o", str(OUT / name)]
+                          *([str(library)] if name in ("files", "ciuknote") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Audit compositor code separately: integer drawing must never emit x87.
