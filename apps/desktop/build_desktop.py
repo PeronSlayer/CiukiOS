@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and inspect desktop, demo, libdeskui and Files using the static Ciuki SDK."""
+"""Build and inspect desktop, demo, libdeskui, Files, Tasks, CiukNote and the Control Panel using the static Ciuki SDK."""
 # SPDX-License-Identifier: MIT
 import hashlib
 import importlib.util
@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build/apps/desktop"
 SDK = ROOT / "build/tools/ciuki-sdk"
 CFLAGS = ["-O2", "-Wall", "-Wextra", "-Werror"]
+PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control")
+# Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
+SHELL = ["shell.c", "settings.c", "wallpaper.c", "image.c", "keymap.c"]
 
 
 def module(name, path):
@@ -30,7 +33,8 @@ def digest(path):
 
 def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
-                                 ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote")
+                                 ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
+                                 ROOT / "third_party/stb")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -45,7 +49,7 @@ def current_build(expected):
     try:
         m = json.loads((OUT / "manifest.json").read_text())
         return (m["inputs"] == expected and set(m["files"]) ==
-                {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"} and
+                {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", "libdeskui.a", "ciuki-portrait.xrgb"} and
                 all(digest(OUT / n) == h for n, h in m["files"].items()))
     except (OSError, ValueError, KeyError):
         return False
@@ -64,7 +68,7 @@ def validate_payloads():
             m["portrait"] != portrait_record(converter)):
         raise ValueError("approved Ciuki portrait provenance mismatch")
     inspect = lua.checker().inspect
-    for name in ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote"):
+    for name in PROGRAMS:
         if inspect(OUT / name) != m["elf"][name]:
             raise ValueError(f"desktop ELF evidence: {name}")
     return m
@@ -96,7 +100,7 @@ def build():
     env = os.environ.copy()
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
-    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "assets.c"],
+    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "assets.c", *SHELL],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}
     evidence, commands = {}, {}
@@ -117,10 +121,11 @@ def build():
     sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
+    sources["control"] = ["../control/main.c", "../control/app.c", "settings.c", "wallpaper.c", "image.c"]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name in ("files", "tasks", "ciuknote") else []), "-o", str(OUT / name)]
+                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "control") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Audit compositor code separately: integer drawing must never emit x87.
@@ -139,7 +144,7 @@ def build():
     (OUT / "manifest.json").write_text(json.dumps(m, indent=2, sort_keys=True)+"\n")
     for obj in objects:
         obj.unlink(missing_ok=True)
-    print(f"[desktop] built/inspected desktop, demo, dosbox, libdeskui, Files, Tasks and CiukNote in {m['build_seconds']} seconds; guest not_run")
+    print(f"[desktop] built/inspected desktop, demo, dosbox, libdeskui, Files, Tasks, CiukNote and Control Panel in {m['build_seconds']} seconds; guest not_run")
 
 
 def audit_integer(obj, sdk):

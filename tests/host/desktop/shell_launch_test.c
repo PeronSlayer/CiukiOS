@@ -69,7 +69,7 @@ static const char *expect_note_arg;
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
-    assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !env[6]);
+    assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !env[7]);
     assert(count>=1 && mapping[0].source==last_child && mapping[0].target==3 && !flags);
     if (!strcmp(path,"/bin/files")) {
         assert(!strcmp(argv[0],"files") && !strcmp(argv[1],"--channel-fd=3") && count==1);
@@ -100,6 +100,10 @@ static void drop_all(struct desktop *d)
 { for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0) desk_drop_client(d,i); }
 static struct ciuki_proc_record fake_records[8];
 static int fake_record_count;
+/* Desktop shell services (desktop.c): no mixer and no power interface on the host. */
+int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
+{ (void)fd; (void)op; (void)record; (void)size; errno=ENODEV; return -1; }
+int ciuki_power(uint32_t action) { (void)action; errno=ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer,uint32_t bytes)
 {
     assert(bytes>=CIUKI_PROC_LIST_MIN+8*sizeof(struct ciuki_proc_record));

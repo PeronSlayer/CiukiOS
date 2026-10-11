@@ -16,6 +16,10 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
+# The desktop shell's units (apps/desktop/build_desktop.py SHELL, without the stb decoder) and the toolkit
+# primitives it draws with: every host build of the production desktop links them.
+SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "settings.c", "wallpaper.c", "keymap.c")] + \
+                [ROOT / "apps/libdeskui/draw.c"]
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
 QCODES = {**{c: s for c, s in zip("qwertyuiop", range(0x10, 0x1a))}, **{c: s for c, s in zip("asdfghjkl", range(0x1e, 0x27))},
@@ -75,7 +79,7 @@ class DesktopTests(unittest.TestCase):
             folder = Path(temp)
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "capture"
-            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c")]
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
             subprocess.run(["clang", "-std=c17", "-O1", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
@@ -109,13 +113,13 @@ class DesktopTests(unittest.TestCase):
             folder = Path(temp)
             inc = folder / "include/ciuki"
             inc.mkdir(parents=True)
-            for name in ("channel.h", "surface.h", "spawn.h", "proc.h"):
+            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "power.h"):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
             for name in ("runtime.h", "raw.h"):
                 (inc / name).write_text("/* supplied by host harness */\n")
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "launch-test"
-            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c")]
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
@@ -139,7 +143,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             out = Path(temp) / "desktop-test"
             sources = [ROOT / "apps/desktop" / n for n in
-                       ("protocol.c", "client.c", "input.c", "compositor.c")]
+                       ("protocol.c", "client.c", "input.c", "compositor.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "desktop_test.c")]
             subprocess.run(["cc", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
@@ -171,8 +175,8 @@ class DesktopTests(unittest.TestCase):
         if not (build.OUT / "manifest.json").is_file():
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
-        self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a",
-                                           "ciuki-portrait.xrgb"})  # f3-02 /bin/dosbox
+        self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", "libdeskui.a",
+                                           "ciuki-portrait.xrgb"})  # f3-02 /bin/dosbox; desktop shell /bin/control
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
         expected["cflags"] = []
@@ -180,13 +184,19 @@ class DesktopTests(unittest.TestCase):
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
         self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/bin/dosbox", "/bin/files", "/bin/tasks",
-                                        "/bin/ciuknote", "/system/assets/ciuki-portrait.xrgb"})
-        self.assertIn("/system/assets", directories)
+                                        "/bin/ciuknote", "/bin/control", "/system/assets/ciuki-portrait.xrgb",
+                                        "/system/licenses/stb_image.txt"})
+        self.assertTrue({"/system/assets", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 7)
+        self.assertEqual(len(records), 9)
         for r in records:
-            self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
+            if r["path"] == "/system/licenses/stb_image.txt":
+                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
+            else:
+                self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
+        # Microsoft's ME wallpapers (third_party/win_bg, local only) never enter the image.
+        self.assertFalse(any("win_bg" in str(v) or Path(k).suffix.lower() == ".bmp" for k, v in sources.items()))
         print("PASS desktop/demo/Files ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
 
     @unittest.skipUnless(all(shutil.which(t) for t in ("mkfs.fat", "mcopy", "mmd", "mdir")),
@@ -217,7 +227,8 @@ class DesktopTests(unittest.TestCase):
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="desktop-stale-", dir=parent) as temp:
             dest = Path(temp)
-            for name in ("manifest.json", "desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"):
+            for name in ("manifest.json", "desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", "libdeskui.a",
+                         "ciuki-portrait.xrgb"):
                 shutil.copy2(build.OUT / name, dest / name)
             with patch.object(build, "OUT", dest):
                 self.assertTrue(build.current_build(build.inputs()))
@@ -242,7 +253,7 @@ class AppCaseReplayTests(unittest.TestCase):
         cls.env = dict(os.environ, TMPDIR=str(folder), ASAN_OPTIONS="detect_leaks=0")
         include = folder / "include/ciuki"
         include.mkdir(parents=True)
-        for name in ("channel.h", "surface.h", "spawn.h", "proc.h"):
+        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "power.h"):
             shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, include / name)
         # Host stand-ins: CU_PTR keeps the whole pointer, the report call takes it (desktop_gate_test.c does the same).
         (include / "runtime.h").write_text("/* app replay */\n#include <ciuki/abi.h>\n#include <stdint.h>\n"
@@ -258,7 +269,8 @@ class AppCaseReplayTests(unittest.TestCase):
         os_calls = ["-D_DEFAULT_SOURCE", "-include", str(host / "replay_os.h")]   # the replay's virtual kernel
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
-                 *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor")),
+                 *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor",
+                                                                                  "shell", "settings", "wallpaper", "keymap", "image")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),

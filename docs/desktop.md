@@ -1,5 +1,141 @@
 # F2 ring-3 desktop and client protocol
 
+## Desktop shell (wt/desktop-shell, 2026-10-12)
+
+The shell turns the f2-30 launcher into a Mac OS 9 Platinum x Windows 98/ME
+style desktop. It lives in `apps/desktop/shell.c` (Start menu, taskbar
+buttons and tray, desktop icons, built-in windows, shortcuts),
+`settings.c` (desktop.cfg), `wallpaper.c` + `image.c` (wallpapers),
+`keymap.c` (keyboard layouts) and the OS side in `desktop.c`
+(`shell_service`: settings file, wallpaper files, mixer, power, Run). The
+shell draws with the libdeskui primitives (`du_fill`, `du_edge`, `du_text`,
+`du_icon`) on the compositor's frame, so the toolkit's colours and metrics
+apply; `desk_theme_apply()` (weak, in shell.c) is the single place to call the
+toolkit's `du_theme_*` once it exists. shell.c does no file or kernel I/O.
+The non-shell compositor path (crash-isolation gate, `plain` digest) is
+unchanged; compositor.c references the shell through weak symbols so the demo
+and the libdeskui programs, which reuse compositor.c, link without it.
+
+- **Start menu** ("Ciuki" button, the approved portrait): Programs (CiukNote,
+  Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then a
+  Developer submenu with Hello, libc_smoke and any unknown `/bin` program),
+  Documents (recent files, My Documents, Clear Recent Documents), Settings
+  (Control Panel and its pages, Task Manager), Help (Keyboard Shortcuts, About
+  CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
+  keyboard works (arrows, Enter, Esc). A vertical banner shows the portrait
+  and "CiukiOS". Menus are 30 px (top) and 22 px rows.
+- **Taskbar:** start button, task buttons (icon, title, pressed state for the
+  active window; right click: Restore, Minimize, Close), tray with a volume
+  icon and the clock (24/12 h, optional seconds; the date as a tooltip after
+  0.6 s). The task button geometry (x 84, at most 160 px each) is unchanged
+  for the f2 scripts. The top bar keeps the identity colours and shows the
+  focused window's title (or a notice) and the date.
+- **Volume:** the supervisor delegates the writable `/dev/mixer` handle to the
+  desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
+  applies `MIXER_SET_MASTER` through it; without the handle the popup shows
+  the public read-only state, without `/dev/mixer` "No audio device".
+- **Desktop icons:** Computer (Files at `/`; the icon carries the Ciuki
+  portrait), Documents (Files at `/home`), DOS Box, CiukNote, Control Panel and
+  Trash (a placeholder: nothing in CiukiOS keeps deleted files yet). Click
+  selects, a double click (desktop.cfg `double_click_ms`) or Enter opens, right
+  click opens Open/Properties; the background menu has Arrange Icons, Refresh,
+  Display Settings... and Properties.
+- **Built-in windows** (internal clients, framed by the compositor): About
+  CiukiOS (tabs General, System from call 70's system record and `uname`,
+  Credits), Run (a `/bin` program and up to six arguments, double quotes
+  group), Shut Down CiukiOS (Restart, Shut Down, Cancel) and message boxes.
+- **Shortcuts:** Win (tap) or Ctrl+Esc opens the Start menu; Alt+Tab and
+  Shift+Alt+Tab switch windows with an overlay; Alt+F4 sends the v2
+  CLOSE_REQUEST to the active window (the Shut Down window when none is
+  active). Alt is held back until the next key, so a program never sees an Alt
+  press for a chord the desktop consumed; a lone Alt tap still reaches it.
+- **Power:** Shut Down calls `ciuki_power(action)` (SDK `ciuki/power.h`,
+  kernel call 73; 1 reboot, 2 power off) after saving desktop.cfg. The SDK
+  definition is weak; with ENOSYS the desktop says that the kernel has no
+  power interface yet.
+- **Runtime gate scenarios** (F12/F11/F10/F9) keep the built-in defaults, never
+  read or write desktop.cfg and never touch the mixer; the f2-desktop scripts
+  reach the programs through Start, Programs and the program row.
+
+### /system/settings/desktop.cfg
+
+Plain `key=value` lines, `#` comments; unknown keys are kept verbatim (for
+example a future theme engine's own keys). Invalid values keep their defaults
+and are counted in a top-bar notice. The desktop writes the file through
+`desktop.new` + rename; the Control Panel merges its keys into the current
+file before writing it and then asks the desktop to apply it.
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `version` | 1 | 1 |
+| `theme` | `Platinum`, `Ciuki Blue`, `Classic 98` | `Platinum` |
+| `wallpaper` | `ciuki` (the approved portrait on the desktop colour, exactly where the f2 compositor draws it), `none`, `builtin:<id>` (`dawn`, `pinstripe`, `deepblue`, `twilight`, `linen`, `blueprint`), or an absolute path to a PNG, JPEG or BMP | `ciuki` |
+| `wallpaper_mode` | `center`, `stretch`, `tile`, `fit` | `center` |
+| `desktop_color` | six hex digits RRGGBB | `375564` |
+| `clock_24h` | 0/1 | 1 |
+| `clock_seconds` | 0/1 | 0 |
+| `desktop_icons` | 0/1 | 1 |
+| `mouse_speed` | 1..10 (5 = one pixel per count; 2/8 .. 20/8) | 5 |
+| `double_click_ms` | 200..900 | 500 |
+| `keyboard` | `us`, `it` | `us` |
+| `recent` | absolute path; repeated, newest first, at most 8 | none |
+
+### Wallpapers
+
+The built-in wallpapers are original CiukiOS designs computed at the screen's
+resolution by integer code (soft platinum/blue gradients with ordered dither,
+pinstripes, a linen weave, a blueprint grid); no image file is shipped for
+them and nothing third-party is drawn. Image files are decoded with the
+vendored stb_image 2.30 (`third_party/stb`, MIT or Public Domain; notice
+installed as `/system/licenses/stb_image.txt`): PNG, baseline and progressive
+JPEG, and uncompressed BMP (4/8/16/24/32 bit; stb_image reads neither 1-bit nor RLE BMP). Images above 4096 x 4096,
+16 Mpixel or 24 MiB are refused. `centre`, `stretch` (area average down,
+bilinear up) and `fit` use the area between the bars; `tile` starts at the
+top-left corner. The image contains an empty `/system/wallpapers`: the
+Control Panel lists the PNG/JPEG/BMP files the owner copies there.
+**The Windows ME bitmaps of the 0.8 line (`third_party/win_bg`, local and
+git-ignored, Microsoft copyright) are never added to the repository or to the
+image;** the desktop only shows them if the owner copies them into
+`/system/wallpapers` himself (they are 8/4-bit tiles; choose Tile).
+
+### Control Panel (`/bin/control`)
+
+A libdeskui program (500 x 420) with tabs Display (theme list with preview,
+wallpaper list with preview, Center/Tile/Stretch/Fit, six desktop colours,
+desktop icons on/off), Mouse (pointer speed and double-click speed, applied
+by the desktop), Keyboard (US or Italian), Sounds (master volume and mute
+through the desktop's mixer handle), Date & Time (the clock and the 24 h and
+seconds options; setting the clock is not offered because the ABI has no
+clock-setting call) and System (portrait, version, build, memory). Every
+change is saved and applied at once. `--panel=display|mouse|keyboard|sounds|
+datetime|system` selects the first tab (the Settings menu uses it).
+
+v2 opcode for it, client to desktop, version 2 only:
+
+| Opcode | Payload bytes | Fields |
+| --- | ---: | --- |
+| SETTINGS=21 | 24 | u32 serial@4, request@8 (1 reload desktop.cfg: the other fields zero; 2 master volume), left@12, right@16 (0..100), mute@20 (0/1) |
+
+The desktop answers TASK_RESULT (request 21): 0, EPERM for any client it did
+not launch as `/bin/control`, ENODEV for request 2 without the mixer handle.
+
+### Keyboard layouts
+
+`keymap.c` maps set-1 scan codes for US and Italian (the KBDIT engraving:
+`ò@ à# è[ +]`, AltGr+E = euro). The desktop's own text field (Run) uses the
+selected layout at once, and every program the desktop launches receives
+`CIUKI_KEYMAP=us|it`. libdeskui's `du_key_char` still uses its US table:
+wiring it to `ciuki_keymap_char` (and UTF-8 insertion of non-ASCII
+characters) is left to the toolkit owner.
+
+### Icons
+
+Each item names its Tango 0.8.90 icon; `desk_shell_icon(name, size)` maps the
+names to the sprites converted today (area-averaged to 16/20/22 px when only a
+larger one exists) until `du_icon(name, size)` lands. Identity icons (About,
+the Computer badge, the Start banner) are area-averaged conversions of the
+approved portrait, whose `#375564` surround is made transparent.
+
 ## f2-33 Task Manager and the v2 task extension (2026-10-11)
 
 `/bin/tasks` is the CiukiOS Task Manager (menu label "Task Manager", a

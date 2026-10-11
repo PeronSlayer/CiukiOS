@@ -547,6 +547,7 @@ void du_render(struct du_ui *u)
         du_draw_widget(u, w, u->focus == (int)i && !u->dialog.kind);
     }
     c->clip = (struct du_rect){0, 0, c->width, c->height};
+    if (u->paint) { u->paint(u, u->user); c->clip = (struct du_rect){0, 0, c->width, c->height}; }
     du_draw_menus(u);
     c->clip = (struct du_rect){0, 0, c->width, c->height};
     du_draw_dialog(u);

@@ -389,6 +389,10 @@ static uint32_t proc_records(void *buffer, uint32_t bytes)
     memcpy((uint8_t *)buffer + sizeof(sys), list, sys.records * sizeof(list[0]));
     return sys.records;
 }
+/* Desktop shell services: the gate scenarios never use the mixer or the power interface. */
+int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size)
+{ (void)fd; (void)op; (void)record; (void)size; errno = ENODEV; return -1; }
+int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer, uint32_t bytes)
 {
     uint32_t r = proc_records(buffer, bytes);

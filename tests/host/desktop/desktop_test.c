@@ -302,7 +302,8 @@ static void test_menu(void)
     assert(d.program_count==DESK_MENU_MAX && !strcmp(d.programs[0].name,"app00") && !strcmp(d.programs[15].name,"app15"));
     desk_shell_enable(&d);
     struct desk_box menu=desk_menu_box(&d);
-    assert(menu.y>=32 && menu.y+menu.h==208 && menu.x+menu.w<=320);
+    /* The Start menu (shell.c) may cover the top bar on a 240-line screen; it ends on the taskbar. */
+    assert(menu.y>=0 && menu.y+menu.h==208 && menu.x+menu.w<=320);
     for (int i=0;i<DESK_CLIENTS;i++) {
         d.clients[i].window=1;
         struct desk_box task=desk_task_button(&d,i);
