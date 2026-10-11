@@ -182,6 +182,11 @@ def normalize(image):
                     for off in (0,8,16,24): put64(p,value+off,EPOCH)
                 if type_==0x30:
                     for off in (8,16,24,32): put64(p,value+off,EPOCH)
+                    # ntfs-3g leaves stale bytes between the end of the name
+                    # and the 8-byte-aligned end of the attribute (one byte of
+                    # MFT record 67 differed between generations, 2026-10-11).
+                    end=value+0x42+2*p[value+0x40]; limit=a+get32(p,a+4)
+                    if end<limit: p[end:limit]=bytes(limit-end)
                 if type_==0x90 and attr_name(p,a)=="$I30": index_names(p,value+16)
             elif type_==0xa0 and attr_name(p,a)=="$I30":
                 size = get64(p,a+48); mapping = runs(p,a)

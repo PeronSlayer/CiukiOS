@@ -514,4 +514,11 @@ The refill thread now blocks with a 1/4/50 ms safety deadline (burst,
 running, idle) and VM admission/stop/guest records carry the owning probe
 (`vm-boot`, `vm-memory`, `vm-devices`) through `dosvm_config.probe`. The
 `f3-vm`, `f0-smoke` and `f2-all` results on this image are recorded below.
+`f0-smoke` 2/2. The first `f3-vm` run was refused by the host prerequisite:
+`test_ntfs_ro.test_fixture_generation_is_deterministic` compared a repeat
+generation against the session's fixtures and every image hash differed;
+run alone immediately afterwards the same test passed in 15 s, so the
+generation is not deterministic under concurrent load (an f4-03 follow-up:
+pin every tool-written field, not only the serial and times). Suites are
+rerun on a quiet machine.
 
