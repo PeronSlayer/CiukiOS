@@ -96,6 +96,9 @@ int audio_master_set(struct ciuki_mixer_master *m)
     kmutex_unlock(&control_lock);
     return 0;
 }
+#define AUDIO_TAIL_LEAD 28u /* silence periods kept ahead during the idle tail (BDL holds 31) */
+#define AUDIO_IDLE_TAIL_MS 500u /* silence published after the last source before the transport stops */
+static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
 void audio_wake(void)
 {
     audio.pending = true; kwait_wake_all(&audio.changed);
@@ -115,13 +118,36 @@ void audio_service(void)
         if (gap > audio.max_service_gap_us) audio.max_service_gap_us = gap > UINT32_MAX ? UINT32_MAX : (uint32_t)gap;
     }
     audio.last_service_cycles = start;
+    bool active = false;
+    for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i] && audio.streams[i]->started) active = true;
+    ac97.idle_tail = !active && audio.running;
+    bool control = false; /* a transport stop has its own deadline, not the 1 ms service budget */
     int err = ac97_progress(&ac97);
+    if (err && !active && audio.running) {
+        /* Idle tail (no started source): an underrun carries no client data.
+         * Stop the transport normally instead of failing the backend. */
+        klog("[audio] idle-tail transport stop err=%d published=%llu retired=%llu halts=%llu tail_ms=%llu",
+             err, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)ac97.dma_halts, (unsigned long long)(g_ticks - idle_since));
+        err = ac97_stop(&ac97); audio.running = false; ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
+    } else if (err) {
+        struct ac97_cursor c; int oe = ac97_observe(&ac97, &c);
+        klog("[audio] progress err=%d observe=%d civ=%u piv=%u remaining=%u status=%04x published=%llu retired=%llu running=%u halts=%llu",
+             err, oe, c.civ, c.piv, c.remaining, c.status, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, audio.running, (unsigned long long)ac97.dma_halts);
+    }
     audio.fetched = ac97.fetched; audio.played_output = ac97.frame_base + ac97.generation_fetched;
     audio.fifo = ac97.fifo_errors;
     audio.halts = ac97.dma_halts; audio.deadlines = ac97.deadline_misses;
-    bool active = false;
-    for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i] && audio.streams[i]->started) active = true;
-    if (!err && (active || audio.running) && ac97.published - ac97.retired < AUDIO_LEAD) {
+    /* Publish until the lead is restored: one period per service let any
+     * service delay erode the lead permanently (QEMU evidence 2026-10-11:
+     * published=770 retired=769 → CELV/DCH halt). */
+    /* Active sources keep the latency lead, one period per service. The
+     * idle tail (silence only) is cushioned deeper in one burst at its
+     * start, before the clients' exits delay this worker (QEMU evidence
+     * 2026-10-11); the burst is a control operation outside the 1 ms budget. */
+    bool tail_start = !active && audio.running && !idle_since;
+    if (tail_start) { idle_since = g_ticks; control = true; }
+    unsigned lead = active ? AUDIO_LEAD : AUDIO_TAIL_LEAD, limit = tail_start ? AUDIO_TAIL_LEAD : 1, published_now = 0;
+    while (!err && (active || audio.running) && ac97.published - ac97.retired < lead && published_now++ < limit) {
         if (!audio.running) {
             memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
         } else audio_mix(quantum, AUDIO_QUANTUM);
@@ -132,13 +158,22 @@ void audio_service(void)
     }
     if (!err && !active && audio.running) {
         /* Client drains have already waited their fetched/tail allowance.
-         * Silence still in the queue is not client data. */
-        err = ac97_stop(&ac97); audio.running = false;
-        ac97.frame_base = audio.output;
+         * Silence still in the queue is not client data. Keep publishing
+         * silence for an idle tail before stopping: the QEMU AC97 backend
+         * dropped the last ~0.3 s of fetched audio when the channel was reset
+         * at once (evidence 2026-10-11), and codecs settle without clicks. */
+        if (g_ticks - idle_since >= AUDIO_IDLE_TAIL_MS) {
+            err = ac97_stop(&ac97); audio.running = false;
+            ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
+        }
+    } else if (active) {
+        idle_since = 0; /* a new source cancels the idle tail */
     }
-    if (ktime_elapsed_us(start, 1000)) { audio.deadlines++; ac97.deadline_misses++; }
+    if (!control && ktime_elapsed_us(start, 1000)) { audio.deadlines++; ac97.deadline_misses++; }
     uint64_t elapsed = (g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms : 0);
-    if (elapsed > audio.max_service_us) audio.max_service_us = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
+    /* Transport control (stop, the idle-tail burst) is accounted apart from refill work. */
+    uint32_t *peak = control ? &audio.max_control_us : &audio.max_service_us;
+    if (elapsed > *peak) *peak = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
     if (err) { audio_fail(-EIO); kmutex_lock(&control_lock); ac97_shutdown(); kmutex_unlock(&control_lock); }
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
@@ -168,9 +203,11 @@ void audio_init(struct vfs *v)
     if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
     int err = ac97_init();
     if (err) return;
-    if (!task_create_kernel("audio-refill", audio_worker, 0, P_DEVICE)) {
+    struct task *worker = task_create_kernel("audio-refill", audio_worker, 0, P_DEVICE);
+    if (!worker) {
         audio.reason = "worker_exhausted"; ac97_shutdown(); return;
     }
+    task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
 }
