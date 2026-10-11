@@ -77,4 +77,6 @@ void audio_vm_ring(struct audio_vm_tap *out);
 void audio_vm_mix(int64_t (*sums)[2], unsigned frames);
 void audio_vm_tap(const struct audio_frame *out, unsigned frames);
 bool audio_vm_active(void);
+/* Any VM source attached (refill policy, audio_refill_lead). */
+bool audio_vm_attached(void);
 #endif

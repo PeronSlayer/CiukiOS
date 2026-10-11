@@ -741,6 +741,20 @@ later only changes `vm_source.c`'s two calls.
   running; an idle VM lets f4-01's idle tail stop it. When the worker is idle,
   the next VM tick with queued audio wakes it once (`audio_vm_kick` from
   `dosvm_tick`); the worker still blocks between services (f1-18).
+- Idle tail with a VM attached (fix after QEMU campaign 12, image e0af9210):
+  the 28-period tail burst queued ~150 ms of silence; a VM transfer starting
+  inside the tail (VMPLAY stage 3, 150 ms after stage 2) made the service stop
+  refilling until the queue drained to eight periods, and the source then
+  skipped that timeline and dropped the PCM as late (QEMU: 2 of 8 blocks,
+  594 frames; the capture holds only the end of block 5 and blocks 6-7).
+  While any VM source is attached the tail keeps eight periods, one per
+  service (`audio_refill_lead` in `ciuki/audio.h`, shared by `audio_service`
+  and the host model); an underrun inside it is the normal tail stop. The
+  native-only tail is unchanged. Host evidence: `test_vm_idle_tail` in
+  `tests/host/dosvm_vmaudio_test.inc` (AC'97 DMA modelled per period, the
+  production refill policy, f3-05 devices and source): with the old policy
+  0 of 8 blocks rendered (512 late frames, one 4,560-frame skip, 28 periods
+  queued); with the fix 8 of 8, 2,048 frames, no late frame, skip or hold.
 - Evidence: per-source counters, a 64-entry block log (sequence, first frame,
   frames, flags), PCM and OPL path taps after the CT1745/source gains (non-zero
   frames, FNV-1a over int16 L/R, sums of squares, peaks, negative-to-non-negative
