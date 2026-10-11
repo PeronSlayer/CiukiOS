@@ -140,6 +140,67 @@ static int disk_bios(struct dosvm *v, struct v86_frame *f)
     return disk_result(v, f, error ? 0x20 : 0);
 }
 
+static int memory_bios(struct dosvm *v, struct v86_frame *f)
+{
+    unsigned ax=(uint16_t)f->tf.eax, fn=ax>>8;
+    carry(f,false);
+    if (ax>=0x2400 && ax<=0x2403) {
+        if (ax==0x2400 || ax==0x2401) {
+            if (dosvm_set_a20(v,ax==0x2401)) { ah(f,0x86); carry(f,true); }
+            else ah(f,0);
+        } else if (ax==0x2402) low(&f->tf.eax,v->a20);
+        else { low(&f->tf.ebx,3); ah(f,0); }
+        return 0;
+    }
+    if (fn==0x88 || ax==0xE801) {
+        unsigned kb=64+v->memory.quota/1024;
+        if (fn==0x88) low(&f->tf.eax,kb);
+        else {
+            unsigned below=kb>15360 ? 15360 : kb, above=kb>15360 ? (kb-15360)/64 : 0;
+            low(&f->tf.eax,below); low(&f->tf.ecx,below); low(&f->tf.ebx,above); low(&f->tf.edx,above);
+        }
+        return 0;
+    }
+    if (ax==0xE820) {
+        /* Describe only private guest RAM; no host E820 or allocator frames. */
+        static const uint32_t starts[]={0,0xA0000,0x100000,0x10FFF0,VM_POOL_BASE};
+        uint32_t lengths[]={0xA0000,0x60000,0xFFF0,0x10,v->memory.quota};
+        unsigned index=f->tf.ebx, count=v->memory.quota ? 5 : 4;
+        if (f->tf.edx!=0x534D4150 || f->tf.ecx<20 || index>=count ||
+            !vm_buffer(v,f->es,f->tf.edi,f->tf.ecx>=24 ? 24 : 20,true)) goto unsupported;
+        uint8_t map[24]={0};
+        vm_w32(map,starts[index]); vm_w32(map+8,lengths[index]);
+        vm_w32(map+16,index==1 || index==3 ? 2 : 1); vm_w32(map+20,1);
+        unsigned size=f->tf.ecx>=24 ? 24 : 20;
+        if (dosvm_write(v,vm_ptr(f->es,f->tf.edi),map,size)) goto unsupported;
+        f->tf.eax=0x534D4150; f->tf.ecx=size; f->tf.ebx=++index<count ? index : 0;
+        return 0;
+    }
+    if (fn==0x87) {
+        uint8_t table[32]; uint32_t base[2];
+        unsigned bytes=(uint16_t)f->tf.ecx*2u;
+        if (!vm_buffer(v,f->es,f->tf.esi,sizeof(table),false) ||
+            dosvm_read(v,vm_ptr(f->es,f->tf.esi),table,sizeof(table))) goto unsupported;
+        for (unsigned i=0;i<2;i++) {
+            const uint8_t *d=table+16+i*8;
+            uint32_t limit=vm_u16(d)|((uint32_t)(d[6]&15)<<16);
+            if (d[6]&0x80) limit=(limit<<12)|0xFFF;
+            unsigned access=d[5];
+            if ((access&0x90)!=0x90 || (access&8) || (access&4) || (i && !(access&2)) ||
+                (bytes && bytes-1>limit)) goto unsupported;
+            base[i]=vm_u16(d+2)|((uint32_t)d[4]<<16)|((uint32_t)d[7]<<24);
+        }
+        bool enabled=v->a20;
+        if (dosvm_set_a20(v,true)) goto unsupported;
+        int e=dosvm_copy_region(v,base[0],base[1],bytes,false);
+        dosvm_set_a20(v,enabled);
+        if (e) goto unsupported;
+        ah(f,0); return 0;
+    }
+unsupported:
+    ah(f,0x86); carry(f,true); return 0;
+}
+
 int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
 {
     uint16_t ax = f->tf.eax;
@@ -157,19 +218,12 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
     case 0x13: return disk_bios(v, f);
     case 0x15:
         carry(f, false);
-        if (ax >= 0x2400 && ax <= 0x2403) {
-            if (ax == 0x2400 || ax == 0x2401) return dosvm_set_a20(v, ax == 0x2401);
-            if (ax == 0x2402) low(&f->tf.eax, v->a20);
-            else { low(&f->tf.ebx, 3); ah(f, 0); }
-            return 0;
-        }
         if (fn == 0x86) {
             uint32_t us = ((uint32_t)(uint16_t)f->tf.ecx << 16) | (uint16_t)f->tf.edx;
             if (us > 60000000) { ah(f, 0x86); carry(f, true); return 0; }
             return dosvm_wait(v, false, deadline_after_ms((us + 999) / 1000));
         }
-        if (fn == 0x88 || ax == 0xE801) { low(&f->tf.eax, 0); low(&f->tf.ebx, 0); low(&f->tf.ecx, 0); low(&f->tf.edx, 0); return 0; }
-        ah(f, 0x86); carry(f, true); return 0; /* includes host E820, PCI/APM */
+        return memory_bios(v,f);
     case 0x16:
         dosvm_input_poll(v);
         if (fn == 0 || fn == 0x10 || fn == 1 || fn == 0x11) {
@@ -213,9 +267,10 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
     case 0x2F:
         if (ax == 0x1687) low(&f->tf.eax, 0xFFFF); /* DPMI not implemented/advertised */
         else if (ax == 0x1686) low(&f->tf.eax, 1);
-        else if (ax == 0x4300) f->tf.eax &= ~255u; /* XMS absent */
+        else if (ax == 0x4300) f->tf.eax = (f->tf.eax & ~255u) | 0x80;
+        else if (ax == 0x4310) { f->es=VM_XMS_SEG; low(&f->tf.ebx,0); }
         return 0;
-    case 0x67: ah(f, 0x80); return 0; /* EMS absent */
+    case 0x67: return dosvm_ems(v,f);
     default:
         if (vector < 8) return -EFAULT;
         carry(f, true); ah(f, 0x86); return 0;
@@ -289,6 +344,13 @@ int dosvm_record_byte(struct dosvm *v, uint8_t byte)
     else {
         static const char hex[] = "0123456789abcdef";
         ready_record(v);
+        /* A fixture result is data, not an injected CIUKI_TEST envelope.
+         * The controller also checks kernel-side dispatch coverage/cleanup. */
+        if (v->line_length == 13 && !memcmp(v->line,"VMMEMORY PASS",13)) {
+            v->info.memory_done=true; v->info.memory_pass=true;
+        } else if (v->line_length >= 13 && !memcmp(v->line,"VMMEMORY FAIL",13)) {
+            v->info.memory_done=true; v->info.memory_pass=false;
+        }
         unsigned parts = (v->line_length + 47) / 48;
         for (unsigned part = 0; part < parts; part++) {
             char encoded[97];
@@ -299,7 +361,7 @@ int dosvm_record_byte(struct dosvm *v, uint8_t byte)
                 encoded[i * 2] = hex[b >> 4]; encoded[i * 2 + 1] = hex[b & 15];
             }
             encoded[n * 2] = 0;
-            rec_emit("vm-boot", "DATA", "group=guest vm=%u generation=%u part=%u parts=%u data=%s",
+            rec_emit(dosvm_probe(v), "DATA", "group=guest vm=%u generation=%u part=%u parts=%u data=%s",
                      v->info.key.id, v->info.key.generation, part + 1, parts, encoded);
         }
         v->info.guest_records++; v->record_lines++;
@@ -318,8 +380,9 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
     if (port == DOSVM_FAULT_PORT) return -V86_EPERM;
     if (port == DOSVM_RECORD_PORT || port == DOSVM_CONTROL_PORT) {
         if (width != 1 || !write) return -V86_EPERM;
-        if (port == DOSVM_RECORD_PORT) return dosvm_record_byte(v, *value);
-        if (*value != 0) return -V86_EPERM;
+        /* OUT passes the whole EAX (v86_emulate); only the written byte counts. */
+        if (port == DOSVM_RECORD_PORT) return dosvm_record_byte(v, (uint8_t)*value);
+        if ((uint8_t)*value != 0) return -V86_EPERM;
         return dosvm_stop(v->info.key, DOSVM_EXIT);
     }
     if (port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1 || (port >= 0x40 && port <= 0x43) || port == 0x61)
@@ -327,21 +390,25 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
     if (port == 0x92 || port == 0x60 || port == 0x64) {
         if (width != 1) return -V86_EPERM;
         if (!write) {
-            *value = port == 0x92 ? (v->a20 ? 2 : 0) : port == 0x64 ? 0 :
-                     v->kbc_command == 0xD0 ? v->kbc_output : 0xFF;
+            *value = port == 0x92 ? (v->a20 ? 2 : 0) : port == 0x64 ? (v->kbc_pending ? 1 : 0) :
+                     v->kbc_pending ? v->kbc_reply : 0xFF;
+            if (port == 0x60) v->kbc_pending=false;
             return 0;
         }
+        uint8_t byte = (uint8_t)*value; /* OUT carries the whole EAX; AH is not data */
         if (port == 0x92) {
-            if (*value & 1) return dosvm_stop(v->info.key, DOSVM_RESET);
-            return dosvm_set_a20(v, !!(*value & 2));
+            if (byte & 1) return dosvm_stop(v->info.key, DOSVM_RESET);
+            return dosvm_set_a20(v, !!(byte & 2));
         }
         if (port == 0x64) {
-            v->kbc_command = *value;
-            if (*value == 0xFE) return dosvm_stop(v->info.key, DOSVM_RESET);
+            v->kbc_command = byte;
+            if (byte == 0xD0) { v->kbc_reply=v->kbc_output; v->kbc_pending=true; v->kbc_command=0; }
+            if (byte == 0xDD || byte == 0xDF) { v->kbc_command=0; return dosvm_set_a20(v,byte==0xDF); }
+            if (byte == 0xFE) return dosvm_stop(v->info.key, DOSVM_RESET);
         } else if (v->kbc_command == 0xD1) {
-            v->kbc_output = *value; v->kbc_command = 0;
-            if (!(*value & 1)) return dosvm_stop(v->info.key, DOSVM_RESET);
-            return dosvm_set_a20(v, !!(*value & 2));
+            v->kbc_output = byte; v->kbc_command = 0;
+            if (!(byte & 1)) return dosvm_stop(v->info.key, DOSVM_RESET);
+            return dosvm_set_a20(v, !!(byte & 2));
         }
         return 0;
     }

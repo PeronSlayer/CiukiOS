@@ -471,13 +471,18 @@ static int identify_packet(struct ata_device *d)
     struct ata_channel *c = d->channel; uint8_t data[512];
     uint64_t start = now(c), deadline = start + ATAPI_COMMAND_MS; uint32_t sequence;
     d->issued = false;
-    int e = packet_select(d, start, deadline);
-    if (!e) e = issue(d, 0xa1, start, &sequence);
-    if (!e) e = poll_status(d, start, deadline, ATA_DRQ, 0);
-    if (!e) e = data_block(d, data, false, start, deadline);
-    if (!e) e = poll_status(d, start, deadline, 0, ATA_DRQ);
+    unsigned stage = 0;
+    int e = packet_select(d, start, deadline); stage = 1;
+    if (!e) { e = issue(d, 0xa1, start, &sequence); stage = 2; }
+    if (!e) { e = poll_status(d, start, deadline, ATA_DRQ, 0); stage = 3; }
+    if (!e) { e = data_block(d, data, false, start, deadline); stage = 4; }
+    if (!e) { e = poll_status(d, start, deadline, 0, ATA_DRQ); stage = 5; }
     disarm(c);
-    if (e) return e;
+    if (e) {
+        /* Lead diagnostics (QEMU evidence of 2026-10-11): which stage failed. */
+        klog("[ata%u] atapi identify unit=%u stage=%u error=%d status=%02x error_reg=%02x", c->irq - 14, d->unit, stage, e, alternate(c), reg_read(c, 1));
+        return e;
+    }
     uint16_t config = fs_rd16(data);
     d->packet_type = (config >> 8) & 31;
     if ((config & 0xc000) != 0x8000 || (config & 3) > 1) return -FS_EOPNOTSUPP;
@@ -489,6 +494,7 @@ static int identify_packet(struct ata_device *d)
     d->model[40] = 0;
     d->identified = true; d->block.read = atapi_read; d->block.write = 0; d->block.flush = 0;
     d->block.sector_size = 2048; d->block.media_generation = 1; d->block.media_check = atapi_check_block;
+    klog("[ata%u] unit=%u kind=atapi type=%u packet_bytes=%u", c->irq - 14, d->unit, d->packet_type, d->packet_bytes);
     return 0;
 }
 
@@ -593,7 +599,12 @@ int ata_channel_discover(struct ata_channel *c)
         reg_write(c, 6, (uint8_t)(0xa0 | i << 4));
         if (pace(c)) { e = failure(d, start, alternate(c)); break; }
         uint8_t s = alternate(c);
-        if (!s || s == 0xff)
+        if (s == 0xff)
+            continue;
+        /* ATA/ATAPI-6 9.12: a PACKET device keeps DRDY clear after reset but
+         * presents its signature; only an absent device reads status 0 with
+         * no signature (QEMU ide-cd evidence of 2026-10-11, lead fix). */
+        if (!s && !(reg_read(c, 4) == 0x14 && reg_read(c, 5) == 0xeb))
             continue;
         while (s & ATA_BSY) {
             if (expired(c, deadline)) { e = failure(d, start, s); break; }

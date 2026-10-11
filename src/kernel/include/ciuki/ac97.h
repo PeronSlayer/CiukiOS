@@ -33,6 +33,7 @@ struct ac97_device {
     uint64_t fifo_errors, dma_halts, deadline_misses;
     bool ready, running, stopping, quarantine, irq_attached, touched;
     bool observed_halt, codec_changed;
+    bool idle_tail; /* no started source: silence cushion, halts not counted */
     uint16_t saved_master, saved_pcm, saved_headphone, saved_ext, saved_rate;
 };
 extern struct ac97_device ac97;

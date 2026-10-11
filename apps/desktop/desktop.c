@@ -49,7 +49,7 @@ static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
     desk_input(d,event);
     if (event->type==CIUKI_INPUT_KEY && event->code==0x1e &&
         (event->value==0 || event->value==1) &&
-        (!d->shell_test || d->shell_stage==6)) gate_keys++; /* f2-30: shell sequence first */
+        (!d->shell_test || d->shell_stage>=5)) gate_keys++; /* f2-30: shell sequence first; stage 5 = close requested (the reap to 6 is asynchronous; the final report still requires 6) */
     if (event->type==CIUKI_INPUT_MOTION) gate_motion++;
     /* The input grant delivers separate button edges, not a motion mask.
      * Count consumption even when the click focuses the background/title. */
@@ -242,7 +242,7 @@ int main(int argc, char **argv)
     int victim_pid = -1, completed = 0;
     uint64_t next_victim = 0;
     int input_reported = 0, display_reported = 0;
-    int report=0, input_dirty=0;
+    int report=0, input_dirty=0, shell_stage_shown=0;
     unsigned report_send=0;
     uint64_t report_deadline=0, next_input_report=0;
     for (;;) {
@@ -327,6 +327,12 @@ int main(int argc, char **argv)
             } else if (d->shell_test && d->shell_stage==1 && !strcmp(d->programs[selected].name,"demo")) {
                 d->shell_pid=(uint32_t)pid; d->shell_stage=2;
             }
+        }
+        if (d->shell_test && d->shell_stage!=shell_stage_shown) {
+            /* Lead diagnostics: the shell test's stage is visible in the runner's screenshot. */
+            shell_stage_shown=d->shell_stage;
+            snprintf(d->notice,sizeof(d->notice),"shell stage %u programs %u",d->shell_stage,d->program_count);
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
         }
         if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         if (desk_redraw(d) && errno!=EINTR && !display_reported) {

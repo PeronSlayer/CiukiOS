@@ -658,13 +658,33 @@ install_int21_vector:
     mov byte [int2f_installed], 1
 
     mov bx, 0x60 * 4
-    mov cx, 8
+    mov cx, 7
 .user_int_iret_loop:
     mov word [es:bx], int_default_iret
     mov ax, cs
     mov [es:bx + 2], ax
     add bx, 4
     loop .user_int_iret_loop
+    ; INT 67h: keep an installed expanded memory manager, recognised by the
+    ; "EMMXXXX0" device name at offset 000Ah of its handler segment (LIM EMS
+    ; 4.0, section 3.3); otherwise install the default IRET as before.
+    push si
+    push ds
+    lds si, [es:bx]
+    cmp word [si + 10], 'EM'
+    jne .int67_default
+    cmp word [si + 12], 'MX'
+    jne .int67_default
+    pop ds
+    pop si
+    jmp .int67_done
+.int67_default:
+    pop ds
+    pop si
+    mov word [es:bx], int_default_iret
+    mov ax, cs
+    mov [es:bx + 2], ax
+.int67_done:
 
     ; Track video mode for DOS programs that query INT 10h directly.
     mov bx, 0x10 * 4
@@ -12051,9 +12071,13 @@ int21_mem_arena_start:
     push bx
     push es
 
-    mov ax, DOS_HEAP_USER_SEG
+    ; Without an active PSP (kernel-owned allocations before the shell, such
+    ; as the VBE backing store) the arena starts at its floor.  The previous
+    ; order returned AX=0 and the first MCB landed at FFFF:0000, a ROM write
+    ; that real firmware ignores and a VM with read-only ROM pages faults on.
     call int21_mem_active_psp
     mov bx, ax
+    mov ax, DOS_HEAP_USER_SEG
     or bx, bx
     jz .done
     mov es, bx
