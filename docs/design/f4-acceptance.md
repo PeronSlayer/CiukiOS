@@ -78,6 +78,18 @@ never qualify analog sound or latency.
   neither outcome can satisfy the AC97 acceptance cases. Required source,
   device, memory, service-budget and cleanup records have independent predicates.
 
+### Lead policy after the QEMU evidence (2026-10-11)
+
+The service owns the lead policy: eight periods while a stream is active,
+a 28-period idle tail for 500 ms after the last writer, then a controlled
+stop (an underrun inside the tail is not a failure); the driver only refuses
+more than 31 outstanding periods. The refill thread runs at `P_DEVICE` and
+must block between services (f1-18 rule): the IRQ and the stream writers
+wake it, and its deadline is a safety net only (1 ms while the first periods
+are published, 4 ms while running, 50 ms idle). The earlier 1 ms poll
+starved ring-3 tasks and failed the F0 `preempt` probe on the integrated
+image 7ab10f64 (zero task switches in two minutes).
+
 ### Validation
 
 The ASan/UBSan production harness passes 10,481,598 checks, including every

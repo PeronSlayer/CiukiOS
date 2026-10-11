@@ -80,7 +80,8 @@ The kernel linker script defines `.text`, `.rodata`, `.data`, `.bss` with
   clear (`dos-dpmi-contract.md`).
   Double fault uses a task gate to a dedicated TSS and stack so a kernel
   stack overflow still reaches the crash screen.
-- Kernel stacks: 16 KiB per thread plus an unmapped guard page below, in the `F0000000`
+- Kernel stacks: 32 KiB per thread (16 KiB until 2026-10-11, raised after the
+  optical probe path double-faulted on QEMU) plus an unmapped guard page below, in the `F0000000`
   region (`boot-memory.md`), superseding F0's 8 KiB bound for f2-20. The T23 sweep
   `44444444` (boot 33, image `cb33aec3…`, commit `f7286ca`) exhausted that bound after
   `inherit-cloexec` (ESP 8204 bytes below the top, faulting CR2 access at depth 8208).

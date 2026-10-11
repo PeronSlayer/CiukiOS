@@ -190,8 +190,13 @@ static void audio_worker(void *arg)
         }
         audio.pending = false;
         audio_service();
-        if (!audio.running && ac97.published && ac97.published < AUDIO_LEAD) task_yield();
-        else kwait_wait_until(&audio.changed, refill_pending, 0, deadline_after_ms(1));
+        /* A P_DEVICE thread must block between services (f1-18 rule): a 1 ms
+         * poll starved ring-3 tasks (F0 preempt, image 7ab10f64). The IRQ and
+         * the stream writers wake `changed`; the deadline is only a safety net:
+         * short while the first periods are published, under half a period
+         * while running, long when idle. */
+        unsigned wait_ms = audio.running ? 4 : ac97.published && ac97.published < AUDIO_LEAD ? 1 : 50;
+        kwait_wait_until(&audio.changed, refill_pending, 0, deadline_after_ms(wait_ms));
     }
 }
 void audio_init(struct vfs *v)

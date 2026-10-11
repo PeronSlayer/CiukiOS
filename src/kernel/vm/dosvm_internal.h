@@ -37,7 +37,7 @@ struct dosvm {
     uint32_t bios_ticks, record_lines;
     bool started, a20, table_ready, base_open, overlay_open, overlay_created;
     uint8_t midnight, disk_status;
-    bool memory_probe;
+    const char *probe;
     struct vfs_table disk_table;
     int base, overlay;
     char overlay_path[48];
@@ -64,5 +64,5 @@ int dosvm_wait(struct dosvm *, bool keyboard, uint64_t deadline);
 void dosvm_input_poll(struct dosvm *);
 int dosvm_keyboard_refresh(struct dosvm *);
 static inline const char *dosvm_probe(const struct dosvm *v)
-{ return v->memory_probe ? "vm-memory" : "vm-boot"; }
+{ return v->probe ? v->probe : "vm-boot"; }
 #endif

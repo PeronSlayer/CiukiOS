@@ -230,7 +230,7 @@ Selector `f3:vm-memory run=<8hex>` (platform override as in F1/F2, no safe
 suffix; lead change of 2026-10-11 in the loader, the kernel parser and the
 runner model so the qemu-e500 profile can run F3); the sweep lists it
 after `vm-boot`. The controller creates one VM with the default 32 MiB
-commitment and `memory_probe` set, boots it to the prompt (`case=boot`:
+commitment and `probe = "vm-memory"` (the record owner of its VMs), boots it to the prompt (`case=boot`:
 `ready`, `commitment`, `pool_quota`, `pool_used`, `free_paras`), types
 `VMMEMORY.COM` and waits up to 60 s for the kernel's verdict latch, written
 by the E9 line `VMMEMORY PASS`/`VMMEMORY FAIL` (`case=conformance`: `done`,

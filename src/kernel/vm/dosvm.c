@@ -329,7 +329,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     dosvm_snapshot(&ledger);
     bool admit = dosvm_admit((uint64_t)pmm_free_count() * PAGE_SIZE,
                              ledger.reserved, ledger.resident, commitment, &admission);
-    rec_emit(config && config->memory_probe ? "vm-memory" : "vm-boot", "DATA", "group=admission free=%llu reserved=%llu resident=%llu outstanding=%llu request=%u headroom=%u admitted=%u",
+    rec_emit(config && config->probe ? config->probe : "vm-boot", "DATA", "group=admission free=%llu reserved=%llu resident=%llu outstanding=%llu request=%u headroom=%u admitted=%u",
              admission.free_bytes, admission.reserved_bytes, admission.resident_bytes,
              admission.outstanding_bytes, commitment, DOSVM_HEADROOM, admit);
     if (!admit) return -ENOMEM;
@@ -347,7 +347,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->info.resident = sizeof(*v);
     v->base = v->overlay = -1;
     v->a20 = true;
-    v->memory_probe = config && config->memory_probe;
+    v->probe = config ? config->probe : 0;
     kwait_init(&v->wake);
     kwait_init(&v->disk_wait); v->disk_busy = false;
     int e = as_create(&v->as);

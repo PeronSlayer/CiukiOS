@@ -45,7 +45,7 @@ void panic(const char *fmt, ...) { (void)fmt; abort(); }
 int main(void)
 {
     unsigned pages = KSTACK_SIZE / PAGE_SIZE;
-    assert(pages == 4);
+    assert(pages == 8); /* KSTACK_SIZE 32 KiB since 2026-10-11 (mm.h): a change here is a design decision */
     for (unsigned i = 0; i < pages; i++) {
         fail_after = (int)i;
         assert(!kstack_alloc() && !live && !maps && !flushes && !stack_slot_used[0]);

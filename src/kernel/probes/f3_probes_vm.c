@@ -223,7 +223,7 @@ static int probe_f3_vm_memory(void)
     int error = 0;
     struct dosvm_ledger before, after;
     dosvm_snapshot(&before);
-    const struct dosvm_config config = { .commitment = 0, .memory_probe = true };
+    const struct dosvm_config config = { .commitment = 0, .probe = "vm-memory" };
     if ((error = storage_enable_write(storage_get(), 2))) goto cleanup;
     if ((error = dosvm_create(&config, &v)) || (error = boot_prompt(v))) goto cleanup;
     struct dosvm_info info;
@@ -238,7 +238,7 @@ static int probe_f3_vm_memory(void)
              info.guest_records, info.dropped_records, error);
     if (error) goto cleanup;
     if (!info.memory_pass) { error = -EFAULT; goto cleanup; }
-    const struct dosvm_config config2 = { .commitment = 0, .memory_probe = true };
+    const struct dosvm_config config2 = { .commitment = 0, .probe = "vm-memory" };
     int admit = dosvm_create(&config2, &second);
     rec_emit(name, "DATA", "case=second admitted=%u error=%d", admit == 0, admit);
     if (!admit) {
