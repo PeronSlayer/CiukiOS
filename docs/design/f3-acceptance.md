@@ -255,6 +255,11 @@ arena C900h–DFFFh), EMS 40h–51h (page-table aliases per window, map errors
 trimming windows, release), denied and unknown functions, destruction with
 aliases still mapped, and a pool-backing failure during creation.
 
+The EMS entry vector is F100:0000 (stub page F1000h: INT FEh, IRET, name
+`EMMXXXX0` at offset 000Ah): LIM EMS 4.0 detection reads the name at the
+handler segment's offset 000Ah, which F000:1000 could not satisfy, and
+F000:1000 collided with f3-01's INT 33h callback continuation (f3-01 review).
+
 Fault diagnostics added to the controller records: `group=vm_stop` carries
 `address` (CR2 read before interrupts are re-enabled), `error` (page-fault
 error code) and `code` (the eight bytes at the faulting CS:IP); a stopped VM

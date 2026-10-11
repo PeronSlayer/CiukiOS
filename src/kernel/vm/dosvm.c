@@ -228,10 +228,10 @@ static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
     if (f->tf.cs == VM_XMS_SEG && f->tf.eip == 18) return dosvm_ems_return(v, f);
     /* Only synthetic ROM stubs may enter the private firmware service.
      * Original INT already pushed its own FLAGS/CS/IP; no second INT frame. */
-    if (f->tf.cs != 0xF000 || (f->tf.eip & 15) != 2 || f->tf.eip > 0x1002 ||
-        (f->tf.eip >= 0x1000 && f->tf.eip != 0x1002))
-        return -V86_EPERM;
-    uint8_t service = f->tf.eip == 0x1002 ? 0x67 : (uint8_t)(f->tf.eip >> 4);
+    uint8_t service;
+    if (f->tf.cs == 0xF100 && f->tf.eip == 2) service = 0x67; /* EMS stub page */
+    else if (f->tf.cs != 0xF000 || (f->tf.eip & 15) != 2 || f->tf.eip >= 0x1000) return -V86_EPERM;
+    else service = (uint8_t)(f->tf.eip >> 4);
     uint32_t off = (uint16_t)f->tf.user_esp;
     if (off > 0xFFFA || f->tf.user_ss > 0xFFFF) return -EFAULT;
     uint32_t linear = (f->tf.user_ss << 4) + off + 4;
