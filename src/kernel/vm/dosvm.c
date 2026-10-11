@@ -48,6 +48,7 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         out->tasks += v->task != 0;
         /* Count owned backing once, including unmapped EMS-window backing. */
         if (v->as.pd_phys) out->pages += DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1;
+        out->pages += v->audio.q.page_count; /* f3-05 PCM/event queues */
         out->handles += v->base_open + v->overlay_open;
         out->devices += 4; /* authoritative PIC, PIT, text/input service and VGA adapter */
         out->reserved += v->info.commitment;
@@ -319,6 +320,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
     if (e && v->info.dirty) v->info.data_loss = true;
+    dosvm_audio_close(v);
     if (v->as.pd_phys) {
         dosvm_memory_close(v);
         as_destroy(&v->as);
@@ -394,7 +396,8 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     if ((e = dosvm_port_register(v->info.key, 0x40, 0x43, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x61, 0x61, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x60, 0x60, dosvm_kbd_port, 0)) ||
-        (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0))) goto fail;
+        (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0)) ||
+        (e = dosvm_audio_init(v))) goto fail; /* f3-05 SB16, OPL3 and 8237 */
     e = dosvm_bios_init(v);
     if (e) goto fail;
     e = dosvm_memory_init(v, config);
@@ -480,6 +483,7 @@ void dosvm_tick(void)
         v->ticks = g_ticks;
         v->clock_ms += elapsed;
         dosvm_pit_advance(v, elapsed);
+        dosvm_audio_advance(v, elapsed);
     }
 }
 const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)

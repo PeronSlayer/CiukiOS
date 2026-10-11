@@ -605,3 +605,224 @@ with `reason=2` also emits `group=vm_fault` (AX…BP, DS, ES, SS:SP) and three
 `group=vm_stack part=N` rows with sixteen stack words each. Guest addresses
 map to the NASM listings: the stage-1 loader runs at linear 8000h, the DOS
 kernel is loaded at 9000h and relocated to 3000h (listing offset + 3000h).
+
+## f3-05
+
+Per-VM Sound Blaster 16, OPL3 and virtual 8237A state, the VM audio timeline
+and the interface F4 consumes (directive f3-05). Implementation and host
+evidence only; the QEMU `f3-vm` audio-state cases belong to the lead.
+
+### Research checked before implementation (2026-10-11)
+
+- Creative, [Sound Blaster Series Hardware Programming Guide](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/SoundBlaster.pdf)
+  (contract source S5). Chapter 2: reset (write 1 to 2x6h, 3 us, write 0,
+  poll 2xEh bit 7, read AAh), 2xCh bit 7 clear = ready, 82h interrupt status
+  (bit 0 8-bit DMA/SB-MIDI, bit 1 16-bit DMA, bit 2 MPU-401), acknowledgement
+  by reading 2xEh (8-bit) or 2xFh (16-bit), 80h IRQ select (2/5/7/10, one
+  bit), 81h DMA select (0/1/3 and 5/6/7, one bit each; no 16-bit bit means
+  16-bit data on the 8-bit channel). Chapter 3: time constant
+  `65536 - 256000000/(channels x rate)` (high byte), auto-init double
+  buffering, termination by exit command or by programming a single-cycle
+  transfer that "continues" at the end of the current block, high-speed mode
+  ignores commands until reset and its reset restores the earlier parameters,
+  4.xx rates 5000-44100 Hz. Chapter 4: CT1745 register map and defaults
+  (30h-35h level 24 = -14 dB; 36h-3Ah 0; 3Ch 1Fh; 3Dh 15h; 3Eh 0Bh; 44h-47h
+  8 = 0 dB; 04h/22h/26h/28h/2Eh/0Ah are CT1345 views of the new registers).
+  Chapter 6: command matrix by DSP version; 41h/42h 5000-45000 Hz; Bxh/Cxh
+  bit 3 A/D, bit 2 auto-init, mode bit 4 signed, bit 5 stereo, length in
+  samples - 1; D1h/D3h on 4.xx only set the D8h status latch. Appendix A:
+  FM at 2x0h-2x3h, 2x8h/2x9h and 388h.
+- DOSBox Staging [soundblaster.cpp](https://raw.githubusercontent.com/dosbox-staging/dosbox-staging/main/src/hardware/audio/soundblaster.cpp)
+  and [opl.cpp](https://raw.githubusercontent.com/dosbox-staging/dosbox-staging/main/src/hardware/audio/opl.cpp),
+  behaviour only (no code taken): SB16 82h reports 20h in its reserved bits,
+  E1h returns 4.05, E3h copyright string, argument counts of undocumented
+  commands, the CT1345-to-CT1745 level mapping `2n+1`, reset clears pending
+  causes; OPL timers start aligned to their 80/320 us clock, a mask clears
+  its flag, RST clears both flags, one address latch with array 1 reachable
+  only for 105h while NEW is clear, OPL3 status low bits 0 (OPL2 06h).
+- Intel [8237A datasheet 231466-005](https://pdos.csail.mit.edu/6.1810/2004/readings/hardware/8237A.pdf):
+  base and current registers written together byte by byte through the
+  flip-flop, TC when the count rolls from 0 to FFFFh, autoinitialize reloads
+  and keeps the channel unmasked, otherwise the mask bit is set, status bits
+  0-3 TC (cleared on read) and 4-7 requests, master clear, clear mask, write
+  all mask bits, temporary register, illegal reads. [QEMU i8257](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/dma/i8257.c):
+  page ports, word channels shifted by one with page bit 0 ignored.
+- Linux [snd_opl3 detection](https://raw.githubusercontent.com/torvalds/linux/v6.12/sound/drivers/opl3/opl3_lib.c):
+  status E0h clear after reset, C0h after timer 1 = FFh started for >= 80 us,
+  timer resolution 80 000 ns and 320 000 ns, signature 06h = OPL2.
+- Repository: legacy `src/vm/guest_peripherals.c` (DMA/SB/OPL models of the
+  0.8 line, migrated as reference) and its `test_guest_peripherals.cpp`
+  audio cases (migrated into the new harness); `session_audio.c`
+  `cvaudio_dma_slice` (block-boundary slicing, now the timeline rule below).
+  CIUKIDOS exports `BLASTER=A220 I7 D1 H5 T6`, so the model's factory setting
+  is base 220h, IRQ 7, DMA 1, HDMA 5, OPL3 at 388h.
+
+### Decisions
+
+Files: `src/kernel/vm/dosvm_sb16.c` (DSP, mixer, timeline, PCM queue, port
+dispatch, F4 calls), `dosvm_dma.c`, `dosvm_opl.c`, private state
+`dosvm_audio_state.h`, public interface `src/kernel/include/ciuki/dosvm_audio.h`.
+State lives in `struct dosvm` (about 3.7 KiB per slot); the PCM ring (4096
+stereo frames, four pages) and the event ring (512 events, two pages) are
+allocated at creation, charged to `resident` and to the ledger's pages, and
+freed by the single release path. Ports: 00h-0Fh, 80h-8Fh, C0h-DFh,
+220h-22Fh, 388h-38Bh, registered with `dosvm_port_register`; the handler runs
+under `irq_save` like the PIT and 8042 because `dosvm_tick` shares the state.
+Wider CPU accesses are split into byte cycles, as on the 8-bit ISA bus (the
+mixer `out dx,ax` index/data idiom). No physical port, DMA or audio device
+is touched.
+
+DSP: version 4.05. Implemented: reset/status, E0h/E1h/E3h/E4h/E8h, D1h/D3h/
+D8h latch (never gates output), 10h direct DAC (timestamped DAC events),
+14h/91h single-cycle and 1Ch/90h auto-init 8-bit, Bxh/Cxh 8/16-bit signed/
+unsigned mono/stereo single/auto-init, 40h/41h/42h (41h clamps to 5000-45000;
+a time-constant rate is halved for stereo; any rate is capped at 45000), 48h,
+80h silence, D0h/D4h, D5h/D6h, D9h/DAh, 45h/47h (continue: cancel a pending
+exit), F2h/F3h forced causes, SB Pro output stereo through mixer 0Eh bit 1
+for the legacy 8-bit commands (a DOSBox-compatible choice; the CT1745 map has
+no 0Eh). High-speed mode ignores commands until reset; MIDI UART mode
+discards writes until reset; those resets restore the earlier parameters,
+an ordinary reset sets 22050 Hz and speaker off. A new transfer during
+auto-init applies at the end of the current block. Not advertised, counted
+as `unsupported`: recording (Bxh/Cxh with A/D, 24h/2Ch/98h/99h start nothing;
+direct 20h answers the midpoint 80h so a polling reader cannot hang), MIDI
+input, ASP (0Fh answers 00h), E2h and undocumented commands. Creative ADPCM
+(16h/17h/74h-77h/1Fh/7Dh/7Fh) keeps DMA, block timing and IRQs and produces
+silence flagged `UNSUPPORTED`: no decoder is advertised in F3.
+
+Mixer: CT1745 defaults above; 22h/04h/26h/28h/2Eh/0Ah views; register masks;
+80h/81h accept exactly one valid bit (otherwise unchanged, counted); 82h is
+read-only `causes | 20h`. The IRQ line is the OR of the 82h causes: a cause
+latched while the line is low raises one edge through `dosvm_irq_raise`
+(f3-01 PIC), none while it is high. Reading 2xEh/2xFh lowers the line but,
+as in f3-01, cannot erase an IRR bit already latched.
+
+Timeline: frames of a 48 kHz clock per VM, advanced by `dosvm_tick` (48 per
+host millisecond) whatever the guest IF, IMR or ISR state. DSP consumption
+uses exact integer phase (`rate` per timeline frame, `48000/channels` per
+sample, `48000 x samples` per ADPCM byte), so block boundaries have exact
+nominal times and segment start stamps are reproducible. The block-boundary
+rule: at a boundary the DSP closes the block's segment with its cause,
+latches the cause, raises the edge if the line was low and stops consuming
+until the guest acknowledges that cause, or until the next block is due on
+the nominal timeline and at least one host tick has passed; that resumption
+is counted as `late`, its segment is flagged `LATE`, and a block started
+after two unserviced boundaries is flagged `STALE` (counted). An
+acknowledgement immediately consumes the part of the next block already
+due, so a responsive guest services sub-millisecond blocks without lag and a
+backlog drains one service per block. Each call processes at most 64 ms of
+DSP time; backlog beyond one second is dropped and counted. A DMA channel
+that does not answer (masked, controller disabled, cascade) stalls the DSP
+and the elapsed time is lost, as on the card; a non-read transfer type or an
+address outside the VM stops the transfer locally (no IRQ, `last_error`,
+DMA fault counter), the DSP and the VM continue.
+
+8237A: addresses resolve only through the owning VM's linear view (as
+Windows 95 VDMAD virtualises V86 DMA, including the VM's A20 state); 8-bit
+channels wrap inside their 64 KiB page, word channels address words with
+page bit 0 ignored inside 128 KiB; decrement mode, verify (no memory cycle,
+open-bus FFh), write/illegal types refused; reads go through `dosvm_read`
+in bounded chunks.
+
+OPL3: 512-byte register file, single address latch, NEW (105h) and pair
+(104h) state, timers 1/2 at 80/320 us with free-running prescaler alignment,
+mask and RST semantics, status bit 7 when a flag is set. No PIC line: the
+SB16 and AdLib do not wire the OPL IRQ output, so "IRQ" is the status bit.
+Timer and status time are the VM's microseconds plus a virtual ISA I/O time
+of 1 us per OPL access inside the current millisecond, capped below the next
+tick, so status-read delay loops (AdLib/Linux detection) observe time.
+Every data write is queued as a 16-byte event (VM generation, timeline frame
+including that sub-millisecond I/O time, register, value). Without a
+consumer, events are counted as discarded while the register file stays
+authoritative; on overflow the next event is preceded by a `GAP` marker and
+F4 resynchronises from `dosvm_audio_opl_registers`.
+
+F4 interface (`ciuki/dosvm_audio.h`): one consumer token per VM
+(`dosvm_audio_attach`/`detach`; VM stop or a new attach revokes it);
+`dosvm_audio_fetch` returns frames of one segment only (signed 16-bit
+stereo at the source rate, with start frame, sequence, rate, source format,
+offset, cause and flags `COMPLETE/SILENCE/UNSUPPORTED/OVERRUN/LATE/STALE/
+ABORTED`), never across a block boundary, partial segments continue by
+offset; `dosvm_audio_events` drains events in write order;
+`dosvm_audio_info` reports counters, configuration, the cause latch, mixer
+master/voice/FM levels and OPL timer stamps. Without a consumer, frames are
+counted as discarded; a full ring drops new frames (`OVERRUN`, counted).
+The ledger's `devices` count is unchanged (3): the vm-boot predicates pin it.
+
+### Probe `f3:vm-audio-state`
+
+Selector `f3:vm-audio-state run=<8hex>` (platform override as for the other
+F3 probes), fourth in the F3 sweep (after vm-boot, vm-memory, vm-devices).
+The controller boots a witness VM and the test VM (8 MiB each, records named
+`vm-audio-state`), attaches as the F4 consumer and types `\VMAUDIO.COM`
+(`src/probes/dos/vm_audio.asm`, in `DOSBOOT.IMG`). The payload parses
+BLASTER from its environment, publishes stage 1 (detection) and then runs one
+stage per command word in the mailbox at 0000:0600 (2 8-bit single-cycle
+ramp; 3 64-unit auto-init double buffer, 32 blocks with ISR refill and DAh
+from the ISR; 4/5 pause, 50 ms hold, continue, exit; 6 16-bit signed stereo
+auto-init on HDMA with 2xFh acknowledgement and D9h; 7/8 CLI for 100 ms then
+STI; 9 OPL script; 10 DMA page F0h outside the VM; 11 restore IVT/IMR and
+return to DOS). Records (`DATA case=`): `detect`, `mixer`, `dma8_single`,
+`double_buffer`, `pause`, `continue`, `dma16_stereo`, `if_clear`,
+`if_restore`, `opl`, `opl_state`, `dma_fault`, `exit`, `locality`,
+`cleanup`; each carries `ok` and the raw values the suite pins (fresh
+blocks and their exact nominal spacing: 384 timeline frames for 64 units at
+8000 Hz, 256 for 64 frames at 12000 Hz; services; IF-clear boundaries
+against host time, at most one edge, one pending request, no delivery;
+the 30 OPL events in order with generation, monotonic stamps inside the
+stage window; timer flags 20.4-20.48 ms and 81.6-81.92 ms after their start;
+locality of the witness). Stage timeouts emit `stage_timeout` and
+`stage_audio` diagnostics (two records, each under 256 bytes).
+Suite `f3-vm.json`: `vm-audio-state-qemu-t23/e500/min128`, timeout 180 s.
+
+### Host and static verification
+
+`tests/host/dosvm_audio_test.inc` (in the production DOS VM harness, ASan/
+UBSan): detection and every mixer register path including the word idiom;
+the migrated cvgp single-cycle case (four samples, speaker off still plays,
+82h, 2xEh/2xFh, forced F3h, the PIC keeps its edge, ADC refused, address
+outside the VM and write-type channel fail locally); every advertised PCM
+layout (8/16-bit, signed/unsigned, mono/stereo, single/auto-init) decoded
+exactly, 16-bit on the 8-bit channel, SB Pro stereo with a time constant,
+silence, ADPCM timing, direct DAC events, high-speed reset restore; the F4
+regression (64-unit auto-init double buffer over 2048 units: 32 sequential
+fresh blocks and 32 eligible services although the fake output clock
+advances in 10 ms steps, consumer fetching 50-frame quanta, spacing
+139/140 frames) and its counter-case without service (nominal pace, LATE/
+STALE, one edge, IF never forced); IF clear, IMR masked and ISR in service
+for 100 ms (exactly ten boundaries, at most one edge, one pending request,
+STI/MOV-SS shadow defers, exactly one delivery); pause/continue/exit/45h/
+new command at the block end/abort on reset; the 8237A register set, wraps,
+autoinit, decrement, verify, cascade, disabled controller, word channels,
+faults; OPL detection, migrated timer case, mask/RST, NEW/array addressing,
+SB16 mirrors, event order/generation/stamps, overflow and GAP, register
+snapshot, two chips independent; queue limits (ring overrun, segment ring,
+stale tokens, VM stop), backlog drop and drain. A mutation that disables the
+boundary wait fails the F4 regression. Creation-failure injection now covers
+283 allocation sites (six new audio pages) with exact teardown.
+
+Results on this worktree (2026-10-11): `bash scripts/test/host_kernel_tests.sh`
+rc=0 (dosvm harness 196 696 checks, largest record 212 bytes);
+`make kernel` green; `python3 scripts/build_dos_image.py` T1 DOS PASS with
+13 payloads; `tests.host.test_dosvm` (including the new suite fixture),
+loader, loader-model and sweep tests pass; the loader still assembles to its
+fixed 24 KiB.
+
+Cross-check of the payload against an independent SB16/OPL3 model: a scratch
+copy of `VMAUDIO.COM` without the controller handshake (mailbox dumped at the
+end; scratch files removed) ran under DOSBox 0.74-3 (`sbtype=sb16`, A220 I7
+D1 H5). All eleven stages completed; BLASTER parsing, reset AAh, version
+4.05, E0h/E8h, speaker FF00h, 80h/81h, `22h=A5h` giving `30h=A8h`, DMA TC,
+equal paused counts, IRQ counts and the six OPL status values (00h, C0h,
+C0h, E0h, A0h, 00h) agree with this model. Differences are DOSBox's: mixer
+reset default 31 (F8h) instead of Creative's 24 (C0h), 82h without the 20h
+bits in 0.74, DMA at 15 MiB valid there, and the last block of a D9h-
+terminated 16-bit transfer raised as an 8-bit cause (with a reset instead of
+D9h all eight IRQs report 02h); the model follows the Creative guide.
+
+Open items for the lead: ADPCM decoding, E2h DMA identification and MPU-401
+are not advertised; 45h/47h follow the later DSP 4.xx documentation and are
+not in the guide revision above; timing granularity is the 1 ms host tick
+(sub-millisecond blocks rely on acknowledgement-driven catch-up); the
+ledger `devices` count does not include the audio devices; the mailbox
+address 0000:0600 is shared with VMDEV.COM by convention (separate VMs).

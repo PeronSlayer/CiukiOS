@@ -141,6 +141,7 @@ def build(out=None):
             files["/" + name] = assemble(f"src/probes/doscompat/{source}.asm", work / name)
         files["/VMMEMORY.COM"] = assemble("src/probes/dos/vm_memory.asm", work / "VMMEMORY.COM")  # f3-03 memory conformance payload
         files["/VMVIDEO.COM"] = assemble("src/probes/dos/vm_video.asm", work / "VMVIDEO.COM")  # f3-02 virtual VGA pattern payload
+        files["/VMAUDIO.COM"] = assemble("src/probes/dos/vm_audio.asm", work / "VMAUDIO.COM")  # f3-05 SB16/OPL3/8237 state payload
         candidate = work / "DOSBOOT.IMG"
         write_fat16(candidate, boot, loader, files)
         subprocess.run(["fsck.fat", "-n", str(candidate)], check=True)

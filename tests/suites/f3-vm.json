@@ -3644,6 +3644,1269 @@
           }
         ]
       }
+    },
+    {
+      "id": "vm-audio-state-qemu-t23",
+      "probe": "vm-audio-state",
+      "profile": "qemu-t23",
+      "selector": "f3:vm-audio-state run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "ident": "aa",
+              "test": "5a",
+              "speaker": "ff00",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irq_bits": "04",
+              "dma_bits": "22",
+              "status": "20",
+              "master": "a8",
+              "compat": "a5",
+              "default": "c0"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma8_single"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 1
+              },
+              "blocks": {
+                "eq": 1
+              },
+              "fresh": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 256
+              },
+              "rate": {
+                "eq": 8000
+              },
+              "cause": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 32
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "double_buffer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "stale": {
+                "eq": 0
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pause"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "paused": {
+                "eq": 1
+              },
+              "units": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "continue"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "count_a": {
+                "eq": "$count_b"
+              },
+              "irqs": {
+                "eq": 5
+              },
+              "active": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 5
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma16_stereo"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "cause": {
+                "eq": 2
+              },
+              "format": {
+                "eq": 7
+              },
+              "rate": {
+                "eq": 12000
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_clear"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 100
+              },
+              "edges": {
+                "le": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "delivered": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 1
+              },
+              "guest_irqs": {
+                "eq": 1
+              },
+              "lag": {
+                "le": 480
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_restore"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs_before": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 3
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "s4": "00",
+              "t2": "e0",
+              "s3": "a0",
+              "events": {
+                "eq": 30
+              },
+              "match": {
+                "eq": 30
+              },
+              "monotonic": {
+                "eq": 1
+              },
+              "generation": {
+                "eq": 1
+              },
+              "window": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl_state"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "new": {
+                "eq": 0
+              },
+              "pairs": "3f",
+              "rhythm": "3f",
+              "r1c0": "f1",
+              "rc0": "31",
+              "t1_us": {
+                "ge": 20401,
+                "le": 20480
+              },
+              "t2_us": {
+                "ge": 81601,
+                "le": 81920
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma_fault"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "faults": {
+                "eq": 1
+              },
+              "error": {
+                "eq": 1
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 0
+              },
+              "reset": "aa",
+              "alive": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 0
+              },
+              "events": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 0
+              },
+              "regs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-audio-state-qemu-e500",
+      "probe": "vm-audio-state",
+      "profile": "qemu-e500",
+      "selector": "f3:vm-audio-state run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "ident": "aa",
+              "test": "5a",
+              "speaker": "ff00",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irq_bits": "04",
+              "dma_bits": "22",
+              "status": "20",
+              "master": "a8",
+              "compat": "a5",
+              "default": "c0"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma8_single"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 1
+              },
+              "blocks": {
+                "eq": 1
+              },
+              "fresh": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 256
+              },
+              "rate": {
+                "eq": 8000
+              },
+              "cause": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 32
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "double_buffer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "stale": {
+                "eq": 0
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pause"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "paused": {
+                "eq": 1
+              },
+              "units": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "continue"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "count_a": {
+                "eq": "$count_b"
+              },
+              "irqs": {
+                "eq": 5
+              },
+              "active": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 5
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma16_stereo"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "cause": {
+                "eq": 2
+              },
+              "format": {
+                "eq": 7
+              },
+              "rate": {
+                "eq": 12000
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_clear"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 100
+              },
+              "edges": {
+                "le": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "delivered": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 1
+              },
+              "guest_irqs": {
+                "eq": 1
+              },
+              "lag": {
+                "le": 480
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_restore"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs_before": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 3
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "s4": "00",
+              "t2": "e0",
+              "s3": "a0",
+              "events": {
+                "eq": 30
+              },
+              "match": {
+                "eq": 30
+              },
+              "monotonic": {
+                "eq": 1
+              },
+              "generation": {
+                "eq": 1
+              },
+              "window": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl_state"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "new": {
+                "eq": 0
+              },
+              "pairs": "3f",
+              "rhythm": "3f",
+              "r1c0": "f1",
+              "rc0": "31",
+              "t1_us": {
+                "ge": 20401,
+                "le": 20480
+              },
+              "t2_us": {
+                "ge": 81601,
+                "le": 81920
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma_fault"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "faults": {
+                "eq": 1
+              },
+              "error": {
+                "eq": 1
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 0
+              },
+              "reset": "aa",
+              "alive": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 0
+              },
+              "events": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 0
+              },
+              "regs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-audio-state-qemu-min128",
+      "probe": "vm-audio-state",
+      "profile": "qemu-min128",
+      "selector": "f3:vm-audio-state run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "ident": "aa",
+              "test": "5a",
+              "speaker": "ff00",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irq_bits": "04",
+              "dma_bits": "22",
+              "status": "20",
+              "master": "a8",
+              "compat": "a5",
+              "default": "c0"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma8_single"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 1
+              },
+              "blocks": {
+                "eq": 1
+              },
+              "fresh": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 256
+              },
+              "rate": {
+                "eq": 8000
+              },
+              "cause": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 32
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "double_buffer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "stale": {
+                "eq": 0
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pause"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "paused": {
+                "eq": 1
+              },
+              "units": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "continue"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "count_a": {
+                "eq": "$count_b"
+              },
+              "irqs": {
+                "eq": 5
+              },
+              "active": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 5
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma16_stereo"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "cause": {
+                "eq": 2
+              },
+              "format": {
+                "eq": 7
+              },
+              "rate": {
+                "eq": 12000
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_clear"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 100
+              },
+              "edges": {
+                "le": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "delivered": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 1
+              },
+              "guest_irqs": {
+                "eq": 1
+              },
+              "lag": {
+                "le": 480
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_restore"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs_before": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 3
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "s4": "00",
+              "t2": "e0",
+              "s3": "a0",
+              "events": {
+                "eq": 30
+              },
+              "match": {
+                "eq": 30
+              },
+              "monotonic": {
+                "eq": 1
+              },
+              "generation": {
+                "eq": 1
+              },
+              "window": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl_state"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "new": {
+                "eq": 0
+              },
+              "pairs": "3f",
+              "rhythm": "3f",
+              "r1c0": "f1",
+              "rc0": "31",
+              "t1_us": {
+                "ge": 20401,
+                "le": 20480
+              },
+              "t2_us": {
+                "ge": 81601,
+                "le": 81920
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma_fault"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "faults": {
+                "eq": 1
+              },
+              "error": {
+                "eq": 1
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 0
+              },
+              "reset": "aa",
+              "alive": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 0
+              },
+              "events": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 0
+              },
+              "regs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
     }
   ]
 }

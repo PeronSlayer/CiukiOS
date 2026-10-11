@@ -8,6 +8,7 @@
 #include <ciuki/sync.h>
 #include "dosvm_devices.h"
 #include "virtual_vga_bios.h"
+#include "dosvm_audio_state.h"
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
@@ -32,6 +33,7 @@ struct dosvm {
     struct dosvm_pit pit;
     struct dosvm_kbd kbd;
     struct dosvm_mouse mouse;
+    struct dosvm_audio audio; /* f3-05: SB16 DSP/mixer, OPL3, 8237 and F4 queues */
     bool window_input;
     int32_t input_x, input_y;
     bool pointer_known;

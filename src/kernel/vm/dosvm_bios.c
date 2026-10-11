@@ -394,9 +394,12 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
     for (unsigned i = 0; i < DOSVM_PORTS; i++)
         if (v->ports[i].handler && port >= v->ports[i].first && port <= v->ports[i].last)
         {
-            uint32_t flags = (v->ports[i].handler == dosvm_pit_port || v->ports[i].handler == dosvm_kbd_port) ? irq_save() : 0;
+            /* Device state shared with the dosvm_tick timer hook. */
+            bool shared = v->ports[i].handler == dosvm_pit_port || v->ports[i].handler == dosvm_kbd_port ||
+                          v->ports[i].handler == dosvm_audio_port;
+            uint32_t flags = shared ? irq_save() : 0;
             int result = v->ports[i].handler(v, port, width, write, value, v->ports[i].arg);
-            if (v->ports[i].handler == dosvm_pit_port || v->ports[i].handler == dosvm_kbd_port) irq_restore(flags);
+            if (shared) irq_restore(flags);
             return result;
         }
     if (port == DOSVM_FAULT_PORT) return -V86_EPERM;
