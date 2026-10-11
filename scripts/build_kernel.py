@@ -228,8 +228,8 @@ def main() -> int:
         ))
     }
     objs.sort(key=lambda obj: f2_order.get(obj.stem, -1))
-    # f3-00 owns the first append-only F3 registration.
-    objs.sort(key=lambda obj: 0 if obj.stem == "probes_f3_probes_vm" else -1)
+    # f3-00 owns the first append-only F3 registration; f3-02 video follows.
+    objs.sort(key=lambda obj: {"probes_f3_probes_vm": 0, "probes_f3_probes_video": 1}.get(obj.stem, -1))
     run(["ld.lld", "-m", "elf_i386", "-T", str(SRC / "linker.ld"), "--no-undefined",
          "-Map", str(OUT / "VMM.map"), "-o", str(elf), *map(str, objs)])
     audit(elf)

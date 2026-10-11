@@ -1,5 +1,16 @@
 # F2 ring-3 desktop and client protocol
 
+## f3-02 additions (2026-10-11)
+
+`/bin/dosbox` (apps/dosbox) is an ordinary protocol-v2 client that owns one
+DOS virtual machine through syscall 70 (execution-abi.md, F3-02 amendment);
+the kernel renders the VM into the client's 640x480 surface and the desktop
+composites it unchanged. The menu lists it from `/bin` like any program and
+passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/bin` menu
+program at shell start through the menu-click path; the `f3:vm-window` probe
+uses it. The extra menu row moves the f2-30 shell case's Demo click to
+`y-197`. Details: docs/design/f3-acceptance.md, section f3-02.
+
 ## f2-30 decisions (2026-10-11)
 
 Research precedes the shell implementation. The [POSIX spawn specification](https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_spawn.html)

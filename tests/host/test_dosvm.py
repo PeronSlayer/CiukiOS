@@ -5,6 +5,7 @@ Fixtures below are parser inputs, not guest or QEMU evidence.
 import copy
 import importlib.util
 import json
+import re
 from pathlib import Path
 import struct
 import sys
@@ -28,7 +29,9 @@ class DosVMTests(unittest.TestCase):
                 runner.selector(request, 'fw_cfg', True)
         suite = runner.load(ROOT / 'tests/suites/f3-vm.json')
         self.assertEqual({c['profile'] for c in suite['cases']},
-                         {'qemu-t23','qemu-e500','qemu-min128'})
+                         {'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-2002','qemu-desktop-1998'})
+        # f3-02: the desktop-twin profiles run only the composited window row.
+        self.assertEqual({c['probe'] for c in suite['cases'] if c['profile'].startswith('qemu-desktop')}, {'vm-window'})
         self.assertTrue(set((*runner.REGRESSION_SUITES,*runner.F2_SUITES)) <= set(suite['prerequisites']))
         resolved = runner.load_suite('f3-vm')
         self.assertEqual(sum(c['probe']=='vm-boot' for c in resolved['cases']),3)
@@ -66,6 +69,140 @@ class DosVMTests(unittest.TestCase):
         with self.assertRaises(EvidenceError): self.parser(records[:1]+records[2:]).check(expected)
         broken=copy.deepcopy(records); broken[1][1]['admitted']=0
         with self.assertRaises(EvidenceError): self.parser(broken).check(expected)
+
+    def video_records(self, golden):
+        records = [('BEGIN', {})]
+        records.append(('DATA', dict(group='admission', free=90000000, reserved=0, resident=0, outstanding=0,
+                                     request=8388608, headroom=33554432, admitted=1)))
+        records.append(('DATA', dict(case='boot', ready=1, prompt=1, free_paras=30000)))
+        records.append(('DATA', dict(case='prompt', mode=3, width=640, height=400, digest='ab' * 32)))
+        geometry = [(3, 640, 400, 1, 1, 3), (3, 640, 400, 1, 1, 0), (19, 320, 200, 2, 0, 1),
+                    (19, 320, 240, 2, 0, 0), (18, 640, 480, 1, 0, 0)]
+        for stage, (mode, width, height, scale, text, flags) in enumerate(geometry, 1):
+            records.append(('DATA', dict(case='frame', stage=stage, mode=mode, width=width, height=height,
+                                         scale=scale, text=text, flags=flags, digest=golden[stage - 1])))
+        records += [('DATA', dict(case='return', stage=6, prompt=1, records=6, dropped=0)),
+                    ('DATA', dict(group='vm_stop', vm=1, generation=4, reason=0, vector=0, eip='00000000',
+                                  address='00000000', error=0, code='0000000000000000')),
+                    ('DATA', dict(group='vm_cleanup', vm=1, generation=4, data_loss=0, error=0)),
+                    ('DATA', dict(case='cleanup', frames=5, vms=0, tasks=0, pages=0, handles=0, devices=0, restored=1)),
+                    ('END', dict(status='PASS', error=0))]
+        return records
+
+    def video_parser(self, records):
+        p = runner.Parser('12345678', 'vm-video')
+        for seq, (event, fields) in enumerate(records, 1):
+            row = ' '.join(f'{key}={value}' for key, value in fields.items())
+            p.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=vm-video event={event}{" " + row if row else ""}\n'.encode())
+        return p
+
+    def test_video_goldens_match_the_host_model(self):
+        """f3-02: suite digests are exactly the host harness's pinned goldens."""
+        source = (ROOT / 'tests/host/dosvm_video_test.inc').read_text()
+        block = source[source.index('static const char *const video_golden[5] = {'):]
+        golden = re.findall(r'"([0-9a-f]{64})"', block[:block.index('};')])
+        self.assertEqual(len(golden), 5)
+        self.assertEqual(len(set(golden)), 5)
+        self.assertEqual(runner.selector('f3:vm-video run=12345678', 'fw_cfg', True)['phase'], 3)
+        cases = [c for c in runner.load(ROOT / 'tests/suites/f3-vm.json')['cases'] if c['probe'] == 'vm-video']
+        self.assertEqual({c['profile'] for c in cases}, {'qemu-t23', 'qemu-e500', 'qemu-min128'})
+        for case in cases:
+            digests = {p['where']['stage']: p['fields']['digest'] for p in case['expected']['predicates']
+                       if p['where'].get('case') == 'frame' and 'stage' in p['where']}
+            self.assertEqual([digests[s] for s in range(1, 6)], golden)
+            self.assertTrue(self.video_parser(self.video_records(golden)).check(case['expected']))
+        expected = cases[0]['expected']
+        for index, field, value in [(4, 'digest', '0' * 64), (4, 'flags', 1), (6, 'flags', 0), (7, 'scale', 1), (8, 'mode', 3)]:
+            broken = copy.deepcopy(self.video_records(golden))
+            broken[index][1][field] = value
+            with self.subTest(index=index, field=field), self.assertRaises(EvidenceError):
+                self.video_parser(broken).check(expected)
+        records = self.video_records(golden)
+        with self.assertRaises(EvidenceError):
+            self.video_parser(records[:6] + records[7:]).check(expected)        # a stage missing
+        broken = copy.deepcopy(records); broken[-2][1]['frames'] = 4
+        with self.assertRaises(EvidenceError): self.video_parser(broken).check(expected)
+
+    def window_records(self, digest):
+        return [('BEGIN', {}),
+                ('DATA', dict(group='admission', free=90000000, reserved=0, resident=0, outstanding=0,
+                              request=33554432, headroom=33554432, admitted=1)),
+                ('DATA', dict(case='window', vm=1, generation=3, client=21, desktop=20, ready=1, prompt=1)),
+                ('ARM', dict(action='window_input', vm=1)),
+                ('DATA', dict(case='frame', stage=1, typed='window', mode=3, width=640, height=400, scale=1, text=1, flags=3, digest=digest)),
+                ('ARM', dict(action='window_screen', digest=digest)),
+                ('DATA', dict(group='vm_stop', vm=1, generation=3, reason=0, vector=0, eip='00000000',
+                              address='00000000', error=0, code='0000000000000000')),
+                ('DATA', dict(case='closed', reason=0, dead=1, window_released=1, client_live=0)),
+                ('DATA', dict(group='vm_cleanup', vm=1, generation=3, data_loss=0, error=0)),
+                ('DATA', dict(case='cleanup', vms=0, tasks=0, pages=0, handles=0, restored=1, objects=1,
+                              surfaces=0, grants=0, channels=0)),
+                ('END', dict(status='PASS', error=0))]
+
+    def test_window_row_and_composited_region(self):
+        """f3-02 desktop row: records, typed stimulus and the screendump region."""
+        cases = [c for c in runner.load(ROOT / 'tests/suites/f3-vm.json')['cases'] if c['probe'] == 'vm-window']
+        self.assertEqual({c['profile'] for c in cases}, {'qemu-desktop-2002', 'qemu-desktop-1998'})
+        self.assertEqual(runner.selector('f3:vm-window run=12345678', 'fw_cfg', True)['phase'], 3)
+        golden = cases[0]['window_screen']['digest']
+        for case in cases:
+            runner.Actions(case['actions'])            # accepted pacing/synchronisation
+            keys = [e['data']['key']['data'] for a in case['actions'] for b in a['batches'] for e in b['events']
+                    if e['type'] == 'key' and e['data']['down']]
+            self.assertEqual(keys, ['backslash', 'shift', 'v', 'm', 'v', 'i', 'd', 'e', 'o', 'dot',
+                                    'shift', 'c', 'o', 'm', 'ret'])
+            p = runner.Parser('12345678', 'vm-window')
+            for seq, (event, fields) in enumerate(self.window_records(golden), 1):
+                row = ' '.join(f'{k}={v}' for k, v in fields.items())
+                p.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=vm-window event={event}{" " + row if row else ""}\n'.encode())
+            self.assertTrue(p.check(case['expected']))
+            kernel = copy.deepcopy(self.window_records(golden)); kernel[4][1]['typed'] = 'kernel'
+            p = runner.Parser('12345678', 'vm-window')
+            for seq, (event, fields) in enumerate(kernel, 1):
+                row = ' '.join(f'{k}={v}' for k, v in fields.items())
+                p.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=vm-window event={event}{" " + row if row else ""}\n'.encode())
+            with self.assertRaises(EvidenceError):    # QEMU requires the desktop input path
+                p.check(case['expected'])
+        # A 1024x768 screendump whose window region holds the frame: build the
+        # region from XRGB rows so the check is independent of the runner code.
+        import hashlib, tempfile
+        width, height, (x0, y0) = 1024, 768, cases[0]['window_screen']['origin']
+        screen = bytearray(width * height * 3)
+        frame = hashlib.sha256()
+        for y in range(480):
+            xrgb = bytearray()
+            for x in range(640):
+                r, g, b = (x * 3 + y) & 255, (y * 5) & 255, (x ^ y) & 255
+                off = ((y0 + y) * width + x0 + x) * 3
+                screen[off:off + 3] = bytes((r, g, b))
+                xrgb += bytes((b, g, r, 0))
+            frame.update(xrgb)
+        digest = frame.hexdigest()
+        spec = dict(cases[0]['window_screen'], digest=digest)
+        with tempfile.TemporaryDirectory(dir=ROOT / 'build/host') as folder:
+            path = Path(folder) / 'window.ppm'
+            path.write_bytes(b'P6\n1024 768\n255\n' + bytes(screen))
+            observed = runner.observe_window_screen(path, spec, {'digest': digest})
+            self.assertEqual(observed['digest'], digest)
+            self.assertEqual(observed['region'], [x0, y0, 640, 480])
+            with self.assertRaises(EvidenceError):
+                runner.observe_window_screen(path, spec, {'digest': '0' * 64})
+            with self.assertRaises(EvidenceError):
+                runner.observe_window_screen(path, dict(spec, digest='1' * 64), {'digest': digest})
+            with self.assertRaises(EvidenceError):
+                runner.observe_window_screen(path, dict(spec, origin=[500, 400]), {'digest': digest})
+            screen[(y0 * width + x0) * 3] ^= 1
+            path.write_bytes(b'P6\n1024 768\n255\n' + bytes(screen))
+            with self.assertRaises(EvidenceError):
+                runner.observe_window_screen(path, spec, {'digest': digest})
+
+    def test_dos_payload_includes_video_fixture(self):
+        builder_source = (ROOT / 'scripts/build_dos_image.py').read_text()
+        self.assertIn('"/VMVIDEO.COM"', builder_source)
+        payload = (ROOT / 'src/probes/dos/vm_video.asm').read_text()
+        # The payload's stage line is the kernel latch format "VMVIDEO s f".
+        self.assertIn("line db 'VMVIDEO 0 0', 10, 0", payload)
+        self.assertIn('VMVIDEO ', (ROOT / 'src/kernel/vm/dosvm_bios.c').read_text())
 
     def test_dos_fat16_writer_and_fixed_dates(self):
         spec=importlib.util.spec_from_file_location('dos_builder',ROOT/'scripts/build_dos_image.py')

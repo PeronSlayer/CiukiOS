@@ -9,7 +9,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/process.h>
 #include <ciuki/supervisor.h>
-extern int32_t dosvm_client_syscall(struct trap_frame *);
+#include <ciuki/dosvm.h>
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
 extern bool probe_f2_libc_report(struct task *, const char *, uint32_t) __attribute__((weak));

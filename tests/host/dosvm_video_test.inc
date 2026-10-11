@@ -1,0 +1,597 @@
+/* f3-02 host cases, included by dosvm_test.c after the production sources:
+ * VGA BIOS/ports, guarded-aperture emulation, presenter damage and its
+ * equivalence with the retained vga_presenter, golden VMVIDEO.COM stage
+ * digests and the native window boundary (syscall 70). No guest DOS runs.
+ * SPDX-License-Identifier: GPL-2.0-only */
+#include "../../src/kernel/vm/vga_presenter.h"
+
+/* ---- Native boundary fakes: processes, descriptors, surfaces, user copies ---- */
+struct surface { struct ciuki_surface_info info; uint8_t *pixels; uint32_t references; };
+static struct process fake_proc[3];
+static struct process *fake_current;
+static struct desktop_description fake_desc[4];
+static const struct process *desc_owner[4];
+static struct surface fake_surface[3];
+static uint8_t user_mem[4096];
+static bool user_fault;
+static unsigned pins;
+struct process *proc_current(void) { return fake_current; }
+struct process *proc_find(uint32_t pid)
+{
+    for (unsigned i = 0; i < 3; i++) if (pid && fake_proc[i].pid == pid) return &fake_proc[i];
+    return 0;
+}
+struct desktop_description *desktop_fd(const struct process *p, int32_t fd)
+{ return fd >= 0 && fd < 4 && desc_owner[fd] == p ? &fake_desc[fd] : 0; }
+const struct ciuki_surface_info *surface_geometry(const struct surface *s) { return &s->info; }
+void surface_retain(struct surface *s) { s->references++; }
+void surface_release(struct surface *s) { CHECK(s->references > 1); s->references--; }
+int surface_write(struct surface *s, uint32_t offset, const void *data, uint32_t bytes)
+{
+    if (offset > s->info.allocation_bytes || bytes > s->info.allocation_bytes - offset) return -EINVAL;
+    memcpy(s->pixels + offset, data, bytes);
+    return 0;
+}
+int copy_from_user(void *dst, uint32_t src, uint32_t bytes)
+{
+    if (user_fault || src > sizeof(user_mem) || bytes > sizeof(user_mem) - src) return -EFAULT;
+    memcpy(dst, user_mem + src, bytes);
+    return 0;
+}
+int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
+{
+    if (dst > sizeof(user_mem) || bytes > sizeof(user_mem) - dst) return -EFAULT;
+    memcpy(user_mem + dst, src, bytes);
+    return 0;
+}
+int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, bool write)
+{
+    (void)u; CHECK(write && !pins);
+    if (base > sizeof(user_mem) || bytes > sizeof(user_mem) - base) return -EFAULT;
+    pin->base = base; pin->end = base + bytes; pins++;
+    return 0;
+}
+void ua_unpin(struct uaddr *u, struct ua_pin *pin) { (void)u; (void)pin; CHECK(pins == 1); pins--; }
+
+/* ---- Helpers ---- */
+static struct v86_frame vf(unsigned ax, unsigned bx, unsigned cx, unsigned dx)
+{ return (struct v86_frame){.tf = {.eax = ax, .ebx = bx, .ecx = cx, .edx = dx, .eflags = V86_VM | V86_IF | 2}}; }
+static void int10(struct dosvm *v, unsigned ax, unsigned bx, unsigned cx, unsigned dx)
+{ struct v86_frame f = vf(ax, bx, cx, dx); CHECK(!dosvm_bios(v, &f, 0x10)); }
+static void port_out(struct dosvm *v, uint16_t port, unsigned width, uint32_t value)
+{ CHECK(!v86_io(&v->monitor, port, width, true, &value)); }
+static uint32_t port_in(struct dosvm *v, uint16_t port, unsigned width)
+{ uint32_t value = 0; CHECK(!v86_io(&v->monitor, port, width, false, &value)); return value; }
+static uint8_t frame_buffer[DOSVM_VIDEO_WIDTH * DOSVM_VIDEO_HEIGHT * 4];
+static uint8_t reference_buffer[DOSVM_VIDEO_WIDTH * DOSVM_VIDEO_HEIGHT * 4];
+static unsigned row_fail_at = UINT32_MAX;
+static int capture_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
+{
+    if (y == row_fail_at) return -EIO;
+    CHECK(bytes == DOSVM_VIDEO_WIDTH * 4 && y < DOSVM_VIDEO_HEIGHT);
+    memcpy((uint8_t *)arg + y * DOSVM_VIDEO_WIDTH * 4, pixels, bytes);
+    return 0;
+}
+/* The retained presenter (cvp_present, CVP_FORCE_FULL) on the same window
+ * rectangle must produce the same pixels as the row-based kernel form. */
+static cvp_state reference_presenter;
+static void compare_with_reference(struct dosvm *v, uint64_t tick)
+{
+    struct ciuki_rect d;
+    memset(frame_buffer, 0xEE, sizeof(frame_buffer));
+    v->video_presented = false;
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, tick, &d) == 1 && !d.dst_y && d.height == DOSVM_VIDEO_HEIGHT);
+    cvga_geometry g;
+    CHECK(cvga_get_geometry(&v->vga, &g) && g.width && g.height);
+    unsigned scale = DOSVM_VIDEO_WIDTH / g.width < DOSVM_VIDEO_HEIGHT / g.height ?
+                     DOSVM_VIDEO_WIDTH / g.width : DOSVM_VIDEO_HEIGHT / g.height;
+    unsigned w = g.width * scale, h = g.height * scale;
+    unsigned left = (DOSVM_VIDEO_WIDTH - w) / 2, top = (DOSVM_VIDEO_HEIGHT - h) / 2;
+    cvp_format format = {DOSVM_VIDEO_WIDTH * 4, DOSVM_VIDEO_WIDTH, DOSVM_VIDEO_HEIGHT, 4, 8, 16, 8, 8, 8, 0, 0};
+    cvp_request q;
+    memset(&q, 0, sizeof(q));
+    q.window = (cvp_rect){(int16_t)left, (int16_t)top, (int16_t)(left + w), (int16_t)(top + h)};
+    q.flags = CVP_FORCE_FULL | ((tick / DOSVM_BLINK_TICKS) & 1 ? 0 : CVP_BLINK_VISIBLE) |
+              ((tick / DOSVM_CURSOR_TICKS) & 1 ? 0 : CVP_CURSOR_VISIBLE);
+    memset(reference_buffer, 0, sizeof(reference_buffer));
+    memset(&reference_presenter, 0, sizeof(reference_presenter));
+    cvp_init(&reference_presenter);
+    cvp_stats stats;
+    CHECK(cvp_present(&reference_presenter, &v->vga, &format, &q, reference_buffer, &stats) == CVP_OK && stats.complete);
+    for (unsigned i = 0; i < sizeof(frame_buffer); i += 4) reference_buffer[i + 3] = 0; /* X byte */
+    CHECK(!memcmp(frame_buffer, reference_buffer, sizeof(frame_buffer)));
+}
+
+/* ---- VGA BIOS, ports and synthetic ROM fonts ---- */
+static void test_video_bios_ports(void)
+{
+    struct dosvm *v = create();
+    uint8_t mode = 0;
+    CHECK(!dosvm_read(v, 0x449, &mode, 1) && mode == 3 && (v->vga.seq[1] & 1));
+    struct v86_frame f = vf(0x4F00, 0, 0, 0); f.es = 0x2000;
+    CHECK(!dosvm_vga_bios(v, &f) && (f.tf.eax & 0xFFFF) == 0x014F);
+    f = vf(0x4F02, 0x4103, 0, 0);
+    CHECK(!dosvm_bios(v, &f, 0x10) && (f.tf.eax & 0xFFFF) == 0x014F && !dosvm_read(v, 0x449, &mode, 1) && mode == 3);
+    int10(v, 0x0013, 0, 0, 0);
+    cvga_geometry g;
+    CHECK(!dosvm_read(v, 0x449, &mode, 1) && mode == 0x13 && cvga_get_geometry(&v->vga, &g) && g.width == 320 && g.height == 200);
+    f = vf(0x0F00, 0, 0, 0); CHECK(!dosvm_bios(v, &f, 0x10) && (f.tf.eax & 0xFFFF) == 0x2813);
+    f = vf(0x1A00, 0, 0, 0); CHECK(!dosvm_bios(v, &f, 0x10) && (f.tf.eax & 0xFF) == 0x1A && (f.tf.ebx & 0xFF) == 8);
+    /* Guest buffers are validated whole before any DAC change. */
+    uint8_t rgb[6] = {1, 2, 3, 4, 5, 6}, saved[3];
+    memcpy(saved, v->vga.dac[0x10], 3);
+    f = vf(0x1017, 0x10, 2, 0); f.es = 0xF000; CHECK(dosvm_vga_bios(v, &f) == -EFAULT); /* ROM destination */
+    f = vf(0x1012, 0x10, 0x8000, 0); f.es = 0x2000; CHECK(dosvm_vga_bios(v, &f) == -EFAULT);
+    f = vf(0x1012, 0x10, 2, 0xFFFE); f.es = 0x2000; CHECK(dosvm_vga_bios(v, &f) == -EFAULT);
+    CHECK(!memcmp(saved, v->vga.dac[0x10], 3));
+    CHECK(!dosvm_write(v, 0x20000, rgb, sizeof(rgb)));
+    f = vf(0x1012, 0x10, 2, 0); f.es = 0x2000;
+    CHECK(!dosvm_vga_bios(v, &f) && v->vga.dac[0x10][0] == 1 && v->vga.dac[0x11][2] == 6);
+    /* Indexed OUTW, DAC ports and bytes beyond 3DFh. */
+    port_out(v, 0x3C4, 2, 0xFFFF0B02u);
+    CHECK(v->vga.seq_index == 2 && v->vga.seq[2] == 0x0B);
+    port_out(v, 0x3C8, 1, 0xFF41); port_out(v, 0x3C9, 1, 12); port_out(v, 0x3C9, 1, 34); port_out(v, 0x3C9, 1, 56);
+    port_out(v, 0x3C7, 1, 0x41);
+    CHECK(port_in(v, 0x3C9, 1) == 12 && port_in(v, 0x3C9, 1) == 34 && port_in(v, 0x3C9, 1) == 56);
+    CHECK((port_in(v, 0x3DE, 4) >> 16) == 0xFFFF);
+    /* Input status 1: vertical retrace in the last three ticks of each frame. */
+    uint8_t a = dosvm_vga_status(v, 0), b = dosvm_vga_status(v, 1);
+    CHECK(a != b && (a | b) == 1 && dosvm_vga_status(v, DOSVM_FRAME_TICKS - 1) == 9 &&
+          dosvm_vga_status(v, DOSVM_FRAME_TICKS * 7 + DOSVM_FRAME_TICKS - DOSVM_RETRACE_TICKS) == 9);
+    uint64_t ticks = g_ticks; g_ticks = DOSVM_FRAME_TICKS * 100 + DOSVM_FRAME_TICKS - 2;
+    CHECK(port_in(v, 0x3DA, 1) == 9); g_ticks = DOSVM_FRAME_TICKS * 100;
+    CHECK(!(port_in(v, 0x3DA, 1) & 8)); g_ticks = ticks;
+    /* ROM fonts: ASCII from the console bitmap, CP437 letters/boxes/blocks drawn. */
+    const uint8_t *rom16 = P2V(v->frames[0xF2]), *rom8 = P2V(v->frames[0xF3]);
+    CHECK(rom16['A' * 16 + 5] == font_cfn_regular[95 + (('A' - 32) * 16 + 5) * 2 + 1] && rom16['A' * 16 + 5]);
+    CHECK(rom8['A' * 8 + 2] == (font_cfn_regular[95 + (('A' - 32) * 16 + 4) * 2 + 1] |
+                                font_cfn_regular[95 + (('A' - 32) * 16 + 5) * 2 + 1]));
+    CHECK(!memcmp(rom16 + 0x82 * 16, rom16 + 'e' * 16, 16) && !memcmp(rom16 + 0x01 * 16, rom16 + '?' * 16, 16));
+    CHECK(rom16[0xC4 * 16 + 7] == 0xFF && !rom16[0xC4 * 16 + 6] && rom16[0xB3 * 16] == 0x18 && rom16[0xB3 * 16 + 15] == 0x18);
+    CHECK(rom16[0xC9 * 16 + 5] == 0x7F && rom16[0xC9 * 16 + 6] == 0x60 && rom16[0xC9 * 16 + 7] == 0x67 &&
+          rom16[0xC9 * 16 + 12] == 0x66 && !rom16[0xC9 * 16 + 4]);
+    CHECK(rom16[0xCE * 16 + 0] == 0x66 && rom16[0xCE * 16 + 5] == 0xE7 && !rom16[0xCE * 16 + 6] && rom16[0xCE * 16 + 7] == 0xE7);
+    CHECK(rom16[0xDB * 16 + 15] == 0xFF && rom16[0xDC * 16 + 7] == 0 && rom16[0xDC * 16 + 8] == 0xFF && !rom16[0]);
+    destroy(v, true); empty();
+    printf("DOS VM video: VBE status, INT 10h buffers, VGA ports, retrace and ROM fonts PASS\n");
+}
+
+/* ---- #PF on the guarded aperture, emulated through the VGA bus ---- */
+static void test_video_faults(void)
+{
+    struct dosvm *v = create();
+    static const uint8_t code[] = {
+        0x26, 0x89, 0x05,       /* 0: mov [es:di], ax */
+        0xF3, 0xAB,             /* 3: rep stosw */
+        0x26, 0x8A, 0x05,       /* 5: mov al, [es:di] */
+        0xD9, 0x05,             /* 8: fld dword [di] -- unsupported */
+        0x26, 0xA3, 0xFF, 0xFF, /* 10: mov [es:0FFFFh], ax -- crosses the 64 KiB limit */
+        0x26, 0xF6, 0x35,       /* 14: div byte [es:di] -- #DE when the byte is zero */
+    };
+    CHECK(!dosvm_write(v, 0x30000, code, sizeof(code)));
+    struct v86_frame f = vf(0x1E41, 0, 0, 0);
+    f.tf.cs = 0x3000; f.es = 0xB800; f.ds = 0x3000; f.tf.user_ss = 0x2000; f.tf.user_esp = 0x100;
+    CHECK(!dosvm_vga_fault(v, &f) && f.tf.eip == 3 && cvga_peek_vram(&v->vga, 0xB8000) == 'A' &&
+          cvga_peek_vram(&v->vga, 0xB8001) == 0x1E);
+    f.tf.ecx = 5000; f.tf.edi = 2; f.tf.eax = 0x0741;
+    CHECK(!dosvm_vga_fault(v, &f) && f.tf.eip == 3 && (f.tf.ecx & 0xFFFF) == 5000 - VIDEO_STRING_BUDGET &&
+          (f.tf.edi & 0xFFFF) == 2 + VIDEO_STRING_BUDGET * 2);
+    CHECK(!dosvm_vga_fault(v, &f) && f.tf.eip == 5 && !(f.tf.ecx & 0xFFFF) && (f.tf.edi & 0xFFFF) == 2 + 5000 * 2 &&
+          cvga_peek_vram(&v->vga, 0xB8000 + 2 + 4999 * 2) == 0x41);
+    f.tf.edi = 0; f.tf.eax = 0;
+    CHECK(!dosvm_vga_fault(v, &f) && (f.tf.eax & 0xFF) == 'A' && f.tf.eip == 8);
+    struct v86_frame before = f;
+    CHECK(dosvm_vga_fault(v, &f) == -EFAULT && !memcmp(&before, &f, sizeof(f)));
+    f.tf.eip = 10; before = f;
+    CHECK(dosvm_vga_fault(v, &f) == -EFAULT && f.tf.eip == 10);
+    /* #DE reflects through the guest IVT with the faulting IP on its stack. */
+    uint8_t zero_byte = 0;
+    CHECK(!dosvm_write(v, 0xB8100, &zero_byte, 1));
+    v->monitor.state = V86_RUNNING; v->monitor.vif = true;
+    f.tf.eip = 14; f.tf.edi = 0x100; f.tf.eax = 0x1234; f.tf.user_esp = 0x100;
+    CHECK(!dosvm_vga_fault(v, &f) && f.tf.cs == 0xF000 && f.tf.eip == 0 && (f.tf.user_esp & 0xFFFF) == 0xFA);
+    uint16_t pushed[3];
+    CHECK(!dosvm_read(v, 0x20000 + 0xFA, pushed, sizeof(pushed)) && pushed[0] == 14 && pushed[1] == 0x3000);
+    f.tf.cs = 0x3000; f.tf.user_esp = 0x100;
+    f.tf.cs = 0xA000; f.tf.eip = 0; CHECK(dosvm_vga_fault(v, &f) == -EFAULT);    /* no fetch from VRAM */
+    f.tf.cs = 0x3000; f.es = 0x10000; CHECK(dosvm_vga_fault(v, &f) == -EFAULT);  /* invalid segment */
+    /* The trap path uses the CR2 captured before interrupts were enabled. */
+    CHECK(!dosvm_boot(v));
+    struct task *saved = g_current;
+    g_current = v->task; v->continuation = 0x12345678;
+    f = vf(0x2F42, 0, 0, 0); f.tf.cs = 0x3000; f.es = 0xB800; f.tf.edi = 4; f.tf.vector = 14; f.tf.err = 7;
+    f.tf.user_ss = 0x2000; f.tf.user_esp = 0x100;
+    unsigned faults = v->video_faults;
+    fake_cr2 = 0xB8004;
+    CHECK(dosvm_trap(&f.tf) && f.tf.eip == 3 && cvga_peek_vram(&v->vga, 0xB8004) == 'B' &&
+          v->info.state < DOSVM_STOPPING && v->video_faults == faults + 1);
+    sti();
+    fake_cr2 = 0x500000; f.tf.eip = 0;
+    if (!setjmp(guest_return)) { dosvm_trap(&f.tf); CHECK(false); }
+    sti();
+    CHECK(v->info.reason == DOSVM_FAULT && v->info.fault_vector == 14 && v->info.fault_address == 0x500000);
+    g_current = saved; v->continuation = 0; fake_cr2 = 0xDEAD000;
+    destroy(v, true); empty();
+    printf("DOS VM video: guarded aperture emulation, REP restart, unsupported forms and trap CR2 PASS\n");
+}
+
+/* ---- Presenter: cadence, damage, phases, custom scanout, writer errors ---- */
+static void test_video_presenter(void)
+{
+    struct dosvm *v = create();
+    struct ciuki_rect d;
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1000, &d) == 1 && !d.dst_y && d.height == 480 && d.width == 640);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1010, &d) == 0 && !d.height);   /* frame clock */
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1040, &d) == 0 && !d.height);   /* no change */
+    uint8_t ch = 'Z';
+    CHECK(!dosvm_write(v, 0xB8000 + 5 * 160 + 10, &ch, 1));
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1080, &d) == 1 && d.dst_y == 40 + 5 * 16 && d.height == 16);
+    /* Cursor phase change redraws only cursor scanlines of text row 0. */
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1250, &d) == 1 && d.dst_y >= 40 && d.dst_y + d.height <= 56 && d.height);
+    /* Blinking attribute: the text-blink phase redraws its row. */
+    uint8_t cell[2] = {'B', 0x87};
+    CHECK(!dosvm_write(v, 0xB8000 + 10 * 160, cell, 2));
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1300, &d) == 1 && d.dst_y == 40 + 10 * 16);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1510, &d) == 1 && d.dst_y <= 40 + 10 * 16 &&
+          d.dst_y + d.height >= 40 + 11 * 16);
+    /* Font (plane 2) change: every row. */
+    int10(v, 0x1112, 0, 0, 0);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1600, &d) == 1 && !d.dst_y && d.height == 480);
+    /* A writer error leaves the next frame whole. */
+    ch = 'Q'; CHECK(!dosvm_write(v, 0xB8000, &ch, 1));
+    row_fail_at = 40;
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1700, &d) == -EIO && !v->video_presented);
+    row_fail_at = UINT32_MAX;
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1701, &d) == 1 && d.height == 480);
+    /* Nine-dot text (720 pixels) is custom scanout: a black frame, then quiet. */
+    int10(v, 0x0003, 0, 0, 0);
+    cvga_write_port(&v->vga, 0x3C4, 1); cvga_write_port(&v->vga, 0x3C5, v->vga.seq[1] & ~1u);
+    cvga_geometry g;
+    CHECK(cvga_get_geometry(&v->vga, &g) && g.width > DOSVM_VIDEO_WIDTH);
+    memset(frame_buffer, 0xEE, sizeof(frame_buffer));
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1800, &d) == 1 && d.height == 480);
+    for (unsigned i = 0; i < sizeof(frame_buffer); i++) CHECK(!frame_buffer[i]);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1840, &d) == 0);
+    int10(v, 0x0003, 0, 0, 0);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 1880, &d) == 1 && d.height == 480);
+    destroy(v, true); empty();
+    printf("DOS VM video: presenter cadence, row damage, blink/cursor phases and custom scanout PASS\n");
+}
+
+/* ---- Golden VMVIDEO.COM stage digests (src/probes/dos/vm_video.asm) ----
+ * Each stage repeats the payload's INT 10h calls, port writes and VRAM
+ * stores in the same order. The digest is SHA-256 of the 640x480 XRGB frame
+ * (little-endian rows) at tick 0. Procedure on a deliberate change: run
+ * this harness, copy the printed digests here and into the f3-vm suite's
+ * vm-video cases; tests/host/test_dosvm.py checks that both agree. */
+static const char *const video_golden[5] = {
+    "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de",
+    "c4ac397792548fb0228a889fd7567275dd8148637fa48405fef5386851fdf12c",
+    "c019f0109e614d8ae01d35638587b23d92148b8d442dfd0deba73fe3a6df527c",
+    "a6d61fa11188a1e81da20dc5f018ee49c264fa0beb004587970b061058d3742a",
+    "81daa6ab021444158a8c45f09c72de3b13ee45d7ddf22c920a65ac496a4ec9c2",
+};
+static const struct { unsigned mode, width, height, scale, text; } video_geometry[5] = {
+    {0x03, 640, 400, 1, 1}, {0x03, 640, 400, 1, 1}, {0x13, 320, 200, 2, 0},
+    {0x13, 320, 240, 2, 0}, {0x12, 640, 480, 1, 0},
+};
+static void video_stage(struct dosvm *v, unsigned stage)
+{
+    static const uint16_t modex_crtc[] = {0x2C11, 0x0D06, 0x3E07, 0x4109, 0xEA10, 0xAC11, 0xDF12, 0xE715, 0x0616};
+    static const char banner[] = "CiukiOS virtual VGA 80x25";
+    uint8_t row[320];
+    switch (stage) {
+    case 1: {
+        int10(v, 0x0003, 0, 0, 0);
+        int10(v, 0x1003, 0, 0, 0);
+        int10(v, 0x0100, 0, 0x2000, 0);
+        for (unsigned i = 0; i < 2000; i++) {
+            uint16_t w = (uint16_t)((((i >> 3) & 0xFF) << 8) | (i & 0xFF));
+            CHECK(!dosvm_write(v, 0xB8000 + i * 2, &w, 2));
+        }
+        CHECK(!dosvm_write(v, 0x20000, banner, sizeof(banner) - 1));
+        struct v86_frame f = vf(0x1300, 0x001E, sizeof(banner) - 1, 0x1800); f.es = 0x2000; f.tf.ebp = 0;
+        CHECK(!dosvm_bios(v, &f, 0x10));
+        port_out(v, 0x3C8, 1, 0x41); port_out(v, 0x3C9, 1, 12); port_out(v, 0x3C9, 1, 34); port_out(v, 0x3C9, 1, 56);
+        port_out(v, 0x3C7, 1, 0x41);
+        CHECK(port_in(v, 0x3C9, 1) == 12 && port_in(v, 0x3C9, 1) == 34 && port_in(v, 0x3C9, 1) == 56);
+        break;
+    }
+    case 2:
+        int10(v, 0x1112, 0, 0, 0);
+        int10(v, 0x0100, 0, 0x2000, 0);
+        for (unsigned i = 0; i < 4000; i++) {
+            uint16_t w = (uint16_t)((((i >> 4) & 0xFF) << 8) | (i & 0xFF));
+            CHECK(!dosvm_write(v, 0xB8000 + i * 2, &w, 2));
+        }
+        break;
+    case 3:
+        int10(v, 0x0013, 0, 0, 0);
+        port_out(v, 0x3C8, 1, 0x40);
+        for (unsigned k = 0; k < 64; k++) {
+            port_out(v, 0x3C9, 1, k); port_out(v, 0x3C9, 1, 63 - k); port_out(v, 0x3C9, 1, (k * 2) & 63);
+        }
+        for (unsigned y = 0; y < 200; y++) {
+            for (unsigned x = 0; x < 320; x++) row[x] = (uint8_t)(x + y);
+            CHECK(!dosvm_write(v, 0xA0000 + y * 320, row, 320));
+        }
+        break;
+    case 4: {
+        int10(v, 0x0013, 0, 0, 0);
+        port_out(v, 0x3C4, 2, 0x0604); port_out(v, 0x3C4, 2, 0x0F02);
+        static uint8_t zero[65536];
+        CHECK(!dosvm_write(v, 0xA0000, zero, sizeof(zero)));
+        port_out(v, 0x3D4, 2, 0x0014); port_out(v, 0x3D4, 2, 0xE317);
+        port_out(v, 0x3C2, 1, 0xE3);
+        for (unsigned i = 0; i < ARRAY_SIZE(modex_crtc); i++) port_out(v, 0x3D4, 2, modex_crtc[i]);
+        for (unsigned p = 0; p < 4; p++) {
+            port_out(v, 0x3C4, 2, (uint32_t)((1u << p) << 8 | 2));
+            for (unsigned y = 0; y < 240; y++) {
+                for (unsigned k = 0; k < 80; k++) row[k] = (uint8_t)(p + y + 4 * k);
+                CHECK(!dosvm_write(v, 0xA0000 + y * 80, row, 80));
+            }
+        }
+        break;
+    }
+    case 5:
+        int10(v, 0x0012, 0, 0, 0);
+        for (unsigned p = 0; p < 4; p++) {
+            port_out(v, 0x3C4, 2, (uint32_t)((1u << p) << 8 | 2));
+            for (unsigned y = 0; y < 480; y++) {
+                for (unsigned bx = 0; bx < 80; bx++) row[bx] = ((((bx + (y >> 3)) & 15) >> p) & 1) ? 0xFF : 0;
+                CHECK(!dosvm_write(v, 0xA0000 + y * 80, row, 80));
+            }
+        }
+        break;
+    default: CHECK(false);
+    }
+}
+/* DOSVM_VIDEO_DUMP=<directory> writes each stage frame as a P6 PPM for review. */
+static void dump_frame(unsigned stage)
+{
+    const char *directory = getenv("DOSVM_VIDEO_DUMP");
+    if (!directory) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/vmvideo-stage%u.ppm", directory, stage);
+    FILE *out = fopen(path, "wb");
+    CHECK(out);
+    fprintf(out, "P6\n%u %u\n255\n", DOSVM_VIDEO_WIDTH, DOSVM_VIDEO_HEIGHT);
+    for (unsigned i = 0; i < sizeof(frame_buffer); i += 4) {
+        uint8_t rgb[3] = {frame_buffer[i + 2], frame_buffer[i + 1], frame_buffer[i]};
+        CHECK(fwrite(rgb, 1, 3, out) == 3);
+    }
+    CHECK(!fclose(out));
+}
+static void test_video_goldens(void)
+{
+    struct dosvm *v = create();
+    bool matched = true;
+    for (unsigned stage = 1; stage <= 5; stage++) {
+        video_stage(v, stage);
+        struct dosvm_frame fr;
+        CHECK(!dosvm_frame_digest(v, 0, &fr));
+        char hex[65];
+        sha256_hex(fr.digest, hex);
+        printf("VIDEO golden stage=%u mode=%u width=%u height=%u scale=%u digest=%s\n",
+               stage, fr.mode, fr.width, fr.height, fr.scale, hex);
+        CHECK(fr.mode == video_geometry[stage - 1].mode && fr.width == video_geometry[stage - 1].width &&
+              fr.height == video_geometry[stage - 1].height && fr.scale == video_geometry[stage - 1].scale &&
+              fr.text == video_geometry[stage - 1].text);
+        if (strcmp(hex, video_golden[stage - 1])) matched = false;
+        compare_with_reference(v, DOSVM_CURSOR_TICKS + DOSVM_BLINK_TICKS);
+        compare_with_reference(v, 0);
+        dump_frame(stage);
+    }
+    CHECK(matched);
+    destroy(v, true); empty();
+    printf("DOS VM video: five golden VMVIDEO stage digests and retained-presenter equivalence PASS\n");
+}
+
+/* ---- Native window boundary: syscall 70 ---- */
+#define RECORD 64u
+static int dosvm_call(unsigned op, struct ciuki_dosvm_command *c, uint32_t size)
+{
+    memcpy(user_mem + RECORD, c, sizeof(*c));
+    struct trap_frame tf;
+    memset(&tf, 0, sizeof(tf));
+    tf.ebx = op; tf.ecx = RECORD; tf.edx = size;
+    int e = dosvm_client_syscall(&tf);
+    memcpy(c, user_mem + RECORD, sizeof(*c));
+    CHECK(!pins);
+    return e;
+}
+static struct ciuki_dosvm_command command_for(uint32_t id, uint32_t generation)
+{
+    struct ciuki_dosvm_command c;
+    memset(&c, 0, sizeof(c));
+    c.version = CIUKI_DOSVM_VERSION; c.size = sizeof(c); c.id = id; c.generation = generation;
+    return c;
+}
+static int create_window(int32_t fd, const char *name, struct ciuki_dosvm_command *out)
+{
+    struct ciuki_dosvm_command c = command_for(0, 0);
+    c.surface_fd = fd;
+    memcpy(c.name, name, strlen(name));
+    int e = dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c));
+    if (out) *out = c;
+    return e;
+}
+static int key_event(struct ciuki_dosvm_command *c, int code, int value)
+{
+    struct ciuki_dosvm_command k = command_for(c->id, c->generation);
+    k.event.type = CIUKI_INPUT_KEY; k.event.code = code; k.event.value = value;
+    return dosvm_call(CIUKI_DOSVM_INPUT, &k, sizeof(k));
+}
+static uint16_t take_key(struct dosvm *v)
+{
+    CHECK(v->key_count);
+    uint16_t word = v->keyboard[v->key_head];
+    v->key_head = (v->key_head + 1) % ARRAY_SIZE(v->keyboard); v->key_count--;
+    return word;
+}
+static uint16_t press(struct dosvm *v, struct ciuki_dosvm_command *c, int code)
+{
+    CHECK(!key_event(c, code, 1) && !key_event(c, code, 0));
+    return v->key_count ? take_key(v) : 0;
+}
+static void test_client_boundary(void)
+{
+    static uint8_t pixels[3][DOSVM_VIDEO_WIDTH * DOSVM_VIDEO_HEIGHT * 4];
+    memset(fake_proc, 0, sizeof(fake_proc));
+    for (unsigned i = 0; i < 3; i++) { fake_proc[i].pid = 10 + i; fake_proc[i].state = PROC_LIVE; }
+    fake_proc[0].dosvm_capability = fake_proc[1].dosvm_capability = true;
+    for (unsigned i = 0; i < 3; i++) {
+        uint32_t w = i == 1 ? 320 : 640, h = i == 1 ? 200 : 480;
+        fake_surface[i] = (struct surface){{sizeof(struct ciuki_surface_info), w, h, w * 4, CIUKI_SURFACE_XRGB8888,
+                                            (w * h * 4 + 4095) & ~4095u}, pixels[i], 1};
+    }
+    fake_desc[0] = (struct desktop_description){.kind = DESKTOP_SURFACE, .maximum = PROT_READ | PROT_WRITE, .u.surface = &fake_surface[0]};
+    fake_desc[1] = (struct desktop_description){.kind = DESKTOP_SURFACE, .maximum = PROT_READ, .u.surface = &fake_surface[0]};
+    fake_desc[2] = (struct desktop_description){.kind = DESKTOP_SURFACE, .maximum = PROT_READ | PROT_WRITE, .u.surface = &fake_surface[1]};
+    fake_desc[3] = (struct desktop_description){.kind = DESKTOP_SURFACE, .maximum = PROT_READ | PROT_WRITE, .u.surface = &fake_surface[2]};
+    desc_owner[0] = desc_owner[1] = desc_owner[2] = &fake_proc[0]; desc_owner[3] = &fake_proc[1];
+    struct ciuki_dosvm_command c, w;
+    /* Authority and record validation, each before any reservation. */
+    fake_current = &fake_proc[2];
+    CHECK(create_window(0, "CiukiDOS", 0) == -EPERM);
+    fake_current = 0;
+    CHECK(create_window(0, "CiukiDOS", 0) == -EPERM);
+    fake_current = &fake_proc[0];
+    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(7, &c, sizeof(c)) == -EINVAL);
+    c = command_for(0, 0); c.surface_fd = 0; c.name[0] = 'X';
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c) - 1) == -EINVAL);
+    c.version = 2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EOPNOTSUPP);
+    c.version = CIUKI_DOSVM_VERSION; c.size = 100; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
+    c.size = sizeof(c); user_fault = true; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EFAULT); user_fault = false;
+    c.state = 1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL); c.state = 0;
+    c.id = 1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL); c.id = 0;
+    c.name[0] = 0; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
+    c.name[0] = '\n'; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
+    memset(c.name, 'N', sizeof(c.name)); CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
+    memset(c.name, 0, sizeof(c.name)); c.name[0] = 'A'; c.name[2] = 'B'; /* bytes after the NUL */
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
+    CHECK(create_window(9, "CiukiDOS", 0) == -EBADF && create_window(1, "CiukiDOS", 0) == -EACCES &&
+          create_window(2, "CiukiDOS", 0) == -EINVAL && create_window(3, "CiukiDOS", 0) == -EBADF);
+    { struct dosvm_ledger l; dosvm_snapshot(&l); CHECK(!l.vms && fake_surface[0].references == 1); }
+    /* Creation, one VM per owner, status and presentation. */
+    CHECK(!create_window(0, "CiukiDOS", &w) && w.id && w.generation && w.state == CIUKI_DOSVM_BOOTING &&
+          w.video_mode == 3 && fake_surface[0].references == 2);
+    struct dosvm *v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+    CHECK(v && v->owner_pid == 10 && !strcmp(v->name, "CiukiDOS") && v->info.state == DOSVM_BOOTING);
+    CHECK(create_window(0, "Second", 0) == -EBUSY);
+    c = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_STATUS, &c, sizeof(c)) && c.state == CIUKI_DOSVM_BOOTING && !c.reason && !c.focused);
+    c = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT, &c, sizeof(c)) && c.changed == 1 && !c.damage.dst_y &&
+          c.damage.height == 480 && c.damage.width == 640 && c.video_mode == 3);
+    c = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT, &c, sizeof(c)) && !c.changed);
+    c = command_for(w.id, w.generation + 1); CHECK(dosvm_call(CIUKI_DOSVM_STATUS, &c, sizeof(c)) == -ESRCH);
+    c = command_for(DOSVM_LIMIT + 1, w.generation); CHECK(dosvm_call(CIUKI_DOSVM_STATUS, &c, sizeof(c)) == -ESRCH);
+    fake_current = &fake_proc[1];
+    c = command_for(w.id, w.generation); CHECK(dosvm_call(CIUKI_DOSVM_PRESENT, &c, sizeof(c)) == -ESRCH);
+    fake_current = &fake_proc[0];
+    /* Focus and the window keyboard adapter. */
+    CHECK(key_event(&w, 0x1E, 1) == -EACCES && !v->key_count);
+    c = command_for(w.id, w.generation); c.focused = 2; CHECK(dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) == -EINVAL);
+    c = command_for(w.id, w.generation); c.focused = 1; CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)));
+    CHECK(press(v, &w, 0x1E) == 0x1E61 && press(v, &w, 0x1C) == 0x1C0D && press(v, &w, 0x2B) == 0x2B5C &&
+          press(v, &w, 0x148) == 0x4800 && press(v, &w, 0x3B) == 0x3B00 && press(v, &w, 0x0E) == 0x0E08 &&
+          press(v, &w, 0x01) == 0x011B && press(v, &w, 0x153) == 0x5300 && press(v, &w, 0x11C) == 0x1C0D);
+    CHECK(!key_event(&w, 0x2A, 1));
+    CHECK(press(v, &w, 0x1E) == 0x1E41 && press(v, &w, 0x27) == 0x273A && press(v, &w, 0x03) == 0x0340 &&
+          press(v, &w, 0x0F) == 0x0F00 && press(v, &w, 0x3C) == 0x5500);
+    CHECK(!key_event(&w, 0x2A, 0) && press(v, &w, 0x3A) == 0);
+    CHECK(press(v, &w, 0x1E) == 0x1E41 && press(v, &w, 0x02) == 0x0231);
+    CHECK(press(v, &w, 0x3A) == 0 && !key_event(&w, 0x1D, 1));
+    CHECK(press(v, &w, 0x2E) == 0x2E03 && press(v, &w, 0x14B) == 0x7300);
+    CHECK(!key_event(&w, 0x1D, 0) && !key_event(&w, 0x38, 1));
+    CHECK(press(v, &w, 0x1E) == 0x1E00 && press(v, &w, 0x02) == 0x7800 && press(v, &w, 0x58) == 0x8C00);
+    CHECK(!key_event(&w, 0x38, 0));
+    CHECK(!key_event(&w, 0x1E, 2) && take_key(v) == 0x1E61);       /* typematic repeat */
+    c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_TEXT; c.event.code = 'a';
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && !v->key_count);
+    c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_MOTION; c.event.value = 5; c.event.value2 = 7;
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && !v->key_count);
+    CHECK(key_event(&w, 0x201, 1) == -EINVAL && key_event(&w, 0x1E, 3) == -EINVAL);
+    c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_BUTTON; c.event.code = 4; c.event.value = 1;
+    CHECK(dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) == -EINVAL);
+    c = command_for(w.id, w.generation); c.event.type = 9; CHECK(dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) == -EINVAL);
+    unsigned queued = 0;
+    while (!key_event(&w, 0x1E, 1)) queued++;
+    CHECK(queued == ARRAY_SIZE(v->keyboard) && key_event(&w, 0x1E, 1) == -EAGAIN);
+    v->key_count = 0;
+    /* Focus loss releases held modifiers; RESYNC likewise. */
+    CHECK(!key_event(&w, 0x2A, 1));
+    c = command_for(w.id, w.generation); CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)));
+    CHECK(key_event(&w, 0x1E, 1) == -EACCES);
+    c = command_for(w.id, w.generation); c.focused = 1; CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)));
+    CHECK(press(v, &w, 0x1E) == 0x1E61 && !key_event(&w, 0x36, 1));
+    c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_RESYNC;
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && press(v, &w, 0x1E) == 0x1E61);
+    /* Status reports a guest-requested stop; close does not force a stopped VM. */
+    uint32_t zero = 0;
+    CHECK(!v86_io(&v->monitor, DOSVM_CONTROL_PORT, 1, true, &zero) && v->info.state == DOSVM_STOPPING);
+    c = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_STATUS, &c, sizeof(c)) && c.state == CIUKI_DOSVM_STOPPED && c.reason == DOSVM_EXIT);
+    c = command_for(w.id, w.generation); CHECK(dosvm_call(CIUKI_DOSVM_PRESENT, &c, sizeof(c)) == -ESRCH);
+    c = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD && !v->info.data_loss &&
+          fake_surface[0].references == 1);
+    c = command_for(w.id, w.generation); CHECK(dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) == -ESRCH);
+    empty();
+    /* Two owners hold two VMs; the owner's death collects its VM only. */
+    CHECK(!create_window(0, "First", &w));
+    fake_current = &fake_proc[1];
+    struct ciuki_dosvm_command other;
+    CHECK(!create_window(3, "Other", &other) && other.id != w.id && fake_surface[2].references == 2);
+    fake_proc[0].state = PROC_STOPPING;
+    bindings[w.id - 1].busy = true;
+    dosvm_client_poll();
+    CHECK(dosvm_valid((struct dosvm_key){w.id, w.generation}));          /* busy: next pass */
+    bindings[w.id - 1].busy = false;
+    dosvm_client_poll();
+    CHECK(!dosvm_valid((struct dosvm_key){w.id, w.generation}) && fake_surface[0].references == 1 && !bindings[w.id - 1].pid);
+    CHECK(dosvm_valid((struct dosvm_key){other.id, other.generation}));
+    fake_proc[0].state = PROC_LIVE;
+    fake_proc[1].pid = 0;                                                 /* reaped */
+    dosvm_client_poll();
+    CHECK(!dosvm_valid((struct dosvm_key){other.id, other.generation}) && fake_surface[2].references == 1);
+    fake_proc[1].pid = 11;
+    empty();
+    /* Owner stopping during creation, allocation and storage failures. */
+    fake_current = &fake_proc[0];
+    fake_proc[0].state = PROC_STOPPING;
+    CHECK(create_window(0, "Late", 0) == -EINTR && fake_surface[0].references == 1);
+    fake_proc[0].state = PROC_LIVE;
+    empty();
+    allocation_calls = 0; fail_at = 1;
+    CHECK(create_window(0, "NoMemory", 0) == -ENOMEM && fake_surface[0].references == 1);
+    fail_at = 0; empty();
+    io_calls = 0; io_fail_at = 1;
+    CHECK(create_window(0, "NoDisk", 0) == -EIO && fake_surface[0].references == 1);
+    io_fail_at = 0; empty();
+    bad_signature = true;
+    CHECK(create_window(0, "NoBoot", 0) == -EIO && fake_surface[0].references == 1);
+    bad_signature = false; empty();
+    /* A live VM closed by its window is forced, and reports possible loss. */
+    CHECK(!create_window(0, "Forced", &w));
+    v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+    uint8_t sector[512] = {1};
+    CHECK(!dosvm_disk_write(v, 9, sector));
+    c = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD && v->info.data_loss &&
+          v->info.reason == DOSVM_TERMINATE && fake_surface[0].references == 1);
+    empty();
+    fake_current = 0;
+    printf("DOS VM window boundary: authority, record validation, focus/keyboard adapter, owner death and failures PASS\n");
+}
+
+static void test_video(void)
+{
+    test_video_bios_ports();
+    test_video_faults();
+    test_video_presenter();
+    test_video_goldens();
+    test_client_boundary();
+}

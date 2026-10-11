@@ -119,7 +119,7 @@ def build():
          "portrait": portrait_record(c), "integer_compositor_audit": "PASS",
          "build_seconds": round(time.monotonic()-start, 3), "guest_qualification": "not_run"}
     (OUT / "manifest.json").write_text(json.dumps(m, indent=2, sort_keys=True)+"\n")
-    print(f"[desktop] built/inspected desktop and demo in {m['build_seconds']} seconds; guest not_run")
+    print(f"[desktop] built/inspected desktop, demo and dosbox in {m['build_seconds']} seconds; guest not_run")
 
 
 def audit_integer(obj, sdk):

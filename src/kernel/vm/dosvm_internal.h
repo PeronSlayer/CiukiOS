@@ -3,7 +3,6 @@
 #ifndef CIUKI_DOSVM_INTERNAL_H
 #define CIUKI_DOSVM_INTERNAL_H
 #include <ciuki/dosvm.h>
-#include <ciuki/abi.h>
 #include <ciuki/task.h>
 #include <ciuki/storage.h>
 #include <ciuki/sync.h>
@@ -12,6 +11,14 @@
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
 #define DOSVM_PORTS 16u
+/* f3-02 presenter: fixed 640x480 XRGB window surface, integer scale only.
+ * One frame per 33 host ticks; the last three ticks are vertical retrace. */
+#define DOSVM_VIDEO_WIDTH 640u
+#define DOSVM_VIDEO_HEIGHT 480u
+#define DOSVM_FRAME_TICKS 33u
+#define DOSVM_RETRACE_TICKS 3u
+#define DOSVM_CURSOR_TICKS 250u
+#define DOSVM_BLINK_TICKS 500u
 #include "dosvm_memory.h"
 struct dosvm {
     struct dosvm_info info;
@@ -42,15 +49,19 @@ struct dosvm {
     uint8_t sector[512];
     uint16_t text[80 * 25], keyboard[32];
     unsigned cursor, key_head, key_count;
+    /* f3-02 virtual VGA and window presenter (dosvm_vga.c, dosvm_client.c). */
     cvga_state vga;
     cvbios video_bios;
     cvx_bus video_bus;
-    bool video_bus_fault, video_presented, focused;
+    bool video_bus_fault, video_presented;
+    uint8_t video_hsync;
     uint64_t video_tick;
     uint32_t video_display, video_phase, owner_pid;
+    uint32_t video_faults, video_frames;
     cvga_geometry video_geometry;
-    uint8_t video_row[640];
-    uint32_t video_pixels[640];
+    uint8_t video_taken[4][CVGA_DIRTY_BYTES];
+    uint8_t video_row[DOSVM_VIDEO_WIDTH];
+    uint32_t video_pixels[DOSVM_VIDEO_WIDTH];
     char name[32];
     char line[81];
     unsigned line_length;
@@ -65,8 +76,13 @@ struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
+/* Writes changed rows of the 640x480 frame through row(arg, y, pixels, bytes).
+ * Returns 1 with *damage set when rows changed, 0 when nothing changed or the
+ * frame period has not elapsed, or the negative row-writer error. */
+struct ciuki_rect;
 int dosvm_vga_present(struct dosvm *, int (*row)(void *, unsigned, const void *, unsigned),
-                      void *, uint64_t, struct ciuki_rect *);
+                      void *, uint64_t tick, struct ciuki_rect *damage);
+uint8_t dosvm_vga_status(struct dosvm *, uint64_t tick);
 int dosvm_disk_open(struct dosvm *);
 int dosvm_disk_close(struct dosvm *, bool forced);
 int dosvm_bios_init(struct dosvm *);

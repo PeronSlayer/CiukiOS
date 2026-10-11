@@ -110,6 +110,25 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     return (int)p->pid;
 }
 
+/* f3-02: the DOS window authority (syscall 70) follows only an exact
+ * "/bin/dosbox" spawned by the supervisor or by a process that owns both a
+ * display and an input grant (the desktop). Grants never leave their owner
+ * process, so no other launcher can confer it. */
+void supervisor_dosvm_delegate(struct process *parent, struct process *child, const char *path)
+{
+    if (strncmp(path, "/bin/dosbox", sizeof("/bin/dosbox"))) return;
+    bool display = false, input = false;
+    if (parent != proc_supervisor()) {
+        for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
+            struct desktop_description *d = desktop_fd(parent, i);
+            if (!d || d->owner != parent->pid) continue;
+            display |= d->kind == DESKTOP_DISPLAY;
+            input |= d->kind == DESKTOP_INPUT;
+        }
+    }
+    child->dosvm_capability = parent == proc_supervisor() || (display && input);
+}
+
 int supervisor_spawn_gate(bool supplement, struct process **out)
 {
     const char *basic[] = { "lua", "-e", "_U=true", "all.lua", 0 };
@@ -235,17 +254,3 @@ void supervisor_observe_end(void)
     observed_pid = 0;
 }
 
-void supervisor_dosvm_delegate(struct process *parent, struct process *child, const char *path)
-{
-    if (strncmp(path, "/bin/dosbox", sizeof("/bin/dosbox"))) return;
-    bool display = false, input = false;
-    if (parent != proc_supervisor()) {
-        for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
-            struct desktop_description *d = desktop_fd(parent, i);
-            if (!d || d->owner != parent->pid) continue;
-            display |= d->kind == DESKTOP_DISPLAY;
-            input |= d->kind == DESKTOP_INPUT;
-        }
-    }
-    child->dosvm_capability = parent == proc_supervisor() || (display && input);
-}

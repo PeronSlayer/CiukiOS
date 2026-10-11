@@ -351,6 +351,12 @@ int dosvm_record_byte(struct dosvm *v, uint8_t byte)
         } else if (v->line_length >= 13 && !memcmp(v->line,"VMMEMORY FAIL",13)) {
             v->info.memory_done=true; v->info.memory_pass=false;
         }
+        /* f3-02 VMVIDEO.COM stage latch: "VMVIDEO s f", s 1-6, f hex flags. */
+        if (v->line_length == 11 && !memcmp(v->line, "VMVIDEO ", 8) && v->line[9] == ' ' &&
+            v->line[8] >= '1' && v->line[8] <= '6' && hex_digit(v->line[10]) >= 0) {
+            v->info.video_flags = (uint32_t)hex_digit(v->line[10]);
+            v->info.video_stage = (uint32_t)(v->line[8] - '0');
+        }
         unsigned parts = (v->line_length + 47) / 48;
         for (unsigned part = 0; part < parts; part++) {
             char encoded[97];

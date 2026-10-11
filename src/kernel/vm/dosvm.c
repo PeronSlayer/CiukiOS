@@ -78,9 +78,10 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
         if (linear >= 0xA0000 && linear < 0xC0000) {
+            /* Kernel reads peek (no latch load); guest cycles use the VGA bus. */
             for (unsigned i = 0; i < n; i++) {
                 if (write) cvga_write_vram(&v->vga, linear + i, b[i]);
-                else b[i] = cvga_read_vram(&v->vga, linear + i);
+                else b[i] = cvga_peek_vram(&v->vga, linear + i);
             }
             b += n; linear += n; bytes -= n; continue;
         }
@@ -198,7 +199,7 @@ bool dosvm_trap(struct trap_frame *tf)
     if (v->info.state != DOSVM_STOPPING) {
         if (tf->vector == 13) e = v86_emulate(&v->monitor, f);
         else if (tf->vector == 1 && v->monitor.shadow) e = v86_debug_step(&v->monitor, f);
-        else if (tf->vector == 14 && read_cr2() >= 0xA0000 && read_cr2() < 0xC0000)
+        else if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000)
             e = dosvm_vga_fault(v, f);
         else if (tf->vector == 7) fpu_handle_nm();
         else if (tf->vector == 3 || tf->vector == 4) e = v86_reflect(&v->monitor, f, tf->vector);
