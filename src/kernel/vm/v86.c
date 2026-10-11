@@ -287,31 +287,63 @@ int v86_irq_deliver(struct v86 *v, struct v86_frame *f)
 /* DOS uses TF to observe instruction boundaries. MOV SS/POP SS suppress #DB
  * until their successor; arm the software shadow before that pair executes.
  * A fault/trap in the successor therefore sees the shadow too. */
+/* Length of the MOV SS/POP SS instruction at cs:ip, prefixes included, or 0
+ * when that instruction is neither (16-bit and 67h-prefixed 32-bit ModRM). */
+static unsigned stack_switch_len(struct v86 *v, uint16_t cs, uint32_t ip)
+{
+    bool addr32 = false;
+    for (unsigned n = 0; n < 15; n++) {
+        uint8_t *p = segmem(v, cs, ip + n, 1, false);
+        if (!p) return 0;
+        uint8_t op = *p;
+        if (op == 0x67) { addr32 = true; continue; }
+        if (op == 0x66 || op == 0x26 || op == 0x2E || op == 0x36 ||
+            op == 0x3E || op == 0x64 || op == 0x65 || op == 0xF2 || op == 0xF3) continue;
+        if (op == 0x17) return n + 1;
+        if (op != 0x8E) return 0;
+        p = segmem(v, cs, ip + n + 1, 1, false);
+        if (!p || (*p & 0x38) != 0x10) return 0;
+        unsigned mod = *p >> 6, rm = *p & 7, extra = 0;
+        if (mod != 3) {
+            if (!addr32) extra = mod == 1 ? 1 : mod == 2 || rm == 6 ? 2 : 0;
+            else {
+                extra = mod == 1 ? 1 : mod == 2 ? 4 : rm == 5 ? 4 : 0;
+                if (rm == 4) {
+                    uint8_t *sib = segmem(v, cs, ip + n + 2, 1, false);
+                    if (!sib) return 0;
+                    extra += 1 + (mod == 0 && (*sib & 7) == 5 ? 4 : 0);
+                }
+            }
+        }
+        return n + 2 + extra;
+    }
+    return 0;
+}
+static void shadow_arm(struct v86 *v, uint16_t cs, uint32_t ip)
+{
+    v->shadow = true; v->shadow_cs = cs; v->shadow_ip = (uint16_t)ip;
+    unsigned len = stack_switch_len(v, cs, ip);
+    v->shadow_next = (uint16_t)(len ? ip + len : ip);
+}
 void v86_prepare_return(struct v86 *v, struct v86_frame *f)
 {
     if (!v->track_boundaries) return;
     f->tf.eflags |= V86_TF;
     if (v->shadow) return;
-    for (unsigned n = 0; n < 15; n++) {
-        uint8_t *p = segmem(v, f->tf.cs, f->tf.eip + n, 1, false);
-        if (!p) return;
-        uint8_t op = *p;
-        if (op == 0x66 || op == 0x67 || op == 0x26 || op == 0x2E || op == 0x36 ||
-            op == 0x3E || op == 0x64 || op == 0x65 || op == 0xF2 || op == 0xF3) continue;
-        bool ss = op == 0x17;
-        if (op == 0x8E) {
-            p = segmem(v, f->tf.cs, f->tf.eip + n + 1, 1, false);
-            ss = p && (*p & 0x38) == 0x10;
-        }
-        if (ss) {
-            v->shadow = true; v->shadow_cs = f->tf.cs; v->shadow_ip = f->tf.eip;
-        }
-        return;
-    }
+    if (stack_switch_len(v, f->tf.cs, f->tf.eip)) shadow_arm(v, f->tf.cs, f->tf.eip);
 }
 int v86_debug_step(struct v86 *v, struct v86_frame *f)
 {
     if (!v->shadow && !v->track_boundaries) return v86_abort(v, f, -EFAULT);
+    /* QEMU TCG (11.1.1) raises the single-step trap right after MOV SS/POP SS
+     * instead of after its successor (observed in f3-01's shadow case on
+     * 2026-10-11): keep the shadow across that one boundary; the successor's
+     * own boundary or trap clears it. Real CPUs never reach this branch. */
+    if (v->shadow && v->track_boundaries && f->tf.cs == v->shadow_cs &&
+        f->tf.eip == v->shadow_next && v->shadow_next != v->shadow_ip) {
+        v->shadow_next = v->shadow_ip;
+        return 0;
+    }
     if (!v->track_boundaries || f->tf.cs != v->shadow_cs || f->tf.eip != v->shadow_ip) v->shadow = false;
     if (!v->track_boundaries) f->tf.eflags &= ~V86_TF;
     return 0;
@@ -433,7 +465,7 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
             f->tf.eflags |= V86_TF; /* retire the next instruction before injecting */
         else
             f->tf.eflags &= ~V86_TF;
-        if (v->shadow) { v->shadow_cs = f->tf.cs; v->shadow_ip = next; }
+        if (v->shadow) shadow_arm(v, f->tf.cs, next);
         v->stats.insn[V86_STI]++;
         f->tf.eip = next;
         return 0;

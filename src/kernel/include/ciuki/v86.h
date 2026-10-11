@@ -61,7 +61,7 @@ struct v86 {
     uint64_t deadline, ticks;
     bool vif, shadow;
     bool track_boundaries; /* DOS: software MOV-SS tracking, firmware unchanged */
-    uint16_t shadow_cs, shadow_ip;
+    uint16_t shadow_cs, shadow_ip, shadow_next; /* shadow_next: successor of a MOV SS/POP SS shadow instruction */
     uint16_t sentinel_cs, sentinel_ip, sentinel_ss, sentinel_sp;
     uint16_t pit_latch[3];
     uint8_t pit_phase[3], pit_latched[3], rtc_index, rtc[128];

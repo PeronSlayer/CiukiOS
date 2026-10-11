@@ -144,8 +144,19 @@ static void test_device_mouse_shadow(void)
     f.tf.edx=0x300; f.tf.ecx=2; f.tf.esi=0; CHECK(!dosvm_write(v,0x3000,"AB",2)); f.ds=0x300;
     CHECK(!v86_emulate(&v->monitor,&f) && v->monitor.shadow && f.tf.eip==2);
     CHECK(!v86_emulate(&v->monitor,&f) && !v->monitor.shadow && f.tf.eip==4);
-    v86_prepare_return(&v->monitor,&f); CHECK(v->monitor.shadow && (f.tf.eflags&V86_TF)); /* MOV SS */
+    v86_prepare_return(&v->monitor,&f); CHECK(v->monitor.shadow && (f.tf.eflags&V86_TF) && v->monitor.shadow_next==6); /* MOV SS */
+    /* TCG raises #DB right after MOV SS: the successor keeps the shadow once. */
+    f.tf.eip=6; CHECK(!v86_debug_step(&v->monitor,&f) && v->monitor.shadow && v->monitor.shadow_next==4);
+    f.tf.eip=6; CHECK(!v86_debug_step(&v->monitor,&f) && !v->monitor.shadow);
+    v->monitor.shadow=false; f.tf.eip=4; v86_prepare_return(&v->monitor,&f); CHECK(v->monitor.shadow);
     f.tf.eip=6; f.tf.eax=0xFF; CHECK(!v86_emulate(&v->monitor,&f) && !v->monitor.shadow && f.tf.eip==8);
+    /* STI whose successor is MOV SS: the shadow extends over the successor's successor. */
+    v->monitor.vif=false; f.tf.eip=1; CHECK(!v86_emulate(&v->monitor,&f) && v->monitor.shadow && f.tf.eip==2 && v->monitor.shadow_next==2);
+    v->monitor.shadow=false; v->monitor.vif=false; const uint8_t sti_ss[]={0xFB,0x8E,0xD0,0xE6,0x21};
+    CHECK(!dosvm_write(v,0x2100,sti_ss,sizeof(sti_ss))); f.tf.cs=0x210; f.tf.eip=0;
+    CHECK(!v86_emulate(&v->monitor,&f) && v->monitor.shadow && f.tf.eip==1 && v->monitor.shadow_next==3);
+    f.tf.eip=3; CHECK(!v86_debug_step(&v->monitor,&f) && v->monitor.shadow);
+    f.tf.eax=0xFF; CHECK(!v86_emulate(&v->monitor,&f) && !v->monitor.shadow && f.tf.eip==5);
     destroy(v,true); empty();
 }
 static void test_devices(void)
