@@ -25,6 +25,7 @@ ALLOWED = {
     'probes/f3_probes_video.c', # f3-02 virtual VGA stage digests
     'probes/f3_probes_audio_state.c', # f3-05 SB16/OPL3/8237 controller (f3:vm-audio-state)
     'probes/f3_probes_dpmi.c', # f3-04 DPMI host row (f3:dpmi)
+    'probes/f3_probes_workloads.c', # f3-06 workloads (f3:dos4gw, doom, doom-sound, wolf3d, vm-starve)
     'vm/dosvm.c',         # f3-00 admission/lifecycle reports, guarded by active probe scope
     'vm/dosvm_bios.c',    # f3-00 bounded, escaped DOS record channel
     'drivers/ata_probe.c',

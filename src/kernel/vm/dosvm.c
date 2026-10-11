@@ -148,7 +148,7 @@ bool dosvm_client(const struct task *t)
 }
 bool dosvm_dpmi_info(struct dosvm_key key, struct dpmi_info *out)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!out || !v || !v->info.key.generation || v->info.state == DOSVM_DEAD) return false;
     dpmi_info_fill(v, out);
     return true;
@@ -405,6 +405,9 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     if (e && v->info.dirty) v->info.data_loss = true;
     dosvm_audio_close(v);
     if (v->as.pd_phys) {
+        /* f3-06: window PTEs may name the model's plane pages (kernel memory);
+         * restore the VM's own frames before the address space frees them. */
+        dosvm_vga_sync(v, true);
         dpmi_close(v);
         dosvm_memory_close(v);
         as_destroy(&v->as);
@@ -487,7 +490,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     e = dosvm_vga_init(v);
     if (e) goto fail;
     if ((e = dpmi_rom_init(v))) goto fail;
-    e = dosvm_disk_open(v);
+    e = dosvm_disk_open(v, config ? config->base : 0);
     if (e) goto fail;
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
     if (!v->task) { e = -ENOMEM; goto fail; }

@@ -61,7 +61,7 @@ struct dosvm {
     uint16_t text[80 * 25], keyboard[32];
     unsigned cursor, key_head, key_count;
     /* f3-02 virtual VGA and window presenter (dosvm_vga.c, dosvm_client.c). */
-    cvga_state vga;
+    cvga_state vga __attribute__((aligned(4096))); /* planes page-aligned: f3-06 direct window */
     cvbios video_bios;
     cvx_bus video_bus;
     bool video_bus_fault, video_presented;
@@ -69,6 +69,11 @@ struct dosvm {
     uint64_t video_tick;
     uint32_t video_display, video_phase, owner_pid;
     uint32_t video_faults, video_frames;
+    /* f3-06: direct plane window (0 none, else plane + 1) and counters. While
+     * open, the window pages A0000h-AFFFFh map that model plane user-
+     * writable; dosvm_destroy restores the VM's frames (dosvm_vga.c). */
+    unsigned video_direct;
+    uint32_t video_pm_faults, video_starts, video_maps, video_flushes;
     cvga_geometry video_geometry;
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
     uint8_t video_row[DOSVM_VIDEO_WIDTH];
@@ -89,6 +94,13 @@ struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
+/* f3-06: a ring-3 DPMI client's access to the supervisor-only window. */
+int dosvm_vga_fault_pm(struct dosvm *, struct v86_frame *);
+/* f3-06: open, move or close the direct plane window for the current VGA
+ * state; sync harvests stored pages for the presenter (and closes the
+ * window, restoring the VM's own frames, if unmap). */
+void dosvm_vga_direct(struct dosvm *);
+void dosvm_vga_sync(struct dosvm *, bool unmap);
 /* Writes changed rows of the 640x480 frame through row(arg, y, pixels, bytes).
  * Returns 1 with *damage set when rows changed, 0 when nothing changed or the
  * frame period has not elapsed, or the negative row-writer error. */
@@ -96,7 +108,7 @@ struct ciuki_rect;
 int dosvm_vga_present(struct dosvm *, int (*row)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t tick, struct ciuki_rect *damage);
 uint8_t dosvm_vga_status(struct dosvm *, uint64_t tick);
-int dosvm_disk_open(struct dosvm *);
+int dosvm_disk_open(struct dosvm *, const char *base);
 int dosvm_disk_close(struct dosvm *, bool forced);
 int dosvm_bios_init(struct dosvm *);
 int dosvm_io(void *, uint16_t, unsigned, bool, uint32_t *);

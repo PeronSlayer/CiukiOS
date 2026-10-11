@@ -53,17 +53,97 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
     uint32_t result = 0;
     /* Indexed OUTW/OUTD address consecutive ports, low byte first. Bytes past
      * the registered 3B0h-3DFh range belong to no device: all ones/ignored. */
+    bool window = false;
     for (unsigned i = 0; i < width; i++) {
         unsigned p = port + i;
         uint8_t byte = 0xFF;
         if (p <= 0x3DF) {
-            if (write) cvga_write_port(&v->vga, (uint16_t)p, (uint8_t)(*value >> (8 * i)));
+            if (write) {
+                /* f3-06: a CRTC start-address-high store is a page flip
+                 * (DOOM's I_FinishUpdate, Wolf3D's VW_UpdateScreen). */
+                if ((p == 0x3D5 || p == 0x3B5) && v->vga.crtc_index == 0x0C) v->video_starts++;
+                window |= p >= 0x3C2 && p <= 0x3CF;
+                cvga_write_port(&v->vga, (uint16_t)p, (uint8_t)(*value >> (8 * i)));
+            }
             else byte = cvga_read_port(&v->vga, (uint16_t)p, dosvm_vga_status(v, g_ticks));
         }
         result |= (uint32_t)byte << (8 * i);
     }
     if (!write) *value = result;
+    /* Misc, sequencer and graphics-controller stores decide whether CPU
+     * writes are a plain store into one plane (cvga_direct_plane). */
+    if (window) dosvm_vga_direct(v);
     return 0;
+}
+
+/* ---- f3-06 direct plane window ----
+ * A protected-mode game (DOOM's I_UpdateBox: map mask 1/2/4/8, write mode
+ * 0, 16-bit stores; Wolf3D's wall posts: one map-mask write per column)
+ * stores each Mode X/Y plane tens of thousands of times per frame; one #PF
+ * per store is far too slow. When cvga_direct_plane() reports that a CPU
+ * write stores its byte unchanged into exactly one plane, the window pages
+ * A0000h-AFFFFh map that plane of the VM's own model (cvga_state.plane,
+ * page-aligned in struct dosvm) user-writable: stores land in the model's
+ * memory, so the presenter, INT 10h and the emulator need no copy. A plane
+ * switch only rewrites the 16 window PTEs. The CPU sets the dirty bit of
+ * each stored page (Intel SDM Vol. 3A, 4.8); it is harvested into the
+ * presenter's granules when the window moves and before each frame. Reads
+ * through an open window return the mapped plane without loading the
+ * latches: exact while read map select equals the mapped plane; a latch
+ * copy (write mode 1), set/reset, logical operation, bit mask, read mode or
+ * memory-map change closes the window first (all are port writes). */
+#define DOSVM_PTE_DIRTY 0x040u
+#define VIDEO_WINDOW_PAGE 0xA0u
+#define VIDEO_WINDOW_PAGES 16u
+_Static_assert(CVGA_PLANE_SIZE == VIDEO_WINDOW_PAGES * PAGE_SIZE, "one plane per window");
+static uint32_t plane_frame(struct dosvm *v, unsigned plane, unsigned page)
+{
+    return V2P(&v->vga.plane[plane][page * PAGE_SIZE]);
+}
+/* Dirty pages of the mapped plane -> presenter granules; clears D. */
+static void video_harvest(struct dosvm *v)
+{
+    unsigned plane = v->video_direct - 1;
+    for (unsigned i = 0; i < VIDEO_WINDOW_PAGES; i++) {
+        uint32_t va = (VIDEO_WINDOW_PAGE + i) * PAGE_SIZE, pte = 0;
+        if (!as_lookup(&v->as, va, &pte) || !(pte & DOSVM_PTE_DIRTY)) continue;
+        as_map(&v->as, va, plane_frame(v, plane, i), PTE_U | PTE_W);
+        memset(&v->vga.dirty[plane][i * (PAGE_SIZE / CVGA_DIRTY_GRANULE / 8)], 0xFF,
+               PAGE_SIZE / CVGA_DIRTY_GRANULE / 8);
+        v->video_flushes++;
+        v->vga.changes++;
+    }
+}
+static void video_map(struct dosvm *v, unsigned want)
+{
+    for (unsigned i = 0; i < VIDEO_WINDOW_PAGES; i++) {
+        unsigned page = VIDEO_WINDOW_PAGE + i;
+        if (want) as_map(&v->as, page * PAGE_SIZE, plane_frame(v, want - 1, i), PTE_U | PTE_W);
+        else as_map(&v->as, page * PAGE_SIZE, v->frames[page], dosvm_low_flags(page));
+    }
+    v->video_direct = want;
+}
+void dosvm_vga_sync(struct dosvm *v, bool unmap)
+{
+    if (!v->video_direct || !v->as.pd_phys) return;
+    uint32_t flags = irq_save();
+    if (v->video_direct) {
+        video_harvest(v);
+        if (unmap) video_map(v, 0);
+    }
+    irq_restore(flags);
+}
+void dosvm_vga_direct(struct dosvm *v)
+{
+    if (!v->as.pd_phys) return;
+    int plane = cvga_direct_plane(&v->vga);
+    unsigned want = plane < 0 ? 0 : (unsigned)plane + 1;
+    if (want == v->video_direct) return;
+    uint32_t flags = irq_save();
+    if (v->video_direct) video_harvest(v);
+    video_map(v, want);
+    if (want) v->video_maps++;
+    irq_restore(flags);
 }
 
 int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
@@ -93,6 +173,7 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
                      f->tf.esi, f->tf.edi, f->tf.ebp, (uint16_t)f->es, (uint16_t)f->ds};
     v->video_bus_fault = false;
     cvbios_int10(&v->video_bios, &r);
+    dosvm_vga_direct(v);                          /* f3-06: the mode set may close the window */
     if (v->video_bus_fault) return -EFAULT;
     f->tf.eax = r.eax; f->tf.ebx = r.ebx; f->tf.ecx = r.ecx; f->tf.edx = r.edx;
     f->tf.esi = r.esi; f->tf.edi = r.edi; f->tf.ebp = r.ebp; f->es = r.es; f->ds = r.ds;
@@ -205,32 +286,84 @@ int dosvm_vga_init(struct dosvm *v)
 
 /* Guest #PF on a supervisor-only A0000-BFFFF page: emulate the faulting
  * instruction through the VGA bus. REP strings resume after the budget, as an
- * interrupted REP does on hardware; unsupported forms fault the VM locally. */
+ * interrupted REP does on hardware; unsupported forms fault the VM locally.
+ * V86 frames use segment:offset bases; a DPMI client frame (f3-06) uses its
+ * descriptors' bases and the code segment's D bit, looked up on first use. */
 #define VIDEO_STRING_BUDGET 4096u
+static int video_emulate(struct dosvm *v, struct v86_frame *f, cvx_cpu *c, const cvx_bus *bus, bool pm)
+{
+    c->gpr[0] = f->tf.eax; c->gpr[1] = f->tf.ecx; c->gpr[2] = f->tf.edx; c->gpr[3] = f->tf.ebx;
+    c->gpr[4] = f->tf.user_esp; c->gpr[5] = f->tf.ebp; c->gpr[6] = f->tf.esi; c->gpr[7] = f->tf.edi;
+    c->eip = f->tf.eip; c->eflags = f->tf.eflags;
+    cvx_result result;
+    v->video_bus_fault = false;
+    int e = cvx_execute(c, bus, VIDEO_STRING_BUDGET, &result);
+    /* DIV/IDIV by a VRAM operand: the architectural #DE, through the guest's
+     * INT 0 vector (V86) or the client's exception 0 (DPMI), at the
+     * unchanged faulting instruction. */
+    if (e == CVX_DIVIDE_ERROR && !v->video_bus_fault)
+        return pm ? dpmi_exception(v, f, 0, 0) : v86_reflect(&v->monitor, f, 0);
+    if (e != CVX_DONE && e != CVX_PARTIAL) return -EFAULT;
+    if (v->video_bus_fault) return -EFAULT;
+    v->video_faults++;
+    if (pm) v->video_pm_faults++;
+    f->tf.eax = c->gpr[0]; f->tf.ecx = c->gpr[1]; f->tf.edx = c->gpr[2]; f->tf.ebx = c->gpr[3];
+    f->tf.user_esp = c->gpr[4]; f->tf.ebp = c->gpr[5]; f->tf.esi = c->gpr[6]; f->tf.edi = c->gpr[7];
+    f->tf.eip = c->eip; f->tf.eflags = c->eflags;
+    if (!pm && e == CVX_DONE && v->monitor.shadow) return v86_debug_step(&v->monitor, f);
+    return 0;
+}
 int dosvm_vga_fault(struct dosvm *v, struct v86_frame *f)
 {
     cvx_cpu c = {0};
-    c.gpr[0] = f->tf.eax; c.gpr[1] = f->tf.ecx; c.gpr[2] = f->tf.edx; c.gpr[3] = f->tf.ebx;
-    c.gpr[4] = f->tf.user_esp; c.gpr[5] = f->tf.ebp; c.gpr[6] = f->tf.esi; c.gpr[7] = f->tf.edi;
-    c.eip = f->tf.eip; c.eflags = f->tf.eflags;
     uint32_t segments[] = {f->es, f->tf.cs, f->tf.user_ss, f->ds, f->fs, f->gs};
     for (unsigned i = 0; i < 6; i++) {
         if (segments[i] > 65535) return -EFAULT;
         c.sreg[i] = (uint16_t)segments[i]; c.seg_base[i] = segments[i] << 4;
     }
-    cvx_result result;
-    v->video_bus_fault = false;
-    int e = cvx_execute(&c, &v->video_bus, VIDEO_STRING_BUDGET, &result);
-    /* DIV/IDIV by a VRAM operand: the architectural #DE, through the guest's
-     * INT 0 vector, at the unchanged faulting instruction. */
-    if (e == CVX_DIVIDE_ERROR && !v->video_bus_fault) return v86_reflect(&v->monitor, f, 0);
-    if (e != CVX_DONE && e != CVX_PARTIAL) return -EFAULT;
-    v->video_faults++;
-    f->tf.eax = c.gpr[0]; f->tf.ecx = c.gpr[1]; f->tf.edx = c.gpr[2]; f->tf.ebx = c.gpr[3];
-    f->tf.user_esp = c.gpr[4]; f->tf.ebp = c.gpr[5]; f->tf.esi = c.gpr[6]; f->tf.edi = c.gpr[7];
-    f->tf.eip = c.eip; f->tf.eflags = c.eflags;
-    if (e == CVX_DONE && v->monitor.shadow) return v86_debug_step(&v->monitor, f);
+    return video_emulate(v, f, &c, &v->video_bus, false);
+}
+/* Selector base for the decoder. A selector the client could not have
+ * loaded (null, absent) makes the access a bus fault: the VM stops with
+ * the diagnostic instead of the emulator using base 0. */
+static uint32_t pm_segment_base(void *arg, uint16_t selector)
+{
+    struct dosvm *v = arg;
+    struct dpmi_seg s;
+    if ((selector & ~3u) && dpmi_seg(v, selector, &s) && s.present) return s.base;
+    v->video_bus_fault = true;
     return 0;
+}
+int dosvm_vga_fault_pm(struct dosvm *v, struct v86_frame *f)
+{
+    struct dpmi_seg cs;
+    if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs) || !cs.code || !cs.present) return -EFAULT;
+    cvx_cpu c = {0};
+    uint32_t selectors[] = {f->tf.es, f->tf.cs, f->tf.user_ss, f->tf.ds, f->tf.fs, f->tf.gs};
+    for (unsigned i = 0; i < 6; i++) c.sreg[i] = (uint16_t)selectors[i];
+    c.code32 = cs.big;
+    c.seg_base[CVX_CS] = cs.base;
+    c.base_valid = 1u << CVX_CS;
+    cvx_bus bus = v->video_bus;
+    bus.segment_base = pm_segment_base;
+    return video_emulate(v, f, &c, &bus, true);
+}
+
+bool dosvm_video_info(struct dosvm_key key, struct dosvm_video_info *out)
+{
+    struct dosvm *v = dosvm_lookup(key);
+    if (!out || !v || !v->info.key.generation || v->info.state == DOSVM_DEAD || !v->as.pd_phys) return false;
+    memset(out, 0, sizeof(*out));
+    uint8_t mode = 0;
+    dosvm_read(v, 0x449, &mode, 1);
+    out->mode = mode;
+    out->unchained = (v->vga.seq[4] & 0x0C) == 0x04;
+    cvga_geometry g;
+    if (cvga_get_geometry(&v->vga, &g)) { out->width = g.width; out->height = g.height; }
+    out->faults = v->video_faults; out->pm_faults = v->video_pm_faults;
+    out->starts = v->video_starts; out->maps = v->video_maps; out->flushes = v->video_flushes;
+    out->frames = v->video_frames;
+    return true;
 }
 
 /* Row-based form of the retained vga_presenter logic: the same dirty
@@ -250,6 +383,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     /* Take and clear the dirty granules atomically with respect to the VM
      * worker: a store after this point stays marked for the next frame. */
     uint32_t flags = irq_save();
+    if (v->video_direct) video_harvest(v);        /* f3-06: pages stored through the window */
     memcpy(v->video_taken, v->vga.dirty, sizeof(v->video_taken));
     memset(v->vga.dirty, 0, sizeof(v->vga.dirty));
     uint32_t display = v->vga.display_changes;

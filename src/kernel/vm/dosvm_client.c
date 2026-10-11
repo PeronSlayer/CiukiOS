@@ -168,11 +168,18 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         while (reservation < DOSVM_LIMIT && creating[reservation]) reservation++;
         if (reservation == DOSVM_LIMIT) { e = -ENOSPC; goto out; }
         creating[reservation] = p->pid;
+        /* f3-06: an owner-attached local workload disk (\CIUKIGAM.IMG, the
+         * DOS system plus \DOOM or \WOLF3D) becomes the window VM's base,
+         * with the staged DPMI host (DOSVM_DPMI_PUBLIC is still 0): the
+         * owner-visible DOOM window. Without that disk nothing changes. */
+        char workload[24];
+        int found = dosvm_workload_base(workload);
+        if (found && found != -ENOENT) { creating[reservation] = 0; e = closed_error(found); goto out; }
         /* Creation may sleep opening storage; another thread may close the
          * descriptor meanwhile, so the VM holds its own surface reference. */
         struct surface *surface = d->u.surface;
         surface_retain(surface);
-        const struct dosvm_config config = {.probe = "vm-window"};
+        const struct dosvm_config config = {.probe = "vm-window", .base = found ? 0 : workload, .dpmi = !found};
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = closed_error(e); goto out; }

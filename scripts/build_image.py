@@ -271,6 +271,8 @@ def build(kernel, out, boot_cfg):
             "-n", "CIUKIOS", volume)
         sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
         payloads = payload_records(sources)
+        # f3-06: owner-local game files never enter the canonical image.
+        dos_build.refuse_local_payloads({p["path"]: p["sha256"] for p in payloads})
         populate_payloads(volume, sources, directories)
         # mtools updates the primary allocation hint but not its backup.
         with volume.open("r+b") as stream:

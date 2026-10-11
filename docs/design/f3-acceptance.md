@@ -1010,3 +1010,266 @@ so one QEMU run reports the whole row (the first error decides). Suite
 - DOS/4GW 1.97 redistribution text not located; the payload stays a local
   test client until the owner decides.
 - Promotion: `DOSVM_DPMI_PUBLIC` stays 0 until the QEMU cases pass.
+
+## f3-06
+
+Reference DOS workloads and the F3 workload gate (directive f3-06; contract
+row "F3 workloads"). Implementation and host evidence by Claude (Opus agent);
+the QEMU `f3-workloads` cases, the owner-visible DOOM window and hardware
+belong to the lead. No runtime PASS is claimed here.
+
+### Research (checked 2026-10-11)
+
+- DOOM, released source [id-Software/DOOM, linuxdoom-1.10](https://github.com/id-Software/DOOM):
+  `g_game.c` `G_TimeDemo` sets `timingdemo` and `singletics` (one frame per
+  game tic) and `G_CheckDemoStatus` ends a timed demo with
+  `I_Error("timed %i gametics in %i realtics")`; `m_misc.c`
+  `M_LoadDefaults` takes `-config <file>`. The released source has no DOS
+  layer, so the DOS behaviour below is taken from the byte-matching
+  reconstruction [gamesrc-ver-recreation-doom](https://github.com/fabiangreffrath/gamesrc-ver-recreation-doom)
+  (GPL-2.0, `APPVER_DOOMREV` builds of 1.9): `i_ibm.c` `I_Error` ends with
+  `exit(1)` after `I_Shutdown` returned to mode 03h, so the timedemo line is
+  on the text screen and the exit code is 1; `I_InitGraphics` sets mode 13h
+  then unchained Mode Y (SR04 chain-4 off, GC05/GC06 odd/even off, CRTC 14h
+  dword off, 17h byte mode) and clears 64 KiB with map mask 0Fh;
+  `I_UpdateBox` writes each plane with `outp(SC_INDEX+1, 1<<p)` and 16-bit
+  stores; `I_FinishUpdate` flips with `outpw(CRTC_INDEX, CRTC_STARTHIGH+...)`
+  (three pages A0000h/A4000h/A8000h); `I_BeginRead`/`I_EndRead` latch-copy
+  the disk icon with write mode 1; `I_SetPalette` waits for vertical retrace
+  on 3DAh; `I_StartupDPMI` locks the program (`_dpmi_lockregion`, 0600h);
+  `I_ZoneBase` sizes the zone from 0500h, at most 8 MiB, at least 1.5 MiB;
+  `i_sound.c` `I_StartupTimer` installs the DMX 140 Hz timer service even
+  with `-nosound`, which sets both devices to `snd_none` (no SB or OPL
+  detection); with devices 3 (Sound Blaster) the music device becomes the
+  Adlib/OPL driver and `SB_Detect`/`AL_Detect` probe 220h/IRQ 7/DMA 1 and
+  388h. Parameters and the frame-rate formula (gametics/realtics x 35) also
+  appear in the DOOM FAQ v6.6, section 9-2 (shipped with the owner's copy as
+  `DMFAQ66B.TXT`).
+- The owner's `DOOM.EXE` (709 905 bytes, SHA-256 `799a20c7...`, v1.9) carries
+  "DOS/4GW Professional Protected Mode Run-time ... 1.95" (Nov 23 1993):
+  the extender is bound into the executable, no external `DOS4GW.EXE` is
+  started (this fixes the "extender hash": it is part of `DOOM.EXE`'s hash).
+  The [Open Watcom DOS/4GW guide](https://open-watcom.github.io/open-watcom-1.9/pguide.html)
+  describes DOS/4GW running as a DPMI client when a host is present, the
+  only mode a Ciuki VMM VM allows (no VCPI, no raw XMS switch).
+- Wolfenstein 3-D, [id-Software/wolf3d WOLFSRC](https://github.com/id-Software/wolf3d):
+  `ID_VL.C` `VL_DePlaneVGA` (mode 13h, then chain-4/odd-even off, write mode
+  0, unchained 320x200); `ID_IN.C` `INL_KeyService` reads port 60h from its
+  own INT 9 handler; `ID_MM.C` `MML_SetupXMS` takes UMBs through XMS
+  function 10h; `WL_MAIN.C` `FinishSignon` prints "Press a key" and
+  `IN_Ack`s, `DemoLoop` shows `NonShareware` (registered builds), `PG13`
+  (7 s or a key) and the title (15 s or a key) before `US_ControlPanel`;
+  `ID_US_1.C` accepts `NOWAIT`; `WL_MENU.C` starts the main menu on "Read
+  This!" (`STARTITEM` without `GOODTIMES`), moves the cursor by initial letter
+  (`HandleMenu`), `CP_NewGame` takes episode 1 and the default difficulty
+  (`NewItems` index 2) with Enter, `CP_Quit` confirms with Y; `WL_PLAY.C`
+  `CheckKeys` opens the quit dialog with F10.
+- Mode X/Y register sequence: [Abrash, Graphics Programming Black Book, ch. 47](https://www.phatcode.net/res/224/files/html/ch47/47-02.html)
+  (already the f3-02 reference).
+- [Intel SDM Vol. 3A](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
+  4.7 (page-fault error code: P=1 protection violation, U/S=1 user mode,
+  W/R) and 4.8 (the processor sets the PTE dirty bit on the first write
+  through a translation).
+- [Microsoft FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf),
+  sections 3-6, for the fixture volumes; `dosfstools` `mkfs.fat`/`fsck.fat`
+  and `mtools` as independent writer/checkers (already used by F1 fixtures).
+
+### Decisions
+
+**Workload disks.** CIUKIDOS serves one private volume, so a game cannot be a
+second DOS drive. `dosvm_config.base` (new, `NULL` = `C:\SYSTEM\DOS\DOSBOOT.IMG`)
+names another read-only base image of the same 128 MiB FAT16 geometry; the
+writable overlay stays in `C:\SYSTEM\DOS`. `scripts/test/dos_fixtures.py`
+builds that image per run: the DOS system read back from the canonical
+build's `DOSBOOT.IMG` (manifest hashes, and the canonical image's
+`dos.image_sha256` when the runner passes it), the game directory under
+`\DOOM` or `\WOLF3D` (top-level plain 8.3 files; others skipped and listed)
+and generated files (`\DOOM\CIUKI.CFG`: SB 220h/IRQ 7/DMA 1, sound and music
+device 3, no mouse or joystick). It is embedded sparsely as `\CIUKIGAM.IMG`
+(read-only attribute) in one contiguous chain of a 160 MiB FAT16 superfloppy
+made by `mkfs.fat` (32 KiB clusters: the VFS walks at most 4096 FAT entries
+per sector read); `fsck.fat` and `mtools` read both volumes back. The kernel
+mounts the disk as a further drive; `dosvm_workload_base` (used by the
+probes and by window VMs) looks for `X:\CIUKIGAM.IMG` (exact size, not a
+directory) on drives D: to Z:. The VFS path is reused unchanged: no raw sector
+access to a mounted volume, the VFS sharing mode keeps the base read-only.
+The canonical image and `DOSBOOT.IMG` refuse payloads whose name or SHA-256
+matches a local game file (`refuse_local_payloads`, files of 64 bytes or
+more), and the generator writes only under `build/test-runs` or `build/host`.
+
+**Launcher.** `\RUNREC.COM <dir> <program> [args]` (new, in `DOSBOOT.IMG`)
+changes directory, EXECs the program with the arguments, reads INT 21h/4Dh
+and reports `RUNREC PASS` (code 0) or `RUNREC FAIL Rcc Ttt` / `Ennnn` /
+`Dnnnn` on the record port; the verdict latch keeps `Rcc_Ttt`. RUNREC is the
+third and the game the fourth CIUKIDOS EXEC frame (DOOM's bound extender
+EXECs nothing). `\CLILOOP.COM` (new) announces itself and spins in `cli; jmp
+$`.
+
+**Protected-mode VGA path.** `dpmi_pm_trap` resolved every client #PF to the
+client. Now a fault with CR2 in A0000h-BFFFFh and error code P=1, U=1 (the
+supervisor-only window, CR2 captured before interrupts) goes to
+`dosvm_vga_fault_pm`: the same `cvx_execute` decoder and VGA bus as V86, with
+`code32` from the code descriptor's D bit, CS's descriptor base, and a
+`segment_base` callback resolving the data/stack selectors through the VM's
+LDT on first use (an unusable selector is a bus fault: the VM stops with the
+diagnostic instead of using base 0). REP strings restart after 4096
+elements; DIV by a VRAM operand raises the client's exception 0. Linear
+addresses come from the descriptors, so flat (DOOM, base 0) and 16-bit
+clients with a selector over A0000h both work. V86 behaviour is unchanged
+(the shared helper keeps the V86 64 KiB checks and the STI-shadow step).
+
+**V86 single-step policy (monitor change).** With `track_boundaries`, the
+f3-00 monitor returned to V86 code with TF set after every trap, so every
+V86 instruction raised #DB. The libx86emu runner measured 687 M #DB traps in
+700 M guest instructions while DOOM loaded its WAD through CIUKIDOS (and
+840 M for a whole timedemo): far too slow for QEMU. `v86_prepare_return`
+now sets TF only while a software STI/MOV-SS shadow is open (including a
+return onto MOV SS/POP SS, as before) or an IRQ is pending for an enabled
+guest; otherwise V86 code runs natively. Delivery points stay exact: every
+instruction that can set the virtual IF (STI, POPF, IRET, INT n) traps at
+IOPL 0 in V86 (Intel SDM Vol. 3, 8086 emulation, "Sensitive Instructions";
+chapter 15 of the 245472-004 edition cited by f3-00), a host IRQ is a delivery point
+after `dosvm_tick` raised the timer edges, and a trapped instruction inside
+a MOV SS shadow is emulated before any delivery. Host shadow, PIC and
+VMDEV-through-`dosvm_trap` tests are unchanged and pass; the runner's whole
+DOOM timedemo fell from 840 M to 5.9 M traps with identical instruction
+count, frames and result.
+
+**Direct plane window.** One #PF per store is far too slow for Mode X/Y
+games. When `cvga_direct_plane()` reports that a CPU write stores its byte
+unchanged into exactly one plane (single-plane map mask, write mode 0, no
+set/reset, rotate, logical operation, bit mask FFh, chain-4/odd-even off,
+64 KiB window at A0000h), the window PTEs A0000h-AFFFFh map that plane of
+the VM's own model (`cvga_state.plane`, now page-aligned in `struct dosvm`)
+user-writable. Stores land in the model's memory, so the presenter, INT 10h
+and the emulator need no copy; a plane switch (DOOM: four per frame; Wolf3D:
+one per wall column) only rewrites 16 PTEs. Dirty bits of the mapped pages
+are harvested into the presenter's granules when the window moves and before
+each frame. Every misc/sequencer/graphics port write re-evaluates the state,
+so a latch copy or any non-identity write mode closes the window before its
+first access; B0000h-BFFFFh stays trapped; `dosvm_destroy` restores the VM's
+own frames before `as_destroy`. Known deviation, recorded here: reads through
+an open window return the mapped plane and do not load the latches (exact
+while read map select equals the mapped plane, as in DOOM's and Wolf3D's
+write-only blits). Counters: `dosvm_video_info` (faults, PM faults, CRTC
+start-high writes = page flips, window openings, harvested pages).
+
+**Probes and records** (`src/kernel/probes/f3_probes_workloads.c`, F3 table
+and sweep after `dpmi`; selectors in the loader, kernel and runner models;
+the runner's probe-name grammar now allows digits):
+
+- `f3:dos4gw`: hashes `/DPMI4GW.EXE` and `/SYSTEM/DOS4GW.EXE` from the VM's
+  disk (`group=dos_payload`, compared with the image manifest), records the
+  extender (`case=extender ... version=1.97 redistribution=open_question`, as
+  f3-04 left it), one warm-up launch, then 20 loops of fresh VM, `DPMI4GW.EXE`
+  verdict, EXIT and destroy (`case=loop`): entries = terminations, no faults
+  or stale handlers, DPMI resources released, and the VM ledger, free
+  physical pages, task count and kernel heap equal the post-warm-up
+  baseline (`case=baseline` diagnostic otherwise).
+- `f3:doom` / `f3:doom-sound`: hash every file of `\DOOM` on the VM's disk
+  (`group=workload_file`, `redistribution=local-only|free`, compared with
+  the fixture manifest), `/RUNREC.COM` (`dos_payload`), the bound extender
+  (`case=extender kind=bound_dos4gw_professional`); 5 loops of a fresh
+  32 MiB DPMI VM booted from `CIUKIGAM.IMG` running `\RUNREC.COM \DOOM
+  DOOM.EXE -config CIUKI.CFG [-nosound] -timedemo demo1`: `case=loop`
+  (ms to the first DPMI entry and to the first page flip = launch time, run
+  time, gametics/realtics parsed from the text screen, RUNREC status, exit
+  code 1 type 0), `case=video` (Mode Y 320x200 seen, flips, faults, PM
+  faults, window openings), `case=dpmi`, `case=audio` (f3-05 counters:
+  DSP resets, block boundaries, PCM frames, IRQ edges, services, OPL events,
+  DMA faults; no consumer, `audible=0`), `case=loop_cleanup`. Without sound
+  every audio counter must be 0; with sound DSP resets and OPL events >= 1.
+- `f3:wolf3d`: real-mode VM (no DPMI flag) from `CIUKIGAM.IMG`; `RUNREC
+  \WOLF3D WOLF3D.EXE`; the signon frame must stay unchanged for 6 s (its
+  memory report precedes "Press a key"; all-black frames are ignored) and
+  its presenter digest is recorded; Set-1 keys through the 8042 (focus):
+  'N' at each further stable screen (2 s) until none appears for 12 s (the
+  menu), Enter x3 (New Game, episode 1, default difficulty), >= 10 page
+  flips in 3 s of play, F10 then Y; `case=loop` with XMS/EMS call counts and
+  RUNREC exit code 0.
+- `f3:vm-starve`: VM A (16 MiB, DPMI) runs `DPMI4GW.EXE` alone and then
+  while VM B (8 MiB) spins in `CLILOOP.COM`; each run injects 8 Left Shift
+  make/break pairs (16 IRQ1, no BIOS-buffer side effect) and measures IRQ0
+  deliveries per ms and a native ring-3 heartbeat; `case=rates` requires
+  timer >= 50 % and heartbeat >= 20 % of the reference, all 16 IRQ1 within
+  1 s, B still running with zero IRQ0 deliveries (CLI held, host preemption
+  intact). Thresholds are provisional until the first QEMU run.
+- Game probes without the disk end `DATA case=fixture status=not_run
+  reason=fixtures_absent`, `END status=NOT_RUN reason=fixtures_absent` (an
+  accepted terminal for these three probes only); the runner itself records
+  a case `not_run` with reason `fixtures_absent` before starting QEMU when
+  the declared directory or a required file is missing.
+
+Every record stays within the parser's 240 bytes and value grammar (paths
+use `/`, drive letters alone); `tests/host/test_f3_workloads.py` checks the
+worst cases.
+
+**Suite** `tests/suites/f3-workloads.json`: `dos4gw-qemu-t23/min128`,
+`doom-qemu-t23`, `doom-sound-qemu-t23`, `wolf3d-qemu-t23`,
+`vm-starve-qemu-t23/min128`. Values only a first run can give are listed per
+case in `pin_from_first_run` (marked `PIN-FROM-FIRST-RUN`): the sound
+run's audio lower bounds, the Wolf3D signon/title digests and screen count,
+the starvation thresholds. Until pinned, predicates check format and
+structure (hex digests, >= bounds). DOOM's 1710 gametics (and flips >= 1710)
+are already pinned from the host run below (`pinned_on_host`).
+
+### Host verification (not QEMU evidence)
+
+Worktree `wt/f3-workloads` on 2026-10-11 (base b5325f0 plus the merge
+worktree's three compile fixes, applied identically):
+
+- `make kernel`: PASS (clang -Werror, FPU/SIMD audit), VMM.ELF 2 921 716 bytes.
+- `scripts/test/host_kernel_tests.sh`: PASS. DOS VM harness 1 611 918
+  checks, largest record 212 bytes, including `dosvm_workloads_test.inc`:
+  32-bit flat and 16-bit DPMI client stores and `REP STOSD` on the window
+  through `dosvm_trap`, null selector stops the VM; direct window mapping,
+  dirty-page harvest, closing on two-plane mask/write mode 1/bit mask/mode
+  set, kernel reads and writes, presenter, restoration before
+  `as_destroy` (the fake PMM refuses freeing a plane page); base image,
+  workload lookup and window VMs on it. f3-02 goldens unchanged.
+- `python3 scripts/build_dos_image.py`: T1 DOS PASS, 23 payloads (RUNREC,
+  CLILOOP added), local-payload guard silent with the owner's directories
+  present.
+- `tests/host/test_f3_workloads.py` (8 tests): selectors and registration
+  order, suite predicates against the probe's record formats with mutations,
+  worst-case record lengths, runner not_run before QEMU, synthetic fixture
+  (fsck, mtools read-back, sparse 13 MiB of 160 MiB, hash comparison and its
+  failure modes, output refusals, payload guard).
+- `python3 -m unittest discover -s tests/host`: 335 tests, 14 skipped, one
+  error not caused by this directive: `test_dosvm` vm-boot fixture still has
+  `devices_before=3` while `f3-vm.json` pins 4 since daff47e.
+- libx86emu guest runner on this `DOSBOOT.IMG`: the f3-04 sequence PASS; 20
+  consecutive `DPMI4GW.EXE` launches in one VM PASS with every DPMI resource
+  released after each exit (475 M instructions).
+- Real fixture from the owner's `third_party/Doom` (generated on the host, 0.6
+  s, 26 files, 6 skipped, `DOOM.EXE` extender `dos4gw-professional-1.95-bound`)
+  booted in the guest runner: DOS/4GW Professional 1.95 enters the kernel
+  DPMI host, allocates 10.5 MiB of the pool, sets Mode Y 320x200 and renders
+  and runs `-nosound -timedemo demo1` to completion: `timed 1710 gametics
+  in 15190 realtics` on the text screen (realtics are the runner's simulated
+  time), RUNREC `R01 T00` (exit code 1 from `I_Error`), 1714 page flips,
+  2.31 M direct-window moves (map-mask writes, one per drawn column and
+  plane), DPMI entries 1 = terminations 1, every DPMI resource released,
+  2.59 G instructions and 5.9 M traps. 1710 gametics is pinned in the
+  suite for this DOOM.EXE/DOOM.WAD pair. Wolf3D cannot run in this runner:
+  its Borland start-up executes x87 loads the runner's CPU does not provide
+  (QEMU does).
+
+### Limitations and open items
+
+- `DOSVM_DPMI_PUBLIC` is still 0: probe VMs pass `dosvm_config.dpmi`. For
+  the owner-visible DOOM window without an ABI change, a `/bin/dosbox` window
+  VM boots an attached workload disk (`dosvm_workload_base`, `\CIUKIGAM.IMG`
+  on D: to Z:) with the staged DPMI host; without that disk it keeps
+  `DOSBOOT.IMG` and no DPMI host, as before. This is a lead decision to
+  confirm (one line in `dosvm_client.c`); no QEMU case covers the window
+  path yet. In the window: `\RUNREC.COM \DOOM DOOM.EXE` (or `CD \DOOM`, `DOOM`).
+- DOOM/Wolf3D timing under TCG is unknown before the first run; the DOOM
+  cases allow 7200 s for five timedemo loops.
+- Wolf3D screen sequence depends on the build (NonShareware only in id's
+  registered build); the script tolerates it, the pinned digests do not.
+- Mode 13h chained stores (chain-4) still trap per instruction; only
+  unchained single-plane stores use the direct window.
+- DOS/4GW 1.97 (`DPMI4GW.EXE`'s extender) redistribution text is still not
+  located (`redistribution=open_question`); DOOM's bound 1.95 extender is
+  part of the owner's local payload.

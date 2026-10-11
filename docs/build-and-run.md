@@ -133,6 +133,51 @@ checks the fixture image hash is unchanged. Passing run artifacts follow the
 runner's ordinary cleanup rules. A missing packet device records
 `not_run reason=device_absent`; this does not qualify an optical case.
 
+### Local DOS game payloads (f3-06)
+
+The F3 workload suite (`tests/suites/f3-workloads.json`) runs the owner's own
+copies of DOS DOOM and Wolfenstein 3-D. They are commercial files and stay
+local: the directories `third_party/Doom/` and `third_party/WOLF3D/` are
+ignored by git and never enter `build/f0/ciukios.img`, `DOSBOOT.IMG` or a
+release (`scripts/build_dos_image.py` and `scripts/build_image.py` refuse a
+payload whose name or SHA-256 matches a file there). To declare them, copy
+the game files into these directories:
+
+| Workload | Directory | Required files (top level, 8.3 names) |
+| --- | --- | --- |
+| DOOM (DOS, v1.9 tested) | `third_party/Doom/` | `DOOM.EXE`, `DOOM.WAD` or `DOOM1.WAD` |
+| Wolfenstein 3-D (WL6) | `third_party/WOLF3D/` | `WOLF3D.EXE`, `VSWAP.WL6`, `VGAGRAPH.WL6`, `GAMEMAPS.WL6` (and the other `.WL6` files) |
+
+For a case that declares one, the runner calls `scripts/test/dos_fixtures.py`
+inside that run's directory under `build/test-runs/`: it builds a private
+DOS VM image with the `DOSBOOT.IMG` geometry (the DOS system read back from
+`build/f0/dos/DOSBOOT.IMG` and checked against its manifest, plus the game
+directory as `\DOOM` or `\WOLF3D` and a generated `\DOOM\CIUKI.CFG`), puts it
+as `\CIUKIGAM.IMG` on a sparse 160 MiB FAT16 superfloppy and attaches that disk
+as the next IDE index. Only top-level regular files with plain 8.3 names
+(letters, digits, `_`, `-`) are copied; the others are listed as skipped in
+the manifest. Every file is hashed (`redistribution=local-only`, the config
+`free`); the probe hashes the same files on the VM's disk and the runner
+compares the two. With a directory or required file missing, the case is
+`not_run reason=fixtures_absent` and QEMU is not started. A host-only build of
+the fixture, for inspection:
+
+```bash
+python3 scripts/test/dos_fixtures.py doom build/host/f306-doom
+python3 scripts/test/dos_fixtures.py wolf3d build/host/f306-wolf
+```
+
+Delete `build/host/f306-*` afterwards (each holds a 160 MiB sparse image).
+For an interactive DOOM window, attach that `fixture-0.img` as a further IDE
+disk of a manual QEMU run (or copy its `CIUKIGAM.IMG` to the root of another
+FAT drive on a test PC): a DOS window (`/bin/dosbox`) then boots the workload
+image, with the kernel DPMI host, instead of `DOSBOOT.IMG`; type
+`\RUNREC.COM \DOOM DOOM.EXE` or `CD \DOOM` and `DOOM`. Without the disk the
+window is unchanged.
+The probes are `f3:dos4gw`, `f3:doom`, `f3:doom-sound`, `f3:wolf3d` and
+`f3:vm-starve` (also in the loader menu and the F3 sweep, where the game
+probes end `NOT_RUN reason=fixtures_absent` without the fixture disk).
+
 ## Test requests
 
 The loader reads the QEMU fw_cfg item `opt/it.alcybercloud.ciukios/test`

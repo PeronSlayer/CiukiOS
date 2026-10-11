@@ -28,6 +28,7 @@ import resources as res
 import fat_fixtures
 import iso_fixtures
 import ntfs_fixtures
+import dos_fixtures
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -470,7 +471,7 @@ def expand_cases(suite):
 def fixture_disks(case):
     # Manifest ordinals also cover nondisk fixtures; IDE connector numbers
     # start after the boot disk and must agree with the kernel disk ledger.
-    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator') in ('mkfs.fat','mkntfs')]
+    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator') in ('mkfs.fat','mkntfs','dos-local')]
     if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
     if sum(f.get('generator')=='mkntfs' for f in case.get('fixtures',[]))>1:raise res.Refusal('one NTFS fixture disk per case')
     optical=[f for f in case.get('fixtures',[]) if f.get('generator')=='xorriso']
@@ -478,9 +479,23 @@ def fixture_disks(case):
     return list(zip(indices,range(1,len(indices)+1)))
 
 
-def prepare_fixtures(host,case,directory):
+def dos_image_identity(image):
+    """f3-06: the DOS VM payload SHA-256 recorded for the canonical image."""
+    try:
+        data=json.loads((Path(image).parent/'build-manifest.json').read_text())
+        return data.get('dos',{}).get('image_sha256')
+    except (OSError,ValueError,TypeError):
+        return None
+
+
+def prepare_fixtures(host,case,directory,image=None):
     manifests=[]
     disks=dict(fixture_disks(case))
+    # f3-06: an absent owner-local game directory is not_run before QEMU starts
+    # (dos_fixtures.FixturesAbsent is an EvidenceNotRun); nothing is generated.
+    for fixture in case.get('fixtures',[]):
+        if fixture.get('generator')=='dos-local' and fixture.get('workload') in dos_fixtures.WORKLOADS:
+            dos_fixtures.local_files(fixture['workload'],ROOT)
     for index,fixture in enumerate(case.get('fixtures',[])):
         item=dict(fixture)
         if fixture.get('generator')=='mkfs.fat':
@@ -493,6 +508,14 @@ def prepare_fixtures(host,case,directory):
         elif fixture.get('generator')=='xorriso':
             item.update(iso_fixtures.generate(fixture,directory,index))
             item['ide_index']=3
+        elif fixture.get('generator')=='dos-local':
+            # f3-06 owner-local commercial payloads: only on this run's own
+            # fixture disk, never the canonical image (dos_fixtures.py).
+            try:item.update(dos_fixtures.generate(fixture,directory,index,ROOT,
+                                                  expected_dos_sha256=dos_image_identity(image) if image else None))
+            except dos_fixtures.FixturesAbsent:raise
+            except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('DOS workload fixture generation failed: '+str(e)) from e
+            item['ide_index']=disks[index]
         elif 'path' in fixture:
             path=(ROOT/fixture['path']).resolve()
             if not path.is_relative_to(ROOT) or not path.is_file():raise res.Refusal('fixture missing/outside worktree')
@@ -1208,7 +1231,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if shared_overlay is not None:raise res.Refusal('crash marker is placed only before the first boot')
             result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
         result['overlay_path']=str(overlay)
-        result['fixtures']=prepare_fixtures(host,case,directory)
+        result['fixtures']=prepare_fixtures(host,case,directory,image)
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
         serial=(directory/'serial.log').open('wb');stderr=(directory/'stderr.log').open('wb');qlog=(directory/'qmp.log').open('wb');logs=[serial,stderr,qlog]
         launched=time.monotonic();deadline=launched+case['timeout']
@@ -1422,6 +1445,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 result['reason']+='; pending declared stimulus '+json.dumps(pending_stimulus,sort_keys=True)
         if isinstance(e,EvidenceNotRun):
             result['outcome']='not_run';result['not_run_subcases']=parser.not_run_subcases
+        if isinstance(e,dos_fixtures.FixturesAbsent):
+            result['reason']='fixtures_absent';result['fixtures_absent']=str(e)
     finally:
         # Ownership is held until this sequence finishes, including verification.
         result['cleanup']=teardown(host,unit,process,qmp,cgroup)
@@ -1471,6 +1496,14 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         raise EvidenceError('NTFS fixture received block writes or flushes')
                     fixture['blockstats']={'initial':initial,'final':final}
                     if result['outcome']=='pass':ntfs_fixtures.verify_records(fixture,parser.records)
+                    fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
+                except (OSError,ValueError) as e:
+                    result['outcome']='fail';result['reason']=str(e)
+            if fixture.get('generator')=='dos-local' and fixture.get('path'):
+                try:
+                    fixture['sha256_after']=sha(fixture['path'])
+                    if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('DOS workload fixture changed during read-only case')
+                    if result['outcome']=='pass':dos_fixtures.verify_records(fixture,parser.records)
                     fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
                 except (OSError,ValueError) as e:
                     result['outcome']='fail';result['reason']=str(e)

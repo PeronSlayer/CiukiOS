@@ -175,12 +175,27 @@ int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive)
 }
 void vfs_table_destroy(struct vfs_table *table)
 { unsigned i=file_slot(table); CHECK(!files[i].cow && !files[i].base_open && !files[i].cow_open); files[i].table=0; tables--; }
+/* f3-06: the canonical payload or a further workload base image. The fake
+ * workload disk is drive D: and exists only while workload_disk is set. */
+static char last_base[32];
+static bool workload_disk;
+static unsigned workload_scans;
+static bool base_path(const char *path) { return !strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG") || !strcmp(path,"D:\\CIUKIGAM.IMG"); }
 int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
-{ (void)file_slot(table); CHECK(!strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG")); if (io_fails()) return -V86_EIO; memset(entry,0,sizeof(*entry)); entry->size=DOSVM_SECTORS*512u; return 0; }
+{
+    (void)file_slot(table);
+    if (strlen(path) == 15 && path[1] == ':' && !strcmp(path + 2, "\\CIUKIGAM.IMG")) {
+        CHECK(path[0] >= 'D' && path[0] <= 'Z');
+        if (path[0] == 'D') workload_scans++;
+        if (!workload_disk || path[0] != 'D') return -ENOENT;
+    }
+    CHECK(base_path(path)); snprintf(last_base,sizeof(last_base),"%s",path); if (io_fails()) return -V86_EIO;
+    memset(entry,0,sizeof(*entry)); entry->size=DOSVM_SECTORS*512u; return 0;
+}
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     unsigned i=file_slot(table); CHECK(attr==0); if (io_fails()) return -V86_EIO;
-    if (!strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG")) { CHECK(access==VFS_READ && share==VFS_DENY_WRITE); files[i].base_open=true; handles++; return 0; }
+    if (base_path(path)) { CHECK(access==VFS_READ && share==VFS_DENY_WRITE); files[i].base_open=true; handles++; return 0; }
     CHECK(access==(VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE) && share==VFS_DENY_ALL && strstr(path,".COW"));
     snprintf(files[i].path,sizeof(files[i].path),"build/host/dosvm-cow-XXXXXX");
     int fd=mkstemp(files[i].path); CHECK(fd>=0); files[i].cow=fdopen(fd,"w+b"); CHECK(files[i].cow);
@@ -503,11 +518,13 @@ static void test_memory_services(void)
 #include "dosvm_video_test.inc"
 #include "dosvm_audio_test.inc"
 #include "dosvm_dpmi_test.inc"
+#include "dosvm_workloads_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
+    test_workloads();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

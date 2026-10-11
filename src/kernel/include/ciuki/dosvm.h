@@ -23,6 +23,10 @@ struct dosvm_config {
     bool disable_umb;
     const char *probe; /* record owner for admission/stop/guest rows; NULL = "vm-boot" */
     bool dpmi;         /* f3-04 staged testing: answer INT 2Fh/1687h before DOSVM_DPMI_PUBLIC */
+    /* f3-06: read-only base image (VFS path, exactly DOSVM_SECTORS sectors of
+     * the private FAT16 geometry); NULL selects C:\SYSTEM\DOS\DOSBOOT.IMG.
+     * The writable overlay always stays in C:\SYSTEM\DOS (any base volume). */
+    const char *base;
 };
 /* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
  * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after
@@ -67,6 +71,10 @@ struct dosvm_ledger { uint32_t vms, tasks, pages, handles, devices; uint64_t res
 bool dosvm_admit(uint64_t free_bytes, uint64_t reserved, uint64_t resident,
                  uint32_t request, struct dosvm_admission *out);
 int dosvm_create(const struct dosvm_config *, struct dosvm **out);
+/* f3-06: the owner's local workload disk (scripts/test/dos_fixtures.py):
+ * "X:\CIUKIGAM.IMG" of exactly the private geometry on the first drive after
+ * C: that has it. 0 with path filled, -ENOENT without one, else the error. */
+int dosvm_workload_base(char path[24]);
 int dosvm_boot(struct dosvm *);
 struct dosvm_key dosvm_key(const struct dosvm *);
 bool dosvm_valid(struct dosvm_key);
@@ -92,6 +100,17 @@ const uint16_t *dosvm_text(const struct dosvm *, unsigned *cursor);
  * blink/cursor clock, without a window surface; mode is BDA 0049h. */
 struct dosvm_frame { uint8_t digest[32]; uint32_t width, height, scale, mode, text; };
 int dosvm_frame_digest(struct dosvm *, uint64_t tick, struct dosvm_frame *);
+/* f3-06: VGA activity of a VM for workload probes (diagnostic snapshot). */
+struct dosvm_video_info {
+    uint32_t mode;            /* BDA 0049h */
+    uint32_t unchained;       /* SR04 chain-4 clear, odd/even disabled: Mode X/Y planes */
+    uint32_t width, height;   /* model scanout geometry, 0 when unsupported */
+    uint32_t faults, pm_faults; /* aperture instructions emulated; of which from DPMI clients */
+    uint32_t starts;          /* CRTC start-address-high writes (page flips) */
+    uint32_t maps, flushes;   /* direct plane windows opened; window pages copied back */
+    uint32_t frames;          /* presenter frames produced */
+};
+bool dosvm_video_info(struct dosvm_key, struct dosvm_video_info *);
 /* Host-testable private-sector and BIOS boundaries. */
 int dosvm_disk_read(struct dosvm *, uint32_t lba, void *sector);
 int dosvm_disk_write(struct dosvm *, uint32_t lba, const void *sector);

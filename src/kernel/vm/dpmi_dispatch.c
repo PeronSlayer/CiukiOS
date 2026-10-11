@@ -387,7 +387,6 @@ static int debug_trap(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
 
 int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
 {
-    (void)cr2;
     struct dpmi *d = &v->dpmi;
     if (!d->active) return -EFAULT;
     unsigned vector = f->tf.vector;
@@ -407,8 +406,14 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
     case 7: fpu_handle_nm(); return 0;
     case 0x80: return dpmi_pm_interrupt(v, f, 0x80);         /* INT 80h: guest vector, never a syscall */
     case 14:
-        /* Host fault resolution first: the only host-owned faults are the
-         * trapped devices of later rows (f3-02 VGA aperture); none here. */
+        /* Host fault resolution first (contract: exceptions undergo host
+         * resolution before the client's handler). f3-06: a ring-3 access
+         * to the supervisor-only VGA window A0000h-BFFFFh (error code P=1,
+         * U=1: protection violation from user mode; CR2 captured before
+         * interrupts were enabled) is a trapped device cycle, emulated on
+         * the VM's VGA model with the client's 16/32-bit decoding. DOOM's
+         * mode 13h/Y frame writes reach the model this way. */
+        if (cr2 >= 0xA0000 && cr2 < 0xC0000 && (f->tf.err & 5) == 5) return dosvm_vga_fault_pm(v, f);
         return dpmi_exception(v, f, 14, f->tf.err);
     default:
         if (vector < 32) return dpmi_exception(v, f, vector, f->tf.err);
