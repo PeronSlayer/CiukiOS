@@ -9,6 +9,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/process.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/dosvm.h>
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
 extern bool probe_f2_libc_report(struct task *, const char *, uint32_t) __attribute__((weak));
@@ -117,6 +118,9 @@ void syscall_dispatch(struct trap_frame *tf)
         break;
     case 5:
         r = sys_probe_query(tf->ebx, tf->ecx);
+        break;
+    case CIUKI_SYS_DOSVM:
+        r = dosvm_client_syscall(tf);
         break;
     case CIUKI_SYS_UNAME:
         r = file_syscall(tf) ? (int32_t)tf->eax : -ENOSYS;

@@ -54,6 +54,7 @@ struct dosvm_info {
     uint32_t pool_quota, pool_used;
     bool memory_done, memory_pass;
     uint32_t xms_calls, ems_calls;
+    uint32_t video_stage, video_flags; /* f3-02 VMVIDEO.COM "VMVIDEO s f" latch */
 };
 struct dosvm_ledger { uint32_t vms, tasks, pages, handles, devices; uint64_t reserved, resident; };
 /* Pure arithmetic uses free physical bytes AFTER firmware/kernel/driver,
@@ -82,11 +83,20 @@ bool dosvm_irq_raise(struct dosvm_key, unsigned irq);
 bool dosvm_keyboard(struct dosvm_key, uint16_t bios_key);
 void dosvm_tick(void); /* host timer hook; bounded, no allocations or I/O */
 const uint16_t *dosvm_text(const struct dosvm *, unsigned *cursor);
+/* f3-02: SHA-256 of the complete 640x480 XRGB presenter frame at the given
+ * blink/cursor clock, without a window surface; mode is BDA 0049h. */
+struct dosvm_frame { uint8_t digest[32]; uint32_t width, height, scale, mode, text; };
+int dosvm_frame_digest(struct dosvm *, uint64_t tick, struct dosvm_frame *);
 /* Host-testable private-sector and BIOS boundaries. */
 int dosvm_disk_read(struct dosvm *, uint32_t lba, void *sector);
 int dosvm_disk_write(struct dosvm *, uint32_t lba, const void *sector);
 int dosvm_bios(struct dosvm *, struct v86_frame *, uint8_t vector);
 int dosvm_record_byte(struct dosvm *, uint8_t byte);
+/* f3-02 native window owner boundary (dosvm_client.c): syscall 70 and the
+ * supervisor's owner-death collection. No physical input or display grant. */
+int32_t dosvm_client_syscall(struct trap_frame *);
+void dosvm_client_poll(void);
+struct dosvm *dosvm_client_first(uint32_t *owner_pid);
 /* Scheduler/arch ownership hooks, identity for every other task. */
 bool dosvm_trap(struct trap_frame *);
 uint32_t dosvm_task_cr3(const struct task *, uint32_t normal);

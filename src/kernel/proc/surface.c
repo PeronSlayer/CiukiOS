@@ -225,6 +225,19 @@ int surface_read(struct surface *s, uint32_t offset, void *out, uint32_t bytes)
     return 0;
 }
 
+int surface_write(struct surface *s, uint32_t offset, const void *data, uint32_t bytes)
+{
+    if (offset > s->info.allocation_bytes || bytes > s->info.allocation_bytes - offset) return -EINVAL;
+    const uint8_t *src = data;
+    while (bytes) {
+        unsigned n = PAGE_SIZE - offset % PAGE_SIZE;
+        if (n > bytes) n = bytes;
+        memcpy((uint8_t *)P2V(surface_page(s, offset / PAGE_SIZE)) + offset % PAGE_SIZE, src, n);
+        src += n; offset += n; bytes -= n;
+    }
+    return 0;
+}
+
 static void surface_mapping_retain(void *object) { surface_retain(object); }
 static void surface_mapping_release(void *object) { surface_release(object); }
 

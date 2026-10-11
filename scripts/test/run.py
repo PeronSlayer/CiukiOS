@@ -710,6 +710,27 @@ def observe_desktop_screen(before, after, root=ROOT):
             'portrait_pixels_checked':6144,'cursor_changed_pixels':changed}
 
 
+def observe_window_screen(path, spec, arm):
+    """f3-02 DOS window: the composited 640x480 client region of a QMP
+    screendump, as little-endian XRGB rows, must hash to the suite's golden
+    frame and to the frame the controller reported in its ARM record."""
+    width,height,pixels = read_ppm(path)
+    try:
+        x0,y0 = (int(v) for v in spec['origin']);w,h = (int(v) for v in spec.get('size',(640,480)))
+        golden = spec['digest']
+    except (KeyError,TypeError,ValueError) as error:raise EvidenceError('invalid window_screen specification') from error
+    if x0 < 0 or y0 < 0 or x0+w > width or y0+h > height:raise EvidenceError('DOS window region outside the screen')
+    digest = hashlib.sha256()
+    for y in range(y0,y0+h):
+        row = pixels[((y*width)+x0)*3:((y*width)+x0+w)*3]
+        xrgb = bytearray(w*4)
+        xrgb[0::4] = row[2::3];xrgb[1::4] = row[1::3];xrgb[2::4] = row[0::3]
+        digest.update(xrgb)
+    observed = digest.hexdigest()
+    if observed != golden or observed != arm.get('digest'):raise EvidenceError('DOS window region mismatch')
+    return {'ppm_sha256':sha(path),'width':width,'height':height,'region':[x0,y0,w,h],'digest':observed}
+
+
 def desktop_interaction(records):
     """Cross-record checks bind the guest interaction to its stimulus ARM."""
     def one(event, **fields):
@@ -1142,6 +1163,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     screen_before = directory/'desktop-before.ppm'
     screen_after = directory/'desktop-after.ppm'
     screen_armed_at = screen_interaction_at = None
+    window_shot = directory/'window.ppm';window_armed_at = None
     restart_performed=False;expected_resets=0
     try:
         if shared_overlay is None:
@@ -1278,6 +1300,15 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     result['desktop_interaction']=desktop_interaction(parser.records)
                     result['desktop_screen']=observe_desktop_screen(screen_before,screen_after)
                     screen_before.unlink();screen_after.unlink()
+            if case.get('window_screen') and qmp:
+                spec = case['window_screen']
+                arms = [r for r in parser.records if r.get('event')=='ARM' and r.get('action')==spec.get('action','window_screen')]
+                if len(arms)>1:raise EvidenceError('duplicate DOS window screen ARM')
+                if arms and window_armed_at is None:window_armed_at=now
+                if arms and 'window_screen' not in result and now-window_armed_at>=spec.get('delay_ms',1500)/1000:
+                    qmp.command('screendump',{'filename':str(window_shot)})
+                    try:result['window_screen']=observe_window_screen(window_shot,spec,arms[0])
+                    finally:window_shot.unlink(missing_ok=True)
             # A trace is serialized before the subsequent request can reach
             # blkdebug. Drain the FIFO before resuming that suspended request;
             # never select a prefix from a partially collected serial batch.
@@ -1300,6 +1331,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
                 if case.get('desktop_screen') and 'desktop_screen' not in result:
                     raise EvidenceError('desktop lacks live post-input screendump')
+                if case.get('window_screen') and 'window_screen' not in result:
+                    raise EvidenceError('DOS window lacks live screendump')
                 if terminal_time is None:terminal_time=now
                 if parser.terminal['event']=='PANIC':
                     arms=[r for r in parser.records if r['event']=='ARM']

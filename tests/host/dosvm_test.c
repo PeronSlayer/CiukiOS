@@ -40,7 +40,8 @@ volatile uint64_t g_ticks;
 volatile bool g_need_resched;
 static uint32_t read_cr3(void) { return cpu_cr3; }
 static void write_cr3(uint32_t x) { cpu_cr3 = x; }
-static uint32_t read_cr2(void) { return 0xDEAD000; }
+static uint32_t fake_cr2 = 0xDEAD000;
+static uint32_t read_cr2(void) { return fake_cr2; }
 static void cli(void) { cpu_flags = 0; }
 static void sti(void) { cpu_flags = V86_IF; }
 static void invlpg(uint32_t va) { (void)va; }
@@ -202,7 +203,7 @@ static unsigned records, guest_records, max_record;
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[240]; va_list ap; va_start(ap,fmt); int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
-    CHECK(n>=0 && n<(int)sizeof(extra) && !strcmp(probe,"vm-boot"));
+    CHECK(n>=0 && n<(int)sizeof(extra) && (!strcmp(probe,"vm-boot") || !strcmp(probe,"vm-video") || !strcmp(probe,"vm-window")));
     n=snprintf(last_record,sizeof(last_record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s %s",++records,probe,event,extra);
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
     if (strstr(extra,"group=guest ")) guest_records++;
@@ -218,6 +219,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_xms.c"
 #include "../../src/kernel/vm/dosvm_umb.c"
 #include "../../src/kernel/vm/dosvm_ems.c"
+/* f3-02 production VGA adapter and native window boundary; fakes and cases
+ * in dosvm_video_test.inc. The font table is generated from the asset the
+ * kernel's font.asm includes (scripts/test/host_kernel_tests.sh). */
+#include "dosvm_font.inc"
+#include "../../src/kernel/vm/dosvm_vga.c"
+#include "../../src/kernel/vm/dosvm_client.c"
 
 static struct dosvm *create(void)
 { struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
@@ -255,7 +262,7 @@ static void test_memory_disk(void)
     CHECK(dosvm_read(b,0xFFF,got,512)==0 && memcmp(bytes,got,512));
     CHECK(!dosvm_range(a,0x10FFEF,2,true) && !dosvm_range(a,UINT32_MAX,512,true));
     CHECK(dosvm_write(a,0xF0000,bytes,1)==-EFAULT);
-    CHECK(dosvm_write(a,0xBFFF0,bytes,32)==-EFAULT); CHECK(dosvm_read(a,0xBFFF0,got,16)==0 && !got[0]);
+    CHECK(dosvm_write(a,0xBFFF0,bytes,32)==-EFAULT); CHECK(dosvm_read(a,0xBFFF0,got,16)==0 && got[0]==0x20 && got[1]==0x07); /* f3-02: cleared mode 3 text cell through the VGA model */
     uint32_t x=0x12345678,y=0; CHECK(dosvm_write(a,0,&x,4)==0 && dosvm_set_a20(a,false)==0);
     CHECK(dosvm_read(a,0x100000,&y,4)==0 && y==x); CHECK(dosvm_set_a20(a,true)==0 && dosvm_read(a,0x100000,&y,4)==0 && !y);
     CHECK(dosvm_disk_write(a,77,bytes)==0 && dosvm_disk_read(a,77,got)==0 && !memcmp(bytes,got,512));
@@ -479,10 +486,12 @@ static void test_memory_services(void)
     printf("DOS memory services: XMS/EMS/UMB state machines and move/resize validators PASS\n");
 }
 #include "dosvm_devices_test.inc"
+#include "dosvm_video_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices();
+    test_video();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

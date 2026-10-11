@@ -1122,3 +1122,53 @@ periods remain owned. SET_FORMAT requires reset after the first queued frame.
 AUDIO open additionally permits ENODEV/ENOMEM; byte writes retain F2 positive
 partial-count precedence over EINTR/EIO. Device seeks/positioned I/O: ESPIPE.
 No ioctl, poll/select, recording or master authority through public opens.
+
+## F3-02 amendment: DOS window virtual machine (2026-10-11, pending lead review)
+
+Syscall **72**, `CIUKI_SYS_DOSVM`, uses B=operation, C=record, D=byte size
+and returns 0 or a negative errno. No F0, F2 or F4 number changes. The
+record `ciuki_dosvm_command` is 136 bytes, little endian, four-byte aligned,
+version=1 at byte 0 and size at byte 4; size must equal both 136 and D.
+Every field an operation does not take, outputs included, must be zero on
+input. The record is copied, then its user range is pinned writable before
+any reservation or sleep; results are copied back only on success.
+
+| Bytes | Field | Use |
+| --- | --- | --- |
+| 0, 4 | version, size | 1, 136 |
+| 8, 12 | id, generation | VM key from CREATE; input of every other operation |
+| 16 | i32 surface_fd | CREATE: owned writable 640x480 XRGB8888 surface (stride 2560) |
+| 20, 24 | state, reason | STATUS/CREATE output: 0 booting, 1 running, 2 stopped; reason when stopped (0 exit, 1 terminate, 2 fault, 3 reset, 4 timeout) |
+| 28 | focused | FOCUS input 0/1; STATUS output |
+| 32 | changed | PRESENT output: 1 when rows were written |
+| 36 | video_mode | output: guest BIOS mode (BDA 0049h) |
+| 40 | name[32] | CREATE: 1-31 printable ASCII bytes, NUL, zero padding |
+| 72 | ciuki_input_event | INPUT: one desktop event with the F2 validation rules |
+| 112 | ciuki_rect | PRESENT output: damage rows, src=dst, full 640-pixel width |
+
+| Operation | Number | Semantics |
+| --- | --- | --- |
+| CREATE | 1 | Admit, create and boot one DOS VM bound to the caller and the surface; one VM per process. |
+| PRESENT | 2 | Render changed rows into the bound surface, at most once per 33 ms frame; integer scale, centred, black borders. |
+| INPUT | 3 | Requires focus. KEY events reach the guest keyboard (US layout BIOS words until the f3-01 device path); TEXT, MOTION and BUTTON are accepted and have no consumer yet. A full guest queue returns EAGAIN. |
+| FOCUS | 4 | Set focus; losing it releases held modifiers. |
+| CLOSE | 5 | Destroy the VM and drop the surface reference; a running VM is forcibly terminated. |
+| STATUS | 6 | State, reason, focus and video mode. |
+
+Authority is not a descriptor. The kernel marks a process at spawn only when
+its exact path is `/bin/dosbox` and its parent is the bootstrap supervisor or
+owns both a display and an input grant (the desktop); grants never leave
+their owner, so no other launcher can confer it. Keys belong to the owner:
+another process, a stale generation or a closed VM gets ESRCH. Owner death
+(exit, signal, fault) makes the supervisor's collection pass destroy the VM
+through the idempotent f3-00 cleanup and release the surface. The kernel
+writes the shared surface pages directly; no framebuffer address, VM memory
+or device is exposed, and the desktop composites the surface like any other
+client window.
+
+Complete dosvm errors: EPERM (no authority), EINVAL, EFAULT, EOPNOTSUPP
+(version), EBADF (surface descriptor), EACCES (read-only surface; input
+without focus), EBUSY (caller already owns or is creating a VM; operation in
+progress), ESRCH, ENOMEM (admission or allocation), ENOSPC (VM or creation
+slots), EAGAIN, EINTR (owner stopping during creation), EIO (private disk or
+boot failure, presenter write failure).

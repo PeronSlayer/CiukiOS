@@ -25,7 +25,7 @@ bool dosvm_admit(uint64_t free_bytes, uint64_t reserved, uint64_t resident,
     return ok;
 }
 
-static struct dosvm *lookup(struct dosvm_key key)
+struct dosvm *dosvm_lookup(struct dosvm_key key)
 {
     if (!key.id || key.id > DOSVM_LIMIT || !key.generation) return 0;
     struct dosvm *v = &slots[key.id - 1];
@@ -34,7 +34,7 @@ static struct dosvm *lookup(struct dosvm_key key)
 struct dosvm_key dosvm_key(const struct dosvm *v) { return v->info.key; }
 bool dosvm_valid(struct dosvm_key key)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     return v && v->info.state < DOSVM_STOPPING;
 }
 void dosvm_info(const struct dosvm *v, struct dosvm_info *out) { *out = v->info; }
@@ -49,7 +49,7 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         /* Count owned backing once, including unmapped EMS-window backing. */
         if (v->as.pd_phys) out->pages += DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1;
         out->handles += v->base_open + v->overlay_open;
-        out->devices += 3; /* authoritative PIC, PIT and text/input service */
+        out->devices += 4; /* authoritative PIC, PIT and text/input service */
         out->reserved += v->info.commitment;
         out->resident += v->info.resident;
     }
@@ -62,7 +62,14 @@ bool dosvm_range(const struct dosvm *v, uint32_t linear, unsigned bytes, bool wr
     bool pool=linear>=VM_POOL_BASE && linear<=end && bytes<=end-linear;
     if ((!low && !pool) || !v->as.pd_phys)
         return false;
-    return as_range_ok(&v->as, linear, bytes, write);
+    while (bytes) {
+        unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
+        if (n > bytes) n = bytes;
+        if (!(linear >= 0xA0000 && linear < 0xC0000) &&
+            !as_range_ok(&v->as, linear, n, write)) return false;
+        linear += n; bytes -= n;
+    }
+    return true;
 }
 static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned bytes, bool write)
 {
@@ -71,6 +78,14 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
     while (bytes) {
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
+        if (linear >= 0xA0000 && linear < 0xC0000) {
+            /* Kernel reads peek (no latch load); guest cycles use the VGA bus. */
+            for (unsigned i = 0; i < n; i++) {
+                if (write) cvga_write_vram(&v->vga, linear + i, b[i]);
+                else b[i] = cvga_peek_vram(&v->vga, linear + i);
+            }
+            b += n; linear += n; bytes -= n; continue;
+        }
         uint32_t phys = as_lookup(&v->as, linear, 0);
         if (!phys) return -EFAULT;
         if (write) memcpy(P2V(phys), b, n);
@@ -123,7 +138,7 @@ uint32_t dosvm_task_esp0(const struct task *t, uint32_t normal)
 }
 int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v) return -EINVAL;
     if (v->info.state >= DOSVM_STOPPING) return 0;
     v->info.reason = reason;
@@ -146,7 +161,7 @@ static bool wake_condition(void *arg)
 }
 void dosvm_input_poll(struct dosvm *v)
 {
-    if (v->window_input || !dosvm_valid(v->info.key) || input_focus.id != v->info.key.id ||
+    if (v->owner_pid || v->window_input || !dosvm_valid(v->info.key) || input_focus.id != v->info.key.id ||
         !gen_matches(input_focus.generation, v->info.key.generation)) return;
     struct input_event event;
     unsigned budget = 32;
@@ -188,6 +203,8 @@ bool dosvm_trap(struct trap_frame *tf)
     if (v->info.state != DOSVM_STOPPING) {
         if (tf->vector == 13) e = v86_emulate(&v->monitor, f);
         else if (tf->vector == 1 && (v->monitor.shadow || v->monitor.track_boundaries)) e = v86_debug_step(&v->monitor, f);
+        else if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000)
+            e = dosvm_vga_fault(v, f);
         else if (tf->vector == 7) fpu_handle_nm();
         else if (tf->vector == 3 || tf->vector == 4) e = v86_reflect(&v->monitor, f, tf->vector);
         else if (tf->vector < 0x20 || tf->vector >= 0x30) e = -EFAULT;
@@ -288,7 +305,7 @@ static void worker(void *arg)
 
 int dosvm_destroy(struct dosvm_key key, bool forced)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v) return -EINVAL;
     if (v->info.state == DOSVM_DEAD) return v->info.cleanup_error;
     if (v->task == g_current) return -V86_EPERM;
@@ -357,6 +374,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
         if (!phys) { e = -ENOMEM; goto fail; }
         memset(P2V(phys), 0, PAGE_SIZE);
         uint32_t flags = PTE_U | PTE_W;
+        if (i >= 0xA0 && i < 0xC0) flags = PTE_W; /* guest #PF -> model */
         if ((i >= 0xC0 && i < 0xC8) || (i >= 0xF0 && i < 0x100)) flags &= ~PTE_W;
         e = as_map(&v->as, i * PAGE_SIZE, phys, flags);
         if (e) { pmm_free(phys); goto fail; }
@@ -380,6 +398,8 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     e = dosvm_bios_init(v);
     if (e) goto fail;
     e = dosvm_memory_init(v, config);
+    if (e) goto fail;
+    e = dosvm_vga_init(v);
     if (e) goto fail;
     e = dosvm_disk_open(v);
     if (e) goto fail;
@@ -421,7 +441,7 @@ int dosvm_boot(struct dosvm *v)
 
 bool dosvm_irq_raise(struct dosvm_key key, unsigned irq)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key) || irq >= 16) return false;
     uint32_t flags = irq_save();
     v86_irq_raise(&v->monitor, irq);
@@ -440,7 +460,7 @@ int dosvm_keyboard_refresh(struct dosvm *v)
 }
 bool dosvm_keyboard(struct dosvm_key key, uint16_t bios_key)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key)) return false;
     uint32_t flags = irq_save();
     if (dosvm_keyboard_refresh(v) || v->key_count == 15) { irq_restore(flags); return false; }
@@ -466,14 +486,16 @@ const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)
 {
     dosvm_read((struct dosvm *)v, 0xB8000, (void *)v->text, sizeof(v->text));
     dosvm_mouse_text((struct dosvm *)v);
+    uint16_t pos = 0;
+    dosvm_read((struct dosvm *)v, 0x450, &pos, 2);
     if (cursor) *cursor = v->mouse.visible >= 0 && v->mouse.text_type == 1 && v->mouse.x < 640 && v->mouse.y < 200 ?
-        (unsigned)(v->mouse.y / 8) * 80 + v->mouse.x / 8 : v->cursor;
+        (unsigned)(v->mouse.y / 8) * 80 + v->mouse.x / 8 : (unsigned)(pos >> 8) * 80 + (pos & 255);
     return v->text;
 }
 int dosvm_port_register(struct dosvm_key key, uint16_t first, uint16_t last,
                         dosvm_port_handler handler, void *arg)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key) || first > last || !handler) return -EINVAL;
     /* These fixed ranges belong to the core. */
     static const uint16_t reserved[][2] = {{0x20,0x21},
@@ -493,7 +515,7 @@ int dosvm_port_register(struct dosvm_key key, uint16_t first, uint16_t last,
 }
 int dosvm_port_unregister(struct dosvm_key key, uint16_t first)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key)) return -EINVAL;
     for (unsigned i = 0; i < DOSVM_PORTS; i++) if (v->ports[i].handler && v->ports[i].first == first) {
         memset(&v->ports[i], 0, sizeof(v->ports[i])); return 0;
@@ -505,10 +527,10 @@ int dosvm_port_unregister(struct dosvm_key key, uint16_t first)
  * granted here; f3-02 supplies the owner-bound adapter. */
 bool dosvm_input_focus(struct dosvm_key key, bool focused)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key)) return false;
     uint32_t flags = irq_save();
-    struct dosvm *previous = lookup(input_focus);
+    struct dosvm *previous = dosvm_lookup(input_focus);
     if (focused && previous && previous != v && dosvm_valid(input_focus)) {
         dosvm_kbd_release(previous); dosvm_mouse_event(previous, 0, 0, 0);
         previous->pointer_known = false;
@@ -524,7 +546,7 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
 }
 bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!e || !v || !dosvm_valid(key) || !v->window_input ||
         input_focus.id != key.id || input_focus.generation != key.generation) return false;
     uint32_t flags = irq_save(); bool ok = true;
@@ -552,7 +574,7 @@ bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
 }
 bool dosvm_device_info(struct dosvm_key key, struct dosvm_device_info *out)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!out || !v || !dosvm_valid(key)) return false;
     uint32_t flags = irq_save(); memset(out, 0, sizeof(*out));
     out->host_ticks = v->clock_ms; out->pit_clocks = v->pit.clocks; out->pit_edges = v->pit.edges;

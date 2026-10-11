@@ -30,7 +30,7 @@ struct process {
     uint64_t pending, cpu_ticks;
     struct kwait changed;
     uint32_t threads, live_threads;
-    bool published;
+    bool published, dosvm_capability;
 };
 struct proc_thread {
     uint32_t tid, slot, value, tls, stack_base, stack_bytes;

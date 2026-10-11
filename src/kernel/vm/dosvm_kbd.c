@@ -127,13 +127,82 @@ int dosvm_kbd_port(struct dosvm *v, uint16_t port, unsigned width, bool write, u
     }
     return kbd_queue(v, reply, n) ? 0 : -ENOSPC;
 }
-static const char kbd_ascii[128] = {
-    [1]=27, [2]='1',[3]='2',[4]='3',[5]='4',[6]='5',[7]='6',[8]='7',[9]='8',[10]='9',[11]='0',
-    [12]='-',[13]='=',[14]=8,[15]=9,[16]='q',[17]='w',[18]='e',[19]='r',[20]='t',[21]='y',[22]='u',[23]='i',
-    [24]='o',[25]='p',[26]='[',[27]=']',[28]=13,[30]='a',[31]='s',[32]='d',[33]='f',[34]='g',[35]='h',
-    [36]='j',[37]='k',[38]='l',[39]=';',[40]='\'',[41]='`',[43]='\\',[44]='z',[45]='x',[46]='c',
-    [47]='v',[48]='b',[49]='n',[50]='m',[51]=',',[52]='.',[53]='/',[55]='*',[57]=' '
+/* IBM PC AT INT 16h words for the synthetic INT 9 translation (f3-02,
+ * from the window adapter it replaces): letters, Shift/Caps/Ctrl/Alt,
+ * function keys with modifiers, F11/F12, Alt digits, Ctrl navigation and
+ * punctuation, NumLock keypad, keypad Enter and slash. Grey keys use the 00h
+ * form INT 16h AH=00h returns. https://stanislavs.org/helppc/scan_codes.html
+ * s is the BIOS shift byte (0417h): 1/2 Shift, 4 Ctrl, 8 Alt, 20h Num, 40h Caps. */
+static const char key_plain[0x3A] = {
+    [0x01]=27, [0x02]='1', [0x03]='2', [0x04]='3', [0x05]='4', [0x06]='5', [0x07]='6',
+    [0x08]='7', [0x09]='8', [0x0A]='9', [0x0B]='0', [0x0C]='-', [0x0D]='=', [0x0E]=8,
+    [0x0F]=9, [0x10]='q', [0x11]='w', [0x12]='e', [0x13]='r', [0x14]='t', [0x15]='y',
+    [0x16]='u', [0x17]='i', [0x18]='o', [0x19]='p', [0x1A]='[', [0x1B]=']', [0x1C]=13,
+    [0x1E]='a', [0x1F]='s', [0x20]='d', [0x21]='f', [0x22]='g', [0x23]='h', [0x24]='j',
+    [0x25]='k', [0x26]='l', [0x27]=';', [0x28]='\'', [0x29]='`', [0x2B]='\\', [0x2C]='z',
+    [0x2D]='x', [0x2E]='c', [0x2F]='v', [0x30]='b', [0x31]='n', [0x32]='m', [0x33]=',',
+    [0x34]='.', [0x35]='/', [0x37]='*', [0x39]=' ',
 };
+static const char key_shift[0x3A] = {
+    [0x01]=27, [0x02]='!', [0x03]='@', [0x04]='#', [0x05]='$', [0x06]='%', [0x07]='^',
+    [0x08]='&', [0x09]='*', [0x0A]='(', [0x0B]=')', [0x0C]='_', [0x0D]='+', [0x0E]=8,
+    [0x10]='Q', [0x11]='W', [0x12]='E', [0x13]='R', [0x14]='T', [0x15]='Y', [0x16]='U',
+    [0x17]='I', [0x18]='O', [0x19]='P', [0x1A]='{', [0x1B]='}', [0x1C]=13, [0x1E]='A',
+    [0x1F]='S', [0x20]='D', [0x21]='F', [0x22]='G', [0x23]='H', [0x24]='J', [0x25]='K',
+    [0x26]='L', [0x27]=':', [0x28]='"', [0x29]='~', [0x2B]='|', [0x2C]='Z', [0x2D]='X',
+    [0x2E]='C', [0x2F]='V', [0x30]='B', [0x31]='N', [0x32]='M', [0x33]='<', [0x34]='>',
+    [0x35]='?', [0x37]='*', [0x39]=' ',
+};
+static uint16_t navigation(unsigned scan, bool ctrl)
+{
+    static const uint8_t ctrl_scan[13] = {0x77, 0x8D, 0x84, 0x8E, 0x73, 0x8F, 0x74, 0x90,
+                                          0x75, 0x91, 0x76, 0x92, 0x93};
+    if (scan < 0x47 || scan > 0x53) return 0;
+    if (scan == 0x4A) return ctrl ? 0x8E00 : 0x4A2D;
+    if (scan == 0x4E) return ctrl ? 0x9000 : 0x4E2B;
+    return (uint16_t)((ctrl ? ctrl_scan[scan - 0x47] : scan) << 8);
+}
+static uint16_t bios_word(unsigned scan, bool extended, uint8_t s)
+{
+    bool shift = s & 3, ctrl = s & 4, alt = s & 8;
+    if (extended) {
+        if (scan == 0x1C) return ctrl ? 0x1C0A : 0x1C0D;        /* keypad Enter */
+        if (scan == 0x35) return 0x352F;                        /* keypad / */
+        return navigation(scan, ctrl);
+    }
+    if (scan >= 0x3B && scan <= 0x44) {                         /* F1-F10 */
+        unsigned base = alt ? 0x68 : ctrl ? 0x5E : shift ? 0x54 : 0x3B;
+        return (uint16_t)((base + scan - 0x3B) << 8);
+    }
+    if (scan == 0x57 || scan == 0x58) {                         /* F11, F12 */
+        unsigned base = alt ? 0x8B : ctrl ? 0x89 : shift ? 0x87 : 0x85;
+        return (uint16_t)((base + scan - 0x57) << 8);
+    }
+    if (scan >= 0x47 && scan <= 0x53 && scan != 0x4A && scan != 0x4E) {
+        static const char digits[] = "789-456+1230.";
+        bool number = ((s & 0x20) != 0) != shift;
+        return number && !ctrl && !alt ? (uint16_t)(scan << 8 | (uint8_t)digits[scan - 0x47]) : navigation(scan, ctrl);
+    }
+    if (scan == 0x4A || scan == 0x4E) return navigation(scan, ctrl);
+    if (scan >= sizeof(key_plain) || !key_plain[scan]) return 0;
+    char c = key_plain[scan];
+    if (alt) {
+        if (scan >= 0x02 && scan <= 0x0D) return (uint16_t)((scan + 0x76) << 8); /* Alt 1..= */
+        return (uint16_t)(scan << 8);
+    }
+    if (ctrl) {
+        if (c >= 'a' && c <= 'z') return (uint16_t)(scan << 8 | (c - 'a' + 1));
+        switch (scan) {
+        case 0x1C: return 0x1C0A; case 0x0E: return 0x0E7F; case 0x03: return 0x0300;
+        case 0x07: return 0x071E; case 0x0C: return 0x0C1F; case 0x1A: return 0x1A1B;
+        case 0x2B: return 0x2B1C; case 0x1B: return 0x1B1D; default: return 0;
+        }
+    }
+    if (scan == 0x0F) return shift ? 0x0F00 : 0x0F09;
+    bool letter = c >= 'a' && c <= 'z';
+    bool upper = letter ? shift != ((s & 0x40) != 0) : shift;
+    return (uint16_t)(scan << 8 | (uint8_t)(upper ? key_shift[scan] : c));
+}
 int dosvm_kbd_bios(struct dosvm *v)
 {
     struct dosvm_kbd *k = &v->kbd;
@@ -147,18 +216,12 @@ int dosvm_kbd_bios(struct dosvm *v)
     bool up = b & 0x80;
     uint8_t mask = !extended && scan == 0x2A ? 2 : !extended && scan == 0x36 ? 1 : scan == 0x1D ? 4 : scan == 0x38 ? 8 : 0;
     if (mask) { if (up) k->shift &= ~mask; else k->shift |= mask; }
-    else if (!up && scan == 0x3A) k->shift ^= 0x40;
+    else if (!up && !extended && scan == 0x3A) k->shift ^= 0x40;   /* Caps Lock */
+    else if (!up && !extended && scan == 0x45) k->shift ^= 0x20;   /* Num Lock */
+    else if (!up && !extended && scan == 0x46) k->shift ^= 0x10;   /* Scroll Lock */
     else if (!up && b < 0x80 && !(extended && scan == 0x2A)) {
-        uint8_t ch = extended ? 0 : kbd_ascii[scan];
-        if (ch >= 'a' && ch <= 'z') {
-            if (k->shift & 4) ch -= 'a' - 1;
-            else if (!!(k->shift & 3) != !!(k->shift & 0x40)) ch -= 'a' - 'A';
-        } else if (k->shift & 3) {
-            const char *normal = "1234567890-=[];'`,./\\", *shifted = "!@#$%^&*()_+{}:\"~<>?|";
-            for (unsigned i = 0; normal[i]; i++) if (ch == (uint8_t)normal[i]) { ch = shifted[i]; break; }
-        }
-        if (k->shift & 8) ch = 0;
-        dosvm_keyboard(v->info.key, (scan << 8) | ch);
+        uint16_t word = bios_word(scan, extended, k->shift);
+        if (word) dosvm_keyboard(v->info.key, word);
     }
     return dosvm_write(v, 0x417, &k->shift, 1);
 }

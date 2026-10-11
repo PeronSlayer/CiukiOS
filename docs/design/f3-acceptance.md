@@ -270,6 +270,212 @@ pending at STI is taken after HLT and wakes it. The host replay reproduces the h
 (old loop: still halted after 200 ms, AX=FDh, IP after HLT) and runs the
 corrected loops, including a focus release made pending before `STI; HLT`.
 
+## f3-02
+
+Status: implementation and host validation complete (2026-10-11, Claude as
+implementer after Codex's partial commit 1c33fb8); QEMU, desktop screenshot
+and hardware evidence belong to the lead. This section makes no runtime PASS
+claim.
+
+### Research checked before implementation
+
+- [QEMU 9.2 `hw/display/vga.c`](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/display/vga.c):
+  `vga_mem_readb/writeb` show that mapped RAM alone cannot implement latches,
+  chain-4 or planar write modes; input status 1 is computed per read
+  (`vga_precise_retrace` sets retrace plus display-disabled in vertical
+  retrace and display-disabled alone in horizontal blanking; the dumb method
+  toggles both per read) and every read clears the attribute flip-flop.
+- [FreeVGA, Input Status #1 Register](https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/extreg.htm):
+  bit 3 vertical retrace; bit 0 set during horizontal or vertical retrace.
+- [VESA VBE 3.0](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/vbe3.pdf):
+  AL=4Fh function recognised, AH=01h call failed (contract's unavailable-VBE
+  convention through F4).
+- [Unicode CP437 mapping](https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC/CP437.TXT):
+  80h-A5h accented letters, B0h-DFh shades, box drawing and blocks, F9h, FAh,
+  FEh, FFh.
+- [HelpPC keyboard scan codes](https://stanislavs.org/helppc/scan_codes.html):
+  INT 16h scan/ASCII words, including shifted/Ctrl/Alt function keys, Ctrl
+  navigation keys (73h-93h), Alt digits (78h-83h) and Ctrl punctuation.
+- [Abrash, Graphics Programming Black Book, ch. 47](https://www.phatcode.net/res/224/files/html/ch47/47-02.html):
+  the Mode X 320x240 sequence (SR04 06h, CRTC 14h/17h byte mode, misc E3h,
+  CRTC 06h/07h/09h/10h-12h/15h/16h) used by `VMVIDEO.COM` stage 4.
+- The retained models (`virtual_vga.c`, `virtual_vga_bios.c`, `vga_x86.c`,
+  `vga_presenter.c`, migrated unchanged apart from V86 64 KiB segment-limit
+  checks in `vga_x86.c`) carry their own register/BIOS references
+  (Chips & Technologies 82C452, DOSBox-X chained-memory notes, SeaVGABIOS
+  tables). They implement the semantics independently; the old Jemm/HDPMI
+  adapters are not used.
+
+### Decisions
+
+Aperture: every `A0000-BFFFF` guest PTE stays supervisor-only. A guest #PF
+there (classified by the CR2 captured before interrupts are re-enabled) runs
+the faulting instruction through `cvx_execute` on a per-VM bus: aperture
+reads load the latches, writes use the GC write modes, other operands use
+the checked private-memory helpers, instruction fetch from the aperture
+fails. REP strings run 4096 elements per fault and restart like an
+interrupted REP; a divide error reflects #DE through the guest's INT 0
+vector; unsupported forms, 64 KiB segment-limit crossings and bus errors
+stop only that VM. Kernel-side `dosvm_read` of the aperture peeks
+(no latch load); kernel writes go through the model. A direct plane or
+shadow mapping for fast mode 13h/Mode X workloads is left to f3-06.
+
+INT 10h: the f3-00 ROM stub reaches `cvbios_int10` (modes 00h-03h, 0Dh,
+0Eh, 10h-13h, cursor, scroll, teletype, palette/DAC, fonts, 12h/1Ah). Guest
+buffers (1002h/1009h, 1012h/1017h, 1100h/1110h, 13xxh) are validated whole,
+direction included, before any register or VRAM change. 4Fxxh returns
+AX=014Fh. Text mode sets select eight-dot character clocks (SR01 bit 0), so
+80-column text is 640 pixels wide. Ports 3B0h-3DFh are the VM's model;
+multi-byte accesses decompose low byte first; bytes past 3DFh read FFh.
+
+Retrace: the presenter's frame clock is 33 host ticks; the last three are
+vertical retrace (status bits 3 and 0). In the active period bit 0
+alternates on successive reads as a horizontal-blanking stand-in, so
+snow-avoiding loops progress; polling never advances the frame clock.
+
+Fonts: the synthetic ROM (F000:2000 8x16, F000:3000 8x8, F000:4000 8x14) is
+a deterministic conversion of the kernel's Inconsolata console bitmap
+(OFL-1.1) for printable ASCII. CP437 accented letters use their base letter,
+shades/blocks/bullets and all 40 box-drawing characters (single, double and
+mixed, with closed double corners) are drawn geometrically, other codes show
+`?`. 8x14 and 8x8 cells OR the 16-row source rows they cover, which keeps
+one-pixel strokes legible in 80x50. No firmware font is copied. (This
+supersedes the partial's "non-ASCII use ?" and "sample alternate rows".)
+
+Presenter: a fixed 640x480 XRGB surface, the largest integer scale that fits,
+centred, black borders; no fractional scaling or aspect correction. Dirty
+granules are taken and cleared atomically at frame start, so stores during a
+frame stay marked; scanout-register/DAC changes, geometry changes and font
+(plane 2) changes redraw everything; blink (500 ticks) and cursor (250 ticks)
+phases redraw only phase-sensitive scanlines. At most one frame per 33 ticks.
+A scanout the models cannot render or that exceeds 640x480 (custom/9-dot)
+produces one black frame and the VM keeps running. The host harness proves
+pixel equality with the retained `cvp_present` for all five pattern stages
+at two phases.
+
+Native authority (execution-abi.md, F3-02 amendment): syscall 72 with a
+136-byte record; the authority is a spawn-time process flag set only for an
+exact `/bin/dosbox` whose parent is the supervisor or owns both a display
+and an input grant. One VM per process, keys bound to the owner, generation
+validation, a creation reservation against concurrent creators, closed
+error set. Owner death reaches the supervisor's collection pass, which
+destroys the VM through the idempotent f3-00 path; a binding busy in its
+owner's syscall is collected at that syscall's exit. CLOSE forces only a VM
+that is still running, so a guest EXIT reports no data loss. Window VMs own
+the record name `vm-window`; the surface is not charged to VM residency (it
+is already outside the free pool used by admission).
+
+Input (after the f3-01 merge, 2026-10-11): `window_focus` and `window_input`
+in `dosvm_client.c` call `dosvm_input_focus` and `dosvm_input_event`. A
+focused KEY event becomes set-1 bytes in the VM's 8042 and IRQ1; the
+synthetic INT 9 (`dosvm_kbd_bios`) fills the BIOS buffer; MOTION and BUTTON
+drive the INT 33h model, so mouse callbacks work in the window; TEXT is
+ignored; focus loss and RESYNC send break codes for held keys and release
+buttons. The interim BIOS-word adapter is gone from the client. Its tables
+moved into `dosvm_kbd_bios`, because the f3-01 translation did not cover
+these BIOS words (HelpPC table): Shift/Ctrl/Alt F1-F10, F11/F12 (85h-8Ch),
+Alt digits and `-`/`=` (78h-83h), Ctrl navigation (73h-93h), Ctrl Enter,
+Backspace, `2`, `6`, `-`, `[`, `]`, `\`, Shift-Tab (0F00h), the Num Lock
+keypad (digits and `.`), keypad `-`, `+`, Enter (1C0Dh) and `/` (352Fh). Num
+Lock and Scroll Lock now toggle BIOS shift bits 20h/10h instead of queuing
+a key. Letters, Shift, Caps Lock and Ctrl/Alt letters keep f3-01's results.
+The text-mode INT 33h cursor appears in the probe text view
+(`dosvm_text`); the window frame does not draw it, the desktop pointer is
+the visible cursor.
+
+ROM map: F000:0000-0FFF interrupt stubs, F100:0000 EMS entry and F000:1020
+INT 33h continuation (both in page F1000h), F000:2000 8x16, F000:3000/3400
+8x8 and F000:4000 8x14 fonts (F2000h-F4DFFh). The fonts stay clear of
+F0000h-F1FFFh.
+
+`/bin/dosbox` (apps/dosbox, MIT): one process, one VM, one window titled
+with the VM name (`--name=`, default `CiukiDOS`), protocol v2 close request
+→ CLOSE and exit, VM stop → window close, focus/key/motion/button forwarding,
+damage at the kernel cadence. The desktop passes `--channel-fd=3` to it and
+gains `--launch=<program>`, which starts one `/bin` menu program through the
+menu-click path (used by `f3:vm-window`). Adding `/bin/dosbox` grows the
+bottom-anchored Ciuki menu by one row, so the f2-30 `desktop-shell-*`
+scripted click on Demo moves from `y-169` to `y-197` (1024x768).
+
+### Probes, cases and golden digests
+
+`f3:vm-video run=<8hex>` (no suffix; sweep after `vm-memory`): one 8 MiB VM
+boots to the prompt (`case=boot`, `case=prompt` with an informational prompt
+digest), types `\VMVIDEO.COM` and, for each of five stages, waits for the
+guest line `VMVIDEO s f`, for INT 16h to block the VM, then hashes the whole
+640x480 presenter frame at tick 0 (`case=frame stage mode width height scale
+text flags digest`). Stage 6 restores text; `case=return`, EXIT, then
+`case=cleanup` against the pre-probe ledger. Cases `vm-video-qemu-t23/e500/
+min128` pin mode, geometry, flags (stage 1: retrace edges and DAC read-back;
+stage 3: retrace) and the digests:
+
+| Stage | Frame | SHA-256 |
+| --- | --- | --- |
+| 1 | mode 03h, 80x25, 640x400 | `0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de` |
+| 2 | 80x50 (8x8 font), 640x400 | `c4ac397792548fb0228a889fd7567275dd8148637fa48405fef5386851fdf12c` |
+| 3 | mode 13h + DAC 40h-7Fh, 320x200 x2 | `c019f0109e614d8ae01d35638587b23d92148b8d442dfd0deba73fe3a6df527c` |
+| 4 | Mode X 320x240 x2 | `a6d61fa11188a1e81da20dc5f018ee49c264fa0beb004587970b061058d3742a` |
+| 5 | mode 12h, 640x480 | `81daa6ab021444158a8c45f09c72de3b13ee45d7ddf22c920a65ac496a4ec9c2` |
+
+Golden procedure: `tests/host/dosvm_video_test.inc` (`video_stage`) repeats
+each stage's INT 10h calls, port writes and VRAM stores of
+`src/probes/dos/vm_video.asm` in order on a real `dosvm_create` VM and
+hashes `dosvm_frame_digest`. On a deliberate pattern, font or presenter
+change, run the harness, copy the printed `VIDEO golden` digests into
+`video_golden[]` and into the suite; `tests/host/test_dosvm.py` fails unless
+the two agree. `DOSVM_VIDEO_DUMP=<dir>` writes the five frames as PPM.
+The digests assume that CIUKIDOS leaves BDA 0489h (palette-loading and
+grey-scale flags) clear; a QEMU mismatch on stage 1 points there first.
+`VMVIDEO.COM` has no guest HLT wait: stage keys use INT 16h AH=00h, which
+blocks in the monitor, and retrace is a bounded 3DAh poll, so the f3-01
+wait-loop rule (test with IF clear, sleep with `STI; HLT`) has no site in
+it. A stage or prompt timeout in either probe adds `group=vm_devices` (IRR,
+ISR, IMR, 8042 queue, held keys, IRQ0/IRQ1 deliveries, last vector, PIC
+bases from `dosvm_device_info`) before the `group=screen` rows, which are
+owned by the running probe.
+
+`f3:vm-window run=<8hex>` (sweep after `vm-video`): the probe spawns
+`/bin/desktop --launch=dosbox` under a controller owner, waits for the bound
+window VM and its prompt (`case=window`), emits `ARM action=window_input`
+(the runner moves the pointer off the window and types `\VMVIDEO.COM` with
+QMP keys; without that stimulus for 30 s, as in a hardware cfg sweep, the
+controller types it and records `typed=kernel`, which the QEMU cases
+refuse), hashes stage 1 (`case=frame stage=1 typed=window`), emits `ARM
+action=window_screen digest=` and holds the frame for 6 s. The runner's new
+`window_screen` check takes a QMP screendump 2 s after that ARM and requires
+the composited client region (origin 23,76: first window at 20,52 plus the
+3-pixel border and 24-pixel title) to hash, as XRGB rows, to both the
+suite's stage-1 golden and the ARM digest. The probe then finishes the
+stages and types EXIT: `case=closed` requires reason 0, the window binding
+released and `/bin/dosbox` exited; `case=cleanup` requires the VM ledger and
+the desktop object ledger (descriptions, surfaces, pages, channels,
+messages, grants) back at baseline. Cases: `vm-window-qemu-desktop-2002`
+and `vm-window-qemu-desktop-1998` (needs a 24/32-bit desktop of at least
+663x556).
+
+### Host and build evidence (worktree, 2026-10-11)
+
+- `bash scripts/test/host_kernel_tests.sh`: PASS (after the f3-01 merge). DOS VM harness 1517061
+  checks (ASan/UBSan) including the f3-00/f3-03 cases, VGA BIOS/ports/ROM
+  fonts, aperture emulation, guest #DE reflection and trap CR2, presenter damage/phases/custom
+  scanout, five goldens with retained-presenter equivalence and the window
+  boundary (authority, record validation, keyboard adapter, owner death,
+  allocation/storage/boot failures); migrated `test_virtual_vga.c` 173117
+  assertions; ABI oracle 805 checks; record-scope PASS.
+- `python3 -m unittest tests.host.test_dosvm tests.host.test_vga_x86`, `tests/host/desktop`,
+  `test_sweep.py`, `test_loader_*.py`, `test_image_payloads.py`,
+  `tests/loader_stub/test_static.py`: PASS. `test_runner.py`,
+  `test_physical.py` and `test_desktop_gate.py` share the QEMU lock and were
+  left to the lead.
+- `make kernel` (clang i686, -Werror, FPU audit) and `make sdk` / `make
+  desktop` (desktop, demo, dosbox inspected): PASS. `DOSBOOT.IMG` builds with
+  `VMVIDEO.COM` (T1 DOS: 12 payloads read back).
+- `tests/host/test_vga_x86_shim.c` (unchanged) is driven by the new
+  `tests/host/test_vga_x86.py` with hand-derived vectors (stores, MOVS cycle
+  order, read-modify-write flags, REP restart, unsupported, divide error,
+  V86 64 KiB limit). The archived Unicorn differential script is not
+  restored: Unicorn is not a project dependency.
+
 ## f3-03
 
 Research checked before implementation, 2026-10-11: [XMS 3.0](https://www.phatcode.net/res/219/files/xms30.txt),
