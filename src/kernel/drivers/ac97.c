@@ -155,7 +155,7 @@ int ac97_progress(struct ac97_device *d)
     d->generation_fetched = fetched;
     if (c.status & AC97_FIFOE) { d->fifo_errors++; wr(d, 0x16, AC97_FIFOE, 2); }
     if (c.status & AC97_DCH) {
-        if (!d->observed_halt) d->dma_halts++;
+        if (!d->observed_halt && !d->idle_tail) d->dma_halts++; /* an idle-tail underrun carries no client data */
         d->observed_halt = true;
         return -EIO; /* no replay/restart of potentially committed PCM */
     }
@@ -167,7 +167,7 @@ int ac97_progress(struct ac97_device *d)
 }
 int ac97_publish(struct ac97_device *d, const struct audio_frame *pcm)
 {
-    if (d->quarantine || d->stopping || d->published - d->retired >= AUDIO_LEAD) return -EAGAIN;
+    if (d->quarantine || d->stopping || d->published - d->retired >= 31) return -EAGAIN; /* ring full; the service owns the lead policy */
     unsigned slot = d->published % 32;
     if (d->running) {
         struct ac97_cursor c;
@@ -285,7 +285,7 @@ static bool ac97_irq(unsigned irq, const char *owner)
     ac97.irq_cursor = (struct ac97_cursor){ .status=status, .civ=rd(&ac97, 0x14, 1),
         .piv=rd(&ac97, 0x1a, 1), .remaining=rd(&ac97, 0x18, 2) };
     if (causes & AC97_FIFOE) ac97.fifo_errors++;
-    if ((status & AC97_DCH) && !ac97.observed_halt) { ac97.dma_halts++; ac97.observed_halt = true; }
+    if ((status & AC97_DCH) && !ac97.observed_halt) { if (!ac97.idle_tail) ac97.dma_halts++; ac97.observed_halt = true; }
     wr(&ac97, 0x16, causes, 2);
     audio_wake();
     uint64_t us = g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms : 0;

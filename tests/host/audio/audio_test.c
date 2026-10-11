@@ -158,7 +158,7 @@ static void test_bdl(void)
     for(unsigned i=0;i<32;i++)d.pcm[i]=buffers[i];
     struct audio_frame block[256];for(unsigned i=0;i<256;i++)block[i]=(struct audio_frame){123,-123};
     for(unsigned i=0;i<8;i++)CHECK(!ac97_publish(&d,block));
-    CHECK(hw.lvi==7 && hw.lvi_writes==8 && ac97_publish(&d,block)==-EAGAIN);
+    CHECK(hw.lvi==7 && hw.lvi_writes==8); /* the lead policy lives in the service; the driver limits the ring (31) */
     CHECK(!ac97_start(&d));hw.sr=0;hw.civ=0;hw.piv=1;hw.remaining=512;
     for(unsigned absolute=1;absolute<100;absolute++) {
         hw.civ=absolute%32;hw.piv=(hw.civ+1)%32;hw.remaining=512;hw.tick++;
@@ -167,6 +167,9 @@ static void test_bdl(void)
         CHECK(!ac97_publish(&d,block));
         CHECK(!memcmp(&current,&buffers[hw.civ][0],sizeof(current)) && !memcmp(&prefetch,&buffers[hw.piv][0],sizeof(prefetch)));
     }
+    /* Ring limit: 31 outstanding periods, then -EAGAIN (idle-tail cushion of 28 fits). */
+    for(unsigned i=0;i<23;i++)CHECK(!ac97_publish(&d,block));
+    CHECK(d.published-d.retired==31 && ac97_publish(&d,block)==-EAGAIN);
     uint64_t fetched=d.fetched;
     CHECK(!ac97_stop(&d) && d.fetched==fetched);
     d.frame_base=1000000;

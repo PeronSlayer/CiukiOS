@@ -616,9 +616,16 @@ class Actions:
         if len(matches)>1:raise EvidenceError('duplicate action synchronization record')
         if not matches:return None
         if action['type']=='media':
-            args={'device':action['device']}
-            if action['operation']=='change':args.update(target=action['target'],arg='raw')
-            response=qmp.command(action['operation'],args)
+            # QEMU 11 has no 'change' command (lead fix, 2026-10-11): the block
+            # backend is addressed by id; 'eject' then 'blockdev-change-medium'.
+            # The -drive id names the block backend; QMP addresses it with the
+            # (deprecated but retained) 'device' member, not the frontend 'id'.
+            if action['operation']=='change':
+                command='blockdev-change-medium'
+                args={'device':action['device'],'filename':action['target'],'format':'raw','read-only-mode':'read-only'}
+            else:
+                command='eject'; args={'device':action['device'],'force':True}
+            response=qmp.command(command,args)
             self.observed.append({'type':'media','operation':action['operation'],'arguments':args,
                                   'response':response,'host_monotonic':now,'sync_seq':matches[0]['seq']})
             self.index+=1;return None
@@ -895,13 +902,31 @@ def check_audio_wav(path, expected):
     import math
     if path.stat().st_size > 16 * 1024 * 1024:
         raise EvidenceError('audio capture exceeds 16 MiB')
-    with wave.open(str(path), 'rb') as capture:
-        rate, count = capture.getframerate(), capture.getnframes()
-        if capture.getnchannels() != 2 or capture.getsampwidth() != 2 or capture.getcomptype() != 'NONE':
-            raise EvidenceError('audio capture must be uncompressed PCM16 stereo')
+    header_finalized = True
+    try:
+        with wave.open(str(path), 'rb') as capture:
+            rate, count = capture.getframerate(), capture.getnframes()
+            if capture.getnchannels() != 2 or capture.getsampwidth() != 2 or capture.getcomptype() != 'NONE':
+                raise EvidenceError('audio capture must be uncompressed PCM16 stereo')
+            if rate < 8000 or rate > 96000 or count > rate * 30:
+                raise EvidenceError('audio capture rate/duration exceeds bounds')
+            samples = array.array('h', capture.readframes(count))
+    except wave.Error:
+        # QEMU's wav audiodev leaves the RIFF/data sizes at zero when the
+        # capture was not finalized (observed with QEMU 11 after a clean QMP
+        # quit); the canonical 44-byte header is still complete, so the data
+        # is the remainder of the file. Recorded as unfinalized evidence.
+        raw = path.read_bytes()
+        if len(raw) < 44 or raw[:4] != b'RIFF' or raw[8:16] != b'WAVEfmt ' or raw[36:40] != b'data':
+            raise EvidenceError('not a WAVE file')
+        fmt, channels, rate, bits = struct.unpack('<HHIxxxxxxH', raw[20:36])
+        if fmt != 1 or channels != 2 or bits != 16: raise EvidenceError('audio capture must be uncompressed PCM16 stereo')
+        header_finalized = False
+        data = raw[44:len(raw) - (len(raw) - 44) % 4]
+        count = len(data) // 4
         if rate < 8000 or rate > 96000 or count > rate * 30:
             raise EvidenceError('audio capture rate/duration exceeds bounds')
-        samples = array.array('h', capture.readframes(count))
+        samples = array.array('h', data)
     if sys.byteorder != 'little': samples.byteswap()
     if len(samples) != count * 2: raise EvidenceError('truncated audio capture')
     threshold = expected.get('silence_threshold', 16)
@@ -913,7 +938,7 @@ def check_audio_wav(path, expected):
     if first is None: raise EvidenceError('audio capture is silent')
     duration = (last - first) / rate
     result = {'sample_rate':rate, 'capture_frames':count, 'first_active_frame':first,
-              'active_frames':last-first, 'duration_seconds':duration, 'windows':[]}
+              'active_frames':last-first, 'duration_seconds':duration, 'windows':[], 'header_finalized':header_finalized}
     failures = []
     if not expected['duration'][0] <= duration <= expected['duration'][1]: failures.append('duration')
     maximum = gap = 0
