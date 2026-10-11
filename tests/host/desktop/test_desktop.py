@@ -86,7 +86,7 @@ class DesktopTests(unittest.TestCase):
             folder = Path(temp)
             inc = folder / "include/ciuki"
             inc.mkdir(parents=True)
-            for name in ("channel.h", "surface.h", "spawn.h"):
+            for name in ("channel.h", "surface.h", "spawn.h", "proc.h"):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
             for name in ("runtime.h", "raw.h"):
                 (inc / name).write_text("/* supplied by host harness */\n")
@@ -104,7 +104,7 @@ class DesktopTests(unittest.TestCase):
     def test_tango_icon_provenance(self):
         c = load("shell_icon_test", ROOT / "apps/desktop/convert_icons.py")
         record = c.check()
-        self.assertEqual(set(record["icons"]), {"run", "restart"})
+        self.assertEqual(set(record["icons"]), set(c.MEMBERS))
         self.assertEqual(record["archive_sha256"], c.ARCHIVE_SHA)
 
     def test_native_production_model(self):
@@ -148,21 +148,23 @@ class DesktopTests(unittest.TestCase):
         if not (build.OUT / "manifest.json").is_file():
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
-        self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "ciuki-portrait.xrgb"})  # f3-02 /bin/dosbox
+        self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a",
+                                           "ciuki-portrait.xrgb"})  # f3-02 /bin/dosbox
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
         expected["cflags"] = []
         self.assertFalse(build.current_build(expected))
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
-        self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/bin/dosbox", "/system/assets/ciuki-portrait.xrgb"})
+        self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/bin/dosbox", "/bin/files", "/bin/tasks",
+                                        "/bin/ciuknote", "/system/assets/ciuki-portrait.xrgb"})
         self.assertIn("/system/assets", directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 4)
+        self.assertEqual(len(records), 7)
         for r in records:
             self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
-        print("PASS desktop/demo ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
+        print("PASS desktop/demo/Files ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
 
     @unittest.skipUnless(all(shutil.which(t) for t in ("mkfs.fat", "mcopy", "mmd", "mdir")),
                          "requires mtools and mkfs.fat")
@@ -182,7 +184,7 @@ class DesktopTests(unittest.TestCase):
             image.populate_payloads(volume, sources, directories)
             with patch.object(image, "PART_LBA", 0):
                 image.check_payloads(volume, image.payload_records(sources), directories)
-        print("PASS real FAT read-back: desktop, demo, portrait sizes/SHA-256")
+        print("PASS real FAT read-back: desktop, demo, Files, portrait sizes/SHA-256")
 
     def test_stale_output_rejected(self):
         build = load("desktop_stale_test", ROOT / "apps/desktop/build_desktop.py")
@@ -192,7 +194,7 @@ class DesktopTests(unittest.TestCase):
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="desktop-stale-", dir=parent) as temp:
             dest = Path(temp)
-            for name in ("manifest.json", "desktop", "demo", "dosbox", "ciuki-portrait.xrgb"):
+            for name in ("manifest.json", "desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"):
                 shutil.copy2(build.OUT / name, dest / name)
             with patch.object(build, "OUT", dest):
                 self.assertTrue(build.current_build(build.inputs()))

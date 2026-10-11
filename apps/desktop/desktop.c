@@ -6,6 +6,7 @@
 #include <ciuki/channel.h>
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
+#include <ciuki/proc.h>
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -49,7 +50,8 @@ static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
     desk_input(d,event);
     if (event->type==CIUKI_INPUT_KEY && event->code==0x1e &&
         (event->value==0 || event->value==1) &&
-        (!d->shell_test || d->shell_stage>=5)) gate_keys++; /* f2-30: shell sequence first; stage 5 = close requested (the reap to 6 is asynchronous; the final report still requires 6) */
+        (!d->shell_test || d->shell_stage>=5) && (!d->tasks_test || d->tasks_stage>=5) &&
+        (!d->app_test || d->app_checkpoint>=DESK_APP_CHECKPOINTS(d->app_test))) gate_keys++; /* f2-30: shell sequence first; stage 5 = close requested (the reap to 6 is asynchronous; the final report still requires 6). f2-33: the same for the tasks scenario (final report requires DESK_TASKS_DONE) */
     if (event->type==CIUKI_INPUT_MOTION) gate_motion++;
     /* The input grant delivers separate button edges, not a motion mask.
      * Count consumption even when the click focuses the background/title. */
@@ -71,8 +73,14 @@ static void gate_report(struct desktop *d, uint32_t control, unsigned generation
     char line[CIUKI_PROBE_REPORT_MAX+1];
     unsigned keys=gate_keys;
     if (d->shell_test) keys=d->shell_stage==6 && gate_keys>=2 ? gate_keys+d->shell_keys : 0;
+    if (d->tasks_test) keys=d->tasks_stage==DESK_TASKS_DONE && gate_keys>=2 ? gate_keys+d->shell_keys : 0;
+    if (d->app_test) keys=d->app_done && gate_keys>=2 ? gate_keys+d->shell_keys : 0;
     int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=%u survivor=%d victim=%d cycle=%u replies=%llu keys=%u motion=%u buttons=%u",
         control,generation,survivor,victim,cycle,(unsigned long long)d->replied,keys,gate_motion,gate_buttons);
+    /* f2-31/f2-32: the Files and CiukNote cases ask the controller for the
+     * storage write gate and a framebuffer digest at each presented checkpoint. */
+    if (d->app_test && n>0 && n<(int)sizeof(line))
+        n+=snprintf(line+n,sizeof(line)-(size_t)n," %s=1 checkpoint=%d",d->app_test==DESK_APP_NOTE ? "note" : "files",d->app_reported);
     int error=n<=0 || n>CIUKI_PROBE_REPORT_MAX ? EINVAL : ciuki_error(ciuki_raw_probe_report(CU_PTR(line),n,0,0,0,0));
     if (error) { fprintf(stderr,"desktop: gate report failed length=%d error=%d\n",n,error); _exit(126); }
 }
@@ -145,12 +153,28 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     if (ciuki_channel_pair(pair)) return -1;
     int index=-1;
     ciuki_pid_t pid=-1;
-    char *argv[]={(char *)program->name,(strcmp(program->name,"demo") && strcmp(program->name,"dosbox")) ? NULL : "--channel-fd=3",NULL};
-    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",NULL};
-    struct ciuki_spawn_fd mapping={pair[1],3};
+    int graphical=desk_program_graphical(program->name), kind=desk_program_kind(program->name);
+    /* f2-33: only the Task Manager receives the delegated termination
+     * authority, explicitly mapped to fd 4; it also may send task requests. */
+    int tasks=!strcmp(program->name,"tasks");
+    char *argv[]={(char *)program->name,NULL,NULL,NULL,NULL};
+    unsigned at=1;
+    if (graphical) argv[at++]="--channel-fd=3";
+    /* The scenario's program gets --test=<its name> (apps/desktop/gate.h scenarios). */
+    if (graphical && d->app_test && kind==d->app_test) argv[at++]=kind==DESK_APP_NOTE ? "--test=ciuknote" : "--test=files";
+    if (tasks && d->authority_fd>=0) argv[at++]="--authority-fd=4";
+    if (tasks && d->tasks_test) argv[at++]="--test=tasks";
+    /* LAUNCH from Files: the path of the text file CiukNote opens (the client validated it). */
+    if (graphical && kind==DESK_APP_NOTE && d->launch_arg) argv[at++]=(char *)d->launch_arg;
+    /* Window size hint for graphical clients; the protocol has no query. */
+    char display[40];
+    snprintf(display,sizeof(display),"CIUKI_DISPLAY=%ux%u",(unsigned)d->width,(unsigned)d->height);
+    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",display,NULL};
+    struct ciuki_spawn_fd mapping[2]={{pair[1],3},{d->authority_fd,4}};
+    uint32_t mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     if (!fcntl(pair[1],F_SETFD,0)) {
         index=desk_add_client(d,pair[0]);
-        if (index>=0) pid=ciuki_spawn(program->path,argv,env,&mapping,1,0);
+        if (index>=0) pid=ciuki_spawn(program->path,argv,env,mapping,mappings,0);
         else errno=ENOSPC;
     }
     int error=errno;
@@ -162,12 +186,37 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     /* Bind launch ownership before accepting the first kernel-stamped message.
      * This also permits cleanup if a child exits without ever sending HELLO. */
     d->clients[index].pid=(uint32_t)pid;
+    d->clients[index].program=kind;
+    d->clients[index].taskman=tasks;
     d->children[child].pid=(uint32_t)pid;
     return pid;
+}
+/* f2-33 scenario: the ended PID has no kernel record any more (reaped, not
+ * just exited), while the Task Manager and this desktop are still live. */
+static int tasks_verify(const struct desktop *d)
+{
+    static uint8_t buffer[CIUKI_PROC_LIST_MIN+CIUKI_PROCESS_MAX*sizeof(struct ciuki_proc_record)];
+    int n=ciuki_proc_list(buffer,sizeof(buffer));
+    if (n<=0) return 0;
+    const struct ciuki_proc_system *sys=(const struct ciuki_proc_system *)buffer;
+    if (sys->version!=CIUKI_PROC_VERSION || sys->records!=(uint32_t)n || sys->processes!=(uint32_t)n) return 0;
+    int demo=0, tasks=0, self=0;
+    for (int i=0; i<n; i++) {
+        struct ciuki_proc_record r;
+        memcpy(&r,buffer+sizeof(*sys)+(size_t)i*sizeof(r),sizeof(r));
+        demo|=r.pid==d->tasks_demo_pid;
+        tasks|=r.pid==d->tasks_pid && r.state==CIUKI_PROC_LIVE;
+        self|=r.pid==d->self_pid && r.state==CIUKI_PROC_LIVE;
+    }
+    return !demo && tasks && self;
 }
 static void shell_setup(struct desktop *d)
 {
     d->launch=launch_program; d->terminate=terminate_child;
+    d->self_pid=(uint32_t)getpid();
+    const char *authority=getenv(CIUKI_TASKS_ENV);
+    int fd=authority ? number(authority,CIUKI_OPEN_MAX-1) : -1;
+    d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");
     if (!uname(&u)) {
@@ -250,7 +299,7 @@ int main(int argc, char **argv)
     int victim_pid = -1, completed = 0;
     uint64_t next_victim = 0;
     int input_reported = 0, display_reported = 0;
-    int report=0, input_dirty=0, shell_stage_shown=0;
+    int report=0, input_dirty=0, shell_stage_shown=0, scenario_key=0, scenario_released=0;
     unsigned report_send=0;
     uint64_t report_deadline=0, next_input_report=0;
     for (;;) {
@@ -306,16 +355,28 @@ int main(int argc, char **argv)
         struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
         int n=ciuki_input_read(input,events,CIUKI_INPUT_READ_MAX);
         if (n>0) { for (int i=0; i<n; i++) {
-            /* Runtime-only shell case extension: old gates never send F12.
-             * Keep it behind the controller's post-fault interaction stage. */
-            if (gate && interaction && !d->shell && events[i].type==CIUKI_INPUT_KEY &&
-                events[i].code==0x58 && events[i].value==1) {
-                d->shell_test=1; d->shell_keys=1; shell_setup(d);
-                continue;
+            /* Runtime scenario selection. Old gates never send these keys: one of them, pressed
+             * once inside the controller's post-fault interaction stage before the shell exists,
+             * selects the case. F12: shell, F9: Task Manager (stage machines of their own);
+             * F11: Files, F10: CiukNote (app scenarios: the launched program gets
+             * --test=<its name>, checkpoint PINGs, a fixed clock and the storage write gate). */
+            if (gate && interaction && !d->shell && events[i].type==CIUKI_INPUT_KEY && events[i].value==1) {
+                int code=events[i].code;
+                int app=code==0x57 ? DESK_APP_FILES : code==0x44 ? DESK_APP_NOTE : 0;
+                if (code==0x58 || code==0x43 || app) {
+                    if (code==0x58) d->shell_test=1;
+                    else if (code==0x43) d->tasks_test=1;
+                    else d->app_test=app;
+                    scenario_key=code; scenario_released=0; d->shell_keys=1; shell_setup(d);
+                    /* The controller learns of the write gate request before the app can write. */
+                    if (app) gate_report(d,CU_PTR(control),generation,survivor_pid,gate_victim,(unsigned)gate_cycle);
+                    continue;
+                }
             }
-            if (gate && d->shell_test && events[i].type==CIUKI_INPUT_KEY &&
-                events[i].code==0x58 && events[i].value==0) {
-                d->shell_keys++; input_dirty=1; continue;
+            /* Its release is the scenario's second key edge; later F-key use belongs to the programs. */
+            if (gate && scenario_key && !scenario_released && events[i].type==CIUKI_INPUT_KEY &&
+                events[i].code==scenario_key && events[i].value==0) {
+                scenario_released=1; d->shell_keys++; input_dirty=1; continue;
             }
             if (gate && interaction) {
                 gate_input(d,&events[i]);
@@ -334,17 +395,36 @@ int main(int argc, char **argv)
                 desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
             } else if (d->shell_test && d->shell_stage==1 && !strcmp(d->programs[selected].name,"demo")) {
                 d->shell_pid=(uint32_t)pid; d->shell_stage=2;
+            } else if (d->tasks_test && d->tasks_stage==0 && !strcmp(d->programs[selected].name,"tasks")) {
+                d->tasks_pid=(uint32_t)pid; d->tasks_stage=1;
+            } else if (d->app_test && !d->app_pid && !strcmp(d->programs[selected].name,desk_app_program(d->app_test))) {
+                d->app_pid=(uint32_t)pid;
             }
         }
-        if (d->shell_test && d->shell_stage!=shell_stage_shown) {
+        if (d->tasks_test && d->tasks_stage==6 && d->tasks_checkpoint && tasks_verify(d)) {
+            d->tasks_stage=DESK_TASKS_DONE; input_dirty=1;
+        }
+        if ((d->shell_test && d->shell_stage!=shell_stage_shown) || (d->tasks_test && d->tasks_stage!=shell_stage_shown)) {
             /* Lead diagnostics: the shell test's stage is visible in the runner's screenshot. */
-            shell_stage_shown=d->shell_stage;
-            snprintf(d->notice,sizeof(d->notice),"shell stage %u programs %u",d->shell_stage,d->program_count);
+            shell_stage_shown=d->tasks_test ? d->tasks_stage : d->shell_stage;
+            snprintf(d->notice,sizeof(d->notice),"%s stage %u programs %u",d->tasks_test ? "tasks" : "shell",
+                     (unsigned)shell_stage_shown,d->program_count);
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
+        }
+        if (d->app_test && d->app_checkpoint!=shell_stage_shown) {
+            shell_stage_shown=d->app_checkpoint;
+            snprintf(d->notice,sizeof(d->notice),"%s test checkpoint %d",d->app_test==DESK_APP_NOTE ? "CiukNote" : "Files",d->app_checkpoint);
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
         }
         if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         if (desk_redraw(d) && errno!=EINTR && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
+        }
+        /* The controller hashes the framebuffer during this report: send it
+         * only after the checkpoint frame has been presented completely. */
+        if (gate && d->app_test && d->app_checkpoint>d->app_reported && !d->damage.count) {
+            d->app_reported++;   /* one checkpoint per report, in order */
+            gate_report(d,CU_PTR(control),generation,survivor_pid,gate_victim,(unsigned)gate_cycle);
         }
         if (report) {
             int pending=0;

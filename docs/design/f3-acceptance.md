@@ -395,7 +395,9 @@ damage at the kernel cadence. The desktop passes `--channel-fd=3` to it and
 gains `--launch=<program>`, which starts one `/bin` menu program through the
 menu-click path (used by `f3:vm-window`). Adding `/bin/dosbox` grows the
 bottom-anchored Ciuki menu by one row, so the f2-30 `desktop-shell-*`
-scripted click on Demo moves from `y-169` to `y-197` (1024x768).
+scripted click on Demo moves from `y-169` to `y-197` (1024x768). With the
+f2-31/32/33 desktop batch (`/bin/files`, `/bin/ciuknote`, `/bin/tasks`) the
+offsets follow the formula in f2-acceptance.md, section F2-33 (Demo: -253).
 
 ### Probes, cases and golden digests
 

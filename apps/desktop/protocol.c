@@ -136,6 +136,78 @@ int desk_parse(const struct ciuki_message *m, int client,
         if (p->focused > 1) return 0;
         n = 8;
         break;
+    case DESK_WINDOWS_QUERY:
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 8) return 0;
+        p->serial = desk_get32(m->data + 4);
+        n = 8;
+        break;
+    case DESK_WINDOW_INFO: {
+        if (client || m->data[0] != DESK_SHELL_VERSION || m->length < 32) return 0;
+        p->serial = desk_get32(m->data + 4);
+        p->index = desk_get32(m->data + 8);
+        p->count = desk_get32(m->data + 12);
+        p->window_id = desk_get32(m->data + 16);
+        p->pid = desk_get32(m->data + 20);
+        p->flags = desk_get32(m->data + 24);
+        unsigned t = desk_get32(m->data + 28);
+        if (p->count > 16 || t > DESK_TITLE_MAX || m->length != 32 + t ||
+            (p->flags & ~DESK_WINDOW_FLAGS)) return 0;
+        if (!p->count ? p->index || p->window_id || p->pid || p->flags || t :
+            p->index >= p->count || !p->window_id) return 0;
+        for (unsigned i = 0; i < t; i++) {
+            if (m->data[32+i] < 32 || m->data[32+i] > 126) return 0;
+            p->title[i] = (char)m->data[32+i];
+        }
+        n = 32 + t;
+        break;
+    }
+    case DESK_END_TASK:
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 16) return 0;
+        p->serial = desk_get32(m->data + 4);
+        p->window_id = desk_get32(m->data + 8);
+        p->pid = desk_get32(m->data + 12);
+        if (!p->window_id && !p->pid) return 0;
+        n = 16;
+        break;
+    case DESK_SWITCH_TO:
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 12) return 0;
+        p->serial = desk_get32(m->data + 4);
+        p->window_id = desk_get32(m->data + 8);
+        if (!p->window_id) return 0;
+        n = 12;
+        break;
+    case DESK_LAUNCH: {
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length < 13) return 0;
+        p->serial = desk_get32(m->data + 4);
+        unsigned t = desk_get32(m->data + 8);
+        if (!t || t > DESK_TITLE_MAX || m->length < 12 + t) return 0;
+        for (unsigned i = 0; i < t; i++) {
+            if (m->data[12+i] < 33 || m->data[12+i] > 126) return 0;
+            p->title[i] = (char)m->data[12+i];
+        }
+        n = 12 + t;
+        if (m->length != n) {   /* optional argument: u32 length, then that many bytes (no control characters) */
+            if (m->length < n + 5) return 0;
+            unsigned a = desk_get32(m->data + n);
+            if (!a || a > DESK_ARG_MAX || m->length != n + 4 + a) return 0;
+            for (unsigned i = 0; i < a; i++) {
+                unsigned char ch = m->data[n+4+i];
+                if (ch < 32 || ch == 127) return 0;
+                p->argument[i] = (char)ch;
+            }
+            n += 4 + a;
+        }
+        break;
+    }
+    case DESK_TASK_RESULT:
+        if (client || m->data[0] != DESK_SHELL_VERSION || m->length != 16) return 0;
+        p->serial = desk_get32(m->data + 4);
+        p->request = desk_get32(m->data + 8);
+        p->result = (int32_t)desk_get32(m->data + 12);
+        if ((p->request != DESK_WINDOWS_QUERY && p->request != DESK_END_TASK &&
+             p->request != DESK_SWITCH_TO && p->request != DESK_LAUNCH) || p->result < -4095) return 0;
+        n = 16;
+        break;
     case DESK_KEY: case DESK_MOTION: case DESK_BUTTON:
         if (client || m->length != 44) return 0;
         p->event.sequence = desk_get32(m->data + 4);

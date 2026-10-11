@@ -58,6 +58,7 @@ extern struct task *g_current;
 extern uint32_t g_quantum_ticks;
 extern uint32_t g_task_count;
 extern uint64_t g_task_switches;   /* user task -> different user task, by preemption */
+extern uint64_t g_idle_ticks;      /* timer ticks taken while the idle task ran (f2-33) */
 extern volatile bool g_need_resched;
 
 void sched_init(void);

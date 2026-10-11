@@ -1,0 +1,655 @@
+/* SPDX-License-Identifier: MIT
+ * Files model. Paths are absolute POSIX paths; FAT names compare without case. */
+#include "model.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+
+static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+static int compare(const char *a, const char *b)
+{
+    while (*a && fold((unsigned char)*a) == fold((unsigned char)*b)) { a++; b++; }
+    return (int)fold((unsigned char)*a) - (int)fold((unsigned char)*b);
+}
+int fm_same_path(const char *a, const char *b) { return !compare(a, b); }
+const char *fm_basename(const char *path) { const char *p = strrchr(path, '/'); return p ? p + 1 : path; }
+
+int fm_valid_name(const char *name)
+{
+    if (!*name || !strcmp(name, ".") || !strcmp(name, "..")) return -EINVAL;
+    for (const char *p = name; *p; p++)
+        if (strchr("\\/:*?\"<>|", *p) || (unsigned char)*p < 32) return -EINVAL;
+    size_t n = strlen(name);
+    if (name[n - 1] == ' ' || name[n - 1] == '.') return -EINVAL;
+    return n >= 256 ? -ENAMETOOLONG : 0;
+}
+
+int fm_join(char *out, const char *parent, const char *name)
+{
+    if (!*name || strchr(name, '/') || !strcmp(name, ".") || !strcmp(name, "..")) return -EINVAL;
+    size_t n = strlen(parent), m = strlen(name);
+    if (n + m + 2 > FM_PATH || m >= FM_NAME) return -ENAMETOOLONG;
+    memmove(out, parent, n);
+    if (!n || parent[n - 1] != '/') out[n++] = '/';
+    memcpy(out + n, name, m + 1);
+    return 0;
+}
+
+int fm_parent(char *out, const char *path)
+{
+    size_t n = strlen(path);
+    if (n >= FM_PATH) return -ENAMETOOLONG;
+    memmove(out, path, n + 1);
+    char *slash = strrchr(out, '/');
+    if (!slash) return -EINVAL;
+    if (slash == out) out[1] = 0; else *slash = 0;
+    return 0;
+}
+
+int fm_beneath(const char *path, const char *parent)
+{
+    size_t n = strlen(parent);
+    if (n == 1 && parent[0] == '/') return path[0] == '/';
+    for (size_t i = 0; i < n; i++) if (fold((unsigned char)path[i]) != fold((unsigned char)parent[i])) return 0;
+    return !path[n] || path[n] == '/';
+}
+
+static const char *suffix(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    return dot && dot != name && dot[1] ? dot + 1 : NULL;
+}
+
+static const struct { const char *ext, *type; enum fm_kind kind; } types[] = {
+    {"txt", "Text Document", FM_KIND_TEXT}, {"md", "Markdown Document", FM_KIND_TEXT},
+    {"log", "Log File", FM_KIND_TEXT}, {"cfg", "Configuration Settings", FM_KIND_TEXT},
+    {"ini", "Configuration Settings", FM_KIND_TEXT}, {"conf", "Configuration Settings", FM_KIND_TEXT},
+    {"csv", "CSV Document", FM_KIND_TEXT}, {"json", "JSON Document", FM_KIND_TEXT},
+    {"lua", "Lua Script", FM_KIND_SCRIPT}, {"c", "C Source File", FM_KIND_SCRIPT},
+    {"h", "C Header File", FM_KIND_SCRIPT}, {"asm", "Assembly Source File", FM_KIND_SCRIPT},
+    {"bat", "MS-DOS Batch File", FM_KIND_SCRIPT}, {"sh", "Shell Script", FM_KIND_SCRIPT},
+    {"htm", "HTML Document", FM_KIND_TEXT}, {"html", "HTML Document", FM_KIND_TEXT},
+    {"bmp", "Bitmap Image", FM_KIND_IMAGE}, {"png", "PNG Image", FM_KIND_IMAGE},
+    {"xrgb", "XRGB Image", FM_KIND_IMAGE}, {"pcx", "PCX Image", FM_KIND_IMAGE},
+    {"wav", "Wave Sound", FM_KIND_AUDIO}, {"mid", "MIDI Sequence", FM_KIND_AUDIO},
+    {"com", "MS-DOS Application", FM_KIND_APP}, {"exe", "Application", FM_KIND_APP},
+    {"elf", "ELF Program", FM_KIND_FILE}, {"img", "Disk Image", FM_KIND_FILE},
+    {"iso", "CD-ROM Image", FM_KIND_FILE}, {"zip", "ZIP Archive", FM_KIND_FILE},
+};
+
+enum fm_kind fm_kind(const struct fm_entry *e)
+{
+    if (e->meta.type == FM_DIR) return FM_KIND_FOLDER;
+    if (e->meta.exec) return FM_KIND_APP;
+    const char *ext = suffix(e->name);
+    if (ext) for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++) if (!compare(ext, types[i].ext)) return types[i].kind;
+    return FM_KIND_FILE;
+}
+
+const char *fm_type_name(const struct fm_entry *e, char *buffer, size_t size)
+{
+    if (e->meta.type == FM_DIR) return "File Folder";
+    if (e->meta.type != FM_FILE) return "Device";
+    if (e->meta.exec) return "Application";
+    const char *ext = suffix(e->name);
+    if (!ext) return "File";
+    for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++) if (!compare(ext, types[i].ext)) return types[i].type;
+    size_t n = 0;
+    for (; ext[n] && n + 6 < size && n < 8; n++) buffer[n] = (char)(ext[n] >= 'a' && ext[n] <= 'z' ? ext[n] - 32 : ext[n]);
+    snprintf(buffer + n, size - n, " File");
+    return buffer;
+}
+
+struct listing { struct fm_entry *entries; unsigned count, capacity; };
+static int collect(const char *name, const struct fm_meta *meta, void *ctx)
+{
+    struct listing *l = ctx;
+    if (!strcmp(name, ".") || !strcmp(name, "..")) return 0;
+    if (!*name || strlen(name) >= FM_NAME || strchr(name, '/')) return -EIO;
+    if (l->count == FM_ENTRIES) return -E2BIG;
+    if (l->count == l->capacity) {
+        unsigned cap = l->capacity ? l->capacity * 2 : 32;
+        struct fm_entry *p = realloc(l->entries, cap * sizeof(*p));
+        if (!p) return -ENOMEM;
+        l->entries = p; l->capacity = cap;
+    }
+    struct fm_entry *e = &l->entries[l->count++];
+    memset(e, 0, sizeof(*e)); strcpy(e->name, name); e->meta = *meta;
+    return 0;
+}
+static int listing(struct fm_vfs *fs, const char *path, struct listing *l)
+{
+    memset(l, 0, sizeof(*l));
+    int r = fs->list(fs->ctx, path, collect, l);
+    if (r) { free(l->entries); memset(l, 0, sizeof(*l)); }
+    return r;
+}
+
+struct resolve { const char *want; char *found; };
+static int match(const char *name, const struct fm_meta *meta, void *ctx)
+{
+    struct resolve *r = ctx;
+    if (meta->type == FM_DIR && !compare(name, r->want) && !r->found[0]) snprintf(r->found, FM_NAME, "%s", name);
+    return 0;
+}
+
+/* Lexical normalisation, then each component takes its stored spelling. */
+int fm_canonical(const struct fm_vfs *fs, const char *in, char *out)
+{
+    if (!in || in[0] != '/' || strlen(in) >= FM_PATH) return in && in[0] && in[0] != '/' ? -ENOENT : -EINVAL;
+    char result[FM_PATH] = "/";
+    for (const char *p = in; *p;) {
+        while (*p == '/') p++;
+        size_t n = strcspn(p, "/");
+        if (!n) break;
+        char part[FM_NAME];
+        if (n >= sizeof(part)) return -ENAMETOOLONG;
+        memcpy(part, p, n); part[n] = 0; p += n;
+        if (!strcmp(part, ".")) continue;
+        if (!strcmp(part, "..")) { fm_parent(result, result); continue; }
+        char found[FM_NAME] = ""; struct resolve r = {part, found};
+        int e = fs->list(fs->ctx, result, match, &r);
+        if (e) return e;
+        if (!found[0]) return -ENOENT;
+        char next[FM_PATH];
+        if ((e = fm_join(next, result, found))) return e;
+        strcpy(result, next);
+    }
+    struct fm_meta meta;
+    int e = fs->stat_path(fs->ctx, result, &meta);
+    if (e) return e;
+    if (meta.type != FM_DIR) return -ENOTDIR;
+    strcpy(out, result);
+    return 0;
+}
+
+void fm_init(struct fm_model *m, const struct fm_vfs *fs) { memset(m, 0, sizeof(*m)); m->fs = *fs; strcpy(m->path, "/"); }
+
+void fm_clipboard_clear(struct fm_model *m)
+{
+    for (unsigned i = 0; i < m->clipboard_count; i++) free(m->clipboard[i]);
+    free(m->clipboard); m->clipboard = NULL; m->clipboard_count = 0; m->cut = 0;
+}
+void fm_destroy(struct fm_model *m) { free(m->entries); fm_clipboard_clear(m); memset(m, 0, sizeof(*m)); }
+
+static int order(const struct fm_entry *a, const struct fm_entry *b, unsigned column, int descending)
+{
+    if (a->meta.type == FM_DIR && b->meta.type != FM_DIR) return -1;
+    if (a->meta.type != FM_DIR && b->meta.type == FM_DIR) return 1;
+    int result = 0;
+    if (column == 1) result = a->meta.size < b->meta.size ? -1 : a->meta.size > b->meta.size;
+    else if (column == 2) { char x[32], y[32]; result = compare(fm_type_name(a, x, sizeof(x)), fm_type_name(b, y, sizeof(y))); }
+    else if (column == 3) result = a->meta.modified < b->meta.modified ? -1 : a->meta.modified > b->meta.modified;
+    if (!result) result = compare(a->name, b->name);
+    if (!result) result = strcmp(a->name, b->name);
+    return descending ? -result : result;
+}
+
+void fm_sort(struct fm_model *m, unsigned column, int descending)
+{
+    if (column > 3) return;
+    m->sort = column; m->descending = descending;
+    if (m->count < 2) return;
+    /* Stable bottom-up merge sort; focus/anchor follow entries, not indices. */
+    struct fm_entry *tmp = malloc(m->count * sizeof(*tmp));
+    if (!tmp) return;
+    char active[FM_NAME] = "", anchor[FM_NAME] = "";
+    if (m->active < m->count) strcpy(active, m->entries[m->active].name);
+    if (m->anchor < m->count) strcpy(anchor, m->entries[m->anchor].name);
+    for (unsigned span = 1; span < m->count; span *= 2) for (unsigned start = 0; start < m->count; start += span * 2) {
+        unsigned middle = start + span, end = start + span * 2;
+        if (middle > m->count) middle = m->count;
+        if (end > m->count) end = m->count;
+        unsigned left = start, right = middle;
+        for (unsigned i = start; i < end; i++)
+            tmp[i] = left < middle && (right == end || order(&m->entries[left], &m->entries[right], column, descending) <= 0)
+                     ? m->entries[left++] : m->entries[right++];
+        memcpy(m->entries + start, tmp + start, (end - start) * sizeof(*tmp));
+    }
+    for (unsigned i = 0; i < m->count; i++) {
+        if (!strcmp(active, m->entries[i].name)) m->active = i;
+        if (!strcmp(anchor, m->entries[i].name)) m->anchor = i;
+    }
+    free(tmp);
+}
+
+static int load(struct fm_model *m, const char *path)
+{
+    struct listing l;
+    int r = listing(&m->fs, path, &l);
+    if (r) return r;
+    free(m->entries);
+    m->entries = l.entries; m->count = l.count; m->capacity = l.capacity;
+    m->active = m->anchor = 0; m->find_length = 0; m->find[0] = 0;
+    if (path != m->path) snprintf(m->path, sizeof(m->path), "%s", path);
+    fm_sort(m, m->sort, m->descending);
+    return 0;
+}
+
+int fm_navigate(struct fm_model *m, const char *path)
+{
+    char canonical[FM_PATH];
+    int r = fm_canonical(&m->fs, path, canonical);
+    if (r) return r;
+    char previous[FM_PATH]; strcpy(previous, m->path);
+    if ((r = load(m, canonical))) return r;
+    /* Going up selects the folder that was left, as Explorer does. */
+    if (fm_beneath(previous, canonical) && !fm_same_path(previous, canonical)) {
+        const char *rest = previous + strlen(canonical) + (strlen(canonical) > 1);
+        char child[FM_NAME]; size_t n = strcspn(rest, "/");
+        if (n < sizeof(child)) { memcpy(child, rest, n); child[n] = 0; fm_select_name(m, child, 0); }
+    }
+    if (m->history_count && !strcmp(m->history[m->history_at], canonical)) return 0;
+    m->history_count = m->history_count ? m->history_at + 1 : 0;
+    if (m->history_count == FM_HISTORY) { memmove(m->history, m->history + 1, (FM_HISTORY - 1) * FM_PATH); m->history_count--; }
+    m->history_at = m->history_count;
+    strcpy(m->history[m->history_count++], canonical);
+    return 0;
+}
+
+int fm_refresh(struct fm_model *m)
+{
+    struct listing l;
+    int r = listing(&m->fs, m->path, &l);
+    if (r) return r;
+    char active[FM_NAME] = "";
+    if (m->active < m->count) strcpy(active, m->entries[m->active].name);
+    for (unsigned i = 0; i < l.count; i++) for (unsigned j = 0; j < m->count; j++)
+        if (!strcmp(l.entries[i].name, m->entries[j].name)) l.entries[i].selected = m->entries[j].selected;
+    free(m->entries);
+    m->entries = l.entries; m->count = l.count; m->capacity = l.capacity; m->active = m->anchor = 0;
+    for (unsigned i = 0; i < m->count; i++) if (!strcmp(active, m->entries[i].name)) m->active = m->anchor = i;
+    fm_sort(m, m->sort, m->descending);
+    return 0;
+}
+
+int fm_history(struct fm_model *m, int delta)
+{
+    int n = (int)m->history_at + delta;
+    if (n < 0 || (unsigned)n >= m->history_count) return -ENOENT;
+    char previous[FM_PATH]; strcpy(previous, m->path);
+    int r = load(m, m->history[n]);
+    if (r) return r;
+    m->history_at = (unsigned)n;
+    if (fm_beneath(previous, m->path) && !fm_same_path(previous, m->path)) {
+        const char *rest = previous + strlen(m->path) + (strlen(m->path) > 1);
+        char child[FM_NAME]; size_t k = strcspn(rest, "/");
+        if (k < sizeof(child)) { memcpy(child, rest, k); child[k] = 0; fm_select_name(m, child, 0); }
+    }
+    return 0;
+}
+
+int fm_up(struct fm_model *m)
+{
+    if (!strcmp(m->path, "/")) return 0;
+    char path[FM_PATH];
+    fm_parent(path, m->path);
+    return fm_navigate(m, path);
+}
+
+void fm_select(struct fm_model *m, unsigned index, unsigned modifiers)
+{
+    if (index >= m->count) return;
+    m->active = index;
+    if (modifiers & 1) {
+        if (m->anchor >= m->count) m->anchor = index;
+        unsigned first = index < m->anchor ? index : m->anchor, last = index > m->anchor ? index : m->anchor;
+        for (unsigned i = 0; i < m->count; i++)
+            if (!(modifiers & 2) || (i >= first && i <= last)) m->entries[i].selected = i >= first && i <= last;
+    } else if (modifiers & 2) { m->entries[index].selected = !m->entries[index].selected; m->anchor = index; }
+    else { for (unsigned i = 0; i < m->count; i++) m->entries[i].selected = i == index; m->anchor = index; }
+}
+
+void fm_focus(struct fm_model *m, unsigned index) { if (index < m->count) m->active = index; }
+void fm_select_all(struct fm_model *m, int invert)
+{ for (unsigned i = 0; i < m->count; i++) m->entries[i].selected = invert ? !m->entries[i].selected : 1; }
+void fm_select_none(struct fm_model *m) { for (unsigned i = 0; i < m->count; i++) m->entries[i].selected = 0; }
+
+int fm_select_name(struct fm_model *m, const char *name, int add)
+{
+    for (unsigned i = 0; i < m->count; i++) if (!compare(m->entries[i].name, name)) {
+        if (add) { m->entries[i].selected = 1; m->active = i; if (m->anchor >= m->count) m->anchor = i; }
+        else fm_select(m, i, 0);
+        return (int)i;
+    }
+    return -ENOENT;
+}
+
+unsigned fm_selected(const struct fm_model *m, uint64_t *bytes)
+{
+    unsigned n = 0; uint64_t total = 0;
+    for (unsigned i = 0; i < m->count; i++) if (m->entries[i].selected) {
+        n++; if (m->entries[i].meta.type == FM_FILE) total += m->entries[i].meta.size;
+    }
+    if (bytes) *bytes = total;
+    return n;
+}
+
+int fm_find(struct fm_model *m, unsigned ch, uint64_t now)
+{
+    if (ch < 32 || ch > 126 || !m->count) return -EINVAL;
+    if (now > m->find_deadline) m->find_length = 0;
+    if (m->find_length + 1 >= sizeof(m->find)) m->find_length = 0;
+    m->find[m->find_length++] = (char)ch; m->find[m->find_length] = 0;
+    m->find_deadline = now + 1000000000u;
+    int repeat = 1;
+    for (size_t i = 1; i < m->find_length; i++) if (fold((unsigned char)m->find[i]) != fold((unsigned char)m->find[0])) repeat = 0;
+    /* Repeating one letter cycles through the names that start with it. */
+    size_t need = repeat && m->find_length > 1 ? 1 : m->find_length;
+    unsigned start = repeat && m->find_length > 1 ? m->active + 1 : 0;
+    for (unsigned k = 0; k < m->count; k++) {
+        unsigned i = (start + k) % m->count; size_t j = 0;
+        while (j < need && fold((unsigned char)m->find[j]) == fold((unsigned char)m->entries[i].name[j])) j++;
+        if (j == need) { fm_select(m, i, 0); return (int)i; }
+    }
+    return -ENOENT;
+}
+
+int fm_clipboard(struct fm_model *m, int cut)
+{
+    unsigned count = fm_selected(m, NULL);
+    if (!count) return -ENOENT;
+    char **paths = calloc(count, sizeof(*paths));
+    if (!paths) return -ENOMEM;
+    unsigned next = 0; int r = 0;
+    for (unsigned i = 0; i < m->count && !r; i++) if (m->entries[i].selected) {
+        paths[next] = malloc(FM_PATH);
+        if (!paths[next]) { r = -ENOMEM; break; }
+        r = fm_join(paths[next++], m->path, m->entries[i].name);
+    }
+    if (r) { for (unsigned i = 0; i < count; i++) free(paths[i]); free(paths); return r; }
+    fm_clipboard_clear(m);
+    m->clipboard = paths; m->clipboard_count = count; m->cut = cut;
+    return 0;
+}
+
+int fm_unique(struct fm_model *m, const char *base, const char *ext, char *out)
+{
+    for (unsigned n = 1; n < 1000; n++) {
+        char name[FM_NAME], path[FM_PATH]; struct fm_meta meta;
+        if (n == 1) snprintf(name, sizeof(name), "%s%s", base, ext);
+        else snprintf(name, sizeof(name), "%s (%u)%s", base, n, ext);
+        int r = fm_join(path, m->path, name);
+        if (r) return r;
+        r = m->fs.stat_path(m->fs.ctx, path, &meta);
+        if (r == -ENOENT) { strcpy(out, name); return 0; }
+        if (r) return r;
+    }
+    return -EEXIST;
+}
+
+int fm_create(struct fm_model *m, const char *name, int directory)
+{
+    char path[FM_PATH];
+    int r = fm_valid_name(name);
+    if (!r) r = fm_join(path, m->path, name);
+    if (r) return r;
+    if (directory) r = m->fs.mkdir(m->fs.ctx, path);
+    else {
+        int fd = m->fs.open(m->fs.ctx, path, 1);
+        if (fd < 0) return fd;
+        r = m->fs.sync(m->fs.ctx, fd);
+        int closed = m->fs.close(m->fs.ctx, fd);
+        if (!r) r = closed;
+        if (r) m->fs.unlink(m->fs.ctx, path);
+    }
+    if (!r) { r = fm_refresh(m); if (!r) fm_select_name(m, name, 0); }
+    return r;
+}
+
+int fm_rename(struct fm_model *m, unsigned index, const char *name)
+{
+    if (index >= m->count) return -ENOENT;
+    char source[FM_PATH], target[FM_PATH];
+    int r = fm_valid_name(name);
+    if (!r) r = fm_join(source, m->path, m->entries[index].name);
+    if (!r) r = fm_join(target, m->path, name);
+    if (r) return r;
+    if (!strcmp(m->entries[index].name, name)) return 0;
+    struct fm_meta meta;
+    r = m->fs.stat_path(m->fs.ctx, target, &meta);
+    if (!r && compare(m->entries[index].name, name)) return -EEXIST;
+    if (r && r != -ENOENT) return r;
+    r = m->fs.rename(m->fs.ctx, source, target);
+    if (!r) { r = fm_refresh(m); if (!r) fm_select_name(m, name, 0); }
+    return r;
+}
+
+/* ---- incremental jobs ---- */
+static void free_frame(struct fm_frame *f) { free(f->entries); memset(f, 0, sizeof(*f)); }
+static int cleanup(struct fm_job *j)
+{
+    int error = 0, r;
+    if (j->input >= 0) { r = j->fs.close(j->fs.ctx, j->input); j->input = -1; if (r) error = r; }
+    if (j->output >= 0) { r = j->fs.close(j->fs.ctx, j->output); j->output = -1; if (r && !error) error = r; }
+    if (*j->temporary) {
+        r = j->fs.unlink(j->fs.ctx, j->temporary);
+        if (r && r != -ENOENT && !error) error = r;
+        if (!r || r == -ENOENT) j->temporary[0] = 0;
+    }
+    return error;
+}
+static int fail(struct fm_job *j, int r) { j->error = -r; j->cleanup_error = -cleanup(j); j->state = FM_FAILED; return r; }
+static void pop(struct fm_job *j)
+{
+    struct fm_frame *f = &j->frames[j->depth - 1];
+    if (j->depth == 1 && (j->kind == FM_COPY || j->kind == FM_MOVE) && j->created_count < FM_CREATED && f->target[0])
+        snprintf(j->created[j->created_count++], FM_NAME, "%s", fm_basename(f->target));
+    free_frame(&j->frames[--j->depth]);
+    if (!j->depth) j->completed++;
+}
+static int push(struct fm_job *j, const char *source, const char *target)
+{
+    if (j->depth == FM_DEPTH) return -ENAMETOOLONG;
+    struct fm_frame *f = &j->frames[j->depth++];
+    memset(f, 0, sizeof(*f)); strcpy(f->source, source);
+    if (target) strcpy(f->target, target);
+    return 0;
+}
+
+int fm_job_start(struct fm_job *j, const struct fm_vfs *fs, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
+{
+    memset(j, 0, sizeof(*j)); j->input = j->output = -1; j->fs = *fs; j->kind = kind;
+    if (!n || n > FM_ENTRIES) return -EINVAL;
+    if ((kind == FM_COPY || kind == FM_MOVE) && (!destination || strlen(destination) >= FM_PATH)) return -EINVAL;
+    if (destination) strcpy(j->destination, destination);
+    j->sources = calloc(n, sizeof(*j->sources));
+    if (!j->sources) return -ENOMEM;
+    j->count = n;
+    for (unsigned i = 0; i < n; i++) {
+        if (paths[i][0] != '/' || strlen(paths[i]) >= FM_PATH) { fm_job_destroy(j); return -EINVAL; }
+        j->sources[i] = malloc(strlen(paths[i]) + 1);
+        if (!j->sources[i]) { fm_job_destroy(j); return -ENOMEM; }
+        strcpy(j->sources[i], paths[i]);
+        /* Never copy or move a folder into itself or a descendant. */
+        if ((kind == FM_COPY || kind == FM_MOVE) && fm_beneath(destination, paths[i])) { fm_job_destroy(j); return -EINVAL; }
+        if (!strcmp(paths[i], "/") && kind != FM_PROPERTIES) { fm_job_destroy(j); return -EBUSY; }
+    }
+    j->state = FM_RUNNING;
+    return 0;
+}
+
+static void metadata(struct fm_job *j, struct fm_frame *f)
+{
+    if (!j->fs.metadata) { j->metadata_warnings++; return; }
+    if (j->fs.metadata(j->fs.ctx, f->target, &f->meta)) j->metadata_warnings++;
+}
+
+static int begin_file(struct fm_job *j, struct fm_frame *f)
+{
+    j->input = j->fs.open(j->fs.ctx, f->source, 0);
+    if (j->input < 0) { int r = j->input; j->input = -1; return r; }
+    char parent[FM_PATH];
+    fm_parent(parent, f->target);
+    for (unsigned attempt = 0; attempt < 32; attempt++) {
+        char name[64]; snprintf(name, sizeof(name), ".ciuki-copy-%u.tmp", ++j->serial);
+        int r = fm_join(j->temporary, parent, name);
+        if (r) { j->temporary[0] = 0; return r; }
+        j->output = j->fs.open(j->fs.ctx, j->temporary, 1);
+        if (j->output >= 0) break;
+        r = j->output; j->output = -1; j->temporary[0] = 0;
+        if (r != -EEXIST) return r;
+    }
+    if (j->output < 0) return -EEXIST;
+    j->used = j->written = 0; f->phase = 1;
+    return 0;
+}
+
+/* Copying beside the source picks "Copy of NAME", as Explorer does. */
+static int copy_name(struct fm_job *j, const char *source, char *target)
+{
+    const char *base = fm_basename(source);
+    for (unsigned n = 1; n < 1000; n++) {
+        char name[FM_NAME]; struct fm_meta meta;
+        if (n == 1) snprintf(name, sizeof(name), "Copy of %s", base);
+        else snprintf(name, sizeof(name), "Copy (%u) of %s", n, base);
+        int r = fm_join(target, j->destination, name);
+        if (r) return r;
+        r = j->fs.stat_path(j->fs.ctx, target, &meta);
+        if (r == -ENOENT) return 0;
+        if (r) return r;
+    }
+    return -EEXIST;
+}
+
+int fm_job_step(struct fm_job *j)
+{
+    if (j->state != FM_RUNNING) return 0;
+    if (j->cancel) {
+        int r = cleanup(j);
+        j->cleanup_error = -r; j->state = r ? FM_FAILED : FM_CANCELLED;
+        if (r) j->error = -r;
+        return r;
+    }
+    if (!j->depth) {
+        if (j->next == j->count) { j->state = FM_DONE; return 0; }
+        const char *source = j->sources[j->next++];
+        char target[FM_PATH] = ""; int r = 0;
+        if (j->kind == FM_COPY || j->kind == FM_MOVE) {
+            r = fm_join(target, j->destination, fm_basename(source));
+            if (!r && fm_same_path(target, source)) {
+                if (j->kind == FM_MOVE) { j->completed++; return 1; }
+                r = copy_name(j, source, target);
+            }
+        }
+        if (!r) r = push(j, source, target);
+        if (r) return fail(j, r);
+    }
+    struct fm_frame *f = &j->frames[j->depth - 1];
+    int r;
+    if (!f->phase) {
+        r = j->fs.stat_path(j->fs.ctx, f->source, &f->meta);
+        if (r) return fail(j, r);
+        if (f->meta.type == FM_OTHER) return fail(j, -ENOTSUP);
+        if (j->kind == FM_PROPERTIES) {
+            if (f->meta.type == FM_FILE) { j->files++; j->bytes += f->meta.size; pop(j); return 1; }
+            if (j->depth > 1) j->folders++;
+        } else if (j->kind == FM_DELETE && f->meta.type == FM_FILE) {
+            r = j->fs.unlink(j->fs.ctx, f->source);
+            if (r) return fail(j, r);
+            j->files++; pop(j); return 1;
+        } else if (j->kind == FM_COPY || j->kind == FM_MOVE) {
+            r = j->fs.stat_path(j->fs.ctx, f->target, &f->existing);
+            f->exists = !r;
+            if (r && r != -ENOENT) return fail(j, r);
+            if (f->exists && f->existing.dev == f->meta.dev && f->existing.ino == f->meta.ino) return fail(j, -EINVAL);
+            if (f->exists && f->existing.type != f->meta.type) return fail(j, f->meta.type == FM_DIR ? -ENOTDIR : -EISDIR);
+            if (f->exists && !f->approved && !j->yes_all) { j->prompt_dir = f->meta.type == FM_DIR; j->state = FM_REPLACE; return 0; }
+            if (j->kind == FM_MOVE && !(f->exists && f->meta.type == FM_DIR)) {
+                r = j->fs.rename(j->fs.ctx, f->source, f->target);
+                if (!r) { if (f->meta.type == FM_FILE) j->files++; else j->folders++; pop(j); return 1; }
+                if (r != -EXDEV) return fail(j, r);
+            }
+            if (f->meta.type == FM_FILE) { j->total_bytes += f->meta.size; r = begin_file(j, f); if (r) return fail(j, r); return 1; }
+            if (!f->exists) { r = j->fs.mkdir(j->fs.ctx, f->target); if (r) return fail(j, r); }
+            j->folders++;
+        }
+        struct listing l;
+        r = listing(&j->fs, f->source, &l);
+        if (r) return fail(j, r);
+        f->entries = l.entries; f->count = l.count; f->phase = 2;
+        return 1;
+    }
+    if (f->phase == 1) {
+        if (j->written < j->used) {
+            r = j->fs.write(j->fs.ctx, j->output, j->buffer + j->written, j->used - j->written);
+            if (r == -EINTR) return 1;
+            if (r <= 0) return fail(j, r ? r : -EIO);
+            if ((unsigned)r > j->used - j->written) return fail(j, -EIO);
+            j->written += (unsigned)r; j->bytes += (unsigned)r;
+            return 1;
+        }
+        r = j->fs.read(j->fs.ctx, j->input, j->buffer, FM_CHUNK);
+        if (r == -EINTR) return 1;
+        if (r < 0) return fail(j, r);
+        if (r > FM_CHUNK) return fail(j, -EIO);
+        if (r) { j->used = (unsigned)r; j->written = 0; return 1; }
+        r = j->fs.sync(j->fs.ctx, j->output);
+        if (r) return fail(j, r);
+        r = j->fs.close(j->fs.ctx, j->output); j->output = -1;
+        if (r) return fail(j, r);
+        r = j->fs.close(j->fs.ctx, j->input); j->input = -1;
+        if (r) return fail(j, r);
+        struct fm_meta current;
+        r = j->fs.stat_path(j->fs.ctx, f->target, &current);
+        if (!f->exists && !r) { f->exists = 1; f->existing = current; j->prompt_dir = 0; j->state = FM_REPLACE; f->phase = 3; return 0; }
+        if (r && r != -ENOENT) return fail(j, r);
+        f->phase = 3;
+    }
+    if (f->phase == 3) {
+        /* POSIX rename publishes the complete copy, replacing atomically. */
+        r = j->fs.rename(j->fs.ctx, j->temporary, f->target);
+        if (r) return fail(j, r);
+        j->temporary[0] = 0;
+        metadata(j, f);
+        if (j->kind == FM_MOVE) { r = j->fs.unlink(j->fs.ctx, f->source); if (r) return fail(j, r); }
+        j->files++; pop(j);
+        return 1;
+    }
+    if (f->next < f->count) {
+        struct fm_entry *e = &f->entries[f->next++];
+        char source[FM_PATH], target[FM_PATH] = "";
+        r = fm_join(source, f->source, e->name);
+        if (!r && (j->kind == FM_COPY || j->kind == FM_MOVE)) r = fm_join(target, f->target, e->name);
+        if (!r) r = push(j, source, target);
+        if (r) return fail(j, r);
+        return 1;
+    }
+    if (j->kind == FM_DELETE || (j->kind == FM_MOVE && !j->skip_seen)) {
+        r = j->fs.rmdir(j->fs.ctx, f->source);
+        if (r) return fail(j, r);
+        if (j->kind == FM_DELETE) j->folders++;
+    }
+    if (j->kind == FM_COPY || j->kind == FM_MOVE) metadata(j, f);
+    pop(j);
+    return 1;
+}
+
+void fm_job_answer(struct fm_job *j, enum fm_replace answer)
+{
+    if (j->state != FM_REPLACE) return;
+    j->state = FM_RUNNING;
+    if (answer == FM_CANCEL) { j->cancel = 1; return; }
+    if (answer == FM_NO) {
+        int r = cleanup(j);
+        if (r) { fail(j, r); return; }
+        j->skip_seen = 1; j->skipped++;
+        j->frames[j->depth - 1].target[0] = 0;
+        pop(j);
+        return;
+    }
+    j->frames[j->depth - 1].approved = 1;
+    if (answer == FM_YES_ALL) j->yes_all = 1;
+}
+
+void fm_job_cancel(struct fm_job *j) { j->cancel = 1; if (j->state == FM_REPLACE) j->state = FM_RUNNING; }
+
+void fm_job_destroy(struct fm_job *j)
+{
+    if (j->fs.close) cleanup(j);
+    for (unsigned i = 0; i < j->depth; i++) free_frame(&j->frames[i]);
+    for (unsigned i = 0; i < j->count; i++) free(j->sources ? j->sources[i] : NULL);
+    free(j->sources);
+    memset(j, 0, sizeof(*j)); j->input = j->output = -1;
+}

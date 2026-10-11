@@ -118,7 +118,14 @@ static struct {
     uint32_t setup_step, setup_error;
     uint32_t server, survivor, victim, control, generation, cycles, replies;
     uint32_t survivor_stage, survivor_turns, survivor_snapshot, victim_stage, unauthorized, keys, motion, buttons;
+    /* f2-31/f2-32 app cases (files-qemu-t23, ciuknote-qemu-t23): write gate request and
+     * per-checkpoint digests. app is 0 for every other desktop case, 1 for Files, 2 for CiukNote. */
+    uint32_t app, checkpoint, checkpoint_digest[6];
 } native_reports;
+static uint32_t native_digest(void);
+/* Case-name prefix and checkpoint count of the reporting app scenario (Files: 5, CiukNote: 3). */
+static const char *native_app_case(void) { return native_reports.app==2 ? "note" : "files"; }
+static uint32_t native_app_checkpoints(void) { return native_reports.app==2 ? 3 : 5; }
 
 static void native_invalid(const char *check)
 {
@@ -166,6 +173,24 @@ static bool native_report(struct process *p, const char *line, unsigned length)
         native_reports.survivor=child; native_reports.victim=fault;
         native_reports.cycles=cycle; native_reports.replies=replies;
         native_reports.keys=keys; native_reports.motion=motion; native_reports.buttons=buttons;
+        /* Optional app-case fields (files=1 or note=1); absent in every other desktop case.
+         * The desktop reports a checkpoint only after presenting its frame,
+         * and stays inside this call while the framebuffer is hashed. */
+        uint32_t files, note, checkpoint;
+        bool has_files=report_unsigned(line,"files",&files), has_note=report_unsigned(line,"note",&note);
+        if (has_files || has_note) {
+            NATIVE_REQUIRE(!(has_files && has_note),"app");
+            NATIVE_REQUIRE(has_files ? files==1 : note==1,has_files ? "files" : "note");
+            NATIVE_REQUIRE(!native_reports.app || native_reports.app==(has_files ? 1u : 2u),"app_changed");
+            native_reports.app=has_files ? 1 : 2;
+            NATIVE_REQUIRE(report_unsigned(line,"checkpoint",&checkpoint),"checkpoint");
+            NATIVE_REQUIRE(checkpoint==native_reports.checkpoint || checkpoint==native_reports.checkpoint+1,"checkpoint_order");
+            NATIVE_REQUIRE(checkpoint<ARRAY_SIZE(native_reports.checkpoint_digest),"checkpoint_range");
+            if (checkpoint>native_reports.checkpoint) {
+                native_reports.checkpoint_digest[checkpoint]=native_digest();
+                native_reports.checkpoint=checkpoint;
+            }
+        }
     } else if (!server && !strncmp(line,"case=native-demo ",17)) {
         uint32_t stage, turns, unauthorized, generation;
         NATIVE_FIELD(stage); native_reports.reported_stage=stage;
@@ -383,8 +408,28 @@ static int native_crash_isolation(void)
             }
         }
         uint64_t start=g_ticks; deadline=start+15000;
-        do { task_sleep_ms(10); desktop_activity_snapshot(&b); }
+        unsigned app_emitted=0; int app_gate=1;
+        do {
+            task_sleep_ms(10); desktop_activity_snapshot(&b);
+            /* f2-31/f2-32: the Files and CiukNote cases write to C: and run a longer script. */
+            if (native_reports.app && app_gate==1) {
+                app_gate=storage_enable_write(storage_get(),2);
+                rec_emit(name,"DATA","case=%s-write-gate server=desktop expected=0 observed=%d",native_app_case(),app_gate);
+                deadline=start+40000;
+            }
+            while (app_emitted<native_reports.checkpoint) {
+                app_emitted++;
+                rec_emit(name,"DATA","case=%s-checkpoint server=desktop checkpoint=%u pixel_digest=%08x",
+                         native_app_case(),app_emitted,native_reports.checkpoint_digest[app_emitted]);
+            }
+        }
         while (native_live(server) && g_ticks<deadline && (native_reports.keys<2 || native_reports.motion<1 || native_reports.buttons<2 || b.presents<=a.presents || g_ticks-start<500));
+        while (app_emitted<native_reports.checkpoint) {
+            app_emitted++;
+            rec_emit(name,"DATA","case=%s-checkpoint server=desktop checkpoint=%u pixel_digest=%08x",
+                     native_app_case(),app_emitted,native_reports.checkpoint_digest[app_emitted]);
+        }
+        if (native_reports.app) pass=pass && !app_gate && native_reports.checkpoint==native_app_checkpoints();
         uint32_t next_digest=native_digest();
         pass=pass && native_live(server) && native_live(survivor) && b.input_events>a.input_events && b.presents>a.presents &&
             next_digest!=digest && native_reports.keys>=2 && native_reports.motion>=1 && native_reports.buttons>=2 && server->pid==server_pid && survivor->pid==survivor_pid && supervisor_desktop_deaths()==deaths;
@@ -404,9 +449,22 @@ cleanup:
             struct process *child=proc_find(i ? native_reports.victim : native_reports.survivor);
             if (child) desktop_remove(server,child);
         }
+        /* f2-33: programs the desktop launched during a scripted interaction
+         * (Task Manager, menu children) are its test children too. Collect them
+         * before the desktop so they are not adopted by PID 1 past the ledger. */
+        static struct ciuki_proc_record children[CIUKI_PROCESS_MAX];
+        unsigned listed=proc_list_snapshot(children,CIUKI_PROCESS_MAX,0);
+        for (unsigned i=0;i<listed;i++)
+            if (children[i].ppid==server->pid) desktop_remove(server,proc_find(children[i].pid));
         desktop_remove(owner,server);
     }
     if (owner) { proc_stop(owner,0,0); proc_collect(); }
+    if (native_reports.app) {
+        /* Publish the app case's writes cleanly for the host checker. */
+        int flushed=storage_sync();
+        rec_emit(name,"DATA","case=%s-durable server=desktop flush_result=%d checker=host_required",native_app_case(),flushed);
+        pass=pass && !flushed;
+    }
 finished:
     desktop_snapshot(&final); proc_snapshot(&after);
     bool objects=desktop_ledgers_equal(&initial,&final), processes=native_proc_equal(&before,&after);

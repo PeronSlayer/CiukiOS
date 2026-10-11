@@ -1,6 +1,6 @@
 .PHONY: help build-full kernel image test-host qemu-test-full qemu-run-full clean \
         legacy-build-full legacy-build-full-cd legacy-qemu-run-full legacy-qemu-test-full \
-        fetch-costa fetch-network-stack sdk lua desktop
+        fetch-costa fetch-network-stack sdk lua desktop apps
 
 # Heavy builds run in a capped scope (see AGENTS.md).
 CAP = systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=1G --
@@ -11,7 +11,8 @@ SDK_ARCHIVE ?= build/downloads/newlib/newlib-4.5.0.20241231.tar.gz
 SDK_ARGS ?= --archive $(SDK_ARCHIVE) --jobs 2
 SDK_INPUTS = $(shell find sdk -type f ! -path '*/__pycache__/*') \
              scripts/build_sdk.sh scripts/build_kernel.py config/sdk-pins.json \
-             config/toolchain.json src/kernel/include/ciuki/abi.h $(wildcard $(SDK_ARCHIVE))
+             config/toolchain.json src/kernel/include/ciuki/abi.h apps/desktop/protocol.h \
+             $(wildcard $(SDK_ARCHIVE))
 LUA_SOURCE_ARCHIVE ?= build/downloads/newlib/lua-5.4.8.tar.gz
 LUA_TESTS_ARCHIVE ?= build/downloads/newlib/lua-5.4.8-tests.tar.gz
 LUA_ARGS ?= --source-archive $(LUA_SOURCE_ARCHIVE) --tests-archive $(LUA_TESTS_ARCHIVE) --jobs 2
@@ -21,7 +22,8 @@ help:
 	@echo "  make build-full      - build the kernel and the canonical FAT32 image ($(IMAGE))"
 	@echo "  make sdk             - build/check the pinned offline F2 C SDK (SDK_ARGS=...)"
 	@echo "  make lua             - build/check pinned Lua and luac (LUA_ARGS=...)"
-	@echo "  make desktop         - build/check ring-3 desktop, demo and approved Ciuki portrait"
+	@echo "  make desktop         - build/check ring-3 desktop, demo, libdeskui, Files, Tasks, CiukNote and approved Ciuki portrait"
+	@echo "  make apps            - build/check every SDK application (Lua, desktop programs) and build/apps/manifest.json"
 	@echo "  make kernel          - build only $(KERNEL)"
 	@echo "  make image           - build only the image from the existing kernel"
 	@echo "  make test-host       - T0 host tests (kernel library, loader statics, runner, fixtures)"
@@ -34,8 +36,7 @@ help:
 
 # The image needs the kernel: keep the order explicit even under make -j.
 build-full: kernel
-	@$(MAKE) --no-print-directory lua
-	@$(MAKE) --no-print-directory desktop
+	@$(MAKE) --no-print-directory apps
 	@$(MAKE) --no-print-directory image
 
 sdk:
@@ -51,6 +52,9 @@ lua: $(SDK_MANIFEST)
 # Both recipes validate SDK/source/output hashes before accepting cached output.
 desktop: $(SDK_MANIFEST)
 	@$(CAP) python3 apps/desktop/build_desktop.py
+
+apps: $(SDK_MANIFEST)
+	@$(CAP) python3 apps/build_apps.py $(LUA_ARGS)
 
 kernel:
 	@python3 scripts/build_kernel.py

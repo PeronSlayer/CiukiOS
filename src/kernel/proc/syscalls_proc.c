@@ -1,7 +1,10 @@
 /* Native syscall rows owned by f2-02. Wire records/constants come from abi.h.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/signal.h>
+uint32_t supervisor_desktop_pid(void); /* proc/supervisor.c */
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 static const struct { const char *start, *end, *fixup; } copy_fixups[] = {
@@ -31,6 +34,124 @@ void proc_trap_dispatch(struct trap_frame *tf)
     }
 }
 
+/* f2-33 termination authority. PID 1 installs one object in the desktop it
+ * bootstraps (CIUKI_TASKS_FD); the desktop may name it in an explicit spawn
+ * list for the Task Manager. Default inheritance covers only fds 0-2, so it
+ * never travels implicitly. It is honoured only for its owner or the owner's
+ * direct children, so a further hand-off grants nothing. */
+struct proc_authority { struct proc_object object; uint32_t refs, owner; };
+static void authority_retain(struct proc_object *o) { ((struct proc_authority *)o)->refs++; }
+static void authority_release(struct proc_object *o)
+{
+    struct proc_authority *a = (struct proc_authority *)o;
+    if (!--a->refs)
+        kfree(a);
+}
+bool proc_authority_object(const struct proc_object *o) { return o && o->release == authority_release; }
+
+int proc_authority_install(struct process *p)
+{
+    if (!p || p == proc_supervisor() || !p->fds)
+        return -EPERM;
+    int fd = -1;
+    for (int i = 3; i < CIUKI_OPEN_MAX && fd < 0; i++)
+        if (!p->fds[i].object)
+            fd = i;
+    if (fd < 0)
+        return -EMFILE;
+    struct proc_authority *a = kzalloc(sizeof(*a));
+    if (!a)
+        return -ENOMEM;
+    a->object = (struct proc_object){ authority_retain, authority_release, true };
+    a->refs = 1;
+    a->owner = p->pid;
+    p->fds[fd] = (struct proc_fd){ &a->object, 0 };
+    return fd;
+}
+
+/* Call 70: N-class. The whole caller range is validated before the snapshot;
+ * only the system record and the written process records are stored. The
+ * kernel heap stops at 2 KiB objects, so the 5184-byte snapshot lives in one
+ * static buffer: nothing between snapshot and copy-out waits, and kernel code
+ * is never preempted (execution-abi.md, Locking), so no two calls share it. */
+static struct {
+    struct ciuki_proc_system system;
+    struct ciuki_proc_record records[CIUKI_PROCESS_MAX];
+} proc_list_buffer;
+_Static_assert(sizeof(proc_list_buffer) == CIUKI_PROC_LIST_MIN + CIUKI_PROCESS_MAX * sizeof(struct ciuki_proc_record),
+               "proc_list snapshot layout");
+int proc_list(uint32_t buffer, uint32_t bytes)
+{
+    struct process *p = proc_current();
+    if (bytes < CIUKI_PROC_LIST_MIN || bytes > CIUKI_PROC_LIST_MAX)
+        return -EINVAL;
+    if (!p || buffer > UINT32_MAX - bytes || !ua_range(p->memory, buffer, bytes, PROT_READ | PROT_WRITE))
+        return -EFAULT;
+    uint32_t capacity = (bytes - sizeof(struct ciuki_proc_system)) / sizeof(struct ciuki_proc_record);
+    if (capacity > CIUKI_PROCESS_MAX)
+        capacity = CIUKI_PROCESS_MAX;
+    struct ciuki_proc_system *sys = &proc_list_buffer.system;
+    struct kheap_ledger heap;
+    kheap_snapshot(&heap);
+    unsigned total = 0;
+    uint32_t flags = irq_save();
+    unsigned records = proc_list_snapshot(proc_list_buffer.records, capacity, &total);
+    *sys = (struct ciuki_proc_system){ .version = CIUKI_PROC_VERSION, .size = sizeof(*sys),
+        .tick_hz = 1000, .records = records, .total_ticks = g_ticks, .idle_ticks = g_idle_ticks,
+        .usable_pages = pmm_total_usable(), .free_pages = pmm_free_count(),
+        .kheap_pages = (uint32_t)heap.pages, .kheap_bytes = (uint32_t)heap.in_use,
+        .kheap_high_water = (uint32_t)heap.peak, .processes = total };
+    irq_restore(flags);
+    int err = copy_to_user(buffer, &proc_list_buffer, sizeof(*sys) + records * sizeof(struct ciuki_proc_record));
+    return err ? err : (int)records;
+}
+
+/* Call 71: N-class termination request. Order: arguments (EINVAL), the
+ * optional authority descriptor (EBADF), then the target (EPERM/ESRCH). */
+int proc_terminate(struct process *caller, int32_t pid, uint32_t signo, int32_t authority_fd)
+{
+    if ((signo != SIGTERM && signo != SIGKILL) || pid <= 0 || (uint32_t)pid == caller->pid)
+        return -EINVAL;
+    bool authority = false;
+    uint32_t owner_pid = 0;
+    if (authority_fd != (int32_t)CIUKI_PROC_NO_AUTHORITY) {
+        if (authority_fd < 0 || authority_fd >= CIUKI_OPEN_MAX || !caller->fds ||
+            !proc_authority_object(caller->fds[authority_fd].object))
+            return -EBADF;
+        const struct proc_authority *a = (const struct proc_authority *)caller->fds[authority_fd].object;
+        owner_pid = a->owner;
+        authority = caller->pid == owner_pid || caller->ppid == owner_pid;
+    }
+    if (pid == 1)
+        return -EPERM;
+    struct process *target = proc_find((uint32_t)pid);
+    if (!target || target->state != PROC_LIVE)
+        return -ESRCH;
+    /* The desktop's group (the desktop and the programs it launched) is ended
+     * only through the desktop's close path, never directly by another caller. */
+    uint32_t desktop_pid = supervisor_desktop_pid();
+    struct process *desktop = desktop_pid ? proc_find(desktop_pid) : 0;
+    if (desktop && target->pgid == desktop->pgid && caller != desktop)
+        return -EPERM;
+    /* The same holds for the authority's owner, whatever PID 1 recorded: a
+     * delegate never ends the process that delegated to it, nor its group. */
+    struct process *owner = owner_pid ? proc_find(owner_pid) : 0;
+    if (owner && target->pgid == owner->pgid && caller != owner)
+        return -EPERM;
+    if (!target->live_threads)
+        return -EPERM;                  /* kernel controller owner, no user thread */
+    bool descendant = false;
+    struct process *at = target;
+    for (unsigned depth = 0; at && depth < CIUKI_PROCESS_MAX && !descendant; depth++) {
+        descendant = at->ppid == caller->pid;
+        at = at->ppid > 1 ? proc_find(at->ppid) : 0;
+    }
+    if (!descendant && !authority)
+        return -EPERM;
+    proc_signal_post(target, 0, signo, caller->pid);
+    return 0;
+}
+
 int32_t proc_syscall(struct trap_frame *tf)
 {
     struct process *p = proc_current();
@@ -56,6 +177,8 @@ int32_t proc_syscall(struct trap_frame *tf)
     case CIUKI_SYS_BRK: return ua_brk(p->memory, tf->ebx);
     case CIUKI_SYS_THREAD_JOIN: return proc_thread_join(tf->ebx, tf->ecx);
     case CIUKI_SYS_THREAD_DETACH: return proc_thread_detach(tf->ebx);
+    case CIUKI_SYS_PROC_LIST: return proc_list(tf->ebx, tf->ecx);
+    case CIUKI_SYS_PROC_TERMINATE: return proc_terminate(p, (int32_t)tf->ebx, tf->ecx, (int32_t)tf->edx);
     default: return -ENOSYS;
     }
 }

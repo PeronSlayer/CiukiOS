@@ -173,7 +173,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_demo_arguments_summaries_pacing_and_faults(self):
         include=self.folder/'include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* host transport declaration supplied by harness */\n')
         binary=self.folder/'demo-test'
@@ -209,7 +209,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_desktop_gate_loop(self):
         include=self.folder/'desktop-include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* declarations supplied by harness */\n')
         binary=self.folder/'desktop-gate-test'
@@ -244,7 +244,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_handshake_reports_through_kernel_hook(self):
         include=self.folder/'handshake-include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):
             (include/name).write_text('/* declarations supplied by host harness */\n')
@@ -315,10 +315,13 @@ void klog(const char *f,...) {(void)f;}
         from evidence import Parser
         suite=runner.load(ROOT/'tests/suites/f2-desktop.json')
         normal=[c for c in suite['cases'] if '-normal-' in c['id']]
-        shell=[c for c in suite['cases'] if c['id'].startswith('desktop-shell-')] # f2-30: real desktop, scripted shell actions
+        shell=[c for c in suite['cases'] if c['id'].startswith(('desktop-shell-','tasks-'))] # f2-30/f2-33: real desktop, scripted actions
+        files=[c for c in suite['cases'] if c['id'].startswith(('files-','ciuknote-'))] # f2-31/f2-32: app scripts with checkpoint digests
         self.assertEqual({c['profile'] for c in normal},{'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-1998','qemu-desktop-2002'})
         self.assertEqual({c['profile'] for c in shell},{'qemu-t23','qemu-e500'})
-        self.assertEqual(len(suite['cases']),13) # f2-30 added two desktop-shell cases
+        self.assertEqual([c['profile'] for c in files],['qemu-t23','qemu-t23'])
+        self.assertEqual(len(suite['cases']),16) # f2-30 two desktop-shell cases, f2-31 files-qemu-t23, f2-33 tasks-qemu-t23, f2-32 ciuknote-qemu-t23
+        shell=shell+files
         for case in suite['cases']:
             native=case in normal or case in shell;server='desktop' if native else 'standin'
             profile=runner.load(ROOT/'tests/profiles'/f"{case['profile']}.json")

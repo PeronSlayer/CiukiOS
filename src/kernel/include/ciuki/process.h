@@ -31,6 +31,10 @@ struct process {
     struct kwait changed;
     uint32_t threads, live_threads;
     bool published, dosvm_capability;
+    /* f2-33 enumeration: image basename (printable, NUL-terminated) and the
+     * g_ticks value at publication. */
+    char name[CIUKI_PROC_NAME_MAX];
+    uint64_t start_tick;
 };
 struct proc_thread {
     uint32_t tid, slot, value, tls, stack_base, stack_bytes;
@@ -90,6 +94,13 @@ int proc_thread_join(uint32_t tid, uint32_t value);
 int proc_thread_detach(uint32_t tid);
 int proc_tls_set(uint32_t base, uint32_t bytes);
 int32_t proc_syscall(struct trap_frame *tf);
+/* f2-33: enumeration and the delegated termination authority. */
+void proc_set_name(struct process *p, const char *path);
+unsigned proc_list_snapshot(struct ciuki_proc_record *out, unsigned capacity, unsigned *total);
+int proc_list(uint32_t buffer, uint32_t bytes);
+int proc_terminate(struct process *caller, int32_t pid, uint32_t signo, int32_t authority_fd);
+int proc_authority_install(struct process *p);
+bool proc_authority_object(const struct proc_object *o);
 /* Native scheduler frames share the process page directory; task.as is a
  * borrowed view for the unchanged F0 debug/probe copy paths. */
 struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp);

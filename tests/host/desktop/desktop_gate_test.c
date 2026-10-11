@@ -34,6 +34,9 @@
 #undef _SC_THREAD_STACK_MIN
 #include <unistd.h>
 #define CU_PTR(p) ((uintptr_t)(p))
+/* The kernel bridge's desktop holds display 3, input 4 and the f2-33
+ * termination authority 5 before its output surface. */
+#define OUTPUT_FD 6
 static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }
 static uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 static void *gate_mmap(void *,size_t,int,int,int,off_t);
@@ -44,6 +47,8 @@ static void *gate_mmap(void *,size_t,int,int,int,off_t);
 #include "../../../apps/desktop/desktop.c"
 #undef main
 #undef mmap
+/* f2-33: only the Task Manager scenario lists processes; not exercised here. */
+int ciuki_proc_list(void *buffer, uint32_t bytes) { (void)buffer; (void)bytes; errno = ENOSYS; return -1; }
 static jmp_buf done;
 static struct gate_control page_storage, *control_page=&page_storage;
 #define page (*control_page)
@@ -206,13 +211,13 @@ int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f)
 {assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return desktop_spawn_host_output();}
 void *ciuki_surface_map(int fd,int prot) {
     if ((handshake && fd==7) || ((burst || flush_timeout) && fd==127)) { assert(prot==PROT_READ); return client_pixels; }
-    assert(fd==5 && prot==(PROT_READ|PROT_WRITE));return output_pixels;
+    assert(fd==OUTPUT_FD && prot==(PROT_READ|PROT_WRITE));return output_pixels;
 }
 int ciuki_surface_info(int fd,struct ciuki_surface_info *s) {
     assert((handshake && fd==7) || ((burst || flush_timeout) && fd==127));
     *s=(struct ciuki_surface_info){sizeof(*s),240,160,240*4,CIUKI_SURFACE_XRGB8888,sizeof(client_pixels)};return 0;
 }
-int ciuki_present(int display,int surface,const struct ciuki_rect *r) {assert(display==3 && surface==5 && r);presents++;return 0;}
+int ciuki_present(int display,int surface,const struct ciuki_rect *r) {assert(display==3 && surface==OUTPUT_FD && r);presents++;return 0;}
 int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
 {
     assert(fd==4 && capacity==CIUKI_INPUT_READ_MAX);
@@ -287,7 +292,7 @@ int main(int argc,char **argv)
         if (!strcmp(argv[1],"--capacity")) {
             struct desktop *d=calloc(1,sizeof(*d)); assert(d);
             const struct desk_ops ops={.close=close}; desk_init(d,&ops,320,320);
-            assert(ciuki_surface_create(320,320,CIUKI_SURFACE_XRGB8888)==5);
+            assert(ciuki_surface_create(320,320,CIUKI_SURFACE_XRGB8888)==OUTPUT_FD);
             for (int i=0;i<DESK_CLIENTS;i++) d->clients[i].channel=64+i;
             errno=EBADF; assert(spawn_demo(d,"none",0)==-1 && errno==ENOSPC);
             free(d);
