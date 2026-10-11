@@ -32,8 +32,13 @@ selector_validate:
     jmp .prefix
 .try_f2:
     cmp byte [si+1], '2'
-    jne .try_f4
+    jne .try_f3
     mov bx, f2_probe_names
+    jmp .prefix
+.try_f3:
+    cmp byte [si+1], '3'
+    jne .try_f4
+    mov bx, f3_probe_names
     jmp .prefix
 .try_f4:
     cmp byte [si+1], '4'
@@ -75,6 +80,8 @@ selector_validate:
     cmp bx, f1_sweep_name
     je .sweep
     cmp bx, f2_sweep_name
+    je .sweep
+    cmp bx, f3_sweep_name
     jne .run
 .sweep:
     cmp byte [selector_fw], 2 ; sweeps enter only through BOOT.CFG
@@ -101,6 +108,10 @@ selector_validate:
     je .good
     cmp byte [selector_sweep], 1
     je .cursor
+    mov ax, [selector_start]
+    mov di, ax
+    cmp byte [di+1], '3'
+    je .bad
     ; Optional fw_cfg-only suffixes: platform, safe, F2 crash server.
     cmp byte [selector_fw], 1
     jne .bad
@@ -268,11 +279,12 @@ f1_probe_names:
 f1_sweep_name db 'sweep',0,'all',0,'core',0
     db 'registry',0,'input',0,'input-fault',0,'framebuffer',0,'ata',0,'ata-fault',0
     db 'partition',0,'fat-read',0,'fat-write',0,'cache',0,'mount-crash',0,'safe',0,'bootlog',0,0
-f4_probe_names db 'audio-native',0,0
 f2_probe_names:
 f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'signals-fault',0
     db 'threads-wait',0
 f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
+f3_probe_names:
+f3_sweep_name db 'sweep',0,'vm-boot',0,0
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
 desktop_suffix db ' server=desktop'
@@ -457,6 +469,7 @@ boot_menu:
 .menu:
     mov si, menu_text
     call print
+.restart:
     mov bp, 55 ; At least three seconds at the BIOS 18.2 Hz rate.
     call deadline_start
 .poll:
@@ -500,7 +513,11 @@ boot_menu:
 .safe:
     call .cancel_cfg
     or dword [B(flags)], CBI_F_SAFE_MODE
-    jmp .done
+    mov si, safe_confirmation
+    call print
+    mov si, safe_selected
+    call print
+    jmp .restart ; Allow P/L after S with a fresh bounded three-second window.
 .cancel_cfg:
     and dword [B(flags)], ~CBI_F_TEST_REQUEST
     mov word [B(test_request_len)], 0
@@ -565,6 +582,8 @@ boot_menu:
 source_menu db 'L:SELECT_SOURCE=menu',13,10,0
 source_fw db 'L:SELECT_SOURCE=fw_cfg',13,10,0
 source_cfg db 'L:SELECT_SOURCE=cfg',13,10,0
+safe_confirmation db 'Safe mode selected; P for a probe, or wait',13,10,0
+safe_selected db 'L:SAFE=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS: N Normal / S Safe mode / L Serial log / P Probe (3 s)',13,10,0
 probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0
@@ -640,3 +659,5 @@ deadline_expired:
     ret
 menu_tick dd 0
 menu_polls dd 0
+
+f4_probe_names db 'optical',0,'audio-native',0,0

@@ -408,3 +408,30 @@ out of release images.
   backends, sole physical EOI/DMA ownership and serialized BIOS fallback.
 - `f0-acceptance.md`: probe selection/markers, hardware log capture and resource
   baselines; DOS workload gates remain later than F0.
+
+## Personality changes recorded
+
+2026-10-11, directive f3-00 (implementation; guest qualification pending):
+
+- The private FAT16 payload assembles the existing `src/runtime/ciukidos.asm`
+  include of `src/boot/floppy_stage1.asm`; neither source is changed for this
+  directive. Geometry remains 262144 sectors, 8 sectors/cluster, 73 reserved
+  sectors, two 128-sector FATs, 512 root entries, 63 sectors/track and 16 heads.
+- The recipe retains external XMS, external shell boot, disabled autorun,
+  self-test/runtime probes/debug traces and hardware validation screen.
+  `ENABLE_PS2_MOUSE_INIT=0` suppresses the legacy physical mouse initialization
+  in this text-only VM payload. It is a fixed personality build recipe, not a
+  test variant; XMS and full virtual devices remain later directives.
+- `COMMAND.COM` is the existing `COMMAND_COMPAT=1` shell. A new small
+  `SYSTEM\SHELL.COM` bootstrap runs AUTOEXEC through `COMMAND /C`, then the
+  interactive interpreter. AUTOEXEC runs DOSREADY.COM; shell return writes
+  zero to the VM control port. No FreeDOS source is included.
+- DOSREADY, MEMORY and CMDSTAT print through DOS and report bounded ASCII
+  lines through virtual port E9. EXIT37, VMPRIV and VMPORT are local test
+  payloads; the latter two request a privileged-instruction/forbidden-port
+  fault. The base is read-only with an ephemeral per-generation file overlay.
+- Virtual equipment, conventional memory, A20, BIOS time/date and text/input
+  services come from private memory and host scheduler time. Extended memory,
+  XMS, EMS and DPMI are not advertised. These are firmware service answers,
+  not changes to CIUKIDOS's INT21 implementation. See
+  [f3-acceptance.md](f3-acceptance.md) for sources, records and remaining gates.

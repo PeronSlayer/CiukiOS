@@ -12,6 +12,7 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 | Kernel and loader | `clang`, `ld.lld`, `llvm-objdump`, `nasm` (majors pinned in `config/toolchain.json`) |
 | Image | `python3`, `mkfs.fat`, `fsck.fat`, `mtools`, `qemu-img` |
 | Tests | `qemu-system-i386`, `systemd-run` (user scopes with a memory controller) |
+| Optical fixtures and independent extraction | `xorriso` |
 
 ## Commands
 
@@ -33,6 +34,39 @@ suites in `tests/suites/` (`docs/design/test-architecture.md`,
 
 Interactive runs use TCG by default; KVM is only for the `qemu-fast`
 developer profile and never for evidence.
+
+### F4 optical fixtures
+
+`scripts/test/iso_fixtures.py` generates deterministic data CDs, without Rock
+Ridge, at ISO 9660 Levels 1–3 with optional Joliet. It fixes timestamps and
+ownership, declares source hashes and extracts the resulting image with
+`xorriso -osirrox` to obtain independent on-media names, sizes and SHA-256
+hashes. Source/extraction scratch trees are removed before it returns. For a
+host-only fixture or deliberately malformed root extent:
+
+```bash
+python3 scripts/test/iso_fixtures.py --out build/host/optical --level 3 --joliet
+python3 scripts/test/iso_fixtures.py --out build/host/optical --level 3 --malformed
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/host -p test_optical.py -v
+```
+
+The fixture image and its manifest remain in the requested build directory.
+The production parser/VFS host harness checks all six Level/Joliet combinations,
+synthetic multi-extent records, malformed descriptors/extents, stale mount
+identities and zero block writes/flushes. Native file and mocked ATA packet
+checks are also part of `make test-host`.
+
+The lead runs `python3 scripts/test/run.py f4-media` after the canonical build.
+Its eight cases cover lawful Levels 1–3 and malformed media on `qemu-t23` and
+`qemu-desktop-2002`. A CD occupies IDE index 3 (secondary slave); at most two
+FAT fixtures occupy indices 1 and 2, leaving index 2 as the same-channel ATA
+peer. Colliding fixtures are refused. `f4:optical run=<8 hex>` is the runtime
+selector, including the loader menu. At the probe's `media_reinsert` ARM the
+runner issues QMP eject/change for `ciuki-optical` using the generated image.
+It compares both directory/hash cycles against the independent manifest and
+checks the fixture image hash is unchanged. Passing run artifacts follow the
+runner's ordinary cleanup rules. A missing packet device records
+`not_run reason=device_absent`; this does not qualify an optical case.
 
 ## Test requests
 
@@ -109,44 +143,34 @@ this absent mode as a failed prerequisite for later cases.
 After SWEEP_END, the on-disk `probe=` line has been removed; keep the disk and
 the same image. Start a **separate** capture with a fresh eight-hex-digit run id
 before powering on. In the three-second `SELECT_READY` window, press **S**
-(upper- or lowercase, laptop keyboard or COM1). The current loader immediately
-boots safe mode and cancels any configured probe request. This boots the safe
-scaffold without rewriting the disk, but it runs no `safe` probe and has no
-test run identity. It therefore cannot qualify the physical menu case.
+(upper- or lowercase, laptop keyboard or COM1). The loader cancels any configured
+probe request, sets safe mode, prints `Safe mode selected; P for a probe, or wait`
+and `L:SAFE=1`, and starts a fresh three-second menu window. Within that new
+window, press **P**, type **`f1:safe run=<fresh id>`** (replace `<fresh id>` with
+the chosen eight hex digits), and press **Enter** within the selector's
+30-second entry deadline. The exact sequence is **S, P,
+`f1:safe run=12345678`, Enter**, with a fresh id for each acquisition and no
+`safe=1` suffix. The loader passes both the safe flag and the selector to the
+kernel, and records `L:SELECT_SOURCE=menu`.
 
-There is currently **no supported key sequence** that combines safe mode and
-a hardware probe selector on that unchanged disk. S then P does not work:
-`ciukldr/menu.inc:boot_menu` `.safe` jumps directly to `.done`; P cannot be read
-afterward. P alone accepts `f1:safe run=12345678` followed by Enter within its
-30-second entry deadline, but does not set the safe flag. Appending ` safe=1`
-is rejected on hardware: `selector_validate` admits that suffix only when
-`selector_fw=1`, and the kernel's `selector.c` also requires validated QEMU
-flags. `.cancel_cfg` clears the request, not the safe flag, and
-`selector_accept` preserves an already-set safe flag. The loader order in
-`ciukldr.asm` is config_read → boot_menu → video_select → elf_load; there is
-no second menu or disk write in this path. These are repository control-flow
-facts; [SeaBIOS 1.16.3 INT16 source](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c)
-confirms AH=01 polls and AH=00 consumes a keyboard character, while
-[QEMU fw_cfg documentation](https://www.qemu.org/docs/master/specs/fw_cfg.html)
-describes the separate virtual-machine selector transport. Neither supplies
-a second menu on hardware.
+After S, expiry or N boots safe mode without a probe; N preserves the safe flag.
+L can still toggle serial logging before P; keep logging enabled for this
+acquisition. P alone does not add safe mode, and the ` safe=1` selector suffix
+remains QEMU-only. Research and source comparison for the bounded menu restart
+are recorded in [the boot contract](design/boot-memory.md#sources); this is the
+F1-37 loader flow, with host checks distinct from the lead's QEMU and physical
+qualification.
 
-**Open loader change for the lead (not implemented by f1-36):** after S sets
-the safe flag, return to the existing bounded menu poll instead of `.done`.
-The smallest change is that branch alone, allowing P during the remainder of
-the original three-second window; restarting the three-second deadline would
-give the operator a full entry window. Expiry still boots safe mode. With that
-change reviewed and qualified, the intended sequence is **S, P,
-`f1:safe run=<fresh-id>`, Enter**, with no suffix. Observe `[safe] Console
-ready.` and the input/console evidence, then retain the original serial bytes
-in that run's own capture directory as `f0.log`. Its `acquisition.json` must
-contain the verified image/build identity, `selector: "f1:safe run=<fresh-id>"`,
-`selector_source: "menu"`, `operator_confirmed: true`, and
-`case_confirmations: {"safe-menu-t23": true}` (or the E500 id), confirming the
-actual operator observation. Qualification requires END PASS, `safe_mode=1`,
-`source=menu`, zero optional activations and mounts, and working console/input;
-an operator confirmation cannot replace those records. A synthetic acquisition
-can exercise the importer now, but establishes no physical qualification.
+Observe `[safe] Console ready.` and the input/console evidence, then retain the
+original serial bytes in that run's own capture directory as `f0.log`. Its
+`acquisition.json` must contain the verified image/build identity,
+`selector: "f1:safe run=<fresh id>"`, `selector_source: "menu"`,
+`operator_confirmed: true`, and `case_confirmations: {"safe-menu-t23": true}`
+(or the E500 id), confirming the actual operator observation. Qualification
+requires END PASS, `safe_mode=1`, `source=menu`, zero optional activations and
+mounts, and working console/input; an operator confirmation cannot replace those
+records. A synthetic acquisition exercises the importer but establishes no
+physical qualification.
 
 The scoped importer can evaluate the declared physical case by passing it in
 the `cases` argument of `physical.import_sweep`, together with the suite's

@@ -270,6 +270,228 @@ static int ata_flush(struct blkdev *b);
 static int ata_read(struct blkdev *b, uint64_t lba, uint32_t n, void *buf);
 static int ata_write(struct blkdev *b, uint64_t lba, uint32_t n, const void *buf);
 
+/* ATAPI accepts a non-busy selection without ATA's DRDY requirement. */
+static int packet_select(struct ata_device *d, uint64_t start, uint64_t deadline)
+{
+    struct ata_channel *c = d->channel;
+    while (alternate(c) & (ATA_BSY | ATA_DRQ)) {
+        if (expired(c, deadline)) return failure(d, start, alternate(c));
+        task_sleep_ms(1);
+    }
+    reg_write(c, 6, (uint8_t)(0xa0 | d->unit << 4));
+    if (pace(c)) return failure(d, start, alternate(c));
+    while (alternate(c) & ATA_BSY) {
+        if (expired(c, deadline)) return failure(d, start, alternate(c));
+        task_sleep_ms(1);
+    }
+    return 0;
+}
+static void media_changed(struct ata_device *d, enum atapi_media state)
+{
+    if (d->block.media_generation == UINT32_MAX) {
+        failure(d, now(d->channel), alternate(d->channel));
+        return;
+    }
+    ++d->block.media_generation;
+    d->block.capacity = 0;
+    d->media = state;
+}
+/* Returns CHECK CONDITION separately so REQUEST SENSE remains under the
+ * same owner mutex. No unrelated command may intervene and clear sense. */
+static int packet_raw(struct ata_device *d, const uint8_t *packet, unsigned length,
+                      void *buffer, uint32_t capacity, uint32_t *done, uint32_t limit)
+{
+    struct ata_channel *c = d->channel;
+    uint64_t start = now(c), deadline = start + limit;
+    uint32_t sequence;
+    *done = 0;
+    if (c->stopped || c->quiescing || d->block.quarantined) return -FS_EQUARANTINED;
+    device_control(c, c->control_shadow | ATA_NIEN);
+    d->issued = false;
+    int e = packet_select(d, start, deadline);
+    if (e) return e;
+    reg_write(c, 1, 0); /* PIO, no overlap */
+    reg_write(c, 2, 0); reg_write(c, 3, 0);
+    uint32_t phase_limit = capacity ? (capacity > 0xfffe ? 0xfffe : (capacity + 1) & ~1u) : 2048;
+    reg_write(c, 4, (uint8_t)phase_limit); reg_write(c, 5, (uint8_t)(phase_limit >> 8));
+    e = issue(d, 0xa0, start, &sequence);
+    bool sent = false, odd = false;
+    unsigned phases = 0;
+    while (!e) {
+        uint8_t status = alternate(c);
+        d->status = status;
+        if (expired(c, deadline) || c->stopped || c->quiescing || !status || status == 0xff || (status & ATA_DF)) {
+            e = failure(d, start, status); break;
+        }
+        if (status & ATA_BSY) { task_sleep_ms(1); continue; }
+        uint8_t reason = reg_read(c, 2) & 7;
+        if (status & ATA_ERR) {
+            if ((status & ATA_DRQ) || reason != 3 || !sent) e = failure(d, start, status);
+            else { d->error = reg_read(c, 1); e = -FS_EAGAIN; }
+            break;
+        }
+        if (!(status & ATA_DRQ)) {
+            if (!sent || reason != 3) e = failure(d, start, status);
+            break;
+        }
+        if (++phases > ATAPI_MAX_BYTES + 1) { e = failure(d, start, status); break; }
+        reg_read(c, 7); /* acknowledge optional packet/data interrupt */
+        if (!sent) {
+            if (reason != 1) { e = failure(d, start, status); break; }
+            for (unsigned i = 0; i < d->packet_bytes; i += 2) {
+                uint16_t word = i < length ? packet[i] : 0;
+                if (i + 1 < length) word |= (uint16_t)packet[i + 1] << 8;
+                c->ops->out16(c->port_ctx, c->base, word);
+                if (pace(c) || expired(c, deadline)) { e = failure(d, start, alternate(c)); break; }
+            }
+            sent = true; d->packet_commands++;
+        } else {
+            uint32_t bytes = reg_read(c, 4) | (uint32_t)reg_read(c, 5) << 8;
+            if (reason != 2 || !bytes || bytes > phase_limit || bytes > capacity - *done || odd) {
+                e = failure(d, start, status); break;
+            }
+            uint8_t *out = (uint8_t *)buffer + *done;
+            for (uint32_t i = 0; i < bytes; i += 2) {
+                if (expired(c, deadline)) { e = failure(d, start, alternate(c)); break; }
+                uint16_t word = c->ops->in16(c->port_ctx, c->base);
+                out[i] = (uint8_t)word;
+                if (i + 1 < bytes) out[i + 1] = (uint8_t)(word >> 8);
+                if (pace(c)) { e = failure(d, start, alternate(c)); break; }
+                if ((i & 127)==126) task_yield();
+            }
+            *done += bytes; odd = !!(bytes & 1);
+        }
+        if (!e && pace(c)) e = failure(d, start, alternate(c));
+        task_yield();
+    }
+    reg_read(c, 7);
+    disarm(c);
+    d->elapsed_ms = now(c) - start;
+    if (d->elapsed_ms > d->max_packet_ms) d->max_packet_ms = d->elapsed_ms;
+    return e;
+}
+static int packet_checked(struct ata_device *d, const uint8_t *p, unsigned length,
+                          void *buf, uint32_t cap, uint32_t *done, uint32_t deadline)
+{
+    uint64_t start=now(d->channel);
+    int e = packet_raw(d, p, length, buf, cap, done, deadline);
+    if (e != -FS_EAGAIN) { if (e) *done=0; return e; }
+    *done=0;
+    uint64_t elapsed=now(d->channel)-start;
+    if (elapsed>=deadline) return failure(d,start,d->status);
+    uint8_t request[12] = { 3, 0, 0, 0, 18 }, sense[18]; uint32_t n;
+    e = packet_raw(d, request, sizeof(request), sense, sizeof(sense), &n, (uint32_t)(deadline-elapsed));
+    if (e || n < 14 || (sense[0] & 0x7e) != 0x70 || sense[7] < 6)
+        return failure(d, now(d->channel), d->status);
+    d->sense_key = sense[2] & 15; d->asc = sense[12]; d->ascq = sense[13];
+    if (d->sense_key == 6) media_changed(d, ATAPI_CHANGED);
+    else if (d->sense_key == 2) {
+        enum atapi_media m = d->asc == 0x3a ? ATAPI_NO_MEDIUM : ATAPI_NOT_READY;
+        if (d->media != m) media_changed(d, m);
+    }
+    d->elapsed_ms=now(d->channel)-start;
+    if (d->elapsed_ms>d->max_packet_ms) d->max_packet_ms=d->elapsed_ms;
+    return -FS_EIO; /* a failed data request is never retried */
+}
+int atapi_packet(struct ata_device *d, const uint8_t *p, unsigned length,
+                 void *buf, uint32_t cap, uint32_t *done)
+{
+    if (!d || !d->identified || !d->atapi || !p || !length || length > d->packet_bytes ||
+        !done || cap > ATAPI_MAX_BYTES || (cap && !buf)) return -FS_EINVAL;
+    switch (p[0]) {
+    case 0: case 3: case 0x12: case 0x25: case 0x28: case 0x43: case 0x1b: case 0x1e: break;
+    default: return -FS_EOPNOTSUPP;
+    }
+    kmutex_lock(&d->channel->mutex);
+    int e = packet_checked(d, p, length, buf, cap, done,
+                          p[0] == 0x1b ? ATAPI_START_MS : ATAPI_COMMAND_MS);
+    kmutex_unlock(&d->channel->mutex);
+    return e;
+}
+static uint32_t packet_be32(const uint8_t *p)
+{ return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+static int atapi_read(struct blkdev *b, uint64_t lba, uint32_t count, void *buf)
+{
+    int e = blkdev_range(b, lba, count);
+    if (e || !buf || lba > UINT32_MAX || count > ATAPI_MAX_BYTES / 2048) return e ? e : -FS_EINVAL;
+    struct ata_device *d = b->ctx; uint32_t gen = b->media_generation, done;
+    uint8_t p[12] = { 0x28, 0, (uint8_t)(lba >> 24), (uint8_t)(lba >> 16),
+        (uint8_t)(lba >> 8), (uint8_t)lba, 0, (uint8_t)(count >> 8), (uint8_t)count };
+    e = atapi_packet(d, p, sizeof(p), buf, count * 2048, &done);
+    if (!e && (done != count * 2048 || gen != b->media_generation)) e = -FS_EIO;
+    if (!e) d->read_blocks += count;
+    return e;
+}
+int atapi_ready(struct ata_device *d)
+{
+    uint8_t p[12] = { 0 }; uint32_t n;
+    int e = atapi_packet(d, p, sizeof(p), 0, 0, &n);
+    if (e) return e;
+    if (d->media == ATAPI_READY && d->block.capacity) return 0;
+    uint8_t inquiry[36]; memset(p,0,sizeof(p)); p[0]=0x12; p[4]=sizeof(inquiry);
+    e=atapi_packet(d,p,sizeof(p),inquiry,sizeof(inquiry),&n);
+    if (e) return e;
+    if (n<36 || (inquiry[0]&31)!=5) return -FS_EOPNOTSUPP;
+    memset(p,0,sizeof(p)); p[0] = 0x25; uint8_t capacity[8];
+    e = atapi_packet(d, p, sizeof(p), capacity, sizeof(capacity), &n);
+    if (e) return e;
+    if (n != 8 || packet_be32(capacity + 4) != 2048 || packet_be32(capacity) == UINT32_MAX) return -FS_EOPNOTSUPP;
+    d->block.capacity = (uint64_t)packet_be32(capacity) + 1;
+    /* First data track, then last-session information. QEMU/SFF encode
+     * format 1 in byte 9, unlike later MMC's additional byte-2 field. */
+    memset(p, 0, sizeof(p)); p[0] = 0x43; p[8] = 20;
+    uint8_t toc[20]; e = atapi_packet(d, p, sizeof(p), toc, sizeof(toc), &n);
+    if (e) return e;
+    if (n < 12 || !(toc[5] & 4)) return -FS_EOPNOTSUPP;
+    d->session_lba = packet_be32(toc + 8);
+    p[8] = 12; p[9] = 0x40;
+    e = atapi_packet(d, p, sizeof(p), toc, 12, &n);
+    if (e) return e;
+    if (n != 12 || packet_be32(toc + 8) >= d->block.capacity) return -FS_EIO;
+    d->session_lba = packet_be32(toc + 8);
+    d->media = ATAPI_READY;
+    return 0;
+}
+int atapi_eject(struct ata_device *d)
+{
+    uint8_t p[12] = { 0x1e }; uint32_t n;
+    int e = atapi_packet(d, p, sizeof(p), 0, 0, &n);
+    if (!e) { p[0] = 0x1b; p[4] = 2; e = atapi_packet(d, p, sizeof(p), 0, 0, &n); }
+    if (!e) media_changed(d, ATAPI_NO_MEDIUM);
+    return e;
+}
+int atapi_start(struct ata_device *d)
+{
+    uint8_t p[12] = { 0x1b, 0, 0, 0, 3 }; uint32_t n;
+    return atapi_packet(d, p, sizeof(p), 0, 0, &n);
+}
+static int atapi_check_block(struct blkdev *b) { return atapi_ready(b->ctx); }
+static int identify_packet(struct ata_device *d)
+{
+    struct ata_channel *c = d->channel; uint8_t data[512];
+    uint64_t start = now(c), deadline = start + ATAPI_COMMAND_MS; uint32_t sequence;
+    d->issued = false;
+    int e = packet_select(d, start, deadline);
+    if (!e) e = issue(d, 0xa1, start, &sequence);
+    if (!e) e = poll_status(d, start, deadline, ATA_DRQ, 0);
+    if (!e) e = data_block(d, data, false, start, deadline);
+    if (!e) e = poll_status(d, start, deadline, 0, ATA_DRQ);
+    disarm(c);
+    if (e) return e;
+    uint16_t config = fs_rd16(data);
+    d->packet_type = (config >> 8) & 31;
+    if ((config & 0xc000) != 0x8000 || (config & 3) > 1) return -FS_EOPNOTSUPP;
+    d->packet_bytes = (config & 3) ? 16 : 12;
+    if (d->packet_type != 5) return -FS_EOPNOTSUPP;
+    for (unsigned i = 0; i < 40; i++) {
+        uint8_t ch = data[54 + (i ^ 1)]; d->model[i] = ch >= 33 && ch <= 126 && ch != '=' ? (char)ch : '_';
+    }
+    d->model[40] = 0;
+    d->identified = true; d->block.read = atapi_read; d->block.write = 0; d->block.flush = 0;
+    d->block.sector_size = 2048; d->block.media_generation = 1; d->block.media_check = atapi_check_block;
+    return 0;
+}
+
 static int identify(struct ata_device *d)
 {
     struct ata_channel *c = d->channel;
@@ -386,8 +608,9 @@ int ata_channel_discover(struct ata_channel *c)
         uint8_t mid = reg_read(c, 4), high = reg_read(c, 5);
         if (mid == 0x14 && high == 0xeb) {
             d->present = d->atapi = true;
-            if (c->native)
-                klog("[ata%u] unit=%u kind=atapi skipped=F4", c->irq - 14, i);
+            e = identify_packet(d);
+            if (e == -FS_EOPNOTSUPP) { e = 0; continue; }
+            if (!e) found++;
             continue;
         }
         if (mid || high)

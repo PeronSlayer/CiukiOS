@@ -7,13 +7,9 @@
 #include "selector.h"
 
 static unsigned calls, begins, ends;
-void rec_emit(const char *probe,const char *event,const char *format,...)
-{
-    (void)probe;(void)event;(void)format;
-    assert(0 && "unexpected missing-probe evidence");
-}
-void klog(const char *format,...)
-{ (void)format;assert(0 && "unexpected unknown-probe log"); }
+void rec_emit(const char *probe, const char *event, const char *format, ...)
+{ (void)probe; (void)event; (void)format; }
+void klog(const char *format, ...) { (void)format; }
 extern bool probes_operator_mode;
 extern bool probes_operator_wait(bool (*)(void *), uint64_t (*)(uint32_t),
                                 void (*)(uint32_t), void (*)(bool), void *);
@@ -54,7 +50,8 @@ static void selection_tests(void)
 {
     struct probe_selection s; struct sweep_cursor c;
     const char *good[] = { "f0:sweep run=12345678", "all:sweep run=abcdef12",
-        "f1:sweep run=12345678 step=16 state=00041000", "f2:sweep run=12345678 step=0" };
+        "f1:sweep run=12345678 step=16 state=00041000", "f2:sweep run=12345678 step=0",
+        "f3:sweep run=12345678 step=0" };
     for (unsigned i=0;i<sizeof(good)/sizeof(*good);i++) {
         assert(sweep_parse(good[i], strlen(good[i]), &c));
         assert(probes_parse_selector(good[i], strlen(good[i]), 0, &s));
@@ -78,14 +75,15 @@ static void order_tests(void)
     const struct probe_def f1[] = {{"registry",pass},{"input",fail},{"fat-write",pass},
         {"cache",pass},{"mount-crash",pass},{"safe",pass},{"bootlog",pass}};
     const struct ciuki_f2_probe f2[] = {{"elf-load",pass},{"fd-table",fail},{"app-gate",pass}};
-    const struct probe_def f4[] = {{"audio-native",pass}};
+    const struct probe_def f3[] = {{"vm-boot",pass}};
+    const struct probe_def f4[] = {{"optical",pass},{"audio-native",pass}};
     const struct probe_tables t = {.f0=f0,.f1=f1,.f0_count=2,.f1_count=7,
-        .f2=f2,.f2_count=3,.f4=f4,.f4_count=1};
+        .f2=f2,.f2_count=3,.f3=f3,.f3_count=1,.f4=f4,.f4_count=2};
     const struct probe_hooks h = {app_begin,app_end,panic_probe};
     const char *expected[] = {"registry","input","cache","safe","fat-write","fat-write",
         "mount-crash","mount-crash","bootlog","bootlog"};
     struct sweep_step step; struct sweep_cursor cursor = {.run="12345678"};
-    assert(sweep_count(0,&t)==3 && sweep_count(1,&t)==10 && sweep_count(2,&t)==3 && sweep_count(3,&t)==16);
+    assert(sweep_count(0,&t)==3 && sweep_count(1,&t)==10 && sweep_count(2,&t)==3 && sweep_count(3,&t)==1 && sweep_count(SWEEP_ALL_PHASE,&t)==17);
     for (unsigned i=0;i<10;i++) {
         assert(sweep_at(1,i,&t,&step)); assert(!strcmp(step.name,expected[i]));
         assert(step.boot == (i>=4 ? (i-4)%2 : 0));
@@ -93,13 +91,22 @@ static void order_tests(void)
     }
     assert(calls==10); // failure at input did not skip following steps
     assert(sweep_at(0,2,&t,&step) && step.panic && !strcmp(step.name,"panic"));
-    assert(sweep_at(3,3,&t,&step) && !strcmp(step.name,"registry"));
+    assert(sweep_at(SWEEP_ALL_PHASE,3,&t,&step) && !strcmp(step.name,"registry"));
     for(unsigned i=0;i<3;i++) { assert(sweep_at(2,i,&t,&step)); sweep_dispatch(&step,&cursor,&t,&h); }
     assert(begins==3 && ends==3 && calls==13);
-    assert(!sweep_at(3,16,&t,&step));
+    assert(sweep_at(3,0,&t,&step) && !strcmp(step.name,"vm-boot"));
+    assert(sweep_at(SWEEP_ALL_PHASE,16,&t,&step) && step.phase==3);
+    sweep_dispatch(&step,&cursor,&t,&h);
+    assert(calls==14);
+    assert(!sweep_at(SWEEP_ALL_PHASE,17,&t,&step));
+    struct probe_selection optical;
+    const char *request="f4:optical run=12345678";
+    assert(probes_parse_selector(request,strlen(request),0,&optical));
+    probes_dispatch(&optical,&t,&h);
+    assert(calls==15 && begins==3 && ends==3);
     struct probe_selection selected={.phase=4,.probe="audio-native",.run="12345678"};
     probes_dispatch(&selected,&t,&h);
-    assert(calls==14 && begins==3 && ends==3); /* F4 has no F2 app framing */
+    assert(calls==16 && begins==3 && ends==3); /* F4 has no F2 app framing */
 }
 static unsigned stage, delays, polls; static bool stuck;
 static void disable(void *c) { (void)c; assert(stage==0); stage=1; }

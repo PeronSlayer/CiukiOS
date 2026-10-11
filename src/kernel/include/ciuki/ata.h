@@ -10,6 +10,10 @@
 #define ATA_DEVICES 2u
 #define ATA_COMMAND_MS 30000u
 #define ATA_FLUSH_MS 60000u
+#define ATAPI_COMMAND_MS 2000u
+#define ATAPI_START_MS 10000u
+#define ATAPI_MAX_BYTES 65536u
+enum atapi_media { ATAPI_UNKNOWN, ATAPI_READY, ATAPI_NO_MEDIUM, ATAPI_NOT_READY, ATAPI_CHANGED };
 
 struct ata_port_ops {
     uint8_t (*in8)(void *ctx, uint16_t port);
@@ -34,6 +38,10 @@ struct ata_device {
     uint64_t commands, elapsed_ms;
     uint8_t status, error, command;
     bool issued;
+    uint8_t packet_bytes, packet_type, sense_key, asc, ascq;
+    enum atapi_media media;
+    uint32_t session_lba;
+    uint64_t packet_commands, read_blocks, media_writes, max_packet_ms;
 };
 
 /* Pinned until reboot/quiescence; no allocation or work in the IRQ handler.
@@ -68,6 +76,14 @@ bool ata_registry_idle(int handle, gen_t generation); /* registry_quiesce proof 
 int ata_init(void);                 /* thread context, after kwork_init */
 struct ata_device *ata_device_get(unsigned channel, unsigned unit);
 uint64_t ata_command_count(void);   /* real devices only */
+/* Read-only packet boundary. Only the required read/control opcodes are
+ * admitted, data is device-to-host, CHECK CONDITION is classified by sense.
+ * A media condition returns EIO without poisoning the ATA peer. */
+int atapi_packet(struct ata_device *, const uint8_t *packet, unsigned packet_length,
+                 void *buffer, uint32_t capacity, uint32_t *done);
+int atapi_ready(struct ata_device *); /* new transaction, never retry a read */
+int atapi_eject(struct ata_device *);
+int atapi_start(struct ata_device *);
 
 int probe_ata(void);
 int probe_ata_fault(void);

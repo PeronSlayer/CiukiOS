@@ -8,7 +8,7 @@ import json
 import re
 from pathlib import Path
 from evidence import Parser, EvidenceError, EvidenceNotRun
-from loader_model import selector as base_selector, PROBES, F0_PROBES, F1_PROBES, F2_PROBES
+from loader_model import selector as base_selector, PROBES, F0_PROBES, F1_PROBES, F2_PROBES, F3_PROBES
 
 LIMIT=128*1024
 FIELDS=('model','unit_identity','bios_version','cpuid','installed_ram','pci_ids',
@@ -19,12 +19,12 @@ def cfg_selector(request, source='cfg'):
     """BOOT.CFG extension; the fw_cfg-only suffixes remain in the old parser."""
     if not isinstance(request, str) or not request.isascii() or len(request) > 64:
         raise ValueError('selector must be at most 64 ASCII bytes')
-    match = re.fullmatch(r'(f[012]|all):sweep run=([0-9a-fA-F]{8})(?: step=([0-9]{1,2})(?: state=([0-9a-fA-F]{8}))?)?', request)
+    match = re.fullmatch(r'(f[0123]|all):sweep run=([0-9a-fA-F]{8})(?: step=([0-9]{1,2})(?: state=([0-9a-fA-F]{8}))?)?', request)
     if match:
         if source != 'cfg': raise ValueError('sweep requires BOOT.CFG')
         step = int(match[3] or 0); state = int(match[4] or '0', 16)
         if step > 63 or state >= 1 << 19: raise ValueError('invalid sweep cursor')
-        return {'phase': 3 if match[1] == 'all' else int(match[1][1]),
+        return {'phase': 4 if match[1] == 'all' else int(match[1][1]),
                 'probe': 'sweep', 'run': match[2], 'step': step, 'state': state,
                 'platform': None, 'safe': False}
     return base_selector(request, source)
@@ -224,7 +224,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
     sweep = any(s['probe'] == 'sweep' for s in selections)
     approved = {}
     for selection in selections:
-        names = PROBES if selection['phase'] == 3 else (F0_PROBES, F1_PROBES, F2_PROBES)[selection['phase']]
+        names = PROBES if selection['phase'] == 4 else (F0_PROBES, F1_PROBES, F2_PROBES, F3_PROBES)[selection['phase']]
         if selection['probe'] not in ('all', 'core', 'sweep'): names = (selection['probe'],)
         approved.setdefault(selection['run'], set()).update((*names, 'sweep'))
     groups = {}; summaries = []; completions = {}; boot_evidence = []; boots = split_boots(log.read_bytes())

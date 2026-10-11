@@ -154,13 +154,14 @@ int file_open(struct process *p, const char *path, uint32_t flags, uint32_t mode
 
 int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, int64_t *out)
 {
+    int live=px_ro_check_locked(d->node); if (live) return live;
     if (whence > SEEK_END) return -EINVAL;
     if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER) return -ESPIPE;
     if (d->node->kind != PX_FILE) {
         if (off || whence != SEEK_SET) return -EINVAL;
         d->position = 0; d->cursor = 0; *out = 0; return 0;
     }
-    uint64_t base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? d->position : d->node->entry.size;
+    uint64_t base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? d->position : d->node->ro ? d->node->ro_size : d->node->entry.size;
     uint64_t magnitude = off < 0 ? (uint64_t)(-(off + 1)) + 1 : (uint64_t)off;
     if (off < 0 && magnitude > base) return -EINVAL;
     if (off >= 0 && magnitude > (uint64_t)INT64_MAX - base) return -EOVERFLOW;
@@ -173,6 +174,8 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
 {
     *done = 0;
     if (bytes > CIUKI_IO_MAX) return -EINVAL;
+    int live=px_ro_check_locked(d->node); if (live) return live;
+    if (write && d->node->ro) return -EROFS;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
     struct px_node *n = d->node;
@@ -189,13 +192,14 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
     uint64_t position = positioned ? offset : write && (d->flags & O_APPEND) ? n->entry.size : d->position;
     if (write && (position > UINT32_MAX || bytes > UINT32_MAX - position)) return -EFBIG;
     struct fat_entry before = n->entry;
-    int err = write ? fat_write(n->volume, &n->entry, position, buffer, bytes, done) :
+    int err = n->ro ? fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done) : write ? fat_write(n->volume, &n->entry, position, buffer, bytes, done) :
                       fat_read(n->volume, &n->entry, position, buffer, bytes, done);
     /* F1 COW publishes the owning entry before freeing the old chain and
      * FSInfo. A failure in that suffix cannot erase completed user bytes. */
     if (write && err && (n->entry.first != before.first || n->entry.size != before.size)) *done = bytes;
     if (!positioned && (!err || *done)) d->position = position + *done;
     if (write && memcmp(&before, &n->entry, sizeof(before))) px_changed_locked(n);
+    if (n->ro && err) px_ro_check_locked(n);
     err = px_error(err);
     /* FAT RO attributes were checked at open. A later legacy attribute
      * change remains effective without exposing EACCES outside the ABI set. */
@@ -203,6 +207,8 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
 }
 int file_truncate_locked(struct file_description *d, uint64_t length)
 {
+    int live=px_ro_check_locked(d->node); if (live) return live;
+    if (d->node->ro) return -EROFS;
     if ((d->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
     if (d->node->kind != PX_FILE) return d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE ? -EINVAL : -EISDIR;
     if (length > INT64_MAX) return -EINVAL;
@@ -214,6 +220,7 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
 }
 int file_sync_locked(struct file_description *d)
 {
+    if (d->node->ro) return px_ro_check_locked(d->node);
     if (!d->node->volume) return -EINVAL;
     return px_error(fat_commit(d->node->volume));
 }
@@ -288,9 +295,9 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
     struct px_path r;
     int err = px_resolve_locked(s, cwd, path, false, &r);
     if (!err && r.node->kind != PX_FILE) err = -EACCES;
-    if (!err && r.node->entry.size > CIUKI_ELF_BYTES_MAX) err = -ENOEXEC;
+    if (!err && (r.node->ro ? r.node->ro_size : r.node->entry.size) > CIUKI_ELF_BYTES_MAX) err = -ENOEXEC;
     if (!err) err = px_share_locked(r.node, VFS_READ, 0);
-    if (!err) image->bytes = r.node->entry.size;
+    if (!err) image->bytes = (uint32_t)(r.node->ro ? r.node->ro_size : r.node->entry.size);
     for (uint32_t offset = 0; !err && offset < image->bytes; offset += PAGE_SIZE) {
         unsigned list_index = image->pages / (PAGE_SIZE / sizeof(uint32_t));
         if (!image->lists[list_index]) {
@@ -305,7 +312,8 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
         uint32_t bytes = image->bytes - offset;
         if (bytes > PAGE_SIZE) bytes = PAGE_SIZE;
         size_t done = 0;
-        err = px_error(fat_read(r.node->volume, &r.node->entry, offset, P2V(page), bytes, &done));
+        err = px_error(r.node->ro ? fs_ro_read(r.node->ro,r.node->ro_id,offset,P2V(page),bytes,&done) :
+                       fat_read(r.node->volume, &r.node->entry, offset, P2V(page), bytes, &done));
         if (!err && done != bytes) err = -EIO;
     }
     fs_lock_drop(&s->vfs->lock);

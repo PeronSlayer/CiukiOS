@@ -925,10 +925,11 @@ int main(void)
 #include <ciuki/process.h>
 #include "selector.h"
 static char evidence[4096];
-static int calls0, calls1, calls2, failing;
+static int calls0, calls1, calls2, calls3, failing;
 static int f0(void) { calls0++; return failing; }
 static int f1(void) { calls1++; return failing; }
 static int f2(void) { calls2++; return failing; }
+static int f3(void) { calls3++; return failing; }
 static void panic_probe(void) { calls0++; }
 static void app_begin(const struct probe_selection *s) { (void)s; }
 static void app_end(void) {}
@@ -945,21 +946,22 @@ static const struct probe_def fixture_f0[] = {
 };
 static const struct probe_def fixture_f1[] = {{"input",f1},{"framebuffer",f1}};
 static const struct ciuki_f2_probe fixture_f2[] = {{"elf-load",f2},{"spawn-wait",f2}};
+static const struct probe_def fixture_f3[] = {{"vm-boot",f3}};
 int validate(const char *s,unsigned len,unsigned flags) {
     struct probe_selection selection;
     evidence[0]=0;
     return probes_parse_selector(s,len,flags,&selection) ? (int)selection.phase+1 : 0;
 }
 int dispatch(const char *s,unsigned flags,unsigned count,int fail) {
-    calls0=calls1=calls2=0;evidence[0]=0;failing=fail;
+    calls0=calls1=calls2=calls3=0;evidence[0]=0;failing=fail;
     struct probe_selection selection;
     if (probes_parse_selector(s,(unsigned)strlen(s),flags,&selection)) {
         const struct probe_tables tables = { .f0=fixture_f0, .f1=fixture_f1, .f0_count=9,
-            .f1_count=count, .f2=fixture_f2, .f2_count=2 };
+            .f1_count=count, .f2=fixture_f2, .f2_count=2, .f3=fixture_f3, .f3_count=1 };
         const struct probe_hooks hooks = { app_begin, app_end, panic_probe };
         probes_dispatch(&selection,&tables,&hooks);
     }
-    return calls0*100+calls1+calls2*10000;
+    return calls0*100+calls1+calls2*10000+calls3*1000000;
 }
 const char *records(void) { return evidence; }
 """)
@@ -997,6 +999,11 @@ const char *records(void) { return evidence; }
             self.assertEqual(native.dispatch(f'f1:{alias} run=12ab34cd'.encode(),0,2,1),1)
             self.assertIn(b'framebuffer NOT_RUN reason=prerequisite_failed after=input',native.records())
         self.assertEqual(native.dispatch(b'f0:core run=12ab34cd',0,2,0),900)
+        text=b'f3:vm-boot run=12ab34cd'
+        self.assertEqual(native.validate(text,len(text),0),4)
+        self.assertEqual(native.dispatch(text,0,2,0),1000000)
+        for suffix in (b' safe=1',b' platform=e500',b' server=desktop',b' run=12345678'):
+            self.assertEqual(native.validate(text+suffix,len(text+suffix),trusted),0)
         self.assertEqual(native.dispatch(b'f0:all run=12ab34cd',0,2,0),1000)
         self.assertEqual(native.dispatch(b'f0:all run=12ab34cd',0,2,1),100)
         self.assertIn(b'panic NOT_RUN',native.records())

@@ -14,6 +14,7 @@ static int decode(const uint8_t *p, uint64_t base, uint64_t cap, struct partitio
     return 0;
 }
 static int sector(struct blkdev *d, uint64_t lba, uint8_t *b) {
+    if (!d || d->sector_size!=512) return -FS_EINVAL;
     int e=blkdev_range(d,lba,1); if (e) return e;
     if (!d->read) return -FS_EINVAL;
     if ((e=d->read(d,lba,1,b))) return e;

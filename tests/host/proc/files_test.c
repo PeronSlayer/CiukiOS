@@ -528,6 +528,42 @@ static void test_uname(void)
 #ifdef FD_TABLE_STACK_TEST
 #define main files_fixture_main
 #endif
+static unsigned optical_writes;
+static int native_optical_read(struct blkdev *b,uint64_t lba,uint32_t count,void *out)
+{
+    int e=blkdev_range(b,lba,count); if (e) return e;
+    return fseek(b->ctx,(long)(lba*2048),SEEK_SET) || fread(out,2048,count,b->ctx)!=count ? -FS_EIO : 0;
+}
+static int native_optical_write(struct blkdev *b,uint64_t lba,uint32_t count,const void *out)
+{ (void)b; (void)lba; (void)count; (void)out; optical_writes++; return -FS_EROFS; }
+static void test_optical_native(void)
+{
+    FILE *f=fopen("build/host/optical/fixture-0.iso","rb"); CHECK(f);
+    CHECK(!fseek(f,0,SEEK_END)); long size=ftell(f);
+    struct blkdev b={.read=native_optical_read,.write=native_optical_write,.capacity=(uint64_t)size/2048,
+        .sector_size=2048,.media_generation=1,.ctx=f};
+    struct fs_ro_volume ro;
+    CHECK(!fs_ro_mount(&ro,&iso9660_ops,&cache,&b,0,b.capacity)); CHECK(!vfs_attach_ro(&vfs,4,&ro));
+    struct px_path path; CHECK(!resolve_path("/mnt/e/DATA/ODD.BIN",&path));
+    struct ciuki_stat st; CHECK(!px_stat_locked(path.node,&st) && st.st_size==4099 && (st.st_mode&0777)==0444);
+    int fd=file_open(client,"/mnt/e/DATA/ODD.BIN",O_RDONLY,0); CHECK(fd>=0);
+    uint8_t bytes[11]; CHECK(io(fd,bytes,11,false,false,0)==11);
+    for (unsigned i=0;i<sizeof(bytes);i++) CHECK(bytes[i]==(uint8_t)(i*17+3));
+    CHECK(file_open(client,"/mnt/e/absent",O_RDONLY|O_CREAT,0666)==-EROFS);
+    CHECK(file_open(client,"/mnt/e/DATA/ODD.BIN",O_WRONLY|O_TRUNC,0)==-EROFS);
+    CHECK(io(fd,bytes,1,true,false,0)==-EROFS);
+    CHECK(file_truncate_locked(file_fd(client,fd),0)==-EROFS);
+    CHECK(!file_sync_locked(file_fd(client,fd)));
+    CHECK(make_dir("/mnt/e/absent")==-EROFS); CHECK(remove_path_native("/mnt/e/DATA/ODD.BIN",false)==-EROFS);
+    CHECK(rename_path("/mnt/e/DATA/ODD.BIN","/mnt/e/DATA/renamed")==-EROFS);
+    CHECK(!px_chdir(client,"/mnt/e/DATA")); b.media_generation++;
+    CHECK(io(fd,bytes,1,false,false,0)==-EIO && !vfs_drive_present(&vfs,4));
+    CHECK(resolve_path(".",&path)==-ENOENT);
+    CHECK(!fs_ro_mount(&ro,&iso9660_ops,&cache,&b,0,b.capacity)); CHECK(!vfs_attach_ro(&vfs,4,&ro));
+    CHECK(io(fd,bytes,1,false,false,0)==-EIO); CHECK(!file_close(client,fd)); CHECK(!px_chdir(client,"/"));
+    CHECK(!vfs_detach(&vfs,4)); CHECK(!optical_writes); fclose(f);
+    puts("native optical: PASS (64-bit metadata/read, EROFS mutations, stale descriptions/cwd, remount identity, zero writes)");
+}
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4);
@@ -541,7 +577,7 @@ int main(int argc, char **argv)
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks();
-    test_uname();
+    test_uname(); test_optical_native();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
     CHECK(f2_files_post_commit_fault());
     CHECK(pages_used == prior_pages && heap_blocks == prior_heap);

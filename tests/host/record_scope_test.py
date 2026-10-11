@@ -13,12 +13,16 @@ ALLOWED = {
     'probes/registry_probe.c',
     'probes/safe_probe.c',
     'probes/fat_probes.c',
+    'probes/f4_probes_media.c',
     'probes/f2_probes_process.c',
     'probes/f2_probes_signals.c',
     'probes/f2_probes_desktop.c',
     'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
     'probes/f4_probes_audio.c', # f4-01 native audio controller
+    'probes/f3_probes_vm.c',
+    'vm/dosvm.c',         # f3-00 admission/lifecycle reports, guarded by active probe scope
+    'vm/dosvm_bios.c',    # f3-00 bounded, escaped DOS record channel
     'drivers/ata_probe.c',
     'drivers/fbdev_probe.c',
     'drivers/i8042_probe.c',
