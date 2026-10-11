@@ -1793,7 +1793,7 @@ def main(argv=None):
             host_evidence=None
             if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-','f3-','f4-')):
                 started=time.monotonic()
-                checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=180,
+                checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=900,  # host suite grew with f3/f4 (303+ tests)
                                        env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
                 output=checked.stdout+checked.stderr
                 if len(output)>res.LOG_CAP:raise res.Refusal('host fixture evidence exceeds log cap')
