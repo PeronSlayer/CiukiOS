@@ -348,6 +348,8 @@ The exact shared `protocol.h` is installed as `ciuki/desktop.h` by the SDK build
 Use [POSIX clocks](https://pubs.opengroup.org/onlinepubs/000095399/functions/clock_getres.html):
 MONOTONIC for deadlines and REALTIME in UTC for the taskbar; label the build-seed
 fallback in About, using the kernel's existing `uname` release/version/source.
+About also shows `Version <uname version>` (the CiukiOS version string of
+`config/version.json`, drawn only when `uname` supplied one) under the dedication.
 Keep the existing font. Taskbar and About portrait sizes sample the existing
 pinned conversion deterministically; generic icons come from the pinned Tango
 0.8.90 archive with its existing notices, and remain separate from Ciuki's asset.

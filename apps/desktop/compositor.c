@@ -194,6 +194,11 @@ static void about_content(struct desktop *d, struct desk_box content, struct des
     desk_text(d,clip,content.x+136,content.y+18,"CiukiOS",2,0x213c4cu);
     desk_text(d,clip,content.x+136,content.y+46,"A modern Retro OS",1,0x213c4cu);
     desk_text(d,clip,content.x+136,content.y+72,"Dedicated to Ciuki",1,0x213c4cu);
+    if (d->version[0]) {            /* uname version: config/version.json */
+        char line[80];
+        snprintf(line,sizeof(line),"Version %.64s",d->version);
+        desk_text(d,clip,content.x+136,content.y+98,line,1,0x213c4cu);
+    }
     desk_text(d,clip,content.x+10,content.y+132,"Kernel build:",1,0x213c4cu);
     desk_text(d,clip,content.x+10,content.y+146,d->build_identity,1,0x213c4cu);
     desk_text(d,clip,content.x+10,content.y+162,"Tango 0.8.90 icons: Public Domain",1,0x213c4cu);

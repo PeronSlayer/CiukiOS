@@ -5,6 +5,11 @@ org 0
 %define LOAD_BASE 0x20000
 %define B(field) boot_info + ciuki_boot_info.%+field
 %define MAX_PH 32
+; Version shown in the menu title; build_image.py passes it from
+; config/version.json (-dCIUKI_VERSION='...'), bare assemblies get 'unknown'.
+%ifndef CIUKI_VERSION
+%define CIUKI_VERSION 'unknown'
+%endif
 ; Fixed 16-byte header. The builder patches sectors and CRC over [16,end).
 dd 0x52444c43
 dw 1, (image_end-$$+511)/512

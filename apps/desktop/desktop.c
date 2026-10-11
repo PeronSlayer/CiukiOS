@@ -219,8 +219,10 @@ static void shell_setup(struct desktop *d)
     d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");
+    d->version[0]=0;
     if (!uname(&u)) {
         snprintf(d->build_identity,sizeof(d->build_identity),"%.64s",u.release);
+        snprintf(d->version,sizeof(d->version),"%.64s",u.version);
 #ifdef __i386__
         d->realtime_source=(int)u.realtime_source;
 #endif
