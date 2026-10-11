@@ -547,3 +547,51 @@ beside its output, so an `--out` inside `build/f0/` replaces the canonical
 image's manifest; rebuild the canonical image afterwards (or write the
 hardware image elsewhere).
 
+
+## Twenty-seventh image: `e896ed38…` (commit `a90fd53`, f3-01, f3-02 and f4-04 merged)
+
+Campaign 9 ran `f3-vm` first: the F0–F2 prefix passed (189 PASS, the three
+`uart-absent-*` operator cases excepted), then `vm-boot-qemu-t23` failed on
+`devices_before eq 3`. The probe itself reports PASS (`case=baselines
+… devices_before=4 devices_after=4 restored=1`): since f3-02 every VM counts
+four authoritative devices (PIC, PIT, text/input service, VGA adapter) in
+`dosvm_snapshot`, and the three `vm-boot` cases still pinned three. The pin
+is corrected (`daff47e`); the campaign chain stopped at that failure, so
+`f0-smoke`, `f2-all` and `f4-media` did not run on this image. No defect
+in the image is known.
+
+## Twenty-eighth image: `4595cd98…` (commit `daff47e`, desktop batch f2-31, f2-32, f2-33 merged)
+
+Campaign 10 ran only the suites the two merged batches can influence,
+through scratch suites without the F0–F2 prefix (`zz-f3`: the 14 F3 cases;
+`zz-desk`: the 16 `f2-desktop` cases with the three new app cases' pixel
+digests left unchecked for the first run), then `f2-process`, `f2-app`,
+`f4-media`, `f0-smoke`:
+
+- `zz-f3`: `vm-boot-qemu-t23/e500/min128` PASS (four devices per VM);
+  `vm-memory-qemu-t23` FAIL. Two findings: the guest reported `VMMEMORY
+  FAIL A7` (the 8042 output-port read-back: since f3-01 a controller reply
+  raises IRQ1 like real hardware, and the CIUKIDOS keyboard ISR consumed the
+  D0h reply before the payload polled the status port; the payload now runs
+  the D1h/D0h sequence with interrupts off), and the probe's screen dump of
+  the failed VM carried `\` and `>` in a record value, which the runner's
+  grammar refuses (`invalid key=value grammar`), hiding the real failure;
+  the dump now maps every glyph outside `[A-Za-z0-9_:.,/+-]` to `.`. The
+  remaining ten F3 cases did not run.
+- `zz-desk`: 13 PASS (`crash-isolation-*`, `desktop-shell-qemu-t23/e500`);
+  `files-qemu-t23` FAIL: the desktop recognised F11 (`files-write-gate
+  observed=0`) but no `files-checkpoint` record followed, the interaction
+  record ended with `keys=0 motion=41 buttons=14` at the probe's 40 s input
+  deadline while the runner had delivered 138 of the 176 stimulus batches
+  (QMP `input-send-event` costs about 0.29 s per batch on this host, pauses
+  included). The probe's app-case deadline is now 180 s; the three app
+  scripts are being replayed on the host against the real desktop and app
+  code before the next run. The runner now keeps `screen-fail.ppm` for a
+  failed desktop or DOS-window case.
+- `f2-process`, `f2-app`, `f4-media`: REFUSED by the host prerequisite
+  (`test_dosvm.test_suite_needs_every_cycle_and_cleanup` still modelled three
+  devices per VM; corrected). `f0-smoke` 2/2.
+
+Evidence on this image therefore covers `vm-boot` on three profiles, the
+thirteen existing desktop cases and the boot smoke; everything else waits
+for the next image.

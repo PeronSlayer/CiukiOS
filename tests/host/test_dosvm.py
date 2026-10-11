@@ -55,7 +55,7 @@ class DosVMTests(unittest.TestCase):
                     ('DATA',dict(case='cycles',clean=100,faults=100,privileged=50,ports=50)),
                     ('DATA',dict(case='isolation',ivt=1,disk=1,heartbeat=1,native_dispatches=1000)),
                     ('DATA',dict(case='baselines',pages_before=20000,pages_after=20000,
-                        handles_before=2,handles_after=2,devices_before=3,devices_after=3,restored=1)),
+                        handles_before=2,handles_after=2,devices_before=4,devices_after=4,restored=1)),
                     ('DATA',dict(case='cleanup',vms=0,tasks=0,pages=0,handles=0,devices=0,restored=1)),
                     ('END',dict(status='PASS',error=0))]
         self.assertTrue(self.parser(records).check(expected))

@@ -64,7 +64,10 @@ static void screen_dump(const char *name, struct dosvm *v)
         unsigned len = 0;
         for (unsigned col = 0; col < 80; col++) {
             uint8_t ch = (uint8_t)text[row * 80 + col];
-            line[col] = ch == ' ' || !ch ? '_' : ch > ' ' && ch < 127 && ch != '=' ? (char)ch : '.';
+            /* Record grammar: values are [A-Za-z0-9_:.,/+-]; other glyphs become '.'. */
+            bool plain = (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                         ch == '_' || ch == ':' || ch == '.' || ch == ',' || ch == '/' || ch == '+' || ch == '-';
+            line[col] = ch == ' ' || !ch ? '_' : plain ? (char)ch : '.';
             if (ch > ' ' && ch < 127) len = col + 1;
         }
         if (!len) continue;

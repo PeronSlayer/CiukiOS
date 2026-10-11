@@ -415,7 +415,7 @@ static int native_crash_isolation(void)
             if (native_reports.app && app_gate==1) {
                 app_gate=storage_enable_write(storage_get(),2);
                 rec_emit(name,"DATA","case=%s-write-gate server=desktop expected=0 observed=%d",native_app_case(),app_gate);
-                deadline=start+40000;
+                deadline=start+180000; /* app scripts: ~300 batches at ~0.3 s each through QMP */
             }
             while (app_emitted<native_reports.checkpoint) {
                 app_emitted++;

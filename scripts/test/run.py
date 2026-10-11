@@ -1400,6 +1400,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         if isinstance(e,EvidenceNotRun):
             result['outcome']='not_run';result['not_run_subcases']=parser.not_run_subcases
     finally:
+        # A failed desktop or DOS-window case keeps its final screen for diagnosis
+        # (failure artifacts are retained; passing runs delete everything but serial.log).
+        if result.get('outcome')!='pass' and qmp and (case.get('desktop_screen') or case.get('window_screen')):
+            try:qmp.command('screendump',{'filename':str(directory/'screen-fail.ppm')})
+            except (OSError,RuntimeError,ValueError):pass
         # Ownership is held until this sequence finishes, including verification.
         result['cleanup']=teardown(host,unit,process,qmp,cgroup)
         result['cleanup']['qemu_process_count']=host.unowned_qemu_count()

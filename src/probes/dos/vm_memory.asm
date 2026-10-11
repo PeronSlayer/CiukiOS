@@ -90,6 +90,7 @@ start:
     cmp word [es:0810h], 5A3Ch
     mov byte [last], 0A5h
     jne fail
+    cli                         ; 8042 replies raise IRQ1: keep the ISR off the output buffer
     mov al, 0D1h
     out 64h, al
     mov al, 3
@@ -107,6 +108,7 @@ start:
     test al, 2
     mov byte [last], 0A8h
     jz fail
+    sti
     mov ax, 2402h
     int 15h
     cmp ax, 1
@@ -431,6 +433,7 @@ verify:
     pop si
     ret
 fail:
+    sti
     push cs
     pop ds
     push cs
