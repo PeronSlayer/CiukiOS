@@ -42,7 +42,7 @@ void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached);
 uint32_t vmm_kernel_pte(uint32_t va);      /* raw PTE or 0 */
 
 /* kernel stacks: 16 KiB with an unmapped guard page below (f2-20) */
-#define KSTACK_SIZE 16384u
+#define KSTACK_SIZE 32768u /* 32 KiB: the optical probe path double-faulted at 16 KiB on QEMU (2026-10-11) */
 void *kstack_alloc(void);                  /* returns lowest usable address */
 void kstack_free(void *base);
 uint32_t kstack_guard_va(void *base);

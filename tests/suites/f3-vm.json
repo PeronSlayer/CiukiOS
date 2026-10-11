@@ -585,6 +585,381 @@
       }
     },
     {
+      "id": "vm-memory-qemu-t23",
+      "probe": "vm-memory",
+      "profile": "qemu-t23",
+      "selector": "f3:vm-memory run={run_id}",
+      "timeout": 600,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "commitment": {
+                "eq": 33554432
+              },
+              "pool_quota": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "conformance"
+            },
+            "fields": {
+              "done": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "second"
+            },
+            "fields": {
+              "admitted": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "second_boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "commitment": {
+                "eq": 33554432
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-memory-qemu-e500",
+      "probe": "vm-memory",
+      "profile": "qemu-e500",
+      "selector": "f3:vm-memory run={run_id}",
+      "timeout": 600,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "commitment": {
+                "eq": 33554432
+              },
+              "pool_quota": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "conformance"
+            },
+            "fields": {
+              "done": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "second"
+            },
+            "fields": {
+              "admitted": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "second_boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "commitment": {
+                "eq": 33554432
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-memory-qemu-min128",
+      "probe": "vm-memory",
+      "profile": "qemu-min128",
+      "selector": "f3:vm-memory run={run_id}",
+      "timeout": 600,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "commitment": {
+                "eq": 33554432
+              },
+              "pool_quota": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "conformance"
+            },
+            "fields": {
+              "done": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "second"
+            },
+            "fields": {
+              "admitted": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "second_boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "commitment": {
+                "eq": 33554432
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
       "id": "vm-devices-qemu-t23",
       "probe": "vm-devices",
       "profile": "qemu-t23",

@@ -17,7 +17,12 @@ enum dosvm_reason { DOSVM_EXIT, DOSVM_TERMINATE, DOSVM_FAULT, DOSVM_RESET, DOSVM
 struct dosvm;
 struct task;
 struct dosvm_key { uint32_t id, generation; };
-struct dosvm_config { uint32_t commitment; }; /* zero selects 32 MiB */
+struct dosvm_config {
+    uint32_t commitment; /* zero selects 32 MiB */
+    uint16_t ems_frame; /* zero/E000h default, D000h alternative */
+    bool disable_umb;
+    bool memory_probe; /* controller records only; no build variant */
+};
 /* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
  * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after
  * a window claims focus. Kernel trusted transport supplies the VM key. */
@@ -39,12 +44,15 @@ struct dosvm_info {
     struct dosvm_key key;
     enum dosvm_state state;
     enum dosvm_reason reason;
-    uint32_t commitment, resident, fault_vector, fault_eip, fault_address;
+    uint32_t commitment, resident, fault_vector, fault_eip, fault_address, fault_error;
     uint32_t guest_records, dropped_records;
     uint16_t free_paragraphs;
     uint8_t dos_major, dos_minor, drive;
     bool dos_ready, dirty, data_loss;
     int cleanup_error;
+    uint32_t pool_quota, pool_used;
+    bool memory_done, memory_pass;
+    uint32_t xms_calls, ems_calls;
 };
 struct dosvm_ledger { uint32_t vms, tasks, pages, handles, devices; uint64_t reserved, resident; };
 /* Pure arithmetic uses free physical bytes AFTER firmware/kernel/driver,
@@ -64,7 +72,7 @@ int dosvm_destroy(struct dosvm_key, bool forced);
 bool dosvm_range(const struct dosvm *, uint32_t linear, unsigned bytes, bool write);
 int dosvm_read(struct dosvm *, uint32_t linear, void *, unsigned bytes);
 int dosvm_write(struct dosvm *, uint32_t linear, const void *, unsigned bytes);
-int dosvm_set_a20(struct dosvm *, bool enabled); /* base alias only; XMS is f3-03 */
+int dosvm_set_a20(struct dosvm *, bool enabled);
 typedef int (*dosvm_port_handler)(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *);
 int dosvm_port_register(struct dosvm_key, uint16_t first, uint16_t last,
                         dosvm_port_handler, void *arg);

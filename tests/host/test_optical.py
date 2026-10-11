@@ -109,7 +109,7 @@ class Optical(unittest.TestCase):
             calls=[]
             def command(self,name,args):self.calls.append((name,args));return {}
         q=Qmp(); a=runner.Actions([{'type':'media','after':{'event':'ARM','action':'media_reinsert'},'operation':'change','device':'ciuki-optical','target':'fixture-2.iso'}])
-        a.step(Parser,q,1); self.assertTrue(a.complete); self.assertEqual(q.calls[0][0],'change')
+        a.step(Parser,q,1); self.assertTrue(a.complete); self.assertEqual(q.calls[0][0],'blockdev-change-medium')
         self.assertEqual(runner.selector('f4:optical run=12345678','fw_cfg',True)['phase'],4)
 
 if __name__=='__main__':unittest.main()

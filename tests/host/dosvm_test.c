@@ -156,7 +156,7 @@ static bool short_read, short_write, fail_delete, fail_commit, fail_close, bad_s
 static bool io_fails(void) { return ++io_calls == io_fail_at; }
 static unsigned file_slot(struct vfs_table *table) { for (unsigned i=0;i<DOSVM_LIMIT;i++) if (files[i].table==table) return i; CHECK(false); return 0; }
 static void disk_owned(struct vfs_table *table)
-{ struct dosvm *v=(void *)((uint8_t *)table - offsetof(struct dosvm,disk_table)); CHECK(v->disk_lock.owner==g_current); }
+{ struct dosvm *v=(void *)((uint8_t *)table - offsetof(struct dosvm,disk_table)); CHECK(v->disk_busy); }
 struct storage *storage_get(void) { return &store; }
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive)
 {
@@ -215,11 +215,14 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_pit.c"
 #include "../../src/kernel/vm/dosvm_kbd.c"
 #include "../../src/kernel/vm/dosvm_mouse.c"
+#include "../../src/kernel/vm/dosvm_xms.c"
+#include "../../src/kernel/vm/dosvm_umb.c"
+#include "../../src/kernel/vm/dosvm_ems.c"
 
 static struct dosvm *create(void)
-{ struct dosvm *v; struct dosvm_config c={DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
+{ struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
 static void empty(void)
-{ struct dosvm_ledger l; dosvm_snapshot(&l); CHECK(!l.vms && !l.pages && !l.tasks && !l.handles && !l.devices && !l.resident && !l.reserved); CHECK(!used_pages && !heap_blocks && !handles && !tables && !scratch && !g_task_count && !g_user_mappings); for (unsigned i=0;i<DOSVM_LIMIT;i++) CHECK(!slots[i].disk_lock.owner); }
+{ struct dosvm_ledger l; dosvm_snapshot(&l); CHECK(!l.vms && !l.pages && !l.tasks && !l.handles && !l.devices && !l.resident && !l.reserved); CHECK(!used_pages && !heap_blocks && !handles && !tables && !scratch && !g_task_count && !g_user_mappings); for (unsigned i=0;i<DOSVM_LIMIT;i++) CHECK(!slots[i].disk_busy); }
 static void destroy(struct dosvm *v, bool forced)
 { struct dosvm_key key=dosvm_key(v); CHECK(dosvm_destroy(key,forced)==0); CHECK(dosvm_destroy(key,forced)==0 && !dosvm_valid(key) && !dosvm_keyboard(key,'X') && !dosvm_irq_raise(key,0)); }
 static void line(struct dosvm *v, const char *text)
@@ -327,6 +330,11 @@ static void test_lifecycle_records(void)
     run_worker(v); CHECK(v->info.state==DOSVM_STOPPING && v->info.reason==DOSVM_FAULT && v->info.fault_vector==13); destroy(v,true); empty();
     struct dosvm *next=create(); CHECK(dosvm_key(next).id==expired.id && dosvm_key(next).generation!=expired.generation && !dosvm_keyboard(expired,'X'));
     CHECK(!dosvm_boot(next)); value=1; CHECK(!v86_io(&next->monitor,0x92,1,true,&value) && next->info.reason==DOSVM_RESET); destroy(next,true); empty();
+    /* OUT hands the handler the whole EAX: a dirty AH must not hide the command byte (QEMU 2026-10-11). */
+    next=create(); CHECK(!dosvm_boot(next)); CHECK(!dosvm_set_a20(next,false)); value=0xFFD1; CHECK(!v86_io(&next->monitor,0x64,1,true,&value)); value=0xFF03; CHECK(!v86_io(&next->monitor,0x60,1,true,&value) && next->a20);
+    value=0xFFD0; CHECK(!v86_io(&next->monitor,0x64,1,true,&value)); value=0; CHECK(!v86_io(&next->monitor,0x64,1,false,&value) && (value&1));
+    value=0; CHECK(!v86_io(&next->monitor,0x60,1,false,&value) && (value&2)); value=0; CHECK(!v86_io(&next->monitor,0x64,1,false,&value) && !(value&1));
+    value=0xFF00; CHECK(!v86_io(&next->monitor,DOSVM_CONTROL_PORT,1,true,&value) && next->info.state==DOSVM_STOPPING && next->info.reason==DOSVM_EXIT); destroy(next,true); empty();
     next=create(); CHECK(!dosvm_boot(next)); next->monitor.vif=false; next->boot_deadline=g_ticks+2;
     guest_halt=true; run_worker(next); guest_halt=false;
     CHECK(next->info.reason==DOSVM_TIMEOUT && next->info.state==DOSVM_STOPPING); destroy(next,true); empty();
@@ -340,11 +348,141 @@ static void test_cleanup_errors(void)
     v=create(); fail_close=true; CHECK(dosvm_destroy(dosvm_key(v),true)==-V86_EIO && v->info.state==DOSVM_DEAD); fail_close=false; empty();
     v=create(); CHECK(!dosvm_disk_write(v,5,sector)); committed=commits; destroy(v,true); CHECK(commits==committed && v->info.data_loss); empty();
 }
+static struct v86_frame xf(unsigned ah, unsigned dx)
+{ return (struct v86_frame){.tf={.eax=ah<<8,.edx=dx,.eflags=V86_VM|V86_IF|2}}; }
+static struct v86_frame ef(unsigned ax, unsigned dx, unsigned bx)
+{ return (struct v86_frame){.tf={.eax=ax,.edx=dx,.ebx=bx,.eflags=V86_VM|V86_IF|2}}; }
+#define AX(f) ((f).tf.eax&0xFFFFu)
+#define BX(f) ((f).tf.ebx&0xFFFFu)
+#define DX(f) ((f).tf.edx&0xFFFFu)
+#define XMS(v,f) (!dosvm_xms((v),&(f)))
+#define EMS(v,f) (!dosvm_ems((v),&(f)))
+#define EMSERR(f) (((f).tf.eax>>8)&255u)
+/* f3-03 memory services (lead, 2026-10-11): XMS/EMS/UMB state machines and the
+ * move/resize validators against the fake VM memory; windows are page aliases. */
+static void test_memory_services(void)
+{
+    struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP+4u*1024*1024};
+    CHECK(dosvm_create(&c,&v)==0 && v && v->memory.quota==4u*1024*1024 && v->info.pool_quota==v->memory.quota && !v->info.pool_used);
+    for (uint32_t off=0;off<v->memory.quota;off+=PAGE_SIZE) CHECK(as_lookup(&v->as,VM_POOL_BASE+off,0));
+    for (unsigned i=0;i<16;i++) CHECK(!as_lookup(&v->as,0xE0000+i*PAGE_SIZE,0));
+    CHECK(as_lookup(&v->as,0xC8000,0)==v->frames[0xC8] && v->memory.frame_segment==0xE000 && v->memory.umb_enabled);
+    struct v86_frame f;
+    f=xf(0,0); CHECK(XMS(v,f) && AX(f)==0x300 && BX(f)==0x100 && DX(f)==1);
+    f=xf(1,0xFFFF); CHECK(XMS(v,f) && AX(f)==1 && v->memory.hma);
+    f=xf(1,0xFFFF); CHECK(XMS(v,f) && !AX(f) && (f.tf.ebx&255)==0x91);
+    f=xf(2,0); CHECK(XMS(v,f) && AX(f)==1 && !v->memory.hma);
+    f=xf(2,0); CHECK(XMS(v,f) && (f.tf.ebx&255)==0x93);
+    f=xf(3,0); CHECK(XMS(v,f) && AX(f)==1 && v->a20 && v->memory.global_a20==1);
+    f=xf(5,0); CHECK(XMS(v,f) && AX(f)==1 && v->memory.local_a20==1);
+    f=xf(4,0); CHECK(XMS(v,f) && (f.tf.ebx&255)==0x94 && v->a20 && !v->memory.global_a20);
+    f=xf(6,0); CHECK(XMS(v,f) && AX(f)==1 && !v->a20 && !v->memory.local_a20);
+    f=xf(7,0); CHECK(XMS(v,f) && !AX(f));
+    f=xf(8,0); CHECK(XMS(v,f) && AX(f)==4096 && DX(f)==4096 && !(f.tf.ebx&255));
+    f=xf(0x88,0); CHECK(XMS(v,f) && f.tf.eax==4096 && f.tf.edx==4096 && f.tf.ecx==VM_POOL_BASE+v->memory.quota-1);
+    f=xf(9,4097); CHECK(XMS(v,f) && !AX(f) && (f.tf.ebx&255)==0xA0 && !DX(f));
+    f=xf(9,64); CHECK(XMS(v,f) && AX(f)==1 && DX(f)==1); unsigned h1=1;
+    CHECK(v->memory.xms[0].used && v->memory.xms[0].base==VM_POOL_BASE && v->memory.xms[0].bytes==65536 && v->memory.xms[0].pages==16 && v->info.pool_used==65536);
+    f=xf(0xE,h1); CHECK(XMS(v,f) && AX(f)==1 && DX(f)==64 && BX(f)==63);
+    f=xf(0xC,h1); CHECK(XMS(v,f) && AX(f)==1 && ((DX(f)<<16)|BX(f))==VM_POOL_BASE && v->memory.xms[0].locks==1);
+    f=xf(0xA,h1); CHECK(XMS(v,f) && !AX(f) && (f.tf.ebx&255)==0xAB);
+    f=xf(0xF,h1); f.tf.ebx=128; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xAB);
+    f=xf(0xD,h1); CHECK(XMS(v,f) && AX(f)==1 && !v->memory.xms[0].locks);
+    f=xf(0xD,h1); CHECK(XMS(v,f) && (f.tf.ebx&255)==0xAA);
+    f=xf(0xD,5); CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA2);
+    f=xf(9,64); CHECK(XMS(v,f) && AX(f)==1 && DX(f)==2 && v->memory.xms[1].base==VM_POOL_BASE+65536);
+    uint8_t pattern[512], back[512]; for (unsigned i=0;i<sizeof pattern;i++) pattern[i]=(uint8_t)(i*7+3);
+    CHECK(!dosvm_write(v,VM_POOL_BASE,pattern,sizeof pattern));
+    /* Growth past an occupied neighbour relocates the block and keeps its bytes. */
+    f=xf(0xF,h1); f.tf.ebx=128; CHECK(XMS(v,f) && AX(f)==1 && v->memory.xms[0].base==VM_POOL_BASE+131072 && v->memory.xms[0].pages==32 && v->memory.xms[0].bytes==131072);
+    CHECK(!dosvm_read(v,v->memory.xms[0].base,back,sizeof back) && !memcmp(back,pattern,sizeof back) && v->info.pool_used==48*PAGE_SIZE);
+    CHECK(!dosvm_read(v,VM_POOL_BASE,back,sizeof back) && !memcmp(back,pattern,sizeof back)); /* freed pages keep bytes until reuse; reuse zeroes */
+    f=xf(0xF,h1); f.tf.ebx=32; CHECK(XMS(v,f) && AX(f)==1 && v->memory.xms[0].pages==8 && v->memory.xms[0].bytes==32768 && v->info.pool_used==24*PAGE_SIZE);
+    f=xf(0x8F,h1); f.tf.ebx=0xFFFFFFFFu; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA0 && v->memory.xms[0].pages==8);
+    f=xf(9,16); CHECK(XMS(v,f) && AX(f)==1 && DX(f)==3 && v->memory.xms[2].base==VM_POOL_BASE); /* first fit reuses the hole, zeroed */
+    CHECK(!dosvm_read(v,VM_POOL_BASE,back,sizeof back) && back[0]==0 && back[511]==0);
+    f=xf(0xA,3); CHECK(XMS(v,f) && AX(f)==1 && !v->memory.xms[2].used);
+    /* Move validator: conventional -> EMB -> conventional, then each error code. */
+    uint8_t move[16]={0}; CHECK(!dosvm_write(v,0x10000,pattern,sizeof pattern));
+    vm_w32(move,512); vm_w16(move+4,0); vm_w32(move+6,0x10000000u); vm_w16(move+10,h1); vm_w32(move+12,0);
+    CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && AX(f)==1 && !v->a20);
+    CHECK(!dosvm_read(v,v->memory.xms[0].base,back,sizeof back) && !memcmp(back,pattern,sizeof back));
+    vm_w16(move+4,h1); vm_w32(move+6,0); vm_w16(move+10,0); vm_w32(move+12,0x30000000u);
+    CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && AX(f)==1);
+    CHECK(!dosvm_read(v,0x30000,back,sizeof back) && !memcmp(back,pattern,sizeof back));
+    vm_w32(move,511); CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA7);
+    vm_w32(move,512); vm_w16(move+4,9); CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA3);
+    vm_w16(move+4,h1); vm_w32(move+6,40000); CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA4);
+    vm_w32(move+6,32512); CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA7);
+    vm_w32(move+6,0); vm_w16(move+10,9); CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA5);
+    vm_w16(move+10,2); vm_w32(move+12,65100); CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA7);
+    vm_w32(move+12,70000); CHECK(!dosvm_write(v,0x20000,move,sizeof move)); f=xf(0xB,0); f.ds=0x2000; CHECK(XMS(v,f) && (f.tf.ebx&255)==0xA6);
+    /* UMB arena: C900h..DFFFh in whole pages, exclusive of the E000h frame. */
+    f=xf(0x10,0xFFFF); CHECK(XMS(v,f) && !AX(f) && (f.tf.ebx&255)==0xB0 && DX(f)==23*256);
+    f=xf(0x10,17); CHECK(XMS(v,f) && AX(f)==1 && BX(f)==0xC900 && DX(f)==256 && v->memory.umb[0]==1);
+    f=xf(0x12,0xC900); f.tf.ebx=512; CHECK(XMS(v,f) && AX(f)==1 && v->memory.umb[0]==2 && v->memory.umb[1]==0xFFFF);
+    f=xf(0x10,23*256); CHECK(XMS(v,f) && (f.tf.ebx&255)==0xB0 && DX(f)==21*256);
+    f=xf(0x11,0xC900); CHECK(XMS(v,f) && AX(f)==1 && !v->memory.umb[0] && !v->memory.umb[1]);
+    f=xf(0x11,0xC900); CHECK(XMS(v,f) && (f.tf.ebx&255)==0xB2);
+    f=xf(0x11,0xE000); CHECK(XMS(v,f) && (f.tf.ebx&255)==0xB2);
+    f=xf(0x8A,0); CHECK(XMS(v,f) && !AX(f) && (f.tf.ebx&255)==0x80);
+    CHECK(v->info.xms_calls==((1u<<0x13)-1u|1u<<19|1u<<22));
+    /* EMS: handles, page-table windows, save/restore, realloc, release. */
+    f=ef(0x4000,0,0); CHECK(EMS(v,f) && !EMSERR(f));
+    f=ef(0x4100,0,0); CHECK(EMS(v,f) && !EMSERR(f) && BX(f)==0xE000);
+    f=ef(0x4200,0,0); CHECK(EMS(v,f) && !EMSERR(f) && DX(f)==256 && BX(f)==250);
+    f=ef(0x4300,0,0); CHECK(EMS(v,f) && EMSERR(f)==0x89);
+    f=ef(0x4300,0,257); CHECK(EMS(v,f) && EMSERR(f)==0x87);
+    f=ef(0x4300,0,251); CHECK(EMS(v,f) && EMSERR(f)==0x88);
+    f=ef(0x4300,0,4); CHECK(EMS(v,f) && !EMSERR(f) && DX(f)==1 && v->memory.ems[0].block.used && v->memory.ems[0].block.base==VM_POOL_BASE && v->memory.ems_bytes==65536);
+    uint32_t base=v->memory.ems[0].block.base;
+    f=ef(0x4400,1,0); CHECK(EMS(v,f) && !EMSERR(f));
+    for (unsigned j=0;j<4;j++) CHECK(as_lookup(&v->as,0xE0000+j*PAGE_SIZE,0)==as_lookup(&v->as,base+j*PAGE_SIZE,0));
+    CHECK(!as_lookup(&v->as,0xE4000,0));
+    CHECK(!dosvm_write(v,0xE0100,pattern,sizeof pattern) && !dosvm_read(v,base+0x100,back,sizeof back) && !memcmp(back,pattern,sizeof back));
+    f=ef(0x4401,1,3); CHECK(EMS(v,f) && !EMSERR(f) && as_lookup(&v->as,0xE4000,0)==as_lookup(&v->as,base+3*VM_EMS_PAGE,0));
+    f=ef(0x4400,1,5); CHECK(EMS(v,f) && EMSERR(f)==0x8A);
+    f=ef(0x4404,1,0); CHECK(EMS(v,f) && EMSERR(f)==0x8B);
+    f=ef(0x4400,7,0); CHECK(EMS(v,f) && EMSERR(f)==0x83);
+    f=ef(0x4600,0,0); CHECK(EMS(v,f) && (f.tf.eax&255)==0x40);
+    f=ef(0x4B00,0,0); CHECK(EMS(v,f) && BX(f)==1);
+    f=ef(0x4C00,1,0); CHECK(EMS(v,f) && BX(f)==4);
+    f=ef(0x4D00,0,0); f.es=0x4000; CHECK(EMS(v,f) && !EMSERR(f) && BX(f)==1 && !dosvm_read(v,0x40000,back,4) && back[0]==1 && !back[1] && back[2]==4 && !back[3]);
+    f=ef(0x4700,1,0); CHECK(EMS(v,f) && !EMSERR(f) && v->memory.ems[0].saved);
+    f=ef(0x4700,1,0); CHECK(EMS(v,f) && EMSERR(f)==0x8D);
+    f=ef(0x4400,1,0xFFFF); CHECK(EMS(v,f) && !EMSERR(f) && !as_lookup(&v->as,0xE0000,0));
+    f=ef(0x4800,1,0); CHECK(EMS(v,f) && !EMSERR(f) && !v->memory.ems[0].saved && as_lookup(&v->as,0xE0000,0)==as_lookup(&v->as,base,0));
+    f=ef(0x4800,1,0); CHECK(EMS(v,f) && EMSERR(f)==0x8E);
+    f=ef(0x5100,1,8); CHECK(EMS(v,f) && !EMSERR(f) && v->memory.ems[0].block.pages==32 && v->memory.ems[0].block.base==VM_POOL_BASE+40*PAGE_SIZE && v->memory.ems_bytes==131072);
+    base=v->memory.ems[0].block.base;
+    CHECK(as_lookup(&v->as,0xE0000,0)==as_lookup(&v->as,base,0) && as_lookup(&v->as,0xE4000,0)==as_lookup(&v->as,base+3*VM_EMS_PAGE,0));
+    CHECK(!dosvm_read(v,base+0x100,back,sizeof back) && !memcmp(back,pattern,sizeof back));
+    f=ef(0x5100,1,2); CHECK(EMS(v,f) && !EMSERR(f) && v->memory.ems[0].block.pages==8 && v->memory.ems_bytes==32768);
+    CHECK(as_lookup(&v->as,0xE0000,0)==as_lookup(&v->as,base,0) && !as_lookup(&v->as,0xE4000,0) && !v->memory.map[1].handle);
+    f=ef(0x5100,1,257); CHECK(EMS(v,f) && EMSERR(f)==0x87);
+    f=ef(0x4500,1,0); CHECK(EMS(v,f) && !EMSERR(f) && !v->memory.ems[0].block.used && !v->memory.ems_bytes && !as_lookup(&v->as,0xE0000,0) && v->info.pool_used==24*PAGE_SIZE);
+    f=ef(0x4500,1,0); CHECK(EMS(v,f) && EMSERR(f)==0x83);
+    f=ef(0x4900,0,0); CHECK(EMS(v,f) && EMSERR(f)==0x84);
+    f=ef(0x5900,0,0); CHECK(EMS(v,f) && EMSERR(f)==0xA4);
+    f=ef(0x5E00,0,0); CHECK(EMS(v,f) && EMSERR(f)==0x84);
+    CHECK((v->info.ems_calls&(1u<<0|1u<<1|1u<<2|1u<<3|1u<<4|1u<<5|1u<<6|1u<<7|1u<<8|1u<<0x11))==(1u<<0|1u<<1|1u<<2|1u<<3|1u<<4|1u<<5|1u<<6|1u<<7|1u<<8|1u<<0x11));
+    destroy(v,true); empty();
+    /* Aliases still mapped at destruction: every page freed exactly once. */
+    CHECK(dosvm_create(&c,&v)==0 && v);
+    f=ef(0x4300,0,2); CHECK(EMS(v,f) && !EMSERR(f) && DX(f)==1);
+    f=ef(0x4400,1,1); CHECK(EMS(v,f) && !EMSERR(f) && as_lookup(&v->as,0xE0000,0));
+    f=xf(9,32); CHECK(XMS(v,f) && AX(f)==1);
+    destroy(v,true); empty();
+    /* Pool backing failure during creation unwinds the whole VM. */
+    allocation_calls=0; struct dosvm *t=create(); unsigned n=allocation_calls; destroy(t,true); empty();
+    allocation_calls=0; fail_at=n+50; v=(void *)1; CHECK(dosvm_create(0,&v)==-ENOMEM && !v); fail_at=0; empty();
+    printf("DOS memory services: XMS/EMS/UMB state machines and move/resize validators PASS\n");
+}
 #include "dosvm_devices_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_devices();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

@@ -102,3 +102,5 @@ Documenti di design, validazione, fonti esterne.
 | [Prove su hardware: ThinkPad T23, sweep automatico e difetti reali corretti](2026-10-11-08-prove-hardware-t23-sweep.md) | 11 ott | analisi hardware e modifica |
 | [Accelerazione: F3 e shell del desktop partono su QEMU in parallelo alla coda hardware di F0–F2](2026-10-11-09-accelerazione-f3-desktop.md) | 11 ott | decisione del proprietario e pianificazione |
 | [Contratto F4 approvato: audio, media, volumi condivisi, ottico e NTFS in sola lettura](2026-10-11-10-contratto-f4-approvato.md) | 11 ott | decisione (contratto di progetto) |
+| [Integrazione notturna: shell del desktop, nucleo VM DOS, audio AC'97, ATAPI/ISO 9660, NTFS, loader; qualifica QEMU e difetti corretti](2026-10-11-11-integrazione-notturna-qualifica-qemu.md) | 11 ott | modifica (integrazione) e analisi |
+| [f3-03 completata dal lead: servizi di memoria XMS/EMS/UMB e primo avvio delle VM DOS su QEMU](2026-10-11-12-f3-03-memoria-vm-primo-avvio-dos-qemu.md) | 11 ott | modifica (implementazione e correzioni) e analisi di regressione |

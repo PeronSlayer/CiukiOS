@@ -46,7 +46,8 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         if (!v->info.key.generation || v->info.state == DOSVM_DEAD) continue;
         out->vms++;
         out->tasks += v->task != 0;
-        out->pages += v->as.pages + v->as.tables + !!v->as.pd_phys;
+        /* Count owned backing once, including unmapped EMS-window backing. */
+        if (v->as.pd_phys) out->pages += DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1;
         out->handles += v->base_open + v->overlay_open;
         out->devices += 3; /* authoritative PIC, PIT and text/input service */
         out->reserved += v->info.commitment;
@@ -56,7 +57,10 @@ void dosvm_snapshot(struct dosvm_ledger *out)
 
 bool dosvm_range(const struct dosvm *v, uint32_t linear, unsigned bytes, bool write)
 {
-    if (linear >= DOSVM_LINEAR_END || bytes > DOSVM_LINEAR_END - linear || !v->as.pd_phys)
+    uint32_t end=VM_POOL_BASE+v->memory.quota;
+    bool low=linear<DOSVM_LINEAR_END && bytes<=DOSVM_LINEAR_END-linear;
+    bool pool=linear>=VM_POOL_BASE && linear<=end && bytes<=end-linear;
+    if ((!low && !pool) || !v->as.pd_phys)
         return false;
     return as_range_ok(&v->as, linear, bytes, write);
 }
@@ -177,6 +181,8 @@ bool dosvm_trap(struct trap_frame *tf)
     struct dosvm *v = owner(g_current);
     if (!v || !v->continuation) return false;
     struct v86_frame *f = (struct v86_frame *)tf;
+    /* CR2 belongs to this fault only while interrupts stay off. */
+    uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
     sti();
     int e = 0;
     if (v->info.state != DOSVM_STOPPING) {
@@ -189,7 +195,8 @@ bool dosvm_trap(struct trap_frame *tf)
     if (e < 0) {
         v->info.fault_vector = tf->vector;
         v->info.fault_eip = (tf->cs << 4) + tf->eip;
-        v->info.fault_address = tf->vector == 14 ? read_cr2() : 0;
+        v->info.fault_address = cr2;
+        v->info.fault_error = tf->err;
         dosvm_stop(v->info.key, DOSVM_FAULT);
     }
     if (!v->info.dos_ready && deadline_passed(v->boot_deadline))
@@ -226,11 +233,14 @@ static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
     struct dosvm *v = arg;
     if (vector == 0xFD) return dosvm_mouse_return(v, f);
     if (vector != 0xFE) return -ENOSYS;
+    if (f->tf.cs == VM_XMS_SEG && f->tf.eip == 4) return dosvm_xms(v, f);
+    if (f->tf.cs == VM_XMS_SEG && f->tf.eip == 18) return dosvm_ems_return(v, f);
     /* Only synthetic ROM stubs may enter the private firmware service.
      * Original INT already pushed its own FLAGS/CS/IP; no second INT frame. */
-    if (f->tf.cs != 0xF000 || (f->tf.eip & 15) != 2 || f->tf.eip >= 0x1000)
+    if (f->tf.cs != 0xF000 || (f->tf.eip & 15) != 2 || f->tf.eip > 0x1002 ||
+        (f->tf.eip >= 0x1000 && f->tf.eip != 0x1002))
         return -V86_EPERM;
-    uint8_t service = (uint8_t)(f->tf.eip >> 4);
+    uint8_t service = f->tf.eip == 0x1002 ? 0x67 : (uint8_t)(f->tf.eip >> 4);
     uint32_t off = (uint16_t)f->tf.user_esp;
     if (off > 0xFFFA || f->tf.user_ss > 0xFFFF) return -EFAULT;
     uint32_t linear = (f->tf.user_ss << 4) + off + 4;
@@ -251,9 +261,28 @@ static void worker(void *arg)
     v->continuation = 0;
     write_cr3(vmm_kernel_pd());
     tss_set_kernel_stack((uint32_t)v->task->kstack + KSTACK_SIZE);
-    rec_emit("vm-boot", "DATA", "group=vm_stop vm=%u generation=%u reason=%u vector=%u eip=%08x",
+    uint8_t code[8] = {0};
+    if (v->info.reason == DOSVM_FAULT) dosvm_read(v, v->info.fault_eip, code, sizeof(code));
+    rec_emit(dosvm_probe(v), "DATA", "group=vm_stop vm=%u generation=%u reason=%u vector=%u eip=%08x address=%08x error=%x code=%02x%02x%02x%02x%02x%02x%02x%02x",
              v->info.key.id, v->info.key.generation, v->info.reason,
-             v->info.fault_vector, v->info.fault_eip);
+             v->info.fault_vector, v->info.fault_eip, v->info.fault_address, v->info.fault_error,
+             code[0], code[1], code[2], code[3], code[4], code[5], code[6], code[7]);
+    if (v->info.reason != DOSVM_EXIT) {
+        /* Guest registers and stack top of the last frame: the INT frame
+         * and return addresses name the DOS path without a build-time trace. */
+        const struct v86_frame *s = &v->frame;
+        rec_emit(dosvm_probe(v), "DATA", "group=vm_fault ax=%04x bx=%04x cx=%04x dx=%04x si=%04x di=%04x bp=%04x ds=%04x es=%04x ss=%04x sp=%04x",
+                 s->tf.eax & 0xFFFF, s->tf.ebx & 0xFFFF, s->tf.ecx & 0xFFFF, s->tf.edx & 0xFFFF,
+                 s->tf.esi & 0xFFFF, s->tf.edi & 0xFFFF, s->tf.ebp & 0xFFFF, s->ds & 0xFFFF, s->es & 0xFFFF,
+                 s->tf.user_ss & 0xFFFF, s->tf.user_esp & 0xFFFF);
+        uint32_t top = ((s->tf.user_ss & 0xFFFF) << 4) + (s->tf.user_esp & 0xFFFF);
+        for (unsigned part = 0; part < 3; part++) {
+            uint16_t w[16] = {0};
+            dosvm_read(v, top + part * sizeof(w), w, sizeof(w));
+            rec_emit(dosvm_probe(v), "DATA", "group=vm_stack part=%u words=%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x",
+                     part, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
+        }
+    }
     task_exit(v->info.reason);
 }
 
@@ -274,7 +303,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
     if (e && v->info.dirty) v->info.data_loss = true;
     if (v->as.pd_phys) {
-        if (!v->a20 && v->as.pages == DOSVM_PAGES) dosvm_set_a20(v, true);
+        dosvm_memory_close(v);
         as_destroy(&v->as);
     }
     memset(v->frames, 0, sizeof(v->frames));
@@ -285,7 +314,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     /* A failed unlink retains the generation/table for retry, never reuses
      * a slot while its private scratch file still exists. */
     v->info.state = v->overlay_created ? DOSVM_STOPPING : DOSVM_DEAD;
-    rec_emit("vm-boot", "DATA", "group=vm_cleanup vm=%u generation=%u data_loss=%u error=%d",
+    rec_emit(dosvm_probe(v), "DATA", "group=vm_cleanup vm=%u generation=%u data_loss=%u error=%d",
              key.id, key.generation, v->info.data_loss, e);
     return e;
 }
@@ -300,7 +329,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     dosvm_snapshot(&ledger);
     bool admit = dosvm_admit((uint64_t)pmm_free_count() * PAGE_SIZE,
                              ledger.reserved, ledger.resident, commitment, &admission);
-    rec_emit("vm-boot", "DATA", "group=admission free=%llu reserved=%llu resident=%llu outstanding=%llu request=%u headroom=%u admitted=%u",
+    rec_emit(config && config->memory_probe ? "vm-memory" : "vm-boot", "DATA", "group=admission free=%llu reserved=%llu resident=%llu outstanding=%llu request=%u headroom=%u admitted=%u",
              admission.free_bytes, admission.reserved_bytes, admission.resident_bytes,
              admission.outstanding_bytes, commitment, DOSVM_HEADROOM, admit);
     if (!admit) return -ENOMEM;
@@ -318,8 +347,9 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->info.resident = sizeof(*v);
     v->base = v->overlay = -1;
     v->a20 = true;
+    v->memory_probe = config && config->memory_probe;
     kwait_init(&v->wake);
-    kmutex_init(&v->disk_lock);
+    kwait_init(&v->disk_wait); v->disk_busy = false;
     int e = as_create(&v->as);
     if (e) goto fail;
     for (unsigned i = 0; i < DOSVM_PAGES; i++) {
@@ -349,12 +379,15 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
         (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0))) goto fail;
     e = dosvm_bios_init(v);
     if (e) goto fail;
+    e = dosvm_memory_init(v, config);
+    if (e) goto fail;
     e = dosvm_disk_open(v);
     if (e) goto fail;
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
     if (!v->task) { e = -ENOMEM; goto fail; }
     v->info.resident += KSTACK_SIZE + PAGE_SIZE + sizeof(struct task);
-    if (v->info.resident > DOSVM_LOW_CAP) { e = -ENOMEM; goto fail; }
+    if (v->info.resident - v->memory.quota > DOSVM_LOW_CAP ||
+        v->info.resident > commitment) { e = -ENOMEM; goto fail; }
     *out = v;
     return 0;
 fail:

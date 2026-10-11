@@ -68,7 +68,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         "elf-load", "spawn-wait", "fd-table", "mmap", "signals-fault",
         "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
     };
-    static const char *const f3_names[] = { "vm-boot", "vm-devices" };
+    static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices" };
     static const char *const f4_names[] = { "optical", "audio-native" };
     const char *const *names = parsed.phase == 4 ? f4_names : parsed.phase == 3 ? f3_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
     unsigned count = parsed.phase == 4 ? ARRAY_SIZE(f4_names) : parsed.phase == 3 ? ARRAY_SIZE(f3_names) : parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
@@ -88,8 +88,8 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     }
     parsed.run[8] = 0;
     i += 12;
-    if (parsed.phase == 3 && i != len) return false;
-    /* optional suffixes, in order, each at most once */
+    /* optional suffixes, in order, each at most once. F3 takes the platform
+     * override like F1/F2 (the qemu-e500 profile appends it); no safe mode. */
     if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0) {
         if (!(boot_flags & CBI_F_SMBIOS_QEMU) || !(boot_flags & CBI_F_INPUT_FORCED))
             return false;
@@ -97,6 +97,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         i += 14;
     }
     if (len - i >= 7 && strncmp(s + i, " safe=1", 7) == 0) {
+        if (parsed.phase == 3) return false;
         if (!(boot_flags & CBI_F_SMBIOS_QEMU) || !(boot_flags & CBI_F_SAFE_MODE))
             return false;
         parsed.flags |= CBI_F_SAFE_MODE;

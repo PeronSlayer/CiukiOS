@@ -67,7 +67,7 @@ static int probe_f3_devices(void)
     struct dosvm *v=0,*w=0; struct task *native=0; uint32_t heartbeat=0;
     struct devices_mail m={0}; struct dosvm_device_info before={0},after={0};
     struct dosvm_ledger baseline, final; dosvm_snapshot(&baseline);
-    const struct dosvm_config config={DOSVM_LOW_CAP};
+    const struct dosvm_config config={.commitment=DOSVM_LOW_CAP};
     int error=storage_enable_write(storage_get(),2);
     if (error) goto cleanup;
     native=devices_heartbeat(&heartbeat); if (!native) { error=-ENOMEM; goto cleanup; }
@@ -76,7 +76,7 @@ static int probe_f3_devices(void)
     uint32_t sentinel=0xA17E5AFE, observed=0;
     if ((error=dosvm_write(w,0x180,&sentinel,4))) goto cleanup;
     struct dosvm_key key=dosvm_key(v);
-    const char *command="VMDEV\r";
+    const char *command="\\VMDEV.COM\r"; /* the shell starts in C:\APPS (f3-03 finding) */
     while (*command) if (!dosvm_keyboard(key,(uint8_t)*command++)) { error=-ENOSPC; goto cleanup; }
     if ((error=devices_stage(v,1,&m))) goto cleanup;
     uint64_t cli_start=g_ticks; uint32_t native_before=*(volatile uint32_t *)P2V(heartbeat);

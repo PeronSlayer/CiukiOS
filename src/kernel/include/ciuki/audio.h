@@ -24,7 +24,7 @@ struct audio_state {
     struct kwait changed;
     uint64_t output, fetched, played_output, fifo, halts, deadlines;
     uint64_t last_service_cycles;
-    uint32_t commitment_pages, max_service_us, max_irq_us, max_service_gap_us;
+    uint32_t commitment_pages, max_service_us, max_irq_us, max_service_gap_us, max_control_us;
     int error;
     bool initialized, ready, running, pending, quarantined;
     const char *reason, *settings_reason;

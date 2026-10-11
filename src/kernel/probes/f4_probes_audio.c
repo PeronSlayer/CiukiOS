@@ -26,7 +26,9 @@ static int tone_spawn(unsigned channel, struct process **out)
     if (!strings) return -ENOMEM;
     int err = proc_strings_add(strings, "audio-tone", 11, false);
     struct ciuki_file file = { .bytes=f4_payload_end - f4_payload_start, .read=tone_read };
-    if (!err) err = proc_spawn_file(proc_supervisor(), &file, strings, 0, 0, 0, 0, out);
+    /* proc_spawn_file returns the new pid on success (lead fix after the QEMU
+     * evidence of 2026-10-11: the positive pid was treated as an error). */
+    if (!err) { int r = proc_spawn_file(proc_supervisor(), &file, strings, 0, 0, 0, 0, out); err = r < 0 ? r : 0; }
     proc_strings_free(strings);
     if (!err) err = ua_write((*out)->memory, RESULT, &channel, sizeof(channel));
     return err;
@@ -65,7 +67,10 @@ static int probe_audio_native(void)
         AUDIO_RATE, AUDIO_QUANTUM, AUDIO_LEAD, audio.caps.drain_ms, audio.master.left, audio.master.right, audio.master.mute);
     struct process *p[2] = {0}; struct tone_result r[2] = {0};
     unsigned baseline = audio.commitment_pages;
-    int err = tone_spawn(0, &p[0]); if (!err) err = tone_spawn(1, &p[1]);
+    /* Lead diagnostics (QEMU evidence of 2026-10-11): record the spawn results. */
+    int err0 = tone_spawn(0, &p[0]); int err1 = err0 ? 0 : tone_spawn(1, &p[1]);
+    rec_emit(name, "DATA", "case=spawn error0=%d error1=%d pid0=%u pid1=%u", err0, err1, p[0] ? p[0]->pid : 0, p[1] ? p[1]->pid : 0);
+    int err = err0 ? err0 : err1;
     uint64_t deadline = deadline_after_ms(10000);
     bool ready = false;
     while (!err && !deadline_passed(deadline)) {
@@ -93,6 +98,11 @@ static int probe_audio_native(void)
         struct ciuki_audio_status *s = &r[i].status;
         rec_emit(name, "DATA", "case=source index=%u pid=%u accepted=%llu consumed=%llu queued=%u starvation=%llu error=%u",
             i, p[i] ? p[i]->pid : 0, s->accepted_frames, s->consumed_frames, s->queued_frames, s->source_starvation, r[i].error);
+        /* Lead diagnostics (QEMU 2026-10-11): payload progress and the kernel's own stream counters. */
+        struct audio_stream *ks = audio.streams[i];
+        rec_emit(name, "DATA", "case=payload index=%u ready=%u done=%u fd=%d frames=%u live=%u kernel_stream=%u kaccepted=%llu kqueued=%u kstarted=%u kconsumed=%llu",
+            i, r[i].ready, r[i].done, (int)r[i].fd, r[i].frames, p[i] && p[i]->state == PROC_LIVE,
+            ks != 0, ks ? ks->accepted : 0, ks ? ks->queued : 0, ks ? ks->started : 0, ks ? ks->consumed : 0);
         if (s->accepted_frames != 192000 || s->consumed_frames != 192000 || s->queued_frames || s->source_starvation) err = -EIO;
     }
     for (unsigned i = 0; i < 2; i++) if (p[i]) proc_stop(p[i], 0, 0);
@@ -106,10 +116,12 @@ static int probe_audio_native(void)
     for (unsigned i = 0; i < 2; i++) if (p[i]) {
         if (p[i]->state == PROC_ZOMBIE) proc_reap(proc_supervisor(), p[i]); else err = -EIO;
     }
+    rec_emit(name, "DATA", "case=worker running=%u pending=%u ready=%u error=%d published=%llu retired=%llu transport_fetched=%llu",
+        audio.running, audio.pending, audio.ready, audio.error, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)ac97.fetched);
     rec_emit(name, "DATA", "case=clock output=%llu fetched=%llu fifo=%llu halts=%llu deadlines=%llu quarantine=%u",
         audio.output, audio.fetched, audio.fifo, audio.halts, audio.deadlines, audio.quarantined);
-    rec_emit(name, "DATA", "case=service max_service_us=%u max_irq_us=%u max_service_gap_us=%u",
-        audio.max_service_us, audio.max_irq_us, audio.max_service_gap_us);
+    rec_emit(name, "DATA", "case=service max_service_us=%u max_irq_us=%u max_service_gap_us=%u max_control_us=%u",
+        audio.max_service_us, audio.max_irq_us, audio.max_service_gap_us, audio.max_control_us);
     rec_emit(name, "DATA", "case=cleanup before_pages=%u after_pages=%u", baseline, audio.commitment_pages);
     if (audio.fifo || audio.halts || audio.deadlines || audio.quarantined || baseline != audio.commitment_pages) err = -EIO;
     rec_emit(name, "END", "status=%s", err ? "FAIL" : "PASS");

@@ -133,12 +133,13 @@ def build(out=None):
         if len(command) > 0xFF00 or len(shell) > 0xFF00:
             raise ValueError("DOS shell exceeds COM extent")
         files = {"/SYSTEM/CIUKIDOS.SYS": kernel, "/SYSTEM/SHELL.COM": shell,
-                 "/COMMAND.COM": command, "/AUTOEXEC.BAT": b"DOSREADY.COM\r\n"}
+                 "/COMMAND.COM": command, "/AUTOEXEC.BAT": b"\\DOSREADY.COM\r\n"}
         for source, name in (("dosready", "DOSREADY.COM"), ("memory", "MEMORY.COM"),
                              ("command_status", "CMDSTAT.COM"), ("exit37", "EXIT37.COM"),
                              ("vmpriv", "VMPRIV.COM"), ("vmport", "VMPORT.COM"),
                              ("vmdevices", "VMDEV.COM")):
             files["/" + name] = assemble(f"src/probes/doscompat/{source}.asm", work / name)
+        files["/VMMEMORY.COM"] = assemble("src/probes/dos/vm_memory.asm", work / "VMMEMORY.COM")  # f3-03 memory conformance payload
         candidate = work / "DOSBOOT.IMG"
         write_fat16(candidate, boot, loader, files)
         subprocess.run(["fsck.fat", "-n", str(candidate)], check=True)
