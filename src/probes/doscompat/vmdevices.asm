@@ -10,6 +10,7 @@ org 0x100
 %define sti_mark 0x608
 %define sti_seen 0x60A
 %define ss_seen 0x60C
+%define last_ip 0x61A
 %define keys 0x60E
 %define last_key 0x610
 %define isr0 0x612
@@ -69,10 +70,10 @@ start:
 .wait_ss:
     cmp word [command],3
     jne .wait_ss
-    mov ax,ss
+    mov bx,ss
+    mov al,0xFF                 ; loaded before STI: the MOV SS shadow must end at the OUT
     sti
-    mov ss,ax                  ; STI + MOV-SS shadow across trapped OUT
-    mov al,0xFF
+    mov ss,bx                  ; STI shadow covers MOV SS; MOV SS shadow covers the trapped OUT
     out 0x21,al                 ; mask pending IRQ before it can run
     cli
     mov ax,[ticks]
@@ -131,6 +132,11 @@ timer:
     xor ax,ax
     mov ds,ax
     inc word [ticks]
+    push bp
+    mov bp,sp
+    mov ax,[ss:bp+6]            ; interrupted IP: where the IRQ was delivered
+    mov [last_ip],ax
+    pop bp
     cmp word [sti_seen],0
     jne .seen
     mov ax,[sti_mark]

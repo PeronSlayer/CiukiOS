@@ -10,7 +10,7 @@
 #include <ciuki/storage.h>
 
 struct devices_mail { uint16_t magic, stage, command, ticks, sti_mark, sti_seen,
-    ss_seen, keys, last_key, isr0, isr1, mouse_release, callbacks; };
+    ss_seen, keys, last_key, isr0, isr1, mouse_release, callbacks, last_ip; };
 static int devices_read(struct dosvm *v, struct devices_mail *m) { return dosvm_read(v, 0x600, m, sizeof(*m)); }
 static int devices_command(struct dosvm *v, uint16_t n) { return dosvm_write(v, 0x604, &n, 2); }
 static int devices_stage(struct dosvm *v, unsigned stage, struct devices_mail *m)
@@ -97,7 +97,7 @@ static int probe_f3_devices(void)
     if ((error=devices_command(v,3)) || (error=devices_stage(v,4,&m))) goto cleanup;
     dosvm_device_info(key,&after);
     bool ss=m.ss_seen==stopped_ticks && after.imr[0]==0xFF && (after.irr[0]&1);
-    rec_emit("vm-devices","DATA","case=shadow mov_ss=%u masked_pending=%u ticks=%u",ss,!!(after.irr[0]&1),m.ticks);
+    rec_emit("vm-devices","DATA","case=shadow mov_ss=%u masked_pending=%u ticks=%u ss_seen=%u last_irq_ip=%04x",ss,!!(after.irr[0]&1),m.ticks,m.ss_seen,m.last_ip);
     if (!ss || !dosvm_input_focus(key,true) || !devices_key(key,0x1E,1) || !devices_key(key,0x1E,2)) { error=-EFAULT; goto cleanup; }
     if ((error=devices_command(v,4)) || (error=devices_stage(v,6,&m))) goto cleanup;
     bool keyboard=m.keys>=2 && m.last_key==0x1E && m.isr1==2;
