@@ -519,10 +519,14 @@ uart_init:
     out dx, al
     ret
 
+; A quiet normal boot (screen_quiet, set by boot_menu) keeps the serial copy
+; and skips the screen; fatal clears it so every refusal stays visible.
 print:
     lodsb
     test al, al
     jz .end
+    cmp byte [screen_quiet], 0
+    jne .serial
     pushad
     push ds
     push es
@@ -533,10 +537,12 @@ print:
     pop es
     pop ds
     popad
+.serial:
     call uart_putc
     jmp print
 .end:
     ret
+screen_quiet db 0
 
 uart_putc:
     push ax

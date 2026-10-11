@@ -46,6 +46,9 @@ void console_write(const char *s, size_t n);
 void console_set_color(uint32_t fg, uint32_t bg);
 void console_display_owned(bool owned);   /* display grant held: no console pixels */
 void console_reclaim(void);               /* panic: the console draws again */
+void console_set_quiet(bool on);          /* quiet boot: history and serial only */
+bool console_quiet(void);
+void console_wake(void);                  /* quiet boot failure: draw from history */
 void klog(const char *fmt, ...);          /* serial + screen, plain log line */
 void kputs_raw(const char *s);            /* panic-safe output */
 

@@ -54,10 +54,15 @@ void kmain(uint32_t magic, uint32_t bi_phys)
     vmm_init();
     kheap_init();
     df_tss_init(vmm_kernel_pd());
+    /* A normal boot keeps the screen quiet (docs/boot.md); the decision is
+     * logged so the serial capture shows which console behaviour applies. */
+    console_set_quiet(!text && cbi_quiet_console(g_boot.flags));
     if (!text && !console_init_lfb()) {
         console_init_text();
         klog("[console] LFB unusable, text console");
     }
+    if (console_quiet())
+        klog("[console] quiet boot: log on serial and disk until the desktop starts");
     klog("[mm] usable RAM %u KiB, free DMA %u pages, free NORMAL %u pages",
          pmm_total_usable() * 4, pmm_zone_free(ZONE_DMA), pmm_zone_free(ZONE_NORMAL));
     registry_init();

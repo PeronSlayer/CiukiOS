@@ -170,7 +170,11 @@ void supervisor_bootstrap(void)
     klog("[supervisor] bootstrap: spawning /bin/desktop");
     int result = supervisor_spawn("/bin/desktop", argv, 0, true, &p);
     if (result == -ENOENT) result = supervisor_spawn_standin(proc_supervisor(), &p);
-    if (result < 0) { klog("[supervisor] desktop unavailable: %d; console ready", result); return; }
+    if (result < 0) {
+        console_wake();   /* a quiet boot shows its log instead of the desktop */
+        klog("[supervisor] desktop unavailable: %d; console ready", result);
+        return;
+    }
     desktop_pid = p->pid;
     klog("[supervisor] desktop pid=%u pgid=%u", p->pid, p->pgid);
 }
@@ -184,6 +188,7 @@ void supervisor_poll(void)
             uint32_t pid=desktop_pid;
             desktop_pid = 0;
             desktop_deaths++;
+            console_wake();
             klog("[supervisor] desktop stopped; console ready pid=%u status=%d deaths=%u", pid, p ? p->status : -1, desktop_deaths);
         }
     }

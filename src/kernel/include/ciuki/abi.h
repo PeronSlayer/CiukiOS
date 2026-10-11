@@ -488,6 +488,7 @@ enum ciuki_syscall {
     CIUKI_SYS_PROC_LIST = 70,
     CIUKI_SYS_PROC_TERMINATE = 71,
     CIUKI_SYS_DOSVM = 72,
+    CIUKI_SYS_POWER = 73,
 };
 
 /* pack(4) is scoped and restores the includer's previous setting. */
@@ -589,6 +590,16 @@ _Static_assert(__builtin_offsetof(struct ciuki_audio_status, accepted_frames) ==
 _Static_assert(sizeof(struct ciuki_audio_gain) == 24, "audio gain");
 _Static_assert(sizeof(struct ciuki_audio_command) == 16, "audio command");
 _Static_assert(sizeof(struct ciuki_mixer_master) == 32, "mixer master");
+
+/* Power control (call 73, execution-abi.md amendment 2026-10-12): B=action.
+ * Only the supervisor-spawned desktop may call it. REBOOT and OFF flush
+ * storage first; OFF returns ENOTSUP or EIO when the machine stays on, with
+ * storage already stopped. QUERY returns the CIUKI_POWER_CAN_* bits. */
+#define CIUKI_POWER_REBOOT 1u
+#define CIUKI_POWER_OFF 2u
+#define CIUKI_POWER_QUERY 3u
+#define CIUKI_POWER_CAN_REBOOT 1u
+#define CIUKI_POWER_CAN_OFF 2u
 
 /* f2-33: process enumeration (call 70) and termination request (call 71).
  * One system record, then process records in ascending PID order. */

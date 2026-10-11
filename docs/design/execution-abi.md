@@ -1258,3 +1258,69 @@ loaded per VM by the same switch hook.
 **[F3]** `v86_enter` copies a 92-byte V86 frame when EFLAGS.VM is set and a
 76-byte ring-3 frame otherwise; the VM worker re-enters after every mode
 change. Every client frame passes `dpmi_frame_check` before the kernel IRET.
+
+## Power control amendment: system call 73 (2026-10-12)
+
+Syscall **73**, `CIUKI_SYS_POWER`, takes B=action and returns a
+non-negative value or a negative errno. No other number changes. Constants
+are in `ciuki/abi.h`; the SDK wrapper is `int ciuki_power(uint32_t action)`
+in `ciuki/power.h` (`-1` with errno on failure).
+
+| Action | Value | Semantics |
+| --- | --- | --- |
+| `CIUKI_POWER_REBOOT` | 1 | Flush storage, then `kernel_reboot()` (8042 reset pulse, then triple fault). Does not return on success. |
+| `CIUKI_POWER_OFF` | 2 | Flush storage, then ACPI S5 soft-off. Returns `ENOTSUP` when no soft-off method was found and `EIO` when the S5 write left the machine running after 2 s; in both cases storage is already stopped and the caller shows "It is now safe to turn off your computer". |
+| `CIUKI_POWER_QUERY` | 3 | Returns `CIUKI_POWER_CAN_REBOOT` (1) and, when ACPI soft-off was found, `CIUKI_POWER_CAN_OFF` (2). No side effect except the one-time table parse. |
+
+**Authority.** Only the process whose PID is the supervisor's live desktop
+(`supervisor_desktop_pid()`, the `/bin/desktop` spawned by PID 1 with
+`desktop=true`) may call it; every other caller gets `EPERM`, including
+queries. Unknown actions give `EINVAL`.
+
+**Storage.** REBOOT and OFF call `storage_sync()` (boot log shutdown, then
+`storage_shutdown`) when writable storage is mounted and running. A failure
+is returned unchanged before any power action: `EBUSY` while any process
+still has a file open on a FAT volume (the desktop closes its applications
+and DOS windows first), or the flush error. A FAT volume left dirty mounts
+read-only on the next boot (`FAT_RO_DIRTY`), so no power action follows a
+failed flush.
+
+**ACPI soft-off.** Once per boot (on a normal boot right after the desktop
+bootstrap, otherwise at the first QUERY or OFF) the kernel reads, through
+cached `vmm_map_mmio` windows, the RSDP the loader recorded
+(`acpi_rsdp_phys`), the RSDT (or, when absent and the RSDP revision is 2 or
+more, the XSDT with entries below 4 GiB), the FADT (`FACP`, at least 116
+bytes) and the DSDT, verifying each signature, length (DSDT at most 256 KiB)
+and checksum. From the FADT it takes PM1a_CNT_BLK (offset 64) and
+PM1b_CNT_BLK (68), or X_PM1a/X_PM1b_CNT_BLK (172/184) in SystemIO space when
+the legacy field is zero, SMI_CMD (48), ACPI_ENABLE (52) and DSDT (40, or
+X_DSDT at 140). In the DSDT AML it looks for `Name(_S5, Package)` or
+`Name(\_S5, Package)` (NameOp 08h, optional RootChar 5Ch, PackageOp 12h) and
+reads the first two elements as ZeroOp, OneOp or Byte/Word/DWord constants
+of at most 7. OFF then, if SCI_EN (PM1 control bit 0) is clear and the FADT
+names SMI_CMD and ACPI_ENABLE, writes ACPI_ENABLE to SMI_CMD and waits up to
+3 s for SCI_EN; writes SLP_TYPx (bits 10-12) with SLP_EN clear, then
+SLP_TYPx | SLP_EN (bit 13), to PM1a and, if present, PM1b. No AML method
+(`_PTS`, `_GTS`) is executed. The parse result is logged once on serial and
+in the boot log (`[power] acpi soft-off ...` or `... unavailable: step=`).
+APM is not used.
+
+Sources checked on 2026-10-12: FADT offsets, Linux
+[`include/acpi/actbl.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/acpi/actbl.h);
+PM1 bits, Linux
+[`drivers/acpi/acpica/aclocal.h`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/acpica/aclocal.h);
+two-write sequence, Linux
+[`drivers/acpi/acpica/hwsleep.c`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/acpica/hwsleep.c)
+`acpi_hw_legacy_sleep`; AML opcodes, Linux
+[`drivers/acpi/acpica/amlcode.h`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/acpica/amlcode.h);
+QEMU [`hw/acpi/core.c`](https://raw.githubusercontent.com/qemu/qemu/master/hw/acpi/core.c)
+`acpi_pm_cnt_write` (SLP_EN with SLP_TYP 0 requests a guest shutdown; SCI_EN
+is not tested) and
+[`hw/i386/acpi-build.c`](https://raw.githubusercontent.com/qemu/qemu/master/hw/i386/acpi-build.c)
+(`_S5` = Package(4){0, 0, 0, 0}); SeaBIOS
+[`src/fw/paravirt.c`](https://raw.githubusercontent.com/coreboot/seabios/master/src/fw/paravirt.c)
+sets the PM base to 0x600 when QEMU provides `etc/table-loader`, so the
+QEMU FADT reports PM1a_CNT 0x604. The T23 tables were not read: its values
+come from its own FADT/DSDT at run time and are recorded by the log line
+above. Host test: `tests/host/power_test.c` (QEMU-shaped and ICH-shaped
+fixtures, refusals).

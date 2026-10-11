@@ -1,0 +1,149 @@
+/* Host test: ACPI soft-off discovery for system call 73 (core/power.c).
+ * Fixtures model the QEMU i440fx tables (hw/i386/acpi-build.c: FADT with
+ * PM1a_CNT 0x604, \_S5 = Package(4){Zero, Zero, Zero, Zero}) and an
+ * ICH-style DSDT (Name(\_S5, Package(4){0x07, 0x07, Zero, Zero})).
+ * SPDX-License-Identifier: GPL-2.0-only */
+#define POWER_HOST 1
+#include <stdio.h>
+#include <string.h>
+#include "../../src/kernel/core/power.c"
+
+static unsigned failures;
+#define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
+
+enum { MEM = 0x20000, RSDP = 0x0E0000 - 0xD0000, RSDT = 0x1000, FADT = 0x2000, DSDT = 0x4000, XSDT = 0x3000 };
+static uint8_t mem[MEM];
+static unsigned maps;
+
+static const uint8_t *map(void *ctx, uint32_t phys, uint32_t len)
+{
+    (void)ctx;
+    maps++;
+    return (uint64_t)phys + len <= MEM ? mem + phys : 0;
+}
+static void put32(uint32_t at, uint32_t v) { for (int i = 0; i < 4; i++) mem[at + i] = (uint8_t)(v >> (8 * i)); }
+static void fix(uint32_t at, uint32_t sum_at, uint32_t len)
+{
+    mem[sum_at] = 0;
+    uint8_t s = 0;
+    for (uint32_t i = 0; i < len; i++) s = (uint8_t)(s + mem[at + i]);
+    mem[sum_at] = (uint8_t)-s;
+}
+static void header(uint32_t at, const char *sig, uint32_t len, uint8_t rev)
+{
+    memcpy(mem + at, sig, 4);
+    put32(at + 4, len);
+    mem[at + 8] = rev;
+    memcpy(mem + at + 10, "CIUKI ", 6);
+}
+static void seal(uint32_t at) { fix(at, at + 9, mem[at + 4] | mem[at + 5] << 8 | mem[at + 6] << 16); }
+
+/* rev 0 RSDP -> RSDT -> FADT (116 bytes) -> DSDT with the given body. */
+static void tables(const uint8_t *aml, uint32_t aml_len, uint32_t pm1a, uint32_t pm1b)
+{
+    memset(mem, 0, sizeof(mem));
+    memcpy(mem + RSDP, "RSD PTR ", 8);
+    memcpy(mem + RSDP + 9, "CIUKI ", 6);
+    put32(RSDP + 16, RSDT);
+    fix(RSDP, RSDP + 8, 20);
+    header(RSDT, "RSDT", 36 + 8, 1);
+    put32(RSDT + 36, 0x1800);           /* an unrelated table first */
+    header(0x1800, "APIC", 44, 1);
+    seal(0x1800);
+    put32(RSDT + 40, FADT);
+    seal(RSDT);
+    header(FADT, "FACP", 116, 1);
+    put32(FADT + 40, DSDT);
+    put32(FADT + 48, 0xB2);
+    mem[FADT + 52] = 0xF1;
+    put32(FADT + 64, pm1a);
+    put32(FADT + 68, pm1b);
+    seal(FADT);
+    header(DSDT, "DSDT", 36 + aml_len, 1);
+    memcpy(mem + DSDT + 36, aml, aml_len);
+    seal(DSDT);
+}
+
+static int parse(struct acpi_soft_off *r, const char **why)
+{
+    memset(r, 0xEE, sizeof(*r));
+    return acpi_soft_off_parse(map, 0, RSDP, r, why);
+}
+
+int main(void)
+{
+    struct acpi_soft_off r;
+    const char *why;
+    /* QEMU: Scope(\) { Name(_S5, Package(4){Zero, Zero, Zero, Zero}) }. */
+    static const uint8_t qemu[] = { 0x10, 0x0E, 0x5C, 0x08, '_', 'S', '5', '_', 0x12, 0x06, 0x04, 0, 0, 0, 0, 0xA3 };
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    CHECK(parse(&r, &why) == 0 && !strcmp(why, "ok"));
+    CHECK(r.pm1a_cnt == 0x604 && r.pm1b_cnt == 0 && r.slp_typa == 0 && r.slp_typb == 0);
+    CHECK(r.smi_cmd == 0xB2 && r.acpi_enable == 0xF1 && r.fadt_revision == 1);
+
+    /* ICH style: Name(\_S5, Package(4){0x07, 0x07, Zero, Zero}), after a
+     * method that only references \_S5_ (no NameOp: skipped). */
+    static const uint8_t ich[] = { 0x70, 0x5C, '_', 'S', '5', '_', 0x60,
+                                   0x08, 0x5C, '_', 'S', '5', '_', 0x12, 0x08, 0x04, 0x0A, 0x07, 0x0A, 0x07, 0, 0 };
+    tables(ich, sizeof(ich), 0x1004, 0x1044);
+    CHECK(parse(&r, &why) == 0 && r.slp_typa == 7 && r.slp_typb == 7);
+    CHECK(r.pm1a_cnt == 0x1004 && r.pm1b_cnt == 0x1044);
+
+    /* A two-byte PkgLength and a single-element package (SLP_TYPb = 0). */
+    static const uint8_t wide[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x40, 0x00, 0x01, 0x01 };
+    uint8_t a = 9, b = 9;
+    CHECK(acpi_s5_find(wide, sizeof(wide), &a, &b) == 0 && a == 1 && b == 0);
+
+    /* Refusals: out-of-range value, truncation, missing object. */
+    static const uint8_t big[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x05, 0x02, 0x0A, 0x08, 0x00 };
+    CHECK(acpi_s5_find(big, sizeof(big), &a, &b) == -ENOENT);
+    static const uint8_t cut[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x06, 0x04, 0x0A };
+    CHECK(acpi_s5_find(cut, sizeof(cut), &a, &b) == -ENOENT);
+    static const uint8_t none[] = { 0x08, '_', 'S', '4', '_', 0x12, 0x06, 0x04, 0, 0, 0, 0 };
+    tables(none, sizeof(none), 0x604, 0);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "s5"));
+
+    /* Checksums and signatures are verified at every level. */
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    mem[DSDT + 40]++;
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "dsdt"));
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    mem[FADT + 64]++;
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "fadt"));
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    mem[RSDP + 16]++;
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "rsdp"));
+    tables(qemu, sizeof(qemu), 0, 0);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1a_cnt"));
+    CHECK(acpi_soft_off_parse(map, 0, 0, &r, &why) == -ENOTSUP && !strcmp(why, "rsdp"));
+    /* A DSDT length beyond the mapped memory is refused, never read. */
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    put32(DSDT + 4, 0x40000);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "dsdt"));
+
+    /* ACPI 2.0: RSDT absent, XSDT with 64-bit entries; X_PM1a_CNT_BLK in
+     * SystemIO when the legacy field is zero (FADT revision 3, 244 bytes). */
+    tables(qemu, sizeof(qemu), 0, 0);
+    mem[RSDP + 15] = 2;
+    put32(RSDP + 16, 0);
+    put32(RSDP + 20, 36);
+    put32(RSDP + 24, XSDT);
+    fix(RSDP, RSDP + 8, 20);
+    fix(RSDP, RSDP + 32, 36);
+    header(XSDT, "XSDT", 36 + 8, 1);
+    put32(XSDT + 36, FADT);
+    seal(XSDT);
+    header(FADT, "FACP", 244, 3);
+    put32(FADT + 40, DSDT);
+    mem[FADT + 172] = 1;                /* SystemIO */
+    mem[FADT + 173] = 16;
+    put32(FADT + 176, 0x604);
+    seal(FADT);
+    CHECK(parse(&r, &why) == 0 && r.pm1a_cnt == 0x604 && r.fadt_revision == 3);
+    mem[FADT + 172] = 0;                /* SystemMemory is not an I/O port */
+    seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1a_cnt"));
+
+    printf("power: acpi soft-off parser, %u failures (%u maps)\n", failures, maps);
+    return failures ? 1 : 0;
+}

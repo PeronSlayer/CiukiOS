@@ -358,4 +358,3 @@ candidate_mode dw 0
 mode_bytes dw 0
 valid_pitch dd 0
 mask_offset dw 0
-mode_scores times 512 dw 0xffff
