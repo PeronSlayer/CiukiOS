@@ -35,11 +35,20 @@ static struct blkdev *refresh_volume(struct storage_volume *v)
     return p;
 }
 
+static struct blkdev *refresh_ntfs(struct storage_ntfs *n)
+{
+    struct blkdev *p = blkpart_device(&n->part);
+    if (p) n->io.quarantined = p->quarantined;
+    return p;
+}
+
 static void refresh_cache(void *ctx, struct blkdev *dev)
 {
     struct storage *s = ctx;
     for (unsigned d = 2; d < 26; d++)
         if (dev == &s->volumes[d].io) { refresh_volume(&s->volumes[d]); return; }
+    for (unsigned i = 0; i < STORAGE_NTFS; i++)
+        if (dev == &s->ntfs[i].io) { refresh_ntfs(&s->ntfs[i]); return; }
 }
 
 static int volume_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
@@ -80,6 +89,30 @@ static int volume_flush(struct blkdev *dev)
     return e;
 }
 
+static int ntfs_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
+{
+    struct storage_ntfs *n = dev->ctx;
+    struct blkdev *p = refresh_ntfs(n);
+    int e = blkdev_range(p, lba, count);
+    if (!e) { n->reads += count; e = p->read(p, lba, count, buf); }
+    refresh_ntfs(n);
+    return e;
+}
+/* Read-only instrumentation: nothing is ever forwarded to the disk. */
+static int ntfs_write(struct blkdev *dev, uint64_t lba, uint32_t count, const void *buf)
+{
+    struct storage_ntfs *n = dev->ctx; (void)lba; (void)buf; n->writes += count; return -FS_EROFS;
+}
+static int ntfs_flush(struct blkdev *dev)
+{
+    struct storage_ntfs *n = dev->ctx; n->flushes++; return -FS_EROFS;
+}
+static int ntfs_media(struct blkdev *dev)
+{
+    struct storage_ntfs *n = dev->ctx; refresh_ntfs(n);
+    return n->io.quarantined ? -FS_EQUARANTINED : 0;
+}
+
 int storage_setup(struct storage *s, size_t bytes)
 {
     if (!s) return -FS_EINVAL;
@@ -95,6 +128,57 @@ int storage_setup(struct storage *s, size_t bytes)
 static bool fat_partition(uint8_t type)
 {
     return type == 1 || type == 4 || type == 6 || type == 0x0b || type == 0x0c || type == 0x0e;
+}
+/* An MBR type 07h partition that carries an NTFS boot sector gets a drive
+ * letter and a read-only mount. Other type 07h contents (exFAT, HPFS) were
+ * never mounted and still consume no letter. */
+static int ntfs_add(struct storage *s, unsigned disk, unsigned partition, struct blkdev *dev, const struct partition *part)
+{
+    unsigned slot = 0;
+    while (slot < STORAGE_NTFS && s->ntfs[slot].present) slot++;
+    if (slot == STORAGE_NTFS) return -FS_ENOSPC;
+    struct storage_ntfs *n = &s->ntfs[slot];
+    memset(n, 0, sizeof(*n));
+    int e = blkpart_init(&n->part, dev, part);
+    if (e) { memset(n, 0, sizeof(*n)); return e; }
+    n->io = (struct blkdev){ .read = ntfs_read, .write = ntfs_write, .flush = ntfs_flush, .media_check = ntfs_media,
+        .capacity = part->count, .sector_size = 512, .write_cache_state = BLKDEV_CACHE_UNKNOWN, .ctx = n };
+    refresh_ntfs(n);
+    e = ntfs_ops.probe(&s->cache, &n->io, 0);
+    if (e == -FS_EINVAL) { cache_invalidate(&s->cache, &n->io, true); memset(n, 0, sizeof(*n)); return 0; }
+    if (s->next_drive >= 26) { cache_invalidate(&s->cache, &n->io, true); memset(n, 0, sizeof(*n)); return -FS_ENOSPC; }
+    n->present = true; n->disk = disk; n->partition = partition; n->drive = s->next_drive++;
+    n->error = e;
+    if (!e) storage_ntfs_mount(s, slot);
+    return 0;
+}
+int storage_ntfs_mount(struct storage *s, unsigned slot)
+{
+    if (!s || !s->ready || s->stopped || slot >= STORAGE_NTFS || !s->ntfs[slot].present) return -FS_EINVAL;
+    struct storage_ntfs *n = &s->ntfs[slot];
+    if (n->ro.mounted) return -FS_EBUSY;
+    unsigned d = n->drive;
+    if (d < 3 || d >= 26 || vfs_drive_present(&s->vfs, d)) {
+        d = 3; while (d < 26 && vfs_drive_present(&s->vfs, d)) d++;
+        if (d >= 26) return n->error = -FS_ENOSPC;
+    }
+    refresh_ntfs(n);
+    int e = fs_ro_mount(&n->ro, &ntfs_ops, &s->cache, &n->io, 0, n->io.capacity);
+    if (!e) e = vfs_attach_ro(&s->vfs, d, &n->ro);
+    if (e && n->ro.mounted) fs_ro_unmount(&n->ro);
+    n->error = e;
+    if (e) return e;
+    n->drive = d;
+    return (int)d;
+}
+int storage_ntfs_unmount(struct storage *s, unsigned slot)
+{
+    if (!s || !s->ready || slot >= STORAGE_NTFS || !s->ntfs[slot].present) return -FS_EINVAL;
+    struct storage_ntfs *n = &s->ntfs[slot];
+    if (!n->ro.mounted) return 0;
+    for (unsigned d = 3; d < 26; d++) if (s->vfs.ro_volumes[d] == &n->ro) return vfs_detach(&s->vfs, d);
+    fs_ro_unmount(&n->ro);
+    return 0;
 }
 int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
 {
@@ -119,6 +203,11 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
     uint32_t boot_start = fs_rd32(mbr + 454), boot_count = fs_rd32(mbr + 458);
     for (unsigned i = 0; i < table.count; i++) {
         struct partition *part = &table.entries[i];
+        if (!superfloppy && part->type == 0x07) {
+            e = ntfs_add(s, disk, i + 1, dev, part);
+            if (e) return s->disk_errors[disk] = e;
+            continue;
+        }
         if (!superfloppy && !fat_partition(part->type)) continue;
         bool boot = !disk && !part->logical && part->start == boot_start && part->count == boot_count;
         unsigned d = boot ? 2 : s->next_drive++;
@@ -250,6 +339,7 @@ void storage_destroy(struct storage *s)
 {
     if (!s || !s->ready) return;
     for (unsigned i=0; i<STORAGE_DISKS; i++) if (s->optical[i].mounted) fs_ro_unmount(&s->optical[i]);
+    for (unsigned i=0; i<STORAGE_NTFS; i++) if (s->ntfs[i].ro.mounted) fs_ro_unmount(&s->ntfs[i].ro);
     vfs_destroy(&s->vfs); cache_destroy(&s->cache); s->ready = false;
 }
 struct storage *storage_get(void) { return &system_storage; }
@@ -403,6 +493,12 @@ void storage_init(void)
         if (!v->partition)
             klog("[storage] kind=%u disk=%u part=0 layout=superfloppy drive=%c mode=%s error=%d",
                  ACTIVATION_MOUNT, v->disk, 'A' + d, v->fat.readonly ? "ro" : "rw", v->error);
+    }
+    for (unsigned i=0; i<STORAGE_NTFS; i++) {
+        struct storage_ntfs *n=&s->ntfs[i];
+        if (!n->present) continue;
+        klog("[storage] ntfs slot=%u disk=%u part=%u drive=%c mode=ro result=%d reason=%s",
+             i,n->disk,n->partition,n->error ? '-' : 'A'+n->drive,n->error,n->ro.diagnostic ? n->ro.diagnostic : "unavailable");
     }
     for (unsigned slot=0; slot<STORAGE_DISKS; slot++) {
         struct ata_device *dev=devices[slot];

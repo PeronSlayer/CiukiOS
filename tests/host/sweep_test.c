@@ -67,6 +67,10 @@ static void selection_tests(void)
     const char *audio_selector="f4:audio-native run=12345678";
     assert(probes_parse_selector(audio_selector,strlen(audio_selector),0,&s));
     assert(s.phase==4 && !strcmp(s.probe,"audio-native"));
+    const char *ntfs_selector="f4:ntfs-ro run=12345678";
+    assert(probes_parse_selector(ntfs_selector,strlen(ntfs_selector),0,&s));
+    assert(s.phase==4 && !strcmp(s.probe,"ntfs-ro"));
+    assert(!probes_parse_selector("f4:ntfs run=12345678",20,0,&s));
     assert(!probes_parse_selector("f4:all run=12345678",19,0,&s));
 }
 static void order_tests(void)

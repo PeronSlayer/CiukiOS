@@ -9,7 +9,7 @@ F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-faul
 F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
              'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
 F3_PROBES = ('vm-boot', 'vm-memory')
-F4_PROBES = ('optical', 'audio-native')  # F4 probes run by selector only; not in the sweep yet
+F4_PROBES = ('optical', 'audio-native', 'ntfs-ro')  # F4 probes run by selector only; not in the sweep yet
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
 SELECTOR_RE = r'f([01234]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 

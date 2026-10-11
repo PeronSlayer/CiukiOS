@@ -19,6 +19,17 @@ static inline void fs_free(void *p) { free(p); }
 static inline void *fs_page_alloc(void) { return calloc(1, 4096); }
 static inline void fs_page_free(void *p) { free(p); }
 static inline void fs_panic(const char *s) { (void)s; abort(); }
+/* Mount-time parser workspaces (f4-04): zeroed, page-aligned, page-rounded.
+ * Host tests make the Nth next allocation fail through fs_host_contig_fail. */
+extern unsigned fs_host_contig_fail, fs_host_contig_live;
+static inline void *fs_contig_alloc(size_t n) {
+    if (fs_host_contig_fail && !--fs_host_contig_fail) return NULL;
+    size_t bytes = (n + 4095) & ~(size_t)4095;
+    void *p = bytes ? aligned_alloc(4096, bytes) : NULL;
+    if (p) { memset(p, 0, bytes); fs_host_contig_live++; }
+    return p;
+}
+static inline void fs_contig_free(void *p, size_t n) { (void)n; if (p) { fs_host_contig_live--; free(p); } }
 static inline uint32_t fs_now_ms(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint32_t)((uint64_t)t.tv_sec * 1000 + (uint32_t)t.tv_nsec / 1000000);
@@ -53,6 +64,20 @@ static inline void *fs_page_alloc(void) {
 }
 static inline void fs_page_free(void *p) { if (p) pmm_free(V2P(p)); }
 static inline void fs_panic(const char *s) { panic("fs: %s", s); }
+/* Mount-time parser workspaces (f4-04): zeroed contiguous pages from the
+ * physical allocator, reached through the direct map. */
+static inline void *fs_contig_alloc(size_t n) {
+    uint32_t pages = (uint32_t)((n + PAGE_SIZE - 1) >> 12);
+    uint32_t p = pages ? pmm_alloc_contig(pages) : 0;
+    if (!p) return 0;
+    void *v = P2V(p); memset(v, 0, (size_t)pages << 12); return v;
+}
+static inline void fs_contig_free(void *v, size_t n) {
+    uint32_t pages = (uint32_t)((n + PAGE_SIZE - 1) >> 12);
+    if (!v) return;
+    uint32_t p = V2P(v);
+    for (uint32_t i = 0; i < pages; i++) pmm_free(p + (i << 12));
+}
 static inline uint32_t fs_now_ms(void) { return ticks_lo(); }
 #endif
 /* Install only at boot/quiescence. F0 exports monotonic PIT time, no RTC.

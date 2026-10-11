@@ -16,6 +16,7 @@
 void pmm_init(void);
 uint32_t pmm_alloc(void);                  /* NORMAL then DMA; returns phys or 0 */
 uint32_t pmm_alloc_zone(int zone);
+uint32_t pmm_alloc_contig(uint32_t pages); /* contiguous run, NORMAL then DMA; phys or 0; free with pmm_free per page */
 void pmm_free(uint32_t phys);
 uint32_t pmm_free_count(void);
 uint32_t pmm_zone_free(int zone);

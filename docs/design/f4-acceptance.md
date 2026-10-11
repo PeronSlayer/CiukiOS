@@ -369,3 +369,206 @@ No QEMU, f2-all or hardware evidence was run by Codex. The lead still owns
 code review, the integration diary entry, earlier QEMU gates on the integrated
 image and the later fs_ro/VFS directive. NTFS 3.0 parsing is admitted by the
 version check; generated-tool evidence here covers NTFS 3.1 only.
+
+## f4-04
+
+Directive: [NTFS read-only mounts through `fs_ro` and optical cache slots on
+demand](../directives/f4-04-ntfs-vfs-cache-slots.md). Host implementation
+evidence only; QEMU and hardware qualification belong to the lead.
+
+### Research and implementation decisions (2026-10-11)
+
+Sources read before the change, in addition to those of f4-02 and f4-03:
+
+- [Linux v6.12 ntfs3 `ntfs.h`](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/ntfs3/ntfs.h):
+  `FILE_ATTRIBUTE_*` (read-only 1, hidden 2, system 4, archive 0x20, directory
+  0x10000000), file-name types (POSIX 0, Win32 1, DOS 2) and `MFT_REC_USER = 24`.
+  Decision: MFT records 0-23 are NTFS system files and are never exposed
+  through the VFS (not listed, not resolvable); the FILE_NAME flags of an index
+  entry become the DOS attribute bits (read-only is implied by the mount).
+- [Linux-NTFS `$FILE_NAME`](https://flatcap.github.io/linux-ntfs/ntfs/attributes/file_name.html):
+  flags at 0x38; size/time fields of the name "are only updated when the
+  filename is changed", `$STANDARD_INFORMATION` and the data stream stay
+  current. Decision: the size reported by listings and `stat` is the node's
+  `$DATA` size read at enumeration (the library's `ntfs_ro_open`), never the
+  index copy.
+- [Microsoft disk partition types](https://learn.microsoft.com/en-us/windows/win32/fileio/disk-partition-types):
+  0x07 is the IFS partition type shared by NTFS, HPFS and exFAT. Decision: an
+  MBR type 07h partition is mounted only if its boot sector carries the NTFS
+  signature; other type 07h content (exFAT, HPFS) still gets no drive letter,
+  as before f4-04.
+- The QMP `query-blockstats` fields (`wr_operations`, `wr_bytes`,
+  `flush_operations`) the runner already uses for panic evidence, now also for
+  the NTFS fixture drive (`id=ciuki-ntfs`). The runner fails closed when the
+  device name is missing from the statistics, so a mismatch is visible on the
+  first QEMU run rather than silently passing.
+
+Repository comparison before the change: `ntfs_ro.c` (f4-03) had no caller;
+`storage_add_disk` mounted only FAT partition types; the cache had a fixed
+one-2048 plus three-512 slot split per page and the VFS views held only
+FAT-like or ISO names. The library file keeps its name: the adapter is the new
+`src/kernel/fs/ntfs_fs.c` (the directive said `ntfs_ro.c`; that file is the
+f4-03 library and stays free of fs_ro, VFS and cache types).
+
+Decisions:
+
+1. **Mount path.** `storage_add_disk` offers each type 07h partition to
+   `ntfs_add`: a counted read-only view (`struct storage_ntfs.io`) of the
+   partition is created and probed through the shared cache. The view forwards
+   reads; `write` and `flush` are refused with `EROFS` and counted, it is never
+   durable (`write_cache_state` unknown), so the cache cannot even issue a
+   dirty write. A volume that fails the NTFS probe leaves no state and no
+   letter; an NTFS volume takes the next drive letter in partition order,
+   including a refused one (as a FAT volume with a mount error does), and is
+   mounted with `fs_ro_mount(&ntfs_ops, ...)` and `vfs_attach_ro`. Slots:
+   `STORAGE_NTFS` = 8. `storage_ntfs_mount` / `storage_ntfs_unmount` are the
+   lifecycle (probe remount, tests); unmount refuses with `EBUSY` while files
+   are open and issues no write. Boot logs `[storage] ntfs slot=... result=...
+   reason=...`; no ACTIVATION ledger entry is added, so the F1 boot/safe
+   records and predicates are unchanged.
+2. **Refusals.** The library's reasons become `ro.diagnostic` and the error:
+   dirty `ntfs_dirty`, recovery-required `ntfs_recovery_required`, hibernated
+   `ntfs_hibernated` (all `-EUCLEAN`, 117); malformed metadata `ntfs_malformed`
+   (`-EIO`); unsupported geometry/limits `ntfs_unsupported` (`-EOPNOTSUPP`);
+   workspace exhausted `ntfs_workspace` (`-ENOMEM`). Nothing is replayed,
+   cleared or repaired; a refused mount holds no workspace and no letter.
+3. **Workspace.** The 233,540-byte i686 library workspace (233,576 on the x86-64
+   host; it grew by one appended `file_attributes` field, below) plus 52,596
+   bytes of adapter header and bounded directory snapshot are one zeroed
+   contiguous allocation of 70 pages per mounted volume, returned at unmount.
+   Nothing in the kernel provided a multi-page contiguous allocation, so
+   `pmm_alloc_contig(pages)` (NORMAL zone first, then DMA, never LOW, freed page
+   by page with `pmm_free`) and `fs_contig_alloc/free` in `fs_port.h` were added;
+   the DMA-only wording of boot-memory.md concerns device DMA, not kernel
+   workspaces. Mounting happens early in `storage_init`, when a run exists.
+4. **Library change (additive).** `ntfs_ro_entry` gained a trailing
+   `file_attributes` (the index entry's FILE_NAME flags); nothing else in
+   `ntfs_ro.c/.h` changed and all 14 f4-03 tests pass unchanged.
+5. **Names.** The VFS name policy is BMP-only (`path_decode` rejects 4-byte
+   UTF-8, `path_validate_name` rejects reserved characters and a trailing dot or
+   space). An NTFS name that fails it is not shown wrongly: when the node has a
+   valid DOS alias the alias becomes its name, otherwise the entry is omitted
+   and counted in `fs_ro_volume.names_omitted` (once per directory per mount;
+   the probe records it). DOS-namespace index entries are merged as the stored
+   alias of exactly one long name with the same MFT reference (an orphan alias
+   is `EIO`, an alias that fits two names of one directory is `EOPNOTSUPP`);
+   an alias the view's 8.3 syntax would refuse is dropped and the VFS generates
+   one. `.`/`..` entries and system files are hidden. Lookup compares with the
+   VFS folding first and, on a miss, with the volume's own `$UpCase` collation
+   through the new `FS_RO_DRIVER_COLLATION` flag (the two tables differ in 27
+   characters NTFS folds and 222 the VFS folds beyond NTFS; the first
+   direction is covered by the Greek `U+1F80` fixture, the second can make two
+   distinct NTFS names collide in the view, which refuses that directory with
+   `EIO`).
+6. **Unsupported and damaged content.** A node the library refuses
+   (compressed, encrypted, reparse point: `EOPNOTSUPP`; damaged record or run
+   map: `EIO`) is still listed (`fs_ro_node.status`, new) with size 0, and every
+   lookup of its name returns that status, so `stat`, open and the native
+   namespace fail explicitly while its neighbours keep working. A `:` in a
+   component is stream syntax (`FS_RO_STREAM_SYNTAX`): `EOPNOTSUPP`. A device
+   error while a directory is enumerated is returned as that error and never
+   recorded as a per-file status. Ordinary sparse files read as zeros,
+   compressed ones are refused: this is the f4-03 reconciliation of the F4
+   contract's blanket "sparse is unsupported", recorded here as the final F4
+   behavior (the 4-GiB+1 sparse fixture reads zeros at 64-bit offsets; the
+   32-bit legacy API returns `EFBIG` for it, the native API is 64-bit).
+7. **Enumeration.** The adapter rebuilds one bounded snapshot of a directory at
+   cursor zero (514 raw index entries, 256 shown entries, 32 KiB of names) and
+   serves the opaque cursor from it; the VFS keeps the existing 256-entry and
+   32-view-per-mount bounds, so the 2048-entry fixture directory fails with
+   `ENOSPC` rather than a truncated listing. Limits worth a later directive:
+   compact views with eviction would lift both.
+8. **Sharing and mutation.** Unchanged generic read-only rules apply (deny
+   modes in both directions, `EROFS` for every mutation, zero free space);
+   the host harness repeats the conflict matrix on an NTFS file, and the
+   probe's eleven mutation attempts must all return `-EROFS`.
+9. **Cache slots on demand.** A data page is two 2048-byte halves; a half serves
+   four 512-byte slots or one 2048-byte slot. Descriptors (44 bytes on i686)
+   are packed 11 page headers per descriptor page, carved from the same byte
+   budget (a static assertion fixes the i686 density; the first header lives in
+   `struct block_cache`, so the 8192-byte minimum still has a data page).
+   `cache_init` allocates exactly `bytes/4096` pages (default 8 MiB: 128
+   workspace, 1760 data and 160 descriptor pages on i686; 1680 and 240 on the
+   64-bit host) and starts every page as eight 512-byte slots: 14,080 slots on
+   i686 against F1's 13,440 (seven per page; the host packs fewer headers and
+   gets exactly 13,440). A system without an optical device keeps all of them.
+   The first 2048-byte device (`cache_attach`, called implicitly by the first
+   read) converts `max(1, data_pages/8)` pages, two halves each, writing healthy
+   dirty blocks back first: on i686 220 pages become 440 slots of 2048 bytes and
+   12,320 slots of 512 bytes remain, with the same page budget. A half pinned by a failed dirty
+   block stays 512-byte, so with a failed FAT block and an optical device at the
+   8192-byte minimum the other half still serves the optical device; if every
+   half is pinned the attach fails with the sticky error. 512-byte requests may
+   use a 2048-byte slot (f4-02 rule). Two LRU lists (one per slot capacity) keep
+   a 2048-byte miss from walking the 512-byte slots. F1 `cache` probe: the loop
+   writes `blocks + 1` sectors; at the 8192-byte minimum `blocks` is now 8 (it
+   was 4) and the arithmetic still yields `issued = 2 >= 2` (one earlier
+   write-back plus one eviction), so its records and predicates are unchanged;
+   `ata_test` and the F2 resource ledger (`cache_blocks` before == after) hold
+   because conversion happens only at attach.
+10. **Test infrastructure.** `tests/host/fs/kernel_compile.py` rejected
+    `__udivdi3` since f4-03 (the library divides 64-bit values) although
+    `lib/divdi3.c` provides the helper; the four division helpers are now
+    allowed explicitly and any other `__` helper still fails. The strict
+    evidence parser rejected `END status=NOT_RUN` (the form f4-02's optical
+    probe already used), which would have turned a missing fixture into a parse
+    failure instead of `not_run`; it now accepts exactly `optical`/`device_absent`
+    and `ntfs-ro`/`fixtures_absent` as a `not_run` outcome and nothing else.
+
+### Probe, records and cases
+
+`f4:ntfs-ro run=<8 hex>` (selector, loader menu, loader model): with no NTFS
+partition mounted it records `not_run reason=fixtures_absent`. Otherwise
+`device`, `refusal` (letter absent, zero writes), and for a mounted volume two
+cycles of `entry` (kind, attributes, status, name length, SHA-256 of the path:
+the record envelope cannot carry a 255-unit name), `file` (size, SHA-256),
+`status` (open and stat of a refused node), `large` (>4 GiB, `EFBIG` through the
+legacy API) and `names`; plus `mutation` 0-10, `ads` (-95), `peer` before/after,
+`unmount` busy (open handle, -16) and clean (letter gone, generation advanced,
+cwd expired), `gone`, `remount`, and `counters` (device reads, view
+writes/flushes and cache writes, all zero). `scripts/test/ntfs_fixtures.py`
+`verify_records` compares both cycles with the ntfs-3g oracle (ntfsls/ntfscat)
+through the VFS name model, and the runner additionally requires an unchanged
+fixture image hash and no QMP block write or flush. `tests/suites/f4-media.json`
+gains `ntfs-{clean,fragmented,names,compressed,dirty,hibernated}-{qemu-t23,
+qemu-desktop-2002}` (FAT16 peer at IDE index 1, NTFS at index 2; refusal cases
+have no peer).
+
+### Validation (host)
+
+The lead runs everything on QEMU. Commands and results in this worktree:
+
+- `make kernel`: PASS (i686 clang `-Werror`, frame limit 4096, FPU/SIMD audit).
+- `bash scripts/test/host_fs_tests.sh`: PASS, 15 groups including
+  `test_cache` (20,581 checks: budget for seven sizes, on-demand attach,
+  20,000 randomized mixed 512/2048 reads, write-back on conversion, the
+  minimum-cache rule in four attach orders) and the kernel compile of all 13
+  `fs/*.c` units.
+- `bash scripts/test/host_kernel_tests.sh`: PASS, including
+  `pmm_contig_test` (zone order, exact accounting, fragmentation, zone edges)
+  and the F1/F2 harnesses linked with the new sources.
+- `python3 -m unittest tests.host.test_ntfs_vfs tests.host.test_ntfs_runner`:
+  PASS (17 tests). The production path from MBR disk to VFS is compiled under
+  ASan/UBSan: tree and hash equality with the oracle for eight fixture kinds
+  and two cycles, every mount refusal (12 kinds) with its reason, unsupported
+  and damaged files, a 4 GiB sparse hole, the large-directory bound,
+  directories/aliases/collation/attributes, sharing, stale handles
+  (quarantine), unmount/remount, and failure injection at all 4401 mount
+  reads, all 44 reads of a directory view and the workspace allocation, with
+  zero disk and view writes everywhere.
+- `python3 -m unittest discover -s tests/host` and
+  `python3 tests/loader_stub/test_static.py`: 303 tests PASS, 13 skips (absent
+  local desktop/SDK builds and private hardware captures); the 17 new tests all
+  ran. The f4-03 library tests (14) pass unchanged, including the second
+  complete fixture generation (identical hashes) and the sanitized walk of every
+  fixture, now 29 images (`names` and `attributes` are new).
+
+No QEMU, `f2-all` or hardware evidence was run by the implementer. For the
+lead on the integrated image: `f4-media` NTFS cases (twelve, above) with hashes
+equal to the manifest, zero writes and an unchanged fixture; the F1 `cache` and
+`f1-fat32` cases; `f2-all` (the cache layout changed for every system, the NTFS
+mount code runs only with a type 07h NTFS partition); and the existing optical
+cases (the first 2048-byte read now converts pages). On first run, check that
+QMP `query-blockstats` names the drive `ciuki-ntfs` and that the mount's
+4401 sector reads of the blank `$LogFile` (2 MiB; the library reads a blank
+log up to 64 MiB) fit the 120 s case timeout under TCG.

@@ -103,9 +103,14 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/ata_test.c" "$root/src/kernel/fs/partition.c" \
     "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c" \
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/path.c" \
-    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/src/kernel/fs/mount.c" \
+    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c" "$root/src/kernel/fs/mount.c" \
     "$root/src/kernel/core/bootlog.c" "$root/src/kernel/probes/fat_probes.c" \
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" -o "$out/ata_test"
+
+# f4-04: the physical allocator's contiguous run behind the NTFS mount workspace.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/pmm_contig_test.c" -o "$out/pmm_contig_test"
+"$out/pmm_contig_test"
 "$out/ata_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -278,6 +283,7 @@ storage_sources=(
     "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c"
     "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c"
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c"
+    "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c"
     "$root/src/kernel/fs/mount.c" "$root/src/kernel/core/bootlog.c"
     "$root/src/kernel/drivers/blkpart.c" "$root/src/kernel/probes/fat_probes.c"
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c"

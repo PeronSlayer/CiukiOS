@@ -39,6 +39,9 @@ undefined=set()
 for obj in out.glob('*.o'):
     for line in subprocess.check_output(['nm','-u',str(obj)],text=True).splitlines():
         undefined.add(line.split()[-1])
-helpers=sorted(x for x in undefined if x.startswith('__') and x not in {'__stack_chk_guard','__stack_chk_fail'})
+# lib/divdi3.c exports the 64-bit division helpers clang emits on i386
+# (execution-abi.md, "Runtime helpers"); ntfs_ro.c divides 64-bit values.
+provided={'__stack_chk_guard','__stack_chk_fail','__udivdi3','__umoddi3','__divdi3','__moddi3'}
+helpers=sorted(x for x in undefined if x.startswith('__') and x not in provided)
 if helpers: raise SystemExit('unexpected kernel compiler runtime helpers: '+', '.join(helpers))
-print('PASS kernel objects: no compiler runtime helpers')
+print('PASS kernel objects: no compiler runtime helpers beyond the 64-bit division set of lib/divdi3.c')

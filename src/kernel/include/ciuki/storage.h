@@ -6,6 +6,7 @@
 #include "../../fs/vfs.h"
 
 #define STORAGE_DISKS 4u
+#define STORAGE_NTFS 8u
 struct storage_volume {
     struct blkpart part;
     struct blkdev io;                 /* counted forwarding view, never a snapshot copy */
@@ -19,11 +20,25 @@ struct storage_volume {
      * No callback in ordinary boot, no controller fault/recovery backdoor. */
     void (*trace)(struct storage_volume *, char action, uint64_t lba, int result);
 };
+/* f4-04: an NTFS partition (MBR type 07h) mounted read-only through fs_ro.
+ * io is a counted forwarding view of the partition: reads go to the disk;
+ * write and flush are refused here and counted, so writes/flushes stay zero
+ * unless a driver bypasses the cache. The view is never durable. */
+struct storage_ntfs {
+    struct blkpart part;
+    struct blkdev io;
+    struct fs_ro_volume ro;
+    unsigned disk, partition, drive;  /* drive: letter index of the last mount */
+    int error;
+    bool present;
+    uint64_t reads, writes, flushes;
+};
 struct storage {
     struct block_cache cache;
     struct vfs vfs;
     struct storage_volume volumes[26];
     struct fs_ro_volume optical[STORAGE_DISKS];
+    struct storage_ntfs ntfs[STORAGE_NTFS];
     int disk_errors[STORAGE_DISKS];
     bool disks[STORAGE_DISKS], ready, stopped;
     unsigned next_drive;
@@ -36,6 +51,11 @@ int storage_setup(struct storage *, size_t cache_bytes);
 int storage_add_disk(struct storage *, unsigned disk, struct blkdev *);
 int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 void storage_refresh_ro(struct storage *);
+/* NTFS slot lifecycle. Mount returns the drive letter index (>= 3) or a
+ * negative FS_E*; the refusal reason is ntfs[slot].ro.diagnostic. Unmount
+ * refuses (EBUSY) while files are open and issues no media write. */
+int storage_ntfs_mount(struct storage *, unsigned slot);
+int storage_ntfs_unmount(struct storage *, unsigned slot);
 struct storage_volume *storage_volume(struct storage *, unsigned drive);
 int storage_enable_write(struct storage *, unsigned drive);
 int storage_writeback(struct storage *, uint32_t now_ms);
