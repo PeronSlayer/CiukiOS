@@ -9,8 +9,9 @@ F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-faul
 F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
              'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
 F3_PROBES = ('vm-boot',)
+F4_PROBES = ('optical',)  # F4 probes run by selector only; not in the sweep yet
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
-SELECTOR_RE = r'f([0123]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
+SELECTOR_RE = r'f([01234]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)'
 E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
@@ -58,7 +59,7 @@ def selector(request, source='menu', validated_fw_cfg=False):
     match = re.fullmatch(SELECTOR_RE, request)
     if not match:
         raise ValueError('invalid selector grammar or probe')
-    names = (F0_PROBES, F1_PROBES, F2_PROBES, F3_PROBES)[int(match[1])]
+    names = {0:F0_PROBES, 1:F1_PROBES, 2:F2_PROBES, 3:F3_PROBES, 4:F4_PROBES}[int(match[1])]
     if match[2] not in (*names, *(('all', 'core') if match[1] in ('0', '1') else ())):
         raise ValueError('invalid selector grammar or probe')
     forced = bool(match[4]); safe = bool(match[5])

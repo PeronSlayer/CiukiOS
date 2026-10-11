@@ -232,7 +232,7 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
                   (uint64_t)f->registers[5][1] << 40;
     else
         f->lba |= (uint64_t)(f->head & 15) << 24;
-    f->blocks = value == 0xec ? 1 : f->registers[2][0] + (ext ? (unsigned)f->registers[2][1] << 8 : 0);
+    f->blocks = (value == 0xec || value == 0xa1) ? 1 : f->registers[2][0] + (ext ? (unsigned)f->registers[2][1] << 8 : 0);
     if (!f->blocks)
         f->blocks = 256;
     bool flush = value == 0xe7 || value == 0xea;
@@ -273,7 +273,7 @@ static uint16_t fake_in16(void *ctx, uint16_t port)
 {
     struct fake *f = ctx;
     CHECK(port == f->channel.base && f->status == 0x48 && !f->writing);
-    uint16_t v = f->command == 0xec ? f->identify[f->selected][f->words] : sector_word(f->lba, f->words);
+    uint16_t v = (f->command == 0xec || f->command == 0xa1) ? f->identify[f->selected][f->words] : sector_word(f->lba, f->words);
     f->data_reads++;
     if (++f->words == 256)
         block_end(f);
@@ -388,7 +388,7 @@ static void test_identify(void)
     CHECK(f.channel.devices[0].block.write_cache_state == BLKDEV_CACHE_UNKNOWN);
     fresh(&f, false);
     f.kind[1] = PACKET;
-    CHECK(ata_channel_discover(&f.channel) == 1 && f.channel.devices[1].atapi && f.commands == 1);
+    CHECK(ata_channel_discover(&f.channel) == 1 && f.channel.devices[1].atapi && !f.channel.devices[1].identified && f.commands == 2);
     fresh(&f, false);
     f.kind[0] = ABSENT; f.kind[1] = DISK;
     CHECK(ata_channel_discover(&f.channel) == 1 && f.channel.devices[1].identified);
@@ -647,10 +647,11 @@ static void test_storage_cache_faults(void)
     cache_destroy(&c);
     puts("storage cache/ATA: PASS (register-boundary write/flush faults, delayed EIO, sticky unmount, quarantine/no further command)");
 }
+#include "atapi_test.inc"
 int main(void)
 {
     test_identify(); test_data(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
-    test_storage_cache_faults();
+    test_storage_cache_faults(); test_packets();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
     return failures ? 1 : 0;

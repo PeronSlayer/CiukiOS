@@ -6,8 +6,26 @@ import subprocess
 
 root=Path(__file__).resolve().parents[3]
 tree=ast.parse((root/'scripts/build_kernel.py').read_text())
-flags=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign)
-           and any(isinstance(t,ast.Name) and t.id=='CFLAGS' for t in n.targets))
+constants={}
+for n in tree.body:
+    if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name):
+        try: constants[n.targets[0].id]=ast.literal_eval(n.value)
+        except (ValueError,TypeError): pass
+def literal(node):
+    if isinstance(node,ast.JoinedStr):
+        parts=[]
+        for part in node.values:
+            if isinstance(part,ast.Constant) and isinstance(part.value,str): parts.append(part.value)
+            elif (isinstance(part,ast.FormattedValue) and isinstance(part.value,ast.Name)
+                  and part.conversion==-1 and part.format_spec is None):
+                parts.append(str(constants[part.value.id]))
+            else: raise ValueError('non-constant kernel flag')
+        return ''.join(parts)
+    return ast.literal_eval(node)
+flag_list=next(n.value for n in tree.body if isinstance(n,ast.Assign)
+               and any(isinstance(t,ast.Name) and t.id=='CFLAGS' for t in n.targets))
+assert isinstance(flag_list,ast.List)
+flags=[literal(n) for n in flag_list.elts]
 out=root/'build/host/fs/kernel'
 out.mkdir(exist_ok=True)
 sources=sorted((root/'src/kernel/fs').glob('*.c'))

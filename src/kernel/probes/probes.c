@@ -1059,6 +1059,7 @@ void probes_main(void *arg)
     const struct probe_tables tables = {
         .f0 = probes, .f0_count = ARRAY_SIZE(probes),
         .f1 = __f1probes_start, .f1_count = (unsigned)(__f1probes_end - __f1probes_start),
+        .f4 = __f4probes_start, .f4_count = (unsigned)(__f4probes_end - __f4probes_start),
         .f2 = __f2probes_start, .f2_count = (unsigned)(__f2probes_end - __f2probes_start),
         .f3 = __f3probes_start, .f3_count = (unsigned)(__f3probes_end - __f3probes_start),
     };

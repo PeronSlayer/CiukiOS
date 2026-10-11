@@ -37,8 +37,13 @@ selector_validate:
     jmp .prefix
 .try_f3:
     cmp byte [si+1], '3'
-    jne .bad
+    jne .try_f4
     mov bx, f3_probe_names
+    jmp .prefix
+.try_f4:
+    cmp byte [si+1], '4'
+    jne .bad
+    mov bx, f4_probe_names
 .prefix:
     cmp byte [si+2], ':'
     jne .bad
@@ -654,3 +659,5 @@ deadline_expired:
     ret
 menu_tick dd 0
 menu_polls dd 0
+
+f4_probe_names db 'optical',0,0

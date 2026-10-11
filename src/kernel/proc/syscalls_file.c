@@ -85,6 +85,11 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     bool write = tf->eax == CIUKI_SYS_WRITE || tf->eax == CIUKI_SYS_PWRITE;
     bool positioned = tf->eax == CIUKI_SYS_PREAD || tf->eax == CIUKI_SYS_PWRITE;
     struct file_description *d = op->description;
+    fs_lock_take(&d->node->space->vfs->lock);
+    int media_error=px_ro_check_locked(d->node);
+    if (!media_error && write && d->node->ro) media_error=-EROFS;
+    fs_lock_drop(&d->node->space->vfs->lock);
+    if (media_error) return media_error;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
     if (d->node->kind != PX_FILE && d->node->kind != PX_NULL && d->node->kind != PX_CONSOLE) return -EISDIR;

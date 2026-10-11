@@ -7,6 +7,9 @@
 #include "selector.h"
 
 static unsigned calls, begins, ends;
+void rec_emit(const char *probe, const char *event, const char *format, ...)
+{ (void)probe; (void)event; (void)format; }
+void klog(const char *format, ...) { (void)format; }
 extern bool probes_operator_mode;
 extern bool probes_operator_wait(bool (*)(void *), uint64_t (*)(uint32_t),
                                 void (*)(uint32_t), void (*)(bool), void *);
@@ -69,7 +72,9 @@ static void order_tests(void)
         {"cache",pass},{"mount-crash",pass},{"safe",pass},{"bootlog",pass}};
     const struct ciuki_f2_probe f2[] = {{"elf-load",pass},{"fd-table",fail},{"app-gate",pass}};
     const struct probe_def f3[] = {{"vm-boot",pass}};
-    const struct probe_tables t = {f0,f1,2,7,f2,3,f3,1};
+    const struct probe_def f4[] = {{"optical",pass}};
+    const struct probe_tables t = {.f0=f0,.f1=f1,.f0_count=2,.f1_count=7,
+        .f2=f2,.f2_count=3,.f3=f3,.f3_count=1,.f4=f4,.f4_count=1};
     const struct probe_hooks h = {app_begin,app_end,panic_probe};
     const char *expected[] = {"registry","input","cache","safe","fat-write","fat-write",
         "mount-crash","mount-crash","bootlog","bootlog"};
@@ -90,6 +95,11 @@ static void order_tests(void)
     sweep_dispatch(&step,&cursor,&t,&h);
     assert(calls==14);
     assert(!sweep_at(SWEEP_ALL_PHASE,17,&t,&step));
+    struct probe_selection optical;
+    const char *request="f4:optical run=12345678";
+    assert(probes_parse_selector(request,strlen(request),0,&optical));
+    probes_dispatch(&optical,&t,&h);
+    assert(calls==15 && begins==3 && ends==3);
 }
 static unsigned stage, delays, polls; static bool stuck;
 static void disable(void *c) { (void)c; assert(stage==0); stage=1; }

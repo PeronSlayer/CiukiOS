@@ -141,6 +141,26 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
     }
     return 0;
 }
+int storage_add_ro(struct storage *s, unsigned slot, struct blkdev *dev, uint64_t session)
+{
+    if (!s || !s->ready || s->stopped || slot>=STORAGE_DISKS || !dev) return -FS_EINVAL;
+    struct fs_ro_volume *ro=&s->optical[slot];
+    if (ro->mounted) return -FS_EBUSY;
+    unsigned d=s->next_drive;
+    while (d<26 && vfs_drive_present(&s->vfs,d)) d++;
+    if (d>=26) return -FS_ENOSPC;
+    int e=fs_ro_mount(ro,&iso9660_ops,&s->cache,dev,session,dev->capacity-session);
+    if (!e) e=vfs_attach_ro(&s->vfs,d,ro);
+    if (e && ro->mounted) fs_ro_unmount(ro);
+    return e ? e : (int)d;
+}
+void storage_refresh_ro(struct storage *s)
+{
+    if (!s || !s->ready || s->stopped) return;
+    fs_lock_take(&s->vfs.lock);
+    for (unsigned d=3; d<26; d++) if (s->vfs.ro_volumes[d]) vfs_ro_check_locked(&s->vfs,d);
+    fs_lock_drop(&s->vfs.lock);
+}
 struct storage_volume *storage_volume(struct storage *s, unsigned d)
 {
     if (!s || !s->ready || d >= 26 || !s->volumes[d].present) return 0;
@@ -203,9 +223,11 @@ int storage_shutdown(struct storage *s)
      * race between the preflight and a later per-volume lock acquisition. */
     fs_lock_take(&s->vfs.lock);
     bool busy = false;
-    for (unsigned i = 0; i < VFS_NODES; i++) if (s->vfs.nodes[i].refs) busy = true;
+    for (unsigned i = 0; i < VFS_NODES; i++) if (s->vfs.nodes[i].refs && (!s->vfs.nodes[i].ro || s->vfs.nodes[i].generation==s->vfs.generation[s->vfs.nodes[i].drive])) busy = true;
     for (unsigned d = 2; d < 26; d++)
         if (s->vfs.volumes[d] && px_volume_busy && px_volume_busy(&s->vfs, s->vfs.volumes[d])) busy = true;
+    for (unsigned d=3; d<26; d++)
+        if (s->vfs.ro_volumes[d] && px_ro_busy && px_ro_busy(&s->vfs,s->vfs.ro_volumes[d])) busy=true;
     if (busy) { fs_lock_drop(&s->vfs.lock); return -FS_EBUSY; }
     s->stopped = true;
     int result = s->writer_error;
@@ -217,7 +239,7 @@ int storage_shutdown(struct storage *s)
         int e = fat_commit(&v->fat);
         if (e && !result) result = e;
     }
-    if (!result) for (unsigned d = 2; d < 26; d++) if (s->vfs.volumes[d]) {
+    if (!result) for (unsigned d = 2; d < 26; d++) if (vfs_drive_present(&s->vfs,d)) {
         result = vfs_detach_locked(&s->vfs, d);
         if (result) break;
     }
@@ -227,6 +249,7 @@ int storage_shutdown(struct storage *s)
 void storage_destroy(struct storage *s)
 {
     if (!s || !s->ready) return;
+    for (unsigned i=0; i<STORAGE_DISKS; i++) if (s->optical[i].mounted) fs_ro_unmount(&s->optical[i]);
     vfs_destroy(&s->vfs); cache_destroy(&s->cache); s->ready = false;
 }
 struct storage *storage_get(void) { return &system_storage; }
@@ -357,9 +380,11 @@ void storage_init(void)
         if (!e) timer = task_create_kernel("storage-timer", storage_timer, s, P_DEVICE);
         if (e || !timer) s->writer_error = e ? e : -FS_ENOMEM;
     }
+    struct ata_device *devices[STORAGE_DISKS];
     for (unsigned slot = 0; slot < STORAGE_DISKS; slot++) {
         struct ata_device *dev = ata_device_get(slot / 2, slot % 2);
-        if (!dev) continue;
+        devices[slot]=dev;
+        if (!dev || dev->atapi) continue;
         e = storage_add_disk(s, slot, &dev->block);
         drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_STORAGE,
             .disk = slot, .error = e, .readonly = true, .reason = "disk_scan" });
@@ -378,6 +403,15 @@ void storage_init(void)
         if (!v->partition)
             klog("[storage] kind=%u disk=%u part=0 layout=superfloppy drive=%c mode=%s error=%d",
                  ACTIVATION_MOUNT, v->disk, 'A' + d, v->fat.readonly ? "ro" : "rw", v->error);
+    }
+    for (unsigned slot=0; slot<STORAGE_DISKS; slot++) {
+        struct ata_device *dev=devices[slot];
+        if (!dev || !dev->atapi) continue;
+        e=atapi_ready(dev);
+        if (!e) e=storage_add_ro(s,slot,&dev->block,dev->session_lba);
+        klog("[storage] optical slot=%u drive=%c mode=ro generation=%u result=%d reason=%s",
+             slot,e>=3 ? 'A'+e : '-',dev->block.media_generation,e,
+             dev->media==ATAPI_NO_MEDIUM ? "no_medium" : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "unavailable");
     }
     /* The F1 boot-identity amendment accepts disk 0, primary partition 1
      * for CBI1. Loader fingerprints remain a boot-info v2 requirement. */

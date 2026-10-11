@@ -3,6 +3,7 @@
 #ifndef CIUKI_VFS_H
 #define CIUKI_VFS_H
 #include "fat.h"
+#include <ciuki/fs_ro.h>
 #define VFS_NODES 64u
 #define VFS_DESCRIPTIONS 128u
 #define VFS_HANDLES 64u
@@ -15,12 +16,14 @@
 /* Bitmask of access denied to other opens, checked in BOTH directions. */
 enum vfs_share { VFS_DENY_NONE=0, VFS_DENY_READ=1, VFS_DENY_WRITE=2, VFS_DENY_ALL=3 };
 enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
-struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs; };
+struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs;
+    struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation; };
 struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny; };
 struct vfs_table;
 struct vfs {
     fs_lock lock; /* namespace -> cache -> device; no IRQ/interrupts-off I/O */
     struct fat_volume *volumes[26];
+    struct fs_ro_volume *ro_volumes[26];
     uint32_t generation[26];
     struct vfs_node nodes[VFS_NODES];
     struct vfs_description descriptions[VFS_DESCRIPTIONS];
@@ -36,6 +39,7 @@ struct vfs_table {
 struct vfs_find {
     unsigned drive; uint32_t generation, directory, cursor;
     uint8_t attr_mask; char pattern[FS_NAME_BYTES];
+    bool ro; uint64_t ro_directory;
 };
 /* Caller owns all storage, including tables, mounted volumes and cache. No
  * allocations in open/read/write/find/etc. Capacity exhaustion is explicit.
@@ -43,6 +47,11 @@ struct vfs_find {
 void vfs_init(struct vfs *);
 void vfs_destroy(struct vfs *);
 int vfs_attach(struct vfs *, unsigned drive, struct fat_volume *);
+int vfs_attach_ro(struct vfs *, unsigned drive, struct fs_ro_volume *);
+bool vfs_drive_present(struct vfs *, unsigned drive);
+/* Namespace lock held. EIO invalidates media cache/names/nodes/cwd and
+ * removes the letter, even with live descriptions. No media writes. */
+int vfs_ro_check_locked(struct vfs *, unsigned drive);
 int vfs_detach(struct vfs *, unsigned drive); /* durable unmount, refuses opens */
 int vfs_table_init(struct vfs *, struct vfs_table *, unsigned default_drive);
 void vfs_table_destroy(struct vfs_table *);

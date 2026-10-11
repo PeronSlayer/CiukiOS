@@ -17,6 +17,7 @@ struct probe_tables {
     unsigned f2_count;
     const struct probe_def *f3;
     unsigned f3_count;
+    const struct probe_def *f4; unsigned f4_count;
 };
 struct probe_hooks {
     void (*app_begin)(const struct probe_selection *);

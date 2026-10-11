@@ -4,10 +4,12 @@
 #ifndef CIUKI_VFS_HOOKS_H
 #define CIUKI_VFS_HOOKS_H
 #include <stdbool.h>
+#include <stdint.h>
 struct vfs;
 struct vfs_node;
 struct fat_volume;
 struct fat_entry;
+struct fs_ro_volume;
 /* Internal storage/VFS seam: caller holds the namespace lock continuously
  * from all-volume open-description preflight through durable detach. */
 int vfs_detach_locked(struct vfs *, unsigned);
@@ -19,5 +21,7 @@ extern int px_legacy_closed(struct vfs *, struct vfs_node *) __attribute__((weak
 /* Only open descriptions on this volume block detach, never cwd pins or
  * synthetic device/namespace nodes. Mutation pin checks remain separate. */
 extern bool px_volume_busy(struct vfs *, struct fat_volume *) __attribute__((weak));
+extern int px_ro_share(struct vfs *, unsigned, uint64_t, unsigned, unsigned) __attribute__((weak));
+extern bool px_ro_busy(struct vfs *, struct fs_ro_volume *) __attribute__((weak));
 extern void px_volume_detached(struct vfs *, unsigned) __attribute__((weak));
 #endif

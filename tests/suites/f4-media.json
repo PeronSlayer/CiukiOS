@@ -1,0 +1,1950 @@
+{
+  "schema_version": 1,
+  "name": "f4-media",
+  "image": "full",
+  "host_tests": true,
+  "cases": [
+    {
+      "id": "optical-l1-qemu-t23",
+      "probe": "optical",
+      "profile": "qemu-t23",
+      "selector": "f4:optical run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 12,
+          "seed": 1
+        },
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1
+        },
+        {
+          "generator": "xorriso",
+          "level": 1,
+          "joliet": false,
+          "seed": 1
+        }
+      ],
+      "actions": [
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "eject",
+          "device": "ciuki-optical"
+        },
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "change",
+          "device": "ciuki-optical",
+          "target": "fixture-2.iso"
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "2"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "3"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "4"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "5"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "6"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "7"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "8"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "9"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "10"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "eject"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "letter_absent": {
+                "eq": 1
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reinsert"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters"
+            },
+            "exact_count": 1,
+            "fields": {
+              "writes": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "max_packet_ms": {
+                "le": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cwd"
+            },
+            "exact_count": 1,
+            "fields": {
+              "expired": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "optical-l2-qemu-t23",
+      "probe": "optical",
+      "profile": "qemu-t23",
+      "selector": "f4:optical run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 12,
+          "seed": 1
+        },
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1
+        },
+        {
+          "generator": "xorriso",
+          "level": 2,
+          "joliet": false,
+          "seed": 1
+        }
+      ],
+      "actions": [
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "eject",
+          "device": "ciuki-optical"
+        },
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "change",
+          "device": "ciuki-optical",
+          "target": "fixture-2.iso"
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "2"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "3"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "4"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "5"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "6"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "7"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "8"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "9"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "10"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "eject"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "letter_absent": {
+                "eq": 1
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reinsert"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters"
+            },
+            "exact_count": 1,
+            "fields": {
+              "writes": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "max_packet_ms": {
+                "le": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cwd"
+            },
+            "exact_count": 1,
+            "fields": {
+              "expired": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "optical-l3-qemu-t23",
+      "probe": "optical",
+      "profile": "qemu-t23",
+      "selector": "f4:optical run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 12,
+          "seed": 1
+        },
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1
+        },
+        {
+          "generator": "xorriso",
+          "level": 3,
+          "joliet": true,
+          "seed": 1
+        }
+      ],
+      "actions": [
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "eject",
+          "device": "ciuki-optical"
+        },
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "change",
+          "device": "ciuki-optical",
+          "target": "fixture-2.iso"
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "2"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "3"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "4"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "5"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "6"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "7"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "8"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "9"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "10"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "eject"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "letter_absent": {
+                "eq": 1
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reinsert"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters"
+            },
+            "exact_count": 1,
+            "fields": {
+              "writes": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "max_packet_ms": {
+                "le": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cwd"
+            },
+            "exact_count": 1,
+            "fields": {
+              "expired": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "optical-malformed-qemu-t23",
+      "probe": "optical",
+      "profile": "qemu-t23",
+      "selector": "f4:optical run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "xorriso",
+          "level": 3,
+          "malformed": true,
+          "seed": 1
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed"
+            },
+            "exact_count": 1,
+            "fields": {
+              "refused": {
+                "eq": 1
+              },
+              "writes": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "optical-l1-qemu-desktop-2002",
+      "probe": "optical",
+      "profile": "qemu-desktop-2002",
+      "selector": "f4:optical run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 12,
+          "seed": 1
+        },
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1
+        },
+        {
+          "generator": "xorriso",
+          "level": 1,
+          "joliet": false,
+          "seed": 1
+        }
+      ],
+      "actions": [
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "eject",
+          "device": "ciuki-optical"
+        },
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "change",
+          "device": "ciuki-optical",
+          "target": "fixture-2.iso"
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "2"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "3"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "4"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "5"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "6"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "7"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "8"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "9"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "10"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "eject"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "letter_absent": {
+                "eq": 1
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reinsert"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters"
+            },
+            "exact_count": 1,
+            "fields": {
+              "writes": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "max_packet_ms": {
+                "le": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cwd"
+            },
+            "exact_count": 1,
+            "fields": {
+              "expired": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "optical-l2-qemu-desktop-2002",
+      "probe": "optical",
+      "profile": "qemu-desktop-2002",
+      "selector": "f4:optical run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 12,
+          "seed": 1
+        },
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1
+        },
+        {
+          "generator": "xorriso",
+          "level": 2,
+          "joliet": false,
+          "seed": 1
+        }
+      ],
+      "actions": [
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "eject",
+          "device": "ciuki-optical"
+        },
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "change",
+          "device": "ciuki-optical",
+          "target": "fixture-2.iso"
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "2"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "3"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "4"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "5"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "6"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "7"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "8"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "9"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "10"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "eject"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "letter_absent": {
+                "eq": 1
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reinsert"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters"
+            },
+            "exact_count": 1,
+            "fields": {
+              "writes": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "max_packet_ms": {
+                "le": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cwd"
+            },
+            "exact_count": 1,
+            "fields": {
+              "expired": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "optical-l3-qemu-desktop-2002",
+      "probe": "optical",
+      "profile": "qemu-desktop-2002",
+      "selector": "f4:optical run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 12,
+          "seed": 1
+        },
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1
+        },
+        {
+          "generator": "xorriso",
+          "level": 3,
+          "joliet": true,
+          "seed": 1
+        }
+      ],
+      "actions": [
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "eject",
+          "device": "ciuki-optical"
+        },
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "media_reinsert"
+          },
+          "operation": "change",
+          "device": "ciuki-optical",
+          "target": "fixture-2.iso"
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "0"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "1"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "2"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "3"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "4"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "5"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "6"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "7"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "8"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "9"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mutation",
+              "operation": "10"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -30
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "eject"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "letter_absent": {
+                "eq": 1
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "reinsert"
+            },
+            "exact_count": 1,
+            "fields": {
+              "old": {
+                "encoding": "signed",
+                "eq": -5
+              },
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "native_old": {
+                "encoding": "signed",
+                "eq": -5
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters"
+            },
+            "exact_count": 1,
+            "fields": {
+              "writes": {
+                "eq": 0
+              },
+              "quarantined": {
+                "eq": 0
+              },
+              "max_packet_ms": {
+                "le": 10000
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "before"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "peer",
+              "stage": "after"
+            },
+            "exact_count": 1,
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "same_channel": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cwd"
+            },
+            "exact_count": 1,
+            "fields": {
+              "expired": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "optical-malformed-qemu-desktop-2002",
+      "probe": "optical",
+      "profile": "qemu-desktop-2002",
+      "selector": "f4:optical run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "xorriso",
+          "level": 3,
+          "malformed": true,
+          "seed": 1
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "malformed"
+            },
+            "exact_count": 1,
+            "fields": {
+              "refused": {
+                "eq": 1
+              },
+              "writes": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
