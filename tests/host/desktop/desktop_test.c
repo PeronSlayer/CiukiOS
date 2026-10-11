@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 static struct desktop d;
 static void request(struct ciuki_message *m, unsigned op, unsigned n)
 { desk_message(m,op,n); m->sender_pid=42; }
@@ -49,7 +50,7 @@ static void test_protocol(void)
         struct ciuki_message bad=m;
         bad.length--; assert(!desk_parse(&bad,inbound,&s,&p));
         bad=m; bad.length++; assert(!desk_parse(&bad,inbound,&s,&p));
-        bad=m; bad.data[0]=2; assert(!desk_parse(&bad,inbound,&s,&p));
+        bad=m; bad.data[0]=3; assert(!desk_parse(&bad,inbound,&s,&p));
         bad=m; bad.data[2]=1; assert(!desk_parse(&bad,inbound,&s,&p));
         bad=m; bad.data[255]=1; assert(!desk_parse(&bad,inbound,&s,&p));
         bad=m; bad.reserved=1; assert(!desk_parse(&bad,inbound,&s,&p));
@@ -80,6 +81,10 @@ static void test_protocol(void)
     e.code=0; desk_event_message(&m,DESK_KEY,&e); assert(desk_parse(&m,0,NULL,&p));
     e.type=CIUKI_INPUT_BUTTON; e.code=4; desk_event_message(&m,DESK_BUTTON,&e); assert(!desk_parse(&m,0,NULL,&p));
     e.type=CIUKI_INPUT_RESYNC; e.code=0; e.value=8; desk_event_message(&m,DESK_KEY,&e); assert(!desk_parse(&m,0,NULL,&p));
+    desk_message(&m,DESK_CLOSE_REQUEST,4); assert(!desk_parse(&m,0,NULL,&p));
+    m.data[0]=DESK_SHELL_VERSION;
+    assert(desk_parse(&m,0,NULL,&p) && !desk_parse(&m,1,NULL,&p));
+    m.data[2]=1; assert(!desk_parse(&m,0,NULL,&p));
     puts("PASS protocol: every opcode/direction, lengths, fds, versions, geometry, events");
 }
 static int covers(struct desk_box b,int x,int y)
@@ -182,7 +187,12 @@ static void equivalent(uint32_t *reference, unsigned pixels)
     assert(!desk_redraw(&d));
     memcpy(reference,d.pixels,pixels*4);
     desk_composite(&d,(struct desk_box){0,0,(int32_t)d.width,(int32_t)d.height});
-    assert(!memcmp(reference,d.pixels,pixels*4)); fake_presents=0;
+    for (unsigned i=0;i<pixels;i++) if (reference[i]!=d.pixels[i]) {
+        fprintf(stderr,"incremental mismatch x=%u y=%u expected=%06x actual=%06x shell=%d menu=%d about=%d focus=%d\n",
+            i%d.width,i/d.width,reference[i],d.pixels[i],d.shell,d.menu_open,d.about,d.focus);
+        assert(0);
+    }
+    fake_presents=0;
 }
 static void test_compositor(void)
 {
@@ -199,6 +209,13 @@ static void test_compositor(void)
     desk_move(&d,a,-2048,2048); equivalent(reference,n);
     pointer(50,50); equivalent(reference,n);
     desk_drop_client(&d,a); equivalent(reference,n);
+    desk_shell_enable(&d); equivalent(reference,n);
+    pointer(40,224); event(CIUKI_INPUT_BUTTON,1,1,0); event(CIUKI_INPUT_BUTTON,1,0,0); equivalent(reference,n);
+    event(CIUKI_INPUT_BUTTON,1,1,0); event(CIUKI_INPUT_BUTTON,1,0,0); equivalent(reference,n);
+    desk_minimize(&d,b); equivalent(reference,n);
+    desk_minimize(&d,b); equivalent(reference,n);
+    desk_about(&d); equivalent(reference,n);
+    desk_request_close(&d,d.about); equivalent(reference,n);
     d.damage.count=0; desk_damage_add(&d.damage,(struct desk_box){200,200,3,3},320,240);
     fake_fail_present=1; assert(desk_redraw(&d)==-1 && d.damage.count==1);
     fake_fail_present=0; assert(!desk_redraw(&d) && fake_presents==1);
@@ -207,8 +224,96 @@ static void test_compositor(void)
     cleanup(); free(reference); free(out);
     puts("PASS compositor: incremental/full equivalence, z-order, clipping, cursor, present retry/damage bounds");
 }
+static unsigned term_calls, term_pid;
+static int terminate(uint32_t pid, int signo)
+{ assert(signo==SIGTERM); term_calls++; term_pid=pid; return 0; }
+static void test_shell(void)
+{
+    setup(640,480); desk_shell_enable(&d);
+    int a=client(10,11,100,80,0x112233), b=client(12,13,100,80,0x445566);
+    desk_move(&d,a,40,60); desk_move(&d,b,40,60);
+    assert(desk_hit(&d,50,90)==b);
+    struct desk_box ab=desk_task_button(&d,a), bb=desk_task_button(&d,b);
+    assert(ab.x+ab.w<=bb.x && bb.x+bb.w<=560 && ab.y>=448 && ab.h==26);
+    flush_all(); fake_sent=0;
+    event(CIUKI_INPUT_KEY,0x1e,1,0); pointer(50,90); event(CIUKI_INPUT_BUTTON,1,1,0);
+    desk_minimize(&d,b); flush_all();
+    assert(d.focus==a && d.clients[b].minimized && desk_hit(&d,50,90)==a);
+    int key_up=0,button_up=0,unfocus=0;
+    for (unsigned k=0; k<fake_sent; k++) if (fake_destinations[k]==12) {
+        struct desk_packet p; assert(desk_parse(&fake_messages[k],0,NULL,&p));
+        key_up+=p.opcode==DESK_KEY && p.event.type==CIUKI_INPUT_KEY && p.event.code==0x1e && !p.event.value;
+        button_up+=p.opcode==DESK_BUTTON && !p.event.value;
+        unfocus+=p.opcode==DESK_FOCUS && !p.focused;
+    }
+    assert(key_up==1 && button_up==1 && unfocus==1 && !d.routed_buttons && !d.keys[0x1e]);
+    event(CIUKI_INPUT_BUTTON,1,0,0);
+    pointer(bb.x+3,bb.y+3); event(CIUKI_INPUT_BUTTON,1,1,0); event(CIUKI_INPUT_BUTTON,1,0,0);
+    assert(!d.clients[b].minimized && d.focus==b && desk_hit(&d,50,90)==b);
+    desk_move(&d,b,INT_MAX,INT_MAX);
+    assert(d.clients[b].frame.y+d.clients[b].frame.h==448);
+    pointer(d.clients[b].frame.x+5,d.clients[b].frame.y+8); event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(d.drag==b); event(CIUKI_INPUT_RESYNC,0,0,0); assert(d.drag<0);
+    desk_focus(&d,a); pointer(40,464); event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(d.menu_open && d.focus<0);
+    event(CIUKI_INPUT_KEY,1,1,0); assert(!d.menu_open && d.focus==a);
+    event(CIUKI_INPUT_BUTTON,1,0,0);
+    /* Negotiated v2, request survives backlog and deadline survives EOF. */
+    d.clients[a].version=DESK_SHELL_VERSION; d.children[0].pid=42;
+    d.terminate=terminate; d.now_ns=100; term_calls=term_pid=0;
+    fake_block=1;
+    struct ciuki_message m; desk_message(&m,DESK_PONG,8);
+    for (int k=0; k<DESK_TX_MAX; k++) desk_queue(&d,a,&m);
+    desk_request_close(&d,a); assert(d.clients[a].close_pending && d.clients[a].window);
+    fake_block=0; fake_sent=0; flush_all(); flush_all();
+    int requested=0;
+    for (unsigned k=0; k<fake_sent; k++) if (fake_messages[k].data[1]==DESK_CLOSE_REQUEST) {
+        struct desk_packet p; assert(fake_messages[k].data[0]==2 && desk_parse(&fake_messages[k],0,NULL,&p)); requested++;
+    }
+    assert(requested==1); desk_drop_client(&d,a);
+    d.now_ns=100+DESK_CLOSE_NS-1; desk_close_timeouts(&d); assert(!term_calls);
+    d.now_ns++; desk_close_timeouts(&d); assert(term_calls==1 && term_pid==42);
+    desk_close_timeouts(&d); assert(term_calls==1);
+    desk_child_exited(&d,42,0); assert(!d.children[0].pid);
+    desk_about(&d); int about=d.about; assert(about>=0 && d.clients[about].internal);
+    desk_about(&d); assert(d.about==about);
+    desk_minimize(&d,about); assert(d.clients[about].minimized);
+    desk_about(&d); assert(!d.clients[about].minimized && d.focus==about);
+    desk_request_close(&d,about); assert(d.about<0);
+    cleanup();
+    puts("PASS shell: hit/z-order, taskbar restore, releases, drag RESYNC, work area, v2 close/backpressure/EOF timeout, About lifecycle");
+}
+static void test_menu(void)
+{
+    setup(320,240);
+    uint8_t elf[52]={0}; memcpy(elf,"\177ELF\1\1\1",7);
+    elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    assert(desk_program_add(&d,"lua",elf,sizeof(elf)));
+    assert(desk_program_add(&d,"demo",elf,sizeof(elf)) && !strcmp(d.programs[0].path,"/bin/demo"));
+    assert(!desk_program_add(&d,"demo",elf,sizeof(elf)));
+    const char *bad[]={"", ".", "..", ".hidden", "a/b", "a\\b", "a:b", "a b", "desktop", "DESKTOP", "\xff"};
+    for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) assert(!desk_program_add(&d,bad[i],elf,sizeof(elf)));
+    char huge[80]; memset(huge,'a',sizeof(huge)); huge[79]=0;
+    assert(!desk_program_add(&d,huge,elf,sizeof(elf)));
+    for (size_t n=0;n<sizeof(elf);n++) assert(!desk_program_add(&d,"truncated",elf,n));
+    for (int k=0;k<7;k++) { uint8_t copy[52]; memcpy(copy,elf,52); copy[k]^=0xff; assert(!desk_program_add(&d,"invalid",copy,52)); }
+    uint8_t copy[52]; memcpy(copy,elf,52); copy[4]=2; assert(!desk_program_add(&d,"elf64",copy,52));
+    for (int i=31;i>=0;i--) { char name[20]; snprintf(name,sizeof(name),"app%02d",i); desk_program_add(&d,name,elf,52); }
+    assert(d.program_count==DESK_MENU_MAX && !strcmp(d.programs[0].name,"app00") && !strcmp(d.programs[15].name,"app15"));
+    desk_shell_enable(&d);
+    struct desk_box menu=desk_menu_box(&d);
+    assert(menu.y>=32 && menu.y+menu.h==208 && menu.x+menu.w<=320);
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        d.clients[i].window=1;
+        struct desk_box task=desk_task_button(&d,i);
+        assert(task.x>=84 && task.x+task.w<=240 && task.w>0);
+    }
+    for (int i=0;i<DESK_CLIENTS;i++) d.clients[i].window=0;
+    cleanup();
+    puts("PASS menu parser: bounded names, ELF filter, self/duplicate rejection, stable sort/cap, taskbar/menu layout");
+}
 int main(void)
 {
-    test_protocol(); test_damage(); test_input(); test_lifecycle(); test_compositor();
+    test_protocol(); test_damage(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }
