@@ -19,9 +19,11 @@ from evidence import EvidenceError
 class DosVMTests(unittest.TestCase):
     def test_selector_and_prerequisites(self):
         self.assertEqual(runner.selector('f3:vm-boot run=Ab12cD34')['phase'], 3)
+        # The platform override is the e500 twin's selector, as for F1/F2 (lead,
+        # 2026-10-11: the qemu-e500 profile appends it to every selector).
+        self.assertEqual(runner.selector('f3:vm-boot run=12345678 platform=e500', 'fw_cfg', True)['platform'], 'e500')
         for request in ('f3:all run=12345678', 'f3:boot run=12345678',
-                        'f3:vm-boot run=12345678 safe=1',
-                        'f3:vm-boot run=12345678 platform=e500'):
+                        'f3:vm-boot run=12345678 safe=1'):
             with self.subTest(request=request), self.assertRaises(ValueError):
                 runner.selector(request, 'fw_cfg', True)
         suite = runner.load(ROOT / 'tests/suites/f3-vm.json')
