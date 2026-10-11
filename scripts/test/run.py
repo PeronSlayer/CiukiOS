@@ -1667,7 +1667,13 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             except (OSError,RuntimeError,ValueError):pass
         # Ownership is held until this sequence finishes, including verification.
         result['cleanup']=teardown(host,unit,process,qmp,cgroup)
-        result['cleanup']['qemu_process_count']=host.unowned_qemu_count()
+        # The wrapper and the scope end before systemd reaps the QEMU process;
+        # allow a few seconds before a lingering process counts as a survivor
+        # (campaigns 11/12 lost safe-mode cases to this race, lead 2026-10-12).
+        count=host.unowned_qemu_count();until=time.monotonic()+5
+        while count and time.monotonic()<until:
+            time.sleep(.05);count=host.unowned_qemu_count()
+        result['cleanup']['qemu_process_count']=count
         if result['cleanup']['qemu_process_count']:
             result['cleanup']['clean']=False
         if qmp:qmp.close()

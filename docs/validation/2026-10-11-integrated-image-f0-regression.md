@@ -637,3 +637,31 @@ device priority. The DOS-window capture still showed the kernel console
 drawn behind the window and a flood of `[work] budget exceeded
 site=storage_work` lines; both fixes (console dark while a display grant
 is held; report limit) are in the next image.
+
+## Thirty-first image: `e0af9210…` (commit `50ba47f`, version 0.9.0 pre-alpha, all F3/F4 rows and the normal-boot cases merged)
+
+Campaign 12 (night of 2026-10-11/12) ran `f3-workloads` (which carries the
+F0–F2 prefix and `f3-vm`), `f4-media` and `f4-audio`; the hardware image
+`build/hw/ciukios-hw.img` (SHA-256
+`ce1453f18de18f933ab1ba5ce512df8e441b38392ae9af6f21a54f0fe3747850`,
+`BOOT.CFG` `safe=0 serial=1`, normal boot) was built from the same tree.
+
+- `f3-workloads`: 185 PASS through the prefix, including the two new
+  `normal-boot-qemu-t23` and `normal-boot-qemu-desktop-2002` cases (boot
+  without a test request to `[supervisor] desktop pid=`, desktop colours
+  verified on the screendump), then `crash-isolation-safe-qemu-min128`
+  FAIL "owned children survived teardown" with the guest run complete
+  (`END status=PASS`) and `cleanup.qemu_process_count=1`: the runner
+  counted the QEMU process in the instant between the wrapper's exit and
+  systemd's reaping. The runner now allows up to five seconds for that
+  count to reach zero. The remaining prefix cases, `f3-vm` and the
+  workload cases did not run; they run again on this image as the scratch
+  suite `zz-night` (campaign 13).
+- `f4-media`: 4 PASS, then `optical-malformed-qemu-t23` FAIL: the probe
+  reports `case=malformed refused=0 result=-5` (the malformed ISO 9660
+  fixture produced EIO instead of a refusal); diagnosis assigned, the
+  other cases run as `zz-media` (campaign 13).
+- `f4-audio`: `audio-native-qemu-t23` and `-qemu-desktop-2002` PASS;
+  `vm-audio-qemu-t23` FAIL with `END status=FAIL error=-14` after a VM
+  stop with `data_loss=1` (the f4-05 probe and VMPLAY.COM pass in the
+  libx86emu guest runner but not under QEMU); diagnosis assigned.
