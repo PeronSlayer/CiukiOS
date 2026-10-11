@@ -200,6 +200,14 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_xms.c"
 #include "../../src/kernel/vm/dosvm_umb.c"
 #include "../../src/kernel/vm/dosvm_ems.c"
+/* f3-02 VGA adapter and f3-05 audio devices, created with every VM since
+ * the F3 merge; the VGA models and presenter link as separate units, as in
+ * the kernel (scripts/test/host_kernel_tests.sh). */
+#include "dosvm_font.inc"
+#include "../../src/kernel/vm/dosvm_vga.c"
+#include "../../src/kernel/vm/dosvm_dma.c"
+#include "../../src/kernel/vm/dosvm_opl.c"
+#include "../../src/kernel/vm/dosvm_sb16.c"
 #include "../../src/kernel/vm/dpmi_desc.c"
 #include "../../src/kernel/vm/dpmi_switch.c"
 #include "../../src/kernel/vm/dpmi_dispatch.c"

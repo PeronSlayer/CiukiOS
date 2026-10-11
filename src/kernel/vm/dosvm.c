@@ -148,7 +148,7 @@ bool dosvm_client(const struct task *t)
 }
 bool dosvm_dpmi_info(struct dosvm_key key, struct dpmi_info *out)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!out || !v || !v->info.key.generation || v->info.state == DOSVM_DEAD) return false;
     dpmi_info_fill(v, out);
     return true;
