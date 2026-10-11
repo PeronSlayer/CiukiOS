@@ -48,6 +48,13 @@ static void invlpg(uint32_t va) { (void)va; }
 static uint32_t *table_va(uint32_t p) { return P2V(p); }
 static uint32_t irq_save(void) { uint32_t f=cpu_flags; cli(); return f; }
 static void irq_restore(uint32_t f) { cpu_flags=f; }
+/* f3-04 architectural seams: LDT register, debug registers, CPUID family. */
+static const void *ldt_loaded; static unsigned ldt_entries;
+static uint32_t debug_dr7, debug_addr[4], debug_dr6;
+void arch_ldt_load(const void *base, unsigned entries) { if (!entries) base=0; ldt_loaded=base; ldt_entries=base?entries:0; }
+void arch_debug_load(const uint32_t a[4], uint32_t dr7) { debug_dr7=dr7; for (unsigned i=0;i<4;i++) debug_addr[i]=dr7?a[i]:0; }
+uint32_t arch_debug_take(void) { uint32_t d=debug_dr6; debug_dr6=0; return d; }
+uint8_t arch_cpu_family(void) { return 6; }
 #include "../../src/kernel/vm/dosvm_internal.h"
 static bool allocation_fails(void) { return ++allocation_calls == fail_at; }
 uint32_t pmm_alloc(void)
@@ -228,6 +235,10 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_dma.c"
 #include "../../src/kernel/vm/dosvm_opl.c"
 #include "../../src/kernel/vm/dosvm_sb16.c"
+#include "../../src/kernel/vm/dpmi_desc.c"
+#include "../../src/kernel/vm/dpmi_switch.c"
+#include "../../src/kernel/vm/dpmi_dispatch.c"
+#include "../../src/kernel/vm/dpmi.c"
 
 static struct dosvm *create(void)
 { struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
@@ -491,10 +502,11 @@ static void test_memory_services(void)
 #include "dosvm_devices_test.inc"
 #include "dosvm_video_test.inc"
 #include "dosvm_audio_test.inc"
+#include "dosvm_dpmi_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;

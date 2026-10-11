@@ -59,6 +59,7 @@ volatile bool g_measure_stop;
  * native timing fixture links without DOS VM instances. */
 extern uint32_t dosvm_task_cr3(const struct task *, uint32_t) __attribute__((weak));
 extern uint32_t dosvm_task_esp0(const struct task *, uint32_t) __attribute__((weak));
+extern void dosvm_task_switch(const struct task *) __attribute__((weak));
 extern void dosvm_tick(void) __attribute__((weak));
 #define vmm_kernel_pd() 0u
 #define tss_set_kernel_stack(value) ((void)(value))

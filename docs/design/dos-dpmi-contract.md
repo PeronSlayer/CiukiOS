@@ -435,3 +435,16 @@ out of release images.
   XMS, EMS and DPMI are not advertised. These are firmware service answers,
   not changes to CIUKIDOS's INT21 implementation. See
   [f3-acceptance.md](f3-acceptance.md) for sources, records and remaining gates.
+
+2026-10-11, directive f3-04 (implementation; QEMU qualification pending):
+
+- `src/boot/floppy_stage1.asm` gains a fourth EXEC return-context slot
+  (kernel, SHELL.COM, COMMAND.COM, program and extender or child), kept
+  outside the EXEC allocator snapshot.
+- INT 21h/48h with BX=0 grants one paragraph instead of failing; DOS/4GW
+  allocates the DPMI host private area this way even when 1687h reports SI=0.
+- DPMI is answered (INT 2Fh/1687h) only in VMs created with
+  `dosvm_config.dpmi` while `DOSVM_DPMI_PUBLIC` is 0. The DOS image adds the
+  f3-04 clients and `SYSTEM\DOS4GW.EXE` (Open Watcom 2.0 runtime, pinned
+  hash, redistribution text not located). Details and sources:
+  [f3-acceptance.md](f3-acceptance.md), section f3-04.

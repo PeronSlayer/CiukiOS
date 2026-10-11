@@ -10,6 +10,7 @@
 #include <ciuki/signal.h>
 #include <ciuki/biosvm.h>
 extern bool dosvm_trap(struct trap_frame *) __attribute__((weak));
+extern bool dosvm_client(const struct task *) __attribute__((weak));
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 
@@ -93,6 +94,19 @@ void trap_dispatch(struct trap_frame *tf)
         return;
     }
     bool from_user = (tf->cs & 3) == 3;
+    /* f3-04: a DOS VM worker running a DPMI client at ring 3 (no VM flag).
+     * Physical IRQs keep their single dispatch/EOI here; every other vector,
+     * INT 80h included, belongs to the VM monitor and never reaches the
+     * native syscall or signal paths (dos-dpmi-contract.md, execution-abi.md). */
+    if (from_user && dosvm_client && dosvm_client(g_current)) {
+        if (tf->vector >= 0x20 && tf->vector < 0x30) {
+            crit_begin();
+            handle_irq(tf);
+            crit_end();
+        }
+        dosvm_trap(tf);
+        return;
+    }
 
     if (tf->vector >= 0x20 && tf->vector < 0x30) {
         crit_begin();
@@ -109,6 +123,8 @@ void trap_dispatch(struct trap_frame *tf)
     } else if (tf->vector == 7) {
         fpu_handle_nm();
     } else if (!from_user) {
+        if (tf->vector == 1 && arch_debug_kernel_trap(tf))
+            return;                     /* VM watchpoint touched by kernel code */
         if (!try_expected(tf))
             panic_frame(tf, "kernel_exception");
     } else {

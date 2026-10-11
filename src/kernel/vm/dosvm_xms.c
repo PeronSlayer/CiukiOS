@@ -162,11 +162,8 @@ void dosvm_memory_close(struct dosvm *v)
     if (!v->as.pd_phys) return;
     /* Restore every owned low page, even windows currently unmapped. This
      * removes all EMS aliases; as_destroy then sees each physical page once. */
-    for (unsigned i=0;i<DOSVM_PAGES;i++) if (v->frames[i]) {
-        uint32_t flags=PTE_U|PTE_W;
-        if ((i>=0xC0 && i<0xC9) || (i>=0xF0 && i<0x100)) flags&=~PTE_W;
-        as_map(&v->as,i*PAGE_SIZE,v->frames[i],flags);
-    }
+    for (unsigned i=0;i<DOSVM_PAGES;i++) if (v->frames[i])
+        as_map(&v->as,i*PAGE_SIZE,v->frames[i],dosvm_low_flags(i));
     v->a20=true;
 }
 
