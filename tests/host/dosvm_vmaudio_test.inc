@@ -322,6 +322,88 @@ static void test_vm_pacing(void)
     dsp_reset(v); destroy(v, true); vq_end(); empty();
 }
 
+/* The transport's idle tail: audio_service's refill policy (audio_refill_lead)
+ * with the AC'97 DMA modelled period by period (start once AUDIO_LEAD periods
+ * are published, one period fetched per 256 frames of clock, the idle tail
+ * stopped after AUDIO_IDLE_TAIL_MS or at an underrun). VMPLAY's stage 3
+ * (QEMU campaign 12, image e0af9210) starts 150 ms after stage 2 ends, while
+ * the idle tail runs: every block must render, as on a stopped transport. */
+struct vt { bool running; uint64_t published, retired, start, base, idle_since; unsigned max_lead; };
+static struct vt vt;
+static void vt_service(void)
+{
+    uint64_t now = g_ticks * 48;
+    if (vt.running) {
+        uint64_t played = now - vt.start;
+        if (played >= vt.published * AUDIO_QUANTUM) { /* the DMA halted at the last valid buffer */
+            CHECK(vt.idle_since);                    /* only the idle tail may underrun */
+            vt.running = false; vt.base = audio.output; vt.published = vt.retired = 0; vt.idle_since = 0;
+        } else { vt.retired = played / AUDIO_QUANTUM; audio.played_output = vt.base + played; }
+    }
+    bool active = audio_vm_active();
+    bool tail_start = !active && vt.running && !vt.idle_since;
+    if (tail_start) vt.idle_since = g_ticks;
+    unsigned limit, n = 0, lead = audio_refill_lead(active, tail_start, audio_vm_attached(), &limit);
+    while ((active || vt.running) && vt.published - vt.retired < lead && n++ < limit) {
+        if (!vt.running) audio.output += AUDIO_QUANTUM;
+        else audio_mix(vq_out, AUDIO_QUANTUM);
+        vt.published++;
+        if (!vt.running && vt.published == AUDIO_LEAD) { vt.running = true; vt.start = now; }
+    }
+    if (vt.published - vt.retired > vt.max_lead) vt.max_lead = (unsigned)(vt.published - vt.retired);
+    if (!active && vt.running && g_ticks - vt.idle_since >= AUDIO_IDLE_TAIL_MS) {
+        vt.running = false; vt.base = audio.output; vt.published = vt.retired = 0; vt.idle_since = 0;
+    } else if (active) vt.idle_since = 0;
+}
+static void vt_ms(struct vg *g, unsigned n) { for (unsigned i = 0; i < n; i++) { ms(1); if (g) vg_service(g); vt_service(); } }
+static unsigned vt_fresh(const struct audio_vm_stats *st, const struct vg *g, unsigned blocks)
+{
+    unsigned fresh = 0;
+    for (unsigned k = 0; k < blocks && k < st->log_count; k++)
+        fresh += st->log[k].frames == 64 && st->log[k].flags == DOSVM_BLOCK_COMPLETE && st->log[k].first[0] == vg_value(g, k, 0);
+    return fresh;
+}
+static void test_vm_idle_tail(void)
+{
+    unsigned limit;
+    CHECK(audio_refill_lead(true, false, true, &limit) == AUDIO_LEAD && limit == 1);
+    CHECK(audio_refill_lead(false, true, false, &limit) == AUDIO_TAIL_LEAD && limit == AUDIO_TAIL_LEAD); /* native-only tail unchanged */
+    audio.ready = true;
+    audio.master = (struct ciuki_mixer_master){ .version = 1, .size = 32, .left = 100, .right = 100 };
+    audio.output = audio.played_output = 0;
+    memset(&vt, 0, sizeof(vt));
+    struct dosvm *v = audio_vm_create(); struct dosvm_key key = dosvm_key(v); unity(v); dsp_reset(v);
+    vt_ms(0, 30);
+    CHECK(!vt.running); /* an idle VM leaves the transport stopped */
+    /* Stage 2 on a stopped transport: 32 blocks of 64 units at 8000 Hz. */
+    struct vg a = { v, 0x30000, 0, 0, 0, 31, 64, false, true };
+    audio_vm_tap_reset(key);
+    vg_start(&a, 8000);
+    for (unsigned t = 0; t < 2000 && (ainfo(v).active || vstats(v).log_count < 32); t++) vt_ms(&a, 1);
+    struct audio_vm_stats st = vstats(v);
+    CHECK(a.serviced == 32 && st.log_count == 32 && vt_fresh(&st, &a, 32) == 32 && !st.late_frames && !st.skips);
+    /* Stage 3, 150 ms later: 16-bit at 12000 Hz, 64-frame blocks (5.3 ms), 8 blocks. */
+    vt_ms(&a, 150);
+    CHECK(vt.running && vt.idle_since);
+    audio_vm_tap_reset(key);
+    struct audio_vm_stats before = vstats(v);
+    struct vg b = { v, 0x30000, 0, 0, 0, 7, 64, true, true };
+    vg_start(&b, 12000);
+    for (unsigned t = 0; t < 2000 && (ainfo(v).active || vstats(v).log_count < 8); t++) vt_ms(&b, 1);
+    vt_ms(&b, 150);
+    st = vstats(v);
+    unsigned fresh = vt_fresh(&st, &b, 8);
+    printf("idle tail: stage3 blocks=%u fresh=%u frames=%llu late=%llu skips=%u skipped=%llu holds=%u max_lead_periods=%u\n",
+           st.log_count, fresh, (unsigned long long)st.pcm.frames, (unsigned long long)(st.late_frames - before.late_frames),
+           st.skips - before.skips, (unsigned long long)(st.skipped_frames - before.skipped_frames), st.holds - before.holds, vt.max_lead);
+    CHECK(b.serviced == 8 && st.log_count == 8 && fresh == 8 && st.pcm.frames == 8 * 64 * 4);
+    CHECK(st.late_frames == before.late_frames && st.skips == before.skips && st.starved == before.starved);
+    vt_ms(&b, AUDIO_IDLE_TAIL_MS + 50);
+    CHECK(!vt.running && audio_vm_attached() && vt.max_lead == AUDIO_LEAD); /* the shallow tail still ends the transport */
+    dsp_reset(v); destroy(v, true);
+    audio.ready = false; empty();
+}
+
 /* CT1745 master x voice (x output gain) and the source gain/mute. */
 static void test_vm_gains(void)
 {
@@ -412,7 +494,7 @@ static void test_vm_opl(void)
 
 static void test_vm_audio(void)
 {
-    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_gains(); test_vm_opl();
+    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_opl();
     audio.ready = false;
     puts("DOS VM audio output: PASS (attach/revoke/release, every PCM layout exact at 2:1, DAC, ADPCM refused, 32 fresh blocks and the 16-bit phase through the mixer, pause gap kept, stalled guest beside native and a second VM, hold/skip/re-anchor without replay, CT1745 and source gains, OPL3 exact against a reference chip, routing, late events, GAP)");
 }

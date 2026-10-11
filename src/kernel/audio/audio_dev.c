@@ -19,6 +19,7 @@ static struct audio_frame quantum[AUDIO_QUANTUM];
 /* f4-05: an active DOS VM source keeps the transport running (weak: the
  * native-only host harness does not link audio/vm_source.c). */
 extern bool audio_vm_active(void) __attribute__((weak));
+extern bool audio_vm_attached(void) __attribute__((weak));
 
 static uint32_t checksum(const struct audio_cfg *record)
 {
@@ -99,8 +100,6 @@ int audio_master_set(struct ciuki_mixer_master *m)
     kmutex_unlock(&control_lock);
     return 0;
 }
-#define AUDIO_TAIL_LEAD 28u /* silence periods kept ahead during the idle tail (BDL holds 31) */
-#define AUDIO_IDLE_TAIL_MS 500u /* silence published after the last source before the transport stops */
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
 void audio_wake(void)
 {
@@ -147,10 +146,13 @@ void audio_service(void)
     /* Active sources keep the latency lead, one period per service. The
      * idle tail (silence only) is cushioned deeper in one burst at its
      * start, before the clients' exits delay this worker (QEMU evidence
-     * 2026-10-11); the burst is a control operation outside the 1 ms budget. */
+     * 2026-10-11); the burst is a control operation outside the 1 ms budget.
+     * While a DOS VM source is attached the tail stays at AUDIO_LEAD
+     * (audio_refill_lead, f4-05). */
     bool tail_start = !active && audio.running && !idle_since;
     if (tail_start) { idle_since = g_ticks; control = true; }
-    unsigned lead = active ? AUDIO_LEAD : AUDIO_TAIL_LEAD, limit = tail_start ? AUDIO_TAIL_LEAD : 1, published_now = 0;
+    unsigned limit, published_now = 0;
+    unsigned lead = audio_refill_lead(active, tail_start, audio_vm_attached && audio_vm_attached(), &limit);
     while (!err && (active || audio.running) && ac97.published - ac97.retired < lead && published_now++ < limit) {
         if (!audio.running) {
             memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;

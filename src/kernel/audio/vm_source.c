@@ -545,6 +545,11 @@ void audio_vm_tap(const struct audio_frame *out, unsigned frames)
     for (unsigned k = 0; k < frames; k++) tap_frame(&ring, out[k].left, out[k].right);
     irq_restore(f);
 }
+bool audio_vm_attached(void)
+{
+    for (unsigned i = 0; i < DOSVM_LIMIT; i++) if (vm_slots[i].state != AUDIO_VM_FREE) return true;
+    return false;
+}
 bool audio_vm_active(void)
 {
     bool any = false;

@@ -9,6 +9,25 @@
 #define AUDIO_LEAD 8u
 #define AUDIO_RATE 48000u
 struct audio_frame { int16_t left, right; };
+/* Refill lead policy of audio_service (audio_dev.c): returns the periods kept
+ * published and sets *limit to the most one service publishes. Active
+ * sources keep AUDIO_LEAD, one period per service; the idle tail (silence
+ * only) is cushioned to AUDIO_TAIL_LEAD in one burst at its start (QEMU
+ * evidence 2026-10-11: the worker is not scheduled for ~130 ms while native
+ * clients exit), except while a DOS VM source is attached: a VM plays on its
+ * own timeline and cannot wait behind ~150 ms of queued silence. Its next
+ * transfer would stop the refill until the cushion drains to AUDIO_LEAD, and
+ * the source would then skip that timeline and drop the PCM as late (f4-05,
+ * QEMU campaign 12: VMPLAY stage 3 started inside the tail). The tail keeps
+ * AUDIO_LEAD then; an underrun ends it as a normal transport stop. */
+#define AUDIO_TAIL_LEAD 28u     /* silence periods kept ahead during the idle tail (BDL holds 31) */
+#define AUDIO_IDLE_TAIL_MS 500u /* silence published after the last source before the transport stops */
+static inline unsigned audio_refill_lead(bool active, bool tail_start, bool vm_attached, unsigned *limit)
+{
+    unsigned tail = vm_attached ? AUDIO_LEAD : AUDIO_TAIL_LEAD;
+    *limit = tail_start ? tail : 1u;
+    return active ? AUDIO_LEAD : tail;
+}
 struct audio_stream {
     struct audio_frame *ring[2];
     uint32_t pages[2], head, queued, phase, rate, format, channels;
