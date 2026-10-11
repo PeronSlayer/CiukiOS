@@ -665,3 +665,32 @@ F0–F2 prefix and `f3-vm`), `f4-media` and `f4-audio`; the hardware image
   `vm-audio-qemu-t23` FAIL with `END status=FAIL error=-14` after a VM
   stop with `data_loss=1` (the f4-05 probe and VMPLAY.COM pass in the
   libx86emu guest runner but not under QEMU); diagnosis assigned.
+
+Campaigns 13–17 (same image `e0af9210…`, scratch suites without the
+prefix, runner with the teardown grace and the explicit `ide-cd` optical
+attach):
+
+- `zz-night` (f3-vm then f3-workloads): `vm-boot`, `vm-memory`,
+  `vm-devices`, `vm-video` PASS on qemu-t23/e500/min128 (12 cases);
+  `vm-window-qemu-desktop-2002` FAIL: the dosbox client's CREATE returned
+  ENOSPC (`dosbox: create: Not enough space` on the console) before any VM
+  existed, so the probe timed out (`END error=-110`); diagnosis assigned.
+- `zz-media` (f4-media without the malformed optical cases): 18 PASS
+  (NTFS twelve cases, optical l1/l2/l3 on both profiles with the explicit
+  ide-cd attach, eject/reinsert included).
+- `zz-night2`: `vm-audio-state-qemu-t23/e500/min128` PASS (first QEMU
+  evidence for f3-05); `dpmi-qemu-t23` FAIL: the DPMI16 client reports
+  `FAIL 0D 02` with most rows failing (`ok=0000001ee67c03dfe1ff3fcf
+  fail=00001fff1d8fffa3ff67fff7`) under TCG while it passes in the
+  libx86emu runner; the probe's screen dump then violated the record
+  grammar (same `\`/`>` defect as the VM probe, fix assigned with the
+  diagnosis).
+- `zz-night3`: `dos4gw-qemu-t23` and `dos4gw-qemu-min128` PASS (20
+  launch/exit loops each, resources released); `doom-qemu-t23` FAIL at the
+  fixture stage (`case=fixture status=error error=-12`, ENOMEM when the
+  160 MiB local fixture disk is attached); diagnosis assigned.
+- `zz-night4`: `wolf3d-qemu-t23` FAIL with the same fixture error.
+- `zz-night5`: `vm-starve-qemu-t23` and `vm-starve-qemu-min128` PASS.
+
+Not yet exercised on QEMU: the f4-05 `vm-audio` cases with the idle-tail
+fix (merged after this image), `doom-sound`, the second DPMI profiles.
