@@ -66,6 +66,12 @@ int dosvm_disk_read(struct dosvm *, uint32_t lba, void *sector);
 int dosvm_disk_write(struct dosvm *, uint32_t lba, const void *sector);
 int dosvm_bios(struct dosvm *, struct v86_frame *, uint8_t vector);
 int dosvm_record_byte(struct dosvm *, uint8_t byte);
+/* f3-02 event ingress. f3-01 installs its per-VM device consumer here.
+ * No second physical input reader is permitted for a native window. */
+struct ciuki_input_event;
+typedef bool (*dosvm_input_handler)(struct dosvm_key, const struct ciuki_input_event *, bool focused);
+void dosvm_input_register(dosvm_input_handler);
+bool dosvm_input_event(struct dosvm_key, const struct ciuki_input_event *, bool focused);
 /* Scheduler/arch ownership hooks, identity for every other task. */
 bool dosvm_trap(struct trap_frame *);
 uint32_t dosvm_task_cr3(const struct task *, uint32_t normal);

@@ -145,7 +145,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     if (ciuki_channel_pair(pair)) return -1;
     int index=-1;
     ciuki_pid_t pid=-1;
-    char *argv[]={(char *)program->name,strcmp(program->name,"demo") ? NULL : "--channel-fd=3",NULL};
+    char *argv[]={(char *)program->name,(strcmp(program->name,"demo") && strcmp(program->name,"dosbox")) ? NULL : "--channel-fd=3",NULL};
     char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",NULL};
     struct ciuki_spawn_fd mapping={pair[1],3};
     if (!fcntl(pair[1],F_SETFD,0)) {

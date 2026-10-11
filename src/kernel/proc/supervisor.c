@@ -4,6 +4,8 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/probe.h>
 #include <ciuki/audio.h>
+#include <ciuki/desktop.h>
+extern void dosvm_client_poll(void) __attribute__((weak));
 #pragma weak audio_mixer_delegate
 
 static const struct supervisor_io_ops *supervisor_io;
@@ -97,6 +99,7 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
             err = proc_strings_add(strings, mixer_env, (uint32_t)length + 1, true);
         }
     }
+    if (!err) supervisor_dosvm_delegate(proc_supervisor(), p, path);
     if (!err) err = proc_stack_build(p->memory, strings, image.entry, thread->tls, &esp);
     if (!err) task_native_frame(thread->task, esp);
     if (file.close) file.close(file.cookie);
@@ -140,6 +143,7 @@ void supervisor_bootstrap(void)
 
 void supervisor_poll(void)
 {
+    if (dosvm_client_poll) dosvm_client_poll();
     if (desktop_pid) {
         struct process *p = proc_find(desktop_pid);
         if (!p || p->state == PROC_STOPPING || p->state == PROC_ZOMBIE) {
@@ -229,4 +233,19 @@ void supervisor_observe_end(void)
     }
     observed_probe[0] = 0;
     observed_pid = 0;
+}
+
+void supervisor_dosvm_delegate(struct process *parent, struct process *child, const char *path)
+{
+    if (strncmp(path, "/bin/dosbox", sizeof("/bin/dosbox"))) return;
+    bool display = false, input = false;
+    if (parent != proc_supervisor()) {
+        for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
+            struct desktop_description *d = desktop_fd(parent, i);
+            if (!d || d->owner != parent->pid) continue;
+            display |= d->kind == DESKTOP_DISPLAY;
+            input |= d->kind == DESKTOP_INPUT;
+        }
+    }
+    child->dosvm_capability = parent == proc_supervisor() || (display && input);
 }

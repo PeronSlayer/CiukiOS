@@ -485,6 +485,7 @@ enum ciuki_syscall {
     CIUKI_SYS_DISPLAY_INFO = 67,
     CIUKI_SYS_THREAD_KILL = 68,
     CIUKI_SYS_DEVCTL = 69,
+    CIUKI_SYS_DOSVM = 70,
 };
 
 /* pack(4) is scoped and restores the includer's previous setting. */
@@ -1072,5 +1073,29 @@ _Static_assert(sizeof(struct ciuki_pthread_condattr) == 8, "ciuki_pthread_condat
 _Static_assert(_Alignof(struct ciuki_pthread_condattr) == 4, "ciuki_pthread_condattr alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_pthread_condattr, clock_id) == 0, "ciuki_pthread_condattr.clock_id offset");
 _Static_assert(__builtin_offsetof(struct ciuki_pthread_condattr, reserved) == 4, "ciuki_pthread_condattr.reserved offset");
+
+/* F3-02: supervisor-delegated DOS window, one VM per native owner. */
+#define CIUKI_DOSVM_VERSION 1u
+#define CIUKI_DOSVM_WIDTH 640u
+#define CIUKI_DOSVM_HEIGHT 480u
+#define CIUKI_DOSVM_CREATE 1u
+#define CIUKI_DOSVM_PRESENT 2u
+#define CIUKI_DOSVM_INPUT 3u
+#define CIUKI_DOSVM_FOCUS 4u
+#define CIUKI_DOSVM_CLOSE 5u
+#define CIUKI_DOSVM_STATUS 6u
+struct ciuki_dosvm_command {
+    uint32_t version;
+    uint32_t size;
+    uint32_t id;
+    uint32_t generation;
+    int32_t surface_fd;
+    uint32_t state;
+    uint32_t focused;
+    uint32_t changed;
+    char name[32];
+    struct ciuki_input_event event;
+    struct ciuki_rect damage;
+};
 
 #endif /* CIUKI_ABI_H */

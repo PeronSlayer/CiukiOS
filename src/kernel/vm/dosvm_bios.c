@@ -34,24 +34,11 @@ static void vm_date(uint64_t elapsed_days, unsigned *year, unsigned *month, unsi
 }
 static void bda16(struct dosvm *v, uint32_t address, uint16_t value)
 { dosvm_write(v, address, &value, sizeof(value)); }
-static void flush_text(struct dosvm *v)
-{ dosvm_write(v, 0xB8000, v->text, sizeof(v->text)); }
-
 void dosvm_putchar(struct dosvm *v, uint8_t c, uint8_t attr)
 {
-    /* Direct guest text stores and BIOS output share the same private page. */
-    dosvm_read(v, 0xB8000, v->text, sizeof(v->text));
-    if (c == 13) v->cursor -= v->cursor % 80;
-    else if (c == 10) v->cursor += 80;
-    else if (c == 8) { if (v->cursor) v->cursor--; }
-    else if (c != 7) v->text[v->cursor++] = ((uint16_t)attr << 8) | c;
-    if (v->cursor >= 2000) {
-        memmove(v->text, v->text + 80, 1920 * sizeof(uint16_t));
-        for (unsigned i = 1920; i < 2000; i++) v->text[i] = ((uint16_t)attr << 8) | ' ';
-        v->cursor -= 80;
-    }
-    flush_text(v);
-    bda16(v, 0x450, (uint16_t)(((v->cursor / 80) << 8) | (v->cursor % 80)));
+    struct v86_frame f = {0};
+    f.tf.eax = 0x0E00 | c; f.tf.ebx = attr;
+    dosvm_vga_bios(v, &f);
 }
 
 static int disk_result(struct dosvm *v, struct v86_frame *f, uint8_t status)
@@ -153,82 +140,6 @@ static int disk_bios(struct dosvm *v, struct v86_frame *f)
     return disk_result(v, f, error ? 0x20 : 0);
 }
 
-static int text_bios(struct dosvm *v, struct v86_frame *f)
-{
-    uint8_t fn = f->tf.eax >> 8, value = f->tf.eax, attr = f->tf.ebx;
-    if ((f->tf.eax & 0xFF00) == 0x4F00) { low(&f->tf.eax, 0x014F); return 0; }
-    switch (fn) {
-    case 0:
-        if ((value & 0x7F) != 3) { carry(f, true); return 0; }
-        if (!(value & 0x80)) {
-            for (unsigned i = 0; i < 2000; i++) v->text[i] = 0x0720;
-            flush_text(v);
-        }
-        v->cursor = 0; bda16(v, 0x450, 0); return 0;
-    case 1: bda16(v, 0x460, f->tf.ecx); return 0;
-    case 2: {
-        unsigned row = (f->tf.edx >> 8) & 255, col = f->tf.edx & 255;
-        if ((f->tf.ebx & 0xFF00) || row >= 25 || col >= 80) { carry(f, true); return 0; }
-        v->cursor = row * 80 + col; bda16(v, 0x450, f->tf.edx); return 0;
-    }
-    case 3:
-        low(&f->tf.edx, ((v->cursor / 80) << 8) | (v->cursor % 80));
-        low(&f->tf.ecx, 0x0607); return 0;
-    case 5: return 0; /* sole page 0 */
-    case 6: case 7: {
-        unsigned top = (f->tf.ecx >> 8) & 255, left = f->tf.ecx & 255;
-        unsigned bottom = (f->tf.edx >> 8) & 255, right = f->tf.edx & 255;
-        if (top > bottom || left > right || bottom >= 25 || right >= 80) { carry(f, true); return 0; }
-        dosvm_read(v, 0xB8000, v->text, sizeof(v->text));
-        unsigned rows = bottom - top + 1, n = !value || value > rows ? rows : value;
-        for (unsigned r = 0; r < rows; r++) for (unsigned c = left; c <= right; c++) {
-            unsigned dst = fn == 6 ? top + r : bottom - r;
-            unsigned src = fn == 6 ? dst + n : dst - n;
-            bool blank = fn == 6 ? src > bottom : dst < top + n;
-            v->text[dst * 80 + c] = blank ? ((uint16_t)(f->tf.ebx >> 8) << 8) | ' ' : v->text[src * 80 + c];
-        }
-        flush_text(v); return 0;
-    }
-    case 8: {
-        uint16_t cell;
-        dosvm_read(v, 0xB8000 + v->cursor * 2, &cell, 2); low(&f->tf.eax, cell); return 0;
-    }
-    case 9: case 0x0A: {
-        unsigned n = (uint16_t)f->tf.ecx;
-        if (n > 2000 - v->cursor) n = 2000 - v->cursor;
-        dosvm_read(v, 0xB8000, v->text, sizeof(v->text));
-        for (unsigned i = 0; i < n; i++)
-            v->text[v->cursor + i] = (fn == 9 ? (uint16_t)attr << 8 : v->text[v->cursor + i] & 0xFF00) | value;
-        flush_text(v); return 0;
-    }
-    case 0x0E: dosvm_putchar(v, value, 7); return 0;
-    case 0x0F: low(&f->tf.eax, 0x5003); f->tf.ebx &= ~0xFF00u; return 0;
-    case 0x11:
-        if (value == 0x30) { f->es = 0xF000; low(&f->tf.ebp, 0x2000); low(&f->tf.ecx, 16); low(&f->tf.edx, 24); }
-        return 0;
-    case 0x12: low(&f->tf.ebx, 0x0010); low(&f->tf.ecx, 0); return 0;
-    case 0x13: {
-        unsigned n = (uint16_t)f->tf.ecx, stride = value & 2 ? 2 : 1;
-        uint16_t off = f->tf.ebp;
-        uint32_t address = segptr(f->es, off);
-        if (n > 2000 || n * stride > 0x10000u - off || !dosvm_range(v, address, n * stride, false))
-            return -EFAULT;
-        unsigned saved = v->cursor;
-        unsigned row = (f->tf.edx >> 8) & 255, col = f->tf.edx & 255;
-        if (row >= 25 || col >= 80) return -EFAULT;
-        v->cursor = row * 80 + col;
-        for (unsigned i = 0; i < n; i++) {
-            uint8_t cell[2];
-            dosvm_read(v, address + i * stride, cell, stride);
-            dosvm_putchar(v, cell[0], stride == 2 ? cell[1] : attr);
-        }
-        if (!(value & 1)) v->cursor = saved;
-        return 0;
-    }
-    default: carry(f, true); return 0;
-    }
-}
-
 int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
 {
     uint16_t ax = f->tf.eax;
@@ -240,7 +151,7 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
         return 0;
     }
     case 9: case 0x1C: return 0;
-    case 0x10: return text_bios(v, f);
+    case 0x10: return dosvm_vga_bios(v, f);
     case 0x11: low(&f->tf.eax, 0x22); return 0;
     case 0x12: low(&f->tf.eax, 640); return 0;
     case 0x13: return disk_bios(v, f);
@@ -330,7 +241,7 @@ int dosvm_bios_init(struct dosvm *v)
     dosvm_write(v, 0x484, &rows, 1); dosvm_write(v, 0x475, &disks, 1);
     bda16(v, 0x485, 16);
     for (unsigned i = 0; i < 2000; i++) v->text[i] = 0x0720;
-    flush_text(v);
+
     v->kbc_output = 3;
     return 0;
 }

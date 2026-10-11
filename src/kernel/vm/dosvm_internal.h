@@ -3,9 +3,11 @@
 #ifndef CIUKI_DOSVM_INTERNAL_H
 #define CIUKI_DOSVM_INTERNAL_H
 #include <ciuki/dosvm.h>
+#include <ciuki/abi.h>
 #include <ciuki/task.h>
 #include <ciuki/storage.h>
 #include <ciuki/sync.h>
+#include "virtual_vga_bios.h"
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
@@ -32,6 +34,16 @@ struct dosvm {
     uint8_t sector[512];
     uint16_t text[80 * 25], keyboard[32];
     unsigned cursor, key_head, key_count;
+    cvga_state vga;
+    cvbios video_bios;
+    cvx_bus video_bus;
+    bool video_bus_fault, video_presented, focused;
+    uint64_t video_tick;
+    uint32_t video_display, video_phase, owner_pid;
+    cvga_geometry video_geometry;
+    uint8_t video_row[640];
+    uint32_t video_pixels[640];
+    char name[32];
     char line[81];
     unsigned line_length;
     bool line_bad;
@@ -41,6 +53,12 @@ struct dosvm {
         void *arg;
     } ports[DOSVM_PORTS];
 };
+struct dosvm *dosvm_lookup(struct dosvm_key);
+int dosvm_vga_init(struct dosvm *);
+int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
+int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
+int dosvm_vga_present(struct dosvm *, int (*row)(void *, unsigned, const void *, unsigned),
+                      void *, uint64_t, struct ciuki_rect *);
 int dosvm_disk_open(struct dosvm *);
 int dosvm_disk_close(struct dosvm *, bool forced);
 int dosvm_bios_init(struct dosvm *);

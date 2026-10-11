@@ -139,3 +139,39 @@ DOSBOOT.IMG SHA-256:
 `13714a2dce32b7456c20c4d1e9c69670367ce7e4021430f79194f87f77518251`.
 These hashes identify static build evidence only; the lead's QEMU acceptance
 is still pending.
+
+## f3-02
+
+Research before implementation (2026-10-11):
+[QEMU 9.2 VGA](https://github.com/qemu/qemu/blob/v9.2.0/hw/display/vga.c),
+`vga_mem_readb/writeb`, confirms that mapped RAM alone cannot implement VGA
+latches, chain-4 or planar write modes. Its retrace implementation uses the
+virtual clock. [VBE 3.0](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/vbe3.pdf)
+defines AL=4Fh, AH=01h for failure. The repository's retained Ciuki models
+already implement the VGA register/memory/BIOS semantics independently; reuse
+them with private VM memory, never with the old Jemm/HDPMI adapters.
+
+Decisions: guard every A0000–BFFFF guest PTE against user access, emulate
+bounded memory instructions through the retained x86 model and route kernel
+memory helpers through the same VGA bus. Private backing remains owned by the
+VM. The synthetic ROM contains deterministic conversions of the existing
+Inconsolata 8×16 console bitmap (OFL-1.1); non-ASCII glyphs use `?`, while
+80×50 uses an 8×8 font obtained by sampling alternate rows. Mode 3 uses
+eight-dot cells. No physical font, mode, port or firmware service is borrowed.
+
+The kernel presenter writes dirty rows into a fixed 640×480 XRGB surface,
+at most once per 33 host ticks. Centre native pixels with the largest fitting
+integer scale; remaining pixels are black. No fractional scaling or aspect
+correction is applied. Text blink/cursor and retrace derive from that same
+host clock (500-tick blink phase, final three ticks of each 33-tick frame
+in retrace); polling never advances time. Unknown custom scanout fails locally.
+
+Native authority and wire layout are recorded in execution-abi.md. One client
+process owns one VM; supervisor polling terminates/reclaims it after owner
+death. Generation validation prevents late input/presentation after stop.
+f3-01 is a parallel dependency: focused events enter a generation-checked
+device hook; the existing core keyboard queue is used until that hook is
+integrated. Full virtual keyboard/mouse semantics remain f3-01 evidence.
+
+Host/static evidence and lead-owned QEMU qualification will be recorded in
+the implementer report; this section makes no runtime PASS claim.
