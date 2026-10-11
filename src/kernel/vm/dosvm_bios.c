@@ -430,6 +430,32 @@ static bool ready_record(struct dosvm *v)
     v->info.state = DOSVM_RUNNABLE;
     return true;
 }
+void dosvm_expect(struct dosvm *v, const char *name)
+{
+    unsigned n = 0;
+    while (name && name[n] && n + 1 < sizeof(v->verdict_name)) { v->verdict_name[n] = name[n]; n++; }
+    v->verdict_name[n] = 0;
+    v->info.verdict_done = v->info.verdict_pass = false;
+    memset(v->info.verdict_detail, 0, sizeof(v->info.verdict_detail));
+}
+static void verdict_line(struct dosvm *v)
+{
+    unsigned n = 0;
+    while (v->verdict_name[n]) n++;
+    if (!n || v->info.verdict_done || v->line_length < n + 5 || memcmp(v->line, v->verdict_name, n) || v->line[n] != ' ')
+        return;
+    const char *rest = v->line + n + 1;
+    unsigned left = v->line_length - n - 1;
+    if (left == 4 && !memcmp(rest, "PASS", 4)) { v->info.verdict_done = v->info.verdict_pass = true; return; }
+    if (left < 4 || memcmp(rest, "FAIL", 4)) return;
+    v->info.verdict_done = true;
+    v->info.verdict_pass = false;
+    unsigned k = 0;
+    for (unsigned i = 5; i < left && k + 1 < sizeof(v->info.verdict_detail); i++) {
+        char c = rest[i];
+        v->info.verdict_detail[k++] = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ? c : '_';
+    }
+}
 int dosvm_record_byte(struct dosvm *v, uint8_t byte)
 {
     if (v->info.state >= DOSVM_STOPPING) return -V86_EIO;
@@ -451,6 +477,7 @@ int dosvm_record_byte(struct dosvm *v, uint8_t byte)
         } else if (v->line_length >= 13 && !memcmp(v->line,"VMMEMORY FAIL",13)) {
             v->info.memory_done=true; v->info.memory_pass=false;
         }
+        verdict_line(v);
         unsigned parts = (v->line_length + 47) / 48;
         for (unsigned part = 0; part < parts; part++) {
             char encoded[97];

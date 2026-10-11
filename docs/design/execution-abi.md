@@ -1122,3 +1122,27 @@ periods remain owned. SET_FORMAT requires reset after the first queued frame.
 AUDIO open additionally permits ENODEV/ENOMEM; byte writes retain F2 positive
 partial-count precedence over EINTR/EIO. Device seeks/positioned I/O: ESPIPE.
 No ioctl, poll/select, recording or master authority through public opens.
+
+## F3-04 amendment: DPMI client entry path (2026-10-11)
+
+**[F3]** GDT index 8 (selector 40h) is the per-VM LDT descriptor. It is
+loaded with LLDT by `dosvm_task_switch` (called from the scheduler after
+`ESP0` is set) when a DOS VM worker with an active DPMI client is switched
+in, and LDTR is null for every other task; F2's TLS descriptor stays at
+index 7. The F0 protection probe now expects a nine-entry GDT, LDTR null and
+index 8 not present outside a DPMI worker.
+
+**[F3]** DPMI clients run at CPL 3, IOPL 0, EFLAGS.VM=0, in the VM's address
+space and LDT. `INT n` through the DPL 0 gates arrives as #GP(n*8+2) and is
+decoded by the VM monitor (INT 31h services, virtual interrupts); `INT3`
+and `INT 80h` use their DPL 3 gates and are delivered to the client's
+protected-mode vectors 3 and 80h. `trap.c` routes every trap of a worker
+whose saved frame is a client frame (`dosvm_client`) to `dosvm_trap` before
+the native fault and syscall paths, after acknowledging hardware IRQs; a
+DPMI client never reaches `syscall_dispatch`. Kernel-mode debug traps caused
+by a VM's DR0–DR3 watchpoints are dismissed with RF; the debug registers are
+loaded per VM by the same switch hook.
+
+**[F3]** `v86_enter` copies a 92-byte V86 frame when EFLAGS.VM is set and a
+76-byte ring-3 frame otherwise; the VM worker re-enters after every mode
+change. Every client frame passes `dpmi_frame_check` before the kernel IRET.

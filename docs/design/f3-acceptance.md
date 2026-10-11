@@ -397,3 +397,188 @@ with `reason=2` also emits `group=vm_fault` (AX…BP, DS, ES, SS:SP) and three
 `group=vm_stack part=N` rows with sixteen stack words each. Guest addresses
 map to the NASM listings: the stage-1 loader runs at linear 8000h, the DOS
 kernel is loaded at 9000h and relocated to 3000h (listing offset + 3000h).
+
+## f3-04
+
+Kernel-owned DPMI 0.9 host (directive f3-04). Implementation:
+`src/kernel/vm/dpmi.c` (discovery, entry, termination, services, V86 hooks),
+`dpmi_desc.c` (LDT and descriptor checks, rows 0000h–000Dh), `dpmi_switch.c`
+(transition records, 0300h–0306h, host-issued DOS calls), `dpmi_dispatch.c`
+(protected-mode traps, interrupts, exceptions, CLI/STI/HLT/I/O emulation,
+watchpoints); `ciuki/dpmi.h` is kernel-internal (no native ABI).
+
+### Research (checked 2026-10-11)
+
+- [DPMI 0.9 Committee specification](https://github.com/OpenRakis/Spice86/wiki/DPMI-0.9-Specs):
+  INT 2Fh/1686h and 1687h, entry registers and initial selectors, the
+  locked-stack rules for hardware interrupts and exceptions (sections 4 and
+  10.3/10.4: the exception handler returns with a far return and "the original
+  SS:(E)SP, CS:(E)IP and flags on the stack ... will be restored"), 0300h–0302h
+  structures, 0303h callbacks (procedure entered with interrupts disabled,
+  DS:(E)SI = real-mode stack, ES:(E)DI = structure, return by IRET), 0305h/
+  0306h register conventions, virtual IF services 0900h–0902h.
+- [DPMI 1.0 specification](https://sudleyplace.com/dpmione/dpmispec1.0.pdf)
+  for the 1.0-only rows refused here and the 0.90 version encoding
+  (DH=0, DL=90 decimal = 5Ah), and the
+  [DJGPP DPMI index](https://www.delorie.com/djgpp/doc/dpmi/ch5.n.html) for
+  numbering and per-function error outputs.
+- [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+  Vol. 3A: segment descriptors, LDT/LLDT, privilege checks on segment loads
+  (ch. 3, 5); IDT gates, `INT n` through a DPL 0 gate raising #GP with error
+  code `n*8+2` (IDT bit), error codes of #GP/#NP/#SS/#TS (ch. 6); debug
+  registers DR0–DR3/DR6/DR7 and RF (ch. 17). Vol. 2: ENTER, IRET at CPL 3
+  (IF and IOPL not restored when IOPL < CPL), LAR/LSL/VERR/VERW.
+- DOS/4GW: `binw/dos4gw.doc` of Open Watcom 2.0 (the DOS16M switch mode is
+  set automatically when DPMI is active); without HDPMI, VCPI or raw XMS
+  access in a Ciuki VMM VM the extender can only run as a client of this
+  host. Redistribution: [Watcom bundled the royalty-free DOS/4GW runtime
+  for programs built with Watcom C/C++](https://en.wikipedia.org/wiki/DOS/4G);
+  no redistribution text for the exact 1.97 binary was found in the
+  Open Watcom 2.0 tree (open question, below).
+- [libx86emu](https://github.com/wfeldt/libx86emu) 3.7 for the host runner;
+  its `ENTER` sizes the frame-pointer push by the stack size instead of the
+  operand size (`ops.c`, `x86emuOp_enter`), which corrupted DOS/4GW's 16-bit
+  kernel on its 32-bit stack until the runner emulated ENTER itself.
+
+### Decisions
+
+- **Advertisement.** `DOSVM_DPMI_PUBLIC` (`ciuki/dpmi.h`) is 0: INT 2Fh/1687h
+  is answered only in VMs created with `dosvm_config.dpmi` (the `f3:dpmi`
+  probe). The lead sets it to 1 when `f3:dpmi` passes on qemu-t23, qemu-e500
+  and qemu-min128. 1687h returns AX=0, BX=1, CL = CPU family (CPUID, 3–6),
+  DX=005Ah, SI=0 (no host private area) and ES:DI=F000:1040h. 1686h returns
+  AX=0 in protected mode.
+- **Entry and clients.** The real-mode entry stub (INT FEh in the VM ROM,
+  page F1000h) asks the personality for the PSP (host-issued INT 21h/62h),
+  then switches: CS/DS/SS selectors for the caller's segments (64 KiB),
+  ES = PSP selector (256 bytes), PSP:2Ch replaced by an environment selector
+  and restored at termination. The first client fixes the width; an
+  opposite-width nested entry fails with CF and changes nothing. Up to four
+  nested clients per VM; each owns its selectors, memory blocks, DOS blocks,
+  callbacks and watchpoints. Clients run at CPL 3 with IOPL 0 and EFLAGS.VM=0
+  in the VM's address space; every port access is emulated against the VM's
+  virtual devices.
+- **LDT.** One 1024-entry LDT per VM (8 KiB of kernel memory), loaded through
+  GDT index 8 (selector 40h) by the scheduler hook `dosvm_task_switch` when a
+  DPMI worker is switched in, and unloaded otherwise. Indices 0–15 are kept
+  for 000Dh; client allocations start at 16; the host's code and locked-stack
+  selectors and 32 callback stack selectors occupy the top. Only DPL 3 data
+  or non-conforming code descriptors are accepted (no system descriptors,
+  gates, conforming code or DPL < 3); base and limit are free, page
+  permissions remain the boundary. Aliases from 0002h are VM-owned and freed
+  when the last client exits.
+- **Interrupt path.** INT n at CPL 3 reaches the kernel as #GP(n*8+2)
+  because the IDT gates are DPL 0; INT3 and INT 80h use their DPL 3 gates
+  and are delivered to the client's protected-mode vectors 3 and 80h; a
+  DPMI client never reaches the native syscall path. `trap.c` routes every
+  trap of a worker running a client frame (`dosvm_client`) to `dosvm_trap`;
+  hardware IRQs are acknowledged by the kernel first.
+- **Stacks.** Hardware interrupts, exceptions and callbacks run on a 16 KiB
+  locked stack allocated from the VM's pool (segment-limit guarded, LIFO
+  per nesting level). Real-mode reflections use a host stack at C600:2000
+  (pages C6000h–C7FFFh made writable, outside the UMB arena and EMS frame),
+  512 bytes per level. 32 transition records per VM; exhaustion fails the
+  service with CF or, inside a fault path, terminates only the VM.
+- **Virtual IF and CLI/STI.** The client's CLI/STI/PUSHF/POPF/IRET IF state
+  is the monitor's virtual IF (0900h–0902h share it). The STI shadow is
+  address based (the CS:EIP after STI), not TF based: a trap-flag shadow
+  leaked TF into PUSHF images under DOS/4GW.
+- **A20** is forced on while a client is in protected mode and the V86
+  state is restored on every return to real mode.
+- **Exception frames** are read at the current SS:ESP after the far return
+  (or below the return address when the handler chains to the host default),
+  not at the address the host pushed: DOS/4GW's error path moves the frame
+  before returning. Interrupt and callback returns restore the interrupted
+  context from the kernel record, so handlers may IRET from another stack;
+  a return through the wrong host stub or without its record terminates the
+  VM. Every frame returned to a client passes `dpmi_frame_check` (CS/SS/EIP
+  valid for the IRET, unusable data selectors zeroed, IOPL 0, VM 0, IF 1).
+- **Termination.** Protected-mode INT 21h/4Ch, 00h, 31h, INT 20h/27h and the
+  V86 INT 21h/4Ch of the client's PSP reach one cleanup path: nested records
+  unwound, the environment segment restored, memory blocks, DOS blocks,
+  callbacks, watchpoints and selectors freed, real vectors restored, DPMI
+  state reset when the last client exits. Faults unwind all nesting without
+  guest help.
+- **V86 monitor.** DOS VMs keep a virtual IOPL/NT image (`v86.h` `vflags`):
+  PUSHF/POPF in V86 report what the guest last wrote; DOS/16M's CPU check
+  ("protected mode available only with 386 or 486") needs IOPL bits to be
+  writable as on a real 386 in real mode.
+
+### Personality changes (CIUKIDOS, `src/boot/floppy_stage1.asm`)
+
+- A fourth EXEC return-context slot (`saved_*4`, outside the 352-byte EXEC
+  snapshot): kernel → SHELL.COM → COMMAND.COM → program → extender or child
+  needs four nested frames; the fourth overwrote slot 3 before.
+- INT 21h/48h with BX=0 grants one paragraph instead of failing: DOS/4GW
+  allocates the host private area (1687h SI paragraphs) with INT 21h/48h
+  even when SI=0 and stopped with "DPMI host error" on the refusal.
+- The termination trampoline is chosen by the caller's CS against the COM
+  load segment, so the host's protected-mode INT 21h/4Ch issues the real-mode
+  call with the client's real-mode return address saved at entry.
+
+### Payloads and probe
+
+`scripts/build_dos_image.py` adds `\DPMI16.COM` and `\DPMI32.COM`
+(`src/probes/dos/dpmi_client.asm`, BITS32=0/1), their nested children
+`\DPMICH16.COM`/`\DPMICH32.COM`, the fault client `\DPMIFLT.COM`
+(`dpmi_fault.asm`: LGDT inside a callback at depth 2), `\DPMI4GW.EXE`
+(`src/probes/vm/dpmi_dos4gw.c`, `wcl386 -zq -bt=dos -l=dos4g`, Open Watcom
+2.0 under `/opt/watcom`, deterministic with a fixed output name) and
+`\SYSTEM\DOS4GW.EXE` (pinned SHA-256
+`b8265123ac8a189637448618409ef3ecd2e9f3e1a47062c685a02240f688dec1`, found
+through the CIUKIDOS PATH). The DOS manifest records them and a `dos4gw`
+block (client, extender, hash, recipe, redistribution status). The 0.8
+DOS/4GW probes beside it (`dpmi_ports.c`, `dpmi_lifetime.c`, `dpmi_fault.c`,
+`dpmi_video.c`) report on COM1 and depend on the 0.8 HDPMI session adapters
+in `src/vm/`; COM1 and the VGA registers are not virtual devices of the F3 VM
+before f3-02. `dpmi_dos4gw.c` keeps their interrupt (protected-mode IRQ0 hook
+with chaining), port (PIC) and lifetime (heap, DPMI blocks and selectors,
+file I/O, normal exit) checks on the record port; the Mode-Y register checks
+of `dpmi_ports.c` belong with f3-02.
+
+Probe `f3:dpmi` (`src/kernel/probes/f3_probes_dpmi.c`, after `vm-devices`
+in the F3 table and sweep): `group=dos_payload` hashes of the seven files
+read from the VM's FAT16 disk (the runner compares them with
+`dos.payloads` of the image manifest), then DPMI16 and DPMI32 each in a fresh
+VM (`case=client` with verdict, entries and terminations, `case=counters`,
+`case=rows` with `ok_all`, `refused`, `invalid` computed from the host's row
+bitmaps, `case=release` after the exit), DPMI4GW (`case=client`,
+`case=counters`, `case=dos4gw` with the extender path, version and
+redistribution status, `case=release`), a VM without the flag where DPMI16 reports
+`FAIL 01 01` (`case=gate`) and serves as witness while DPMIFLT faults in
+another VM (`case=fault`), and `case=cleanup` against the ledger. Each
+section destroys its own VMs and the later sections run after a failure,
+so one QEMU run reports the whole row (the first error decides). Suite
+`f3-vm.json`: `dpmi-qemu-t23`, `dpmi-qemu-e500`, `dpmi-qemu-min128`.
+
+### Host verification (not QEMU evidence)
+
+- `tests/host/dosvm_dpmi_test.inc` (in `dosvm_test`): descriptor and
+  selector services, interrupts and translation, termination, callbacks and
+  raw switches, memory/paging, DOS memory through a fake personality, IRQ
+  and exception dispatch (including moved exception frames and wrong-stub
+  returns), I/O and watchpoints, 16 nested levels and exhaustion, stale
+  handlers and frames, 32-bit clients and nested cleanup, INT 1Ch/23h/24h
+  reflection.
+- `tests/host/dosvm_guest.c` + `dosvm_guest_cpu.c`: boots the real
+  `DOSBOOT.IMG` in one VM with the production DOS VM, BIOS, XMS/EMS and DPMI
+  code and libx86emu as the CPU, types the payload commands and reports
+  their verdicts and the host state; run by `host_kernel_tests.sh` when
+  libx86emu and an image with these payloads exist. On 2026-10-11 DPMI16
+  with the VM's DPMI flag cleared reported `FAIL 01 01` (no host), DPMI16,
+  DPMI32 and DPMI4GW passed and DPMIFLT stopped its VM with #GP at depth 2,
+  every DPMI resource released after each exit. The runner found the
+  personality and V86 defects listed above before any QEMU run.
+
+### Limitations and open questions
+
+- Mouse (INT 33h) callbacks are delivered only while the client is in real
+  mode; protected-mode delivery is deferred to f3-06 workloads.
+- Host page-fault resolution before the client's 0Eh handler has no
+  producer yet; f3-02's VGA aperture will need it.
+- CIUKIDOS terminations that do not pass through INT 21h/4Ch (internal
+  aborts) are not intercepted; EXEC nesting deeper than four frames still
+  exceeds the personality.
+- DOS/4GW 1.97 redistribution text not located; the payload stays a local
+  test client until the owner decides.
+- Promotion: `DOSVM_DPMI_PUBLIC` stays 0 until the QEMU cases pass.

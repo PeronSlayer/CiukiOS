@@ -22,6 +22,7 @@ ALLOWED = {
     'probes/f4_probes_audio.c', # f4-01 native audio controller
     'probes/f3_probes_vm.c',
     'probes/f3_probes_devices.c', # f3-01 DOS device controller (f3:vm-devices)
+    'probes/f3_probes_dpmi.c', # f3-04 DPMI host row (f3:dpmi)
     'vm/dosvm.c',         # f3-00 admission/lifecycle reports, guarded by active probe scope
     'vm/dosvm_bios.c',    # f3-00 bounded, escaped DOS record channel
     'drivers/ata_probe.c',

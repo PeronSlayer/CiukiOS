@@ -13,6 +13,7 @@
 /* Optional in the standalone F0/F1 host scheduler harnesses. */
 extern uint32_t dosvm_task_cr3(const struct task *, uint32_t) __attribute__((weak));
 extern uint32_t dosvm_task_esp0(const struct task *, uint32_t) __attribute__((weak));
+extern void dosvm_task_switch(const struct task *) __attribute__((weak)); /* f3-04 LDT/watchpoints */
 extern void dosvm_tick(void) __attribute__((weak));
 
 extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
@@ -287,6 +288,7 @@ void schedule(void)
     uint32_t esp0 = biosvm_task_esp0(next, (uint32_t)next->kstack + KSTACK_SIZE);
     write_cr3(dosvm_task_cr3 ? dosvm_task_cr3(next, cr3) : cr3);
     tss_set_kernel_stack(dosvm_task_esp0 ? dosvm_task_esp0(next, esp0) : esp0);
+    if (dosvm_task_switch) dosvm_task_switch(next);
     proc_task_switch(next);
     fpu_task_switch(next);
     crit_end();                 /* a switch suspends the caller's critical section */

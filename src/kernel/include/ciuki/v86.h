@@ -61,6 +61,7 @@ struct v86 {
     enum v86_state state;
     uint64_t deadline, ticks;
     bool vif, shadow;
+    uint16_t vflags; /* DOS VMs: guest-visible IOPL/NT (bits 12-14), never applied to the CPU */
     bool track_boundaries; /* DOS: software MOV-SS tracking, firmware unchanged */
     uint16_t shadow_cs, shadow_ip, shadow_next; /* shadow_next: successor of a MOV SS/POP SS shadow instruction */
     uint16_t sentinel_cs, sentinel_ip, sentinel_ss, sentinel_sp;

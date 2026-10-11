@@ -42,6 +42,36 @@ def assemble(source, output, definitions=None):
     return output.read_bytes()
 
 
+# f3-04 pinned DOS/4GW client: Open Watcom 2.0 wcl386 (the 0.8 recipe of
+# scripts/build_pmirqsb_dos4gw.sh) and the extender shipped with it, found
+# by the stub through the CIUKIDOS PATH (C:\SYSTEM). Same output name in a
+# fresh directory gives byte-identical builds (the module name is embedded).
+WATCOM = Path("/opt/watcom")
+DOS4GW_SHA256 = "b8265123ac8a189637448618409ef3ecd2e9f3e1a47062c685a02240f688dec1"
+DOS4GW_STATUS = ("DOS/4GW 1.97 runtime from Open Watcom 2.0 binw/dos4gw.exe, distributed with "
+                 "Open Watcom for applications it builds (Tenberry); shipped by the 0.8 images; "
+                 "exact 1.97 redistribution text not located (open question, f3-acceptance.md f3-04)")
+
+
+def watcom_build(source, name, work):
+    wcl = WATCOM / "binl64/wcl386"
+    extender = WATCOM / "binw/dos4gw.exe"
+    if not wcl.is_file() or not extender.is_file():
+        raise SystemExit(f"missing Open Watcom (wcl386, binw/dos4gw.exe) under {WATCOM}: required for {name}")
+    folder = work / ("watcom-" + name.split(".")[0].lower())
+    folder.mkdir()
+    env = {"WATCOM": str(WATCOM), "INCLUDE": str(WATCOM / "h"),
+           "PATH": f"{WATCOM / 'binl64'}:{WATCOM / 'binl'}:/usr/bin:/bin"}
+    stem = name.split(".")[0]
+    subprocess.run([str(wcl), "-zq", "-bt=dos", "-l=dos4g", f"-fo={stem}.o", f"-fe={name}", str(ROOT / source)],
+                   cwd=folder, env=env, check=True, stdout=subprocess.DEVNULL)
+    data = (folder / name).read_bytes()
+    runtime = extender.read_bytes()
+    if hashlib.sha256(runtime).hexdigest() != DOS4GW_SHA256:
+        raise SystemExit("DOS4GW.EXE differs from the pinned Open Watcom 2.0 runtime")
+    return data, runtime
+
+
 def entry(name, attr, cluster, size):
     # All fields, including directory and file timestamps, are deterministic.
     record = bytearray(32)
@@ -140,6 +170,14 @@ def build(out=None):
                              ("vmdevices", "VMDEV.COM")):
             files["/" + name] = assemble(f"src/probes/doscompat/{source}.asm", work / name)
         files["/VMMEMORY.COM"] = assemble("src/probes/dos/vm_memory.asm", work / "VMMEMORY.COM")  # f3-03 memory conformance payload
+        # f3-04 DPMI clients: 16/32-bit conformance, nested children, fault, DOS/4GW.
+        for width in (16, 32):
+            files[f"/DPMI{width}.COM"] = assemble("src/probes/dos/dpmi_client.asm", work / f"DPMI{width}.COM",
+                                                  {"BITS32": int(width == 32)})
+            files[f"/DPMICH{width}.COM"] = assemble("src/probes/dos/dpmi_child.asm", work / f"DPMICH{width}.COM",
+                                                    {"BITS32": int(width == 32)})
+        files["/DPMIFLT.COM"] = assemble("src/probes/dos/dpmi_fault.asm", work / "DPMIFLT.COM")
+        files["/DPMI4GW.EXE"], files["/SYSTEM/DOS4GW.EXE"] = watcom_build("src/probes/vm/dpmi_dos4gw.c", "DPMI4GW.EXE", work)
         candidate = work / "DOSBOOT.IMG"
         write_fat16(candidate, boot, loader, files)
         subprocess.run(["fsck.fat", "-n", str(candidate)], check=True)
@@ -153,7 +191,10 @@ def build(out=None):
                 "geometry": GEOMETRY, "personality": PERSONALITY,
                 "shell": "src/com/shell.asm COMMAND_COMPAT=1; dosvm_shell.asm AUTOEXEC/exit wrapper",
                 "payloads": [{"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-                             for name, data in sorted(files.items())]}
+                             for name, data in sorted(files.items())],
+                "dos4gw": {"client": "/DPMI4GW.EXE", "extender": "/SYSTEM/DOS4GW.EXE",
+                           "extender_sha256": DOS4GW_SHA256, "redistribution": DOS4GW_STATUS,
+                           "recipe": "wcl386 -zq -bt=dos -l=dos4g (Open Watcom 2.0)"}}
     out.with_suffix(".json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     print(f"T1 DOS PASS: FAT16, CIUKIDOS header, {len(files)} payloads read back; SHA256 {manifest['image_sha256']}")
     return out, manifest

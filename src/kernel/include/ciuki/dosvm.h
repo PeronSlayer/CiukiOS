@@ -22,6 +22,7 @@ struct dosvm_config {
     uint16_t ems_frame; /* zero/E000h default, D000h alternative */
     bool disable_umb;
     const char *probe; /* record owner for admission/stop/guest rows; NULL = "vm-boot" */
+    bool dpmi;         /* f3-04 staged testing: answer INT 2Fh/1687h before DOSVM_DPMI_PUBLIC */
 };
 /* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
  * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after
@@ -54,6 +55,10 @@ struct dosvm_info {
     uint32_t pool_quota, pool_used;
     bool memory_done, memory_pass;
     uint32_t xms_calls, ems_calls;
+    /* f3-04: verdict of the payload named by dosvm_expect(): "<NAME> PASS"
+     * or "<NAME> FAIL <detail>" on the record port (data, not evidence). */
+    bool verdict_done, verdict_pass;
+    char verdict_detail[20];
 };
 struct dosvm_ledger { uint32_t vms, tasks, pages, handles, devices; uint64_t reserved, resident; };
 /* Pure arithmetic uses free physical bytes AFTER firmware/kernel/driver,
@@ -87,8 +92,11 @@ int dosvm_disk_read(struct dosvm *, uint32_t lba, void *sector);
 int dosvm_disk_write(struct dosvm *, uint32_t lba, const void *sector);
 int dosvm_bios(struct dosvm *, struct v86_frame *, uint8_t vector);
 int dosvm_record_byte(struct dosvm *, uint8_t byte);
+void dosvm_expect(struct dosvm *, const char *name);   /* resets the verdict latch */
 /* Scheduler/arch ownership hooks, identity for every other task. */
 bool dosvm_trap(struct trap_frame *);
+bool dosvm_client(const struct task *);       /* f3-04: worker running a DPMI client frame */
+void dosvm_task_switch(const struct task *);  /* f3-04: per-VM LDT and watchpoints */
 uint32_t dosvm_task_cr3(const struct task *, uint32_t normal);
 uint32_t dosvm_task_esp0(const struct task *, uint32_t normal);
 #endif

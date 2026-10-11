@@ -190,6 +190,24 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=
     "$root/src/kernel/lib/fmt.c" -o "$out/dosvm_test"
 "$out/dosvm_test"
 
+# f3-04 guest runner: the real DOSBOOT.IMG on the production DOS VM and DPMI
+# host code with libx86emu as the CPU (pre-QEMU check, not QEMU evidence).
+# Optional: needs libx86emu and an already built build/f0/dos/DOSBOOT.IMG.
+dos_image="$root/build/f0/dos/DOSBOOT.IMG"
+if [[ -f /usr/include/x86emu.h && -f "$dos_image" ]] && grep -q '"/DPMI4GW.EXE"' "${dos_image%.IMG}.json"; then
+    clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
+        -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_guest.c" \
+        "$root/tests/host/dosvm_guest_cpu.c" "$root/src/kernel/lib/fmt.c" -lx86emu -o "$out/dosvm_guest"
+    if ! (cd "$root" && timeout 600 "$out/dosvm_guest" "$dos_image" 'gate:\DPMI16.COM' DPMI16 '\DPMI16.COM' DPMI16 '\DPMI32.COM' DPMI32 \
+            '\DPMI4GW.EXE' DPMI4GW 'fault:\DPMIFLT.COM' DPMIFLT > "$out/dosvm_guest.log" 2>&1); then
+        tail -n 40 "$out/dosvm_guest.log"
+        exit 1
+    fi
+    tail -n 1 "$out/dosvm_guest.log"
+else
+    echo "dosvm guest runner: SKIP (no libx86emu headers, or no DOSBOOT.IMG with the f3-04 payloads)"
+fi
+
 # F1 firmware queue: fake-time scheduler and the existing production VM fakes.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_test"
