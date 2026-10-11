@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 # Rendered screens (sha256 of the raw XRGB array: 320x240 text area harness, 640x440 application),
 # produced by the production renderer and reviewed as screenshots on the f2-31 toolkit
 # (2026-10-11); a change here is a visible change of CiukNote or of libdeskui.
+# Re-pinned 2026-10-12 after review: cn-open-tests shows text-file icons from the Tango store.
 TEXTAREA_SCREENS = {
     "ta-bold.xrgb": "7805646b995636522bddc91f90e12a5a63923b0dfa083bcb68782c2f50d68f3d",
     "ta-plain.xrgb": "d832afc19218ae89624ee09457a701af1087c644edc79f22b4c5d2b59c2112d3",
@@ -35,7 +36,7 @@ APP_SCREENS = {
     "cn-menu-edit.xrgb": "6872c1ccb6d46ef59fb4e6547b0e7fd386849e00cbf4deffedebc004c9ba24e1",
     "cn-menu-file.xrgb": "69f3df0b2d8f1a72284aa9dd6086622c15e93900217ccd391aeb5c5fe6424bf5",
     "cn-open-root.xrgb": "e5e4c4fabb866f7e9d1accb65ca0fb6565dc51f14f89cc03c7cdac95bb54fb6d",
-    "cn-open-tests.xrgb": "b9f16a0098a6a9ebb297c013d9c2282be73d76279344eba9d221de79abf59672",
+    "cn-open-tests.xrgb": "e6136565acf6f8f05dd56b7af2872bcdfbb5cfea7c23bb0da2cd4236f9c4e33f",
     "cn-prompt-changes.xrgb": "b77da3d38ab87a0c1f04affa70c7870f044681687b51dd8d11af64015a17a632",
     "cn-replace-bar.xrgb": "4e9ff509a253865e28b293a4e3829a3765174279dd7f56a5df6d5d9f97eb0ccd",
     "cn-save-page.xrgb": "cc86442ce05aeffe194670da6a52ea6b6a8ed11f369547aac553591fdd648c08",
@@ -61,7 +62,8 @@ FLAGS = ["-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra
 INCLUDES = ["-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/ciuknote"), "-I", str(ROOT / "apps/desktop"),
             "-I", str(ROOT / "src/kernel/include")]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
-           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c"]
+           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c",
+           "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 APP = [*TOOLKIT, "apps/ciuknote/app.c", "apps/ciuknote/doc.c", "tests/host/desktop/ciuknote_test.c"]
 
 
@@ -70,6 +72,9 @@ def load(name, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+ICONS = load("ciuknote_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")
 
 
 def case():
@@ -93,7 +98,8 @@ class CiuknoteTests(unittest.TestCase):
     def compile(self, folder, name, sources):
         binary = folder / name
         env = dict(os.environ, TMPDIR=str(folder))
-        subprocess.run(["clang", *FLAGS, *INCLUDES, *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
+        subprocess.run(["clang", *FLAGS, *INCLUDES, *ICONS.defines(), *(str(ROOT / s) for s in sources), "-o", str(binary)],
+                       check=True, env=env)
         return binary
 
     def run_binary(self, folder, binary, *args):

@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * Files controller: layout, menus, panes, selection, operations and jobs. */
 #include "app.h"
-#include "../desktop/shell_icons.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,31 +122,12 @@ static void checkpoint(struct files_app *a, int stage)
     if (a->checkpoint) a->checkpoint(a, stage);
 }
 
-/* ---- icons ---- */
-static const uint32_t *icon16(const struct fm_entry *e)
-{
-    switch (fm_kind(e)) {
-    case FM_KIND_FOLDER: return desk_icon_folder;
-    case FM_KIND_TEXT: return desk_icon_text;
-    case FM_KIND_APP: return desk_icon_run;
-    case FM_KIND_IMAGE: return desk_icon_image;
-    case FM_KIND_AUDIO: return desk_icon_audio;
-    case FM_KIND_SCRIPT: return desk_icon_script;
-    default: return desk_icon_generic;
-    }
-}
-static const uint32_t *icon32(const struct fm_entry *e)
-{
-    switch (fm_kind(e)) {
-    case FM_KIND_FOLDER: return desk_icon_folder32;
-    case FM_KIND_TEXT: return desk_icon_text32;
-    case FM_KIND_APP: return desk_icon_run32;
-    case FM_KIND_IMAGE: return desk_icon_image32;
-    case FM_KIND_AUDIO: return desk_icon_audio32;
-    case FM_KIND_SCRIPT: return desk_icon_script32;
-    default: return desk_icon_generic32;
-    }
-}
+/* ---- icons: Tango store (libdeskui du_icon, icon_map.c) ---- */
+static const uint32_t *icon_of(const struct fm_entry *e, unsigned size)
+{ return du_icon_argb(du_icon_file(e->name, e->meta.type == FM_DIR, e->meta.exec != 0), size); }
+static const uint32_t *icon16(const struct fm_entry *e) { return icon_of(e, 16); }
+static const uint32_t *icon32(const struct fm_entry *e) { return icon_of(e, 32); }
+static const uint32_t *named(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object), size); }
 
 /* Deterministic box-filter size conversion of the approved portrait array. */
 static void shrink(const uint32_t *src, uint32_t *dst, int size)
@@ -167,11 +147,11 @@ static void shrink(const uint32_t *src, uint32_t *dst, int size)
 /* ---- widgets and layout ---- */
 static struct du_widget *W(struct files_app *a, int id) { return du_get(a->ui, id); }
 
-static const struct { int id; const char *label; const uint32_t *icon; int width; } toolbar[] = {
-    {C_BACK, "Back", desk_icon_back22, 46}, {C_FORWARD, "Forward", desk_icon_forward22, 54}, {C_UP, "Up", desk_icon_up22, 40},
-    {C_CUT, "Cut", desk_icon_cut22, 40}, {C_COPY, "Copy", desk_icon_copy22, 40}, {C_PASTE, "Paste", desk_icon_paste22, 44},
-    {C_DELETE, "Delete", desk_icon_delete22, 48}, {C_PROPERTIES, "Properties", desk_icon_properties22, 70},
-    {C_VIEWS, "Views", desk_icon_views22, 56}};
+static const struct { int id; const char *label; const char *icon; int width; } toolbar[] = {
+    {C_BACK, "Back", "action:back", 46}, {C_FORWARD, "Forward", "action:forward", 54}, {C_UP, "Up", "action:up", 40},
+    {C_CUT, "Cut", "action:cut", 40}, {C_COPY, "Copy", "action:copy", 40}, {C_PASTE, "Paste", "action:paste", 44},
+    {C_DELETE, "Delete", "action:delete", 48}, {C_PROPERTIES, "Properties", "action:properties", 70},
+    {C_VIEWS, "Views", "action:views", 56}};
 
 void files_layout(struct files_app *a)
 {
@@ -267,7 +247,8 @@ static void places_build(struct files_app *a)
         struct du_item *it = &a->place_items[i];
         memset(it, 0, sizeof(*it));
         it->text[0] = a->places[i].name;
-        it->icon16 = i == 0 ? (a->ciuki ? a->ciuki16 : desk_icon_harddisk) : i == 1 ? desk_icon_run : i == 2 ? desk_icon_folder : desk_icon_harddisk;
+        it->icon16 = i == 0 ? (a->ciuki ? a->ciuki16 : named("place:harddisk", 16)) :
+                     named(i == 1 ? "place:applications" : i == 2 ? "place:system" : "place:volume", 16);
     }
     struct du_widget *w = W(a, W_PLACES);
     w->items = a->place_items; w->count = a->place_count;
@@ -335,7 +316,7 @@ static void tree_items(struct files_app *a)
         int here = fm_same_path(n->path, a->model.path);
         if (here) current = (int)i;
         it->text[0] = n->name;
-        it->icon16 = !i ? (a->ciuki ? a->ciuki16 : desk_icon_harddisk) : here ? desk_icon_folder_open : desk_icon_folder;
+        it->icon16 = !i ? (a->ciuki ? a->ciuki16 : named("place:harddisk", 16)) : named(here ? "type:folder-open" : "type:folder", 16);
         it->selected = (uint8_t)here; it->depth = (uint8_t)(n->depth > 255 ? 255 : n->depth);
         it->expanded = n->expanded; it->children = n->children;
     }
@@ -602,7 +583,7 @@ static void properties_dialog(struct files_app *a)
     a->model.fs.stat_path(a->model.fs.ctx, path, &meta);
     files_size_text(size, sizeof(size), j->bytes); group(g, sizeof(g), j->bytes);
     fm_parent(parent, path);
-    const uint32_t *icon = desk_icon_folder32;
+    const uint32_t *icon = named("type:folder", 32);
     if (j->count == 1) {
         struct fm_entry e; memset(&e, 0, sizeof(e)); snprintf(e.name, sizeof(e.name), "%s", fm_basename(path)); e.meta = meta;
         char buffer[40]; snprintf(type, sizeof(type), "%s", fm_type_name(&e, buffer, sizeof(buffer)));
@@ -1047,13 +1028,13 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     du_add(u, DU_SEPARATOR, W_BAND1, zero, "");
     for (unsigned i = 0; i < sizeof(toolbar) / sizeof(toolbar[0]); i++) {
         struct du_widget *b = du_add(u, DU_TOOLBUTTON, toolbar[i].id, zero, toolbar[i].label);
-        b->icon = toolbar[i].icon; b->icon_size = 22;
+        b->icon = named(toolbar[i].icon, 22); b->icon_size = 22;
         if (toolbar[i].id == C_VIEWS) b->dropdown = 12;
     }
     du_add(u, DU_SEPARATOR, W_TSEP1, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP2, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP3, zero, "");
     du_add(u, DU_SEPARATOR, W_BAND2, zero, "");
     du_add(u, DU_LABEL, W_ADDRESS_LABEL, zero, "A&ddress");
-    du_add(u, DU_EDIT, W_ADDRESS, zero, "/")->icon = desk_icon_folder;
+    du_add(u, DU_EDIT, W_ADDRESS, zero, "/")->icon = named("type:folder", 16);
     du_add(u, DU_SEPARATOR, W_BAND3, zero, "");
     du_add(u, DU_HEADER, W_PLACES_HEADER, zero, "Places");
     struct du_widget *places = du_add(u, DU_TREE, W_PLACES, zero, "");

@@ -127,7 +127,9 @@ void tv_update(struct tasks_view *v, const struct tm_model *m)
         memset(it, 0, sizeof(*it));
         it->text[0] = w->title;
         it->text[1] = (w->flags & DESK_WINDOW_UNRESPONSIVE) ? "Not Responding" : "Running";
-        it->icon16 = v->app_icon;
+        const struct tm_process *owner = tm_find(m, w->pid);   /* the window's /bin program icon */
+        it->icon16 = owner ? du_icon_argb(du_icon_file(owner->name, 0, 1), 16) : NULL;
+        if (!it->icon16) it->icon16 = v->app_icon;
         it->selected = i == app_selected;
     }
     apps->count = m->window_count;

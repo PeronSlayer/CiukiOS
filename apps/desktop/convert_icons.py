@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Prepare/check deterministic Tango sprites for the desktop and libdeskui.
+"""Deterministic Tango 0.8.90 icons for the desktop and libdeskui.
 
-Each sprite is an original 16x16, 22x22 or 32x32 PNG from the pinned archive,
-converted to AARRGGBB words without resizing.
+The system icon store (build/apps/desktop/tango.cis, /system/icons/tango.cis
+in the image) holds every PNG icon of the pinned archive at 16, 22 and 32
+pixels, plus 48-pixel entries derived from the 32-pixel originals by an
+integer area filter (Tango 0.8.90 ships no 48x48 PNGs). It is built with the
+standard library only (own PNG decoder, QOI-coded pixels) and its SHA-256 is
+pinned in tango-store.json with the archive hash and every member's hash;
+see assets/icons/README.md for the file format.
 
-Pillow is needed only for preparation; normal builds verify pinned bytes using
-the standard library. Ciuki artwork is not included or converted by this tool.
+shell_icons.h is the earlier compiled-in sprite set (f2-08/f2-31). No
+production source includes it any more; it stays verified until the branches
+that still reference it are merged. Pillow is needed only for --prepare of
+that header. Ciuki artwork is not included or converted by this tool.
 """
 # SPDX-License-Identifier: MIT
 import hashlib
@@ -103,9 +110,432 @@ def prepare():
     (HERE / "shell-icons.json").write_text(json.dumps(record, indent=2, sort_keys=True)+"\n")
 
 
+
+# ---- system icon store (CIUKICS1) -------------------------------------------
+# Format (little-endian), documented in assets/icons/README.md:
+#   header (48 bytes): magic "CIUKICS1", u16 version 1, u16 header size 48,
+#     u16 name count, u16 image count, u8 sizes[4] = 16,22,32,48,
+#     u32 names offset, u32 images offset, u32 strings offset, u32 strings length,
+#     u32 data offset, u32 data length, u32 notice offset (into the strings).
+#   names (16 bytes each, sorted by strcmp of the name): u32 name offset,
+#     u32 context offset (strings, NUL-terminated), u16 image index per size
+#     (0xffff: none).
+#   images (16 bytes each): u8 size, u8 encoding, u16 source image,
+#     u32 data offset, u32 data length, u32 FNV-1a 32 of the decoded R,G,B,A bytes.
+#     Encoding 0: QOI 1.0 chunk stream (qoiformat.org) without the 14-byte header
+#     and the end marker, straight alpha, exactly size*size pixels.
+#     Encoding 1: the integer area filter of image `source` (an encoding-0 image).
+#   strings, then the data blob; the file ends at data offset + data length.
+STORE_RECORD = HERE / "tango-store.json"
+STORE_MAGIC = b"CIUKICS1"
+STORE_VERSION = 1
+STORE_HEADER = 48
+STORE_SIZES = (16, 22, 32, 48)
+PNG_SIZES = (16, 22, 32)
+ENC_QOI, ENC_SCALE = 0, 1
+PREFIX = "tango-icon-theme-0.8.90/"
+NOTICE = ("Tango Icon Theme 0.8.90 (https://tango.freedesktop.org/), released into the Public Domain "
+          "by Ulisse Perusin, Steven Garrity, Lapo Calamandrei, Ryan Collier, Rodney Dawes, Andreas Nilsson, "
+          "Tuomas Kuosmanen, Garrett LeSage and Jakub Steiner. Archive SHA-256 " + ARCHIVE_SHA + ". "
+          "Converted for CiukiOS by apps/desktop/convert_icons.py; see /system/icons/TANGO.TXT.")
+STORE_CONVERSION = ("PNG members of the pinned archive at 16, 22 and 32 px decoded without resampling "
+                    "(16-bit samples: high byte), RGB of fully transparent pixels set to 0, QOI-coded; "
+                    "48 px and missing sizes: integer area filter (premultiplied, round half up) of the "
+                    "nearest PNG size, larger preferred; animations/process-working split into its square frames "
+                    "process-working-00..31")
+
+
+def png_rgba(data):
+    """Standard-library PNG decoder for the archive's members: 8- or 16-bit RGBA,
+    non-interlaced (https://www.w3.org/TR/png/). Returns (width, height, RGBA8)."""
+    import struct
+    import zlib
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("PNG signature")
+    pos, idat, header, ended = 8, bytearray(), None, False
+    while pos < len(data):
+        if pos + 12 > len(data):
+            raise ValueError("truncated PNG chunk")
+        length, kind = struct.unpack_from(">I4s", data, pos)
+        end = pos + 12 + length
+        if end > len(data):
+            raise ValueError("truncated PNG data")
+        payload = data[pos+8:pos+8+length]
+        if zlib.crc32(kind + payload) != struct.unpack_from(">I", data, pos+8+length)[0]:
+            raise ValueError("PNG CRC")
+        if kind == b"IHDR":
+            if header is not None or length != 13:
+                raise ValueError("PNG IHDR")
+            header = struct.unpack(">IIBBBBB", payload)
+        elif kind == b"IDAT":
+            idat.extend(payload)
+        elif kind == b"IEND":
+            ended = True
+            break
+        elif kind[0] & 32 == 0:
+            raise ValueError("unsupported critical PNG chunk")
+        pos = end
+    if not ended or header is None:
+        raise ValueError("PNG structure")
+    w, h, depth, colour, compression, filtering, interlace = header
+    if colour != 6 or depth not in (8, 16) or compression or filtering or interlace or not 0 < w <= 4096 or not 0 < h <= 4096:
+        raise ValueError("expected non-interlaced 8/16-bit RGBA PNG")
+    bpp = 4 * depth // 8
+    stride = w * bpp
+    inflater = zlib.decompressobj()
+    raw = inflater.decompress(bytes(idat), (stride + 1) * h + 1)
+    if len(raw) != (stride + 1) * h or not inflater.eof:
+        raise ValueError("PNG inflated length")
+    out, previous = bytearray(), bytearray(stride)
+    for y in range(h):
+        f = raw[y * (stride + 1)]
+        row = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        if f == 1:
+            for x in range(bpp, stride):
+                row[x] = (row[x] + row[x - bpp]) & 255
+        elif f == 2:
+            for x in range(stride):
+                row[x] = (row[x] + previous[x]) & 255
+        elif f == 3:
+            for x in range(stride):
+                row[x] = (row[x] + ((row[x - bpp] if x >= bpp else 0) + previous[x]) // 2) & 255
+        elif f == 4:
+            for x in range(stride):
+                a = row[x - bpp] if x >= bpp else 0
+                b = previous[x]
+                c = previous[x - bpp] if x >= bpp else 0
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                row[x] = (row[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        elif f:
+            raise ValueError("PNG filter")
+        out.extend(row if depth == 8 else row[0::2])
+        previous = row
+    return w, h, bytes(out)
+
+
+def canonical(rgba):
+    """RGB of fully transparent pixels carries no colour; store it as zero."""
+    out = bytearray(rgba)
+    for k in range(3, len(out), 4):
+        if not out[k]:
+            out[k-3:k] = b"\0\0\0"
+    return bytes(out)
+
+
+def area_scale(rgba, src, dst):
+    """Integer area filter of a src x src RGBA8 image to dst x dst: each output pixel
+    averages the source area it covers, weighted by overlap and alpha (premultiplied),
+    rounding half up. apps/libdeskui/icons.c implements the same arithmetic in 32 bits."""
+    if not 0 < src <= 256 or not 0 < dst <= 256 or len(rgba) != src * src * 4:
+        raise ValueError("area_scale geometry")
+    total = src * src
+    out = bytearray(dst * dst * 4)
+    spans = []
+    for d in range(dst):
+        lo, hi = d * src, d * src + src
+        spans.append([(s, min(hi, (s + 1) * dst) - max(lo, s * dst)) for s in range(lo // dst, (hi - 1) // dst + 1)])
+    for dy in range(dst):
+        for dx in range(dst):
+            sa = sr = sg = sb = 0
+            for sy, wy in spans[dy]:
+                for sx, wx in spans[dx]:
+                    p = (sy * src + sx) * 4
+                    wa = wx * wy * rgba[p + 3]
+                    sa += wa
+                    sr += wa * rgba[p]
+                    sg += wa * rgba[p + 1]
+                    sb += wa * rgba[p + 2]
+            a = (sa + total // 2) // total
+            if a:
+                q = (dy * dst + dx) * 4
+                out[q:q + 4] = bytes(((sr + sa // 2) // sa, (sg + sa // 2) // sa, (sb + sa // 2) // sa, a))
+    return bytes(out)
+
+
+def qoi_encode(rgba):
+    """QOI 1.0 chunk stream (https://qoiformat.org/qoi-specification.pdf), no header/end marker."""
+    out = bytearray()
+    index = [(0, 0, 0, 0)] * 64
+    prev = (0, 0, 0, 255)
+    run = 0
+    for k in range(0, len(rgba), 4):
+        px = (rgba[k], rgba[k + 1], rgba[k + 2], rgba[k + 3])
+        if px == prev:
+            run += 1
+            if run == 62:
+                out.append(0xc0 | 61)
+                run = 0
+            continue
+        if run:
+            out.append(0xc0 | (run - 1))
+            run = 0
+        h = (px[0] * 3 + px[1] * 5 + px[2] * 7 + px[3] * 11) % 64
+        if index[h] == px:
+            out.append(h)
+        else:
+            index[h] = px
+            if px[3] == prev[3]:
+                dr = (px[0] - prev[0] + 128) % 256 - 128
+                dg = (px[1] - prev[1] + 128) % 256 - 128
+                db = (px[2] - prev[2] + 128) % 256 - 128
+                if -2 <= dr <= 1 and -2 <= dg <= 1 and -2 <= db <= 1:
+                    out.append(0x40 | (dr + 2) << 4 | (dg + 2) << 2 | (db + 2))
+                elif -32 <= dg <= 31 and -8 <= dr - dg <= 7 and -8 <= db - dg <= 7:
+                    out += bytes((0x80 | (dg + 32), (dr - dg + 8) << 4 | (db - dg + 8)))
+                else:
+                    out += bytes((0xfe, px[0], px[1], px[2]))
+            else:
+                out += bytes((0xff, *px))
+        prev = px
+    if run:
+        out.append(0xc0 | (run - 1))
+    return bytes(out)
+
+
+def qoi_decode(stream, count):
+    """Reference decoder for the store's QOI streams; exactly count pixels."""
+    out = bytearray()
+    index = [(0, 0, 0, 0)] * 64
+    px = (0, 0, 0, 255)
+    p = run = 0
+    while len(out) < count * 4:
+        if run:
+            run -= 1
+        else:
+            if p >= len(stream):
+                raise ValueError("QOI stream truncated")
+            b = stream[p]
+            p += 1
+            if b == 0xfe:
+                px = (*stream[p:p + 3], px[3]); p += 3
+            elif b == 0xff:
+                px = tuple(stream[p:p + 4]); p += 4
+            elif b >> 6 == 0:
+                px = index[b]
+            elif b >> 6 == 1:
+                px = ((px[0] + (b >> 4 & 3) - 2) & 255, (px[1] + (b >> 2 & 3) - 2) & 255, (px[2] + (b & 3) - 2) & 255, px[3])
+            elif b >> 6 == 2:
+                b2 = stream[p]; p += 1
+                dg = (b & 63) - 32
+                px = ((px[0] + dg + (b2 >> 4) - 8) & 255, (px[1] + dg) & 255, (px[2] + dg + (b2 & 15) - 8) & 255, px[3])
+            else:
+                run = b & 63
+            if len(px) != 4 or p > len(stream):
+                raise ValueError("QOI stream truncated")
+            index[(px[0] * 3 + px[1] * 5 + px[2] * 7 + px[3] * 11) % 64] = px
+        out += bytes(px)
+    if p != len(stream) or run:
+        raise ValueError("QOI stream length")
+    return bytes(out)
+
+
+def fnv1a(data):
+    h = 0x811c9dc5
+    for byte in data:
+        h = ((h ^ byte) * 0x01000193) & 0xffffffff
+    return h
+
+
+def store_sources(archive_path=ARCHIVE):
+    """{name: {"context", "png": {size: (member, sha256, rgba)}}} for every PNG icon."""
+    data = Path(archive_path).read_bytes()
+    if sha(data) != ARCHIVE_SHA:
+        raise ValueError("Tango archive changed")
+    icons = {}
+    def entry(name, context):
+        icon = icons.setdefault(name, {"context": context, "png": {}})
+        if icon["context"] != context:
+            raise ValueError(f"Tango name {name} in two contexts")
+        return icon["png"]
+    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+        for member in sorted(archive.getmembers(), key=lambda m: m.name):
+            parts = member.name.split("/")
+            if not member.isfile() or not member.name.endswith(".png") or len(parts) != 4 or parts[0] + "/" != PREFIX:
+                continue
+            size = int(parts[1].split("x")[0])
+            if parts[1] != f"{size}x{size}" or size not in PNG_SIZES:
+                raise ValueError(f"unexpected Tango member {member.name}")
+            raw = archive.extractfile(member).read()
+            w, h, rgba = png_rgba(raw)
+            name, context = parts[3][:-4], parts[2]
+            source = member.name[len(PREFIX):]
+            if context == "animations":
+                if w % size or h % size:
+                    raise ValueError("animation strip geometry")
+                frames = [(fy, fx) for fy in range(h // size) for fx in range(w // size)]
+                for n, (fy, fx) in enumerate(frames):
+                    frame = b"".join(rgba[((fy * size + y) * w + fx * size) * 4:((fy * size + y) * w + fx * size + size) * 4]
+                                     for y in range(size))
+                    entry(f"{name}-{n:02d}", context)[size] = (source, sha(raw), canonical(frame))
+                continue
+            if (w, h) != (size, size):
+                raise ValueError(f"Tango icon size {member.name}")
+            entry(name, context)[size] = (source, sha(raw), canonical(rgba))
+    return icons
+
+
+def nearest(available, size):
+    larger = sorted(s for s in available if s > size)
+    return larger[0] if larger else max(available)
+
+
+def build_store(archive_path=ARCHIVE):
+    """Return (store bytes, record) for the pinned archive. Deterministic."""
+    import struct
+    icons = store_sources(archive_path)
+    names = sorted(icons, key=lambda n: n.encode())
+    strings = bytearray()
+    offsets = {}
+    def string(text):
+        if text not in offsets:
+            offsets[text] = len(strings)
+            strings.extend(text.encode("ascii") + b"\0")
+        return offsets[text]
+    notice = string(NOTICE)
+    images, keys, blob = [], {}, bytearray()
+    decoded = hashlib.sha256()
+    def image(size, encoding, source, pixels, payload):
+        key = (size, encoding, source, pixels)
+        if key not in keys:
+            off = len(blob)
+            blob.extend(payload)
+            keys[key] = len(images)
+            images.append((size, encoding, source if source is not None else 0, off, len(payload), fnv1a(pixels)))
+        return keys[key]
+    table = []
+    for name in names:
+        png = icons[name]["png"]
+        slots = []
+        for size in STORE_SIZES:
+            if size in png:
+                rgba = png[size][2]
+                slots.append(image(size, ENC_QOI, None, rgba, qoi_encode(rgba)))
+            else:
+                base = nearest(png, size)
+                if base not in png:
+                    raise ValueError("no source size")
+                src_index = image(base, ENC_QOI, None, png[base][2], qoi_encode(png[base][2]))
+                rgba = area_scale(png[base][2], base, size)
+                slots.append(image(size, ENC_SCALE, src_index, rgba, b""))
+            decoded.update(name.encode() + b"\0" + bytes((size,)) + rgba)
+        table.append((string(name), string(icons[name]["context"]), slots))
+    if len(names) > 0xfffe or len(images) > 0xfffe:
+        raise ValueError("store too large")
+    names_off = STORE_HEADER
+    images_off = names_off + 16 * len(table)
+    strings_off = images_off + 16 * len(images)
+    data_off = (strings_off + len(strings) + 3) & ~3
+    head = struct.pack("<8sHHHH4BIIIIIII", STORE_MAGIC, STORE_VERSION, STORE_HEADER, len(table), len(images),
+                       *STORE_SIZES, names_off, images_off, strings_off, len(strings), data_off, len(blob), notice)
+    body = b"".join(struct.pack("<II4H", n, c, *slots) for n, c, slots in table)
+    body += b"".join(struct.pack("<BBHIII", *entry) for entry in images)
+    out = head + body + bytes(strings)
+    out += b"\0" * (data_off - len(out)) + bytes(blob)
+    members = {}
+    for name in names:
+        for size, (source, digest, _) in icons[name]["png"].items():
+            members[source] = digest
+    record = {"archive_sha256": ARCHIVE_SHA, "license": "Tango Icon Theme 0.8.90, Public Domain (assets/icons/upstream/COPYING)",
+              "format": "CIUKICS1 version 1 (assets/icons/README.md)", "sizes": list(STORE_SIZES),
+              "conversion": STORE_CONVERSION, "names": len(table), "images": len(images),
+              "qoi_images": sum(1 for e in images if e[1] == ENC_QOI), "scaled_images": sum(1 for e in images if e[1] == ENC_SCALE),
+              "store_bytes": len(out), "store_sha256": sha(out), "decoded_sha256": decoded.hexdigest(),
+              "notice_sha256": sha(NOTICE.encode()), "members": dict(sorted(members.items()))}
+    return out, record
+
+
+def parse_store(data):
+    """Python reader (tests): {name: {"context", size: RGBA8}} with every check the C reader makes."""
+    import struct
+    if len(data) < STORE_HEADER:
+        raise ValueError("store header")
+    (magic, version, header, count, image_count, *rest) = struct.unpack_from("<8sHHHH4BIIIIIII", data)
+    sizes, (names_off, images_off, strings_off, strings_len, data_off, data_len, notice) = tuple(rest[:4]), rest[4:]
+    if magic != STORE_MAGIC or version != STORE_VERSION or header != STORE_HEADER or sizes != STORE_SIZES:
+        raise ValueError("store magic/version")
+    if (names_off != STORE_HEADER or images_off != names_off + 16 * count or strings_off != images_off + 16 * image_count
+            or strings_off + strings_len > data_off or data_off + data_len != len(data) or notice >= strings_len):
+        raise ValueError("store layout")
+    strings = data[strings_off:strings_off + strings_len]
+    def text(off):
+        end = strings.index(b"\0", off)
+        return strings[off:end].decode("ascii")
+    images = [struct.unpack_from("<BBHIII", data, images_off + 16 * k) for k in range(image_count)]
+    cache = {}
+    def pixels(k):
+        if k in cache:
+            return cache[k]
+        size, encoding, source, off, length, check = images[k]
+        if encoding == ENC_QOI:
+            if off + length > data_len:
+                raise ValueError("store image bounds")
+            rgba = qoi_decode(data[data_off + off:data_off + off + length], size * size)
+        elif encoding == ENC_SCALE and source < image_count and images[source][1] == ENC_QOI:
+            rgba = area_scale(pixels(source), images[source][0], size)
+        else:
+            raise ValueError("store image encoding")
+        if fnv1a(rgba) != check:
+            raise ValueError("store image checksum")
+        cache[k] = rgba
+        return rgba
+    result, previous = {}, b""
+    for k in range(count):
+        n, c, *slots = struct.unpack_from("<II4H", data, names_off + 16 * k)
+        name = text(n)
+        if name.encode() <= previous:
+            raise ValueError("store names not sorted")
+        previous = name.encode()
+        entry = {"context": text(c)}
+        for size, slot in zip(STORE_SIZES, slots):
+            if slot != 0xffff:
+                if slot >= image_count or images[slot][0] != size:
+                    raise ValueError("store slot")
+                entry[size] = pixels(slot)
+        result[name] = entry
+    result[""] = {"notice": text(notice)}
+    return result
+
+
+def store_record():
+    return json.loads(STORE_RECORD.read_text())
+
+
+def check_store(data):
+    """Raise unless data is exactly the pinned store."""
+    record = store_record()
+    if sha(data) != record["store_sha256"] or len(data) != record["store_bytes"]:
+        raise ValueError("Tango icon store differs from tango-store.json")
+    return record
+
+
+def check_store_record():
+    record = store_record()
+    if record["archive_sha256"] != ARCHIVE_SHA or record["notice_sha256"] != sha(NOTICE.encode()):
+        raise ValueError("Tango store record provenance")
+    with tarfile.open(ARCHIVE) as archive:
+        for source, digest in record["members"].items():
+            if sha(archive.extractfile(PREFIX + source).read()) != digest:
+                raise ValueError(f"Tango store member {source}")
+    return record
+
+
+def prepare_store():
+    data, record = build_store()
+    STORE_RECORD.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n")
+    return data
+
+
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--prepare"]:
+    args = sys.argv[1:]
+    if args == ["--prepare"]:
         prepare()
-    elif sys.argv[1:] != ["--check"]:
-        raise SystemExit("usage: convert_icons.py --check|--prepare")
+    elif args == ["--prepare-store"]:
+        prepare_store()
+    elif args[:1] == ["--store"] and len(args) == 2:
+        data, _ = build_store()
+        check_store(data)
+        Path(args[1]).write_bytes(data)
+    elif args != ["--check"]:
+        raise SystemExit("usage: convert_icons.py --check|--prepare|--prepare-store|--store OUT")
     check()
+    check_store_record()

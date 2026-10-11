@@ -216,7 +216,7 @@ void du_draw_edit(struct du_canvas *c, struct du_widget *w, int focused)
     else { du_fill(c, b, w->disabled ? DU_FACE : DU_WINDOW); du_edge(c, b, DU_SUNKEN); }
     struct du_rect old = c->clip;
     c->clip = du_intersection(old, (struct du_rect){b.x + 2, b.y + 2, b.w - 4, b.h - 4});
-    if (w->icon) du_icon(c, b.x + 3, b.y + (b.h - 16) / 2, w->icon, 16, DU_ICON_NORMAL);
+    if (w->icon) du_icon_blit(c, b.x + 3, b.y + (b.h - 16) / 2, w->icon, 16, DU_ICON_NORMAL);
     int x = text_x(w), y = b.y + (b.h - DU_GLYPH_H) / 2;
     size_t room = (size_t)((b.x + b.w - 3 - x) / DU_CHAR_W), cursor_cells = 0;
     if (!room) room = 1;
@@ -260,7 +260,7 @@ void du_draw_button(struct du_canvas *c, const struct du_widget *w, int focused)
     int tw = du_text_width(w->text) - (strchr(w->text, '&') ? DU_CHAR_W : 0);
     int iw = w->icon ? w->icon_size + 4 : 0;
     int x = b.x + (b.w - tw - iw) / 2 + down, y = b.y + (b.h - DU_GLYPH_H) / 2 + down;
-    if (w->icon) du_icon(c, x, b.y + (b.h - w->icon_size) / 2 + down, w->icon, w->icon_size, w->disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
+    if (w->icon) du_icon_blit(c, x, b.y + (b.h - w->icon_size) / 2 + down, w->icon, w->icon_size, w->disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
     if (w->disabled) { du_label(c, x + iw + 1, y + 1, w->text, DU_HILITE, 1); du_label(c, x + iw, y, w->text, DU_GRAY, 1); }
     else du_label(c, x + iw, y, w->text, DU_INK, 1);
     if (focused) du_dotted(c, (struct du_rect){b.x + 4, b.y + 4, b.w - 8, b.h - 8});
@@ -284,7 +284,7 @@ static void draw_toolbutton(struct du_canvas *c, const struct du_widget *w)
     int size = w->icon_size ? w->icon_size : 22;
     int has_text = w->text[0] != 0;
     int ix = main.x + (main.w - size) / 2 + off, iy = has_text ? b.y + 3 + off : b.y + (b.h - size) / 2 + off;
-    du_icon(c, ix, iy, w->icon, size, w->disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
+    du_icon_blit(c, ix, iy, w->icon, size, w->disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
     if (has_text) {
         int tx = main.x + (main.w - du_text_width(w->text)) / 2 + off, ty = b.y + size + 7 + off;
         if (w->disabled) du_text_disabled(c, tx, ty, w->text); else du_text(c, tx, ty, w->text, DU_INK);

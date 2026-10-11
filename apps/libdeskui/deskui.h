@@ -79,10 +79,41 @@ void du_text_n(struct du_canvas *, int x, int y, const char *, size_t cells, uin
 void du_text_fit(struct du_canvas *, int x, int y, int width, const char *, uint32_t);
 void du_text_disabled(struct du_canvas *, int x, int y, const char *);
 void du_label(struct du_canvas *, int x, int y, const char *mnemonic, uint32_t, int underline);
-void du_icon(struct du_canvas *, int x, int y, const uint32_t *argb, int size, enum du_icon_mode);
+/* Straight-alpha AARRGGBB sprite, size x size (at most 64), alpha-blended. */
+void du_icon_blit(struct du_canvas *, int x, int y, const uint32_t *argb, int size, enum du_icon_mode);
 size_t du_utf8_prev(const char *, size_t);
 size_t du_utf8_next(const char *, size_t);
 void du_format_key(char *out, size_t size, unsigned key, unsigned modifiers);
+
+/* System icons: Tango Icon Theme 0.8.90 (Public Domain), one store file
+ * (/system/icons/tango.cis, built by apps/desktop/convert_icons.py; format in
+ * assets/icons/README.md). du_icon() returns the icon of a Tango name
+ * ("folder", or "places/folder") at 16, 22, 32 or 48 pixels, or NULL when the
+ * name, size or store is unavailable. Icons are decoded on first use and stay
+ * valid for the life of the process. DU_ICON_CIUKI is the identity icon, the
+ * approved Ciuki portrait conversion (/system/assets/ciuki-portrait.xrgb)
+ * reduced with the store's area filter. Not thread-safe. */
+struct du_icon { unsigned size; const uint32_t *argb; };   /* straight-alpha AARRGGBB */
+#define DU_ICON_CIUKI "ciuki"
+const struct du_icon *du_icon(const char *tango_name, unsigned size);
+const uint32_t *du_icon_argb(const char *tango_name, unsigned size);   /* du_icon()->argb or NULL */
+void du_icon_draw(struct du_canvas *, int x, int y, const struct du_icon *, enum du_icon_mode);
+int du_icon_paths(const char *store, const char *portrait);   /* before the first lookup; NULL keeps the default */
+unsigned du_icon_count(void);                                /* names in the store */
+const char *du_icon_store_name(unsigned index);
+const char *du_icon_notice(void);                            /* the store's Tango licence notice */
+
+/* CiukiOS objects -> Tango names (icon_map.c). Keys are "<kind>:<object>":
+ * program:<name in /bin>, menu:, action:, place:, type:folder|executable|unknown,
+ * type:.<extension>, status:, dialog:, device:, settings:, category:, emblem:, wm:.
+ * An unknown object of a known kind gets that kind's default; a key without
+ * a colon is returned unchanged (a Tango name). */
+struct du_icon_map { const char *object, *tango; };
+extern const struct du_icon_map du_icon_map[];
+extern const unsigned du_icon_map_count;
+const char *du_icon_name(const char *object);
+const char *du_icon_file(const char *filename, int directory, int executable);
+const struct du_icon *du_icon_for(const char *object, unsigned size);   /* du_icon(du_icon_name(object), size) */
 
 /* List and tree content belongs to the application; the toolkit only reads it. */
 struct du_item {

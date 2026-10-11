@@ -2,7 +2,6 @@
  * Modal dialogs drawn inside the client window: message box, input box,
  * file open/save and progress with Cancel. */
 #include "internal.h"
-#include "../desktop/shell_icons.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -209,7 +208,7 @@ static int navigate(struct du_ui *u, const char *path)
     for (unsigned i = 0; i < count; i++) {
         memset(&d->rows[i], 0, sizeof(d->rows[i]));
         d->rows[i].text[0] = d->entries[i].name;
-        d->rows[i].icon16 = d->entries[i].directory ? desk_icon_folder : desk_icon_generic;
+        d->rows[i].icon16 = du_icon_argb(du_icon_file(d->entries[i].name, d->entries[i].directory, 0), 16);
     }
     snprintf(d->folder, sizeof(d->folder), "%s", path);
     struct du_widget *list = &d->items[F_LIST];
@@ -241,7 +240,7 @@ int du_file_dialog(struct du_ui *u, int id, int save, const char *title, const c
     item(d, F_CANCEL, DU_BUTTON, ID_BUTTON - 1, "Cancel")->box = (struct du_rect){right - BTN_W, b.y + b.h - 3 - 10 - BTN_H, BTN_W, BTN_H};
     item(d, F_UP, DU_BUTTON, ID_UP, "Up")->box = (struct du_rect){right - 40, y, 40, 22};
     item(d, F_FOLDER, DU_EDIT, ID_FOLDER, folder)->box = (struct du_rect){b.x + 80, y, right - 46 - b.x - 80, 22};
-    d->items[F_FOLDER].icon = desk_icon_folder;
+    d->items[F_FOLDER].icon = du_icon_argb(du_icon_name("type:folder"), 16);
     struct du_widget *list = item(d, F_LIST, DU_LISTVIEW, ID_LIST, "");
     list->view = DU_LIST; list->inactive_selection = 1;
     list->box = (struct du_rect){b.x + 14, y + 30, b.w - 28, d->items[F_OK].box.y - 10 - (y + 30)};
@@ -463,13 +462,12 @@ void du_draw_dialog(struct du_ui *u)
     }
     int top = body_y(d);
     if (d->kind == DU_DLG_MESSAGE) {
-        static const uint32_t *const icons[] = {NULL, desk_icon_dialog_info32, desk_icon_dialog_warning32,
-                                                desk_icon_dialog_error32, desk_icon_dialog_question32};
+        static const char *const icons[] = {NULL, "dialog:info", "dialog:warning", "dialog:error", "dialog:question"};
         int ix = b.x + 14, tx = ix + (d->icon ? 46 : 0);
         int tw, lines; measure(d->text, &tw, &lines);
         int ty = top + 14 + (d->icon && lines * LINE_H < 32 ? (32 - lines * LINE_H) / 2 + 2 : 0);
-        if (d->icon_pixels) du_icon(c, ix, top + 14, d->icon_pixels, 32, DU_ICON_NORMAL);
-        else if (d->icon > 0 && d->icon < 5) du_icon(c, ix, top + 14, icons[d->icon], 32, DU_ICON_NORMAL);
+        if (d->icon_pixels) du_icon_blit(c, ix, top + 14, d->icon_pixels, 32, DU_ICON_NORMAL);
+        else if (d->icon > 0 && d->icon < 5) du_icon_draw(c, ix, top + 14, du_icon_for(icons[d->icon], 32), DU_ICON_NORMAL);
         draw_text(c, tx, ty, b.x + b.w - 14 - tx, d->text);
     } else if (d->kind == DU_DLG_INPUT || d->kind == DU_DLG_PROGRESS) {
         draw_text(c, b.x + 14, top + 12, b.w - 28, d->text);

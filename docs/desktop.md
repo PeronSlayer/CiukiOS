@@ -1,5 +1,77 @@
 # F2 ring-3 desktop and client protocol
 
+## System icons: the Tango store (2026-10-12)
+
+The owner asked for a complete copyright-free icon set as the default and only
+style. Tango Icon Theme 0.8.90 (Public Domain, `assets/icons/`) is that set:
+the desktop, libdeskui and its applications now draw every icon from one file,
+`/system/icons/tango.cis`, instead of compiled-in sprites. Format, conversion,
+size and pinned hashes: [`assets/icons/README.md`](../assets/icons/README.md).
+
+- **Pipeline.** `apps/desktop/convert_icons.py` (standard library only) builds
+  the store from the pinned archive: all 645 PNG members (16, 22, 32 px; 48 px
+  derived by an integer area filter), 246 names, 726,504 bytes. `make desktop`
+  writes `build/apps/desktop/tango.cis` and refuses a SHA-256 other than the one
+  in `apps/desktop/tango-store.json` (which also records the archive and every
+  member hash); the desktop manifest records the store under `icons`, and
+  `scripts/build_image.py` installs it in `/system/icons/` with `TANGO.TXT`
+  (upstream COPYING), `AUTHORS.TXT` and `CREDITS.TXT`.
+- **API** (`apps/libdeskui/deskui.h`, `icons.c`):
+  `const struct du_icon *du_icon(const char *tango_name, unsigned size)`
+  returns `{size, argb}` (straight-alpha AARRGGBB) for a Tango name
+  (`"folder"` or `"places/folder"`) at 16, 22, 32 or 48 px, or NULL.
+  `du_icon_argb()` returns the pixel pointer only, `du_icon_draw(canvas, x, y,
+  icon, mode)` alpha-blends it with the existing normal/selected/ghost/disabled
+  modes, `du_icon_for(object, size)` looks up a CiukiOS object.
+  `du_icon_paths()` selects other files before the first lookup (host tests use
+  `-DDU_ICON_STORE_PATH`/`-DDU_ICON_PORTRAIT_PATH`), `du_icon_count()`,
+  `du_icon_store_name()` and `du_icon_notice()` list the store and its licence
+  notice. The reader keeps only the 24 KB index, decodes an icon on its first
+  use (QOI chunk stream or area filter, FNV-1a checked) and caches it for the
+  process lifetime; it is integer-only (the build's opcode audit covers it) and
+  not thread-safe. A missing store gives NULL icons, never a failure.
+  The former sprite blitter `du_icon(canvas, x, y, argb, size, mode)` is renamed
+  `du_icon_blit` (same behaviour); branches that still call the old name fail to
+  compile and need that one-word change.
+- **Identity.** `DU_ICON_CIUKI` (`"ciuki"`) is the approved portrait conversion
+  (`/system/assets/ciuki-portrait.xrgb`, pinned by `convert_portrait.py`)
+  reduced with the same area filter (identical to Files' box filter at 16 and
+  32 px). Computer, About, the Start (Ciuki) button and `device:computer` map
+  to it; the compositor keeps drawing its own nearest-neighbour portrait for the
+  Ciuki button and About, Files and CiukNote keep their portrait callbacks.
+- **Map** (`apps/libdeskui/icon_map.c`, 353 entries, keys `<kind>:<object>`;
+  Tango names follow the [Icon Naming Specification](https://specifications.freedesktop.org/icon-naming-spec/latest/)
+  as of Tango 0.8.90, and only names present in the archive are used):
+  programs (`files` system-file-manager, `ciuknote` accessories-text-editor,
+  `tasks` utilities-system-monitor, `dosbox` utilities-terminal, `demo`
+  preferences-desktop-peripherals, `hello` face-smile, `lua`
+  applications-development, `libc_smoke` applications-system, `desktop`
+  user-desktop, others application-x-executable); Start menu entries (settings,
+  control panel, run, find, help, about, shut down, restart, log out, lock and
+  categories); toolbar and menu actions (navigation, edit, document, view,
+  formatting, media); places (computer, home, desktop, drives, removable,
+  floppy, optical, network, trash); file types by extension (folders, text,
+  configuration, HTML, scripts and sources, DOS `.COM`/`.EXE`/`.BAT`, images,
+  audio, video, archives, fonts, disk images, office documents, certificates,
+  unknown); status (volume levels, battery, network, updates, busy); message
+  box icons (Tango 0.8.90 has no dialog-question; help-browser is used, as
+  before); devices; settings items; emblems; window-manager buttons for a
+  toolkit that wants them. `du_icon_name()` falls back to a kind's `*` entry;
+  `du_icon_file(name, directory, executable)` picks folder, then a native
+  executable's `/bin` program icon, then the extension, then unknown.
+- **Users.** Files (toolbar, address bar, places, tree, list/icon views,
+  properties), the open/save dialog (file-type icons), message boxes, Task
+  Manager (Applications rows show the owning process's program icon), and the
+  desktop's Start menu and taskbar buttons (through the `struct desktop` hook
+  `icon`, set in `desktop.c`; host harnesses that leave it NULL draw no menu
+  icons). `apps/desktop/shell_icons.h` is no longer included anywhere.
+- **Tests.** `tests/host/desktop/test_icons.py` pins the store and decoded
+  pixels, cross-checks the PNG decoder with Pillow, round-trips the Python and
+  C readers against the archive, resolves every map entry at four sizes,
+  rejects corrupt stores, checks the licence notice and renders the 32 px
+  contact sheet `build/host/icons/contact-sheet-32.png`. Re-pinned host frames
+  (Files, open dialog, Task Manager) were reviewed as images on 2026-10-12.
+
 ## f2-33 Task Manager and the v2 task extension (2026-10-11)
 
 `/bin/tasks` is the CiukiOS Task Manager (menu label "Task Manager", a
@@ -306,7 +378,8 @@ Explorer layout in the CiukiOS colours.
   application callback, focus loss and RESYNC releases, and `du_run`, the
   event loop with timers (no poll/select: nonblocking turns and short sleeps).
 - **Drawing** (`draw.c`): clipped integer primitives, Windows 98 edges, the
-  compositor's glyphs, Tango icons with selected/ghost/disabled modes.
+  compositor's glyphs, Tango icons with selected/ghost/disabled modes
+  (`du_icon_blit`, `du_icon_draw`; icons come from the store, `icons.c`).
 - **Widgets** (`widgets.c`, `list.c`, `menu.c`, `dialog.c`): label, push
   button, toolbar button (with split arrow), single-line edit (selection,
   clipboard, UTF-8), list view (Details with sortable, resizable columns,
@@ -453,7 +526,8 @@ integer arithmetic. The libc may use the SDK's qualified x87 instructions.
 `build/apps/desktop/manifest.json` records commands, source/SDK hashes, ELF
 sizes/LOAD memory, conversion parameters and hashes. `scripts/build_image.py`
 validates these before image creation and adds `/bin/desktop`, `/bin/demo`,
-and `/system/assets/ciuki-portrait.xrgb`. The image manifest includes each
+and `/system/assets/ciuki-portrait.xrgb` (since 2026-10-12 also
+`/system/icons/tango.cis` and its three notices). The image manifest includes each
 payload's size and SHA-256 plus desktop/portrait provenance, and existing T1
 mtools read-back applies to all three. `make build-full` orders kernel, Lua,
 desktop, then image. No full image build was run by this implementer.

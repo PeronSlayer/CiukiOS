@@ -19,16 +19,19 @@ import unittest
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
-           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c"]
+           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c",
+           "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 
 # Reviewed frames (2026-10-11): an unpinned run prints the new digests. Convert
 # the harness frames (XRGB8888, 400x300 toolkit, 760x520 Files) to PNG and
 # re-pin only after a visual review.
+# Re-pinned 2026-10-12 after review: Tango store icons (libdeskui du_icon) in the
+# Files places/tree/bin/type icons and the open dialog's file-type icons.
 TOOLKIT_FRAMES = {
     "deskui-input.xrgb": "cd7aed148d6c9ae54c23e13eb17563a2ae8488f4d40664d1fe81fe99170251c8",
     "deskui-menu.xrgb": "6a3b7c78ec5576f2f237e4abf344d850a49f92c281e29a86880f0f41c13aabe0",
     "deskui-message.xrgb": "e652a4f707dd38bfc4486703d669a9bb5a0a3e591f062aa96313b6ac9c1972a8",
-    "deskui-open.xrgb": "d0a12aba4db4070909d712af782db5002c329e94cc47e23a94d68e26849f6423",
+    "deskui-open.xrgb": "66ef7ebe0f2b563c54c56333bcd3db4578ff901021b602667b955dc0b66741b2",
     "deskui-popup.xrgb": "448045458ae3a455eeceff6e6629169ce00810984182c38c797ac3b36754c185",
     "deskui-progress.xrgb": "6915fefe563a3a461bc144867bc3b7926cdd5c41dcf5ddbda76f0209d46f8dac",
     "deskui-view0.xrgb": "b7b45a87702afd0c8a4fea32a8bd87a0728f75743b6a4b938c1c50f886dd1fcc",
@@ -36,29 +39,29 @@ TOOLKIT_FRAMES = {
     "deskui-view2.xrgb": "0bc25854712e0ea58ce7c8ed9dfb779b5951ad2ded3832ac75587d2ce726f51b",
 }
 FILES_FRAMES = {
-    "files-about.xrgb": "848608e756eb362f7bc4d1a7786691b3e5952f63a56a5442092a74c3b8311bd3",
-    "files-bin-icons.xrgb": "4c6a87ed369387027741cfcc76fb05de2927e2b9c55df6974f1f7c6804919443",
-    "files-confirm-delete.xrgb": "fd47eff318c5f996920050cdf2e32501250161be33b940644a52b7d9af065cf2",
-    "files-context-background.xrgb": "7d035a9c7900d4ff94e58d8d4f9af4b3695f0eda5ea2eb5fae90f94eba3d4a6f",
-    "files-context-item.xrgb": "4822dd79e1a4e1310bb7e5139c5aa501c15a71b39e06e7dee6e0da9132ec6a63",
-    "files-copy-progress.xrgb": "2e971b17357a0dd9fc22b9b50eaa2535c67f5d7d68c28f5958bb3a69413d269a",
-    "files-cp1-system.xrgb": "74a71b778af7b88181d83121c9b329add96db6125d3f057e27cfff657aa55164",
-    "files-cp2-new-folder.xrgb": "4c35e8cc64e74e01f4133b5fdfbc39c9601c247ec65997879a6acd60f3bf4b24",
-    "files-cp3-renamed.xrgb": "84323e077af4dfd29de63bea8c66bb7684deed81fa132b6e27b347e173ba4259",
-    "files-cp4-copied.xrgb": "d08e6b1bc00856b2afc78e177d8b7733bbc532f8535d4fa50219860b38b5b1af",
-    "files-cp5-deleted.xrgb": "d77bdadc036e25f432d0e7e73f7ae3e4e00ef2538c26a3fe2c2b18235be13b5a",
-    "files-help.xrgb": "677e8a2507dd53d7c8bc3ab11b3767c61aae0731394f3fdf6d0c6eacddcf4fa7",
-    "files-menu-file.xrgb": "95ef19921b9407be6851e298e0fcd084adbe64a10b71af0597ace371aad2639f",
-    "files-menu-view.xrgb": "ebc24ad44c9ee83bb70531e58131fa9dc6d1c789a4b30490f197ba0c16f1eef2",
-    "files-multi-select.xrgb": "0ff6ca9e82ed0594a174e5c32dd1cf9f1b5d221bdc7b4b151196bbe60fb2335a",
-    "files-properties.xrgb": "080576a0f1e700b7f0b80aa4e4c93435c167e76184ab59d727e2a07141a4650a",
-    "files-rename-error.xrgb": "8266209136693d75a8e81899fb0545eb74689f4c5da7434791c1a4ac5658d8f7",
-    "files-replace-prompt.xrgb": "16a93e3305f6b3d6a1e3f4d7661888dd267b9cda5c1ddaecb27276c7e9d31f4f",
-    "files-root-details.xrgb": "5282f23b1cb7fd8c73f6746bfeaf246b319884195927e6296978100e0573f690",
-    "files-sort-size-desc.xrgb": "6b99f6c3fbaaaee919a6493bd26cad3eb3f87ff69bb4cf90fd9f9e5cdf91996b",
-    "files-system-details.xrgb": "cfe19bb7248aae935bf752e6eec247d5b442c5c23e4c354ab829e6d7ec06d0af",
-    "files-system-icons.xrgb": "c6135eb087a4c61af8949da49c7aefcf1f326283bd9463297ac73cef7f60544e",
-    "files-tree.xrgb": "fb19be1f01ca4f871d0d27bac8addb7e5c87d398de8c8e174a6cc841986ffcdd",
+    "files-about.xrgb": "4e9a6df7bccc68089d1330c9aab409f535dc55c82e9123f8de05d9e4b129a821",
+    "files-bin-icons.xrgb": "45d901bbcb4bafe96763bcc3a0ec3bcb45992f88224d5d3bfaeacc8ea032178d",
+    "files-confirm-delete.xrgb": "838513dfbc9fa394fa0b1527dd81e8f27d9b6a27d6d52e19d3921ffc012cdc64",
+    "files-context-background.xrgb": "913bbfc0fdad940f6c615357810782254b312094de23fdf3521fcf03857e54a9",
+    "files-context-item.xrgb": "ef79f6a5bdc0b1d24a2c0b0c25ecc4d27e0d0dd5b7c0d261a36e7135fff79482",
+    "files-copy-progress.xrgb": "c2cfd6335896196969bef87114e720d4b1a40107f5c5203bae71bde6b1fa4e37",
+    "files-cp1-system.xrgb": "e3a5e0fced0541b2d05317fea6b38c02608a5e5831cda8bf31d509072fd3ea9b",
+    "files-cp2-new-folder.xrgb": "788bac2a40c1d63df676377c22d384241f12d66f4fe6d173c6c3c21e00f6b58b",
+    "files-cp3-renamed.xrgb": "6a95eaee30d7094c5f2b19fbb9f8cc0c0a2ba9ad20c8b70733c756d0f644381d",
+    "files-cp4-copied.xrgb": "3f78909f9dd88bbf60f6ea6d67787c8756244e1f9ec62320857ec61a26110be8",
+    "files-cp5-deleted.xrgb": "92e1ea862278f9bd7fd8dd4517a90dcc28aac821330ef8c36c2450464be7e1d7",
+    "files-help.xrgb": "1736a56b35cdcb1d55c515915ced93303301754fab88223d4cfa5726fe0fbd00",
+    "files-menu-file.xrgb": "8e7cb258ae8339b909323c42377c4fe13e7036a30759abe16d86f57986423d00",
+    "files-menu-view.xrgb": "18260f7cf633da2209fbfcb728b0ef12137a5e188e6adef3e028cc0cafafdde5",
+    "files-multi-select.xrgb": "70407eb59478acb9903db53c63b204308db3218b109727a7ec6aa265a9568256",
+    "files-properties.xrgb": "bee3f324de75e47546a40025ab000783ac0d919e651e43ebb30e5dc46e1831f5",
+    "files-rename-error.xrgb": "04e896519e40cb106b558988b8231048f2dfe195df6cdc01dbfac57fb41b9b63",
+    "files-replace-prompt.xrgb": "9fefe01913eff1b88db45bdd018bcd3da3ea56f2a8d4d9ceecfdc360f1e01ed6",
+    "files-root-details.xrgb": "07670c675c49e9c31b11700b7bb88dbf671ff94fd2ce4ca6d5e6a72e2eaca80d",
+    "files-sort-size-desc.xrgb": "de6d3b701fb83d2ba896b0eb0578a39a776c534ad4f9272c7dca7202423b178c",
+    "files-system-details.xrgb": "c5552601f63c2267ca76389c14774b0d00079fb3d91148f02b01f9e172d74089",
+    "files-system-icons.xrgb": "7c7e55fdff5fce2315ab1d8b1f34cb5a974aff413742f3e0c3681f92e1d92e20",
+    "files-tree.xrgb": "5e5c80a147ddf098c88b3d49cb05572ff6f5d11e2010af3ccf928875777d01b2",
 }
 
 
@@ -67,6 +70,9 @@ def load(name, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+ICONS = load("deskui_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")
 
 
 class DeskuiTests(unittest.TestCase):
@@ -85,7 +91,7 @@ class DeskuiTests(unittest.TestCase):
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/files"), "-I", str(ROOT / "src/kernel/include"),
-                            *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
+                            *ICONS.defines(), *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
             output = folder / "frames"
             output.mkdir()
             extra = [str(a(folder)) if callable(a) else str(a) for a in args]

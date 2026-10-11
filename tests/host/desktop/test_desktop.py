@@ -172,7 +172,9 @@ class DesktopTests(unittest.TestCase):
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
         self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a",
-                                           "ciuki-portrait.xrgb"})  # f3-02 /bin/dosbox
+                                           "ciuki-portrait.xrgb",  # f3-02 /bin/dosbox
+                                           "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT"})  # Tango store
+        self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
         expected["cflags"] = []
@@ -180,11 +182,14 @@ class DesktopTests(unittest.TestCase):
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
         self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/bin/dosbox", "/bin/files", "/bin/tasks",
-                                        "/bin/ciuknote", "/system/assets/ciuki-portrait.xrgb"})
+                                        "/bin/ciuknote", "/system/assets/ciuki-portrait.xrgb", "/system/icons/tango.cis",
+                                        "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT"})
         self.assertIn("/system/assets", directories)
+        self.assertIn("/system/icons", directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
+        self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 7)
+        self.assertEqual(len(records), 11)
         for r in records:
             self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
         print("PASS desktop/demo/Files ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
@@ -217,7 +222,7 @@ class DesktopTests(unittest.TestCase):
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="desktop-stale-", dir=parent) as temp:
             dest = Path(temp)
-            for name in ("manifest.json", "desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"):
+            for name in ("manifest.json", *sorted(build.OUTPUTS)):
                 shutil.copy2(build.OUT / name, dest / name)
             with patch.object(build, "OUT", dest):
                 self.assertTrue(build.current_build(build.inputs()))
@@ -255,11 +260,13 @@ class AppCaseReplayTests(unittest.TestCase):
                   "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/libdeskui"),
                   "-I", str(ROOT / "apps/tasks"), "-I", str(ROOT / "src/kernel/include")]
         host = ROOT / "tests/host/desktop"
+        icons = load("replay_icon_assets", host / "icon_assets.py")   # the guest's /system/icons store
         os_calls = ["-D_DEFAULT_SOURCE", "-include", str(host / "replay_os.h")]   # the replay's virtual kernel
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
+                 *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix, ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),

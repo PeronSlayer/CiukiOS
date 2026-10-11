@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "gate.h"
+#include "../libdeskui/deskui.h"
 #include <ciuki/raw.h>
 #include <ciuki/runtime.h>
 #include <ciuki/channel.h>
@@ -210,9 +211,11 @@ static int tasks_verify(const struct desktop *d)
     }
     return !demo && tasks && self;
 }
+/* Start menu and taskbar icons: the Tango store through icon_map.c. */
+static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
 static void shell_setup(struct desktop *d)
 {
-    d->launch=launch_program; d->terminate=terminate_child;
+    d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
     int fd=authority ? number(authority,CIUKI_OPEN_MAX-1) : -1;

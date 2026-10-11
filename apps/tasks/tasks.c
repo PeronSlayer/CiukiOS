@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: MIT */
 #include "model.h"
 #include "view.h"
-#include "../desktop/shell_icons.h"
 #include "../desktop/gate.h"
 #include <ciuki/proc.h>
 #include <errno.h>
@@ -232,7 +231,7 @@ int main(int argc, char **argv)
     }
     a->window.message = on_message; a->window.user = a;
     a->ui.event = event; a->ui.user = a;
-    tv_init(&a->view, &a->ui, desk_icon_run);
+    tv_init(&a->view, &a->ui, du_icon_argb(du_icon_name("program:*"), 16));
     if (test) { tv_speed(&a->view, TV_HIGH); du_window_move(&a->window, 8, 40); }
     refresh(a); sample(a); timers(a);
     int r = du_run(&a->window, NULL, NULL);

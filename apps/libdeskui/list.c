@@ -288,7 +288,7 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
         enum du_icon_mode mode = it->ghost ? DU_ICON_GHOST : sel && focused && window ? DU_ICON_SELECTED : DU_ICON_NORMAL;
         const char *name = it->text[0] ? it->text[0] : "";
         if (w->view == DU_ICONS) {
-            du_icon(c, r.x + (CELL_W - 32) / 2, r.y + 4, it->icon32 ? it->icon32 : it->icon16, it->icon32 ? 32 : 16, mode);
+            du_icon_blit(c, r.x + (CELL_W - 32) / 2, r.y + 4, it->icon32 ? it->icon32 : it->icon16, it->icon32 ? 32 : 16, mode);
             char lines[2][64]; unsigned n = wrap(name, lines);
             struct du_rect lab = label_rect(w, &l, i);
             uint32_t ink = DU_INK;
@@ -299,7 +299,7 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
             if (act && focused && window) du_dotted(c, lab);
             continue;
         }
-        du_icon(c, r.x + 2, r.y + (DU_ROW - 16) / 2, it->icon16, 16, mode);
+        du_icon_blit(c, r.x + 2, r.y + (DU_ROW - 16) / 2, it->icon16, 16, mode);
         struct du_rect lab = label_rect(w, &l, i);
         int limit = (w->view == DU_DETAILS && w->column_count ? w->columns[0].width : l.colw) - 26;
         draw_label(c, lab, name, limit, sel, act, focused, window, w->inactive_selection);
@@ -361,7 +361,7 @@ void du_draw_tree(struct du_canvas *c, struct du_widget *w, int focused, int win
             if (!it->expanded) du_vline(c, cx, cy - 2, 5, DU_INK);
         }
         int sel = it->selected;
-        du_icon(c, cx + 8, r.y + (DU_ROW - 16) / 2, it->icon16, 16, sel && focused && window ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        du_icon_blit(c, cx + 8, r.y + (DU_ROW - 16) / 2, it->icon16, 16, sel && focused && window ? DU_ICON_SELECTED : DU_ICON_NORMAL);
         struct du_rect lab = label_rect(w, &l, i);
         draw_label(c, lab, it->text[0] ? it->text[0] : "", l.area.x + l.area.w - lab.x - 4, sel, i == w->active, focused, window, 1);
     }
