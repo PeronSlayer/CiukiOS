@@ -143,44 +143,34 @@ this absent mode as a failed prerequisite for later cases.
 After SWEEP_END, the on-disk `probe=` line has been removed; keep the disk and
 the same image. Start a **separate** capture with a fresh eight-hex-digit run id
 before powering on. In the three-second `SELECT_READY` window, press **S**
-(upper- or lowercase, laptop keyboard or COM1). The current loader immediately
-boots safe mode and cancels any configured probe request. This boots the safe
-scaffold without rewriting the disk, but it runs no `safe` probe and has no
-test run identity. It therefore cannot qualify the physical menu case.
+(upper- or lowercase, laptop keyboard or COM1). The loader cancels any configured
+probe request, sets safe mode, prints `Safe mode selected; P for a probe, or wait`
+and `L:SAFE=1`, and starts a fresh three-second menu window. Within that new
+window, press **P**, type **`f1:safe run=<fresh id>`** (replace `<fresh id>` with
+the chosen eight hex digits), and press **Enter** within the selector's
+30-second entry deadline. The exact sequence is **S, P,
+`f1:safe run=12345678`, Enter**, with a fresh id for each acquisition and no
+`safe=1` suffix. The loader passes both the safe flag and the selector to the
+kernel, and records `L:SELECT_SOURCE=menu`.
 
-There is currently **no supported key sequence** that combines safe mode and
-a hardware probe selector on that unchanged disk. S then P does not work:
-`ciukldr/menu.inc:boot_menu` `.safe` jumps directly to `.done`; P cannot be read
-afterward. P alone accepts `f1:safe run=12345678` followed by Enter within its
-30-second entry deadline, but does not set the safe flag. Appending ` safe=1`
-is rejected on hardware: `selector_validate` admits that suffix only when
-`selector_fw=1`, and the kernel's `selector.c` also requires validated QEMU
-flags. `.cancel_cfg` clears the request, not the safe flag, and
-`selector_accept` preserves an already-set safe flag. The loader order in
-`ciukldr.asm` is config_read → boot_menu → video_select → elf_load; there is
-no second menu or disk write in this path. These are repository control-flow
-facts; [SeaBIOS 1.16.3 INT16 source](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c)
-confirms AH=01 polls and AH=00 consumes a keyboard character, while
-[QEMU fw_cfg documentation](https://www.qemu.org/docs/master/specs/fw_cfg.html)
-describes the separate virtual-machine selector transport. Neither supplies
-a second menu on hardware.
+After S, expiry or N boots safe mode without a probe; N preserves the safe flag.
+L can still toggle serial logging before P; keep logging enabled for this
+acquisition. P alone does not add safe mode, and the ` safe=1` selector suffix
+remains QEMU-only. Research and source comparison for the bounded menu restart
+are recorded in [the boot contract](design/boot-memory.md#sources); this is the
+F1-37 loader flow, with host checks distinct from the lead's QEMU and physical
+qualification.
 
-**Open loader change for the lead (not implemented by f1-36):** after S sets
-the safe flag, return to the existing bounded menu poll instead of `.done`.
-The smallest change is that branch alone, allowing P during the remainder of
-the original three-second window; restarting the three-second deadline would
-give the operator a full entry window. Expiry still boots safe mode. With that
-change reviewed and qualified, the intended sequence is **S, P,
-`f1:safe run=<fresh-id>`, Enter**, with no suffix. Observe `[safe] Console
-ready.` and the input/console evidence, then retain the original serial bytes
-in that run's own capture directory as `f0.log`. Its `acquisition.json` must
-contain the verified image/build identity, `selector: "f1:safe run=<fresh-id>"`,
-`selector_source: "menu"`, `operator_confirmed: true`, and
-`case_confirmations: {"safe-menu-t23": true}` (or the E500 id), confirming the
-actual operator observation. Qualification requires END PASS, `safe_mode=1`,
-`source=menu`, zero optional activations and mounts, and working console/input;
-an operator confirmation cannot replace those records. A synthetic acquisition
-can exercise the importer now, but establishes no physical qualification.
+Observe `[safe] Console ready.` and the input/console evidence, then retain the
+original serial bytes in that run's own capture directory as `f0.log`. Its
+`acquisition.json` must contain the verified image/build identity,
+`selector: "f1:safe run=<fresh id>"`, `selector_source: "menu"`,
+`operator_confirmed: true`, and `case_confirmations: {"safe-menu-t23": true}`
+(or the E500 id), confirming the actual operator observation. Qualification
+requires END PASS, `safe_mode=1`, `source=menu`, zero optional activations and
+mounts, and working console/input; an operator confirmation cannot replace those
+records. A synthetic acquisition exercises the importer but establishes no
+physical qualification.
 
 The scoped importer can evaluate the declared physical case by passing it in
 the `cases` argument of `physical.import_sweep`, together with the suite's

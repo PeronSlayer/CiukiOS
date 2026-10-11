@@ -13,6 +13,9 @@ struct probe_def { const char *name; int (*fn)(void); };
     __attribute__((used, section(".f1probes"))) f1probe_##func = { id, func }
 
 extern const struct probe_def __f1probes_start[], __f1probes_end[];
+#define CIUKI_F3_PROBE(id, func) static const struct probe_def \
+    __attribute__((used, section(".f3probes"), aligned(4))) f3probe_##func = { id, func }
+extern const struct probe_def __f3probes_start[], __f3probes_end[];
 #define CIUKI_F4_PROBE(id, func) static const struct probe_def \
     __attribute__((used, section(".f4probes"))) f4probe_##func = { id, func }
 extern const struct probe_def __f4probes_start[], __f4probes_end[];

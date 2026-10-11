@@ -464,3 +464,32 @@ self-reboot (34 intact provenance lines out of 35 boots). The
 (`device_exceptions` `vga: none`). Both import rules are directive
 f1-35; the results above are read from the capture until the import
 lands.
+
+## Twenty-third image: `a71327b7…` (commit `798a92d`, f2-23, f1-35, f1-36, f1-34 and the lead's importer glue merged)
+
+Changes under test: `channel-eintr` injection accepting the timer-expired
+`T_READY` receive with `part=inject`/`part=wait` records (f2-23); the sweep
+`safe` step as `NOT_RUN reason=safe_mode_not_selected` (f1-36); the
+operator criteria of the `input` probe and the desktop gate loop that
+coalesces reports instead of exiting on pending transmissions, with
+button edges counted and typematic repeats tolerated (f1-34 and the lead
+amendment); the importer rules (f1-35 plus the lead's glue: damaged
+provenance with sweep continuity, `device_exceptions`, QEMU-only
+` safe=1` selector cases, `timing_domain` literal, operator criteria).
+Host tests 219 OK. Targeted QEMU checks through a scratch suite
+(prerequisites empty, deleted after the run): `input-qemu-t23`,
+`input-qemu-e500`, `input-qemu-desktop-1998`,
+`crash-isolation-normal-qemu-t23`, `crash-isolation-normal-qemu-e500`,
+`signals-fault-qemu-t23`, `signals-fault-qemu-e500`,
+`signals-fault-qemu-min128`, `safe-fw-cfg-qemu-t23`,
+`safe-boot-cfg-qemu-t23`, `video-fallback`: 11 PASS. The physical import
+of capture `77777777` with the merged importer (`--image-sha256
+6ed146ab…`): 98 PASS, 1 FAIL (`input-qemu-t23`, the historical operator
+run judged by the exact totals of that image), 90 `not_run` (74 by the
+`input` prerequisite, 6 `device_exception_not_applicable:vga=none`,
+5 `selector_flag_not_applicable:safe=1`, 3 `serial=none`, 1 host-block
+fault variant, 1 `disk_cache=writethrough`); `66666666` imports with the
+same rules. The hardware image for the fourth T23 sweep is the same tree
+with `BOOT.CFG` `safe=0 serial=1` and `probe=all:sweep run=88888888`
+(`build/f0/ciukios-hw.img`, SHA-256 `ad63279d…`). The `f2-all` batch on
+`a71327b7…` is recorded below when it completes.

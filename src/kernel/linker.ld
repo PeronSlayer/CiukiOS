@@ -39,6 +39,11 @@ SECTIONS
         __f2probes_start = .;
         KEEP(*(.f2probes))
         __f2probes_end = .;
+        . = ALIGN(4);
+        __f3probes_start = .;
+        KEEP(*(.f3probes))
+        __f3probes_end = .;
+        . = ALIGN(4);
         __f4probes_start = .;
         KEEP(*(.f4probes))
         __f4probes_end = .;

@@ -54,8 +54,14 @@ volatile bool g_measure_stop;
 #define task_sleep_ms timing_sleep_ms
 #define write_cr3(value) (host_cr3 = (value))
 #define biosvm_task_cr3(task, normal) ((void)(task), (normal))
+#define biosvm_task_esp0(task, normal) ((void)(task), 0u)
+/* The production scheduler composes optional DOS ownership hooks. This
+ * native timing fixture links without DOS VM instances. */
+extern uint32_t dosvm_task_cr3(const struct task *, uint32_t) __attribute__((weak));
+extern uint32_t dosvm_task_esp0(const struct task *, uint32_t) __attribute__((weak));
+extern void dosvm_tick(void) __attribute__((weak));
 #define vmm_kernel_pd() 0u
-#define tss_set_kernel_stack(value) ((void)0)
+#define tss_set_kernel_stack(value) ((void)(value))
 #define crit_begin() ((void)0)
 #define crit_end() ((void)0)
 #define switch_context(old, next) ((void)(old), (void)(next))
@@ -66,6 +72,7 @@ volatile bool g_measure_stop;
 #undef tss_set_kernel_stack
 #undef vmm_kernel_pd
 #undef biosvm_task_cr3
+#undef biosvm_task_esp0
 #undef write_cr3
 #undef task_sleep_ms
 #undef sched_tick

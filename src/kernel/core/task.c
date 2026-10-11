@@ -10,6 +10,10 @@
 #include <ciuki/sync.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/process.h>
+/* Optional in the standalone F0/F1 host scheduler harnesses. */
+extern uint32_t dosvm_task_cr3(const struct task *, uint32_t) __attribute__((weak));
+extern uint32_t dosvm_task_esp0(const struct task *, uint32_t) __attribute__((weak));
+extern void dosvm_tick(void) __attribute__((weak));
 
 extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
 extern void task_first_entry(void);
@@ -279,8 +283,10 @@ void schedule(void)
     g_current = next;
     /* F1 V86 worker: preserve its private directory and live C continuation.
      * Both hooks return the unmodified F0 values for all other tasks. */
-    write_cr3(biosvm_task_cr3(next, next->user ? next->as.pd_phys : vmm_kernel_pd()));
-    tss_set_kernel_stack(biosvm_task_esp0(next, (uint32_t)next->kstack + KSTACK_SIZE));
+    uint32_t cr3 = biosvm_task_cr3(next, next->user ? next->as.pd_phys : vmm_kernel_pd());
+    uint32_t esp0 = biosvm_task_esp0(next, (uint32_t)next->kstack + KSTACK_SIZE);
+    write_cr3(dosvm_task_cr3 ? dosvm_task_cr3(next, cr3) : cr3);
+    tss_set_kernel_stack(dosvm_task_esp0 ? dosvm_task_esp0(next, esp0) : esp0);
     proc_task_switch(next);
     fpu_task_switch(next);
     crit_end();                 /* a switch suspends the caller's critical section */
@@ -292,6 +298,7 @@ void schedule(void)
 void sched_tick(void)
 {
     file_clock_tick();
+    if (dosvm_tick) dosvm_tick();
     for (struct task *t = all_tasks; t; t = t->all_next) {
         if (t->state == T_BLOCKED && t->wake_tick && g_ticks >= t->wake_tick) {
             t->wake_tick = 0;

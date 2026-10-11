@@ -15,7 +15,7 @@ import run as runner
 class SweepTests(unittest.TestCase):
     def test_cfg_source_and_menu_precedence(self):
         cfg = 'safe=0 serial=1\nprobe=all:sweep run=12345678\n'
-        self.assertEqual(config(cfg)['selection']['phase'], 3)
+        self.assertEqual(config(cfg)['selection']['phase'], 4)
         self.assertEqual(config(cfg)['source'], 'cfg')
         self.assertIsNone(config(cfg, menu='N')['selection'])
         self.assertTrue(config(cfg, menu='S')['safe'])

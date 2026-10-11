@@ -8,9 +8,10 @@ F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-faul
              'partition', 'fat-read', 'fat-write', 'cache', 'mount-crash', 'safe', 'bootlog')
 F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
              'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
-F4_PROBES = ('optical',)
-PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES)
-SELECTOR_RE = r'f([0124]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
+F3_PROBES = ('vm-boot',)
+F4_PROBES = ('optical',)  # F4 probes run by selector only; not in the sweep yet
+PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
+SELECTOR_RE = r'f([01234]):([a-z]+(?:-[a-z]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)'
 E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
@@ -58,10 +59,12 @@ def selector(request, source='menu', validated_fw_cfg=False):
     match = re.fullmatch(SELECTOR_RE, request)
     if not match:
         raise ValueError('invalid selector grammar or probe')
-    names = {0:F0_PROBES, 1:F1_PROBES, 2:F2_PROBES, 4:F4_PROBES}[int(match[1])]
-    if match[2] not in (*names, *(('all', 'core') if match[1] in ('0','1') else ())):
+    names = {0:F0_PROBES, 1:F1_PROBES, 2:F2_PROBES, 3:F3_PROBES, 4:F4_PROBES}[int(match[1])]
+    if match[2] not in (*names, *(('all', 'core') if match[1] in ('0', '1') else ())):
         raise ValueError('invalid selector grammar or probe')
     forced = bool(match[4]); safe = bool(match[5])
+    if match[1] == '3' and (forced or safe):
+        raise ValueError('F3 selector has no optional suffix')
     if (forced or safe) and not (source == 'fw_cfg' and validated_fw_cfg):
         raise ValueError('platform override and safe mode require validated QEMU fw_cfg')
     return {'phase': int(match[1]), 'probe': match[2], 'run': match[3], 'platform': 'e500' if forced else None, 'safe': safe}
@@ -72,6 +75,98 @@ def menu_choice(choice, safe=False):
     if choice.lower() not in ('n', 's'):
         raise ValueError('invalid boot menu choice')
     return safe or choice.lower() == 's'
+
+
+class BootMenu:
+    """Replay menu.inc polls with BIOS ticks and optional keyboard/COM1 bytes.
+
+    A poll consumes at most one character before checking the deadline, as the
+    loader does. Configured requests are already validated by the cfg parser;
+    validated fw_cfg bypasses the menu. No firmware or disk access occurs here.
+    """
+    DAY_TICKS = 0x1800b0
+    MENU_TICKS = 55
+    ENTRY_TICKS = 548
+    POLL_LIMIT = 0x2000000
+    SAFE_CONFIRMATION = 'Safe mode selected; P for a probe, or wait'
+
+    def __init__(self, tick=0, safe=False, serial=True, request=None, source='cfg'):
+        self.safe = safe
+        self.serial = serial
+        self.request = request
+        self.source = source if request is not None else 'menu'
+        self.line = ''
+        self.error = False
+        self.output = []
+        self.state = 'menu'
+        if request is not None and source == 'fw_cfg':
+            selected = selector(request, source, validated_fw_cfg=True)
+            self.safe |= selected['safe']
+            self._finish()
+        else:
+            self.output.append('SELECT_READY')
+            self._restart(tick, self.MENU_TICKS)
+
+    def _restart(self, tick, ticks):
+        self.start_tick = tick
+        self.deadline_ticks = ticks
+        self.polls_left = self.POLL_LIMIT
+
+    def _cancel_cfg(self):
+        self.request = None
+        self.source = 'menu'
+
+    def _finish(self, error=False):
+        self.error = error
+        if error:
+            self.output.append('SELECT_ERROR')
+        self.state = 'done'
+        self.output.append('L:SELECT_SOURCE=' + self.source)
+
+    def poll(self, tick, char=None):
+        if self.state == 'done':
+            return
+        if char is not None:
+            if self.state == 'menu':
+                key = char.lower()
+                if key == 'n':
+                    self._cancel_cfg()
+                    self._finish()
+                    return
+                if key == 's':
+                    self._cancel_cfg()
+                    self.safe = True
+                    self.output.extend((self.SAFE_CONFIRMATION, 'L:SAFE=1'))
+                    self._restart(tick, self.MENU_TICKS)
+                    return
+                if key == 'p':
+                    self._cancel_cfg()
+                    self.state = 'entry'
+                    self._restart(tick, self.ENTRY_TICKS)
+                    return
+                if key == 'l':
+                    self.serial = not self.serial
+            elif char in ('\r', '\n'):
+                try:
+                    selector(self.line)
+                except ValueError:
+                    self._finish(error=True)
+                else:
+                    self.request = self.line
+                    self._finish()
+                return
+            elif char == '\b':
+                self.line = self.line[:-1]
+                return
+            elif 32 <= ord(char) <= 126:
+                if len(self.line) == 64:
+                    self._finish(error=True)
+                    return
+                self.line += char
+        self.polls_left -= 1
+        elapsed = (tick - self.start_tick) % self.DAY_TICKS
+        if self.polls_left == 0 or elapsed >= self.deadline_ticks:
+            self._finish(error=self.state == 'entry')
 
 
 def boot_options(options, safe=False, serial=True):

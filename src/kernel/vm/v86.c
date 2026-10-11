@@ -202,6 +202,13 @@ static uint8_t pit_io(struct v86 *v, uint16_t port, bool write, uint8_t value)
 
 int v86_io(struct v86 *v, uint16_t port, unsigned width, bool write, uint32_t *value)
 {
+    if (width != 1 && width != 2 && width != 4)
+        return -EINVAL;
+    if (v->io) {
+        int rc = v->io(v->ops.arg, port, width, write, value);
+        if (rc != -ENOSYS)
+            return rc;
+    }
     /* SeaBIOS rel-1.16.3 qemu_cfg_init selects PMBASE=0600h for QEMU's
      * etc/table-loader; piix4_pm_setup uses PMBASE+8, timer_read does INL.
      * PS/2 reply waits need this port even when no power service is enabled.
@@ -282,6 +289,20 @@ static void putword(uint8_t *p, unsigned width, uint32_t x)
         p[i] = (uint8_t)(x >> (i * 8));
 }
 
+static int copyseg(struct v86 *v, uint32_t seg, uint32_t off, void *buf, unsigned n, bool write)
+{
+    void *p = segmem(v, seg, off, n, write);
+    if (!p)
+        return -EFAULT;
+    if (v->copy)
+        return v->copy(v->ops.arg, (seg << 4) + off, buf, n, write);
+    if (write)
+        memcpy(p, buf, n);
+    else
+        memcpy(buf, p, n);
+    return 0;
+}
+
 static uint32_t guest_flags(const struct v86 *v, const struct v86_frame *f)
 {
     return (f->tf.eflags & 0xCD5u) | 2u | (v->vif ? V86_IF : 0);
@@ -301,19 +322,22 @@ static void setlow(uint32_t *reg, uint32_t value)
 
 int v86_reflect(struct v86 *v, struct v86_frame *f, uint8_t vector)
 {
-    uint8_t *ivt = v->ops.memory(v->ops.arg, (uint32_t)vector * 4, 4, false);
+    uint8_t ivt[4], slot[2];
     uint16_t sp = (uint16_t)(f->tf.user_esp - 6);
     uint8_t *ip_slot = segmem(v, f->tf.user_ss, sp, 2, true);
     uint8_t *cs_slot = segmem(v, f->tf.user_ss, (uint16_t)(sp + 2), 2, true);
     uint8_t *fl_slot = segmem(v, f->tf.user_ss, (uint16_t)(sp + 4), 2, true);
-    if (!ivt || !ip_slot || !cs_slot || !fl_slot)
+    if (copyseg(v, 0, (uint32_t)vector * 4, ivt, 4, false) || !ip_slot || !cs_slot || !fl_slot)
         return v86_abort(v, f, -EFAULT);
     uint32_t ip = getword(ivt, 2), cs = getword(ivt + 2, 2);
     if (!segmem(v, cs, ip, 1, false))
         return v86_abort(v, f, -EFAULT);
-    putword(ip_slot, 2, f->tf.eip);
-    putword(cs_slot, 2, f->tf.cs);
-    putword(fl_slot, 2, guest_flags(v, f));
+    putword(slot, 2, f->tf.eip);
+    if (copyseg(v, f->tf.user_ss, sp, slot, 2, true)) goto fault;
+    putword(slot, 2, f->tf.cs);
+    if (copyseg(v, f->tf.user_ss, (uint16_t)(sp + 2), slot, 2, true)) goto fault;
+    putword(slot, 2, guest_flags(v, f));
+    if (copyseg(v, f->tf.user_ss, (uint16_t)(sp + 4), slot, 2, true)) goto fault;
     setlow(&f->tf.user_esp, sp);
     f->tf.eip = ip;
     f->tf.cs = cs;
@@ -322,6 +346,8 @@ int v86_reflect(struct v86 *v, struct v86_frame *f, uint8_t vector)
     f->tf.eflags &= ~V86_TF;
     v->state = V86_RUNNING;
     return 0;
+fault:
+    return v86_abort(v, f, -EFAULT);
 }
 
 void v86_irq_raise(struct v86 *v, unsigned irq)
@@ -405,7 +431,7 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
     unsigned width = op32 ? 4 : 2;
     uint32_t next = (uint16_t)(f->tf.eip + len), value;
     uint16_t sp = (uint16_t)f->tf.user_esp;
-    uint8_t *p;
+    uint8_t *p, buf[4], csbuf[4], flbuf[4];
     bool old_shadow = v->shadow;
     int rc = 0;
     switch (op) {
@@ -425,6 +451,13 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
          * deadline, mapped memory and I/O policy still bound this execution. */
         v->stats.insn[V86_INT]++;
         f->tf.eip = next;
+        if (v->interrupt) {
+            rc = v->interrupt(v->ops.arg, f, vector);
+            if (rc != -ENOSYS) {
+                if (old_shadow) { v->shadow = false; f->tf.eflags &= ~V86_TF; }
+                return rc < 0 ? v86_abort(v, f, rc) : rc;
+            }
+        }
         return v86_reflect(v, f, vector);
     }
     case 0xCF: {
@@ -433,9 +466,13 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
         uint8_t *fl_slot = segmem(v, f->tf.user_ss, (uint16_t)(sp + width * 2), width, false);
         if (!p || !cs_slot || !fl_slot)
             goto fault;
-        uint32_t ip = getword(p, width), cs = getword(cs_slot, width);
-        value = getword(fl_slot, width);
-        if (ip > 0xFFFF || cs > 0xFFFF)
+        if (copyseg(v, f->tf.user_ss, sp, buf, width, false) ||
+            copyseg(v, f->tf.user_ss, (uint16_t)(sp + width), csbuf, width, false) ||
+            copyseg(v, f->tf.user_ss, (uint16_t)(sp + width * 2), flbuf, width, false))
+            goto fault;
+        uint32_t ip = getword(buf, width), cs = getword(csbuf, width);
+        value = getword(flbuf, width);
+        if (ip > 0xFFFF || cs > 0xFFFF || !segmem(v, cs, ip, 1, false))
             goto fault;
         v->stats.insn[V86_IRET]++;
         f->tf.eip = ip;
@@ -455,7 +492,8 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
         p = segmem(v, f->tf.user_ss, sp, width, true);
         if (!p)
             goto fault;
-        putword(p, width, guest_flags(v, f));
+        putword(buf, width, guest_flags(v, f));
+        if (copyseg(v, f->tf.user_ss, sp, buf, width, true)) goto fault;
         setlow(&f->tf.user_esp, sp);
         v->stats.insn[V86_PUSHF]++;
         break;
@@ -463,7 +501,8 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
         p = segmem(v, f->tf.user_ss, sp, width, false);
         if (!p)
             goto fault;
-        set_flags(v, f, getword(p, width));
+        if (copyseg(v, f->tf.user_ss, sp, buf, width, false)) goto fault;
+        set_flags(v, f, getword(buf, width));
         setlow(&f->tf.user_esp, sp + width);
         v->stats.insn[V86_POPF]++;
         break;
@@ -522,12 +561,15 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
         p = segmem(v, write ? seg : f->es, off, width, !write);
         if (!p)
             goto fault; /* validate INS destination before its physical read */
-        value = write ? getword(p, width) : 0;
+        if (write && copyseg(v, seg, off, buf, width, false)) goto fault;
+        value = write ? getword(buf, width) : 0;
         rc = v86_io(v, (uint16_t)f->tf.edx, width, write, &value);
         if (rc)
             return v86_abort(v, f, rc);
-        if (!write)
-            putword(p, width, value);
+        if (!write) {
+            putword(buf, width, value);
+            if (copyseg(v, f->es, off, buf, width, true)) goto fault;
+        }
         off += (f->tf.eflags & 0x400) ? 0u - width : width;
         if (addr32)
             *index = off;
