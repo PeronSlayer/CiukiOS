@@ -159,8 +159,10 @@ void kmutex_lock(struct kmutex *m)
 {
     thread_context();
     for (struct kmutex *p = held; p; p = p->held_next)
-        if (p->owner == g_current && (uintptr_t)p >= (uintptr_t)m)
+        if (p->owner == g_current && (uintptr_t)p >= (uintptr_t)m) {
+            klog("[mutex] held=%p new=%p task=%s", (void *)p, (void *)m, g_current->name);
             panic("mutex: recursive acquisition or lock order");
+        }
     while (m->owner)
         kwait_wait_until(&m->wait, mutex_free, m, deadline_after_ms(1000));
     m->owner = g_current;

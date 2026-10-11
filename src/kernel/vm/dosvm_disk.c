@@ -1,6 +1,7 @@
 /* File-backed bounded private disk overlay; the base is never opened writable.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/cpu.h>
 #include "dosvm_internal.h"
 
 int dosvm_disk_open(struct dosvm *v)
@@ -27,6 +28,20 @@ int dosvm_disk_open(struct dosvm *v)
     return 0;
 }
 
+
+static bool disk_gate_free(void *arg) { return !*(bool *)arg; }
+static void disk_gate_take(struct dosvm *v)
+{
+    /* Test-and-set under a critical section: the worker and the controller
+     * task may both reach the gate, and the kernel preempts at trap exits. */
+    for (;;) {
+        uint32_t flags = irq_save();
+        if (!v->disk_busy) { v->disk_busy = true; irq_restore(flags); return; }
+        irq_restore(flags);
+        kwait_wait_until(&v->disk_wait, disk_gate_free, &v->disk_busy, deadline_after_ms(1000));
+    }
+}
+static void disk_gate_drop(struct dosvm *v) { v->disk_busy = false; kwait_wake_all(&v->disk_wait); }
 static int sector_io(struct dosvm *v, int handle, uint32_t offset, void *data, bool write)
 {
     uint64_t position;
@@ -70,22 +85,22 @@ static int disk_write_locked(struct dosvm *v, uint32_t lba, const void *sector)
 
 int dosvm_disk_read(struct dosvm *v, uint32_t lba, void *sector)
 {
-    kmutex_lock(&v->disk_lock);
+    disk_gate_take(v);
     int e = disk_read_locked(v, lba, sector);
-    kmutex_unlock(&v->disk_lock);
+    disk_gate_drop(v);
     return e;
 }
 int dosvm_disk_write(struct dosvm *v, uint32_t lba, const void *sector)
 {
-    kmutex_lock(&v->disk_lock);
+    disk_gate_take(v);
     int e = disk_write_locked(v, lba, sector);
-    kmutex_unlock(&v->disk_lock);
+    disk_gate_drop(v);
     return e;
 }
 
 int dosvm_disk_close(struct dosvm *v, bool forced)
 {
-    kmutex_lock(&v->disk_lock);
+    disk_gate_take(v);
     int error = 0, e;
     if (v->overlay_open) {
         if (!forced && v->info.dirty) error = vfs_commit(&v->disk_table, v->overlay);
@@ -109,6 +124,6 @@ int dosvm_disk_close(struct dosvm *v, bool forced)
         v->table_ready = false;
     }
     v->sector_count = 0;
-    kmutex_unlock(&v->disk_lock);
+    disk_gate_drop(v);
     return error;
 }

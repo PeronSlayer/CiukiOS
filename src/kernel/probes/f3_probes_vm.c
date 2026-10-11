@@ -51,6 +51,27 @@ static int command(struct dosvm *v, const char *text)
     }
 }
 
+/* Lead diagnostic (QEMU 2026-10-11): the guest screen when a boot does not
+ * reach the prompt. Spaces become '_', '=' and non-ASCII become '.'. */
+static void screen_dump(const char *name, struct dosvm *v)
+{
+    struct dosvm_info info;
+    dosvm_info(v, &info);
+    rec_emit(name, "DATA", "group=boot_state ready=%u state=%u reason=%u", info.dos_ready, info.state, info.reason);
+    const uint16_t *text = dosvm_text(v, 0);
+    for (unsigned row = 0; row < 25; row++) {
+        char line[81];
+        unsigned len = 0;
+        for (unsigned col = 0; col < 80; col++) {
+            uint8_t ch = (uint8_t)text[row * 80 + col];
+            line[col] = ch == ' ' || !ch ? '_' : ch > ' ' && ch < 127 && ch != '=' ? (char)ch : '.';
+            if (ch > ' ' && ch < 127) len = col + 1;
+        }
+        if (!len) continue;
+        line[len] = 0;
+        rec_emit(name, "DATA", "group=screen row=%u text=%s", row, line);
+    }
+}
 static struct task *heartbeat(uint32_t *data)
 {
     struct task *t = task_create_user("f3-heartbeat", P_NORMAL, 0x400000, 0x800000, 0, 0, 0);
@@ -86,7 +107,7 @@ static int probe_f3_vm_boot(void)
     unsigned clean = 0, faults = 0, privileged = 0, ports = 0;
     int error = 0;
     bool isolated = true, restored = true;
-    const struct dosvm_config config = {DOSVM_LOW_CAP};
+    const struct dosvm_config config = {.commitment=DOSVM_LOW_CAP};
     struct dosvm_ledger before, baseline, after;
     dosvm_snapshot(&before);
     /* Test boots start with read-only mounts. The existing F1 write gate
@@ -124,7 +145,7 @@ static int probe_f3_vm_boot(void)
         if ((error = dosvm_write(v, 0x180, &candidate_ivt, 4)) ||
             (error = dosvm_disk_write(v, 262143, verify))) break;
         bool fault = cycle >= 100;
-        if ((error = command(v, !fault ? "EXIT" : cycle & 1 ? "VMPORT.COM" : "VMPRIV.COM"))) break;
+        if ((error = command(v, !fault ? "EXIT" : cycle & 1 ? "\\VMPORT.COM" : "\\VMPRIV.COM"))) break;
         struct dosvm_info ended;
         dosvm_info(v, &ended);
         if (ended.reason != (fault ? DOSVM_FAULT : DOSVM_EXIT) || (fault && ended.fault_vector != 13)) {
@@ -155,6 +176,8 @@ static int probe_f3_vm_boot(void)
              free_before, pmm_free_count(), baseline.handles, after.handles, baseline.devices, after.devices, restored);
     if (clean != 100 || faults != 100 || native_after == native_before || !isolated || !restored) error = -EFAULT;
 cleanup:
+    if (error && v) screen_dump("vm-boot", v);
+    else if (error && witness) screen_dump("vm-boot", witness);
     if (v) { int e = dosvm_destroy(dosvm_key(v), true); if (!error) error = e; }
     if (witness) { int e = dosvm_destroy(dosvm_key(witness), true); if (!error) error = e; }
     if (native) { task_kill(native, 0); task_reap(native); }
@@ -167,3 +190,78 @@ cleanup:
     return !!error;
 }
 CIUKI_F3_PROBE("vm-boot", probe_f3_vm_boot);
+
+/* F3 memory row (directive f3-03): A20/HMA, XMS 3.0, UMB and EMS 4.0 are
+ * exercised by the DOS-side payload VMMEMORY.COM, whose verdict the kernel
+ * records from its E9 line ("VMMEMORY PASS"/"FAIL"); the second VM shows the
+ * admission arithmetic (group=admission) and is admitted or refused explicitly. */
+static int type_command(struct dosvm *v, const char *text)
+{
+    struct dosvm_key key = dosvm_key(v);
+    for (unsigned i = 0; text[i]; i++)
+        if (!dosvm_keyboard(key, (uint8_t)text[i])) return -ENOSPC;
+    if (!dosvm_keyboard(key, 0x1C0D)) return -ENOSPC;
+    return 0;
+}
+static int wait_memory(struct dosvm *v, uint32_t ms)
+{
+    uint64_t until = deadline_after_ms(ms);
+    for (;;) {
+        struct dosvm_info info;
+        dosvm_info(v, &info);
+        if (info.state >= DOSVM_STOPPING) return -V86_EIO;
+        if (info.memory_done) return 0;
+        if (deadline_passed(until)) return -V86_ETIMEDOUT;
+        task_sleep_ms(1);
+    }
+}
+static int probe_f3_vm_memory(void)
+{
+    const char *name = "vm-memory";
+    rec_emit(name, "BEGIN", "version=1");
+    struct dosvm *v = 0, *second = 0;
+    int error = 0;
+    struct dosvm_ledger before, after;
+    dosvm_snapshot(&before);
+    const struct dosvm_config config = { .commitment = 0, .memory_probe = true };
+    if ((error = storage_enable_write(storage_get(), 2))) goto cleanup;
+    if ((error = dosvm_create(&config, &v)) || (error = boot_prompt(v))) goto cleanup;
+    struct dosvm_info info;
+    dosvm_info(v, &info);
+    rec_emit(name, "DATA", "case=boot ready=%u commitment=%u pool_quota=%u pool_used=%u free_paras=%u",
+             info.dos_ready, info.commitment, info.pool_quota, info.pool_used, info.free_paragraphs);
+    if ((error = type_command(v, "\\VMMEMORY.COM"))) goto cleanup;
+    error = wait_memory(v, 60000);
+    dosvm_info(v, &info);
+    rec_emit(name, "DATA", "case=conformance done=%u pass=%u xms_calls=%08x ems_calls=%08x pool_used=%u guest_records=%u dropped=%u error=%d",
+             info.memory_done, info.memory_pass, info.xms_calls, info.ems_calls, info.pool_used,
+             info.guest_records, info.dropped_records, error);
+    if (error) goto cleanup;
+    if (!info.memory_pass) { error = -EFAULT; goto cleanup; }
+    const struct dosvm_config config2 = { .commitment = 0, .memory_probe = true };
+    int admit = dosvm_create(&config2, &second);
+    rec_emit(name, "DATA", "case=second admitted=%u error=%d", admit == 0, admit);
+    if (!admit) {
+        if ((error = boot_prompt(second))) goto cleanup;
+        struct dosvm_info si;
+        dosvm_info(second, &si);
+        rec_emit(name, "DATA", "case=second_boot ready=%u commitment=%u", si.dos_ready, si.commitment);
+        if ((error = command(second, "EXIT")) || (error = dosvm_destroy(dosvm_key(second), false))) goto cleanup;
+        second = 0;
+    } else if (admit != -ENOMEM) { error = admit; goto cleanup; }
+    if ((error = command(v, "EXIT")) || (error = dosvm_destroy(dosvm_key(v), false))) goto cleanup;
+    v = 0;
+cleanup:
+    if (error && v) screen_dump(name, v);
+    if (second) { int e = dosvm_destroy(dosvm_key(second), true); if (!error) error = e; }
+    if (v) { int e = dosvm_destroy(dosvm_key(v), true); if (!error) error = e; }
+    dosvm_snapshot(&after);
+    bool cleaned = ledger_equal(&before, &after);
+    if (!cleaned && !error) error = -ENOMEM;
+    rec_emit(name, "DATA", "case=cleanup vms=%u tasks=%u pages=%u handles=%u devices=%u restored=%u",
+             after.vms, after.tasks, after.pages, after.handles, after.devices, cleaned);
+    rec_emit(name, "END", "status=%s error=%d", error ? "FAIL" : "PASS", error);
+    return !!error;
+}
+CIUKI_F3_PROBE("vm-memory", probe_f3_vm_memory);
+

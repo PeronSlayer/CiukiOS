@@ -111,7 +111,7 @@ selector_validate:
     mov ax, [selector_start]
     mov di, ax
     cmp byte [di+1], '3'
-    je .bad
+    je .f3_suffix
     ; Optional fw_cfg-only suffixes: platform, safe, F2 crash server.
     cmp byte [selector_fw], 1
     jne .bad
@@ -235,6 +235,22 @@ selector_validate:
 .bad:
     stc
     ret
+
+.f3_suffix:
+    ; F3 takes only the platform override, fw_cfg only (lead, 2026-10-11: the
+    ; qemu-e500 profile appends it to every selector); safe mode stays refused.
+    cmp byte [selector_fw], 1
+    jne .bad
+    mov ax, [selector_end]
+    sub ax, si
+    cmp ax, 14
+    jne .bad
+    mov di, platform_suffix
+    mov cx, 14
+    repe cmpsb
+    jne .bad
+    mov byte [selector_force], 1
+    jmp .good
 hex_digit:
     cmp al, '0'
     jb .bad
@@ -284,7 +300,7 @@ f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'si
     db 'threads-wait',0
 f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
-f3_sweep_name db 'sweep',0,'vm-boot',0,0
+f3_sweep_name db 'sweep',0,'vm-boot',0,'vm-memory',0,0
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
 desktop_suffix db ' server=desktop'

@@ -139,3 +139,126 @@ DOSBOOT.IMG SHA-256:
 `13714a2dce32b7456c20c4d1e9c69670367ce7e4021430f79194f87f77518251`.
 These hashes identify static build evidence only; the lead's QEMU acceptance
 is still pending.
+
+## f3-03
+
+Research checked before implementation, 2026-10-11: [XMS 3.0](https://www.phatcode.net/res/219/files/xms30.txt),
+[LIM EMS 4.0](https://www.phatcode.net/res/218/files/limems40.txt),
+[QEMU 9.2 i8042](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/input/pckbd.c)
+and [ACPI address-map interface](https://uefi.org/specs/ACPI/6.5/15_System_Address_Map_Interfaces.html).
+The existing monitor supplies checked private copies and synthetic interrupt
+stubs; its allocator owns each mapped page. EMS aliases therefore require
+explicit removal before freeing a pool block or destroying the address space.
+
+Decisions: keep the 32 MiB commitment, 8 MiB low-memory allowance and 32 MiB
+headroom. The pool is `00110000h` onwards, limited to commitment minus 8 MiB
+and at most 24 MiB; EMS has an 8 MiB sub-cap. Allocations use NORMAL pages
+and contiguous guest addresses, never contiguous host addresses. The pool is eagerly backed at creation so synthetic BIOS RAM is directly
+usable; resident backing and handle usage are reported separately. Both services
+share the same allocator; failed growth is transactional. XMS sizes remain
+KiB, EMS pages 16 KiB, physical backing 4 KiB. No extra 64 KiB rounding is
+introduced into XMS. Firmware E801 high memory alone uses 64 KiB units.
+
+Default frame: E000h; explicit D000h configuration is supported. UMBs stay
+within the contract's C800h–DFFFh ceiling and exclude the selected frame.
+Reserve C800h's first page for the far-call XMS stub, leaving C900h onwards
+for page-rounded UMB allocations. HMA remains wholly available to its single
+XMS owner. CIUKIDOS INT21/58h remains unchanged: no DOS-owned UMB MCB chain,
+link=0, only conventional strategies 0–2; upper strategies/linking fail.
+This follows the actual `int21` implementation rather than advertising a DOS
+arena that AH=48h cannot use.
+
+LIM's reserved 49h/4Ah fail. OS/E-only hardware, alternate-map/DMA and warmboot
+functions are subject to the specification's access-denied policy (A4h);
+there is no physical EMS hardware or VCPI grant. The application interface,
+including partial maps and alter-map jump/call, is implemented independently.
+Unsupported XMS extensions in 88h–8Fh return 80h. All memory BIOS answers are
+synthetic descriptions of this VM's pool; host firmware/allocator addresses
+are never returned. BIOS 87h validates both descriptors and complete extents
+before copying and preserves virtual A20.
+
+Host and build results and lead qualification are recorded below after
+verification. These decisions do not constitute QEMU or hardware evidence.
+
+### Probe `f3:vm-memory` (lead implementation after Codex's usage limit, 2026-10-11)
+
+Selector `f3:vm-memory run=<8hex>` (platform override as in F1/F2, no safe
+suffix; lead change of 2026-10-11 in the loader, the kernel parser and the
+runner model so the qemu-e500 profile can run F3); the sweep lists it
+after `vm-boot`. The controller creates one VM with the default 32 MiB
+commitment and `memory_probe` set, boots it to the prompt (`case=boot`:
+`ready`, `commitment`, `pool_quota`, `pool_used`, `free_paras`), types
+`VMMEMORY.COM` and waits up to 60 s for the kernel's verdict latch, written
+by the E9 line `VMMEMORY PASS`/`VMMEMORY FAIL` (`case=conformance`: `done`,
+`pass`, `xms_calls` and `ems_calls` as function bitmasks, `pool_used`,
+`guest_records`, `dropped`, `error`). It then creates a second VM with the
+same configuration: `group=admission` is emitted by `dosvm_create` for both
+VMs (free, reserved, resident, outstanding, request, headroom, admitted);
+`case=second` records `admitted` and the error; an admitted second VM boots
+to the prompt (`case=second_boot`) and exits; a refusal with `-ENOMEM` is an
+explicit outcome, any other error fails. `EXIT` ends the first VM; `case=cleanup`
+compares the ledger with the pre-probe snapshot. `VMMEMORY.COM` is assembled
+from `src/probes/dos/vm_memory.asm` into `DOSBOOT.IMG` (eleven payloads).
+Suite `f3-vm.json`: `vm-memory-qemu-t23/e500/min128`. The first QEMU runs
+(worktree image f47a4d78…, 2026-10-11) admitted the second 32 MiB VM on all
+three profiles (min128: 116 MiB free before the first VM, 91 MiB free with
+32 MiB reserved and 25 MiB resident before the second), so `admitted` is
+pinned to 1 with a successful `second_boot` on every profile; conformance
+reported `xms_calls=007fffff ems_calls=3fffffff` and both VMs exited cleanly.
+
+### Lead findings while qualifying f3-03 on QEMU (2026-10-11)
+
+The f3-00 row had been merged with its QEMU evidence pending, and no DOS VM
+had booted on an integrated image before this work. Two blockers were found
+and fixed in `wt/f3-vm-memory`:
+
+1. **Lock order.** `dosvm_disk_open` took the per-VM `disk_lock` kmutex and
+   then the ATA channel mutex introduced by f4-02; `kmutex_lock` panics on a
+   held mutex whose address is not below the new one. The VM disk path now
+   serialises its own transfers with a per-VM `kwait` gate (`disk_busy`,
+   `disk_wait`, bounded 1 s waits) and no longer holds a kmutex across the
+   storage call. `kmutex_lock` logs `[mutex] held=%p new=%p task=%s` before
+   panicking.
+2. **ROM write at the boot splash.** `stage1_show_boot_splash` issues
+   INT 10h AX=4F02; the synthetic BIOS answers 014F; the kernel's INT 10h
+   hook falls back to its local VBE emulation and allocates the 192 KiB
+   backing store with no active PSP. `int21_mem_arena_start` returned 0 in
+   that state, so `int21_mem_init` wrote the first MCB at FFFF:0000. Real
+   firmware ignores writes to ROM; the VM's ROM pages are read-only, so every
+   VM stopped with `vector=14 address=000ffff0 error=7`. The arena now starts
+   at `DOS_HEAP_USER_SEG` without a PSP. In the same installer the
+   INT 60h–67h default-IRET loop no longer replaces INT 67h when the handler
+   segment carries `EMMXXXX0` at offset 000Ah (LIM EMS 4.0 §3.3); otherwise
+   `VMMEMORY.COM`'s signature check cannot see the synthetic EMM.
+3. **Working directory.** `init_shell_default_dirs` creates `\SYSTEM` and
+   `\APPS` and the shell starts in `C:\APPS`; COMMAND_COMPAT resolves bare
+   names in the working directory only, so `AUTOEXEC.BAT`'s `DOSREADY.COM`
+   was never found and `dos_ready` never latched. The DOS image and the
+   probes now name the payloads absolutely (`\DOSREADY.COM`, `\VMPORT.COM`,
+   `\VMPRIV.COM`, `\VMMEMORY.COM`).
+4. **OUT operand width.** `v86_emulate` hands the port handler the whole
+   EAX for every OUT; `dosvm_io` compared that value with command bytes
+   (`D0h`, `DDh`, `DFh`, `FEh`, the control port's zero), so `out 64h, al`
+   with a non-zero AH never latched the D0h reply (VMMEMORY tag A7) and the
+   shell's exit write to port EAh would have faulted the VM. The handler now
+   uses the written byte only; the host harness drives the same writes with
+   a dirty AH.
+
+Host coverage added for item 6 of the directive (`tests/host/dosvm_test.c`,
+`test_memory_services`): a VM with a 4 MiB pool checks eager backing and the
+unmapped frame windows, XMS 00h–12h/88h/8Fh (HMA ownership, A20 counts and
+94h, free queries, handles, lock/unlock, growth that relocates past an
+occupied neighbour and keeps its bytes, shrink, first-fit reuse zeroed), the
+move validator (both directions, A3h–A7h), UMB 10h–12h (B0h/B2h, page-rounded
+arena C900h–DFFFh), EMS 40h–51h (page-table aliases per window, map errors
+8Ah/8Bh/83h, handle list, save/restore 8Dh/8Eh, reallocation relocating and
+trimming windows, release), denied and unknown functions, destruction with
+aliases still mapped, and a pool-backing failure during creation.
+
+Fault diagnostics added to the controller records: `group=vm_stop` carries
+`address` (CR2 read before interrupts are re-enabled), `error` (page-fault
+error code) and `code` (the eight bytes at the faulting CS:IP); a stopped VM
+with `reason=2` also emits `group=vm_fault` (AX…BP, DS, ES, SS:SP) and three
+`group=vm_stack part=N` rows with sixteen stack words each. Guest addresses
+map to the NASM listings: the stage-1 loader runs at linear 8000h, the DOS
+kernel is loaded at 9000h and relocated to 3000h (listing offset + 3000h).

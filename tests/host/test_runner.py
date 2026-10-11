@@ -1002,8 +1002,13 @@ const char *records(void) { return evidence; }
         text=b'f3:vm-boot run=12ab34cd'
         self.assertEqual(native.validate(text,len(text),0),4)
         self.assertEqual(native.dispatch(text,0,2,0),1000000)
-        for suffix in (b' safe=1',b' platform=e500',b' server=desktop',b' run=12345678'):
+        for suffix in (b' safe=1',b' server=desktop',b' run=12345678'):
             self.assertEqual(native.validate(text+suffix,len(text+suffix),trusted),0)
+        # F3 takes the platform override like F1/F2 (lead, 2026-10-11): the
+        # qemu-e500 profile appends it; it still needs the forced-input flag.
+        forced=text+b' platform=e500'
+        self.assertEqual(native.validate(forced,len(forced),trusted),4)
+        self.assertEqual(native.validate(forced,len(forced),32),0)
         self.assertEqual(native.dispatch(b'f0:all run=12ab34cd',0,2,0),1000)
         self.assertEqual(native.dispatch(b'f0:all run=12ab34cd',0,2,1),100)
         self.assertIn(b'panic NOT_RUN',native.records())
