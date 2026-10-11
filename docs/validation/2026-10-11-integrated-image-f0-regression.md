@@ -622,3 +622,18 @@ Host prerequisite: 336 tests OK.
   integration branch ran concurrently. The same case passed in the
   `f2-process` prefix minutes earlier on this image; it is treated as a
   host-load effect and reruns on the next image. `app-gate` did not run.
+
+## Thirtieth image: `8e8d5dad…` (commit `9de5efc`, normal boot)
+
+Not a campaign: a headless normal boot (no fw_cfg request, `-display none`,
+QMP screendumps) of the image built with the blocking VFS lock. The serial
+log reaches `[supervisor] bootstrap: spawning /bin/desktop` and
+`[supervisor] desktop pid=2 pgid=2`; the desktop, the Ciuki menu, Files,
+CiukNote, Task Manager and the DOS window were captured. On the previous
+images (`9fbfab4d…` and earlier) the same boot stopped after
+`[storage] disk_log=available error=0`: the boot task held the VFS lock
+while reading `/bin/desktop` and the storage worker yield-spun on it at
+device priority. The DOS-window capture still showed the kernel console
+drawn behind the window and a flood of `[work] budget exceeded
+site=storage_work` lines; both fixes (console dark while a display grant
+is held; report limit) are in the next image.
