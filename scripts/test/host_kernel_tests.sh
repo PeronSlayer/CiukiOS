@@ -198,11 +198,19 @@ rows = ",\n".join(", ".join(str(b) for b in font[i:i + 24]) for i in range(0, le
 PY
 # The VGA models and the retained presenter (reference oracle) are separate
 # translation units, exactly as the kernel links them.
+# f4-05: the VM audio sources, the integer OPL3 port and the f4-01 mixer are
+# their own units, as in the kernel; the shim makes their IRQ sections no-ops.
+for unit in vm_source opl3 mixer; do
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -include "$root/tests/host/vm_audio_shim.h" -I "$root/src/kernel/include" \
+        -c "$root/src/kernel/audio/$unit.c" -o "$out/dosvm_audio_$unit.o"
+done
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
     -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
-    "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" -o "$out/dosvm_test"
+    "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
+    "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" -o "$out/dosvm_test"
 "$out/dosvm_test"
 
 # f3-02 migrated VGA model vectors (legacy test_virtual_vga.c, unchanged).
@@ -352,3 +360,24 @@ python3 -m unittest discover -s "$root/tests/host" -p test_app_gate.py
 
 # F4: production mixer, stream syscalls, persistent settings and mock AC97.
 bash "$root/tests/host/audio/run.sh"
+
+# f4-05: the kernel's integer OPL3 port sample for sample against the pinned
+# upstream DBOPL C++ (third_party/vsbhda, archive hash checked first), and
+# its generated tables against their floating-point formulas.
+python3 - "$root" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+pin = Path(sys.argv[1]) / "third_party/vsbhda"
+meta = json.loads((pin / "UPSTREAM.json").read_text())
+assert hashlib.sha256((pin / meta["archive"]).read_bytes()).hexdigest() == meta["sha256"], "VSBHDA archive hash"
+PY
+rm -rf "$out/dbopl" && mkdir -p "$out/dbopl"
+tar -xzf "$root/third_party/vsbhda/source-75fa4bb.tar.gz" -C "$out/dbopl" --strip-components=2 \
+    --wildcards '*/src/DBOPL.CPP' '*/src/DBOPL.H' '*/src/CONFIG.HPP'
+clang++ -std=c++17 -O1 -g -w -fsanitize=address -I "$out/dbopl" -c "$out/dbopl/DBOPL.CPP" -o "$out/dbopl/dbopl.o"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -DCIUKI_HOST_OPL3 \
+    -I "$root/src/kernel/include" -c "$root/src/kernel/audio/opl3.c" -o "$out/dbopl/opl3_port.o"
+clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -I "$out/dbopl" -I "$root/src/kernel/include" \
+    "$root/tests/host/opl3_ref_test.cpp" "$out/dbopl/dbopl.o" "$out/dbopl/opl3_port.o" -o "$out/opl3_ref_test"
+"$out/opl3_ref_test"
+python3 "$root/tests/host/test_opl3_tables.py"

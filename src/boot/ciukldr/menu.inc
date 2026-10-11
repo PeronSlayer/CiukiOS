@@ -676,4 +676,4 @@ deadline_expired:
 menu_tick dd 0
 menu_polls dd 0
 
-f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,0
+f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,0

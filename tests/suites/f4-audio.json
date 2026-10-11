@@ -562,6 +562,1299 @@
           }
         ]
       }
+    },
+    {
+      "id": "vm-audio-qemu-t23",
+      "probe": "vm-audio",
+      "profile": "qemu-t23",
+      "selector": "f4:vm-audio run={run_id}",
+      "device_exceptions": {
+        "audio": "ac97"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "vendor": "8086",
+              "device": "2415",
+              "generation": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "transport"
+            },
+            "fields": {
+              "accepted_rate": {
+                "eq": 48000
+              },
+              "period_frames": {
+                "eq": 256
+              },
+              "published_periods": {
+                "eq": 8
+              },
+              "latency_frames": {
+                "eq": 2688
+              },
+              "mute": {
+                "eq": 0
+              },
+              "master_left": {
+                "eq": 50
+              },
+              "master_right": {
+                "eq": 50
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "attach"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "state": {
+                "ge": 1
+              },
+              "epoch": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "master": "f8",
+              "voice": "f8",
+              "fm": "f8",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm8"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "repeats": {
+                "eq": 0
+              },
+              "seq_gaps": {
+                "eq": 0
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "frames": {
+                "eq": 12288
+              },
+              "peak_l": {
+                "eq": 24576
+              },
+              "peak_r": {
+                "eq": 24576
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm8_digest"
+            },
+            "fields": {
+              "digest": "99159afd",
+              "ring_frames": {
+                "eq": 12288
+              },
+              "ring_digest": "f5ca336d",
+              "late": {
+                "eq": 0
+              },
+              "starved": {
+                "eq": 0
+              },
+              "pcm_frames": {
+                "eq": 2048
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm16"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "repeats": {
+                "eq": 0
+              },
+              "seq_gaps": {
+                "eq": 0
+              },
+              "frames": {
+                "eq": 2048
+              },
+              "peak_l": {
+                "eq": 454
+              },
+              "peak_r": {
+                "eq": 455
+              },
+              "digest": "0a2f6943",
+              "ring_digest": "5a0f7acb"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl2"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "frames": {
+                "ge": 24000
+              },
+              "hz10": {
+                "ge": 4360,
+                "le": 4440
+              },
+              "crossings_r": {
+                "eq": "$crossings_l"
+              },
+              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_r": {
+                "eq": "$rms_l"
+              },
+              "peak_l": {
+                "eq": 4090
+              },
+              "peak_r": {
+                "eq": "$peak_l"
+              },
+              "ticks": {
+                "ge": 10,
+                "le": 12
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl2_digest"
+            },
+            "fields": {
+              "head_digest": "f679c41d",
+              "head_frames": {
+                "eq": 4096
+              },
+              "events": {
+                "eq": 15
+              },
+              "late_events": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl3"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "frames": {
+                "ge": 24000
+              },
+              "hz10": {
+                "ge": 8760,
+                "le": 8840
+              },
+              "crossings_r": {
+                "eq": 0
+              },
+              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_r": {
+                "eq": 0
+              },
+              "peak_l": {
+                "eq": 4090
+              },
+              "peak_r": {
+                "eq": 0
+              },
+              "ticks": {
+                "ge": 10,
+                "le": 12
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl3_digest"
+            },
+            "fields": {
+              "head_digest": "257cbe85",
+              "head_frames": {
+                "eq": 4096
+              },
+              "events": {
+                "eq": 7
+              },
+              "late_events": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pacing"
+            },
+            "fields": {
+              "lead_min": "PIN-FROM-FIRST-RUN",
+              "lead_max": "PIN-FROM-FIRST-RUN",
+              "lag_min": "PIN-FROM-FIRST-RUN",
+              "holds": "PIN-FROM-FIRST-RUN",
+              "skips": {
+                "eq": 0
+              },
+              "late": {
+                "eq": 0
+              },
+              "starved": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "accounting"
+            },
+            "fields": {
+              "blocks": {
+                "eq": 40
+              },
+              "stale": {
+                "eq": 0
+              },
+              "overrun": {
+                "eq": 0
+              },
+              "unsupported": {
+                "eq": 0
+              },
+              "revoked": {
+                "eq": 0
+              },
+              "resyncs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock"
+            },
+            "fields": {
+              "fifo": {
+                "eq": 0
+              },
+              "halts": {
+                "eq": 0
+              },
+              "deadlines": "PIN-FROM-FIRST-RUN",
+              "max_service_us": "PIN-FROM-FIRST-RUN",
+              "max_irq_us": {
+                "le": 250
+              },
+              "quarantine": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "detached": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "after_pages": {
+                "eq": "$before_pages"
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-audio-qemu-e500",
+      "probe": "vm-audio",
+      "profile": "qemu-e500",
+      "selector": "f4:vm-audio run={run_id}",
+      "device_exceptions": {
+        "audio": "ac97"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "vendor": "8086",
+              "device": "2415",
+              "generation": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "transport"
+            },
+            "fields": {
+              "accepted_rate": {
+                "eq": 48000
+              },
+              "period_frames": {
+                "eq": 256
+              },
+              "published_periods": {
+                "eq": 8
+              },
+              "latency_frames": {
+                "eq": 2688
+              },
+              "mute": {
+                "eq": 0
+              },
+              "master_left": {
+                "eq": 50
+              },
+              "master_right": {
+                "eq": 50
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "attach"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "state": {
+                "ge": 1
+              },
+              "epoch": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "master": "f8",
+              "voice": "f8",
+              "fm": "f8",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm8"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "repeats": {
+                "eq": 0
+              },
+              "seq_gaps": {
+                "eq": 0
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "frames": {
+                "eq": 12288
+              },
+              "peak_l": {
+                "eq": 24576
+              },
+              "peak_r": {
+                "eq": 24576
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm8_digest"
+            },
+            "fields": {
+              "digest": "99159afd",
+              "ring_frames": {
+                "eq": 12288
+              },
+              "ring_digest": "f5ca336d",
+              "late": {
+                "eq": 0
+              },
+              "starved": {
+                "eq": 0
+              },
+              "pcm_frames": {
+                "eq": 2048
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm16"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "repeats": {
+                "eq": 0
+              },
+              "seq_gaps": {
+                "eq": 0
+              },
+              "frames": {
+                "eq": 2048
+              },
+              "peak_l": {
+                "eq": 454
+              },
+              "peak_r": {
+                "eq": 455
+              },
+              "digest": "0a2f6943",
+              "ring_digest": "5a0f7acb"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl2"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "frames": {
+                "ge": 24000
+              },
+              "hz10": {
+                "ge": 4360,
+                "le": 4440
+              },
+              "crossings_r": {
+                "eq": "$crossings_l"
+              },
+              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_r": {
+                "eq": "$rms_l"
+              },
+              "peak_l": {
+                "eq": 4090
+              },
+              "peak_r": {
+                "eq": "$peak_l"
+              },
+              "ticks": {
+                "ge": 10,
+                "le": 12
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl2_digest"
+            },
+            "fields": {
+              "head_digest": "f679c41d",
+              "head_frames": {
+                "eq": 4096
+              },
+              "events": {
+                "eq": 15
+              },
+              "late_events": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl3"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "frames": {
+                "ge": 24000
+              },
+              "hz10": {
+                "ge": 8760,
+                "le": 8840
+              },
+              "crossings_r": {
+                "eq": 0
+              },
+              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_r": {
+                "eq": 0
+              },
+              "peak_l": {
+                "eq": 4090
+              },
+              "peak_r": {
+                "eq": 0
+              },
+              "ticks": {
+                "ge": 10,
+                "le": 12
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl3_digest"
+            },
+            "fields": {
+              "head_digest": "257cbe85",
+              "head_frames": {
+                "eq": 4096
+              },
+              "events": {
+                "eq": 7
+              },
+              "late_events": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pacing"
+            },
+            "fields": {
+              "lead_min": "PIN-FROM-FIRST-RUN",
+              "lead_max": "PIN-FROM-FIRST-RUN",
+              "lag_min": "PIN-FROM-FIRST-RUN",
+              "holds": "PIN-FROM-FIRST-RUN",
+              "skips": {
+                "eq": 0
+              },
+              "late": {
+                "eq": 0
+              },
+              "starved": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "accounting"
+            },
+            "fields": {
+              "blocks": {
+                "eq": 40
+              },
+              "stale": {
+                "eq": 0
+              },
+              "overrun": {
+                "eq": 0
+              },
+              "unsupported": {
+                "eq": 0
+              },
+              "revoked": {
+                "eq": 0
+              },
+              "resyncs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock"
+            },
+            "fields": {
+              "fifo": {
+                "eq": 0
+              },
+              "halts": {
+                "eq": 0
+              },
+              "deadlines": "PIN-FROM-FIRST-RUN",
+              "max_service_us": "PIN-FROM-FIRST-RUN",
+              "max_irq_us": {
+                "le": 250
+              },
+              "quarantine": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "detached": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "after_pages": {
+                "eq": "$before_pages"
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-audio-qemu-min128",
+      "probe": "vm-audio",
+      "profile": "qemu-min128",
+      "selector": "f4:vm-audio run={run_id}",
+      "device_exceptions": {
+        "audio": "ac97"
+      },
+      "timeout": 300,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "vendor": "8086",
+              "device": "2415",
+              "generation": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "transport"
+            },
+            "fields": {
+              "accepted_rate": {
+                "eq": 48000
+              },
+              "period_frames": {
+                "eq": 256
+              },
+              "published_periods": {
+                "eq": 8
+              },
+              "latency_frames": {
+                "eq": 2688
+              },
+              "mute": {
+                "eq": 0
+              },
+              "master_left": {
+                "eq": 50
+              },
+              "master_right": {
+                "eq": 50
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "attach"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "state": {
+                "ge": 1
+              },
+              "epoch": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "master": "f8",
+              "voice": "f8",
+              "fm": "f8",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm8"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "repeats": {
+                "eq": 0
+              },
+              "seq_gaps": {
+                "eq": 0
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "frames": {
+                "eq": 12288
+              },
+              "peak_l": {
+                "eq": 24576
+              },
+              "peak_r": {
+                "eq": 24576
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm8_digest"
+            },
+            "fields": {
+              "digest": "99159afd",
+              "ring_frames": {
+                "eq": 12288
+              },
+              "ring_digest": "f5ca336d",
+              "late": {
+                "eq": 0
+              },
+              "starved": {
+                "eq": 0
+              },
+              "pcm_frames": {
+                "eq": 2048
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pcm16"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "repeats": {
+                "eq": 0
+              },
+              "seq_gaps": {
+                "eq": 0
+              },
+              "frames": {
+                "eq": 2048
+              },
+              "peak_l": {
+                "eq": 454
+              },
+              "peak_r": {
+                "eq": 455
+              },
+              "digest": "0a2f6943",
+              "ring_digest": "5a0f7acb"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl2"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "frames": {
+                "ge": 24000
+              },
+              "hz10": {
+                "ge": 4360,
+                "le": 4440
+              },
+              "crossings_r": {
+                "eq": "$crossings_l"
+              },
+              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_r": {
+                "eq": "$rms_l"
+              },
+              "peak_l": {
+                "eq": 4090
+              },
+              "peak_r": {
+                "eq": "$peak_l"
+              },
+              "ticks": {
+                "ge": 10,
+                "le": 12
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl2_digest"
+            },
+            "fields": {
+              "head_digest": "f679c41d",
+              "head_frames": {
+                "eq": 4096
+              },
+              "events": {
+                "eq": 15
+              },
+              "late_events": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl3"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "frames": {
+                "ge": 24000
+              },
+              "hz10": {
+                "ge": 8760,
+                "le": 8840
+              },
+              "crossings_r": {
+                "eq": 0
+              },
+              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_r": {
+                "eq": 0
+              },
+              "peak_l": {
+                "eq": 4090
+              },
+              "peak_r": {
+                "eq": 0
+              },
+              "ticks": {
+                "ge": 10,
+                "le": 12
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl3_digest"
+            },
+            "fields": {
+              "head_digest": "257cbe85",
+              "head_frames": {
+                "eq": 4096
+              },
+              "events": {
+                "eq": 7
+              },
+              "late_events": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pacing"
+            },
+            "fields": {
+              "lead_min": "PIN-FROM-FIRST-RUN",
+              "lead_max": "PIN-FROM-FIRST-RUN",
+              "lag_min": "PIN-FROM-FIRST-RUN",
+              "holds": "PIN-FROM-FIRST-RUN",
+              "skips": {
+                "eq": 0
+              },
+              "late": {
+                "eq": 0
+              },
+              "starved": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "accounting"
+            },
+            "fields": {
+              "blocks": {
+                "eq": 40
+              },
+              "stale": {
+                "eq": 0
+              },
+              "overrun": {
+                "eq": 0
+              },
+              "unsupported": {
+                "eq": 0
+              },
+              "revoked": {
+                "eq": 0
+              },
+              "resyncs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "clock"
+            },
+            "fields": {
+              "fifo": {
+                "eq": 0
+              },
+              "halts": {
+                "eq": 0
+              },
+              "deadlines": "PIN-FROM-FIRST-RUN",
+              "max_service_us": "PIN-FROM-FIRST-RUN",
+              "max_irq_us": {
+                "le": 250
+              },
+              "quarantine": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "detached": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "after_pages": {
+                "eq": "$before_pages"
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
     }
   ]
 }

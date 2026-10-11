@@ -20,3 +20,16 @@ audio assets. CiukiOS does not extract or link those files. The verification
 script checks the archive hash, extracts only the three named DBOPL source
 files into an ignored build directory, compiles them, and records their hashes
 in its report. No physical audio driver from VSBHDA is used by a guest session.
+
+Since f4-05 (2026-10-11) the kernel also carries a C17 port of the same
+`DBOPL.CPP`/`DBOPL.H`: `src/kernel/audio/opl3.c` and
+`src/kernel/include/ciuki/opl3.h`, which keep the DOSBox Team copyright and
+the GPL version 2 or later notice and list their changes (C structures
+instead of classes, int32 accumulation, floating-point tables replaced by the
+constants of `src/kernel/audio/opl3_tables.h`, generated and checked by
+`tests/host/test_opl3_tables.py`). The kernel image that links it is
+distributed under GPLv2 with its complete source in this repository. The host
+test `tests/host/opl3_ref_test.cpp` extracts the three files above from the
+pinned archive (hash checked), builds them unmodified and compares the port
+sample for sample. Research and decision: `docs/design/f4-acceptance.md`,
+section f4-05.

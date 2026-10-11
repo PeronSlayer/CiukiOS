@@ -503,11 +503,13 @@ static void test_memory_services(void)
 #include "dosvm_video_test.inc"
 #include "dosvm_audio_test.inc"
 #include "dosvm_dpmi_test.inc"
+#include "dosvm_vmaudio_test.inc"  /* f4-05: VM sources in the mixer (separate units) */
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
+    test_vm_audio();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

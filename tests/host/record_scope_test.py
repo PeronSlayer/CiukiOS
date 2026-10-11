@@ -20,6 +20,7 @@ ALLOWED = {
     'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
     'probes/f4_probes_audio.c', # f4-01 native audio controller
+    'probes/f4_probes_vm_audio.c', # f4-05 DOS VM audio output controller (f4:vm-audio)
     'probes/f3_probes_vm.c',
     'probes/f3_probes_devices.c', # f3-01 DOS device controller (f3:vm-devices)
     'probes/f3_probes_video.c', # f3-02 virtual VGA stage digests

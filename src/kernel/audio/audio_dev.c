@@ -16,6 +16,9 @@ static struct audio_cfg saved[2];
 static uint32_t saved_sequence;
 static unsigned saved_slot;
 static struct audio_frame quantum[AUDIO_QUANTUM];
+/* f4-05: an active DOS VM source keeps the transport running (weak: the
+ * native-only host harness does not link audio/vm_source.c). */
+extern bool audio_vm_active(void) __attribute__((weak));
 
 static uint32_t checksum(const struct audio_cfg *record)
 {
@@ -120,6 +123,7 @@ void audio_service(void)
     audio.last_service_cycles = start;
     bool active = false;
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i] && audio.streams[i]->started) active = true;
+    if (audio_vm_active && audio_vm_active()) active = true;
     ac97.idle_tail = !active && audio.running;
     bool control = false; /* a transport stop has its own deadline, not the 1 ms service budget */
     int err = ac97_progress(&ac97);
