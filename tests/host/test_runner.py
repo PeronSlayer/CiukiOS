@@ -882,6 +882,30 @@ int main(void)
     CHECK(fbdev_fill(&invalid,0)==-EINVAL && !drawing);
     CHECK(fbdev_present(&surface,&empty)==0 && !drawing);
     host_if=0;console_write("a",1);CHECK(host_if==0 && !drawing);
+    host_if=0x200;
+    /* f3-02: a display grant owner composites every pixel. Lines and
+     * scrolling keep history only; the prompt and evidence pages are
+     * deliberate overlays; the release repaints on the next line. */
+    console_write("\n",1);
+    CHECK(fbdev_fill(&owned,0x010203)==0);
+    memcpy(saved,fake_lfb,SIZE);
+    unsigned before=hist_count;
+    console_display_owned(true);
+    for (unsigned i=0;i<rows+3;i++) console_write("a\n",2);
+    console_write("a",1);
+    CHECK(!memcmp(saved,fake_lfb,SIZE) && hist_count==before+rows+3 && !drawing);
+    console_operator_prompt(false);
+    CHECK(memcmp(saved,fake_lfb,PITCH*16)!=0 && !memcmp(saved+PITCH*16,fake_lfb+PITCH*16,SIZE-PITCH*16) && !drawing);
+    CHECK(fbdev_fill(&owned,0x010203)==0);
+    console_display_owned(false);
+    CHECK(!memcmp(saved,fake_lfb,SIZE));                 /* nothing drawn until the next line */
+    console_write("a",1);
+    CHECK(memcmp(saved,fake_lfb,32*PITCH)!=0 && cur_col==2 && linelen==2 && !drawing);
+    memcpy(saved,fake_lfb,SIZE);
+    console_display_owned(true);
+    console_reclaim();                                   /* panic: the console draws again */
+    console_write("a",1);
+    CHECK(memcmp(saved,fake_lfb,32*PITCH)!=0 && !drawing);
     CHECK(irq_sections>0 && locks==0);
     for (unsigned i=0;i<GUARD;i++) CHECK(raw[i]==0xA5 && raw[GUARD+SIZE+i]==0xA5);
     free(saved);free(raw);

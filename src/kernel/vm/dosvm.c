@@ -208,7 +208,9 @@ int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
     v->info.state = DOSVM_BLOCKED;
     while (v->info.state != DOSVM_STOPPING) {
         if (keyboard) { dosvm_input_poll(v); if (dosvm_keyboard_refresh(v)) return -EFAULT; }
-        if (keyboard && v->key_count) break;
+        /* A window key reaches the 8042, not the BIOS buffer: return so the
+         * guest's INT 9 can move it there (dosvm_bios INT 16h, f3-02). */
+        if (keyboard && (v->key_count || dosvm_kbd_irq_ready(v))) break;
         if (!keyboard && deadline_passed(deadline)) break;
         if (!v->info.dos_ready && deadline_passed(v->boot_deadline)) {
             dosvm_stop(v->info.key, DOSVM_TIMEOUT);

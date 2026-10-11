@@ -44,6 +44,8 @@ void console_init_text(void);
 bool console_init_lfb(void);
 void console_write(const char *s, size_t n);
 void console_set_color(uint32_t fg, uint32_t bg);
+void console_display_owned(bool owned);   /* display grant held: no console pixels */
+void console_reclaim(void);               /* panic: the console draws again */
 void klog(const char *fmt, ...);          /* serial + screen, plain log line */
 void kputs_raw(const char *s);            /* panic-safe output */
 

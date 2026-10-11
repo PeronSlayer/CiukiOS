@@ -440,10 +440,13 @@ owned by the running probe.
 `/bin/desktop --launch=dosbox` under a controller owner, waits for the bound
 window VM and its prompt (`case=window`), emits `ARM action=window_input`
 (the runner moves the pointer off the window and types `\VMVIDEO.COM` with
-QMP keys; without that stimulus for 30 s, as in a hardware cfg sweep, the
-controller types it and records `typed=kernel`, which the QEMU cases
-refuse), hashes stage 1 (`case=frame stage=1 typed=window`), emits `ARM
-action=window_screen digest=` and holds the frame for 6 s. The runner's new
+QMP keys; a runner request never gets kernel typing: the probe waits up to
+120 s for stage 1 and otherwise fails with the device diagnostics; only a
+BOOT.CFG sweep (`probes_operator_mode`) types it itself after 30 s and
+records `typed=kernel`, which the QEMU cases refuse), hashes stage 1
+(`case=frame stage=<latched stage> typed=window`; any stage other than 1
+fails the probe), emits `ARM action=window_screen digest=` and holds stage
+1 for 6 s (a stage change during the hold fails the probe). The runner's new
 `window_screen` check takes a QMP screendump 2 s after that ARM and requires
 the composited client region (origin 23,76: first window at 20,52 plus the
 3-pixel border and 24-pixel title) to hash, as XRGB rows, to both the
@@ -454,6 +457,53 @@ the desktop object ledger (descriptions, surfaces, pages, channels,
 messages, grants) back at baseline. Cases: `vm-window-qemu-desktop-2002`
 and `vm-window-qemu-desktop-1998` (needs a 24/32-bit desktop of at least
 663x556).
+
+First QEMU run of `vm-window-qemu-desktop-2002` (2026-10-11, lead
+evidence): no `VMVIDEO` line in 30 s although the runner delivered all 31
+batches; after the fallback typed the command, VMVIDEO ran stages 1-4 at
+once and the probe hashed the stage-4 Mode X frame (digest a6d61fa1…, the
+stage-4 golden) under the label `stage=1`; the screendump showed the kernel
+console drawn over the whole desktop background. Causes and fixes:
+
+- Window keys never reached a blocked shell. The shell reads a line with
+  INT 16h AH=00h, which `dosvm_wait` served by sleeping until the BIOS
+  buffer (0041Eh) held a key; window keys reach only the virtual 8042 and
+  IRQ1, and the guest INT 9 that moves them into the buffer cannot run
+  while the monitor sleeps inside the INT FEh service. The keys stayed
+  queued until the fallback wrote the BIOS buffer directly
+  (`dosvm_keyboard`); the queued bytes then became BIOS words after the
+  command and three of them advanced VMVIDEO. A BIOS INT 16h read enables
+  interrupts and loops until the keyboard ISR has stored a key (Art of
+  Assembly, ch. 20.4, INT 16h replacement: "We need to turn interrupts on
+  here (so the kbd ISR can place a character in the buffer if one is
+  pending) ... BIOS always forces interrupts on",
+  <https://www.cs.yale.edu/flint/cs422/doc/art-of-asm/pdf/CH20.PDF>).
+  Decision: with the BIOS buffer empty, a key byte in the 8042, IRQ1
+  requested and an interrupt deliverable (`dosvm_kbd_irq_ready`), AH=00h/10h
+  re-executes its own INT FEh at F000:0160 with the guest IF set; the wait
+  also returns when such a byte arrives. The IRQ is delivered first, the
+  guest INT 9 (ROM stub or a DOS/TSR hook) fills the buffer and the retry
+  returns the key. Kernel typing and every other wait are unchanged.
+  Evidence: `test_client_typing` in `tests/host/dosvm_video_test.inc` (the
+  runner's 30 events through syscall 72 into a guest blocked in AH=00h,
+  production ROM stubs through `dosvm_trap`) and the guest runner's
+  `keys:\VMVIDEO.COM VMVIDEO` row on the real DOSBOOT.IMG (stage 1, flags
+  3, digest 0893476b…, then one stage per Enter); both fail on the previous
+  code (the guest runner reports 30 bytes queued, BIOS buffer empty, stage 0).
+- The console drew over the desktop. `kputs_raw` writes every log line and
+  record to the screen console, whose scroll redraws all rows from history;
+  the presenter arbitration in `fbdev.c` only serialises single lines. The
+  production desktop repaints damage only (clock, window damage), so the
+  background stayed console text. The F2 gate desktop hid this by
+  repainting the whole frame on every interaction pass and after each
+  report. Decision: while a process holds the display grant
+  (`grants_install` to the last `grant_release`) the console keeps history
+  and serial but draws nothing; the next line after the release repaints
+  the screen from history. The operator prompt and evidence pages draw as
+  deliberate overlays, and the panic paths reclaim the console first.
+  F2 checks are unaffected: their pixel digests are compared between
+  records or still marked PIN-FROM-FIRST-RUN, and the desktop_screen check
+  reads desktop pixels only.
 
 ### Host and build evidence (worktree, 2026-10-11)
 

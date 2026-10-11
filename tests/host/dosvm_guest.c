@@ -5,8 +5,13 @@
  * transport and time are host fakes; one simulated millisecond per SLICE
  * guest instructions. Not QEMU or hardware evidence: a pre-QEMU check of
  * the payloads against the real kernel host paths.
- * Usage: dosvm_guest DOSBOOT.IMG [COMMAND NAME | fault:COMMAND NAME | gate:COMMAND NAME]...
- * (gate: the VM's DPMI flag cleared; the client must report FAIL 01 01).
+ * Usage: dosvm_guest DOSBOOT.IMG [COMMAND NAME | fault:COMMAND NAME | gate:COMMAND NAME |
+ *        keys:\VMVIDEO.COM VMVIDEO]...
+ * (gate: the VM's DPMI flag cleared; the client must report FAIL 01 01.
+ * keys: f3-02 window typing: set-1 make/break codes into the focused VM's
+ * 8042 (dosvm_input_event), IRQ1 and the guest INT 9 to the shell blocked in
+ * INT 16h AH=00h; VMVIDEO must stop at stage 1 with flags 3, then each Enter
+ * through the 8042 advances one stage until the prompt returns.)
  * f3-06: GUEST_BUDGET=<instructions per command> for long workloads, e.g. the
  * base image of a local DOOM fixture (scripts/test/dos_fixtures.py; extract
  * CIUKIGAM.IMG with mcopy): GUEST_BUDGET=9000000000 dosvm_guest base.img
@@ -34,6 +39,7 @@
 #include <ciuki/task.h>
 #include <ciuki/input.h>
 #include <ciuki/dosvm.h>
+#include <ciuki/sha256.h>
 #include "dosvm_guest.h"
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#c); exit(1); } } while (0)
@@ -438,6 +444,70 @@ static void type(const char *command)
     }
     waiting_input = false;
 }
+/* f3-02: a line typed the way /bin/dosbox forwards a window's keys. */
+static void window_key(unsigned code, int value)
+{
+    struct ciuki_input_event e = {.type = CIUKI_INPUT_KEY, .code = (int32_t)code, .value = value};
+    CHECK(dosvm_input_event(dosvm_key(gv), &e));
+}
+static unsigned window_code(char c, bool *shift)
+{
+    static const char row1[] = "1234567890", qwerty[] = "qwertyuiop", home[] = "asdfghjkl", bottom[] = "zxcvbnm";
+    char lower = c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+    *shift = c >= 'A' && c <= 'Z';
+    const char *at;
+    if ((at = strchr(row1, lower)) && lower) return 0x02 + (unsigned)(at - row1);
+    if ((at = strchr(qwerty, lower)) && lower) return 0x10 + (unsigned)(at - qwerty);
+    if ((at = strchr(home, lower)) && lower) return 0x1E + (unsigned)(at - home);
+    if ((at = strchr(bottom, lower)) && lower) return 0x2C + (unsigned)(at - bottom);
+    switch (c) {
+    case '\\': return 0x2B; case '.': return 0x34; case ' ': return 0x39; case '-': return 0x0C;
+    case ':': *shift = true; return 0x27;
+    default: CHECK(false); return 0;
+    }
+}
+static void window_type(const char *command)
+{
+    CHECK(dosvm_input_focus(dosvm_key(gv), true));
+    bool held = false;
+    for (unsigned i = 0; ; i++) {
+        bool shift = false;
+        unsigned code = command[i] ? window_code(command[i], &shift) : 0x1C;
+        if (shift != held) { window_key(0x2A, shift); held = shift; }
+        window_key(code, 1); window_key(code, 0);
+        if (!command[i]) break;
+    }
+    if (held) window_key(0x2A, 0);
+    waiting_input = false;
+}
+/* VMVIDEO through window keys: stage 1 exactly, then Enter per stage. */
+static int window_vmvideo(const char *command)
+{
+    /* The shell is blocked in INT 16h AH=00h before the first key, as when
+     * the runner starts typing after the ARM record. */
+    waiting_input = false;
+    int r = run(400000000ull, 0);
+    printf("  -> shell idle: wait=%d (2 = blocked in INT 16h AH=00h)\n", r);
+    if (r != 2) return 1;
+    window_type(command);
+    r = run(2000000000ull, 0);
+    struct dosvm_frame frame;
+    char hex[65] = "none";
+    if (!dosvm_frame_digest(gv, 0, &frame)) sha256_hex(frame.digest, hex);
+    printf("  -> window keys: wait=%d stage=%u flags=%u mode=%u %ux%u text=%u queued=%u bios=%u digest=%s\n", r,
+           gv->info.video_stage, gv->info.video_flags, frame.mode, frame.width, frame.height, frame.text,
+           gv->kbd.count, gv->key_count, hex);
+    if (r != 2 || gv->info.video_stage != 1 || gv->info.video_flags != 3 || frame.mode != 3 ||
+        frame.width != 640 || frame.height != 400 || !frame.text || gv->kbd.count) return 1;
+    for (uint32_t stage = 2; stage <= 6; stage++) {
+        window_key(0x1C, 1); window_key(0x1C, 0);
+        waiting_input = false;
+        r = run(2000000000ull, 0);
+        printf("  -> Enter: wait=%d stage=%u flags=%u\n", r, gv->info.video_stage, gv->info.video_flags);
+        if (r != 2 || gv->info.video_stage != stage) return 1;
+    }
+    return prompt() ? 0 : 1;
+}
 static void stats(const char *name)
 {
     struct dpmi_info info;
@@ -476,6 +546,12 @@ int main(int argc, char **argv)
     if (r <= 0) { screen(); return 1; }
     for (int i = 2; i + 1 < argc; i += 2) {
         bool fault = !strncmp(argv[i], "fault:", 6), gate = !strncmp(argv[i], "gate:", 5);
+        if (!strncmp(argv[i], "keys:", 5)) {
+            CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
+            printf("run %s through window keys (expect VMVIDEO stage 1, then stages 2-6)\n", argv[i] + 5);
+            if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
+            continue;
+        }
         const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;

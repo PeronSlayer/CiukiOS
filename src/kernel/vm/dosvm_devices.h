@@ -44,6 +44,7 @@ int dosvm_kbd_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *)
 bool dosvm_kbd_event(struct dosvm *, unsigned code, int value);
 void dosvm_kbd_release(struct dosvm *);
 int dosvm_kbd_bios(struct dosvm *);
+bool dosvm_kbd_irq_ready(const struct dosvm *);
 void dosvm_mouse_init(struct dosvm *);
 void dosvm_mouse_event(struct dosvm *, int32_t dx, int32_t dy, unsigned buttons);
 int dosvm_mouse_bios(struct dosvm *, struct v86_frame *);

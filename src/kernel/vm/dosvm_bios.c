@@ -233,8 +233,23 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
         if (fn == 0 || fn == 0x10 || fn == 1 || fn == 0x11) {
             bool peek = fn == 1 || fn == 0x11;
             if (!peek && !v->key_count) {
-                int e = dosvm_wait(v, true, 0);
+                int e = dosvm_kbd_irq_ready(v) ? 0 : dosvm_wait(v, true, 0);
                 if (e) return e;
+                /* A PC BIOS INT 16h AH=00h/10h enables interrupts and loops
+                 * until IRQ1's INT 9 has stored a key (f3-acceptance.md,
+                 * vm-window first QEMU run). The monitor
+                 * cannot run that INT 9 while it blocks here, so with a key
+                 * byte in the virtual 8042 (window input, f3-02) the call
+                 * re-executes its own INT FEh at F000:0160 with the guest's
+                 * IF set: the IRQ is delivered first, the guest INT 9 (ROM or
+                 * DOS/TSR hook) fills the buffer, and the retried read takes
+                 * the key. Kernel typing (dosvm_keyboard) fills the buffer
+                 * directly and never needs this. */
+                if (!v->key_count && dosvm_kbd_irq_ready(v)) {
+                    v->monitor.vif = true;
+                    f->tf.eip -= 2;
+                    return 0;
+                }
             }
             f->tf.eflags = (f->tf.eflags & ~V86_ZF) | (!v->key_count ? V86_ZF : 0);
             if (v->key_count) {
