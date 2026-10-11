@@ -493,3 +493,25 @@ same rules. The hardware image for the fourth T23 sweep is the same tree
 with `BOOT.CFG` `safe=0 serial=1` and `probe=all:sweep run=88888888`
 (`build/f0/ciukios-hw.img`, SHA-256 `ad63279d…`). The `f2-all` batch on
 `a71327b7…` is recorded below when it completes.
+
+## Twenty-fourth image: `7ab10f64…` (commit `a9c0b31`, f3-03 merged)
+
+Built after the f3-03 merge (XMS/EMS/UMB services, DOS VM boot fixes,
+F3 platform override; diary 2026-10-11-12). `f0-smoke` 2/2. The `f3-vm`
+and `f2-all` runs were first refused by the runner's host prerequisite:
+the stack allocator host test still asserted 16 KiB kernel stacks after
+the 32 KiB change of `31ed0c5` (fixed in `a9c0b31`). The rerun of `f3-vm`
+passed its F0 prefix up to `isolation` and failed `preempt`
+(`switches=0 timer_switches=0 dispatch_a=0 dispatch_b=0` over 120020 ticks):
+the AC'97 refill thread started by `31ed0c5` polled every millisecond at
+`P_DEVICE` (`kwait_wait_until` with a 1 ms deadline) and starved the ring-3
+tasks, the f1-18 pattern. No image with the audio worker running had been
+put through the F0 probes before.
+
+## Twenty-fifth image: `0aa939e9…` (audio worker blocks between services; VM records named by their probe)
+
+The refill thread now blocks with a 1/4/50 ms safety deadline (burst,
+running, idle) and VM admission/stop/guest records carry the owning probe
+(`vm-boot`, `vm-memory`, `vm-devices`) through `dosvm_config.probe`. The
+`f3-vm`, `f0-smoke` and `f2-all` results on this image are recorded below.
+

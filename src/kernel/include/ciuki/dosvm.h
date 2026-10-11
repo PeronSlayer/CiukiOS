@@ -21,7 +21,7 @@ struct dosvm_config {
     uint32_t commitment; /* zero selects 32 MiB */
     uint16_t ems_frame; /* zero/E000h default, D000h alternative */
     bool disable_umb;
-    bool memory_probe; /* controller records only; no build variant */
+    const char *probe; /* record owner for admission/stop/guest rows; NULL = "vm-boot" */
 };
 struct dosvm_admission {
     uint64_t free_bytes, reserved_bytes, resident_bytes, outstanding_bytes;
