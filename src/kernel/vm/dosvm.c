@@ -10,6 +10,11 @@
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
 extern void v86_leave(uint32_t) __attribute__((noreturn));
+/* f4-05 DOS VM audio output (audio/vm_source.c): one mixer source per VM
+ * while a backend is ready. Weak: host harnesses link the VM without F4. */
+extern int audio_vm_attach(struct dosvm_key) __attribute__((weak));
+extern void audio_vm_detach(struct dosvm_key) __attribute__((weak));
+extern void audio_vm_kick(void) __attribute__((weak));
 static struct dosvm slots[DOSVM_LIMIT];
 static struct dosvm_key input_focus;
 
@@ -403,6 +408,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
     if (e && v->info.dirty) v->info.data_loss = true;
+    if (audio_vm_detach) audio_vm_detach(key); /* f4-05: revoke the mixer source first */
     dosvm_audio_close(v);
     if (v->as.pd_phys) {
         dpmi_close(v);
@@ -494,6 +500,9 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->info.resident += KSTACK_SIZE + PAGE_SIZE + sizeof(struct task);
     if (v->info.resident - v->memory.quota > DOSVM_LOW_CAP ||
         v->info.resident > commitment) { e = -ENOMEM; goto fail; }
+    /* f4-05: the VM's SB16/OPL output joins the mixer when a backend is
+     * ready; without one f3-05 keeps discarding with its counter. */
+    if (audio_vm_attach) audio_vm_attach(v->info.key);
     *out = v;
     return 0;
 fail:
@@ -567,6 +576,7 @@ void dosvm_tick(void)
         v->clock_ms += elapsed;
         dosvm_pit_advance(v, elapsed);
         dosvm_audio_advance(v, elapsed);
+        if (audio_vm_kick && (v->audio.q.seg_count || v->audio.q.event_count)) audio_vm_kick();
     }
 }
 const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)

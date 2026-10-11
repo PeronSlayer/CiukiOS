@@ -67,6 +67,7 @@ struct dosvm_audio_info {
     bool consumer;
     uint32_t opl_period_us[2];           /* last programmed timer periods */
     uint64_t opl_start_us[2], opl_flag_us[2]; /* VM microseconds: start and first flag */
+    uint8_t output_gain[2];              /* CT1745 41h/42h: 0-3 = 0/6/12/18 dB (f4-05) */
 };
 
 /* One consumer per VM. attach returns a token that later calls must present;

@@ -172,6 +172,7 @@ def build(out=None):
         files["/VMMEMORY.COM"] = assemble("src/probes/dos/vm_memory.asm", work / "VMMEMORY.COM")  # f3-03 memory conformance payload
         files["/VMVIDEO.COM"] = assemble("src/probes/dos/vm_video.asm", work / "VMVIDEO.COM")  # f3-02 virtual VGA pattern payload
         files["/VMAUDIO.COM"] = assemble("src/probes/dos/vm_audio.asm", work / "VMAUDIO.COM")  # f3-05 SB16/OPL3/8237 state payload
+        files["/VMPLAY.COM"] = assemble("src/probes/dos/vm_play.asm", work / "VMPLAY.COM")  # f4-05 SB16/OPL3 output pattern payload
         # f3-04 DPMI clients: 16/32-bit conformance, nested children, fault, DOS/4GW.
         for width in (16, 32):
             files[f"/DPMI{width}.COM"] = assemble("src/probes/dos/dpmi_client.asm", work / f"DPMI{width}.COM",

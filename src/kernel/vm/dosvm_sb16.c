@@ -666,6 +666,7 @@ bool dosvm_audio_info(struct dosvm_key key, struct dosvm_audio_info *out)
     for (unsigned i = 0; i < 2; i++) {
         out->master[i] = s->mixer[0x30 + i] >> 3; out->voice[i] = s->mixer[0x32 + i] >> 3;
         out->fm[i] = s->mixer[0x34 + i] >> 3;
+        out->output_gain[i] = s->mixer[0x41 + i] >> 6;
         out->opl_period_us[i] = o->timer[i].period;
         out->opl_start_us[i] = o->timer[i].started_us; out->opl_flag_us[i] = o->timer[i].flag_us;
     }
