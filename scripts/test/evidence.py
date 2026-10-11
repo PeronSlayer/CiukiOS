@@ -2,7 +2,8 @@
 import hashlib
 import json
 import re
-from loader_model import PROBES
+from loader_model import PROBES, F4_PROBES
+KNOWN_PROBES = (*PROBES, *F4_PROBES)  # sweep order plus the selector-only F4 probes
 
 
 class EvidenceError(ValueError):
@@ -164,7 +165,7 @@ class Parser:
             raise EvidenceError('missing envelope field')
         if record['v'] != '1' or record['run'] != self.run_id or record['probe'] != self.probe:
             raise EvidenceError('version, run or probe mismatch')
-        if record['probe'] not in PROBES or not re.fullmatch('[0-9]{6}', record['seq']):
+        if record['probe'] not in KNOWN_PROBES or not re.fullmatch('[0-9]{6}', record['seq']):
             raise EvidenceError('unknown probe or invalid sequence')
         seq = int(record['seq'])
         if seq <= self.seq:
@@ -177,7 +178,7 @@ class Parser:
                 raise EvidenceError('duplicate BEGIN')
             self.started = True
         elif event == 'NOT_RUN':
-            if self.started or record.get('reason') != 'prerequisite_failed' or record.get('after') not in PROBES:
+            if self.started or record.get('reason') != 'prerequisite_failed' or record.get('after') not in KNOWN_PROBES:
                 raise EvidenceError('invalid NOT_RUN record')
         elif not self.started or event not in ('DATA','READY','ARM','END','PANIC','ERROR'):
             raise EvidenceError('unknown event or missing BEGIN')
