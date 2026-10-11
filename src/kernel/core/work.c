@@ -98,10 +98,17 @@ bool kwork_run_one(void)
         stats.max_run_us = us;
     if (overrun)
         stats.budget_violations++;
-    unsigned pending = stats.pending;
+    unsigned pending = stats.pending, violations = stats.budget_violations;
     irq_restore(f);
-    if (overrun)
-        klog("[work] budget exceeded site=%p us=%llu pending=%u", (void *)fn, us, pending);
+    /* The report itself feeds the boot log, whose drain runs on this worker:
+     * an unbounded report per overrun loops into more overruns (lead fix,
+     * 2026-10-11). Report the first eight, then one in 1024; the counter
+     * in kwork_stats keeps the total. */
+    static unsigned reported;
+    if (overrun && (reported < 8 || (violations & 1023u) == 0)) {
+        reported++;
+        klog("[work] budget exceeded site=%p us=%llu pending=%u violations=%u", (void *)fn, us, pending, violations);
+    }
     report_loss();
     /* Returning/yielding inside a callback remains its author's duty. */
     kwork_yield();

@@ -167,6 +167,7 @@ void supervisor_bootstrap(void)
     bootstrap_attempted = true;
     const char *argv[] = { "desktop", 0 };
     struct process *p = 0;
+    klog("[supervisor] bootstrap: spawning /bin/desktop");
     int result = supervisor_spawn("/bin/desktop", argv, 0, true, &p);
     if (result == -ENOENT) result = supervisor_spawn_standin(proc_supervisor(), &p);
     if (result < 0) { klog("[supervisor] desktop unavailable: %d; console ready", result); return; }

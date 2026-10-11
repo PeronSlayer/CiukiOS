@@ -595,3 +595,30 @@ digests left unchecked for the first run), then `f2-process`, `f2-app`,
 Evidence on this image therefore covers `vm-boot` on three profiles, the
 thirteen existing desktop cases and the boot smoke; everything else waits
 for the next image.
+
+## Twenty-ninth image: `9fbfab4d…` (commit `edc8137`, version 0.9.0 pre-alpha, f3-05 and f3-04 merged)
+
+Campaign 11 ran the F3 cases beyond `vm-boot` as a scratch suite (`zz-f3b`,
+17 cases), then `f2-process` and `f2-app` with their F0–F2 prerequisites.
+Host prerequisite: 336 tests OK.
+
+- `zz-f3b`: `vm-memory`, `vm-devices` and `vm-video` PASS on qemu-t23,
+  qemu-e500 and qemu-min128 (nine cases; the VMMEMORY 8042 sequence under
+  CLI resolved the A7 failure of campaign 10). `vm-window-qemu-desktop-2002`
+  FAIL, "DOS window region mismatch": the keystrokes typed through QMP and
+  the desktop did not reach stage 1 within the probe's 30 s, the probe fell
+  back to kernel typing (`typed=kernel`), VMVIDEO then advanced to stage 4
+  before the frame was sampled (`mode=19 320x240`), and the retained
+  `screen-fail.ppm` shows the kernel screen console drawn over the desktop
+  launched by the probe, with the desktop background never painted. The
+  remaining cases (`vm-window-qemu-desktop-1998`, `vm-audio-state` ×3,
+  `dpmi` ×3) did not run. Diagnosis assigned; see the next image.
+- `f2-process`: 161 PASS including the prerequisites; the three
+  `uart-absent-*` operator cases excepted.
+- `f2-app`: 58 PASS, then `safe-mode` (prerequisite `f1-safe`) FAIL with the
+  host observation "owned children survived teardown": the guest run is
+  complete (`probe=boot … END status=PASS`), the QEMU scope did not finish
+  its teardown in time while host builds and host suites of the
+  integration branch ran concurrently. The same case passed in the
+  `f2-process` prefix minutes earlier on this image; it is treated as a
+  host-load effect and reruns on the next image. `app-gate` did not run.

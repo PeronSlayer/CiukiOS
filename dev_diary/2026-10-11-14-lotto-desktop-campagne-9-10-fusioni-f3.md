@@ -52,6 +52,16 @@ si è interrotta lì (`f0-smoke`, `f2-all` e `f4-media` non sono girate).
 
 ## Verifiche
 
+Immagine `9fbfab4d…` (campagna 11, dopo versione 0.9.0 e fusione di f3-05 e
+f3-04): `vm-memory`, `vm-devices` e `vm-video` PASS su t23, e500 e min128;
+`vm-window-qemu-desktop-2002` FAIL (tasti via desktop non arrivati alla VM
+entro 30 s, console kernel disegnata sopra il desktop lanciato dalla sonda:
+diagnosi in corso); `f2-process` 161 PASS con prerequisiti; `f2-app` 58
+PASS poi `safe-mode` fallito per un'osservazione host (processi del
+scope QEMU sopravvissuti al teardown mentre giravano build e suite host
+del ramo di integrazione), lo stesso caso passato pochi minuti prima nel
+prefisso di `f2-process`.
+
 Immagine `e896ed38…`: prefisso F0–F2 189 PASS. Immagine `4595cd98…`:
 `vm-boot` PASS su t23, e500 e min128; 13 casi desktop esistenti PASS;
 `f0-smoke` 2/2. I casi F3 restanti, i casi app e le suite F2/F4 attendono la
