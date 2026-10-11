@@ -74,7 +74,12 @@ uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages; }
 uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr,"unexpected panic: %s\n",fmt); abort(); }
 void klog(const char *fmt, ...) { (void)fmt; }
-void *kmalloc(size_t n) { if (allocation_fails()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
+/* The production heap (core/kheap.c) has power-of-two classes up to 2048
+ * bytes with an 8-byte header: larger requests always fail there, so they
+ * fail here too (f3-06 lookup table, vm-window QEMU 2026-10-12). The fake
+ * scheduler's own task/stack storage uses harness_alloc instead. */
+static void *harness_alloc(size_t n) { if (allocation_fails()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
+void *kmalloc(size_t n) { return n > 2040 ? 0 : harness_alloc(n); }
 void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 /* Generated from the unmodified production user-address-space section. */
 #include "dosvm_aspace.inc"
@@ -87,10 +92,10 @@ static bool guest_halt;
 struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
 {
     CHECK(!strcmp(name,"dosvm") && prio == P_NORMAL);
-    struct task *t = kmalloc(sizeof(*t));
+    struct task *t = harness_alloc(sizeof(*t));
     if (!t) return 0;
     memset(t,0,sizeof(*t)); t->state = T_BLOCKED;
-    t->kstack = kmalloc(KSTACK_SIZE); t->fpu_alloc = kmalloc(512);
+    t->kstack = harness_alloc(KSTACK_SIZE); t->fpu_alloc = harness_alloc(512);
     if (!t->kstack || !t->fpu_alloc) { kfree(t->kstack); kfree(t->fpu_alloc); kfree(t); return 0; }
     t->fpu_area = t->fpu_alloc;
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) if (!tasks[i].t) { tasks[i].t=t; tasks[i].fn=fn; tasks[i].arg=arg; g_task_count++; return t; }

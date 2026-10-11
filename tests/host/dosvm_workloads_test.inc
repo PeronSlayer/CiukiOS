@@ -155,27 +155,38 @@ static void test_workload_base_image(void)
     CHECK(dosvm_create(&c, &v) == -EINVAL);
     empty();
     /* A window VM boots the attached workload disk with the staged DPMI host;
-     * without the disk it keeps the canonical payload and no DPMI host. */
+     * without the disk it keeps the canonical payload and no DPMI host. The
+     * production create path (syscall 72, the f3-06 lookup under the 2040-byte
+     * kernel heap limit, f4-05 mixer attach with a ready backend), as
+     * /bin/dosbox runs it on QEMU (vm-window, 2026-10-12: ENOMEM before). */
     struct process *saved_current = fake_current;
     fake_current = &fake_proc[0];
     struct ciuki_dosvm_command w;
     unsigned scans = workload_scans;
+    vq_begin();
     /* Two D: stats: the lookup, then the base image open of the new VM. */
-    CHECK(!create_window(0, "Games", &w) && workload_scans == scans + 2);
+    CHECK(!create_window(0, "Games", &w) && workload_scans == scans + 2 && !workload_busy);
     v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
     CHECK(v && v->dpmi_enabled && !strcmp(last_base, "D:\\CIUKIGAM.IMG"));
+    struct audio_vm_stats st;
+    struct dosvm_key wkey = {w.id, w.generation};
+    CHECK(audio_vm_stats(wkey, &st) && st.state == AUDIO_VM_PENDING && ainfo(v).consumer);
     struct ciuki_dosvm_command shut = command_for(w.id, w.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut)));
+    CHECK(audio_vm_stats(wkey, &st) && st.state == AUDIO_VM_FREE);
     empty();
     workload_disk = false;
-    CHECK(!create_window(0, "Plain", &w));
+    CHECK(!create_window(0, "Plain", &w) && !workload_busy);
     v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
     CHECK(v && !v->dpmi_enabled && !strcmp(last_base, "C:\\SYSTEM\\DOS\\DOSBOOT.IMG"));
+    wkey = (struct dosvm_key){w.id, w.generation};
+    CHECK(audio_vm_stats(wkey, &st) && st.state == AUDIO_VM_PENDING && ainfo(v).consumer);
     shut = command_for(w.id, w.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut)));
+    vq_end();
     empty();
     fake_current = saved_current;
-    printf("f3-06 base image: further read-only image, workload disk lookup, window VMs boot it with the staged DPMI host\n");
+    printf("f3-06 base image: further read-only image, workload disk lookup within the kernel heap limit, window VMs (syscall 72, mixer attached) boot it with the staged DPMI host\n");
 }
 
 static void test_workloads(void)

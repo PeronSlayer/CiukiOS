@@ -9,12 +9,25 @@
  * local workload disk built by scripts/test/dos_fixtures.py); the canonical
  * C: payload otherwise. Only the overlay below is ever opened writable. */
 #define DOSVM_DEFAULT_BASE "C:\\SYSTEM\\DOS\\DOSBOOT.IMG"
+/* The lookup table (20596 bytes on i686) is larger than the kernel heap's
+ * biggest class (2040 bytes, core/kheap.c), so a kmalloc'd table failed with
+ * ENOMEM on every call: /bin/dosbox create was refused ("Not enough space",
+ * vm-window QEMU 2026-10-12). One static table, never on a kernel stack,
+ * behind a sleeping test-and-set gate (no mutex: the VFS calls below take
+ * the storage lock). */
+static struct vfs_table workload_table;
+static bool workload_busy;
 int dosvm_workload_base(char path[24])
 {
     struct storage *s = storage_get();
     if (!s || !s->ready || s->stopped) return -V86_EIO;
-    struct vfs_table *t = kmalloc(sizeof(*t));      /* ~7 KiB: not on the stack */
-    if (!t) return -ENOMEM;
+    for (;;) {
+        uint32_t flags = irq_save();
+        if (!workload_busy) { workload_busy = true; irq_restore(flags); break; }
+        irq_restore(flags);
+        task_sleep_ms(1);
+    }
+    struct vfs_table *t = &workload_table;
     int e = vfs_table_init(&s->vfs, t, 2);
     if (!e) {
         e = -ENOENT;
@@ -25,7 +38,7 @@ int dosvm_workload_base(char path[24])
         }
         vfs_table_destroy(t);
     }
-    kfree(t);
+    workload_busy = false;
     if (e) path[0] = 0;
     return e;
 }
