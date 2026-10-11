@@ -1304,7 +1304,14 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     fixture_disks(case) # collision validation also for direct command construction
     for index,fixture in enumerate(case.get('fixtures',[])):
         if fixture.get('generator')=='xorriso':
-            args+=['-drive',f'file=fixture-{index}.iso,format=raw,if=ide,index=3,media=cdrom,readonly=on,id=ciuki-optical']
+            # Secondary slave (IDE index 3) as an explicit ide-cd frontend. A
+            # legacy if=ide CD-ROM let QEMU add its default empty CD-ROM at
+            # index 2 whenever no fixture disk held it (system/vl.c
+            # default_drive), an undeclared first packet device; an explicit
+            # -device ide-cd clears default_cdrom (vl.c default_list). The
+            # backend keeps the name QMP media actions address.
+            args+=['-drive',f'file=fixture-{index}.iso,format=raw,if=none,readonly=on,id=ciuki-optical',
+                   '-device','ide-cd,drive=ciuki-optical,bus=ide.1,unit=1']
     if case.get('crash_cut'):args=['stdbuf','-oL',*args]
     return args,request
 

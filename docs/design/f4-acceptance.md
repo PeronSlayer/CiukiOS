@@ -162,6 +162,16 @@ Research before implementation (2026-10-11):
   CD-ROM uses IDE index 3 (secondary slave), with ATA fixture peer at index
   2 when declared. Refuse any collision with FAT fixture indices 1–3;
   optical cases can declare at most two FAT fixtures.
+- [QEMU system/vl.c](https://github.com/qemu/qemu/blob/v9.2.0/system/vl.c)
+  (`default_drive`, `default_list`; unchanged on master): unless
+  `-nodefaults` or an explicit `-device ide-cd` is given, QEMU adds an empty
+  default CD-ROM at IDE index 2 when no drive holds that index. Campaign 12
+  (image `e0af9210`, `optical-malformed-qemu-t23`) attached the fixture as a
+  legacy `if=ide` CD-ROM without an index-2 peer; the probe took the
+  undeclared default drive (slot 2, no medium) and failed. Decision: the
+  runner attaches the fixture as `-drive if=none,id=ciuki-optical` with
+  `-device ide-cd,bus=ide.1,unit=1` (still the secondary slave), which
+  clears QEMU's default CD-ROM; QMP media actions keep the backend name.
 
 Repository comparison: `ata.c` formerly skipped ATAPI after reset signature;
 `cache.c` stored only 512-byte blocks; the two VFS views assumed FAT volumes.
