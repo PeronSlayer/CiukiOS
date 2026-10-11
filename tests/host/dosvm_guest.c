@@ -7,6 +7,11 @@
  * the payloads against the real kernel host paths.
  * Usage: dosvm_guest DOSBOOT.IMG [COMMAND NAME | fault:COMMAND NAME | gate:COMMAND NAME]...
  * (gate: the VM's DPMI flag cleared; the client must report FAIL 01 01).
+ * f3-06: GUEST_BUDGET=<instructions per command> for long workloads, e.g. the
+ * base image of a local DOOM fixture (scripts/test/dos_fixtures.py; extract
+ * CIUKIGAM.IMG with mcopy): GUEST_BUDGET=9000000000 dosvm_guest base.img
+ * '\RUNREC.COM \DOOM DOOM.EXE -config CIUKI.CFG -nosound -timedemo demo1' RUNREC
+ * ends with the timed line on the screen and RUNREC FAIL R01 T00 (exit 1).
  * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -417,11 +422,21 @@ static void fault_dump(void)
     for (unsigned i = 0; i < sizeof(code); i++) printf(" %02x", code[i]);
     printf("\n");
 }
+/* f3-06: the BIOS buffer holds 15 keys; long command lines (RUNREC
+ * launchers) wait for the shell to take keys instead of failing. */
+static bool key_room(void) { return !dosvm_keyboard_refresh(gv) && gv->key_count < 14; }
 static void type(const char *command)
 {
+    for (unsigned i = 0; ; i++) {
+        uint16_t code = command[i] ? (uint8_t)command[i] : 0x1C0D;
+        for (unsigned tries = 0; !dosvm_keyboard(dosvm_key(gv), code); tries++) {
+            CHECK(tries < 1000 && !stopped());
+            waiting_input = false;
+            run(2000000ull, key_room);
+        }
+        if (!command[i]) break;
+    }
     waiting_input = false;
-    for (unsigned i = 0; command[i]; i++) CHECK(dosvm_keyboard(dosvm_key(gv), (uint8_t)command[i]));
-    CHECK(dosvm_keyboard(dosvm_key(gv), 0x1C0D));
 }
 static void stats(const char *name)
 {
@@ -433,6 +448,11 @@ static void stats(const char *name)
            info.stats.irqs_pm, info.stats.irqs_reflected, info.stats.soft_reflected, info.stats.exceptions,
            info.stats.callbacks, info.stats.raw_switches, info.stats.realcalls, info.stats.max_depth, info.stats.stale);
     printf("  host real-mode stack lowest SP=%04x\n", rstack_low);
+    struct dosvm_video_info video;
+    if (dosvm_video_info(dosvm_key(gv), &video))
+        printf("  video: mode=%02x unchained=%u %ux%u faults=%u pm_faults=%u flips=%u windows=%u harvested=%u\n",
+               video.mode, video.unchained, video.width, video.height, video.faults, video.pm_faults, video.starts,
+               video.maps, video.flushes);
     printf("  rows ok=%08x%08x%08x fail=%08x%08x%08x\n", info.stats.rows_ok[2], info.stats.rows_ok[1], info.stats.rows_ok[0],
            info.stats.rows_fail[2], info.stats.rows_fail[1], info.stats.rows_fail[0]);
 }
@@ -462,7 +482,9 @@ int main(int argc, char **argv)
         dosvm_expect(gv, argv[i + 1]);
         printf("run %s (expect %s%s)\n", command, argv[i + 1], fault ? ", VM fault" : gate ? ", no DPMI host" : "");
         type(command);
-        r = run(2000000000ull, fault ? 0 : verdict);
+        /* GUEST_BUDGET (instructions per command): long workloads (f3-06 DOOM). */
+        const char *budget = getenv("GUEST_BUDGET");
+        r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull, fault ? 0 : verdict);
         printf("  -> %s %s detail=%s state=%u reason=%u vector=%u after %llu instructions, %llu ms\n",
                argv[i + 1], gv->info.verdict_done ? (gv->info.verdict_pass ? "PASS" : "FAIL") : "NO-VERDICT",
                gv->info.verdict_detail, gv->info.state, gv->info.reason, gv->info.fault_vector,

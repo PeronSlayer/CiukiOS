@@ -53,6 +53,39 @@ DOS4GW_STATUS = ("DOS/4GW 1.97 runtime from Open Watcom 2.0 binw/dos4gw.exe, dis
                  "exact 1.97 redistribution text not located (open question, f3-acceptance.md f3-04)")
 
 
+# f3-06: owner-local commercial DOS games (ignored by git). They reach a DOS
+# VM only through the runner's separate fixture disk (scripts/test/
+# dos_fixtures.py), never this payload, the canonical image or a release.
+LOCAL_PAYLOAD_DIRS = ("third_party/Doom", "third_party/WOLF3D")
+LOCAL_PAYLOAD_NAMES = ("DOOM.EXE", "DOOM.WAD", "DOOM1.WAD", "DOOM2.WAD", "WOLF3D.EXE",
+                       "VSWAP.WL6", "VGAGRAPH.WL6", "GAMEMAPS.WL6", "AUDIOT.WL6")
+
+
+def local_payload_hashes(root=ROOT):
+    """SHA-256 of every file below the declared local game directories present on this host."""
+    hashes = {}
+    for folder in LOCAL_PAYLOAD_DIRS:
+        base = Path(root) / folder
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            # Tiny files (batch stubs, empty files) could collide with
+            # unrelated payloads by content; the names below still apply.
+            if path.is_file() and not path.is_symlink() and path.stat().st_size >= 64:
+                hashes[digest(path)] = str(path.relative_to(root))
+    return hashes
+
+
+def refuse_local_payloads(payloads, root=ROOT):
+    """payloads: {path: sha256}. Raises when a local commercial file would be published."""
+    local = local_payload_hashes(root)
+    for path, sha in sorted(payloads.items()):
+        name = path.replace("\\", "/").rsplit("/", 1)[-1].upper()
+        if sha in local or name in LOCAL_PAYLOAD_NAMES:
+            raise SystemExit(f"refusing local commercial payload {path} "
+                             f"({local.get(sha, 'reserved name')}): fixtures only (f3-06)")
+
+
 def watcom_build(source, name, work):
     wcl = WATCOM / "binl64/wcl386"
     extender = WATCOM / "binw/dos4gw.exe"
@@ -89,17 +122,23 @@ def shortname(name):
     return parts[0].ljust(8) + (parts[1] if len(parts) == 2 else "").ljust(3)
 
 
-def write_fat16(out, boot, loader, files):
+def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=()):
+    """Deterministic private FAT16 volume: root, /SYSTEM and (f3-06) further
+    one-level directories, each one cluster (126 entries). Paths are
+    "/NAME.EXT" or "/DIR/NAME.EXT" with 8.3 names."""
     if len(boot) != 512 or boot[510:] != b"\x55\xaa" or len(loader) > 4096:
         raise ValueError("DOS boot/loader bounds")
     clusters = (SECTORS - DATA_LBA) // SPC
     if not 4085 <= clusters < 65525 or clusters + 2 > FAT_SECTORS * 256:
         raise ValueError("FAT16 cluster-count/capacity mismatch")
+    if len(label) > 11:
+        raise ValueError("volume label exceeds 11 bytes")
     fat = bytearray(FAT_SECTORS * 512)
     struct.pack_into("<HH", fat, 0, 0xFFF8, 0xFFFF)
     root = bytearray(ROOT_SECTORS * 512)
-    system = bytearray(SPC * 512)
     next_cluster = 2
+    names = ["SYSTEM"] + sorted({d.strip("/").upper() for d in directories} - {"SYSTEM"})
+    folders = {name: bytearray(SPC * 512) for name in names}
 
     def allocate(data):
         nonlocal next_cluster
@@ -121,26 +160,36 @@ def write_fat16(out, boot, loader, files):
         stream.truncate(SECTORS * 512)
         stream.write(boot)
         stream.write(loader)
-        directory_cluster = allocate(system)
-        root[:32] = entry("CIUKIOSFULL", 8, 0, 0)
-        root[32:64] = entry(shortname("SYSTEM"), 0x10, directory_cluster, 0)
-        system[:32] = entry(".", 0x10, directory_cluster, 0)
-        system[32:64] = entry("..", 0x10, 0, 0)
-        root_index, system_index = 2, 2
+        first_cluster = {name: allocate(folders[name]) for name in names}
+        root[:32] = entry(label.ljust(11), 8, 0, 0)
+        root_index = 1
+        index = {}
+        for name in names:
+            root[root_index * 32:(root_index + 1) * 32] = entry(shortname(name), 0x10, first_cluster[name], 0)
+            root_index += 1
+            folders[name][:32] = entry(".", 0x10, first_cluster[name], 0)
+            folders[name][32:64] = entry("..", 0x10, 0, 0)
+            index[name] = 2
         for path, data in sorted(files.items()):
             cluster = allocate(data)
             parent, name = path.rsplit("/", 1)
             record = entry(shortname(name), 0x20, cluster, len(data))
-            if parent == "/SYSTEM":
-                system[system_index * 32:(system_index + 1) * 32] = record
-                system_index += 1
-            elif not parent:
+            folder = parent.strip("/").upper()
+            if not parent:
+                if root_index >= len(root) // 32:
+                    raise ValueError("DOS root directory full")
                 root[root_index * 32:(root_index + 1) * 32] = record
                 root_index += 1
+            elif folder in folders and "/" not in folder:
+                if index[folder] >= SPC * 512 // 32:
+                    raise ValueError("DOS payload directory full: " + folder)
+                folders[folder][index[folder] * 32:(index[folder] + 1) * 32] = record
+                index[folder] += 1
             else:
                 raise ValueError("unapproved DOS payload directory")
-        stream.seek(DATA_LBA * 512)
-        stream.write(system)
+        for name in names:
+            stream.seek((DATA_LBA + (first_cluster[name] - 2) * SPC) * 512)
+            stream.write(folders[name])
         for lba in (RESERVED, RESERVED + FAT_SECTORS):
             stream.seek(lba * 512)
             stream.write(fat)
@@ -180,7 +229,11 @@ def build(out=None):
             files[f"/DPMICH{width}.COM"] = assemble("src/probes/dos/dpmi_child.asm", work / f"DPMICH{width}.COM",
                                                     {"BITS32": int(width == 32)})
         files["/DPMIFLT.COM"] = assemble("src/probes/dos/dpmi_fault.asm", work / "DPMIFLT.COM")
+        # f3-06 workloads: EXEC-and-report launcher and the starvation-gate CLI loop.
+        files["/RUNREC.COM"] = assemble("src/probes/dos/run_record.asm", work / "RUNREC.COM")
+        files["/CLILOOP.COM"] = assemble("src/probes/dos/cli_loop.asm", work / "CLILOOP.COM")
         files["/DPMI4GW.EXE"], files["/SYSTEM/DOS4GW.EXE"] = watcom_build("src/probes/vm/dpmi_dos4gw.c", "DPMI4GW.EXE", work)
+        refuse_local_payloads({name: hashlib.sha256(data).hexdigest() for name, data in files.items()})
         candidate = work / "DOSBOOT.IMG"
         write_fat16(candidate, boot, loader, files)
         subprocess.run(["fsck.fat", "-n", str(candidate)], check=True)
