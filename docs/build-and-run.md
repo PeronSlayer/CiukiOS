@@ -37,6 +37,27 @@ suites in `tests/suites/` (`docs/design/test-architecture.md`,
 Interactive runs use TCG by default; KVM is only for the `qemu-fast`
 developer profile and never for evidence.
 
+### Normal boot cases in f0-smoke
+
+After its two probe boots, `f0-smoke` boots the image twice the way a user
+does (`normal-boot-qemu-t23`, `normal-boot-qemu-desktop-2002`): QEMU gets no
+fw_cfg test request, the loader menu times out (about 3 s) and the kernel
+takes the production path up to `/bin/desktop`. A case passes when
+`serial.log` shows, in order and at the start of a line, `L:CPU signature=`,
+`L:SELECT_SOURCE=menu`, the `Ciuki VMM F0 build` banner,
+`[supervisor] bootstrap: spawning /bin/desktop` and
+`[supervisor] desktop pid=<n> pgid=<n>` within 300 s, with no panic,
+CIUKI_TEST record, `desktop unavailable` or `desktop stopped` line, and the
+screendump taken 8 s after the desktop line shows the desktop taskbar, start
+button, top bar and background colours instead of the kernel console.
+The run directory keeps `screen.ppm` also on a pass; `result.json` has
+`evidence_kind: "normal-boot"`, `normal_boot` (milestones, desktop PID,
+timings) and `screen` (PPM SHA-256, measured colour fractions). A failure
+keeps the overlay, `screen.ppm` when taken and `screen-fail.ppm`. Because
+`f0-smoke` is the first prerequisite of the other suites, a failed normal
+boot stops the campaign there. The case kind and its rules are in
+[test architecture](design/test-architecture.md#normal-boot-cases-amendment-2026-10-11).
+
 ## Version
 
 `config/version.json` is the single source of the CiukiOS version

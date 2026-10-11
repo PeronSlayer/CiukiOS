@@ -68,6 +68,57 @@ used copy-on-write. Earlier, `/tmp` (a 7.4 GiB tmpfs, that is RAM) filled with
 8. **Results are evidence only for the image they ran on.** `result.json`
    records the image SHA-256, git revision, QEMU version and profile.
 
+## Normal boot cases (amendment, 2026-10-11)
+
+Every probe case boots with the fw_cfg request, and with
+`CBI_F_TEST_REQUEST` the kernel's `probes_main` never calls `drivers_init()`
+or `supervisor_bootstrap()`. The path a user boots (drivers, storage with the
+boot log and timer, files, audio, supervisor spawning `/bin/desktop`) was
+therefore never covered. A case with `"kind": "normal-boot"` (and
+`"probe": "normal-boot"`) closes that gap:
+
+- QEMU gets the same profile, overlay, scope, lock, timeout and teardown as
+  a probe case, but no `-fw_cfg` item: the loader menu times out after about
+  3 s and boots normally, as on a physical PC. A profile with a `platform`
+  override is refused (the override travels in the fw_cfg request). The case
+  allows only `id`, `kind`, `probe`, `profile`, `timeout`, `attempt`,
+  `expected` and a cold `boot_kind`; `expected` holds only
+  `evidence_kind: "normal-boot"`, `settle_seconds` and `screen.geometry`.
+- Evidence is serial text, not CIUKI_TEST records. Milestones are whole-line
+  prefixes, once each and in this order: `L:CPU signature=`,
+  `L:SELECT_SOURCE=menu`, `Ciuki VMM F0 build <id> - CiukiOS`,
+  `[supervisor] bootstrap: spawning /bin/desktop`,
+  `[supervisor] desktop pid=<n> pgid=<n>`. The case fails on a line starting
+  with `Ciuki VMM panic`/`Ciuki VMM double fault`, any `CIUKI_TEST` record
+  (a panic record or a probe record without a request), another
+  `L:SELECT_SOURCE=`, `CIUKI: `/`L:SELECT_ERROR`, `L:SAFE=1`,
+  `[supervisor] desktop unavailable`, `[supervisor] desktop stopped`, or a
+  repeated milestone. The runner keeps collecting for 1 s after such a line
+  so the following diagnostic lines reach `serial.log`.
+- `settle_seconds` after the desktop line the runner takes one QMP
+  [`screendump`](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-screendump)
+  (`screen.ppm`) and checks layout colours taken from `apps/desktop`, not a
+  frame digest (the taskbar clock changes): the bottom 32 rows are mostly the
+  taskbar colour `b8c9cc`, the start button `e8d7b9` (or `607a85` with the
+  menu open), the top-left 256x32 is mostly the top bar `213c4c` and has at
+  most 2 % kernel console colours (`10243c`, `e8e8e8`, panic `800000`), and
+  the area between the bars is at least 25 % desktop background `375564`;
+  per-channel tolerance 8. A host test checks these colours against the C
+  sources and runs the heuristic on frames from the production compositor.
+- `result.json` records `evidence_kind: "normal-boot"` (probe cases record
+  `ciuki-test-records`), `selector: null`, `normal_boot` (milestones with
+  serial line and host time, negative lines, desktop PID/PGID, kernel build
+  ID, settle and screendump times) and `screen` (PPM SHA-256 and the measured
+  fraction of every region). Amending rule 6, a passing normal-boot run keeps
+  `screen.ppm` beside `result.json` and `serial.log`; a failing run also keeps
+  `screen-fail.ppm` taken at teardown.
+- `f0-smoke` ends with `normal-boot-qemu-t23` and
+  `normal-boot-qemu-desktop-2002` (timeout 300 s, settle 8 s, geometry
+  1024x768), so every suite that has `f0-smoke` as a prerequisite stops when
+  the image does not boot to the desktop. Physical sweep import reports these
+  cases `not_run reason=normal_boot_qemu_only` without blocking later cases: a
+  sweep boot always carries a BOOT.CFG probe selection.
+
 F1-31 operator waits apply only to cfg sweep boots, before the normal input
 stimulus or post-fault desktop interaction window: announce a screen/serial
 prompt, retain the first event, and wait at most 60 seconds. Absence produces

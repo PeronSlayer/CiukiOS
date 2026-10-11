@@ -182,7 +182,7 @@ class RunnerTests(unittest.TestCase):
     def test_bootlog_readonly_position_operator_skip_and_f2_failure_gate(self):
         cases=runner.load_suite('f2-all')['cases']
         index=next(i for i,c in enumerate(cases) if c['id']=='bootlog-read-only')
-        first_f2=next(i for i,c in enumerate(cases) if c['selector'].startswith('f2:'))
+        first_f2=next(i for i,c in enumerate(cases) if c.get('selector','').startswith('f2:'))
         operator=next(c for c in cases[:index] if c.get('operator_confirmation'))
         readonly=cases[index];f2=cases[first_f2]
         self.assertLess(index,first_f2)
@@ -1644,7 +1644,7 @@ class F2EvidenceTests(unittest.TestCase):
                 self.assertEqual({c['profile'] for c in suite['cases'] if c['probe']==probe},({'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-1998','qemu-desktop-2002'} if probe=='crash-isolation' else {'qemu-t23','qemu-e500','qemu-min128'}))
         self.assertEqual(set(probes),set(F2_PROBES))
         suite=runner.load_suite('f2-all');cases=suite['cases']
-        first=next(i for i,c in enumerate(cases) if c['selector'].startswith('f2:'))
+        first=next(i for i,c in enumerate(cases) if c.get('selector','').startswith('f2:'))
         expected=[c for name in runner.F2_SUITES for c in runner.load(ROOT/'tests/suites'/f'{name}.json')['cases']]
         self.assertEqual([c['id'] for c in cases[first:]],[c['id'] for c in expected])
         self.assertEqual(len(cases[:first]),sum(len(runner.load(ROOT/'tests/suites'/f'{n}.json')['cases']) for n in runner.REGRESSION_SUITES))
