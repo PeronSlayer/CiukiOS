@@ -87,10 +87,19 @@ start:
     out 0x21,al
     sti
     mov word [stage],5
+; Test before sleeping: IRQ1s pending at STI run at the boundary after the
+; MOV above (the STI shadow covers one instruction), so a leading HLT would
+; wait for an interrupt that never comes. Test with IF clear, then STI;HLT:
+; the shadow covers HLT, so an IRQ pending at STI is taken after it and wakes it.
 .wait_keys:
-    hlt
+    cli
     cmp word [keys],2
-    jb .wait_keys
+    jae .keys_done
+    sti
+    hlt
+    jmp .wait_keys
+.keys_done:
+    sti
     xor ax,ax
     int 0x33
     push cs
@@ -100,16 +109,22 @@ start:
     mov dx,mouse_callback
     int 0x33
     mov word [stage],6
-.wait_focus:
-    hlt
+.wait_focus:                    ; same shape: test with IF clear, then STI;HLT
+    cli
     mov ax,3
     int 0x33
     test bx,bx
-    jnz .wait_focus
+    jnz .focus_sleep
     cmp byte [last_key],0x9E
-    jne .wait_focus
+    jne .focus_sleep
     cmp word [callback_count],0
-    je .wait_focus
+    jne .focus_done
+.focus_sleep:
+    sti
+    hlt
+    jmp .wait_focus
+.focus_done:
+    sti
     mov word [mouse_release],1
     mov word [stage],7
     push cs

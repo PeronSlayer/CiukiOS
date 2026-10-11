@@ -252,6 +252,24 @@ Open items for the lead: the EMS name is found at handler offset+0Ah
 looks, because the vector is F000:1000. Separately, port 60h returns FFh when the output buffer is empty,
 while QEMU's `ps2_read_data` returns the last byte ("needed for EMM386").
 
+### Wait loops (QEMU, image from a9e3845, 2026-10-11)
+
+With `FDh`, both key events arrived through vector 9 (`keys=2 isr1=2`,
+`irq1=2`, ISR clear) but stage 6 never came. The stopped frame had `AX=00FDh`
+and `SP=FFFAh` with `0000h,1746h`, which is CiukiDOS's COM entry frame
+(PSP:0000 pushed below SP=FFFEh), so the guest was halted in its main loop.
+`.wait_keys` was `HLT; CMP keys,2; JB`. The two IRQ1s became deliverable at
+STI and were taken at the boundary after `mov word [stage],5`, because the
+[STI](https://www.felixcloutier.com/x86/sti) inhibition "ends after ... the
+execution of the next instruction". They returned to the HLT, which then
+waited for an interrupt that never came (IRQ0 masked, keyboard drained). A
+real CPU behaves the same; the monitor's delivery at that `#DB` boundary is
+correct. `.wait_keys` and `.wait_focus` now test their condition with IF
+clear and sleep with `STI; HLT`. The shadow then covers HLT, so an interrupt
+pending at STI is taken after HLT and wakes it. The host replay reproduces the hang
+(old loop: still halted after 200 ms, AX=FDh, IP after HLT) and runs the
+corrected loops, including a focus release made pending before `STI; HLT`.
+
 ## f3-03
 
 Research checked before implementation, 2026-10-11: [XMS 3.0](https://www.phatcode.net/res/219/files/xms30.txt),

@@ -240,6 +240,18 @@ static void device_pointer(struct dosvm *v)
     CHECK(dosvm_input_event(key,&motion)); motion.value=27; motion.value2=18;
     CHECK(dosvm_input_event(key,&motion) && dosvm_input_event(key,&button));
 }
+static void guest_op(struct dosvm *v, struct v86_frame *f, uint8_t op) { CHECK(device_insn(v,f,f->tf.eax,&op,1)); }
+static bool hang_halted;
+static void device_hang_stop(struct dosvm *v)
+{ hang_halted=v->monitor.state==V86_HALTED && v->info.state==DOSVM_BLOCKED; CHECK(!dosvm_stop(dosvm_key(v),DOSVM_TERMINATE)); }
+/* .wait_focus as corrected: CLI; INT 33h AX=3; done when no button is down, the
+ * 9Eh break was seen and a callback ran; otherwise STI; HLT; JMP .wait_focus. */
+static bool guest_focus_check(struct dosvm *v, struct v86_frame *f, struct device_guest *g, uint32_t loop)
+{
+    f->tf.eip=loop; guest_op(v,f,0xFA); CHECK(!v->monitor.vif);
+    f->tf.eip+=3; guest_int33(v,f,3); CHECK(!v->monitor.vif);
+    return !(uint16_t)f->tf.ebx && g->last_key==0x9E && g->callbacks;
+}
 static void test_device_irq_delivery(void)
 {
     /* The payload as run on QEMU: IRQ0 is the enabled line, IRQ1 stays queued. */
@@ -249,37 +261,64 @@ static void test_device_irq_delivery(void)
     CHECK(v->monitor.pic[0].isr==1 && (v->monitor.pic[0].irr&2) && v->kbd.count==2);
     destroy(v,true); empty();
 
+    /* FDh with the old ".wait_keys: HLT; CMP; JB" loop, as run on QEMU (a9e3845):
+     * both IRQ1s are taken at the boundary after the stage-5 MOV (the STI shadow
+     * covers that MOV, not the HLT) and return to the HLT, which then waits for
+     * an interrupt that never comes. Same record: AX=FDh, keys=2, IRR 01h, ISR 0. */
+    v=create(); device_payload_setup(v,&f); struct device_guest g={0};
+    uint32_t resume=guest_unmask(v,&f,0xFD);
+    guest_keyboard(v,&f,&g); guest_keyboard(v,&f,&g);
+    CHECK(g.keys==2 && f.tf.cs==0x200 && f.tf.eip==resume && v->monitor.vif);
+    const uint8_t hlt=0xF4; device_hook_arm(v,200,device_hang_stop);
+    CHECK(!device_insn(v,&f,0xFD,&hlt,1) && hang_halted && v->info.reason==DOSVM_TERMINATE);
+    CHECK(v->frame.tf.cs==0x200 && v->frame.tf.eip==resume+1 && (uint16_t)v->frame.tf.eax==0xFD && v->frame.tf.user_esp==0x100);
+    CHECK(v->monitor.pic[0].irr==1 && !v->monitor.pic[0].isr && v->monitor.pic[0].imr==0xFD &&
+          v->monitor.stats.delivered[1]==2 && !v->monitor.stats.delivered[0] && !v->kbd.count);
+    destroy(v,true); empty();
+
     /* Corrected payload, stages 5-7 and the locality fault. */
     struct dosvm *w=create(); v=create(); device_payload_setup(v,&f);
     /* The EMS entry/name and the INT 33h continuation share ROM page F1 without overlap. */
     uint8_t rom[3]; CHECK(!dosvm_read(v,0xF0000+DOSVM_MOUSE_RETURN,rom,3) && rom[0]==0xCD && rom[1]==0xFD && rom[2]==0xF4);
     char ems[8]; CHECK(!dosvm_read(v,0xF100A,ems,8) && !memcmp(ems,"EMMXXXX0",8) && !dosvm_read(v,0xF1000,rom,3) && rom[1]==0xFE);
-    struct device_guest g={0}; struct dosvm_key key=dosvm_key(v);
-    uint32_t resume=guest_unmask(v,&f,0xFD);
+    g=(struct device_guest){0}; struct dosvm_key key=dosvm_key(v);
+    resume=guest_unmask(v,&f,0xFD);
     guest_keyboard(v,&f,&g); /* its IRET delivers the host typematic make at once */
     CHECK(g.last_key==0x1E && g.isr1==2 && f.tf.cs==0x280 && v->monitor.stats.delivered[1]==2);
     guest_keyboard(v,&f,&g);
     CHECK(g.keys==2 && g.last_key==0x1E && g.isr1==2 && f.tf.cs==0x200 && f.tf.eip==resume && v->monitor.vif);
     CHECK(!v->kbd.count && v->monitor.pic[0].irr==1 && !v->monitor.pic[0].isr && !v->monitor.stats.delivered[0]);
+    /* .wait_keys: CLI; CMP keys,2; JAE .keys_done; .keys_done: STI; XOR AX,AX. */
+    guest_op(v,&f,0xFA); CHECK(!v->monitor.vif && f.tf.eip==resume+1);
+    f.tf.eip+=7; guest_op(v,&f,0xFB); CHECK(v->monitor.vif && v->monitor.shadow);
+    f.tf.eip+=2; CHECK(device_trap(v,&f,1) && !v->monitor.shadow);
     guest_int33(v,&f,0); CHECK((uint16_t)f.tf.eax==0xFFFF && (uint16_t)f.tf.ebx==3);
     const uint8_t retf=0xCB; CHECK(!dosvm_write(v,0x2F00,&retf,1));
     f.es=0x200; f.tf.ecx=0x7F; f.tf.edx=0xF00; guest_int33(v,&f,0x0C);
     CHECK(v->mouse.mask==0x7F && v->mouse.callback_cs==0x200 && v->mouse.callback_ip==0xF00);
-    /* HLT across ~50 masked timer edges; the pointer events wake the callback. */
-    uint64_t edges=v->pit.edges; uint32_t halt=f.tf.eip; const uint8_t hlt=0xF4;
+    /* .wait_focus pass 1: nothing yet; STI;HLT blocks across ~50 masked timer
+     * edges until the pointer events wake the callback. */
+    uint32_t loop=f.tf.eip+6; CHECK(!guest_focus_check(v,&f,&g,loop));
+    guest_op(v,&f,0xFB); CHECK(v->monitor.vif && v->monitor.shadow);
+    uint64_t edges=v->pit.edges; uint32_t halt=f.tf.eip;
     device_hook_arm(v,50,device_pointer); CHECK(device_insn(v,&f,0,&hlt,1));
     CHECK(!sleep_hook && v->pit.edges>=edges+48 && (v->monitor.pic[0].irr&1) && !v->monitor.stats.delivered[0]);
     CHECK((uint16_t)f.tf.eax==3 && (uint16_t)f.tf.ebx==1 && (uint16_t)f.tf.ecx==336 && (uint16_t)f.tf.edx==96 &&
           (uint16_t)f.tf.esi==17 && (uint16_t)f.tf.edi==8);
     guest_callback(v,&f,&g,halt+1); CHECK(f.tf.cs==0x200);
-    guest_int33(v,&f,3); CHECK((uint16_t)f.tf.ebx==1);
+    /* Pass 2: button held. The focus release becomes pending while IF is clear,
+     * before STI;HLT: the STI shadow covers HLT, so the HLT still wakes (the
+     * race the old loop lost). The release callback runs first, then IRQ1. */
+    CHECK(!guest_focus_check(v,&f,&g,loop) && (uint16_t)f.tf.ebx==1);
     struct dosvm_device_info d; CHECK(dosvm_device_info(key,&d) && d.held_keys==1 && d.buttons==1);
     CHECK(dosvm_input_focus(key,false) && dosvm_device_info(key,&d) && !d.held_keys && !d.buttons && d.queued_bytes==1);
-    /* Focus loss: the button-release callback runs first, then IRQ1 delivers the break. */
+    guest_op(v,&f,0xFB); CHECK(v->monitor.shadow && !v->mouse.active && f.tf.cs==0x200);
     halt=f.tf.eip; CHECK(device_insn(v,&f,0,&hlt,1) && (uint16_t)f.tf.eax==4 && !(uint16_t)f.tf.ebx);
     guest_callback(v,&f,&g,halt+1); CHECK(f.tf.cs==0x280 && v->monitor.stats.delivered[1]==3);
     guest_keyboard(v,&f,&g); CHECK(g.last_key==0x9E && g.keys==3 && f.tf.cs==0x200 && f.tf.eip==halt+1);
-    guest_int33(v,&f,3); CHECK(!(uint16_t)f.tf.ebx && g.callbacks==2 && !v->monitor.stats.delivered[0]);
+    /* Pass 3: done; STI, then stage 7. */
+    CHECK(guest_focus_check(v,&f,&g,loop) && g.callbacks==2 && !v->monitor.stats.delivered[0]);
+    guest_op(v,&f,0xFB); CHECK(v->monitor.vif);
     /* Malformed wide PIT I/O stops only this VM, with #GP recorded. */
     f.tf.edx=0x40; const uint8_t wide[]={0xEF}; CHECK(!device_insn(v,&f,0x1234,wide,1));
     CHECK(v->info.state==DOSVM_STOPPING && v->info.reason==DOSVM_FAULT && v->info.fault_vector==13);
