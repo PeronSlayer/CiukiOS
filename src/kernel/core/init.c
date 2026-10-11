@@ -137,7 +137,10 @@ void drivers_init(void)
         .tick = tick, .safe_flag_before = safe_flag_before, .present = storage, .quarantined = quarantine });
     storage_init();
     file_clock_start(CIUKI_BUILD_EPOCH, true);
+    klog("[init] storage done; files bootstrap");
     int native_files = files_bootstrap(&storage_get()->vfs);
+    klog("[init] files result=%d; audio init", native_files);
     if (audio_init) audio_init(&storage_get()->vfs);
+    klog("[init] audio init done");
     if (native_files) klog("[files] initialization failed: %d", native_files);
 }

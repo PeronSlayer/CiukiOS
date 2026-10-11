@@ -39,21 +39,29 @@ static inline uint32_t fs_now_ms(void) {
 #include <ciuki/mm.h>
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
-/* F0 has no sleepable mutex primitive. Cooperative task-context mutex: only
- * test/set has IF clear. No filesystem entry point may run in an IRQ. The
- * kernel is UP and nonpreemptible; yielding permits a sleeping owner to run. */
-typedef struct { bool held; } fs_lock;
-static inline void fs_lock_init(fs_lock *l) { l->held = false; }
+#include <ciuki/sync.h>
+#include <ciuki/sync.h>
+/* Task-context mutex: test/set with IF clear, waiters BLOCK on a kwait queue
+ * (f1-18 rule). A yield-spin livelocked the boot: the P_DEVICE storage worker
+ * draining the boot log yielded only to its own priority while the P_NORMAL
+ * boot task held the VFS lock reading /bin/desktop (lead fix, 2026-10-11).
+ * No filesystem entry point may run in an IRQ. The bounded wait guards a
+ * missed wake-up, like the DOS VM disk gate. */
+typedef struct { bool held; struct kwait wait; } fs_lock;
+static inline bool fs_lock_free(void *arg) { return !((fs_lock *)arg)->held; }
+static inline void fs_lock_init(fs_lock *l) { l->held = false; kwait_init(&l->wait); }
 static inline void fs_lock_destroy(fs_lock *l) { (void)l; }
 static inline void fs_lock_take(fs_lock *l) {
     for (;;) {
         uint32_t f = irq_save();
         if (!l->held) { l->held = true; irq_restore(f); return; }
-        irq_restore(f); task_yield();
+        irq_restore(f);
+        kwait_wait_until(&l->wait, fs_lock_free, l, deadline_after_ms(1000));
     }
 }
 static inline void fs_lock_drop(fs_lock *l) {
     uint32_t f = irq_save(); l->held = false; irq_restore(f);
+    kwait_wake_all(&l->wait);
 }
 static inline void *fs_alloc(size_t n) { return n <= 2040 ? kmalloc(n) : 0; }
 static inline void fs_free(void *p) { kfree(p); }
