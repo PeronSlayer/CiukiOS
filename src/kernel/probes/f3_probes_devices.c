@@ -25,8 +25,8 @@ static int devices_stage(struct dosvm *v, unsigned stage, struct devices_mail *m
             /* Lead diagnostic: the mailbox and device state at the timeout. */
             struct dosvm_device_info d={0}; dosvm_device_info(dosvm_key(v),&d);
             uint32_t ivt8=0, ivt9=0; dosvm_read(v,0x20,&ivt8,4); dosvm_read(v,0x24,&ivt9,4);
-            rec_emit("vm-devices","DATA","case=stage_timeout wanted=%u stage=%u command=%u ticks=%u keys=%u last_key=%02x isr1=%u irr0=%02x isr0=%02x imr0=%02x queued=%u held=%u last_ip=%04x ivt8=%08x ivt9=%08x",
-                stage,m->stage,m->command,m->ticks,m->keys,m->last_key,m->isr1,d.irr[0],d.isr[0],d.imr[0],d.queued_bytes,d.held_keys,m->last_ip,ivt8,ivt9);
+            rec_emit("vm-devices","DATA","case=stage_timeout wanted=%u stage=%u command=%u ticks=%u keys=%u last_key=%02x isr1=%u irr0=%02x isr0=%02x imr0=%02x queued=%u held=%u last_ip=%04x ivt8=%08x ivt9=%08x irq0=%u irq1=%u last_vector=%u base0=%02x base1=%02x mail_isr0=%u",
+                stage,m->stage,m->command,m->ticks,m->keys,m->last_key,m->isr1,d.irr[0],d.isr[0],d.imr[0],d.queued_bytes,d.held_keys,m->last_ip,ivt8,ivt9,d.delivered[0],d.delivered[1],d.last_vector,d.pic_base[0],d.pic_base[1],m->isr0);
             return -V86_ETIMEDOUT;
         }
         task_sleep_ms(1);

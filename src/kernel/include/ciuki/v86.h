@@ -33,6 +33,7 @@ enum v86_insn { V86_INT, V86_IRET, V86_PUSHF, V86_POPF, V86_CLI,
                 V86_STI, V86_IN, V86_OUT, V86_INS, V86_OUTS, V86_HLT, V86_INSNS };
 struct v86_stats {
     uint64_t calls, io[V86_PORT_CLASSES], reflected_irqs, disallowed_io, timeouts;
+    uint32_t delivered[16], last_vector; /* per-IRQ reflections (diagnostic) */
     uint64_t insn[V86_INSNS];
 };
 enum v86_state { V86_IDLE, V86_RUNNING, V86_HALTED, V86_DONE, V86_DISABLED };

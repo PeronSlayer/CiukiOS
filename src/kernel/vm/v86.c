@@ -281,6 +281,7 @@ int v86_irq_deliver(struct v86 *v, struct v86_frame *f)
     if (rc) return rc;
     dosvm_pic_ack(v);
     v->stats.reflected_irqs++;
+    v->stats.delivered[irq & 15]++; v->stats.last_vector = vector;
     return 1;
 }
 

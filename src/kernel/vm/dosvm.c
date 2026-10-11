@@ -562,6 +562,10 @@ bool dosvm_device_info(struct dosvm_key key, struct dosvm_device_info *out)
         for (unsigned bit = 0; bit < 8; bit++) out->held_keys += !!(v->kbd.held[i] & (1u << bit));
     for (unsigned i = 0; i < 2; i++) {
         out->irr[i] = v->monitor.pic[i].irr; out->isr[i] = v->monitor.pic[i].isr; out->imr[i] = v->monitor.pic[i].imr;
+        out->pic_base[i] = v->monitor.pic[i].base;
+    }
+    out->last_vector = v->monitor.stats.last_vector;
+    for (unsigned i = 0; i < 16; i++) { out->delivered[i] = v->monitor.stats.delivered[i];
     }
     irq_restore(flags); return true;
 }

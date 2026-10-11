@@ -33,6 +33,7 @@ struct dosvm_device_info {
     uint64_t host_ticks, pit_clocks, pit_edges, pit_dropped_ticks, key_overflows;
     uint32_t queued_bytes, held_keys, buttons;
     uint8_t irr[2], isr[2], imr[2];
+    uint32_t delivered[16], last_vector, pic_base[2];
 };
 bool dosvm_device_info(struct dosvm_key, struct dosvm_device_info *);
 struct dosvm_admission {
