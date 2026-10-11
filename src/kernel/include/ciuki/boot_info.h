@@ -25,7 +25,17 @@
 #define CBI_F_INPUT_FORCED     (1u << 7)
 #define CBI_F_A20_SHIFT        8u
 #define CBI_F_A20_MASK         (7u << CBI_F_A20_SHIFT)
-#define CBI_F_DEFINED_MASK     0x000007FFu
+/* Boot log on screen: menu L key (amendment 2026-10-12, docs/boot.md). */
+#define CBI_F_VERBOSE          (1u << 11)
+#define CBI_F_DEFINED_MASK     0x00000FFFu
+
+/* A normal boot keeps the screen quiet until the desktop takes it: no test
+ * request, no safe mode, no L choice and a linear framebuffer. Every other
+ * boot draws the kernel log on screen as before. */
+static inline int cbi_quiet_console(uint32_t flags)
+{
+    return !(flags & (CBI_F_TEST_REQUEST | CBI_F_SAFE_MODE | CBI_F_VERBOSE | CBI_F_TEXT_MODE));
+}
 
 #define CBI_A20_ALREADY_ON     1u
 #define CBI_A20_INT15          2u

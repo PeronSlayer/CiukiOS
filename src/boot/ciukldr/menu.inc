@@ -484,6 +484,25 @@ boot_menu:
     mov byte [selector_source], 1 ; validated fw_cfg, no second port read
     jmp .done
 .menu:
+    test dword [B(flags)], CBI_F_TEST_REQUEST | CBI_F_SAFE_MODE
+    jnz .announce
+    ; Normal boot (docs/boot.md): a cleared screen with one discreet line;
+    ; the serial log keeps SELECT_READY and the full menu text unchanged.
+    mov ax, 3
+    int 0x10
+    ; INT 10h AH=13h write string (IBM PC/AT BIOS; SeaBIOS vgasrc/vgabios.c
+    ; handle_1013): ES:BP text, CX length, DX row/col, BL attribute. AL=0
+    ; leaves the cursor at the top, where S/L/P output then starts.
+    mov ax, 0x1300
+    mov bx, 0x0007
+    mov cx, menu_hint_end-menu_hint
+    mov dx, 0x1800
+    push ds
+    pop es
+    mov bp, menu_hint
+    int 0x10
+    mov byte [screen_quiet], 1
+.announce:
     mov si, menu_text
     call print
 .restart:
@@ -530,6 +549,7 @@ boot_menu:
 .safe:
     call .cancel_cfg
     or dword [B(flags)], CBI_F_SAFE_MODE
+    mov byte [screen_quiet], 0
     mov si, safe_confirmation
     call print
     mov si, safe_selected
@@ -541,10 +561,14 @@ boot_menu:
     mov byte [selector_source], 0
     ret
 .log:
+    ; L also shows the boot log on screen (CBI_F_VERBOSE, bit 11).
     xor dword [B(flags)], CBI_F_SERIAL_LOG
+    or byte [B(flags)+1], CBI_F_VERBOSE >> 8
+    mov byte [screen_quiet], 0
     jmp .deadline
 .probe:
     call .cancel_cfg
+    mov byte [screen_quiet], 0
     mov si, probe_prompt
     call print
     mov bp, 548 ; Thirty-second command-entry deadline.
@@ -604,6 +628,8 @@ safe_selected db 'L:SAFE=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe mode / L Serial log / P Probe (3 s)',13,10,0
 probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0
+menu_hint db 'Press S for safe mode, L for serial log'
+menu_hint_end:
 
 ; INT 10h teletype AL character, BH page, BL colour (SeaBIOS vgabios.c).
 ; https://github.com/coreboot/seabios/blob/master/vgasrc/vgabios.c

@@ -41,11 +41,17 @@ static bool draw_enabled;
  * repaints the screen from history. Deliberate overlays (the operator
  * prompt, evidence pages) and panic output (console_reclaim) still draw. */
 static volatile bool display_owned, repaint_pending;
+/* Quiet boot (docs/boot.md): a normal boot leaves the loader's screen alone
+ * until the desktop takes the display. Lines still reach the history, the
+ * serial port and the boot log file; console_wake (panic, double fault,
+ * desktop failure, watchdog) switches drawing on and repaints the history. */
+static volatile bool quiet;
 
 static uint32_t line_begin_as(bool overlay)
 {
     uint32_t flags = irq_save();
-    draw_enabled = con_kind != CON_LFB || ((overlay || !display_owned) && fbdev_console_begin());
+    draw_enabled = con_kind != CON_LFB ||
+                   ((overlay || (!display_owned && !quiet)) && fbdev_console_begin());
     return flags;
 }
 static uint32_t line_begin(void) { return line_begin_as(false); }
@@ -98,6 +104,40 @@ static void draw_cell(unsigned col, unsigned row, char ch)
     }
 }
 
+#ifdef CIUKI_SPLASH_BIN
+/* Quiet-boot splash: the original Ciuki photograph, 512x384 RGB565 from
+ * scripts/convert_splash.py, scaled (nearest neighbour) to the largest 4:3
+ * area that fits and centred on black. Drawn once, before any line. */
+#define SPLASH_W 512u
+#define SPLASH_H 384u
+__asm__(".pushsection .rodata.splash,\"a\"\n.balign 4\n"
+        ".global console_splash, console_splash_end\nconsole_splash:\n"
+        ".incbin \"" CIUKI_SPLASH_BIN "\"\nconsole_splash_end:\n.popsection\n");
+extern const uint8_t console_splash[], console_splash_end[];
+
+static void draw_splash(void)
+{
+    if ((uint32_t)(console_splash_end - console_splash) != SPLASH_W * SPLASH_H * 2)
+        return;
+    uint32_t dw = width, dh = width * 3 / 4;
+    if (dh > height) { dh = height; dw = height * 4 / 3; }
+    uint32_t x0 = (width - dw) / 2, y0 = (height - dh) / 2, black = pack(0);
+    for (uint32_t y = 0; y < height; y++) {
+        bool inside = y >= y0 && y < y0 + dh;
+        const uint8_t *row = console_splash + (inside ? (y - y0) * SPLASH_H / dh : 0) * SPLASH_W * 2;
+        for (uint32_t x = 0; x < width; x++) {
+            if (!inside || x < x0 || x >= x0 + dw) { put_px(x, y, black); continue; }
+            const uint8_t *s = row + (x - x0) * SPLASH_W / dw * 2;
+            uint32_t v = s[0] | (uint32_t)s[1] << 8;
+            uint32_t r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+            put_px(x, y, pack((r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2)));
+        }
+    }
+}
+#else
+static void draw_splash(void) {}
+#endif
+
 static void clear_screen(void)
 {
     for (unsigned r = 0; r < rows; r++) {
@@ -114,7 +154,7 @@ static void scroll(void)
     /* Redraw from history: robust for both kinds and avoids reading VRAM. */
     unsigned shown = rows - 1;
     unsigned n = hist_count < shown ? hist_count : shown;
-    if (con_kind == CON_LFB && display_owned) {
+    if (con_kind == CON_LFB && (display_owned || quiet)) {
         cur_row = n;
         cur_col = 0;
         return;
@@ -149,6 +189,7 @@ static void commit_line(void)
 
 void console_init_text(void)
 {
+    quiet = false;
     con_kind = CON_TEXT;
     cols = 80;
     rows = 25;
@@ -177,8 +218,24 @@ bool console_init_lfb(void)
     rows = height / CELL_H;
     fbdev_console_region(rows * CELL_H);
     con_kind = CON_LFB;
-    clear_screen();
+    if (quiet) {
+        draw_splash();             /* nothing else is drawn until a wake */
+        cur_col = cur_row = 0;
+    } else
+        clear_screen();
     return true;
+}
+
+/* Called once before console_init_lfb; a text console is never quiet. */
+void console_set_quiet(bool on) { quiet = on; }
+bool console_quiet(void) { return quiet; }
+
+void console_wake(void)
+{
+    if (!quiet)
+        return;
+    quiet = false;
+    repaint_pending = true;
 }
 
 void console_set_color(uint32_t f, uint32_t b) { fg = f; bg = b; }
@@ -191,8 +248,13 @@ void console_display_owned(bool owned)
         repaint_pending = true;
 }
 
-/* Panic path: two stores, no lock; the panic lines repaint the console. */
-void console_reclaim(void) { console_display_owned(false); }
+/* Panic path: plain stores, no lock; the panic lines repaint the console,
+ * also on a quiet boot. */
+void console_reclaim(void)
+{
+    quiet = false;
+    console_display_owned(false);
+}
 
 /* The released LFB still shows the desktop: redraw history and the line in
  * progress before the next character. */
@@ -234,7 +296,7 @@ void console_write(const char *s, size_t n)
 {
     if (con_kind == CON_NONE)
         return;
-    if (repaint_pending && !display_owned && con_kind == CON_LFB)
+    if (repaint_pending && !display_owned && !quiet && con_kind == CON_LFB)
         repaint();
     size_t i = 0;
     while (i < n) {

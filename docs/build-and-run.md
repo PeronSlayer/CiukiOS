@@ -39,6 +39,9 @@ developer profile and never for evidence.
 
 ### Normal boot cases in f0-smoke
 
+What a user boot shows on screen (quiet console until the desktop) and which
+boots keep the verbose console: [boot modes](boot.md).
+
 After its two probe boots, `f0-smoke` boots the image twice the way a user
 does (`normal-boot-qemu-t23`, `normal-boot-qemu-desktop-2002`): QEMU gets no
 fw_cfg test request, the loader menu times out (about 3 s) and the kernel

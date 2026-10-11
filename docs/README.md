@@ -4,6 +4,7 @@
 `legacy-0.8`. See the [README](../README.md) for the overview.
 
 - [Build and run](build-and-run.md)
+- [Boot modes and what the screen shows](boot.md)
 - [Windows portable release](windows-portable-release.md)
 - [0.8.3 screenshots](screenshots/0.8.3/README.md)
 - [Test architecture](design/test-architecture.md)

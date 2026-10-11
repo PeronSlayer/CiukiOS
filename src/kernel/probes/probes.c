@@ -20,6 +20,7 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/reboot.h>
 #include <ciuki/storage.h>
+#include <ciuki/power.h>
 
 /* Reuse process.h's existing CIUKI_F2_PROBE layout and registration macro. */
 extern const struct ciuki_f2_probe __f2probes_start[], __f2probes_end[];
@@ -1039,14 +1040,36 @@ static __attribute__((noreturn)) void sweep_main(struct sweep_cursor cursor,
     kernel_reboot();
 }
 
+/* Quiet boot watchdog (docs/boot.md): a normal boot that has not spawned
+ * the desktop within 120 s of kernel time (a stall in drivers, storage or
+ * the bootstrap; QEMU -icount runs count virtual time)
+ * shows its boot log instead of a silent screen. */
+#define QUIET_WATCHDOG_MS 120000u
+static void quiet_watchdog(void *arg)
+{
+    (void)arg;
+    task_sleep_ms(QUIET_WATCHDOG_MS);
+    if (console_quiet() && !supervisor_desktop_pid() && !supervisor_desktop_deaths()) {
+        console_wake();
+        klog("[console] no desktop %u s after boot; boot log shown", QUIET_WATCHDOG_MS / 1000u);
+    }
+    for (;;)
+        task_sleep_ms(60000);
+}
+
 void probes_main(void *arg)
 {
     (void)arg;
     timing_calibrate();
     kwork_init();                        /* device worker, before any driver IRQ producer */
     if (!(g_boot.flags & CBI_F_TEST_REQUEST)) {
+        if (console_quiet()) {
+            struct task *watchdog = task_create_kernel("quiet-watchdog", quiet_watchdog, 0, P_INTERACTIVE);
+            if (watchdog) task_start(watchdog);
+        }
         drivers_init();
         supervisor_bootstrap();
+        power_discover();                /* logs the ACPI soft-off facts once */
         klog("Ciuki VMM F0 scaffold ready (no test request). Build %s.", CIUKI_BUILD_ID);
         for (;;)
             task_sleep_ms(60000);

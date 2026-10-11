@@ -39,7 +39,7 @@ def check(data, expected_request=None, text=False, crc_error=False):
     flags = int(records[1]["flags"], 16)
     count = int(records[1]["e820_count"])
     policy = int(records[1]["input_policy"])
-    if not 1 <= count <= 128 or flags & ~0x7FF or not 1 <= (flags>>8)&7 <= 4:
+    if not 1 <= count <= 128 or flags & ~0xFFF or not 1 <= (flags>>8)&7 <= 4:
         raise ValueError("invalid handoff flags/map count")
     if not flags & (1<<5):
         raise ValueError("SMBIOS QEMU was not discovered")

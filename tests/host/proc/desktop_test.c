@@ -46,6 +46,7 @@ void console_operator_prompt(bool announce) { if (announce) operator_prompts++; 
 /* f3-02: the screen console stays dark while a process holds the display grant. */
 static bool console_owned; static unsigned console_owned_changes;
 void console_display_owned(bool owned) { console_owned = owned; console_owned_changes++; }
+void console_wake(void) {}
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {

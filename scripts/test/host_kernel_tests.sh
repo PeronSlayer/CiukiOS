@@ -118,6 +118,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/lib/sha256.c" -o "$out/sha256_test"
 "$out/sha256_test"
 
+# Call 73: ACPI soft-off discovery (RSDP/RSDT/XSDT/FADT/DSDT and \_S5).
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_test.c" -o "$out/power_test"
+"$out/power_test"
+
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.
 fx="$out/audit_fixture.asm"
