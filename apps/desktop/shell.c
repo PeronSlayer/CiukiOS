@@ -40,7 +40,7 @@ static void bold(struct du_canvas *c, int x, int y, const char *s, uint32_t colo
 static int text_h(void) { return DU_GLYPH_H; }
 
 /* ---- icons ------------------------------------------------------------- */
-/* Tango 0.8.90 names (the icon family of AGENTS.md). Until du_icon(name,
+/* Tango 0.8.90 names (the icon family of AGENTS.md). Until du_icon_blit(name,
  * size) lands (wt/icons), each name maps to the sprites converted today;
  * smaller sizes are area-averaged from the next larger sprite and the
  * identity icons add the approved Ciuki portrait (deterministic scaling). */
@@ -478,7 +478,7 @@ static void draw_banner(struct du_canvas *c, struct desk_box b)
     }
     int32_t px = b.x + (b.w - 20) / 2, py = b.y + b.h - 24;
     const uint32_t *badge = desk_shell_icon("ciuki", 20);
-    du_icon(c, px, py, badge, 20, DU_ICON_NORMAL);
+    du_icon_blit(c, px, py, badge, 20, DU_ICON_NORMAL);
     /* Rotated glyphs: column col of the glyph becomes row (4-col) going up. */
     const char *word = "CiukiOS";
     int32_t x0 = b.x + (b.w - 14) / 2, y = py - 8;
@@ -515,7 +515,7 @@ static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_bo
         int hot = k == m->hot && !(it->flags & SH_ITEM_DISABLED);
         if (hot) du_fill(&c, (struct du_rect){x0, y, w, h}, SH_HOT);
         const uint32_t *ic = desk_shell_icon(it->icon, m->icon);
-        if (ic) du_icon(&c, x0 + 6, y + (h - m->icon) / 2, ic, m->icon, it->flags & SH_ITEM_DISABLED ? DU_ICON_DISABLED : DU_ICON_NORMAL);
+        if (ic) du_icon_blit(&c, x0 + 6, y + (h - m->icon) / 2, ic, m->icon, it->flags & SH_ITEM_DISABLED ? DU_ICON_DISABLED : DU_ICON_NORMAL);
         int32_t tx = x0 + 6 + m->icon + 10, ty = y + (h - text_h()) / 2;
         if (it->flags & SH_ITEM_DISABLED) du_text_disabled(&c, tx, ty, it->label);
         else if (it->flags & SH_ITEM_DEFAULT) bold(&c, tx, ty, it->label, hot ? SH_HOT_INK : SH_INK);
@@ -613,7 +613,7 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
         if (button.w > 24) {
             const uint32_t *ic = desk_shell_icon(client_icon(d, i), 16);
             int dy = active ? 1 : 0;
-            if (ic) du_icon(&bc, button.x + 5, button.y + 5 + dy, ic, 16, d->clients[i].minimized ? DU_ICON_GHOST : DU_ICON_NORMAL);
+            if (ic) du_icon_blit(&bc, button.x + 5, button.y + 5 + dy, ic, 16, d->clients[i].minimized ? DU_ICON_GHOST : DU_ICON_NORMAL);
             const char *title = d->clients[i].closing ? "Closing..." : d->clients[i].unresponsive ? "Not responding" : d->clients[i].title;
             struct du_canvas tc = bc;
             tc.clip = du_intersection(bc.clip, (struct du_rect){button.x + 24, button.y, button.w - 30, button.h});
@@ -626,7 +626,7 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
     du_edge(&c, R(tray), DU_SUNKEN_THIN);
     const uint32_t *speaker = desk_shell_icon(d->sh.muted ? "audio-volume-muted" : "audio-volume-high", 16);
     struct desk_box vi = volume_icon_box(d);
-    du_icon(&c, vi.x, vi.y, speaker, 16, d->sh.mixer_state < 0 ? DU_ICON_DISABLED : DU_ICON_NORMAL);
+    du_icon_blit(&c, vi.x, vi.y, speaker, 16, d->sh.mixer_state < 0 ? DU_ICON_DISABLED : DU_ICON_NORMAL);
     if (d->sh.muted) {   /* a red bar across a muted speaker */
         for (int k = 0; k < 14; k++) du_fill(&c, (struct du_rect){vi.x + 1 + k, vi.y + 14 - k, 2, 2}, 0xc0201eu);
     }
@@ -755,7 +755,7 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
         struct du_canvas c = canvas(d, b);
         int selected = k == d->sh.icon_selected;
         int32_t ix = ic->box.x + (ic->box.w - 32) / 2, iy = ic->box.y + 4;
-        du_icon(&c, ix, iy, desk_shell_icon(ic->icon, 32), 32, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, 32), 32, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
         char lines[2][16];
         label_lines(ic->label, lines);
         for (int l = 0; l < 2 && lines[l][0]; l++) {
@@ -831,7 +831,7 @@ static void draw_switcher(struct desktop *d, struct desk_box clip)
         int i = d->sh.switch_list[k];
         struct du_rect cell = {x + k * 44 + 2, s.y + 12, 40, 40};
         if (k == d->sh.switch_pick) du_outline(&c, cell, SH_HOT), du_outline(&c, (struct du_rect){cell.x + 1, cell.y + 1, 38, 38}, SH_HOT);
-        du_icon(&c, cell.x + 4, cell.y + 4, desk_shell_icon(client_icon(d, i), 32), 32,
+        du_icon_blit(&c, cell.x + 4, cell.y + 4, desk_shell_icon(client_icon(d, i), 32), 32,
                 d->clients[i].minimized ? DU_ICON_GHOST : DU_ICON_NORMAL);
     }
     if (d->sh.switch_pick >= 0 && d->sh.switch_pick < d->sh.switch_count) {
@@ -871,7 +871,7 @@ void desk_shell_topbar(struct desktop *d, struct desk_box clip)
     struct desk_box bar = {0, 0, (int32_t)d->width, DESK_BAR}, b;
     if (!desk_intersect(bar, clip, &b)) return;
     struct du_canvas c = canvas(d, b);
-    du_icon(&c, 8, 6, desk_shell_icon("ciuki", 20), 20, DU_ICON_NORMAL);
+    du_icon_blit(&c, 8, 6, desk_shell_icon("ciuki", 20), 20, DU_ICON_NORMAL);
     bold(&c, 34, 12, "CiukiOS", SH_CREAM);
     const char *what = d->notice[0] ? d->notice : NULL;
     char line[96];
@@ -1037,7 +1037,7 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         du_hline(c, page.x + 10, page.y + page.h - 33, page.w - 20, DU_HILITE);
         du_text(c, x, page.y + page.h - 24, "The Ciuki portrait is a separate project asset.", DU_SHADOW);
     } else if (d->sh.about_tab == 1) {
-        du_icon(c, x, y, desk_shell_icon("ciuki-computer", 32), 32, DU_ICON_NORMAL);
+        du_icon_blit(c, x, y, desk_shell_icon("ciuki-computer", 32), 32, DU_ICON_NORMAL);
         int32_t tx = x + 46;
         bold(c, tx, y + 2, "System", SH_INK);
         snprintf(line, sizeof(line), "CiukiOS %s on %s", d->version[0] ? d->version : "", d->sh.cpu_name[0] ? d->sh.cpu_name : "i686");
@@ -1083,7 +1083,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         push_button(&c, button_box(content, 0, 1), "OK", 1);
         break;
     case DESK_INTERNAL_RUN: {
-        du_icon(&c, content.x + 12, content.y + 12, desk_shell_icon("application-x-executable", 32), 32, DU_ICON_NORMAL);
+        du_icon_blit(&c, content.x + 12, content.y + 12, desk_shell_icon("application-x-executable", 32), 32, DU_ICON_NORMAL);
         multiline(&c, content.x + 56, content.y + 14, "Type the name of a program in /bin, followed by\nits arguments, and CiukiOS will start it.", SH_INK);
         du_label(&c, content.x + 12, content.y + 58, "&Open:", SH_INK, 1);
         struct du_rect field = {content.x + 56, content.y + 52, content.w - 68, 20};
@@ -1098,8 +1098,8 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         break;
     }
     case DESK_INTERNAL_SHUTDOWN: {
-        du_icon(&c, content.x + 14, content.y + 16, desk_shell_icon("system-shutdown", 32), 32, DU_ICON_NORMAL);
-        du_icon(&c, content.x + 30, content.y + 32, desk_shell_icon("ciuki", 20), 20, DU_ICON_NORMAL);
+        du_icon_blit(&c, content.x + 14, content.y + 16, desk_shell_icon("system-shutdown", 32), 32, DU_ICON_NORMAL);
+        du_icon_blit(&c, content.x + 30, content.y + 32, desk_shell_icon("ciuki", 20), 20, DU_ICON_NORMAL);
         bold(&c, content.x + 64, content.y + 18, "What do you want CiukiOS to do?", SH_INK);
         multiline(&c, content.x + 64, content.y + 38, "Your settings are saved first. Close your\ndocuments before you continue.", SH_INK);
         static const char *const labels[] = {"&Restart", "&Shut Down", "Cancel"};
@@ -1107,7 +1107,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         break;
     }
     default:
-        du_icon(&c, content.x + 14, content.y + 14, desk_shell_icon(d->sh.message_kind ? "dialog-error" : "dialog-information", 32), 32, DU_ICON_NORMAL);
+        du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(d->sh.message_kind ? "dialog-error" : "dialog-information", 32), 32, DU_ICON_NORMAL);
         multiline(&c, content.x + 60, content.y + 18, d->sh.message_text, SH_INK);
         push_button(&c, button_box(content, 0, 1), "OK", 1);
         break;

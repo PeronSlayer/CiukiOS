@@ -14,6 +14,7 @@ const struct du_icon_map du_icon_map[] = {
     /* /bin programs (the desktop menu lists /bin) */
     {"program:*", "application-x-executable"},
     {"program:files", "system-file-manager"},
+    {"program:control", "preferences-desktop"},
     {"program:ciuknote", "accessories-text-editor"},
     {"program:tasks", "utilities-system-monitor"},
     {"program:dosbox", "utilities-terminal"},          /* MS-DOS Prompt class VM window */
