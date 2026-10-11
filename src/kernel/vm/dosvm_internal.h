@@ -6,6 +6,7 @@
 #include <ciuki/task.h>
 #include <ciuki/storage.h>
 #include <ciuki/sync.h>
+#include "dosvm_devices.h"
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
@@ -17,13 +18,19 @@ struct dosvm {
     struct task *task;
     struct v86 monitor;
     struct v86_frame frame;
+    struct dosvm_pit pit;
+    struct dosvm_kbd kbd;
+    struct dosvm_mouse mouse;
+    bool window_input;
+    int32_t input_x, input_y;
+    bool pointer_known;
     uint32_t continuation;
     struct kwait wake;
     struct kmutex disk_lock; /* sector index + VFS seek/transfer pairs */
     uint64_t boot_deadline, input_since, ticks, timer_cycles, clock_ms, record_window;
     uint32_t bios_ticks, record_lines;
     bool started, a20, table_ready, base_open, overlay_open, overlay_created;
-    uint8_t midnight, disk_status, kbc_command, kbc_output;
+    uint8_t midnight, disk_status;
     struct vfs_table disk_table;
     int base, overlay;
     char overlay_path[48];
@@ -48,4 +55,5 @@ int dosvm_io(void *, uint16_t, unsigned, bool, uint32_t *);
 void dosvm_putchar(struct dosvm *, uint8_t, uint8_t);
 int dosvm_wait(struct dosvm *, bool keyboard, uint64_t deadline);
 void dosvm_input_poll(struct dosvm *);
+int dosvm_keyboard_refresh(struct dosvm *);
 #endif

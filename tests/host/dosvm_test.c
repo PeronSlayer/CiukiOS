@@ -7,6 +7,16 @@
 #include <string.h>
 #include <setjmp.h>
 #include <unistd.h>
+#undef _SC_PAGESIZE
+#undef _SC_OPEN_MAX
+#undef _SC_ARG_MAX
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
+#include <ciuki/abi.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #include <ciuki/task.h>
@@ -197,10 +207,14 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
     if (strstr(extra,"group=guest ")) guest_records++;
 }
+#include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
 #include "../../src/kernel/vm/dosvm.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
+#include "../../src/kernel/vm/dosvm_pit.c"
+#include "../../src/kernel/vm/dosvm_kbd.c"
+#include "../../src/kernel/vm/dosvm_mouse.c"
 
 static struct dosvm *create(void)
 { struct dosvm *v; struct dosvm_config c={DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
@@ -326,10 +340,11 @@ static void test_cleanup_errors(void)
     v=create(); fail_close=true; CHECK(dosvm_destroy(dosvm_key(v),true)==-V86_EIO && v->info.state==DOSVM_DEAD); fail_close=false; empty();
     v=create(); CHECK(!dosvm_disk_write(v,5,sector)); committed=commits; destroy(v,true); CHECK(commits==committed && v->info.data_loss); empty();
 }
+#include "dosvm_devices_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_devices();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

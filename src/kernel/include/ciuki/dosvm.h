@@ -18,6 +18,18 @@ struct dosvm;
 struct task;
 struct dosvm_key { uint32_t id, generation; };
 struct dosvm_config { uint32_t commitment; }; /* zero selects 32 MiB */
+/* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
+ * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after
+ * a window claims focus. Kernel trusted transport supplies the VM key. */
+struct ciuki_input_event;
+bool dosvm_input_focus(struct dosvm_key, bool focused);
+bool dosvm_input_event(struct dosvm_key, const struct ciuki_input_event *);
+struct dosvm_device_info {
+    uint64_t host_ticks, pit_clocks, pit_edges, pit_dropped_ticks, key_overflows;
+    uint32_t queued_bytes, held_keys, buttons;
+    uint8_t irr[2], isr[2], imr[2];
+};
+bool dosvm_device_info(struct dosvm_key, struct dosvm_device_info *);
 struct dosvm_admission {
     uint64_t free_bytes, reserved_bytes, resident_bytes, outstanding_bytes;
     uint32_t requested_bytes, headroom_bytes;

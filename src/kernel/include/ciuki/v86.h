@@ -26,8 +26,8 @@ _Static_assert(sizeof(struct v86_frame) == 92, "V86 frame size");
 enum v86_port_class { V86_CONTROLLER, V86_PIC, V86_PIT, V86_RTC, V86_PMTIMER, V86_PORT_CLASSES };
 struct v86_port_rule { uint16_t first, last; enum v86_port_class kind; };
 struct v86_pic {
-    uint8_t irr, isr, imr, base, priority, init, icw1;
-    bool read_isr, auto_eoi, rotate_auto, poll, special_mask;
+    uint8_t irr, isr, imr, base, priority, init, icw1, icw3;
+    bool read_isr, auto_eoi, rotate_auto, poll, special_mask, sfnm;
 };
 enum v86_insn { V86_INT, V86_IRET, V86_PUSHF, V86_POPF, V86_CLI,
                 V86_STI, V86_IN, V86_OUT, V86_INS, V86_OUTS, V86_HLT, V86_INSNS };
@@ -60,6 +60,8 @@ struct v86 {
     enum v86_state state;
     uint64_t deadline, ticks;
     bool vif, shadow;
+    bool track_boundaries; /* DOS: software MOV-SS tracking, firmware unchanged */
+    uint16_t shadow_cs, shadow_ip;
     uint16_t sentinel_cs, sentinel_ip, sentinel_ss, sentinel_sp;
     uint16_t pit_latch[3];
     uint8_t pit_phase[3], pit_latched[3], rtc_index, rtc[128];
@@ -73,6 +75,12 @@ int v86_begin(struct v86 *v, uint64_t now, uint32_t ticks);
 int v86_check_deadline(struct v86 *v, uint64_t now);
 int v86_abort(struct v86 *v, const struct v86_frame *f, int error);
 int v86_io(struct v86 *v, uint16_t port, unsigned width, bool write, uint32_t *value);
+int dosvm_pic_eligible(const struct v86_pic *);
+uint8_t dosvm_pic_register(struct v86_pic *, bool, bool, uint8_t);
+void dosvm_pic_accept(struct v86_pic *, unsigned);
+void dosvm_pic_cascade(struct v86 *);
+int dosvm_pic_pending(const struct v86 *);
+uint8_t dosvm_pic_ack(struct v86 *);
 void v86_irq_raise(struct v86 *v, unsigned irq);
 /* PIC arbitration only, independent of the current call's virtual IF. */
 int v86_irq_pending(const struct v86 *v);
@@ -81,5 +89,6 @@ int v86_reflect(struct v86 *v, struct v86_frame *f, uint8_t vector);
 /* 0: resume, 1: sentinel complete, 2: halted, negative: disabled. */
 int v86_emulate(struct v86 *v, struct v86_frame *f);
 int v86_debug_step(struct v86 *v, struct v86_frame *f);
+void v86_prepare_return(struct v86 *, struct v86_frame *);
 
 #endif

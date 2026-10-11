@@ -139,3 +139,47 @@ DOSBOOT.IMG SHA-256:
 `13714a2dce32b7456c20c4d1e9c69670367ce7e4021430f79194f87f77518251`.
 These hashes identify static build evidence only; the lead's QEMU acceptance
 is still pending.
+
+## f3-01
+
+Research checked 2026-10-11 before implementation:
+
+- [Intel 8259A datasheet](https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8259A.pdf)
+  and [QEMU 9.2 PIC](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/intc/i8259.c):
+  retain the monitor's authoritative PIC pair, move its register/arbitration
+  helpers into `dosvm_pic.c`, and latch the cascade request. An empty slave
+  at acknowledge returns slave-base+7, sets master ISR2 only, and requires
+  only master EOI. Empty master acknowledge returns master-base+7 without ISR7.
+  ICW3 and ICW4, OCW polling, special mask, rotation and auto EOI are private.
+- [Intel 8254 datasheet](https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8254.pdf):
+  migrate the legacy latch/access model, extend modes 1/4/5 and BCD counting,
+  preserve independent count/status latches, and select read-back channels
+  with set bits 1–3. Channel 2 gate is port 61 bit 0; bit 5 reads OUT2.
+  Host time is accounted first, at 1193 PIT clocks per scheduler tick.
+  Catch-up is capped at 64 host ticks per call; excess is counted and dropped
+  from device advancement while the VM clock advances by the full elapsed
+  interval. Arithmetic advancement bounds work independently of the divisor;
+  multiple edges coalesce in the PIC IRR, with expiry/drop counters exposed.
+- [QEMU PS/2 model](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/input/ps2.c)
+  and [SeaBIOS keyboard BIOS](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c):
+  normalized desktop KEY codes already use set 1. Queue whole encoded
+  sequences, keep controller replies separate from key state, and generate
+  typematic only for host repeat events. The synthetic INT09 consumes bytes,
+  updates the private BIOS keyboard queue, and EOIs the virtual PIC. INT16
+  remains in f3-00. Focus loss discards stale queued makes and queues breaks
+  for every held key; desktop TEXT must not duplicate KEY-derived input.
+- [CuteMouse upstream INT33 interface](https://github.com/FDOS/mouse/blob/master/int33.lst):
+  implement polling and a validated V86 far-call continuation, never a host
+  function pointer. The callback returns with RETF to a private ROM INT stub;
+  the monitor restores its saved frame and virtual IF. Callbacks are serialized,
+  deferred while IF is clear or a shadow is active, and revoked on stop.
+  Default text coordinates span 640×200 in 8×8 units. Text cursor decoration
+  is applied to the exported cell copy, preserving guest video memory.
+
+The desktop integration boundary is kernel-internal and generation checked:
+`dosvm_input_focus` and `dosvm_input_event`. f3-02 owns its authorized native
+transport and DOS window; the existing desktop v1/v2 wire format is unchanged.
+The existing shell-only input poll remains available until an explicit window
+claims focus. No physical controller, PIC, PIT or PS/2 access is added.
+
+Host/build and lead evidence are recorded below after implementation.

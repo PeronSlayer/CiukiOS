@@ -136,7 +136,8 @@ def build(out=None):
                  "/COMMAND.COM": command, "/AUTOEXEC.BAT": b"DOSREADY.COM\r\n"}
         for source, name in (("dosready", "DOSREADY.COM"), ("memory", "MEMORY.COM"),
                              ("command_status", "CMDSTAT.COM"), ("exit37", "EXIT37.COM"),
-                             ("vmpriv", "VMPRIV.COM"), ("vmport", "VMPORT.COM")):
+                             ("vmpriv", "VMPRIV.COM"), ("vmport", "VMPORT.COM"),
+                             ("vmdevices", "VMDEV.COM")):
             files["/" + name] = assemble(f"src/probes/doscompat/{source}.asm", work / name)
         candidate = work / "DOSBOOT.IMG"
         write_fat16(candidate, boot, loader, files)
