@@ -522,3 +522,24 @@ generation is not deterministic under concurrent load (an f4-03 follow-up:
 pin every tool-written field, not only the serial and times). Suites are
 rerun on a quiet machine.
 
+## Twenty-sixth image: `fcd96d6e…` (commit `9f17715`, fat-read digest cap)
+
+Built after the fat-read cap (files above 8 MiB are recorded as `case=large`
+in the volume walk; `fat12-read` had exceeded its host deadline on the
+128 MiB DOS boot image) on a quiet machine, with the deterministic NTFS
+fixtures and the 32 KiB stack assertion in place. Results, each suite
+preceded by the runner's host prerequisite (303 Python tests OK):
+
+- `f3-vm` 195 PASS: the F0–F2 prefix, then `vm-boot-qemu-t23/e500/min128`
+  and `vm-memory-qemu-t23/e500/min128` (second VM admitted on every
+  profile, conformance `xms_calls=007fffff ems_calls=3fffffff`). The three
+  `uart-absent-*` cases remain operator cases (screen evidence).
+- `f0-smoke` 2/2.
+- `f2-all` 189 PASS, the same three operator cases excepted.
+
+This is the first integrated image on which DOS VMs boot and the F3 rows
+f3-00 and f3-03 hold QEMU evidence. The hardware image for the fifth T23
+sweep is built from the same tree with `BOOT.CFG` `safe=0 serial=1` and
+`probe=all:sweep run=99999999` (`build/f0/ciukios-hw.img`, SHA-256 recorded
+below when built).
+
