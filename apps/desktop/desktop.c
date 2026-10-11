@@ -50,7 +50,8 @@ static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
     desk_input(d,event);
     if (event->type==CIUKI_INPUT_KEY && event->code==0x1e &&
         (event->value==0 || event->value==1) &&
-        (!d->shell_test || d->shell_stage>=5) && (!d->tasks_test || d->tasks_stage>=5)) gate_keys++; /* f2-30: shell sequence first; stage 5 = close requested (the reap to 6 is asynchronous; the final report still requires 6). f2-33: the same for the tasks scenario (final report requires DESK_TASKS_DONE) */
+        (!d->shell_test || d->shell_stage>=5) && (!d->tasks_test || d->tasks_stage>=5) &&
+        (!d->files_test || d->files_checkpoint>=DESK_FILES_CHECKPOINTS)) gate_keys++; /* f2-30: shell sequence first; stage 5 = close requested (the reap to 6 is asynchronous; the final report still requires 6). f2-33: the same for the tasks scenario (final report requires DESK_TASKS_DONE) */
     if (event->type==CIUKI_INPUT_MOTION) gate_motion++;
     /* The input grant delivers separate button edges, not a motion mask.
      * Count consumption even when the click focuses the background/title. */
@@ -73,8 +74,13 @@ static void gate_report(struct desktop *d, uint32_t control, unsigned generation
     unsigned keys=gate_keys;
     if (d->shell_test) keys=d->shell_stage==6 && gate_keys>=2 ? gate_keys+d->shell_keys : 0;
     if (d->tasks_test) keys=d->tasks_stage==DESK_TASKS_DONE && gate_keys>=2 ? gate_keys+d->shell_keys : 0;
+    if (d->files_test) keys=d->files_done && gate_keys>=2 ? gate_keys+d->shell_keys : 0;
     int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=%u survivor=%d victim=%d cycle=%u replies=%llu keys=%u motion=%u buttons=%u",
         control,generation,survivor,victim,cycle,(unsigned long long)d->replied,keys,gate_motion,gate_buttons);
+    /* f2-31: the Files case asks the controller for its write gate and a
+     * framebuffer digest at each presented checkpoint. */
+    if (d->files_test && n>0 && n<(int)sizeof(line))
+        n+=snprintf(line+n,sizeof(line)-(size_t)n," files=1 checkpoint=%d",d->files_reported);
     int error=n<=0 || n>CIUKI_PROBE_REPORT_MAX ? EINVAL : ciuki_error(ciuki_raw_probe_report(CU_PTR(line),n,0,0,0,0));
     if (error) { fprintf(stderr,"desktop: gate report failed length=%d error=%d\n",n,error); _exit(126); }
 }
@@ -147,17 +153,20 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     if (ciuki_channel_pair(pair)) return -1;
     int index=-1;
     ciuki_pid_t pid=-1;
+    int graphical=desk_program_graphical(program->name);
     /* f2-33: only the Task Manager receives the delegated termination
      * authority, explicitly mapped to fd 4; it also may send task requests. */
     int tasks=!strcmp(program->name,"tasks");
-    char *argv[]={(char *)program->name,NULL,NULL,NULL};
-    if (!strcmp(program->name,"demo")) argv[1]="--channel-fd=3";
-    if (tasks) {
-        unsigned at=1;
-        if (d->authority_fd>=0) argv[at++]="--authority-fd=4";
-        if (d->tasks_test) argv[at++]="--test=tasks";
-    }
-    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",NULL};
+    char *argv[]={(char *)program->name,NULL,NULL,NULL,NULL};
+    unsigned at=1;
+    if (graphical) argv[at++]="--channel-fd=3";
+    if (graphical && d->files_test && !strcmp(program->name,"files")) argv[at++]="--test=files";
+    if (tasks && d->authority_fd>=0) argv[at++]="--authority-fd=4";
+    if (tasks && d->tasks_test) argv[at++]="--test=tasks";
+    /* Window size hint for graphical clients; the protocol has no query. */
+    char display[40];
+    snprintf(display,sizeof(display),"CIUKI_DISPLAY=%ux%u",(unsigned)d->width,(unsigned)d->height);
+    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",display,NULL};
     struct ciuki_spawn_fd mapping[2]={{pair[1],3},{d->authority_fd,4}};
     uint32_t mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     if (!fcntl(pair[1],F_SETFD,0)) {
@@ -174,6 +183,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     /* Bind launch ownership before accepting the first kernel-stamped message.
      * This also permits cleanup if a child exits without ever sending HELLO. */
     d->clients[index].pid=(uint32_t)pid;
+    d->clients[index].program=!strcmp(program->name,"files");
     d->clients[index].taskman=tasks;
     d->children[child].pid=(uint32_t)pid;
     return pid;
@@ -345,9 +355,20 @@ int main(int argc, char **argv)
                 events[i].code==0x58 && events[i].value==0) {
                 d->shell_keys++; input_dirty=1; continue;
             }
-            /* f2-33: F11 at the same stage selects the Task Manager scenario. */
+            /* f2-31: F11 selects the Files case (write gate, fixed clock). */
             if (gate && interaction && !d->shell && events[i].type==CIUKI_INPUT_KEY &&
                 events[i].code==0x57 && events[i].value==1) {
+                d->files_test=1; d->shell_keys=1; shell_setup(d);
+                gate_report(d,CU_PTR(control),generation,survivor_pid,gate_victim,(unsigned)gate_cycle);
+                continue;
+            }
+            if (gate && d->files_test && events[i].type==CIUKI_INPUT_KEY &&
+                events[i].code==0x57 && events[i].value==0) {
+                d->shell_keys++; input_dirty=1; continue;
+            }
+            /* f2-33: F9 at the same stage selects the Task Manager scenario. */
+            if (gate && interaction && !d->shell && events[i].type==CIUKI_INPUT_KEY &&
+                events[i].code==0x43 && events[i].value==1) {
                 d->tasks_test=1; d->shell_keys=1; shell_setup(d);
                 continue;
             }
@@ -374,6 +395,8 @@ int main(int argc, char **argv)
                 d->shell_pid=(uint32_t)pid; d->shell_stage=2;
             } else if (d->tasks_test && d->tasks_stage==0 && !strcmp(d->programs[selected].name,"tasks")) {
                 d->tasks_pid=(uint32_t)pid; d->tasks_stage=1;
+            } else if (d->files_test && !d->files_pid && !strcmp(d->programs[selected].name,"files")) {
+                d->files_pid=(uint32_t)pid;
             }
         }
         if (d->tasks_test && d->tasks_stage==6 && d->tasks_checkpoint && tasks_verify(d)) {
@@ -386,9 +409,20 @@ int main(int argc, char **argv)
                      (unsigned)shell_stage_shown,d->program_count);
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
         }
+        if (d->files_test && d->files_checkpoint!=shell_stage_shown) {
+            shell_stage_shown=d->files_checkpoint;
+            snprintf(d->notice,sizeof(d->notice),"Files test checkpoint %d",d->files_checkpoint);
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
+        }
         if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         if (desk_redraw(d) && errno!=EINTR && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
+        }
+        /* The controller hashes the framebuffer during this report: send it
+         * only after the checkpoint frame has been presented completely. */
+        if (gate && d->files_test && d->files_checkpoint>d->files_reported && !d->damage.count) {
+            d->files_reported++;   /* one checkpoint per report, in order */
+            gate_report(d,CU_PTR(control),generation,survivor_pid,gate_victim,(unsigned)gate_cycle);
         }
         if (report) {
             int pending=0;

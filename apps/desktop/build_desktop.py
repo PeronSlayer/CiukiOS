@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and inspect desktop/demo using the existing static Ciuki SDK."""
+"""Build and inspect desktop, demo, libdeskui and Files using the static Ciuki SDK."""
 # SPDX-License-Identifier: MIT
 import hashlib
 import importlib.util
@@ -105,15 +105,15 @@ def build():
         obj = temp / (source.stem + ".o")
         command = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-ffunction-sections", "-fdata-sections", "-c", str(source), "-o", str(obj)]
         subprocess.run(command, check=True, env=env)
-        if source.name in ("draw.c", "widgets.c", "compositor.c"):
-            audit_integer(obj, sdk)
+        # The whole toolkit draws with integers only, like the compositor.
+        audit_integer(obj, sdk)
         objects.append(obj)
     library = OUT / "libdeskui.a"
     library.unlink(missing_ok=True)
     archive = [sdk["tools"]["llvm-ar"]["path"], "rcsD", str(library), *(str(p) for p in objects)]
     subprocess.run(archive, check=True, env=env)
     commands["libdeskui"] = archive
-    sources["files"] = ["../files/files.c", "../files/model.c", "../files/vfs.c"]
+    sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),

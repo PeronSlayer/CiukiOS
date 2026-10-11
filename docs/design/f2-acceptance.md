@@ -398,6 +398,119 @@ data/license hashes. Failure or absence MUST be recorded as stretch coverage
 and MUST NOT replace or weaken any mandatory row. Commercial data MUST NOT be
 included in the canonical image.
 
+### f2-31 desktop applications: libdeskui and Files
+
+Directive `docs/directives/f2-31-deskui-toolkit-files.md`. Research
+(2026-10-11), compared with `apps/desktop/{protocol,compositor,input}.c`,
+`src/kernel/drivers/i8042.c`, `src/kernel/proc/posixpath.c` and the SDK headers:
+Win32 [DrawEdge](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-drawedge)
+(raised/sunken/etched edges), [list-view views](https://learn.microsoft.com/en-us/windows/win32/controls/list-view-controls-overview)
+(icon, list with column flow, report with column headers and in-place label
+editing), the [500 ms default double-click time](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdoubleclicktime),
+[File Explorer keys](https://support.microsoft.com/en-us/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec)
+(F2, F4, F5, Alt+D, Alt+Enter, Alt+Left/Right/Up), the legacy 0.8 Files
+description (`legacy/CiukiOS-docs-legacy-2026-10-09.zip:docs/desktop-apps-2026-09-29.md`),
+POSIX [rename](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html)
+(atomic replacement of an existing file, implemented by `px_rename_locked` with
+`fat_rename_replace`) and the [QMP input API](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event).
+
+Decisions:
+
+1. **Font.** The compositor has no 8×16 font: its single glyph table is 5×7,
+   drawn at scale 1 with a 6 px advance. libdeskui uses exactly that table and
+   metrics (17 px list/menu rows), so client text matches window titles. The
+   compositor places g, p, q and y on the baseline, where they read as
+   capitals; the toolkit draws those four glyphs one row lower. The bitmaps and
+   the compositor (with its pinned digests) are unchanged.
+2. **Look.** Windows 98 classic geometry (3D edges, menu bar with underlined
+   mnemonics and accelerator column, flat toolbar buttons with 22×22 Tango
+   icons and labels, sunken fields, dithered scrollbar tracks, raised column
+   headers, dotted tree lines and focus rectangles) in CiukiOS colours: the
+   3D face equals the compositor's frame and taskbar (#b8c9cc), selections the
+   focused title colour (#213c4c). Rendering is integer-only and a pure function
+   of state; the build audits every toolkit object for x87/SIMD.
+3. **One window.** Protocol v2 allows one window per channel, so menus, context
+   menus and modal dialogs (message box, input box, open/save, progress with
+   Cancel) are drawn inside the client surface. The client renders into a
+   private back buffer and copies only changed pixels, damaging their bounding
+   box: the compositor never reads a half-drawn frame.
+4. **Window size.** The protocol has no display query. The shell passes
+   `CIUKI_DISPLAY=<w>x<h>` to graphical programs it launches; Files opens at
+   760×520 on 1024×768, 680×440 on 800×600 and 620×380 below.
+5. **Text input** comes from KEY events with Shift and Caps Lock (US set-1
+   layout): the native i8042 path emits TEXT only for the unshifted character
+   (`input_unshifted`), so TEXT events are ignored.
+6. **Event loop.** No poll/select in the F2 ABI: nonblocking channel turns plus
+   `nanosleep` of at most 10 ms (1 ms while timers are due); timers use
+   CLOCK_MONOTONIC. Focus loss and RESYNC release keys, buttons, captures and
+   open menus. The shell SIGTERMs a client two seconds after CLOSE_REQUEST, so
+   Files answers a close request during a job by cancelling it (the unfinished
+   copy is removed, never a source) and closing, without a dialog.
+7. **Files model.** Absolute POSIX paths; typed paths are normalised and take
+   each component's stored spelling; bounded history; folders first in every
+   sort; Windows 98 type names ("File Folder", "Text Document", "XYZ File";
+   extensionless files with an ELF32 i386 header are "Application"). Copies
+   stream into an exclusive `.ciuki-copy-N.tmp` sibling, fsync, close and
+   publish with rename (which replaces atomically); EXDEV alone makes a move
+   copy then delete; copying beside the source makes "Copy of NAME"; an existing
+   file or folder asks Yes / Yes to All / No / Cancel, folder merges keep
+   unrelated files; Delete is permanent after confirmation; pasted items are
+   selected. The status bar shows the selection's size only (a folder total
+   would tie it to unrelated sizes such as the kernel's).
+8. **Opening.** Folders navigate; text and script types run
+   `/bin/ciuknote <path>` when it exists (it is not in the image yet: Files says
+   so); ELF programs run through `ciuki_spawn` with stdio only.
+9. **Shell.** The Ciuki menu labels `files` as "Files" with the Tango
+   `system-file-manager` icon (also on its taskbar button); `demo` and `files`
+   receive `--channel-fd=3`. The canonical menu now has five programs, so the
+   two `desktop-shell-*` scripts move 197 px (was 169) from the Ciuki button to
+   the Demo row; nothing else in those cases changes.
+
+**API gaps for the lead.** (a) The F2 ABI has no timestamp or FAT attribute
+setter (`chmod` is excluded, no `utime`): copies cannot keep dates and
+attributes as the directive asks. Moves within a volume keep them (rename).
+The model has an optional metadata adapter (exercised by the host fake) and
+Files reports "(dates not kept)" after a copy. Closing this needs an
+authorised setter or a scope amendment. (b) Programs started from Files get no
+desktop channel (there is no channel service), so a graphical program opened
+from Files cannot show a window; the Ciuki menu remains the launcher for those.
+(c) Properties shows "Read-only" from the informational mode bits only; hidden,
+system and archive attributes are not exposed by `stat`.
+
+**QEMU case `files-qemu-t23`** (`tests/suites/f2-desktop.json`). The existing
+crash-isolation desktop gate runs; at its interaction ARM the script presses
+F11, which selects the Files case in the desktop (shell, taskbar clock fixed at
+12:00:00) and adds `files=1 checkpoint=N` to its controller reports. Test
+selectors start read-only, so the controller then opens the C: write gate
+(`case=files-write-gate`, expected 0) and allows 40 s instead of 15 s for the
+interaction. The script opens the Ciuki menu, launches Files (which receives
+`--test=files` and moves its frame to 4,36), chooses View > List (dates depend
+on build and run time), clicks Places > System, File > New Folder, types
+"Ciuki" + Enter, selects BOOT.CFG by typing `b`, Ctrl+C, `c`, Enter (opens
+Ciuki), Ctrl+V, Del, Enter (Yes), then Alt+F4 and `a`. Files sends each
+milestone (1 /system shown, 2 folder created, 3 renamed, 4 copy done, 5 delete
+done) as a PING with serial 0xF2310000+N in the turn after the frame's DAMAGE;
+the desktop presents that frame and reports one checkpoint per report; the
+controller hashes the framebuffer (FNV-1a, as the interaction digest) inside
+that report syscall and emits `case=files-checkpoint checkpoint=N
+pixel_digest=…`. The final interaction record counts keys=4 only after the
+fifth checkpoint and Files' exit status 0. After teardown the controller flushes
+storage (`case=files-durable flush_result=0`) and the runner's overlay check
+requires a clean fsck and `CIUKI` in `::/SYSTEM`. The five `pixel_digest`
+fields hold the placeholder `PIN-FROM-FIRST-RUN`: the lead pins them from the
+first run's records (the case fails until then). The host test
+`tests/host/desktop/test_deskui.py` checks that the script's relative moves
+land on the targets computed from the real Files layout.
+
+Host evidence: `python3 -B -m unittest discover -s tests/host/desktop`
+(toolkit geometry/hit-testing/input/menus/dialogs/timers and 9 pinned frames;
+the Files model against a fake tree with short I/O and every injected failure;
+the Files controller replaying the QEMU script with 23 pinned frames; the
+shell launcher's Files convention and checkpoint accounting), plus
+`tests/host/test_desktop_gate.py` and the desktop part of
+`scripts/test/host_kernel_tests.sh`. QEMU evidence and the owner screenshot
+remain lead-owned.
+
 ## Suites, deadlines and retained evidence
 
 **[F2]** Versioned suite definitions under `tests/suites/` MUST use the existing
@@ -501,16 +614,16 @@ Normal), with one history point per second over 60 s.
 **[f2-33/T3]** `tasks-qemu-t23` (`tests/suites/f2-desktop.json`) is the
 `desktop-shell-qemu-t23` case with the same probe, selector, deadline,
 predicates (`keys` = 4) and `desktop_screen` evidence and a different script,
-selected at run time by F11 instead of F12 at the post-fault interaction ARM:
+selected at run time by F9 (F12 is the shell case, F11 the f2-31 Files case)
+at the post-fault interaction ARM:
 
-1. F11 makes the gate desktop enter shell mode with the tasks scenario
-   (`tasks_test`); both F11 edges count towards `keys` like the shell's F12.
+1. F9 makes the gate desktop enter shell mode with the tasks scenario
+   (`tasks_test`); both F9 edges count towards `keys` like the shell's F12.
 2. The script clamps to the bottom-left corner, clicks the Ciuki button
-   (40, h-17) and the `tasks` menu row (40, h-102). `tasks` is the last
-   program in the sorted `/bin` scan, so its row sits directly above "About
-   CiukiOS" whatever the number of programs (row height 28 while at most 23
-   programs fit at 768 lines). A future `/bin` program sorting after `tasks`
-   moves it. Stage 1: launched from the menu with `--authority-fd=4
+   (40, h-17) and the `tasks` menu row (40, h-102), from the menu formula
+   below with k = n-1: `tasks` is the last program in the sorted `/bin`
+   scan, so its row sits directly above "About CiukiOS" whatever n is. A
+   future `/bin` program sorting after `tasks` moves it. Stage 1: launched from the menu with `--authority-fd=4
    --test=tasks`; stage 2: its window exists.
 3. Alt+N, `demo`, Enter: Task Manager's New Task sends the v2 LAUNCH request;
    the desktop launches `/bin/demo` as its own child (stage 3), whose window
@@ -531,17 +644,32 @@ selected at run time by F11 instead of F12 at the post-fault interaction ARM:
    omission or failure at any step leaves `keys=0` and the 15 s interaction
    window expires (`changed=0`). The script's pauses total 9.24 s.
 
-Task Manager stays open for the post-input screendump (frame x 8..454,
-y 40..537 at 1024x768): it covers neither the upper-right portrait region
+Task Manager stays open for the post-input screendump (400x420 content,
+frame x 8..414, y 40..487 at 1024x768): it covers neither the upper-right portrait region
 nor the centre cursor footprint that `observe_desktop_screen` checks. The
 native cleanup now also collects every remaining child of the desktop before
 the desktop itself (generalizing the survivor/victim rule), so a program left
-open by a script cannot be adopted by PID 1 past the ledger. The two
-`desktop-shell-*` scripts move from the Ciuki button to the demo row by
-(0, -225) instead of (0, -169): `/bin/files` (f2-31) and `/bin/tasks` sort
-after `demo` and raise the menu top by one 28-pixel row each, so the old
-offset selected `hello`; a program sorting before `demo` (for example f2-32's
-`ciuknote`) raises the top and lowers `demo` by one row, leaving -225 valid.
+open by a script cannot be adopted by PID 1 past the ledger.
+
+Menu click formula for scripted cases (`apps/desktop/compositor.c`
+`desk_menu_row`/`desk_menu_box`, `client.c` `desk_shell_click`,
+`desk_program_add`). The desktop admits at most 16 `/bin` ELF programs
+except `desktop`, sorted by `strcmp` of their names (ASCII byte order, not
+the displayed label). With n admitted programs, screen height h and the
+32-pixel taskbar, the row height is r = min(28, floor((h - 64) / (n + 2)))
+and the menu is anchored above the bar: its top is y0 = h - 32 - r(n + 2);
+program k (0-based in sorted order) occupies [y0 + kr, y0 + (k+1)r), then
+"About CiukiOS" (k = n) and "Restart" (k = n + 1). A row is selected by
+floor((y - y0) / r). The scripts clamp to the bottom-left corner and move
+(+40, -16) onto the Ciuki button, i.e. to y = h - 17, so the vertical move
+to the centre of program k is dy = y0 + kr + floor(r/2) - (h - 17)
+= -15 - r(n + 2 - k) + floor(r/2), which for r = 28 is dy = -1 - 28(n + 2 - k),
+independent of h. It holds while r = 28, i.e. h >= 64 + 28(n + 2). The
+committed `desktop-shell-*` (-197: demo, k = 0, n = 5) and `files-qemu-t23`
+(-169: files, k = 1, n = 5) offsets come from f2-31's five-program list and
+are left for the lead to recompute for the final list; `tasks-qemu-t23` uses
+k = n - 1, dy = -85 for any n.
+
 The case pins no
 pixel digest in the suite (like `desktop-shell-*`): the runner records
 `desktop_screen.ppm_sha256` and `before_ppm_sha256` for the image it ran on;
@@ -558,8 +686,8 @@ protection, kernel controller owners, leak-free release),
 End Task/Switch To/LAUNCH rights, authority mapping to fd 4 only for Tasks,
 scenario stages, the desktop's call-70 verification and `keys`),
 `tasks_model_test.c` and `tasks_view_test.c` (model with fake data, layout,
-accelerators, pinned renders). `f2-all` is unaffected by construction: no F2
-gate program issues calls 70/71, F11 is never sent by an existing case, and
+mnemonics, pinned renders). `f2-all` is unaffected by construction: no F2
+gate program issues calls 70/71, F9 is never sent by another case, and
 the only behaviour change outside the tasks scenario is one more descriptor
 in the desktop (counted before every baseline) and the cleanup above, a
 no-op when the desktop has no extra children.

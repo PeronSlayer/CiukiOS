@@ -130,6 +130,8 @@ int storage_enable_write(struct storage *s, unsigned drive)
 {
     CHECK(s == &libc_storage && drive == 2); libc_gate_calls++; return libc_gate_error;
 }
+/* f2-31: only the Files desktop case flushes; no host fixture selects it. */
+int storage_sync(void) { CHECK(!"storage_sync outside the Files case"); return -EIO; }
 static int report_fixture_spawn(const char *path, const char *const argv[], const char *cwd,
                                 bool desktop, struct process **out)
 {

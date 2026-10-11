@@ -202,6 +202,9 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     case DESK_PING:
         desk_message(&reply, DESK_PONG, 8); desk_put32(reply.data + 4, p.serial);
         desk_queue(d, i, &reply);
+        /* Files test milestones arrive in order after their frame's DAMAGE. */
+        if (d->files_test && d->files_pid && c->pid == d->files_pid && d->files_checkpoint < DESK_FILES_CHECKPOINTS &&
+            p.serial == DESK_FILES_CHECKPOINT + (uint32_t)d->files_checkpoint + 1) d->files_checkpoint++;
         /* Private f2-33 scenario checkpoint (apps/desktop/gate.h): Tasks saw
          * the ended PID leave the kernel process list. */
         if (d->tasks_test && c->pid == d->tasks_pid && c->taskman && p.serial == DESK_TASKS_CHECKPOINT &&
@@ -359,7 +362,9 @@ void desk_child_exited(struct desktop *d, uint32_t pid, int status)
     }
     if (owned && d->shell_test && d->shell_stage==5 && pid==d->shell_pid && !status) d->shell_stage=6;
     if (owned && d->tasks_test && d->tasks_stage==5 && pid==d->tasks_demo_pid && !status) d->tasks_stage=6;
+    if (owned && d->files_test && pid==d->files_pid && !status && d->files_checkpoint==DESK_FILES_CHECKPOINTS) d->files_done=1;
 }
+
 void desk_about(struct desktop *d)
 {
     if (d->about>=0) {

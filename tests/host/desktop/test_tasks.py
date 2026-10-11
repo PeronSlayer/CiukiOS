@@ -12,17 +12,21 @@ import unittest
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
-FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
+         "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
          "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
+TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
+           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/desktop/compositor.c"]
 INCLUDES = ["-I", str(ROOT / "apps/tasks"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/desktop"),
             "-I", str(ROOT / "src/kernel/include")]
-# Production renders at 440x470 from fixed model data (tasks_view_test.c). Any
-# toolkit or Task Manager visual change must update these deliberately.
+# Production renders at 400x420 on the f2-31 toolkit (9239aca) from fixed
+# model data (tasks_view_test.c), reviewed 2026-10-11. Any toolkit or Task
+# Manager visual change must update these deliberately.
 RENDERS = {
-    "tasks-applications.xrgb": "70ad7f1b01d08c85bed236ca13e555040ea033056ac57c988000808b93747254",
-    "tasks-newtask.xrgb": "04207d196e85dc05996f1606ea5e91ee855054e51438e78ff2fd859e9282d365",
-    "tasks-performance.xrgb": "30311a4854914f26d56c54195e923927633c30cbc2be75089ef96187a358bb4c",
-    "tasks-processes.xrgb": "61655ebff0963b04004f2c36ae5dddf9367ac8dc739b801ca70379c514138e15",
+    "tasks-applications.xrgb": "d389994c536ba5dbc1cedd82ab1d42561d1bed192d3413ad997e50341cd47b67",
+    "tasks-newtask.xrgb": "62f3ac91d9cdd52d0a73d1b804dcaf0518c12b798859205be6a06dbbaa298ff7",
+    "tasks-performance.xrgb": "9bb99e99565ac244cef3f7a8ec25d55633a3d51d91229567594d974a87954b5f",
+    "tasks-processes.xrgb": "f8db02623c205802a9a6a24600b39dfb1470b4628ae5c77cd8caa541e317d8e8",
 }
 
 
@@ -42,15 +46,14 @@ class TasksTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / name
             subprocess.run([*FLAGS, *INCLUDES, *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
-            subprocess.run([str(binary), *([str(folder / "tasks")] if capture else [])], check=True, env=env)
+            subprocess.run([str(binary), *([str(folder)] if capture else [])], check=True, env=env)
             return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.glob("*.xrgb"))}
 
     def test_model(self):
         self.run_native("tasks-model", ["apps/tasks/model.c", "tests/host/desktop/tasks_model_test.c"])
 
     def test_view_and_renders(self):
-        actual = self.run_native("tasks-view", ["apps/tasks/model.c", "apps/tasks/view.c", "apps/libdeskui/draw.c",
-                                                "apps/libdeskui/widgets.c", "apps/desktop/compositor.c",
+        actual = self.run_native("tasks-view", ["apps/tasks/model.c", "apps/tasks/view.c", *TOOLKIT,
                                                 "tests/host/desktop/tasks_view_test.c"], True)
         self.assertEqual(actual, RENDERS)
 
@@ -69,10 +72,10 @@ class TasksTests(unittest.TestCase):
             runner.Actions(case["actions"])
             batches = case["actions"][0]["batches"]
             keys = [(e["data"]["key"]["data"], e["data"]["down"]) for b in batches for e in b["events"] if e["type"] == "key"]
-            self.assertEqual(keys[:2], [("f11", True), ("f11", False)])
+            self.assertEqual(keys[:2], [("f9", True), ("f9", False)])   # F11 is the Files case
             self.assertEqual(keys[-2:], [("a", True), ("a", False)])
             self.assertEqual([k for k, _ in keys].count("a"), 2)         # only the counted A edges
-            self.assertNotIn("f12", [k for k, _ in keys])
+            self.assertFalse({"f11", "f12"} & {k for k, _ in keys})
             typed = "".join(k for k, down in keys[2:-2] if down and len(k) == 1)
             self.assertEqual(typed, "ndemoe")                            # Alt+N, demo, Alt+E
             self.assertLessEqual(sum(b["pause_ms"] for b in batches), 12000)  # inside the 15 s window

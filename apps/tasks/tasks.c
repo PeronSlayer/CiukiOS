@@ -12,7 +12,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 enum { T_REFRESH = 1, T_SAMPLE };
 #define QUERY_RETRY_NS 2000000000ull
@@ -23,13 +22,13 @@ struct tasks_app {
     uint64_t query_ns;
     uint8_t buffer[TM_LIST_BYTES];
 };
-static void message_box(struct tasks_app *a, const char *title, const char *text)
-{ du_dialog_show(&a->ui, DU_MESSAGE, D_INFO, title, text, NULL); du_dialog_buttons(&a->ui, (const char *const[]){ "OK" }, 1); }
+static void message_box(struct tasks_app *a, const char *title, const char *text, int icon)
+{ du_message(&a->ui, D_INFO, title, text, icon, NULL, 0, 0, 0); }
 static void error_box(struct tasks_app *a, const char *what, int error)
 {
     char text[256];
     snprintf(text, sizeof(text), "%s\n%s (error %d)", what, error == EPERM ? "Access is denied." : strerror(error), error);
-    message_box(a, "Task Manager", text);
+    message_box(a, "Task Manager", text, DU_DLG_ICON_ERROR);
 }
 static int request(struct tasks_app *a, unsigned opcode, uint32_t first, uint32_t second, const char *name)
 {
@@ -51,22 +50,25 @@ static void query_windows(struct tasks_app *a, uint64_t now)
 }
 static int refused(struct tasks_app *a, uint32_t pid, int signo, int error)
 { return ciuki_proc_terminate((ciuki_pid_t)pid, signo, a->authority) == -1 && errno == error; }
+/* Test scenario: call 71 refuses the ended PID (ESRCH, which also proves the
+ * delegated descriptor is a valid authority: EBADF comes first), PID 1 and
+ * the desktop (EPERM). */
 static int refusals(struct tasks_app *a)
 {
     return a->authority >= 0 && a->window.server_pid && refused(a, a->ended_pid, SIGKILL, ESRCH) &&
            refused(a, 1, SIGKILL, EPERM) && refused(a, a->window.server_pid, SIGTERM, EPERM);
 }
+static void status_text(struct tasks_app *a, const char *text)
+{ du_set_text(du_get(&a->ui, A_STATUS), text); a->ui.dirty = 1; }
 static void refresh(struct tasks_app *a)
 {
     int n = ciuki_proc_list(a->buffer, sizeof(a->buffer));
     if (n < 0 || tm_update(&a->model, a->buffer, sizeof(a->buffer), n)) {
-        snprintf(du_get(&a->ui, A_STATUS)->text, DU_TEXT_MAX, "Process list unavailable (error %d)", n < 0 ? errno : EIO);
-        a->ui.dirty = 1;
+        char text[64]; snprintf(text, sizeof(text), "Process list unavailable (error %d)", n < 0 ? errno : EIO);
+        status_text(a, text);
     } else tv_update(&a->view, &a->model);
     query_windows(a, du_now());
-    /* Test scenario: the ended PID has left the kernel list (reaped), and
-     * call 71 refuses it (ESRCH, which also proves the delegated descriptor
-     * is a valid authority: EBADF comes first), PID 1 and the desktop. */
+    /* Test scenario: the ended PID has left the kernel list (reaped). */
     if (a->test && a->ended_pid && !a->checkpoint_sent && n >= 0 && !tm_find(&a->model, a->ended_pid) &&
         refusals(a) && !du_window_ping(&a->window, DESK_TASKS_CHECKPOINT)) {
         a->checkpoint_sent = 1;
@@ -82,19 +84,25 @@ static void sample(struct tasks_app *a)
 }
 static void timers(struct tasks_app *a)
 {
-    uint64_t interval = tv_interval_ns(a->view.speed), now = du_now();
+    uint64_t interval = tv_interval_ns(a->view.speed);
     du_timer_stop(&a->ui, T_REFRESH); du_timer_stop(&a->ui, T_SAMPLE);
     if (!interval) return;
-    du_timer_start(&a->ui, T_REFRESH, now, interval);
-    du_timer_start(&a->ui, T_SAMPLE, now, 1000000000ull);
+    du_timer_start(&a->ui, T_REFRESH, interval, 1);
+    du_timer_start(&a->ui, T_SAMPLE, 1000000000ull, 1);
+}
+static void end_task(struct tasks_app *a)
+{
+    const struct tm_window *w = tv_window(&a->view, &a->model);
+    if (!w) return;
+    int serial = request(a, DESK_END_TASK, w->id, w->pid, NULL);
+    if (serial > 0) { a->end_serial = (uint32_t)serial; a->end_target = w->pid; }
 }
 static void end_process(struct tasks_app *a, uint32_t pid)
 {
-    uint32_t desktop = a->window.server_pid;
-    switch (tm_route(&a->model, pid, desktop)) {
-    case TM_REFUSE_SYSTEM: message_box(a, "Unable to Terminate Process", "System processes cannot be ended."); return;
-    case TM_REFUSE_DESKTOP: message_box(a, "Unable to Terminate Process", "The desktop cannot be ended from Task Manager."); return;
-    case TM_REFUSE_GONE: message_box(a, "Unable to Terminate Process", "The process has already exited."); return;
+    switch (tm_route(&a->model, pid, a->window.server_pid)) {
+    case TM_REFUSE_SYSTEM: message_box(a, "Unable to Terminate Process", "System processes cannot be ended.", DU_DLG_ICON_WARNING); return;
+    case TM_REFUSE_DESKTOP: message_box(a, "Unable to Terminate Process", "The desktop cannot be ended from Task Manager.", DU_DLG_ICON_WARNING); return;
+    case TM_REFUSE_GONE: message_box(a, "Unable to Terminate Process", "The process has already exited.", DU_DLG_ICON_INFO); return;
     case TM_VIA_DESKTOP: {
         /* The desktop's group ends only through the desktop's close path. */
         int serial = request(a, DESK_END_TASK, 0, pid, NULL);
@@ -106,6 +114,32 @@ static void end_process(struct tasks_app *a, uint32_t pid)
         refresh(a);
         return;
     }
+}
+static void confirm_end_process(struct tasks_app *a)
+{
+    if (!a->view.selected_pid) return;
+    a->pending_pid = a->view.selected_pid;
+    static const char *const buttons[] = { "&Yes", "&No" };
+    du_message(&a->ui, D_CONFIRM, "Task Manager Warning",
+               "Terminating a process can cause loss of unsaved data.\nDo you want to end this process?",
+               DU_DLG_ICON_WARNING, buttons, 2, 1, 1);
+}
+static void launch(struct tasks_app *a, const char *text)
+{
+    char program[DESK_TITLE_MAX + 1];
+    while (*text == ' ') text++;
+    snprintf(program, sizeof(program), "%s", text);
+    for (size_t n = strlen(program); n && program[n - 1] == ' '; n--) program[n - 1] = 0;
+    /* The v2 LAUNCH name is 1..63 visible ASCII bytes; anything else would
+     * be a protocol violation, so refuse it here. */
+    int valid = program[0] != 0;
+    for (const char *c = program; *c; c++) valid &= *c > 32 && *c < 127;
+    if (!valid) {
+        if (program[0]) message_box(a, "Create New Task", "Program names are visible ASCII without spaces.", DU_DLG_ICON_WARNING);
+        return;
+    }
+    int serial = request(a, DESK_LAUNCH, 0, 0, program);
+    if (serial > 0) a->launch_serial = (uint32_t)serial;
 }
 static void on_message(struct du_window *w, const struct desk_packet *p, void *ctx)
 {
@@ -121,7 +155,7 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *c
     } else if (p->opcode == DESK_TASK_RESULT) {
         if (p->request == DESK_WINDOWS_QUERY && p->serial == a->query_serial) {
             a->query_serial = 0;
-            if (p->result == -EPERM) { snprintf(du_get(&a->ui, A_STATUS)->text, DU_TEXT_MAX, "Window list unavailable"); a->ui.dirty = 1; }
+            if (p->result == -EPERM) status_text(a, "Window list unavailable");
         } else if (p->request == DESK_LAUNCH && p->serial == a->launch_serial) {
             a->launch_serial = 0;
             if (p->result > 0) a->launched_pid = (uint32_t)p->result;
@@ -137,55 +171,43 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *c
 static void event(struct du_ui *u, const struct du_event *e, void *ctx)
 {
     struct tasks_app *a = ctx; struct tm_model *m = &a->model; struct tasks_view *v = &a->view;
-    if (e->type == DU_TICK) { if (e->id == T_REFRESH) refresh(a); else if (e->id == T_SAMPLE) sample(a); return; }
-    if (e->type == DU_SELECT) {
-        if (e->id == A_TABS) { tv_page(v, e->index); tv_update(v, m); }
+    switch (e->type) {
+    case DU_EV_TICK: if (e->id == T_REFRESH) refresh(a); else if (e->id == T_SAMPLE) sample(a); return;
+    case DU_EV_SELECT:
+        if (e->id == A_TABS) tv_page(v, e->index);
         else if (e->id == A_APPS) v->selected_window = e->index >= 0 && (unsigned)e->index < m->window_count ? m->windows[e->index].id : 0;
         else if (e->id == A_PROCS) v->selected_pid = e->index >= 0 && (unsigned)e->index < m->count ? m->processes[e->index].pid : 0;
         tv_update(v, m);
         return;
+    case DU_EV_SORT:
+        if (e->id == A_PROCS) { tm_sort(m, e->index, m->sort == e->index ? !m->descending : 0); tv_update(v, m); }
+        return;
+    case DU_EV_OPEN:
+        if (e->id == A_APPS && tv_window(v, m)) request(a, DESK_SWITCH_TO, tv_window(v, m)->id, 0, NULL);
+        return;
+    case DU_EV_KEY:      /* Delete ends the selected task or process, as on Windows */
+        if (e->key == DU_KEY_DELETE && e->id == A_APPS) end_task(a);
+        else if (e->key == DU_KEY_DELETE && e->id == A_PROCS) confirm_end_process(a);
+        return;
+    case DU_EV_DIALOG:
+        if (e->id == D_NEW && !e->index && e->text) launch(a, e->text);
+        else if (e->id == D_CONFIRM) { if (!e->index && a->pending_pid) end_process(a, a->pending_pid); a->pending_pid = 0; }
+        return;
+    case DU_EV_ACTIVATE: break;
+    default: return;
     }
-    if (e->type == DU_SORT && e->id == A_PROCS) { tm_sort(m, e->index, m->sort == e->index ? !m->descending : 0); tv_update(v, m); return; }
-    if (e->type == DU_CHANGE && e->id == A_PROC_SCROLL) { du_get(u, A_PROCS)->first = (unsigned)e->index; u->dirty = 1; return; }
-    if (e->type != DU_ACTIVATE) return;
-    const struct tm_window *w = tv_window(v, m);
     switch (e->id) {
-    case A_APPS: case A_SWITCH: if (w) request(a, DESK_SWITCH_TO, w->id, 0, NULL); break;
-    case A_END_TASK:
-        if (w) { int serial = request(a, DESK_END_TASK, w->id, w->pid, NULL); if (serial > 0) { a->end_serial = (uint32_t)serial; a->end_target = w->pid; } }
-        break;
+    case A_SWITCH: if (tv_window(v, m)) request(a, DESK_SWITCH_TO, tv_window(v, m)->id, 0, NULL); break;
+    case A_END_TASK: end_task(a); break;
     case A_NEW: case M_NEW:
-        du_dialog_show(u, DU_INPUT, D_NEW, "Create New Task", "Type the name of a program in /bin, and\nCiukiOS will open it for you.\nOpen:", "");
+        du_input_box(u, D_NEW, "Create New Task", "Type the name of a program in /bin, and CiukiOS\nwill open it for you.", "");
         break;
-    case D_NEW:
-        if (!e->index) {
-            const char *name = u->dialog.edit.text;
-            while (*name == ' ') name++;
-            char program[DESK_TITLE_MAX + 1]; snprintf(program, sizeof(program), "%s", name);
-            for (size_t n = strlen(program); n && program[n - 1] == ' '; n--) program[n - 1] = 0;
-            /* The v2 LAUNCH name is 1..63 visible ASCII bytes; anything else
-             * would be a protocol violation, so refuse it here. */
-            int valid = program[0] != 0;
-            for (const char *c = program; *c; c++) valid &= *c > 32 && *c < 127;
-            if (!valid) { if (program[0]) message_box(a, "Create New Task", "Program names are visible ASCII without spaces."); break; }
-            int serial = request(a, DESK_LAUNCH, 0, 0, program);
-            if (serial > 0) a->launch_serial = (uint32_t)serial;
-        }
-        break;
-    case A_END_PROCESS:
-        if (v->selected_pid) {
-            a->pending_pid = v->selected_pid;
-            du_dialog_show(u, DU_MESSAGE, D_CONFIRM, "Task Manager Warning",
-                "Terminating a process can cause loss of unsaved\ndata. Do you want to end this process?", NULL);
-            du_dialog_buttons(u, (const char *const[]){ "Yes", "No" }, 2);
-        }
-        break;
-    case D_CONFIRM: if (!e->index && a->pending_pid) end_process(a, a->pending_pid); a->pending_pid = 0; break;
+    case A_END_PROCESS: confirm_end_process(a); break;
     case M_REFRESH: refresh(a); break;
     case M_HIGH: case M_NORMAL: case M_LOW: case M_PAUSED: tv_speed(v, (enum tv_speed)(e->id - M_HIGH)); timers(a); tv_update(v, m); break;
     case M_EXIT: du_window_close(&a->window); break;
     case M_ABOUT:
-        message_box(a, "About Task Manager", "CiukiOS Task Manager - A modern Retro OS\nProcesses: kernel call 70. End Process: the\ndesktop or the delegated authority (call 71).\nlibdeskui and Task Manager code: MIT.");
+        message_box(a, "About Task Manager", "CiukiOS Task Manager - A modern Retro OS\nProcesses: kernel call 70. End Process: the\ndesktop or the delegated authority (call 71).\nlibdeskui and Task Manager code: MIT.", DU_DLG_ICON_INFO);
         break;
     default: break;
     }
@@ -213,11 +235,7 @@ int main(int argc, char **argv)
     tv_init(&a->view, &a->ui, desk_icon_run);
     if (test) { tv_speed(&a->view, TV_HIGH); du_window_move(&a->window, 8, 40); }
     refresh(a); sample(a); timers(a);
-    int r;
-    while ((r = du_window_turn(&a->window, du_now())) > 0) {
-        struct timespec pause = { .tv_sec = 0, .tv_nsec = 10000000 };
-        nanosleep(&pause, NULL);
-    }
+    int r = du_run(&a->window, NULL, NULL);
     du_window_destroy(&a->window);
     free(a);
     return r < 0 ? 1 : 0;

@@ -2,7 +2,8 @@
 
 ## f2-33 Task Manager and the v2 task extension (2026-10-11)
 
-`/bin/tasks` is the CiukiOS Task Manager: tabs Applications, Processes and
+`/bin/tasks` is the CiukiOS Task Manager (menu label "Task Manager", a
+400x420 window): tabs Applications, Processes and
 Performance (the Virtual Machines tab arrives with F3, f3-02), menus File
 (New Task (Run...), Exit Task Manager), View (Refresh Now F5; Update Speed
 High 0.5 s, Normal 1 s, Low 4 s, Paused) and Help, and a status bar
@@ -13,15 +14,15 @@ Research and decisions are in docs/design/f2-acceptance.md, section F2-33.
 
 - **Applications:** columns Task and Status (Running / Not Responding from
   the desktop's heartbeat), sorted by title, PID and window id. End Task
-  (Alt+E) sends END_TASK, the desktop's close path: CLOSE_REQUEST, SIGTERM
-  after 2 s for its own children. Switch To (Alt+S, Enter) restores and
+  (Alt+E or Delete) sends END_TASK, the desktop's close path: CLOSE_REQUEST, SIGTERM
+  after 2 s for its own children. Switch To (Alt+S, Enter, double-click) restores and
   focuses. New Task (Alt+N) asks the desktop to launch an admitted `/bin`
   program (name or `/bin/name`), so graphical programs get their channel and
   appear here; the launched program's row is selected once it appears.
 - **Processes:** Image Name, PID, PPID, Threads, Mem Usage (resident pages x
   4 KiB), CPU (percent of the last interval), sortable by header click
   (again to reverse), plus "System Idle Process" (PID 0). End Process
-  (Alt+E, with confirmation) refuses PID 0/1 and the desktop, routes the
+  (Alt+E or Delete, with confirmation) refuses PID 0/1 and the desktop, routes the
   desktop's group through END_TASK by PID and everything else through
   call 71 with SIGKILL and the delegated authority (EPERM shows "Access is
   denied").
@@ -46,12 +47,14 @@ other client gains any right.
 
 Window ids are assigned by the desktop at window creation (never 0) and are
 not reused while the counter does not wrap. The desktop never sends a partial
-window list. The desktop launches `/bin/tasks` with the channel at fd 3, the
-authority at fd 4 and `--authority-fd=4` (absent when PID 1 installed none);
+window list. The desktop launches `/bin/tasks` like Files (a graphical menu program:
+`--channel-fd=3`, `CIUKI_DISPLAY`), plus the authority at fd 4 and
+`--authority-fd=4` (absent when PID 1 installed none);
 other programs never receive it.
 
 Runtime test scenario (`tasks-qemu-t23`): at the crash-isolation probe's
-interaction ARM, F11 (instead of the shell case's F12) selects the scenario;
+interaction ARM, F9 selects the scenario (F12 is the shell case, F11 the
+Files case);
 the desktop tracks stages 1-7 (Tasks launched from the menu, its window, demo
 launched through LAUNCH, its window, END_TASK on that window, demo reaped
 with status 0, Tasks' private checkpoint ping `0xf2330007` plus the desktop's
@@ -61,59 +64,97 @@ when the ended PID has left the process list and call 71, with the delegated
 descriptor, refuses that PID (ESRCH), PID 1 and the desktop (EPERM); nothing
 is printed on the console. The taskbar notice shows `tasks stage N` for the lead's screenshot.
 
-Toolkit additions (`apps/libdeskui`, additive; existing widget digests are
-unchanged, verified against the f2-31 sources): `DU_TABS` (labels, `value`
-is the selected tab, click/Left/Right/Ctrl+Tab/Ctrl+Shift+Tab/Ctrl+PgUp/PgDn
-emit DU_SELECT), `DU_GRAPH` (0..100 samples, newest at the right, integer
-Bresenham), `DU_GROUP` (labelled frame, never hit-tested), caller-defined
-Details columns on lists (`columns`, `column_count`, row-major `cells`,
-right alignment, sort indicator, header clicks emit DU_SORT with the column
-index), button accelerators (`key`, `key_modifiers`; hidden or disabled
-buttons are inert), menu mnemonics taken from each menu label's first
-letter (Files keeps F/E/V/G/H), `du_window_queue`, `du_tabs_hit` and a
-`message` hook on `du_window` for v2 messages the toolkit does not consume.
-`struct du_row` is unchanged.
+Toolkit additions on the f2-31 libdeskui (9239aca), additive; the pinned
+toolkit and Files frames of `tests/host/desktop/test_deskui.py` are
+unchanged: `DU_TABS` (a tab control whose box spans the 20-pixel strip,
+`DU_TAB_H`, and the raised page; labels are `items[i].text[0]`, `active` is
+the selected tab; click, Left/Right/Home/End when focused and, from anywhere,
+Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PgDn/PgUp emit DU_EV_SELECT; `du_tabs_hit`),
+`DU_GRAPH` (`samples`/`sample_count`, 0..100, oldest first, `total` = capacity;
+black field, green grid and line, integer Bresenham), `DU_GROUP` (etched
+frame with its label), `DU_COLUMNS` raised from 4 to 8 for the six Processes
+columns (list drawing iterates `column_count`, so Files is unaffected), Alt
+plus a visible enabled button's `&` letter presses it (after the menu
+mnemonics, as in the dialogs), `du_window_queue` for arbitrary v2 requests
+and a `message` hook on `du_window` receiving the v2 messages the glue does
+not consume (WINDOW_INFO, TASK_RESULT). Task Manager uses the toolkit's own
+list columns, sort indicator, embedded scrollbars, radio menu items,
+message/input dialogs, timers and `du_run`.
 
-## f2-31 toolkit and Files decisions (2026-10-11)
+## Files
 
-Research: [POSIX rename](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html),
-[short reads and EINTR](https://pubs.opengroup.org/onlinepubs/9699919799.orig/functions/read.html),
-[timestamp setting](https://pubs.opengroup.org/onlinepubs/9699919799/functions/utime.html)
-and [Wayland focus/surface coordinates](https://wayland.freedesktop.org/docs/html/apa.html)
-were compared with the SDK headers, protocol.c, compositor.c and posix-subset.md.
-Use the existing negotiated v2 protocol, explicit inherited fd 3 and
-`ciuki_spawn`. Timers and incremental jobs share a nonblocking event loop;
-no pthread, new syscall, DOS VM service or physical device grant is needed.
-Focus loss/RESYNC clears held input and capture. Damage is coalesced and
-retained across EAGAIN. Clipboard contents belong to the process.
+Files is the CiukiOS file manager (`/bin/files`), started from the Ciuki menu
+("Files", with the Tango file-manager icon). Its window follows the Windows 98
+Explorer layout in the CiukiOS colours.
 
-The compositor actually supplies original 5x7 glyphs, not an 8x16 font.
-Reuse those exact glyphs in 8x16 toolkit cells; do not change the existing
-compositor or its gate digests. All drawing is clipped integer XRGB8888.
-Icons extend the existing pinned Tango conversion/manifest; the approved
-portrait and boot photograph remain unchanged.
+- **Menus.** File (Open, Open with CiukNote, New Folder, New Text Document,
+  Delete, Rename, Properties, Close), Edit (Cut, Copy, Paste, Select All,
+  Invert Selection), View (Large Icons, List, Details, Sort by Name/Size/Type/
+  Modified, Refresh), Go (Back, Forward, Up One Level, Address Bar, CiukiOS,
+  Applications, System) and Help (Help Topics, About Files). Alt or F10 opens
+  the menu bar; underlined letters work with Alt and inside open menus.
+- **Toolbar.** Back, Forward, Up, Cut, Copy, Paste, Delete, Properties and
+  Views (click to cycle views; the arrow lists them).
+- **Address bar.** Type a path such as `/system/assets` and press Enter; Esc
+  restores the current folder. Letter case does not matter on FAT volumes.
+- **Left pane.** Places lists CiukiOS (`/`), Applications (`/bin`), System
+  (`/system`) and every volume mounted under `/mnt`. Folders shows the tree,
+  opened along the current folder; [+] and [-] expand and collapse it.
+- **Views.** Details (Name, Size, Type, Modified; click a header to sort, again
+  to reverse; drag a header edge to resize), Large Icons and List. Folders
+  always come first.
+- **Selection.** Click, Ctrl+click (toggle), Shift+click (range),
+  Shift+arrows, Ctrl+arrows and Ctrl+Space, Ctrl+A, Invert Selection, and
+  typing the first letters of a name; repeating one letter cycles through the
+  names that start with it.
+- **Context menus.** Right-click (or Shift+F10 / the Menu key) on an item for
+  Open, Open with CiukNote, Cut, Copy, Paste (into a folder), Delete, Rename,
+  Properties; on the background for the views, sorting, Refresh, Paste, New
+  Folder, New Text Document and Properties.
+- **Operations.** New Folder and New Text Document create "New Folder",
+  "New Folder (2)", ... and open the name for editing. Rename in place with F2
+  (Enter keeps, Esc cancels). Cut/Copy and Paste copy or move files and
+  folders in the background with a progress window and Cancel; an existing
+  name asks Yes, Yes to All, No or Cancel; copying into the same folder makes
+  "Copy of NAME". Delete asks for confirmation and deletes permanently (there
+  is no Recycle Bin yet). Properties shows type, location, size, contents,
+  modification time and the read-only attribute.
+- **Opening.** Enter or double-click opens folders; text documents and scripts
+  open in `/bin/ciuknote` when it is installed; programs run directly.
+- **Keys.** Enter, Backspace (up one level, as in Windows 98), Alt+Left/Right/
+  Up, F2, F4 or Alt+D (address bar), F5, Del, Alt+Enter, Ctrl+C/X/V, Ctrl+A,
+  Alt+F4.
+- **Limits of this release.** Copies cannot keep dates and attributes (the F2
+  system interface has no setter; moves on one volume keep them). Programs
+  started from Files have no desktop window. Drag and drop, removable media
+  and the Recycle Bin come later.
 
-Files uses absolute POSIX paths, readdir (the SDK's getdents adapter), stat,
-and a bounded history. Places enumerates /mnt, besides /, /bin and /system.
-Copy streams into an exclusive temporary sibling, fsyncs and closes before
-rename publication; cancellation/error removes the unfinished sibling and
-never removes its source. Completed items remain and are reported. Moves
-first use native rename; EXDEV alone permits copy followed by deletion.
-Replace decisions are explicit and remembered only for the current job.
-Directory merges preserve unrelated destination entries. Jobs yield between
-bounded transfers and directory steps and refuse descent into their source.
+## libdeskui
 
-**API gap for lead review:** timestamp and FAT attribute setters do not exist
-in the frozen ABI; chmod is excluded and stat exposes only informational mode
-bits. Native rename keeps existing metadata. Copy cannot preserve timestamps
-or FAT attributes on this SDK. The model has an optional metadata adapter for
-host tests/future integration and reports a visible preservation warning when
-the runtime lacks it. No copy is labelled metadata-preserving. Full f2-31
-acceptance requires a separately authorized setter or a lead-approved scope
-amendment. Properties displays the currently available informational attributes.
+`apps/libdeskui/` is the static widget toolkit shared by desktop programs
+(MIT, built with the SDK's `ciuki-cc` into `build/apps/desktop/libdeskui.a`).
 
-Host and static build results, limitations and the lead's remaining QEMU work
-are recorded in build/codex/f2-31-report.md. No QEMU acceptance is inferred.
+- **Window glue** (`client.c`): protocol v2 handshake, surface and private back
+  buffer, damage limited to changed pixels, PING/PONG, CLOSE_REQUEST with an
+  application callback, focus loss and RESYNC releases, and `du_run`, the
+  event loop with timers (no poll/select: nonblocking turns and short sleeps).
+- **Drawing** (`draw.c`): clipped integer primitives, Windows 98 edges, the
+  compositor's glyphs, Tango icons with selected/ghost/disabled modes.
+- **Widgets** (`widgets.c`, `list.c`, `menu.c`, `dialog.c`): label, push
+  button, toolbar button (with split arrow), single-line edit (selection,
+  clipboard, UTF-8), list view (Details with sortable, resizable columns,
+  Large Icons, List), tree view, scrollbars, status bar with panels, splitter,
+  progress bar, pane headers and separators; menu bar with drop-downs,
+  mnemonics and accelerators; context menus; modal message box, input box,
+  open/save dialog and progress dialog with Cancel. Tab moves the focus.
+- **Clipboard and timers.** A per-process text clipboard
+  (`du_clipboard_set/get`) and monotonic timers (`du_timer_start/stop`).
+- Applications receive `du_event`s (activate, select, open, sort, context,
+  change, commit, cancel, key, tick, dialog, focus) through one callback.
+
+Host tests: `python3 -B -m unittest discover -s tests/host/desktop`. Rendered
+frames are pinned by SHA-256 in `tests/host/desktop/test_deskui.py`; a visual
+change must be reviewed and re-pinned.
 
 ## f2-30 decisions (2026-10-11)
 

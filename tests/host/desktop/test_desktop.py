@@ -163,7 +163,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(len(records), 5)
         for r in records:
             self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
-        print("PASS desktop/demo ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
+        print("PASS desktop/demo/Files ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
 
     @unittest.skipUnless(all(shutil.which(t) for t in ("mkfs.fat", "mcopy", "mmd", "mdir")),
                          "requires mtools and mkfs.fat")
@@ -183,7 +183,7 @@ class DesktopTests(unittest.TestCase):
             image.populate_payloads(volume, sources, directories)
             with patch.object(image, "PART_LBA", 0):
                 image.check_payloads(volume, image.payload_records(sources), directories)
-        print("PASS real FAT read-back: desktop, demo, portrait sizes/SHA-256")
+        print("PASS real FAT read-back: desktop, demo, Files, portrait sizes/SHA-256")
 
     def test_stale_output_rejected(self):
         build = load("desktop_stale_test", ROOT / "apps/desktop/build_desktop.py")
