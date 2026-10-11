@@ -1,0 +1,588 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "host_tests": true,
+  "prerequisites": [
+    "f0-smoke",
+    "f0-core",
+    "f0-panic",
+    "f0-runner",
+    "f1-input",
+    "f1-storage",
+    "f1-fat32",
+    "f1-safe",
+    "f2-process",
+    "f2-runtime",
+    "f2-desktop",
+    "f2-app"
+  ],
+  "cases": [
+    {
+      "id": "vm-boot-qemu-t23",
+      "probe": "vm-boot",
+      "profile": "qemu-t23",
+      "selector": "f3:vm-boot run={run_id}",
+      "timeout": 1800,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "prompt": {
+                "eq": 1
+              },
+              "major": {
+                "ge": 1
+              },
+              "minor": {
+                "ge": 0
+              },
+              "free_paras": {
+                "ge": 1,
+                "le": 40960
+              },
+              "drive": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "clean": {
+                "eq": 100
+              },
+              "faults": {
+                "eq": 100
+              },
+              "privileged": {
+                "eq": 50
+              },
+              "ports": {
+                "eq": 50
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "isolation"
+            },
+            "fields": {
+              "ivt": {
+                "eq": 1
+              },
+              "disk": {
+                "eq": 1
+              },
+              "heartbeat": {
+                "eq": 1
+              },
+              "native_dispatches": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "baselines"
+            },
+            "fields": {
+              "pages_before": {
+                "ge": 1
+              },
+              "pages_after": {
+                "eq": "$pages_before"
+              },
+              "handles_before": {
+                "eq": 2
+              },
+              "handles_after": {
+                "eq": "$handles_before"
+              },
+              "devices_before": {
+                "eq": 3
+              },
+              "devices_after": {
+                "eq": "$devices_before"
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "free": {
+                "ge": 41943040
+              },
+              "reserved": {
+                "ge": 0
+              },
+              "resident": {
+                "ge": 0
+              },
+              "outstanding": {
+                "ge": 0
+              },
+              "request": {
+                "eq": 8388608
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 202
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "vm": {
+                "ge": 1,
+                "le": 4
+              },
+              "generation": {
+                "ge": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 202
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-boot-qemu-e500",
+      "probe": "vm-boot",
+      "profile": "qemu-e500",
+      "selector": "f3:vm-boot run={run_id}",
+      "timeout": 1800,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "prompt": {
+                "eq": 1
+              },
+              "major": {
+                "ge": 1
+              },
+              "minor": {
+                "ge": 0
+              },
+              "free_paras": {
+                "ge": 1,
+                "le": 40960
+              },
+              "drive": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "clean": {
+                "eq": 100
+              },
+              "faults": {
+                "eq": 100
+              },
+              "privileged": {
+                "eq": 50
+              },
+              "ports": {
+                "eq": 50
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "isolation"
+            },
+            "fields": {
+              "ivt": {
+                "eq": 1
+              },
+              "disk": {
+                "eq": 1
+              },
+              "heartbeat": {
+                "eq": 1
+              },
+              "native_dispatches": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "baselines"
+            },
+            "fields": {
+              "pages_before": {
+                "ge": 1
+              },
+              "pages_after": {
+                "eq": "$pages_before"
+              },
+              "handles_before": {
+                "eq": 2
+              },
+              "handles_after": {
+                "eq": "$handles_before"
+              },
+              "devices_before": {
+                "eq": 3
+              },
+              "devices_after": {
+                "eq": "$devices_before"
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "free": {
+                "ge": 41943040
+              },
+              "reserved": {
+                "ge": 0
+              },
+              "resident": {
+                "ge": 0
+              },
+              "outstanding": {
+                "ge": 0
+              },
+              "request": {
+                "eq": 8388608
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 202
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "vm": {
+                "ge": 1,
+                "le": 4
+              },
+              "generation": {
+                "ge": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 202
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-boot-qemu-min128",
+      "probe": "vm-boot",
+      "profile": "qemu-min128",
+      "selector": "f3:vm-boot run={run_id}",
+      "timeout": 1800,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "prompt": {
+                "eq": 1
+              },
+              "major": {
+                "ge": 1
+              },
+              "minor": {
+                "ge": 0
+              },
+              "free_paras": {
+                "ge": 1,
+                "le": 40960
+              },
+              "drive": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cycles"
+            },
+            "fields": {
+              "clean": {
+                "eq": 100
+              },
+              "faults": {
+                "eq": 100
+              },
+              "privileged": {
+                "eq": 50
+              },
+              "ports": {
+                "eq": 50
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "isolation"
+            },
+            "fields": {
+              "ivt": {
+                "eq": 1
+              },
+              "disk": {
+                "eq": 1
+              },
+              "heartbeat": {
+                "eq": 1
+              },
+              "native_dispatches": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "baselines"
+            },
+            "fields": {
+              "pages_before": {
+                "ge": 1
+              },
+              "pages_after": {
+                "eq": "$pages_before"
+              },
+              "handles_before": {
+                "eq": 2
+              },
+              "handles_after": {
+                "eq": "$handles_before"
+              },
+              "devices_before": {
+                "eq": 3
+              },
+              "devices_after": {
+                "eq": "$devices_before"
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "free": {
+                "ge": 41943040
+              },
+              "reserved": {
+                "ge": 0
+              },
+              "resident": {
+                "ge": 0
+              },
+              "outstanding": {
+                "ge": 0
+              },
+              "request": {
+                "eq": 8388608
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 202
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "vm": {
+                "ge": 1,
+                "le": 4
+              },
+              "generation": {
+                "ge": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 202
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -235,6 +235,13 @@ def build(kernel, out, boot_cfg):
     if len(options) > 127 or b"\0" in options or any(c > 127 for c in options):
         raise SystemExit("BOOT.CFG must be <=127 ASCII bytes without NUL")
     sources, directories, metadata = application_payloads()
+    dos_spec = importlib.util.spec_from_file_location("build_dos_image", ROOT / "scripts/build_dos_image.py")
+    dos_build = importlib.util.module_from_spec(dos_spec)
+    dos_spec.loader.exec_module(dos_build)
+    dos_image, dos_manifest = dos_build.build()
+    sources["/system/dos/DOSBOOT.IMG"] = dos_image
+    directories.add("/system/dos")
+    metadata["dos"] = dos_manifest
     out.parent.mkdir(parents=True, exist_ok=True)
     # Large scratch files stay on disk beside the output, never in /tmp.
     with tempfile.TemporaryDirectory(prefix=".image-", dir=out.parent) as directory:

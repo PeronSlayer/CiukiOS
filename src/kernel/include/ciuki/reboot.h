@@ -27,6 +27,7 @@ struct probe_hooks;
 struct sweep_cursor { unsigned phase, step; uint32_t state; char run[9]; };
 struct sweep_step { unsigned phase, index, boot; const char *name; bool panic; };
 #define SWEEP_PENDING (1u << 18)
+#define SWEEP_ALL_PHASE 4u /* phase 3 is DOS; cursor metadata is internal */
 bool sweep_parse(const char *, unsigned, struct sweep_cursor *);
 unsigned sweep_count(unsigned, const struct probe_tables *);
 bool sweep_at(unsigned, unsigned, const struct probe_tables *, struct sweep_step *);

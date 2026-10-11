@@ -44,7 +44,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         *selection = parsed;
         return true;
     }
-    if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1' && s[1] != '2') || s[2] != ':')
+    if (len < 3 || len > 64 || s[0] != 'f' || s[1] < '0' || s[1] > '3' || s[2] != ':')
         return false;
     for (unsigned j = 0; j < len; j++)
         if ((uint8_t)s[j] < 32 || (uint8_t)s[j] > 126)
@@ -68,8 +68,9 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         "elf-load", "spawn-wait", "fd-table", "mmap", "signals-fault",
         "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
     };
-    const char *const *names = parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
-    unsigned count = parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
+    static const char *const f3_names[] = { "vm-boot" };
+    const char *const *names = parsed.phase == 3 ? f3_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
+    unsigned count = parsed.phase == 3 ? ARRAY_SIZE(f3_names) : parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
     bool known = false;
     for (unsigned n = 0; n < count; n++)
         if (!strncmp(parsed.probe, names[n], sizeof(parsed.probe)))
@@ -86,6 +87,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     }
     parsed.run[8] = 0;
     i += 12;
+    if (parsed.phase == 3 && i != len) return false;
     /* optional suffixes, in order, each at most once */
     if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0) {
         if (!(boot_flags & CBI_F_SMBIOS_QEMU) || !(boot_flags & CBI_F_INPUT_FORCED))
@@ -117,8 +119,8 @@ bool sweep_parse(const char *s, unsigned len, struct sweep_cursor *cursor)
     if (!s || len < 21 || len > 64) return false;
     struct sweep_cursor p = { 0 };
     unsigned i;
-    if (len >= 22 && !memcmp(s, "all:sweep run=", 14)) { p.phase = 3; i = 14; }
-    else if (s[0] == 'f' && s[1] >= '0' && s[1] <= '2' && !memcmp(s + 2, ":sweep run=", 11)) {
+    if (len >= 22 && !memcmp(s, "all:sweep run=", 14)) { p.phase = SWEEP_ALL_PHASE; i = 14; }
+    else if (s[0] == 'f' && s[1] >= '0' && s[1] <= '3' && !memcmp(s + 2, ":sweep run=", 11)) {
         p.phase = s[1] - '0'; i = 13;
     } else return false;
     if (len - i < 8) return false;
@@ -157,7 +159,8 @@ static bool multiboot(const char *name)
 }
 unsigned sweep_count(unsigned phase, const struct probe_tables *t)
 {
-    if (phase == 3) return sweep_count(0, t) + sweep_count(1, t) + sweep_count(2, t);
+    if (phase == SWEEP_ALL_PHASE) return sweep_count(0, t) + sweep_count(1, t) + sweep_count(2, t) + sweep_count(3, t);
+    if (phase == 3) return t->f3_count;
     if (phase == 0) return t->f0_count + 1;
     if (phase == 2) return t->f2_count;
     unsigned n = t->f1_count;
@@ -166,8 +169,8 @@ unsigned sweep_count(unsigned phase, const struct probe_tables *t)
 }
 bool sweep_at(unsigned phase, unsigned step, const struct probe_tables *t, struct sweep_step *out)
 {
-    if (phase == 3) {
-        for (unsigned p = 0; p < 3; p++) {
+    if (phase == SWEEP_ALL_PHASE) {
+        for (unsigned p = 0; p < 4; p++) {
             unsigned n = sweep_count(p, t);
             if (step < n) return sweep_at(p, step, t, out);
             step -= n;
@@ -179,6 +182,9 @@ bool sweep_at(unsigned phase, unsigned step, const struct probe_tables *t, struc
         if (step > t->f0_count) return false;
         s.index = step; s.panic = step == t->f0_count;
         s.name = s.panic ? "panic" : t->f0[step].name;
+    } else if (phase == 3) {
+        if (step >= t->f3_count) return false;
+        s.index = step; s.name = t->f3[step].name;
     } else if (phase == 2) {
         if (step >= t->f2_count) return false;
         s.index = step; s.name = t->f2[step].name;
@@ -210,7 +216,7 @@ int sweep_dispatch(const struct sweep_step *s, const struct sweep_cursor *cursor
         int result = t->f2[s->index].run();
         hooks->app_end(); return result;
     }
-    return (s->phase ? t->f1 : t->f0)[s->index].fn();
+    return (s->phase == 3 ? t->f3 : s->phase ? t->f1 : t->f0)[s->index].fn();
 }
 
 /* Probe-only policy; no new boot-info bits or public ABI. Safe/text always
@@ -246,8 +252,8 @@ void probes_dispatch(const struct probe_selection *selection,
         rec_emit(probe, "ERROR", "status=not_run reason=missing_probe");
         return;
     }
-    const struct probe_def *table = selection->phase == 1 ? tables->f1 : tables->f0;
-    unsigned count = selection->phase == 1 ? tables->f1_count : tables->f0_count;
+    const struct probe_def *table = selection->phase == 3 ? tables->f3 : selection->phase == 1 ? tables->f1 : tables->f0;
+    unsigned count = selection->phase == 3 ? tables->f3_count : selection->phase == 1 ? tables->f1_count : tables->f0_count;
     unsigned ran = 0;
     for (unsigned i = 0; i < count; i++) {
         if (all || core || !strncmp(probe, table[i].name, sizeof(selection->probe))) {
@@ -266,9 +272,9 @@ void probes_dispatch(const struct probe_selection *selection,
         hooks->panic();
         ran++;
     }
-    if (!ran && selection->phase == 1) {
+    if (!ran && selection->phase != 0) {
         rec_emit(probe, "BEGIN", 0);
-        rec_emit(probe, "READY", "table=f1 installed=%u", count);
+        rec_emit(probe, "READY", "table=f%u installed=%u", selection->phase, count);
         rec_emit(probe, "ERROR", "status=not_run reason=missing_probe");
     }
     if (!ran && !selection->phase)

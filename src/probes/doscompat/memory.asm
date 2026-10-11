@@ -113,8 +113,7 @@ checks:
     cmp byte [0x80], 0                  ; the child only reports its code
     jne .passed
     mov dx, pass_msg
-    mov ah, 9
-    int 0x21
+    call record_dollar
 .passed:
     mov ax, 0x4C00
     int 0x21
@@ -143,20 +142,17 @@ overlap:
     push cs
     pop ds
     mov dx, overlap_msg
-    mov ah, 9
-    int 0x21
+    call record_dollar
 fail_child:
     push cs
     pop ds
     mov dx, child_msg
-    mov ah, 9
-    int 0x21
+    call record_dollar
 fail:
     push cs
     pop ds
     mov dx, fail_msg
-    mov ah, 9
-    int 0x21
+    call record_dollar
     mov ax, 0x4C01
     int 0x21
 initial_end dw 0
@@ -167,6 +163,7 @@ allocation dw 0
 pass_msg db 'MEMORY PASS: initial PSP, current MCB, allocation isolation',13,10,'$'
 fail_msg db 'MEMORY FAIL',13,10,'$'
 overlap_msg db 'MEMORY AH=48h returned memory inside the caller',13,10,'$'
+%include "src/probes/doscompat/record.inc"
 align 16
 stack times 512 db 0
 stack_top:

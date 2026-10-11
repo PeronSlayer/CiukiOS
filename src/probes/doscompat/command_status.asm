@@ -25,16 +25,14 @@ start:
     cmp ax, 37
     jne fail
     mov dx, pass_msg
-    mov ah, 9
-    int 0x21
+    call record_dollar
     mov ax, 0x4C00
     int 0x21
 fail:
     push cs
     pop ds
     mov dx, fail_msg
-    mov ah, 9
-    int 0x21
+    call record_dollar
     mov ax, 0x4C01
     int 0x21
 command db '\COMMAND.COM', 0
@@ -44,6 +42,7 @@ tail_end db 13
 param dw 0, tail, 0, 0, 0, 0, 0
 pass_msg db 'COMMAND STATUS PASS',13,10,'$'
 fail_msg db 'COMMAND STATUS FAIL',13,10,'$'
+%include "src/probes/doscompat/record.inc"
 align 16
 stack times 512 db 0
 stack_top:

@@ -263,6 +263,8 @@ def controller_source(source):
     release = 'static struct signal_release' + source.split('static struct signal_release', 1)[1].split('static int signal_image_read', 1)[0]
     scheduler = (ROOT / 'src/kernel/core/task.c').read_text()
     tick = 'void sched_tick(void)' + scheduler.split('void sched_tick(void)', 1)[1].split('void task_yield(void)', 1)[0]
+    # f3-00 added optional DOS VM hooks to the production scheduler as weak symbols.
+    tick = 'extern void dosvm_tick(void) __attribute__((weak));\n' + tick
     return (HARNESS.replace('RESULT_LAYOUT', layout).replace('CONTROLLER', controller)
             .replace('RELEASE_INJECTION', release).replace('SCHED_TICK', tick))
 
