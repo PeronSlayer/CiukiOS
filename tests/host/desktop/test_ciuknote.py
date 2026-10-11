@@ -153,7 +153,8 @@ class CiuknoteTests(unittest.TestCase):
         # F10 selects the CiukNote scenario (F9 Task Manager, F11 Files, F12 shell); two A edges end the case.
         self.assertEqual(keys[:2], [("f10", True), ("f10", False)])
         self.assertEqual(keys[-2:], [("a", True), ("a", False)])
-        # The desktop counts A edges only once the last checkpoint is reached: none may follow Alt+F4 but the pair.
+        # The desktop counts A edges only once the last checkpoint is reached: none may follow File > Exit
+        # (Alt+F, X: the only Alt chord of the script) but the pair.
         self.assertNotIn("a", [k for k, _ in keys[keys.index(("alt", True)):-2]])
         after = next(p for p in c["expected"]["predicates"] if p["where"].get("stage") == "after")
         self.assertEqual(after["fields"]["keys"], {"eq": 4})
@@ -195,39 +196,31 @@ class CiuknoteTests(unittest.TestCase):
         menu_top = 768 - 32 - 28 * (len(programs) + 2)
         self.assertEqual((clicks[1][1] - menu_top) // 28, programs.index("ciuknote"))
         self.assertEqual(clicks[1][1] - clicks[0][1], menu_distance(programs, "ciuknote"))
+        # Apart from the corner clamp (+381 twice, three packets each) and the button approach (-16), the only
+        # vertical move is the row distance.
         moves = [e["data"]["value"] for b in c["actions"][0]["batches"] for e in b["events"]
-                 if e["type"] == "rel" and e["data"]["axis"] == "y" and e["data"]["value"] not in (127, -16)]
+                 if e["type"] == "rel" and e["data"]["axis"] == "y" and e["data"]["value"] not in (381, -16)]
         self.assertEqual(moves, [menu_distance(programs, "ciuknote")])
 
     def key_script(self):
-        """The case's keys after the launch click, as the replay harness reads them: K <code> <down>
-        per key event, S after every batch (the guest renders and may report a checkpoint), and C for
-        Alt+F4, which the desktop turns into the window's close request."""
+        """The case's keys after the launch click, as the replay harness reads them: K <code> <down> per key
+        event and S after every batch (the guest renders and may report a checkpoint). The final A pair is
+        not CiukNote's: it follows File > Exit, when the window is gone (the desktop counts it)."""
         c, _ = case()
-        lines, buttons, alt = ["S"], 0, None   # the guest renders and reports the empty window before the first key
-        for b in c["actions"][0]["batches"]:
+        batches = c["actions"][0]["batches"]
+        total = sum(1 for b in batches for e in b["events"] if e["type"] == "key")
+        lines, buttons, seen = ["S"], 0, 0   # the guest renders and reports the empty window before the first key
+        for b in batches:
             started = buttons >= 4
             for e in b["events"]:
                 if e["type"] == "btn":
                     buttons += 1
                     continue
-                if e["type"] != "key" or not started or "C" in lines:   # nothing reaches a closed window
+                if e["type"] != "key":
                     continue
-                code, down = QCODES[e["data"]["key"]["data"]], int(e["data"]["down"])
-                if code == 0x38:
-                    if down: alt = "pending"           # held back: the desktop consumes Alt+F4
-                    elif alt == "pending": lines += [f"K {code} 1", f"K {code} 0"]
-                    elif alt == "flushed": lines.append(f"K {code} 0")
-                    alt = None if not down else alt
-                    continue
-                if code == 0x3e and alt == "pending" and down:
-                    lines.append("C"); alt = "closed"
-                    continue
-                if code == 0x3e and alt == "closed":
-                    continue
-                if alt == "pending" and down:
-                    lines.append(f"K {0x38} 1"); alt = "flushed"
-                lines.append(f"K {code} {down}")
+                seen += 1
+                if started and seen <= total - 2:
+                    lines.append(f"K {QCODES[e['data']['key']['data']]} {int(e['data']['down'])}")
             if started:
                 lines.append("S")
         return lines
@@ -237,7 +230,6 @@ class CiuknoteTests(unittest.TestCase):
         key-to-text rules; the saved file must be exactly the one the host checker digests."""
         c, _ = case()
         lines = self.key_script()
-        self.assertEqual(lines.count("C"), 1)
         with self.scratch() as temp:
             folder = Path(temp)
             binary = self.compile(folder, "ciuknote", APP)
@@ -256,7 +248,7 @@ class CiuknoteTests(unittest.TestCase):
         self.assertEqual(path, "/system/tests/note.txt")
         self.assertEqual(bytes.fromhex(hexdata), expected)
         self.assertEqual(hashlib.sha256(expected).hexdigest(), c["checks"]["files"][0]["sha256"])
-        self.assertEqual(fields["CLOSE"], "1")                 # the clean document accepts the close request
+        self.assertEqual(fields["QUIT"], "1")                  # File > Exit on the clean document closes the window
         self.assertEqual(fields["DIALOG"], "0")                # no prompt is left open
         self.assertEqual(fields["TEXT"], str(len("Hello CiukNote\nCiuki says woof.\n9:41 AM 10/11/2026")))
         self.assertEqual([x.split()[1] for x in checkpoints], ["checkpoint=1", "checkpoint=2", "checkpoint=3"])
