@@ -27,6 +27,7 @@ from qmp import QMP, writes
 import resources as res
 import fat_fixtures
 import iso_fixtures
+import ntfs_fixtures
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -446,8 +447,9 @@ def expand_cases(suite):
 def fixture_disks(case):
     # Manifest ordinals also cover nondisk fixtures; IDE connector numbers
     # start after the boot disk and must agree with the kernel disk ledger.
-    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator')=='mkfs.fat']
+    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator') in ('mkfs.fat','mkntfs')]
     if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
+    if sum(f.get('generator')=='mkntfs' for f in case.get('fixtures',[]))>1:raise res.Refusal('one NTFS fixture disk per case')
     optical=[f for f in case.get('fixtures',[]) if f.get('generator')=='xorriso']
     if len(optical)>1 or optical and len(indices)>2: raise res.Refusal('optical IDE index 3 collides with FAT fixture disks')
     return list(zip(indices,range(1,len(indices)+1)))
@@ -460,6 +462,10 @@ def prepare_fixtures(host,case,directory):
         item=dict(fixture)
         if fixture.get('generator')=='mkfs.fat':
             item.update(host.fat_fixture(fixture,directory,index))
+            item['ide_index']=disks[index]
+        elif fixture.get('generator')=='mkntfs':
+            try:item.update(ntfs_fixtures.qemu_fixture(fixture,directory,index))
+            except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('NTFS fixture generation failed: '+str(e)) from e
             item['ide_index']=disks[index]
         elif fixture.get('generator')=='xorriso':
             item.update(iso_fixtures.generate(fixture,directory,index))
@@ -708,6 +714,27 @@ def observe_desktop_screen(before, after, root=ROOT):
     return {'before_ppm_sha256':sha(before),'ppm_sha256':sha(after),'width':width,'height':height,
             'portrait_array_sha256':converter.ARRAY_SHA256,'portrait_region':[x0+192,y0,64,96],
             'portrait_pixels_checked':6144,'cursor_changed_pixels':changed}
+
+
+def observe_window_screen(path, spec, arm):
+    """f3-02 DOS window: the composited 640x480 client region of a QMP
+    screendump, as little-endian XRGB rows, must hash to the suite's golden
+    frame and to the frame the controller reported in its ARM record."""
+    width,height,pixels = read_ppm(path)
+    try:
+        x0,y0 = (int(v) for v in spec['origin']);w,h = (int(v) for v in spec.get('size',(640,480)))
+        golden = spec['digest']
+    except (KeyError,TypeError,ValueError) as error:raise EvidenceError('invalid window_screen specification') from error
+    if x0 < 0 or y0 < 0 or x0+w > width or y0+h > height:raise EvidenceError('DOS window region outside the screen')
+    digest = hashlib.sha256()
+    for y in range(y0,y0+h):
+        row = pixels[((y*width)+x0)*3:((y*width)+x0+w)*3]
+        xrgb = bytearray(w*4)
+        xrgb[0::4] = row[2::3];xrgb[1::4] = row[1::3];xrgb[2::4] = row[0::3]
+        digest.update(xrgb)
+    observed = digest.hexdigest()
+    if observed != golden or observed != arm.get('digest'):raise EvidenceError('DOS window region mismatch')
+    return {'ppm_sha256':sha(path),'width':width,'height':height,'region':[x0,y0,w,h],'digest':observed}
 
 
 def desktop_interaction(records):
@@ -1043,7 +1070,9 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     elif profile.get('audio') and audio_exception != 'none':
         args += ['-device', profile['audio']+',audiodev=silent']
     for index,disk in fixture_disks(case):
-        args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache]
+        # The NTFS fixture is named so QMP block statistics can prove it was only read.
+        ident=',id=ciuki-ntfs' if case['fixtures'][index].get('generator')=='mkntfs' else ''
+        args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache+ident]
     fixture_disks(case) # collision validation also for direct command construction
     for index,fixture in enumerate(case.get('fixtures',[])):
         if fixture.get('generator')=='xorriso':
@@ -1142,6 +1171,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     screen_before = directory/'desktop-before.ppm'
     screen_after = directory/'desktop-after.ppm'
     screen_armed_at = screen_interaction_at = None
+    window_shot = directory/'window.ppm';window_armed_at = None
     restart_performed=False;expected_resets=0
     try:
         if shared_overlay is None:
@@ -1278,6 +1308,15 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     result['desktop_interaction']=desktop_interaction(parser.records)
                     result['desktop_screen']=observe_desktop_screen(screen_before,screen_after)
                     screen_before.unlink();screen_after.unlink()
+            if case.get('window_screen') and qmp:
+                spec = case['window_screen']
+                arms = [r for r in parser.records if r.get('event')=='ARM' and r.get('action')==spec.get('action','window_screen')]
+                if len(arms)>1:raise EvidenceError('duplicate DOS window screen ARM')
+                if arms and window_armed_at is None:window_armed_at=now
+                if arms and 'window_screen' not in result and now-window_armed_at>=spec.get('delay_ms',1500)/1000:
+                    qmp.command('screendump',{'filename':str(window_shot)})
+                    try:result['window_screen']=observe_window_screen(window_shot,spec,arms[0])
+                    finally:window_shot.unlink(missing_ok=True)
             # A trace is serialized before the subsequent request can reach
             # blkdebug. Drain the FIFO before resuming that suspended request;
             # never select a prefix from a partially collected serial batch.
@@ -1300,6 +1339,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
                 if case.get('desktop_screen') and 'desktop_screen' not in result:
                     raise EvidenceError('desktop lacks live post-input screendump')
+                if case.get('window_screen') and 'window_screen' not in result:
+                    raise EvidenceError('DOS window lacks live screendump')
                 if terminal_time is None:terminal_time=now
                 if parser.terminal['event']=='PANIC':
                     arms=[r for r in parser.records if r['event']=='ARM']
@@ -1324,6 +1365,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         parser=Parser(run_id,case['probe']);terminal_time=None
                         restart_performed=True;pending=b''
                     else:
+                        if qmp and any(f.get('generator')=='mkntfs' for f in case.get('fixtures',[])):
+                            result['observed_blockstats_final']=writes(qmp.command('query-blockstats'))
                         break
             if process.poll() is not None:
                 if case.get('sweep'):
@@ -1392,6 +1435,19 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     fixture['sha256_after']=sha(fixture['path'])
                     if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('optical fixture changed during read-only case')
                     if result['outcome']=='pass':iso_fixtures.verify_records(fixture,parser.records)
+                    fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
+                except (OSError,ValueError) as e:
+                    result['outcome']='fail';result['reason']=str(e)
+            if fixture.get('generator')=='mkntfs' and fixture.get('path'):
+                try:
+                    fixture['sha256_after']=sha(fixture['path'])
+                    if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('NTFS fixture changed during read-only case')
+                    initial=result.get('initial_blockstats',{}).get('ciuki-ntfs');final=result.get('observed_blockstats_final',{}).get('ciuki-ntfs')
+                    if initial is None or final is None:raise EvidenceError('NTFS fixture lacks QMP block statistics')
+                    if any(final[key]!=initial[key] for key in ('wr_operations','wr_bytes','flush_operations')):
+                        raise EvidenceError('NTFS fixture received block writes or flushes')
+                    fixture['blockstats']={'initial':initial,'final':final}
+                    if result['outcome']=='pass':ntfs_fixtures.verify_records(fixture,parser.records)
                     fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
                 except (OSError,ValueError) as e:
                     result['outcome']='fail';result['reason']=str(e)
@@ -1737,7 +1793,7 @@ def main(argv=None):
             host_evidence=None
             if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-','f3-','f4-')):
                 started=time.monotonic()
-                checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=180,
+                checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=900,  # host suite grew with f3/f4 (303+ tests)
                                        env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
                 output=checked.stdout+checked.stderr
                 if len(output)>res.LOG_CAP:raise res.Refusal('host fixture evidence exceeds log cap')

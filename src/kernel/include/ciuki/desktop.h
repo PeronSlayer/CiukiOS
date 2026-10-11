@@ -38,6 +38,7 @@ int surface_info(struct process *p, int32_t fd, struct ciuki_surface_info *out);
 int surface_attachment(struct process *p, int32_t fd, struct desktop_description **out);
 void surface_retain(struct surface *s);
 void surface_release(struct surface *s);
+int surface_write(struct surface *, uint32_t offset, const void *, uint32_t bytes);
 int surface_read(struct surface *s, uint32_t offset, void *out, uint32_t bytes);
 const struct ciuki_surface_info *surface_geometry(const struct surface *s);
 

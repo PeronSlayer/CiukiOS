@@ -182,7 +182,11 @@ class Parser:
                 raise EvidenceError('invalid NOT_RUN record')
         elif not self.started or event not in ('DATA','READY','ARM','END','PANIC','ERROR'):
             raise EvidenceError('unknown event or missing BEGIN')
-        if event == 'END' and record.get('status') not in ('PASS','FAIL'):
+        # f4-02/f4-04: a media probe without its declared device or fixture ends
+        # NOT_RUN with the reason (never a pass); everything else needs PASS/FAIL.
+        media_not_run = (event == 'END' and record.get('status') == 'NOT_RUN' and
+                         {'optical':'device_absent','ntfs-ro':'fixtures_absent'}.get(self.probe) == record.get('reason'))
+        if event == 'END' and not media_not_run and record.get('status') not in ('PASS','FAIL'):
             raise EvidenceError('END requires PASS or FAIL')
         if event == 'ERROR' and record.get('status') == 'not_run':
             ready = [r for r in self.records if r['event'] == 'READY']
@@ -195,7 +199,7 @@ class Parser:
                 raise EvidenceError('missing probe requires READY then ERROR')
         if event in ('END','PANIC','ERROR','NOT_RUN'):
             self.terminal = record
-            self.outcome = 'not_run' if event == 'NOT_RUN' or event == 'ERROR' and record.get('status') == 'not_run' else 'pass' if event == 'END' and record['status'] == 'PASS' else 'fail'
+            self.outcome = 'not_run' if event == 'NOT_RUN' or media_not_run or event == 'ERROR' and record.get('status') == 'not_run' else 'pass' if event == 'END' and record['status'] == 'PASS' else 'fail'
         self.seq = seq
         if event == 'DATA' and record.get('group') == 'app':
             try:

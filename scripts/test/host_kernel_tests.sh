@@ -103,9 +103,14 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/ata_test.c" "$root/src/kernel/fs/partition.c" \
     "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c" \
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/path.c" \
-    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/src/kernel/fs/mount.c" \
+    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c" "$root/src/kernel/fs/mount.c" \
     "$root/src/kernel/core/bootlog.c" "$root/src/kernel/probes/fat_probes.c" \
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" -o "$out/ata_test"
+
+# f4-04: the physical allocator's contiguous run behind the NTFS mount workspace.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/pmm_contig_test.c" -o "$out/pmm_contig_test"
+"$out/pmm_contig_test"
 "$out/ata_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -184,11 +189,28 @@ import sys
 root, out = map(Path, sys.argv[1:])
 source = (root / "src/kernel/core/vmm.c").read_text()
 (out / "dosvm_aspace.inc").write_text(source.split("/* ---- user address spaces ---- */", 1)[1])
+# f3-02: the exact bytes src/kernel/arch/font.asm includes (offset 64,
+# 95 widths + 95 glyphs x 16 u16 rows), for the VM's synthetic ROM fonts.
+font = (root / "assets/fonts/native/INCONSOL.CFN").read_bytes()[64:64 + 95 + 95 * 32]
+assert len(font) == 95 + 95 * 32
+rows = ",\n".join(", ".join(str(b) for b in font[i:i + 24]) for i in range(0, len(font), 24))
+(out / "dosvm_font.inc").write_text("const uint8_t font_cfn_regular[%d] = {\n%s\n};\n" % (len(font), rows))
 PY
+# The VGA models and the retained presenter (reference oracle) are separate
+# translation units, exactly as the kernel links them.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
     -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
-    "$root/src/kernel/lib/fmt.c" -o "$out/dosvm_test"
+    "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
+    "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
+    "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" -o "$out/dosvm_test"
 "$out/dosvm_test"
+
+# f3-02 migrated VGA model vectors (legacy test_virtual_vga.c, unchanged).
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/vm" "$root/tests/host/test_virtual_vga.c" \
+    "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
+    "$root/src/kernel/vm/vga_presenter.c" -o "$out/test_virtual_vga"
+"$out/test_virtual_vga"
 
 # F1 firmware queue: fake-time scheduler and the existing production VM fakes.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -278,6 +300,7 @@ storage_sources=(
     "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c"
     "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c"
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c"
+    "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c"
     "$root/src/kernel/fs/mount.c" "$root/src/kernel/core/bootlog.c"
     "$root/src/kernel/drivers/blkpart.c" "$root/src/kernel/probes/fat_probes.c"
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c"

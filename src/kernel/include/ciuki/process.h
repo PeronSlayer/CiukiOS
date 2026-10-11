@@ -30,7 +30,7 @@ struct process {
     uint64_t pending, cpu_ticks;
     struct kwait changed;
     uint32_t threads, live_threads;
-    bool published;
+    bool published, dosvm_capability;
     /* f2-33 enumeration: image basename (printable, NUL-terminated) and the
      * g_ticks value at publication. */
     char name[CIUKI_PROC_NAME_MAX];

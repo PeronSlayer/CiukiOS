@@ -487,6 +487,7 @@ enum ciuki_syscall {
     CIUKI_SYS_DEVCTL = 69,
     CIUKI_SYS_PROC_LIST = 70,
     CIUKI_SYS_PROC_TERMINATE = 71,
+    CIUKI_SYS_DOSVM = 72,
 };
 
 /* pack(4) is scoped and restores the includer's previous setting. */
@@ -854,6 +855,37 @@ struct ciuki_pthread_condattr {
     uint32_t reserved; /* 4 */
 };
 
+/* F3-02: one supervisor-delegated DOS window VM per native owner.
+ * dosvm(B=operation, C=record*, D=size); execution-abi.md, F3-02 amendment. */
+#define CIUKI_DOSVM_VERSION 1u
+#define CIUKI_DOSVM_WIDTH 640u
+#define CIUKI_DOSVM_HEIGHT 480u
+#define CIUKI_DOSVM_NAME_MAX 31u
+#define CIUKI_DOSVM_CREATE 1u
+#define CIUKI_DOSVM_PRESENT 2u
+#define CIUKI_DOSVM_INPUT 3u
+#define CIUKI_DOSVM_FOCUS 4u
+#define CIUKI_DOSVM_CLOSE 5u
+#define CIUKI_DOSVM_STATUS 6u
+#define CIUKI_DOSVM_BOOTING 0u
+#define CIUKI_DOSVM_RUNNING 1u
+#define CIUKI_DOSVM_STOPPED 2u
+struct ciuki_dosvm_command {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t id; /* 8 */
+    uint32_t generation; /* 12 */
+    int32_t surface_fd; /* 16 */
+    uint32_t state; /* 20 */
+    uint32_t reason; /* 24 */
+    uint32_t focused; /* 28 */
+    uint32_t changed; /* 32 */
+    uint32_t video_mode; /* 36 */
+    char name[32]; /* 40 */
+    struct ciuki_input_event event; /* 72 */
+    struct ciuki_rect damage; /* 112 */
+};
+
 #pragma pack(pop)
 
 typedef struct ciuki_pthread_mutex ciuki_pthread_mutex_t;
@@ -1118,5 +1150,12 @@ _Static_assert(sizeof(struct ciuki_pthread_condattr) == 8, "ciuki_pthread_condat
 _Static_assert(_Alignof(struct ciuki_pthread_condattr) == 4, "ciuki_pthread_condattr alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_pthread_condattr, clock_id) == 0, "ciuki_pthread_condattr.clock_id offset");
 _Static_assert(__builtin_offsetof(struct ciuki_pthread_condattr, reserved) == 4, "ciuki_pthread_condattr.reserved offset");
+
+_Static_assert(sizeof(struct ciuki_dosvm_command) == 136, "ciuki_dosvm_command size");
+_Static_assert(_Alignof(struct ciuki_dosvm_command) == 4, "ciuki_dosvm_command alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, surface_fd) == 16, "ciuki_dosvm_command.surface_fd offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, name) == 40, "ciuki_dosvm_command.name offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, event) == 72, "ciuki_dosvm_command.event offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, damage) == 112, "ciuki_dosvm_command.damage offset");
 
 #endif /* CIUKI_ABI_H */

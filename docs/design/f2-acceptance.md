@@ -722,11 +722,15 @@ floor((y - y0) / r). The scripts clamp to the bottom-left corner and move
 (+40, -16) onto the Ciuki button, i.e. to y = h - 17, so the vertical move
 to the centre of program k is dy = y0 + kr + floor(r/2) - (h - 17)
 = -15 - r(n + 2 - k) + floor(r/2), which for r = 28 is dy = -1 - 28(n + 2 - k),
-independent of h. It holds while r = 28, i.e. h >= 64 + 28(n + 2). The
-committed `desktop-shell-*` (-197: demo, k = 0, n = 5) and `files-qemu-t23`
-(-169: files, k = 1, n = 5) offsets come from f2-31's five-program list and
-are left for the lead to recompute for the final list; `tasks-qemu-t23` uses
-k = n - 1, dy = -85 for any n.
+independent of h. It holds while r = 28, i.e. h >= 64 + 28(n + 2). For the
+desktop batch image (n = 8: ciuknote, demo, dosbox, files, hello, libc_smoke,
+lua, tasks) the suite uses `desktop-shell-*` Demo k = 1, dy = -253;
+`files-qemu-t23` files k = 3, dy = -197; `ciuknote-qemu-t23` ciuknote k = 0,
+dy = -281; `tasks-qemu-t23` tasks k = 7 = n - 1, dy = -85 (the last program,
+so independent of n). `tests/host/desktop/test_tasks.py`
+(`test_menu_clicks_follow_the_image_inventory`) derives n and k from
+`scripts/build_image.py` and checks every scripted case, so adding or
+removing a `/bin` program fails the host tests until the offsets follow.
 
 The case pins no
 pixel digest in the suite (like `desktop-shell-*`): the runner records

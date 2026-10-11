@@ -467,7 +467,7 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                         result['outcome'] = 'not_run'; result['reason'] = str(e); break
                     except EvidenceError as e:
                         result['outcome'] = 'fail'; result['reason'] = str(e); break
-                if result['outcome'] == 'pass' and any(case.get(k) for k in ('checks', 'digests', 'crash_sequence', 'desktop_screen')):
+                if result['outcome'] == 'pass' and any(case.get(k) for k in ('checks', 'digests', 'crash_sequence', 'desktop_screen', 'window_screen')):
                     result['outcome'] = 'not_run'; result['reason'] = 'independent disk/screen observation required'
         if variants or unproven:
             result['outcome'] = 'not_run'

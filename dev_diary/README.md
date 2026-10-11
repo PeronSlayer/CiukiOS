@@ -104,3 +104,4 @@ Documenti di design, validazione, fonti esterne.
 | [Contratto F4 approvato: audio, media, volumi condivisi, ottico e NTFS in sola lettura](2026-10-11-10-contratto-f4-approvato.md) | 11 ott | decisione (contratto di progetto) |
 | [Integrazione notturna: shell del desktop, nucleo VM DOS, audio AC'97, ATAPI/ISO 9660, NTFS, loader; qualifica QEMU e difetti corretti](2026-10-11-11-integrazione-notturna-qualifica-qemu.md) | 11 ott | modifica (integrazione) e analisi |
 | [f3-03 completata dal lead: servizi di memoria XMS/EMS/UMB e primo avvio delle VM DOS su QEMU](2026-10-11-12-f3-03-memoria-vm-primo-avvio-dos-qemu.md) | 11 ott | modifica (implementazione e correzioni) e analisi di regressione |
+| [Campagna QEMU dell'immagine integrata fcd96d6e; lavoro parallelo con subagent Claude verso la pre-alpha 0.9.0](2026-10-11-13-campagna-immagine-integrata-subagent.md) | 11 ott | modifica (correzioni) e analisi; decisione di metodo |

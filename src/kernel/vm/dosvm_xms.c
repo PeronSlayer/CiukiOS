@@ -147,7 +147,11 @@ int dosvm_memory_init(struct dosvm *v, const struct dosvm_config *config)
      * adjacent sixteen-byte interrupt stub. */
     uint8_t *ems=P2V(v->frames[0xF1]);
     ems[0]=0xCD; ems[1]=0xFE; ems[2]=0xCF; memcpy(ems+10,"EMMXXXX0",8);
-    const uint16_t entry[2]={0x1000,0xF000};
+    /* Vector F100:0000: LIM EMS 4.0 detection reads the name at the handler
+     * segment's offset 000Ah, so the stub page must be the segment base
+     * (f3-01 review, 2026-10-11); F000:1000 also collided with the INT 33h
+     * callback continuation. */
+    const uint16_t entry[2]={0x0000,0xF100};
     if (dosvm_write(v,0x67*4,entry,sizeof(entry))) return -EFAULT;
     for (unsigned i=0;i<16;i++) dosvm_page_remove(v,(uint32_t)v->memory.frame_segment*16+i*PAGE_SIZE);
     return 0;

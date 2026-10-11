@@ -17,6 +17,18 @@
  * EIO. The caller must invalidate before reusing the mount/letter. unmount
  * releases parser state only; old nodes carry a VFS mount generation, never
  * a pointer into driver workspace. No public native ABI is defined here.
+ *
+ * f4-04 additions. A node may carry status: a negative FS_E* error (for
+ * example EOPNOTSUPP for compressed, encrypted or reparse content, EIO for a
+ * damaged record) that every lookup of that name returns. The entry is still
+ * listed by readdir, so the file is visible but never opened with wrong
+ * bytes. Drivers may declare FS_RO_STREAM_SYNTAX (a ':' in a lookup component
+ * is alternate-data-stream syntax: EOPNOTSUPP, not ENOENT) and
+ * FS_RO_DRIVER_COLLATION (the driver's lookup() implements the volume's own
+ * case folding; the VFS falls back to it when its folding finds no name and
+ * maps the answer back onto the view entry with the same id). Entries whose
+ * names the VFS cannot represent are omitted by the driver and counted in
+ * the volume's names_omitted.
  */
 #ifndef CIUKI_FS_RO_H
 #define CIUKI_FS_RO_H
@@ -31,8 +43,11 @@ struct fs_ro_node {
     uint64_t id, parent, size;
     uint8_t attr;
     char name[FS_NAME_BYTES], alias[40];
+    int32_t status; /* 0 or negative FS_E*: lookup fails with it (see above) */
 };
 struct fs_ro_volume;
+#define FS_RO_STREAM_SYNTAX 1u
+#define FS_RO_DRIVER_COLLATION 2u
 struct fs_ro_ops {
     const char *name;
     int (*probe)(struct block_cache *, struct blkdev *, uint64_t start);
@@ -44,6 +59,7 @@ struct fs_ro_ops {
     int (*read)(struct fs_ro_volume *, uint64_t id, uint64_t offset, void *, size_t, size_t *done);
     int (*metadata)(struct fs_ro_volume *, uint64_t id, struct fs_ro_node *);
     uint32_t (*generation)(struct fs_ro_volume *);
+    uint32_t flags; /* FS_RO_* */
 };
 struct fs_ro_view;
 struct fs_ro_volume {
@@ -51,13 +67,17 @@ struct fs_ro_volume {
     struct block_cache *cache;
     struct blkdev *dev;
     uint64_t start, sectors;
-    uint32_t mount_generation, view_count;
+    uint32_t mount_generation, view_count, names_omitted;
     bool mounted;
     void *state;
     struct fs_ro_view *views; /* host VFS names, never cached media blocks */
     const char *diagnostic;
 };
 extern const struct fs_ro_ops iso9660_ops;
+extern const struct fs_ro_ops ntfs_ops;
+/* Valid VFS 8.3 alias syntax (uppercase ASCII, one dot); out receives the
+ * canonical form. Drivers use it to drop on-media aliases the view refuses. */
+bool fs_ro_short_name(const char *name, char out[40]);
 int fs_ro_mount(struct fs_ro_volume *, const struct fs_ro_ops *, struct block_cache *,
                 struct blkdev *, uint64_t start, uint64_t sectors);
 void fs_ro_unmount(struct fs_ro_volume *);

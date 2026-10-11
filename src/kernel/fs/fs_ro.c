@@ -54,7 +54,7 @@ static bool conflict(struct fs_ro_view *v, const char *name, unsigned self)
     }
     return false;
 }
-static bool short_name(const char *s, char out[40])
+bool fs_ro_short_name(const char *s, char out[40])
 {
     unsigned a = 0, b = 0, used = 0; bool dot = false;
     while (*s) {
@@ -99,13 +99,13 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
     for (unsigned i = 0; !e && i < v->count; i++) {
         struct fs_ro_node *n = at(v, i); char alias[40];
         if (n->alias[0]) {
-            if (!short_name(n->alias, alias) || conflict(v, alias, i)) { e = -FS_EIO; break; }
+            if (!fs_ro_short_name(n->alias, alias) || conflict(v, alias, i)) { e = -FS_EIO; break; }
             memcpy(n->alias, alias, strlen(alias) + 1);
         }
     }
     for (unsigned i = 0; !e && i < v->count; i++) {
         struct fs_ro_node *n = at(v, i); if (n->alias[0]) continue;
-        if (short_name(n->name, n->alias) && !conflict(v, n->alias, i)) continue;
+        if (fs_ro_short_name(n->name, n->alias) && !conflict(v, n->alias, i)) continue;
         n->alias[0] = 0;
         /* Bounded numeric tails: four-digit maximum for this view quota. */
         const char *s = n->name; char base[7] = {0}, ext[4] = {0}; unsigned nb = 0, ne = 0;
@@ -135,12 +135,30 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
 }
 int fs_ro_lookup(struct fs_ro_volume *v, uint64_t dir, const char *name, struct fs_ro_node *out)
 {
-    struct fs_ro_view *names; int e = view(v, dir, &names); if (e) return e;
-    for (unsigned i = 0; i < names->count; i++) {
-        struct fs_ro_node *n = at(names, i);
-        if (path_equal(name, n->name) || path_equal(name, n->alias)) { *out = *n; return 0; }
+    if (!name || !out) return -FS_EINVAL;
+    if (v && v->ops && (v->ops->flags & FS_RO_STREAM_SYNTAX)) {
+        for (const char *p = name; *p; p++) if (*p == ':') return -FS_EOPNOTSUPP;
     }
-    return -FS_ENOENT;
+    struct fs_ro_view *names; int e = view(v, dir, &names); if (e) return e;
+    struct fs_ro_node *hit = 0;
+    for (unsigned i = 0; i < names->count && !hit; i++) {
+        struct fs_ro_node *n = at(names, i);
+        if (path_equal(name, n->name) || path_equal(name, n->alias)) hit = n;
+    }
+    if (!hit && (v->ops->flags & FS_RO_DRIVER_COLLATION)) {
+        /* The volume's own folding (NTFS $UpCase) may equate names the VFS
+         * does not. The driver answers with an id; the view entry carries
+         * the names, alias and status. Valid only while the media is live. */
+        struct fs_ro_node found;
+        e = v->ops->lookup(v, dir, name, &found);
+        if (e) return e;
+        for (unsigned i = 0; i < names->count && !hit; i++)
+            if (at(names, i)->id == found.id) hit = at(names, i);
+        if (!hit) return -FS_ENOENT;
+    }
+    if (!hit) return -FS_ENOENT;
+    if (hit->status) return hit->status;
+    *out = *hit; return 0;
 }
 int fs_ro_next(struct fs_ro_volume *v, uint64_t dir, uint32_t *cursor, struct fs_ro_node *out)
 {

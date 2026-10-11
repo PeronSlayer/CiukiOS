@@ -232,7 +232,7 @@ int main(int argc, char **argv)
 {
     int display = 3, input = 4, test = 0, gate = 0, cycles = 1, demo_count = 0;
     int channels[DESK_CLIENTS], channel_count = 0;
-    const char *demos[DESK_CLIENTS], *victim = NULL;
+    const char *demos[DESK_CLIENTS], *victim = NULL, *launch = NULL;
     for (int a = 1; a < argc; a++) if (!strcmp(argv[a],"--test=crash-isolation")) test = 1;
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a],"--test=crash-isolation")) continue;
@@ -249,6 +249,7 @@ int main(int argc, char **argv)
         else if (test && !strncmp(argv[a],"--victim=",9) && fault_kind(argv[a]+9) && strcmp(argv[a]+9,"none"))
             victim = argv[a]+9;
         else if (test && !strncmp(argv[a],"--cycles=",9)) cycles = number(argv[a]+9,100);
+        else if (!strncmp(argv[a],"--launch=",9) && argv[a][9] && !launch) launch = argv[a]+9;
         else return 2;
     }
     if (display < 3 || input < 3 || display == input || cycles < 1 ||
@@ -275,6 +276,13 @@ int main(int argc, char **argv)
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (!gate) shell_setup(d);
+    /* f3-02: --launch=<name> starts one /bin menu program through the same
+     * path as a menu click (the f3:vm-window probe opens /bin/dosbox so). */
+    if (launch && !gate) {
+        d->action=-2;
+        for (unsigned i=0; i<d->program_count; i++) if (!strcmp(d->programs[i].name,launch)) d->action=(int)i;
+        if (d->action<0) { d->action=-1; snprintf(d->notice,sizeof(d->notice),"%.40s is not in /bin",launch); }
+    }
     /* The ABI has no timed input read or poll/select. A bounded nonblocking
      * drain followed by an interruptible 10 ms sleep keeps IPC/time moving. */
     for (int i=0; i<channel_count; i++) desk_add_client(d,channels[i]);

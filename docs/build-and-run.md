@@ -59,9 +59,44 @@ one directory. Images, temporary inputs, binaries and manifests stay under
 Delete that directory when its investigation closes; tests regenerate it.
 
 These are generated nonboot data volumes, separate from the canonical Ciuki
-image. The parser currently has no VFS integration or runtime selector.
-Bounds, refusal reasons, license references and qualification limits are in
-[F4 acceptance, f4-03](design/f4-acceptance.md#f4-03).
+image. Bounds, refusal reasons, license references and qualification limits
+are in [F4 acceptance, f4-03](design/f4-acceptance.md#f4-03).
+
+### NTFS through the VFS (f4-04)
+
+The generator also builds the `names` (names the VFS folds differently or
+cannot hold, a DOS alias for a non-BMP name) and `attributes` (hidden, system
+and read-only bits) kinds, and accepts a subset for QEMU cases:
+`build(out, only={"clean"})` makes just that kind and the base it derives from.
+`disk_image()` wraps one volume, byte for byte, in an MBR disk with a single
+type 07h partition at LBA 2048 (the volume is not patched; its own
+hidden-sectors field stays 0 and the driver ignores it).
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.host.test_ntfs_vfs tests.host.test_ntfs_runner -v
+bash scripts/test/host_fs_tests.sh          # includes the cache layout test
+bash scripts/test/host_kernel_tests.sh      # includes the pmm_alloc_contig test
+```
+
+`test_ntfs_vfs` compiles `mount.c`, the VFS, `ntfs_fs.c` and `ntfs_ro.c` under
+ASan/UBSan and drives the disk through `storage_add_disk`: trees and hashes
+against the ntfsls/ntfscat manifest, refusals, unsupported content, large
+directory bound, unmount/remount/stale handles, and failure injection at every
+device read and at the workspace allocation. `test_ntfs_runner` covers IDE slot
+allocation, QEMU drive arguments, the evidence checker and the f4-media
+predicates without QEMU.
+
+`python3 scripts/test/run.py f4-media` (the lead, after the canonical build)
+includes twelve `ntfs-*` cases: `clean`, `fragmented`, `names`, `compressed`,
+`dirty` and `hibernated` on `qemu-t23` and `qemu-desktop-2002`. A case declares
+`{"generator":"mkntfs","kind":<kind>,"seed":1}`; the runner generates that
+kind, wraps it in the MBR disk and attaches it as a raw IDE disk named
+`ciuki-ntfs` after any FAT fixtures (`mkfs.fat` peers take the lower indices;
+one NTFS disk per case, three disks in all, at most two with a CD). The runner
+refuses a changed fixture hash and requires QMP block statistics that show no
+write or flush on `ciuki-ntfs` during the run. `f4:ntfs-ro run=<8 hex>` is the
+selector; with no NTFS partition mounted it records
+`not_run reason=fixtures_absent`.
 
 ### F4 optical fixtures
 

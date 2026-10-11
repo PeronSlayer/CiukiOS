@@ -229,4 +229,4 @@ static int mount_iso(struct fs_ro_volume *v)
 }
 static void unmount_iso(struct fs_ro_volume *v) { fs_free(v->state); v->state = 0; }
 const struct fs_ro_ops iso9660_ops = { "iso9660", probe, mount_iso, unmount_iso,
-    root_node, lookup, readdir, read_file, metadata, generation };
+    root_node, lookup, readdir, read_file, metadata, generation, 0 };

@@ -181,7 +181,7 @@ class CiuknoteTests(unittest.TestCase):
         on the Ciuki button, 16 px above the corner. Adding or removing a /bin program moves a row's
         distance; this test names the new one, and the desktop cases must follow."""
         programs = bin_programs()
-        self.assertEqual(programs, ["ciuknote", "demo", "files", "hello", "libc_smoke", "lua", "tasks"],
+        self.assertEqual(programs, ["ciuknote", "demo", "dosbox", "files", "hello", "libc_smoke", "lua", "tasks"],
                          "the image's /bin changed: recompute dy = -1 - 28 * (n + 2 - k) for the desktop cases")
         c, _ = case()
         x, y, clicks = 512, 384, []   # 1024x768 (QEMU std VGA mode 0x144); the cursor starts at the centre

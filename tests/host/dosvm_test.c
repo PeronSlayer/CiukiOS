@@ -7,6 +7,16 @@
 #include <string.h>
 #include <setjmp.h>
 #include <unistd.h>
+#undef _SC_PAGESIZE
+#undef _SC_OPEN_MAX
+#undef _SC_ARG_MAX
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
+#include <ciuki/abi.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #include <ciuki/task.h>
@@ -30,7 +40,8 @@ volatile uint64_t g_ticks;
 volatile bool g_need_resched;
 static uint32_t read_cr3(void) { return cpu_cr3; }
 static void write_cr3(uint32_t x) { cpu_cr3 = x; }
-static uint32_t read_cr2(void) { return 0xDEAD000; }
+static uint32_t fake_cr2 = 0xDEAD000;
+static uint32_t read_cr2(void) { return fake_cr2; }
 static void cli(void) { cpu_flags = 0; }
 static void sti(void) { cpu_flags = V86_IF; }
 static void invlpg(uint32_t va) { (void)va; }
@@ -192,18 +203,28 @@ static unsigned records, guest_records, max_record;
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[240]; va_list ap; va_start(ap,fmt); int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
-    CHECK(n>=0 && n<(int)sizeof(extra) && !strcmp(probe,"vm-boot"));
+    CHECK(n>=0 && n<(int)sizeof(extra) && (!strcmp(probe,"vm-boot") || !strcmp(probe,"vm-video") || !strcmp(probe,"vm-window")));
     n=snprintf(last_record,sizeof(last_record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s %s",++records,probe,event,extra);
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
     if (strstr(extra,"group=guest ")) guest_records++;
 }
+#include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
 #include "../../src/kernel/vm/dosvm.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
+#include "../../src/kernel/vm/dosvm_pit.c"
+#include "../../src/kernel/vm/dosvm_kbd.c"
+#include "../../src/kernel/vm/dosvm_mouse.c"
 #include "../../src/kernel/vm/dosvm_xms.c"
 #include "../../src/kernel/vm/dosvm_umb.c"
 #include "../../src/kernel/vm/dosvm_ems.c"
+/* f3-02 production VGA adapter and native window boundary; fakes and cases
+ * in dosvm_video_test.inc. The font table is generated from the asset the
+ * kernel's font.asm includes (scripts/test/host_kernel_tests.sh). */
+#include "dosvm_font.inc"
+#include "../../src/kernel/vm/dosvm_vga.c"
+#include "../../src/kernel/vm/dosvm_client.c"
 
 static struct dosvm *create(void)
 { struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
@@ -241,7 +262,7 @@ static void test_memory_disk(void)
     CHECK(dosvm_read(b,0xFFF,got,512)==0 && memcmp(bytes,got,512));
     CHECK(!dosvm_range(a,0x10FFEF,2,true) && !dosvm_range(a,UINT32_MAX,512,true));
     CHECK(dosvm_write(a,0xF0000,bytes,1)==-EFAULT);
-    CHECK(dosvm_write(a,0xBFFF0,bytes,32)==-EFAULT); CHECK(dosvm_read(a,0xBFFF0,got,16)==0 && !got[0]);
+    CHECK(dosvm_write(a,0xBFFF0,bytes,32)==-EFAULT); CHECK(dosvm_read(a,0xBFFF0,got,16)==0 && got[0]==0x20 && got[1]==0x07); /* f3-02: cleared mode 3 text cell through the VGA model */
     uint32_t x=0x12345678,y=0; CHECK(dosvm_write(a,0,&x,4)==0 && dosvm_set_a20(a,false)==0);
     CHECK(dosvm_read(a,0x100000,&y,4)==0 && y==x); CHECK(dosvm_set_a20(a,true)==0 && dosvm_read(a,0x100000,&y,4)==0 && !y);
     CHECK(dosvm_disk_write(a,77,bytes)==0 && dosvm_disk_read(a,77,got)==0 && !memcmp(bytes,got,512));
@@ -317,9 +338,9 @@ static void test_lifecycle_records(void)
     struct dosvm *next=create(); CHECK(dosvm_key(next).id==expired.id && dosvm_key(next).generation!=expired.generation && !dosvm_keyboard(expired,'X'));
     CHECK(!dosvm_boot(next)); value=1; CHECK(!v86_io(&next->monitor,0x92,1,true,&value) && next->info.reason==DOSVM_RESET); destroy(next,true); empty();
     /* OUT hands the handler the whole EAX: a dirty AH must not hide the command byte (QEMU 2026-10-11). */
-    next=create(); CHECK(!dosvm_boot(next)); value=0xFFD1; CHECK(!v86_io(&next->monitor,0x64,1,true,&value)); value=0xFF03; CHECK(!v86_io(&next->monitor,0x60,1,true,&value) && next->a20);
-    value=0xFFD0; CHECK(!v86_io(&next->monitor,0x64,1,true,&value) && next->kbc_pending); value=0; CHECK(!v86_io(&next->monitor,0x64,1,false,&value) && value==1);
-    value=0; CHECK(!v86_io(&next->monitor,0x60,1,false,&value) && value==3 && !next->kbc_pending);
+    next=create(); CHECK(!dosvm_boot(next)); CHECK(!dosvm_set_a20(next,false)); value=0xFFD1; CHECK(!v86_io(&next->monitor,0x64,1,true,&value)); value=0xFF03; CHECK(!v86_io(&next->monitor,0x60,1,true,&value) && next->a20);
+    value=0xFFD0; CHECK(!v86_io(&next->monitor,0x64,1,true,&value)); value=0; CHECK(!v86_io(&next->monitor,0x64,1,false,&value) && (value&1));
+    value=0; CHECK(!v86_io(&next->monitor,0x60,1,false,&value) && (value&2)); value=0; CHECK(!v86_io(&next->monitor,0x64,1,false,&value) && !(value&1));
     value=0xFF00; CHECK(!v86_io(&next->monitor,DOSVM_CONTROL_PORT,1,true,&value) && next->info.state==DOSVM_STOPPING && next->info.reason==DOSVM_EXIT); destroy(next,true); empty();
     next=create(); CHECK(!dosvm_boot(next)); next->monitor.vif=false; next->boot_deadline=g_ticks+2;
     guest_halt=true; run_worker(next); guest_halt=false;
@@ -464,10 +485,13 @@ static void test_memory_services(void)
     allocation_calls=0; fail_at=n+50; v=(void *)1; CHECK(dosvm_create(0,&v)==-ENOMEM && !v); fail_at=0; empty();
     printf("DOS memory services: XMS/EMS/UMB state machines and move/resize validators PASS\n");
 }
+#include "dosvm_devices_test.inc"
+#include "dosvm_video_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices();
+    test_video();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

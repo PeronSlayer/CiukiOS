@@ -43,4 +43,7 @@ bool supervisor_output(struct task *task, unsigned stream, const void *bytes, ui
 const struct supervisor_capture *supervisor_captured(unsigned stream);
 int probe_f2_crash_isolation(void);
 int probe_f2_libc_smoke(void);
+/* Only immutable supervisor/desktop-selected /bin/dosbox spawns qualify.
+ * Weak consumers keep standalone F0/F2 host harnesses independent. */
+void supervisor_dosvm_delegate(struct process *, struct process *, const char *) __attribute__((weak));
 #endif

@@ -29,8 +29,8 @@ def digest(path):
 
 
 def inputs():
-    files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/libdeskui", ROOT / "apps/files",
-                                 ROOT / "apps/tasks", ROOT / "apps/ciuknote")
+    files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
+                                 ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -45,7 +45,7 @@ def current_build(expected):
     try:
         m = json.loads((OUT / "manifest.json").read_text())
         return (m["inputs"] == expected and set(m["files"]) ==
-                {"desktop", "demo", "files", "tasks", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"} and
+                {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"} and
                 all(digest(OUT / n) == h for n, h in m["files"].items()))
     except (OSError, ValueError, KeyError):
         return False
@@ -64,7 +64,7 @@ def validate_payloads():
             m["portrait"] != portrait_record(converter)):
         raise ValueError("approved Ciuki portrait provenance mismatch")
     inspect = lua.checker().inspect
-    for name in ("desktop", "demo", "files", "tasks", "ciuknote"):
+    for name in ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote"):
         if inspect(OUT / name) != m["elf"][name]:
             raise ValueError(f"desktop ELF evidence: {name}")
     return m
@@ -97,7 +97,8 @@ def build():
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
     sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "assets.c"],
-               "demo": ["../demo/demo.c", "protocol.c", "compositor.c"]}
+               "demo": ["../demo/demo.c", "protocol.c", "compositor.c"],
+               "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}
     evidence, commands = {}, {}
     sdk = json.loads((SDK / "manifest.json").read_text())
     objects = []
@@ -138,7 +139,7 @@ def build():
     (OUT / "manifest.json").write_text(json.dumps(m, indent=2, sort_keys=True)+"\n")
     for obj in objects:
         obj.unlink(missing_ok=True)
-    print(f"[desktop] built/inspected desktop, demo, libdeskui, Files, Tasks and CiukNote in {m['build_seconds']} seconds; guest not_run")
+    print(f"[desktop] built/inspected desktop, demo, dosbox, libdeskui, Files, Tasks and CiukNote in {m['build_seconds']} seconds; guest not_run")
 
 
 def audit_integer(obj, sdk):

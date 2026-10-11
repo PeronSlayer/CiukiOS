@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -83,6 +84,30 @@ class TasksTests(unittest.TestCase):
             self.assertEqual(after["fields"]["keys"], {"eq": 4})
         finally:
             sys.path.remove(str(ROOT / "scripts/test"))
+
+    def test_menu_clicks_follow_the_image_inventory(self):
+        """Every scripted desktop case reaches its menu row with dy = -1 - 28 * (n + 2 - k): n programs
+        in the image's /bin (without desktop) sorted by strcmp, k the target's index, 28 px rows
+        anchored above the 32 px bar, the pointer on the Ciuki button 16 px above the corner."""
+        programs = sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
+        suite = json.loads((ROOT / "tests/suites/f2-desktop.json").read_text())
+        targets = {"desktop-shell-qemu-t23": "demo", "desktop-shell-qemu-e500": "demo", "files-qemu-t23": "files",
+                   "ciuknote-qemu-t23": "ciuknote", "tasks-qemu-t23": "tasks"}
+        for case in suite["cases"]:
+            if case["id"] not in targets:
+                continue
+            x, y, clicks = 512, 384, []   # 1024x768; the cursor starts at the centre
+            for batch in case["actions"][0]["batches"]:
+                for event in batch["events"]:
+                    if event["type"] == "rel":
+                        if event["data"]["axis"] == "x": x = min(max(x + event["data"]["value"], 0), 1023)
+                        else: y = min(max(y + event["data"]["value"], 0), 767)
+                    elif event["type"] == "btn" and event["data"]["down"]: clicks.append((x, y))
+            k = programs.index(targets[case["id"]])
+            self.assertTrue(4 <= clicks[0][0] < 80 and 739 <= clicks[0][1] < 765, case["id"])
+            self.assertEqual(clicks[1][1] - clicks[0][1], -1 - 28 * (len(programs) + 2 - k), case["id"])
+            self.assertEqual((clicks[1][1] - (768 - 32 - 28 * (len(programs) + 2))) // 28, k, case["id"])
+        self.assertEqual(set(targets) - {c["id"] for c in suite["cases"]}, set())
 
     def test_image_inventory(self):
         build = load("tasks_build", ROOT / "apps/desktop/build_desktop.py")

@@ -514,4 +514,36 @@ The refill thread now blocks with a 1/4/50 ms safety deadline (burst,
 running, idle) and VM admission/stop/guest records carry the owning probe
 (`vm-boot`, `vm-memory`, `vm-devices`) through `dosvm_config.probe`. The
 `f3-vm`, `f0-smoke` and `f2-all` results on this image are recorded below.
+`f0-smoke` 2/2. The first `f3-vm` run was refused by the host prerequisite:
+`test_ntfs_ro.test_fixture_generation_is_deterministic` compared a repeat
+generation against the session's fixtures and every image hash differed;
+run alone immediately afterwards the same test passed in 15 s, so the
+generation is not deterministic under concurrent load (an f4-03 follow-up:
+pin every tool-written field, not only the serial and times). Suites are
+rerun on a quiet machine.
+
+## Twenty-sixth image: `fcd96d6e…` (commit `9f17715`, fat-read digest cap)
+
+Built after the fat-read cap (files above 8 MiB are recorded as `case=large`
+in the volume walk; `fat12-read` had exceeded its host deadline on the
+128 MiB DOS boot image) on a quiet machine, with the deterministic NTFS
+fixtures and the 32 KiB stack assertion in place. Results, each suite
+preceded by the runner's host prerequisite (303 Python tests OK):
+
+- `f3-vm` 195 PASS: the F0–F2 prefix, then `vm-boot-qemu-t23/e500/min128`
+  and `vm-memory-qemu-t23/e500/min128` (second VM admitted on every
+  profile, conformance `xms_calls=007fffff ems_calls=3fffffff`). The three
+  `uart-absent-*` cases remain operator cases (screen evidence).
+- `f0-smoke` 2/2.
+- `f2-all` 189 PASS, the same three operator cases excepted.
+
+This is the first integrated image on which DOS VMs boot and the F3 rows
+f3-00 and f3-03 hold QEMU evidence. The hardware image for the fifth T23
+sweep is built from the same tree with `BOOT.CFG` `safe=0 serial=1` and
+`probe=all:sweep run=99999999` (`build/f0/ciukios-hw.img`, SHA-256
+`e4db63968b932fd0b5e6b1786fb609fdd05d8d495ad514b6f42a796deeec732b`). Note
+for the next hardware image: `build_image.py` writes `build-manifest.json`
+beside its output, so an `--out` inside `build/f0/` replaces the canonical
+image's manifest; rebuild the canonical image afterwards (or write the
+hardware image elsewhere).
 

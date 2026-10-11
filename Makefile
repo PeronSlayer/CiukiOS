@@ -11,7 +11,8 @@ SDK_ARCHIVE ?= build/downloads/newlib/newlib-4.5.0.20241231.tar.gz
 SDK_ARGS ?= --archive $(SDK_ARCHIVE) --jobs 2
 SDK_INPUTS = $(shell find sdk -type f ! -path '*/__pycache__/*') \
              scripts/build_sdk.sh scripts/build_kernel.py config/sdk-pins.json \
-             config/toolchain.json src/kernel/include/ciuki/abi.h $(wildcard $(SDK_ARCHIVE))
+             config/toolchain.json src/kernel/include/ciuki/abi.h apps/desktop/protocol.h \
+             $(wildcard $(SDK_ARCHIVE))
 LUA_SOURCE_ARCHIVE ?= build/downloads/newlib/lua-5.4.8.tar.gz
 LUA_TESTS_ARCHIVE ?= build/downloads/newlib/lua-5.4.8-tests.tar.gz
 LUA_ARGS ?= --source-archive $(LUA_SOURCE_ARCHIVE) --tests-archive $(LUA_TESTS_ARCHIVE) --jobs 2

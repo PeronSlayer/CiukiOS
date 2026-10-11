@@ -459,6 +459,7 @@ static int directory_walk(struct ntfs_ro *v, uint64_t ref, ntfs_ro_emit emit, vo
         if (u64(v->record+32)) return IO;
         v->entry.reference=node_ref; v->entry.size=u64(fn+48);
         v->entry.directory=(u16(v->record+22)&2)!=0; v->entry.name_space=fn[65];
+        v->entry.file_attributes=u32(fn+56);
         TRY(utf8_name(fn+66,units,v->entry.name));
         if (emit) { int err=emit(opaque,&v->entry); if (err) return err<0 ? err : -NTFS_RO_EINVAL; }
         f->pos+=len; f->descended=0;

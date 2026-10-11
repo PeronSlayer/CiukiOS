@@ -962,8 +962,10 @@ void desktop_spawn_host_init(int gate)
 }
 int desktop_spawn_host_output(void)
 {
+    /* Display 3, input 4, the f2-33 termination authority 5, then the output. */
+    CHECK(proc_authority_object(spawn_host_server->fds[5].object));
     int fd=surface_create(spawn_host_server,320,320,CIUKI_SURFACE_XRGB8888);
-    CHECK(fd==5);
+    CHECK(fd==6);
     CHECK(surface_map(spawn_host_server,fd,PROT_READ|PROT_WRITE)==CIUKI_MMAP_BASE+CIUKI_TLS_SIZE);
     return fd;
 }

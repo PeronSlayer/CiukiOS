@@ -53,6 +53,7 @@ struct task *g_current;
 static struct task *all_tasks, *idle_task;
 static uint32_t slice_left;
 uint32_t g_starvation_boosts;
+uint64_t g_idle_ticks;   /* f2-33: the extracted sched_tick counts idle ticks */
 volatile bool g_need_resched;
 static unsigned queued;
 void file_clock_tick(void) { }

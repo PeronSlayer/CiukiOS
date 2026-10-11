@@ -145,6 +145,44 @@ uint32_t pmm_alloc(void)
     return p ? p : pmm_alloc_zone(ZONE_DMA);
 }
 
+/* Physically contiguous run for mount-time parser workspaces (f4-04). NORMAL
+ * zone first, then DMA; never LOW. The run is freed page by page with
+ * pmm_free(). Returns the physical base or 0; the page allocator hint is
+ * untouched, so ordinary single-page allocation behavior does not change. */
+uint32_t pmm_alloc_contig(uint32_t pages)
+{
+    static const uint32_t lo[3] = { 0, 256, 4096 }, hi[3] = { 256, 4096, PMM_MAX_PAGES };
+    if (!pages)
+        return 0;
+    uint32_t f = irq_save();
+    for (int zone = ZONE_NORMAL; zone >= ZONE_DMA; zone--) {
+        if (zone_free[zone] < pages)
+            continue;
+        uint32_t run = 0;
+        for (uint32_t pfn = lo[zone]; pfn < hi[zone]; pfn++) {
+            if ((pfn & 31) == 0 && bitmap[pfn >> 5] == 0xFFFFFFFFu) {
+                pfn += 31;
+                run = 0;
+                continue;
+            }
+            if (used(pfn)) {
+                run = 0;
+                continue;
+            }
+            if (++run == pages) {
+                uint32_t start = pfn + 1 - pages;
+                for (uint32_t i = start; i <= pfn; i++)
+                    set_used(i);
+                zone_free[zone] -= pages;
+                irq_restore(f);
+                return start << 12;
+            }
+        }
+    }
+    irq_restore(f);
+    return 0;
+}
+
 void pmm_free(uint32_t phys)
 {
     uint32_t pfn = phys >> 12;

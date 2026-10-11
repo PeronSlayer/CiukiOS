@@ -23,6 +23,19 @@ struct dosvm_config {
     bool disable_umb;
     const char *probe; /* record owner for admission/stop/guest rows; NULL = "vm-boot" */
 };
+/* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
+ * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after
+ * a window claims focus. Kernel trusted transport supplies the VM key. */
+struct ciuki_input_event;
+bool dosvm_input_focus(struct dosvm_key, bool focused);
+bool dosvm_input_event(struct dosvm_key, const struct ciuki_input_event *);
+struct dosvm_device_info {
+    uint64_t host_ticks, pit_clocks, pit_edges, pit_dropped_ticks, key_overflows;
+    uint32_t queued_bytes, held_keys, buttons;
+    uint8_t irr[2], isr[2], imr[2];
+    uint32_t delivered[16], last_vector, pic_base[2];
+};
+bool dosvm_device_info(struct dosvm_key, struct dosvm_device_info *);
 struct dosvm_admission {
     uint64_t free_bytes, reserved_bytes, resident_bytes, outstanding_bytes;
     uint32_t requested_bytes, headroom_bytes;
@@ -41,6 +54,7 @@ struct dosvm_info {
     uint32_t pool_quota, pool_used;
     bool memory_done, memory_pass;
     uint32_t xms_calls, ems_calls;
+    uint32_t video_stage, video_flags; /* f3-02 VMVIDEO.COM "VMVIDEO s f" latch */
 };
 struct dosvm_ledger { uint32_t vms, tasks, pages, handles, devices; uint64_t reserved, resident; };
 /* Pure arithmetic uses free physical bytes AFTER firmware/kernel/driver,
@@ -69,11 +83,20 @@ bool dosvm_irq_raise(struct dosvm_key, unsigned irq);
 bool dosvm_keyboard(struct dosvm_key, uint16_t bios_key);
 void dosvm_tick(void); /* host timer hook; bounded, no allocations or I/O */
 const uint16_t *dosvm_text(const struct dosvm *, unsigned *cursor);
+/* f3-02: SHA-256 of the complete 640x480 XRGB presenter frame at the given
+ * blink/cursor clock, without a window surface; mode is BDA 0049h. */
+struct dosvm_frame { uint8_t digest[32]; uint32_t width, height, scale, mode, text; };
+int dosvm_frame_digest(struct dosvm *, uint64_t tick, struct dosvm_frame *);
 /* Host-testable private-sector and BIOS boundaries. */
 int dosvm_disk_read(struct dosvm *, uint32_t lba, void *sector);
 int dosvm_disk_write(struct dosvm *, uint32_t lba, const void *sector);
 int dosvm_bios(struct dosvm *, struct v86_frame *, uint8_t vector);
 int dosvm_record_byte(struct dosvm *, uint8_t byte);
+/* f3-02 native window owner boundary (dosvm_client.c): syscall 70 and the
+ * supervisor's owner-death collection. No physical input or display grant. */
+int32_t dosvm_client_syscall(struct trap_frame *);
+void dosvm_client_poll(void);
+struct dosvm *dosvm_client_first(uint32_t *owner_pid);
 /* Scheduler/arch ownership hooks, identity for every other task. */
 bool dosvm_trap(struct trap_frame *);
 uint32_t dosvm_task_cr3(const struct task *, uint32_t normal);

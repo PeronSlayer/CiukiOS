@@ -5,6 +5,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/supervisor.h>
 #include <ciuki/signal.h>
 
 static const struct ciuki_file_ops *file_ops;
@@ -332,6 +333,8 @@ int proc_spawn(uint32_t args_va)
             err = -EINTR;
             goto out;
         }
+        if (supervisor_dosvm_delegate)
+            supervisor_dosvm_delegate(self->process, op->child, path);
         proc_publish(op->child, a.flags);
         err = (int)op->child->pid;
         op->child = 0;

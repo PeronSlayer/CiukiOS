@@ -229,7 +229,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
 }
 /* Programs that open a desktop window receive their channel at fd 3. */
 int desk_program_graphical(const char *name)
-{ return !strcmp(name,"demo") || !strcmp(name,"files") || !strcmp(name,"tasks") || !strcmp(name,"ciuknote"); }
+{ return !strcmp(name,"demo") || !strcmp(name,"dosbox") || !strcmp(name,"files") || !strcmp(name,"tasks") || !strcmp(name,"ciuknote"); }
 const char *desk_program_label(const char *name)
 {
     return !strcmp(name,"demo") ? "Ciuki Demo" : !strcmp(name,"files") ? "Files" : !strcmp(name,"tasks") ? "Task Manager" :

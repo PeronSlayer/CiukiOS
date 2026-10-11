@@ -958,6 +958,2692 @@
           }
         ]
       }
+    },
+    {
+      "id": "vm-devices-qemu-t23",
+      "probe": "vm-devices",
+      "profile": "qemu-t23",
+      "selector": "f3:vm-devices run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cli"
+            },
+            "fields": {
+              "preemptible": {
+                "eq": 1
+              },
+              "host_ticks": {
+                "ge": 100
+              },
+              "pit_edges": {
+                "ge": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "guest_ticks": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "timer"
+            },
+            "fields": {
+              "ticks": {
+                "ge": 64
+              },
+              "host_ticks": {
+                "ge": 40,
+                "le": 250
+              },
+              "sti_shadow": {
+                "eq": 1
+              },
+              "isr0": {
+                "eq": 1
+              },
+              "cap": {
+                "eq": 64
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "shadow"
+            },
+            "fields": {
+              "mov_ss": {
+                "eq": 1
+              },
+              "masked_pending": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input"
+            },
+            "fields": {
+              "keyboard": {
+                "eq": 1
+              },
+              "hlt_wake": {
+                "eq": 1
+              },
+              "focus_release": {
+                "eq": 1
+              },
+              "callbacks": {
+                "ge": 1
+              },
+              "keys": {
+                "ge": 3
+              },
+              "held": {
+                "eq": 0
+              },
+              "buttons": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "malformed_io": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "heartbeat": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-devices-qemu-e500",
+      "probe": "vm-devices",
+      "profile": "qemu-e500",
+      "selector": "f3:vm-devices run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cli"
+            },
+            "fields": {
+              "preemptible": {
+                "eq": 1
+              },
+              "host_ticks": {
+                "ge": 100
+              },
+              "pit_edges": {
+                "ge": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "guest_ticks": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "timer"
+            },
+            "fields": {
+              "ticks": {
+                "ge": 64
+              },
+              "host_ticks": {
+                "ge": 40,
+                "le": 250
+              },
+              "sti_shadow": {
+                "eq": 1
+              },
+              "isr0": {
+                "eq": 1
+              },
+              "cap": {
+                "eq": 64
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "shadow"
+            },
+            "fields": {
+              "mov_ss": {
+                "eq": 1
+              },
+              "masked_pending": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input"
+            },
+            "fields": {
+              "keyboard": {
+                "eq": 1
+              },
+              "hlt_wake": {
+                "eq": 1
+              },
+              "focus_release": {
+                "eq": 1
+              },
+              "callbacks": {
+                "ge": 1
+              },
+              "keys": {
+                "ge": 3
+              },
+              "held": {
+                "eq": 0
+              },
+              "buttons": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "malformed_io": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "heartbeat": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-devices-qemu-min128",
+      "probe": "vm-devices",
+      "profile": "qemu-min128",
+      "selector": "f3:vm-devices run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cli"
+            },
+            "fields": {
+              "preemptible": {
+                "eq": 1
+              },
+              "host_ticks": {
+                "ge": 100
+              },
+              "pit_edges": {
+                "ge": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "guest_ticks": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "timer"
+            },
+            "fields": {
+              "ticks": {
+                "ge": 64
+              },
+              "host_ticks": {
+                "ge": 40,
+                "le": 250
+              },
+              "sti_shadow": {
+                "eq": 1
+              },
+              "isr0": {
+                "eq": 1
+              },
+              "cap": {
+                "eq": 64
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "shadow"
+            },
+            "fields": {
+              "mov_ss": {
+                "eq": 1
+              },
+              "masked_pending": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input"
+            },
+            "fields": {
+              "keyboard": {
+                "eq": 1
+              },
+              "hlt_wake": {
+                "eq": 1
+              },
+              "focus_release": {
+                "eq": 1
+              },
+              "callbacks": {
+                "ge": 1
+              },
+              "keys": {
+                "ge": 3
+              },
+              "held": {
+                "eq": 0
+              },
+              "buttons": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "malformed_io": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "heartbeat": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-video-qemu-t23",
+      "probe": "vm-video",
+      "profile": "qemu-t23",
+      "selector": "f3:vm-video run={run_id}",
+      "timeout": 600,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 8388608
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "prompt": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "prompt"
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              }
+            },
+            "required_fields": [
+              "digest"
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 1
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 1
+              },
+              "flags": {
+                "eq": 3
+              },
+              "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 2
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 1
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "c4ac397792548fb0228a889fd7567275dd8148637fa48405fef5386851fdf12c"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 3
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 200
+              },
+              "scale": {
+                "eq": 2
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 1
+              },
+              "digest": "c019f0109e614d8ae01d35638587b23d92148b8d442dfd0deba73fe3a6df527c"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 4
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 240
+              },
+              "scale": {
+                "eq": 2
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "a6d61fa11188a1e81da20dc5f018ee49c264fa0beb004587970b061058d3742a"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 5
+            },
+            "fields": {
+              "mode": {
+                "eq": 18
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 480
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "81daa6ab021444158a8c45f09c72de3b13ee45d7ddf22c920a65ac496a4ec9c2"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame"
+            },
+            "exact_count": 5,
+            "unique": "stage"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "return"
+            },
+            "fields": {
+              "stage": {
+                "eq": 6
+              },
+              "prompt": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_stop"
+            },
+            "fields": {
+              "reason": {
+                "eq": 0
+              },
+              "vector": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "data_loss": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "frames": {
+                "eq": 5
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-video-qemu-e500",
+      "probe": "vm-video",
+      "profile": "qemu-e500",
+      "selector": "f3:vm-video run={run_id}",
+      "timeout": 600,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 8388608
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "prompt": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "prompt"
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              }
+            },
+            "required_fields": [
+              "digest"
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 1
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 1
+              },
+              "flags": {
+                "eq": 3
+              },
+              "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 2
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 1
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "c4ac397792548fb0228a889fd7567275dd8148637fa48405fef5386851fdf12c"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 3
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 200
+              },
+              "scale": {
+                "eq": 2
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 1
+              },
+              "digest": "c019f0109e614d8ae01d35638587b23d92148b8d442dfd0deba73fe3a6df527c"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 4
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 240
+              },
+              "scale": {
+                "eq": 2
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "a6d61fa11188a1e81da20dc5f018ee49c264fa0beb004587970b061058d3742a"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 5
+            },
+            "fields": {
+              "mode": {
+                "eq": 18
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 480
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "81daa6ab021444158a8c45f09c72de3b13ee45d7ddf22c920a65ac496a4ec9c2"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame"
+            },
+            "exact_count": 5,
+            "unique": "stage"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "return"
+            },
+            "fields": {
+              "stage": {
+                "eq": 6
+              },
+              "prompt": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_stop"
+            },
+            "fields": {
+              "reason": {
+                "eq": 0
+              },
+              "vector": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "data_loss": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "frames": {
+                "eq": 5
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-video-qemu-min128",
+      "probe": "vm-video",
+      "profile": "qemu-min128",
+      "selector": "f3:vm-video run={run_id}",
+      "timeout": 600,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 8388608
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "boot"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "prompt": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "prompt"
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              }
+            },
+            "required_fields": [
+              "digest"
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 1
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 1
+              },
+              "flags": {
+                "eq": 3
+              },
+              "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 2
+            },
+            "fields": {
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 1
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "c4ac397792548fb0228a889fd7567275dd8148637fa48405fef5386851fdf12c"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 3
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 200
+              },
+              "scale": {
+                "eq": 2
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 1
+              },
+              "digest": "c019f0109e614d8ae01d35638587b23d92148b8d442dfd0deba73fe3a6df527c"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 4
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 240
+              },
+              "scale": {
+                "eq": 2
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "a6d61fa11188a1e81da20dc5f018ee49c264fa0beb004587970b061058d3742a"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 5
+            },
+            "fields": {
+              "mode": {
+                "eq": 18
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 480
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 0
+              },
+              "flags": {
+                "eq": 0
+              },
+              "digest": "81daa6ab021444158a8c45f09c72de3b13ee45d7ddf22c920a65ac496a4ec9c2"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame"
+            },
+            "exact_count": 5,
+            "unique": "stage"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "return"
+            },
+            "fields": {
+              "stage": {
+                "eq": 6
+              },
+              "prompt": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_stop"
+            },
+            "fields": {
+              "reason": {
+                "eq": 0
+              },
+              "vector": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "data_loss": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "frames": {
+                "eq": 5
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-window-qemu-desktop-2002",
+      "probe": "vm-window",
+      "profile": "qemu-desktop-2002",
+      "selector": "f3:vm-window run={run_id}",
+      "timeout": 600,
+      "window_screen": {
+        "action": "window_screen",
+        "delay_ms": 2000,
+        "origin": [
+          23,
+          76
+        ],
+        "size": [
+          640,
+          480
+        ],
+        "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+      },
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "window_input"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 700
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 500
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "backslash"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "backslash"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "v"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "v"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "v"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "v"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "d"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "d"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "c"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "c"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "window"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "prompt": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "vm",
+              "client",
+              "desktop"
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "window_input"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 1
+            },
+            "fields": {
+              "typed": "window",
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 1
+              },
+              "flags": {
+                "eq": 3
+              },
+              "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "window_screen"
+            },
+            "fields": {
+              "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "closed"
+            },
+            "fields": {
+              "reason": {
+                "eq": 0
+              },
+              "dead": {
+                "eq": 1
+              },
+              "window_released": {
+                "eq": 1
+              },
+              "client_live": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_stop"
+            },
+            "fields": {
+              "reason": {
+                "eq": 0
+              },
+              "vector": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "data_loss": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              },
+              "objects": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "surfaces",
+              "grants",
+              "channels"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-window-qemu-desktop-1998",
+      "probe": "vm-window",
+      "profile": "qemu-desktop-1998",
+      "selector": "f3:vm-window run={run_id}",
+      "timeout": 600,
+      "window_screen": {
+        "action": "window_screen",
+        "delay_ms": 2000,
+        "origin": [
+          23,
+          76
+        ],
+        "size": [
+          640,
+          480
+        ],
+        "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+      },
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "window_input"
+          },
+          "batches": [
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 700
+                  }
+                },
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 500
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "backslash"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "backslash"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "v"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "v"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "v"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "v"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "i"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "d"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "d"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "e"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "dot"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "c"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "c"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "m"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "shift"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            },
+            {
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ],
+              "pause_ms": 40
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "window"
+            },
+            "fields": {
+              "ready": {
+                "eq": 1
+              },
+              "prompt": {
+                "eq": 1
+              }
+            },
+            "required_fields": [
+              "vm",
+              "client",
+              "desktop"
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "window_input"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": 1
+            },
+            "fields": {
+              "typed": "window",
+              "mode": {
+                "eq": 3
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "scale": {
+                "eq": 1
+              },
+              "text": {
+                "eq": 1
+              },
+              "flags": {
+                "eq": 3
+              },
+              "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "ARM",
+              "action": "window_screen"
+            },
+            "fields": {
+              "digest": "0893476bb8b2355dd506ca57bba164a2a7b607df49280278f1b3f857e95424de"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "closed"
+            },
+            "fields": {
+              "reason": {
+                "eq": 0
+              },
+              "dead": {
+                "eq": 1
+              },
+              "window_released": {
+                "eq": 1
+              },
+              "client_live": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_stop"
+            },
+            "fields": {
+              "reason": {
+                "eq": 0
+              },
+              "vector": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "data_loss": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              },
+              "objects": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1,
+            "required_fields": [
+              "surfaces",
+              "grants",
+              "channels"
+            ]
+          }
+        ]
+      }
     }
   ]
 }

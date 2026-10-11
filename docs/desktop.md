@@ -297,6 +297,17 @@ Host tests: `python3 -B -m unittest discover -s tests/host/desktop`. Rendered
 frames are pinned by SHA-256 in `tests/host/desktop/test_deskui.py`; a visual
 change must be reviewed and re-pinned.
 
+## f3-02 additions (2026-10-11)
+
+`/bin/dosbox` (apps/dosbox) is an ordinary protocol-v2 client that owns one
+DOS virtual machine through syscall 72 (execution-abi.md, F3-02 amendment);
+the kernel renders the VM into the client's 640x480 surface and the desktop
+composites it unchanged. The menu lists it from `/bin` like any program and
+passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/bin` menu
+program at shell start through the menu-click path; the `f3:vm-window` probe
+uses it. Menu click offsets for the scripted cases follow the formula in
+docs/design/f2-acceptance.md, section F2-33. Details: docs/design/f3-acceptance.md, section f3-02.
+
 ## f2-30 decisions (2026-10-11)
 
 Research precedes the shell implementation. The [POSIX spawn specification](https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_spawn.html)
