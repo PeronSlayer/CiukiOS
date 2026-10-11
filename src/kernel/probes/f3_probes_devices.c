@@ -67,7 +67,7 @@ static int probe_f3_devices(void)
     struct dosvm *v=0,*w=0; struct task *native=0; uint32_t heartbeat=0;
     struct devices_mail m={0}; struct dosvm_device_info before={0},after={0};
     struct dosvm_ledger baseline, final; dosvm_snapshot(&baseline);
-    const struct dosvm_config config={.commitment=DOSVM_LOW_CAP};
+    const struct dosvm_config config={.commitment=DOSVM_LOW_CAP,.probe="vm-devices"};
     int error=storage_enable_write(storage_get(),2);
     if (error) goto cleanup;
     native=devices_heartbeat(&heartbeat); if (!native) { error=-ENOMEM; goto cleanup; }
