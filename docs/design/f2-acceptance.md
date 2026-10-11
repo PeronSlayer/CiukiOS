@@ -489,7 +489,11 @@ interaction. The script opens the Ciuki menu, launches Files (which receives
 `--test=files` and moves its frame to 4,36), chooses View > List (dates depend
 on build and run time), clicks Places > System, File > New Folder, types
 "Ciuki" + Enter, selects BOOT.CFG by typing `b`, Ctrl+C, `c`, Enter (opens
-Ciuki), Ctrl+V, Del, Enter (Yes), then Alt+F4 and `a`. Files sends each
+Ciuki), Ctrl+V, Del, Enter (Yes), then Alt+F4 (Files' File > Close) and `a`.
+The kernel reports a PS/2 packet's X motion before its Y motion, so a diagonal
+move passes through (x1, y0): inside the menus the script moves vertically
+first (the first script's direct move from View to List crossed the Go title
+and opened Go; checkpoint 1 never came). Files sends each
 milestone (1 /system shown, 2 folder created, 3 renamed, 4 copy done, 5 delete
 done) as a PING with serial 0xF2310000+N in the turn after the frame's DAMAGE;
 the desktop presents that frame and reports one checkpoint per report; the
@@ -502,7 +506,9 @@ requires a clean fsck and `CIUKI` in `::/SYSTEM`. The five `pixel_digest`
 fields hold the placeholder `PIN-FROM-FIRST-RUN`: the lead pins them from the
 first run's records (the case fails until then). The host test
 `tests/host/desktop/test_deskui.py` checks that the script's relative moves
-land on the targets computed from the real Files layout.
+land on the targets computed from the real Files layout, and
+`tests/host/desktop/test_desktop.py` (`AppCaseReplayTests`) replays the whole
+case through the production desktop and Files (docs/desktop.md).
 
 Host evidence: `python3 -B -m unittest discover -s tests/host/desktop`
 (toolkit geometry/hit-testing/input/menus/dialogs/timers and 9 pinned frames;
@@ -686,11 +692,14 @@ at the post-fault interaction ARM:
 3. Alt+N, `demo`, Enter: Task Manager's New Task sends the v2 LAUNCH request;
    the desktop launches `/bin/demo` as its own child (stage 3), whose window
    follows (stage 4). Task Manager selects the launched PID's row.
-4. The script clamps to the top-left corner and clicks Task Manager's title
-   at (300, 50) (test mode places its frame at (8, 40)) to take keyboard
-   focus back from the demo window, then Alt+E (End Task) sends END_TASK for
-   the demo's window: the desktop requests its close (stage 5); the demo
-   acknowledges and exits 0 and the desktop reaps it (stage 6).
+4. While the demo starts, the script's waits move the pointer onto Task
+   Manager's taskbar button (300, 751: slot 1 of three windows, x 244..403)
+   and clicks it to take keyboard focus back from the demo window (a click
+   into Task Manager's client area would be hit-tested at a stale pointer
+   position: the desktop sends a newly focused client no MOTION before the
+   BUTTON), then Alt+E (End Task) sends END_TASK for the demo's window: the
+   desktop requests its close (stage 5); the demo acknowledges and exits 0
+   and the desktop reaps it (stage 6).
 5. Task Manager's next 0.5 s refresh no longer finds the PID in call 70;
    it then requires call 71 with its delegated descriptor to refuse the
    ended PID (ESRCH, which also proves the descriptor is a valid authority
@@ -700,7 +709,12 @@ at the post-fault interaction ARM:
    desktop live) and reaches stage 7 (`DESK_TASKS_DONE`).
 6. Only then do the two A edges count, so `keys=4` proves the whole sequence;
    omission or failure at any step leaves `keys=0` and the 15 s interaction
-   window expires (`changed=0`). The script's pauses total 9.24 s.
+   window expires (`changed=0`). The script has 40 batches (pauses 3.2 s;
+   several key taps per batch): the first script's 107 batches needed about
+   31 s at the pace measured in the first QEMU run of `files-qemu-t23`
+   (0.33 s per 100 ms batch), twice the 15 s window, which applies to this
+   case because it reports no app flag; the host replay puts the new script's
+   last batch at about 11 s at that pace.
 
 Task Manager stays open for the post-input screendump (400x420 content,
 frame x 8..414, y 40..487 at 1024x768): it covers neither the upper-right portrait region

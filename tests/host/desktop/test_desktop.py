@@ -1,9 +1,11 @@
 """Native production desktop tests with fake surfaces/channels; never boots QEMU."""
 # SPDX-License-Identifier: MIT
+import concurrent.futures
 import hashlib
 import json
 import importlib.util
 import os
+import re
 import shutil
 from pathlib import Path
 import subprocess
@@ -14,6 +16,27 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
+
+# Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
+QCODES = {**{c: s for c, s in zip("qwertyuiop", range(0x10, 0x1a))}, **{c: s for c, s in zip("asdfghjkl", range(0x1e, 0x27))},
+          **{c: s for c, s in zip("zxcvbnm", range(0x2c, 0x33))}, **{c: s for c, s in zip("1234567890", range(0x02, 0x0c))},
+          "spc": 0x39, "ret": 0x1c, "esc": 0x01, "tab": 0x0f, "backspace": 0x0e, "shift": 0x2a, "ctrl": 0x1d, "alt": 0x38,
+          "dot": 0x34, "slash": 0x35, "comma": 0x33, "minus": 0x0c, "f1": 0x3b, "f2": 0x3c, "f4": 0x3e, "f5": 0x3f,
+          "f9": 0x43, "f10": 0x44, "f11": 0x57, "f12": 0x58, "up": 0x148, "down": 0x150, "left": 0x14b, "right": 0x14d,
+          "home": 0x147, "end": 0x14f, "delete": 0x153}
+# Pacing and guest-speed models of tests/host/desktop/app_replay.c.
+REPLAY_MODELS = {
+    # The declared pauses; a launched program's first turn 0.8 s after its spawn.
+    "declared": ["--start-delay-ms", "800"],
+    # The first QEMU run of files-qemu-t23 (2026-10-11): 0.19 s per 60 ms batch and 0.33 s per 100 ms batch
+    # (runner loop plus QMP under TCG); programs ready 2.5 s after their spawn; slower desktop and program turns.
+    "measured": ["--overhead-ms", "90", "--pause-scale-pct", "240", "--start-delay-ms", "2500",
+                 "--desktop-cost-ms", "60", "--app-cost-ms", "20"],
+}
+# The probe's interaction window (src/kernel/probes/f2_probes_desktop.c): 15 s, 40 s once an app case
+# (files=1/note=1) reports. The Task Manager scenario sends no app flag, so it keeps 15 s.
+TASKS_WINDOW_S = 15
+APP_WINDOW_S = 40
 
 
 def load(name, path):
@@ -202,6 +225,139 @@ class DesktopTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "stale desktop"):
                     build.validate_payloads()
         print("PASS stale/tampered portrait rejected before image payload acceptance")
+
+
+class AppCaseReplayTests(unittest.TestCase):
+    """files-qemu-t23, tasks-qemu-t23 and ciuknote-qemu-t23 replayed on the host: their exact QMP batches,
+    through a model of QEMU's PS/2 devices and the kernel's i8042 decoder, into the production desktop (gate
+    mode, the probe's interaction stage, scenario keys and launches) and the production Files, CiukNote,
+    Task Manager and demo with libdeskui at the 1024x768 geometry of the QEMU profiles. See app_replay.c
+    for what the virtual kernel models and what it does not."""
+    @classmethod
+    def setUpClass(cls):
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        cls.temp = tempfile.TemporaryDirectory(prefix="desktop-replay-", dir=parent)
+        folder = Path(cls.temp.name)
+        cls.env = dict(os.environ, TMPDIR=str(folder), ASAN_OPTIONS="detect_leaks=0")
+        include = folder / "include/ciuki"
+        include.mkdir(parents=True)
+        for name in ("channel.h", "surface.h", "spawn.h", "proc.h"):
+            shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, include / name)
+        # Host stand-ins: CU_PTR keeps the whole pointer, the report call takes it (desktop_gate_test.c does the same).
+        (include / "runtime.h").write_text("/* app replay */\n#include <ciuki/abi.h>\n#include <stdint.h>\n"
+                                           "#define CU_PTR(p) ((uintptr_t)(p))\n"
+                                           "static inline int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }\n")
+        (include / "raw.h").write_text("/* app replay */\n#include <stdint.h>\n"
+                                       "uint32_t ciuki_raw_probe_report(uintptr_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);\n")
+        common = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-Wno-macro-redefined",
+                  "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                  "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/libdeskui"),
+                  "-I", str(ROOT / "apps/tasks"), "-I", str(ROOT / "src/kernel/include")]
+        host = ROOT / "tests/host/desktop"
+        os_calls = ["-D_DEFAULT_SOURCE", "-include", str(host / "replay_os.h")]   # the replay's virtual kernel
+        posix = ["-D_POSIX_C_SOURCE=200809L"]
+        units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
+                 *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor")),
+                 *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
+                 ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
+                 ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
+                 ("files_app", posix, ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
+                 ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),
+                 ("note_app", posix, ROOT / "apps/ciuknote/app.c"), ("note_doc", posix, ROOT / "apps/ciuknote/doc.c"),
+                 ("tasks_main", os_calls + ["-Dmain=tasks_main"], ROOT / "apps/tasks/tasks.c"),
+                 ("tasks_model", posix, ROOT / "apps/tasks/model.c"), ("tasks_view", posix, ROOT / "apps/tasks/view.c"),
+                 ("demo", os_calls + ["-Dmain=demo_main"], ROOT / "apps/demo/demo.c"),
+                 ("fake_vfs", posix, host / "fake_vfs.c"),
+                 ("harness", ["-D_DEFAULT_SOURCE"], host / "app_replay.c")]
+        def compile_unit(unit):
+            name, flags, source = unit
+            target = folder / f"{name}.o"
+            subprocess.run([*common, *flags, "-c", str(source), "-o", str(target)], check=True, env=cls.env)
+            return target
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+            objects = list(pool.map(compile_unit, units))
+        cls.binary = folder / "app_replay"
+        subprocess.run(["clang", "-fsanitize=address,undefined", "-pthread", *map(str, objects), "-o", str(cls.binary)],
+                       check=True, env=cls.env)
+        cls.suite = json.loads((ROOT / "tests/suites/f2-desktop.json").read_text())
+        # The image's /bin, as the desktop scans it (the menu lists it without the desktop itself).
+        cls.programs = sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def replay(self, case_id, kind, model):
+        case = next(c for c in self.suite["cases"] if c["id"] == case_id)
+        lines = []
+        for batch in case["actions"][0]["batches"]:
+            lines.append(f"B {batch['pause_ms']}")
+            for event in batch["events"]:
+                data = event["data"]
+                if event["type"] == "key": lines.append(f"K {QCODES[data['key']['data']]} {int(data['down'])}")
+                elif event["type"] == "rel": lines.append(f"R {0 if data['axis'] == 'x' else 1} {data['value']}")
+                elif event["type"] == "btn": lines.append(f"M {('left', 'right', 'middle').index(data['button']) + 1} {int(data['down'])}")
+                else: self.fail(event)
+        script = Path(self.temp.name) / f"{case_id}.script"
+        script.write_text("\n".join(lines) + "\n")
+        result = subprocess.run([str(self.binary), "--script", str(script), "--case", kind, "--bin", ",".join(self.programs),
+                                 "--limit-s", "200", *REPLAY_MODELS[model]],
+                                capture_output=True, text=True, env=self.env, timeout=300)
+        self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr[-4000:])
+        out = {"checkpoints": [], "system": [], "text": result.stdout}
+        for line in result.stdout.splitlines():
+            head, _, rest = line.partition(" ")
+            if head == "CHECKPOINT_AT": out["checkpoints"].append((int(rest.split()[0]), float(rest.split()[1])))
+            elif head == "SYSTEM": out["system"].append(rest)
+            elif head == "FILE": out["file"] = rest.split()
+            elif head in ("PROBE", "GATE", "PS2", "TIMING", "RESULT", "DESKTOP"):
+                out[head] = dict(kv.split("=", 1) for kv in re.findall(r'(\w+=(?:"[^"]*"|\S+))', rest))
+        print(f"REPLAY {case_id} {model}: " + " | ".join(l for l in result.stdout.splitlines()
+                                                         if l.startswith(("PROBE", "GATE", "PS2", "TIMING", "CHECKPOINT_AT"))))
+        return case, out
+
+    def check(self, case_id, kind, checkpoints, window):
+        for model in REPLAY_MODELS:
+            with self.subTest(model=model):
+                case, out = self.replay(case_id, kind, model)
+                self.assertEqual(out["RESULT"]["success"], "1", out["text"][-3000:])
+                # Every checkpoint, in order, each reported once (the probe's checkpoint_order rule).
+                self.assertEqual([n for n, _ in out["checkpoints"]], list(range(1, checkpoints + 1)))
+                self.assertEqual(int(out["PROBE"]["checkpoint"]), checkpoints)
+                after = next(p for p in case["expected"]["predicates"] if p["where"].get("stage") == "after")
+                self.assertEqual(int(out["PROBE"]["keys"]), after["fields"]["keys"]["eq"])
+                gate = {k: int(v) for k, v in out["GATE"].items()}
+                self.assertGreaterEqual(gate["keys"], 2)
+                self.assertGreaterEqual(gate["buttons"], 2)
+                self.assertGreaterEqual(gate["motion"], 1)
+                # Nothing the QEMU PS/2 queues would drop or carry into a later batch.
+                self.assertEqual(out["PS2"]["dropped_bytes"], "0")
+                self.assertEqual(out["PS2"]["leftover_batches"], "0")
+                timing = out["TIMING"]
+                self.assertEqual(timing["batches"].split("/")[0], timing["batches"].split("/")[1])
+                # The probe ENDs 3 s after its interaction record: the runner must have sent every batch by then.
+                self.assertLessEqual(float(timing["last_batch"]), float(timing["success"]) + 3.0)
+                self.assertLess(float(timing["success"]), window - 1.0)
+                yield model, out
+
+    def test_files_case_replay(self):
+        for _, out in self.check("files-qemu-t23", "files", 5, APP_WINDOW_S):
+            self.assertEqual(out["DESKTOP"]["app_done"], "1")
+            # The host checker lists ::/SYSTEM for CIUKI (the renamed folder); the copy was deleted again.
+            self.assertIn("Ciuki", out["system"])
+
+    def test_tasks_case_replay(self):
+        for _, out in self.check("tasks-qemu-t23", "tasks", 0, TASKS_WINDOW_S):
+            self.assertEqual(out["DESKTOP"]["tasks_stage"], "7")
+
+    def test_ciuknote_case_replay(self):
+        case = next(c for c in self.suite["cases"] if c["id"] == "ciuknote-qemu-t23")
+        for _, out in self.check("ciuknote-qemu-t23", "ciuknote", 3, APP_WINDOW_S):
+            self.assertEqual(out["DESKTOP"]["app_done"], "1")
+            path, data = out["file"]
+            self.assertEqual(path, "/system/tests/note.txt")
+            self.assertEqual(hashlib.sha256(bytes.fromhex(data)).hexdigest(), case["checks"]["files"][0]["sha256"])
 
 
 if __name__ == "__main__":

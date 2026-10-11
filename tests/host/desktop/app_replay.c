@@ -1,0 +1,832 @@
+/* SPDX-License-Identifier: MIT
+ * Host replay of the desktop app cases of tests/suites/f2-desktop.json
+ * (files-qemu-t23, tasks-qemu-t23, ciuknote-qemu-t23).
+ *
+ * The production desktop (gate mode, crash-isolation probe interaction stage),
+ * the survivor demo and every program the desktop launches (Files, CiukNote,
+ * Task Manager, demo) run unchanged as threads of this process. Exactly one
+ * runs at a time: each is a process of a small virtual kernel whose scheduler
+ * hands a baton over at every nanosleep, so a run is deterministic and its
+ * clock is virtual. The kernel side is faithful where the cases depend on it:
+ * channels (64-message queues, kernel-stamped sender PIDs, descriptor
+ * passing, EOF/EPIPE on close), surfaces shared by mapping, spawn with
+ * explicit descriptor mappings and process groups, waitpid/kill, call 70/71,
+ * the probe's GATE_INTERACT/ARM sequence and report checks.
+ *
+ * Input follows the same path as in QEMU: each runner batch goes through a
+ * model of QEMU's PS/2 devices (16-byte queues per batch: at most five 3-byte
+ * mouse packets, deltas clamped to +-127 per packet, button state sampled at
+ * the batch's sync; set-2 key bytes, E0 prefixes, F0 breaks) and of the
+ * kernel's i8042 decoder (per-axis REL events, inverted Y, button edges after
+ * the packet's motion, unshifted TEXT after key downs), then reaches the
+ * desktop through ciuki_input_read. QEMU sources: hw/input/ps2.c
+ * (ps2_queue_noirq, ps2_mouse_send_packet, ps2_mouse_sync) and ui/input.c
+ * (qmp_input_send_event syncs once per command), checked 2026-10-11.
+ *
+ * Not covered: the kernel's real scheduler and timings (turn costs and start
+ * delays are parameters), pixel digests (the lead pins them from QEMU), the
+ * FAT driver (the Files and CiukNote file systems are the fake image tree of
+ * fake_vfs.c), and the write gate (always open here).
+ *
+ *   app_replay --script F --case files|tasks|ciuknote --bin a,b,c [options]
+ */
+#include "replay_base.h"
+#include <assert.h>
+#include <pthread.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include "desktop.h"
+#include "gate.h"
+#include "fake_vfs.h"
+#include "../../../apps/ciuknote/doc.h"
+
+int desktop_main(int, char **);
+int files_main(int, char **);
+int ciuknote_main(int, char **);
+int tasks_main(int, char **);
+int demo_main(int, char **);
+extern struct desktop *replay_desktop;
+void replay_gate_counts(unsigned out[3]);
+
+#define MS 1000000ull
+#define MAX_PROCS 48
+#define MAX_FDS CIUKI_OPEN_MAX
+#define WIDTH 1024u
+#define HEIGHT 768u
+
+/* ---- options ----------------------------------------------------------- */
+static const char *case_name, *portrait_path;
+static char bin_list[512];
+static uint64_t overhead_ns, first_ns = 150 * MS, start_delay_ns, desktop_cost_ns = 20 * MS, app_cost_ns = 5 * MS;
+static unsigned pause_scale_pct = 100;
+static uint64_t limit_ns = 240000 * MS;
+static int trace;
+static const char *shots;   /* --shots DIR: the desktop frame before every batch with a button press (diagnosis) */
+
+/* ---- virtual kernel objects ---------------------------------------------- */
+enum kind { K_CHANNEL = 1, K_SURFACE, K_DISPLAY, K_INPUT, K_AUTHORITY, K_CONSOLE };
+struct chan;
+struct surface { struct ciuki_surface_info info; uint32_t *pixels; };
+struct obj { int kind, refs; struct chan *chan; int side; struct surface *surface; };
+struct qmsg { struct ciuki_message m; struct obj *attached[CIUKI_MESSAGE_FD_MAX]; };
+struct chan { struct qmsg q[2][CIUKI_CHANNEL_QUEUE_MAX]; unsigned head[2], count[2]; int open[2]; };
+struct fdent { struct obj *o; int cloexec, flags; };
+
+struct proc {
+    int used, pid, ppid, pgid, state;   /* state: CIUKI_PROC_LIVE, CIUKI_PROC_ZOMBIE, 0 reaped */
+    int status, killed, go;
+    char name[32];
+    pthread_t thread; pthread_cond_t cv;
+    uint64_t wake, cost, start;
+    int (*entry)(int, char **); int argc; char **argv; char **env;
+    struct fdent fd[MAX_FDS];
+};
+static struct proc procs[MAX_PROCS];
+static struct proc *cur;
+static pthread_mutex_t big = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sched_cv = PTHREAD_COND_INITIALIZER;
+static uint64_t vnow = 1000 * MS;
+static int next_pid = 3;
+static int desktop_pid, survivor_pid;
+static unsigned presents;
+
+static void fail(const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt);
+    printf("FAIL "); vprintf(fmt, ap); printf("\n");
+    va_end(ap); fflush(stdout); _exit(1);
+}
+static void note(const char *fmt, ...)
+{
+    if (!trace) return;
+    va_list ap; va_start(ap, fmt);
+    printf("[%8.3f] ", (double)vnow / 1e9); vprintf(fmt, ap); printf("\n");
+    va_end(ap);
+}
+
+static struct obj *obj_new(int kind)
+{
+    struct obj *o = calloc(1, sizeof(*o)); assert(o);
+    o->kind = kind; o->refs = 1; return o;
+}
+static void obj_put(struct obj *o)
+{
+    if (!o || --o->refs) return;
+    if (o->kind == K_CHANNEL) {
+        struct chan *c = o->chan;
+        c->open[o->side] = 0;
+        /* A closed reader drops its queue (and the descriptors in flight). */
+        while (c->count[o->side]) {
+            struct qmsg *q = &c->q[o->side][c->head[o->side]];
+            for (unsigned k = 0; k < q->m.fd_count; k++) obj_put(q->attached[k]);
+            c->head[o->side] = (c->head[o->side] + 1) % CIUKI_CHANNEL_QUEUE_MAX; c->count[o->side]--;
+        }
+        if (!c->open[0] && !c->open[1]) free(c);
+    }
+    /* Surfaces stay allocated: mappings outlive descriptors, as in the kernel. */
+    free(o);
+}
+static struct obj *fd_obj(struct proc *p, int fd)
+{
+    if (fd < 0 || fd >= MAX_FDS || !p->fd[fd].o) return NULL;
+    return p->fd[fd].o;
+}
+static int fd_install(struct proc *p, struct obj *o, int cloexec)
+{
+    for (int fd = 0; fd < MAX_FDS; fd++) if (!p->fd[fd].o) { p->fd[fd] = (struct fdent){o, cloexec, 0}; return fd; }
+    errno = EMFILE; return -1;
+}
+
+/* ---- scheduler ------------------------------------------------------------ */
+static _Noreturn void proc_exit(struct proc *p, int status)
+{
+    for (int fd = 0; fd < MAX_FDS; fd++) if (p->fd[fd].o) { obj_put(p->fd[fd].o); p->fd[fd].o = NULL; }
+    p->state = CIUKI_PROC_ZOMBIE; p->status = status;
+    note("exit pid=%d %s status=%#x", p->pid, p->name, status);
+    cur = NULL;
+    pthread_cond_signal(&sched_cv);
+    pthread_mutex_unlock(&big);
+    pthread_exit(NULL);
+}
+static void yield_until(uint64_t wake)
+{
+    struct proc *p = cur;
+    p->wake = wake;
+    cur = NULL;
+    pthread_cond_signal(&sched_cv);
+    while (!p->go) pthread_cond_wait(&p->cv, &big);
+    p->go = 0;
+    if (p->killed) proc_exit(p, p->killed);
+}
+static void *proc_thread(void *arg)
+{
+    struct proc *p = arg;
+    pthread_mutex_lock(&big);
+    while (!p->go) pthread_cond_wait(&p->cv, &big);
+    p->go = 0;
+    if (p->killed) proc_exit(p, p->killed);
+    int r = p->entry(p->argc, p->argv);
+    proc_exit(p, (r & 255) << 8);
+}
+static char **copy_strings(char *const *v, int *count)
+{
+    int n = 0; while (v && v[n]) n++;
+    char **out = calloc((size_t)n + 1, sizeof(*out)); assert(out);
+    for (int i = 0; i < n; i++) { out[i] = strdup(v[i]); assert(out[i]); }
+    if (count) *count = n;
+    return out;
+}
+static int stub_main(int argc, char **argv) { (void)argc; (void)argv; return 0; }
+static struct proc *proc_create(const char *name, int (*entry)(int, char **), char *const argv[], char *const env[],
+                                int ppid, int pgid, uint64_t cost, uint64_t delay)
+{
+    struct proc *p = NULL;
+    for (int i = 0; i < MAX_PROCS && !p; i++) if (!procs[i].used) p = &procs[i];
+    if (!p) { errno = EAGAIN; return NULL; }
+    memset(p, 0, sizeof(*p));
+    p->used = 1; p->pid = next_pid++; p->ppid = ppid; p->pgid = pgid ? pgid : p->pid; p->state = CIUKI_PROC_LIVE;
+    snprintf(p->name, sizeof(p->name), "%s", name);
+    p->entry = entry; p->argv = copy_strings(argv, &p->argc); p->env = copy_strings(env, NULL);
+    p->cost = cost; p->wake = vnow + delay; p->start = vnow;
+    for (int fd = 0; fd < 3; fd++) p->fd[fd].o = obj_new(K_CONSOLE);
+    pthread_cond_init(&p->cv, NULL);
+    if (pthread_create(&p->thread, NULL, proc_thread, p)) fail("pthread_create");
+    pthread_detach(p->thread);
+    note("spawn pid=%d %s", p->pid, name);
+    return p;
+}
+static struct proc *proc_find(int pid)
+{
+    for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used && procs[i].pid == pid) return &procs[i];
+    return NULL;
+}
+static void run(struct proc *p)
+{
+    cur = p; p->go = 1;
+    pthread_cond_signal(&p->cv);
+    while (cur) pthread_cond_wait(&sched_cv, &big);
+}
+
+/* ---- ciuki_* system calls -------------------------------------------------- */
+int ciuki_channel_pair(int pair[2])
+{
+    struct chan *c = calloc(1, sizeof(*c)); assert(c);
+    c->open[0] = c->open[1] = 1;
+    struct obj *a = obj_new(K_CHANNEL), *b = obj_new(K_CHANNEL);
+    a->chan = b->chan = c; a->side = 0; b->side = 1;
+    pair[0] = fd_install(cur, a, 1); pair[1] = fd_install(cur, b, 1);
+    if (pair[0] < 0 || pair[1] < 0) fail("channel_pair: descriptor table full");
+    return 0;
+}
+int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
+{
+    struct obj *o = fd_obj(cur, fd);
+    if (!o || o->kind != K_CHANNEL) { errno = EBADF; return -1; }
+    if (m->length > CIUKI_MESSAGE_PAYLOAD_MAX || m->fd_count > CIUKI_MESSAGE_FD_MAX) { errno = EINVAL; return -1; }
+    struct obj *attached[CIUKI_MESSAGE_FD_MAX] = {0};
+    for (unsigned k = 0; k < m->fd_count; k++) {
+        attached[k] = fd_obj(cur, m->fds[k]);
+        if (!attached[k] || (attached[k]->kind != K_CHANNEL && attached[k]->kind != K_SURFACE)) { errno = EBADF; return -1; }
+    }
+    for (;;) {
+        o = fd_obj(cur, fd);
+        if (!o) { errno = EBADF; return -1; }
+        struct chan *c = o->chan; int to = 1 - o->side;
+        if (!c->open[to]) { errno = EPIPE; return -1; }
+        if (c->count[to] < CIUKI_CHANNEL_QUEUE_MAX) {
+            struct qmsg *q = &c->q[to][(c->head[to] + c->count[to]++) % CIUKI_CHANNEL_QUEUE_MAX];
+            q->m = *m; q->m.sender_pid = (uint32_t)cur->pid; q->m.reserved = 0;
+            if (trace > 1 && m->length >= 2 && m->data[1] != DESK_DAMAGE && m->data[1] != DESK_MOTION)
+                note("msg pid=%d op=%u len=%u fds=%u", cur->pid, m->data[1], m->length, m->fd_count);
+            for (unsigned k = 0; k < m->fd_count; k++) { q->attached[k] = attached[k]; attached[k]->refs++; q->m.fds[k] = -1; }
+            return 0;
+        }
+        if (flags & DONTWAIT) { errno = EAGAIN; return -1; }
+        yield_until(vnow + 1 * MS);
+    }
+}
+int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
+{
+    for (;;) {
+        struct obj *o = fd_obj(cur, fd);
+        if (!o || o->kind != K_CHANNEL) { errno = EBADF; return -1; }
+        struct chan *c = o->chan; int side = o->side;
+        if (c->count[side]) {
+            struct qmsg *q = &c->q[side][c->head[side]];
+            *m = q->m;
+            for (unsigned k = 0; k < q->m.fd_count; k++) {
+                m->fds[k] = fd_install(cur, q->attached[k], 1);
+                if (m->fds[k] < 0) fail("recv: descriptor table full");
+            }
+            c->head[side] = (c->head[side] + 1) % CIUKI_CHANNEL_QUEUE_MAX; c->count[side]--;
+            return 1;
+        }
+        if (!c->open[1 - side]) return 0;
+        if (flags & DONTWAIT) { errno = EAGAIN; return -1; }
+        yield_until(vnow + 1 * MS);
+    }
+}
+int ciuki_surface_create(uint32_t w, uint32_t h, uint32_t format)
+{
+    if (!w || !h || w > 2048 || h > 2048 || format != CIUKI_SURFACE_XRGB8888) { errno = EINVAL; return -1; }
+    struct surface *s = calloc(1, sizeof(*s)); assert(s);
+    s->info = (struct ciuki_surface_info){sizeof(s->info), w, h, w * 4, format, (w * h * 4 + 4095) & ~4095u};
+    s->pixels = calloc(1, s->info.allocation_bytes); assert(s->pixels);
+    struct obj *o = obj_new(K_SURFACE); o->surface = s;
+    return fd_install(cur, o, 0);
+}
+void *ciuki_surface_map(int fd, int prot)
+{
+    (void)prot;
+    struct obj *o = fd_obj(cur, fd);
+    if (!o || o->kind != K_SURFACE) { errno = EBADF; return MAP_FAILED; }
+    return o->surface->pixels;
+}
+int ciuki_surface_info(int fd, struct ciuki_surface_info *s)
+{
+    struct obj *o = fd_obj(cur, fd);
+    if (!o || o->kind != K_SURFACE) { errno = EBADF; return -1; }
+    *s = o->surface->info; return 0;
+}
+int ciuki_display_info(int fd, struct ciuki_display_info *s)
+{
+    struct obj *o = fd_obj(cur, fd);
+    if (!o || o->kind != K_DISPLAY) { errno = EBADF; return -1; }
+    memset(s, 0, sizeof(*s));
+    s->size = sizeof(*s); s->width = WIDTH; s->height = HEIGHT; s->pitch = WIDTH * 4; s->bpp = 32;
+    return 0;
+}
+int ciuki_present(int display, int surface, const struct ciuki_rect *r)
+{
+    struct obj *d = fd_obj(cur, display), *s = fd_obj(cur, surface);
+    if (!d || d->kind != K_DISPLAY || !s || s->kind != K_SURFACE || !r) { errno = EBADF; return -1; }
+    presents++;
+    return 0;
+}
+
+/* Kernel input queue (i8042 events already converted for the desktop grant). */
+static struct ciuki_input_event kq[CIUKI_INPUT_QUEUE_MAX];
+static unsigned kq_head, kq_count, kq_sequence;
+static void kq_push(uint32_t type, int32_t code, int32_t value, int32_t value2)
+{
+    if (kq_count == CIUKI_INPUT_QUEUE_MAX) fail("kernel input queue overflow");
+    struct ciuki_input_event *e = &kq[(kq_head + kq_count++) % CIUKI_INPUT_QUEUE_MAX];
+    *e = (struct ciuki_input_event){.sequence = ++kq_sequence, .type = type, .monotonic_ns = vnow / MS * MS,
+                                    .code = code, .value = value, .value2 = value2};
+}
+int ciuki_input_read(int fd, struct ciuki_input_event *events, uint32_t capacity)
+{
+    struct obj *o = fd_obj(cur, fd);
+    if (!o || o->kind != K_INPUT) { errno = EBADF; return -1; }
+    if (!kq_count) { errno = EAGAIN; return -1; }
+    unsigned n = 0;
+    while (n < capacity && kq_count) { events[n++] = kq[kq_head]; kq_head = (kq_head + 1) % CIUKI_INPUT_QUEUE_MAX; kq_count--; }
+    if (trace) {
+        const struct desktop *d = replay_desktop;
+        for (unsigned i = 0; i < n; i++)
+            note("input type=%u code=%d value=%d value2=%d (mouse before %d,%d focus=%d)", events[i].type, events[i].code,
+                 events[i].value, events[i].value2, d ? d->mouse_x : -1, d ? d->mouse_y : -1, d ? d->focus : -9);
+    }
+    return (int)n;
+}
+
+ciuki_pid_t ciuki_spawn(const char *path, char *const argv[], char *const env[], const struct ciuki_spawn_fd *mapping,
+                        uint32_t count, uint32_t flags)
+{
+    static const struct { const char *path; int (*entry)(int, char **); } programs[] = {
+        {"/bin/files", files_main}, {"/bin/ciuknote", ciuknote_main}, {"/bin/tasks", tasks_main}, {"/bin/demo", demo_main}};
+    int (*entry)(int, char **) = NULL;
+    for (unsigned i = 0; i < sizeof(programs) / sizeof(programs[0]); i++) if (!strcmp(path, programs[i].path)) entry = programs[i].entry;
+    if (!entry) {
+        char name[80]; snprintf(name, sizeof(name), ",%s,", path + (strncmp(path, "/bin/", 5) ? 0 : 5));
+        char list[520]; snprintf(list, sizeof(list), ",%s,", bin_list);
+        if (strncmp(path, "/bin/", 5) || !strstr(list, name)) { errno = ENOENT; return -1; }
+        entry = stub_main;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        struct obj *o = fd_obj(cur, mapping[i].source);
+        if (!o || cur->fd[mapping[i].source].cloexec || mapping[i].target < 0 || mapping[i].target >= MAX_FDS) { errno = EBADF; return -1; }
+    }
+    int argn = 0; while (argv && argv[argn]) argn++;
+    int survivor = !strcmp(path, "/bin/demo") && argn == 4 && !strcmp(argv[3], "--test=crash-isolation");
+    struct proc *p = proc_create(path + 5, entry, argv, env, cur->pid, flags & CIUKI_SPAWN_NEW_GROUP ? 0 : cur->pgid,
+                                 cur->pid == desktop_pid && !survivor ? app_cost_ns : 2 * MS, survivor ? 0 : start_delay_ns);
+    if (!p) return -1;
+    for (uint32_t i = 0; i < count; i++) {
+        struct obj *o = fd_obj(cur, mapping[i].source);
+        if (p->fd[mapping[i].target].o) obj_put(p->fd[mapping[i].target].o);
+        o->refs++; p->fd[mapping[i].target] = (struct fdent){o, 0, 0};
+    }
+    if (survivor) { survivor_pid = p->pid; next_pid = 105; }   /* 100 crash cycles used the PIDs in between */
+    return p->pid;
+}
+
+static uint32_t proc_records(void *buffer, uint32_t bytes)
+{
+    struct ciuki_proc_system sys = {.version = CIUKI_PROC_VERSION, .size = sizeof(sys), .tick_hz = 1000,
+        .total_ticks = vnow / MS, .idle_ticks = vnow / MS / 2, .usable_pages = 65536, .free_pages = 40000,
+        .kheap_pages = 64, .kheap_bytes = 100000, .kheap_high_water = 120000};
+    struct ciuki_proc_record list[MAX_PROCS + 2]; unsigned n = 0;
+    static const char *const system[] = {"init", "probe"};
+    for (int pid = 1; pid <= 2; pid++) {
+        list[n] = (struct ciuki_proc_record){.version = CIUKI_PROC_VERSION, .size = sizeof(list[0]), .pid = (uint32_t)pid,
+                                            .ppid = pid == 1 ? 0 : 1, .pgid = (uint32_t)pid, .state = CIUKI_PROC_LIVE, .threads = 1, .resident_pages = 32};
+        snprintf(list[n++].name, CIUKI_PROC_NAME_MAX, "%s", system[pid - 1]);
+    }
+    for (int pid = 3; pid < next_pid; pid++) {
+        struct proc *p = proc_find(pid);
+        if (!p || !p->state) continue;
+        list[n] = (struct ciuki_proc_record){.version = CIUKI_PROC_VERSION, .size = sizeof(list[0]), .pid = (uint32_t)p->pid,
+            .ppid = (uint32_t)p->ppid, .pgid = (uint32_t)p->pgid, .state = (uint32_t)p->state, .threads = 1,
+            .resident_pages = 256, .cpu_ticks = (vnow - p->start) / MS / 10, .start_tick = p->start / MS};
+        snprintf(list[n++].name, CIUKI_PROC_NAME_MAX, "%.31s", p->name);
+    }
+    sys.processes = n;
+    if (bytes < CIUKI_PROC_LIST_MIN) { errno = EINVAL; return (uint32_t)-1; }
+    uint32_t fit = (bytes - (uint32_t)sizeof(sys)) / (uint32_t)sizeof(list[0]);
+    sys.records = n < fit ? n : fit;
+    memcpy(buffer, &sys, sizeof(sys));
+    memcpy((uint8_t *)buffer + sizeof(sys), list, sys.records * sizeof(list[0]));
+    return sys.records;
+}
+int ciuki_proc_list(void *buffer, uint32_t bytes)
+{
+    uint32_t r = proc_records(buffer, bytes);
+    return r == (uint32_t)-1 ? -1 : (int)r;
+}
+int ciuki_proc_terminate(ciuki_pid_t pid, int signo, int authority_fd)
+{
+    struct obj *a = authority_fd >= 0 ? fd_obj(cur, authority_fd) : NULL;
+    if (authority_fd >= 0 && (!a || a->kind != K_AUTHORITY)) { errno = EBADF; return -1; }
+    if (signo != SIGTERM && signo != SIGKILL) { errno = EINVAL; return -1; }
+    /* PIDs 1 (init) and 2 (the probe's owner) are live system processes. */
+    if (pid == 1 || pid == 2 || (int)pid == desktop_pid || (int)pid == cur->pid) { errno = EPERM; return -1; }
+    struct proc *p = proc_find((int)pid);
+    if (!p || p->state != CIUKI_PROC_LIVE) { errno = ESRCH; return -1; }
+    p->killed = signo; p->wake = vnow;
+    return 0;
+}
+
+/* ---- probe-report capture (the kernel side of call ciuki_raw_probe_report) -- */
+static struct { unsigned generation, keys, motion, buttons, reports; int checkpoint, app, survivor_ready; } probe;
+static uint64_t checkpoint_ns[8], success_ns;
+static unsigned field(const char *line, const char *name, int *present)
+{
+    char key[40]; snprintf(key, sizeof(key), " %s=", name);
+    const char *at = strstr(line, key);
+    if (!at) { if (present) *present = 0; return 0; }
+    if (present) *present = 1;
+    return (unsigned)strtoul(at + strlen(key), NULL, 10);
+}
+uint32_t ciuki_raw_probe_report(uintptr_t address, uint32_t n, uint32_t b, uint32_t c, uint32_t d, uint32_t e)
+{
+    (void)b; (void)c; (void)d; (void)e;
+    const char *line = (const char *)address;
+    if (n != strlen(line) || n > CIUKI_PROBE_REPORT_MAX) fail("report length %u", n);
+    if (cur->pid == survivor_pid && !strncmp(line, "case=native-demo ", 17)) {
+        if (field(line, "stage", NULL) == 2) probe.survivor_ready = 1;
+        return 0;
+    }
+    if (cur->pid != desktop_pid) fail("report from pid %d: %s", cur->pid, line);
+    if (!strncmp(line, "case=native-setup ", 18)) fail("desktop setup failed: %s", line);
+    if (strncmp(line, "case=native-desktop ", 20)) fail("unexpected report: %s", line);
+    unsigned generation = field(line, "generation", NULL), keys = field(line, "keys", NULL);
+    unsigned motion = field(line, "motion", NULL), buttons = field(line, "buttons", NULL);
+    if (generation < probe.generation || keys < probe.keys || motion < probe.motion || buttons < probe.buttons)
+        fail("probe order check: %s", line);
+    probe.generation = generation; probe.keys = keys; probe.motion = motion; probe.buttons = buttons; probe.reports++;
+    int files, notes;
+    field(line, "files", &files); field(line, "note", &notes);
+    if (files || notes) {
+        int checkpoint = (int)field(line, "checkpoint", NULL);
+        if (probe.app && probe.app != (files ? 1 : 2)) fail("app changed: %s", line);
+        probe.app = files ? 1 : 2;
+        if (checkpoint != probe.checkpoint && checkpoint != probe.checkpoint + 1) fail("checkpoint order: %s", line);
+        if (checkpoint > probe.checkpoint) {
+            probe.checkpoint = checkpoint; checkpoint_ns[checkpoint] = vnow;
+            printf("CHECKPOINT %d t=%.3f\n", checkpoint, (double)vnow / 1e9);
+        }
+    }
+    if (!success_ns && keys >= 2 && motion >= 1 && buttons >= 2) success_ns = vnow;
+    note("report %s", line);
+    return 0;
+}
+
+/* ---- rp_* (replay_os.h) ---------------------------------------------------- */
+int rp_nanosleep(const struct timespec *t, struct timespec *rest)
+{
+    (void)rest;
+    uint64_t ns = (uint64_t)t->tv_sec * 1000000000ull + (uint64_t)t->tv_nsec;
+    yield_until(vnow + ns + cur->cost);
+    return 0;
+}
+int rp_clock_gettime(clockid_t clock, struct timespec *out)
+{
+    uint64_t ns = clock == CLOCK_REALTIME ? 1791711660ull * 1000000000ull + vnow : vnow;
+    out->tv_sec = (time_t)(ns / 1000000000ull); out->tv_nsec = (long)(ns % 1000000000ull);
+    return 0;
+}
+char *rp_getenv(const char *name)
+{
+    size_t n = strlen(name);
+    for (char **e = cur ? cur->env : NULL; e && *e; e++) if (!strncmp(*e, name, n) && (*e)[n] == '=') return *e + n + 1;
+    return NULL;
+}
+int rp_close(int fd)
+{
+    struct obj *o = fd_obj(cur, fd);
+    if (!o) { errno = EBADF; return -1; }
+    cur->fd[fd].o = NULL; obj_put(o);
+    return 0;
+}
+int rp_munmap(void *p, size_t n) { (void)p; (void)n; return 0; }
+static _Alignas(4096) uint8_t control_page[4096];
+void *rp_mmap(void *addr, size_t n, int prot, int flags, int fd, off_t off)
+{
+    (void)prot;
+    if (addr || n != 4096 || fd != -1 || off || !(flags & MAP_ANONYMOUS)) { errno = EINVAL; return MAP_FAILED; }
+    return control_page;
+}
+int rp_fcntl(int fd, int cmd, ...)
+{
+    if (!fd_obj(cur, fd)) { errno = EBADF; return -1; }
+    va_list ap; va_start(ap, cmd);
+    int arg = cmd == F_SETFD || cmd == F_SETFL ? va_arg(ap, int) : 0;
+    va_end(ap);
+    switch (cmd) {
+    case F_GETFD: return cur->fd[fd].cloexec ? FD_CLOEXEC : 0;
+    case F_SETFD: cur->fd[fd].cloexec = (arg & FD_CLOEXEC) != 0; return 0;
+    case F_GETFL: return cur->fd[fd].flags;
+    case F_SETFL: cur->fd[fd].flags = arg; return 0;
+    default: errno = EINVAL; return -1;
+    }
+}
+pid_t rp_waitpid(pid_t pid, int *status, int options)
+{
+    int any = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        struct proc *p = &procs[i];
+        if (!p->used || p->ppid != cur->pid || !p->state || (pid > 0 && p->pid != pid)) continue;
+        any = 1;
+        if (p->state == CIUKI_PROC_ZOMBIE) {
+            if (status) *status = p->status;
+            p->state = 0;
+            note("reap pid=%d status=%#x by %d", p->pid, p->status, cur->pid);
+            return p->pid;
+        }
+    }
+    if (!any) { errno = ECHILD; return -1; }
+    if (!(options & WNOHANG)) fail("blocking waitpid");
+    return 0;
+}
+int rp_kill(pid_t pid, int sig)
+{
+    struct proc *p = proc_find(pid);
+    if (!p || p->state != CIUKI_PROC_LIVE) { errno = ESRCH; return -1; }
+    if (sig) { p->killed = sig; p->wake = vnow; note("kill pid=%d sig=%d by %d", pid, sig, cur->pid); }
+    return 0;
+}
+pid_t rp_getpid(void) { return cur->pid; }
+
+/* /bin as the desktop scans it: the image's programs (scripts/build_image.py). */
+struct rp_dir { char names[24][64]; unsigned count, at; struct dirent entry; };
+DIR *rp_opendir(const char *path)
+{
+    if (strcmp(path, "/bin")) { errno = ENOENT; return NULL; }
+    struct rp_dir *d = calloc(1, sizeof(*d)); assert(d);
+    char list[512]; snprintf(list, sizeof(list), "%s", bin_list);
+    for (char *s = strtok(list, ","); s && d->count < 24; s = strtok(NULL, ",")) snprintf(d->names[d->count++], 64, "%s", s);
+    return (DIR *)d;
+}
+struct dirent *rp_readdir(DIR *dir)
+{
+    struct rp_dir *d = (struct rp_dir *)dir;
+    if (d->at == d->count) return NULL;
+    memset(&d->entry, 0, sizeof(d->entry));
+    snprintf(d->entry.d_name, sizeof(d->entry.d_name), "%s", d->names[d->at++]);
+    return &d->entry;
+}
+int rp_closedir(DIR *dir) { free(dir); return 0; }
+static int in_bin(const char *path)
+{
+    if (strncmp(path, "/bin/", 5)) return 0;
+    char name[80], list[520]; snprintf(name, sizeof(name), ",%s,", path + 5); snprintf(list, sizeof(list), ",%s,", bin_list);
+    return strstr(list, name) != NULL;
+}
+int rp_stat(const char *path, struct stat *st)
+{
+    if (!in_bin(path)) { errno = ENOENT; return -1; }
+    memset(st, 0, sizeof(*st)); st->st_mode = S_IFREG | 0755; st->st_size = 100000;
+    return 0;
+}
+static unsigned char elf_header[52] = {0x7f, 'E', 'L', 'F', 1, 1, 1, [16] = 2, [18] = 3, [20] = 1, [40] = 52};
+FILE *rp_fopen(const char *path, const char *mode)
+{
+    if (in_bin(path) && !strcmp(mode, "rb")) return fmemopen(elf_header, sizeof(elf_header), "rb");
+    if (!strcmp(path, "/system/assets/ciuki-portrait.xrgb") && portrait_path) return fopen(portrait_path, "rb");
+    errno = ENOENT; return NULL;
+}
+int rp_uname(struct utsname *u)
+{
+    memset(u, 0, sizeof(*u));
+    snprintf(u->sysname, sizeof(u->sysname), "CiukiOS"); snprintf(u->release, sizeof(u->release), "replay");
+    return 0;
+}
+_Noreturn void rp_exit(int code) { proc_exit(cur, (code & 255) << 8); }
+int desk_load_portrait(uint32_t *pixels)
+{
+    memset(pixels, 0, DESK_PORTRAIT_SIZE * DESK_PORTRAIT_SIZE * 4);
+    FILE *f = portrait_path ? fopen(portrait_path, "rb") : NULL;
+    if (!f) return 0;
+    size_t n = fread(pixels, 4, DESK_PORTRAIT_SIZE * DESK_PORTRAIT_SIZE, f);
+    fclose(f);
+    return n == DESK_PORTRAIT_SIZE * DESK_PORTRAIT_SIZE ? 0 : -1;
+}
+
+/* ---- the image's file system for Files and CiukNote (fake_vfs.c tree) -------- */
+const struct fm_vfs *fm_native_vfs(void) { return &fake_vfs; }
+static int cn_stat(void *ctx, const char *path, struct cn_stat *st)
+{
+    struct fm_meta m; int r = fake_vfs.stat_path(ctx, path, &m);
+    if (!r) *st = (struct cn_stat){m.type == FM_DIR, m.size, m.modified};
+    return r;
+}
+struct cn_list { cn_emit emit; void *arg; };
+static int cn_list_one(const char *name, const struct fm_meta *m, void *arg)
+{
+    struct cn_list *l = arg; struct cn_stat st = {m->type == FM_DIR, m->size, m->modified};
+    return l->emit(name, &st, l->arg);
+}
+static int cn_list(void *ctx, const char *dir, cn_emit emit, void *arg)
+{ struct cn_list l = {emit, arg}; return fake_vfs.list(ctx, dir, cn_list_one, &l); }
+static int cn_load(void *ctx, const char *path, char *buf, size_t cap, size_t *len)
+{
+    (void)ctx; int n = fake_lookup(path);
+    if (n < 0) return -ENOENT;
+    if (fake_nodes[n].meta.type == FM_DIR) return -EISDIR;
+    if (fake_nodes[n].meta.size > cap) return -EFBIG;
+    memcpy(buf, fake_nodes[n].data, fake_nodes[n].meta.size); *len = fake_nodes[n].meta.size;
+    return 0;
+}
+static int cn_save(void *ctx, const char *path, const char *data, size_t len)
+{
+    (void)ctx;
+    if (len > FAKE_DATA) return -ENOSPC;
+    char parent[FM_PATH]; fm_parent(parent, path);
+    int p = fake_lookup(parent);
+    if (p < 0 || fake_nodes[p].meta.type != FM_DIR) return -ENOENT;
+    int n = fake_lookup(path);
+    if (n >= 0 && fake_nodes[n].meta.type == FM_DIR) return -EISDIR;
+    if (n < 0 && (n = fake_create(path, FM_FILE)) < 0) return n;
+    memcpy(fake_nodes[n].data, data, len); fake_nodes[n].meta.size = len;
+    return 0;
+}
+static const struct cn_fs replay_cn_fs = {NULL, cn_stat, cn_list, cn_load, cn_save};
+const struct cn_fs *cn_native_fs(void) { return &replay_cn_fs; }
+static void image_tree(void)
+{
+    fake_image_tree();   /* /, /bin, /system as in tests/host/desktop/files_ui_test.c */
+    fake_create("/home", FM_DIR); fake_create("/tmp", FM_DIR);
+    char list[512]; snprintf(list, sizeof(list), "%s", bin_list);
+    for (char *s = strtok(list, ","); s; s = strtok(NULL, ",")) {
+        char path[80]; snprintf(path, sizeof(path), "/bin/%s", s);
+        if (fake_lookup(path) < 0) { int n = fake_file(path, 2000, 1); fake_nodes[n].meta.exec = 1; fake_nodes[n].meta.mode = 0100777; }
+    }
+}
+
+/* ---- the runner's batches through QEMU's PS/2 devices and the i8042 driver --- */
+enum { EV_KEY, EV_REL, EV_BTN };
+struct event { int type, code, value; };
+struct batch { unsigned pause_ms, count; struct event events[32]; };
+static struct batch batches[512];
+static unsigned batch_count, batch_next;
+static uint64_t batch_due, last_batch_ns;
+static int qemu_dx, qemu_dy, qemu_buttons, kernel_buttons, kernel_down[0x200];
+static unsigned dropped_bytes, leftover_batches, max_kbd_bytes, max_packets;
+static const char us[0x59] = {
+    [0x02]='1', [0x03]='2', [0x04]='3', [0x05]='4', [0x06]='5', [0x07]='6', [0x08]='7', [0x09]='8', [0x0A]='9', [0x0B]='0',
+    [0x0C]='-', [0x0D]='=', [0x0E]='\b', [0x0F]='\t', [0x10]='q', [0x11]='w', [0x12]='e', [0x13]='r', [0x14]='t', [0x15]='y',
+    [0x16]='u', [0x17]='i', [0x18]='o', [0x19]='p', [0x1A]='[', [0x1B]=']', [0x1C]='\r', [0x1E]='a', [0x1F]='s', [0x20]='d',
+    [0x21]='f', [0x22]='g', [0x23]='h', [0x24]='j', [0x25]='k', [0x26]='l', [0x27]=';', [0x28]=39, [0x29]='`', [0x2B]=92,
+    [0x2C]='z', [0x2D]='x', [0x2E]='c', [0x2F]='v', [0x30]='b', [0x31]='n', [0x32]='m', [0x33]=',', [0x34]='.', [0x35]='/',
+    [0x39]=' '};
+static void kernel_key(int code, int down)
+{
+    int value = down;
+    if (kernel_down[code] == down) { if (!down) return; value = 2; }
+    else kernel_down[code] = down;
+    kq_push(CIUKI_INPUT_KEY, code, value, 0);
+    if (down && code < (int)sizeof(us) && us[code]) kq_push(CIUKI_INPUT_TEXT, (unsigned char)us[code], 0, 0);
+}
+static void deliver(struct batch *b)
+{
+    unsigned bytes = 0; int mouse = 0;
+    for (unsigned i = 0; i < b->count; i++) {
+        struct event *e = &b->events[i];
+        if (e->type == EV_KEY) {
+            /* Set 2 without translation (the kernel decodes set 2): make 1 byte, break F0+1, E0 prefix. */
+            unsigned need = (e->code >= 0x100) + (e->value ? 1u : 2u);
+            if (bytes + need > 16) { dropped_bytes += need; continue; }   /* ps2_queue_noirq drops at 16 */
+            bytes += need; kernel_key(e->code, e->value);
+        } else if (e->type == EV_REL) {
+            mouse = 1;
+            if (e->code == 0) qemu_dx += e->value; else qemu_dy -= e->value;   /* PS/2 Y grows up */
+        } else {
+            mouse = 1;
+            unsigned bit = e->code == 1 ? 1u : e->code == 2 ? 2u : 4u;     /* PS/2 header: left, right, middle */
+            if (e->value) qemu_buttons |= (int)bit; else qemu_buttons &= ~(int)bit;
+        }
+    }
+    if (bytes > max_kbd_bytes) max_kbd_bytes = bytes;
+    if (!mouse) return;
+    /* ps2_mouse_sync: packets while the 16-byte queue has room for 3 bytes, the first one always. */
+    unsigned packets = 0;
+    for (;;) {
+        if (packets == 5) { leftover_batches++; break; }
+        int dx = qemu_dx > 127 ? 127 : qemu_dx < -127 ? -127 : qemu_dx;
+        int dy = qemu_dy > 127 ? 127 : qemu_dy < -127 ? -127 : qemu_dy;
+        qemu_dx -= dx; qemu_dy -= dy; packets++;
+        if (dx) kq_push(CIUKI_INPUT_MOTION, 0, dx, 0);
+        if (dy) kq_push(CIUKI_INPUT_MOTION, 0, 0, -dy);
+        int changed = qemu_buttons ^ kernel_buttons; kernel_buttons = qemu_buttons;
+        for (int i = 0; i < 3; i++) if (changed & (1 << i)) kq_push(CIUKI_INPUT_BUTTON, i + 1, (qemu_buttons >> i) & 1, 0);
+        if (!qemu_dx && !qemu_dy) break;
+    }
+    if (packets > max_packets) max_packets = packets;
+}
+static void load_script(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) fail("script %s", path);
+    char kind[4];
+    while (fscanf(f, "%3s", kind) == 1) {
+        if (kind[0] == 'B') {
+            if (batch_count == sizeof(batches) / sizeof(batches[0])) fail("too many batches");
+            if (fscanf(f, "%u", &batches[batch_count].pause_ms) != 1) fail("script B");
+            batch_count++;
+            continue;
+        }
+        if (!batch_count) fail("script: event before batch");
+        struct batch *b = &batches[batch_count - 1];
+        if (b->count == 32) fail("script: batch too long");
+        struct event *e = &b->events[b->count++];
+        int ok = fscanf(f, "%d %d", &e->code, &e->value) == 2;
+        e->type = kind[0] == 'K' ? EV_KEY : kind[0] == 'R' ? EV_REL : kind[0] == 'M' ? EV_BTN : -1;
+        if (!ok || e->type < 0) fail("script line %s", kind);
+    }
+    fclose(f);
+}
+
+/* ---- controller: the crash-isolation probe's interaction stage -------------- */
+static void describe_desktop(void)
+{
+    const struct desktop *d = replay_desktop;
+    if (!d) return;
+    printf("DESKTOP mouse=%d,%d focus=%d shell=%d menu_open=%d app_test=%d app_pid=%u app_checkpoint=%d app_reported=%d app_done=%d"
+           " tasks_test=%d tasks_stage=%d notice=\"%s\"\n", d->mouse_x, d->mouse_y, d->focus, d->shell, d->menu_open, d->app_test,
+           d->app_pid, d->app_checkpoint, d->app_reported, d->app_done, d->tasks_test, d->tasks_stage, d->notice);
+    for (int i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].window)
+        printf("WINDOW slot=%d pid=%u title=\"%s\" frame=%d,%d,%d,%d order=%llu%s\n", i, d->clients[i].pid, d->clients[i].title,
+               d->clients[i].frame.x, d->clients[i].frame.y, d->clients[i].frame.w, d->clients[i].frame.h,
+               (unsigned long long)d->clients[i].order, d->clients[i].minimized ? " minimized" : "");
+}
+int main(int argc, char **argv)
+{
+    const char *script = NULL;
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
+#define OPT(name) (!strcmp(a, name) && v && ++i)
+        if (OPT("--script")) script = v;
+        else if (OPT("--case")) case_name = v;
+        else if (OPT("--bin")) snprintf(bin_list, sizeof(bin_list), "%s", v);
+        else if (OPT("--portrait")) portrait_path = v;
+        else if (OPT("--overhead-ms")) overhead_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--pause-scale-pct")) pause_scale_pct = (unsigned)strtoul(v, NULL, 10);
+        else if (OPT("--first-ms")) first_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--start-delay-ms")) start_delay_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--desktop-cost-ms")) desktop_cost_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--app-cost-ms")) app_cost_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--limit-s")) limit_ns = strtoull(v, NULL, 10) * 1000 * MS;
+        else if (!strcmp(a, "--trace")) trace++;
+        else if (OPT("--shots")) shots = v;
+        else fail("usage: argument %s", a);
+#undef OPT
+    }
+    if (!script || !case_name || !bin_list[0]) fail("usage: --script, --case and --bin are required");
+    load_script(script);
+    image_tree();
+    pthread_mutex_lock(&big);
+    /* The supervisor's desktop: display 3, input 4, termination authority 5 (CIUKI_TASKS_FD). */
+    char *dargv[] = {"desktop", "--test=crash-isolation", "--gate", NULL};
+    char *denv[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/home", "TMPDIR=/tmp", "PATH=/bin", "CIUKI_TASKS_FD=5", NULL};
+    struct proc *desktop = proc_create("desktop", desktop_main, dargv, denv, 2, 0, desktop_cost_ns, 0);
+    desktop_pid = desktop->pid;
+    desktop->fd[3].o = obj_new(K_DISPLAY); desktop->fd[4].o = obj_new(K_INPUT); desktop->fd[5].o = obj_new(K_AUTHORITY);
+    struct gate_control *control = (struct gate_control *)control_page;
+    int stage = 0; uint64_t arm_ns = 0, end_ns = 0;
+    unsigned last_cp = 0;
+    while (vnow < limit_ns) {
+        /* Controller: survivor ready -> GATE_INTERACT -> its report -> 20 ms -> ARM. */
+        if (stage == 0 && probe.reports && probe.survivor_ready) {
+            control->generation = 501; control->command = GATE_INTERACT; stage = 1;
+        } else if (stage == 1 && probe.generation == 501 && !control->command) {
+            arm_ns = vnow + 20 * MS; batch_due = arm_ns + first_ns; stage = 2;
+            note("ARM at %.3f", (double)arm_ns / 1e9);
+        }
+        if (stage == 2 && batch_next < batch_count && vnow >= batch_due) {
+            struct batch *b = &batches[batch_next++];
+            int press = 0;
+            for (unsigned i = 0; i < b->count; i++) press |= b->events[i].type == EV_BTN && b->events[i].value;
+            if (shots && (press || batch_next == batch_count) && replay_desktop && replay_desktop->pixels) {
+                char path[1024]; snprintf(path, sizeof(path), "%s/batch-%03u.xrgb", shots, batch_next - 1);
+                FILE *f = fopen(path, "wb");
+                if (f) { fwrite(replay_desktop->pixels, 4, WIDTH * HEIGHT, f); fclose(f); }
+            }
+            deliver(b);
+            last_batch_ns = vnow;
+            batch_due = vnow + overhead_ns + (uint64_t)b->pause_ms * MS * pause_scale_pct / 100;
+            if (trace) note("batch %u delivered (%u events, queue %u)", batch_next - 1, b->count, kq_count);
+        }
+        if (trace && probe.checkpoint != (int)last_cp) { last_cp = (unsigned)probe.checkpoint; describe_desktop(); }
+        if (success_ns && !end_ns) end_ns = success_ns + 3000 * MS;   /* the probe sleeps 3 s, then ENDs */
+        if (end_ns && vnow >= end_ns) break;
+        struct proc *next = NULL;
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct proc *p = &procs[i];
+            if (p->used && p->state == CIUKI_PROC_LIVE && p->wake <= vnow && (!next || p->wake < next->wake || (p->wake == next->wake && p->pid < next->pid)))
+                next = p;
+        }
+        if (next) { run(next); continue; }
+        uint64_t wake = UINT64_MAX;
+        for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used && procs[i].state == CIUKI_PROC_LIVE && procs[i].wake < wake) wake = procs[i].wake;
+        if (stage == 2 && batch_next < batch_count && batch_due < wake) wake = batch_due;
+        if (end_ns && end_ns < wake) wake = end_ns;
+        if (wake == UINT64_MAX) fail("every process exited");
+        vnow = wake;
+    }
+    unsigned counts[3]; replay_gate_counts(counts);
+    describe_desktop();
+    printf("PROBE generation=%u keys=%u motion=%u buttons=%u checkpoint=%d app=%d reports=%u presents=%u\n", probe.generation,
+           probe.keys, probe.motion, probe.buttons, probe.checkpoint, probe.app, probe.reports, presents);
+    printf("GATE keys=%u motion=%u buttons=%u\n", counts[0], counts[1], counts[2]);
+    printf("PS2 dropped_bytes=%u leftover_batches=%u max_key_bytes=%u max_packets=%u\n", dropped_bytes, leftover_batches,
+           max_kbd_bytes, max_packets);
+    printf("TIMING arm=%.3f batches=%u/%u last_batch=%.3f success=%.3f\n", (double)arm_ns / 1e9, batch_next, batch_count,
+           arm_ns && last_batch_ns ? (double)(last_batch_ns - arm_ns) / 1e9 : -1.0,
+           success_ns ? (double)(success_ns - arm_ns) / 1e9 : -1.0);
+    for (int i = 1; i <= probe.checkpoint; i++) printf("CHECKPOINT_AT %d %.3f\n", i, (double)(checkpoint_ns[i] - arm_ns) / 1e9);
+    for (int i = 0; i < FAKE_NODES; i++) if (fake_nodes[i].live && !strncmp(fake_nodes[i].path, "/system/", 8) && !strchr(fake_nodes[i].path + 8, '/'))
+        printf("SYSTEM %s\n", fake_nodes[i].path + 8);
+    int note_txt = fake_lookup("/system/tests/note.txt");
+    if (note_txt >= 0) {
+        printf("FILE /system/tests/note.txt ");
+        for (unsigned i = 0; i < fake_nodes[note_txt].meta.size; i++) printf("%02x", fake_nodes[note_txt].data[i]);
+        printf("\n");
+    }
+    for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used)
+        printf("PROC pid=%d ppid=%d name=%s state=%d status=%#x\n", procs[i].pid, procs[i].ppid, procs[i].name, procs[i].state, procs[i].status);
+    printf("CASE %s\n", case_name);
+    printf("RESULT success=%d\n", success_ns != 0);
+    fflush(stdout);
+    _exit(0);
+}

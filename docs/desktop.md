@@ -196,21 +196,47 @@ surface bytes (little-endian words), which contains no clock, so the host reprod
 
 **QEMU case `ciuknote-qemu-t23`** (`tests/suites/f2-desktop.json`; the selector and
 predicates of `files-qemu-t23` with `note-*` records and three checkpoints): F10 down/up;
-the cursor is clamped to the bottom-left corner (six paced -127/+127 moves); click the
+the cursor is clamped to the bottom-left corner (two (-381, +381) moves); click the
 Ciuki button; move up to row 0 of the menu and click `ciuknote` (rows are 28 px and
 anchored to the bar: from the button, dy = -1 - 28 * (n + 2 - k) for n programs sorted
-by strcmp and the 0-based row k; `/bin` lists seven programs (ciuknote, demo, files,
-hello, libc_smoke, lua, tasks), so `ciuknote` is 253 px up); wait 4 s; type `Hello
+by strcmp and the 0-based row k; `/bin` lists eight programs (ciuknote, demo, dosbox,
+files, hello, libc_smoke, lua, tasks), so `ciuknote` is 281 px up); wait 3.6 s; type `Hello
 CiukNote`, Enter, `Ciuki says woof.`, Enter, F5; Ctrl+S, type `/system/tests/note.txt`,
-Enter (checkpoint 2); Ctrl+N, Ctrl+O, type `note.txt`, Enter (checkpoint 3); Alt+F4
-(a clean document accepts the close request and exits 0); A down/up. Nominal pacing 23.3 s
-of the 40 s window. After QEMU stops the host checker digests `::/system/tests/note.txt`:
+Enter (checkpoint 2); Ctrl+N, Ctrl+O, type `note.txt`, Enter (checkpoint 3); File > Exit
+by its mnemonics, Alt+F then X (the clean document closes and CiukNote exits 0; neither
+CiukNote nor the desktop binds Alt+F4); A down/up. Several key taps share one QMP batch
+(at most 12 set-2 bytes: QEMU's PS/2 queue drops beyond 16 bytes per batch). 121 batches,
+nominal pacing 10.3 s; at the 0.33 s per 100 ms batch measured in the first QEMU run of
+`files-qemu-t23` about 36 s. After QEMU stops the host checker digests `::/system/tests/note.txt`:
 bytes `Hello CiukNote\r\nCiuki says woof.\r\n9:41 AM 10/11/2026`, SHA-256
 `8295f4d0977502fc61022209d665ff588382b0bd1564e5e38736f022e57f807d`, plus `fsck.fat -n`
 exit 0. The three `pixel_digest` fields hold the placeholder `PIN-FROM-FIRST-RUN`, as
 Files' (the lead pins them from the first run). The desktop-shell cases and the Files case
 address `demo` and `files`, whose distance from the bar does not change when a program that
 sorts before them is added; `tasks` (added by f2-33) does move them.
+
+**Host replay of the app cases** (`tests/host/desktop/test_desktop.py`,
+`AppCaseReplayTests`; harness `app_replay.c`, `replay_desktop.c`, `replay_os.h`,
+`replay_base.h`): the exact batches of `files-qemu-t23`, `tasks-qemu-t23` and
+`ciuknote-qemu-t23` go through a model of QEMU's PS/2 devices (16-byte queues per
+batch, five 3-byte mouse packets, deltas clamped to +-127 per packet, button state
+sampled at the batch's sync, one sync per QMP command: QEMU `hw/input/ps2.c`
+`ps2_queue_noirq`, `ps2_mouse_send_packet`, `ps2_mouse_sync` and `ui/input.c`
+`qmp_input_send_event`, https://gitlab.com/qemu-project/qemu, checked 2026-10-11) and of
+the kernel's i8042 decoder (one REL event per axis,
+X before Y, button edges after the packet's motion) into the production desktop in gate
+mode at the probe's interaction stage, which launches the production Files, CiukNote,
+Task Manager and demo as threads of a deterministic virtual kernel (channels, surfaces,
+spawn mappings, waitpid/kill, calls 70/71, the probe's report checks; the Files and
+CiukNote file systems are the fake image tree of `fake_vfs.c`). Each case runs at the
+declared pacing and at the measured QEMU pacing with 2.5 s program start-up; the test
+requires every checkpoint in order, `keys` = 4, the gate counters, no PS/2 drop or
+carry-over and the probe's window. Two consequences for scripts: a diagonal move passes
+through (x1, y0), so moves inside menus go vertically first (the first Files script crossed
+the Go title on its way to View > List and opened Go); and the desktop routes a click to a
+window it has just focused without first sending that client the pointer position, so a
+first click into an unfocused client is hit-tested at a stale position (the Task Manager
+case refocuses with the taskbar button).
 
 Host evidence (no QEMU, image build or hardware): `python3 -B -m unittest discover -s
 tests/host/desktop` (textarea model, layout, pointer and rendering with 3 pinned frames;

@@ -4384,12 +4384,7 @@
                       "data": "f11"
                     }
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -4409,18 +4404,18 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
+                    "value": -381
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": 381
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -4428,94 +4423,18 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
+                    "value": -381
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": 381
                   }
                 }
               ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -4532,12 +4451,7 @@
                     "axis": "y",
                     "value": -16
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "btn",
                   "data": {
@@ -4546,7 +4460,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -4558,17 +4472,10 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                },
                 {
                   "type": "rel",
                   "data": {
@@ -4577,7 +4484,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -4589,7 +4496,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -4944,163 +4851,24 @@
                 {
                   "type": "rel",
                   "data": {
-                    "axis": "x",
-                    "value": 0
+                    "axis": "y",
+                    "value": -381
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -127
+                    "value": -103
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5108,135 +4876,9 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
+                    "value": 64
                   }
                 },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 104
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 70
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
                 {
                   "type": "btn",
                   "data": {
@@ -5245,7 +4887,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5257,7 +4899,19 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 37
+                  }
+                }
+              ],
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5269,18 +4923,6 @@
                   }
                 },
                 {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 37
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
                   "type": "btn",
                   "data": {
                     "down": true,
@@ -5288,7 +4930,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5300,7 +4942,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5317,16 +4959,23 @@
                     "axis": "y",
                     "value": 107
                   }
+                },
+                {
+                  "type": "btn",
+                  "data": {
+                    "down": true,
+                    "button": "left"
+                  }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
                 {
                   "type": "btn",
                   "data": {
-                    "down": true,
+                    "down": false,
                     "button": "left"
                   }
                 }
@@ -5336,10 +4985,46 @@
             {
               "events": [
                 {
-                  "type": "btn",
+                  "type": "rel",
                   "data": {
-                    "down": false,
-                    "button": "left"
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
                   }
                 }
               ],
@@ -5430,14 +5115,21 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -144
+                    "value": -127
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": -17
+                  }
+                },
                 {
                   "type": "btn",
                   "data": {
@@ -5446,7 +5138,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5458,7 +5150,19 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "y",
+                    "value": 63
+                  }
+                }
+              ],
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5470,18 +5174,6 @@
                   }
                 },
                 {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 63
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
                   "type": "btn",
                   "data": {
                     "down": true,
@@ -5489,7 +5181,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5578,6 +5270,54 @@
             {
               "events": [
                 {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
                   "type": "key",
                   "data": {
                     "down": true,
@@ -5586,12 +5326,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5601,12 +5336,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5616,12 +5346,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5631,12 +5356,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5646,12 +5366,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5661,12 +5376,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5676,12 +5386,7 @@
                       "data": "u"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5693,7 +5398,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -5706,12 +5411,7 @@
                       "data": "k"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5721,12 +5421,7 @@
                       "data": "k"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5736,12 +5431,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5751,12 +5441,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5766,12 +5451,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5783,7 +5463,55 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
             },
             {
               "events": [
@@ -5868,12 +5596,7 @@
                       "data": "b"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5883,12 +5606,7 @@
                       "data": "b"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5898,12 +5616,7 @@
                       "data": "ctrl"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5913,12 +5626,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5928,12 +5636,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5943,12 +5646,7 @@
                       "data": "ctrl"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5958,12 +5656,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -5975,7 +5668,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -5988,12 +5681,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6003,84 +5691,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6090,12 +5701,7 @@
                       "data": "ctrl"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6105,12 +5711,7 @@
                       "data": "v"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6120,12 +5721,7 @@
                       "data": "v"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6137,7 +5733,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -6294,12 +5890,7 @@
                       "data": "delete"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6309,60 +5900,7 @@
                       "data": "delete"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6372,12 +5910,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6389,7 +5922,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -6546,12 +6079,7 @@
                       "data": "alt"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6561,12 +6089,7 @@
                       "data": "f4"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6576,12 +6099,7 @@
                       "data": "f4"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -6590,54 +6108,6 @@
                       "type": "qcode",
                       "data": "alt"
                     }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
                   }
                 }
               ],
@@ -6726,12 +6196,7 @@
                       "data": "a"
                     }
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7002,12 +6467,7 @@
                       "data": "f9"
                     }
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7019,7 +6479,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -7027,18 +6487,18 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
+                    "value": -381
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": 381
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -7046,94 +6506,18 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
+                    "value": -381
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": 381
                   }
                 }
               ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -7150,12 +6534,7 @@
                     "axis": "y",
                     "value": -16
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "btn",
                   "data": {
@@ -7164,7 +6543,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -7173,18 +6552,6 @@
                   "data": {
                     "down": false,
                     "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
                   }
                 },
                 {
@@ -7195,7 +6562,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -7207,7 +6574,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -7216,42 +6583,6 @@
                   "data": {
                     "down": false,
                     "button": "left"
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
                   }
                 }
               ],
@@ -7412,12 +6743,7 @@
                       "data": "alt"
                     }
                   }
-                }
-              ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7427,12 +6753,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7442,12 +6763,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7459,7 +6775,7 @@
                   }
                 }
               ],
-              "pause_ms": 50
+              "pause_ms": 20
             },
             {
               "events": [
@@ -7472,12 +6788,7 @@
                       "data": "d"
                     }
                   }
-                }
-              ],
-              "pause_ms": 40
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7487,12 +6798,7 @@
                       "data": "d"
                     }
                   }
-                }
-              ],
-              "pause_ms": 40
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7502,12 +6808,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 40
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7517,12 +6818,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 40
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7532,12 +6828,7 @@
                       "data": "m"
                     }
                   }
-                }
-              ],
-              "pause_ms": 40
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7547,12 +6838,7 @@
                       "data": "m"
                     }
                   }
-                }
-              ],
-              "pause_ms": 40
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7562,12 +6848,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 40
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7579,7 +6860,7 @@
                   }
                 }
               ],
-              "pause_ms": 40
+              "pause_ms": 20
             },
             {
               "events": [
@@ -7592,12 +6873,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -7609,18 +6885,6 @@
                   }
                 }
               ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
               "pause_ms": 100
             },
             {
@@ -7629,246 +6893,18 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
+                    "value": 254
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -127
+                    "value": 85
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -7876,18 +6912,11 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
+                    "value": 6
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -7895,18 +6924,11 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
+                    "value": 0
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -7914,18 +6936,11 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
+                    "value": 0
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -7933,18 +6948,11 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
+                    "value": 0
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -7952,18 +6960,11 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": -127
+                    "value": 0
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 100
             },
             {
               "events": [
@@ -7971,14 +6972,67 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": 300
+                    "value": 0
                   }
-                },
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
                 {
                   "type": "rel",
                   "data": {
-                    "axis": "y",
-                    "value": 50
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
+                  }
+                }
+              ],
+              "pause_ms": 100
+            },
+            {
+              "events": [
+                {
+                  "type": "rel",
+                  "data": {
+                    "axis": "x",
+                    "value": 0
                   }
                 }
               ],
@@ -7994,7 +7048,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -8006,43 +7060,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -8055,12 +7073,7 @@
                       "data": "alt"
                     }
                   }
-                }
-              ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -8070,12 +7083,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -8085,12 +7093,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -8099,282 +7102,6 @@
                       "type": "qcode",
                       "data": "alt"
                     }
-                  }
-                }
-              ],
-              "pause_ms": 50
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
                   }
                 }
               ],
@@ -8415,12 +7142,7 @@
                       "data": "a"
                     }
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -8429,18 +7151,6 @@
                       "type": "qcode",
                       "data": "a"
                     }
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
                   }
                 }
               ],
@@ -8757,12 +7467,7 @@
                       "data": "f10"
                     }
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -8782,18 +7487,18 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
+                    "value": -381
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": 381
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -8801,94 +7506,18 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -127
+                    "value": -381
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": 381
                   }
                 }
               ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": -127
-                  }
-                },
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "y",
-                    "value": 127
-                  }
-                }
-              ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -8905,12 +7534,7 @@
                     "axis": "y",
                     "value": -16
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "btn",
                   "data": {
@@ -8919,7 +7543,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -8931,17 +7555,10 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                },
                 {
                   "type": "rel",
                   "data": {
@@ -8950,7 +7567,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -8962,7 +7579,7 @@
                   }
                 }
               ],
-              "pause_ms": 100
+              "pause_ms": 20
             },
             {
               "events": [
@@ -9411,54 +8028,6 @@
             {
               "events": [
                 {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
                   "type": "key",
                   "data": {
                     "down": true,
@@ -9467,12 +8036,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9482,12 +8046,7 @@
                       "data": "h"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9497,12 +8056,7 @@
                       "data": "h"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9512,12 +8066,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9527,12 +8076,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9542,9 +8086,29 @@
                       "data": "e"
                     }
                   }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "l"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "l"
+                    }
+                  }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -9557,12 +8121,7 @@
                       "data": "l"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9572,42 +8131,7 @@
                       "data": "l"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "l"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "l"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9617,12 +8141,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9632,12 +8151,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9647,12 +8161,7 @@
                       "data": "spc"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9664,7 +8173,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -9677,12 +8186,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9692,12 +8196,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9707,12 +8206,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9722,12 +8216,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9737,12 +8226,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9752,12 +8236,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9767,12 +8246,7 @@
                       "data": "u"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9784,7 +8258,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -9797,12 +8271,7 @@
                       "data": "k"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9812,12 +8281,7 @@
                       "data": "k"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9827,12 +8291,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9842,12 +8301,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9857,12 +8311,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9872,12 +8321,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9887,12 +8331,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9904,7 +8343,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -9917,12 +8356,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9932,12 +8366,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9947,12 +8376,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9962,12 +8386,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9977,12 +8396,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -9994,7 +8408,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -10007,12 +8421,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10022,12 +8431,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10037,12 +8441,7 @@
                       "data": "c"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10052,12 +8451,7 @@
                       "data": "shift"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10067,12 +8461,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10082,12 +8471,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10097,12 +8481,7 @@
                       "data": "u"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10114,7 +8493,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -10127,12 +8506,7 @@
                       "data": "k"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10142,12 +8516,7 @@
                       "data": "k"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10157,12 +8526,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10172,12 +8536,7 @@
                       "data": "i"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10187,12 +8546,7 @@
                       "data": "spc"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10202,12 +8556,7 @@
                       "data": "spc"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10217,12 +8566,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10234,7 +8578,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -10247,12 +8591,7 @@
                       "data": "a"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10262,12 +8601,7 @@
                       "data": "a"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10277,12 +8611,7 @@
                       "data": "y"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10292,12 +8621,7 @@
                       "data": "y"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10307,12 +8631,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10322,12 +8641,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10337,12 +8651,7 @@
                       "data": "spc"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10354,7 +8663,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -10367,12 +8676,7 @@
                       "data": "w"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10382,12 +8686,7 @@
                       "data": "w"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10397,12 +8696,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10412,12 +8706,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10427,12 +8716,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10442,12 +8726,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10457,12 +8736,7 @@
                       "data": "f"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10474,7 +8748,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -10487,12 +8761,7 @@
                       "data": "dot"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10502,12 +8771,7 @@
                       "data": "dot"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10517,12 +8781,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10532,12 +8791,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10547,12 +8801,7 @@
                       "data": "f5"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10564,30 +8813,6 @@
                   }
                 }
               ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
               "pause_ms": 100
             },
             {
@@ -10649,12 +8874,7 @@
                       "data": "ctrl"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10664,12 +8884,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10679,12 +8894,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10693,54 +8903,6 @@
                       "type": "qcode",
                       "data": "ctrl"
                     }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
                   }
                 }
               ],
@@ -10805,12 +8967,7 @@
                       "data": "slash"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10820,12 +8977,7 @@
                       "data": "slash"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10835,12 +8987,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10850,12 +8997,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10865,12 +9007,7 @@
                       "data": "y"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10880,12 +9017,7 @@
                       "data": "y"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10895,12 +9027,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10912,7 +9039,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -10925,12 +9052,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10940,12 +9062,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10955,12 +9072,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10970,12 +9082,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -10985,12 +9092,7 @@
                       "data": "m"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11000,12 +9102,7 @@
                       "data": "m"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11015,12 +9112,7 @@
                       "data": "slash"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11032,7 +9124,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -11045,12 +9137,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11060,12 +9147,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11075,12 +9157,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11090,12 +9167,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11105,12 +9177,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11120,12 +9187,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11135,12 +9197,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11152,7 +9209,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -11165,12 +9222,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11180,12 +9232,7 @@
                       "data": "s"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11195,12 +9242,7 @@
                       "data": "slash"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11210,12 +9252,7 @@
                       "data": "slash"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11225,12 +9262,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11240,12 +9272,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11255,12 +9282,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11272,7 +9294,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -11285,12 +9307,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11300,12 +9317,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11315,12 +9327,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11330,12 +9337,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11345,12 +9347,7 @@
                       "data": "dot"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11360,12 +9357,7 @@
                       "data": "dot"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11375,12 +9367,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11392,7 +9379,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -11405,12 +9392,7 @@
                       "data": "x"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11420,12 +9402,7 @@
                       "data": "x"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11435,12 +9412,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11450,12 +9422,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11465,12 +9432,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11479,114 +9441,6 @@
                       "type": "qcode",
                       "data": "ret"
                     }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
                   }
                 }
               ],
@@ -11795,12 +9649,7 @@
                       "data": "ctrl"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11810,12 +9659,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11825,12 +9669,47 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ctrl"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ctrl"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "o"
+                    }
+                  }
+                },
                 {
                   "type": "key",
                   "data": {
@@ -11842,114 +9721,6 @@
                   }
                 }
               ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "ctrl"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": true,
-                    "key": {
-                      "type": "qcode",
-                      "data": "o"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "o"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "key",
-                  "data": {
-                    "down": false,
-                    "key": {
-                      "type": "qcode",
-                      "data": "ctrl"
-                    }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
               "pause_ms": 100
             },
             {
@@ -12011,12 +9782,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12026,12 +9792,7 @@
                       "data": "n"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12041,12 +9802,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12056,12 +9812,7 @@
                       "data": "o"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12071,12 +9822,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12086,12 +9832,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12101,12 +9842,7 @@
                       "data": "e"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12118,7 +9854,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -12131,12 +9867,7 @@
                       "data": "dot"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12146,12 +9877,7 @@
                       "data": "dot"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12161,12 +9887,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12176,12 +9897,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12191,12 +9907,7 @@
                       "data": "x"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12206,12 +9917,7 @@
                       "data": "x"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12221,12 +9927,7 @@
                       "data": "t"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12238,7 +9939,7 @@
                   }
                 }
               ],
-              "pause_ms": 60
+              "pause_ms": 20
             },
             {
               "events": [
@@ -12251,12 +9952,7 @@
                       "data": "ret"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12265,114 +9961,6 @@
                       "type": "qcode",
                       "data": "ret"
                     }
-                  }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
                   }
                 }
               ],
@@ -12581,42 +10169,27 @@
                       "data": "alt"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
                     "down": true,
                     "key": {
                       "type": "qcode",
-                      "data": "f4"
+                      "data": "f"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
                     "down": false,
                     "key": {
                       "type": "qcode",
-                      "data": "f4"
+                      "data": "f"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
@@ -12626,65 +10199,25 @@
                       "data": "alt"
                     }
                   }
-                }
-              ],
-              "pause_ms": 60
-            },
-            {
-              "events": [
+                },
                 {
-                  "type": "rel",
+                  "type": "key",
                   "data": {
-                    "axis": "x",
-                    "value": 0
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "x"
+                    }
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
-                  "type": "rel",
+                  "type": "key",
                   "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
-                  }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
-                {
-                  "type": "rel",
-                  "data": {
-                    "axis": "x",
-                    "value": 0
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "x"
+                    }
                   }
                 }
               ],
@@ -12821,12 +10354,7 @@
                       "data": "a"
                     }
                   }
-                }
-              ],
-              "pause_ms": 100
-            },
-            {
-              "events": [
+                },
                 {
                   "type": "key",
                   "data": {
