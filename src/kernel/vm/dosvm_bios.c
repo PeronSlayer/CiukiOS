@@ -396,7 +396,7 @@ int dosvm_bios_init(struct dosvm *v)
     flush_text(v);
     static const uint8_t keyboard_irq[] = {0xCD,0xFE,0x50,0xB0,0x20,0xE6,0x20,0x58,0xCF};
     memcpy(rom + 9 * 16, keyboard_irq, sizeof(keyboard_irq));
-    uint8_t *callback_rom = P2V(v->frames[0xF1]);
+    uint8_t *callback_rom = (uint8_t *)P2V(v->frames[0xF1]) + (DOSVM_MOUSE_RETURN & 0xFFF);
     callback_rom[0] = 0xCD; callback_rom[1] = 0xFD; callback_rom[2] = 0xF4;
     return 0;
 }

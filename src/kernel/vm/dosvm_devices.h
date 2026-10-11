@@ -4,6 +4,10 @@
 #include <ciuki/dosvm.h>
 #define DOSVM_PIT_CATCHUP 64u
 #define DOSVM_KBD_BYTES 1152u /* legacy cvgp capacity: all held-key releases fit */
+/* INT 33h callback continuation F000:1020 (INT FD; HLT). F000:1000-1011 is the
+ * f3-03 EMS entry and its EMMXXXX0 name: sharing 1000h sent every callback
+ * RETF into the EMS service (f3-01 host finding, 2026-10-11). */
+#define DOSVM_MOUSE_RETURN 0x1020u
 struct dosvm_pit_channel {
     uint32_t reload, phase, pending;
     uint16_t latch;

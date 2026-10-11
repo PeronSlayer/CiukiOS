@@ -78,6 +78,8 @@ class DosVMTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<H',record,24)[0],builder.DATE)
         self.assertEqual(builder.PERSONALITY['CIUKIDOS_EXTERNAL_XMS'],1)
         self.assertEqual(builder.PERSONALITY['STAGE1_BOOT_EXTERNAL_SHELL'],1)
+        # The VMM's INT 33h must survive the DOS boot (f3-01 host review finding).
+        self.assertEqual(builder.PERSONALITY['CIUKIDOS_FIRMWARE_MOUSE'],1)
         self.assertEqual(builder.PERSONALITY['ENABLE_PS2_MOUSE_INIT'],0)
 
 

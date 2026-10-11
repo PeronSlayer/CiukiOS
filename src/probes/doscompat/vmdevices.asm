@@ -23,7 +23,7 @@ start:
     mov ds,ax
     mov es,ax
     mov di,magic
-    mov cx,13
+    mov cx,14                   ; 0600h..061Bh: the whole mailbox, last_ip included
     rep stosw
     mov word [8*4],timer
     mov [8*4+2],cs
@@ -43,7 +43,7 @@ start:
     mov al,1
     out 0x21,al
     out 0xA1,al
-    mov al,0xFC                 ; IRQ0/1 unmasked, slave absent
+    mov al,0xFC                 ; IRQ0/1 enabled (mask bits clear), slave absent
     out 0x21,al
     mov al,0xFF
     out 0xA1,al
@@ -82,7 +82,8 @@ start:
 .wait_input:
     cmp word [command],4
     jne .wait_input
-    mov al,0xFE                 ; timer stays masked; IRQ1 unmasked
+    mov al,0xFD                 ; OCW1 bit=1 masks (8259A p.13): only IRQ1 enabled,
+                                ; the pending IRQ0 stays masked
     out 0x21,al
     sti
     mov word [stage],5

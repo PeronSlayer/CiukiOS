@@ -94,7 +94,7 @@ int dosvm_mouse_dispatch(struct dosvm *v, struct v86_frame *f)
     if (f->tf.user_ss > 0xFFFF || (uint16_t)f->tf.user_esp < 4 ||
         !dosvm_range(v, ((uint32_t)m->callback_cs << 4) + m->callback_ip, 1, false)) return -EFAULT;
     uint16_t sp = (uint16_t)f->tf.user_esp - 4;
-    uint16_t ret[2] = {0x1000,0xF000};
+    uint16_t ret[2] = {DOSVM_MOUSE_RETURN,0xF000};
     if (dosvm_write(v, (f->tf.user_ss << 4) + sp, ret, 4)) return -EFAULT;
     m->saved = *f; m->saved_vif = v->monitor.vif; m->active = true;
     mouse_low(&f->tf.user_esp, sp); f->tf.cs = m->callback_cs; f->tf.eip = m->callback_ip;
@@ -109,7 +109,7 @@ int dosvm_mouse_dispatch(struct dosvm *v, struct v86_frame *f)
 int dosvm_mouse_return(struct dosvm *v, struct v86_frame *f)
 {
     struct dosvm_mouse *m = &v->mouse;
-    if (!m->active || f->tf.cs != 0xF000 || f->tf.eip != 0x1002 ||
+    if (!m->active || f->tf.cs != 0xF000 || f->tf.eip != DOSVM_MOUSE_RETURN + 2 ||
         f->tf.user_ss != m->saved.tf.user_ss || f->tf.user_esp != m->saved.tf.user_esp) return -V86_EPERM;
     *f = m->saved; m->active = false; v->monitor.vif = m->saved_vif;
     /* Wake from HLT: resume at the instruction following the HLT. */
