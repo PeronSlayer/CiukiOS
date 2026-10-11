@@ -62,6 +62,12 @@ dormiva con `hlt` dopo che entrambi gli IRQ1 erano già stati consegnati al
 confine dopo STI: i cicli di attesa ora verificano la condizione a
 interruzioni spente e dormono con `sti; hlt`.
 
+Nel tardo pomeriggio sono state fuse anche f3-02 (`36e9c12`: VGA
+intercettata su A0000h–BFFFFh, risposte INT 10h/VBE, font, `/bin/dosbox`
+con la syscall 72, sonde `vm-video` e `vm-window`) e f4-04 (`f524207`):
+la campagna 7 sull'immagine integrata (`f3-vm` a 14 casi, `f0-smoke`,
+`f2-all`, `f4-media`) è in corso; l'esito va in una voce successiva.
+
 ## Decisioni
 
 - Le direttive aperte si realizzano con subagent Claude: Opus per kernel,
