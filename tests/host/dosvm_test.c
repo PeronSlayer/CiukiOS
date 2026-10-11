@@ -7,6 +7,16 @@
 #include <string.h>
 #include <setjmp.h>
 #include <unistd.h>
+#undef _SC_PAGESIZE
+#undef _SC_OPEN_MAX
+#undef _SC_ARG_MAX
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
+#include <ciuki/abi.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #include <ciuki/task.h>
@@ -197,10 +207,14 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
     if (strstr(extra,"group=guest ")) guest_records++;
 }
+#include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
 #include "../../src/kernel/vm/dosvm.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
+#include "../../src/kernel/vm/dosvm_pit.c"
+#include "../../src/kernel/vm/dosvm_kbd.c"
+#include "../../src/kernel/vm/dosvm_mouse.c"
 #include "../../src/kernel/vm/dosvm_xms.c"
 #include "../../src/kernel/vm/dosvm_umb.c"
 #include "../../src/kernel/vm/dosvm_ems.c"
@@ -317,9 +331,9 @@ static void test_lifecycle_records(void)
     struct dosvm *next=create(); CHECK(dosvm_key(next).id==expired.id && dosvm_key(next).generation!=expired.generation && !dosvm_keyboard(expired,'X'));
     CHECK(!dosvm_boot(next)); value=1; CHECK(!v86_io(&next->monitor,0x92,1,true,&value) && next->info.reason==DOSVM_RESET); destroy(next,true); empty();
     /* OUT hands the handler the whole EAX: a dirty AH must not hide the command byte (QEMU 2026-10-11). */
-    next=create(); CHECK(!dosvm_boot(next)); value=0xFFD1; CHECK(!v86_io(&next->monitor,0x64,1,true,&value)); value=0xFF03; CHECK(!v86_io(&next->monitor,0x60,1,true,&value) && next->a20);
-    value=0xFFD0; CHECK(!v86_io(&next->monitor,0x64,1,true,&value) && next->kbc_pending); value=0; CHECK(!v86_io(&next->monitor,0x64,1,false,&value) && value==1);
-    value=0; CHECK(!v86_io(&next->monitor,0x60,1,false,&value) && value==3 && !next->kbc_pending);
+    next=create(); CHECK(!dosvm_boot(next)); CHECK(!dosvm_set_a20(next,false)); value=0xFFD1; CHECK(!v86_io(&next->monitor,0x64,1,true,&value)); value=0xFF03; CHECK(!v86_io(&next->monitor,0x60,1,true,&value) && next->a20);
+    value=0xFFD0; CHECK(!v86_io(&next->monitor,0x64,1,true,&value)); value=0; CHECK(!v86_io(&next->monitor,0x64,1,false,&value) && (value&1));
+    value=0; CHECK(!v86_io(&next->monitor,0x60,1,false,&value) && (value&2)); value=0; CHECK(!v86_io(&next->monitor,0x64,1,false,&value) && !(value&1));
     value=0xFF00; CHECK(!v86_io(&next->monitor,DOSVM_CONTROL_PORT,1,true,&value) && next->info.state==DOSVM_STOPPING && next->info.reason==DOSVM_EXIT); destroy(next,true); empty();
     next=create(); CHECK(!dosvm_boot(next)); next->monitor.vif=false; next->boot_deadline=g_ticks+2;
     guest_halt=true; run_worker(next); guest_halt=false;
@@ -464,10 +478,11 @@ static void test_memory_services(void)
     allocation_calls=0; fail_at=n+50; v=(void *)1; CHECK(dosvm_create(0,&v)==-ENOMEM && !v); fail_at=0; empty();
     printf("DOS memory services: XMS/EMS/UMB state machines and move/resize validators PASS\n");
 }
+#include "dosvm_devices_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
+#include <ciuki/cpu.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
 
@@ -300,7 +301,9 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
         dosvm_write(v, 0x46C, &v->bios_ticks, 4); dosvm_write(v, 0x470, &v->midnight, 1);
         return 0;
     }
-    case 9: case 0x1C: return 0;
+    case 9: return dosvm_kbd_bios(v);
+    case 0x33: return dosvm_mouse_bios(v, f);
+    case 0x1C: return 0;
     case 0x10: return text_bios(v, f);
     case 0x11: low(&f->tf.eax, 0x22); return 0;
     case 0x12: low(&f->tf.eax, 640); return 0;
@@ -315,6 +318,7 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
         return memory_bios(v,f);
     case 0x16:
         dosvm_input_poll(v);
+        if (dosvm_keyboard_refresh(v)) return -EFAULT;
         if (fn == 0 || fn == 0x10 || fn == 1 || fn == 0x11) {
             bool peek = fn == 1 || fn == 0x11;
             if (!peek && !v->key_count) {
@@ -324,11 +328,15 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
             f->tf.eflags = (f->tf.eflags & ~V86_ZF) | (!v->key_count ? V86_ZF : 0);
             if (v->key_count) {
                 low(&f->tf.eax, v->keyboard[v->key_head]);
-                if (!peek) { v->key_head = (v->key_head + 1) % ARRAY_SIZE(v->keyboard); v->key_count--; }
+                if (!peek) {
+                    v->key_head = (v->key_head + 1) % 16; v->key_count--;
+                    uint16_t head = 0x1E + v->key_head * 2;
+                    if (dosvm_write(v, 0x41A, &head, 2)) return -EFAULT;
+                }
             }
             return 0;
         }
-        if (fn == 2 || fn == 0x12) { low(&f->tf.eax, 0); return 0; }
+        if (fn == 2 || fn == 0x12) { low(&f->tf.eax, v->kbd.shift); return 0; }
         if (fn == 5) { low(&f->tf.eax, dosvm_keyboard(v->info.key, f->tf.ecx) ? 0 : 1); return 0; }
         carry(f, true); return 0;
     case 0x19: dosvm_stop(v->info.key, DOSVM_RESET); return 0;
@@ -386,7 +394,10 @@ int dosvm_bios_init(struct dosvm *v)
     bda16(v, 0x485, 16);
     for (unsigned i = 0; i < 2000; i++) v->text[i] = 0x0720;
     flush_text(v);
-    v->kbc_output = 3;
+    static const uint8_t keyboard_irq[] = {0xCD,0xFE,0x50,0xB0,0x20,0xE6,0x20,0x58,0xCF};
+    memcpy(rom + 9 * 16, keyboard_irq, sizeof(keyboard_irq));
+    uint8_t *callback_rom = (uint8_t *)P2V(v->frames[0xF1]) + (DOSVM_MOUSE_RETURN & 0xFFF);
+    callback_rom[0] = 0xCD; callback_rom[1] = 0xFD; callback_rom[2] = 0xF4;
     return 0;
 }
 
@@ -465,7 +476,12 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
     if (v->info.state >= DOSVM_STOPPING) return -V86_EIO;
     for (unsigned i = 0; i < DOSVM_PORTS; i++)
         if (v->ports[i].handler && port >= v->ports[i].first && port <= v->ports[i].last)
-            return v->ports[i].handler(v, port, width, write, value, v->ports[i].arg);
+        {
+            uint32_t flags = (v->ports[i].handler == dosvm_pit_port || v->ports[i].handler == dosvm_kbd_port) ? irq_save() : 0;
+            int result = v->ports[i].handler(v, port, width, write, value, v->ports[i].arg);
+            if (v->ports[i].handler == dosvm_pit_port || v->ports[i].handler == dosvm_kbd_port) irq_restore(flags);
+            return result;
+        }
     if (port == DOSVM_FAULT_PORT) return -V86_EPERM;
     if (port == DOSVM_RECORD_PORT || port == DOSVM_CONTROL_PORT) {
         if (width != 1 || !write) return -V86_EPERM;
@@ -474,32 +490,13 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
         if ((uint8_t)*value != 0) return -V86_EPERM;
         return dosvm_stop(v->info.key, DOSVM_EXIT);
     }
-    if (port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1 || (port >= 0x40 && port <= 0x43) || port == 0x61)
+    if (port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1)
         return -ENOSYS;
-    if (port == 0x92 || port == 0x60 || port == 0x64) {
+    if (port == 0x92) {
         if (width != 1) return -V86_EPERM;
-        if (!write) {
-            *value = port == 0x92 ? (v->a20 ? 2 : 0) : port == 0x64 ? (v->kbc_pending ? 1 : 0) :
-                     v->kbc_pending ? v->kbc_reply : 0xFF;
-            if (port == 0x60) v->kbc_pending=false;
-            return 0;
-        }
-        uint8_t byte = (uint8_t)*value; /* OUT carries the whole EAX; AH is not data */
-        if (port == 0x92) {
-            if (byte & 1) return dosvm_stop(v->info.key, DOSVM_RESET);
-            return dosvm_set_a20(v, !!(byte & 2));
-        }
-        if (port == 0x64) {
-            v->kbc_command = byte;
-            if (byte == 0xD0) { v->kbc_reply=v->kbc_output; v->kbc_pending=true; v->kbc_command=0; }
-            if (byte == 0xDD || byte == 0xDF) { v->kbc_command=0; return dosvm_set_a20(v,byte==0xDF); }
-            if (byte == 0xFE) return dosvm_stop(v->info.key, DOSVM_RESET);
-        } else if (v->kbc_command == 0xD1) {
-            v->kbc_output = byte; v->kbc_command = 0;
-            if (!(byte & 1)) return dosvm_stop(v->info.key, DOSVM_RESET);
-            return dosvm_set_a20(v, !!(byte & 2));
-        }
-        return 0;
+        if (!write) { *value = v->a20 ? 2 : 0; return 0; }
+        if (*value & 1) return dosvm_stop(v->info.key, DOSVM_RESET);
+        return dosvm_set_a20(v, *value & 2);
     }
     /* Absent devices: all-one reads, discarded writes, at the CPU width.
      * This includes UART, ATA, DMA, PCI, VGA and CMOS, never real access. */

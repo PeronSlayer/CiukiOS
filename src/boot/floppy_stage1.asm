@@ -254,6 +254,11 @@ runtime_service_table:
 %ifndef ENABLE_PS2_MOUSE_INIT
 %define ENABLE_PS2_MOUSE_INIT 1
 %endif
+; DOS VM personality: the Ciuki VMM firmware supplies INT 33h/INT 74h, so
+; the built-in driver must not replace them (f3-acceptance.md, f3-01).
+%ifndef CIUKIDOS_FIRMWARE_MOUSE
+%define CIUKIDOS_FIRMWARE_MOUSE 0
+%endif
 %ifndef MOUSE_VGA_SCALE_SHIFT
 %define MOUSE_VGA_SCALE_SHIFT 1
 %endif
@@ -19565,8 +19570,17 @@ convert_dec_buf:
 init_stage2_services:
     push ax
     push si
+%if CIUKIDOS_FIRMWARE_MOUSE && FAT_TYPE == 16
+    ; A DOS VM's firmware already owns INT 33h (virtual mouse with the V86
+    ; callback continuation) and INT 74h. Keep both vectors: installing the
+    ; built-in driver here found no PS/2 hardware and left INT 33h on an IRET
+    ; stub, hiding the VM mouse from every program. INT 15h/C2 chains on.
+    mov byte [cs:mouse_installed], 0
+    mov byte [cs:shell_exec_external_mouse_disabled], 1
+%else
     call install_int33_vector
     call init_mouse
+%endif
 %if FAT_TYPE == 16
 %else
     mov si, msg_stage2_ready

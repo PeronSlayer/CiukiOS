@@ -68,7 +68,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         "elf-load", "spawn-wait", "fd-table", "mmap", "signals-fault",
         "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
     };
-    static const char *const f3_names[] = { "vm-boot", "vm-memory" };
+    static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices" };
     static const char *const f4_names[] = { "optical", "audio-native" };
     const char *const *names = parsed.phase == 4 ? f4_names : parsed.phase == 3 ? f3_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
     unsigned count = parsed.phase == 4 ? ARRAY_SIZE(f4_names) : parsed.phase == 3 ? ARRAY_SIZE(f3_names) : parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);

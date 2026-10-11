@@ -23,6 +23,19 @@ struct dosvm_config {
     bool disable_umb;
     const char *probe; /* record owner for admission/stop/guest rows; NULL = "vm-boot" */
 };
+/* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
+ * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after
+ * a window claims focus. Kernel trusted transport supplies the VM key. */
+struct ciuki_input_event;
+bool dosvm_input_focus(struct dosvm_key, bool focused);
+bool dosvm_input_event(struct dosvm_key, const struct ciuki_input_event *);
+struct dosvm_device_info {
+    uint64_t host_ticks, pit_clocks, pit_edges, pit_dropped_ticks, key_overflows;
+    uint32_t queued_bytes, held_keys, buttons;
+    uint8_t irr[2], isr[2], imr[2];
+    uint32_t delivered[16], last_vector, pic_base[2];
+};
+bool dosvm_device_info(struct dosvm_key, struct dosvm_device_info *);
 struct dosvm_admission {
     uint64_t free_bytes, reserved_bytes, resident_bytes, outstanding_bytes;
     uint32_t requested_bytes, headroom_bytes;

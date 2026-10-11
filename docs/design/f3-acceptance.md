@@ -140,6 +140,136 @@ DOSBOOT.IMG SHA-256:
 These hashes identify static build evidence only; the lead's QEMU acceptance
 is still pending.
 
+## f3-01
+
+Research checked 2026-10-11 before implementation:
+
+- [Intel 8259A datasheet](https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8259A.pdf)
+  and [QEMU 9.2 PIC](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/intc/i8259.c):
+  retain the monitor's authoritative PIC pair, move its register/arbitration
+  helpers into `dosvm_pic.c`, and latch the cascade request. An empty slave
+  at acknowledge returns slave-base+7, sets master ISR2 only, and requires
+  only master EOI. Empty master acknowledge returns master-base+7 without ISR7.
+  ICW3 and ICW4, OCW polling, special mask, rotation and auto EOI are private.
+- [Intel 8254 datasheet](https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8254.pdf):
+  migrate the legacy latch/access model, extend modes 1/4/5 and BCD counting,
+  preserve independent count/status latches, and select read-back channels
+  with set bits 1–3. Channel 2 gate is port 61 bit 0; bit 5 reads OUT2.
+  Host time is accounted first, at 1193 PIT clocks per scheduler tick.
+  Catch-up is capped at 64 host ticks per call; excess is counted and dropped
+  from device advancement while the VM clock advances by the full elapsed
+  interval. Arithmetic advancement bounds work independently of the divisor;
+  multiple edges coalesce in the PIC IRR, with expiry/drop counters exposed.
+- [QEMU PS/2 model](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/input/ps2.c)
+  and [SeaBIOS keyboard BIOS](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c):
+  normalized desktop KEY codes already use set 1. Queue whole encoded
+  sequences, keep controller replies separate from key state, and generate
+  typematic only for host repeat events. The synthetic INT09 consumes bytes,
+  updates the private BIOS keyboard queue, and EOIs the virtual PIC. INT16
+  remains in f3-00. Focus loss discards stale queued makes and queues breaks
+  for every held key; desktop TEXT must not duplicate KEY-derived input.
+- [CuteMouse upstream INT33 interface](https://github.com/FDOS/mouse/blob/master/int33.lst):
+  implement polling and a validated V86 far-call continuation, never a host
+  function pointer. The callback returns with RETF to a private ROM INT stub;
+  the monitor restores its saved frame and virtual IF. Callbacks are serialized,
+  deferred while IF is clear or a shadow is active, and revoked on stop.
+  Default text coordinates span 640×200 in 8×8 units. Text cursor decoration
+  is applied to the exported cell copy, preserving guest video memory.
+
+The desktop integration boundary is kernel-internal and generation checked:
+`dosvm_input_focus` and `dosvm_input_event`. f3-02 owns its authorized native
+transport and DOS window; the existing desktop v1/v2 wire format is unchanged.
+The existing shell-only input poll remains available until an explicit window
+claims focus. No physical controller, PIC, PIT or PS/2 access is added.
+
+Host/build and lead evidence are recorded below after implementation.
+
+### Lead findings while qualifying f3-01 on QEMU (2026-10-11)
+
+Codex stopped at its usage limit; the lead merged `main` (f3-03 services and
+the DOS VM boot fixes) into the row, gave the i8042 model sole ownership of
+ports 60h/64h (the f3-03 inline controller state was removed), named the
+VM records by the owning probe (`dosvm_config.probe = "vm-devices"`) and
+made the payload path absolute (`\VMDEV.COM`). The first QEMU runs reached
+the `cli` and `timer` stages; the `shadow` stage failed with one extra tick
+and the timer handler's interrupted IP at the `out 21h` instruction: the
+payload loaded AL *between* `mov ss` and `out`, so the MOV SS shadow ended at
+`mov al` and the pending IRQ0 was recognised before the OUT, as a real CPU
+does. The payload now loads AL before STI, so the STI shadow covers MOV SS and
+the MOV SS shadow covers the trapped OUT. The timer handler records the
+interrupted IP (`last_irq_ip` in `case=shadow`). The monitor also keeps a
+MOV SS/POP SS shadow across a single-step trap raised at the successor
+(`shadow_next`), a robustness measure for an emulator that does not suppress
+the #DB after MOV SS; real CPUs never reach that branch. A kernel-side record
+per delivered IRQ was tried and removed: its serial cost broke the timer
+stage.
+
+### Keyboard stage diagnosis (2026-10-11)
+
+The QEMU timeout record at stage 5 (`ticks=10054 keys=0 irr0=03 isr0=00
+imr0=fe queued=2`) is correct 8259A behaviour for what the payload wrote.
+[Intel 8259A, p. 13](https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8259A.pdf):
+"M = 1 indicates the channel is masked (inhibited), M = 0 indicates the
+channel is enabled"; bit 0 masks IR0. `VMDEV.COM` wrote OCW1 `FEh` for
+"IRQ1 only", which enables IR0 and masks IR1, so the 1 kHz timer ran and
+the two queued scancodes waited behind a masked IRQ1. The payload now writes
+`FDh`. `test_device_irq_delivery` (host) replays the payload's ICW/OCW and
+PIT programming, the host key events, STI with its boundary trap and HLT
+through `dosvm_trap`, `v86_emulate`, `v86_irq_deliver` and the ROM stubs:
+`FEh` delivers vector 8 with IRQ1 still queued (the QEMU record), and `FDh`
+delivers vector 9 twice (make, then host typematic) and never vector 8 across
+about 50 masked PIT edges during HLT.
+
+The same replay of stages 6 and 7 found two more defects, both fixed:
+
+- **Mouse continuation overwritten.** f3-03 put the EMS INT 67h entry
+  (`INT FE; IRET`) and its `EMMXXXX0` name at F000:1000–1011, the address
+  the INT 33h callback continuation (`INT FD; HLT`) already used, and
+  `dosvm_memory_init` runs after `dosvm_bios_init`. Every callback's RETF
+  therefore entered the EMS service and then an IRET over a non-interrupt
+  stack. The continuation now has its own slot at F000:1020
+  (`DOSVM_MOUSE_RETURN`); a host check reads both ROM layouts back.
+- **INT 33h replaced by CiukiDOS.** `init_stage2_services` installed the
+  built-in driver, whose reset fails without PS/2 hardware
+  (`ENABLE_PS2_MOUSE_INIT=0`), and `init_mouse` then pointed INT 33h at an
+  IRET stub. Every DOS program in the VM, `VMDEV.COM` included, lost the
+  VMM's mouse. The [CuteMouse INT 33h list](https://github.com/FDOS/mouse/blob/master/int33.lst)
+  defines detection as AX=0 returning FFFFh after checking that the vector
+  is neither 0000:0000 nor an IRET. The DOS VM personality now sets
+  `CIUKIDOS_FIRMWARE_MOUSE=1` (`scripts/build_dos_image.py`): CiukiDOS
+  keeps the firmware INT 33h and INT 74h vectors, records no built-in
+  driver and lets INT 15h/C2 chain. The default (0) assembles byte-identical
+  to the previous kernel.
+
+The payload also clears the whole 28-byte mailbox, including `last_ip`.
+`tests/host/record_scope_test.py` lists `probes/f3_probes_devices.c` as an
+evidence producer, like the other probe files.
+
+Open items for the lead: the EMS name is found at handler offset+0Ah
+(CiukiDOS and `VMMEMORY.COM` check it there), not at segment:000Ah where the
+"get interrupt vector" method of
+[LIM EMS 4.0](https://lo-tech.co.uk/wiki/LIM_Expanded_Memory_Specification_V4)
+looks, because the vector is F000:1000. Separately, port 60h returns FFh when the output buffer is empty,
+while QEMU's `ps2_read_data` returns the last byte ("needed for EMM386").
+
+### Wait loops (QEMU, image from a9e3845, 2026-10-11)
+
+With `FDh`, both key events arrived through vector 9 (`keys=2 isr1=2`,
+`irq1=2`, ISR clear) but stage 6 never came. The stopped frame had `AX=00FDh`
+and `SP=FFFAh` with `0000h,1746h`, which is CiukiDOS's COM entry frame
+(PSP:0000 pushed below SP=FFFEh), so the guest was halted in its main loop.
+`.wait_keys` was `HLT; CMP keys,2; JB`. The two IRQ1s became deliverable at
+STI and were taken at the boundary after `mov word [stage],5`, because the
+[STI](https://www.felixcloutier.com/x86/sti) inhibition "ends after ... the
+execution of the next instruction". They returned to the HLT, which then
+waited for an interrupt that never came (IRQ0 masked, keyboard drained). A
+real CPU behaves the same; the monitor's delivery at that `#DB` boundary is
+correct. `.wait_keys` and `.wait_focus` now test their condition with IF
+clear and sleep with `STI; HLT`. The shadow then covers HLT, so an interrupt
+pending at STI is taken after HLT and wakes it. The host replay reproduces the hang
+(old loop: still halted after 200 ms, AX=FDh, IP after HLT) and runs the
+corrected loops, including a focus release made pending before `STI; HLT`.
+
 ## f3-03
 
 Research checked before implementation, 2026-10-11: [XMS 3.0](https://www.phatcode.net/res/219/files/xms30.txt),
