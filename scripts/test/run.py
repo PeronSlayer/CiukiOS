@@ -329,6 +329,29 @@ def failed_prerequisite(case, result):
         result.get('operator_confirmation') is True)
 
 
+def record_dos_payloads(result, parser):
+    """f3-04: hashes the guest measured on its DOS disk (DATA group=dos_payload
+    path= size= sha256=) must equal the image manifest's dos.payloads."""
+    records = [r for r in parser.records if r.get('event') == 'DATA' and r.get('group') == 'dos_payload']
+    result['dos_payload_hash_comparisons'] = []
+    if not records:
+        return
+    manifest_path = result['build_manifest'].get('path')
+    manifest = json.loads(Path(manifest_path).read_text()) if manifest_path != 'unknown' else {}
+    payloads = {p.get('path'):p for p in manifest.get('dos',{}).get('payloads',[])}
+    seen = set()
+    for record in records:
+        path, actual = record.get('path'), record.get('sha256')
+        if path in seen:raise EvidenceError('duplicate guest-measured DOS payload hash: '+str(path))
+        seen.add(path)
+        expected = payloads.get(path) or {}
+        match = bool(expected and isinstance(actual,str) and re.fullmatch('[0-9a-fA-F]{64}',actual) and
+                     actual.lower() == str(expected.get('sha256','')).lower() and record.get('size') == str(expected.get('size')))
+        result['dos_payload_hash_comparisons'].append({'path':path,'guest_sha256':actual,
+                                                      'host_sha256':expected.get('sha256','unknown'),'match':match})
+        if not match:raise EvidenceError('guest-measured DOS payload hash differs from image manifest: '+str(path))
+
+
 def record_f2_result(result, parser):
     empty = f2_metadata([])
     result.update({k:v for k,v in empty.items() if k != 'missing_fields'})
@@ -1468,6 +1491,10 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     result['outcome']='fail';result['reason']='corrupted fixture changed during read-only mount case'
         if request.startswith('f2:'):
             try:record_f2_result(result,parser)
+            except (OSError,ValueError,RuntimeError) as e:
+                result['outcome']='fail';result['reason']=str(e)
+        if request.startswith('f3:'):
+            try:record_dos_payloads(result,parser)
             except (OSError,ValueError,RuntimeError) as e:
                 result['outcome']='fail';result['reason']=str(e)
         if result['outcome']=='pass' and (case['probe']=='fd-table' or case.get('checks') or case.get('digests') or case.get('crash_observation')):

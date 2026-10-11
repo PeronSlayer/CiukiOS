@@ -1809,6 +1809,23 @@ const char *records(void) { return evidence; }
                 else:
                     with self.assertRaisesRegex(EvidenceError,'guest-loaded'):runner.record_f2_result(result,parser)
 
+    def test_f3_dos_payload_hashes_match_image_manifest(self):
+        scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            manifest=Path(directory)/'build-manifest.json'
+            digest=hashlib.sha256(b'dos4gw').hexdigest()
+            manifest.write_text(json.dumps({'dos':{'payloads':[{'path':'/SYSTEM/DOS4GW.EXE','size':6,'sha256':digest}]}}))
+            for actual,size,ok in ((digest,6,True),('0'*64,6,False),(digest,7,False)):
+                parser=Parser('12345678','dpmi')
+                for seq,extra in enumerate(('event=BEGIN',f'event=DATA group=dos_payload path=/SYSTEM/DOS4GW.EXE size={size} sha256={actual}','event=END status=PASS'),1):
+                    parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=dpmi {extra}'.encode())
+                result={'build_manifest':{'path':str(manifest)},'probe':'dpmi','outcome':'pass'}
+                if ok:
+                    runner.record_dos_payloads(result,parser)
+                    self.assertTrue(result['dos_payload_hash_comparisons'][0]['match'])
+                else:
+                    with self.assertRaisesRegex(EvidenceError,'DOS payload'):runner.record_dos_payloads(result,parser)
+
     def test_app_result_requires_provenance_setup_wait_and_complete_output(self):
         scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:

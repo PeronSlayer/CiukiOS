@@ -3476,9 +3476,12 @@ int21_exec_set_context_slot:
     push ax
     xor ax, ax
     mov al, [cs:dos_exec_state_depth]
-    cmp ax, 3
+    ; f3-04: four EXEC state frames (DOS_EXEC_STATE_FRAME_MAX) need four
+    ; return-context slots; a fourth nested EXEC (kernel, SHELL.COM,
+    ; COMMAND.COM, program, extender/child) overwrote slot 3 before.
+    cmp ax, 4
     jbe .store
-    mov ax, 3
+    mov ax, 4
 .store:
     mov [cs:current_mz_context_slot], ax
     pop ax
@@ -3892,6 +3895,8 @@ int21_exec_slot_free:
 
 int21_exec_run_com:
     mov ax, [cs:current_psp_seg]
+    cmp word [cs:current_mz_context_slot], 4
+    je .save_fourth_ctx
     cmp word [cs:current_mz_context_slot], 3
     je .save_third_ctx
     cmp word [cs:current_mz_context_slot], 2
@@ -3915,6 +3920,16 @@ int21_exec_run_com:
     mov [cs:saved_ds3], ax
     mov ax, es
     mov [cs:saved_es3], ax
+    jmp .ctx_saved
+
+.save_fourth_ctx:
+    mov [cs:saved_psp4], ax
+    mov [cs:saved_ss4], ss
+    mov [cs:saved_sp4], sp
+    mov ax, ds
+    mov [cs:saved_ds4], ax
+    mov ax, es
+    mov [cs:saved_es4], ax
     jmp .ctx_saved
 
 .save_primary_ctx:
@@ -4014,6 +4029,8 @@ int21_exec_run_com:
     call int21_restore_psp_term_vectors
 .retf_vectors_done:
     call ciukidos_restore_parent_dta
+    cmp word [cs:current_mz_context_slot], 4
+    je .restore_fourth_ss
     cmp word [cs:current_mz_context_slot], 3
     je .restore_third_ss
     cmp word [cs:current_mz_context_slot], 2
@@ -4028,6 +4045,11 @@ int21_exec_run_com:
     mov ss, ax
     mov sp, [cs:saved_sp3]
     jmp .done_ss_restore
+.restore_fourth_ss:
+    mov ax, [cs:saved_ss4]
+    mov ss, ax
+    mov sp, [cs:saved_sp4]
+    jmp .done_ss_restore
 .restore_primary_ss:
     mov ax, [cs:saved_ss]
     mov ss, ax
@@ -4035,6 +4057,8 @@ int21_exec_run_com:
 .done_ss_restore:
     sti
 
+    cmp word [cs:current_mz_context_slot], 4
+    je .restore_fourth_ctx
     cmp word [cs:current_mz_context_slot], 3
     je .restore_third_ctx
     cmp word [cs:current_mz_context_slot], 2
@@ -4060,6 +4084,16 @@ int21_exec_run_com:
     clc
     ret
 
+.restore_fourth_ctx:
+    mov ax, [cs:saved_ds4]
+    mov ds, ax
+    mov ax, [cs:saved_es4]
+    mov es, ax
+    mov ax, [cs:saved_psp4]
+    call int21_set_current_psp
+    clc
+    ret
+
 .restore_primary_ctx:
     mov ax, [cs:saved_ds]
     mov ds, ax
@@ -4072,11 +4106,16 @@ int21_exec_run_com:
 
 .arena_prepare_fail:
     call ciukidos_restore_parent_dta
+    cmp word [cs:current_mz_context_slot], 4
+    je .arena_fail_fourth
     cmp word [cs:current_mz_context_slot], 3
     je .arena_fail_third
     cmp word [cs:current_mz_context_slot], 2
     jne .arena_fail_primary
     mov ax, [cs:saved_psp2]
+    jmp .arena_fail_parent_ready
+.arena_fail_fourth:
+    mov ax, [cs:saved_psp4]
     jmp .arena_fail_parent_ready
 .arena_fail_third:
     mov ax, [cs:saved_psp3]
@@ -4603,6 +4642,8 @@ int21_exec_run_mz:
     mov ax, ds
     mov dx, es
     mov bx, [cs:current_psp_seg]
+    cmp word [cs:current_mz_context_slot], 4
+    je .save_fourth_ctx
     cmp word [cs:current_mz_context_slot], 3
     je .save_third_ctx
     cmp word [cs:current_mz_context_slot], 2
@@ -4620,6 +4661,14 @@ int21_exec_run_mz:
     mov [cs:saved_sp3], sp
     mov [cs:saved_ds3], ax
     mov [cs:saved_es3], dx
+    jmp .ctx_saved
+
+.save_fourth_ctx:
+    mov [cs:saved_psp4], bx
+    mov [cs:saved_ss4], ss
+    mov [cs:saved_sp4], sp
+    mov [cs:saved_ds4], ax
+    mov [cs:saved_es4], dx
     jmp .ctx_saved
 
 .save_primary_ctx:
@@ -4732,6 +4781,8 @@ int21_exec_run_mz:
 .retf_vectors_done:
     call ciukidos_restore_parent_dta
     ; restore SS:SP from appropriate slot
+    cmp word [cs:current_mz_context_slot], 4
+    je .restore_fourth_ss
     cmp word [cs:current_mz_context_slot], 3
     je .restore_third_ss
     cmp word [cs:current_mz_context_slot], 2
@@ -4745,6 +4796,11 @@ int21_exec_run_mz:
     mov ss, ax
     mov sp, [cs:saved_sp3]
     jmp .done_ss_restore
+.restore_fourth_ss:
+    mov ax, [cs:saved_ss4]
+    mov ss, ax
+    mov sp, [cs:saved_sp4]
+    jmp .done_ss_restore
 .restore_primary_ss:
     mov ax, [cs:saved_ss]
     mov ss, ax
@@ -4752,6 +4808,8 @@ int21_exec_run_mz:
 .done_ss_restore:
     sti
 
+    cmp word [cs:current_mz_context_slot], 4
+    je .restore_fourth_ctx
     cmp word [cs:current_mz_context_slot], 3
     je .restore_third_ctx
     cmp word [cs:current_mz_context_slot], 2
@@ -4771,6 +4829,16 @@ int21_exec_run_mz:
     mov ax, [cs:saved_ds3]
     mov ds, ax
     mov ax, [cs:saved_es3]
+    mov es, ax
+    clc
+    jmp .done
+
+.restore_fourth_ctx:
+    mov ax, [cs:saved_psp4]
+    call int21_set_current_psp
+    mov ax, [cs:saved_ds4]
+    mov ds, ax
+    mov ax, [cs:saved_es4]
     mov es, ax
     clc
     jmp .done
@@ -13132,8 +13200,14 @@ int21_alloc:
     ret
 
 .req_ready:
+    ; f3-04: MS-DOS and FreeDOS grant a zero-paragraph request a valid
+    ; block. DOS extenders allocate the DPMI host data area this way even
+    ; when INT 2Fh/1687h reports SI=0 (DOS/4GW: "DPMI host error"). Grant
+    ; one paragraph so the block can be freed or resized like any other.
     cmp bx, 0
-    je .no_memory
+    jne .req_nonzero
+    mov bx, 1
+.req_nonzero:
 
     call int21_mem_table_alloc_from_free
     jnc .alloc_from_table_ready
@@ -24535,6 +24609,14 @@ saved_sp3 dw 0
 saved_ds3 dw 0
 saved_es3 dw 0
 dos_exec_saved_context_end:
+; f3-04: the fourth return-context slot is written only by an EXEC issued at
+; depth 3 and read when that child returns; it stays outside the per-frame
+; snapshot so the 352-byte EXEC state frames keep their size.
+saved_psp4 dw 0
+saved_ss4 dw 0
+saved_sp4 dw 0
+saved_ds4 dw 0
+saved_es4 dw 0
 com_entry_off dw 0
 com_entry_seg dw 0
 com_stack_sp dw 0xFFFE

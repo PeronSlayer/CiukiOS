@@ -48,6 +48,7 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         out->tasks += v->task != 0;
         /* Count owned backing once, including unmapped EMS-window backing. */
         if (v->as.pd_phys) out->pages += DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1;
+        out->pages += v->audio.q.page_count; /* f3-05 PCM/event queues */
         out->handles += v->base_open + v->overlay_open;
         out->devices += 4; /* authoritative PIC, PIT, text/input service and VGA adapter */
         out->reserved += v->info.commitment;
@@ -126,6 +127,32 @@ static struct dosvm *owner(const struct task *t)
         if (slots[i].task == t && t) return &slots[i];
     return 0;
 }
+/* f3-04 scheduler hook: the incoming worker's LDT and watchpoints, or none. */
+void dosvm_task_switch(const struct task *t)
+{
+    struct dosvm *v = owner(t);
+    if (v && v->dpmi.active) {
+        uint32_t address[4] = {0};
+        for (unsigned i = 0; i < DPMI_WATCH; i++) address[i] = v->dpmi.watch[i].addr;
+        arch_ldt_load(v->dpmi.ldt, DPMI_LDT_ENTRIES);
+        arch_debug_load(address, v->dpmi.dr7);
+    } else {
+        arch_ldt_load(0, 0);
+        arch_debug_load((const uint32_t[4]){0}, 0);
+    }
+}
+bool dosvm_client(const struct task *t)
+{
+    struct dosvm *v = owner(t);
+    return v && v->continuation && v->dpmi.active;
+}
+bool dosvm_dpmi_info(struct dosvm_key key, struct dpmi_info *out)
+{
+    struct dosvm *v = dosvm_lookup(key);
+    if (!out || !v || !v->info.key.generation || v->info.state == DOSVM_DEAD) return false;
+    dpmi_info_fill(v, out);
+    return true;
+}
 uint32_t dosvm_task_cr3(const struct task *t, uint32_t normal)
 {
     struct dosvm *v = owner(t);
@@ -156,8 +183,8 @@ static bool wake_condition(void *arg)
 {
     struct dosvm *v = arg;
     return v->info.state == DOSVM_STOPPING ||
-           (v->monitor.vif && !v->monitor.shadow &&
-            (v86_irq_pending(&v->monitor) >= 0 || v->mouse.pending_mask));
+           (v->monitor.vif && !v->monitor.shadow && !v->dpmi.shadow &&
+            (v86_irq_pending(&v->monitor) >= 0 || (!v->frame_pm && v->mouse.pending_mask)));
 }
 void dosvm_input_poll(struct dosvm *v)
 {
@@ -191,18 +218,36 @@ int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
     return 0;
 }
 
+/* Every trap of the worker's guest, V86 or (f3-04) a ring-3 DPMI client.
+ * The hardware frame is copied into v->frame, the single working copy all
+ * emulation, dispatch and mode switches use; it goes back to the stack when
+ * the mode is unchanged, otherwise the worker re-enters with the new frame
+ * (a PM trap_frame and a V86 frame differ in size on the same TSS stack). */
 bool dosvm_trap(struct trap_frame *tf)
 {
     struct dosvm *v = owner(g_current);
     if (!v || !v->continuation) return false;
-    struct v86_frame *f = (struct v86_frame *)tf;
-    /* CR2 belongs to this fault only while interrupts stay off. */
+    bool pm = !(tf->eflags & V86_VM);
+    /* CR2/DR6 belong to this trap only while interrupts stay off. */
     uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
+    uint32_t dr6 = tf->vector == 1 && v->dpmi.dr7 ? arch_debug_take() : 0;
+    unsigned size = pm ? sizeof(struct trap_frame) : sizeof(struct v86_frame);
+    struct v86_frame *f = &v->frame;
+    memcpy(f, tf, size);
+    v->frame_pm = pm;
     sti();
     int e = 0;
     if (v->info.state != DOSVM_STOPPING) {
-        if (tf->vector == 13) e = v86_emulate(&v->monitor, f);
-        else if (tf->vector == 1 && (v->monitor.shadow || v->monitor.track_boundaries)) e = v86_debug_step(&v->monitor, f);
+        if (pm) e = dpmi_pm_trap(v, f, cr2, dr6);
+        else if (tf->vector == 13) e = v86_emulate(&v->monitor, f);
+        else if (tf->vector == 1 && (v->monitor.shadow || v->monitor.track_boundaries)) {
+            if (dr6 & 15) {
+                dpmi_watch_hits(v, dr6);
+                for (unsigned i = 0; i < DPMI_WATCH; i++)
+                    if ((dr6 & (1u << i)) && v->dpmi.watch[i].type == 0) f->tf.eflags |= 1u << 16;
+            }
+            e = v86_debug_step(&v->monitor, f);
+        }
         else if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000)
             e = dosvm_vga_fault(v, f);
         else if (tf->vector == 7) fpu_handle_nm();
@@ -211,7 +256,7 @@ bool dosvm_trap(struct trap_frame *tf)
     }
     if (e < 0) {
         v->info.fault_vector = tf->vector;
-        v->info.fault_eip = (tf->cs << 4) + tf->eip;
+        v->info.fault_eip = pm ? dpmi_fault_linear(v, (const struct v86_frame *)tf) : (tf->cs << 4) + tf->eip;
         v->info.fault_address = cr2;
         v->info.fault_error = tf->err;
         dosvm_stop(v->info.key, DOSVM_FAULT);
@@ -223,25 +268,48 @@ bool dosvm_trap(struct trap_frame *tf)
             dosvm_stop(v->info.key, DOSVM_TIMEOUT);
             break;
         }
-        uint32_t flags = irq_save();
-        e = dosvm_mouse_dispatch(v, f);
-        if (!e) e = v86_irq_deliver(&v->monitor, f);
-        irq_restore(flags);
-        if (e < 0) { dosvm_stop(v->info.key, DOSVM_FAULT); break; }
+        if (v->dpmi.active) {
+            e = 0;
+            if (!v->frame_pm) {
+                uint32_t flags = irq_save();
+                e = dosvm_mouse_dispatch(v, f);
+                irq_restore(flags);
+            }
+            if (!e) e = dpmi_deliver(v, f);
+        } else {
+            uint32_t flags = irq_save();
+            e = dosvm_mouse_dispatch(v, f);
+            if (!e) e = v86_irq_deliver(&v->monitor, f);
+            irq_restore(flags);
+        }
+        if (e < 0) {
+            v->info.fault_vector = tf->vector;
+            v->info.fault_eip = dpmi_fault_linear(v, f);
+            dosvm_stop(v->info.key, DOSVM_FAULT);
+            break;
+        }
         if (v->monitor.state != V86_HALTED) break;
         v->info.state = DOSVM_BLOCKED;
         kwait_wait_until(&v->wake, wake_condition, v, deadline_after_ms(10));
     }
+    /* A protected-mode frame must let the kernel IRET succeed. */
+    if (v->info.state != DOSVM_STOPPING && v->frame_pm && !dpmi_frame_check(v, f)) {
+        v->info.fault_vector = 13;
+        v->info.fault_eip = dpmi_fault_linear(v, f);
+        v->dpmi.stats.faults++;
+        dosvm_stop(v->info.key, DOSVM_FAULT);
+    }
     if (v->info.state == DOSVM_STOPPING) {
-        v->frame = *f;
         cli();
         v86_leave(v->continuation);
     }
     if (v->info.state == DOSVM_BLOCKED)
         v->info.state = v->info.dos_ready ? DOSVM_RUNNABLE : DOSVM_BOOTING;
     if (g_need_resched) schedule();
-    v86_prepare_return(&v->monitor, f);
+    if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
     cli();
+    if (v->frame_pm != pm) v86_leave(v->continuation);
+    memcpy(tf, f, size);
     return true;
 }
 
@@ -249,7 +317,9 @@ static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
     if (vector == 0xFD) return dosvm_mouse_return(v, f);
-    if (vector != 0xFE) return -ENOSYS;
+    if (vector != 0xFE) return dpmi_v86_int(v, f, vector);
+    int stub = dpmi_v86_stub(v, f);
+    if (stub != -ENOSYS) return stub;
     if (f->tf.cs == VM_XMS_SEG && f->tf.eip == 4) return dosvm_xms(v, f);
     if (f->tf.cs == VM_XMS_SEG && f->tf.eip == 18) return dosvm_ems_return(v, f);
     /* Only synthetic ROM stubs may enter the private firmware service.
@@ -274,8 +344,17 @@ static void worker(void *arg)
 {
     struct dosvm *v = arg;
     write_cr3(v->as.pd_phys);
-    v86_enter(&v->frame, &v->continuation);
+    /* f3-04: a mode switch leaves the trap stack and re-enters here with
+     * the new frame; only a stopping VM ends the loop. */
+    for (;;) {
+        v86_enter(&v->frame, &v->continuation);
+        if (v->info.state == DOSVM_STOPPING) break;
+    }
     v->continuation = 0;
+    if (v->dpmi.active) {
+        arch_ldt_load(0, 0);
+        arch_debug_load((const uint32_t[4]){0}, 0);
+    }
     write_cr3(vmm_kernel_pd());
     tss_set_kernel_stack((uint32_t)v->task->kstack + KSTACK_SIZE);
     uint8_t code[8] = {0};
@@ -288,11 +367,16 @@ static void worker(void *arg)
         /* Guest registers and stack top of the last frame: the INT frame
          * and return addresses name the DOS path without a build-time trace. */
         const struct v86_frame *s = &v->frame;
-        rec_emit(dosvm_probe(v), "DATA", "group=vm_fault ax=%04x bx=%04x cx=%04x dx=%04x si=%04x di=%04x bp=%04x ds=%04x es=%04x ss=%04x sp=%04x",
-                 s->tf.eax & 0xFFFF, s->tf.ebx & 0xFFFF, s->tf.ecx & 0xFFFF, s->tf.edx & 0xFFFF,
-                 s->tf.esi & 0xFFFF, s->tf.edi & 0xFFFF, s->tf.ebp & 0xFFFF, s->ds & 0xFFFF, s->es & 0xFFFF,
-                 s->tf.user_ss & 0xFFFF, s->tf.user_esp & 0xFFFF);
+        /* A DPMI frame shows selectors and the protected-mode CS:EIP. */
+        rec_emit(dosvm_probe(v), "DATA", "group=vm_fault pm=%u ax=%04x bx=%04x cx=%04x dx=%04x si=%04x di=%04x bp=%04x ds=%04x es=%04x ss=%04x sp=%04x cs=%04x ip=%08x",
+                 v->frame_pm, s->tf.eax & 0xFFFF, s->tf.ebx & 0xFFFF, s->tf.ecx & 0xFFFF, s->tf.edx & 0xFFFF,
+                 s->tf.esi & 0xFFFF, s->tf.edi & 0xFFFF, s->tf.ebp & 0xFFFF,
+                 (v->frame_pm ? s->tf.ds : s->ds) & 0xFFFF, (v->frame_pm ? s->tf.es : s->es) & 0xFFFF,
+                 s->tf.user_ss & 0xFFFF, s->tf.user_esp & 0xFFFF, s->tf.cs & 0xFFFF, s->tf.eip);
         uint32_t top = ((s->tf.user_ss & 0xFFFF) << 4) + (s->tf.user_esp & 0xFFFF);
+        struct dpmi_seg stack;
+        if (v->frame_pm && dpmi_seg(v, (uint16_t)s->tf.user_ss, &stack))
+            top = stack.base + (stack.big ? s->tf.user_esp : (s->tf.user_esp & 0xFFFF));
         for (unsigned part = 0; part < 3; part++) {
             uint16_t w[16] = {0};
             dosvm_read(v, top + part * sizeof(w), w, sizeof(w));
@@ -319,7 +403,9 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
     if (e && v->info.dirty) v->info.data_loss = true;
+    dosvm_audio_close(v);
     if (v->as.pd_phys) {
+        dpmi_close(v);
         dosvm_memory_close(v);
         as_destroy(&v->as);
     }
@@ -365,6 +451,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->base = v->overlay = -1;
     v->a20 = true;
     v->probe = config ? config->probe : 0;
+    v->dpmi_enabled = config && config->dpmi;
     kwait_init(&v->wake);
     kwait_init(&v->disk_wait); v->disk_busy = false;
     int e = as_create(&v->as);
@@ -373,10 +460,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
         uint32_t phys = pmm_alloc_zone(ZONE_NORMAL);
         if (!phys) { e = -ENOMEM; goto fail; }
         memset(P2V(phys), 0, PAGE_SIZE);
-        uint32_t flags = PTE_U | PTE_W;
-        if (i >= 0xA0 && i < 0xC0) flags = PTE_W; /* guest #PF -> model */
-        if ((i >= 0xC0 && i < 0xC8) || (i >= 0xF0 && i < 0x100)) flags &= ~PTE_W;
-        e = as_map(&v->as, i * PAGE_SIZE, phys, flags);
+        e = as_map(&v->as, i * PAGE_SIZE, phys, dosvm_low_flags(i));
         if (e) { pmm_free(phys); goto fail; }
         v->frames[i] = phys;
         v->info.resident += PAGE_SIZE;
@@ -394,13 +478,15 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     if ((e = dosvm_port_register(v->info.key, 0x40, 0x43, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x61, 0x61, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x60, 0x60, dosvm_kbd_port, 0)) ||
-        (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0))) goto fail;
+        (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0)) ||
+        (e = dosvm_audio_init(v))) goto fail; /* f3-05 SB16, OPL3 and 8237 */
     e = dosvm_bios_init(v);
     if (e) goto fail;
     e = dosvm_memory_init(v, config);
     if (e) goto fail;
     e = dosvm_vga_init(v);
     if (e) goto fail;
+    if ((e = dpmi_rom_init(v))) goto fail;
     e = dosvm_disk_open(v);
     if (e) goto fail;
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
@@ -480,6 +566,7 @@ void dosvm_tick(void)
         v->ticks = g_ticks;
         v->clock_ms += elapsed;
         dosvm_pit_advance(v, elapsed);
+        dosvm_audio_advance(v, elapsed);
     }
 }
 const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)

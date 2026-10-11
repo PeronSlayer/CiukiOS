@@ -9,6 +9,9 @@ extern trap_return
 ; void v86_enter(const struct v86_frame *frame, uint32_t *continuation)
 ; The TSS stack ends BELOW this call's saved C continuation. Using the top
 ; of the task stack would overwrite the live BIOS worker on the first IRQ.
+; f3-04: a frame without EFLAGS.VM is a ring-3 DPMI client frame, the
+; 76-byte trap_frame whose SS:ESP/EFLAGS/CS:EIP end at the same TSS ESP0
+; (no V86 segment words). trap_return selects the matching IRET path.
 global v86_enter
 v86_enter:
     push ebp
@@ -20,9 +23,14 @@ v86_enter:
     cli
     mov [eax], esp
     mov [g_tss + 4], esp
-    sub esp, 92
-    mov edi, esp
     mov ecx, 23
+    test dword [esi + 64], 0x20000
+    jnz .copy
+    mov ecx, 19
+.copy:
+    lea edx, [ecx * 4]
+    sub esp, edx
+    mov edi, esp
     cld
     rep movsd
     jmp trap_return

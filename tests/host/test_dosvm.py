@@ -203,6 +203,57 @@ class DosVMTests(unittest.TestCase):
         # The payload's stage line is the kernel latch format "VMVIDEO s f".
         self.assertIn("line db 'VMVIDEO 0 0', 10, 0", payload)
         self.assertIn('VMVIDEO ', (ROOT / 'src/kernel/vm/dosvm_bios.c').read_text())
+    def test_audio_state_suite_needs_every_case(self):
+        # f3-05: record shapes as emitted by probes/f3_probes_audio_state.c.
+        self.assertEqual(runner.selector('f3:vm-audio-state run=12345678')['phase'], 3)
+        suite = runner.load(ROOT / 'tests/suites/f3-vm.json')
+        cases = [c for c in suite['cases'] if c['probe'] == 'vm-audio-state']
+        self.assertEqual({c['profile'] for c in cases}, {'qemu-t23', 'qemu-e500', 'qemu-min128'})
+        expected = cases[0]['expected']
+        rows = [
+            dict(case='detect', ok=1, reset='aa', version='0405', ident='aa', test='5a', speaker='ff00',
+                 base='220', irq=7, dma=1, hdma=5, error=0),
+            dict(case='mixer', ok=1, irq_bits='04', dma_bits='22', status='20', master='a8', compat='a5', default='c0'),
+            dict(case='dma8_single', ok=1, irqs=1, status='21', tc='02', blocks=1, fresh=1, frames=256, rate=8000,
+                 cause=1, host_ms=33),
+            dict(case='double_buffer', ok=1, irqs=32, blocks=32, fresh=32, services=32, boundaries=32, late=0,
+                 stale=0, bad_spacing=0, isr_bad=0, max_service=48),
+            dict(case='pause', ok=1, paused=1, units=0, boundaries=0, count=67, irqs=2),
+            dict(case='continue', ok=1, count_a=67, count_b=67, irqs=5, active=0, blocks=5, segments=6),
+            dict(case='dma16_stereo', ok=1, irqs=8, blocks=8, fresh=8, cause=2, format=7, rate=12000,
+                 bad_spacing=0, isr_bad=0),
+            dict(case='if_clear', ok=1, host_ms=101, boundaries=10, expected=10, edges=1, pending=1, delivered=0,
+                 causes=1, guest_irqs=1, lag=240),
+            dict(case='if_restore', ok=1, irqs_before=1, status='21', irqs=3),
+            dict(case='opl', ok=1, s1='00', s2='c0', t1='c0', t2='e0', s3='a0', s4='00', events=30, match=30,
+                 monotonic=1, generation=1, window=1),
+            dict(case='opl_state', ok=1, new=0, pairs='3f', rhythm='3f', r1c0='f1', rc0='31', t1_us=20440, t2_us=81760),
+            dict(case='dma_fault', ok=1, faults=1, error=1, boundaries=0, irqs=0, reset='aa', alive=1),
+            dict(case='exit', ok=1, state=4, reason=0),
+            dict(case='locality', ok=1, witness=1, frames=0, events=0, boundaries=0, causes=0, regs=0),
+            dict(case='cleanup', restored=1, vms=0, tasks=0, pages=0, handles=0, devices=0),
+        ]
+        def parse(rows, status='PASS'):
+            p = runner.Parser('12345678', 'vm-audio-state')
+            records = [('BEGIN', {'version': 1})] + [('DATA', r) for r in rows] + [('END', {'status': status, 'error': 0})]
+            for seq, (event, fields) in enumerate(records, 1):
+                row = ' '.join(f'{k}={v}' for k, v in fields.items())
+                p.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=vm-audio-state event={event} {row}\n'.encode())
+            return p
+        self.assertTrue(parse(rows).check(expected))
+        for case, field, value in [('double_buffer', 'fresh', 31), ('double_buffer', 'stale', 1),
+                                   ('if_clear', 'pending', 0), ('if_clear', 'delivered', 1), ('if_clear', 'edges', 2),
+                                   ('continue', 'count_b', 66), ('opl', 'match', 29), ('opl_state', 't1_us', 20481),
+                                   ('dma_fault', 'alive', 0), ('locality', 'events', 1), ('detect', 'version', '0201'),
+                                   ('dma16_stereo', 'format', 3), ('cleanup', 'pages', 6)]:
+            broken = copy.deepcopy(rows)
+            next(r for r in broken if r['case'] == case)[field] = value
+            with self.subTest(case=case, field=field), self.assertRaises(EvidenceError):
+                parse(broken).check(expected)
+        with self.assertRaises(EvidenceError):
+            parse([r for r in rows if r['case'] != 'opl']).check(expected)
+        with self.assertRaises(EvidenceError):
+            parse(rows, 'FAIL').check(expected)
 
     def test_dos_fat16_writer_and_fixed_dates(self):
         spec=importlib.util.spec_from_file_location('dos_builder',ROOT/'scripts/build_dos_image.py')

@@ -214,14 +214,20 @@ static int copyseg(struct v86 *v, uint32_t seg, uint32_t off, void *buf, unsigne
     return 0;
 }
 
+/* f3-04: a 386 in real mode keeps FLAGS bits 12-14 that POPF/IRET load;
+ * 8086/286 detection (DOS/16M, DOS/4GW: "protected mode available only
+ * with 386 or 486") sets them and reads them back with PUSHF. DOS VMs keep
+ * them as virtual state; the CPU always runs the guest with IOPL 0, NT 0. */
 static uint32_t guest_flags(const struct v86 *v, const struct v86_frame *f)
 {
-    return (f->tf.eflags & (v->track_boundaries ? (0xCD5u & ~V86_TF) : 0xCD5u)) | 2u | (v->vif ? V86_IF : 0);
+    return (f->tf.eflags & (v->track_boundaries ? (0xCD5u & ~V86_TF) : 0xCD5u)) | 2u | (v->vif ? V86_IF : 0) |
+           (v->track_boundaries ? v->vflags : 0u);
 }
 
 static void set_flags(struct v86 *v, struct v86_frame *f, uint32_t flags)
 {
     v->vif = !!(flags & V86_IF);
+    if (v->track_boundaries) v->vflags = (uint16_t)(flags & 0x7000u);
     /* IOPL, NT, VM, VIF/VIP and guest TF never control the host return. */
     f->tf.eflags = (flags & 0xCD5u) | V86_VM | V86_IF | 2u;
 }

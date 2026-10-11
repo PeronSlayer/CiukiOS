@@ -11,6 +11,8 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 | --- | --- |
 | Kernel and loader | `clang`, `ld.lld`, `llvm-objdump`, `nasm` (majors pinned in `config/toolchain.json`) |
 | Image | `python3`, `mkfs.fat`, `fsck.fat`, `mtools`, `qemu-img` |
+| DOS image DPMI clients (f3-04) | Open Watcom 2.0 under `/opt/watcom` (`binl64/wcl386`, `binw/dos4gw.exe` with the SHA-256 pinned in `scripts/build_dos_image.py`) |
+| Optional host guest runner | `libx86emu` (headers and library); skipped when absent |
 | Tests | `qemu-system-i386`, `systemd-run` (user scopes with a memory controller) |
 | Optical fixtures and independent extraction | `xorriso` |
 

@@ -3644,6 +3644,2469 @@
           }
         ]
       }
+    },
+    {
+      "id": "vm-audio-state-qemu-t23",
+      "probe": "vm-audio-state",
+      "profile": "qemu-t23",
+      "selector": "f3:vm-audio-state run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "ident": "aa",
+              "test": "5a",
+              "speaker": "ff00",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irq_bits": "04",
+              "dma_bits": "22",
+              "status": "20",
+              "master": "a8",
+              "compat": "a5",
+              "default": "c0"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma8_single"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 1
+              },
+              "blocks": {
+                "eq": 1
+              },
+              "fresh": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 256
+              },
+              "rate": {
+                "eq": 8000
+              },
+              "cause": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 32
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "double_buffer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "stale": {
+                "eq": 0
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pause"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "paused": {
+                "eq": 1
+              },
+              "units": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "continue"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "count_a": {
+                "eq": "$count_b"
+              },
+              "irqs": {
+                "eq": 5
+              },
+              "active": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 5
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma16_stereo"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "cause": {
+                "eq": 2
+              },
+              "format": {
+                "eq": 7
+              },
+              "rate": {
+                "eq": 12000
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_clear"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 100
+              },
+              "edges": {
+                "le": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "delivered": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 1
+              },
+              "guest_irqs": {
+                "eq": 1
+              },
+              "lag": {
+                "le": 480
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_restore"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs_before": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 3
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "s4": "00",
+              "t2": "e0",
+              "s3": "a0",
+              "events": {
+                "eq": 30
+              },
+              "match": {
+                "eq": 30
+              },
+              "monotonic": {
+                "eq": 1
+              },
+              "generation": {
+                "eq": 1
+              },
+              "window": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl_state"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "new": {
+                "eq": 0
+              },
+              "pairs": "3f",
+              "rhythm": "3f",
+              "r1c0": "f1",
+              "rc0": "31",
+              "t1_us": {
+                "ge": 20401,
+                "le": 20480
+              },
+              "t2_us": {
+                "ge": 81601,
+                "le": 81920
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma_fault"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "faults": {
+                "eq": 1
+              },
+              "error": {
+                "eq": 1
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 0
+              },
+              "reset": "aa",
+              "alive": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 0
+              },
+              "events": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 0
+              },
+              "regs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-audio-state-qemu-e500",
+      "probe": "vm-audio-state",
+      "profile": "qemu-e500",
+      "selector": "f3:vm-audio-state run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "ident": "aa",
+              "test": "5a",
+              "speaker": "ff00",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irq_bits": "04",
+              "dma_bits": "22",
+              "status": "20",
+              "master": "a8",
+              "compat": "a5",
+              "default": "c0"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma8_single"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 1
+              },
+              "blocks": {
+                "eq": 1
+              },
+              "fresh": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 256
+              },
+              "rate": {
+                "eq": 8000
+              },
+              "cause": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 32
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "double_buffer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "stale": {
+                "eq": 0
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pause"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "paused": {
+                "eq": 1
+              },
+              "units": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "continue"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "count_a": {
+                "eq": "$count_b"
+              },
+              "irqs": {
+                "eq": 5
+              },
+              "active": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 5
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma16_stereo"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "cause": {
+                "eq": 2
+              },
+              "format": {
+                "eq": 7
+              },
+              "rate": {
+                "eq": 12000
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_clear"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 100
+              },
+              "edges": {
+                "le": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "delivered": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 1
+              },
+              "guest_irqs": {
+                "eq": 1
+              },
+              "lag": {
+                "le": 480
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_restore"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs_before": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 3
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "s4": "00",
+              "t2": "e0",
+              "s3": "a0",
+              "events": {
+                "eq": 30
+              },
+              "match": {
+                "eq": 30
+              },
+              "monotonic": {
+                "eq": 1
+              },
+              "generation": {
+                "eq": 1
+              },
+              "window": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl_state"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "new": {
+                "eq": 0
+              },
+              "pairs": "3f",
+              "rhythm": "3f",
+              "r1c0": "f1",
+              "rc0": "31",
+              "t1_us": {
+                "ge": 20401,
+                "le": 20480
+              },
+              "t2_us": {
+                "ge": 81601,
+                "le": 81920
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma_fault"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "faults": {
+                "eq": 1
+              },
+              "error": {
+                "eq": 1
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 0
+              },
+              "reset": "aa",
+              "alive": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 0
+              },
+              "events": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 0
+              },
+              "regs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-audio-state-qemu-min128",
+      "probe": "vm-audio-state",
+      "profile": "qemu-min128",
+      "selector": "f3:vm-audio-state run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detect"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reset": "aa",
+              "version": "0405",
+              "ident": "aa",
+              "test": "5a",
+              "speaker": "ff00",
+              "base": "220",
+              "irq": {
+                "eq": 7
+              },
+              "dma": {
+                "eq": 1
+              },
+              "hdma": {
+                "eq": 5
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mixer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irq_bits": "04",
+              "dma_bits": "22",
+              "status": "20",
+              "master": "a8",
+              "compat": "a5",
+              "default": "c0"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma8_single"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 1
+              },
+              "blocks": {
+                "eq": 1
+              },
+              "fresh": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 256
+              },
+              "rate": {
+                "eq": 8000
+              },
+              "cause": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 32
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "double_buffer"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 32
+              },
+              "blocks": {
+                "eq": 32
+              },
+              "fresh": {
+                "eq": 32
+              },
+              "services": {
+                "eq": 32
+              },
+              "boundaries": {
+                "eq": 32
+              },
+              "stale": {
+                "eq": 0
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "pause"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "paused": {
+                "eq": 1
+              },
+              "units": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 2
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "continue"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "count_a": {
+                "eq": "$count_b"
+              },
+              "irqs": {
+                "eq": 5
+              },
+              "active": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 5
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma16_stereo"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 8
+              },
+              "blocks": {
+                "eq": 8
+              },
+              "fresh": {
+                "eq": 8
+              },
+              "cause": {
+                "eq": 2
+              },
+              "format": {
+                "eq": 7
+              },
+              "rate": {
+                "eq": 12000
+              },
+              "bad_spacing": {
+                "eq": 0
+              },
+              "isr_bad": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_clear"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "host_ms": {
+                "ge": 100
+              },
+              "edges": {
+                "le": 1
+              },
+              "pending": {
+                "eq": 1
+              },
+              "delivered": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 1
+              },
+              "guest_irqs": {
+                "eq": 1
+              },
+              "lag": {
+                "le": 480
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "if_restore"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "irqs_before": {
+                "eq": 1
+              },
+              "irqs": {
+                "eq": 3
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "s4": "00",
+              "t2": "e0",
+              "s3": "a0",
+              "events": {
+                "eq": 30
+              },
+              "match": {
+                "eq": 30
+              },
+              "monotonic": {
+                "eq": 1
+              },
+              "generation": {
+                "eq": 1
+              },
+              "window": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "opl_state"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "new": {
+                "eq": 0
+              },
+              "pairs": "3f",
+              "rhythm": "3f",
+              "r1c0": "f1",
+              "rc0": "31",
+              "t1_us": {
+                "ge": 20401,
+                "le": 20480
+              },
+              "t2_us": {
+                "ge": 81601,
+                "le": 81920
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dma_fault"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "faults": {
+                "eq": 1
+              },
+              "error": {
+                "eq": 1
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "irqs": {
+                "eq": 0
+              },
+              "reset": "aa",
+              "alive": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "locality"
+            },
+            "fields": {
+              "ok": {
+                "eq": 1
+              },
+              "witness": {
+                "eq": 1
+              },
+              "frames": {
+                "eq": 0
+              },
+              "events": {
+                "eq": 0
+              },
+              "boundaries": {
+                "eq": 0
+              },
+              "causes": {
+                "eq": 0
+              },
+              "regs": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "dpmi-qemu-t23",
+      "probe": "dpmi",
+      "profile": "qemu-t23",
+      "selector": "f3:dpmi run={run_id}",
+      "timeout": 900,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "hashes"
+            },
+            "fields": {
+              "files": {
+                "eq": 7
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "dos_payload"
+            },
+            "fields": {
+              "size": {
+                "ge": 1
+              }
+            },
+            "exact_count": 7,
+            "unique": "path"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI16"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "eq": 2
+              },
+              "entry_fails": {
+                "eq": 1
+              },
+              "terminations": {
+                "eq": 2
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI16"
+            },
+            "fields": {
+              "exceptions": {
+                "ge": 4
+              },
+              "callbacks": {
+                "ge": 8
+              },
+              "raw": {
+                "ge": 2
+              },
+              "max_depth": {
+                "ge": 8
+              },
+              "irq_pm": {
+                "ge": 1
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI32"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "eq": 2
+              },
+              "entry_fails": {
+                "eq": 1
+              },
+              "terminations": {
+                "eq": 2
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI32"
+            },
+            "fields": {
+              "exceptions": {
+                "ge": 4
+              },
+              "callbacks": {
+                "ge": 8
+              },
+              "raw": {
+                "ge": 2
+              },
+              "max_depth": {
+                "ge": 8
+              },
+              "irq_pm": {
+                "ge": 1
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "rows"
+            },
+            "fields": {
+              "ok_all": {
+                "eq": 1
+              },
+              "refused": {
+                "eq": 1
+              },
+              "invalid": {
+                "eq": 1
+              }
+            },
+            "exact_count": 2,
+            "unique": "client"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI4GW"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "ge": 1
+              },
+              "terminations": {
+                "eq": "$entries"
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI4GW"
+            },
+            "fields": {
+              "irq_pm": {
+                "ge": 4
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dos4gw"
+            },
+            "fields": {
+              "extender": "/SYSTEM/DOS4GW.EXE",
+              "version": "1.97"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "release"
+            },
+            "fields": {
+              "released": {
+                "eq": 1
+              },
+              "active": {
+                "eq": 0
+              },
+              "clients": {
+                "eq": 0
+              },
+              "selectors": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 0
+              },
+              "dos": {
+                "eq": 0
+              },
+              "callbacks": {
+                "eq": 0
+              },
+              "watch": {
+                "eq": 0
+              },
+              "depth": {
+                "eq": 0
+              },
+              "pool": {
+                "eq": 0
+              },
+              "hstack": {
+                "eq": 0
+              }
+            },
+            "exact_count": 3,
+            "unique": "client"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "gate"
+            },
+            "fields": {
+              "unadvertised": {
+                "eq": 1
+              },
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 0
+              },
+              "entries": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fault"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 2
+              },
+              "vector": {
+                "eq": 13
+              },
+              "faults": {
+                "eq": 1
+              },
+              "max_depth": {
+                "ge": 2
+              },
+              "witness": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 6
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "vm": {
+                "ge": 1,
+                "le": 4
+              },
+              "generation": {
+                "ge": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 6
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "dpmi-qemu-e500",
+      "probe": "dpmi",
+      "profile": "qemu-e500",
+      "selector": "f3:dpmi run={run_id}",
+      "timeout": 900,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "hashes"
+            },
+            "fields": {
+              "files": {
+                "eq": 7
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "dos_payload"
+            },
+            "fields": {
+              "size": {
+                "ge": 1
+              }
+            },
+            "exact_count": 7,
+            "unique": "path"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI16"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "eq": 2
+              },
+              "entry_fails": {
+                "eq": 1
+              },
+              "terminations": {
+                "eq": 2
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI16"
+            },
+            "fields": {
+              "exceptions": {
+                "ge": 4
+              },
+              "callbacks": {
+                "ge": 8
+              },
+              "raw": {
+                "ge": 2
+              },
+              "max_depth": {
+                "ge": 8
+              },
+              "irq_pm": {
+                "ge": 1
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI32"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "eq": 2
+              },
+              "entry_fails": {
+                "eq": 1
+              },
+              "terminations": {
+                "eq": 2
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI32"
+            },
+            "fields": {
+              "exceptions": {
+                "ge": 4
+              },
+              "callbacks": {
+                "ge": 8
+              },
+              "raw": {
+                "ge": 2
+              },
+              "max_depth": {
+                "ge": 8
+              },
+              "irq_pm": {
+                "ge": 1
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "rows"
+            },
+            "fields": {
+              "ok_all": {
+                "eq": 1
+              },
+              "refused": {
+                "eq": 1
+              },
+              "invalid": {
+                "eq": 1
+              }
+            },
+            "exact_count": 2,
+            "unique": "client"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI4GW"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "ge": 1
+              },
+              "terminations": {
+                "eq": "$entries"
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI4GW"
+            },
+            "fields": {
+              "irq_pm": {
+                "ge": 4
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dos4gw"
+            },
+            "fields": {
+              "extender": "/SYSTEM/DOS4GW.EXE",
+              "version": "1.97"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "release"
+            },
+            "fields": {
+              "released": {
+                "eq": 1
+              },
+              "active": {
+                "eq": 0
+              },
+              "clients": {
+                "eq": 0
+              },
+              "selectors": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 0
+              },
+              "dos": {
+                "eq": 0
+              },
+              "callbacks": {
+                "eq": 0
+              },
+              "watch": {
+                "eq": 0
+              },
+              "depth": {
+                "eq": 0
+              },
+              "pool": {
+                "eq": 0
+              },
+              "hstack": {
+                "eq": 0
+              }
+            },
+            "exact_count": 3,
+            "unique": "client"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "gate"
+            },
+            "fields": {
+              "unadvertised": {
+                "eq": 1
+              },
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 0
+              },
+              "entries": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fault"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 2
+              },
+              "vector": {
+                "eq": 13
+              },
+              "faults": {
+                "eq": 1
+              },
+              "max_depth": {
+                "ge": 2
+              },
+              "witness": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 6
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "vm": {
+                "ge": 1,
+                "le": 4
+              },
+              "generation": {
+                "ge": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 6
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "dpmi-qemu-min128",
+      "probe": "dpmi",
+      "profile": "qemu-min128",
+      "selector": "f3:dpmi run={run_id}",
+      "timeout": 900,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "hashes"
+            },
+            "fields": {
+              "files": {
+                "eq": 7
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "dos_payload"
+            },
+            "fields": {
+              "size": {
+                "ge": 1
+              }
+            },
+            "exact_count": 7,
+            "unique": "path"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI16"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "eq": 2
+              },
+              "entry_fails": {
+                "eq": 1
+              },
+              "terminations": {
+                "eq": 2
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI16"
+            },
+            "fields": {
+              "exceptions": {
+                "ge": 4
+              },
+              "callbacks": {
+                "ge": 8
+              },
+              "raw": {
+                "ge": 2
+              },
+              "max_depth": {
+                "ge": 8
+              },
+              "irq_pm": {
+                "ge": 1
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI32"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "eq": 2
+              },
+              "entry_fails": {
+                "eq": 1
+              },
+              "terminations": {
+                "eq": 2
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI32"
+            },
+            "fields": {
+              "exceptions": {
+                "ge": 4
+              },
+              "callbacks": {
+                "ge": 8
+              },
+              "raw": {
+                "ge": 2
+              },
+              "max_depth": {
+                "ge": 8
+              },
+              "irq_pm": {
+                "ge": 1
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "rows"
+            },
+            "fields": {
+              "ok_all": {
+                "eq": 1
+              },
+              "refused": {
+                "eq": 1
+              },
+              "invalid": {
+                "eq": 1
+              }
+            },
+            "exact_count": 2,
+            "unique": "client"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "client",
+              "client": "DPMI4GW"
+            },
+            "fields": {
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 1
+              },
+              "entries": {
+                "ge": 1
+              },
+              "terminations": {
+                "eq": "$entries"
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "counters",
+              "client": "DPMI4GW"
+            },
+            "fields": {
+              "irq_pm": {
+                "ge": 4
+              },
+              "stale": {
+                "eq": 0
+              },
+              "faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dos4gw"
+            },
+            "fields": {
+              "extender": "/SYSTEM/DOS4GW.EXE",
+              "version": "1.97"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "release"
+            },
+            "fields": {
+              "released": {
+                "eq": 1
+              },
+              "active": {
+                "eq": 0
+              },
+              "clients": {
+                "eq": 0
+              },
+              "selectors": {
+                "eq": 0
+              },
+              "blocks": {
+                "eq": 0
+              },
+              "dos": {
+                "eq": 0
+              },
+              "callbacks": {
+                "eq": 0
+              },
+              "watch": {
+                "eq": 0
+              },
+              "depth": {
+                "eq": 0
+              },
+              "pool": {
+                "eq": 0
+              },
+              "hstack": {
+                "eq": 0
+              }
+            },
+            "exact_count": 3,
+            "unique": "client"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "gate"
+            },
+            "fields": {
+              "unadvertised": {
+                "eq": 1
+              },
+              "verdict": {
+                "eq": 1
+              },
+              "pass": {
+                "eq": 0
+              },
+              "entries": {
+                "eq": 0
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fault"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "reason": {
+                "eq": 2
+              },
+              "vector": {
+                "eq": 13
+              },
+              "faults": {
+                "eq": 1
+              },
+              "max_depth": {
+                "ge": 2
+              },
+              "witness": {
+                "eq": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 6
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "vm": {
+                "ge": 1,
+                "le": 4
+              },
+              "generation": {
+                "ge": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 6
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
     }
   ]
 }

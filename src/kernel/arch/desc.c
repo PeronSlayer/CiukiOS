@@ -1,6 +1,7 @@
 /* GDT, TSS, double-fault TSS and IDT.
  * GDT: null, kcode 0x08, kdata 0x10, ucode 0x1B, udata 0x23, TSS 0x28,
- * double-fault TSS 0x30, native GS TLS 0x3B. Ordinary segments remain flat.
+ * double-fault TSS 0x30, native GS TLS 0x3B, DOS VM LDT 0x40 (f3-04; null
+ * unless a DPMI VM worker runs). Ordinary segments remain flat.
  * The TSS has no I/O bitmap, so every port is denied to ring 3 (IOPL 0).
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -12,7 +13,8 @@ struct gdt_entry { uint16_t lim0, base0; uint8_t base1, access, gran, base2; } _
 struct idt_entry { uint16_t off0, sel; uint8_t zero, type; uint16_t off1; } __attribute__((packed));
 struct dtr { uint16_t limit; uint32_t base; } __attribute__((packed));
 
-static struct gdt_entry gdt[CIUKI_TLS_GDT_INDEX + 1];
+static struct gdt_entry gdt[ARCH_LDT_GDT_INDEX + 1];
+_Static_assert(ARCH_LDT_GDT_INDEX == CIUKI_TLS_GDT_INDEX + 1, "LDT slot follows TLS");
 static struct idt_entry idt[256];
 struct tss g_tss;
 static struct tss df_tss;
@@ -61,6 +63,80 @@ void gdt_init(void)
 }
 
 void tss_set_kernel_stack(uint32_t esp0) { g_tss.esp0 = esp0; }
+
+/* f3-04 per-VM LDT. Intel SDM Vol. 3A 3.5.1 and LLDT: the descriptor is a
+ * system segment of type 2 in the GDT; LLDT with a null selector marks the
+ * LDTR invalid. Only the DOS VM switch hook and the DPMI entry call this;
+ * the LDT itself lives in kernel memory, supervisor-only. */
+static const void *ldt_base;
+static unsigned ldt_count;
+void arch_ldt_load(const void *base, unsigned entries)
+{
+    if (!entries)
+        base = 0;
+    if (base == ldt_base && entries == ldt_count)
+        return;
+    uint16_t selector = 0;
+    if (base) {
+        set_gdt(ARCH_LDT_GDT_INDEX, (uint32_t)base, entries * 8 - 1, 0x82, 0x00);
+        selector = SEL_LDT;
+    }
+    __asm__ volatile("lldt %0" :: "r"(selector) : "memory");
+    if (!base)
+        memset(&gdt[ARCH_LDT_GDT_INDEX], 0, sizeof(gdt[0]));
+    ldt_base = base;
+    ldt_count = entries;
+}
+
+/* VM-local DPMI watchpoints (Intel SDM Vol. 3B 17.2): local enables only,
+ * never kernel addresses (validated by the DPMI host). */
+static bool debug_active;
+void arch_debug_load(const uint32_t a[4], uint32_t dr7)
+{
+    if (!dr7) {
+        if (debug_active)
+            __asm__ volatile("mov %0, %%dr7" :: "r"(0u));
+        debug_active = false;
+        return;
+    }
+    __asm__ volatile("mov %0, %%dr7" :: "r"(0u));
+    __asm__ volatile("mov %0, %%dr0" :: "r"(a[0]));
+    __asm__ volatile("mov %0, %%dr1" :: "r"(a[1]));
+    __asm__ volatile("mov %0, %%dr2" :: "r"(a[2]));
+    __asm__ volatile("mov %0, %%dr3" :: "r"(a[3]));
+    __asm__ volatile("mov %0, %%dr7" :: "r"(dr7));
+    debug_active = true;
+}
+uint32_t arch_debug_take(void)
+{
+    uint32_t dr6;
+    __asm__ volatile("mov %%dr6, %0" : "=r"(dr6));
+    __asm__ volatile("mov %0, %%dr6" :: "r"(0xFFFF0FF0u));
+    return dr6;
+}
+uint8_t arch_cpu_family(void)
+{
+    uint32_t a, b, c, d;
+    cpuid(0, &a, &b, &c, &d);
+    if (a < 1) return 4;
+    cpuid(1, &a, &b, &c, &d);
+    unsigned family = (a >> 8) & 15;
+    return (uint8_t)(family > 6 ? 6 : family < 3 ? 3 : family);
+}
+/* A watchpoint on a VM linear address hit by kernel code running in that
+ * worker: record nothing, resume (RF for an instruction breakpoint). */
+bool arch_debug_kernel_trap(struct trap_frame *tf)
+{
+    if (!debug_active)
+        return false;
+    uint32_t dr6;
+    __asm__ volatile("mov %%dr6, %0" : "=r"(dr6));
+    if (!(dr6 & 15) || (dr6 & 0x4000))
+        return false;
+    __asm__ volatile("mov %0, %%dr6" :: "r"(0xFFFF0FF0u));
+    tf->eflags |= 1u << 16;
+    return true;
+}
 
 void arch_tls_switch(uint32_t base, bool native)
 {

@@ -241,10 +241,11 @@ def main() -> int:
         ))
     }
     objs.sort(key=lambda obj: f2_order.get(obj.stem, -1))
-    # f3-00 owns the first append-only F3 registration; f3-01 devices and
-    # f3-02 video (vm-video, vm-window) follow in the sweep order.
+    # f3-00 owns the first append-only F3 registration; f3-01 devices,
+    # f3-02 video (vm-video, vm-window), f3-05 audio state and f3-04 DPMI follow in the sweep order.
     objs.sort(key=lambda obj: {"probes_f3_probes_vm": 0, "probes_f3_probes_devices": 1,
-                               "probes_f3_probes_video": 2}.get(obj.stem, -1))
+                               "probes_f3_probes_video": 2, "probes_f3_probes_audio_state": 3,
+                               "probes_f3_probes_dpmi": 4}.get(obj.stem, -1))
     run(["ld.lld", "-m", "elf_i386", "-T", str(SRC / "linker.ld"), "--no-undefined",
          "-Map", str(OUT / "VMM.map"), "-o", str(elf), *map(str, objs)])
     audit(elf)

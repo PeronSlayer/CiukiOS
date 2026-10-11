@@ -605,3 +605,408 @@ with `reason=2` also emits `group=vm_fault` (AX…BP, DS, ES, SS:SP) and three
 `group=vm_stack part=N` rows with sixteen stack words each. Guest addresses
 map to the NASM listings: the stage-1 loader runs at linear 8000h, the DOS
 kernel is loaded at 9000h and relocated to 3000h (listing offset + 3000h).
+
+## f3-05
+
+Per-VM Sound Blaster 16, OPL3 and virtual 8237A state, the VM audio timeline
+and the interface F4 consumes (directive f3-05). Implementation and host
+evidence only; the QEMU `f3-vm` audio-state cases belong to the lead.
+
+### Research checked before implementation (2026-10-11)
+
+- Creative, [Sound Blaster Series Hardware Programming Guide](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/SoundBlaster.pdf)
+  (contract source S5). Chapter 2: reset (write 1 to 2x6h, 3 us, write 0,
+  poll 2xEh bit 7, read AAh), 2xCh bit 7 clear = ready, 82h interrupt status
+  (bit 0 8-bit DMA/SB-MIDI, bit 1 16-bit DMA, bit 2 MPU-401), acknowledgement
+  by reading 2xEh (8-bit) or 2xFh (16-bit), 80h IRQ select (2/5/7/10, one
+  bit), 81h DMA select (0/1/3 and 5/6/7, one bit each; no 16-bit bit means
+  16-bit data on the 8-bit channel). Chapter 3: time constant
+  `65536 - 256000000/(channels x rate)` (high byte), auto-init double
+  buffering, termination by exit command or by programming a single-cycle
+  transfer that "continues" at the end of the current block, high-speed mode
+  ignores commands until reset and its reset restores the earlier parameters,
+  4.xx rates 5000-44100 Hz. Chapter 4: CT1745 register map and defaults
+  (30h-35h level 24 = -14 dB; 36h-3Ah 0; 3Ch 1Fh; 3Dh 15h; 3Eh 0Bh; 44h-47h
+  8 = 0 dB; 04h/22h/26h/28h/2Eh/0Ah are CT1345 views of the new registers).
+  Chapter 6: command matrix by DSP version; 41h/42h 5000-45000 Hz; Bxh/Cxh
+  bit 3 A/D, bit 2 auto-init, mode bit 4 signed, bit 5 stereo, length in
+  samples - 1; D1h/D3h on 4.xx only set the D8h status latch. Appendix A:
+  FM at 2x0h-2x3h, 2x8h/2x9h and 388h.
+- DOSBox Staging [soundblaster.cpp](https://raw.githubusercontent.com/dosbox-staging/dosbox-staging/main/src/hardware/audio/soundblaster.cpp)
+  and [opl.cpp](https://raw.githubusercontent.com/dosbox-staging/dosbox-staging/main/src/hardware/audio/opl.cpp),
+  behaviour only (no code taken): SB16 82h reports 20h in its reserved bits,
+  E1h returns 4.05, E3h copyright string, argument counts of undocumented
+  commands, the CT1345-to-CT1745 level mapping `2n+1`, reset clears pending
+  causes; OPL timers start aligned to their 80/320 us clock, a mask clears
+  its flag, RST clears both flags, one address latch with array 1 reachable
+  only for 105h while NEW is clear, OPL3 status low bits 0 (OPL2 06h).
+- Intel [8237A datasheet 231466-005](https://pdos.csail.mit.edu/6.1810/2004/readings/hardware/8237A.pdf):
+  base and current registers written together byte by byte through the
+  flip-flop, TC when the count rolls from 0 to FFFFh, autoinitialize reloads
+  and keeps the channel unmasked, otherwise the mask bit is set, status bits
+  0-3 TC (cleared on read) and 4-7 requests, master clear, clear mask, write
+  all mask bits, temporary register, illegal reads. [QEMU i8257](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/dma/i8257.c):
+  page ports, word channels shifted by one with page bit 0 ignored.
+- Linux [snd_opl3 detection](https://raw.githubusercontent.com/torvalds/linux/v6.12/sound/drivers/opl3/opl3_lib.c):
+  status E0h clear after reset, C0h after timer 1 = FFh started for >= 80 us,
+  timer resolution 80 000 ns and 320 000 ns, signature 06h = OPL2.
+- Repository: legacy `src/vm/guest_peripherals.c` (DMA/SB/OPL models of the
+  0.8 line, migrated as reference) and its `test_guest_peripherals.cpp`
+  audio cases (migrated into the new harness); `session_audio.c`
+  `cvaudio_dma_slice` (block-boundary slicing, now the timeline rule below).
+  CIUKIDOS exports `BLASTER=A220 I7 D1 H5 T6`, so the model's factory setting
+  is base 220h, IRQ 7, DMA 1, HDMA 5, OPL3 at 388h.
+
+### Decisions
+
+Files: `src/kernel/vm/dosvm_sb16.c` (DSP, mixer, timeline, PCM queue, port
+dispatch, F4 calls), `dosvm_dma.c`, `dosvm_opl.c`, private state
+`dosvm_audio_state.h`, public interface `src/kernel/include/ciuki/dosvm_audio.h`.
+State lives in `struct dosvm` (about 3.7 KiB per slot); the PCM ring (4096
+stereo frames, four pages) and the event ring (512 events, two pages) are
+allocated at creation, charged to `resident` and to the ledger's pages, and
+freed by the single release path. Ports: 00h-0Fh, 80h-8Fh, C0h-DFh,
+220h-22Fh, 388h-38Bh, registered with `dosvm_port_register`; the handler runs
+under `irq_save` like the PIT and 8042 because `dosvm_tick` shares the state.
+Wider CPU accesses are split into byte cycles, as on the 8-bit ISA bus (the
+mixer `out dx,ax` index/data idiom). No physical port, DMA or audio device
+is touched.
+
+DSP: version 4.05. Implemented: reset/status, E0h/E1h/E3h/E4h/E8h, D1h/D3h/
+D8h latch (never gates output), 10h direct DAC (timestamped DAC events),
+14h/91h single-cycle and 1Ch/90h auto-init 8-bit, Bxh/Cxh 8/16-bit signed/
+unsigned mono/stereo single/auto-init, 40h/41h/42h (41h clamps to 5000-45000;
+a time-constant rate is halved for stereo; any rate is capped at 45000), 48h,
+80h silence, D0h/D4h, D5h/D6h, D9h/DAh, 45h/47h (continue: cancel a pending
+exit), F2h/F3h forced causes, SB Pro output stereo through mixer 0Eh bit 1
+for the legacy 8-bit commands (a DOSBox-compatible choice; the CT1745 map has
+no 0Eh). High-speed mode ignores commands until reset; MIDI UART mode
+discards writes until reset; those resets restore the earlier parameters,
+an ordinary reset sets 22050 Hz and speaker off. A new transfer during
+auto-init applies at the end of the current block. Not advertised, counted
+as `unsupported`: recording (Bxh/Cxh with A/D, 24h/2Ch/98h/99h start nothing;
+direct 20h answers the midpoint 80h so a polling reader cannot hang), MIDI
+input, ASP (0Fh answers 00h), E2h and undocumented commands. Creative ADPCM
+(16h/17h/74h-77h/1Fh/7Dh/7Fh) keeps DMA, block timing and IRQs and produces
+silence flagged `UNSUPPORTED`: no decoder is advertised in F3.
+
+Mixer: CT1745 defaults above; 22h/04h/26h/28h/2Eh/0Ah views; register masks;
+80h/81h accept exactly one valid bit (otherwise unchanged, counted); 82h is
+read-only `causes | 20h`. The IRQ line is the OR of the 82h causes: a cause
+latched while the line is low raises one edge through `dosvm_irq_raise`
+(f3-01 PIC), none while it is high. Reading 2xEh/2xFh lowers the line but,
+as in f3-01, cannot erase an IRR bit already latched.
+
+Timeline: frames of a 48 kHz clock per VM, advanced by `dosvm_tick` (48 per
+host millisecond) whatever the guest IF, IMR or ISR state. DSP consumption
+uses exact integer phase (`rate` per timeline frame, `48000/channels` per
+sample, `48000 x samples` per ADPCM byte), so block boundaries have exact
+nominal times and segment start stamps are reproducible. The block-boundary
+rule: at a boundary the DSP closes the block's segment with its cause,
+latches the cause, raises the edge if the line was low and stops consuming
+until the guest acknowledges that cause, or until the next block is due on
+the nominal timeline and at least one host tick has passed; that resumption
+is counted as `late`, its segment is flagged `LATE`, and a block started
+after two unserviced boundaries is flagged `STALE` (counted). An
+acknowledgement immediately consumes the part of the next block already
+due, so a responsive guest services sub-millisecond blocks without lag and a
+backlog drains one service per block. Each call processes at most 64 ms of
+DSP time; backlog beyond one second is dropped and counted. A DMA channel
+that does not answer (masked, controller disabled, cascade) stalls the DSP
+and the elapsed time is lost, as on the card; a non-read transfer type or an
+address outside the VM stops the transfer locally (no IRQ, `last_error`,
+DMA fault counter), the DSP and the VM continue.
+
+8237A: addresses resolve only through the owning VM's linear view (as
+Windows 95 VDMAD virtualises V86 DMA, including the VM's A20 state); 8-bit
+channels wrap inside their 64 KiB page, word channels address words with
+page bit 0 ignored inside 128 KiB; decrement mode, verify (no memory cycle,
+open-bus FFh), write/illegal types refused; reads go through `dosvm_read`
+in bounded chunks.
+
+OPL3: 512-byte register file, single address latch, NEW (105h) and pair
+(104h) state, timers 1/2 at 80/320 us with free-running prescaler alignment,
+mask and RST semantics, status bit 7 when a flag is set. No PIC line: the
+SB16 and AdLib do not wire the OPL IRQ output, so "IRQ" is the status bit.
+Timer and status time are the VM's microseconds plus a virtual ISA I/O time
+of 1 us per OPL access inside the current millisecond, capped below the next
+tick, so status-read delay loops (AdLib/Linux detection) observe time.
+Every data write is queued as a 16-byte event (VM generation, timeline frame
+including that sub-millisecond I/O time, register, value). Without a
+consumer, events are counted as discarded while the register file stays
+authoritative; on overflow the next event is preceded by a `GAP` marker and
+F4 resynchronises from `dosvm_audio_opl_registers`.
+
+F4 interface (`ciuki/dosvm_audio.h`): one consumer token per VM
+(`dosvm_audio_attach`/`detach`; VM stop or a new attach revokes it);
+`dosvm_audio_fetch` returns frames of one segment only (signed 16-bit
+stereo at the source rate, with start frame, sequence, rate, source format,
+offset, cause and flags `COMPLETE/SILENCE/UNSUPPORTED/OVERRUN/LATE/STALE/
+ABORTED`), never across a block boundary, partial segments continue by
+offset; `dosvm_audio_events` drains events in write order;
+`dosvm_audio_info` reports counters, configuration, the cause latch, mixer
+master/voice/FM levels and OPL timer stamps. Without a consumer, frames are
+counted as discarded; a full ring drops new frames (`OVERRUN`, counted).
+The ledger's `devices` count is unchanged (3): the vm-boot predicates pin it.
+
+### Probe `f3:vm-audio-state`
+
+Selector `f3:vm-audio-state run=<8hex>` (platform override as for the other
+F3 probes), fourth in the F3 sweep (after vm-boot, vm-memory, vm-devices).
+The controller boots a witness VM and the test VM (8 MiB each, records named
+`vm-audio-state`), attaches as the F4 consumer and types `\VMAUDIO.COM`
+(`src/probes/dos/vm_audio.asm`, in `DOSBOOT.IMG`). The payload parses
+BLASTER from its environment, publishes stage 1 (detection) and then runs one
+stage per command word in the mailbox at 0000:0600 (2 8-bit single-cycle
+ramp; 3 64-unit auto-init double buffer, 32 blocks with ISR refill and DAh
+from the ISR; 4/5 pause, 50 ms hold, continue, exit; 6 16-bit signed stereo
+auto-init on HDMA with 2xFh acknowledgement and D9h; 7/8 CLI for 100 ms then
+STI; 9 OPL script; 10 DMA page F0h outside the VM; 11 restore IVT/IMR and
+return to DOS). Records (`DATA case=`): `detect`, `mixer`, `dma8_single`,
+`double_buffer`, `pause`, `continue`, `dma16_stereo`, `if_clear`,
+`if_restore`, `opl`, `opl_state`, `dma_fault`, `exit`, `locality`,
+`cleanup`; each carries `ok` and the raw values the suite pins (fresh
+blocks and their exact nominal spacing: 384 timeline frames for 64 units at
+8000 Hz, 256 for 64 frames at 12000 Hz; services; IF-clear boundaries
+against host time, at most one edge, one pending request, no delivery;
+the 30 OPL events in order with generation, monotonic stamps inside the
+stage window; timer flags 20.4-20.48 ms and 81.6-81.92 ms after their start;
+locality of the witness). Stage timeouts emit `stage_timeout` and
+`stage_audio` diagnostics (two records, each under 256 bytes).
+Suite `f3-vm.json`: `vm-audio-state-qemu-t23/e500/min128`, timeout 180 s.
+
+### Host and static verification
+
+`tests/host/dosvm_audio_test.inc` (in the production DOS VM harness, ASan/
+UBSan): detection and every mixer register path including the word idiom;
+the migrated cvgp single-cycle case (four samples, speaker off still plays,
+82h, 2xEh/2xFh, forced F3h, the PIC keeps its edge, ADC refused, address
+outside the VM and write-type channel fail locally); every advertised PCM
+layout (8/16-bit, signed/unsigned, mono/stereo, single/auto-init) decoded
+exactly, 16-bit on the 8-bit channel, SB Pro stereo with a time constant,
+silence, ADPCM timing, direct DAC events, high-speed reset restore; the F4
+regression (64-unit auto-init double buffer over 2048 units: 32 sequential
+fresh blocks and 32 eligible services although the fake output clock
+advances in 10 ms steps, consumer fetching 50-frame quanta, spacing
+139/140 frames) and its counter-case without service (nominal pace, LATE/
+STALE, one edge, IF never forced); IF clear, IMR masked and ISR in service
+for 100 ms (exactly ten boundaries, at most one edge, one pending request,
+STI/MOV-SS shadow defers, exactly one delivery); pause/continue/exit/45h/
+new command at the block end/abort on reset; the 8237A register set, wraps,
+autoinit, decrement, verify, cascade, disabled controller, word channels,
+faults; OPL detection, migrated timer case, mask/RST, NEW/array addressing,
+SB16 mirrors, event order/generation/stamps, overflow and GAP, register
+snapshot, two chips independent; queue limits (ring overrun, segment ring,
+stale tokens, VM stop), backlog drop and drain. A mutation that disables the
+boundary wait fails the F4 regression. Creation-failure injection now covers
+283 allocation sites (six new audio pages) with exact teardown.
+
+Results on this worktree (2026-10-11): `bash scripts/test/host_kernel_tests.sh`
+rc=0 (dosvm harness 196 696 checks, largest record 212 bytes);
+`make kernel` green; `python3 scripts/build_dos_image.py` T1 DOS PASS with
+13 payloads; `tests.host.test_dosvm` (including the new suite fixture),
+loader, loader-model and sweep tests pass; the loader still assembles to its
+fixed 24 KiB.
+
+Cross-check of the payload against an independent SB16/OPL3 model: a scratch
+copy of `VMAUDIO.COM` without the controller handshake (mailbox dumped at the
+end; scratch files removed) ran under DOSBox 0.74-3 (`sbtype=sb16`, A220 I7
+D1 H5). All eleven stages completed; BLASTER parsing, reset AAh, version
+4.05, E0h/E8h, speaker FF00h, 80h/81h, `22h=A5h` giving `30h=A8h`, DMA TC,
+equal paused counts, IRQ counts and the six OPL status values (00h, C0h,
+C0h, E0h, A0h, 00h) agree with this model. Differences are DOSBox's: mixer
+reset default 31 (F8h) instead of Creative's 24 (C0h), 82h without the 20h
+bits in 0.74, DMA at 15 MiB valid there, and the last block of a D9h-
+terminated 16-bit transfer raised as an 8-bit cause (with a reset instead of
+D9h all eight IRQs report 02h); the model follows the Creative guide.
+
+Open items for the lead: ADPCM decoding, E2h DMA identification and MPU-401
+are not advertised; 45h/47h follow the later DSP 4.xx documentation and are
+not in the guide revision above; timing granularity is the 1 ms host tick
+(sub-millisecond blocks rely on acknowledgement-driven catch-up); the
+ledger `devices` count does not include the audio devices; the mailbox
+address 0000:0600 is shared with VMDEV.COM by convention (separate VMs).
+## f3-04
+
+Kernel-owned DPMI 0.9 host (directive f3-04). Implementation:
+`src/kernel/vm/dpmi.c` (discovery, entry, termination, services, V86 hooks),
+`dpmi_desc.c` (LDT and descriptor checks, rows 0000h–000Dh), `dpmi_switch.c`
+(transition records, 0300h–0306h, host-issued DOS calls), `dpmi_dispatch.c`
+(protected-mode traps, interrupts, exceptions, CLI/STI/HLT/I/O emulation,
+watchpoints); `ciuki/dpmi.h` is kernel-internal (no native ABI).
+
+### Research (checked 2026-10-11)
+
+- [DPMI 0.9 Committee specification](https://github.com/OpenRakis/Spice86/wiki/DPMI-0.9-Specs):
+  INT 2Fh/1686h and 1687h, entry registers and initial selectors, the
+  locked-stack rules for hardware interrupts and exceptions (sections 4 and
+  10.3/10.4: the exception handler returns with a far return and "the original
+  SS:(E)SP, CS:(E)IP and flags on the stack ... will be restored"), 0300h–0302h
+  structures, 0303h callbacks (procedure entered with interrupts disabled,
+  DS:(E)SI = real-mode stack, ES:(E)DI = structure, return by IRET), 0305h/
+  0306h register conventions, virtual IF services 0900h–0902h.
+- [DPMI 1.0 specification](https://sudleyplace.com/dpmione/dpmispec1.0.pdf)
+  for the 1.0-only rows refused here and the 0.90 version encoding
+  (DH=0, DL=90 decimal = 5Ah), and the
+  [DJGPP DPMI index](https://www.delorie.com/djgpp/doc/dpmi/ch5.n.html) for
+  numbering and per-function error outputs.
+- [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+  Vol. 3A: segment descriptors, LDT/LLDT, privilege checks on segment loads
+  (ch. 3, 5); IDT gates, `INT n` through a DPL 0 gate raising #GP with error
+  code `n*8+2` (IDT bit), error codes of #GP/#NP/#SS/#TS (ch. 6); debug
+  registers DR0–DR3/DR6/DR7 and RF (ch. 17). Vol. 2: ENTER, IRET at CPL 3
+  (IF and IOPL not restored when IOPL < CPL), LAR/LSL/VERR/VERW.
+- DOS/4GW: `binw/dos4gw.doc` of Open Watcom 2.0 (the DOS16M switch mode is
+  set automatically when DPMI is active); without HDPMI, VCPI or raw XMS
+  access in a Ciuki VMM VM the extender can only run as a client of this
+  host. Redistribution: [Watcom bundled the royalty-free DOS/4GW runtime
+  for programs built with Watcom C/C++](https://en.wikipedia.org/wiki/DOS/4G);
+  no redistribution text for the exact 1.97 binary was found in the
+  Open Watcom 2.0 tree (open question, below).
+- [libx86emu](https://github.com/wfeldt/libx86emu) 3.7 for the host runner;
+  its `ENTER` sizes the frame-pointer push by the stack size instead of the
+  operand size (`ops.c`, `x86emuOp_enter`), which corrupted DOS/4GW's 16-bit
+  kernel on its 32-bit stack until the runner emulated ENTER itself.
+
+### Decisions
+
+- **Advertisement.** `DOSVM_DPMI_PUBLIC` (`ciuki/dpmi.h`) is 0: INT 2Fh/1687h
+  is answered only in VMs created with `dosvm_config.dpmi` (the `f3:dpmi`
+  probe). The lead sets it to 1 when `f3:dpmi` passes on qemu-t23, qemu-e500
+  and qemu-min128. 1687h returns AX=0, BX=1, CL = CPU family (CPUID, 3–6),
+  DX=005Ah, SI=0 (no host private area) and ES:DI=F000:1040h. 1686h returns
+  AX=0 in protected mode.
+- **Entry and clients.** The real-mode entry stub (INT FEh in the VM ROM,
+  page F1000h) asks the personality for the PSP (host-issued INT 21h/62h),
+  then switches: CS/DS/SS selectors for the caller's segments (64 KiB),
+  ES = PSP selector (256 bytes), PSP:2Ch replaced by an environment selector
+  and restored at termination. The first client fixes the width; an
+  opposite-width nested entry fails with CF and changes nothing. Up to four
+  nested clients per VM; each owns its selectors, memory blocks, DOS blocks,
+  callbacks and watchpoints. Clients run at CPL 3 with IOPL 0 and EFLAGS.VM=0
+  in the VM's address space; every port access is emulated against the VM's
+  virtual devices.
+- **LDT.** One 1024-entry LDT per VM (8 KiB of kernel memory), loaded through
+  GDT index 8 (selector 40h) by the scheduler hook `dosvm_task_switch` when a
+  DPMI worker is switched in, and unloaded otherwise. Indices 0–15 are kept
+  for 000Dh; client allocations start at 16; the host's code and locked-stack
+  selectors and 32 callback stack selectors occupy the top. Only DPL 3 data
+  or non-conforming code descriptors are accepted (no system descriptors,
+  gates, conforming code or DPL < 3); base and limit are free, page
+  permissions remain the boundary. Aliases from 0002h are VM-owned and freed
+  when the last client exits.
+- **Interrupt path.** INT n at CPL 3 reaches the kernel as #GP(n*8+2)
+  because the IDT gates are DPL 0; INT3 and INT 80h use their DPL 3 gates
+  and are delivered to the client's protected-mode vectors 3 and 80h; a
+  DPMI client never reaches the native syscall path. `trap.c` routes every
+  trap of a worker running a client frame (`dosvm_client`) to `dosvm_trap`;
+  hardware IRQs are acknowledged by the kernel first.
+- **Stacks.** Hardware interrupts, exceptions and callbacks run on a 16 KiB
+  locked stack allocated from the VM's pool (segment-limit guarded, LIFO
+  per nesting level). Real-mode reflections use a host stack at C600:2000
+  (pages C6000h–C7FFFh made writable, outside the UMB arena and EMS frame),
+  512 bytes per level. 32 transition records per VM; exhaustion fails the
+  service with CF or, inside a fault path, terminates only the VM.
+- **Virtual IF and CLI/STI.** The client's CLI/STI/PUSHF/POPF/IRET IF state
+  is the monitor's virtual IF (0900h–0902h share it). The STI shadow is
+  address based (the CS:EIP after STI), not TF based: a trap-flag shadow
+  leaked TF into PUSHF images under DOS/4GW.
+- **A20** is forced on while a client is in protected mode and the V86
+  state is restored on every return to real mode.
+- **Exception frames** are read at the current SS:ESP after the far return
+  (or below the return address when the handler chains to the host default),
+  not at the address the host pushed: DOS/4GW's error path moves the frame
+  before returning. Interrupt and callback returns restore the interrupted
+  context from the kernel record, so handlers may IRET from another stack;
+  a return through the wrong host stub or without its record terminates the
+  VM. Every frame returned to a client passes `dpmi_frame_check` (CS/SS/EIP
+  valid for the IRET, unusable data selectors zeroed, IOPL 0, VM 0, IF 1).
+- **Termination.** Protected-mode INT 21h/4Ch, 00h, 31h, INT 20h/27h and the
+  V86 INT 21h/4Ch of the client's PSP reach one cleanup path: nested records
+  unwound, the environment segment restored, memory blocks, DOS blocks,
+  callbacks, watchpoints and selectors freed, real vectors restored, DPMI
+  state reset when the last client exits. Faults unwind all nesting without
+  guest help.
+- **V86 monitor.** DOS VMs keep a virtual IOPL/NT image (`v86.h` `vflags`):
+  PUSHF/POPF in V86 report what the guest last wrote; DOS/16M's CPU check
+  ("protected mode available only with 386 or 486") needs IOPL bits to be
+  writable as on a real 386 in real mode.
+
+### Personality changes (CIUKIDOS, `src/boot/floppy_stage1.asm`)
+
+- A fourth EXEC return-context slot (`saved_*4`, outside the 352-byte EXEC
+  snapshot): kernel → SHELL.COM → COMMAND.COM → program → extender or child
+  needs four nested frames; the fourth overwrote slot 3 before.
+- INT 21h/48h with BX=0 grants one paragraph instead of failing: DOS/4GW
+  allocates the host private area (1687h SI paragraphs) with INT 21h/48h
+  even when SI=0 and stopped with "DPMI host error" on the refusal.
+- The termination trampoline is chosen by the caller's CS against the COM
+  load segment, so the host's protected-mode INT 21h/4Ch issues the real-mode
+  call with the client's real-mode return address saved at entry.
+
+### Payloads and probe
+
+`scripts/build_dos_image.py` adds `\DPMI16.COM` and `\DPMI32.COM`
+(`src/probes/dos/dpmi_client.asm`, BITS32=0/1), their nested children
+`\DPMICH16.COM`/`\DPMICH32.COM`, the fault client `\DPMIFLT.COM`
+(`dpmi_fault.asm`: LGDT inside a callback at depth 2), `\DPMI4GW.EXE`
+(`src/probes/vm/dpmi_dos4gw.c`, `wcl386 -zq -bt=dos -l=dos4g`, Open Watcom
+2.0 under `/opt/watcom`, deterministic with a fixed output name) and
+`\SYSTEM\DOS4GW.EXE` (pinned SHA-256
+`b8265123ac8a189637448618409ef3ecd2e9f3e1a47062c685a02240f688dec1`, found
+through the CIUKIDOS PATH). The DOS manifest records them and a `dos4gw`
+block (client, extender, hash, recipe, redistribution status). The 0.8
+DOS/4GW probes beside it (`dpmi_ports.c`, `dpmi_lifetime.c`, `dpmi_fault.c`,
+`dpmi_video.c`) report on COM1 and depend on the 0.8 HDPMI session adapters
+in `src/vm/`; COM1 and the VGA registers are not virtual devices of the F3 VM
+before f3-02. `dpmi_dos4gw.c` keeps their interrupt (protected-mode IRQ0 hook
+with chaining), port (PIC) and lifetime (heap, DPMI blocks and selectors,
+file I/O, normal exit) checks on the record port; the Mode-Y register checks
+of `dpmi_ports.c` belong with f3-02.
+
+Probe `f3:dpmi` (`src/kernel/probes/f3_probes_dpmi.c`, after `vm-devices`
+in the F3 table and sweep): `group=dos_payload` hashes of the seven files
+read from the VM's FAT16 disk (the runner compares them with
+`dos.payloads` of the image manifest), then DPMI16 and DPMI32 each in a fresh
+VM (`case=client` with verdict, entries and terminations, `case=counters`,
+`case=rows` with `ok_all`, `refused`, `invalid` computed from the host's row
+bitmaps, `case=release` after the exit), DPMI4GW (`case=client`,
+`case=counters`, `case=dos4gw` with the extender path, version and
+redistribution status, `case=release`), a VM without the flag where DPMI16 reports
+`FAIL 01 01` (`case=gate`) and serves as witness while DPMIFLT faults in
+another VM (`case=fault`), and `case=cleanup` against the ledger. Each
+section destroys its own VMs and the later sections run after a failure,
+so one QEMU run reports the whole row (the first error decides). Suite
+`f3-vm.json`: `dpmi-qemu-t23`, `dpmi-qemu-e500`, `dpmi-qemu-min128`.
+
+### Host verification (not QEMU evidence)
+
+- `tests/host/dosvm_dpmi_test.inc` (in `dosvm_test`): descriptor and
+  selector services, interrupts and translation, termination, callbacks and
+  raw switches, memory/paging, DOS memory through a fake personality, IRQ
+  and exception dispatch (including moved exception frames and wrong-stub
+  returns), I/O and watchpoints, 16 nested levels and exhaustion, stale
+  handlers and frames, 32-bit clients and nested cleanup, INT 1Ch/23h/24h
+  reflection.
+- `tests/host/dosvm_guest.c` + `dosvm_guest_cpu.c`: boots the real
+  `DOSBOOT.IMG` in one VM with the production DOS VM, BIOS, XMS/EMS and DPMI
+  code and libx86emu as the CPU, types the payload commands and reports
+  their verdicts and the host state; run by `host_kernel_tests.sh` when
+  libx86emu and an image with these payloads exist. On 2026-10-11 DPMI16
+  with the VM's DPMI flag cleared reported `FAIL 01 01` (no host), DPMI16,
+  DPMI32 and DPMI4GW passed and DPMIFLT stopped its VM with #GP at depth 2,
+  every DPMI resource released after each exit. The runner found the
+  personality and V86 defects listed above before any QEMU run.
+
+### Limitations and open questions
+
+- Mouse (INT 33h) callbacks are delivered only while the client is in real
+  mode; protected-mode delivery is deferred to f3-06 workloads.
+- Host page-fault resolution before the client's 0Eh handler has no
+  producer yet; f3-02's VGA aperture will need it.
+- CIUKIDOS terminations that do not pass through INT 21h/4Ch (internal
+  aborts) are not intercepted; EXEC nesting deeper than four frames still
+  exceeds the personality.
+- DOS/4GW 1.97 redistribution text not located; the payload stays a local
+  test client until the owner decides.
+- Promotion: `DOSVM_DPMI_PUBLIC` stays 0 until the QEMU cases pass.

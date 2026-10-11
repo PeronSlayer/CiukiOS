@@ -27,6 +27,18 @@ void idt_init(void);
 void tss_set_kernel_stack(uint32_t esp0);
 void df_tss_init(uint32_t cr3);
 
+/* f3-04: one GDT slot after the native TLS descriptor (index 7) holds the
+ * LDT descriptor of the running DOS VM's DPMI clients (execution-abi.md,
+ * "F3-04 amendment"). NULL unloads it (LDTR = 0). Debug registers are
+ * VM-local watchpoints, loaded only while that VM's worker runs. */
+#define ARCH_LDT_GDT_INDEX 8
+#define SEL_LDT 0x40
+void arch_ldt_load(const void *base, unsigned entries);
+void arch_debug_load(const uint32_t address[4], uint32_t dr7);
+uint32_t arch_debug_take(void);          /* DR6, then cleared */
+bool arch_debug_kernel_trap(struct trap_frame *tf);
+uint8_t arch_cpu_family(void);          /* CPUID family, 3..6, for DPMI CL */
+
 /* PIC / IRQ */
 void pic_init(void);
 void pic_unmask(unsigned irq);
