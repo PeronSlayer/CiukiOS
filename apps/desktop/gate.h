@@ -5,6 +5,9 @@
 #include <stdint.h>
 #define GATE_MAGIC 0x32475443u
 enum { GATE_SPAWN = 1, GATE_RELEASE, GATE_REAP, GATE_RUN, GATE_SNAPSHOT, GATE_INTERACT };
+/* f2-33 tasks scenario: Tasks pings with this serial once the PID it ended
+ * has left the kernel process list (runtime test mode only). */
+#define DESK_TASKS_CHECKPOINT 0xf2330007u
 struct gate_control { volatile uint32_t command, generation; };
 enum { GATE_SETUP_SIGPIPE=1, GATE_SETUP_DISPLAY, GATE_SETUP_GEOMETRY,
     GATE_SETUP_MEMORY, GATE_SETUP_PORTRAIT, GATE_SETUP_OUTPUT,

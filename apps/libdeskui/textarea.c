@@ -1,14 +1,10 @@
 /* SPDX-License-Identifier: MIT
  * Multi-line text area for libdeskui (f2-32). See textarea.h. Integer only. */
 #include "textarea.h"
+#include "internal.h"
 #include <stdlib.h>
 #include <string.h>
 
-/* The compositor is the single glyph source (5x7 cells drawn into 8x16). */
-extern uint8_t desk_glyph_row(unsigned, unsigned);
-
-#define SELECTION 0xb8d0dcu
-#define TRACK 0xd5d0c6u
 
 /* ---- characters --------------------------------------------------------- */
 
@@ -400,87 +396,53 @@ long du_ta_replace_all(struct du_textarea *ta, const char *needle, size_t n, con
 
 /* ---- pointer ------------------------------------------------------------ */
 
-static void geometry(const struct du_textarea *ta, struct du_rect box, struct du_rect *text, struct du_rect *vbar, struct du_rect *hbar)
+struct geo { struct du_rect body, text, vbar, hbar; };
+static void geometry(const struct du_textarea *ta, struct du_rect box, struct geo *g)
 {
     int hb = ta->wrap ? 0 : DU_TA_BAR;
-    *text = (struct du_rect){box.x + 2, box.y + 2, box.w - 4 - DU_TA_BAR, box.h - 4 - hb};
-    *vbar = (struct du_rect){box.x + box.w - 2 - DU_TA_BAR, box.y + 2, DU_TA_BAR, text->h};
-    *hbar = (struct du_rect){box.x + 2, box.y + box.h - 2 - DU_TA_BAR, text->w, hb};
+    g->body = (struct du_rect){box.x + 2, box.y + 2, box.w - 4, box.h - 4};
+    g->text = (struct du_rect){g->body.x, g->body.y, g->body.w - DU_TA_BAR, g->body.h - hb};
+    g->vbar = (struct du_rect){g->body.x + g->body.w - DU_TA_BAR, g->body.y, DU_TA_BAR, g->body.h - hb};
+    g->hbar = (struct du_rect){g->body.x, g->body.y + g->body.h - DU_TA_BAR, g->text.w, hb};
 }
 void du_ta_fit(struct du_textarea *ta, struct du_rect box)
 {
-    struct du_rect text, v, h; geometry(ta, box, &text, &v, &h);
-    int cols = (text.w - 2 * DU_TA_PAD) / DU_TA_CELL_W, rows = (text.h - 2 * DU_TA_PAD) / DU_TA_CELL_H;
+    struct geo g; geometry(ta, box, &g);
+    int cols = (g.text.w - 2 * DU_TA_PAD) / DU_TA_CELL_W, rows = (g.text.h - 2 * DU_TA_PAD) / DU_TA_CELL_H;
     du_ta_set_view(ta, cols > 0 ? (unsigned)cols : 1, rows > 0 ? (unsigned)rows : 1);
 }
+static struct du_sb vscroll(struct du_textarea *ta, const struct geo *g)
+{ layout(ta); return (struct du_sb){g->vbar, 1, (int)ta->top, (int)ta->vl_count, (int)ta->rows}; }
+static struct du_sb hscroll(const struct du_textarea *ta, const struct geo *g)
+{ return (struct du_sb){g->hbar, 0, (int)ta->left, (int)ta->maxcol + 1, (int)ta->cols}; }
+
 size_t du_ta_hit(struct du_textarea *ta, struct du_rect box, int x, int y)
 {
-    struct du_rect text, v, h; geometry(ta, box, &text, &v, &h);
+    struct geo g; geometry(ta, box, &g);
     layout(ta);
-    int row = y - (text.y + DU_TA_PAD), vi;
+    int row = y - (g.text.y + DU_TA_PAD), vi;
     if (row < 0) { unsigned back = (unsigned)((-row + DU_TA_CELL_H - 1) / DU_TA_CELL_H); vi = ta->top > back ? (int)(ta->top - back) : 0; }
     else vi = (int)ta->top + row / DU_TA_CELL_H;
     if (vi >= (int)ta->vl_count) vi = (int)ta->vl_count - 1;
-    int cx = x - (text.x + DU_TA_PAD) + DU_TA_CELL_W / 2;
+    int cx = x - (g.text.x + DU_TA_PAD) + DU_TA_CELL_W / 2;
     int col = cx < 0 ? 0 : cx / DU_TA_CELL_W;
     return offset_at(ta, (unsigned)vi, (unsigned)col + ta->left);
 }
-/* Thumb start and size inside a track of `track` pixels (size 0: no scrolling). */
-static void bar_metrics(int track, unsigned total, unsigned page, unsigned value, int *pos, int *size)
-{
-    *pos = 0; *size = 0;
-    if (track <= 0 || total <= page) return;
-    int sz = (int)((uint64_t)(unsigned)track * page / total);
-    if (sz < DU_TA_BAR) sz = DU_TA_BAR;
-    if (sz > track) sz = track;
-    unsigned range = total - page;
-    *size = sz; *pos = (int)((uint64_t)(unsigned)(track - sz) * (value > range ? range : value) / range);
-}
-static unsigned vbar_range(struct du_textarea *ta) { layout(ta); return ta->vl_count > ta->rows ? ta->vl_count - ta->rows : 0; }
-static unsigned hbar_range(const struct du_textarea *ta) { unsigned extent = ta->maxcol + 1; return extent > ta->cols ? extent - ta->cols : 0; }
-static void scroll_by(struct du_textarea *ta, int vertical, int delta)
-{
-    if (vertical) {
-        int t = (int)ta->top + delta, max = (int)vbar_range(ta);
-        ta->top = (unsigned)(t < 0 ? 0 : t > max ? max : t);
-    } else {
-        int l = (int)ta->left + delta, max = (int)hbar_range(ta);
-        ta->left = (unsigned)(l < 0 ? 0 : l > max ? max : l);
-    }
-}
-static void thumb_to(struct du_textarea *ta, int vertical, struct du_rect bar, int y)
-{
-    int track = (vertical ? bar.h : bar.w) - 2 * DU_TA_BAR, pos, size;
-    unsigned range = vertical ? vbar_range(ta) : hbar_range(ta);
-    bar_metrics(track, range + (vertical ? ta->rows : ta->cols), vertical ? ta->rows : ta->cols, 0, &pos, &size);
-    if (!size || track <= size) return;
-    int at = y - ta->grab - ((vertical ? bar.y : bar.x) + DU_TA_BAR);
-    if (at < 0) at = 0;
-    if (at > track - size) at = track - size;
-    unsigned value = (unsigned)((uint64_t)(unsigned)at * range / (unsigned)(track - size));
-    if (vertical) ta->top = value; else ta->left = value;
-}
 int du_ta_mouse_down(struct du_textarea *ta, struct du_rect box, int x, int y, unsigned modifiers, uint64_t ns)
 {
-    struct du_rect text, vbar, hbar; geometry(ta, box, &text, &vbar, &hbar);
+    struct geo g; geometry(ta, box, &g);
     du_ta_fit(ta, box); layout(ta); clamp_scroll(ta);
-    int on_v = du_contains(vbar, x, y), on_h = hbar.h && du_contains(hbar, x, y);
-    if (on_v || on_h) {
-        struct du_rect bar = on_v ? vbar : hbar;
-        int pos0 = on_v ? y - bar.y : x - bar.x, len = on_v ? bar.h : bar.w, track = len - 2 * DU_TA_BAR, pos, size;
-        unsigned page = on_v ? ta->rows : ta->cols, total = (on_v ? vbar_range(ta) : hbar_range(ta)) + page;
-        bar_metrics(track, total, page, on_v ? ta->top : ta->left, &pos, &size);
-        if (pos0 < DU_TA_BAR) scroll_by(ta, on_v, -1);
-        else if (pos0 >= len - DU_TA_BAR) scroll_by(ta, on_v, 1);
-        else if (size) {
-            int at = pos0 - DU_TA_BAR;
-            if (at < pos) scroll_by(ta, on_v, -(int)page);
-            else if (at >= pos + size) scroll_by(ta, on_v, (int)page);
-            else { ta->drag = on_v ? DU_TA_DRAG_VTHUMB : DU_TA_DRAG_HTHUMB; ta->grab = at - pos; }
-        }
+    struct du_sb v = vscroll(ta, &g), h = hscroll(ta, &g);
+    int pv = du_sb_part(&v, x, y), ph = g.hbar.h ? du_sb_part(&h, x, y) : 0;
+    if (pv || ph) {
+        const struct du_sb *s = pv ? &v : &h;
+        int part = pv ? pv : ph;
+        if (part == 3) { ta->drag = pv ? DU_TA_DRAG_VTHUMB : DU_TA_DRAG_HTHUMB; ta->grab = du_sb_grab(s, x, y); }
+        else if (pv) ta->top = (unsigned)du_sb_apply(s, part);
+        else ta->left = (unsigned)du_sb_apply(s, part);
         return 1;
     }
-    if (!du_contains(text, x, y)) return 0;
+    if (!du_contains(g.text, x, y)) return 0;
     size_t off = du_ta_hit(ta, box, x, y);
     int dx = x > ta->click_x ? x - ta->click_x : ta->click_x - x, dy = y > ta->click_y ? y - ta->click_y : ta->click_y - y;
     if (ta->click_ns && ns > ta->click_ns && ns - ta->click_ns <= DU_TA_DOUBLE_NS && dx <= 4 && dy <= 4) {
@@ -497,9 +459,9 @@ int du_ta_mouse_down(struct du_textarea *ta, struct du_rect box, int x, int y, u
 int du_ta_mouse_move(struct du_textarea *ta, struct du_rect box, int x, int y)
 {
     if (ta->drag == DU_TA_DRAG_NONE) return 0;
-    struct du_rect text, vbar, hbar; geometry(ta, box, &text, &vbar, &hbar);
-    if (ta->drag == DU_TA_DRAG_VTHUMB) { thumb_to(ta, 1, vbar, y); return 1; }
-    if (ta->drag == DU_TA_DRAG_HTHUMB) { thumb_to(ta, 0, hbar, x); return 1; }
+    struct geo g; geometry(ta, box, &g);
+    if (ta->drag == DU_TA_DRAG_VTHUMB) { struct du_sb v = vscroll(ta, &g); ta->top = (unsigned)du_sb_drag(&v, x, y, ta->grab); return 1; }
+    if (ta->drag == DU_TA_DRAG_HTHUMB) { struct du_sb h = hscroll(ta, &g); ta->left = (unsigned)du_sb_drag(&h, x, y, ta->grab); return 1; }
     break_group(ta);
     ta->cursor = du_ta_hit(ta, box, x, y); ta->want_valid = 0; ta->affinity = 0;
     du_ta_reveal(ta);
@@ -509,23 +471,25 @@ void du_ta_mouse_up(struct du_textarea *ta) { ta->drag = DU_TA_DRAG_NONE; }
 
 /* ---- keyboard ----------------------------------------------------------- */
 
+/* Editing keys; printable characters arrive through du_ta_text (the toolkit
+ * derives them from KEY events with Shift/Caps Lock, as for edit widgets). */
 int du_ta_key(struct du_textarea *ta, unsigned code, unsigned modifiers)
 {
     int shift = (modifiers & DU_SHIFT) != 0, ctrl = (modifiers & DU_CTRL) != 0;
     if (modifiers & DU_ALT) return 0;
     switch (code) {
-    case 0x14b: du_ta_move(ta, ctrl ? DU_TA_WORD_LEFT : DU_TA_LEFT, shift); return 1;
-    case 0x14d: du_ta_move(ta, ctrl ? DU_TA_WORD_RIGHT : DU_TA_RIGHT, shift); return 1;
-    case 0x148: du_ta_move(ta, DU_TA_UP, shift); return 1;
-    case 0x150: du_ta_move(ta, DU_TA_DOWN, shift); return 1;
-    case 0x147: du_ta_move(ta, ctrl ? DU_TA_DOC_START : DU_TA_HOME, shift); return 1;
-    case 0x14f: du_ta_move(ta, ctrl ? DU_TA_DOC_END : DU_TA_END, shift); return 1;
-    case 0x149: du_ta_move(ta, DU_TA_PAGE_UP, shift); return 1;
-    case 0x151: du_ta_move(ta, DU_TA_PAGE_DOWN, shift); return 1;
-    case 0x0e: du_ta_backspace(ta); return 1;
-    case 0x153: du_ta_delete(ta); return 1;
-    case 0x1c: case 0x11c: if (!ctrl) du_ta_insert(ta, "\n", 1, DU_TA_EDIT_TYPE); return !ctrl;
-    case 0x0f: if (!ctrl) du_ta_insert(ta, "\t", 1, DU_TA_EDIT_TYPE); return !ctrl;
+    case DU_KEY_LEFT: du_ta_move(ta, ctrl ? DU_TA_WORD_LEFT : DU_TA_LEFT, shift); return 1;
+    case DU_KEY_RIGHT: du_ta_move(ta, ctrl ? DU_TA_WORD_RIGHT : DU_TA_RIGHT, shift); return 1;
+    case DU_KEY_UP: du_ta_move(ta, DU_TA_UP, shift); return 1;
+    case DU_KEY_DOWN: du_ta_move(ta, DU_TA_DOWN, shift); return 1;
+    case DU_KEY_HOME: du_ta_move(ta, ctrl ? DU_TA_DOC_START : DU_TA_HOME, shift); return 1;
+    case DU_KEY_END: du_ta_move(ta, ctrl ? DU_TA_DOC_END : DU_TA_END, shift); return 1;
+    case DU_KEY_PGUP: du_ta_move(ta, DU_TA_PAGE_UP, shift); return 1;
+    case DU_KEY_PGDN: du_ta_move(ta, DU_TA_PAGE_DOWN, shift); return 1;
+    case DU_KEY_BACKSPACE: du_ta_backspace(ta); return 1;
+    case DU_KEY_DELETE: du_ta_delete(ta); return 1;
+    case DU_KEY_ENTER: case 0x11c: if (!ctrl) du_ta_insert(ta, "\n", 1, DU_TA_EDIT_TYPE); return !ctrl;
+    case DU_KEY_TAB: if (!ctrl) du_ta_insert(ta, "\t", 1, DU_TA_EDIT_TYPE); return !ctrl;
     default: return 0;
     }
 }
@@ -540,74 +504,30 @@ int du_ta_text(struct du_textarea *ta, unsigned ch)
     du_ta_insert(ta, s, n, DU_TA_EDIT_TYPE);
     return 1;
 }
-/* The kernel's native keyboard path reports the unshifted US character of the
- * pressed key; the BIOS path reports the shifted one. Shifting only the
- * unshifted forms keeps both correct (Caps Lock inverts letters only). */
-unsigned du_text_translate(unsigned ch, int shift, int caps)
-{
-    if (ch >= 'a' && ch <= 'z') return (shift != 0) != (caps != 0) ? ch - 32 : ch;
-    if (!shift) return ch;
-    switch (ch) {
-    case '1': return '!'; case '2': return '@'; case '3': return '#'; case '4': return '$'; case '5': return '%';
-    case '6': return '^'; case '7': return '&'; case '8': return '*'; case '9': return '('; case '0': return ')';
-    case '-': return '_'; case '=': return '+'; case '[': return '{'; case ']': return '}'; case '\\': return '|';
-    case ';': return ':'; case '\'': return '"'; case ',': return '<'; case '.': return '>'; case '/': return '?';
-    case '`': return '~';
-    default: return ch;
-    }
-}
 
 /* ---- drawing ------------------------------------------------------------ */
 
-static const uint8_t placeholder_rows[7] = {31, 17, 17, 17, 17, 17, 31};
-static void put2(struct du_canvas *c, int x, int y, uint32_t colour)
+/* Printable ASCII is the compositor's glyph; anything else (non-ASCII, control
+ * characters) is a hollow placeholder box of the same size. */
+static void draw_char(struct du_canvas *c, int x, int y, unsigned ch, uint32_t ink, int bold)
 {
-    if (x < c->clip.x || x >= c->clip.x + c->clip.w || x < 0 || x >= (int)c->width) return;
-    for (int k = 0; k < 2; k++) {
-        int yy = y + k;
-        if (yy >= c->clip.y && yy < c->clip.y + c->clip.h && yy >= 0 && yy < (int)c->height) c->pixels[(size_t)yy * c->width + (unsigned)x] = colour;
-    }
-}
-static void draw_glyph(struct du_canvas *c, int x, int y, unsigned ch, uint32_t colour, int bold)
-{
-    for (unsigned row = 0; row < 7; row++) {
-        uint8_t bits = ch >= 0x20 && ch < 0x7f ? desk_glyph_row(ch, row) : placeholder_rows[row];
-        for (unsigned col = 0; col < 5; col++) if (bits & (1u << (4 - col))) {
-            put2(c, x + 1 + (int)col, y + 1 + (int)row * 2, colour);
-            if (bold) put2(c, x + 2 + (int)col, y + 1 + (int)row * 2, colour);
-        }
-    }
-}
-static void draw_arrow(struct du_canvas *c, struct du_rect r, int dir)
-{ /* dir: 0 up, 1 down, 2 left, 3 right; a 7x4 triangle centred in r */
-    int cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-    for (int i = 0; i < 4; i++) {
-        int half = dir < 2 ? (dir == 0 ? i : 3 - i) : (dir == 2 ? i : 3 - i);
-        if (dir < 2) du_fill(c, (struct du_rect){cx - half, cy - 2 + i, 2 * half + 1, 1}, DU_INK);
-        else du_fill(c, (struct du_rect){cx - 2 + i, cy - half, 1, 2 * half + 1}, DU_INK);
-    }
-}
-static void draw_bar(struct du_canvas *c, struct du_rect r, int vertical, unsigned total, unsigned page, unsigned value)
-{
-    du_fill(c, r, TRACK);
-    struct du_rect a = vertical ? (struct du_rect){r.x, r.y, r.w, DU_TA_BAR} : (struct du_rect){r.x, r.y, DU_TA_BAR, r.h};
-    struct du_rect b = vertical ? (struct du_rect){r.x, r.y + r.h - DU_TA_BAR, r.w, DU_TA_BAR} : (struct du_rect){r.x + r.w - DU_TA_BAR, r.y, DU_TA_BAR, r.h};
-    du_bevel(c, a, 0); du_bevel(c, b, 0);
-    draw_arrow(c, a, vertical ? 0 : 2); draw_arrow(c, b, vertical ? 1 : 3);
-    int track = (vertical ? r.h : r.w) - 2 * DU_TA_BAR, pos, size;
-    bar_metrics(track, total, page, value, &pos, &size);
-    if (size) du_bevel(c, vertical ? (struct du_rect){r.x, r.y + DU_TA_BAR + pos, r.w, size} : (struct du_rect){r.x + DU_TA_BAR + pos, r.y, size, r.h}, 0);
+    if (ch >= 0x20 && ch < 0x7f) {
+        char s[2] = {(char)ch, 0};
+        du_text_n(c, x, y, s, 1, ink);
+        if (bold) du_text_n(c, x + 1, y, s, 1, ink);
+    } else du_outline(c, (struct du_rect){x, y, 5, DU_GLYPH_H}, ink);
 }
 void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta, int focused)
 {
     if (!ta) return;
-    struct du_rect text, vbar, hbar; geometry(ta, box, &text, &vbar, &hbar);
+    struct geo g; geometry(ta, box, &g);
     du_ta_fit(ta, box); layout(ta); clamp_scroll(ta);
-    du_bevel(c, box, 1);
-    struct du_rect saved = c->clip, view = du_intersection(saved, text);
-    c->clip = view; du_fill(c, text, DU_WHITE);
+    du_fill(c, box, DU_WINDOW); du_edge(c, box, DU_SUNKEN);
+    struct du_rect saved = c->clip;
+    c->clip = du_intersection(saved, g.text);
     size_t a, b; du_ta_selection(ta, &a, &b);
-    int ox = text.x + DU_TA_PAD, oy = text.y + DU_TA_PAD;
+    int ox = g.text.x + DU_TA_PAD, oy = g.text.y + DU_TA_PAD, glyph_dy = (DU_TA_CELL_H - DU_GLYPH_H) / 2;
+    uint32_t sel_bg = focused ? DU_SELECT : DU_GRAY;
     for (unsigned n = 0; n < ta->rows && ta->top + n < ta->vl_count; n++) {
         unsigned vi = ta->top + n; int y = oy + (int)n * DU_TA_CELL_H;
         size_t p = ta->vl[vi], end = vl_end(ta, vi); unsigned col = 0;
@@ -617,24 +537,26 @@ void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta,
             if (col + w > ta->left) {
                 int x = ox + ((int)col - (int)ta->left) * DU_TA_CELL_W;
                 int sel = p >= a && p < b;
-                if (sel) du_fill(c, (struct du_rect){x, y, (int)w * DU_TA_CELL_W, DU_TA_CELL_H}, SELECTION);
-                if (ch != '\t') draw_glyph(c, x, y, len == 1 ? ch : 0x80, DU_INK, ta->bold);
+                if (sel) du_fill(c, (struct du_rect){x, y, (int)w * DU_TA_CELL_W, DU_TA_CELL_H}, sel_bg);
+                if (ch != '\t') draw_char(c, x, y + glyph_dy, len == 1 ? ch : 0x80, sel ? DU_SELECT_INK : DU_INK, ta->bold);
             }
             col += w; p += len;
         }
         if (end < ta->len && ta->text[end] == '\n' && a <= end && b > end && col >= ta->left && col < ta->left + ta->cols)
-            du_fill(c, (struct du_rect){ox + ((int)col - (int)ta->left) * DU_TA_CELL_W, y, DU_TA_CELL_W, DU_TA_CELL_H}, SELECTION);
+            du_fill(c, (struct du_rect){ox + ((int)col - (int)ta->left) * DU_TA_CELL_W, y, DU_TA_CELL_W, DU_TA_CELL_H}, sel_bg);
     }
     if (focused) {
         unsigned vi, col; locate(ta, ta->cursor, ta->affinity, &vi, &col);
         if (vi >= ta->top && vi < ta->top + ta->rows && col >= ta->left && col <= ta->left + ta->cols)
-            du_fill(c, (struct du_rect){ox + ((int)col - (int)ta->left) * DU_TA_CELL_W, oy + (int)(vi - ta->top) * DU_TA_CELL_H, 1, DU_TA_CELL_H}, DU_INK);
+            du_vline(c, ox + ((int)col - (int)ta->left) * DU_TA_CELL_W - 1, oy + (int)(vi - ta->top) * DU_TA_CELL_H + 1, DU_GLYPH_H + 4, DU_INK);
     }
-    c->clip = du_intersection(saved, box);
-    draw_bar(c, vbar, 1, ta->vl_count, ta->rows, ta->top);
-    if (hbar.h) {
-        draw_bar(c, hbar, 0, ta->maxcol + 1, ta->cols, ta->left);
-        du_fill(c, (struct du_rect){vbar.x, hbar.y, DU_TA_BAR, hbar.h}, DU_BG);
+    c->clip = du_intersection(saved, g.body);
+    struct du_sb v = vscroll(ta, &g);
+    du_sb_draw(c, &v, 0);
+    if (g.hbar.h) {
+        struct du_sb h = hscroll(ta, &g);
+        du_sb_draw(c, &h, 0);
+        du_fill(c, (struct du_rect){g.vbar.x, g.hbar.y, DU_TA_BAR, g.hbar.h}, DU_FACE);
     }
     c->clip = saved;
 }

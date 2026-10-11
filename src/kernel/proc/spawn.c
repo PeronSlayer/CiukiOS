@@ -189,6 +189,26 @@ static int prepare_image(struct process *p, const struct ciuki_file *file,
     return err;
 }
 
+/* Callers without a path name the child after argv[0]'s basename. */
+static void name_from_argv0(struct process *p, const struct proc_strings *s)
+{
+    char name[CIUKI_PROC_NAME_MAX];
+    unsigned n = 0;
+    if (!s->argc)
+        return;
+    for (uint32_t at = s->argv[0]; at < s->used; at++) {
+        char c = ((const char *)P2V(s->pages[at / PAGE_SIZE]))[at % PAGE_SIZE];
+        if (!c)
+            break;
+        if (c == '/')
+            n = 0;
+        else if (n < sizeof(name) - 1)
+            name[n++] = c;
+    }
+    name[n] = 0;
+    proc_set_name(p, name);
+}
+
 int proc_spawn_file(struct process *parent, const struct ciuki_file *file,
                     const struct proc_strings *strings, const struct ciuki_spawn_fd *fds,
                     uint32_t fd_count, uint32_t flags, uint64_t mask, struct process **out)
@@ -200,6 +220,8 @@ int proc_spawn_file(struct process *parent, const struct ciuki_file *file,
     if (err)
         return err;
     err = proc_inherit(p, parent, fds, fd_count);
+    if (!err)
+        name_from_argv0(p, strings);
     if (!err)
         err = prepare_image(p, file, strings, mask);
     if (!err && parent->state != PROC_LIVE)
@@ -279,6 +301,7 @@ int proc_spawn(uint32_t args_va)
      * and retain the inheritance snapshot before file operations can wait. */
     if ((err = proc_prepare(self->process, &op->child)))
         goto out;
+    proc_set_name(op->child, path);
     if ((err = proc_inherit(op->child, self->process, fds, a.fd_count)))
         goto out;
     if (proc_signal_caught(self)) {

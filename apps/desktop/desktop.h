@@ -14,13 +14,25 @@
 #define DESK_MENU_MAX 16
 #define DESK_MENU_ROW 28
 #define DESK_CLOSE_NS 2000000000ull
+/* App scenarios (runtime-selected in the post-fault interaction stage): the
+ * launched program gets --test=<its name> and reports ordered checkpoint
+ * PINGs whose serials are base+n. */
+#define DESK_APP_FILES 1
+#define DESK_APP_NOTE 2
+#define DESK_FILES_CHECKPOINT 0xf2310000u
+#define DESK_FILES_CHECKPOINTS 5
+#define DESK_NOTE_CHECKPOINT 0xf2320000u
+#define DESK_NOTE_CHECKPOINTS 3
+#define DESK_APP_CHECKPOINT(kind) ((kind)==DESK_APP_NOTE ? DESK_NOTE_CHECKPOINT : DESK_FILES_CHECKPOINT)
+#define DESK_APP_CHECKPOINTS(kind) ((kind)==DESK_APP_NOTE ? DESK_NOTE_CHECKPOINTS : DESK_FILES_CHECKPOINTS)
 struct desk_box { int32_t x, y, w, h; };
 struct desk_damage { unsigned count; struct desk_box boxes[DESK_DAMAGE_MAX]; };
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
-    int minimized, internal, closing;
-    uint32_t pid, serial, version;
+    int minimized, internal, closing, program;   /* program: 1 Files, 2 CiukNote (launched by the desktop) */
+    int taskman;                  /* f2-33: launched /bin/tasks; may send task requests */
+    uint32_t pid, serial, version, window_id;
     uint64_t ping_sent_ns, next_ping_ns, order;
     struct ciuki_surface_info info;
     const uint32_t *pixels;
@@ -51,8 +63,12 @@ struct desktop {
     struct desk_damage damage;
     struct desk_client clients[DESK_CLIENTS];
     int shell, menu_open, menu_focus, about, action, shell_test, shell_stage;
-    int shell_app; /* f2-32: F11 scenario: the first program launched is the subject (menu, launch, run to exit) */
     uint32_t shell_pid, shell_keys;
+    /* f2-31/f2-32 app scenarios (app_test is DESK_APP_FILES or DESK_APP_NOTE):
+     * the program's checkpoints are PINGs with serial DESK_APP_CHECKPOINT+n. */
+    int app_test, app_checkpoint, app_reported, app_done;
+    uint32_t app_pid;
+    const char *launch_arg;      /* single argument for the next launch (LAUNCH from Files) */
     int (*launch)(struct desktop *, const struct desk_program *);
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
@@ -61,7 +77,16 @@ struct desktop {
     struct desk_program programs[DESK_MENU_MAX];
     unsigned program_count;
     struct desk_child children[DESK_CLIENTS];
+    /* f2-33: task-manager extension and its runtime-selected gate scenario. */
+    uint32_t next_window_id, self_pid;
+    int authority_fd, tasks_test, tasks_stage, tasks_checkpoint;
+    uint32_t tasks_pid, tasks_demo_pid, tasks_demo_window;
 };
+/* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
+ * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
+ * 6 demo reaped with status 0, 7 Tasks reported the PID gone and the
+ * desktop's own process list confirmed it (desktop.c). */
+#define DESK_TASKS_DONE 7
 int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out);
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
@@ -74,12 +99,20 @@ int32_t desk_menu_row(const struct desktop *);
 int desk_contains(struct desk_box, int32_t, int32_t);
 int desk_hit(const struct desktop *, int32_t, int32_t);
 int desk_program_add(struct desktop *, const char *name, const uint8_t *elf, size_t);
+int desk_program_graphical(const char *name);
+const char *desk_program_label(const char *name);
+const char *desk_app_program(int kind);          /* "files" / "ciuknote" */
+int desk_program_kind(const char *name);         /* 1 Files, 2 CiukNote, else 0 */
 void desk_shell_enable(struct desktop *);
 void desk_minimize(struct desktop *, int index);
 void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
 void desk_about(struct desktop *);
+void desk_task_windows(struct desktop *, int index, uint32_t serial);
+int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
+int desk_task_switch(struct desktop *, uint32_t window_id);
+int desk_task_launch(struct desktop *, const char *name, const char *argument);
 int desk_shell_click(struct desktop *);
 void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);

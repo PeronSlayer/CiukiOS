@@ -123,14 +123,15 @@ int supervisor_spawn_standin(struct process *parent, struct process **out) { (vo
 #include "../../../src/kernel/proc/supervisor.c"
 #include "../../../src/kernel/proc/syscalls_desktop.c"
 static struct storage libc_storage;
-static int libc_gate_error, native_syncs;
-int storage_sync(void) { native_syncs++; return 0; }
+static int libc_gate_error;
 static unsigned libc_gate_calls, libc_spawn_calls;
 struct storage *storage_get(void) { return &libc_storage; }
 int storage_enable_write(struct storage *s, unsigned drive)
 {
     CHECK(s == &libc_storage && drive == 2); libc_gate_calls++; return libc_gate_error;
 }
+/* f2-31: only the Files desktop case flushes; no host fixture selects it. */
+int storage_sync(void) { CHECK(!"storage_sync outside the Files case"); return -EIO; }
 static int report_fixture_spawn(const char *path, const char *const argv[], const char *cwd,
                                 bool desktop, struct process **out)
 {
@@ -704,8 +705,6 @@ static void test_native_controller(void)
     }
     probes_operator_mode=false;gate_input_absent=false;
     device.present=false;device.mapped=0;device.size=0;
-    /* f2-32: every desktop run opens the write gate (as libc-smoke does) and syncs the volume once at the end. */
-    CHECK(native_syncs==4 && libc_gate_calls>=4);
     puts("native controller: 100 cycles/five kinds, counters, ticks, PID/CR3/pgid, ledgers, interaction, wrong-signal refusal PASS (fake scheduling)");
 }
 static void test_native_diagnostics(void)
@@ -781,6 +780,53 @@ static void test_native_reports(void)
     for(unsigned i=0;i<ARRAY_SIZE(bad);i++) { native_reports.invalid=false;native_report(child,bad[i],strlen(bad[i]));CHECK(native_reports.invalid); }
     native_reports.active=false;desktop_remove(p,child);desktop_remove(proc_supervisor(),p);
     puts("native summaries: emitting PID, stage, monotonic turns, overflow, unauthorized/missing fields, barrier generation PASS");
+}
+
+/* f2-31/f2-32: the optional app-case fields of the server's report (files=1 or note=1). */
+static void app_report(struct process *server, struct process *child, uint32_t control, const char *suffix)
+{
+    char line[241];
+    int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=1 survivor=%u victim=0 cycle=0 replies=0 keys=0 motion=0 buttons=0%s",
+        control,child->pid,suffix);
+    native_report(server,line,(unsigned)n);
+}
+static void test_native_app_reports(void)
+{
+    struct process *server,*child;
+    make_process(proc_supervisor(),&server); server->pgid=server->pid;
+    make_process(server,&child); child->pgid=child->pid;
+    struct ciuki_mmap_args a={.size=sizeof(a),.length=PAGE_SIZE,.prot=PROT_READ|PROT_WRITE,.flags=MAP_PRIVATE|MAP_ANONYMOUS,.fd=-1};
+    uint32_t control=(uint32_t)ua_mmap(server->memory,&a); CHECK(control>=CIUKI_MMAP_BASE);
+    uint8_t pixels[4]={0}; struct fb_device saved=device;
+    device.present=true;device.mapped=pixels;device.size=sizeof(pixels);
+    struct { const char *suffix; uint32_t app; const char *invalid; } cases[]={
+        {"",0,0}, {" files=1 checkpoint=0",1,0}, {" note=1 checkpoint=0",2,0}, {" note=1 checkpoint=1",2,0},
+        {" files=1 note=1 checkpoint=0",0,"app"}, {" note=2 checkpoint=0",0,"note"}, {" files=2 checkpoint=0",0,"files"},
+        {" note=1",0,"checkpoint"}, {" note=1 checkpoint=2",0,"checkpoint_order"}, {" files=1 checkpoint=6",0,"checkpoint_order"}};
+    for (unsigned i=0;i<ARRAY_SIZE(cases);i++) {
+        memset(&native_reports,0,sizeof(native_reports));native_reports.active=true;
+        native_reports.server=server->pid;native_reports.survivor=child->pid;
+        if (i==3) app_report(server,child,control," note=1 checkpoint=0");
+        app_report(server,child,control,cases[i].suffix);
+        if (cases[i].invalid) CHECK(native_reports.invalid && !strcmp(native_reports.invalid_check,cases[i].invalid));
+        else CHECK(!native_reports.invalid && native_reports.app==cases[i].app);
+    }
+    /* Checkpoints advance one at a time, hash the framebuffer once and keep the digest. */
+    memset(&native_reports,0,sizeof(native_reports));native_reports.active=true;
+    native_reports.server=server->pid;native_reports.survivor=child->pid;
+    app_report(server,child,control," note=1 checkpoint=0"); pixels[0]=7;
+    app_report(server,child,control," note=1 checkpoint=1");
+    uint32_t first=native_reports.checkpoint_digest[1]; CHECK(native_reports.checkpoint==1 && first==native_digest());
+    pixels[0]=9; app_report(server,child,control," note=1 checkpoint=1"); CHECK(native_reports.checkpoint_digest[1]==first);
+    app_report(server,child,control," note=1 checkpoint=2"); CHECK(native_reports.checkpoint==2 && native_reports.checkpoint_digest[2]==native_digest());
+    CHECK(!native_reports.invalid);
+    /* One run never switches case, whatever the order. */
+    app_report(server,child,control," files=1 checkpoint=2"); CHECK(native_reports.invalid && !strcmp(native_reports.invalid_check,"app_changed"));
+    CHECK(!strcmp(native_app_case(),"note") && native_app_checkpoints()==3);
+    native_reports.app=1; CHECK(!strcmp(native_app_case(),"files") && native_app_checkpoints()==5);
+    device=saved; native_reports.active=false;
+    desktop_remove(server,child);desktop_remove(proc_supervisor(),server);
+    puts("native app reports: files=1/note=1 fields, checkpoint order/range, digests, no case switching, other desktop cases unaffected PASS");
 }
 
 static struct proc_thread *native_group(struct process *parent, struct process **out)
@@ -1032,7 +1078,7 @@ int main(int argc, char **argv)
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
     test_desktop_surfaces(); test_desktop_channels(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
-    test_native_reports(); test_native_controller(); test_native_diagnostics();
+    test_native_reports(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();
 #endif

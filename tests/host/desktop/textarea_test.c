@@ -214,23 +214,10 @@ static void test_search(void)
     load("\xc3\x89", DU_TA_LIMIT); assert(du_ta_find(&ta, "\xc3\xa9", 2, 0, 0, 0) == -1);   /* ASCII-only case folding */
 }
 
-static void test_translate(void)
-{
-    assert(du_text_translate('a', 0, 0) == 'a' && du_text_translate('a', 1, 0) == 'A');
-    assert(du_text_translate('a', 0, 1) == 'A' && du_text_translate('a', 1, 1) == 'a');
-    assert(du_text_translate('A', 0, 0) == 'A' && du_text_translate('A', 1, 1) == 'A'); /* BIOS text is already shifted */
-    assert(du_text_translate('1', 1, 0) == '!' && du_text_translate('0', 1, 0) == ')' && du_text_translate('1', 0, 1) == '1');
-    assert(du_text_translate('-', 1, 0) == '_' && du_text_translate('=', 1, 0) == '+' && du_text_translate('[', 1, 0) == '{');
-    assert(du_text_translate(']', 1, 0) == '}' && du_text_translate('\\', 1, 0) == '|' && du_text_translate(';', 1, 0) == ':');
-    assert(du_text_translate('\'', 1, 0) == '"' && du_text_translate(',', 1, 0) == '<' && du_text_translate('.', 1, 0) == '>');
-    assert(du_text_translate('/', 1, 0) == '?' && du_text_translate('`', 1, 0) == '~' && du_text_translate('!', 1, 0) == '!');
-    assert(du_text_translate(' ', 1, 0) == ' ' && du_text_translate(0xe9, 1, 1) == 0xe9);
-}
-
-static const struct du_rect BOX = {0, 0, 200, 120};   /* text 180x100 at (2,2): 22 columns, 6 rows */
+static const struct du_rect BOX = {0, 0, 200, 120};   /* text 180x100 at (2,2): 29 columns, 7 rows (6x13 cells) */
 static void test_keys(void)
 {
-    load("one two", DU_TA_LIMIT); du_ta_fit(&ta, BOX); assert(ta.cols == 22 && ta.rows == 6);
+    load("one two", DU_TA_LIMIT); du_ta_fit(&ta, BOX); assert(ta.cols == 29 && ta.rows == 7);
     assert(du_ta_key(&ta, 0x14d, 0) && ta.cursor == 1);
     assert(du_ta_key(&ta, 0x14d, DU_CTRL) && ta.cursor == 4);
     assert(du_ta_key(&ta, 0x14b, DU_CTRL) && ta.cursor == 0);
@@ -247,31 +234,33 @@ static void test_keys(void)
     assert(du_ta_key(&ta, 0x149, 0) && du_ta_key(&ta, 0x151, 0));
 }
 
+static int px(int col) { return 4 + col * DU_TA_CELL_W + 1; }       /* inside cell `col`, nearest boundary col */
+static int py(int row) { return 4 + row * DU_TA_CELL_H + 4; }
 static void test_pointer(void)
 {
     load("abc\ndef\nghi", DU_TA_LIMIT); du_ta_fit(&ta, BOX);
-    /* Text origin (4,4); a column boundary is nearest within 4 pixels. */
-    assert(du_ta_hit(&ta, BOX, 21, 23) == 6);                    /* row 1, boundary 2 of "def" */
-    assert(du_ta_hit(&ta, BOX, 150, 23) == 7);                   /* beyond the end of a line */
+    /* Text origin (4,4); a column boundary is nearest within half a cell. */
+    assert(du_ta_hit(&ta, BOX, px(2), py(1)) == 6);                  /* row 1, boundary 2 of "def" */
+    assert(du_ta_hit(&ta, BOX, 150, py(1)) == 7);                    /* beyond the end of a line */
     assert(du_ta_hit(&ta, BOX, 4, 4) == 0 && du_ta_hit(&ta, BOX, 0, 0) == 0);
-    assert(du_ta_hit(&ta, BOX, 21, 90) >= 8);                    /* below the text: the last line */
-    assert(du_ta_mouse_down(&ta, BOX, 21, 23, 0, 1000) == 1); at(6);
+    assert(du_ta_hit(&ta, BOX, px(2), 90) >= 8);                     /* below the text: the last line */
+    assert(du_ta_mouse_down(&ta, BOX, px(2), py(1), 0, 1000) == 1); at(6);
     assert(du_ta_mouse_move(&ta, BOX, 5, 7) == 1); sel(0, 6); assert(ta.cursor == 0);   /* drag selects */
-    du_ta_mouse_up(&ta); assert(du_ta_mouse_move(&ta, BOX, 21, 23) == 0); sel(0, 6);
+    du_ta_mouse_up(&ta); assert(du_ta_mouse_move(&ta, BOX, px(2), py(1)) == 0); sel(0, 6);
     assert(du_ta_mouse_down(&ta, BOX, 5, 7, 0, 2000000000ull)); du_ta_mouse_up(&ta); at(0);
-    assert(du_ta_mouse_down(&ta, BOX, 21, 23, DU_SHIFT, 3000000000ull)); sel(0, 6); assert(ta.cursor == 6 && ta.anchor == 0);
+    assert(du_ta_mouse_down(&ta, BOX, px(2), py(1), DU_SHIFT, 3000000000ull)); sel(0, 6); assert(ta.cursor == 6 && ta.anchor == 0);
     du_ta_mouse_up(&ta);
     /* Double-click selects the word; a third click is single again. */
     load("abc def ghi", DU_TA_LIMIT); du_ta_fit(&ta, BOX);
-    assert(du_ta_mouse_down(&ta, BOX, 45, 7, 0, 1000000000ull)); du_ta_mouse_up(&ta); assert(ta.cursor == 5);
-    assert(du_ta_mouse_down(&ta, BOX, 45, 7, 0, 1300000000ull)); sel(4, 7); du_ta_mouse_up(&ta);
-    assert(du_ta_mouse_down(&ta, BOX, 45, 7, 0, 1400000000ull)); at(5); du_ta_mouse_up(&ta);
+    assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 1000000000ull)); du_ta_mouse_up(&ta); assert(ta.cursor == 5);
+    assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 1300000000ull)); sel(4, 7); du_ta_mouse_up(&ta);
+    assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 1400000000ull)); at(5); du_ta_mouse_up(&ta);
     /* A slow or distant second click is a plain click. */
-    assert(du_ta_mouse_down(&ta, BOX, 45, 7, 0, 3000000000ull)); du_ta_mouse_up(&ta); at(5);
-    assert(du_ta_mouse_down(&ta, BOX, 45, 7, 0, 3600000000ull)); du_ta_mouse_up(&ta); at(5);
-    assert(du_ta_mouse_down(&ta, BOX, 45, 7, 0, 3700000000ull)); du_ta_mouse_up(&ta); sel(4, 7);
-    assert(du_ta_mouse_down(&ta, BOX, 5, 7, 0, 3800000000ull)); du_ta_mouse_up(&ta); at(0);
-    assert(du_ta_mouse_down(&ta, BOX, 30, 7, 0, 3900000000ull)); du_ta_mouse_up(&ta); at(3);
+    assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 3000000000ull)); du_ta_mouse_up(&ta); at(5);
+    assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 3600000000ull)); du_ta_mouse_up(&ta); at(5);
+    assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 3700000000ull)); du_ta_mouse_up(&ta); sel(4, 7);
+    assert(du_ta_mouse_down(&ta, BOX, px(0), py(0), 0, 3800000000ull)); du_ta_mouse_up(&ta); at(0);
+    assert(du_ta_mouse_down(&ta, BOX, px(3), py(0), 0, 3900000000ull)); du_ta_mouse_up(&ta); at(3);
     /* Word selection classes: blanks, punctuation, words; never across a newline. */
     load("ab, cd\n  \nef", DU_TA_LIMIT);
     du_ta_select_word(&ta, 2); sel(2, 3);
@@ -286,29 +275,28 @@ static void test_scrollbars(void)
 {
     char many[400]; many[0] = 0;
     for (int i = 0; i < 40; i++) strcat(many, "line\n");
-    load(many, DU_TA_LIMIT); du_ta_fit(&ta, BOX);               /* 41 visual lines, 6 rows: range 35 */
-    int vx = 190;                                               /* vertical bar x range 182..198 */
+    load(many, DU_TA_LIMIT); du_ta_fit(&ta, BOX);               /* 41 visual lines, 7 rows: range 34 */
+    int vx = 190;                                               /* the vertical bar spans x 182..198, y 2..102 */
     assert(du_ta_mouse_down(&ta, BOX, vx, 4, 0, 0) && ta.top == 0);        /* up arrow at the top: no change */
     assert(du_ta_mouse_down(&ta, BOX, vx, 94, 0, 0) && ta.top == 1);       /* down arrow */
-    assert(du_ta_mouse_down(&ta, BOX, vx, 60, 0, 0) && ta.top == 7);       /* track below the thumb: one page */
-    assert(du_ta_mouse_down(&ta, BOX, vx, 20, 0, 0) && ta.top == 1);       /* track above the thumb: one page back */
-    /* Dragging the thumb. For top=1 the track is 68px, the thumb 16px, at offset 1 (y = 2+16+1 ..). */
+    assert(du_ta_mouse_down(&ta, BOX, vx, 62, 0, 0) && ta.top == 7);       /* track below the thumb: a page less one line */
+    assert(du_ta_mouse_down(&ta, BOX, vx, 22, 0, 0) && ta.top == 1);       /* track above the thumb */
+    /* Dragging the thumb. For top=1 the track is 68px, the thumb 11px, at offset 1 (y = 2+16+1 ..). */
     assert(du_ta_mouse_down(&ta, BOX, vx, 2 + 16 + 1 + 3, 0, 0) && ta.drag == DU_TA_DRAG_VTHUMB && ta.grab == 3);
-    assert(du_ta_mouse_move(&ta, BOX, vx, 2 + 16 + 52 + 3) && ta.top == 35);
-    assert(du_ta_mouse_move(&ta, BOX, vx, 500) && ta.top == 35);
+    assert(du_ta_mouse_move(&ta, BOX, vx, 2 + 16 + 57 + 3) && ta.top == 34);
+    assert(du_ta_mouse_move(&ta, BOX, vx, 500) && ta.top == 34);
     assert(du_ta_mouse_move(&ta, BOX, vx, 0) && ta.top == 0);
     du_ta_mouse_up(&ta);
-    /* The text area cursor is unaffected by bar clicks. */
-    at(0);
-    /* Horizontal bar (no wrap): a 60 column line in a 22 column view. */
+    at(0);                                                      /* bar clicks never move the caret */
+    /* Horizontal bar (no wrap): a 60 column line in a 29 column view. */
     char wide[80]; memset(wide, 'x', 60); wide[60] = 0;
     load(wide, DU_TA_LIMIT); du_ta_fit(&ta, BOX);
     int hy = 120 - 2 - 8;
     assert(du_ta_mouse_down(&ta, BOX, 6, hy, 0, 0) && ta.left == 0);       /* left arrow at the origin */
     assert(du_ta_mouse_down(&ta, BOX, 170, hy, 0, 0) && ta.left == 1);     /* right arrow */
-    assert(du_ta_mouse_down(&ta, BOX, 120, hy, 0, 0) && ta.left == 23);    /* track beyond the thumb: one page */
+    assert(du_ta_mouse_down(&ta, BOX, 120, hy, 0, 0) && ta.left == 29);    /* track beyond the thumb: a page less one column */
     /* Wrap removes the horizontal bar and the text area reflows. */
-    du_ta_set_wrap(&ta, 1); du_ta_fit(&ta, BOX); assert(du_ta_visual_lines(&ta) == 3 && ta.rows == 6 + 1);
+    du_ta_set_wrap(&ta, 1); du_ta_fit(&ta, BOX); assert(du_ta_visual_lines(&ta) == 3 && ta.rows == 7 + 1);
 }
 
 static uint32_t canvas[240 * 320];
@@ -326,32 +314,33 @@ static void test_render(const char *prefix)
     canvas[239 * 320 + 319] = 0xaabbccddu;
     load("A\xc3\xa9 x\n\tB", DU_TA_LIMIT);
     du_ta_draw(&surface, box, &ta, 1); dump(prefix, "plain");
-    /* 'A' row 0 is 01110: pixels at columns 1..3 of the glyph, two rows tall, origin (14,14). */
-    assert(at_px(14 + 1 + 1, 14 + 1) == DU_INK && at_px(14 + 1 + 1, 14 + 2) == DU_INK && at_px(14 + 1, 14 + 1) == DU_WHITE);
-    /* The e-acute is drawn as a hollow placeholder box in the next cell. */
-    assert(at_px(22 + 1, 14 + 1) == DU_INK && at_px(22 + 1 + 4, 14 + 1) == DU_INK && at_px(22 + 1 + 2, 14 + 1 + 4) == DU_WHITE);
-    /* Caret at the origin: a 1 pixel line when focused only. */
-    assert(at_px(14, 14) == DU_INK);
-    du_ta_draw(&surface, box, &ta, 0); assert(at_px(14, 14) == DU_WHITE);
-    /* Selection fills whole cells and keeps the ink visible. */
+    /* 'A' row 0 is 01110: pixels at columns 1..3 of the glyph, cell origin (14,14), glyph 3 rows down. */
+    assert(at_px(14 + 1, 17) == DU_INK && at_px(14 + 3, 17) == DU_INK && at_px(14, 17) == DU_WINDOW);
+    /* The e-acute is a hollow 5x7 placeholder box in the next cell. */
+    assert(at_px(20, 17) == DU_INK && at_px(24, 17) == DU_INK && at_px(20, 20) == DU_INK && at_px(22, 20) == DU_WINDOW && at_px(22, 23) == DU_INK);
+    /* Caret one pixel left of the origin cell: focused only. */
+    assert(at_px(13, 15) == DU_INK && at_px(13, 25) == DU_INK);
+    du_ta_draw(&surface, box, &ta, 0); assert(at_px(13, 15) == DU_WINDOW);
+    /* Selection fills whole cells; ink inverts. Unfocused it is gray. */
     du_ta_select(&ta, 0, 1); du_ta_draw(&surface, box, &ta, 1);
-    assert(at_px(14, 14 + 15) == 0xb8d0dcu && at_px(14 + 7, 14) == 0xb8d0dcu && at_px(14 + 8 + 7, 14) == DU_WHITE);
-    assert(at_px(14 + 2, 14 + 1) == DU_INK);
+    assert(at_px(14, 14 + 12) == DU_SELECT && at_px(14 + 5, 14) == DU_SELECT && at_px(14 + 6 + 5, 14) == DU_WINDOW);
+    assert(at_px(14 + 1, 17) == DU_SELECT_INK);
+    du_ta_draw(&surface, box, &ta, 0); assert(at_px(14, 14 + 12) == DU_GRAY);
     /* A selected line break highlights one cell after the line. */
     du_ta_select(&ta, 3, 6); du_ta_draw(&surface, box, &ta, 1);
-    assert(at_px(14 + 4 * 8 + 3, 14 + 5) == 0xb8d0dcu);
+    assert(at_px(14 + 4 * 6 + 3, 14 + 5) == DU_SELECT);
     /* Bold doubles the stems horizontally. */
     du_ta_select(&ta, 0, 0); ta.bold = 1; du_ta_draw(&surface, box, &ta, 0); dump(prefix, "bold");
-    assert(at_px(14 + 1 + 4, 14 + 1) == DU_INK); /* 'A' top row becomes columns 1..4 */
+    assert(at_px(14 + 4, 17) == DU_INK); /* 'A' top row becomes columns 1..4 */
     /* Nothing is drawn outside the box. */
     assert(canvas[239 * 320 + 319] == 0xaabbccddu && at_px(9, 10) == 0 && at_px(10, 9) == 0 && at_px(210, 130) == 0);
-    /* The scrollbars: vertical thumb absent when everything fits; arrows are drawn. */
+    /* Scrollbars: both arrows are drawn; with everything visible they are gray. */
     ta.bold = 0; du_ta_draw(&surface, box, &ta, 0);
-    assert(at_px(10 + 200 - 2 - 8, 10 + 2 + 8 + 1) == DU_INK);
+    assert(at_px(10 + 2 + 196 - 8, 10 + 2 + 8 + 1) == DU_GRAY);
     /* Clipping: a clip rectangle confines the widget. */
     memset(canvas, 0, sizeof(canvas)); surface.clip = (struct du_rect){10, 10, 50, 50};
     du_ta_draw(&surface, box, &ta, 1);
-    assert(at_px(70, 70) == 0 && at_px(30, 30) == DU_WHITE);
+    assert(at_px(70, 70) == 0 && at_px(30, 30) == DU_WINDOW);
     surface.clip = (struct du_rect){0, 0, 320, 240};
     /* A long document with wrap and the viewport scrolled. */
     char many[800]; many[0] = 0;
@@ -414,7 +403,7 @@ static void test_random_operations(void)
 int main(int argc, char **argv)
 {
     test_editing(); test_undo(); test_limit(); test_movement(); test_wrap(); test_goto_and_scroll();
-    test_search(); test_translate(); test_keys(); test_pointer(); test_scrollbars(); test_random_operations();
+    test_search(); test_keys(); test_pointer(); test_scrollbars(); test_random_operations();
     test_render(argc > 1 ? argv[1] : NULL);
     du_ta_free(&ta);
     puts("PASS textarea: editing, UTF-8, undo, limit, movement, wrap, search/replace, keys, pointer, scrollbars, rendering");

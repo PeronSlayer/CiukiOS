@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include "gate.h"
 #include <errno.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -11,7 +12,7 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
 {
     memset(d, 0, sizeof(*d));
     d->ops = *ops; d->width = w; d->height = h;
-    d->display = d->input = d->output = d->focus = d->drag = d->about = -1;
+    d->display = d->input = d->output = d->focus = d->drag = d->about = d->authority_fd = -1;
     d->action = -1;
     d->mouse_x = (int32_t)w / 2; d->mouse_y = (int32_t)h / 2;
     d->clock_second = UINT64_MAX;
@@ -164,6 +165,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             close_attachments(d, m, -1); desk_drop_client(d, i); return;
         }
         c->surface = m->fds[0]; c->info = s; c->pixels = pixels; c->window = 1;
+        if (!++d->next_window_id) ++d->next_window_id;
+        c->window_id = d->next_window_id;
         memcpy(c->title, p.title, sizeof(c->title));
         c->frame = desk_frame(s.width, s.height, 0, DESK_BAR);
         desk_move(d, i, 20 + i * 18, DESK_BAR + 20 + i * 18);
@@ -176,7 +179,11 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             desk_message(&reply,DESK_FOCUS,8); desk_queue(d,i,&reply);
         } else desk_focus(d, i);
         if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
-        if (d->shell_test && c->pid == d->shell_pid && d->shell_stage == 2) d->shell_stage = d->shell_app ? 4 : 3; /* the app scenario has no drag step */
+        if (d->shell_test && c->pid == d->shell_pid && d->shell_stage == 2) d->shell_stage = 3;
+        if (d->tasks_test && d->tasks_stage == 1 && c->pid == d->tasks_pid) d->tasks_stage = 2;
+        if (d->tasks_test && d->tasks_stage == 3 && c->pid == d->tasks_demo_pid) {
+            d->tasks_stage = 4; d->tasks_demo_window = c->window_id;
+        }
         break;
     }
     case DESK_DAMAGE: {
@@ -195,7 +202,44 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     case DESK_PING:
         desk_message(&reply, DESK_PONG, 8); desk_put32(reply.data + 4, p.serial);
         desk_queue(d, i, &reply);
+        /* App scenario milestones (Files, CiukNote) arrive in order after their frame's DAMAGE. */
+        if (d->app_test && d->app_pid && c->pid == d->app_pid && d->app_checkpoint < DESK_APP_CHECKPOINTS(d->app_test) &&
+            p.serial == DESK_APP_CHECKPOINT(d->app_test) + (uint32_t)d->app_checkpoint + 1) d->app_checkpoint++;
+        /* Private f2-33 scenario checkpoint (apps/desktop/gate.h): Tasks saw
+         * the ended PID leave the kernel process list. */
+        if (d->tasks_test && c->pid == d->tasks_pid && c->taskman && p.serial == DESK_TASKS_CHECKPOINT &&
+            d->tasks_stage >= 5) d->tasks_checkpoint = 1;
         break;
+    case DESK_WINDOWS_QUERY:
+        if (c->taskman) desk_task_windows(d, i, p.serial);
+        else {
+            desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
+            desk_put32(reply.data + 8, DESK_WINDOWS_QUERY); desk_put32(reply.data + 12, (uint32_t)-EPERM);
+            desk_queue(d, i, &reply);
+        }
+        break;
+    case DESK_END_TASK: case DESK_SWITCH_TO: case DESK_LAUNCH: {
+        /* The Task Manager holds every request. Files, which the desktop itself launched, may only
+         * LAUNCH /bin/ciuknote with one absolute path argument (opening a text file). */
+        int files_open = p.opcode == DESK_LAUNCH && c->program == DESK_APP_FILES && !c->taskman &&
+                         !strcmp(p.title, "ciuknote") && p.argument[0] == '/';
+        int32_t result = !c->taskman && !files_open ? -EPERM :
+            p.opcode == DESK_END_TASK ? desk_task_end(d, p.window_id, p.pid) :
+            p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
+            c->taskman && p.argument[0] ? -EPERM : desk_task_launch(d, p.title, p.argument);
+        if (d->tasks_test && c->taskman && c->pid == d->tasks_pid) {
+            if (p.opcode == DESK_LAUNCH && result > 0 && d->tasks_stage == 2 && !strcmp(p.title, "demo")) {
+                d->tasks_demo_pid = (uint32_t)result; d->tasks_stage = 3;
+            }
+            if (p.opcode == DESK_END_TASK && !result && d->tasks_stage == 4 &&
+                p.window_id == d->tasks_demo_window) d->tasks_stage = 5;
+        }
+        /* The launcher may have reused this slot's neighbours; c stays valid. */
+        desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
+        desk_put32(reply.data + 8, p.opcode); desk_put32(reply.data + 12, (uint32_t)result);
+        desk_queue(d, i, &reply);
+        break;
+    }
     case DESK_PONG:
         if (c->ping_pending && p.serial == c->serial) {
             c->ping_pending = 0; c->next_ping_ns = d->now_ns + 1000000000ull;
@@ -321,8 +365,11 @@ void desk_child_exited(struct desktop *d, uint32_t pid, int status)
         if (d->clients[i].pid==pid && pid) desk_drop_client(d,i);
         if (d->children[i].pid==pid && pid) { owned=1; memset(&d->children[i],0,sizeof(d->children[i])); }
     }
-    if (owned && d->shell_test && (d->shell_stage==5 || (d->shell_app && d->shell_stage==4)) && pid==d->shell_pid && !status) d->shell_stage=6;
+    if (owned && d->shell_test && d->shell_stage==5 && pid==d->shell_pid && !status) d->shell_stage=6;
+    if (owned && d->tasks_test && d->tasks_stage==5 && pid==d->tasks_demo_pid && !status) d->tasks_stage=6;
+    if (owned && d->app_test && pid==d->app_pid && !status && d->app_checkpoint==DESK_APP_CHECKPOINTS(d->app_test)) d->app_done=1;
 }
+
 void desk_about(struct desktop *d)
 {
     if (d->about>=0) {
@@ -335,6 +382,8 @@ void desk_about(struct desktop *d)
     uint32_t w=d->width>420 ? 400 : d->width>20 ? d->width-20 : 1;
     uint32_t h=d->height>316 ? 220 : d->height>96 ? d->height-96 : 1;
     c->internal=c->window=1;
+    if (!++d->next_window_id) ++d->next_window_id;
+    c->window_id=d->next_window_id;
     c->info.width=w; c->info.height=h;
     strcpy(c->title,"About CiukiOS");
     c->frame=desk_frame(w,h,0,DESK_BAR);
@@ -380,4 +429,82 @@ int desk_shell_click(struct desktop *d)
         return 1;
     }
     return 0;
+}
+
+/* f2-33 task-manager requests. Only a client the desktop itself launched as
+ * /bin/tasks (taskman) reaches these; every result is a TASK_RESULT. */
+static int window_slot(const struct desktop *d, uint32_t id)
+{
+    for (int i=0; i<DESK_CLIENTS; i++) if (id && d->clients[i].window && d->clients[i].window_id==id) return i;
+    return -1;
+}
+void desk_task_windows(struct desktop *d, int index, uint32_t serial)
+{
+    struct desk_client *requester=&d->clients[index];
+    unsigned count=0;
+    for (int i=0; i<DESK_CLIENTS; i++) count+=d->clients[i].window!=0;
+    struct ciuki_message m;
+    if (DESK_TX_MAX-requester->tx_count < (count ? count : 1)) {
+        /* Never deliver a partial list: the client retries on its next refresh. */
+        desk_message(&m,DESK_TASK_RESULT,16); desk_put32(m.data+4,serial);
+        desk_put32(m.data+8,DESK_WINDOWS_QUERY); desk_put32(m.data+12,(uint32_t)-EAGAIN);
+        desk_queue(d,index,&m); return;
+    }
+    if (!count) {
+        desk_message(&m,DESK_WINDOW_INFO,32); desk_put32(m.data+4,serial); desk_queue(d,index,&m); return;
+    }
+    unsigned at=0;
+    for (int i=0; i<DESK_CLIENTS; i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (!c->window) continue;
+        unsigned n=0; while (n<DESK_TITLE_MAX && c->title[n]) n++;
+        uint32_t flags=(c->unresponsive ? DESK_WINDOW_UNRESPONSIVE : 0) | (c->minimized ? DESK_WINDOW_MINIMIZED : 0) |
+            (d->focus==i ? DESK_WINDOW_FOCUSED : 0) | (c->internal ? DESK_WINDOW_INTERNAL : 0) |
+            (c->closing ? DESK_WINDOW_CLOSING : 0);
+        desk_message(&m,DESK_WINDOW_INFO,32+n);
+        desk_put32(m.data+4,serial); desk_put32(m.data+8,at++); desk_put32(m.data+12,count);
+        desk_put32(m.data+16,c->window_id); desk_put32(m.data+20,c->internal ? d->self_pid : c->pid);
+        desk_put32(m.data+24,flags); desk_put32(m.data+28,n); memcpy(m.data+32,c->title,n);
+        desk_queue(d,index,&m);
+    }
+}
+int desk_task_end(struct desktop *d, uint32_t window_id, uint32_t pid)
+{
+    if (window_id) {
+        int i=window_slot(d,window_id);
+        if (i<0 || (pid && d->clients[i].pid!=pid && !d->clients[i].internal)) return -ESRCH;
+        desk_request_close(d,i);
+        return 0;
+    }
+    if (!pid || pid==d->self_pid) return -EPERM;
+    int owned=0;
+    for (int j=0; j<DESK_CLIENTS; j++) owned|=d->children[j].pid==pid;
+    if (!owned) return -EPERM;   /* outside the desktop's close path: kernel authority */
+    int windows=0;
+    for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].window && d->clients[i].pid==pid) { desk_request_close(d,i); windows++; }
+    if (!windows) {
+        for (int j=0; j<DESK_CLIENTS; j++) if (d->children[j].pid==pid) d->children[j].term_sent=1;
+        if (!d->terminate || (d->terminate(pid,SIGTERM) && errno!=ESRCH)) return -EPERM;
+    }
+    return 0;
+}
+int desk_task_switch(struct desktop *d, uint32_t window_id)
+{
+    int i=window_slot(d,window_id);
+    if (i<0) return -ESRCH;
+    if (d->clients[i].minimized) desk_minimize(d,i); else desk_focus(d,i);
+    return 0;
+}
+int desk_task_launch(struct desktop *d, const char *name, const char *argument)
+{
+    if (!strncmp(name,"/bin/",5)) name+=5;
+    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
+        if (!d->launch) return -ENOSYS;
+        d->launch_arg=argument && argument[0] ? argument : NULL;
+        int pid=d->launch(d,&d->programs[k]);
+        int error=errno;
+        d->launch_arg=NULL;
+        return pid<0 ? -(error ? error : EIO) : pid;
+    }
+    return -ENOENT;
 }

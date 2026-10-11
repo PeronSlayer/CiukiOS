@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT
- * F2 desktop protocol v1, with negotiated v2 close requests.
+ * F2 desktop protocol v1, with negotiated v2 close requests and the v2
+ * task-manager extension (f2-33): window list, End Task, Switch To, launch.
  * Byte encoding, independent of C alignment/padding. SDK: ciuki/desktop.h. */
 #ifndef CIUKI_APP_DESKTOP_PROTOCOL_H
 #define CIUKI_APP_DESKTOP_PROTOCOL_H
@@ -8,17 +9,31 @@
 #define DESK_VERSION 1u
 #define DESK_SHELL_VERSION 2u
 #define DESK_TITLE_MAX 63u
+#define DESK_ARG_MAX 160u   /* LAUNCH argument: 12 + name + 4 + argument always fits one message */
 enum desk_opcode {
     DESK_HELLO = 1, DESK_CREATE_WINDOW, DESK_DAMAGE, DESK_MOVE, DESK_CLOSE,
     DESK_PING, DESK_CONFIGURE, DESK_KEY, DESK_MOTION, DESK_BUTTON,
-    DESK_FOCUS, DESK_PONG, DESK_CLOSED, DESK_CLOSE_REQUEST
+    DESK_FOCUS, DESK_PONG, DESK_CLOSED, DESK_CLOSE_REQUEST,
+    /* f2-33, version 2 only. WINDOW_INFO and TASK_RESULT flow desktop to
+     * client; the other four flow client to desktop. */
+    DESK_WINDOWS_QUERY, DESK_WINDOW_INFO, DESK_END_TASK, DESK_SWITCH_TO,
+    DESK_LAUNCH, DESK_TASK_RESULT
 };
+#define DESK_WINDOW_UNRESPONSIVE 1u
+#define DESK_WINDOW_MINIMIZED 2u
+#define DESK_WINDOW_FOCUSED 4u
+#define DESK_WINDOW_INTERNAL 8u
+#define DESK_WINDOW_CLOSING 16u
+#define DESK_WINDOW_FLAGS 31u
 struct desk_packet {
     unsigned opcode;
     int32_t x, y;
     uint32_t width, height, serial, focused;
-    char title[DESK_TITLE_MAX + 1];
+    char title[DESK_TITLE_MAX + 1];   /* also WINDOW_INFO title and LAUNCH name */
+    char argument[DESK_ARG_MAX + 1];  /* LAUNCH: optional single program argument (empty when absent) */
     struct ciuki_input_event event;
+    uint32_t window_id, pid, flags, index, count, request;
+    int32_t result;
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);

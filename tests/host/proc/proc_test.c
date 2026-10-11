@@ -10,6 +10,7 @@
 #undef WTERMSIG
 #include <ciuki/kernel.h>
 #include <ciuki/process.h>
+#include <ciuki/signal.h>
 
 #define CIUKI_CPU_H
 #define KERNEL_VBASE CIUKI_MAIN_STACK_LIMIT
@@ -97,13 +98,33 @@ int copy_user(void *dst, const void *src, uint32_t bytes)
     return -EFAULT;
 }
 
+/* f2-33 enumeration inputs: fixed fake memory/heap/idle figures, the
+ * supervisor's desktop identity and a recording signal post. */
+uint64_t g_idle_ticks;
+static uint32_t fake_desktop_pid;
+/* Renamed for syscalls_proc.c only: harnesses that include this fixture also
+ * link the production supervisor.c/signal.c definitions. */
+uint32_t proc_test_desktop_pid(void) { return fake_desktop_pid; }
+uint32_t pmm_total_usable(void) { return HOST_PAGES - 1; }
+uint32_t pmm_free_count(void) { return HOST_PAGES - 1 - pages_used; }
+void kheap_snapshot(struct kheap_ledger *out) { *out = (struct kheap_ledger){ .pages = 7, .in_use = 1234, .peak = 5678 }; }
+static struct { uint32_t pid, signo, sender; unsigned calls; } posted;
+void proc_test_signal_post(struct process *p, struct proc_thread *t, uint32_t signo, uint32_t sender)
+{
+    CHECK(!t); posted.pid = p->pid; posted.signo = signo; posted.sender = sender; posted.calls++;
+}
+
 #include "../../../src/kernel/proc/uaddr.c"
 #include "../../../src/kernel/proc/elf.c"
 #include "../../../src/kernel/proc/waitword.c"
 #include "../../../src/kernel/proc/process.c"
 #include "../../../src/kernel/proc/thread.c"
 #include "../../../src/kernel/proc/spawn.c"
+#define supervisor_desktop_pid proc_test_desktop_pid
+#define proc_signal_post proc_test_signal_post
 #include "../../../src/kernel/proc/syscalls_proc.c"
+#undef proc_signal_post
+#undef supervisor_desktop_pid
 
 static uint8_t fixture[4 * PAGE_SIZE];
 static int fixture_read(void *cookie, uint32_t off, void *dst, uint32_t n)
@@ -553,6 +574,7 @@ static void test_spawn_syscall(void)
     CHECK(ct && ct->mask == pt->mask);
     char arg[8]; CHECK(ua_read(child->memory, arg, get_word(child->memory, ct->task->saved_esp + 4), sizeof(arg)) == 0);
     CHECK(!strcmp(arg, "program"));
+    CHECK(!strcmp(child->name, "fixture") && child->start_tick == g_ticks); /* f2-33: path basename */
     stop_collect(child); CHECK(proc_reap(p, child) == 0);
     g_current = pt->task;
     CHECK(pages_used == baseline_pages && heap_blocks == baseline_heap);
@@ -631,6 +653,149 @@ static void test_limits(void)
     CHECK(pages_used == base_pages && heap_blocks == base_heap);
     puts("proc limits: 64 processes, 256 retained/live threads, 16 per process, INT32_MAX exhaustion PASS");
 }
+/* f2-33: record layout, ordering/accounting over a fake process set,
+ * validation, truncation, and the termination authority (EPERM paths). */
+static unsigned list_records(struct process *caller, uint32_t buffer, uint32_t bytes,
+                             struct ciuki_proc_system *sys, struct ciuki_proc_record *out)
+{
+    (void)caller;
+    int n = proc_list(buffer, bytes); CHECK(n >= 0);
+    CHECK(ua_read(proc_current()->memory, sys, buffer, sizeof(*sys)) == 0);
+    if (n) CHECK(ua_read(proc_current()->memory, out, buffer + sizeof(*sys), (uint32_t)n * sizeof(*out)) == 0);
+    return (unsigned)n;
+}
+static const struct ciuki_proc_record *find_record(const struct ciuki_proc_record *r, unsigned n, uint32_t pid)
+{
+    for (unsigned i = 0; i < n; i++) if (r[i].pid == pid) return &r[i];
+    return 0;
+}
+static void test_enumeration(void)
+{
+    struct process probe = { 0 };
+    proc_set_name(&probe, "/bin/tasks"); CHECK(!strcmp(probe.name, "tasks"));
+    proc_set_name(&probe, "a/b/0123456789abcdefghijklmnopqrstuvwxyz"); CHECK(!strcmp(probe.name, "0123456789abcdefghijklmnopqrstu"));
+    proc_set_name(&probe, "x\x01y"); CHECK(!strcmp(probe.name, "x?y"));
+    proc_set_name(&probe, "/dir/"); CHECK(!probe.name[0]);
+    CHECK(!strcmp(proc_supervisor()->name, "supervisor"));
+
+    unsigned base_pages = pages_used, base_heap = heap_blocks;
+    struct process *p, *child, *grand, *keeper, *other, *desk, *desk_child, *owner;
+    g_ticks = 5000;
+    struct proc_thread *pt = make_process(proc_supervisor(), &p);
+    struct proc_thread *ct = make_process(p, &child);
+    struct proc_thread *gt = make_process(child, &grand);
+    struct proc_thread *kt = make_process(proc_supervisor(), &keeper); /* keeps other's zombie */
+    struct ciuki_file file = fixture_file(); struct proc_strings *s = proc_strings_new();
+    CHECK(s && proc_strings_add(s, "/bin/other", 11, false) == 0);
+    CHECK(proc_spawn_file(keeper, &file, s, 0, 0, CIUKI_SPAWN_NEW_GROUP, 0, &other) > 0);
+    CHECK(proc_spawn_file(proc_supervisor(), &file, s, 0, 0, CIUKI_SPAWN_NEW_GROUP, 0, &desk) > 0);
+    proc_strings_free(s);
+    struct proc_thread *dt = 0;
+    for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) if (proc_thread_slot(i) && proc_thread_slot(i)->process == desk) dt = proc_thread_slot(i);
+    CHECK(dt); make_process(desk, &desk_child);
+    CHECK(proc_prepare(proc_supervisor(), &owner) == 0); proc_publish(owner, 0); /* kernel controller owner */
+    CHECK(!strcmp(other->name, "other") && !strcmp(child->name, "test") && other->pgid == other->pid);
+    CHECK(child->pgid == p->pgid && grand->ppid == child->pid && desk_child->pgid == desk->pgid);
+    p->cpu_ticks = 11; child->cpu_ticks = 22; grand->cpu_ticks = 33; other->cpu_ticks = UINT64_C(0x100000007);
+    g_ticks = 9000; g_idle_ticks = 4000;
+
+    g_current = pt->task; g_current->state = T_RUNNING;
+    struct ciuki_mmap_args a = map_args(2 * PAGE_SIZE, PROT_READ | PROT_WRITE);
+    int32_t mapped = ua_mmap(p->memory, &a); CHECK(mapped > 0);
+    uint32_t buffer = (uint32_t)mapped;
+    CHECK(proc_list(buffer, CIUKI_PROC_LIST_MIN - 1) == -EINVAL);
+    CHECK(proc_list(buffer, CIUKI_PROC_LIST_MAX + 1) == -EINVAL);
+    CHECK(proc_list(CIUKI_IMAGE_BASE - PAGE_SIZE, 512) == -EFAULT);
+    CHECK(proc_list(buffer, 2 * PAGE_SIZE + 4) == -EFAULT);          /* straddles the mapping end */
+    CHECK(proc_list(UINT32_MAX - 63, 64) == -EFAULT);
+    struct ciuki_proc_system sys; struct ciuki_proc_record rec[CIUKI_PROCESS_MAX];
+    uint8_t fill[2 * PAGE_SIZE]; memset(fill, 0xcc, sizeof(fill)); CHECK(ua_write(p->memory, buffer, fill, sizeof(fill)) == 0);
+    CHECK(list_records(p, buffer, CIUKI_PROC_LIST_MIN, &sys, rec) == 0);
+    CHECK(sys.version == CIUKI_PROC_VERSION && sys.size == sizeof(sys) && sys.records == 0 && sys.processes == 9);
+    CHECK(sys.tick_hz == 1000 && sys.total_ticks == 9000 && sys.idle_ticks == 4000 && !sys.reserved[0] && !sys.reserved[1]);
+    CHECK(sys.usable_pages == HOST_PAGES - 1 && sys.free_pages == HOST_PAGES - 1 - pages_used);
+    CHECK(sys.kheap_pages == 7 && sys.kheap_bytes == 1234 && sys.kheap_high_water == 5678);
+    CHECK(get_word(p->memory, buffer + 64) == 0xccccccccu);           /* nothing beyond the system record */
+    CHECK(list_records(p, buffer, 64 + 2 * 80 + 79, &sys, rec) == 2 && sys.processes == 9 && sys.records == 2);
+    CHECK(rec[0].pid == 1 && rec[1].pid == p->pid && get_word(p->memory, buffer + 64 + 160) == 0xccccccccu);
+    unsigned n = list_records(p, buffer, 2 * PAGE_SIZE, &sys, rec);
+    CHECK(n == 9 && sys.records == 9 && sys.processes == 9);
+    for (unsigned i = 1; i < n; i++) CHECK(rec[i].pid > rec[i - 1].pid);
+    for (unsigned i = 0; i < n; i++) CHECK(rec[i].version == CIUKI_PROC_VERSION && rec[i].size == sizeof(rec[i]) && !rec[i].name[31]);
+    CHECK(!strcmp(rec[0].name, "supervisor") && rec[0].ppid == 0 && rec[0].pgid == 1 && rec[0].threads == 1 && rec[0].state == CIUKI_PROC_LIVE);
+    const struct ciuki_proc_record *r = find_record(rec, n, child->pid);
+    CHECK(r && r->ppid == p->pid && r->pgid == p->pgid && r->threads == 1 && r->cpu_ticks == 22 && r->start_tick == 5000);
+    CHECK(r->resident_pages == child->memory->backing && r->resident_pages > 0 && !strcmp(r->name, "test"));
+    r = find_record(rec, n, other->pid); CHECK(r && r->cpu_ticks == UINT64_C(0x100000007) && r->pgid == other->pid && !strcmp(r->name, "other"));
+    r = find_record(rec, n, owner->pid); CHECK(r && !r->threads && !r->resident_pages && !r->name[0] && r->state == CIUKI_PROC_LIVE);
+
+    /* Termination: arguments, descriptor, target, then permission. */
+    const int32_t none = (int32_t)CIUKI_PROC_NO_AUTHORITY;
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGUSR1, none) == -EINVAL);
+    CHECK(proc_terminate(p, 0, SIGTERM, none) == -EINVAL && proc_terminate(p, -3, SIGTERM, none) == -EINVAL);
+    CHECK(proc_terminate(p, (int32_t)p->pid, SIGKILL, none) == -EINVAL);
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGTERM, 9) == -EBADF);
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGTERM, 200) == -EBADF);
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGTERM, 0) == -EBADF || !p->fds[0].object);
+    CHECK(proc_terminate(p, 1, SIGKILL, none) == -EPERM);
+    CHECK(proc_terminate(p, 999999, SIGTERM, none) == -ESRCH);
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGTERM, none) == -EPERM && !posted.calls);
+    CHECK(proc_terminate(p, (int32_t)grand->pid, SIGTERM, none) == 0);  /* descendant: no authority needed */
+    CHECK(posted.calls == 1 && posted.pid == grand->pid && posted.signo == SIGTERM && posted.sender == p->pid);
+    unsigned heap_before = heap_blocks;
+    int fd = proc_authority_install(p); CHECK(fd >= 3 && proc_authority_object(p->fds[fd].object));
+    CHECK(heap_blocks == heap_before + 1 && p->fds[fd].object->inheritable && !(p->fds[fd].flags & FD_CLOEXEC));
+    CHECK(proc_authority_install(proc_supervisor()) == -EPERM);
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGKILL, fd) == 0 && posted.pid == other->pid && posted.signo == SIGKILL);
+    CHECK(proc_terminate(p, (int32_t)owner->pid, SIGKILL, fd) == -EPERM);  /* no user thread */
+    /* Explicit delegation reaches the owner's direct child only. */
+    struct ciuki_spawn_fd map = { fd, 4 };
+    struct process *delegate, *nested;
+    struct ciuki_file file2 = fixture_file(); s = proc_strings_new();
+    CHECK(s && proc_strings_add(s, "tasks", 6, false) == 0);
+    CHECK(proc_spawn_file(p, &file2, s, &map, 1, 0, 0, &delegate) > 0 && proc_authority_object(delegate->fds[4].object));
+    struct ciuki_spawn_fd again = { 4, 4 };
+    CHECK(proc_spawn_file(delegate, &file2, s, &again, 1, 0, 0, &nested) > 0 && proc_authority_object(nested->fds[4].object));
+    proc_strings_free(s);
+    CHECK(proc_terminate(delegate, (int32_t)other->pid, SIGTERM, 4) == 0);
+    CHECK(proc_terminate(nested, (int32_t)other->pid, SIGTERM, 4) == -EPERM);
+    /* A delegate never ends its owner or the owner's group, even unrecorded. */
+    CHECK(!fake_desktop_pid && proc_terminate(delegate, (int32_t)p->pid, SIGKILL, 4) == -EPERM);
+    CHECK(proc_terminate(delegate, (int32_t)child->pid, SIGKILL, 4) == -EPERM);
+    CHECK(proc_terminate(p, (int32_t)grand->pid, SIGKILL, fd) == 0);    /* the owner itself may */
+    CHECK(proc_terminate(delegate, (int32_t)other->pid, SIGTERM, none) == -EPERM);
+    /* The desktop's group is ended only through the desktop. */
+    fake_desktop_pid = desk->pid;
+    CHECK(proc_terminate(p, (int32_t)desk_child->pid, SIGKILL, fd) == -EPERM);
+    CHECK(proc_terminate(p, (int32_t)desk->pid, SIGKILL, fd) == -EPERM);
+    CHECK(proc_terminate(desk, (int32_t)desk_child->pid, SIGTERM, none) == 0 && posted.pid == desk_child->pid);
+    fake_desktop_pid = 0;
+    CHECK(proc_terminate(p, (int32_t)desk_child->pid, SIGKILL, fd) == 0);
+    /* Zombies are not targets; their records report state 3 and no threads. */
+    stop_collect(other); g_current = pt->task;
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGKILL, fd) == -ESRCH);
+    n = list_records(p, buffer, 2 * PAGE_SIZE, &sys, rec);
+    r = find_record(rec, n, other->pid); CHECK(r && r->state == CIUKI_PROC_ZOMBIE && !r->threads && !r->resident_pages);
+    CHECK(n == 11 && find_record(rec, n, delegate->pid) && !strcmp(find_record(rec, n, delegate->pid)->name, "tasks"));
+    (void)ct; (void)gt; (void)dt; (void)kt;
+    uint32_t pids[] = { nested->pid, delegate->pid, grand->pid, child->pid, desk_child->pid, desk->pid, p->pid, other->pid, keeper->pid };
+    for (unsigned i = 0; i < sizeof(pids) / sizeof(pids[0]); i++) {
+        struct process *z = proc_find(pids[i]);
+        if (z && z->state == PROC_LIVE) stop_collect(z);
+    }
+    for (unsigned round = 0; round < 4; round++) {
+        g_current = &controller; proc_collect();
+        for (unsigned i = 0; i < sizeof(pids) / sizeof(pids[0]); i++) {
+            struct process *z = proc_find(pids[i]), *parent = z ? proc_find(z->ppid) : 0;
+            if (z && z->state == PROC_ZOMBIE && parent) CHECK(proc_reap(parent, z) == 0);
+        }
+    }
+    for (unsigned i = 0; i < sizeof(pids) / sizeof(pids[0]); i++) CHECK(!proc_find(pids[i]));
+    proc_discard(owner);
+    CHECK(pages_used == base_pages && heap_blocks == base_heap); /* authority freed with its last holder */
+    g_ticks = 0; g_idle_ticks = 0;
+    puts("proc enumeration: 64+80-byte records, PID order, truncation, EINVAL/EFAULT, names, accounting; terminate EINVAL/EBADF/ESRCH/EPERM, descendants, delegated authority, desktop group PASS");
+}
 static int real_payload_read(void *cookie, uint32_t off, void *dst, uint32_t bytes)
 {
     memcpy(dst, (const uint8_t *)cookie + off, bytes);
@@ -656,7 +821,7 @@ int main(int argc, char **argv)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     controller.state = T_RUNNING;
-    test_elf(); test_arena(); test_stack(); test_queue(); test_processes(); test_creation_failure(); test_spawn_syscall(); test_limits();
+    test_elf(); test_arena(); test_stack(); test_queue(); test_processes(); test_creation_failure(); test_spawn_syscall(); test_limits(); test_enumeration();
     if (argc == 2) test_real_payload(argv[1]);
     struct trap_frame tf = { .vector = 14, .cs = 8,
         .eip = (uint32_t)(uintptr_t)copy_user_fault_start };

@@ -3,10 +3,12 @@
  * and input handling for a Notepad-class editor (f2-32).
  *
  * The buffer holds UTF-8 with "\n" line breaks. Each character occupies one
- * 8x16 cell (a tab advances to the next multiple of 8 cells, counted from the
- * start of the visual line); characters the compositor font lacks (non-ASCII,
- * control characters) are drawn as a hollow placeholder box. All arithmetic is
- * integer-only and every offset the API hands out lies on a character boundary.
+ * 6x13 cell (the compositor's 5x7 glyphs; a tab advances to the next multiple
+ * of 8 cells, counted from the start of the visual line); characters the font
+ * lacks (non-ASCII, control characters) are drawn as a hollow placeholder box.
+ * All arithmetic is integer-only and every offset the API hands out lies on a
+ * character boundary. Keys and text reach the widget through libdeskui's
+ * dispatch (widgets.c); scrollbars reuse the toolkit's du_sb.
  */
 #ifndef CIUKI_DESKUI_TEXTAREA_H
 #define CIUKI_DESKUI_TEXTAREA_H
@@ -14,9 +16,9 @@
 
 #define DU_TA_LIMIT 61440u  /* default capacity in bytes (the 0.8 CiukNote limit) */
 #define DU_TA_TAB 8u
-#define DU_TA_CELL_W 8
-#define DU_TA_CELL_H 16
-#define DU_TA_BAR 16        /* scrollbar thickness */
+#define DU_TA_CELL_W DU_CHAR_W   /* the compositor's 5x7 glyphs at their 6 pixel advance */
+#define DU_TA_CELL_H 13          /* line height */
+#define DU_TA_BAR 16             /* scrollbar thickness */
 #define DU_TA_PAD 2         /* text inset inside the sunken border */
 #define DU_TA_DOUBLE_NS 500000000ull
 
@@ -89,10 +91,9 @@ size_t du_ta_hit(struct du_textarea *, struct du_rect box, int x, int y);
 
 /* Widget behaviour; wired into libdeskui for widgets of kind DU_TEXTAREA. */
 void du_ta_draw(struct du_canvas *, struct du_rect box, struct du_textarea *, int focused);
-int du_ta_key(struct du_textarea *, unsigned code, unsigned modifiers);
-int du_ta_text(struct du_textarea *, unsigned ch);
+int du_ta_key(struct du_textarea *, unsigned code, unsigned modifiers); /* editing and movement keys */
+int du_ta_text(struct du_textarea *, unsigned ch);                     /* a character from du_key_char */
 int du_ta_mouse_down(struct du_textarea *, struct du_rect box, int x, int y, unsigned modifiers, uint64_t ns);
 int du_ta_mouse_move(struct du_textarea *, struct du_rect box, int x, int y);
 void du_ta_mouse_up(struct du_textarea *);
-unsigned du_text_translate(unsigned ch, int shift, int caps); /* US layout shift/caps of a key's unshifted text */
 #endif

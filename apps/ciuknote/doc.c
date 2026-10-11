@@ -95,65 +95,17 @@ int cn_resolve(char *out, const char *dir, const char *input)
 }
 
 static unsigned char lower(unsigned char c) { return c >= 'A' && c <= 'Z' ? (unsigned char)(c + 32) : c; }
-static int name_compare(const char *a, const char *b)
+int cn_has_wildcard(const char *name) { return strpbrk(name, "*?") != NULL; }
+int cn_match(const char *pattern, const char *name)
 {
-    for (;; a++, b++) {
-        unsigned char x = lower((unsigned char)*a), y = lower((unsigned char)*b);
-        if (x != y) return x < y ? -1 : 1;
-        if (!x) break;
+    /* Iterative glob with one backtrack point per `*`: linear space, bounded time. */
+    const char *star = NULL, *mark = NULL;
+    while (*name) {
+        if (*pattern == '*') { star = pattern++; mark = name; }
+        else if (*pattern == '?' || (*pattern && lower((unsigned char)*pattern) == lower((unsigned char)*name))) { pattern++; name++; }
+        else if (star) { pattern = star + 1; name = ++mark; }
+        else return 0;
     }
-    return strcmp(a, b);
-}
-struct collect { struct cn_listing *list; int text_only; };
-static int collect_entry(const char *name, const struct cn_stat *st, void *arg)
-{
-    struct collect *c = arg;
-    if (!st->dir && c->text_only && !cn_is_text_name(name)) return 0;
-    struct cn_listing *l = c->list;
-    if (l->count >= CN_ENTRIES) { l->truncated = 1; return 0; }
-    if (l->count == l->capacity) {
-        unsigned capacity = l->capacity ? l->capacity * 2 : 64;
-        struct cn_entry *grown = realloc(l->entries, capacity * sizeof(*grown));
-        if (!grown) return -ENOMEM;
-        l->entries = grown; l->capacity = capacity;
-    }
-    size_t len = strlen(name) + 1;
-    char *copy = malloc(len);
-    if (!copy) return -ENOMEM;
-    memcpy(copy, name, len);
-    l->entries[l->count++] = (struct cn_entry){copy, st->dir != 0, st->size, st->mtime};
-    return 0;
-}
-int cn_list(const struct cn_fs *fs, const char *dir, int text_only, struct cn_listing *out)
-{
-    memset(out, 0, sizeof(*out));
-    struct collect c = {out, text_only};
-    int r = fs->list(fs->ctx, dir, collect_entry, &c);
-    if (r) { cn_listing_free(out); return r; }
-    return 0;
-}
-static const char *extension(const struct cn_entry *e)
-{ const char *dot = strrchr(e->name, '.'); return e->dir ? "" : dot && dot != e->name ? dot + 1 : ""; }
-static unsigned sort_column; static int sort_descending;
-static int entry_compare(const void *pa, const void *pb)
-{
-    const struct cn_entry *a = pa, *b = pb;
-    if (a->dir != b->dir) return a->dir ? -1 : 1;
-    int r = 0;
-    if (sort_column == 1) r = a->size < b->size ? -1 : a->size > b->size;
-    else if (sort_column == 2) r = name_compare(extension(a), extension(b));
-    else if (sort_column == 3) r = a->mtime < b->mtime ? -1 : a->mtime > b->mtime;
-    if (!r) r = name_compare(a->name, b->name);
-    return sort_descending ? -r : r;
-}
-void cn_listing_sort(struct cn_listing *l, unsigned column, int descending)
-{
-    /* qsort is not stable: the name is the final tie-breaker, so the order is total. */
-    sort_column = column; sort_descending = descending;
-    if (l->count > 1) qsort(l->entries, l->count, sizeof(*l->entries), entry_compare);
-}
-void cn_listing_free(struct cn_listing *l)
-{
-    for (unsigned i = 0; i < l->count; i++) free(l->entries[i].name);
-    free(l->entries); memset(l, 0, sizeof(*l));
+    while (*pattern == '*') pattern++;
+    return !*pattern;
 }

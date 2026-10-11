@@ -1,17 +1,101 @@
 # F2 ring-3 desktop and client protocol
 
-## f2-32 CiukNote decisions (2026-10-11)
+## f2-33 Task Manager and the v2 task extension (2026-10-11)
 
-`/bin/ciuknote` is a Notepad-class editor on `libdeskui` (`apps/ciuknote/`: `app.c`
-commands/dialogs, `doc.c` file and text rules, `vfs.c` POSIX boundary, `main.c`
-window glue; `apps/libdeskui/textarea.{h,c}` the multi-line widget). Window 600x352,
-single bitmap font in 8x16 cells, menus File/Edit/Format/View/Help (Alt+F, E, O, V, H;
-F10), right-click menu, status bar `Ln, Col`, find/replace bar, Open/Save As page.
-Printing to LPT1 stays out (no parallel port driver); Page Setup/Print are absent.
+`/bin/tasks` is the CiukiOS Task Manager (menu label "Task Manager", a
+400x420 window): tabs Applications, Processes and
+Performance (the Virtual Machines tab arrives with F3, f3-02), menus File
+(New Task (Run...), Exit Task Manager), View (Refresh Now F5; Update Speed
+High 0.5 s, Normal 1 s, Low 4 s, Paused) and Help, and a status bar
+(processes, CPU usage, memory). Kernel data comes from call 70 and the
+termination request from call 71 (docs/design/execution-abi.md, f2-33
+amendment); window data comes from the desktop through the extension below.
+Research and decisions are in docs/design/f2-acceptance.md, section F2-33.
+
+- **Applications:** columns Task and Status (Running / Not Responding from
+  the desktop's heartbeat), sorted by title, PID and window id. End Task
+  (Alt+E or Delete) sends END_TASK, the desktop's close path: CLOSE_REQUEST, SIGTERM
+  after 2 s for its own children. Switch To (Alt+S, Enter, double-click) restores and
+  focuses. New Task (Alt+N) asks the desktop to launch an admitted `/bin`
+  program (name or `/bin/name`), so graphical programs get their channel and
+  appear here; the launched program's row is selected once it appears.
+- **Processes:** Image Name, PID, PPID, Threads, Mem Usage (resident pages x
+  4 KiB), CPU (percent of the last interval), sortable by header click
+  (again to reverse), plus "System Idle Process" (PID 0). End Process
+  (Alt+E or Delete, with confirmation) refuses PID 0/1 and the desktop, routes the
+  desktop's group through END_TASK by PID and everything else through
+  call 71 with SIGKILL and the delegated authority (EPERM shows "Access is
+  denied").
+- **Performance:** CPU usage meter, a 60-second history graph (one point per
+  second), Physical Memory (K) total/available/used, Kernel Memory (K) heap
+  in use/peak/pool, Totals (processes, threads, up time).
+
+The v2 task extension follows f2-30's rules: version 2 only, a v1 client or
+a wrong direction is a protocol error (that peer is disconnected), payload
+tails are zero and integers little-endian. Requests from a client that the
+desktop did not launch as `/bin/tasks` receive TASK_RESULT with EPERM; no
+other client gains any right.
+
+| Opcode | Direction | Payload bytes | Fields |
+| --- | --- | ---: | --- |
+| WINDOWS_QUERY=15 | Client → desktop | 8 | u32 serial@4 |
+| WINDOW_INFO=16 | Desktop → client | 32+n | u32 serial@4, index@8, count@12 (0..16), window_id@16, pid@20, flags@24 (1 unresponsive, 2 minimized, 4 focused, 8 internal, 16 closing), n@28; title@32, 0..63 printable bytes. count=0 is one message with every field zero. |
+| END_TASK=17 | Client → desktop | 16 | u32 serial@4, window_id@8, pid@12; not both zero. window_id selects a window (pid, when nonzero, must match); window_id=0 ends a desktop child by PID: its windows get close requests, a windowless child gets SIGTERM. |
+| SWITCH_TO=18 | Client → desktop | 12 | u32 serial@4, window_id@8 (nonzero) |
+| LAUNCH=19 | Client → desktop | 12+n, or 16+n+a with an argument (f2-32) | u32 serial@4, n@8 (1..63); name@12, visible ASCII without spaces, matched against the `/bin` menu list. Optional argument after the name: u32 a@12+n (1..160), then a bytes (32..255 except 127), one `argv[1]` for the program; a message of any other length is a protocol error. |
+| TASK_RESULT=20 | Desktop → client | 16 | u32 serial@4, request@8 (15, 17, 18 or 19), i32 result@12: 0, the launched PID, or -errno (EPERM, ESRCH, ENOENT, EAGAIN when the reply queue cannot hold a whole list, or the spawn error) |
+
+Window ids are assigned by the desktop at window creation (never 0) and are
+not reused while the counter does not wrap. The desktop never sends a partial
+window list. The desktop launches `/bin/tasks` like Files (a graphical menu program:
+`--channel-fd=3`, `CIUKI_DISPLAY`), plus the authority at fd 4 and
+`--authority-fd=4` (absent when PID 1 installed none);
+other programs never receive it.
+
+Runtime test scenario (`tasks-qemu-t23`): at the crash-isolation probe's
+interaction ARM, F9 selects the scenario (F12 is the shell case, F11 the
+Files case, F10 the CiukNote case);
+the desktop tracks stages 1-7 (Tasks launched from the menu, its window, demo
+launched through LAUNCH, its window, END_TASK on that window, demo reaped
+with status 0, Tasks' private checkpoint ping `0xf2330007` plus the desktop's
+own call-70 check) and reports `keys` only at stage 7. `--test=tasks` makes
+Tasks place its frame at (8, 40), use the High speed and send the checkpoint
+when the ended PID has left the process list and call 71, with the delegated
+descriptor, refuses that PID (ESRCH), PID 1 and the desktop (EPERM); nothing
+is printed on the console. The taskbar notice shows `tasks stage N` for the lead's screenshot.
+
+Toolkit additions on the f2-31 libdeskui (9239aca), additive; the pinned
+toolkit and Files frames of `tests/host/desktop/test_deskui.py` are
+unchanged: `DU_TABS` (a tab control whose box spans the 20-pixel strip,
+`DU_TAB_H`, and the raised page; labels are `items[i].text[0]`, `active` is
+the selected tab; click, Left/Right/Home/End when focused and, from anywhere,
+Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PgDn/PgUp emit DU_EV_SELECT; `du_tabs_hit`),
+`DU_GRAPH` (`samples`/`sample_count`, 0..100, oldest first, `total` = capacity;
+black field, green grid and line, integer Bresenham), `DU_GROUP` (etched
+frame with its label), `DU_COLUMNS` raised from 4 to 8 for the six Processes
+columns (list drawing iterates `column_count`, so Files is unaffected), Alt
+plus a visible enabled button's `&` letter presses it (after the menu
+mnemonics, as in the dialogs), `du_window_queue` for arbitrary v2 requests
+and a `message` hook on `du_window` receiving the v2 messages the glue does
+not consume (WINDOW_INFO, TASK_RESULT). Task Manager uses the toolkit's own
+list columns, sort indicator, embedded scrollbars, radio menu items,
+message/input dialogs, timers and `du_run`.
+
+## f2-32 CiukNote (2026-10-11)
+
+`/bin/ciuknote` is a Notepad-class editor on libdeskui (menu label "CiukNote",
+Tango text-document icon in the menu and the taskbar): `apps/ciuknote/app.c` commands,
+dialogs and find bar, `doc.c` file and text rules, `vfs.c` the POSIX boundary, `main.c`
+the window glue, `apps/libdeskui/textarea.{h,c}` the multi-line widget (`DU_TEXTAREA`).
+Window 640x440 on displays of 1000x700 and more (600x380 from 800x600, else 560x320;
+`CIUKI_DISPLAY`), menus File, Edit, Format, View and Help with accelerators, a right-click
+menu, a find/replace bar and a status bar (`Ln, Col`). Printing to LPT1 stays out (no
+parallel port driver); Page Setup and Print are absent. Acceptance decisions:
+docs/design/f2-acceptance.md, section f2-32.
 
 Research (2026-10-11): Microsoft's
 [Notepad help](https://support.microsoft.com/en-us/topic/how-to-use-notepad-to-create-a-log-file-dd228763-76de-a7a7-952b-d5ae203c4e12)
-describes the `.LOG` feature (first line `.LOG`, the date and time are appended at the end
+describes the `.LOG` feature (first line `.LOG`; the date and time are appended at the end
 each time the file is opened); the 0.8 CiukNote description in the legacy archive
 (`docs/desktop-apps-2026-09-29.md`) fixes the scope and the 61,440-byte limit;
 [Unicode 15 chapter 3, Table 3-7](https://www.unicode.org/versions/Unicode15.0.0/ch03.pdf)
@@ -21,157 +105,197 @@ and truncated sequences are single invalid bytes); POSIX
 [fsync](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fsync.html) justify the
 save path; the QEMU case follows the
 [QMP input-send-event](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event)
-conventions of the desktop-shell cases. These were checked against `apps/libdeskui`, the
+conventions of the other desktop cases. These were checked against `apps/libdeskui`, the
 `protocol.h`/`desktop.c` shell code and the kernel's `i8042.c` text path.
 
-Decisions.
-
-- **Keyboard text.** The kernel's native keyboard path (`i8042.c`, `key_transition`) reports
-  the *unshifted* US character of every key press as a TEXT event; only the BIOS path reports
-  shifted text. The toolkit therefore translates TEXT with the tracked Shift and Caps Lock
-  state (`du_text_translate`): a lowercase letter is upper-cased when Shift xor Caps is set,
-  digits and punctuation take their US shifted forms with Shift. Text that is already shifted
-  (BIOS, or any character that is not an unshifted key form) passes unchanged, so both
-  backends stay correct. This also fixes capitals and punctuation in Files' edit boxes.
-- **Text model.** One flat UTF-8 buffer with `\n` line breaks, 61,440 bytes (line breaks
-  count as one byte). Every offset lies on a character boundary; each character is one
-  cell, tabs advance to the next multiple of 8 counted from the visual line start, and
-  non-ASCII or control characters are drawn as a hollow placeholder box and saved unchanged
-  (a lone CR and NUL bytes survive). Undo has one level: it swaps with a snapshot, so a
-  second Undo redoes; consecutive typing, backspaces or forward deletes form one step and
-  any caret movement ends it. Word wrap breaks after the last blank that fits and hard-breaks
-  longer words; blanks hang past the edge; End on a soft-wrapped line keeps the caret at the
-  end of that line (affinity). Go To is disabled while Word Wrap is on. Find and Replace
-  fold ASCII case only and never match inside a character; Replace All counts on the
-  original text and is one Undo step; there is no wrap-around (the 0.8 behaviour):
-  `Cannot find "..."`.
-- **Files.** CRLF pairs read from a file become `\n`; the style of the first line break
-  is remembered and written back (new documents use CRLF, as Windows 9x Notepad). A file
+- **Text model.** One flat UTF-8 buffer with `\n` line breaks, 61,440 bytes (a line break
+  counts as one byte). Every offset lies on a character boundary; a character is one
+  6x13 cell of the 5x7 glyph font, tabs advance to the next multiple of 8 counted from the
+  visual line start, and non-ASCII or control characters are drawn as a hollow
+  placeholder box and saved unchanged (a lone CR and NUL bytes survive). Undo has one
+  level: it swaps with a snapshot, so a second Undo redoes; consecutive typing,
+  backspaces or forward deletes form one step and any caret movement ends it. Word wrap
+  breaks after the last blank that fits and hard-breaks longer words; End on a
+  soft-wrapped line keeps the caret at the end of that line. Go To is disabled while Word
+  Wrap is on. Find and Replace fold ASCII case only and never match inside a character;
+  Replace All is one Undo step and, like Find, does not wrap around (`Cannot find "..."`).
+- **Keyboard text.** The widget takes characters from `du_key_char` (the kernel's
+  unshifted TEXT is ignored and Shift and Caps Lock are applied by the toolkit), so
+  capitals and punctuation are correct on the native keyboard path.
+- **Files.** CRLF pairs read from a file become `\n`; the style of the first line break is
+  remembered and written back (new documents use CRLF, as Windows 9x Notepad). A file
   larger than twice the limit, or longer than the limit after conversion, is refused
   (`File too large`). Save writes `<name>.cn~`, `fsync`s, then `rename`s over the target
-  and removes the temporary on any error, so a failed save keeps the old file. The name
-  appears in the status bar: protocol v2 has no title update, so the creation title is
-  `CiukNote` (or `CiukNote - <name>` when started with a path).
-- **Open and Save As page.** The toolkit's DU_OPEN/DU_SAVE dialogs are path prompts, so the
-  application shows a page in the same window: location edit, Details list (folders first;
-  Name/Size/Type/Modified sortable; `..` row), file-name edit, `Text Documents (*.txt)` or
-  `All Files (*.*)`, Open/Save and Cancel. Typed names may be absolute or relative; a folder
-  name navigates; without an extension `.txt` is appended on Save and tried on Open; Save
-  over an existing file asks `<name> already exists. Do you want to replace it?`.
+  and removes the temporary on any error, so a failed save keeps the old file. Protocol v2
+  has no title update: the creation title is `CiukNote`, or `CiukNote - <name>` when
+  started with a path; the status bar shows the document name.
+- **Open and Save As** are the toolkit's file dialogs with a lister that shows folders and
+  `*.txt` files; a pattern typed in the name box (`*.*`, `*.bin`) is a filter for the next
+  dialog, a folder name navigates, the default extension `.txt` is appended on Save and
+  tried on Open, and Save over an existing file asks `<name> already exists. Do you want
+  to replace it?`.
 - **Clipboard.** The editor keeps its own 61,440-byte clipboard (the toolkit's is 1,040
   bytes) and mirrors the first line into the toolkit clipboard, so text copied in an edit
   box or dialog can be pasted into the document and the reverse.
-- **Prompts** use the exact 0.8 text: `The text in the <name> file has changed.` / `Do you want
+- **Prompts** use the 0.8 text: `The text in the <name> file has changed.` / `Do you want
   to save the changes?` (Yes/No/Cancel) on New, Open, Exit and a window close request.
+- **About** shows the approved Ciuki portrait: the application reads
+  `/system/assets/ciuki-portrait.xrgb` (the desktop's deterministic conversion) and reduces
+  it with the box filter Files uses to the 32x32 dialog icon.
 - **Command line.** `ciuknote [--channel-fd=N] [--test=ciuknote] [path]`; a missing path
-  offers to create the file. **Gap for lead review:** Files starts text files with
-  `ciuki_spawn(...)` without a channel mapping, but a graphical client needs a channel
-  whose other end the desktop owns (protocol v2 has no launch request). Opening from Files
-  therefore needs a desktop-side launch request or a lead-approved alternative; the editor
-  side accepts the path argument already.
+  offers to create the file.
 
-Toolkit changes (all inside `apps/libdeskui`, additive unless noted; Files rebuilds and its
-host tests still pass): `textarea.{h,c}` and the widget kind `DU_TEXTAREA` (appended to
-`enum du_kind`; `du_widget.data` appended); `du_ui.menu_keys` (per-menu Alt scan codes; NULL
-keeps the F,E,V,G,H table) and `du_ui.caps` appended; menu labels starting with `\001`/`\002`
-draw a check mark / indent (no struct change, so existing positional initialisers still
-compile under `-Wmissing-field-initializers`); Caps Lock tracking and TEXT translation;
-Esc emits `DU_CLOSE` for the focused widget when no menu is open (Files' inline rename
-expected it); Tab/Shift+Tab also leave edit widgets and skip scrollbars, splitters and
-progress bars; the right button is code 2 (`CIUKI_BUTTON_RIGHT`: the old code 3 was the
-middle button, so Files' context menus fired on the wrong button); a click on a label,
-status bar or bar no longer steals the keyboard focus; F10 does nothing without menus;
-message dialogs start on their first button and Tab cycles only the buttons. The renderer
-is unchanged for existing widgets; the build audits `textarea.c` for integer-only code.
+**Opening from Files.** Files cannot spawn a window: only the desktop owns the channel and
+the display grants of a client. A Files that the desktop launched therefore sends LAUNCH
+(protocol v2) with the name `ciuknote` and the file's absolute path as the single
+argument. The desktop honours exactly that: the requester must be a client it launched as
+`/bin/files` (`program == 1`, kernel-stamped PID), the name must be `ciuknote`, and the
+argument must start with `/`; every other request with an argument, from any client
+including the Task Manager, is answered `-EPERM`, and the Task Manager keeps its
+argument-less LAUNCH. The program is started as `ciuknote --channel-fd=3 <path>` and the
+answer arrives as TASK_RESULT (the PID, or -errno), which Files shows as `Cannot start
+CiukNote:` when negative. Files refuses an over-long path (`ENAMETOOLONG`, limit 160
+bytes) or one with control characters (`EINVAL`) itself, because the wire rules would
+disconnect it. **`apps/desktop/protocol.h` changed (`DESK_ARG_MAX`, `desk_packet.argument`),
+and the SDK installs it as `ciuki/desktop.h`: run `make sdk` before `make desktop`.**
 
-The desktop gate has one more scripted scenario, selected like the F12 shell case by an
-input at the interaction ARM: **F11** enables the shell with `shell_app`: the first
-programme started from the Ciuki menu is launched with `--test=<name>` (Files already
-accepts `--test=files`), there is no drag step, and a clean exit (status 0) completes the
-sequence (`shell_stage` 6); only then do the A key edges count, so `keys=4` (two F11
-edges plus two A edges) cannot be reached by an app that never started or exited. In
-`--test=ciuknote` mode the window moves to (24,48), Time/Date and `.LOG` use the fixed
+**Toolkit changes** (all additive on the f2-31 libdeskui; its 9 toolkit frames and Files' 23
+frames and the Task Manager's frames stay byte-identical): `DU_TEXTAREA` (appended to
+`enum du_kind`) and `du_widget.data`; the text area takes focus, keys, text, pointer,
+drag, double-click and scrollbar events from `widgets.c` and posts `DU_EV_CHANGE` on edits
+and `DU_EV_CONTEXT` on the right button; Tab and Shift+Tab leave an edit but a focused
+text area keeps Tab for the document. **Fix:** the toolkit treated button 3 as the right
+button; the kernel maps `INPUT_BTN` index+1 (left 1, right 2, middle 3), so context menus
+now fire on button 2 (`widgets.c`, `list.c`; the toolkit and Files host tests were updated
+accordingly). The 0.8-era additions of the first f2-32 version that the rewritten toolkit
+makes redundant were dropped: menu check marks and indentation (`DU_ITEM_CHECKED`),
+shifted TEXT translation (`du_key_char`), Caps Lock tracking and message-dialog focus.
+
+**Scenario keys.** The crash-isolation gate selects a desktop scenario at run time by one
+function key pressed at the interaction ARM, before the shell exists; the key's release
+is the scenario's second counted edge and later uses of the key belong to the programs.
+F12: shell (stage machine, `demo`). F9: Task Manager (stage machine, `tasks`).
+F11: Files and F10: CiukNote are *app scenarios* sharing one mechanism (`app_test` in
+`desktop.c`): the first program started from the Ciuki menu with that name is launched with
+`--test=<its name>`, the taskbar clock is fixed at 12:00:00, the program sends checkpoint
+PINGs with serial base+n (Files `0xf2310000`, 5 checkpoints; CiukNote `0xf2320000`, 3: ready,
+saved, opened), each presented frame is reported once as ` files=1 checkpoint=N` or
+` note=1 checkpoint=N` and hashed by the controller, which opens the write gate for these
+cases only (`case=files-write-gate` or `case=note-write-gate`, expected 0) and allows
+40 s; a clean exit (status 0) after the last checkpoint completes the scenario, and only
+then do the A key edges count, so `keys=4` (two scenario edges, two A edges) cannot be
+reached by an app that did not run to the end. After teardown the controller flushes
+storage (`files-durable` or `note-durable`).
+
+In `--test=ciuknote` mode the window moves to (24,48), Time/Date and `.LOG` use the fixed
 time 2026-10-11 09:41 UTC (`9:41 AM 10/11/2026`) and the application prints one
 `CiukNote checkpoint=N event=ready|saved|opened path=... text=... digest=XXXXXXXX` line on
-stdout after the frame that follows each event; the digest is FNV-1a 32 of the 600x352
-surface bytes (little-endian words), which contains no clock, so the host reproduces it.
+stdout after the frame that follows each event; the digest is FNV-1a 32 of the 640x440
+surface bytes (little-endian words), which contains no clock, so the host reproduces it
+(`tests/host/desktop/test_ciuknote.py`).
 
-The crash-isolation probe now opens the storage write gate (as `libc-smoke` does; test
-selectors start read-only) before launching the desktop and calls `storage_sync()` after
-the desktop is stopped, recording `case=storage write_gate=N` and `case=storage-sync
-result=N`; without it no application could save in a gate boot and the host checker could
-not read the file back. The unmodified cases do not depend on either result.
-
-QEMU case `ciuknote-qemu-t23` (`tests/suites/f2-desktop.json`, same selector and
-predicates as `desktop-shell-qemu-t23`, `keys eq 4`): F11 down/up; cursor to the bottom-left
-corner (six paced -127/+127 moves clamp there); open the Ciuki menu; move up 225 px to
-row 0, `ciuknote` (menu rows are 28 px, anchored at the bottom: see the arithmetic test);
-wait 2 s; type `Hello CiukNote`, Enter, `Ciuki says woof.`, Enter, F5; Ctrl+S, wait, type
-`/system/tests/note.txt`, Enter, wait; Ctrl+N, Ctrl+O, wait, type the same path, Enter, wait;
-F10, Up, Enter (File > Exit); wait; A down/up. Nominal pacing 8.7 s of the kernel's 15 s
-post-fault window. After QEMU stops the host checker digests `::/system/tests/note.txt`:
+**QEMU case `ciuknote-qemu-t23`** (`tests/suites/f2-desktop.json`; the selector and
+predicates of `files-qemu-t23` with `note-*` records and three checkpoints): F10 down/up;
+the cursor is clamped to the bottom-left corner (six paced -127/+127 moves); click the
+Ciuki button; move up to row 0 of the menu and click `ciuknote` (rows are 28 px and
+anchored to the bar: from the button, dy = -1 - 28 * (n + 2 - k) for n programs sorted
+by strcmp and the 0-based row k; `/bin` lists seven programs (ciuknote, demo, files,
+hello, libc_smoke, lua, tasks), so `ciuknote` is 253 px up); wait 4 s; type `Hello
+CiukNote`, Enter, `Ciuki says woof.`, Enter, F5; Ctrl+S, type `/system/tests/note.txt`,
+Enter (checkpoint 2); Ctrl+N, Ctrl+O, type `note.txt`, Enter (checkpoint 3); Alt+F4
+(a clean document accepts the close request and exits 0); A down/up. Nominal pacing 23.3 s
+of the 40 s window. After QEMU stops the host checker digests `::/system/tests/note.txt`:
 bytes `Hello CiukNote\r\nCiuki says woof.\r\n9:41 AM 10/11/2026`, SHA-256
 `8295f4d0977502fc61022209d665ff588382b0bd1564e5e38736f022e57f807d`, plus `fsck.fat -n`
-exit 0. The `desktop_screen` evidence is the runner's before/after capture of the whole
-screen (it contains the clocks and is not pinned); the deterministic screen evidence is the
-three checkpoint lines in the serial log, expected digests derived on the host:
-`ready ba7c24ab`, `saved cab5d60b`, `opened 8e0e8937`.
-The two `desktop-shell-*` cases keep selecting Demo; their upward move changed from 169 to
-197 px because `/bin` now lists six programmes (Files and CiukNote precede or follow Demo).
+exit 0. The three `pixel_digest` fields hold the placeholder `PIN-FROM-FIRST-RUN`, as
+Files' (the lead pins them from the first run). The desktop-shell cases and the Files case
+address `demo` and `files`, whose distance from the bar does not change when a program that
+sorts before them is added; `tasks` (added by f2-33) does move them.
 
-Host evidence (this worktree; no QEMU, image build or hardware):
-`python3 -B -m unittest discover -s tests/host/desktop` (textarea model/layout/pointer
-and rendering, the application against a fake file system with 20 pinned screens, a replay
-of the committed QMP key script, case/arithmetic checks, plus the existing desktop tests)
-and the production desktop launcher test with the app scenario. Screens, checkpoint
-digests and the case's file digest are pinned in `tests/host/desktop/test_ciuknote.py`.
+Host evidence (no QEMU, image build or hardware): `python3 -B -m unittest discover -s
+tests/host/desktop` (textarea model, layout, pointer and rendering with 3 pinned frames;
+the application against a fake file system with 20 pinned 640x440 screens and a
+25,000-step random input run; the replay of the committed QMP key script, which checks the
+saved bytes and the three checkpoint digests; case and arithmetic checks; the launcher
+test with the LAUNCH argument wire rules, the Files-only CiukNote launch and the CiukNote
+scenario; Files' report of a refused LAUNCH). Not done: printing, a Help viewer beyond a
+message box, a dedicated text-editor icon (the generic text-document icon is used).
 
-Not done here: printing; a `Help Topics` viewer beyond a message box; menu separators
-(the toolkit has none); a dedicated Tango icon for the application (the shell reuses the
-generic executable icon; the file page uses `text-x-generic` and `folder` from the pinned
-set, and adding `accessories-text-editor` means regenerating the shared icon header);
-the Ciuki portrait in About (message dialogs carry no image).
+## Files
 
-## f2-31 toolkit and Files decisions (2026-10-11)
+Files is the CiukiOS file manager (`/bin/files`), started from the Ciuki menu
+("Files", with the Tango file-manager icon). Its window follows the Windows 98
+Explorer layout in the CiukiOS colours.
 
-Research: [POSIX rename](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html),
-[short reads and EINTR](https://pubs.opengroup.org/onlinepubs/9699919799.orig/functions/read.html),
-[timestamp setting](https://pubs.opengroup.org/onlinepubs/9699919799/functions/utime.html)
-and [Wayland focus/surface coordinates](https://wayland.freedesktop.org/docs/html/apa.html)
-were compared with the SDK headers, protocol.c, compositor.c and posix-subset.md.
-Use the existing negotiated v2 protocol, explicit inherited fd 3 and
-`ciuki_spawn`. Timers and incremental jobs share a nonblocking event loop;
-no pthread, new syscall, DOS VM service or physical device grant is needed.
-Focus loss/RESYNC clears held input and capture. Damage is coalesced and
-retained across EAGAIN. Clipboard contents belong to the process.
+- **Menus.** File (Open, Open with CiukNote, New Folder, New Text Document,
+  Delete, Rename, Properties, Close), Edit (Cut, Copy, Paste, Select All,
+  Invert Selection), View (Large Icons, List, Details, Sort by Name/Size/Type/
+  Modified, Refresh), Go (Back, Forward, Up One Level, Address Bar, CiukiOS,
+  Applications, System) and Help (Help Topics, About Files). Alt or F10 opens
+  the menu bar; underlined letters work with Alt and inside open menus.
+- **Toolbar.** Back, Forward, Up, Cut, Copy, Paste, Delete, Properties and
+  Views (click to cycle views; the arrow lists them).
+- **Address bar.** Type a path such as `/system/assets` and press Enter; Esc
+  restores the current folder. Letter case does not matter on FAT volumes.
+- **Left pane.** Places lists CiukiOS (`/`), Applications (`/bin`), System
+  (`/system`) and every volume mounted under `/mnt`. Folders shows the tree,
+  opened along the current folder; [+] and [-] expand and collapse it.
+- **Views.** Details (Name, Size, Type, Modified; click a header to sort, again
+  to reverse; drag a header edge to resize), Large Icons and List. Folders
+  always come first.
+- **Selection.** Click, Ctrl+click (toggle), Shift+click (range),
+  Shift+arrows, Ctrl+arrows and Ctrl+Space, Ctrl+A, Invert Selection, and
+  typing the first letters of a name; repeating one letter cycles through the
+  names that start with it.
+- **Context menus.** Right-click (or Shift+F10 / the Menu key) on an item for
+  Open, Open with CiukNote, Cut, Copy, Paste (into a folder), Delete, Rename,
+  Properties; on the background for the views, sorting, Refresh, Paste, New
+  Folder, New Text Document and Properties.
+- **Operations.** New Folder and New Text Document create "New Folder",
+  "New Folder (2)", ... and open the name for editing. Rename in place with F2
+  (Enter keeps, Esc cancels). Cut/Copy and Paste copy or move files and
+  folders in the background with a progress window and Cancel; an existing
+  name asks Yes, Yes to All, No or Cancel; copying into the same folder makes
+  "Copy of NAME". Delete asks for confirmation and deletes permanently (there
+  is no Recycle Bin yet). Properties shows type, location, size, contents,
+  modification time and the read-only attribute.
+- **Opening.** Enter or double-click opens folders; text documents and scripts
+  open in `/bin/ciuknote` when it is installed; programs run directly.
+- **Keys.** Enter, Backspace (up one level, as in Windows 98), Alt+Left/Right/
+  Up, F2, F4 or Alt+D (address bar), F5, Del, Alt+Enter, Ctrl+C/X/V, Ctrl+A,
+  Alt+F4.
+- **Limits of this release.** Copies cannot keep dates and attributes (the F2
+  system interface has no setter; moves on one volume keep them). Programs
+  started from Files have no desktop window, except CiukNote, which the desktop
+  starts on Files' request (f2-32, LAUNCH with a path). Drag and drop, removable
+  media and the Recycle Bin come later.
 
-The compositor actually supplies original 5x7 glyphs, not an 8x16 font.
-Reuse those exact glyphs in 8x16 toolkit cells; do not change the existing
-compositor or its gate digests. All drawing is clipped integer XRGB8888.
-Icons extend the existing pinned Tango conversion/manifest; the approved
-portrait and boot photograph remain unchanged.
+## libdeskui
 
-Files uses absolute POSIX paths, readdir (the SDK's getdents adapter), stat,
-and a bounded history. Places enumerates /mnt, besides /, /bin and /system.
-Copy streams into an exclusive temporary sibling, fsyncs and closes before
-rename publication; cancellation/error removes the unfinished sibling and
-never removes its source. Completed items remain and are reported. Moves
-first use native rename; EXDEV alone permits copy followed by deletion.
-Replace decisions are explicit and remembered only for the current job.
-Directory merges preserve unrelated destination entries. Jobs yield between
-bounded transfers and directory steps and refuse descent into their source.
+`apps/libdeskui/` is the static widget toolkit shared by desktop programs
+(MIT, built with the SDK's `ciuki-cc` into `build/apps/desktop/libdeskui.a`).
 
-**API gap for lead review:** timestamp and FAT attribute setters do not exist
-in the frozen ABI; chmod is excluded and stat exposes only informational mode
-bits. Native rename keeps existing metadata. Copy cannot preserve timestamps
-or FAT attributes on this SDK. The model has an optional metadata adapter for
-host tests/future integration and reports a visible preservation warning when
-the runtime lacks it. No copy is labelled metadata-preserving. Full f2-31
-acceptance requires a separately authorized setter or a lead-approved scope
-amendment. Properties displays the currently available informational attributes.
+- **Window glue** (`client.c`): protocol v2 handshake, surface and private back
+  buffer, damage limited to changed pixels, PING/PONG, CLOSE_REQUEST with an
+  application callback, focus loss and RESYNC releases, and `du_run`, the
+  event loop with timers (no poll/select: nonblocking turns and short sleeps).
+- **Drawing** (`draw.c`): clipped integer primitives, Windows 98 edges, the
+  compositor's glyphs, Tango icons with selected/ghost/disabled modes.
+- **Widgets** (`widgets.c`, `list.c`, `menu.c`, `dialog.c`): label, push
+  button, toolbar button (with split arrow), single-line edit (selection,
+  clipboard, UTF-8), list view (Details with sortable, resizable columns,
+  Large Icons, List), tree view, scrollbars, status bar with panels, splitter,
+  progress bar, pane headers and separators; menu bar with drop-downs,
+  mnemonics and accelerators; context menus; modal message box, input box,
+  open/save dialog and progress dialog with Cancel. Tab moves the focus.
+- **Clipboard and timers.** A per-process text clipboard
+  (`du_clipboard_set/get`) and monotonic timers (`du_timer_start/stop`).
+- Applications receive `du_event`s (activate, select, open, sort, context,
+  change, commit, cancel, key, tick, dialog, focus) through one callback.
 
-Host and static build results, limitations and the lead's remaining QEMU work
-are recorded in build/codex/f2-31-report.md. No QEMU acceptance is inferred.
+Host tests: `python3 -B -m unittest discover -s tests/host/desktop`. Rendered
+frames are pinned by SHA-256 in `tests/host/desktop/test_deskui.py`; a visual
+change must be reviewed and re-pinned.
 
 ## f2-30 decisions (2026-10-11)
 

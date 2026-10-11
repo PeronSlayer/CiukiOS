@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * CiukNote document logic: file boundary, line endings, .LOG, time stamps,
- * paths and directory listings. No UI and no direct system calls, so that
+ * and paths. No UI and no direct system calls, so that
  * host tests run the production code against a fake file system. */
 #ifndef CIUKI_CIUKNOTE_DOC_H
 #define CIUKI_CIUKNOTE_DOC_H
@@ -11,7 +11,6 @@
 #define CN_LIMIT 61440u     /* text limit in bytes (the 0.8 CiukNote limit); line breaks count as one byte */
 #define CN_LIMIT_TEXT "61,440"
 #define CN_PATH 1040        /* PATH_MAX of the POSIX subset */
-#define CN_ENTRIES 4096     /* directory entries listed by the file dialog */
 
 struct cn_stat { int dir; uint64_t size; int64_t mtime; };
 typedef int (*cn_emit)(const char *name, const struct cn_stat *, void *);
@@ -42,11 +41,7 @@ int cn_is_text_name(const char *name);                 /* *.txt, ASCII case-inse
 int cn_resolve(char *out, const char *dir, const char *input); /* absolute, normalised; input may be relative */
 int cn_join(char *out, const char *dir, const char *name);
 
-struct cn_entry { char *name; int dir; uint64_t size; int64_t mtime; };
-struct cn_listing { struct cn_entry *entries; unsigned count, capacity; int truncated; };
-/* Lists dir: folders always, files only when text_only is 0 or they end in .txt. */
-int cn_list(const struct cn_fs *, const char *dir, int text_only, struct cn_listing *);
-/* Folders first, then by column 0 name, 1 size, 2 type, 3 modified (stable, ASCII case-insensitive names). */
-void cn_listing_sort(struct cn_listing *, unsigned column, int descending);
-void cn_listing_free(struct cn_listing *);
+/* Case-insensitive glob (`*`, `?`) of a file name, as typed in a file dialog's name box. */
+int cn_match(const char *pattern, const char *name);
+int cn_has_wildcard(const char *name);
 #endif
