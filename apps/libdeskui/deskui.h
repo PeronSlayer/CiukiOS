@@ -220,6 +220,9 @@ struct du_ui {
     int dirty;
     void (*event)(struct du_ui *, const struct du_event *, void *);
     void *user;
+    /* Optional application drawing after the widgets, before menus and
+     * dialogs (previews, swatches; Control Panel). */
+    void (*paint)(struct du_ui *, void *);
 };
 
 /* Core */

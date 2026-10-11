@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * F2 desktop protocol v1, with negotiated v2 close requests and the v2
- * task-manager extension (f2-33): window list, End Task, Switch To, launch.
+ * task-manager extension (f2-33): window list, End Task, Switch To, launch,
+ * and the v2 settings request of the Control Panel (desktop shell).
  * Byte encoding, independent of C alignment/padding. SDK: ciuki/desktop.h. */
 #ifndef CIUKI_APP_DESKTOP_PROTOCOL_H
 #define CIUKI_APP_DESKTOP_PROTOCOL_H
@@ -17,8 +18,13 @@ enum desk_opcode {
     /* f2-33, version 2 only. WINDOW_INFO and TASK_RESULT flow desktop to
      * client; the other four flow client to desktop. */
     DESK_WINDOWS_QUERY, DESK_WINDOW_INFO, DESK_END_TASK, DESK_SWITCH_TO,
-    DESK_LAUNCH, DESK_TASK_RESULT
+    DESK_LAUNCH, DESK_TASK_RESULT,
+    /* Desktop shell, version 2 only, client to desktop: only /bin/control
+     * launched by the desktop may send it (others get TASK_RESULT EPERM). */
+    DESK_SETTINGS
 };
+#define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
+#define DESK_SETTINGS_MASTER 2u   /* set the master volume: left, right 0..100, mute 0/1 */
 #define DESK_WINDOW_UNRESPONSIVE 1u
 #define DESK_WINDOW_MINIMIZED 2u
 #define DESK_WINDOW_FOCUSED 4u
@@ -34,6 +40,7 @@ struct desk_packet {
     struct ciuki_input_event event;
     uint32_t window_id, pid, flags, index, count, request;
     int32_t result;
+    uint32_t values[3];               /* SETTINGS: left, right, mute */
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);

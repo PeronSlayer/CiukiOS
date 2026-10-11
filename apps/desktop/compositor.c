@@ -4,6 +4,12 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+/* The shell (shell.c) is linked only into /bin/desktop; the demo and the
+ * libdeskui programs reuse this file for glyphs and frames without it. */
+extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
+extern void desk_shell_topbar(struct desktop *, struct desk_box) __attribute__((weak));
+extern void desk_shell_overlay(struct desktop *, struct desk_box) __attribute__((weak));
+extern void desk_internal_paint(struct desktop *, int, struct desk_box, struct desk_box) __attribute__((weak));
 int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out)
 {
     int64_t x = a.x > b.x ? a.x : b.x, y = a.y > b.y ? a.y : b.y;
@@ -42,7 +48,7 @@ struct desk_box desk_task_button(const struct desktop *d, int index)
         if (i<index) position++;
         count++;
     }
-    int32_t available=(int32_t)d->width-164;
+    int32_t available=(int32_t)d->width-84-SH_TRAY_W-12;   /* start button, tray */
     if (available<=0 || !count) return (struct desk_box){0,0,0,0};
     int32_t w=available/(int32_t)count;
     if (w>160) w=160;
@@ -50,16 +56,13 @@ struct desk_box desk_task_button(const struct desktop *d, int index)
     return (struct desk_box){left,(int32_t)d->height-DESK_BAR+3,w,26};
 }
 int32_t desk_menu_row(const struct desktop *d)
-{
-    int32_t h=((int32_t)d->height-2*DESK_BAR)/(int32_t)(d->program_count+2);
-    if (h>DESK_MENU_ROW) h=DESK_MENU_ROW;
-    return h>0 ? h : 1;
-}
+{ (void)d; return SH_START_ROW; }
+/* The Start menu's box (open or not): shell.c lays it out above the start button. */
 struct desk_box desk_menu_box(const struct desktop *d)
 {
-    int32_t h=desk_menu_row(d)*(int32_t)(d->program_count+2);
-    int32_t w=d->width>244 ? 240 : (int32_t)d->width-8;
-    return (struct desk_box){4,(int32_t)d->height-DESK_BAR-h,w,h};
+    if (d->sh.levels && d->sh.menus[0].kind == SH_MENU_START) return d->sh.menus[0].box;
+    int32_t h = 6 + 6 * SH_START_ROW + SH_SEPARATOR, y = (int32_t)d->height - DESK_BAR - h;
+    return (struct desk_box){2, y < 0 ? 0 : y, 184, h};
 }
 static struct desk_box unite(struct desk_box a, struct desk_box b)
 {
@@ -173,37 +176,6 @@ static void portrait_at(struct desktop *d, struct desk_box clip, int32_t x, int3
         d->pixels[(uint32_t)yy*d->width+(uint32_t)xx]=
             d->portrait[((yy-y)*DESK_PORTRAIT_SIZE/size)*DESK_PORTRAIT_SIZE+(xx-x)*DESK_PORTRAIT_SIZE/size];
 }
-static void icon(struct desktop *d, struct desk_box clip, int32_t x, int32_t y, const uint32_t *pixels)
-{
-    struct desk_box b;
-    if (!pixels || !desk_intersect((struct desk_box){x,y,16,16},clip,&b)) return;
-    for (int32_t yy=b.y; yy<b.y+b.h; yy++) for (int32_t xx=b.x; xx<b.x+b.w; xx++) {
-        uint32_t src=pixels[(yy-y)*16+xx-x], *dst=&d->pixels[(uint32_t)yy*d->width+(uint32_t)xx];
-        unsigned a=src>>24;
-        uint32_t out=0;
-        for (unsigned shift=0; shift<24; shift+=8)
-            out|=((((src>>shift)&255)*a+((*dst>>shift)&255)*(255-a)+127)/255)<<shift;
-        *dst=out;
-    }
-}
-static void about_content(struct desktop *d, struct desk_box content, struct desk_box clip)
-{
-    fill(d,content,clip,0xe8d7b9u);
-    portrait_at(d,clip,content.x+10,content.y+10,112);
-    desk_text(d,clip,content.x+136,content.y+18,"CiukiOS",2,0x213c4cu);
-    desk_text(d,clip,content.x+136,content.y+46,"A modern Retro OS",1,0x213c4cu);
-    desk_text(d,clip,content.x+136,content.y+72,"Dedicated to Ciuki",1,0x213c4cu);
-    if (d->version[0]) {            /* uname version: config/version.json */
-        char line[80];
-        snprintf(line,sizeof(line),"Version %.64s",d->version);
-        desk_text(d,clip,content.x+136,content.y+98,line,1,0x213c4cu);
-    }
-    desk_text(d,clip,content.x+10,content.y+132,"Kernel build:",1,0x213c4cu);
-    desk_text(d,clip,content.x+10,content.y+146,d->build_identity,1,0x213c4cu);
-    desk_text(d,clip,content.x+10,content.y+162,"Tango 0.8.90 icons: Public Domain",1,0x213c4cu);
-    desk_text(d,clip,content.x+10,content.y+178,"Ciuki portrait: separate project asset",1,0x213c4cu);
-    desk_text(d,clip,content.x+10,content.y+196,d->realtime_source ? "Clock: RTC (UTC)" : "Clock: build seed (UTC)",1,0x213c4cu);
-}
 static void window(struct desktop *d, int i, struct desk_box clip)
 {
     struct desk_client *c = &d->clients[i];
@@ -223,7 +195,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
     }
     struct desk_box content = desk_content(c), b;
     if (c->internal) {
-        if (desk_intersect(content,clip,&b)) about_content(d,content,b);
+        if (desk_internal_paint && desk_intersect(content,clip,&b)) desk_internal_paint(d,i,content,b);
         return;
     }
     if (desk_intersect(content,clip,&b))
@@ -233,73 +205,35 @@ static void window(struct desktop *d, int i, struct desk_box clip)
 }
 /* Programs that open a desktop window receive their channel at fd 3. */
 int desk_program_graphical(const char *name)
-{ return !strcmp(name,"demo") || !strcmp(name,"dosbox") || !strcmp(name,"files") || !strcmp(name,"tasks") || !strcmp(name,"ciuknote"); }
+{ return !strcmp(name,"demo") || !strcmp(name,"dosbox") || !strcmp(name,"files") || !strcmp(name,"tasks") || !strcmp(name,"ciuknote") ||
+         !strcmp(name,"control"); }
 const char *desk_program_label(const char *name)
 {
     return !strcmp(name,"demo") ? "Ciuki Demo" : !strcmp(name,"files") ? "Files" : !strcmp(name,"tasks") ? "Task Manager" :
-           !strcmp(name,"ciuknote") ? "CiukNote" : name;
+           !strcmp(name,"ciuknote") ? "CiukNote" : !strcmp(name,"control") ? "Control Panel" : name;
 }
 const char *desk_app_program(int kind) { return kind==DESK_APP_NOTE ? "ciuknote" : "files"; }
 int desk_program_kind(const char *name)
-{ return !strcmp(name,"files") ? DESK_APP_FILES : !strcmp(name,"ciuknote") ? DESK_APP_NOTE : 0; }
-/* 16-pixel Tango icon of an icon_map.c object ("program:<name>", "menu:restart"). */
-static const uint32_t *shell_icon(const struct desktop *d, const char *object)
-{ return d->icon ? d->icon(object,16) : NULL; }
-static const uint32_t *program_icon(const struct desktop *d, const char *name)
-{
-    char object[80];
-    snprintf(object,sizeof(object),"program:%.64s",name);
-    return shell_icon(d,object);
-}
-static const char *client_program(const struct desk_client *c)
-{ return c->program==DESK_APP_FILES ? "files" : c->program==DESK_APP_NOTE ? "ciuknote" : c->taskman ? "tasks" : "*"; }
+{ return !strcmp(name,"files") ? DESK_APP_FILES : !strcmp(name,"ciuknote") ? DESK_APP_NOTE : !strcmp(name,"control") ? DESK_APP_CONTROL : 0; }
 void desk_shell_draw(struct desktop *d, struct desk_box clip)
 {
-    struct desk_box bar=desk_taskbar(d), b;
+    struct desk_box bar=desk_taskbar(d);
     fill(d,bar,clip,0xb8c9ccu);
     fill(d,(struct desk_box){4,bar.y+3,76,26},clip,d->menu_open ? 0x607a85u : 0xe8d7b9u);
     portrait_at(d,clip,8,bar.y+6,20);
-    desk_text(d,clip,34,bar.y+12,"Ciuki",1,0x213c4cu);
-    for (int i=0; i<DESK_CLIENTS; i++) if (desk_intersect(desk_task_button(d,i),clip,&b)) {
-        struct desk_box button=desk_task_button(d,i);
-        fill(d,(struct desk_box){button.x+1,button.y,button.w-2,button.h},b,
-            d->focus==i ? 0x213c4cu : 0xe8d7b9u);
-        if (button.w>24) {
-            if (d->clients[i].internal) portrait_at(d,b,button.x+4,button.y+5,16);
-            else icon(d,b,button.x+4,button.y+5,program_icon(d,client_program(&d->clients[i])));
-            desk_text(d,b,button.x+24,button.y+9,d->clients[i].title,1,d->focus==i ? 0xffffffu : 0x213c4cu);
-        }
-    }
-    char clock[24]; uint64_t s=d->app_test ? 12*3600 : d->realtime_second; /* fixed in the app scenarios */
-    snprintf(clock,sizeof(clock),"%02u:%02u:%02u",(unsigned)(s/3600%24),(unsigned)(s/60%60),(unsigned)(s%60));
-    desk_text(d,clip,(int32_t)d->width-64,bar.y+12,clock,1,0x213c4cu);
-    if (!d->menu_open) return;
-    struct desk_box menu=desk_menu_box(d);
-    if (!desk_intersect(menu,clip,&b)) return;
-    fill(d,menu,b,0xe8d7b9u);
-    int32_t row=desk_menu_row(d);
-    for (unsigned i=0; i<d->program_count+2; i++) {
-        struct desk_box item={menu.x,menu.y+(int32_t)i*row,menu.w,row}, part;
-        if (!desk_intersect(item,b,&part)) continue;
-        fill(d,(struct desk_box){item.x,item.y,item.w,1},part,0xb8c9ccu);
-        const char *name=i<d->program_count ? desk_program_label(d->programs[i].name) :
-            i==d->program_count ? "About CiukiOS" : "Restart (unavailable)";
-        if (row>=18) {
-            if (i==d->program_count) portrait_at(d,part,item.x+6,item.y+(row-16)/2,16);
-            else icon(d,part,item.x+6,item.y+(row-16)/2,i<d->program_count ?
-                      program_icon(d,d->programs[i].name) : shell_icon(d,"menu:restart"));
-        }
-        desk_text(d,part,item.x+28,item.y+(row-7)/2,name,1,i==d->program_count+1 ? 0x607a85u : 0x213c4cu);
-    }
+    if (desk_shell_overlay) desk_shell_overlay(d,clip);   /* bevels, task buttons, tray, menus, popups (shell.c) */
 }
 void desk_composite(struct desktop *d, struct desk_box clip)
 {
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
-    fill(d,clip,clip,DESK_BACKGROUND);
-    portrait(d,clip);
+    if (d->shell && desk_shell_background) desk_shell_background(d,clip);   /* wallpaper and desktop icons (shell.c) */
+    else { fill(d,clip,clip,DESK_BACKGROUND); portrait(d,clip); }
     fill(d,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},clip,0x213c4cu);
-    desk_text(d,clip,12,12,"CiukiOS",1,0xf6dfb6u);
-    desk_text(d,clip,72,12,d->shell && d->notice[0] ? d->notice : "A modern Retro OS",1,0xffffffu);
+    if (d->shell && desk_shell_topbar) desk_shell_topbar(d,clip);
+    else {
+        desk_text(d,clip,12,12,"CiukiOS",1,0xf6dfb6u);
+        desk_text(d,clip,72,12,"A modern Retro OS",1,0xffffffu);
+    }
     char clock[24];
     uint64_t s = d->now_ns / 1000000000ull;
     snprintf(clock,sizeof(clock),"%02u:%02u:%02u",(unsigned)(s/3600%100),(unsigned)(s/60%60),(unsigned)(s%60));

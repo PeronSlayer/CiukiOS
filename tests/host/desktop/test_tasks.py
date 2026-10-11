@@ -93,10 +93,10 @@ class TasksTests(unittest.TestCase):
             sys.path.remove(str(ROOT / "scripts/test"))
 
     def test_menu_clicks_follow_the_image_inventory(self):
-        """Every scripted desktop case reaches its menu row with dy = -1 - 28 * (n + 2 - k): n programs
-        in the image's /bin (without desktop) sorted by strcmp, k the target's index, 28 px rows
-        anchored above the 32 px bar, the pointer on the Ciuki button 16 px above the corner."""
+        """Every scripted desktop case reaches its program through the Ciuki button, Programs and the
+        program's row of the Programs submenu (tests/host/desktop/shell_menu.py), with the image's /bin."""
         programs = sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
+        menu = load("tasks_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         suite = json.loads((ROOT / "tests/suites/f2-desktop.json").read_text())
         targets = {"desktop-shell-qemu-t23": "demo", "desktop-shell-qemu-e500": "demo", "files-qemu-t23": "files",
                    "ciuknote-qemu-t23": "ciuknote", "tasks-qemu-t23": "tasks"}
@@ -110,10 +110,7 @@ class TasksTests(unittest.TestCase):
                         if event["data"]["axis"] == "x": x = min(max(x + event["data"]["value"], 0), 1023)
                         else: y = min(max(y + event["data"]["value"], 0), 767)
                     elif event["type"] == "btn" and event["data"]["down"]: clicks.append((x, y))
-            k = programs.index(targets[case["id"]])
-            self.assertTrue(4 <= clicks[0][0] < 80 and 739 <= clicks[0][1] < 765, case["id"])
-            self.assertEqual(clicks[1][1] - clicks[0][1], -1 - 28 * (len(programs) + 2 - k), case["id"])
-            self.assertEqual((clicks[1][1] - (768 - 32 - 28 * (len(programs) + 2))) // 28, k, case["id"])
+            menu.check_launch(self, clicks, programs, targets[case["id"]], case["id"])
         self.assertEqual(set(targets) - {c["id"] for c in suite["cases"]}, set())
 
     def test_image_inventory(self):

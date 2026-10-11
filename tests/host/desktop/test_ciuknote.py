@@ -183,13 +183,13 @@ class CiuknoteTests(unittest.TestCase):
         self.assertEqual(c["checks"]["fsck_exit_codes"], [0])
 
     def test_menu_row_arithmetic_follows_the_image_inventory(self):
-        """The scripts address Ciuki menu rows by distance from the bottom of the screen: rows are
-        28 px, the menu lists /bin (without desktop) plus About and Restart, and the pointer starts
-        on the Ciuki button, 16 px above the corner. Adding or removing a /bin program moves a row's
-        distance; this test names the new one, and the desktop cases must follow."""
+        """The script reaches CiukNote through the Ciuki button, Programs and the CiukNote row of the
+        Programs submenu (tests/host/desktop/shell_menu.py). Adding or removing a /bin program can move a
+        submenu row; this test names the inventory, and the desktop cases must follow."""
         programs = bin_programs()
-        self.assertEqual(programs, ["ciuknote", "demo", "dosbox", "files", "hello", "libc_smoke", "lua", "tasks"],
-                         "the image's /bin changed: recompute dy = -1 - 28 * (n + 2 - k) for the desktop cases")
+        self.assertEqual(programs, ["ciuknote", "control", "demo", "dosbox", "files", "hello", "libc_smoke", "lua", "tasks"],
+                         "the image's /bin changed: check the Programs submenu rows of the desktop cases")
+        menu = load("note_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         c, _ = case()
         x, y, clicks = 512, 384, []   # 1024x768 (QEMU std VGA mode 0x144); the cursor starts at the centre
         for batch in c["actions"][0]["batches"]:
@@ -198,15 +198,13 @@ class CiuknoteTests(unittest.TestCase):
                     if event["data"]["axis"] == "x": x = min(max(x + event["data"]["value"], 0), 1023)
                     else: y = min(max(y + event["data"]["value"], 0), 767)
                 elif event["type"] == "btn" and event["data"]["down"]: clicks.append((x, y))
-        self.assertTrue(4 <= clicks[0][0] < 80 and 739 <= clicks[0][1] < 765, "the first click is on the Ciuki button")
-        menu_top = 768 - 32 - 28 * (len(programs) + 2)
-        self.assertEqual((clicks[1][1] - menu_top) // 28, programs.index("ciuknote"))
-        self.assertEqual(clicks[1][1] - clicks[0][1], menu_distance(programs, "ciuknote"))
-        # Apart from the corner clamp (+381 twice, three packets each) and the button approach (-16), the only
-        # vertical move is the row distance.
+        menu.check_launch(self, clicks, programs, "ciuknote")
+        self.assertEqual(len(clicks), 3, "the case clicks only the Ciuki button, Programs and CiukNote")
+        # Apart from the corner clamp (+381 twice) and the button approach (-16): up to Programs, the
+        # CiukNote row offset in the submenu and the move back to the f2-32 pointer position.
         moves = [e["data"]["value"] for b in c["actions"][0]["batches"] for e in b["events"]
                  if e["type"] == "rel" and e["data"]["axis"] == "y" and e["data"]["value"] not in (381, -16)]
-        self.assertEqual(moves, [menu_distance(programs, "ciuknote")])
+        self.assertEqual(moves, [560 - 751, 556 - 560, 470 - 556])
 
     def key_script(self):
         """The case's keys after the launch click, as the replay harness reads them: K <code> <down> per key

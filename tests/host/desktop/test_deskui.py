@@ -157,17 +157,13 @@ class DeskuiTests(unittest.TestCase):
                     else: y = min(max(y + event["data"]["value"], 0), 767)
                 elif event["type"] == "btn" and event["data"]["down"]: clicks.append((x, y))
                 elif event["type"] == "key": keys.append((event["data"]["key"]["data"], event["data"]["down"]))
-        # Ciuki button, then the "files" row of the menu: the image's /bin (without desktop) sorted
-        # by strcmp plus About and Restart, 28 px rows anchored above the 32 px bar (f2-33 formula
-        # dy = -1 - 28 * (n + 2 - k), docs/design/f2-acceptance.md).
+        # Ciuki button, Programs, then the Files row of the Programs submenu (tests/host/desktop/shell_menu.py).
         programs = sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
-        self.assertTrue(4 <= clicks[0][0] < 80 and 739 <= clicks[0][1] < 765)
-        menu_top = 768 - 32 - 28 * (len(programs) + 2)
-        self.assertEqual((clicks[1][1] - menu_top) // 28, programs.index("files"))
-        self.assertEqual(clicks[1][1] - clicks[0][1], -1 - 28 * (len(programs) + 2 - programs.index("files")))
+        menu = load("deskui_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
+        menu.check_launch(self, clicks, programs, "files")
         client = (4 + 3, 36 + 24)   # Files moves its frame to 4,36; content below the 24 px title
         expected = [targets[k] for k in ("view_title", "list_item", "places_system", "file_title", "new_folder")]
-        self.assertEqual([(cx - client[0], cy - client[1]) for cx, cy in clicks[2:]], expected)
+        self.assertEqual([(cx - client[0], cy - client[1]) for cx, cy in clicks[3:]], expected)
         self.assertEqual(keys[:2], [("f11", True), ("f11", False)])
         self.assertEqual(keys[-2:], [("a", True), ("a", False)])
         self.assertNotIn("a", [k for k, _ in keys[2:-2]])

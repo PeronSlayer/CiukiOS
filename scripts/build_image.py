@@ -62,13 +62,17 @@ def desktop_payloads():
     desktop = desktop_build.validate_payloads()
     sources = {"/bin/desktop": DESKTOP / "desktop", "/bin/demo": DESKTOP / "demo", "/bin/dosbox": DESKTOP / "dosbox",
                "/bin/files": DESKTOP / "files", "/bin/tasks": DESKTOP / "tasks", "/bin/ciuknote": DESKTOP / "ciuknote",
-               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
+               "/bin/control": DESKTOP / "control",
+               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
+               "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
     # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
     sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],
                 "elf": desktop["elf"], "portrait": desktop["portrait"], "icons": desktop["icons"]}
-    return sources, {"/bin", "/system", "/system/assets", "/system/icons"}, metadata
+    # /system/settings holds desktop.cfg (written at run time); /system/wallpapers is where the owner may
+    # copy wallpapers (PNG, JPEG, BMP). Never Microsoft's third_party/win_bg bitmaps: see docs/desktop.md.
+    return sources, {"/bin", "/system", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def application_payloads():

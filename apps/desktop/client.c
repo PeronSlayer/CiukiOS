@@ -12,7 +12,7 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
 {
     memset(d, 0, sizeof(*d));
     d->ops = *ops; d->width = w; d->height = h;
-    d->display = d->input = d->output = d->focus = d->drag = d->about = d->authority_fd = -1;
+    d->display = d->input = d->output = d->focus = d->drag = d->about = d->authority_fd = d->mixer_fd = -1;
     d->action = -1;
     d->mouse_x = (int32_t)w / 2; d->mouse_y = (int32_t)h / 2;
     d->clock_second = UINT64_MAX;
@@ -40,6 +40,7 @@ void desk_drop_client(struct desktop *d, int i)
     if (c->surface >= 0) d->ops.close(c->surface);
     if (c->channel >= 0) d->ops.close(c->channel);
     if (d->about == i) d->about = -1;
+    if (c->internal) desk_internal_closed(d, i);
     memset(c, 0, sizeof(*c));
     c->channel = c->surface = -1;
     if (d->focus < 0) {
@@ -227,6 +228,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             p.opcode == DESK_END_TASK ? desk_task_end(d, p.window_id, p.pid) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             c->taskman && p.argument[0] ? -EPERM : desk_task_launch(d, p.title, p.argument);
+        /* Documents menu: files opened from Files (never in the runtime gate scenarios). */
+        if (files_open && result > 0 && d->shell && !d->sh.gate) { cfg_recent_add(&d->sh.cfg, p.argument); d->sh.want_save = 1; }
         if (d->tasks_test && c->taskman && c->pid == d->tasks_pid) {
             if (p.opcode == DESK_LAUNCH && result > 0 && d->tasks_stage == 2 && !strcmp(p.title, "demo")) {
                 d->tasks_demo_pid = (uint32_t)result; d->tasks_stage = 3;
@@ -237,6 +240,24 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         /* The launcher may have reused this slot's neighbours; c stays valid. */
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, p.opcode); desk_put32(reply.data + 12, (uint32_t)result);
+        desk_queue(d, i, &reply);
+        break;
+    }
+    case DESK_SETTINGS: {
+        /* Control Panel: apply desktop.cfg again, or set the master volume
+         * through the desktop's delegated mixer handle (desktop.c). */
+        int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : 0;
+        if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
+        if (!result && p.request == DESK_SETTINGS_MASTER) {
+            if (d->mixer_fd < 0) result = -ENODEV;
+            else {
+                d->sh.volume = (int)((p.values[0] + p.values[1]) / 2); d->sh.muted = (int)p.values[2];
+                d->sh.want_mixer = 1;
+                desk_damage_add(&d->damage, desk_taskbar(d), d->width, d->height);
+            }
+        }
+        desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
+        desk_put32(reply.data + 8, DESK_SETTINGS); desk_put32(reply.data + 12, (uint32_t)result);
         desk_queue(d, i, &reply);
         break;
     }
@@ -310,8 +331,12 @@ void desk_shell_enable(struct desktop *d)
 {
     if (d->shell) return;
     d->shell = 1;
+    /* desktop.c loads desktop.cfg first; otherwise the built-in defaults. */
+    if (!d->sh.cfg.theme[0]) desk_shell_reset(d);
+    d->sh.icon_selected = d->sh.click_icon = -1;
     for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].window)
         desk_move(d,i,d->clients[i].frame.x,d->clients[i].frame.y);
+    desk_shell_apply(d);
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
 }
 void desk_minimize(struct desktop *d, int i)
@@ -371,65 +396,10 @@ void desk_child_exited(struct desktop *d, uint32_t pid, int status)
 }
 
 void desk_about(struct desktop *d)
-{
-    if (d->about>=0) {
-        d->clients[d->about].minimized=0; desk_focus(d,d->about); return;
-    }
-    int i;
-    for (i=0; i<DESK_CLIENTS; i++) if (d->clients[i].channel<0 && !d->clients[i].internal) break;
-    if (i==DESK_CLIENTS) return;
-    struct desk_client *c=&d->clients[i];
-    uint32_t w=d->width>420 ? 400 : d->width>20 ? d->width-20 : 1;
-    uint32_t h=d->height>316 ? 220 : d->height>96 ? d->height-96 : 1;
-    c->internal=c->window=1;
-    if (!++d->next_window_id) ++d->next_window_id;
-    c->window_id=d->next_window_id;
-    c->info.width=w; c->info.height=h;
-    strcpy(c->title,"About CiukiOS");
-    c->frame=desk_frame(w,h,0,DESK_BAR);
-    d->about=i;
-    desk_move(d,i,((int32_t)d->width-c->frame.w)/2,DESK_BAR+20);
-    desk_focus(d,i);
-    desk_damage_add(&d->damage,c->frame,d->width,d->height);
-    desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
-}
+{ desk_internal_open(d, DESK_INTERNAL_ABOUT); }
+/* Kept for the f2-30 tests: a left press at the pointer through the shell. */
 int desk_shell_click(struct desktop *d)
-{
-    if (!d->shell) return 0;
-    struct desk_box bar=desk_taskbar(d);
-    if (desk_contains((struct desk_box){4,bar.y+3,76,26},d->mouse_x,d->mouse_y)) {
-        if (!d->menu_open) { d->menu_focus=d->focus; desk_focus(d,-1); }
-        d->menu_open=!d->menu_open;
-        if (!d->menu_open) desk_focus(d,d->menu_focus);
-        if (d->menu_open && d->shell_test && d->shell_stage==0) d->shell_stage=1;
-        desk_damage_add(&d->damage,desk_menu_box(d),d->width,d->height);
-        desk_damage_add(&d->damage,bar,d->width,d->height);
-        return 1;
-    }
-    if (d->menu_open) {
-        struct desk_box box=desk_menu_box(d);
-        int row=(d->mouse_y-box.y)/desk_menu_row(d);
-        int inside=desk_contains(box,d->mouse_x,d->mouse_y);
-        d->menu_open=0;
-        desk_damage_add(&d->damage,box,d->width,d->height);
-        desk_damage_add(&d->damage,bar,d->width,d->height);
-        if (inside) {
-            if (row>=0 && (unsigned)row<d->program_count) d->action=row;
-            else if ((unsigned)row==d->program_count) desk_about(d);
-            else if ((unsigned)row==d->program_count+1) strcpy(d->notice,"Restart is unavailable");
-            return 1;
-        }
-    }
-    if (desk_contains(bar,d->mouse_x,d->mouse_y)) {
-        for (int i=0; i<DESK_CLIENTS; i++) if (desk_contains(desk_task_button(d,i),d->mouse_x,d->mouse_y)) {
-            if (d->clients[i].minimized || d->focus==i) desk_minimize(d,i);
-            else desk_focus(d,i);
-            break;
-        }
-        return 1;
-    }
-    return 0;
-}
+{ return desk_shell_button(d, CIUKI_BUTTON_LEFT, 1); }
 
 /* f2-33 task-manager requests. Only a client the desktop itself launched as
  * /bin/tasks (taskman) reaches these; every result is a TASK_RESULT. */

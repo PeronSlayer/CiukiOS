@@ -19,6 +19,7 @@
  * PINGs whose serials are base+n. */
 #define DESK_APP_FILES 1
 #define DESK_APP_NOTE 2
+#define DESK_APP_CONTROL 3          /* /bin/control: may send DESK_SETTINGS */
 #define DESK_FILES_CHECKPOINT 0xf2310000u
 #define DESK_FILES_CHECKPOINTS 5
 #define DESK_NOTE_CHECKPOINT 0xf2320000u
@@ -26,11 +27,12 @@
 #define DESK_APP_CHECKPOINT(kind) ((kind)==DESK_APP_NOTE ? DESK_NOTE_CHECKPOINT : DESK_FILES_CHECKPOINT)
 #define DESK_APP_CHECKPOINTS(kind) ((kind)==DESK_APP_NOTE ? DESK_NOTE_CHECKPOINTS : DESK_FILES_CHECKPOINTS)
 struct desk_box { int32_t x, y, w, h; };
+#include "shell.h"
 struct desk_damage { unsigned count; struct desk_box boxes[DESK_DAMAGE_MAX]; };
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
-    int minimized, internal, closing, program;   /* program: 1 Files, 2 CiukNote (launched by the desktop) */
+    int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
     int taskman;                  /* f2-33: launched /bin/tasks; may send task requests */
     uint32_t pid, serial, version, window_id;
     uint64_t ping_sent_ns, next_ping_ns, order;
@@ -84,6 +86,10 @@ struct desktop {
     uint32_t next_window_id, self_pid;
     int authority_fd, tasks_test, tasks_stage, tasks_checkpoint;
     uint32_t tasks_pid, tasks_demo_pid, tasks_demo_window;
+    /* Desktop shell (shell.h): settings, menus, icons, tray, built-in windows. */
+    int mixer_fd;                /* delegated /dev/mixer control handle (CIUKI_MIXER_FD) or -1 */
+    const char *launch_argv[6];  /* Run dialog: extra arguments for the next launch */
+    struct desk_shell sh;
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -117,6 +123,7 @@ int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
 int desk_task_switch(struct desktop *, uint32_t window_id);
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
 int desk_shell_click(struct desktop *);
+void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);

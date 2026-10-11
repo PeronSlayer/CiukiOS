@@ -237,7 +237,9 @@ class NormalBootUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='normal-boot-screen-', dir=folder) as temp:
             temp = Path(temp); env = dict(os.environ, TMPDIR=str(temp), ASAN_OPTIONS='detect_leaks=0')
             binary = temp / 'capture'
-            sources = [ROOT / 'apps/desktop' / n for n in ('client.c', 'protocol.c', 'input.c', 'compositor.c')]
+            sources = [ROOT / 'apps/desktop' / n for n in ('client.c', 'protocol.c', 'input.c', 'compositor.c',
+                                                           'shell.c', 'settings.c', 'wallpaper.c', 'keymap.c')]
+            sources += [ROOT / 'apps/libdeskui/draw.c']
             sources += [ROOT / 'tests/host/desktop' / n for n in ('fake.c', 'compositor_capture.c')]
             subprocess.run(['clang', '-std=c17', '-O1', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'apps/desktop'),
