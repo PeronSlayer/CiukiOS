@@ -315,10 +315,10 @@ void klog(const char *f,...) {(void)f;}
         from evidence import Parser
         suite=runner.load(ROOT/'tests/suites/f2-desktop.json')
         normal=[c for c in suite['cases'] if '-normal-' in c['id']]
-        shell=[c for c in suite['cases'] if c['id'].startswith('desktop-shell-')] # f2-30: real desktop, scripted shell actions
+        shell=[c for c in suite['cases'] if c['id'].startswith(('desktop-shell-','tasks-'))] # f2-30/f2-33: real desktop, scripted actions
         self.assertEqual({c['profile'] for c in normal},{'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-1998','qemu-desktop-2002'})
         self.assertEqual({c['profile'] for c in shell},{'qemu-t23','qemu-e500'})
-        self.assertEqual(len(suite['cases']),13) # f2-30 added two desktop-shell cases
+        self.assertEqual(len(suite['cases']),14) # f2-30 added two desktop-shell cases, f2-33 tasks-qemu-t23
         for case in suite['cases']:
             native=case in normal or case in shell;server='desktop' if native else 'standin'
             profile=runner.load(ROOT/'tests/profiles'/f"{case['profile']}.json")

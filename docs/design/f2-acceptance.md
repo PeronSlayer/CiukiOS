@@ -471,3 +471,95 @@ into architecture choices by the implementer. Open qualification items are
 actual newlib/desktop/Lua footprint, guest suite success, F1 laptop behavior and
 later Wine requirements; no ABI numbering or process-semantics question is
 intentionally left for implementation to choose.
+
+## F2-33 Task Manager (2026-10-11)
+
+**[F2+, f2-33]** Implementer draft; lead review and QEMU evidence pending. The
+ABI rows (calls 70 `proc_list` and 71 `proc_terminate`, records, errors and the
+authority descriptor) are in
+[execution-abi.md](execution-abi.md#f2-33-amendment-process-enumeration-and-termination-requests-2026-10-11);
+the SDK wrappers in [posix-subset.md](posix-subset.md#f2-33-amendment-process-enumeration-and-the-termination-authority-2026-10-11);
+the desktop protocol extension and the application in [docs/desktop.md](../desktop.md).
+
+Decisions. The process table records an image basename and the publication
+tick; the scheduler counts idle ticks (`g_idle_ticks`), so CPU usage is the
+busy share of timer ticks and per-process CPU is the tick delta of
+`cpu_ticks` (`file_clock_tick`) over the interval; PID 1 carries the busy
+ticks not charged to any process (the Windows "System" role) and a synthetic
+"System Idle Process" (PID 0) row shows the idle share. Termination authority
+is a descriptor, delegated like the F4-01 mixer handle: PID 1 installs it in
+the bootstrapped (or probe) desktop, the desktop maps it to fd 4 only for
+`/bin/tasks`, and the kernel honours it only for its owner and the owner's
+direct children. The desktop's own group (the desktop and every program it
+launched, including the Task Manager) is never a `proc_terminate` target
+except for the desktop itself: Task Manager ends those processes through the
+desktop's existing close path (CLOSE_REQUEST, SIGTERM after 2 s), and refuses
+PID 0/1 and the desktop. Update speeds follow the commonly reported Windows
+values (High 0.5 s, Normal 1 s, Low 4 s, Paused; Windows XP used 2 s for
+Normal), with one history point per second over 60 s.
+
+**[f2-33/T3]** `tasks-qemu-t23` (`tests/suites/f2-desktop.json`) is the
+`desktop-shell-qemu-t23` case with the same probe, selector, deadline,
+predicates (`keys` = 4) and `desktop_screen` evidence and a different script,
+selected at run time by F11 instead of F12 at the post-fault interaction ARM:
+
+1. F11 makes the gate desktop enter shell mode with the tasks scenario
+   (`tasks_test`); both F11 edges count towards `keys` like the shell's F12.
+2. The script clamps to the bottom-left corner, clicks the Ciuki button
+   (40, h-17) and the `tasks` menu row (40, h-102). `tasks` is the last
+   program in the sorted `/bin` scan, so its row sits directly above "About
+   CiukiOS" whatever the number of programs (row height 28 while at most 23
+   programs fit at 768 lines). A future `/bin` program sorting after `tasks`
+   moves it. Stage 1: launched from the menu with `--authority-fd=4
+   --test=tasks`; stage 2: its window exists.
+3. Alt+N, `demo`, Enter: Task Manager's New Task sends the v2 LAUNCH request;
+   the desktop launches `/bin/demo` as its own child (stage 3), whose window
+   follows (stage 4). Task Manager selects the launched PID's row.
+4. The script clamps to the top-left corner and clicks Task Manager's title
+   at (300, 50) (test mode places its frame at (8, 40)) to take keyboard
+   focus back from the demo window, then Alt+E (End Task) sends END_TASK for
+   the demo's window: the desktop requests its close (stage 5); the demo
+   acknowledges and exits 0 and the desktop reaps it (stage 6).
+5. Task Manager's next 0.5 s refresh no longer finds the PID in call 70;
+   it then requires call 71 with its delegated descriptor to refuse the
+   ended PID (ESRCH, which also proves the descriptor is a valid authority
+   since EBADF is checked first), PID 1 (EPERM) and the desktop (EPERM), and
+   only then pings the private checkpoint serial `0xf2330007`; the desktop then checks
+   its own call-70 snapshot (no record for the demo PID, Task Manager and the
+   desktop live) and reaches stage 7 (`DESK_TASKS_DONE`).
+6. Only then do the two A edges count, so `keys=4` proves the whole sequence;
+   omission or failure at any step leaves `keys=0` and the 15 s interaction
+   window expires (`changed=0`). The script's pauses total 9.24 s.
+
+Task Manager stays open for the post-input screendump (frame x 8..454,
+y 40..537 at 1024x768): it covers neither the upper-right portrait region
+nor the centre cursor footprint that `observe_desktop_screen` checks. The
+native cleanup now also collects every remaining child of the desktop before
+the desktop itself (generalizing the survivor/victim rule), so a program left
+open by a script cannot be adopted by PID 1 past the ledger. The two
+`desktop-shell-*` scripts move from the Ciuki button to the demo row by
+(0, -225) instead of (0, -169): `/bin/files` (f2-31) and `/bin/tasks` sort
+after `demo` and raise the menu top by one 28-pixel row each, so the old
+offset selected `hello`; a program sorting before `demo` (for example f2-32's
+`ciuknote`) raises the top and lowers `demo` by one row, leaving -225 valid.
+The case pins no
+pixel digest in the suite (like `desktop-shell-*`): the runner records
+`desktop_screen.ppm_sha256` and `before_ppm_sha256` for the image it ran on;
+the lead pins or archives them from the first passing run. Host renders of
+the four Task Manager views are pinned in `tests/host/desktop/test_tasks.py`.
+
+Host evidence (no guest qualification): `tests/host/proc/proc_test.c`
+`test_enumeration` (record layout and order, truncation, EINVAL/EFAULT,
+names, accounting over a fake process set, zombies, EINVAL/EBADF/ESRCH/EPERM,
+descendants, delegated authority and its one-level limit, desktop-group
+protection, kernel controller owners, leak-free release),
+`tests/host/abi_layout_test.c` (both records and all constants),
+`tests/host/desktop/shell_launch_test.c` (v2 opcode parsing, window list,
+End Task/Switch To/LAUNCH rights, authority mapping to fd 4 only for Tasks,
+scenario stages, the desktop's call-70 verification and `keys`),
+`tasks_model_test.c` and `tasks_view_test.c` (model with fake data, layout,
+accelerators, pinned renders). `f2-all` is unaffected by construction: no F2
+gate program issues calls 70/71, F11 is never sent by an existing case, and
+the only behaviour change outside the tasks scenario is one more descriptor
+in the desktop (counted before every baseline) and the cleanup above, a
+no-op when the desktop has no extra children.

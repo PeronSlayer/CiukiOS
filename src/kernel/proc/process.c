@@ -137,10 +137,68 @@ int proc_inherit(struct process *child, const struct process *parent,
     return 0;
 }
 
+/* Image basename for enumeration: printable ASCII only, at most 31 bytes,
+ * NUL-terminated and zero-filled. Never part of any authorization decision. */
+void proc_set_name(struct process *p, const char *path)
+{
+    unsigned n = 0;
+    memset(p->name, 0, sizeof(p->name));
+    for (const char *c = path; c && *c; c++) {
+        if (*c == '/') { n = 0; memset(p->name, 0, sizeof(p->name)); continue; }
+        if (n < sizeof(p->name) - 1)
+            p->name[n++] = *c >= 32 && *c <= 126 ? *c : '?';
+    }
+}
+
+/* Consistent copy of published processes in ascending PID order (PID
+ * allocation is monotonic, so slot order is not). Interrupts are held off
+ * so tick counters belong to one instant; no allocation or wait here. */
+unsigned proc_list_snapshot(struct ciuki_proc_record *out, unsigned capacity, unsigned *total)
+{
+    uint32_t flags = irq_save();
+    unsigned written = 0, present = 0;
+    uint32_t last = 0;
+    for (;;) {
+        struct process *next = 0;
+        for (unsigned i = 0; i < CIUKI_PROCESS_MAX; i++) {
+            struct process *p = processes[i];
+            if (p && p->published && p->pid > last && (!next || p->pid < next->pid))
+                next = p;
+        }
+        if (!next)
+            break;
+        last = next->pid;
+        present++;
+        if (written == capacity)
+            continue;
+        struct ciuki_proc_record *r = &out[written++];
+        memset(r, 0, sizeof(*r));
+        r->version = CIUKI_PROC_VERSION;
+        r->size = sizeof(*r);
+        r->pid = next->pid;
+        r->ppid = next == &supervisor ? 0 : next->ppid;
+        r->pgid = next->pgid;
+        r->state = next->state == PROC_ZOMBIE ? CIUKI_PROC_ZOMBIE :
+                   next->state == PROC_STOPPING ? CIUKI_PROC_STOPPING : CIUKI_PROC_LIVE;
+        /* PID 1 is the kernel reaper task; native processes count live threads. */
+        r->threads = next == &supervisor ? 1 : next->live_threads;
+        r->resident_pages = next->memory ? next->memory->backing : 0;
+        r->cpu_ticks = next->cpu_ticks;
+        r->start_tick = next->start_tick;
+        memcpy(r->name, next->name, sizeof(r->name));
+        r->name[sizeof(r->name) - 1] = 0;
+    }
+    irq_restore(flags);
+    if (total)
+        *total = present;
+    return written;
+}
+
 void proc_publish(struct process *p, uint32_t flags)
 {
     if (flags & CIUKI_SPAWN_NEW_GROUP)
         p->pgid = p->pid;
+    p->start_tick = g_ticks;
     p->state = PROC_LIVE;
     p->published = true;
     for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) {
@@ -438,6 +496,7 @@ static void supervisor_main(void *arg)
 void proc_init(void)
 {
     supervisor.pid = supervisor.ppid = supervisor.pgid = 1;
+    proc_set_name(&supervisor, "supervisor");
     supervisor.state = PROC_LIVE;
     supervisor.published = true;
     kwait_init(&supervisor.changed);

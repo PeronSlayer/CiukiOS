@@ -404,6 +404,13 @@ cleanup:
             struct process *child=proc_find(i ? native_reports.victim : native_reports.survivor);
             if (child) desktop_remove(server,child);
         }
+        /* f2-33: programs the desktop launched during a scripted interaction
+         * (Task Manager, menu children) are its test children too. Collect them
+         * before the desktop so they are not adopted by PID 1 past the ledger. */
+        static struct ciuki_proc_record children[CIUKI_PROCESS_MAX];
+        unsigned listed=proc_list_snapshot(children,CIUKI_PROCESS_MAX,0);
+        for (unsigned i=0;i<listed;i++)
+            if (children[i].ppid==server->pid) desktop_remove(server,proc_find(children[i].pid));
         desktop_remove(owner,server);
     }
     if (owner) { proc_stop(owner,0,0); proc_collect(); }

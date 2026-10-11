@@ -1122,3 +1122,66 @@ periods remain owned. SET_FORMAT requires reset after the first queued frame.
 AUDIO open additionally permits ENODEV/ENOMEM; byte writes retain F2 positive
 partial-count precedence over EINTR/EIO. Device seeks/positioned I/O: ESPIPE.
 No ioctl, poll/select, recording or master authority through public opens.
+
+## F2-33 amendment: process enumeration and termination requests (2026-10-11)
+
+Directive f2-33 (Task Manager). Implementer draft, lead review pending. No
+F0/F2/F4 number changes; both calls are unadvertised to the F2 gate programs
+(no probe or SDK test issues them) and every other unassigned number keeps
+returning ENOSYS.
+
+Research: the Linux [`/proc/PID/stat` fields](https://docs.kernel.org/filesystems/proc.html)
+(state, ppid, pgrp, utime in jiffies, num_threads, start time after boot, rss)
+fix the per-process set; the [POSIX kill permission rule](https://pubs.opengroup.org/onlinepubs/9799919799/functions/kill.html)
+(EPERM without permission, ESRCH without a target) the error vocabulary;
+Windows separates [EndTask](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-endtask)
+(WM_CLOSE first, then forced) from [TerminateProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess)
+(unconditional, needs PROCESS_TERMINATE on the handle). Ciuki keeps the close
+path in the desktop (f2-30 CLOSE_REQUEST, SIGTERM after 2 s) and models the
+access right as a delegated descriptor, as the F4-01 mixer control handle does.
+
+| No. | Call and register signature | Success / semantics | Block | Complete errors |
+| --- | --- | --- | --- | --- |
+| 70 | `proc_list(B=buffer*,C=bytes)` | Number of process records written after one system record; readable by every process. | N | EINVAL, EFAULT |
+| 71 | `proc_terminate(B=pid,C=signal,D=authority_fd)` | 0 after posting SIGTERM or SIGKILL; D=0xffffffff means no authority. | N | EINVAL, EBADF, EPERM, ESRCH |
+
+**Call 70.** `bytes` must be 64..65536 (`CIUKI_PROC_LIST_MIN/MAX`), otherwise
+EINVAL. The whole `[buffer, buffer+bytes)` range must be mapped writable
+(EFAULT, checked before any side effect). The kernel takes a consistent
+snapshot with interrupts held off into one static 5184-byte buffer (the
+kernel heap stops at 2 KiB objects; nothing between snapshot and copy-out
+waits and kernel code is not preempted, so calls never share it), then stores
+the 64-byte system record and
+`min(64, (bytes-64)/80)` process records; the unused suffix stays untouched.
+Records follow in ascending PID order and include zombies.
+
+| Record | Size | Fields in byte-offset order |
+| --- | --- | --- |
+| `ciuki_proc_system` | 64 | 0:u32 version=1, 4:u32 size=64, 8:u32 tick_hz=1000, 12:u32 records (written), 16:u64 total_ticks, 24:u64 idle_ticks (timer ticks taken by the idle task), 32:u32 usable_pages, 36:u32 free_pages, 40:u32 kheap_pages, 44:u32 kheap_bytes (in use), 48:u32 kheap_high_water (bytes), 52:u32 processes (published, may exceed records), 56:u32 reserved[2]=0 |
+| `ciuki_proc_record` | 80 | 0:u32 version=1, 4:u32 size=80, 8:u32 pid, 12:u32 ppid (0 for PID 1), 16:u32 pgid, 20:u32 state (1 live, 2 stopping, 3 zombie), 24:u32 threads (live threads; PID 1 reports its one reaper task), 28:u32 resident_pages (owned backing pages incl. mapped shared surfaces), 32:u64 cpu_ticks (ticks charged while a thread of the process ran), 40:u64 start_tick (g_ticks at publication), 48:char name[32] (image basename, printable ASCII, NUL-terminated, zero-filled; empty for kernel controller owners) |
+
+**Call 71.** Validation order: signal must be SIGTERM or SIGKILL and pid > 0
+and not the caller (EINVAL); a D other than 0xffffffff must name an open
+authority descriptor of the caller (EBADF, also for any other descriptor
+kind); PID 1 gives EPERM; a missing, unpublished, stopping or zombie target
+gives ESRCH; then permission: a target in the group of the live desktop that
+PID 1 bootstrapped is refused (EPERM) unless the caller is that desktop (its
+group ends only through the desktop's close path); with an authority descriptor, a target in the
+group of the descriptor's owner is refused (EPERM) unless the caller is the
+owner, so a delegate never ends the desktop or its group even where PID 1
+recorded no desktop; a target without live user
+threads (a kernel controller owner) is refused (EPERM); a descendant of the
+caller is allowed; any other target requires the authority, honoured only
+when the caller is the descriptor's owner or the owner's direct child (EPERM
+otherwise). Success posts the signal exactly like `kill`; a caught or ignored
+SIGTERM is the target's choice, SIGKILL is not. `kill` (54) keeps its
+group-local rule unchanged.
+
+**Authority descriptor.** `supervisor_spawn(..., desktop=true)` installs one
+authority object at the lowest free fd >= 3 of the trusted desktop, FD_CLOEXEC
+clear, and passes its number as `CIUKI_TASKS_FD`. Default inheritance covers
+only fds 0-2, so it never travels implicitly; the desktop names it in the
+explicit spawn list (target fd 4) only for `/bin/tasks`. Close, dup, dup2 and
+fcntl treat it as a generic object; fstat gives EOPNOTSUPP, byte I/O EBADF.
+The object is freed with its last descriptor. The F0/F2 ledgers count it as a
+handle of its holder; no device, description or grant counter changes.

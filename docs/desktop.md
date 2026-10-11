@@ -1,5 +1,79 @@
 # F2 ring-3 desktop and client protocol
 
+## f2-33 Task Manager and the v2 task extension (2026-10-11)
+
+`/bin/tasks` is the CiukiOS Task Manager: tabs Applications, Processes and
+Performance (the Virtual Machines tab arrives with F3, f3-02), menus File
+(New Task (Run...), Exit Task Manager), View (Refresh Now F5; Update Speed
+High 0.5 s, Normal 1 s, Low 4 s, Paused) and Help, and a status bar
+(processes, CPU usage, memory). Kernel data comes from call 70 and the
+termination request from call 71 (docs/design/execution-abi.md, f2-33
+amendment); window data comes from the desktop through the extension below.
+Research and decisions are in docs/design/f2-acceptance.md, section F2-33.
+
+- **Applications:** columns Task and Status (Running / Not Responding from
+  the desktop's heartbeat), sorted by title, PID and window id. End Task
+  (Alt+E) sends END_TASK, the desktop's close path: CLOSE_REQUEST, SIGTERM
+  after 2 s for its own children. Switch To (Alt+S, Enter) restores and
+  focuses. New Task (Alt+N) asks the desktop to launch an admitted `/bin`
+  program (name or `/bin/name`), so graphical programs get their channel and
+  appear here; the launched program's row is selected once it appears.
+- **Processes:** Image Name, PID, PPID, Threads, Mem Usage (resident pages x
+  4 KiB), CPU (percent of the last interval), sortable by header click
+  (again to reverse), plus "System Idle Process" (PID 0). End Process
+  (Alt+E, with confirmation) refuses PID 0/1 and the desktop, routes the
+  desktop's group through END_TASK by PID and everything else through
+  call 71 with SIGKILL and the delegated authority (EPERM shows "Access is
+  denied").
+- **Performance:** CPU usage meter, a 60-second history graph (one point per
+  second), Physical Memory (K) total/available/used, Kernel Memory (K) heap
+  in use/peak/pool, Totals (processes, threads, up time).
+
+The v2 task extension follows f2-30's rules: version 2 only, a v1 client or
+a wrong direction is a protocol error (that peer is disconnected), payload
+tails are zero and integers little-endian. Requests from a client that the
+desktop did not launch as `/bin/tasks` receive TASK_RESULT with EPERM; no
+other client gains any right.
+
+| Opcode | Direction | Payload bytes | Fields |
+| --- | --- | ---: | --- |
+| WINDOWS_QUERY=15 | Client → desktop | 8 | u32 serial@4 |
+| WINDOW_INFO=16 | Desktop → client | 32+n | u32 serial@4, index@8, count@12 (0..16), window_id@16, pid@20, flags@24 (1 unresponsive, 2 minimized, 4 focused, 8 internal, 16 closing), n@28; title@32, 0..63 printable bytes. count=0 is one message with every field zero. |
+| END_TASK=17 | Client → desktop | 16 | u32 serial@4, window_id@8, pid@12; not both zero. window_id selects a window (pid, when nonzero, must match); window_id=0 ends a desktop child by PID: its windows get close requests, a windowless child gets SIGTERM. |
+| SWITCH_TO=18 | Client → desktop | 12 | u32 serial@4, window_id@8 (nonzero) |
+| LAUNCH=19 | Client → desktop | 12+n | u32 serial@4, n@8 (1..63); name@12, visible ASCII without spaces, matched against the `/bin` menu list |
+| TASK_RESULT=20 | Desktop → client | 16 | u32 serial@4, request@8 (15, 17, 18 or 19), i32 result@12: 0, the launched PID, or -errno (EPERM, ESRCH, ENOENT, EAGAIN when the reply queue cannot hold a whole list, or the spawn error) |
+
+Window ids are assigned by the desktop at window creation (never 0) and are
+not reused while the counter does not wrap. The desktop never sends a partial
+window list. The desktop launches `/bin/tasks` with the channel at fd 3, the
+authority at fd 4 and `--authority-fd=4` (absent when PID 1 installed none);
+other programs never receive it.
+
+Runtime test scenario (`tasks-qemu-t23`): at the crash-isolation probe's
+interaction ARM, F11 (instead of the shell case's F12) selects the scenario;
+the desktop tracks stages 1-7 (Tasks launched from the menu, its window, demo
+launched through LAUNCH, its window, END_TASK on that window, demo reaped
+with status 0, Tasks' private checkpoint ping `0xf2330007` plus the desktop's
+own call-70 check) and reports `keys` only at stage 7. `--test=tasks` makes
+Tasks place its frame at (8, 40), use the High speed and send the checkpoint
+when the ended PID has left the process list and call 71, with the delegated
+descriptor, refuses that PID (ESRCH), PID 1 and the desktop (EPERM); nothing
+is printed on the console. The taskbar notice shows `tasks stage N` for the lead's screenshot.
+
+Toolkit additions (`apps/libdeskui`, additive; existing widget digests are
+unchanged, verified against the f2-31 sources): `DU_TABS` (labels, `value`
+is the selected tab, click/Left/Right/Ctrl+Tab/Ctrl+Shift+Tab/Ctrl+PgUp/PgDn
+emit DU_SELECT), `DU_GRAPH` (0..100 samples, newest at the right, integer
+Bresenham), `DU_GROUP` (labelled frame, never hit-tested), caller-defined
+Details columns on lists (`columns`, `column_count`, row-major `cells`,
+right alignment, sort indicator, header clicks emit DU_SORT with the column
+index), button accelerators (`key`, `key_modifiers`; hidden or disabled
+buttons are inert), menu mnemonics taken from each menu label's first
+letter (Files keeps F/E/V/G/H), `du_window_queue`, `du_tabs_hit` and a
+`message` hook on `du_window` for v2 messages the toolkit does not consume.
+`struct du_row` is unchanged.
+
 ## f2-31 toolkit and Files decisions (2026-10-11)
 
 Research: [POSIX rename](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html),

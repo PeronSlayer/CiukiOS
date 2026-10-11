@@ -34,6 +34,7 @@ static struct task *all_tasks;
 static struct task *idle_task;
 static uint32_t next_id = 1;
 static uint32_t slice_left;
+uint64_t g_idle_ticks;              /* in the extracted scheduler block for host replays */
 
 static void rq_push(struct task *t)
 {
@@ -318,6 +319,7 @@ void sched_tick(void)
         }
     }
     if (g_current == idle_task) {
+        g_idle_ticks++;
         if (rq_any())
             g_need_resched = true;
     } else if (slice_left && --slice_left == 0) {

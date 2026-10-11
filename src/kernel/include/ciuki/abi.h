@@ -485,6 +485,8 @@ enum ciuki_syscall {
     CIUKI_SYS_DISPLAY_INFO = 67,
     CIUKI_SYS_THREAD_KILL = 68,
     CIUKI_SYS_DEVCTL = 69,
+    CIUKI_SYS_PROC_LIST = 70,
+    CIUKI_SYS_PROC_TERMINATE = 71,
 };
 
 /* pack(4) is scoped and restores the includer's previous setting. */
@@ -586,6 +588,50 @@ _Static_assert(__builtin_offsetof(struct ciuki_audio_status, accepted_frames) ==
 _Static_assert(sizeof(struct ciuki_audio_gain) == 24, "audio gain");
 _Static_assert(sizeof(struct ciuki_audio_command) == 16, "audio command");
 _Static_assert(sizeof(struct ciuki_mixer_master) == 32, "mixer master");
+
+/* f2-33: process enumeration (call 70) and termination request (call 71).
+ * One system record, then process records in ascending PID order. */
+#define CIUKI_PROC_VERSION 1u
+#define CIUKI_PROC_NAME_MAX 32u
+#define CIUKI_PROC_LIVE 1u
+#define CIUKI_PROC_STOPPING 2u
+#define CIUKI_PROC_ZOMBIE 3u
+#define CIUKI_PROC_LIST_MIN 64u
+#define CIUKI_PROC_LIST_MAX 65536u
+#define CIUKI_PROC_NO_AUTHORITY 0xffffffffu
+struct ciuki_proc_system {
+    uint32_t version;
+    uint32_t size;
+    uint32_t tick_hz;
+    uint32_t records;
+    uint64_t total_ticks;
+    uint64_t idle_ticks;
+    uint32_t usable_pages;
+    uint32_t free_pages;
+    uint32_t kheap_pages;
+    uint32_t kheap_bytes;
+    uint32_t kheap_high_water;
+    uint32_t processes;
+    uint32_t reserved[2];
+};
+struct ciuki_proc_record {
+    uint32_t version;
+    uint32_t size;
+    uint32_t pid;
+    uint32_t ppid;
+    uint32_t pgid;
+    uint32_t state;
+    uint32_t threads;
+    uint32_t resident_pages;
+    uint64_t cpu_ticks;
+    uint64_t start_tick;
+    char name[32];
+};
+_Static_assert(sizeof(struct ciuki_proc_system) == 64, "proc system record");
+_Static_assert(__builtin_offsetof(struct ciuki_proc_system, total_ticks) == 16, "proc system ticks");
+_Static_assert(sizeof(struct ciuki_proc_record) == 80, "proc record");
+_Static_assert(__builtin_offsetof(struct ciuki_proc_record, cpu_ticks) == 32, "proc record ticks");
+_Static_assert(__builtin_offsetof(struct ciuki_proc_record, name) == 48, "proc record name");
 
 struct ciuki_timespec {
     int64_t tv_sec; /* 0 */

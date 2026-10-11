@@ -14,7 +14,7 @@
 struct du_rect { int x,y,w,h; };
 struct du_canvas { uint32_t *pixels; unsigned width,height; struct du_rect clip; };
 enum du_kind { DU_BUTTON, DU_EDIT, DU_LIST, DU_TREE, DU_SCROLLBAR, DU_STATUS,
-               DU_SPLITTER, DU_PROGRESS, DU_LABEL };
+               DU_SPLITTER, DU_PROGRESS, DU_LABEL, DU_TABS, DU_GRAPH, DU_GROUP };
 enum du_view { DU_DETAILS, DU_ICONS, DU_LIST_MODE };
 enum du_event_kind { DU_ACTIVATE, DU_CHANGE, DU_SELECT, DU_SORT, DU_CONTEXT,
                      DU_CLOSE, DU_TICK };
@@ -24,12 +24,23 @@ struct du_event { enum du_event_kind type; int id,index,x,y; unsigned modifiers;
 #define DU_ALT 4u
 struct du_row { const char *name,*size,*type,*modified; const uint32_t *icon;
                 unsigned selected,depth,expanded; };
+/* f2-33: optional caller-defined Details columns (percent of the list width);
+ * cell text comes from the widget's row-major cells table. */
+struct du_column { const char *label; unsigned percent; int right; };
 struct du_widget {
     enum du_kind kind; int id; struct du_rect box; int disabled,hidden;
     char text[DU_TEXT_MAX]; size_t cursor,anchor,offset;
     const uint32_t *icon;
     struct du_row *rows; unsigned count,first,active; enum du_view view;
     unsigned value,total,page;
+    /* f2-33 additions, zero for existing widgets: Details columns with a sort
+     * indicator; a button accelerator; tab labels (value = selected tab);
+     * graph samples 0..100, oldest first, total = capacity. */
+    const struct du_column *columns; unsigned column_count; int sort_column,sort_descending;
+    const char *const *cells; /* count x column_count; NULL cell 0 falls back to row name */
+    unsigned key,key_modifiers;
+    const char *const *labels; unsigned label_count;
+    const uint8_t *samples; unsigned sample_count;
 };
 struct du_menu_item { const char *label; int id; unsigned key,modifiers; int disabled; };
 struct du_menu { const char *label; const struct du_menu_item *items; unsigned count; };
@@ -54,6 +65,8 @@ struct du_window {
     struct du_rect damage; int damaged;
     struct du_ui *ui;
     int (*close_request)(struct du_window *,void *); void *user;
+    /* f2-33: v2 messages the toolkit does not consume (WINDOW_INFO, TASK_RESULT). */
+    void (*message)(struct du_window *,const struct desk_packet *,void *);
 };
 int du_contains(struct du_rect,int,int);
 struct du_rect du_intersection(struct du_rect,struct du_rect);
@@ -82,6 +95,8 @@ int du_window_open(struct du_window *,struct du_ui *,int,unsigned,unsigned,const
 void du_window_damage(struct du_window *,struct du_rect);
 int du_window_turn(struct du_window *,uint64_t);
 int du_window_ping(struct du_window *,uint32_t);
+int du_window_queue(struct du_window *,struct ciuki_message *);
+int du_tabs_hit(const struct du_widget *,int,int);
 int du_window_move(struct du_window *,int,int);
 void du_window_close(struct du_window *);
 void du_window_destroy(struct du_window *);

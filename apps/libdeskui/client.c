@@ -55,6 +55,7 @@ void du_window_damage(struct du_window *w,struct du_rect r)
         w->damage=(struct du_rect){x,y,right-x,bottom-y};
     } w->damaged=1;
 }
+int du_window_queue(struct du_window *w,struct ciuki_message *m) { return queue(w,m); }
 int du_window_ping(struct du_window *w,uint32_t serial)
 { struct ciuki_message m; desk_message(&m,DESK_PING,8); desk_put32(m.data+4,serial); return queue(w,&m); }
 int du_window_move(struct du_window *w,int x,int y)
@@ -80,6 +81,7 @@ int du_window_turn(struct du_window *w,uint64_t now)
         else if (p.opcode==DESK_CLOSE_REQUEST) { if (!w->close_request || w->close_request(w,w->user)) du_window_close(w); }
         else if (p.opcode==DESK_FOCUS) { if (!p.focused) du_release(w->ui); }
         else if (p.opcode==DESK_KEY || p.opcode==DESK_MOTION || p.opcode==DESK_BUTTON) du_input(w->ui,&p.event);
+        else if (w->message) w->message(w,&p,w->user);
     }
     if (w->closing) {
         if (w->count<16) { struct ciuki_message m; desk_message(&m,DESK_CLOSE,4); queue(w,&m); w->closing=2; }

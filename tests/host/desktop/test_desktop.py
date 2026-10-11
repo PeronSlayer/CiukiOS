@@ -86,7 +86,7 @@ class DesktopTests(unittest.TestCase):
             folder = Path(temp)
             inc = folder / "include/ciuki"
             inc.mkdir(parents=True)
-            for name in ("channel.h", "surface.h", "spawn.h"):
+            for name in ("channel.h", "surface.h", "spawn.h", "proc.h"):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
             for name in ("runtime.h", "raw.h"):
                 (inc / name).write_text("/* supplied by host harness */\n")
@@ -148,18 +148,19 @@ class DesktopTests(unittest.TestCase):
         if not (build.OUT / "manifest.json").is_file():
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
-        self.assertEqual(set(m["files"]), {"desktop", "demo", "ciuki-portrait.xrgb"})
+        self.assertEqual(set(m["files"]), {"desktop", "demo", "files", "tasks", "libdeskui.a", "ciuki-portrait.xrgb"})
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
         expected["cflags"] = []
         self.assertFalse(build.current_build(expected))
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
-        self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/system/assets/ciuki-portrait.xrgb"})
+        self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/bin/files", "/bin/tasks",
+                                        "/system/assets/ciuki-portrait.xrgb"})
         self.assertIn("/system/assets", directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 3)
+        self.assertEqual(len(records), 5)
         for r in records:
             self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
         print("PASS desktop/demo ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
@@ -192,7 +193,7 @@ class DesktopTests(unittest.TestCase):
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="desktop-stale-", dir=parent) as temp:
             dest = Path(temp)
-            for name in ("manifest.json", "desktop", "demo", "ciuki-portrait.xrgb"):
+            for name in ("manifest.json", "desktop", "demo", "files", "tasks", "libdeskui.a", "ciuki-portrait.xrgb"):
                 shutil.copy2(build.OUT / name, dest / name)
             with patch.object(build, "OUT", dest):
                 self.assertTrue(build.current_build(build.inputs()))

@@ -52,6 +52,7 @@ def desktop_payloads():
     spec.loader.exec_module(desktop_build)
     desktop = desktop_build.validate_payloads()
     sources = {"/bin/desktop": DESKTOP / "desktop", "/bin/demo": DESKTOP / "demo", "/bin/files": DESKTOP / "files",
+               "/bin/tasks": DESKTOP / "tasks",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],

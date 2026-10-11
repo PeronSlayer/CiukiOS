@@ -20,7 +20,8 @@ struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
     int minimized, internal, closing;
-    uint32_t pid, serial, version;
+    int taskman;                  /* f2-33: launched /bin/tasks; may send task requests */
+    uint32_t pid, serial, version, window_id;
     uint64_t ping_sent_ns, next_ping_ns, order;
     struct ciuki_surface_info info;
     const uint32_t *pixels;
@@ -60,7 +61,16 @@ struct desktop {
     struct desk_program programs[DESK_MENU_MAX];
     unsigned program_count;
     struct desk_child children[DESK_CLIENTS];
+    /* f2-33: task-manager extension and its runtime-selected gate scenario. */
+    uint32_t next_window_id, self_pid;
+    int authority_fd, tasks_test, tasks_stage, tasks_checkpoint;
+    uint32_t tasks_pid, tasks_demo_pid, tasks_demo_window;
 };
+/* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
+ * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
+ * 6 demo reaped with status 0, 7 Tasks reported the PID gone and the
+ * desktop's own process list confirmed it (desktop.c). */
+#define DESK_TASKS_DONE 7
 int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out);
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
@@ -79,6 +89,10 @@ void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
 void desk_about(struct desktop *);
+void desk_task_windows(struct desktop *, int index, uint32_t serial);
+int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
+int desk_task_switch(struct desktop *, uint32_t window_id);
+int desk_task_launch(struct desktop *, const char *name);
 int desk_shell_click(struct desktop *);
 void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);

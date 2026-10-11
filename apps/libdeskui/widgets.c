@@ -29,7 +29,7 @@ struct du_widget *du_get(struct du_ui *u,int id)
 int du_hit(const struct du_ui *u,int x,int y)
 {
     for (unsigned i=u->count;i>0;i--) { const struct du_widget *w=&u->widgets[i-1];
-        if (!w->hidden && !w->disabled && du_contains(w->box,x,y)) return (int)i-1; }
+        if (!w->hidden && !w->disabled && w->kind!=DU_GROUP && du_contains(w->box,x,y)) return (int)i-1; }
     return -1;
 }
 static unsigned columns(const struct du_widget *w)
@@ -92,11 +92,103 @@ static void draw_edit(struct du_ui *u,struct du_widget *w,int focused)
     if (focused) du_fill(c,(struct du_rect){w->box.x+4+(int)(w->cursor-w->offset)*8,w->box.y+4,1,16},DU_INK);
     c->clip=clip;
 }
+/* f2-33: caller-defined Details columns; the final column takes the rest. */
+static int column_left(const struct du_widget *w,unsigned col)
+{
+    unsigned percent=0; for (unsigned i=0;i<col && i<w->column_count;i++) percent+=w->columns[i].percent;
+    return col>=w->column_count?w->box.w:(int)((int64_t)w->box.w*percent/100);
+}
+static int column_at(const struct du_widget *w,int x)
+{
+    for (unsigned i=0;i+1<w->column_count;i++) if (x-w->box.x<column_left(w,i+1)) return (int)i;
+    return w->column_count?(int)w->column_count-1:0;
+}
+static void draw_columns(struct du_ui *u,struct du_widget *w)
+{
+    struct du_canvas *c=&u->canvas; struct du_rect all=c->clip;
+    for (unsigned i=0;i<w->column_count;i++) {
+        int left=column_left(w,i),right=column_left(w,i+1);
+        struct du_rect cell={w->box.x+left,w->box.y,right-left,22};
+        du_bevel(c,cell,0); c->clip=du_intersection(all,(struct du_rect){cell.x+2,cell.y,cell.w-4,22});
+        char label[48]; snprintf(label,sizeof(label),"%s%s",w->columns[i].label,
+            w->sort_column==(int)i?(w->sort_descending?" v":" ^"):"");
+        int width=(int)strlen(label)*8;
+        du_text(c,w->columns[i].right && width<cell.w-8?cell.x+cell.w-4-width:cell.x+4,cell.y+3,label,DU_INK);
+        c->clip=all;
+    }
+}
+static void draw_cells(struct du_ui *u,struct du_widget *w,unsigned index,int y,uint32_t ink)
+{
+    struct du_canvas *c=&u->canvas; struct du_rect all=c->clip; const struct du_row *row=&w->rows[index];
+    for (unsigned i=0;i<w->column_count;i++) {
+        int left=column_left(w,i),right=column_left(w,i+1);
+        c->clip=du_intersection(all,(struct du_rect){w->box.x+left+2,y,right-left-4,20});
+        const char *cell=w->cells?w->cells[(size_t)index*w->column_count+i]:NULL;
+        const char *text=cell?cell:!i&&row->name?row->name:"";
+        int x=w->box.x+left+4;
+        if (!i && row->icon) { du_icon(c,x-2,y+2,row->icon,16); x+=18; }
+        int width=(int)strlen(text)*8;
+        if (w->columns[i].right && width<right-left-8) x=w->box.x+right-4-width;
+        du_text(c,x,y+2,text,ink);
+    }
+    c->clip=all;
+}
+int du_tabs_hit(const struct du_widget *w,int x,int y)
+{
+    if (!du_contains(w->box,x,y)) return -1;
+    int at=w->box.x+2;
+    for (unsigned i=0;i<w->label_count;i++) { int width=(int)strlen(w->labels[i])*8+20;
+        if (x>=at && x<at+width) return (int)i; at+=width; }
+    return -1;
+}
+static void draw_tabs(struct du_ui *u,struct du_widget *w,int focused)
+{
+    struct du_canvas *c=&u->canvas; int at=w->box.x+2,bottom=w->box.y+w->box.h-1;
+    du_fill(c,(struct du_rect){w->box.x,bottom,w->box.w,1},DU_WHITE);
+    for (unsigned i=0;i<w->label_count;i++) {
+        int width=(int)strlen(w->labels[i])*8+20,selected=w->value==i;
+        struct du_rect r={at,w->box.y+(selected?0:3),width,w->box.h-(selected?0:3)};
+        du_fill(c,r,DU_BG); du_fill(c,(struct du_rect){r.x,r.y,r.w,1},DU_WHITE);
+        du_fill(c,(struct du_rect){r.x,r.y,1,r.h},DU_WHITE); du_fill(c,(struct du_rect){r.x+r.w-1,r.y,1,r.h},0x879399u);
+        if (selected) du_fill(c,(struct du_rect){r.x+1,bottom,r.w-2,1},DU_BG);
+        du_text(c,r.x+10,r.y+(selected?4:2),w->labels[i],DU_INK);
+        if (selected && focused) du_fill(c,(struct du_rect){r.x+8,r.y+r.h-5,r.w-16,1},DU_INK);
+        at+=width;
+    }
+}
+static int graph_y(const struct du_widget *w,unsigned value)
+{ if (value>100) value=100; return w->box.y+w->box.h-2-(int)((int64_t)(w->box.h-4)*value/100); }
+static void draw_graph(struct du_ui *u,struct du_widget *w)
+{
+    struct du_canvas *c=&u->canvas; du_fill(c,w->box,0x000000u);
+    for (int y=w->box.y+w->box.h-1;y>=w->box.y;y-=12) du_fill(c,(struct du_rect){w->box.x,y,w->box.w,1},0x00573fu);
+    for (int x=w->box.x+w->box.w-1;x>=w->box.x;x-=12) du_fill(c,(struct du_rect){x,w->box.y,1,w->box.h},0x00573fu);
+    unsigned capacity=w->total>1?w->total:2,n=w->sample_count<capacity?w->sample_count:capacity;
+    if (!w->samples || !n) return;
+    /* Newest sample at the right edge; integer Bresenham segments. */
+    for (unsigned i=0;i<n;i++) {
+        unsigned slot=capacity-n+i;
+        int x1=w->box.x+(int)((int64_t)(w->box.w-1)*slot/(capacity-1)),y1=graph_y(w,w->samples[w->sample_count-n+i]);
+        if (!i) { du_fill(c,(struct du_rect){x1,y1,1,1},0x00ff00u); continue; }
+        int x0=w->box.x+(int)((int64_t)(w->box.w-1)*(slot-1)/(capacity-1)),y0=graph_y(w,w->samples[w->sample_count-n+i-1]);
+        int dx=x1-x0,dy=y1>y0?y1-y0:y0-y1,sy=y0<y1?1:-1,err=dx-dy;
+        for (;;) { du_fill(c,(struct du_rect){x0,y0,1,1},0x00ff00u); if (x0==x1 && y0==y1) break;
+            int e2=2*err; if (e2>-dy) { err-=dy; x0++; } if (e2<dx) { err+=dx; y0+=sy; } }
+    }
+}
+static void draw_group(struct du_ui *u,struct du_widget *w)
+{
+    struct du_canvas *c=&u->canvas; struct du_rect b=w->box;
+    du_fill(c,(struct du_rect){b.x,b.y+7,b.w,1},0x879399u); du_fill(c,(struct du_rect){b.x,b.y+b.h-1,b.w,1},0x879399u);
+    du_fill(c,(struct du_rect){b.x,b.y+7,1,b.h-7},0x879399u); du_fill(c,(struct du_rect){b.x+b.w-1,b.y+7,1,b.h-7},0x879399u);
+    if (w->text[0]) { int width=(int)strlen(w->text)*8+8; du_fill(c,(struct du_rect){b.x+6,b.y,width,16},DU_BG); du_text(c,b.x+10,b.y,w->text,DU_INK); }
+}
 static void draw_list(struct du_ui *u,struct du_widget *w)
 {
     struct du_canvas *c=&u->canvas; du_fill(c,w->box,DU_WHITE);
     int header=w->view==DU_DETAILS?22:0;
-    if (header) {
+    if (header && w->column_count) draw_columns(u,w);
+    else if (header) {
         const char *labels[]={"Name","Size","Type","Modified"};
         int widths[]={w->box.w*43/100,w->box.w*17/100,w->box.w*18/100,w->box.w*22/100};
         int x=w->box.x;
@@ -111,6 +203,7 @@ static void draw_list(struct du_ui *u,struct du_widget *w)
         uint32_t ink=row->selected?DU_WHITE:DU_INK;
         if (row->selected) du_fill(c,c->clip,DU_SELECTED);
         if (w->view==DU_ICONS) { du_icon(c,x+32,y+2,row->icon,32); du_text(c,x+4,y+40,row->name,ink); }
+        else if (header && w->column_count) draw_cells(u,w,i,y,ink);
         else {
             int indent=w->kind==DU_TREE?(int)row->depth*12:0;
             if (w->kind==DU_TREE) du_text(c,x+indent,y+2,row->expanded?"-":"+",ink);
@@ -161,6 +254,9 @@ void du_render(struct du_ui *u)
         case DU_PROGRESS: du_bevel(c,w->box,1); du_fill(c,(struct du_rect){w->box.x+2,w->box.y+2,w->total?(int)((uint64_t)(unsigned)(w->box.w-4)*w->value/w->total):0,w->box.h-4},DU_SELECTED); break;
         case DU_STATUS: du_bevel(c,w->box,1); du_text(c,w->box.x+4,w->box.y+4,w->text,DU_INK); break;
         case DU_LABEL: du_text(c,w->box.x,w->box.y,w->text,DU_INK); break;
+        case DU_TABS: draw_tabs(u,w,u->focus==(int)i); break;
+        case DU_GRAPH: draw_graph(u,w); break;
+        case DU_GROUP: draw_group(u,w); break;
         }
         c->clip=clip;
     }
@@ -187,6 +283,14 @@ void du_render(struct du_ui *u)
         for (unsigned i=0;i<d->count;i++) { struct du_rect b=dialog_button(u,i); du_bevel(c,b,d->focus==(int)i+1); du_text(c,b.x+5,b.y+4,d->buttons[i],DU_INK); }
     }
     u->dirty=0;
+}
+/* Set-1 make codes for ASCII letters (public keyboard table). */
+static unsigned letter_code(char ch)
+{
+    static const unsigned char codes[26]={0x1e,0x30,0x2e,0x20,0x12,0x21,0x22,0x23,0x17,0x24,0x25,0x26,0x32,
+                                          0x31,0x18,0x19,0x10,0x13,0x1f,0x14,0x16,0x2f,0x11,0x2d,0x15,0x2c};
+    if (ch>='A' && ch<='Z') ch=(char)(ch-'A'+'a');
+    return ch>='a' && ch<='z'?codes[ch-'a']:0;
 }
 static size_t previous(const char *s,size_t n) { if (!n) return 0; do { n--; } while (n && ((unsigned char)s[n]&0xc0)==0x80); return n; }
 static size_t next(const char *s,size_t n) { if (!s[n]) return n; n++; while (((unsigned char)s[n]&0xc0)==0x80) n++; return n; }
@@ -253,9 +357,13 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
             if (hit<0) { if (e->code==3) emit(u,DU_CONTEXT,-1,-1); return; }
             struct du_widget *w=&u->widgets[hit]; u->focus=hit;
             if (e->code==1) u->capture=hit;
-            if (w->kind==DU_LIST || w->kind==DU_TREE) {
+            if (w->kind==DU_TABS) {
+                int n=du_tabs_hit(w,u->mouse_x,u->mouse_y);
+                if (n>=0 && e->code==1) { w->value=(unsigned)n; emit(u,DU_SELECT,w->id,n); }
+            } else if (w->kind==DU_LIST || w->kind==DU_TREE) {
                 int n=du_list_hit(w,u->mouse_x,u->mouse_y);
-                if (w->view==DU_DETAILS && u->mouse_y<w->box.y+22 && e->code==1) {
+                if (w->view==DU_DETAILS && u->mouse_y<w->box.y+22 && e->code==1 && w->column_count) emit(u,DU_SORT,w->id,column_at(w,u->mouse_x));
+                else if (w->view==DU_DETAILS && u->mouse_y<w->box.y+22 && e->code==1) {
                     int x=(u->mouse_x-w->box.x)*100/(w->box.w?w->box.w:1); emit(u,DU_SORT,w->id,x<43?0:x<60?1:x<78?2:3);
                 } else {
                     if (n>=0) w->active=(unsigned)n;
@@ -297,13 +405,21 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
             const struct du_menu_item *item=&u->menus[m].items[i];
             if (!item->disabled && item->key==code && item->modifiers==u->modifiers) { emit(u,DU_ACTIVATE,item->id,0); return; }
         }
+        for (unsigned i=0;i<u->count;i++) { const struct du_widget *w=&u->widgets[i];
+            if (w->kind==DU_BUTTON && w->key && !w->hidden && !w->disabled && w->key==code && w->key_modifiers==u->modifiers) { emit(u,DU_ACTIVATE,w->id,0); return; } }
         if ((u->modifiers&DU_ALT) && code<128) {
-            static const unsigned menu_keys[]={0x21,0x12,0x2f,0x22,0x23};
-            for (unsigned i=0;i<u->menu_count && i<5;i++) if (code==menu_keys[i]) { u->menu=(int)i; u->menu_item=0; u->dirty=1; return; }
+            /* Each menu's mnemonic is the first letter of its label (set-1 code). */
+            for (unsigned i=0;i<u->menu_count;i++) if (code==letter_code(u->menus[i].label[0])) { u->menu=(int)i; u->menu_item=0; u->dirty=1; return; }
+        }
+        if ((code==0x0f || code==0x149 || code==0x151) && (u->modifiers&DU_CTRL)) {
+            for (unsigned i=0;i<u->count;i++) { struct du_widget *w=&u->widgets[i];
+                if (w->kind!=DU_TABS || w->hidden || !w->label_count) continue;
+                int back=code==0x149 || (code==0x0f && (u->modifiers&DU_SHIFT));
+                w->value=(w->value+(back?w->label_count-1:1))%w->label_count; emit(u,DU_SELECT,w->id,(int)w->value); return; }
         }
         if (code==0x0f && u->count) {
             for (unsigned n=0;n<u->count;n++) { u->focus=(u->focus+1)%(int)u->count; struct du_widget *w=&u->widgets[u->focus];
-                if (!w->hidden && !w->disabled && w->kind!=DU_LABEL && w->kind!=DU_STATUS) break; }
+                if (!w->hidden && !w->disabled && w->kind!=DU_LABEL && w->kind!=DU_STATUS && w->kind!=DU_GROUP && w->kind!=DU_GRAPH) break; }
             u->dirty=1; return;
         }
         if (u->focus>=0) {
@@ -324,6 +440,8 @@ void du_input(struct du_ui *u,const struct ciuki_input_event *e)
                 if (code==0x15d || (code==0x44 && (u->modifiers&DU_SHIFT))) { emit(u,DU_CONTEXT,w->id,(int)w->active); return; }
             }
             if (w->kind==DU_BUTTON && (code==0x1c || code==0x39)) emit(u,DU_ACTIVATE,w->id,0);
+            if (w->kind==DU_TABS && w->label_count && (code==0x14b || code==0x14d)) {
+                w->value=(w->value+(code==0x14b?w->label_count-1:1))%w->label_count; emit(u,DU_SELECT,w->id,(int)w->value); }
         }
         return;
     }

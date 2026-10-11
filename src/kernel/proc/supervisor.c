@@ -5,6 +5,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/audio.h>
 #pragma weak audio_mixer_delegate
+#pragma weak proc_authority_install
 
 static const struct supervisor_io_ops *supervisor_io;
 static uint32_t desktop_pid, desktop_deaths;
@@ -57,6 +58,7 @@ void supervisor_capture_tail(const struct supervisor_capture *c, uint8_t *out)
 }
 void supervisor_set_io_ops(const struct supervisor_io_ops *ops) { supervisor_io = ops; }
 uint32_t supervisor_desktop_deaths(void) { return desktop_deaths; }
+uint32_t supervisor_desktop_pid(void) { return desktop_pid; }
 
 int supervisor_spawn(const char *path, const char *const argv[], const char *cwd,
                       bool desktop, struct process **out)
@@ -80,6 +82,7 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     struct proc_thread *thread = 0;
     uint32_t esp = 0;
     if (!err) err = proc_prepare(proc_supervisor(), &p);
+    if (!err) proc_set_name(p, path);
     if (!err) err = elf_validate(&file, &image);
     if (!err) err = elf_load(&file, &image, p->memory);
     if (!err) err = proc_thread_prepare(p, image.entry, 0, 0, CIUKI_THREAD_STACK_DEFAULT, 0, 0, true, &thread);
@@ -95,6 +98,17 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
             char mixer_env[32];
             int length = ksnprintf(mixer_env, sizeof(mixer_env), "CIUKI_MIXER_FD=%d", fd);
             err = proc_strings_add(strings, mixer_env, (uint32_t)length + 1, true);
+        }
+    }
+    if (!err && desktop && proc_authority_install) {
+        /* f2-33: termination authority, delegated like the mixer handle. The
+         * desktop may pass it explicitly to the Task Manager it launches. */
+        int fd = proc_authority_install(p);
+        if (fd < 0) err = fd;
+        else {
+            char tasks_env[32];
+            int length = ksnprintf(tasks_env, sizeof(tasks_env), "CIUKI_TASKS_FD=%d", fd);
+            err = proc_strings_add(strings, tasks_env, (uint32_t)length + 1, true);
         }
     }
     if (!err) err = proc_stack_build(p->memory, strings, image.entry, thread->tls, &esp);

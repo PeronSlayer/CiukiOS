@@ -473,3 +473,18 @@ slot on save failure. No refill/IRQ path reads or writes a file. Both device
 leaves reject creation/truncation/directory/append flags, seek and positioned
 I/O (ESPIPE); mixer byte I/O gives EBADF. No recording, poll/select or UI is
 introduced. Earlier F2-only namespace descriptions remain historical.
+
+## F2-33 amendment: process enumeration and the termination authority (2026-10-11)
+
+The SDK adds MIT-licensed `ciuki/proc.h` (`__CIUKI_PROC_VERSION__=1`):
+`int ciuki_proc_list(void *buffer, uint32_t bytes)` returns the number of
+process records written after the system record, and
+`int ciuki_proc_terminate(ciuki_pid_t pid, int signo, int authority_fd)`
+returns 0; both return -1 with errno on failure. They wrap calls 70 and 71 of
+[execution-abi.md](execution-abi.md#f2-33-amendment-process-enumeration-and-termination-requests-2026-10-11);
+a negative `authority_fd` requests without authority. `CIUKI_TASKS_ENV`
+names the environment variable (`CIUKI_TASKS_FD`) through which PID 1 tells
+the desktop its authority descriptor. These are CiukiOS extensions, not a
+POSIX `/proc` or `sysctl` interface; `kill` and process groups are unchanged
+and `setpgid`/`setsid` stay excluded. The raw stubs `ciuki_raw_proc_list` and
+`ciuki_raw_proc_terminate` are generated from `abi.h` like every other call.
