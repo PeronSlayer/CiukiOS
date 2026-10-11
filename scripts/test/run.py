@@ -17,6 +17,7 @@ import signal
 import subprocess
 import sys
 import time
+import wave
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from evidence import Parser as EvidenceParser, ApplicationCapture, EvidenceError, EvidenceNotRun, f2_metadata
@@ -870,6 +871,76 @@ def teardown(host,unit,process,qmp,cgroup):
     return result
 
 
+def check_audio_wav(path, expected):
+    """Bounded PCM16 stereo waveform evidence; no third-party FFT dependency."""
+    import array
+    import math
+    if path.stat().st_size > 16 * 1024 * 1024:
+        raise EvidenceError('audio capture exceeds 16 MiB')
+    with wave.open(str(path), 'rb') as capture:
+        rate, count = capture.getframerate(), capture.getnframes()
+        if capture.getnchannels() != 2 or capture.getsampwidth() != 2 or capture.getcomptype() != 'NONE':
+            raise EvidenceError('audio capture must be uncompressed PCM16 stereo')
+        if rate < 8000 or rate > 96000 or count > rate * 30:
+            raise EvidenceError('audio capture rate/duration exceeds bounds')
+        samples = array.array('h', capture.readframes(count))
+    if sys.byteorder != 'little': samples.byteswap()
+    if len(samples) != count * 2: raise EvidenceError('truncated audio capture')
+    threshold = expected.get('silence_threshold', 16)
+    first, last = None, None
+    for i in range(count):
+        if max(abs(samples[2*i]), abs(samples[2*i+1])) > threshold:
+            if first is None: first = i
+            last = i + 1
+    if first is None: raise EvidenceError('audio capture is silent')
+    duration = (last - first) / rate
+    result = {'sample_rate':rate, 'capture_frames':count, 'first_active_frame':first,
+              'active_frames':last-first, 'duration_seconds':duration, 'windows':[]}
+    failures = []
+    if not expected['duration'][0] <= duration <= expected['duration'][1]: failures.append('duration')
+    maximum = gap = 0
+    for i in range(first, last):
+        gap = gap + 1 if max(abs(samples[2*i]), abs(samples[2*i+1])) <= threshold else 0
+        maximum = max(maximum, gap)
+    result['max_stereo_gap_frames'] = maximum
+    quantum = expected.get('quantum_frames', 256) * rate / 48000
+    if maximum > quantum: failures.append('stereo gap')
+    if len(expected['windows']) > 16: raise EvidenceError('too many audio analysis windows')
+    for declaration in expected['windows']:
+        if declaration['channel'] not in (0, 1): raise EvidenceError('invalid audio channel')
+        start, end = (first + round(t * rate) for t in declaration['seconds'])
+        if not first <= start < end <= last: raise EvidenceError('audio analysis window outside active capture')
+        values = samples[2*start + declaration['channel']:2*end:2]
+        rms = math.sqrt(sum(v*v for v in values) / len(values))
+        observed = {'channel':declaration['channel'], 'seconds':declaration['seconds'], 'rms':rms}
+        if not declaration['rms'][0] <= rms <= declaration['rms'][1]: failures.append('channel RMS')
+        if 'frequency' in declaration:
+            # Downsample to about 3 kHz; scan a declared bounded band using DFT.
+            stride = max(1, rate // 3000)
+            signal = values[::stride]
+            low, high = declaration.get('dft_band', [300,1000])
+            if not 1 <= low < high <= min(1200,rate/(2*stride)) or high-low > 1000:
+                raise EvidenceError('invalid audio DFT band')
+            power = []
+            for frequency in range(low, high+1):
+                angle = 2*math.pi*frequency*stride/rate
+                re = sum(v*math.cos(angle*i) for i,v in enumerate(signal))
+                im = sum(v*math.sin(angle*i) for i,v in enumerate(signal))
+                power.append((re*re+im*im,frequency))
+            dominant = max(power)[1]
+            observed['dominant_hz'] = dominant
+            if abs(dominant - declaration['frequency']) > declaration.get('frequency_tolerance',2): failures.append('frequency')
+            gap = longest = 0
+            for v in values:
+                gap = gap+1 if abs(v) <= threshold else 0
+                longest = max(longest,gap)
+            observed['max_gap_frames'] = longest
+            if longest > quantum: failures.append('channel gap')
+        result['windows'].append(observed)
+    result['failures'] = failures
+    return result
+
+
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
     request=case.get('selector',f"f0:{case['probe']} run={{run_id}}").format(run_id=run_id)
@@ -920,8 +991,14 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         args+=['-icount',profile['icount']]
     # A FIFO file backend keeps COM1 file output bounded by the host collector.
     args+=['-serial','none' if devices.get('serial')=='none' else 'file:serial.fifo']
-    if profile.get('audio') and not devices.get('audio')=='none':
-        args+=['-audiodev','none,id=silent','-device',profile['audio']+',audiodev=silent']
+    audio_exception = devices.get('audio')
+    if audio_exception not in (None, 'none', 'ac97'): raise res.Refusal('unknown audio device exception')
+    if profile.get('audio') or audio_exception == 'ac97':
+        args += ['-audiodev', 'none,id=silent']
+    if audio_exception == 'ac97':
+        args += ['-audiodev', 'wav,id=cap,path=audio.wav', '-device', 'AC97,audiodev=cap']
+    elif profile.get('audio') and audio_exception != 'none':
+        args += ['-device', profile['audio']+',audiodev=silent']
     for index,disk in fixture_disks(case):
         args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache]
     if case.get('crash_cut'):args=['stdbuf','-oL',*args]
@@ -1000,7 +1077,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     'arguments':args,'scope_arguments':scoped,'machine':profile['machine'],'cpu':profile['cpu'],
                     'accelerator':profile['accelerator'],'ram_mib':profile['ram_mib'],'profile':profile,
                     'firmware_sha256':sha(firmware),'devices':{'ide':'PIIX','i8042':True,'vga':case.get('device_exceptions',{}).get('vga',profile['vga']),
-                        'com1':case.get('device_exceptions',{}).get('serial','file'),'audio':profile.get('audio','none')}}}
+                        'com1':case.get('device_exceptions',{}).get('serial','file'),'audio':case.get('device_exceptions',{}).get('audio',profile.get('audio','none'))}}}
     result['build_git_revision']=result['build_manifest']['revision'];result['build_dirty']=result['build_manifest']['dirty']
     if case.get('sweep'):result['sweep_boot']=case.get('_sweep_boot',1)
     actions=Actions(case.get('actions',[]))
@@ -1295,6 +1372,14 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     result['crash_overlay']=[{'lba':lba,**host.sector_digest(overlay,directory,lba,1,'qcow2')} for lba in sectors]
             except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e:
                 result['outcome']='fail';result['reason']=str(e)
+        if case.get('audio_expectations') and result['outcome'] == 'pass':
+            try:
+                if not result['cleanup']['clean']: raise EvidenceError('QEMU must stop before WAV analysis')
+                if case.get('device_exceptions',{}).get('audio') != 'ac97': raise EvidenceError('WAV expectations require AC97 capture')
+                result['audio'] = check_audio_wav(directory/'audio.wav', case['audio_expectations'])
+                if result['audio']['failures']: raise EvidenceError('audio waveform: '+', '.join(result['audio']['failures']))
+            except (OSError, ValueError, RuntimeError, EOFError, wave.Error) as e:
+                result['outcome']='fail'; result['reason']=str(e)
         result['image']['sha256_after']=sha(image)
         if result['image']['sha256_after']!=result['image']['sha256']:
             result['outcome']='fail';result['reason']='canonical image changed during run'

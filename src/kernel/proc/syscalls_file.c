@@ -6,6 +6,9 @@
 #include <ciuki/files.h>
 #include <ciuki/clock.h>
 #include <ciuki/signal.h>
+#include <ciuki/audio.h>
+#pragma weak audio_write_user
+#pragma weak audio_devctl
 
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
@@ -87,6 +90,11 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     struct file_description *d = op->description;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
+    if (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER) {
+        if (positioned) return -ESPIPE;
+        if (d->node->kind == PX_MIXER || !write) return -EBADF;
+        return -EBADF; /* audio write dispatch owns its own cancellable operation */
+    }
     if (d->node->kind != PX_FILE && d->node->kind != PX_NULL && d->node->kind != PX_CONSOLE) return -EISDIR;
     if (positioned && d->node->kind != PX_FILE) return -ESPIPE;
     int64_t offset = scalar64(tf->esi, tf->edi);
@@ -135,7 +143,7 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     int err = 0;
     if (tf->eax == CIUKI_SYS_GETDENTS && d->node->kind != PX_DIRECTORY &&
         d->node->kind != PX_MNT && d->node->kind != PX_DEV) return -ENOTDIR;
-    if (tf->eax == CIUKI_SYS_LSEEK64 && (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE)) return -ESPIPE;
+    if (tf->eax == CIUKI_SYS_LSEEK64 && (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER)) return -ESPIPE;
     if (tf->eax == CIUKI_SYS_LSEEK64)
         err = output_pin(op, tf->edi, sizeof(int64_t), true);
     else if (tf->eax == CIUKI_SYS_FSTAT)
@@ -237,6 +245,7 @@ static int pathname_call(struct file_operation *op, const struct trap_frame *tf)
 static int file_dispatch(struct process *p, struct trap_frame *tf)
 {
     uint32_t nr = tf->eax;
+    if (nr == CIUKI_SYS_DEVCTL) return audio_devctl ? audio_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
     if (nr == CIUKI_SYS_UNAME) return file_uname(tf->ebx);
     /* Flags/structure checks precede descriptor and pointer validation. */
     if (nr == CIUKI_SYS_OPEN) { int err = file_open_flags(tf->ecx, tf->edx); if (err) return err; }
@@ -263,6 +272,8 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
         if (!d) return nr == CIUKI_SYS_FSTAT ? -EOPNOTSUPP : nr == CIUKI_SYS_GETDENTS ? -ENOTDIR :
             nr == CIUKI_SYS_LSEEK64 || nr == CIUKI_SYS_PREAD || nr == CIUKI_SYS_PWRITE ? -ESPIPE : -EBADF;
     }
+    if (d && d->node->kind == PX_AUDIO && nr == CIUKI_SYS_WRITE)
+        return audio_write_user ? audio_write_user(d, tf->ecx, tf->edx) : -ENODEV;
     struct file_operation *op = kzalloc(sizeof(*op));
     if (!op) return -ENOMEM;
     op->process = p; op->cwd = p->cwd; px_retain(op->cwd);
@@ -291,7 +302,7 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
 }
 bool file_syscall(struct trap_frame *tf)
 {
-    if ((tf->eax < CIUKI_SYS_OPEN || tf->eax > CIUKI_SYS_NANOSLEEP) && tf->eax != CIUKI_SYS_UNAME) return false;
+    if ((tf->eax < CIUKI_SYS_OPEN || tf->eax > CIUKI_SYS_NANOSLEEP) && tf->eax != CIUKI_SYS_UNAME && tf->eax != CIUKI_SYS_DEVCTL) return false;
     struct process *p = proc_current();
     tf->eax = (uint32_t)(p ? file_dispatch(p, tf) : -ENOSYS);
     return true;

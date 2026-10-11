@@ -44,7 +44,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         *selection = parsed;
         return true;
     }
-    if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1' && s[1] != '2') || s[2] != ':')
+    if (len < 3 || len > 64 || s[0] != 'f' || (s[1] != '0' && s[1] != '1' && s[1] != '2' && s[1] != '4') || s[2] != ':')
         return false;
     for (unsigned j = 0; j < len; j++)
         if ((uint8_t)s[j] < 32 || (uint8_t)s[j] > 126)
@@ -68,8 +68,9 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         "elf-load", "spawn-wait", "fd-table", "mmap", "signals-fault",
         "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
     };
-    const char *const *names = parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
-    unsigned count = parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
+    static const char *const f4_names[] = { "audio-native" };
+    const char *const *names = parsed.phase == 4 ? f4_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
+    unsigned count = parsed.phase == 4 ? ARRAY_SIZE(f4_names) : parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
     bool known = false;
     for (unsigned n = 0; n < count; n++)
         if (!strncmp(parsed.probe, names[n], sizeof(parsed.probe)))
@@ -231,6 +232,14 @@ void probes_dispatch(const struct probe_selection *selection,
     const char *probe = selection->probe;
     bool all = !strncmp(probe, "all", 4);
     bool core = !strncmp(probe, "core", 5);
+    if (selection->phase == 4) {
+        for (unsigned i = 0; i < tables->f4_count; i++)
+            if (!strncmp(probe, tables->f4[i].name, sizeof(selection->probe))) {
+                tables->f4[i].fn(); return;
+            }
+        rec_emit(probe, "BEGIN", 0);
+        rec_emit(probe, "ERROR", "status=not_run reason=missing_probe"); return;
+    }
     if (selection->phase == 2) {
         for (unsigned i = 0; i < tables->f2_count; i++) {
             const struct ciuki_f2_probe *p = &tables->f2[i];

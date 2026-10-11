@@ -18,6 +18,7 @@ ALLOWED = {
     'probes/f2_probes_desktop.c',
     'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
+    'probes/f4_probes_audio.c', # f4-01 native audio controller
     'drivers/ata_probe.c',
     'drivers/fbdev_probe.c',
     'drivers/i8042_probe.c',

@@ -7,6 +7,13 @@
 #include "selector.h"
 
 static unsigned calls, begins, ends;
+void rec_emit(const char *probe,const char *event,const char *format,...)
+{
+    (void)probe;(void)event;(void)format;
+    assert(0 && "unexpected missing-probe evidence");
+}
+void klog(const char *format,...)
+{ (void)format;assert(0 && "unexpected unknown-probe log"); }
 extern bool probes_operator_mode;
 extern bool probes_operator_wait(bool (*)(void *), uint64_t (*)(uint32_t),
                                 void (*)(uint32_t), void (*)(bool), void *);
@@ -60,6 +67,10 @@ static void selection_tests(void)
     for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) assert(!probes_parse_selector(bad[i], strlen(bad[i]), 0, &s));
     assert(!sweep_parse(good[0], 65, &c));
     assert(probes_parse_selector("f0:all run=12345678", 19, 0, &s));
+    const char *audio_selector="f4:audio-native run=12345678";
+    assert(probes_parse_selector(audio_selector,strlen(audio_selector),0,&s));
+    assert(s.phase==4 && !strcmp(s.probe,"audio-native"));
+    assert(!probes_parse_selector("f4:all run=12345678",19,0,&s));
 }
 static void order_tests(void)
 {
@@ -67,7 +78,9 @@ static void order_tests(void)
     const struct probe_def f1[] = {{"registry",pass},{"input",fail},{"fat-write",pass},
         {"cache",pass},{"mount-crash",pass},{"safe",pass},{"bootlog",pass}};
     const struct ciuki_f2_probe f2[] = {{"elf-load",pass},{"fd-table",fail},{"app-gate",pass}};
-    const struct probe_tables t = {f0,f1,2,7,f2,3};
+    const struct probe_def f4[] = {{"audio-native",pass}};
+    const struct probe_tables t = {.f0=f0,.f1=f1,.f0_count=2,.f1_count=7,
+        .f2=f2,.f2_count=3,.f4=f4,.f4_count=1};
     const struct probe_hooks h = {app_begin,app_end,panic_probe};
     const char *expected[] = {"registry","input","cache","safe","fat-write","fat-write",
         "mount-crash","mount-crash","bootlog","bootlog"};
@@ -84,6 +97,9 @@ static void order_tests(void)
     for(unsigned i=0;i<3;i++) { assert(sweep_at(2,i,&t,&step)); sweep_dispatch(&step,&cursor,&t,&h); }
     assert(begins==3 && ends==3 && calls==13);
     assert(!sweep_at(3,16,&t,&step));
+    struct probe_selection selected={.phase=4,.probe="audio-native",.run="12345678"};
+    probes_dispatch(&selected,&t,&h);
+    assert(calls==14 && begins==3 && ends==3); /* F4 has no F2 app framing */
 }
 static unsigned stage, delays, polls; static bool stuck;
 static void disable(void *c) { (void)c; assert(stage==0); stage=1; }

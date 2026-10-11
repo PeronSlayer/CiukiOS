@@ -179,6 +179,9 @@ def main() -> int:
     files_payload = OUT / "files-payload.elf"
     run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
          str(ROOT / "tests/host/proc/files_payload.asm"), "-o", str(files_payload)])
+    audio_payload = OUT / "audio-payload.elf"
+    run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
+         str(ROOT / "tests/host/audio/payload.asm"), "-o", str(audio_payload)])
     objs = []
     for asm in sorted((SRC / "arch").glob("*.asm")) + sorted((SRC / "vm").glob("*.asm")) + [SRC / "probes" / "payload_blob.asm"]:
         o = OBJ / (asm.stem + ".o")
@@ -188,13 +191,14 @@ def main() -> int:
     for c in sorted(list((SRC / "core").glob("*.c")) + list((SRC / "lib").glob("*.c")) +
                     list((SRC / "arch").glob("*.c")) + list((SRC / "probes").glob("*.c")) +
                     list((SRC / "drivers").glob("*.c")) + list((SRC / "fs").glob("*.c")) +
-                    list((SRC / "proc").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
+                    list((SRC / "audio").glob("*.c")) + list((SRC / "proc").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
         run(["clang", *CFLAGS, *frame_flags(c), f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
              f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',
              f'-DCIUKI_SIGNAL_PAYLOAD_BIN="{signal_payload}"',
              f'-DCIUKI_DESKTOP_PAYLOAD_BIN="{desktop_payload}"',
              f'-DCIUKI_FILES_PAYLOAD_BIN="{files_payload}"',
+             f'-DCIUKI_AUDIO_PAYLOAD_BIN="{audio_payload}"',
              f"-DCIUKI_BUILD_EPOCH={epoch}LL",
              f"-DCIUKI_BUILD_DIRTY={bdirty}", "-I", str(SRC / "include"),
              "-c", str(c), "-o", str(o)])

@@ -32,8 +32,13 @@ selector_validate:
     jmp .prefix
 .try_f2:
     cmp byte [si+1], '2'
-    jne .bad
+    jne .try_f4
     mov bx, f2_probe_names
+    jmp .prefix
+.try_f4:
+    cmp byte [si+1], '4'
+    jne .bad
+    mov bx, f4_probe_names
 .prefix:
     cmp byte [si+2], ':'
     jne .bad
@@ -263,6 +268,7 @@ f1_probe_names:
 f1_sweep_name db 'sweep',0,'all',0,'core',0
     db 'registry',0,'input',0,'input-fault',0,'framebuffer',0,'ata',0,'ata-fault',0
     db 'partition',0,'fat-read',0,'fat-write',0,'cache',0,'mount-crash',0,'safe',0,'bootlog',0,0
+f4_probe_names db 'audio-native',0,0
 f2_probe_names:
 f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'signals-fault',0
     db 'threads-wait',0

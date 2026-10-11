@@ -5,6 +5,8 @@
 #include <ciuki/desktop.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/signal.h>
+#include <ciuki/audio.h>
+#pragma weak audio_device_close
 
 static uint32_t file_descriptions;
 uint32_t file_description_count(void) { return file_descriptions; }
@@ -60,6 +62,7 @@ int file_description_close(struct file_description *d)
 {
     if (--d->references) return 0;
     int err = 0;
+    if (audio_device_close) audio_device_close(d);
     if (d->node) {
         struct px_namespace *s = d->node->space;
         fs_lock_take(&s->vfs->lock);
@@ -119,6 +122,7 @@ int file_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg)
     uint32_t *status = d ? &d->flags : desktop ? &desktop->flags : 0;
     if (!status) return -EINVAL;
     if (cmd == F_GETFL) return (int)*status;
+    if (cmd == F_SETFL && d && (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER) && (arg & O_APPEND)) return -EINVAL;
     if (cmd == F_SETFL) { *status = (*status & O_ACCMODE) | arg; return 0; }
     return -EINVAL;
 }
@@ -151,7 +155,7 @@ int file_open(struct process *p, const char *path, uint32_t flags, uint32_t mode
 int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, int64_t *out)
 {
     if (whence > SEEK_END) return -EINVAL;
-    if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE) return -ESPIPE;
+    if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER) return -ESPIPE;
     if (d->node->kind != PX_FILE) {
         if (off || whence != SEEK_SET) return -EINVAL;
         d->position = 0; d->cursor = 0; *out = 0; return 0;

@@ -13,6 +13,8 @@
 #include <ciuki/biosvm.h>
 #include <ciuki/registry.h>
 #include <ciuki/storage.h>
+#include <ciuki/audio.h>
+#pragma weak audio_init
 
 static struct drivers_state state;
 static struct activation_entry activation_ledger[ACTIVATION_LEDGER_MAX];
@@ -136,5 +138,6 @@ void drivers_init(void)
     storage_init();
     file_clock_start(CIUKI_BUILD_EPOCH, true);
     int native_files = files_bootstrap(&storage_get()->vfs);
+    if (audio_init) audio_init(&storage_get()->vfs);
     if (native_files) klog("[files] initialization failed: %d", native_files);
 }

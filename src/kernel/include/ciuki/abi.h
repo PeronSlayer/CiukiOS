@@ -484,10 +484,108 @@ enum ciuki_syscall {
     CIUKI_SYS_THREAD_DETACH = 66,
     CIUKI_SYS_DISPLAY_INFO = 67,
     CIUKI_SYS_THREAD_KILL = 68,
+    CIUKI_SYS_DEVCTL = 69,
 };
 
 /* pack(4) is scoped and restores the includer's previous setting. */
 #pragma pack(push, 4)
+
+/* F4-01: fixed copied device-control extension. */
+#define CIUKI_AUDIO_VERSION 1u
+#define CIUKI_AUDIO_U8 1u
+#define CIUKI_AUDIO_S16LE 2u
+#define AUDIO_GET_CAPS 0x4101u
+#define AUDIO_SET_FORMAT 0x4102u
+#define AUDIO_GET_STATUS 0x4103u
+#define AUDIO_SET_GAIN 0x4104u
+#define AUDIO_DRAIN 0x4105u
+#define AUDIO_RESET 0x4106u
+#define MIXER_GET_MASTER 0x4201u
+#define MIXER_SET_MASTER 0x4202u
+#define CIUKI_MIXER_DEFAULTS 0u
+#define CIUKI_MIXER_SAVED 1u
+#define CIUKI_MIXER_UNSAVED 2u
+struct ciuki_audio_caps {
+    uint32_t version;
+    uint32_t size;
+    uint32_t formats;
+    uint32_t min_rate;
+    uint32_t max_rate;
+    uint32_t output_rate;
+    uint32_t max_streams;
+    uint32_t ring_frames;
+    uint32_t period_frames;
+    uint32_t published_periods;
+    uint32_t backend;
+    uint32_t generation;
+    uint32_t vendor;
+    uint32_t device;
+    uint32_t subsystem;
+    uint32_t revision;
+    uint32_t codec_id;
+    uint32_t drain_ms;
+    uint32_t reserved[2];
+};
+struct ciuki_audio_format {
+    uint32_t version;
+    uint32_t size;
+    uint32_t rate;
+    uint32_t format;
+    uint32_t channels;
+    uint32_t output_rate;
+    uint32_t reserved[2];
+};
+struct ciuki_audio_gain {
+    uint32_t version;
+    uint32_t size;
+    uint32_t left;
+    uint32_t right;
+    uint32_t reserved[2];
+};
+struct ciuki_audio_command {
+    uint32_t version;
+    uint32_t size;
+    uint32_t reserved[2];
+};
+struct ciuki_audio_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t queued_frames;
+    uint32_t state;
+    uint32_t output_rate;
+    uint32_t generation;
+    uint64_t accepted_frames;
+    uint64_t consumed_frames;
+    uint64_t output_frames;
+    uint64_t fetched_frames;
+    uint64_t source_starvation;
+    uint64_t fifo_errors;
+    uint64_t dma_halts;
+    uint64_t deadline_misses;
+    int32_t last_error;
+    uint32_t stream_generation;
+    uint32_t max_service_us;
+    uint32_t max_irq_us;
+    uint32_t transport_frames;
+    uint32_t reserved;
+};
+struct ciuki_mixer_master {
+    uint32_t version;
+    uint32_t size;
+    uint32_t left;
+    uint32_t right;
+    uint32_t mute;
+    uint32_t save_state;
+    int32_t save_error;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_audio_caps) == 80, "audio caps");
+_Static_assert(sizeof(struct ciuki_audio_format) == 32, "audio format");
+_Static_assert(sizeof(struct ciuki_audio_status) == 112, "audio status");
+_Static_assert(__builtin_offsetof(struct ciuki_audio_status, accepted_frames) == 24, "audio counters");
+_Static_assert(sizeof(struct ciuki_audio_gain) == 24, "audio gain");
+_Static_assert(sizeof(struct ciuki_audio_command) == 16, "audio command");
+_Static_assert(sizeof(struct ciuki_mixer_master) == 32, "mixer master");
 
 struct ciuki_timespec {
     int64_t tv_sec; /* 0 */

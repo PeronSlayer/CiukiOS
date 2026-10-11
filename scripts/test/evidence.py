@@ -185,7 +185,12 @@ class Parser:
             raise EvidenceError('END requires PASS or FAIL')
         if event == 'ERROR' and record.get('status') == 'not_run':
             ready = [r for r in self.records if r['event'] == 'READY']
-            if record.get('reason') != 'missing_probe' or len(ready) != 1:
+            audio_disabled = (self.probe == 'audio-native' and len(ready) == 1 and
+                              ready[0].get('case') == 'backend' and ready[0].get('status') == 'not_run' and
+                              ready[0].get('reason') == record.get('reason') and
+                              record.get('reason') in ('device_absent','safe_mode','invalid_bars',
+                                                       'routing_unqualified','aclink_dependency'))
+            if len(ready) != 1 or (record.get('reason') != 'missing_probe' and not audio_disabled):
                 raise EvidenceError('missing probe requires READY then ERROR')
         if event in ('END','PANIC','ERROR','NOT_RUN'):
             self.terminal = record
