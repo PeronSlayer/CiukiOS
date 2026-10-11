@@ -28,6 +28,10 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...);
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra);
 
 void probe_user_report(struct task *t, const char *msg, uint32_t len);
+/* F3 failure diagnostic (f3_probes_vm.c): a DOS VM's text screen as
+ * "group=screen row=N text=..." records in the record grammar. */
+struct dosvm;
+void probe_dos_screen(const char *probe, struct dosvm *v);
 void probes_main(void *arg);      /* kernel task: parse selector, run probes */
 
 #endif

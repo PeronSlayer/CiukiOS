@@ -89,23 +89,6 @@ static void video_devices(const char *probe, struct dosvm *v)
              d.irr[0], d.isr[0], d.imr[0], d.queued_bytes, d.held_keys, d.delivered[0], d.delivered[1],
              d.last_vector, d.pic_base[0], d.pic_base[1]);
 }
-/* Lead diagnostic: the guest screen when a stage does not arrive. */
-static void video_screen(const char *probe, struct dosvm *v)
-{
-    const uint16_t *text = dosvm_text(v, 0);
-    for (unsigned row = 0; row < 25; row++) {
-        char line[81];
-        unsigned len = 0;
-        for (unsigned col = 0; col < 80; col++) {
-            uint8_t ch = (uint8_t)text[row * 80 + col];
-            line[col] = ch == ' ' || !ch ? '_' : ch > ' ' && ch < 127 && ch != '=' ? (char)ch : '.';
-            if (ch > ' ' && ch < 127) len = col + 1;
-        }
-        if (!len) continue;
-        line[len] = 0;
-        rec_emit(probe, "DATA", "group=screen row=%u text=%s", row, line);
-    }
-}
 
 static int probe_f3_vm_video(void)
 {
@@ -167,7 +150,7 @@ cleanup:
         rec_emit(VIDEO_PROBE, "DATA", "group=boot_state ready=%u state=%u reason=%u stage=%u",
                  info.dos_ready, info.state, info.reason, info.video_stage);
         video_devices(VIDEO_PROBE, v);
-        video_screen(VIDEO_PROBE, v);
+        probe_dos_screen(VIDEO_PROBE, v);
     }
     if (v) { int e = dosvm_destroy(dosvm_key(v), true); if (!error) error = e; }
     dosvm_snapshot(&after);
@@ -311,7 +294,7 @@ cleanup:
         rec_emit(WINDOW_PROBE, "DATA", "group=boot_state ready=%u state=%u reason=%u stage=%u",
                  info.dos_ready, info.state, info.reason, info.video_stage);
         video_devices(WINDOW_PROBE, v);
-        video_screen(WINDOW_PROBE, v);
+        probe_dos_screen(WINDOW_PROBE, v);
     }
     if (client) process_remove(0, client);
     if (desktop_pid) process_remove(owner, desktop_pid);

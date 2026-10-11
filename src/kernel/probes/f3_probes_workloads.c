@@ -53,23 +53,6 @@ static bool wl_prompt(struct dosvm *v)
     }
     return false;
 }
-/* Failure diagnostic: the guest text screen (spaces '_', '=' and non-ASCII '.'). */
-static void wl_screen(const char *name, struct dosvm *v)
-{
-    const uint16_t *text = dosvm_text(v, 0);
-    for (unsigned row = 0; row < 25; row++) {
-        char line[81];
-        unsigned len = 0;
-        for (unsigned col = 0; col < 80; col++) {
-            uint8_t ch = (uint8_t)text[row * 80 + col];
-            line[col] = ch == ' ' || !ch ? '_' : ch > ' ' && ch < 127 && ch != '=' ? (char)ch : '.';
-            if (ch > ' ' && ch < 127) len = col + 1;
-        }
-        if (!len) continue;
-        line[len] = 0;
-        rec_emit(name, "DATA", "group=screen row=%u text=%s", row, line);
-    }
-}
 static int wl_boot(const struct dosvm_config *config, struct dosvm **out)
 {
     int e = dosvm_create(config, out);
@@ -463,7 +446,7 @@ static int probe_f3_dos4gw(void)
         int e = wl_boot(&config, &v);
         if (!e) e = dos4gw_run(v, &w);
         bool released = dpmi_released(&w.dpmi);
-        if (e && v) wl_screen(name, v);
+        if (e && v) probe_dos_screen(name, v);
         if (v) { int x = wl_exit(&v); if (!e) e = x; }
         baseline_take(&now);
         bool same = baseline_equal(&base, &now);
@@ -575,7 +558,7 @@ static int doom_probe(const char *name, bool sound)
             e = -EFAULT;
         if (!e && sound && (!a.resets || !a.events)) e = -EFAULT;          /* SB detected, OPL music written */
         if (!e && !sound && (a.resets || a.events || a.frames)) e = -EFAULT; /* -nosound touches neither */
-        if (e && v) wl_screen(name, v);
+        if (e && v) probe_dos_screen(name, v);
         if (v) { int x = wl_exit(&v); if (!e) e = x; }
         struct dosvm_ledger now;
         dosvm_snapshot(&now);
@@ -745,7 +728,7 @@ static int probe_f3_wolf3d(void)
         rec_emit(name, "DATA", "case=loop loop=%u launch_ms=%u run_ms=%u screens=%u status=%u rc=%u type=%u xms_calls=%u ems_calls=%u error=%d",
                  loop, (uint32_t)w.flip_ms, (uint32_t)w.end_ms, screens, status, rc, type, w.info.xms_calls, w.info.ems_calls, e);
         if (!e && (!playing || !status || rc || type || !w.graphics)) e = -EFAULT;
-        if (e && v) wl_screen(name, v);
+        if (e && v) probe_dos_screen(name, v);
         if (v) { int x = wl_exit(&v); if (!e) e = x; }
         struct dosvm_ledger now;
         dosvm_snapshot(&now);
@@ -886,7 +869,7 @@ static int probe_f3_vm_starve(void)
     if (!error && (!ref.pass || !loaded.pass || !spinning || ref.keys < 16 || loaded.keys < 16 ||
                    timer_pct < 50 || beat_pct < 20 || loaded.key_ms > 1000))
         error = -EFAULT;
-    if (error && a) wl_screen(name, a);
+    if (error && a) probe_dos_screen(name, a);
     if (b) { int x = dosvm_destroy(dosvm_key(b), true); if (!error) error = x; }
     if (a) { int x = wl_exit(&a); if (!error) error = x; }
     if (native) { task_kill(native, 0); task_reap(native); }
