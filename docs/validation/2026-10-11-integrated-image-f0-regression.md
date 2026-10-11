@@ -540,6 +540,10 @@ preceded by the runner's host prerequisite (303 Python tests OK):
 This is the first integrated image on which DOS VMs boot and the F3 rows
 f3-00 and f3-03 hold QEMU evidence. The hardware image for the fifth T23
 sweep is built from the same tree with `BOOT.CFG` `safe=0 serial=1` and
-`probe=all:sweep run=99999999` (`build/f0/ciukios-hw.img`, SHA-256 recorded
-below when built).
+`probe=all:sweep run=99999999` (`build/f0/ciukios-hw.img`, SHA-256
+`e4db63968b932fd0b5e6b1786fb609fdd05d8d495ad514b6f42a796deeec732b`). Note
+for the next hardware image: `build_image.py` writes `build-manifest.json`
+beside its output, so an `--out` inside `build/f0/` replaces the canonical
+image's manifest; rebuild the canonical image afterwards (or write the
+hardware image elsewhere).
 
