@@ -55,6 +55,13 @@ f2-32 (CiukNote), f2-33 (Task Manager con `proc_list` 70 e
 `proc_terminate` 71), f4-04 (montaggi NTFS e slot cache). Il Task Manager
 è già riportato sul toolkit riscritto; CiukNote in corso.
 
+f3-01 fusa su `main` nel pomeriggio: `vm-devices` PASS su qemu-t23, e500 e
+min128 (`case=input keyboard=1 focus_release=1 callbacks=2 keys=3`,
+`case=locality malformed_io=1`). Oltre alla maschera OCW1, il payload
+dormiva con `hlt` dopo che entrambi gli IRQ1 erano già stati consegnati al
+confine dopo STI: i cicli di attesa ora verificano la condizione a
+interruzioni spente e dormono con `sti; hlt`.
+
 ## Decisioni
 
 - Le direttive aperte si realizzano con subagent Claude: Opus per kernel,
