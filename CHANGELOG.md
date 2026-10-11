@@ -145,8 +145,12 @@ hardware must still raise vector 17).
   16, OPL3 and 8237 DMA state models with the F4 consumer interface (f3-05;
   `f3:vm-audio-state` cases): merged with host evidence (327 host tests,
   libx86emu guest runner DPMI16/DPMI32/DOS4GW PASS); their integrated-image
-  QEMU campaign is pending. DOS workloads such as DOOM and Wolfenstein 3D
-  (f3-06) are in progress. F3 has no recorded hardware run.
+  QEMU campaign is pending. DOS workloads (f3-06): DOS/4GW probe loops, DOOM
+  timedemo and Wolfenstein 3D from local, never redistributed game files on
+  a per-run fixture disk, a starvation gate, protected-mode VGA access for
+  DOS/4GW programs and a V86 monitor that traps only at shadow and IRQ
+  boundaries; DOOM completes its timedemo in the host guest runner, QEMU
+  campaign pending. F3 has no recorded hardware run.
 
 ### F4 — audio, optical media, NTFS read-only
 
@@ -163,8 +167,12 @@ hardware must still raise vector 17).
   through `fs_ro`, cache halves and on-demand optical cache slots, probe
   `f4:ntfs-ro` with 12 `f4-media` cases. The f4-04 code is merged; its QEMU
   campaign is pending.
-- Not in this version: ESS Maestro-2E backend, the audio path of DOS VMs,
-  2D acceleration (deferred by the contract).
+- DOS VM audio path (f4-05): every DOS VM owns a mixer source; SB16 PCM is
+  converted at the programmed rate and OPL3 is synthesised by an integer C
+  port of the DOSBox DBOPL (GPL-2.0-or-later), paced 56 ms behind the VM
+  clock with CT1745 gains; `f4:vm-audio` cases, QEMU campaign pending.
+- Not in this version: ESS Maestro-2E backend and 2D acceleration
+  (deferred by the contract).
 
 ### Hardware (ThinkPad T23 only)
 

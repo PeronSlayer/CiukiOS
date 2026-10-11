@@ -2,21 +2,49 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
+#include <ciuki/abi.h>
 #include "dosvm_internal.h"
 
-int dosvm_disk_open(struct dosvm *v)
+/* f3-06: base names a read-only image of the same private geometry (a
+ * local workload disk built by scripts/test/dos_fixtures.py); the canonical
+ * C: payload otherwise. Only the overlay below is ever opened writable. */
+#define DOSVM_DEFAULT_BASE "C:\\SYSTEM\\DOS\\DOSBOOT.IMG"
+int dosvm_workload_base(char path[24])
 {
     struct storage *s = storage_get();
     if (!s || !s->ready || s->stopped) return -V86_EIO;
+    struct vfs_table *t = kmalloc(sizeof(*t));      /* ~7 KiB: not on the stack */
+    if (!t) return -ENOMEM;
+    int e = vfs_table_init(&s->vfs, t, 2);
+    if (!e) {
+        e = -ENOENT;
+        for (unsigned d = 3; d < 26 && e == -ENOENT; d++) {
+            struct fat_entry entry;
+            ksnprintf(path, 24, "%c:\\CIUKIGAM.IMG", 'A' + d);
+            if (!vfs_stat(t, path, &entry) && entry.size == DOSVM_SECTORS * 512u && !(entry.attr & 0x10)) e = 0;
+        }
+        vfs_table_destroy(t);
+    }
+    kfree(t);
+    if (e) path[0] = 0;
+    return e;
+}
+int dosvm_disk_open(struct dosvm *v, const char *base)
+{
+    struct storage *s = storage_get();
+    if (!s || !s->ready || s->stopped) return -V86_EIO;
+    if (!base) base = DOSVM_DEFAULT_BASE;
+    unsigned length = 0;
+    while (length < 64 && base[length]) length++;
+    if (!length || length == 64) return -EINVAL;
     int e = vfs_table_init(&s->vfs, &v->disk_table, 2);
     if (e) return e;
     v->table_ready = true;
     struct fat_entry entry;
-    e = vfs_stat(&v->disk_table, "C:\\SYSTEM\\DOS\\DOSBOOT.IMG", &entry);
+    e = vfs_stat(&v->disk_table, base, &entry);
     if (e) return e;
     if (entry.size != DOSVM_SECTORS * 512u) return -EINVAL;
-    v->base = vfs_open(&v->disk_table, "C:\\SYSTEM\\DOS\\DOSBOOT.IMG",
-                       VFS_READ, VFS_DENY_WRITE, 0);
+    v->base = vfs_open(&v->disk_table, base, VFS_READ, VFS_DENY_WRITE, 0);
     if (v->base < 0) return v->base;
     v->base_open = true;
     ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",

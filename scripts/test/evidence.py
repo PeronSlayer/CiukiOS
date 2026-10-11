@@ -184,13 +184,15 @@ class Parser:
             raise EvidenceError('unknown event or missing BEGIN')
         # f4-02/f4-04: a media probe without its declared device or fixture ends
         # NOT_RUN with the reason (never a pass); everything else needs PASS/FAIL.
+        # f3-06: the owner-local game workloads likewise without their fixture disk.
         media_not_run = (event == 'END' and record.get('status') == 'NOT_RUN' and
-                         {'optical':'device_absent','ntfs-ro':'fixtures_absent'}.get(self.probe) == record.get('reason'))
+                         {'optical':'device_absent','ntfs-ro':'fixtures_absent','doom':'fixtures_absent',
+                          'doom-sound':'fixtures_absent','wolf3d':'fixtures_absent'}.get(self.probe) == record.get('reason'))
         if event == 'END' and not media_not_run and record.get('status') not in ('PASS','FAIL'):
             raise EvidenceError('END requires PASS or FAIL')
         if event == 'ERROR' and record.get('status') == 'not_run':
             ready = [r for r in self.records if r['event'] == 'READY']
-            audio_disabled = (self.probe == 'audio-native' and len(ready) == 1 and
+            audio_disabled = (self.probe in ('audio-native', 'vm-audio') and len(ready) == 1 and
                               ready[0].get('case') == 'backend' and ready[0].get('status') == 'not_run' and
                               ready[0].get('reason') == record.get('reason') and
                               record.get('reason') in ('device_absent','safe_mode','invalid_bars',

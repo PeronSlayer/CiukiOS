@@ -397,6 +397,18 @@ def import_sweep(capture, canonical_hash, cases, physical_cases=(), image_sha256
                                      if r.get('result') == 'not_run' and r.get('reason')],
                   'outcome': 'not_run', 'reason': 'probe absent from capture',
                   'operator_confirmation': False}
+        if case.get('kind') == 'normal-boot':
+            # A normal-boot case is a QEMU boot without any test request,
+            # judged on serial milestones and a screendump; a sweep boot always
+            # carries a BOOT.CFG probe selection and cannot stand in for it.
+            # It is reported not_run and never blocks the later cases.
+            reason = 'normal_boot_qemu_only'
+            result.update(outcome='not_run', reason=reason, evidence_outcome='not_run', evidence_reason=reason,
+                          not_run_reasons=[reason], not_run_subcases=[], device_exceptions_not_applicable=[],
+                          operator_confirmation_required=False,
+                          prerequisite={'satisfied': not bool(blocked), 'failed_case': blocked})
+            results.append(result)
+            continue
         observations = groups.get(probe, [])
         variants = inapplicable_variants(case, metadata)
         unproven = any(b.get('reason') == 'provenance_damaged' and (

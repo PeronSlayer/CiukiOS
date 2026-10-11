@@ -26,6 +26,11 @@ gates=scenario.get('boot_gates',[[]]*(boot+1))[boot]
 gate_index=0;gate_armed=False;gate_suspended=False;crash_arm_emitted=False;setup_writes=0
 if '-fw_cfg' in sys.argv:
     selector=sys.argv[sys.argv.index('-fw_cfg')+1].split('string=',1)[1]
+elif scenario.get('normal_boot'):
+    # A normal boot carries no request at all: no fw_cfg item and the overlay
+    # is never read for a BOOT.CFG probe line. Serial records are raw lines.
+    assert not any('opt/it.alcybercloud.ciukios' in a for a in sys.argv)
+    selector='f0:normal-boot run=00000000'
 else:
     # The sweep fixture stores a tiny BOOT.CFG in the shared fake overlay.
     overlay=Path(sys.argv[sys.argv.index('-drive')+1].split(',format=',1)[0][5:])
@@ -106,7 +111,7 @@ for raw in stream:
         Path('fake-stopped').touch()
         conn.sendall(json.dumps({'return':{},'id':request['id']}).encode()+b'\n');break
     elif cmd=='screendump':
-        screen=scenario.get('desktop_screens',{}).get('after' if scenario.get('received_input') else 'before')
+        screen=scenario.get('screen') or scenario.get('desktop_screens',{}).get('after' if scenario.get('received_input') else 'before')
         Path(request['arguments']['filename']).write_bytes(Path(screen).read_bytes() if screen else b'P6\n1 1\n255\n\x00\x00\x00')
     conn.sendall(json.dumps({'return':reply,'id':request['id']}).encode()+b'\n')
     if cmd in ('cont','system_reset'):
@@ -127,6 +132,11 @@ for raw in stream:
         elif gates:pass
         elif scenario.get('flood') or scenario.get('application_bytes'):threading.Thread(target=emit,daemon=True).start()
         else:emit()
+        if scenario.get('delayed_records'):
+            # Serial lines that arrive later in the boot (normal-boot settle window).
+            def later():
+                time.sleep(scenario.get('delay',.3));emit(scenario['delayed_records'])
+            threading.Thread(target=later,daemon=True).start()
         if scenario.get('boot_reboots', [False]*(boot+1))[boot]:
             # Persist the guest cursor before -no-reboot ends this process.
             overlay.write_text('safe=0 serial=1\nprobe=f0:sweep run='+run_id+' step='+str(boot+1)+'\n')

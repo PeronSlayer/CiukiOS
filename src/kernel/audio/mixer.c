@@ -3,6 +3,10 @@
 #include <ciuki/kernel.h>
 #include <ciuki/audio.h>
 struct audio_state audio;
+/* f4-05 DOS VM sources (audio/vm_source.c); weak so host harnesses that link
+ * only the native mixer keep working. */
+extern void audio_vm_mix(int64_t (*sums)[2], unsigned frames) __attribute__((weak));
+extern void audio_vm_tap(const struct audio_frame *out, unsigned frames) __attribute__((weak));
 static int16_t saturate(int64_t value)
 {
     return value > 32767 ? 32767 : value < -32768 ? -32768 : (int16_t)value;
@@ -41,9 +45,11 @@ void audio_mix(struct audio_frame *out, unsigned frames)
         if (starved) s->starvation++;
         kwait_wake_all(&s->changed);
     }
+    if (audio_vm_mix) audio_vm_mix(sums, frames); /* every admitted VM, focused or not */
     for (unsigned i = 0; i < frames; i++) {
         out[i].left = audio.master.mute ? 0 : saturate(sums[i][0] * audio.master.left / 100);
         out[i].right = audio.master.mute ? 0 : saturate(sums[i][1] * audio.master.right / 100);
     }
+    if (audio_vm_tap) audio_vm_tap(out, frames);
     audio.output += frames;
 }

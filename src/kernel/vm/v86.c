@@ -332,12 +332,21 @@ static void shadow_arm(struct v86 *v, uint16_t cs, uint32_t ip)
     unsigned len = stack_switch_len(v, cs, ip);
     v->shadow_next = (uint16_t)(len ? ip + len : ip);
 }
+/* f3-06: single-step only while an instruction boundary matters: a software
+ * STI/MOV-SS shadow is open, or an IRQ is pending for an enabled guest (it
+ * is delivered at the next boundary). Otherwise V86 code runs natively:
+ * every V86 instruction that can set IF (STI, POPF, IRET, INT) traps at
+ * IOPL 0, a host IRQ is itself a delivery point (dosvm_tick runs first), and
+ * a trapped instruction after MOV SS is emulated before any delivery. The
+ * f3-00 policy stepped every instruction (one #DB each), which made DOS
+ * file I/O under DOS/4GW (DOOM's WAD loading) and real-mode games run at
+ * exception rate (measured: 687 M #DB in 700 M guest instructions). */
 void v86_prepare_return(struct v86 *v, struct v86_frame *f)
 {
     if (!v->track_boundaries) return;
-    f->tf.eflags |= V86_TF;
-    if (v->shadow) return;
-    if (stack_switch_len(v, f->tf.cs, f->tf.eip)) shadow_arm(v, f->tf.cs, f->tf.eip);
+    if (!v->shadow && stack_switch_len(v, f->tf.cs, f->tf.eip)) shadow_arm(v, f->tf.cs, f->tf.eip);
+    if (v->shadow || (v->vif && v86_irq_pending(v) >= 0)) f->tf.eflags |= V86_TF;
+    else f->tf.eflags &= ~V86_TF;
 }
 int v86_debug_step(struct v86 *v, struct v86_frame *f)
 {

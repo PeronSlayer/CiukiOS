@@ -20,11 +20,13 @@ ALLOWED = {
     'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
     'probes/f4_probes_audio.c', # f4-01 native audio controller
+    'probes/f4_probes_vm_audio.c', # f4-05 DOS VM audio output controller (f4:vm-audio)
     'probes/f3_probes_vm.c',
     'probes/f3_probes_devices.c', # f3-01 DOS device controller (f3:vm-devices)
     'probes/f3_probes_video.c', # f3-02 virtual VGA stage digests
     'probes/f3_probes_audio_state.c', # f3-05 SB16/OPL3/8237 controller (f3:vm-audio-state)
     'probes/f3_probes_dpmi.c', # f3-04 DPMI host row (f3:dpmi)
+    'probes/f3_probes_workloads.c', # f3-06 workloads (f3:dos4gw, doom, doom-sound, wolf3d, vm-starve)
     'vm/dosvm.c',         # f3-00 admission/lifecycle reports, guarded by active probe scope
     'vm/dosvm_bios.c',    # f3-00 bounded, escaped DOS record channel
     'drivers/ata_probe.c',

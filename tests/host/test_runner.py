@@ -182,7 +182,7 @@ class RunnerTests(unittest.TestCase):
     def test_bootlog_readonly_position_operator_skip_and_f2_failure_gate(self):
         cases=runner.load_suite('f2-all')['cases']
         index=next(i for i,c in enumerate(cases) if c['id']=='bootlog-read-only')
-        first_f2=next(i for i,c in enumerate(cases) if c['selector'].startswith('f2:'))
+        first_f2=next(i for i,c in enumerate(cases) if c.get('selector','').startswith('f2:'))
         operator=next(c for c in cases[:index] if c.get('operator_confirmation'))
         readonly=cases[index];f2=cases[first_f2]
         self.assertLess(index,first_f2)
@@ -882,6 +882,30 @@ int main(void)
     CHECK(fbdev_fill(&invalid,0)==-EINVAL && !drawing);
     CHECK(fbdev_present(&surface,&empty)==0 && !drawing);
     host_if=0;console_write("a",1);CHECK(host_if==0 && !drawing);
+    host_if=0x200;
+    /* f3-02: a display grant owner composites every pixel. Lines and
+     * scrolling keep history only; the prompt and evidence pages are
+     * deliberate overlays; the release repaints on the next line. */
+    console_write("\n",1);
+    CHECK(fbdev_fill(&owned,0x010203)==0);
+    memcpy(saved,fake_lfb,SIZE);
+    unsigned before=hist_count;
+    console_display_owned(true);
+    for (unsigned i=0;i<rows+3;i++) console_write("a\n",2);
+    console_write("a",1);
+    CHECK(!memcmp(saved,fake_lfb,SIZE) && hist_count==before+rows+3 && !drawing);
+    console_operator_prompt(false);
+    CHECK(memcmp(saved,fake_lfb,PITCH*16)!=0 && !memcmp(saved+PITCH*16,fake_lfb+PITCH*16,SIZE-PITCH*16) && !drawing);
+    CHECK(fbdev_fill(&owned,0x010203)==0);
+    console_display_owned(false);
+    CHECK(!memcmp(saved,fake_lfb,SIZE));                 /* nothing drawn until the next line */
+    console_write("a",1);
+    CHECK(memcmp(saved,fake_lfb,32*PITCH)!=0 && cur_col==2 && linelen==2 && !drawing);
+    memcpy(saved,fake_lfb,SIZE);
+    console_display_owned(true);
+    console_reclaim();                                   /* panic: the console draws again */
+    console_write("a",1);
+    CHECK(memcmp(saved,fake_lfb,32*PITCH)!=0 && !drawing);
     CHECK(irq_sections>0 && locks==0);
     for (unsigned i=0;i<GUARD;i++) CHECK(raw[i]==0xA5 && raw[GUARD+SIZE+i]==0xA5);
     free(saved);free(raw);
@@ -1620,7 +1644,7 @@ class F2EvidenceTests(unittest.TestCase):
                 self.assertEqual({c['profile'] for c in suite['cases'] if c['probe']==probe},({'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-1998','qemu-desktop-2002'} if probe=='crash-isolation' else {'qemu-t23','qemu-e500','qemu-min128'}))
         self.assertEqual(set(probes),set(F2_PROBES))
         suite=runner.load_suite('f2-all');cases=suite['cases']
-        first=next(i for i,c in enumerate(cases) if c['selector'].startswith('f2:'))
+        first=next(i for i,c in enumerate(cases) if c.get('selector','').startswith('f2:'))
         expected=[c for name in runner.F2_SUITES for c in runner.load(ROOT/'tests/suites'/f'{name}.json')['cases']]
         self.assertEqual([c['id'] for c in cases[first:]],[c['id'] for c in expected])
         self.assertEqual(len(cases[:first]),sum(len(runner.load(ROOT/'tests/suites'/f'{n}.json')['cases']) for n in runner.REGRESSION_SUITES))

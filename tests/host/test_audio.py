@@ -93,8 +93,16 @@ class AudioWaveTests(unittest.TestCase):
         suite = runner.load(ROOT / 'tests/suites/f4-audio.json')
         for case in suite['cases']:
             profile = runner.load(ROOT / f"tests/profiles/{case['profile']}.json")
-            self.assertEqual(profile['ram_mib'], 512)
             args, request = runner.qemu_args('fixture', profile, case, '12345678', self.path, self.path)
+            if case['probe'] == 'vm-audio':
+                # f4-05: the DOS VM audio output on the three F3 profiles, AC97 by case exception.
+                self.assertIn(case['profile'], ('qemu-t23', 'qemu-e500', 'qemu-min128'))
+                platform = ' platform=e500' if profile.get('platform') == 'e500' else ''
+                self.assertEqual(request, 'f4:vm-audio run=12345678' + platform)
+                self.assertEqual(args.count('AC97,audiodev=cap'), 1)
+                self.assertNotIn('audio_expectations', case)
+                continue
+            self.assertEqual(profile['ram_mib'], 512)
             self.assertEqual(request, 'f4:audio-native run=12345678')
             self.assertIn('none,id=silent', args)
             self.assertIn('wav,id=cap,path=audio.wav', args)
@@ -103,6 +111,17 @@ class AudioWaveTests(unittest.TestCase):
             broken = {**case, 'device_exceptions': {'audio': 'unknown'}}
             with self.assertRaises(runner.res.Refusal):
                 runner.qemu_args('fixture', profile, broken, '12345678', self.path, self.path)
+
+    def test_vm_audio_selector_and_absent_backend(self):
+        selected = selector('f4:vm-audio run=12345678', 'fw_cfg', True)
+        self.assertEqual((selected['phase'], selected['probe']), (4, 'vm-audio'))
+        parser = runner.Parser('12345678', 'vm-audio')
+        for sequence, row in enumerate((dict(event='BEGIN'),
+                                        dict(event='READY', case='backend', status='not_run', reason='device_absent'),
+                                        dict(event='ERROR', status='not_run', reason='device_absent')), 1):
+            parser.feed((f'CIUKI_TEST v=1 run=12345678 seq={sequence:06d} probe=vm-audio ' +
+                         ' '.join(f'{key}={value}' for key, value in row.items())).encode())
+        self.assertEqual(parser.outcome, 'not_run')
 
     def test_declared_evidence_and_absent_backend(self):
         records = [dict(event='BEGIN'),

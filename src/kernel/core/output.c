@@ -127,6 +127,7 @@ void panic(const char *fmt, ...)
             *p = '_';
     char extra[200];
     ksnprintf(extra, sizeof(extra), "vector=none reason=%s", msg);
+    console_reclaim();
     console_set_color(0xFFFFFF, 0x800000);
     kputs_raw("Ciuki VMM panic: halting.\n");
     rec_emit_panicsafe("panic", "PANIC", extra);   /* last output */
@@ -144,6 +145,7 @@ void panic_frame(struct trap_frame *tf, const char *why)
               "vector=%u error=%08x eip=%08x cr2=%08x storage_delta=0 allocations=0 locks=0 task=%s why=%s",
               tf->vector, tf->err, tf->eip, cr2,
               g_current ? g_current->name : "boot", why);
+    console_reclaim();
     console_set_color(0xFFFFFF, 0x800000);
     char regs[200];
     ksnprintf(regs, sizeof(regs),
@@ -163,6 +165,7 @@ void df_handler(void)
     char extra[200];
     ksnprintf(extra, sizeof(extra), "vector=8 error=00000000 eip=%08x esp=%08x cr2=%08x why=double_fault",
               g_tss.eip, g_tss.esp, read_cr2());
+    console_reclaim();
     console_set_color(0xFFFFFF, 0x800000);
     kputs_raw("Ciuki VMM double fault: halting.\n");
     rec_emit_panicsafe("panic", "PANIC", extra);   /* last output */

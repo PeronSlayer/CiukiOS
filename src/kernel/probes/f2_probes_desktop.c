@@ -407,7 +407,7 @@ static int native_crash_isolation(void)
                 goto cleanup;
             }
         }
-        uint64_t start=g_ticks; deadline=start+15000;
+        uint64_t start=g_ticks; deadline=start+60000; /* QMP delivers ~0.3 s per batch; the loop ends early on success */
         unsigned app_emitted=0; int app_gate=1;
         do {
             task_sleep_ms(10); desktop_activity_snapshot(&b);

@@ -5,8 +5,18 @@
  * transport and time are host fakes; one simulated millisecond per SLICE
  * guest instructions. Not QEMU or hardware evidence: a pre-QEMU check of
  * the payloads against the real kernel host paths.
- * Usage: dosvm_guest DOSBOOT.IMG [COMMAND NAME | fault:COMMAND NAME | gate:COMMAND NAME]...
- * (gate: the VM's DPMI flag cleared; the client must report FAIL 01 01).
+ * Usage: dosvm_guest DOSBOOT.IMG [COMMAND NAME | fault:COMMAND NAME | gate:COMMAND NAME |
+ *        keys:\VMVIDEO.COM VMVIDEO]...
+ * (gate: the VM's DPMI flag cleared; the client must report FAIL 01 01.
+ * keys: f3-02 window typing: set-1 make/break codes into the focused VM's
+ * 8042 (dosvm_input_event), IRQ1 and the guest INT 9 to the shell blocked in
+ * INT 16h AH=00h; VMVIDEO must stop at stage 1 with flags 3, then each Enter
+ * through the 8042 advances one stage until the prompt returns.)
+ * f3-06: GUEST_BUDGET=<instructions per command> for long workloads, e.g. the
+ * base image of a local DOOM fixture (scripts/test/dos_fixtures.py; extract
+ * CIUKIGAM.IMG with mcopy): GUEST_BUDGET=9000000000 dosvm_guest base.img
+ * '\RUNREC.COM \DOOM DOOM.EXE -config CIUKI.CFG -nosound -timedemo demo1' RUNREC
+ * ends with the timed line on the screen and RUNREC FAIL R01 T00 (exit 1).
  * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -29,6 +39,7 @@
 #include <ciuki/task.h>
 #include <ciuki/input.h>
 #include <ciuki/dosvm.h>
+#include <ciuki/sha256.h>
 #include "dosvm_guest.h"
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#c); exit(1); } } while (0)
@@ -417,11 +428,85 @@ static void fault_dump(void)
     for (unsigned i = 0; i < sizeof(code); i++) printf(" %02x", code[i]);
     printf("\n");
 }
+/* f3-06: the BIOS buffer holds 15 keys; long command lines (RUNREC
+ * launchers) wait for the shell to take keys instead of failing. */
+static bool key_room(void) { return !dosvm_keyboard_refresh(gv) && gv->key_count < 14; }
 static void type(const char *command)
 {
+    for (unsigned i = 0; ; i++) {
+        uint16_t code = command[i] ? (uint8_t)command[i] : 0x1C0D;
+        for (unsigned tries = 0; !dosvm_keyboard(dosvm_key(gv), code); tries++) {
+            CHECK(tries < 1000 && !stopped());
+            waiting_input = false;
+            run(2000000ull, key_room);
+        }
+        if (!command[i]) break;
+    }
     waiting_input = false;
-    for (unsigned i = 0; command[i]; i++) CHECK(dosvm_keyboard(dosvm_key(gv), (uint8_t)command[i]));
-    CHECK(dosvm_keyboard(dosvm_key(gv), 0x1C0D));
+}
+/* f3-02: a line typed the way /bin/dosbox forwards a window's keys. */
+static void window_key(unsigned code, int value)
+{
+    struct ciuki_input_event e = {.type = CIUKI_INPUT_KEY, .code = (int32_t)code, .value = value};
+    CHECK(dosvm_input_event(dosvm_key(gv), &e));
+}
+static unsigned window_code(char c, bool *shift)
+{
+    static const char row1[] = "1234567890", qwerty[] = "qwertyuiop", home[] = "asdfghjkl", bottom[] = "zxcvbnm";
+    char lower = c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+    *shift = c >= 'A' && c <= 'Z';
+    const char *at;
+    if ((at = strchr(row1, lower)) && lower) return 0x02 + (unsigned)(at - row1);
+    if ((at = strchr(qwerty, lower)) && lower) return 0x10 + (unsigned)(at - qwerty);
+    if ((at = strchr(home, lower)) && lower) return 0x1E + (unsigned)(at - home);
+    if ((at = strchr(bottom, lower)) && lower) return 0x2C + (unsigned)(at - bottom);
+    switch (c) {
+    case '\\': return 0x2B; case '.': return 0x34; case ' ': return 0x39; case '-': return 0x0C;
+    case ':': *shift = true; return 0x27;
+    default: CHECK(false); return 0;
+    }
+}
+static void window_type(const char *command)
+{
+    CHECK(dosvm_input_focus(dosvm_key(gv), true));
+    bool held = false;
+    for (unsigned i = 0; ; i++) {
+        bool shift = false;
+        unsigned code = command[i] ? window_code(command[i], &shift) : 0x1C;
+        if (shift != held) { window_key(0x2A, shift); held = shift; }
+        window_key(code, 1); window_key(code, 0);
+        if (!command[i]) break;
+    }
+    if (held) window_key(0x2A, 0);
+    waiting_input = false;
+}
+/* VMVIDEO through window keys: stage 1 exactly, then Enter per stage. */
+static int window_vmvideo(const char *command)
+{
+    /* The shell is blocked in INT 16h AH=00h before the first key, as when
+     * the runner starts typing after the ARM record. */
+    waiting_input = false;
+    int r = run(400000000ull, 0);
+    printf("  -> shell idle: wait=%d (2 = blocked in INT 16h AH=00h)\n", r);
+    if (r != 2) return 1;
+    window_type(command);
+    r = run(2000000000ull, 0);
+    struct dosvm_frame frame;
+    char hex[65] = "none";
+    if (!dosvm_frame_digest(gv, 0, &frame)) sha256_hex(frame.digest, hex);
+    printf("  -> window keys: wait=%d stage=%u flags=%u mode=%u %ux%u text=%u queued=%u bios=%u digest=%s\n", r,
+           gv->info.video_stage, gv->info.video_flags, frame.mode, frame.width, frame.height, frame.text,
+           gv->kbd.count, gv->key_count, hex);
+    if (r != 2 || gv->info.video_stage != 1 || gv->info.video_flags != 3 || frame.mode != 3 ||
+        frame.width != 640 || frame.height != 400 || !frame.text || gv->kbd.count) return 1;
+    for (uint32_t stage = 2; stage <= 6; stage++) {
+        window_key(0x1C, 1); window_key(0x1C, 0);
+        waiting_input = false;
+        r = run(2000000000ull, 0);
+        printf("  -> Enter: wait=%d stage=%u flags=%u\n", r, gv->info.video_stage, gv->info.video_flags);
+        if (r != 2 || gv->info.video_stage != stage) return 1;
+    }
+    return prompt() ? 0 : 1;
 }
 static void stats(const char *name)
 {
@@ -433,6 +518,11 @@ static void stats(const char *name)
            info.stats.irqs_pm, info.stats.irqs_reflected, info.stats.soft_reflected, info.stats.exceptions,
            info.stats.callbacks, info.stats.raw_switches, info.stats.realcalls, info.stats.max_depth, info.stats.stale);
     printf("  host real-mode stack lowest SP=%04x\n", rstack_low);
+    struct dosvm_video_info video;
+    if (dosvm_video_info(dosvm_key(gv), &video))
+        printf("  video: mode=%02x unchained=%u %ux%u faults=%u pm_faults=%u flips=%u windows=%u harvested=%u\n",
+               video.mode, video.unchained, video.width, video.height, video.faults, video.pm_faults, video.starts,
+               video.maps, video.flushes);
     printf("  rows ok=%08x%08x%08x fail=%08x%08x%08x\n", info.stats.rows_ok[2], info.stats.rows_ok[1], info.stats.rows_ok[0],
            info.stats.rows_fail[2], info.stats.rows_fail[1], info.stats.rows_fail[0]);
 }
@@ -456,13 +546,21 @@ int main(int argc, char **argv)
     if (r <= 0) { screen(); return 1; }
     for (int i = 2; i + 1 < argc; i += 2) {
         bool fault = !strncmp(argv[i], "fault:", 6), gate = !strncmp(argv[i], "gate:", 5);
+        if (!strncmp(argv[i], "keys:", 5)) {
+            CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
+            printf("run %s through window keys (expect VMVIDEO stage 1, then stages 2-6)\n", argv[i] + 5);
+            if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
+            continue;
+        }
         const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
         dosvm_expect(gv, argv[i + 1]);
         printf("run %s (expect %s%s)\n", command, argv[i + 1], fault ? ", VM fault" : gate ? ", no DPMI host" : "");
         type(command);
-        r = run(2000000000ull, fault ? 0 : verdict);
+        /* GUEST_BUDGET (instructions per command): long workloads (f3-06 DOOM). */
+        const char *budget = getenv("GUEST_BUDGET");
+        r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull, fault ? 0 : verdict);
         printf("  -> %s %s detail=%s state=%u reason=%u vector=%u after %llu instructions, %llu ms\n",
                argv[i + 1], gv->info.verdict_done ? (gv->info.verdict_pass ? "PASS" : "FAIL") : "NO-VERDICT",
                gv->info.verdict_detail, gv->info.state, gv->info.reason, gv->info.fault_vector,

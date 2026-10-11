@@ -28,6 +28,7 @@ import resources as res
 import fat_fixtures
 import iso_fixtures
 import ntfs_fixtures
+import dos_fixtures
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -313,6 +314,7 @@ def load_suite(name):
             suite.setdefault('physical_cases',[]).extend(part.get('physical_cases',[]))
     for part_name in names:add(part_name, name != 'all')
     for case in suite['cases']:
+        case_kind(case)  # refuse a malformed normal-boot case before any boot
         if operator_confirmation_case(case):case['operator_confirmation'] = True
     return suite
 
@@ -470,7 +472,7 @@ def expand_cases(suite):
 def fixture_disks(case):
     # Manifest ordinals also cover nondisk fixtures; IDE connector numbers
     # start after the boot disk and must agree with the kernel disk ledger.
-    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator') in ('mkfs.fat','mkntfs')]
+    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator') in ('mkfs.fat','mkntfs','dos-local')]
     if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
     if sum(f.get('generator')=='mkntfs' for f in case.get('fixtures',[]))>1:raise res.Refusal('one NTFS fixture disk per case')
     optical=[f for f in case.get('fixtures',[]) if f.get('generator')=='xorriso']
@@ -478,9 +480,23 @@ def fixture_disks(case):
     return list(zip(indices,range(1,len(indices)+1)))
 
 
-def prepare_fixtures(host,case,directory):
+def dos_image_identity(image):
+    """f3-06: the DOS VM payload SHA-256 recorded for the canonical image."""
+    try:
+        data=json.loads((Path(image).parent/'build-manifest.json').read_text())
+        return data.get('dos',{}).get('image_sha256')
+    except (OSError,ValueError,TypeError):
+        return None
+
+
+def prepare_fixtures(host,case,directory,image=None):
     manifests=[]
     disks=dict(fixture_disks(case))
+    # f3-06: an absent owner-local game directory is not_run before QEMU starts
+    # (dos_fixtures.FixturesAbsent is an EvidenceNotRun); nothing is generated.
+    for fixture in case.get('fixtures',[]):
+        if fixture.get('generator')=='dos-local' and fixture.get('workload') in dos_fixtures.WORKLOADS:
+            dos_fixtures.local_files(fixture['workload'],ROOT)
     for index,fixture in enumerate(case.get('fixtures',[])):
         item=dict(fixture)
         if fixture.get('generator')=='mkfs.fat':
@@ -493,6 +509,14 @@ def prepare_fixtures(host,case,directory):
         elif fixture.get('generator')=='xorriso':
             item.update(iso_fixtures.generate(fixture,directory,index))
             item['ide_index']=3
+        elif fixture.get('generator')=='dos-local':
+            # f3-06 owner-local commercial payloads: only on this run's own
+            # fixture disk, never the canonical image (dos_fixtures.py).
+            try:item.update(dos_fixtures.generate(fixture,directory,index,ROOT,
+                                                  expected_dos_sha256=dos_image_identity(image) if image else None))
+            except dos_fixtures.FixturesAbsent:raise
+            except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('DOS workload fixture generation failed: '+str(e)) from e
+            item['ide_index']=disks[index]
         elif 'path' in fixture:
             path=(ROOT/fixture['path']).resolve()
             if not path.is_relative_to(ROOT) or not path.is_file():raise res.Refusal('fixture missing/outside worktree')
@@ -758,6 +782,181 @@ def observe_window_screen(path, spec, arm):
     observed = digest.hexdigest()
     if observed != golden or observed != arm.get('digest'):raise EvidenceError('DOS window region mismatch')
     return {'ppm_sha256':sha(path),'width':width,'height':height,'region':[x0,y0,w,h],'digest':observed}
+
+
+# Normal boot (test-architecture.md, "Normal boot cases"): QEMU starts without
+# the fw_cfg item, so the loader's menu times out and the kernel takes the
+# production path (drivers, storage, files, audio, supervisor -> /bin/desktop)
+# instead of probes_main's probe path. No CIUKI_TEST records are expected; the
+# evidence is the ordered serial milestones, the absence of the negative lines
+# and one screendump. Every pattern is anchored at the start of a line (CR/LF
+# removed), so text in the middle of a line never matches.
+NORMAL_BOOT_KIND = 'normal-boot'
+NORMAL_BOOT_MILESTONES = (
+    ('loader_banner', re.compile(rb'L:CPU signature=')),
+    ('loader_source', re.compile(rb'L:SELECT_SOURCE=menu$')),
+    ('kernel_banner', re.compile(rb'Ciuki VMM F0 build ([!-~]+) - CiukiOS$')),
+    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: spawning /bin/desktop(?: |$)')),
+    ('desktop_pid', re.compile(rb'\[supervisor\] desktop pid=([0-9]+) pgid=([0-9]+)(?: |$)')),
+)
+NORMAL_BOOT_NEGATIVE = (
+    ('panic', re.compile(rb'Ciuki VMM (?:panic|double fault)')),
+    ('panic', re.compile(rb'CIUKI_TEST .* (?:probe=panic|event=PANIC)(?: |$)')),
+    ('test_record', re.compile(rb'CIUKI_TEST ')),
+    ('test_request_source', re.compile(rb'L:SELECT_SOURCE=(?!menu$)')),
+    ('loader_refusal', re.compile(rb'(?:CIUKI: |L:SELECT_ERROR)')),
+    ('safe_mode', re.compile(rb'L:SAFE=1')),
+    ('desktop_unavailable', re.compile(rb'\[supervisor\] desktop unavailable')),
+    ('desktop_stopped', re.compile(rb'\[supervisor\] desktop stopped')),
+)
+NORMAL_BOOT_CASE_KEYS = {'id','kind','probe','profile','timeout','expected','attempt','boot_kind','_smoke','_run_id'}
+NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
+# Colours drawn by apps/desktop (desktop.h DESK_BAR/DESK_BACKGROUND;
+# compositor.c desk_composite top bar, desk_shell_draw taskbar and start
+# button) and by the kernel console (src/kernel/core/console.c fg/bg,
+# output.c panic background). test_normal_boot.py checks these literals
+# against those sources.
+DESK_BAR_ROWS = 32
+DESK_TOP_BAR = 0x213c4c
+DESK_TASKBAR = 0xb8c9cc
+DESK_START_BUTTON = (0xe8d7b9, 0x607a85)  # menu closed / open
+DESK_BACKGROUND = 0x375564
+CONSOLE_COLOURS = (0x10243c, 0xe8e8e8, 0x800000)  # console bg, fg, panic bg
+SCREEN_TOLERANCE = 8  # per channel: also accepts a 16-bpp (565) framebuffer
+
+
+def case_kind(case):
+    """'probe' (fw_cfg request, CIUKI_TEST evidence) or 'normal-boot'.
+
+    Probe cases are unchanged: they carry no 'kind' and every existing check
+    applies to them. A normal-boot case is an allowlist of keys: no selector,
+    stimulus, fixture, patch, fault, reboot sequence or device exception.
+    """
+    kind = case.get('kind')
+    if kind is None and case.get('probe') != NORMAL_BOOT_KIND:return 'probe'
+    if kind != NORMAL_BOOT_KIND or case.get('probe') != NORMAL_BOOT_KIND:
+        raise res.Refusal('normal-boot case needs kind and probe "normal-boot"; unknown case kind: '+str(kind))
+    extra = sorted(set(case)-NORMAL_BOOT_CASE_KEYS)
+    if extra:raise res.Refusal('normal-boot case refuses keys: '+', '.join(extra))
+    if case.get('boot_kind','cold') != 'cold':raise res.Refusal('normal-boot case is a cold boot')
+    expected = case.get('expected')
+    if not isinstance(expected,dict) or set(expected)-NORMAL_BOOT_EXPECTED_KEYS or expected.get('evidence_kind') != NORMAL_BOOT_KIND:
+        raise res.Refusal('normal-boot expected declares only evidence_kind "normal-boot", settle_seconds and screen')
+    settle = expected.get('settle_seconds')
+    if type(settle) not in (int,float) or not 0 < settle <= 60:raise res.Refusal('normal-boot settle_seconds must be in (0, 60]')
+    if type(case.get('timeout')) is not int or case['timeout'] <= settle:raise res.Refusal('normal-boot timeout must exceed the settle time')
+    screen = expected.get('screen',{})
+    geometry = screen.get('geometry') if isinstance(screen,dict) else None
+    if not isinstance(screen,dict) or set(screen)-{'geometry'} or geometry is not None and (
+            not isinstance(geometry,list) or len(geometry) != 2 or any(type(v) is not int for v in geometry) or
+            not 256 <= geometry[0] <= 2048 or not 300 <= geometry[1] <= 2048):
+        raise res.Refusal('normal-boot screen declares only geometry [width, height]')
+    return NORMAL_BOOT_KIND
+
+
+class NormalBootParser:
+    """Serial evidence of a boot without a test request.
+
+    Milestones must appear once each, in declared order. A negative line is
+    recorded as the failure at once; the runner raises it after a short grace
+    so the lines that follow it (a PANIC record's reason) reach serial.log.
+    """
+    def __init__(self, run_id, probe=NORMAL_BOOT_KIND, clock=None):
+        self.run_id = run_id; self.probe = probe; self.clock = clock
+        self.records = []; self.milestones = {}; self.failure = None
+        self.terminal = None; self.not_run_subcases = []; self.lines = 0
+    def feed(self, raw):
+        self.lines += 1
+        line = raw.removesuffix(b'\n').removesuffix(b'\r')
+        def record(event, name, **fields):
+            row = {'event':event, 'name':name, 'serial_line':self.lines,
+                   'text':line[:240].decode('ascii','backslashreplace'), **fields}
+            if self.clock:row['host_elapsed_seconds'] = round(self.clock(),3)
+            self.records.append(row);return row
+        for name, pattern in NORMAL_BOOT_NEGATIVE:
+            if pattern.match(line):
+                row = record('NEGATIVE', name)
+                if self.failure is None:self.failure = row
+                return row
+        for name, pattern in NORMAL_BOOT_MILESTONES:
+            match = pattern.match(line)
+            if not match:continue
+            if name in self.milestones:
+                row = record('NEGATIVE', 'repeated_milestone', milestone=name)
+                if self.failure is None:self.failure = row
+                return row
+            fields = {'build_id':match[1].decode('ascii')} if name == 'kernel_banner' else \
+                     {'pid':int(match[1]), 'pgid':int(match[2])} if name == 'desktop_pid' else {}
+            self.milestones[name] = row = record('MILESTONE', name, **fields)
+            return row
+        return None
+    @property
+    def desktop_seen(self):return 'desktop_pid' in self.milestones
+    def failure_reason(self):
+        f = self.failure
+        return f"normal boot: {f['name']} at serial line {f['serial_line']}: {f['text']}"
+    def check(self, expected=None):
+        if self.failure:raise EvidenceError(self.failure_reason())
+        previous = 0
+        for name, _ in NORMAL_BOOT_MILESTONES:
+            row = self.milestones.get(name)
+            if row is None:raise EvidenceError('missing normal-boot milestone: '+name)
+            if row['serial_line'] <= previous:raise EvidenceError('normal-boot milestone out of order: '+name)
+            previous = row['serial_line']
+        return True
+    def summary(self):
+        desktop = self.milestones.get('desktop_pid',{})
+        return {'milestones':{name:{k:v for k,v in row.items() if k not in ('event','name')}
+                              for name,row in self.milestones.items()},
+                'negative_lines':[r for r in self.records if r['event'] == 'NEGATIVE'],
+                'kernel_build_id':self.milestones.get('kernel_banner',{}).get('build_id'),
+                'desktop_pid':desktop.get('pid'), 'desktop_pgid':desktop.get('pgid'),
+                'ciuki_test_records':sum(r['name'] in ('panic','test_record') and r['text'].startswith('CIUKI_TEST ')
+                                         for r in self.records)}
+
+
+def normal_boot_regions(width, height):
+    """(name, box, colours, bound, limit, step): cheap layout facts of the
+    shell desktop, never a full-frame digest (the taskbar clock changes)."""
+    top = min(width,256)
+    return (('top_bar',(0,0,top,DESK_BAR_ROWS),(DESK_TOP_BAR,),'min',0.5,1),
+            ('console_absent',(0,0,top,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
+            ('taskbar',(0,height-DESK_BAR_ROWS,width,DESK_BAR_ROWS),(DESK_TASKBAR,),'min',0.5,1),
+            ('start_button',(4,height-DESK_BAR_ROWS+3,76,26),DESK_START_BUTTON,'min',0.4,1),
+            ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),(DESK_BACKGROUND,),'min',0.25,2))
+
+
+def colour_fraction(pixels, width, box, colours, step=1, tolerance=SCREEN_TOLERANCE):
+    accepted = {(r,g,b) for c in colours
+                for r in range(max(0,(c>>16&255)-tolerance),min(255,(c>>16&255)+tolerance)+1)
+                for g in range(max(0,(c>>8&255)-tolerance),min(255,(c>>8&255)+tolerance)+1)
+                for b in range(max(0,(c&255)-tolerance),min(255,(c&255)+tolerance)+1)}
+    x0, y0, w, h = box; matched = total = 0
+    for y in range(y0,y0+h,step):
+        row = pixels[(y*width+x0)*3:(y*width+x0+w)*3]
+        for pixel in zip(row[0::3*step],row[1::3*step],row[2::3*step]):
+            total += 1; matched += pixel in accepted
+    return matched/total if total else 0.0
+
+
+def observe_normal_boot_screen(path, spec):
+    """Taskbar, start button, top bar and background colours of the shell
+    desktop; the top-left must not show the kernel console colours."""
+    width, height, pixels = read_ppm(path)
+    observed = {'artifact':Path(path).name, 'ppm_sha256':sha(path), 'width':width, 'height':height,
+                'heuristic':'normal-boot-desktop-1', 'colour_tolerance':SCREEN_TOLERANCE,
+                'regions':{}, 'failures':[]}
+    geometry = spec.get('geometry')
+    if geometry is not None and [width,height] != list(geometry):
+        observed['failures'].append(f'geometry {width}x{height} differs from declared {geometry[0]}x{geometry[1]}')
+        return observed
+    for name, box, colours, bound, limit, step in normal_boot_regions(width,height):
+        fraction = colour_fraction(pixels,width,box,colours,step)
+        observed['regions'][name] = {'box':list(box), 'colours':['%06x'%c for c in colours],
+                                     bound:limit, 'fraction':round(fraction,4), 'sample_step':step}
+        if bound == 'min' and fraction < limit or bound == 'max' and fraction > limit:
+            observed['failures'].append(name)
+    return observed
 
 
 def desktop_interaction(records):
@@ -1036,15 +1235,23 @@ def check_audio_wav(path, expected):
 
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
-    request=case.get('selector',f"f0:{case['probe']} run={{run_id}}").format(run_id=run_id)
-    source = case.get('selector_source', 'fw_cfg')
-    requested=selector(request,source,True)
-    if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
-    request=f"f{requested['phase']}:{requested['probe']} run={requested['run']}"
-    platform=None if source == 'cfg' else profile.get('platform') or requested['platform']
-    if platform:request+=' platform='+platform
-    if requested['safe']:request+=' safe=1'
-    if requested.get('server'):request+=' server='+requested['server']
+    normal=case_kind(case)==NORMAL_BOOT_KIND
+    if normal:
+        # No fw_cfg item and no BOOT.CFG probe line: the loader menu times out
+        # into a normal boot, as on a physical PC. A profile platform override
+        # travels in the fw_cfg request, so such a profile cannot host it.
+        if profile.get('platform'):raise res.Refusal('normal boot has no fw_cfg request; profile platform override unavailable')
+        request=None;source='none'
+    else:
+        request=case.get('selector',f"f0:{case['probe']} run={{run_id}}").format(run_id=run_id)
+        source = case.get('selector_source', 'fw_cfg')
+        requested=selector(request,source,True)
+        if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
+        request=f"f{requested['phase']}:{requested['probe']} run={requested['run']}"
+        platform=None if source == 'cfg' else profile.get('platform') or requested['platform']
+        if platform:request+=' platform='+platform
+        if requested['safe']:request+=' safe=1'
+        if requested.get('server'):request+=' server='+requested['server']
     cache=case.get('disk_cache','writeback')
     if cache not in ('writeback','writethrough','none','directsync'):raise res.Refusal('unsafe/unknown disk cache mode forbidden')
     disk={'driver':'qcow2','file':{'driver':'file','filename':str(overlay)}}
@@ -1061,17 +1268,15 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         disk_format='blkdebug'
     drive='file='+('json:'+json.dumps(disk,separators=(',',':')) if case.get('fault') or case.get('crash_cut') else str(overlay))
     drive_id=',id=ciuki-cut-drive' if case.get('crash_cut') else ''
-    selector(request,source,True)
+    if not normal:selector(request,source,True)
     devices=case.get('device_exceptions',{})
     args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
           '-monitor','none','-nic','none','-no-shutdown','-S',
           '-drive',drive.replace(',',',,')+',format='+disk_format+',if=ide,index=0,media=disk,cache='+cache+',rerror=report,werror=report'+drive_id,
-          '-vga',devices.get('vga',profile['vga']),'-qmp','unix:q,server=on,wait=off',
-          '-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
-    if source == 'cfg':
-        args = args[:-2]
-        if case.get('sweep'): args.remove('-no-shutdown')
+          '-vga',devices.get('vga',profile['vga']),'-qmp','unix:q,server=on,wait=off']
+    if source not in ('cfg','none'):args+=['-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
+    if source == 'cfg' and case.get('sweep'): args.remove('-no-shutdown')
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
     # reason=host-qmp-system-reset'), so warm-restart cases omit it; guest
     # resets are still caught by the RESET event count against expected_resets.
@@ -1187,14 +1392,24 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                   checkers=[],durability_observations=[],patch_manifest=[],marker_manifest=[],digests=[])
     result['operator_confirmation'] = False
     result['operator_confirmation_required'] = case.get('operator_confirmation',False)
+    normal=case_kind(case)==NORMAL_BOOT_KIND
+    # Probe and sweep cases are judged on CIUKI_TEST records; a normal boot on
+    # serial milestones and a screendump, with no test request at all.
+    result['evidence_kind']=NORMAL_BOOT_KIND if normal else 'ciuki-test-records'
+    if normal:
+        result['normal_boot']={'fw_cfg_request':None,'ciuki_test_records_required':False,
+                               'settle_seconds':case['expected']['settle_seconds'],
+                               'milestones_required':[name for name,_ in NORMAL_BOOT_MILESTONES],
+                               'negative_kinds':sorted({name for name,_ in NORMAL_BOOT_NEGATIVE}|{'repeated_milestone'})}
     directory.mkdir(parents=True,exist_ok=False)
     launched=None
-    process=qmp=cgroup=None;parser=(SweepParser if case.get('sweep') else Parser)(run_id,case['probe']);fd=None;dirfd=None;logs=[]
+    process=qmp=cgroup=None;parser=(SweepParser if case.get('sweep') else NormalBootParser if normal else Parser)(run_id,case['probe']);fd=None;dirfd=None;logs=[]
     pending=b'';panic_start=None;armed_stats=None;terminal_time=None
     screen_before = directory/'desktop-before.ppm'
     screen_after = directory/'desktop-after.ppm'
     screen_armed_at = screen_interaction_at = None
     window_shot = directory/'window.ppm';window_armed_at = None
+    normal_shot = directory/'screen.ppm';desktop_at = failure_at = None
     restart_performed=False;expected_resets=0
     try:
         if shared_overlay is None:
@@ -1208,10 +1423,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if shared_overlay is not None:raise res.Refusal('crash marker is placed only before the first boot')
             result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
         result['overlay_path']=str(overlay)
-        result['fixtures']=prepare_fixtures(host,case,directory)
+        result['fixtures']=prepare_fixtures(host,case,directory,image)
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
         serial=(directory/'serial.log').open('wb');stderr=(directory/'stderr.log').open('wb');qlog=(directory/'qmp.log').open('wb');logs=[serial,stderr,qlog]
         launched=time.monotonic();deadline=launched+case['timeout']
+        if normal:parser.clock=lambda:time.monotonic()-launched
         process=host.launch(scoped,directory)
         os.set_blocking(process.stdout.fileno(),False)
         # The wrapper cannot exec QEMU until both systemd properties and kernel
@@ -1331,6 +1547,24 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     result['desktop_interaction']=desktop_interaction(parser.records)
                     result['desktop_screen']=observe_desktop_screen(screen_before,screen_after)
                     screen_before.unlink();screen_after.unlink()
+            if normal:
+                # A negative line fails the case after a 1 s grace (or at once
+                # near the deadline) that collects the lines following it.
+                if parser.failure:
+                    if failure_at is None:failure_at=now
+                    if now-failure_at>=1 or deadline-now<.2:raise EvidenceError(parser.failure_reason())
+                elif parser.desktop_seen and qmp:
+                    if desktop_at is None:
+                        desktop_at=now;result['normal_boot']['desktop_seen_after_seconds']=round(now-launched,3)
+                    if now-desktop_at>=case['expected']['settle_seconds']:
+                        qmp.command('screendump',{'filename':str(normal_shot)})
+                        while select.select([fd],[],[],0)[0]:collect(fd)
+                        parser.check(case['expected'])
+                        result['screen']=observe_normal_boot_screen(normal_shot,case['expected'].get('screen',{}))
+                        result['normal_boot']['screendump_after_seconds']=round(time.monotonic()-launched,3)
+                        if result['screen']['failures']:
+                            raise EvidenceError('normal-boot screen heuristic failed: '+', '.join(result['screen']['failures']))
+                        break
             if case.get('window_screen') and qmp:
                 spec = case['window_screen']
                 arms = [r for r in parser.records if r.get('event')=='ARM' and r.get('action')==spec.get('action','window_screen')]
@@ -1396,6 +1630,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     sweep_exit()
                     break
                 if pending:parser.feed(pending)
+                if normal and parser.failure:raise EvidenceError(parser.failure_reason())
                 raise EvidenceError('QEMU exited before observation completed')
             if case.get('evidence_sink')=='screen' and now-launched>=case.get('screen_capture_after',10) and not (directory/'screen.ppm').exists() and qmp:
                 qmp.command('screendump',{'filename':str(directory/'screen.ppm')})
@@ -1422,10 +1657,12 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 result['reason']+='; pending declared stimulus '+json.dumps(pending_stimulus,sort_keys=True)
         if isinstance(e,EvidenceNotRun):
             result['outcome']='not_run';result['not_run_subcases']=parser.not_run_subcases
+        if isinstance(e,dos_fixtures.FixturesAbsent):
+            result['reason']='fixtures_absent';result['fixtures_absent']=str(e)
     finally:
         # A failed desktop or DOS-window case keeps its final screen for diagnosis
         # (failure artifacts are retained; passing runs delete everything but serial.log).
-        if result.get('outcome')!='pass' and qmp and (case.get('desktop_screen') or case.get('window_screen')):
+        if result.get('outcome')!='pass' and qmp and (case.get('desktop_screen') or case.get('window_screen') or normal):
             try:qmp.command('screendump',{'filename':str(directory/'screen-fail.ppm')})
             except (OSError,RuntimeError,ValueError):pass
         # Ownership is held until this sequence finishes, including verification.
@@ -1457,6 +1694,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         result['stimulus']['observed_sha256']=digest_json(actions.observed)
         result['durability_observations'].extend(r for r in parser.records if r.get('group') in ('durability','barrier','persisted'))
         result['observed']=parser.records
+        if normal:result['normal_boot'].update(parser.summary())
         for fixture in result['fixtures'].get('manifest',[]):
             if fixture.get('generator')=='xorriso' and fixture.get('path'):
                 try:
@@ -1479,6 +1717,14 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
                 except (OSError,ValueError) as e:
                     result['outcome']='fail';result['reason']=str(e)
+            if fixture.get('generator')=='dos-local' and fixture.get('path'):
+                try:
+                    fixture['sha256_after']=sha(fixture['path'])
+                    if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('DOS workload fixture changed during read-only case')
+                    if result['outcome']=='pass':dos_fixtures.verify_records(fixture,parser.records)
+                    fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
+                except (OSError,ValueError) as e:
+                    result['outcome']='fail';result['reason']=str(e)
             if fixture.get('corruption') and fixture.get('path'):
                 fixture['sha256_after']=sha(fixture['path'])
                 if case['id']=='mount-dirty' and fixture['corruption']['defect']=='dirty' and result['outcome']=='pass':
@@ -1489,11 +1735,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         result['outcome']='fail';result['reason']=str(e)
                 elif fixture['sha256_after']!=fixture['sha256']:
                     result['outcome']='fail';result['reason']='corrupted fixture changed during read-only mount case'
-        if request.startswith('f2:'):
+        if (request or '').startswith('f2:'):
             try:record_f2_result(result,parser)
             except (OSError,ValueError,RuntimeError) as e:
                 result['outcome']='fail';result['reason']=str(e)
-        if request.startswith('f3:'):
+        if (request or '').startswith('f3:'):
             try:record_dos_payloads(result,parser)
             except (OSError,ValueError,RuntimeError) as e:
                 result['outcome']='fail';result['reason']=str(e)
@@ -1535,16 +1781,18 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         for p in directory.iterdir():
             if p.is_file() and p.name!='result.json':result['artifacts'][p.name]={'sha256':sha(p),'size':p.stat().st_size}
         # --keep retains failure evidence for review, not passing overlays;
-        # all passing runs always retain exactly these two contract artifacts.
+        # all passing runs always retain exactly these contract artifacts
+        # (a normal boot also keeps its evaluated screendump).
+        passing=['serial.log','screen.ppm'] if normal else ['serial.log']
         if result['outcome']=='pass':
             for p in directory.iterdir():
-                if p.name!='serial.log' and not (retain_overlay and p==overlay):p.unlink()
-            result['artifacts']={k:v for k,v in result['artifacts'].items() if k=='serial.log' or (retain_overlay and k=='run.qcow2')}
+                if p.name not in passing and not (retain_overlay and p==overlay):p.unlink()
+            result['artifacts']={k:v for k,v in result['artifacts'].items() if k in passing or (retain_overlay and k=='run.qcow2')}
         else:
             for name in ('q','serial.fifo','gate','file-limit'):
                 (directory/name).unlink(missing_ok=True)
         result['artifacts']={k:v for k,v in result['artifacts'].items() if (directory/k).is_file()}
-        result['retention']={'keep_requested':keep,'passing_files':['result.json','serial.log']}
+        result['retention']={'keep_requested':keep,'passing_files':['result.json',*passing]}
         (directory/'result.json').write_text(json.dumps(result,indent=2)+'\n')
         res.prune(directory.parent.parent if case.get('sweep') else directory.parent)
     return result,directory

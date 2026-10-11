@@ -10,6 +10,11 @@
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
 extern void v86_leave(uint32_t) __attribute__((noreturn));
+/* f4-05 DOS VM audio output (audio/vm_source.c): one mixer source per VM
+ * while a backend is ready. Weak: host harnesses link the VM without F4. */
+extern int audio_vm_attach(struct dosvm_key) __attribute__((weak));
+extern void audio_vm_detach(struct dosvm_key) __attribute__((weak));
+extern void audio_vm_kick(void) __attribute__((weak));
 static struct dosvm slots[DOSVM_LIMIT];
 static struct dosvm_key input_focus;
 
@@ -203,7 +208,9 @@ int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
     v->info.state = DOSVM_BLOCKED;
     while (v->info.state != DOSVM_STOPPING) {
         if (keyboard) { dosvm_input_poll(v); if (dosvm_keyboard_refresh(v)) return -EFAULT; }
-        if (keyboard && v->key_count) break;
+        /* A window key reaches the 8042, not the BIOS buffer: return so the
+         * guest's INT 9 can move it there (dosvm_bios INT 16h, f3-02). */
+        if (keyboard && (v->key_count || dosvm_kbd_irq_ready(v))) break;
         if (!keyboard && deadline_passed(deadline)) break;
         if (!v->info.dos_ready && deadline_passed(v->boot_deadline)) {
             dosvm_stop(v->info.key, DOSVM_TIMEOUT);
@@ -403,8 +410,12 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
     if (e && v->info.dirty) v->info.data_loss = true;
+    if (audio_vm_detach) audio_vm_detach(key); /* f4-05: revoke the mixer source first */
     dosvm_audio_close(v);
     if (v->as.pd_phys) {
+        /* f3-06: window PTEs may name the model's plane pages (kernel memory);
+         * restore the VM's own frames before the address space frees them. */
+        dosvm_vga_sync(v, true);
         dpmi_close(v);
         dosvm_memory_close(v);
         as_destroy(&v->as);
@@ -487,13 +498,16 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     e = dosvm_vga_init(v);
     if (e) goto fail;
     if ((e = dpmi_rom_init(v))) goto fail;
-    e = dosvm_disk_open(v);
+    e = dosvm_disk_open(v, config ? config->base : 0);
     if (e) goto fail;
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
     if (!v->task) { e = -ENOMEM; goto fail; }
     v->info.resident += KSTACK_SIZE + PAGE_SIZE + sizeof(struct task);
     if (v->info.resident - v->memory.quota > DOSVM_LOW_CAP ||
         v->info.resident > commitment) { e = -ENOMEM; goto fail; }
+    /* f4-05: the VM's SB16/OPL output joins the mixer when a backend is
+     * ready; without one f3-05 keeps discarding with its counter. */
+    if (audio_vm_attach) audio_vm_attach(v->info.key);
     *out = v;
     return 0;
 fail:
@@ -567,6 +581,7 @@ void dosvm_tick(void)
         v->clock_ms += elapsed;
         dosvm_pit_advance(v, elapsed);
         dosvm_audio_advance(v, elapsed);
+        if (audio_vm_kick && (v->audio.q.seg_count || v->audio.q.event_count)) audio_vm_kick();
     }
 }
 const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)

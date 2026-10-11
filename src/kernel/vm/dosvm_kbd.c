@@ -203,6 +203,14 @@ static uint16_t bios_word(unsigned scan, bool extended, uint8_t s)
     bool upper = letter ? shift != ((s & 0x40) != 0) : shift;
     return (uint16_t)(scan << 8 | (uint8_t)(upper ? key_shift[scan] : c));
 }
+/* f3-02: a key byte waits in the 8042 with IRQ1 requested, and the virtual
+ * PIC would deliver an interrupt to an enabled guest now. The guest's INT 9
+ * (the ROM stub below, or a DOS/TSR hook chained to it) is the only path from
+ * the 8042 to the BIOS buffer, so a blocking INT 16h must let it run. */
+bool dosvm_kbd_irq_ready(const struct dosvm *v)
+{
+    return v->kbd.count && (v->monitor.pic[0].irr & 2u) && v86_irq_pending(&v->monitor) >= 0;
+}
 int dosvm_kbd_bios(struct dosvm *v)
 {
     struct dosvm_kbd *k = &v->kbd;
