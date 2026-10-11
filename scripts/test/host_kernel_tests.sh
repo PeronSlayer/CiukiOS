@@ -221,6 +221,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 "$out/test_virtual_vga"
 # f3-04 guest runner: the real DOSBOOT.IMG on the production DOS VM and DPMI
 # host code with libx86emu as the CPU (pre-QEMU check, not QEMU evidence).
+# f3-02: keys: types \VMVIDEO.COM the way a desktop window does (8042, IRQ1,
+# guest INT 9) into the shell blocked in INT 16h AH=00h.
 # Optional: needs libx86emu and an already built build/f0/dos/DOSBOOT.IMG.
 dos_image="$root/build/f0/dos/DOSBOOT.IMG"
 if [[ -f /usr/include/x86emu.h && -f "$dos_image" ]] && grep -q '"/DPMI4GW.EXE"' "${dos_image%.IMG}.json"; then
@@ -229,7 +231,7 @@ if [[ -f /usr/include/x86emu.h && -f "$dos_image" ]] && grep -q '"/DPMI4GW.EXE"'
         "$root/tests/host/dosvm_guest_cpu.c" "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
         "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
         "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" -lx86emu -o "$out/dosvm_guest"
-    if ! (cd "$root" && timeout 600 "$out/dosvm_guest" "$dos_image" 'gate:\DPMI16.COM' DPMI16 '\DPMI16.COM' DPMI16 '\DPMI32.COM' DPMI32 \
+    if ! (cd "$root" && timeout 600 "$out/dosvm_guest" "$dos_image" 'keys:\VMVIDEO.COM' VMVIDEO 'gate:\DPMI16.COM' DPMI16 '\DPMI16.COM' DPMI16 '\DPMI32.COM' DPMI32 \
             '\DPMI4GW.EXE' DPMI4GW 'fault:\DPMIFLT.COM' DPMIFLT > "$out/dosvm_guest.log" 2>&1); then
         tail -n 40 "$out/dosvm_guest.log"
         exit 1

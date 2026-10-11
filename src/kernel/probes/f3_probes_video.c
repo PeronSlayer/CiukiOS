@@ -182,13 +182,22 @@ CIUKI_F3_PROBE("vm-video", probe_f3_vm_video);
 
 /* F3 desktop row (directive f3-02 item 4): the desktop launches /bin/dosbox
  * through its menu path (--launch=dosbox); the window VM boots to the prompt;
- * the runner types \VMVIDEO.COM through QMP (desktop -> dosbox -> syscall 70
- * -> guest keyboard); stage 1 is held for the runner's window_screen
- * screendump of the composited window; the controller then finishes the
- * stages and types EXIT: the VM stops, /bin/dosbox closes its window and
- * exits, and every VM and desktop object returns to its baseline. */
+ * the runner types \VMVIDEO.COM through QMP (desktop -> dosbox -> syscall 72
+ * -> virtual 8042 -> IRQ1 -> guest INT 9 -> BIOS buffer); stage 1 is held for
+ * the runner's window_screen screendump of the composited window; the
+ * controller then finishes the stages and types EXIT: the VM stops,
+ * /bin/dosbox closes its window and exits, and every VM and desktop object
+ * returns to its baseline.
+ * Stimulus: a runner (fw_cfg) case declares the typed keys, so the
+ * controller never types for it: it waits WINDOW_INPUT_MS (31 QMP batches
+ * take about 10 s under TCG) and fails with the device diagnostics when the
+ * keys do not arrive. Only a BOOT.CFG sweep (probes_operator_mode, no runner)
+ * falls back to kernel typing after WINDOW_OPERATOR_MS and says typed=kernel. */
 #define WINDOW_PROBE "vm-window"
 #define WINDOW_HOLD_MS 6000u
+#define WINDOW_INPUT_MS 120000u
+#define WINDOW_OPERATOR_MS 30000u
+extern bool probes_operator_mode;
 static bool process_live(uint32_t pid)
 {
     struct process *p = proc_find(pid);
@@ -250,30 +259,33 @@ static int probe_f3_vm_window(void)
     rec_emit(WINDOW_PROBE, "DATA", "case=window vm=%u generation=%u client=%u desktop=%u ready=%u prompt=1",
              info.key.id, info.key.generation, client, desktop_pid, info.dos_ready);
     rec_emit(WINDOW_PROBE, "ARM", "action=window_input vm=%u", info.key.id);
-    /* QEMU types through QMP and the desktop. Without that stimulus (a cfg
-     * sweep on hardware) the controller types after 30 s and says so. */
     uint32_t first = 1;
     const char *typed = "window";
-    error = video_wait(v, 30000, stage_reached, &first);
-    if (error == -V86_ETIMEDOUT) {
+    error = video_wait(v, probes_operator_mode ? WINDOW_OPERATOR_MS : WINDOW_INPUT_MS, stage_reached, &first);
+    if (error == -V86_ETIMEDOUT && probes_operator_mode) {
         typed = "kernel";
         if ((error = type_line(v, "\\VMVIDEO.COM"))) goto cleanup;
         error = video_wait(v, 60000, stage_reached, &first);
     }
     if (error || (error = video_wait(v, 5000, blocked_for_key, 0))) goto cleanup;
+    /* The sample is the stage-1 text frame (mode 3, 640x400, flags 3): the
+     * typed line ends with Enter, so no key may have advanced VMVIDEO yet. */
     struct dosvm_frame frame;
     if ((error = dosvm_frame_digest(v, 0, &frame))) goto cleanup;
     char hex[65];
     sha256_hex(frame.digest, hex);
     dosvm_info(v, &info);
-    rec_emit(WINDOW_PROBE, "DATA", "case=frame stage=1 typed=%s mode=%u width=%u height=%u scale=%u text=%u flags=%u digest=%s",
-             typed, frame.mode, frame.width, frame.height, frame.scale, frame.text, info.video_flags, hex);
+    uint32_t sampled = info.video_stage;
+    rec_emit(WINDOW_PROBE, "DATA", "case=frame stage=%u typed=%s mode=%u width=%u height=%u scale=%u text=%u flags=%u digest=%s",
+             sampled, typed, frame.mode, frame.width, frame.height, frame.scale, frame.text, info.video_flags, hex);
+    if (sampled != 1) { error = -EFAULT; goto cleanup; }
     rec_emit(WINDOW_PROBE, "ARM", "action=window_screen digest=%s", hex);
-    /* The frame stays in place while the runner composites and captures it. */
+    /* Stage 1 stays in place while the runner composites and captures it. */
     until = deadline_after_ms(WINDOW_HOLD_MS);
     while (!deadline_passed(until)) {
         dosvm_info(v, &info);
         if (info.state >= DOSVM_STOPPING || !process_live(client)) { error = -V86_EIO; goto cleanup; }
+        if (info.video_stage != 1) { error = -EFAULT; goto cleanup; }
         task_sleep_ms(10);
     }
     if (!dosvm_keyboard(dosvm_key(v), 0x1C0D)) { error = -ENOSPC; goto cleanup; }

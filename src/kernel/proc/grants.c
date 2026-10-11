@@ -18,7 +18,8 @@ void grant_release(struct desktop_description *d)
 {
     if (!d->owner) return;
     desktop_objects.grants--;
-    if (!--grant_descriptions) grant_owner = 0;
+    /* The last grant description closes: the screen console draws again. */
+    if (!--grant_descriptions) { grant_owner = 0; console_display_owned(false); }
 }
 
 int grants_install(struct process *p, int32_t fds[2])
@@ -44,6 +45,9 @@ int grants_install(struct process *p, int32_t fds[2])
     p->fds[a] = (struct proc_fd){ &display->object, FD_CLOEXEC };
     p->fds[b] = (struct proc_fd){ &input->object, FD_CLOEXEC };
     fds[0] = a; fds[1] = b;
+    /* f3-02: the grant owner composites every LFB pixel; kernel log lines
+     * and records (serial, history) must not draw over it. */
+    console_display_owned(true);
     return 0;
 }
 

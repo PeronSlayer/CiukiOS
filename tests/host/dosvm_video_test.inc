@@ -434,6 +434,7 @@ static uint16_t take_key(struct dosvm *v)
     CHECK(!dosvm_bios(v, &f, 0x16));
     return (uint16_t)f.tf.eax;
 }
+static unsigned take_bios_count(struct dosvm *v) { CHECK(!dosvm_keyboard_refresh(v)); return v->key_count; }
 static uint16_t press(struct dosvm *v, struct ciuki_dosvm_command *c, int code)
 {
     CHECK(!key_event(c, code, 1) && !key_event(c, code, 0));
@@ -604,6 +605,111 @@ static void test_client_boundary(void)
     printf("DOS VM window boundary: authority, record validation, focus/keyboard adapter, owner death and failures PASS\n");
 }
 
+/* f3-02 QEMU finding (vm-window, 2026-10-11): the shell waits for a line in
+ * INT 16h AH=00h, which blocked inside the monitor until the BIOS buffer held
+ * a key, while window keys only reach the virtual 8042 and need the guest's
+ * INT 9 to get there: the runner's keys stayed queued until the controller
+ * typed into the BIOS buffer directly, and three of them then advanced
+ * VMVIDEO from stage 1 to 4. This test drives the runner's exact 30 key
+ * events through syscall 72 into a guest already blocked in INT 16h AH=00h,
+ * then runs the production ROM stubs (F000:0090 INT 9, F000:0160 INT 16h)
+ * through dosvm_trap: only trapping instructions execute, as in
+ * test_device_irq_delivery. */
+static struct ciuki_dosvm_command typing_window;
+static unsigned typing_sleeps, typing_pending;
+static const struct { int code, value; } typing_keys[] = {
+    {0x2B,1},{0x2B,0},{0x2A,1},{0x2F,1},{0x2F,0},{0x32,1},{0x32,0},{0x2F,1},{0x2F,0},{0x17,1},{0x17,0},
+    {0x20,1},{0x20,0},{0x12,1},{0x12,0},{0x18,1},{0x18,0},{0x2A,0},{0x34,1},{0x34,0},{0x2A,1},{0x2E,1},
+    {0x2E,0},{0x18,1},{0x18,0},{0x32,1},{0x32,0},{0x2A,0},{0x1C,1},{0x1C,0}};   /* \VMVIDEO.COM Enter (f3-vm.json) */
+static void typing_hook(void)
+{
+    /* The guest is blocked in the AH=00h wait; the first key arrives on the
+     * 5th scheduler sleep. Any wait after that is the old deadlock. */
+    typing_sleeps++;
+    if (typing_sleeps == 5) {
+        CHECK(!key_event(&typing_window, typing_keys[0].code, typing_keys[0].value) &&
+              !key_event(&typing_window, typing_keys[1].code, typing_keys[1].value));
+        typing_pending = 2;
+    }
+    if (typing_pending && typing_sleeps > 205) {
+        fprintf(stderr, "FAIL: INT 16h AH=00h still blocked 200 ms after window keys reached the 8042\n");
+        exit(1);
+    }
+}
+/* F000:0090: INT FEh; PUSH AX; MOV AL,20h; OUT 20h,AL; POP AX; IRET. */
+static void typing_rom_int9(struct dosvm *v, struct v86_frame *f)
+{
+    CHECK(device_trap(v, f, 13) && f->tf.cs == 0xF000 && f->tf.eip == 0x92);     /* synthetic INT 9 */
+    uint32_t ax = f->tf.eax;
+    f->tf.user_esp -= 2; f->tf.eax = (ax & ~0xFFu) | 0x20; f->tf.eip = 0x95;     /* PUSH AX; MOV AL,20h */
+    CHECK(device_trap(v, f, 13) && f->tf.eip == 0x97 && !(v->monitor.pic[0].isr & 2)); /* OUT 20h: EOI */
+    f->tf.user_esp += 2; f->tf.eax = ax; f->tf.eip = 0x98;                        /* POP AX */
+    CHECK(device_trap(v, f, 13));                                                 /* IRET */
+}
+/* One INT 16h AH=00h at 0200:0000; returns AX at the caller's next byte. */
+static uint16_t typing_read(struct dosvm *v, struct v86_frame *f)
+{
+    const uint8_t int16[] = {0xCD, 0x16};
+    f->tf.cs = 0x200; f->tf.eip = 0;
+    CHECK(device_insn(v, f, 0, int16, 2) && f->tf.cs == 0xF000 && f->tf.eip == 0x160 && !v->monitor.vif);
+    for (unsigned steps = 0; steps < 512; steps++) {
+        if (f->tf.cs == 0xF000 && f->tf.eip == 0x90) { typing_rom_int9(v, f); continue; }
+        CHECK(f->tf.cs == 0xF000 && f->tf.eip == 0x160);
+        CHECK(device_trap(v, f, 13));                                             /* INT FEh: AH=00h */
+        if (f->tf.cs == 0xF000 && f->tf.eip == 0x162) {
+            uint16_t key = (uint16_t)f->tf.eax;
+            CHECK(device_trap(v, f, 13) && f->tf.cs == 0x200 && f->tf.eip == 2 && v->monitor.vif); /* IRET */
+            return key;
+        }
+    }
+    CHECK(false);
+    return 0;
+}
+static void test_client_typing(void)
+{
+    memset(fake_proc, 0, sizeof(fake_proc));
+    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_proc[0].dosvm_capability = true;
+    fake_current = &fake_proc[0];
+    struct ciuki_dosvm_command c;
+    CHECK(!create_window(0, "Typing", &typing_window));
+    struct dosvm *v = dosvm_lookup((struct dosvm_key){typing_window.id, typing_window.generation});
+    CHECK(v); v->info.dos_ready = true;
+    c = command_for(typing_window.id, typing_window.generation); c.focused = 1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)));      /* the desktop's FOCUS after CREATE_WINDOW */
+    v->monitor.pic[0].imr = 0xFD;                               /* IRQ1 only: no ROM timer stub in this walk */
+    struct v86_frame f = {0};
+    f.tf.user_ss = 0x300; f.tf.user_esp = 0x100; f.tf.eflags = V86_VM | V86_IF | 2;
+    v->monitor.vif = true; v->monitor.state = V86_RUNNING;
+    /* Blocked first, as the shell is when the runner starts typing. */
+    typing_sleeps = typing_pending = 0; sleep_hook = typing_hook;
+    uint16_t words[13]; unsigned n = 0;
+    words[n++] = typing_read(v, &f);
+    CHECK(typing_sleeps >= 5 && v->monitor.stats.delivered[1] == 2 && !v->kbd.count);
+    sleep_hook = 0;
+    /* The rest of the line arrives while the shell echoes: all 28 events queue
+     * in the 8042 before the next read, which runs one INT 9 per byte. */
+    for (unsigned i = 2; i < ARRAY_SIZE(typing_keys); i++)
+        CHECK(!key_event(&typing_window, typing_keys[i].code, typing_keys[i].value));
+    CHECK(v->kbd.count == 28 && !take_bios_count(v));
+    while (n < ARRAY_SIZE(words)) words[n++] = typing_read(v, &f);
+    static const uint16_t line[13] = {0x2B5C, 0x2F56, 0x324D, 0x2F56, 0x1749, 0x2044, 0x1245, 0x184F,
+                                      0x342E, 0x2E43, 0x184F, 0x324D, 0x1C0D};
+    CHECK(!memcmp(words, line, sizeof(line)) && !v->kbd.count && !take_bios_count(v) && !v->kbd.shift);
+    CHECK(v->monitor.stats.delivered[1] == 30 && !v->monitor.pic[0].isr && !(v->monitor.pic[0].irr & 2));
+    /* Nothing queued: the read blocks again (no spin through the stub). */
+    typing_sleeps = 0; typing_pending = 0; sleep_hook = device_hook;
+    device_hook_arm(v, 50, device_hang_stop);
+    const uint8_t int16[] = {0xCD, 0x16};
+    f.tf.cs = 0x200; f.tf.eip = 0;
+    CHECK(device_insn(v, &f, 0, int16, 2) && f.tf.eip == 0x160 && !device_trap(v, &f, 13));
+    CHECK(!sleep_hook && v->info.reason == DOSVM_TERMINATE);
+    c = command_for(typing_window.id, typing_window.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD);
+    empty();
+    fake_current = 0;
+    printf("DOS VM window typing: runner keys through syscall 72, 8042, IRQ1 and the ROM INT 9 into a blocked INT 16h AH=00h PASS\n");
+}
+
 static void test_video(void)
 {
     test_video_bios_ports();
@@ -611,4 +717,5 @@ static void test_video(void)
     test_video_presenter();
     test_video_goldens();
     test_client_boundary();
+    test_client_typing();
 }

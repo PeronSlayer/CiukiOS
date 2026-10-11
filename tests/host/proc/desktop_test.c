@@ -43,6 +43,9 @@ static char frame_probe[24];
 void klog(const char *fmt, ...) { (void)fmt; }
 static unsigned operator_prompts;
 void console_operator_prompt(bool announce) { if (announce) operator_prompts++; }
+/* f3-02: the screen console stays dark while a process holds the display grant. */
+static bool console_owned; static unsigned console_owned_changes;
+void console_display_owned(bool owned) { console_owned = owned; console_owned_changes++; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
@@ -395,8 +398,10 @@ static void test_desktop_grants(void)
 {
     struct process *p, *child;
     struct proc_thread *t = make_process(proc_supervisor(), &p); desktop_select(t);
-    int32_t grants[2]; CHECK(!grants_install(p, grants));
-    CHECK(grants_install(p, grants) == -EPERM);
+    unsigned owned_changes = console_owned_changes;
+    int32_t grants[2]; CHECK(!console_owned && !grants_install(p, grants));
+    CHECK(console_owned && console_owned_changes == owned_changes + 1);
+    CHECK(grants_install(p, grants) == -EPERM && console_owned_changes == owned_changes + 1);
     struct ciuki_display_info info;
     CHECK(grant_display_info(p, 127, &info) == -EBADF);
     CHECK(grant_display_info(p, grants[1], &info) == -EBADF);
@@ -456,8 +461,10 @@ static void test_desktop_grants(void)
     CHECK(grant_input_read(p, grants[1], BUFFER, 1) == 1 && input_at == 3);
     CHECK(!ua_read(p->memory, events, BUFFER, sizeof(events[0])));
     CHECK(events[0].type == CIUKI_INPUT_KEY && !events[0].value && events[0].sequence == 260);
+    CHECK(console_owned);   /* the display duplicate and the input grant are still open */
     desktop_clean(p);
-    puts("desktop grants: inheritance/transfer forbidden, duplication, authority, input conversion/RESYNC PASS");
+    CHECK(!console_owned && !desktop_objects.grants);
+    puts("desktop grants: inheritance/transfer forbidden, duplication, authority, input conversion/RESYNC, console dark while granted PASS");
 }
 
 /* Independent pixel oracle enumerates source coordinates, not clipped rows. */

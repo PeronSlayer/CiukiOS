@@ -35,13 +35,20 @@ static unsigned hist_head, hist_count;
 static char linebuf[MAX_COLS + 1];
 static unsigned linelen;
 static bool draw_enabled;
+/* f3-02: while a process holds the display grant (the desktop), every LFB
+ * pixel is its own. The console keeps history and the serial copy but draws
+ * nothing until the grant is released (proc/grants.c); the next line then
+ * repaints the screen from history. Deliberate overlays (the operator
+ * prompt, evidence pages) and panic output (console_reclaim) still draw. */
+static volatile bool display_owned, repaint_pending;
 
-static uint32_t line_begin(void)
+static uint32_t line_begin_as(bool overlay)
 {
     uint32_t flags = irq_save();
-    draw_enabled = con_kind != CON_LFB || fbdev_console_begin();
+    draw_enabled = con_kind != CON_LFB || ((overlay || !display_owned) && fbdev_console_begin());
     return flags;
 }
+static uint32_t line_begin(void) { return line_begin_as(false); }
 
 static void line_end(uint32_t flags)
 {
@@ -107,6 +114,11 @@ static void scroll(void)
     /* Redraw from history: robust for both kinds and avoids reading VRAM. */
     unsigned shown = rows - 1;
     unsigned n = hist_count < shown ? hist_count : shown;
+    if (con_kind == CON_LFB && display_owned) {
+        cur_row = n;
+        cur_col = 0;
+        return;
+    }
     for (unsigned r = 0; r < rows; r++) {
         uint32_t flags = line_begin();
         const char *s = "";
@@ -171,6 +183,33 @@ bool console_init_lfb(void)
 
 void console_set_color(uint32_t f, uint32_t b) { fg = f; bg = b; }
 
+/* Display grant hook (proc/grants.c): owned while a process holds it. */
+void console_display_owned(bool owned)
+{
+    display_owned = owned;
+    if (!owned)
+        repaint_pending = true;
+}
+
+/* Panic path: two stores, no lock; the panic lines repaint the console. */
+void console_reclaim(void) { console_display_owned(false); }
+
+/* The released LFB still shows the desktop: redraw history and the line in
+ * progress before the next character. */
+static void repaint(void)
+{
+    repaint_pending = false;
+    scroll();
+    if (!linelen)
+        return;
+    uint32_t flags = line_begin();
+    unsigned c = 0;
+    for (; c < linelen && c < cols; c++)
+        draw_cell(c, cur_row, linebuf[c]);
+    cur_col = c;
+    line_end(flags);
+}
+
 /* The desktop owns and repaints the LFB. Refresh just one prompt row through
  * the existing console/presenter arbitration, without history scrolling or
  * holding a framebuffer claim across the operator wait. Serial is announced
@@ -183,7 +222,7 @@ void console_operator_prompt(bool announce)
         serial_write("\n", 1);
     }
     if (con_kind == CON_NONE || !rows || !cols) return;
-    uint32_t flags = line_begin();
+    uint32_t flags = line_begin_as(true);
     unsigned c = 0;
     for (; c < cols && c < sizeof(message) - 1; c++)
         draw_cell(c, 0, message[c]);
@@ -195,6 +234,8 @@ void console_write(const char *s, size_t n)
 {
     if (con_kind == CON_NONE)
         return;
+    if (repaint_pending && !display_owned && con_kind == CON_LFB)
+        repaint();
     size_t i = 0;
     while (i < n) {
         if (cur_col >= cols || s[i] == '\n') {
@@ -233,7 +274,7 @@ void console_show_page(unsigned page, const char *header)
         return;
     unsigned per = rows - 1;
     unsigned first = (hist_head + HIST_LINES - hist_count) % HIST_LINES;
-    uint32_t flags = line_begin();
+    uint32_t flags = line_begin_as(true);
     unsigned c = 0;
     for (; c < cols && header[c]; c++)
         draw_cell(c, 0, header[c]);
@@ -241,7 +282,7 @@ void console_show_page(unsigned page, const char *header)
         draw_cell(c, 0, ' ');
     line_end(flags);
     for (unsigned r = 0; r < per; r++) {
-        flags = line_begin();
+        flags = line_begin_as(true);
         unsigned li = page * per + r;
         const char *s = li < hist_count ? hist[(first + li) % HIST_LINES] : "";
         unsigned k = 0;
