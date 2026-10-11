@@ -74,6 +74,7 @@ void task_start(struct task *t) { (void)t; CHECK(false); }
 int ata_init(void) { ata_calls++; return 0; }
 struct ata_device *ata_device_get(unsigned c, unsigned u)
 { CHECK(c < 2 && u < 2); ata_lookups++; CHECK(!ata_calls); return 0; }
+int atapi_ready(struct ata_device *device) { (void)device; CHECK(false); return -FS_EIO; }
 int fbdev_init(void) { CHECK(false); return 0; }
 int i8042_init(void) { return 0; }
 int biosvm_init(void) { CHECK(false); return 0; }
@@ -121,7 +122,7 @@ int main(int argc, char **argv)
 }
 ''')
             sources=['fs/fs_port.c','fs/cache.c','fs/partition.c','fs/path.c',
-                     'fs/fat.c','fs/vfs.c','core/bootlog.c','drivers/blkpart.c',
+                     'fs/fat.c','fs/vfs.c','fs/fs_ro.c','fs/iso9660.c','core/bootlog.c','drivers/blkpart.c',
                      'probes/fat_probes.c','lib/sha256.c','lib/fmt.c']
             executable=directory/'bootlog-safe'
             env={**os.environ,'TMPDIR':str(directory),'ASAN_OPTIONS':'detect_leaks=0'}
@@ -218,7 +219,7 @@ int main(int argc,char **argv) {
     fake_close(&media[0]); return 0;
 }
 ''')
-            sources=['fs/fs_port.c','fs/cache.c','fs/partition.c','fs/path.c','fs/fat.c','fs/vfs.c',
+            sources=['fs/fs_port.c','fs/cache.c','fs/partition.c','fs/path.c','fs/fat.c','fs/vfs.c','fs/fs_ro.c','fs/iso9660.c',
                      'fs/mount.c','core/bootlog.c','drivers/blkpart.c','probes/fat_probes.c','lib/sha256.c','lib/fmt.c']
             exe=directory/'dirty-probe'
             env={**os.environ,'TMPDIR':str(directory),'ASAN_OPTIONS':'detect_leaks=0'}

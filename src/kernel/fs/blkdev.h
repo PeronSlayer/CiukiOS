@@ -12,14 +12,16 @@ struct blkdev {
     int (*read)(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf);
     int (*write)(struct blkdev *dev, uint64_t lba, uint32_t count, const void *buf);
     int (*flush)(struct blkdev *dev);
+    int (*media_check)(struct blkdev *dev); /* optional, sleepable readiness */
     uint64_t capacity;                 /* number of sectors, not last LBA */
-    uint32_t sector_size;              /* F1 requires 512 */
+    uint32_t sector_size;              /* FAT/partition: 512; ATAPI: 2048 */
+    uint32_t media_generation;         /* zero for fixed disks; never recycled */
     enum blkdev_cache_state write_cache_state;
     bool quarantined;
     void *ctx;                        /* owned by the device implementation */
 };
 static inline int blkdev_range(struct blkdev *d, uint64_t lba, uint32_t n) {
-    if (!d || d->sector_size != 512 || !n || lba >= d->capacity || n > d->capacity-lba) return -FS_EINVAL;
+    if (!d || (d->sector_size != 512 && d->sector_size != 2048) || !n || lba >= d->capacity || n > d->capacity-lba) return -FS_EINVAL;
     return d->quarantined ? -FS_EQUARANTINED : 0;
 }
 static inline bool blkdev_durable(struct blkdev *d) {

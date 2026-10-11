@@ -23,6 +23,7 @@ struct storage {
     struct block_cache cache;
     struct vfs vfs;
     struct storage_volume volumes[26];
+    struct fs_ro_volume optical[STORAGE_DISKS];
     int disk_errors[STORAGE_DISKS];
     bool disks[STORAGE_DISKS], ready, stopped;
     unsigned next_drive;
@@ -33,6 +34,8 @@ int storage_setup(struct storage *, size_t cache_bytes);
 /* disk is the IDE slot, independent of discovery order. Only MBR primary
  * entry 1 on slot 0 may become C:, all other FAT partitions start at D:. */
 int storage_add_disk(struct storage *, unsigned disk, struct blkdev *);
+int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
+void storage_refresh_ro(struct storage *);
 struct storage_volume *storage_volume(struct storage *, unsigned drive);
 int storage_enable_write(struct storage *, unsigned drive);
 int storage_writeback(struct storage *, uint32_t now_ms);

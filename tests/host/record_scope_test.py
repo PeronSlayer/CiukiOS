@@ -13,6 +13,7 @@ ALLOWED = {
     'probes/registry_probe.c',
     'probes/safe_probe.c',
     'probes/fat_probes.c',
+    'probes/f4_probes_media.c',
     'probes/f2_probes_process.c',
     'probes/f2_probes_signals.c',
     'probes/f2_probes_desktop.c',

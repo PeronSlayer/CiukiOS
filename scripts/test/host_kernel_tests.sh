@@ -103,7 +103,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/ata_test.c" "$root/src/kernel/fs/partition.c" \
     "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c" \
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/path.c" \
-    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/mount.c" \
+    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/src/kernel/fs/mount.c" \
     "$root/src/kernel/core/bootlog.c" "$root/src/kernel/probes/fat_probes.c" \
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" -o "$out/ata_test"
 "$out/ata_test"
@@ -253,6 +253,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "-DCIUKI_DESKTOP_PAYLOAD_BIN=\"$out/desktop-payload.elf\"" -o "$out/desktop_test"
 "$out/desktop_test" "$out/desktop-payload.elf"
 
+python3 "$root/scripts/test/iso_fixtures.py" --out "$out/optical" --joliet > "$out/optical-manifest.json"
+
 # F2 native files use the same mkfs/mtools fixtures and fake block layer as
 # the independent F1 harness. Fail-closed integration gaps are reported by name.
 python3 "$root/tests/host/fs/fixtures.py"
@@ -261,7 +263,7 @@ python3 "$root/tests/host/fs/fixtures.py"
 storage_sources=(
     "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c"
     "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c"
-    "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c"
+    "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c"
     "$root/src/kernel/fs/mount.c" "$root/src/kernel/core/bootlog.c"
     "$root/src/kernel/drivers/blkpart.c" "$root/src/kernel/probes/fat_probes.c"
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c"
@@ -286,7 +288,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/proc/files_test.c" "$root/tests/host/proc/signal_legacy.c" \
     "$root/tests/host/proc/desktop_legacy.c" "$root/src/kernel/fs/fs_port.c" \
     "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
-    "$root/src/kernel/fs/vfs.c" "$root/tests/host/fs/fake.c" \
+    "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/tests/host/fs/fake.c" \
     "$root/src/kernel/probes/f2_probes_files.c" -o "$out/files_test"
 "$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf"
 

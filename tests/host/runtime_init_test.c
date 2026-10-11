@@ -189,6 +189,9 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
 void task_start(struct task *task) { CHECK(task != 0); }
 int bootlog_activate(struct vfs *vfs, bool qualified, uint32_t seq)
 { (void)vfs; (void)qualified; (void)seq; return 0; }
+int atapi_ready(struct ata_device *d) { (void)d; return -FS_EIO; }
+int storage_add_ro(struct storage *s, unsigned slot, struct blkdev *b, uint64_t session)
+{ (void)s; (void)slot; (void)b; (void)session; return -FS_EIO; }
 int storage_add_disk(struct storage *s, unsigned slot, struct blkdev *dev)
 {
     (void)dev; CHECK(!slot);

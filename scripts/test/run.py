@@ -25,6 +25,7 @@ from loader_model import selector as base_selector, F1_PROBES
 from qmp import QMP, writes
 import resources as res
 import fat_fixtures
+import iso_fixtures
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -446,6 +447,8 @@ def fixture_disks(case):
     # start after the boot disk and must agree with the kernel disk ledger.
     indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator')=='mkfs.fat']
     if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
+    optical=[f for f in case.get('fixtures',[]) if f.get('generator')=='xorriso']
+    if len(optical)>1 or optical and len(indices)>2: raise res.Refusal('optical IDE index 3 collides with FAT fixture disks')
     return list(zip(indices,range(1,len(indices)+1)))
 
 
@@ -457,6 +460,9 @@ def prepare_fixtures(host,case,directory):
         if fixture.get('generator')=='mkfs.fat':
             item.update(host.fat_fixture(fixture,directory,index))
             item['ide_index']=disks[index]
+        elif fixture.get('generator')=='xorriso':
+            item.update(iso_fixtures.generate(fixture,directory,index))
+            item['ide_index']=3
         elif 'path' in fixture:
             path=(ROOT/fixture['path']).resolve()
             if not path.is_relative_to(ROOT) or not path.is_file():raise res.Refusal('fixture missing/outside worktree')
@@ -581,12 +587,17 @@ class Actions:
         for action in declared:
             if action.get('after',{}).get('event') not in ('READY','ARM'):
                 raise res.Refusal('actions require READY/ARM synchronization')
-            if action.get('type') not in ('input','cut'):raise res.Refusal('unknown runner action')
+            if action.get('type') not in ('input','cut','media'):raise res.Refusal('unknown runner action')
             if action['type']=='input':
                 if not 1<=action.get('repeat',1)<=1000 or not action.get('batches'):
                     raise res.Refusal('invalid input repetition/batches')
                 for batch in action['batches']:
                     if not 1<=batch.get('pause_ms',0)<=100:raise res.Refusal('input pacing must be 1..100 ms')
+            elif action['type']=='media':
+                if action.get('device')!='ciuki-optical' or action.get('operation') not in ('eject','change'):
+                    raise res.Refusal('invalid optical media action')
+                if action['operation']=='change' and not re.fullmatch(r'fixture-[0-9]+\.iso',action.get('target','')):
+                    raise res.Refusal('media change requires a generated optical fixture')
             elif action.get('mode') not in ('guest-termination',):
                 raise res.Refusal('device power loss requires a driver-boundary fixture; guest termination is distinct')
     @property
@@ -603,6 +614,13 @@ class Actions:
         matches=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['after'].items())]
         if len(matches)>1:raise EvidenceError('duplicate action synchronization record')
         if not matches:return None
+        if action['type']=='media':
+            args={'device':action['device']}
+            if action['operation']=='change':args.update(target=action['target'],arg='raw')
+            response=qmp.command(action['operation'],args)
+            self.observed.append({'type':'media','operation':action['operation'],'arguments':args,
+                                  'response':response,'host_monotonic':now,'sync_seq':matches[0]['seq']})
+            self.index+=1;return None
         if action['type']=='cut':
             if parser.terminal:raise EvidenceError('cut point already passed before termination')
             self.observed.append({'type':'cut','mode':action['mode'],'record':matches[0]})
@@ -924,6 +942,10 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         args+=['-audiodev','none,id=silent','-device',profile['audio']+',audiodev=silent']
     for index,disk in fixture_disks(case):
         args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache]
+    fixture_disks(case) # collision validation also for direct command construction
+    for index,fixture in enumerate(case.get('fixtures',[])):
+        if fixture.get('generator')=='xorriso':
+            args+=['-drive',f'file=fixture-{index}.iso,format=raw,if=ide,index=3,media=cdrom,readonly=on,id=ciuki-optical']
     if case.get('crash_cut'):args=['stdbuf','-oL',*args]
     return args,request
 
@@ -1263,6 +1285,14 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         result['durability_observations'].extend(r for r in parser.records if r.get('group') in ('durability','barrier','persisted'))
         result['observed']=parser.records
         for fixture in result['fixtures'].get('manifest',[]):
+            if fixture.get('generator')=='xorriso' and fixture.get('path'):
+                try:
+                    fixture['sha256_after']=sha(fixture['path'])
+                    if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('optical fixture changed during read-only case')
+                    if result['outcome']=='pass':iso_fixtures.verify_records(fixture,parser.records)
+                    fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
+                except (OSError,ValueError) as e:
+                    result['outcome']='fail';result['reason']=str(e)
             if fixture.get('corruption') and fixture.get('path'):
                 fixture['sha256_after']=sha(fixture['path'])
                 if case['id']=='mount-dirty' and fixture['corruption']['defect']=='dirty' and result['outcome']=='pass':
@@ -1618,7 +1648,7 @@ def main(argv=None):
                 if not all(c.isalnum() or c in '-_' for c in name):raise res.Refusal('invalid profile name')
                 profile=load(ROOT/'tests/profiles'/f'{name}.json')
                 if profile['machine']!=toolchain['qemu_machine']:raise res.Refusal('profile machine does not match pinned toolchain')
-                if case.get('selector','').startswith(('f1:','f2:')) and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1/F2 evidence requires pinned icount profile')
+                if case.get('selector','').startswith(('f1:','f2:','f4:')) and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1/F2 evidence requires pinned icount profile')
                 if options.suite!='f0-smoke' and profile['accelerator']!='tcg' and not case.get('_smoke'):raise res.Refusal('CPU correctness evidence requires TCG')
                 result,directory=run_case(ROOT,options.suite,case,profile,image,executable,firmware,keep=options.keep)
                 if host_evidence is not None:

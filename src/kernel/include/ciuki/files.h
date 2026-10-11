@@ -12,6 +12,8 @@ struct px_node {
     struct px_namespace *space;
     struct px_node *next, *parent;
     struct fat_volume *volume;
+    struct fs_ro_volume *ro;
+    uint64_t ro_id, ro_size;
     struct fat_entry entry;
     struct vfs_node *legacy;
     struct ciuki_timespec ctime;
@@ -94,5 +96,7 @@ void px_legacy_changed(struct vfs *, struct fat_volume *, const struct fat_entry
 int px_legacy_closed(struct vfs *, struct vfs_node *);
 bool px_volume_busy(struct vfs *, struct fat_volume *);
 void px_volume_detached(struct vfs *, unsigned drive);
+bool px_ro_busy(struct vfs *, struct fs_ro_volume *);
+int px_ro_check_locked(struct px_node *);
 int vfs_directory_pinned(struct vfs *, struct fat_volume *, uint32_t directory);
 #endif

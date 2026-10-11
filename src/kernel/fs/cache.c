@@ -5,11 +5,15 @@ struct cache_block {
     struct blkdev *dev;
     uint64_t lba;
     uint32_t since;
+    uint32_t generation, sector_size;
     bool dirty;
-    uint8_t data[512];
+    uint32_t capacity;
+    uint8_t *data;
 };
-#define BLOCKS_PER_PAGE ((4096-sizeof(void *))/sizeof(struct cache_block))
-struct cache_page { struct cache_page *next; struct cache_block b[BLOCKS_PER_PAGE]; };
+#define BLOCKS_PER_PAGE 4u
+/* One optical slot and three FAT slots share each allocation, including
+ * metadata. A failed dirty FAT block must not monopolize a minimum cache. */
+struct cache_page { struct cache_page *next; struct cache_block b[BLOCKS_PER_PAGE]; uint8_t data[2048+3*512]; };
 _Static_assert(sizeof(struct cache_page)<=4096, "cache page");
 static unsigned bucket(struct blkdev *d, uint64_t lba) { return (unsigned)((uintptr_t)d/16 ^ lba ^ (lba>>32)) & 255; }
 static struct cache_device *device(struct block_cache *c, struct blkdev *d) {
@@ -55,21 +59,24 @@ static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read,
     if (!d->read) return -FS_EINVAL;
     struct cache_device *s=device(c,d); if (!s) return -FS_ENOSPC;
     for (struct cache_block *b=c->hash[bucket(d,lba)];b;b=b->hash_next) {
-        if (b->dev==d && b->lba==lba) { c->hits++; newest(c,b); *out=b; return 0; }
+        if (b->dev==d && b->lba==lba && b->generation==d->media_generation && b->sector_size==d->sector_size) { c->hits++; newest(c,b); *out=b; return 0; }
     }
     c->misses++;
     struct cache_block *b=c->oldest;
     int blocked=-FS_ENOMEM;
-    while (b && b->dirty) {
-        struct cache_device *owner=device(c,b->dev);
-        if (!owner || !owner->error) break;
-        blocked=owner->error; b=b->next;
+    while (b) {
+        if (b->capacity>=d->sector_size) {
+            struct cache_device *owner=b->dirty ? device(c,b->dev) : 0;
+            if (!b->dirty || !owner || !owner->error) break;
+            blocked=owner->error;
+        }
+        b=b->next;
     }
     if (!b) return blocked;
     if ((e=write_block(c,b))) return e;
     unhash(c,b);
     if (read && (e=d->read(d,lba,1,b->data))) return e;
-    b->dev=d; b->lba=lba;
+    b->dev=d; b->lba=lba; b->generation=d->media_generation; b->sector_size=d->sector_size;
     unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
     newest(c,b); *out=b; return 0;
 }
@@ -84,8 +91,10 @@ int cache_init(struct block_cache *c, size_t bytes) {
     for (size_t i=c->workspace_pages;i<pages;i++) {
         struct cache_page *p=fs_page_alloc(); if (!p) goto fail;
         p->next=c->pages; c->pages=p;
+        unsigned offset=0;
         for (unsigned j=0;j<BLOCKS_PER_PAGE;j++) {
             struct cache_block *b=&p->b[j]; b->prev=c->newest;
+            b->capacity=j ? 512 : 2048; b->data=p->data+offset; offset+=b->capacity;
             if (c->newest) c->newest->next=b; else c->oldest=b;
             c->newest=b; c->blocks++;
         }
@@ -102,7 +111,7 @@ void cache_destroy(struct block_cache *c) {
 int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf) {
     if (!buf) return -FS_EINVAL;
     fs_lock_take(&c->lock); struct cache_block *b;
-    int e=get(c,d,lba,true,&b); if (!e) memcpy(buf,b->data,512);
+    int e=get(c,d,lba,true,&b); if (!e) memcpy(buf,b->data,d->sector_size);
     fs_lock_drop(&c->lock); return e;
 }
 int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const void *buf) {
@@ -112,7 +121,7 @@ int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const voi
     int e=!s ? -FS_ENOSPC : s->error;
     if (!e) e=get(c,d,lba,false,&b);
     if (!e) {
-        memcpy(b->data,buf,512);
+        memcpy(b->data,buf,d->sector_size);
         if (!b->dirty) {
             b->since=fs_now_ms();
             uint32_t due=b->since+5000;

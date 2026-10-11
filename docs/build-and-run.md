@@ -12,6 +12,7 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 | Kernel and loader | `clang`, `ld.lld`, `llvm-objdump`, `nasm` (majors pinned in `config/toolchain.json`) |
 | Image | `python3`, `mkfs.fat`, `fsck.fat`, `mtools`, `qemu-img` |
 | Tests | `qemu-system-i386`, `systemd-run` (user scopes with a memory controller) |
+| Optical fixtures and independent extraction | `xorriso` |
 
 ## Commands
 
@@ -33,6 +34,39 @@ suites in `tests/suites/` (`docs/design/test-architecture.md`,
 
 Interactive runs use TCG by default; KVM is only for the `qemu-fast`
 developer profile and never for evidence.
+
+### F4 optical fixtures
+
+`scripts/test/iso_fixtures.py` generates deterministic data CDs, without Rock
+Ridge, at ISO 9660 Levels 1–3 with optional Joliet. It fixes timestamps and
+ownership, declares source hashes and extracts the resulting image with
+`xorriso -osirrox` to obtain independent on-media names, sizes and SHA-256
+hashes. Source/extraction scratch trees are removed before it returns. For a
+host-only fixture or deliberately malformed root extent:
+
+```bash
+python3 scripts/test/iso_fixtures.py --out build/host/optical --level 3 --joliet
+python3 scripts/test/iso_fixtures.py --out build/host/optical --level 3 --malformed
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/host -p test_optical.py -v
+```
+
+The fixture image and its manifest remain in the requested build directory.
+The production parser/VFS host harness checks all six Level/Joliet combinations,
+synthetic multi-extent records, malformed descriptors/extents, stale mount
+identities and zero block writes/flushes. Native file and mocked ATA packet
+checks are also part of `make test-host`.
+
+The lead runs `python3 scripts/test/run.py f4-media` after the canonical build.
+Its eight cases cover lawful Levels 1–3 and malformed media on `qemu-t23` and
+`qemu-desktop-2002`. A CD occupies IDE index 3 (secondary slave); at most two
+FAT fixtures occupy indices 1 and 2, leaving index 2 as the same-channel ATA
+peer. Colliding fixtures are refused. `f4:optical run=<8 hex>` is the runtime
+selector, including the loader menu. At the probe's `media_reinsert` ARM the
+runner issues QMP eject/change for `ciuki-optical` using the generated image.
+It compares both directory/hash cycles against the independent manifest and
+checks the fixture image hash is unchanged. Passing run artifacts follow the
+runner's ordinary cleanup rules. A missing packet device records
+`not_run reason=device_absent`; this does not qualify an optical case.
 
 ## Test requests
 

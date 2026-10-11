@@ -179,6 +179,10 @@ def main() -> int:
     files_payload = OUT / "files-payload.elf"
     run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
          str(ROOT / "tests/host/proc/files_payload.asm"), "-o", str(files_payload)])
+    # f4-02 optical registration is collected from probes/f4_probes_media.c
+    # below and retained by .f4probes in the canonical linker script.
+    if not (SRC / "probes/f4_probes_media.c").is_file():
+        raise SystemExit("missing F4 optical probe")
     objs = []
     for asm in sorted((SRC / "arch").glob("*.asm")) + sorted((SRC / "vm").glob("*.asm")) + [SRC / "probes" / "payload_blob.asm"]:
         o = OBJ / (asm.stem + ".o")
