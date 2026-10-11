@@ -25,7 +25,7 @@ bool dosvm_admit(uint64_t free_bytes, uint64_t reserved, uint64_t resident,
     return ok;
 }
 
-static struct dosvm *lookup(struct dosvm_key key)
+struct dosvm *dosvm_lookup(struct dosvm_key key)
 {
     if (!key.id || key.id > DOSVM_LIMIT || !key.generation) return 0;
     struct dosvm *v = &slots[key.id - 1];
@@ -34,7 +34,7 @@ static struct dosvm *lookup(struct dosvm_key key)
 struct dosvm_key dosvm_key(const struct dosvm *v) { return v->info.key; }
 bool dosvm_valid(struct dosvm_key key)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     return v && v->info.state < DOSVM_STOPPING;
 }
 void dosvm_info(const struct dosvm *v, struct dosvm_info *out) { *out = v->info; }
@@ -48,6 +48,7 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         out->tasks += v->task != 0;
         /* Count owned backing once, including unmapped EMS-window backing. */
         if (v->as.pd_phys) out->pages += DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1;
+        out->pages += v->audio.q.page_count; /* f3-05 PCM/event queues */
         out->handles += v->base_open + v->overlay_open;
         out->devices += 3; /* authoritative PIC, PIT and text/input service */
         out->reserved += v->info.commitment;
@@ -123,7 +124,7 @@ uint32_t dosvm_task_esp0(const struct task *t, uint32_t normal)
 }
 int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v) return -EINVAL;
     if (v->info.state >= DOSVM_STOPPING) return 0;
     v->info.reason = reason;
@@ -288,7 +289,7 @@ static void worker(void *arg)
 
 int dosvm_destroy(struct dosvm_key key, bool forced)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v) return -EINVAL;
     if (v->info.state == DOSVM_DEAD) return v->info.cleanup_error;
     if (v->task == g_current) return -V86_EPERM;
@@ -302,6 +303,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
     if (e && v->info.dirty) v->info.data_loss = true;
+    dosvm_audio_close(v);
     if (v->as.pd_phys) {
         dosvm_memory_close(v);
         as_destroy(&v->as);
@@ -376,7 +378,8 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     if ((e = dosvm_port_register(v->info.key, 0x40, 0x43, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x61, 0x61, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x60, 0x60, dosvm_kbd_port, 0)) ||
-        (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0))) goto fail;
+        (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0)) ||
+        (e = dosvm_audio_init(v))) goto fail; /* f3-05 SB16, OPL3 and 8237 */
     e = dosvm_bios_init(v);
     if (e) goto fail;
     e = dosvm_memory_init(v, config);
@@ -421,7 +424,7 @@ int dosvm_boot(struct dosvm *v)
 
 bool dosvm_irq_raise(struct dosvm_key key, unsigned irq)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key) || irq >= 16) return false;
     uint32_t flags = irq_save();
     v86_irq_raise(&v->monitor, irq);
@@ -440,7 +443,7 @@ int dosvm_keyboard_refresh(struct dosvm *v)
 }
 bool dosvm_keyboard(struct dosvm_key key, uint16_t bios_key)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key)) return false;
     uint32_t flags = irq_save();
     if (dosvm_keyboard_refresh(v) || v->key_count == 15) { irq_restore(flags); return false; }
@@ -460,6 +463,7 @@ void dosvm_tick(void)
         v->ticks = g_ticks;
         v->clock_ms += elapsed;
         dosvm_pit_advance(v, elapsed);
+        dosvm_audio_advance(v, elapsed);
     }
 }
 const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)
@@ -473,7 +477,7 @@ const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)
 int dosvm_port_register(struct dosvm_key key, uint16_t first, uint16_t last,
                         dosvm_port_handler handler, void *arg)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key) || first > last || !handler) return -EINVAL;
     /* These fixed ranges belong to the core. */
     static const uint16_t reserved[][2] = {{0x20,0x21},
@@ -493,7 +497,7 @@ int dosvm_port_register(struct dosvm_key key, uint16_t first, uint16_t last,
 }
 int dosvm_port_unregister(struct dosvm_key key, uint16_t first)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key)) return -EINVAL;
     for (unsigned i = 0; i < DOSVM_PORTS; i++) if (v->ports[i].handler && v->ports[i].first == first) {
         memset(&v->ports[i], 0, sizeof(v->ports[i])); return 0;
@@ -505,10 +509,10 @@ int dosvm_port_unregister(struct dosvm_key key, uint16_t first)
  * granted here; f3-02 supplies the owner-bound adapter. */
 bool dosvm_input_focus(struct dosvm_key key, bool focused)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key)) return false;
     uint32_t flags = irq_save();
-    struct dosvm *previous = lookup(input_focus);
+    struct dosvm *previous = dosvm_lookup(input_focus);
     if (focused && previous && previous != v && dosvm_valid(input_focus)) {
         dosvm_kbd_release(previous); dosvm_mouse_event(previous, 0, 0, 0);
         previous->pointer_known = false;
@@ -524,7 +528,7 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
 }
 bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!e || !v || !dosvm_valid(key) || !v->window_input ||
         input_focus.id != key.id || input_focus.generation != key.generation) return false;
     uint32_t flags = irq_save(); bool ok = true;
@@ -552,7 +556,7 @@ bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
 }
 bool dosvm_device_info(struct dosvm_key key, struct dosvm_device_info *out)
 {
-    struct dosvm *v = lookup(key);
+    struct dosvm *v = dosvm_lookup(key);
     if (!out || !v || !dosvm_valid(key)) return false;
     uint32_t flags = irq_save(); memset(out, 0, sizeof(*out));
     out->host_ticks = v->clock_ms; out->pit_clocks = v->pit.clocks; out->pit_edges = v->pit.edges;

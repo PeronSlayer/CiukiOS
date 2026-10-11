@@ -218,6 +218,9 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_xms.c"
 #include "../../src/kernel/vm/dosvm_umb.c"
 #include "../../src/kernel/vm/dosvm_ems.c"
+#include "../../src/kernel/vm/dosvm_dma.c"
+#include "../../src/kernel/vm/dosvm_opl.c"
+#include "../../src/kernel/vm/dosvm_sb16.c"
 
 static struct dosvm *create(void)
 { struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
@@ -479,10 +482,11 @@ static void test_memory_services(void)
     printf("DOS memory services: XMS/EMS/UMB state machines and move/resize validators PASS\n");
 }
 #include "dosvm_devices_test.inc"
+#include "dosvm_audio_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }
