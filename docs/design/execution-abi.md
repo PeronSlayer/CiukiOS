@@ -1125,7 +1125,7 @@ No ioctl, poll/select, recording or master authority through public opens.
 
 ## F3-02 amendment: DOS window virtual machine (2026-10-11, pending lead review)
 
-Syscall **70**, `CIUKI_SYS_DOSVM`, uses B=operation, C=record, D=byte size
+Syscall **72**, `CIUKI_SYS_DOSVM`, uses B=operation, C=record, D=byte size
 and returns 0 or a negative errno. No F0, F2 or F4 number changes. The
 record `ciuki_dosvm_command` is 136 bytes, little endian, four-byte aligned,
 version=1 at byte 0 and size at byte 4; size must equal both 136 and D.

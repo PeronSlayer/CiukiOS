@@ -485,7 +485,7 @@ enum ciuki_syscall {
     CIUKI_SYS_DISPLAY_INFO = 67,
     CIUKI_SYS_THREAD_KILL = 68,
     CIUKI_SYS_DEVCTL = 69,
-    CIUKI_SYS_DOSVM = 70,
+    CIUKI_SYS_DOSVM = 72, /* 70/71 belong to f2-33 proc_list/proc_terminate */
 };
 
 /* pack(4) is scoped and restores the includer's previous setting. */

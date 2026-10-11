@@ -9,7 +9,7 @@ struct expectation { const char *key; uint32_t native, expected; };
 static const struct expectation expectations[] = {
     {"constant.CIUKI_SYS_DEVCTL", (uint32_t)(CIUKI_SYS_DEVCTL), 69u},
     /* f3-02: DOS window VM record (execution-abi.md, F3-02 amendment). */
-    {"constant.CIUKI_SYS_DOSVM", (uint32_t)(CIUKI_SYS_DOSVM), 70u},
+    {"constant.CIUKI_SYS_DOSVM", (uint32_t)(CIUKI_SYS_DOSVM), 72u},
     {"constant.CIUKI_DOSVM_VERSION", (uint32_t)(CIUKI_DOSVM_VERSION), 1u},
     {"constant.CIUKI_DOSVM_WIDTH", (uint32_t)(CIUKI_DOSVM_WIDTH), 640u},
     {"constant.CIUKI_DOSVM_HEIGHT", (uint32_t)(CIUKI_DOSVM_HEIGHT), 480u},
