@@ -17,15 +17,18 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
          "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
          "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
-           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c"]
+           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c",
+           "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 INCLUDES = ["-I", str(ROOT / "apps/tasks"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/desktop"),
             "-I", str(ROOT / "src/kernel/include")]
 # Production renders at 400x420 on the f2-31 toolkit (9239aca) from fixed
 # model data (tasks_view_test.c), reviewed 2026-10-11. Any toolkit or Task
 # Manager visual change must update these deliberately.
+# Re-pinned 2026-10-12 after review: Applications rows show the window's
+# /bin program icon from the Tango store (du_icon_file).
 RENDERS = {
-    "tasks-applications.xrgb": "d389994c536ba5dbc1cedd82ab1d42561d1bed192d3413ad997e50341cd47b67",
-    "tasks-newtask.xrgb": "62f3ac91d9cdd52d0a73d1b804dcaf0518c12b798859205be6a06dbbaa298ff7",
+    "tasks-applications.xrgb": "12b8de9bf2b1e21519116f98bbeadbf67d3697dd5a75763c7f558fe4263a83c2",
+    "tasks-newtask.xrgb": "3b68bce15cae5c48cd8e9615da67fd3351cbaa505c9383a68cc2124a26e36655",
     "tasks-performance.xrgb": "9bb99e99565ac244cef3f7a8ec25d55633a3d51d91229567594d974a87954b5f",
     "tasks-processes.xrgb": "f8db02623c205802a9a6a24600b39dfb1470b4628ae5c77cd8caa541e317d8e8",
 }
@@ -38,6 +41,9 @@ def load(name, path):
     return module
 
 
+ICONS = load("tasks_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")
+
+
 class TasksTests(unittest.TestCase):
     def run_native(self, name, sources, capture=False):
         parent = ROOT / "build/host"
@@ -46,7 +52,8 @@ class TasksTests(unittest.TestCase):
             folder = Path(temp)
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / name
-            subprocess.run([*FLAGS, *INCLUDES, *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
+            subprocess.run([*FLAGS, *INCLUDES, *ICONS.defines(), *(str(ROOT / s) for s in sources), "-o", str(binary)],
+                           check=True, env=env)
             subprocess.run([str(binary), *([str(folder)] if capture else [])], check=True, env=env)
             return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.glob("*.xrgb"))}
 

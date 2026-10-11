@@ -16,7 +16,9 @@ The production `make desktop` target uses the existing capped build recipe.
 The implementer uses the direct Python command under the directive's explicit
 sandbox exception. No download, QEMU, systemd or Git command is used by this
 recipe. Scratch lives on disk inside the worktree. The manifest records SDK,
-source, ELF and portrait hashes; stale outputs fail image payload validation.
+source, ELF, portrait and Tango icon store hashes; stale outputs fail image
+payload validation. The store (`tango.cis`, pinned in `tango-store.json`) is
+built by `convert_icons.py`; see `assets/icons/README.md`.
 
 `protocol.h` is shared with `apps/demo`. **Lead note:** install this header as
 `ciuki/desktop.h` through an SDK directive; f2-08 does not allow edits to `sdk/`.

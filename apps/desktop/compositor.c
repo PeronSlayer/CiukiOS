@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-#include "shell_icons.h"
 int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out)
 {
     int64_t x = a.x > b.x ? a.x : b.x, y = a.y > b.y ? a.y : b.y;
@@ -177,7 +176,7 @@ static void portrait_at(struct desktop *d, struct desk_box clip, int32_t x, int3
 static void icon(struct desktop *d, struct desk_box clip, int32_t x, int32_t y, const uint32_t *pixels)
 {
     struct desk_box b;
-    if (!desk_intersect((struct desk_box){x,y,16,16},clip,&b)) return;
+    if (!pixels || !desk_intersect((struct desk_box){x,y,16,16},clip,&b)) return;
     for (int32_t yy=b.y; yy<b.y+b.h; yy++) for (int32_t xx=b.x; xx<b.x+b.w; xx++) {
         uint32_t src=pixels[(yy-y)*16+xx-x], *dst=&d->pixels[(uint32_t)yy*d->width+(uint32_t)xx];
         unsigned a=src>>24;
@@ -243,8 +242,17 @@ const char *desk_program_label(const char *name)
 const char *desk_app_program(int kind) { return kind==DESK_APP_NOTE ? "ciuknote" : "files"; }
 int desk_program_kind(const char *name)
 { return !strcmp(name,"files") ? DESK_APP_FILES : !strcmp(name,"ciuknote") ? DESK_APP_NOTE : 0; }
-static const uint32_t *program_icon(int kind)
-{ return kind==DESK_APP_FILES ? desk_icon_files : kind==DESK_APP_NOTE ? desk_icon_text : desk_icon_run; }
+/* 16-pixel Tango icon of an icon_map.c object ("program:<name>", "menu:restart"). */
+static const uint32_t *shell_icon(const struct desktop *d, const char *object)
+{ return d->icon ? d->icon(object,16) : NULL; }
+static const uint32_t *program_icon(const struct desktop *d, const char *name)
+{
+    char object[80];
+    snprintf(object,sizeof(object),"program:%.64s",name);
+    return shell_icon(d,object);
+}
+static const char *client_program(const struct desk_client *c)
+{ return c->program==DESK_APP_FILES ? "files" : c->program==DESK_APP_NOTE ? "ciuknote" : c->taskman ? "tasks" : "*"; }
 void desk_shell_draw(struct desktop *d, struct desk_box clip)
 {
     struct desk_box bar=desk_taskbar(d), b;
@@ -258,7 +266,7 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
             d->focus==i ? 0x213c4cu : 0xe8d7b9u);
         if (button.w>24) {
             if (d->clients[i].internal) portrait_at(d,b,button.x+4,button.y+5,16);
-            else icon(d,b,button.x+4,button.y+5,program_icon(d->clients[i].program));
+            else icon(d,b,button.x+4,button.y+5,program_icon(d,client_program(&d->clients[i])));
             desk_text(d,b,button.x+24,button.y+9,d->clients[i].title,1,d->focus==i ? 0xffffffu : 0x213c4cu);
         }
     }
@@ -279,7 +287,7 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
         if (row>=18) {
             if (i==d->program_count) portrait_at(d,part,item.x+6,item.y+(row-16)/2,16);
             else icon(d,part,item.x+6,item.y+(row-16)/2,i<d->program_count ?
-                      program_icon(desk_program_kind(d->programs[i].name)) : desk_icon_restart);
+                      program_icon(d,d->programs[i].name) : shell_icon(d,"menu:restart"));
         }
         desk_text(d,part,item.x+28,item.y+(row-7)/2,name,1,i==d->program_count+1 ? 0x607a85u : 0x213c4cu);
     }

@@ -191,7 +191,7 @@ static uint32_t mix(uint32_t a, uint32_t b, unsigned alpha)
     return out;
 }
 
-void du_icon(struct du_canvas *c, int x, int y, const uint32_t *argb, int size, enum du_icon_mode mode)
+void du_icon_blit(struct du_canvas *c, int x, int y, const uint32_t *argb, int size, enum du_icon_mode mode)
 {
     if (!argb || size <= 0 || size > 64) return;
     struct du_rect v = visible(c, (struct du_rect){x, y, size, size});
@@ -211,6 +211,9 @@ void du_icon(struct du_canvas *c, int x, int y, const uint32_t *argb, int size, 
         if (mode == DU_ICON_SELECTED) *p = mix(DU_SELECT, *p, 128);
     }
 }
+
+void du_icon_draw(struct du_canvas *c, int x, int y, const struct du_icon *icon, enum du_icon_mode mode)
+{ if (icon) du_icon_blit(c, x, y, icon->argb, (int)icon->size, mode); }
 
 void du_format_key(char *out, size_t size, unsigned key, unsigned modifiers)
 {

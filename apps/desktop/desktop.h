@@ -56,6 +56,9 @@ struct desktop {
     int display, input, output, focus, drag;
     uint32_t width, height, *pixels;
     const uint32_t *portrait;
+    /* Shell icons (desktop.c: libdeskui's Tango store, icon_map.c keys such as
+     * "program:files"); NULL draws none. */
+    const uint32_t *(*icon)(const char *object, unsigned size);
     int32_t mouse_x, mouse_y, drag_x, drag_y;
     uint8_t keys[513];
     uint32_t buttons, routed_buttons;

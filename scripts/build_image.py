@@ -63,10 +63,12 @@ def desktop_payloads():
     sources = {"/bin/desktop": DESKTOP / "desktop", "/bin/demo": DESKTOP / "demo", "/bin/dosbox": DESKTOP / "dosbox",
                "/bin/files": DESKTOP / "files", "/bin/tasks": DESKTOP / "tasks", "/bin/ciuknote": DESKTOP / "ciuknote",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
+    # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
+    sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],
-                "elf": desktop["elf"], "portrait": desktop["portrait"]}
-    return sources, {"/bin", "/system", "/system/assets"}, metadata
+                "elf": desktop["elf"], "portrait": desktop["portrait"], "icons": desktop["icons"]}
+    return sources, {"/bin", "/system", "/system/assets", "/system/icons"}, metadata
 
 
 def application_payloads():

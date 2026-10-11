@@ -220,6 +220,7 @@ void klog(const char *f,...) {(void)f;}
             '-I',str(self.folder/'desktop-include'),'-I',str(ROOT/'apps/desktop'),
             '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
             *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+            *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c')),  # desktop.c's shell icons
             *bridge,
             '-o',str(binary)],check=True,env=env)
         result=subprocess.run([str(binary)],capture_output=True,text=True,env=env,timeout=10)
@@ -258,6 +259,7 @@ void klog(const char *f,...) {(void)f;}
                         '-o',str(demo)],check=True,env=env)
         subprocess.run([*common,str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
                         *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+                        *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c')),
                         '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
                         *self.kernel_spawn_bridge(env),
                         '-o',str(desktop)],check=True,env=env)
