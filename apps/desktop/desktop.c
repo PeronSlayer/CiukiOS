@@ -309,6 +309,8 @@ int main(int argc, char **argv)
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
+        /* The shell follows the theme key of DESK_SETTINGS_PATH (gates keep the default). */
+        if (d->shell && !gate && desk_theme_poll(DESK_SETTINGS_PATH,now)) desk_theme_changed(d);
         if (d->shell) {
             struct timespec rtc;
             if (!clock_gettime(CLOCK_REALTIME,&rtc) && rtc.tv_sec>=0 && d->realtime_second!=(uint64_t)rtc.tv_sec) {

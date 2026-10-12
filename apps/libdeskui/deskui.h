@@ -9,26 +9,37 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "../desktop/protocol.h"
+#include "../desktop/theme.h"
 
-/* CiukiOS identity colours on a Windows 98 class layout. FACE equals the
- * compositor's window frame and taskbar; SELECT equals its focused title. */
-#define DU_FACE       0xb8c9ccu
-#define DU_LIGHT      0xdbe5e7u
-#define DU_HILITE     0xffffffu
-#define DU_SHADOW     0x6c8489u
-#define DU_DARK       0x14262eu
-#define DU_WINDOW     0xffffffu
-#define DU_INK        0x10212au
-#define DU_GRAY       0x6c8489u
-#define DU_SELECT     0x213c4cu
-#define DU_SELECT_INK 0xffffffu
+/* Colours, fonts and styles come from the current theme (desk_theme,
+ * apps/desktop/theme.h): Platinum (default), Ciuki Blue or Classic 98.
+ * The names keep their Windows 98 roles; they are not constants. */
+#define DU_FACE       (desk_theme->face)
+#define DU_LIGHT      (desk_theme->light)
+#define DU_HILITE     (desk_theme->hilite)
+#define DU_SHADOW     (desk_theme->shadow)
+#define DU_DARK       (desk_theme->dark)
+#define DU_WINDOW     (desk_theme->window)
+#define DU_INK        (desk_theme->ink)
+#define DU_GRAY       (desk_theme->gray)
+#define DU_SELECT     (desk_theme->select)
+#define DU_SELECT_INK (desk_theme->select_ink)
+#define DU_ACCENT     (desk_theme->accent)
 #define DU_CREAM      0xe8d7b9u
 
-/* The compositor's own glyph table (5x7, apps/desktop/compositor.c), drawn
- * at its scale and advance so client text matches window titles. */
-#define DU_CHAR_W  6
-#define DU_GLYPH_H 7
-#define DU_ROW     17   /* list, tree and menu rows */
+/* Text: anti-aliased proportional faces (theme.h DESK_FONT_*). du_text and
+ * friends take the top of the capitals as y; DU_GLYPH_H is the capital
+ * height of the UI face, so (h - DU_GLYPH_H) / 2 centres a line in h rows.
+ * DU_CHAR_W is only an average advance for rough sizing. */
+#define DU_CHAR_W  7
+#define DU_GLYPH_H 9
+#define DU_ROW     17   /* list, tree and menu-bar rows */
+#define DU_MENU_ITEM_H 19
+#define DU_MENU_SEP_H  9
+/* Icon slots (16 menus/lists, 22 toolbars, 32 large icons and dialogs). */
+#define DU_ICON_SMALL   (desk_theme->icon_small)
+#define DU_ICON_TOOLBAR (desk_theme->icon_toolbar)
+#define DU_ICON_LARGE   (desk_theme->icon_large)
 
 #define DU_WIDGETS       48
 #define DU_DIALOG_ITEMS  10
@@ -54,6 +65,7 @@ enum {
     DU_KEY_MENU = 0x15d
 };
 
+struct du_ui;
 struct du_rect { int x, y, w, h; };
 struct du_canvas { uint32_t *pixels; int width, height; struct du_rect clip; };
 
@@ -83,6 +95,19 @@ void du_icon(struct du_canvas *, int x, int y, const uint32_t *argb, int size, e
 size_t du_utf8_prev(const char *, size_t);
 size_t du_utf8_next(const char *, size_t);
 void du_format_key(char *out, size_t size, unsigned key, unsigned modifiers);
+/* ui-look: faces, mnemonic labels, theme-drawn faces and focus. */
+void du_text_font(struct du_canvas *, int font, int x, int y, const char *, uint32_t);   /* y: capital top */
+int du_text_width_font(int font, const char *);
+int du_label_width(const char *mnemonic);                                               /* '&' not counted */
+void du_raised(struct du_canvas *, struct du_rect, int pressed, int hot);                /* theme button face */
+void du_focus_ring(struct du_canvas *, struct du_rect);                                  /* theme focus cue */
+void du_well(struct du_canvas *, struct du_rect, uint32_t fill);                         /* sunken field */
+void du_shadow(struct du_canvas *, struct du_rect, int size);                            /* soft drop shadow */
+/* Current theme by name (Platinum, Ciuki Blue, Classic 98): 0, or -1 and no
+ * change. Marks the UI dirty. Persisting it is the caller's job
+ * (desk_settings_set/save on DESK_SETTINGS_PATH); clients follow the file. */
+int du_theme_use(struct du_ui *, const char *name);
+const char *du_theme_name(void);
 
 /* List and tree content belongs to the application; the toolkit only reads it. */
 struct du_item {
@@ -101,7 +126,11 @@ enum du_kind { DU_LABEL, DU_BUTTON, DU_TOOLBUTTON, DU_EDIT, DU_LISTVIEW, DU_TREE
                DU_TABS, DU_GRAPH, DU_GROUP,
                /* f2-32: multi-line editor; widget.data is a struct du_textarea
                 * (textarea.h) owned by the application. */
-               DU_TEXTAREA };
+               DU_TEXTAREA,
+               /* ui-look: check box and radio button (text is the label, value
+                * is the state; radios with the same `total` form one group),
+                * and a tool-bar band that draws the strip behind tool buttons. */
+               DU_CHECKBOX, DU_RADIO, DU_TOOLBAR };
 #define DU_TAB_H 20
 
 struct du_widget {

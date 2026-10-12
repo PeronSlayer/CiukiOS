@@ -64,7 +64,7 @@ class ReportRoutingTests(unittest.TestCase):
                         '-I', str(folder/'include'), '-I', str(ROOT/'apps/desktop'),
                         '-I', str(ROOT/'src/kernel/include'),
                         str(ROOT/'tests/host/desktop/demo_gate_test.c'),
-                        str(ROOT/'apps/desktop/protocol.c'), str(ROOT/'apps/desktop/compositor.c'),
+                        str(ROOT/'apps/desktop/protocol.c'), str(ROOT/'apps/desktop/compositor.c'), str(ROOT/'apps/desktop/theme.c'),
                         '-o', str(demo)], check=True, env=cls.env)
         result = subprocess.run([str(demo), '--fault-run', 'bad-pointer'],
                                 capture_output=True, text=True, env=cls.env, timeout=10,

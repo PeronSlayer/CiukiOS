@@ -2,6 +2,7 @@
 #ifndef CIUKI_APP_DESKTOP_H
 #define CIUKI_APP_DESKTOP_H
 #include "protocol.h"
+#include "theme.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
@@ -31,6 +32,7 @@ struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
     int minimized, internal, closing, program;   /* program: 1 Files, 2 CiukNote (launched by the desktop) */
+    int collapsed;                /* windowshade: only the title bar shows (double-click or shade box) */
     int taskman;                  /* f2-33: launched /bin/tasks; may send task requests */
     uint32_t pid, serial, version, window_id;
     uint64_t ping_sent_ns, next_ping_ns, order;
@@ -81,6 +83,9 @@ struct desktop {
     uint32_t next_window_id, self_pid;
     int authority_fd, tasks_test, tasks_stage, tasks_checkpoint;
     uint32_t tasks_pid, tasks_demo_pid, tasks_demo_window;
+    /* Title-bar double-click (windowshade) and the theme settings poll. */
+    uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
+    int theme_poll;              /* nonzero: follow DESK_SETTINGS_PATH (the shell, not the gates) */
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -92,6 +97,10 @@ struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
 struct desk_box desk_close_box(const struct desk_client *c);
 struct desk_box desk_min_box(const struct desk_client *c);
+struct desk_box desk_shade_box(const struct desk_client *c);   /* zero box when too narrow */
+struct desk_box desk_outer(const struct desk_client *c);       /* frame plus drop shadow */
+void desk_collapse(struct desktop *, int index);                /* toggle windowshade */
+void desk_theme_changed(struct desktop *);                       /* repaint after desk_theme_use */
 struct desk_box desk_taskbar(const struct desktop *);
 struct desk_box desk_task_button(const struct desktop *, int index);
 struct desk_box desk_menu_box(const struct desktop *);

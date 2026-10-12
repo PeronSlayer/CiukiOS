@@ -156,6 +156,8 @@ int du_window_turn(struct du_window *w, uint64_t now)
         return w->closed ? 0 : 1;
     }
     du_tick(w->ui, now);
+    /* ui-look: follow the shell's theme setting (read at once, then a stat every 2 s). */
+    if (desk_theme_poll(DESK_SETTINGS_PATH, now)) w->ui->dirty = 1;
     if (w->configured && w->ui->dirty) { du_render(w->ui); du_window_present(w); }
     if (w->configured && w->damaged && w->count < 16) {
         struct ciuki_message m; desk_message(&m, DESK_DAMAGE, 20);

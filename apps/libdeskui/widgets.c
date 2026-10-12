@@ -53,7 +53,8 @@ void du_set_text(struct du_widget *w, const char *s)
 int du_focusable(const struct du_widget *w)
 {
     return !w->hidden && !w->disabled && (w->kind == DU_EDIT || w->kind == DU_LISTVIEW ||
-           w->kind == DU_TREE || w->kind == DU_BUTTON || w->kind == DU_TABS || w->kind == DU_TEXTAREA);
+           w->kind == DU_TREE || w->kind == DU_BUTTON || w->kind == DU_TABS || w->kind == DU_TEXTAREA ||
+           w->kind == DU_CHECKBOX || w->kind == DU_RADIO);
 }
 
 int du_hit(const struct du_ui *u, int x, int y)
@@ -163,13 +164,22 @@ void du_edit_insert(struct du_widget *w, const char *s)
     w->cursor = w->anchor = a + n;
 }
 
-static int text_x(const struct du_widget *w) { return w->box.x + 4 + (w->icon ? 20 : 0); }
+static int text_x(const struct du_widget *w) { return w->box.x + 5 + (w->icon ? 20 : 0); }
+static size_t char_at(const char *s, size_t chars)
+{ size_t at = 0; for (size_t n = 0; n < chars && s[at]; n++) at = du_utf8_next(s, at); return at; }
 
 void du_edit_press(struct du_widget *w, int x, int extend)
 {
-    int cell = (x - text_x(w) + DU_CHAR_W / 2) / DU_CHAR_W + (int)w->offset;
-    size_t at = 0;
-    for (int n = 0; n < cell && w->text[at]; n++) at = du_utf8_next(w->text, at);
+    /* The character boundary nearest to x, from the scrolled first character. */
+    int font = desk_theme->font_ui, pen = text_x(w);
+    size_t at = char_at(w->text, w->offset);
+    while (w->text[at]) {
+        size_t used; unsigned ch = desk_utf8_decode(w->text + at, &used);
+        int adv = desk_text_advance(font, ch);
+        if (x < pen + adv / 2) break;
+        pen += adv; at += used;
+    }
+    if (x < text_x(w) && w->offset) at = char_at(w->text, w->offset - 1);
     w->cursor = at;
     if (!extend) w->anchor = at;
 }
@@ -212,19 +222,22 @@ int du_edit_key(struct du_ui *u, struct du_widget *w, unsigned code)
 void du_draw_edit(struct du_canvas *c, struct du_widget *w, int focused)
 {
     struct du_rect b = w->box;
+    int font = desk_theme->font_ui;
     if (w->def) { du_fill(c, b, DU_WINDOW); du_outline(c, b, DU_DARK); }
-    else { du_fill(c, b, w->disabled ? DU_FACE : DU_WINDOW); du_edge(c, b, DU_SUNKEN); }
+    else du_well(c, b, w->disabled ? DU_FACE : DU_WINDOW);
+    if (focused && !w->def && desk_theme->focus_style == DESK_FOCUS_RING) du_focus_ring(c, b);
     struct du_rect old = c->clip;
     c->clip = du_intersection(old, (struct du_rect){b.x + 2, b.y + 2, b.w - 4, b.h - 4});
-    if (w->icon) du_icon(c, b.x + 3, b.y + (b.h - 16) / 2, w->icon, 16, DU_ICON_NORMAL);
-    int x = text_x(w), y = b.y + (b.h - DU_GLYPH_H) / 2;
-    size_t room = (size_t)((b.x + b.w - 3 - x) / DU_CHAR_W), cursor_cells = 0;
-    if (!room) room = 1;
-    for (size_t i = 0; i < w->cursor && w->text[i]; i = du_utf8_next(w->text, i)) cursor_cells++;
-    if (cursor_cells < w->offset) w->offset = cursor_cells;
-    if (cursor_cells > w->offset + room - 1) w->offset = cursor_cells - room + 1;
-    size_t start = 0;
-    for (size_t n = 0; n < w->offset && w->text[start]; n++) start = du_utf8_next(w->text, start);
+    if (w->icon) du_icon(c, b.x + 4, b.y + (b.h - 16) / 2, w->icon, 16, DU_ICON_NORMAL);
+    int x = text_x(w), y = b.y + (b.h - DU_GLYPH_H) / 2, room = b.x + b.w - 4 - x;
+    if (room < 4) room = 4;
+    size_t cursor_chars = 0, chars = du_cells(w->text);
+    for (size_t i = 0; i < w->cursor && w->text[i]; i = du_utf8_next(w->text, i)) cursor_chars++;
+    if (cursor_chars < w->offset) w->offset = cursor_chars;
+    while (w->offset < cursor_chars &&
+           desk_text_measure_n(font, w->text + char_at(w->text, w->offset), cursor_chars - w->offset) > room - 1) w->offset++;
+    if (w->offset > chars) w->offset = chars;
+    size_t start = char_at(w->text, w->offset);
     size_t lo = 0, hi = 0, cells = 0;
     for (size_t i = 0; w->text[i]; i = du_utf8_next(w->text, i), cells++) {
         if (i == sel_lo(w)) lo = cells;
@@ -237,14 +250,16 @@ void du_draw_edit(struct du_canvas *c, struct du_widget *w, int focused)
     if (focused && hi > lo) {
         size_t a = lo > w->offset ? lo : w->offset;
         if (hi > a) {
-            struct du_rect r = {x + (int)(a - w->offset) * DU_CHAR_W - 1, y - 2, (int)(hi - a) * DU_CHAR_W + 1, DU_GLYPH_H + 4};
+            int x0 = x + desk_text_measure_n(font, w->text + start, a - w->offset);
+            int x1 = x + desk_text_measure_n(font, w->text + start, hi - w->offset);
+            struct du_rect r = {x0, y - 3, x1 - x0, DU_GLYPH_H + 6};
             du_fill(c, r, DU_SELECT);
             struct du_rect keep = c->clip; c->clip = du_intersection(keep, r);
             du_text(c, x, y, w->text + start, DU_SELECT_INK);
             c->clip = keep;
         }
     }
-    if (focused) du_vline(c, x + (int)(cursor_cells - w->offset) * DU_CHAR_W - 1, y - 2, DU_GLYPH_H + 4, DU_INK);
+    if (focused) du_vline(c, x + desk_text_measure_n(font, w->text + start, cursor_chars - w->offset) - 1, y - 3, DU_GLYPH_H + 6, DU_INK);
     c->clip = old;
 }
 
@@ -252,18 +267,31 @@ void du_draw_edit(struct du_canvas *c, struct du_widget *w, int focused)
 void du_draw_button(struct du_canvas *c, const struct du_widget *w, int focused)
 {
     struct du_rect b = w->box;
-    int down = w->pressed && w->hot;
+    int down = w->pressed && w->hot, platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
     du_fill(c, b, DU_FACE);
-    if (down) du_edge(c, b, DU_PRESSED);
-    else if (w->def || focused) { du_outline(c, b, DU_DARK); du_edge(c, (struct du_rect){b.x + 1, b.y + 1, b.w - 2, b.h - 2}, DU_BUTTON_EDGE); }
-    else du_edge(c, b, DU_BUTTON_EDGE);
-    int tw = du_text_width(w->text) - (strchr(w->text, '&') ? DU_CHAR_W : 0);
+    struct du_rect face = b;
+    if (platinum && w->def) {
+        /* Platinum default button: a dark rounded ring round the face. */
+        du_fill(c, (struct du_rect){b.x + 1, b.y, b.w - 2, b.h}, desk_theme->outline);
+        du_fill(c, (struct du_rect){b.x, b.y + 1, b.w, b.h - 2}, desk_theme->outline);
+        face = (struct du_rect){b.x + 2, b.y + 2, b.w - 4, b.h - 4};
+    } else if (!platinum && (w->def || focused) && !down) {
+        du_outline(c, b, DU_DARK);
+        face = (struct du_rect){b.x + 1, b.y + 1, b.w - 2, b.h - 2};
+    }
+    if (!platinum) {
+        if (down) du_edge(c, face, DU_PRESSED); else du_edge(c, face, DU_BUTTON_EDGE);
+    } else du_raised(c, face, down, w->hot && !w->disabled);
+    int tw = du_label_width(w->text);
     int iw = w->icon ? w->icon_size + 4 : 0;
     int x = b.x + (b.w - tw - iw) / 2 + down, y = b.y + (b.h - DU_GLYPH_H) / 2 + down;
     if (w->icon) du_icon(c, x, b.y + (b.h - w->icon_size) / 2 + down, w->icon, w->icon_size, w->disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
     if (w->disabled) { du_label(c, x + iw + 1, y + 1, w->text, DU_HILITE, 1); du_label(c, x + iw, y, w->text, DU_GRAY, 1); }
     else du_label(c, x + iw, y, w->text, DU_INK, 1);
-    if (focused) du_dotted(c, (struct du_rect){b.x + 4, b.y + 4, b.w - 8, b.h - 8});
+    if (focused) {
+        if (desk_theme->focus_style == DESK_FOCUS_RING) du_focus_ring(c, (struct du_rect){face.x + 2, face.y + 2, face.w - 4, face.h - 4});
+        else du_dotted(c, (struct du_rect){b.x + 4, b.y + 4, b.w - 8, b.h - 8});
+    }
 }
 
 static void draw_toolbutton(struct du_canvas *c, const struct du_widget *w)
@@ -271,22 +299,27 @@ static void draw_toolbutton(struct du_canvas *c, const struct du_widget *w)
     struct du_rect b = w->box;
     int down = w->pressed && w->hot && !w->disabled;
     int split = w->dropdown > 0 ? w->dropdown : 0;
+    int platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
     struct du_rect main = {b.x, b.y, b.w - split, b.h};
-    if (down && w->drag != 2) du_edge(c, main, DU_SUNKEN_THIN);
+    if (platinum) {
+        if (down && w->drag != 2) du_raised(c, main, 1, 0);
+        else if ((w->hot || w->drag == 2) && !w->disabled) du_raised(c, main, 0, 1);
+    } else if (down && w->drag != 2) du_edge(c, main, DU_SUNKEN_THIN);
     else if ((w->hot || w->drag == 2) && !w->disabled) du_edge(c, main, DU_RAISED_THIN);
     if (split) {
         struct du_rect arrow = {b.x + b.w - split, b.y, split, b.h};
-        if (w->drag == 2) du_edge(c, arrow, DU_SUNKEN_THIN);
+        if (platinum) { if (w->drag == 2 || (w->hot && !w->disabled)) du_raised(c, arrow, w->drag == 2, w->drag != 2); }
+        else if (w->drag == 2) du_edge(c, arrow, DU_SUNKEN_THIN);
         else if (w->hot && !w->disabled) du_edge(c, arrow, DU_RAISED_THIN);
         du_triangle(c, arrow.x + split / 2, b.y + b.h / 2, 1, 3, w->disabled ? DU_GRAY : DU_INK);
     }
     int off = down && w->drag != 2;
-    int size = w->icon_size ? w->icon_size : 22;
+    int size = w->icon_size ? w->icon_size : DU_ICON_TOOLBAR;
     int has_text = w->text[0] != 0;
     int ix = main.x + (main.w - size) / 2 + off, iy = has_text ? b.y + 3 + off : b.y + (b.h - size) / 2 + off;
     du_icon(c, ix, iy, w->icon, size, w->disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
     if (has_text) {
-        int tx = main.x + (main.w - du_text_width(w->text)) / 2 + off, ty = b.y + size + 7 + off;
+        int tx = main.x + (main.w - du_text_width(w->text)) / 2 + off, ty = b.y + size + 5 + off;
         if (w->disabled) du_text_disabled(c, tx, ty, w->text); else du_text(c, tx, ty, w->text, DU_INK);
     }
 }
@@ -294,19 +327,25 @@ static void draw_toolbutton(struct du_canvas *c, const struct du_widget *w)
 static void draw_status(struct du_canvas *c, const struct du_widget *w)
 {
     struct du_rect b = w->box; int x = b.x;
-    du_fill(c, b, DU_FACE);
+    int platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
+    if (platinum) {
+        struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+        desk_paint_vgradient(&p, b.x, b.y, b.w, b.h, desk_theme->face_top, desk_theme->face_bottom);
+        du_hline(c, b.x, b.y, b.w, DU_SHADOW); du_hline(c, b.x, b.y + 1, b.w, DU_HILITE);
+    } else du_fill(c, b, DU_FACE);
     const char *s = w->text;
     for (int i = 0; i < 4; i++) {
         int width = w->panels[i] > 0 ? w->panels[i] : b.x + b.w - x;
         if (width <= 0) break;
         struct du_rect panel = {x, b.y + 2, width - 2, b.h - 2};
-        du_edge(c, panel, DU_SUNKEN_THIN);
+        if (platinum) { if (x > b.x) { du_vline(c, x - 1, b.y + 4, b.h - 7, DU_SHADOW); du_vline(c, x, b.y + 4, b.h - 7, DU_HILITE); } }
+        else du_edge(c, panel, DU_SUNKEN_THIN);
         const char *end = strchr(s, '\t');
         char part[256]; size_t n = end ? (size_t)(end - s) : strlen(s);
         if (n >= sizeof(part)) n = sizeof(part) - 1;
         memcpy(part, s, n); part[n] = 0;
         struct du_rect old = c->clip; c->clip = du_intersection(old, panel);
-        du_text_fit(c, panel.x + 4, panel.y + (panel.h - DU_GLYPH_H) / 2, panel.w - 6, part, DU_INK);
+        du_text_fit(c, panel.x + 5, panel.y + (panel.h - DU_GLYPH_H) / 2, panel.w - 8, part, DU_INK);
         c->clip = old;
         x += width;
         if (!end || w->panels[i] <= 0) break;
@@ -317,8 +356,20 @@ static void draw_status(struct du_canvas *c, const struct du_widget *w)
 static void draw_progress(struct du_canvas *c, const struct du_widget *w)
 {
     struct du_rect b = w->box;
-    du_fill(c, b, DU_FACE); du_edge(c, b, DU_SUNKEN_THIN);
     int inner = b.w - 4, filled = w->total > 0 ? (int)((int64_t)inner * (w->value > w->total ? w->total : w->value) / w->total) : 0;
+    if (desk_theme->control_style == DESK_CONTROLS_PLATINUM) {
+        /* Platinum: rounded groove, accent bar with a light top half. */
+        du_well(c, b, desk_mix(DU_SHADOW, DU_FACE, 70));
+        struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+        if (filled > 0) {
+            int h = b.h - 4;
+            desk_paint_vgradient(&p, b.x + 2, b.y + 2, filled, h / 2, desk_mix(0xffffffu, DU_ACCENT, 120), desk_mix(0xffffffu, DU_ACCENT, 40));
+            desk_paint_vgradient(&p, b.x + 2, b.y + 2 + h / 2, filled, h - h / 2, DU_ACCENT, desk_mix(0x000000u, DU_ACCENT, 50));
+            for (int x = 10; x < filled; x += 12) du_vline(c, b.x + 2 + x, b.y + 2, h, desk_mix(0xffffffu, DU_ACCENT, 50));
+        }
+        return;
+    }
+    du_fill(c, b, DU_FACE); du_edge(c, b, DU_SUNKEN_THIN);
     for (int x = 0; x < filled; x += 10) {
         int bw = filled - x < 8 ? filled - x : 8;
         du_fill(c, (struct du_rect){b.x + 2 + x, b.y + 2, bw, b.h - 4}, DU_SELECT);
@@ -355,23 +406,41 @@ void du_sb_draw(struct du_canvas *c, const struct du_sb *s, int pressed)
         dec = (struct du_rect){b.x, b.y, start, b.h}; inc = (struct du_rect){b.x + b.w - start, b.y, start, b.h};
         tr = (struct du_rect){b.x + start, b.y, track, b.h}; th = (struct du_rect){b.x + start + at, b.y, thumb, b.h};
     }
-    du_checker(c, tr, DU_HILITE, DU_FACE);
-    if (pressed == 2) du_fill(c, (struct du_rect){tr.x, tr.y, s->vertical ? tr.w : th.x - tr.x, s->vertical ? th.y - tr.y : tr.h}, DU_DARK);
+    int platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
+    if (platinum) {
+        /* Platinum groove: darker at the leading edge, lighter towards the far one. */
+        struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+        uint32_t g0 = desk_mix(DU_SHADOW, DU_FACE, 150), g1 = desk_mix(DU_SHADOW, DU_FACE, 60);
+        if (s->vertical) desk_paint_hgradient(&p, tr.x, tr.y, tr.w, tr.h, g0, g1);
+        else desk_paint_vgradient(&p, tr.x, tr.y, tr.w, tr.h, g0, g1);
+    } else du_checker(c, tr, DU_HILITE, DU_FACE);
+    uint32_t press = platinum ? desk_mix(DU_DARK, DU_SHADOW, 120) : DU_DARK;
+    if (pressed == 2) du_fill(c, (struct du_rect){tr.x, tr.y, s->vertical ? tr.w : th.x - tr.x, s->vertical ? th.y - tr.y : tr.h}, press);
     if (pressed == 4) du_fill(c, s->vertical ? (struct du_rect){tr.x, th.y + th.h, tr.w, tr.y + tr.h - th.y - th.h}
-                                             : (struct du_rect){th.x + th.w, tr.y, tr.x + tr.w - th.x - th.w, tr.h}, DU_DARK);
+                                             : (struct du_rect){th.x + th.w, tr.y, tr.x + tr.w - th.x - th.w, tr.h}, press);
     int enabled = s->total > s->page;
     struct du_rect arrows[2] = {dec, inc};
     for (int i = 0; i < 2; i++) {
         struct du_rect a = arrows[i];
-        du_fill(c, a, DU_FACE);
-        du_edge(c, a, pressed == (i ? 5 : 1) ? DU_PRESSED : DU_BUTTON_EDGE);
         int off = pressed == (i ? 5 : 1);
+        if (platinum) du_raised(c, a, off, 0);
+        else { du_fill(c, a, DU_FACE); du_edge(c, a, off ? DU_PRESSED : DU_BUTTON_EDGE); }
         int dir = s->vertical ? (i ? 1 : 0) : (i ? 3 : 2);
         uint32_t ink = enabled ? DU_INK : DU_GRAY;
-        if (!enabled) du_triangle(c, a.x + a.w / 2 + 1, a.y + a.h / 2 + 1, dir, 4, DU_HILITE);
+        if (!enabled && !platinum) du_triangle(c, a.x + a.w / 2 + 1, a.y + a.h / 2 + 1, dir, 4, DU_HILITE);
         du_triangle(c, a.x + a.w / 2 + off, a.y + a.h / 2 + off, dir, 4, ink);
     }
-    if (enabled && track > 0) { du_fill(c, th, DU_FACE); du_edge(c, th, DU_BUTTON_EDGE); }
+    if (enabled && track > 0) {
+        if (platinum) {
+            du_raised(c, th, 0, 0);
+            /* Grip: three short ridges across the middle of the thumb. */
+            int cx = th.x + th.w / 2, cy = th.y + th.h / 2;
+            for (int k = -1; k <= 1 && (s->vertical ? th.h : th.w) > 14; k++) {
+                if (s->vertical) { du_hline(c, cx - 3, cy + 2 * k - 1, 6, DU_HILITE); du_hline(c, cx - 3, cy + 2 * k, 6, DU_SHADOW); }
+                else { du_vline(c, cx + 2 * k - 1, cy - 3, 6, DU_HILITE); du_vline(c, cx + 2 * k, cy - 3, 6, DU_SHADOW); }
+            }
+        } else { du_fill(c, th, DU_FACE); du_edge(c, th, DU_BUTTON_EDGE); }
+    }
 }
 
 int du_sb_part(const struct du_sb *s, int x, int y)
@@ -414,7 +483,7 @@ int du_sb_drag(const struct du_sb *s, int x, int y, int grab)
 
 /* ---- f2-33: tab control, history graph, group frame ---- */
 static int tab_width(const struct du_widget *w, unsigned i)
-{ return du_text_width(w->items[i].text[0] ? w->items[i].text[0] : "") + 16; }
+{ return du_text_width_font(desk_theme->font_bold, w->items[i].text[0] ? w->items[i].text[0] : "") + 18; }
 
 int du_tabs_hit(const struct du_widget *w, int x, int y)
 {
@@ -431,25 +500,42 @@ int du_tabs_hit(const struct du_widget *w, int x, int y)
 static void draw_tabs(struct du_canvas *c, const struct du_widget *w, int focused)
 {
     struct du_rect b = w->box;
-    int base = b.y + DU_TAB_H - 1;
+    int base = b.y + DU_TAB_H - 1, platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
     struct du_rect page = {b.x, base, b.w, b.y + b.h - base};
     du_fill(c, page, DU_FACE);
-    du_hline(c, page.x, page.y, page.w, DU_HILITE); du_vline(c, page.x, page.y, page.h, DU_HILITE);
-    du_vline(c, page.x + page.w - 1, page.y, page.h, DU_DARK); du_vline(c, page.x + page.w - 2, page.y + 1, page.h - 2, DU_SHADOW);
-    du_hline(c, page.x, page.y + page.h - 1, page.w, DU_DARK); du_hline(c, page.x + 1, page.y + page.h - 2, page.w - 2, DU_SHADOW);
+    if (platinum) {
+        du_outline(c, page, desk_mix(desk_theme->outline, DU_FACE, 150));
+        du_hline(c, page.x + 1, page.y + 1, page.w - 2, DU_HILITE); du_vline(c, page.x + 1, page.y + 1, page.h - 2, DU_HILITE);
+    } else {
+        du_hline(c, page.x, page.y, page.w, DU_HILITE); du_vline(c, page.x, page.y, page.h, DU_HILITE);
+        du_vline(c, page.x + page.w - 1, page.y, page.h, DU_DARK); du_vline(c, page.x + page.w - 2, page.y + 1, page.h - 2, DU_SHADOW);
+        du_hline(c, page.x, page.y + page.h - 1, page.w, DU_DARK); du_hline(c, page.x + 1, page.y + page.h - 2, page.w - 2, DU_SHADOW);
+    }
     int at = b.x + 2;
     for (unsigned i = 0; i < w->count; i++) {
         int width = tab_width(w, i), sel = i == w->active;
         struct du_rect r = {at - (sel ? 2 : 0), b.y + (sel ? 0 : 2), width + (sel ? 4 : 0), DU_TAB_H - (sel ? 0 : 2)};
-        du_fill(c, r, DU_FACE);
-        du_hline(c, r.x + 2, r.y, r.w - 4, DU_HILITE); du_vline(c, r.x, r.y + 2, r.h - 2, DU_HILITE);
-        du_fill(c, (struct du_rect){r.x + 1, r.y + 1, 1, 1}, DU_HILITE);
-        du_vline(c, r.x + r.w - 1, r.y + 2, r.h - 2, DU_DARK); du_vline(c, r.x + r.w - 2, r.y + 1, r.h - 1, DU_SHADOW);
-        if (sel) du_hline(c, r.x + 1, base, r.w - 3, DU_FACE);
+        if (platinum) {
+            struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+            desk_paint_vgradient(&p, r.x + 1, r.y + 1, r.w - 2, r.h - 1, sel ? desk_theme->face_top : desk_mix(DU_SHADOW, desk_theme->face_top, 50),
+                                 sel ? DU_FACE : desk_mix(DU_SHADOW, desk_theme->face_bottom, 60));
+            uint32_t edge = desk_mix(desk_theme->outline, DU_FACE, 150);
+            du_hline(c, r.x + 2, r.y, r.w - 4, edge); du_vline(c, r.x, r.y + 2, r.h - 2, edge); du_vline(c, r.x + r.w - 1, r.y + 2, r.h - 2, edge);
+            du_fill(c, (struct du_rect){r.x + 1, r.y + 1, 1, 1}, edge); du_fill(c, (struct du_rect){r.x + r.w - 2, r.y + 1, 1, 1}, edge);
+            du_hline(c, r.x + 2, r.y + 1, r.w - 4, DU_HILITE); du_vline(c, r.x + 1, r.y + 2, r.h - 2, DU_HILITE);
+            if (sel) { du_hline(c, r.x + 1, base, r.w - 2, DU_FACE); du_hline(c, r.x + 3, r.y + 1, r.w - 6, desk_theme->accent); }
+        } else {
+            du_fill(c, r, DU_FACE);
+            du_hline(c, r.x + 2, r.y, r.w - 4, DU_HILITE); du_vline(c, r.x, r.y + 2, r.h - 2, DU_HILITE);
+            du_fill(c, (struct du_rect){r.x + 1, r.y + 1, 1, 1}, DU_HILITE);
+            du_vline(c, r.x + r.w - 1, r.y + 2, r.h - 2, DU_DARK); du_vline(c, r.x + r.w - 2, r.y + 1, r.h - 1, DU_SHADOW);
+            if (sel) du_hline(c, r.x + 1, base, r.w - 3, DU_FACE);
+        }
         const char *t = w->items[i].text[0] ? w->items[i].text[0] : "";
-        int tw = du_text_width(t), tx = r.x + (r.w - tw) / 2, ty = r.y + (DU_TAB_H - 2 - DU_GLYPH_H) / 2 + (sel ? 0 : -1);
-        du_text(c, tx, ty, t, DU_INK);
-        if (sel && focused) du_dotted(c, (struct du_rect){tx - 3, ty - 3, tw + 5, DU_GLYPH_H + 6});
+        int font = sel ? desk_theme->font_bold : desk_theme->font_ui;
+        int tw = du_text_width_font(font, t), tx = r.x + (r.w - tw) / 2, ty = r.y + (DU_TAB_H - 2 - DU_GLYPH_H) / 2 + (sel ? 1 : 0);
+        du_text_font(c, font, tx, ty, t, DU_INK);
+        if (sel && focused) du_dotted(c, (struct du_rect){tx - 3, ty - 3, tw + 6, DU_GLYPH_H + 7});
         at += width;
     }
 }
@@ -487,10 +573,79 @@ static void draw_group(struct du_canvas *c, const struct du_widget *w)
     struct du_rect b = w->box;
     du_edge(c, (struct du_rect){b.x, b.y + DU_GLYPH_H / 2, b.w, b.h - DU_GLYPH_H / 2}, DU_ETCHED);
     if (w->text[0]) {
-        int tw = du_text_width(w->text);
-        du_fill(c, (struct du_rect){b.x + 6, b.y, tw + 6, DU_GLYPH_H + 1}, DU_FACE);
-        du_label(c, b.x + 9, b.y, w->text, w->disabled ? DU_GRAY : DU_INK, 1);
+        int tw = du_label_width(w->text);
+        du_fill(c, (struct du_rect){b.x + 6, b.y - 2, tw + 8, DU_GLYPH_H + 4}, DU_FACE);
+        du_label(c, b.x + 10, b.y, w->text, w->disabled ? DU_GRAY : DU_INK, 1);
     }
+}
+
+/* ---- ui-look: check boxes, radio buttons, tool-bar bands, headers ---- */
+static const char *const radio_mask[12] = {
+    "....####....", "..##oooo##..", ".#oooooooo#.", ".#oooooooo#.", "#oooooooooo#", "#oooooooooo#",
+    "#oooooooooo#", "#oooooooooo#", ".#oooooooo#.", ".#oooooooo#.", "..##oooo##..", "....####...."};
+
+static void draw_check(struct du_canvas *c, struct du_widget *w, int focused)
+{
+    struct du_rect b = w->box;
+    int platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM, size = platinum ? 12 : 13;
+    int bx = b.x, by = b.y + (b.h - size) / 2, down = w->pressed && w->hot;
+    uint32_t ink = w->disabled ? DU_GRAY : DU_INK;
+    if (w->kind == DU_CHECKBOX) {
+        struct du_rect box = {bx, by, size, size};
+        if (platinum) {
+            struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+            du_outline(c, box, w->disabled ? DU_SHADOW : desk_theme->outline);
+            desk_paint_vgradient(&p, bx + 1, by + 1, size - 2, size - 2, down ? DU_SHADOW : DU_FACE, down ? DU_FACE : DU_HILITE);
+            if (!down) { du_hline(c, bx + 1, by + 1, size - 2, desk_mix(DU_SHADOW, DU_FACE, 120)); du_vline(c, bx + 1, by + 1, size - 2, desk_mix(DU_SHADOW, DU_FACE, 120)); }
+        } else { du_fill(c, box, down || w->disabled ? DU_FACE : DU_WINDOW); du_edge(c, box, DU_SUNKEN); }
+        if (w->value) {
+            /* Tick: two strokes, two pixels thick. */
+            static const int8_t tick[][2] = {{2,5},{3,6},{4,7},{5,6},{6,5},{7,4},{8,3},{9,2}};
+            uint32_t mark = platinum && !w->disabled ? desk_theme->accent : ink;
+            for (unsigned k = 0; k < sizeof(tick) / sizeof(tick[0]); k++)
+                du_fill(c, (struct du_rect){bx + tick[k][0] + (platinum ? 0 : 1), by + tick[k][1] - 1 + (platinum ? 0 : 1), 1, 3}, mark);
+        }
+        if (focused && desk_theme->focus_style == DESK_FOCUS_RING) du_focus_ring(c, (struct du_rect){bx - 2, by - 2, size + 4, size + 4});
+    } else {
+        for (int y = 0; y < 12; y++) for (int x = 0; x < 12; x++) {
+            char k = radio_mask[y][x];
+            if (k == '#') du_fill(c, (struct du_rect){bx + x, by + y, 1, 1},
+                platinum ? (w->disabled ? DU_SHADOW : desk_theme->outline) : (y + x < 12 ? DU_SHADOW : DU_HILITE));
+            else if (k == 'o') du_fill(c, (struct du_rect){bx + x, by + y, 1, 1},
+                down || w->disabled ? DU_FACE : platinum ? desk_mix(DU_FACE, DU_HILITE, (unsigned)(y * 20)) : DU_WINDOW);
+        }
+        if (w->value) {
+            uint32_t mark = platinum && !w->disabled ? desk_theme->accent : ink;
+            du_fill(c, (struct du_rect){bx + 4, by + 3, 4, 6}, mark); du_fill(c, (struct du_rect){bx + 3, by + 4, 6, 4}, mark);
+        }
+        if (focused && desk_theme->focus_style == DESK_FOCUS_RING) du_focus_ring(c, (struct du_rect){bx - 2, by - 2, 16, 16});
+    }
+    int tx = bx + size + 6, ty = b.y + (b.h - DU_GLYPH_H) / 2;
+    if (w->disabled) du_text_disabled(c, tx, ty, w->text); else du_label(c, tx, ty, w->text, DU_INK, 1);
+    if (focused && desk_theme->focus_style == DESK_FOCUS_DOTTED)
+        du_dotted(c, (struct du_rect){tx - 2, ty - 3, du_label_width(w->text) + 4, DU_GLYPH_H + 7});
+}
+
+static void draw_band(struct du_canvas *c, const struct du_widget *w)
+{
+    struct du_rect b = w->box;
+    if (desk_theme->control_style == DESK_CONTROLS_PLATINUM) {
+        struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+        desk_paint_vgradient(&p, b.x, b.y, b.w, b.h, desk_theme->face_top, desk_theme->face_bottom);
+    } else du_fill(c, b, DU_FACE);
+    du_hline(c, b.x, b.y, b.w, DU_HILITE);
+    du_hline(c, b.x, b.y + b.h - 1, b.w, DU_SHADOW);
+}
+
+static void draw_header_box(struct du_canvas *c, const struct du_widget *w)
+{
+    if (desk_theme->control_style == DESK_CONTROLS_PLATINUM) {
+        struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+        desk_paint_vgradient(&p, w->box.x, w->box.y, w->box.w, w->box.h, desk_theme->face_top, desk_theme->face_bottom);
+        du_hline(c, w->box.x, w->box.y + w->box.h - 1, w->box.w, DU_SHADOW);
+        du_hline(c, w->box.x, w->box.y, w->box.w, DU_HILITE);
+    } else { du_fill(c, w->box, DU_FACE); du_edge(c, w->box, DU_RAISED_THIN); }
+    du_text_font(c, desk_theme->font_bold, w->box.x + 6, w->box.y + (w->box.h - DU_GLYPH_H) / 2, w->text, DU_INK);
 }
 
 static void select_tab(struct du_ui *u, struct du_widget *w, int index)
@@ -511,10 +666,7 @@ void du_draw_widget(struct du_ui *u, struct du_widget *w, int focused)
         if (w->disabled) du_text_disabled(c, w->box.x, w->box.y + (w->box.h - DU_GLYPH_H) / 2, w->text);
         else du_label(c, w->box.x, w->box.y + (w->box.h - DU_GLYPH_H) / 2, w->text, DU_INK, 1);
         break;
-    case DU_HEADER:
-        du_fill(c, w->box, DU_FACE); du_edge(c, w->box, DU_RAISED_THIN);
-        du_text_fit(c, w->box.x + 5, w->box.y + (w->box.h - DU_GLYPH_H) / 2, w->box.w - 10, w->text, DU_INK);
-        break;
+    case DU_HEADER: draw_header_box(c, w); break;
     case DU_SEPARATOR:
         if (w->box.w <= 2) { du_vline(c, w->box.x, w->box.y, w->box.h, DU_SHADOW); du_vline(c, w->box.x + 1, w->box.y, w->box.h, DU_HILITE); }
         else { du_hline(c, w->box.x, w->box.y, w->box.w, DU_SHADOW); du_hline(c, w->box.x, w->box.y + 1, w->box.w, DU_HILITE); }
@@ -532,6 +684,8 @@ void du_draw_widget(struct du_ui *u, struct du_widget *w, int focused)
     case DU_GRAPH: draw_graph(c, w); break;
     case DU_GROUP: draw_group(c, w); break;
     case DU_TEXTAREA: du_ta_draw(c, w->box, (struct du_textarea *)w->data, focused && u->focused_window); break;
+    case DU_CHECKBOX: case DU_RADIO: draw_check(c, w, focused && u->focused_window); break;
+    case DU_TOOLBAR: draw_band(c, w); break;
     }
 }
 
@@ -555,6 +709,17 @@ void du_render(struct du_ui *u)
 }
 
 /* ---- per-widget input ---- */
+static void toggle(struct du_ui *u, struct du_widget *w)
+{
+    if (w->kind == DU_RADIO) {
+        for (unsigned i = 0; i < u->count; i++)
+            if (u->widgets[i].kind == DU_RADIO && u->widgets[i].total == w->total) u->widgets[i].value = 0;
+        w->value = 1;
+    } else w->value = !w->value;
+    u->dirty = 1;
+    du_post(u, DU_EV_CHANGE, w->id, w->value);
+}
+
 int du_widget_key(struct du_ui *u, struct du_widget *w, unsigned code)
 {
     switch (w->kind) {
@@ -572,6 +737,9 @@ int du_widget_key(struct du_ui *u, struct du_widget *w, unsigned code)
     case DU_BUTTON:
         if (code == DU_KEY_SPACE || code == DU_KEY_ENTER) { du_post(u, DU_EV_ACTIVATE, w->id, 0); return 1; }
         return 0;
+    case DU_CHECKBOX: case DU_RADIO:
+        if (code != DU_KEY_SPACE) return 0;
+        toggle(u, w); return 1;
     case DU_TABS:
         if (!w->count || (code != DU_KEY_LEFT && code != DU_KEY_RIGHT && code != DU_KEY_HOME && code != DU_KEY_END)) return 0;
         select_tab(u, w, code == DU_KEY_HOME ? 0 : code == DU_KEY_END ? (int)w->count - 1 :
@@ -585,7 +753,7 @@ int du_widget_press(struct du_ui *u, struct du_widget *w, int button, int x, int
 {
     if (w->disabled) return 1;
     switch (w->kind) {
-    case DU_BUTTON: case DU_TOOLBUTTON:
+    case DU_BUTTON: case DU_TOOLBUTTON: case DU_CHECKBOX: case DU_RADIO:
         if (button != 1) return 1;
         w->pressed = 1; w->hot = 1;
         w->drag = w->kind == DU_TOOLBUTTON && w->dropdown > 0 && x >= w->box.x + w->box.w - w->dropdown ? 2 : 1;
@@ -625,7 +793,7 @@ int du_widget_press(struct du_ui *u, struct du_widget *w, int button, int x, int
 void du_widget_motion(struct du_ui *u, struct du_widget *w, int x, int y)
 {
     switch (w->kind) {
-    case DU_BUTTON: case DU_TOOLBUTTON: {
+    case DU_BUTTON: case DU_TOOLBUTTON: case DU_CHECKBOX: case DU_RADIO: {
         int hot = du_contains(w->box, x, y);
         if (hot != w->hot) { w->hot = (uint8_t)hot; u->dirty = 1; }
         break;
@@ -651,11 +819,13 @@ void du_widget_release(struct du_ui *u, struct du_widget *w, int button, int x, 
 {
     if (button != 1) return;
     int fire = (w->kind == DU_BUTTON || w->kind == DU_TOOLBUTTON) && w->pressed && w->drag == 1 && du_contains(w->box, x, y) && !w->disabled;
+    int flip = (w->kind == DU_CHECKBOX || w->kind == DU_RADIO) && w->pressed && du_contains(w->box, x, y) && !w->disabled;
     if (w->kind == DU_LISTVIEW || w->kind == DU_TREE) du_list_release(u, w);
     if (w->kind == DU_TEXTAREA && w->data) du_ta_mouse_up(w->data);
     w->pressed = 0; w->drag = 0; w->hot = (uint8_t)du_contains(w->box, x, y);
     u->dirty = 1;
     if (fire) du_post(u, DU_EV_ACTIVATE, w->id, 0);
+    if (flip) toggle(u, w);
 }
 
 /* ---- dispatch ---- */
@@ -685,10 +855,13 @@ static void key_down(struct du_ui *u, unsigned code)
         if (ch >= 'A' && ch <= 'Z') ch += 32;
         for (unsigned i = 0; ch && i < u->count; i++) {
             const struct du_widget *b = &u->widgets[i];
-            const char *amp = b->kind == DU_BUTTON && !b->hidden && !b->disabled ? strchr(b->text, '&') : NULL;
+            const char *amp = (b->kind == DU_BUTTON || b->kind == DU_CHECKBOX || b->kind == DU_RADIO) && !b->hidden && !b->disabled ? strchr(b->text, '&') : NULL;
             unsigned m = amp && amp[1] && amp[1] != '&' ? (unsigned char)amp[1] : 0;
             if (m >= 'A' && m <= 'Z') m += 32;
-            if (m == ch) { du_post(u, DU_EV_ACTIVATE, b->id, 0); return; }
+            if (m == ch) {
+                if (b->kind == DU_BUTTON) du_post(u, DU_EV_ACTIVATE, b->id, 0); else toggle(u, &u->widgets[i]);
+                return;
+            }
         }
     }
     struct du_widget *f = u->focus >= 0 && (unsigned)u->focus < u->count ? &u->widgets[u->focus] : NULL;
@@ -752,7 +925,8 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
             if (u->hover >= 0 && (unsigned)u->hover < u->count) { u->widgets[u->hover].hot = 0; u->dirty = 1; }
             u->hover = hit;
         }
-        if (hit >= 0 && u->widgets[hit].kind == DU_TOOLBUTTON && !u->widgets[hit].hot && !u->widgets[hit].disabled) { u->widgets[hit].hot = 1; u->dirty = 1; }
+        if (hit >= 0 && (u->widgets[hit].kind == DU_TOOLBUTTON || u->widgets[hit].kind == DU_BUTTON) &&
+            !u->widgets[hit].hot && !u->widgets[hit].disabled) { u->widgets[hit].hot = 1; u->dirty = 1; }
         return;
     }
     if (e->type != CIUKI_INPUT_BUTTON || e->code < 1 || e->code > 3) return;

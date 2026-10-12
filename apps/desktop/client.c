@@ -16,10 +16,13 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
     d->action = -1;
     d->mouse_x = (int32_t)w / 2; d->mouse_y = (int32_t)h / 2;
     d->clock_second = UINT64_MAX;
+    d->title_click_window = -1;
     for (unsigned i = 0; i < DESK_CLIENTS; i++)
         d->clients[i].channel = d->clients[i].surface = -1;
     desk_damage_add(&d->damage, (struct desk_box){0, 0, (int32_t)w, (int32_t)h}, w, h);
 }
+void desk_theme_changed(struct desktop *d)
+{ desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height); }
 int desk_add_client(struct desktop *d, int fd)
 {
     for (unsigned i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].channel == fd) return -1;
@@ -35,7 +38,7 @@ void desk_drop_client(struct desktop *d, int i)
     if (c->channel < 0 && !c->internal) return;
     if (d->focus == i) desk_focus(d, -1);
     if (d->drag == i) d->drag = -1;
-    if (c->window) desk_damage_add(&d->damage, c->frame, d->width, d->height);
+    if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
     if (c->pixels && !c->internal) d->ops.unmap((void *)c->pixels, c->info.allocation_bytes);
     if (c->surface >= 0) d->ops.close(c->surface);
     if (c->channel >= 0) d->ops.close(c->channel);
@@ -119,9 +122,9 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
     if (c->frame.x == x && c->frame.y == y) return;
     if (d->shell_test && d->shell_stage == 3 && c->pid == d->shell_pid && d->drag == i)
         d->shell_stage = 4;
-    desk_damage_add(&d->damage, c->frame, d->width, d->height);
+    desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
     c->frame.x = x; c->frame.y = y;
-    desk_damage_add(&d->damage, c->frame, d->width, d->height);
+    desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
 }
 static void close_attachments(struct desktop *d, const struct ciuki_message *m, int keep)
 {
@@ -170,7 +173,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         memcpy(c->title, p.title, sizeof(c->title));
         c->frame = desk_frame(s.width, s.height, 0, DESK_BAR);
         desk_move(d, i, 20 + i * 18, DESK_BAR + 20 + i * 18);
-        desk_damage_add(&d->damage, c->frame, d->width, d->height);
+        desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
         desk_message(&reply, DESK_CONFIGURE, 12);
         desk_put32(reply.data + 4, s.width); desk_put32(reply.data + 8, s.height);
         desk_queue(d, i, &reply);
@@ -189,7 +192,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     case DESK_DAMAGE: {
         struct desk_box b = desk_content(c);
         b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
-        if (!c->minimized) desk_damage_add(&d->damage, b, d->width, d->height);
+        if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
         break;
     }
     case DESK_MOVE: desk_move(d, i, p.x, p.y); break;
@@ -245,7 +248,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             c->ping_pending = 0; c->next_ping_ns = d->now_ns + 1000000000ull;
             if (c->unresponsive) {
                 c->unresponsive = 0;
-                desk_damage_add(&d->damage, c->frame, d->width, d->height);
+                desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
             }
         }
         break;
@@ -270,7 +273,7 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
         }
         if (c->ping_pending && now - c->ping_sent_ns >= 5000000000ull && !c->unresponsive) {
             c->unresponsive = 1;
-            if (c->window) desk_damage_add(&d->damage, c->frame, d->width, d->height);
+            if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
         }
     }
     if (d->shell) desk_close_timeouts(d);
@@ -329,7 +332,7 @@ void desk_minimize(struct desktop *d, int i)
             desk_focus(d,next);
         }
     }
-    desk_damage_add(&d->damage,c->frame,d->width,d->height);
+    desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
 }
 void desk_request_close(struct desktop *d, int i)
@@ -345,7 +348,7 @@ void desk_request_close(struct desktop *d, int i)
     for (int j=0; j<DESK_CLIENTS; j++) if (d->children[j].pid==c->pid && c->pid)
         d->children[j].close_ns=d->now_ns+DESK_CLOSE_NS;
     if (d->shell_test && d->shell_stage==4 && c->pid==d->shell_pid) d->shell_stage=5;
-    desk_damage_add(&d->damage,c->frame,d->width,d->height);
+    desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
 }
 void desk_close_timeouts(struct desktop *d)
 {
@@ -390,7 +393,7 @@ void desk_about(struct desktop *d)
     d->about=i;
     desk_move(d,i,((int32_t)d->width-c->frame.w)/2,DESK_BAR+20);
     desk_focus(d,i);
-    desk_damage_add(&d->damage,c->frame,d->width,d->height);
+    desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
 }
 int desk_shell_click(struct desktop *d)

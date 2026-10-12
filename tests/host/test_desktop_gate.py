@@ -182,7 +182,7 @@ void klog(const char *f,...) {(void)f;}
             '-I',str(self.folder/'include'),
             '-I',str(ROOT/'apps/desktop'),'-I',str(ROOT/'src/kernel/include'),
             str(ROOT/'tests/host/desktop/demo_gate_test.c'),str(ROOT/'apps/desktop/protocol.c'),
-            str(ROOT/'apps/desktop/compositor.c'),'-o',str(binary)]
+            str(ROOT/'apps/desktop/compositor.c'),str(ROOT/'apps/desktop/theme.c'),'-o',str(binary)]
         subprocess.run(command,check=True,env=env)
         def execute(*args):
             return subprocess.run([str(binary),*args],capture_output=True,text=True,env=env,
@@ -219,7 +219,7 @@ void klog(const char *f,...) {(void)f;}
             '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
             '-I',str(self.folder/'desktop-include'),'-I',str(ROOT/'apps/desktop'),
             '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
-            *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+            *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c','theme.c')),
             *bridge,
             '-o',str(binary)],check=True,env=env)
         result=subprocess.run([str(binary)],capture_output=True,text=True,env=env,timeout=10)
@@ -254,10 +254,10 @@ void klog(const char *f,...) {(void)f;}
                 '-I',str(ROOT/'src/kernel/include')]
         desktop=self.folder/'desktop';demo=self.folder/'demo';kernel=self.folder/'kernel'
         subprocess.run([*common,str(ROOT/'tests/host/desktop/demo_gate_test.c'),
-                        *(str(ROOT/'apps/desktop'/n) for n in ('protocol.c','compositor.c')),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('protocol.c','compositor.c','theme.c')),
                         '-o',str(demo)],check=True,env=env)
         subprocess.run([*common,str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
-                        *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c','theme.c')),
                         '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
                         *self.kernel_spawn_bridge(env),
                         '-o',str(desktop)],check=True,env=env)

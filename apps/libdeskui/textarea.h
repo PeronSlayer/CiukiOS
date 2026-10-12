@@ -3,9 +3,10 @@
  * and input handling for a Notepad-class editor (f2-32).
  *
  * The buffer holds UTF-8 with "\n" line breaks. Each character occupies one
- * 6x13 cell (the compositor's 5x7 glyphs; a tab advances to the next multiple
- * of 8 cells, counted from the start of the visual line); characters the font
- * lacks (non-ASCII, control characters) are drawn as a hollow placeholder box.
+ * 6x13 cell of the theme's monospace face (Inconsolata 12; a tab advances to
+ * the next multiple of 8 cells, counted from the start of the visual line);
+ * characters the face lacks (beyond Latin-1, control characters) are drawn
+ * as a hollow placeholder box.
  * All arithmetic is integer-only and every offset the API hands out lies on a
  * character boundary. Keys and text reach the widget through libdeskui's
  * dispatch (widgets.c); scrollbars reuse the toolkit's du_sb.
@@ -16,7 +17,7 @@
 
 #define DU_TA_LIMIT 61440u  /* default capacity in bytes (the 0.8 CiukNote limit) */
 #define DU_TA_TAB 8u
-#define DU_TA_CELL_W DU_CHAR_W   /* the compositor's 5x7 glyphs at their 6 pixel advance */
+#define DU_TA_CELL_W 6           /* monospace advance (Inconsolata 12, theme.h DESK_FONT_MONO) */
 #define DU_TA_CELL_H 13          /* line height */
 #define DU_TA_BAR 16             /* scrollbar thickness */
 #define DU_TA_PAD 2         /* text inset inside the sunken border */
