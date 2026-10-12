@@ -86,7 +86,7 @@ def doom_rows(sound):
                  ('DATA', dict(case='video', loop=i, graphics=1, width=320, height=200, flips=1720, faults=40, pm_faults=40,
                                maps=6900, flushes=7000, mode=3)),
                  ('DATA', dict(case='dpmi', loop=i, entries=1, terminations=1, exceptions=0, irq_pm=9000, faults=0, stale=0,
-                               released=1)),
+                               released=1, popf=40)),
                  ('DATA', dict(case='audio', loop=i, **audio)),
                  ('DATA', dict(case='loop_cleanup', loop=i, restored=1))]
     rows.append(('DATA', dict(case='loops', completed=5, required=5)))
@@ -215,7 +215,7 @@ class Workloads(unittest.TestCase):
                 ('DATA', dict(case='audio', loop=5, resets=big, blocks=big, frames=big, edges=big, services=big, opl=big,
                               dma_faults=big, consumer=big)),
                 ('DATA', dict(case='dpmi', loop=5, entries=big, terminations=big, exceptions=big, irq_pm=big, faults=big,
-                              stale=big, released=1)),
+                              stale=big, released=1, popf=big)),
                 ('DATA', dict(case='frame', loop=5, stage='signon', mode=255, width=640, height=480, digest=HEX)),
                 ('DATA', dict(group='screen', row=24, text='X' * 80))]
         parse('doom-sound', rows, 'FAIL')

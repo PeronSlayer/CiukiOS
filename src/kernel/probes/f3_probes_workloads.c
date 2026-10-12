@@ -548,9 +548,9 @@ static int doom_probe(const char *name, bool sound)
         rec_emit(name, "DATA", "case=video loop=%u graphics=%u width=%u height=%u flips=%u faults=%u pm_faults=%u maps=%u flushes=%u mode=%u",
                  loop, w.graphics, w.width, w.height, w.video.starts, w.video.faults, w.video.pm_faults,
                  w.video.maps, w.video.flushes, w.video.mode);
-        rec_emit(name, "DATA", "case=dpmi loop=%u entries=%u terminations=%u exceptions=%u irq_pm=%u faults=%u stale=%u released=%u",
+        rec_emit(name, "DATA", "case=dpmi loop=%u entries=%u terminations=%u exceptions=%u irq_pm=%u faults=%u stale=%u released=%u popf=%u",
                  loop, w.dpmi.stats.entries, w.dpmi.stats.terminations, w.dpmi.stats.exceptions, w.dpmi.stats.irqs_pm,
-                 w.dpmi.stats.faults, w.dpmi.stats.stale, dpmi_released(&w.dpmi));
+                 w.dpmi.stats.faults, w.dpmi.stats.stale, dpmi_released(&w.dpmi), w.dpmi.stats.if_restored);
         /* f3-05 counters: DSP resets, block boundaries, PCM frames, IRQ
          * edges, services, OPL events, DMA faults; consumer = the f4-05
          * native output attached to this VM (AC97 profiles), not a pass
