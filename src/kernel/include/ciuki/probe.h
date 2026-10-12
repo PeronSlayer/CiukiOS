@@ -15,6 +15,9 @@ struct probe_def { const char *name; int (*fn)(void); };
 #define CIUKI_F4_PROBE(id, func) static const struct probe_def \
     __attribute__((used, section(".f4probes"), aligned(4))) f4probe_##func = { id, func }
 extern const struct probe_def __f4probes_start[], __f4probes_end[];
+#define CIUKI_F6_PROBE(id, func) static const struct probe_def \
+    __attribute__((used, section(".f6probes"), aligned(4))) f6probe_##func = { id, func }
+extern const struct probe_def __f6probes_start[], __f6probes_end[];
 extern const struct probe_def __f1probes_start[], __f1probes_end[];
 #define CIUKI_F3_PROBE(id, func) static const struct probe_def \
     __attribute__((used, section(".f3probes"), aligned(4))) f3probe_##func = { id, func }
@@ -25,6 +28,9 @@ void probe_app_output(struct task *t, const char *stream, const void *bytes, uin
 /* CIUKI_TEST v=1 run=<id> seq=<n> probe=<p> event=<e> [key=value ...] */
 void rec_set_run(const char *run8);
 void rec_emit(const char *probe, const char *event, const char *fmt, ...);
+/* Bounded runtime diagnostics, DATA framing; boot menu L only. Unlike
+ * evidence, these also work without a selected/begun test run. */
+void rec_diag(const char *probe, const char *fmt, ...);
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra);
 
 void probe_user_report(struct task *t, const char *msg, uint32_t len);

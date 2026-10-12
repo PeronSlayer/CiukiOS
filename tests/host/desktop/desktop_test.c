@@ -515,8 +515,38 @@ static void test_menu(void)
     cleanup();
     puts("PASS menu parser: bounded names, ELF filter, self/duplicate rejection, stable sort/cap, taskbar/menu layout");
 }
+static char ide_path[DESK_ARG_MAX+1];
+static int ide_launch_count;
+static int ide_launch(struct desktop *desktop,const struct desk_program *p)
+{
+    (void)desktop; assert(!strcmp(p->name,"ciukide-app"));
+    snprintf(ide_path,sizeof(ide_path),"%s",p->path); ++ide_launch_count; return 123;
+}
+static void test_ide_launch(void)
+{
+    setup(640,480); int i=client(5,12,64,48,0x123456);
+    d.clients[i].version=DESK_SHELL_VERSION; /* LAUNCH is a v2 client request. */
+    d.launch=ide_launch; ide_launch_count=0;
+    assert(desk_program_graphical("ciukide") && desk_program_kind("ciukide")==DESK_APP_IDE);
+    assert(desk_program_graphical("ciukide-app") && !desk_program_kind("ciukide-app"));
+    assert(desk_ide_launch(&d,"/Documents/Test/hello")==123);
+    assert(!strcmp(ide_path,"/Documents/Test/hello"));
+    const char *bad[]={"/System/kernel", "/Documents/../Programs/tcc", "/Documents/x/../../System/tcc",
+        "/Documents//hello", "/Documents/./hello", "/Documents/hello/", "/Documents/x\\hello", "/Documents/x:hello"};
+    for (unsigned b=0;b<sizeof(bad)/sizeof(bad[0]);++b) assert(desk_ide_launch(&d,bad[b])<0);
+    assert(ide_launch_count==1);
+    struct ciuki_message m; const char *name="ciukide-run", *path="/Documents/Test/hello";
+    unsigned n=(unsigned)strlen(name),p=(unsigned)strlen(path);
+    request(&m,DESK_LAUNCH,16+n+p); m.data[0]=DESK_SHELL_VERSION;
+    desk_put32(m.data+4,44); desk_put32(m.data+8,n); memcpy(m.data+12,name,n);
+    desk_put32(m.data+12+n,p); memcpy(m.data+16+n,path,p);
+    desk_receive(&d,i,&m); assert(ide_launch_count==1 && d.clients[i].channel>=0); /* ordinary client denied */
+    d.clients[i].program=DESK_APP_IDE; desk_receive(&d,i,&m); assert(ide_launch_count==2);
+    d.power.state=1; assert(desk_ide_launch(&d,path)==-EBUSY);
+    d.power.state=0; cleanup(); puts("PASS CiukIDE: desktop-owned identity, project path checks, ordinary launch callback");
+}
 int main(void)
 {
-    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu();
+    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu(); test_ide_launch();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

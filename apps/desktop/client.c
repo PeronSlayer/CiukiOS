@@ -39,6 +39,7 @@ void desk_drop_client(struct desktop *d, int i)
     if (c->channel < 0 && !c->internal) return;
     if (d->focus == i) desk_focus(d, -1);
     if (d->drag == i) d->drag = -1;
+    if (c->window) desk_sound(d,SOUND_WINDOW_CLOSE);
     if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
     if (c->pixels && !c->internal) d->ops.unmap((void *)c->pixels, c->info.allocation_bytes);
     if (c->surface >= 0) d->ops.close(c->surface);
@@ -167,6 +168,56 @@ void desk_resize(struct desktop *d, int i, struct desk_box f)
     configure(d, i, 0);
     desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
 }
+/* Only a successfully presented frame in the requested/confirmed mode may
+ * replace the saved preference. Failed reallocations still have the old id. */
+int desk_display_frame_commit(struct desktop *d, int redraw)
+{
+    if (redraw || !d->display_pending || d->display_pending != d->display_mode || d->damage.count) return 0;
+    d->sh.cfg.display_mode = d->display_pending;
+    d->display_pending = 0;
+    return 1;
+}
+
+/* Called only after allocating the new screen surface. Client surfaces stay
+ * attached until their CONFIGURE/DAMAGE handshake replaces them. */
+void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
+{
+    d->width = width; d->height = height;
+    d->drag = -1; d->resize_edges = 0;
+    d->title_hot = d->title_down = 0;
+    if (d->mouse_x >= (int32_t)width) d->mouse_x = (int32_t)width - 1;
+    if (d->mouse_y >= (int32_t)height) d->mouse_y = (int32_t)height - 1;
+    int32_t work = (int32_t)height - DESK_BAR - (d->shell ? DESK_BAR : 0);
+    for (int i = 0; i < DESK_CLIENTS; i++) {
+        struct desk_client *c = &d->clients[i];
+        if (!c->window) continue;
+        if (c->collapsed && c->resizable) desk_collapse(d, i);
+        if (c->resizable && !c->internal) {
+            struct desk_box f = c->frame;
+            if (c->zoomed || f.w > (int32_t)width) f.w = (int32_t)width;
+            if (c->zoomed || f.h > work) f.h = work;
+            uint32_t serial = c->resize_serial;
+            desk_resize(d, i, f);
+            /* The display geometry changed even if this client's size did
+             * not. Issue a fresh serial, allowing the client to re-layout. */
+            if (serial == c->resize_serial) {
+                if (!++c->resize_serial) ++c->resize_serial;
+                configure(d, i, 0);
+            }
+        }
+        desk_move(d, i, c->zoomed ? 0 : c->frame.x, c->zoomed ? DESK_BAR : c->frame.y);
+        int32_t max_x = (int32_t)width - c->restore.w, max_y = (int32_t)height - c->restore.h - (d->shell ? DESK_BAR : 0);
+        if (max_x < 0) max_x = 0;
+        if (max_y < DESK_BAR) max_y = DESK_BAR;
+        if (c->restore.x > max_x) c->restore.x = max_x;
+        if (c->restore.y > max_y) c->restore.y = max_y;
+    }
+    d->sh.wall_valid = 0;
+    if (d->shell) desk_shell_apply(d);
+    d->damage.count = 0;
+    desk_damage_add(&d->damage, (struct desk_box){0, 0, (int32_t)width, (int32_t)height}, width, height);
+}
+
 void desk_zoom(struct desktop *d, int i)
 {
     if (i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return;
@@ -250,6 +301,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             close_attachments(d, m, -1); desk_drop_client(d, i); return;
         }
         c->surface = m->fds[0]; c->info = s; c->pixels = pixels; c->window = 1;
+        desk_sound(d,SOUND_WINDOW_OPEN);
         c->resizable = (p.flags & DESK_RESIZABLE) != 0;
         c->min_width = p.min_width; c->min_height = p.min_height;
         c->max_width = p.max_width; c->max_height = p.max_height;
@@ -340,10 +392,15 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
          * LAUNCH /Programs/ciuknote with one absolute path argument (opening a text file). */
         int files_open = p.opcode == DESK_LAUNCH && c->program == DESK_APP_FILES && !c->taskman &&
                          (!strcmp(p.title, "ciuknote") || desk_catalog_takes_file(p.title)) && p.argument[0] == '/';
-        int32_t result = !c->taskman && !files_open ? -EPERM :
+        int ide_run = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
+                      !strcmp(p.title,"ciukide-run");
+        int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
+                        !strcmp(p.title,"ciuknote") && !strcmp(p.argument,"/Documents/Developer/Guide.txt");
+        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide ? -EPERM :
             p.opcode == DESK_END_TASK ? desk_task_end(d, p.window_id, p.pid) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
-            c->taskman && p.argument[0] ? -EPERM : desk_task_launch(d, p.title, p.argument);
+            c->taskman && p.argument[0] ? -EPERM : ide_run ? desk_ide_launch(d,p.argument) : desk_task_launch(d, p.title, p.argument);
+        if (p.opcode == DESK_END_TASK && !result) desk_sound(d,SOUND_END_TASK);
         /* Documents menu: files opened from Files (never in the runtime gate scenarios). */
         if (files_open && result > 0 && d->shell && !d->sh.gate) { cfg_recent_add(&d->sh.cfg, p.argument); d->sh.want_save = 1; }
         if (d->tasks_test && c->taskman && c->pid == d->tasks_pid) {
@@ -360,23 +417,33 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_SETTINGS: {
-        /* Control Panel: apply desktop.cfg again, or set the master volume
-         * through the desktop's delegated mixer handle (desktop.c). */
+        /* Control Panel settings use the real display callback and share
+         * the shutdown guard with the other preference requests. */
         int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : d->power.state ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
+        if (!result && p.request == DESK_SETTINGS_DISPLAY)
+            result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
         if (!result && p.request == DESK_SETTINGS_MASTER) {
             if (d->mixer_fd < 0) result = -ENODEV;
             else {
                 d->sh.volume = (int)((p.values[0] + p.values[1]) / 2); d->sh.muted = (int)p.values[2];
                 d->sh.want_mixer = 1;
+                d->sh.want_reload |= 8; /* volume feedback after applying gain */
                 desk_damage_add(&d->damage, desk_taskbar(d), d->width, d->height);
             }
         }
+        if (!result && (p.request == DESK_SETTINGS_SOUND_RELOAD || p.request == DESK_SETTINGS_SOUND_TEST ||
+                        p.request == DESK_SETTINGS_AUDIO_TEST))
+            result = d->sound_request ? d->sound_request(d,i,p.request,p.values[0],p.serial) : -ENODEV;
+        if (result == DESK_SOUND_PENDING) break; /* hardware completion replies asynchronously */
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, DESK_SETTINGS); desk_put32(reply.data + 12, (uint32_t)result);
         desk_queue(d, i, &reply);
         break;
     }
+    case DESK_SOUND:
+        desk_sound(d,p.flags);
+        break;
     case DESK_MIXER_SET: {
         /* Only the Volume Control the desktop launched may change the master volume. */
         int32_t result = !c->mixer ? -EPERM : d->power.state ? -EBUSY : d->mixer_set ? d->mixer_set(d, p.width, p.height, p.flags) : -ENODEV;
@@ -467,6 +534,7 @@ void desk_minimize(struct desktop *d, int i)
 {
     if (!d->shell || i<0 || i>=DESK_CLIENTS || !d->clients[i].window) return;
     struct desk_client *c = &d->clients[i];
+    desk_sound(d,c->minimized ? SOUND_RESTORE : SOUND_MINIMISE);
     if (c->minimized) { c->minimized=0; desk_focus(d,i); }
     else {
         c->minimized=1;
@@ -624,6 +692,31 @@ int desk_task_launch(struct desktop *d, const char *name, const char *argument)
     return -ENOENT;
 }
 
+int desk_ide_launch(struct desktop *d,const char *path)
+{
+    if (d->power.state) return -EBUSY;
+    size_t n=strlen(path);
+    if (n<=11 || n>DESK_ARG_MAX || strncmp(path,"/Documents/",11)) return -EPERM;
+    const char *start=path+11;
+    for (const char *p=start;;++p) {
+        unsigned char ch=(unsigned char)*p;
+        if (!ch || ch=='/') {
+            size_t len=(size_t)(p-start);
+            if (!len || (len==1 && *start=='.') || (len==2 && start[0]=='.' && start[1]=='.')) return -EINVAL;
+            if (!ch) break;
+            start=p+1;
+        } else if (ch<32 || ch>126 || ch=='\\' || ch==':') return -EINVAL;
+    }
+    if (!d->launch) return -ENOSYS;
+    /* The ordinary launcher owns channel creation, child tracking and reap.
+       Kernel ELF validation still admits/rejects the actual file. A generic
+       project app gets no Task Manager, mixer, Files or IDE privileges. */
+    struct desk_program program={0};
+    strcpy(program.name,"ciukide-app"); memcpy(program.path,path,n+1);
+    int pid=d->launch(d,&program), error=errno;
+    return pid<0 ? -(error ? error : EIO) : pid;
+}
+
 /* Shutdown is driven by the ordinary IPC/reap/paint loop, never by sleeps.
  * A channel CLOSE/disconnect is not proof that its process (or VM) exited. */
 static void power_target(struct desktop *d, uint32_t pid, const char *name, int owned)
@@ -682,6 +775,7 @@ void desk_power_begin(struct desktop *d, int action)
 }
 void desk_power_cancel(struct desktop *d)
 {
+    if (d->sound_cancel) d->sound_cancel(d);
     if (!d->power.state || d->power.state==DESK_POWER_DONE) return;
     int window=d->power.window, focus=d->power.previous_focus;
     d->power.state=DESK_POWER_IDLE;
@@ -738,6 +832,7 @@ void desk_power_tick(struct desktop *d)
         p->busy_deadline=d->now_ns+DESK_POWER_BUSY_NS;
     }
     if (d->now_ns<p->next_try) return;
+    if (d->sound_shutdown && !d->sound_shutdown(d)) return;
     if (!p->prepared) { p->prepared=1; if (d->power_prepare) d->power_prepare(d); }
     int r;
     if (d->power_request) r=d->power_request(p->action);

@@ -46,6 +46,11 @@ struct du_textarea {
     int undo_valid, undo_kind; size_t edit_cursor;
     /* pointer */
     int drag, grab; uint64_t click_ns; int click_x, click_y, clicks;
+    /* Optional source-editor presentation. Byte offsets refer to text; the
+     * callback is never applied to selected text. Zero preserves plain text. */
+    int line_numbers;
+    uint32_t (*colour)(void *ctx, size_t byte_offset, uint32_t default_ink);
+    void *colour_ctx;
 };
 
 int du_ta_init(struct du_textarea *, size_t cap);

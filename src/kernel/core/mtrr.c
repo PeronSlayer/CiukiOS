@@ -1,4 +1,4 @@
-/* F1-24: conservative boot-framebuffer MTRR allocation, before any LFB alias.
+/* F1-24: conservative framebuffer MTRR allocation, before any LFB alias.
  * Research/combination: docs/design/framebuffer-write-combining.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -26,6 +26,8 @@ struct mtrr_state {
 struct wc_range { uint64_t base, size; unsigned slot; };
 struct wc_plan { unsigned count; struct wc_range range[2]; };
 static struct mtrr_state state;
+static struct wc_plan owned;
+static struct mtrr_pair original[2];
 static bool attempted, enabled;
 static uint32_t framebuffer_phys, framebuffer_bytes;
 
@@ -132,6 +134,13 @@ static bool program_wc(const struct mtrr_state *s, const struct wc_plan *p)
     if (cr4 & CR4_PGE) write_cr4(cr4 & ~CR4_PGE);
     else write_cr3(cr3);
     wrmsr(MTRR_DEF, s->def & ~MTRR_ENABLE);
+    /* All aliases were revoked. Retire only verified OS-owned pairs. */
+    for (unsigned i = 0; i < owned.count; i++) {
+        uint32_t msr = MTRR_BASE + 2 * owned.range[i].slot;
+        wrmsr(msr + 1, 0);
+        wrmsr(msr, original[i].base);
+        wrmsr(msr + 1, original[i].mask);
+    }
     for (unsigned i = 0; i < p->count; i++) {
         const struct wc_range *r = &p->range[i];
         uint32_t msr = MTRR_BASE + 2 * r->slot;
@@ -145,6 +154,14 @@ static bool program_wc(const struct mtrr_state *s, const struct wc_plan *p)
     write_cr0(cr0);
     if (cr4 & CR4_PGE) write_cr4(cr4);
     bool ok = rdmsr(MTRR_DEF) == s->def;
+    for (unsigned i = 0; i < owned.count; i++) {
+        unsigned slot = owned.range[i].slot;
+        bool reused = false;
+        for (unsigned j = 0; j < p->count; j++)
+            if (p->range[j].slot == slot) reused = true;
+        if (!reused && (rdmsr(MTRR_BASE + 2 * slot) != original[i].base ||
+                        rdmsr(MTRR_BASE + 2 * slot + 1) != original[i].mask)) ok = false;
+    }
     for (unsigned i = 0; i < p->count; i++) {
         const struct wc_range *r = &p->range[i];
         uint32_t msr = MTRR_BASE + 2 * r->slot;
@@ -154,17 +171,18 @@ static bool program_wc(const struct mtrr_state *s, const struct wc_plan *p)
     return ok;
 }
 
-bool mtrr_framebuffer_enable(uint32_t phys, uint32_t bytes)
+static bool framebuffer_configure(uint32_t phys, uint32_t bytes, bool runtime)
 {
-    if ((g_boot.flags & CBI_F_TEXT_MODE) || phys != g_boot.fb_phys || !phys ||
-        (uint64_t)g_boot.fb_pitch * g_boot.fb_height != bytes) return false;
+    if (!runtime && ((g_boot.flags & CBI_F_TEXT_MODE) || phys != g_boot.fb_phys || !phys ||
+        (uint64_t)g_boot.fb_pitch * g_boot.fb_height != bytes)) return false;
     uint32_t flags = irq_save();
-    if (attempted) {
+    if (attempted && !runtime) {
         bool wc = enabled && phys == framebuffer_phys && bytes == framebuffer_bytes;
         irq_restore(flags);
         return wc;
     }
     attempted = true;
+    enabled = false;
     framebuffer_phys = phys; framebuffer_bytes = bytes;
     const char *why = "no-cpuid";
     const char *hypervisor = "none";
@@ -210,14 +228,31 @@ bool mtrr_framebuffer_enable(uint32_t phys, uint32_t bytes)
         state.pair[i].base = rdmsr(MTRR_BASE + 2 * i);
         state.pair[i].mask = rdmsr(MTRR_BASE + 2 * i + 1);
     }
+    /* The BIOS may have touched MTRRs while changing video mode. Never
+     * silently reclaim a pair that no longer contains our exact values. */
+    for (unsigned i = 0; i < owned.count; i++) {
+        const struct wc_range *r = &owned.range[i];
+        const struct mtrr_pair *pair = &state.pair[r->slot];
+        why = "owned-range-changed";
+        if (r->slot >= state.count || pair->base != (r->base | TYPE_WC) ||
+            pair->mask != ((address_mask(state.bits) & ~(r->size - 1)) | MTRR_VALID)) goto done;
+    }
+    for (unsigned i = 0; i < owned.count; i++)
+        state.pair[owned.range[i].slot] = original[i];
     uint64_t aperture = ((uint64_t)bytes + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
     if (g_boot.flags & CBI_F_VBE_CTRL_VALID) {
         uint32_t units = g_boot.vbe_ctrl[18] | (uint32_t)g_boot.vbe_ctrl[19] << 8;
         if (units) aperture = (uint64_t)units << 16;
     }
+    if (g_boot.version >= 2 && g_boot.display.tag == CBI_DISPLAY_TAG &&
+        g_boot.display.size == sizeof(g_boot.display) && g_boot.display.vram_bytes)
+        aperture = g_boot.display.vram_bytes;
     why = plan_wc(&state, phys, bytes, aperture, &plan);
     if (!plan.count) goto done;
     enabled = program_wc(&state, &plan);
+    for (unsigned i = 0; i < plan.count; i++)
+        original[i] = state.pair[plan.range[i].slot];
+    owned = plan;
     why = enabled ? "ok" : "readback-failed";
 done:
     irq_restore(flags);
@@ -228,6 +263,12 @@ done:
              (uint32_t)plan.range[i].base, plan.range[i].size, plan.range[i].slot);
     return enabled;
 }
+
+bool mtrr_framebuffer_enable(uint32_t phys, uint32_t bytes)
+{ return framebuffer_configure(phys, bytes, false); }
+
+bool mtrr_framebuffer_reconfigure(uint32_t phys, uint32_t bytes)
+{ return framebuffer_configure(phys, bytes, true); }
 
 void framebuffer_write_drain(void) { if (enabled) cpu_write_drain(); }
 uint64_t framebuffer_cycles(void) { return read_tsc_serialized(); }

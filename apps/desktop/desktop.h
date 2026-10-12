@@ -24,7 +24,7 @@
 #define DESK_TASK_X 4
 #define DESK_BACKGROUND 0x375564u
 #define DESK_PORTRAIT_SIZE 256
-#define DESK_MENU_MAX 16
+#define DESK_MENU_MAX 32
 #define DESK_MENU_ROW 28
 #define DESK_CLOSE_NS 2000000000ull
 /* App scenarios (runtime-selected in the post-fault interaction stage): the
@@ -33,6 +33,7 @@
 #define DESK_APP_FILES 1
 #define DESK_APP_NOTE 2
 #define DESK_APP_CONTROL 3          /* /Programs/control: may send DESK_SETTINGS */
+#define DESK_APP_IDE 4              /* /Programs/ciukide: project LAUNCH only */
 #define DESK_FILES_CHECKPOINT 0xf2310000u
 #define DESK_FILES_CHECKPOINTS 5
 #define DESK_NOTE_CHECKPOINT 0xf2320000u
@@ -41,6 +42,8 @@
 #define DESK_APP_CHECKPOINTS(kind) ((kind)==DESK_APP_NOTE ? DESK_NOTE_CHECKPOINTS : DESK_FILES_CHECKPOINTS)
 struct desk_box { int32_t x, y, w, h; };
 #include "shell.h"
+#include "sounds.h"
+#define DESK_SOUND_PENDING 1
 struct desk_damage { unsigned count; struct desk_box boxes[DESK_DAMAGE_MAX]; };
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
@@ -74,7 +77,7 @@ struct desk_ops {
     int (*close)(int);
     int (*present)(int, int, const struct ciuki_rect *);
 };
-struct desk_program { char name[64], path[sizeof("/Programs/") + 64]; };
+struct desk_program { char name[64], path[DESK_ARG_MAX + 1]; };
 struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent; };
 #define DESK_POWER_CLOSE_NS 3000000000ull
 #define DESK_POWER_RETRY_NS 250000000ull
@@ -137,6 +140,11 @@ struct desktop {
     struct desk_power_sequence power;
     /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
      * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
+    void (*sound_event)(struct desktop *, unsigned event);
+    /* sound_request: 0/-errno, or DESK_SOUND_PENDING for a deferred reply. */
+    int (*sound_request)(struct desktop *, int client, unsigned request, unsigned event, uint32_t serial);
+    int (*sound_shutdown)(struct desktop *); /* 1 complete, 0 still within the 2 s allowance */
+    void (*sound_cancel)(struct desktop *);
     int (*power_request)(int action);
     void (*power_prepare)(struct desktop *);
     int (*power_alive)(struct desktop *, uint32_t pid);
@@ -147,6 +155,9 @@ struct desktop {
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
     /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
     int title_hot, title_down;
+    uint32_t display_counter;
+    uint16_t display_mode, display_pending;
+    int (*display_set)(struct desktop *, uint16_t);
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -173,6 +184,7 @@ int desk_contains(struct desk_box, int32_t, int32_t);
 int desk_hit(const struct desktop *, int32_t, int32_t);
 int desk_program_add(struct desktop *, const char *name, const uint8_t *elf, size_t);
 int desk_program_graphical(const char *name);
+int desk_ide_launch(struct desktop *, const char *path);
 const char *desk_program_label(const char *name);
 const char *desk_app_program(int kind);          /* "files" / "ciuknote" */
 int desk_program_kind(const char *name);
@@ -198,6 +210,7 @@ int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);
+static inline void desk_sound(struct desktop *d, unsigned e) { if (d->sound_event) d->sound_event(d,e); }
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);
 int desk_ignore_sigpipe(void);
 int desk_add_client(struct desktop *, int channel);
@@ -209,6 +222,8 @@ void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 void desk_move(struct desktop *, int index, int32_t x, int32_t y);
 void desk_resize(struct desktop *, int index, struct desk_box frame);
+int desk_display_frame_commit(struct desktop *, int redraw_result);
+void desk_display_relayout(struct desktop *, uint32_t width, uint32_t height);
 void desk_zoom(struct desktop *, int index);
 unsigned desk_resize_hit(const struct desk_client *, int32_t x, int32_t y);
 void desk_input(struct desktop *, const struct ciuki_input_event *);

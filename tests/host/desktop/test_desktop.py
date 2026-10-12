@@ -322,12 +322,13 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-test"
             icons = load("control_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
-            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c",
-                       *(f"apps/desktop/{n}.c" for n in ("settings", "wallpaper", "image", "compositor", "theme")),
+            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/control/display.c", "apps/desktop/protocol.c",
+                       *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
+                            "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
                             *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
             c = load("control_portrait", ROOT / "apps/desktop/convert_portrait.py")
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
@@ -346,6 +347,37 @@ class DesktopTests(unittest.TestCase):
                     write_png(Path(frames) / f"{name}.png", width, height, xrgb_to_rgb((renders / f"{name}.xrgb").read_bytes()))
         print(result.stdout.strip())
 
+    def test_control_display_modes(self):
+        """f2-37: mode transactions, query ABI, adapter page and review renders."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="control-modes-", dir=parent) as temp:
+            folder = Path(temp)
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = folder / "control-modes-test"
+            icons = load("control_modes_icons", ROOT / "tests/host/desktop/icon_assets.py")
+            sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/control/display.c",
+                       *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
+                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
+                            "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
+                            "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
+                            "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
+                            *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
+            c = load("control_modes_portrait", ROOT / "apps/desktop/convert_portrait.py")
+            (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
+            renders = folder / "renders"; renders.mkdir()
+            result = subprocess.run([str(binary), str(renders), str(folder / "portrait.xrgb")],
+                                    check=True, env=env, capture_output=True, text=True)
+            self.assertIn("PASS control display modes", result.stdout)
+            frames = os.environ.get("CIUKI_WALL_FRAMES")
+            if frames:
+                Path(frames).mkdir(parents=True, exist_ok=True)
+                for raw in renders.glob("*.xrgb"):
+                    width, height = map(int, raw.with_suffix(".size").read_text().split())
+                    write_png(Path(frames) / f"{raw.stem}.png", width, height, xrgb_to_rgb(raw.read_bytes()))
+        print(result.stdout.strip())
+
     def test_shell_launcher(self):
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
@@ -353,7 +385,7 @@ class DesktopTests(unittest.TestCase):
             folder = Path(temp)
             inc = folder / "include/ciuki"
             inc.mkdir(parents=True)
-            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "power.h"):
+            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "power.h", "display.h"):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
             for name in ("runtime.h", "raw.h"):
                 (inc / name).write_text("/* supplied by host harness */\n")
@@ -429,7 +461,7 @@ class DesktopTests(unittest.TestCase):
         if not (build.OUT / "manifest.json").is_file():
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
-        self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", "libdeskui.a",
+        self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
                                            "calc", "charmap", "clock", "help", "mixer", "paint", "viewer"})  # legacy-recovery accessories
@@ -442,24 +474,28 @@ class DesktopTests(unittest.TestCase):
         sources, directories, metadata = image.desktop_payloads()
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
         self.assertEqual(set(sources), {"/Programs/desktop", "/Programs/demo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
-                                        "/Programs/ciuknote", "/Programs/control", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer",
+                                        "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/fonts/LICENSES.TXT",
                                         *(f"/system/fonts/{p.name}" for p in (ROOT / "assets/fonts/native").glob("*.CFN")),
                                         "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
-                                        "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png"})
+                                        "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png",
+                                        "/system/settings/sounds.cfg",
+                                        *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "sounds.cfg")})
         self.assertTrue({"/Programs", "/System", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 36)
+        self.assertEqual(len(records), 54)  # 40 main payloads plus Paint, 12 font files and the writer notice
         for r in records:
             if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
             elif r["path"].startswith("/system/fonts/"):
                 source = str(sources[r["path"]].relative_to(ROOT))
                 self.assertEqual(r["sha256"], m["inputs"]["sources"][source])
+            elif r["path"].startswith("/system/sounds/") or r["path"] == "/system/settings/sounds.cfg":
+                self.assertEqual(r["sha256"], metadata["sounds"]["files"][Path(r["path"]).name])
             elif r["path"].startswith("/system/wallpapers/"):
                 # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())
@@ -522,7 +558,7 @@ class AppCaseReplayTests(unittest.TestCase):
         cls.env = dict(os.environ, TMPDIR=str(folder), ASAN_OPTIONS="detect_leaks=0")
         include = folder / "include/ciuki"
         include.mkdir(parents=True)
-        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "power.h"):
+        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "power.h", "display.h"):
             shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, include / name)
         # Host stand-ins: CU_PTR keeps the whole pointer, the report call takes it (desktop_gate_test.c does the same).
         (include / "runtime.h").write_text("/* app replay */\n#include <ciuki/abi.h>\n#include <stdint.h>\n"

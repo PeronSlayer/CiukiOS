@@ -19,11 +19,12 @@ def load(name, path):
 
 def validate_payloads():
     desktop = load("apps_desktop", ROOT / "apps/desktop/build_desktop.py").validate_payloads()
+    tcc = load("apps_tcc", ROOT / "apps/tcc/build_tcc.py").validate_payloads()
     lua = load("apps_lua", ROOT / "apps/lua/build_lua.py")
     sdk = lua.validate_sdk()
     checker = lua.checker()
     files = {}
-    for name in ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "paint"):
+    for name in ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "paint"):
         files["/Programs/" + name] = {"source": "build/apps/desktop/" + name,
                                "sha256": desktop["files"][name], "elf": desktop["elf"][name]}
     for name, source in (("lua", "build/apps/lua/lua"), ("hello", "build/tools/ciuki-sdk/tests/hello.elf"),
@@ -31,6 +32,7 @@ def validate_payloads():
         path = ROOT / source
         files["/Programs/" + name] = {"source": source, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                                "elf": checker.inspect(path)}
+    files["/Programs/tcc"] = {"source": "build/apps/tcc/tcc", "sha256": tcc["files"]["tcc"], "elf": tcc["elf"]}
     result = {"schema_version": 1, "sdk_manifest_sha256": hashlib.sha256((ROOT / "build/tools/ciuki-sdk/manifest.json").read_bytes()).hexdigest(),
               "applications": files, "newlib": sdk["newlib"], "guest_qualification": "not_run"}
     return result
@@ -44,6 +46,7 @@ def main():
     subprocess.run([sys.executable, "-B", str(ROOT / "apps/lua/build_lua.py"), "--jobs", str(args.jobs),
                     "--source-archive", str(args.source_archive), "--tests-archive", str(args.tests_archive)], check=True)
     load("apps_desktop_build", ROOT / "apps/desktop/build_desktop.py").build()
+    load("apps_tcc_build", ROOT / "apps/tcc/build_tcc.py").build()
     (ROOT / "build/apps/manifest.json").write_text(json.dumps(validate_payloads(), indent=2, sort_keys=True) + "\n")
 
 if __name__ == "__main__":

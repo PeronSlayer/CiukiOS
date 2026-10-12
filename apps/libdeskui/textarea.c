@@ -3,6 +3,7 @@
 #include "textarea.h"
 #include "internal.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 
@@ -404,6 +405,7 @@ static void geometry(const struct du_textarea *ta, struct du_rect box, struct ge
     g->text = (struct du_rect){g->body.x, g->body.y, g->body.w - DU_TA_BAR, g->body.h - hb};
     g->vbar = (struct du_rect){g->body.x + g->body.w - DU_TA_BAR, g->body.y, DU_TA_BAR, g->body.h - hb};
     g->hbar = (struct du_rect){g->body.x, g->body.y + g->body.h - DU_TA_BAR, g->text.w, hb};
+    if (ta->line_numbers) { g->text.x += 42; g->text.w -= 42; }
 }
 void du_ta_fit(struct du_textarea *ta, struct du_rect box)
 {
@@ -527,6 +529,24 @@ void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta,
     du_ta_fit(ta, box); layout(ta); clamp_scroll(ta);
     du_well(c, box, DU_WINDOW);
     struct du_rect saved = c->clip;
+    if (ta->line_numbers) {
+        struct du_rect gutter = {g.body.x, g.body.y, 42, g.text.h};
+        c->clip = du_intersection(saved, gutter);
+        du_fill(c, gutter, DU_FACE);
+        unsigned logical = 1;
+        size_t before = ta->top < ta->vl_count ? ta->vl[ta->top] : ta->len;
+        for (size_t p = 0; p < before; ++p) logical += ta->text[p] == '\n';
+        for (unsigned row = 0; row < ta->rows && ta->top + row < ta->vl_count; ++row) {
+            size_t p = ta->vl[ta->top + row];
+            if (!p || ta->text[p-1] == '\n') {
+                char label[16]; snprintf(label, sizeof(label), "%u", logical);
+                du_text_font(c, desk_theme->font_mono, gutter.x + 38 - du_text_width_font(desk_theme->font_mono,label),
+                             gutter.y + DU_TA_PAD + (int)row * DU_TA_CELL_H + 2, label, DU_GRAY);
+            }
+            size_t end = vl_end(ta,ta->top + row);
+            if (end < ta->len && ta->text[end] == '\n') ++logical;
+        }
+    }
     c->clip = du_intersection(saved, g.text);
     size_t a, b; du_ta_selection(ta, &a, &b);
     int ox = g.text.x + DU_TA_PAD, oy = g.text.y + DU_TA_PAD, glyph_dy = (DU_TA_CELL_H - desk_font_cap(desk_theme->font_mono)) / 2 - 1;
@@ -543,7 +563,8 @@ void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta,
                 if (sel) du_fill(c, (struct du_rect){x, y, (int)w * DU_TA_CELL_W, DU_TA_CELL_H}, sel_bg);
                 if (ch != '\t') {
                     size_t used; unsigned cp = len == 1 ? ch : desk_utf8_decode(ta->text + p, &used);
-                    draw_char(c, x, y + glyph_dy, cp, sel ? DU_SELECT_INK : DU_INK, ta->bold);
+                    uint32_t ink = ta->colour ? ta->colour(ta->colour_ctx, p, DU_INK) : DU_INK;
+                    draw_char(c, x, y + glyph_dy, cp, sel ? DU_SELECT_INK : ink, ta->bold);
                 }
             }
             col += w; p += len;

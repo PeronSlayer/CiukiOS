@@ -29,13 +29,15 @@ void kmain(uint32_t magic, uint32_t bi_phys)
 {
     if (magic != CIUKI_BOOT_MAGIC_EAX)
         early_fail("magic");
-    if (bi_phys < 0x500 || bi_phys > 0x1000000u - CIUKI_BOOT_INFO_SIZE)
+    if (bi_phys < 0x500 || bi_phys > 0x1000000u - CIUKI_BOOT_INFO_V1_SIZE)
         early_fail("address");
     const struct ciuki_boot_info *src = P2V(bi_phys);
+    if (src->size > 0x1000000u - bi_phys) early_fail("address_size");
     const char *why;
     if (bootinfo_validate(src, &why) != 0)
         early_fail(why);
-    memcpy(&g_boot, src, sizeof(g_boot));
+    memset(&g_boot, 0, sizeof(g_boot));
+    memcpy(&g_boot, src, src->size); /* v1 never reads the v2 extension */
 
     serial_init((uint16_t)g_boot.uart_base, (uint16_t)g_boot.uart_divisor);
     bool text = (g_boot.flags & CBI_F_TEXT_MODE) != 0;

@@ -1,4 +1,4 @@
-/* ciuki_boot_info version 1: loader -> Ciuki VMM handoff.
+/* ciuki_boot_info version 2 (v1 prefix preserved): loader -> Ciuki VMM handoff.
  * Frozen layout; the authority is docs/design/boot-memory.md.
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -9,8 +9,11 @@
 
 #define CIUKI_BOOT_MAGIC_EAX   0x4B554943u /* "CIUK" in EAX at kernel entry */
 #define CIUKI_BOOT_INFO_MAGIC  0x31494243u /* "CBI1" */
-#define CIUKI_BOOT_INFO_VER    1u
-#define CIUKI_BOOT_INFO_SIZE   0x10F0u
+#define CIUKI_BOOT_INFO_VER    2u
+#define CIUKI_BOOT_INFO_V1_SIZE 0x10F0u
+#define CIUKI_BOOT_INFO_SIZE   0x1344u
+#define CBI_DISPLAY_TAG       0x50534944u /* "DISP" */
+#define CBI_DISPLAY_MAX       32u
 #define CIUKI_E820_MAX         128u
 #define CIUKI_TEST_REQ_MAX     64u
 
@@ -53,6 +56,18 @@ struct ciuki_e820 {
     uint64_t length;
     uint32_t type;
     uint32_t ext;
+} __attribute__((packed));
+
+/* Copied values only: no real-mode pointers escape the loader. */
+struct ciuki_boot_display_mode {
+    uint16_t id, width, height, bpp, pitch;
+    uint8_t linear, reserved;
+} __attribute__((packed));
+struct ciuki_boot_display {
+    uint32_t tag, size, vbe_version, vram_bytes;
+    char oem[64], vendor[64], product[64];
+    uint32_t mode_count;
+    struct ciuki_boot_display_mode modes[CBI_DISPLAY_MAX];
 } __attribute__((packed));
 
 struct ciuki_boot_info {
@@ -102,6 +117,7 @@ struct ciuki_boot_info {
     uint8_t  vbe_ctrl[512];         /* 0x1F0 */
     uint8_t  vbe_mode_info[256];    /* 0x3F0 */
     struct ciuki_e820 e820[128];    /* 0x4F0 */
+    struct ciuki_boot_display display; /* 0x10F0: version 2 tagged block */
 } __attribute__((packed));
 
 #define CBI_ASSERT_OFF(f, o) \
@@ -120,6 +136,8 @@ CBI_ASSERT_OFF(edd, 0x1A8);
 CBI_ASSERT_OFF(vbe_ctrl, 0x1F0);
 CBI_ASSERT_OFF(vbe_mode_info, 0x3F0);
 CBI_ASSERT_OFF(e820, 0x4F0);
+CBI_ASSERT_OFF(display, CIUKI_BOOT_INFO_V1_SIZE);
+_Static_assert(sizeof(struct ciuki_boot_display) == 596, "display block");
 _Static_assert(sizeof(struct ciuki_e820) == 24, "e820 entry");
 _Static_assert(sizeof(struct ciuki_boot_info) == CIUKI_BOOT_INFO_SIZE, "size");
 

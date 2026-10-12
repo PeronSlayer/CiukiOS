@@ -101,6 +101,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
     return 0;
 }
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
+static bool first_playback;
 static uint64_t non_silent_end; /* output position after the last nonzero published quantum */
 void audio_wake(void)
 {
@@ -170,12 +171,19 @@ void audio_service(void)
     unsigned limit, published_now = 0;
     unsigned lead = audio_refill_lead(active, tail_start, audio_vm_attached && audio_vm_attached(), &limit);
     while (!err && (active || audio.running) && ac97.published - ac97.retired < lead && published_now++ < limit) {
+        bool mixed = audio.running && active;
         if (!audio.running) {
             memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
         } else audio_mix(quantum, AUDIO_QUANTUM);
         err = ac97_publish(&ac97, quantum);
+        if (!err && mixed && !first_playback) {
+            first_playback = true;
+            klog("[audio] codec=%08x rate=%u play=ok", ac97.codec_id, AUDIO_RATE);
+        }
         if (!err) for (unsigned i = 0; i < AUDIO_QUANTUM; i++) {
-            if (quantum[i].left || quantum[i].right) { non_silent_end = audio.output; break; }
+            if (quantum[i].left || quantum[i].right) {
+                non_silent_end = audio.output; break;
+            }
         }
         if (!err && !audio.running && ac97.published == AUDIO_LEAD) {
             err = ac97_start(&ac97); audio.running = !err;
@@ -244,6 +252,7 @@ void audio_init(struct vfs *v)
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
+    klog("[audio] codec=%08x rate=%u play=pending", ac97.codec_id, AUDIO_RATE);
 }
 int audio_device_open(struct file_description *d, uint32_t flags)
 {

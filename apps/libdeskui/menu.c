@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Menu bar, drop-down and context menus with mnemonics and accelerators. */
 #include "internal.h"
+#include "../desktop/sounds.h"
 #include <string.h>
 
 #define ITEM_H DU_MENU_ITEM_H
@@ -161,6 +162,7 @@ void du_draw_menus(struct du_ui *u)
 void du_menu_open(struct du_ui *u, int menu, int keyboard)
 {
     if (menu < 0 || (unsigned)menu >= u->menu_count) return;
+    if (u->sound) u->sound(u->sound_ctx,SOUND_MENU_OPEN);
     u->popup = NULL; u->menu = menu; u->menu_keyboard = keyboard; u->menu_track = 0; u->menu_item = -1;
     if (keyboard)
         for (unsigned i = 0; i < u->menus[menu].count; i++)
@@ -176,6 +178,7 @@ void du_menu_close(struct du_ui *u)
 
 void du_popup(struct du_ui *u, const struct du_menu_item *items, unsigned n, int x, int y, int owner)
 {
+    if (u->sound) u->sound(u->sound_ctx,SOUND_MENU_OPEN);
     u->menu = -1; u->popup = items; u->popup_count = n; u->popup_x = x; u->popup_y = y;
     u->popup_owner = owner; u->menu_item = -1; u->menu_track = 0; u->dirty = 1;
 }
@@ -185,6 +188,7 @@ static void activate(struct du_ui *u, const struct du_menu_item *items, int inde
     if (index < 0) return;
     const struct du_menu_item *it = &items[index];
     if (it->flags & (DU_ITEM_DISABLED | DU_ITEM_SEPARATOR)) return;
+    if (u->sound) u->sound(u->sound_ctx,SOUND_MENU_SELECT);
     int id = it->id, owner = u->popup ? u->popup_owner : -1;
     du_menu_close(u);
     du_emit(u, (struct du_event){.type = DU_EV_ACTIVATE, .id = id, .index = owner});

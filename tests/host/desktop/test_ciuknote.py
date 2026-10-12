@@ -98,8 +98,7 @@ def case():
 
 def bin_programs():
     """The desktop menu lists /Programs of the image, sorted by strcmp (the desktop itself is not listed)."""
-    text = (ROOT / "scripts/build_image.py").read_text()
-    return sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', text)) - {"desktop"})
+    return load("ciuknote_image_inventory", ROOT / "tests/host/desktop/shell_menu.py").image_programs(ROOT)
 
 
 class CiuknoteTests(unittest.TestCase):
@@ -195,7 +194,7 @@ class CiuknoteTests(unittest.TestCase):
         Programs submenu (tests/host/desktop/shell_menu.py). Adding or removing a /Programs program can move a
         submenu row; this test names the inventory, and the desktop cases must follow."""
         programs = bin_programs()
-        self.assertEqual(programs, ["calc", "charmap", "ciuknote", "clock", "control", "demo", "dosbox", "files", "hello", "help", "libc_smoke", "lua", "mixer", "tasks", "viewer"],
+        self.assertEqual(programs, ["calc", "charmap", "ciukide", "ciuknote", "clock", "control", "demo", "dosbox", "files", "hello", "help", "libc_smoke", "lua", "mixer", "paint", "tasks", "tcc", "viewer"],
                          "the image's /Programs changed: check the Programs submenu rows of the desktop cases")
         menu = load("note_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         c, _ = case()

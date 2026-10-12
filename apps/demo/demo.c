@@ -93,7 +93,7 @@ static void fault(int channel, int surface, const char *kind, int gate)
         if (!strcmp(kind,"grant-fd")) {
             /* Forge display/input operations on an owned endpoint. An actual
              * grant cannot be inherited; wrong descriptor kinds must be EBADF. */
-            struct ciuki_display_info display={.size=sizeof(display)};
+            struct ciuki_framebuffer_info display={.size=sizeof(display)};
             struct ciuki_input_event event;
             struct ciuki_rect rect={0,0,0,0,1,1};
             if (ciuki_display_info(channel,&display)!=-1 || errno!=EBADF ||

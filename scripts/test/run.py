@@ -1302,12 +1302,20 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     drive_id=',id=ciuki-cut-drive' if case.get('crash_cut') else ''
     if not normal:selector(request,source,True)
     devices=case.get('device_exceptions',{})
+    nic = devices.get('network')
+    if nic not in (None, 'rtl8139', 'ne2k_pci', 'i82559er'):
+        raise res.Refusal('unknown network device exception')
+    if nic and (normal or requested['phase'] != 6 or requested['probe'] != 'net-arp'):
+        raise res.Refusal('user network backend requires f6:net-arp')
     args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
           '-monitor','none','-nic','none','-no-shutdown','-S',
           '-drive',drive.replace(',',',,')+',format='+disk_format+',if=ide,index=0,media=disk,cache='+cache+',rerror=report,werror=report'+drive_id,
           '-vga',devices.get('vga',profile['vga']),'-qmp','unix:q,server=on,wait=off']
     if source not in ('cfg','none'):args+=['-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
+    if nic:
+        args += ['-netdev', 'user,id=ciuknet0,restrict=on',
+                 '-device', nic+',netdev=ciuknet0,mac=52:54:00:12:34:56,romfile=']
     if source == 'cfg' and case.get('sweep'): args.remove('-no-shutdown')
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
     # reason=host-qmp-system-reset'), so warm-restart cases omit it; guest
@@ -2122,7 +2130,7 @@ def main(argv=None):
                 for result in summary: print(result['outcome'].upper()+': '+result['case']+' — '+result['reason'],flush=True)
                 return 0 if complete and all(r['outcome']=='pass' for r in summary) else 1
             host_evidence=None
-            if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-','f3-','f4-')):
+            if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-','f3-','f4-','f6-')):
                 started=time.monotonic()
                 checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=900,  # host suite grew with f3/f4 (303+ tests)
                                        env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
@@ -2145,7 +2153,7 @@ def main(argv=None):
                 if not all(c.isalnum() or c in '-_' for c in name):raise res.Refusal('invalid profile name')
                 profile=load(ROOT/'tests/profiles'/f'{name}.json')
                 if profile['machine']!=toolchain['qemu_machine']:raise res.Refusal('profile machine does not match pinned toolchain')
-                if case.get('selector','').startswith(('f1:','f2:','f3:','f4:')) and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1/F2/F3/F4 evidence requires pinned icount profile')
+                if case.get('selector','').startswith(('f1:','f2:','f3:','f4:','f6:')) and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1/F2/F3/F4/F6 evidence requires pinned icount profile')
                 if options.suite!='f0-smoke' and profile['accelerator']!='tcg' and not case.get('_smoke'):raise res.Refusal('CPU correctness evidence requires TCG')
                 result,directory=run_case(ROOT,options.suite,case,profile,image,executable,firmware,keep=options.keep)
                 if host_evidence is not None:
