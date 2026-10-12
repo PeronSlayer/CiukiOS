@@ -491,6 +491,7 @@ enum ciuki_syscall {
     CIUKI_SYS_POWER = 73,
     CIUKI_SYS_DISPLAY = 74,
     CIUKI_SYS_LAUNCH_MARK = 75,
+    CIUKI_SYS_DEVICES = 76,
 };
 
 /* f2-39: diagnostic markers, no copied wire record. See execution-abi.md. */
@@ -502,6 +503,103 @@ enum ciuki_syscall {
 
 /* pack(4) is scoped and restores the includer's previous setting. */
 #pragma pack(push, 4)
+
+/* F2-41: read-only, fixed copied device inventory (device-manager.md). */
+#define CIUKI_DEVICES_VERSION 1u
+#define CIUKI_DEVICES_MAX 64u
+#define CIUKI_DEVICE_RESOURCES 8u
+#define CIUKI_DRIVERS_MAX 16u
+#define CIUKI_LEASES_MAX 64u
+#define CIUKI_DEVICES_TRUNCATED 1u
+#define CIUKI_RESOURCE_UNKNOWN_SIZE 1u
+#define CIUKI_DEVICE_SYSTEM 0u
+#define CIUKI_DEVICE_DISPLAY 1u
+#define CIUKI_DEVICE_KEYBOARD 2u
+#define CIUKI_DEVICE_MOUSE 3u
+#define CIUKI_DEVICE_DISK 4u
+#define CIUKI_DEVICE_CDROM 5u
+#define CIUKI_DEVICE_SOUND 6u
+#define CIUKI_DEVICE_NETWORK 7u
+#define CIUKI_DEVICE_PORT 8u
+#define CIUKI_DEVICE_CLASSES 9u
+#define CIUKI_DEVICE_READY 0u
+#define CIUKI_DEVICE_ABSENT 1u
+#define CIUKI_DEVICE_QUARANTINED 2u
+#define CIUKI_DEVICE_FIRMWARE_FIRST 3u
+#define CIUKI_BUS_LEGACY 0u
+#define CIUKI_BUS_PCI 1u
+#define CIUKI_BUS_LOADER 2u
+#define CIUKI_RESOURCE_IO 0u
+#define CIUKI_RESOURCE_IRQ 1u
+#define CIUKI_RESOURCE_DMA 2u
+#define CIUKI_RESOURCE_MEMORY 3u
+struct ciuki_device_resource {
+    uint32_t type;
+    uint32_t flags;
+    uint64_t start;
+    uint64_t end;
+};
+struct ciuki_device_record {
+    uint32_t id;
+    uint32_t class_id;
+    uint32_t bus_type;
+    uint32_t bus;
+    uint32_t slot;
+    uint32_t function;
+    uint32_t vendor;
+    uint32_t device;
+    uint32_t sub_vendor;
+    uint32_t sub_device;
+    uint32_t pci_class;
+    uint32_t subclass;
+    uint32_t prog_if;
+    uint32_t revision;
+    uint32_t state;
+    uint32_t activation_seq;
+    uint32_t generation;
+    uint32_t resource_count;
+    uint32_t flags;
+    char name[64];
+    char driver[32];
+    char reason[80];
+    struct ciuki_device_resource resources[8];
+};
+struct ciuki_driver_record {
+    char name[32];
+    char build[32];
+    char policy[64];
+    uint32_t bound_devices;
+    uint32_t state;
+};
+struct ciuki_device_lease {
+    char owner[32];
+    uint32_t type;
+    uint32_t state;
+    uint32_t generation;
+    uint64_t start;
+    uint64_t end;
+};
+struct ciuki_devices_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t count;
+    uint32_t flags;
+    uint32_t generation;
+    uint32_t driver_count;
+    uint32_t lease_count;
+    uint32_t boot_flags;
+    uint32_t input_policy;
+    uint32_t cpu_family;
+    uint32_t cpu_model;
+    uint32_t cpu_stepping;
+    uint64_t uptime_ms;
+    char cpu_vendor[16];
+    char cpu_brand[64];
+    char boot_options[128];
+    struct ciuki_device_record devices[64];
+    struct ciuki_driver_record drivers[16];
+    struct ciuki_device_lease leases[64];
+};
 
 /* F4-01: fixed copied device-control extension. */
 #define CIUKI_AUDIO_VERSION 1u
@@ -1215,4 +1313,73 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, name) == 40, "ciuk
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, event) == 72, "ciuki_dosvm_command.event offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, damage) == 112, "ciuki_dosvm_command.damage offset");
 
+
+/* F2-41 inventory layout: target and host agree at pack(4). */
+_Static_assert(sizeof(struct ciuki_device_resource) == 24, "ciuki_device_resource size");
+_Static_assert(_Alignof(struct ciuki_device_resource) == 4, "ciuki_device_resource alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_device_resource, type) == 0, "ciuki_device_resource.type offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_resource, flags) == 4, "ciuki_device_resource.flags offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_resource, start) == 8, "ciuki_device_resource.start offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_resource, end) == 16, "ciuki_device_resource.end offset");
+_Static_assert(sizeof(struct ciuki_device_record) == 444, "ciuki_device_record size");
+_Static_assert(_Alignof(struct ciuki_device_record) == 4, "ciuki_device_record alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, id) == 0, "ciuki_device_record.id offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, class_id) == 4, "ciuki_device_record.class_id offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, bus_type) == 8, "ciuki_device_record.bus_type offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, bus) == 12, "ciuki_device_record.bus offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, slot) == 16, "ciuki_device_record.slot offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, function) == 20, "ciuki_device_record.function offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, vendor) == 24, "ciuki_device_record.vendor offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, device) == 28, "ciuki_device_record.device offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, sub_vendor) == 32, "ciuki_device_record.sub_vendor offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, sub_device) == 36, "ciuki_device_record.sub_device offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, pci_class) == 40, "ciuki_device_record.pci_class offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, subclass) == 44, "ciuki_device_record.subclass offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, prog_if) == 48, "ciuki_device_record.prog_if offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, revision) == 52, "ciuki_device_record.revision offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, state) == 56, "ciuki_device_record.state offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, activation_seq) == 60, "ciuki_device_record.activation_seq offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, generation) == 64, "ciuki_device_record.generation offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, resource_count) == 68, "ciuki_device_record.resource_count offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, flags) == 72, "ciuki_device_record.flags offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, name) == 76, "ciuki_device_record.name offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, driver) == 140, "ciuki_device_record.driver offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, reason) == 172, "ciuki_device_record.reason offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_record, resources) == 252, "ciuki_device_record.resources offset");
+_Static_assert(sizeof(struct ciuki_driver_record) == 136, "ciuki_driver_record size");
+_Static_assert(_Alignof(struct ciuki_driver_record) == 4, "ciuki_driver_record alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_driver_record, name) == 0, "ciuki_driver_record.name offset");
+_Static_assert(__builtin_offsetof(struct ciuki_driver_record, build) == 32, "ciuki_driver_record.build offset");
+_Static_assert(__builtin_offsetof(struct ciuki_driver_record, policy) == 64, "ciuki_driver_record.policy offset");
+_Static_assert(__builtin_offsetof(struct ciuki_driver_record, bound_devices) == 128, "ciuki_driver_record.bound_devices offset");
+_Static_assert(__builtin_offsetof(struct ciuki_driver_record, state) == 132, "ciuki_driver_record.state offset");
+_Static_assert(sizeof(struct ciuki_device_lease) == 60, "ciuki_device_lease size");
+_Static_assert(_Alignof(struct ciuki_device_lease) == 4, "ciuki_device_lease alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_device_lease, owner) == 0, "ciuki_device_lease.owner offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_lease, type) == 32, "ciuki_device_lease.type offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_lease, state) == 36, "ciuki_device_lease.state offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_lease, generation) == 40, "ciuki_device_lease.generation offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_lease, start) == 44, "ciuki_device_lease.start offset");
+_Static_assert(__builtin_offsetof(struct ciuki_device_lease, end) == 52, "ciuki_device_lease.end offset");
+_Static_assert(sizeof(struct ciuki_devices_info) == 34696, "ciuki_devices_info size");
+_Static_assert(_Alignof(struct ciuki_devices_info) == 4, "ciuki_devices_info alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, version) == 0, "ciuki_devices_info.version offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, size) == 4, "ciuki_devices_info.size offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, count) == 8, "ciuki_devices_info.count offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, flags) == 12, "ciuki_devices_info.flags offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, generation) == 16, "ciuki_devices_info.generation offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, driver_count) == 20, "ciuki_devices_info.driver_count offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, lease_count) == 24, "ciuki_devices_info.lease_count offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, boot_flags) == 28, "ciuki_devices_info.boot_flags offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, input_policy) == 32, "ciuki_devices_info.input_policy offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, cpu_family) == 36, "ciuki_devices_info.cpu_family offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, cpu_model) == 40, "ciuki_devices_info.cpu_model offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, cpu_stepping) == 44, "ciuki_devices_info.cpu_stepping offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, uptime_ms) == 48, "ciuki_devices_info.uptime_ms offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, cpu_vendor) == 56, "ciuki_devices_info.cpu_vendor offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, cpu_brand) == 72, "ciuki_devices_info.cpu_brand offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, boot_options) == 136, "ciuki_devices_info.boot_options offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, devices) == 264, "ciuki_devices_info.devices offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, drivers) == 28680, "ciuki_devices_info.drivers offset");
+_Static_assert(__builtin_offsetof(struct ciuki_devices_info, leases) == 30856, "ciuki_devices_info.leases offset");
 #endif /* CIUKI_ABI_H */

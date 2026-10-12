@@ -45,6 +45,13 @@ static void chord(int mod, int code) { event(CIUKI_INPUT_KEY, mod, 1, 0); key(co
 static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 5000000ull; du_tick(&ui, clock_ns); } }
 static void on_checkpoint(struct files_app *a, int stage) { (void)a; checkpoints[checkpoint_count++] = stage; }
 static void on_close(struct files_app *a) { (void)a; closed = 1; }
+static int control_spawned;
+static int control_spawn(struct files_app *a, const char *program, char *const argv[])
+{
+    (void)a; assert(!strcmp(program, "/Programs/control") && !strcmp(argv[0], "control") &&
+                    !strcmp(argv[1], "--panel=home") && !argv[2]);
+    control_spawned++; return 77;
+}
 static int spawned;
 static char launched[80], launch_path[FM_PATH];
 static int on_spawn(struct files_app *a, const char *program, char *const argv[])
@@ -90,9 +97,9 @@ static void activate(int id)
 static void computer_ui_tests(void)
 {
     fake_image_tree(); memset(&app, 0, sizeof(app));
-    du_init(&ui, pixels, WIDTH, HEIGHT); app.portrait = portrait;
+    du_init(&ui, pixels, WIDTH, HEIGHT); app.portrait = portrait; app.spawn = control_spawn;
     assert(!files_setup(&app, &ui, &fake_vfs, NULL));
-    assert(!app.model.path[0] && app.model.count == 1 && app.place_count == 5);
+    assert(!app.model.path[0] && app.model.count == 1 && app.place_count == 6);
     assert(!strcmp(du_get(&ui, 100)->text, "Computer"));
     fm_select(&app.model, 0, 0); files_update(&app);
     assert(app.rows[0].icon16 && app.rows[0].icon32 && !strcmp(app.rows[0].text[2], "Disk Drive"));
@@ -114,9 +121,12 @@ static void computer_ui_tests(void)
     for (unsigned i = 0; i < app.place_count; i++) {
         struct du_rect r = du_list_label(places, i);
         click(r.x + r.w / 2, r.y + r.h / 2);
-        assert(fm_same_path(app.model.path, app.places[i].path));
+        if (!strcmp(app.places[i].path, "control:")) {
+            assert(control_spawned == 1 && !du_dialog_id(&ui));
+        } else assert(fm_same_path(app.model.path, app.places[i].path));
         assert(app.place_items[i].icon16);
     }
+    assert(control_spawned == 1); activate(302); assert(control_spawned == 2);
     fake_create("/mnt/d", FM_DIR); fake_create("/mnt/d/Games", FM_DIR); fake_create("/mnt/d/Games/tmp", FM_DIR);
     assert(!files_navigate(&app, "Computer") && app.model.count == 2);
     fm_select_none(&app.model); files_update(&app); dump("computer");
@@ -136,7 +146,7 @@ static void computer_ui_tests(void)
     assert(dot); fake_nodes[fake_lookup("/.config")].live=0; activate(25);
     dump("c-drive");
     fake_nodes[fake_lookup("/Games")].live = 0; activate(25);
-    assert(app.place_count == 4);
+    assert(app.place_count == 5);
     files_destroy(&app); fake_assert_clean();
     puts("PASS Files Computer UI: drive open/Up, protected commands/menus, typed POSIX/drive addresses, Places, D: create/rename/properties/delete, hidden tree, optional Games");
 }

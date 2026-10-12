@@ -29,6 +29,16 @@ struct pci_func {
     uint32_t bar[6];
 };
 
+/* Pointer-bearing private copy, never exported directly to userspace. */
+struct registry_inventory_copy {
+    struct resource resources[64];
+    struct pci_func functions[32];
+    unsigned resource_count, function_count;
+    bool truncated;
+    uint32_t generation;
+};
+void registry_inventory(struct registry_inventory_copy *out);
+uint32_t registry_generation(void);
 void registry_init(void);
 int registry_claim(enum res_type type, uint32_t start, uint32_t end, const char *owner, bool share);
 int registry_release(int handle, uint32_t generation);

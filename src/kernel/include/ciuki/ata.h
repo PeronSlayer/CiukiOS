@@ -75,6 +75,8 @@ bool ata_channel_idle(struct ata_channel *channel);
 bool ata_registry_idle(int handle, gen_t generation); /* registry_quiesce proof */
 int ata_init(void);                 /* thread context, after kwork_init */
 struct ata_device *ata_device_get(unsigned channel, unsigned unit);
+/* Inventory includes identified quarantined units; no I/O or recovery. */
+const struct ata_device *ata_inventory_get(unsigned channel, unsigned unit);
 uint64_t ata_command_count(void);   /* real devices only */
 /* Read-only packet boundary. Only the required read/control opcodes are
  * admitted, data is device-to-host, CHECK CONDITION is classified by sense.

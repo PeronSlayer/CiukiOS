@@ -126,6 +126,10 @@ int main(int argc, char **argv)
     init(); start(); ack(); save_error = 1; choose(0); assert(a.mode_state == CP_MODE_REVERT && !saves && requested == 0x118); changed_mode(requested); cp_display_result(&a, 0); cp_detach(&a);
     init(); start(); du_tick(&u, u.now + 15000000000ull); assert(a.mode_state == CP_MODE_REVERT && requested == 0x118); du_tick(&u, u.now + 15000000000ull); assert(a.mode_state == CP_MODE_IDLE && !saves); cp_detach(&a);
     init(); queue_error = 1; select(CP_AREA, 0); at_click_widget(&u, CP_APPLY); assert(a.mode_state == CP_MODE_IDLE && !requests && !saves); cp_detach(&a);
+    init(); start(); ack(); cp_open(&a, CP_SOUNDS);
+    assert(a.page == CP_SOUNDS && a.mode_state == CP_MODE_REVERT && requested == 0x118 && !saves);
+    changed_mode(requested); cp_display_result(&a, 0);
+    cp_open(&a, CP_DISPLAY); assert(a.mode_state == CP_MODE_IDLE && !u.dialog.kind); cp_detach(&a);
     init(); start(); ack(); cp_detach(&a); assert(a.mode_state == CP_MODE_REVERT && requested == 0x118 && !saves);
     init(); start(); ack(); du_tick(&u, u.now + 16000000000ull); assert(a.mode_state == CP_MODE_REVERT && !saves); changed_mode(requested); cp_display_result(&a, 0); cp_detach(&a);
     init(); start(); /* changed query despite successful acknowledgement must revert */
@@ -138,12 +142,16 @@ int main(int argc, char **argv)
     init(); query_error = 1; cp_display_refresh(&a); assert(!a.display_ok && du_get(&u, CP_APPLY)->disabled); cp_detach(&a);
     init(); info.mode_count = 32; /* maximum table: remaining entries have zero IDs */
     cp_display_refresh(&a); assert(a.area_count == 4); cp_detach(&a);
-    init(); select(1, CP_ADAPTER); check_layout(); assert(!du_get(&u, CP_REFRESH)->hidden && du_get(&u, CP_AREA)->hidden);
+    init(); cp_open(&a, CP_ADAPTER); check_layout(); assert(!du_get(&u, CP_REFRESH)->hidden && !du_get(&u, CP_AREA));
     assert(strstr(a.adapter_lines[0], "1024 x 768") && strstr(a.adapter_lines[1], "4096") && strstr(a.adapter_lines[2], "2.00") && strstr(a.adapter_lines[2], "16384"));
     assert(strstr(a.adapter_lines[4], "SuperSavage") && strstr(a.adapter_lines[9], "no EDID yet"));
     du_render(&u); at_save(argv[1], "control-adapter", &u);
     info.pci_vendor = 0x1002; info.pci_device = 0x4c52; at_click_widget(&u, CP_REFRESH); assert(strstr(a.adapter_lines[4], "ATI Rage Mobility"));
-    select(1, CP_SYSTEM); assert(strstr(du_get(&u, CP_SUMMARY)->text, "32-bit")); du_render(&u); at_save(argv[1], "control-system-display", &u);
+    cp_open(&a, CP_SYSTEM); assert(strstr(du_get(&u, CP_SUMMARY)->text, "32-bit")); du_render(&u); at_save(argv[1], "control-system-display", &u);
+    int system_tabs = -1;
+    for (unsigned i = 0; i < u.count; i++) if (u.widgets[i].kind == DU_TABS) system_tabs = u.widgets[i].id;
+    assert(system_tabs >= 0); select(system_tabs, 1); assert(!du_get(&u, CP_SUMMARY));
+    select(system_tabs, 0); assert(strstr(du_get(&u, CP_SUMMARY)->text, "32-bit"));
     char name[64];
     assert(strstr(cp_adapter_name(0x5333, 0x8c2f, name, sizeof(name)), "IX/C"));
     assert(strstr(cp_adapter_name(0x8086, 0x1132, name, sizeof(name)), "815"));
@@ -154,7 +162,7 @@ int main(int argc, char **argv)
     assert(strstr(cp_adapter_name(0x8086, 0x2572, name, sizeof(name)), "865G"));
     assert(strstr(cp_adapter_name(0x121a, 0x0005, name, sizeof(name)), "Voodoo3"));
     assert(!strcmp(cp_adapter_name(0xdead, 0xbeef, name, sizeof(name)), "Unknown adapter (dead:beef)"));
-    info.pci_vendor = 0xdead; info.pci_device = 0xbeef; select(1, CP_ADAPTER); du_render(&u); at_save(argv[1], "control-adapter-unknown", &u);
+    info.pci_vendor = 0xdead; info.pci_device = 0xbeef; cp_open(&a, CP_ADAPTER); du_render(&u); at_save(argv[1], "control-adapter-unknown", &u);
     query_error = 1; at_click_widget(&u, CP_REFRESH); du_render(&u); at_save(argv[1], "control-adapter-unavailable", &u); cp_detach(&a);
     struct desk_packet p;
     cp_settings_message(&wire, 42, DESK_SETTINGS_DISPLAY, 0x118, 0); assert(desk_parse(&wire, 1, NULL, &p));

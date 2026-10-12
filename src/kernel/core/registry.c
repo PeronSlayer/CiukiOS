@@ -16,6 +16,8 @@
 
 static struct resource res[MAX_RES];
 static unsigned nres;
+static uint32_t inventory_generation;
+static bool inventory_truncated;
 static bool idle_proven[MAX_RES];
 static struct registry_stats counters;
 static struct pci_func pci[MAX_PCI];
@@ -79,6 +81,7 @@ static int claim(enum res_type type, uint32_t start, uint32_t end, const char *o
     if (slot == nres)
         nres++;
     counters.live++;
+    inventory_generation++;
     if (state == RS_CLAIMED)
         counters.claims++;
     irq_restore(f);
@@ -112,6 +115,7 @@ int registry_claim_reserved(int h, gen_t generation, const char *owner)
     res[h].owner = owner;
     res[h].generation = next;
     res[h].state = RS_CLAIMED;
+    inventory_generation++;
     counters.claims++;
     irq_restore(f);
     return 0;
@@ -125,6 +129,7 @@ int registry_activate(int h, gen_t generation)
         return -EINVAL;
     }
     res[h].state = RS_ACTIVE;
+    inventory_generation++;
     irq_restore(f);
     return 0;
 }
@@ -138,6 +143,7 @@ int registry_quarantine(int h, gen_t generation)
     }
     if (res[h].state != RS_QUARANTINED) {
         res[h].state = RS_QUARANTINED;
+        inventory_generation++;
         idle_proven[h] = false;
         counters.quarantines++;
         irq_quarantine_claim(h, generation);
@@ -156,6 +162,7 @@ int registry_quiesce(int h, gen_t generation, registry_idle_proof_fn proof)
         return -EINVAL;
     }
     res[h].state = RS_QUIESCING;
+    inventory_generation++;
     irq_restore(f);
     bool idle = proof(h, generation);
     f = irq_save();
@@ -182,6 +189,7 @@ int registry_release(int h, uint32_t generation)
         return -EINVAL;
     }
     res[h].state = RS_RELEASED;
+    inventory_generation++;
     idle_proven[h] = false;
     counters.releases++;
     counters.live--;
@@ -194,6 +202,26 @@ void registry_snapshot(struct registry_stats *out)
     uint32_t f = irq_save();
     *out = counters;
     irq_restore(f);
+}
+
+void registry_inventory(struct registry_inventory_copy *out)
+{
+    uint32_t f = irq_save();
+    out->resource_count = nres;
+    out->function_count = npci;
+    out->truncated = inventory_truncated;
+    out->generation = inventory_generation;
+    memcpy(out->resources, res, nres * sizeof(res[0]));
+    memcpy(out->functions, pci, npci * sizeof(pci[0]));
+    irq_restore(f);
+}
+
+uint32_t registry_generation(void)
+{
+    uint32_t f = irq_save();
+    uint32_t generation = inventory_generation;
+    irq_restore(f);
+    return generation;
 }
 
 unsigned registry_count(void) { return nres; }
@@ -226,8 +254,8 @@ static void pci_scan(void)
             uint8_t nfn = (ht0 & 0x80) ? 8 : 1;
             for (uint8_t fn = 0; fn < nfn; fn++) {
                 uint32_t id = pci_read(bus, dev, fn, 0);
-                if ((id & 0xFFFF) == 0xFFFF || npci == MAX_PCI)
-                    continue;
+                if ((id & 0xFFFF) == 0xFFFF) continue;
+                if (npci == MAX_PCI) { inventory_truncated = true; continue; }
                 struct pci_func *p = &pci[npci++];
                 memset(p, 0, sizeof(*p));
                 p->bus = bus; p->dev = dev; p->fn = fn;
@@ -255,8 +283,10 @@ static void pci_scan(void)
                     for (unsigned k = 0; k < nb; k++)
                         if (buses[k] == sec)
                             seen = true;
-                    if (sec && !seen && nb < ARRAY_SIZE(buses))
-                        buses[nb++] = sec;
+                    if (sec && !seen) {
+                        if (nb < ARRAY_SIZE(buses)) buses[nb++] = sec;
+                        else inventory_truncated = true;
+                    }
                 }
             }
         }
@@ -282,6 +312,7 @@ __attribute__((no_stack_protector)) void registry_init(void)
     dma_init();
     nres = 0;
     npci = 0;
+    inventory_truncated = false;
     memset(&counters, 0, sizeof(counters));
     static const struct { uint32_t s, e; const char *o; } legacy[] = {
         { 0x20, 0x22, "pic" }, { 0xA0, 0xA2, "pic" },
