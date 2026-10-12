@@ -998,9 +998,11 @@ static void test_dpmi_32bit_nested(void)
     v86_start(); cur.tf.cs = 0x2100; cur.tf.user_ss = 0x2200; cur.ds = 0x2200;
     uint16_t psp = PSP_SEG;   /* the fake DOS reports the same PSP; the child owns its own selectors */
     (void)psp;
+    d->decode_stack_valid = d->decode_ds_valid = true; /* parent's snapshot is not the child's */
     enter(v, true);
     CHECK(in_pm() && d->clients == 2 && d->client[1].depth_base == 1);
     CHECK(!d->if_armed && d->client[0].suspended_if_armed);
+    CHECK(!d->decode_stack_valid && !d->decode_ds_valid);
     cur.tf.ebx = 0; cur.tf.ecx = 0x3000; int31(v, 0x0501); CHECK(!cf());
     cur.tf.ebx = 0x68; cur.tf.ecx = cur.tf.cs; cur.tf.edx = 0x50; int31(v, 0x0205); CHECK(!cf() && d->vec[0x68].sel != pvec.sel);
     cur.tf.ds = cur.tf.cs; cur.tf.esi = 0x60; cur.tf.es = cur.tf.user_ss; cur.tf.edi = 0x100; int31(v, 0x0303); CHECK(!cf());

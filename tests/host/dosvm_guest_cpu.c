@@ -123,6 +123,19 @@ static int intr(x86emu_t *e, u8 num, unsigned type)
 
 static bool fetch(uint32_t lin, uint8_t *b) { return ops->read(lin, b, 1); }
 
+/* SS interrupt/debug inhibition applies to prefixed forms too. */
+static bool loads_ss(uint32_t lin)
+{
+    uint8_t op = 0, modrm;
+    for (unsigned n = 0; n < 15; n++) {
+        if (!fetch(lin + n, &op)) return false;
+        if (op == 0x66 || op == 0x67 || op == 0x26 || op == 0x2E || op == 0x36 ||
+            op == 0x3E || op == 0x64 || op == 0x65 || op == 0xF2 || op == 0xF3) continue;
+        return op == 0x17 || (op == 0x8E && fetch(lin + n + 1, &modrm) && ((modrm >> 3) & 7) == 2);
+    }
+    return false;
+}
+
 static uint32_t *reg32(unsigned i)
 {
     switch (i & 7) {
@@ -404,9 +417,7 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
         ev->executed_descriptor = false;
         if (trap_check(s)) { rc = ev->fault && ev->vector == 13 ? GCPU_TRAP : GCPU_TRAP; break; }
         if (ev->executed_descriptor) { executed++; continue; }
-        uint8_t first = 0, second = 0;
-        fetch(emu->x86.R_CS_BASE + emu->x86.R_EIP, &first);
-        fetch(emu->x86.R_CS_BASE + emu->x86.R_EIP + 1, &second);
+        bool ss_load = loads_ss(emu->x86.R_CS_BASE + emu->x86.R_EIP);
         uint32_t saved_eip = emu->x86.R_EIP;
         watch_hits = 0;
         emu->max_instr = emu->x86.R_TSC + 1;
@@ -418,14 +429,14 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
             break;
         }
         executed++;
-        ev->ss_shadow = first == 0x17 || (first == 0x8E && ((second >> 3) & 7) == 2);
+        ev->ss_shadow = ss_load;
         if (watch_hits) {                  /* data breakpoint: #DB trap after the access */
             ev->vector = 1; ev->err = 0; ev->fault = false; ev->dr6 = watch_hits | ((tf || tf_loaded) ? 0x4000u : 0);
             rc = GCPU_TRAP;
             break;
         }
         /* MOV SS / POP SS delay a single-step trap by one instruction. */
-        if ((tf || tf_loaded) && executed == budget && (first == 0x17 || (first == 0x8E && ((second >> 3) & 7) == 2)))
+        if ((tf || tf_loaded) && executed == budget && ss_load)
             budget++;
         if (tf_loaded && executed == budget) { tf = true; break; }
     }

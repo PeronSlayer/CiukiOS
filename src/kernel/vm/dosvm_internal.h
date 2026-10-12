@@ -29,6 +29,9 @@
 #define DOSVM_BLINK_TICKS 500u
 #include "dosvm_memory.h"
 #include "dpmi_internal.h"
+enum dosvm_trace_kind { DOSVM_TRACE_VECTOR, DOSVM_TRACE_PIT, DOSVM_TRACE_IRQ0,
+    DOSVM_TRACE_DB_PM, DOSVM_TRACE_DB_RM, DOSVM_TRACE_FLAGS, DOSVM_TRACE_TIMER,
+    DOSVM_TRACE_FAULT, DOSVM_TRACE_COUNT };
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -104,7 +107,15 @@ struct dosvm {
         void *arg;
     } ports[DOSVM_PORTS];
     struct dpmi dpmi;        /* f3-04 kernel DPMI host, idle until the first entry */
+    /* f3-09: fixed lifetime budgets, with at most four IRQ0 hook epochs. */
+    struct {
+        uint8_t used[DOSVM_TRACE_COUNT], irq_epochs;
+        bool timer_programmed;
+        uint64_t timer_tick;
+    } trace;
 };
+void dosvm_trace(struct dosvm *, enum dosvm_trace_kind, const struct v86_frame *,
+                 uint32_t a, uint32_t b, uint32_t c);
 struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
@@ -165,6 +176,7 @@ int dpmi_pm_trap(struct dosvm *, struct v86_frame *, uint32_t cr2, uint32_t dr6)
 int dpmi_deliver(struct dosvm *, struct v86_frame *);
 void dpmi_close(struct dosvm *);
 void dpmi_watch_hits(struct dosvm *, uint32_t dr6);
+uint32_t dpmi_debug_status(const struct dosvm *, uint32_t dr6);
 uint32_t dpmi_fault_linear(struct dosvm *, const struct v86_frame *);
 int dpmi_rom_init(struct dosvm *);
 void dpmi_info_fill(struct dosvm *, struct dpmi_info *);

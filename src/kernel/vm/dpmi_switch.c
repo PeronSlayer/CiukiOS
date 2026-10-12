@@ -22,6 +22,14 @@ int dpmi_push_record(struct dosvm *v, const struct v86_frame *f, uint8_t kind, s
     r->saved = *f;
     r->saved_pm = v->frame_pm;
     r->vif = v->monitor.vif;
+    r->decode_valid = d->decode_valid;
+    r->decode_cs = d->decode_cs;
+    r->decode_eip = d->decode_eip;
+    r->decode_stack_valid = d->decode_stack_valid;
+    memcpy(r->decode_stack, d->decode_stack, sizeof(r->decode_stack));
+    r->decode_ds_valid = d->decode_ds_valid;
+    r->decode_stack_linear = d->decode_stack_linear;
+    r->decode_ds_base = d->decode_ds_base;
     r->lock_top = d->lock_top;
     r->rstack_top = d->rstack_top;
     dpmi_lock_below(v, f);
@@ -449,6 +457,15 @@ int dpmi_v86_return(struct dosvm *v, struct v86_frame *f)
     if (!(rec.flags & DPMI_RF_HWINT)) {
         dpmi_gprs(f, &result);
         f->tf.eflags = (f->tf.eflags & ~0x08D5u) | (result.tf.eflags & 0x08D5u);
+    } else {
+        d->decode_valid = rec.decode_valid;
+        d->decode_cs = rec.decode_cs;
+        d->decode_eip = rec.decode_eip;
+        d->decode_stack_valid = rec.decode_stack_valid;
+        memcpy(d->decode_stack, rec.decode_stack, sizeof(d->decode_stack));
+        d->decode_ds_valid = rec.decode_ds_valid;
+        d->decode_stack_linear = rec.decode_stack_linear;
+        d->decode_ds_base = rec.decode_ds_base;
     }
     return 0;
 }
