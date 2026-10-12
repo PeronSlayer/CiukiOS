@@ -17,6 +17,29 @@ static uint8_t *fake_lfb;
 static unsigned map_calls, locks, ends, passes, data_records;
 static bool fail_map, fail_activate, fail_alloc;
 static char last_end[240];
+bool g_cpu_tsc;
+uint64_t g_tsc_per_ms;
+volatile uint64_t g_ticks;
+static unsigned drains, stamps, present_logs, last_stamp_drains;
+static uint64_t fake_cycles, copy_cycles;
+static char last_present[240];
+void framebuffer_write_drain(void) { drains++; }
+uint64_t framebuffer_cycles(void)
+{
+    if (stamps & 1u) CHECK(drains == last_stamp_drains + 1); /* drain between timestamps */
+    last_stamp_drains = drains;
+    stamps++;
+    uint64_t result = fake_cycles;
+    fake_cycles += copy_cycles;
+    return result;
+}
+void klog(const char *fmt, ...)
+{
+    if (strncmp(fmt, "[display] present full ", 23)) return;
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(last_present, sizeof(last_present), fmt, ap);
+    va_end(ap); present_logs++;
+}
 
 /* Scheduler and hardware ownership boundaries; all pixels run production
  * code. Transfer deliberately accepts exactly the states in registry.c. */
@@ -56,9 +79,9 @@ bool registry_valid(int h, gen_t gen)
     return h == 0 && gen == reservation.generation && reservation.state != RS_QUARANTINED &&
            reservation.state != RS_RELEASED;
 }
-void *vmm_map_mmio(uint32_t phys, uint32_t size, bool uncached)
+void *vmm_map_framebuffer(uint32_t phys, uint32_t size)
 {
-    CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height && uncached);
+    CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height);
     CHECK(reservation.state == RS_CLAIMED && !strcmp(reservation.owner, "fbdev"));
     map_calls++;
     return fail_map ? 0 : fake_lfb;
@@ -92,7 +115,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 
 void *vmm_reserve_mmio(uint32_t capacity) { (void)capacity; return 0; }
 void vmm_revoke_mmio(void *p, uint32_t bytes) { (void)p; (void)bytes; }
-void *vmm_replace_mmio(void *p, uint32_t capacity, uint32_t phys, uint32_t bytes)
+void *vmm_replace_framebuffer(void *p, uint32_t capacity, uint32_t phys, uint32_t bytes)
 { (void)p; (void)capacity; (void)phys; (void)bytes; return 0; }
 int registry_quiesce(int h, gen_t g, registry_idle_proof_fn proof)
 { (void)h; (void)g; (void)proof; return -EINVAL; }
@@ -269,6 +292,10 @@ static void boot_fixture(bool vbe3)
     initialized = false;
     fail_map = fail_activate = fail_alloc = false;
     map_calls = ends = passes = data_records = 0;
+    g_cpu_tsc = false; g_tsc_per_ms = 0;
+    g_ticks = fake_cycles = copy_cycles = 0;
+    drains = stamps = present_logs = 0;
+    full_count = full_total_us = full_last_us = full_max_us = full_log_tick = 0;
     g_boot.flags = CBI_F_VBE_CTRL_VALID;
     g_boot.vbe_ctrl[5] = vbe3 ? 3 : 2;
     g_boot.fb_phys = 0xE0000000;
@@ -383,6 +410,41 @@ static void boot_tests(void)
     free(fake_lfb);
 }
 
+static void timing_tests(void)
+{
+    enum { SIZE = 13 * (17 * 4 + 7) };
+    fake_lfb = malloc(SIZE); CHECK(fake_lfb != 0);
+    boot_fixture(true); CHECK(fbdev_init() == 0);
+    uint32_t pixels[17 * 13] = {0x112233};
+    struct fb_surface s = { pixels, 17, 13, 17 * 4, sizeof(pixels) };
+    struct fb_rect all = {0, 0, 17, 13}, part = {0, 0, 1, 1};
+    g_boot.flags |= CBI_F_VERBOSE;
+    CHECK(fbdev_present(&s, &all) == 0 && !stamps && !full_count);
+    g_cpu_tsc = true;
+    CHECK(fbdev_present(&s, &all) == 0 && !stamps && !full_count); /* no calibration */
+    g_tsc_per_ms = 900123; copy_cycles = 1800246;
+    CHECK(fbdev_present(&s, &all) == 0 && stamps == 2 && full_count == 1);
+    CHECK(full_total_us == 2000 && full_max_us == 2000 && present_logs == 1);
+    CHECK(strstr(last_present, "count=1 total_us=2000 last_us=2000 max_us=2000 tsc_khz=900123"));
+    copy_cycles = 450062;
+    CHECK(fbdev_present(&s, &all) == 0 && full_last_us == 500 && present_logs == 1);
+    g_ticks = 1000;
+    CHECK(fbdev_present(&s, &all) == 0 && full_count == 3 && full_total_us == 3000 && present_logs == 2);
+    CHECK(fbdev_present(&s, &part) == 0 && full_count == 3 && stamps == 6);
+    CHECK(fbdev_fill(&all, 0) == 0 && full_count == 3 && stamps == 6);
+    struct fb_device fixture = device;
+    CHECK(fbdev_present_to(&fixture, &s, &all) == 0 && full_count == 3);
+    console_rows = 13; drawing = CONSOLE_BUSY;
+    CHECK(fbdev_present(&s, &all) == -EBUSY && full_count == 3 && stamps == 6);
+    drawing = 0;
+    reservation.state = RS_QUIESCING;
+    CHECK(fbdev_present(&s, &all) == -ENODEV && full_count == 3);
+    reservation.state = RS_ACTIVE;
+    g_boot.flags &= ~CBI_F_VERBOSE; g_ticks = 2000;
+    CHECK(fbdev_present(&s, &all) == 0 && full_count == 4 && present_logs == 2);
+    free(fake_lfb);
+}
+
 int main(void)
 {
     for (unsigned bpp = 24; bpp <= 32; bpp += 8)
@@ -394,6 +456,7 @@ int main(void)
         for (unsigned source_pad = 0; source_pad <= 7; source_pad += 7)
             render_tests(16, pad, 2, source_pad);
     boot_tests();
+    timing_tests();
     printf("framebuffer host tests: %s (%u reference comparisons, %u failures)\n",
            failures ? "FAIL" : "PASS", cases, failures);
     return failures ? 1 : 0;

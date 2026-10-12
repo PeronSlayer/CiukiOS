@@ -361,6 +361,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "launch-test"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
+            sources += [ROOT / "apps/desktop/image.c"]  # shell_service's production shutdown/gate guard
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),

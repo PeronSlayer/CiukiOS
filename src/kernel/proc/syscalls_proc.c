@@ -5,6 +5,109 @@
 #include <ciuki/process.h>
 #include <ciuki/signal.h>
 uint32_t supervisor_desktop_pid(void); /* proc/supervisor.c */
+/* Standalone process harnesses have no console; they may supply these sinks. */
+#pragma weak console_quiet
+#pragma weak klog
+
+uint64_t proc_launch_now(void)
+{
+    uint32_t flags = irq_save();
+    uint64_t us = g_ticks * 1000;
+    irq_restore(flags);
+    return us;
+}
+bool proc_launch_enabled(void) { return console_quiet && !console_quiet(); }
+
+void proc_launch_start(struct process *parent, struct process *child, uint64_t spawn_us, uint64_t click_us)
+{
+    if (!proc_launch_enabled()) return;
+    child->launch.active = true;
+    child->launch.spawn_us = spawn_us;
+    child->launch.click_us = click_us;
+    struct proc_thread *self = proc_thread_for(g_current);
+    if (self && self->process == parent) self->launch_loading = child;
+}
+void proc_launch_elf(struct process *p)
+{
+    if (!p->launch.active || !proc_launch_enabled()) return;
+    p->launch.elf_us = proc_launch_now();
+    if (klog) klog("[launch-stage] name=%s pid=%u spawn_us=%llu elf_us=%llu read_bytes=%llu disk_bytes=%llu",
+                  p->name, p->pid, p->launch.spawn_us, p->launch.elf_us,
+                  p->launch.volume_bytes, p->launch.disk_bytes);
+}
+static struct proc_launch *launch_io(void)
+{
+    if (!proc_launch_enabled()) return 0;
+    struct process *p = proc_current();
+    struct proc_thread *self = proc_thread_for(g_current);
+    if (self && self->launch_loading) p = self->launch_loading;
+    return p && p->launch.active && !p->launch.finished ? &p->launch : 0;
+}
+void proc_launch_volume_read(uint32_t requested, size_t done)
+{
+    struct proc_launch *l = launch_io();
+    if (!l) return;
+    l->volume_reads++; l->volume_bytes += done;
+    if (requested > l->volume_max) l->volume_max = requested;
+}
+void proc_launch_disk_read(uint32_t bytes)
+{
+    struct proc_launch *l = launch_io();
+    if (!l) return;
+    l->disk_reads++; l->disk_bytes += bytes;
+    if (bytes > l->disk_max) l->disk_max = bytes;
+}
+void proc_launch_image_read(uint32_t bytes)
+{
+    struct proc_launch *l = launch_io();
+    if (!l) return;
+    l->image_reads++; l->image_bytes += bytes;
+    if (bytes > l->image_max) l->image_max = bytes;
+}
+void proc_launch_surface(struct process *p)
+{
+    if (p && p->launch.active && !p->launch.surface_us && proc_launch_enabled())
+        p->launch.surface_us = proc_launch_now();
+}
+int proc_launch_mark(struct process *caller, uint32_t event, uint32_t pid, uint64_t click_us)
+{
+    if (event > CIUKI_LAUNCH_FRAME || (event != CIUKI_LAUNCH_BEGIN && click_us) ||
+        (event <= CIUKI_LAUNCH_BEGIN && pid)) return -EINVAL;
+    if (event == CIUKI_LAUNCH_STATUS) return proc_launch_enabled();
+    if (!caller || caller->pid != supervisor_desktop_pid()) return -EPERM;
+    uint64_t now = proc_launch_now();
+    if (event == CIUKI_LAUNCH_BEGIN && click_us > now) return -EINVAL;
+    if (!proc_launch_enabled()) return 0;
+    if (event == CIUKI_LAUNCH_BEGIN) {
+        caller->launch_click_us = click_us; caller->launch_pending = true;
+        return 0;
+    }
+    struct process *p = proc_find(pid);
+    if (!p || p->ppid != caller->pid) return -ESRCH;
+    struct proc_launch *l = &p->launch;
+    if (!l->active || l->finished) return 0;
+    if (event == CIUKI_LAUNCH_CONFIGURE) {
+        if (!l->configured) { l->configure_us = now; l->configured = true; }
+    } else if (event == CIUKI_LAUNCH_DAMAGE) {
+        if (!l->configured) return -EINVAL;
+        if (!l->damaged) { l->damage_us = now; l->damaged = true; }
+    } else {
+        if (!l->damaged) return -EINVAL;
+        l->frame_us = now; l->finished = true;
+        if (klog) {
+            klog("[launch] name=%s pid=%u click_us=%llu spawn_us=%llu elf_us=%llu first_frame_us=%llu total_us=%llu resolution_us=1000",
+                 p->name, p->pid, l->click_us, l->spawn_us, l->elf_us, l->frame_us, l->frame_us-l->click_us);
+            klog("[launch-detail] pid=%u surface_us=%llu configure_us=%llu damage_us=%llu page_faults=%u",
+                 p->pid, l->surface_us, l->configure_us, l->damage_us, l->page_faults);
+            klog("[launch-io] pid=%u read_bytes=%llu read_requests=%llu read_max=%u disk_bytes=%llu disk_requests=%llu disk_max=%u",
+                 p->pid, l->volume_bytes, l->volume_reads, l->volume_max, l->disk_bytes, l->disk_reads, l->disk_max);
+            klog("[launch-image] pid=%u image_bytes=%llu image_requests=%llu image_max=%u",
+                 p->pid,
+                 l->image_bytes, l->image_reads, l->image_max);
+        }
+    }
+    return 0;
+}
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 static const struct { const char *start, *end, *fixup; } copy_fixups[] = {
@@ -13,6 +116,10 @@ static const struct { const char *start, *end, *fixup; } copy_fixups[] = {
 
 void proc_trap_dispatch(struct trap_frame *tf)
 {
+    if (tf->vector == 14) {
+        struct process *p = proc_current();
+        if (p && p->launch.active && !p->launch.finished && proc_launch_enabled()) p->launch.page_faults++;
+    }
     /* The complete frame has already been saved by isr_common. Match only a
      * kernel #PF at the copy instruction; every other fault follows F0's
      * unchanged expected-fault/panic/user-fault dispatcher. */
@@ -158,6 +265,9 @@ int32_t proc_syscall(struct trap_frame *tf)
     if (!p)
         return -ENOSYS;                 /* F0 tasks retain their frozen interface */
     switch (tf->eax) {
+    case CIUKI_SYS_LAUNCH_MARK:
+        if (tf->edi || tf->ebp) return -EINVAL;
+        return proc_launch_mark(p, tf->ebx, tf->ecx, (uint64_t)tf->edx | (uint64_t)tf->esi << 32);
     case CIUKI_SYS_SPAWN: return proc_spawn(tf->ebx);
     case CIUKI_SYS_WAITPID: return proc_waitpid((int32_t)tf->ebx, tf->ecx, tf->edx);
     case CIUKI_SYS_GETPID: return (int32_t)p->pid;

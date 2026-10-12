@@ -209,7 +209,7 @@ bool console_init_lfb(void)
     if (bi->fb_bpp != 32 && bi->fb_bpp != 24 && bi->fb_bpp != 16 && bi->fb_bpp != 15)
         return false;
     uint32_t bytes = bi->fb_pitch * bi->fb_height;
-    void *va = vmm_map_mmio(bi->fb_phys, bytes, true);
+    void *va = vmm_map_framebuffer(bi->fb_phys, bytes);
     if (!va)
         return false;
     fb = va;

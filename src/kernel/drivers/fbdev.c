@@ -8,6 +8,9 @@
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
 
+#include <ciuki/mtrr.h>
+#include <ciuki/timing.h>
+
 static struct fb_device device;
 static struct kmutex presenter;
 static bool initialized, changing;
@@ -15,6 +18,7 @@ static void *change_window;
 static uint32_t change_capacity;
 static unsigned console_rows;
 static unsigned drawing;
+static uint64_t full_count, full_total_us, full_last_us, full_max_us, full_log_tick;
 enum { CONSOLE_BUSY = 1, PRESENT_BUSY = 2 };
 
 void fbdev_console_region(unsigned rows)
@@ -31,6 +35,7 @@ bool fbdev_console_begin(void)
 
 void fbdev_console_end(void)
 {
+    framebuffer_write_drain();
     __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
 }
 
@@ -43,10 +48,13 @@ static bool present_begin(const struct fb_device *d, const struct fb_rect *c)
                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 }
 
-static void present_end(const struct fb_device *d, const struct fb_rect *c)
+static uint64_t present_end(const struct fb_device *d, const struct fb_rect *c, bool timed)
 {
+    if (d == &device) framebuffer_write_drain();
+    uint64_t end = timed ? framebuffer_cycles() : 0;
     if (d == &device && (unsigned)c->y < __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE))
         __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
+    return end;
 }
 
 /* VESA VBE Core Functions 3.0 (1998-09-16), pp. 14, 30-31, 37-39:
@@ -145,7 +153,7 @@ int fbdev_init(void)
      * must publish it as FIRMWARE/DISCOVERED for the transfer API above. */
     if (d.handle < 0)
         return -ENODEV;
-    d.mapped = vmm_map_mmio(d.phys, d.size, true);
+    d.mapped = vmm_map_framebuffer(d.phys, d.size);
     if (!d.mapped) {
         registry_quarantine(d.handle, d.generation);
         return -ENOMEM;
@@ -224,6 +232,9 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
         return 0;
     if (!present_begin(d, &c))
         return -EBUSY;
+    bool timed = d == &device && g_cpu_tsc && g_tsc_per_ms &&
+                 !c.x && !c.y && c.width == (int32_t)d->width && c.height == (int32_t)d->height;
+    uint64_t start = timed ? framebuffer_cycles() : 0;
     uint32_t sx = (uint32_t)((int64_t)c.x - r->x), sy = (uint32_t)((int64_t)c.y - r->y);
     unsigned bytes = d->bpp / 8;
     for (int32_t y = 0; y < c.height; y++) {
@@ -235,7 +246,22 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
             pixel(dp + (uint32_t)x * bytes, bytes, pack(d, rgb));
         }
     }
-    present_end(d, &c);
+    uint64_t end = present_end(d, &c, timed);
+    if (timed) {
+        uint64_t cycles = end - start;
+        /* Avoid overflowing cycles*1000; calibration is fixed after boot. */
+        full_last_us = (cycles / g_tsc_per_ms) * 1000 +
+                       (cycles % g_tsc_per_ms) * 1000 / g_tsc_per_ms;
+        full_count++;
+        full_total_us += full_last_us;
+        if (full_last_us > full_max_us) full_max_us = full_last_us;
+        uint64_t now = g_ticks;
+        if ((g_boot.flags & CBI_F_VERBOSE) && (full_count == 1 || now - full_log_tick >= 1000)) {
+            full_log_tick = now;
+            klog("[display] present full count=%llu total_us=%llu last_us=%llu max_us=%llu tsc_khz=%llu",
+                 full_count, full_total_us, full_last_us, full_max_us, g_tsc_per_ms);
+        }
+    }
     return 0;
 }
 
@@ -257,7 +283,7 @@ int fbdev_fill_to(const struct fb_device *d, const struct fb_rect *r, uint32_t c
         for (int32_t x = 0; x < c.width; x++)
             pixel(dp + (uint32_t)x * bytes, bytes, colour);
     }
-    present_end(d, &c);
+    (void)present_end(d, &c, false);
     return 0;
 }
 
@@ -321,6 +347,7 @@ static bool change_idle(int handle, gen_t generation)
 {
     (void)handle; (void)generation;
     if (drawing) return false;
+    framebuffer_write_drain();
     console_framebuffer_revoke();
     vmm_revoke_mmio(device.mapped, device.size);
     device.mapped = 0;
@@ -362,7 +389,7 @@ int fbdev_change_commit(const struct fb_device *next)
     d.handle = registry_claim(RES_MMIO, d.phys, d.phys + d.size, "fbdev", false);
     if (d.handle < 0) return d.handle;
     d.generation = registry_get((unsigned)d.handle)->generation;
-    d.mapped = vmm_replace_mmio(change_window, change_capacity, d.phys, d.size);
+    d.mapped = vmm_replace_framebuffer(change_window, change_capacity, d.phys, d.size);
     if (!d.mapped || registry_activate(d.handle, d.generation)) {
         registry_quarantine(d.handle, d.generation);
         return -EIO;

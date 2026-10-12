@@ -24,7 +24,7 @@ int main(void)
     const struct gcpu_ops ops={read_memory,write_memory,descriptor,unexpected,0}; gcpu_init(&ops);
     for(unsigned bits=0;bits<2;bits++) {
         big=bits!=0; unsigned w=big?4:2;
-        for(unsigned form=0;form<5;form++) {
+        for(unsigned form=0;form<7;form++) {
             memset(memory,0,sizeof(memory));
             struct gcpu_state s={.cs=0x87,.ss=0x8F,.ds=0x97,.es=0x97,.fs=0x97,.gs=0x97,
                 .esp=0x100,.eflags=0x202,.pm=true,.ldt_limit=159};
@@ -39,6 +39,8 @@ int main(void)
                 if(form==4) word(0x2100+w,0x202,w);
             }
             if(form==3) { memory[0x1001]=0x17; memory[0x1002]=0x90; word(0x2100+w,0x8F,w); }
+            if(form==5) { memory[0x1001]=0x66; memory[0x1002]=0x8E; memory[0x1003]=0xD0; memory[0x1004]=0x90; s.eax=0x8F; }
+            if(form==6) { memory[0x1001]=0x66; memory[0x1002]=0x17; memory[0x1003]=0x90; word(0x2100+w,0x8F,big?2:4); }
             word(0x2100,0x302,w);
             struct gcpu_event ev;
             int rc=gcpu_run(&s,20,&ev);
@@ -46,9 +48,9 @@ int main(void)
                 fprintf(stderr,"bits=%u form=%u rc=%d vector=%u dr6=%x fault=%u executed=%u eip=%x flags=%x\n",bits,form,rc,ev.vector,ev.dr6,ev.fault,ev.executed,s.eip,s.eflags);
             CHECK(rc==GCPU_TRAP && ev.vector==1 && ev.dr6==0x4000 && !ev.fault);
             CHECK(ev.executed==(form>=2?3u:2u));
-            CHECK(s.eip==(form==1?0x20u:form==3?3u:form>=2?4u:2u));
-            CHECK((bool)(s.eflags&0x100)==(form==2 || form==3));
+            CHECK(s.eip==(form==1?0x20u:form==3?3u:form==5?5u:form>=2?4u:2u));
+            CHECK((bool)(s.eflags&0x100)==(form==2 || form==3 || form>=5));
         }
     }
-    gcpu_done(); printf("guest CPU single step: 16/32-bit POPF/IRET TF clear, MOV/POP SS delay and delayed TF clear PASS (%u checks)\n",checks); return 0;
+    gcpu_done(); printf("guest CPU single step: 16/32-bit POPF/IRET TF clear, prefixed MOV/POP SS delay and delayed TF clear PASS (%u checks)\n",checks); return 0;
 }

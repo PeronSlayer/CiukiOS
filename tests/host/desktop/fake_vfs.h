@@ -8,6 +8,8 @@
 struct fake_node { char path[FM_PATH]; struct fm_meta meta; unsigned char data[FAKE_DATA]; int live; };
 extern struct fake_node fake_nodes[FAKE_NODES];
 extern int fake_countdown, fake_operations, fake_metadata_count, fake_short_io;
+struct fake_read_stats { uint64_t bytes, requested; unsigned calls, max_request; };
+extern struct fake_read_stats fake_reads;
 extern struct fm_vfs fake_vfs;
 void fake_reset(void);
 int fake_lookup(const char *);

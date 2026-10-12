@@ -41,6 +41,10 @@ static uint8_t frame_bytes[8192];
 static unsigned frame_length;
 static char frame_probe[24];
 void klog(const char *fmt, ...) { (void)fmt; }
+bool g_cpu_tsc;
+uint64_t g_tsc_per_ms;
+void framebuffer_write_drain(void) {}
+uint64_t framebuffer_cycles(void) { return 0; }
 static unsigned operator_prompts;
 void console_operator_prompt(bool announce) { if (announce) operator_prompts++; }
 /* f3-02: the screen console stays dark while a process holds the display grant. */
@@ -110,7 +114,7 @@ bool registry_valid(int handle, gen_t gen) { return !handle && gen == desktop_re
 int registry_claim_reserved(int handle, gen_t gen, const char *owner) { (void)handle; (void)gen; (void)owner; return 0; }
 int registry_activate(int handle, gen_t gen) { (void)handle; (void)gen; return 0; }
 int registry_quarantine(int handle, gen_t gen) { (void)handle; (void)gen; return 0; }
-void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached) { (void)phys; (void)bytes; (void)uncached; return 0; }
+void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes) { (void)phys; (void)bytes; return 0; }
 void i8042_snapshot(struct i8042_stats *out) { *out = input_state; }
 void input_snapshot(struct input_stats *out) { *out = input_status; out->pending = input_count - input_at; }
 bool input_read(struct input_event *out)

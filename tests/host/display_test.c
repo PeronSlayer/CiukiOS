@@ -73,9 +73,14 @@ int registry_claim(enum res_type type, uint32_t start, uint32_t end, const char 
     resources[h] = (struct resource){type, start, end, owner_name, ++generation, RS_CLAIMED, false}; return h;
 }
 void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached) { (void)phys; assert(uncached); aperture = calloc(1, bytes); assert(aperture); return aperture; }
+bool g_cpu_tsc;
+uint64_t g_tsc_per_ms;
+void framebuffer_write_drain(void) {}
+uint64_t framebuffer_cycles(void) { return 0; }
+void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes) { return vmm_map_mmio(phys, bytes, true); }
 void *vmm_reserve_mmio(uint32_t cap) { if (fail_window) return 0; window_size = cap; window = calloc(1, cap); assert(window); return window; }
 void vmm_revoke_mmio(void *p, uint32_t bytes) { assert(p && bytes); event(3); }
-void *vmm_replace_mmio(void *p, uint32_t cap, uint32_t phys, uint32_t bytes) { assert(p == window && cap == window_size && (uint64_t)bytes + (phys & 4095) <= cap); event(7); return window + (phys & 4095); }
+void *vmm_replace_framebuffer(void *p, uint32_t cap, uint32_t phys, uint32_t bytes) { assert(p == window && cap == window_size && (uint64_t)bytes + (phys & 4095) <= cap); event(7); return window + (phys & 4095); }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t d) { return g_ticks - d < (UINT64_C(1) << 63); }
 void task_sleep_ms(uint32_t ms) { (void)ms; assert(0); }

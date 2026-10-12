@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/mm.h>
 #include <ciuki/cpu.h>
+#include <ciuki/mtrr.h>
 
 extern char __text_start[], __rodata_end[];
 
@@ -122,7 +123,23 @@ void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached)
     for (uint32_t i = 0; i < span; i += PAGE_SIZE)
         kmap(va + i, (phys & ~0xFFFu) + i, PTE_W | (uncached ? (PTE_PCD | PTE_PWT) : 0));
     mmio_next += span + PAGE_SIZE;            /* unmapped gap between mappings */
-    return (void *)(va + off);
+    return (void *)(uintptr_t)(va + off);
+}
+
+void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes)
+{
+    uint64_t span = ((uint64_t)bytes + (phys & 0xFFFu) + PAGE_SIZE - 1) &
+                    ~(uint64_t)(PAGE_SIZE - 1);
+    /* Check capacity before changing cache policy. This path runs first from
+     * the early console; the direct map excludes the LFB, so no alias exists. */
+    if (!bytes || (g_boot.flags & CBI_F_TEXT_MODE) || !phys || phys != g_boot.fb_phys ||
+        (uint64_t)g_boot.fb_pitch * g_boot.fb_height != bytes ||
+        (uint64_t)phys + bytes > 0x100000000ull || mmio_next >= MMIO_END ||
+        span + PAGE_SIZE > MMIO_END - mmio_next) return 0;
+    bool wc = mtrr_framebuffer_enable(phys, bytes);
+    /* PCD=PWT=PAT=0: verified PAT[0]=WB, combined with MTRR WC gives WC.
+     * Failure keeps PCD=PWT=1 (PAT[3]=UC). No PAT MSR is rewritten. */
+    return vmm_map_mmio(phys, bytes, !wc);
 }
 
 void *vmm_reserve_mmio(uint32_t capacity)
@@ -131,7 +148,7 @@ void *vmm_reserve_mmio(uint32_t capacity)
     if (!capacity || mmio_next >= MMIO_END || span + PAGE_SIZE > MMIO_END - mmio_next) return 0;
     uint32_t va = mmio_next;
     mmio_next += (uint32_t)span + PAGE_SIZE;
-    return (void *)va;
+    return (void *)(uintptr_t)va;
 }
 
 void vmm_revoke_mmio(void *mapped, uint32_t bytes)
@@ -142,19 +159,26 @@ void vmm_revoke_mmio(void *mapped, uint32_t bytes)
     for (uint32_t p = start; p < end; p += PAGE_SIZE) kunmap(p);
 }
 
-void *vmm_replace_mmio(void *window, uint32_t capacity, uint32_t phys, uint32_t bytes)
+static void *replace_mmio(void *window, uint32_t capacity, uint32_t phys, uint32_t bytes, bool framebuffer)
 {
     uint32_t va = (uint32_t)(uintptr_t)window, off = phys & (PAGE_SIZE - 1);
     uint64_t span = ((uint64_t)bytes + off + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
     if (!bytes || span > capacity || va < MMIO_REGION || (va & (PAGE_SIZE - 1)) ||
         (uint64_t)va + capacity > MMIO_END || (uint64_t)phys + bytes > 0x100000000ull) return 0;
     vmm_revoke_mmio(window, capacity);
+    bool wc = framebuffer && mtrr_framebuffer_reconfigure(phys, bytes);
     for (uint32_t i = 0; i < span; i += PAGE_SIZE) {
-        kmap(va + i, PAGE_ALIGN_DOWN(phys) + i, PTE_W | PTE_PCD | PTE_PWT);
+        kmap(va + i, PAGE_ALIGN_DOWN(phys) + i, PTE_W | (wc ? 0 : PTE_PCD | PTE_PWT));
         invlpg(va + i);
     }
-    return (void *)(va + off);
+    return (void *)(uintptr_t)(va + off);
 }
+
+void *vmm_replace_mmio(void *window, uint32_t capacity, uint32_t phys, uint32_t bytes)
+{ return replace_mmio(window, capacity, phys, bytes, false); }
+
+void *vmm_replace_framebuffer(void *window, uint32_t capacity, uint32_t phys, uint32_t bytes)
+{ return replace_mmio(window, capacity, phys, bytes, true); }
 
 void *kstack_alloc(void)
 {

@@ -25,6 +25,9 @@ void probe_app_output(struct task *t, const char *stream, const void *bytes, uin
 /* CIUKI_TEST v=1 run=<id> seq=<n> probe=<p> event=<e> [key=value ...] */
 void rec_set_run(const char *run8);
 void rec_emit(const char *probe, const char *event, const char *fmt, ...);
+/* Bounded runtime diagnostics, DATA framing; boot menu L only. Unlike
+ * evidence, these also work without a selected/begun test run. */
+void rec_diag(const char *probe, const char *fmt, ...);
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra);
 
 void probe_user_report(struct task *t, const char *msg, uint32_t len);

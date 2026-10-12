@@ -10,7 +10,11 @@ int32_t desktop_syscall(struct trap_frame *tf)
     if (!p) return -ENOSYS;
     switch (tf->eax) {
     case CIUKI_SYS_SURFACE_CREATE: return surface_create(p, tf->ebx, tf->ecx, tf->edx);
-    case CIUKI_SYS_SURFACE_MAP: return surface_map(p, (int32_t)tf->ebx, tf->ecx);
+    case CIUKI_SYS_SURFACE_MAP: {
+        int32_t result = surface_map(p, (int32_t)tf->ebx, tf->ecx);
+        if ((uint32_t)result < (uint32_t)-4095) proc_launch_surface(p);
+        return result;
+    }
     case CIUKI_SYS_SURFACE_INFO: {
         struct ciuki_surface_info out;
         int err = surface_info(p, (int32_t)tf->ebx, &out);

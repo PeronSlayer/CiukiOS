@@ -180,6 +180,10 @@ print("stack protector build flag/instrumentation/integer audit: PASS")
 PY
 
 # F1 framebuffer presenter and probe with heap-backed LFB fixtures.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/mtrr_test.c" -o "$out/mtrr_test"
+"$out/mtrr_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/fbdev_test.c" -o "$out/fbdev_test"
 "$out/fbdev_test"
@@ -284,6 +288,12 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/proc/proc_test.c" \
     "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/proc_test"
 "$out/proc_test"
+
+# f2-39: production launch markers and ELF batches, fake monotonic clock/I/O.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/proc/launch_test.c" \
+    "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/launch_test"
+"$out/launch_test"
 
 # Replay signal-probe timing with the production run queues/dispatch/timer.
 # Extract only these functions: architectural stack creation cannot run on

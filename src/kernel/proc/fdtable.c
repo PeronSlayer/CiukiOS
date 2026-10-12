@@ -194,6 +194,7 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
     struct fat_entry before = n->entry;
     int err = n->ro ? fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done) : write ? fat_write(n->volume, &n->entry, position, buffer, bytes, done) :
                       fat_read(n->volume, &n->entry, position, buffer, bytes, done);
+    if (!write) proc_launch_volume_read((uint32_t)bytes, *done);
     /* F1 COW publishes the owning entry before freeing the old chain and
      * FSInfo. A failure in that suffix cannot erase completed user bytes. */
     if (write && err && (n->entry.first != before.first || n->entry.size != before.size)) *done = bytes;
@@ -314,6 +315,7 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
         size_t done = 0;
         err = px_error(r.node->ro ? fs_ro_read(r.node->ro,r.node->ro_id,offset,P2V(page),bytes,&done) :
                        fat_read(r.node->volume, &r.node->entry, offset, P2V(page), bytes, &done));
+        proc_launch_volume_read(bytes, done);
         if (!err && done != bytes) err = -EIO;
     }
     fs_lock_drop(&s->vfs->lock);

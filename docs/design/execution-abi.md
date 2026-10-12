@@ -1341,3 +1341,49 @@ fd returns its current nonblocking u32 mode-change counter. Complete successful
 presents with the active lease generation acknowledge the 10 s switch watchdog.
 See the [f1-23 acceptance amendment](f1-acceptance.md#amendment-f1-23--display-inventory-and-runtime-vbe-modes-2026-10-12)
 for the precise structure, validation, firmware transaction and qualification.
+
+## F2-39 amendment — launch diagnostics (2026-10-12)
+
+Additive syscall 75, `LAUNCH_MARK`: `ebx=event`, `ecx=pid`,
+`edx=click_us_low`, `esi=click_us_high`, `edi=ebp=0`. No wire record,
+no change to desktop messages or process-list records. The F1-23 integration
+keeps its specified display call at 74 and moves the new launch diagnostics
+call from main's provisional 74 to 75; rebuild the SDK and diagnostic clients
+with this merged header.
+The SDK wrapper is `ciuki_launch_mark(event, pid, click_us)`.
+
+Events: STATUS (0), BEGIN (1), CONFIGURE (2), DAMAGE (3), FRAME (4). STATUS
+requires pid/timestamp zero and returns 1 when the console is verbose, 0 when
+quiet. BEGIN requires pid zero and a CLOCK_MONOTONIC timestamp in microseconds
+no later than the current clock. It records the click for the next spawn; even
+a rejected or cancelled spawn consumes it. The other events require timestamp
+zero and the PID of a direct child of the supervisor's desktop. Only that
+desktop may issue markers (EPERM otherwise); unknown or unrelated PIDs give
+ESRCH, invalid arguments/stage order EINVAL. Quiet mode accepts authorized
+markers without collecting or emitting diagnostics.
+
+CONFIGURE is marked after the initial committed configuration is queued. DAMAGE
+is marked after the first valid initial damage message. FRAME is marked after
+the desktop successfully presents all dirty regions containing that frame.
+Duplicate stages do not reset times or emit duplicate launch records. A failed
+present leaves FRAME pending. Minimized/collapsed windows wait for presentation
+after restoration. Native surface mapping is timestamped by the kernel.
+
+Kernel timestamps use an atomic PIT tick snapshot, expressed in microseconds
+with 1000 us resolution. Wall-clock corrections cannot change them. Verbose
+records identify the name and PID: `[launch-stage]` on ELF completion, `[launch]`
+on first presentation, `[launch-detail]` for surface/configuration/damage/#PF,
+`[launch-io]` for volume payload and physical cache-miss requests, and
+`[launch-image]` for immutable ELF snapshot reads. All times are absolute
+CLOCK_MONOTONIC timestamps; total_us is first_frame_us minus click_us.
+Volume read_bytes counts returned payload bytes, including the entire immutable
+ELF snapshot once, and excludes RAM snapshot copies. Physical disk_bytes includes
+metadata and cache misses only. read_max/disk_max/image_max are requested bytes
+per operation at the respective layer, not throughput. Successful physical
+requests are counted; a failed request does not claim bytes transferred.
+
+This is diagnostic N-class work: markers never wait or allocate. Serial emission
+uses the existing klog sinks; launch timestamps are captured before emitting
+the record. Counters stop at FRAME. No launch output is emitted in quiet boot.
+Sources, host evidence and pending T23 qualification:
+`docs/validation/f2-39-app-launch-latency.md`, `build/codex/f2-39-report.md`.
