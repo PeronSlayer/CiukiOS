@@ -18,6 +18,8 @@
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
 #define SH_SEPARATOR 8
+#define SH_START_RADIUS 7       /* the Ciuki button's corners */
+#define SH_START_MARK 18        /* the portrait mark in the Ciuki button */
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
        DESK_INTERNAL_MESSAGE, DESK_INTERNAL_KINDS };
@@ -45,6 +47,7 @@ struct desk_shell {
     uint64_t click_ns; int click_icon;
     int volume_open, volume, muted, mixer_state;   /* mixer_state: 0 unknown, 1 read-only, 2 controllable, -1 absent */
     int volume_drag;
+    int start_hot;                  /* the pointer is over the Ciuki button */
     int tooltip; uint64_t hover_since; int32_t hover_x, hover_y;
     int switcher, switch_pick, switch_count, switch_list[16];
     int about_tab, shutdown_choice, message_kind;

@@ -227,6 +227,7 @@ struct du_dialog {
     du_lister lister; void *lister_ctx;
     struct du_file_entry *entries; struct du_item *rows; unsigned entry_count;
     int dragging, drag_x, drag_y, capture;
+    int close_hot;                          /* the pointer is over the close button */
     const uint32_t *icon_pixels;            /* optional 32x32 replacement icon */
     struct du_event pending[4]; unsigned pending_count;
 };

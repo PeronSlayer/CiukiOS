@@ -389,7 +389,7 @@ int main(void)
     fail_mapping=0; fail_spawn=1;
     assert(launch_program(&d,&program)==-1 && errno==ENOEXEC && !fake_live());
     fail_spawn=0;
-    d.shell_test=1; d.mouse_x=40; d.mouse_y=464;
+    d.shell_test=1; d.mouse_x=40; d.mouse_y=16;   /* the Ciuki button in the top bar */
     assert(desk_shell_click(&d) && d.menu_open && d.shell_stage==1);
     int pid=launch_program(&d,&program);
     assert(pid==100 && d.clients[0].pid==100 && d.children[0].pid==100 && fake_live()==1);
@@ -402,7 +402,8 @@ int main(void)
     desk_put32(m.data+4,240); desk_put32(m.data+8,160); desk_put32(m.data+12,4);
     memcpy(m.data+16,"Demo",4); desk_receive(&d,0,&m);
     assert(d.clients[0].window && d.shell_stage==3);
-    d.menu_open=0;
+    desk_menu_close(&d);   /* as a menu launch does (shell.c activate): the menu drops over the demo's title now */
+    assert(!d.menu_open && d.focus==0);
     struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
     d.mouse_x=40; d.mouse_y=60; desk_input(&d,&e); assert(d.drag==0);
     e.type=CIUKI_INPUT_MOTION; e.code=0; e.value=60; e.value2=60; desk_input(&d,&e);
