@@ -81,7 +81,8 @@ and the F0 acceptance criteria). In short:
 - Scope (owner decision 2026-10-09, dev diary 2026-10-09-10): a modern
   retro gaming OS, not a Windows clone; F0 foundations followed by eight
   steps, F1–F8 (drivers and disk, native programs, DOS, sound and media,
-  native games, network, 3D, Windows games through Wine). The F2 native API is a POSIX
+  Windows games through a compatible Win32 API (owner decision
+  2026-10-13), network, 3D, optional native ports). The F2 native API is a POSIX
   subset with a ported libc; networking is step F6 with lwIP, a NIC driver
   compatibility layer and a virtual NE2000/IPX for DOS VMs. Each step's
   contract is written and cross-reviewed before its code.
