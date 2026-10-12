@@ -36,9 +36,13 @@ class QMP:
         if self.log.tell()+len(payload)>LOG_CAP:raise RuntimeError('QMP log exceeds cap')
         self.log.write(payload);self.log.flush()
         self.socket.sendall(payload)
-        deadline=time.monotonic()+1
+        # A busy TCG guest (DOOM at full CPU under a loaded host) answers QMP
+        # slower than the 0.3 s socket timeout: wait for the reply up to 10 s
+        # (lead fix 2026-10-12: doom-qemu-t23 ended 'timed out' in loop 2).
+        deadline=time.monotonic()+10
         while time.monotonic()<deadline:
-            result=self.read()
+            try:result=self.read()
+            except socket.timeout:continue
             if result.get('id')==identifier:
                 if 'error' in result: raise RuntimeError('QMP command failed: '+str(result['error']))
                 return result.get('return')
