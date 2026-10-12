@@ -66,8 +66,12 @@ def desktop_payloads():
                "/Programs/control": DESKTOP / "control",
                "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
+               "/Programs/paint": DESKTOP / "paint",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
                "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
+    sources.update({f"/system/fonts/{p.name}": p for p in (ROOT / "assets/fonts/native").glob("*.CFN")})
+    sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
+    sources["/system/licenses/stb_image_write.txt"] = ROOT / "third_party/stb/LICENSE"
     # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
     sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
@@ -78,7 +82,7 @@ def desktop_payloads():
     # time); the owner may add PNG/JPEG/BMP files to /system/wallpapers. Never Microsoft's
     # third_party/win_bg bitmaps: see docs/desktop.md.
     sources.update({f"/system/wallpapers/{name}": ROOT / "assets/wallpapers/ciuki" / name for name in WALLPAPERS})
-    return sources, {"/Programs", "/System", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
+    return sources, {"/Programs", "/System", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def application_payloads():

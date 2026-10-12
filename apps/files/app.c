@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Files controller: layout, menus, panes, selection, operations and jobs. */
 #include "app.h"
+#include "../desktop/catalog.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -523,7 +524,7 @@ static void after_history(struct files_app *a, int r)
 /* ---- opening ---- */
 void files_launch_failed(struct files_app *a, int error)
 {
-    error_box(a, "Files", "Cannot start CiukNote:", error > 0 ? -error : error);
+    error_box(a, "Files", "Cannot start the application:", error > 0 ? -error : error);
 }
 static int spawn(struct files_app *a, const char *program, char *const argv[])
 {
@@ -559,12 +560,15 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
         if (r < 0) error_box(a, "Files", "Cannot start CiukNote:", r);
         return;
     }
-    if (kind == FM_KIND_IMAGE) {   /* pictures open in the Image Viewer (legacy recovery) */
+    const struct desk_catalog_entry *program = desk_catalog_file(path);
+    if (kind == FM_KIND_IMAGE || program) {
         struct fm_meta meta;
-        if (!a->model.fs.stat_path(a->model.fs.ctx, "/Programs/viewer", &meta) && meta.type == FM_FILE) {
-            char *argv[] = {"viewer", path, NULL};
-            int r = spawn(a, "/Programs/viewer", argv);
-            if (r < 0) error_box(a, "Files", "Cannot start the Image Viewer:", r);
+        char executable[80];
+        if (program) snprintf(executable, sizeof(executable), "/Programs/%s", program->name);
+        if (program && !a->model.fs.stat_path(a->model.fs.ctx, executable, &meta) && meta.type == FM_FILE) {
+            char *argv[] = {(char *)program->name, path, NULL};
+            int r = spawn(a, executable, argv);
+            if (r < 0) error_box(a, "Files", "Cannot start the image application:", r);
             return;
         }
     }

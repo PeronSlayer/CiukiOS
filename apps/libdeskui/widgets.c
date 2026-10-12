@@ -32,6 +32,8 @@ void du_resize(struct du_ui *u, uint32_t *pixels, int width, int height)
 {
     int dx = width - u->canvas.width, dy = height - u->canvas.height;
     if (!pixels || width <= 0 || height <= 0) return;
+    if (u->capture >= 0 && (unsigned)u->capture < u->count && u->widgets[u->capture].kind == DU_CANVAS)
+        du_post(u, DU_EV_POINTER, u->widgets[u->capture].id, DU_POINTER_CANCEL);
     du_menu_close(u);
     u->capture = u->hover = -1;
     for (unsigned i = 0; i < u->count; i++) {
@@ -94,7 +96,7 @@ int du_focusable(const struct du_widget *w)
 {
     return !w->hidden && !w->disabled && (w->kind == DU_EDIT || w->kind == DU_LISTVIEW ||
            w->kind == DU_TREE || w->kind == DU_BUTTON || w->kind == DU_TABS || w->kind == DU_TEXTAREA ||
-           w->kind == DU_CHECKBOX || w->kind == DU_RADIO);
+           w->kind == DU_CHECKBOX || w->kind == DU_RADIO || w->kind == DU_CANVAS);
 }
 
 int du_hit(const struct du_ui *u, int x, int y)
@@ -123,6 +125,7 @@ void du_release(struct du_ui *u)
     u->modifiers = u->buttons = 0; u->menu_armed = 0;
     if (u->capture >= 0 && (unsigned)u->capture < u->count) {
         struct du_widget *w = &u->widgets[u->capture];
+        if (w->kind == DU_CANVAS) du_post(u, DU_EV_POINTER, w->id, DU_POINTER_CANCEL);
         w->pressed = 0; w->drag = 0;
     }
     for (unsigned i = 0; i < u->dialog.count; i++) { u->dialog.items[i].pressed = 0; u->dialog.items[i].drag = 0; }
@@ -702,6 +705,7 @@ void du_draw_widget(struct du_ui *u, struct du_widget *w, int focused)
 {
     struct du_canvas *c = &u->canvas;
     switch (w->kind) {
+    case DU_CANVAS: break; /* the application's paint hook draws it */
     case DU_LABEL:
         if (w->disabled) du_text_disabled(c, w->box.x, w->box.y + (w->box.h - DU_GLYPH_H) / 2, w->text);
         else du_label(c, w->box.x, w->box.y + (w->box.h - DU_GLYPH_H) / 2, w->text, DU_INK, 1);
@@ -753,8 +757,12 @@ void du_render(struct du_ui *u)
 static void toggle(struct du_ui *u, struct du_widget *w)
 {
     if (w->kind == DU_RADIO) {
-        for (unsigned i = 0; i < u->count; i++)
-            if (u->widgets[i].kind == DU_RADIO && u->widgets[i].total == w->total) u->widgets[i].value = 0;
+        struct du_widget *items = u->widgets; unsigned count = u->count;
+        for (unsigned i = 0; i < u->dialog.count; i++) if (w == &u->dialog.items[i]) {
+            items = u->dialog.items; count = u->dialog.count; break;
+        }
+        for (unsigned i = 0; i < count; i++)
+            if (items[i].kind == DU_RADIO && items[i].total == w->total) items[i].value = 0;
         w->value = 1;
     } else w->value = !w->value;
     u->dirty = 1;
@@ -794,6 +802,11 @@ int du_widget_press(struct du_ui *u, struct du_widget *w, int button, int x, int
 {
     if (w->disabled) return 1;
     switch (w->kind) {
+    case DU_CANVAS:
+        if (w->drag) return 1;
+        w->drag = button;
+        du_emit(u, (struct du_event){.type = DU_EV_POINTER, .id = w->id, .index = DU_POINTER_DOWN, .key = (unsigned)button, .x = x, .y = y});
+        return 1;
     case DU_BUTTON: case DU_TOOLBUTTON: case DU_CHECKBOX: case DU_RADIO:
         if (button != 1) return 1;
         w->pressed = 1; w->hot = 1;
@@ -834,6 +847,9 @@ int du_widget_press(struct du_ui *u, struct du_widget *w, int button, int x, int
 void du_widget_motion(struct du_ui *u, struct du_widget *w, int x, int y)
 {
     switch (w->kind) {
+    case DU_CANVAS:
+        du_emit(u, (struct du_event){.type = DU_EV_POINTER, .id = w->id, .index = DU_POINTER_MOVE, .key = (unsigned)w->drag, .x = x, .y = y});
+        break;
     case DU_BUTTON: case DU_TOOLBUTTON: case DU_CHECKBOX: case DU_RADIO: {
         int hot = du_contains(w->box, x, y);
         if (hot != w->hot) { w->hot = (uint8_t)hot; u->dirty = 1; }
@@ -858,6 +874,12 @@ void du_widget_motion(struct du_ui *u, struct du_widget *w, int x, int y)
 
 void du_widget_release(struct du_ui *u, struct du_widget *w, int button, int x, int y)
 {
+    if (w->kind == DU_CANVAS) {
+        if (w->drag != button) return;
+        w->drag = 0;
+        du_emit(u, (struct du_event){.type = DU_EV_POINTER, .id = w->id, .index = DU_POINTER_UP, .key = (unsigned)button, .x = x, .y = y});
+        return;
+    }
     if (button != 1) return;
     int fire = (w->kind == DU_BUTTON || w->kind == DU_TOOLBUTTON) && w->pressed && w->drag == 1 && du_contains(w->box, x, y) && !w->disabled;
     int flip = (w->kind == DU_CHECKBOX || w->kind == DU_RADIO) && w->pressed && du_contains(w->box, x, y) && !w->disabled;
@@ -968,6 +990,8 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
         }
         if (hit >= 0 && (u->widgets[hit].kind == DU_TOOLBUTTON || u->widgets[hit].kind == DU_BUTTON) &&
             !u->widgets[hit].hot && !u->widgets[hit].disabled) { u->widgets[hit].hot = 1; u->dirty = 1; }
+        if (hit >= 0 && u->widgets[hit].kind == DU_CANVAS && !u->widgets[hit].disabled)
+            du_widget_motion(u, &u->widgets[hit], u->mouse_x, u->mouse_y);
         return;
     }
     if (e->type != CIUKI_INPUT_BUTTON || e->code < 1 || e->code > 3) return;
@@ -976,6 +1000,9 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
     if (e->value) u->buttons |= bit; else u->buttons &= ~bit;
     if (u->dialog.kind) { if (e->value) du_dialog_press(u, button); else du_dialog_release(u, button); return; }
     if (e->value) {
+        /* A second button cannot steal an application's drawing capture. */
+        if (u->capture >= 0 && (unsigned)u->capture < u->count &&
+            u->widgets[u->capture].kind == DU_CANVAS && u->widgets[u->capture].drag) return;
         if (du_menu_press(u, button)) return;
         int hit = du_hit(u, u->mouse_x, u->mouse_y);
         if (hit < 0) {
@@ -984,13 +1011,14 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
         }
         struct du_widget *w = &u->widgets[hit];
         if (du_focusable(w)) { if (u->focus != hit) u->dirty = 1; u->focus = hit; }
-        if (button == 1) u->capture = hit;
+        if (button == 1 || (w->kind == DU_CANVAS && !w->drag)) u->capture = hit;
         du_widget_press(u, w, button, u->mouse_x, u->mouse_y);
     } else {
         if (du_menu_release(u, button)) return;
         if (u->capture >= 0 && (unsigned)u->capture < u->count) {
             int captured = u->capture;
-            if (button == 1) u->capture = -1;
+            if ((u->widgets[captured].kind == DU_CANVAS && u->widgets[captured].drag == button) ||
+                (u->widgets[captured].kind != DU_CANVAS && button == 1)) u->capture = -1;
             du_widget_release(u, &u->widgets[captured], button, u->mouse_x, u->mouse_y);
         }
     }

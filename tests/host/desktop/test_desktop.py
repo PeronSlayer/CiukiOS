@@ -432,7 +432,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
-                                           "calc", "charmap", "clock", "help", "mixer", "viewer"})  # legacy-recovery accessories
+                                           "calc", "charmap", "clock", "help", "mixer", "paint", "viewer"})  # legacy-recovery accessories
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
@@ -442,19 +442,24 @@ class DesktopTests(unittest.TestCase):
         sources, directories, metadata = image.desktop_payloads()
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
         self.assertEqual(set(sources), {"/Programs/desktop", "/Programs/demo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
-                                        "/Programs/ciuknote", "/Programs/control", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer",
+                                        "/Programs/ciuknote", "/Programs/control", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer",
                                         "/system/assets/ciuki-portrait.xrgb",
-                                        "/system/licenses/stb_image.txt", "/system/icons/tango.cis",
+                                        "/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/fonts/LICENSES.TXT",
+                                        *(f"/system/fonts/{p.name}" for p in (ROOT / "assets/fonts/native").glob("*.CFN")),
+                                        "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
                                         "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png"})
         self.assertTrue({"/Programs", "/System", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 22)
+        self.assertEqual(len(records), 36)
         for r in records:
-            if r["path"] == "/system/licenses/stb_image.txt":
+            if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
+            elif r["path"].startswith("/system/fonts/"):
+                source = str(sources[r["path"]].relative_to(ROOT))
+                self.assertEqual(r["sha256"], m["inputs"]["sources"][source])
             elif r["path"].startswith("/system/wallpapers/"):
                 # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())

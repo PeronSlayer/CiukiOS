@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Files entry point: desktop channel, native VFS, program launching. */
 #include "app.h"
+#include "../desktop/catalog.h"
 #include <ciuki/spawn.h>
 #include <errno.h>
 #include <stdio.h>
@@ -39,8 +40,10 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 
 static int launch(struct files_app *a, const char *program, char *const argv[])
 {
-    /* Windows that open a file: CiukNote and the Image Viewer (the desktop launches them). */
-    if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/viewer")) && argv[0] && argv[1] && !argv[2])
+    /* File-taking desktop clients need the desktop's channel and grants. */
+    const char *name = !strncmp(program, "/Programs/", sizeof("/Programs/") - 1) ? program + sizeof("/Programs/") - 1 : NULL;
+    const struct desk_catalog_entry *entry = name ? desk_catalog_find(name) : NULL;
+    if ((!strcmp(program, "/Programs/ciuknote") || (entry && entry->takes_file)) && argv[0] && argv[1] && !argv[2])
         return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
     char *env[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);

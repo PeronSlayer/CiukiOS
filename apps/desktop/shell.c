@@ -232,6 +232,7 @@ static const struct program_info programs[] = {
     {"demo", "Ciuki Demo", "preferences-desktop-peripherals", "programs"},   /* the keyboard/mouse input demo */
     {"lua", "Lua", "text-x-script", "programs"},
     {"control", "Control Panel", "preferences-desktop", "programs"},
+    {"paint", "CiukPaint", "applications-graphics", "programs"},
     {"calc", "Calculator", "accessories-calculator", "accessories"},
     {"charmap", "Character Map", "accessories-character-map", "accessories"},
     {"clock", "Clock", "appointment-new", "accessories"},
@@ -507,7 +508,11 @@ static void act(struct desktop *d, const struct sh_item *it)
     case SH_ACT_RUN: desk_internal_open(d, DESK_INTERNAL_RUN); break;
     case SH_ACT_SHUTDOWN: desk_internal_open(d, DESK_INTERNAL_SHUTDOWN); break;
     case SH_ACT_DOCUMENT:
-        if (it->arg >= 0 && (unsigned)it->arg < d->sh.cfg.recent_count) launch_named(d, "ciuknote", d->sh.cfg.recent[it->arg]);
+        if (it->arg >= 0 && (unsigned)it->arg < d->sh.cfg.recent_count) {
+            const char *path = d->sh.cfg.recent[it->arg];
+            const struct desk_catalog_entry *program = desk_catalog_file(path);
+            launch_named(d, program ? program->name : "ciuknote", path);
+        }
         break;
     case SH_ACT_CONTROL:
         if (it->arg <= 0) launch_named(d, "control", NULL);

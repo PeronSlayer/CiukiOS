@@ -168,7 +168,10 @@ enum du_kind { DU_LABEL, DU_BUTTON, DU_TOOLBUTTON, DU_EDIT, DU_LISTVIEW, DU_TREE
                /* ui-look: check box and radio button (text is the label, value
                 * is the state; radios with the same `total` form one group),
                 * and a tool-bar band that draws the strip behind tool buttons. */
-               DU_CHECKBOX, DU_RADIO, DU_TOOLBAR };
+               DU_CHECKBOX, DU_RADIO, DU_TOOLBAR,
+               /* Application-drawn canvas; pointer events retain capture for
+                * either drawing button, including motion outside its box. */
+               DU_CANVAS };
 #define DU_TAB_H 20
 
 struct du_widget {
@@ -213,8 +216,13 @@ struct du_menu { const char *label; struct du_menu_item *items; unsigned count; 
 
 enum du_event_type {
     DU_EV_ACTIVATE = 1, DU_EV_SELECT, DU_EV_OPEN, DU_EV_SORT, DU_EV_CONTEXT, DU_EV_CHANGE,
-    DU_EV_COMMIT, DU_EV_CANCEL, DU_EV_KEY, DU_EV_TICK, DU_EV_DIALOG, DU_EV_FOCUS
+    DU_EV_COMMIT, DU_EV_CANCEL, DU_EV_KEY, DU_EV_TICK, DU_EV_DIALOG, DU_EV_FOCUS,
+    DU_EV_POINTER
 };
+/* DU_EV_POINTER: index is the phase, key is the captured button (1/2/3,
+ * zero on hover), x/y are client coordinates. CANCEL follows focus loss,
+ * input resynchronization or resize. The application paints DU_CANVAS. */
+enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL };
 struct du_event {
     enum du_event_type type;
     int id, index, x, y;
@@ -244,6 +252,12 @@ struct du_dialog {
     int close_hot;                          /* the pointer is over the close button */
     const uint32_t *icon_pixels;            /* optional 32x32 replacement icon */
     struct du_event pending[4]; unsigned pending_count;
+    /* Optional custom-controls validation before values are released. Zero
+     * closes the dialog; nonzero keeps it open (for example invalid sizes).
+     * Called for Cancel too. The callback may read items but must not replace
+     * the dialog while it is running. */
+    int (*accept)(struct du_ui *, int button, void *);
+    void *accept_ctx;
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
