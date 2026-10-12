@@ -2,6 +2,7 @@
  * Modal dialogs drawn inside the client window: message box, input box,
  * file open/save and progress with Cancel. */
 #include "internal.h"
+#include "../desktop/sounds.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -116,6 +117,7 @@ void du_message(struct du_ui *u, int id, const char *title, const char *text, in
     begin(u, DU_DLG_MESSAGE, id, title, text);
     struct du_dialog *d = &u->dialog;
     d->icon = icon; d->buttons = count;
+    if (u->sound) u->sound(u->sound_ctx,icon == DU_DLG_ICON_ERROR ? SOUND_ERROR : icon == DU_DLG_ICON_QUESTION || count > 1 ? SOUND_QUESTION : SOUND_INFORMATION);
     d->cancel = cancel >= 0 && (unsigned)cancel < count ? cancel : (int)count - 1;
     d->focus = def >= 0 && (unsigned)def < count ? def : 0;
     for (unsigned i = 0; i < count; i++) item(d, i, DU_BUTTON, ID_BUTTON - (int)i, buttons[i]);
@@ -130,6 +132,7 @@ void du_message(struct du_ui *u, int id, const char *title, const char *text, in
 void du_input_box(struct du_ui *u, int id, const char *title, const char *prompt, const char *initial)
 {
     begin(u, DU_DLG_INPUT, id, title, prompt);
+    if (u->sound) u->sound(u->sound_ctx,SOUND_QUESTION);
     struct du_dialog *d = &u->dialog;
     d->buttons = 2; d->cancel = 1; d->focus = 2;
     item(d, 0, DU_BUTTON, ID_BUTTON, "OK"); item(d, 1, DU_BUTTON, ID_BUTTON - 1, "Cancel");

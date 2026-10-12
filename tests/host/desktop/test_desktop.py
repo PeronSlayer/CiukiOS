@@ -323,7 +323,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "control-test"
             icons = load("control_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
             sources = ["tests/host/desktop/control_test.c", "apps/control/app.c",
-                       *(f"apps/desktop/{n}.c" for n in ("settings", "wallpaper", "image", "compositor", "theme")),
+                       *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
@@ -446,7 +446,9 @@ class DesktopTests(unittest.TestCase):
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
-                                        "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png"})
+                                        "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png",
+                                        "/system/settings/sounds.cfg",
+                                        *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "sounds.cfg")})
         self.assertTrue({"/Programs", "/System", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])

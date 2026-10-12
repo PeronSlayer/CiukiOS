@@ -15,7 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 
-struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; uint32_t portrait[256 * 256]; uint32_t serial; uint64_t last_tick; };
+struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; uint32_t portrait[256 * 256]; uint32_t serial; uint64_t last_tick; uint32_t audio_serial; };
 
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
@@ -38,6 +38,22 @@ static int save(void *ctx, const char *text, size_t length)
     if (fflush(f) || fsync(fileno(f))) ok = 0;
     if (fclose(f)) ok = 0;
     if (ok && rename(temp, CFG_FILE)) ok = !unlink(CFG_FILE) && !rename(temp, CFG_FILE);
+    if (!ok) unlink(temp);
+    return ok ? 0 : -1;
+}
+static int load_sounds(void *ctx, char *text, size_t size, size_t *length)
+{
+    (void)ctx; FILE *f = fopen(SOUND_CFG,"rb"); if (!f) return -1;
+    *length = fread(text,1,size,f); int ok = !ferror(f) && *length < size; fclose(f); return ok ? 0 : -1;
+}
+static int save_sounds(void *ctx, const char *text, size_t length)
+{
+    (void)ctx; if (mkdir(CFG_DIR,0755) && errno != EEXIST) return -1;
+    const char *temp = CFG_DIR "/sounds.cpl"; FILE *f = fopen(temp,"wb"); if (!f) return -1;
+    int ok = fwrite(text,1,length,f) == length;
+    if (fflush(f) || fsync(fileno(f))) ok = 0;
+    if (fclose(f)) ok = 0;
+    if (ok && rename(temp,SOUND_CFG)) ok = !unlink(SOUND_CFG) && !rename(temp,SOUND_CFG);
     if (!ok) unlink(temp);
     return ok ? 0 : -1;
 }
@@ -107,12 +123,18 @@ static int apply(void *ctx, unsigned request, int volume, int muted)
     if (request == DESK_SETTINGS_MASTER) {
         desk_put32(msg.data + 12, (uint32_t)volume); desk_put32(msg.data + 16, (uint32_t)volume); desk_put32(msg.data + 20, (uint32_t)(muted != 0));
     }
+    if (request == DESK_SETTINGS_SOUND_TEST) desk_put32(msg.data+12,(uint32_t)volume);
+    if (request == DESK_SETTINGS_AUDIO_TEST) m->audio_serial = m->serial;
     return du_window_queue(&m->window, &msg);
 }
 static void on_message(struct du_window *w, const struct desk_packet *p, void *user)
 {
     (void)w;
     struct cp_main *m = user;
+    if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && p->serial == m->audio_serial) {
+        cp_audio_result(&m->app,p->result);
+        m->audio_serial = 0; return;
+    }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && p->result < 0) {
         struct du_widget *s = du_get(&m->ui, 3);   /* the status line */
         if (s) { du_set_text(s, p->result == -ENODEV ? "No writable mixer: the volume is read-only." : "The desktop refused the change."); m->ui.dirty = 1; }
@@ -140,7 +162,7 @@ int main(int argc, char **argv)
     struct cp_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
     struct cp_host *h = &m->app.host;
-    h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
+    h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
     if (f) { if (fread(m->portrait, 4, 256 * 256, f) == 256 * 256) h->portrait = m->portrait; fclose(f); }
     const char *display = getenv("CIUKI_DISPLAY");

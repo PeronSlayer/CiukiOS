@@ -92,9 +92,19 @@ static void shutdown_key(int code)
     struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=code,.value=1};
     desk_input(&shutdown_desktop,&e);
 }
+static uint64_t shutdown_sound_deadline;
+static int shutdown_sound(struct desktop *d) { return d->now_ns>=shutdown_sound_deadline; }
 static void test_shutdown_sequence(void)
 {
     struct desktop *d=&shutdown_desktop;
+    /* The audio completion seam precedes descriptor cleanup and the power syscall. */
+    shutdown_setup(); d->sound_shutdown=shutdown_sound;
+    uint64_t sound_start=d->now_ns; shutdown_sound_deadline=sound_start+700000000ull;
+    desk_power_begin(d,2); shutdown_at(sound_start);
+    assert(!shutdown_prepares && !shutdown_calls);
+    shutdown_at(sound_start+699999999ull); assert(!shutdown_prepares && !shutdown_calls);
+    shutdown_at(shutdown_sound_deadline); assert(shutdown_prepares==1 && shutdown_calls==1);
+    shutdown_cleanup();
     /* Two ordinary clients plus a DOS/VM window. All CLOSE requests precede
      * termination/descriptor cleanup/power; EOF is not process exit. */
     shutdown_setup();

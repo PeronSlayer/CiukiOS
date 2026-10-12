@@ -371,6 +371,9 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Properties", "document-properties", SH_ACT_CONTROL, 1, program_index(d, "control") < 0 ? SH_ITEM_DISABLED : 0);
         break;
     case SH_MENU_ICON:
+        if (d->sh.menu_owner >= 0 && d->sh.menu_owner < d->sh.icon_count &&
+            !strcmp(d->sh.icons[d->sh.menu_owner].label,"Trash"))
+            item(m,"Empty Trash", "user-trash", SH_ACT_EMPTY_RECYCLE,0,0);
         item(m, "Open", NULL, SH_ACT_ICON_OPEN, d->sh.menu_owner, SH_ITEM_DEFAULT);
         separator(m);
         item(m, "Properties", "document-properties", SH_ACT_ICON_PROPERTIES, d->sh.menu_owner, 0);
@@ -420,6 +423,7 @@ static void menus_damage(struct desktop *d)
 }
 void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
 {
+    desk_sound(d,SOUND_MENU_OPEN);
     menus_damage(d);
     d->sh.levels = 1;
     build(d, &d->sh.menus[0], kind);
@@ -454,6 +458,7 @@ static void submenu(struct desktop *d, int level, int index)
     for (int l = level + 1; l < d->sh.levels; l++) damage(d, outer(d->sh.menus[l].box));
     d->sh.levels = level + 1;
     if (level + 1 >= SH_LEVELS) return;
+    desk_sound(d,SOUND_MENU_OPEN);
     struct sh_menu *s = &d->sh.menus[level + 1];
     build(d, s, it->arg);
     int32_t y = item_y(m, index) - 3;
@@ -504,6 +509,7 @@ static void act(struct desktop *d, const struct sh_item *it)
     switch (it->action) {
     case SH_ACT_LAUNCH: d->action = it->arg; break;
     case SH_ACT_ABOUT: desk_about(d); break;
+    case SH_ACT_EMPTY_RECYCLE: desk_sound(d,SOUND_EMPTY_RECYCLE); break;
     case SH_ACT_RUN: desk_internal_open(d, DESK_INTERNAL_RUN); break;
     case SH_ACT_SHUTDOWN: desk_internal_open(d, DESK_INTERNAL_SHUTDOWN); break;
     case SH_ACT_DOCUMENT:
@@ -553,6 +559,8 @@ static void act(struct desktop *d, const struct sh_item *it)
 static void activate(struct desktop *d, int level, int index)
 {
     struct sh_item it = d->sh.menus[level].items[index];
+    if (it.flags & SH_ITEM_DISABLED) return;
+    desk_sound(d,SOUND_MENU_SELECT);
     if (it.action == SH_ACT_SUBMENU) { submenu(d, level, index); return; }
     desk_menu_close(d);
     act(d, &it);
@@ -1171,6 +1179,8 @@ int desk_internal_open(struct desktop *d, int kind)
     uint32_t w, h;
     internal_size(d, kind, &w, &h);
     c->internal = kind; c->window = 1;
+    if (kind != DESK_INTERNAL_MESSAGE && kind != DESK_INTERNAL_POWER)
+        desk_sound(d,kind == DESK_INTERNAL_SHUTDOWN ? SOUND_QUESTION : SOUND_WINDOW_OPEN);
     if (!++d->next_window_id) ++d->next_window_id;
     c->window_id = d->next_window_id;
     c->info.width = w; c->info.height = h;
@@ -1199,6 +1209,7 @@ void desk_shell_message(struct desktop *d, const char *title, const char *text, 
     snprintf(d->sh.message_title, sizeof(d->sh.message_title), "%s", title);
     snprintf(d->sh.message_text, sizeof(d->sh.message_text), "%s", text);
     d->sh.message_kind = error;
+    desk_sound(d,error ? SOUND_ERROR : SOUND_INFORMATION);
     if (!d->shell) return;
     desk_internal_open(d, DESK_INTERNAL_MESSAGE);
 }
