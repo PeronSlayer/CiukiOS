@@ -92,7 +92,7 @@ static int gate_digest(const char *path, char hex[65])
 }
 static bool gate_path(const char *path)
 {
-    if (gate_compare(path,"/bin/lua") && gate_compare(path,"/system/tests/ciuki-f2.lua") &&
+    if (gate_compare(path,"/Programs/lua") && gate_compare(path,"/system/tests/ciuki-f2.lua") &&
         strncmp(path,GATE_CWD "/",sizeof(GATE_CWD))) return false;
     if (strlen(path) > 80) return false; /* full SHA and path fit in 240 bytes */
     for (const char *p = path; *p; p++)
@@ -409,10 +409,10 @@ int probe_f2_app_gate(void)
     const struct fb_device *lfb = fbdev_get();
     const struct ciuki_file_ops *ops = proc_get_file_ops(); struct ciuki_file file = {0};
     bool native = !(g_boot.flags & CBI_F_SAFE_MODE) && lfb->present && ops && ops->open &&
-                  !ops->open(proc_supervisor()->cwd,"/bin/desktop",&file);
+                  !ops->open(proc_supervisor()->cwd,"/Programs/desktop",&file);
     if (native && file.close) file.close(file.cookie);
     const char *argv[] = {"desktop",0};
-    err = native ? supervisor_spawn("/bin/desktop",argv,0,true,&desktop) : supervisor_spawn_standin(owner,&desktop);
+    err = native ? supervisor_spawn("/Programs/desktop",argv,0,true,&desktop) : supervisor_spawn_standin(owner,&desktop);
     bool pass = err > 0;
     if (!pass) rec_emit(GATE_NAME,"DATA","case=desktop expected=1 observed=0 error=%d",err);
     if (pass) {
@@ -423,7 +423,7 @@ int probe_f2_app_gate(void)
         pass = gate_live(desktop->pid) && gate_progress(desktop,native) && gate_provenance();
     }
     gate_metadata("argv","json","[\"lua\",\"-e\",\"_U=true\",\"all.lua\"]");
-    gate_metadata("env","json","{\"LC_ALL\":\"C\",\"TZ\":\"UTC0\",\"HOME\":\"/home\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/bin\"}");
+    gate_metadata("env","json","{\"LC_ALL\":\"C\",\"TZ\":\"UTC0\",\"HOME\":\"/Documents\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/Programs\"}");
     gate_metadata("cwd","utf8",GATE_CWD);
     gate_metadata("fd_setup","json","{\"inherited\":[0,1,2],\"stdin\":\"/dev/null\",\"stdout\":\"bounded\",\"stderr\":\"bounded\"}");
     struct proc_ledger baseline, final; struct desktop_ledger objects_before, objects_after;

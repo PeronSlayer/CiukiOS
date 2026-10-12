@@ -4,7 +4,7 @@ The Ciuki (Start) button sits at the left end of the 32 px top bar, x 4..100, y 
 DESK_START_*). Its menu drops from it: 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px)
 from y 32 (the top bar's bottom edge) at x 4, so it spans y 32..226 and its first row, Programs, y 35..65
 (x 4..188). Hovering or clicking Programs opens its submenu at x 185..335 with rows of 22 px, top-aligned
-with Programs (y 32): the known programs present in /bin in PROGRAM_ORDER, then "Accessories" when an
+with Programs (y 32): the known programs present in /Programs in PROGRAM_ORDER, then "Accessories" when an
 accessory is present, "Games" when dosbox is present (the bundled shareware games, owner decision
 2026-10-12), then a separator (8 px) and "Developer" when any other program is present (shell.c build(),
 SH_MENU_PROGRAMS). shell.c layout() would move the submenu up only if it crossed the
@@ -84,7 +84,7 @@ def check_launch(test, clicks, programs, name, label=""):
 
 def image_programs(root):
     import re
-    return sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (root / "scripts/build_image.py").read_text())) - {"desktop"})
+    return sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (root / "scripts/build_image.py").read_text())) - {"desktop"})
 
 
 def walk(case):

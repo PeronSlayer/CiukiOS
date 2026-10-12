@@ -1,4 +1,4 @@
-/* /bin/dosbox COMMAND typing (apps/dosbox/autorun.h): line split, US set-1
+/* /Programs/dosbox COMMAND typing (apps/dosbox/autorun.h): line split, US set-1
  * key events decoded back by an independent US keyboard table, and the
  * resume point after a focus loss.
  * SPDX-License-Identifier: MIT */

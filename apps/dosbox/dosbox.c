@@ -1,4 +1,4 @@
-/* /bin/dosbox: one CiukiDOS virtual machine in one desktop window (f3-02).
+/* /Programs/dosbox: one CiukiDOS virtual machine in one desktop window (f3-02).
  * A native desktop client of the Ciuki VMM, not the third-party DOSBox
  * emulator. The kernel owns the VM and renders its frame into our surface;
  * this process forwards window focus and input, reports damage and closes

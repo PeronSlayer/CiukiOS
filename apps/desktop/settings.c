@@ -5,7 +5,7 @@
 #include <string.h>
 
 const char *const cfg_theme_names[CFG_THEMES] = {"Platinum", "Ciuki Blue", "Classic 98"};
-const char *const cfg_mode_names[CFG_WALL_MODES] = {"center", "stretch", "tile", "fit"};
+const char *const cfg_mode_names[CFG_WALL_MODES] = {"center", "stretch", "tile", "fit", "fill"};
 const char *const cfg_keyboard_names[CFG_KEYS_COUNT] = {"us", "it"};
 const char *const cfg_keyboard_labels[CFG_KEYS_COUNT] = {"English (US)", "Italian"};
 
@@ -13,8 +13,8 @@ void cfg_defaults(struct ciuki_settings *s)
 {
     memset(s, 0, sizeof(*s));
     strcpy(s->theme, "Platinum");
-    strcpy(s->wallpaper, "/system/wallpapers/Ciuk2.png");   /* owner's Ciuk2 scene (assets/wallpapers/ciuki), centred */
-    s->wallpaper_mode = CFG_WALL_CENTER;
+    strcpy(s->wallpaper, "/system/wallpapers/Ciuk2.png");   /* owner's Ciuk2 scene (assets/wallpapers/ciuki) */
+    s->wallpaper_mode = CFG_WALL_FILL;     /* the adaptive scenes are made for a centred, aspect-preserving fill */
     s->desktop_color = 0x375564u;          /* DESK_BACKGROUND */
     s->clock_24h = 1;
     s->desktop_icons = 1;

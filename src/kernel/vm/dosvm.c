@@ -239,7 +239,7 @@ bool dosvm_trap(struct trap_frame *tf)
     bool pm = !(tf->eflags & V86_VM);
     /* CR2/DR6 belong to this trap only while interrupts stay off. */
     uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
-    uint32_t dr6 = tf->vector == 1 && v->dpmi.dr7 ? arch_debug_take() : 0;
+    uint32_t dr6 = tf->vector == 1 ? arch_debug_take() : 0;
     unsigned size = pm ? sizeof(struct trap_frame) : sizeof(struct v86_frame);
     struct v86_frame *f = &v->frame;
     memcpy(f, tf, size);

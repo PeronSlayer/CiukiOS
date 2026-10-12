@@ -199,8 +199,34 @@ directory; `/mnt/d` through `/mnt/z` MUST denote mounted non-system volumes
 `D:\` through `Z:\`. There MUST be no `/mnt/c` alias. `/dev` MUST be synthetic
 and contain only `null` and `console` in F2. These two reserved root names MUST
 take precedence over same-named on-disk entries, which MUST NOT be created or
-modified through the POSIX view. `/bin`, `/tmp`, `/home` and `/system` MUST be
-ordinary boot-volume directories created by the canonical image builder.
+modified through the POSIX view.
+
+**[F2, amended 2026-10-12: owner decision, f2-35]** The canonical image builder
+MUST create these ordinary boot-volume directories with the following names:
+
+| Earlier POSIX path | Current POSIX path | Required disk name and use |
+| --- | --- | --- |
+| `/bin` | `/Programs` | `Programs`; native programs, `PATH=/Programs` |
+| `/home` | `/Documents` | `Documents`; `HOME=/Documents`, recent list `/Documents/recent.lst` |
+| `/system` | `/system` | `System`; case-insensitive lookup preserves existing runtime paths |
+| `/GAMES` | `/Games` | `Games`; the kernel retains `C:\GAMES\CIUKIGAM.IMG` |
+| `/tmp` | `/tmp` | `tmp`; temporary files |
+
+The builder MUST preserve the long names `Programs`, `Documents`, `System` and
+`Games` so directory enumeration displays them with that spelling. `/dev` and
+`/mnt` remain synthetic structural nodes. This applies the owner's retro
+namespace decision without changing the drive mapping or path resolver.
+
+Research checked on 2026-10-12: POSIX defines HOME as a home-directory pathname
+and PATH as executable-search prefixes, without requiring these directories
+to be named `home` or `bin` ([The Open Group, Environment Variables](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap08.html)).
+FAT32 preserves long-name spelling and supports case-insensitive access
+([Microsoft, Naming Files, Paths, and Namespaces](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)).
+Repository check: `populate_payloads` in `scripts/build_image.py` passes directory
+names to mtools, and the F1/F2 VFS already preserves spelling and compares names
+case-insensitively. Therefore the builder creates `/System` while source paths
+continue using `/system`; no resolver or filesystem-format change is needed.
+
 This lets software use one root, `/tmp`, HOME and ordinary relative paths;
 SDL/game ports need no drive-letter parsing. Wine's later drive mappings remain
 a Wine-backend responsibility, not synthetic POSIX symlinks in F2.

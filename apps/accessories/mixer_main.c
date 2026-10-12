@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/mixer: CiukiOS Volume Control (desktop client, protocol v2).
+ * /Programs/mixer: CiukiOS Volume Control (desktop client, protocol v2).
  * Usage: mixer [--channel-fd=N] [--test=mixer] */
 #include "mixer.h"
 #include <ciuki/audio.h>

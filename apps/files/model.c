@@ -15,6 +15,102 @@ static int compare(const char *a, const char *b)
 int fm_same_path(const char *a, const char *b) { return !compare(a, b); }
 const char *fm_basename(const char *path) { const char *p = strrchr(path, '/'); return p ? p + 1 : path; }
 
+int fm_drive_root(const char *path)
+{
+    return !strcmp(path, "/") || (!strncmp(path, "/mnt/", 5) &&
+           fold((unsigned char)path[5]) >= 'd' && fold((unsigned char)path[5]) <= 'z' && !path[6]);
+}
+
+int fm_hidden(const char *parent, const char *name)
+{
+    static const char *const hidden[] = {"dev", "mnt", "tmp"};
+    if (strcmp(parent, "/")) return 0;
+    for (unsigned i = 0; i < sizeof(hidden) / sizeof(hidden[0]); i++)
+        if (!compare(name, hidden[i])) return 1;
+    return 0;
+}
+
+/* Presentation conversion only: no filesystem calls or case folding of names.
+ * Drive-relative paths (C:folder) are unsupported; C: alone denotes its root. */
+int fm_posix_path(char *out, const char *in)
+{
+    if (!in) return -EINVAL;
+    char path[FM_PATH]; size_t used = 0;
+    const char *p = in;
+    if (!*in || !compare(in, "Computer")) { out[0] = 0; return 0; }
+    if (in[0] != '/' && in[1] == ':') {
+        unsigned drive = fold((unsigned char)in[0]);
+        if (drive < 'c' || drive > 'z' || (in[2] && in[2] != '/' && in[2] != '\\')) return -EINVAL;
+        if (drive != 'c') { memcpy(path, "/mnt/", 5); path[5] = (char)drive; used = 6; }
+        p += 2;
+    } else if (in[0] != '/') return -EINVAL;
+    path[used++] = '/';
+    for (; *p; p++) {
+        char c = *p == '\\' ? '/' : *p;
+        if (c == '/' && path[used - 1] == '/') continue;
+        if (used + 1 >= sizeof(path)) return -ENAMETOOLONG;
+        path[used++] = c;
+    }
+    while (used > 1 && path[used - 1] == '/') used--;
+    path[used] = 0;
+    memcpy(out, path, used + 1);
+    return 0;
+}
+
+int fm_display_path(char *out, const char *in)
+{
+    char path[FM_PATH];
+    int r = fm_posix_path(path, in);
+    if (r) return r;
+    if (!path[0]) { strcpy(out, "Computer"); return 0; }
+    const char *p = path + 1; char drive = 'C';
+    if (!strncmp(path, "/mnt/", 5) && fold((unsigned char)path[5]) >= 'd' &&
+        fold((unsigned char)path[5]) <= 'z' && (!path[6] || path[6] == '/')) {
+        drive = (char)(fold((unsigned char)path[5]) - 'a' + 'A');
+        p = path + 6; if (*p == '/') p++;
+    }
+    size_t n = strlen(p);
+    if (n + 4 > FM_PATH) return -ENAMETOOLONG;
+    out[0] = drive; out[1] = ':'; out[2] = '\\';
+    for (size_t i = 0; i <= n; i++) out[i + 3] = p[i] == '/' ? '\\' : p[i];
+    return 0;
+}
+
+struct volumes { struct fm_meta meta[23]; uint32_t seen; };
+static int collect_volume(const char *name, const struct fm_meta *meta, void *ctx)
+{
+    struct volumes *v = ctx;
+    unsigned letter = fold((unsigned char)name[0]);
+    if (meta->type != FM_DIR || !name[0] || name[1] || letter < 'd' || letter > 'z') return 0;
+    uint32_t bit = 1u << (letter - 'a');
+    if (v->seen & bit) return 0;
+    v->seen |= bit;
+    v->meta[letter - 'd'] = *meta;
+    return 0;
+}
+
+int fm_volumes(const struct fm_vfs *fs, fm_emit emit, void *ctx)
+{
+    struct fm_meta meta;
+    int r = fs->stat_path(fs->ctx, "/", &meta);
+    if (r) return r;
+    if ((r = emit("C:", &meta, ctx))) return r;
+    struct volumes v = {0};
+    r = fs->list(fs->ctx, "/mnt", collect_volume, &v);
+    if (r && r != -ENOENT) return r;
+    for (unsigned letter = 'd'; letter <= 'z'; letter++) if (v.seen & (1u << (letter - 'a'))) {
+        char drive[] = {(char)(letter - 'a' + 'A'), ':', 0};
+        if ((r = emit(drive, &v.meta[letter - 'd'], ctx))) return r;
+    }
+    return 0;
+}
+
+int fm_entry_path(const struct fm_model *m, unsigned index, char *out)
+{
+    if (index >= m->count) return -ENOENT;
+    return m->path[0] ? fm_join(out, m->path, m->entries[index].name) : fm_posix_path(out, m->entries[index].name);
+}
+
 int fm_valid_name(const char *name)
 {
     if (!*name || !strcmp(name, ".") || !strcmp(name, "..")) return -EINVAL;
@@ -126,6 +222,25 @@ static int listing(struct fm_vfs *fs, const char *path, struct listing *l)
     return r;
 }
 
+/* Jobs use raw listing(): hiding belongs only to the browser, not to copies
+ * or recursive deletion/properties. */
+static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *l)
+{
+    int r;
+    if (!path[0]) {
+        memset(l, 0, sizeof(*l));
+        r = fm_volumes(fs, collect, l);
+        if (r) { free(l->entries); memset(l, 0, sizeof(*l)); }
+    } else r = listing(fs, path, l);
+    if (!r) {
+        unsigned count = 0;
+        for (unsigned i = 0; i < l->count; i++)
+            if (!fm_hidden(path, l->entries[i].name)) l->entries[count++] = l->entries[i];
+        l->count = count;
+    }
+    return r;
+}
+
 struct resolve { const char *want; char *found; };
 static int match(const char *name, const struct fm_meta *meta, void *ctx)
 {
@@ -217,7 +332,7 @@ void fm_sort(struct fm_model *m, unsigned column, int descending)
 static int load(struct fm_model *m, const char *path)
 {
     struct listing l;
-    int r = listing(&m->fs, path, &l);
+    int r = browser_listing(&m->fs, path, &l);
     if (r) return r;
     free(m->entries);
     m->entries = l.entries; m->count = l.count; m->capacity = l.capacity;
@@ -230,12 +345,19 @@ static int load(struct fm_model *m, const char *path)
 int fm_navigate(struct fm_model *m, const char *path)
 {
     char canonical[FM_PATH];
-    int r = fm_canonical(&m->fs, path, canonical);
+    int r = fm_posix_path(canonical, path);
     if (r) return r;
+    if (!canonical[0] || fm_same_path(canonical, "/mnt")) canonical[0] = 0;
+    else r = fm_canonical(&m->fs, canonical, canonical);
+    if (r) return r;
+    if (fm_same_path(canonical, "/mnt")) canonical[0] = 0;
     char previous[FM_PATH]; strcpy(previous, m->path);
     if ((r = load(m, canonical))) return r;
     /* Going up selects the folder that was left, as Explorer does. */
-    if (fm_beneath(previous, canonical) && !fm_same_path(previous, canonical)) {
+    if (!canonical[0] && previous[0]) {
+        char drive[FM_PATH];
+        if (!fm_display_path(drive, previous)) { drive[2] = 0; fm_select_name(m, drive, 0); }
+    } else if (fm_beneath(previous, canonical) && !fm_same_path(previous, canonical)) {
         const char *rest = previous + strlen(canonical) + (strlen(canonical) > 1);
         char child[FM_NAME]; size_t n = strcspn(rest, "/");
         if (n < sizeof(child)) { memcpy(child, rest, n); child[n] = 0; fm_select_name(m, child, 0); }
@@ -251,7 +373,7 @@ int fm_navigate(struct fm_model *m, const char *path)
 int fm_refresh(struct fm_model *m)
 {
     struct listing l;
-    int r = listing(&m->fs, m->path, &l);
+    int r = browser_listing(&m->fs, m->path, &l);
     if (r) return r;
     char active[FM_NAME] = "";
     if (m->active < m->count) strcpy(active, m->entries[m->active].name);
@@ -272,7 +394,10 @@ int fm_history(struct fm_model *m, int delta)
     int r = load(m, m->history[n]);
     if (r) return r;
     m->history_at = (unsigned)n;
-    if (fm_beneath(previous, m->path) && !fm_same_path(previous, m->path)) {
+    if (!m->path[0] && previous[0]) {
+        char drive[FM_PATH];
+        if (!fm_display_path(drive, previous)) { drive[2] = 0; fm_select_name(m, drive, 0); }
+    } else if (fm_beneath(previous, m->path) && !fm_same_path(previous, m->path)) {
         const char *rest = previous + strlen(m->path) + (strlen(m->path) > 1);
         char child[FM_NAME]; size_t k = strcspn(rest, "/");
         if (k < sizeof(child)) { memcpy(child, rest, k); child[k] = 0; fm_select_name(m, child, 0); }
@@ -282,7 +407,8 @@ int fm_history(struct fm_model *m, int delta)
 
 int fm_up(struct fm_model *m)
 {
-    if (!strcmp(m->path, "/")) return 0;
+    if (!m->path[0]) return 0;
+    if (fm_drive_root(m->path)) return fm_navigate(m, FM_COMPUTER);
     char path[FM_PATH];
     fm_parent(path, m->path);
     return fm_navigate(m, path);
@@ -348,6 +474,7 @@ int fm_find(struct fm_model *m, unsigned ch, uint64_t now)
 
 int fm_clipboard(struct fm_model *m, int cut)
 {
+    if (!m->path[0]) return -EPERM;
     unsigned count = fm_selected(m, NULL);
     if (!count) return -ENOENT;
     char **paths = calloc(count, sizeof(*paths));
@@ -366,6 +493,7 @@ int fm_clipboard(struct fm_model *m, int cut)
 
 int fm_unique(struct fm_model *m, const char *base, const char *ext, char *out)
 {
+    if (!m->path[0]) return -EPERM;
     for (unsigned n = 1; n < 1000; n++) {
         char name[FM_NAME], path[FM_PATH]; struct fm_meta meta;
         if (n == 1) snprintf(name, sizeof(name), "%s%s", base, ext);
@@ -381,6 +509,7 @@ int fm_unique(struct fm_model *m, const char *base, const char *ext, char *out)
 
 int fm_create(struct fm_model *m, const char *name, int directory)
 {
+    if (!m->path[0]) return -EPERM;
     char path[FM_PATH];
     int r = fm_valid_name(name);
     if (!r) r = fm_join(path, m->path, name);
@@ -400,6 +529,7 @@ int fm_create(struct fm_model *m, const char *name, int directory)
 
 int fm_rename(struct fm_model *m, unsigned index, const char *name)
 {
+    if (!m->path[0]) return -EPERM;
     if (index >= m->count) return -ENOENT;
     char source[FM_PATH], target[FM_PATH];
     int r = fm_valid_name(name);

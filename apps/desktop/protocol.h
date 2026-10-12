@@ -2,6 +2,7 @@
  * F2 desktop protocol v1, with negotiated v2 close requests and the v2
  * task-manager extension (f2-33): window list, End Task, Switch To, launch,
  * and the v2 settings request of the Control Panel (desktop shell).
+ * Minor v2.1 negotiates client-allocated replacement surfaces for resizing.
  * Byte encoding, independent of C alignment/padding. SDK: ciuki/desktop.h. */
 #ifndef CIUKI_APP_DESKTOP_PROTOCOL_H
 #define CIUKI_APP_DESKTOP_PROTOCOL_H
@@ -9,6 +10,9 @@
 #include <stdint.h>
 #define DESK_VERSION 1u
 #define DESK_SHELL_VERSION 2u
+#define DESK_RESIZE_MINOR 1u       /* v2.1: header byte 2; v1/v2.0 remain unchanged */
+#define DESK_RESIZABLE 1u
+#define DESK_CONFIGURE_COMMITTED 1u
 #define DESK_TITLE_MAX 63u
 #define DESK_ARG_MAX 160u   /* LAUNCH argument: 12 + name + 4 + argument always fits one message */
 enum desk_opcode {
@@ -19,13 +23,16 @@ enum desk_opcode {
      * client; the other four flow client to desktop. */
     DESK_WINDOWS_QUERY, DESK_WINDOW_INFO, DESK_END_TASK, DESK_SWITCH_TO,
     DESK_LAUNCH, DESK_TASK_RESULT,
-    /* Desktop shell, version 2 only, client to desktop: only /bin/control
+    /* Desktop shell, version 2 only, client to desktop: only /Programs/control
      * launched by the desktop may send it (others get TASK_RESULT EPERM). */
     DESK_SETTINGS,
     /* Legacy recovery (Volume Control), version 2, client to desktop: serial,
      * left, right (0..100), mute (0/1). The desktop applies it through its
      * delegated /dev/mixer control handle (F4) and answers TASK_RESULT. */
-    DESK_MIXER_SET
+    DESK_MIXER_SET,
+    /* f2-36, version 2, client to desktop: uint32 length, then 1..63
+     * printable ASCII bytes. Updates only the sending client's window. */
+    DESK_SET_TITLE
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_MASTER 2u   /* set the master volume: left, right 0..100, mute 0/1 */
@@ -45,13 +52,14 @@ struct desk_packet {
     uint32_t window_id, pid, flags, index, count, request;
     int32_t result;
     uint32_t values[3];               /* SETTINGS: left, right, mute */
+    uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);
 void desk_message(struct ciuki_message *m, unsigned opcode, unsigned length);
 void desk_event_message(struct ciuki_message *m, unsigned opcode,
                         const struct ciuki_input_event *e);
-/* from_client selects allowed direction. surface required only for CREATE. */
+/* Surface info is required for CREATE and DAMAGE (the attachment on a swap). */
 int desk_parse(const struct ciuki_message *m, int from_client,
                const struct ciuki_surface_info *surface, struct desk_packet *out);
 int desk_surface_valid(const struct ciuki_surface_info *s);

@@ -186,17 +186,17 @@ class IconStoreTests(unittest.TestCase):
             self.assertIn(obj, table)
             if tango:
                 self.assertEqual(table[obj], tango, obj)
-        programs = set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text()))
+        programs = set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text()))
         self.assertEqual({p for p in programs if f"program:{p}" not in table}, set())
         for obj, tango in table.items():
             if tango == "ciuki":
                 self.assertTrue(obj.endswith((":computer", ":about", ":start")), obj)
-        print(f"PASS icon map: {len(lines)} objects resolve at 16/22/32/48; every /bin program mapped; identity = portrait")
+        print(f"PASS icon map: {len(lines)} objects resolve at 16/22/32/48; every /Programs program mapped; identity = portrait")
 
     def test_shell_tables_match_icon_map(self):
         """One icon per object (owner feedback 2026-10-12: the icon set must not change from screen to screen): the
         shell's program table, Start menu rows, desktop icons and games use the Tango names of icon_map.c, which
-        Files (/bin) and Task Manager use for the same programs."""
+        Files (/Programs) and Task Manager use for the same programs."""
         table = {l.split()[0]: l.split()[1] for l in self.harness("map").splitlines()}
         shell = (ROOT / "apps/desktop/shell.c").read_text()
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()

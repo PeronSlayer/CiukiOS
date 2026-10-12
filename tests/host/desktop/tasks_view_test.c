@@ -119,12 +119,22 @@ int main(int argc, char **argv)
     tv_page(&v, TV_APPS); tv_speed(&v, TV_PAUSED); tv_update(&v, &m);
     assert(strstr(du_get(&ui, A_STATUS)->text, "(paused)") && v.view_items[5].flags == (DU_ITEM_RADIO | DU_ITEM_CHECKED));
     /* New Task: typed set-1 keys, Enter reports the edit text. */
-    du_input_box(&ui, D_NEW, "Create New Task", "Type the name of a program in /bin, and CiukiOS\nwill open it for you.", "");
+    du_input_box(&ui, D_NEW, "Create New Task", "Type the name of a program in /Programs, and CiukiOS\nwill open it for you.", "");
     tap(&ui, 0x20); tap(&ui, 0x12); tap(&ui, 0x32); tap(&ui, 0x18);
     du_render(&ui); save(folder, "newtask", pixels);
     event_count = 0; tap(&ui, DU_KEY_ENTER);
     assert(last()->type == DU_EV_DIALOG && last()->id == D_NEW && !last()->index && !strcmp(dialog_text, "demo") && !ui.dialog.kind);
     assert(pixels[TV_WIDTH * TV_HEIGHT] == 0x5a5a5a5au);
+    uint32_t *large = calloc(600 * 540 + 1, 4); assert(large);
+    large[600 * 540] = 0x5a5a5a5au;
+    uint32_t selected = v.selected_window;
+    du_resize(&ui, large, 600, 540);
+    assert(v.selected_window == selected && v.page == TV_APPS && v.speed == TV_PAUSED);
+    assert(du_get(&ui, A_APPS)->box.h == 420 && du_get(&ui, A_APPS)->box.w == 576);
+    assert(du_get(&ui, A_NEW)->box.y == 478 && du_get(&ui, A_NEW)->box.h == 23);
+    assert(du_get(&ui, A_STATUS)->box.y == 518 && du_get(&ui, A_STATUS)->box.w == 600);
+    du_render(&ui); assert(large[600 * 540] == 0x5a5a5a5au);
+    du_resize(&ui, pixels, TV_WIDTH, TV_HEIGHT); free(large);
     free(pixels);
     puts("PASS tasks view: tabs, Details columns/sort, selection identity, button mnemonics, menus, New Task dialog, deterministic renders");
     return 0;

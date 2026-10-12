@@ -466,7 +466,7 @@ static void type(const char *command)
     }
     waiting_input = false;
 }
-/* f3-02: a line typed the way /bin/dosbox forwards a window's keys. */
+/* f3-02: a line typed the way /Programs/dosbox forwards a window's keys. */
 static void window_key(unsigned code, int value)
 {
     struct ciuki_input_event e = {.type = CIUKI_INPUT_KEY, .code = (int32_t)code, .value = value};

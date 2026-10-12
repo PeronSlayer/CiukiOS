@@ -1,5 +1,5 @@
 /* f3-02 native owner boundary: syscall 72 (dosvm) for one DOS window VM per
- * process, delegated only to a desktop-launched /bin/dosbox. No public VM
+ * process, delegated only to a desktop-launched /Programs/dosbox. No public VM
  * lookup, device grant or physical display access. execution-abi.md, F3-02.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>

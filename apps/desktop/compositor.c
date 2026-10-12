@@ -4,7 +4,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-/* The shell (shell.c) is linked only into /bin/desktop; the demo and the
+/* The shell (shell.c) is linked only into /Programs/desktop; the demo and the
  * libdeskui programs reuse this file for glyphs and frames without it. */
 extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_topbar(struct desktop *, struct desk_box) __attribute__((weak));
@@ -25,7 +25,7 @@ int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out)
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y)
 { return (struct desk_box){x,y,(int32_t)w+DESK_BORDER*2,(int32_t)h+DESK_TITLE+DESK_BORDER}; }
 struct desk_box desk_content(const struct desk_client *c)
-{ return (struct desk_box){c->frame.x+DESK_BORDER,c->frame.y+DESK_TITLE,(int32_t)c->info.width,c->collapsed ? 0 : (int32_t)c->info.height}; }
+{ return (struct desk_box){c->frame.x+DESK_BORDER,c->frame.y+DESK_TITLE,c->frame.w-2*DESK_BORDER,c->collapsed ? 0 : c->frame.h-DESK_TITLE-DESK_BORDER}; }
 /* The frame plus its theme's drop shadow: the area a frame change repaints. */
 struct desk_box desk_outer(const struct desk_client *c)
 {
@@ -42,10 +42,10 @@ static struct desk_box title_box(const struct desk_client *c, unsigned button)
 }
 struct desk_box desk_close_box(const struct desk_client *c) { return title_box(c,DESK_TB_CLOSE); }
 struct desk_box desk_min_box(const struct desk_client *c) { return title_box(c,DESK_TB_MINIMIZE); }
-/* Windowshade (collapse to the title bar), left of the minimise box. */
+/* Zoom button, left of minimise (the old function and theme flag names are retained). */
 struct desk_box desk_shade_box(const struct desk_client *c) { return title_box(c,DESK_TB_COLLAPSE); }
 /* The title button (DESK_TB_*) of the topmost window under the pointer, as
- * index*4+k+1 (k: 0 close, 1 minimise, 2 collapse), or 0: hover tracking. */
+ * index*4+k+1 (k: 0 close, 1 minimise, 2 zoom), or 0: hover tracking. */
 static int inside(struct desk_box b, int32_t x, int32_t y)
 { return x>=b.x && y>=b.y && (int64_t)x<(int64_t)b.x+b.w && (int64_t)y<(int64_t)b.y+b.h; }
 int desk_title_code(const struct desktop *d, int32_t x, int32_t y)
@@ -74,7 +74,8 @@ void desk_collapse(struct desktop *d, int i)
     struct desk_client *c=&d->clients[i];
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     c->collapsed=!c->collapsed;
-    c->frame.h=c->collapsed ? DESK_TITLE : (int32_t)c->info.height+DESK_TITLE+DESK_BORDER;
+    if (c->collapsed) { c->shade_height = c->frame.h; c->frame.h = DESK_TITLE; }
+    else c->frame.h = c->shade_height;
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
 }
@@ -257,10 +258,23 @@ static void window(struct desktop *d, int i, struct desk_box clip)
         if (desk_internal_paint && desk_intersect(content,clip,&b)) desk_internal_paint(d,i,content,b);
         return;
     }
-    if (desk_intersect(content,clip,&b))
+    /* While resizing, the previous client surface is clipped in the new
+     * content well. The frame fill above clears all newly exposed pixels. */
+    struct desk_box old = {content.x,content.y,(int32_t)c->info.width,(int32_t)c->info.height};
+    if (desk_intersect(content,old,&b) && desk_intersect(b,clip,&b))
         for (int32_t y=b.y; y<b.y+b.h; y++) for (int32_t x=b.x; x<b.x+b.w; x++)
             d->pixels[(uint32_t)y*d->width+(uint32_t)x] =
                 c->pixels[(uint32_t)(y-content.y)*c->info.width+(uint32_t)(x-content.x)] & 0xffffffu;
+    if (c->resizable && !c->zoomed) {
+        /* A visible grip in the 3 px bottom/right frame, outside app pixels. */
+        for (int k=0; k<3; k++) {
+            int gx=f.x+f.w-5-k*4, gy=f.y+f.h-5-k*4;
+            if (gx >= f.x+DESK_BORDER)
+                desk_paint_fill(&p,gx,f.y+f.h-3,2,1,t->dark);
+            if (gy >= f.y+DESK_TITLE)
+                desk_paint_fill(&p,f.x+f.w-3,gy,1,2,t->dark);
+        }
+    }
 }
 /* Programs that open a desktop window receive their channel at fd 3. */
 int desk_program_graphical(const char *name)

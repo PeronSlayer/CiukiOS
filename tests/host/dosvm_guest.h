@@ -17,7 +17,7 @@ struct gcpu_event {
     bool fault;                 /* EIP at the instruction (else after it) */
     bool executed_descriptor;
     unsigned executed;
-    uint32_t dr6;               /* data breakpoint hits (trap after the instruction) */
+    uint32_t dr6;               /* BS and data breakpoint hits (after the instruction) */
     bool ss_shadow;             /* last instruction loaded SS: no interrupt before the next */
 };
 struct gcpu_ops {

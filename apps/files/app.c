@@ -15,6 +15,7 @@ enum {
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS,
+    C_GO_DOCUMENTS = 300, C_GO_GAMES,
     T_JOB = 1
 };
 #define PANE_TOP 92
@@ -42,7 +43,8 @@ static const struct du_menu_item go_template[] = {
     {"&Back", C_BACK, DU_KEY_LEFT, DU_ALT, 0}, {"&Forward", C_FORWARD, DU_KEY_RIGHT, DU_ALT, 0},
     {"&Up One Level", C_UP, DU_KEY_UP, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Address Bar", C_ADDRESS, 0x20, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
-    {"&CiukiOS (/)", C_GO_ROOT, 0, 0, 0}, {"A&pplications (/bin)", C_GO_BIN, 0, 0, 0}, {"&System (/system)", C_GO_SYSTEM, 0, 0, 0}};
+    {"&Computer", C_GO_ROOT, 0, 0, 0}, {"&Programs", C_GO_BIN, 0, 0, 0},
+    {"&Documents", C_GO_DOCUMENTS, 0, 0, 0}, {"&System", C_GO_SYSTEM, 0, 0, 0}, {"&Games", C_GO_GAMES, 0, 0, 0}};
 static const struct du_menu_item help_template[] = {
     {"&Help Topics", C_HELP, DU_KEY_F1, 0, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&About Files", C_ABOUT, 0, 0, 0}};
 
@@ -153,8 +155,21 @@ static const struct { int id; const char *label; const char *icon; int width; } 
     {C_DELETE, "Delete", "action:delete", 48}, {C_PROPERTIES, "Properties", "action:properties", 70},
     {C_VIEWS, "Views", "action:views", 56}};
 
+static struct du_rect rename_box(struct du_widget *list, unsigned index)
+{
+    du_list_ensure(list, index);
+    struct du_rect label = du_list_label(list, index), body = du_list_body(list);
+    int width = label.w + 30; if (width < 110) width = 110;
+    int x = label.x - 1;
+    if (list->view == DU_ICONS) { width = 96; x = label.x + label.w / 2 - width / 2; }
+    if (x + width > body.x + body.w) width = body.x + body.w - x;
+    if (x < body.x) x = body.x;
+    return (struct du_rect){x, label.y - 2, width, 19};
+}
+
 void files_layout(struct files_app *a)
 {
+    a->width = a->ui->canvas.width; a->height = a->ui->canvas.height;
     int w = a->width, h = a->height;
     if (a->split < 120) a->split = 120;
     if (a->split > w - 260) a->split = w - 260;
@@ -189,15 +204,22 @@ void files_layout(struct files_app *a)
     struct du_widget *status = W(a, W_STATUS);
     status->box = (struct du_rect){0, h - STATUS_H, w, STATUS_H};
     status->panels[0] = w - 250; status->panels[1] = 100; status->panels[2] = 0;
+    if (a->rename_index >= 0) {
+        W(a, W_RENAME)->box = rename_box(list, (unsigned)a->rename_index);
+    }
     a->ui->dirty = 1;
 }
 
+static void resize_layout(struct du_ui *u, void *user)
+{ (void)u; files_layout(user); }
+
 /* ---- places and folder tree ---- */
-struct names { char (*v)[FM_NAME]; unsigned count, capacity; };
+struct names { char (*v)[FM_NAME]; unsigned count, capacity; const char *parent; };
 static int collect_dir(const char *name, const struct fm_meta *meta, void *ctx)
 {
     struct names *n = ctx;
-    if (meta->type != FM_DIR || name[0] == '.' || n->count >= 512) return 0;
+    if (meta->type != FM_DIR || !strcmp(name, ".") || !strcmp(name, "..") ||
+        (n->parent && fm_hidden(n->parent, name)) || n->count >= 512) return 0;
     if (n->count == n->capacity) {
         unsigned cap = n->capacity ? n->capacity * 2 : 16;
         void *p = realloc(n->v, cap * sizeof(*n->v));
@@ -225,30 +247,21 @@ static void sort_names(struct names *n)
 
 static void places_build(struct files_app *a)
 {
-    static const char *const names[] = {"CiukiOS", "Applications", "System"}, *const paths[] = {"/", "/bin", "/system"};
+    static const char *const names[] = {"Computer", "Programs", "Documents", "System", "Games"};
+    static const char *const paths[] = {FM_COMPUTER, "/Programs", "/Documents", "/system", "/Games"};
+    static const char *const icons[] = {"place:computer", "place:applications", "place:documents", "place:system", "place:folder"};
     a->place_count = 0;
-    for (unsigned i = 0; i < 3; i++) {
+    for (unsigned i = 0; i < 5; i++) {
+        struct fm_meta meta;
+        if (i == 4 && (a->model.fs.stat_path(a->model.fs.ctx, paths[i], &meta) || meta.type != FM_DIR)) continue;
         struct files_place *p = &a->places[a->place_count++];
         snprintf(p->name, sizeof(p->name), "%s", names[i]); snprintf(p->path, sizeof(p->path), "%s", paths[i]);
     }
-    struct names mounts = {0};
-    struct fm_meta meta;
-    if (!a->model.fs.stat_path(a->model.fs.ctx, "/mnt", &meta) && meta.type == FM_DIR &&
-        !a->model.fs.list(a->model.fs.ctx, "/mnt", collect_dir, &mounts)) {
-        sort_names(&mounts);
-        for (unsigned i = 0; i < mounts.count && a->place_count < FILES_PLACES; i++) {
-            struct files_place *p = &a->places[a->place_count++];
-            snprintf(p->name, sizeof(p->name), "Volume %.48s", mounts.v[i]);
-            snprintf(p->path, sizeof(p->path), "/mnt/%.900s", mounts.v[i]);
-        }
-    }
-    free(mounts.v);
     for (unsigned i = 0; i < a->place_count; i++) {
         struct du_item *it = &a->place_items[i];
         memset(it, 0, sizeof(*it));
         it->text[0] = a->places[i].name;
-        it->icon16 = i == 0 ? (a->ciuki ? a->ciuki16 : named("place:harddisk", 16)) :
-                     named(i == 1 ? "place:applications" : i == 2 ? "place:system" : "place:volume", 16);
+        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(icons[i], 16);
     }
     struct du_widget *w = W(a, W_PLACES);
     w->items = a->place_items; w->count = a->place_count;
@@ -277,7 +290,7 @@ static int expanded(struct files_app *a, const char *path)
 static void tree_add(struct files_app *a, unsigned parent)
 {
     struct files_node *p = &a->tree[parent];
-    struct names n = {0};
+    struct names n = {.parent = p->path};
     if (a->model.fs.list(a->model.fs.ctx, p->path, collect_dir, &n)) { free(n.v); p->children = 0; return; }
     sort_names(&n);
     p->children = n.count > 0;
@@ -295,13 +308,28 @@ static void tree_add(struct files_app *a, unsigned parent)
     free(n.v);
 }
 
+static int tree_drive(const char *name, const struct fm_meta *meta, void *ctx)
+{
+    struct files_app *a = ctx;
+    (void)meta;
+    if (a->tree_count == FILES_TREE) return 0;
+    unsigned index = a->tree_count++;
+    struct files_node *n = &a->tree[index];
+    snprintf(n->name, sizeof(n->name), "%s", name);
+    fm_posix_path(n->path, name); n->depth = 1;
+    n->expanded = (uint8_t)expanded(a, n->path); n->children = 1;
+    if (n->expanded) tree_add(a, index);
+    return 0;
+}
+
 static void tree_build(struct files_app *a)
 {
     a->tree_count = 1;
     struct files_node *root = &a->tree[0];
-    snprintf(root->name, sizeof(root->name), "CiukiOS");
-    strcpy(root->path, "/"); root->depth = 0; root->expanded = (uint8_t)!in_set(a->collapsed, a->collapsed_count, "/"); root->children = 1;
-    if (root->expanded) tree_add(a, 0);
+    snprintf(root->name, sizeof(root->name), "Computer");
+    strcpy(root->path, FM_COMPUTER); root->depth = 0;
+    root->expanded = (uint8_t)!in_set(a->collapsed, a->collapsed_count, FM_COMPUTER); root->children = 1;
+    if (root->expanded) fm_volumes(&a->model.fs, tree_drive, a);
     a->tree_dirty = 0;
 }
 
@@ -316,7 +344,8 @@ static void tree_items(struct files_app *a)
         int here = fm_same_path(n->path, a->model.path);
         if (here) current = (int)i;
         it->text[0] = n->name;
-        it->icon16 = !i ? (a->ciuki ? a->ciuki16 : named("place:harddisk", 16)) : named(here ? "type:folder-open" : "type:folder", 16);
+        it->icon16 = !i ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) :
+                     named(n->depth == 1 ? "place:volume" : here ? "type:folder-open" : "type:folder", 16);
         it->selected = (uint8_t)here; it->depth = (uint8_t)(n->depth > 255 ? 255 : n->depth);
         it->expanded = n->expanded; it->children = n->children;
     }
@@ -335,20 +364,15 @@ static int in_clipboard(const struct files_app *a, const char *name)
     return 0;
 }
 
-static const char *location(const struct files_app *a)
-{
-    const char *best = "CiukiOS"; size_t len = 0;
-    for (unsigned i = 0; i < a->place_count; i++)
-        if (fm_beneath(a->model.path, a->places[i].path) && strlen(a->places[i].path) >= len) { best = a->places[i].name; len = strlen(a->places[i].path); }
-    return best;
-}
-
 static void set_flag(struct du_menu_item *items, unsigned n, int id, unsigned flag, int on)
 { for (unsigned i = 0; i < n; i++) if (items[i].id == id) items[i].flags = on ? items[i].flags | flag : items[i].flags & ~flag; }
 
 void files_update(struct files_app *a)
 {
     struct fm_model *m = &a->model;
+    int computer = !m->path[0];
+    char display[FM_PATH];
+    if (fm_display_path(display, m->path)) strcpy(display, "(path too long)");
     if (m->count > a->capacity) {
         unsigned cap = m->count + 32;
         struct du_item *rows = realloc(a->rows, cap * sizeof(*rows));
@@ -363,9 +387,10 @@ void files_update(struct files_app *a)
         struct fm_entry *e = &m->entries[i];
         struct files_row *t = &a->texts[i];
         if (e->meta.type == FM_DIR) t->size[0] = 0; else { kb_text(t->size, sizeof(t->size), e->meta.size); folder_bytes += e->meta.size; }
-        char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", fm_type_name(e, buffer, sizeof(buffer)));
-        time_text(t->modified, sizeof(t->modified), e->meta.modified);
-        a->rows[i] = (struct du_item){{e->name, t->size, t->type, t->modified}, icon16(e), icon32(e),
+        char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? "Disk Drive" : fm_type_name(e, buffer, sizeof(buffer)));
+        time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
+        a->rows[i] = (struct du_item){{e->name, t->size, t->type, t->modified},
+                                      computer ? named("place:volume", 16) : icon16(e), computer ? named("place:volume", 32) : icon32(e),
                                       (uint8_t)e->selected, (uint8_t)in_clipboard(a, e->name), 0, 0, 0};
     }
     struct du_widget *list = W(a, W_LIST);
@@ -374,7 +399,8 @@ void files_update(struct files_app *a)
     list->sort = (int)m->sort; list->descending = m->descending;
     du_set_text(list, "This folder is empty.");
     struct du_widget *address = W(a, W_ADDRESS);
-    if (du_focused(a->ui) != W_ADDRESS) du_set_text(address, m->path);
+    if (du_focused(a->ui) != W_ADDRESS) du_set_text(address, display);
+    address->icon = computer ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) : named("type:folder", 16);
     uint64_t bytes = 0; unsigned selected = fm_selected(m, &bytes), selected_files = 0;
     for (unsigned i = 0; i < count; i++) selected_files += m->entries[i].selected && m->entries[i].meta.type == FM_FILE;
     char size[48] = "", left[200];
@@ -385,23 +411,28 @@ void files_update(struct files_app *a)
     if (a->note[0]) snprintf(left, sizeof(left), "%s", a->note);
     else if (selected) snprintf(left, sizeof(left), "%u object(s) selected", selected);
     else snprintf(left, sizeof(left), "%u object(s)", count);
-    snprintf(W(a, W_STATUS)->text, DU_TEXT_MAX, "%s\t%s\t%s", left, size, location(a));
-    int root = !strcmp(m->path, "/");
+    snprintf(W(a, W_STATUS)->text, DU_TEXT_MAX, "%s\t%s\t%.*s", left, size, DU_TEXT_MAX - 252, display);
+    int root = computer;
     W(a, C_BACK)->disabled = !m->history_at;
     W(a, C_FORWARD)->disabled = m->history_at + 1 >= m->history_count;
     W(a, C_UP)->disabled = (uint8_t)root;
-    W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = W(a, C_DELETE)->disabled = !selected;
-    W(a, C_PASTE)->disabled = !m->clipboard_count;
+    W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = W(a, C_DELETE)->disabled = computer || !selected;
+    W(a, C_PASTE)->disabled = computer || !m->clipboard_count;
+    W(a, C_PROPERTIES)->disabled = (uint8_t)computer;
     set_flag(a->file_items, 11, C_OPEN, DU_ITEM_DISABLED, !selected);
-    set_flag(a->file_items, 11, C_OPEN_NOTE, DU_ITEM_DISABLED, !selected);
-    set_flag(a->file_items, 11, C_DELETE, DU_ITEM_DISABLED, !selected);
-    set_flag(a->file_items, 11, C_RENAME, DU_ITEM_DISABLED, selected != 1);
-    set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, !selected);
-    set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, !selected);
-    set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, !m->clipboard_count);
-    set_flag(a->go_items, 9, C_BACK, DU_ITEM_DISABLED, !m->history_at);
-    set_flag(a->go_items, 9, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
-    set_flag(a->go_items, 9, C_UP, DU_ITEM_DISABLED, root);
+    set_flag(a->file_items, 11, C_OPEN_NOTE, DU_ITEM_DISABLED, computer || !selected);
+    set_flag(a->file_items, 11, C_DELETE, DU_ITEM_DISABLED, computer || !selected);
+    set_flag(a->file_items, 11, C_RENAME, DU_ITEM_DISABLED, computer || selected != 1);
+    set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, computer);
+    set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, computer);
+    set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, computer);
+    set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || !selected);
+    set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || !selected);
+    set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || !m->clipboard_count);
+    set_flag(a->go_items, 11, C_BACK, DU_ITEM_DISABLED, !m->history_at);
+    set_flag(a->go_items, 11, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
+    set_flag(a->go_items, 11, C_UP, DU_ITEM_DISABLED, root);
+    set_flag(a->go_items, 11, C_GO_GAMES, DU_ITEM_DISABLED, a->place_count < 5);
     set_flag(a->view_items, 10, C_ICONS, DU_ITEM_CHECKED, list->view == DU_ICONS);
     set_flag(a->view_items, 10, C_LIST, DU_ITEM_CHECKED, list->view == DU_LIST);
     set_flag(a->view_items, 10, C_DETAILS, DU_ITEM_CHECKED, list->view == DU_DETAILS);
@@ -429,14 +460,8 @@ static void rename_start(struct files_app *a, unsigned index, int is_new)
 {
     if (index >= a->model.count) return;
     struct du_widget *list = W(a, W_LIST), *edit = W(a, W_RENAME);
-    list->active = index; du_list_ensure(list, index);
-    struct du_rect label = du_list_label(list, index), body = du_list_body(list);
-    int width = label.w + 30; if (width < 110) width = 110;
-    int x = label.x - 1;
-    if (list->view == DU_ICONS) { width = 96; x = label.x + label.w / 2 - width / 2; }
-    if (x + width > body.x + body.w) width = body.x + body.w - x;
-    if (x < body.x) x = body.x;
-    edit->box = (struct du_rect){x, label.y - 2, width, 19};
+    list->active = index;
+    edit->box = rename_box(list, index);
     edit->def = 1; edit->hidden = 0;
     du_set_text(edit, a->model.entries[index].name);
     edit->anchor = 0;
@@ -511,7 +536,8 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
     if (index >= a->model.count) return;
     struct fm_entry *e = &a->model.entries[index];
     char path[FM_PATH];
-    if (fm_join(path, a->model.path, e->name)) return;
+    if (!a->model.path[0] && with_note) return;
+    if (fm_entry_path(&a->model, index, path)) return;
     if (e->meta.type == FM_DIR && !with_note) { files_navigate(a, path); return; }
     enum fm_kind kind = fm_kind(e);
     if (e->meta.exec && !with_note) {
@@ -523,21 +549,21 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
     }
     if (with_note || kind == FM_KIND_TEXT || kind == FM_KIND_SCRIPT) {
         struct fm_meta meta;
-        if (a->model.fs.stat_path(a->model.fs.ctx, "/bin/ciuknote", &meta) || meta.type != FM_FILE) {
-            du_message(a->ui, D_INFO, "Files", "CiukNote is not installed.\nText files open in /bin/ciuknote once it is available.",
+        if (a->model.fs.stat_path(a->model.fs.ctx, "/Programs/ciuknote", &meta) || meta.type != FM_FILE) {
+            du_message(a->ui, D_INFO, "Files", "CiukNote is not installed.\nText files open in /Programs/ciuknote once it is available.",
                        DU_DLG_ICON_INFO, NULL, 0, 0, 0);
             return;
         }
         char *argv[] = {"ciuknote", path, NULL};
-        int r = spawn(a, "/bin/ciuknote", argv);
+        int r = spawn(a, "/Programs/ciuknote", argv);
         if (r < 0) error_box(a, "Files", "Cannot start CiukNote:", r);
         return;
     }
     if (kind == FM_KIND_IMAGE) {   /* pictures open in the Image Viewer (legacy recovery) */
         struct fm_meta meta;
-        if (!a->model.fs.stat_path(a->model.fs.ctx, "/bin/viewer", &meta) && meta.type == FM_FILE) {
+        if (!a->model.fs.stat_path(a->model.fs.ctx, "/Programs/viewer", &meta) && meta.type == FM_FILE) {
             char *argv[] = {"viewer", path, NULL};
-            int r = spawn(a, "/bin/viewer", argv);
+            int r = spawn(a, "/Programs/viewer", argv);
             if (r < 0) error_box(a, "Files", "Cannot start the Image Viewer:", r);
             return;
         }
@@ -592,6 +618,8 @@ static void properties_dialog(struct files_app *a)
     a->model.fs.stat_path(a->model.fs.ctx, path, &meta);
     files_size_text(size, sizeof(size), j->bytes); group(g, sizeof(g), j->bytes);
     fm_parent(parent, path);
+    if (j->count == 1 && fm_drive_root(path)) strcpy(parent, path);
+    fm_display_path(parent, parent);
     const uint32_t *icon = named("type:folder", 32);
     if (j->count == 1) {
         struct fm_entry e; memset(&e, 0, sizeof(e)); snprintf(e.name, sizeof(e.name), "%s", fm_basename(path)); e.meta = meta;
@@ -602,13 +630,13 @@ static void properties_dialog(struct files_app *a)
     if (j->folders || meta.type == FM_DIR || j->count > 1)
         snprintf(contains, sizeof(contains), "\nContains:\t%llu Files, %llu Folders", (unsigned long long)j->files, (unsigned long long)j->folders);
     char name[FM_NAME + 32];
-    if (j->count == 1) snprintf(name, sizeof(name), "%s", !strcmp(path, "/") ? "CiukiOS (/)" : fm_basename(path));
+    if (j->count == 1) snprintf(name, sizeof(name), "%s", fm_drive_root(path) ? parent : fm_basename(path));
     else snprintf(name, sizeof(name), "%u items", j->count);
     snprintf(text, sizeof(text), "%.200s\n---\nType:\t%s\nLocation:\t%.200s\nSize:\t%s (%s bytes)%s\n---\nModified:\t%s\nAttributes:\t%s",
-             name, type, j->count == 1 && strcmp(path, "/") ? parent : a->model.path, size, g, contains,
+             name, type, parent, size, g, contains,
              when[0] ? when : "-", meta.mode & 0200 ? "(none)" : "Read-only");
     char title[FM_NAME + 32];
-    snprintf(title, sizeof(title), "%.60s Properties", j->count == 1 ? (!strcmp(path, "/") ? "CiukiOS" : fm_basename(path)) : "Selection");
+    snprintf(title, sizeof(title), "%.60s Properties", j->count == 1 ? (fm_drive_root(path) ? parent : fm_basename(path)) : "Selection");
     du_message(a->ui, D_PROPERTIES, title, text, DU_DLG_ICON_INFO, NULL, 0, 0, 0);
     du_dialog_icon(a->ui, icon);
 }
@@ -763,6 +791,9 @@ static void create(struct files_app *a, int folder)
 
 static void popup_add(struct files_app *a, const char *label, int id, unsigned flags)
 {
+    if (!a->model.path[0] && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
+        id == C_PASTE_INTO || id == C_DELETE || id == C_RENAME || id == C_PROPERTIES || id == C_NEW_FOLDER || id == C_NEW_TEXT))
+        flags |= DU_ITEM_DISABLED;
     if (a->popup_count < sizeof(a->popup) / sizeof(a->popup[0]))
         a->popup[a->popup_count++] = (struct du_menu_item){label, id, 0, 0, flags};
 }
@@ -840,12 +871,16 @@ static void command(struct files_app *a, int id)
     m->find_length = 0;
     if (a->rename_index >= 0 && id != C_RENAME) rename_commit(a);
     if (du_dialog_id(a->ui)) return;
+    if (!m->path[0] && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
+        id == C_PASTE_INTO || id == C_DELETE || id == C_RENAME || id == C_PROPERTIES || id == C_NEW_FOLDER || id == C_NEW_TEXT)) return;
     switch (id) {
     case C_BACK: after_history(a, fm_history(m, -1)); break;
     case C_FORWARD: after_history(a, fm_history(m, 1)); break;
-    case C_UP: if (strcmp(m->path, "/")) { char p[FM_PATH]; fm_parent(p, m->path); files_navigate(a, p); } break;
-    case C_GO_ROOT: files_navigate(a, "/"); break;
-    case C_GO_BIN: files_navigate(a, "/bin"); break;
+    case C_UP: after_history(a, fm_up(m)); if (fm_same_path(m->path, "/system")) checkpoint(a, 1); break;
+    case C_GO_ROOT: files_navigate(a, FM_COMPUTER); break;
+    case C_GO_BIN: files_navigate(a, "/Programs"); break;
+    case C_GO_DOCUMENTS: files_navigate(a, "/Documents"); break;
+    case C_GO_GAMES: if (a->place_count == 5) files_navigate(a, "/Games"); break;
     case C_GO_SYSTEM: files_navigate(a, "/system"); break;
     case C_TREE_OPEN: files_update(a); break;
     case C_ADDRESS: { struct du_widget *e = W(a, W_ADDRESS); du_focus(a->ui, W_ADDRESS); e->anchor = 0; e->cursor = strlen(e->text); break; }
@@ -1018,7 +1053,7 @@ static void copy_menu(struct du_menu_item *dst, const struct du_menu_item *src, 
 
 int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, const char *path)
 {
-    a->ui = u; u->event = files_event; u->user = a;
+    a->ui = u; u->event = files_event; u->user = a; u->layout = resize_layout;
     a->width = u->canvas.width; a->height = u->canvas.height;
     a->rename_index = -1; a->split = a->width >= 700 ? 180 : 150;
     fm_init(&a->model, fs);
@@ -1026,11 +1061,11 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;
     copy_menu(a->file_items, file_template, 11); copy_menu(a->edit_items, edit_template, 6);
-    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 9); copy_menu(a->help_items, help_template, 3);
+    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 11); copy_menu(a->help_items, help_template, 3);
     a->menus[0] = (struct du_menu){"&File", a->file_items, 11};
     a->menus[1] = (struct du_menu){"&Edit", a->edit_items, 6};
     a->menus[2] = (struct du_menu){"&View", a->view_items, 10};
-    a->menus[3] = (struct du_menu){"&Go", a->go_items, 9};
+    a->menus[3] = (struct du_menu){"&Go", a->go_items, 11};
     a->menus[4] = (struct du_menu){"&Help", a->help_items, 3};
     u->menus = a->menus; u->menu_count = 5;
     struct du_rect zero = {0, 0, 0, 0};
@@ -1043,7 +1078,7 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     du_add(u, DU_SEPARATOR, W_TSEP1, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP2, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP3, zero, "");
     du_add(u, DU_SEPARATOR, W_BAND2, zero, "");
     du_add(u, DU_LABEL, W_ADDRESS_LABEL, zero, "A&ddress");
-    du_add(u, DU_EDIT, W_ADDRESS, zero, "/")->icon = named("type:folder", 16);
+    du_add(u, DU_EDIT, W_ADDRESS, zero, "Computer")->icon = named("place:computer", 16);
     du_add(u, DU_SEPARATOR, W_BAND3, zero, "");
     du_add(u, DU_HEADER, W_PLACES_HEADER, zero, "Places");
     struct du_widget *places = du_add(u, DU_TREE, W_PLACES, zero, "");
@@ -1064,9 +1099,9 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     places_build(a);
     files_layout(a);
     du_focus(u, W_LIST);
-    if (files_navigate(a, path && path[0] ? path : "/") && strcmp(path ? path : "/", "/")) {
+    if (files_navigate(a, path ? path : FM_COMPUTER)) {
         du_dialog_close(u);
-        files_navigate(a, "/");
+        if (files_navigate(a, FM_COMPUTER)) return -EIO;
     }
     return 0;
 }

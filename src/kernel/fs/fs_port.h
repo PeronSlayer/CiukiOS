@@ -44,7 +44,7 @@ static inline uint32_t fs_now_ms(void) {
 /* Task-context mutex: test/set with IF clear, waiters BLOCK on a kwait queue
  * (f1-18 rule). A yield-spin livelocked the boot: the P_DEVICE storage worker
  * draining the boot log yielded only to its own priority while the P_NORMAL
- * boot task held the VFS lock reading /bin/desktop (lead fix, 2026-10-11).
+ * boot task held the VFS lock reading /Programs/desktop (lead fix, 2026-10-11).
  * No filesystem entry point may run in an IRQ. The bounded wait guards a
  * missed wake-up, like the DOS VM disk gate. */
 typedef struct { bool held; struct kwait wait; } fs_lock;

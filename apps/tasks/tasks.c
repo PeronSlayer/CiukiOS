@@ -199,7 +199,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *ctx)
     case A_SWITCH: if (tv_window(v, m)) request(a, DESK_SWITCH_TO, tv_window(v, m)->id, 0, NULL); break;
     case A_END_TASK: end_task(a); break;
     case A_NEW: case M_NEW:
-        du_input_box(u, D_NEW, "Create New Task", "Type the name of a program in /bin, and CiukiOS\nwill open it for you.", "");
+        du_input_box(u, D_NEW, "Create New Task", "Type the name of a program in /Programs, and CiukiOS\nwill open it for you.", "");
         break;
     case A_END_PROCESS: confirm_end_process(a); break;
     case M_REFRESH: refresh(a); break;
@@ -226,7 +226,7 @@ int main(int argc, char **argv)
     if (!a) return 1;
     a->authority = authority; a->test = test;
     tm_init(&a->model);
-    if (du_window_open(&a->window, &a->ui, channel, TV_WIDTH, TV_HEIGHT, "Task Manager")) {
+    if (du_window_open_resizable(&a->window, &a->ui, channel, TV_WIDTH, TV_HEIGHT, "Task Manager", TV_WIDTH, TV_HEIGHT)) {
         fprintf(stderr, "tasks: desktop connection failed: %s\n", strerror(errno)); free(a); return 1;
     }
     a->window.message = on_message; a->window.user = a;

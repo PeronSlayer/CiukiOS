@@ -151,7 +151,7 @@ int ciuki_channel_pair(int pair[2]) {
 }
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
-    assert(!strcmp(path,"/bin/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") &&
+    assert(!strcmp(path,"/Programs/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") &&
         (normal_spawn ? !argv[3] : !strcmp(argv[3],"--test=crash-isolation")) && !argv[4]);
     assert(env && !strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !env[2] &&
         mapping && count==1 && mapping->target==3 && flags==CIUKI_SPAWN_NEW_GROUP);

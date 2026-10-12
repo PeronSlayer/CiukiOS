@@ -114,7 +114,7 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
      * display/input grants and the desktop endpoint keep their flags. */
     if (!fcntl(pair[1],F_SETFD,0)) {
         i = desk_add_client(d,pair[0]);
-        if (i >= 0) pid = ciuki_spawn("/bin/demo",argv,env,&mapping,1,CIUKI_SPAWN_NEW_GROUP);
+        if (i >= 0) pid = ciuki_spawn("/Programs/demo",argv,env,&mapping,1,CIUKI_SPAWN_NEW_GROUP);
         else errno = ENOSPC;
     }
     int error = errno;
@@ -129,12 +129,12 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
 static void scan_programs(struct desktop *d)
 {
     d->program_count=0;
-    DIR *dir=opendir("/bin");
+    DIR *dir=opendir("/Programs");
     if (!dir) { strcpy(d->notice,"Programs are unavailable"); return; }
     struct dirent *entry;
     while ((entry=readdir(dir))) {
-        char path[70];
-        int len=snprintf(path,sizeof(path),"/bin/%s",entry->d_name);
+        char path[sizeof(d->programs[0].path)];
+        int len=snprintf(path,sizeof(path),"/Programs/%s",entry->d_name);
         if (len<=0 || len>=(int)sizeof(path)) continue;
         struct stat st;
         if (stat(path,&st) || !S_ISREG(st.st_mode)) continue;
@@ -185,7 +185,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     snprintf(display,sizeof(display),"CIUKI_DISPLAY=%ux%u",(unsigned)d->width,(unsigned)d->height);
     char keymap[24];   /* the Control Panel's keyboard layout, for libdeskui programs */
     snprintf(keymap,sizeof(keymap),"CIUKI_KEYMAP=%s",cfg_keyboard_names[d->sh.cfg.keyboard==CFG_KEYS_IT ? CFG_KEYS_IT : CFG_KEYS_US]);
-    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",display,keymap,NULL};
+    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",display,keymap,NULL};
     struct ciuki_spawn_fd mapping[2]={{pair[1],3},{d->authority_fd,4}};
     uint32_t mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     if (!fcntl(pair[1],F_SETFD,0)) {
@@ -362,7 +362,7 @@ static void system_read(struct desktop *d)
 }
 static int run_command(struct desktop *d, char *line)
 {
-    /* "name arg..." or "/bin/name arg...": spaces separate, double quotes group. */
+    /* "name arg..." or "/Programs/name arg...": spaces separate, double quotes group. */
     char *words[8]; unsigned count=0;
     for (char *p=line; *p && count<8;) {
         while (*p==' ') p++;
@@ -372,7 +372,7 @@ static int run_command(struct desktop *d, char *line)
         if (*p) *p++=0;
     }
     if (!count) return 0;
-    const char *name=!strncmp(words[0],"/bin/",5) ? words[0]+5 : words[0];
+    const char *name=!strncmp(words[0],"/Programs/",sizeof("/Programs/")-1) ? words[0]+sizeof("/Programs/")-1 : words[0];
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
         for (unsigned a=0; a<6; a++) d->launch_argv[a]=a+1<count ? words[a+1] : NULL;
         int pid=d->launch ? d->launch(d,&d->programs[k]) : -1;
@@ -385,7 +385,7 @@ static int run_command(struct desktop *d, char *line)
         return pid;
     }
     char text[200];
-    snprintf(text,sizeof(text),"CiukiOS cannot find '%.60s'.\nType the name of a program in /bin.",words[0]);
+    snprintf(text,sizeof(text),"CiukiOS cannot find '%.60s'.\nType the name of a program in /Programs.",words[0]);
     desk_shell_message(d,"Run",text,1);
     return -1;
 }
@@ -451,8 +451,11 @@ static void shell_setup(struct desktop *d, int gate)
     d->sh.gate=gate;
     if (!gate) settings_load(d);
     desk_shell_enable(d);
-    if (!gate) { wallpaper_load(d); mixer_read(d); system_read(d); }
-    else desk_shell_wallpaper_update(d);
+    /* The first frame shows the desktop colour, bars and icons at once; the
+     * image wallpaper (the default Ciuk2 PNG takes seconds to decode under
+     * TCG) is loaded two loop iterations later (lead fix, 2026-10-12). */
+    if (!gate) { d->sh.wallpaper_deferred=2; mixer_read(d); system_read(d); }
+    desk_shell_wallpaper_update(d);
 }
 int main(int argc, char **argv)
 {
@@ -502,12 +505,12 @@ int main(int argc, char **argv)
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (!gate) shell_setup(d,0);
-    /* f3-02: --launch=<name> starts one /bin menu program through the same
-     * path as a menu click (the f3:vm-window probe opens /bin/dosbox so). */
+    /* f3-02: --launch=<name> starts one /Programs menu program through the same
+     * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
     if (launch && !gate) {
         d->action=-2;
         for (unsigned i=0; i<d->program_count; i++) if (!strcmp(d->programs[i].name,launch)) d->action=(int)i;
-        if (d->action<0) { d->action=-1; snprintf(d->notice,sizeof(d->notice),"%.40s is not in /bin",launch); }
+        if (d->action<0) { d->action=-1; snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",launch); }
     }
     /* The ABI has no timed input read or poll/select. A bounded nonblocking
      * drain followed by an interruptible 10 ms sleep keeps IPC/time moving. */
@@ -534,6 +537,7 @@ int main(int argc, char **argv)
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
+        if (d->shell && d->sh.wallpaper_deferred && !--d->sh.wallpaper_deferred) wallpaper_load(d);
         /* The shell follows the theme key of DESK_SETTINGS_PATH (gates keep the default). */
         if (d->shell && !gate && desk_theme_poll(DESK_SETTINGS_PATH,now)) {
             desk_theme_changed(d); d->sh.wall_valid=0; desk_shell_wallpaper_update(d);   /* theme colours in the wallpaper */

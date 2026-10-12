@@ -9,7 +9,7 @@
 int du_recent_file(char *out, size_t cap)
 {
     const char *home = getenv("HOME");
-    if (!home || home[0] != '/') home = "/home";
+    if (!home || home[0] != '/') home = "/Documents";
     int n = snprintf(out, cap, "%s%s%s", home, home[strlen(home) - 1] == '/' ? "" : "/", DU_RECENT_FILE);
     return n > 0 && (size_t)n < cap ? 0 : -1;
 }

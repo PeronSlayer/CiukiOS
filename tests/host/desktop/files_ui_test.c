@@ -46,7 +46,7 @@ static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock
 static void on_checkpoint(struct files_app *a, int stage) { (void)a; checkpoints[checkpoint_count++] = stage; }
 static void on_close(struct files_app *a) { (void)a; closed = 1; }
 static int spawned;
-static int on_spawn(struct files_app *a, const char *program, char *const argv[]) { (void)a; (void)argv; spawned++; return strcmp(program, "/bin/hello") ? -2 : 77; }
+static int on_spawn(struct files_app *a, const char *program, char *const argv[]) { (void)a; (void)argv; spawned++; return strcmp(program, "/Programs/hello") ? -2 : 77; }
 static int portrait(uint32_t *p)
 {
     if (!portrait_path) return -1;
@@ -58,6 +58,83 @@ static int list_row_y(struct du_widget *list, unsigned index) { struct du_rect r
 static int list_find(const char *name)
 { for (unsigned i = 0; i < app.model.count; i++) if (!strcmp(app.model.entries[i].name, name)) return (int)i; return -1; }
 
+static void type(const char *text)
+{
+    static const unsigned char letters[] = {
+        0x1e, 0x30, 0x2e, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32,
+        0x31, 0x18, 0x19, 0x10, 0x13, 0x1f, 0x14, 0x16, 0x2f, 0x11, 0x2d, 0x15, 0x2c
+    };
+    for (; *text; text++) {
+        unsigned c = (unsigned char)*text, code; int shift = 0;
+        if (c >= 'A' && c <= 'Z') { shift = 1; c += 'a' - 'A'; }
+        if (c >= 'a' && c <= 'z') code = letters[c - 'a'];
+        else if (c == ':') { shift = 1; code = 0x27; }
+        else if (c == '\\') code = 0x2b;
+        else if (c == '/') code = 0x35;
+        else if (c == ' ') code = 0x39;
+        else { assert(!"unmapped character"); code = 0; }
+        if (shift) chord(DU_KEY_LSHIFT, (int)code); else key((int)code);
+    }
+}
+static void address(const char *text)
+{ chord(DU_KEY_LALT, 0x20); type(text); key(DU_KEY_ENTER); }
+static void activate(int id)
+{ struct du_event e = {.type = DU_EV_ACTIVATE, .id = id}; files_event(&ui, &e, &app); }
+
+static void computer_ui_tests(void)
+{
+    fake_image_tree(); memset(&app, 0, sizeof(app));
+    du_init(&ui, pixels, WIDTH, HEIGHT); app.portrait = portrait;
+    assert(!files_setup(&app, &ui, &fake_vfs, NULL));
+    assert(!app.model.path[0] && app.model.count == 1 && app.place_count == 5);
+    assert(!strcmp(du_get(&ui, 100)->text, "Computer"));
+    fm_select(&app.model, 0, 0); files_update(&app);
+    assert(app.rows[0].icon16 && app.rows[0].icon32 && !strcmp(app.rows[0].text[2], "Disk Drive"));
+    assert(du_get(&ui, 3)->disabled && du_get(&ui, 4)->disabled && du_get(&ui, 7)->disabled && du_get(&ui, 8)->disabled);
+    int operations = fake_operations;
+    const int forbidden[] = {4, 5, 6, 7, 8, 11, 12, 13, 14, 32};
+    for (unsigned i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); i++) activate(forbidden[i]);
+    assert(fake_operations == operations && !app.job_active && !ui.dialog.kind && app.rename_index < 0);
+    rclick(du_get(&ui, 107)->box.x + 30, list_row_y(du_get(&ui, 107), 0));
+    for (unsigned i = 0; i < app.popup_count; i++)
+        if (app.popup[i].id == 7 || app.popup[i].id == 14 || app.popup[i].id == 8) assert(app.popup[i].flags & DU_ITEM_DISABLED);
+    key(DU_KEY_ESC); key(DU_KEY_ENTER);
+    assert(!strcmp(app.model.path, "/") && !strcmp(du_get(&ui, 100)->text, "C:\\"));
+    key(DU_KEY_BACKSPACE); assert(!app.model.path[0]);
+    address("C:\\Programs\\"); assert(!strcmp(app.model.path, "/Programs"));
+    assert(!strcmp(du_get(&ui, 100)->text, "C:\\Programs") && strstr(du_get(&ui, 108)->text, "C:\\Programs"));
+    address("/Documents/"); assert(!strcmp(app.model.path, "/Documents"));
+    struct du_widget *places = du_get(&ui, 103);
+    for (unsigned i = 0; i < app.place_count; i++) {
+        struct du_rect r = du_list_label(places, i);
+        click(r.x + r.w / 2, r.y + r.h / 2);
+        assert(fm_same_path(app.model.path, app.places[i].path));
+        assert(app.place_items[i].icon16);
+    }
+    fake_create("/mnt/d", FM_DIR); fake_create("/mnt/d/Games", FM_DIR); fake_create("/mnt/d/Games/tmp", FM_DIR);
+    assert(!files_navigate(&app, "Computer") && app.model.count == 2);
+    fm_select_none(&app.model); files_update(&app); dump("computer");
+    fm_select(&app.model, 1, 0); files_update(&app); du_focus(&ui, 107); key(DU_KEY_ENTER);
+    assert(!strcmp(app.model.path, "/mnt/d") && !strcmp(du_get(&ui, 100)->text, "D:\\"));
+    address("D:\\Games"); assert(!strcmp(app.model.path, "/mnt/d/Games") && list_find("tmp") >= 0);
+    activate(12); assert(app.rename_index >= 0); type("Created"); key(DU_KEY_ENTER);
+    assert(fake_lookup("/mnt/d/Games/Created") >= 0);
+    chord(DU_KEY_LALT, DU_KEY_ENTER); tick(); assert(strstr(ui.dialog.text, "D:\\Games")); key(DU_KEY_ENTER);
+    key(DU_KEY_DELETE); key(DU_KEY_ENTER); tick(); assert(fake_lookup("/mnt/d/Games/Created") < 0);
+    address("C:\\"); assert(app.model.count == 4);
+    for (unsigned i = 0; i < app.model.count; i++) assert(!fm_hidden("/", app.model.entries[i].name));
+    assert(!strcmp(app.tree[0].name, "Computer") && !strcmp(app.tree[1].name, "C:") && app.tree[1].depth == 1);
+    for (unsigned i = 0; i < app.tree_count; i++) if (app.tree[i].depth == 2) assert(!fm_hidden("/", app.tree[i].name));
+    fake_create("/.config", FM_DIR); activate(25); assert(list_find(".config") >= 0);
+    int dot=0; for (unsigned i = 0; i < app.tree_count; i++) dot |= !strcmp(app.tree[i].name, ".config");
+    assert(dot); fake_nodes[fake_lookup("/.config")].live=0; activate(25);
+    dump("c-drive");
+    fake_nodes[fake_lookup("/Games")].live = 0; activate(25);
+    assert(app.place_count == 4);
+    files_destroy(&app); fake_assert_clean();
+    puts("PASS Files Computer UI: drive open/Up, protected commands/menus, typed POSIX/drive addresses, Places, D: create/rename/properties/delete, hidden tree, optional Games");
+}
+
 /* Client-coordinate targets shared with the QEMU script (window at 4,36:
  * client origin 7,60). The Python test converts them to screen moves. */
 static void script_coordinates(void)
@@ -66,7 +143,7 @@ static void script_coordinates(void)
     struct du_rect vbox = du_menu_box(&ui, app.view_items, 10, view.x, view.y + view.h);
     struct du_rect fbox = du_menu_box(&ui, app.file_items, 11, file.x, file.y + file.h);
     struct du_widget *places = du_get(&ui, 103);
-    struct du_rect system = du_list_label(places, 2);
+    struct du_rect system = du_list_label(places, 3);
     printf("SCRIPT view_title=%d,%d list_item=%d,%d places_system=%d,%d file_title=%d,%d new_folder=%d,%d\n",
            view.x + view.w / 2, view.y + view.h / 2, vbox.x + 40, vbox.y + 3 + DU_MENU_ITEM_H + DU_MENU_ITEM_H / 2,
            system.x + system.w / 2, system.y + system.h / 2, file.x + file.w / 2, file.y + file.h / 2,
@@ -83,7 +160,7 @@ int main(int argc, char **argv)
     du_init(&ui, pixels, WIDTH, HEIGHT);
     app.test = 1; app.checkpoint = on_checkpoint; app.close = on_close; app.spawn = on_spawn; app.portrait = portrait;
     assert(!files_setup(&app, &ui, &fake_vfs, "/"));
-    assert(!strcmp(app.model.path, "/") && app.model.count == 2);
+    assert(!strcmp(app.model.path, "/") && app.model.count == 4);
     dump("root-details");
     script_coordinates();
 
@@ -98,9 +175,9 @@ int main(int argc, char **argv)
 
     /* Places > System: checkpoint 1. */
     struct du_widget *places = du_get(&ui, 103);
-    struct du_rect system = du_list_label(places, 2);
+    struct du_rect system = du_list_label(places, 3);
     click(system.x + system.w / 2, system.y + system.h / 2);
-    assert(!strcmp(app.model.path, "/system") && checkpoint_count == 1 && checkpoints[0] == 1);
+    assert(fm_same_path(app.model.path, "/system") && checkpoint_count == 1 && checkpoints[0] == 1);
     dump("cp1-system");
 
     /* File > New Folder: checkpoint 2, inline rename open. */
@@ -121,7 +198,7 @@ int main(int argc, char **argv)
     key(0x30); assert(!strcmp(app.model.entries[app.model.active].name, "BOOT.CFG"));
     chord(DU_KEY_LCTRL, 0x2e); assert(app.model.clipboard_count == 1);
     key(0x2e); assert(!strcmp(app.model.entries[app.model.active].name, "Ciuki"));
-    key(DU_KEY_ENTER); assert(!strcmp(app.model.path, "/system/Ciuki") && app.model.count == 0);
+    key(DU_KEY_ENTER); assert(fm_same_path(app.model.path, "/system/Ciuki") && app.model.count == 0);
     chord(DU_KEY_LCTRL, 0x2f); assert(app.job_active);
     dump("copy-progress");
     tick();
@@ -138,7 +215,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < 5; i++) assert(checkpoints[i] == i + 1);
 
     /* Backspace goes up and selects the folder that was left. */
-    key(DU_KEY_BACKSPACE); assert(!strcmp(app.model.path, "/system") && !strcmp(app.model.entries[app.model.active].name, "Ciuki"));
+    key(DU_KEY_BACKSPACE); assert(fm_same_path(app.model.path, "/system") && !strcmp(app.model.entries[app.model.active].name, "Ciuki"));
 
     /* Views, sorting, selection keys. */
     click(du_get(&ui, 9)->box.x + 10, du_get(&ui, 9)->box.y + 10);
@@ -211,14 +288,16 @@ int main(int argc, char **argv)
     struct du_widget *tree = du_get(&ui, 105);
     dump("tree");
     chord(DU_KEY_LALT, 0x20); assert(du_focused(&ui) == 100);
-    const char *bin = "/bin";
-    for (const char *p = bin; *p; p++) {
-        static const unsigned char map[128] = {['/'] = 0x35, ['b'] = 0x30, ['i'] = 0x17, ['n'] = 0x31};
-        key(map[(unsigned char)*p]);
+    const char *programs = "/Programs";
+    for (const char *p = programs; *p; p++) {
+        static const unsigned char map[128] = {['/'] = 0x35, ['p'] = 0x19, ['r'] = 0x13,
+            ['o'] = 0x18, ['g'] = 0x22, ['a'] = 0x1e, ['m'] = 0x32, ['s'] = 0x1f};
+        if (*p >= 'A' && *p <= 'Z') chord(DU_KEY_LSHIFT, map[(unsigned char)(*p - 'A' + 'a')]);
+        else key(map[(unsigned char)*p]);
     }
-    key(DU_KEY_ENTER); assert(!strcmp(app.model.path, "/bin") && app.model.count == 6);
+    key(DU_KEY_ENTER); assert(!strcmp(app.model.path, "/Programs") && app.model.count == 6);
     assert(tree->count >= 3);
-    dump("bin-icons");
+    dump("programs-icons");
     int hello = list_find("hello");
     app.model.active = (unsigned)hello; fm_select(&app.model, (unsigned)hello, 0); files_update(&app);
     key(DU_KEY_ENTER); assert(spawned == 1);
@@ -242,6 +321,7 @@ int main(int argc, char **argv)
     chord(DU_KEY_LALT, DU_KEY_F4); assert(closed);
     files_destroy(&app);
     fake_assert_clean();
+    computer_ui_tests();
     free(pixels);
     puts("PASS Files UI: script checkpoints 1-5, views, sorting, selection, context menus, properties, replace, Copy of, rename errors, tree, address, open, help/about");
     return 0;

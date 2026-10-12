@@ -54,3 +54,17 @@ currently collapses (windowshade).
 replays included), `tests/host/test_desktop_gate.py` and `test_normal_boot.py`
 PASS; a host render (compositor capture) of Files at two sizes; QEMU
 `f2-desktop` cases unchanged; the lead checks resizing by hand on QEMU.
+
+## Lead decision 2026-10-12 (addendum after the first Codex report)
+
+Codex reported that live resizing is blocked: `src/kernel/proc/surface.c` (`surface_attachment`, `surface_map`) gives every received surface read-only rights, as the F2 window contract requires ("transferred surface descriptions MUST have read-only mapping rights"), so the desktop cannot hand a client a writable replacement surface.
+
+Decision: **client allocation**, no kernel or ABI change.
+
+1. On a CONFIGURE with a new size, the client (toolkit path, `du_resize`) allocates a new surface of the new size and the same pixel format, lays out and repaints its tree into it, and sends that surface as the attachment of the acknowledgement the protocol already defines for CONFIGURE (the first PRESENT/DAMAGE after it, carrying the configure serial).
+2. The desktop keeps compositing the old surface until that message arrives; on arrival it maps the attachment read-only, swaps it under the window atomically, drops its reference to the old surface and repaints the window plus the exposed desktop area.
+3. The client never draws into the old surface after sending the swap message and releases it once the desktop's next message for that window confirms the new size (no new ABI: the existing CONFIGURE/PRESENT round trip).
+4. Memory bound: at most one pending replacement per window; a CONFIGURE arriving while a replacement is pending supersedes it (the pending surface is released unsent).
+5. Resize borders and corner, zoom to the work area, minimum sizes and the per-app relayout stay as specified above; the desktop never allocates on the client's behalf.
+
+Acceptance (host): the replay harness shows a Files window resized twice with the correct frame content after each swap and the surface counts back to baseline afterwards; `deskui_test` covers a CONFIGURE superseding a pending replacement; `docs/desktop.md` records this reading of the ABI. Same constraints as above (no QEMU, no commits, no diary).
