@@ -40,6 +40,28 @@ static uint64_t codec_deadline(struct ac97_device *d, uint64_t limit)
     uint64_t deadline = d->io.now(d->io.cookie) + 100;
     return (int64_t)(deadline - limit) > 0 ? limit : deadline;
 }
+int ac97_controller_reset(struct ac97_device *d)
+{
+    uint64_t limit = operation_deadline(d);
+    /* Caller proved idle audio engines and excluded a modem dependency.
+     * Cold Reset# is active low. 1 ms exceeds the specified 1 us pulse. */
+    wr(d, 0x2c, 0, 4);
+    if (rd(d, 0x2c, 4) & 2) return -EIO;
+    d->io.sleep(d->io.cookie, 1);
+    if (expired(d, limit)) return -ETIMEDOUT;
+    wr(d, 0x2c, 2, 4); /* stereo, link on; no resume/GPI IRQs */
+    if (rd(d, 0x2c, 4) != 2) return -EIO;
+    do {
+        d->global_status = rd(d, 0x30, 4);
+        if (d->global_status == UINT32_MAX) return -EIO;
+        if (d->global_status & 0x100) {
+            wr(d, 0x30, 1u << 15, 4); /* stale read timeout, isolated W1C */
+            return 0;
+        }
+        d->io.sleep(d->io.cookie, 1);
+    } while (!expired(d, limit));
+    return -ETIMEDOUT;
+}
 static int cas(struct ac97_device *d, uint64_t deadline)
 {
     while (!expired(d, deadline)) {
@@ -57,7 +79,14 @@ int ac97_codec_read(struct ac97_device *d, uint16_t reg, uint16_t *out, uint64_t
     if (err) return err;
     *out = (uint16_t)d->io.read(d->io.cookie, d->nam + reg, 2);
     if (*out == 0xffff || (rd(d, 0x30, 4) & (1u << 15))) return -EIO;
-    return expired(d, deadline) ? -ETIMEDOUT : 0;
+    if (expired(d, deadline)) return -ETIMEDOUT;
+    /* Diagnostics retain the last successful hardware read, including
+     * mismatches and restoration; never report a desired write as readback. */
+    if (reg == 0x26) d->power = *out;
+    else if (reg == 0x02) d->master = *out;
+    else if (reg == 0x18) d->pcm_volume = *out;
+    else if (reg == 0x2c) d->rate = *out;
+    return 0;
 }
 int ac97_codec_write(struct ac97_device *d, uint16_t reg, uint16_t value, uint64_t limit)
 {
@@ -69,60 +98,128 @@ int ac97_codec_write(struct ac97_device *d, uint16_t reg, uint16_t value, uint64
     err = ac97_codec_read(d, reg, &got, deadline);
     return err ? err : got != value ? -EIO : 0;
 }
-static int set_mute_until(struct ac97_device *d, bool mute, uint64_t limit)
+/* Read-only readiness bits must not participate in power/extended-control
+ * write verification. Volume controls get one bounded retry for sticky mute. */
+static int codec_update(struct ac97_device *d, uint16_t reg, uint16_t value,
+                        uint16_t mask, bool retry, uint64_t limit)
 {
-    uint16_t v = mute ? 0x8000 : 0;
-    int err = ac97_codec_write(d, 0x18, d->pcm_unity | v, limit);
-    if (!err) err = ac97_codec_write(d, 0x02, v, limit);
-    if (!err && (d->codec_caps & 0x10)) err = ac97_codec_write(d, 0x04, v, limit);
+    uint64_t deadline = codec_deadline(d, limit);
+    for (unsigned attempt = 0; attempt < (retry ? 2u : 1u); attempt++) {
+        int err = cas(d, deadline);
+        if (err) return err;
+        d->io.write(d->io.cookie, d->nam + reg, value, 2);
+        uint16_t got;
+        err = ac97_codec_read(d, reg, &got, deadline);
+        if (err) return err;
+        if (!((got ^ value) & mask)) return 0;
+        if (!attempt && retry) d->io.sleep(d->io.cookie, 1);
+    }
+    return -EIO;
+}
+static unsigned attenuation(unsigned percent)
+{
+    /* Rounded 10000 * 10^(-1.5*n/20), the mandatory 5-bit AC'97 scale. */
+    static const uint16_t gain[32] = {10000,8414,7079,5957,5012,4217,3548,2985,
+        2512,2113,1778,1496,1259,1059,891,750,631,531,447,376,316,266,224,
+        188,158,133,112,94,79,67,56,47};
+    unsigned target = percent * 100, best = 0, distance = UINT32_MAX;
+    for (unsigned n = 0; n < 32; n++) {
+        unsigned diff = gain[n] > target ? gain[n] - target : target - gain[n];
+        if (diff < distance) { best = n; distance = diff; }
+    }
+    return best;
+}
+static int master_until(struct ac97_device *d, const struct ciuki_mixer_master *m, uint64_t limit)
+{
+    uint16_t mute = (m->mute || (!m->left && !m->right)) ? 0x8000 : 0;
+    uint16_t volume = mute;
+    if (!d->software_master) volume |= attenuation(m->left) << 8 | attenuation(m->right);
+    int err = codec_update(d, 0x18, d->pcm_unity | mute, 0x9f1f, true, limit);
+    if (!err) err = codec_update(d, 0x02, volume, 0x9f1f, true, limit);
+    if (!err && (d->codec_caps & 0x10)) err = codec_update(d, 0x04, volume, 0x9f1f, true, limit);
     return err;
 }
+int ac97_set_master(struct ac97_device *d, const struct ciuki_mixer_master *m)
+{
+    if (m->left > 100 || m->right > 100 || m->mute > 1) return -EINVAL;
+    return master_until(d, m, operation_deadline(d));
+}
 int ac97_set_mute(struct ac97_device *d, bool mute)
-{ return set_mute_until(d, mute, operation_deadline(d)); }
+{
+    struct ciuki_mixer_master m = audio.master; m.mute = mute;
+    return ac97_set_master(d, &m);
+}
 int ac97_codec_restore(struct ac97_device *d)
 {
     if (!d->codec_changed) return 0;
     uint64_t limit = operation_deadline(d);
-    int err = ac97_codec_write(d, 0x18, d->saved_pcm, limit);
-    if (!err) err = ac97_codec_write(d, 0x02, d->saved_master, limit);
-    if (!err && (d->codec_caps & 0x10)) err = ac97_codec_write(d, 0x04, d->saved_headphone, limit);
-    if (!err) err = ac97_codec_write(d, 0x2a, d->saved_ext, limit);
+    int err = codec_update(d, 0x18, d->saved_pcm, 0x9f1f, true, limit);
+    if (!err) err = codec_update(d, 0x02, d->saved_master, 0x9f1f, true, limit);
+    if (!err && (d->codec_caps & 0x10)) err = codec_update(d, 0x04, d->saved_headphone, 0x9f1f, true, limit);
+    if (!err && d->beep_present) err = codec_update(d, 0x0a, d->saved_beep, 0x801e, true, limit);
+    if (!err && d->cirrus_spdif) err = ac97_codec_write(d, 0x68, d->saved_spdif, limit);
+    if (!err) err = codec_update(d, 0x2a, d->saved_ext, 0x000f, false, limit);
     if (!err && (d->saved_ext & 1)) err = ac97_codec_write(d, 0x2c, d->saved_rate, limit);
+    if (!err) err = codec_update(d, 0x26, d->saved_power & 0xff00, 0xff00, false, limit);
     if (!err) d->codec_changed = false;
     return err;
 }
 int ac97_codec_prepare(struct ac97_device *d)
 {
     uint64_t limit = operation_deadline(d);
-    while (!(rd(d, 0x30, 4) & 0x100)) {
+    while (!((d->global_status = rd(d, 0x30, 4)) & 0x100)) {
         if (expired(d, limit)) return -ETIMEDOUT;
         d->io.sleep(d->io.cookie, 1);
     }
-    uint16_t id1, id2, power, ext;
+    if (d->global_status == UINT32_MAX) return -EIO;
+    uint16_t id1, id2, ext;
     int err = ac97_codec_read(d, 0x7c, &id1, limit);
     if (!err) err = ac97_codec_read(d, 0x7e, &id2, limit);
     if (!err && (!id1 || !id2)) err = -EIO;
-    if (!err) err = ac97_codec_read(d, 0, &d->codec_caps, limit);
-    if (!err) err = ac97_codec_read(d, 0x26, &power, limit);
-    /* DAC, analog mixer and reference must already be powered; no guessed
-     * firmware/modem power/reset sequence is authorized. */
-    if (!err && (power & 0xe) != 0xe) err = -ENODEV;
+    if (err) return err;
+    d->codec_id = (uint32_t)id1 << 16 | id2;
+    err = ac97_codec_read(d, 0, &d->codec_caps, limit);
+    if (!err) err = ac97_codec_read(d, 0x26, &d->power, limit);
+    if (err) return err;
+    d->saved_power = d->power;
+    /* Power control has RO ready bits; EAPD=0 enables the external amp.
+     * No guessed vendor amplifier polarity/registers. */
+    d->codec_changed = true;
+    err = codec_update(d, 0x26, 0, 0xff00, false, limit);
+    while (!err) {
+        err = ac97_codec_read(d, 0x26, &d->power, limit);
+        if (err || (d->power & 0xf) == 0xf) break;
+        if (expired(d, limit)) { err = -ETIMEDOUT; break; }
+        d->io.sleep(d->io.cookie, 1);
+    }
+    /* Mixer snapshots are meaningful only once analog sections are ready.
+     * A power failure cannot safely restore an incomplete mixer snapshot. */
+    if (err) { d->quarantine = true; return err; }
     if (!err) err = ac97_codec_read(d, 0x28, &ext, limit);
     if (!err) err = ac97_codec_read(d, 0x02, &d->saved_master, limit);
     if (!err) err = ac97_codec_read(d, 0x18, &d->saved_pcm, limit);
     if (!err && (d->codec_caps & 0x10)) err = ac97_codec_read(d, 0x04, &d->saved_headphone, limit);
     if (!err) err = ac97_codec_read(d, 0x2a, &d->saved_ext, limit);
     if (!err) err = ac97_codec_read(d, 0x2c, &d->saved_rate, limit);
-    if (err) return err;
-    d->codec_id = (uint32_t)id1 << 16 | id2;
-    d->codec_changed = true;
-    /* Fixed 48 kHz needs no VRA. Clear VRA only with verified readback,
-     * preserving the other AC-link clients' extended control fields. */
-    if (ext & 1) err = ac97_codec_write(d, 0x2a, d->saved_ext & ~1u, limit);
-    uint16_t rate;
-    if (!err) err = ac97_codec_read(d, 0x2c, &rate, limit);
-    if (!err && rate != AUDIO_RATE) err = -EIO;
-    if (!err) err = set_mute_until(d, audio.master.mute != 0, limit);
+    /* PC beep is optional; ffff/absent is not a playback failure. */
+    if (!err) {
+        int beep = ac97_codec_read(d, 0x0a, &d->saved_beep, limit);
+        if (beep && (beep != -EIO || d->saved_beep != 0xffff)) err = beep;
+        else if (beep && (rd(d, 0x30, 4) & (1u << 15))) wr(d, 0x30, 1u << 15, 4);
+        else d->beep_present = !beep && d->saved_beep != 0;
+    }
+    d->cirrus_spdif = (d->codec_id & 0xfffffff8u) == 0x43525930;
+    if (!err && d->cirrus_spdif) err = ac97_codec_read(d, 0x68, &d->saved_spdif, limit);
+    if (err) { d->quarantine = true; return err; }
+    uint16_t control = d->saved_ext & ~0x000fu; /* VRA/DRA/S/PDIF/VRM */
+    if (ext & 1) control |= 1;
+    err = codec_update(d, 0x2a, control, 0x000f, false, limit);
+    if (!err && (ext & 1)) err = ac97_codec_write(d, 0x2c, AUDIO_RATE, limit);
+    if (!err) err = ac97_codec_read(d, 0x2c, &d->rate, limit);
+    if (!err && d->rate != AUDIO_RATE) err = -EIO;
+    if (!err && d->cirrus_spdif) err = ac97_codec_write(d, 0x68, d->saved_spdif & ~0x8000u, limit);
+    if (!err && d->beep_present) err = codec_update(d, 0x0a, 0, 0x801e, true, limit);
+    if (!err) err = master_until(d, &audio.master, limit);
     if (err && ac97_codec_restore(d)) d->quarantine = true;
     return err;
 }
@@ -134,7 +231,7 @@ int ac97_observe(struct ac97_device *d, struct ac97_cursor *out)
             .remaining = rd(d, 0x18, 2), .piv = rd(d, 0x1a, 1) };
         if (civ == rd(d, 0x14, 1) && c.piv == rd(d, 0x1a, 1)) {
             if (c.civ >= 32 || c.piv >= 32 || c.remaining > 512 || c.status == 0xffff) return -EIO;
-            *out = c; return 0;
+            d->cursor = c; *out = c; return 0;
         }
     }
     return -EIO;
@@ -249,6 +346,7 @@ static bool controller_layout(struct ac97_device *d, uint32_t boot_flags)
     bool twin=(boot_flags & CBI_F_SMBIOS_QEMU) && p->device==0x2415;
     d->nam_bytes=twin?1024:256;d->nabm_bytes=twin?256:64;
     d->pcm_unity=twin?0:0x0808;
+    d->software_master=twin;
     uint32_t nam=p->bar[0]&~(uint32_t)(d->nam_bytes-1);
     uint32_t nabm=p->bar[1]&~(uint32_t)(d->nabm_bytes-1);
     if ((p->header_type & 0x7f) || !(p->bar[0]&1) || !(p->bar[1]&1) ||
@@ -276,6 +374,25 @@ static bool routed(const struct pci_func *p)
     }
     return false;
 }
+static bool modem_idle(struct ac97_device *d, const struct pci_func *peer)
+{
+    /* A PCI modem function is not proof of an active AC-link client. The
+     * Intel peer shares GLOB_CNT; cold reset is safe only with no running
+     * modem channel. These checks are read-only, before hardware takeover. */
+    if (peer->vendor != 0x8086 || peer->device != d->pci.device + 1u ||
+        peer->subclass != 3 || (peer->header_type & 0x7f)) return false;
+    if (!(peer->command & 5)) return true; /* decode and DMA both disabled */
+    uint32_t base = peer->bar[1] & ~0x7fu;
+    if (!(peer->command & 1) || !(peer->bar[1] & 1) || (peer->bar[1] & 0x7e) ||
+        !base || base > 0xff80) return false;
+    for (unsigned pass = 0; pass < 2; pass++) for (unsigned off = 0; off <= 0x10; off += 0x10) {
+        uint32_t control = d->io.read(d->io.cookie, base + off + 0xb, 1);
+        uint32_t status = d->io.read(d->io.cookie, base + off + 6, 2);
+        if (control == 0xff || status == 0xffff || (control & 1) || !(status & AC97_DCH) ||
+            (status & 0x1c)) return false;
+    }
+    return true;
+}
 static bool ac97_irq(unsigned irq, const char *owner)
 {
     (void)irq; (void)owner;
@@ -284,6 +401,7 @@ static bool ac97_irq(unsigned irq, const char *owner)
     uint16_t status = rd(&ac97, 0x16, 2);
     unsigned causes = status & 0x1c;
     if (!causes) return false;
+    ac97.irqs++;
     ac97.irq_cursor = (struct ac97_cursor){ .status=status, .civ=rd(&ac97, 0x14, 1),
         .piv=rd(&ac97, 0x1a, 1), .remaining=rd(&ac97, 0x18, 2) };
     if (causes & AC97_FIFOE) ac97.fifo_errors++;
@@ -355,7 +473,7 @@ int ac97_init(void)
     if (!routed(p)) { audio.reason = "routing_unqualified"; return -ENODEV; }
     for (unsigned i = 0; i < pci_count(); i++) {
         const struct pci_func *peer = pci_get(i);
-        if (peer->bus == p->bus && peer->dev == p->dev && peer->fn == 6 && peer->class_code == 7) {
+        if (peer->bus == p->bus && peer->dev == p->dev && peer->fn == 6 && peer->class_code == 7 && !modem_idle(d, peer)) {
             audio.reason = "aclink_dependency"; return -ENODEV;
         }
     }
@@ -405,7 +523,9 @@ int ac97_init(void)
         d->activation_deadline = d->io.now(d->io.cookie) + 500;
         d->touched = true;
         config_command(p, (p->command | 1) & ~4u); /* decode; no DMA before descriptors */
-        err = ac97_stop(d);
+        if ((config_read(p, 4) & 0xffff) != ((p->command | 1u) & ~4u)) err = -EIO;
+        if (!err) err = ac97_controller_reset(d);
+        if (!err) err = ac97_stop(d); /* BDBAR must follow cold reset */
         if (!err) err = ac97_codec_prepare(d);
         if (!err) {
             config_command(p, p->command | 5);

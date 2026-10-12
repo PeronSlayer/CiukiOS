@@ -30,12 +30,15 @@ struct ac97_device {
     gen_t claim_generation[12];
     uint64_t retired, published, frame_base, fetched, generation_fetched, last_progress;
     uint64_t activation_deadline;
-    uint64_t fifo_errors, dma_halts, deadline_misses;
+    uint64_t fifo_errors, dma_halts, deadline_misses, irqs;
+    uint32_t global_status;
+    uint16_t power, master, pcm_volume, rate;
+    struct ac97_cursor cursor;
     bool ready, running, stopping, quarantine, irq_attached, touched;
-    bool observed_halt, codec_changed;
+    bool observed_halt, codec_changed, software_master, beep_present, cirrus_spdif;
     bool idle_tail; /* no started source: silence cushion, halts not counted */
     bool tail_drained; /* progress proved DCH at the fully fetched last period */
-    uint16_t saved_master, saved_pcm, saved_headphone, saved_ext, saved_rate;
+    uint16_t saved_master, saved_pcm, saved_headphone, saved_ext, saved_rate, saved_power, saved_beep, saved_spdif;
 };
 extern struct ac97_device ac97;
 int ac97_init(void);
@@ -43,6 +46,8 @@ int ac97_codec_read(struct ac97_device *, uint16_t reg, uint16_t *value, uint64_
 int ac97_codec_write(struct ac97_device *, uint16_t reg, uint16_t value, uint64_t deadline);
 int ac97_codec_prepare(struct ac97_device *);
 int ac97_codec_restore(struct ac97_device *);
+int ac97_controller_reset(struct ac97_device *);
+int ac97_set_master(struct ac97_device *, const struct ciuki_mixer_master *);
 int ac97_set_mute(struct ac97_device *, bool mute);
 int ac97_observe(struct ac97_device *, struct ac97_cursor *);
 int ac97_progress(struct ac97_device *);

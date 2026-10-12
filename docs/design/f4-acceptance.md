@@ -1,5 +1,55 @@
 # F4 implementation and acceptance evidence
 
+## f4-08: physical AC'97 bring-up
+
+Directive: [T23 silence](../directives/f4-08-ac97-t23-silent.md). These
+decisions supersede f4-01's firmware-powered-codec prerequisite. Physical
+audibility remains for the lead's T23 `L` capture.
+
+- Intel [82801CAM ICH3-M, 290716-001](https://datasheet.lcsc.com/datasheet/pdf/7d520883a0f21f1845e4892c5243848a.pdf?productCode=C3247608),
+  sections 5.18.3 and 13.2.7–10: Cold Reset# is active low (GLOB_CNT bit 1).
+  Assert it for 1 ms, release it with the link on and stereo selected, then
+  wait only for primary-ready (GLOB_STA bit 8). No secondary codec is required.
+  Check idle engines before reset. Sections 14.1.11/14.2 describe the shared
+  modem: a disabled Intel peer or one with both modem engines stopped can
+  share the cold reset. Refuse active/unknown peers; never take over a modem.
+  Clear stale RCS with its isolated W1C bit. Program BDBAR after reset, publish
+  LVI after descriptors, and start with RPBM/IOCE/FEIE/LVBIE (1Dh).
+- Intel [AC'97 2.3](https://hands.com/~lkcl/ac97_r23.pdf), sections 5.7.2,
+  5.7.5, 5.7.11 and 5.8: codec-ready alone does not prove analog readiness. Clear
+  PR0–PR6 and EAPD in 26h, compare writable bits separately, and wait for
+  REF/ANL/DAC/ADC (000Fh) before writing volume controls. EAPD is **power
+  down**, so zero enables the standard external amplifier. Volume readbacks
+  get at most two writes within the transaction deadline to tolerate a codec
+  retaining its power-on mute on the first write; a persistent mismatch fails.
+- [Cirrus CS4299, DS319PP4](https://sunsite.icm.edu.pl/pub/Linux/alsa/manuals/cirrus/cs4299-4.pdf),
+  sections 4.2–4.4, 4.13–4.16, 4.20: real outputs reset muted. Program master
+  02h, advertised headphone/alternate output 04h, PCM 18h (0808h unity), and
+  optional PC beep 0Ah. Disable CS4299 vendor S/PDIF (68h SPEN) only for its
+  identified 43525930/FFFFFFF8 family. Its amplifier uses standard EAPD;
+  guessing other vendor registers is unnecessary.
+- [Analog Devices AD1881A](https://www.analog.com/media/en/technical-documentation/data-sheets/AD1881A.pdf),
+  powerdown and vendor-ID tables: EAPD is active high powerdown here too.
+  Codec identity comes from 7Ch/7Eh, never from the PCI controller ID. Enable
+  VRA in 2Ah only when 28h advertises it and explicitly write 48000 to 2Ch;
+  otherwise verify fixed 48 kHz. Disable advertised standard S/PDIF and DRA.
+- Real hardware uses 1.5 dB codec master/headphone attenuation, with software
+  mute/zero-channel handling and no second master attenuation in the PCM.
+  The validated QEMU 8086:2415 twin retains software linear master gain and
+  zero codec attenuation, as its volume model differs from the specification.
+  This preserves the f4-audio waveform and DOS ring-tap expectations.
+- Activation remains bounded by 500 ms and each posted codec transaction by
+  100 ms. Failed codec restoration or unproved DMA stop quarantines resources.
+  Saved codec values are post-cold-reset values, not a claim to restore BIOS
+  state erased by that reset. No reset occurs during quarantine recovery.
+- A copied, read-only 64-byte `MIXER_GET_DIAGNOSTICS` (4203h, version 1) reports
+  identity, readiness, cached codec volumes/power/rate, observed DMA fetches,
+  cursor and owned IRQ count, including backend failures. The Control Panel
+  compares counts around its test and describes kernel observations without
+  asserting audible output. `L` alone adds one second of stereo 1 kHz before
+  the UI, temporarily unmuted at 50%, with the saved master restored afterward;
+  normal, safe and test boots do not inject this tone.
+
 ## f4-01
 
 Directive: [native audio](../directives/f4-01-native-audio-ac97.md).

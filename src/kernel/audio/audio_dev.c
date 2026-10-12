@@ -90,7 +90,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
 {
     if (m->left > 100 || m->right > 100 || m->mute > 1 || m->save_state || m->save_error) return -EINVAL;
     kmutex_lock(&control_lock);
-    int err = audio.ready ? ac97_set_mute(&ac97, m->mute != 0) : 0;
+    int err = audio.ready ? ac97_set_master(&ac97, m) : 0;
     if (err) { audio_fail(-EIO); kmutex_unlock(&control_lock); return -EIO; }
     audio.master = *m;
     err = save_master();
@@ -102,7 +102,35 @@ int audio_master_set(struct ciuki_mixer_master *m)
 }
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
 static bool first_playback;
+static bool playback_logged;
+static uint64_t playback_start, playback_next;
 static uint64_t non_silent_end; /* output position after the last nonzero published quantum */
+void audio_diagnostics(struct ciuki_audio_diagnostics *out)
+{
+    uint32_t f = irq_save();
+    *out = (struct ciuki_audio_diagnostics){ .version=1, .size=sizeof(*out),
+        .codec_id=ac97.codec_id, .controller=(uint32_t)ac97.pci.vendor << 16 | ac97.pci.device,
+        .flags=(audio.ready ? CIUKI_AUDIO_DIAG_READY : 0) | (ac97.running ? CIUKI_AUDIO_DIAG_RUNNING : 0) |
+               (ac97.quarantine ? CIUKI_AUDIO_DIAG_QUARANTINE : 0),
+        .irq_line=ac97.pci.irq_line, .civ=ac97.cursor.civ, .picb=ac97.cursor.remaining,
+        .fetched_frames=ac97.fetched, .irqs=ac97.irqs, .last_error=audio.error ? audio.error : audio.init_error,
+        .power=ac97.power, .master=ac97.master, .pcm=ac97.pcm_volume, .rate=ac97.rate };
+    irq_restore(f);
+}
+static void playback_log(bool failed)
+{
+    if (!first_playback || playback_logged || !(g_boot.flags & CBI_F_VERBOSE)) return;
+    uint64_t now = g_ticks;
+    if (!failed && now < playback_next) return;
+    struct ciuki_audio_diagnostics d;
+    audio_diagnostics(&d);
+    bool done = failed || now - playback_start >= 1000;
+    klog("[audio] play=%s civ=%u picb=%u irqs=%llu fetched=%llu elapsed_ms=%llu",
+         failed ? "failed" : done ? "complete" : "running", d.civ, d.picb,
+         (unsigned long long)d.irqs, (unsigned long long)d.fetched_frames,
+         (unsigned long long)(now - playback_start));
+    playback_next = now + 250; playback_logged = done;
+}
 void audio_wake(void)
 {
     audio.pending = true; kwait_wake_all(&audio.changed);
@@ -178,7 +206,7 @@ void audio_service(void)
         err = ac97_publish(&ac97, quantum);
         if (!err && mixed && !first_playback) {
             first_playback = true;
-            klog("[audio] codec=%08x rate=%u play=ok", ac97.codec_id, AUDIO_RATE);
+            playback_start = g_ticks; playback_next = g_ticks;
         }
         if (!err) for (unsigned i = 0; i < AUDIO_QUANTUM; i++) {
             if (quantum[i].left || quantum[i].right) {
@@ -189,6 +217,7 @@ void audio_service(void)
             err = ac97_start(&ac97); audio.running = !err;
         }
     }
+    playback_log(err != 0);
     if (!err && !active && audio.running) {
         /* Client drains have already waited their fetched/tail allowance.
          * Silence still in the queue is not client data. Keep publishing
@@ -236,6 +265,66 @@ static void audio_worker(void *arg)
         kwait_wait_until(&audio.changed, refill_pending, 0, deadline_after_ms(wait_ms));
     }
 }
+/* One 48-sample sine period: exactly 1 kHz at 48 kHz, with short edge ramps.
+ * Scratch stays off the kernel stack. The ordinary copied stream/worker owns
+ * DMA; the startup task sleeps while that worker refills. */
+static int16_t boot_sample(unsigned frame)
+{
+    static const int16_t quarter[13] = {0,1069,2120,3135,4096,4987,5793,6499,7094,7568,7913,8122,8192};
+    unsigned phase = frame % 48, index = phase % 12;
+    int sample = quarter[(phase / 12) & 1 ? 12 - index : index];
+    if (phase >= 24) sample = -sample;
+    unsigned edge = frame < AUDIO_RATE - 1 - frame ? frame : AUDIO_RATE - 1 - frame;
+    if (edge < 96) sample = sample * (int)edge / 96;
+    return sample;
+}
+static struct audio_frame boot_pcm[AUDIO_QUANTUM];
+static void audio_boot_tone(void)
+{
+    if (!audio_boot_tone_enabled(g_boot.flags) || !audio.ready) return;
+    struct ciuki_mixer_master saved_master = audio.master;
+    struct ciuki_mixer_master test = { .version=1, .size=32, .left=50, .right=50 };
+    int err = ac97_set_master(&ac97, &test);
+    struct audio_stream *s = 0;
+    if (!err) { audio.master = test; err = audio_stream_open(&s); }
+    uint64_t limit = deadline_after_ms(3000);
+    unsigned sent = 0;
+    if (s) { s->draining = true; s->drain_goal = AUDIO_RATE; }
+    while (!err && sent < AUDIO_RATE) {
+        if (deadline_passed(limit)) { err = -ETIMEDOUT; break; }
+        unsigned count = AUDIO_RATE - sent;
+        if (count > AUDIO_QUANTUM) count = AUDIO_QUANTUM;
+        for (unsigned i = 0; i < count; i++) {
+            int16_t sample = boot_sample(sent + i);
+            boot_pcm[i] = (struct audio_frame){sample, sample};
+        }
+        int wrote = audio_stream_enqueue(s, boot_pcm, count * sizeof(*boot_pcm));
+        if (wrote > 0) sent += (unsigned)wrote / sizeof(*boot_pcm);
+        else if (wrote != -EAGAIN) err = wrote;
+        if (!err && sent < AUDIO_RATE) task_sleep_ms(1);
+    }
+    while (!err && (!s->drain_latched || audio.played_output < s->drain_output)) {
+        if (audio.error) err = audio.error;
+        else if (deadline_passed(limit)) err = -ETIMEDOUT;
+        else task_sleep_ms(1);
+    }
+    if (!err) task_sleep_ms(audio.caps.drain_ms);
+    if (s) audio_stream_close(s);
+    playback_log(err != 0);
+    /* The diagnostic tone must not rewrite AUDIO.CFG. */
+    kmutex_lock(&control_lock);
+    int restore = audio.ready ? ac97_set_master(&ac97, &saved_master) : 0;
+    audio.master = saved_master;
+    if (restore) { audio_fail(-EIO); ac97_shutdown(); }
+    kmutex_unlock(&control_lock);
+    klog("[audio] boot_tone=1khz frames=%u result=%d restore=%d", sent, err, restore);
+}
+static void audio_init_log(int err)
+{
+    klog("[audio] controller=%04x:%04x codec=%08x ready=%08x power=%04x master=%04x pcm=%04x rate=%u irq=%u error=%d reason=%s",
+         ac97.pci.vendor, ac97.pci.device, ac97.codec_id, ac97.global_status,
+         ac97.power, ac97.master, ac97.pcm_volume, ac97.rate, ac97.pci.irq_line, err, audio.reason);
+}
 void audio_init(struct vfs *v)
 {
     if (audio.initialized) return;
@@ -244,15 +333,18 @@ void audio_init(struct vfs *v)
     audio_settings_load(v);
     if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
     int err = ac97_init();
+    audio.init_error = err;
+    audio_init_log(err);
     if (err) return;
+    audio.master_in_codec = !ac97.software_master;
     struct task *worker = task_create_kernel("audio-refill", audio_worker, 0, P_DEVICE);
     if (!worker) {
-        audio.reason = "worker_exhausted"; ac97_shutdown(); return;
+        audio.reason = "worker_exhausted"; audio.error = -ENOMEM; ac97_shutdown(); return;
     }
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
-    klog("[audio] codec=%08x rate=%u play=pending", ac97.codec_id, AUDIO_RATE);
+    audio_boot_tone();
 }
 int audio_device_open(struct file_description *d, uint32_t flags)
 {
@@ -357,6 +449,7 @@ static uint32_t record_size(uint32_t op)
     case AUDIO_SET_GAIN: return sizeof(struct ciuki_audio_gain);
     case AUDIO_DRAIN: case AUDIO_RESET: return sizeof(struct ciuki_audio_command);
     case MIXER_GET_MASTER: case MIXER_SET_MASTER: return sizeof(struct ciuki_mixer_master);
+    case MIXER_GET_DIAGNOSTICS: return sizeof(struct ciuki_audio_diagnostics);
     default: return 0;
     }
 }
@@ -416,6 +509,7 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
         break;
     }
     case MIXER_GET_MASTER: memcpy(record, &audio.master, size); break;
+    case MIXER_GET_DIAGNOSTICS: audio_diagnostics((struct ciuki_audio_diagnostics *)record); break;
     case MIXER_SET_MASTER:
         err = !d->mixer_control ? -EACCES : audio_master_set((struct ciuki_mixer_master *)record); break;
     }
