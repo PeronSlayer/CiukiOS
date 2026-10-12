@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define CP_T_PREVIEW 700   /* timer id of the deferred wallpaper preview (outside the widget ids) */
 enum {
     C_TABS = 1, C_CLOSE, C_STATUS,
     C_THEME_L, C_THEME, C_WALL_L, C_WALL, C_POS_L, C_POS0, C_POS1, C_POS2, C_POS3, C_POS4, C_COL_L,
@@ -113,7 +114,17 @@ static void paint(struct du_ui *u, void *user)
     struct cp_app *a = user;
     struct du_canvas *c = &u->canvas;
     if (a->page == CP_DISPLAY) {
-        if (!a->preview_valid) preview_build(a);
+        if (!a->preview_valid) {
+            /* An image wallpaper not decoded yet: paint the desktop colour now and
+             * decode after this frame (timer), so the window never opens black
+             * (reading and decoding the 2.5 MB default scene takes seconds under TCG). */
+            if (a->cfg.wallpaper[0] == '/' && a->preview_pending == 0 &&   /* 0 never scheduled, 1 scheduled, 2 fired */
+                (!a->image.pixels || strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path)))) {
+                for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
+                a->preview_pending = 1; a->preview_valid = 1;
+                du_timer_start(u, CP_T_PREVIEW, 20000000ull, 0);
+            } else { preview_build(a); a->preview_pending = 0; }
+        }
         /* A small monitor: bezel, screen, stand. */
         put(c, 24, 44, 208, 160, DU_FACE);
         du_edge(c, (struct du_rect){24, 44, 208, 160}, DU_RAISED);
@@ -210,8 +221,11 @@ void cp_tick(struct cp_app *a)
 static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct cp_app *a = user;
-    (void)u;
     int save = 0;
+    if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
+        a->preview_pending = 2; a->preview_valid = 0; u->dirty = 1;
+        return;
+    }
     switch (e->id) {
     case C_TABS: if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CP_PAGES) { a->page = e->index; cp_tick(a); } break;
     case C_CLOSE: if (e->type == DU_EV_ACTIVATE) a->quit = 1; break;

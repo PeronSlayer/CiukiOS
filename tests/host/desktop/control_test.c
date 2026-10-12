@@ -66,6 +66,8 @@ static void check_marked(int mode)
 {
     for (int k = 0; k < 5; k++) assert(find(DU_BUTTON, labels[k])->def == (modes[k] == mode));
 }
+/* The preview of an image wallpaper is decoded after the first paint (timer): render, tick, render. */
+static void render_settled(struct du_ui *u) { du_render(u); du_tick(u, u->now + 1000000000ull); du_render(u); }
 /* An image wallpaper is rendered straight at preview size (bars 32*144/768 =
  * 6 px, decoded image cached in the app); any other spec is the full 1024x768
  * render of the chosen mode scaled to 192x144. */
@@ -137,7 +139,7 @@ int main(int argc, char **argv)
     }
     assert(visible >= 5 + 6 + 8);
 
-    du_render(&u);
+    render_settled(&u);
     check_preview();
     assert(!preview_band());
     at_save(renders, "control-display-fill", &u);
@@ -153,7 +155,7 @@ int main(int argc, char **argv)
         assert(find(DU_LABEL, "Saved and applied."));
         check_marked(modes[k]);
         assert(!a.preview_valid);
-        du_render(&u);
+        render_settled(&u);
         assert(decodes == d0);   /* a mode change reuses the decoded image cached per path */
         check_preview();
         assert(preview_band() == (modes[k] == CFG_WALL_FIT));
@@ -176,11 +178,11 @@ int main(int argc, char **argv)
     assert(a.cfg.wallpaper_mode == CFG_WALL_CENTER && !strcmp(a.cfg.theme, "Classic 98"));
     check_marked(CFG_WALL_CENTER);
     for (int k = 0; k < 5; k++) assert(du_text_width(labels[k]) + 8 <= find(DU_BUTTON, labels[k])->box.w);
-    du_render(&u);
+    render_settled(&u);
     check_preview();
     at_click_widget(&u, find(DU_BUTTON, "Fill")->id);
     assert(a.cfg.wallpaper_mode == CFG_WALL_FILL && strstr(saved, "\nwallpaper=/system/wallpapers/Ciuk1.png\nwallpaper_mode=fill\n"));
-    du_render(&u);
+    render_settled(&u);
     check_preview();
     at_save(renders, "control-display-classic-fill", &u);
     cp_detach(&a);
