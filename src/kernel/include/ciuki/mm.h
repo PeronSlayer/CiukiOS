@@ -40,9 +40,17 @@ unsigned pmm_reservations(const struct pmm_reservation **out);
 void vmm_init(void);
 uint32_t vmm_kernel_pd(void);              /* physical address */
 void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached);
-/* Immutable boot LFB only: configure MTRR before its first mapping, then
+/* A reusable, private MMIO window; reserve once, revoke before firmware,
+ * then replace only after validating device ownership and metadata. */
+void *vmm_reserve_mmio(uint32_t capacity);
+void vmm_revoke_mmio(void *mapped, uint32_t bytes);
+void *vmm_replace_mmio(void *window, uint32_t capacity, uint32_t phys, uint32_t bytes);
+
+/* Initial boot LFB aliases: configure MTRR before its first mapping, then
  * give console and presenter identical page attributes (WC or UC fallback). */
 void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes);
+/* All console/presenter aliases must be revoked before runtime replacement. */
+void *vmm_replace_framebuffer(void *window, uint32_t capacity, uint32_t phys, uint32_t bytes);
 uint32_t vmm_kernel_pte(uint32_t va);      /* raw PTE or 0 */
 
 /* kernel stacks: 16 KiB with an unmapped guard page below (f2-20) */

@@ -13,17 +13,17 @@ enum {
     C_COL0, C_COL1, C_COL2, C_COL3, C_COL4, C_COL5, C_ICONS,
     C_SPEED_L, C_SPEED, C_SPEED_V, C_SLOW, C_FAST, C_DBL_L, C_DBL, C_DBL_V, C_MOUSE_NOTE,
     C_KEY_L, C_KEY, C_KEY_NOTE1, C_KEY_NOTE2,
-    C_VOL_L, C_VOL, C_VOL_V, C_MUTE, C_AUDIO,
+    C_VOL_L, C_VOL, C_VOL_V, C_MUTE, C_SOUND_LIST, C_SOUND_TEST, C_SOUND_ENABLED, C_HARDWARE, C_AUDIO,
     C_DATE, C_H24, C_SECONDS, C_TIME_NOTE1, C_TIME_NOTE2,
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
-    C_SYSTEM_TABS, C_CPU, C_UPTIME, C_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
+    C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, D_PROPERTIES = 200, D_INFO
 };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power"};
-static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System", "Device Manager", "Drivers", "Network", "Power"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter"};
+static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System", "Device Manager", "Drivers", "Network", "Power", "Adapter"};
 static const char *const page_icons[CP_PAGES] = {"device:display", "device:mouse", "device:keyboard", "device:sound-card",
-    "settings:date-time", "device:computer", "settings:peripherals", "system-software-update", "device:network", "system-shutdown"};
+    "settings:date-time", "device:computer", "settings:peripherals", "system-software-update", "device:network", "system-shutdown", "device:display"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
@@ -152,7 +152,8 @@ static void paint(struct du_ui *u, void *user)
         du_well(c, (struct du_rect){24, 44, 452, 54}, DU_WINDOW);
         int font = desk_theme->font_large;
         du_text_font(c, font, 24 + (452 - du_text_width_font(font, a->clock_line)) / 2, 71 - desk_font_cap(font) / 2, a->clock_line, DU_SELECT);
-    } else if (a->page == CP_SYSTEM && a->system_tab == 0 && a->host.portrait) {
+    } else if (a->page == CP_ADAPTER) cp_adapter_paint(a, c);
+    else if (a->page == CP_SYSTEM && a->system_tab == 0 && a->host.portrait) {
         du_edge(c, (struct du_rect){22, 46, 100, 100}, DU_SUNKEN);
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) put(c, 24 + x, 48 + y, 1, 1, a->host.portrait[(y * 256 / 96) * 256 + x * 256 / 96]);
         du_text_font(c, desk_theme->font_large, 140, 50, "CiukiOS", DU_SELECT);
@@ -178,7 +179,7 @@ static void sync(struct cp_app *a)
         a->wall_items[k].selected = !strcmp(spec, a->cfg.wallpaper);
         if (a->wall_items[k].selected) wall = k;
     }
-    if ((w = du_get(u, C_WALL))) w->active = wall;
+    if ((w = du_get(u, C_WALL))) { w->active = wall; du_list_ensure(w, wall); }
     for (int k = 0; k < CP_POSITIONS; k++) if ((w = du_get(u, C_POS0 + k))) w->def = mode_order[k] == a->cfg.wallpaper_mode;
     toggle_label(a, C_ICONS, "Desktop icons", a->cfg.desktop_icons);
     char s[64];
@@ -193,9 +194,20 @@ static void sync(struct cp_app *a)
     toggle_label(a, C_MUTE, "Mute", a->muted);
     if ((w = du_get(u, C_MUTE))) w->disabled = !a->mixer_ok;
     text(a, C_AUDIO, a->mixer_ok ? "Master output of the sound card (/dev/mixer)." : "No audio device: /dev/mixer is unavailable.");
+    for (unsigned k = 0; k < SOUND_EVENTS; k++) a->sound_items[k].selected = k == a->sound_selected;
+    if ((w = du_get(u,C_SOUND_LIST))) w->active = a->sound_selected;
+    if ((w = du_get(u,C_SOUND_ENABLED))) w->value = a->sounds.enabled;
+    if ((w = du_get(u,C_HARDWARE))) w->disabled = a->audio_testing;
     toggle_label(a, C_H24, "24-hour clock", a->cfg.clock_24h);
     toggle_label(a, C_SECONDS, "Show seconds", a->cfg.clock_seconds);
+    cp_display_sync(a);
     u->dirty = 1;
+}
+void cp_audio_result(struct cp_app *a, int result)
+{
+    a->audio_testing = 0;
+    text(a,C_STATUS,result ? "Device did not accept the full tone." : "Device accepted the full 1 kHz tone.");
+    sync(a);
 }
 void cp_tick(struct cp_app *a)
 {
@@ -224,6 +236,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct cp_app *a = user;
     int save = 0;
+    if (cp_display_event(a, e)) return;
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
         a->preview_pending = 2; a->preview_valid = 0; u->dirty = 1;
         return;
@@ -273,7 +286,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             else text(a, C_STATUS, "Saved. Serial logging changes at the next boot.");
         }
         break;
-    case C_CLOSE: if (e->type == DU_EV_ACTIVATE) a->quit = 1; break;
+    case C_CLOSE: if (e->type == DU_EV_ACTIVATE) { cp_display_cancel(a); a->quit = 1; } break;
     case C_THEME:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CFG_THEMES) {
             snprintf(a->cfg.theme, sizeof(a->cfg.theme), "%s", cfg_theme_names[e->index]); save = 1; a->preview_valid = 0;
@@ -307,6 +320,29 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             if (e->id == C_VOL) a->volume = e->index; else a->muted = !a->muted;
             int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_MASTER, a->volume, a->muted) : -1;
             text(a, C_STATUS, r ? "The volume could not be changed." : "Volume applied.");
+        }
+        break;
+    case C_SOUND_LIST:
+        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < SOUND_EVENTS) a->sound_selected = (unsigned)e->index;
+        break;
+    case C_SOUND_TEST: case C_HARDWARE:
+        if (e->type == DU_EV_ACTIVATE) {
+            int r = a->host.apply ? a->host.apply(a->host.ctx,e->id == C_HARDWARE ? DESK_SETTINGS_AUDIO_TEST : DESK_SETTINGS_SOUND_TEST,
+                                               e->id == C_HARDWARE ? 0 : (int)a->sound_selected,0) : -1;
+            if (!r && e->id == C_HARDWARE) a->audio_testing = 1;
+            text(a,C_STATUS,r ? "Audio test could not start." : e->id == C_HARDWARE ? "Testing audio hardware..." : "Playing selected sound.");
+        }
+        break;
+    case C_SOUND_ENABLED:
+        if (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE) {
+            struct sound_scheme next = a->sounds; next.enabled = !next.enabled;
+            size_t n = sound_format(&next,a->sound_text,sizeof(a->sound_text));
+            if (!n || !a->host.save_sounds || a->host.save_sounds(a->host.ctx,a->sound_text,n)) text(a,C_STATUS,"Sound settings could not be saved.");
+            else {
+                a->sounds = next;
+                int r = a->host.apply ? a->host.apply(a->host.ctx,DESK_SETTINGS_SOUND_RELOAD,0,0) : -1;
+                text(a,C_STATUS,r ? "Saved. Restart to apply sound settings." : "Sound settings saved and applied.");
+            }
         }
         break;
     case C_H24: if (e->type == DU_EV_ACTIVATE) { a->cfg.clock_24h = !a->cfg.clock_24h; save = 1; cp_tick(a); } break;
@@ -611,6 +647,7 @@ static void system_pages(struct cp_app *a)
                      (unsigned long long)(a->host.mem_free_k / 1024), a->host.processes);
             add(a, DU_LABEL, C_SYS3, 24, 240, 452, 14, line);
             add(a, DU_LABEL, C_UPTIME, 24, 266, 452, 14, "Uptime unavailable.");
+            add(a, DU_LABEL, CP_SUMMARY, 24, 296, CP_WIDTH - 48, 14, "");
         } else if (a->system_tab == 1) {
             add(a, DU_LABEL, C_SYS0, 24, 44, 452, 14, "Hardware summary");
             for (unsigned cls = 0; cls < CIUKI_DEVICE_CLASSES; cls++) {
@@ -645,6 +682,8 @@ static void system_pages(struct cp_app *a)
             add(a, DU_LABEL, C_SYS2, 24, 254, 452, 14, "This choice takes effect after restarting CiukiOS.");
             if (!a->boot_ok) add(a, DU_LABEL, C_SYS3, 24, 280, 452, 14, "BOOT.CFG is unavailable or exceeds the loader limit.");
         }
+    } else if (a->page == CP_ADAPTER) {
+        add(a, DU_BUTTON, CP_REFRESH, 24, 324, 84, 24, "Refresh");
     } else if (a->page == CP_NETWORK) {
         add(a, DU_LABEL, C_SYS0, 24, 48, 452, 14, "Network settings will be available in F6.");
         add(a, DU_LABEL, C_SYS1, 24, 76, 452, 14, "Detected adapters are listed in Device Manager.");
@@ -674,7 +713,7 @@ static void build(struct cp_app *a)
         w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
     } else {
         a->tab_items[0].text[0] = page_labels[a->page];
-        w = add(a, DU_TABS, C_TABS, 8, 8, CP_WIDTH - 16, CP_HEIGHT - 72, "");
+        w = add(a, DU_TABS, C_TABS, 8, 8, CP_WIDTH - 16, CP_HEIGHT - 64, "");
         w->items = a->tab_items; w->count = 1;
         w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
         add(a, DU_BUTTON, C_BACK, 12, CP_HEIGHT - 34, 110, 24, "Control Panel")->anchors = DU_ANCHOR_BOTTOM;
@@ -691,14 +730,20 @@ static void build(struct cp_app *a)
     unsigned walls = 2 + DESK_BUILTIN_WALLPAPERS + a->wall_count;
     items(a->wall_items, a->wall_labels, walls, wall_label, a);
     for (unsigned k = 0; k < walls; k++) a->wall_items[k].icon16 = NULL;
-    w = add(a, DU_LISTVIEW, C_WALL, 248, 152, 228, 126 + DU_ROW, ""); w->items = a->wall_items; w->count = walls; list_style(w, "Wallpaper");   /* seven whole rows */
+    w = add(a, DU_LISTVIEW, C_WALL, 248, 152, CP_WIDTH - 272, 22 + 2 * DU_ROW, ""); w->items = a->wall_items; w->count = walls; list_style(w, "Wallpaper");
     add(a, DU_LABEL, C_POS_L, 24, 224, 100, 14, "Position:");
     /* Under the 208 px monitor: three 68 px buttons per row, 2 px apart. */
     static const char *const pos[CP_POSITIONS] = {"Center", "Tile", "Stretch", "Fit", "Fill"};
     for (int k = 0; k < CP_POSITIONS; k++) add(a, DU_BUTTON, C_POS0 + k, 24 + k % 3 * 70, 240 + k / 3 * 24, 68, 22, pos[k]);
     add(a, DU_LABEL, C_COL_L, 24, 296, 100, 14, "Desktop colour:");
     for (int k = 0; k < 6; k++) add(a, DU_BUTTON, C_COL0 + k, 24 + k * 34, 312, 30, 24, "");
-    add(a, DU_BUTTON, C_ICONS, 248, 312, 228, 24, "");
+    add(a, DU_BUTTON, C_ICONS, 248, 212, CP_WIDTH - 272, 24, "");
+    add(a, DU_LABEL, CP_AREA_LABEL, 248, 240, CP_WIDTH - 272, 14, "Screen area:");
+    w = add(a, DU_LISTVIEW, CP_AREA, 248, 256, CP_WIDTH - 272, 22 + DU_ROW, ""); w->items = a->area_items; list_style(w, "Resolution");
+    add(a, DU_LABEL, CP_DEPTH_LABEL, 248, 306, CP_WIDTH - 272, 14, "Colours:");
+    w = add(a, DU_LISTVIEW, CP_DEPTH, 248, 322, CP_WIDTH - 272, 22 + DU_ROW, ""); w->items = a->depth_items; list_style(w, "Colour depth");
+    add(a, DU_BUTTON, CP_APPLY, 24, 338, 84, 24, "Apply");
+    add(a, DU_LABEL, CP_MODE_NOTE, 116, 342, 116, 14, "");
     } else if (a->page == CP_MOUSE) {
     /* Mouse */
     add(a, DU_LABEL, C_SPEED_L, 24, 44, 200, 14, "Pointer &speed:");
@@ -723,7 +768,16 @@ static void build(struct cp_app *a)
     w = add(a, DU_SCROLLBAR, C_VOL, 24, 62, 300, 17, ""); w->vertical = 0; w->total = 101; w->page = 1;
     add(a, DU_LABEL, C_VOL_V, 336, 62, 80, 17, "");
     add(a, DU_BUTTON, C_MUTE, 24, 94, 140, 24, "");
-    add(a, DU_LABEL, C_AUDIO, 24, 132, 452, 14, "");
+    add(a, DU_CHECKBOX, C_SOUND_ENABLED, 184, 94, 290, 24, "Play system sounds");
+    for (unsigned k = 0; k < SOUND_EVENTS; k++) {
+        a->sound_items[k].text[0] = sound_labels[k]; a->sound_items[k].text[1] = a->sounds.file[k];
+    }
+    w = add(a,DU_LISTVIEW,C_SOUND_LIST,24,126,452,154,""); w->items = a->sound_items; w->count = SOUND_EVENTS;
+    list_style(w,"Event"); w->column_count = 2;
+    w->columns[0] = (struct du_column){"Event",170,0}; w->columns[1] = (struct du_column){"Assigned sound",258,0};
+    add(a,DU_BUTTON,C_SOUND_TEST,24,290,90,24,"Test");
+    add(a,DU_BUTTON,C_HARDWARE,124,290,220,24,"Test audio hardware");
+    add(a,DU_LABEL,C_AUDIO,24,326,452,14,"");
     } else if (a->page == CP_DATETIME) {
     /* Date & Time */
     add(a, DU_LABEL, C_DATE, 24, 106, 452, 14, "");
@@ -734,10 +788,12 @@ static void build(struct cp_app *a)
     } else {
         system_pages(a);
     }
+    if (a->page == CP_DISPLAY || a->page == CP_ADAPTER || a->page == CP_SYSTEM) cp_display_refresh(a);
     cp_tick(a); sync(a);
     if (a->page == CP_DISPLAY) {
         du_get(u, C_THEME)->anchors = du_get(u, C_WALL)->anchors = DU_ANCHOR_GROW_X;
         du_get(u, C_ICONS)->anchors = DU_ANCHOR_GROW_X;
+        du_get(u, CP_AREA)->anchors = du_get(u, CP_DEPTH)->anchors = DU_ANCHOR_GROW_X;
     }
     /* Honor the current surface when returning from an applet after a resize. */
     int dx = u->canvas.width - CP_WIDTH, dy = u->canvas.height - CP_HEIGHT;
@@ -752,6 +808,7 @@ static void build(struct cp_app *a)
 }
 void cp_open(struct cp_app *a, int page)
 {
+    if (page != a->page && a->mode_state) cp_display_cancel(a);
     a->page = page >= 0 && page < CP_PAGES ? page : CP_HOME;
     a->status[0] = 0;
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
@@ -762,6 +819,11 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
 {
     a->ui = u;
     load(a, &a->cfg); du_theme_use(u, a->cfg.theme);
+    sound_defaults(&a->sounds);
+    if (a->host.load_sounds) { size_t n = 0;
+        if (!a->host.load_sounds(a->host.ctx, a->sound_text, sizeof(a->sound_text), &n))
+            (void)sound_parse(&a->sounds, a->sound_text, n);
+    }
     a->wall_count = a->host.wallpapers ? (unsigned)a->host.wallpapers(a->host.ctx, a->wall_names, CP_WALLPAPERS) : 0;
     if (a->wall_count > CP_WALLPAPERS) a->wall_count = 0;
     a->mixer_ok = a->host.mixer && !a->host.mixer(a->host.ctx, &a->volume, &a->muted);
@@ -769,4 +831,4 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     cp_open(a, page);
     return 0;
 }
-void cp_detach(struct cp_app *a) { desk_image_free(&a->image); }
+void cp_detach(struct cp_app *a) { cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }

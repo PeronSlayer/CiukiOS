@@ -72,6 +72,13 @@ struct dpmi_vec { uint32_t off; uint16_t sel; };
 struct dpmi_record {
     uint8_t kind, client, vector, flags, op;
     bool saved_pm, vif;
+    bool decode_valid;
+    uint16_t decode_cs;
+    uint32_t decode_eip;             /* interrupted boundary proof, HWINT only */
+    bool decode_stack_valid;
+    uint32_t decode_stack[8];
+    bool decode_ds_valid;
+    uint32_t decode_stack_linear, decode_ds_base;
     struct v86_frame saved;
     uint32_t lock_top;
     uint16_t rstack_top;
@@ -101,6 +108,10 @@ struct dpmi {
     bool decode_valid;
     uint16_t decode_cs;
     uint32_t decode_eip;            /* known boundary at entry/previous trap return */
+    bool decode_stack_valid;
+    uint32_t decode_stack[8];       /* root return proof, captured at that boundary */
+    bool decode_ds_valid;
+    uint32_t decode_stack_linear, decode_ds_base;
     uint16_t shadow_cs;             /* STI shadow: CS:EIP of the shadowed instruction */
     uint32_t shadow_eip;
     unsigned clients, depth;

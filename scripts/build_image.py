@@ -63,7 +63,7 @@ def desktop_payloads():
     desktop = desktop_build.validate_payloads()
     sources = {"/Programs/desktop": DESKTOP / "desktop", "/Programs/demo": DESKTOP / "demo", "/Programs/dosbox": DESKTOP / "dosbox",
                "/Programs/files": DESKTOP / "files", "/Programs/tasks": DESKTOP / "tasks", "/Programs/ciuknote": DESKTOP / "ciuknote",
-               "/Programs/control": DESKTOP / "control",
+               "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
                "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
@@ -78,7 +78,21 @@ def desktop_payloads():
     # time); the owner may add PNG/JPEG/BMP files to /system/wallpapers. Never Microsoft's
     # third_party/win_bg bitmaps: see docs/desktop.md.
     sources.update({f"/system/wallpapers/{name}": ROOT / "assets/wallpapers/ciuki" / name for name in WALLPAPERS})
-    return sources, {"/Programs", "/System", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
+    sound_sources, sounds = sound_payloads()
+    sources.update(sound_sources)
+    metadata["sounds"] = sounds
+    return sources, {"/system/sounds", "/Programs", "/System", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
+
+
+def sound_payloads():
+    """Validate and map the bounded provisional sound pack; no image build."""
+    spec = importlib.util.spec_from_file_location("build_sounds", ROOT / "scripts/build_sounds.py")
+    sound_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sound_build)
+    sounds = sound_build.validate()
+    sources = {(f"/system/sounds/{name}" if name != "sounds.cfg" else "/system/settings/sounds.cfg"):
+               sound_build.OUTPUT / name for name in sounds["files"]}
+    return sources, sounds
 
 
 def application_payloads():
@@ -113,10 +127,16 @@ def application_payloads():
         sources[f"{TEST_PATH}/{name}"] = LUA / "lua-5.4.8-tests" / name
     desktop_sources, desktop_directories, desktop_metadata = desktop_payloads()
     sources.update(desktop_sources)
+    tcc_spec = importlib.util.spec_from_file_location("image_tcc", ROOT / "apps/tcc/build_tcc.py")
+    tcc_build = importlib.util.module_from_spec(tcc_spec)
+    tcc_spec.loader.exec_module(tcc_build)
+    tcc_sources, tcc_directories, tcc_metadata = tcc_build.image_payloads()
+    sources.update(tcc_sources)
     directories = {"/Programs", "/tmp", "/Documents", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
     directories.update(desktop_directories)
+    directories.update(tcc_directories)
     metadata = {"sdk_manifest_sha256": expected["sdk_manifest_sha256"],
                 "lua": {"version": manifest["version"],
                         "manifest_sha256": sha256(LUA / "manifest.json"),
@@ -124,6 +144,7 @@ def application_payloads():
                         "supplement_sha256": manifest["files"]["ciuki-f2.lua"],
                         "upstream_mode": manifest["upstream_mode"], "patches": manifest["patches"]}}
     metadata["desktop"] = desktop_metadata
+    metadata["tcc"] = tcc_metadata
     # The gate's relative supplement argv uses TEST_PATH. Retain the f2-07
     # absolute path as an alias; both copies are separately verified in T1.
     # Runtime provenance cannot be recovered from a host-only build manifest.

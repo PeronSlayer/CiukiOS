@@ -297,7 +297,7 @@ static int probe_bootinfo(void)
     for (unsigned n = 0; n < ARRAY_SIZE(negs); n++) {
         memcpy(&scratch, &g_boot, sizeof(scratch));
         switch (negs[n].field) {
-        case 0: scratch.version = 2; break;
+        case 0: scratch.version = CIUKI_BOOT_INFO_VER + 1; break;
         case 1: scratch.size = 0x1000; break;
         case 2: scratch.e820_count = CIUKI_E820_MAX + 1; break;
         case 3: scratch.e820[0].base = 0xFFFFFFFFFFFFF000ull; scratch.e820[0].length = 0x2000; break;
@@ -1089,6 +1089,7 @@ void probes_main(void *arg)
         .f0 = probes, .f0_count = ARRAY_SIZE(probes),
         .f1 = __f1probes_start, .f1_count = (unsigned)(__f1probes_end - __f1probes_start),
         .f4 = __f4probes_start, .f4_count = (unsigned)(__f4probes_end - __f4probes_start),
+        .f6 = __f6probes_start, .f6_count = (unsigned)(__f6probes_end - __f6probes_start),
         .f2 = __f2probes_start, .f2_count = (unsigned)(__f2probes_end - __f2probes_start),
         .f3 = __f3probes_start, .f3_count = (unsigned)(__f3probes_end - __f3probes_start),
     };

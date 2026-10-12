@@ -40,8 +40,8 @@ class DeviceTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS='detect_leaks=0')
             binary = folder / 'control'
             icons = load('devices_icons', ROOT / 'tests/host/desktop/icon_assets.py')
-            sources = ['tests/host/desktop/device_manager_test.c', 'apps/control/app.c',
-                       *(f'apps/desktop/{n}.c' for n in ('settings', 'wallpaper', 'image', 'compositor', 'theme')),
+            sources = ['tests/host/desktop/device_manager_test.c', 'apps/control/app.c', 'apps/control/display.c', 'apps/desktop/protocol.c',
+                       *(f'apps/desktop/{n}.c' for n in ('settings', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
                        *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'textarea', 'icons', 'icon_map'))]
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-D_POSIX_C_SOURCE=200809L', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
@@ -55,7 +55,7 @@ class DeviceTests(unittest.TestCase):
             image = load('devices_png', ROOT / 'tests/host/desktop/test_desktop.py')
             target = ROOT / 'build/f2-41'; target.mkdir(parents=True, exist_ok=True)
             captures = sorted(frames.glob('*.xrgb'))
-            self.assertEqual(len(captures), 18)
+            self.assertEqual(len(captures), 19)
             for path in captures:
                 width, height = map(int, path.with_suffix('.size').read_text().split())
                 image.write_png(target / (path.stem + '.png'), width, height, image.xrgb_to_rgb(path.read_bytes()))

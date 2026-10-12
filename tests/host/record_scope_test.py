@@ -20,6 +20,7 @@ ALLOWED = {
     'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
     'probes/f4_probes_audio.c', # f4-01 native audio controller
+    'probes/f6_probes_net.c', # f6-01 bounded ARP controller
     'probes/f4_probes_vm_audio.c', # f4-05 DOS VM audio output controller (f4:vm-audio)
     'probes/f3_probes_vm.c',
     'probes/f3_probes_devices.c', # f3-01 DOS device controller (f3:vm-devices)
@@ -34,7 +35,7 @@ ALLOWED = {
     'drivers/i8042_probe.c',
 }
 TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.S)
-CALL = re.compile(r'\brec_emit(?:_panicsafe)?\s*\(')
+CALL = re.compile(r'\b(?:rec_emit(?:_panicsafe)?|rec_diag)\s*\(')
 
 
 def calls(source):

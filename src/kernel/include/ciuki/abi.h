@@ -489,8 +489,9 @@ enum ciuki_syscall {
     CIUKI_SYS_PROC_TERMINATE = 71,
     CIUKI_SYS_DOSVM = 72,
     CIUKI_SYS_POWER = 73,
-    CIUKI_SYS_LAUNCH_MARK = 74,
-    CIUKI_SYS_DEVICES = 75,
+    CIUKI_SYS_DISPLAY = 74,
+    CIUKI_SYS_LAUNCH_MARK = 75,
+    CIUKI_SYS_DEVICES = 76,
 };
 
 /* f2-39: diagnostic markers, no copied wire record. See execution-abi.md. */
@@ -903,7 +904,44 @@ struct ciuki_surface_info {
     uint32_t allocation_bytes; /* 20 */
 };
 
+/* f1-23: syscall 74. Query=0 (ECX pointer), set=1 (ECX mode id).
+ * Syscall 67 retains its original 48-byte framebuffer wire record below. */
+#define CIUKI_DISPLAY_VERSION 1
+#define CIUKI_DISPLAY_QUERY 0u
+#define CIUKI_DISPLAY_SET 1u
+struct ciuki_display_mode {
+    uint16_t id;
+    uint16_t width;
+    uint16_t height;
+    uint16_t bpp;
+    uint16_t pitch;
+    uint8_t linear;
+    uint8_t current;
+};
 struct ciuki_display_info {
+    uint32_t version;
+    uint32_t size;
+    uint16_t width;
+    uint16_t height;
+    uint16_t bpp;
+    uint16_t pitch;
+    uint32_t vram_bytes;
+    uint32_t vbe_version;
+    char oem[64];
+    char vendor[64];
+    char product[64];
+    uint16_t pci_vendor;
+    uint16_t pci_device;
+    uint16_t pci_class;
+    uint16_t pci_subclass;
+    uint32_t mode_count;
+    struct ciuki_display_mode modes[32];
+};
+_Static_assert(sizeof(struct ciuki_display_mode) == 12, "display mode wire size");
+_Static_assert(sizeof(struct ciuki_display_info) == 612, "display info wire size");
+_Static_assert(__builtin_offsetof(struct ciuki_display_info, modes) == 228, "display modes offset");
+
+struct ciuki_framebuffer_info {
     uint32_t size; /* 0 */
     uint32_t width; /* 4 */
     uint32_t height; /* 8 */
@@ -1207,20 +1245,20 @@ _Static_assert(__builtin_offsetof(struct ciuki_surface_info, height) == 8, "ciuk
 _Static_assert(__builtin_offsetof(struct ciuki_surface_info, stride) == 12, "ciuki_surface_info.stride offset");
 _Static_assert(__builtin_offsetof(struct ciuki_surface_info, format) == 16, "ciuki_surface_info.format offset");
 _Static_assert(__builtin_offsetof(struct ciuki_surface_info, allocation_bytes) == 20, "ciuki_surface_info.allocation_bytes offset");
-_Static_assert(sizeof(struct ciuki_display_info) == 48, "ciuki_display_info size");
-_Static_assert(_Alignof(struct ciuki_display_info) == 4, "ciuki_display_info alignment");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, size) == 0, "ciuki_display_info.size offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, width) == 4, "ciuki_display_info.width offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, height) == 8, "ciuki_display_info.height offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, pitch) == 12, "ciuki_display_info.pitch offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, bpp) == 16, "ciuki_display_info.bpp offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, red_size) == 20, "ciuki_display_info.red_size offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, red_pos) == 24, "ciuki_display_info.red_pos offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, green_size) == 28, "ciuki_display_info.green_size offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, green_pos) == 32, "ciuki_display_info.green_pos offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, blue_size) == 36, "ciuki_display_info.blue_size offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, blue_pos) == 40, "ciuki_display_info.blue_pos offset");
-_Static_assert(__builtin_offsetof(struct ciuki_display_info, generation) == 44, "ciuki_display_info.generation offset");
+_Static_assert(sizeof(struct ciuki_framebuffer_info) == 48, "ciuki_framebuffer_info size");
+_Static_assert(_Alignof(struct ciuki_framebuffer_info) == 4, "ciuki_framebuffer_info alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, size) == 0, "ciuki_framebuffer_info.size offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, width) == 4, "ciuki_framebuffer_info.width offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, height) == 8, "ciuki_framebuffer_info.height offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, pitch) == 12, "ciuki_framebuffer_info.pitch offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, bpp) == 16, "ciuki_framebuffer_info.bpp offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, red_size) == 20, "ciuki_framebuffer_info.red_size offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, red_pos) == 24, "ciuki_framebuffer_info.red_pos offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, green_size) == 28, "ciuki_framebuffer_info.green_size offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, green_pos) == 32, "ciuki_framebuffer_info.green_pos offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, blue_size) == 36, "ciuki_framebuffer_info.blue_size offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, blue_pos) == 40, "ciuki_framebuffer_info.blue_pos offset");
+_Static_assert(__builtin_offsetof(struct ciuki_framebuffer_info, generation) == 44, "ciuki_framebuffer_info.generation offset");
 _Static_assert(sizeof(struct ciuki_rect) == 24, "ciuki_rect size");
 _Static_assert(_Alignof(struct ciuki_rect) == 4, "ciuki_rect alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_rect, src_x) == 0, "ciuki_rect.src_x offset");

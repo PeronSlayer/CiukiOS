@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "protocol.h"
+#include "sounds.h"
 #include <limits.h>
 #include <string.h>
 uint32_t desk_get32(const uint8_t *p)
@@ -245,13 +246,25 @@ int desk_parse(const struct ciuki_message *m, int client,
             p->result < -4095) return 0;
         n = 16;
         break;
+    case DESK_SOUND:
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 8) return 0;
+        p->flags = desk_get32(m->data+4);
+        if (p->flags != SOUND_MENU_OPEN && p->flags != SOUND_MENU_SELECT &&
+            p->flags != SOUND_ERROR && p->flags != SOUND_INFORMATION && p->flags != SOUND_QUESTION) return 0;
+        n = 8; break;
     case DESK_SETTINGS:
         if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 24) return 0;
         p->serial = desk_get32(m->data + 4);
         p->request = desk_get32(m->data + 8);
         for (unsigned i = 0; i < 3; i++) p->values[i] = desk_get32(m->data + 12 + i * 4);
-        if (p->request == DESK_SETTINGS_RELOAD ? p->values[0] || p->values[1] || p->values[2] :
-            p->request != DESK_SETTINGS_MASTER || p->values[0] > 100 || p->values[1] > 100 || p->values[2] > 1) return 0;
+        if (p->request == DESK_SETTINGS_MASTER) {
+            if (p->values[0] > 100 || p->values[1] > 100 || p->values[2] > 1) return 0;
+        } else if (p->request == DESK_SETTINGS_DISPLAY) {
+            if (p->values[0] > UINT16_MAX || p->values[1] || p->values[2]) return 0;
+        } else if (p->request == DESK_SETTINGS_SOUND_TEST) {
+            if (p->values[0] >= SOUND_EVENTS || p->values[1] || p->values[2]) return 0;
+        } else if ((p->request != DESK_SETTINGS_RELOAD && p->request != DESK_SETTINGS_SOUND_RELOAD &&
+                    p->request != DESK_SETTINGS_AUDIO_TEST) || p->values[0] || p->values[1] || p->values[2]) return 0;
         n = 24;
         break;
     case DESK_MIXER_SET:

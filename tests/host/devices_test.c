@@ -18,6 +18,7 @@ static void irq_restore(uint32_t);
 #include <ciuki/i8042.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/ac97.h>
+#include <ciuki/net.h>
 #include <ciuki/init.h>
 static unsigned writes, copies, ranges, cpu_calls;
 static uint32_t flags = 0x200;
@@ -46,6 +47,10 @@ struct ciuki_boot_info g_boot;
 volatile uint64_t g_ticks;
 struct ac97_device ac97;
 struct audio_state audio;
+static struct netif nic_context;
+static unsigned nic_count;
+unsigned net_count(void) { return nic_count; }
+struct netif *net_get(unsigned i) { return i < nic_count ? &nic_context : NULL; }
 bool gen_matches(gen_t a, gen_t b) { return a && a == b; }
 void klog(const char *s, ...) { (void)s; }
 #include "../../src/kernel/core/registry.c"
@@ -118,6 +123,25 @@ int main(void)
     assert(snapshot.drivers[9].bound_devices == 3 && snapshot.drivers[10].state == CIUKI_DEVICE_QUARANTINED);
     assert(!writes && flags == 0x200);
     for (unsigned i = snapshot.count; i < 64; i++) assert(!snapshot.devices[i].id && !snapshot.devices[i].name[0]);
+    static const struct netif_driver nic_driver = {.name = "rtl8139"};
+    nic_context = (struct netif){.pci = pci[0], .driver = &nic_driver, .ready = true,
+        .running = true, .generation = 31, .reason = "ready"};
+    strcpy(nic_context.owner, "net-31"); nic_count = 1;
+    res[nres++] = (struct resource){RES_PORT, 0xc000, 0xc100, "net-31", 31, RS_ACTIVE, false};
+    devices_snapshot(&snapshot); nic = device(0x10018);
+    assert(nic->state == CIUKI_DEVICE_READY && !strcmp(nic->driver, "rtl8139") && nic->generation == 31);
+    assert(nic->resources[0].end == 0xc100 && !nic->resources[0].flags);
+    assert(snapshot.driver_count == 15 && snapshot.drivers[13].bound_devices == 1);
+    for (unsigned i = 0; i < snapshot.count; i++) assert(strcmp(snapshot.devices[i].name, "net-31"));
+    nic_context.quarantined = true; nic_context.ready = nic_context.running = false; nic_context.reason = "tx_timeout";
+    devices_snapshot(&snapshot); nic = device(0x10018);
+    assert(nic->state == CIUKI_DEVICE_QUARANTINED && !strcmp(nic->reason, "tx_timeout"));
+    assert(snapshot.drivers[13].state == CIUKI_DEVICE_QUARANTINED);
+    nic_context.quarantined = false; nic_context.reason = "invalid_bar";
+    devices_snapshot(&snapshot); assert(device(0x10018)->state == CIUKI_DEVICE_ABSENT);
+    nic_context.pci.fn = 1;
+    devices_snapshot(&snapshot); assert(!device(0x10018)->driver[0]);
+    nic_count = 0;
     extended = 1; devices_snapshot(&snapshot); assert(!strcmp(snapshot.cpu_brand, "Synthetic Pentium III CPU"));
     /* Count cap and zeroed tail: more unique owners/PCI than device slots. */
     static char owners[64][16]; nres = 64; npci = 32;
@@ -139,6 +163,6 @@ int main(void)
     changes = 100; c0 = copies;
     assert(devices_query(0x1000, sizeof(user)) == -EAGAIN && copies == c0);
     assert(!writes);
-    puts("PASS devices: retained registry, PCI/64-bit BARs, quarantine, firmware leases, CPUID, zeroed marshalling and bounds");
+    puts("PASS devices: retained registry, PCI/64-bit BARs, NIC binding/readiness/quarantine/failure, quarantine, firmware leases, CPUID, zeroed marshalling and bounds");
     return 0;
 }

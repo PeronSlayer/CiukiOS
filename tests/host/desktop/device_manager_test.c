@@ -64,10 +64,10 @@ int main(int argc, char **argv)
         .version = "0.9.0 pre-alpha", .build = "host-preview", .machine = "i686", .processes = 6};
     du_init(&ui, pixels, CP_WIDTH, CP_HEIGHT); ui.focused_window = 1;
     assert(!cp_attach(&app, &ui, CP_HOME));
-    assert(app.page == CP_HOME && kind(DU_LISTVIEW)->view == DU_ICONS && kind(DU_LISTVIEW)->count == 10);
-    for (unsigned k = 0; k < 10; k++) assert(app.applet_items[k].icon16 && app.applet_items[k].icon32);
+    assert(app.page == CP_HOME && kind(DU_LISTVIEW)->view == DU_ICONS && kind(DU_LISTVIEW)->count == CP_PAGES);
+    for (unsigned k = 0; k < CP_PAGES; k++) assert(app.applet_items[k].icon16 && app.applet_items[k].icon32);
     render(renders, "control-folder");
-    static const char *const page_files[] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power"};
+    static const char *const page_files[] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter"};
     for (int k = 0; k < CP_PAGES; k++) {
         du_focus(&ui, kind(DU_LISTVIEW)->id); at_tap(&ui, DU_KEY_HOME);
         for (int right = 0; right < k; right++) at_tap(&ui, DU_KEY_RIGHT);
@@ -123,6 +123,6 @@ int main(int argc, char **argv)
     strcpy(boot, "serial=0 serial=1"); tab(2); assert(!kind(DU_CHECKBOX)->value);
     strcpy(boot, "safe=0"); tab(2); assert(kind(DU_CHECKBOX)->value);
     assert(loads >= 3); cp_detach(&app);
-    puts("PASS device manager: ten applets, keyboard navigation, bounded class tree, refresh, Properties, drivers/leases, system and preserving BOOT.CFG edits");
+    puts("PASS device manager: eleven applets, keyboard navigation, bounded class tree, refresh, Properties, drivers/leases, system and preserving BOOT.CFG edits");
     return 0;
 }

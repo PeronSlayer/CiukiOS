@@ -12,6 +12,7 @@
 #include <ciuki/process.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/dosvm.h>
+extern int32_t display_syscall(struct trap_frame *) __attribute__((weak));
 extern int32_t power_syscall(uint32_t action) __attribute__((weak));
 extern int32_t dosvm_client_syscall(struct trap_frame *) __attribute__((weak));
 
@@ -129,6 +130,9 @@ void syscall_dispatch(struct trap_frame *tf)
         break;
     case CIUKI_SYS_DEVICES:
         r = devices_query ? devices_query(tf->ebx, tf->ecx) : -ENOSYS;
+        break;
+    case CIUKI_SYS_DISPLAY:
+        r = display_syscall ? display_syscall(tf) : -ENOSYS;
         break;
     case CIUKI_SYS_POWER:
         /* Weak: host harnesses link syscall.c without core/power.c. */

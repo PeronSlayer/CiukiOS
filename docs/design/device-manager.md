@@ -19,7 +19,7 @@ separate read-only accessor. No PCI BAR extents exist for unbound devices.
 fs/fs_port.c owns native CMOS calendar reads (IRQ8 stays masked); its service is represented as rtc, without
 reading CMOS during inventory queries.
 
-Decision: call 75 copies a version-1, fixed-size snapshot, capped at 64 devices,
+Decision: call 76 copies a version-1, fixed-size snapshot, capped at 64 devices,
 16 built-in drivers and 64 leases. Caller supplies version and size and the SDK
 supplies the buffer extent. Invalid versions/extents return EINVAL; inaccessible
 ranges return EFAULT before snapshot/copy. The entire output is zeroed, contains
@@ -58,4 +58,16 @@ not promise an atomic replacement during power loss. Read/write/sync errors
 are shown to the user.
 
 Host tests and review renders are implementation evidence; the lead must qualify
-call 75 and navigation in QEMU and on the T23 before integration.
+call 76 and navigation in QEMU and on the T23 before integration.
+
+Merge reconciliation (2026-10-12): main retains Display at call 74 and launch
+records at call 75; DEVICES moves to the next free call, 76. The SDK derives
+its raw call number from the shared ABI enum. The folder includes main's Adapter
+page and System's display summary, and Display keeps its timed Keep/Revert
+transaction. Sounds retains its event list, persisted enable switch, preview
+and hardware test. Distinct widget IDs separate audio testing and System data.
+The upstream PCI and Device Manager references above were rechecked for this
+merge: inventory continues to read retained metadata only. NIC bindings use
+main's retained net_count/net_get contexts under an IRQ lock; exact BDF and IDs
+must match, and resources come from their owner leases. Unattempted adapters
+keep firmware-first status; failed attempts expose their retained reason.

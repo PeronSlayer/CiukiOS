@@ -21,6 +21,12 @@ static int queue(struct du_window *w, struct ciuki_message *m)
     return 0;
 }
 
+static void dialog_sound(void *ctx, unsigned event)
+{
+    struct du_window *w = ctx; struct ciuki_message m;
+    desk_message(&m,DESK_SOUND,8); m.data[0] = DESK_SHELL_VERSION; desk_put32(m.data+4,event); (void)queue(w,&m);
+}
+
 static int flush(struct du_window *w)
 {
     while (w->count) {
@@ -59,6 +65,7 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     if (!w->back) { errno = ENOMEM; goto fail; }
     du_init(u, w->back, width, height);
     u->now = du_now();
+    u->sound = dialog_sound; u->sound_ctx = w;
     struct ciuki_message m;
     desk_message(&m, DESK_HELLO, 4); queue(w, &m);
     desk_message(&m, DESK_CREATE_WINDOW, 44 + (unsigned)len);

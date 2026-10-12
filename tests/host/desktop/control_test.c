@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: MIT */
 #include "control.h"
 #include "acc_test.h"
+#include "display_fixture.h"
 
 static char saved[CFG_TEXT_MAX]; static size_t saved_n; static unsigned saves, applies, decodes; static const char *folder;
 static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) return -1; memcpy(t, saved, saved_n); *n = saved_n; return 0; }
@@ -15,6 +16,7 @@ static int save(void *c, const char *t, size_t n) { (void)c; if (n >= sizeof(sav
 static int apply(void *c, unsigned r, int v, int m) { (void)c; (void)v; (void)m; assert(r == DESK_SETTINGS_RELOAD); applies++; return 0; }
 static int mixer(void *c, int *v, int *m) { (void)c; *v = 70; *m = 0; return 0; }
 static uint64_t now(void *c) { (void)c; return 1791763200ull + 20 * 3600 + 46 * 60 + 12; }
+static int display(void *c, struct ciuki_display_info *d) { (void)c; display_fixture(d); return 0; }
 static int wallpapers(void *c, char names[][CFG_PATH_MAX], unsigned capacity)
 {
     (void)c; assert(capacity >= 3);
@@ -43,7 +45,7 @@ static void attach(int page)
 {
     memset(&a, 0, sizeof(a));
     a.host = (struct cp_host){.load = load, .save = save, .wallpapers = wallpapers, .decode = decode, .mixer = mixer,
-                              .apply = apply, .now = now, .portrait = portrait, .screen_w = 1024, .screen_h = 768,
+                              .apply = apply, .now = now, .display = display, .portrait = portrait, .screen_w = 1024, .screen_h = 768,
                               .version = "0.9.0-prealpha", .build = "host-preview", .machine = "i686",
                               .mem_total_k = 511u * 1024, .mem_free_k = 480u * 1024, .processes = 6};
     du_init(&u, pixels, CP_WIDTH, CP_HEIGHT);

@@ -41,7 +41,7 @@
 #define DU_ICON_TOOLBAR (desk_theme->icon_toolbar)
 #define DU_ICON_LARGE   (desk_theme->icon_large)
 
-#define DU_WIDGETS       48
+#define DU_WIDGETS       64
 #define DU_DIALOG_ITEMS  10
 #define DU_TIMERS        8
 #define DU_TEXT_MAX      1040
@@ -249,6 +249,8 @@ struct du_dialog {
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
 
 struct du_ui {
+    void (*sound)(void *, unsigned);
+    void *sound_ctx;
     struct du_canvas canvas;
     struct du_widget widgets[DU_WIDGETS];
     unsigned count;

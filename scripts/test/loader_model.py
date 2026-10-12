@@ -11,8 +11,9 @@ F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
 F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-audio-state', 'dpmi',
              'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio')  # F4 probes run by selector only; not in the sweep yet
+F6_PROBES = ('net-arp',)  # explicit selector; no F6 hardware sweep yet
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
-SELECTOR_RE = r'f([01234]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
+SELECTOR_RE = r'f([012346]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)'
 E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
@@ -60,7 +61,7 @@ def selector(request, source='menu', validated_fw_cfg=False):
     match = re.fullmatch(SELECTOR_RE, request)
     if not match:
         raise ValueError('invalid selector grammar or probe')
-    names = {0:F0_PROBES, 1:F1_PROBES, 2:F2_PROBES, 3:F3_PROBES, 4:F4_PROBES}[int(match[1])]
+    names = {0:F0_PROBES, 1:F1_PROBES, 2:F2_PROBES, 3:F3_PROBES, 4:F4_PROBES, 6:F6_PROBES}[int(match[1])]
     if match[2] not in (*names, *(('all', 'core') if match[1] in ('0', '1') else ())):
         raise ValueError('invalid selector grammar or probe')
     forced = bool(match[4]); safe = bool(match[5])
@@ -286,7 +287,7 @@ def mode_eligibility(controller, mode, allow_low_bpp=False):
     occupied = 0
     for name in ('red', 'green', 'blue', 'reserved'):
         bits, position = masks[name]
-        if not (0 <= bits <= bpp and 0 <= position <= bpp and bits+position <= bpp):
+        if not (0 <= bits <= 8 and 0 <= position <= bpp and bits+position <= bpp):
             return 'masks'
         if name != 'reserved' and bits == 0:
             return 'masks'
@@ -328,3 +329,46 @@ def input_policy(pci, pci_bios_ok=True, request=None, validated_fw_cfg=False):
     ess = any(d['vendor'] == 0x125d and d['device'] == 0x1978 and
               d.get('subsystem_vendor') == 0x0e11 and d.get('subsystem_device') == 0xb112 for d in pci)
     return {'policy': int(pci_bios_ok and ati and ess), 'forced': False}
+
+
+def display_inventory(controller, modes, current=None, firmware_memory=None):
+    """v2 DISP block: bounded copies, first 32 unique eligible ids, boot mode retained.
+
+    Firmware far pointers are converted in the loader, not consumed by the kernel.
+    firmware_memory optionally supplies the one-MiB real-mode byte address space.
+    """
+    result = dict(tag=0x50534944, size=596, vbe_version=0, vram_bytes=0,
+                  oem='', vendor='', product='', modes=[])
+    if not controller or controller.get('signature') != 'VESA' or controller.get('version', 0) < 0x200:
+        return result
+    result['vbe_version'] = controller['version']
+    result['vram_bytes'] = controller.get('total_memory_64k', 0) * 65536
+    for field in ('oem', 'vendor', 'product'):
+        text = controller.get(field, '')
+        if firmware_memory is not None:
+            ptr = controller.get(field + '_ptr', 0)
+            at = (ptr >> 16) * 16 + (ptr & 0xffff)
+            text = bytes(firmware_memory[at:min(at + 63, 0x100000)]).split(b'\0', 1)[0] if 0 < at < 0x100000 else b''
+        if isinstance(text, str): text = text.encode('ascii', 'replace')
+        result[field] = ''.join(chr(c) if 32 <= c <= 126 else '?' for c in text[:63].split(b'\0', 1)[0])
+    for m in modes:
+        if (mode_eligibility(controller, m, allow_low_bpp=True) or not 0x100 <= m['mode'] < 0x200 or
+                not 640 <= m['width'] <= 1600 or not 480 <= m['height'] <= 1200): continue
+        item = dict(id=m['mode'], width=m['width'], height=m['height'], bpp=m['bpp'],
+                    pitch=m['linear_pitch' if result['vbe_version'] >= 0x300 else 'banked_pitch'], linear=1, reserved=0)
+        if any(x['id'] == item['id'] for x in result['modes']): continue
+        if len(result['modes']) < 32: result['modes'].append(item)
+        elif item['id'] == current: result['modes'][-1] = item
+    return result
+
+
+def pack_display_inventory(inventory):
+    """Exact NASM/C packed extension, including zero unused entries."""
+    import struct
+    d = inventory
+    strings = [d[k].encode('ascii') + b'\0' for k in ('oem', 'vendor', 'product')]
+    data = struct.pack('<IIII64s64s64sI', d['tag'], d['size'], d['vbe_version'], d['vram_bytes'],
+                       *strings, len(d['modes']))
+    data += b''.join(struct.pack('<HHHHHBB', *(m[k] for k in
+                      ('id', 'width', 'height', 'bpp', 'pitch', 'linear', 'reserved'))) for m in d['modes'])
+    return data + bytes((32 - len(d['modes'])) * 12)

@@ -20,6 +20,8 @@ void replay_hook_desk_init(struct desktop *d, const struct desk_ops *ops, uint32
     replay_desktop = d;
     desk_init(d, ops, w, h);
 }
+void desk_sound_init(struct desktop *d) { (void)d; }
+void desk_sound_results(struct desktop *d) { (void)d; }
 void replay_gate_counts(unsigned out[3])
 {
     out[0] = gate_keys; out[1] = gate_motion; out[2] = gate_buttons;

@@ -9,6 +9,7 @@
 #include <ciuki/i8042.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/ac97.h>
+#include <ciuki/net.h>
 #include <ciuki/process.h>
 #include <ciuki/uaddr.h>
 #ifndef CIUKI_BUILD_ID
@@ -128,6 +129,25 @@ static const char *legacy_name(const char *owner)
     if (equal(owner, "uart")) return "16550 serial port";
     return owner;
 }
+/* No driver callbacks or hardware access: only pinned boot NIC contexts.
+ * IRQ quarantine updates status, so copy the fields under the same IRQ lock. */
+static void network_binding(struct ciuki_device_record *d, const struct pci_func *p)
+{
+    uint32_t flags = irq_save();
+    for (unsigned i = 0; i < net_count() && i < NETIF_MAX; i++) {
+        const struct netif *n = net_get(i);
+        if (!n || !n->driver || p->bus != n->pci.bus || p->dev != n->pci.dev ||
+            p->fn != n->pci.fn || p->vendor != n->pci.vendor || p->device != n->pci.device) continue;
+        string(d->driver, sizeof(d->driver), n->driver->name);
+        d->state = n->quarantined ? CIUKI_DEVICE_QUARANTINED :
+                   n->ready && n->running ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT;
+        string(d->reason, sizeof(d->reason), n->reason);
+        if (n->owner[0]) owner_resources(d, n->owner);
+        if (n->generation) d->generation = n->generation;
+        break;
+    }
+    irq_restore(flags);
+}
 static void drivers(struct ciuki_devices_info *out)
 {
     static const struct { const char *name, *policy; } builtins[] = {
@@ -140,6 +160,9 @@ static void drivers(struct ciuki_devices_info *out)
         {"firmware-input", "Sole firmware-first PS/2 controller lease"},
         {"ata-pio", "Legacy ATA/ATAPI; disabled in safe mode"},
         {"ac97", "Qualified Intel ICH AC97 only"},
+        {"e100", "Retained PCI binding; safe mode disables NIC activation"},
+        {"rtl8139", "Retained PCI binding; safe mode disables NIC activation"},
+        {"ne2000", "Retained PCI binding; safe mode disables NIC activation"},
     };
     for (unsigned i = 0; i < ARRAY_SIZE(builtins); i++) {
         struct ciuki_driver_record *r = &out->drivers[out->driver_count++];
@@ -201,6 +224,7 @@ void devices_snapshot(struct ciuki_devices_info *out)
             if (base) resource(d, type, base, base, CIUKI_RESOURCE_UNKNOWN_SIZE);
         }
         if (p->irq_pin && p->irq_line < 16) resource(d, RES_IRQ, p->irq_line, p->irq_line + 1, 0);
+        if (p->class_code == 2) network_binding(d, p);
         if (bound) { owner_resources(d, "ac97"); d->generation = ac97.generation ? ac97.generation : d->generation; }
     }
     /* Registry owners become legacy logical devices. Special owners below
@@ -209,7 +233,7 @@ void devices_snapshot(struct ciuki_devices_info *out)
         const struct resource *r = &inventory.resources[k];
         if (r->state == RS_RELEASED || equal(r->owner, "input") || equal(r->owner, "i8042") ||
             equal(r->owner, "firmware-input") || equal(r->owner, "boot-framebuffer") || equal(r->owner, "fbdev") ||
-            equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma")) continue;
+            !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma")) continue;
         bool seen = false;
         for (unsigned j = 0; j < k; j++) if (inventory.resources[j].state != RS_RELEASED && equal(inventory.resources[j].owner, r->owner)) seen = true;
         if (seen) continue;

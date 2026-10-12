@@ -24,7 +24,10 @@ static uint32_t low_pt, continuation;
 static struct kmutex request_mutex;
 static struct kwait wake, completion;
 static volatile uint16_t pending_irqs;
-static bool initialized, quarantined, synthetic;
+static bool initialized, quarantined, synthetic, input_enabled, video_active, video_claimed;
+static struct { int handle; gen_t generation; } video_leases[3];
+static unsigned video_lease_count;
+static bool video_dispi;
 static bool request_pending, request_done;
 static unsigned request_test;
 static struct biosvm_regs request_regs;
@@ -127,6 +130,8 @@ static void quarantine(void)
     quarantined = true;
     /* Do not touch PIC/PIT here: physical dispatcher retains EOI ownership.
      * Disabled callbacks consume nothing and the lease stays pinned. */
+    for (unsigned i = 0; i < video_lease_count; i++)
+        registry_quarantine(video_leases[i].handle, video_leases[i].generation);
     for (unsigned i = 0; i < lease_count; i++) {
         int rc = registry_quarantine(leases[i].handle, leases[i].generation);
         klog("[biosvm] step=quarantine handle=%d generation=%u result=%d",
@@ -153,7 +158,7 @@ static bool vm_woken(void *arg)
 
 static void irq_input(struct trap_frame *tf)
 {
-    if (!initialized || quarantined || synthetic)
+    if (!initialized || !input_enabled || quarantined || synthetic)
         return;
     unsigned irq = tf->vector - 0x20;
     delivery.queued[irq == 12]++;
@@ -501,15 +506,15 @@ static void worker_main(void *arg)
     }
 }
 
-int biosvm_init(void)
+static int biosvm_init_for(bool input)
 {
     if (quarantined)
         return init_error("already_quarantined", -V86_EIO);
     if (initialized)
-        return 0;
+        return input && !input_enabled ? -V86_EPERM : 0;
     if (!g_current || !(read_eflags() & V86_IF))
         return init_error("thread_context", -V86_EPERM);
-    if (g_boot.input_policy != CBI_INPUT_FIRMWARE)
+    if (input && g_boot.input_policy != CBI_INPUT_FIRMWARE)
         return init_error("input_policy", -V86_EPERM);
     if (read_cr4() & 3)
         return init_error("vme_pvi", -V86_EPERM); /* no alternate VME/PVI monitor path */
@@ -524,19 +529,19 @@ int biosvm_init(void)
         rc = init_error("worker_create", -ENOMEM);
         goto failed;
     }
-    rc = claim_input();
-    if (rc)
-        goto failed;
+    if (input) {
+        rc = claim_input();
+        if (rc) goto failed;
+    }
     kmutex_init(&request_mutex);
     kwait_init(&wake);
     kwait_init(&completion);
     uint32_t f = irq_save();
     initialized = true;
-    irq_set_handler(1, irq_input);
-    irq_set_handler(12, irq_input);
+    input_enabled = input;
+    if (input) { irq_set_handler(1, irq_input); irq_set_handler(12, irq_input); }
     task_start(vm_thread);
-    pic_unmask(1);
-    pic_unmask(12);
+    if (input) { pic_unmask(1); pic_unmask(12); }
     irq_restore(f);
     klog("[biosvm] step=ready leases=%u qemu_pmtimer=%u", lease_count, firmware.qemu_pmtimer);
     return 0;
@@ -557,6 +562,8 @@ failed:
     low_pt = vm_as.pd_phys = 0;
     return rc;
 }
+
+int biosvm_init(void) { return biosvm_init_for(true); }
 
 static bool finished(void *arg)
 {
@@ -597,7 +604,7 @@ int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms)
     uint8_t ah = regs->eax >> 8;
     bool keyboard = regs->interrupt == 0x16 && (ah == 0x10 || ah == 0x11);
     bool mouse = regs->interrupt == 0x15 && ah == 0xC2 && (regs->eax & 0xFF) <= 7;
-    if ((!keyboard && !mouse) || deadline_ms > (mouse ? 500u : 100u))
+    if (!input_enabled || (!keyboard && !mouse) || deadline_ms > (mouse ? 500u : 100u))
         return reject_call("call_policy", regs, -V86_EPERM);
     if (g_current != vm_thread)
         kmutex_lock(&request_mutex);
@@ -833,4 +840,98 @@ int biosvm_selftest(struct biosvm_selftest_report *r)
            r->timeout_result == -V86_ETIMEDOUT && r->later_result == -V86_EIO &&
            r->pic_unchanged && r->pit_unchanged && r->disabled && r->mappings_ok &&
            r->disallowed == 1 && r->timeouts == 1 ? 0 : -EFAULT;
+}
+
+/* Runtime video gets its own leases and temporary VM aperture. The native
+ * driver has no accelerator/DMA; unexpected BAR/chipset I/O stays denied.
+ * QEMU std VGA uses Bochs DISPI index/data words at 1CEh/1CFh. */
+static int claim_video(void)
+{
+    if (video_claimed) return 0;
+    for (unsigned i = 0; i < pci_count(); i++) {
+        const struct pci_func *p = pci_get(i);
+        if (p && p->class_code == 3 && p->vendor == 0x1234 && p->device == 0x1111 &&
+            (g_boot.flags & CBI_F_SMBIOS_QEMU)) video_dispi = true;
+    }
+    const enum res_type types[] = {RES_PORT, RES_MMIO, RES_PORT};
+    const uint32_t start[] = {0x3B0, 0xA0000, 0x1CE}, end[] = {0x3E0, 0xC0000, 0x1D2};
+    for (unsigned i = 0; i < (video_dispi ? 3u : 2u); i++) {
+        int h = registry_claim(types[i], start[i], end[i], "firmware-video", false);
+        if (h < 0) { quarantine(); return h; }
+        gen_t gen = registry_get((unsigned)h)->generation;
+        video_leases[video_lease_count].handle = h;
+        video_leases[video_lease_count++].generation = gen;
+        if (registry_activate(h, gen)) { quarantine(); return -V86_EIO; }
+    }
+    video_claimed = true;
+    return 0;
+}
+
+int biosvm_video_prepare(void)
+{
+    if (!g_current || g_current == vm_thread || !(read_eflags() & V86_IF)) return -EINVAL;
+    int e = biosvm_init_for(g_boot.input_policy == CBI_INPUT_FIRMWARE);
+    if (e) return e;
+    kmutex_lock(&request_mutex);
+    e = quarantined || firmware.state == V86_DISABLED ? -V86_EIO : claim_video();
+    kmutex_unlock(&request_mutex);
+    return e;
+}
+
+static int video_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *value)
+{
+    (void)arg;
+    if (!video_active) return -ENOSYS;
+    if (port == 0x500 && width == 1 && write) return 0; /* VGA ROM diagnostic sink */
+    bool vga = port >= 0x3B0 && (uint32_t)port + width <= 0x3E0 && width <= 2;
+    bool dispi = video_dispi && (port == 0x1CE || port == 0x1CF || port == 0x1D0) && width == 2;
+    if (vga || dispi) {
+        if (write) {
+            if (width == 1) outb(port, (uint8_t)*value); else cpu_outw(port, (uint16_t)*value);
+        } else *value = width == 1 ? inb(port) : cpu_inw(port);
+        return 0;
+    }
+    /* Native input remains its sole consumer, even during INT10. */
+    if (!input_enabled && (port == 0x60 || port == 0x64)) return -V86_EPERM;
+    return -ENOSYS; /* PIC/PIT remain virtual; unknown dependencies fault */
+}
+
+int biosvm_video_switch(uint16_t mode, uint8_t info[256])
+{
+    if (!info || mode < 0x100 || mode >= 0x200 || !g_current || g_current == vm_thread ||
+        !(read_eflags() & V86_IF)) return -EINVAL;
+    int e = biosvm_init_for(g_boot.input_policy == CBI_INPUT_FIRMWARE);
+    if (e) return e;
+    kmutex_lock(&request_mutex);
+    if (quarantined || firmware.state == V86_DISABLED) { e = -V86_EIO; goto done; }
+    if ((e = claim_video())) goto done;
+    uint32_t *pt = P2V(low_pt);
+    for (uint32_t p = 0xA0000; p < 0xC0000; p += PAGE_SIZE)
+        pt[p >> 12] = p | PTE_P | PTE_U | PTE_W | PTE_PCD | PTE_PWT;
+    video_active = true;
+    firmware.io = video_io;
+    firmware.max_call_ms = 2000;
+    uint64_t deadline = deadline_after_ms(2000);
+    struct biosvm_regs r = {.interrupt = 0x10, .eax = 0x4F02, .ebx = mode | 0x4000};
+    e = submit(&r, 2000, 0);
+    if (e || (uint16_t)r.eax != 0x004F) { e = -V86_EIO; goto revoke; }
+    memset(P2V(BIOSVM_SCRATCH + 0x800), 0, 256);
+    r = (struct biosvm_regs){.interrupt = 0x10, .eax = 0x4F01, .ecx = mode,
+        .es = BIOSVM_SCRATCH >> 4, .edi = 0x800};
+    if (deadline_passed(deadline)) { e = -V86_EIO; goto revoke; }
+    e = submit(&r, (uint32_t)(deadline - deadline_after_ms(0)), 0);
+    if (e || (uint16_t)r.eax != 0x004F) { e = -V86_EIO; goto revoke; }
+    memcpy(info, P2V(BIOSVM_SCRATCH + 0x800), 256);
+    r = (struct biosvm_regs){.interrupt = 0x10, .eax = 0x4F03};
+    if (deadline_passed(deadline)) { e = -V86_EIO; goto revoke; }
+    e = submit(&r, (uint32_t)(deadline - deadline_after_ms(0)), 0);
+    if (e || (uint16_t)r.eax != 0x004F || (r.ebx & 0x7FFF) != (mode | 0x4000)) e = -V86_EIO;
+revoke:
+    video_active = false;
+    firmware.io = 0;
+    firmware.max_call_ms = 0;
+    for (uint32_t p = 0xA0000; p < 0xC0000; p += PAGE_SIZE) pt[p >> 12] = 0;
+done:
+    kmutex_unlock(&request_mutex);
+    return e;
 }

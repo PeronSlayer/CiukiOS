@@ -988,7 +988,7 @@ to bytes outside the zero-initialized rounded allocation. A client MAY race
 its own drawing, but MUST NOT be able to change geometry through shared pixels.
 
 **[F2]** `ciuki_surface_info` MUST be 24 bytes: six u32, in order size=24,
-width, height, stride, format=1, allocation_bytes. `ciuki_display_info` MUST be
+width, height, stride, format=1, allocation_bytes. `ciuki_framebuffer_info` (syscall 67) MUST be
 48 bytes: twelve u32, size=48, width, height, pitch, bpp, red_size, red_pos,
 green_size, green_pos, blue_size, blue_pos, generation. Display generation MUST
 identify the F1 active lease and MUST NOT authorize runtime modesetting.
@@ -1326,11 +1326,30 @@ above. Host test: `tests/host/power_test.c` (QEMU-shaped and ICH-shaped
 fixtures, refusals).
 
 
+### f1-23 display ABI amendment
+
+Syscall **74**, `CIUKI_SYS_DISPLAY`: EBX=CIUKI_DISPLAY_QUERY (0), ECX points to
+`ciuki_display_info` (612 bytes, version=1 and size=612 supplied by caller),
+or EBX=CIUKI_DISPLAY_SET (1), ECX is a uint16 mode id encoded in u32. EDX,
+ESI, EDI and EBP are zero. The mode entry is 12 bytes. Query is public; set
+requires the live supervisor desktop PID and exclusive display descriptor.
+The `<ciuki/display.h>` wrappers return 0 or negative errno directly.
+The original syscall-67 layout/function remain binary compatible under the
+C record name `ciuki_framebuffer_info`; framebuffer lease generation conveys
+no mode-setting authority. Reading exactly four bytes from the owner's display
+fd returns its current nonblocking u32 mode-change counter. Complete successful
+presents with the active lease generation acknowledge the 10 s switch watchdog.
+See the [f1-23 acceptance amendment](f1-acceptance.md#amendment-f1-23--display-inventory-and-runtime-vbe-modes-2026-10-12)
+for the precise structure, validation, firmware transaction and qualification.
+
 ## F2-39 amendment — launch diagnostics (2026-10-12)
 
-Additive syscall 74, `LAUNCH_MARK`: `ebx=event`, `ecx=pid`,
+Additive syscall 75, `LAUNCH_MARK`: `ebx=event`, `ecx=pid`,
 `edx=click_us_low`, `esi=click_us_high`, `edi=ebp=0`. No wire record,
-no change to existing syscall numbers, desktop messages or process-list records.
+no change to desktop messages or process-list records. The F1-23 integration
+keeps its specified display call at 74 and moves the new launch diagnostics
+call from main's provisional 74 to 75; rebuild the SDK and diagnostic clients
+with this merged header.
 The SDK wrapper is `ciuki_launch_mark(event, pid, click_us)`.
 
 Events: STATUS (0), BEGIN (1), CONFIGURE (2), DAMAGE (3), FRAME (4). STATUS
@@ -1372,7 +1391,7 @@ Sources, host evidence and pending T23 qualification:
 
 ## F2-41 amendment — read-only devices (2026-10-12)
 
-Call 75 `DEVICES`: `ebx=output`, `ecx=34696`, other argument registers
+Call 76 `DEVICES`: `ebx=output`, `ecx=34696`, other argument registers
 ignored. The SDK `ciuki_devices(struct ciuki_devices_info *)` supplies the
 extent. The first two caller words must be version 1 and size 34696.
 Returns 0 on success, EINVAL for an unsupported extent/version/size,

@@ -10,7 +10,18 @@ extern uint32_t file_description_count(void) __attribute__((weak));
 #include <ciuki/registry.h>
 #include <ciuki/signal.h>
 
-static uint32_t grant_owner, grant_descriptions;
+static uint32_t grant_owner, grant_descriptions, presenting;
+extern void display_frame_complete(uint32_t generation) __attribute__((weak));
+bool grants_display_owner(const struct process *p)
+{
+    if (!p || p->pid != grant_owner) return false;
+    for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
+        struct desktop_description *d = desktop_fd(p, (int32_t)i);
+        if (d && d->kind == DESKTOP_DISPLAY && d->owner == p->pid && (d->maximum & PROT_WRITE)) return true;
+    }
+    return false;
+}
+bool grants_display_busy(void) { return presenting != 0; }
 static struct desktop_activity activity;
 void desktop_activity_snapshot(struct desktop_activity *out) { *out = activity; }
 
@@ -68,13 +79,13 @@ static int display_live(void)
     return 0;
 }
 
-int grant_display_info(struct process *p, int32_t fd, struct ciuki_display_info *out)
+int grant_display_info(struct process *p, int32_t fd, struct ciuki_framebuffer_info *out)
 {
     int err = grant_check(p, fd, DESKTOP_DISPLAY, PROT_WRITE);
     if (err) return err;
     if ((err = display_live())) return err;
     const struct fb_device *d = fbdev_get();
-    *out = (struct ciuki_display_info){ sizeof(*out), d->width, d->height, d->pitch,
+    *out = (struct ciuki_framebuffer_info){ sizeof(*out), d->width, d->height, d->pitch,
         d->bpp, d->red_size, d->red_pos, d->green_size, d->green_pos,
         d->blue_size, d->blue_pos, d->generation };
     return 0;
@@ -106,10 +117,11 @@ int desktop_clip(const struct ciuki_surface_info *s, const struct fb_device *d,
     return 0;
 }
 
-struct present_operation { struct surface *surface; struct desktop_description *grant; uint32_t row_page; };
+struct present_operation { struct surface *surface; struct desktop_description *grant; uint32_t row_page; bool presenting; };
 static void present_cleanup(void *arg)
 {
     struct present_operation *op = arg;
+    if (op->presenting) presenting--;
     surface_release(op->surface);
     op->grant->object.release(&op->grant->object);
     pmm_free(op->row_page);
@@ -137,6 +149,8 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
     op.grant = desktop_fd(p, display);
     op.grant->object.retain(&op.grant->object);
     if (t) { t->cleanup = present_cleanup; t->operation = &op; }
+    uint32_t generation = fbdev_get()->generation;
+    presenting++; op.presenting = true;
     for (unsigned y = 0; y < clipped.height && !err; y++) {
         for (unsigned x = 0; x < clipped.width; x += PAGE_SIZE / 4) {
             uint32_t width = clipped.width - x;
@@ -149,9 +163,15 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
             if (err) { if (err == -ENODEV) err = -EIO; break; }
         }
     }
+    bool full_frame = s->width == fbdev_get()->width && s->height == fbdev_get()->height &&
+                      !clipped.dst_x && !clipped.dst_y && clipped.width == fbdev_get()->width &&
+                      clipped.height == fbdev_get()->height;
     if (t) { t->cleanup = 0; t->operation = 0; }
     present_cleanup(&op);
-    if (!err) activity.presents++;
+    if (!err) {
+        activity.presents++;
+        if (display_frame_complete && full_frame) display_frame_complete(generation);
+    }
     return err;
 }
 

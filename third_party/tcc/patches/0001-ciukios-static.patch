@@ -1,0 +1,313 @@
+--- a/libtcc.c
++++ b/libtcc.c
+@@ -753,6 +753,7 @@
+ #else
+     tcc_set_lib_path(s, CONFIG_TCCDIR);
+ #endif
++    s->static_link = 1; /* CiukiOS: no interpreter or shared libraries. */
+     tccelf_new(s);
+     tccpp_new(s);
+ 
+@@ -817,7 +818,7 @@
+     tcc_define_symbol(s, "__unix__", NULL);
+     tcc_define_symbol(s, "__unix", NULL);
+     tcc_define_symbol(s, "unix", NULL);
+-# if defined(__linux__)
++# if defined(__linux__) && !defined CIUKI_TCC
+     tcc_define_symbol(s, "__linux__", NULL);
+     tcc_define_symbol(s, "__linux", NULL);
+ # endif
+@@ -836,6 +837,51 @@
+     tcc_define_symbol(s, "__OpenBSD__", "__OpenBSD__");
+ # endif
+ #endif
++
++    tcc_define_symbol(s, "__CIUKIOS__", "1");
++    tcc_define_symbol(s, "_DEFAULT_SOURCE", "1");
++    tcc_define_symbol(s, "__DYNAMIC_REENT__", "1");
++
++    /* newlib requires GCC-style integer type macros even with TinyCC. */
++    tcc_define_symbol(s, "__INTPTR_TYPE__", "int");
++    tcc_define_symbol(s, "__UINTPTR_TYPE__", "unsigned int");
++    tcc_define_symbol(s, "__INT8_TYPE__", "signed char");
++    tcc_define_symbol(s, "__UINT8_TYPE__", "unsigned char");
++    tcc_define_symbol(s, "__INT16_TYPE__", "short");
++    tcc_define_symbol(s, "__UINT16_TYPE__", "unsigned short");
++    tcc_define_symbol(s, "__INT32_TYPE__", "int");
++    tcc_define_symbol(s, "__UINT32_TYPE__", "unsigned int");
++    tcc_define_symbol(s, "__INT64_TYPE__", "long long");
++    tcc_define_symbol(s, "__UINT64_TYPE__", "unsigned long long");
++    tcc_define_symbol(s, "__INTMAX_TYPE__", "long long");
++    tcc_define_symbol(s, "__UINTMAX_TYPE__", "unsigned long long");
++    tcc_define_symbol(s, "__SIZEOF_POINTER__", "4");
++    tcc_define_symbol(s, "__SIZEOF_LONG__", "4");
++    tcc_define_symbol(s, "__SIZEOF_INT__", "4");
++    tcc_define_symbol(s, "__SIZEOF_SHORT__", "2");
++    tcc_define_symbol(s, "__SIZEOF_LONG_LONG__", "8");
++    tcc_define_symbol(s, "__SIZEOF_LONG_DOUBLE__", "12");
++    tcc_define_symbol(s, "__ORDER_LITTLE_ENDIAN__", "1234");
++    tcc_define_symbol(s, "__BYTE_ORDER__", "1234");
++    tcc_define_symbol(s, "__INT_FAST8_TYPE__", "signed char");
++    tcc_define_symbol(s, "__UINT_FAST8_TYPE__", "unsigned char");
++    tcc_define_symbol(s, "__INT_LEAST8_TYPE__", "signed char");
++    tcc_define_symbol(s, "__UINT_LEAST8_TYPE__", "unsigned char");
++    tcc_define_symbol(s, "__INT_FAST16_TYPE__", "short");
++    tcc_define_symbol(s, "__UINT_FAST16_TYPE__", "unsigned short");
++    tcc_define_symbol(s, "__INT_LEAST16_TYPE__", "short");
++    tcc_define_symbol(s, "__UINT_LEAST16_TYPE__", "unsigned short");
++    tcc_define_symbol(s, "__INT_FAST32_TYPE__", "int");
++    tcc_define_symbol(s, "__UINT_FAST32_TYPE__", "unsigned int");
++    tcc_define_symbol(s, "__INT_LEAST32_TYPE__", "int");
++    tcc_define_symbol(s, "__UINT_LEAST32_TYPE__", "unsigned int");
++    tcc_define_symbol(s, "__INT_FAST64_TYPE__", "long long");
++    tcc_define_symbol(s, "__UINT_FAST64_TYPE__", "unsigned long long");
++    tcc_define_symbol(s, "__INT_LEAST64_TYPE__", "long long");
++    tcc_define_symbol(s, "__UINT_LEAST64_TYPE__", "unsigned long long");
++
++    /* newlib sys/cdefs.h supplies evaluated C11 layout-check spellings. */
++    tcc_define_symbol(s, "__builtin_offsetof(t,m)", "((unsigned int)&(((t *)0)->m))");
+ 
+     /* TinyCC & gcc defines */
+ #if PTR_SIZE == 4
+@@ -933,6 +979,9 @@
+ 
+ LIBTCCAPI int tcc_set_output_type(TCCState *s, int output_type)
+ {
++    if (output_type != TCC_OUTPUT_EXE && output_type != TCC_OUTPUT_OBJ &&
++        output_type != TCC_OUTPUT_PREPROCESS)
++        tcc_error("CiukiOS supports static executables, objects and preprocessing only");
+     s->output_type = output_type;
+ 
+     /* always elf for objects */
+@@ -974,9 +1023,7 @@
+     /* add libc crt1/crti objects */
+     if ((output_type == TCC_OUTPUT_EXE || output_type == TCC_OUTPUT_DLL) &&
+         !s->nostdlib) {
+-        if (output_type != TCC_OUTPUT_DLL)
+-            tcc_add_crt(s, "crt1.o");
+-        tcc_add_crt(s, "crti.o");
++        tcc_add_crt(s, "crt0.o");
+     }
+ #endif
+     return 0;
+--- a/tcc.c
++++ b/tcc.c
+@@ -256,6 +256,9 @@
+     argc = argc0, argv = argv0;
+     s = tcc_new();
+     opt = tcc_parse_args(s, &argc, &argv, 1);
++    if (s->output_type == TCC_OUTPUT_DLL || s->output_type == TCC_OUTPUT_MEMORY ||
++        s->has_text_addr || s->section_align || s->output_format != TCC_OUTPUT_FORMAT_ELF)
++        tcc_error("CiukiOS requires static ELF at the SDK image base");
+ 
+     if ((n | t) == 0) {
+         if (opt == OPT_HELP)
+@@ -263,7 +266,7 @@
+         if (opt == OPT_HELP2)
+             return printf(help2), 1;
+         if (opt == OPT_M32 || opt == OPT_M64)
+-            tcc_tool_cross(s, argv, opt); /* never returns */
++            tcc_error("CiukiOS compiler targets i386 only; omit -m32/-m64");
+         if (s->verbose)
+             printf(version);
+         if (opt == OPT_AR)
+--- a/tcc.h
++++ b/tcc.h
+@@ -150,7 +150,7 @@
+ #endif
+ 
+ /* only native compiler supports -run */
+-#if defined _WIN32 == defined TCC_TARGET_PE
++#if !defined CIUKI_TCC && (defined _WIN32 == defined TCC_TARGET_PE)
+ # if (defined __i386__ || defined _X86_) && defined TCC_TARGET_I386
+ #  define TCC_IS_NATIVE
+ # elif (defined __x86_64__ || defined _AMD64_) && defined TCC_TARGET_X86_64
+--- a/tccelf.c
++++ b/tccelf.c
+@@ -1189,21 +1189,27 @@
+ {
+     tcc_add_bcheck(s1);
+     tcc_add_pragma_libs(s1);
+-    /* add libc */
++    /* Archives are rescanned to a fixed point: newlib, libc hooks and
++       pthread mutually refer to each other. Each pass extracts only members
++       needed by currently undefined symbols. No host runtime is searched. */
+     if (!s1->nostdlib) {
+-        tcc_add_library_err(s1, "c");
+-#ifdef TCC_LIBGCC
+-        if (!s1->static_link) {
+-            if (TCC_LIBGCC[0] == '/')
+-                tcc_add_file(s1, TCC_LIBGCC);
+-            else
+-                tcc_add_dll(s1, TCC_LIBGCC, 0);
+-        }
+-#endif
+-        tcc_add_support(s1, TCC_LIBTCC1);
+-        /* add crt end if not memory output */
+-        if (s1->output_type != TCC_OUTPUT_MEMORY)
+-            tcc_add_crt(s1, "crtn.o");
++        int pass, before, alacarte = s1->alacarte_link;
++        /* SDK libc overrides (notably abort) must be present before newlib
++           can satisfy an undefined symbol with its generic counterpart. */
++        s1->alacarte_link = 0;
++        tcc_add_library_err(s1, "pthread");
++        tcc_add_library_err(s1, "ciuki");
++        s1->alacarte_link = alacarte;
++        for (pass = 0; pass < 16; ++pass) {
++            before = symtab_section->data_offset;
++            tcc_add_library_err(s1, "pthread");
++            tcc_add_library_err(s1, "ciuki");
++            tcc_add_library_err(s1, "c");
++            tcc_add_library_err(s1, "m");
++            tcc_add_library_err(s1, "compiler");
++            tcc_add_support(s1, TCC_LIBTCC1);
++            if (symtab_section->data_offset == before) break;
++        }
+     }
+ }
+ 
+@@ -1576,6 +1582,52 @@
+     file_offset = 0;
+     if (s1->output_format == TCC_OUTPUT_FORMAT_ELF)
+         file_offset = sizeof(ElfW(Ehdr)) + phnum * sizeof(ElfW(Phdr));
++
++    /* CiukiOS static ELF layout: page-separated RX, R, RW and GNU_STACK.
++       Keep this before relocation, rather than rewriting a linked ELF. */
++    if (phnum) {
++        unsigned segment, pass;
++        addr = CIUKI_TCC_IMAGE_BASE;
++        dyninf->rel_addr = dyninf->rel_size = 0;
++        for (segment = 0; segment < 3; ++segment) {
++            file_offset = (file_offset + 4095) & ~4095;
++            addr = (addr + 4095) & ~(addr_t)4095;
++            ph = &phdr[segment];
++            ph->p_type = PT_LOAD;
++            ph->p_flags = segment == 0 ? PF_R | PF_X : segment == 1 ? PF_R : PF_R | PF_W;
++            ph->p_align = 4096;
++            ph->p_offset = file_offset;
++            ph->p_vaddr = ph->p_paddr = addr;
++            for (pass = 0; pass < 2; ++pass) {
++                for (i = 1; i < s1->nb_sections; ++i) {
++                    s = s1->sections[i];
++                    if (!(s->sh_flags & SHF_ALLOC)) continue;
++                    if (s->sh_flags & SHF_TLS) tcc_error("compiler TLS is unsupported");
++                    if ((s->sh_flags & (SHF_WRITE | SHF_EXECINSTR)) == (SHF_WRITE | SHF_EXECINSTR))
++                        tcc_error("writable executable section is unsupported");
++                    if ((s->sh_flags & SHF_EXECINSTR ? 0u : s->sh_flags & SHF_WRITE ? 2u : 1u) != segment)
++                        continue;
++                    if ((s->sh_type == SHT_NOBITS) != (pass != 0)) continue;
++                    tmp = addr;
++                    addr = (addr + s->sh_addralign - 1) & ~(addr_t)(s->sh_addralign - 1);
++                    if (!pass) file_offset += addr - tmp;
++                    s->sh_addr = addr;
++                    s->sh_offset = file_offset;
++                    sec_order[sh_order_index++] = i;
++                    addr += s->sh_size;
++                    if (!pass) file_offset += s->sh_size;
++                }
++            }
++            ph->p_filesz = file_offset - ph->p_offset;
++            ph->p_memsz = addr - ph->p_vaddr;
++            if (addr > 0x10000000u) tcc_error("image exceeds CiukiOS application range");
++        }
++        phdr[3].p_type = PT_GNU_STACK;
++        phdr[3].p_flags = PF_R | PF_W;
++        phdr[3].p_align = 4;
++        goto ciuki_unallocated;
++    }
++
+     s_align = ELF_PAGE_SIZE;
+     if (s1->section_align)
+         s_align = s1->section_align;
+@@ -1721,6 +1773,7 @@
+         }
+     }
+ 
++ciuki_unallocated:
+     /* all other sections come after */
+     for(i = 1; i < s1->nb_sections; i++) {
+         s = s1->sections[i];
+@@ -1992,6 +2045,12 @@
+         return -1;
+     }
+     f = fdopen(fd, "wb");
++    if (!f) {
++        close(fd);
++        unlink(filename);
++        tcc_error_noabort("could not open output stream '%s'", filename);
++        return -1;
++    }
+     if (s1->verbose)
+         printf("<- %s\n", filename);
+ 
+@@ -2004,8 +2063,16 @@
+         tcc_output_elf(s1, f, phnum, phdr, file_offset, sec_order);
+     else
+         tcc_output_binary(s1, f, sec_order);
+-    fclose(f);
+-
++    {
++        int failed = ferror(f);
++        if (fflush(f) || fsync(fd)) failed = 1;
++        if (fclose(f)) failed = 1;
++        if (failed) {
++            unlink(filename);
++            tcc_error_noabort("could not finish output '%s'", filename);
++            return -1;
++        }
++    }
+     return 0;
+ }
+ 
+@@ -2166,7 +2233,7 @@
+     else if (file_type == TCC_OUTPUT_DLL)
+         phnum = 3;
+     else if (s1->static_link)
+-        phnum = 2;
++        phnum = 4;
+     else
+         phnum = 5;
+ 
+@@ -2690,6 +2757,7 @@
+    the generated ELF file) */
+ ST_FUNC int tcc_load_dll(TCCState *s1, int fd, const char *filename, int level)
+ {
++    tcc_error("CiukiOS does not support dynamic library inputs");
+     ElfW(Ehdr) ehdr;
+     ElfW(Shdr) *shdr, *sh, *sh1;
+     int i, j, nb_syms, nb_dts, sym_bind, ret;
+--- a/lib/libtcc1.c
++++ b/lib/libtcc1.c
+@@ -363,7 +363,7 @@
+ 
+ #define __negdi2(a) (-(a))
+ 
+-long long __divdi3(long long u, long long v)
++__attribute__((weak)) long long __divdi3(long long u, long long v)
+ {
+     int c = 0;
+     DWunion uu, vv;
+@@ -386,7 +386,7 @@
+     return w;
+ }
+ 
+-long long __moddi3(long long u, long long v)
++__attribute__((weak)) long long __moddi3(long long u, long long v)
+ {
+     int c = 0;
+     DWunion uu, vv;
+@@ -408,12 +408,12 @@
+     return w;
+ }
+ 
+-unsigned long long __udivdi3(unsigned long long u, unsigned long long v)
++__attribute__((weak)) unsigned long long __udivdi3(unsigned long long u, unsigned long long v)
+ {
+     return __udivmoddi4 (u, v, (UDWtype *) 0);
+ }
+ 
+-unsigned long long __umoddi3(unsigned long long u, unsigned long long v)
++__attribute__((weak)) unsigned long long __umoddi3(unsigned long long u, unsigned long long v)
+ {
+     UDWtype w;
+     

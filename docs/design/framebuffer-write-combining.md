@@ -28,7 +28,7 @@ Repository inspection found two independent UC aliases: the early console
 and `fbdev_init` both called `vmm_map_mmio(..., true)`. The RAM direct map
 already excludes the LFB. Both callers will use `vmm_map_framebuffer`, which
 configures WC before creating the first alias and retains its decision for
-the immutable boot framebuffer. Generic MMIO mappings keep their existing
+the two initial boot aliases. Generic MMIO mappings keep their existing
 attributes. No framebuffer PTE exists during the MTRR update.
 
 ## Range and fallback policy
@@ -64,3 +64,28 @@ requires ordering against both earlier and later instructions. Surround each
 read with CPUID for the P6 baseline; the reported interval includes boundary
 serialization overhead. Older hardware can change TSC rate with power state:
 the existing boot calibration is a comparison aid, not an invariant clock.
+
+## F1-23 merge: runtime modes (2026-10-12)
+
+The [Linux MTRR documentation](https://docs.kernel.org/arch/x86/mtrr.html)
+explains that the framebuffer physical base can move and the range must use
+that reported address. The Intel update/combination rules cited above apply
+also after a mode switch. Inspection found that F1-23 revokes both console
+and presenter aliases before firmware, but its replacement mapped UC pages;
+F1-24 initially configured only the immutable boot extent.
+
+Keep the initial boot decision shared between the console/presenter aliases.
+After firmware confirms a mode (including rollback/watchdog restore), use a
+separate framebuffer replacement API: revoke the reusable window, re-evaluate
+WC for the confirmed base and pitch*height, then publish matching pages to both
+console and presenter. Reprogram the one/two OS-owned variable pairs on each
+runtime remap rather than growing the boot range or accumulating pairs. Verify
+the owned MSR values still match before reclaiming them; firmware changes
+cause UC fallback without overwriting that pair. Restore original invalid pair
+contents when retiring a slot. Never overwrite a valid BIOS pair. Recheck CPU,
+PAT, E820 and aperture bounds through the existing planner. Use the bootinfo-v2
+video memory extent when present, falling back to the original VBE controller
+or the page-rounded frame. Unsupported, unaligned or unsafe extents retain UC.
+Generic MMIO replacement remains UC. Drain writes before revoking mappings.
+No LFB alias exists during the UP MTRR update; firmware has returned and
+registry ownership is claimed before remapping. Physical qualification is pending.
