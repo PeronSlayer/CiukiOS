@@ -125,6 +125,37 @@ void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached)
     return (void *)(va + off);
 }
 
+void *vmm_reserve_mmio(uint32_t capacity)
+{
+    uint64_t span = ((uint64_t)capacity + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    if (!capacity || mmio_next >= MMIO_END || span + PAGE_SIZE > MMIO_END - mmio_next) return 0;
+    uint32_t va = mmio_next;
+    mmio_next += (uint32_t)span + PAGE_SIZE;
+    return (void *)va;
+}
+
+void vmm_revoke_mmio(void *mapped, uint32_t bytes)
+{
+    uint32_t va = (uint32_t)(uintptr_t)mapped, start = PAGE_ALIGN_DOWN(va);
+    uint64_t end = ((uint64_t)va + bytes + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    if (!bytes || start < MMIO_REGION || end > MMIO_END) return;
+    for (uint32_t p = start; p < end; p += PAGE_SIZE) kunmap(p);
+}
+
+void *vmm_replace_mmio(void *window, uint32_t capacity, uint32_t phys, uint32_t bytes)
+{
+    uint32_t va = (uint32_t)(uintptr_t)window, off = phys & (PAGE_SIZE - 1);
+    uint64_t span = ((uint64_t)bytes + off + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    if (!bytes || span > capacity || va < MMIO_REGION || (va & (PAGE_SIZE - 1)) ||
+        (uint64_t)va + capacity > MMIO_END || (uint64_t)phys + bytes > 0x100000000ull) return 0;
+    vmm_revoke_mmio(window, capacity);
+    for (uint32_t i = 0; i < span; i += PAGE_SIZE) {
+        kmap(va + i, PAGE_ALIGN_DOWN(phys) + i, PTE_W | PTE_PCD | PTE_PWT);
+        invlpg(va + i);
+    }
+    return (void *)(va + off);
+}
+
 void *kstack_alloc(void)
 {
     for (unsigned s = 0; s < STACK_SLOTS; s++) {

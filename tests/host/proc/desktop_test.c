@@ -45,6 +45,7 @@ static unsigned operator_prompts;
 void console_operator_prompt(bool announce) { if (announce) operator_prompts++; }
 /* f3-02: the screen console stays dark while a process holds the display grant. */
 static bool console_owned; static unsigned console_owned_changes;
+static unsigned display_frames;
 void console_display_owned(bool owned) { console_owned = owned; console_owned_changes++; }
 void console_wake(void) {}
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
@@ -403,10 +404,16 @@ static void test_desktop_grants(void)
     int32_t grants[2]; CHECK(!console_owned && !grants_install(p, grants));
     CHECK(console_owned && console_owned_changes == owned_changes + 1);
     CHECK(grants_install(p, grants) == -EPERM && console_owned_changes == owned_changes + 1);
-    struct ciuki_display_info info;
+    struct ciuki_framebuffer_info info;
     CHECK(grant_display_info(p, 127, &info) == -EBADF);
     CHECK(grant_display_info(p, grants[1], &info) == -EBADF);
     CHECK(grant_display_info(p, grants[0], &info) == -ENODEV);
+    struct trap_frame change = {.eax = CIUKI_SYS_READ, .ebx = (uint32_t)grants[0], .ecx = BUFFER, .edx = 4};
+    CHECK(desktop_fd_syscall(&change) && (int32_t)change.eax == 4);
+    uint32_t counter; CHECK(!ua_read(p->memory, &counter, BUFFER, 4) && counter == 42);
+    change.eax = CIUKI_SYS_READ; change.edx = 3;
+    CHECK(desktop_fd_syscall(&change) && (int32_t)change.eax == -EINVAL);
+    CHECK(grants_display_owner(p) && !grants_display_busy());
     int dup = desktop_dup(p, grants[0], 0, false, 0); CHECK(dup >= 0);
     CHECK(!desktop_fcntl(p, grants[0], F_SETFD, 0));
     struct ciuki_spawn_fd inherited = { grants[0], 3 };
@@ -502,7 +509,7 @@ static void test_desktop_present(void)
         CHECK(grant_present(p, grants[0], fd, &invalid) == -EINVAL);
         invalid = (struct ciuki_rect){ INT32_MIN, INT32_MIN, 0, 0, UINT32_MAX, UINT32_MAX };
         CHECK(grant_present(p, grants[0], fd, &invalid) == -EINVAL);
-        struct ciuki_display_info info; CHECK(!grant_display_info(p, grants[0], &info) && info.generation == 1);
+        struct ciuki_framebuffer_info info; CHECK(!grant_display_info(p, grants[0], &info) && info.generation == 1);
         desktop_resource.state = RS_QUARANTINED;
         CHECK(grant_present(p, grants[0], fd, &invalid) == -EIO);
         desktop_resource.state = RS_ACTIVE;
@@ -519,7 +526,15 @@ static void test_desktop_present(void)
         memcpy((uint8_t *)P2V(surface_page(wide, i*4/PAGE_SIZE)) + i*4%PAGE_SIZE, &value, 4);
     }
     struct ciuki_rect whole = { 0, 0, 0, 0, 2048, 2 };
-    CHECK(!grant_present(p, grants[0], wide_fd, &whole));
+    unsigned acknowledged = display_frames;
+    CHECK(!grant_present(p, grants[0], wide_fd, &whole) && display_frames == acknowledged + 1);
+    whole.height = 1;
+    CHECK(!grant_present(p, grants[0], wide_fd, &whole) && display_frames == acknowledged + 1);
+    /* An old larger surface clipped onto a smaller new screen is not a
+     * complete compositor frame for the mode watchdog. */
+    device.width = 1024; whole.height = 2;
+    CHECK(!grant_present(p, grants[0], wide_fd, &whole) && display_frames == acknowledged + 1);
+    device.width = 2048;
     for (unsigned y = 0; y < 2; y++) {
         for (unsigned x = 0; x < 2048; x++) {
             uint32_t value; memcpy(&value, wide_target+y*pitch+x*4, 4);
@@ -1111,3 +1126,6 @@ int main(int argc, char **argv)
     free(ram);
     return 0;
 }
+
+void display_frame_complete(uint32_t gen) { CHECK(gen == 1); display_frames++; }
+uint32_t display_change_counter(void) { return 42; }

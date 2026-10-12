@@ -1177,3 +1177,49 @@ bootstrap/probe/SDK-header boundaries above remain lead-owned.
 
 No QEMU, systemd scope, full image build, commit, push or Git command is part of
 this implementer's evidence.
+
+## Display mode service (f1-23)
+
+The SDK's `<ciuki/display.h>` exposes `ciuki_display_query(info)` to any process
+and `ciuki_display_set(mode_id)` to the supervisor's desktop. Initialize
+`info.version=CIUKI_DISPLAY_VERSION` and `info.size=sizeof(info)`; the version-1
+record is 612 bytes and contains current width/height/depth/pitch, VRAM bytes,
+VBE BCD version, copied OEM/vendor/product strings, PCI adapter identity and
+up to 32 LFB modes. Query/set return 0 or **negative errno directly**. The
+existing syscall-67 framebuffer function and its 48-byte wire layout remain;
+its C record is now `struct ciuki_framebuffer_info`.
+
+Control Panel must ask the desktop to switch through its existing authenticated
+v2 settings channel: `DESK_SETTINGS_DISPLAY` (=3), 24-byte `DESK_SETTINGS`,
+serial at byte 4, request at 8, uint16 mode id encoded as u32 at 12, zeros at
+16/20. Only the Control Panel launched by this desktop is accepted. The desktop
+returns `DESK_TASK_RESULT` with request `DESK_SETTINGS` and 0 or negative errno.
+Send this request instead of calling set from the applet process or writing an
+unconfirmed mode into the configuration file. The UI belongs to f2-37.
+
+Each desktop frame polls the readable u32 change counter on its display
+fd (`read(fd,&counter,4)`). A committed mode or restore changes it. The desktop
+queries the active mode, allocates/maps a replacement XRGB8888 output surface,
+releases its previous mapping/fd, clamps windows and the pointer to the new work
+area, sends CONFIGURE to resizable clients and lays out bars/icons again.
+Client minimum/step constraints remain binding; an oversized fixed/minimum-size
+client is positioned with its title reachable and clipped by the compositor.
+The wallpaper cache is rebuilt for the new geometry and a full screen is
+presented. If output allocation fails, the old surface remains private and
+the kernel's independent 10 s frame watchdog restores the preceding mode.
+
+`/system/settings/desktop.cfg` gains `display_mode=<decimal VBE id>`; zero
+keeps the loader default. At startup the desktop tries it once only if it is
+still listed. Settings reloads preserve the confirmed mode; runtime changes
+use the settings-channel request above. The desktop saves the selected id only
+after a complete successful frame in that mode, and saves a restored mode after
+its recovery frame. The loader never reads this setting, so the next boot
+starts with its ordinary boot-mode selection before applying a qualified saved
+preference.
+
+The ABI, transaction/firmware ownership, source research and qualification
+matrix are specified in the [f1-23 acceptance amendment](design/f1-acceptance.md#amendment-f1-23--display-inventory-and-runtime-vbe-modes-2026-10-12).
+Host coverage: `tests/host/test_display_modes.py`, `display_test.c`, the firmware
+worker cases in `v86_test.c`, bootinfo cases in `kernel_lib_test.c`, and RGB565
+reference fixtures in `fbdev_test.c`. Real QEMU/T23/E500 mode changes remain
+lead-owned qualification.

@@ -166,6 +166,56 @@ void desk_resize(struct desktop *d, int i, struct desk_box f)
     configure(d, i, 0);
     desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
 }
+/* Only a successfully presented frame in the requested/confirmed mode may
+ * replace the saved preference. Failed reallocations still have the old id. */
+int desk_display_frame_commit(struct desktop *d, int redraw)
+{
+    if (redraw || !d->display_pending || d->display_pending != d->display_mode || d->damage.count) return 0;
+    d->sh.cfg.display_mode = d->display_pending;
+    d->display_pending = 0;
+    return 1;
+}
+
+/* Called only after allocating the new screen surface. Client surfaces stay
+ * attached until their CONFIGURE/DAMAGE handshake replaces them. */
+void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
+{
+    d->width = width; d->height = height;
+    d->drag = -1; d->resize_edges = 0;
+    d->title_hot = d->title_down = 0;
+    if (d->mouse_x >= (int32_t)width) d->mouse_x = (int32_t)width - 1;
+    if (d->mouse_y >= (int32_t)height) d->mouse_y = (int32_t)height - 1;
+    int32_t work = (int32_t)height - DESK_BAR - (d->shell ? DESK_BAR : 0);
+    for (int i = 0; i < DESK_CLIENTS; i++) {
+        struct desk_client *c = &d->clients[i];
+        if (!c->window) continue;
+        if (c->collapsed && c->resizable) desk_collapse(d, i);
+        if (c->resizable && !c->internal) {
+            struct desk_box f = c->frame;
+            if (c->zoomed || f.w > (int32_t)width) f.w = (int32_t)width;
+            if (c->zoomed || f.h > work) f.h = work;
+            uint32_t serial = c->resize_serial;
+            desk_resize(d, i, f);
+            /* The display geometry changed even if this client's size did
+             * not. Issue a fresh serial, allowing the client to re-layout. */
+            if (serial == c->resize_serial) {
+                if (!++c->resize_serial) ++c->resize_serial;
+                configure(d, i, 0);
+            }
+        }
+        desk_move(d, i, c->zoomed ? 0 : c->frame.x, c->zoomed ? DESK_BAR : c->frame.y);
+        int32_t max_x = (int32_t)width - c->restore.w, max_y = (int32_t)height - c->restore.h - (d->shell ? DESK_BAR : 0);
+        if (max_x < 0) max_x = 0;
+        if (max_y < DESK_BAR) max_y = DESK_BAR;
+        if (c->restore.x > max_x) c->restore.x = max_x;
+        if (c->restore.y > max_y) c->restore.y = max_y;
+    }
+    d->sh.wall_valid = 0;
+    if (d->shell) desk_shell_apply(d);
+    d->damage.count = 0;
+    desk_damage_add(&d->damage, (struct desk_box){0, 0, (int32_t)width, (int32_t)height}, width, height);
+}
+
 void desk_zoom(struct desktop *d, int i)
 {
     if (i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return;
@@ -352,6 +402,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         /* Control Panel: apply desktop.cfg again, or set the master volume
          * through the desktop's delegated mixer handle (desktop.c). */
         int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : 0;
+        if (!result && p.request == DESK_SETTINGS_DISPLAY)
+            result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
         if (!result && p.request == DESK_SETTINGS_MASTER) {
             if (d->mixer_fd < 0) result = -ENODEV;

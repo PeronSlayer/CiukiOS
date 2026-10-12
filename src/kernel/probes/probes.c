@@ -297,7 +297,7 @@ static int probe_bootinfo(void)
     for (unsigned n = 0; n < ARRAY_SIZE(negs); n++) {
         memcpy(&scratch, &g_boot, sizeof(scratch));
         switch (negs[n].field) {
-        case 0: scratch.version = 2; break;
+        case 0: scratch.version = CIUKI_BOOT_INFO_VER + 1; break;
         case 1: scratch.size = 0x1000; break;
         case 2: scratch.e820_count = CIUKI_E820_MAX + 1; break;
         case 3: scratch.e820[0].base = 0xFFFFFFFFFFFFF000ull; scratch.e820[0].length = 0x2000; break;

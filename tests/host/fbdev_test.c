@@ -90,6 +90,16 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         data_records++;
 }
 
+void *vmm_reserve_mmio(uint32_t capacity) { (void)capacity; return 0; }
+void vmm_revoke_mmio(void *p, uint32_t bytes) { (void)p; (void)bytes; }
+void *vmm_replace_mmio(void *p, uint32_t capacity, uint32_t phys, uint32_t bytes)
+{ (void)p; (void)capacity; (void)phys; (void)bytes; return 0; }
+int registry_quiesce(int h, gen_t g, registry_idle_proof_fn proof)
+{ (void)h; (void)g; (void)proof; return -EINVAL; }
+int registry_release(int h, uint32_t g) { (void)h; (void)g; return -EINVAL; }
+int registry_claim(enum res_type t, uint32_t s, uint32_t e, const char *o, bool share)
+{ (void)t; (void)s; (void)e; (void)o; (void)share; return -EINVAL; }
+
 #include "../../src/kernel/drivers/fbdev.c"
 #include "../../src/kernel/drivers/fbdev_probe.c"
 
@@ -221,7 +231,7 @@ static void render_tests(unsigned bpp, unsigned padding, unsigned format, unsign
         case 1: bad.pitch = UINT32_MAX; break;
         case 2: bad.size--; break;
         case 3: bad.mapped = 0; break;
-        case 4: bad.bpp = 16; break;
+        case 4: bad.bpp = 15; break;
         case 5: bad.red_size = 9; break;
         case 6: bad.red_pos = 31; break;
         case 7: bad.green_pos = bad.red_pos; break;
@@ -380,6 +390,9 @@ int main(void)
             for (unsigned format = 0; format < 3; format++)
                 for (unsigned source_pad = 0; source_pad <= 7; source_pad += 7)
                     render_tests(bpp, pad, format, source_pad);
+    for (unsigned pad = 0; pad <= 7; pad += 7)
+        for (unsigned source_pad = 0; source_pad <= 7; source_pad += 7)
+            render_tests(16, pad, 2, source_pad);
     boot_tests();
     printf("framebuffer host tests: %s (%u reference comparisons, %u failures)\n",
            failures ? "FAIL" : "PASS", cases, failures);

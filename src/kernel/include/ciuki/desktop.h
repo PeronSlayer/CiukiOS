@@ -48,7 +48,7 @@ int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags
 
 /* No public syscall can install a grant. Caller is the bootstrap controller. */
 int grants_install(struct process *p, int32_t fds[2]);
-int grant_display_info(struct process *p, int32_t fd, struct ciuki_display_info *out);
+int grant_display_info(struct process *p, int32_t fd, struct ciuki_framebuffer_info *out);
 int grant_present(struct process *p, int32_t display, int32_t surface, const struct ciuki_rect *rect);
 int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t capacity);
 int desktop_clip(const struct ciuki_surface_info *s, const struct fb_device *d,
