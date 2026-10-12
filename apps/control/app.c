@@ -258,7 +258,7 @@ static void list_style(struct du_widget *w, const char *title)
 static const char *wall_label(struct cp_app *a, unsigned k)
 {
     if (k == 0) return "(None)";
-    if (k == 1) return "Ciuki (default)";
+    if (k == 1) return "Ciuki portrait";
     if (k < 2 + DESK_BUILTIN_WALLPAPERS) return desk_builtin_wallpapers[k - 2].label;
     const char *path = a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS], *base = strrchr(path, '/');
     return base ? base + 1 : path;

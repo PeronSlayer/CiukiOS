@@ -13,7 +13,7 @@ void cfg_defaults(struct ciuki_settings *s)
 {
     memset(s, 0, sizeof(*s));
     strcpy(s->theme, "Platinum");
-    strcpy(s->wallpaper, "ciuki");
+    strcpy(s->wallpaper, "/system/wallpapers/Ciuk2.png");   /* owner's Ciuk2 scene (assets/wallpapers/ciuki), centred */
     s->wallpaper_mode = CFG_WALL_CENTER;
     s->desktop_color = 0x375564u;          /* DESK_BACKGROUND */
     s->clock_24h = 1;

@@ -26,6 +26,7 @@ SDK = ROOT / "build/tools/ciuki-sdk"
 LUA = ROOT / "build/apps/lua"
 DESKTOP = ROOT / "build/apps/desktop"
 TEST_PATH = "/system/tests/lua-5.4.8-tests"
+WALLPAPERS = ("Ciuk1.png", "Ciuk2.png", "Ciuk3.png")
 
 
 def run(*args):
@@ -72,8 +73,11 @@ def desktop_payloads():
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],
                 "elf": desktop["elf"], "portrait": desktop["portrait"], "icons": desktop["icons"]}
-    # /system/settings holds desktop.cfg (written at run time); /system/wallpapers is where the owner may
-    # copy wallpapers (PNG, JPEG, BMP). Never Microsoft's third_party/win_bg bitmaps: see docs/desktop.md.
+    # The owner's three adaptive Ciuki scenes (assets/wallpapers/ciuki, 1448x1086 PNG; Ciuk2 is the
+    # default wallpaper of apps/desktop/settings.c). /system/settings holds desktop.cfg (written at run
+    # time); the owner may add PNG/JPEG/BMP files to /system/wallpapers. Never Microsoft's
+    # third_party/win_bg bitmaps: see docs/desktop.md.
+    sources.update({f"/system/wallpapers/{name}": ROOT / "assets/wallpapers/ciuki" / name for name in WALLPAPERS})
     return sources, {"/bin", "/system", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
 
 

@@ -265,15 +265,19 @@ class DesktopTests(unittest.TestCase):
                                         "/bin/ciuknote", "/bin/control", "/bin/calc", "/bin/charmap", "/bin/clock", "/bin/help", "/bin/mixer", "/bin/viewer",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/icons/tango.cis",
-                                        "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT"})
+                                        "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
+                                        "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png"})
         self.assertTrue({"/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 19)
+        self.assertEqual(len(records), 22)
         for r in records:
             if r["path"] == "/system/licenses/stb_image.txt":
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
+            elif r["path"].startswith("/system/wallpapers/"):
+                # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
+                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())
             else:
                 self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
         # Microsoft's ME wallpapers (third_party/win_bg, local only) never enter the image.
@@ -293,7 +297,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp)
             volume = Path(temp) / "fixture.fat"
             with volume.open("wb") as f:
-                f.truncate(16*1024*1024)   # desktop programs plus the accessories
+                f.truncate(32*1024*1024)   # desktop programs, the accessories and the three Ciuki wallpaper scenes (8.4 MiB)
             subprocess.run(["mkfs.fat", str(volume)], check=True, env=env, stdout=subprocess.DEVNULL)
             image.populate_payloads(volume, sources, directories)
             with patch.object(image, "PART_LBA", 0):

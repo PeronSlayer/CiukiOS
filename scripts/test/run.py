@@ -930,7 +930,9 @@ def normal_boot_regions(width, height):
             ('console_absent',(left,0,top-left,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
             ('taskbar',(0,height-DESK_BAR_ROWS,width,DESK_BAR_ROWS),(DESK_TASKBAR,),'min',0.5,1),
             ('start_button',DESK_START_BOX,DESK_START_BUTTON,'min',0.4,1),
-            ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),(DESK_BACKGROUND,),'min',0.25,2))
+            # Heuristic 3: the default wallpaper is the owner's Ciuk2 scene, so the
+            # work area is only required to be free of the kernel console colours.
+            ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,2))
 
 
 def colour_fraction(pixels, width, box, colours, step=1, tolerance=SCREEN_TOLERANCE):
@@ -949,10 +951,11 @@ def colour_fraction(pixels, width, box, colours, step=1, tolerance=SCREEN_TOLERA
 def observe_normal_boot_screen(path, spec):
     """Taskbar, Ciuki button (top-left), top bar and background colours of
     the shell desktop; the top bar must not show the kernel console colours.
-    Heuristic 2: the Ciuki button moved from the taskbar to the top bar."""
+    Heuristic 2: the Ciuki button moved from the taskbar to the top bar;
+    3: the work area shows the default wallpaper (Ciuk2), not the desktop colour."""
     width, height, pixels = read_ppm(path)
     observed = {'artifact':Path(path).name, 'ppm_sha256':sha(path), 'width':width, 'height':height,
-                'heuristic':'normal-boot-desktop-2', 'colour_tolerance':SCREEN_TOLERANCE,
+                'heuristic':'normal-boot-desktop-3', 'colour_tolerance':SCREEN_TOLERANCE,
                 'regions':{}, 'failures':[]}
     geometry = spec.get('geometry')
     if geometry is not None and [width,height] != list(geometry):
