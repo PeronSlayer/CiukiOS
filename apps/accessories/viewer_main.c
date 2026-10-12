@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/viewer: the CiukiOS Image Viewer (desktop client, protocol v2).
+ * /Programs/viewer: the CiukiOS Image Viewer (desktop client, protocol v2).
  * Usage: viewer [--channel-fd=N] [--test=viewer] [path] */
 #include "viewer.h"
 #include <errno.h>
@@ -18,7 +18,7 @@ int main(int argc, char **argv)
     acc_title(title, sizeof(title), "Image Viewer", path);
     acc_window_size(VIEWER_W, VIEWER_H, &w, &h);
     if (test) { w = VIEWER_W; h = VIEWER_H; }
-    if (du_window_open(&m->window, &m->ui, channel, w, h, title)) {
+    if (du_window_open_resizable(&m->window, &m->ui, channel, w, h, title, 320, 240)) {
         fprintf(stderr, "viewer: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
     viewer_attach(&m->app, &m->ui, viewer_native_fs());

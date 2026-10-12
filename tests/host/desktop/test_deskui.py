@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,7 +41,7 @@ TOOLKIT_FRAMES = {
 }
 FILES_FRAMES = {
     "files-about.xrgb": "PIN-FROM-FIRST-RUN",
-    "files-bin-icons.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-programs-icons.xrgb": "PIN-FROM-FIRST-RUN",
     "files-confirm-delete.xrgb": "PIN-FROM-FIRST-RUN",
     "files-context-background.xrgb": "PIN-FROM-FIRST-RUN",
     "files-context-item.xrgb": "PIN-FROM-FIRST-RUN",
@@ -57,6 +58,8 @@ FILES_FRAMES = {
     "files-properties.xrgb": "PIN-FROM-FIRST-RUN",
     "files-rename-error.xrgb": "PIN-FROM-FIRST-RUN",
     "files-replace-prompt.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-computer.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-c-drive.xrgb": "PIN-FROM-FIRST-RUN",
     "files-root-details.xrgb": "PIN-FROM-FIRST-RUN",
     "files-sort-size-desc.xrgb": "PIN-FROM-FIRST-RUN",
     "files-system-details.xrgb": "PIN-FROM-FIRST-RUN",
@@ -101,9 +104,14 @@ class DeskuiTests(unittest.TestCase):
             folder = Path(temp)
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / name
+            include = folder / "include/ciuki"
+            include.mkdir(parents=True)
+            for header in ("channel.h", "surface.h"):
+                shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / header, include / header)
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/files"), "-I", str(ROOT / "src/kernel/include"),
+                            "-I", str(folder / "include"),
                             *ICONS.defines(), *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
             output = folder / "frames"
             output.mkdir()
@@ -111,6 +119,13 @@ class DeskuiTests(unittest.TestCase):
             result = subprocess.run([str(binary), *([str(output)] if frames else []), *extra],
                                     check=True, env=env, capture_output=True, text=True)
             print(result.stdout.strip())
+            if name == "files-ui":
+                from PIL import Image
+                review = ROOT / "build/f2-36"
+                review.mkdir(parents=True, exist_ok=True)
+                for stem in ("computer", "c-drive"):
+                    raw = (output / f"files-{stem}.xrgb").read_bytes()
+                    Image.frombytes("RGB", (760, 520), raw, "raw", "BGRX").save(review / f"files-{stem}.png")
             digests = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output.glob("*.xrgb"))}
             return result.stdout, digests
 
@@ -121,7 +136,9 @@ class DeskuiTests(unittest.TestCase):
         assert_pins(self, actual, pinned, label + "_FRAMES")
 
     def test_toolkit_widgets_and_frames(self):
-        _, digests = self.run_harness("deskui", ["tests/host/desktop/deskui_test.c", *TOOLKIT], frames=True)
+        _, digests = self.run_harness("deskui", ["tests/host/desktop/deskui_test.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c",
+            "tests/host/desktop/resize_client.c", "tests/host/desktop/resize_client_test.c"], frames=True)
         self.assertEqual(len(digests), 9)
         self.check_frames(digests, TOOLKIT_FRAMES, "TOOLKIT")
 
@@ -144,7 +161,7 @@ class DeskuiTests(unittest.TestCase):
     def test_files_ui_script_and_frames(self):
         stdout, digests = self.files_ui()
         self.assertIn("PASS Files UI", stdout)
-        self.assertEqual(len(digests), 23)
+        self.assertEqual(len(digests), 25)
         self.check_frames(digests, FILES_FRAMES, "FILES")
 
     def test_files_qemu_script_targets(self):
@@ -171,7 +188,7 @@ class DeskuiTests(unittest.TestCase):
                 elif event["type"] == "btn" and event["data"]["down"]: clicks.append((x, y))
                 elif event["type"] == "key": keys.append((event["data"]["key"]["data"], event["data"]["down"]))
         # Ciuki button, Programs, then the Files row of the Programs submenu (tests/host/desktop/shell_menu.py).
-        programs = sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
+        programs = sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
         menu = load("deskui_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         menu.check_launch(self, clicks, programs, "files")
         client = (4 + 3, 36 + 24)   # Files moves its frame to 4,36; content below the 24 px title

@@ -130,7 +130,7 @@ const char *du_icon_store_name(unsigned index);
 const char *du_icon_notice(void);                            /* the store's Tango licence notice */
 
 /* CiukiOS objects -> Tango names (icon_map.c). Keys are "<kind>:<object>":
- * program:<name in /bin>, menu:, action:, place:, type:folder|executable|unknown,
+ * program:<name in /Programs>, menu:, action:, place:, type:folder|executable|unknown,
  * type:.<extension>, status:, dialog:, device:, settings:, category:, emblem:, wm:.
  * An unknown object of a known kind gets that kind's default; a key without
  * a colon is returned unchanged (a Tango name). */
@@ -169,6 +169,7 @@ struct du_widget {
     enum du_kind kind;
     int id;
     struct du_rect box;
+    unsigned anchors;                      /* DU_ANCHOR_*; zero keeps top/left */
     uint8_t hidden, disabled, pressed, hot, def, vertical;
     char text[DU_TEXT_MAX];
     size_t cursor, anchor, offset;          /* edit (bytes; offset in cells) */
@@ -188,6 +189,13 @@ struct du_widget {
     unsigned sample_count;
     void *data;                             /* f2-32: DU_TEXTAREA state */
 };
+
+#define DU_ANCHOR_LEFT   1u
+#define DU_ANCHOR_RIGHT  2u
+#define DU_ANCHOR_TOP    4u
+#define DU_ANCHOR_BOTTOM 8u
+#define DU_ANCHOR_GROW_X (DU_ANCHOR_LEFT | DU_ANCHOR_RIGHT)
+#define DU_ANCHOR_GROW_Y (DU_ANCHOR_TOP | DU_ANCHOR_BOTTOM)
 
 #define DU_ITEM_DISABLED  1u
 #define DU_ITEM_CHECKED   2u
@@ -254,10 +262,13 @@ struct du_ui {
     /* Optional application drawing after the widgets, before menus and
      * dialogs (previews, swatches; Control Panel). */
     void (*paint)(struct du_ui *, void *);
+    /* Runs after anchors and canvas replacement, preserving widget/model state. */
+    void (*layout)(struct du_ui *, void *);
 };
 
 /* Core */
 void du_init(struct du_ui *, uint32_t *pixels, int width, int height);
+void du_resize(struct du_ui *, uint32_t *pixels, int width, int height);
 struct du_widget *du_add(struct du_ui *, enum du_kind, int id, struct du_rect, const char *text);
 struct du_widget *du_get(struct du_ui *, int id);
 int du_hit(const struct du_ui *, int x, int y);
@@ -317,6 +328,12 @@ struct du_window {
     uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;
+    /* At most one replacement. After sending its attachment, retain the
+     * previous surface until CONFIGURE(COMMITTED) confirms the swap. */
+    int old_surface, replacement, swap_sent, resizable;
+    struct ciuki_surface_info old_info;
+    uint32_t *old_pixels, *old_back;
+    uint32_t configure_serial, request_serial, request_width, request_height, last_serial;
     struct ciuki_message tx[16]; unsigned head, count;
     struct du_rect damage; int damaged;
     struct du_ui *ui;
@@ -326,11 +343,14 @@ struct du_window {
     void (*message)(struct du_window *, const struct desk_packet *, void *);
 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);
+int du_window_open_resizable(struct du_window *, struct du_ui *, int channel, int width, int height,
+                             const char *title, int min_width, int min_height);
 int du_window_turn(struct du_window *, uint64_t now);
 void du_window_present(struct du_window *);
 int du_window_ping(struct du_window *, uint32_t serial);
 int du_window_queue(struct du_window *, struct ciuki_message *);  /* f2-33: any v2 request */
 int du_window_move(struct du_window *, int x, int y);
+int du_window_set_title(struct du_window *, const char *title);
 void du_window_close(struct du_window *);
 void du_window_destroy(struct du_window *);
 int du_run(struct du_window *, void (*idle)(void *), void *);

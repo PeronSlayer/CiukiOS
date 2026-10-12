@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
+ * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
  * NAME: display, mouse, keyboard, sounds, datetime, system. */
 #include "control.h"
 #include <ciuki/audio.h>
@@ -153,7 +153,7 @@ int main(int argc, char **argv)
         struct ciuki_proc_system sys; memcpy(&sys, buffer, sizeof(sys));
         if (sys.version == CIUKI_PROC_VERSION) { h->mem_total_k = (uint64_t)sys.usable_pages * 4u; h->mem_free_k = (uint64_t)sys.free_pages * 4u; h->processes = sys.processes; }
     }
-    if (du_window_open(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel")) {
+    if (du_window_open_resizable(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
     m->window.message = on_message; m->window.user = m;

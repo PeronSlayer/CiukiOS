@@ -3,6 +3,7 @@
  * menus, dialogs, timers, clipboard, focus releases and rendering frames. */
 #include "deskui.h"
 #include <assert.h>
+#include "resize_transport.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -233,7 +234,7 @@ int main(int argc, char **argv)
     du_add(&u, DU_SCROLLBAR, 90, (struct du_rect){300, 60, 16, 150}, "")->total = 50;
     du_get(&u, 90)->page = 10; du_get(&u, 90)->value = 20;
     struct du_widget *tree = du_add(&u, DU_TREE, 91, (struct du_rect){320, 60, 78, 150}, "");
-    static struct du_item nodes[4] = {{{"Root"}, NULL, NULL, 0, 0, 0, 1, 1}, {{"bin"}, NULL, NULL, 0, 0, 1, 0, 1},
+    static struct du_item nodes[4] = {{{"Root"}, NULL, NULL, 0, 0, 0, 1, 1}, {{"Programs"}, NULL, NULL, 0, 0, 1, 0, 1},
                                       {{"system"}, NULL, NULL, 1, 0, 1, 1, 1}, {{"logs"}, NULL, NULL, 0, 0, 2, 0, 0}};
     tree->items = nodes; tree->count = 4; tree->active = 2;
     assert(du_tree_toggle_hit(tree, 322 + 9 + 16, 62 + 17 + 8) == 1 && du_tree_toggle_hit(tree, 322 + 9 + 32, 62 + 17 * 3 + 8) == -1);
@@ -255,7 +256,26 @@ int main(int argc, char **argv)
         list->view = (enum du_view)view; list->scroll = list->hscroll = 0;
         char name[16]; snprintf(name, sizeof(name), "view%d", view); frame(name);
     }
+    /* Resize preserves focus, text/selection, timers and dialogs; anchors
+     * grow the body and move fixed-height footer controls. */
+    list->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
+    status->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
+    struct du_rect old_list = list->box, old_status = status->box;
+    int old_focus = u.focus; unsigned old_active = list->active;
+    du_input_box(&u, 101, "Resize", "Keep this text:", "Ciuki");
+    uint32_t *large = calloc(600 * 440 + 1, 4); assert(large);
+    large[600 * 440] = 0x5a5a5a5au;
+    du_resize(&u, large, 600, 440);
+    assert(list->box.w == old_list.w + 200 && list->box.h == old_list.h + 140);
+    assert(status->box.y == old_status.y + 140 && status->box.w == 600 && status->box.h == 20);
+    assert(u.focus == old_focus && list->active == old_active && rows[1].selected);
+    assert(u.dialog.kind == DU_DLG_INPUT && !strcmp(u.dialog.items[2].text, "Ciuki"));
+    du_render(&u); assert(large[600 * 440] == 0x5a5a5a5au);
+    du_resize(&u, pixels, W, H);
+    assert(!memcmp(&list->box, &old_list, sizeof(old_list)) && !memcmp(&status->box, &old_status, sizeof(old_status)));
+    du_dialog_close(&u); free(large);
     free(pixels);
+    rt_client_tests();
     puts("PASS deskui: geometry, hit-testing, edit/clipboard/UTF-8, list/tree/scroll/columns, focus/release, menus/accelerators/mnemonics, dialogs, timers, frames");
     return 0;
 }

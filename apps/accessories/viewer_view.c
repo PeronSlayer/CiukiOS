@@ -82,6 +82,13 @@ void viewer_layout(struct viewer_app *a)
     du_get(a->ui, V_STATUS)->box = (struct du_rect){0, c->height - STATUS_H, c->width, STATUS_H};
 }
 
+static void resize_layout(struct du_ui *u, void *user)
+{
+    (void)u;
+    struct viewer_app *a = user;
+    viewer_layout(a); clamp_scroll(a); status(a);
+}
+
 static int by_name(const void *x, const void *y) { return strcasecmp(x, y); }
 static void scan_folder(struct viewer_app *a)
 {
@@ -173,7 +180,7 @@ static const struct du_menu_item help_template[] = { {"&About Image Viewer", V_M
 
 int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs *fs)
 {
-    a->ui = u; a->fs = fs ? fs : &native; u->event = viewer_event; u->user = a; u->paint = viewer_paint;
+    a->ui = u; a->fs = fs ? fs : &native; u->event = viewer_event; u->user = a; u->paint = viewer_paint; u->layout = resize_layout;
     memcpy(a->file_items, file_template, sizeof(file_template));
     memcpy(a->view_items, view_template, sizeof(view_template));
     memcpy(a->help_items, help_template, sizeof(help_template));
@@ -211,7 +218,7 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
         case V_M_ACTUAL: case V_ACTUAL: zoom(a, 100); break;
         case V_M_EXIT: if (a->quit) a->quit(a->host); break;
         case V_M_ABOUT:
-            du_message(u, V_D_INFO, "About Image Viewer", "CiukiOS Image Viewer - A modern Retro OS\n"
+            du_message(u, V_D_INFO, "About Image Viewer", "CiukiOS Image Viewer - Classic computing, one woof at a time.\n"
                        "PNG, JPEG, BMP and GIF by stb_image v2.30\n(MIT or Public Domain). Viewer code: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
             break;
         default: break;

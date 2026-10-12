@@ -24,6 +24,7 @@ static unsigned writes, masks, unmasks, eois, starts, schedules, yields, creates
 static bool masked[16];
 static irq_handler_t handlers[16];
 static char last_log[256];
+static unsigned budget_reports;
 static bool expect_panic;
 static jmp_buf panic_env;
 static struct task tasks[4];
@@ -53,6 +54,7 @@ void klog(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(last_log, sizeof(last_log), fmt, ap);
     va_end(ap);
+    if (strstr(last_log, "budget exceeded")) budget_reports++;
 }
 
 __attribute__((noreturn)) void panic(const char *fmt, ...)
@@ -104,6 +106,9 @@ void pic_mask(unsigned irq) { CHECK(irq < 16); masked[irq] = true; masks++; writ
 void pic_unmask(unsigned irq) { CHECK(irq < 16); masked[irq] = false; unmasks++; writes++; }
 void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); handlers[irq] = h; }
 
+#define P2V(p) ((void *)(uintptr_t)(p))
+#define V2P(p) ((uint32_t)(uintptr_t)(p))
+#include "../../src/kernel/fs/fs_port.h"
 #include "../../src/kernel/core/sync.c"
 #include "../../src/kernel/core/work.c"
 #include "../../src/kernel/lib/stackprot.c"
@@ -440,6 +445,51 @@ static void test_work(void)
     printf("kernel services work: PASS (IRQ enqueue, FIFO wrap, counted overflow, yield)\n");
 }
 
+static fs_lock contended_fs;
+static unsigned fs_schedules;
+static void release_fs_owner(void)
+{
+    CHECK(!flags && g_current->state == T_BLOCKED && g_current->prio == P_DEVICE);
+    struct task *waiter = g_current;
+    g_current = &tasks[0]; CHECK(g_current->prio == P_NORMAL);
+    fs_schedules++;
+    fs_lock_drop(&contended_fs);
+    g_current = waiter;
+}
+static void test_fs_wait_lock(void)
+{
+    fs_lock_init(&contended_fs);
+    for (unsigned i = 0; i < 32; i++) {
+        current(0); tasks[0].prio = P_NORMAL;
+        fs_lock_take(&contended_fs); CHECK(contended_fs.held && flags == 0x200);
+        current(1); tasks[1].prio = P_DEVICE; on_schedule = release_fs_owner;
+        fs_lock_take(&contended_fs);
+        CHECK(contended_fs.held && flags == 0x200 && !contended_fs.wait.head && !waiters);
+        fs_lock_drop(&contended_fs); CHECK(!contended_fs.held && flags == 0x200);
+    }
+    CHECK(fs_schedules == 32);
+    on_schedule = 0; current(0);
+    /* Wake before enqueue: the recheck acquires without sleeping. */
+    fs_lock_take(&contended_fs); fs_lock_drop(&contended_fs);
+    unsigned before = schedules;
+    fs_lock_take(&contended_fs); CHECK(schedules == before); fs_lock_drop(&contended_fs);
+    fs_lock_destroy(&contended_fs);
+    puts("kernel fs_lock: P_DEVICE blocks behind P_NORMAL, wake/recheck, IF and waiter baselines PASS");
+}
+static void overrun_work(void *arg) { (void)arg; g_ticks += 2; }
+static void test_work_report_bound(void)
+{
+    unsigned before = budget_reports;
+    bool tsc = g_cpu_tsc; g_cpu_tsc = false; /* deterministic two-ms callbacks */
+    for (unsigned i = 0; i < 2048; i++) {
+        current(0); CHECK(kwork_queue(overrun_work, 0)); drain_work();
+    }
+    struct kwork_stats s; kwork_snapshot(&s);
+    CHECK(s.budget_violations >= 2048 && budget_reports - before <= 10 && !s.pending);
+    g_cpu_tsc = tsc;
+    puts("kernel work reports: 2048 sustained overruns produce at most ten reports PASS");
+}
+
 static unsigned calls_a, calls_b;
 static bool source_a, source_b;
 static bool irq_a(unsigned irq, const char *owner)
@@ -628,6 +678,8 @@ int main(void)
     test_work();
     test_irq_chain();
     test_registry_probe();
+    test_fs_wait_lock();
+    test_work_report_bound();
     test_generation_exhaustion();
     printf("kernel services: %s (%u failures)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;

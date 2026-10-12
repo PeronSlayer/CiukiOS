@@ -77,7 +77,7 @@ int dosvm_create(const struct dosvm_config *, struct dosvm **out);
  * C: that has it. 0 with path filled, -ENOENT without one, else the error.
  * The workload probes use only this disk (their pins are the owner's data). */
 int dosvm_workload_base(char path[24]);
-/* Window VMs (/bin/dosbox): that local disk when attached, else the bundled
+/* Window VMs (/Programs/dosbox): that local disk when attached, else the bundled
  * shareware games disk C:\GAMES\CIUKIGAM.IMG (owner decision 2026-10-12;
  * scripts/build_games_disk.py). Same results as dosvm_workload_base. */
 int dosvm_window_base(char path[24]);

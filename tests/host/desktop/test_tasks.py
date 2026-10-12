@@ -107,8 +107,8 @@ class TasksTests(unittest.TestCase):
 
     def test_menu_clicks_follow_the_image_inventory(self):
         """Every scripted desktop case reaches its program through the Ciuki button, Programs and the
-        program's row of the Programs submenu (tests/host/desktop/shell_menu.py), with the image's /bin."""
-        programs = sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
+        program's row of the Programs submenu (tests/host/desktop/shell_menu.py), with the image's /Programs."""
+        programs = sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
         menu = load("tasks_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         suite = json.loads((ROOT / "tests/suites/f2-desktop.json").read_text())
         targets = {"desktop-shell-qemu-t23": "demo", "desktop-shell-qemu-e500": "demo", "files-qemu-t23": "files",
@@ -135,7 +135,7 @@ class TasksTests(unittest.TestCase):
         self.assertIn("tasks", manifest["elf"])
         image = load("tasks_image", ROOT / "scripts/build_image.py")
         sources, _, _ = image.desktop_payloads()
-        self.assertEqual(sources["/bin/tasks"], build.OUT / "tasks")
+        self.assertEqual(sources["/Programs/tasks"], build.OUT / "tasks")
 
 
 if __name__ == "__main__":

@@ -29,12 +29,12 @@ static void fs_reset(void)
 {
     for (unsigned i = 0; i < node_count; i++) { free(nodes[i].data); memset(&nodes[i], 0, sizeof(nodes[i])); }
     node_count = 0; fail_save = fail_load = fail_list = saves = 0;
-    add_dir("/home"); add_dir("/system"); add_dir("/system/tests"); add_dir("/system/tests/sub"); add_dir("/bin");
+    add_dir("/Documents"); add_dir("/system"); add_dir("/system/tests"); add_dir("/system/tests/sub"); add_dir("/Programs");
     add_file("/system/tests/beta.txt", "lf only\nsecond\n", 15, 1791000000);
     add_file("/system/tests/Alpha.TXT", "Alpha\r\nline two\r\n", 17, 1790000000);
     add_file("/system/tests/data.bin", "\1\2\3", 3, 1792000000);
     add_file("/system/hello.txt", "hello", 5, 1791500000);
-    add_file("/bin/ciuknote", "ELF", 3, 1);
+    add_file("/Programs/ciuknote", "ELF", 3, 1);
 }
 static int f_stat(void *ctx, const char *path, struct cn_stat *st)
 {
@@ -432,7 +432,7 @@ static void test_goto_wrap_status(void)
     menu_pick(0x18, 1); assert(strstr(ui.dialog.text, "Style:\tBold") && ui.dialog.focus == 1); ESC; assert(app.ta.bold == 1);
     screen("bold");
     menu_pick(0x23, 0); assert(dialog_is(D_INFO) && strstr(ui.dialog.title, "CiukNote Help") && strstr(ui.dialog.text, "F3 Find next")); screen("help"); ENTER;
-    menu_pick(0x23, 1); assert(dialog_is(D_INFO) && !strcmp(ui.dialog.title, "About CiukNote") && strstr(ui.dialog.text, "A modern Retro OS") &&
+    menu_pick(0x23, 1); assert(dialog_is(D_INFO) && !strcmp(ui.dialog.title, "About CiukNote") && strstr(ui.dialog.text, "Classic computing, one woof at a time.") &&
            strstr(ui.dialog.text, "Tango 0.8.90 icons: Public Domain.") && strstr(ui.dialog.text, "Ciuki portrait: separate project asset.") &&
            ui.dialog.icon_pixels == app.ciuki32 && app.ciuki32[0] >> 24 == 0xff);
     screen("about"); ENTER;
@@ -521,7 +521,7 @@ static void test_file_dialogs(void)
 {
     reset(0);
     CTRL(0x18);
-    assert(dialog_is(D_OPEN) && ui.dialog.entry_count == 3 && entry_is(0, "bin") && entry_is(1, "home") && entry_is(2, "system"));
+    assert(dialog_is(D_OPEN) && ui.dialog.entry_count == 3 && entry_is(0, "Documents") && entry_is(1, "Programs") && entry_is(2, "system"));
     screen("open-root");
     type("/system/tests"); ENTER;                      /* an absolute folder in the name box navigates */
     assert(dialog_is(D_OPEN) && !strcmp(ui.dialog.folder, "/system/tests") && !name_box()[0]);
@@ -569,8 +569,8 @@ static void test_file_dialogs(void)
     CTRL(0x1f); menu_pick(0x21, 3); assert(dialog_is(D_SAVE) && !strcmp(ui.dialog.folder, "/system/tests/sub") && !strcmp(name_box(), "copy.log")); ESC;
     /* Saving over a folder name is refused. */
     reset(0); type("x"); CTRL(0x1f); type("/system/tests"); ENTER; assert(dialog_is(D_SAVE)); type("sub"); ENTER; assert(dialog_is(D_SAVE)); ESC;
-    reset(0); type("x"); CTRL(0x1f); type("/home/sub.txt"); fail_save = -EIO; ENTER; assert(dialog_is(D_INFO)); fail_save = 0; ENTER;
-    add_dir("/home/dir.txt"); CTRL(0x1f); type("/home/dir"); ENTER; assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "That name is a folder:")); ENTER;
+    reset(0); type("x"); CTRL(0x1f); type("/Documents/sub.txt"); fail_save = -EIO; ENTER; assert(dialog_is(D_INFO)); fail_save = 0; ENTER;
+    add_dir("/Documents/dir.txt"); CTRL(0x1f); type("/Documents/dir"); ENTER; assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "That name is a folder:")); ENTER;
     /* The Save As dialog's own cancel button keeps the document and the prompt chain stops. */
     reset(0); type("x"); CTRL(0x31); ENTER; assert(dialog_is(D_SAVE) && app.after == CN_AFTER_NEW); ESC; assert(!ui.dialog.kind && app.after == CN_AFTER_NONE && has_text("x"));
 }
@@ -677,6 +677,23 @@ static void test_screens(void)
 /* Random keys, text and pointer events against the whole application: it must stay consistent. */
 static uint32_t rng = 0x9e3779b9u;
 static unsigned rnd(unsigned n) { rng = rng * 1664525u + 1013904223u; return (rng >> 8) % n; }
+static void test_resize(void)
+{
+    reset(0);
+    const char *text = "Ciuki\nA modern Retro OS";
+    assert(!du_ta_set_text(&app.ta, text, strlen(text)));
+    du_ta_select(&app.ta, 1, 4);
+    size_t cursor = app.ta.cursor, anchor = app.ta.anchor;
+    uint32_t *large = calloc(800 * 560 + 1, 4); assert(large);
+    large[800 * 560] = 0xdeadbeef;
+    du_resize(&ui, large, 800, 560);
+    assert(!strcmp(app.ta.text, "Ciuki\nA modern Retro OS") && app.ta.cursor == cursor && app.ta.anchor == anchor);
+    assert(focus_is(W_TEXT) && W(W_TEXT)->box.w == 800 && W(W_STATUS)->box.y == 540);
+    assert(app.ta.cols > 102 && app.ta.rows > 28);
+    du_render(&ui); assert(large[800 * 560] == 0xdeadbeef);
+    du_resize(&ui, canvas, NW, NH); free(large);
+}
+
 static void test_random_input(void)
 {
     static const int keys[] = {0x01, 0x0e, 0x0f, 0x1c, 0x39, 0x44, 0x3d, 0x3f, 0x147, 0x148, 0x149, 0x14b, 0x14d, 0x14f, 0x150, 0x151, 0x153,
@@ -739,7 +756,7 @@ int main(int argc, char **argv)
     test_startup(); test_typing(); test_clipboard_and_undo(); test_save_and_open(); test_unsaved_prompt();
     test_save_errors_and_replace(); test_find_replace(); test_goto_wrap_status(); test_time_log_encoding();
     test_limits(); test_open_argument(); test_file_dialogs(); test_menus_and_context(); test_mouse_text();
-    test_wrap_navigation(); test_screens(); test_random_input();
+    test_wrap_navigation(); test_screens(); test_resize(); test_random_input();
     puts("PASS ciuknote: typing, shift/caps, clipboard, undo, prompts, save/open, replace prompt, find/replace, go to, wrap, status bar, "
          "time/date, .LOG, line endings, limits, argument, file dialogs, menus, context menu, mouse, scroll bars, screens");
     return 0;

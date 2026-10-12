@@ -395,7 +395,7 @@ at two phases.
 
 Native authority (execution-abi.md, F3-02 amendment): syscall 72 with a
 136-byte record; the authority is a spawn-time process flag set only for an
-exact `/bin/dosbox` whose parent is the supervisor or owns both a display
+exact `/Programs/dosbox` whose parent is the supervisor or owns both a display
 and an input grant. One VM per process, keys bound to the owner, generation
 validation, a creation reservation against concurrent creators, closed
 error set. Owner death reaches the supervisor's collection pass, which
@@ -428,15 +428,15 @@ INT 33h continuation (both in page F1000h), F000:2000 8x16, F000:3000/3400
 8x8 and F000:4000 8x14 fonts (F2000h-F4DFFh). The fonts stay clear of
 F0000h-F1FFFh.
 
-`/bin/dosbox` (apps/dosbox, MIT): one process, one VM, one window titled
+`/Programs/dosbox` (apps/dosbox, MIT): one process, one VM, one window titled
 with the VM name (`--name=`, default `CiukiDOS`), protocol v2 close request
 → CLOSE and exit, VM stop → window close, focus/key/motion/button forwarding,
 damage at the kernel cadence. The desktop passes `--channel-fd=3` to it and
-gains `--launch=<program>`, which starts one `/bin` menu program through the
-menu-click path (used by `f3:vm-window`). Adding `/bin/dosbox` grows the
+gains `--launch=<program>`, which starts one `/Programs` menu program through the
+menu-click path (used by `f3:vm-window`). Adding `/Programs/dosbox` grows the
 bottom-anchored Ciuki menu by one row, so the f2-30 `desktop-shell-*`
 scripted click on Demo moves from `y-169` to `y-197` (1024x768). With the
-f2-31/32/33 desktop batch (`/bin/files`, `/bin/ciuknote`, `/bin/tasks`) the
+f2-31/32/33 desktop batch (`/Programs/files`, `/Programs/ciuknote`, `/Programs/tasks`) the
 offsets follow the formula in f2-acceptance.md, section F2-33 (Demo: -253).
 
 ### Probes, cases and golden digests
@@ -477,7 +477,7 @@ bases from `dosvm_device_info`) before the `group=screen` rows, which are
 owned by the running probe.
 
 `f3:vm-window run=<8hex>` (sweep after `vm-video`): the probe spawns
-`/bin/desktop --launch=dosbox` under a controller owner, waits for the bound
+`/Programs/desktop --launch=dosbox` under a controller owner, waits for the bound
 window VM and its prompt (`case=window`), emits `ARM action=window_input`
 (the runner moves the pointer off the window and types `\VMVIDEO.COM` with
 QMP keys; a runner request never gets kernel typing: the probe waits up to
@@ -492,7 +492,7 @@ the composited client region (origin 23,76: first window at 20,52 plus the
 3-pixel border and 24-pixel title) to hash, as XRGB rows, to both the
 suite's stage-1 golden and the ARM digest. The probe then finishes the
 stages and types EXIT: `case=closed` requires reason 0, the window binding
-released and `/bin/dosbox` exited; `case=cleanup` requires the VM ledger and
+released and `/Programs/dosbox` exited; `case=cleanup` requires the VM ledger and
 the desktop object ledger (descriptions, surfaces, pages, channels,
 messages, grants) back at baseline. Cases: `vm-window-qemu-desktop-2002`
 and `vm-window-qemu-desktop-1998` (needs a 24/32-bit desktop of at least
@@ -1401,7 +1401,7 @@ worktree's three compile fixes, applied identically):
 ### Limitations and open items
 
 - `DOSVM_DPMI_PUBLIC` is still 0: probe VMs pass `dosvm_config.dpmi`. For
-  the owner-visible DOOM window without an ABI change, a `/bin/dosbox` window
+  the owner-visible DOOM window without an ABI change, a `/Programs/dosbox` window
   VM boots an attached workload disk (`dosvm_workload_base`, `\CIUKIGAM.IMG`
   on D: to Z:) with the staged DPMI host; without that disk it keeps
   `DOSBOOT.IMG` and no DPMI host, as before. This is a lead decision to
@@ -1525,14 +1525,14 @@ games builder applies it to the whole disk, and `build_image.py` to every
 payload of the system image. `DOSBOOT.IMG` and the f3-06 fixtures are
 unchanged.
 
-**Image.** `/GAMES/CIUKIGAM.IMG` and `/system/licenses/<package>-<file>`
+**Image.** `/Games/CIUKIGAM.IMG` and `/system/licenses/<package>-<file>`
 (licence documents and `UPSTREAM.json`); `build-manifest.json` gains a
 `games` record (packages, files, sizes, hashes).
 
 **Kernel** (`dosvm_disk.c`). `dosvm_window_base()` returns the owner's
 local fixture disk (`X:\CIUKIGAM.IMG` on D:–Z:, exact geometry size, as
 before) and, without one, the bundled `C:\GAMES\CIUKIGAM.IMG`; the window
-client (`dosvm_client.c`) uses it, so every `/bin/dosbox` window boots the
+client (`dosvm_client.c`) uses it, so every `/Programs/dosbox` window boots the
 games disk with the staged DPMI host. `dosvm_workload_base()` (the f3-06
 probes) keeps the fixture disk only: its pins are the owner's data. A base
 may now be shorter than the geometry: a multiple of 512 bytes, at least
@@ -1540,7 +1540,7 @@ may now be shorter than the geometry: a multiple of 512 bytes, at least
 the full 128 MiB; sectors past its end read as zeros without a VFS read,
 writes go to the private overlay as before.
 
-**Launcher.** `/bin/dosbox [--name=TITLE] [COMMAND...]`: the command words,
+**Launcher.** `/Programs/dosbox [--name=TITLE] [COMMAND...]`: the command words,
 joined by spaces, are typed at the DOS prompt through the window's own
 input once the VM reports DOS ready (+400 ms) and the window has the focus
 (`apps/dosbox/autorun.h`; no ABI change). A leading `\DIR\PROGRAM` becomes
@@ -1549,7 +1549,7 @@ finds its data; US set-1 keys, Shift for capitals and `_ :`; one event per
 10 ms loop (about 20 ms per character, slow enough for the shell to drain
 the guest's 15-key BIOS buffer); a full guest queue retries, a focus loss resumes
 without typing a character twice. Untypable or over-long commands make dosbox exit 2. The
-Start menu's Programs submenu gets "Games" (when `/bin/dosbox` exists) with
+Start menu's Programs submenu gets "Games" (when `/Programs/dosbox` exists) with
 "Wolfenstein 3D (shareware)" (`\WOLF3D\WOLF3D.EXE`) and "DOOM (shareware)"
 (`\DOOM\DOOM.EXE -config CIUKI.CFG`), Tango `applications-games`; each
 launches `dosbox --name=<game> <command>` (`desk_task_launch_args`), and the

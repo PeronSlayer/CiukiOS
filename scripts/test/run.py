@@ -408,14 +408,14 @@ def record_f2_result(result, parser):
             raise EvidenceError('guest application provenance differs from host manifest: '+field)
     if result['probe'] == 'app-gate' and result['outcome'] == 'pass':
         if result['missing_f2_fields']:raise EvidenceError('missing application provenance/setup fields')
-        required = {'/bin/lua','/system/tests/ciuki-f2.lua'} | {p for p in payloads if p.startswith('/system/tests/lua-5.4.8-tests/')}
+        required = {'/Programs/lua','/system/tests/ciuki-f2.lua'} | {p for p in payloads if p.startswith('/system/tests/lua-5.4.8-tests/')}
         if required-seen:raise EvidenceError('missing guest-loaded application/test payload hashes')
         if metadata['abi_version'] != '1' or metadata['application_wait_status'] != '0':
             raise EvidenceError('application ABI or wait status mismatch')
         if metadata['argv'] != ['lua','-e','_U=true','all.lua'] or metadata['cwd'] != '/system/tests/lua-5.4.8-tests':
             raise EvidenceError('application argv/cwd mismatch')
         environment = metadata['env']
-        if not isinstance(environment,dict) or any(environment.get(k)!=v for k,v in {'LC_ALL':'C','TZ':'UTC0','HOME':'/home','TMPDIR':'/tmp'}.items()):
+        if not isinstance(environment,dict) or any(environment.get(k)!=v for k,v in {'LC_ALL':'C','TZ':'UTC0','HOME':'/Documents','TMPDIR':'/tmp'}.items()):
             raise EvidenceError('application environment mismatch')
         fds = metadata['fd_setup']
         if not isinstance(fds,dict) or fds.get('inherited') != [0,1,2] or fds.get('stdin') not in ('fixture','/dev/null') or any(fds.get(s)!='bounded' for s in ('stdout','stderr')):
@@ -786,7 +786,7 @@ def observe_window_screen(path, spec, arm):
 
 # Normal boot (test-architecture.md, "Normal boot cases"): QEMU starts without
 # the fw_cfg item, so the loader's menu times out and the kernel takes the
-# production path (drivers, storage, files, audio, supervisor -> /bin/desktop)
+# production path (drivers, storage, files, audio, supervisor -> /Programs/desktop)
 # instead of probes_main's probe path. No CIUKI_TEST records are expected; the
 # evidence is the ordered serial milestones, the absence of the negative lines
 # and one screendump. Every pattern is anchored at the start of a line (CR/LF
@@ -796,7 +796,7 @@ NORMAL_BOOT_MILESTONES = (
     ('loader_banner', re.compile(rb'L:CPU signature=')),
     ('loader_source', re.compile(rb'L:SELECT_SOURCE=menu$')),
     ('kernel_banner', re.compile(rb'Ciuki VMM F0 build ([!-~]+) - CiukiOS$')),
-    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: spawning /bin/desktop(?: |$)')),
+    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: spawning /Programs/desktop(?: |$)')),
     ('desktop_pid', re.compile(rb'\[supervisor\] desktop pid=([0-9]+) pgid=([0-9]+)(?: |$)')),
 )
 NORMAL_BOOT_NEGATIVE = (
@@ -930,7 +930,9 @@ def normal_boot_regions(width, height):
             ('console_absent',(left,0,top-left,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
             ('taskbar',(0,height-DESK_BAR_ROWS,width,DESK_BAR_ROWS),(DESK_TASKBAR,),'min',0.5,1),
             ('start_button',DESK_START_BOX,DESK_START_BUTTON,'min',0.4,1),
-            ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),(DESK_BACKGROUND,),'min',0.25,2))
+            # Heuristic 3: the default wallpaper is the owner's Ciuk2 scene, so the
+            # work area is only required to be free of the kernel console colours.
+            ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,2))
 
 
 def colour_fraction(pixels, width, box, colours, step=1, tolerance=SCREEN_TOLERANCE):
@@ -949,10 +951,11 @@ def colour_fraction(pixels, width, box, colours, step=1, tolerance=SCREEN_TOLERA
 def observe_normal_boot_screen(path, spec):
     """Taskbar, Ciuki button (top-left), top bar and background colours of
     the shell desktop; the top bar must not show the kernel console colours.
-    Heuristic 2: the Ciuki button moved from the taskbar to the top bar."""
+    Heuristic 2: the Ciuki button moved from the taskbar to the top bar;
+    3: the work area shows the default wallpaper (Ciuk2), not the desktop colour."""
     width, height, pixels = read_ppm(path)
     observed = {'artifact':Path(path).name, 'ppm_sha256':sha(path), 'width':width, 'height':height,
-                'heuristic':'normal-boot-desktop-2', 'colour_tolerance':SCREEN_TOLERANCE,
+                'heuristic':'normal-boot-desktop-3', 'colour_tolerance':SCREEN_TOLERANCE,
                 'regions':{}, 'failures':[]}
     geometry = spec.get('geometry')
     if geometry is not None and [width,height] != list(geometry):

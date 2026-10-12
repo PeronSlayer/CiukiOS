@@ -141,6 +141,7 @@ int ac97_observe(struct ac97_device *d, struct ac97_cursor *out)
 }
 int ac97_progress(struct ac97_device *d)
 {
+    d->tail_drained = false;
     if (!d->running) return 0;
     struct ac97_cursor c;
     int err = ac97_observe(d, &c);
@@ -155,6 +156,7 @@ int ac97_progress(struct ac97_device *d)
     d->generation_fetched = fetched;
     if (c.status & AC97_FIFOE) { d->fifo_errors++; wr(d, 0x16, AC97_FIFOE, 2); }
     if (c.status & AC97_DCH) {
+        d->tail_drained = !(c.status & AC97_FIFOE) && !c.remaining && d->retired + 1 == d->published;
         if (!d->observed_halt && !d->idle_tail) d->dma_halts++; /* an idle-tail underrun carries no client data */
         d->observed_halt = true;
         return -EIO; /* no replay/restart of potentially committed PCM */

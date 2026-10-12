@@ -27,9 +27,9 @@ a later F-step (network F6, browser, DOS games F3/F5), not tonight's work.
 |---|---|---|---|---|---|
 | 1 | Top bar | "CiukiOS" title with the portrait, which opened the system menu | `src/apps/desktop.c` (top bar), `src/com/shell_gui.inc` | partial: dark bar with "CiukiOS" and tagline; no menu | wt/desktop-shell |
 | 2 | Top-bar meters | Five clickable readings: VOL, NET, CPU, RAM, DISK (idle/busy) | `src/apps/desktop.c` lines ~370-400 | missing | wt/desktop-shell |
-| 3 | Volume pop-up | Slider with "Volume", "Muted", "No device" from the VOL meter | `src/apps/desktop.c` (`VOL_TRACK_X`) | missing on main; Volume Control window done on wt/legacy-recovery (`/bin/mixer`, DESK_MIXER_SET) | wt/desktop-shell (tray icon, launches `mixer`) |
+| 3 | Volume pop-up | Slider with "Volume", "Muted", "No device" from the VOL meter | `src/apps/desktop.c` (`VOL_TRACK_X`) | missing on main; Volume Control window done on wt/legacy-recovery (`/Programs/mixer`, DESK_MIXER_SET) | wt/desktop-shell (tray icon, launches `mixer`) |
 | 4 | Bottom taskbar | Task buttons for open windows; date and clock box | `src/com/shell_gui_windows.inc`, `src/apps/desktop.c` | partial: taskbar, "Ciuki" button, task buttons, HH:MM:SS clock; no date | wt/desktop-shell |
-| 5 | System/Start menu | Programs, Files, Run, DOS Prompt, Control Panel, Display, Sound, Network, Image Viewer, Music Player, Task Manager, About, Shut Down | `src/apps/desktop.c` menus `m_system*` | partial: "Ciuki" menu lists every /bin ELF, About, "Restart (unavailable)" | wt/desktop-shell |
+| 5 | System/Start menu | Programs, Files, Run, DOS Prompt, Control Panel, Display, Sound, Network, Image Viewer, Music Player, Task Manager, About, Shut Down | `src/apps/desktop.c` menus `m_system*` | partial: "Ciuki" menu lists every /Programs ELF, About, "Restart (unavailable)" | wt/desktop-shell |
 | 6 | Application Library ("Programs") | Window listing installed programs by category | `src/apps/desktop.c` (`DI_PROGRAMS`), `src/com/shell_apps.inc` | missing | wt/desktop-shell |
 | 7 | Desktop icons | Computer, Programs, Recycle Bin, Control Panel, DOS Prompt, Floppy, USB drive, CD-ROM; files in `C:\DESKTOP` | `src/apps/desktop.c` `desk_items[]` | missing | wt/desktop-shell |
 | 8 | Desktop context menus | Arrange by name/type, Line Up, Refresh, Paste, New Folder, New Text Document, Properties; per-icon Open/Explore/Remove/Properties | `src/apps/desktop.c` lines ~1120-1160 | missing | wt/desktop-shell |
@@ -62,7 +62,7 @@ a later F-step (network F6, browser, DOS games F3/F5), not tonight's work.
 | 30 | Mouse applet | Pointer speed, double-click speed with test folder, scheme | `src/apps/control.c` Mouse | missing | wt/desktop-shell |
 | 31 | Keyboard applet | Repeat delay and rate | `src/apps/control.c` Keyboard | missing | wt/desktop-shell |
 | 32 | Keyboard layouts | none in 0.8 (US only); requested IT and US | - | missing on main; US and Italian tables done on wt/legacy-recovery (`apps/libdeskui/keymap.h`) | setting and wiring: wt/desktop-shell; non-ASCII glyphs: wt/ui-look |
-| 33 | Date and Time applet | Calendar with month names and weekday grid, time fields, automatic detection, time zone lookup | `src/apps/control.c` Date and Time | missing on main; calendar view done on wt/legacy-recovery (`/bin/clock`); setting the clock is not possible (no RTC write call) | applet: wt/desktop-shell |
+| 33 | Date and Time applet | Calendar with month names and weekday grid, time fields, automatic detection, time zone lookup | `src/apps/control.c` Date and Time | missing on main; calendar view done on wt/legacy-recovery (`/Programs/clock`); setting the clock is not possible (no RTC write call) | applet: wt/desktop-shell |
 | 34 | System applet | CiukiOS identity, computer, memory, VM manager state | `src/apps/control.c` System | partial (About shows kernel build) | wt/desktop-shell |
 | 35 | Device Manager | Devices by class with properties | `src/apps/devices.c` | missing | unowned (needs a kernel device-list call) |
 | 36 | Drivers | Installed DOS drivers, enable/disable/remove, Add New Driver (DRIVER.INF) | `src/apps/devices.c`, `assets/drivers/` | missing (0.9 drivers are kernel-native) | retired for the native desktop; DOS drivers return with F3 |
@@ -77,18 +77,18 @@ a later F-step (network F6, browser, DOS games F3/F5), not tonight's work.
 | 40 | Files opens images/music | Images open in the viewer, audio in the player | `src/apps/desktop.c` `ext_is(...)` | partial on main (text only); pictures open in the Image Viewer on wt/legacy-recovery; audio has no player | wt/legacy-recovery |
 | 41 | CiukNote | Notepad with find/replace, go to, word wrap, fonts, time/date | `src/apps/ciuknote.c` | present (f2-32 `apps/ciuknote`) | - |
 | 42 | Task Manager | Applications, Processes, Virtual Machines, Performance | `src/apps/tasks.c` | partial: Applications, Processes, Performance (f2-33); no VM tab | VM tab unowned (needs a VM list call) |
-| 43 | Image Viewer | BMP/PNG/JPEG/GIF, zoom (wheel, +/-), pan, fit (F), previous/next image in the folder | `src/apps/viewer.c`, `src/apps/webimg.c`, `third_party/tjpgd` | missing on main; done on wt/legacy-recovery (`/bin/viewer`, stb_image v2.30: PNG/JPEG/BMP/GIF and raw XRGB) | wt/legacy-recovery |
+| 43 | Image Viewer | BMP/PNG/JPEG/GIF, zoom (wheel, +/-), pan, fit (F), previous/next image in the folder | `src/apps/viewer.c`, `src/apps/webimg.c`, `third_party/tjpgd` | missing on main; done on wt/legacy-recovery (`/Programs/viewer`, stb_image v2.30: PNG/JPEG/BMP/GIF and raw XRGB) | wt/legacy-recovery |
 | 44 | Music Player | WAV/MP3/OGG/FLAC through MEDIAWORK, Prev/Play/Pause/Stop/Next, elapsed time, seek | `src/apps/player.c`, `src/media/`, `third_party/audio` | missing (native `/dev/audio` exists) | not done tonight; F4 media follow-up (dr_libs and stb_vorbis are in `third_party/audio`) |
-| 45 | Calculator | none in 0.8 (requested as Windows 98 class accessory) | - | missing on main; done on wt/legacy-recovery (`/bin/calc`) | wt/legacy-recovery |
-| 46 | Clock / Calendar | Desktop clock and the Date and Time calendar | `src/apps/desktop.c`, `src/apps/control.c` | partial on main (taskbar clock); analog/digital clock with month calendar on wt/legacy-recovery (`/bin/clock`) | wt/legacy-recovery |
-| 47 | Help / README | Command guide (HELP), F1 shortcut lists in apps | `src/com/shell_help_data.inc`, app Help menus | partial on main (Files/CiukNote Help boxes); CiukiOS Help with 10 topics and a read-only text viewer on wt/legacy-recovery (`/bin/help`) | wt/legacy-recovery |
-| 48 | Character Map | none in 0.8 | - | missing on main; done on wt/legacy-recovery (`/bin/charmap`, printable ASCII of the system font) | wt/legacy-recovery |
+| 45 | Calculator | none in 0.8 (requested as Windows 98 class accessory) | - | missing on main; done on wt/legacy-recovery (`/Programs/calc`) | wt/legacy-recovery |
+| 46 | Clock / Calendar | Desktop clock and the Date and Time calendar | `src/apps/desktop.c`, `src/apps/control.c` | partial on main (taskbar clock); analog/digital clock with month calendar on wt/legacy-recovery (`/Programs/clock`) | wt/legacy-recovery |
+| 47 | Help / README | Command guide (HELP), F1 shortcut lists in apps | `src/com/shell_help_data.inc`, app Help menus | partial on main (Files/CiukNote Help boxes); CiukiOS Help with 10 topics and a read-only text viewer on wt/legacy-recovery (`/Programs/help`) | wt/legacy-recovery |
+| 48 | Character Map | none in 0.8 | - | missing on main; done on wt/legacy-recovery (`/Programs/charmap`, printable ASCII of the system font) | wt/legacy-recovery |
 | 49 | CiukPaint | Paint program, live strokes | `src/apps/paint.c` | missing | unowned (large; later) |
 | 50 | CiukWeb browser | HTML, forms, PNG/GIF/JPEG, CSS worker, BearSSL TLS 1.2, mQuickJS | `src/apps/browser.c`, `src/apps/web*.c`, `src/web/` | missing | later step (F6 network) |
-| 51 | DOS Prompt window | DOS in a desktop window (forked VM) | `src/apps/dosvm.c`, `src/com/dos_window_*.inc` | present: `/bin/dosbox` (f3-02) | - |
+| 51 | DOS Prompt window | DOS in a desktop window (forked VM) | `src/apps/dosvm.c`, `src/com/dos_window_*.inc` | present: `/Programs/dosbox` (f3-02) | - |
 | 52 | DOOM / Doom-vanille / Wolf3D in a window | Launchers and window ports | `src/com/doom*_launch.asm`, `src/ports/` | partial: DOS workloads (f3-06) run in the VM; no launchers | later step (F3/F5 games) |
 | 53 | Full-screen DOS | F4 switches the DOS session to full screen | `src/com/shell_vm_window.inc` | missing | later step (F3) |
-| 54 | Lua / native demo | none in 0.8 | - | present: `/bin/lua`, `/bin/demo` | - |
+| 54 | Lua / native demo | none in 0.8 | - | present: `/Programs/lua`, `/Programs/demo` | - |
 
 ## Shell commands (COMMAND.COM)
 
@@ -136,7 +136,7 @@ The most visible gaps and their owners:
   `accessories-character-map`, `office-calendar`, `help-browser`,
   `audio-volume-high`, `image-x-generic`) through `du_icon(name, size)`.
 - Protocol v2 `DESK_MIXER_SET` (client to desktop: serial, left, right,
-  mute; answer `DESK_TASK_RESULT`). Only `/bin/mixer` launched by the desktop
+  mute; answer `DESK_TASK_RESULT`). Only `/Programs/mixer` launched by the desktop
   may send it; the desktop applies it with the `CIUKI_MIXER_FD` control handle
   the supervisor delegates (F4 contract, "Volume and persistence"). The
   handle is not inheritable, so the mixer window cannot hold it itself. A
@@ -150,7 +150,7 @@ The most visible gaps and their owners:
   `du_utf8_encode`). The compositor glyph table is ASCII only, so accented
   letters need glyphs from `wt/ui-look` before the Italian layout is useful
   in text fields.
-- Files opens pictures in `/bin/viewer` through `DESK_LAUNCH` with the path
+- Files opens pictures in `/Programs/viewer` through `DESK_LAUNCH` with the path
   as its argument, as it already does for CiukNote; the desktop passes the
   argument to every catalogue program with `takes_file` set.
 

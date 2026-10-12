@@ -45,10 +45,10 @@ boots keep the verbose console: [boot modes](boot.md).
 After its two probe boots, `f0-smoke` boots the image twice the way a user
 does (`normal-boot-qemu-t23`, `normal-boot-qemu-desktop-2002`): QEMU gets no
 fw_cfg test request, the loader menu times out (about 3 s) and the kernel
-takes the production path up to `/bin/desktop`. A case passes when
+takes the production path up to `/Programs/desktop`. A case passes when
 `serial.log` shows, in order and at the start of a line, `L:CPU signature=`,
 `L:SELECT_SOURCE=menu`, the `Ciuki VMM F0 build` banner,
-`[supervisor] bootstrap: spawning /bin/desktop` and
+`[supervisor] bootstrap: spawning /Programs/desktop` and
 `[supervisor] desktop pid=<n> pgid=<n>` within 300 s, with no panic,
 CIUKI_TEST record, `desktop unavailable` or `desktop stopped` line, and the
 screendump taken 8 s after the desktop line shows the desktop taskbar, start
@@ -217,7 +217,7 @@ Delete `build/host/f306-*` afterwards (each holds a 160 MiB sparse image).
 For an interactive DOOM window with the owner's registered data, attach that
 `fixture-0.img` as a further IDE disk of a manual QEMU run (or copy its
 `CIUKIGAM.IMG` to the root of another FAT drive on a test PC): a DOS window
-(`/bin/dosbox`) then boots the workload image, with the kernel DPMI host,
+(`/Programs/dosbox`) then boots the workload image, with the kernel DPMI host,
 instead of the bundled shareware games disk below; type
 `\RUNREC.COM \DOOM DOOM.EXE` or `CD \DOOM` and `DOOM`.
 The probes are `f3:dos4gw`, `f3:doom`, `f3:doom-sound`, `f3:wolf3d` and
@@ -249,7 +249,8 @@ disk has the `DOSBOOT.IMG` geometry (the DOS system read back from
 `DOSBOOT.IMG` and checked against its manifest) with `\WOLF3D` and `\DOOM`;
 its trailing zero sectors are cut (7,262,208 bytes of the 128 MiB volume;
 the kernel reads sectors past the end as zeros). The image holds it at
-`/GAMES/CIUKIGAM.IMG`, and the licence documents and `UPSTREAM.json` files
+`/Games/CIUKIGAM.IMG` (display folder `Games`; the kernel retains the
+case-insensitive `C:\GAMES\CIUKIGAM.IMG` path), and the licence documents and `UPSTREAM.json` files
 at `/system/licenses/<package>-<file>`. To build or inspect it alone:
 
 ```bash
@@ -258,7 +259,7 @@ python3 scripts/build_games_disk.py
 mdir -/ -i build/f0/games/CIUKIGAM.IMG ::/
 ```
 
-Every DOS window (`/bin/dosbox`) boots this disk with the kernel DPMI host,
+Every DOS window (`/Programs/dosbox`) boots this disk with the kernel DPMI host,
 unless the owner's local fixture disk above is attached (it takes
 precedence); the f3-06 workload probes use only the local fixture disk.
 The Start menu's Programs > Games lists "Wolfenstein 3D (shareware)" and

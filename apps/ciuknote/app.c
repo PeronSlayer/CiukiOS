@@ -468,7 +468,7 @@ static void menu_command(struct cn_app *a, int id)
         break;
     case M_ABOUT:
         box(a, D_INFO, "About CiukNote", DU_DLG_ICON_INFO, NULL, 0, 0, 0,
-            "CiukiOS CiukNote\nA modern Retro OS\n---\nDedicated to Ciuki.\nTango 0.8.90 icons: Public Domain.\n"
+            "CiukiOS CiukNote\nClassic computing, one woof at a time.\n---\nDedicated to Ciuki.\nTango 0.8.90 icons: Public Domain.\n"
             "Ciuki portrait: separate project asset.\nlibdeskui and CiukNote: MIT licence.");
         if (a->ciuki) du_dialog_icon(a->ui, a->ciuki32);
         break;
@@ -557,9 +557,12 @@ void cn_event(struct du_ui *u, const struct du_event *e, void *ctx)
 
 /* ---- lifecycle ---------------------------------------------------------- */
 
+static void resize_layout(struct du_ui *u, void *user)
+{ (void)u; cn_layout(user); }
+
 int cn_attach(struct cn_app *a, struct du_ui *u)
 {
-    a->ui = u; u->event = cn_event; u->user = a;
+    a->ui = u; u->event = cn_event; u->user = a; u->layout = resize_layout;
     if (du_ta_init(&a->ta, CN_LIMIT)) return -ENOMEM;
     a->crlf = 1; a->show_status = 1; strcpy(a->dir, "/"); strcpy(a->filter, TEXT_FILTER);
     memcpy(a->file_items, file_template, sizeof(file_template));

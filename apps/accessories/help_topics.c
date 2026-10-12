@@ -4,7 +4,7 @@
 #include "help.h"
 const struct help_topic help_topics[] = {
 {"Welcome to CiukiOS",
-"Welcome to CiukiOS - A modern Retro OS\n"
+"Welcome to CiukiOS - Classic computing, one woof at a time.\n"
 "\n"
 "CiukiOS is a retro gaming operating system for PCs of the late\n"
 "1990s and early 2000s and for their emulated twins. It boots its\n"
@@ -20,15 +20,15 @@ const struct help_topic help_topics[] = {
 "Getting started\n"
 "\n"
 "1. Click the Ciuki button at the left of the top bar to open the\n"
-"   menu. It lists the programs installed in /bin, About CiukiOS\n"
+"   menu. It lists the programs installed in /Programs, About CiukiOS\n"
 "   and Restart.\n"
 "2. Click a program to open it in a window. Each open window has a\n"
 "   button on the taskbar; click it to bring the window to the\n"
 "   front.\n"
 "3. Drag a window by its title bar. The close box in the title bar\n"
 "   closes it; programs with unsaved work ask first.\n"
-"4. Files shows the disk: CiukiOS (/), Applications (/bin),\n"
-"   System (/system) and your folder (/home).\n"},
+"4. Files shows the disk: CiukiOS (/), Applications (/Programs),\n"
+"   System (/system) and your folder (/Documents).\n"},
 {"Programs",
 "Programs\n"
 "\n"
@@ -70,11 +70,12 @@ const struct help_topic help_topics[] = {
 "Files and folders\n"
 "\n"
 "The system disk is FAT32. Long names are supported. Folders:\n"
-"  /bin      programs (each one appears in the Ciuki menu)\n"
-"  /home     your documents and the recent documents list\n"
-"            (/home/recent.lst)\n"
-"  /system   system files, licences and assets\n"
-"  /tmp      temporary files\n"
+"  /Programs   programs (each one appears in the Ciuki menu)\n"
+"  /Documents  your documents and the recent documents list\n"
+"              (/Documents/recent.lst)\n"
+"  /system     system files, licences and assets\n"
+"  /Games      bundled shareware games disk\n"
+"  /tmp        temporary files\n"
 "\n"
 "Open a file in Files with Enter or a double click: text files\n"
 "open in CiukNote, pictures in the Image Viewer, programs run.\n"},
@@ -114,7 +115,7 @@ const struct help_topic help_topics[] = {
 {"About CiukiOS",
 "About CiukiOS\n"
 "\n"
-"CiukiOS - A modern Retro OS\n"
+"CiukiOS - Classic computing, one woof at a time.\n"
 "Version 0.9.0 pre-alpha\n"
 "\n"
 "Dedicated to Ciuki\n"

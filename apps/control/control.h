@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/control: the CiukiOS Control Panel on libdeskui. The panel edits
+ * /Programs/control: the CiukiOS Control Panel on libdeskui. The panel edits
  * /system/settings/desktop.cfg (apps/desktop/settings.h) and asks the
  * desktop to apply it at once (DESK_SETTINGS); the master volume goes
  * through the desktop, which holds the writable mixer handle. */
@@ -38,6 +38,7 @@ struct cp_app {
     uint32_t preview[192 * 144];
     int preview_valid;
     struct desk_image image;
+    char image_path[128];           /* path of the wallpaper decoded into image (preview_build cache) */
     char status[96], clock_line[64], date_line[64];
     int quit;
 };

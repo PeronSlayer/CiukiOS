@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * Launcher catalogue of the accessories recovered from the 0.8 line:
- * /bin name, launcher label, Tango Icon Theme 0.8.90 icon name (Public
+ * /Programs name, launcher label, Tango Icon Theme 0.8.90 icon name (Public
  * Domain, assets/icons; resolved by du_icon(name, size) from the icons
  * branch) and whether the program opens a file given as its argument
  * (LAUNCH from Files). Every entry is a graphical desktop client. */
@@ -19,8 +19,8 @@ static const struct desk_catalog_entry desk_catalog[] = {
 #define DESK_CATALOG_COUNT (sizeof(desk_catalog) / sizeof(desk_catalog[0]))
 /* Pre-installed DOS games (owner decision 2026-10-12): the shareware
  * releases on the bundled games disk (C:\GAMES\CIUKIGAM.IMG, built by
- * scripts/build_games_disk.py), which every /bin/dosbox window boots.
- * Programs > Games starts "/bin/dosbox --name=<title> <command>"; dosbox
+ * scripts/build_games_disk.py), which every /Programs/dosbox window boots.
+ * Programs > Games starts "/Programs/dosbox --name=<title> <command>"; dosbox
  * types the command at the DOS prompt (apps/dosbox/autorun.h). Commands
  * use only characters autorun.h can type; title is the window title. */
 struct desk_game_entry { const char *label, *title, *command, *tango; };

@@ -71,24 +71,25 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
     assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !env[7]);
+    assert(!strcmp(env[2],"HOME=/Documents") && !strcmp(env[3],"TMPDIR=/tmp") && !strcmp(env[4],"PATH=/Programs"));
     assert(count>=1 && mapping[0].source==last_child && mapping[0].target==3 && !flags);
-    if (!strcmp(path,"/bin/files")) {
+    if (!strcmp(path,"/Programs/files")) {
         assert(!strcmp(argv[0],"files") && !strcmp(argv[1],"--channel-fd=3") && count==1);
         assert(expect_files_test ? argv[2] && !strcmp(argv[2],"--test=files") && !argv[3] : !argv[2]);
-    } else if (!strcmp(path,"/bin/ciuknote")) {
+    } else if (!strcmp(path,"/Programs/ciuknote")) {
         /* f2-32: --test=ciuknote only in its scenario; the path argument only through LAUNCH from Files. */
         assert(!strcmp(argv[0],"ciuknote") && !strcmp(argv[1],"--channel-fd=3") && count==1);
         unsigned at=2;
         if (expect_note_test) assert(!strcmp(argv[at++],"--test=ciuknote"));
         if (expect_note_arg) assert(!strcmp(argv[at++],expect_note_arg));
         assert(!argv[at]);
-    } else if (!strcmp(path,"/bin/dosbox")) {
+    } else if (!strcmp(path,"/Programs/dosbox")) {
         /* Programs > Games: the window title, then the command dosbox types at the DOS prompt. */
         assert(!strcmp(argv[0],"dosbox") && !strcmp(argv[1],"--channel-fd=3") && count==1 && expect_dosbox[0]);
         assert(!strcmp(argv[2],expect_dosbox[0]) && !strcmp(argv[3],expect_dosbox[1]) && !argv[4]);
         dosbox_spawns++;
-    } else if (!strcmp(path,"/bin/hello")) assert(!strcmp(argv[0],"hello") && !argv[1] && count==1);
-    else if (!strcmp(path,"/bin/tasks")) {
+    } else if (!strcmp(path,"/Programs/hello")) assert(!strcmp(argv[0],"hello") && !argv[1] && count==1);
+    else if (!strcmp(path,"/Programs/tasks")) {
         /* f2-33: only the Task Manager receives the authority, at fd 4. */
         assert(!strcmp(argv[0],"tasks") && !strcmp(argv[1],"--channel-fd=3"));
         unsigned at=2;
@@ -98,7 +99,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         } else assert(count==1);
         if (expect_test) assert(!strcmp(argv[at++],"--test=tasks"));
         assert(!argv[at]);
-    } else assert(!strcmp(path,"/bin/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
+    } else assert(!strcmp(path,"/Programs/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     if (fail_spawn) { errno=ENOEXEC; return -1; }
     return pid_source++;
 }
@@ -248,8 +249,8 @@ static void test_tasks_scenario(void)
     /* A windowless desktop child ends through SIGTERM on the same path. */
     d.children[2].pid=302; assert(request(&d,0,300,DESK_END_TASK,0,302,0)==0 && terminated_pid==302 && terminated_signal==SIGTERM);
     assert(d.children[2].term_sent);
-    /* "/bin/" names resolve to the same admitted program list. */
-    int again=request(&d,0,300,DESK_LAUNCH,0,0,"/bin/demo"); assert(again==302 || again==303);
+    /* "/Programs/" names resolve to the same admitted program list. */
+    int again=request(&d,0,300,DESK_LAUNCH,0,0,"/Programs/demo"); assert(again==302 || again==303);
     for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].channel>=0 || d.clients[i].internal) desk_drop_client(&d,i);
     gate_keys=0; d.tasks_test=0;
     fake_reset();
@@ -348,7 +349,7 @@ static void test_note_scenario(void)
 
     /* The CiukNote scenario: --test=ciuknote, three ordered checkpoints, a fixed clock and the key edges after exit. */
     next_pair=90; pid_source=500;
-    struct desk_program note_program={"ciuknote","/bin/ciuknote"};
+    struct desk_program note_program={"ciuknote","/Programs/ciuknote"};
     desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     d.app_test=DESK_APP_NOTE; expect_note_test=1; expect_note_arg=NULL;
     int pid=launch_program(&d,&note_program); assert(pid==500 && d.clients[0].program==DESK_APP_NOTE);
@@ -386,8 +387,8 @@ static void message(struct desktop *d,int index,unsigned opcode,unsigned length)
     desk_message(&m,opcode,length); m.data[0]=DESK_SHELL_VERSION; m.sender_pid=d->shell_pid;
     desk_receive(d,index,&m);
 }
-/* Owner decision 2026-10-12: Programs > Games (present with /bin/dosbox)
- * lists the bundled shareware games; each starts /bin/dosbox titled after
+/* Owner decision 2026-10-12: Programs > Games (present with /Programs/dosbox)
+ * lists the bundled shareware games; each starts /Programs/dosbox titled after
  * the game with its command (apps/desktop/catalog.h desk_games). */
 static int item_at(const struct sh_menu *m, const char *label)
 { for (int k=0;k<m->count;k++) if (!strcmp(m->items[k].label,label)) return k; return -1; }
@@ -400,7 +401,7 @@ static void test_games_menu(void)
     d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
     desk_program_add(&d,"files",elf,sizeof(elf)); desk_program_add(&d,"calc",elf,sizeof(elf));
     desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
-    assert(item_at(&d.sh.menus[0],"Games")<0);                         /* no /bin/dosbox: no Games */
+    assert(item_at(&d.sh.menus[0],"Games")<0);                         /* no /Programs/dosbox: no Games */
     desk_menu_close(&d);
     desk_program_add(&d,"dosbox",elf,sizeof(elf));
     desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
@@ -427,13 +428,13 @@ static void test_games_menu(void)
     }
     assert(!strcmp(desk_games[0].command,"\\WOLF3D\\WOLF3D.EXE") && !strcmp(desk_games[1].command,"\\DOOM\\DOOM.EXE -config CIUKI.CFG"));
     drop_all(&d); fake_reset();
-    puts("PASS games menu: Programs > Games with /bin/dosbox, keyboard path to each shareware game, dosbox --name=<title> <command>");
+    puts("PASS games menu: Programs > Games with /Programs/dosbox, keyboard path to each shareware game, dosbox --name=<title> <command>");
 }
 int main(void)
 {
     struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
-    struct desk_program program={"demo","/bin/demo"};
+    struct desk_program program={"demo","/Programs/demo"};
     fail_mapping=1; assert(launch_program(&d,&program)==-1 && errno==EBADF && !fake_live());
     fail_mapping=0; fail_spawn=1;
     assert(launch_program(&d,&program)==-1 && errno==ENOEXEC && !fake_live());
@@ -491,7 +492,7 @@ int main(void)
     assert(desk_program_graphical("files") && desk_program_graphical("demo") && !desk_program_graphical("hello"));
     assert(!strcmp(desk_program_label("files"),"Files") && !strcmp(desk_program_label("lua"),"lua"));
     desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
-    struct desk_program hello={"hello","/bin/hello"}, files={"files","/bin/files"};
+    struct desk_program hello={"hello","/Programs/hello"}, files={"files","/Programs/files"};
     assert(launch_program(&d,&hello)>0 && !d.clients[0].program);
     drop_all(&d); fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     pid=launch_program(&d,&files); assert(pid>0 && d.clients[0].program==1);
@@ -518,6 +519,12 @@ int main(void)
     gate_report(&d,0,1,42,0,100); assert(strstr(captured_report," keys=4 "));
     drop_all(&d); fake_reset();
     puts("PASS production launcher: explicit channel-only inheritance/group, CLOEXEC/spawn rollback, PID binding, menu/drag/close/reap evidence, capacity, Files launch/checkpoints");
+    /* The Run dialog strips the complete Programs prefix before menu lookup. */
+    desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    d.programs[0]=hello; d.program_count=1; d.launch=launch_program;
+    char command[]="/Programs/hello";
+    assert(run_command(&d,command)>0);
+    drop_all(&d); fake_reset();
     test_task_protocol();
     test_tasks_scenario();
     test_launch_protocol();

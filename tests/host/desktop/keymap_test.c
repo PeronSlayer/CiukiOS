@@ -41,10 +41,10 @@ int main(void)
     /* Recent documents (model only; the file helpers are covered by the viewer test). */
     struct du_recent r = { .count = 0 };
     assert(du_recent_push(&r, "relative") == -1 && du_recent_push(&r, "/a\nb") == -1);
-    for (int i = 0; i < DU_RECENT_MAX + 3; i++) { char p[32]; snprintf(p, sizeof(p), "/home/doc%d.txt", i); assert(!du_recent_push(&r, p)); }
-    assert(r.count == DU_RECENT_MAX && !strcmp(r.paths[0], "/home/doc17.txt") && !strcmp(r.paths[DU_RECENT_MAX - 1], "/home/doc3.txt"));
-    assert(!du_recent_push(&r, "/home/doc10.txt") && !strcmp(r.paths[0], "/home/doc10.txt") && r.count == DU_RECENT_MAX &&
-           !strcmp(r.paths[1], "/home/doc17.txt") && !strcmp(r.paths[DU_RECENT_MAX - 1], "/home/doc3.txt"));
+    for (int i = 0; i < DU_RECENT_MAX + 3; i++) { char p[32]; snprintf(p, sizeof(p), "/Documents/doc%d.txt", i); assert(!du_recent_push(&r, p)); }
+    assert(r.count == DU_RECENT_MAX && !strcmp(r.paths[0], "/Documents/doc17.txt") && !strcmp(r.paths[DU_RECENT_MAX - 1], "/Documents/doc3.txt"));
+    assert(!du_recent_push(&r, "/Documents/doc10.txt") && !strcmp(r.paths[0], "/Documents/doc10.txt") && r.count == DU_RECENT_MAX &&
+           !strcmp(r.paths[1], "/Documents/doc17.txt") && !strcmp(r.paths[DU_RECENT_MAX - 1], "/Documents/doc3.txt"));
     char text[DU_RECENT_MAX * (DU_RECENT_PATH + 1) + 1];
     size_t n = du_recent_format(&r, text, sizeof(text));
     struct du_recent back; du_recent_parse(&back, text, n);

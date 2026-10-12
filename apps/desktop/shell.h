@@ -64,6 +64,7 @@ struct desk_shell {
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;
     struct desk_image image;        /* decoded file, owned by desktop.c */
     int image_failed;
+    int wallpaper_deferred;       /* main-loop iterations before the image wallpaper is decoded (first frame first) */
     char status[96];
     uint64_t mem_total_k, mem_free_k; uint32_t cpu_mhz, processes, uptime_s; int system_valid;
     char cpu_name[48];
