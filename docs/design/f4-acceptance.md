@@ -755,6 +755,20 @@ later only changes `vm_source.c`'s two calls.
   production refill policy, f3-05 devices and source): with the old policy
   0 of 8 blocks rendered (512 late frames, one 4,560-frame skip, 28 periods
   queued); with the fix 8 of 8, 2,048 frames, no late frame, skip or hold.
+- Drained tail (fix after QEMU campaign 13, image 22320ccc): the eight-period
+  tail drained between VMPLAY stages 4 and 5 (the run also logged one tail
+  underrun before stage 3). With the DMA on the last valid period,
+  `ac97_publish` refuses the CIV/PIV slot and `audio_service` treated the
+  `-EIO` as a backend failure without a log line: the backend shut down
+  (`after_pages` 17 to 8, nine DMA pages released), so stage 5's OPL3 events
+  were never consumed (`events=0 frames=0`), while the guest finished
+  stage 5 and waited for command 6 (IP 0151h, `wait_command`). Now a tail
+  (no source, or the service where a source arrives) that is drained to one
+  period or halted stops the transport normally and a source restarts it;
+  remaining failures log `[audio] backend failure`. Host evidence:
+  `test_idle_tail_drain` in `tests/host/audio/audio_test.c` (production
+  `audio_service` and `ac97.c`, mock controller): before, `error=-5 ready=0`
+  in both cases; after, a clean stop and restart, no halt counted.
 - Evidence: per-source counters, a 64-entry block log (sequence, first frame,
   frames, flags), PCM and OPL path taps after the CT1745/source gains (non-zero
   frames, FNV-1a over int16 L/R, sums of squares, peaks, negative-to-non-negative
