@@ -172,20 +172,26 @@ class DesktopTests(unittest.TestCase):
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
         self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a",
-                                           "ciuki-portrait.xrgb"})  # f3-02 /bin/dosbox
+                                           "ciuki-portrait.xrgb",  # f3-02 /bin/dosbox
+                                           "calc", "charmap", "clock", "help", "mixer", "viewer"})  # legacy-recovery accessories
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
         expected["cflags"] = []
         self.assertFalse(build.current_build(expected))
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
+        accessories = {f"/bin/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
         self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/bin/dosbox", "/bin/files", "/bin/tasks",
-                                        "/bin/ciuknote", "/system/assets/ciuki-portrait.xrgb"})
+                                        "/bin/ciuknote", "/system/assets/ciuki-portrait.xrgb",
+                                        "/system/licenses/stb_image.txt", *accessories})
         self.assertIn("/system/assets", directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 7)
+        self.assertEqual(len(records), 14)
         for r in records:
+            if r["path"] == "/system/licenses/stb_image.txt":   # third_party/stb/LICENSE, not a build output
+                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
+                continue
             self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
         print("PASS desktop/demo/Files ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
 
@@ -202,7 +208,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp)
             volume = Path(temp) / "fixture.fat"
             with volume.open("wb") as f:
-                f.truncate(8*1024*1024)
+                f.truncate(16*1024*1024)   # desktop programs plus the accessories
             subprocess.run(["mkfs.fat", str(volume)], check=True, env=env, stdout=subprocess.DEVNULL)
             image.populate_payloads(volume, sources, directories)
             with patch.object(image, "PART_LBA", 0):
@@ -217,7 +223,7 @@ class DesktopTests(unittest.TestCase):
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="desktop-stale-", dir=parent) as temp:
             dest = Path(temp)
-            for name in ("manifest.json", "desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"):
+            for name in ("manifest.json", *build.PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb"):
                 shutil.copy2(build.OUT / name, dest / name)
             with patch.object(build, "OUT", dest):
                 self.assertTrue(build.current_build(build.inputs()))
@@ -261,6 +267,7 @@ class AppCaseReplayTests(unittest.TestCase):
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
+                 ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix, ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
                  ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),

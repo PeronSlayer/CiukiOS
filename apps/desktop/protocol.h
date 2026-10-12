@@ -17,7 +17,11 @@ enum desk_opcode {
     /* f2-33, version 2 only. WINDOW_INFO and TASK_RESULT flow desktop to
      * client; the other four flow client to desktop. */
     DESK_WINDOWS_QUERY, DESK_WINDOW_INFO, DESK_END_TASK, DESK_SWITCH_TO,
-    DESK_LAUNCH, DESK_TASK_RESULT
+    DESK_LAUNCH, DESK_TASK_RESULT,
+    /* Legacy recovery (Volume Control), version 2, client to desktop: serial,
+     * left, right (0..100), mute (0/1). The desktop applies it through its
+     * delegated /dev/mixer control handle (F4) and answers TASK_RESULT. */
+    DESK_MIXER_SET
 };
 #define DESK_WINDOW_UNRESPONSIVE 1u
 #define DESK_WINDOW_MINIMIZED 2u

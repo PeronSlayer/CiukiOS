@@ -2,6 +2,7 @@
  * /bin/ciuknote: a Notepad-class text editor on libdeskui (f2-32).
  * Usage: ciuknote [--channel-fd=N] [--test=ciuknote] [path] */
 #include "app.h"
+#include "../libdeskui/recent.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +16,7 @@
 struct note_main { struct cn_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; };
 
 static time_t host_now(void *p) { struct note_main *m = p; return m->app.test ? (time_t)TEST_TIME : time(NULL); }
+static void host_recent(const char *path) { (void)du_recent_add(path); }
 static void host_quit(void *p) { du_window_close(&((struct note_main *)p)->window); }
 static int close_request(struct du_window *w, void *p) { (void)w; return cn_close_request(p); }
 
@@ -83,6 +85,7 @@ int main(int argc, char **argv)
     struct cn_app *a = &m->app;
     m->window.close_request = close_request; m->window.user = a;
     a->fs = cn_native_fs(); a->now = host_now; a->quit = host_quit; a->portrait = portrait;
+    if (!test) a->recent = host_recent;   /* scripted runs keep the disk unchanged */
     a->host = m; a->test = test;
     if (test) a->checkpoint = on_checkpoint;
     if (cn_attach(a, &m->ui)) { fprintf(stderr, "CiukNote: out of memory\n"); du_window_destroy(&m->window); free(m); return 1; }

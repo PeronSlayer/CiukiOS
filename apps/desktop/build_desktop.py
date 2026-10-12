@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and inspect desktop, demo, libdeskui and Files using the static Ciuki SDK."""
+"""Build and inspect desktop, demo, libdeskui, Files and the accessories using the static Ciuki SDK."""
 # SPDX-License-Identifier: MIT
 import hashlib
 import importlib.util
@@ -15,6 +15,16 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build/apps/desktop"
 SDK = ROOT / "build/tools/ciuki-sdk"
 CFLAGS = ["-O2", "-Wall", "-Wextra", "-Werror"]
+# Accessories recovered from the 0.8 line (apps/accessories; launcher names in apps/desktop/catalog.h).
+ACCESSORIES = {
+    "calc": ["calc_main.c", "calc_view.c", "calc_model.c"],
+    "charmap": ["charmap_main.c", "charmap_view.c"],
+    "clock": ["clock_main.c", "clock_view.c", "clock_model.c"],
+    "help": ["help_main.c", "help_view.c", "help_topics.c"],
+    "mixer": ["mixer_main.c", "mixer_view.c"],
+    "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
+}
+PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", *ACCESSORIES)
 
 
 def module(name, path):
@@ -30,10 +40,12 @@ def digest(path):
 
 def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
-                                 ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote")
+                                 ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote",
+                                 ROOT / "apps/accessories")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
+    files.extend(ROOT / "third_party/stb" / n for n in ("stb_image.h", "LICENSE", "README.md"))
     if (SDK / "sysroot/include/ciuki/desktop.h").read_bytes() != (ROOT / "apps/desktop/protocol.h").read_bytes():
         raise ValueError("SDK desktop header is stale; rebuild SDK")
     return {"sdk_manifest_sha256": digest(SDK / "manifest.json"),
@@ -45,7 +57,7 @@ def current_build(expected):
     try:
         m = json.loads((OUT / "manifest.json").read_text())
         return (m["inputs"] == expected and set(m["files"]) ==
-                {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "libdeskui.a", "ciuki-portrait.xrgb"} and
+                {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb"} and
                 all(digest(OUT / n) == h for n, h in m["files"].items()))
     except (OSError, ValueError, KeyError):
         return False
@@ -64,7 +76,7 @@ def validate_payloads():
             m["portrait"] != portrait_record(converter)):
         raise ValueError("approved Ciuki portrait provenance mismatch")
     inspect = lua.checker().inspect
-    for name in ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote"):
+    for name in PROGRAMS:
         if inspect(OUT / name) != m["elf"][name]:
             raise ValueError(f"desktop ELF evidence: {name}")
     return m
@@ -117,10 +129,13 @@ def build():
     sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
+    for name, files in ACCESSORIES.items():
+        sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name in ("files", "tasks", "ciuknote") else []), "-o", str(OUT / name)]
+                          *([str(library)] if name in ("files", "tasks", "ciuknote", *ACCESSORIES) else []),
+                          *(["-lm"] if name in ACCESSORIES else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Audit compositor code separately: integer drawing must never emit x87.
@@ -139,7 +154,8 @@ def build():
     (OUT / "manifest.json").write_text(json.dumps(m, indent=2, sort_keys=True)+"\n")
     for obj in objects:
         obj.unlink(missing_ok=True)
-    print(f"[desktop] built/inspected desktop, demo, dosbox, libdeskui, Files, Tasks and CiukNote in {m['build_seconds']} seconds; guest not_run")
+    print(f"[desktop] built/inspected desktop, demo, dosbox, libdeskui, Files, Tasks, CiukNote and "
+          f"{len(ACCESSORIES)} accessories in {m['build_seconds']} seconds; guest not_run")
 
 
 def audit_integer(obj, sdk):

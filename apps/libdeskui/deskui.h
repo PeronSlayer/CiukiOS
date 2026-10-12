@@ -189,6 +189,9 @@ struct du_ui {
     int dirty;
     void (*event)(struct du_ui *, const struct du_event *, void *);
     void *user;
+    /* Optional application drawing (image, clock face, glyph grid): called by
+     * du_render after the widgets, before menus and dialogs, with a full clip. */
+    void (*paint)(struct du_ui *, void *);
 };
 
 /* Core */

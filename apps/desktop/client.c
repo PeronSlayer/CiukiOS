@@ -12,7 +12,7 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
 {
     memset(d, 0, sizeof(*d));
     d->ops = *ops; d->width = w; d->height = h;
-    d->display = d->input = d->output = d->focus = d->drag = d->about = d->authority_fd = -1;
+    d->display = d->input = d->output = d->focus = d->drag = d->about = d->authority_fd = d->mixer_fd = -1;
     d->action = -1;
     d->mouse_x = (int32_t)w / 2; d->mouse_y = (int32_t)h / 2;
     d->clock_second = UINT64_MAX;
@@ -222,7 +222,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         /* The Task Manager holds every request. Files, which the desktop itself launched, may only
          * LAUNCH /bin/ciuknote with one absolute path argument (opening a text file). */
         int files_open = p.opcode == DESK_LAUNCH && c->program == DESK_APP_FILES && !c->taskman &&
-                         !strcmp(p.title, "ciuknote") && p.argument[0] == '/';
+                         (!strcmp(p.title, "ciuknote") || desk_catalog_takes_file(p.title)) && p.argument[0] == '/';
         int32_t result = !c->taskman && !files_open ? -EPERM :
             p.opcode == DESK_END_TASK ? desk_task_end(d, p.window_id, p.pid) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
@@ -237,6 +237,14 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         /* The launcher may have reused this slot's neighbours; c stays valid. */
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, p.opcode); desk_put32(reply.data + 12, (uint32_t)result);
+        desk_queue(d, i, &reply);
+        break;
+    }
+    case DESK_MIXER_SET: {
+        /* Only the Volume Control the desktop launched may change the master volume. */
+        int32_t result = !c->mixer ? -EPERM : d->mixer_set ? d->mixer_set(d, p.width, p.height, p.flags) : -ENODEV;
+        desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
+        desk_put32(reply.data + 8, DESK_MIXER_SET); desk_put32(reply.data + 12, (uint32_t)result);
         desk_queue(d, i, &reply);
         break;
     }

@@ -179,6 +179,7 @@ static int load_file(struct cn_app *a, const char *path)
     if (!r) {
         du_ta_set_text(&a->ta, text, len);
         snprintf(a->path, sizeof(a->path), "%s", path); a->named = 1; a->crlf = crlf; a->note[0] = 0;
+        if (a->recent) a->recent(a->path);
         if (cn_is_log(a->ta.text, a->ta.len)) {  /* a first line .LOG appends the time and date on each opening */
             struct tm tm; time_t t = a->now(a->host); char stamp[48], add[64]; size_t k = 0;
             if (gmtime_r(&t, &tm)) {
@@ -206,6 +207,7 @@ static int save_file(struct cn_app *a, const char *path)
     if (!r) {
         if (path != a->path) snprintf(a->path, sizeof(a->path), "%s", path);
         a->named = 1; a->ta.modified = 0; a->note[0] = 0;
+        if (a->recent) a->recent(a->path);
         checkpoint(a, CN_CP_SAVED);
     }
     return r;

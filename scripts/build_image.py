@@ -62,11 +62,14 @@ def desktop_payloads():
     desktop = desktop_build.validate_payloads()
     sources = {"/bin/desktop": DESKTOP / "desktop", "/bin/demo": DESKTOP / "demo", "/bin/dosbox": DESKTOP / "dosbox",
                "/bin/files": DESKTOP / "files", "/bin/tasks": DESKTOP / "tasks", "/bin/ciuknote": DESKTOP / "ciuknote",
-               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
+               "/bin/calc": DESKTOP / "calc", "/bin/charmap": DESKTOP / "charmap", "/bin/clock": DESKTOP / "clock",
+               "/bin/help": DESKTOP / "help", "/bin/mixer": DESKTOP / "mixer", "/bin/viewer": DESKTOP / "viewer",
+               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
+               "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],
                 "elf": desktop["elf"], "portrait": desktop["portrait"]}
-    return sources, {"/bin", "/system", "/system/assets"}, metadata
+    return sources, {"/bin", "/system", "/system/assets", "/system/licenses"}, metadata
 
 
 def application_payloads():
