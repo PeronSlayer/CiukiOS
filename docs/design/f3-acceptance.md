@@ -1360,3 +1360,197 @@ worktree's three compile fixes, applied identically):
 - DOS/4GW 1.97 (`DPMI4GW.EXE`'s extender) redistribution text is still not
   located (`redistribution=open_question`); DOOM's bound 1.95 extender is
   part of the owner's local payload.
+
+### Amendment 2026-10-12: bundled shareware games
+
+Owner decision 2026-10-12: Wolfenstein 3-D and DOOM are pre-installed games
+of CiukiOS. Only their shareware releases are bundled; the registered data
+(`third_party/WOLF3D`, `third_party/Doom`) stays local and keeps the rules
+above. Implementation and host evidence by a Claude subagent (Opus) in
+`wt/wolf-bundle`; the QEMU window evidence belongs to the lead. No runtime
+PASS is claimed here.
+
+#### Research (checked 2026-10-12)
+
+- Packages and canonical sources. DOOM 1.9 shareware `doom19s.zip` from id's
+  `idstuff` tree ([mirrors.lug.mtu.edu/idgames/idstuff/doom](https://mirrors.lug.mtu.edu/idgames/idstuff/doom/doom19s.txt),
+  `ftp.fu-berlin.de/pc/msdos/games/idgames/idstuff/doom`). Wolfenstein 3-D 1.4
+  shareware `1wolf14.zip` from the 3D Realms/Apogee `share` directory
+  (mirrors `www.gamers.org/pub/mirrors/ftp.3drealms.com/share`,
+  `ftp.zx.net.nz/pub/mirror/ftp.3drealms.com/share`, the mirror list of
+  game-data-packager `etc/3drealms-mirrors`). Both mirrors of each package
+  served byte-identical files.
+- Published hashes. DOOM: SHA-256 `cacf0142b31ca1af00796b4a0339e07992ac5f21bc3f81e7532fe1b5e1b486e6`
+  in the [AUR doom1-wad PKGBUILD](https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=doom1-wad)
+  and MD5 `244d181457c9be5f28b91b488e67e042` in [RPM Fusion doom-shareware `sources`](https://github.com/rpmfusion/doom-shareware/blob/master/sources).
+  Wolfenstein 3-D: size 856,401, MD5 `a29432cd4a5184d552d8e5da8f80a531`, SHA-1
+  `a4553d7ec4216061b9486c40be90b066862ea8e0`, SHA-256
+  `cb2a2ef7ecef14152c65ff93cc3b84fbd3e8eb0c5c1de41a6fc8cdef559451a8` in
+  [game-data-packager `data/wolf3d.yaml`](https://salsa.debian.org/games-team/game-data-packager/-/raw/master/data/wolf3d.yaml)
+  (`1wolf14.zip?3drealms`) and the same MD5 in [RPM Fusion wolf3d-shareware `sources`](https://github.com/rpmfusion/wolf3d-shareware/blob/master/sources).
+  Members: the eight WL1 files match game-data-packager's v1.4 shareware
+  entries; DOOM.EXE MD5 `e2382b7d…` and DOOM1.WAD MD5 `f0cefca4…` match
+  [doomwiki.org Doom files](https://doomwiki.org/wiki/Doom_files). The funet
+  Apogee variant of `1wolf14.zip` (`c3d355ed…`, 728,992 bytes, `WOLF.1`
+  inside) has one published reference only and carries a different
+  `WOLF3D.EXE` build; it is not used.
+- Containers. `doom19s.zip` holds `DOOMS_19.1` and `DOOMS_19.2`, one ZIP when
+  concatenated (as RPM Fusion and AUR unpack it). `1wolf14.zip` holds
+  `W3DSW14.SHR`, Apogee's installer container: layout from Hans de Goede's
+  [extract.c](https://github.com/rpmfusion/wolf3d-shareware/blob/master/extract.c)
+  (3Ah-byte header, 0A8h-byte entry headers, compressed size at +88h),
+  members compressed with PKWARE DCL "implode"; the decoder is a port of
+  Mark Adler's [blast.c](https://github.com/madler/zlib/blob/develop/contrib/blast/blast.c)
+  (zlib licence), checked with the example in blast.c's header and by the
+  member hashes above.
+- Licence texts inside the packages (verbatim in each `UPSTREAM.json`,
+  `license_clauses`). Wolfenstein 3-D, `VENDOR.DOC` [V.07.15.94] of Apogee
+  Software, Ltd.: everyone may "copy, upload and generally pass around this
+  Program without charging for it"; [3][A][1] "All of the Program's files,
+  including this one, as released by us must be included without
+  modification"; KEY POINTS and [3][C]: "If you wish to distribute in a
+  retail location (such as on a rack), or as part of a hardware or software
+  bundle, or on CD-ROM, you must get PRIOR signed written permission from
+  Apogee, which is in Apogee's discretion and may be subject to royalty or
+  other conditions." DOOM 1.9: the ENDOOM screen of `DOOM1.WAD` says "DOOM,
+  Knee-Deep in the Dead can be freely distributed. Disk vendors should refer
+  to the vendor information text file (vendor.doc) in your DOOM directory."
+  (`doom19s.zip` contains no `VENDOR.DOC`); `DOOMS_19.DAT` "SHAREWARE
+  VERSION" / "PLEASE DISTRIBUTE!!!"; `README.TXT` asks not to modify the
+  shareware levels; John Carmack's 1999 e-mail quoted in Debian's
+  [doom-wad-shareware copyright](https://tracker.debian.org/media/packages/d/doom-wad-shareware/copyright-1.9.fixed-4):
+  "The DOOM shareware wad is freely distributable." The DOOM FAQ files
+  (`DMFAQ66A`–`D.TXT`, by Hank Leukart) carry their own terms, II.(d): "the
+  distributed form is not in an electronic magazine or within computer
+  software (prior explicit permission may be obtained from Hank Leukart)".
+- Source code. DOOM: GPL-2.0 ([id-Software/DOOM](https://github.com/id-Software/DOOM)).
+  Wolfenstein 3-D: [id-Software/wolf3d](https://github.com/id-Software/wolf3d)
+  carries id's 1995 LIMITED USE SOFTWARE LICENSE AGREEMENT (README.rst,
+  LICENCE.DOC); John Carmack wrote that the code was later released under
+  the GPL (`idstuff/wolf3d/wolf3d_iphone_v1.2_src.txt`). The bundled
+  executables are id's original binaries, not rebuilt from source.
+
+#### Decisions
+
+**Vendoring.** `third_party/games/wolf3d-shareware/` and
+`third_party/games/doom-shareware/` hold the unmodified archives, the
+licence documents extracted byte-identical from them (`VENDOR.DOC`,
+`FILE_ID.DIZ`; `README.TXT`, `DOOMS_19.DAT`) and `UPSTREAM.json` (sources,
+hashes, references, licence clauses, `"redistribution": "free (shareware,
+unmodified package)"`, a `bundling` note, every installed member's size and
+SHA-256, excluded members with their reason). `.gitattributes` keeps the
+bytes exact (`-text`).
+
+**Games disk** (`scripts/build_games_disk.py`, called by
+`scripts/build_image.py`; it never downloads). Each archive and member is
+checked against its pins; an unpinned member that is not explicitly
+excluded fails the build. `\WOLF3D` holds all 12 files of the release
+(VENDOR.DOC [3][A][1]); `\DOOM` holds the 16 files of `DOOMS_19` except
+the four FAQ files (their terms above), plus the f3-06 `CIUKI.CFG`.
+DOOM's DOS/4GW Professional 1.95 is bound into `DOOM.EXE`; the package has
+no separate `DOS4GW.EXE`. The disk is a DOS VM base of the `DOSBOOT.IMG`
+geometry with the DOS system read back from the built `DOSBOOT.IMG`
+(`dos_fixtures.dos_system`, manifest-checked), fsck'd and read back with
+mtools; then its trailing all-zero sectors are cut: 7,262,208 of
+134,217,728 bytes, so the 512 MiB system image gains about 7 MiB instead of
+128 MiB. The manifest (`CIUKIGAM.json`) records every file (path, size,
+SHA-256, role, package, `redistribution=free`), both the file and the full
+logical image hashes, the DOS image hash and the licence documents. The
+build is deterministic (`491c78c1…` twice).
+
+**Guard.** `build_dos_image.refuse_local_payloads` now always refuses
+registered data names (`DOOM.WAD`, `DOOM2.WAD`, `DOOMU.WAD`, `TNT.WAD`,
+`PLUTONIA.WAD`, `*.WL6`, `*.SOD`, `*.SD1`–`3`, `*.N3D`) and accepts a file
+that equals one of the owner's local files, or carries a reserved name,
+only when its SHA-256 is pinned in a vendored shareware package
+(`free=build_games_disk.free_hashes()`): DOOM 1.9 shareware and registered
+share `SETUP.EXE`, the network tools and documents byte for byte. The
+games builder applies it to the whole disk, and `build_image.py` to every
+payload of the system image. `DOSBOOT.IMG` and the f3-06 fixtures are
+unchanged.
+
+**Image.** `/GAMES/CIUKIGAM.IMG` and `/system/licenses/<package>-<file>`
+(licence documents and `UPSTREAM.json`); `build-manifest.json` gains a
+`games` record (packages, files, sizes, hashes).
+
+**Kernel** (`dosvm_disk.c`). `dosvm_window_base()` returns the owner's
+local fixture disk (`X:\CIUKIGAM.IMG` on D:–Z:, exact geometry size, as
+before) and, without one, the bundled `C:\GAMES\CIUKIGAM.IMG`; the window
+client (`dosvm_client.c`) uses it, so every `/bin/dosbox` window boots the
+games disk with the staged DPMI host. `dosvm_workload_base()` (the f3-06
+probes) keeps the fixture disk only: its pins are the owner's data. A base
+may now be shorter than the geometry: a multiple of 512 bytes, at least
+`DOSVM_BASE_MIN_SECTORS` (361, the boot, loader, FAT and root area), at most
+the full 128 MiB; sectors past its end read as zeros without a VFS read,
+writes go to the private overlay as before.
+
+**Launcher.** `/bin/dosbox [--name=TITLE] [COMMAND...]`: the command words,
+joined by spaces, are typed at the DOS prompt through the window's own
+input once the VM reports DOS ready (+400 ms) and the window has the focus
+(`apps/dosbox/autorun.h`; no ABI change). A leading `\DIR\PROGRAM` becomes
+`CD \DIR` and `PROGRAM [args]` (800 ms pause after each Enter) so the game
+finds its data; US set-1 keys, Shift for capitals and `_ :`; one event per
+10 ms loop (about 20 ms per character, slow enough for the shell to drain
+the guest's 15-key BIOS buffer); a full guest queue retries, a focus loss resumes
+without typing a character twice. Untypable or over-long commands make dosbox exit 2. The
+Start menu's Programs submenu gets "Games" (when `/bin/dosbox` exists) with
+"Wolfenstein 3D (shareware)" (`\WOLF3D\WOLF3D.EXE`) and "DOOM (shareware)"
+(`\DOOM\DOOM.EXE -config CIUKI.CFG`), Tango `applications-games`; each
+launches `dosbox --name=<game> <command>` (`desk_task_launch_args`), and the
+window's taskbar/title icon is `applications-games`. The Programs submenu
+grows by one row: `tests/host/desktop/shell_menu.py` models it and
+`--regenerate` moved the five scripted desktop cases' submenu rows
+(`tests/suites/f2-desktop.json`).
+
+**Licence status (owner).** DOOM's package terms permit free
+redistribution and CiukiOS charges nothing. Wolfenstein 3-D's `VENDOR.DOC`
+asks for Apogee's prior signed written permission for distribution "as part
+of a hardware or software bundle, or on CD-ROM"; pre-installing it in the
+image is such a bundle, and no permission is recorded. Vendoring the
+unmodified package in the repository corresponds to the free on-line
+distribution the same document allows. The owner decides before an image
+with Wolfenstein 3-D is published (main prereleases are suspended); removing
+it is one line (`PACKAGES` in `build_games_disk.py`, the `desk_games` row).
+
+#### Host verification (not QEMU evidence)
+
+- `make kernel`: PASS (FPU/SIMD audit passed); `make CAP= sdk`, `make CAP=
+  desktop`: PASS (dosbox with autorun built for the target).
+- `scripts/test/host_kernel_tests.sh`: PASS; dosvm harness 2,637,092 checks
+  including the bundled-disk test (lookup order fixture > bundled, probes
+  fixture-only, cut base zero fill without VFS reads, invalid sizes, window
+  VM with DPMI on the bundled disk).
+- `tests/host/test_games_disk.py` (12 tests): pins and references, member
+  hashes against game-data-packager/doomwiki, VENDOR.DOC file list
+  installed, verbatim clauses found in the documents, DCL decoder and SHR
+  container, registered names and unpinned local files refused, a disk
+  built beside fake local registered files holds none of them,
+  determinism, cut image read back and extended to the logical hash.
+- libx86emu guest runner (production DOS VM and DPMI host) on the cut
+  `CIUKIGAM.IMG`, reading it at its real size: `\RUNREC.COM \DOOM DOOM.EXE
+  -config CIUKI.CFG -nosound -timedemo demo1` → `timed 5026 gametics in
+  43344 realtics` (realtics are the runner's simulated time), RUNREC
+  `R01 T00` (exit code 1 from `I_Error`), 5,030 page flips, one DPMI client
+  entered and terminated, 5.10 G instructions, guest runner PASS. Wolf3D
+  cannot run there (x87, as above).
+
+#### Lead QEMU checks
+
+On the canonical image built from this state: from the desktop, Start >
+Programs > Games > "Wolfenstein 3D (shareware)": a DOS window titled
+"Wolfenstein 3D" types `CD \WOLF3D`, `WOLF3D.EXE` and the game reaches its
+title and a playable episode 1; the same for "DOOM (shareware)" (DOOM
+with SB16/OPL through `CIUKI.CFG`; keyboard only). Then `f3-vm` (the
+vm-window case now runs on the games disk with the DPMI host),
+`f3-workloads` (unchanged: fixture disk only), `f2-desktop` (regenerated
+menu rows) and the f2/f3 gates.
+
+#### Open items
+
+- Wolfenstein 3-D bundling permission (above): owner decision.
+- No QEMU probe drives the bundled games yet (a `f3:doom` variant on the
+  shareware disk would pin 5026 gametics); the f3-06 probes still end
+  `NOT_RUN` without the owner's fixture disk.
+- The typed command assumes the US keyboard decoding of the DOS VM and an
+  idle shell prompt; a user typing during the 400 ms settle time mixes
+  input.

@@ -171,6 +171,19 @@ class DesktopTests(unittest.TestCase):
                            check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
 
+    def test_dosbox_autorun(self):
+        """/bin/dosbox COMMAND (Programs > Games): the typed key events (apps/dosbox/autorun.h)."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="dosbox-autorun-", dir=parent) as temp:
+            binary = Path(temp) / "autorun-test"
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+                            "-I", str(ROOT / "src/kernel/include"), str(ROOT / "tests/host/desktop/dosbox_autorun_test.c"),
+                            "-o", str(binary)], check=True)
+            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True,
+                                    env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
+            self.assertIn("PASS dosbox autorun", result.stdout)
+
     def test_tango_icon_provenance(self):
         c = load("shell_icon_test", ROOT / "apps/desktop/convert_icons.py")
         record = c.check()

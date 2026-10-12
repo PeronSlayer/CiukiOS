@@ -3,8 +3,9 @@
 The Start menu is 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px) above the 32 px
 taskbar, so it spans y 542..736 and its first row, Programs, y 545..575 (x 2..186). Hovering or clicking
 Programs opens its submenu at x 183..333 with rows of 22 px: the known programs present in /bin in
-PROGRAM_ORDER, then "Accessories" when an accessory is present, then a separator (8 px) and "Developer"
-when any other program is present (shell.c build(), SH_MENU_PROGRAMS). The submenu is top-aligned with
+PROGRAM_ORDER, then "Accessories" when an accessory is present, "Games" when dosbox is present (the bundled
+shareware games, owner decision 2026-10-12), then a separator (8 px) and "Developer" when any other program
+is present (shell.c build(), SH_MENU_PROGRAMS). The submenu is top-aligned with
 Programs (y 542) unless it would cross the taskbar: then shell.c layout() moves it up to end at y 736.
 A script clicks the Ciuki button, Programs, moves right along the Programs row into the submenu, then
 up or down to the program row (submenu_row_y), clicks it and moves back.
@@ -44,6 +45,7 @@ def program_row(programs, name):
 def submenu_height(programs):
     rows = sum(p in programs for p in PROGRAM_ORDER)
     rows += any(p in programs for p in ACCESSORIES)
+    rows += "dosbox" in programs                  # Games (shell.c SH_MENU_GAMES)
     developer = any(p not in PROGRAM_ORDER and p not in ACCESSORIES for p in programs)
     return 6 + (rows + developer) * SUB_ROW + (SEPARATOR if developer else 0)
 

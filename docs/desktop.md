@@ -88,8 +88,9 @@ unchanged; compositor.c references the shell through weak symbols so the demo
 and the libdeskui programs, which reuse compositor.c, link without it.
 
 - **Start menu** ("Ciuki" button, the approved portrait): Programs (CiukNote,
-  Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then a
-  Developer submenu with Hello, libc_smoke and any unknown `/bin` program),
+  Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
+  Accessories and Games submenus, then a Developer submenu with Hello,
+  libc_smoke and any unknown `/bin` program),
   Documents (recent files, My Documents, Clear Recent Documents), Settings
   (Control Panel and its pages, Task Manager), Help (Keyboard Shortcuts, About
   CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
@@ -541,6 +542,19 @@ passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/bin` menu
 program at shell start through the menu-click path; the `f3:vm-window` probe
 uses it. Menu click offsets for the scripted cases follow the formula in
 docs/design/f2-acceptance.md, section F2-33. Details: docs/design/f3-acceptance.md, section f3-02.
+
+## Games (owner decision 2026-10-12)
+
+Programs > Games (present with `/bin/dosbox`) lists the pre-installed
+shareware games of `apps/desktop/catalog.h` (`desk_games`): "Wolfenstein 3D
+(shareware)" and "DOOM (shareware)", Tango `applications-games`. Each starts
+`/bin/dosbox --name=<game> <command>`; dosbox types the command at the DOS
+prompt of its window (`apps/dosbox/autorun.h`: `\DIR\PROGRAM` becomes
+`CD \DIR` and `PROGRAM`) once DOS is ready and the window has the focus. The
+window VM boots the bundled games disk `C:\GAMES\CIUKIGAM.IMG`
+(docs/build-and-run.md, "Pre-installed shareware games"). The extra
+Programs row moves the scripted cases' submenu rows:
+`tests/host/desktop/shell_menu.py --regenerate`.
 
 ## f2-30 decisions (2026-10-11)
 

@@ -2829,7 +2829,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 66
+                    "value": 44
                   }
                 }
               ],
@@ -2872,7 +2872,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -128
+                    "value": -106
                   }
                 }
               ],
@@ -3737,7 +3737,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 66
+                    "value": 44
                   }
                 }
               ],
@@ -3780,7 +3780,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -128
+                    "value": -106
                   }
                 }
               ],
@@ -4648,7 +4648,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 1
+                    "value": -22
                   }
                 }
               ],
@@ -4691,7 +4691,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -7
+                    "value": 16
                   }
                 }
               ],
@@ -6798,7 +6798,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 22
+                    "value": 1
                   }
                 }
               ],
@@ -6841,7 +6841,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 84
+                    "value": 105
                   }
                 }
               ],
@@ -7870,7 +7870,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -22
+                    "value": -44
                   }
                 }
               ],
@@ -7913,7 +7913,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -68
+                    "value": -46
                   }
                 }
               ],

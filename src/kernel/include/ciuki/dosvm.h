@@ -23,8 +23,9 @@ struct dosvm_config {
     bool disable_umb;
     const char *probe; /* record owner for admission/stop/guest rows; NULL = "vm-boot" */
     bool dpmi;         /* f3-04 staged testing: answer INT 2Fh/1687h before DOSVM_DPMI_PUBLIC */
-    /* f3-06: read-only base image (VFS path, exactly DOSVM_SECTORS sectors of
-     * the private FAT16 geometry); NULL selects C:\SYSTEM\DOS\DOSBOOT.IMG.
+    /* f3-06: read-only base image (VFS path, the private FAT16 geometry:
+     * DOSVM_SECTORS sectors, or fewer when its trailing zero sectors were
+     * cut, which then read as zeros); NULL selects C:\SYSTEM\DOS\DOSBOOT.IMG.
      * The writable overlay always stays in C:\SYSTEM\DOS (any base volume). */
     const char *base;
 };
@@ -73,8 +74,13 @@ bool dosvm_admit(uint64_t free_bytes, uint64_t reserved, uint64_t resident,
 int dosvm_create(const struct dosvm_config *, struct dosvm **out);
 /* f3-06: the owner's local workload disk (scripts/test/dos_fixtures.py):
  * "X:\CIUKIGAM.IMG" of exactly the private geometry on the first drive after
- * C: that has it. 0 with path filled, -ENOENT without one, else the error. */
+ * C: that has it. 0 with path filled, -ENOENT without one, else the error.
+ * The workload probes use only this disk (their pins are the owner's data). */
 int dosvm_workload_base(char path[24]);
+/* Window VMs (/bin/dosbox): that local disk when attached, else the bundled
+ * shareware games disk C:\GAMES\CIUKIGAM.IMG (owner decision 2026-10-12;
+ * scripts/build_games_disk.py). Same results as dosvm_workload_base. */
+int dosvm_window_base(char path[24]);
 int dosvm_boot(struct dosvm *);
 struct dosvm_key dosvm_key(const struct dosvm *);
 bool dosvm_valid(struct dosvm_key);

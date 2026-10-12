@@ -135,6 +135,8 @@ void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
 int desk_task_switch(struct desktop *, uint32_t window_id);
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
+/* Launch with several arguments after the desktop's own (Programs > Games: /bin/dosbox). */
+int desk_task_launch_args(struct desktop *, const char *name, const char *const *args, unsigned count);
 int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);

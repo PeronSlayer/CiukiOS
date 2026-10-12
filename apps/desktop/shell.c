@@ -266,6 +266,8 @@ static const char *client_icon(const struct desktop *d, int i)
     if (c->taskman) return "utilities-system-monitor";
     for (unsigned k = 0; k < DESK_CATALOG_COUNT; k++)   /* accessories: the launcher's Tango name by window title */
         if (strstr(c->title, desk_catalog[k].label)) return desk_catalog[k].tango;
+    for (unsigned k = 0; k < DESK_GAME_COUNT; k++)   /* Programs > Games: the DOS Box window carries the game's title */
+        if (!strcmp(c->title, desk_games[k].title)) return desk_games[k].tango;
     if (!strncmp(c->title, "DOS", 3)) return "utilities-terminal";
     if (strstr(c->title, "Demo") || strstr(c->title, "demo")) return "applications-games";
     return "application-x-executable";
@@ -309,6 +311,8 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         for (unsigned k = 0; k < d->program_count; k++) if (!program_find(d->programs[k].name)) developer = 1;
         if (!m->count) item(m, "(No programs)", NULL, SH_ACT_NONE, 0, SH_ITEM_DISABLED);
         if (accessories) item(m, "Accessories", "applications-accessories", SH_ACT_SUBMENU, SH_MENU_ACCESSORIES, 0);
+        /* The bundled shareware games run in a DOS Box window (catalog.h desk_games). */
+        if (program_index(d, "dosbox") >= 0) item(m, "Games", "applications-games", SH_ACT_SUBMENU, SH_MENU_GAMES, 0);
         if (developer) { separator(m); item(m, "Developer", "applications-development", SH_ACT_SUBMENU, SH_MENU_DEVELOPER, 0); }
         break;
     }
@@ -317,6 +321,9 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
             int at = program_index(d, programs[k].name);
             if (at >= 0 && !strcmp(programs[k].category, "accessories")) item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
+        break;
+    case SH_MENU_GAMES:
+        for (unsigned k = 0; k < DESK_GAME_COUNT; k++) item(m, desk_games[k].label, desk_games[k].tango, SH_ACT_GAME, (int)k, 0);
         break;
     case SH_MENU_DEVELOPER:
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
@@ -473,6 +480,21 @@ static void launch_named(struct desktop *d, const char *name, const char *argume
         desk_shell_message(d, "Programs", text, 1);
     }
 }
+/* Programs > Games: a DOS Box window titled after the game, typing its command. */
+static void launch_game(struct desktop *d, int index)
+{
+    if (index < 0 || (unsigned)index >= DESK_GAME_COUNT) return;
+    char name[48];
+    snprintf(name, sizeof(name), "--name=%s", desk_games[index].title);
+    const char *args[] = {name, desk_games[index].command};
+    int r = desk_task_launch_args(d, "dosbox", args, 2);
+    if (r < 0) {
+        char text[160];
+        snprintf(text, sizeof(text), r == -ENOENT ? "CiukiOS cannot find 'dosbox' in /bin." :
+                 "'%s' could not be started (error %d).", desk_games[index].title, -r);
+        desk_shell_message(d, "Games", text, 1);
+    }
+}
 static void act(struct desktop *d, const struct sh_item *it)
 {
     char argument[24];
@@ -489,6 +511,7 @@ static void act(struct desktop *d, const struct sh_item *it)
         else { snprintf(argument, sizeof(argument), "--panel=%s", panel_names[it->arg]); launch_named(d, "control", argument); }
         break;
     case SH_ACT_TASKMAN: launch_named(d, "tasks", NULL); break;
+    case SH_ACT_GAME: launch_game(d, it->arg); break;
     case SH_ACT_KEYS:
         desk_shell_message(d, "Keyboard Shortcuts",
             "Win or Ctrl+Esc   Open the Start menu\nAlt+Tab           Switch between windows\n"
