@@ -152,7 +152,7 @@ void clock_event(struct du_ui *u, const struct du_event *e, void *user)
         } else if (e->id == CLOCK_M_SECONDS) { a->seconds_hand = !a->seconds_hand; a->view_items[0].flags = a->seconds_hand ? DU_ITEM_CHECKED : 0; }
         else if (e->id == CLOCK_M_24H) { a->h24 = !a->h24; a->view_items[1].flags = a->h24 ? DU_ITEM_CHECKED : 0; }
         else if (e->id == CLOCK_M_ABOUT)
-            du_message(u, 1, "About Clock", "CiukiOS Clock and Calendar - A modern Retro OS\n"
+            du_message(u, 1, "About Clock", "CiukiOS Clock and Calendar - Classic computing, one woof at a time.\n"
                        "The system clock keeps UTC (battery clock).\nCode: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         u->focus = -1;
         break;

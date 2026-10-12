@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import struct
 import subprocess
 import tempfile
@@ -59,6 +60,10 @@ DOS4GW_STATUS = ("DOS/4GW 1.97 runtime from Open Watcom 2.0 binw/dos4gw.exe, dis
 LOCAL_PAYLOAD_DIRS = ("third_party/Doom", "third_party/WOLF3D")
 LOCAL_PAYLOAD_NAMES = ("DOOM.EXE", "DOOM.WAD", "DOOM1.WAD", "DOOM2.WAD", "WOLF3D.EXE",
                        "VSWAP.WL6", "VGAGRAPH.WL6", "GAMEMAPS.WL6", "AUDIOT.WL6")
+# Registered (commercial) game data: never published under any condition,
+# not even as a pinned shareware member (owner decision 2026-10-12: only the
+# shareware releases are bundled, scripts/build_games_disk.py).
+REGISTERED_DATA = re.compile(r"(DOOM|DOOM2|DOOMU|TNT|PLUTONIA)\.WAD|[^/]*\.(WL6|SOD|SD[1-3]|N3D)")
 
 
 def local_payload_hashes(root=ROOT):
@@ -76,11 +81,18 @@ def local_payload_hashes(root=ROOT):
     return hashes
 
 
-def refuse_local_payloads(payloads, root=ROOT):
-    """payloads: {path: sha256}. Raises when a local commercial file would be published."""
+def refuse_local_payloads(payloads, root=ROOT, free=frozenset()):
+    """payloads: {path: sha256}. Raises when a local commercial file would be published.
+    free: SHA-256 of the files pinned in the vendored shareware packages
+    (scripts/build_games_disk.free_hashes); only such a file may equal a
+    local file or carry a reserved name, never a registered data name."""
     local = local_payload_hashes(root)
     for path, sha in sorted(payloads.items()):
         name = path.replace("\\", "/").rsplit("/", 1)[-1].upper()
+        if REGISTERED_DATA.fullmatch(name):
+            raise SystemExit(f"refusing registered game data {path}: never published")
+        if sha in free:
+            continue
         if sha in local or name in LOCAL_PAYLOAD_NAMES:
             raise SystemExit(f"refusing local commercial payload {path} "
                              f"({local.get(sha, 'reserved name')}): fixtures only (f3-06)")

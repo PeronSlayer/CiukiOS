@@ -8,7 +8,7 @@
 
 enum {
     C_TABS = 1, C_CLOSE, C_STATUS,
-    C_THEME_L, C_THEME, C_WALL_L, C_WALL, C_POS_L, C_POS0, C_POS1, C_POS2, C_POS3, C_COL_L,
+    C_THEME_L, C_THEME, C_WALL_L, C_WALL, C_POS_L, C_POS0, C_POS1, C_POS2, C_POS3, C_POS4, C_COL_L,
     C_COL0, C_COL1, C_COL2, C_COL3, C_COL4, C_COL5, C_ICONS,
     C_SPEED_L, C_SPEED, C_SPEED_V, C_SLOW, C_FAST, C_DBL_L, C_DBL, C_DBL_V, C_MOUSE_NOTE,
     C_KEY_L, C_KEY, C_KEY_NOTE1, C_KEY_NOTE2,
@@ -19,7 +19,9 @@ enum {
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system"};
 static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System"};
 static const uint32_t swatches[6] = {0x375564u, 0x2f6f6bu, 0x3a3f6bu, 0x6b4f3au, 0x808080u, 0x101820u};
-static const int mode_order[4] = {CFG_WALL_CENTER, CFG_WALL_TILE, CFG_WALL_STRETCH, CFG_WALL_FIT};
+/* The Position buttons, in two rows of three: Center Tile Stretch / Fit Fill. */
+#define CP_POSITIONS 5
+static const int mode_order[CP_POSITIONS] = {CFG_WALL_CENTER, CFG_WALL_TILE, CFG_WALL_STRETCH, CFG_WALL_FIT, CFG_WALL_FILL};
 /* Page of each widget id (-1: every page). */
 static int page_of(int id)
 {
@@ -158,7 +160,7 @@ static void sync(struct cp_app *a)
         if (a->wall_items[k].selected) wall = k;
     }
     if ((w = du_get(u, C_WALL))) w->active = wall;
-    for (int k = 0; k < 4; k++) if ((w = du_get(u, C_POS0 + k))) w->def = mode_order[k] == a->cfg.wallpaper_mode;
+    for (int k = 0; k < CP_POSITIONS; k++) if ((w = du_get(u, C_POS0 + k))) w->def = mode_order[k] == a->cfg.wallpaper_mode;
     toggle_label(a, C_ICONS, "Desktop icons", a->cfg.desktop_icons);
     char s[64];
     if ((w = du_get(u, C_SPEED))) w->value = a->cfg.mouse_speed - CFG_MOUSE_MIN;
@@ -213,12 +215,11 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             else if (k < 2 + DESK_BUILTIN_WALLPAPERS) snprintf(a->cfg.wallpaper, sizeof(a->cfg.wallpaper), "builtin:%s", desk_builtin_wallpapers[k - 2].id);
             else if (k - 2 - DESK_BUILTIN_WALLPAPERS < a->wall_count) {
                 snprintf(a->cfg.wallpaper, sizeof(a->cfg.wallpaper), "%s", a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS]);
-                if (a->cfg.wallpaper_mode == CFG_WALL_CENTER) a->cfg.wallpaper_mode = CFG_WALL_TILE;
             } else break;
             save = 1; a->preview_valid = 0;
         }
         break;
-    case C_POS0: case C_POS1: case C_POS2: case C_POS3:
+    case C_POS0: case C_POS1: case C_POS2: case C_POS3: case C_POS4:
         if (e->type == DU_EV_ACTIVATE) { a->cfg.wallpaper_mode = mode_order[e->id - C_POS0]; save = 1; a->preview_valid = 0; }
         break;
     case C_COL0: case C_COL1: case C_COL2: case C_COL3: case C_COL4: case C_COL5:
@@ -258,7 +259,7 @@ static void list_style(struct du_widget *w, const char *title)
 static const char *wall_label(struct cp_app *a, unsigned k)
 {
     if (k == 0) return "(None)";
-    if (k == 1) return "Ciuki (default)";
+    if (k == 1) return "Ciuki portrait";
     if (k < 2 + DESK_BUILTIN_WALLPAPERS) return desk_builtin_wallpapers[k - 2].label;
     const char *path = a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS], *base = strrchr(path, '/');
     return base ? base + 1 : path;
@@ -286,13 +287,14 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     unsigned walls = 2 + DESK_BUILTIN_WALLPAPERS + a->wall_count;
     items(a->wall_items, a->wall_labels, walls, wall_label, a);
     for (unsigned k = 0; k < walls; k++) a->wall_items[k].icon16 = NULL;
-    w = add(a, DU_LISTVIEW, C_WALL, 248, 152, 228, 126, ""); w->items = a->wall_items; w->count = walls; list_style(w, "Wallpaper");
+    w = add(a, DU_LISTVIEW, C_WALL, 248, 152, 228, 126 + DU_ROW, ""); w->items = a->wall_items; w->count = walls; list_style(w, "Wallpaper");   /* seven whole rows */
     add(a, DU_LABEL, C_POS_L, 24, 224, 100, 14, "Position:");
-    static const char *const pos[4] = {"Center", "Tile", "Stretch", "Fit"};
-    for (int k = 0; k < 4; k++) add(a, DU_BUTTON, C_POS0 + k, 24 + k * 52, 240, 50, 22, pos[k]);
-    add(a, DU_LABEL, C_COL_L, 24, 272, 100, 14, "Desktop colour:");
-    for (int k = 0; k < 6; k++) add(a, DU_BUTTON, C_COL0 + k, 24 + k * 34, 288, 30, 24, "");
-    add(a, DU_BUTTON, C_ICONS, 248, 290, 228, 24, "");
+    /* Under the 208 px monitor: three 68 px buttons per row, 2 px apart. */
+    static const char *const pos[CP_POSITIONS] = {"Center", "Tile", "Stretch", "Fit", "Fill"};
+    for (int k = 0; k < CP_POSITIONS; k++) add(a, DU_BUTTON, C_POS0 + k, 24 + k % 3 * 70, 240 + k / 3 * 24, 68, 22, pos[k]);
+    add(a, DU_LABEL, C_COL_L, 24, 296, 100, 14, "Desktop colour:");
+    for (int k = 0; k < 6; k++) add(a, DU_BUTTON, C_COL0 + k, 24 + k * 34, 312, 30, 24, "");
+    add(a, DU_BUTTON, C_ICONS, 248, 312, 228, 24, "");
     /* Mouse */
     add(a, DU_LABEL, C_SPEED_L, 24, 44, 200, 14, "Pointer &speed:");
     w = add(a, DU_SCROLLBAR, C_SPEED, 24, 62, 300, 17, ""); w->vertical = 0; w->total = CFG_MOUSE_MAX - CFG_MOUSE_MIN + 1; w->page = 1;
@@ -330,7 +332,7 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     snprintf(line, sizeof(line), "Memory %llu MB, %llu MB available, %u processes", (unsigned long long)(a->host.mem_total_k / 1024),
              (unsigned long long)(a->host.mem_free_k / 1024), a->host.processes);
     add(a, DU_LABEL, C_SYS3, 140, 122, 336, 14, line);
-    add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "A modern Retro OS. About CiukiOS is in the Start menu, under Help.");
+    add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "Classic computing, one woof at a time. About CiukiOS is in the Start menu, under Help.");
     cp_tick(a);
     sync(a);
     du_focus(u, C_TABS);

@@ -80,7 +80,7 @@ void charmap_event(struct du_ui *u, const struct du_event *e, void *user)
         } else if (e->id == CM_SELECT) { append(a); u->focus = -1; }
         else if (e->id == CM_COPY) { du_clipboard_set(du_get(u, CM_FIELD)->text); u->focus = -1; }
         else if (e->id == CM_M_ABOUT)
-            du_message(u, 1, "About Character Map", "CiukiOS Character Map - A modern Retro OS\nThe characters of the system font.\nCode: MIT.",
+            du_message(u, 1, "About Character Map", "CiukiOS Character Map - Classic computing, one woof at a time.\nThe characters of the system font.\nCode: MIT.",
                        DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         break;
     case DU_EV_KEY: {

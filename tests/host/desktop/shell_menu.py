@@ -5,8 +5,9 @@ DESK_START_*). Its menu drops from it: 6 rows of 30 px plus one 8 px separator a
 from y 32 (the top bar's bottom edge) at x 4, so it spans y 32..226 and its first row, Programs, y 35..65
 (x 4..188). Hovering or clicking Programs opens its submenu at x 185..335 with rows of 22 px, top-aligned
 with Programs (y 32): the known programs present in /bin in PROGRAM_ORDER, then "Accessories" when an
-accessory is present, then a separator (8 px) and "Developer" when any other program is present
-(shell.c build(), SH_MENU_PROGRAMS). shell.c layout() would move the submenu up only if it crossed the
+accessory is present, "Games" when dosbox is present (the bundled shareware games, owner decision
+2026-10-12), then a separator (8 px) and "Developer" when any other program is present (shell.c build(),
+SH_MENU_PROGRAMS). shell.c layout() would move the submenu up only if it crossed the
 taskbar. A script clamps the pointer to the top-left corner, moves onto the Ciuki button (START_CLICK) and
 clicks it, moves down onto Programs (PROGRAMS_CLICK_Y) and clicks it, moves right along the Programs row
 into the submenu, then down to the program row (submenu_row_y), clicks it and moves back.
@@ -54,6 +55,7 @@ def program_row(programs, name):
 def submenu_height(programs):
     rows = sum(p in programs for p in PROGRAM_ORDER)
     rows += any(p in programs for p in ACCESSORIES)
+    rows += "dosbox" in programs                  # Games (shell.c SH_MENU_GAMES)
     developer = any(p not in PROGRAM_ORDER and p not in ACCESSORIES for p in programs)
     return 6 + (rows + developer) * SUB_ROW + (SEPARATOR if developer else 0)
 

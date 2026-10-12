@@ -82,7 +82,6 @@ def frame(width=1024, height=768, background=0x375564, top=0xdcdcdc, taskbar=0xd
     fill(4, 4, 96, 24, button)                         # the Ciuki button at the left of the top bar
     fill(13, 7, 18, 18, 0x9a7a5a)                      # its portrait mark
     fill(37, 11, 53, 9, 0x161616)                      # "CiukiOS"
-    fill(118, 11, 100, 9, 0x6a6a6a)                    # tagline
     fill((width - 256) // 2, 200, 256, 256, 0x9a7a5a)  # portrait stand-in
     fill(0, height - 32, width, 32, taskbar)
     fill(width - 64, height - 20, 48, 7, 0x161616)    # taskbar clock

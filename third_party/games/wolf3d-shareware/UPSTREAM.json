@@ -1,0 +1,165 @@
+{
+  "project": "Wolfenstein 3-D shareware v1.4 (episode 1)",
+  "authors": "id Software; published by Apogee Software, Ltd.",
+  "archive": "1wolf14.zip",
+  "size": 856401,
+  "sha256": "cb2a2ef7ecef14152c65ff93cc3b84fbd3e8eb0c5c1de41a6fc8cdef559451a8",
+  "sha1": "a4553d7ec4216061b9486c40be90b066862ea8e0",
+  "md5": "a29432cd4a5184d552d8e5da8f80a531",
+  "original_location": "ftp://ftp.3drealms.com/share/1wolf14.zip (3D Realms/Apogee shareware directory)",
+  "downloaded": "2026-10-12",
+  "sources": [
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1wolf14.zip",
+    "ftp://ftp.zx.net.nz/pub/mirror/ftp.3drealms.com/share/1wolf14.zip"
+  ],
+  "hash_references": [
+    {
+      "reference": "Debian game-data-packager data/wolf3d.yaml, file 1wolf14.zip?3drealms (mirrors etc/3drealms-mirrors)",
+      "url": "https://salsa.debian.org/games-team/game-data-packager/-/raw/master/data/wolf3d.yaml",
+      "size": 856401,
+      "md5": "a29432cd4a5184d552d8e5da8f80a531",
+      "sha1": "a4553d7ec4216061b9486c40be90b066862ea8e0",
+      "sha256": "cb2a2ef7ecef14152c65ff93cc3b84fbd3e8eb0c5c1de41a6fc8cdef559451a8"
+    },
+    {
+      "reference": "RPM Fusion nonfree wolf3d-shareware 1.4, 'sources' (Source0 ftp://ftp.3drealms.com/share/1wolf14.zip)",
+      "url": "https://github.com/rpmfusion/wolf3d-shareware/blob/master/sources",
+      "md5": "a29432cd4a5184d552d8e5da8f80a531"
+    },
+    {
+      "reference": "both mirrors above served byte-identical files (SHA-256 above)"
+    }
+  ],
+  "member_references": "The eight WL1 data files equal the v1.4 shareware entries (size and MD5) of game-data-packager data/wolf3d.yaml.",
+  "unpack": {
+    "format": "apogee-shr",
+    "member": "W3DSW14.SHR",
+    "notes": "Apogee installer container; members compressed with PKWARE DCL implode (scripts/build_games_disk.py dcl_explode, a port of zlib contrib/blast)"
+  },
+  "install": {
+    "directory": "WOLF3D",
+    "files": [
+      {
+        "name": "AUDIOHED.WL1",
+        "size": 1156,
+        "sha256": "39351624ae6f8eef4b873e060c1a6f3e5ee7e81c4939c485275a89b145336338",
+        "role": "data"
+      },
+      {
+        "name": "AUDIOT.WL1",
+        "size": 132613,
+        "sha256": "1e2c9ae30398a14c61a4ddd39aabaa0dbcc984cc4924a3e51df75574c259cfb9",
+        "role": "data"
+      },
+      {
+        "name": "GAMEMAPS.WL1",
+        "size": 27425,
+        "sha256": "a6a6654b342f2c027bcb22bfce0a41f9fc0063b775e9e4da0c771970e53e11aa",
+        "role": "data"
+      },
+      {
+        "name": "MAPHEAD.WL1",
+        "size": 402,
+        "sha256": "3458f661c9b875bca99ea22a7267771fad8f2a33c699ea732cf7c3322909bf8c",
+        "role": "data"
+      },
+      {
+        "name": "ORDER.FRM",
+        "size": 5714,
+        "sha256": "e0596c5390896a27001f6cf263bc7a6b5f087a7499c5df18f1530de6c959bcd4",
+        "role": "documentation"
+      },
+      {
+        "name": "VENDOR.DOC",
+        "size": 7641,
+        "sha256": "fc1f4c23122702198eaa0df09a12af135801bdc835317638f2b895e948a33710",
+        "role": "license"
+      },
+      {
+        "name": "VGADICT.WL1",
+        "size": 1024,
+        "sha256": "59878fec65f033b00dbb1240317d1793f5858213dc8013b4d68f9ac8b45b0c80",
+        "role": "data"
+      },
+      {
+        "name": "VGAGRAPH.WL1",
+        "size": 326568,
+        "sha256": "d5176f843c53415132db199c19f38591eaf3cedd35a4f7eb2698c1865d83030d",
+        "role": "data"
+      },
+      {
+        "name": "VGAHEAD.WL1",
+        "size": 471,
+        "sha256": "f4cc800dc8444373092d4eaa5d6ab59d63d23a510a9d38b73ca9b3dbb700d18b",
+        "role": "data"
+      },
+      {
+        "name": "VSWAP.WL1",
+        "size": 742912,
+        "sha256": "698f217257e2cbb951a4d110ba09140291f38d0121b3784d1d6be59c03a6b47b",
+        "role": "data"
+      },
+      {
+        "name": "W3DHELP.EXE",
+        "size": 33161,
+        "sha256": "ea226934cbfa1d11060992c2201aabe6c5e2310a117225dd0388a068d5b23684",
+        "role": "program"
+      },
+      {
+        "name": "WOLF3D.EXE",
+        "size": 109959,
+        "sha256": "75bd63f1db75be77a9dfd317144fec2a86d2a409dd3b6847a251a2565b646280",
+        "role": "executable"
+      }
+    ],
+    "excluded": {}
+  },
+  "license": "Shareware; VENDOR.DOC [V.07.15.94] of Apogee Software, Ltd. (inside W3DSW14.SHR)",
+  "license_files": [
+    {
+      "name": "VENDOR.DOC",
+      "from": "installed",
+      "sha256": "fc1f4c23122702198eaa0df09a12af135801bdc835317638f2b895e948a33710"
+    },
+    {
+      "name": "FILE_ID.DIZ",
+      "from": "archive",
+      "sha256": "840242ab486718872c865f4feed86b7bd874bf0d7e339977956e347dac97dfca"
+    }
+  ],
+  "license_clauses": [
+    {
+      "source": "VENDOR.DOC (KEY POINTS)",
+      "text": "[*] Everyone can -- and is encouraged! -- to copy, upload and\n    generally pass around this Program without charging for it."
+    },
+    {
+      "source": "VENDOR.DOC (KEY POINTS)",
+      "text": "[*] If you want to distribute it in a retail location (such as\n    on a rack), or as part of a hardware or software bundle, or\n    on CD-ROM you must get PRIOR signed written permission from\n    Apogee.  Apogee reserves its right to withhold permission."
+    },
+    {
+      "source": "VENDOR.DOC (KEY POINTS)",
+      "text": "[*] The Program is marked \"Shareware\" and contains \"episode #1\". \n    No right is given by this Vendor.Doc to copy, use or\n    distribute any other version, including any version that is\n    registered, or not marked shareware, or that contains any\n    episode other than #1."
+    },
+    {
+      "source": "VENDOR.DOC [3][A][1]",
+      "text": "[1] All of the Program's files, including this one, as\n      released by us must be included without modification.\n      The following files must always be included to\n      constitute a legal version for shareware distribution:\n\n      \u25a0 audiohed wl1         1,156 01-01-93   1:40p\n      \u25a0 audiot   wl1       132,613 01-01-93   1:40p\n      \u25a0 gamemaps wl1        27,425 01-01-93   1:40p\n      \u25a0 maphead  wl1           402 01-01-93   1:40p\n      \u25a0 vgadict  wl1         1,024 01-01-93   1:40p\n      \u25a0 vgagraph wl1       326,568 01-01-93   1:40p\n      \u25a0 vgahead  wl1           471 01-01-93   1:40p\n      \u25a0 vswap    wl1       742,912 01-01-93   1:40p\n      \u25a0 wolf3d   exe       109,959 01-01-93   1:40p\n      \u25a0 w3dhelp  exe"
+    },
+    {
+      "source": "VENDOR.DOC [3][A][3]",
+      "text": "[3] You must not [a] distribute any version of the Program\n      with unauthorized changes, such as additional or different\n      levels, or changed characters or mazes; or\n      [b] characterize such versions as an \"add-on\" or\n      \"extension\" of any Apogee product; or [c] distribute any\n      unauthorized third party utility designed to alter any\n      Apogee game, game level, game episode or saved game."
+    },
+    {
+      "source": "VENDOR.DOC [3][C]",
+      "text": "[C] ADDITIONAL CONDITIONS FOR BUNDLES, CD-ROMS, AND RACKS: If\nyou wish to distribute in a retail location (such as on a rack),\nor as part of a hardware or software bundle, or on CD-ROM, you\nmust get PRIOR signed written permission from Apogee, which is\nin Apogee's discretion and may be subject to royalty or other\nconditions."
+    },
+    {
+      "source": "VENDOR.DOC [6][D]",
+      "text": "[D] You will not modify, reverse compile, disassemble, or\nreverse engineer the Program, or use or disclose any\nconfidential information that it contains."
+    }
+  ],
+  "redistribution": "free (shareware, unmodified package)",
+  "bundling": "VENDOR.DOC [3][C] and KEY POINTS: distribution as part of a hardware or software bundle, or on CD-ROM, needs PRIOR signed written permission from Apogee; no such permission is recorded for CiukiOS (owner decision 2026-10-12 to bundle; open licence question).",
+  "source_code": "The Wolfenstein 3-D source (https://github.com/id-Software/wolf3d) carries id's 1995 LIMITED USE SOFTWARE LICENSE AGREEMENT (README.rst, LICENCE.DOC); John Carmack wrote that it was later released under the GPL (idstuff/wolf3d/wolf3d_iphone_v1.2_src.txt). The bundled WOLF3D.EXE is id's original 1.4 shareware binary, not rebuilt.",
+  "game_data": "Shareware episode 1 (WL1) only. The registered WL6 data is the owner's local copy (third_party/WOLF3D), never bundled.",
+  "modifications": "none: the archive is vendored unmodified; scripts/build_games_disk.py installs every member byte-identical into \\WOLF3D"
+}

@@ -432,7 +432,7 @@ static void test_goto_wrap_status(void)
     menu_pick(0x18, 1); assert(strstr(ui.dialog.text, "Style:\tBold") && ui.dialog.focus == 1); ESC; assert(app.ta.bold == 1);
     screen("bold");
     menu_pick(0x23, 0); assert(dialog_is(D_INFO) && strstr(ui.dialog.title, "CiukNote Help") && strstr(ui.dialog.text, "F3 Find next")); screen("help"); ENTER;
-    menu_pick(0x23, 1); assert(dialog_is(D_INFO) && !strcmp(ui.dialog.title, "About CiukNote") && strstr(ui.dialog.text, "A modern Retro OS") &&
+    menu_pick(0x23, 1); assert(dialog_is(D_INFO) && !strcmp(ui.dialog.title, "About CiukNote") && strstr(ui.dialog.text, "Classic computing, one woof at a time.") &&
            strstr(ui.dialog.text, "Tango 0.8.90 icons: Public Domain.") && strstr(ui.dialog.text, "Ciuki portrait: separate project asset.") &&
            ui.dialog.icon_pixels == app.ciuki32 && app.ciuki32[0] >> 24 == 0xff);
     screen("about"); ENTER;

@@ -4,7 +4,7 @@
 #include "help.h"
 const struct help_topic help_topics[] = {
 {"Welcome to CiukiOS",
-"Welcome to CiukiOS - A modern Retro OS\n"
+"Welcome to CiukiOS - Classic computing, one woof at a time.\n"
 "\n"
 "CiukiOS is a retro gaming operating system for PCs of the late\n"
 "1990s and early 2000s and for their emulated twins. It boots its\n"
@@ -114,7 +114,7 @@ const struct help_topic help_topics[] = {
 {"About CiukiOS",
 "About CiukiOS\n"
 "\n"
-"CiukiOS - A modern Retro OS\n"
+"CiukiOS - Classic computing, one woof at a time.\n"
 "Version 0.9.0 pre-alpha\n"
 "\n"
 "Dedicated to Ciuki\n"

@@ -13,7 +13,8 @@ only deterministic size/format conversion for the renderer is appropriate.
 Do not substitute a generic dog, an abstract letter C, or an unrelated mascot.
 Keep the original Ciuki photograph in the boot splash. Desktop and Setup must
 share this identity.
-UI copy remains English; the existing tagline is `A modern Retro OS`.
+UI copy remains English; the tagline is `Classic computing, one woof at a time.`
+(owner decision 2026-10-12; it replaced `A modern Retro OS`).
 
 The official system icon family uses **Tango Icon Theme 0.8.90**, whose upstream
 icons are released into the Public Domain. Keep its source archive, authors and

@@ -1,0 +1,188 @@
+{
+  "project": "DOOM shareware v1.9 (episode 1, Knee-Deep in the Dead)",
+  "authors": "id Software",
+  "archive": "doom19s.zip",
+  "size": 2450688,
+  "sha256": "cacf0142b31ca1af00796b4a0339e07992ac5f21bc3f81e7532fe1b5e1b486e6",
+  "sha1": "8d0fbbbeba5ecb692a99f97e55dfb5365cfe5b77",
+  "md5": "244d181457c9be5f28b91b488e67e042",
+  "original_location": "ftp://ftp.idsoftware.com/idstuff/doom/doom19s.zip (id Software's FTP, mirrored as idgames/idstuff)",
+  "downloaded": "2026-10-12",
+  "sources": [
+    "https://mirrors.lug.mtu.edu/idgames/idstuff/doom/doom19s.zip",
+    "ftp://ftp.fu-berlin.de/pc/msdos/games/idgames/idstuff/doom/doom19s.zip"
+  ],
+  "hash_references": [
+    {
+      "reference": "Arch Linux AUR doom1-wad 1.9, PKGBUILD sha256sums (source ftp://ftp.fu-berlin.de/pc/msdos/games/idgames/idstuff/doom/doom19s.zip)",
+      "url": "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=doom1-wad",
+      "sha256": "cacf0142b31ca1af00796b4a0339e07992ac5f21bc3f81e7532fe1b5e1b486e6"
+    },
+    {
+      "reference": "RPM Fusion nonfree doom-shareware 1.9, 'sources' (Source0 ftp://ftp.idsoftware.com/idstuff/doom/doom19s.zip)",
+      "url": "https://github.com/rpmfusion/doom-shareware/blob/master/sources",
+      "md5": "244d181457c9be5f28b91b488e67e042"
+    },
+    {
+      "reference": "both mirrors above served byte-identical files (SHA-256 above)"
+    }
+  ],
+  "member_references": "DOOM.EXE MD5 e2382b7dc47ae2433d26b6e6bc312999 and DOOM1.WAD MD5 f0cefca49926d00903cf57551d901abe equal the 1.9 shareware entries of https://doomwiki.org/wiki/Doom_files.",
+  "unpack": {
+    "format": "zip-split",
+    "parts": [
+      "DOOMS_19.1",
+      "DOOMS_19.2"
+    ],
+    "notes": "DEICE installer split: the two parts concatenated are one ZIP archive"
+  },
+  "install": {
+    "directory": "DOOM",
+    "files": [
+      {
+        "name": "DM.DOC",
+        "size": 6397,
+        "sha256": "aade82ddad8b05b9e57121b80158893d2b3f2f8a2eed9147e720947dd9821b4e",
+        "role": "documentation"
+      },
+      {
+        "name": "DM.EXE",
+        "size": 33640,
+        "sha256": "2725df25c7536aa98a4e6282e61e17186777f54074e6fa56d9a38825dd1c7e09",
+        "role": "program"
+      },
+      {
+        "name": "DOOM.EXE",
+        "size": 709905,
+        "sha256": "b8020523561a5ad9706e009a52d61c578f37faafd85ac471962308406292ce27",
+        "role": "executable"
+      },
+      {
+        "name": "DOOM1.WAD",
+        "size": 4196020,
+        "sha256": "1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771",
+        "role": "data"
+      },
+      {
+        "name": "DWANGO.DOC",
+        "size": 10623,
+        "sha256": "2300bcb497b18389de4fa8ed7c2822710967b4a26d6d162bccae9cd8cebd0cee",
+        "role": "documentation"
+      },
+      {
+        "name": "DWANGO.EXE",
+        "size": 65021,
+        "sha256": "724486508cb23da93986c34336299972fbfaa2509a9ed18b0ec2832e07d600ca",
+        "role": "program"
+      },
+      {
+        "name": "DWANGO.STR",
+        "size": 2536,
+        "sha256": "b4f93bc9d74e22f3b489e574b71189a931f963e76f4ea8da4d34e22c8be0971c",
+        "role": "data"
+      },
+      {
+        "name": "HELPME.TXT",
+        "size": 4690,
+        "sha256": "b8ee1678923e1130700ec6a73cf50ed320091c9f79a933124e8c99e347aae5f5",
+        "role": "documentation"
+      },
+      {
+        "name": "IPXSETUP.EXE",
+        "size": 18051,
+        "sha256": "1e5eeb2e3b6f526d603f19ed08c00668e04bd2b7e6439c109b84b1c61d283d51",
+        "role": "program"
+      },
+      {
+        "name": "MODEM.CFG",
+        "size": 67,
+        "sha256": "0eb17ba5df3f319a02325401c9fbe212a3aa9065d63d4b7bd49d75bd2bb0268b",
+        "role": "data"
+      },
+      {
+        "name": "MODEM.NUM",
+        "size": 67,
+        "sha256": "604a8033fa26c634a758006e318573206d123419fefc9df8cf76f2b1e67ba105",
+        "role": "data"
+      },
+      {
+        "name": "MODEM.STR",
+        "size": 3405,
+        "sha256": "84a5af6596ce180bdb03a0bee414421538c27df5b0722041213cec953099d1d2",
+        "role": "data"
+      },
+      {
+        "name": "ORDER.FRM",
+        "size": 4617,
+        "sha256": "a7fa68a0021b3d04abd781e74175511a1a96d923c544fce19805ea5a9696df86",
+        "role": "documentation"
+      },
+      {
+        "name": "README.TXT",
+        "size": 21631,
+        "sha256": "17878ebe5ca179de7ec2cc90bbabbc922ab69924118be168a25f8d317f65a2ff",
+        "role": "documentation"
+      },
+      {
+        "name": "SERSETUP.EXE",
+        "size": 20257,
+        "sha256": "94cf23eac5fc43da942f9529e9ff4dd6dc5aab82fe348bd72eb7de971d9170f5",
+        "role": "program"
+      },
+      {
+        "name": "SETUP.EXE",
+        "size": 45884,
+        "sha256": "c9d328bff268854414feae5459870aac6f779e55a9cbf4568a83fef9b7be6e15",
+        "role": "program"
+      }
+    ],
+    "excluded": {
+      "DMFAQ66A.TXT": "DOOM FAQ v6.666 by Hank Leukart, not by id: its terms (DMFAQ66A.TXT, II.(d)) forbid distribution within computer software without the author's prior permission; kept only inside the unmodified archive",
+      "DMFAQ66B.TXT": "DOOM FAQ v6.666 by Hank Leukart, not by id: its terms (DMFAQ66A.TXT, II.(d)) forbid distribution within computer software without the author's prior permission; kept only inside the unmodified archive",
+      "DMFAQ66C.TXT": "DOOM FAQ v6.666 by Hank Leukart, not by id: its terms (DMFAQ66A.TXT, II.(d)) forbid distribution within computer software without the author's prior permission; kept only inside the unmodified archive",
+      "DMFAQ66D.TXT": "DOOM FAQ v6.666 by Hank Leukart, not by id: its terms (DMFAQ66A.TXT, II.(d)) forbid distribution within computer software without the author's prior permission; kept only inside the unmodified archive"
+    }
+  },
+  "extender": "DOS/4GW Professional 1.95 is bound into DOOM.EXE; the package has no separate DOS4GW.EXE",
+  "license": "Shareware; the package's own terms are the clauses below (doom19s.zip has no VENDOR.DOC or LICENSE.DOC)",
+  "license_files": [
+    {
+      "name": "README.TXT",
+      "from": "installed",
+      "sha256": "17878ebe5ca179de7ec2cc90bbabbc922ab69924118be168a25f8d317f65a2ff"
+    },
+    {
+      "name": "DOOMS_19.DAT",
+      "from": "archive",
+      "sha256": "94e78ec5e44728613bd807485eb9a8a97ba8ff5fdb6d96ecfd4c1a6a8c3d9125"
+    }
+  ],
+  "license_clauses": [
+    {
+      "source": "DOOM1.WAD, ENDOOM lump (exit screen)",
+      "text": "DOOM, Knee-Deep in the Dead can be freely distributed. Disk\n        vendors should refer to the vendor information text file\n        (vendor.doc) in your DOOM directory."
+    },
+    {
+      "source": "DOOMS_19.DAT (installer banner, outer member of doom19s.zip)",
+      "text": "LINE5=SHAREWARE VERSION\nLINE6=PLEASE DISTRIBUTE!!!"
+    },
+    {
+      "source": "README.TXT",
+      "text": "id Software respectfully requests that you do not modify the\nlevels for the shareware version of DOOM.  We feel that the\ndistribution of new levels that work with the shareware version\nof DOOM will lessen a potential user's incentive to purchase the\nregistered version.\n\nIf you would like to work with modified levels of DOOM, we\nencourage you to purchase the registered version of the game."
+    },
+    {
+      "source": "John Carmack (id Software), e-mail of 1999-10-23 quoted in Debian doom-wad-shareware debian/copyright",
+      "url": "https://tracker.debian.org/media/packages/d/doom-wad-shareware/copyright-1.9.fixed-4",
+      "text": "The DOOM shareware wad is freely distributable.  No Quake data is freely\ndistributable."
+    },
+    {
+      "source": "DMFAQ66A.TXT (DOOM FAQ, excluded from the disk)",
+      "text": "II. To distribute this work, or copies made under the provisions\n    above, so long as\n      (a) this is the original work and not a derivative form;\n      (b) you do not charge a fee for copying or for distribution;\n      (c) you ensure that the distributed form includes the copyright\n          notice, this paragraph, the disclaimer of warranty in\n          their entirety and credit to the author;\n      (d) the distributed form is not in an electronic magazine or\n          within computer software (prior explicit permission may be\n          obtained from Hank Leukart);"
+    }
+  ],
+  "redistribution": "free (shareware, unmodified package)",
+  "bundling": "No bundling condition in the package; the ENDOOM text sends disk vendors to a vendor.doc that doom19s.zip does not contain. CiukiOS charges nothing.",
+  "source_code": "GPL-2.0 (https://github.com/id-Software/DOOM, linuxdoom-1.10). The bundled DOOM.EXE is id's original 1.9 binary, not rebuilt.",
+  "game_data": "Shareware episode 1 (DOOM1.WAD) only. The registered DOOM.WAD is the owner's local copy (third_party/Doom), never bundled.",
+  "modifications": "none: the archive is vendored unmodified; scripts/build_games_disk.py installs its members byte-identical into \\DOOM, except the four FAQ files"
+}
