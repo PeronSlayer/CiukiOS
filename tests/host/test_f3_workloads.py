@@ -83,8 +83,9 @@ def doom_rows(sound):
     for i in range(1, 6):
         rows += [('DATA', dict(case='loop', loop=i, dpmi_ms=900, launch_ms=4000, run_ms=200000, gametics=1710,
                                realtics=9000, timed=1, status=1, rc=1, type=0, error=0)),
-                 ('DATA', dict(case='video', loop=i, graphics=1, width=320, height=200, flips=1720, faults=40, pm_faults=40,
-                               maps=6900, flushes=7000, mode=3)),
+                 ('DATA', dict(case='video', loop=i, graphics=1, width=320, height=200, flips=1720, pm_faults=40,
+                               maps=6900, mode=3, linear_maps=10, linear_harvests=160)),
+                 ('DATA', dict(case='video_detail', loop=i, faults=40, flushes=7000)),
                  ('DATA', dict(case='dpmi', loop=i, entries=1, terminations=1, exceptions=0, irq_pm=9000, faults=0, stale=0,
                                released=1, popf=40)),
                  ('DATA', dict(case='audio', loop=i, **audio)),
@@ -210,8 +211,11 @@ class Workloads(unittest.TestCase):
         rows = [('DATA', dict(group='workload_file', path='/WOLF3D/VGAGRAPH.WL6', size=big, sha256=HEX, redistribution='local-only')),
                 ('DATA', dict(case='loop', loop=5, dpmi_ms=big, launch_ms=big, run_ms=big, gametics=big, realtics=big, timed=1,
                               status=1, rc=255, type=255, error=-2147483648)),
-                ('DATA', dict(case='video', loop=5, graphics=1, width=big, height=big, flips=big, faults=big, pm_faults=big,
-                              maps=big, flushes=big, mode=255)),
+                # Largest dimensions representable by the model's CRTC
+                # (256 columns x 9 dots, 1024 physical lines).
+                ('DATA', dict(case='video', loop=5, graphics=1, width=2304, height=1024, flips=big, pm_faults=big,
+                              maps=big, mode=255, linear_maps=big, linear_harvests=big)),
+                ('DATA', dict(case='video_detail', loop=5, faults=big, flushes=big)),
                 ('DATA', dict(case='audio', loop=5, resets=big, blocks=big, frames=big, edges=big, services=big, opl=big,
                               dma_faults=big, consumer=big)),
                 ('DATA', dict(case='dpmi', loop=5, entries=big, terminations=big, exceptions=big, irq_pm=big, faults=big,
