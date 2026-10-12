@@ -33,6 +33,8 @@ FACES = [
     ("DESK_FONT_MONO", "Inconsolata 12", "inconsolata/Inconsolata[wdth,wght].ttf", "inconsolata/OFL.txt", 12, 400),
     ("DESK_FONT_MONO_BOLD", "Inconsolata 12 Bold", "inconsolata/Inconsolata[wdth,wght].ttf", "inconsolata/OFL.txt", 12, 700),
     ("DESK_FONT_LARGE", "Inter 22 Bold", "inter/Inter[opsz,wght].ttf", "inter/OFL.txt", 22, 700),
+    # Desktop icon labels (shell.c draw_icons): white with a soft dark halo on the wallpaper.
+    ("DESK_FONT_LABEL", "Inter 13", "inter/Inter[opsz,wght].ttf", "inter/OFL.txt", 13, 400),
 ]
 
 

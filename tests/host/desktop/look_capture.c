@@ -2,9 +2,15 @@
  * and libdeskui render a 1024x768 shell desktop with a window of every
  * control, an inactive CiukNote window, a windowshaded window, dialogs and
  * the Start menu, once per built-in theme. Host-only review material; never
- * guest evidence. SPDX-License-Identifier: MIT
+ * guest evidence. Icons come from the pinned Tango store (icon_assets.py), as
+ * on the guest. SPDX-License-Identifier: MIT
  *
- *   look_capture PORTRAIT.xrgb OUTDIR   -> OUTDIR/<theme>-{desktop,dialogs}.ppm */
+ *   look_capture PORTRAIT.xrgb OUTDIR   -> OUTDIR/<theme>-{desktop,dialogs}.ppm
+ *   look_capture PORTRAIT.xrgb OUTDIR WALLPAPER
+ *       the desktop icons over the decoded image file (image.c, the default
+ *       settings' placement), one icon selected, no window, and the same
+ *       desktop with the icons turned off (the bare wallpaper):
+ *       OUTDIR/<theme>-wallpaper.ppm, OUTDIR/<theme>-wallpaper-plain.ppm */
 #include "fake.h"
 #include "../../../apps/libdeskui/deskui.h"
 #include "../../../apps/libdeskui/textarea.h"
@@ -123,6 +129,9 @@ static void note(struct du_ui *u, struct du_textarea *ta, uint32_t *pixels, int 
     du_focus(u, 1);
 }
 
+/* The desktop's icon hook (desktop.c store_icon): libdeskui's Tango store. */
+static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object), size); }
+
 static void window(struct desktop *d, int i, const char *title, uint32_t *pixels, int w, int h, int x, int y, int program)
 {
     struct desk_client *c = &d->clients[i];
@@ -148,11 +157,45 @@ static void save(const struct desktop *d, const char *dir, const char *theme, co
     printf("%s\n", path);
 }
 
+static int wallpaper_frames(const uint32_t *portrait, const char *dir, const char *path)
+{
+    FILE *f = fopen(path, "rb"); assert(f);
+    assert(!fseek(f, 0, SEEK_END)); long n = ftell(f); assert(n > 0 && !fseek(f, 0, SEEK_SET));
+    uint8_t *data = malloc((size_t)n); assert(data && fread(data, 1, (size_t)n, f) == (size_t)n && !fclose(f));
+    static uint32_t screen[W * H];
+    for (int pass = 0; pass < 2 * desk_theme_count(); pass++) {
+        int theme = pass / 2, icons = !(pass & 1);
+        assert(!desk_theme_use(desk_theme_at(theme)->name));
+        struct desktop *d = calloc(1, sizeof(*d)); assert(d);
+        desk_init(d, &fake_ops, W, H);
+        d->pixels = screen; d->portrait = portrait; d->icon = store_icon; d->realtime_second = 12 * 3600 + 34 * 60 + 56;
+        cfg_defaults(&d->sh.cfg);   /* the default wallpaper placement; the image stands for its file */
+        snprintf(d->sh.cfg.theme, sizeof(d->sh.cfg.theme), "%s", desk_theme_at(theme)->name);
+        d->sh.cfg.desktop_icons = icons;
+        assert(!desk_image_decode(data, (size_t)n, &d->sh.image));
+        static const char *const programs[] = {"ciuknote", "control", "dosbox", "files"};
+        for (int i = 0; i < 4; i++) {
+            snprintf(d->programs[i].name, sizeof(d->programs[i].name), "%s", programs[i]);
+            snprintf(d->programs[i].path, sizeof(d->programs[i].path), "/Programs/%s", programs[i]);
+        }
+        d->program_count = 4;
+        desk_shell_enable(d);
+        assert(!desk_shell_wallpaper_update(d));
+        d->sh.icon_selected = 1;    /* Documents: the translucent rounded selection */
+        desk_composite(d, (struct desk_box){0, 0, W, H});
+        save(d, dir, desk_theme->name, icons ? "wallpaper" : "wallpaper-plain");
+        desk_image_free(&d->sh.image); free(d->sh.wall); free(d);
+    }
+    free(data);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    assert(argc == 3);
+    assert(argc == 3 || argc == 4);
     uint32_t *portrait = malloc(256 * 256 * 4); assert(portrait);
     FILE *f = fopen(argv[1], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256 && !fclose(f));
+    if (argc == 4) { int r = wallpaper_frames(portrait, argv[2], argv[3]); free(portrait); return r; }
     static uint32_t screen[W * H], a[520 * 430], b[440 * 300], c[300 * 200];
     static struct du_ui ua, ub, uc; static struct du_textarea ta;
     for (int theme = 0; theme < desk_theme_count(); theme++) {
@@ -160,7 +203,7 @@ int main(int argc, char **argv)
         for (int pass = 0; pass < 2; pass++) {
             struct desktop *d = calloc(1, sizeof(*d)); assert(d);
             desk_init(d, &fake_ops, W, H);
-            d->pixels = screen; d->portrait = portrait; d->realtime_second = 12 * 3600 + 34 * 60 + 56;
+            d->pixels = screen; d->portrait = portrait; d->icon = store_icon; d->realtime_second = 12 * 3600 + 34 * 60 + 56;
             /* The shell applies desktop.cfg's theme: name this pass's theme there. */
             cfg_defaults(&d->sh.cfg);
             snprintf(d->sh.cfg.theme, sizeof(d->sh.cfg.theme), "%s", desk_theme_at(theme)->name);

@@ -193,6 +193,52 @@ class IconStoreTests(unittest.TestCase):
                 self.assertTrue(obj.endswith((":computer", ":about", ":start")), obj)
         print(f"PASS icon map: {len(lines)} objects resolve at 16/22/32/48; every /Programs program mapped; identity = portrait")
 
+    def test_shell_tables_match_icon_map(self):
+        """One icon per object (owner feedback 2026-10-12: the icon set must not change from screen to screen): the
+        shell's program table, Start menu rows, desktop icons and games use the Tango names of icon_map.c, which
+        Files (/Programs) and Task Manager use for the same programs."""
+        table = {l.split()[0]: l.split()[1] for l in self.harness("map").splitlines()}
+        shell = (ROOT / "apps/desktop/shell.c").read_text()
+        catalog = (ROOT / "apps/desktop/catalog.h").read_text()
+        programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer)"\}', shell)
+        accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
+        self.assertEqual(len(programs), 15)
+        self.assertEqual(len(accessories), 6)
+        for name, tango in programs + accessories:
+            self.assertEqual(tango, table[f"program:{name}"], name)
+        games = re.findall(r'\{"[^"]+", "[^"]+", "[^"]+", "([a-z-]+)"\}', catalog)
+        self.assertEqual(set(games), {table["menu:game"]})
+        rows = dict(re.findall(r'item\(m, "([^"]+)", "([a-z-]+)"', shell))
+        objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
+                   "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",
+                   "Developer": "menu:development", "Control Panel": "menu:control-panel", "My Documents": "place:home",
+                   "Display": "settings:display", "Mouse": "settings:mouse", "Keyboard": "settings:keyboard",
+                   "Sounds": "settings:sound", "Date & Time": "settings:date-time", "Task Manager": "program:tasks",
+                   "Keyboard Shortcuts": "settings:shortcuts", "Refresh": "action:refresh", "Properties": "action:properties",
+                   "Close    Alt+F4": "action:stop", "About CiukiOS": "menu:about"}
+        for label, obj in objects.items():
+            self.assertEqual(rows[label], table[obj], label)
+        icons = dict(re.findall(r'icon_add\(d, "([^"]+)", "[^"]*", "[^"]*", "([a-z-]+)"', shell))
+        for label, obj in {"Documents": "place:home", "DOS Box": "program:dosbox", "CiukNote": "program:ciuknote",
+                           "Control Panel": "program:control", "Trash": "place:trash"}.items():
+            self.assertEqual(icons[label], table[obj], label)
+        self.assertEqual(icons["Computer"], "ciuki-computer")    # identity: Tango computer with the approved portrait
+        # The shell draws only store sizes: menus and the taskbar 16, dialogs and Alt+Tab 32, desktop icons 48.
+        self.assertIn("#define SH_DESKTOP_ICON 48", shell)
+        self.assertIn("m->icon = 16;", shell)
+        calls = []
+        for m in re.finditer(r"desk_shell_icon\(", shell):
+            depth, at = 1, m.end()
+            while depth:
+                depth += {"(": 1, ")": -1}.get(shell[at], 0); at += 1
+            args = shell[m.end():at - 1]
+            if not args.startswith("const char"):                 # the definition
+                calls.append((args[:args.rindex(",")].strip(), args[args.rindex(",") + 1:].strip()))
+        # Only the identity portrait ("ciuki") is drawn at other sizes (Ciuki button 18, banner and badges 20).
+        sizes = {size for name, size in calls if name != '"ciuki"'}
+        self.assertEqual(sizes - {"16", "32", "SH_DESKTOP_ICON", "m->icon", "size"}, set(), calls)
+        print(f"PASS shell/map coherence: {len(programs) + len(accessories)} program rows, {len(objects)} menu rows, desktop icons")
+
     def test_lookup_rules(self):
         probe = lambda name, size: self.harness("probe", name, size).splitlines()[0]
         self.assertTrue(probe("folder", 16).startswith("OK "))

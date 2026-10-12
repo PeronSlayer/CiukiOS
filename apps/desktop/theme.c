@@ -366,6 +366,32 @@ void desk_paint_round_rect(struct desk_paint *p, int x, int y, int w, int h, int
     }
 }
 
+/* Translucent rounded rectangle (desktop icon selection): the fill blended
+ * at fill_alpha, the 1 px outline at outline_alpha, anti-aliased corners. */
+void desk_paint_round_blend(struct desk_paint *p, int x, int y, int w, int h, int r,
+                            uint32_t fill, unsigned fill_alpha, uint32_t outline, unsigned outline_alpha)
+{
+    if (w <= 0 || h <= 0) return;
+    if (2 * r > h) r = h / 2;
+    if (2 * r > w) r = w / 2;
+    if (r < 0) r = 0;
+    int vx = x, vy = y, vw = w, vh = h;
+    if (!clip(p, &vx, &vy, &vw, &vh)) return;
+    for (int yy = vy; yy < vy + vh; yy++) {
+        uint32_t *dst = p->pixels + (size_t)yy * (size_t)p->width;
+        for (int xx = vx; xx < vx + vw; xx++) {
+            unsigned outer = round_cover(xx - x, yy - y, w, h, r);
+            if (!outer) continue;
+            unsigned inner = round_cover(xx - x - 1, yy - y - 1, w - 2, h - 2, r > 0 ? r - 1 : 0);
+            if (inner > outer) inner = outer;
+            uint32_t v = dst[xx];
+            if (inner) v = desk_mix(fill, v, inner * fill_alpha / 16);
+            if (outer > inner) v = desk_mix(outline, v, (outer - inner) * outline_alpha / 16);
+            dst[xx] = v;
+        }
+    }
+}
+
 void desk_paint_icon(struct desk_paint *p, int x, int y, const uint32_t *argb, int size)
 {
     int vx = x, vy = y, vw = size, vh = size;

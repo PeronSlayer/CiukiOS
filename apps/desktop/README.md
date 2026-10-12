@@ -70,7 +70,8 @@ Shell and Control Panel API (all in `theme.h`; libdeskui re-exports it):
 - Fonts: `desk_font(id)`, `desk_text_measure(_n)`, `desk_text_fit_chars`,
   `desk_paint_text(_n)` (pen on the baseline). Faces: Inter 12 (UI), Inter 12
   SemiBold, Inter 13 Bold (titles), Inconsolata 12 and 12 Bold (CiukNote,
-  6x13 cells), Inter 22 Bold (large). U+0020-007E, U+00A0-00FF, U+2022, U+2026.
+  6x13 cells), Inter 22 Bold (large), Inter 13 (`DESK_FONT_LABEL`, desktop
+  icon labels). U+0020-007E, U+00A0-00FF, U+2022, U+2026.
 - libdeskui: `du_text_font`, `du_text_width_font`, `du_label_width`,
   `du_raised`, `du_well`, `du_focus_ring`, `du_shadow`, widget kinds
   `DU_CHECKBOX`, `DU_RADIO` (radios group by `total`) and `DU_TOOLBAR` (band

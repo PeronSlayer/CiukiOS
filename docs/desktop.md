@@ -143,13 +143,13 @@ size and pinned hashes: [`assets/icons/README.md`](../assets/icons/README.md).
   32 px). Computer, About, the Start (Ciuki) button and `device:computer` map
   to it; the compositor keeps drawing its own nearest-neighbour portrait for the
   Ciuki button and About, Files and CiukNote keep their portrait callbacks.
-- **Map** (`apps/libdeskui/icon_map.c`, 353 entries, keys `<kind>:<object>`;
+- **Map** (`apps/libdeskui/icon_map.c`, 361 entries, keys `<kind>:<object>`;
   Tango names follow the [Icon Naming Specification](https://specifications.freedesktop.org/icon-naming-spec/latest/)
   as of Tango 0.8.90, and only names present in the archive are used):
   programs (`files` system-file-manager, `ciuknote` accessories-text-editor,
   `tasks` utilities-system-monitor, `dosbox` utilities-terminal, `demo`
   preferences-desktop-peripherals, `hello` face-smile, `lua`
-  applications-development, `libc_smoke` applications-system, `desktop`
+  text-x-script, `libc_smoke` applications-system, `desktop`
   user-desktop, others application-x-executable); Start menu entries (settings,
   control panel, run, find, help, about, shut down, restart, log out, lock and
   categories); toolbar and menu actions (navigation, edit, document, view,
@@ -202,7 +202,7 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   (Control Panel and its pages, Task Manager), Help (Keyboard Shortcuts, About
   CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
   keyboard works (arrows, Enter, Esc). A vertical banner shows the portrait
-  and "CiukiOS". Menus are 30 px (top) and 22 px rows.
+  and "CiukiOS". Menus are 30 px (top) and 22 px rows, all with 16 px icons.
 - **Taskbar:** task buttons (icon, title, pressed state for the active
   window; right click: Restore, Minimize, Close) from x 4, at most 160 px
   each, and a tray with a volume icon and the clock (24/12 h, optional
@@ -322,11 +322,51 @@ characters) is left to the toolkit owner.
 
 ### Icons
 
-Each item names its Tango 0.8.90 icon; `desk_shell_icon(name, size)` maps the
-names to the sprites converted today (area-averaged to 16/20/22 px when only a
-larger one exists) until `du_icon(name, size)` lands. Identity icons (About,
-the Computer badge, the Start banner) are area-averaged conversions of the
-approved portrait, whose `#375564` surround is made transparent.
+Each item names its Tango 0.8.90 icon; `desk_shell_icon(name, size)` returns
+it from the Tango store (`/system/icons/tango.cis`, through the desktop's
+icon hook) at a size the store holds. One size per place (owner feedback
+2026-10-12: one fixed, coherent icon set): every menu (the Start menu too)
+16 px, taskbar buttons, title bars and the tray 16 px, built-in windows,
+message boxes and Alt+Tab 32 px, desktop icons 48 px (Tango 0.8.90 has no
+48 px PNGs: the store's 48 px entries are the area filter of the 32 px
+artwork), Files' toolbar 22 px. Tango draws some icons differently at 16 px
+and at 22/32 px (`preferences-desktop` is a window grid at 16 px and a panel
+at 32 px); keeping one size per place keeps each place consistent. The shell's
+program table, Start menu rows, desktop icons and `catalog.h` use the same
+Tango names as `icon_map.c` (`program:`, `menu:`, `settings:`, `place:`), so a
+program has one icon in the Start menu, Files' `/Programs` and Task Manager
+(`test_icons.py` compares them); two rows of one menu never share an icon
+(`shell_launch_test.c`): Run... is `go-jump`, Settings `preferences-system`
+(Control Panel keeps `preferences-desktop`), Ciuki Demo
+`preferences-desktop-peripherals`, each game `input-gaming` (the Games folder
+keeps `applications-games`), Clock `appointment-new` (Date & Time keeps
+`office-calendar`). Identity icons (About, the Computer badge, the Start
+banner) are area-averaged conversions of the approved portrait, whose
+`#375564` surround is made transparent.
+
+Desktop icon labels (Windows Vista/7 style, readable on any wallpaper): white
+Inter 13 (`DESK_FONT_LABEL`), up to two centred lines broken by width in a
+96 x 94 cell, over a soft dark halo: the glyph coverage blurred twice by the
+binomial filter 1 4 6 4 1 (radius 4), raised 3x, capped at 82 % and moved
+1 px down, blended in black. The halo is integer-only, computed once per
+label and theme text mode and cached (`label_halo`), and stays inside the
+cell, so a partial repaint is exact. The selected label sits in a rounded
+(radius 4), translucent box: a light tint of the theme's selection colour at
+about 50 % with a lighter outline, the wallpaper showing through.
+`DesktopTests.test_look_reference_frames` renders the icons over Ciuk2 in
+every theme (`look_capture PORTRAIT OUTDIR WALLPAPER`) and checks the text,
+the halo, the translucent selection and that nothing is drawn outside the
+cells.
+
+Research (2026-10-12): Microsoft's Windows 7 UX guide,
+[Icons](https://learn.microsoft.com/en-us/windows/win32/uxguide/vis-icons):
+application and Control Panel icons come at 16, 32 and 48 px, dialog icons at
+32 and 48 px, 16 px icons are drawn straight-on and simplified ("simply
+scaling down ... does not work"), which is why Tango's 16 px artwork differs
+from its 32 px artwork; the Vista desktop list view draws its labels as
+"shadow text on transparent backgrounds"
+([`LVS_EX_TRANSPARENTSHADOWTEXT`](https://learn.microsoft.com/en-us/windows/win32/controls/extended-list-view-styles)),
+the model of the halo above.
 
 ## f2-33 Task Manager and the v2 task extension (2026-10-11)
 
@@ -703,7 +743,7 @@ docs/design/f2-acceptance.md, section F2-33. Details: docs/design/f3-acceptance.
 
 Programs > Games (present with `/Programs/dosbox`) lists the pre-installed
 shareware games of `apps/desktop/catalog.h` (`desk_games`): "Wolfenstein 3D
-(shareware)" and "DOOM (shareware)", Tango `applications-games`. Each starts
+(shareware)" and "DOOM (shareware)", Tango `input-gaming` (the Games folder is `applications-games`). Each starts
 `/Programs/dosbox --name=<game> <command>`; dosbox types the command at the DOS
 prompt of its window (`apps/dosbox/autorun.h`: `\DIR\PROGRAM` becomes
 `CD \DIR` and `PROGRAM`) once DOS is ready and the window has the focus. The

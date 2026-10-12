@@ -156,7 +156,7 @@ class DesktopTests(unittest.TestCase):
                      "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include")]
             plain = [ROOT / "tests/host/desktop/fake.c", *(ROOT / "apps/desktop" / f"{n}.c" for n in
                                                            ("client", "protocol", "input", "compositor", "theme",
-                                                            "shell", "settings", "wallpaper", "keymap"))]
+                                                            "shell", "settings", "wallpaper", "keymap", "image"))]
             posix = [ROOT / "tests/host/desktop/look_capture.c", *(ROOT / "apps/libdeskui" / f"{n}.c" for n in
                                                                    ("draw", "widgets", "list", "menu", "dialog", "textarea",
                                                                     "icons", "icon_map"))]
@@ -178,11 +178,63 @@ class DesktopTests(unittest.TestCase):
                                            for w in ("desktop", "dialogs")))
             digests = {n: hashlib.sha256((frames / n).read_bytes()).hexdigest() for n in names}
             self.assertEqual(len(set(digests.values())), 6)
+            # Desktop icon labels over the default wallpaper, the owner's Ciuk2 scene (owner feedback 2026-10-12:
+            # labels must stay readable on any wallpaper): look_capture's wallpaper mode renders the six desktop
+            # icons with Documents selected, and the same desktop with the icons off.
+            wall = folder / "wall"; wall.mkdir()
+            subprocess.run([str(binary), str(folder / "portrait.xrgb"), str(wall), str(ROOT / "assets/wallpapers/ciuki/Ciuk2.png")],
+                           check=True, env=env, capture_output=True)
+            for theme in ("platinum", "ciuki-blue", "classic-98"):
+                with self.subTest(theme=theme):
+                    self.check_icon_labels(wall / f"{theme}-wallpaper.ppm", wall / f"{theme}-wallpaper-plain.ppm")
             target = os.environ.get("CIUKI_LOOK_FRAMES")
             if target:
                 Path(target).mkdir(parents=True, exist_ok=True)
-                for n in names: shutil.copy2(frames / n, Path(target) / n)
+                for n in [*names, *(p.name for p in wall.glob("*.ppm"))]:
+                    shutil.copy2(frames / n if (frames / n).exists() else wall / n, Path(target) / n)
             print("LOOK_FRAMES", json.dumps(digests, sort_keys=True))
+
+    def check_icon_labels(self, icons_ppm, plain_ppm):
+        """shell.c draw_icons: 48 px icons in 96 x 94 cells from (8, 42) down the left edge; each label block (the
+        cell's last 40 rows) holds white Inter 13 text over a soft dark halo blended into the wallpaper; the selected
+        label (Documents) sits in a translucent rounded box; nothing is drawn outside the cells."""
+        def pixels(path):
+            data = path.read_bytes()
+            magic, w, h, depth, raster = data.split(maxsplit=4)
+            self.assertEqual((magic, int(w), int(h), depth), (b"P6", 1024, 768, b"255"))
+            return raster
+        icons, plain = pixels(icons_ppm), pixels(plain_ppm)
+        row = 1024 * 3
+        x0, y0, cw, ch, label_top, cells = 8, 42, 96, 94, 54, 6
+        for y in range(768):
+            a, b = icons[y * row:(y + 1) * row], plain[y * row:(y + 1) * row]
+            if y0 <= y < y0 + cells * ch:
+                self.assertEqual((a[:x0 * 3], a[(x0 + cw) * 3:]), (b[:x0 * 3], b[(x0 + cw) * 3:]), y)
+            else:
+                self.assertEqual(a, b, y)
+        luma = lambda p: 299 * p[0] + 587 * p[1] + 114 * p[2]
+        for k in range(cells):
+            white = darker = lighter = 0
+            levels, colours = set(), set()
+            for y in range(y0 + k * ch + label_top, y0 + (k + 1) * ch):
+                for x in range(x0, x0 + cw):
+                    at = y * row + x * 3
+                    p, q = icons[at:at + 3], plain[at:at + 3]
+                    colours.add(p)
+                    if p != q and min(p) >= 230:                # white glyph cores
+                        white += 1
+                    elif luma(p) < luma(q):
+                        darker += 1
+                        levels.add((luma(q) - luma(p)) // 2000)
+                    elif p != q:
+                        lighter += 1                                # anti-aliased glyph edges (and the selection box)
+            self.assertGreater(white, 15, k)                        # the text
+            self.assertGreater(darker, 300, k)                      # the halo around it
+            self.assertGreater(len(levels), 12, k)                  # soft (many levels), not a hard outline
+            if k != 1:
+                self.assertGreater(darker, 2 * lighter, k)          # a halo darkens; only the glyph edges lighten
+            else:
+                self.assertGreater(len(colours), 200)               # translucent box: the wallpaper shows through
 
     def test_wallpaper_fill(self):
         """wallpaper_mode=fill: the uniform cover scale and centred crop against the stretch it crops (4:3, wide,
