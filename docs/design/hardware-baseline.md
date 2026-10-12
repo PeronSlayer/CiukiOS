@@ -175,7 +175,7 @@ CIUKLDR performs UART discovery, CPU checks, E820 collection/normalization
 and VBE controller query before platform disk-parameter discovery or FAT reads.
 CPUID absence, a missing basic leaf 1 or missing CMOV emits:
 
-`CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)`
+`CIUKI: this PC needs an i686 CPU with CMOV`
 
 Invalid/missing E820 emits:
 

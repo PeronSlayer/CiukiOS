@@ -15,7 +15,7 @@ F6_PROBES = ('net-arp',)  # explicit selector; no F6 hardware sweep yet
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
 SELECTOR_RE = r'f([012346]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
-CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)'
+CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV'
 E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
 VBE_MINIMUM_ERROR = 'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer'
 

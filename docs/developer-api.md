@@ -506,6 +506,7 @@ enum ciuki_syscall {
     CIUKI_SYS_POWER = 73,
     CIUKI_SYS_DISPLAY = 74,
     CIUKI_SYS_LAUNCH_MARK = 75,
+    CIUKI_SYS_DEVICES = 76,
 };
 ```
 
@@ -523,6 +524,106 @@ pack(4) is scoped and restores the includer's previous setting.
 
 ```c
 #pragma pack(push, 4)
+```
+
+F2-41: read-only, fixed copied device inventory (device-manager.md).
+
+```c
+#define CIUKI_DEVICES_VERSION 1u
+#define CIUKI_DEVICES_MAX 64u
+#define CIUKI_DEVICE_RESOURCES 8u
+#define CIUKI_DRIVERS_MAX 16u
+#define CIUKI_LEASES_MAX 64u
+#define CIUKI_DEVICES_TRUNCATED 1u
+#define CIUKI_RESOURCE_UNKNOWN_SIZE 1u
+#define CIUKI_DEVICE_SYSTEM 0u
+#define CIUKI_DEVICE_DISPLAY 1u
+#define CIUKI_DEVICE_KEYBOARD 2u
+#define CIUKI_DEVICE_MOUSE 3u
+#define CIUKI_DEVICE_DISK 4u
+#define CIUKI_DEVICE_CDROM 5u
+#define CIUKI_DEVICE_SOUND 6u
+#define CIUKI_DEVICE_NETWORK 7u
+#define CIUKI_DEVICE_PORT 8u
+#define CIUKI_DEVICE_CLASSES 9u
+#define CIUKI_DEVICE_READY 0u
+#define CIUKI_DEVICE_ABSENT 1u
+#define CIUKI_DEVICE_QUARANTINED 2u
+#define CIUKI_DEVICE_FIRMWARE_FIRST 3u
+#define CIUKI_BUS_LEGACY 0u
+#define CIUKI_BUS_PCI 1u
+#define CIUKI_BUS_LOADER 2u
+#define CIUKI_RESOURCE_IO 0u
+#define CIUKI_RESOURCE_IRQ 1u
+#define CIUKI_RESOURCE_DMA 2u
+#define CIUKI_RESOURCE_MEMORY 3u
+struct ciuki_device_resource {
+    uint32_t type;
+    uint32_t flags;
+    uint64_t start;
+    uint64_t end;
+};
+struct ciuki_device_record {
+    uint32_t id;
+    uint32_t class_id;
+    uint32_t bus_type;
+    uint32_t bus;
+    uint32_t slot;
+    uint32_t function;
+    uint32_t vendor;
+    uint32_t device;
+    uint32_t sub_vendor;
+    uint32_t sub_device;
+    uint32_t pci_class;
+    uint32_t subclass;
+    uint32_t prog_if;
+    uint32_t revision;
+    uint32_t state;
+    uint32_t activation_seq;
+    uint32_t generation;
+    uint32_t resource_count;
+    uint32_t flags;
+    char name[64];
+    char driver[32];
+    char reason[80];
+    struct ciuki_device_resource resources[8];
+};
+struct ciuki_driver_record {
+    char name[32];
+    char build[32];
+    char policy[64];
+    uint32_t bound_devices;
+    uint32_t state;
+};
+struct ciuki_device_lease {
+    char owner[32];
+    uint32_t type;
+    uint32_t state;
+    uint32_t generation;
+    uint64_t start;
+    uint64_t end;
+};
+struct ciuki_devices_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t count;
+    uint32_t flags;
+    uint32_t generation;
+    uint32_t driver_count;
+    uint32_t lease_count;
+    uint32_t boot_flags;
+    uint32_t input_policy;
+    uint32_t cpu_family;
+    uint32_t cpu_model;
+    uint32_t cpu_stepping;
+    uint64_t uptime_ms;
+    char cpu_vendor[16];
+    char cpu_brand[64];
+    char boot_options[128];
+    struct ciuki_device_record devices[64];
+    struct ciuki_driver_record drivers[16];
+    struct ciuki_device_lease leases[64];
+};
 ```
 
 F4-01: fixed copied device-control extension.
@@ -1809,254 +1910,11 @@ These describe target C objects, rather than the host's wire-record view.
 
 
 #endif
+```
 
+F2-41 inventory layout: target and host agree at pack(4).
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+```c
 #endif
 ```
 
@@ -2246,6 +2104,28 @@ Surface info is required for CREATE and DAMAGE (the attachment on a swap).
 int desk_parse(const struct ciuki_message *m, int from_client,
                const struct ciuki_surface_info *surface, struct desk_packet *out);
 int desk_surface_valid(const struct ciuki_surface_info *s);
+#endif
+```
+
+## `ciuki/devices.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/devices.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_DEVICES_H
+#define CIUKI_SDK_DEVICES_H
+#include <ciuki/abi.h>
+```
+
+Initialize version=CIUKI_DEVICES_VERSION and size=sizeof(*info).
+Call 76: read-only, bounded inventory. Returns 0, or -1 with errno.
+Resource ends are exclusive; UNKNOWN_SIZE records carry a base only.
+See docs/design/device-manager.md.
+
+```c
+int ciuki_devices(struct ciuki_devices_info *info);
 #endif
 ```
 

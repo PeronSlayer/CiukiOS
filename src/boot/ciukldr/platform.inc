@@ -90,7 +90,7 @@ cpu_signature_text db '00000000 family='
 cpu_family_text db '00000000 model='
 cpu_model_text db '00000000 stepping='
 cpu_stepping_text db '00000000',13,10,0
-cpu_error db 'CIUKI: this PC needs an i686 CPU with CMOV (Pentium Pro or later)',0
+cpu_error db 'CIUKI: this PC needs an i686 CPU with CMOV',0
 
 ; Query only, never modeset before BOOT.CFG/menu. A responding pre-2.0
 ; controller is unsupported. An absent controller keeps the contract's
