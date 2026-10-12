@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -101,9 +102,14 @@ class DeskuiTests(unittest.TestCase):
             folder = Path(temp)
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / name
+            include = folder / "include/ciuki"
+            include.mkdir(parents=True)
+            for header in ("channel.h", "surface.h"):
+                shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / header, include / header)
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/files"), "-I", str(ROOT / "src/kernel/include"),
+                            "-I", str(folder / "include"),
                             *ICONS.defines(), *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
             output = folder / "frames"
             output.mkdir()
@@ -121,7 +127,9 @@ class DeskuiTests(unittest.TestCase):
         assert_pins(self, actual, pinned, label + "_FRAMES")
 
     def test_toolkit_widgets_and_frames(self):
-        _, digests = self.run_harness("deskui", ["tests/host/desktop/deskui_test.c", *TOOLKIT], frames=True)
+        _, digests = self.run_harness("deskui", ["tests/host/desktop/deskui_test.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c",
+            "tests/host/desktop/resize_client.c", "tests/host/desktop/resize_client_test.c"], frames=True)
         self.assertEqual(len(digests), 9)
         self.check_frames(digests, TOOLKIT_FRAMES, "TOOLKIT")
 

@@ -335,6 +335,13 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "Classic computing, one woof at a time. About CiukiOS is in the Start menu, under Help.");
     cp_tick(a);
     sync(a);
+    /* Keep the preview and controls at their existing minimum size while
+     * widening the lists and anchoring the page/footer to the new surface. */
+    du_get(u, C_TABS)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
+    du_get(u, C_CLOSE)->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+    du_get(u, C_STATUS)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
+    du_get(u, C_THEME)->anchors = du_get(u, C_WALL)->anchors = DU_ANCHOR_GROW_X;
+    du_get(u, C_ICONS)->anchors = DU_ANCHOR_GROW_X;
     du_focus(u, C_TABS);
     return 0;
 }

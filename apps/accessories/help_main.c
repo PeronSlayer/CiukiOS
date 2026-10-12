@@ -18,7 +18,7 @@ int main(int argc, char **argv)
     acc_title(title, sizeof(title), "CiukiOS Help", path);
     acc_window_size(HELP_W, HELP_H, &w, &h);
     if (test) { w = HELP_W; h = HELP_H; }
-    if (du_window_open(&m->window, &m->ui, channel, w, h, title)) {
+    if (du_window_open_resizable(&m->window, &m->ui, channel, w, h, title, 440, 280)) {
         fprintf(stderr, "help: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
     if (help_attach(&m->app, &m->ui)) { du_window_destroy(&m->window); free(m); return 1; }

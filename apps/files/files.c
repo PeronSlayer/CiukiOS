@@ -103,7 +103,7 @@ int main(int argc, char **argv)
     int width, height;
     window_size(&width, &height);
     if (test) { width = 760; height = 520; }
-    if (du_window_open(&m->window, &m->ui, channel, width, height, "Files")) {
+    if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Files", 600, 360)) {
         fprintf(stderr, "Files: desktop connection failed: %s\n", strerror(errno));
         free(m);
         return 1;

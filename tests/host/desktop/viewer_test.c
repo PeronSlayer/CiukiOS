@@ -94,6 +94,14 @@ int main(int argc, char **argv)
     du_render(&ui);
     at_save(folder, "viewer-jpeg-300", &ui);
     assert(!du_recent_load(&recent) && recent.count == 3);
+    uint32_t *large = calloc(760 * 520 + 1, 4); assert(large);
+    large[760 * 520] = 0xdeadbeef;
+    uint32_t *image_pixels = app.image.pixels;
+    du_resize(&ui, large, 760, 520);
+    assert(app.image.pixels == image_pixels && app.zoom == 300 && app.index == 1);
+    assert(du_get(&ui, V_STATUS)->box.y == 500 && du_get(&ui, V_STATUS)->box.h == 20);
+    du_render(&ui); assert(large[760 * 520] == 0xdeadbeef);
+    du_resize(&ui, pixels, VIEWER_W, VIEWER_H); free(large);
     snprintf(path, sizeof(path), "%s/missing.png", scratch);
     assert(viewer_open(&app, path) == -ENOENT && strstr(app.error, "not found"));
     viewer_detach(&app);

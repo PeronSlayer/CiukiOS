@@ -79,7 +79,7 @@ int main(int argc, char **argv)
     int width, height;
     window_size(&width, &height);
     if (test) { width = 640; height = 440; }
-    if (du_window_open(&m->window, &m->ui, channel, width, height, title)) {
+    if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, title, 440, 280)) {
         fprintf(stderr, "CiukNote: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
     struct cn_app *a = &m->app;

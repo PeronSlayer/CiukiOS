@@ -1,5 +1,102 @@
 # F2 ring-3 desktop and client protocol
 
+## f2-34 resize research (2026-10-12)
+
+Before implementation, the existing fixed CONFIGURE/client surfaces, frame hit
+testing and toolkit layout functions were checked against Microsoft's
+[WM_SIZING](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing)
+(eight border/corner drag directions) and
+[WM_GETMINMAXINFO](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-getminmaxinfo)
+(separate tracking limits and maximized geometry). Ciuki uses client dimensions
+for limits and keeps the 3 px border and 24 px caption. Toolkit resize passes
+preserve model/widget state; anchors grow content and move bottom bars, and a
+layout hook handles application-specific geometry.
+
+The existing `execution-abi.md` surface/channel contract and
+`proc/surface.c:surface_map` enforce read-only rights on every received surface.
+The lead decision of 2026-10-12 uses client allocation instead: no kernel or
+syscall ABI change. The [Wayland surface specification](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_surface)
+provides the reference for attaching client-owned buffers, applying a new size
+atomically and retaining the old buffer until its release. Ciuki uses its own
+CONFIGURE/DAMAGE round trip for those roles. Pending size requests supersede
+unsent replacements; an already sent replacement completes before allocating
+another. The desktop maps all received attachments read-only.
+
+## Protocol v2.1: client-owned resize surfaces (f2-34)
+
+HELLO negotiates major 2 (header byte 0) and minor 1 (header byte 2).
+Header byte 3 stays reserved. Every later message uses that pair. v1 and v2.0
+clients retain their existing lengths, zero byte 2, fixed surfaces and close
+behaviour. Other v2 opcodes retain their fields and directions under v2.1.
+The shared header remains the SDK's `ciuki/desktop.h`; no syscall record or
+kernel mapping right changes.
+
+| Opcode | Direction | v2.1 bytes | Extension |
+| --- | --- | ---: | --- |
+| CREATE_WINDOW | Client → desktop | 44+n | Existing title@16, then seven u32 fields@16+n: flags, minimum w/h, maximum w/h, step w/h; exactly one client-created surface fd |
+| CONFIGURE | Desktop → client | 20 | w@4, h@8, serial@12, flags@16; zero fds |
+| DAMAGE | Client → desktop | 24 | Existing rectangle@4, configure serial@20; zero fds for ordinary damage (serial 0), exactly one replacement surface fd for a resize acknowledgement (nonzero serial) |
+
+CREATE's only capability is `DESK_RESIZABLE=1`. Fixed windows send all seven
+fields as zero. Resizable limits are positive client dimensions, at most 2048,
+contain the initial size and use positive steps. Tracking rounds down to a
+step relative to the minimum. Swap DAMAGE must cover the entire replacement
+surface and its format/stride/page allocation must pass the existing surface
+validator. The window also enforces its advertised limits and steps. Malformed
+messages, invalid serials, attachment types or changed versions close only the
+peer, releasing its descriptors and mappings.
+
+Initial CONFIGURE has serial 0 and `DESK_CONFIGURE_COMMITTED=1`. A resize
+proposal has a new nonzero serial and flags 0. The frame follows pointer motion;
+the desktop clips the old surface into the requested content well, filling
+newly exposed pixels with the theme's window background. Both old and new frame
+bounds (including the shadow) are damaged. There is no scaling, desktop-side
+allocation or out-of-bounds read of the old surface.
+
+The toolkit allocates a writable replacement in the same format, calls
+`du_resize` (anchors then the app layout hook), renders its whole tree and
+sends full DAMAGE with the serial and the attachment. The desktop maps it
+read-only, atomically replaces its surface, unmaps/closes its old reference and
+damages the window. CONFIGURE with the acknowledged serial, new dimensions and
+COMMITTED then permits the client to unmap/close/free its old surface/back
+buffer. The client never writes the previous surface after the swap send.
+
+Only one replacement is allowed per window. A newer proposal discards an
+unsent replacement before another is allocated. Once the send succeeds, new
+proposals are coalesced without allocation until COMMITTED arrives; an older
+proposal already in flight can complete while the newest frame geometry stays
+visible. Committed serials increase and cannot exceed the latest issued serial.
+Unsent desktop proposals coalesce; under queue backpressure the latest proposal
+and the surface confirmation are retained separately. Client surface/back
+buffer failures or peer closure take the ordinary cleanup path. Surface
+allocations return from two to one after each round trip, and zero at teardown.
+
+The 3 px frame has a 7 px exterior grab margin, eight resize directions and a
+visible bottom-right grip. The pointer uses the existing arrow (no resize
+cursor family exists). The title zoom button toggles the saved user frame and
+the work area between the 32 px top bar and 32 px taskbar, subject to limits
+and steps. Title double-click retains windowshade. Moving/resizing a zoomed
+window exits zoom; fixed clients and built-in About/Run/Shut Down windows do
+not zoom or resize. DOS Box keeps its fixed 640×480 client surface.
+
+`du_window_open_resizable` advertises per-app minimums, a 2048×2048 maximum and
+unit steps: Files 600×360, CiukNote 440×280, Task Manager 400×420, Control Panel
+its initial page size, Help 440×280 and Image Viewer 320×240. Calculator,
+Character Map, Clock/Calendar and Volume Control keep their fixed control
+layouts. Layout preserves document/model state, list selection, caret/focus,
+dialog entries and timers; content grows and bottom bars retain their height.
+
+Host evidence: `deskui_test` exercises unsent supersession, EAGAIN, deferred
+in-flight proposals, read-only transferred descriptors, EOF and allocation/map
+failures. `desktop_test` checks v2.1 wire rejection rules, borders/corners,
+tracking steps, zoom restore, windowshade, fixed clients and backlog recovery.
+`test_window_resize.py` replays six Files swaps through the production client
+and desktop, at 600×380 and 760×520 in all three themes. It also exercises zoom to the full work area and restore across windowshade.
+It compares every content pixel with the toolkit frame, incremental redraw with
+a complete composition, and surface/descriptor/mapping counts with their baseline.
+`CIUKI_RESIZE_FRAMES` optionally saves the six host compositor PNGs. Existing
+QMP app/gate scenarios remain unchanged; QEMU evidence belongs to the lead.
+
 ## System icons: the Tango store (2026-10-12)
 
 The owner asked for a complete copyright-free icon set as the default and only

@@ -226,7 +226,7 @@ int main(int argc, char **argv)
     if (!a) return 1;
     a->authority = authority; a->test = test;
     tm_init(&a->model);
-    if (du_window_open(&a->window, &a->ui, channel, TV_WIDTH, TV_HEIGHT, "Task Manager")) {
+    if (du_window_open_resizable(&a->window, &a->ui, channel, TV_WIDTH, TV_HEIGHT, "Task Manager", TV_WIDTH, TV_HEIGHT)) {
         fprintf(stderr, "tasks: desktop connection failed: %s\n", strerror(errno)); free(a); return 1;
     }
     a->window.message = on_message; a->window.user = a;

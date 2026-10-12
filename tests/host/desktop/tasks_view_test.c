@@ -125,6 +125,16 @@ int main(int argc, char **argv)
     event_count = 0; tap(&ui, DU_KEY_ENTER);
     assert(last()->type == DU_EV_DIALOG && last()->id == D_NEW && !last()->index && !strcmp(dialog_text, "demo") && !ui.dialog.kind);
     assert(pixels[TV_WIDTH * TV_HEIGHT] == 0x5a5a5a5au);
+    uint32_t *large = calloc(600 * 540 + 1, 4); assert(large);
+    large[600 * 540] = 0x5a5a5a5au;
+    uint32_t selected = v.selected_window;
+    du_resize(&ui, large, 600, 540);
+    assert(v.selected_window == selected && v.page == TV_APPS && v.speed == TV_PAUSED);
+    assert(du_get(&ui, A_APPS)->box.h == 420 && du_get(&ui, A_APPS)->box.w == 576);
+    assert(du_get(&ui, A_NEW)->box.y == 478 && du_get(&ui, A_NEW)->box.h == 23);
+    assert(du_get(&ui, A_STATUS)->box.y == 518 && du_get(&ui, A_STATUS)->box.w == 600);
+    du_render(&ui); assert(large[600 * 540] == 0x5a5a5a5au);
+    du_resize(&ui, pixels, TV_WIDTH, TV_HEIGHT); free(large);
     free(pixels);
     puts("PASS tasks view: tabs, Details columns/sort, selection identity, button mnemonics, menus, New Task dialog, deterministic renders");
     return 0;

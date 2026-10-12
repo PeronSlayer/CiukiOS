@@ -82,6 +82,13 @@ void viewer_layout(struct viewer_app *a)
     du_get(a->ui, V_STATUS)->box = (struct du_rect){0, c->height - STATUS_H, c->width, STATUS_H};
 }
 
+static void resize_layout(struct du_ui *u, void *user)
+{
+    (void)u;
+    struct viewer_app *a = user;
+    viewer_layout(a); clamp_scroll(a); status(a);
+}
+
 static int by_name(const void *x, const void *y) { return strcasecmp(x, y); }
 static void scan_folder(struct viewer_app *a)
 {
@@ -173,7 +180,7 @@ static const struct du_menu_item help_template[] = { {"&About Image Viewer", V_M
 
 int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs *fs)
 {
-    a->ui = u; a->fs = fs ? fs : &native; u->event = viewer_event; u->user = a; u->paint = viewer_paint;
+    a->ui = u; a->fs = fs ? fs : &native; u->event = viewer_event; u->user = a; u->paint = viewer_paint; u->layout = resize_layout;
     memcpy(a->file_items, file_template, sizeof(file_template));
     memcpy(a->view_items, view_template, sizeof(view_template));
     memcpy(a->help_items, help_template, sizeof(help_template));

@@ -677,6 +677,23 @@ static void test_screens(void)
 /* Random keys, text and pointer events against the whole application: it must stay consistent. */
 static uint32_t rng = 0x9e3779b9u;
 static unsigned rnd(unsigned n) { rng = rng * 1664525u + 1013904223u; return (rng >> 8) % n; }
+static void test_resize(void)
+{
+    reset(0);
+    const char *text = "Ciuki\nA modern Retro OS";
+    assert(!du_ta_set_text(&app.ta, text, strlen(text)));
+    du_ta_select(&app.ta, 1, 4);
+    size_t cursor = app.ta.cursor, anchor = app.ta.anchor;
+    uint32_t *large = calloc(800 * 560 + 1, 4); assert(large);
+    large[800 * 560] = 0xdeadbeef;
+    du_resize(&ui, large, 800, 560);
+    assert(!strcmp(app.ta.text, "Ciuki\nA modern Retro OS") && app.ta.cursor == cursor && app.ta.anchor == anchor);
+    assert(focus_is(W_TEXT) && W(W_TEXT)->box.w == 800 && W(W_STATUS)->box.y == 540);
+    assert(app.ta.cols > 102 && app.ta.rows > 28);
+    du_render(&ui); assert(large[800 * 560] == 0xdeadbeef);
+    du_resize(&ui, canvas, NW, NH); free(large);
+}
+
 static void test_random_input(void)
 {
     static const int keys[] = {0x01, 0x0e, 0x0f, 0x1c, 0x39, 0x44, 0x3d, 0x3f, 0x147, 0x148, 0x149, 0x14b, 0x14d, 0x14f, 0x150, 0x151, 0x153,
@@ -739,7 +756,7 @@ int main(int argc, char **argv)
     test_startup(); test_typing(); test_clipboard_and_undo(); test_save_and_open(); test_unsaved_prompt();
     test_save_errors_and_replace(); test_find_replace(); test_goto_wrap_status(); test_time_log_encoding();
     test_limits(); test_open_argument(); test_file_dialogs(); test_menus_and_context(); test_mouse_text();
-    test_wrap_navigation(); test_screens(); test_random_input();
+    test_wrap_navigation(); test_screens(); test_resize(); test_random_input();
     puts("PASS ciuknote: typing, shift/caps, clipboard, undo, prompts, save/open, replace prompt, find/replace, go to, wrap, status bar, "
          "time/date, .LOG, line endings, limits, argument, file dialogs, menus, context menu, mouse, scroll bars, screens");
     return 0;
