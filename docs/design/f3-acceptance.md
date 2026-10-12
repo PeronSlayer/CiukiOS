@@ -1240,6 +1240,40 @@ VMDEV-through-`dosvm_trap` tests are unchanged and pass; the runner's whole
 DOOM timedemo fell from 840 M to 5.9 M traps with identical instruction
 count, frames and result.
 
+**POPF compatibility for DPMI clients** (closes the contract's open
+question "Compatibility beyond 0.9" for the pinned DOOM build). On QEMU
+(zz-doom5, 5fe5d14c) DOOM with sound stopped after `I_StartupTimer()`:
+DMX saves its flags and disables (`pushfd; pop eax; cli` at 0024:7F15),
+later restores them with `push eax; popfd`, then waits for timer ticks. At
+CPL 3 and IOPL 0 the CLI traps but the POPF neither traps nor changes IF
+(Intel SDM Vol. 2, POPF/IRET; DPMI 0.9 section 2.4: POPF and IRET "may not
+modify the state of the interrupt flag"), so the virtual IF stayed clear,
+IRQ0 stayed pending (IRR 01h) and the tick loop at 0024:83E2 never ended;
+the libx86emu runner reproduced it exactly. The same loss later hung the
+exit in `I_ShutdownSound` (`while (s != ticcount)` at 0024:E849, IRR 81h).
+Design, IOPL unchanged, no timeout: the Windows 95 remedy described by
+Raymond Chen ("Getting MS-DOS games to run on Windows 95: The interrupt
+flag", The Old New Thing, 2016-04-11,
+https://devblogs.microsoft.com/oldnewthing/20160411-00/?p=93281). When a
+trapped CLI directly follows `PUSHF` (image on the stack top) or
+`PUSHF; POP r` (image in r), the virtual IF was set, and the image equals
+PUSHF's image of the current flags (IF set, IOPL 0, NT and TF clear,
+status flags as now), the host sets TF in that saved image. The POPF or
+IRET that later loads it sets TF; the single-step trap one instruction
+later (Intel SDM Vol. 3, single-step exception condition) tells the host
+the client restored "enabled": the host clears TF and sets the virtual IF;
+any trap taken with TF set first applies that restore (a CLI right after
+the POPF still disables). Images saved while virtually disabled (nested
+sections) are not touched, so their restore keeps IF clear. Nothing is
+single-stepped: the first design (stepping each section, 4096 instructions
+at most) cost 42.6 M debug traps for one timedemo and still ran out on
+DMX's mixing loops (10 128 sections hit the limit). Once a client holds an
+armed image, a single-step trap without a watchpoint hit is the host's: a
+debugger single-stepping that client is not supported. Counters
+`if_armed` and `if_restored` in `dpmi_stats`; the doom `case=dpmi` record
+reports `popf=` (restores). The libx86emu runner models TF loaded by
+POPF/IRET (libx86emu loads it but never traps on it).
+
 **Direct plane window.** One #PF per store is far too slow for Mode X/Y
 games. When `cvga_direct_plane()` reports that a CPU write stores its byte
 unchanged into exactly one plane (single-plane map mask, write mode 0, no
@@ -1282,7 +1316,8 @@ the runner's probe-name grammar now allows digits):
   verdict line (`dosvm_verdict_text`: the CiukiOS shell redraws its row-0
   title bar over DOOM's line before the prompt; QEMU zz-doom c11506e9), RUNREC status, exit
   code 1 type 0), `case=video` (Mode Y 320x200 seen, flips, faults, PM
-  faults, window openings), `case=dpmi`, `case=audio` (f3-05 counters:
+  faults, window openings), `case=dpmi` (`popf` = flags restores seen
+  through armed images, informative), `case=audio` (f3-05 counters:
   DSP resets, block boundaries, PCM frames, IRQ edges, services, OPL events,
   DMA faults; `consumer` = the f4-05 native output attached on AC97
   profiles, not a pass condition), `case=loop_cleanup`. Without sound

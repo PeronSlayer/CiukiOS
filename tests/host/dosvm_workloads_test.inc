@@ -356,11 +356,75 @@ static void test_workload_wolf_frame(void)
     CHECK(wolf_pf <= 3 * 304 && total_faults <= 3 * 304);
     destroy(v, true); empty();
     printf("f3-06 Wolf3D frame replay: ScalePost strips and compiled scalers through dosvm_trap, planes exact, flips counted, %u traps for three views\n", total_traps);
+/* f3-06 POPF compatibility (DOOM's DMX on QEMU): a CLI right after a flags
+ * save steps the client; PUSHF/POPF are emulated on the virtual IF. */
+static void test_workload_popf_compat(void)
+{
+    struct dosvm *v = dpmi_vm(true);
+    v86_start(); enter(v, false);
+    CHECK(in_pm());
+    struct dpmi *d = &v->dpmi;
+    /* 200 pushf; 201 pop ax; 202 cli; 203 push ax; 204 popf; 205 nop;
+     * 206 pushf; 207 cli; 208 popf; 209 cli; 20A pushf; 20B cli */
+    static const uint8_t code[] = {0x9C, 0x58, 0xFA, 0x50, 0x9D, 0x90, 0x9C, 0xFA, 0x9D, 0xFA, 0x9C, 0xFA};
+    CHECK(!dosvm_write(v, seg_base(v, (uint16_t)cur.tf.cs) + 0x200, code, sizeof(code)));
+    cur.tf.eflags = (cur.tf.eflags & ~0x0DD5u) | V86_ZF | V86_IF | 2u;
+    uint16_t image = (uint16_t)((cur.tf.eflags & 0x0CD5u) | V86_IF | 2u);   /* PUSHF of the real flags */
+    /* pushf; pop ax ran natively; the CLI traps: the image in AX gets TF
+     * (the virtual IF was set), nothing is stepped. */
+    v->monitor.vif = true;
+    cur.tf.eax = 0xABCD0000u | image;
+    cur.tf.eip = 0x202;
+    step(v, 13, 0);
+    CHECK(!left && in_pm() && !v->monitor.vif && cur.tf.eip == 0x203 && !(cur.tf.eflags & V86_TF));
+    CHECK(cur.tf.eax == (0xABCD0000u | image | V86_TF) && d->if_armed && d->stats.if_armed == 1);
+    /* push ax; popf ran natively and loaded TF; the single-step trap after
+     * the NOP restores the virtual IF and clears TF, no client exception. */
+    unsigned exceptions = d->stats.exceptions;
+    cur.tf.eflags |= V86_TF; cur.tf.eip = 0x206;
+    debug_dr6 = 0x4000; step(v, 1, 0);
+    CHECK(!left && v->monitor.vif && !(cur.tf.eflags & V86_TF) && cur.tf.eip == 0x206);
+    CHECK(d->stats.if_restored == 1 && d->stats.exceptions == exceptions);
+    /* pushf; cli: the image on the stack top gets TF. */
+    pm_push(v, image); cur.tf.eip = 0x207;
+    step(v, 13, 0);
+    CHECK(!left && !v->monitor.vif && cur.tf.eip == 0x208 && d->stats.if_armed == 2);
+    uint32_t top = 0;
+    struct dpmi_seg ss; CHECK(dpmi_seg(v, (uint16_t)cur.tf.user_ss, &ss));
+    CHECK(!dosvm_read(v, ss.base + (uint16_t)cur.tf.user_esp, &top, 2) && top == (uint32_t)(image | V86_TF));
+    /* popf ran natively (TF loaded); the next instruction is a CLI that
+     * traps first: the restore is applied before the CLI, which then
+     * disables again; the popf before it does not arm anything. */
+    (void)pm_pop(v); cur.tf.eflags |= V86_TF; cur.tf.eip = 0x209;
+    step(v, 13, 0);
+    CHECK(!left && !v->monitor.vif && !(cur.tf.eflags & V86_TF) && cur.tf.eip == 0x20A);
+    CHECK(d->stats.if_restored == 2 && d->stats.if_armed == 2);
+    /* Saved while virtually disabled (a nested section): left alone, its
+     * restore keeps the client disabled. */
+    pm_push(v, image); cur.tf.eip = 0x20B;
+    step(v, 13, 0);
+    CHECK(!left && !v->monitor.vif && d->stats.if_armed == 2);
+    CHECK(!dosvm_read(v, ss.base + (uint16_t)cur.tf.user_esp, &top, 2) && top == image);
+    /* A stack top that is not PUSHF's image of the current flags is never
+     * touched; neither is a CLI without a flags save before it. */
+    CHECK(!dosvm_write(v, ss.base + (uint16_t)cur.tf.user_esp, &(uint16_t){0x1234}, 2));
+    v->monitor.vif = true; cur.tf.eip = 0x20B;
+    step(v, 13, 0);
+    CHECK(!left && !v->monitor.vif && d->stats.if_armed == 2);
+    CHECK(!dosvm_read(v, ss.base + (uint16_t)cur.tf.user_esp, &top, 2) && top == 0x1234);
+    (void)pm_pop(v);
+    v->monitor.vif = true; cur.tf.eip = 0x209;
+    step(v, 13, 0);
+    CHECK(!left && !v->monitor.vif && d->stats.if_armed == 2 && !(cur.tf.eflags & V86_TF));
+    v->frame_pm = true;
+    destroy(v, true); empty();
+    printf("f3-06 POPF compatibility: flags image armed at CLI (stack and POP r), POPF trap restores the virtual IF, nested and foreign images untouched\n");
 }
 
 static void test_workloads(void)
 {
     test_workload_wolf_frame();
+    test_workload_popf_compat();
     test_workload_verdict_screen();
     test_workload_pm_vga();
     test_workload_direct_window();

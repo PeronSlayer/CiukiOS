@@ -395,6 +395,12 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
     unsigned executed = 0, budget = tf ? 1 : max;
     int rc = GCPU_BUDGET;
     while (executed < budget) {
+        /* TF loaded inside the slice (POPF/IRET of an image with TF, which
+         * libx86emu loads but never acts on): the trap follows the first
+         * instruction that starts with TF set, not the one that set it
+         * (Intel SDM Vol. 3, "Single-Step Exception Condition"). */
+        bool tf_loaded = !tf && (emu->x86.R_EFLG & 0x100u);
+        if (tf_loaded && budget > executed + 1) budget = executed + 1;
         ev->executed_descriptor = false;
         if (trap_check(s)) { rc = ev->fault && ev->vector == 13 ? GCPU_TRAP : GCPU_TRAP; break; }
         if (ev->executed_descriptor) { executed++; continue; }
@@ -419,15 +425,16 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
             break;
         }
         /* MOV SS / POP SS delay a single-step trap by one instruction. */
-        if (tf && executed == budget && (first == 0x17 || (first == 0x8E && ((second >> 3) & 7) == 2)))
+        if ((tf || tf_loaded) && executed == budget && (first == 0x17 || (first == 0x8E && ((second >> 3) & 7) == 2)))
             budget++;
+        if (tf_loaded && executed == budget) { tf = true; break; }
     }
     ev->executed = executed;
     if (rc == GCPU_BUDGET && tf && executed) { ev->vector = 1; ev->err = 0; ev->fault = false; rc = GCPU_TRAP; }
     s->eax = emu->x86.R_EAX; s->ebx = emu->x86.R_EBX; s->ecx = emu->x86.R_ECX; s->edx = emu->x86.R_EDX;
     s->esi = emu->x86.R_ESI; s->edi = emu->x86.R_EDI; s->ebp = emu->x86.R_EBP; s->esp = emu->x86.R_ESP;
     s->eip = emu->x86.R_EIP;
-    s->eflags = (emu->x86.R_EFLG & 0x00000CD5u) | (s->eflags & 0x100u) | 0x202u;
+    s->eflags = (emu->x86.R_EFLG & 0x00000CD5u) | ((s->eflags | emu->x86.R_EFLG) & 0x100u) | 0x202u;
     s->cs = emu->x86.R_CS; s->ss = emu->x86.R_SS; s->ds = emu->x86.R_DS; s->es = emu->x86.R_ES;
     s->fs = emu->x86.R_FS; s->gs = emu->x86.R_GS;
     return rc;

@@ -279,6 +279,74 @@ static int software_int(struct dosvm *v, struct v86_frame *f, uint8_t n)
     return dpmi_pm_interrupt(v, f, n);
 }
 
+/* ---- f3-06: POPF compatibility for flags-saving CLI sections ----
+ * At CPL 3 and IOPL 0, CLI/STI trap but PUSHF/POPF/IRET do not, and POPF
+ * and IRET leave IF unchanged (Intel SDM Vol. 2, POPF/IRET operation; DPMI
+ * 0.9 section 2.4: they "may not modify the state of the interrupt flag").
+ * A client that saves its flags and disables (`pushf; cli` ... `popf`, or
+ * Watcom's `pushfd; pop eax; cli` ... `push eax; popfd`: DMX in DOOM,
+ * zz-doom5) then stays virtually disabled, and its timer-tick waits never
+ * end (I_StartupTimer, I_ShutdownSound). Windows 95's remedy (R. Chen,
+ * "Getting MS-DOS games to run on Windows 95: The interrupt flag", The Old
+ * New Thing, 2016-04-11): at the trapped CLI, when the code just before it
+ * is that pattern and the saved image matches the current flags, copy the
+ * virtual IF into the image's TF. The POPF or IRET that later loads the
+ * image sets TF, and the single-step trap one instruction later tells the
+ * host that the client re-enabled: the host clears TF and sets the virtual
+ * IF. Nothing is stepped in between, IOPL stays 0 and no timeout enables
+ * interrupts (contract). An image saved while virtually disabled is left
+ * alone: its restore keeps IF clear, as on hardware. Once a client holds an
+ * armed image, a single-step trap without a watchpoint hit is the host's
+ * (a client debugger single-stepping it is not supported). */
+static uint32_t *pop_register(struct v86_frame *f, uint8_t op)
+{
+    switch (op) {
+    case 0x58: return &f->tf.eax;
+    case 0x59: return &f->tf.ecx;
+    case 0x5A: return &f->tf.edx;
+    case 0x5B: return &f->tf.ebx;
+    case 0x5D: return &f->tf.ebp;
+    case 0x5E: return &f->tf.esi;
+    case 0x5F: return &f->tf.edi;
+    default: return 0;                      /* 5Ch POP ESP: not an image */
+    }
+}
+static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs)
+{
+    uint8_t b[2] = {0, 0};
+    uint32_t off = f->tf.eip;
+    if (off < 2 || off - 2 > cs->limit || dosvm_read(v, cs->base + off - 2, b, 2)) return false;
+    /* PUSHF's image of the real flags: IF set (the host never runs a client
+     * disabled), IOPL 0, NT and TF clear, status flags as now (POP and the
+     * trapped CLI change none). */
+    uint16_t want = (uint16_t)((f->tf.eflags & 0x0CD5u) | V86_IF | 2u);
+    if (b[1] == 0x9C) {                     /* PUSHF; CLI: the image is on the stack top */
+        struct dpmi_seg ss;
+        uint16_t sel = (uint16_t)f->tf.user_ss, image = 0;
+        uint32_t lin;
+        if (!dpmi_seg(v, sel, &ss)) return false;
+        uint32_t esp = ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+        if (!dpmi_ptr(v, sel, esp, 2, true, &lin) || dosvm_read(v, lin, &image, 2) || image != want) return false;
+        image |= V86_TF;
+        return !dosvm_write(v, lin, &image, 2);
+    }
+    uint32_t *r = b[0] == 0x9C ? pop_register(f, b[1]) : 0;
+    if (!r || (uint16_t)*r != want) return false;   /* PUSHF; POP r; CLI: the image is in r */
+    *r |= V86_TF;
+    return true;
+}
+/* A trap with TF set after an armed image was loaded: the client's POPF or
+ * IRET restored "enabled". */
+static bool flags_restored(struct dosvm *v, struct v86_frame *f)
+{
+    struct dpmi *d = &v->dpmi;
+    if (!d->if_armed || !(f->tf.eflags & V86_TF)) return false;
+    f->tf.eflags &= ~V86_TF;
+    v->monitor.vif = true;
+    d->stats.if_restored++;
+    return true;
+}
+
 /* #GP(0): IOPL-sensitive instructions the monitor virtualizes. */
 static int emulate(struct dosvm *v, struct v86_frame *f)
 {
@@ -309,7 +377,13 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
     uint32_t next = f->tf.eip + len, mask = cs.big ? 0xFFFFFFFFu : 0xFFFFu;
     unsigned w = op32 ? 4 : 2;
     switch (op) {
-    case 0xFA: v->monitor.vif = false; break;
+    case 0xFA:
+        if (v->monitor.vif && arm_flags_image(v, f, &cs)) {
+            d->if_armed = true;
+            d->stats.if_armed++;
+        }
+        v->monitor.vif = false;
+        break;
     case 0xFB:
         if (!v->monitor.vif) {
             /* STI shadow: no IRQ before the next instruction retires. Not
@@ -396,6 +470,9 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
     if (d->shadow && !(irq && (uint16_t)f->tf.cs == d->shadow_cs && f->tf.eip == d->shadow_eip))
         d->shadow = false;
     if (irq) return 0;                                      /* physical IRQ, handled */
+    /* Before anything else: an instruction trapping right after the POPF
+     * (a CLI, an INT, a host stub) sees the restored IF first. */
+    if (flags_restored(v, f) && vector == 1 && !(dr6 & 15)) return 0;
     switch (vector) {
     case 13:
         if ((f->tf.err & 3) == 2) return software_int(v, f, (uint8_t)(f->tf.err >> 3));
