@@ -92,9 +92,36 @@ static void shutdown_key(int code)
     struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=code,.value=1};
     desk_input(&shutdown_desktop,&e);
 }
+static unsigned shutdown_mode_sets;
+static int shutdown_display_set(struct desktop *d, uint16_t id)
+{
+    assert(d == &shutdown_desktop && id == 0x111);
+    shutdown_mode_sets++;
+    return 0;
+}
 static void test_shutdown_sequence(void)
 {
     struct desktop *d=&shutdown_desktop;
+    /* The merged settings path applies display requests only while idle. */
+    shutdown_setup();
+    int control=shutdown_client(200,"Control Panel",1,2);
+    d->clients[control].program=DESK_APP_CONTROL;
+    d->display_set=shutdown_display_set; shutdown_mode_sets=0;
+    struct ciuki_message settings;
+    desk_message(&settings,DESK_SETTINGS,24);
+    settings.data[0]=2; settings.sender_pid=200;
+    desk_put32(settings.data+4,1); desk_put32(settings.data+8,DESK_SETTINGS_DISPLAY);
+    desk_put32(settings.data+12,0x111);
+    desk_receive(d,control,&settings); desk_flush(d,control);
+    assert(shutdown_mode_sets==1 && fake_messages[fake_sent-1].data[1]==DESK_TASK_RESULT);
+    assert((int32_t)desk_get32(fake_messages[fake_sent-1].data+12)==0);
+    desk_power_begin(d,2); desk_flush(d,control);
+    assert(d->power.state==DESK_POWER_CLOSING);
+    desk_receive(d,control,&settings); desk_flush(d,control);
+    assert(shutdown_mode_sets==1 && fake_messages[fake_sent-1].data[1]==DESK_TASK_RESULT);
+    assert((int32_t)desk_get32(fake_messages[fake_sent-1].data+12)==-EBUSY);
+    shutdown_cleanup();
+    puts("PASS display/shutdown settings: idle request applies, closing request returns EBUSY without mode switch");
     /* Two ordinary clients plus a DOS/VM window. All CLOSE requests precede
      * termination/descriptor cleanup/power; EOF is not process exit. */
     shutdown_setup();

@@ -27,7 +27,7 @@ struct fb_device {
     uint8_t bpp;
     uint8_t red_size, red_pos, green_size, green_pos, blue_size, blue_pos;
     uint8_t rsvd_size, rsvd_pos;
-    uint16_t mode_id;              /* immutable loader-selected mode */
+    uint16_t mode_id;              /* active VBE mode */
     bool present;
     int handle;
     gen_t generation;
@@ -35,9 +35,18 @@ struct fb_device {
 
 /* Call once after registry/vmm initialization, in thread context with IF=1.
  * Missing LFB succeeds with present=false. Invalid metadata/claim fails
- * before framebuffer access. Further calls retain the original mode. */
+ * before framebuffer access. Further calls leave the active mode untouched. */
 int fbdev_init(void);
 const struct fb_device *fbdev_get(void);
+/* f1-23 transaction: submissions stop and both presenter/console mappings
+ * are revoked before firmware. commit remaps validated, claimed geometry;
+ * failure leaves the device unavailable until a confirmed restore commits. */
+int fbdev_change_begin(void);
+int fbdev_change_commit(const struct fb_device *next);
+void fbdev_change_end(void);
+int fbdev_mode_decode(uint16_t id, const uint8_t info[256], struct fb_device *out);
+void console_framebuffer_changed(const struct fb_device *dev);
+void console_framebuffer_revoke(void);
 bool fbdev_rect_valid(const struct fb_rect *rect);
 /* No scaling: source (0,0) maps to dst (x,y). dst dimensions must fit src.
  * Clip at all screen edges, advancing the source for left/top clipping.

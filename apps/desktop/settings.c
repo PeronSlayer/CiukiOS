@@ -111,6 +111,10 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     if (!strcmp(key, "desktop_icons")) return flag(v, &s->desktop_icons);
     if (!strcmp(key, "mouse_speed")) return number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);
     if (!strcmp(key, "double_click_ms")) return number(v, 200, 900, &s->double_click_ms);
+    if (!strcmp(key, "display_mode")) {
+        if (!number(v, 0, 65535, &n)) return 0;
+        s->display_mode = (uint16_t)n; return 1;
+    }
     if (!strcmp(key, "keyboard")) {
         for (int i = 0; i < CFG_KEYS_COUNT; i++) if (!strcmp(v, cfg_keyboard_names[i])) { s->keyboard = i; return 1; }
         return 0;
@@ -163,12 +167,12 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
     int n = snprintf(out, size,
         "# CiukiOS desktop settings (key=value). Written by the desktop and Control Panel.\n"
         "version=%d\ntheme=%s\nwallpaper=%s\nwallpaper_mode=%s\ndesktop_color=%06x\n"
-        "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\nmouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\n",
+        "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\nmouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\ndisplay_mode=%u\n",
         CFG_VERSION, s->theme, s->wallpaper,
         cfg_mode_names[s->wallpaper_mode >= 0 && s->wallpaper_mode < CFG_WALL_MODES ? s->wallpaper_mode : 0],
         (unsigned)(s->desktop_color & 0xffffffu), !!s->clock_24h, !!s->clock_seconds, !!s->desktop_icons,
         s->mouse_speed, s->double_click_ms,
-        cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0]);
+        cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0], (unsigned)s->display_mode);
     if (n <= 0 || (size_t)n >= size) return 0;
     size_t used = (size_t)n;
     for (unsigned i = 0; i < s->recent_count && i < CFG_RECENT_MAX; i++) {

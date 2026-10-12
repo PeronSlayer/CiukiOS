@@ -695,3 +695,6 @@ int main(void)
     test_shutdown_sequence();
     return 0;
 }
+
+int ciuki_display_query(struct ciuki_display_info *i) { (void)i; return -ENOSYS; }
+int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }

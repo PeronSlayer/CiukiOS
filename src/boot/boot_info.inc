@@ -1,11 +1,13 @@
-; ciuki_boot_info version 1 (NASM view). Frozen layout; the authority is
+; ciuki_boot_info version 2 (NASM view). Frozen layout; the authority is
 ; docs/design/boot-memory.md and must match src/kernel/include/ciuki/boot_info.h.
 ; SPDX-License-Identifier: GPL-2.0-only
 
 %define CIUKI_BOOT_MAGIC_EAX  0x4B554943   ; "CIUK"
 %define CIUKI_BOOT_INFO_MAGIC 0x31494243   ; "CBI1"
-%define CIUKI_BOOT_INFO_VER   1
-%define CIUKI_BOOT_INFO_SIZE  0x10F0
+%define CIUKI_BOOT_INFO_VER   2
+%define CIUKI_BOOT_INFO_SIZE  0x1344
+%define CBI_DISPLAY_TAG      0x50534944
+%define CBI_DISPLAY_MAX      32
 %define CIUKI_E820_MAX        128
 %define CIUKI_TEST_REQ_MAX    64
 
@@ -29,6 +31,18 @@ struc ciuki_e820
     .length     resq 1
     .type       resd 1
     .ext        resd 1
+endstruc
+
+struc ciuki_boot_display
+    .tag resd 1
+    .size resd 1
+    .vbe_version resd 1
+    .vram_bytes resd 1
+    .oem resb 64
+    .vendor resb 64
+    .product resb 64
+    .mode_count resd 1
+    .modes resb CBI_DISPLAY_MAX * 12
 endstruc
 
 struc ciuki_boot_info
@@ -78,6 +92,7 @@ struc ciuki_boot_info
     .vbe_ctrl           resb 512    ; 0x1F0
     .vbe_mode_info      resb 256    ; 0x3F0
     .e820               resb 128 * ciuki_e820_size ; 0x4F0
+    .display            resb ciuki_boot_display_size ; 0x10F0
 endstruc
 
 %if ciuki_boot_info_size != CIUKI_BOOT_INFO_SIZE

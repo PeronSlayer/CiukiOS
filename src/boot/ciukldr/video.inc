@@ -1,4 +1,6 @@
 video_select:
+    mov dword [B(display)+ciuki_boot_display.tag], CBI_DISPLAY_TAG
+    mov dword [B(display)+ciuki_boot_display.size], ciuki_boot_display_size
     mov dword [B(vbe_ctrl)], 'VBE2'
     mov di, B(vbe_ctrl)
     mov ax, 0x4f00
@@ -10,6 +12,7 @@ video_select:
     cmp word [B(vbe_ctrl)+4], 0x0200
     jb .text
     or dword [B(flags)], CBI_F_VBE_CTRL_VALID
+    call display_controller_copy
     mov ax, [B(vbe_ctrl)+16]
     mov fs, ax
     mov si, [B(vbe_ctrl)+14]
@@ -40,6 +43,8 @@ video_select:
     jc .reject
     call mode_validate
     jc .reject
+    xor dx, dx
+    call display_mode_copy
     call mode_rank
     pop bp
     mov [ds:mode_scores+bp], ax
@@ -126,6 +131,8 @@ video_select:
     xor al, al
     rep stosb
 .active:
+    mov dx, 1 ; keep the boot mode even if the table was full
+    call display_mode_copy
     mov ax, [candidate_mode]
     mov [B(vbe_mode)], ax
     jmp .edid
@@ -193,6 +200,8 @@ mode_query:
     ret
 
 mode_validate:
+    cmp byte [mode_buffer+24], 1
+    jne .bad
     mov ax, [mode_buffer]
     and ax, 0x91
     cmp ax, 0x91
@@ -262,7 +271,7 @@ mode_validate:
     jne .bad
     jmp .mask_next
 .nonzero:
-    cmp eax, 32
+    cmp eax, 8 ; integer presenter supports components up to eight bits
     ja .bad
     movzx edx, cl
     add edx, eax
@@ -358,3 +367,114 @@ candidate_mode dw 0
 mode_bytes dw 0
 valid_pitch dd 0
 mask_offset dw 0
+
+; f1-23: export only validated direct-colour LFB modes in the desktop range.
+; DX=1 keeps the actual boot mode in a full table (last slot replacement).
+display_mode_copy:
+    pusha
+    cmp word [candidate_mode], 0x100
+    jb .done
+    cmp word [candidate_mode], 0x200
+    jae .done
+    cmp byte [mode_buffer+25], 16
+    jb .done
+    cmp word [mode_buffer+18], 640
+    jb .done
+    cmp word [mode_buffer+18], 1600
+    ja .done
+    cmp word [mode_buffer+20], 480
+    jb .done
+    cmp word [mode_buffer+20], 1200
+    ja .done
+    mov bx, [B(display)+ciuki_boot_display.mode_count]
+    mov di, B(display)+ciuki_boot_display.modes
+    mov cx, bx
+    mov ax, [candidate_mode]
+.find:
+    jcxz .new
+    cmp [di], ax
+    je .write
+    add di, 12
+    loop .find
+.new:
+    cmp bx, CBI_DISPLAY_MAX
+    jb .append
+    test dx, dx
+    jz .done
+    sub di, 12
+    jmp .write
+.append:
+    inc dword [B(display)+ciuki_boot_display.mode_count]
+.write:
+    mov [di], ax
+    mov eax, [mode_buffer+18]
+    mov [di+2], eax
+    movzx ax, byte [mode_buffer+25]
+    mov [di+6], ax
+    mov ax, [valid_pitch]
+    mov [di+8], ax
+    mov word [di+10], 1 ; linear=1, reserved=0
+.done:
+    popa
+    ret
+
+display_controller_copy:
+    movzx eax, word [B(vbe_ctrl)+4]
+    mov [B(display)+ciuki_boot_display.vbe_version], eax
+    movzx eax, word [B(vbe_ctrl)+18]
+    shl eax, 16
+    mov [B(display)+ciuki_boot_display.vram_bytes], eax
+    mov eax, [B(vbe_ctrl)+6]
+    mov di, B(display)+ciuki_boot_display.oem
+    call display_string_copy
+    mov eax, [B(vbe_ctrl)+22]
+    mov di, B(display)+ciuki_boot_display.vendor
+    call display_string_copy
+    mov eax, [B(vbe_ctrl)+26]
+    mov di, B(display)+ciuki_boot_display.product
+    call display_string_copy
+    ret
+
+; Convert a far pointer, bound it to real-mode memory and copy printable ASCII.
+; Buffers were zeroed at entry, so truncation at 63 bytes remains terminated.
+display_string_copy:
+    push fs
+    movzx edx, ax
+    shr eax, 16
+    shl eax, 4
+    add eax, edx
+    test eax, eax
+    jz .done
+    cmp eax, 0x100000
+    jae .done
+    mov edx, eax
+    and dx, 15
+    mov si, dx
+    shr eax, 4
+    mov fs, ax
+    mov cx, 63
+.copy:
+    cmp byte [fs:si], 0
+    je .done
+    mov al, [fs:si]
+    cmp al, 32
+    jb .sanitize
+    cmp al, 126
+    jbe .store
+.sanitize:
+    mov al, '?'
+.store:
+    stosb
+    inc si
+    ; Check the actual normalized segment + offset against the 1 MiB end.
+    mov ax, fs
+    movzx eax, ax
+    shl eax, 4
+    movzx ebx, si
+    add eax, ebx
+    cmp eax, 0x100000
+    jae .done
+    loop .copy
+.done:
+    pop fs
+    ret

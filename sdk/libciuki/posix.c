@@ -2,6 +2,7 @@
 #include <ciuki/runtime.h>
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
+#include <ciuki/display.h>
 #include <ciuki/channel.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -103,7 +104,7 @@ int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f) { return RET(CU_CALL(
 void *ciuki_surface_map(int f,int prot) { uint32_t r=CU_CALL(SURFACE_MAP,f,prot,0,0,0,0);int e=ciuki_error(r);if(e)errno=e;return e?MAP_FAILED:(void *)(uintptr_t)r; }
 int ciuki_surface_info(int f,struct ciuki_surface_info *i) { return RET(CU_CALL(SURFACE_INFO,f,CU_PTR(i),0,0,0,0)); }
 int ciuki_present(int d,int s,const struct ciuki_rect *r) { return RET(CU_CALL(PRESENT,d,s,CU_PTR(r),0,0,0)); }
-int ciuki_display_info(int d,struct ciuki_display_info *i) { return RET(CU_CALL(DISPLAY_INFO,d,CU_PTR(i),0,0,0,0)); }
+int ciuki_display_info(int d,struct ciuki_framebuffer_info *i) { return RET(CU_CALL(DISPLAY_INFO,d,CU_PTR(i),0,0,0,0)); }
 int ciuki_input_read(int d,struct ciuki_input_event *e,uint32_t n) { return RET(CU_CALL(INPUT_READ,d,CU_PTR(e),n,0,0,0)); }
 int ciuki_channel_pair(int fds[2]) { return RET(CU_CALL(CHANNEL_PAIR,CU_PTR(fds),0,0,0,0,0)); }
 int ciuki_channel_send(int f,const struct ciuki_message *m,uint32_t flags) { return RET(CU_CALL(CHANNEL_SEND,f,CU_PTR(m),flags,0,0,0)); }
@@ -147,3 +148,6 @@ char *tmpnam(char *out) {
     unsigned counter=++temp_counter;int e=pthread_mutex_unlock(&temp_lock);if(e) { errno=e;return NULL; }
     snprintf(out,L_tmpnam,"/tmp/c%lx-%lx",(unsigned long)getpid(),(unsigned long)counter);return out;
 }
+
+int ciuki_display_query(struct ciuki_display_info *i) { return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_QUERY,CU_PTR(i),0,0,0,0); }
+int ciuki_display_set(uint16_t id) { return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SET,id,0,0,0,0); }

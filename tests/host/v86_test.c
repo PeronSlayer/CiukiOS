@@ -33,6 +33,10 @@ static uint32_t cr4_fake, setup_ticks, completion_delay;
 static int mouse_error_function = -1;
 static uint16_t mouse_error_ax, mouse_error_flags;
 static unsigned mouse_calls;
+static bool video_rom;
+static uint16_t video_fail_ax, video_current_mode;
+static uint16_t video_calls[16];
+static unsigned video_call_count;
 static bool worker_until_idle;
 static jmp_buf worker_idle_env;
 static unsigned worker_waits, worker_sleeps, reflection_ticks;
@@ -65,6 +69,8 @@ static void outb(uint16_t p, uint8_t b)
     if (p == 0x43 && b == 0xE2) return;
     physical[p] = b;
 }
+static uint16_t cpu_inw(uint16_t p) { hw_reads++; return physical[p] | (uint16_t)physical[p + 1] << 8; }
+static void cpu_outw(uint16_t p, uint16_t v) { hw_writes++; physical[p] = v; physical[p + 1] = v >> 8; }
 static uint32_t inl(uint16_t p) { (void)p; CHECK(false); return UINT32_MAX; }
 static void outl(uint16_t p, uint32_t value) { (void)p; (void)value; CHECK(false); }
 
@@ -244,6 +250,27 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
     bool mouse_setup_call = initial->tf.cs == 0xF000 && initial->tf.eip == 0x400 &&
                             (initial->tf.eax & 0xFF00) == 0xC200;
     if (mouse_setup_call) mouse_calls++;
+    if (video_rom && initial->tf.cs == 0xF000 && initial->tf.eip == 0x700) {
+        unsigned ax = initial->tf.eax & 0xFFFF;
+        CHECK(video_active && firmware.max_call_ms == 2000 && request_ms > 0 && request_ms <= 2000);
+        CHECK(vm_memory(0, 0xA0000, 0x20000, true) == ram + 0xA0000);
+        CHECK(video_call_count < ARRAY_SIZE(video_calls));
+        video_calls[video_call_count++] = (uint16_t)ax;
+        live.tf.eax = ax == video_fail_ax ? 0x014F : 0x004F;
+        if (ax == video_fail_ax) video_fail_ax = 0;
+        else if (ax == 0x4F02) {
+            CHECK((initial->tf.ebx & 0xFE00) == 0x4000);
+            video_current_mode = initial->tf.ebx & 0x1FF;
+        } else if (ax == 0x4F01) {
+            CHECK(initial->es == BIOSVM_SCRATCH >> 4 && initial->tf.edi == 0x800);
+            CHECK(initial->tf.ecx == video_current_mode);
+            uint8_t *m = vm_memory(0, (initial->es << 4) + initial->tf.edi, 256, true);
+            CHECK(m != 0); memset(m, 0, 256); m[0] = 0x91; m[24] = 1; m[25] = 32; m[27] = 6;
+            putword(m + 18, 2, 640); putword(m + 20, 2, 480); putword(m + 50, 2, 2560);
+            putword(m + 40, 4, 0xE0000000);
+        } else if (ax == 0x4F03) live.tf.ebx = video_current_mode | 0x4000;
+        else CHECK(false);
+    }
     if (setjmp(leave_env)) {
         sti();
         return;
@@ -944,6 +971,9 @@ static void boot_fixture(bool irq_reservations)
     diagnostic_count = 0;
     safe_input = safe_backend = safe_pass = false;
     initialized = quarantined = synthetic = started = false;
+    input_enabled = video_active = video_claimed = video_dispi = false;
+    video_lease_count = 0;
+    video_rom = false; video_fail_ax = video_current_mode = 0; video_call_count = 0;
     request_pending = request_done = controller_status_valid = false;
     vm_thread = adapter = 0;
     input_service = 0; input_observer = 0;
@@ -1273,6 +1303,46 @@ static void test_pm_timer(void)
     CHECK(!hw_reads && !hw_writes);
 }
 
+static void test_video_calls(void)
+{
+    for (unsigned native = 0; native < 2; native++) {
+        boot_fixture(true);
+        if (native) g_boot.input_policy = CBI_INPUT_NATIVE;
+        video_rom = true; ivt(0x10, 0xF000, 0x700); ram[0xF0700] = 0xCF;
+        pci[0] = (struct pci_func){.vendor = 0x1234, .device = 0x1111, .class_code = 3}; npci = 1;
+        uint8_t m[256];
+        CHECK(!biosvm_video_switch(0x111, m));
+        CHECK(video_call_count == 3 && video_calls[0] == 0x4F02 && video_calls[1] == 0x4F01 && video_calls[2] == 0x4F03);
+        CHECK(m[0] == 0x91 && getword(m + 18, 2) == 640 && getword(m + 50, 2) == 2560);
+        CHECK(video_lease_count == 3 && !video_active && !firmware.io && !firmware.max_call_ms);
+        CHECK(!vm_memory(0, 0xA0000, 1, false));
+        CHECK(input_enabled == !native && lease_count == (native ? 0u : 4u));
+        if (native) CHECK(!irq_fake[1] && !irq_fake[12]);
+        struct biosvm_regs denied = {.interrupt = 0x10, .eax = 0x4F02, .ebx = 0x4111};
+        unsigned before = enters;
+        CHECK(biosvm_call(&denied, 100) == -V86_EPERM && enters == before);
+        video_fail_ax = 0x4F01; video_call_count = 0;
+        CHECK(biosvm_video_switch(0x112, m) == -V86_EIO && video_call_count == 2);
+        CHECK(!quarantined && !video_active && !vm_memory(0, 0xA0000, 1, false));
+        CHECK(!biosvm_video_switch(0x111, m) && video_current_mode == 0x111 && video_call_count == 5);
+        CHECK(video_calls[2] == 0x4F02 && video_calls[3] == 0x4F01 && video_calls[4] == 0x4F03);
+        video_active = true;
+        uint32_t value = 0x1234;
+        CHECK(!video_io(0, 0x1CE, 2, true, &value));
+        value = 0; CHECK(!video_io(0, 0x1CE, 2, false, &value) && value == 0x1234);
+        CHECK(video_io(0, 0xCF8, 4, true, &value) == -ENOSYS);
+        if (native) CHECK(video_io(0, 0x60, 1, false, &value) == -V86_EPERM);
+        video_active = false;
+        execution_fault = 2;
+        CHECK(biosvm_video_switch(0x112, m) == -V86_EIO && quarantined);
+        before = enters;
+        CHECK(biosvm_video_switch(0x111, m) == -V86_EIO && enters == before);
+        CHECK(!video_active && !vm_memory(0, 0xA0000, 1, false));
+        for (unsigned i = 0; i < video_lease_count; i++) CHECK(registry_get(video_leases[i].handle)->state == RS_QUARANTINED);
+    }
+    puts("PASS biosvm video: serialized 4F02(LFB)/4F01/4F03, query failure/restore, temporary aperture/leases, native-input isolation, timeout quarantine");
+}
+
 int main(void)
 {
     test_flags_interrupts();
@@ -1287,6 +1357,7 @@ int main(void)
     test_setup_failures();
     test_lease_failures();
     test_pm_timer();
+    test_video_calls();
     printf("firmware diagnostics: max=%u bytes (strictly below 240)\n", diagnostic_max);
     printf("v86/firmware host tests: %s (%u checks, %u failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;

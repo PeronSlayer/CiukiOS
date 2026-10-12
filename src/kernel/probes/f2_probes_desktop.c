@@ -65,7 +65,7 @@ static void desktop_activity_record(struct process *server, int32_t grant, const
 {
     struct desktop_activity a;
     desktop_activity_snapshot(&a);
-    struct ciuki_display_info info;
+    struct ciuki_framebuffer_info info;
     int err = grant_display_info(server, grant, &info);
     uint32_t digest = 0;
     if (!err) {
