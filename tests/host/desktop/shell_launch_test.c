@@ -26,12 +26,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #define CIUKI_RUNTIME_H
 #define CIUKI_RAW_H
 #define CU_PTR(p) ((uintptr_t)(p))
 static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }
 uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 int shell_close(int);
+static int shell_clock_gettime(clockid_t, struct timespec *);
+#define clock_gettime shell_clock_gettime
 #define fcntl shell_fcntl
 #define close shell_close
 #define main desktop_main
@@ -39,6 +42,35 @@ int shell_close(int);
 #undef main
 #undef close
 #undef fcntl
+#undef clock_gettime
+static int timing_model, trace_verbose;
+static uint64_t model_us;
+static struct {
+    uint64_t click_us, spawn_us, elf_us, configure_us, damage_us, frame_us;
+    uint64_t bytes;
+    unsigned image_requests, frames;
+} launch_timing;
+static unsigned model_elf_bytes, model_batch=2048;
+static int shell_clock_gettime(clockid_t clock, struct timespec *t)
+{
+    if (!timing_model) return clock_gettime(clock,t);
+    assert(clock==CLOCK_MONOTONIC);
+    t->tv_sec=(time_t)(model_us/1000000); t->tv_nsec=(long)(model_us%1000000)*1000;
+    return 0;
+}
+int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us)
+{
+    if (event==CIUKI_LAUNCH_STATUS) return trace_verbose;
+    assert(trace_verbose && timing_model);
+    if (event==CIUKI_LAUNCH_BEGIN) { assert(!pid); launch_timing.click_us=click_us; }
+    else {
+        assert(pid>0 && !click_us);
+        if (event==CIUKI_LAUNCH_CONFIGURE) launch_timing.configure_us=model_us;
+        else if (event==CIUKI_LAUNCH_DAMAGE) launch_timing.damage_us=model_us;
+        else { assert(event==CIUKI_LAUNCH_FRAME); launch_timing.frame_us=model_us; launch_timing.frames++; }
+    }
+    return 0;
+}
 static int fail_mapping, fail_spawn, pid_source=100;
 static char captured_report[CIUKI_PROBE_REPORT_MAX+1];
 uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,uint32_t b,uint32_t c,uint32_t e)
@@ -99,8 +131,17 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         } else assert(count==1);
         if (expect_test) assert(!strcmp(argv[at++],"--test=tasks"));
         assert(!argv[at]);
-    } else assert(!strcmp(path,"/Programs/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
+    } else if (!strcmp(path,"/Programs/control")) assert(!strcmp(argv[0],"control") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
+    else assert(!strcmp(path,"/Programs/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     if (fail_spawn) { errno=ENOEXEC; return -1; }
+    if (timing_model) {
+        launch_timing.spawn_us=model_us; launch_timing.bytes=model_elf_bytes;
+        launch_timing.image_requests=(model_elf_bytes+model_batch-1)/model_batch;
+        /* Explicit fixture model, not T23 calibration: 2 MiB/s disk and
+         * 6 us per loader request. The kernel harness verifies real batches. */
+        model_us+=(uint64_t)model_elf_bytes*1000000/(2u*1024u*1024u)+launch_timing.image_requests*6;
+        launch_timing.elf_us=model_us;
+    }
     return pid_source++;
 }
 static void drop_all(struct desktop *d)
@@ -470,6 +511,61 @@ static void test_menu_icons(void)
     drop_all(&d); fake_reset();
     puts("PASS menu icons: every menu 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
 }
+static void test_launch_timing(void)
+{
+    static const char *const names[]={"files","ciuknote","control"};
+    static const unsigned bytes[]={512u*1024u,384u*1024u,448u*1024u};
+    uint64_t totals[2][3];
+    trace_verbose=timing_model=1;
+    for(unsigned mode=0;mode<2;mode++) for(unsigned program=0;program<3;program++) {
+        struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
+        d.pixels=calloc(640*480,4); assert(d.pixels);
+        model_us=1000000; d.launch_click_ns=model_us*1000;
+        memset(&launch_timing,0,sizeof(launch_timing)); model_elf_bytes=bytes[program];
+        model_batch=mode ? 2048 : 512; model_us+=3000; /* menu close/channel setup fixture */
+        struct desk_program p; snprintf(p.name,sizeof(p.name),"%s",names[program]);
+        snprintf(p.path,sizeof(p.path),"/Programs/%s",p.name);
+        int pid=launch_program(&d,&p); assert(pid>0);
+        assert(desk_launch_wait(&d,model_us*1000)==1000000);
+        assert(desk_launch_wait(&d,(model_us+5000000)*1000)==10000000);
+        model_us+=1000+(mode ? 1000 : 10000); /* surface + CONFIGURE polling model */
+        window(&d,0,(uint32_t)pid,60,p.name);
+        assert(launch_timing.configure_us==model_us && !launch_timing.frames);
+        assert(!desk_redraw(&d) && !launch_timing.frames); /* CREATE is not the app's frame */
+        model_us+=15000+(mode ? 1000 : 10000); /* full app render + desktop polling model */
+        struct ciuki_message m; desk_message(&m,DESK_DAMAGE,20);
+        desk_put32(m.data+12,120); desk_put32(m.data+16,80); v2(&d,0,(uint32_t)pid,&m);
+        assert(!d.clients[0].awaiting_frame && d.clients[0].launch_frame_pending && !launch_timing.frames);
+        assert(desk_launch_wait(&d,model_us*1000)==10000000);
+        fake_fail_present=1;
+        assert(desk_redraw(&d)==-1 && !launch_timing.frames && d.clients[0].launch_frame_pending);
+        fake_fail_present=0; model_us+=1000;
+        assert(!desk_redraw(&d) && launch_timing.frames==1 && !d.clients[0].launch_frame_pending);
+        assert(!desk_redraw(&d) && launch_timing.frames==1);
+        totals[mode][program]=model_us-launch_timing.click_us;
+        printf("HOST_LAUNCH policy=%s name=%s click_us=%llu spawn_us=%llu elf_us=%llu configure_us=%llu damage_us=%llu first_frame_us=%llu total_us=%llu read_bytes=%llu image_requests=%u page_faults=0 model=2MiBps_6us_per_request\n",
+               mode ? "after" : "before",p.name,(unsigned long long)launch_timing.click_us,
+               (unsigned long long)launch_timing.spawn_us,(unsigned long long)launch_timing.elf_us,
+               (unsigned long long)launch_timing.configure_us,(unsigned long long)launch_timing.damage_us,
+               (unsigned long long)launch_timing.frame_us,(unsigned long long)totals[mode][program],
+               (unsigned long long)launch_timing.bytes,launch_timing.image_requests);
+        drop_all(&d); free(d.pixels);
+    }
+    for(unsigned i=0;i<3;i++) assert(totals[1][i]<totals[0][i]);
+    trace_verbose=timing_model=0;
+    fake_reset(); next_pair=20;
+    struct desktop d; desk_init(&d,&fake_ops,640,480);
+    struct desk_program p={"files","/Programs/files"};
+    assert(launch_program(&d,&p)>0 && !d.launch_mark); drop_all(&d); fake_reset(); next_pair=20;
+    timing_model=trace_verbose=1; model_us=1000000;
+    struct ciuki_input_event input={.type=CIUKI_INPUT_KEY,.code=0x1e,.value=1,.monotonic_ns=900000000};
+    desk_input(&d,&input); d.action=0; input.monotonic_ns=950000000; desk_input(&d,&input);
+    assert(d.launch_click_ns==900000000); /* later events cannot replace a deferred launching click */
+    assert(launch_program(&d,&p)>0 && d.launch_mark); /* console verbose after a quiet launch */
+    assert(launch_timing.click_us==900000 && !d.launch_click_ns);
+    drop_all(&d); fake_reset(); timing_model=trace_verbose=0;
+    puts("PASS launch timing: three policies/models, quiet mode, CREATE/DAMAGE/present distinction, failed present retry, no duplicate frames, bounded startup polling");
+}
 int main(void)
 {
     struct desktop d;
@@ -571,5 +667,6 @@ int main(void)
     test_note_scenario();
     test_games_menu();
     test_menu_icons();
+    test_launch_timing();
     return 0;
 }

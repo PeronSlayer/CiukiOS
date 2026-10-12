@@ -16,6 +16,12 @@ struct proc_object {
 };
 struct proc_fd { struct proc_object *object; uint32_t flags; };
 enum proc_state { PROC_PREPARING, PROC_LIVE, PROC_STOPPING, PROC_ZOMBIE };
+struct proc_launch {
+    uint64_t click_us, spawn_us, elf_us, surface_us, configure_us, damage_us, frame_us;
+    uint64_t volume_bytes, volume_reads, disk_bytes, disk_reads, image_bytes, image_reads;
+    uint32_t volume_max, disk_max, image_max, page_faults;
+    bool active, configured, damaged, finished;
+};
 struct process {
     uint32_t pid, ppid, pgid, slot;
     enum proc_state state;
@@ -35,10 +41,14 @@ struct process {
      * g_ticks value at publication. */
     char name[CIUKI_PROC_NAME_MAX];
     uint64_t start_tick;
+    struct proc_launch launch;
+    uint64_t launch_click_us;
+    bool launch_pending;
 };
 struct proc_thread {
     uint32_t tid, slot, value, tls, stack_base, stack_bytes;
     struct process *process;
+    struct process *launch_loading; /* provisional child for this thread's spawn I/O */
     struct task *task;
     uint64_t mask, pending;
     struct ua_pin tls_pin;
@@ -94,6 +104,15 @@ int proc_thread_join(uint32_t tid, uint32_t value);
 int proc_thread_detach(uint32_t tid);
 int proc_tls_set(uint32_t base, uint32_t bytes);
 int32_t proc_syscall(struct trap_frame *tf);
+uint64_t proc_launch_now(void);
+bool proc_launch_enabled(void);
+void proc_launch_start(struct process *parent, struct process *child, uint64_t spawn_us, uint64_t click_us);
+void proc_launch_elf(struct process *child);
+void proc_launch_volume_read(uint32_t requested, size_t done);
+void proc_launch_disk_read(uint32_t bytes);
+void proc_launch_image_read(uint32_t bytes);
+void proc_launch_surface(struct process *p);
+int proc_launch_mark(struct process *caller, uint32_t event, uint32_t pid, uint64_t click_us);
 /* f2-33: enumeration and the delegated termination authority. */
 void proc_set_name(struct process *p, const char *path);
 unsigned proc_list_snapshot(struct ciuki_proc_record *out, unsigned capacity, unsigned *total);

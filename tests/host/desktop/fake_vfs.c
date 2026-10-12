@@ -8,6 +8,7 @@
 struct fake_node fake_nodes[FAKE_NODES];
 static struct { int node, live; unsigned offset; } fds[16];
 int fake_countdown, fake_operations, fake_metadata_count, fake_short_io;
+struct fake_read_stats fake_reads;
 
 static int injection(void) { fake_operations++; return fake_countdown > 0 && --fake_countdown == 0 ? -EIO : 0; }
 static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
@@ -108,12 +109,15 @@ static int open_node(void *ctx, const char *p, int make)
 
 static int read_node(void *ctx, int fd, void *p, unsigned size)
 {
+    fake_reads.calls++; fake_reads.requested += size;
+    if (size > fake_reads.max_request) fake_reads.max_request = size;
     (void)ctx; int r = injection(); if (r) return r;
     assert(fds[fd].live); struct fake_node *n = &fake_nodes[fds[fd].node];
     unsigned count = (unsigned)n->meta.size - fds[fd].offset;
     if (count > size) count = size;
     if (fake_short_io && count > 113) count = 113;
     memcpy(p, n->data + fds[fd].offset, count); fds[fd].offset += count;
+    fake_reads.bytes += count;
     return (int)count;
 }
 
@@ -143,6 +147,7 @@ void fake_reset(void)
 {
     memset(fake_nodes, 0, sizeof(fake_nodes)); memset(fds, 0, sizeof(fds));
     fake_countdown = fake_operations = fake_metadata_count = fake_short_io = 0;
+    memset(&fake_reads, 0, sizeof(fake_reads));
     fake_create("/", FM_DIR);
 }
 

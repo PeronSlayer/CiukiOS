@@ -29,7 +29,9 @@ static int read_at(const struct ciuki_file *f, uint32_t off, void *dst, uint32_t
         return -EINTR;
     if (!file_range(f, off, bytes))
         return -ENOEXEC;
-    return f->read(f->cookie, off, dst, bytes);
+    int err = f->read(f->cookie, off, dst, bytes);
+    if (!err) proc_launch_image_read(bytes);
+    return err;
 }
 
 int elf_validate(const struct ciuki_file *f, struct elf_image *image)
@@ -116,7 +118,9 @@ int elf_load(const struct ciuki_file *file, const struct elf_image *image, struc
 {
     /* The caller owns a provisional address space; every failure destroys
      * it through proc_discard, so no partially loaded child is published. */
-    uint8_t buffer[512];
+    /* Snapshot reads are RAM copies, not ATA requests. Batch within the 4 KiB
+     * kernel frame bound, without allocating cleanup-sensitive scratch. */
+    uint8_t buffer[2048];
     for (unsigned i = 0; i < image->count; i++) {
         struct process *caller = proc_current();
         if (caller && caller->state == PROC_STOPPING)

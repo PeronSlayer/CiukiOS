@@ -260,6 +260,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         desk_move(d, i, 20 + i * 18, DESK_BAR + 20 + i * 18);
         desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
         configure(d, i, 1);
+        if (c->awaiting_frame && d->launch_mark) d->launch_mark(CIUKI_LAUNCH_CONFIGURE,c->pid,0);
         if (d->shell && d->menu_open) {
             c->order=++d->order; d->menu_focus=i;
             desk_message(&reply,DESK_FOCUS,8); desk_queue(d,i,&reply);
@@ -273,7 +274,6 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_DAMAGE: {
-        c->awaiting_frame = 0;   /* its first frame: a launched program is ready for input (desktop.c) */
         if (p.serial) {
             void *pixels = d->ops.map(m->fds[0], PROT_READ);
             if (!pixels || pixels == MAP_FAILED) { close_attachments(d, m, -1); desk_drop_client(d, i); return; }
@@ -283,11 +283,17 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             configure(d, i, 1);
             /* A superseded request already in flight may commit; keep the
              * newest frame geometry and clip this surface until its swap. */
-            break;
+        } else {
+            struct desk_box b = desk_content(c);
+            b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
+            if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
         }
-        struct desk_box b = desk_content(c);
-        b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
-        if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
+        /* A valid replacement surface can also carry the first rendered frame. */
+        if (c->awaiting_frame) {
+            c->launch_frame_pending = 1;
+            if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_DAMAGE,c->pid,0);
+        }
+        c->awaiting_frame = 0;
         break;
     }
     case DESK_SET_TITLE:

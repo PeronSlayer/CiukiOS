@@ -285,6 +285,12 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/proc_test"
 "$out/proc_test"
 
+# f2-39: production launch markers and ELF batches, fake monotonic clock/I/O.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/proc/launch_test.c" \
+    "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/launch_test"
+"$out/launch_test"
+
 # Replay signal-probe timing with the production run queues/dispatch/timer.
 # Extract only these functions: architectural stack creation cannot run on
 # the host. No scheduler policy or function body is replaced by a test model.

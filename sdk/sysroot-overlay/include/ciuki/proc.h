@@ -14,4 +14,9 @@ int ciuki_proc_list(void *buffer, uint32_t bytes);
 /* SIGTERM or SIGKILL; authority_fd < 0 requests without the delegated
  * authority (descendants only). Returns 0 or -1 with errno. */
 int ciuki_proc_terminate(ciuki_pid_t pid, int signo, int authority_fd);
+/* STATUS returns 1 in verbose mode, 0 in quiet mode. BEGIN's click timestamp
+ * is CLOCK_MONOTONIC in microseconds; other markers use pid and click_us=0.
+ * Markers are restricted to the supervisor's desktop and its direct children.
+ * Returns 0 (or STATUS's result), or -1 with errno. */
+int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
 #endif

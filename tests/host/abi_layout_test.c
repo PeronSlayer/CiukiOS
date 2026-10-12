@@ -12,6 +12,12 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_SYS_DOSVM", (uint32_t)(CIUKI_SYS_DOSVM), 72u},
     /* Power control (execution-abi.md, amendment 2026-10-12). */
     {"constant.CIUKI_SYS_POWER", (uint32_t)(CIUKI_SYS_POWER), 73u},
+    {"constant.CIUKI_SYS_LAUNCH_MARK", (uint32_t)(CIUKI_SYS_LAUNCH_MARK), 74u},
+    {"constant.CIUKI_LAUNCH_STATUS", CIUKI_LAUNCH_STATUS, 0u},
+    {"constant.CIUKI_LAUNCH_BEGIN", CIUKI_LAUNCH_BEGIN, 1u},
+    {"constant.CIUKI_LAUNCH_CONFIGURE", CIUKI_LAUNCH_CONFIGURE, 2u},
+    {"constant.CIUKI_LAUNCH_DAMAGE", CIUKI_LAUNCH_DAMAGE, 3u},
+    {"constant.CIUKI_LAUNCH_FRAME", CIUKI_LAUNCH_FRAME, 4u},
     {"constant.CIUKI_POWER_REBOOT", (uint32_t)(CIUKI_POWER_REBOOT), 1u},
     {"constant.CIUKI_POWER_OFF", (uint32_t)(CIUKI_POWER_OFF), 2u},
     {"constant.CIUKI_POWER_QUERY", (uint32_t)(CIUKI_POWER_QUERY), 3u},

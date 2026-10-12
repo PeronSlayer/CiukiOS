@@ -86,8 +86,26 @@ static void computer_tests(void)
     puts("PASS Files Computer model: one/two volumes, drive paths both ways, case/separators/limits, hidden nodes, drive Up/history, protected drives");
 }
 
+static void read_accounting(void)
+{
+    fake_reset(); fake_file("/read.bin",4097,5);
+    int fd=fake_vfs.open(NULL,"/read.bin",0); assert(fd>=0);
+    unsigned char buffer[4096];
+    assert(fake_vfs.read(NULL,fd,buffer,sizeof(buffer))==4096 && buffer[0]==5);
+    assert(fake_vfs.read(NULL,fd,buffer,sizeof(buffer))==1);
+    assert(fake_vfs.read(NULL,fd,buffer,sizeof(buffer))==0);
+    assert(fake_reads.calls==3 && fake_reads.bytes==4097 && fake_reads.requested==12288 && fake_reads.max_request==4096);
+    assert(!fake_vfs.close(NULL,fd)); fd=fake_vfs.open(NULL,"/read.bin",0); assert(fd>=0);
+    fake_short_io=1; assert(fake_vfs.read(NULL,fd,buffer,sizeof(buffer))==113);
+    fake_countdown=1; assert(fake_vfs.read(NULL,fd,buffer,sizeof(buffer))==-EIO);
+    assert(fake_reads.calls==5 && fake_reads.bytes==4210 && fake_reads.requested==20480);
+    assert(!fake_vfs.close(NULL,fd)); fake_assert_clean();
+    fake_reset(); assert(!fake_reads.calls && !fake_reads.bytes && !fake_reads.max_request);
+    puts("PASS VFS read accounting: requested/returned bytes, sizes, short reads, EOF, errors, reset");
+}
 int main(void)
 {
+    read_accounting();
     computer_tests();
     /* Paths and names. */
     char out[FM_PATH];
