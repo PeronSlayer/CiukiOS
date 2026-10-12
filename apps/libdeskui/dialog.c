@@ -274,6 +274,7 @@ void du_dialog_close(struct du_ui *u)
 static void finish(struct du_ui *u, int index)
 {
     struct du_dialog *d = &u->dialog;
+    if (d->accept && d->accept(u, index, d->accept_ctx)) { u->dirty = 1; return; }
     char text[DU_TEXT_MAX] = "";
     if (d->kind == DU_DLG_INPUT) snprintf(text, sizeof(text), "%s", d->items[2].text);
     if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && index == 0) join(text, d->folder, d->items[F_NAME].text);
@@ -340,6 +341,7 @@ static void process(struct du_ui *u)
         } else if (e->type == DU_EV_COMMIT && e->id == ID_NAME) accept_file(u);
         else if (e->type == DU_EV_COMMIT && e->id == ID_FOLDER) { if (navigate(u, d->items[F_FOLDER].text)) du_set_text(&d->items[F_FOLDER], d->folder); }
         else if (e->type == DU_EV_COMMIT && e->id == ID_EDIT) finish(u, 0);
+        else if (e->type == DU_EV_COMMIT && d->accept) finish(u, 0);
         else if (e->type == DU_EV_CANCEL) finish(u, d->cancel);
     }
 }
@@ -367,6 +369,9 @@ void du_dialog_key(struct du_ui *u, unsigned code)
     }
     if (f && f->kind == DU_EDIT) { int handled = 0; DIALOG_CALL(handled = du_edit_key(u, f, code)); if (handled) return; }
     if (f && f->kind == DU_LISTVIEW) { int handled = 0; DIALOG_CALL(handled = du_list_key(u, f, code)); if (handled) return; }
+    if (f && (f->kind == DU_CHECKBOX || f->kind == DU_RADIO)) {
+        int handled = 0; DIALOG_CALL(handled = du_widget_key(u, f, code)); if (handled) return;
+    }
     if (code == DU_KEY_ENTER || (code == DU_KEY_SPACE && f && f->kind == DU_BUTTON)) {
         int index = f && f->kind == DU_BUTTON ? (f->id == ID_UP ? -1 : ID_BUTTON - f->id) : 0;
         if (f && f->id == ID_UP) { parent_folder(u); return; }

@@ -37,6 +37,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:help", "help-browser"},
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
+    {"program:paint", "applications-graphics"},
 
     /* Start menu */
     {"menu:*", "application-x-executable"},

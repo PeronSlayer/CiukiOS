@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+"""Sequential native CiukPaint harness; no guest, full image or variants."""
+import hashlib
+import importlib.util
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[3]
+TOOLKIT = ["draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"]
+
+
+class PaintTests(unittest.TestCase):
+    def test_application(self):
+        parent = ROOT / "build/host"; parent.mkdir(parents=True, exist_ok=True)
+        renders = ROOT / "build/f2-40"; renders.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="paint-", dir=parent) as temp:
+            spec = importlib.util.spec_from_file_location("paint_icons", ROOT / "tests/host/desktop/icon_assets.py")
+            icons = importlib.util.module_from_spec(spec); spec.loader.exec_module(icons)
+            sources = [*(f"apps/libdeskui/{s}.c" for s in TOOLKIT), "apps/desktop/compositor.c", "apps/desktop/theme.c",
+                       "apps/paint/paint.c", "apps/paint/io.c", "apps/paint/stb.c", "tests/host/desktop/paint_test.c"]
+            binary = Path(temp) / "paint"
+            flags = ["clang", "-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
+                     "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-ffunction-sections", "-fdata-sections",
+                     "-Wl,--gc-sections", "-I", str(ROOT / "src/kernel/include"), *icons.defines()]
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            subprocess.run([*flags, *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)], check=True, env=env)
+            one, two = Path(temp) / "one", Path(temp) / "two"
+            one.mkdir(); two.mkdir()
+            result = subprocess.run([str(binary), str(one), str(renders)], capture_output=True, text=True, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("paint: PASS", result.stdout)
+            first = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in renders.glob("paint-*.png")}
+            self.assertEqual(len(first), 7)
+            result = subprocess.run([str(binary), str(two), str(renders)], capture_output=True, text=True, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("paint: PASS", result.stdout)
+            self.assertEqual(first, {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in renders.glob("paint-*.png")})
+            (renders / "renders.sha256").write_text("".join(f"{digest}  {name}\n" for name, digest in sorted(first.items())))
+
+    def test_font_and_writer_provenance(self):
+        data = (ROOT / "third_party/stb/stb_image_write.h").read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), "cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05")
+        self.assertIn(b"ALTERNATIVE A - MIT License", data)
+        header = (ROOT / "apps/paint/default_font.h").read_text().split("= {", 1)[1]
+        native = bytes(int(n) for n in re.findall(r"\d+", header))
+        self.assertEqual(native, (ROOT / "assets/fonts/native/CIUKIOS.CFN").read_bytes()[64:])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -14,7 +14,8 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"clock", "Clock", "appointment-new", 0, ""},   /* a clock face; Settings > Date & Time keeps office-calendar */
     {"help", "CiukiOS Help", "help-browser", 1, ""},
     {"mixer", "Volume Control", "audio-volume-high", 0, ""},
-    {"viewer", "Image Viewer", "image-x-generic", 1, "png|jpg|jpeg|jpe|bmp|gif|xrgb"},
+    {"paint", "CiukPaint", "applications-graphics", 1, "bmp|png"},
+    {"viewer", "Image Viewer", "image-x-generic", 1, "jpg|jpeg|jpe|gif|xrgb"},
 };
 #define DESK_CATALOG_COUNT (sizeof(desk_catalog) / sizeof(desk_catalog[0]))
 /* Pre-installed DOS games (owner decision 2026-10-12): the shareware
@@ -34,6 +35,31 @@ static const struct desk_game_entry desk_games[] = {
 static inline const struct desk_catalog_entry *desk_catalog_find(const char *name)
 {
     for (unsigned i = 0; i < DESK_CATALOG_COUNT; i++) if (!strcmp(desk_catalog[i].name, name)) return &desk_catalog[i];
+    return 0;
+}
+/* Default file association, shared by Files and the shell. Case-insensitive
+ * extension tokens; the first matching catalogue entry wins. */
+static inline const struct desk_catalog_entry *desk_catalog_file(const char *path)
+{
+    const char *ext = strrchr(path, '.');
+    if (!ext || !ext[1] || strchr(ext, '/')) return 0;
+    ext++;
+    for (unsigned i = 0; i < DESK_CATALOG_COUNT; i++) {
+        const char *token = desk_catalog[i].extensions;
+        while (*token) {
+            const char *end = strchr(token, '|'); size_t n = end ? (size_t)(end - token) : strlen(token);
+            if (strlen(ext) == n) {
+                size_t k;
+                for (k = 0; k < n; k++) {
+                    unsigned c = (unsigned char)ext[k]; if (c >= 'A' && c <= 'Z') c += 32;
+                    if (c != (unsigned char)token[k]) break;
+                }
+                if (k == n) return &desk_catalog[i];
+            }
+            if (!end) break;
+            token = end + 1;
+        }
+    }
     return 0;
 }
 #endif

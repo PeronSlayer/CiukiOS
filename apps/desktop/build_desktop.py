@@ -25,6 +25,7 @@ ACCESSORIES = {
     "clock": ["clock_main.c", "clock_view.c", "clock_model.c"],
     "help": ["help_main.c", "help_view.c", "help_topics.c"],
     "mixer": ["mixer_main.c", "mixer_view.c"],
+    "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
 }
 PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", *ACCESSORIES)
@@ -47,12 +48,14 @@ def digest(path):
 def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
-                                 ROOT / "apps/ciukide", ROOT / "apps/accessories", ROOT / "third_party/stb")
+                                 ROOT / "apps/ciukide", ROOT / "apps/accessories", ROOT / "apps/paint",
+                                 ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
                  "assets/sounds/kenney-interface/upstream.zip"))
     files.append(ROOT / "assets/brand/ciuki-logo.png")
+    files.append(ROOT / "assets/fonts/LICENSES.TXT")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
     files.extend(ROOT / "assets/icons" / name for name in ICON_NOTICES.values())
     # UI fonts (apps/desktop/ui_fonts.h is generated from these by convert_fonts.py).

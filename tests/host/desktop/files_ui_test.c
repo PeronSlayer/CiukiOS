@@ -53,7 +53,13 @@ static int control_spawn(struct files_app *a, const char *program, char *const a
     control_spawned++; return 77;
 }
 static int spawned;
-static int on_spawn(struct files_app *a, const char *program, char *const argv[]) { (void)a; (void)argv; spawned++; return strcmp(program, "/Programs/hello") ? -2 : 77; }
+static char launched[80], launch_path[FM_PATH];
+static int on_spawn(struct files_app *a, const char *program, char *const argv[])
+{
+    (void)a; spawned++; snprintf(launched,sizeof(launched),"%s",program);
+    snprintf(launch_path,sizeof(launch_path),"%s",argv[1]?argv[1]:"");
+    return !strcmp(program,"/Programs/hello") || !strcmp(program,"/Programs/paint") || !strcmp(program,"/Programs/viewer") ? 77 : -2;
+}
 static int portrait(uint32_t *p)
 {
     if (!portrait_path) return -1;
@@ -313,7 +319,7 @@ int main(int argc, char **argv)
     key(DU_KEY_ENTER); assert(spawned == 1);
     /* f2-32: the desktop's refusal of a LAUNCH request (CiukNote) is reported in a dialog. */
     files_launch_failed(&app, EPERM);
-    assert(ui.dialog.kind == DU_DLG_MESSAGE && strstr(ui.dialog.text, "Cannot start CiukNote:") && strstr(ui.dialog.text, "Access is denied"));
+    assert(ui.dialog.kind == DU_DLG_MESSAGE && strstr(ui.dialog.text, "Cannot start the application:") && strstr(ui.dialog.text, "Access is denied"));
     key(DU_KEY_ENTER); assert(!ui.dialog.kind);
     /* Help and About dialogs. */
     key(DU_KEY_F1); dump("help"); key(DU_KEY_ESC);
@@ -332,6 +338,19 @@ int main(int argc, char **argv)
     files_destroy(&app);
     fake_assert_clean();
     computer_ui_tests();
+    /* Default associations run through the actual Files controller. */
+    fake_image_tree(); fake_file("/Programs/paint",100,1); fake_file("/Programs/viewer",100,1);
+    fake_file("/Documents/Test.BMP",100,1); fake_file("/Documents/Other.PNG",100,1); fake_file("/Documents/Photo.jpg",100,1);
+    du_init(&ui,pixels,WIDTH,HEIGHT); memset(&app,0,sizeof(app));
+    assert(!files_setup(&app,&ui,&fake_vfs,"/Documents")); app.spawn=on_spawn;
+    const char *names[]={"Test.BMP","Other.PNG","Photo.jpg"};
+    for (unsigned i=0;i<3;i++) {
+        int row=list_find(names[i]); assert(row>=0); app.model.active=(unsigned)row;
+        fm_select(&app.model,(unsigned)row,0); files_update(&app); key(DU_KEY_ENTER);
+        assert(!ui.dialog.kind && !strcmp(launched,i==2?"/Programs/viewer":"/Programs/paint"));
+        assert(strstr(launch_path,names[i]));
+    }
+    files_destroy(&app); fake_assert_clean();
     free(pixels);
     puts("PASS Files UI: script checkpoints 1-5, views, sorting, selection, context menus, properties, replace, Copy of, rename errors, tree, address, open, help/about");
     return 0;
