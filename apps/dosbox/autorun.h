@@ -1,4 +1,4 @@
-/* /bin/dosbox COMMAND: what the window types at the DOS prompt once its VM
+/* /Programs/dosbox COMMAND: what the window types at the DOS prompt once its VM
  * is running and the window has the input focus (owner decision 2026-10-12:
  * Programs > Games starts "dosbox --name=DOOM \DOOM\DOOM.EXE -config CIUKI.CFG").
  * The VM has no command channel (syscall 72 is unchanged): the program types

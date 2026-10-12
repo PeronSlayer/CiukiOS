@@ -5,6 +5,13 @@ grants and the desktop's separate process group. See
 [the desktop guide](../../docs/desktop.md) for wire layout, launch arguments,
 limits, input recovery, research, evidence and f2-09 integration requirements.
 
+The canonical image installs native programs in `/Programs`. The desktop uses
+`PATH=/Programs` and `HOME=/Documents`, opens `/Documents` from its Documents
+icon, and keeps the recent list at `/Documents/recent.lst`. The boot-volume
+folders display as `Programs`, `Documents`, `System` and `Games`; runtime
+`/system` paths continue to resolve through case-insensitive lookup (owner
+decision 2026-10-12, f2-35).
+
 Build the existing SDK first, then run:
 
 ```sh

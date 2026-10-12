@@ -66,7 +66,7 @@ class AppGateTests(unittest.TestCase):
         cls.expected = cls.suite["cases"][0]["expected"]
         pins = json.loads((ROOT / "config/sdk-pins.json").read_text())
         cls.sources = {}
-        for name, data in (("/bin/lua", b"fake SDK ELF"),
+        for name, data in (("/Programs/lua", b"fake SDK ELF"),
                            ("/system/tests/lua-5.4.8-tests/all.lua", b"fake upstream tests"),
                            ("/system/tests/lua-5.4.8-tests/libs/P1/lib1.c", b"fake upstream library"),
                            ("/system/tests/ciuki-f2.lua", (ROOT / "apps/lua/ciuki-f2.lua").read_bytes()),
@@ -149,8 +149,8 @@ class AppGateTests(unittest.TestCase):
         self.assertEqual(len(result["application_output"]["guest_console_captures"]), 4)
         self.assertTrue(all(item["match"] for item in result["payload_hash_comparisons"]))
         self.assertEqual(result["argv"], ["lua", "-e", "_U=true", "all.lua"])
-        self.assertEqual(result["env"], {"LC_ALL":"C", "TZ":"UTC0", "HOME":"/home",
-                                      "TMPDIR":"/tmp", "PATH":"/bin"})
+        self.assertEqual(result["env"], {"LC_ALL":"C", "TZ":"UTC0", "HOME":"/Documents",
+                                      "TMPDIR":"/tmp", "PATH":"/Programs"})
         self.assertEqual(result["declared_exclusions"]["complete"], "excluded_by_contract")
 
     def test_named_identity_growth_is_exactly_attributed(self):
@@ -248,7 +248,7 @@ static struct proc_strings strings;
 struct process *proc_supervisor(void) { return &parent; }
 static int lookup(void *cwd, const char *path, struct ciuki_file *out) {
     (void)cwd; (void)out;
-    if (strcmp(path, "/bin/lua")) abort();
+    if (strcmp(path, "/Programs/lua")) abort();
     return 0;
 }
 const struct ciuki_file_ops *proc_get_file_ops(void) {
@@ -387,13 +387,13 @@ int main(void) {
         self.assertIn('f"{TEST_PATH}/ciuki-f2.lua": LUA / "ciuki-f2.lua"', image)
         self.assertEqual(self.sources["/system/tests/ciuki-f2.lua"].read_bytes(),
                          self.sources["/system/tests/lua-5.4.8-tests/ciuki-f2.lua"].read_bytes())
-        target = self.sources["/bin/lua"]; original = target.read_bytes()
+        target = self.sources["/Programs/lua"]; original = target.read_bytes()
         try:
             target.write_bytes(b"wrong ELF")
             self.assertEqual(self.parse(self.output()).outcome, "fail")
         finally: target.write_bytes(original)
         for bad in ("", self.provenance.replace("M sdk_manifest", "M bad_manifest", 1),
-                    self.provenance+"P /bin/lua CIUKI_TEST\n", self.provenance.rstrip("\n")):
+                    self.provenance+"P /Programs/lua CIUKI_TEST\n", self.provenance.rstrip("\n")):
             try:
                 self.provenance_path.write_text(bad)
                 self.assertEqual(self.parse(self.output()).outcome, "fail")

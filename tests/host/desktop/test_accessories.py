@@ -101,7 +101,7 @@ class AccessoriesTests(unittest.TestCase):
         self.assertEqual(self.run_native("calc"), self.run_native("calc"))
 
     def test_catalog_registration(self):
-        """Every catalog entry is built, installed in /bin and has a Tango icon in the theme archive."""
+        """Every catalog entry is built, installed in /Programs and has a Tango icon in the theme archive."""
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
@@ -110,7 +110,7 @@ class AccessoriesTests(unittest.TestCase):
         self.assertEqual(set(build.ACCESSORIES), set(names))
         image = (ROOT / "scripts/build_image.py").read_text()
         for name in names:
-            self.assertIn(f'"/bin/{name}": DESKTOP / "{name}"', image)
+            self.assertIn(f'"/Programs/{name}": DESKTOP / "{name}"', image)
         self.assertIn('"/system/licenses/stb_image.txt"', image)
         listing = subprocess.run(["tar", "tzf", str(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")],
                                  check=True, capture_output=True, text=True).stdout
@@ -133,7 +133,7 @@ class AccessoriesTests(unittest.TestCase):
         sources, directories, _ = image.desktop_payloads()
         for name in build.ACCESSORIES:
             self.assertIn(name, manifest["elf"])
-            self.assertEqual(sources[f"/bin/{name}"], build.OUT / name)
+            self.assertEqual(sources[f"/Programs/{name}"], build.OUT / name)
         self.assertIn("/system/licenses", directories)
 
 

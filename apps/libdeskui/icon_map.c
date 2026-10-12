@@ -11,7 +11,7 @@
 #include <string.h>
 
 const struct du_icon_map du_icon_map[] = {
-    /* /bin programs (the desktop menu lists /bin) */
+    /* /Programs programs (the desktop menu lists /Programs) */
     {"program:*", "application-x-executable"},
     {"program:files", "system-file-manager"},
     {"program:control", "preferences-desktop"},
@@ -339,7 +339,7 @@ const char *du_icon_name(const char *object)
     return exact(kind);
 }
 
-/* Directory, then a native executable (by its /bin program name), then the
+/* Directory, then a native executable (by its /Programs program name), then the
  * extension (case-insensitive), then the unknown-file icon. */
 const char *du_icon_file(const char *filename, int directory, int executable)
 {

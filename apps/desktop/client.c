@@ -318,7 +318,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     case DESK_END_TASK: case DESK_SWITCH_TO: case DESK_LAUNCH: {
         /* The Task Manager holds every request. Files, which the desktop itself launched, may only
-         * LAUNCH /bin/ciuknote with one absolute path argument (opening a text file). */
+         * LAUNCH /Programs/ciuknote with one absolute path argument (opening a text file). */
         int files_open = p.opcode == DESK_LAUNCH && c->program == DESK_APP_FILES && !c->taskman &&
                          (!strcmp(p.title, "ciuknote") || desk_catalog_takes_file(p.title)) && p.argument[0] == '/';
         int32_t result = !c->taskman && !files_open ? -EPERM :
@@ -402,7 +402,7 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
     if (d->shell) desk_close_timeouts(d);
 }
 
-/* A bounded /bin entry parser, independent of directory enumeration order.
+/* A bounded /Programs entry parser, independent of directory enumeration order.
  * This is an admission filter, never a replacement for kernel ELF validation. */
 int desk_program_add(struct desktop *d, const char *name, const uint8_t *elf, size_t n)
 {
@@ -421,14 +421,14 @@ int desk_program_add(struct desktop *d, const char *name, const uint8_t *elf, si
     for (size_t k=0; k<=len; k++) lower[k] = name[k]>='A' && name[k]<='Z' ? name[k]+32 : name[k];
     if (!strcmp(lower,"desktop")) return 0;
     unsigned at = 0;
-    while (at < d->program_count && strcmp(d->programs[at].path+5,name) < 0) at++;
-    if (at < d->program_count && !strcmp(d->programs[at].path+5,name)) return 0;
+    while (at < d->program_count && strcmp(d->programs[at].name,name) < 0) at++;
+    if (at < d->program_count && !strcmp(d->programs[at].name,name)) return 0;
     if (at >= DESK_MENU_MAX) return 0;
     unsigned count = d->program_count < DESK_MENU_MAX ? d->program_count+1 : DESK_MENU_MAX;
     memmove(d->programs+at+1,d->programs+at,(count-at-1)*sizeof(d->programs[0]));
     struct desk_program *p = &d->programs[at];
     memcpy(p->name,name,len+1);
-    snprintf(p->path,sizeof(p->path),"/bin/%s",name);
+    snprintf(p->path,sizeof(p->path),"/Programs/%s",name);
     d->program_count = count;
     return 1;
 }
@@ -507,7 +507,7 @@ int desk_shell_click(struct desktop *d)
 { return desk_shell_button(d, CIUKI_BUTTON_LEFT, 1); }
 
 /* f2-33 task-manager requests. Only a client the desktop itself launched as
- * /bin/tasks (taskman) reaches these; every result is a TASK_RESULT. */
+ * /Programs/tasks (taskman) reaches these; every result is a TASK_RESULT. */
 static int window_slot(const struct desktop *d, uint32_t id)
 {
     for (int i=0; i<DESK_CLIENTS; i++) if (id && d->clients[i].window && d->clients[i].window_id==id) return i;
@@ -573,7 +573,7 @@ int desk_task_switch(struct desktop *d, uint32_t window_id)
 int desk_task_launch_args(struct desktop *d, const char *name, const char *const *args, unsigned count)
 {
     if (!count || count > sizeof(d->launch_argv) / sizeof(d->launch_argv[0])) return -EINVAL;
-    if (!strncmp(name,"/bin/",5)) name+=5;
+    if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
         if (!d->launch) return -ENOSYS;
         for (unsigned a=0; a<count; a++) d->launch_argv[a]=args[a];
@@ -586,7 +586,7 @@ int desk_task_launch_args(struct desktop *d, const char *name, const char *const
 }
 int desk_task_launch(struct desktop *d, const char *name, const char *argument)
 {
-    if (!strncmp(name,"/bin/",5)) name+=5;
+    if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
         if (!d->launch) return -ENOSYS;
         d->launch_arg=argument && argument[0] ? argument : NULL;

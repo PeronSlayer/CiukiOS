@@ -14,5 +14,5 @@ int fake_lookup(const char *);
 int fake_create(const char *, enum fm_type);
 int fake_file(const char *, unsigned size, unsigned char seed);
 void fake_assert_clean(void);
-void fake_image_tree(void);   /* mirrors the canonical image's / , /bin and /system */
+void fake_image_tree(void);   /* mirrors the canonical image's / , /Programs and /system */
 #endif

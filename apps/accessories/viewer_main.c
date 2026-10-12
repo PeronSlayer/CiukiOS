@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/viewer: the CiukiOS Image Viewer (desktop client, protocol v2).
+ * /Programs/viewer: the CiukiOS Image Viewer (desktop client, protocol v2).
  * Usage: viewer [--channel-fd=N] [--test=viewer] [path] */
 #include "viewer.h"
 #include <errno.h>

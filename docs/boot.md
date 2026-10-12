@@ -17,7 +17,7 @@ pressed in the menu window.
 3. The loader sets the VBE mode (black screen) and loads `VMM.ELF`.
 4. The kernel draws the boot splash, the original Ciuki photograph
    (`misc/CiukiOS_SplashScreen.png`), as soon as it maps the framebuffer,
-   and then draws no log line. The splash stays until `/bin/desktop` takes
+   and then draws no log line. The splash stays until `/Programs/desktop` takes
    the display (its display grant) and paints over it.
 5. The desktop.
 

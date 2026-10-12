@@ -198,7 +198,7 @@ static void file_close_snapshot(void *cookie) { fclose(cookie); }
 static int file_open_snapshot(void *cwd, const char *path, struct ciuki_file *out)
 {
     (void)cwd;
-    if (!strcmp(path,"/bin/desktop")) { *out=(struct ciuki_file){0}; return 0; }
+    if (!strcmp(path,"/Programs/desktop")) { *out=(struct ciuki_file){0}; return 0; }
     char host[1024]; snprintf(host,sizeof(host),"%s%s",directory,path);
     FILE *file=fopen(host,"rb"); if (!file) return -ENOENT;
     fseek(file,0,SEEK_END); long size=ftell(file);
@@ -243,10 +243,10 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     memory[slot]=(struct uaddr){.heap_base=0x100000,.brk=0x100000,.as={.pages=20},.backing=20,.head=&stacks[slot]};
     p->memory=&memory[slot]; proc_publish(p,CIUKI_SPAWN_NEW_GROUP);
     if (desktop) {
-        if (strcmp(path,"/bin/desktop") || strcmp(argv[0],"desktop") || argv[1] || cwd) abort();
+        if (strcmp(path,"/Programs/desktop") || strcmp(argv[0],"desktop") || argv[1] || cwd) abort();
         server=p;
     } else {
-        if (strcmp(path,"/bin/lua") || strcmp(cwd,"/system/tests/lua-5.4.8-tests") || strcmp(argv[0],"lua")) abort();
+        if (strcmp(path,"/Programs/lua") || strcmp(cwd,"/system/tests/lua-5.4.8-tests") || strcmp(argv[0],"lua")) abort();
         run_number++;
         if (run_number==1) { if (strcmp(argv[1],"-e") || strcmp(argv[2],"_U=true") || strcmp(argv[3],"all.lua") || argv[4]) abort(); }
         else if (strcmp(argv[1],"ciuki-f2.lua") || argv[2]) abort();
@@ -258,7 +258,7 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
 int supervisor_spawn_standin(struct process *owner, struct process **out)
 {
     const char *argv[]={"desktop",0};
-    int result=supervisor_spawn("/bin/desktop",argv,0,true,out); (*out)->ppid=owner->pid; return result;
+    int result=supervisor_spawn("/Programs/desktop",argv,0,true,out); (*out)->ppid=owner->pid; return result;
 }
 static void output(unsigned stream, const char *text)
 {

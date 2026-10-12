@@ -186,12 +186,12 @@ class IconStoreTests(unittest.TestCase):
             self.assertIn(obj, table)
             if tango:
                 self.assertEqual(table[obj], tango, obj)
-        programs = set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text()))
+        programs = set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text()))
         self.assertEqual({p for p in programs if f"program:{p}" not in table}, set())
         for obj, tango in table.items():
             if tango == "ciuki":
                 self.assertTrue(obj.endswith((":computer", ":about", ":start")), obj)
-        print(f"PASS icon map: {len(lines)} objects resolve at 16/22/32/48; every /bin program mapped; identity = portrait")
+        print(f"PASS icon map: {len(lines)} objects resolve at 16/22/32/48; every /Programs program mapped; identity = portrait")
 
     def test_lookup_rules(self):
         probe = lambda name, size: self.harness("probe", name, size).splitlines()[0]

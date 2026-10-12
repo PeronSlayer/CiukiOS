@@ -74,7 +74,7 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     if (!strings) { if (file.close) file.close(file.cookie); return -ENOMEM; }
     for (unsigned i = 0; argv[i] && !err; i++)
         err = proc_strings_add(strings, argv[i], (uint32_t)strlen(argv[i]) + 1, false);
-    const char *env[] = { "LC_ALL=C", "TZ=UTC0", "HOME=/home", "TMPDIR=/tmp", "PATH=/bin" };
+    const char *env[] = { "LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs" };
     for (unsigned i = 0; i < ARRAY_SIZE(env) && !err; i++)
         err = proc_strings_add(strings, env[i], (uint32_t)strlen(env[i]) + 1, true);
     /* Prepare privately; stdio/cwd can block, so proc_spawn_file's immediate
@@ -125,12 +125,12 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
 }
 
 /* f3-02: the DOS window authority (syscall 70) follows only an exact
- * "/bin/dosbox" spawned by the supervisor or by a process that owns both a
+ * "/Programs/dosbox" spawned by the supervisor or by a process that owns both a
  * display and an input grant (the desktop). Grants never leave their owner
  * process, so no other launcher can confer it. */
 void supervisor_dosvm_delegate(struct process *parent, struct process *child, const char *path)
 {
-    if (strncmp(path, "/bin/dosbox", sizeof("/bin/dosbox"))) return;
+    if (strncmp(path, "/Programs/dosbox", sizeof("/Programs/dosbox"))) return;
     bool display = false, input = false;
     if (parent != proc_supervisor()) {
         for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
@@ -147,7 +147,7 @@ int supervisor_spawn_gate(bool supplement, struct process **out)
 {
     const char *basic[] = { "lua", "-e", "_U=true", "all.lua", 0 };
     const char *extra[] = { "lua", "ciuki-f2.lua", 0 };
-    return supervisor_spawn("/bin/lua", supplement ? extra : basic,
+    return supervisor_spawn("/Programs/lua", supplement ? extra : basic,
                              "/system/tests/lua-5.4.8-tests", false, out);
 }
 
@@ -156,7 +156,7 @@ int supervisor_spawn_gate(bool supplement, struct process **out)
 int supervisor_spawn_desktop_probe(struct process **out)
 {
     const char *argv[] = { "desktop", "--test=crash-isolation", "--gate", 0 };
-    int result = supervisor_spawn("/bin/desktop", argv, 0, true, out);
+    int result = supervisor_spawn("/Programs/desktop", argv, 0, true, out);
     if (result > 0) desktop_pid = (*out)->pid;
     return result;
 }
@@ -167,8 +167,8 @@ void supervisor_bootstrap(void)
     bootstrap_attempted = true;
     const char *argv[] = { "desktop", 0 };
     struct process *p = 0;
-    klog("[supervisor] bootstrap: spawning /bin/desktop");
-    int result = supervisor_spawn("/bin/desktop", argv, 0, true, &p);
+    klog("[supervisor] bootstrap: spawning /Programs/desktop");
+    int result = supervisor_spawn("/Programs/desktop", argv, 0, true, &p);
     if (result == -ENOENT) result = supervisor_spawn_standin(proc_supervisor(), &p);
     if (result < 0) {
         console_wake();   /* a quiet boot shows its log instead of the desktop */

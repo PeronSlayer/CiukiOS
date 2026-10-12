@@ -46,7 +46,7 @@ static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock
 static void on_checkpoint(struct files_app *a, int stage) { (void)a; checkpoints[checkpoint_count++] = stage; }
 static void on_close(struct files_app *a) { (void)a; closed = 1; }
 static int spawned;
-static int on_spawn(struct files_app *a, const char *program, char *const argv[]) { (void)a; (void)argv; spawned++; return strcmp(program, "/bin/hello") ? -2 : 77; }
+static int on_spawn(struct files_app *a, const char *program, char *const argv[]) { (void)a; (void)argv; spawned++; return strcmp(program, "/Programs/hello") ? -2 : 77; }
 static int portrait(uint32_t *p)
 {
     if (!portrait_path) return -1;
@@ -100,7 +100,7 @@ int main(int argc, char **argv)
     struct du_widget *places = du_get(&ui, 103);
     struct du_rect system = du_list_label(places, 2);
     click(system.x + system.w / 2, system.y + system.h / 2);
-    assert(!strcmp(app.model.path, "/system") && checkpoint_count == 1 && checkpoints[0] == 1);
+    assert(!strcmp(app.model.path, "/System") && checkpoint_count == 1 && checkpoints[0] == 1);
     dump("cp1-system");
 
     /* File > New Folder: checkpoint 2, inline rename open. */
@@ -121,7 +121,7 @@ int main(int argc, char **argv)
     key(0x30); assert(!strcmp(app.model.entries[app.model.active].name, "BOOT.CFG"));
     chord(DU_KEY_LCTRL, 0x2e); assert(app.model.clipboard_count == 1);
     key(0x2e); assert(!strcmp(app.model.entries[app.model.active].name, "Ciuki"));
-    key(DU_KEY_ENTER); assert(!strcmp(app.model.path, "/system/Ciuki") && app.model.count == 0);
+    key(DU_KEY_ENTER); assert(!strcmp(app.model.path, "/System/Ciuki") && app.model.count == 0);
     chord(DU_KEY_LCTRL, 0x2f); assert(app.job_active);
     dump("copy-progress");
     tick();
@@ -138,7 +138,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < 5; i++) assert(checkpoints[i] == i + 1);
 
     /* Backspace goes up and selects the folder that was left. */
-    key(DU_KEY_BACKSPACE); assert(!strcmp(app.model.path, "/system") && !strcmp(app.model.entries[app.model.active].name, "Ciuki"));
+    key(DU_KEY_BACKSPACE); assert(!strcmp(app.model.path, "/System") && !strcmp(app.model.entries[app.model.active].name, "Ciuki"));
 
     /* Views, sorting, selection keys. */
     click(du_get(&ui, 9)->box.x + 10, du_get(&ui, 9)->box.y + 10);
@@ -211,12 +211,14 @@ int main(int argc, char **argv)
     struct du_widget *tree = du_get(&ui, 105);
     dump("tree");
     chord(DU_KEY_LALT, 0x20); assert(du_focused(&ui) == 100);
-    const char *bin = "/bin";
-    for (const char *p = bin; *p; p++) {
-        static const unsigned char map[128] = {['/'] = 0x35, ['b'] = 0x30, ['i'] = 0x17, ['n'] = 0x31};
-        key(map[(unsigned char)*p]);
+    const char *programs = "/Programs";
+    for (const char *p = programs; *p; p++) {
+        static const unsigned char map[128] = {['/'] = 0x35, ['p'] = 0x19, ['r'] = 0x13,
+            ['o'] = 0x18, ['g'] = 0x22, ['a'] = 0x1e, ['m'] = 0x32, ['s'] = 0x1f};
+        if (*p >= 'A' && *p <= 'Z') chord(DU_KEY_LSHIFT, map[(unsigned char)(*p - 'A' + 'a')]);
+        else key(map[(unsigned char)*p]);
     }
-    key(DU_KEY_ENTER); assert(!strcmp(app.model.path, "/bin") && app.model.count == 6);
+    key(DU_KEY_ENTER); assert(!strcmp(app.model.path, "/Programs") && app.model.count == 6);
     assert(tree->count >= 3);
     dump("bin-icons");
     int hello = list_find("hello");

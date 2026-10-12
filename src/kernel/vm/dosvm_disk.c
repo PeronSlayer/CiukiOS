@@ -22,7 +22,7 @@ static bool base_size_valid(uint32_t size)
 }
 /* The lookup table (20596 bytes on i686) is larger than the kernel heap's
  * biggest class (2040 bytes, core/kheap.c), so a kmalloc'd table failed with
- * ENOMEM on every call: /bin/dosbox create was refused ("Not enough space",
+ * ENOMEM on every call: /Programs/dosbox create was refused ("Not enough space",
  * vm-window QEMU 2026-10-12). One static table, never on a kernel stack,
  * behind a sleeping test-and-set gate (no mutex: the VFS calls below take
  * the storage lock). */

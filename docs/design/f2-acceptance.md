@@ -51,7 +51,7 @@ f2:<probe-id> run=<8-hex-digit-id> [platform=e500] [safe=1] [server=desktop|stan
 
 **[F2, f2-12 amendment]** `server` MUST apply only to `crash-isolation`,
 occur last, appear at most once and require validated QEMU fw_cfg provenance. Automatic selection MUST use the actual
-desktop when a qualified LFB and `/bin/desktop` are available. Safe mode and
+desktop when a qualified LFB and `/Programs/desktop` are available. Safe mode and
 no-LFB operation MUST retain the stand-in, including with an explicit desktop
 request. An explicit desktop request with an available LFB but missing payload
 MUST fail launch rather than silently qualify the stand-in. The existing
@@ -95,7 +95,7 @@ also MUST show both key edges, motion and both button edges consumed.
 
 | Record | Stand-in | Native desktop |
 | --- | --- | --- |
-| `payload` | Embedded ELF SHA-256 | Production `/bin/desktop` launch |
+| `payload` | Embedded ELF SHA-256 | Production `/Programs/desktop` launch |
 | `identity`, `spaces` | PIDs and CR3 in identity | PIDs/pgids in identity, CR3 in spaces |
 | `victim` x100 | Existing modes 2–5, signal/status | Five named faults, PID/CR3/pgid, signal/status |
 | `progress` x100 | Result-page turns/ticks | PID-bound summary turns/ticks |
@@ -341,7 +341,7 @@ Ledger metadata arrays `storage`, `identities` and `heap` are respectively
 
 **[F2]** `app-gate` MUST first run the SDK-built Lua executable with argv
 `["lua","-e","_U=true","all.lua"]`, cwd `/system/tests/lua-5.4.8-tests`,
-`LC_ALL=C`, `TZ=UTC0`, `HOME=/home`, `TMPDIR=/tmp`, and only fd 0–2 inherited.
+`LC_ALL=C`, `TZ=UTC0`, `HOME=/Documents`, `TMPDIR=/tmp`, and only fd 0–2 inherited.
 Stdin MUST be a finite fixture or `/dev/null`; stdout/stderr MUST be bounded
 capture streams/files. The complete test directory MUST be writable in the
 overlay where upstream tests require it, with test-created files limited to
@@ -458,7 +458,7 @@ Decisions:
    selected. The status bar shows the selection's size only (a folder total
    would tie it to unrelated sizes such as the kernel's).
 8. **Opening.** Folders navigate; text and script types run
-   `/bin/ciuknote <path>` when it exists (it is not in the image yet: Files says
+   `/Programs/ciuknote <path>` when it exists (it is not in the image yet: Files says
    so); ELF programs run through `ciuki_spawn` with stdio only.
 9. **Shell.** The Ciuki menu labels `files` as "Files" with the Tango
    `system-file-manager` icon (also on its taskbar button); `demo` and `files`
@@ -525,8 +525,8 @@ Contract and rationale: `docs/desktop.md` (section f2-32), directive
 `docs/directives/f2-32-ciuknote.md`. This section records the acceptance decisions only;
 it adds no mandatory F2 row and no `f2-all` probe.
 
-**[F2+, f2-32]** `/bin/ciuknote` MUST be a payload of the canonical image (builder, SDK ELF
-checks and manifest as `/bin/files` and `/bin/tasks`). Its host evidence is the text area
+**[F2+, f2-32]** `/Programs/ciuknote` MUST be a payload of the canonical image (builder, SDK ELF
+checks and manifest as `/Programs/files` and `/Programs/tasks`). Its host evidence is the text area
 model and rendering test, the application test with a fake file system (20 pinned screens,
 a 25,000-step random input run), the replay of the committed QMP key script, and the
 desktop launcher test of the CiukNote scenario and of LAUNCH with an argument; none of it is
@@ -534,7 +534,7 @@ guest qualification. `apps/desktop/protocol.h` changed, so the SDK (which instal
 `ciuki/desktop.h`) MUST be rebuilt before `make desktop`.
 
 **[F2+, f2-32]** Opening a text file from Files: the desktop MUST honour LAUNCH with an
-argument only from a client it launched as `/bin/files`, only for `ciuknote`, and only with
+argument only from a client it launched as `/Programs/files`, only for `ciuknote`, and only with
 an absolute path (at most 160 bytes, no control characters); it MUST answer every other
 LAUNCH with an argument `-EPERM`, and the Task Manager's argument-less LAUNCH is unchanged.
 Files MUST refuse a path the wire cannot carry itself and MUST report a negative TASK_RESULT.
@@ -552,9 +552,9 @@ or `note=1` plus `checkpoint=N`, the controller hashes the framebuffer in that r
 opens the storage write gate for these cases only and allows 40 s, and the A key edges
 count only after the last checkpoint and a clean exit: `keys=4`. The case MUST fail if the
 application never starts, does not reach its three checkpoints or exits uncleanly. The
-distance from the Ciuki button to menu row k of n programs is `-1 - 28 * (n + 2 - k)`; `/bin`
+distance from the Ciuki button to menu row k of n programs is `-1 - 28 * (n + 2 - k)`; `/Programs`
 lists seven programs (ciuknote, demo, files, hello, libc_smoke, lua, tasks), so `ciuknote`
-is 253 px up. A host test fails when the image builder's `/bin` inventory changes.
+is 253 px up. A host test fails when the image builder's `/Programs` inventory changes.
 
 **[F2+, f2-32]** Durability and content: the controller flushes storage after the
 desktop stops (`case=note-durable flush_result=0`). After QEMU stops the runner MUST digest
@@ -666,7 +666,7 @@ ticks not charged to any process (the Windows "System" role) and a synthetic
 "System Idle Process" (PID 0) row shows the idle share. Termination authority
 is a descriptor, delegated like the F4-01 mixer handle: PID 1 installs it in
 the bootstrapped (or probe) desktop, the desktop maps it to fd 4 only for
-`/bin/tasks`, and the kernel honours it only for its owner and the owner's
+`/Programs/tasks`, and the kernel honours it only for its owner and the owner's
 direct children. The desktop's own group (the desktop and every program it
 launched, including the Task Manager) is never a `proc_terminate` target
 except for the desktop itself: Task Manager ends those processes through the
@@ -685,12 +685,12 @@ at the post-fault interaction ARM:
    (`tasks_test`); both F9 edges count towards `keys` like the shell's F12.
 2. The script clamps to the bottom-left corner, clicks the Ciuki button
    (40, h-17) and the `tasks` menu row (40, h-102), from the menu formula
-   below with k = n-1: `tasks` is the last program in the sorted `/bin`
+   below with k = n-1: `tasks` is the last program in the sorted `/Programs`
    scan, so its row sits directly above "About CiukiOS" whatever n is. A
-   future `/bin` program sorting after `tasks` moves it. Stage 1: launched from the menu with `--authority-fd=4
+   future `/Programs` program sorting after `tasks` moves it. Stage 1: launched from the menu with `--authority-fd=4
    --test=tasks`; stage 2: its window exists.
 3. Alt+N, `demo`, Enter: Task Manager's New Task sends the v2 LAUNCH request;
-   the desktop launches `/bin/demo` as its own child (stage 3), whose window
+   the desktop launches `/Programs/demo` as its own child (stage 3), whose window
    follows (stage 4). Task Manager selects the launched PID's row.
 4. While the demo starts, the script's waits move the pointer onto Task
    Manager's taskbar button (300, 751: slot 1 of three windows, x 244..403)
@@ -725,7 +725,7 @@ open by a script cannot be adopted by PID 1 past the ledger.
 
 Menu click formula for scripted cases (`apps/desktop/compositor.c`
 `desk_menu_row`/`desk_menu_box`, `client.c` `desk_shell_click`,
-`desk_program_add`). The desktop admits at most 16 `/bin` ELF programs
+`desk_program_add`). The desktop admits at most 16 `/Programs` ELF programs
 except `desktop`, sorted by `strcmp` of their names (ASCII byte order, not
 the displayed label). With n admitted programs, screen height h and the
 32-pixel taskbar, the row height is r = min(28, floor((h - 64) / (n + 2)))
@@ -744,7 +744,7 @@ dy = -281; `tasks-qemu-t23` tasks k = 7 = n - 1, dy = -85 (the last program,
 so independent of n). `tests/host/desktop/test_tasks.py`
 (`test_menu_clicks_follow_the_image_inventory`) derives n and k from
 `scripts/build_image.py` and checks every scripted case, so adding or
-removing a `/bin` program fails the host tests until the offsets follow.
+removing a `/Programs` program fails the host tests until the offsets follow.
 
 The case pins no
 pixel digest in the suite (like `desktop-shell-*`): the runner records

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/calc: the CiukiOS Calculator (desktop client, protocol v2).
+ * /Programs/calc: the CiukiOS Calculator (desktop client, protocol v2).
  * Usage: calc [--channel-fd=N] [--test=calc] */
 #include "calc.h"
 #include <errno.h>

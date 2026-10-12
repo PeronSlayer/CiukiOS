@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/help: CiukiOS Help and text viewer (desktop client, protocol v2).
+ * /Programs/help: CiukiOS Help and text viewer (desktop client, protocol v2).
  * Usage: help [--channel-fd=N] [--test=help] [text file] */
 #include "help.h"
 #include <errno.h>

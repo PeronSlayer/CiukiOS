@@ -1820,10 +1820,10 @@ const char *records(void) { return evidence; }
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             manifest=Path(directory)/'build-manifest.json'
             digest=hashlib.sha256(b'elf').hexdigest()
-            manifest.write_text(json.dumps({'payloads':[{'path':'/bin/hello','sha256':digest}]}))
+            manifest.write_text(json.dumps({'payloads':[{'path':'/Programs/hello','sha256':digest}]}))
             for actual,ok in ((digest,True),('0'*64,False)):
                 parser=Parser('12345678','elf-load')
-                for seq,extra in enumerate(('event=BEGIN',f'event=DATA group=payload path=/bin/hello sha256={actual}','event=END status=PASS'),1):
+                for seq,extra in enumerate(('event=BEGIN',f'event=DATA group=payload path=/Programs/hello sha256={actual}','event=END status=PASS'),1):
                     parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=elf-load {extra}'.encode())
                 result={'build_manifest':{'path':str(manifest)},'probe':'elf-load','outcome':'pass'}
                 if ok:
@@ -1854,13 +1854,13 @@ const char *records(void) { return evidence; }
         scratch=ROOT/'build/runner-host-tests';scratch.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             directory=Path(directory);manifest=directory/'build-manifest.json';digest=hashlib.sha256(b'payload').hexdigest()
-            paths=('/bin/lua','/system/tests/ciuki-f2.lua','/system/tests/lua-5.4.8-tests/all.lua')
+            paths=('/Programs/lua','/system/tests/ciuki-f2.lua','/system/tests/lua-5.4.8-tests/all.lua')
             manifest.write_text(json.dumps({'sdk_manifest_sha256':digest,'payloads':[{'path':p,'sha256':digest} for p in paths],
                                            'lua':{'archives':{'source':{'sha256':digest},'tests':{'sha256':digest}}}}))
             metadata={field:'1' for field in F2_FIELDS}
             metadata.update(sdk_manifest_sha256=digest,newlib_source_sha256=digest,newlib_patch_hashes={'patch':digest},
-                            application_source_sha256=digest,application_tests_sha256=digest,elf_hashes={'/bin/lua':digest},
-                            argv=['lua','-e','_U=true','all.lua'],env={'LC_ALL':'C','TZ':'UTC0','HOME':'/home','TMPDIR':'/tmp'},
+                            application_source_sha256=digest,application_tests_sha256=digest,elf_hashes={'/Programs/lua':digest},
+                            argv=['lua','-e','_U=true','all.lua'],env={'LC_ALL':'C','TZ':'UTC0','HOME':'/Documents','TMPDIR':'/tmp'},
                             cwd='/system/tests/lua-5.4.8-tests',fd_setup={'inherited':[0,1,2],'stdin':'/dev/null','stdout':'bounded','stderr':'bounded'},
                             application_wait_status='0',declared_exclusions=['_U'],resource_ledgers={'baseline':1,'final':1})
             def parser_for(values,output=b'final OK !!!\n'):

@@ -179,7 +179,7 @@ class DeskuiTests(unittest.TestCase):
                 elif event["type"] == "btn" and event["data"]["down"]: clicks.append((x, y))
                 elif event["type"] == "key": keys.append((event["data"]["key"]["data"], event["data"]["down"]))
         # Ciuki button, Programs, then the Files row of the Programs submenu (tests/host/desktop/shell_menu.py).
-        programs = sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
+        programs = sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())) - {"desktop"})
         menu = load("deskui_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         menu.check_launch(self, clicks, programs, "files")
         client = (4 + 3, 36 + 24)   # Files moves its frame to 4,36; content below the 24 px title

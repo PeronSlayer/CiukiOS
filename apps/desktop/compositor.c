@@ -4,7 +4,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-/* The shell (shell.c) is linked only into /bin/desktop; the demo and the
+/* The shell (shell.c) is linked only into /Programs/desktop; the demo and the
  * libdeskui programs reuse this file for glyphs and frames without it. */
 extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_topbar(struct desktop *, struct desk_box) __attribute__((weak));

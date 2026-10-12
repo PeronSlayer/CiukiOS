@@ -364,7 +364,7 @@ static void test_workload_base_image(void)
      * without the disk it keeps the canonical payload and no DPMI host. The
      * production create path (syscall 72, the f3-06 lookup under the 2040-byte
      * kernel heap limit, f4-05 mixer attach with a ready backend), as
-     * /bin/dosbox runs it on QEMU (vm-window, 2026-10-12: ENOMEM before). */
+     * /Programs/dosbox runs it on QEMU (vm-window, 2026-10-12: ENOMEM before). */
     struct process *saved_current = fake_current;
     fake_current = &fake_proc[0];
     struct ciuki_dosvm_command w;

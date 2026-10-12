@@ -17,7 +17,7 @@ static void programs(struct desktop *d)
     static const char *const names[] = {"ciuknote", "control", "demo", "dosbox", "files", "hello", "libc_smoke", "lua", "tasks"};
     for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         strcpy(d->programs[i].name, names[i]);
-        snprintf(d->programs[i].path, sizeof(d->programs[i].path), "/bin/%s", names[i]);
+        snprintf(d->programs[i].path, sizeof(d->programs[i].path), "/Programs/%s", names[i]);
     }
     d->program_count = sizeof(names) / sizeof(names[0]);
 }
@@ -61,7 +61,7 @@ int main(int argc,char **argv)
     const char *mode=argv[3];
     if (!strcmp(mode,"shell")) {
         desk_shell_enable(d);
-        strcpy(d->programs[0].name,"demo"); strcpy(d->programs[0].path,"/bin/demo");
+        strcpy(d->programs[0].name,"demo"); strcpy(d->programs[0].path,"/Programs/demo");
         d->program_count=1; d->menu_open=1;
     } else if (!strcmp(mode,"about")) {
         desk_shell_enable(d); strcpy(d->build_identity,"f2-30-host-preview"); desk_about(d);

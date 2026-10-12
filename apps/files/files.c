@@ -15,7 +15,7 @@ struct files_main { struct files_app app; struct du_ui ui; struct du_window wind
 
 /* CiukNote is a window: only the desktop can give it a channel and the display grants, so Files
  * asks it (protocol v2 LAUNCH with the path as the single argument; the desktop honours this for
- * /bin/ciuknote from a Files it launched). The answer, TASK_RESULT, arrives later: 0 here means
+ * /Programs/ciuknote from a Files it launched). The answer, TASK_RESULT, arrives later: 0 here means
  * the request was queued. Everything else is spawned directly, as before. */
 static int launch_window(struct files_main *m, const char *name, const char *path)
 {
@@ -40,9 +40,9 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 static int launch(struct files_app *a, const char *program, char *const argv[])
 {
     /* Windows that open a file: CiukNote and the Image Viewer (the desktop launches them). */
-    if ((!strcmp(program, "/bin/ciuknote") || !strcmp(program, "/bin/viewer")) && argv[0] && argv[1] && !argv[2])
-        return launch_window(a->user, program + 5, argv[1]);
-    char *env[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/home", "TMPDIR=/tmp", "PATH=/bin", NULL};
+    if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/viewer")) && argv[0] && argv[1] && !argv[2])
+        return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
+    char *env[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);
     return pid < 0 ? -errno : (int)pid;
 }

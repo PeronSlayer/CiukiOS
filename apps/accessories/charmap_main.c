@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/charmap: CiukiOS Character Map (desktop client, protocol v2).
+ * /Programs/charmap: CiukiOS Character Map (desktop client, protocol v2).
  * Usage: charmap [--channel-fd=N] [--test=charmap] */
 #include "charmap.h"
 #include <errno.h>
