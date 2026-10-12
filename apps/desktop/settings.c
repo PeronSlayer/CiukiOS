@@ -111,13 +111,14 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     if (!strcmp(key, "desktop_icons")) return flag(v, &s->desktop_icons);
     if (!strcmp(key, "mouse_speed")) return number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);
     if (!strcmp(key, "double_click_ms")) return number(v, 200, 900, &s->double_click_ms);
-    if (!strcmp(key, "display_mode")) {
-        if (!number(v, 0, 65535, &n)) return 0;
-        s->display_mode = (uint16_t)n; return 1;
-    }
+
     if (!strcmp(key, "keyboard")) {
         for (int i = 0; i < CFG_KEYS_COUNT; i++) if (!strcmp(v, cfg_keyboard_names[i])) { s->keyboard = i; return 1; }
         return 0;
+    }
+    if (!strcmp(key, "display_mode")) {
+        if (!number(v, 0, 65535, &n)) return 0;
+        s->display_mode = (uint16_t)n; return 1;
     }
     if (!strcmp(key, "recent")) {
         if (!*recent_reset) { s->recent_count = 0; *recent_reset = 1; }

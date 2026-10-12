@@ -224,6 +224,32 @@ static int parses(unsigned version,unsigned opcode,unsigned length,int client,co
     if (text) memcpy(m.data+at,text,strlen(text));
     return desk_parse(&m,client,NULL,&p);
 }
+static unsigned display_calls; static uint16_t display_mode; static int display_result;
+static int display_set(struct desktop *d, uint16_t mode)
+{ (void)d; display_calls++; display_mode = mode; return display_result; }
+static void test_display_settings(void)
+{
+    struct desktop d; struct ciuki_message m; struct desk_packet reply[DESK_TX_MAX];
+    fake_reset(); desk_init(&d, &fake_ops, 1024, 768); desk_shell_enable(&d);
+    fake_channel(60); assert(desk_add_client(&d, 60) == 0); window(&d, 0, 500, 70, "Control Panel");
+    d.display_set = display_set; display_calls = 0; display_result = 0;
+    desk_message(&m, DESK_SETTINGS, 24); desk_put32(m.data + 4, 42);
+    desk_put32(m.data + 8, DESK_SETTINGS_DISPLAY); desk_put32(m.data + 12, 0x118);
+    drain(&d, 0); v2(&d, 0, 500, &m); /* ordinary client has no display authority */
+    assert(queued(&d, 0, DESK_TASK_RESULT, reply) == 1 && reply[0].result == -EPERM && !display_calls);
+    d.clients[0].program = DESK_APP_CONTROL;
+    drain(&d, 0); v2(&d, 0, 500, &m);
+    assert(queued(&d, 0, DESK_TASK_RESULT, reply) == 1 && !reply[0].result && reply[0].serial == 42 && reply[0].request == DESK_SETTINGS);
+    assert(display_calls == 1 && display_mode == 0x118 && !d.sh.want_save && !d.sh.want_reload && !d.sh.cfg.display_mode);
+    display_result = -EBUSY; drain(&d, 0); v2(&d, 0, 500, &m);
+    assert(queued(&d, 0, DESK_TASK_RESULT, reply) == 1 && reply[0].result == -EBUSY && display_calls == 2);
+    d.display_set = NULL; drain(&d, 0); v2(&d, 0, 500, &m);
+    assert(queued(&d, 0, DESK_TASK_RESULT, reply) == 1 && reply[0].result == -ENOSYS && display_calls == 2);
+    d.display_set = display_set; desk_put32(m.data + 20, 1); drain(&d, 0); v2(&d, 0, 500, &m);
+    assert(display_calls == 2 && !queued(&d, 0, DESK_TASK_RESULT, reply));
+    drop_all(&d); fake_reset();
+    puts("PASS display SETTINGS: Control Panel authority, display mode callback, serial/result, EBUSY/ENOSYS, reserved fields, no premature persistence");
+}
 /* f2-33 wire rules: v2 only, direction, exact lengths, bounded titles. */
 static void test_task_protocol(void)
 {
@@ -686,6 +712,7 @@ int main(void)
     assert(run_command(&d,command)>0);
     drop_all(&d); fake_reset();
     test_task_protocol();
+    test_display_settings();
     test_tasks_scenario();
     test_launch_protocol();
     test_note_scenario();

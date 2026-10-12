@@ -52,7 +52,7 @@ struct desk_packet {
     struct ciuki_input_event event;
     uint32_t window_id, pid, flags, index, count, request;
     int32_t result;
-    uint32_t values[3];               /* SETTINGS: left, right, mute */
+    uint32_t values[3];               /* SETTINGS: left/right/mute or mode id/0/0 */
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
 };
 uint32_t desk_get32(const uint8_t *p);
