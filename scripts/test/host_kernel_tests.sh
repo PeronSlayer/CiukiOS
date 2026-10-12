@@ -122,6 +122,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_test.c" -o "$out/power_test"
 "$out/power_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
+"$out/power_runtime_test"
 
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.
@@ -230,6 +233,13 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 # guest INT 9) into the shell blocked in INT 16h AH=00h.
 # Optional: needs libx86emu and an already built build/f0/dos/DOSBOOT.IMG.
 dos_image="$root/build/f0/dos/DOSBOOT.IMG"
+if [[ -f /usr/include/x86emu.h ]]; then
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        "$root/tests/host/dosvm_guest_step_test.c" "$root/tests/host/dosvm_guest_cpu.c" -lx86emu -o "$out/dosvm_guest_step_test"
+    "$out/dosvm_guest_step_test"
+else
+    echo "guest CPU single step: SKIP (no libx86emu headers)"
+fi
 if [[ -f /usr/include/x86emu.h && -f "$dos_image" ]] && grep -q '"/DPMI4GW.EXE"' "${dos_image%.IMG}.json"; then
     clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
         -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_guest.c" \

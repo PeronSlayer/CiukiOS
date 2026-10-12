@@ -81,6 +81,7 @@ struct dpmi_record {
 };
 struct dpmi_callback { bool used; uint16_t sel, struct_sel; uint32_t off, struct_off; };
 struct dpmi_client {
+    bool suspended_if_armed;         /* parent's deferred flags restore across a child */
     bool used;
     uint16_t psp, env, psp_sel, env_sel, rm_ss, rm_sp, rm_cs, rm_ip;
     unsigned depth_base;
@@ -97,6 +98,9 @@ struct dpmi {
     /* f3-06 POPF compatibility: a flags image saved before a CLI carries
      * TF, so its POPF/IRET traps once (dpmi_dispatch.c). */
     bool if_armed;
+    bool decode_valid;
+    uint16_t decode_cs;
+    uint32_t decode_eip;            /* known boundary at entry/previous trap return */
     uint16_t shadow_cs;             /* STI shadow: CS:EIP of the shadowed instruction */
     uint32_t shadow_eip;
     unsigned clients, depth;

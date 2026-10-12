@@ -143,6 +143,12 @@ static void test_workload_direct_window(void)
     printf("f3-06 direct plane window: single-plane stores mapped to the model, dirty pages marked, closed on latch/mask/mode changes\n");
 }
 
+static unsigned workload_waits;
+static void release_workload_lookup(void)
+{
+    CHECK(cpu_flags & V86_IF);
+    if (++workload_waits == 3) { workload_busy = false; sleep_hook = 0; }
+}
 /* Play only native memory cycles; every #PF and port cycle still uses the
  * production monitor. The PMM deliberately separates successive frames. */
 static void linear_store(struct dosvm *v, unsigned offset, uint8_t byte)
@@ -341,6 +347,13 @@ static void test_workload_base_image(void)
     CHECK(dosvm_workload_base(path) == -ENOENT && !path[0] && !heap_blocks && !tables);
     workload_disk = true;
     CHECK(!dosvm_workload_base(path) && !strcmp(path, "D:\\CIUKIGAM.IMG") && !heap_blocks && !tables);
+    workload_busy = true; workload_waits = 0; sleep_hook = release_workload_lookup;
+    CHECK(!dosvm_workload_base(path) && workload_waits == 3 && !workload_busy && !tables && !handles);
+    io_fail_at = io_calls + 1;
+    CHECK(dosvm_workload_base(path) == -V86_EIO && !path[0] && !workload_busy && !tables && !handles);
+    io_fail_at = 0;
+    for (unsigned i = 0; i < 64; i++) CHECK(!dosvm_workload_base(path) && !workload_busy && !tables && !handles && !heap_blocks);
+    puts("f3-08 workload lookup: sleeping gate, init-error release, 64 table/handle/heap baselines PASS");
     struct dosvm_config c = {.commitment = DOSVM_LOW_CAP, .base = path};
     CHECK(dosvm_create(&c, &v) == 0 && v && v->base_open && !strcmp(last_base, "D:\\CIUKIGAM.IMG"));
     destroy(v, true); empty();
@@ -633,6 +646,7 @@ static void test_workload_popf_compat(void)
      * (the virtual IF was set), nothing is stepped. */
     v->monitor.vif = true;
     cur.tf.eax = 0xABCD0000u | image;
+    cur.tf.eip = 0x200; step(v, 0x20, 0); /* establish a native instruction boundary */
     cur.tf.eip = 0x202;
     step(v, 13, 0);
     CHECK(!left && in_pm() && !v->monitor.vif && cur.tf.eip == 0x203 && !(cur.tf.eflags & V86_TF));
@@ -680,8 +694,11 @@ static void test_workload_popf_compat(void)
     printf("f3-06 POPF compatibility: flags image armed at CLI (stack and POP r), POPF trap restores the virtual IF, nested and foreign images untouched\n");
 }
 
+#include "dosvm_review_test.inc"
 static void test_workloads(void)
 {
+    test_review_vm();
+    if (getenv("F3_REVIEW")) return;
     test_workload_linear_closures();
     test_workload_linear_golden();
     test_workload_linear_replay(false, false);
