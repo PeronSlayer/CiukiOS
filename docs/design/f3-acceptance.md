@@ -1061,6 +1061,21 @@ so one QEMU run reports the whole row (the first error decides). Suite
   test client until the owner decides.
 - Promotion: `DOSVM_DPMI_PUBLIC` stays 0 until the QEMU cases pass.
 
+### First QEMU run (2026-10-12) and fixes
+
+Run `d1a610eb` (qemu-t23, image `e0af9210…`): hashes passed, then
+`DPMI16 FAIL 0D 02`. QEMU TCG does not check data-segment limits (recorded
+with sources in `docs/validation/2026-10-09-f0/README.md`, f3-04 deviation);
+the stage-13 read beyond a 255-byte limit completed. The clients now accept
+that omission only under TCG's CPUID signature, print
+`DPMIxx NOTE tcg_no_data_limit_check` and substitute a CLTS #GP(0); hardware
+still requires the limit fault. The runner reproduces the failure with
+`GUEST_TCG=1`, and `host_kernel_tests.sh` runs DPMI16/DPMI32 in that mode.
+The same run stopped at the probe's screen dump: `\` and `>` are outside the
+record grammar. The F3 controllers (`vm`, `dpmi`, `video`, `workloads`)
+now share `probe_dos_screen` (`f3_probes_vm.c`, `ciuki/probe.h`), which maps
+every glyph outside `[A-Za-z0-9_:.,/+-]` to `.`.
+
 ## f3-06
 
 Reference DOS workloads and the F3 workload gate (directive f3-06; contract

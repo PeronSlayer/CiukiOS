@@ -242,6 +242,15 @@ if [[ -f /usr/include/x86emu.h && -f "$dos_image" ]] && grep -q '"/DPMI4GW.EXE"'
         exit 1
     fi
     tail -n 1 "$out/dosvm_guest.log"
+    # QEMU TCG model (no data-segment limit checks, TCG CPUID signature): the
+    # clients must take their recorded TCG fallback and still pass.
+    if ! (cd "$root" && GUEST_TCG=1 timeout 600 "$out/dosvm_guest" "$dos_image" '\DPMI16.COM' DPMI16 \
+            '\DPMI32.COM' DPMI32 > "$out/dosvm_guest_tcg.log" 2>&1) ||
+       [[ $(grep -c 'NOTE tcg_no_data_limit_check' "$out/dosvm_guest_tcg.log") != 2 ]]; then
+        tail -n 40 "$out/dosvm_guest_tcg.log"
+        exit 1
+    fi
+    echo "TCG model: $(tail -n 1 "$out/dosvm_guest_tcg.log")"
 else
     echo "dosvm guest runner: SKIP (no libx86emu headers, or no DOSBOOT.IMG with the f3-04 payloads)"
 fi

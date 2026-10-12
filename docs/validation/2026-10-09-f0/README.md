@@ -159,6 +159,29 @@ reported `Ran 99 tests`, `OK (skipped=5)`. The new payload SHA-256 is
 No QEMU validation of this payload was performed here; the three directed
 profiles and hardware #AC qualification remain with the lead.
 
+## QEMU TCG deviation: data-segment limits are not checked (f3-04)
+
+Run `d1a610eb` (`f3:dpmi`, qemu-t23, image `e0af9210…`, main `50ba47f`):
+`DPMI16 FAIL 0D 02` with `exceptions=1`. Stage 13 detail 2 loads a
+selector whose limit is FFh and reads `[es:200h]`; an Intel CPU raises
+#GP(0) ([Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+Vol. 3A, 5.3 limit checking). The kernel delivered only the preceding LGDT
+fault: the read completed. [QEMU 11.0.0's translator](https://github.com/qemu/qemu/blob/v11.0.0/target/i386/tcg/translate.c)
+forms data addresses in `gen_lea_v_seg_dest` by adding the segment base,
+with no limit comparison. The libx86emu runner checks limits, so the same
+client passed there. With `GUEST_TCG=1` the runner models this omission
+(data descriptors read with limit FFFFFh, G=1) and TCG's CPUID leaf
+40000000h; the unchanged client then fails `0D 02` with the same counters
+as QEMU (`exc=1 cb=8 raw=2 realcalls=12 max_depth=16`).
+
+The client still attempts the real fault first. Only when it does not trap
+and CPUID leaf 40000000h reports `TCGTCGTCGTCG` with a maximum leaf of at
+least 40000001h (the f2-14 rule above) does it print
+`DPMIxx NOTE tcg_no_data_limit_check` and deliver a CLTS #GP(0) instead,
+so the handler count, faulting IP and error-code checks stay strict. A
+Pentium III without the fault still fails `0D 02`. TCG PASS is not
+evidence of data-segment limit checking; that remains a hardware item.
+
 ## Runner suites
 
 - `f0-smoke` (profiles `qemu-fast` and `qemu-t23`): PASS, both cases.

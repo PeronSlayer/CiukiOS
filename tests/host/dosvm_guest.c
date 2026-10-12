@@ -12,6 +12,8 @@
  * 8042 (dosvm_input_event), IRQ1 and the guest INT 9 to the shell blocked in
  * INT 16h AH=00h; VMVIDEO must stop at stage 1 with flags 3, then each Enter
  * through the 8042 advances one stage until the prompt returns.)
+ * GUEST_TCG=1 models QEMU TCG: no data-segment limit checks and TCG's CPUID
+ * signature (docs/validation/2026-10-09-f0/README.md, f3-04 deviation).
  * f3-06: GUEST_BUDGET=<instructions per command> for long workloads, e.g. the
  * base image of a local DOOM fixture (scripts/test/dos_fixtures.py; extract
  * CIUKIGAM.IMG with mcopy): GUEST_BUDGET=9000000000 dosvm_guest base.img

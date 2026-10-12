@@ -8,6 +8,7 @@
  * laptops remain the acceptance authority. SPDX-License-Identifier: GPL-2.0-only */
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <x86emu.h>
 #include "dosvm_guest.h"
@@ -19,6 +20,16 @@ static const struct gcpu_ops *ops;
 static bool fetch(uint32_t lin, uint8_t *b);
 static struct gcpu_event *event;
 static bool fault_pending;
+/* GUEST_TCG=1 models two QEMU TCG traits seen on qemu-t23 (2026-10-12):
+ * data accesses are not checked against segment limits (translate.c adds
+ * the base only) and CPUID leaf 40000000h reports "TCGTCGTCGTCG". */
+static int tcg_mode = -1;
+static bool tcg(void) { if (tcg_mode < 0) tcg_mode = getenv("GUEST_TCG") != 0; return tcg_mode; }
+static void tcg_descriptor(uint32_t d[2])
+{
+    bool data = (d[1] & 0x1800u) == 0x1000u, down = d[1] & 0x400u;
+    if (tcg() && data && !down) { d[0] |= 0xFFFFu; d[1] |= 0x008F0000u; }  /* limit FFFFF, G=1 */
+}
 static unsigned watch_hits;
 
 static unsigned memio(x86emu_t *e, u32 addr, u32 *val, unsigned type)
@@ -36,6 +47,7 @@ static unsigned memio(x86emu_t *e, u32 addr, u32 *val, unsigned type)
         unsigned off = addr - GDT_FAKE;
         ops->descriptor((uint16_t)(off & ~7u), false, d);
         if (kind == X86EMU_MEMIO_W) return 0;
+        tcg_descriptor(d);
         uint32_t x = 0;
         memcpy(&x, (uint8_t *)d + (off & 7), n > 8 - (off & 7) ? 8 - (off & 7) : n);
         *val = x;
@@ -46,6 +58,7 @@ static unsigned memio(x86emu_t *e, u32 addr, u32 *val, unsigned type)
         unsigned off = addr - LDT_FAKE;
         ops->descriptor((uint16_t)((off & ~7u) | 4), kind == X86EMU_MEMIO_W, d);
         if (kind == X86EMU_MEMIO_W) return 0;   /* accessed-bit updates are not modelled */
+        tcg_descriptor(d);
         uint32_t x = 0;
         memcpy(&x, (uint8_t *)d + (off & 7), n > 8 - (off & 7) ? 8 - (off & 7) : n);
         *val = x;
@@ -265,6 +278,15 @@ static bool trap_check(struct gcpu_state *s)
         int len = fpu_insn(lin, n, a32, seg_override, op);
         if (len > 0) { emu->x86.R_EIP += (uint32_t)len; event->vector = 0; event->executed_descriptor = true; return false; }
         if (op != 0x9B) ops->unexpected("x87 instruction outside the runner's control/status subset");
+    }
+    if (op == 0x0F && tcg()) {                      /* CPUID 40000000h under GUEST_TCG */
+        uint8_t next = 0;
+        if (fetch(lin + n + 1, &next) && next == 0xA2 && emu->x86.R_EAX == 0x40000000u) {
+            emu->x86.R_EAX = 0x40000001u; emu->x86.R_EBX = 0x54474354u;
+            emu->x86.R_ECX = 0x43544743u; emu->x86.R_EDX = 0x47435447u;
+            emu->x86.R_EIP += n + 2; event->vector = 0; event->executed_descriptor = true;
+            return false;
+        }
     }
     if (op == 0xC8) {
         int len = enter_insn(lin, n, op32, s->pm && (emu->x86.R_SS_ACC & (1u << 10)));
