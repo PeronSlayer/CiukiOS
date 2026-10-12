@@ -14,6 +14,18 @@
       "source_sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
       "weight": 600
     },
+    "DESK_FONT_LABEL": {
+      "alpha_sha256": "298eb378341afef21d59cac88c956e9c7db646aea84564d50521801bc9541361",
+      "ascent": 13,
+      "descent": 4,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inter/OFL.txt",
+      "name": "Inter 13",
+      "size": 13,
+      "source": "upstream/inter/Inter[opsz,wght].ttf",
+      "source_sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+      "weight": 400
+    },
     "DESK_FONT_LARGE": {
       "alpha_sha256": "5fc9eeb0ec44d7e92574eaf252772acf347df2aa7a5114a7d469f0186543b9f9",
       "ascent": 22,
@@ -76,6 +88,6 @@
     }
   },
   "freetype": "2.14.3",
-  "header_sha256": "71abada9d5d5738bc8a6511bc53d909b485fa58fcac1a6aea0f5a6acbe6c9536",
+  "header_sha256": "46ea623d7bb46f07c5bf81ce2328805d3e1798019cca2e6764efa4fdb9abe62e",
   "pillow": "12.3.0"
 }

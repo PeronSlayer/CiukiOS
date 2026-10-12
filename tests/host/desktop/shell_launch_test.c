@@ -408,6 +408,7 @@ static void test_games_menu(void)
     int games=item_at(programs,"Games"), accessories=item_at(programs,"Accessories");
     assert(games==accessories+1 && programs->items[games].action==SH_ACT_SUBMENU &&
            programs->items[games].arg==SH_MENU_GAMES && !strcmp(programs->items[games].icon,"applications-games"));
+    for (unsigned g=0; g<DESK_GAME_COUNT; g++) assert(!strcmp(desk_games[g].tango,"input-gaming"));   /* a game, not the Games folder */
     desk_menu_close(&d);
     for (unsigned g=0; g<DESK_GAME_COUNT; g++) {
         /* Start menu, Programs, Games, then the game's row: the keyboard path a user takes. */
@@ -428,6 +429,45 @@ static void test_games_menu(void)
     assert(!strcmp(desk_games[0].command,"\\WOLF3D\\WOLF3D.EXE") && !strcmp(desk_games[1].command,"\\DOOM\\DOOM.EXE -config CIUKI.CFG"));
     drop_all(&d); fake_reset();
     puts("PASS games menu: Programs > Games with /bin/dosbox, keyboard path to each shareware game, dosbox --name=<title> <command>");
+}
+/* Owner feedback 2026-10-12: one fixed, coherent icon set. Every menu uses
+ * the Tango 16 px artwork; inside one menu two rows never share an icon
+ * (only the games, rows of one kind, share input-gaming); Run... and the
+ * Ciuki Demo no longer borrow the icons of programs and games. */
+static void test_menu_icons(void)
+{
+    struct desktop d;
+    uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    static const char *const bin[]={"calc","charmap","ciuknote","clock","control","demo","dosbox","files","hello","help",
+                                    "libc_smoke","lua","mixer","tasks","viewer","newtool"};
+    fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
+    for (unsigned i=0;i<sizeof(bin)/sizeof(bin[0]);i++) desk_program_add(&d,bin[i],elf,sizeof(elf));
+    d.sh.cfg.recent_count=1; snprintf(d.sh.cfg.recent[0],sizeof(d.sh.cfg.recent[0]),"/notes.txt");
+    static const int kinds[]={SH_MENU_START,SH_MENU_PROGRAMS,SH_MENU_ACCESSORIES,SH_MENU_GAMES,SH_MENU_DEVELOPER,SH_MENU_DOCUMENTS,
+                              SH_MENU_SETTINGS,SH_MENU_HELP,SH_MENU_DESKTOP,SH_MENU_ICON,SH_MENU_TASK};
+    for (unsigned k=0;k<sizeof(kinds)/sizeof(kinds[0]);k++) {
+        d.sh.menu_owner=0; desk_menu_open(&d,kinds[k],0,0);
+        const struct sh_menu *m=&d.sh.menus[0];
+        assert(m->icon==16);
+        for (int a=0;a<m->count;a++) for (int b=a+1;b<m->count;b++) {
+            const struct sh_item *x=&m->items[a], *y=&m->items[b];
+            if (x->icon && y->icon && !(x->action==SH_ACT_GAME && y->action==SH_ACT_GAME)) assert(strcmp(x->icon,y->icon));
+        }
+        if (kinds[k]==SH_MENU_DEVELOPER) {   /* only programs outside Programs and Accessories */
+            assert(m->count==3 && item_at(m,"Hello")>=0 && item_at(m,"libc smoke test")>=0 && item_at(m,"newtool")>=0);
+            assert(item_at(m,"Calculator")<0 && item_at(m,"CiukNote")<0);
+        }
+        desk_menu_close(&d);
+    }
+    desk_menu_open(&d,SH_MENU_START,0,0);
+    const char *run=d.sh.menus[0].items[item_at(&d.sh.menus[0],"Run...")].icon;
+    const char *settings=d.sh.menus[0].items[item_at(&d.sh.menus[0],"Settings")].icon;
+    desk_menu_close(&d);
+    assert(strcmp(run,"application-x-executable") && strcmp(settings,desk_program_icon_name("control")));
+    for (unsigned i=0;i<sizeof(bin)/sizeof(bin[0]);i++) assert(strcmp(run,desk_program_icon_name(bin[i])));
+    assert(strcmp(desk_program_icon_name("demo"),"applications-games") && strcmp(desk_program_icon_name("demo"),desk_games[0].tango));
+    drop_all(&d); fake_reset();
+    puts("PASS menu icons: every menu 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
 }
 int main(void)
 {
@@ -512,5 +552,6 @@ int main(void)
     test_launch_protocol();
     test_note_scenario();
     test_games_menu();
+    test_menu_icons();
     return 0;
 }

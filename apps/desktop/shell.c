@@ -221,23 +221,25 @@ const uint32_t *desk_shell_icon(const char *name, int size)
 
 /* ---- programs ---------------------------------------------------------- */
 struct program_info { const char *name, *label, *icon, *category; };
-/* Menu order of the known programs; anything else in /bin is "developer". */
+/* Menu order of the known programs; anything else in /bin is "developer".
+ * Icons: the Tango names of icon_map.c program:* (Files and Task Manager
+ * show the same icon for the same program; test_icons.py compares them). */
 static const struct program_info programs[] = {
     {"ciuknote", "CiukNote", "accessories-text-editor", "programs"},
     {"files", "Files", "system-file-manager", "programs"},
     {"tasks", "Task Manager", "utilities-system-monitor", "programs"},
     {"dosbox", "DOS Box", "utilities-terminal", "programs"},
-    {"demo", "Ciuki Demo", "applications-games", "programs"},
+    {"demo", "Ciuki Demo", "preferences-desktop-peripherals", "programs"},   /* the keyboard/mouse input demo */
     {"lua", "Lua", "text-x-script", "programs"},
     {"control", "Control Panel", "preferences-desktop", "programs"},
     {"calc", "Calculator", "accessories-calculator", "accessories"},
     {"charmap", "Character Map", "accessories-character-map", "accessories"},
-    {"clock", "Clock", "office-calendar", "accessories"},
+    {"clock", "Clock", "appointment-new", "accessories"},
     {"help", "CiukiOS Help", "help-browser", "accessories"},
     {"mixer", "Volume Control", "audio-volume-high", "accessories"},
     {"viewer", "Image Viewer", "image-x-generic", "accessories"},
-    {"hello", "Hello", "application-x-executable", "developer"},
-    {"libc_smoke", "libc smoke test", "application-x-executable", "developer"},
+    {"hello", "Hello", "face-smile", "developer"},
+    {"libc_smoke", "libc smoke test", "applications-system", "developer"},
 };
 static const struct program_info *program_find(const char *name)
 {
@@ -257,9 +259,9 @@ static const char *client_icon(const struct desktop *d, int i)
 {
     const struct desk_client *c = &d->clients[i];
     if (c->internal == DESK_INTERNAL_ABOUT) return "ciuki";
-    if (c->internal == DESK_INTERNAL_RUN) return "application-x-executable";
+    if (c->internal == DESK_INTERNAL_RUN) return "go-jump";
     if (c->internal == DESK_INTERNAL_SHUTDOWN) return "system-shutdown";
-    if (c->internal) return "dialog-information";
+    if (c->internal) return d->sh.message_kind ? "dialog-error" : "dialog-information";
     if (c->program == DESK_APP_FILES) return "system-file-manager";
     if (c->program == DESK_APP_NOTE) return "accessories-text-editor";
     if (c->program == DESK_APP_CONTROL) return "preferences-desktop";
@@ -269,7 +271,7 @@ static const char *client_icon(const struct desktop *d, int i)
     for (unsigned k = 0; k < DESK_GAME_COUNT; k++)   /* Programs > Games: the DOS Box window carries the game's title */
         if (!strcmp(c->title, desk_games[k].title)) return desk_games[k].tango;
     if (!strncmp(c->title, "DOS", 3)) return "utilities-terminal";
-    if (strstr(c->title, "Demo") || strstr(c->title, "demo")) return "applications-games";
+    if (strstr(c->title, "Demo") || strstr(c->title, "demo")) return desk_program_icon_name("demo");
     return "application-x-executable";
 }
 
@@ -288,14 +290,14 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     memset(m, 0, sizeof(*m));
     m->kind = kind; m->hot = -1;
     m->row_h = kind == SH_MENU_START ? SH_START_ROW : SH_SUB_ROW;
-    m->icon = kind == SH_MENU_START ? 22 : 16;
+    m->icon = 16;   /* every menu: the Tango 16 px artwork (the Start menu too) */
     switch (kind) {
     case SH_MENU_START:
         item(m, "Programs", "applications-other", SH_ACT_SUBMENU, SH_MENU_PROGRAMS, 0);
         item(m, "Documents", "document-open", SH_ACT_SUBMENU, SH_MENU_DOCUMENTS, 0);
-        item(m, "Settings", "preferences-desktop", SH_ACT_SUBMENU, SH_MENU_SETTINGS, 0);
+        item(m, "Settings", "preferences-system", SH_ACT_SUBMENU, SH_MENU_SETTINGS, 0);
         item(m, "Help", "help-browser", SH_ACT_SUBMENU, SH_MENU_HELP, 0);
-        item(m, "Run...", "application-x-executable", SH_ACT_RUN, 0, 0);
+        item(m, "Run...", "go-jump", SH_ACT_RUN, 0, 0);
         separator(m);
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;
@@ -328,7 +330,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     case SH_MENU_DEVELOPER:
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
             const struct program_info *p = program_find(d->programs[k].name);
-            if (p && !strcmp(p->category, "programs")) continue;
+            if (p && strcmp(p->category, "developer")) continue;   /* Programs and Accessories list theirs */
             item(m, p ? p->label : d->programs[k].name, p ? p->icon : "application-x-executable", SH_ACT_LAUNCH, (int)k, 0);
         }
         break;
@@ -721,10 +723,7 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
     du_edge(&c, R(tray), DU_SUNKEN_THIN);
     const uint32_t *speaker = desk_shell_icon(d->sh.muted ? "audio-volume-muted" : "audio-volume-high", 16);
     struct desk_box vi = volume_icon_box(d);
-    du_icon_blit(&c, vi.x, vi.y, speaker, 16, d->sh.mixer_state < 0 ? DU_ICON_DISABLED : DU_ICON_NORMAL);
-    if (d->sh.muted) {   /* a red bar across a muted speaker */
-        for (int k = 0; k < 14; k++) du_fill(&c, (struct du_rect){vi.x + 1 + k, vi.y + 14 - k, 2, 2}, 0xc0201eu);
-    }
+    du_icon_blit(&c, vi.x, vi.y, speaker, 16, d->sh.mixer_state < 0 ? DU_ICON_DISABLED : DU_ICON_NORMAL);   /* muted: Tango's red cross */
     char clock[24];
     clock_text(d, clock, sizeof(clock));
     struct desk_box cb = clock_box(d);
@@ -778,8 +777,24 @@ static void draw_tooltip(struct desktop *d, struct desk_box clip)
 }
 
 /* ---- desktop icons ----------------------------------------------------- */
-#define ICON_CELL_W 84
-#define ICON_CELL_H 76
+/* Large icons: the Tango store's 48 px slot, centred at the top of a 96 x 94
+ * cell, the label below in Inter 13 (up to two centred lines, broken by
+ * width). Labels are white with a soft dark halo, in the manner of the
+ * Windows Vista/7 desktop, so they read on light sky, dark rock and busy
+ * foliage alike: the glyph coverage blurred twice by the 5-tap binomial
+ * filter 1 4 6 4 1 (radius 4), raised 3x, capped at HALO_PEAK and moved
+ * 1 px down, blended in black under the white text. It is computed once per
+ * label (and theme text mode) and cached; a repaint only blends it. */
+#define ICON_CELL_W 96
+#define ICON_CELL_H 94
+#define SH_DESKTOP_ICON 48
+#define LABEL_TOP 54                                   /* label block (halo included) in the cell */
+#define LABEL_H (ICON_CELL_H - LABEL_TOP)
+#define LABEL_ROOM (ICON_CELL_W - 12)                  /* widest line; the halo stays in the cell */
+#define LABEL_BASE 14                                  /* first baseline below LABEL_TOP */
+#define LABEL_PITCH 16
+#define HALO_GAIN 48                                   /* sixteenths: 3x the blurred coverage */
+#define HALO_PEAK 210                                  /* at most 82 % black */
 static void icon_add(struct desktop *d, const char *label, const char *program, const char *argument,
                      const char *icon, int action, int ciuki)
 {
@@ -830,17 +845,59 @@ static int icon_hit(const struct desktop *d, int32_t x, int32_t y)
     }
     return -1;
 }
-static void label_lines(const char *label, char lines[2][16])
+static int label_lines(const char *label, char lines[2][32])
 {
-    /* Up to two centred lines of 13 cells, broken at a space when possible. */
-    size_t n = strlen(label);
+    /* Up to two lines of at most LABEL_ROOM pixels, broken at the last space
+     * that fits (a longer word is cut); a second line that still does not
+     * fit ends with an ellipsis. Returns the number of lines. */
+    const int f = DESK_FONT_LABEL;
+    size_t n = strlen(label), cut = 0, skip = 1;
     lines[0][0] = lines[1][0] = 0;
-    if (n <= 13) { snprintf(lines[0], 16, "%s", label); return; }
-    size_t cut = 13;
-    while (cut > 0 && label[cut] != ' ') cut--;
-    if (!cut) cut = 13;
-    snprintf(lines[0], 16, "%.*s", (int)cut, label);
-    snprintf(lines[1], 16, "%.13s", label + cut + (label[cut] == ' '));
+    if (desk_text_measure(f, label) <= LABEL_ROOM) { snprintf(lines[0], 32, "%s", label); return 1; }
+    for (size_t i = 1; i < n; i++) if (label[i] == ' ' && desk_text_measure_n(f, label, i) <= LABEL_ROOM) cut = i;
+    if (!cut) { cut = desk_text_fit_chars(f, label, LABEL_ROOM); skip = 0; }
+    if (!cut) cut = 1;
+    snprintf(lines[0], 32, "%.*s", (int)cut, label);
+    const char *rest = label + cut + skip;
+    if (desk_text_measure(f, rest) <= LABEL_ROOM) snprintf(lines[1], 32, "%s", rest);
+    else snprintf(lines[1], 32, "%.*s\xe2\x80\xa6", (int)desk_text_fit_chars(f, rest, LABEL_ROOM - desk_text_measure(f, "\xe2\x80\xa6")), rest);
+    return 2;
+}
+static void binomial(const uint16_t *in, uint16_t *out, int dx, int dy)
+{
+    /* One pass of the 5-tap binomial filter along (dx, dy); zero outside. */
+    static const unsigned k[5] = {1, 4, 6, 4, 1};
+    for (int y = 0; y < LABEL_H; y++) for (int x = 0; x < ICON_CELL_W; x++) {
+        unsigned sum = 0;
+        for (int t = -2; t <= 2; t++) {
+            int xx = x + t * dx, yy = y + t * dy;
+            if (xx >= 0 && yy >= 0 && xx < ICON_CELL_W && yy < LABEL_H) sum += k[t + 2] * in[yy * ICON_CELL_W + xx];
+        }
+        out[y * ICON_CELL_W + x] = (uint16_t)((sum + 8) / 16);
+    }
+}
+static struct { char text[sizeof(((struct sh_icon *)0)->label)]; int aa, valid; uint8_t alpha[ICON_CELL_W * LABEL_H]; } label_halo[SH_ICONS];
+static const uint8_t *label_halo_of(int k, const char *label, char lines[2][32], int count)
+{
+    /* Halo alpha of desktop icon k's label block (ICON_CELL_W x LABEL_H). */
+    int aa = desk_theme->text_aa;
+    if (label_halo[k].valid && label_halo[k].aa == aa && !strcmp(label_halo[k].text, label)) return label_halo[k].alpha;
+    static uint32_t mask[ICON_CELL_W * LABEL_H];
+    static uint16_t a[ICON_CELL_W * LABEL_H], b[ICON_CELL_W * LABEL_H];
+    memset(mask, 0, sizeof(mask));
+    struct desk_paint m = {mask, ICON_CELL_W, LABEL_H, 0, 0, ICON_CELL_W, LABEL_H};
+    for (int l = 0; l < count; l++)
+        desk_paint_text(&m, DESK_FONT_LABEL, (ICON_CELL_W - desk_text_measure(DESK_FONT_LABEL, lines[l])) / 2,
+                        LABEL_BASE + l * LABEL_PITCH, lines[l], 0x0000ffu);
+    for (int i = 0; i < ICON_CELL_W * LABEL_H; i++) a[i] = (uint16_t)(mask[i] & 255u);
+    for (int pass = 0; pass < 2; pass++) { binomial(a, b, 1, 0); binomial(b, a, 0, 1); }
+    for (int y = 0; y < LABEL_H; y++) for (int x = 0; x < ICON_CELL_W; x++) {
+        unsigned v = y ? (unsigned)a[(y - 1) * ICON_CELL_W + x] * HALO_GAIN / 16 : 0;   /* 1 px down */
+        label_halo[k].alpha[y * ICON_CELL_W + x] = (uint8_t)(v > HALO_PEAK ? HALO_PEAK : v);
+    }
+    snprintf(label_halo[k].text, sizeof(label_halo[k].text), "%s", label);
+    label_halo[k].aa = aa; label_halo[k].valid = 1;
+    return label_halo[k].alpha;
 }
 static void draw_icons(struct desktop *d, struct desk_box clip)
 {
@@ -850,27 +907,31 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
         struct desk_box b;
         if (!desk_intersect(ic->box, clip, &b)) continue;
         struct du_canvas c = canvas(d, b);
+        struct desk_paint p = painter(&c);
         int selected = k == d->sh.icon_selected;
-        int32_t ix = ic->box.x + (ic->box.w - 32) / 2, iy = ic->box.y + 4;
-        du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, 32), 32, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
-        char lines[2][16];
-        label_lines(ic->label, lines);
-        for (int l = 0; l < 2 && lines[l][0]; l++) {
-            int32_t tw = du_text_width(lines[l]), tx = ic->box.x + (ic->box.w - tw) / 2, ty = iy + 38 + l * 14;
-            if (selected) {
-                du_fill(&c, (struct du_rect){tx - 2, ty - 3, tw + 4, 15}, SH_HOT);
-                du_text(&c, tx, ty, lines[l], SH_HOT_INK);
-            } else {
-                /* White on the wallpaper with a soft dark shadow. */
-                struct desk_paint p = painter(&c);
-                desk_paint_text(&p, desk_theme->font_ui, tx + 1, ty + 1 + desk_font_cap(desk_theme->font_ui), lines[l], 0x000000u);
-                du_text(&c, tx, ty, lines[l], 0xffffffu);
+        int32_t ix = ic->box.x + (ic->box.w - SH_DESKTOP_ICON) / 2, iy = ic->box.y + 4;
+        du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, SH_DESKTOP_ICON), SH_DESKTOP_ICON, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        char lines[2][32];
+        int count = label_lines(ic->label, lines), widest = 0;
+        for (int l = 0; l < count; l++) { int w = desk_text_measure(DESK_FONT_LABEL, lines[l]); if (w > widest) widest = w; }
+        int32_t top = ic->box.y + LABEL_TOP;
+        struct desk_box sel = {ic->box.x + (ICON_CELL_W - widest) / 2 - 5, top + 1, widest + 10, count * LABEL_PITCH + 4};
+        if (selected)   /* rounded, translucent: a light tint of the selection colour, the wallpaper shows through */
+            desk_paint_round_blend(&p, sel.x, sel.y, sel.w, sel.h, 4, desk_mix(0xffffffu, SH_HOT, 80), 130,
+                                   desk_mix(0xffffffu, SH_HOT, 170), 235);
+        /* The cached halo, then white text over it. */
+        const uint8_t *halo = label_halo_of(k, ic->label, lines, count);
+        struct desk_box area;
+        if (desk_intersect((struct desk_box){ic->box.x, top, ICON_CELL_W, LABEL_H}, b, &area))
+            for (int32_t y = area.y; y < area.y + area.h; y++) {
+                const uint8_t *row = halo + (size_t)(y - top) * ICON_CELL_W + (size_t)(area.x - ic->box.x);
+                uint32_t *dst = d->pixels + (size_t)y * d->width + (size_t)area.x;
+                for (int32_t x = 0; x < area.w; x++) if (row[x]) dst[x] = desk_mix(0x000000u, dst[x], row[x]);
             }
-        }
-        if (selected && d->focus < 0 && !d->sh.levels) {
-            int32_t tw = du_text_width(lines[0]);
-            du_dotted(&c, (struct du_rect){ic->box.x + (ic->box.w - tw) / 2 - 3, iy + 34, tw + 6, lines[1][0] ? 31 : 17});
-        }
+        for (int l = 0; l < count; l++)
+            desk_paint_text(&p, DESK_FONT_LABEL, ic->box.x + (ICON_CELL_W - desk_text_measure(DESK_FONT_LABEL, lines[l])) / 2,
+                            top + LABEL_BASE + l * LABEL_PITCH, lines[l], 0xffffffu);
+        if (selected && d->focus < 0 && !d->sh.levels) du_dotted(&c, (struct du_rect){sel.x + 2, sel.y + 2, sel.w - 4, sel.h - 4});
     }
 }
 
@@ -1297,7 +1358,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         push_button(&c, button_box(content, 0, 1), "OK", 1);
         break;
     case DESK_INTERNAL_RUN: {
-        du_icon_blit(&c, content.x + 12, content.y + 12, desk_shell_icon("application-x-executable", 32), 32, DU_ICON_NORMAL);
+        du_icon_blit(&c, content.x + 12, content.y + 12, desk_shell_icon("go-jump", 32), 32, DU_ICON_NORMAL);
         multiline(&c, content.x + 56, content.y + 14, "Type the name of a program in /bin, followed by\nits arguments, and CiukiOS will start it.", SH_INK);
         du_label(&c, content.x + 12, content.y + 52 + (22 - DU_GLYPH_H) / 2, "&Open:", SH_INK, 1);
         struct du_rect field = {content.x + 56, content.y + 52, content.w - 68, 22};

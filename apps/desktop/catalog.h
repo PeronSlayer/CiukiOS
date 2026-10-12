@@ -11,7 +11,7 @@ struct desk_catalog_entry { const char *name, *label, *tango; int takes_file; co
 static const struct desk_catalog_entry desk_catalog[] = {
     {"calc", "Calculator", "accessories-calculator", 0, ""},
     {"charmap", "Character Map", "accessories-character-map", 0, ""},
-    {"clock", "Clock", "office-calendar", 0, ""},
+    {"clock", "Clock", "appointment-new", 0, ""},   /* a clock face; Settings > Date & Time keeps office-calendar */
     {"help", "CiukiOS Help", "help-browser", 1, ""},
     {"mixer", "Volume Control", "audio-volume-high", 0, ""},
     {"viewer", "Image Viewer", "image-x-generic", 1, "png|jpg|jpeg|jpe|bmp|gif|xrgb"},
@@ -22,11 +22,13 @@ static const struct desk_catalog_entry desk_catalog[] = {
  * scripts/build_games_disk.py), which every /bin/dosbox window boots.
  * Programs > Games starts "/bin/dosbox --name=<title> <command>"; dosbox
  * types the command at the DOS prompt (apps/dosbox/autorun.h). Commands
- * use only characters autorun.h can type; title is the window title. */
+ * use only characters autorun.h can type; title is the window title.
+ * Icon: Tango input-gaming (a game), distinct from the Games folder
+ * (applications-games) and from the Ciuki Demo. */
 struct desk_game_entry { const char *label, *title, *command, *tango; };
 static const struct desk_game_entry desk_games[] = {
-    {"Wolfenstein 3D (shareware)", "Wolfenstein 3D", "\\WOLF3D\\WOLF3D.EXE", "applications-games"},
-    {"DOOM (shareware)", "DOOM", "\\DOOM\\DOOM.EXE -config CIUKI.CFG", "applications-games"},
+    {"Wolfenstein 3D (shareware)", "Wolfenstein 3D", "\\WOLF3D\\WOLF3D.EXE", "input-gaming"},
+    {"DOOM (shareware)", "DOOM", "\\DOOM\\DOOM.EXE -config CIUKI.CFG", "input-gaming"},
 };
 #define DESK_GAME_COUNT (sizeof(desk_games) / sizeof(desk_games[0]))
 static inline const struct desk_catalog_entry *desk_catalog_find(const char *name)

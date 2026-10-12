@@ -6,7 +6,11 @@
  * names here exist in the pinned archive at 16, 22 and 32 px
  * (48 px derived), which tests/host/desktop/test_icons.py verifies for every
  * entry. Identity objects (Computer, About, the Ciuki button) use the
- * approved portrait (DU_ICON_CIUKI), never a Tango or redrawn dog. */
+ * approved portrait (DU_ICON_CIUKI), never a Tango or redrawn dog.
+ * One icon per object everywhere: the desktop shell's own tables (shell.c
+ * programs[] and Start menu, catalog.h) use the same Tango names as the
+ * program:, menu: and settings: entries below (test_icons.py checks it), so
+ * a program shows one icon in the Start menu, Files' /bin and Task Manager. */
 #include "deskui.h"
 #include <string.h>
 
@@ -20,14 +24,14 @@ const struct du_icon_map du_icon_map[] = {
     {"program:dosbox", "utilities-terminal"},          /* MS-DOS Prompt class VM window */
     {"program:demo", "preferences-desktop-peripherals"}, /* keyboard/mouse input demo window */
     {"program:hello", "face-smile"},                   /* prints a greeting */
-    {"program:lua", "applications-development"},       /* Lua interpreter */
+    {"program:lua", "text-x-script"},                  /* Lua interpreter (runs scripts; the Developer folder is applications-development) */
     {"program:libc_smoke", "applications-system"},     /* C library self-test */
     {"program:desktop", "user-desktop"},
     {"program:setup", "system-installer"},
     /* Accessories (apps/desktop/catalog.h: the launcher's Tango names). */
     {"program:calc", "accessories-calculator"},
     {"program:charmap", "accessories-character-map"},
-    {"program:clock", "office-calendar"},
+    {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */
     {"program:help", "help-browser"},
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
@@ -37,7 +41,7 @@ const struct du_icon_map du_icon_map[] = {
     {"menu:start", DU_ICON_CIUKI},
     {"menu:about", DU_ICON_CIUKI},
     {"menu:programs", "applications-other"},
-    {"menu:documents", "x-office-document"},
+    {"menu:documents", "document-open"},
     {"menu:settings", "preferences-system"},
     {"menu:control-panel", "preferences-desktop"},
     {"menu:find", "system-search"},
@@ -52,6 +56,7 @@ const struct du_icon_map du_icon_map[] = {
     {"menu:accessories", "applications-accessories"},
     {"menu:development", "applications-development"},
     {"menu:games", "applications-games"},
+    {"menu:game", "input-gaming"},                     /* a game of Programs > Games (catalog.h desk_games) */
     {"menu:graphics", "applications-graphics"},
     {"menu:internet", "applications-internet"},
     {"menu:multimedia", "applications-multimedia"},
@@ -264,7 +269,7 @@ const struct du_icon_map du_icon_map[] = {
     {"settings:*", "preferences-system"},
     {"settings:system", "preferences-system"},
     {"settings:desktop", "preferences-desktop"},
-    {"settings:display", "video-display"},
+    {"settings:display", "preferences-desktop-wallpaper"}, /* Settings > Display: the wallpaper and theme page */
     {"settings:theme", "preferences-desktop-theme"},
     {"settings:wallpaper", "preferences-desktop-wallpaper"},
     {"settings:screensaver", "preferences-desktop-screensaver"},
@@ -273,7 +278,7 @@ const struct du_icon_map du_icon_map[] = {
     {"settings:shortcuts", "preferences-desktop-keyboard-shortcuts"},
     {"settings:mouse", "input-mouse"},
     {"settings:game-controllers", "input-gaming"},
-    {"settings:sound", "preferences-desktop-multimedia"},
+    {"settings:sound", "audio-card"},
     {"settings:accessibility", "preferences-desktop-accessibility"},
     {"settings:locale", "preferences-desktop-locale"},
     {"settings:date-time", "office-calendar"},
@@ -297,7 +302,7 @@ const struct du_icon_map du_icon_map[] = {
     {"category:office", "applications-office"},
     {"category:system", "applications-system"},
     {"category:other", "applications-other"},
-    {"category:settings", "preferences-desktop"},
+    {"category:settings", "preferences-system"},
 
     /* Emblems (overlays) */
     {"emblem:*", "emblem-important"},
