@@ -682,9 +682,6 @@
        },
        "dma_faults": {
         "eq": 0
-       },
-       "audible": {
-        "eq": 0
        }
       },
       "exact_count": 5,
@@ -1033,9 +1030,6 @@
         "ge": 1
        },
        "dma_faults": {
-        "eq": 0
-       },
-       "audible": {
         "eq": 0
        }
       },

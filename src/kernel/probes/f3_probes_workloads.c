@@ -475,10 +475,14 @@ CIUKI_F3_PROBE("dos4gw", probe_f3_dos4gw);
 
 /* ---- f3:doom, f3:doom-sound ---- */
 /* "timed %i gametics in %i realtics" (G_CheckDemoStatus, I_Error) on the
- * text screen after DOOM returns to mode 03h. */
+ * text screen after DOOM returns to mode 03h. Read from the screen latched
+ * at RUNREC's verdict line: by the time the shell prompt is back, the shell
+ * has redrawn its title bar on row 0, where DOOM printed the line (QEMU
+ * zz-doom c11506e9). The live screen is only a fallback. */
 static bool doom_timed(struct dosvm *v, unsigned *gametics, unsigned *realtics)
 {
-    const uint16_t *text = dosvm_text(v, 0);
+    const uint16_t *text = dosvm_verdict_text(v);
+    if (!text) text = dosvm_text(v, 0);
     static const char mark[] = "timed ", mid[] = " gametics in ";
     for (unsigned row = 0; row < 25; row++) {
         char line[81];
@@ -548,9 +552,10 @@ static int doom_probe(const char *name, bool sound)
                  loop, w.dpmi.stats.entries, w.dpmi.stats.terminations, w.dpmi.stats.exceptions, w.dpmi.stats.irqs_pm,
                  w.dpmi.stats.faults, w.dpmi.stats.stale, dpmi_released(&w.dpmi));
         /* f3-05 counters: DSP resets, block boundaries, PCM frames, IRQ
-         * edges, services, OPL events, DMA faults. No consumer is attached
-         * in F3, so nothing is audible (audible output is an F4 check). */
-        rec_emit(name, "DATA", "case=audio loop=%u resets=%u blocks=%u frames=%u edges=%u services=%u opl=%u dma_faults=%u audible=%u",
+         * edges, services, OPL events, DMA faults; consumer = the f4-05
+         * native output attached to this VM (AC97 profiles), not a pass
+         * condition: audible output is checked by the F4 cases. */
+        rec_emit(name, "DATA", "case=audio loop=%u resets=%u blocks=%u frames=%u edges=%u services=%u opl=%u dma_faults=%u consumer=%u",
                  loop, a.resets, a.boundaries, (uint32_t)a.frames, a.irq_edges, a.services, (uint32_t)a.events, a.dma_faults,
                  a.consumer);
         if (!e && (!timed || !status || !w.graphics || !w.video.starts || !dpmi_released(&w.dpmi) ||

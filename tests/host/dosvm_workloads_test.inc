@@ -189,8 +189,43 @@ static void test_workload_base_image(void)
     printf("f3-06 base image: further read-only image, workload disk lookup within the kernel heap limit, window VMs (syscall 72, mixer attached) boot it with the staged DPMI host\n");
 }
 
+/* The verdict line latches the text screen: a child's output that the shell
+ * later overwrites (its row-0 title bar) stays readable (QEMU zz-doom). */
+static void text_row(struct dosvm *v, unsigned row, const char *text)
+{
+    uint16_t cells[80];
+    bool end = false;
+    for (unsigned i = 0; i < 80; i++) { end = end || !text[i]; cells[i] = 0x0700 | (end ? ' ' : (uint8_t)text[i]); }
+    CHECK(!dosvm_write(v, 0xB8000 + row * 160, cells, sizeof(cells)));
+}
+static void test_workload_verdict_screen(void)
+{
+    struct dosvm *v = create();
+    dosvm_expect(v, "RUNREC");
+    CHECK(!dosvm_verdict_text(v));
+    text_row(v, 0, "timed 1710 gametics in 15190 realtics");
+    text_row(v, 1, "RUNREC FAIL R01 T00");
+    line(v, "RUNREC FAIL R01 T00");
+    const uint16_t *latched = dosvm_verdict_text(v);
+    CHECK(latched && v->info.verdict_done && !v->info.verdict_pass && !strcmp(v->info.verdict_detail, "R01_T00"));
+    CHECK((uint8_t)latched[0] == 't' && (uint8_t)latched[80] == 'R');
+    text_row(v, 0, "                             CiukiOS pre-Alpha v0.8.3");
+    CHECK((uint8_t)latched[0] == 't' && (uint8_t)dosvm_text(v, 0)[29] == 'C');
+    line(v, "RUNREC PASS");                              /* a verdict latches once */
+    CHECK(dosvm_verdict_text(v) == latched && (uint8_t)latched[0] == 't');
+    dosvm_expect(v, "RUNREC");
+    CHECK(!dosvm_verdict_text(v));
+    line(v, "OTHER PASS");
+    CHECK(!dosvm_verdict_text(v) && !v->info.verdict_done);
+    line(v, "RUNREC PASS");
+    CHECK(dosvm_verdict_text(v) && v->info.verdict_pass && (uint8_t)dosvm_verdict_text(v)[29] == 'C');
+    destroy(v, true); empty();
+    printf("f3-06 verdict screen: latched at the payload's verdict line, kept over the shell redraw, reset by dosvm_expect\n");
+}
+
 static void test_workloads(void)
 {
+    test_workload_verdict_screen();
     test_workload_pm_vga();
     test_workload_direct_window();
     test_workload_base_image();

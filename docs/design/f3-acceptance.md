@@ -1238,11 +1238,14 @@ the runner's probe-name grammar now allows digits):
   32 MiB DPMI VM booted from `CIUKIGAM.IMG` running `\RUNREC.COM \DOOM
   DOOM.EXE -config CIUKI.CFG [-nosound] -timedemo demo1`: `case=loop`
   (ms to the first DPMI entry and to the first page flip = launch time, run
-  time, gametics/realtics parsed from the text screen, RUNREC status, exit
+  time, gametics/realtics parsed from the text screen latched at RUNREC's
+  verdict line (`dosvm_verdict_text`: the CiukiOS shell redraws its row-0
+  title bar over DOOM's line before the prompt; QEMU zz-doom c11506e9), RUNREC status, exit
   code 1 type 0), `case=video` (Mode Y 320x200 seen, flips, faults, PM
   faults, window openings), `case=dpmi`, `case=audio` (f3-05 counters:
   DSP resets, block boundaries, PCM frames, IRQ edges, services, OPL events,
-  DMA faults; no consumer, `audible=0`), `case=loop_cleanup`. Without sound
+  DMA faults; `consumer` = the f4-05 native output attached on AC97
+  profiles, not a pass condition), `case=loop_cleanup`. Without sound
   every audio counter must be 0; with sound DSP resets and OPL events >= 1.
 - `f3:wolf3d`: real-mode VM (no DPMI flag) from `CIUKIGAM.IMG`; `RUNREC
   \WOLF3D WOLF3D.EXE`; the signon frame must stay unchanged for 6 s (its
