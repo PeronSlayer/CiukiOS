@@ -37,6 +37,7 @@ struct cp_host {
     int (*load_sounds)(void *, char *, size_t, size_t *);
     int (*save_sounds)(void *, const char *, size_t);
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
+    int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
     uint32_t screen_w, screen_h;
@@ -48,6 +49,8 @@ struct cp_app {
     struct cp_host host;
     struct ciuki_settings cfg;
     int page, volume, muted, mixer_ok, audio_testing;
+    struct ciuki_audio_diagnostics audio_before;
+    int audio_before_ok;
     char sound_text[SOUND_TEXT_MAX+1];
     struct sound_scheme sounds; unsigned sound_selected;
     struct du_item sound_items[SOUND_EVENTS];

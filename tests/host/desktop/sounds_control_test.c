@@ -9,6 +9,10 @@ static int save(void *c,const char *text,size_t n) { (void)c;if(failed_save)retu
 static int apply(void *c,unsigned r,int v,int m) { (void)c;(void)m;request=r;arg=v;return 0; }
 static int mixer(void *c,int *v,int *m) { (void)c;*v=70;*m=0;return 0; }
 static unsigned sound_event_seen;
+static struct ciuki_audio_diagnostics diag;
+static int diag_error;
+static int diagnostics(void *c,struct ciuki_audio_diagnostics *out)
+{ (void)c;*out=diag;return diag_error; }
 static void sound_event(void *ctx,unsigned e) { (void)ctx;sound_event_seen=e; }
 static struct du_widget *find(struct du_ui *u,const char *text)
 { for(unsigned i=0;i<u->count;i++) if(!strcmp(u->widgets[i].text,text))return &u->widgets[i];assert(0);return NULL; }
@@ -16,7 +20,9 @@ int main(int argc,char **argv)
 {
     assert(argc==2); static struct cp_app a; static struct du_ui u; static uint32_t pixels[CP_WIDTH*CP_HEIGHT];
     strcpy(saved,"enabled=1\nerror=custom.wav\n");saved_n=strlen(saved);
-    a.host=(struct cp_host){.mixer=mixer,.apply=apply,.load_sounds=load,.save_sounds=save};
+    a.host=(struct cp_host){.mixer=mixer,.apply=apply,.load_sounds=load,.save_sounds=save,.audio_diagnostics=diagnostics};
+    diag=(struct ciuki_audio_diagnostics){.version=1,.size=64,.codec_id=0x43525931,.controller=0x80862485,
+        .flags=CIUKI_AUDIO_DIAG_READY,.irq_line=11,.fetched_frames=10,.irqs=1,.power=15,.master=0x0404,.pcm=0x0808,.rate=48000};
     du_init(&u,pixels,CP_WIDTH,CP_HEIGHT);u.focused_window=1;assert(!cp_attach(&a,&u,CP_SOUNDS));
     assert(!strcmp(a.sounds.file[SOUND_ERROR],"custom.wav"));
     struct du_widget *list=NULL;for(unsigned i=0;i<u.count;i++)if(u.widgets[i].items==a.sound_items)list=&u.widgets[i];
@@ -26,7 +32,17 @@ int main(int argc,char **argv)
     ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Test")->id};u.event(&u,&ev,u.user);
     assert(request==DESK_SETTINGS_SOUND_TEST && arg==SOUND_ERROR);
     ev.id=find(&u,"Test audio hardware")->id;u.event(&u,&ev,u.user);assert(request==DESK_SETTINGS_AUDIO_TEST && a.audio_testing);
-    assert(find(&u,"Test audio hardware")->disabled);cp_audio_result(&a,0);assert(!a.audio_testing);
+    assert(find(&u,"Test audio hardware")->disabled);
+    diag.fetched_frames+=48000;diag.irqs+=187;cp_audio_result(&a,0);assert(!a.audio_testing);
+    assert(strstr(u.dialog.text,"Codec: 43525931") && strstr(u.dialog.text,"DMA advanced: yes (48000 frames)") && strstr(u.dialog.text,"IRQs received: yes (187, line 11)"));
+    du_dialog_close(&u);
+    ev.id=find(&u,"Test audio hardware")->id;u.event(&u,&ev,u.user);cp_audio_result(&a,-5);
+    assert(strstr(u.dialog.text,"DMA advanced: no (0 frames)") && strstr(u.dialog.text,"IRQs received: no (0, line 11)"));
+    du_dialog_close(&u);
+    diag.flags=CIUKI_AUDIO_DIAG_QUARANTINE;diag.last_error=-110;cp_audio_result(&a,-5);
+    assert(strstr(u.dialog.text,"Kernel error: -110") && strstr(u.dialog.text,"unavailable, quarantined"));du_dialog_close(&u);
+    diag_error=-19;cp_audio_result(&a,-19);assert(strstr(u.dialog.text,"diagnostics unavailable (error -19)"));du_dialog_close(&u);
+    diag_error=0;diag.flags=CIUKI_AUDIO_DIAG_READY;diag.last_error=0;
     ev=(struct du_event){.type=DU_EV_CHANGE,.id=find(&u,"Play system sounds")->id};u.event(&u,&ev,u.user);
     assert(!a.sounds.enabled && request==DESK_SETTINGS_SOUND_RELOAD);
     struct sound_scheme scheme;sound_defaults(&scheme);assert(!sound_parse(&scheme,saved,saved_n));

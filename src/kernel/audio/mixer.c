@@ -47,8 +47,10 @@ void audio_mix(struct audio_frame *out, unsigned frames)
     }
     if (audio_vm_mix) audio_vm_mix(sums, frames); /* every admitted VM, focused or not */
     for (unsigned i = 0; i < frames; i++) {
-        out[i].left = audio.master.mute ? 0 : saturate(sums[i][0] * audio.master.left / 100);
-        out[i].right = audio.master.mute ? 0 : saturate(sums[i][1] * audio.master.right / 100);
+        unsigned left = audio.master_in_codec && audio.master.left ? 100 : audio.master.left;
+        unsigned right = audio.master_in_codec && audio.master.right ? 100 : audio.master.right;
+        out[i].left = audio.master.mute ? 0 : saturate(sums[i][0] * left / 100);
+        out[i].right = audio.master.mute ? 0 : saturate(sums[i][1] * right / 100);
     }
     if (audio_vm_tap) audio_vm_tap(out, frames);
     audio.output += frames;

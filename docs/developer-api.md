@@ -640,6 +640,34 @@ F4-01: fixed copied device-control extension.
 #define AUDIO_RESET 0x4106u
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
+#define MIXER_GET_DIAGNOSTICS 0x4203u
+#define CIUKI_AUDIO_DIAG_READY 1u
+#define CIUKI_AUDIO_DIAG_RUNNING 2u
+#define CIUKI_AUDIO_DIAG_QUARANTINE 4u
+```
+
+Read-only kernel observations, also available on an absent/failed backend.
+
+```c
+struct ciuki_audio_diagnostics {
+    uint32_t version;
+    uint32_t size;
+    uint32_t codec_id;
+    uint32_t controller;
+    uint32_t flags;
+    uint32_t irq_line;
+    uint32_t civ;
+    uint32_t picb;
+    uint64_t fetched_frames;
+    uint64_t irqs;
+    int32_t last_error;
+    uint16_t power;
+    uint16_t master;
+    uint16_t pcm;
+    uint16_t rate;
+    uint32_t reserved;
+};
+
 #define CIUKI_MIXER_DEFAULTS 0u
 #define CIUKI_MIXER_SAVED 1u
 #define CIUKI_MIXER_UNSAVED 2u
