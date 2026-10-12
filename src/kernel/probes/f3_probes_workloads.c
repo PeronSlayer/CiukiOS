@@ -37,6 +37,7 @@
 #define GAME_LOOPS 5u
 #define DOOM_LOOP_MS 1200000u      /* one timedemo under TCG; QEMU suite timeout covers 5 */
 #define WOLF_LOOP_MS 300000u
+#define WOLF_PLAY_START_MS 90000u    /* menu keys to steady 3D flipping */
 #define BASE_BYTES (262144u * 512u)
 
 /* ---- shared VM helpers ---- */
@@ -52,23 +53,6 @@ static bool wl_prompt(struct dosvm *v)
         }
     }
     return false;
-}
-/* Failure diagnostic: the guest text screen (spaces '_', '=' and non-ASCII '.'). */
-static void wl_screen(const char *name, struct dosvm *v)
-{
-    const uint16_t *text = dosvm_text(v, 0);
-    for (unsigned row = 0; row < 25; row++) {
-        char line[81];
-        unsigned len = 0;
-        for (unsigned col = 0; col < 80; col++) {
-            uint8_t ch = (uint8_t)text[row * 80 + col];
-            line[col] = ch == ' ' || !ch ? '_' : ch > ' ' && ch < 127 && ch != '=' ? (char)ch : '.';
-            if (ch > ' ' && ch < 127) len = col + 1;
-        }
-        if (!len) continue;
-        line[len] = 0;
-        rec_emit(name, "DATA", "group=screen row=%u text=%s", row, line);
-    }
 }
 static int wl_boot(const struct dosvm_config *config, struct dosvm **out)
 {
@@ -463,7 +447,7 @@ static int probe_f3_dos4gw(void)
         int e = wl_boot(&config, &v);
         if (!e) e = dos4gw_run(v, &w);
         bool released = dpmi_released(&w.dpmi);
-        if (e && v) wl_screen(name, v);
+        if (e && v) probe_dos_screen(name, v);
         if (v) { int x = wl_exit(&v); if (!e) e = x; }
         baseline_take(&now);
         bool same = baseline_equal(&base, &now);
@@ -492,10 +476,14 @@ CIUKI_F3_PROBE("dos4gw", probe_f3_dos4gw);
 
 /* ---- f3:doom, f3:doom-sound ---- */
 /* "timed %i gametics in %i realtics" (G_CheckDemoStatus, I_Error) on the
- * text screen after DOOM returns to mode 03h. */
+ * text screen after DOOM returns to mode 03h. Read from the screen latched
+ * at RUNREC's verdict line: by the time the shell prompt is back, the shell
+ * has redrawn its title bar on row 0, where DOOM printed the line (QEMU
+ * zz-doom c11506e9). The live screen is only a fallback. */
 static bool doom_timed(struct dosvm *v, unsigned *gametics, unsigned *realtics)
 {
-    const uint16_t *text = dosvm_text(v, 0);
+    const uint16_t *text = dosvm_verdict_text(v);
+    if (!text) text = dosvm_text(v, 0);
     static const char mark[] = "timed ", mid[] = " gametics in ";
     for (unsigned row = 0; row < 25; row++) {
         char line[81];
@@ -558,16 +546,18 @@ static int doom_probe(const char *name, bool sound)
         if (v) dosvm_audio_info(dosvm_key(v), &a);
         rec_emit(name, "DATA", "case=loop loop=%u dpmi_ms=%u launch_ms=%u run_ms=%u gametics=%u realtics=%u timed=%u status=%u rc=%u type=%u error=%d",
                  loop, (uint32_t)w.dpmi_ms, (uint32_t)w.flip_ms, (uint32_t)w.end_ms, gametics, realtics, timed, status, rc, type, e);
-        rec_emit(name, "DATA", "case=video loop=%u graphics=%u width=%u height=%u flips=%u faults=%u pm_faults=%u maps=%u flushes=%u mode=%u",
-                 loop, w.graphics, w.width, w.height, w.video.starts, w.video.faults, w.video.pm_faults,
-                 w.video.maps, w.video.flushes, w.video.mode);
-        rec_emit(name, "DATA", "case=dpmi loop=%u entries=%u terminations=%u exceptions=%u irq_pm=%u faults=%u stale=%u released=%u",
+        rec_emit(name, "DATA", "case=video loop=%u graphics=%u width=%u height=%u flips=%u pm_faults=%u maps=%u mode=%u linear_maps=%u linear_harvests=%u",
+                 loop, w.graphics, w.width, w.height, w.video.starts, w.video.pm_faults,
+                 w.video.maps, w.video.mode, w.video.linear_maps, w.video.linear_harvests);
+        rec_emit(name, "DATA", "case=video_detail loop=%u faults=%u flushes=%u", loop, w.video.faults, w.video.flushes);
+        rec_emit(name, "DATA", "case=dpmi loop=%u entries=%u terminations=%u exceptions=%u irq_pm=%u faults=%u stale=%u released=%u popf=%u",
                  loop, w.dpmi.stats.entries, w.dpmi.stats.terminations, w.dpmi.stats.exceptions, w.dpmi.stats.irqs_pm,
-                 w.dpmi.stats.faults, w.dpmi.stats.stale, dpmi_released(&w.dpmi));
+                 w.dpmi.stats.faults, w.dpmi.stats.stale, dpmi_released(&w.dpmi), w.dpmi.stats.if_restored);
         /* f3-05 counters: DSP resets, block boundaries, PCM frames, IRQ
-         * edges, services, OPL events, DMA faults. No consumer is attached
-         * in F3, so nothing is audible (audible output is an F4 check). */
-        rec_emit(name, "DATA", "case=audio loop=%u resets=%u blocks=%u frames=%u edges=%u services=%u opl=%u dma_faults=%u audible=%u",
+         * edges, services, OPL events, DMA faults; consumer = the f4-05
+         * native output attached to this VM (AC97 profiles), not a pass
+         * condition: audible output is checked by the F4 cases. */
+        rec_emit(name, "DATA", "case=audio loop=%u resets=%u blocks=%u frames=%u edges=%u services=%u opl=%u dma_faults=%u consumer=%u",
                  loop, a.resets, a.boundaries, (uint32_t)a.frames, a.irq_edges, a.services, (uint32_t)a.events, a.dma_faults,
                  a.consumer);
         if (!e && (!timed || !status || !w.graphics || !w.video.starts || !dpmi_released(&w.dpmi) ||
@@ -575,7 +565,7 @@ static int doom_probe(const char *name, bool sound)
             e = -EFAULT;
         if (!e && sound && (!a.resets || !a.events)) e = -EFAULT;          /* SB detected, OPL music written */
         if (!e && !sound && (a.resets || a.events || a.frames)) e = -EFAULT; /* -nosound touches neither */
-        if (e && v) wl_screen(name, v);
+        if (e && v) probe_dos_screen(name, v);
         if (v) { int x = wl_exit(&v); if (!e) e = x; }
         struct dosvm_ledger now;
         dosvm_snapshot(&now);
@@ -722,19 +712,33 @@ static int probe_f3_wolf3d(void)
             if (!wl_key(key, 0x1C)) e = -EFAULT;
             task_sleep_ms(2500);
         }
+        /* SetupGameLevel, PreloadGraphics ("Get Psyched") and the fizzle-in
+         * take an unknown time under TCG: play has begun once ThreeDRefresh
+         * flips steadily (WL_DRAW.C, CRTC 0Ch each frame), at least 3 flips
+         * in one second; the 3 s measurement starts there. */
+        uint64_t play_wait = g_ticks;
+        bool started = false;
+        while (!e && !started && g_ticks - play_wait < WOLF_PLAY_START_MS) {
+            struct dosvm_video_info a = {0}, b = {0};
+            dosvm_video_info(key, &a);
+            task_sleep_ms(1000);
+            dosvm_video_info(key, &b);
+            started = b.starts - a.starts >= 3;
+        }
+        uint32_t start_ms = (uint32_t)(g_ticks - play_wait);
         if (!e) {
-            task_sleep_ms(4000);
             dosvm_video_info(key, &play0);
             task_sleep_ms(3000);
             dosvm_video_info(key, &play1);
         }
         uint32_t flips = play1.starts - play0.starts;
-        bool playing = !e && flips >= 10 && play1.unchained && play1.width == 320;
+        bool playing = !e && started && flips >= 10 && play1.unchained && play1.width == 320;
         if (!e) {
             dosvm_frame_digest(v, 0, &frame);
             hex32(frame.digest, hex);
-            rec_emit(name, "DATA", "case=play loop=%u playing=%u flips=%u faults=%u maps=%u digest=%s",
-                     loop, playing, flips, play1.faults, play1.maps, hex);
+            rec_emit(name, "DATA", "case=play loop=%u playing=%u flips=%u start_ms=%u faults=%u burst=%u maps=%u digest=%s",
+                     loop, playing, flips, start_ms, play1.faults - play0.faults, play1.burst - play0.burst,
+                     play1.maps - play0.maps, hex);
         }
         /* F10 pops the quit dialog in play (WL_PLAY.C CheckKeys); Y confirms. */
         if (!e && !wl_key(key, 0x44)) e = -EFAULT;
@@ -745,7 +749,7 @@ static int probe_f3_wolf3d(void)
         rec_emit(name, "DATA", "case=loop loop=%u launch_ms=%u run_ms=%u screens=%u status=%u rc=%u type=%u xms_calls=%u ems_calls=%u error=%d",
                  loop, (uint32_t)w.flip_ms, (uint32_t)w.end_ms, screens, status, rc, type, w.info.xms_calls, w.info.ems_calls, e);
         if (!e && (!playing || !status || rc || type || !w.graphics)) e = -EFAULT;
-        if (e && v) wl_screen(name, v);
+        if (e && v) probe_dos_screen(name, v);
         if (v) { int x = wl_exit(&v); if (!e) e = x; }
         struct dosvm_ledger now;
         dosvm_snapshot(&now);
@@ -886,7 +890,7 @@ static int probe_f3_vm_starve(void)
     if (!error && (!ref.pass || !loaded.pass || !spinning || ref.keys < 16 || loaded.keys < 16 ||
                    timer_pct < 50 || beat_pct < 20 || loaded.key_ms > 1000))
         error = -EFAULT;
-    if (error && a) wl_screen(name, a);
+    if (error && a) probe_dos_screen(name, a);
     if (b) { int x = dosvm_destroy(dosvm_key(b), true); if (!error) error = x; }
     if (a) { int x = wl_exit(&a); if (!error) error = x; }
     if (native) { task_kill(native, 0); task_reap(native); }

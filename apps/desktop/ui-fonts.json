@@ -1,0 +1,93 @@
+{
+  "codes": "U+0020-007E, U+00A0-00FF, U+2022, U+2026",
+  "conversion": "Pillow ImageFont (FreeType hinting, 8-bit coverage), ink-box crop, rounded advances",
+  "faces": {
+    "DESK_FONT_BOLD": {
+      "alpha_sha256": "fa42c673351e5ca51588477c2f397ed5a98cc9ccdfe35c505c4e11321b89d3cd",
+      "ascent": 12,
+      "descent": 3,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inter/OFL.txt",
+      "name": "Inter 12 SemiBold",
+      "size": 12,
+      "source": "upstream/inter/Inter[opsz,wght].ttf",
+      "source_sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+      "weight": 600
+    },
+    "DESK_FONT_LABEL": {
+      "alpha_sha256": "298eb378341afef21d59cac88c956e9c7db646aea84564d50521801bc9541361",
+      "ascent": 13,
+      "descent": 4,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inter/OFL.txt",
+      "name": "Inter 13",
+      "size": 13,
+      "source": "upstream/inter/Inter[opsz,wght].ttf",
+      "source_sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+      "weight": 400
+    },
+    "DESK_FONT_LARGE": {
+      "alpha_sha256": "5fc9eeb0ec44d7e92574eaf252772acf347df2aa7a5114a7d469f0186543b9f9",
+      "ascent": 22,
+      "descent": 6,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inter/OFL.txt",
+      "name": "Inter 22 Bold",
+      "size": 22,
+      "source": "upstream/inter/Inter[opsz,wght].ttf",
+      "source_sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+      "weight": 700
+    },
+    "DESK_FONT_MONO": {
+      "alpha_sha256": "d3d4d878127c9a863a7f4c582a63381d2de52eab59c3ee0c185945cb3d44654d",
+      "ascent": 11,
+      "descent": 3,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inconsolata/OFL.txt",
+      "name": "Inconsolata 12",
+      "size": 12,
+      "source": "upstream/inconsolata/Inconsolata[wdth,wght].ttf",
+      "source_sha256": "23ded25b447074d00659392bf9b1123d89df55cb07b0ad9bfef3366d199b5fcb",
+      "weight": 400
+    },
+    "DESK_FONT_MONO_BOLD": {
+      "alpha_sha256": "054500212e532d7b1503cc82bda18068f9231fbfc85d60e565f4c7f58d594943",
+      "ascent": 11,
+      "descent": 3,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inconsolata/OFL.txt",
+      "name": "Inconsolata 12 Bold",
+      "size": 12,
+      "source": "upstream/inconsolata/Inconsolata[wdth,wght].ttf",
+      "source_sha256": "23ded25b447074d00659392bf9b1123d89df55cb07b0ad9bfef3366d199b5fcb",
+      "weight": 700
+    },
+    "DESK_FONT_TITLE": {
+      "alpha_sha256": "af7fab8004847b632537ca70135f5ebd40386ca119fd7e731859be28dc1430d4",
+      "ascent": 13,
+      "descent": 4,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inter/OFL.txt",
+      "name": "Inter 13 Bold",
+      "size": 13,
+      "source": "upstream/inter/Inter[opsz,wght].ttf",
+      "source_sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+      "weight": 700
+    },
+    "DESK_FONT_UI": {
+      "alpha_sha256": "07159a6425b40ae5d77b808c6fc39a0f1ab2d2cbc7364b5e5072ef8475888860",
+      "ascent": 12,
+      "descent": 3,
+      "licence": "OFL-1.1",
+      "licence_file": "upstream/inter/OFL.txt",
+      "name": "Inter 12",
+      "size": 12,
+      "source": "upstream/inter/Inter[opsz,wght].ttf",
+      "source_sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+      "weight": 400
+    }
+  },
+  "freetype": "2.14.3",
+  "header_sha256": "46ea623d7bb46f07c5bf81ce2328805d3e1798019cca2e6764efa4fdb9abe62e",
+  "pillow": "12.3.0"
+}

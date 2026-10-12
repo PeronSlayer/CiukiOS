@@ -159,6 +159,55 @@ reported `Ran 99 tests`, `OK (skipped=5)`. The new payload SHA-256 is
 No QEMU validation of this payload was performed here; the three directed
 profiles and hardware #AC qualification remain with the lead.
 
+## QEMU TCG deviation: data-segment limits are not checked (f3-04)
+
+Run `d1a610eb` (`f3:dpmi`, qemu-t23, image `e0af9210…`, main `50ba47f`):
+`DPMI16 FAIL 0D 02` with `exceptions=1`. Stage 13 detail 2 loads a
+selector whose limit is FFh and reads `[es:200h]`; an Intel CPU raises
+#GP(0) ([Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+Vol. 3A, 5.3 limit checking). The kernel delivered only the preceding LGDT
+fault: the read completed. [QEMU 11.0.0's translator](https://github.com/qemu/qemu/blob/v11.0.0/target/i386/tcg/translate.c)
+forms data addresses in `gen_lea_v_seg_dest` by adding the segment base,
+with no limit comparison. The libx86emu runner checks limits, so the same
+client passed there. With `GUEST_TCG=1` the runner models this omission
+(data descriptors read with limit FFFFFh, G=1) and TCG's CPUID leaf
+40000000h; the unchanged client then fails `0D 02` with the same counters
+as QEMU (`exc=1 cb=8 raw=2 realcalls=12 max_depth=16`).
+
+The client still attempts the real fault first. Only when it does not trap
+and CPUID leaf 40000000h reports `TCGTCGTCGTCG` with a maximum leaf of at
+least 40000001h (the f2-14 rule above) does it print
+`DPMIxx NOTE tcg_no_data_limit_check` and deliver a CLTS #GP(0) instead,
+so the handler count, faulting IP and error-code checks stay strict. A
+Pentium III without the fault still fails `0D 02`. TCG PASS is not
+evidence of data-segment limit checking; that remains a hardware item.
+
+## QEMU TCG defect: stale block link after a code-buffer flush (f3-06, 2026-10-12)
+
+qemu-system-i386 11.1.1 died with SIGSEGV in `tb_jmp_unlink` (frame
+`tb_invalidate_phys_range_fast`) five times during the DOS workload cases:
+DOOM at the start of a later loop, Wolf3D during play. Analysis of the core
+dumps (an Opus agent, no symbols published for the distribution build;
+functions matched to the v11.1.1 source): since QEMU commit `ebf7a5d2`
+("accel/tcg: Improve buffer overflow in tb_gen_code", v10.2.0+) a full
+translated-code buffer is flushed synchronously in single-threaded TCG
+(always the case with `-icount` and one vCPU) and execution continues, but
+`cpu_exec_loop` still calls `tb_add_jump(last_tb, …)` with `last_tb`
+pointing into the flushed region; the stale entry sits in the first
+post-flush block's jump list and the next invalidation of that block
+(self-modifying code) walks it and writes through garbage. DOOM and
+Wolf3D patch their inner loops once per screen column (`WL_DR_A.ASM`
+`AsmRefresh` opcodes; DOOM column step immediates), so the buffer fills
+every few minutes and, under icount, the flush lands on the same
+instruction each run. Nothing in the CiukiOS kernel (plane window, VM
+teardown, EMS remaps) is involved: QEMU indexes translated code by physical
+address and only guest stores into code pages invalidate it. Mitigation
+adopted by the lead: the runner passes `-d nochain` with `-icount`, which
+disables direct block chaining so the stale link is never created (slower
+execution, same semantics). A four-line upstream fix (drop `last_tb` when
+`tb_flush_count` changes across `tb_gen_code`, restoring the 2016
+`tb_flushed` guard) is kept in the lead scratchpad for a report.
+
 ## Runner suites
 
 - `f0-smoke` (profiles `qemu-fast` and `qemu-t23`): PASS, both cases.

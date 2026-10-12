@@ -10,6 +10,13 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_SYS_DEVCTL", (uint32_t)(CIUKI_SYS_DEVCTL), 69u},
     /* f3-02: DOS window VM record (execution-abi.md, F3-02 amendment). */
     {"constant.CIUKI_SYS_DOSVM", (uint32_t)(CIUKI_SYS_DOSVM), 72u},
+    /* Power control (execution-abi.md, amendment 2026-10-12). */
+    {"constant.CIUKI_SYS_POWER", (uint32_t)(CIUKI_SYS_POWER), 73u},
+    {"constant.CIUKI_POWER_REBOOT", (uint32_t)(CIUKI_POWER_REBOOT), 1u},
+    {"constant.CIUKI_POWER_OFF", (uint32_t)(CIUKI_POWER_OFF), 2u},
+    {"constant.CIUKI_POWER_QUERY", (uint32_t)(CIUKI_POWER_QUERY), 3u},
+    {"constant.CIUKI_POWER_CAN_REBOOT", (uint32_t)(CIUKI_POWER_CAN_REBOOT), 1u},
+    {"constant.CIUKI_POWER_CAN_OFF", (uint32_t)(CIUKI_POWER_CAN_OFF), 2u},
     {"constant.CIUKI_DOSVM_VERSION", (uint32_t)(CIUKI_DOSVM_VERSION), 1u},
     {"constant.CIUKI_DOSVM_WIDTH", (uint32_t)(CIUKI_DOSVM_WIDTH), 640u},
     {"constant.CIUKI_DOSVM_HEIGHT", (uint32_t)(CIUKI_DOSVM_HEIGHT), 480u},

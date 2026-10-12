@@ -39,24 +39,6 @@ static bool at_prompt(struct dosvm *v)
     }
     return false;
 }
-/* Failure diagnostic: the guest text screen (spaces '_', '=' and
- * non-ASCII '.'), as the vm-boot/vm-memory controllers do. */
-static void screen_dump(struct dosvm *v)
-{
-    const uint16_t *text = dosvm_text(v, 0);
-    for (unsigned row = 0; row < 25; row++) {
-        char line[81];
-        unsigned len = 0;
-        for (unsigned col = 0; col < 80; col++) {
-            uint8_t ch = (uint8_t)text[row * 80 + col];
-            line[col] = ch == ' ' || !ch ? '_' : ch > ' ' && ch < 127 && ch != '=' ? (char)ch : '.';
-            if (ch > ' ' && ch < 127) len = col + 1;
-        }
-        if (!len) continue;
-        line[len] = 0;
-        rec_emit(name, "DATA", "group=screen row=%u text=%s", row, line);
-    }
-}
 static int start_vm(bool dpmi, struct dosvm **out)
 {
     const struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = dpmi};
@@ -182,7 +164,7 @@ static int conformance(const char *client, const char *command)
              ok_all, refused, invalid);
     release_record(client, &d);
     if (!e && (!info.verdict_pass || !ok_all || !refused || !invalid || !released(&d) || s->stale || s->faults)) e = -EFAULT;
-    if (e && v) screen_dump(v);
+    if (e && v) probe_dos_screen(name, v);
     if (v) { int f = finish_vm(&v); if (!e) e = f; }
     return e;
 }
@@ -206,7 +188,7 @@ static int dos4gw(void)
     rec_emit(name, "DATA", "case=dos4gw extender=/SYSTEM/DOS4GW.EXE version=1.97 redistribution=open_question");
     release_record("DPMI4GW", &d);
     if (!e && (!info.verdict_pass || s->entries < 1 || !released(&d) || s->stale || s->faults)) e = -EFAULT;
-    if (e && v) screen_dump(v);
+    if (e && v) probe_dos_screen(name, v);
     if (v) { int f = finish_vm(&v); if (!e) e = f; }
     return e;
 }
@@ -256,7 +238,7 @@ static int gate_and_fault(void)
     rec_emit(name, "DATA", "case=fault stopped=%u reason=%u vector=%u faults=%u max_depth=%u witness=%u error=%d",
              fault, info.reason, info.fault_vector, d.stats.faults, d.stats.max_depth, witness, e);
     if (!e && (!fault || !witness)) e = -EFAULT;
-    if (e && w) screen_dump(w);
+    if (e && w) probe_dos_screen(name, w);
     if (v) { int f = dosvm_destroy(dosvm_key(v), true); if (!e) e = f; }
     if (w) { int f = finish_vm(&w); if (!e) e = f; }
     return e;

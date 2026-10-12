@@ -108,15 +108,19 @@ hardware must still raise vector 17).
   over five fault kinds leave it and a survivor running on the five QEMU
   profiles (`desktop_restarts=0`, post-fault input consumed, portrait region
   checked on the screen).
-- Desktop (f2-08, f2-30): taskbar with clock, Ciuki menu built from `/bin`,
+- Desktop (f2-08, f2-30): taskbar with clock, Ciuki menu built from `/Programs`
+  (`/bin` until f2-35, see 2026-10-12 below),
   minimise, window protocol v2 (close requests), About window with the
   approved Ciuki portrait, Tango icons (`desktop-shell-qemu-t23/e500` pass).
 - Applications on the `libdeskui` toolkit (f2-31, f2-32, f2-33, merged
-  2026-10-11, commit `1241de1`): Files, CiukNote (`/bin/ciuknote`) and Task
-  Manager (`/bin/tasks`, using calls 70/71 and protocol v2 opcodes 15–20
+  2026-10-11, commit `1241de1`): Files, CiukNote (`/Programs/ciuknote`) and Task
+  Manager (`/Programs/tasks`, using calls 70/71 and protocol v2 opcodes 15–20
   restricted to the launched Task Manager). QEMU evidence is pending at the
   time of this entry: their cases (`files-qemu-t23`, `ciuknote-qemu-t23`,
-  `tasks-qemu-t23`) have not yet run on an integrated image.
+  `tasks-qemu-t23`) have not yet run on an integrated image. Update
+  2026-10-12: `files-qemu-t23` ran on image `2fdd515a…` and failed with
+  `keys=0` (cause and fix in the 2026-10-12 section); the other two have no
+  recorded run.
 - Evidence on QEMU: `f2-process`, `f2-runtime`, `f2-desktop` and `f2-app`
   pass in the `f2-all` batch on image `b9c052cd…`, including `app-gate`
   (upstream Lua suite and supplement).
@@ -132,25 +136,27 @@ hardware must still raise vector 17).
 - Devices (f3-01): per-VM PIC, PIT, keyboard controller and mouse (INT 33h)
   models with IRQ delivery.
 - Video (f3-02): trapped VGA at A0000h–BFFFFh, INT 10h and VBE answers, fonts,
-  the `/bin/dosbox` window and call 72, probes `vm-video` and `vm-window`.
+  the `/Programs/dosbox` window and call 72, probes `vm-video` and `vm-window`.
 - Evidence on QEMU: image `fcd96d6e…` is the first on which DOS VMs boot:
   `f3-vm` 195 PASS (F0–F2 prefix, then `vm-boot` and `vm-memory` on
   `qemu-t23`, `qemu-e500` and `qemu-min128`), `f0-smoke` 2/2, `f2-all` 189
   PASS (the three `uart-absent-*` operator cases excepted). `vm-devices`
-  passes on those three profiles on a worktree image; the f3-01 and f3-02 code
-  is merged and its integrated-image campaign is pending.
+  passes on those three profiles on a worktree image; `vm-devices` and
+  `vm-video` pass on the three profiles of the integrated image `e0af9210…`.
 - Kernel-owned DPMI 0.9 host (f3-04: six stages, LDT at GDT index 8,
   INT 2Fh AX=1687h entry, DPMI16/DPMI32 conformance clients and a DOS/4GW
   client built with Open Watcom; `f3:dpmi` cases) and per-VM Sound Blaster
   16, OPL3 and 8237 DMA state models with the F4 consumer interface (f3-05;
   `f3:vm-audio-state` cases): merged with host evidence (327 host tests,
-  libx86emu guest runner DPMI16/DPMI32/DOS4GW PASS); their integrated-image
-  QEMU campaign is pending. DOS workloads (f3-06): DOS/4GW probe loops, DOOM
+  libx86emu guest runner DPMI16/DPMI32/DOS4GW PASS); on QEMU `vm-audio-state`
+  passes on the three profiles (image `e0af9210…`) and `dpmi` passes on the
+  three profiles (image `d70cf673…`, with the TCG data-limit rule of
+  2026-10-12). DOS workloads (f3-06): DOS/4GW probe loops, DOOM
   timedemo and Wolfenstein 3D from local, never redistributed game files on
   a per-run fixture disk, a starvation gate, protected-mode VGA access for
   DOS/4GW programs and a V86 monitor that traps only at shadow and IRQ
-  boundaries; DOOM completes its timedemo in the host guest runner, QEMU
-  campaign pending. F3 has no recorded hardware run.
+  boundaries; DOOM completes its timedemo in the host guest runner and on
+  QEMU (see 2026-10-12 below). F3 has no recorded hardware run.
 
 ### F4 — audio, optical media, NTFS read-only
 
@@ -165,14 +171,117 @@ hardware must still raise vector 17).
 - NTFS read-only (f4-03, f4-04): independent `ntfs_ro` library (GPL-2.0-only,
   no NTFS3 code) with 27 deterministic fixtures and 14 host tests; mounts
   through `fs_ro`, cache halves and on-demand optical cache slots, probe
-  `f4:ntfs-ro` with 12 `f4-media` cases. The f4-04 code is merged; its QEMU
-  campaign is pending.
+  `f4:ntfs-ro` with 12 `f4-media` cases, all passing on QEMU (image
+  `e0af9210…`, scratch suite `zz-media`, 18 cases with the optical ones).
 - DOS VM audio path (f4-05): every DOS VM owns a mixer source; SB16 PCM is
   converted at the programmed rate and OPL3 is synthesised by an integer C
   port of the DOSBox DBOPL (GPL-2.0-or-later), paced 56 ms behind the VM
-  clock with CT1745 gains; `f4:vm-audio` cases, QEMU campaign pending.
+  clock with CT1745 gains; `f4:vm-audio` cases pass on the three QEMU
+  profiles after the 2026-10-12 idle-tail fixes (image `d70cf673…`).
 - Not in this version: ESS Maestro-2E backend and 2D acceleration
   (deferred by the contract).
+
+### 2026-10-12 — desktop shell, applications, DOS games, retro namespace
+
+Integrated on branch `wt/integ2` (night of 2026-10-11/12 and the day), toward
+a usable pre-alpha. Directives: f2-30 to f2-36, f3-01 to f3-08, f4-04, f4-05.
+Evidence per image is in
+`docs/validation/2026-10-11-integrated-image-f0-regression.md`
+("2026-10-12 integration images"); the newest image, `8435a16a…`
+(commit `96027a71`), has had no QEMU campaign.
+
+Desktop and UI
+
+- Quiet normal boot (`docs/boot.md`): the loader shows one hint line, the
+  kernel draws the original Ciuki photograph (deterministic 512x384 RGB565
+  conversion, pinned) and keeps the console dark until the desktop; the
+  console returns on a panic, a lost desktop or after 120 s. System call 73
+  `ciuki_power` reboots or powers off through ACPI S5 (storage synced first,
+  trusted desktop only). `normal-boot` cases in `f0-smoke` check the path.
+- Desktop shell (f2-30 follow-up): the Ciuki (Start) button at the left end of
+  the top bar (rounded gradient face, approved portrait) opens Programs,
+  Documents, Settings, Help, Run... and Shut Down...; taskbar with window
+  buttons and a tray (volume popup, clock); desktop icons with context menus,
+  readable labels (soft halo, translucent selection); Run dialog, Alt+Tab,
+  Alt+F4, About with the dedication. The tagline is
+  `Classic computing, one woof at a time.` (owner decision), shown in About.
+- Looks: theme engine with Platinum (default), Ciuki Blue and Classic 98;
+  Inter and Inconsolata UI fonts rasterised from the OFL sources; one frame
+  painter gives every window and dialog the same 24 px title bar.
+- Window resizing (f2-34): borders, corner and zoom, protocol v2.1 with
+  client-allocated replacement surfaces (no kernel or ABI change) and toolkit
+  relayout in the applications.
+- Icons: the full Tango 0.8.90 store (`/system/icons/tango.cis`, 246 names at
+  16/22/32/48 px, pinned hashes) with one size per place (menus 16, Files
+  toolbar 22, dialogs and built-in windows 32, desktop 48) and distinct icons
+  per program.
+- Wallpapers: six procedural wallpapers and PNG/JPEG/BMP files (stb_image
+  2.30) from `/system/wallpapers`, including the owner's three Ciuki scenes
+  (Ciuk2 in `fill` position is the default); positions Center, Tile, Stretch,
+  Fit and Fill; image decoding is deferred so the first desktop frame and the
+  Control Panel preview do not stall under TCG.
+
+Applications
+
+- Files (f2-31, f2-36): a "Computer" view with the drives `C:`, `D:`... from
+  `/mnt`, drive-letter paths (`C:\Programs`), Places Computer, Programs,
+  Documents, System and Games; `dev`, `mnt` and `tmp` are hidden in `C:\`.
+- Control Panel (Display with theme, wallpaper, position and desktop colour;
+  Mouse; Keyboard with the Italian layout; Sounds; Date & Time; System) over
+  `desktop.cfg`; accessories recovered from 0.8 (Calculator, Character Map,
+  Clock, CiukiOS Help, Volume Control, Image Viewer) and a recent-documents
+  list (`docs/design/legacy-0.8-feature-inventory.md`).
+- Namespace (f2-35, owner decision): programs keep the POSIX view over the
+  drives, with `/bin` renamed `/Programs` and `/home` renamed `/Documents`;
+  `System` and `Games` are created with long names; amendment in
+  `docs/design/posix-subset.md`.
+
+DOS and virtual machines
+
+- DOOM 1.9 and Wolfenstein 3D 1.4 shareware are pre-installed on
+  `C:\GAMES\CIUKIGAM.IMG` (`third_party/games` with their licence texts,
+  `scripts/build_games_disk.py`, Programs > Games, `dosbox --name`); every DOS
+  window boots that disk with the kernel DPMI host. Registered game data is
+  refused by the builder. The Wolfenstein 3D bundling clause of
+  `VENDOR.DOC` is an open owner decision.
+- DOS window and games: INT 16h wake-up of the CIUKIDOS shell, workload-disk
+  lookup without a 20 KiB heap request (ENOMEM), VGA input status 1 on the
+  programmed vertical timing, burst emulation of VGA stores (Wolfenstein 3D
+  scalers from about 11-15k faults per frame to 76-152), direct linear window
+  for chained mode 13h including DPMI clients (f3-07), virtual IF restored on
+  POPF/IRET in the DPMI host, and the TCG data-limit rule for the DPMI clients.
+- DOS VM audio (f4-05 follow-up): with a VM source attached the idle tail
+  keeps 8 periods, and a drained tail stops the transport normally.
+- Kernel review fixes (f3-08, from a read-only Codex review): DPMI virtual-IF
+  trap keyed on DR6.BS with one-shot arming, PUSHF/POP detection decoded
+  forward, VGA burst preflight and refused LOCK forms, `ciuki_power` retrying
+  a failed sync, `_S5` parsing with PkgLength, SCI_EN required before PM1
+  writes, audio tail stops only on proven silence.
+
+Build and test
+
+- Runner: QMP replies awaited up to 10 s (a late reply is a timeout), five
+  seconds of reaping grace, optical fixtures as an explicit `ide-cd`,
+  repeated `query-status` exchanges not logged, `-d nochain` with `-icount`
+  (QEMU 10.2-11.1 crash under self-modifying DOS games, recorded as a
+  deviation), `normal-boot` screen heuristics updated for the new desktop
+  (Ciuki button in the top bar, wallpaper work area). Desktop gate
+  scenarios hold their input until the launched program shows its first
+  frame (root cause of the `keys=0` failures of `files-qemu-t23` and
+  `desktop-shell-qemu-e500`); the runner names the failing contract. Scratch
+  suites stay untracked.
+- Host suites on `96027a71`: desktop 56 OK, normal-boot 14 OK, gate 10 OK,
+  kernel host tests OK, runner 85 OK (2 skipped).
+- QEMU (TCG, one image per result): image `2fdd515a…` `f0-smoke` 4 PASS,
+  DOOM, DOOM with sound and Wolfenstein 3D PASS, `desktop-shell-qemu-t23`
+  PASS, `files-qemu-t23` FAIL (`keys=0`, fixed on the host in `96027a71`, not
+  re-run); image `5dd760ee…` DOOM PASS with f3-08. Not run: the campaign of
+  `8435a16a…`. QEMU 11.1 itself crashed three times in TB invalidation
+  during DOS workloads (deviation recorded).
+- Hardware image for the T23: `build/hw/ciukios-hw.img`, SHA-256
+  `893a83e0f24b515b1daa24d06da8fb22fc2c434a805d7b48343624d06bdc3421`
+  (`BOOT.CFG` `safe=0 serial=1`), handed to the owner for a direct test; no
+  hardware result is recorded for it.
 
 ### Hardware (ThinkPad T23 only)
 

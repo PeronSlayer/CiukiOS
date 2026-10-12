@@ -9,26 +9,37 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "../desktop/protocol.h"
+#include "../desktop/theme.h"
 
-/* CiukiOS identity colours on a Windows 98 class layout. FACE equals the
- * compositor's window frame and taskbar; SELECT equals its focused title. */
-#define DU_FACE       0xb8c9ccu
-#define DU_LIGHT      0xdbe5e7u
-#define DU_HILITE     0xffffffu
-#define DU_SHADOW     0x6c8489u
-#define DU_DARK       0x14262eu
-#define DU_WINDOW     0xffffffu
-#define DU_INK        0x10212au
-#define DU_GRAY       0x6c8489u
-#define DU_SELECT     0x213c4cu
-#define DU_SELECT_INK 0xffffffu
+/* Colours, fonts and styles come from the current theme (desk_theme,
+ * apps/desktop/theme.h): Platinum (default), Ciuki Blue or Classic 98.
+ * The names keep their Windows 98 roles; they are not constants. */
+#define DU_FACE       (desk_theme->face)
+#define DU_LIGHT      (desk_theme->light)
+#define DU_HILITE     (desk_theme->hilite)
+#define DU_SHADOW     (desk_theme->shadow)
+#define DU_DARK       (desk_theme->dark)
+#define DU_WINDOW     (desk_theme->window)
+#define DU_INK        (desk_theme->ink)
+#define DU_GRAY       (desk_theme->gray)
+#define DU_SELECT     (desk_theme->select)
+#define DU_SELECT_INK (desk_theme->select_ink)
+#define DU_ACCENT     (desk_theme->accent)
 #define DU_CREAM      0xe8d7b9u
 
-/* The compositor's own glyph table (5x7, apps/desktop/compositor.c), drawn
- * at its scale and advance so client text matches window titles. */
-#define DU_CHAR_W  6
-#define DU_GLYPH_H 7
-#define DU_ROW     17   /* list, tree and menu rows */
+/* Text: anti-aliased proportional faces (theme.h DESK_FONT_*). du_text and
+ * friends take the top of the capitals as y; DU_GLYPH_H is the capital
+ * height of the UI face, so (h - DU_GLYPH_H) / 2 centres a line in h rows.
+ * DU_CHAR_W is only an average advance for rough sizing. */
+#define DU_CHAR_W  7
+#define DU_GLYPH_H 9
+#define DU_ROW     17   /* list, tree and menu-bar rows */
+#define DU_MENU_ITEM_H 19
+#define DU_MENU_SEP_H  9
+/* Icon slots (16 menus/lists, 22 toolbars, 32 large icons and dialogs). */
+#define DU_ICON_SMALL   (desk_theme->icon_small)
+#define DU_ICON_TOOLBAR (desk_theme->icon_toolbar)
+#define DU_ICON_LARGE   (desk_theme->icon_large)
 
 #define DU_WIDGETS       48
 #define DU_DIALOG_ITEMS  10
@@ -54,6 +65,7 @@ enum {
     DU_KEY_MENU = 0x15d
 };
 
+struct du_ui;
 struct du_rect { int x, y, w, h; };
 struct du_canvas { uint32_t *pixels; int width, height; struct du_rect clip; };
 
@@ -79,10 +91,55 @@ void du_text_n(struct du_canvas *, int x, int y, const char *, size_t cells, uin
 void du_text_fit(struct du_canvas *, int x, int y, int width, const char *, uint32_t);
 void du_text_disabled(struct du_canvas *, int x, int y, const char *);
 void du_label(struct du_canvas *, int x, int y, const char *mnemonic, uint32_t, int underline);
-void du_icon(struct du_canvas *, int x, int y, const uint32_t *argb, int size, enum du_icon_mode);
+/* Straight-alpha AARRGGBB sprite, size x size (at most 64), alpha-blended. */
+void du_icon_blit(struct du_canvas *, int x, int y, const uint32_t *argb, int size, enum du_icon_mode);
 size_t du_utf8_prev(const char *, size_t);
 size_t du_utf8_next(const char *, size_t);
 void du_format_key(char *out, size_t size, unsigned key, unsigned modifiers);
+/* ui-look: faces, mnemonic labels, theme-drawn faces and focus. */
+void du_text_font(struct du_canvas *, int font, int x, int y, const char *, uint32_t);   /* y: capital top */
+int du_text_width_font(int font, const char *);
+int du_label_width(const char *mnemonic);                                               /* '&' not counted */
+void du_raised(struct du_canvas *, struct du_rect, int pressed, int hot);                /* theme button face */
+void du_focus_ring(struct du_canvas *, struct du_rect);                                  /* theme focus cue */
+void du_well(struct du_canvas *, struct du_rect, uint32_t fill);                         /* sunken field */
+void du_shadow(struct du_canvas *, struct du_rect, int size);                            /* soft drop shadow */
+/* Current theme by name (Platinum, Ciuki Blue, Classic 98): 0, or -1 and no
+ * change. Marks the UI dirty. Persisting it is the caller's job (the theme
+ * key of DESK_SETTINGS_PATH, written with settings.c cfg_format); every
+ * client follows the file through desk_theme_poll. */
+int du_theme_use(struct du_ui *, const char *name);
+const char *du_theme_name(void);
+
+/* System icons: Tango Icon Theme 0.8.90 (Public Domain), one store file
+ * (/system/icons/tango.cis, built by apps/desktop/convert_icons.py; format in
+ * assets/icons/README.md). du_icon() returns the icon of a Tango name
+ * ("folder", or "places/folder") at 16, 22, 32 or 48 pixels, or NULL when the
+ * name, size or store is unavailable. Icons are decoded on first use and stay
+ * valid for the life of the process. DU_ICON_CIUKI is the identity icon, the
+ * approved Ciuki portrait conversion (/system/assets/ciuki-portrait.xrgb)
+ * reduced with the store's area filter. Not thread-safe. */
+struct du_icon { unsigned size; const uint32_t *argb; };   /* straight-alpha AARRGGBB */
+#define DU_ICON_CIUKI "ciuki"
+const struct du_icon *du_icon(const char *tango_name, unsigned size);
+const uint32_t *du_icon_argb(const char *tango_name, unsigned size);   /* du_icon()->argb or NULL */
+void du_icon_draw(struct du_canvas *, int x, int y, const struct du_icon *, enum du_icon_mode);
+int du_icon_paths(const char *store, const char *portrait);   /* before the first lookup; NULL keeps the default */
+unsigned du_icon_count(void);                                /* names in the store */
+const char *du_icon_store_name(unsigned index);
+const char *du_icon_notice(void);                            /* the store's Tango licence notice */
+
+/* CiukiOS objects -> Tango names (icon_map.c). Keys are "<kind>:<object>":
+ * program:<name in /Programs>, menu:, action:, place:, type:folder|executable|unknown,
+ * type:.<extension>, status:, dialog:, device:, settings:, category:, emblem:, wm:.
+ * An unknown object of a known kind gets that kind's default; a key without
+ * a colon is returned unchanged (a Tango name). */
+struct du_icon_map { const char *object, *tango; };
+extern const struct du_icon_map du_icon_map[];
+extern const unsigned du_icon_map_count;
+const char *du_icon_name(const char *object);
+const char *du_icon_file(const char *filename, int directory, int executable);
+const struct du_icon *du_icon_for(const char *object, unsigned size);   /* du_icon(du_icon_name(object), size) */
 
 /* List and tree content belongs to the application; the toolkit only reads it. */
 struct du_item {
@@ -101,13 +158,18 @@ enum du_kind { DU_LABEL, DU_BUTTON, DU_TOOLBUTTON, DU_EDIT, DU_LISTVIEW, DU_TREE
                DU_TABS, DU_GRAPH, DU_GROUP,
                /* f2-32: multi-line editor; widget.data is a struct du_textarea
                 * (textarea.h) owned by the application. */
-               DU_TEXTAREA };
+               DU_TEXTAREA,
+               /* ui-look: check box and radio button (text is the label, value
+                * is the state; radios with the same `total` form one group),
+                * and a tool-bar band that draws the strip behind tool buttons. */
+               DU_CHECKBOX, DU_RADIO, DU_TOOLBAR };
 #define DU_TAB_H 20
 
 struct du_widget {
     enum du_kind kind;
     int id;
     struct du_rect box;
+    unsigned anchors;                      /* DU_ANCHOR_*; zero keeps top/left */
     uint8_t hidden, disabled, pressed, hot, def, vertical;
     char text[DU_TEXT_MAX];
     size_t cursor, anchor, offset;          /* edit (bytes; offset in cells) */
@@ -127,6 +189,13 @@ struct du_widget {
     unsigned sample_count;
     void *data;                             /* f2-32: DU_TEXTAREA state */
 };
+
+#define DU_ANCHOR_LEFT   1u
+#define DU_ANCHOR_RIGHT  2u
+#define DU_ANCHOR_TOP    4u
+#define DU_ANCHOR_BOTTOM 8u
+#define DU_ANCHOR_GROW_X (DU_ANCHOR_LEFT | DU_ANCHOR_RIGHT)
+#define DU_ANCHOR_GROW_Y (DU_ANCHOR_TOP | DU_ANCHOR_BOTTOM)
 
 #define DU_ITEM_DISABLED  1u
 #define DU_ITEM_CHECKED   2u
@@ -166,6 +235,7 @@ struct du_dialog {
     du_lister lister; void *lister_ctx;
     struct du_file_entry *entries; struct du_item *rows; unsigned entry_count;
     int dragging, drag_x, drag_y, capture;
+    int close_hot;                          /* the pointer is over the close button */
     const uint32_t *icon_pixels;            /* optional 32x32 replacement icon */
     struct du_event pending[4]; unsigned pending_count;
 };
@@ -189,10 +259,16 @@ struct du_ui {
     int dirty;
     void (*event)(struct du_ui *, const struct du_event *, void *);
     void *user;
+    /* Optional application drawing after the widgets, before menus and
+     * dialogs (previews, swatches; Control Panel). */
+    void (*paint)(struct du_ui *, void *);
+    /* Runs after anchors and canvas replacement, preserving widget/model state. */
+    void (*layout)(struct du_ui *, void *);
 };
 
 /* Core */
 void du_init(struct du_ui *, uint32_t *pixels, int width, int height);
+void du_resize(struct du_ui *, uint32_t *pixels, int width, int height);
 struct du_widget *du_add(struct du_ui *, enum du_kind, int id, struct du_rect, const char *text);
 struct du_widget *du_get(struct du_ui *, int id);
 int du_hit(const struct du_ui *, int x, int y);
@@ -252,6 +328,12 @@ struct du_window {
     uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;
+    /* At most one replacement. After sending its attachment, retain the
+     * previous surface until CONFIGURE(COMMITTED) confirms the swap. */
+    int old_surface, replacement, swap_sent, resizable;
+    struct ciuki_surface_info old_info;
+    uint32_t *old_pixels, *old_back;
+    uint32_t configure_serial, request_serial, request_width, request_height, last_serial;
     struct ciuki_message tx[16]; unsigned head, count;
     struct du_rect damage; int damaged;
     struct du_ui *ui;
@@ -261,11 +343,14 @@ struct du_window {
     void (*message)(struct du_window *, const struct desk_packet *, void *);
 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);
+int du_window_open_resizable(struct du_window *, struct du_ui *, int channel, int width, int height,
+                             const char *title, int min_width, int min_height);
 int du_window_turn(struct du_window *, uint64_t now);
 void du_window_present(struct du_window *);
 int du_window_ping(struct du_window *, uint32_t serial);
 int du_window_queue(struct du_window *, struct ciuki_message *);  /* f2-33: any v2 request */
 int du_window_move(struct du_window *, int x, int y);
+int du_window_set_title(struct du_window *, const char *title);
 void du_window_close(struct du_window *);
 void du_window_destroy(struct du_window *);
 int du_run(struct du_window *, void (*idle)(void *), void *);

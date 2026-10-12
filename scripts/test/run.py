@@ -408,14 +408,14 @@ def record_f2_result(result, parser):
             raise EvidenceError('guest application provenance differs from host manifest: '+field)
     if result['probe'] == 'app-gate' and result['outcome'] == 'pass':
         if result['missing_f2_fields']:raise EvidenceError('missing application provenance/setup fields')
-        required = {'/bin/lua','/system/tests/ciuki-f2.lua'} | {p for p in payloads if p.startswith('/system/tests/lua-5.4.8-tests/')}
+        required = {'/Programs/lua','/system/tests/ciuki-f2.lua'} | {p for p in payloads if p.startswith('/system/tests/lua-5.4.8-tests/')}
         if required-seen:raise EvidenceError('missing guest-loaded application/test payload hashes')
         if metadata['abi_version'] != '1' or metadata['application_wait_status'] != '0':
             raise EvidenceError('application ABI or wait status mismatch')
         if metadata['argv'] != ['lua','-e','_U=true','all.lua'] or metadata['cwd'] != '/system/tests/lua-5.4.8-tests':
             raise EvidenceError('application argv/cwd mismatch')
         environment = metadata['env']
-        if not isinstance(environment,dict) or any(environment.get(k)!=v for k,v in {'LC_ALL':'C','TZ':'UTC0','HOME':'/home','TMPDIR':'/tmp'}.items()):
+        if not isinstance(environment,dict) or any(environment.get(k)!=v for k,v in {'LC_ALL':'C','TZ':'UTC0','HOME':'/Documents','TMPDIR':'/tmp'}.items()):
             raise EvidenceError('application environment mismatch')
         fds = metadata['fd_setup']
         if not isinstance(fds,dict) or fds.get('inherited') != [0,1,2] or fds.get('stdin') not in ('fixture','/dev/null') or any(fds.get(s)!='bounded' for s in ('stdout','stderr')):
@@ -738,9 +738,15 @@ def read_ppm(path):
 def observe_desktop_screen(before, after, root=ROOT):
     """Independent pixels from the pinned portrait converter used by T0.
 
-    The upper-right 64x96 portrait region avoids the demo at (20,52) and
-    the initial centre cursor even at 640x480. Clock changes cannot establish
-    interaction: require changes within the old cursor's 8x16 footprint.
+    Since the Ciuki button moved into the top bar and the default wallpaper
+    became the owner's scene (2026-10-12), the approved portrait on the
+    desktop is the 18 px area average drawn in that button (shell.c
+    desk_shell_icon "ciuki"; desktop.h DESK_START_*, Inter 13 Bold "CiukiOS"
+    53 px wide): every mark cell fully covered by portrait ink must equal the
+    exact average of its 256 px source block, in both screens, with the
+    button released (shift 0) or pressed (shift 1). Clock changes cannot
+    establish interaction: require changes within the old cursor's 8x16
+    footprint.
     """
     import importlib.util
     spec = importlib.util.spec_from_file_location('screen_portrait',root/'apps/desktop/convert_portrait.py')
@@ -748,19 +754,28 @@ def observe_desktop_screen(before, after, root=ROOT):
     portrait = converter.convert(root/'assets/brand/ciuki-logo.png')
     bw,bh,bp = read_ppm(before);width,height,pixels = read_ppm(after)
     if (bw,bh) != (width,height):raise EvidenceError('desktop screen geometry changed')
-    x0 = (width-256)//2; y0 = max(32,32+(height-32-256-36)//2)
-    for y in range(96):
-        for x in range(192,256):
-            source = portrait[(y*256+x)*4:(y*256+x)*4+3][::-1]
-            off = ((y0+y)*width+x0+x)*3
-            if bp[off:off+3] != source or pixels[off:off+3] != source:
-                raise EvidenceError('approved Ciuki portrait region mismatch')
+    size = 18
+    cells = []
+    for y in range(size):
+        for x in range(size):
+            block = [portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
+                     for yy in range(y*256//size,(y+1)*256//size) for xx in range(x*256//size,(x+1)*256//size)]
+            if any(b == bytes((0x64,0x55,0x37)) for b in block):continue   # transparent surround (#375564, BGR bytes)
+            cells.append((x,y,bytes(sum(b[k] for b in block)//len(block) for k in range(3))[::-1]))   # RGB
+    if len(cells) <= 100:raise EvidenceError('portrait mark model has too few covered cells')
+    def mark_matches(frame, shift):
+        x0 = 4+(96-size-6-53)//2+shift; y0 = 4+(24-size)//2+shift
+        return all(frame[((y0+y)*width+x0+x)*3:((y0+y)*width+x0+x)*3+3] == rgb for x,y,rgb in cells)
+    shifts = [s for s in (0,1) if mark_matches(bp,s)]
+    if not shifts or not any(mark_matches(pixels,s) for s in (0,1)):
+        raise EvidenceError('approved Ciuki portrait region mismatch')
+    x0 = 4+(96-size-6-53)//2+shifts[0]; y0 = 4+(24-size)//2+shifts[0]
     changed = sum(bp[(y*width+x)*3:(y*width+x)*3+3] != pixels[(y*width+x)*3:(y*width+x)*3+3]
                   for y in range(height//2,height//2+16) for x in range(width//2,width//2+8))
     if changed < 16:raise EvidenceError('post-fault cursor footprint did not change')
     return {'before_ppm_sha256':sha(before),'ppm_sha256':sha(after),'width':width,'height':height,
-            'portrait_array_sha256':converter.ARRAY_SHA256,'portrait_region':[x0+192,y0,64,96],
-            'portrait_pixels_checked':6144,'cursor_changed_pixels':changed}
+            'portrait_array_sha256':converter.ARRAY_SHA256,'portrait_region':[x0,y0,size,size],
+            'portrait_pixels_checked':len(cells),'cursor_changed_pixels':changed}
 
 
 def observe_window_screen(path, spec, arm):
@@ -786,7 +801,7 @@ def observe_window_screen(path, spec, arm):
 
 # Normal boot (test-architecture.md, "Normal boot cases"): QEMU starts without
 # the fw_cfg item, so the loader's menu times out and the kernel takes the
-# production path (drivers, storage, files, audio, supervisor -> /bin/desktop)
+# production path (drivers, storage, files, audio, supervisor -> /Programs/desktop)
 # instead of probes_main's probe path. No CIUKI_TEST records are expected; the
 # evidence is the ordered serial milestones, the absence of the negative lines
 # and one screendump. Every pattern is anchored at the start of a line (CR/LF
@@ -796,7 +811,7 @@ NORMAL_BOOT_MILESTONES = (
     ('loader_banner', re.compile(rb'L:CPU signature=')),
     ('loader_source', re.compile(rb'L:SELECT_SOURCE=menu$')),
     ('kernel_banner', re.compile(rb'Ciuki VMM F0 build ([!-~]+) - CiukiOS$')),
-    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: spawning /bin/desktop(?: |$)')),
+    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: spawning /Programs/desktop(?: |$)')),
     ('desktop_pid', re.compile(rb'\[supervisor\] desktop pid=([0-9]+) pgid=([0-9]+)(?: |$)')),
 )
 NORMAL_BOOT_NEGATIVE = (
@@ -811,15 +826,20 @@ NORMAL_BOOT_NEGATIVE = (
 )
 NORMAL_BOOT_CASE_KEYS = {'id','kind','probe','profile','timeout','expected','attempt','boot_kind','_smoke','_run_id'}
 NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
-# Colours drawn by apps/desktop (desktop.h DESK_BAR/DESK_BACKGROUND;
-# compositor.c desk_composite top bar, desk_shell_draw taskbar and start
-# button) and by the kernel console (src/kernel/core/console.c fg/bg,
-# output.c panic background). test_normal_boot.py checks these literals
-# against those sources.
+# Colours drawn by apps/desktop in its default theme (desktop.h DESK_BAR/
+# DESK_BACKGROUND/DESK_START_*; theme.c "Platinum" topbar, taskbar,
+# start/start_open, desktop, painted by compositor.c desk_composite and
+# desk_shell_draw and by shell.c draw_start, the Ciuki button at the left end
+# of the top bar: a soft gradient within the tolerance of its base colour)
+# and by the kernel console (src/kernel/core/console.c fg/bg, output.c panic
+# background). test_normal_boot.py checks these literals against those
+# sources. A persisted non-default theme (/system/settings/desktop.cfg) is
+# outside this heuristic: test images carry no settings file.
 DESK_BAR_ROWS = 32
-DESK_TOP_BAR = 0x213c4c
-DESK_TASKBAR = 0xb8c9cc
-DESK_START_BUTTON = (0xe8d7b9, 0x607a85)  # menu closed / open
+DESK_TOP_BAR = 0xdcdcdc
+DESK_TASKBAR = 0xd6d6d6
+DESK_START_BOX = (4, 4, 96, 24)  # x, y, w, h: the Ciuki button in the top bar
+DESK_START_BUTTON = (0xf2f2f2, 0xb9b9b9)  # menu closed / open
 DESK_BACKGROUND = 0x375564
 CONSOLE_COLOURS = (0x10243c, 0xe8e8e8, 0x800000)  # console bg, fg, panic bg
 SCREEN_TOLERANCE = 8  # per channel: also accepts a 16-bpp (565) framebuffer
@@ -917,13 +937,17 @@ class NormalBootParser:
 
 def normal_boot_regions(width, height):
     """(name, box, colours, bound, limit, step): cheap layout facts of the
-    shell desktop, never a full-frame digest (the taskbar clock changes)."""
-    top = min(width,256)
-    return (('top_bar',(0,0,top,DESK_BAR_ROWS),(DESK_TOP_BAR,),'min',0.5,1),
-            ('console_absent',(0,0,top,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
+    shell desktop, never a full-frame digest (the taskbar clock changes).
+    The top bar regions start right of the Ciuki button, which has its own."""
+    x, y, w, h = DESK_START_BOX
+    left = x+w+4; top = max(min(width,256),left+64)
+    return (('top_bar',(left,0,top-left,DESK_BAR_ROWS),(DESK_TOP_BAR,),'min',0.5,1),
+            ('console_absent',(left,0,top-left,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
             ('taskbar',(0,height-DESK_BAR_ROWS,width,DESK_BAR_ROWS),(DESK_TASKBAR,),'min',0.5,1),
-            ('start_button',(4,height-DESK_BAR_ROWS+3,76,26),DESK_START_BUTTON,'min',0.4,1),
-            ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),(DESK_BACKGROUND,),'min',0.25,2))
+            ('start_button',DESK_START_BOX,DESK_START_BUTTON,'min',0.4,1),
+            # Heuristic 3: the default wallpaper is the owner's Ciuk2 scene, so the
+            # work area is only required to be free of the kernel console colours.
+            ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,2))
 
 
 def colour_fraction(pixels, width, box, colours, step=1, tolerance=SCREEN_TOLERANCE):
@@ -940,11 +964,13 @@ def colour_fraction(pixels, width, box, colours, step=1, tolerance=SCREEN_TOLERA
 
 
 def observe_normal_boot_screen(path, spec):
-    """Taskbar, start button, top bar and background colours of the shell
-    desktop; the top-left must not show the kernel console colours."""
+    """Taskbar, Ciuki button (top-left), top bar and background colours of
+    the shell desktop; the top bar must not show the kernel console colours.
+    Heuristic 2: the Ciuki button moved from the taskbar to the top bar;
+    3: the work area shows the default wallpaper (Ciuk2), not the desktop colour."""
     width, height, pixels = read_ppm(path)
     observed = {'artifact':Path(path).name, 'ppm_sha256':sha(path), 'width':width, 'height':height,
-                'heuristic':'normal-boot-desktop-1', 'colour_tolerance':SCREEN_TOLERANCE,
+                'heuristic':'normal-boot-desktop-3', 'colour_tolerance':SCREEN_TOLERANCE,
                 'regions':{}, 'failures':[]}
     geometry = spec.get('geometry')
     if geometry is not None and [width,height] != list(geometry):
@@ -969,15 +995,21 @@ def desktop_interaction(records):
     arm=one('ARM',action='post_fault_input')
     before=one('DATA',case='interaction',stage='before')
     after=one('DATA',case='interaction',stage='after')
+    # Field parsing only: a contract failure below must keep its own message
+    # (EvidenceError is a ValueError, so it may not be raised inside this try).
     try:
-        for key in ('presents','input_events','pixel_digest'):
-            if before[key]!=arm[key]:raise EvidenceError('desktop interaction baseline differs from ARM')
-        for key in ('presents','input_events'):
-            if int(after[key])<=int(before[key]):raise EvidenceError('desktop interaction counter did not increase')
-        if after['pixel_digest']==before['pixel_digest']:raise EvidenceError('desktop interaction digest did not change')
-        if int(after['keys'])<2 or int(after['motion'])<1 or int(after['buttons'])<2:
-            raise EvidenceError('desktop did not consume every input kind')
+        baseline={k:(arm[k],before[k]) for k in ('presents','input_events','pixel_digest')}
+        counts={k:(int(before[k]),int(after[k])) for k in ('presents','input_events')}
+        digests=(before['pixel_digest'],after['pixel_digest'])
+        kinds={k:int(after[k]) for k in ('keys','motion','buttons')}
     except (KeyError,ValueError) as error:raise EvidenceError('invalid desktop interaction fields') from error
+    for key,(armed,base) in baseline.items():
+        if armed!=base:raise EvidenceError(f'desktop interaction baseline differs from ARM: {key}')
+    for key,(old,new) in counts.items():
+        if new<=old:raise EvidenceError(f'desktop interaction counter did not increase: {key} {old}->{new}')
+    if digests[0]==digests[1]:raise EvidenceError('desktop interaction digest did not change')
+    if kinds['keys']<2 or kinds['motion']<1 or kinds['buttons']<2:
+        raise EvidenceError('desktop did not consume every input kind: '+' '.join(f'{k}={v}' for k,v in kinds.items()))
     return {'before':{k:before[k] for k in ('presents','input_events','pixel_digest')},
             'after':{k:after[k] for k in ('presents','input_events','pixel_digest','keys','motion','buttons')}}
 
@@ -1287,6 +1319,12 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if profile.get('icount'):
         if profile['accelerator']!='tcg':raise res.Refusal('icount requires the tcg accelerator')
         args+=['-icount',profile['icount']]
+        # QEMU 10.2-11.1 (commit ebf7a5d2) keeps a stale last_tb across the synchronous
+        # code-buffer flush of single-threaded TCG and crashes in tb_jmp_unlink when a
+        # self-modifying guest (DOOM, Wolf3D) invalidates the first post-flush block.
+        # Without direct block chaining the stale link is never made (lead, 2026-10-12;
+        # docs/validation/2026-10-09-f0/README.md).
+        args+=['-d','nochain']
     # A FIFO file backend keeps COM1 file output bounded by the host collector.
     args+=['-serial','none' if devices.get('serial')=='none' else 'file:serial.fifo']
     audio_exception = devices.get('audio')

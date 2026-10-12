@@ -279,6 +279,160 @@ static int software_int(struct dosvm *v, struct v86_frame *f, uint8_t n)
     return dpmi_pm_interrupt(v, f, n);
 }
 
+/* ---- f3-06: POPF compatibility for flags-saving CLI sections ----
+ * At CPL 3 and IOPL 0, CLI/STI trap but PUSHF/POPF/IRET do not, and POPF
+ * and IRET leave IF unchanged (Intel SDM Vol. 2, POPF/IRET operation; DPMI
+ * 0.9 section 2.4: they "may not modify the state of the interrupt flag").
+ * A client that saves its flags and disables (`pushf; cli` ... `popf`, or
+ * Watcom's `pushfd; pop eax; cli` ... `push eax; popfd`: DMX in DOOM,
+ * zz-doom5) then stays virtually disabled, and its timer-tick waits never
+ * end (I_StartupTimer, I_ShutdownSound). Windows 95's remedy (R. Chen,
+ * "Getting MS-DOS games to run on Windows 95: The interrupt flag", The Old
+ * New Thing, 2016-04-11): at the trapped CLI, when the code just before it
+ * is that pattern and the saved image matches the current flags, copy the
+ * virtual IF into the image's TF. The POPF or IRET that later loads the
+ * image sets TF, and the single-step trap one instruction later tells the
+ * host that the client re-enabled: the host clears TF and sets the virtual
+ * IF. Nothing is stepped in between, IOPL stays 0 and no timeout enables
+ * interrupts (contract). An image saved while virtually disabled is left
+ * alone: its restore keeps IF clear, as on hardware. Once a client holds an
+ * armed image, a single-step trap without a watchpoint hit is the host's
+ * (a client debugger single-stepping it is not supported). */
+static uint32_t *pop_register(struct v86_frame *f, uint8_t op)
+{
+    switch (op) {
+    case 0x58: return &f->tf.eax;
+    case 0x59: return &f->tf.ecx;
+    case 0x5A: return &f->tf.edx;
+    case 0x5B: return &f->tf.ebx;
+    case 0x5D: return &f->tf.ebp;
+    case 0x5E: return &f->tf.esi;
+    case 0x5F: return &f->tf.edi;
+    default: return 0;                      /* 5Ch POP ESP: not an image */
+    }
+}
+/* Conservative instruction lengths for a forward walk, never a backwards
+ * byte signature. Unsupported encodings stop the walk. No operand is read or
+ * instruction executed here. A transfer ends the straight-line boundary proof. */
+static unsigned flags_instruction(const uint8_t *b, unsigned n, bool big, uint8_t *opcode, unsigned *width)
+{
+    unsigned at = 0, w = big ? 4 : 2, a = w, imm = 0;
+    bool modrm = false;
+    uint8_t op;
+    do {
+        if (at >= n) return 0;
+        op = b[at++];
+        if (op == 0x66) { w = big ? 2 : 4; continue; }
+        if (op == 0x67) { a = big ? 2 : 4; continue; }
+        if (op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E || op == 0x64 || op == 0x65) continue;
+        break;
+    } while (true);
+    *opcode = op; *width = w;
+    if (op < 0x40 && (op & 7) <= 5) {
+        modrm = (op & 7) < 4;
+        imm = (op & 7) == 4 ? 1 : (op & 7) == 5 ? w : 0;
+    } else if ((op >= 0x40 && op <= 0x61) || (op >= 0x90 && op <= 0x9F && op != 0x9A) ||
+               op == 0xFA || op == 0xFB || op == 0xFC || op == 0xFD ||
+               op == 0x06 || op == 0x07 || op == 0x0E || op == 0x16 || op == 0x17 || op == 0x1E || op == 0x1F) {
+        /* no operands */
+    } else if (op >= 0xB0 && op <= 0xBF) imm = op < 0xB8 ? 1 : w;
+    else if (op == 0x68 || op == 0xA9) imm = w;
+    else if (op == 0x6A || op == 0xA8 || (op >= 0xE4 && op <= 0xE7) || op == 0xCD) imm = 1;
+    else if (op >= 0xA0 && op <= 0xA3) imm = a;
+    else if (op == 0x69 || op == 0x6B || (op >= 0x80 && op <= 0x8F) ||
+             op == 0xC0 || op == 0xC1 || op == 0xC6 || op == 0xC7 ||
+             (op >= 0xD0 && op <= 0xD3) || op == 0xF6 || op == 0xF7 || op == 0xFE || op == 0xFF) {
+        modrm = true;
+        if (op == 0x69 || op == 0x81 || op == 0xC7) imm = w;
+        else if (op == 0x6B || op == 0x80 || op == 0x82 || op == 0x83 || op == 0xC0 || op == 0xC1 || op == 0xC6) imm = 1;
+    } else if (op == 0x0F) {
+        if (at >= n) return 0;
+        uint8_t ext = b[at++];
+        if ((ext >= 0x40 && ext <= 0x4F) || (ext >= 0x90 && ext <= 0x9F) ||
+            ext == 0xAF || ext == 0xB6 || ext == 0xB7 || ext == 0xBE || ext == 0xBF) modrm = true;
+        else return 0;
+    } else if (op >= 0xEC && op <= 0xEF) { /* port I/O */ }
+    else return 0;
+    if (modrm) {
+        if (at >= n) return 0;
+        unsigned m = b[at++], mod = m >> 6, reg = (m >> 3) & 7, rm = m & 7;
+        if ((op == 0xFF && reg > 1) || (op == 0x8F && reg) ||
+            ((op == 0xC6 || op == 0xC7) && reg)) return 0;
+        if ((op == 0xF6 || op == 0xF7) && reg <= 1) imm = op == 0xF6 ? 1 : w;
+        if (mod != 3) {
+            if (a == 4 && rm == 4) {
+                if (at >= n) return 0;
+                unsigned base = b[at++] & 7;
+                if (!mod && base == 5) at += 4;
+            } else if (!mod && rm == (a == 4 ? 5u : 6u)) at += a;
+            if (mod == 1) at++;
+            if (mod == 2) at += a;
+        }
+    }
+    at += imm;
+    return at <= n && at <= 15 ? at : 0;
+}
+static bool flags_preceding(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
+                            uint8_t *pop, unsigned *width)
+{
+    struct dpmi *d = &v->dpmi;
+    uint32_t at = d->decode_eip, end = f->tf.eip;
+    if (!d->decode_valid || d->decode_cs != (uint16_t)f->tf.cs || at >= end ||
+        end > cs->limit || end - at > 4096) return false;
+    uint8_t previous = 0, last = 0;
+    unsigned previous_w = 0, last_w = 0;
+    while (at < end) {
+        uint8_t bytes[15], op;
+        unsigned n = end - at < 15 ? end - at : 15, w;
+        if (dosvm_read(v, cs->base + at, bytes, n)) return false;
+        unsigned len = flags_instruction(bytes, n, cs->big, &op, &w);
+        if (!len) return false;
+        previous = last; previous_w = last_w; last = op; last_w = w;
+        at += len;
+    }
+    if (last == 0x9C) { *pop = 0; *width = last_w; return true; }
+    if (previous != 0x9C || previous_w != last_w || !pop_register(f, last)) return false;
+    *pop = last; *width = last_w; return true;
+}
+static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs)
+{
+    uint8_t pop;
+    unsigned width;
+    if (!flags_preceding(v, f, cs, &pop, &width)) return false;
+    /* PUSHF's image of the real flags: IF set (the host never runs a client
+     * disabled), IOPL 0, NT and TF clear, status flags as now (POP and the
+     * trapped CLI change none). */
+    uint16_t want = (uint16_t)((f->tf.eflags & 0x0CD5u) | V86_IF | 2u);
+    if (!pop) {                             /* decoded PUSHF; CLI */
+        struct dpmi_seg ss;
+        uint16_t sel = (uint16_t)f->tf.user_ss;
+        uint32_t lin, image = 0;
+        if (!dpmi_seg(v, sel, &ss)) return false;
+        uint32_t esp = ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+        if (!dpmi_ptr(v, sel, esp, width, true, &lin) || dosvm_read(v, lin, &image, width) || image != want) return false;
+        image |= V86_TF;
+        return !dosvm_write(v, lin, &image, width);
+    }
+    uint32_t *r = pop_register(f, pop);
+    if (!r || (width == 4 ? *r : (uint16_t)*r) != want) return false;
+    *r |= V86_TF;
+    return true;
+}
+/* BS proves a stepped instruction even if it cleared saved TF. MOV/POP SS
+ * defer this trap through the following instruction. Other faulting forms
+ * retain TF until the monitor has handled them (CLI/INT/#PF). */
+static bool flags_restored(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
+{
+    struct dpmi *d = &v->dpmi;
+    bool step = f->tf.vector == 1 ? (dr6 & (1u << 14)) != 0 : (f->tf.eflags & V86_TF) != 0;
+    if (!d->if_armed || !step) return false;
+    d->if_armed = false;
+    f->tf.eflags &= ~V86_TF;
+    v->monitor.vif = true;
+    d->stats.if_restored++;
+    return true;
+}
+
 /* #GP(0): IOPL-sensitive instructions the monitor virtualizes. */
 static int emulate(struct dosvm *v, struct v86_frame *f)
 {
@@ -309,7 +463,13 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
     uint32_t next = f->tf.eip + len, mask = cs.big ? 0xFFFFFFFFu : 0xFFFFu;
     unsigned w = op32 ? 4 : 2;
     switch (op) {
-    case 0xFA: v->monitor.vif = false; break;
+    case 0xFA:
+        if (v->monitor.vif && arm_flags_image(v, f, &cs)) {
+            d->if_armed = true;
+            d->stats.if_armed++;
+        }
+        v->monitor.vif = false;
+        break;
     case 0xFB:
         if (!v->monitor.vif) {
             /* STI shadow: no IRQ before the next instruction retires. Not
@@ -385,7 +545,7 @@ static int debug_trap(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
     return dpmi_exception(v, f, 1, 0);
 }
 
-int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
+static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
 {
     struct dpmi *d = &v->dpmi;
     if (!d->active) return -EFAULT;
@@ -396,6 +556,9 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
     if (d->shadow && !(irq && (uint16_t)f->tf.cs == d->shadow_cs && f->tf.eip == d->shadow_eip))
         d->shadow = false;
     if (irq) return 0;                                      /* physical IRQ, handled */
+    /* Before anything else: an instruction trapping right after the POPF
+     * (a CLI, an INT, a host stub) sees the restored IF first. */
+    if (flags_restored(v, f, dr6) && vector == 1 && !(dr6 & (15u | (1u << 13) | (1u << 15)))) return 0;
     switch (vector) {
     case 13:
         if ((f->tf.err & 3) == 2) return software_int(v, f, (uint8_t)(f->tf.err >> 3));
@@ -413,12 +576,26 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
          * interrupts were enabled) is a trapped device cycle, emulated on
          * the VM's VGA model with the client's 16/32-bit decoding. DOOM's
          * mode 13h/Y frame writes reach the model this way. */
-        if (cr2 >= 0xA0000 && cr2 < 0xC0000 && (f->tf.err & 5) == 5) return dosvm_vga_fault_pm(v, f);
+        if (cr2 >= 0xA0000 && cr2 < 0xC0000 && (f->tf.err & 5) == 5) {
+            if (dosvm_vga_retry(v, cr2, dpmi_fault_linear(v, f), true)) return 0;
+            return dosvm_vga_fault_pm(v, f);
+        }
         return dpmi_exception(v, f, 14, f->tf.err);
     default:
         if (vector < 32) return dpmi_exception(v, f, vector, f->tf.err);
         return -EFAULT;
     }
+}
+
+int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
+{
+    int e = pm_trap(v, f, cr2, dr6);
+    /* The returned PC (including handler entry and emulated fall-through) is
+     * a known instruction boundary. Never seed from a backwards guess. */
+    v->dpmi.decode_valid = !e && v->frame_pm;
+    v->dpmi.decode_cs = (uint16_t)f->tf.cs;
+    v->dpmi.decode_eip = f->tf.eip;
+    return e;
 }
 
 /* Virtual IRQ delivery while a client exists. Hooked vectors reach the

@@ -1,5 +1,5 @@
 /* f3-02 native owner boundary: syscall 72 (dosvm) for one DOS window VM per
- * process, delegated only to a desktop-launched /bin/dosbox. No public VM
+ * process, delegated only to a desktop-launched /Programs/dosbox. No public VM
  * lookup, device grant or physical display access. execution-abi.md, F3-02.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -171,9 +171,11 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         /* f3-06: an owner-attached local workload disk (\CIUKIGAM.IMG, the
          * DOS system plus \DOOM or \WOLF3D) becomes the window VM's base,
          * with the staged DPMI host (DOSVM_DPMI_PUBLIC is still 0): the
-         * owner-visible DOOM window. Without that disk nothing changes. */
+         * owner-visible DOOM window. Without it, the bundled shareware games
+         * disk (C:\GAMES\CIUKIGAM.IMG, owner decision 2026-10-12) does;
+         * with neither, DOSBOOT.IMG and no DPMI host, as before. */
         char workload[24];
-        int found = dosvm_workload_base(workload);
+        int found = dosvm_window_base(workload);
         if (found && found != -ENOENT) { creating[reservation] = 0; e = closed_error(found); goto out; }
         /* Creation may sleep opening storage; another thread may close the
          * descriptor meanwhile, so the VM holds its own surface reference. */

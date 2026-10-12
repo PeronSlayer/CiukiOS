@@ -1,11 +1,17 @@
 # CiukiOS documentation
 
-`main` is the Ciuki VMM line (phase F0); the 0.8 line lives on branch
-`legacy-0.8`. See the [README](../README.md) for the overview.
+`main` is the Ciuki VMM line (0.9.0 pre-alpha, steps F0 to F4 merged); the
+0.8 line lives on branch `legacy-0.8`. See the [README](../README.md) for the
+overview.
 
 - [Build and run](build-and-run.md)
-- [Windows portable release](windows-portable-release.md)
+- [Boot modes and what the screen shows](boot.md)
+- [Desktop, window protocol and applications](desktop.md)
+- [SDK and libc](sdk.md)
+- [Windows portable release](windows-portable-release.md) (0.8 line)
+- [0.9.0 screenshots](screenshots/0.9.0/README.md)
 - [0.8.3 screenshots](screenshots/0.8.3/README.md)
+- [Directives](directives/README.md) — the written tasks behind each merged change
 - [Test architecture](design/test-architecture.md)
 - [Generic PC hardware baseline and compatibility matrix](design/hardware-baseline.md)
 
@@ -27,8 +33,14 @@ F2 contracts (revised after cross-review 2026-10-10; lead approval pending):
 - [POSIX subset, libc and SDK](design/posix-subset.md) — newlib decision, paths, supported interfaces and application gate
 - [F2 acceptance](design/f2-acceptance.md) — native-process, desktop and upstream-application evidence
 
+F3 and F4 documents:
+
+- [F3 acceptance](design/f3-acceptance.md) — DOS virtual machines, DPMI, video, audio state and workloads
+- [F4 audio, media and shared volumes](design/f4-audio-media-contract.md) and [F4 acceptance](design/f4-acceptance.md)
+
 Validation records: [F0 kernel, loader and runner on QEMU](validation/2026-10-09-f0/README.md),
-[F0 runner implementation](validation/f0-runner.md), [F0 loader](validation/2026-10-09-f0-loader.md).
+[F0 runner implementation](validation/f0-runner.md), [F0 loader](validation/2026-10-09-f0-loader.md),
+[integrated images, one section per image SHA-256](validation/2026-10-11-integrated-image-f0-regression.md).
 
 The development diary is in [`dev_diary/`](../dev_diary/). Earlier design
 notes, validation records and history are archived in

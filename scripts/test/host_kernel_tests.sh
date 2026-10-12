@@ -118,6 +118,14 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/lib/sha256.c" -o "$out/sha256_test"
 "$out/sha256_test"
 
+# Call 73: ACPI soft-off discovery (RSDP/RSDT/XSDT/FADT/DSDT and \_S5).
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_test.c" -o "$out/power_test"
+"$out/power_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
+"$out/power_runtime_test"
+
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.
 fx="$out/audit_fixture.asm"
@@ -225,6 +233,13 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 # guest INT 9) into the shell blocked in INT 16h AH=00h.
 # Optional: needs libx86emu and an already built build/f0/dos/DOSBOOT.IMG.
 dos_image="$root/build/f0/dos/DOSBOOT.IMG"
+if [[ -f /usr/include/x86emu.h ]]; then
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        "$root/tests/host/dosvm_guest_step_test.c" "$root/tests/host/dosvm_guest_cpu.c" -lx86emu -o "$out/dosvm_guest_step_test"
+    "$out/dosvm_guest_step_test"
+else
+    echo "guest CPU single step: SKIP (no libx86emu headers)"
+fi
 if [[ -f /usr/include/x86emu.h && -f "$dos_image" ]] && grep -q '"/DPMI4GW.EXE"' "${dos_image%.IMG}.json"; then
     clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
         -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_guest.c" \
@@ -237,6 +252,15 @@ if [[ -f /usr/include/x86emu.h && -f "$dos_image" ]] && grep -q '"/DPMI4GW.EXE"'
         exit 1
     fi
     tail -n 1 "$out/dosvm_guest.log"
+    # QEMU TCG model (no data-segment limit checks, TCG CPUID signature): the
+    # clients must take their recorded TCG fallback and still pass.
+    if ! (cd "$root" && GUEST_TCG=1 timeout 600 "$out/dosvm_guest" "$dos_image" '\DPMI16.COM' DPMI16 \
+            '\DPMI32.COM' DPMI32 > "$out/dosvm_guest_tcg.log" 2>&1) ||
+       [[ $(grep -c 'NOTE tcg_no_data_limit_check' "$out/dosvm_guest_tcg.log") != 2 ]]; then
+        tail -n 40 "$out/dosvm_guest_tcg.log"
+        exit 1
+    fi
+    echo "TCG model: $(tail -n 1 "$out/dosvm_guest_tcg.log")"
 else
     echo "dosvm guest runner: SKIP (no libx86emu headers, or no DOSBOOT.IMG with the f3-04 payloads)"
 fi

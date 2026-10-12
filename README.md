@@ -2,7 +2,7 @@
 
 # CiukiOS
 
-**A modern Retro OS.** An open-source operating system for playing the games
+**Classic computing, one woof at a time.** An open-source operating system for playing the games
 of the 1990s on the computers of the 1990s. Dedicated to **Ciuki**, the dog
 in the boot splash. Code under [GNU GPLv2](LICENSE).
 
@@ -48,7 +48,7 @@ There are two lines of code:
 | Line | Branch | What it is | State |
 | --- | --- | --- | --- |
 | **0.8** | [`legacy-0.8`](https://github.com/PeronSlayer/CiukiOS/tree/legacy-0.8) | The DOS-based system in the screenshots below: CiukiDOS kernel, graphical desktop, DOS games in windows, CiukWeb browser. | Frozen. Last release: prerelease **0.8.3 build 849** with a [Windows portable bundle](docs/windows-portable-release.md). |
-| **Ciuki VMM** | `main` | **0.9.0 pre-alpha.** A 32-bit protected-mode kernel with paging, scheduling and fault containment; ATA, FAT32, keyboard, mouse and framebuffer drivers; native processes with a POSIX-subset libc and Lua; a ring-3 desktop with taskbar and menu; DOS virtual machines (V86, XMS/EMS/UMB, trapped VGA in a desktop window); AC'97 audio, ATAPI/ISO 9660 and NTFS read-only. No DPMI, no DOS sound card and no DOS games yet. | Unreleased. QEMU only: the F0 to F2 suites and the first DOS VM boots pass on QEMU; Files, CiukNote, the Task Manager and the NTFS mounts are merged and wait for their QEMU campaign. Hardware: only the ThinkPad T23 has run it (unattended sweeps, failures remain open); the E500 and generic PCs have not. Main prereleases are suspended. |
+| **Ciuki VMM** | `main` | **0.9.0 pre-alpha.** A 32-bit protected-mode kernel with paging, scheduling and fault containment; ATA, FAT32, keyboard, mouse and framebuffer drivers; native processes with a POSIX-subset libc and Lua; a ring-3 desktop (Ciuki menu in the top bar, taskbar with tray, resizable windows, three themes, wallpapers, Files, CiukNote, Task Manager, Control Panel and accessories); DOS virtual machines (V86, XMS/EMS/UMB, trapped VGA in a desktop window, a kernel DPMI host, Sound Blaster 16 and OPL3 emulation); AC'97 audio, ATAPI/ISO 9660 and NTFS read-only. DOOM and Wolfenstein 3D shareware are pre-installed. | Unreleased. QEMU only: the F0 to F2 suites, DOS VM boots, DPMI, DOS/4GW, DOS audio, DOOM (five timedemo loops, with sound) and Wolfenstein 3D pass on integration images; the newest image (`8435a16a…`) has had no QEMU campaign yet. Hardware: only the ThinkPad T23 has run this line (unattended sweeps, failures remain open) and a new image was handed over for a direct T23 test; the E500 and generic PCs have not run it. Main prereleases are suspended. |
 
 The 0.8 line ran a real-mode DOS kernel under a third-party V86 monitor and
 a 16-bit desktop. It worked on emulators but not reliably on the real
@@ -67,15 +67,68 @@ the real laptops.
 | --- | --- | --- |
 | F0 Foundations | Kernel boots, isolates processes, survives faults, reports its own tests | QEMU: `f0-core` 92/92 on five profiles. T23: the nine non-fatal probes pass in the sweeps. E500 and generic PCs: open |
 | F1 Drivers and disk | Keyboard, mouse, display, hard disk, FAT32, safe mode | QEMU: suites pass. T23: sweeps ran, input and safe-mode criteria to re-run. Not done until hardware passes |
-| F2 Native programs | POSIX-compatible API, a desktop that survives application crashes | QEMU: process, runtime, crash-isolation and desktop cases pass. Files, CiukNote and Task Manager: QEMU pending. Not done until hardware passes |
-| F3 DOS | DOS programs and games in virtual machines, with DPMI (DOOM, Wolfenstein 3D…) | QEMU: VMs boot to the shell prompt, XMS/EMS/UMB pass; devices and video merged, campaign pending. DPMI, Sound Blaster state and games: not started |
-| F4 Sound and media | Sound Blaster for DOS games, AC97/ESS audio, CD-ROM, NTFS read-only | QEMU: native AC'97 audio and ATAPI/ISO 9660 pass; NTFS read-only merged, QEMU pending. DOS audio and ESS: not started |
+| F2 Native programs | POSIX-compatible API, a desktop that survives application crashes | QEMU: process, runtime, crash-isolation and desktop-shell cases pass. Files, CiukNote, Task Manager, window resizing, the Computer view and the retro folder names are merged; their QEMU cases wait for the next campaign. Not done until hardware passes |
+| F3 DOS | DOS programs and games in virtual machines, with DPMI (DOOM, Wolfenstein 3D…) | QEMU: VMs boot to the shell prompt; XMS/EMS/UMB, devices, video, DPMI (16/32-bit and DOS/4GW), Sound Blaster 16/OPL3 state, DOOM and Wolfenstein 3D pass on integration images; the newest image has not been through the campaign. No hardware evidence |
+| F4 Sound and media | Sound Blaster for DOS games, AC97/ESS audio, CD-ROM, NTFS read-only | QEMU: native AC'97 audio, ATAPI/ISO 9660, NTFS read-only and DOS VM audio (Sound Blaster 16 and OPL3 through the AC'97 mixer) pass. ESS: not started. No hardware evidence |
 | F5 Native games | SDL and the open-source engines: Quake, Half-Life (Xash3D), Doom, Descent, Duke Nukem 3D | Not started |
 | F6 Network | TCP/IP, DHCP, network cards, IPX for DOS games: **LAN parties** | Not started |
 | F7 3D | OpenGL on chosen graphics chips (SuperSavage, Rage Mobility, Voodoo, TNT…): Quake 3 natively | Not started |
 | F8 Windows games | Original Windows 95/98 games and applications through Wine | Not started |
 
 Details and gates: [Roadmap](Roadmap.md).
+
+## What the 0.9.0 pre-alpha does today
+
+- **Boot.** A quiet normal boot: the loader menu (N normal, S safe mode, L
+  serial log, P probe), the kernel-drawn splash with the original Ciuki
+  photograph, then the desktop. Verbose boots keep the console.
+- **Desktop.** The Ciuki (Start) button at the left end of the top bar opens
+  the menu (Programs, Documents, Settings, Help, Run..., Shut Down...); the
+  taskbar has the window buttons and a tray with volume and clock; desktop
+  icons have readable labels. One Tango 0.8.90 icon family, three themes
+  (Platinum by default, Ciuki Blue, Classic 98) with uniform 24 px title bars,
+  resizable windows, and the owner's wallpaper scenes (Ciuk2 by default) with
+  procedural wallpapers and tiles.
+- **Programs.** Files (a "Computer" view with the drives `C:`, `D:`...; the
+  folders Programs, Documents, System and Games), CiukNote, Task Manager,
+  Control Panel (Display, Mouse, Keyboard, Sounds, Date & Time, System),
+  accessories (Calculator, Character Map, Clock, CiukiOS Help, Volume Control,
+  Image Viewer), DOS Box, Lua and developer tools.
+- **DOS games.** DOOM 1.9 and Wolfenstein 3D 1.4, shareware releases,
+  are pre-installed on `C:\GAMES\CIUKIGAM.IMG` and start from Programs >
+  Games in a DOS window with DPMI, Sound Blaster 16/OPL3 emulation and a fast
+  path for VGA mode 13h. The shareware licence texts are in
+  `third_party/games`; whether Wolfenstein 3D may stay in a published image is
+  an open owner decision.
+- **File names.** Programs see a POSIX view of the drives (`/` is `C:\`,
+  `/Programs`, `/Documents`, `/system`, `/tmp`, synthetic `/dev` and `/mnt`);
+  users see `C:\Programs`, `C:\Documents`, `C:\System` and `C:\Games`.
+
+## 0.9.0 pre-alpha in pictures
+
+QEMU captures (Pentium III profile, TCG) of the integration image `8435a16a…`
+of 2026-10-12 ([capture details](docs/screenshots/0.9.0/README.md)). The two
+game frames show the games starting up, not play.
+
+| Desktop | Ciuki menu |
+| --- | --- |
+| ![Desktop](docs/screenshots/0.9.0/01-desktop.png) | ![Ciuki menu](docs/screenshots/0.9.0/02-ciuki-menu.png) |
+
+| Programs | Files, Computer view |
+| --- | --- |
+| ![Programs](docs/screenshots/0.9.0/03-programs.png) | ![Files, Computer view](docs/screenshots/0.9.0/04-files-computer.png) |
+
+| CiukNote | Task Manager |
+| --- | --- |
+| ![CiukNote](docs/screenshots/0.9.0/05-ciuknote.png) | ![Task Manager](docs/screenshots/0.9.0/06-task-manager.png) |
+
+| Control Panel and Calculator | Games menu |
+| --- | --- |
+| ![Control Panel and Calculator](docs/screenshots/0.9.0/07-control-panel-calculator.png) | ![Games menu](docs/screenshots/0.9.0/08-games-menu.png) |
+
+| Wolfenstein 3D (shareware) | DOOM (shareware) |
+| --- | --- |
+| ![Wolfenstein 3D (shareware)](docs/screenshots/0.9.0/09-wolfenstein-3d.png) | ![DOOM (shareware)](docs/screenshots/0.9.0/10-doom.png) |
 
 ## The 0.8 line in pictures
 

@@ -3,6 +3,7 @@
 #define FD_TABLE_STACK_TEST
 #include "../proc/files_test.c"
 #undef FD_TABLE_STACK_TEST
+#include <stdarg.h>
 #include <ciuki/ac97.h>
 #include <ciuki/timing.h>
 struct ciuki_boot_info g_boot;
@@ -12,6 +13,7 @@ static uint32_t inl(uint16_t p) { (void)p; return 0; }
 static void outb(uint16_t p, uint8_t v) { (void)p; (void)v; }
 static void outl(uint16_t p, uint32_t v) { (void)p; (void)v; }
 uint64_t ktime_cycles(void) { return g_ticks * 1000; }
+void klog(const char *fmt, ...) { va_list a; va_start(a, fmt); vprintf(fmt, a); va_end(a); putchar('\n'); }
 bool ktime_elapsed_us(uint64_t start, uint32_t us) { return ktime_cycles() - start >= us; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t deadline) { return (int64_t)(g_ticks - deadline) >= 0; }
@@ -58,6 +60,7 @@ int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
 #include "../../../src/kernel/audio/audio_dev.c"
 
 struct mock_hw {
+    unsigned bad_civ_reads;
     uint64_t tick;
     uint64_t busy_until, stop_after;
     uint16_t codec[128], posted_reg, posted_value;
@@ -65,6 +68,7 @@ struct mock_hw {
     uint16_t sr, remaining;
     bool busy, posted, stuck, reject, stop_stuck;
     bool reset_stuck;
+    bool any_pcm; /* the service publishes mixed or silent periods, not test_bdl's marker */
     unsigned post_delay;
     unsigned writes, lvi_writes;
     struct ac97_device *device;
@@ -80,7 +84,7 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
         return 0;
     }
     if(off==0x30)return 0x100;
-    if(off==0x14)return h->civ;
+    if(off==0x14) { if(h->bad_civ_reads) { h->bad_civ_reads--; return 32; } return h->civ; }
     if(off==0x1a)return h->piv;
     if(off==0x16) {
         if(!h->cr && !h->stop_stuck && h->tick >= h->stop_after)h->sr|=AC97_DCH;
@@ -101,7 +105,7 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
     if(off==0x15) {
         unsigned slot=value;
         CHECK(h->device->bdl[slot].length==((1u<<31)|512));
-        CHECK(h->device->pcm[slot][0].left==123);
+        if(!h->any_pcm)CHECK(h->device->pcm[slot][0].left==123);
         h->lvi=value;h->lvi_writes++;
     }
     if(off==0x16) { CHECK(!(value&~0x1cu));h->sr&=~value; }
@@ -287,6 +291,88 @@ static void test_shutdown(void)
     memset(&ac97,0,sizeof(ac97));
     puts("audio shutdown: preactivation claims released; unproved stop retains all nine DMA pages/claims; no quarantine reset PASS");
 }
+/* f4-05 hooks (weak in audio_dev.c; the VM sources are not linked here). */
+static bool vm_active_hook, vm_attached_hook, vm_nonzero_hook;
+bool audio_vm_active(void) { return vm_active_hook; }
+bool audio_vm_attached(void) { return vm_attached_hook; }
+void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
+{
+    if (vm_nonzero_hook) for (unsigned i=0;i<frames;i++) sums[i][0]=sums[i][1]=12000;
+}
+/* The idle tail with a DOS VM attached keeps AUDIO_LEAD periods. A worker that
+ * runs late can find the DMA on the last valid period (published-retired 1)
+ * or halted at it; ac97_publish refuses the CIV/PIV slots. Either way the tail
+ * must end as a normal transport stop, never as a backend failure, also when
+ * a VM sound arrives in that service, and the next sound restarts it
+ * (QEMU campaign 13, image 22320ccc: the backend died between VMPLAY stages
+ * 4 and 5, after_pages 17 -> 8, no OPL3 event consumed). */
+static void transport_restart(void)
+{
+    vm_active_hook=true;
+    for(unsigned i=0;i<AUDIO_LEAD;i++) { g_ticks++;audio_service(); }
+    CHECK(audio.running && ac97.running && ac97.published==AUDIO_LEAD && !audio.error && audio.ready);
+    hw.sr=0;hw.civ=0;hw.piv=1;hw.remaining=512;
+    vm_active_hook=false;g_ticks++;audio_service(); /* the VM goes idle: the shallow tail starts */
+    CHECK(idle_since && ac97.published-ac97.retired==AUDIO_LEAD);
+}
+static void test_idle_tail_drain(void)
+{
+    static struct ac97_bd bdl[32];static struct audio_frame buffers[32][256];
+    hardware_setup(&ac97);hw.any_pcm=true;
+    ac97.bdl=bdl;ac97.ready=true;for(unsigned i=0;i<32;i++)ac97.pcm[i]=buffers[i];
+    for(unsigned i=0;i<12;i++)ac97.claims[i]=-1;
+    audio.ready=true;audio.error=0;audio.running=false;audio.output=0;idle_since=0;
+    vm_attached_hook=true;g_ticks=1000;
+    transport_restart();
+    /* Late worker: seven periods played, the DMA still on the last one. */
+    hw.civ=7;hw.piv=8;hw.remaining=300;hw.tick+=40;g_ticks+=40;
+    audio_service();
+    printf("idle tail drained: error=%d ready=%u running=%u published=%llu halts=%llu\n",audio.error,audio.ready,audio.running,
+           (unsigned long long)ac97.published,(unsigned long long)audio.halts);
+    CHECK(!audio.error && audio.ready && !audio.running && !ac97.running && !ac97.published && ac97.frame_base==audio.output);
+    transport_restart();
+    /* Halted at the last period (underrun) when a VM sound arrives in the same service. */
+    hw.civ=7;hw.piv=8;hw.remaining=0;hw.sr=AC97_DCH;hw.tick+=50;g_ticks+=50;
+    vm_active_hook=true;audio_service();
+    printf("idle tail halted, source arriving: error=%d ready=%u running=%u published=%llu halts=%llu\n",audio.error,audio.ready,
+           audio.running,(unsigned long long)ac97.published,(unsigned long long)audio.halts);
+    CHECK(!audio.error && audio.ready && !audio.running && ac97.published==1 && !audio.halts); /* restarting: first silent period */
+    for(unsigned i=1;i<AUDIO_LEAD;i++) { g_ticks++;audio_service(); }
+    CHECK(audio.running && ac97.running && !audio.error && !audio.halts && !audio.deadlines);
+    vm_active_hook=vm_attached_hook=false;audio.ready=audio.running=false;idle_since=0;
+    memset(&ac97,0,sizeof(ac97));
+    puts("audio idle tail: drained or halted VM tail stops the transport, a VM sound restarts it, no backend failure PASS");
+}
+static void test_idle_tail_cursor_error(void)
+{
+    static struct ac97_bd bdl[32]; static struct audio_frame buffers[32][256];
+    for(unsigned fault=0;fault<5;fault++) {
+    hardware_setup(&ac97); hw.any_pcm=true;
+    ac97.bdl=bdl; ac97.ready=true; for(unsigned i=0;i<32;i++) ac97.pcm[i]=buffers[i];
+    for(unsigned i=0;i<12;i++) ac97.claims[i]=-1;
+    audio.ready=true; audio.error=0; audio.running=false; audio.output=0; idle_since=0;
+    audio.master=(struct ciuki_mixer_master){.left=100,.right=100};
+    vm_attached_hook=vm_active_hook=true; g_ticks=1000;
+    for(unsigned i=0;i<AUDIO_LEAD;i++) { g_ticks++; audio_service(); }
+    hw.sr=0; hw.civ=1; hw.piv=2; hw.remaining=512;
+    vm_nonzero_hook=fault!=4; g_ticks++; audio_service();
+    CHECK(ac97.published==AUDIO_LEAD+1 && buffers[AUDIO_LEAD][0].left==(fault==4?0:12000));
+    vm_nonzero_hook=vm_active_hook=false;
+    /* Source becomes inactive after rendering silence; the earlier PCM is
+     * still queued. Invalid CIV cannot establish that it was fetched. */
+    ac97.touched=true;
+    if(fault==0 || fault==4) hw.bad_civ_reads=2;
+    if(fault==1) hw.piv=3;
+    if(fault==2) ac97.generation_fetched=AUDIO_QUANTUM+200;
+    if(fault==3) hw.tick=ac97.last_progress+101;
+    g_ticks++; audio_service();
+    printf("idle cursor error with queued PCM: error=%d ready=%u running=%u published=%llu\n",audio.error,audio.ready,audio.running,(unsigned long long)ac97.published);
+    CHECK(audio.error==-EIO && !audio.ready); /* no successful silent-tail reset */
+    vm_active_hook=vm_attached_hook=false; audio.ready=audio.running=false; idle_since=0;
+    memset(&ac97,0,sizeof(ac97)); non_silent_end=0;
+    }
+    puts("audio idle tail: CIV/PIV/regression/timeout fail backend, zero PCM alone does not prove drain PASS");
+}
 static struct audio_stream *waiting_stream;
 static void signal_waiter(void) { client_thread->interrupted=true; }
 static void reset_waiter(void) { audio_stream_reset(waiting_stream); }
@@ -398,7 +484,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_bdl();test_formats();test_shutdown();test_stream_syscalls();test_persistence();
+    test_codec();test_bdl();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

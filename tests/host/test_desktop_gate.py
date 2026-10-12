@@ -135,11 +135,16 @@ void klog(const char *f,...) {(void)f;}
         c = importlib.util.module_from_spec(spec);spec.loader.exec_module(c)
         portrait = c.convert(ROOT/'assets/brand/ciuki-logo.png')
         pixels = bytearray(bytes((0x37,0x55,0x64))*width*height)
-        x0=(width-256)//2;y0=max(32,32+(height-32-256-36)//2)
-        for y in range(256):
-            for x in range(256):
-                p=(y*256+x)*4;off=((y0+y)*width+x0+x)*3
-                pixels[off:off+3]=portrait[p:p+3][::-1]
+        # The Ciuki button mark (2026-10-12): the 18 px area average of the portrait at
+        # (13,7) in the top bar; cells touching the transparent surround keep the bar colour.
+        size=18;x0=4+(96-size-6-53)//2;y0=4+(24-size)//2
+        for y in range(size):
+            for x in range(size):
+                block=[portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
+                       for yy in range(y*256//size,(y+1)*256//size) for xx in range(x*256//size,(x+1)*256//size)]
+                if any(b==bytes((0x64,0x55,0x37)) for b in block):continue
+                off=((y0+y)*width+x0+x)*3
+                pixels[off:off+3]=bytes(sum(b[k] for b in block)//len(block) for k in range(3))[::-1]
         return pixels
 
     def write_screen(self,name,width,height,pixels):
@@ -157,13 +162,13 @@ void klog(const char *f,...) {(void)f;}
             a=self.write_screen('after.ppm',width,height,after)
             observed=runner.observe_desktop_screen(b,a)
             self.assertEqual(observed['ppm_sha256'],hashlib.sha256(a.read_bytes()).hexdigest())
-            self.assertEqual(observed['portrait_pixels_checked'],6144)
+            self.assertGreater(observed['portrait_pixels_checked'],100);self.assertEqual(observed['portrait_region'][2:],[18,18])
             self.assertGreaterEqual(observed['cursor_changed_pixels'],16)
             with self.assertRaisesRegex(EvidenceError,'cursor'):runner.observe_desktop_screen(b,b)
             clock_only=bytearray(before);clock_only[:30]=b'\xff'*30
             a=self.write_screen('clock.ppm',width,height,clock_only)
             with self.assertRaisesRegex(EvidenceError,'cursor'):runner.observe_desktop_screen(b,a)
-            x,y,_,_=observed['portrait_region'];after[(y*width+x)*3]^=1
+            x,y,_,_=observed['portrait_region'];after[((y+9)*width+x+9)*3]^=1   # the centre cell of the mark is portrait ink
             a=self.write_screen('corrupt.ppm',width,height,after)
             with self.assertRaisesRegex(EvidenceError,'portrait'):runner.observe_desktop_screen(b,a)
         for data in (b'P3\n640 480\n255\n',b'P6\n640 480\n256\n',b'P6\n640 480\n255\nshort',b'P6\n# missing newline'):
@@ -173,7 +178,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_demo_arguments_summaries_pacing_and_faults(self):
         include=self.folder/'include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* host transport declaration supplied by harness */\n')
         binary=self.folder/'demo-test'
@@ -182,7 +187,7 @@ void klog(const char *f,...) {(void)f;}
             '-I',str(self.folder/'include'),
             '-I',str(ROOT/'apps/desktop'),'-I',str(ROOT/'src/kernel/include'),
             str(ROOT/'tests/host/desktop/demo_gate_test.c'),str(ROOT/'apps/desktop/protocol.c'),
-            str(ROOT/'apps/desktop/compositor.c'),'-o',str(binary)]
+            str(ROOT/'apps/desktop/compositor.c'),str(ROOT/'apps/desktop/theme.c'),'-o',str(binary)]
         subprocess.run(command,check=True,env=env)
         def execute(*args):
             return subprocess.run([str(binary),*args],capture_output=True,text=True,env=env,
@@ -209,7 +214,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_desktop_gate_loop(self):
         include=self.folder/'desktop-include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* declarations supplied by harness */\n')
         binary=self.folder/'desktop-gate-test'
@@ -219,7 +224,9 @@ void klog(const char *f,...) {(void)f;}
             '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
             '-I',str(self.folder/'desktop-include'),'-I',str(ROOT/'apps/desktop'),
             '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
-            *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+            *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c','theme.c')),
+            *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c')),  # desktop.c's shell icons
+            *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','settings.c','wallpaper.c','image.c','keymap.c')),  # desktop shell
             *bridge,
             '-o',str(binary)],check=True,env=env)
         result=subprocess.run([str(binary)],capture_output=True,text=True,env=env,timeout=10)
@@ -244,7 +251,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_handshake_reports_through_kernel_hook(self):
         include=self.folder/'handshake-include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):
             (include/name).write_text('/* declarations supplied by host harness */\n')
@@ -254,10 +261,12 @@ void klog(const char *f,...) {(void)f;}
                 '-I',str(ROOT/'src/kernel/include')]
         desktop=self.folder/'desktop';demo=self.folder/'demo';kernel=self.folder/'kernel'
         subprocess.run([*common,str(ROOT/'tests/host/desktop/demo_gate_test.c'),
-                        *(str(ROOT/'apps/desktop'/n) for n in ('protocol.c','compositor.c')),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('protocol.c','compositor.c','theme.c')),
                         '-o',str(demo)],check=True,env=env)
         subprocess.run([*common,str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
-                        *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c','theme.c')),
+                        *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c')),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','settings.c','wallpaper.c','image.c','keymap.c')),
                         '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
                         *self.kernel_spawn_bridge(env),
                         '-o',str(desktop)],check=True,env=env)
@@ -304,9 +313,20 @@ void klog(const char *f,...) {(void)f;}
 
     def test_guest_interaction_binding_and_failures(self):
         rows=self.interaction_records();runner.desktop_interaction(rows)
-        for key,value in (('presents','10'),('input_events','0'),('pixel_digest','12345678'),('keys','1'),('motion','0'),('buttons','1')):
+        for key,value,message in (('presents','10','counter did not increase: presents'),
+                                  ('input_events','0','counter did not increase: input_events'),
+                                  ('pixel_digest','12345678','digest did not change'),
+                                  ('keys','1','did not consume every input kind: keys=1 '),
+                                  ('motion','0','did not consume every input kind: keys=2 motion=0'),
+                                  ('buttons','1','buttons=1')):
             bad=copy.deepcopy(rows);bad[-1][key]=value
-            with self.assertRaises(EvidenceError):runner.desktop_interaction(bad)
+            # The failed contract is named: it is not re-wrapped as a field error (image 639bcca5 keys=0).
+            with self.assertRaisesRegex(EvidenceError,message):runner.desktop_interaction(bad)
+        for key,value in (('keys','x'),('presents','')):
+            bad=copy.deepcopy(rows);bad[-1][key]=value
+            with self.assertRaisesRegex(EvidenceError,'invalid desktop interaction fields'):runner.desktop_interaction(bad)
+        bad=copy.deepcopy(rows);del bad[-1]['motion']
+        with self.assertRaisesRegex(EvidenceError,'invalid desktop interaction fields'):runner.desktop_interaction(bad)
         bad=copy.deepcopy(rows);bad[1]['presents']='9'
         with self.assertRaises(EvidenceError):runner.desktop_interaction(bad)
         with self.assertRaises(EvidenceError):runner.desktop_interaction(rows+rows[-1:])

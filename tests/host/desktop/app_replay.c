@@ -23,6 +23,21 @@
  * (ps2_queue_noirq, ps2_mouse_send_packet, ps2_mouse_sync) and ui/input.c
  * (qmp_input_send_event syncs once per command), checked 2026-10-11.
  *
+ * --i8042-byte-ms N models a guest that reads one controller byte every N ms
+ * instead of at once: the firmware input path of the qemu-e500 profile, whose
+ * BIOS VM worker reflects one IRQ1/IRQ12 byte per VM entry
+ * (src/kernel/vm/biosvm.c worker_main, src/kernel/vm/fwinput.c). The bytes
+ * then wait in QEMU's PS/2 queues, and each time the guest reads the output
+ * buffer the controller refills it from a pending keyboard byte before a
+ * pending aux byte (hw/input/pckbd.c kbd_update_irq: KBD_PENDING_KBD is tested
+ * before KBD_PENDING_AUX), so a key sent after a click can reach the desktop
+ * before the click's packet. Keys are translated set-1 bytes there (make 1,
+ * break 1, E0 prefix 1); a packet's events follow its third byte; a sync
+ * sends packets only while the 16-byte aux queue has room for one.
+ * --i8042-stall-batch B --i8042-stall-ms S: the reader reads nothing for S ms
+ * once batch B is delivered (a firmware worker that does not run meanwhile);
+ * queued bytes keep their order, except that keyboard bytes go first.
+ *
  * Not covered: the kernel's real scheduler and timings (turn costs and start
  * delays are parameters), pixel digests (the lead pins them from QEMU), the
  * FAT driver (the Files and CiukNote file systems are the fake image tree of
@@ -59,6 +74,9 @@ static const char *case_name, *portrait_path;
 static char bin_list[512];
 static uint64_t overhead_ns, first_ns = 150 * MS, start_delay_ns, desktop_cost_ns = 20 * MS, app_cost_ns = 5 * MS;
 static unsigned pause_scale_pct = 100;
+static uint64_t byte_ns;   /* --i8042-byte-ms: 0 = every byte read at once (the native IRQ handler) */
+static uint64_t stall_ns;  /* --i8042-stall-ms: the reader reads nothing for this long after ... */
+static int stall_batch = -1;   /* ... --i8042-stall-batch: the batch with this index is delivered */
 static uint64_t limit_ns = 240000 * MS;
 static int trace;
 static const char *shots;   /* --shots DIR: the desktop frame before every batch with a button press (diagnosis) */
@@ -334,13 +352,13 @@ ciuki_pid_t ciuki_spawn(const char *path, char *const argv[], char *const env[],
                         uint32_t count, uint32_t flags)
 {
     static const struct { const char *path; int (*entry)(int, char **); } programs[] = {
-        {"/bin/files", files_main}, {"/bin/ciuknote", ciuknote_main}, {"/bin/tasks", tasks_main}, {"/bin/demo", demo_main}};
+        {"/Programs/files", files_main}, {"/Programs/ciuknote", ciuknote_main}, {"/Programs/tasks", tasks_main}, {"/Programs/demo", demo_main}};
     int (*entry)(int, char **) = NULL;
     for (unsigned i = 0; i < sizeof(programs) / sizeof(programs[0]); i++) if (!strcmp(path, programs[i].path)) entry = programs[i].entry;
     if (!entry) {
-        char name[80]; snprintf(name, sizeof(name), ",%s,", path + (strncmp(path, "/bin/", 5) ? 0 : 5));
+        char name[80]; snprintf(name, sizeof(name), ",%s,", path + (strncmp(path, "/Programs/", sizeof("/Programs/") - 1) ? 0 : sizeof("/Programs/") - 1));
         char list[520]; snprintf(list, sizeof(list), ",%s,", bin_list);
-        if (strncmp(path, "/bin/", 5) || !strstr(list, name)) { errno = ENOENT; return -1; }
+        if (strncmp(path, "/Programs/", sizeof("/Programs/") - 1) || !strstr(list, name)) { errno = ENOENT; return -1; }
         entry = stub_main;
     }
     for (uint32_t i = 0; i < count; i++) {
@@ -348,8 +366,8 @@ ciuki_pid_t ciuki_spawn(const char *path, char *const argv[], char *const env[],
         if (!o || cur->fd[mapping[i].source].cloexec || mapping[i].target < 0 || mapping[i].target >= MAX_FDS) { errno = EBADF; return -1; }
     }
     int argn = 0; while (argv && argv[argn]) argn++;
-    int survivor = !strcmp(path, "/bin/demo") && argn == 4 && !strcmp(argv[3], "--test=crash-isolation");
-    struct proc *p = proc_create(path + 5, entry, argv, env, cur->pid, flags & CIUKI_SPAWN_NEW_GROUP ? 0 : cur->pgid,
+    int survivor = !strcmp(path, "/Programs/demo") && argn == 4 && !strcmp(argv[3], "--test=crash-isolation");
+    struct proc *p = proc_create(path + sizeof("/Programs/") - 1, entry, argv, env, cur->pid, flags & CIUKI_SPAWN_NEW_GROUP ? 0 : cur->pgid,
                                  cur->pid == desktop_pid && !survivor ? app_cost_ns : 2 * MS, survivor ? 0 : start_delay_ns);
     if (!p) return -1;
     for (uint32_t i = 0; i < count; i++) {
@@ -389,6 +407,10 @@ static uint32_t proc_records(void *buffer, uint32_t bytes)
     memcpy((uint8_t *)buffer + sizeof(sys), list, sys.records * sizeof(list[0]));
     return sys.records;
 }
+/* Desktop shell services: the gate scenarios never use the mixer or the power interface. */
+int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size)
+{ (void)fd; (void)op; (void)record; (void)size; errno = ENODEV; return -1; }
+int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer, uint32_t bytes)
 {
     uint32_t r = proc_records(buffer, bytes);
@@ -528,11 +550,11 @@ int rp_kill(pid_t pid, int sig)
 }
 pid_t rp_getpid(void) { return cur->pid; }
 
-/* /bin as the desktop scans it: the image's programs (scripts/build_image.py). */
+/* /Programs as the desktop scans it: the image's programs (scripts/build_image.py). */
 struct rp_dir { char names[24][64]; unsigned count, at; struct dirent entry; };
 DIR *rp_opendir(const char *path)
 {
-    if (strcmp(path, "/bin")) { errno = ENOENT; return NULL; }
+    if (strcmp(path, "/Programs")) { errno = ENOENT; return NULL; }
     struct rp_dir *d = calloc(1, sizeof(*d)); assert(d);
     char list[512]; snprintf(list, sizeof(list), "%s", bin_list);
     for (char *s = strtok(list, ","); s && d->count < 24; s = strtok(NULL, ",")) snprintf(d->names[d->count++], 64, "%s", s);
@@ -549,8 +571,8 @@ struct dirent *rp_readdir(DIR *dir)
 int rp_closedir(DIR *dir) { free(dir); return 0; }
 static int in_bin(const char *path)
 {
-    if (strncmp(path, "/bin/", 5)) return 0;
-    char name[80], list[520]; snprintf(name, sizeof(name), ",%s,", path + 5); snprintf(list, sizeof(list), ",%s,", bin_list);
+    if (strncmp(path, "/Programs/", sizeof("/Programs/") - 1)) return 0;
+    char name[80], list[520]; snprintf(name, sizeof(name), ",%s,", path + sizeof("/Programs/") - 1); snprintf(list, sizeof(list), ",%s,", bin_list);
     return strstr(list, name) != NULL;
 }
 int rp_stat(const char *path, struct stat *st)
@@ -625,11 +647,11 @@ static const struct cn_fs replay_cn_fs = {NULL, cn_stat, cn_list, cn_load, cn_sa
 const struct cn_fs *cn_native_fs(void) { return &replay_cn_fs; }
 static void image_tree(void)
 {
-    fake_image_tree();   /* /, /bin, /system as in tests/host/desktop/files_ui_test.c */
-    fake_create("/home", FM_DIR); fake_create("/tmp", FM_DIR);
+    fake_image_tree();   /* /, /Programs, /system as in tests/host/desktop/files_ui_test.c */
+    fake_create("/Documents", FM_DIR); fake_create("/tmp", FM_DIR);
     char list[512]; snprintf(list, sizeof(list), "%s", bin_list);
     for (char *s = strtok(list, ","); s; s = strtok(NULL, ",")) {
-        char path[80]; snprintf(path, sizeof(path), "/bin/%s", s);
+        char path[80]; snprintf(path, sizeof(path), "/Programs/%s", s);
         if (fake_lookup(path) < 0) { int n = fake_file(path, 2000, 1); fake_nodes[n].meta.exec = 1; fake_nodes[n].meta.mode = 0100777; }
     }
 }
@@ -658,8 +680,79 @@ static void kernel_key(int code, int down)
     kq_push(CIUKI_INPUT_KEY, code, value, 0);
     if (down && code < (int)sizeof(us) && us[code]) kq_push(CIUKI_INPUT_TEXT, (unsigned char)us[code], 0, 0);
 }
+/* --i8042-byte-ms: QEMU's keyboard and aux queues (units of one key edge or one packet) and the output
+ * buffer the guest reads one byte at a time. */
+struct unit { int code, value, dx, dy, buttons; unsigned left, seq; };
+static struct unit kbd_q[16], aux_q[16];
+static unsigned kbd_n, aux_n, kbd_bytes, aux_bytes, unit_seq, reordered;
+static int latched, sent_buttons;   /* latched: 0 empty output buffer, 1 keyboard byte, 2 aux byte */
+static uint64_t byte_due;
+static void latch(void)
+{
+    latched = kbd_n ? 1 : aux_n ? 2 : 0;           /* pckbd.c: the keyboard first */
+    if (latched == 1) kbd_bytes--; else if (latched == 2) aux_bytes--;
+    byte_due = latched ? vnow + byte_ns : 0;
+}
+static void kernel_packet(int dx, int dy, int buttons)
+{
+    if (dx) kq_push(CIUKI_INPUT_MOTION, 0, dx, 0);
+    if (dy) kq_push(CIUKI_INPUT_MOTION, 0, 0, -dy);
+    int changed = buttons ^ kernel_buttons; kernel_buttons = buttons;
+    for (int i = 0; i < 3; i++) if (changed & (1 << i)) kq_push(CIUKI_INPUT_BUTTON, i + 1, (buttons >> i) & 1, 0);
+}
+static void read_byte(void)
+{
+    struct unit *q = latched == 1 ? kbd_q : aux_q;
+    unsigned *n = latched == 1 ? &kbd_n : &aux_n;
+    if (!--q[0].left) {
+        struct unit u = q[0];
+        memmove(q, q + 1, (--*n) * sizeof(*q));
+        if (latched == 1) {
+            if (aux_n && aux_q[0].seq < u.seq) reordered++;   /* an older packet still waits */
+            kernel_key(u.code, u.value);
+        } else kernel_packet(u.dx, u.dy, u.buttons);
+    }
+    latch();
+}
+static void deliver_queued(struct batch *b)
+{
+    int mouse = 0;
+    for (unsigned i = 0; i < b->count; i++) {
+        struct event *e = &b->events[i];
+        if (e->type == EV_KEY) {
+            unsigned need = (e->code >= 0x100) + 1u;
+            if (kbd_bytes + need > 16 || kbd_n == 16) { dropped_bytes += need; continue; }
+            kbd_q[kbd_n++] = (struct unit){.code = e->code, .value = e->value, .left = need, .seq = ++unit_seq};
+            kbd_bytes += need;
+            if (kbd_bytes > max_kbd_bytes) max_kbd_bytes = kbd_bytes;
+        } else if (e->type == EV_REL) {
+            mouse = 1;
+            if (e->code == 0) qemu_dx += e->value; else qemu_dy -= e->value;
+        } else {
+            mouse = 1;
+            unsigned bit = e->code == 1 ? 1u : e->code == 2 ? 2u : 4u;
+            if (e->value) qemu_buttons |= (int)bit; else qemu_buttons &= ~(int)bit;
+        }
+    }
+    if (mouse) {
+        /* ps2_mouse_sync: packets while the queue has room for 3 bytes; none at all when it is full. */
+        unsigned packets = 0;
+        while (aux_bytes + 3 <= 16 && aux_n < 16) {
+            int dx = qemu_dx > 127 ? 127 : qemu_dx < -127 ? -127 : qemu_dx;
+            int dy = qemu_dy > 127 ? 127 : qemu_dy < -127 ? -127 : qemu_dy;
+            qemu_dx -= dx; qemu_dy -= dy; packets++;
+            aux_q[aux_n++] = (struct unit){.dx = dx, .dy = dy, .buttons = qemu_buttons, .left = 3, .seq = ++unit_seq};
+            aux_bytes += 3; sent_buttons = qemu_buttons;
+            if (!qemu_dx && !qemu_dy) break;
+        }
+        if (qemu_dx || qemu_dy || sent_buttons != qemu_buttons) leftover_batches++;
+        if (packets > max_packets) max_packets = packets;
+    }
+    if (!latched) latch();
+}
 static void deliver(struct batch *b)
 {
+    if (byte_ns) { deliver_queued(b); return; }
     unsigned bytes = 0; int mouse = 0;
     for (unsigned i = 0; i < b->count; i++) {
         struct event *e = &b->events[i];
@@ -746,6 +839,9 @@ int main(int argc, char **argv)
         else if (OPT("--start-delay-ms")) start_delay_ns = strtoull(v, NULL, 10) * MS;
         else if (OPT("--desktop-cost-ms")) desktop_cost_ns = strtoull(v, NULL, 10) * MS;
         else if (OPT("--app-cost-ms")) app_cost_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--i8042-byte-ms")) byte_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--i8042-stall-ms")) stall_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--i8042-stall-batch")) stall_batch = atoi(v);
         else if (OPT("--limit-s")) limit_ns = strtoull(v, NULL, 10) * 1000 * MS;
         else if (!strcmp(a, "--trace")) trace++;
         else if (OPT("--shots")) shots = v;
@@ -758,7 +854,7 @@ int main(int argc, char **argv)
     pthread_mutex_lock(&big);
     /* The supervisor's desktop: display 3, input 4, termination authority 5 (CIUKI_TASKS_FD). */
     char *dargv[] = {"desktop", "--test=crash-isolation", "--gate", NULL};
-    char *denv[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/home", "TMPDIR=/tmp", "PATH=/bin", "CIUKI_TASKS_FD=5", NULL};
+    char *denv[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", "CIUKI_TASKS_FD=5", NULL};
     struct proc *desktop = proc_create("desktop", desktop_main, dargv, denv, 2, 0, desktop_cost_ns, 0);
     desktop_pid = desktop->pid;
     desktop->fd[3].o = obj_new(K_DISPLAY); desktop->fd[4].o = obj_new(K_INPUT); desktop->fd[5].o = obj_new(K_AUTHORITY);
@@ -783,10 +879,16 @@ int main(int argc, char **argv)
                 if (f) { fwrite(replay_desktop->pixels, 4, WIDTH * HEIGHT, f); fclose(f); }
             }
             deliver(b);
+            if (byte_ns && (int)batch_next - 1 == stall_batch) {
+                /* The byte in the output buffer is read only after the stall; nothing else in between. */
+                if (!latched) latch();
+                if (latched) byte_due = vnow + stall_ns;
+            }
             last_batch_ns = vnow;
             batch_due = vnow + overhead_ns + (uint64_t)b->pause_ms * MS * pause_scale_pct / 100;
             if (trace) note("batch %u delivered (%u events, queue %u)", batch_next - 1, b->count, kq_count);
         }
+        if (latched && vnow >= byte_due) read_byte();
         if (trace && probe.checkpoint != (int)last_cp) { last_cp = (unsigned)probe.checkpoint; describe_desktop(); }
         if (success_ns && !end_ns) end_ns = success_ns + 3000 * MS;   /* the probe sleeps 3 s, then ENDs */
         if (end_ns && vnow >= end_ns) break;
@@ -800,6 +902,7 @@ int main(int argc, char **argv)
         uint64_t wake = UINT64_MAX;
         for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used && procs[i].state == CIUKI_PROC_LIVE && procs[i].wake < wake) wake = procs[i].wake;
         if (stage == 2 && batch_next < batch_count && batch_due < wake) wake = batch_due;
+        if (latched && byte_due < wake) wake = byte_due;
         if (end_ns && end_ns < wake) wake = end_ns;
         if (wake == UINT64_MAX) fail("every process exited");
         vnow = wake;
@@ -809,14 +912,17 @@ int main(int argc, char **argv)
     printf("PROBE generation=%u keys=%u motion=%u buttons=%u checkpoint=%d app=%d reports=%u presents=%u\n", probe.generation,
            probe.keys, probe.motion, probe.buttons, probe.checkpoint, probe.app, probe.reports, presents);
     printf("GATE keys=%u motion=%u buttons=%u\n", counts[0], counts[1], counts[2]);
-    printf("PS2 dropped_bytes=%u leftover_batches=%u max_key_bytes=%u max_packets=%u\n", dropped_bytes, leftover_batches,
-           max_kbd_bytes, max_packets);
+    printf("PS2 dropped_bytes=%u leftover_batches=%u max_key_bytes=%u max_packets=%u reordered=%u\n", dropped_bytes,
+           leftover_batches, max_kbd_bytes, max_packets, reordered);
     printf("TIMING arm=%.3f batches=%u/%u last_batch=%.3f success=%.3f\n", (double)arm_ns / 1e9, batch_next, batch_count,
            arm_ns && last_batch_ns ? (double)(last_batch_ns - arm_ns) / 1e9 : -1.0,
            success_ns ? (double)(success_ns - arm_ns) / 1e9 : -1.0);
     for (int i = 1; i <= probe.checkpoint; i++) printf("CHECKPOINT_AT %d %.3f\n", i, (double)(checkpoint_ns[i] - arm_ns) / 1e9);
-    for (int i = 0; i < FAKE_NODES; i++) if (fake_nodes[i].live && !strncmp(fake_nodes[i].path, "/system/", 8) && !strchr(fake_nodes[i].path + 8, '/'))
-        printf("SYSTEM %s\n", fake_nodes[i].path + 8);
+    for (int i = 0; i < FAKE_NODES; i++) if (fake_nodes[i].live) {
+        char parent[FM_PATH];
+        fm_parent(parent, fake_nodes[i].path);
+        if (fm_same_path(parent, "/system")) printf("SYSTEM %s\n", fake_nodes[i].path + sizeof("/system/") - 1);
+    }
     int note_txt = fake_lookup("/system/tests/note.txt");
     if (note_txt >= 0) {
         printf("FILE /system/tests/note.txt ");

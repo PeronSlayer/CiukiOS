@@ -49,6 +49,9 @@ static void *gate_mmap(void *,size_t,int,int,int,off_t);
 #undef mmap
 /* f2-33: only the Task Manager scenario lists processes; not exercised here. */
 int ciuki_proc_list(void *buffer, uint32_t bytes) { (void)buffer; (void)bytes; errno = ENOSYS; return -1; }
+/* Shell services the gate harness does not model: mixer control and power. */
+int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size) { (void)fd; (void)op; (void)record; (void)size; errno = ENOSYS; return -1; }
+int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
 static jmp_buf done;
 static struct gate_control page_storage, *control_page=&page_storage;
 #define page (*control_page)
@@ -148,7 +151,7 @@ int ciuki_channel_pair(int pair[2]) {
 }
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
-    assert(!strcmp(path,"/bin/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") &&
+    assert(!strcmp(path,"/Programs/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") &&
         (normal_spawn ? !argv[3] : !strcmp(argv[3],"--test=crash-isolation")) && !argv[4]);
     assert(env && !strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !env[2] &&
         mapping && count==1 && mapping->target==3 && flags==CIUKI_SPAWN_NEW_GROUP);

@@ -85,6 +85,7 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
         if (linear >= 0xA0000 && linear < 0xC0000) {
+            dosvm_vga_model(v); /* f3-07: harvest before model peeks/stores */
             /* Kernel reads peek (no latch load); guest cycles use the VGA bus. */
             for (unsigned i = 0; i < n; i++) {
                 if (write) cvga_write_vram(&v->vga, linear + i, b[i]);
@@ -175,6 +176,7 @@ int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
     if (v->info.state >= DOSVM_STOPPING) return 0;
     v->info.reason = reason;
     v->info.state = DOSVM_STOPPING;
+    dosvm_vga_sync(v, true);
     v->mouse.mask = v->mouse.pending_mask = 0;
     v->mouse.active = false;
     if (input_focus.id == key.id && input_focus.generation == key.generation) input_focus = (struct dosvm_key){0};
@@ -237,7 +239,7 @@ bool dosvm_trap(struct trap_frame *tf)
     bool pm = !(tf->eflags & V86_VM);
     /* CR2/DR6 belong to this trap only while interrupts stay off. */
     uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
-    uint32_t dr6 = tf->vector == 1 && v->dpmi.dr7 ? arch_debug_take() : 0;
+    uint32_t dr6 = tf->vector == 1 ? arch_debug_take() : 0;
     unsigned size = pm ? sizeof(struct trap_frame) : sizeof(struct v86_frame);
     struct v86_frame *f = &v->frame;
     memcpy(f, tf, size);
@@ -255,8 +257,12 @@ bool dosvm_trap(struct trap_frame *tf)
             }
             e = v86_debug_step(&v->monitor, f);
         }
-        else if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000)
-            e = dosvm_vga_fault(v, f);
+        else if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000) {
+            if (!dosvm_vga_retry(v, cr2, (f->tf.cs << 4) + f->tf.eip, false)) {
+                e = dosvm_vga_fault(v, f);
+                if (!e) dosvm_vga_burst(v, f);   /* f3-06: the rest of a store run */
+            }
+        }
         else if (tf->vector == 7) fpu_handle_nm();
         else if (tf->vector == 3 || tf->vector == 4) e = v86_reflect(&v->monitor, f, tf->vector);
         else if (tf->vector < 0x20 || tf->vector >= 0x30) e = -EFAULT;

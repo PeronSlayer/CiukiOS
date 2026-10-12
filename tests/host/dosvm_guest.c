@@ -12,11 +12,15 @@
  * 8042 (dosvm_input_event), IRQ1 and the guest INT 9 to the shell blocked in
  * INT 16h AH=00h; VMVIDEO must stop at stage 1 with flags 3, then each Enter
  * through the 8042 advances one stage until the prompt returns.)
+ * GUEST_TCG=1 models QEMU TCG: no data-segment limit checks and TCG's CPUID
+ * signature (docs/validation/2026-10-09-f0/README.md, f3-04 deviation).
  * f3-06: GUEST_BUDGET=<instructions per command> for long workloads, e.g. the
  * base image of a local DOOM fixture (scripts/test/dos_fixtures.py; extract
  * CIUKIGAM.IMG with mcopy): GUEST_BUDGET=9000000000 dosvm_guest base.img
  * '\RUNREC.COM \DOOM DOOM.EXE -config CIUKI.CFG -nosound -timedemo demo1' RUNREC
  * ends with the timed line on the screen and RUNREC FAIL R01 T00 (exit 1).
+ * With an rc: prefix and GUEST_EXPECT_TEXT='timed 1710 gametics in', the
+ * runner goes on to the shell prompt and checks the verdict-time screen.
  * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -156,8 +160,11 @@ static uint64_t pos[2];
 struct storage *storage_get(void) { return &store; }
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive) { (void)vfs; (void)table; (void)drive; return 0; }
 void vfs_table_destroy(struct vfs_table *table) { (void)table; }
+/* The image's real size: a cut base (the bundled games disk, owner decision
+ * 2026-10-12) must be read through dosvm_disk.c's zero fill, never past its end. */
+static uint64_t disk_bytes;
 int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
-{ (void)table; (void)path; memset(entry, 0, sizeof(*entry)); entry->size = DOSVM_SECTORS * 512u; return 0; }
+{ (void)table; (void)path; memset(entry, 0, sizeof(*entry)); entry->size = (uint32_t)disk_bytes; return 0; }
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     (void)table; (void)access; (void)share; (void)attr;
@@ -175,6 +182,7 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
 {
     (void)table;
     FILE *f = handle ? cow : disk_image;
+    CHECK(handle || pos[0] + bytes <= disk_bytes);
     CHECK(fseek(f, (long)pos[handle], SEEK_SET) == 0);
     size_t n = fread(data, 1, bytes, f);
     if (n < bytes) memset((uint8_t *)data + n, 0, bytes - n);
@@ -399,9 +407,8 @@ static bool prompt(void)
 }
 static bool booted(void) { return gv->info.dos_ready && prompt(); }
 static bool verdict(void) { return gv->info.verdict_done; }
-static void screen(void)
+static void screen_of(const uint16_t *text, const char *prefix)
 {
-    const uint16_t *text = dosvm_text(gv, 0);
     for (unsigned row = 0; row < 25; row++) {
         char line[81]; unsigned len = 0;
         for (unsigned col = 0; col < 80; col++) {
@@ -410,8 +417,23 @@ static void screen(void)
             if (ch > 32 && ch < 127) len = col + 1;
         }
         line[len] = 0;
-        if (len) printf("  | %s\n", line);
+        if (len) printf("  %s %s\n", prefix, line);
     }
+}
+static void screen(void) { screen_of(dosvm_text(gv, 0), "|"); }
+/* f3-06: does the screen latched at the verdict line hold text? */
+static bool latched_has(const char *text)
+{
+    const uint16_t *cells = dosvm_verdict_text(gv);
+    if (!cells || !text) return false;
+    size_t n = strlen(text);
+    for (unsigned row = 0; row < 25; row++) {
+        char line[81];
+        for (unsigned col = 0; col < 80; col++) line[col] = (char)(uint8_t)cells[row * 80 + col];
+        line[80] = 0;
+        for (unsigned col = 0; col + n <= 80; col++) if (!memcmp(line + col, text, n)) return true;
+    }
+    return false;
 }
 static void fault_dump(void)
 {
@@ -444,7 +466,7 @@ static void type(const char *command)
     }
     waiting_input = false;
 }
-/* f3-02: a line typed the way /bin/dosbox forwards a window's keys. */
+/* f3-02: a line typed the way /Programs/dosbox forwards a window's keys. */
 static void window_key(unsigned code, int value)
 {
     struct ciuki_input_event e = {.type = CIUKI_INPUT_KEY, .code = (int32_t)code, .value = value};
@@ -529,10 +551,11 @@ static void stats(const char *name)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: %s DOSBOOT.IMG [COMMAND NAME]...\n", argv[0]); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: %s DOSBOOT.IMG|CIUKIGAM.IMG [COMMAND NAME]...\n", argv[0]); return 2; }
     setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     disk_image = fopen(argv[1], "rb"); CHECK(disk_image);
+    CHECK(fseek(disk_image, 0, SEEK_END) == 0); disk_bytes = (uint64_t)ftell(disk_image);
     gcpu_init(&guest_ops);
     struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = true};
     CHECK(dosvm_create(&config, &gv) == 0);
@@ -546,13 +569,17 @@ int main(int argc, char **argv)
     if (r <= 0) { screen(); return 1; }
     for (int i = 2; i + 1 < argc; i += 2) {
         bool fault = !strncmp(argv[i], "fault:", 6), gate = !strncmp(argv[i], "gate:", 5);
+        /* f3-06 rc: the payload reports a child's exit code (RUNREC): any
+         * verdict counts; the shell then gets its prompt back, and the screen
+         * latched at the verdict must still hold GUEST_EXPECT_TEXT. */
+        bool rc = !strncmp(argv[i], "rc:", 3);
         if (!strncmp(argv[i], "keys:", 5)) {
             CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
             printf("run %s through window keys (expect VMVIDEO stage 1, then stages 2-6)\n", argv[i] + 5);
             if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
             continue;
         }
-        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : argv[i];
+        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
         dosvm_expect(gv, argv[i + 1]);
@@ -575,6 +602,15 @@ int main(int argc, char **argv)
             bool refused = gv->info.verdict_done && !gv->info.verdict_pass && !strcmp(gv->info.verdict_detail, "01_01");
             r = run(400000000ull, 0);
             if (!refused || r != 2 || gv->dpmi.stats.entries) { failures++; screen(); break; }
+            continue;
+        }
+        if (rc) {
+            if (!gv->info.verdict_done) { failures++; screen(); break; }
+            r = run(400000000ull, 0);
+            printf("  live screen with the prompt back:\n"); screen();
+            printf("  screen latched at the verdict line:\n"); screen_of(dosvm_verdict_text(gv), "latched |");
+            const char *expect = getenv("GUEST_EXPECT_TEXT");
+            if (r != 2 || gv->dpmi.active || (expect && !latched_has(expect))) { failures++; break; }
             continue;
         }
         if (!gv->info.verdict_pass) { failures++; screen(); break; }

@@ -19,6 +19,7 @@ struct dpmi_stats {
     uint32_t entries, entry_failures, terminations, faults;
     uint32_t irqs_pm, irqs_reflected, soft_reflected, exceptions, callbacks;
     uint32_t raw_switches, realcalls, max_depth, hostcalls, stale;
+    uint32_t if_armed, if_restored;     /* f3-06: flags images armed at CLI, POPF/IRET restores seen */
 };
 struct dpmi_info {
     bool active, bits32;

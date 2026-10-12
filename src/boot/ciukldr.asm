@@ -33,7 +33,7 @@ entry:
     mov word [B(version)], CIUKI_BOOT_INFO_VER
     mov word [B(size)], CIUKI_BOOT_INFO_SIZE
     mov dword [B(loader_start)], LOAD_BASE
-    mov dword [B(loader_end)], LOAD_BASE+image_padded_end
+    mov dword [B(loader_end)], LOAD_BASE+loader_bss_end
     call uart_init
     ; Reject minimum CPU/firmware failures before even EDD disk discovery.
     call cpu_minimum
@@ -67,6 +67,7 @@ entry:
 
 ; All errors terminate without entering the kernel. SI names a short code.
 fatal:
+    mov byte [screen_quiet], 0
     call print
     mov si, newline
     call print
@@ -127,5 +128,15 @@ image_end:
 %if image_end-$$ > 65536
 %error F0 loader must fit its 64 KiB real-mode segment
 %endif
-times ((($-$$)+511)/512)*512-($-$$) db 0
+; Fixed extent: 48 sectors (tests/host/test_boot_modes.py checks it).
+%if image_end-$$ > 24576
+%error F0 loader must fit its fixed 24576-byte image
+%endif
+times 24576-($-$$) db 0
 image_padded_end:
+; Loader-only scratch beyond the file image but inside the reported loader
+; extent (loader_end); its contents are undefined until video_select writes
+; them, as the ranking loop always does before reading an entry.
+absolute image_padded_end
+mode_scores resw 512
+loader_bss_end:

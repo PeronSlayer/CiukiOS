@@ -42,7 +42,7 @@ stub_entry:
     ja invalid
     cmp word [I(test_request_len)], 64
     ja invalid
-    test dword [I(flags)], ~0x7ff
+    test dword [I(flags)], ~0xfff
     jnz invalid
     cmp byte [I(reserved0)], 0
     jne invalid

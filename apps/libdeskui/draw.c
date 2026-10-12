@@ -1,10 +1,9 @@
 /* SPDX-License-Identifier: MIT
- * Clipped integer drawing primitives. Glyphs come from the compositor. */
+ * Clipped integer drawing primitives. Text, bevels and faces follow the
+ * current theme (apps/desktop/theme.c). */
 #include "deskui.h"
 #include <stdio.h>
 #include <string.h>
-
-extern uint8_t desk_glyph_row(unsigned, unsigned);
 
 int du_contains(struct du_rect r, int x, int y)
 {
@@ -60,16 +59,63 @@ static void pair(struct du_canvas *c, struct du_rect r, uint32_t tl, uint32_t br
 void du_edge(struct du_canvas *c, struct du_rect r, enum du_edge e)
 {
     struct du_rect in = {r.x + 1, r.y + 1, r.w - 2, r.h - 2};
+    int platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
     switch (e) {
-    case DU_RAISED: pair(c, r, DU_LIGHT, DU_DARK); pair(c, in, DU_HILITE, DU_SHADOW); break;
+    case DU_RAISED:
+        if (platinum) { du_outline(c, r, desk_theme->outline); pair(c, in, DU_HILITE, DU_SHADOW); }
+        else { pair(c, r, DU_LIGHT, DU_DARK); pair(c, in, DU_HILITE, DU_SHADOW); }
+        break;
     case DU_BUTTON_EDGE: pair(c, r, DU_HILITE, DU_DARK); pair(c, in, DU_LIGHT, DU_SHADOW); break;
-    case DU_SUNKEN: pair(c, r, DU_SHADOW, DU_HILITE); pair(c, in, DU_DARK, DU_LIGHT); break;
+    case DU_SUNKEN:
+        if (platinum) { pair(c, r, DU_SHADOW, DU_HILITE); pair(c, in, DU_DARK, DU_FACE); }
+        else { pair(c, r, DU_SHADOW, DU_HILITE); pair(c, in, DU_DARK, DU_LIGHT); }
+        break;
     case DU_PRESSED: du_outline(c, r, DU_DARK); du_outline(c, in, DU_SHADOW); break;
     case DU_RAISED_THIN: pair(c, r, DU_HILITE, DU_SHADOW); break;
     case DU_SUNKEN_THIN: pair(c, r, DU_SHADOW, DU_HILITE); break;
     case DU_ETCHED: pair(c, r, DU_SHADOW, DU_HILITE); pair(c, in, DU_HILITE, DU_SHADOW); break;
     }
 }
+
+static struct desk_paint painter(struct du_canvas *c)
+{
+    struct du_rect v = visible(c, c->clip);
+    return (struct desk_paint){c->pixels, c->width, c->height, v.x, v.y, v.w, v.h};
+}
+
+void du_raised(struct du_canvas *c, struct du_rect r, int pressed, int hot)
+{ struct desk_paint p = painter(c); desk_paint_raised(&p, r.x, r.y, r.w, r.h, pressed, hot); }
+
+void du_shadow(struct du_canvas *c, struct du_rect r, int size)
+{ struct desk_paint p = painter(c); desk_paint_shadow(&p, r.x, r.y, r.w, r.h, size, desk_theme->drop_shadow); }
+
+void du_well(struct du_canvas *c, struct du_rect r, uint32_t colour)
+{
+    du_fill(c, r, colour);
+    if (desk_theme->control_style == DESK_CONTROLS_PLATINUM) {
+        /* Platinum field: soft outer bevel, dark inner rim, light floor. */
+        pair(c, r, desk_mix(DU_SHADOW, DU_FACE, 170), DU_HILITE);
+        struct du_rect in = {r.x + 1, r.y + 1, r.w - 2, r.h - 2};
+        pair(c, in, DU_DARK, desk_mix(DU_SHADOW, colour, 90));
+    } else du_edge(c, r, DU_SUNKEN);
+}
+
+void du_focus_ring(struct du_canvas *c, struct du_rect r)
+{
+    if (desk_theme->focus_style == DESK_FOCUS_DOTTED) { du_dotted(c, r); return; }
+    uint32_t ring = desk_theme->focus;
+    du_outline(c, r, ring);
+    du_outline(c, (struct du_rect){r.x + 1, r.y + 1, r.w - 2, r.h - 2}, desk_mix(ring, DU_HILITE, 170));
+}
+
+int du_theme_use(struct du_ui *u, const char *name)
+{
+    if (desk_theme_use(name)) return -1;
+    if (u) u->dirty = 1;
+    return 0;
+}
+
+const char *du_theme_name(void) { return desk_theme->name; }
 
 void du_dotted(struct du_canvas *c, struct du_rect r)
 {
@@ -124,74 +170,73 @@ size_t du_cells(const char *s)
     return n;
 }
 
-int du_text_width(const char *s) { return (int)du_cells(s) * DU_CHAR_W; }
+int du_text_width(const char *s) { return desk_text_measure(desk_theme->font_ui, s); }
+int du_text_width_font(int font, const char *s) { return desk_text_measure(font, s); }
 
-static void glyph(struct du_canvas *c, int x, int y, unsigned ch, uint32_t colour)
+static void text_font_n(struct du_canvas *c, int font, int x, int y, const char *s, size_t chars, uint32_t colour)
 {
-    /* The compositor's g, p, q and y sit on the baseline; one row lower
-     * they read as descenders. Same bitmaps, deterministic placement. */
-    int drop = ch == 'g' || ch == 'p' || ch == 'q' || ch == 'y';
-    struct du_rect cell = visible(c, (struct du_rect){x, y, 5, DU_GLYPH_H + 1});
-    if (!cell.w || !cell.h) return;
-    for (unsigned row = 0; row < DU_GLYPH_H; row++) {
-        uint8_t bits = desk_glyph_row(ch, row);
-        int py = y + (int)row + drop;
-        for (unsigned col = 0; col < 5; col++)
-            if (bits & (1u << (4 - col)) && du_contains(cell, x + (int)col, py))
-                c->pixels[(size_t)py * (size_t)c->width + (size_t)(x + (int)col)] = colour;
-    }
+    if (x > c->clip.x + c->clip.w || y > c->clip.y + c->clip.h) return;
+    struct desk_paint p = painter(c);
+    desk_paint_text_n(&p, font, x, y + desk_font_cap(font), s, chars, colour);
 }
+
+void du_text_font(struct du_canvas *c, int font, int x, int y, const char *s, uint32_t colour)
+{ text_font_n(c, font, x, y, s, (size_t)-1, colour); }
 
 void du_text_n(struct du_canvas *c, int x, int y, const char *s, size_t cells, uint32_t colour)
-{
-    int64_t at = x;
-    for (size_t n = 0; *s && n < cells; s++) {
-        unsigned ch = (unsigned char)*s;
-        if ((ch & 0xc0) == 0x80) continue;
-        if (at >= (int64_t)c->clip.x + c->clip.w) break;
-        if (at + 5 >= c->clip.x && at > -32768 && at < 32768) glyph(c, (int)at, y, ch >= 128 ? '?' : ch, colour);
-        at += DU_CHAR_W; n++;
-    }
-}
+{ text_font_n(c, desk_theme->font_ui, x, y, s, cells, colour); }
 
 void du_text(struct du_canvas *c, int x, int y, const char *s, uint32_t colour)
 { du_text_n(c, x, y, s, (size_t)-1, colour); }
 
 void du_text_fit(struct du_canvas *c, int x, int y, int width, const char *s, uint32_t colour)
 {
-    size_t cells = du_cells(s), room = width > 0 ? (size_t)width / DU_CHAR_W : 0;
-    if (cells <= room) { du_text(c, x, y, s, colour); return; }
-    if (room <= 3) { du_text_n(c, x, y, "...", room, colour); return; }
-    du_text_n(c, x, y, s, room - 3, colour);
-    du_text(c, x + (int)(room - 3) * DU_CHAR_W, y, "...", colour);
+    int font = desk_theme->font_ui;
+    if (desk_text_measure(font, s) <= width) { du_text(c, x, y, s, colour); return; }
+    static const char ellipsis[] = "\xe2\x80\xa6";
+    int dots = desk_text_measure(font, ellipsis);
+    size_t room = width > dots ? desk_text_fit_chars(font, s, width - dots) : 0;
+    du_text_n(c, x, y, s, room, colour);
+    du_text(c, x + desk_text_measure_n(font, s, room), y, ellipsis, colour);
 }
 
 void du_text_disabled(struct du_canvas *c, int x, int y, const char *s)
 { du_text(c, x + 1, y + 1, s, DU_HILITE); du_text(c, x, y, s, DU_GRAY); }
 
-void du_label(struct du_canvas *c, int x, int y, const char *s, uint32_t colour, int underline)
+static void strip_mnemonic(const char *s, char *plain, size_t size, int *mark)
 {
-    char plain[256]; size_t n = 0; int mark = -1, cells = 0;
-    for (; *s && n + 1 < sizeof(plain); s++) {
-        if (*s == '&' && s[1] && s[1] != '&') { mark = cells; continue; }
+    size_t n = 0; int chars = 0;
+    *mark = -1;
+    for (; *s && n + 1 < size; s++) {
+        if (*s == '&' && s[1] && s[1] != '&') { *mark = chars; continue; }
         if (*s == '&' && s[1] == '&') s++;
-        if (((unsigned char)*s & 0xc0) != 0x80) cells++;
+        if (((unsigned char)*s & 0xc0) != 0x80) chars++;
         plain[n++] = *s;
     }
     plain[n] = 0;
-    du_text(c, x, y, plain, colour);
-    if (underline && mark >= 0) du_hline(c, x + mark * DU_CHAR_W, y + DU_GLYPH_H + 1, 5, colour);
 }
 
-static uint32_t mix(uint32_t a, uint32_t b, unsigned alpha)
+int du_label_width(const char *s)
+{ char plain[256]; int mark; strip_mnemonic(s, plain, sizeof(plain), &mark); return du_text_width(plain); }
+
+void du_label(struct du_canvas *c, int x, int y, const char *s, uint32_t colour, int underline)
 {
-    uint32_t out = 0;
-    for (unsigned shift = 0; shift < 24; shift += 8)
-        out |= ((((a >> shift) & 255) * alpha + ((b >> shift) & 255) * (255 - alpha) + 127) / 255) << shift;
-    return out;
+    char plain[256]; int mark;
+    strip_mnemonic(s, plain, sizeof(plain), &mark);
+    du_text(c, x, y, plain, colour);
+    if (underline && mark >= 0) {
+        int font = desk_theme->font_ui, at = desk_text_measure_n(font, plain, (size_t)mark);
+        size_t skip = 0;
+        for (int k = 0; k < mark && plain[skip]; k++) skip = du_utf8_next(plain, skip);
+        size_t used; unsigned ch = desk_utf8_decode(plain + skip, &used);
+        int w = desk_text_advance(font, ch) - 1;
+        du_hline(c, x + at, y + DU_GLYPH_H + 2, w > 1 ? w : 1, colour);
+    }
 }
 
-void du_icon(struct du_canvas *c, int x, int y, const uint32_t *argb, int size, enum du_icon_mode mode)
+static uint32_t mix(uint32_t a, uint32_t b, unsigned alpha) { return desk_mix(a, b, alpha); }
+
+void du_icon_blit(struct du_canvas *c, int x, int y, const uint32_t *argb, int size, enum du_icon_mode mode)
 {
     if (!argb || size <= 0 || size > 64) return;
     struct du_rect v = visible(c, (struct du_rect){x, y, size, size});
@@ -211,6 +256,9 @@ void du_icon(struct du_canvas *c, int x, int y, const uint32_t *argb, int size, 
         if (mode == DU_ICON_SELECTED) *p = mix(DU_SELECT, *p, 128);
     }
 }
+
+void du_icon_draw(struct du_canvas *c, int x, int y, const struct du_icon *icon, enum du_icon_mode mode)
+{ if (icon) du_icon_blit(c, x, y, icon->argb, (int)icon->size, mode); }
 
 void du_format_key(char *out, size_t size, unsigned key, unsigned modifiers)
 {

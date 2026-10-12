@@ -12,13 +12,19 @@
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
+/* A base image may stop before the geometry's end (owner decision
+ * 2026-10-12, the bundled shareware games disk): trailing all-zero sectors
+ * are cut by scripts/build_games_disk.py and read back as zeros. It must
+ * still hold the boot sector, loader area, both FATs and the root directory
+ * of the private FAT16 geometry (scripts/build_dos_image.py DATA_LBA). */
+#define DOSVM_BASE_MIN_SECTORS 361u
 #define DOSVM_PORTS 16u
 /* f3-02 presenter: fixed 640x480 XRGB window surface, integer scale only.
- * One frame per 33 host ticks; the last three ticks are vertical retrace. */
+ * One presented frame per 33 host ticks. Input status 1 follows the guest's
+ * own VGA timing instead (dosvm_vga_status). */
 #define DOSVM_VIDEO_WIDTH 640u
 #define DOSVM_VIDEO_HEIGHT 480u
 #define DOSVM_FRAME_TICKS 33u
-#define DOSVM_RETRACE_TICKS 3u
 #define DOSVM_CURSOR_TICKS 250u
 #define DOSVM_BLINK_TICKS 500u
 #include "dosvm_memory.h"
@@ -54,6 +60,7 @@ struct dosvm {
     const char *probe;
     struct vfs_table disk_table;
     int base, overlay;
+    uint32_t base_sectors;   /* sectors the base image holds; zeros after them */
     char overlay_path[48];
     struct { uint32_t lba, offset; } sectors[DOSVM_OVERLAY_SECTORS];
     unsigned sector_count;
@@ -66,14 +73,17 @@ struct dosvm {
     cvx_bus video_bus;
     bool video_bus_fault, video_presented;
     uint8_t video_hsync;
+    unsigned video_blank;      /* read index in the vertical blank, 0 outside */
+    uint64_t video_vblank_us;  /* host time (us) the next vertical blank is due */
     uint64_t video_tick;
     uint32_t video_display, video_phase, owner_pid;
     uint32_t video_faults, video_frames;
-    /* f3-06: direct plane window (0 none, else plane + 1) and counters. While
-     * open, the window pages A0000h-AFFFFh map that model plane user-
-     * writable; dosvm_destroy restores the VM's frames (dosvm_vga.c). */
+    /* f3-06/07: direct window (0 none, 1..4 plane + 1, 5 linear). A0000h-
+     * AFFFFh maps a model plane or the VM's own linear backing user-writable;
+     * sync closes it before the VM's low-page restoration (dosvm_vga.c). */
     unsigned video_direct;
-    uint32_t video_pm_faults, video_starts, video_maps, video_flushes;
+    uint32_t video_pm_faults, video_starts, video_maps, video_flushes, video_burst;
+    uint32_t video_linear_maps, video_linear_harvests;
     cvga_geometry video_geometry;
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
     uint8_t video_row[DOSVM_VIDEO_WIDTH];
@@ -81,6 +91,11 @@ struct dosvm {
     char name[32];
     char line[81];
     char verdict_name[12];
+    /* f3-06: the text screen latched when the verdict line arrives, before
+     * the shell runs again (the CiukiOS shell redraws its row-0 title bar
+     * before its prompt, over a child's last output line). */
+    uint16_t verdict_text[80 * 25];
+    bool verdict_text_valid;
     unsigned line_length;
     bool line_bad;
     struct {
@@ -94,6 +109,7 @@ struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
+void dosvm_vga_burst(struct dosvm *, struct v86_frame *);
 /* f3-06: a ring-3 DPMI client's access to the supervisor-only window. */
 int dosvm_vga_fault_pm(struct dosvm *, struct v86_frame *);
 /* f3-06: open, move or close the direct plane window for the current VGA
@@ -101,6 +117,10 @@ int dosvm_vga_fault_pm(struct dosvm *, struct v86_frame *);
  * window, restoring the VM's own frames, if unmap). */
 void dosvm_vga_direct(struct dosvm *);
 void dosvm_vga_sync(struct dosvm *, bool unmap);
+/* Close only the linear window before a consumer uses/modifies the planes. */
+void dosvm_vga_model(struct dosvm *);
+/* Eligible protection fault: open the linear window and retry the CPU cycle. */
+bool dosvm_vga_retry(struct dosvm *, uint32_t address, uint32_t instruction, bool pm);
 /* Writes changed rows of the 640x480 frame through row(arg, y, pixels, bytes).
  * Returns 1 with *damage set when rows changed, 0 when nothing changed or the
  * frame period has not elapsed, or the negative row-writer error. */

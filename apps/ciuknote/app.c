@@ -179,6 +179,7 @@ static int load_file(struct cn_app *a, const char *path)
     if (!r) {
         du_ta_set_text(&a->ta, text, len);
         snprintf(a->path, sizeof(a->path), "%s", path); a->named = 1; a->crlf = crlf; a->note[0] = 0;
+        if (a->recent) a->recent(a->path);
         if (cn_is_log(a->ta.text, a->ta.len)) {  /* a first line .LOG appends the time and date on each opening */
             struct tm tm; time_t t = a->now(a->host); char stamp[48], add[64]; size_t k = 0;
             if (gmtime_r(&t, &tm)) {
@@ -206,6 +207,7 @@ static int save_file(struct cn_app *a, const char *path)
     if (!r) {
         if (path != a->path) snprintf(a->path, sizeof(a->path), "%s", path);
         a->named = 1; a->ta.modified = 0; a->note[0] = 0;
+        if (a->recent) a->recent(a->path);
         checkpoint(a, CN_CP_SAVED);
     }
     return r;
@@ -466,7 +468,7 @@ static void menu_command(struct cn_app *a, int id)
         break;
     case M_ABOUT:
         box(a, D_INFO, "About CiukNote", DU_DLG_ICON_INFO, NULL, 0, 0, 0,
-            "CiukiOS CiukNote\nA modern Retro OS\n---\nDedicated to Ciuki.\nTango 0.8.90 icons: Public Domain.\n"
+            "CiukiOS CiukNote\nClassic computing, one woof at a time.\n---\nDedicated to Ciuki.\nTango 0.8.90 icons: Public Domain.\n"
             "Ciuki portrait: separate project asset.\nlibdeskui and CiukNote: MIT licence.");
         if (a->ciuki) du_dialog_icon(a->ui, a->ciuki32);
         break;
@@ -555,9 +557,12 @@ void cn_event(struct du_ui *u, const struct du_event *e, void *ctx)
 
 /* ---- lifecycle ---------------------------------------------------------- */
 
+static void resize_layout(struct du_ui *u, void *user)
+{ (void)u; cn_layout(user); }
+
 int cn_attach(struct cn_app *a, struct du_ui *u)
 {
-    a->ui = u; u->event = cn_event; u->user = a;
+    a->ui = u; u->event = cn_event; u->user = a; u->layout = resize_layout;
     if (du_ta_init(&a->ta, CN_LIMIT)) return -ENOMEM;
     a->crlf = 1; a->show_status = 1; strcpy(a->dir, "/"); strcpy(a->filter, TEXT_FILTER);
     memcpy(a->file_items, file_template, sizeof(file_template));

@@ -507,26 +507,29 @@ int du_ta_text(struct du_textarea *ta, unsigned ch)
 
 /* ---- drawing ------------------------------------------------------------ */
 
-/* Printable ASCII is the compositor's glyph; anything else (non-ASCII, control
- * characters) is a hollow placeholder box of the same size. */
+/* Latin-1 and the face's extra glyphs come from the monospace face; anything
+ * else (control characters, other scripts) is a hollow placeholder box. */
 static void draw_char(struct du_canvas *c, int x, int y, unsigned ch, uint32_t ink, int bold)
 {
-    if (ch >= 0x20 && ch < 0x7f) {
-        char s[2] = {(char)ch, 0};
-        du_text_n(c, x, y, s, 1, ink);
-        if (bold) du_text_n(c, x + 1, y, s, 1, ink);
-    } else du_outline(c, (struct du_rect){x, y, 5, DU_GLYPH_H}, ink);
+    if ((ch >= 0x20 && ch < 0x7f) || (ch >= 0xa0 && ch <= 0xff) || ch == 0x2022 || ch == 0x2026) {
+        char s[4]; size_t n;
+        if (ch < 0x80) { s[0] = (char)ch; n = 1; }
+        else if (ch < 0x800) { s[0] = (char)(0xc0 | (ch >> 6)); s[1] = (char)(0x80 | (ch & 63)); n = 2; }
+        else { s[0] = (char)(0xe0 | (ch >> 12)); s[1] = (char)(0x80 | ((ch >> 6) & 63)); s[2] = (char)(0x80 | (ch & 63)); n = 3; }
+        s[n] = 0;
+        du_text_font(c, bold ? desk_theme->font_mono_bold : desk_theme->font_mono, x, y, s, ink);
+    } else du_outline(c, (struct du_rect){x + 1, y, DU_TA_CELL_W - 2, desk_font_cap(desk_theme->font_mono)}, ink);
 }
 void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta, int focused)
 {
     if (!ta) return;
     struct geo g; geometry(ta, box, &g);
     du_ta_fit(ta, box); layout(ta); clamp_scroll(ta);
-    du_fill(c, box, DU_WINDOW); du_edge(c, box, DU_SUNKEN);
+    du_well(c, box, DU_WINDOW);
     struct du_rect saved = c->clip;
     c->clip = du_intersection(saved, g.text);
     size_t a, b; du_ta_selection(ta, &a, &b);
-    int ox = g.text.x + DU_TA_PAD, oy = g.text.y + DU_TA_PAD, glyph_dy = (DU_TA_CELL_H - DU_GLYPH_H) / 2;
+    int ox = g.text.x + DU_TA_PAD, oy = g.text.y + DU_TA_PAD, glyph_dy = (DU_TA_CELL_H - desk_font_cap(desk_theme->font_mono)) / 2 - 1;
     uint32_t sel_bg = focused ? DU_SELECT : DU_GRAY;
     for (unsigned n = 0; n < ta->rows && ta->top + n < ta->vl_count; n++) {
         unsigned vi = ta->top + n; int y = oy + (int)n * DU_TA_CELL_H;
@@ -538,7 +541,10 @@ void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta,
                 int x = ox + ((int)col - (int)ta->left) * DU_TA_CELL_W;
                 int sel = p >= a && p < b;
                 if (sel) du_fill(c, (struct du_rect){x, y, (int)w * DU_TA_CELL_W, DU_TA_CELL_H}, sel_bg);
-                if (ch != '\t') draw_char(c, x, y + glyph_dy, len == 1 ? ch : 0x80, sel ? DU_SELECT_INK : DU_INK, ta->bold);
+                if (ch != '\t') {
+                    size_t used; unsigned cp = len == 1 ? ch : desk_utf8_decode(ta->text + p, &used);
+                    draw_char(c, x, y + glyph_dy, cp, sel ? DU_SELECT_INK : DU_INK, ta->bold);
+                }
             }
             col += w; p += len;
         }
@@ -548,7 +554,7 @@ void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta,
     if (focused) {
         unsigned vi, col; locate(ta, ta->cursor, ta->affinity, &vi, &col);
         if (vi >= ta->top && vi < ta->top + ta->rows && col >= ta->left && col <= ta->left + ta->cols)
-            du_vline(c, ox + ((int)col - (int)ta->left) * DU_TA_CELL_W - 1, oy + (int)(vi - ta->top) * DU_TA_CELL_H + 1, DU_GLYPH_H + 4, DU_INK);
+            du_vline(c, ox + ((int)col - (int)ta->left) * DU_TA_CELL_W - 1, oy + (int)(vi - ta->top) * DU_TA_CELL_H + 1, DU_TA_CELL_H - 2, DU_INK);
     }
     c->clip = du_intersection(saved, g.body);
     struct du_sb v = vscroll(ta, &g);

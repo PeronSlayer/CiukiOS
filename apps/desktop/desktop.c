@@ -1,12 +1,16 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include "catalog.h"
 #include "gate.h"
+#include "../libdeskui/deskui.h"
 #include <ciuki/raw.h>
 #include <ciuki/runtime.h>
 #include <ciuki/channel.h>
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
 #include <ciuki/proc.h>
+#include <ciuki/audio.h>
+#include <ciuki/power.h>
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -48,15 +52,39 @@ static int gate_error(const char *path, int error, unsigned generation)
 static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
 {
     desk_input(d,event);
+    /* f2-30 shell: the A edges count whenever they follow F12; gate_report publishes them only at stage 6
+     * (launch, drag, close, reap). Their arrival is not ordered after the close click: the last shell step
+     * is a mouse click, and the 8042 hands out a pending keyboard byte before pending aux bytes (QEMU
+     * hw/input/pckbd.c kbd_update_irq), so on the firmware input path of qemu-e500 the A edges reached
+     * the desktop before the close click (image 639bcca5: stage 6 with keys=0). f2-33 tasks and the app
+     * scenarios end with keyboard steps and keep the arrival rule (stage 5 / last checkpoint first; the
+     * final report requires DESK_TASKS_DONE / app_done). */
     if (event->type==CIUKI_INPUT_KEY && event->code==0x1e &&
-        (event->value==0 || event->value==1) &&
-        (!d->shell_test || d->shell_stage>=5) && (!d->tasks_test || d->tasks_stage>=5) &&
-        (!d->app_test || d->app_checkpoint>=DESK_APP_CHECKPOINTS(d->app_test))) gate_keys++; /* f2-30: shell sequence first; stage 5 = close requested (the reap to 6 is asynchronous; the final report still requires 6). f2-33: the same for the tasks scenario (final report requires DESK_TASKS_DONE) */
+        (event->value==0 || event->value==1) && (!d->tasks_test || d->tasks_stage>=5) &&
+        (!d->app_test || d->app_checkpoint>=DESK_APP_CHECKPOINTS(d->app_test))) gate_keys++;
     if (event->type==CIUKI_INPUT_MOTION) gate_motion++;
     /* The input grant delivers separate button edges, not a motion mask.
      * Count consumption even when the click focuses the background/title. */
     if (event->type==CIUKI_INPUT_BUTTON && event->code>=1 && event->code<=3 &&
         (event->value==0 || event->value==1)) gate_buttons++;
+}
+/* Gate scenarios: the desktop reads input into a FIFO. While a graphical program it launched has not sent
+ * its first frame, the scripted input stays there; then it is replayed with its recorded spacing, shifted
+ * by the wait. A scripted case then no longer depends on how long the program takes to start: on image
+ * 2fdd515a Files was not ready (not yet at its --test frame) when files-qemu-t23 clicked File at (27,70),
+ * the click raised the survivor demo's window (20,52) behind it, the typed keys went to the survivor and
+ * the shell's Alt+F4 closed it (survivor_exit:0, keys=0). The hold ends after GATE_HOLD_MAX_NS at most. */
+#define GATE_INPUT_FIFO 512
+#define GATE_HOLD_MAX_NS 30000000000ull
+static struct ciuki_input_event input_fifo[GATE_INPUT_FIFO];
+static unsigned fifo_head, fifo_count;
+static int scenario_hold(const struct desktop *d, uint64_t now)
+{
+    for (int i=0; i<DESK_CLIENTS; i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (c->channel>=0 && c->awaiting_frame && now-c->launched_ns<GATE_HOLD_MAX_NS) return 1;
+    }
+    return 0;
 }
 static int gate_setup_error(int gate, unsigned step, int error)
 {
@@ -110,7 +138,7 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
      * display/input grants and the desktop endpoint keep their flags. */
     if (!fcntl(pair[1],F_SETFD,0)) {
         i = desk_add_client(d,pair[0]);
-        if (i >= 0) pid = ciuki_spawn("/bin/demo",argv,env,&mapping,1,CIUKI_SPAWN_NEW_GROUP);
+        if (i >= 0) pid = ciuki_spawn("/Programs/demo",argv,env,&mapping,1,CIUKI_SPAWN_NEW_GROUP);
         else errno = ENOSPC;
     }
     int error = errno;
@@ -125,12 +153,12 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
 static void scan_programs(struct desktop *d)
 {
     d->program_count=0;
-    DIR *dir=opendir("/bin");
+    DIR *dir=opendir("/Programs");
     if (!dir) { strcpy(d->notice,"Programs are unavailable"); return; }
     struct dirent *entry;
     while ((entry=readdir(dir))) {
-        char path[70];
-        int len=snprintf(path,sizeof(path),"/bin/%s",entry->d_name);
+        char path[sizeof(d->programs[0].path)];
+        int len=snprintf(path,sizeof(path),"/Programs/%s",entry->d_name);
         if (len<=0 || len>=(int)sizeof(path)) continue;
         struct stat st;
         if (stat(path,&st) || !S_ISREG(st.st_mode)) continue;
@@ -157,24 +185,36 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     /* f2-33: only the Task Manager receives the delegated termination
      * authority, explicitly mapped to fd 4; it also may send task requests. */
     int tasks=!strcmp(program->name,"tasks");
-    char *argv[]={(char *)program->name,NULL,NULL,NULL,NULL};
+    /* Accessories that open a file (Image Viewer, Help) take the LAUNCH argument as CiukNote does. */
+    int takes_file=kind==DESK_APP_NOTE || desk_catalog_takes_file(program->name);
+    char *argv[]={(char *)program->name,NULL,NULL,NULL,NULL,NULL};
     unsigned at=1;
     if (graphical) argv[at++]="--channel-fd=3";
     /* The scenario's program gets --test=<its name> (apps/desktop/gate.h scenarios). */
     if (graphical && d->app_test && kind==d->app_test) argv[at++]=kind==DESK_APP_NOTE ? "--test=ciuknote" : "--test=files";
     if (tasks && d->authority_fd>=0) argv[at++]="--authority-fd=4";
     if (tasks && d->tasks_test) argv[at++]="--test=tasks";
-    /* LAUNCH from Files: the path of the text file CiukNote opens (the client validated it). */
-    if (graphical && kind==DESK_APP_NOTE && d->launch_arg) argv[at++]=(char *)d->launch_arg;
+    /* LAUNCH from Files: the path of the text file CiukNote opens (the client validated it).
+     * The shell also opens Files on a folder and the Control Panel on a page. */
+    if (graphical && (kind || takes_file) && d->launch_arg) argv[at++]=(char *)d->launch_arg;
+    char *full[12];
+    if (d->launch_argv[0]) {   /* Run dialog: the typed arguments after the desktop's own */
+        unsigned n=0;
+        for (unsigned k=0; k<at; k++) full[n++]=argv[k];
+        for (unsigned k=0; k<6 && d->launch_argv[k] && n<11; k++) full[n++]=(char *)d->launch_argv[k];
+        full[n]=NULL;
+    }
     /* Window size hint for graphical clients; the protocol has no query. */
     char display[40];
     snprintf(display,sizeof(display),"CIUKI_DISPLAY=%ux%u",(unsigned)d->width,(unsigned)d->height);
-    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/home","TMPDIR=/tmp","PATH=/bin",display,NULL};
+    char keymap[24];   /* the Control Panel's keyboard layout, for libdeskui programs */
+    snprintf(keymap,sizeof(keymap),"CIUKI_KEYMAP=%s",cfg_keyboard_names[d->sh.cfg.keyboard==CFG_KEYS_IT ? CFG_KEYS_IT : CFG_KEYS_US]);
+    char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",display,keymap,NULL};
     struct ciuki_spawn_fd mapping[2]={{pair[1],3},{d->authority_fd,4}};
     uint32_t mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     if (!fcntl(pair[1],F_SETFD,0)) {
         index=desk_add_client(d,pair[0]);
-        if (index>=0) pid=ciuki_spawn(program->path,argv,env,mapping,mappings,0);
+        if (index>=0) pid=ciuki_spawn(program->path,d->launch_argv[0] ? full : argv,env,mapping,mappings,0);
         else errno=ENOSPC;
     }
     int error=errno;
@@ -188,6 +228,9 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].pid=(uint32_t)pid;
     d->clients[index].program=kind;
     d->clients[index].taskman=tasks;
+    d->clients[index].mixer=!strcmp(program->name,"mixer");
+    d->clients[index].awaiting_frame=graphical;
+    d->clients[index].launched_ns=monotonic();
     d->children[child].pid=(uint32_t)pid;
     return pid;
 }
@@ -210,13 +253,215 @@ static int tasks_verify(const struct desktop *d)
     }
     return !demo && tasks && self;
 }
-static void shell_setup(struct desktop *d)
+/* Start menu and taskbar icons: the Tango store through icon_map.c. */
+static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
+/* Volume Control requests (DESK_MIXER_SET): the desktop holds the delegated
+ * /dev/mixer control handle (F4 contract, Volume and persistence); the kernel
+ * validates the record and saves C:\\SYSTEM\\AUDIO.CFG. */
+#ifdef __i386__   /* the SDK target; host replays (x86-64) have no mixer device */
+#include <ciuki/audio.h>
+#endif
+static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_t mute)
 {
-    d->launch=launch_program; d->terminate=terminate_child;
+#ifndef __i386__
+    (void)d; (void)left; (void)right; (void)mute;
+    return -ENODEV;   /* host replays: no mixer device */
+#else
+    struct ciuki_mixer_master m;
+    if (d->mixer_fd<0) return -ENODEV;
+    memset(&m,0,sizeof(m)); m.version=1; m.size=sizeof(m);
+    if (ciuki_devctl(d->mixer_fd,MIXER_GET_MASTER,&m,sizeof(m))) return -errno;
+    m.left=left; m.right=right; m.mute=mute; m.save_state=0; m.save_error=0; m.reserved=0;
+    return ciuki_devctl(d->mixer_fd,MIXER_SET_MASTER,&m,sizeof(m)) ? -errno : 0;
+#endif
+}
+/* ---- desktop shell services: the file and kernel side of shell.c ---- */
+static int read_file(const char *path, size_t limit, uint8_t **out, size_t *size)
+{
+    *out=NULL; *size=0;
+    FILE *f=fopen(path,"rb");
+    if (!f) return -1;
+    size_t cap=4096, n=0;
+    uint8_t *buffer=malloc(cap);
+    int ok=buffer!=NULL;
+    while (ok) {
+        if (n==cap) {
+            if (cap>=limit) { ok=0; errno=EFBIG; break; }
+            size_t next=cap*2>limit ? limit : cap*2;
+            uint8_t *grown=realloc(buffer,next);
+            if (!grown) { ok=0; break; }
+            buffer=grown; cap=next;
+        }
+        size_t got=fread(buffer+n,1,cap-n,f);
+        n+=got;
+        if (got==0) { ok=!ferror(f); break; }
+    }
+    if (fclose(f)) ok=0;
+    if (!ok) { free(buffer); return -1; }
+    *out=buffer; *size=n;
+    return 0;
+}
+static void settings_load(struct desktop *d)
+{
+    cfg_defaults(&d->sh.cfg);
+    uint8_t *text; size_t n;
+    if (read_file(CFG_FILE,CFG_TEXT_MAX,&text,&n)) return;   /* first boot: defaults */
+    int rejected=cfg_parse(&d->sh.cfg,(const char *)text,n);
+    free(text);
+    if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
+}
+static int settings_save(struct desktop *d)
+{
+    static char text[CFG_TEXT_MAX];
+    size_t n=cfg_format(&d->sh.cfg,text,sizeof(text));
+    if (!n) { errno=ENOSPC; return -1; }
+    if (mkdir(CFG_DIR,0755) && errno!=EEXIST) return -1;
+    static const char temp[]=CFG_DIR "/desktop.new";
+    FILE *f=fopen(temp,"wb");
+    if (!f) return -1;
+    int ok=fwrite(text,1,n,f)==n;
+    if (fflush(f)) ok=0;
+    if (ok && fsync(fileno(f))) ok=0;
+    if (fclose(f)) ok=0;
+    if (ok && rename(temp,CFG_FILE)) {
+        /* A file system without replacing rename: remove the old file first. */
+        ok=!unlink(CFG_FILE) && !rename(temp,CFG_FILE);
+    }
+    if (!ok) { int error=errno; unlink(temp); errno=error; return -1; }
+    return 0;
+}
+static void wallpaper_load(struct desktop *d)
+{
+    desk_image_free(&d->sh.image);
+    d->sh.wall_valid=0;
+    const char *spec=d->sh.cfg.wallpaper;
+    if (spec[0]=='/') {
+        uint8_t *data; size_t n;
+        if (read_file(spec,DESK_IMAGE_FILE_MAX,&data,&n) || desk_image_decode(data,n,&d->sh.image)) {
+            snprintf(d->notice,sizeof(d->notice),"Wallpaper %.40s cannot be shown",strrchr(spec,'/')+1);
+            desk_image_free(&d->sh.image);
+        }
+        if (data) free(data);
+    }
+    desk_shell_wallpaper_update(d);
+}
+static void mixer_read(struct desktop *d)
+{
+    int fd=d->mixer_fd, own=0;
+    if (fd<0) { fd=open("/dev/mixer",O_RDONLY|O_CLOEXEC); own=1; }   /* public, read-only */
+    struct ciuki_mixer_master m={.version=CIUKI_AUDIO_VERSION,.size=sizeof(m)};
+    if (fd<0 || ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0) d->sh.mixer_state=-1;
+    else {
+        d->sh.mixer_state=d->mixer_fd>=0 ? 2 : 1;
+        d->sh.volume=(int)((m.left+m.right)/2); d->sh.muted=m.mute!=0;
+    }
+    if (own && fd>=0) close(fd);
+    desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
+}
+static void mixer_write(struct desktop *d)
+{
+    if (d->mixer_fd<0) { mixer_read(d); return; }
+    struct ciuki_mixer_master m={.version=CIUKI_AUDIO_VERSION,.size=sizeof(m),
+        .left=(uint32_t)d->sh.volume,.right=(uint32_t)d->sh.volume,.mute=(uint32_t)(d->sh.muted!=0)};
+    if (ciuki_devctl(d->mixer_fd,MIXER_SET_MASTER,&m,sizeof(m))<0)
+        snprintf(d->notice,sizeof(d->notice),"Volume change failed (errno %d)",errno);
+    else if (m.save_state==CIUKI_MIXER_UNSAVED)
+        snprintf(d->notice,sizeof(d->notice),"Volume applied but not saved (error %d)",(int)m.save_error);
+    mixer_read(d);
+}
+static void system_read(struct desktop *d)
+{
+    static uint8_t buffer[CIUKI_PROC_LIST_MIN+CIUKI_PROCESS_MAX*sizeof(struct ciuki_proc_record)];
+    int n=ciuki_proc_list(buffer,sizeof(buffer));
+    d->sh.system_valid=0;
+    if (n>0) {
+        struct ciuki_proc_system sys;
+        memcpy(&sys,buffer,sizeof(sys));
+        if (sys.version==CIUKI_PROC_VERSION && sys.tick_hz) {
+            d->sh.mem_total_k=(uint64_t)sys.usable_pages*4u; d->sh.mem_free_k=(uint64_t)sys.free_pages*4u;
+            d->sh.processes=sys.processes; d->sh.uptime_s=(uint32_t)(sys.total_ticks/sys.tick_hz);
+            d->sh.system_valid=1;
+        }
+    }
+    struct utsname u;
+    if (!uname(&u)) snprintf(d->sh.cpu_name,sizeof(d->sh.cpu_name),"%.40s",u.machine);
+}
+static int run_command(struct desktop *d, char *line)
+{
+    /* "name arg..." or "/Programs/name arg...": spaces separate, double quotes group. */
+    char *words[8]; unsigned count=0;
+    for (char *p=line; *p && count<8;) {
+        while (*p==' ') p++;
+        if (!*p) break;
+        if (*p=='"') { words[count++]=++p; while (*p && *p!='"') p++; }
+        else { words[count++]=p; while (*p && *p!=' ') p++; }
+        if (*p) *p++=0;
+    }
+    if (!count) return 0;
+    const char *name=!strncmp(words[0],"/Programs/",sizeof("/Programs/")-1) ? words[0]+sizeof("/Programs/")-1 : words[0];
+    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
+        for (unsigned a=0; a<6; a++) d->launch_argv[a]=a+1<count ? words[a+1] : NULL;
+        int pid=d->launch ? d->launch(d,&d->programs[k]) : -1;
+        int error=errno;
+        for (unsigned a=0; a<6; a++) d->launch_argv[a]=NULL;
+        if (pid<0) {
+            char text[160]; snprintf(text,sizeof(text),"'%s' could not be started (error %d).",name,error);
+            desk_shell_message(d,"Run",text,1);
+        } else snprintf(d->notice,sizeof(d->notice),"Started %.32s (PID %d)",name,pid);
+        return pid;
+    }
+    char text[200];
+    snprintf(text,sizeof(text),"CiukiOS cannot find '%.60s'.\nType the name of a program in /Programs.",words[0]);
+    desk_shell_message(d,"Run",text,1);
+    return -1;
+}
+/* Serves the requests that shell.c raised while handling input. */
+static void shell_service(struct desktop *d)
+{
+    struct desk_shell *sh=&d->sh;
+    if (!d->shell) return;
+    if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
+    if (sh->want_reload & 1) {
+        settings_load(d); scan_programs(d);
+        sh->icon_count=0; desk_shell_apply(d); wallpaper_load(d);
+    }
+    if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
+    if (sh->want_reload & 4) mixer_read(d);
+    sh->want_reload=0;
+    if (!sh->wall_valid) desk_shell_wallpaper_update(d);
+    if (sh->want_save) {
+        sh->want_save=0;
+        if (settings_save(d)) snprintf(d->notice,sizeof(d->notice),"Settings not saved (errno %d)",errno);
+    }
+    if (sh->want_mixer) { sh->want_mixer=0; mixer_write(d); }
+    if (sh->want_run[0]) {
+        char line[sizeof(sh->want_run)];
+        memcpy(line,sh->want_run,sizeof(line)); sh->want_run[0]=0;
+        run_command(d,line);
+    }
+    if (sh->want_power) {
+        int action=sh->want_power; sh->want_power=0;
+        if (settings_save(d)) { /* still try: settings are a convenience */ }
+        if (ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF)) {
+            char text[200];
+            if (errno==ENOSYS) snprintf(text,sizeof(text),"%s is not available yet: this kernel has no\npower interface (call 73). Turn the computer off\nwith its power button once the disk is idle.",
+                                        action==1 ? "Restart" : "Shut down");
+            else snprintf(text,sizeof(text),"%s failed (error %d).",action==1 ? "Restart" : "Shut down",errno);
+            desk_shell_message(d,"Shut Down CiukiOS",text,1);
+        }
+    }
+}
+static void shell_setup(struct desktop *d, int gate)
+{
+    d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
     int fd=authority ? number(authority,CIUKI_OPEN_MAX-1) : -1;
     d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
+    const char *mixer=getenv("CIUKI_MIXER_FD");
+    fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
+    d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
+    d->mixer_set=mixer_apply;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");
     d->version[0]=0;
@@ -228,7 +473,15 @@ static void shell_setup(struct desktop *d)
 #endif
     }
     scan_programs(d);
+    /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
+    d->sh.gate=gate;
+    if (!gate) settings_load(d);
     desk_shell_enable(d);
+    /* The first frame shows the desktop colour, bars and icons at once; the
+     * image wallpaper (the default Ciuk2 PNG takes seconds to decode under
+     * TCG) is loaded two loop iterations later (lead fix, 2026-10-12). */
+    if (!gate) { d->sh.wallpaper_deferred=2; mixer_read(d); system_read(d); }
+    desk_shell_wallpaper_update(d);
 }
 int main(int argc, char **argv)
 {
@@ -277,13 +530,13 @@ int main(int argc, char **argv)
     if (d->pixels==MAP_FAILED) { int error=errno; if (d->output>=0) close(d->output); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_OUTPUT,error); }
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
-    if (!gate) shell_setup(d);
-    /* f3-02: --launch=<name> starts one /bin menu program through the same
-     * path as a menu click (the f3:vm-window probe opens /bin/dosbox so). */
+    if (!gate) shell_setup(d,0);
+    /* f3-02: --launch=<name> starts one /Programs menu program through the same
+     * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
     if (launch && !gate) {
         d->action=-2;
         for (unsigned i=0; i<d->program_count; i++) if (!strcmp(d->programs[i].name,launch)) d->action=(int)i;
-        if (d->action<0) { d->action=-1; snprintf(d->notice,sizeof(d->notice),"%.40s is not in /bin",launch); }
+        if (d->action<0) { d->action=-1; snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",launch); }
     }
     /* The ABI has no timed input read or poll/select. A bounded nonblocking
      * drain followed by an interruptible 10 ms sleep keeps IPC/time moving. */
@@ -304,17 +557,28 @@ int main(int argc, char **argv)
     int report=0, input_dirty=0, shell_stage_shown=0, scenario_key=0, scenario_released=0;
     unsigned report_send=0;
     uint64_t report_deadline=0, next_input_report=0;
+    unsigned reported_progress=0;
+    int holding=0, shifted=0;
+    uint64_t shift_base=0, shift_release=0;
     for (;;) {
         uint64_t now = monotonic();
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
+        if (d->shell && d->sh.wallpaper_deferred && !--d->sh.wallpaper_deferred) wallpaper_load(d);
+        /* The shell follows the theme key of DESK_SETTINGS_PATH (gates keep the default). */
+        if (d->shell && !gate && desk_theme_poll(DESK_SETTINGS_PATH,now)) {
+            desk_theme_changed(d); d->sh.wall_valid=0; desk_shell_wallpaper_update(d);   /* theme colours in the wallpaper */
+        }
         if (d->shell) {
             struct timespec rtc;
             if (!clock_gettime(CLOCK_REALTIME,&rtc) && rtc.tv_sec>=0 && d->realtime_second!=(uint64_t)rtc.tv_sec) {
+                if (d->realtime_second/60!=(uint64_t)rtc.tv_sec/60)   /* the top bar shows the date */
+                    desk_damage_add(&d->damage,(struct desk_box){(int32_t)d->width/2,0,(int32_t)d->width/2,DESK_BAR},d->width,d->height);
                 d->realtime_second=(uint64_t)rtc.tv_sec;
                 desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
             }
+            desk_shell_tick(d);
         }
         if (gate && control->command) {
             unsigned command=control->command; generation=control->generation;
@@ -354,40 +618,56 @@ int main(int argc, char **argv)
             }
             desk_flush(d,i);
         }
-        struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
-        int n=ciuki_input_read(input,events,CIUKI_INPUT_READ_MAX);
-        if (n>0) { for (int i=0; i<n; i++) {
+        if (fifo_count+CIUKI_INPUT_READ_MAX<=GATE_INPUT_FIFO) {
+            struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
+            int n=ciuki_input_read(input,events,CIUKI_INPUT_READ_MAX);
+            for (int i=0; i<n; i++) input_fifo[(fifo_head+fifo_count++)%GATE_INPUT_FIFO]=events[i];
+            if (n>0) input_reported=0;
+            else if (n<0 && errno!=EAGAIN && errno!=EINTR && !input_reported) {
+                fprintf(stderr,"desktop: input unavailable (errno=%d)\n",errno); input_reported=1;
+                struct ciuki_input_event resync={.type=CIUKI_INPUT_RESYNC}; desk_input(d,&resync);
+            }
+        }
+        int scenario=gate && (d->shell_test || d->tasks_test || d->app_test);
+        int hold=scenario && scenario_hold(d,now);
+        if (hold) holding=1;
+        else if (holding) {
+            holding=0;
+            if (fifo_count) { shift_base=input_fifo[fifo_head].monotonic_ns; shift_release=now; shifted=1; }
+        }
+        while (fifo_count && !holding) {
+            /* A launch starts its hold before the input that follows the launching click. */
+            if (gate && (d->shell_test || d->tasks_test || d->app_test) && d->action>=0) break;
+            struct ciuki_input_event ev=input_fifo[fifo_head];
+            if (shifted && (int64_t)(now-shift_release)<(int64_t)(ev.monotonic_ns-shift_base)) break;
+            fifo_head=(fifo_head+1)%GATE_INPUT_FIFO; fifo_count--;
             /* Runtime scenario selection. Old gates never send these keys: one of them, pressed
              * once inside the controller's post-fault interaction stage before the shell exists,
              * selects the case. F12: shell, F9: Task Manager (stage machines of their own);
              * F11: Files, F10: CiukNote (app scenarios: the launched program gets
              * --test=<its name>, checkpoint PINGs, a fixed clock and the storage write gate). */
-            if (gate && interaction && !d->shell && events[i].type==CIUKI_INPUT_KEY && events[i].value==1) {
-                int code=events[i].code;
+            if (gate && interaction && !d->shell && ev.type==CIUKI_INPUT_KEY && ev.value==1) {
+                int code=ev.code;
                 int app=code==0x57 ? DESK_APP_FILES : code==0x44 ? DESK_APP_NOTE : 0;
                 if (code==0x58 || code==0x43 || app) {
                     if (code==0x58) d->shell_test=1;
                     else if (code==0x43) d->tasks_test=1;
                     else d->app_test=app;
-                    scenario_key=code; scenario_released=0; d->shell_keys=1; shell_setup(d);
+                    scenario_key=code; scenario_released=0; d->shell_keys=1; shell_setup(d,1);
                     /* The controller learns of the write gate request before the app can write. */
                     if (app) gate_report(d,CU_PTR(control),generation,survivor_pid,gate_victim,(unsigned)gate_cycle);
                     continue;
                 }
             }
             /* Its release is the scenario's second key edge; later F-key use belongs to the programs. */
-            if (gate && scenario_key && !scenario_released && events[i].type==CIUKI_INPUT_KEY &&
-                events[i].code==scenario_key && events[i].value==0) {
+            if (gate && scenario_key && !scenario_released && ev.type==CIUKI_INPUT_KEY &&
+                ev.code==scenario_key && ev.value==0) {
                 scenario_released=1; d->shell_keys++; input_dirty=1; continue;
             }
             if (gate && interaction) {
-                gate_input(d,&events[i]);
+                gate_input(d,&ev);
                 input_dirty=1;
-            } else desk_input(d,&events[i]);
-        } input_reported=0; }
-        else if (n<0 && errno!=EAGAIN && errno!=EINTR && !input_reported) {
-            fprintf(stderr,"desktop: input unavailable (errno=%d)\n",errno); input_reported=1;
-            struct ciuki_input_event resync={.type=CIUKI_INPUT_RESYNC}; desk_input(d,&resync);
+            } else desk_input(d,&ev);
         }
         if (d->action>=0) {
             unsigned selected=(unsigned)d->action; d->action=-1;
@@ -403,6 +683,7 @@ int main(int argc, char **argv)
                 d->app_pid=(uint32_t)pid;
             }
         }
+        shell_service(d);
         if (d->tasks_test && d->tasks_stage==6 && d->tasks_checkpoint && tasks_verify(d)) {
             d->tasks_stage=DESK_TASKS_DONE; input_dirty=1;
         }
@@ -478,6 +759,11 @@ int main(int argc, char **argv)
             int status, pid=(int)d->children[i].pid;
             if (waitpid(pid,&status,WNOHANG)==pid) desk_child_exited(d,(uint32_t)pid,status);
         }
+        /* Scenario progress that completes without input (the shell demo's reap: stage 6; the app's
+         * exit: app_done) changes the reported keys (gate_report): report it even when no input
+         * follows, or the probe keeps the last input's keys=0 (QEMU image d964369f). */
+        unsigned progress=(unsigned)d->shell_stage|(unsigned)d->tasks_stage<<8|(unsigned)d->app_done<<16;
+        if (gate && progress!=reported_progress) { reported_progress=progress; input_dirty=1; }
         if (test && victim && victim_pid<0 && completed<cycles && now>=next_victim)
             victim_pid=spawn_demo(d,victim,0);
         struct timespec pause={.tv_sec=0,.tv_nsec=gate ? 1000000 : 10000000}; nanosleep(&pause,NULL);

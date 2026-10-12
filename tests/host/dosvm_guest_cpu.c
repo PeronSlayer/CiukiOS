@@ -8,6 +8,7 @@
  * laptops remain the acceptance authority. SPDX-License-Identifier: GPL-2.0-only */
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <x86emu.h>
 #include "dosvm_guest.h"
@@ -19,6 +20,16 @@ static const struct gcpu_ops *ops;
 static bool fetch(uint32_t lin, uint8_t *b);
 static struct gcpu_event *event;
 static bool fault_pending;
+/* GUEST_TCG=1 models two QEMU TCG traits seen on qemu-t23 (2026-10-12):
+ * data accesses are not checked against segment limits (translate.c adds
+ * the base only) and CPUID leaf 40000000h reports "TCGTCGTCGTCG". */
+static int tcg_mode = -1;
+static bool tcg(void) { if (tcg_mode < 0) tcg_mode = getenv("GUEST_TCG") != 0; return tcg_mode; }
+static void tcg_descriptor(uint32_t d[2])
+{
+    bool data = (d[1] & 0x1800u) == 0x1000u, down = d[1] & 0x400u;
+    if (tcg() && data && !down) { d[0] |= 0xFFFFu; d[1] |= 0x008F0000u; }  /* limit FFFFF, G=1 */
+}
 static unsigned watch_hits;
 
 static unsigned memio(x86emu_t *e, u32 addr, u32 *val, unsigned type)
@@ -36,6 +47,7 @@ static unsigned memio(x86emu_t *e, u32 addr, u32 *val, unsigned type)
         unsigned off = addr - GDT_FAKE;
         ops->descriptor((uint16_t)(off & ~7u), false, d);
         if (kind == X86EMU_MEMIO_W) return 0;
+        tcg_descriptor(d);
         uint32_t x = 0;
         memcpy(&x, (uint8_t *)d + (off & 7), n > 8 - (off & 7) ? 8 - (off & 7) : n);
         *val = x;
@@ -46,6 +58,7 @@ static unsigned memio(x86emu_t *e, u32 addr, u32 *val, unsigned type)
         unsigned off = addr - LDT_FAKE;
         ops->descriptor((uint16_t)((off & ~7u) | 4), kind == X86EMU_MEMIO_W, d);
         if (kind == X86EMU_MEMIO_W) return 0;   /* accessed-bit updates are not modelled */
+        tcg_descriptor(d);
         uint32_t x = 0;
         memcpy(&x, (uint8_t *)d + (off & 7), n > 8 - (off & 7) ? 8 - (off & 7) : n);
         *val = x;
@@ -266,6 +279,15 @@ static bool trap_check(struct gcpu_state *s)
         if (len > 0) { emu->x86.R_EIP += (uint32_t)len; event->vector = 0; event->executed_descriptor = true; return false; }
         if (op != 0x9B) ops->unexpected("x87 instruction outside the runner's control/status subset");
     }
+    if (op == 0x0F && tcg()) {                      /* CPUID 40000000h under GUEST_TCG */
+        uint8_t next = 0;
+        if (fetch(lin + n + 1, &next) && next == 0xA2 && emu->x86.R_EAX == 0x40000000u) {
+            emu->x86.R_EAX = 0x40000001u; emu->x86.R_EBX = 0x54474354u;
+            emu->x86.R_ECX = 0x43544743u; emu->x86.R_EDX = 0x47435447u;
+            emu->x86.R_EIP += n + 2; event->vector = 0; event->executed_descriptor = true;
+            return false;
+        }
+    }
     if (op == 0xC8) {
         int len = enter_insn(lin, n, op32, s->pm && (emu->x86.R_SS_ACC & (1u << 10)));
         if (len > 0) { emu->x86.R_EIP += (uint32_t)len; event->vector = 0; event->executed_descriptor = true; return false; }
@@ -361,7 +383,7 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
     emu->x86.R_EAX = s->eax; emu->x86.R_EBX = s->ebx; emu->x86.R_ECX = s->ecx; emu->x86.R_EDX = s->edx;
     emu->x86.R_ESI = s->esi; emu->x86.R_EDI = s->edi; emu->x86.R_EBP = s->ebp; emu->x86.R_ESP = s->esp;
     emu->x86.R_EIP = s->eip;
-    emu->x86.R_EFLG = (s->eflags & 0x00000DD5u & ~0x100u) | 0x202u;
+    emu->x86.R_EFLG = (s->eflags & 0x00000DD5u) | 0x202u;
     load_seg(emu->x86.R_CS_SEL, s->cs, s->pm, true);
     load_seg(emu->x86.R_SS_SEL, s->ss, s->pm, false);
     load_seg(emu->x86.R_DS_SEL, s->ds, s->pm, false);
@@ -373,6 +395,12 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
     unsigned executed = 0, budget = tf ? 1 : max;
     int rc = GCPU_BUDGET;
     while (executed < budget) {
+        /* TF loaded inside the slice (POPF/IRET of an image with TF, which
+         * libx86emu loads but never acts on): the trap follows the first
+         * instruction that starts with TF set, not the one that set it
+         * (Intel SDM Vol. 3, "Single-Step Exception Condition"). */
+        bool tf_loaded = !tf && (emu->x86.R_EFLG & 0x100u);
+        if (tf_loaded && budget > executed + 1) budget = executed + 1;
         ev->executed_descriptor = false;
         if (trap_check(s)) { rc = ev->fault && ev->vector == 13 ? GCPU_TRAP : GCPU_TRAP; break; }
         if (ev->executed_descriptor) { executed++; continue; }
@@ -392,20 +420,21 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
         executed++;
         ev->ss_shadow = first == 0x17 || (first == 0x8E && ((second >> 3) & 7) == 2);
         if (watch_hits) {                  /* data breakpoint: #DB trap after the access */
-            ev->vector = 1; ev->err = 0; ev->fault = false; ev->dr6 = watch_hits;
+            ev->vector = 1; ev->err = 0; ev->fault = false; ev->dr6 = watch_hits | ((tf || tf_loaded) ? 0x4000u : 0);
             rc = GCPU_TRAP;
             break;
         }
         /* MOV SS / POP SS delay a single-step trap by one instruction. */
-        if (tf && executed == budget && (first == 0x17 || (first == 0x8E && ((second >> 3) & 7) == 2)))
+        if ((tf || tf_loaded) && executed == budget && (first == 0x17 || (first == 0x8E && ((second >> 3) & 7) == 2)))
             budget++;
+        if (tf_loaded && executed == budget) { tf = true; break; }
     }
     ev->executed = executed;
-    if (rc == GCPU_BUDGET && tf && executed) { ev->vector = 1; ev->err = 0; ev->fault = false; rc = GCPU_TRAP; }
+    if (rc == GCPU_BUDGET && tf && executed) { ev->vector = 1; ev->err = 0; ev->fault = false; ev->dr6 = 0x4000; rc = GCPU_TRAP; }
     s->eax = emu->x86.R_EAX; s->ebx = emu->x86.R_EBX; s->ecx = emu->x86.R_ECX; s->edx = emu->x86.R_EDX;
     s->esi = emu->x86.R_ESI; s->edi = emu->x86.R_EDI; s->ebp = emu->x86.R_EBP; s->esp = emu->x86.R_ESP;
     s->eip = emu->x86.R_EIP;
-    s->eflags = (emu->x86.R_EFLG & 0x00000CD5u) | (s->eflags & 0x100u) | 0x202u;
+    s->eflags = (emu->x86.R_EFLG & 0x00000DD5u) | 0x202u;
     s->cs = emu->x86.R_CS; s->ss = emu->x86.R_SS; s->ds = emu->x86.R_DS; s->es = emu->x86.R_ES;
     s->fs = emu->x86.R_FS; s->gs = emu->x86.R_GS;
     return rc;

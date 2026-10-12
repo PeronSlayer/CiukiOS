@@ -51,13 +51,11 @@ static int command(struct dosvm *v, const char *text)
     }
 }
 
-/* Lead diagnostic (QEMU 2026-10-11): the guest screen when a boot does not
- * reach the prompt. Spaces become '_', '=' and non-ASCII become '.'. */
-static void screen_dump(const char *name, struct dosvm *v)
+/* Lead diagnostic (QEMU 2026-10-11), shared by the F3 controllers
+ * (ciuki/probe.h): the guest text screen. Spaces become '_', every glyph
+ * outside the record grammar '.'. */
+void probe_dos_screen(const char *name, struct dosvm *v)
 {
-    struct dosvm_info info;
-    dosvm_info(v, &info);
-    rec_emit(name, "DATA", "group=boot_state ready=%u state=%u reason=%u", info.dos_ready, info.state, info.reason);
     const uint16_t *text = dosvm_text(v, 0);
     for (unsigned row = 0; row < 25; row++) {
         char line[81];
@@ -74,6 +72,13 @@ static void screen_dump(const char *name, struct dosvm *v)
         line[len] = 0;
         rec_emit(name, "DATA", "group=screen row=%u text=%s", row, line);
     }
+}
+static void screen_dump(const char *name, struct dosvm *v)
+{
+    struct dosvm_info info;
+    dosvm_info(v, &info);
+    rec_emit(name, "DATA", "group=boot_state ready=%u state=%u reason=%u", info.dos_ready, info.state, info.reason);
+    probe_dos_screen(name, v);
 }
 static struct task *heartbeat(uint32_t *data)
 {

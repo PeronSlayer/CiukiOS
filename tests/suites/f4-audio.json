@@ -789,7 +789,10 @@
               "crossings_r": {
                 "eq": "$crossings_l"
               },
-              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_l": {
+                "ge": 2800,
+                "le": 2950
+              },
               "rms_r": {
                 "eq": "$rms_l"
               },
@@ -844,7 +847,10 @@
               "crossings_r": {
                 "eq": 0
               },
-              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_l": {
+                "ge": 2800,
+                "le": 2950
+              },
               "rms_r": {
                 "eq": 0
               },
@@ -886,10 +892,21 @@
               "case": "pacing"
             },
             "fields": {
-              "lead_min": "PIN-FROM-FIRST-RUN",
-              "lead_max": "PIN-FROM-FIRST-RUN",
-              "lag_min": "PIN-FROM-FIRST-RUN",
-              "holds": "PIN-FROM-FIRST-RUN",
+              "lead_min": {
+                "ge": 2500,
+                "le": 2700
+              },
+              "lead_max": {
+                "ge": 2600,
+                "le": 3400
+              },
+              "lag_min": {
+                "ge": 500,
+                "le": 1200
+              },
+              "holds": {
+                "le": 4
+              },
               "skips": {
                 "eq": 0
               },
@@ -953,8 +970,12 @@
               "halts": {
                 "eq": 0
               },
-              "deadlines": "PIN-FROM-FIRST-RUN",
-              "max_service_us": "PIN-FROM-FIRST-RUN",
+              "deadlines": {
+                "eq": 0
+              },
+              "max_service_us": {
+                "le": 1000
+              },
               "max_irq_us": {
                 "le": 250
               },
@@ -1220,7 +1241,10 @@
               "crossings_r": {
                 "eq": "$crossings_l"
               },
-              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_l": {
+                "ge": 2800,
+                "le": 2950
+              },
               "rms_r": {
                 "eq": "$rms_l"
               },
@@ -1275,7 +1299,10 @@
               "crossings_r": {
                 "eq": 0
               },
-              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_l": {
+                "ge": 2800,
+                "le": 2950
+              },
               "rms_r": {
                 "eq": 0
               },
@@ -1317,10 +1344,21 @@
               "case": "pacing"
             },
             "fields": {
-              "lead_min": "PIN-FROM-FIRST-RUN",
-              "lead_max": "PIN-FROM-FIRST-RUN",
-              "lag_min": "PIN-FROM-FIRST-RUN",
-              "holds": "PIN-FROM-FIRST-RUN",
+              "lead_min": {
+                "ge": 2500,
+                "le": 2700
+              },
+              "lead_max": {
+                "ge": 2600,
+                "le": 3400
+              },
+              "lag_min": {
+                "ge": 500,
+                "le": 1200
+              },
+              "holds": {
+                "le": 4
+              },
               "skips": {
                 "eq": 0
               },
@@ -1384,8 +1422,12 @@
               "halts": {
                 "eq": 0
               },
-              "deadlines": "PIN-FROM-FIRST-RUN",
-              "max_service_us": "PIN-FROM-FIRST-RUN",
+              "deadlines": {
+                "eq": 0
+              },
+              "max_service_us": {
+                "le": 1000
+              },
               "max_irq_us": {
                 "le": 250
               },
@@ -1651,7 +1693,10 @@
               "crossings_r": {
                 "eq": "$crossings_l"
               },
-              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_l": {
+                "ge": 2800,
+                "le": 2950
+              },
               "rms_r": {
                 "eq": "$rms_l"
               },
@@ -1706,7 +1751,10 @@
               "crossings_r": {
                 "eq": 0
               },
-              "rms_l": "PIN-FROM-FIRST-RUN",
+              "rms_l": {
+                "ge": 2800,
+                "le": 2950
+              },
               "rms_r": {
                 "eq": 0
               },
@@ -1748,10 +1796,21 @@
               "case": "pacing"
             },
             "fields": {
-              "lead_min": "PIN-FROM-FIRST-RUN",
-              "lead_max": "PIN-FROM-FIRST-RUN",
-              "lag_min": "PIN-FROM-FIRST-RUN",
-              "holds": "PIN-FROM-FIRST-RUN",
+              "lead_min": {
+                "ge": 2500,
+                "le": 2700
+              },
+              "lead_max": {
+                "ge": 2600,
+                "le": 3400
+              },
+              "lag_min": {
+                "ge": 500,
+                "le": 1200
+              },
+              "holds": {
+                "le": 4
+              },
               "skips": {
                 "eq": 0
               },
@@ -1815,8 +1874,12 @@
               "halts": {
                 "eq": 0
               },
-              "deadlines": "PIN-FROM-FIRST-RUN",
-              "max_service_us": "PIN-FROM-FIRST-RUN",
+              "deadlines": {
+                "eq": 0
+              },
+              "max_service_us": {
+                "le": 1000
+              },
               "max_irq_us": {
                 "le": 250
               },

@@ -26,6 +26,7 @@ SDK = ROOT / "build/tools/ciuki-sdk"
 LUA = ROOT / "build/apps/lua"
 DESKTOP = ROOT / "build/apps/desktop"
 TEST_PATH = "/system/tests/lua-5.4.8-tests"
+WALLPAPERS = ("Ciuk1.png", "Ciuk2.png", "Ciuk3.png")
 
 
 def run(*args):
@@ -60,13 +61,24 @@ def desktop_payloads():
     desktop_build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(desktop_build)
     desktop = desktop_build.validate_payloads()
-    sources = {"/bin/desktop": DESKTOP / "desktop", "/bin/demo": DESKTOP / "demo", "/bin/dosbox": DESKTOP / "dosbox",
-               "/bin/files": DESKTOP / "files", "/bin/tasks": DESKTOP / "tasks", "/bin/ciuknote": DESKTOP / "ciuknote",
-               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
+    sources = {"/Programs/desktop": DESKTOP / "desktop", "/Programs/demo": DESKTOP / "demo", "/Programs/dosbox": DESKTOP / "dosbox",
+               "/Programs/files": DESKTOP / "files", "/Programs/tasks": DESKTOP / "tasks", "/Programs/ciuknote": DESKTOP / "ciuknote",
+               "/Programs/control": DESKTOP / "control",
+               "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
+               "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
+               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
+               "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
+    # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
+    sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],
-                "elf": desktop["elf"], "portrait": desktop["portrait"]}
-    return sources, {"/bin", "/system", "/system/assets"}, metadata
+                "elf": desktop["elf"], "portrait": desktop["portrait"], "icons": desktop["icons"]}
+    # The owner's three adaptive Ciuki scenes (assets/wallpapers/ciuki, 1448x1086 PNG; Ciuk2 is the
+    # default wallpaper of apps/desktop/settings.c). /system/settings holds desktop.cfg (written at run
+    # time); the owner may add PNG/JPEG/BMP files to /system/wallpapers. Never Microsoft's
+    # third_party/win_bg bitmaps: see docs/desktop.md.
+    sources.update({f"/system/wallpapers/{name}": ROOT / "assets/wallpapers/ciuki" / name for name in WALLPAPERS})
+    return sources, {"/Programs", "/System", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def application_payloads():
@@ -83,9 +95,9 @@ def application_payloads():
                 "configuration": "generic; C89/Linux/POSIX/readline/dlopen off; int64/double"}
     require(lua_build.current_build(expected), "missing/stale Lua payloads; run make lua")
     inspect = lua_build.checker().inspect
-    sources = {"/bin/lua": LUA / "lua",
-               "/bin/hello": SDK / "tests/hello.elf",
-               "/bin/libc_smoke": SDK / "tests/libc_smoke.elf",
+    sources = {"/Programs/lua": LUA / "lua",
+               "/Programs/hello": SDK / "tests/hello.elf",
+               "/Programs/libc_smoke": SDK / "tests/libc_smoke.elf",
                "/system/tests/ciuki-f2.lua": LUA / "ciuki-f2.lua",
                f"{TEST_PATH}/ciuki-f2.lua": LUA / "ciuki-f2.lua",
                "/system/licenses/lua-5.4.8.txt": LUA / "LUA-LICENSE.txt",
@@ -101,7 +113,7 @@ def application_payloads():
         sources[f"{TEST_PATH}/{name}"] = LUA / "lua-5.4.8-tests" / name
     desktop_sources, desktop_directories, desktop_metadata = desktop_payloads()
     sources.update(desktop_sources)
-    directories = {"/bin", "/tmp", "/home", "/system", "/system/tests",
+    directories = {"/Programs", "/tmp", "/Documents", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
     directories.update(desktop_directories)
@@ -147,10 +159,32 @@ def application_provenance(sources, manifest, sdk):
         for part in range(parts):
             lines.append(f"M {name} {part + 1} {parts} {encoding} {encoded[part*32:(part+1)*32]}\n")
     for path, source in sorted(sources.items()):
-        if path == "/bin/lua" or path == "/system/tests/ciuki-f2.lua" or path.startswith(TEST_PATH + "/"):
+        if path == "/Programs/lua" or path == "/system/tests/ciuki-f2.lua" or path.startswith(TEST_PATH + "/"):
             require(len(path) <= 80, "app-gate payload path exceeds evidence bound")
             lines.append(f"P {path} {sha256(source)}\n")
     return "".join(lines)
+
+
+def games_payloads(dos_image, out=None):
+    """Owner decision 2026-10-12: Wolfenstein 3-D and DOOM shareware are
+    pre-installed. The games disk (the DOS system plus \\WOLF3D and \\DOOM,
+    from the pinned archives in third_party/games) is the base of every
+    /Programs/dosbox window VM (dosvm_disk.c, C:\\GAMES\\CIUKIGAM.IMG); the
+    packages' licence documents and provenance go to /system/licenses.
+    Returns sources, directories, metadata and the SHA-256 set of pinned
+    shareware files the local-payload guard accepts. out: the disk's path
+    (default build/f0/games/CIUKIGAM.IMG; host tests write elsewhere)."""
+    spec = importlib.util.spec_from_file_location("build_games_disk", ROOT / "scripts/build_games_disk.py")
+    games = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(games)
+    image, manifest = games.build(out, dos_image)
+    sources = {"/Games/CIUKIGAM.IMG": image}
+    for record in manifest["licenses"]:
+        sources[f"/system/licenses/{record['package']}-{record['name']}"] = ROOT / record["path"]
+    for package in manifest["packages"]:
+        sources[f"/system/licenses/{package['name']}-UPSTREAM.json"] = ROOT / games.GAMES / package["name"] / "UPSTREAM.json"
+    metadata = {k: v for k, v in manifest.items() if k not in ("checkers", "geometry")}
+    return sources, {"/Games", "/system/licenses"}, metadata, games.free_hashes()
 
 
 def payload_records(sources):
@@ -171,6 +205,16 @@ def check_payloads(image, payloads, directories):
     for directory in sorted(directories):
         subprocess.run(["mdir", "-i", volume, "::" + directory], cwd=ROOT,
                        check=True, stdout=subprocess.DEVNULL)
+    # A case-insensitive lookup alone would accept all-uppercase 8.3 names.
+    # Check enumeration too: Files must display the owner's exact long names.
+    display_names = {name for name in ("Programs", "Documents", "System", "Games")
+                     if "/" + name in directories}
+    if display_names:
+        listing = subprocess.run(["mdir", "-b", "-i", volume, "::/"], cwd=ROOT,
+                                 check=True, capture_output=True, text=True).stdout
+        names = {line.rstrip("/").rsplit("/", 1)[-1] for line in listing.splitlines()}
+        for name in sorted(display_names):
+            require(name in names, f"directory display name: {name}")
     for payload in payloads:
         # mcopy's '-' destination writes raw file bytes to stdout without scratch copies.
         data = subprocess.run(["mcopy", "-i", volume, "::" + payload["path"], "-"],
@@ -258,6 +302,9 @@ def build(kernel, out, boot_cfg):
     sources["/system/dos/DOSBOOT.IMG"] = dos_image
     directories.add("/system/dos")
     metadata["dos"] = dos_manifest
+    games_sources, games_directories, metadata["games"], free = games_payloads(dos_image)
+    sources.update(games_sources)
+    directories.update(games_directories)
     out.parent.mkdir(parents=True, exist_ok=True)
     # Large scratch files stay on disk beside the output, never in /tmp.
     with tempfile.TemporaryDirectory(prefix=".image-", dir=out.parent) as directory:
@@ -289,8 +336,9 @@ def build(kernel, out, boot_cfg):
             "-n", "CIUKIOS", volume)
         sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
         payloads = payload_records(sources)
-        # f3-06: owner-local game files never enter the canonical image.
-        dos_build.refuse_local_payloads({p["path"]: p["sha256"] for p in payloads})
+        # f3-06: owner-local game files never enter the canonical image; only
+        # files pinned in the vendored shareware packages may equal one.
+        dos_build.refuse_local_payloads({p["path"]: p["sha256"] for p in payloads}, free=free)
         populate_payloads(volume, sources, directories)
         # mtools updates the primary allocation hint but not its backup.
         with volume.open("r+b") as stream:

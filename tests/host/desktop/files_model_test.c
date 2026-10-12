@@ -12,7 +12,7 @@
 static void fixture(void)
 {
     fake_reset();
-    fake_create("/system", FM_DIR); fake_create("/system/sub", FM_DIR); fake_create("/home", FM_DIR);
+    fake_create("/system", FM_DIR); fake_create("/system/sub", FM_DIR); fake_create("/Documents", FM_DIR);
     fake_create("/mnt", FM_DIR); fake_create("/mnt/d", FM_DIR);
     fake_file("/system/readme.txt", 33001, 0);
     fake_file("/system/sub/a.txt", 17, 42);
@@ -28,11 +28,70 @@ static void same(const char *a, const char *b)
 static unsigned index_of(struct fm_model *m, const char *name)
 { for (unsigned i = 0; i < m->count; i++) if (!strcmp(m->entries[i].name, name)) return i; assert(!"missing entry"); return 0; }
 
+static void computer_tests(void)
+{
+    static const struct { const char *posix, *display; } paths[] = {
+        {"/", "C:\\"}, {"/Programs", "C:\\Programs"}, {"/Documents/My File.txt", "C:\\Documents\\My File.txt"},
+        {"/mnt/d", "D:\\"}, {"/mnt/d/Games/MiXeD", "D:\\Games\\MiXeD"}, {"/mnt/z/x", "Z:\\x"},
+        {"/mnt/data/x", "C:\\mnt\\data\\x"}, {FM_COMPUTER, "Computer"}
+    };
+    char out[FM_PATH], back[FM_PATH];
+    for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        assert(!fm_display_path(out, paths[i].posix) && !strcmp(out, paths[i].display));
+        assert(!fm_posix_path(back, out) && !strcmp(back, paths[i].posix));
+    }
+    assert(!fm_posix_path(out, "d:/Games\\MiXeD\\\\") && !strcmp(out, "/mnt/d/Games/MiXeD"));
+    assert(!fm_posix_path(out, "/Programs///MiXeD//") && !strcmp(out, "/Programs/MiXeD"));
+    assert(!fm_display_path(out, "/mnt/D/Games///") && !strcmp(out, "D:\\Games"));
+    assert(!fm_posix_path(out, "C:") && !strcmp(out, "/"));
+    assert(!fm_posix_path(out, "D:") && !strcmp(out, "/mnt/d"));
+    assert(fm_posix_path(out, "C:Programs") == -EINVAL && fm_posix_path(out, "A:\\") == -EINVAL);
+    assert(fm_posix_path(out, "relative") == -EINVAL && fm_posix_path(out, NULL) == -EINVAL);
+    char long_path[FM_PATH + 4]; memset(long_path, 'x', sizeof(long_path));
+    long_path[0] = '/'; long_path[sizeof(long_path) - 1] = 0;
+    assert(fm_posix_path(out, long_path) == -ENAMETOOLONG);
+    long_path[FM_PATH - 2] = 0; assert(fm_display_path(out, long_path) == -ENAMETOOLONG);
+    strcpy(out, "D:\\Games\\"); assert(!fm_posix_path(out, out) && !strcmp(out, "/mnt/d/Games"));
+    assert(!fm_display_path(out, out) && !strcmp(out, "D:\\Games"));
+    assert(fm_hidden("/", "DEV") && fm_hidden("/", "mnt") && fm_hidden("/", "tmp"));
+    assert(!fm_hidden("/", ".config") && !fm_hidden("/Games", "tmp"));
+
+    fake_reset(); fake_create("/Programs", FM_DIR); fake_create("/Documents", FM_DIR);
+    fake_create("/dev", FM_DIR); fake_create("/tmp", FM_DIR); fake_create("/.config", FM_DIR);
+    struct fm_model m; fm_init(&m, &fake_vfs);
+    assert(!fm_navigate(&m, "Computer") && !m.path[0] && m.count == 1 && !strcmp(m.entries[0].name, "C:"));
+    assert(!fm_entry_path(&m, 0, out) && !strcmp(out, "/"));
+    fm_select(&m, 0, 0);
+    assert(fm_create(&m, "No", 1) == -EPERM && fm_rename(&m, 0, "No") == -EPERM && fm_clipboard(&m, 1) == -EPERM);
+    assert(!fm_navigate(&m, "C:\\") && m.count == 3);
+    assert(!strcmp(m.entries[0].name, ".config"));
+    assert(!fm_up(&m) && !m.path[0] && m.entries[m.active].selected && !strcmp(m.entries[m.active].name, "C:"));
+    assert(!fm_history(&m, -1) && !strcmp(m.path, "/"));
+    fake_create("/mnt", FM_DIR); fake_create("/mnt/d", FM_DIR); fake_create("/mnt/d/Games", FM_DIR);
+    fake_create("/mnt/d/Games/tmp", FM_DIR); fake_create("/mnt/not-a-drive", FM_DIR); fake_file("/mnt/e", 1, 1);
+    assert(!fm_navigate(&m, FM_COMPUTER) && m.count == 2);
+    assert(!strcmp(m.entries[0].name, "C:") && !strcmp(m.entries[1].name, "D:"));
+    assert(!fm_entry_path(&m, 1, out) && !strcmp(out, "/mnt/d"));
+    assert(!fm_navigate(&m, "D:\\Games\\") && !strcmp(m.path, "/mnt/d/Games") && m.count == 1);
+    assert(!fm_up(&m) && !strcmp(m.path, "/mnt/d"));
+    assert(!fm_up(&m) && !m.path[0] && !strcmp(m.entries[m.active].name, "D:"));
+    assert(!fm_navigate(&m, "/mnt") && !m.path[0]);
+    fake_nodes[fake_lookup("/mnt/d")].live = 0;
+    assert(!fm_refresh(&m) && m.count == 1);
+    fake_create("/mnt/z", FM_DIR); fake_create("/mnt/D", FM_DIR);
+    assert(!fm_refresh(&m) && m.count == 3 && !strcmp(m.entries[1].name, "D:") && !strcmp(m.entries[2].name, "Z:"));
+    assert(!fm_navigate(&m, "D:\\") && !strcmp(m.path, "/mnt/D"));
+    assert(!fm_up(&m) && !m.path[0]);
+    fm_destroy(&m); fake_assert_clean();
+    puts("PASS Files Computer model: one/two volumes, drive paths both ways, case/separators/limits, hidden nodes, drive Up/history, protected drives");
+}
+
 int main(void)
 {
+    computer_tests();
     /* Paths and names. */
     char out[FM_PATH];
-    assert(!fm_join(out, "/", "bin") && !strcmp(out, "/bin") && !fm_join(out, "/bin", "x") && !strcmp(out, "/bin/x"));
+    assert(!fm_join(out, "/", "Programs") && !strcmp(out, "/Programs") && !fm_join(out, "/Programs", "x") && !strcmp(out, "/Programs/x"));
     assert(fm_join(out, "/", "a/b") == -EINVAL && fm_join(out, "/", "..") == -EINVAL);
     assert(fm_beneath("/System/x", "/system") && !fm_beneath("/systemx", "/system") && fm_beneath("/a", "/"));
     assert(!fm_parent(out, "/a/b") && !strcmp(out, "/a") && !fm_parent(out, "/a") && !strcmp(out, "/"));
@@ -58,7 +117,7 @@ int main(void)
     assert(!fm_history(&m, -1) && !strcmp(m.path, "/system"));
     assert(fm_history(&m, -5) == -ENOENT);
     assert(!fm_history(&m, 1) && !strcmp(m.path, "/system/sub"));
-    assert(!fm_navigate(&m, "/home") && m.history_at + 1 == m.history_count);   /* new branch drops forward entries */
+    assert(!fm_navigate(&m, "/Documents") && m.history_at + 1 == m.history_count);   /* new branch drops forward entries */
     assert(!fm_navigate(&m, "/system"));
 
     /* Selection: click, Shift range, Ctrl toggle, Ctrl+Shift add, invert, focus. */
@@ -89,54 +148,54 @@ int main(void)
     /* Clipboard, create with unique names, rename with conflicts. */
     fm_select(&m, 1, 0); assert(!fm_clipboard(&m, 1) && m.clipboard_count == 1 && m.cut);
     fm_clipboard_clear(&m); assert(!m.clipboard_count);
-    assert(!fm_navigate(&m, "/home"));
+    assert(!fm_navigate(&m, "/Documents"));
     char name[FM_NAME];
     assert(!fm_unique(&m, "New Folder", "", name) && !strcmp(name, "New Folder"));
-    assert(!fm_create(&m, name, 1) && fake_lookup("/home/New Folder") >= 0 && m.entries[m.active].selected);
+    assert(!fm_create(&m, name, 1) && fake_lookup("/Documents/New Folder") >= 0 && m.entries[m.active].selected);
     assert(!fm_unique(&m, "New Folder", "", name) && !strcmp(name, "New Folder (2)"));
-    assert(!fm_unique(&m, "New Text Document", ".txt", name) && !fm_create(&m, name, 0) && fake_lookup("/home/New Text Document.txt") >= 0);
+    assert(!fm_unique(&m, "New Text Document", ".txt", name) && !fm_create(&m, name, 0) && fake_lookup("/Documents/New Text Document.txt") >= 0);
     assert(fm_create(&m, "bad/name", 1) == -EINVAL && fm_create(&m, "New Folder", 1) == -EEXIST);
     unsigned folder = index_of(&m, "New Folder");
     assert(fm_rename(&m, folder, "New Text Document.txt") == -EEXIST);
     assert(fm_rename(&m, folder, "a:b") == -EINVAL);
-    assert(!fm_rename(&m, index_of(&m, "New Folder"), "Renamed") && fake_lookup("/home/Renamed") >= 0 && !strcmp(m.entries[m.active].name, "Renamed"));
-    assert(!fm_rename(&m, index_of(&m, "Renamed"), "RENAMED") && fake_lookup("/home/RENAMED") >= 0);   /* case-only */
+    assert(!fm_rename(&m, index_of(&m, "New Folder"), "Renamed") && fake_lookup("/Documents/Renamed") >= 0 && !strcmp(m.entries[m.active].name, "Renamed"));
+    assert(!fm_rename(&m, index_of(&m, "Renamed"), "RENAMED") && fake_lookup("/Documents/RENAMED") >= 0);   /* case-only */
     fake_countdown = 1; assert(fm_refresh(&m) == -EIO); fake_countdown = 0;
     fm_destroy(&m);
 
     /* Recursive copy with short I/O; metadata adapter called per item. */
     struct fm_job j; char *system[] = {"/system"}, *file[] = {"/system/readme.txt"};
     fixture(); fake_short_io = 1;
-    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, system, 1, "/home")); finish(&j);
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, system, 1, "/Documents")); finish(&j);
     assert(j.state == FM_DONE && !j.metadata_warnings && fake_metadata_count == 5 && j.created_count == 1 && !strcmp(j.created[0], "system"));
-    same("/system/readme.txt", "/home/system/readme.txt"); same("/system/sub/a.txt", "/home/system/sub/a.txt");
+    same("/system/readme.txt", "/Documents/system/readme.txt"); same("/system/sub/a.txt", "/Documents/system/sub/a.txt");
     fm_job_destroy(&j); fake_assert_clean();
     fixture(); assert(fm_job_start(&j, &fake_vfs, FM_COPY, system, 1, "/system/sub") == -EINVAL);
     char *root[] = {"/"}; assert(fm_job_start(&j, &fake_vfs, FM_DELETE, root, 1, NULL) == -EBUSY);
 
     /* Cancel mid-copy removes the unfinished copy and keeps the source. */
-    fixture(); assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/home"));
+    fixture(); assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/Documents"));
     fm_job_step(&j); fm_job_step(&j); fm_job_step(&j); fm_job_cancel(&j); finish(&j);
-    assert(j.state == FM_CANCELLED && fake_lookup(file[0]) >= 0 && fake_lookup("/home/readme.txt") < 0);
+    assert(j.state == FM_CANCELLED && fake_lookup(file[0]) >= 0 && fake_lookup("/Documents/readme.txt") < 0);
     fm_job_destroy(&j); fake_assert_clean();
 
     /* Replace prompt: No keeps the old file, Yes to All replaces. */
-    fixture(); int old = fake_file("/home/readme.txt", 3, 'o');
-    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/home")); finish(&j);
+    fixture(); int old = fake_file("/Documents/readme.txt", 3, 'o');
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/Documents")); finish(&j);
     assert(j.state == FM_REPLACE && !j.prompt_dir && j.frames[0].existing.size == 3);
     fm_job_answer(&j, FM_NO); finish(&j);
     assert(j.state == FM_DONE && j.skipped == 1 && fake_nodes[old].meta.size == 3 && !j.created_count);
     fm_job_destroy(&j); fake_assert_clean();
-    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/home")); finish(&j); fm_job_answer(&j, FM_YES_ALL); finish(&j);
-    assert(j.state == FM_DONE); same(file[0], "/home/readme.txt"); fm_job_destroy(&j); fake_assert_clean();
-    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/home")); finish(&j); fm_job_answer(&j, FM_CANCEL); finish(&j);
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/Documents")); finish(&j); fm_job_answer(&j, FM_YES_ALL); finish(&j);
+    assert(j.state == FM_DONE); same(file[0], "/Documents/readme.txt"); fm_job_destroy(&j); fake_assert_clean();
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/Documents")); finish(&j); fm_job_answer(&j, FM_CANCEL); finish(&j);
     assert(j.state == FM_CANCELLED); fm_job_destroy(&j); fake_assert_clean();
 
     /* Existing folders prompt before a merge; merges keep unrelated files. */
-    fixture(); fake_create("/home/system", FM_DIR); fake_file("/home/system/keep.txt", 4, 'k');
-    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, system, 1, "/home")); finish(&j);
+    fixture(); fake_create("/Documents/system", FM_DIR); fake_file("/Documents/system/keep.txt", 4, 'k');
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, system, 1, "/Documents")); finish(&j);
     assert(j.state == FM_REPLACE && j.prompt_dir); fm_job_answer(&j, FM_YES); finish(&j);
-    assert(j.state == FM_DONE && fake_lookup("/home/system/keep.txt") >= 0 && fake_lookup("/home/system/sub/a.txt") >= 0);
+    assert(j.state == FM_DONE && fake_lookup("/Documents/system/keep.txt") >= 0 && fake_lookup("/Documents/system/sub/a.txt") >= 0);
     fm_job_destroy(&j); fake_assert_clean();
 
     /* Copy beside the source makes "Copy of"; moving onto itself is a no-op. */
@@ -149,8 +208,8 @@ int main(void)
     assert(j.state == FM_DONE && j.completed == 1 && fake_lookup(file[0]) >= 0); fm_job_destroy(&j); fake_assert_clean();
 
     /* Moves: same volume renames, other volume (EXDEV) copies then deletes. */
-    fixture(); assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, file, 1, "/home")); finish(&j);
-    assert(j.state == FM_DONE && fake_lookup("/home/readme.txt") >= 0 && fake_lookup(file[0]) < 0); fm_job_destroy(&j);
+    fixture(); assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, file, 1, "/Documents")); finish(&j);
+    assert(j.state == FM_DONE && fake_lookup("/Documents/readme.txt") >= 0 && fake_lookup(file[0]) < 0); fm_job_destroy(&j);
     fixture(); assert(!fm_job_start(&j, &fake_vfs, FM_MOVE, system, 1, "/mnt/d")); finish(&j);
     assert(j.state == FM_DONE && fake_lookup("/system") < 0 && fake_lookup("/mnt/d/system/sub/a.txt") >= 0); fm_job_destroy(&j); fake_assert_clean();
     char *moved[] = {"/mnt/d/system"}; assert(!fm_job_start(&j, &fake_vfs, FM_DELETE, moved, 1, NULL)); finish(&j);
@@ -161,11 +220,11 @@ int main(void)
     assert(j.bytes == 33018 && j.files == 3 && j.folders == 1); fm_job_destroy(&j);
 
     /* Every injected failure leaves the source intact and no temporary file. */
-    fixture(); assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/home")); finish(&j);
+    fixture(); assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/Documents")); finish(&j);
     int stages = fake_operations; fm_job_destroy(&j);
     for (int failure = 1; failure <= stages; failure++) {
         fixture(); fake_countdown = failure;
-        assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/home")); finish(&j);
+        assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/Documents")); finish(&j);
         assert(j.state == FM_FAILED || j.state == FM_DONE);
         if (j.state == FM_FAILED) assert(j.error > 0);
         fake_countdown = 0; fm_job_destroy(&j); fake_assert_clean();
@@ -177,7 +236,7 @@ int main(void)
 
     /* Without a metadata setter (the F2 ABI) copies warn instead. */
     fixture(); struct fm_vfs plain = fake_vfs; plain.metadata = NULL;
-    assert(!fm_job_start(&j, &plain, FM_COPY, file, 1, "/home")); finish(&j);
+    assert(!fm_job_start(&j, &plain, FM_COPY, file, 1, "/Documents")); finish(&j);
     assert(j.state == FM_DONE && j.metadata_warnings == 1); fm_job_destroy(&j); fake_assert_clean();
     puts("PASS Files model: names/types, canonical case, history, selection, sorting, find, create/rename, copy/move/delete/properties, prompts, Copy of, EXDEV, Cancel, injected errors");
     return 0;

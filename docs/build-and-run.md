@@ -39,17 +39,21 @@ developer profile and never for evidence.
 
 ### Normal boot cases in f0-smoke
 
+What a user boot shows on screen (quiet console until the desktop) and which
+boots keep the verbose console: [boot modes](boot.md).
+
 After its two probe boots, `f0-smoke` boots the image twice the way a user
 does (`normal-boot-qemu-t23`, `normal-boot-qemu-desktop-2002`): QEMU gets no
 fw_cfg test request, the loader menu times out (about 3 s) and the kernel
-takes the production path up to `/bin/desktop`. A case passes when
+takes the production path up to `/Programs/desktop`. A case passes when
 `serial.log` shows, in order and at the start of a line, `L:CPU signature=`,
 `L:SELECT_SOURCE=menu`, the `Ciuki VMM F0 build` banner,
-`[supervisor] bootstrap: spawning /bin/desktop` and
+`[supervisor] bootstrap: spawning /Programs/desktop` and
 `[supervisor] desktop pid=<n> pgid=<n>` within 300 s, with no panic,
 CIUKI_TEST record, `desktop unavailable` or `desktop stopped` line, and the
-screendump taken 8 s after the desktop line shows the desktop taskbar, start
-button, top bar and background colours instead of the kernel console.
+screendump taken 8 s after the desktop line shows the taskbar, the Ciuki
+button and the top bar, and a work area free of the kernel console colours
+(the default wallpaper is a photograph, so no background colour is required).
 The run directory keeps `screen.ppm` also on a pass; `result.json` has
 `evidence_kind: "normal-boot"`, `normal_boot` (milestones, desktop PID,
 timings) and `screen` (PPM SHA-256, measured colour fractions). A failure
@@ -211,15 +215,62 @@ python3 scripts/test/dos_fixtures.py wolf3d build/host/f306-wolf
 ```
 
 Delete `build/host/f306-*` afterwards (each holds a 160 MiB sparse image).
-For an interactive DOOM window, attach that `fixture-0.img` as a further IDE
-disk of a manual QEMU run (or copy its `CIUKIGAM.IMG` to the root of another
-FAT drive on a test PC): a DOS window (`/bin/dosbox`) then boots the workload
-image, with the kernel DPMI host, instead of `DOSBOOT.IMG`; type
-`\RUNREC.COM \DOOM DOOM.EXE` or `CD \DOOM` and `DOOM`. Without the disk the
-window is unchanged.
+For an interactive DOOM window with the owner's registered data, attach that
+`fixture-0.img` as a further IDE disk of a manual QEMU run (or copy its
+`CIUKIGAM.IMG` to the root of another FAT drive on a test PC): a DOS window
+(`/Programs/dosbox`) then boots the workload image, with the kernel DPMI host,
+instead of the bundled shareware games disk below; type
+`\RUNREC.COM \DOOM DOOM.EXE` or `CD \DOOM` and `DOOM`.
 The probes are `f3:dos4gw`, `f3:doom`, `f3:doom-sound`, `f3:wolf3d` and
 `f3:vm-starve` (also in the loader menu and the F3 sweep, where the game
 probes end `NOT_RUN reason=fixtures_absent` without the fixture disk).
+
+### Pre-installed shareware games
+
+Owner decision 2026-10-12: Wolfenstein 3-D and DOOM are pre-installed in
+their shareware releases, the only ones whose packages may be passed on
+(the registered data above stays local). The original archives are vendored
+under `third_party/games/` with their licence documents and an
+`UPSTREAM.json` that pins the archive (size, SHA-256, SHA-1, MD5, two
+published references) and every installed member:
+
+| Package | Archive | SHA-256 | Installed as |
+| --- | --- | --- | --- |
+| `wolf3d-shareware` | `1wolf14.zip` (Wolfenstein 3-D 1.4, episode 1) | `cb2a2ef7…59451a8` | `\WOLF3D` (all 12 files of `W3DSW14.SHR`) |
+| `doom-shareware` | `doom19s.zip` (DOOM 1.9, episode 1) | `cacf0142…1b486e6` | `\DOOM` (16 files of `DOOMS_19.1`+`.2`, without the DOOM FAQ) plus `CIUKI.CFG` |
+
+The image build never downloads: `scripts/build_image.py` calls
+`scripts/build_games_disk.py`, which checks each archive against its pins,
+unpacks it (ZIP; Apogee's `.SHR` container with PKWARE DCL "implode"
+members, decoded by a port of zlib's `blast.c`), checks every member,
+refuses registered data names (`DOOM.WAD`, `*.WL6`, …) and any other
+match with the owner's local files that is not a pinned shareware file, and
+writes `build/f0/games/CIUKIGAM.IMG` and its manifest `CIUKIGAM.json`. The
+disk has the `DOSBOOT.IMG` geometry (the DOS system read back from
+`DOSBOOT.IMG` and checked against its manifest) with `\WOLF3D` and `\DOOM`;
+its trailing zero sectors are cut (7,262,208 bytes of the 128 MiB volume;
+the kernel reads sectors past the end as zeros). The image holds it at
+`/Games/CIUKIGAM.IMG` (display folder `Games`; the kernel retains the
+case-insensitive `C:\GAMES\CIUKIGAM.IMG` path), and the licence documents and `UPSTREAM.json` files
+at `/system/licenses/<package>-<file>`. To build or inspect it alone:
+
+```bash
+python3 scripts/build_dos_image.py
+python3 scripts/build_games_disk.py
+mdir -/ -i build/f0/games/CIUKIGAM.IMG ::/
+```
+
+Every DOS window (`/Programs/dosbox`) boots this disk with the kernel DPMI host,
+unless the owner's local fixture disk above is attached (it takes
+precedence); the f3-06 workload probes use only the local fixture disk.
+The Ciuki menu's Programs > Games lists "Wolfenstein 3D (shareware)" and
+"DOOM (shareware)": each opens a DOS window titled after the game, which
+types `CD \WOLF3D` and `WOLF3D.EXE` (or `CD \DOOM` and
+`DOOM.EXE -config CIUKI.CFG`) at the DOS prompt once the window has the
+keyboard focus. The same works from Run…: `dosbox \WOLF3D\WOLF3D.EXE`
+(`dosbox [--name=TITLE] [COMMAND...]`; letters, digits and `\ . - _ : / = ,`
+and spaces). Licence status, including the Wolfenstein 3-D bundling clause
+still open with the owner: `docs/design/f3-acceptance.md`, f3-06 amendment.
 
 ## Test requests
 
@@ -244,6 +295,14 @@ photographs. With an RS-232 to USB adapter and a null-modem cable on the
 laptop's serial port, `scripts/test/serial_capture.sh <run-id>` records
 COM1 (38400 8N1) into `legacy/local/physical/<run-id>/serial.log`; start
 it before power-on, then `f0:all run=<run-id>` also covers `panic`.
+
+A user boot (no test request) is what the image's default `BOOT.CFG`
+(`safe=0 serial=1`, `DEFAULT_CONFIG` in `scripts/build_image.py`) gives: the
+quiet boot of [boot.md](boot.md) to the desktop, with the log on COM1 and in
+`C:\SYSTEM\LOGS`. The builder writes `build-manifest.json` beside the image;
+a physical run is evidence only for the SHA-256 recorded there, which goes in
+the validation record of that test
+(`docs/validation/2026-10-11-integrated-image-f0-regression.md`).
 
 
 ### Unattended hardware sweep

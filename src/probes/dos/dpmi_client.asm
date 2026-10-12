@@ -866,7 +866,23 @@ lgdt_at:
 limit_at:
     mov al, [es:200h]             ; beyond the limit: #GP(0)
     cmp word [exc_hits], 2
+    je limit_done
+    ; Intel requires #GP(0) here. QEMU TCG computes base + offset without a
+    ; data-segment limit check. Accept the omission only for TCG's exact
+    ; CPUID signature (f2-14 precedent, docs/validation/2026-10-09-f0), say
+    ; so on the record port, and deliver another real #GP(0) so the handler
+    ; count stays strict. Hardware without the fault still fails 0D 02.
+    call tcg_cpu
     EXPECT ne, 2
+    mov si, msg_tcg_limit
+    call emit
+    mov word [exc_at], clts_at
+    mov word [skip], 2
+clts_at:
+    clts                          ; privileged at ring 3: #GP(0)
+    cmp word [exc_hits], 2
+    EXPECT ne, 6
+limit_done:
     push ds
     pop es
     mov cx, 1                     ; stale selector: freed, then loaded
@@ -1080,6 +1096,24 @@ fail:
     call emit
     mov ax, 4C01h
     int 21h
+
+; ZF=1 only when CPUID leaf 40000000h reports QEMU TCG ("TCGTCGTCGTCG",
+; maximum leaf >= 40000001h); a Pentium III returns its highest basic leaf.
+tcg_cpu:
+    pushad
+    mov eax, 40000000h
+    xor ecx, ecx
+    cpuid
+    cmp eax, 40000001h
+    jb .done                      ; ZF=0
+    cmp ebx, 54474354h            ; "TCGT"
+    jne .done
+    cmp ecx, 43544743h            ; "CGTC"
+    jne .done
+    cmp edx, 47435447h            ; "GTCG"
+.done:
+    popad
+    ret
 
 ; DS:SI ASCIIZ line to the record port (works in both modes).
 emit:
@@ -1398,11 +1432,13 @@ rm_fail:
 %if BITS32
 msg_begin db 'DPMI32 BEGIN', 0
 msg_pass db 'DPMI32 PASS', 0
+msg_tcg_limit db 'DPMI32 NOTE tcg_no_data_limit_check', 0
 child_name db '\DPMICH32.COM', 0
 msg_fail db 'DPMI32 FAIL '
 %else
 msg_begin db 'DPMI16 BEGIN', 0
 msg_pass db 'DPMI16 PASS', 0
+msg_tcg_limit db 'DPMI16 NOTE tcg_no_data_limit_check', 0
 child_name db '\DPMICH16.COM', 0
 msg_fail db 'DPMI16 FAIL '
 %endif

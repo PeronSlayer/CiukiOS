@@ -84,12 +84,15 @@ class BootMenu:
     A poll consumes at most one character before checking the deadline, as the
     loader does. Configured requests are already validated by the cfg parser;
     validated fw_cfg bypasses the menu. No firmware or disk access occurs here.
+    `output` is the serial copy; `screen_quiet` models the quiet normal boot
+    (docs/boot.md): only MENU_HINT on screen until S, L or P is pressed.
     """
     DAY_TICKS = 0x1800b0
     MENU_TICKS = 55
     ENTRY_TICKS = 548
     POLL_LIMIT = 0x2000000
     SAFE_CONFIRMATION = 'Safe mode selected; P for a probe, or wait'
+    MENU_HINT = 'Press S for safe mode, L for serial log'
 
     def __init__(self, tick=0, safe=False, serial=True, request=None, source='cfg'):
         self.safe = safe
@@ -100,11 +103,14 @@ class BootMenu:
         self.error = False
         self.output = []
         self.state = 'menu'
+        self.verbose = False
+        self.screen_quiet = False
         if request is not None and source == 'fw_cfg':
             selected = selector(request, source, validated_fw_cfg=True)
             self.safe |= selected['safe']
             self._finish()
         else:
+            self.screen_quiet = request is None and not safe
             self.output.append('SELECT_READY')
             self._restart(tick, self.MENU_TICKS)
 
@@ -137,16 +143,20 @@ class BootMenu:
                 if key == 's':
                     self._cancel_cfg()
                     self.safe = True
+                    self.screen_quiet = False
                     self.output.extend((self.SAFE_CONFIRMATION, 'L:SAFE=1'))
                     self._restart(tick, self.MENU_TICKS)
                     return
                 if key == 'p':
                     self._cancel_cfg()
+                    self.screen_quiet = False
                     self.state = 'entry'
                     self._restart(tick, self.ENTRY_TICKS)
                     return
                 if key == 'l':
                     self.serial = not self.serial
+                    self.verbose = True
+                    self.screen_quiet = False
             elif char in ('\r', '\n'):
                 try:
                     selector(self.line)

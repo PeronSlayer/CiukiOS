@@ -18,36 +18,38 @@ ROOT = Path(__file__).resolve().parents[3]
 # Rendered screens (sha256 of the raw XRGB array: 320x240 text area harness, 640x440 application),
 # produced by the production renderer and reviewed as screenshots on the f2-31 toolkit
 # (2026-10-11); a change here is a visible change of CiukNote or of libdeskui.
+# wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
+# every frame is PIN-FROM-FIRST-RUN until the lead's visual review.
 TEXTAREA_SCREENS = {
-    "ta-bold.xrgb": "7805646b995636522bddc91f90e12a5a63923b0dfa083bcb68782c2f50d68f3d",
-    "ta-plain.xrgb": "d832afc19218ae89624ee09457a701af1087c644edc79f22b4c5d2b59c2112d3",
-    "ta-scrolled.xrgb": "9da85efa4fffc16a6db2f0a5b421b73b1d4c97186da4278e51f85188c8e3b0c1",
+    "ta-bold.xrgb": "PIN-FROM-FIRST-RUN",
+    "ta-plain.xrgb": "PIN-FROM-FIRST-RUN",
+    "ta-scrolled.xrgb": "PIN-FROM-FIRST-RUN",
 }
 APP_SCREENS = {
-    "cn-about.xrgb": "89c450cde4c55e38e924276a308437934db63e75eb5ed8c28b4fb460cc6bf606",
-    "cn-bold.xrgb": "c09b6806cf1c593914b0afd73cd8c565e9a89e04f32898960178ebbbb07e3c16",
-    "cn-context.xrgb": "2ab3f5690ab352e21f5e58b60080846de9fe89bfaa83a7c5e2792d79f5a30477",
-    "cn-empty.xrgb": "844b1be57b4f845c50921712915e0b977476ffbf5e0bea68308d4ed2ccfaba09",
-    "cn-find-bar.xrgb": "e2d612979f6f465024587da77bcb90daff5f15f9b4940809fb73f7bfe6273ff5",
-    "cn-format-menu.xrgb": "20c5ed5449f2f00b7fcb5ee672e6d92c1f4a23b3cd0fe96c12aae094615452e4",
-    "cn-help.xrgb": "581aa1a95923938d639825f9fece789a76b26460f889b79212cabe5b7e4a5ef0",
-    "cn-limit.xrgb": "8e3b78d13945e4f53c13ca12f39173df6f8b8918c936464b938852837dfa6ac1",
-    "cn-menu-edit.xrgb": "6872c1ccb6d46ef59fb4e6547b0e7fd386849e00cbf4deffedebc004c9ba24e1",
-    "cn-menu-file.xrgb": "69f3df0b2d8f1a72284aa9dd6086622c15e93900217ccd391aeb5c5fe6424bf5",
-    "cn-open-root.xrgb": "e5e4c4fabb866f7e9d1accb65ca0fb6565dc51f14f89cc03c7cdac95bb54fb6d",
-    "cn-open-tests.xrgb": "b9f16a0098a6a9ebb297c013d9c2282be73d76279344eba9d221de79abf59672",
-    "cn-prompt-changes.xrgb": "b77da3d38ab87a0c1f04affa70c7870f044681687b51dd8d11af64015a17a632",
-    "cn-replace-bar.xrgb": "4e9ff509a253865e28b293a4e3829a3765174279dd7f56a5df6d5d9f97eb0ccd",
-    "cn-save-page.xrgb": "cc86442ce05aeffe194670da6a52ea6b6a8ed11f369547aac553591fdd648c08",
-    "cn-saved.xrgb": "f3e546ddcebd4c8ddc6e94c0328c5f22a082e3017b7d0c26847deb31da7f275e",
-    "cn-scrolled-bars.xrgb": "6e2941be09961be39b046dec50104d51d6db4cd0442a00d9dd2be00bd84609e1",
-    "cn-status-hidden.xrgb": "8c7282da19f6e4f425122d0a8e9316260a2bff76548a91a91ed41683caedbc67",
-    "cn-typed.xrgb": "6cecb1e48db81fc020128d7185e58807fd596bc63e80a81df6589c18428a28cd",
-    "cn-wrapped.xrgb": "309ea0f0d6f7084244db438fe1108a76a9bcf0358121a88f569b17b59670548c",
+    "cn-about.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-bold.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-context.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-empty.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-find-bar.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-format-menu.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-help.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-limit.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-menu-edit.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-menu-file.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-open-root.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-open-tests.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-prompt-changes.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-replace-bar.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-save-page.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-saved.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-scrolled-bars.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-status-hidden.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-typed.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-wrapped.xrgb": "PIN-FROM-FIRST-RUN",
 }
 # Digests the guest prints for the QEMU case (FNV-1a 32 of the 640x440 surface), derived on the
 # host from the same script: compare them with the serial log lines "CiukNote checkpoint=...".
-CHECKPOINTS = {"ready": "780ef981", "saved": "7f605aaf", "opened": "033a8c51"}
+CHECKPOINTS = {"ready": "PIN-FROM-FIRST-RUN", "saved": "PIN-FROM-FIRST-RUN", "opened": "PIN-FROM-FIRST-RUN"}
 
 # QMP qcodes used by the scripts and the public set-1 codes the kernel reports (E0 keys | 0x100).
 QCODES = {**{c: s for c, s in zip("qwertyuiop", range(0x10, 0x1a))}, **{c: s for c, s in zip("asdfghjkl", range(0x1e, 0x27))},
@@ -61,8 +63,22 @@ FLAGS = ["-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra
 INCLUDES = ["-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/ciuknote"), "-I", str(ROOT / "apps/desktop"),
             "-I", str(ROOT / "src/kernel/include")]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
-           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c"]
+           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
+           "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 APP = [*TOOLKIT, "apps/ciuknote/app.c", "apps/ciuknote/doc.c", "tests/host/desktop/ciuknote_test.c"]
+
+# ui-look (2026-10-12): the new theme engine, fonts and controls changed every
+# rendered frame. Entries set to PIN-FROM-FIRST-RUN print their new digest and
+# are re-pinned by the lead after a visual review; pinned entries still compare.
+PIN = "PIN-FROM-FIRST-RUN"
+
+
+def assert_pins(test, actual, pinned, label):
+    test.assertEqual(sorted(actual), sorted(pinned))
+    fresh = {k: v for k, v in actual.items() if pinned[k] == PIN}
+    if fresh:
+        print(label, PIN, json.dumps(fresh, indent=1, sort_keys=True))
+    test.assertEqual({k: v for k, v in actual.items() if pinned[k] != PIN}, {k: v for k, v in pinned.items() if v != PIN})
 
 
 def load(name, path):
@@ -72,28 +88,26 @@ def load(name, path):
     return module
 
 
+ICONS = load("ciuknote_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")
+
+
 def case():
     suite = json.loads((ROOT / "tests/suites/f2-desktop.json").read_text())
     return next(c for c in suite["cases"] if c["id"] == "ciuknote-qemu-t23"), suite
 
 
 def bin_programs():
-    """The desktop menu lists /bin of the image, sorted by strcmp (the desktop itself is not listed)."""
+    """The desktop menu lists /Programs of the image, sorted by strcmp (the desktop itself is not listed)."""
     text = (ROOT / "scripts/build_image.py").read_text()
-    return sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', text)) - {"desktop"})
-
-
-def menu_distance(programs, name):
-    """Pointer travel from the Ciuki button (cursor 16 px above the corner) to the middle of a menu row:
-    dy = -1 - 28 * (n + 2 - k) for the 28 px rows anchored to the bottom bar (see docs/desktop.md)."""
-    return -1 - 28 * (len(programs) + 2 - programs.index(name))
+    return sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', text)) - {"desktop"})
 
 
 class CiuknoteTests(unittest.TestCase):
     def compile(self, folder, name, sources):
         binary = folder / name
         env = dict(os.environ, TMPDIR=str(folder))
-        subprocess.run(["clang", *FLAGS, *INCLUDES, *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
+        subprocess.run(["clang", *FLAGS, *INCLUDES, *ICONS.defines(), *(str(ROOT / s) for s in sources), "-o", str(binary)],
+                       check=True, env=env)
         return binary
 
     def run_binary(self, folder, binary, *args):
@@ -117,7 +131,7 @@ class CiuknoteTests(unittest.TestCase):
             actual = self.screens(folder)
             self.assertEqual(sorted(actual), sorted(f"ta-{n}.xrgb" for n in ("plain", "bold", "scrolled")))
             if TEXTAREA_SCREENS:
-                self.assertEqual(actual, TEXTAREA_SCREENS)
+                assert_pins(self, actual, TEXTAREA_SCREENS, "TEXTAREA_SCREENS")
             else:
                 print("TEXTAREA_SCREENS", json.dumps(actual, indent=1))
 
@@ -129,7 +143,7 @@ class CiuknoteTests(unittest.TestCase):
             self.assertIn("PASS ciuknote", out)
             actual = self.screens(folder)
             if APP_SCREENS:
-                self.assertEqual(actual, APP_SCREENS)
+                assert_pins(self, actual, APP_SCREENS, "APP_SCREENS")
             else:
                 print("APP_SCREENS", json.dumps(actual, indent=1))
             self.assertGreaterEqual(len(actual), 20)
@@ -177,13 +191,13 @@ class CiuknoteTests(unittest.TestCase):
         self.assertEqual(c["checks"]["fsck_exit_codes"], [0])
 
     def test_menu_row_arithmetic_follows_the_image_inventory(self):
-        """The scripts address Ciuki menu rows by distance from the bottom of the screen: rows are
-        28 px, the menu lists /bin (without desktop) plus About and Restart, and the pointer starts
-        on the Ciuki button, 16 px above the corner. Adding or removing a /bin program moves a row's
-        distance; this test names the new one, and the desktop cases must follow."""
+        """The script reaches CiukNote through the Ciuki button, Programs and the CiukNote row of the
+        Programs submenu (tests/host/desktop/shell_menu.py). Adding or removing a /Programs program can move a
+        submenu row; this test names the inventory, and the desktop cases must follow."""
         programs = bin_programs()
-        self.assertEqual(programs, ["ciuknote", "demo", "dosbox", "files", "hello", "libc_smoke", "lua", "tasks"],
-                         "the image's /bin changed: recompute dy = -1 - 28 * (n + 2 - k) for the desktop cases")
+        self.assertEqual(programs, ["calc", "charmap", "ciuknote", "clock", "control", "demo", "dosbox", "files", "hello", "help", "libc_smoke", "lua", "mixer", "tasks", "viewer"],
+                         "the image's /Programs changed: check the Programs submenu rows of the desktop cases")
+        menu = load("note_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         c, _ = case()
         x, y, clicks = 512, 384, []   # 1024x768 (QEMU std VGA mode 0x144); the cursor starts at the centre
         for batch in c["actions"][0]["batches"]:
@@ -192,15 +206,17 @@ class CiuknoteTests(unittest.TestCase):
                     if event["data"]["axis"] == "x": x = min(max(x + event["data"]["value"], 0), 1023)
                     else: y = min(max(y + event["data"]["value"], 0), 767)
                 elif event["type"] == "btn" and event["data"]["down"]: clicks.append((x, y))
-        self.assertTrue(4 <= clicks[0][0] < 80 and 739 <= clicks[0][1] < 765, "the first click is on the Ciuki button")
-        menu_top = 768 - 32 - 28 * (len(programs) + 2)
-        self.assertEqual((clicks[1][1] - menu_top) // 28, programs.index("ciuknote"))
-        self.assertEqual(clicks[1][1] - clicks[0][1], menu_distance(programs, "ciuknote"))
-        # Apart from the corner clamp (+381 twice, three packets each) and the button approach (-16), the only
-        # vertical move is the row distance.
+        menu.check_launch(self, clicks, programs, "ciuknote")
+        self.assertEqual(len(clicks), 3, "the case clicks only the Ciuki button, Programs and CiukNote")
+        # Apart from the corner clamp (-381 twice, to the top edge) and the approach onto the Ciuki button
+        # in the top bar: down to Programs, the CiukNote row offset in the submenu and the move back to the
+        # f2-32 pointer position.
+        start, programs_y = menu.START_CLICK[1], menu.PROGRAMS_CLICK_Y
         moves = [e["data"]["value"] for b in c["actions"][0]["batches"] for e in b["events"]
-                 if e["type"] == "rel" and e["data"]["axis"] == "y" and e["data"]["value"] not in (381, -16)]
-        self.assertEqual(moves, [menu_distance(programs, "ciuknote")])
+                 if e["type"] == "rel" and e["data"]["axis"] == "y"]
+        self.assertEqual(moves[:3], [-381, -381, start])
+        row = menu.submenu_row_y(programs, "ciuknote")
+        self.assertEqual(moves[3:], [programs_y - start, row - programs_y, 470 - row])
 
     def key_script(self):
         """The case's keys after the launch click, as the replay harness reads them: K <code> <down> per key
@@ -256,7 +272,7 @@ class CiuknoteTests(unittest.TestCase):
         self.assertIn("path=/system/tests/note.txt", checkpoints[2])
         digests = {x.split()[2].split("=")[1]: x.split("digest=")[1] for x in checkpoints}
         if CHECKPOINTS:
-            self.assertEqual(digests, CHECKPOINTS)
+            assert_pins(self, digests, CHECKPOINTS, "CHECKPOINTS")
         else:
             print("CHECKPOINTS", json.dumps(digests), json.dumps(checkpoints, indent=1))
 

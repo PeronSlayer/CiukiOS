@@ -134,13 +134,21 @@ static void test_video_bios_ports(void)
     port_out(v, 0x3C7, 1, 0x41);
     CHECK(port_in(v, 0x3C9, 1) == 12 && port_in(v, 0x3C9, 1) == 34 && port_in(v, 0x3C9, 1) == 56);
     CHECK((port_in(v, 0x3DE, 4) >> 16) == 0xFFFF);
-    /* Input status 1: vertical retrace in the last three ticks of each frame. */
-    uint8_t a = dosvm_vga_status(v, 0), b = dosvm_vga_status(v, 1);
-    CHECK(a != b && (a | b) == 1 && dosvm_vga_status(v, DOSVM_FRAME_TICKS - 1) == 9 &&
-          dosvm_vga_status(v, DOSVM_FRAME_TICKS * 7 + DOSVM_FRAME_TICKS - DOSVM_RETRACE_TICKS) == 9);
-    uint64_t ticks = g_ticks; g_ticks = DOSVM_FRAME_TICKS * 100 + DOSVM_FRAME_TICKS - 2;
-    CHECK(port_in(v, 0x3DA, 1) == 9); g_ticks = DOSVM_FRAME_TICKS * 100;
-    CHECK(!(port_in(v, 0x3DA, 1) & 8)); g_ticks = ticks;
+    /* Input status 1 (f3-06): each frame of the programmed timing ends with
+     * the vertical blank, display disabled before and after the sync, each
+     * region a fixed number of reads; bit 0 alternates in the active period. */
+    CHECK(vga_frame_us(&v->vga) == 14268);                       /* 13h: 449 lines at 31.469 kHz, 70.09 Hz */
+    uint64_t ticks = g_ticks; g_ticks = 1000;
+    for (unsigned i = 0; i < 16; i++) CHECK(port_in(v, 0x3DA, 1) == 1);
+    for (unsigned i = 0; i < 4; i++) CHECK(port_in(v, 0x3DA, 1) == 9);
+    for (unsigned i = 0; i < 16; i++) CHECK(port_in(v, 0x3DA, 1) == 1);
+    uint8_t a = (uint8_t)port_in(v, 0x3DA, 1), b = (uint8_t)port_in(v, 0x3DA, 1);
+    CHECK(a != b && (a | b) == 1);                               /* active: horizontal blanking */
+    CHECK(v->video_vblank_us > 1000000 && v->video_vblank_us <= 1000000 + 14268);
+    for (unsigned i = 0; i < 1000; i++) CHECK(!(port_in(v, 0x3DA, 1) & 8)); /* no time, no frame */
+    g_ticks = (v->video_vblank_us + 999) / 1000;
+    CHECK(port_in(v, 0x3DA, 1) == 1 && v->video_blank == 1);
+    g_ticks = ticks;
     /* ROM fonts: ASCII from the console bitmap, CP437 letters/boxes/blocks drawn. */
     const uint8_t *rom16 = P2V(v->frames[0xF2]), *rom8 = P2V(v->frames[0xF3]);
     CHECK(rom16['A' * 16 + 5] == font_cfn_regular[95 + (('A' - 32) * 16 + 5) * 2 + 1] && rom16['A' * 16 + 5]);
@@ -201,10 +209,21 @@ static void test_video_faults(void)
     g_current = v->task; v->continuation = 0x12345678;
     f = vf(0x2F42, 0, 0, 0); f.tf.cs = 0x3000; f.es = 0xB800; f.tf.edi = 4; f.tf.vector = 14; f.tf.err = 7;
     f.tf.user_ss = 0x2000; f.tf.user_esp = 0x100;
-    unsigned faults = v->video_faults;
+    unsigned faults = v->video_faults, burst = v->video_burst;
     fake_cr2 = 0xB8004;
-    CHECK(dosvm_trap(&f.tf) && f.tf.eip == 3 && cvga_peek_vram(&v->vga, 0xB8004) == 'B' &&
-          v->info.state < DOSVM_STOPPING && v->video_faults == faults + 1);
+    /* f3-06 burst: after the faulting store the trap path also runs REP STOSW
+     * (CX=0) and the aperture load, then stops before the FLD it cannot
+     * decode; only the first instruction counts as a fault. */
+    CHECK(dosvm_trap(&f.tf) && f.tf.eip == 8 && cvga_peek_vram(&v->vga, 0xB8004) == 'B' &&
+          (f.tf.eax & 0xFFFF) == 0x2F42 && v->info.state < DOSVM_STOPPING && v->video_faults == faults + 1 &&
+          v->video_burst == burst + 2);
+    sti();
+    /* A REP STOSW longer than the string budget: its progress is committed
+     * and the burst stops on it, as an interrupted REP. */
+    f.tf.eip = 0; f.tf.edi = 4; f.tf.ecx = 5000; f.tf.eax = 0x0743; f.tf.vector = 14; burst = v->video_burst;
+    CHECK(dosvm_trap(&f.tf) && f.tf.eip == 3 && (f.tf.ecx & 0xFFFF) == 5000 - VIDEO_STRING_BUDGET &&
+          (f.tf.edi & 0xFFFF) == 4 + VIDEO_STRING_BUDGET * 2 && v->video_burst == burst + 1 &&
+          cvga_peek_vram(&v->vga, 0xB8004 + VIDEO_STRING_BUDGET * 2 - 2) == 0x43);
     sti();
     fake_cr2 = 0x500000; f.tf.eip = 0;
     if (!setjmp(guest_return)) { dosvm_trap(&f.tf); CHECK(false); }
@@ -710,9 +729,91 @@ static void test_client_typing(void)
     printf("DOS VM window typing: runner keys through syscall 72, 8042, IRQ1 and the ROM INT 9 into a blocked INT 16h AH=00h PASS\n");
 }
 
+/* f3-06 QEMU finding (wolf3d-qemu-t23, 2026-10-12): Wolf3D's SignonScreen
+ * calls VW_SetScreen(0x8000,0) before SD_Startup installs its timer, so id's
+ * VL_SetScreen (WOLFSRC/ID_VL_A.ASM) can leave its loop only through five
+ * successive 3DAh reads with display disabled (bit 0) and no vertical sync
+ * (bit 3): the bottom of the screen. The VM was found spinning there with
+ * AX=5201 CX=0002 DX=03DA. Here every IN AL,DX is a real #GP through
+ * dosvm_trap and v86_emulate to the production port handler, with the
+ * guest's IF clear, and the host tick advances once per `rate` reads. */
+static unsigned retrace_rate, retrace_reads;
+static uint8_t retrace_in(struct dosvm *v, struct v86_frame *f)
+{
+    static const uint8_t in_al_dx = 0xEC;
+    f->tf.cs = 0x3855; f->tf.eip = 0x6E; f->tf.edx = 0x3DA;
+    CHECK(device_insn(v, f, 0x5200, &in_al_dx, 1) && f->tf.eip == 0x6F);
+    if (++retrace_reads % retrace_rate == 0) g_ticks++;
+    return (uint8_t)f->tf.eax;
+}
+/* VL_SetScreen's wait; returns the reads it took, 0 when over limit. */
+static unsigned retrace_set_screen(struct dosvm *v, struct v86_frame *f, unsigned limit)
+{
+    unsigned start = retrace_reads;
+waitdisplay:
+    while (retrace_in(v, f) & 1) if (retrace_reads - start > limit) return 0;
+loop:   /* sti; jmp $+2; cli; cmp [timecount],cx: TimeCount stays 0 */
+    for (unsigned k = 0; k < 5; k++) {
+        uint8_t al = retrace_in(v, f);
+        if (retrace_reads - start > limit) return 0;
+        if (al & 8) goto waitdisplay;
+        if (!(al & 1)) goto loop;
+    }
+    return retrace_reads - start;                                /* @@setcrtc */
+}
+/* VL_WaitVBL(1): no sync, then sync. */
+static bool retrace_wait_vbl(struct dosvm *v, struct v86_frame *f, unsigned limit)
+{
+    unsigned start = retrace_reads;
+    while (retrace_in(v, f) & 8) if (retrace_reads - start > limit) return false;
+    while (!(retrace_in(v, f) & 8)) if (retrace_reads - start > limit) return false;
+    return true;
+}
+/* Sync starts per second over 140 consecutive VL_WaitVBL(1) calls. */
+static unsigned retrace_rate_hz(struct dosvm *v, struct v86_frame *f)
+{
+    CHECK(retrace_wait_vbl(v, f, 100000));
+    uint64_t t0 = g_ticks;
+    for (unsigned i = 0; i < 140; i++) CHECK(retrace_wait_vbl(v, f, 100000));
+    return (unsigned)((140000u + (g_ticks - t0) / 2) / (g_ticks - t0));
+}
+static void test_video_retrace(void)
+{
+    struct dosvm *v = create();
+    CHECK(!dosvm_boot(v)); v->info.dos_ready = true;
+    struct v86_frame f = vf(0x0013, 0, 0, 0);
+    CHECK(!dosvm_vga_bios(v, &f));                               /* VL_SetVGAPlaneMode: INT 10h AX=0013h */
+    port_out(v, 0x3C4, 2, 0x0604); port_out(v, 0x3D4, 2, 0x0014); port_out(v, 0x3D4, 2, 0xE317); /* VL_DePlaneVGA */
+    port_out(v, 0x3C4, 2, 0x0F02); port_out(v, 0x3D4, 2, 0x1413);                                /* map mask, line width 40 */
+    f = (struct v86_frame){0}; f.tf.user_ss = 0x529F; f.tf.user_esp = 0xFFBA; f.tf.eflags = V86_VM | V86_IF | 2;
+    v->monitor.vif = false;                                      /* CLI, as in VL_SetScreen */
+    g_ticks = 5000; retrace_reads = 0;
+    const unsigned rates[] = {50, 5, 1};                         /* reads per host millisecond */
+    for (unsigned i = 0; i < 3; i++) {
+        retrace_rate = rates[i];
+        uint64_t t0 = g_ticks;
+        unsigned reads = retrace_set_screen(v, &f, 200000);
+        printf("VL_SetScreen(0x8000,0) mode Y IF=0 rate=%u reads/ms: %u reads, %llu ms\n",
+               rates[i], reads, (unsigned long long)(g_ticks - t0));
+        CHECK(reads && g_ticks - t0 <= 30 + 40 / rates[i]);     /* two frames plus one blank */
+    }
+    retrace_rate = 50;
+    unsigned hz13 = retrace_rate_hz(v, &f);
+    v->monitor.vif = true;                                       /* the guest's IF does not matter */
+    unsigned hz13_if = retrace_rate_hz(v, &f);
+    f = vf(0x0012, 0, 0, 0); CHECK(!dosvm_vga_bios(v, &f));
+    f = (struct v86_frame){0}; f.tf.user_ss = 0x529F; f.tf.user_esp = 0xFFBA; f.tf.eflags = V86_VM | V86_IF | 2;
+    unsigned hz12 = retrace_rate_hz(v, &f);
+    printf("VL_WaitVBL rate: mode Y %u Hz (IF=0), %u Hz (IF=1), mode 12h %u Hz\n", hz13, hz13_if, hz12);
+    CHECK(hz13 == 70 && hz13_if == 70 && hz12 == 60);
+    destroy(v, true); empty();
+    printf("DOS VM video: Wolf3D VL_SetScreen/VL_WaitVBL loops on 3DAh through dosvm_trap, 70/60 Hz from the programmed timing, IF-independent PASS\n");
+}
+
 static void test_video(void)
 {
     test_video_bios_ports();
+    test_video_retrace();
     test_video_faults();
     test_video_presenter();
     test_video_goldens();

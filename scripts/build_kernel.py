@@ -194,6 +194,8 @@ def main() -> int:
     audio_payload = OUT / "audio-payload.elf"
     run(["nasm", "-f", "bin", "-I", str(OUT) + "/",
          str(ROOT / "tests/host/audio/payload.asm"), "-o", str(audio_payload)])
+    # Quiet-boot splash: the original Ciuki photograph (docs/boot.md).
+    splash = runpy.run_path(str(ROOT / "scripts/convert_splash.py"))["build"](OUT / "splash.rgb565")
     # f4-02 optical registration is collected from probes/f4_probes_media.c
     # below and retained by .f4probes in the canonical linker script.
     if not (SRC / "probes/f4_probes_media.c").is_file():
@@ -216,6 +218,7 @@ def main() -> int:
              f'-DCIUKI_DESKTOP_PAYLOAD_BIN="{desktop_payload}"',
              f'-DCIUKI_FILES_PAYLOAD_BIN="{files_payload}"',
              f'-DCIUKI_AUDIO_PAYLOAD_BIN="{audio_payload}"',
+             f'-DCIUKI_SPLASH_BIN="{splash}"',
              f"-DCIUKI_BUILD_EPOCH={epoch}LL",
              f"-DCIUKI_BUILD_DIRTY={bdirty}", "-I", str(SRC / "include"),
              "-c", str(c), "-o", str(o)])

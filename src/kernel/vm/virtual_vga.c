@@ -380,6 +380,16 @@ int cvga_direct_plane(const cvga_state *v)
     }
 }
 
+int cvga_direct_linear(const cvga_state *v)
+{
+    if ((v->seq[4] & 0x0e) != 0x0e || !v->enable || !(v->misc & 2) ||
+        (v->seq[2] & 15u) != 15u || (v->gc[6] & 0x0f) != 0x05 ||
+        (v->gc[5] & 0x7b) != 0x40 || (v->gc[1] & 15u) || v->gc[3] ||
+        v->gc[8] != 0xff || !(v->crtc[0x14] & 0x40) || (v->crtc[0x17] & 0x40)) return 0;
+    cvga_geometry g;
+    return cvga_get_geometry(v, &g) && !g.text && g.width == 320 && g.height == 200;
+}
+
 void cvga_write_vram(cvga_state *v, uint32_t address, uint8_t value)
 {
     uint32_t offset;

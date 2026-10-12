@@ -10,6 +10,7 @@
 #include <ciuki/process.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/dosvm.h>
+extern int32_t power_syscall(uint32_t action) __attribute__((weak));
 extern int32_t dosvm_client_syscall(struct trap_frame *) __attribute__((weak));
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
@@ -123,6 +124,10 @@ void syscall_dispatch(struct trap_frame *tf)
     case CIUKI_SYS_DOSVM:
         /* Weak like dosvm_trap: host harnesses link syscall.c without the VM. */
         r = dosvm_client_syscall ? dosvm_client_syscall(tf) : -ENOSYS;
+        break;
+    case CIUKI_SYS_POWER:
+        /* Weak: host harnesses link syscall.c without core/power.c. */
+        r = power_syscall ? power_syscall(tf->ebx) : -ENOSYS;
         break;
     case CIUKI_SYS_UNAME:
         r = file_syscall(tf) ? (int32_t)tf->eax : -ENOSYS;

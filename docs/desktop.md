@@ -1,8 +1,383 @@
 # F2 ring-3 desktop and client protocol
 
+## f2-34 resize research (2026-10-12)
+
+Before implementation, the existing fixed CONFIGURE/client surfaces, frame hit
+testing and toolkit layout functions were checked against Microsoft's
+[WM_SIZING](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-sizing)
+(eight border/corner drag directions) and
+[WM_GETMINMAXINFO](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-getminmaxinfo)
+(separate tracking limits and maximized geometry). Ciuki uses client dimensions
+for limits and keeps the 3 px border and 24 px caption. Toolkit resize passes
+preserve model/widget state; anchors grow content and move bottom bars, and a
+layout hook handles application-specific geometry.
+
+The existing `execution-abi.md` surface/channel contract and
+`proc/surface.c:surface_map` enforce read-only rights on every received surface.
+The lead decision of 2026-10-12 uses client allocation instead: no kernel or
+syscall ABI change. The [Wayland surface specification](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_surface)
+provides the reference for attaching client-owned buffers, applying a new size
+atomically and retaining the old buffer until its release. Ciuki uses its own
+CONFIGURE/DAMAGE round trip for those roles. Pending size requests supersede
+unsent replacements; an already sent replacement completes before allocating
+another. The desktop maps all received attachments read-only.
+
+Merge verification (2026-10-12): the [POSIX mmap specification](https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html)
+defines `MAP_FAILED` as mapping failure. `desk_receive` retains its check before
+replacing the current surface and its ordinary peer cleanup on failure. Both
+ordinary DAMAGE and a valid resize DAMAGE end the launched program's
+`awaiting_frame` hold; the resize path still maps, swaps, releases the old
+surface and sends COMMITTED. CREATE_WINDOW alone does not release held input.
+
+## Protocol v2.1: client-owned resize surfaces (f2-34)
+
+HELLO negotiates major 2 (header byte 0) and minor 1 (header byte 2).
+Header byte 3 stays reserved. Every later message uses that pair. v1 and v2.0
+clients retain their existing lengths, zero byte 2, fixed surfaces and close
+behaviour. Other v2 opcodes retain their fields and directions under v2.1.
+The shared header remains the SDK's `ciuki/desktop.h`; no syscall record or
+kernel mapping right changes.
+
+| Opcode | Direction | v2.1 bytes | Extension |
+| --- | --- | ---: | --- |
+| CREATE_WINDOW | Client → desktop | 44+n | Existing title@16, then seven u32 fields@16+n: flags, minimum w/h, maximum w/h, step w/h; exactly one client-created surface fd |
+| CONFIGURE | Desktop → client | 20 | w@4, h@8, serial@12, flags@16; zero fds |
+| DAMAGE | Client → desktop | 24 | Existing rectangle@4, configure serial@20; zero fds for ordinary damage (serial 0), exactly one replacement surface fd for a resize acknowledgement (nonzero serial) |
+
+CREATE's only capability is `DESK_RESIZABLE=1`. Fixed windows send all seven
+fields as zero. Resizable limits are positive client dimensions, at most 2048,
+contain the initial size and use positive steps. Tracking rounds down to a
+step relative to the minimum. Swap DAMAGE must cover the entire replacement
+surface and its format/stride/page allocation must pass the existing surface
+validator. The window also enforces its advertised limits and steps. Malformed
+messages, invalid serials, attachment types or changed versions close only the
+peer, releasing its descriptors and mappings.
+
+Initial CONFIGURE has serial 0 and `DESK_CONFIGURE_COMMITTED=1`. A resize
+proposal has a new nonzero serial and flags 0. The frame follows pointer motion;
+the desktop clips the old surface into the requested content well, filling
+newly exposed pixels with the theme's window background. Both old and new frame
+bounds (including the shadow) are damaged. There is no scaling, desktop-side
+allocation or out-of-bounds read of the old surface.
+
+The toolkit allocates a writable replacement in the same format, calls
+`du_resize` (anchors then the app layout hook), renders its whole tree and
+sends full DAMAGE with the serial and the attachment. The desktop maps it
+read-only, atomically replaces its surface, unmaps/closes its old reference and
+damages the window. CONFIGURE with the acknowledged serial, new dimensions and
+COMMITTED then permits the client to unmap/close/free its old surface/back
+buffer. The client never writes the previous surface after the swap send.
+
+Only one replacement is allowed per window. A newer proposal discards an
+unsent replacement before another is allocated. Once the send succeeds, new
+proposals are coalesced without allocation until COMMITTED arrives; an older
+proposal already in flight can complete while the newest frame geometry stays
+visible. Committed serials increase and cannot exceed the latest issued serial.
+Unsent desktop proposals coalesce; under queue backpressure the latest proposal
+and the surface confirmation are retained separately. Client surface/back
+buffer failures or peer closure take the ordinary cleanup path. Surface
+allocations return from two to one after each round trip, and zero at teardown.
+
+The 3 px frame has a 7 px exterior grab margin, eight resize directions and a
+visible bottom-right grip. The pointer uses the existing arrow (no resize
+cursor family exists). The title zoom button toggles the saved user frame and
+the work area between the 32 px top bar and 32 px taskbar, subject to limits
+and steps. Title double-click retains windowshade. Moving/resizing a zoomed
+window exits zoom; fixed clients and built-in About/Run/Shut Down windows do
+not zoom or resize. DOS Box keeps its fixed 640×480 client surface.
+
+`du_window_open_resizable` advertises per-app minimums, a 2048×2048 maximum and
+unit steps: Files 600×360, CiukNote 440×280, Task Manager 400×420, Control Panel
+its initial page size, Help 440×280 and Image Viewer 320×240. Calculator,
+Character Map, Clock/Calendar and Volume Control keep their fixed control
+layouts. Layout preserves document/model state, list selection, caret/focus,
+dialog entries and timers; content grows and bottom bars retain their height.
+
+Host evidence: `deskui_test` exercises unsent supersession, EAGAIN, deferred
+in-flight proposals, read-only transferred descriptors, EOF and allocation/map
+failures. `desktop_test` checks v2.1 wire rejection rules, borders/corners,
+tracking steps, zoom restore, windowshade, fixed clients and backlog recovery.
+`test_window_resize.py` replays six Files swaps through the production client
+and desktop, at 600×380 and 760×520 in all three themes. It also exercises zoom to the full work area and restore across windowshade.
+It compares every content pixel with the toolkit frame, incremental redraw with
+a complete composition, and surface/descriptor/mapping counts with their baseline.
+`CIUKI_RESIZE_FRAMES` optionally saves the six host compositor PNGs. Existing
+QMP app/gate scenarios remain unchanged; QEMU evidence belongs to the lead.
+Owner decision 2026-10-12 (f2-35): native applications live in `/Programs`,
+with `PATH=/Programs` and `HOME=/Documents`. The Documents shortcut and recent
+list use `/Documents` and `/Documents/recent.lst`. The canonical FAT32 image
+preserves the display names `Programs`, `Documents`, `System` and `Games`;
+runtime `/system` paths and `C:\GAMES\CIUKIGAM.IMG` retain case-insensitive
+lookup. `/tmp`, synthetic `/dev` and `/mnt`, and the drive mapping are unchanged.
+See [the POSIX namespace contract](design/posix-subset.md#posix-paths-over-the-drive-vfs).
+
+## System icons: the Tango store (2026-10-12)
+
+The owner asked for a complete copyright-free icon set as the default and only
+style. Tango Icon Theme 0.8.90 (Public Domain, `assets/icons/`) is that set:
+the desktop, libdeskui and its applications now draw every icon from one file,
+`/system/icons/tango.cis`, instead of compiled-in sprites. Format, conversion,
+size and pinned hashes: [`assets/icons/README.md`](../assets/icons/README.md).
+
+- **Pipeline.** `apps/desktop/convert_icons.py` (standard library only) builds
+  the store from the pinned archive: all 645 PNG members (16, 22, 32 px; 48 px
+  derived by an integer area filter), 246 names, 726,504 bytes. `make desktop`
+  writes `build/apps/desktop/tango.cis` and refuses a SHA-256 other than the one
+  in `apps/desktop/tango-store.json` (which also records the archive and every
+  member hash); the desktop manifest records the store under `icons`, and
+  `scripts/build_image.py` installs it in `/system/icons/` with `TANGO.TXT`
+  (upstream COPYING), `AUTHORS.TXT` and `CREDITS.TXT`.
+- **API** (`apps/libdeskui/deskui.h`, `icons.c`):
+  `const struct du_icon *du_icon(const char *tango_name, unsigned size)`
+  returns `{size, argb}` (straight-alpha AARRGGBB) for a Tango name
+  (`"folder"` or `"places/folder"`) at 16, 22, 32 or 48 px, or NULL.
+  `du_icon_argb()` returns the pixel pointer only, `du_icon_draw(canvas, x, y,
+  icon, mode)` alpha-blends it with the existing normal/selected/ghost/disabled
+  modes, `du_icon_for(object, size)` looks up a CiukiOS object.
+  `du_icon_paths()` selects other files before the first lookup (host tests use
+  `-DDU_ICON_STORE_PATH`/`-DDU_ICON_PORTRAIT_PATH`), `du_icon_count()`,
+  `du_icon_store_name()` and `du_icon_notice()` list the store and its licence
+  notice. The reader keeps only the 24 KB index, decodes an icon on its first
+  use (QOI chunk stream or area filter, FNV-1a checked) and caches it for the
+  process lifetime; it is integer-only (the build's opcode audit covers it) and
+  not thread-safe. A missing store gives NULL icons, never a failure.
+  The former sprite blitter `du_icon(canvas, x, y, argb, size, mode)` is renamed
+  `du_icon_blit` (same behaviour); branches that still call the old name fail to
+  compile and need that one-word change.
+- **Identity.** `DU_ICON_CIUKI` (`"ciuki"`) is the approved portrait conversion
+  (`/system/assets/ciuki-portrait.xrgb`, pinned by `convert_portrait.py`)
+  reduced with the same area filter (identical to Files' box filter at 16 and
+  32 px). Computer, About, the Start (Ciuki) button and `device:computer` map
+  to it; the compositor keeps drawing its own nearest-neighbour portrait for the
+  Ciuki button and About, Files and CiukNote keep their portrait callbacks.
+- **Map** (`apps/libdeskui/icon_map.c`, 361 entries, keys `<kind>:<object>`;
+  Tango names follow the [Icon Naming Specification](https://specifications.freedesktop.org/icon-naming-spec/latest/)
+  as of Tango 0.8.90, and only names present in the archive are used):
+  programs (`files` system-file-manager, `ciuknote` accessories-text-editor,
+  `tasks` utilities-system-monitor, `dosbox` utilities-terminal, `demo`
+  preferences-desktop-peripherals, `hello` face-smile, `lua`
+  text-x-script, `libc_smoke` applications-system, `desktop`
+  user-desktop, others application-x-executable); Start menu entries (settings,
+  control panel, run, find, help, about, shut down, restart, log out, lock and
+  categories); toolbar and menu actions (navigation, edit, document, view,
+  formatting, media); places (computer, home, desktop, drives, removable,
+  floppy, optical, network, trash); file types by extension (folders, text,
+  configuration, HTML, scripts and sources, DOS `.COM`/`.EXE`/`.BAT`, images,
+  audio, video, archives, fonts, disk images, office documents, certificates,
+  unknown); status (volume levels, battery, network, updates, busy); message
+  box icons (Tango 0.8.90 has no dialog-question; help-browser is used, as
+  before); devices; settings items; emblems; window-manager buttons for a
+  toolkit that wants them. `du_icon_name()` falls back to a kind's `*` entry;
+  `du_icon_file(name, directory, executable)` picks folder, then a native
+  executable's `/Programs` program icon, then the extension, then unknown.
+- **Users.** Files (toolbar, address bar, places, tree, list/icon views,
+  properties), the open/save dialog (file-type icons), message boxes, Task
+  Manager (Applications rows show the owning process's program icon), and the
+  desktop's Start menu and taskbar buttons (through the `struct desktop` hook
+  `icon`, set in `desktop.c`; host harnesses that leave it NULL draw no menu
+  icons). `apps/desktop/shell_icons.h` is no longer included anywhere.
+- **Tests.** `tests/host/desktop/test_icons.py` pins the store and decoded
+  pixels, cross-checks the PNG decoder with Pillow, round-trips the Python and
+  C readers against the archive, resolves every map entry at four sizes,
+  rejects corrupt stores, checks the licence notice and renders the 32 px
+  contact sheet `build/host/icons/contact-sheet-32.png`. Re-pinned host frames
+  (Files, open dialog, Task Manager) were reviewed as images on 2026-10-12.
+## Desktop shell (wt/desktop-shell, 2026-10-12)
+
+The shell turns the f2-30 launcher into a Mac OS 9 Platinum x Windows 98/ME
+style desktop. It lives in `apps/desktop/shell.c` (Start menu, taskbar
+buttons and tray, desktop icons, built-in windows, shortcuts),
+`settings.c` (desktop.cfg), `wallpaper.c` + `image.c` (wallpapers),
+`keymap.c` (keyboard layouts) and the OS side in `desktop.c`
+(`shell_service`: settings file, wallpaper files, mixer, power, Run). The
+shell draws with the libdeskui primitives (`du_fill`, `du_edge`, `du_text`,
+`du_icon`) on the compositor's frame, so the toolkit's colours and metrics
+apply; `desk_theme_apply()` (weak, in shell.c) is the single place to call the
+toolkit's `du_theme_*` once it exists. shell.c does no file or kernel I/O.
+The non-shell compositor path (crash-isolation gate, `plain` digest) is
+unchanged; compositor.c references the shell through weak symbols so the demo
+and the libdeskui programs, which reuse compositor.c, link without it.
+
+- **Start menu** (the Ciuki button at the left end of the top bar: the
+  approved portrait and "CiukiOS" on a rounded gradient face, pressed in while
+  the menu is open; the menu drops below the bar, submenus open to the
+  right): Programs (CiukNote,
+  Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
+  Accessories and Games submenus, then a Developer submenu with Hello,
+  libc_smoke and any unknown `/Programs` program),
+  Documents (recent files, My Documents, Clear Recent Documents), Settings
+  (Control Panel and its pages, Task Manager), Help (Keyboard Shortcuts, About
+  CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
+  keyboard works (arrows, Enter, Esc). A vertical banner shows the portrait
+  and "CiukiOS". Menus are 30 px (top) and 22 px rows, all with 16 px icons.
+- **Taskbar:** task buttons (icon, title, pressed state for the active
+  window; right click: Restore, Minimize, Close) from x 4, at most 160 px
+  each, and a tray with a volume icon and the clock (24/12 h, optional
+  seconds; the date as a tooltip after 0.6 s). The top bar keeps the identity
+  colours and shows the Ciuki button, the focused window's title (or a
+  notice) and the date.
+- **Volume:** the supervisor delegates the writable `/dev/mixer` handle to the
+  desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
+  applies `MIXER_SET_MASTER` through it; without the handle the popup shows
+  the public read-only state, without `/dev/mixer` "No audio device".
+- **Desktop icons:** Computer (Files at Computer; the icon carries the Ciuki
+  portrait), Documents (Files at `C:\Documents`), DOS Box, CiukNote, Control Panel and
+  Trash (a placeholder: nothing in CiukiOS keeps deleted files yet). Click
+  selects, a double click (desktop.cfg `double_click_ms`) or Enter opens, right
+  click opens Open/Properties; the background menu has Arrange Icons, Refresh,
+  Display Settings... and Properties.
+- **Built-in windows** (internal clients, framed by the compositor): About
+  CiukiOS (tabs General, System from call 70's system record and `uname`,
+  Credits), Run (a `/Programs` program and up to six arguments, double quotes
+  group), Shut Down CiukiOS (Restart, Shut Down, Cancel) and message boxes.
+- **Shortcuts:** Win (tap) or Ctrl+Esc opens the Start menu; Alt+Tab and
+  Shift+Alt+Tab switch windows with an overlay; Alt+F4 sends the v2
+  CLOSE_REQUEST to the active window (the Shut Down window when none is
+  active). Alt is held back until the next key, so a program never sees an Alt
+  press for a chord the desktop consumed; a lone Alt tap still reaches it.
+- **Power:** Shut Down calls `ciuki_power(action)` (SDK `ciuki/power.h`,
+  kernel call 73; 1 reboot, 2 power off) after saving desktop.cfg. The SDK
+  definition is weak; with ENOSYS the desktop says that the kernel has no
+  power interface yet.
+- **Runtime gate scenarios** (F12/F11/F10/F9) keep the built-in defaults, never
+  read or write desktop.cfg and never touch the mixer; the f2-desktop scripts
+  reach the programs through Start, Programs and the program row.
+
+### /system/settings/desktop.cfg
+
+Plain `key=value` lines, `#` comments; unknown keys are kept verbatim (for
+example a future theme engine's own keys). Invalid values keep their defaults
+and are counted in a top-bar notice. The desktop writes the file through
+`desktop.new` + rename; the Control Panel merges its keys into the current
+file before writing it and then asks the desktop to apply it.
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `version` | 1 | 1 |
+| `theme` | `Platinum`, `Ciuki Blue`, `Classic 98` | `Platinum` |
+| `wallpaper` | `ciuki` (the approved portrait on the desktop colour, exactly where the f2 compositor draws it), `none`, `builtin:<id>` (`dawn`, `pinstripe`, `deepblue`, `twilight`, `linen`, `blueprint`), or an absolute path to a PNG, JPEG or BMP | `/system/wallpapers/Ciuk2.png` |
+| `wallpaper_mode` | `center`, `stretch`, `tile`, `fit`, `fill` | `fill` |
+| `desktop_color` | six hex digits RRGGBB | `375564` |
+| `clock_24h` | 0/1 | 1 |
+| `clock_seconds` | 0/1 | 0 |
+| `desktop_icons` | 0/1 | 1 |
+| `mouse_speed` | 1..10 (5 = one pixel per count; 2/8 .. 20/8) | 5 |
+| `double_click_ms` | 200..900 | 500 |
+| `keyboard` | `us`, `it` | `us` |
+| `recent` | absolute path; repeated, newest first, at most 8 | none |
+
+### Wallpapers
+
+The built-in wallpapers are original CiukiOS designs computed at the screen's
+resolution by integer code (soft platinum/blue gradients with ordered dither,
+pinstripes, a linen weave, a blueprint grid); no image file is shipped for
+them and nothing third-party is drawn. Image files are decoded with the
+vendored stb_image 2.30 (`third_party/stb`, MIT or Public Domain; notice
+installed as `/system/licenses/stb_image.txt`): PNG, baseline and progressive
+JPEG, and uncompressed BMP (4/8/16/24/32 bit; stb_image reads neither 1-bit nor RLE BMP). Images above 4096 x 4096,
+16 Mpixel or 24 MiB are refused. `center` (1:1, centred, cropped or banded),
+`stretch` (non-uniform to the area; area average down, bilinear up), `fit`
+(uniform scale inside the area, bands in the desktop colour) and `fill`
+(uniform scale max(area width / image width, area height / image height), so
+the image covers the area, with the overflow cropped equally on both sides;
+same resampling as `stretch`) use the area between the bars (1024 x 704 at
+1024 x 768); `tile` starts at the top-left corner of the screen. The mode
+names keep their order and values (`fill` was appended), so files written
+before `fill` existed still parse. The image installs the owner's three
+adaptive Ciuki scenes (`assets/wallpapers/ciuki`, 1448 x 1086 PNG, the 0.8-line
+artwork extended with scenery so that a centred, aspect-preserving fill keeps
+the dog and the lettering) in `/system/wallpapers`; `Ciuk2.png` with `fill` is
+the default (owner decision 2026-10-12). At 1024 x 768 the 4:3 scene scales by
+1024/1448 to 1024 x 768 and loses 32 rows (45 source rows) at the top and at
+the bottom of the work area, nothing at the sides. The Control Panel lists
+them with any PNG/JPEG/BMP files the owner copies there; "Ciuki portrait" is
+the approved portrait on the desktop colour.
+**The Windows ME bitmaps of the 0.8 line (`third_party/win_bg`, local and
+git-ignored, Microsoft copyright) are never added to the repository or to the
+image;** the desktop only shows them if the owner copies them into
+`/system/wallpapers` himself (they are 8/4-bit tiles; choose Tile).
+
+### Control Panel (`/Programs/control`)
+
+A libdeskui program (500 x 420) with tabs Display (theme list with preview,
+wallpaper list with preview, Center/Tile/Stretch/Fit/Fill, six desktop colours,
+desktop icons on/off), Mouse (pointer speed and double-click speed, applied
+by the desktop), Keyboard (US or Italian), Sounds (master volume and mute
+through the desktop's mixer handle), Date & Time (the clock and the 24 h and
+seconds options; setting the clock is not offered because the ABI has no
+clock-setting call) and System (portrait, version, build, memory). Every
+change is saved and applied at once. `--panel=display|mouse|keyboard|sounds|
+datetime|system` selects the first tab (the Settings menu uses it).
+
+v2 opcode for it, client to desktop, version 2 only:
+
+| Opcode | Payload bytes | Fields |
+| --- | ---: | --- |
+| SETTINGS=21 | 24 | u32 serial@4, request@8 (1 reload desktop.cfg: the other fields zero; 2 master volume), left@12, right@16 (0..100), mute@20 (0/1) |
+
+The desktop answers TASK_RESULT (request 21): 0, EPERM for any client it did
+not launch as `/Programs/control`, ENODEV for request 2 without the mixer handle.
+
+### Keyboard layouts
+
+`keymap.c` maps set-1 scan codes for US and Italian (the KBDIT engraving:
+`ò@ à# è[ +]`, AltGr+E = euro). The desktop's own text field (Run) uses the
+selected layout at once, and every program the desktop launches receives
+`CIUKI_KEYMAP=us|it`. libdeskui's `du_key_char` still uses its US table:
+wiring it to `ciuki_keymap_char` (and UTF-8 insertion of non-ASCII
+characters) is left to the toolkit owner.
+
+### Icons
+
+Each item names its Tango 0.8.90 icon; `desk_shell_icon(name, size)` returns
+it from the Tango store (`/system/icons/tango.cis`, through the desktop's
+icon hook) at a size the store holds. One size per place (owner feedback
+2026-10-12: one fixed, coherent icon set): every menu (the Start menu too)
+16 px, taskbar buttons, title bars and the tray 16 px, built-in windows,
+message boxes and Alt+Tab 32 px, desktop icons 48 px (Tango 0.8.90 has no
+48 px PNGs: the store's 48 px entries are the area filter of the 32 px
+artwork), Files' toolbar 22 px. Tango draws some icons differently at 16 px
+and at 22/32 px (`preferences-desktop` is a window grid at 16 px and a panel
+at 32 px); keeping one size per place keeps each place consistent. The shell's
+program table, Start menu rows, desktop icons and `catalog.h` use the same
+Tango names as `icon_map.c` (`program:`, `menu:`, `settings:`, `place:`), so a
+program has one icon in the Start menu, Files' `/Programs` and Task Manager
+(`test_icons.py` compares them); two rows of one menu never share an icon
+(`shell_launch_test.c`): Run... is `go-jump`, Settings `preferences-system`
+(Control Panel keeps `preferences-desktop`), Ciuki Demo
+`preferences-desktop-peripherals`, each game `input-gaming` (the Games folder
+keeps `applications-games`), Clock `appointment-new` (Date & Time keeps
+`office-calendar`). Identity icons (About, the Computer badge, the Start
+banner) are area-averaged conversions of the approved portrait, whose
+`#375564` surround is made transparent.
+
+Desktop icon labels (Windows Vista/7 style, readable on any wallpaper): white
+Inter 13 (`DESK_FONT_LABEL`), up to two centred lines broken by width in a
+96 x 94 cell, over a soft dark halo: the glyph coverage blurred twice by the
+binomial filter 1 4 6 4 1 (radius 4), raised 3x, capped at 82 % and moved
+1 px down, blended in black. The halo is integer-only, computed once per
+label and theme text mode and cached (`label_halo`), and stays inside the
+cell, so a partial repaint is exact. The selected label sits in a rounded
+(radius 4), translucent box: a light tint of the theme's selection colour at
+about 50 % with a lighter outline, the wallpaper showing through.
+`DesktopTests.test_look_reference_frames` renders the icons over Ciuk2 in
+every theme (`look_capture PORTRAIT OUTDIR WALLPAPER`) and checks the text,
+the halo, the translucent selection and that nothing is drawn outside the
+cells.
+
+Research (2026-10-12): Microsoft's Windows 7 UX guide,
+[Icons](https://learn.microsoft.com/en-us/windows/win32/uxguide/vis-icons):
+application and Control Panel icons come at 16, 32 and 48 px, dialog icons at
+32 and 48 px, 16 px icons are drawn straight-on and simplified ("simply
+scaling down ... does not work"), which is why Tango's 16 px artwork differs
+from its 32 px artwork; the Vista desktop list view draws its labels as
+"shadow text on transparent backgrounds"
+([`LVS_EX_TRANSPARENTSHADOWTEXT`](https://learn.microsoft.com/en-us/windows/win32/controls/extended-list-view-styles)),
+the model of the halo above.
+
 ## f2-33 Task Manager and the v2 task extension (2026-10-11)
 
-`/bin/tasks` is the CiukiOS Task Manager (menu label "Task Manager", a
+`/Programs/tasks` is the CiukiOS Task Manager (menu label "Task Manager", a
 400x420 window): tabs Applications, Processes and
 Performance (the Virtual Machines tab arrives with F3, f3-02), menus File
 (New Task (Run...), Exit Task Manager), View (Refresh Now F5; Update Speed
@@ -16,8 +391,8 @@ Research and decisions are in docs/design/f2-acceptance.md, section F2-33.
   the desktop's heartbeat), sorted by title, PID and window id. End Task
   (Alt+E or Delete) sends END_TASK, the desktop's close path: CLOSE_REQUEST, SIGTERM
   after 2 s for its own children. Switch To (Alt+S, Enter, double-click) restores and
-  focuses. New Task (Alt+N) asks the desktop to launch an admitted `/bin`
-  program (name or `/bin/name`), so graphical programs get their channel and
+  focuses. New Task (Alt+N) asks the desktop to launch an admitted `/Programs`
+  program (name or `/Programs/name`), so graphical programs get their channel and
   appear here; the launched program's row is selected once it appears.
 - **Processes:** Image Name, PID, PPID, Threads, Mem Usage (resident pages x
   4 KiB), CPU (percent of the last interval), sortable by header click
@@ -33,7 +408,7 @@ Research and decisions are in docs/design/f2-acceptance.md, section F2-33.
 The v2 task extension follows f2-30's rules: version 2 only, a v1 client or
 a wrong direction is a protocol error (that peer is disconnected), payload
 tails are zero and integers little-endian. Requests from a client that the
-desktop did not launch as `/bin/tasks` receive TASK_RESULT with EPERM; no
+desktop did not launch as `/Programs/tasks` receive TASK_RESULT with EPERM; no
 other client gains any right.
 
 | Opcode | Direction | Payload bytes | Fields |
@@ -42,12 +417,12 @@ other client gains any right.
 | WINDOW_INFO=16 | Desktop → client | 32+n | u32 serial@4, index@8, count@12 (0..16), window_id@16, pid@20, flags@24 (1 unresponsive, 2 minimized, 4 focused, 8 internal, 16 closing), n@28; title@32, 0..63 printable bytes. count=0 is one message with every field zero. |
 | END_TASK=17 | Client → desktop | 16 | u32 serial@4, window_id@8, pid@12; not both zero. window_id selects a window (pid, when nonzero, must match); window_id=0 ends a desktop child by PID: its windows get close requests, a windowless child gets SIGTERM. |
 | SWITCH_TO=18 | Client → desktop | 12 | u32 serial@4, window_id@8 (nonzero) |
-| LAUNCH=19 | Client → desktop | 12+n, or 16+n+a with an argument (f2-32) | u32 serial@4, n@8 (1..63); name@12, visible ASCII without spaces, matched against the `/bin` menu list. Optional argument after the name: u32 a@12+n (1..160), then a bytes (32..255 except 127), one `argv[1]` for the program; a message of any other length is a protocol error. |
+| LAUNCH=19 | Client → desktop | 12+n, or 16+n+a with an argument (f2-32) | u32 serial@4, n@8 (1..63); name@12, visible ASCII without spaces, matched against the `/Programs` menu list. Optional argument after the name: u32 a@12+n (1..160), then a bytes (32..255 except 127), one `argv[1]` for the program; a message of any other length is a protocol error. |
 | TASK_RESULT=20 | Desktop → client | 16 | u32 serial@4, request@8 (15, 17, 18 or 19), i32 result@12: 0, the launched PID, or -errno (EPERM, ESRCH, ENOENT, EAGAIN when the reply queue cannot hold a whole list, or the spawn error) |
 
 Window ids are assigned by the desktop at window creation (never 0) and are
 not reused while the counter does not wrap. The desktop never sends a partial
-window list. The desktop launches `/bin/tasks` like Files (a graphical menu program:
+window list. The desktop launches `/Programs/tasks` like Files (a graphical menu program:
 `--channel-fd=3`, `CIUKI_DISPLAY`), plus the authority at fd 4 and
 `--authority-fd=4` (absent when PID 1 installed none);
 other programs never receive it.
@@ -83,7 +458,7 @@ message/input dialogs, timers and `du_run`.
 
 ## f2-32 CiukNote (2026-10-11)
 
-`/bin/ciuknote` is a Notepad-class editor on libdeskui (menu label "CiukNote",
+`/Programs/ciuknote` is a Notepad-class editor on libdeskui (menu label "CiukNote",
 Tango text-document icon in the menu and the taskbar): `apps/ciuknote/app.c` commands,
 dialogs and find bar, `doc.c` file and text rules, `vfs.c` the POSIX boundary, `main.c`
 the window glue, `apps/libdeskui/textarea.{h,c}` the multi-line widget (`DU_TEXTAREA`).
@@ -149,7 +524,7 @@ conventions of the other desktop cases. These were checked against `apps/libdesk
 the display grants of a client. A Files that the desktop launched therefore sends LAUNCH
 (protocol v2) with the name `ciuknote` and the file's absolute path as the single
 argument. The desktop honours exactly that: the requester must be a client it launched as
-`/bin/files` (`program == 1`, kernel-stamped PID), the name must be `ciuknote`, and the
+`/Programs/files` (`program == 1`, kernel-stamped PID), the name must be `ciuknote`, and the
 argument must start with `/`; every other request with an argument, from any client
 including the Task Manager, is answered `-EPERM`, and the Task Manager keeps its
 argument-less LAUNCH. The program is started as `ciuknote --channel-fd=3 <path>` and the
@@ -187,6 +562,21 @@ then do the A key edges count, so `keys=4` (two scenario edges, two A edges) can
 reached by an app that did not run to the end. After teardown the controller flushes
 storage (`files-durable` or `note-durable`).
 
+**Scripted input and program start (2026-10-12).** In the gate scenarios the desktop reads its input
+grant into a FIFO (512 events). While a graphical program it launched has not sent its first DAMAGE
+(`awaiting_frame`, at most 30 s), the scripted input stays there; it is then replayed with its recorded
+spacing (kernel event timestamps), shifted by the wait, so a script no longer depends on how long a
+program takes to start. Files and CiukNote move to their `--test` frame before their first frame, so the
+held clicks land on the moved window. Motivation: on image `2fdd515a` Files was not ready when
+`files-qemu-t23` clicked File at (27,70); the click raised the survivor demo's window (20,52) behind it,
+the typed keys went to the survivor, the shell's Alt+F4 closed it (`survivor_exit:0`) and `keys=0`.
+The shell scenario counts its A edges whenever they follow F12 (still published only at stage 6): its
+last step is a mouse click, and the 8042 hands out a pending keyboard byte before queued aux bytes
+(QEMU `hw/input/pckbd.c` `kbd_update_irq`), so on the `qemu-e500` firmware input path the A edges
+reached the desktop before the close click (image `639bcca5`: stage 6, `keys=0`). Task Manager and the
+app scenarios keep the arrival rule (their last steps are keyboard input). Host replay models:
+`late-start` (programs ready 8 s after spawn) and `--i8042-stall-*` (`app_replay.c`).
+
 In `--test=ciuknote` mode the window moves to (24,48), Time/Date and `.LOG` use the fixed
 time 2026-10-11 09:41 UTC (`9:41 AM 10/11/2026`) and the application prints one
 `CiukNote checkpoint=N event=ready|saved|opened path=... text=... digest=XXXXXXXX` line on
@@ -196,11 +586,10 @@ surface bytes (little-endian words), which contains no clock, so the host reprod
 
 **QEMU case `ciuknote-qemu-t23`** (`tests/suites/f2-desktop.json`; the selector and
 predicates of `files-qemu-t23` with `note-*` records and three checkpoints): F10 down/up;
-the cursor is clamped to the bottom-left corner (two (-381, +381) moves); click the
-Ciuki button; move up to row 0 of the menu and click `ciuknote` (rows are 28 px and
-anchored to the bar: from the button, dy = -1 - 28 * (n + 2 - k) for n programs sorted
-by strcmp and the 0-based row k; `/bin` lists eight programs (ciuknote, demo, dosbox,
-files, hello, libc_smoke, lua, tasks), so `ciuknote` is 281 px up); wait 3.6 s; type `Hello
+the cursor is clamped to the top-left corner (two (-381, -381) moves); click the
+Ciuki button in the top bar at (40, 16), Programs at (40, 50) and the `ciuknote` row of
+the Programs submenu (`tests/host/desktop/shell_menu.py` models the geometry and
+regenerates the scripted cases); wait 3.6 s; type `Hello
 CiukNote`, Enter, `Ciuki says woof.`, Enter, F5; Ctrl+S, type `/system/tests/note.txt`,
 Enter (checkpoint 2); Ctrl+N, Ctrl+O, type `note.txt`, Enter (checkpoint 3); File > Exit
 by its mnemonics, Alt+F then X (the clean document closes and CiukNote exits 0; neither
@@ -249,23 +638,32 @@ message box, a dedicated text-editor icon (the generic text-document icon is use
 
 ## Files
 
-Files is the CiukiOS file manager (`/bin/files`), started from the Ciuki menu
+Files is the CiukiOS file manager (`/Programs/files`), started from the Ciuki menu
 ("Files", with the Tango file-manager icon). Its window follows the Windows 98
 Explorer layout in the CiukiOS colours.
 
 - **Menus.** File (Open, Open with CiukNote, New Folder, New Text Document,
   Delete, Rename, Properties, Close), Edit (Cut, Copy, Paste, Select All,
   Invert Selection), View (Large Icons, List, Details, Sort by Name/Size/Type/
-  Modified, Refresh), Go (Back, Forward, Up One Level, Address Bar, CiukiOS,
-  Applications, System) and Help (Help Topics, About Files). Alt or F10 opens
+  Modified, Refresh), Go (Back, Forward, Up One Level, Address Bar, Computer,
+  Programs, Documents, System, Games) and Help (Help Topics, About Files). Alt or F10 opens
   the menu bar; underlined letters work with Alt and inside open menus.
 - **Toolbar.** Back, Forward, Up, Cut, Copy, Paste, Delete, Properties and
   Views (click to cycle views; the arrow lists them).
-- **Address bar.** Type a path such as `/system/assets` and press Enter; Esc
-  restores the current folder. Letter case does not matter on FAT volumes.
-- **Left pane.** Places lists CiukiOS (`/`), Applications (`/bin`), System
-  (`/system`) and every volume mounted under `/mnt`. Folders shows the tree,
-  opened along the current folder; [+] and [-] expand and collapse it.
+- **Address bar.** Shows drive-letter paths such as `C:\Programs` and
+  `D:\Games`. Type either a drive-letter path or an absolute POSIX path
+  such as `/system/assets` and press Enter; Esc restores the current location.
+  Letter case does not matter on FAT volumes.
+- **Left pane.** Places lists Computer, Programs (`/Programs`), Documents
+  (`/Documents`), System (`/system`) and Games (`/Games`, when present).
+  Folders starts at Computer, then C: and the other mounted drives, followed
+  by their folders; [+] and [-] expand and collapse branches.
+- **Computer.** The top location lists C: (the boot volume `/`) and D:..Z:
+  for directory entries `/mnt/d`..`/mnt/z`. Up from any drive root returns
+  to Computer. Drives open like folders; filesystem operations and Properties
+  are disabled at Computer. In `C:\`, only `dev`, `mnt` and `tmp` are hidden,
+  in both the list and the tree. The mount directory is presented as Computer.
+  Programs continue to use the POSIX VFS paths.
 - **Views.** Details (Name, Size, Type, Modified; click a header to sort, again
   to reverse; drag a header edge to resize), Large Icons and List. Folders
   always come first.
@@ -286,7 +684,7 @@ Explorer layout in the CiukiOS colours.
   is no Recycle Bin yet). Properties shows type, location, size, contents,
   modification time and the read-only attribute.
 - **Opening.** Enter or double-click opens folders; text documents and scripts
-  open in `/bin/ciuknote` when it is installed; programs run directly.
+  open in `/Programs/ciuknote` when it is installed; programs run directly.
 - **Keys.** Enter, Backspace (up one level, as in Windows 98), Alt+Left/Right/
   Up, F2, F4 or Alt+D (address bar), F5, Del, Alt+Enter, Ctrl+C/X/V, Ctrl+A,
   Alt+F4.
@@ -295,6 +693,34 @@ Explorer layout in the CiukiOS colours.
   started from Files have no desktop window, except CiukNote, which the desktop
   starts on Files' request (f2-32, LAUNCH with a path). Drag and drop, removable
   media and the Recycle Bin come later.
+
+The path presentation follows [Microsoft’s path naming documentation](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file):
+a drive root includes the backslash, and folder separators are backslashes.
+Drive-relative forms such as `C:Programs` are rejected; bare `C:` opens its
+root. Absolute slash paths retain their POSIX meaning, consistent with
+[POSIX pathname resolution](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html#tag_04_16).
+Conversion preserves component case and normalises separators. Files resolves
+the stored spelling through its existing FAT-aware canonicaliser. The VFS
+metadata currently has no optical-volume type, so Computer uses the catalog’s
+generic Tango drive icon; no optical type is inferred from names.
+
+Files updates its title (`Files - C:\Programs`, or `Files - Computer`) as
+locations change, following the window-caption behaviour described by
+[Microsoft’s SetWindowText API](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowtexta).
+The existing protocol had only a creation title, so the additive v2
+`SET_TITLE` request (opcode 23) carries a 32-bit length and 1..63 printable
+ASCII bytes after the 4-byte header. It takes no descriptors or target ID
+and changes only the sending client’s existing window. The desktop damages
+the frame and taskbar; libdeskui queues the request. Files retries when its
+queue is full and respects the existing 63-character caption limit.
+
+Integration check (2026-10-12): the Computer view and the renamed ordinary
+folders remain in place with protocol v2.1 resizing. Files opens a resizable
+window (minimum client size 600x360), retains its drive-letter caption and
+runs `files_layout` through the toolkit's `du_resize` layout callback. The
+path rules above were rechecked against Microsoft's naming documentation;
+case-preserving FAT lookup stays behind the display conversion, and Computer
+remains a UI location rather than a VFS directory.
 
 ## libdeskui
 
@@ -306,7 +732,8 @@ Explorer layout in the CiukiOS colours.
   application callback, focus loss and RESYNC releases, and `du_run`, the
   event loop with timers (no poll/select: nonblocking turns and short sleeps).
 - **Drawing** (`draw.c`): clipped integer primitives, Windows 98 edges, the
-  compositor's glyphs, Tango icons with selected/ghost/disabled modes.
+  compositor's glyphs, Tango icons with selected/ghost/disabled modes
+  (`du_icon_blit`, `du_icon_draw`; icons come from the store, `icons.c`).
 - **Widgets** (`widgets.c`, `list.c`, `menu.c`, `dialog.c`): label, push
   button, toolbar button (with split arrow), single-line edit (selection,
   clipboard, UTF-8), list view (Details with sortable, resizable columns,
@@ -325,14 +752,29 @@ change must be reviewed and re-pinned.
 
 ## f3-02 additions (2026-10-11)
 
-`/bin/dosbox` (apps/dosbox) is an ordinary protocol-v2 client that owns one
+`/Programs/dosbox` (apps/dosbox) is an ordinary protocol-v2 client that owns one
 DOS virtual machine through syscall 72 (execution-abi.md, F3-02 amendment);
 the kernel renders the VM into the client's 640x480 surface and the desktop
-composites it unchanged. The menu lists it from `/bin` like any program and
-passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/bin` menu
+composites it unchanged. The menu lists it from `/Programs` like any program and
+passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/Programs` menu
 program at shell start through the menu-click path; the `f3:vm-window` probe
 uses it. Menu click offsets for the scripted cases follow the formula in
 docs/design/f2-acceptance.md, section F2-33. Details: docs/design/f3-acceptance.md, section f3-02.
+
+## Games (owner decision 2026-10-12)
+
+Programs > Games (present with `/Programs/dosbox`) lists the pre-installed
+shareware games of `apps/desktop/catalog.h` (`desk_games`): "Wolfenstein 3D
+(shareware)" and "DOOM (shareware)", Tango `input-gaming` (the Games folder is `applications-games`). Each starts
+`/Programs/dosbox --name=<game> <command>`; dosbox types the command at the DOS
+prompt of its window (`apps/dosbox/autorun.h`: `\DIR\PROGRAM` becomes
+`CD \DIR` and `PROGRAM`) once DOS is ready and the window has the focus. The
+window VM boots the bundled games disk `C:\GAMES\CIUKIGAM.IMG`
+(docs/build-and-run.md, "Pre-installed shareware games"). The Games row
+follows the program rows in the top-aligned Programs submenu, so the
+scripted cases' rows do not move (`tests/host/desktop/shell_menu.py` models
+it; `--regenerate` leaves `f2-desktop.json` unchanged; the scratch `zz-ui.json`
+copy of those cases is no longer tracked).
 
 ## f2-30 decisions (2026-10-11)
 
@@ -344,7 +786,7 @@ children inherit the desktop's supervisor-created process group (flags=0), so
 the existing group-local `kill` can send SIGTERM after a two-second close grace.
 The crash gate retains NEW_GROUP and its original transport and pacing.
 
-Choose a sorted `/bin` scan, bounded to 16 regular i386 ELF candidates, excluding
+Choose a sorted `/Programs` scan, bounded to 16 regular i386 ELF candidates, excluding
 `desktop` itself. Validate printable, bounded basenames and an ELF32 little-endian
 ET_EXEC/i386 prefix before admitting a menu entry; the kernel loader remains the
 authority on executable validity. Children receive only stdio and an explicit
@@ -452,8 +894,9 @@ integer arithmetic. The libc may use the SDK's qualified x87 instructions.
 
 `build/apps/desktop/manifest.json` records commands, source/SDK hashes, ELF
 sizes/LOAD memory, conversion parameters and hashes. `scripts/build_image.py`
-validates these before image creation and adds `/bin/desktop`, `/bin/demo`,
-and `/system/assets/ciuki-portrait.xrgb`. The image manifest includes each
+validates these before image creation and adds `/Programs/desktop`, `/Programs/demo`,
+and `/system/assets/ciuki-portrait.xrgb` (since 2026-10-12 also
+`/system/icons/tango.cis` and its three notices). The image manifest includes each
 payload's size and SHA-256 plus desktop/portrait provenance, and existing T1
 mtools read-back applies to all three. `make build-full` orders kernel, Lua,
 desktop, then image. No full image build was run by this implementer.
@@ -487,7 +930,7 @@ and from the application's MIT code. F2 adds no replacement system icon family.
 
 The compositor centres the converted portrait against a solid blue-grey
 background. Its quiet dark top bar displays `CiukiOS`, the exact English
-tagline `A modern Retro OS`, and MONOTONIC uptime as HH:MM:SS (hours modulo 100).
+tagline `Classic computing, one woof at a time.`, and MONOTONIC uptime as HH:MM:SS (hours modulo 100).
 Window frames use a cream close button, a dark focused title and a muted
 unfocused title. `Not responding` is the five-second heartbeat warning.
 Original 5x7 bitmap glyphs render English UI and printable ASCII titles; the
@@ -578,7 +1021,7 @@ are enforced by the kernel/supervisor, not invented by the compositor.
 
 ## Bootstrap and f2-09 wiring
 
-Normal launch is `/bin/desktop`; current supervisor stdio uses fd 0–2 and
+Normal launch is `/Programs/desktop`; current supervisor stdio uses fd 0–2 and
 `grants_install` chooses the next free slots, so display/input default to 3/4.
 The supervisor must pass `--display-fd=N --input-fd=N` if it reserves other
 descriptors first. Repeated `--channel=N` registers explicitly inherited
@@ -593,7 +1036,7 @@ desktop --test=crash-isolation --demo=none --victim=bad-pointer --cycles=100
 ```
 
 The desktop creates each test pair, explicitly maps the child's endpoint to
-fd 3, spawns `/bin/demo` with CIUKI_SPAWN_NEW_GROUP, and closes its own duplicate
+fd 3, spawns `/Programs/demo` with CIUKI_SPAWN_NEW_GROUP, and closes its own duplicate
 of the child's endpoint. Sequential victims are reaped with waitpid and a
 120 ms minimum interval before the next spawn. The survivor stays alive and
 exchanges PING/PONG turns. Cycle output is plain application output with PID,
@@ -682,6 +1125,9 @@ ELF/SDK/source/output provenance and the production image payload inventory.
 The final `ciuki-cc` build and inspections completed in 0.761 seconds. A repeat
 build accepted the same source/output hashes without recompilation. These ELF
 sizes include debug information, which remains in the image payloads:
+
+The names and measurements below record the earlier build, before the
+2026-10-12 namespace amendment; current builds use `/Programs`.
 
 | Payload | File bytes | Text | Data | BSS | Page-rounded LOAD bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |

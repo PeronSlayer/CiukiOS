@@ -46,6 +46,7 @@ void console_operator_prompt(bool announce) { if (announce) operator_prompts++; 
 /* f3-02: the screen console stays dark while a process holds the display grant. */
 static bool console_owned; static unsigned console_owned_changes;
 void console_display_owned(bool owned) { console_owned = owned; console_owned_changes++; }
+void console_wake(void) {}
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
@@ -138,7 +139,7 @@ int storage_sync(void) { CHECK(!"storage_sync outside the Files case"); return -
 static int report_fixture_spawn(const char *path, const char *const argv[], const char *cwd,
                                 bool desktop, struct process **out)
 {
-    CHECK(libc_gate_calls == 1 && !libc_gate_error && !strcmp(path, "/bin/libc_smoke"));
+    CHECK(libc_gate_calls == 1 && !libc_gate_error && !strcmp(path, "/Programs/libc_smoke"));
     CHECK(argv && !strcmp(argv[0], "libc_smoke") && !argv[1] && !cwd && !desktop && out);
     libc_spawn_calls++; return -ENOENT;
 }
@@ -931,7 +932,7 @@ static struct test_object spawn_host_stdio[3];
 static int spawn_host_open(void *cwd, const char *path, struct ciuki_file *file)
 {
     (void)cwd;
-    CHECK(!strcmp(path,"/bin/desktop") || !strcmp(path,"/bin/demo"));
+    CHECK(!strcmp(path,"/Programs/desktop") || !strcmp(path,"/Programs/demo"));
     *file=fixture_file(); return 0;
 }
 static int spawn_host_install_stdio(struct process *p)
@@ -961,7 +962,7 @@ void desktop_spawn_host_init(int gate)
     if (gate) CHECK(supervisor_spawn_desktop_probe(&spawn_host_server)==41);
     else {
         const char *argv[]={"desktop",0};
-        CHECK(supervisor_spawn("/bin/desktop",argv,0,true,&spawn_host_server)==41);
+        CHECK(supervisor_spawn("/Programs/desktop",argv,0,true,&spawn_host_server)==41);
     }
     if (gate) spawn_host_server->ppid=spawn_host_owner->pid;
     CHECK(desktop_fd(spawn_host_server,3)->kind==DESKTOP_DISPLAY && desktop_fd(spawn_host_server,4)->kind==DESKTOP_INPUT);

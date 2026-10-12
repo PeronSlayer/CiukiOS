@@ -2,13 +2,26 @@
 #ifndef CIUKI_APP_DESKTOP_H
 #define CIUKI_APP_DESKTOP_H
 #include "protocol.h"
+#include "theme.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
 #define DESK_TX_MAX 64
 #define DESK_BAR 32
-#define DESK_BORDER 3
-#define DESK_TITLE 24
+#define DESK_BORDER DESK_FRAME_BORDER   /* theme.h: one frame geometry for windows and dialogs */
+#define DESK_TITLE DESK_FRAME_TITLE
+#define DESK_RESIZE_MARGIN 7
+#define DESK_EDGE_LEFT 1u
+#define DESK_EDGE_RIGHT 2u
+#define DESK_EDGE_TOP 4u
+#define DESK_EDGE_BOTTOM 8u
+/* The Ciuki (Start) button at the left end of the top bar; the Start menu
+ * drops from it. Task buttons start DESK_TASK_X from the taskbar's left edge. */
+#define DESK_START_X 4
+#define DESK_START_Y 4
+#define DESK_START_W 96
+#define DESK_START_H 24
+#define DESK_TASK_X 4
 #define DESK_BACKGROUND 0x375564u
 #define DESK_PORTRAIT_SIZE 256
 #define DESK_MENU_MAX 16
@@ -19,6 +32,7 @@
  * PINGs whose serials are base+n. */
 #define DESK_APP_FILES 1
 #define DESK_APP_NOTE 2
+#define DESK_APP_CONTROL 3          /* /Programs/control: may send DESK_SETTINGS */
 #define DESK_FILES_CHECKPOINT 0xf2310000u
 #define DESK_FILES_CHECKPOINTS 5
 #define DESK_NOTE_CHECKPOINT 0xf2320000u
@@ -26,17 +40,27 @@
 #define DESK_APP_CHECKPOINT(kind) ((kind)==DESK_APP_NOTE ? DESK_NOTE_CHECKPOINT : DESK_FILES_CHECKPOINT)
 #define DESK_APP_CHECKPOINTS(kind) ((kind)==DESK_APP_NOTE ? DESK_NOTE_CHECKPOINTS : DESK_FILES_CHECKPOINTS)
 struct desk_box { int32_t x, y, w, h; };
+#include "shell.h"
 struct desk_damage { unsigned count; struct desk_box boxes[DESK_DAMAGE_MAX]; };
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
-    int minimized, internal, closing, program;   /* program: 1 Files, 2 CiukNote (launched by the desktop) */
-    int taskman;                  /* f2-33: launched /bin/tasks; may send task requests */
+    int commit_pending, resizable, zoomed;
+    int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
+    int collapsed;                /* windowshade: only the title bar shows (double-click) */
+    int32_t shade_height;
+    int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
+    int mixer;                    /* launched /Programs/mixer (Volume Control); may send MIXER_SET */
+    int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
+    uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     uint32_t pid, serial, version, window_id;
+    uint32_t minor, resize_serial, applied_serial;
+    uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
     uint64_t ping_sent_ns, next_ping_ns, order;
     struct ciuki_surface_info info;
     const uint32_t *pixels;
     struct desk_box frame;
+    struct desk_box restore;
     char title[DESK_TITLE_MAX + 1];
     struct ciuki_message tx[DESK_TX_MAX];
     unsigned tx_head, tx_count;
@@ -49,14 +73,19 @@ struct desk_ops {
     int (*close)(int);
     int (*present)(int, int, const struct ciuki_rect *);
 };
-struct desk_program { char name[64], path[70]; };
+struct desk_program { char name[64], path[sizeof("/Programs/") + 64]; };
 struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent; };
 struct desktop {
     struct desk_ops ops;
     int display, input, output, focus, drag;
     uint32_t width, height, *pixels;
     const uint32_t *portrait;
+    /* Shell icons (desktop.c: libdeskui's Tango store, icon_map.c keys such as
+     * "program:files"); NULL draws none. */
+    const uint32_t *(*icon)(const char *object, unsigned size);
     int32_t mouse_x, mouse_y, drag_x, drag_y;
+    unsigned resize_edges;
+    struct desk_box resize_start;
     uint8_t keys[513];
     uint32_t buttons, routed_buttons;
     uint64_t order, now_ns, clock_second, presents, inputs, received, replied;
@@ -81,6 +110,17 @@ struct desktop {
     uint32_t next_window_id, self_pid;
     int authority_fd, tasks_test, tasks_stage, tasks_checkpoint;
     uint32_t tasks_pid, tasks_demo_pid, tasks_demo_window;
+    /* Desktop shell (shell.h): settings, menus, icons, tray, built-in windows. */
+    int mixer_fd;                /* delegated /dev/mixer control handle (CIUKI_MIXER_FD) or -1 */
+    const char *launch_argv[6];  /* Run dialog: extra arguments for the next launch */
+    struct desk_shell sh;
+    /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
+     * control handle; NULL on hosts without one. 0 or -errno. */
+    int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
+    /* Title-bar double-click (windowshade). */
+    uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
+    /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
+    int title_hot, title_down;
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -92,7 +132,14 @@ struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
 struct desk_box desk_close_box(const struct desk_client *c);
 struct desk_box desk_min_box(const struct desk_client *c);
+struct desk_box desk_shade_box(const struct desk_client *c);   /* zoom; zero box when too narrow */
+struct desk_box desk_outer(const struct desk_client *c);       /* frame plus drop shadow */
+void desk_collapse(struct desktop *, int index);                /* toggle windowshade */
+void desk_theme_changed(struct desktop *);                       /* repaint after desk_theme_use */
 struct desk_box desk_taskbar(const struct desktop *);
+struct desk_box desk_start_button(const struct desktop *);       /* top bar, left end */
+int desk_title_code(const struct desktop *, int32_t x, int32_t y);   /* title button under (x, y): index*4+k+1, or 0 */
+struct desk_box desk_title_code_box(const struct desktop *, int code);
 struct desk_box desk_task_button(const struct desktop *, int index);
 struct desk_box desk_menu_box(const struct desktop *);
 int32_t desk_menu_row(const struct desktop *);
@@ -102,7 +149,8 @@ int desk_program_add(struct desktop *, const char *name, const uint8_t *elf, siz
 int desk_program_graphical(const char *name);
 const char *desk_program_label(const char *name);
 const char *desk_app_program(int kind);          /* "files" / "ciuknote" */
-int desk_program_kind(const char *name);         /* 1 Files, 2 CiukNote, else 0 */
+int desk_program_kind(const char *name);
+int desk_catalog_takes_file(const char *name);   /* catalog.h accessories that open a file argument */         /* 1 Files, 2 CiukNote, else 0 */
 void desk_shell_enable(struct desktop *);
 void desk_minimize(struct desktop *, int index);
 void desk_request_close(struct desktop *, int index);
@@ -113,7 +161,10 @@ void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
 int desk_task_switch(struct desktop *, uint32_t window_id);
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
+/* Launch with several arguments after the desktop's own (Programs > Games: /Programs/dosbox). */
+int desk_task_launch_args(struct desktop *, const char *name, const char *const *args, unsigned count);
 int desk_shell_click(struct desktop *);
+void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);
@@ -126,6 +177,9 @@ void desk_flush(struct desktop *, int index);
 void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 void desk_move(struct desktop *, int index, int32_t x, int32_t y);
+void desk_resize(struct desktop *, int index, struct desk_box frame);
+void desk_zoom(struct desktop *, int index);
+unsigned desk_resize_hit(const struct desk_client *, int32_t x, int32_t y);
 void desk_input(struct desktop *, const struct ciuki_input_event *);
 void desk_composite(struct desktop *, struct desk_box);
 void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,

@@ -71,8 +71,8 @@ def dos4gw_rows():
 
 
 def doom_rows(sound):
-    audio = (dict(resets=1, blocks=400, frames=900000, edges=400, services=400, opl=5000, dma_faults=0, audible=0) if sound else
-             dict(resets=0, blocks=0, frames=0, edges=0, services=0, opl=0, dma_faults=0, audible=0))
+    audio = (dict(resets=1, blocks=400, frames=900000, edges=400, services=400, opl=5000, dma_faults=0, consumer=1) if sound else
+             dict(resets=0, blocks=0, frames=0, edges=0, services=0, opl=0, dma_faults=0, consumer=1))
     rows = [('DATA', dict(case='identity', build='0123abcd', loops=5, sound=int(sound))),
             ('DATA', dict(case='fixture', status='present', drive='D', base='CIUKIGAM.IMG', size=134217728)),
             ('DATA', dict(group='workload_file', path='/DOOM/DOOM.EXE', size=709905, sha256=HEX, redistribution='local-only')),
@@ -83,10 +83,11 @@ def doom_rows(sound):
     for i in range(1, 6):
         rows += [('DATA', dict(case='loop', loop=i, dpmi_ms=900, launch_ms=4000, run_ms=200000, gametics=1710,
                                realtics=9000, timed=1, status=1, rc=1, type=0, error=0)),
-                 ('DATA', dict(case='video', loop=i, graphics=1, width=320, height=200, flips=1720, faults=40, pm_faults=40,
-                               maps=6900, flushes=7000, mode=3)),
+                 ('DATA', dict(case='video', loop=i, graphics=1, width=320, height=200, flips=1720, pm_faults=40,
+                               maps=6900, mode=3, linear_maps=10, linear_harvests=160)),
+                 ('DATA', dict(case='video_detail', loop=i, faults=40, flushes=7000)),
                  ('DATA', dict(case='dpmi', loop=i, entries=1, terminations=1, exceptions=0, irq_pm=9000, faults=0, stale=0,
-                               released=1)),
+                               released=1, popf=40)),
                  ('DATA', dict(case='audio', loop=i, **audio)),
                  ('DATA', dict(case='loop_cleanup', loop=i, restored=1))]
     rows.append(('DATA', dict(case='loops', completed=5, required=5)))
@@ -188,7 +189,6 @@ class Workloads(unittest.TestCase):
             ('doom-qemu-t23', 'doom', doom_rows(False), {'case': 'dpmi', 'loop': 5}, 'released', 0),
             ('doom-qemu-t23', 'doom', doom_rows(False), {'group': 'workload_file', 'path': '/DOOM/DOOM.EXE'}, 'redistribution', 'free'),
             ('doom-sound-qemu-t23', 'doom-sound', doom_rows(True), {'case': 'audio', 'loop': 3}, 'resets', 0),
-            ('doom-sound-qemu-t23', 'doom-sound', doom_rows(True), {'case': 'audio', 'loop': 3}, 'audible', 1),
             ('wolf3d-qemu-t23', 'wolf3d', wolf_rows(), {'case': 'play', 'loop': 2}, 'playing', 0),
             ('wolf3d-qemu-t23', 'wolf3d', wolf_rows(), {'case': 'loop', 'loop': 2}, 'xms_calls', 0),
             ('wolf3d-qemu-t23', 'wolf3d', wolf_rows(), {'case': 'frame', 'loop': 1, 'stage': 'signon'}, 'width', 640),
@@ -211,12 +211,15 @@ class Workloads(unittest.TestCase):
         rows = [('DATA', dict(group='workload_file', path='/WOLF3D/VGAGRAPH.WL6', size=big, sha256=HEX, redistribution='local-only')),
                 ('DATA', dict(case='loop', loop=5, dpmi_ms=big, launch_ms=big, run_ms=big, gametics=big, realtics=big, timed=1,
                               status=1, rc=255, type=255, error=-2147483648)),
-                ('DATA', dict(case='video', loop=5, graphics=1, width=big, height=big, flips=big, faults=big, pm_faults=big,
-                              maps=big, flushes=big, mode=255)),
+                # Largest dimensions representable by the model's CRTC
+                # (256 columns x 9 dots, 1024 physical lines).
+                ('DATA', dict(case='video', loop=5, graphics=1, width=2304, height=1024, flips=big, pm_faults=big,
+                              maps=big, mode=255, linear_maps=big, linear_harvests=big)),
+                ('DATA', dict(case='video_detail', loop=5, faults=big, flushes=big)),
                 ('DATA', dict(case='audio', loop=5, resets=big, blocks=big, frames=big, edges=big, services=big, opl=big,
-                              dma_faults=big, audible=big)),
+                              dma_faults=big, consumer=big)),
                 ('DATA', dict(case='dpmi', loop=5, entries=big, terminations=big, exceptions=big, irq_pm=big, faults=big,
-                              stale=big, released=1)),
+                              stale=big, released=1, popf=big)),
                 ('DATA', dict(case='frame', loop=5, stage='signon', mode=255, width=640, height=480, digest=HEX)),
                 ('DATA', dict(group='screen', row=24, text='X' * 80))]
         parse('doom-sound', rows, 'FAIL')

@@ -12,6 +12,8 @@
 #define FM_DEPTH 32
 #define FM_CHUNK 16384
 #define FM_CREATED 64
+/* Empty is a virtual location, never a filesystem pathname. */
+#define FM_COMPUTER ""
 enum fm_type { FM_FILE, FM_DIR, FM_OTHER };
 enum fm_kind { FM_KIND_FOLDER, FM_KIND_TEXT, FM_KIND_APP, FM_KIND_IMAGE, FM_KIND_AUDIO, FM_KIND_SCRIPT, FM_KIND_FILE };
 struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int64_t modified; uint32_t exec; };
@@ -59,6 +61,12 @@ struct fm_job {
 int fm_join(char *, const char *, const char *);
 int fm_beneath(const char *, const char *);
 int fm_same_path(const char *, const char *);
+int fm_display_path(char *out, const char *posix);
+int fm_posix_path(char *out, const char *display);
+int fm_drive_root(const char *);
+int fm_hidden(const char *parent, const char *name);
+int fm_volumes(const struct fm_vfs *, fm_emit, void *);
+int fm_entry_path(const struct fm_model *, unsigned, char *out);
 int fm_parent(char *out, const char *path);
 int fm_valid_name(const char *);
 const char *fm_basename(const char *);

@@ -363,6 +363,18 @@ void dosvm_expect(struct dosvm *v, const char *name)
     v->verdict_name[n] = 0;
     v->info.verdict_done = v->info.verdict_pass = false;
     memset(v->info.verdict_detail, 0, sizeof(v->info.verdict_detail));
+    v->verdict_text_valid = false;
+}
+/* The verdict line is the payload's own record-port write: the screen is
+ * exactly what the payload left (RUNREC: the child's output and its line),
+ * whatever the controller's polling cadence. Kernel reads peek (no latch). */
+static void verdict_screen(struct dosvm *v)
+{
+    v->verdict_text_valid = !dosvm_read(v, 0xB8000, v->verdict_text, sizeof(v->verdict_text));
+}
+const uint16_t *dosvm_verdict_text(const struct dosvm *v)
+{
+    return v->verdict_text_valid ? v->verdict_text : 0;
 }
 static void verdict_line(struct dosvm *v)
 {
@@ -372,8 +384,13 @@ static void verdict_line(struct dosvm *v)
         return;
     const char *rest = v->line + n + 1;
     unsigned left = v->line_length - n - 1;
-    if (left == 4 && !memcmp(rest, "PASS", 4)) { v->info.verdict_done = v->info.verdict_pass = true; return; }
+    if (left == 4 && !memcmp(rest, "PASS", 4)) {
+        v->info.verdict_done = v->info.verdict_pass = true;
+        verdict_screen(v);
+        return;
+    }
     if (left < 4 || memcmp(rest, "FAIL", 4)) return;
+    verdict_screen(v);
     v->info.verdict_done = true;
     v->info.verdict_pass = false;
     unsigned k = 0;

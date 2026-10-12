@@ -3,6 +3,7 @@
  * menus, dialogs, timers, clipboard, focus releases and rendering frames. */
 #include "deskui.h"
 #include <assert.h>
+#include "resize_transport.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +60,8 @@ int main(int argc, char **argv)
     assert(du_contains((struct du_rect){0, 0, 2, 2}, 1, 1) && !du_contains((struct du_rect){0, 0, 2, 2}, 2, 0));
     struct du_rect i = du_intersection((struct du_rect){0, 0, 10, 10}, (struct du_rect){5, 5, 10, 10});
     assert(i.x == 5 && i.w == 5 && !du_intersection((struct du_rect){0, 0, 1, 1}, (struct du_rect){2, 2, 1, 1}).w);
-    assert(du_text_width("Files") == 30 && du_cells("caf\xc3\xa9") == 4);
+    /* ui-look: proportional faces (Inter 12): narrow letters advance less than wide ones. */
+    assert(du_text_width("Files") == 26 && du_text_width("iiii") < du_text_width("MMMM") && du_cells("caf\xc3\xa9") == 4);
     char key_name[32]; du_format_key(key_name, sizeof(key_name), 0x2e, DU_CTRL); assert(!strcmp(key_name, "Ctrl+C"));
     du_format_key(key_name, sizeof(key_name), DU_KEY_ENTER, DU_ALT); assert(!strcmp(key_name, "Alt+Enter"));
     du_format_key(key_name, sizeof(key_name), DU_KEY_F5, 0); assert(!strcmp(key_name, "F5"));
@@ -148,13 +150,13 @@ int main(int argc, char **argv)
     static struct du_menu menus[] = {{"&File", file_items, 5}, {"&View", view_items, 2}};
     u.menus = menus; u.menu_count = 2;
     struct du_rect t0 = du_menu_title(&u, 0), t1 = du_menu_title(&u, 1);
-    assert(t0.x == 2 && t0.w == 24 + 14 && t1.x == t0.x + t0.w && t0.h == 18);
+    assert(t0.x == 2 && t0.w == du_label_width("&File") + 16 && t1.x == t0.x + t0.w && t0.h == 18);
     click(t0.x + 5, 8, 1); assert(u.menu == 0);
     struct du_rect box = du_menu_box(&u, file_items, 5, t0.x, t0.y + t0.h);
-    assert(box.y == 19 && box.h == 6 + 17 * 4 + 9);
-    assert(du_menu_item_at(file_items, 5, box, box.y + 3 + 17 + 4) == -1 && du_menu_item_at(file_items, 5, box, box.y + 3 + 17 + 9 + 2) == 2);
+    assert(box.y == 19 && box.h == 6 + DU_MENU_ITEM_H * 4 + DU_MENU_SEP_H);
+    assert(du_menu_item_at(file_items, 5, box, box.y + 3 + DU_MENU_ITEM_H + 4) == -1 && du_menu_item_at(file_items, 5, box, box.y + 3 + DU_MENU_ITEM_H + DU_MENU_SEP_H + 2) == 2);
     frame("menu");
-    before = count; click(box.x + 30, box.y + 3 + 17 + 9 + 5, 1); assert(count == before && u.menu == 0);   /* disabled: stays open */
+    before = count; click(box.x + 30, box.y + 3 + DU_MENU_ITEM_H + DU_MENU_SEP_H + 5, 1); assert(count == before && u.menu == 0);   /* disabled: stays open */
     click(box.x + 30, box.y + 3 + 8, 1); assert(last()->type == DU_EV_ACTIVATE && last()->id == 10 && u.menu < 0);
     key(DU_KEY_F10); assert(u.menu == 0 && u.menu_item == 0);
     key(DU_KEY_DOWN); assert(u.menu_item == 2); key(DU_KEY_RIGHT); assert(u.menu == 1 && u.menu_item == 0);
@@ -171,7 +173,7 @@ int main(int argc, char **argv)
     du_popup(&u, file_items, 5, 380, 290, 3);
     struct du_rect pbox = du_menu_box(&u, file_items, 5, 380, 290);
     assert(pbox.x + pbox.w == W && pbox.y + pbox.h == H);
-    input(CIUKI_INPUT_MOTION, 0, pbox.x + 20, pbox.y + 3 + 17 + 9 + 17 + 17 + 5);
+    input(CIUKI_INPUT_MOTION, 0, pbox.x + 20, pbox.y + 3 + DU_MENU_ITEM_H * 3 + DU_MENU_SEP_H + 5);
     assert(u.menu_item == 4);
     frame("popup");
     input(CIUKI_INPUT_BUTTON, 1, 1, 0); input(CIUKI_INPUT_BUTTON, 1, 0, 0);
@@ -232,7 +234,7 @@ int main(int argc, char **argv)
     du_add(&u, DU_SCROLLBAR, 90, (struct du_rect){300, 60, 16, 150}, "")->total = 50;
     du_get(&u, 90)->page = 10; du_get(&u, 90)->value = 20;
     struct du_widget *tree = du_add(&u, DU_TREE, 91, (struct du_rect){320, 60, 78, 150}, "");
-    static struct du_item nodes[4] = {{{"Root"}, NULL, NULL, 0, 0, 0, 1, 1}, {{"bin"}, NULL, NULL, 0, 0, 1, 0, 1},
+    static struct du_item nodes[4] = {{{"Root"}, NULL, NULL, 0, 0, 0, 1, 1}, {{"Programs"}, NULL, NULL, 0, 0, 1, 0, 1},
                                       {{"system"}, NULL, NULL, 1, 0, 1, 1, 1}, {{"logs"}, NULL, NULL, 0, 0, 2, 0, 0}};
     tree->items = nodes; tree->count = 4; tree->active = 2;
     assert(du_tree_toggle_hit(tree, 322 + 9 + 16, 62 + 17 + 8) == 1 && du_tree_toggle_hit(tree, 322 + 9 + 32, 62 + 17 * 3 + 8) == -1);
@@ -254,7 +256,26 @@ int main(int argc, char **argv)
         list->view = (enum du_view)view; list->scroll = list->hscroll = 0;
         char name[16]; snprintf(name, sizeof(name), "view%d", view); frame(name);
     }
+    /* Resize preserves focus, text/selection, timers and dialogs; anchors
+     * grow the body and move fixed-height footer controls. */
+    list->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
+    status->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
+    struct du_rect old_list = list->box, old_status = status->box;
+    int old_focus = u.focus; unsigned old_active = list->active;
+    du_input_box(&u, 101, "Resize", "Keep this text:", "Ciuki");
+    uint32_t *large = calloc(600 * 440 + 1, 4); assert(large);
+    large[600 * 440] = 0x5a5a5a5au;
+    du_resize(&u, large, 600, 440);
+    assert(list->box.w == old_list.w + 200 && list->box.h == old_list.h + 140);
+    assert(status->box.y == old_status.y + 140 && status->box.w == 600 && status->box.h == 20);
+    assert(u.focus == old_focus && list->active == old_active && rows[1].selected);
+    assert(u.dialog.kind == DU_DLG_INPUT && !strcmp(u.dialog.items[2].text, "Ciuki"));
+    du_render(&u); assert(large[600 * 440] == 0x5a5a5a5au);
+    du_resize(&u, pixels, W, H);
+    assert(!memcmp(&list->box, &old_list, sizeof(old_list)) && !memcmp(&status->box, &old_status, sizeof(old_status)));
+    du_dialog_close(&u); free(large);
     free(pixels);
+    rt_client_tests();
     puts("PASS deskui: geometry, hit-testing, edit/clipboard/UTF-8, list/tree/scroll/columns, focus/release, menus/accelerators/mnemonics, dialogs, timers, frames");
     return 0;
 }

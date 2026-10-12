@@ -84,11 +84,105 @@ static void test_protocol(void)
     desk_message(&m,DESK_CLOSE_REQUEST,4); assert(!desk_parse(&m,0,NULL,&p));
     m.data[0]=DESK_SHELL_VERSION;
     assert(desk_parse(&m,0,NULL,&p) && !desk_parse(&m,1,NULL,&p));
-    m.data[2]=1; assert(!desk_parse(&m,0,NULL,&p));
+    m.data[2]=2; assert(!desk_parse(&m,0,NULL,&p));
     puts("PASS protocol: every opcode/direction, lengths, fds, versions, geometry, events");
 }
 static int covers(struct desk_box b,int x,int y)
 { return x>=b.x && y>=b.y && x<b.x+b.w && y<b.y+b.h; }
+static void test_titles(void)
+{
+    struct ciuki_message m, bad; struct desk_packet p;
+    for (unsigned n = 1; n <= DESK_TITLE_MAX; n += DESK_TITLE_MAX - 1) {
+        request(&m, DESK_SET_TITLE, 8 + n); m.data[0] = DESK_SHELL_VERSION;
+        desk_put32(m.data + 4, n); memset(m.data + 8, 'x', n);
+        assert(desk_parse(&m, 1, NULL, &p) && strlen(p.title) == n);
+        assert(!desk_parse(&m, 0, NULL, &p));
+        bad=m; bad.data[0]=DESK_VERSION; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.length--; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.length++; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.fd_count=1; bad.fds[0]=9; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.data[8]=31; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.data[8]=127; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; desk_put32(bad.data + 4, 0); assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; desk_put32(bad.data + 4, DESK_TITLE_MAX + 1); assert(!desk_parse(&bad, 1, NULL, &p));
+    }
+    setup(640, 480); desk_shell_enable(&d);
+    int indices[2];
+    for (int k = 0; k < 2; k++) {
+        fake_channel(10 + k); indices[k]=desk_add_client(&d, 10 + k); assert(indices[k]>=0);
+        request(&m, DESK_HELLO, 4); m.data[0]=DESK_SHELL_VERSION; desk_receive(&d, indices[k], &m);
+        fake_surface(20 + k, 32, 24, 0xffc0c0c0u);
+        create_message(&m, 20 + k, 32, 24); m.data[0]=DESK_SHELL_VERSION; desk_receive(&d, indices[k], &m);
+        assert(d.clients[indices[k]].window);
+    }
+    request(&m, DESK_SET_TITLE, 21); m.data[0]=DESK_SHELL_VERSION;
+    desk_put32(m.data + 4, 13); memcpy(m.data + 8, "Files - C:\\X", 13);
+    /* The title above includes its terminator: reject it, then send the 12 bytes. */
+    assert(!desk_parse(&m, 1, NULL, &p)); m.length=20; desk_put32(m.data + 4, 12);
+    d.damage.count=0; desk_receive(&d, indices[0], &m);
+    assert(!strcmp(d.clients[indices[0]].title, "Files - C:\\X") && !strcmp(d.clients[indices[1]].title, "Test"));
+    int taskbar=0, frame=0;
+    for (unsigned k=0; k<d.damage.count; k++) {
+        taskbar |= covers(d.damage.boxes[k], 1, 479);
+        frame |= covers(d.damage.boxes[k], d.clients[indices[0]].frame.x, d.clients[indices[0]].frame.y);
+    }
+    assert(taskbar && frame);
+    d.damage.count=0; desk_receive(&d, indices[0], &m); assert(!d.damage.count);
+    m.sender_pid=43; desk_receive(&d, indices[0], &m);
+    assert(d.clients[indices[0]].channel<0 && d.clients[indices[1]].window);
+    fake_channel(12); int empty=desk_add_client(&d, 12); assert(empty>=0);
+    request(&bad, DESK_HELLO, 4); bad.data[0]=DESK_SHELL_VERSION; desk_receive(&d, empty, &bad);
+    m.sender_pid=42; desk_receive(&d, empty, &m); assert(d.clients[empty].channel<0);
+    cleanup();
+    puts("PASS window titles: v2 bounds/direction/ASCII/fds, own window only, frame/taskbar damage, no-op updates, sender/pre-create rejection");
+}
+static void resize_create(struct ciuki_message *m,int fd)
+{
+    create_message(m,fd,320,240);m->data[0]=2;m->data[2]=1;m->length+=28;
+    unsigned limits[]={DESK_RESIZABLE,200,160,600,480,8,8};
+    for(unsigned k=0;k<7;k++) desk_put32(m->data+20+k*4,limits[k]);
+}
+static void test_resize_protocol(void)
+{
+    struct ciuki_surface_info s={24,320,240,1280,1,307200};
+    struct ciuki_message m,bad; struct desk_packet p;
+    resize_create(&m,9);assert(desk_parse(&m,1,&s,&p) && p.min_width==200 && p.step_height==8);
+    assert(!desk_parse(&m,0,&s,&p));
+    for(unsigned k=0;k<7;k++) {
+        bad=m;desk_put32(bad.data+20+k*4,k==0?2:0);assert(!desk_parse(&bad,1,&s,&p));
+    }
+    bad=m;desk_put32(bad.data+28,241);assert(!desk_parse(&bad,1,&s,&p));
+    bad=m;desk_put32(bad.data+32,2049);assert(!desk_parse(&bad,1,&s,&p));
+    bad=m;desk_put32(bad.data+40,7);assert(!desk_parse(&bad,1,&s,&p));
+    for(unsigned n=0;n<28;n++) m.data[20+n]=0;
+    assert(desk_parse(&m,1,&s,&p)); /* v2.1 fixed windows */
+    for(unsigned op=DESK_CREATE_WINDOW;op<=DESK_CONFIGURE;op++) {
+        if(op!=DESK_CREATE_WINDOW && op!=DESK_DAMAGE && op!=DESK_CONFIGURE) continue;
+        int client=op!=DESK_CONFIGURE;
+        if(op==DESK_CREATE_WINDOW) resize_create(&m,9);
+        else {
+            request(&m,op,op==DESK_DAMAGE?24:20);m.data[0]=2;m.data[2]=1;
+            if(client) { m.fd_count=1;m.fds[0]=9;desk_put32(m.data+12,320);desk_put32(m.data+16,240);desk_put32(m.data+20,1); }
+            else { desk_put32(m.data+4,320);desk_put32(m.data+8,240);desk_put32(m.data+12,1); }
+        }
+        assert(desk_parse(&m,client,&s,&p) && !desk_parse(&m,!client,&s,&p));
+        bad=m;bad.length--;assert(!desk_parse(&bad,client,&s,&p));
+        bad=m;bad.length++;assert(!desk_parse(&bad,client,&s,&p));
+        bad=m;bad.data[2]=0;assert(!desk_parse(&bad,client,&s,&p));
+        bad=m;bad.data[0]=1;assert(!desk_parse(&bad,client,&s,&p));
+        bad=m;bad.data[2]=2;assert(!desk_parse(&bad,client,&s,&p));
+        bad=m;bad.data[3]=1;assert(!desk_parse(&bad,client,&s,&p));
+        bad=m;bad.fd_count=client?0:1;assert(!desk_parse(&bad,client,&s,&p));
+        bad=m;bad.data[255]=1;assert(!desk_parse(&bad,client,&s,&p));
+    }
+    desk_put32(m.data+16,2);assert(!desk_parse(&m,0,NULL,&p));
+    desk_put32(m.data+12,0);desk_put32(m.data+16,0);assert(!desk_parse(&m,0,NULL,&p));
+    desk_put32(m.data+16,DESK_CONFIGURE_COMMITTED);assert(desk_parse(&m,0,NULL,&p));
+    request(&m,DESK_DAMAGE,24);m.data[0]=2;m.data[2]=1;
+    assert(desk_parse(&m,1,&s,&p));m.fd_count=1;m.fds[0]=9;assert(!desk_parse(&m,1,&s,&p));
+    desk_put32(m.data+20,1);assert(!desk_parse(&m,1,&s,&p)); /* swap must damage full surface */
+    puts("PASS resize protocol: v2.1 directions/lengths/attachments/min-max/steps/flags, v1/v2.0 isolation");
+}
 static void test_damage(void)
 {
     struct desk_damage a={0};
@@ -123,6 +217,106 @@ static void event(unsigned type,int code,int value,int value2)
 { struct ciuki_input_event e={.type=type,.code=code,.value=value,.value2=value2}; desk_input(&d,&e); }
 static void pointer(int x,int y)
 { event(CIUKI_INPUT_MOTION,0,x-d.mouse_x,y-d.mouse_y); }
+static void test_resize_title_buttons(void)
+{
+    setup(800,600);desk_shell_enable(&d);
+    fake_channel(10);int i=desk_add_client(&d,10);assert(i>=0);
+    struct ciuki_message m;request(&m,DESK_HELLO,4);m.data[0]=2;m.data[2]=1;desk_receive(&d,i,&m);
+    fake_surface(11,320,240,0x112233);resize_create(&m,11);desk_receive(&d,i,&m);flush_all();
+    struct desk_client *c=&d.clients[i];struct desk_box original=c->frame;
+    struct desk_box zoom=desk_shade_box(c);
+    pointer(zoom.x+1,zoom.y+1);assert(d.title_hot==i*4+3);
+    event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(c->zoomed && d.drag==-1 && d.title_down==i*4+3 && !d.routed_buttons);
+    event(CIUKI_INPUT_BUTTON,1,0,0);assert(!d.title_down);
+    zoom=desk_shade_box(c);pointer(zoom.x+1,zoom.y+1);
+    event(CIUKI_INPUT_BUTTON,1,1,0);event(CIUKI_INPUT_BUTTON,1,0,0);
+    assert(!c->zoomed && !memcmp(&original,&c->frame,sizeof(original)));
+    pointer(c->frame.x+c->frame.w-8,c->frame.y+c->frame.h-8);
+    assert(!d.title_hot);event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(d.drag==i && d.resize_edges==(DESK_EDGE_RIGHT|DESK_EDGE_BOTTOM) && !d.title_down);
+    event(CIUKI_INPUT_BUTTON,1,0,0);
+    pointer(c->frame.x+60,c->frame.y+10);event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(d.drag==i && !d.resize_edges && !d.title_down);
+    pointer(d.mouse_x+16,d.mouse_y+12);event(CIUKI_INPUT_BUTTON,1,0,0);
+    assert(c->frame.x==original.x+16 && c->frame.y==original.y+12);
+    /* A short surface must not extend its corner grab region into Close. */
+    c->frame=desk_frame(320,1,20,52);
+    struct desk_box close=desk_close_box(c);pointer(close.x+close.w-1,close.y+close.h-1);
+    assert(!desk_resize_hit(c,d.mouse_x,d.mouse_y) && d.title_hot==i*4+1);
+    event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(c->closing && d.drag==-1 && d.title_down==i*4+1);
+    event(CIUKI_INPUT_BUTTON,1,0,0);assert(!d.title_down);cleanup();
+    puts("PASS merged title/resize input: zoom hover/press/release, corner capture, title drag, short-frame Close priority");
+}
+static void test_resize(void)
+{
+    setup(800,600);desk_shell_enable(&d);
+    fake_channel(10);int i=desk_add_client(&d,10);assert(i>=0);
+    struct ciuki_message m;request(&m,DESK_HELLO,4);m.data[0]=2;m.data[2]=1;desk_receive(&d,i,&m);
+    fake_surface(11,320,240,0x112233);resize_create(&m,11);desk_receive(&d,i,&m);flush_all();
+    struct desk_client *c=&d.clients[i];struct desk_box f=c->frame;
+    assert(c->resizable && fake_live()==3);
+    c->awaiting_frame=1; /* A resize acknowledgement may be the first rendered frame. */
+    int x[8]={f.x-6,f.x+f.w+6,f.x+100,f.x+100,f.x-6,f.x+f.w+6,f.x-6,f.x+f.w+6};
+    int y[8]={f.y+100,f.y+100,f.y-6,f.y+f.h+6,f.y-6,f.y-6,f.y+f.h+6,f.y+f.h+6};
+    unsigned edges[8]={1,2,4,8,5,6,9,10};
+    for(int k=0;k<8;k++) assert(desk_resize_hit(c,x[k],y[k])==edges[k] && desk_hit(&d,x[k],y[k])==i);
+    assert(!desk_resize_hit(c,f.x+100,f.y+100));
+    pointer(f.x+f.w+2,f.y+f.h+2);event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(d.drag==i && d.resize_edges==10 && !d.routed_buttons);
+    pointer(d.mouse_x+83,d.mouse_y+51);event(CIUKI_INPUT_BUTTON,1,0,0);
+    assert(d.drag==-1 && c->frame.w==406 && c->frame.h==315 && c->info.width==320 && c->surface==11);
+    assert(c->resize_serial==1);
+    assert(c->awaiting_frame); /* CREATE/CONFIGURE do not release scripted input. */
+    flush_all();fake_surface(12,400,288,0x445566);
+    request(&m,DESK_DAMAGE,24);m.data[0]=2;m.data[2]=1;m.fd_count=1;m.fds[0]=12;
+    desk_put32(m.data+12,400);desk_put32(m.data+16,288);desk_put32(m.data+20,1);desk_receive(&d,i,&m);
+    assert(!c->awaiting_frame && c->surface==12 && c->info.width==400 && c->applied_serial==1 && fake_live()==3);flush_all();
+    struct desk_box user=c->frame;desk_zoom(&d,i);
+    assert(c->zoomed && !c->collapsed && c->frame.x==0 && c->frame.y==32 && c->frame.w<=800 && c->frame.h<=536);
+    desk_collapse(&d,i);assert(c->collapsed);desk_collapse(&d,i);assert(!c->collapsed);
+    desk_zoom(&d,i);assert(!c->zoomed && !memcmp(&user,&c->frame,sizeof(user)));
+    /* Backpressure remembers a commit and the latest proposal separately. */
+    flush_all();fake_block=1;desk_message(&m,DESK_PONG,8);
+    for(int k=0;k<DESK_TX_MAX;k++) desk_queue(&d,i,&m);
+    desk_resize(&d,i,desk_frame(600,480,20,52));assert(c->configure_pending);
+    /* A slot opens while the old pending proposal waits: queueing the next
+     * size must clear pending state, or it would be sent twice later. */
+    c->tx_head=(c->tx_head+1)%DESK_TX_MAX;c->tx_count--;
+    desk_resize(&d,i,desk_frame(592,472,20,52));assert(!c->configure_pending);
+    /* Its acknowledgement arrives while the outbound FIFO is full. */
+    uint32_t serial=c->resize_serial;
+    fake_surface(13,592,472,0x778899);
+    request(&m,DESK_DAMAGE,24);m.data[0]=2;m.data[2]=1;m.fd_count=1;m.fds[0]=13;
+    desk_put32(m.data+12,592);desk_put32(m.data+16,472);desk_put32(m.data+20,serial);
+    desk_receive(&d,i,&m);assert(c->commit_pending && fake_live()==3);
+    desk_resize(&d,i,desk_frame(584,464,20,52));
+    desk_collapse(&d,i); /* pending CONFIGURE must retain the full unshaded size */
+    fake_block=0;flush_all();flush_all();
+    int n=0,commits=0;for(unsigned k=0;k<fake_sent;k++) if(fake_messages[k].data[1]==DESK_CONFIGURE && fake_messages[k].length==20) {
+        if(desk_get32(fake_messages[k].data+12)==c->resize_serial) { n++;assert(desk_get32(fake_messages[k].data+8)==464); }
+        if(desk_get32(fake_messages[k].data+12)==serial && desk_get32(fake_messages[k].data+16)) commits++;
+    }
+    assert(n==1 && commits==1);cleanup();
+    /* Fixed old clients and internal windows cannot acquire resize/zoom. */
+    setup(800,600);i=client(10,11,320,240,0x112233);f=d.clients[i].frame;
+    desk_resize(&d,i,desk_frame(600,480,0,32));desk_zoom(&d,i);assert(!memcmp(&f,&d.clients[i].frame,sizeof(f)));
+    cleanup();puts("PASS resize WM: eight edges/margin/corner capture, live step limits, read-only swaps/cleanup, zoom restore/windowshade, backlog, fixed clients");
+    for(int fault=0;fault<5;fault++) {
+        setup(800,600);fake_channel(10);i=desk_add_client(&d,10);
+        request(&m,DESK_HELLO,4);m.data[0]=2;m.data[2]=1;desk_receive(&d,i,&m);
+        fake_surface(11,320,240,0x112233);resize_create(&m,11);desk_receive(&d,i,&m);
+        desk_resize(&d,i,desk_frame(400,288,20,52));flush_all();
+        if(fault==3) fake_channel(12); else fake_surface(12,fault==2?408:400,288,0x445566);
+        request(&m,DESK_DAMAGE,24);m.data[0]=2;m.data[2]=1;m.fd_count=1;m.fds[0]=12;
+        desk_put32(m.data+12,fault==2?408:400);desk_put32(m.data+16,288);desk_put32(m.data+20,fault==1?2:1);
+        if(fault==0) m.data[2]=0; /* channel version changes */
+        if(fault==4) fake_fail_map=1;
+        desk_receive(&d,i,&m);assert(!d.clients[i].window && !fake_live());cleanup();
+    }
+    puts("PASS resize peer isolation: wrong version/serial/size/non-surface/map failure, every fd and mapping released");
+}
 static void test_input(void)
 {
     setup(640,480);
@@ -254,8 +448,11 @@ static void test_shell(void)
     assert(d.clients[b].frame.y+d.clients[b].frame.h==448);
     pointer(d.clients[b].frame.x+5,d.clients[b].frame.y+8); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.drag==b); event(CIUKI_INPUT_RESYNC,0,0,0); assert(d.drag<0);
-    desk_focus(&d,a); pointer(40,464); event(CIUKI_INPUT_BUTTON,1,1,0);
+    /* The Ciuki button at the left end of the top bar; its menu drops below the bar. */
+    desk_focus(&d,a); pointer(40,16); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.menu_open && d.focus<0);
+    { struct desk_box m=desk_menu_box(&d), s=desk_start_button(&d);
+      assert(s.x==DESK_START_X && s.y+s.h<=DESK_BAR && m.x==s.x && m.y==DESK_BAR && m.y+m.h<=448); }
     event(CIUKI_INPUT_KEY,1,1,0); assert(!d.menu_open && d.focus==a);
     event(CIUKI_INPUT_BUTTON,1,0,0);
     /* Negotiated v2, request survives backlog and deadline survives EOF. */
@@ -289,8 +486,13 @@ static void test_menu(void)
     uint8_t elf[52]={0}; memcpy(elf,"\177ELF\1\1\1",7);
     elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     assert(desk_program_add(&d,"lua",elf,sizeof(elf)));
-    assert(desk_program_add(&d,"demo",elf,sizeof(elf)) && !strcmp(d.programs[0].path,"/bin/demo"));
+    assert(desk_program_add(&d,"demo",elf,sizeof(elf)) && !strcmp(d.programs[0].path,"/Programs/demo"));
     assert(!desk_program_add(&d,"demo",elf,sizeof(elf)));
+    char longest[64]; memset(longest,'z',sizeof(longest)-1); longest[sizeof(longest)-1]=0;
+    assert(desk_program_add(&d,longest,elf,sizeof(elf)));
+    assert(strlen(d.programs[2].path)==strlen("/Programs/")+strlen(longest) &&
+           !strcmp(d.programs[2].path+strlen("/Programs/"),longest));
+    assert(!desk_program_add(&d,longest,elf,sizeof(elf)));
     const char *bad[]={"", ".", "..", ".hidden", "a/b", "a\\b", "a:b", "a b", "desktop", "DESKTOP", "\xff"};
     for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) assert(!desk_program_add(&d,bad[i],elf,sizeof(elf)));
     char huge[80]; memset(huge,'a',sizeof(huge)); huge[79]=0;
@@ -302,11 +504,12 @@ static void test_menu(void)
     assert(d.program_count==DESK_MENU_MAX && !strcmp(d.programs[0].name,"app00") && !strcmp(d.programs[15].name,"app15"));
     desk_shell_enable(&d);
     struct desk_box menu=desk_menu_box(&d);
-    assert(menu.y>=32 && menu.y+menu.h==208 && menu.x+menu.w<=320);
+    /* The Start menu (shell.c) drops from the top bar; on a 240-line screen it moves up to end on the taskbar. */
+    assert(menu.y>=0 && menu.y+menu.h==208 && menu.x==DESK_START_X && menu.x+menu.w<=320);
     for (int i=0;i<DESK_CLIENTS;i++) {
         d.clients[i].window=1;
         struct desk_box task=desk_task_button(&d,i);
-        assert(task.x>=84 && task.x+task.w<=240 && task.w>0);
+        assert(task.x>=DESK_TASK_X && task.x+task.w<=320-SH_TRAY_W-8 && task.w>0);
     }
     for (int i=0;i<DESK_CLIENTS;i++) d.clients[i].window=0;
     cleanup();
@@ -314,6 +517,6 @@ static void test_menu(void)
 }
 int main(void)
 {
-    test_protocol(); test_damage(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu();
+    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

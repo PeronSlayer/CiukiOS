@@ -73,7 +73,7 @@ used copy-on-write. Earlier, `/tmp` (a 7.4 GiB tmpfs, that is RAM) filled with
 Every probe case boots with the fw_cfg request, and with
 `CBI_F_TEST_REQUEST` the kernel's `probes_main` never calls `drivers_init()`
 or `supervisor_bootstrap()`. The path a user boots (drivers, storage with the
-boot log and timer, files, audio, supervisor spawning `/bin/desktop`) was
+boot log and timer, files, audio, supervisor spawning `/Programs/desktop`) was
 therefore never covered. A case with `"kind": "normal-boot"` (and
 `"probe": "normal-boot"`) closes that gap:
 
@@ -87,7 +87,7 @@ therefore never covered. A case with `"kind": "normal-boot"` (and
 - Evidence is serial text, not CIUKI_TEST records. Milestones are whole-line
   prefixes, once each and in this order: `L:CPU signature=`,
   `L:SELECT_SOURCE=menu`, `Ciuki VMM F0 build <id> - CiukiOS`,
-  `[supervisor] bootstrap: spawning /bin/desktop`,
+  `[supervisor] bootstrap: spawning /Programs/desktop`,
   `[supervisor] desktop pid=<n> pgid=<n>`. The case fails on a line starting
   with `Ciuki VMM panic`/`Ciuki VMM double fault`, any `CIUKI_TEST` record
   (a panic record or a probe record without a request), another
@@ -97,13 +97,17 @@ therefore never covered. A case with `"kind": "normal-boot"` (and
   so the following diagnostic lines reach `serial.log`.
 - `settle_seconds` after the desktop line the runner takes one QMP
   [`screendump`](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-screendump)
-  (`screen.ppm`) and checks layout colours taken from `apps/desktop`, not a
-  frame digest (the taskbar clock changes): the bottom 32 rows are mostly the
-  taskbar colour `b8c9cc`, the start button `e8d7b9` (or `607a85` with the
-  menu open), the top-left 256x32 is mostly the top bar `213c4c` and has at
+  (`screen.ppm`) and checks layout colours taken from `apps/desktop` (its
+  default theme, Platinum, in `theme.c`), not a frame digest (the taskbar
+  clock changes): the bottom 32 rows are mostly the taskbar colour `d6d6d6`,
+  the Ciuki button at the left end of the top bar (x 4..100, y 4..28) is
+  mostly `f2f2f2` (or `b9b9b9` with the menu open), the top bar right of it
+  up to x 256 is mostly `dcdcdc` and has at
   most 2 % kernel console colours (`10243c`, `e8e8e8`, panic `800000`), and
-  the area between the bars is at least 25 % desktop background `375564`;
-  per-channel tolerance 8. A host test checks these colours against the C
+  the area between the bars has at most 2 % of those console colours
+  (heuristic 3, 2026-10-12: the default wallpaper is the owner's Ciuk2
+  photograph, so the earlier 25 % `375564` desktop-colour requirement no
+  longer applies); per-channel tolerance 8. A host test checks these colours against the C
   sources and runs the heuristic on frames from the production compositor.
 - `result.json` records `evidence_kind: "normal-boot"` (probe cases record
   `ciuki-test-records`), `selector: null`, `normal_boot` (milestones with

@@ -35,7 +35,7 @@ GOOD_SERIAL = [
     'CiukiOS 0.9.0 pre-alpha',
     '[init] flag safe_mode=0 boot_flags=0000016e activation_seq=1',
     '[records] dropped premature evidence record',
-    '[supervisor] bootstrap: spawning /bin/desktop',
+    '[supervisor] bootstrap: spawning /Programs/desktop',
     '[spawn] open err=0',
     '[supervisor] desktop pid=3 pgid=3',
 ]
@@ -66,8 +66,8 @@ def rgb(colour):
     return bytes(((colour >> 16) & 255, (colour >> 8) & 255, colour & 255))
 
 
-def frame(width=1024, height=768, background=0x375564, top=0x213c4c, taskbar=0xb8c9cc,
-          button=0xe8d7b9, quantize=False):
+def frame(width=1024, height=768, background=0x375564, top=0xdcdcdc, taskbar=0xd6d6d6,
+          button=0xf2f2f2, quantize=False):
     """Synthetic shell desktop laid out like apps/desktop/compositor.c."""
     def colour(c):
         if quantize:  # 16-bpp 565 framebuffer read back as 8-bit RGB
@@ -79,12 +79,12 @@ def frame(width=1024, height=768, background=0x375564, top=0x213c4c, taskbar=0xb
         for row in range(y, y + h):
             pixels[(row * width + x) * 3:(row * width + x + w) * 3] = colour(c) * w
     fill(0, 0, width, 32, top)
-    fill(12, 12, 40, 7, 0xf6dfb6)                      # "CiukiOS"
+    fill(4, 4, 96, 24, button)                         # the Ciuki button at the left of the top bar
+    fill(13, 7, 18, 18, 0x9a7a5a)                      # its portrait mark
+    fill(37, 11, 53, 9, 0x161616)                      # "CiukiOS"
     fill((width - 256) // 2, 200, 256, 256, 0x9a7a5a)  # portrait stand-in
     fill(0, height - 32, width, 32, taskbar)
-    fill(4, height - 29, 76, 26, button)
-    fill(8, height - 26, 20, 20, 0x9a7a5a)            # start button portrait
-    fill(width - 64, height - 20, 48, 7, 0x213c4c)    # taskbar clock
+    fill(width - 64, height - 20, 48, 7, 0x161616)    # taskbar clock
     return b'P6\n%d %d\n255\n' % (width, height) + bytes(pixels)
 
 
@@ -218,7 +218,7 @@ class NormalBootUnitTests(unittest.TestCase):
         self.assertEqual(good['regions']['taskbar']['box'], [0, 736, 1024, 32])
         self.assertGreater(good['regions']['taskbar']['fraction'], 0.9)
         self.assertEqual(good['regions']['console_absent']['fraction'], 0)
-        self.assertEqual(observe(frame(button=0x607a85))['failures'], [])   # start menu open
+        self.assertEqual(observe(frame(button=0xb9b9b9))['failures'], [])   # start menu open
         self.assertEqual(observe(frame(quantize=True))['failures'], [])     # 16-bpp framebuffer
         self.assertEqual(observe(frame(800, 600), {})['failures'], [])      # geometry relative
         self.assertEqual(observe(console_frame())['failures'],
@@ -237,7 +237,9 @@ class NormalBootUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='normal-boot-screen-', dir=folder) as temp:
             temp = Path(temp); env = dict(os.environ, TMPDIR=str(temp), ASAN_OPTIONS='detect_leaks=0')
             binary = temp / 'capture'
-            sources = [ROOT / 'apps/desktop' / n for n in ('client.c', 'protocol.c', 'input.c', 'compositor.c')]
+            sources = [ROOT / 'apps/desktop' / n for n in ('client.c', 'protocol.c', 'input.c', 'compositor.c', 'theme.c',
+                                                           'shell.c', 'settings.c', 'wallpaper.c', 'keymap.c')]
+            sources += [ROOT / 'apps/libdeskui/draw.c']
             sources += [ROOT / 'tests/host/desktop' / n for n in ('fake.c', 'compositor_capture.c')]
             subprocess.run(['clang', '-std=c17', '-O1', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'apps/desktop'),
@@ -271,10 +273,23 @@ class NormalBootUnitTests(unittest.TestCase):
         output = (ROOT / 'src/kernel/core/output.c').read_text()
         self.assertIn('#define DESK_BAR %d' % runner.DESK_BAR_ROWS, header)
         self.assertIn('#define DESK_BACKGROUND 0x%06xu' % runner.DESK_BACKGROUND, header)
-        self.assertIn('DESK_BAR},clip,0x%06xu);' % runner.DESK_TOP_BAR, compositor)
-        self.assertIn('fill(d,bar,clip,0x%06xu);' % runner.DESK_TASKBAR, compositor)
-        self.assertIn('fill(d,(struct desk_box){4,bar.y+3,76,26},clip,d->menu_open ? 0x%06xu : 0x%06xu);'
-                      % (runner.DESK_START_BUTTON[1], runner.DESK_START_BUTTON[0]), compositor)
+        # ui-look: the colours come from the default (first) theme in theme.c.
+        theme = (ROOT / 'apps/desktop/theme.c').read_text()
+        default = theme[theme.index('.name = "Platinum"'):]
+        default = default[:default.index('\n    },')]
+        self.assertLess(theme.index('.name = "Platinum"'), theme.index('.name = "Ciuki Blue"'))
+        self.assertIn('.desktop = 0x%06xu,' % runner.DESK_BACKGROUND, default)
+        self.assertIn('.topbar = 0x%06xu,' % runner.DESK_TOP_BAR, default)
+        self.assertIn('.taskbar = 0x%06xu,' % runner.DESK_TASKBAR, default)
+        self.assertIn('.start = 0x%06xu, .start_open = 0x%06xu,' % runner.DESK_START_BUTTON, default)
+        self.assertIn('DESK_BAR},clip,t->topbar);', compositor)
+        self.assertIn('fill(d,bar,clip,t->taskbar);', compositor)
+        # The Ciuki button: its box (desktop.h, compositor.c) and its face colours (shell.c draw_start).
+        for name, value in zip(('X', 'Y', 'W', 'H'), runner.DESK_START_BOX):
+            self.assertIn('#define DESK_START_%s %d\n' % (name, value), header)
+        self.assertIn('return (struct desk_box){DESK_START_X,DESK_START_Y,DESK_START_W,DESK_START_H};', compositor)
+        shell = (ROOT / 'apps/desktop/shell.c').read_text()
+        self.assertIn('uint32_t base = open ? t->start_open : t->start;', shell)
         self.assertIn('{0,(int32_t)d->height-DESK_BAR,(int32_t)d->width,DESK_BAR}', compositor)
         self.assertIn('fg = 0x%06X, bg = 0x%06X;' % (runner.CONSOLE_COLOURS[1], runner.CONSOLE_COLOURS[0]), console)
         self.assertIn('console_set_color(0xFFFFFF, 0x%06X);' % runner.CONSOLE_COLOURS[2], output)

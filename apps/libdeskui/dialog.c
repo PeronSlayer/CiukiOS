@@ -2,7 +2,6 @@
  * Modal dialogs drawn inside the client window: message box, input box,
  * file open/save and progress with Cancel. */
 #include "internal.h"
-#include "../desktop/shell_icons.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -10,10 +9,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define TITLE_H 18
+#define TITLE_H (DESK_FRAME_TITLE - 3)   /* the window frame: body at box.y + 24 */
 #define BTN_W 75
 #define BTN_H 23
-#define LINE_H 13
+#define LINE_H 15
 #define TAB_X 84
 
 enum { ID_BUTTON = -1000, ID_UP = -2000, ID_LIST = -3000, ID_NAME = -4000, ID_FOLDER = -5000, ID_EDIT = -6000, ID_BAR = -7000 };
@@ -209,7 +208,7 @@ static int navigate(struct du_ui *u, const char *path)
     for (unsigned i = 0; i < count; i++) {
         memset(&d->rows[i], 0, sizeof(d->rows[i]));
         d->rows[i].text[0] = d->entries[i].name;
-        d->rows[i].icon16 = d->entries[i].directory ? desk_icon_folder : desk_icon_generic;
+        d->rows[i].icon16 = du_icon_argb(du_icon_file(d->entries[i].name, d->entries[i].directory, 0), 16);
     }
     snprintf(d->folder, sizeof(d->folder), "%s", path);
     struct du_widget *list = &d->items[F_LIST];
@@ -241,7 +240,7 @@ int du_file_dialog(struct du_ui *u, int id, int save, const char *title, const c
     item(d, F_CANCEL, DU_BUTTON, ID_BUTTON - 1, "Cancel")->box = (struct du_rect){right - BTN_W, b.y + b.h - 3 - 10 - BTN_H, BTN_W, BTN_H};
     item(d, F_UP, DU_BUTTON, ID_UP, "Up")->box = (struct du_rect){right - 40, y, 40, 22};
     item(d, F_FOLDER, DU_EDIT, ID_FOLDER, folder)->box = (struct du_rect){b.x + 80, y, right - 46 - b.x - 80, 22};
-    d->items[F_FOLDER].icon = desk_icon_folder;
+    d->items[F_FOLDER].icon = du_icon_argb(du_icon_name("type:folder"), 16);
     struct du_widget *list = item(d, F_LIST, DU_LISTVIEW, ID_LIST, "");
     list->view = DU_LIST; list->inactive_selection = 1;
     list->box = (struct du_rect){b.x + 14, y + 30, b.w - 28, d->items[F_OK].box.y - 10 - (y + 30)};
@@ -392,8 +391,13 @@ void du_dialog_key(struct du_ui *u, unsigned code)
     }
 }
 
+/* The close button's hit box: the same place and size as on every window (theme.c). */
 static struct du_rect close_box(const struct du_dialog *d)
-{ return (struct du_rect){d->box.x + d->box.w - 3 - 2 - 16, d->box.y + 5, 16, 14}; }
+{
+    int b[4];
+    desk_title_button_box(d->box.x, d->box.y, d->box.w, DESK_TB_CLOSE, b);
+    return (struct du_rect){b[0], b[1], b[2], b[3]};
+}
 
 void du_dialog_press(struct du_ui *u, int button)
 {
@@ -416,6 +420,8 @@ void du_dialog_press(struct du_ui *u, int button)
 void du_dialog_motion(struct du_ui *u)
 {
     struct du_dialog *d = &u->dialog;
+    int hot = !d->dragging && du_contains(close_box(d), u->mouse_x, u->mouse_y);
+    if (hot != d->close_hot) { d->close_hot = hot; u->dirty = 1; }
     if (d->dragging) {
         int nx = u->mouse_x - d->drag_x, ny = u->mouse_y - d->drag_y;
         if (nx < -d->box.w + 40) nx = -d->box.w + 40;
@@ -450,26 +456,24 @@ void du_draw_dialog(struct du_ui *u)
     if (!d->kind) return;
     struct du_canvas *c = &u->canvas;
     struct du_rect b = d->box;
-    du_fill(c, b, DU_FACE);
-    du_edge(c, b, DU_RAISED);
-    struct du_rect title = {b.x + 3, b.y + 3, b.w - 6, TITLE_H};
-    du_fill(c, title, DU_SELECT);
-    du_text_fit(c, title.x + 5, title.y + (TITLE_H - DU_GLYPH_H) / 2, title.w - 30, d->title, DU_SELECT_INK);
-    struct du_rect x = close_box(d);
-    du_fill(c, x, DU_FACE); du_edge(c, x, DU_BUTTON_EDGE);
-    for (int i = 0; i < 6; i++) {
-        du_fill(c, (struct du_rect){x.x + 4 + i, x.y + 3 + i, 2, 1}, DU_INK);
-        du_fill(c, (struct du_rect){x.x + 9 - i, x.y + 3 + i, 2, 1}, DU_INK);
-    }
+    const struct desk_theme *t = desk_theme;
+    if (t->shadow_size) du_shadow(c, b, t->shadow_size);
+    /* The frame of every window (theme.c desk_paint_frame): same title bar,
+     * height, close button, outline and corners; a modal dialog has only
+     * the close button (it cannot be minimised or rolled up on its own). */
+    struct du_rect v = du_intersection(c->clip, (struct du_rect){0, 0, c->width, c->height});
+    struct desk_paint p = {c->pixels, c->width, c->height, v.x, v.y, v.w, v.h};
+    struct desk_frame_style style = {.title = d->title, .active = u->focused_window, .buttons = DESK_TB_CLOSE,
+                                     .hot = d->close_hot && du_contains(close_box(d), u->mouse_x, u->mouse_y) ? DESK_TB_CLOSE : 0};
+    desk_paint_frame(&p, b.x, b.y, b.w, b.h, &style);
     int top = body_y(d);
     if (d->kind == DU_DLG_MESSAGE) {
-        static const uint32_t *const icons[] = {NULL, desk_icon_dialog_info32, desk_icon_dialog_warning32,
-                                                desk_icon_dialog_error32, desk_icon_dialog_question32};
+        static const char *const icons[] = {NULL, "dialog:info", "dialog:warning", "dialog:error", "dialog:question"};
         int ix = b.x + 14, tx = ix + (d->icon ? 46 : 0);
         int tw, lines; measure(d->text, &tw, &lines);
         int ty = top + 14 + (d->icon && lines * LINE_H < 32 ? (32 - lines * LINE_H) / 2 + 2 : 0);
-        if (d->icon_pixels) du_icon(c, ix, top + 14, d->icon_pixels, 32, DU_ICON_NORMAL);
-        else if (d->icon > 0 && d->icon < 5) du_icon(c, ix, top + 14, icons[d->icon], 32, DU_ICON_NORMAL);
+        if (d->icon_pixels) du_icon_blit(c, ix, top + 14, d->icon_pixels, 32, DU_ICON_NORMAL);
+        else if (d->icon > 0 && d->icon < 5) du_icon_draw(c, ix, top + 14, du_icon_for(icons[d->icon], 32), DU_ICON_NORMAL);
         draw_text(c, tx, ty, b.x + b.w - 14 - tx, d->text);
     } else if (d->kind == DU_DLG_INPUT || d->kind == DU_DLG_PROGRESS) {
         draw_text(c, b.x + 14, top + 12, b.w - 28, d->text);
