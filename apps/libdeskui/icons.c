@@ -11,6 +11,9 @@
  * (/system/assets/ciuki-portrait.xrgb, pinned by convert_portrait.py)
  * reduced with the same area filter. Integer arithmetic only, 32-bit
  * intermediates; not thread-safe (call from the UI thread). */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "deskui.h"
 #include <stdio.h>
 #include <stdlib.h>

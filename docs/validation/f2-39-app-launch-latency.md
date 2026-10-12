@@ -81,3 +81,20 @@ acceptance. Physical disk commands remain single-sector; cache read-ahead and
 an immutable-snapshot FAT chain cursor are proposals for the lead's next
 measured storage change. The canonical image uses eight 512-byte sectors per
 cluster (`scripts/build_image.py`), so snapshot pages align to clusters.
+
+Merge reconciliation with f2-38/f1-24 (2026-10-12): retain the shutdown
+state check before launch verbosity, timestamp consumption, channel creation
+or spawn. Accepted launches keep the existing monotonic measurement path and
+first-frame polling. The harness retains both shutdown and launch timing cases,
+with independent clock, fstat, termination-authority and marker fakes. A
+combined regression rejects a verbose launch during shutdown without consuming
+its timestamp or creating descriptors, then accepts it after cancellation.
+The icon reader declares its POSIX feature level before its headers so gate
+host builds expose pread without changing feature levels in desktop units
+that also include the native ABI and host signal definitions.
+This follows the [POSIX monotonic clock contract](https://pubs.opengroup.org/onlinepubs/000095399/functions/clock_getres.html)
+and the distinction between [sending a termination signal](https://pubs.opengroup.org/onlinepubs/009604499/functions/kill.html)
+and observing process exit: shutdown still waits/reaps before the power request.
+The automatically merged framebuffer write-combining implementation is retained.
+Merge validation and remaining lead checks are recorded in
+`build/codex/f2-39b-report.md`; no QEMU or hardware evidence is implied.

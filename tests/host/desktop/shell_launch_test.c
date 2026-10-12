@@ -35,14 +35,18 @@ uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,ui
 int shell_close(int);
 static int shell_clock_gettime(clockid_t, struct timespec *);
 #define clock_gettime shell_clock_gettime
+struct stat;
+int shell_fstat(int, struct stat *);
 #define fcntl shell_fcntl
 #define close shell_close
+#define fstat shell_fstat
 #define main desktop_main
 #include "../../../apps/desktop/desktop.c"
 #undef main
 #undef close
 #undef fcntl
 #undef clock_gettime
+#undef fstat
 static int timing_model, trace_verbose;
 static uint64_t model_us;
 static struct {
@@ -96,6 +100,14 @@ int shell_fcntl(int fd, int command, ...)
     return 0;
 }
 int shell_close(int fd) { return fake_ops.close(fd); }
+static int shell_regular_fd=-1, shell_directory_fd=-1;
+int shell_fstat(int fd, struct stat *st)
+{
+    memset(st,0,sizeof(*st));
+    if (fd==shell_regular_fd) { st->st_mode=S_IFREG; return 0; }
+    if (fd==shell_directory_fd) { st->st_mode=S_IFDIR; return 0; }
+    errno=EBADF; return -1;
+}
 static int expect_files_test, expect_note_test, expect_authority=-1, expect_test=0;
 static const char *expect_note_arg, *expect_dosbox[2];
 static unsigned dosbox_spawns;
@@ -151,7 +163,8 @@ static int fake_record_count;
 /* Desktop shell services (desktop.c): no mixer and no power interface on the host. */
 int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
 { (void)fd; (void)op; (void)record; (void)size; errno=ENODEV; return -1; }
-int ciuki_power(uint32_t action) { (void)action; errno=ENOSYS; return -1; }
+static uint32_t last_power_action;
+int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer,uint32_t bytes)
 {
     assert(bytes>=CIUKI_PROC_LIST_MIN+8*sizeof(struct ciuki_proc_record));
@@ -163,6 +176,9 @@ int ciuki_proc_list(void *buffer,uint32_t bytes)
 }
 static uint32_t terminated_pid; static int terminated_signal;
 static int fake_terminate(uint32_t pid,int signal) { terminated_pid=pid; terminated_signal=signal; return 0; }
+static int last_authority;
+int ciuki_proc_terminate(ciuki_pid_t pid, int signo, int authority_fd)
+{ last_authority=authority_fd; return fake_terminate((uint32_t)pid,signo); }
 static void v2(struct desktop *d,int index,uint32_t pid,struct ciuki_message *m)
 { (void)d; m->data[0]=DESK_SHELL_VERSION; m->sender_pid=pid; desk_receive(d,index,m); }
 static unsigned queued(const struct desktop *d,int index,unsigned opcode,struct desk_packet *out)
@@ -561,11 +577,19 @@ static void test_launch_timing(void)
     struct ciuki_input_event input={.type=CIUKI_INPUT_KEY,.code=0x1e,.value=1,.monotonic_ns=900000000};
     desk_input(&d,&input); d.action=0; input.monotonic_ns=950000000; desk_input(&d,&input);
     assert(d.launch_click_ns==900000000); /* later events cannot replace a deferred launching click */
+    struct desk_child children_before[DESK_CLIENTS];
+    memcpy(children_before,d.children,sizeof(children_before));
+    d.power.state=DESK_POWER_CLOSING;
+    assert(launch_program(&d,&p)==-1 && errno==EBUSY);
+    assert(!d.launch_mark && d.launch_click_ns==900000000 && !fake_live());
+    assert(!memcmp(children_before,d.children,sizeof(children_before)));
+    d.power.state=DESK_POWER_IDLE; /* Cancel restores the measured launch path. */
     assert(launch_program(&d,&p)>0 && d.launch_mark); /* console verbose after a quiet launch */
     assert(launch_timing.click_us==900000 && !d.launch_click_ns);
     drop_all(&d); fake_reset(); timing_model=trace_verbose=0;
-    puts("PASS launch timing: three policies/models, quiet mode, CREATE/DAMAGE/present distinction, failed present retry, no duplicate frames, bounded startup polling");
+    puts("PASS launch timing: three policies/models, quiet mode, CREATE/DAMAGE/present distinction, failed present retry, no duplicate frames, bounded startup polling, shutdown blocks launch before tracing");
 }
+#include "shutdown_sequence_test.h"
 int main(void)
 {
     struct desktop d;
@@ -668,5 +692,6 @@ int main(void)
     test_games_menu();
     test_menu_icons();
     test_launch_timing();
+    test_shutdown_sequence();
     return 0;
 }
