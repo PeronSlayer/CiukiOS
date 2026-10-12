@@ -87,7 +87,10 @@ The non-shell compositor path (crash-isolation gate, `plain` digest) is
 unchanged; compositor.c references the shell through weak symbols so the demo
 and the libdeskui programs, which reuse compositor.c, link without it.
 
-- **Start menu** ("Ciuki" button, the approved portrait): Programs (CiukNote,
+- **Start menu** (the Ciuki button at the left end of the top bar: the
+  approved portrait and "CiukiOS" on a rounded gradient face, pressed in while
+  the menu is open; the menu drops below the bar, submenus open to the
+  right): Programs (CiukNote,
   Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
   Accessories and Games submenus, then a Developer submenu with Hello,
   libc_smoke and any unknown `/bin` program),
@@ -96,12 +99,12 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
   keyboard works (arrows, Enter, Esc). A vertical banner shows the portrait
   and "CiukiOS". Menus are 30 px (top) and 22 px rows.
-- **Taskbar:** start button, task buttons (icon, title, pressed state for the
-  active window; right click: Restore, Minimize, Close), tray with a volume
-  icon and the clock (24/12 h, optional seconds; the date as a tooltip after
-  0.6 s). The task button geometry (x 84, at most 160 px each) is unchanged
-  for the f2 scripts. The top bar keeps the identity colours and shows the
-  focused window's title (or a notice) and the date.
+- **Taskbar:** task buttons (icon, title, pressed state for the active
+  window; right click: Restore, Minimize, Close) from x 4, at most 160 px
+  each, and a tray with a volume icon and the clock (24/12 h, optional
+  seconds; the date as a tooltip after 0.6 s). The top bar keeps the identity
+  colours and shows the Ciuki button, the focused window's title (or a
+  notice) and the date.
 - **Volume:** the supervisor delegates the writable `/dev/mixer` handle to the
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
@@ -404,11 +407,10 @@ surface bytes (little-endian words), which contains no clock, so the host reprod
 
 **QEMU case `ciuknote-qemu-t23`** (`tests/suites/f2-desktop.json`; the selector and
 predicates of `files-qemu-t23` with `note-*` records and three checkpoints): F10 down/up;
-the cursor is clamped to the bottom-left corner (two (-381, +381) moves); click the
-Ciuki button; move up to row 0 of the menu and click `ciuknote` (rows are 28 px and
-anchored to the bar: from the button, dy = -1 - 28 * (n + 2 - k) for n programs sorted
-by strcmp and the 0-based row k; `/bin` lists eight programs (ciuknote, demo, dosbox,
-files, hello, libc_smoke, lua, tasks), so `ciuknote` is 281 px up); wait 3.6 s; type `Hello
+the cursor is clamped to the top-left corner (two (-381, -381) moves); click the
+Ciuki button in the top bar at (40, 16), Programs at (40, 50) and the `ciuknote` row of
+the Programs submenu (`tests/host/desktop/shell_menu.py` models the geometry and
+regenerates the scripted cases); wait 3.6 s; type `Hello
 CiukNote`, Enter, `Ciuki says woof.`, Enter, F5; Ctrl+S, type `/system/tests/note.txt`,
 Enter (checkpoint 2); Ctrl+N, Ctrl+O, type `note.txt`, Enter (checkpoint 3); File > Exit
 by its mnemonics, Alt+F then X (the clean document closes and CiukNote exits 0; neither
@@ -552,9 +554,10 @@ shareware games of `apps/desktop/catalog.h` (`desk_games`): "Wolfenstein 3D
 prompt of its window (`apps/dosbox/autorun.h`: `\DIR\PROGRAM` becomes
 `CD \DIR` and `PROGRAM`) once DOS is ready and the window has the focus. The
 window VM boots the bundled games disk `C:\GAMES\CIUKIGAM.IMG`
-(docs/build-and-run.md, "Pre-installed shareware games"). The extra
-Programs row moves the scripted cases' submenu rows:
-`tests/host/desktop/shell_menu.py --regenerate`.
+(docs/build-and-run.md, "Pre-installed shareware games"). The Games row
+follows the program rows in the top-aligned Programs submenu, so the
+scripted cases' rows do not move (`tests/host/desktop/shell_menu.py` models
+it; `--regenerate` leaves `f2-desktop.json` and `zz-ui.json` unchanged).
 
 ## f2-30 decisions (2026-10-11)
 

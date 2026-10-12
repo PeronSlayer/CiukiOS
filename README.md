@@ -77,6 +77,16 @@ the real laptops.
 
 Details and gates: [Roadmap](Roadmap.md).
 
+## 0.9.0 pre-alpha in pictures
+
+QEMU captures of the integration image of 2026-10-12 ([capture details](docs/screenshots/0.9.0/README.md)).
+
+| | |
+| --- | --- |
+| ![Desktop](docs/screenshots/0.9.0/desktop.png) | ![Start menu](docs/screenshots/0.9.0/start-menu.png) |
+| ![Files](docs/screenshots/0.9.0/files.png) | ![Control Panel](docs/screenshots/0.9.0/control-panel.png) |
+| ![Task Manager](docs/screenshots/0.9.0/task-manager.png) | ![DOS window](docs/screenshots/0.9.0/dos-window.png) |
+
 ## The 0.8 line in pictures
 
 Actual Linux QEMU captures of 0.8.3 ([capture details](docs/screenshots/0.8.3/README.md)).

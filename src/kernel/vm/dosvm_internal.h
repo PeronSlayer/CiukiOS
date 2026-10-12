@@ -78,11 +78,12 @@ struct dosvm {
     uint64_t video_tick;
     uint32_t video_display, video_phase, owner_pid;
     uint32_t video_faults, video_frames;
-    /* f3-06: direct plane window (0 none, else plane + 1) and counters. While
-     * open, the window pages A0000h-AFFFFh map that model plane user-
-     * writable; dosvm_destroy restores the VM's frames (dosvm_vga.c). */
+    /* f3-06/07: direct window (0 none, 1..4 plane + 1, 5 linear). A0000h-
+     * AFFFFh maps a model plane or the VM's own linear backing user-writable;
+     * sync closes it before the VM's low-page restoration (dosvm_vga.c). */
     unsigned video_direct;
-    uint32_t video_pm_faults, video_starts, video_maps, video_flushes;
+    uint32_t video_pm_faults, video_starts, video_maps, video_flushes, video_burst;
+    uint32_t video_linear_maps, video_linear_harvests;
     cvga_geometry video_geometry;
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
     uint8_t video_row[DOSVM_VIDEO_WIDTH];
@@ -108,6 +109,7 @@ struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
+void dosvm_vga_burst(struct dosvm *, struct v86_frame *);
 /* f3-06: a ring-3 DPMI client's access to the supervisor-only window. */
 int dosvm_vga_fault_pm(struct dosvm *, struct v86_frame *);
 /* f3-06: open, move or close the direct plane window for the current VGA
@@ -115,6 +117,10 @@ int dosvm_vga_fault_pm(struct dosvm *, struct v86_frame *);
  * window, restoring the VM's own frames, if unmap). */
 void dosvm_vga_direct(struct dosvm *);
 void dosvm_vga_sync(struct dosvm *, bool unmap);
+/* Close only the linear window before a consumer uses/modifies the planes. */
+void dosvm_vga_model(struct dosvm *);
+/* Eligible protection fault: open the linear window and retry the CPU cycle. */
+bool dosvm_vga_retry(struct dosvm *, uint32_t address, uint32_t instruction, bool pm);
 /* Writes changed rows of the 640x480 frame through row(arg, y, pixels, bytes).
  * Returns 1 with *damage set when rows changed, 0 when nothing changed or the
  * frame period has not elapsed, or the negative row-writer error. */

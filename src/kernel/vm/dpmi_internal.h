@@ -94,6 +94,9 @@ struct dpmi {
     uint32_t ldt[DPMI_LDT_ENTRIES][2] __attribute__((aligned(8)));
     uint8_t kind[DPMI_LDT_ENTRIES], owner[DPMI_LDT_ENTRIES];
     bool active, bits32, shadow, rm_a20;
+    /* f3-06 POPF compatibility: a flags image saved before a CLI carries
+     * TF, so its POPF/IRET traps once (dpmi_dispatch.c). */
+    bool if_armed;
     uint16_t shadow_cs;             /* STI shadow: CS:EIP of the shadowed instruction */
     uint32_t shadow_eip;
     unsigned clients, depth;

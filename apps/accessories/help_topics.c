@@ -19,7 +19,7 @@ const struct help_topic help_topics[] = {
 {"Getting started",
 "Getting started\n"
 "\n"
-"1. Click the Ciuki button at the left of the taskbar to open the\n"
+"1. Click the Ciuki button at the left of the top bar to open the\n"
 "   menu. It lists the programs installed in /bin, About CiukiOS\n"
 "   and Restart.\n"
 "2. Click a program to open it in a window. Each open window has a\n"

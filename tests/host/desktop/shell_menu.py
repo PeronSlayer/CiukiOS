@@ -1,19 +1,23 @@
 """Start menu geometry of the desktop shell (apps/desktop/shell.c) at 1024x768, for the scripted QEMU cases.
 
-The Start menu is 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px) above the 32 px
-taskbar, so it spans y 542..736 and its first row, Programs, y 545..575 (x 2..186). Hovering or clicking
-Programs opens its submenu at x 183..333 with rows of 22 px: the known programs present in /bin in
-PROGRAM_ORDER, then "Accessories" when an accessory is present, "Games" when dosbox is present (the bundled
-shareware games, owner decision 2026-10-12), then a separator (8 px) and "Developer" when any other program
-is present (shell.c build(), SH_MENU_PROGRAMS). The submenu is top-aligned with
-Programs (y 542) unless it would cross the taskbar: then shell.c layout() moves it up to end at y 736.
-A script clicks the Ciuki button, Programs, moves right along the Programs row into the submenu, then
-up or down to the program row (submenu_row_y), clicks it and moves back.
+The Ciuki (Start) button sits at the left end of the 32 px top bar, x 4..100, y 4..28 (desktop.h
+DESK_START_*). Its menu drops from it: 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px)
+from y 32 (the top bar's bottom edge) at x 4, so it spans y 32..226 and its first row, Programs, y 35..65
+(x 4..188). Hovering or clicking Programs opens its submenu at x 185..335 with rows of 22 px, top-aligned
+with Programs (y 32): the known programs present in /bin in PROGRAM_ORDER, then "Accessories" when an
+accessory is present, "Games" when dosbox is present (the bundled shareware games, owner decision
+2026-10-12), then a separator (8 px) and "Developer" when any other program is present (shell.c build(),
+SH_MENU_PROGRAMS). shell.c layout() would move the submenu up only if it crossed the
+taskbar. A script clamps the pointer to the top-left corner, moves onto the Ciuki button (START_CLICK) and
+clicks it, moves down onto Programs (PROGRAMS_CLICK_Y) and clicks it, moves right along the Programs row
+into the submenu, then down to the program row (submenu_row_y), clicks it and moves back.
 
-Regenerating the cases after a submenu change: tests/host/desktop/shell_menu.py --regenerate rewrites the
-move into the program row of each scripted case (and the following move, so every later pointer
-position stays the same) from this model, then the move before each ANCHORS click so that click lands on
-its absolute target (the later path moves with it)."""
+Regenerating the cases after a layout change: tests/host/desktop/shell_menu.py --regenerate rewrites, from
+this model, the pointer path of each scripted case up to the program click (the corner clamp, the moves
+onto the Ciuki button, Programs and the program row) and the move after the launch click, so every later
+pointer position stays the same; then the move before each ANCHORS click so that click lands on its
+absolute target (the later path moves with it). tests/suites/zz-ui.json carries copies of these cases and
+is rewritten with them."""
 # SPDX-License-Identifier: MIT
 import json
 from pathlib import Path
@@ -21,13 +25,18 @@ import sys
 
 PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "control"]
 ACCESSORIES = ["calc", "charmap", "clock", "help", "mixer", "viewer"]
-SCREEN_H = 768
-TASKBAR_TOP = SCREEN_H - 32
-START_TOP = TASKBAR_TOP - (6 + 6 * 30 + 8)
+SCREEN_W, SCREEN_H = 1024, 768
+TOP_BAR = 32
+START_BUTTON = (4, 4, 96, 24)              # x, y, w, h (desktop.h DESK_START_X/Y/W/H)
+START_CLICK = (40, 16)
+MENU_X, MENU_W = START_BUTTON[0], 184
+START_TOP = TOP_BAR
 PROGRAMS_ROW = (START_TOP + 3, START_TOP + 3 + 30)
-SUBMENU_X = (183, 333)
+PROGRAMS_CLICK_Y = (PROGRAMS_ROW[0] + PROGRAMS_ROW[1]) // 2
+SUBMENU_X = (MENU_X + MENU_W - 3, MENU_X + MENU_W - 3 + 150)
 SUB_ROW = 22
 SEPARATOR = 8
+TASKBAR_TOP = SCREEN_H - 32
 # Scripted cases and the program each one launches (tests/suites/f2-desktop.json).
 TARGETS = {"desktop-shell-qemu-t23": "demo", "desktop-shell-qemu-e500": "demo", "files-qemu-t23": "files",
            "ciuknote-qemu-t23": "ciuknote", "tasks-qemu-t23": "tasks"}
@@ -36,6 +45,7 @@ TARGETS = {"desktop-shell-qemu-t23": "demo", "desktop-shell-qemu-e500": "demo", 
 # client (97, 10) in the Files UI harness (files_ui_test.c SCRIPT view_title), and the rest of the Files path
 # is relative to it. Task Manager: its taskbar button (task buttons span y 739..765).
 ANCHORS = {"files-qemu-t23": (4, (7 + 97, 60 + 10)), "tasks-qemu-t23": (4, (300, 751))}
+SUITES = ("tests/suites/f2-desktop.json", "tests/suites/zz-ui.json")
 
 
 def program_row(programs, name):
@@ -63,8 +73,9 @@ def submenu_row_y(programs, name):
 
 def check_launch(test, clicks, programs, name, label=""):
     """clicks[0] Ciuki button, clicks[1] Programs, clicks[2] the program's submenu row."""
-    test.assertTrue(4 <= clicks[0][0] < 80 and 739 <= clicks[0][1] < 765, label)
-    test.assertTrue(2 <= clicks[1][0] < 186 and PROGRAMS_ROW[0] <= clicks[1][1] < PROGRAMS_ROW[1], label)
+    x, y, w, h = START_BUTTON
+    test.assertTrue(x <= clicks[0][0] < x + w and y <= clicks[0][1] < y + h, label)
+    test.assertTrue(MENU_X <= clicks[1][0] < MENU_X + MENU_W and PROGRAMS_ROW[0] <= clicks[1][1] < PROGRAMS_ROW[1], label)
     test.assertTrue(SUBMENU_X[0] <= clicks[2][0] < SUBMENU_X[1], label)
     first = submenu_top(programs) + 3
     test.assertGreaterEqual(clicks[2][1], first, label)
@@ -76,9 +87,76 @@ def image_programs(root):
     return sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (root / "scripts/build_image.py").read_text())) - {"desktop"})
 
 
+def walk(case):
+    """(phase, event data, x before, y before) for every relative move; phase = clicks before it."""
+    x, y, clicks, moves = SCREEN_W // 2, SCREEN_H // 2, 0, []
+    for batch in case["actions"][0]["batches"]:
+        for event in batch["events"]:
+            data = event["data"]
+            if event["type"] == "rel":
+                moves.append((clicks, data, x, y))
+                if data["axis"] == "x": x = min(max(x + data["value"], 0), SCREEN_W - 1)
+                else: y = min(max(y + data["value"], 0), SCREEN_H - 1)
+            elif event["type"] == "btn" and data["down"]: clicks += 1
+    return moves
+
+
+def launch_path(case, programs, changed):
+    """Rewrites the moves up to the first move after the launch click (click 3)."""
+    moves = walk(case)
+    # The absolute position after the first move of phase 3 (y; x is restored by its x move) must stay.
+    after = [m for m in moves if m[0] == 3 and m[1]["axis"] == "y"]
+    assert after, case["id"]
+    first_after = after[0]
+    keep_y = min(max(first_after[3] + first_after[1]["value"], 0), SCREEN_H - 1)
+    targets = {1: START_CLICK[1], 2: PROGRAMS_CLICK_Y, 3: submenu_row_y(programs, TARGETS[case["id"]])}
+    y = SCREEN_H // 2
+    for phase in (0, 1, 2):
+        ys = [m for m in moves if m[0] == phase and m[1]["axis"] == "y"]
+        assert ys, (case["id"], phase)
+        for k, (_, data, _, _) in enumerate(ys):
+            if k + 1 < len(ys):
+                value = -abs(data["value"]) if phase == 0 else data["value"]   # phase 0: clamp to the top edge
+            else:
+                value = targets[phase + 1] - y
+            if value != data["value"]:
+                changed.append((case["id"], f"phase {phase} y {data['value']}->{value}"))
+                data["value"] = value
+            y = min(max(y + value, 0), SCREEN_H - 1)
+    data = first_after[1]
+    value = keep_y - y
+    if value != data["value"]:
+        changed.append((case["id"], f"after launch y {data['value']}->{value}"))
+        data["value"] = value
+
+
+def anchor(case, changed):
+    number, (ax, ay) = ANCHORS[case["id"]]
+    x, y, clicks, last = SCREEN_W // 2, SCREEN_H // 2, 0, {}
+    for batch in case["actions"][0]["batches"]:
+        for event in batch["events"]:
+            data = event["data"]
+            if event["type"] == "rel":
+                before = x if data["axis"] == "x" else y
+                value = min(max(before + data["value"], 0), (SCREEN_W - 1 if data["axis"] == "x" else SCREEN_H - 1))
+                if data["axis"] == "x": x = value
+                else: y = value
+                last[data["axis"]] = (data, before)
+            elif event["type"] == "btn" and data["down"]:
+                clicks += 1
+                if clicks == number:
+                    for axis, target, now in (("x", ax, x), ("y", ay, y)):
+                        if target != now:
+                            move, before = last[axis]
+                            move["value"] = target - before
+                            changed.append((case["id"], f"click {number} {axis} {now}->{target}"))
+                    return
+
+
 def regenerate(root):
-    """Moves each case's pointer onto its program row (submenu_row_y) and keeps every later position."""
-    path = root / "tests/suites/f2-desktop.json"
+    """Rewrites each scripted case's path onto the Ciuki button, Programs and its program row (this model),
+    keeping every later pointer position; then copies the cases into the derived suites."""
+    path = root / SUITES[0]
     text = path.read_text()
     suite = json.loads(text)
     assert json.dumps(suite, indent=2) + "\n" == text, "f2-desktop.json is not in the canonical indent=2 form"
@@ -87,53 +165,19 @@ def regenerate(root):
     for case in suite["cases"]:
         if case["id"] not in TARGETS:
             continue
-        x, y, clicks, moves = 512, 384, 0, []
-        for batch in case["actions"][0]["batches"]:
-            for event in batch["events"]:
-                data = event["data"]
-                if event["type"] == "rel":
-                    if data["axis"] == "x": x = min(max(x + data["value"], 0), 1023)
-                    else:
-                        before = y
-                        y = min(max(y + data["value"], 0), SCREEN_H - 1)
-                        moves.append((clicks, data, before))
-                elif event["type"] == "btn" and data["down"]: clicks += 1
-        into = [m for m in moves if m[0] == 2]
-        after = [m for m in moves if m[0] == 3]
-        assert len(into) == 1 and after, case["id"]
-        _, data, before = into[0]
-        target = submenu_row_y(programs, TARGETS[case["id"]])
-        if target == before: target += 1          # never a zero-length move
-        delta = target - (before + data["value"])
-        if delta:
-            data["value"] += delta
-            after[0][1]["value"] -= delta
-            changed.append((case["id"], delta))
+        launch_path(case, programs, changed)
         if case["id"] in ANCHORS:
-            number, (ax, ay) = ANCHORS[case["id"]]
-            x, y, clicks, last = 512, 384, 0, {}
-            for batch in case["actions"][0]["batches"]:
-                for event in batch["events"]:
-                    data = event["data"]
-                    if event["type"] == "rel":
-                        before = x if data["axis"] == "x" else y
-                        value = min(max(before + data["value"], 0), (1023 if data["axis"] == "x" else SCREEN_H - 1))
-                        if data["axis"] == "x": x = value
-                        else: y = value
-                        last[data["axis"]] = (data, before)
-                    elif event["type"] == "btn" and data["down"]:
-                        clicks += 1
-                        if clicks == number:
-                            for axis, target, now in (("x", ax, x), ("y", ay, y)):
-                                if target != now:
-                                    move, before = last[axis]
-                                    move["value"] = target - before
-                                    changed.append((case["id"], f"click {number} {axis} {now}->{target}"))
-                            break
-                else:
-                    continue
-                break
+            anchor(case, changed)
     path.write_text(json.dumps(suite, indent=2) + "\n")
+    cases = {c["id"]: c for c in suite["cases"] if c["id"] in TARGETS}
+    for name in SUITES[1:]:
+        other = root / name
+        text = other.read_text()
+        data = json.loads(text)
+        end = "\n" if text.endswith("\n") else ""
+        assert json.dumps(data, indent=2) + end == text, f"{name} is not in the indent=2 form"
+        data["cases"] = [cases.get(c["id"], c) for c in data["cases"]]
+        other.write_text(json.dumps(data, indent=2) + end)
     return changed
 
 

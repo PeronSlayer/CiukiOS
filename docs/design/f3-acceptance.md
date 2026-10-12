@@ -352,6 +352,27 @@ modes. The read floors make each region visible whatever the trap cost.
 Only 3BAh/3DAh reads advance the sequence. The presenter cadence (33 ticks)
 is unchanged.
 
+Wolf3D play stage (wolf3d-qemu-t23 with the retrace fix, 2026-10-12): no
+flip in the 3 s window and 1.14 million emulated aperture stores. Wall
+strips wider than one pixel set multi-plane map masks (WOLFSRC/WL_SCALE.C
+`mapmasks1-3`: 3, 7, 15, 6, 14, 12) that the single-plane direct window
+cannot carry, and the compiled scalers (`BuildCompScale`: `mov al,[si+d8]`,
+`mov es:[di+d16],al`, ..., `RETF`) store one byte per instruction, so every
+stored byte was a #PF. Decision: after a V86 aperture #PF the trap path
+keeps emulating the following instructions with the same decoder
+(`dosvm_vga_burst`) while they touch the aperture (at most 4 in a row
+without), up to 1024; it stops before anything the decoder does not handle,
+any store outside the aperture, TF, an STI/MOV SS shadow or a deliverable
+interrupt, so the guest sees the sequential result. Host replay of one view
+through `dosvm_trap` (tests/host/dosvm_workloads_test.inc): near wall, 4-pixel
+strips, 11552 -> 76 #PF per frame; mid wall, 2-pixel strips, 15200 -> 152;
+1-pixel strips stay on the direct window (304 remaps, 0 #PF); planes
+identical to the reference. Flips were already counted (CRTC 0Ch data
+writes, byte OUTs as in `ThreeDRefresh` or OUTW); the probe now starts its
+3 s flip window only once flipping is steady (3 flips in one second, within
+90 s of the last menu key) and reports `start_ms`, `burst` and per-window
+`faults`/`maps`.
+
 Fonts: the synthetic ROM (F000:2000 8x16, F000:3000 8x8, F000:4000 8x14) is
 a deterministic conversion of the kernel's Inconsolata console bitmap
 (OFL-1.1) for printable ASCII. CP437 accented letters use their base letter,
@@ -1219,6 +1240,40 @@ VMDEV-through-`dosvm_trap` tests are unchanged and pass; the runner's whole
 DOOM timedemo fell from 840 M to 5.9 M traps with identical instruction
 count, frames and result.
 
+**POPF compatibility for DPMI clients** (closes the contract's open
+question "Compatibility beyond 0.9" for the pinned DOOM build). On QEMU
+(zz-doom5, 5fe5d14c) DOOM with sound stopped after `I_StartupTimer()`:
+DMX saves its flags and disables (`pushfd; pop eax; cli` at 0024:7F15),
+later restores them with `push eax; popfd`, then waits for timer ticks. At
+CPL 3 and IOPL 0 the CLI traps but the POPF neither traps nor changes IF
+(Intel SDM Vol. 2, POPF/IRET; DPMI 0.9 section 2.4: POPF and IRET "may not
+modify the state of the interrupt flag"), so the virtual IF stayed clear,
+IRQ0 stayed pending (IRR 01h) and the tick loop at 0024:83E2 never ended;
+the libx86emu runner reproduced it exactly. The same loss later hung the
+exit in `I_ShutdownSound` (`while (s != ticcount)` at 0024:E849, IRR 81h).
+Design, IOPL unchanged, no timeout: the Windows 95 remedy described by
+Raymond Chen ("Getting MS-DOS games to run on Windows 95: The interrupt
+flag", The Old New Thing, 2016-04-11,
+https://devblogs.microsoft.com/oldnewthing/20160411-00/?p=93281). When a
+trapped CLI directly follows `PUSHF` (image on the stack top) or
+`PUSHF; POP r` (image in r), the virtual IF was set, and the image equals
+PUSHF's image of the current flags (IF set, IOPL 0, NT and TF clear,
+status flags as now), the host sets TF in that saved image. The POPF or
+IRET that later loads it sets TF; the single-step trap one instruction
+later (Intel SDM Vol. 3, single-step exception condition) tells the host
+the client restored "enabled": the host clears TF and sets the virtual IF;
+any trap taken with TF set first applies that restore (a CLI right after
+the POPF still disables). Images saved while virtually disabled (nested
+sections) are not touched, so their restore keeps IF clear. Nothing is
+single-stepped: the first design (stepping each section, 4096 instructions
+at most) cost 42.6 M debug traps for one timedemo and still ran out on
+DMX's mixing loops (10 128 sections hit the limit). Once a client holds an
+armed image, a single-step trap without a watchpoint hit is the host's: a
+debugger single-stepping that client is not supported. Counters
+`if_armed` and `if_restored` in `dpmi_stats`; the doom `case=dpmi` record
+reports `popf=` (restores). The libx86emu runner models TF loaded by
+POPF/IRET (libx86emu loads it but never traps on it).
+
 **Direct plane window.** One #PF per store is far too slow for Mode X/Y
 games. When `cvga_direct_plane()` reports that a CPU write stores its byte
 unchanged into exactly one plane (single-plane map mask, write mode 0, no
@@ -1261,7 +1316,8 @@ the runner's probe-name grammar now allows digits):
   verdict line (`dosvm_verdict_text`: the CiukiOS shell redraws its row-0
   title bar over DOOM's line before the prompt; QEMU zz-doom c11506e9), RUNREC status, exit
   code 1 type 0), `case=video` (Mode Y 320x200 seen, flips, faults, PM
-  faults, window openings), `case=dpmi`, `case=audio` (f3-05 counters:
+  faults, window openings), `case=dpmi` (`popf` = flags restores seen
+  through armed images, informative), `case=audio` (f3-05 counters:
   DSP resets, block boundaries, PCM frames, IRQ edges, services, OPL events,
   DMA faults; `consumer` = the f4-05 native output attached on AC97
   profiles, not a pass condition), `case=loop_cleanup`. Without sound
@@ -1498,9 +1554,10 @@ Start menu's Programs submenu gets "Games" (when `/bin/dosbox` exists) with
 (`\DOOM\DOOM.EXE -config CIUKI.CFG`), Tango `applications-games`; each
 launches `dosbox --name=<game> <command>` (`desk_task_launch_args`), and the
 window's taskbar/title icon is `applications-games`. The Programs submenu
-grows by one row: `tests/host/desktop/shell_menu.py` models it and
-`--regenerate` moved the five scripted desktop cases' submenu rows
-(`tests/suites/f2-desktop.json`).
+grows by one row after the program rows: `tests/host/desktop/shell_menu.py`
+models it; with the submenu top-aligned under the top-bar Ciuki button
+(wt/ui-polish) no program row moves, so `--regenerate` leaves the five
+scripted desktop cases (`f2-desktop.json`, `zz-ui.json`) unchanged.
 
 **Licence status (owner).** DOOM's package terms permit free
 redistribution and CiukiOS charges nothing. Wolfenstein 3-D's `VENDOR.DOC`
@@ -1542,8 +1599,8 @@ Programs > Games > "Wolfenstein 3D (shareware)": a DOS window titled
 title and a playable episode 1; the same for "DOOM (shareware)" (DOOM
 with SB16/OPL through `CIUKI.CFG`; keyboard only). Then `f3-vm` (the
 vm-window case now runs on the games disk with the DPMI host),
-`f3-workloads` (unchanged: fixture disk only), `f2-desktop` (regenerated
-menu rows) and the f2/f3 gates.
+`f3-workloads` (unchanged: fixture disk only), `f2-desktop` (the Programs
+submenu now has a Games row) and the f2/f3 gates.
 
 #### Open items
 
@@ -1554,3 +1611,119 @@ menu rows) and the f2/f3 gates.
 - The typed command assumes the US keyboard decoding of the DOS VM and an
   idle shell prompt; a user typing during the 400 ms settle time mixes
   input.
+
+## f3-07
+
+Direct chained-mode window (directive f3-07). QEMU and hardware acceptance
+belong to the lead; host evidence does not qualify either. Supersedes the
+f3-06 limitation that chained mode-13h stores always trap per instruction.
+
+### Research checked before implementation (2026-10-12)
+
+- [FreeVGA sequencer registers](https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/seqreg.htm):
+  SR04 chain-4 selects the plane using address bits 0–1; SR02 still enables
+  individual planes. Odd/even must be disabled and extended memory enabled.
+- [FreeVGA graphics registers](https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/graphreg.htm)
+  and [display-memory access](https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/vgamem.htm):
+  write mode 0 is a plain byte store only with enable-set/reset clear,
+  rotate/logical operation zero and bit mask FFh. Read mode 1 and odd/even
+  reads cannot use a linear mapping. Hardware reads load all four latches;
+  those latches do not affect identity write-mode-0 stores.
+- [DOSBox Staging upstream `vga_memory.cpp`](https://raw.githubusercontent.com/dosbox-staging/dosbox-staging/main/src/hardware/video/vga_memory.cpp):
+  chained handlers separate CPU byte addressing from plane storage and
+  scanout caches. Consulted for behavior only; no upstream code copied.
+  The repository's `memory_address`, `read_vram`, `cvga_write_vram` and
+  scanout use physical plane offsets: byte `o` selects plane `o & 3` at
+  `o & FFFCh`, rather than a compacted `o >> 2`. That existing layout is
+  retained, including the untouched intervening plane bytes.
+
+### Decisions
+
+- Reuse the VM's sixteen already allocated A0000h–AFFFFh backing pages as
+  the linear 64 KiB buffer, seeded from the four planes on opening. No new
+  allocation, commitment, residency or memory limit is required. These
+  pages may be physically noncontiguous; the shared V86/DPMI page table
+  maps each one user-writable. B0000h–BFFFFh remains trapped. The existing
+  single-plane mapping and its counters retain their behavior.
+- Enable only the standard chained 320x200 graphics state: SR04 bits 1–3
+  set, SR02=0Fh, A0000h 64 KiB aperture, read/write mode 0, GC01/03 zero,
+  GC08=FFh, 256-color shift, and mode-13h CRTC addressing. Palette and
+  start-address changes remain trapped and counted.
+- Harvest CPU-dirty linear pages using the existing PTE dirty-bit/TLB
+  machinery. Deinterleave only those pages into the model using
+  `cvga_store_plane`; dirty presenter granules are set for changed bytes.
+  Close before BIOS/VBE calls, register changes that affect access or CRTC
+  mode, model reads/writes, presentation, VM stop and low-page restoration.
+  Palette/start-address writes do not need to close the linear mapping.
+  Re-evaluate after port/BIOS changes; an eligible aperture protection
+  fault after closure opens the mapping and retries the original instruction,
+  with no EIP/register advancement or V86 burst. Retry faults are counted.
+- Direct reads return the same bytes as trapped read mode 0, independent of
+  GC04. As for the existing plane window, direct reads do not load latches:
+  no load is needed for identity chain-4 write-mode-0 stores. Enabling a
+  latch-dependent operation closes the mapping before subsequent reads.
+  A program which reads while mapped, switches to write mode 1 and consumes
+  that earlier read's latches without another read retains the f3-06
+  limitation; this optimization does not claim to track native CPU reads.
+- `linear_maps` counts openings and `linear_harvests` counts dirty linear
+  pages harvested; plane `maps`/`flushes` remain separate. The DOOM
+  `case=video` row gains both counters; `faults`/`flushes` move to a
+  companion `case=video_detail` row so the 240-byte record envelope holds
+  even with maximum 32-bit counters. Existing suite fields stay available.
+
+### Host verification (worktree `wt/f3-07`, 2026-10-12)
+
+- `make kernel`: PASS, clang i686 `-Werror`, FPU/SIMD audit PASS;
+  `build/f0/VMM.ELF` 3,471,736 bytes, base `af6369cd5a34` with local changes.
+- `ASAN_OPTIONS=detect_leaks=0 bash scripts/test/host_kernel_tests.sh`: PASS.
+  The initial unmodified environment failed at LeakSanitizer because this
+  sandbox denies its process inspection; ASan and UBSan remain enabled.
+  The pre-existing Wolf3D replay was missing its closing `}` in the base;
+  that compile blocker was corrected without changing the replay.
+- DOS VM harness: **4,811,002 checks**, PASS. V86 replay through
+  `dosvm_trap`: 32,768 stores, 32,768 trapped faults versus **1** with the
+  linear window. Flat-selector PM replay through `dosvm_trap` /
+  `dpmi_pm_trap`: 16,384 stores, 16,384 trapped faults versus **1** with the
+  window. That one fault retries after a deliberate mid-frame closure.
+  The no-window replay disables only GC06 graphics scanout while preserving
+  identical chain-4 memory cycles, restoring graphics before presentation.
+  Both compare every plane byte (including sentinel holes), every mapped
+  read for all four GC04 selections and the unused end of the 64 KiB window.
+  Closure tests cover the directive's indexed port writes (both selected
+  CRTC pairs), set/reset, odd/even, aperture, BIOS clear/preserve, VBE,
+  kernel peek/store, latch copy, presenter and VM stop/destruction. Clean
+  pages are not harvested twice; granules represent only changed bytes.
+- All five f3-02 goldens unchanged, including a mode-13h pattern written
+  through the actual linear backing/PTE dirty-bit seam (stage 3) and the
+  stage-4 Mode X golden. Wolf3D replays unchanged: 76 / 152 / 0 faults,
+  0 / 0 / 304 plane maps, one flip each. Independent VGA vectors:
+  173,117 assertions PASS; `cvga_state` remains 267,092 bytes.
+- Standard libx86emu guest probes: PASS (27,156,373 instructions,
+  212,345 traps, 0 unexpected); TCG-model guest probes PASS (853,698
+  instructions, 174,763 traps, 0 unexpected).
+- `python3 scripts/build_dos_image.py`: T1 DOS PASS, 24 payloads read back,
+  SHA-256 `0a48c8e347c4211033443ca7d9dab2d34ef3362be29732ee2eb97d95f58d3e62`.
+  DOOM fixture fsck/mtools read-back PASS; supplemental libx86emu run of
+  `-nosound -timedemo demo1`: **timed 1710 gametics in 15162 realtics**,
+  **1714 flips**, RUNREC `R01_T00` (the expected timedemo exit 1), DPMI
+  resources released, guest runner PASS (2,584,560,273 instructions,
+  5,189,202 traps, 0 unexpected). The runner writes the model directly:
+  its zero `pm_faults` is not evidence for the mapped window or QEMU timing.
+- Focused Python tests (`test_f3_workloads`, `test_dosvm`, `test_vga_x86`):
+  19 tests PASS. Record-envelope tests retain the existing suite fields
+  and cover maximum counters plus maximum CRTC geometry (231-byte video
+  row for `doom-sound`). `git diff --check`: PASS.
+
+### Lead gate and limitations
+
+Build the canonical image once after review/integration, then qualify
+`doom-qemu-t23` (five loops: gametics=1710, flips approximately 1714,
+pm_faults <= 1000 per loop, at least 100x below the previous result).
+Inspect `linear_maps`/`linear_harvests` and the companion video-detail rows;
+retain the vm-video and vm-window digests and wolf3d-qemu-t23 evidence.
+The existing workload suite still has its previous PM-fault lower-bound
+predicate; tightening the performance gate belongs to the lead's QEMU
+qualification. Run the earlier integrated F0/F1/F2/F3 gates and complete
+the T23 DOOM hardware run. No QEMU, full image/CD build, hardware test,
+commit or push was performed here. The complete verbatim host outputs and
+handoff are in `build/codex/f3-07-report.md`.

@@ -114,6 +114,10 @@ uint8_t CVGA_CALL cvga_read_vram(cvga_state *v, uint32_t address);
  * Any register write must re-evaluate it, so a latch copy (write mode 1)
  * traps again before its latch-loading reads. */
 int CVGA_CALL cvga_direct_plane(const cvga_state *v);
+/* Identity chain-4 mode-13h accesses. A linear byte o corresponds to plane
+ * o & 3, physical plane offset o & FFFCh. Reads return that byte without
+ * latch loading; latches are unused by the permitted write-mode-0 stores. */
+int CVGA_CALL cvga_direct_linear(const cvga_state *v);
 /* The plane (0..3) a CPU read from A0000-AFFFF returns unchanged, or -1: the
  * same window conditions, read mode 0 and write mode 0 (a latch copy traps). */
 int CVGA_CALL cvga_direct_read_plane(const cvga_state *v);

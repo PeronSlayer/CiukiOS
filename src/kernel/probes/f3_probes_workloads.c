@@ -37,6 +37,7 @@
 #define GAME_LOOPS 5u
 #define DOOM_LOOP_MS 1200000u      /* one timedemo under TCG; QEMU suite timeout covers 5 */
 #define WOLF_LOOP_MS 300000u
+#define WOLF_PLAY_START_MS 90000u    /* menu keys to steady 3D flipping */
 #define BASE_BYTES (262144u * 512u)
 
 /* ---- shared VM helpers ---- */
@@ -545,12 +546,13 @@ static int doom_probe(const char *name, bool sound)
         if (v) dosvm_audio_info(dosvm_key(v), &a);
         rec_emit(name, "DATA", "case=loop loop=%u dpmi_ms=%u launch_ms=%u run_ms=%u gametics=%u realtics=%u timed=%u status=%u rc=%u type=%u error=%d",
                  loop, (uint32_t)w.dpmi_ms, (uint32_t)w.flip_ms, (uint32_t)w.end_ms, gametics, realtics, timed, status, rc, type, e);
-        rec_emit(name, "DATA", "case=video loop=%u graphics=%u width=%u height=%u flips=%u faults=%u pm_faults=%u maps=%u flushes=%u mode=%u",
-                 loop, w.graphics, w.width, w.height, w.video.starts, w.video.faults, w.video.pm_faults,
-                 w.video.maps, w.video.flushes, w.video.mode);
-        rec_emit(name, "DATA", "case=dpmi loop=%u entries=%u terminations=%u exceptions=%u irq_pm=%u faults=%u stale=%u released=%u",
+        rec_emit(name, "DATA", "case=video loop=%u graphics=%u width=%u height=%u flips=%u pm_faults=%u maps=%u mode=%u linear_maps=%u linear_harvests=%u",
+                 loop, w.graphics, w.width, w.height, w.video.starts, w.video.pm_faults,
+                 w.video.maps, w.video.mode, w.video.linear_maps, w.video.linear_harvests);
+        rec_emit(name, "DATA", "case=video_detail loop=%u faults=%u flushes=%u", loop, w.video.faults, w.video.flushes);
+        rec_emit(name, "DATA", "case=dpmi loop=%u entries=%u terminations=%u exceptions=%u irq_pm=%u faults=%u stale=%u released=%u popf=%u",
                  loop, w.dpmi.stats.entries, w.dpmi.stats.terminations, w.dpmi.stats.exceptions, w.dpmi.stats.irqs_pm,
-                 w.dpmi.stats.faults, w.dpmi.stats.stale, dpmi_released(&w.dpmi));
+                 w.dpmi.stats.faults, w.dpmi.stats.stale, dpmi_released(&w.dpmi), w.dpmi.stats.if_restored);
         /* f3-05 counters: DSP resets, block boundaries, PCM frames, IRQ
          * edges, services, OPL events, DMA faults; consumer = the f4-05
          * native output attached to this VM (AC97 profiles), not a pass
@@ -710,19 +712,33 @@ static int probe_f3_wolf3d(void)
             if (!wl_key(key, 0x1C)) e = -EFAULT;
             task_sleep_ms(2500);
         }
+        /* SetupGameLevel, PreloadGraphics ("Get Psyched") and the fizzle-in
+         * take an unknown time under TCG: play has begun once ThreeDRefresh
+         * flips steadily (WL_DRAW.C, CRTC 0Ch each frame), at least 3 flips
+         * in one second; the 3 s measurement starts there. */
+        uint64_t play_wait = g_ticks;
+        bool started = false;
+        while (!e && !started && g_ticks - play_wait < WOLF_PLAY_START_MS) {
+            struct dosvm_video_info a = {0}, b = {0};
+            dosvm_video_info(key, &a);
+            task_sleep_ms(1000);
+            dosvm_video_info(key, &b);
+            started = b.starts - a.starts >= 3;
+        }
+        uint32_t start_ms = (uint32_t)(g_ticks - play_wait);
         if (!e) {
-            task_sleep_ms(4000);
             dosvm_video_info(key, &play0);
             task_sleep_ms(3000);
             dosvm_video_info(key, &play1);
         }
         uint32_t flips = play1.starts - play0.starts;
-        bool playing = !e && flips >= 10 && play1.unchained && play1.width == 320;
+        bool playing = !e && started && flips >= 10 && play1.unchained && play1.width == 320;
         if (!e) {
             dosvm_frame_digest(v, 0, &frame);
             hex32(frame.digest, hex);
-            rec_emit(name, "DATA", "case=play loop=%u playing=%u flips=%u faults=%u maps=%u digest=%s",
-                     loop, playing, flips, play1.faults, play1.maps, hex);
+            rec_emit(name, "DATA", "case=play loop=%u playing=%u flips=%u start_ms=%u faults=%u burst=%u maps=%u digest=%s",
+                     loop, playing, flips, start_ms, play1.faults - play0.faults, play1.burst - play0.burst,
+                     play1.maps - play0.maps, hex);
         }
         /* F10 pops the quit dialog in play (WL_PLAY.C CheckKeys); Y confirms. */
         if (!e && !wl_key(key, 0x44)) e = -EFAULT;

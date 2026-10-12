@@ -9,7 +9,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define TITLE_H 20
+#define TITLE_H (DESK_FRAME_TITLE - 3)   /* the window frame: body at box.y + 24 */
 #define BTN_W 75
 #define BTN_H 23
 #define LINE_H 15
@@ -391,8 +391,13 @@ void du_dialog_key(struct du_ui *u, unsigned code)
     }
 }
 
+/* The close button's hit box: the same place and size as on every window (theme.c). */
 static struct du_rect close_box(const struct du_dialog *d)
-{ return (struct du_rect){d->box.x + d->box.w - 3 - 2 - 16, d->box.y + 4, 16, 16}; }
+{
+    int b[4];
+    desk_title_button_box(d->box.x, d->box.y, d->box.w, DESK_TB_CLOSE, b);
+    return (struct du_rect){b[0], b[1], b[2], b[3]};
+}
 
 void du_dialog_press(struct du_ui *u, int button)
 {
@@ -415,6 +420,8 @@ void du_dialog_press(struct du_ui *u, int button)
 void du_dialog_motion(struct du_ui *u)
 {
     struct du_dialog *d = &u->dialog;
+    int hot = !d->dragging && du_contains(close_box(d), u->mouse_x, u->mouse_y);
+    if (hot != d->close_hot) { d->close_hot = hot; u->dirty = 1; }
     if (d->dragging) {
         int nx = u->mouse_x - d->drag_x, ny = u->mouse_y - d->drag_y;
         if (nx < -d->box.w + 40) nx = -d->box.w + 40;
@@ -450,32 +457,15 @@ void du_draw_dialog(struct du_ui *u)
     struct du_canvas *c = &u->canvas;
     struct du_rect b = d->box;
     const struct desk_theme *t = desk_theme;
-    struct desk_paint p = {c->pixels, c->width, c->height, 0, 0, c->width, c->height};
     if (t->shadow_size) du_shadow(c, b, t->shadow_size);
-    du_fill(c, b, DU_FACE);
-    du_edge(c, b, DU_RAISED);
-    struct du_rect title = {b.x + 3, b.y + 3, b.w - 6, TITLE_H};
-    struct du_rect x = close_box(d);
-    int font = t->font_title, tw = desk_text_measure(font, d->title), baseline = title.y + 15;
-    if (t->title_style == DESK_TITLE_PINSTRIPE) {
-        /* Platinum dialog: the window title bar in miniature. */
-        desk_paint_vgradient(&p, title.x, title.y, title.w, title.h, t->title[0], t->title[1]);
-        int tx = title.x + (title.w - 24 - tw) / 2;
-        if (tx < title.x + 12) tx = title.x + 12;
-        if (tx - 8 > title.x + 4) desk_paint_pinstripes(&p, title.x + 4, title.y + 4, tx - 8 - title.x - 4, 12, t->stripe_light, t->stripe_dark);
-        if (x.x - 6 > tx + tw + 8) desk_paint_pinstripes(&p, tx + tw + 8, title.y + 4, x.x - 6 - tx - tw - 8, 12, t->stripe_light, t->stripe_dark);
-        struct du_rect keep = c->clip; c->clip = du_intersection(keep, (struct du_rect){title.x, title.y, x.x - title.x - 4, title.h});
-        du_text_font(c, font, tx, baseline - desk_font_cap(font), d->title, t->title_text);
-        c->clip = keep;
-        du_hline(c, b.x + 3, title.y + title.h, b.w - 6, DU_SHADOW);
-        desk_paint_title_button(&p, x.x + 1, x.y + 1, 13, DESK_GLYPH_CLOSE, 1, 0, 0);
-    } else {
-        desk_paint_hgradient(&p, title.x, title.y, title.w, title.h, t->title[0], t->title[1]);
-        struct du_rect keep = c->clip; c->clip = du_intersection(keep, (struct du_rect){title.x, title.y, title.w - 24, title.h});
-        du_text_font(c, font, title.x + 5, baseline - desk_font_cap(font), d->title, t->title_text);
-        c->clip = keep;
-        desk_paint_title_button(&p, x.x - 1, x.y + 1, 15, DESK_GLYPH_CLOSE, 1, 0, 0);
-    }
+    /* The frame of every window (theme.c desk_paint_frame): same title bar,
+     * height, close button, outline and corners; a modal dialog has only
+     * the close button (it cannot be minimised or rolled up on its own). */
+    struct du_rect v = du_intersection(c->clip, (struct du_rect){0, 0, c->width, c->height});
+    struct desk_paint p = {c->pixels, c->width, c->height, v.x, v.y, v.w, v.h};
+    struct desk_frame_style style = {.title = d->title, .active = u->focused_window, .buttons = DESK_TB_CLOSE,
+                                     .hot = d->close_hot && du_contains(close_box(d), u->mouse_x, u->mouse_y) ? DESK_TB_CLOSE : 0};
+    desk_paint_frame(&p, b.x, b.y, b.w, b.h, &style);
     int top = body_y(d);
     if (d->kind == DU_DLG_MESSAGE) {
         static const char *const icons[] = {NULL, "dialog:info", "dialog:warning", "dialog:error", "dialog:question"};
