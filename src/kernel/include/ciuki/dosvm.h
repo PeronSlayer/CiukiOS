@@ -122,6 +122,9 @@ int32_t dosvm_client_syscall(struct trap_frame *);
 void dosvm_client_poll(void);
 struct dosvm *dosvm_client_first(uint32_t *owner_pid);
 void dosvm_expect(struct dosvm *, const char *name);   /* resets the verdict latch */
+/* f3-06: the 80x25 text cells latched when the expected verdict line
+ * arrived (NULL before it); a child's output survives the shell's redraw. */
+const uint16_t *dosvm_verdict_text(const struct dosvm *);
 /* Scheduler/arch ownership hooks, identity for every other task. */
 bool dosvm_trap(struct trap_frame *);
 bool dosvm_client(const struct task *);       /* f3-04: worker running a DPMI client frame */

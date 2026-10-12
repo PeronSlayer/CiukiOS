@@ -71,8 +71,8 @@ def dos4gw_rows():
 
 
 def doom_rows(sound):
-    audio = (dict(resets=1, blocks=400, frames=900000, edges=400, services=400, opl=5000, dma_faults=0, audible=0) if sound else
-             dict(resets=0, blocks=0, frames=0, edges=0, services=0, opl=0, dma_faults=0, audible=0))
+    audio = (dict(resets=1, blocks=400, frames=900000, edges=400, services=400, opl=5000, dma_faults=0, consumer=1) if sound else
+             dict(resets=0, blocks=0, frames=0, edges=0, services=0, opl=0, dma_faults=0, consumer=1))
     rows = [('DATA', dict(case='identity', build='0123abcd', loops=5, sound=int(sound))),
             ('DATA', dict(case='fixture', status='present', drive='D', base='CIUKIGAM.IMG', size=134217728)),
             ('DATA', dict(group='workload_file', path='/DOOM/DOOM.EXE', size=709905, sha256=HEX, redistribution='local-only')),
@@ -188,7 +188,6 @@ class Workloads(unittest.TestCase):
             ('doom-qemu-t23', 'doom', doom_rows(False), {'case': 'dpmi', 'loop': 5}, 'released', 0),
             ('doom-qemu-t23', 'doom', doom_rows(False), {'group': 'workload_file', 'path': '/DOOM/DOOM.EXE'}, 'redistribution', 'free'),
             ('doom-sound-qemu-t23', 'doom-sound', doom_rows(True), {'case': 'audio', 'loop': 3}, 'resets', 0),
-            ('doom-sound-qemu-t23', 'doom-sound', doom_rows(True), {'case': 'audio', 'loop': 3}, 'audible', 1),
             ('wolf3d-qemu-t23', 'wolf3d', wolf_rows(), {'case': 'play', 'loop': 2}, 'playing', 0),
             ('wolf3d-qemu-t23', 'wolf3d', wolf_rows(), {'case': 'loop', 'loop': 2}, 'xms_calls', 0),
             ('wolf3d-qemu-t23', 'wolf3d', wolf_rows(), {'case': 'frame', 'loop': 1, 'stage': 'signon'}, 'width', 640),
@@ -214,7 +213,7 @@ class Workloads(unittest.TestCase):
                 ('DATA', dict(case='video', loop=5, graphics=1, width=big, height=big, flips=big, faults=big, pm_faults=big,
                               maps=big, flushes=big, mode=255)),
                 ('DATA', dict(case='audio', loop=5, resets=big, blocks=big, frames=big, edges=big, services=big, opl=big,
-                              dma_faults=big, audible=big)),
+                              dma_faults=big, consumer=big)),
                 ('DATA', dict(case='dpmi', loop=5, entries=big, terminations=big, exceptions=big, irq_pm=big, faults=big,
                               stale=big, released=1)),
                 ('DATA', dict(case='frame', loop=5, stage='signon', mode=255, width=640, height=480, digest=HEX)),

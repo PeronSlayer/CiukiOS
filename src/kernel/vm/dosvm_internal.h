@@ -81,6 +81,11 @@ struct dosvm {
     char name[32];
     char line[81];
     char verdict_name[12];
+    /* f3-06: the text screen latched when the verdict line arrives, before
+     * the shell runs again (the CiukiOS shell redraws its row-0 title bar
+     * before its prompt, over a child's last output line). */
+    uint16_t verdict_text[80 * 25];
+    bool verdict_text_valid;
     unsigned line_length;
     bool line_bad;
     struct {

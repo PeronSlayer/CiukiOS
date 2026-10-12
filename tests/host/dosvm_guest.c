@@ -19,6 +19,8 @@
  * CIUKIGAM.IMG with mcopy): GUEST_BUDGET=9000000000 dosvm_guest base.img
  * '\RUNREC.COM \DOOM DOOM.EXE -config CIUKI.CFG -nosound -timedemo demo1' RUNREC
  * ends with the timed line on the screen and RUNREC FAIL R01 T00 (exit 1).
+ * With an rc: prefix and GUEST_EXPECT_TEXT='timed 1710 gametics in', the
+ * runner goes on to the shell prompt and checks the verdict-time screen.
  * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -401,9 +403,8 @@ static bool prompt(void)
 }
 static bool booted(void) { return gv->info.dos_ready && prompt(); }
 static bool verdict(void) { return gv->info.verdict_done; }
-static void screen(void)
+static void screen_of(const uint16_t *text, const char *prefix)
 {
-    const uint16_t *text = dosvm_text(gv, 0);
     for (unsigned row = 0; row < 25; row++) {
         char line[81]; unsigned len = 0;
         for (unsigned col = 0; col < 80; col++) {
@@ -412,8 +413,23 @@ static void screen(void)
             if (ch > 32 && ch < 127) len = col + 1;
         }
         line[len] = 0;
-        if (len) printf("  | %s\n", line);
+        if (len) printf("  %s %s\n", prefix, line);
     }
+}
+static void screen(void) { screen_of(dosvm_text(gv, 0), "|"); }
+/* f3-06: does the screen latched at the verdict line hold text? */
+static bool latched_has(const char *text)
+{
+    const uint16_t *cells = dosvm_verdict_text(gv);
+    if (!cells || !text) return false;
+    size_t n = strlen(text);
+    for (unsigned row = 0; row < 25; row++) {
+        char line[81];
+        for (unsigned col = 0; col < 80; col++) line[col] = (char)(uint8_t)cells[row * 80 + col];
+        line[80] = 0;
+        for (unsigned col = 0; col + n <= 80; col++) if (!memcmp(line + col, text, n)) return true;
+    }
+    return false;
 }
 static void fault_dump(void)
 {
@@ -548,13 +564,17 @@ int main(int argc, char **argv)
     if (r <= 0) { screen(); return 1; }
     for (int i = 2; i + 1 < argc; i += 2) {
         bool fault = !strncmp(argv[i], "fault:", 6), gate = !strncmp(argv[i], "gate:", 5);
+        /* f3-06 rc: the payload reports a child's exit code (RUNREC): any
+         * verdict counts; the shell then gets its prompt back, and the screen
+         * latched at the verdict must still hold GUEST_EXPECT_TEXT. */
+        bool rc = !strncmp(argv[i], "rc:", 3);
         if (!strncmp(argv[i], "keys:", 5)) {
             CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
             printf("run %s through window keys (expect VMVIDEO stage 1, then stages 2-6)\n", argv[i] + 5);
             if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
             continue;
         }
-        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : argv[i];
+        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
         dosvm_expect(gv, argv[i + 1]);
@@ -577,6 +597,15 @@ int main(int argc, char **argv)
             bool refused = gv->info.verdict_done && !gv->info.verdict_pass && !strcmp(gv->info.verdict_detail, "01_01");
             r = run(400000000ull, 0);
             if (!refused || r != 2 || gv->dpmi.stats.entries) { failures++; screen(); break; }
+            continue;
+        }
+        if (rc) {
+            if (!gv->info.verdict_done) { failures++; screen(); break; }
+            r = run(400000000ull, 0);
+            printf("  live screen with the prompt back:\n"); screen();
+            printf("  screen latched at the verdict line:\n"); screen_of(dosvm_verdict_text(gv), "latched |");
+            const char *expect = getenv("GUEST_EXPECT_TEXT");
+            if (r != 2 || gv->dpmi.active || (expect && !latched_has(expect))) { failures++; break; }
             continue;
         }
         if (!gv->info.verdict_pass) { failures++; screen(); break; }
