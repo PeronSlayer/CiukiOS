@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/desktop.h>
+extern uint32_t display_change_counter(void) __attribute__((weak));
 
 int32_t desktop_syscall(struct trap_frame *tf)
 {
@@ -9,14 +10,18 @@ int32_t desktop_syscall(struct trap_frame *tf)
     if (!p) return -ENOSYS;
     switch (tf->eax) {
     case CIUKI_SYS_SURFACE_CREATE: return surface_create(p, tf->ebx, tf->ecx, tf->edx);
-    case CIUKI_SYS_SURFACE_MAP: return surface_map(p, (int32_t)tf->ebx, tf->ecx);
+    case CIUKI_SYS_SURFACE_MAP: {
+        int32_t result = surface_map(p, (int32_t)tf->ebx, tf->ecx);
+        if ((uint32_t)result < (uint32_t)-4095) proc_launch_surface(p);
+        return result;
+    }
     case CIUKI_SYS_SURFACE_INFO: {
         struct ciuki_surface_info out;
         int err = surface_info(p, (int32_t)tf->ebx, &out);
         return err ? err : copy_to_user(tf->ecx, &out, sizeof(out));
     }
     case CIUKI_SYS_DISPLAY_INFO: {
-        struct ciuki_display_info out;
+        struct ciuki_framebuffer_info out;
         int err = grant_display_info(p, (int32_t)tf->ebx, &out);
         return err ? err : copy_to_user(tf->ecx, &out, sizeof(out));
     }
@@ -73,7 +78,17 @@ bool desktop_fd_syscall(struct trap_frame *tf)
     case CIUKI_SYS_DUP2: result = desktop_dup(p, (int32_t)tf->ebx, (int32_t)tf->ecx, true, 0); break;
     case CIUKI_SYS_FCNTL: result = desktop_fcntl(p, (int32_t)tf->ebx, tf->ecx, tf->edx); break;
     case CIUKI_SYS_FSTAT: result = -EOPNOTSUPP; break;
-    case CIUKI_SYS_READ: case CIUKI_SYS_WRITE: result = -EBADF; break;
+    case CIUKI_SYS_READ: {
+        struct desktop_description *d = desktop_fd(p, fd);
+        if (d->kind != DESKTOP_DISPLAY) { result = -EBADF; break; }
+        if (d->owner != p->pid) { result = -EACCES; break; }
+        if (tf->edx != sizeof(uint32_t)) { result = -EINVAL; break; }
+        uint32_t count = display_change_counter ? display_change_counter() : 0;
+        result = copy_to_user(tf->ecx, &count, sizeof(count));
+        if (!result) result = sizeof(count);
+        break;
+    }
+    case CIUKI_SYS_WRITE: result = -EBADF; break;
     case CIUKI_SYS_LSEEK64: case CIUKI_SYS_PREAD: case CIUKI_SYS_PWRITE: result = -ESPIPE; break;
     default: return false;
     }

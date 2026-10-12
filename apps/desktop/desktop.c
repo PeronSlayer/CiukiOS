@@ -8,6 +8,7 @@
 #include <ciuki/channel.h>
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
+#include <ciuki/display.h>
 #include <ciuki/proc.h>
 #include <ciuki/audio.h>
 #include <ciuki/power.h>
@@ -170,10 +171,16 @@ static void scan_programs(struct desktop *d)
     }
     closedir(dir);
 }
+static int terminate_authority=-1;
 static int terminate_child(uint32_t pid, int sig)
-{ return kill((pid_t)pid,sig); }
+{ return ciuki_proc_terminate((ciuki_pid_t)pid,sig,terminate_authority); }
 static int launch_program(struct desktop *d, const struct desk_program *program)
 {
+    if (d->power.state) { errno=EBUSY; return -1; }
+    /* Recheck each launch: the operator can change console verbosity at run time. */
+    d->launch_mark = ciuki_launch_mark(CIUKI_LAUNCH_STATUS,0,0) > 0 ? ciuki_launch_mark : NULL;
+    uint64_t click_ns = d->launch_click_ns ? d->launch_click_ns : monotonic();
+    d->launch_click_ns = 0;
     int child=-1;
     for (int j=0; j<DESK_CLIENTS; j++) if (!d->children[j].pid) { child=j; break; }
     if (child<0) { errno=EAGAIN; return -1; }
@@ -214,7 +221,10 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     uint32_t mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     if (!fcntl(pair[1],F_SETFD,0)) {
         index=desk_add_client(d,pair[0]);
-        if (index>=0) pid=ciuki_spawn(program->path,d->launch_argv[0] ? full : argv,env,mapping,mappings,0);
+        if (index>=0) {
+            if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_BEGIN,0,click_ns/1000);
+            pid=ciuki_spawn(program->path,d->launch_argv[0] ? full : argv,env,mapping,mappings,0);
+        }
         else errno=ENOSPC;
     }
     int error=errno;
@@ -263,6 +273,7 @@ static const uint32_t *store_icon(const char *object, unsigned size) { return du
 #endif
 static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_t mute)
 {
+    if (d->power.state) return -EBUSY;
 #ifndef __i386__
     (void)d; (void)left; (void)right; (void)mute;
     return -ENODEV;   /* host replays: no mixer device */
@@ -330,6 +341,56 @@ static int settings_save(struct desktop *d)
     if (!ok) { int error=errno; unlink(temp); errno=error; return -1; }
     return 0;
 }
+static int display_apply(struct desktop *d, uint16_t id)
+{
+    int e = ciuki_display_set(id);
+    if (!e && id != d->display_mode) d->display_pending = id;
+    return e;
+}
+/* Polls the readable counter once per frame. Allocation failure keeps the old
+ * surface private and lets the kernel watchdog restore its previous mode. */
+static void display_poll(struct desktop *d)
+{
+    struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(info)};
+    if (ciuki_display_query(&info)) return;
+    uint32_t counter;
+    if (read(d->display, &counter, sizeof(counter)) != sizeof(counter)) return;
+    uint16_t mode = 0;
+    for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].current) mode = info.modes[i].id;
+    if (counter == d->display_counter && mode == d->display_mode) return;
+    if (!info.width || !info.height || info.width > 1600 || info.height > 1200) return;
+    int output = ciuki_surface_create(info.width, info.height, CIUKI_SURFACE_XRGB8888);
+    uint32_t *pixels = output < 0 ? MAP_FAILED : ciuki_surface_map(output, PROT_READ | PROT_WRITE);
+    if (pixels == MAP_FAILED) { if (output >= 0) close(output); return; }
+    munmap(d->pixels, ((size_t)d->width * d->height * 4 + CIUKI_PAGE_SIZE - 1) & ~(size_t)(CIUKI_PAGE_SIZE - 1));
+    close(d->output);
+    d->pixels = pixels; d->output = output;
+    desk_display_relayout(d, info.width, info.height);
+    if (d->shell) desk_shell_wallpaper_update(d);
+    d->display_counter = counter;
+    d->display_mode = mode;
+    /* Includes rollback: save that confirmed frame's mode, never the failed
+     * candidate. The existing cfg retains its previous id until then. */
+    d->display_pending = mode;
+}
+static void display_start(struct desktop *d)
+{
+    d->display_set = display_apply;
+    struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(info)};
+    if (ciuki_display_query(&info)) return;
+    for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].current) d->display_mode = info.modes[i].id;
+    uint32_t counter;
+    if (read(d->display, &counter, sizeof(counter)) == sizeof(counter)) d->display_counter = counter;
+    uint16_t wanted = d->sh.cfg.display_mode;
+    d->sh.cfg.display_mode = d->display_mode;
+    if (d->sh.gate || !wanted || wanted == d->display_mode) return;
+    for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].id == wanted) {
+        int e = display_apply(d, wanted);
+        if (e) snprintf(d->notice, sizeof(d->notice), "Display mode unavailable (error %d)", -e);
+        break;
+    }
+}
+
 static void wallpaper_load(struct desktop *d)
 {
     desk_image_free(&d->sh.image);
@@ -415,14 +476,61 @@ static int run_command(struct desktop *d, char *line)
     desk_shell_message(d,"Run",text,1);
     return -1;
 }
+static int power_request(int action)
+{ return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF); }
+static int power_alive(struct desktop *d, uint32_t pid)
+{
+    /* One syscall snapshot per loop, shared by all targets. Disconnecting
+     * the desktop channel does not imply exit/VM teardown. */
+    static uint8_t buffer[CIUKI_PROC_LIST_MIN+CIUKI_PROCESS_MAX*sizeof(struct ciuki_proc_record)];
+    static uint64_t sampled=UINT64_MAX;
+    static int count=-1;
+    uint64_t now=d->now_ns;
+    if (sampled!=now) { sampled=now; count=ciuki_proc_list(buffer,sizeof(buffer)); }
+    if (count<0 || count>CIUKI_PROCESS_MAX) return -1;
+    struct ciuki_proc_system sys;
+    memcpy(&sys,buffer,sizeof(sys));
+    if (sys.version!=CIUKI_PROC_VERSION || sys.records!=(uint32_t)count) return -1;
+    for (int i=0; i<count; i++) {
+        struct ciuki_proc_record r;
+        memcpy(&r,buffer+CIUKI_PROC_LIST_MIN+(size_t)i*sizeof(r),sizeof(r));
+        if (r.pid==pid) return r.state!=CIUKI_PROC_ZOMBIE;
+    }
+    return 0;
+}
+static void power_prepare(struct desktop *d)
+{
+    if (d->mixer_fd>=0) { close(d->mixer_fd); d->mixer_fd=-1; d->sh.mixer_state=1; }
+    /* Settings, wallpaper and icon readers use scoped FILE/DIR handles.
+     * Also release inherited file-backed logs, preserving input, display,
+     * output, IPC and the termination authority for retry/Cancel. */
+    fflush(NULL);
+    for (int fd=0; fd<CIUKI_OPEN_MAX; fd++) {
+        if (fd==d->input || fd==d->display || fd==d->output || fd==d->authority_fd) continue;
+        int ipc=0;
+        for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].channel==fd || d->clients[i].surface==fd) ipc=1;
+        if (ipc) continue;
+        struct stat st;
+        if (!fstat(fd,&st) && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))) close(fd);
+    }
+}
 /* Serves the requests that shell.c raised while handling input. */
 static void shell_service(struct desktop *d)
 {
     struct desk_shell *sh=&d->sh;
     if (!d->shell) return;
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
+    if (d->power.state) { desk_power_tick(d); return; }
+    if (sh->want_power) {
+        int action=sh->want_power; sh->want_power=0;
+        if (settings_save(d)) { /* still try: settings are a convenience */ }
+        desk_power_begin(d,action);
+        return;
+    }
     if (sh->want_reload & 1) {
-        settings_load(d); scan_programs(d);
+        uint16_t confirmed = sh->cfg.display_mode;
+        settings_load(d);
+        sh->cfg.display_mode = confirmed; scan_programs(d);
         sh->icon_count=0; desk_shell_apply(d); wallpaper_load(d);
     }
     if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
@@ -439,26 +547,16 @@ static void shell_service(struct desktop *d)
         memcpy(line,sh->want_run,sizeof(line)); sh->want_run[0]=0;
         run_command(d,line);
     }
-    if (sh->want_power) {
-        int action=sh->want_power; sh->want_power=0;
-        if (settings_save(d)) { /* still try: settings are a convenience */ }
-        if (ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF)) {
-            char text[200];
-            if (errno==ENOSYS) snprintf(text,sizeof(text),"%s is not available yet: this kernel has no\npower interface (call 73). Turn the computer off\nwith its power button once the disk is idle.",
-                                        action==1 ? "Restart" : "Shut down");
-            else snprintf(text,sizeof(text),"%s failed (error %d).",action==1 ? "Restart" : "Shut down",errno);
-            desk_shell_message(d,"Shut Down CiukiOS",text,1);
-        }
-    }
 }
 static void shell_setup(struct desktop *d, int gate)
 {
     d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
-    d->display_set=desk_display_mode_set;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
     int fd=authority ? number(authority,CIUKI_OPEN_MAX-1) : -1;
     d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
+    terminate_authority=d->authority_fd;
+    d->power_request=power_request; d->power_prepare=power_prepare; d->power_alive=power_alive;
     const char *mixer=getenv("CIUKI_MIXER_FD");
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
@@ -513,7 +611,7 @@ int main(int argc, char **argv)
     for (int i=0; i<channel_count; i++) if (channels[i]==display || channels[i]==input) return 2;
     /* Kernel channel_send posts SIGPIPE as well as returning EPIPE. */
     if (desk_ignore_sigpipe()) return gate_setup_error(gate,GATE_SETUP_SIGPIPE,errno);
-    struct ciuki_display_info info = {.size=sizeof(info)};
+    struct ciuki_framebuffer_info info = {.size=sizeof(info)};
     if (ciuki_display_info(display,&info)) {
         fprintf(stderr,"desktop: display unavailable (errno=%d); console ready\n",errno);
         return gate_setup_error(gate,GATE_SETUP_DISPLAY,errno); /* no-LFB profiles use the stand-in */
@@ -532,6 +630,7 @@ int main(int argc, char **argv)
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (!gate) shell_setup(d,0);
+    display_start(d);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
     if (launch && !gate) {
@@ -563,12 +662,13 @@ int main(int argc, char **argv)
     uint64_t shift_base=0, shift_release=0;
     for (;;) {
         uint64_t now = monotonic();
+        display_poll(d);
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
-        if (d->shell && d->sh.wallpaper_deferred && !--d->sh.wallpaper_deferred) wallpaper_load(d);
+        if (d->shell && !d->power.state && d->sh.wallpaper_deferred && !--d->sh.wallpaper_deferred) wallpaper_load(d);
         /* The shell follows the theme key of DESK_SETTINGS_PATH (gates keep the default). */
-        if (d->shell && !gate && desk_theme_poll(DESK_SETTINGS_PATH,now)) {
+        if (d->shell && !gate && !d->power.state && desk_theme_poll(DESK_SETTINGS_PATH,now)) {
             desk_theme_changed(d); d->sh.wall_valid=0; desk_shell_wallpaper_update(d);   /* theme colours in the wallpaper */
         }
         if (d->shell) {
@@ -579,7 +679,7 @@ int main(int argc, char **argv)
                 d->realtime_second=(uint64_t)rtc.tv_sec;
                 desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
             }
-            desk_shell_tick(d);
+            if (!d->power.state) desk_shell_tick(d);
         }
         if (gate && control->command) {
             unsigned command=control->command; generation=control->generation;
@@ -670,6 +770,7 @@ int main(int argc, char **argv)
                 input_dirty=1;
             } else desk_input(d,&ev);
         }
+        if (d->sh.want_power && !d->sh.gate) d->action=-1;
         if (d->action>=0) {
             unsigned selected=(unsigned)d->action; d->action=-1;
             int pid=selected<d->program_count && d->launch ? d->launch(d,&d->programs[selected]) : -1;
@@ -701,8 +802,13 @@ int main(int argc, char **argv)
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
         }
         if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
-        if (desk_redraw(d) && errno!=EINTR && !display_reported) {
+        int redraw = desk_redraw(d);
+        if (redraw && errno!=EINTR && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
+        }
+        if (desk_display_frame_commit(d, redraw)) {
+            if (d->shell && !d->sh.gate && settings_save(d))
+                snprintf(d->notice, sizeof(d->notice), "Display applied; settings not saved");
         }
         /* The controller hashes the framebuffer during this report: send it
          * only after the checkpoint frame has been presented completely. */
@@ -767,6 +873,6 @@ int main(int argc, char **argv)
         if (gate && progress!=reported_progress) { reported_progress=progress; input_dirty=1; }
         if (test && victim && victim_pid<0 && completed<cycles && now>=next_victim)
             victim_pid=spawn_demo(d,victim,0);
-        struct timespec pause={.tv_sec=0,.tv_nsec=gate ? 1000000 : 10000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=(long)(gate ? 1000000 : desk_launch_wait(d,monotonic()))}; nanosleep(&pause,NULL);
     }
 }

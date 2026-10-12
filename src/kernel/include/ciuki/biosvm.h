@@ -25,6 +25,11 @@ enum biosvm_backend { BIOSVM_OFF, BIOSVM_READY, BIOSVM_DISABLED_BACKEND };
  * zero/EBDA are borrowed and must never reach as_destroy/pmm_free. */
 int biosvm_init(void);
 int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
+/* Only fbdev's quiesced transaction calls this kernel-only entry. 4F02
+ * (LFB), 4F01 into private scratch, 4F03 readback; serialized as one request.
+ * No allowlist widening for biosvm_call or DOS guests. */
+int biosvm_video_prepare(void); /* acquire dependencies before LFB revocation */
+int biosvm_video_switch(uint16_t mode, uint8_t info[256]);
 enum biosvm_backend biosvm_backend_state(void);
 void biosvm_stats(struct v86_stats *out);
 /* RTC service is outside f1-07: supply its validated cache before first use.

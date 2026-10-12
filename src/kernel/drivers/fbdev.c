@@ -1,15 +1,24 @@
-/* F1 boot LFB: no firmware entry points and no runtime mode changes.
+/* F1 LFB presenter and f1-23 quiesced runtime remapping.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/abi.h>
 #include <ciuki/mm.h>
 #include <ciuki/registry.h>
 #include <ciuki/fbdev.h>
+extern void console_framebuffer_revoke(void) __attribute__((weak));
+extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
+
+#include <ciuki/mtrr.h>
+#include <ciuki/timing.h>
 
 static struct fb_device device;
 static struct kmutex presenter;
-static bool initialized;
+static bool initialized, changing;
+static void *change_window;
+static uint32_t change_capacity;
 static unsigned console_rows;
 static unsigned drawing;
+static uint64_t full_count, full_total_us, full_last_us, full_max_us, full_log_tick;
 enum { CONSOLE_BUSY = 1, PRESENT_BUSY = 2 };
 
 void fbdev_console_region(unsigned rows)
@@ -26,6 +35,7 @@ bool fbdev_console_begin(void)
 
 void fbdev_console_end(void)
 {
+    framebuffer_write_drain();
     __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
 }
 
@@ -38,10 +48,13 @@ static bool present_begin(const struct fb_device *d, const struct fb_rect *c)
                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 }
 
-static void present_end(const struct fb_device *d, const struct fb_rect *c)
+static uint64_t present_end(const struct fb_device *d, const struct fb_rect *c, bool timed)
 {
+    if (d == &device) framebuffer_write_drain();
+    uint64_t end = timed ? framebuffer_cycles() : 0;
     if (d == &device && (unsigned)c->y < __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE))
         __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
+    return end;
 }
 
 /* VESA VBE Core Functions 3.0 (1998-09-16), pp. 14, 30-31, 37-39:
@@ -54,7 +67,7 @@ static void present_end(const struct fb_device *d, const struct fb_rect *c)
 static bool layout_valid(const struct fb_device *d)
 {
     if (!d->width || !d->height || d->width > INT32_MAX ||
-        d->height > INT32_MAX || (d->bpp != 24 && d->bpp != 32))
+        d->height > INT32_MAX || (d->bpp != 16 && d->bpp != 24 && d->bpp != 32))
         return false;
     if ((uint64_t)d->width * (d->bpp / 8) > d->pitch ||
         (uint64_t)d->pitch * d->height > d->size)
@@ -140,7 +153,7 @@ int fbdev_init(void)
      * must publish it as FIRMWARE/DISCOVERED for the transfer API above. */
     if (d.handle < 0)
         return -ENODEV;
-    d.mapped = vmm_map_mmio(d.phys, d.size, true);
+    d.mapped = vmm_map_framebuffer(d.phys, d.size);
     if (!d.mapped) {
         registry_quarantine(d.handle, d.generation);
         return -ENOMEM;
@@ -193,7 +206,10 @@ static void pixel(uint8_t *p, unsigned bytes, uint32_t colour)
     /* i386 supports unaligned integer stores. Lower the C alignment too,
      * so arbitrary pitch/base does not introduce alignment or aliasing UB. */
     typedef uint32_t fb_word __attribute__((aligned(1), may_alias));
-    if (bytes == 4)
+    if (bytes == 2) {
+        p[0] = (uint8_t)colour;
+        p[1] = (uint8_t)(colour >> 8);
+    } else if (bytes == 4)
         *(volatile fb_word *)p = colour;
     else {
         p[0] = (uint8_t)colour;
@@ -216,6 +232,9 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
         return 0;
     if (!present_begin(d, &c))
         return -EBUSY;
+    bool timed = d == &device && g_cpu_tsc && g_tsc_per_ms &&
+                 !c.x && !c.y && c.width == (int32_t)d->width && c.height == (int32_t)d->height;
+    uint64_t start = timed ? framebuffer_cycles() : 0;
     uint32_t sx = (uint32_t)((int64_t)c.x - r->x), sy = (uint32_t)((int64_t)c.y - r->y);
     unsigned bytes = d->bpp / 8;
     for (int32_t y = 0; y < c.height; y++) {
@@ -227,7 +246,22 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
             pixel(dp + (uint32_t)x * bytes, bytes, pack(d, rgb));
         }
     }
-    present_end(d, &c);
+    uint64_t end = present_end(d, &c, timed);
+    if (timed) {
+        uint64_t cycles = end - start;
+        /* Avoid overflowing cycles*1000; calibration is fixed after boot. */
+        full_last_us = (cycles / g_tsc_per_ms) * 1000 +
+                       (cycles % g_tsc_per_ms) * 1000 / g_tsc_per_ms;
+        full_count++;
+        full_total_us += full_last_us;
+        if (full_last_us > full_max_us) full_max_us = full_last_us;
+        uint64_t now = g_ticks;
+        if ((g_boot.flags & CBI_F_VERBOSE) && (full_count == 1 || now - full_log_tick >= 1000)) {
+            full_log_tick = now;
+            klog("[display] present full count=%llu total_us=%llu last_us=%llu max_us=%llu tsc_khz=%llu",
+                 full_count, full_total_us, full_last_us, full_max_us, g_tsc_per_ms);
+        }
+    }
     return 0;
 }
 
@@ -249,13 +283,13 @@ int fbdev_fill_to(const struct fb_device *d, const struct fb_rect *r, uint32_t c
         for (int32_t x = 0; x < c.width; x++)
             pixel(dp + (uint32_t)x * bytes, bytes, colour);
     }
-    present_end(d, &c);
+    (void)present_end(d, &c, false);
     return 0;
 }
 
 static bool live(void)
 {
-    if (!initialized || !device.present || !registry_valid(device.handle, device.generation))
+    if (!initialized || changing || !device.present || !registry_valid(device.handle, device.generation))
         return false;
     const struct resource *r = registry_get((unsigned)device.handle);
     return r && r->state == RS_ACTIVE;
@@ -265,6 +299,7 @@ int fbdev_present(const struct fb_surface *src, const struct fb_rect *dst)
 {
     if (!initialized || !device.present)
         return -ENODEV;
+    if (changing) return -EBUSY;
     kmutex_lock(&presenter);
     int rc = live() ? fbdev_present_to(&device, src, dst) : -ENODEV;
     kmutex_unlock(&presenter);
@@ -275,8 +310,94 @@ int fbdev_fill(const struct fb_rect *rect, uint32_t colour)
 {
     if (!initialized || !device.present)
         return -ENODEV;
+    if (changing) return -EBUSY;
     kmutex_lock(&presenter);
     int rc = live() ? fbdev_fill_to(&device, rect, colour) : -ENODEV;
     kmutex_unlock(&presenter);
     return rc;
 }
+
+/* VBE 3.0 functions 01h/02h: a mode can change its LFB address. Reject RAM
+ * aliases and invalid RGB masks before claiming or mapping the result. */
+int fbdev_mode_decode(uint16_t id, const uint8_t m[256], struct fb_device *d)
+{
+    unsigned p = g_boot.display.vbe_version >= 0x300 ? 50 : 16;
+    unsigned f = g_boot.display.vbe_version >= 0x300 ? 54 : 31;
+    *d = (struct fb_device){.mode_id = id, .handle = -1, .present = true,
+        .width = m[18] | (uint32_t)m[19] << 8, .height = m[20] | (uint32_t)m[21] << 8,
+        .pitch = m[p] | (uint32_t)m[p + 1] << 8, .bpp = m[25],
+        .phys = m[40] | (uint32_t)m[41] << 8 | (uint32_t)m[42] << 16 | (uint32_t)m[43] << 24,
+        .red_size = m[f], .red_pos = m[f + 1], .green_size = m[f + 2], .green_pos = m[f + 3],
+        .blue_size = m[f + 4], .blue_pos = m[f + 5], .rsvd_size = m[f + 6], .rsvd_pos = m[f + 7]};
+    d->size = d->pitch * d->height;
+    if ((m[0] & 0x91) != 0x91 || m[24] != 1 || m[27] != 6 || !layout_valid(d) ||
+        d->width < 640 || d->width > 1600 || d->height < 480 || d->height > 1200 ||
+        d->phys < 0x100000 || d->size > UINT32_MAX - d->phys ||
+        d->size > g_boot.display.vram_bytes) return -EINVAL;
+    uint64_t end = (uint64_t)d->phys + d->size;
+    if (d->phys < g_boot.kernel_end && end > g_boot.kernel_start) return -EINVAL;
+    for (unsigned i = 0; i < g_boot.e820_count; i++) {
+        const struct ciuki_e820 *e = &g_boot.e820[i];
+        if (e->type == CBI_E820_RAM && d->phys < e->base + e->length && end > e->base) return -EINVAL;
+    }
+    return 0;
+}
+
+static bool change_idle(int handle, gen_t generation)
+{
+    (void)handle; (void)generation;
+    if (drawing) return false;
+    framebuffer_write_drain();
+    console_framebuffer_revoke();
+    vmm_revoke_mmio(device.mapped, device.size);
+    device.mapped = 0;
+    device.present = false;
+    return true;
+}
+
+int fbdev_change_begin(void)
+{
+    if (!initialized || changing || !live()) return -EBUSY;
+    if (!console_framebuffer_revoke || !console_framebuffer_changed) return -ENODEV;
+    changing = true; /* stop submissions before waiting for the last presenter */
+    kmutex_lock(&presenter);
+    if (!change_window) {
+        uint32_t capacity = device.size;
+        for (unsigned i = 0; i < g_boot.display.mode_count; i++) {
+            uint32_t size = (uint32_t)g_boot.display.modes[i].pitch * g_boot.display.modes[i].height;
+            if (size > capacity) capacity = size;
+        }
+        change_capacity = PAGE_ALIGN_UP(capacity + PAGE_SIZE); /* nonaligned physical base */
+        change_window = vmm_reserve_mmio(change_capacity);
+        if (!change_window) { changing = false; kmutex_unlock(&presenter); return -ENOMEM; }
+    }
+    int e = registry_quiesce(device.handle, device.generation, change_idle);
+    kmutex_unlock(&presenter);
+    if (e) { changing = false; device.present = false; }
+    return e;
+}
+
+int fbdev_change_commit(const struct fb_device *next)
+{
+    if (!changing || !layout_valid(next) || (uint64_t)next->size + (next->phys & 0xfff) > change_capacity) return -EINVAL;
+    struct fb_device d = *next;
+    const struct resource *old = registry_get((unsigned)device.handle);
+    if (old && old->state == RS_QUIESCING) {
+        int e = registry_release(device.handle, device.generation);
+        if (e) return e;
+    }
+    d.handle = registry_claim(RES_MMIO, d.phys, d.phys + d.size, "fbdev", false);
+    if (d.handle < 0) return d.handle;
+    d.generation = registry_get((unsigned)d.handle)->generation;
+    d.mapped = vmm_replace_framebuffer(change_window, change_capacity, d.phys, d.size);
+    if (!d.mapped || registry_activate(d.handle, d.generation)) {
+        registry_quarantine(d.handle, d.generation);
+        return -EIO;
+    }
+    d.present = true;
+    device = d;
+    console_framebuffer_changed(&device);
+    return 0;
+}
+
+void fbdev_change_end(void) { changing = false; }

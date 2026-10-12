@@ -30,16 +30,16 @@ static uint32_t irq_save(void) { unsigned old = host_if; host_if = 0; return old
 static void irq_restore(uint32_t flags) { host_if = flags; }
 const uint8_t font_cfn_regular[95+95*32] = { [95+('a'-32)*32+1] = 0x80 };
 void serial_write(const char *s, size_t n) { CHECK(s && n); }
-static void *console_map(uint32_t phys, uint32_t size, bool uncached)
+static void *console_map(uint32_t phys, uint32_t size)
 {
-    CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height && uncached);
+    CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height);
     return fake_lfb;
 }
-#define vmm_map_mmio console_map
+#define vmm_map_framebuffer console_map
 #define pack console_pack
 #include "src/kernel/core/console.c"
 #undef pack
-#undef vmm_map_mmio
+#undef vmm_map_framebuffer
 '''
 
 
@@ -284,7 +284,7 @@ int main(void)
 
     def test_power_call_wiring_and_sdk_wrapper(self):
         abi = (ROOT / 'src/kernel/include/ciuki/abi.h').read_text()
-        self.assertRegex(abi, r'CIUKI_SYS_DOSVM = 72,\n    CIUKI_SYS_POWER = 73,\n};')
+        self.assertRegex(abi, r'CIUKI_SYS_DOSVM = 72,\n    CIUKI_SYS_POWER = 73,\n    CIUKI_SYS_DISPLAY = 74,\n    CIUKI_SYS_LAUNCH_MARK = 75,\n};')
         for name, value in (('REBOOT', 1), ('OFF', 2), ('QUERY', 3), ('CAN_REBOOT', 1), ('CAN_OFF', 2)):
             self.assertIn(f'#define CIUKI_POWER_{name} {value}u', abi)
         syscall = (ROOT / 'src/kernel/core/syscall.c').read_text()

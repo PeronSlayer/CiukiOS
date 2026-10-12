@@ -329,7 +329,6 @@ class DesktopTests(unittest.TestCase):
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                             "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
-                            "-include", str(ROOT / "tests/host/desktop/display_abi_compat.h"),
                             *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
             c = load("control_portrait", ROOT / "apps/desktop/convert_portrait.py")
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
@@ -364,7 +363,6 @@ class DesktopTests(unittest.TestCase):
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                             "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
-                            "-include", str(ROOT / "tests/host/desktop/display_abi_compat.h"),
                             *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
             c = load("control_modes_portrait", ROOT / "apps/desktop/convert_portrait.py")
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
@@ -393,8 +391,9 @@ class DesktopTests(unittest.TestCase):
                 (inc / name).write_text("/* supplied by host harness */\n")
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "launch-test"
-            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "display_mode.c")] + SHELL_SOURCES
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
+            sources += [ROOT / "apps/desktop/image.c"]  # shell_service's production shutdown/gate guard
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),
@@ -550,7 +549,7 @@ class AppCaseReplayTests(unittest.TestCase):
         cls.env = dict(os.environ, TMPDIR=str(folder), ASAN_OPTIONS="detect_leaks=0")
         include = folder / "include/ciuki"
         include.mkdir(parents=True)
-        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "power.h"):
+        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "power.h", "display.h"):
             shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, include / name)
         # Host stand-ins: CU_PTR keeps the whole pointer, the report call takes it (desktop_gate_test.c does the same).
         (include / "runtime.h").write_text("/* app replay */\n#include <ciuki/abi.h>\n#include <stdint.h>\n"

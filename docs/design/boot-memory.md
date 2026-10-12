@@ -392,3 +392,15 @@ values, and any later change to a target needs a measurement on QEMU at
   clearing the framebuffer, draws no console line until the desktop takes
   the display, and draws the history on a panic, double fault, desktop
   failure or a 120 s watchdog. See `docs/boot.md`.
+
+
+### f1-23 amendment: bootinfo version 2 display extension
+
+The v1 prefix and offsets above remain frozen. A v2 handoff has version=2,
+size=0x1344 and a tagged DISP block at 0x10F0, described in the
+[f1-23 acceptance amendment](f1-acceptance.md#amendment-f1-23--display-inventory-and-runtime-vbe-modes-2026-10-12).
+The validator accepts exactly v1/0x10F0 or v2/0x1344. The kernel zeroes its
+private copy and copies only the declared validated size, so a v1 allocation
+never requires extension bytes. Unknown versions/tags/sizes are refused.
+OEM strings and the bounded mode inventory are copied values, never live
+firmware pointers. This amendment supersedes the earlier version-1-only check.

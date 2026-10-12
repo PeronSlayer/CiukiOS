@@ -272,7 +272,7 @@ static void test_resize(void)
     flush_all();fake_surface(12,400,288,0x445566);
     request(&m,DESK_DAMAGE,24);m.data[0]=2;m.data[2]=1;m.fd_count=1;m.fds[0]=12;
     desk_put32(m.data+12,400);desk_put32(m.data+16,288);desk_put32(m.data+20,1);desk_receive(&d,i,&m);
-    assert(!c->awaiting_frame && c->surface==12 && c->info.width==400 && c->applied_serial==1 && fake_live()==3);flush_all();
+    assert(!c->awaiting_frame && c->launch_frame_pending && c->surface==12 && c->info.width==400 && c->applied_serial==1 && fake_live()==3);flush_all();
     struct desk_box user=c->frame;desk_zoom(&d,i);
     assert(c->zoomed && !c->collapsed && c->frame.x==0 && c->frame.y==32 && c->frame.w<=800 && c->frame.h<=536);
     desk_collapse(&d,i);assert(c->collapsed);desk_collapse(&d,i);assert(!c->collapsed);

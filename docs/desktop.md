@@ -235,10 +235,40 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   CLOSE_REQUEST to the active window (the Shut Down window when none is
   active). Alt is held back until the next key, so a program never sees an Alt
   press for a chord the desktop consumed; a lone Alt tap still reaches it.
-- **Power:** Shut Down calls `ciuki_power(action)` (SDK `ciuki/power.h`,
-  kernel call 73; 1 reboot, 2 power off) after saving desktop.cfg. The SDK
-  definition is weak; with ENOSYS the desktop says that the kernel has no
-  power interface yet.
+- **Shut Down and Restart:** confirmation saves desktop.cfg and opens a
+  built-in "Shutting down..." window using the ordinary frame painter.
+  Every client receives the same close request as Alt+F4, including DOS
+  windows; their process exit lets the kernel tear down the VM. Clients get
+  three seconds to exit, concurrently, then survivors are terminated through
+  the existing call 71 path. IPC, painting and child reaping continue; normal
+  input and launches are blocked. Escape or Cancel returns to the desktop;
+  programs already closed are not relaunched.
+  Settings streams are closed by the save operation; the delegated mixer
+  descriptor and any regular-file/directory descriptors (including redirected
+  logs) are closed before `ciuki_power` (call 73; 1 reboot, 2 power off).
+  EBUSY is retried every 250 ms for five seconds. Persistent EBUSY shows
+  "Some programs are still running:" and the remaining client names, with
+  Cancel and Force. Force terminates remaining targets and retries once after
+  allowing 250 ms for teardown. If no client is still known,
+  the message identifies an unknown storage holder rather than inventing a
+  program name. Other failures retain the power error message with errno text,
+  including the existing ENOSYS explanation. Cancel/error restores normal
+  input; after the delegated mixer descriptor has been closed, public mixer
+  reads remain available but control requires a new desktop session (only
+  PID 1 can delegate that capability).
+  Runtime gates and the crash-isolation probe never enter this sequence.
+
+  Research (f2-38): [POSIX monotonic clocks](https://pubs.opengroup.org/onlinepubs/000095399/functions/clock_getres.html)
+  provide elapsed-time deadlines unaffected by wall-clock changes;
+  [WNOHANG](https://pubs.opengroup.org/onlinepubs/9699919799/functions/wait.html)
+  allows reaping without blocking the compositor;
+  [close](https://pubs.opengroup.org/onlinepubs/009604499/functions/close.html)
+  releases descriptors; and [SDL's close event](https://wiki.libsdl.org/SDL2/SDL_WindowEventID)
+  is a request for application cleanup. Repository checks: `desk_request_close`
+  already queues CLOSE_REQUEST/CLOSED and `desk_child_exited` releases clients;
+  `storage_shutdown` refuses referenced VFS nodes before detaching volumes.
+  Decision: reuse that protocol and monotonic event-loop deadlines, leaving
+  the kernel's storage refusal and VM lifecycle unchanged.
 - **Runtime gate scenarios** (F12/F11/F10/F9) keep the built-in defaults, never
   read or write desktop.cfg and never touch the mixer; the f2-desktop scripts
   reach the programs through Start, Programs and the program row.
@@ -339,7 +369,8 @@ open “Keep these settings?” with a 15-second countdown; Revert is the defaul
 and Escape choice. Keep merges only `display_mode` into the latest settings
 file, preserving recent documents and unknown keys, then requests a reload.
 Revert, timeout, save failure and panel close request the previous active mode
-without changing the persisted preference. There is a separate 15-second
+through the desktop relay. Main persists each successfully presented mode
+(see the integration note below). There is a separate 15-second
 reply timeout before confirmation and during rollback; missed rollback replies
 are reported, never described as a successful restore. Apply is disabled when
 the query is unavailable or the active mode cannot be identified for rollback.
@@ -347,21 +378,26 @@ The two scrollable mode lists live below the wallpaper controls; the monitor
 preview and five Position buttons retain their geometry. libdeskui now has 64
 widget slots to accommodate the extra controls and seventh tab.
 
-**f1-23 integration prerequisite:** the supplied SDK header is at the actual
-repository SDK overlay path, `sdk/sysroot-overlay/include/ciuki/display.h`.
-Its records match the directive exactly (12-byte mode, 612-byte info). The
-current call-67 ABI already defines a different 48-byte
-`struct ciuki_display_info`; f1-23 must give that older record a distinct tag
-and update its consumers before these headers can coexist in the real SDK.
-The host tests preinclude `tests/host/desktop/display_abi_compat.h` to rename
-only the older host record. It is not a shipping ABI fix.
-`desktop.display_set` is wired through `apps/desktop/display_mode.c` to
-`ciuki_display_set`; the small bridge includes only the new SDK header, keeping
-the older grant-record consumer in its own translation unit. f1-23 must supply
-the real SDK query/set symbols, and own display-event relayout and startup replay
-of the confirmed mode (only if still listed). The request dispatcher responds
-with ENOSYS if its display callback is absent. No synthetic
-information or syscall marshalling is installed in the production application.
+**f1-23 integration:** the SDK overlay's `<ciuki/display.h>` now imports the
+canonical records from `<ciuki/abi.h>` (12-byte mode, 612-byte query info).
+The older 48-byte call-67 record is `struct ciuki_framebuffer_info`; no host
+ABI renaming shim or provisional desktop bridge remains. The SDK supplies
+call-74 query/set and `display_start` installs the real desktop callback,
+including pending-frame tracking, counter polling, relayout and startup replay.
+SETTINGS retains main's uint16 wire validation (including zero, which the kernel
+rejects if unlisted), reserved-zero fields, permission check and shutdown EBUSY
+guard. The relay calls the callback once and returns its result and serial.
+
+Integration research rechecked the [VESA VBE 2.0 Core Functions standard,
+sections 4.3–4.5](https://www.phatcode.net/res/221/files/vbe20.pdf): controller
+information supplies the mode list, strings and VRAM in 64 KiB units; mode
+information supplies geometry/pitch; setting an LFB uses bit 14. The existing
+f1-23 kernel owns that firmware operation. The Control Panel consumes its
+queried table and authenticated desktop relay; it adds no firmware calls.
+Main's desktop persists a mode after its first successful presented frame,
+including a preview or rollback. The panel's Keep/Revert timer remains, but
+strict persistence only after Keep needs a separate lead decision about that
+existing service contract.
 
 v2 opcode for it, client to desktop, version 2 only:
 
@@ -1246,3 +1282,49 @@ bootstrap/probe/SDK-header boundaries above remain lead-owned.
 
 No QEMU, systemd scope, full image build, commit, push or Git command is part of
 this implementer's evidence.
+
+## Display mode service (f1-23)
+
+The SDK's `<ciuki/display.h>` exposes `ciuki_display_query(info)` to any process
+and `ciuki_display_set(mode_id)` to the supervisor's desktop. Initialize
+`info.version=CIUKI_DISPLAY_VERSION` and `info.size=sizeof(info)`; the version-1
+record is 612 bytes and contains current width/height/depth/pitch, VRAM bytes,
+VBE BCD version, copied OEM/vendor/product strings, PCI adapter identity and
+up to 32 LFB modes. Query/set return 0 or **negative errno directly**. The
+existing syscall-67 framebuffer function and its 48-byte wire layout remain;
+its C record is now `struct ciuki_framebuffer_info`.
+
+Control Panel must ask the desktop to switch through its existing authenticated
+v2 settings channel: `DESK_SETTINGS_DISPLAY` (=3), 24-byte `DESK_SETTINGS`,
+serial at byte 4, request at 8, uint16 mode id encoded as u32 at 12, zeros at
+16/20. Only the Control Panel launched by this desktop is accepted. The desktop
+returns `DESK_TASK_RESULT` with request `DESK_SETTINGS` and 0 or negative errno.
+Send this request instead of calling set from the applet process or writing an
+unconfirmed mode into the configuration file. The UI belongs to f2-37.
+
+Each desktop frame polls the readable u32 change counter on its display
+fd (`read(fd,&counter,4)`). A committed mode or restore changes it. The desktop
+queries the active mode, allocates/maps a replacement XRGB8888 output surface,
+releases its previous mapping/fd, clamps windows and the pointer to the new work
+area, sends CONFIGURE to resizable clients and lays out bars/icons again.
+Client minimum/step constraints remain binding; an oversized fixed/minimum-size
+client is positioned with its title reachable and clipped by the compositor.
+The wallpaper cache is rebuilt for the new geometry and a full screen is
+presented. If output allocation fails, the old surface remains private and
+the kernel's independent 10 s frame watchdog restores the preceding mode.
+
+`/system/settings/desktop.cfg` gains `display_mode=<decimal VBE id>`; zero
+keeps the loader default. At startup the desktop tries it once only if it is
+still listed. Settings reloads preserve the confirmed mode; runtime changes
+use the settings-channel request above. The desktop saves the selected id only
+after a complete successful frame in that mode, and saves a restored mode after
+its recovery frame. The loader never reads this setting, so the next boot
+starts with its ordinary boot-mode selection before applying a qualified saved
+preference.
+
+The ABI, transaction/firmware ownership, source research and qualification
+matrix are specified in the [f1-23 acceptance amendment](design/f1-acceptance.md#amendment-f1-23--display-inventory-and-runtime-vbe-modes-2026-10-12).
+Host coverage: `tests/host/test_display_modes.py`, `display_test.c`, the firmware
+worker cases in `v86_test.c`, bootinfo cases in `kernel_lib_test.c`, and RGB565
+reference fixtures in `fbdev_test.c`. Real QEMU/T23/E500 mode changes remain
+lead-owned qualification.

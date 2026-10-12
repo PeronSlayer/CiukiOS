@@ -178,6 +178,7 @@ static int prepare_image(struct process *p, const struct ciuki_file *file,
     if (err)
         return err;
     err = elf_load(file, &image, p->memory);
+    if (!err) proc_launch_elf(p);
     struct proc_thread *t = 0;
     if (!err)
         err = proc_thread_prepare(p, image.entry, 0, 0, CIUKI_THREAD_STACK_DEFAULT,
@@ -223,8 +224,14 @@ int proc_spawn_file(struct process *parent, const struct ciuki_file *file,
     err = proc_inherit(p, parent, fds, fd_count);
     if (!err)
         name_from_argv0(p, strings);
+    if (!err) {
+        uint64_t now = proc_launch_enabled() ? proc_launch_now() : 0;
+        proc_launch_start(parent, p, now, now);
+    }
     if (!err)
         err = prepare_image(p, file, strings, mask);
+    struct proc_thread *self = proc_thread_for(g_current);
+    if (self && self->process == parent) self->launch_loading = 0;
     if (!err && parent->state != PROC_LIVE)
         err = -EINTR;
     if (err) {
@@ -237,6 +244,7 @@ int proc_spawn_file(struct process *parent, const struct ciuki_file *file,
 }
 
 struct spawn_operation {
+    struct proc_thread *thread;
     struct process *child;
     struct proc_strings *strings;
     struct ciuki_spawn_fd *fds;
@@ -247,6 +255,7 @@ struct spawn_operation {
 static void spawn_cleanup(void *operation)
 {
     struct spawn_operation *op = operation;
+    op->thread->launch_loading = 0;
     if (op->file.close)
         op->file.close(op->file.cookie);
     if (op->child)
@@ -259,6 +268,10 @@ static void spawn_cleanup(void *operation)
 
 int proc_spawn(uint32_t args_va)
 {
+    struct process *parent = proc_current();
+    uint64_t spawn_us = proc_launch_enabled() ? proc_launch_now() : 0;
+    uint64_t click_us = parent->launch_pending ? parent->launch_click_us : spawn_us;
+    parent->launch_pending = false; /* even an invalid or cancelled attempt consumes BEGIN */
     struct ciuki_spawn_args a;
     int err = copy_from_user(&a, args_va, sizeof(a));
     if (err)
@@ -270,6 +283,7 @@ int proc_spawn(uint32_t args_va)
     struct spawn_operation *op = kzalloc(sizeof(*op));
     if (!op)
         return -ENOMEM;
+    op->thread = self;
     self->cleanup = spawn_cleanup;
     self->operation = op;
     char *path = op->path = kmalloc(CIUKI_PATH_MAX);
@@ -303,6 +317,7 @@ int proc_spawn(uint32_t args_va)
     if ((err = proc_prepare(self->process, &op->child)))
         goto out;
     proc_set_name(op->child, path);
+    proc_launch_start(parent, op->child, spawn_us, click_us);
     if ((err = proc_inherit(op->child, self->process, fds, a.fd_count)))
         goto out;
     if (proc_signal_caught(self)) {

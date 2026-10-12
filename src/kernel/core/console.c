@@ -51,7 +51,7 @@ static uint32_t line_begin_as(bool overlay)
 {
     uint32_t flags = irq_save();
     draw_enabled = con_kind != CON_LFB ||
-                   ((overlay || (!display_owned && !quiet)) && fbdev_console_begin());
+                   (__atomic_load_n(&fb, __ATOMIC_ACQUIRE) && (overlay || (!display_owned && !quiet)) && fbdev_console_begin());
     return flags;
 }
 static uint32_t line_begin(void) { return line_begin_as(false); }
@@ -66,12 +66,17 @@ static void line_end(uint32_t flags)
 static uint32_t pack(uint32_t rgb)
 {
     uint32_t r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+    const struct fb_device *d = fbdev_get();
     const struct ciuki_boot_info *bi = &g_boot;
+    unsigned rp = d->present ? d->red_pos : bi->fb_red_pos, gp = d->present ? d->green_pos : bi->fb_green_pos;
+    unsigned bp = d->present ? d->blue_pos : bi->fb_blue_pos;
+    unsigned rs = d->present ? d->red_size : bi->fb_red_size, gs = d->present ? d->green_size : bi->fb_green_size;
+    unsigned bs = d->present ? d->blue_size : bi->fb_blue_size;
     if (bpp == 16 || bpp == 15)
-        return ((r >> (8 - bi->fb_red_size)) << bi->fb_red_pos) |
-               ((g >> (8 - bi->fb_green_size)) << bi->fb_green_pos) |
-               ((b >> (8 - bi->fb_blue_size)) << bi->fb_blue_pos);
-    return (r << bi->fb_red_pos) | (g << bi->fb_green_pos) | (b << bi->fb_blue_pos);
+        return ((r >> (8 - rs)) << rp) |
+               ((g >> (8 - gs)) << gp) |
+               ((b >> (8 - bs)) << bp);
+    return ((r >> (8 - rs)) << rp) | ((g >> (8 - gs)) << gp) | ((b >> (8 - bs)) << bp);
 }
 
 static void put_px(uint32_t x, uint32_t y, uint32_t c)
@@ -204,7 +209,7 @@ bool console_init_lfb(void)
     if (bi->fb_bpp != 32 && bi->fb_bpp != 24 && bi->fb_bpp != 16 && bi->fb_bpp != 15)
         return false;
     uint32_t bytes = bi->fb_pitch * bi->fb_height;
-    void *va = vmm_map_mmio(bi->fb_phys, bytes, true);
+    void *va = vmm_map_framebuffer(bi->fb_phys, bytes);
     if (!va)
         return false;
     fb = va;
@@ -224,6 +229,23 @@ bool console_init_lfb(void)
     } else
         clear_screen();
     return true;
+}
+
+/* Revoke the separate early-boot console alias before a VBE transaction.
+ * Presenter quiescence prevents even panic/overlay writes while revoked. */
+void console_framebuffer_revoke(void)
+{
+    uint8_t *old = __atomic_exchange_n(&fb, 0, __ATOMIC_ACQ_REL);
+    if (con_kind == CON_LFB && old) vmm_revoke_mmio(old, pitch * height);
+}
+void console_framebuffer_changed(const struct fb_device *d)
+{
+    pitch = d->pitch; bpp = d->bpp; width = d->width; height = d->height;
+    cols = width / CELL_W; if (cols > MAX_COLS) cols = MAX_COLS;
+    rows = height / CELL_H; cur_col = cur_row = 0; con_kind = CON_LFB;
+    fbdev_console_region(rows * CELL_H);
+    repaint_pending = true;
+    __atomic_store_n(&fb, d->mapped, __ATOMIC_RELEASE); /* publish after geometry */
 }
 
 /* Called once before console_init_lfb; a text console is never quiet. */

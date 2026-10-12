@@ -18,6 +18,97 @@ extern void audio_vm_kick(void) __attribute__((weak));
 static struct dosvm slots[DOSVM_LIMIT];
 static struct dosvm_key input_focus;
 
+/* Runtime diagnostics live here to keep record ownership in the lifecycle
+ * service. Call only from the preemptible monitor, never dosvm_tick or an
+ * IF-disabled device transaction (polled UART writes can lose PIT ticks). */
+void dosvm_trace(struct dosvm *v, enum dosvm_trace_kind kind, const struct v86_frame *f,
+                 uint32_t a, uint32_t b, uint32_t c)
+{
+    static const uint8_t limits[DOSVM_TRACE_COUNT] = {32, 24, 10, 32, 8, 64, 10, 1};
+    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    if (kind == DOSVM_TRACE_FLAGS && !v->trace.timer_programmed && !a && !v->dpmi.if_armed) {
+        struct dpmi_seg cs;
+        /* Extender initialization contains many 16-bit CLI/STI pairs.
+         * Keep the sample budget for the application's flat code. */
+        if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs) || !cs.big) return;
+    }
+    if (kind == DOSVM_TRACE_VECTOR && (a >> 8) == 0x0205 && (uint8_t)a == v->monitor.pic[0].base &&
+        v->trace.irq_epochs < 4) {
+        v->trace.irq_epochs++;
+        v->trace.used[DOSVM_TRACE_IRQ0] = 0;
+    }
+    /* DOS/4GW can spend seconds loading the WAD before the application's
+     * PIT setup. Reserve clock samples for the programmed guest timer. */
+    if (kind == DOSVM_TRACE_PIT && a == 0x40 && !v->pit.channel[0].write_phase &&
+        v->pit.channel[0].pending && !v->trace.timer_programmed) {
+        v->trace.timer_programmed = true;
+        v->trace.used[DOSVM_TRACE_DB_PM] = v->trace.used[DOSVM_TRACE_FLAGS] = 0;
+        if (v->trace.irq_epochs < 4) {
+            v->trace.irq_epochs++;
+            v->trace.used[DOSVM_TRACE_IRQ0] = 0;
+        }
+    }
+    if (v->trace.used[kind] >= limits[kind]) return;
+    if (kind == DOSVM_TRACE_TIMER) {
+        if (!v->trace.timer_programmed) return;
+        if (v->trace.used[kind] && g_ticks - v->trace.timer_tick < 250) return;
+        v->trace.timer_tick = g_ticks;
+    }
+    unsigned n = ++v->trace.used[kind];
+    const char *probe = dosvm_probe(v);
+    bool pm = !(f->tf.eflags & V86_VM);
+    switch (kind) {
+    case DOSVM_TRACE_VECTOR:
+        rec_diag(probe, "group=vm_vec vm=%u gen=%u n=%u api=%04x vec=%02x sel=%04x off=%08x pm=%u cs=%04x eip=%08x",
+                 v->info.key.id, v->info.key.generation, n, a >> 8, a & 255, b, c, pm,
+                 f->tf.cs & 0xFFFF, f->tf.eip);
+        break;
+    case DOSVM_TRACE_PIT: {
+        unsigned ch = a == 0x43 ? b >> 6 : a - 0x40;
+        const struct dosvm_pit_channel *p = &v->pit.channel[ch];
+        rec_diag(probe, "group=vm_pit vm=%u gen=%u n=%u port=%02x byte=%02x ch=%u mode=%u access=%u reload=%u pending=%u half=%u cs=%04x eip=%08x vif=%u armed=%u",
+                 v->info.key.id, v->info.key.generation, n, a, b, ch, p->mode, p->access,
+                 p->reload, p->pending, p->write_phase, f->tf.cs & 0xFFFF, f->tf.eip, v->monitor.vif, v->dpmi.if_armed);
+        break;
+    }
+    case DOSVM_TRACE_IRQ0:
+        rec_diag(probe, "group=vm_irq0 vm=%u gen=%u epoch=%u n=%u pm=%u cs=%04x eip=%08x if=%u vif=1 tf=%u vec=%02x to_pm=%u sel=%04x off=%08x",
+                 v->info.key.id, v->info.key.generation, v->trace.irq_epochs, n, pm, f->tf.cs & 0xFFFF,
+                 f->tf.eip, !!(f->tf.eflags & V86_IF), !!(f->tf.eflags & V86_TF), a, v->frame_pm, b, c);
+        break;
+    case DOSVM_TRACE_DB_PM: case DOSVM_TRACE_DB_RM:
+        rec_diag(probe, "group=vm_db vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x dr6=%08x cause=%08x tf=%u if=%u vif=%u armed=%u",
+                 v->info.key.id, v->info.key.generation, n, pm, f->tf.cs & 0xFFFF, f->tf.eip, a, b,
+                 !!(f->tf.eflags & V86_TF), !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed);
+        break;
+    case DOSVM_TRACE_FLAGS:
+        rec_diag(probe, "group=vm_if vm=%u gen=%u n=%u restore=%u matched=%u cs=%04x eip=%08x vif=%u armed=%u seed=%u seed_cs=%04x seed_ip=%08x",
+                 v->info.key.id, v->info.key.generation, n, a, b, f->tf.cs & 0xFFFF, f->tf.eip,
+                 v->monitor.vif, v->dpmi.if_armed, v->dpmi.decode_valid, v->dpmi.decode_cs, v->dpmi.decode_eip);
+        break;
+    case DOSVM_TRACE_TIMER: {
+        uint32_t flags = irq_save();
+        uint64_t tick = g_ticks, clocks = v->pit.clocks, edges = v->pit.edges;
+        uint32_t delivered = v->monitor.stats.delivered[0];
+        struct v86_pic pic = v->monitor.pic[0];
+        irq_restore(flags);
+        rec_diag(probe, "group=vm_clock vm=%u gen=%u n=%u tick=%llu clocks=%llu edges=%llu delivered=%u reload=%u",
+                 v->info.key.id, v->info.key.generation, n, tick, clocks, edges, delivered, v->pit.channel[0].reload);
+        rec_diag(probe, "group=vm_gate vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x if=%u vif=%u armed=%u shadow=%u irr=%02x isr=%02x imr=%02x",
+                 v->info.key.id, v->info.key.generation, n, pm, f->tf.cs & 0xFFFF, f->tf.eip,
+                 !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed,
+                 v->monitor.shadow || v->dpmi.shadow, pic.irr, pic.isr, pic.imr);
+        break;
+    }
+    case DOSVM_TRACE_FAULT:
+        rec_diag(probe, "group=vm_fault_pc vm=%u gen=%u pm=%u vec=%u cs=%04x eip=%08x linear=%08x address=%08x error=%x",
+                 v->info.key.id, v->info.key.generation, pm, v->info.fault_vector,
+                 f->tf.cs & 0xFFFF, f->tf.eip, v->info.fault_eip, v->info.fault_address, v->info.fault_error);
+        break;
+    default: break;
+    }
+}
+
 bool dosvm_admit(uint64_t free_bytes, uint64_t reserved, uint64_t resident,
                  uint32_t request, struct dosvm_admission *out)
 {
@@ -138,6 +229,11 @@ void dosvm_task_switch(const struct task *t)
 {
     struct dosvm *v = owner(t);
     if (v && v->dpmi.active) {
+        /* Native #DB signal handling need not inspect DR6. Its sticky BS
+         * must not become this VM's next breakpoint cause (SDM 18.2.3).
+         * A VM trap captures its DR6 before STI/scheduling, so clearing at
+         * the incoming context boundary cannot discard that trap's cause. */
+        arch_debug_take();
         uint32_t address[4] = {0};
         for (unsigned i = 0; i < DPMI_WATCH; i++) address[i] = v->dpmi.watch[i].addr;
         arch_ldt_load(v->dpmi.ldt, DPMI_LDT_ENTRIES);
@@ -245,11 +341,14 @@ bool dosvm_trap(struct trap_frame *tf)
     memcpy(f, tf, size);
     v->frame_pm = pm;
     sti();
+    if (tf->vector == 1)
+        dosvm_trace(v, pm ? DOSVM_TRACE_DB_PM : DOSVM_TRACE_DB_RM, f, dr6, dpmi_debug_status(v, dr6), 0);
     int e = 0;
     if (v->info.state != DOSVM_STOPPING) {
         if (pm) e = dpmi_pm_trap(v, f, cr2, dr6);
         else if (tf->vector == 13) e = v86_emulate(&v->monitor, f);
         else if (tf->vector == 1 && (v->monitor.shadow || v->monitor.track_boundaries)) {
+            dr6 = dpmi_debug_status(v, dr6);
             if (dr6 & 15) {
                 dpmi_watch_hits(v, dr6);
                 for (unsigned i = 0; i < DPMI_WATCH; i++)
@@ -272,6 +371,7 @@ bool dosvm_trap(struct trap_frame *tf)
         v->info.fault_eip = pm ? dpmi_fault_linear(v, (const struct v86_frame *)tf) : (tf->cs << 4) + tf->eip;
         v->info.fault_address = cr2;
         v->info.fault_error = tf->err;
+        dosvm_trace(v, DOSVM_TRACE_FAULT, (const struct v86_frame *)tf, 0, 0, 0);
         dosvm_stop(v->info.key, DOSVM_FAULT);
     }
     if (!v->info.dos_ready && deadline_passed(v->boot_deadline))
@@ -298,6 +398,7 @@ bool dosvm_trap(struct trap_frame *tf)
         if (e < 0) {
             v->info.fault_vector = tf->vector;
             v->info.fault_eip = dpmi_fault_linear(v, f);
+            dosvm_trace(v, DOSVM_TRACE_FAULT, f, 0, 0, 0);
             dosvm_stop(v->info.key, DOSVM_FAULT);
             break;
         }
@@ -310,6 +411,7 @@ bool dosvm_trap(struct trap_frame *tf)
         v->info.fault_vector = 13;
         v->info.fault_eip = dpmi_fault_linear(v, f);
         v->dpmi.stats.faults++;
+        dosvm_trace(v, DOSVM_TRACE_FAULT, f, 0, 0, 0);
         dosvm_stop(v->info.key, DOSVM_FAULT);
     }
     if (v->info.state == DOSVM_STOPPING) {
@@ -318,6 +420,8 @@ bool dosvm_trap(struct trap_frame *tf)
     }
     if (v->info.state == DOSVM_BLOCKED)
         v->info.state = v->info.dos_ready ? DOSVM_RUNNABLE : DOSVM_BOOTING;
+    if (tf->vector == 0x20 && v->dpmi.active)
+        dosvm_trace(v, DOSVM_TRACE_TIMER, f, 0, 0, 0);
     if (g_need_resched) schedule();
     if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
     cli();

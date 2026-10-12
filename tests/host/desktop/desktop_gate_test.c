@@ -52,6 +52,10 @@ int ciuki_proc_list(void *buffer, uint32_t bytes) { (void)buffer; (void)bytes; e
 /* Shell services the gate harness does not model: mixer control and power. */
 int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size) { (void)fd; (void)op; (void)record; (void)size; errno = ENOSYS; return -1; }
 int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
+int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us)
+{ (void)event; (void)pid; (void)click_us; return 0; } /* quiet gate */
+int ciuki_proc_terminate(ciuki_pid_t pid, int signo, int authority_fd)
+{ (void)pid; (void)signo; (void)authority_fd; errno=ENOSYS; return -1; }
 static jmp_buf done;
 static struct gate_control page_storage, *control_page=&page_storage;
 #define page (*control_page)
@@ -208,7 +212,7 @@ int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
     else {errno=EAGAIN;return -1;}
     m->sender_pid=client_pid[fd];return 1;
 }
-int ciuki_display_info(int fd,struct ciuki_display_info *s)
+int ciuki_display_info(int fd,struct ciuki_framebuffer_info *s)
 { assert(fd==3);s->width=s->height=320;return 0; }
 int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f)
 {assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return desktop_spawn_host_output();}
@@ -323,3 +327,6 @@ int main(int argc,char **argv)
     puts("desktop production gate: five fault kinds, spawn mappings/groups, controller pacing, flush barriers, input summaries PASS");
     return 0;
 }
+
+int ciuki_display_query(struct ciuki_display_info *i) { (void)i; return -ENOSYS; }
+int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }

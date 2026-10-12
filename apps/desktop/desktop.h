@@ -52,6 +52,7 @@ struct desk_client {
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
     int mixer;                    /* launched /Programs/mixer (Volume Control); may send MIXER_SET */
     int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
+    int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
@@ -75,6 +76,23 @@ struct desk_ops {
 };
 struct desk_program { char name[64], path[sizeof("/Programs/") + 64]; };
 struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent; };
+#define DESK_POWER_CLOSE_NS 3000000000ull
+#define DESK_POWER_RETRY_NS 250000000ull
+#define DESK_POWER_BUSY_NS 5000000000ull
+enum { DESK_POWER_IDLE, DESK_POWER_CLOSING, DESK_POWER_RETRY,
+       DESK_POWER_BUSY, DESK_POWER_FORCE, DESK_POWER_DONE };
+struct desk_power_target {
+    uint32_t pid;
+    int owned, terminated, gone;
+    char name[DESK_TITLE_MAX + 1];
+};
+struct desk_power_sequence {
+    int state, action, window, previous_focus, prepared;
+    unsigned count;
+    uint64_t close_deadline, busy_deadline, next_try;
+    struct desk_power_target targets[DESK_CLIENTS * 2];
+    char text[320];
+};
 struct desktop {
     struct desk_ops ops;
     int display, input, output, focus, drag;
@@ -99,6 +117,8 @@ struct desktop {
     uint32_t app_pid;
     const char *launch_arg;      /* single argument for the next launch (LAUNCH from Files) */
     int (*launch)(struct desktop *, const struct desk_program *);
+    uint64_t launch_click_ns;
+    int (*launch_mark)(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
     int realtime_source;
@@ -114,21 +134,28 @@ struct desktop {
     int mixer_fd;                /* delegated /dev/mixer control handle (CIUKI_MIXER_FD) or -1 */
     const char *launch_argv[6];  /* Run dialog: extra arguments for the next launch */
     struct desk_shell sh;
+    struct desk_power_sequence power;
+    /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
+     * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
+    int (*power_request)(int action);
+    void (*power_prepare)(struct desktop *);
+    int (*power_alive)(struct desktop *, uint32_t pid);
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
      * control handle; NULL on hosts without one. 0 or -errno. */
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
-    int (*display_set)(struct desktop *, uint16_t mode); /* f1-23 runtime; 0 or -errno */
     /* Title-bar double-click (windowshade). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
     /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
     int title_hot, title_down;
+    uint32_t display_counter;
+    uint16_t display_mode, display_pending;
+    int (*display_set)(struct desktop *, uint16_t);
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
  * 6 demo reaped with status 0, 7 Tasks reported the PID gone and the
  * desktop's own process list confirmed it (desktop.c). */
 #define DESK_TASKS_DONE 7
-int desk_display_mode_set(struct desktop *, uint16_t mode);
 int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out);
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
@@ -158,6 +185,11 @@ void desk_minimize(struct desktop *, int index);
 void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
+void desk_power_begin(struct desktop *, int action);
+void desk_power_tick(struct desktop *);
+void desk_power_cancel(struct desktop *);
+void desk_power_force(struct desktop *);
+int desk_power_input(struct desktop *, const struct ciuki_input_event *);
 void desk_about(struct desktop *);
 void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
@@ -180,6 +212,8 @@ void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 void desk_move(struct desktop *, int index, int32_t x, int32_t y);
 void desk_resize(struct desktop *, int index, struct desk_box frame);
+int desk_display_frame_commit(struct desktop *, int redraw_result);
+void desk_display_relayout(struct desktop *, uint32_t width, uint32_t height);
 void desk_zoom(struct desktop *, int index);
 unsigned desk_resize_hit(const struct desk_client *, int32_t x, int32_t y);
 void desk_input(struct desktop *, const struct ciuki_input_event *);
@@ -188,5 +222,6 @@ void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,
                const char *, int, uint32_t);
 uint8_t desk_glyph_row(unsigned, unsigned);
 int desk_redraw(struct desktop *);
+uint64_t desk_launch_wait(const struct desktop *, uint64_t now); /* ns; short startup polling only */
 int desk_load_portrait(uint32_t *pixels);
 #endif

@@ -29,6 +29,7 @@ static void release(struct desktop *d, const struct ciuki_input_event *base)
 }
 void desk_focus(struct desktop *d, int i)
 {
+    if (d->power.state && i>=0 && i<DESK_CLIENTS && d->clients[i].internal!=DESK_INTERNAL_POWER) return;
     if (i >= 0 && (i >= DESK_CLIENTS || !d->clients[i].window || d->clients[i].minimized)) return;
     if (i == d->focus) return;
     struct ciuki_input_event e = { .monotonic_ns = d->now_ns };
@@ -104,8 +105,23 @@ static int32_t axis(int32_t old, int32_t delta, uint32_t limit)
 }
 void desk_input(struct desktop *d, const struct ciuki_input_event *in)
 {
+    /* Preserve the timestamp of a deferred menu action across the remaining
+     * input batch. Immediate icon/menu actions consume it in launch_program. */
+    if (d->action < 0) d->launch_click_ns = in->monotonic_ns ? in->monotonic_ns : d->now_ns;
     d->inputs++;
     struct ciuki_input_event e = *in;
+    if (d->sh.want_power && !d->sh.gate && !d->power.state) return;
+    if (d->power.state) {
+        if (e.type==CIUKI_INPUT_MOTION) {
+            desk_damage_add(&d->damage,(struct desk_box){d->mouse_x,d->mouse_y,12,18},d->width,d->height);
+            int32_t dx=e.value, dy=e.value2;
+            desk_shell_scale_motion(d,&dx,&dy);
+            d->mouse_x=axis(d->mouse_x,dx,d->width); d->mouse_y=axis(d->mouse_y,dy,d->height);
+            desk_damage_add(&d->damage,(struct desk_box){d->mouse_x,d->mouse_y,12,18},d->width,d->height);
+        }
+        desk_power_input(d,&e);
+        return;
+    }
     switch (e.type) {
     case CIUKI_INPUT_RESYNC:
         release(d, &e); d->drag = -1;

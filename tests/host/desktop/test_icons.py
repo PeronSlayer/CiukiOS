@@ -76,6 +76,7 @@ class IconStoreTests(unittest.TestCase):
         cls.binary = cls.folder / "icons_test"
         subprocess.run([*FLAGS, "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                         *cls.assets.defines(), str(ROOT / "tests/host/desktop/icons_test.c"),
+                        str(ROOT / "tests/host/desktop/icon_io.c"), "-Wl,--wrap=pread",
                         *(str(ROOT / s) for s in ["apps/libdeskui/draw.c", *cls.assets.SOURCES, "apps/desktop/compositor.c", "apps/desktop/theme.c"]),
                         "-o", str(cls.binary)], check=True, env=cls.env)
 
@@ -249,6 +250,33 @@ class IconStoreTests(unittest.TestCase):
         self.assertTrue(probe("process-working-01", 48).startswith("OK "))
         src = (ROOT / "apps/libdeskui/icon_map.c").read_text()
         self.assertIn('{"type:*", "text-x-generic-template"}', src)
+
+    def test_lazy_io_and_memory(self):
+        """A directory lookup reads no pixel data; repeated icons do no I/O."""
+        import struct
+        out = self.harness("stats")
+        rows = {r["phase"]: r for line in out.splitlines() if line.startswith("ICONS ")
+                for r in [dict(item.split("=", 1) for item in line.split()[1:])]}
+        directory_bytes = struct.unpack_from("<I", self.data, 36)[0]
+        self.assertEqual(int(rows["directory"]["store_bytes"]), directory_bytes)
+        off, length = self.image_span("folder", 32)
+        self.assertGreater(off, directory_bytes)
+        self.assertEqual(int(rows["folder"]["store_bytes"]), directory_bytes + length)
+        self.assertEqual(int(rows["portrait"]["portrait_bytes"]), 262144)
+        self.assertIn("PASS lazy cache", out)
+        print(out.strip())
+
+    def test_positional_read_boundaries(self):
+        normal = self.harness("probe", "folder", 32)
+        self.assertEqual(self.harness("probe", "folder", 32,
+                                     env={"ICONS_IO_LIMIT": "17", "ICONS_IO_INTERRUPT": "1"}), normal)
+        # Premature EOF in the directory refuses the store. EOF in pixel data
+        # refuses that icon, while the valid directory remains available.
+        self.assertEqual(self.harness("probe", "folder", 32,
+                                      env={"ICONS_IO_EOF_AT": "48"}), "NULL\nCOUNT 0\n")
+        off, _ = self.image_span("folder", 32)
+        self.assertEqual(self.harness("probe", "folder", 32,
+                                      env={"ICONS_IO_EOF_AT": str(off)}), "NULL\nCOUNT 246\n")
 
     def image_span(self, name, size):
         """(offset, length) of the stored pixels of name at size, from the header and tables."""

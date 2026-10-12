@@ -356,6 +356,23 @@ int desk_redraw(struct desktop *d)
     if (done) {
         d->damage.count -= done;
         memmove(d->damage.boxes,d->damage.boxes+done,d->damage.count*sizeof(d->damage.boxes[0]));
+        if (!d->damage.count) for (int i=0; i<DESK_CLIENTS; i++) {
+            struct desk_client *c=&d->clients[i];
+            if (c->launch_frame_pending && c->window && !c->minimized && !c->collapsed) {
+                c->launch_frame_pending=0;
+                if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_FRAME,c->pid,0);
+            }
+        }
     }
     return d->damage.count ? -1 : 0;
+}
+uint64_t desk_launch_wait(const struct desktop *d, uint64_t now)
+{
+    /* A stalled app must not make the desktop poll faster forever. */
+    for (int i=0; i<DESK_CLIENTS; i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (c->channel>=0 && c->awaiting_frame && now>=c->launched_ns &&
+            now-c->launched_ns<5000000000ull) return 1000000;
+    }
+    return 10000000;
 }

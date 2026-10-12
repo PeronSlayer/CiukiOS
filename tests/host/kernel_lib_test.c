@@ -2,6 +2,7 @@
  * Build: scripts/test/host_kernel_tests.sh
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -65,7 +66,9 @@ static void good_info(struct ciuki_boot_info *bi)
 {
     memset(bi, 0, sizeof(*bi));
     bi->magic = CIUKI_BOOT_INFO_MAGIC;
-    bi->version = 1;
+    bi->version = CIUKI_BOOT_INFO_VER;
+    bi->display.tag = CBI_DISPLAY_TAG;
+    bi->display.size = sizeof(bi->display);
     bi->size = CIUKI_BOOT_INFO_SIZE;
     bi->flags = CBI_A20_INT15 << CBI_F_A20_SHIFT;
     bi->memmap_source = 1;
@@ -97,7 +100,30 @@ static void test_bootinfo(void)
     CHECK(bootinfo_validate(&bi, &why) == 0);
 #define NEG(stmt, expect) do { good_info(&bi); stmt; int r = bootinfo_validate(&bi, &why); \
         CHECK(r != 0); CHECK(strcmp(why, expect) == 0); } while (0)
-    NEG(bi.version = 2, "version");
+    /* Backward compatibility reads exactly the old allocation, not v2 data. */
+    bi.version = 1; bi.size = CIUKI_BOOT_INFO_V1_SIZE;
+    uint8_t *v1 = malloc(CIUKI_BOOT_INFO_V1_SIZE);
+    CHECK(v1 != 0); memcpy(v1, &bi, CIUKI_BOOT_INFO_V1_SIZE);
+    CHECK(bootinfo_validate((const struct ciuki_boot_info *)v1, &why) == 0); free(v1);
+    NEG(bi.display.tag = 0, "display_tag_size");
+    NEG(bi.display.size--, "display_tag_size");
+    NEG(bi.display.mode_count = 33, "display_count");
+    NEG(memset(bi.display.oem, 'x', 64), "display_string_nul");
+    NEG(bi.display.vendor[0] = 0x7f, "display_string_ascii");
+    NEG(bi.display.vbe_version = 0x100, "display_controller_copy");
+    NEG(bi.display.vram_bytes = 1, "display_controller_copy");
+    good_info(&bi);
+    bi.flags |= CBI_F_VBE_CTRL_VALID; bi.vbe_ctrl[5] = 3; bi.vbe_ctrl[19] = 1;
+    bi.display.vbe_version = 0x300; bi.display.vram_bytes = 16 * 1024 * 1024;
+    bi.display.mode_count = 2;
+    bi.display.modes[0] = (struct ciuki_boot_display_mode){0x118,1024,768,32,4096,1,0};
+    bi.display.modes[1] = (struct ciuki_boot_display_mode){0x111,640,480,16,1280,1,0};
+    CHECK(bootinfo_validate(&bi, &why) == 0);
+    bi.display.modes[1].id = 0x118;
+    CHECK(bootinfo_validate(&bi, &why) != 0 && !strcmp(why, "display_duplicate"));
+    bi.display.modes[1].id = 0x111; bi.display.modes[1].pitch = 1279;
+    CHECK(bootinfo_validate(&bi, &why) != 0 && !strcmp(why, "display_mode"));
+    NEG(bi.version = 3, "version");
     NEG(bi.size = 0x1000, "size");
     NEG(bi.flags |= 1u << 20, "undefined_flag_bits");
     NEG(bi.flags &= ~CBI_F_A20_MASK, "a20_method");

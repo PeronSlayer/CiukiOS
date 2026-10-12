@@ -306,7 +306,7 @@ int ciuki_surface_info(int fd, struct ciuki_surface_info *s)
     if (!o || o->kind != K_SURFACE) { errno = EBADF; return -1; }
     *s = o->surface->info; return 0;
 }
-int ciuki_display_info(int fd, struct ciuki_display_info *s)
+int ciuki_display_info(int fd, struct ciuki_framebuffer_info *s)
 {
     struct obj *o = fd_obj(cur, fd);
     if (!o || o->kind != K_DISPLAY) { errno = EBADF; return -1; }
@@ -411,6 +411,8 @@ static uint32_t proc_records(void *buffer, uint32_t bytes)
 int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size)
 { (void)fd; (void)op; (void)record; (void)size; errno = ENODEV; return -1; }
 int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
+int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us)
+{ (void)event; (void)pid; (void)click_us; return 0; } /* quiet replay */
 int ciuki_proc_list(void *buffer, uint32_t bytes)
 {
     uint32_t r = proc_records(buffer, bytes);
@@ -936,3 +938,6 @@ int main(int argc, char **argv)
     fflush(stdout);
     _exit(0);
 }
+
+int ciuki_display_query(struct ciuki_display_info *i) { (void)i; return -ENOSYS; }
+int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }

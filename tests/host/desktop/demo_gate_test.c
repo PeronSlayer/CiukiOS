@@ -53,7 +53,7 @@ int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t format)
 void *ciuki_surface_map(int fd,int prot) { assert(fd==7 && prot==(PROT_READ|PROT_WRITE));return pixels; }
 int ciuki_surface_info(int fd,struct ciuki_surface_info *s)
 { assert(fd==7);*s=(struct ciuki_surface_info){sizeof(*s),WIDTH,HEIGHT,WIDTH*4,CIUKI_SURFACE_XRGB8888,sizeof(pixels)};return 0; }
-int ciuki_display_info(int fd,struct ciuki_display_info *s) { (void)s;assert(fd==expected_fd);grant_checks++;errno=EBADF;return -1; }
+int ciuki_display_info(int fd,struct ciuki_framebuffer_info *s) { (void)s;assert(fd==expected_fd);grant_checks++;errno=EBADF;return -1; }
 int ciuki_present(int fd,int surface,const struct ciuki_rect *r) { (void)r;assert(fd==expected_fd && surface==7);grant_checks++;errno=EBADF;return -1; }
 int ciuki_input_read(int fd,struct ciuki_input_event *e,uint32_t n) { (void)e;assert(fd==expected_fd && n==1);grant_checks++;errno=EBADF;return -1; }
 int ciuki_channel_pair(int pair[2]) { pair[0]=10;pair[1]=11;return 0; }

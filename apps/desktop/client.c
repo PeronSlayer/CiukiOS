@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <stdio.h>
+static void power_target(struct desktop *, uint32_t, const char *, int);
 int desk_ignore_sigpipe(void)
 { return signal(SIGPIPE,SIG_IGN)==SIG_ERR ? -1 : 0; }
 void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32_t h)
@@ -166,6 +167,56 @@ void desk_resize(struct desktop *d, int i, struct desk_box f)
     configure(d, i, 0);
     desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
 }
+/* Only a successfully presented frame in the requested/confirmed mode may
+ * replace the saved preference. Failed reallocations still have the old id. */
+int desk_display_frame_commit(struct desktop *d, int redraw)
+{
+    if (redraw || !d->display_pending || d->display_pending != d->display_mode || d->damage.count) return 0;
+    d->sh.cfg.display_mode = d->display_pending;
+    d->display_pending = 0;
+    return 1;
+}
+
+/* Called only after allocating the new screen surface. Client surfaces stay
+ * attached until their CONFIGURE/DAMAGE handshake replaces them. */
+void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
+{
+    d->width = width; d->height = height;
+    d->drag = -1; d->resize_edges = 0;
+    d->title_hot = d->title_down = 0;
+    if (d->mouse_x >= (int32_t)width) d->mouse_x = (int32_t)width - 1;
+    if (d->mouse_y >= (int32_t)height) d->mouse_y = (int32_t)height - 1;
+    int32_t work = (int32_t)height - DESK_BAR - (d->shell ? DESK_BAR : 0);
+    for (int i = 0; i < DESK_CLIENTS; i++) {
+        struct desk_client *c = &d->clients[i];
+        if (!c->window) continue;
+        if (c->collapsed && c->resizable) desk_collapse(d, i);
+        if (c->resizable && !c->internal) {
+            struct desk_box f = c->frame;
+            if (c->zoomed || f.w > (int32_t)width) f.w = (int32_t)width;
+            if (c->zoomed || f.h > work) f.h = work;
+            uint32_t serial = c->resize_serial;
+            desk_resize(d, i, f);
+            /* The display geometry changed even if this client's size did
+             * not. Issue a fresh serial, allowing the client to re-layout. */
+            if (serial == c->resize_serial) {
+                if (!++c->resize_serial) ++c->resize_serial;
+                configure(d, i, 0);
+            }
+        }
+        desk_move(d, i, c->zoomed ? 0 : c->frame.x, c->zoomed ? DESK_BAR : c->frame.y);
+        int32_t max_x = (int32_t)width - c->restore.w, max_y = (int32_t)height - c->restore.h - (d->shell ? DESK_BAR : 0);
+        if (max_x < 0) max_x = 0;
+        if (max_y < DESK_BAR) max_y = DESK_BAR;
+        if (c->restore.x > max_x) c->restore.x = max_x;
+        if (c->restore.y > max_y) c->restore.y = max_y;
+    }
+    d->sh.wall_valid = 0;
+    if (d->shell) desk_shell_apply(d);
+    d->damage.count = 0;
+    desk_damage_add(&d->damage, (struct desk_box){0, 0, (int32_t)width, (int32_t)height}, width, height);
+}
+
 void desk_zoom(struct desktop *d, int i)
 {
     if (i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return;
@@ -260,6 +311,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         desk_move(d, i, 20 + i * 18, DESK_BAR + 20 + i * 18);
         desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
         configure(d, i, 1);
+        if (c->awaiting_frame && d->launch_mark) d->launch_mark(CIUKI_LAUNCH_CONFIGURE,c->pid,0);
         if (d->shell && d->menu_open) {
             c->order=++d->order; d->menu_focus=i;
             desk_message(&reply,DESK_FOCUS,8); desk_queue(d,i,&reply);
@@ -270,10 +322,13 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         if (d->tasks_test && d->tasks_stage == 3 && c->pid == d->tasks_demo_pid) {
             d->tasks_stage = 4; d->tasks_demo_window = c->window_id;
         }
+        if (d->power.state) {
+            power_target(d,c->pid,c->title,0);
+            desk_request_close(d,i);
+        }
         break;
     }
     case DESK_DAMAGE: {
-        c->awaiting_frame = 0;   /* its first frame: a launched program is ready for input (desktop.c) */
         if (p.serial) {
             void *pixels = d->ops.map(m->fds[0], PROT_READ);
             if (!pixels || pixels == MAP_FAILED) { close_attachments(d, m, -1); desk_drop_client(d, i); return; }
@@ -283,11 +338,17 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             configure(d, i, 1);
             /* A superseded request already in flight may commit; keep the
              * newest frame geometry and clip this surface until its swap. */
-            break;
+        } else {
+            struct desk_box b = desk_content(c);
+            b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
+            if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
         }
-        struct desk_box b = desk_content(c);
-        b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
-        if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
+        /* A valid replacement surface can also carry the first rendered frame. */
+        if (c->awaiting_frame) {
+            c->launch_frame_pending = 1;
+            if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_DAMAGE,c->pid,0);
+        }
+        c->awaiting_frame = 0;
         break;
     }
     case DESK_SET_TITLE:
@@ -349,9 +410,9 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_SETTINGS: {
-        /* Control Panel: reload preferences, set the master volume or ask
-         * f1-23's display callback for a temporary mode. */
-        int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : 0;
+        /* Control Panel settings use the real display callback and share
+         * the shutdown guard with the other preference requests. */
+        int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : d->power.state ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
         if (!result && p.request == DESK_SETTINGS_DISPLAY)
             result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
@@ -370,7 +431,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     }
     case DESK_MIXER_SET: {
         /* Only the Volume Control the desktop launched may change the master volume. */
-        int32_t result = !c->mixer ? -EPERM : d->mixer_set ? d->mixer_set(d, p.width, p.height, p.flags) : -ENODEV;
+        int32_t result = !c->mixer ? -EPERM : d->power.state ? -EBUSY : d->mixer_set ? d->mixer_set(d, p.width, p.height, p.flags) : -ENODEV;
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, DESK_MIXER_SET); desk_put32(reply.data + 12, (uint32_t)result);
         desk_queue(d, i, &reply);
@@ -489,6 +550,7 @@ void desk_request_close(struct desktop *d, int i)
 }
 void desk_close_timeouts(struct desktop *d)
 {
+    if (d->power.state) return; /* shutdown owns its three-second deadline */
     for (int i=0; i<DESK_CLIENTS; i++) {
         struct desk_child *c=&d->children[i];
         if (c->pid && c->close_ns && !c->term_sent && d->now_ns>=c->close_ns && d->terminate) {
@@ -500,6 +562,8 @@ void desk_close_timeouts(struct desktop *d)
 }
 void desk_child_exited(struct desktop *d, uint32_t pid, int status)
 {
+    for (unsigned i=0; i<d->power.count; i++)
+        if (d->power.targets[i].pid==pid) d->power.targets[i].gone=1;
     int owned=0;
     for (int i=0; i<DESK_CLIENTS; i++) {
         if (d->clients[i].pid==pid && pid) desk_drop_client(d,i);
@@ -555,6 +619,7 @@ void desk_task_windows(struct desktop *d, int index, uint32_t serial)
 }
 int desk_task_end(struct desktop *d, uint32_t window_id, uint32_t pid)
 {
+    if (d->power.state) return -EBUSY;
     if (window_id) {
         int i=window_slot(d,window_id);
         if (i<0 || (pid && d->clients[i].pid!=pid && !d->clients[i].internal)) return -ESRCH;
@@ -575,6 +640,7 @@ int desk_task_end(struct desktop *d, uint32_t window_id, uint32_t pid)
 }
 int desk_task_switch(struct desktop *d, uint32_t window_id)
 {
+    if (d->power.state) return -EBUSY;
     int i=window_slot(d,window_id);
     if (i<0) return -ESRCH;
     if (d->clients[i].minimized) desk_minimize(d,i); else desk_focus(d,i);
@@ -582,6 +648,7 @@ int desk_task_switch(struct desktop *d, uint32_t window_id)
 }
 int desk_task_launch_args(struct desktop *d, const char *name, const char *const *args, unsigned count)
 {
+    if (d->power.state) return -EBUSY;
     if (!count || count > sizeof(d->launch_argv) / sizeof(d->launch_argv[0])) return -EINVAL;
     if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
@@ -596,6 +663,7 @@ int desk_task_launch_args(struct desktop *d, const char *name, const char *const
 }
 int desk_task_launch(struct desktop *d, const char *name, const char *argument)
 {
+    if (d->power.state) return -EBUSY;
     if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
         if (!d->launch) return -ENOSYS;
@@ -606,4 +674,138 @@ int desk_task_launch(struct desktop *d, const char *name, const char *argument)
         return pid<0 ? -(error ? error : EIO) : pid;
     }
     return -ENOENT;
+}
+
+/* Shutdown is driven by the ordinary IPC/reap/paint loop, never by sleeps.
+ * A channel CLOSE/disconnect is not proof that its process (or VM) exited. */
+static void power_target(struct desktop *d, uint32_t pid, const char *name, int owned)
+{
+    if (!pid || pid==d->self_pid) return;
+    for (unsigned i=0; i<d->power.count; i++) if (d->power.targets[i].pid==pid) {
+        d->power.targets[i].owned|=owned;
+        if (name && name[0]) snprintf(d->power.targets[i].name,sizeof(d->power.targets[i].name),"%s",name);
+        return;
+    }
+    if (d->power.count>=DESK_CLIENTS*2) return;
+    struct desk_power_target *t=&d->power.targets[d->power.count++];
+    t->pid=pid; t->owned=owned;
+    if (name && name[0]) snprintf(t->name,sizeof(t->name),"%s",name);
+    else snprintf(t->name,sizeof(t->name),"PID %u",pid);
+}
+static int power_live(struct desktop *d, struct desk_power_target *t)
+{
+    if (t->gone) return 0;
+    if (t->owned) {
+        for (int i=0; i<DESK_CLIENTS; i++) if (d->children[i].pid==t->pid) return 1;
+        t->gone=1; return 0;
+    }
+    if (d->power_alive && d->power_alive(d,t->pid)==0) { t->gone=1; return 0; }
+    return 1; /* Unknown is still pending, including after IPC disconnect. */
+}
+static void power_terminate(struct desktop *d, struct desk_power_target *t)
+{
+    if (!power_live(d,t)) return;
+    t->terminated=1;
+    if (d->terminate && d->terminate(t->pid,SIGTERM)<0 && errno==ESRCH) t->gone=1;
+    for (int i=0; i<DESK_CLIENTS; i++) if (d->children[i].pid==t->pid) d->children[i].term_sent=1;
+}
+void desk_power_begin(struct desktop *d, int action)
+{
+    if (!d->shell || d->sh.gate || d->power.state || (action!=1 && action!=2)) return;
+    memset(&d->power,0,sizeof(d->power));
+    d->power.state=DESK_POWER_CLOSING; d->power.action=action;
+    d->power.previous_focus=d->focus;
+    d->power.close_deadline=d->now_ns+DESK_POWER_CLOSE_NS;
+    desk_menu_close(d);
+    d->sh.volume_open=d->sh.volume_drag=d->sh.switcher=d->sh.tooltip=0;
+    d->sh.want_run[0]=0; d->action=-1;
+    d->drag=-1; d->resize_edges=0; d->title_down=d->title_hot=0;
+    for (int i=0; i<DESK_CLIENTS; i++) {
+        struct desk_client *c=&d->clients[i];
+        if (!c->internal && c->channel>=0) power_target(d,c->pid,c->title,0);
+    }
+    for (int i=0; i<DESK_CLIENTS; i++) power_target(d,d->children[i].pid,NULL,1);
+    for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].window) desk_request_close(d,i);
+    for (int i=0; i<DESK_CLIENTS; i++) if (d->children[i].pid)
+        d->children[i].close_ns=d->power.close_deadline;
+    strcpy(d->power.text,"Shutting down...\nClosing programs and virtual machines.");
+    d->power.window=desk_internal_open(d,DESK_INTERNAL_POWER);
+    desk_theme_changed(d);
+}
+void desk_power_cancel(struct desktop *d)
+{
+    if (!d->power.state || d->power.state==DESK_POWER_DONE) return;
+    int window=d->power.window, focus=d->power.previous_focus;
+    d->power.state=DESK_POWER_IDLE;
+    if (window>=0 && d->clients[window].internal==DESK_INTERNAL_POWER) desk_drop_client(d,window);
+    for (int i=0; i<DESK_CLIENTS; i++) {
+        for (unsigned j=0; j<d->power.count; j++) if (d->children[i].pid==d->power.targets[j].pid) {
+            d->children[i].close_ns=0; d->children[i].term_sent=0;
+        }
+        d->clients[i].closing=0;
+    }
+    d->sh.modifiers=0; d->sh.logo_down=d->sh.alt_routed=d->sh.alt_used=d->sh.alt_code=0;
+    memset(d->keys,0,sizeof(d->keys)); d->buttons=d->routed_buttons=0;
+    d->sh.want_save=d->sh.want_mixer=d->sh.want_reload=d->sh.want_power=0;
+    desk_focus(d,focus>=0 && d->clients[focus].window ? focus : -1);
+    desk_theme_changed(d);
+}
+static void power_busy(struct desktop *d)
+{
+    d->power.state=DESK_POWER_BUSY;
+    strcpy(d->power.text,"Some programs are still running:");
+    unsigned count=0;
+    for (unsigned i=0; i<d->power.count; i++) if (power_live(d,&d->power.targets[i])) {
+        size_t n=strlen(d->power.text);
+        if (sizeof(d->power.text)-n<54) { strcat(d->power.text,"\n..."); break; }
+        snprintf(d->power.text+n,sizeof(d->power.text)-n,"\n%.48s",d->power.targets[i].name);
+        count++;
+    }
+    if (!count) strcat(d->power.text,"\nUnknown storage holder (no client remains).");
+    if (d->power.window>=0) desk_drop_client(d,d->power.window);
+    d->power.window=desk_internal_open(d,DESK_INTERNAL_POWER);
+    desk_theme_changed(d);
+}
+void desk_power_force(struct desktop *d)
+{
+    if (d->power.state!=DESK_POWER_BUSY) return;
+    for (unsigned i=0; i<d->power.count; i++) power_terminate(d,&d->power.targets[i]);
+    d->power.state=DESK_POWER_FORCE;
+    d->power.next_try=d->now_ns+DESK_POWER_RETRY_NS;
+    strcpy(d->power.text,"Shutting down...\nWaiting for terminated programs.");
+    desk_theme_changed(d);
+}
+void desk_power_tick(struct desktop *d)
+{
+    struct desk_power_sequence *p=&d->power;
+    if (!p->state || d->sh.gate || p->state==DESK_POWER_BUSY || p->state==DESK_POWER_DONE) return;
+    if (p->state==DESK_POWER_CLOSING) {
+        int pending=0;
+        for (unsigned i=0; i<p->count; i++) if (power_live(d,&p->targets[i])) {
+            pending=1;
+            if (d->now_ns>=p->close_deadline && !p->targets[i].terminated) power_terminate(d,&p->targets[i]);
+        }
+        if (pending && d->now_ns<p->close_deadline) return;
+        p->state=DESK_POWER_RETRY; p->next_try=d->now_ns;
+        p->busy_deadline=d->now_ns+DESK_POWER_BUSY_NS;
+    }
+    if (d->now_ns<p->next_try) return;
+    if (!p->prepared) { p->prepared=1; if (d->power_prepare) d->power_prepare(d); }
+    int r;
+    if (d->power_request) r=d->power_request(p->action);
+    else { errno=ENOSYS; r=-1; }
+    if (!r) { p->state=DESK_POWER_DONE; return; } /* real success never returns */
+    int error=errno;
+    if (error==EBUSY) {
+        if (p->state==DESK_POWER_FORCE || d->now_ns>=p->busy_deadline) power_busy(d);
+        else p->next_try=d->now_ns+DESK_POWER_RETRY_NS;
+        return;
+    }
+    char text[300];
+    int action=p->action;
+    desk_power_cancel(d);
+    if (error==ENOSYS) snprintf(text,sizeof(text),"%s is not available yet: this kernel has no\npower interface (call 73). Turn the computer off\nwith its power button once the disk is idle.\n%s (error %d).",
+                               action==1 ? "Restart" : "Shut down",strerror(error),error);
+    else snprintf(text,sizeof(text),"%s failed (error %d): %s.",action==1 ? "Restart" : "Shut down",error,strerror(error));
+    desk_shell_message(d,"Shut Down CiukiOS",text,1);
 }

@@ -132,7 +132,7 @@ def build():
     env = os.environ.copy()
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
-    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", "display_mode.c", *SHELL,
+    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
                            "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}
