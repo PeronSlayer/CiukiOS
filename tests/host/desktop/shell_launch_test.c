@@ -32,13 +32,17 @@
 static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }
 uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 int shell_close(int);
+struct stat;
+int shell_fstat(int, struct stat *);
 #define fcntl shell_fcntl
 #define close shell_close
+#define fstat shell_fstat
 #define main desktop_main
 #include "../../../apps/desktop/desktop.c"
 #undef main
 #undef close
 #undef fcntl
+#undef fstat
 static int fail_mapping, fail_spawn, pid_source=100;
 static char captured_report[CIUKI_PROBE_REPORT_MAX+1];
 uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,uint32_t b,uint32_t c,uint32_t e)
@@ -64,6 +68,14 @@ int shell_fcntl(int fd, int command, ...)
     return 0;
 }
 int shell_close(int fd) { return fake_ops.close(fd); }
+static int shell_regular_fd=-1, shell_directory_fd=-1;
+int shell_fstat(int fd, struct stat *st)
+{
+    memset(st,0,sizeof(*st));
+    if (fd==shell_regular_fd) { st->st_mode=S_IFREG; return 0; }
+    if (fd==shell_directory_fd) { st->st_mode=S_IFDIR; return 0; }
+    errno=EBADF; return -1;
+}
 static int expect_files_test, expect_note_test, expect_authority=-1, expect_test=0;
 static const char *expect_note_arg, *expect_dosbox[2];
 static unsigned dosbox_spawns;
@@ -110,7 +122,8 @@ static int fake_record_count;
 /* Desktop shell services (desktop.c): no mixer and no power interface on the host. */
 int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
 { (void)fd; (void)op; (void)record; (void)size; errno=ENODEV; return -1; }
-int ciuki_power(uint32_t action) { (void)action; errno=ENOSYS; return -1; }
+static uint32_t last_power_action;
+int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer,uint32_t bytes)
 {
     assert(bytes>=CIUKI_PROC_LIST_MIN+8*sizeof(struct ciuki_proc_record));
@@ -122,6 +135,9 @@ int ciuki_proc_list(void *buffer,uint32_t bytes)
 }
 static uint32_t terminated_pid; static int terminated_signal;
 static int fake_terminate(uint32_t pid,int signal) { terminated_pid=pid; terminated_signal=signal; return 0; }
+static int last_authority;
+int ciuki_proc_terminate(ciuki_pid_t pid, int signo, int authority_fd)
+{ last_authority=authority_fd; return fake_terminate((uint32_t)pid,signo); }
 static void v2(struct desktop *d,int index,uint32_t pid,struct ciuki_message *m)
 { (void)d; m->data[0]=DESK_SHELL_VERSION; m->sender_pid=pid; desk_receive(d,index,m); }
 static unsigned queued(const struct desktop *d,int index,unsigned opcode,struct desk_packet *out)
@@ -470,6 +486,7 @@ static void test_menu_icons(void)
     drop_all(&d); fake_reset();
     puts("PASS menu icons: every menu 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
 }
+#include "shutdown_sequence_test.h"
 int main(void)
 {
     struct desktop d;
@@ -571,5 +588,6 @@ int main(void)
     test_note_scenario();
     test_games_menu();
     test_menu_icons();
+    test_shutdown_sequence();
     return 0;
 }
