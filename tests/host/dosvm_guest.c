@@ -62,6 +62,7 @@ struct task *g_current = &caller;
 uint32_t g_task_count, g_user_mappings;
 volatile uint64_t g_ticks;
 volatile bool g_need_resched;
+struct ciuki_boot_info g_boot;
 static uint32_t read_cr3(void) { return cpu_cr3; }
 static void write_cr3(uint32_t x) { cpu_cr3 = x; }
 static uint32_t read_cr2(void) { return fake_cr2; }
@@ -208,6 +209,15 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     }
     printf("  record %s %s %s\n", probe, event, extra);
 }
+void rec_diag(const char *probe, const char *fmt, ...)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    CHECK(cpu_flags & V86_IF);
+    char extra[240]; va_list ap; va_start(ap,fmt);
+    int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
+    CHECK(n>=0 && n<(int)sizeof(extra));
+    rec_emit(probe,"DATA","%s",extra);
+}
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
 #include "../../src/kernel/vm/dosvm.c"
@@ -341,6 +351,15 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     g_current = &caller; sti();
 }
 static bool stopped(void) { return gv->info.state >= DOSVM_STOPPING; }
+/* f3-09 startup replay: reach the application's unchained graphics and
+ * two page flips with a running PM timer. This is not a timedemo verdict. */
+static uint32_t startup_irqs;
+static bool video_started(void)
+{
+    struct dosvm_video_info video;
+    return dosvm_video_info(gv->info.key, &video) && video.mode == 0x13 && video.unchained &&
+        video.starts >= 2 && gv->dpmi.stats.irqs_pm - startup_irqs >= 10;
+}
 /* Run until done() or the VM stops or the instruction budget runs out. */
 static int run(uint64_t budget, bool (*done)(void))
 {
@@ -375,7 +394,17 @@ static int run(uint64_t budget, bool (*done)(void))
         if (rc != GCPU_BUDGET) {
             trace_trap(&ev);
             bool was_pm = frame_pm();
-            debug_dr6 = ev.dr6;
+            /* DR6 is sticky until arch_debug_take clears it. Disabled
+             * breakpoint comparisons are permitted alongside BS (SDM
+             * 18.2.3); opt in for replay without altering the guest image. */
+            debug_dr6 |= ev.dr6;
+            const char *unused = getenv("GUEST_DR6_UNUSED");
+            if (unused && (ev.dr6 & 0x4000)) {
+                uint32_t bits = (uint32_t)strtoul(unused, 0, 0) & 15;
+                for (unsigned j = 0; j < 4; j++)
+                    if (debug_dr7 & (1u << (2 * j))) bits &= ~(1u << j);
+                debug_dr6 |= bits;
+            }
             deliver(ev.vector, ev.err, ev.cr2);
             if (trace && was_pm != frame_pm())
                 printf("    trace switch -> %s %04x:%08x ss:sp=%04x:%08x depth=%u\n", frame_pm() ? "PM" : "V86",
@@ -555,6 +584,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     disk_image = fopen(argv[1], "rb"); CHECK(disk_image);
+    if (getenv("GUEST_VERBOSE")) g_boot.flags |= CBI_F_VERBOSE;
     CHECK(fseek(disk_image, 0, SEEK_END) == 0); disk_bytes = (uint64_t)ftell(disk_image);
     gcpu_init(&guest_ops);
     struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = true};
@@ -573,21 +603,31 @@ int main(int argc, char **argv)
          * verdict counts; the shell then gets its prompt back, and the screen
          * latched at the verdict must still hold GUEST_EXPECT_TEXT. */
         bool rc = !strncmp(argv[i], "rc:", 3);
+        bool video = !strncmp(argv[i], "video:", 6);
         if (!strncmp(argv[i], "keys:", 5)) {
             CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
             printf("run %s through window keys (expect VMVIDEO stage 1, then stages 2-6)\n", argv[i] + 5);
             if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
             continue;
         }
-        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : argv[i];
+        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : video ? argv[i] + 6 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
         dosvm_expect(gv, argv[i + 1]);
+        startup_irqs = gv->dpmi.stats.irqs_pm;
         printf("run %s (expect %s%s)\n", command, argv[i + 1], fault ? ", VM fault" : gate ? ", no DPMI host" : "");
         type(command);
         /* GUEST_BUDGET (instructions per command): long workloads (f3-06 DOOM). */
         const char *budget = getenv("GUEST_BUDGET");
-        r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull, fault ? 0 : verdict);
+        r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull, fault ? 0 : video ? video_started : verdict);
+        if (video) {
+            printf("video startup replay: %s (%llu instructions, %llu ms, PM timer IRQs=%u)\n",
+                   r == 1 ? "PASS" : "FAIL", (unsigned long long)(instructions - start),
+                   (unsigned long long)(g_ticks - ms), gv->dpmi.stats.irqs_pm - startup_irqs);
+            stats("video-startup");
+            if (r != 1) { failures++; screen(); }
+            break;
+        }
         printf("  -> %s %s detail=%s state=%u reason=%u vector=%u after %llu instructions, %llu ms\n",
                argv[i + 1], gv->info.verdict_done ? (gv->info.verdict_pass ? "PASS" : "FAIL") : "NO-VERDICT",
                gv->info.verdict_detail, gv->info.state, gv->info.reason, gv->info.fault_vector,

@@ -390,3 +390,16 @@ Unsupported optional devices pass the disablement check, not driver qualificatio
 
 No change to the shared address-space, interrupt-vector, toolchain or licensing
 assumptions is proposed. Nominal 1000 Hz accounts for the PIT's integer divisor.
+
+
+### f1-23 amendment: qualified F1 display mode switch
+
+The owner's written f1-23 directive advances the table's F4 VBE mode-switch
+entry to F1 for the supervisor desktop's explicit mode requests. Its
+[acceptance amendment](f1-acceptance.md#amendment-f1-23--display-inventory-and-runtime-vbe-modes-2026-10-12)
+requires stopped presentation, console/presenter mapping revocation, VGA leases,
+serialized 4F02(LFB)/4F01/4F03, bounded private scratch and 2 s call budgets,
+confirmed remapping and a 10 s desktop-frame watchdog. Unknown I/O dependencies
+remain forbidden; timeouts retain quarantine and require reboot rather than
+an assumed restore. This does not authorize acceleration, option-ROM startup,
+PCI BIOS/configuration writes or ordinary DOS VM calls to host INT10.

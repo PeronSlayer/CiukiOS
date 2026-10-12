@@ -41,7 +41,7 @@
 #define DU_ICON_TOOLBAR (desk_theme->icon_toolbar)
 #define DU_ICON_LARGE   (desk_theme->icon_large)
 
-#define DU_WIDGETS       48
+#define DU_WIDGETS       64
 #define DU_DIALOG_ITEMS  10
 #define DU_TIMERS        8
 #define DU_TEXT_MAX      1040

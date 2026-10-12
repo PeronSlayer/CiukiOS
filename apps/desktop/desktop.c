@@ -9,6 +9,7 @@
 #include <ciuki/channel.h>
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
+#include <ciuki/display.h>
 #include <ciuki/proc.h>
 #include <ciuki/audio.h>
 #include <ciuki/power.h>
@@ -341,6 +342,56 @@ static int settings_save(struct desktop *d)
     if (!ok) { int error=errno; unlink(temp); errno=error; return -1; }
     return 0;
 }
+static int display_apply(struct desktop *d, uint16_t id)
+{
+    int e = ciuki_display_set(id);
+    if (!e && id != d->display_mode) d->display_pending = id;
+    return e;
+}
+/* Polls the readable counter once per frame. Allocation failure keeps the old
+ * surface private and lets the kernel watchdog restore its previous mode. */
+static void display_poll(struct desktop *d)
+{
+    struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(info)};
+    if (ciuki_display_query(&info)) return;
+    uint32_t counter;
+    if (read(d->display, &counter, sizeof(counter)) != sizeof(counter)) return;
+    uint16_t mode = 0;
+    for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].current) mode = info.modes[i].id;
+    if (counter == d->display_counter && mode == d->display_mode) return;
+    if (!info.width || !info.height || info.width > 1600 || info.height > 1200) return;
+    int output = ciuki_surface_create(info.width, info.height, CIUKI_SURFACE_XRGB8888);
+    uint32_t *pixels = output < 0 ? MAP_FAILED : ciuki_surface_map(output, PROT_READ | PROT_WRITE);
+    if (pixels == MAP_FAILED) { if (output >= 0) close(output); return; }
+    munmap(d->pixels, ((size_t)d->width * d->height * 4 + CIUKI_PAGE_SIZE - 1) & ~(size_t)(CIUKI_PAGE_SIZE - 1));
+    close(d->output);
+    d->pixels = pixels; d->output = output;
+    desk_display_relayout(d, info.width, info.height);
+    if (d->shell) desk_shell_wallpaper_update(d);
+    d->display_counter = counter;
+    d->display_mode = mode;
+    /* Includes rollback: save that confirmed frame's mode, never the failed
+     * candidate. The existing cfg retains its previous id until then. */
+    d->display_pending = mode;
+}
+static void display_start(struct desktop *d)
+{
+    d->display_set = display_apply;
+    struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(info)};
+    if (ciuki_display_query(&info)) return;
+    for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].current) d->display_mode = info.modes[i].id;
+    uint32_t counter;
+    if (read(d->display, &counter, sizeof(counter)) == sizeof(counter)) d->display_counter = counter;
+    uint16_t wanted = d->sh.cfg.display_mode;
+    d->sh.cfg.display_mode = d->display_mode;
+    if (d->sh.gate || !wanted || wanted == d->display_mode) return;
+    for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].id == wanted) {
+        int e = display_apply(d, wanted);
+        if (e) snprintf(d->notice, sizeof(d->notice), "Display mode unavailable (error %d)", -e);
+        break;
+    }
+}
+
 static void wallpaper_load(struct desktop *d)
 {
     desk_image_free(&d->sh.image);
@@ -478,7 +529,9 @@ static void shell_service(struct desktop *d)
         return;
     }
     if (sh->want_reload & 1) {
-        settings_load(d); scan_programs(d);
+        uint16_t confirmed = sh->cfg.display_mode;
+        settings_load(d);
+        sh->cfg.display_mode = confirmed; scan_programs(d);
         sh->icon_count=0; desk_shell_apply(d); wallpaper_load(d);
     }
     if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
@@ -562,7 +615,7 @@ int main(int argc, char **argv)
     for (int i=0; i<channel_count; i++) if (channels[i]==display || channels[i]==input) return 2;
     /* Kernel channel_send posts SIGPIPE as well as returning EPIPE. */
     if (desk_ignore_sigpipe()) return gate_setup_error(gate,GATE_SETUP_SIGPIPE,errno);
-    struct ciuki_display_info info = {.size=sizeof(info)};
+    struct ciuki_framebuffer_info info = {.size=sizeof(info)};
     if (ciuki_display_info(display,&info)) {
         fprintf(stderr,"desktop: display unavailable (errno=%d); console ready\n",errno);
         return gate_setup_error(gate,GATE_SETUP_DISPLAY,errno); /* no-LFB profiles use the stand-in */
@@ -581,6 +634,7 @@ int main(int argc, char **argv)
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (!gate) shell_setup(d,0);
+    display_start(d);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
     if (launch && !gate) {
@@ -612,6 +666,7 @@ int main(int argc, char **argv)
     uint64_t shift_base=0, shift_release=0;
     for (;;) {
         uint64_t now = monotonic();
+        display_poll(d);
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
@@ -752,10 +807,15 @@ int main(int argc, char **argv)
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
         }
         if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
-        if (desk_redraw(d) && errno!=EINTR && !display_reported) {
+        int redraw = desk_redraw(d);
+        if (redraw && errno!=EINTR && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); }
+        if (desk_display_frame_commit(d, redraw)) {
+            if (d->shell && !d->sh.gate && settings_save(d))
+                snprintf(d->notice, sizeof(d->notice), "Display applied; settings not saved");
+        }
         /* The controller hashes the framebuffer during this report: send it
          * only after the checkpoint frame has been presented completely. */
         if (gate && d->app_test && d->app_checkpoint>d->app_reported && !d->damage.count) {

@@ -158,7 +158,7 @@ def build():
     sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["control"] = ["../control/main.c", "../control/app.c", "sounds.c", "settings.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "sounds.c", "settings.c", "wallpaper.c", "image.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():

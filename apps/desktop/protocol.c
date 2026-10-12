@@ -259,6 +259,8 @@ int desk_parse(const struct ciuki_message *m, int client,
         for (unsigned i = 0; i < 3; i++) p->values[i] = desk_get32(m->data + 12 + i * 4);
         if (p->request == DESK_SETTINGS_MASTER) {
             if (p->values[0] > 100 || p->values[1] > 100 || p->values[2] > 1) return 0;
+        } else if (p->request == DESK_SETTINGS_DISPLAY) {
+            if (p->values[0] > UINT16_MAX || p->values[1] || p->values[2]) return 0;
         } else if (p->request == DESK_SETTINGS_SOUND_TEST) {
             if (p->values[0] >= SOUND_EVENTS || p->values[1] || p->values[2]) return 0;
         } else if ((p->request != DESK_SETTINGS_RELOAD && p->request != DESK_SETTINGS_SOUND_RELOAD &&

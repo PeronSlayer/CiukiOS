@@ -16,6 +16,7 @@ static unsigned console_count;
 #define CHECK(x) do { if (!(x)) { printf("FAIL record guard line %d: %s\n", __LINE__, #x); failures++; } } while (0)
 struct task *g_current;
 struct tss g_tss;
+struct ciuki_boot_info g_boot;
 static uint32_t test_irq_save(void) { return 0; }
 static void test_irq_restore(uint32_t flags) { (void)flags; }
 static void test_cli(void) { }
@@ -81,7 +82,23 @@ int main(void)
     CHECK(strstr(serial_lines[7], "event=SWEEP_END passed=9 failed=0 not_run=1"));
     CHECK(lines == console_count);
     for (unsigned i = 0; i < lines; i++) CHECK(!strcmp(serial_lines[i], console_lines[i]));
+    /* Diagnostics share framing/sinks without claiming a probe scope. */
+    run_selected = run_begun = false;
+    memcpy(run_id, "00000000", 9);
+    unsigned before = lines, captured = captures, drops = rec_premature_records();
+    rec_diag("vm-boot", "group=vm_db dr6=%08x", 0xFFFF4FF0u);
+    CHECK(lines == before && captures == captured);
+    g_boot.flags = CBI_F_VERBOSE;
+    rec_diag("vm-boot", "group=vm_db dr6=%08x", 0xFFFF4FF0u);
+    CHECK(lines == before + 1 && captures == captured + 1 && !run_selected && !run_begun);
+    CHECK(strstr(serial_lines[before], "run=00000000") && strstr(serial_lines[before], "event=DATA group=vm_db dr6=ffff4ff0"));
+    rec_set_run("abcdef01");
+    rec_diag("vm-boot", "group=vm_db");
+    CHECK(lines == before + 1 && rec_premature_records() == drops);
+    g_boot.flags = 0;
+    CHECK(lines == console_count && !strcmp(serial_lines[before], console_lines[before]));
     printf("record runtime guard: %s (%u failures; drops before run/BEGIN, one warning, identical sinks, panic bypass)\n",
            failures ? "FAIL" : "PASS", failures);
+    printf("verbose runtime diagnostics: %s (quiet off, no run/BEGIN needed, evidence scope preserved)\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }

@@ -35,7 +35,7 @@ The lead must measure <50 ms latency and audible output on the T23 and run QEMU.
 
 Desktop protocol v2 additions: DESK_SOUND carries an event uint32 at byte 4;
 only menu open/select and error/information/question are accepted from toolkit
-clients. DESK_SETTINGS requests 3, 4 and 5 reload the scheme, test one event and
+clients. DESK_SETTINGS requests 4, 5 and 6 reload the scheme, test one event and
 test hardware respectively. These remain restricted to the desktop-launched
 Control Panel. Hardware sends a deferred TASK_RESULT with the original serial
 only after all 22050 source frames are accepted, or an error/timeout; replies
@@ -47,3 +47,22 @@ and deletes permanently. Its existing desktop icon's context menu invokes the
 empty_recycle sound without claiming to recover or remove stored files.
 Runtime gate scenarios leave audio hooks unset so their framebuffer evidence
 and deterministic interactions remain independent of an audio device.
+
+Merge reconciliation checked on 2026-10-12 (f4-06b): retain Display request 3
+and assign sound reload/test/hardware to 4/5/6; explicitly dispatch the three
+sound requests so a display switch cannot reload the sound scheme. Control
+Panel links both display.c and sounds.c and tracks the two asynchronous result
+serials independently. The startup sound and display frame commit both remain
+after redraw. Keep the audio completion callback inside desk_power_tick, after
+program-close processing and before descriptor cleanup and the power request.
+
+Research rechecked before reconciliation:
+- POSIX write: https://pubs.opengroup.org/onlinepubs/9699919799/functions/write.html
+  permits partial writes and EAGAIN with O_NONBLOCK; preserve the existing
+  worker's staged samples and nonblocking compositor callback.
+- Linux upstream ALSA timestamping:
+  https://www.kernel.org/doc/html/v4.19/sound/designs/timestamping.html
+  distinguishes writable capacity from queued playback delay. The existing
+  Ciuki worker waits for consumed frames plus transport/drain allowance (or
+  its two-second shutdown deadline); acceptance alone is not sound completion.
+  This is a cross-check of the existing behavior, not a new ALSA dependency.

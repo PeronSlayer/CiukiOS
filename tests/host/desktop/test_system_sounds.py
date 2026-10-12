@@ -23,7 +23,8 @@ class SystemSoundsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix=name, dir=scratch) as temp:
             binary = Path(temp) / name
             inc = Path(temp) / "include/ciuki"; inc.mkdir(parents=True)
-            (inc / "audio.h").write_bytes((ROOT / "sdk/sysroot-overlay/include/ciuki/audio.h").read_bytes())
+            for header in ("audio.h", "display.h"):
+                (inc / header).write_bytes((ROOT / "sdk/sysroot-overlay/include/ciuki" / header).read_bytes())
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-D_POSIX_C_SOURCE=200809L", "-Wno-macro-redefined", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/control"),
@@ -61,11 +62,11 @@ class SystemSoundsTests(unittest.TestCase):
         desktop = module("sounds_desktop_tests", ROOT / "tests/host/desktop/test_deskui.py")
         folder = ROOT / "build/codex"; folder.mkdir(parents=True, exist_ok=True)
         frame = folder / "f4-06-sounds.xrgb"
-        self.harness("sounds-control", ["tests/host/desktop/sounds_control_test.c", "apps/control/app.c", "apps/desktop/sounds.c",
+        self.harness("sounds-control", ["tests/host/desktop/sounds_control_test.c", "apps/control/app.c", "apps/control/display.c", "apps/desktop/protocol.c", "apps/desktop/sounds.c",
                     "apps/desktop/settings.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c", *desktop.TOOLKIT], frame)
-        self.assertEqual(frame.stat().st_size, 500*420*4)
+        self.assertEqual(frame.stat().st_size, 560*420*4)
         from PIL import Image
-        Image.frombytes("RGB", (500,420), frame.read_bytes(), "raw", "BGRX").save(folder / "f4-06-sounds.png")
+        Image.frombytes("RGB", (560,420), frame.read_bytes(), "raw", "BGRX").save(folder / "f4-06-sounds.png")
         frame.unlink()
 
 if __name__ == "__main__":

@@ -93,18 +93,50 @@ static void shutdown_key(int code)
     desk_input(&shutdown_desktop,&e);
 }
 static uint64_t shutdown_sound_deadline;
-static int shutdown_sound(struct desktop *d) { return d->now_ns>=shutdown_sound_deadline; }
+static unsigned shutdown_sound_checks;
+static int shutdown_sound(struct desktop *d) { shutdown_sound_checks++; return d->now_ns>=shutdown_sound_deadline; }
+static unsigned shutdown_mode_sets;
+static int shutdown_display_set(struct desktop *d, uint16_t id)
+{
+    assert(d == &shutdown_desktop && id == 0x111);
+    shutdown_mode_sets++;
+    return 0;
+}
 static void test_shutdown_sequence(void)
 {
     struct desktop *d=&shutdown_desktop;
     /* The audio completion seam precedes descriptor cleanup and the power syscall. */
-    shutdown_setup(); d->sound_shutdown=shutdown_sound;
+    shutdown_setup(); d->sound_shutdown=shutdown_sound; shutdown_sound_checks=0;
+    shutdown_client(210,"Files",1,2);
     uint64_t sound_start=d->now_ns; shutdown_sound_deadline=sound_start+700000000ull;
     desk_power_begin(d,2); shutdown_at(sound_start);
-    assert(!shutdown_prepares && !shutdown_calls);
+    assert(!shutdown_prepares && !shutdown_calls && !shutdown_sound_checks);
+    shutdown_reap(210,0); shutdown_at(sound_start+100000000ull);
+    assert(!shutdown_prepares && !shutdown_calls && shutdown_sound_checks==1);
     shutdown_at(sound_start+699999999ull); assert(!shutdown_prepares && !shutdown_calls);
     shutdown_at(shutdown_sound_deadline); assert(shutdown_prepares==1 && shutdown_calls==1);
     shutdown_cleanup();
+    puts("PASS shutdown sound: audio completion precedes descriptor cleanup and the power request");
+    /* The merged settings path applies display requests only while idle. */
+    shutdown_setup();
+    int control=shutdown_client(200,"Control Panel",1,2);
+    d->clients[control].program=DESK_APP_CONTROL;
+    d->display_set=shutdown_display_set; shutdown_mode_sets=0;
+    struct ciuki_message settings;
+    desk_message(&settings,DESK_SETTINGS,24);
+    settings.data[0]=2; settings.sender_pid=200;
+    desk_put32(settings.data+4,1); desk_put32(settings.data+8,DESK_SETTINGS_DISPLAY);
+    desk_put32(settings.data+12,0x111);
+    desk_receive(d,control,&settings); desk_flush(d,control);
+    assert(shutdown_mode_sets==1 && fake_messages[fake_sent-1].data[1]==DESK_TASK_RESULT);
+    assert((int32_t)desk_get32(fake_messages[fake_sent-1].data+12)==0);
+    desk_power_begin(d,2); desk_flush(d,control);
+    assert(d->power.state==DESK_POWER_CLOSING);
+    desk_receive(d,control,&settings); desk_flush(d,control);
+    assert(shutdown_mode_sets==1 && fake_messages[fake_sent-1].data[1]==DESK_TASK_RESULT);
+    assert((int32_t)desk_get32(fake_messages[fake_sent-1].data+12)==-EBUSY);
+    shutdown_cleanup();
+    puts("PASS display/shutdown settings: idle request applies, closing request returns EBUSY without mode switch");
     /* Two ordinary clients plus a DOS/VM window. All CLOSE requests precede
      * termination/descriptor cleanup/power; EOF is not process exit. */
     shutdown_setup();

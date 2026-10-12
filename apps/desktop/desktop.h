@@ -154,6 +154,9 @@ struct desktop {
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
     /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
     int title_hot, title_down;
+    uint32_t display_counter;
+    uint16_t display_mode, display_pending;
+    int (*display_set)(struct desktop *, uint16_t);
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -217,6 +220,8 @@ void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 void desk_move(struct desktop *, int index, int32_t x, int32_t y);
 void desk_resize(struct desktop *, int index, struct desk_box frame);
+int desk_display_frame_commit(struct desktop *, int redraw_result);
+void desk_display_relayout(struct desktop *, uint32_t width, uint32_t height);
 void desk_zoom(struct desktop *, int index);
 unsigned desk_resize_hit(const struct desk_client *, int32_t x, int32_t y);
 void desk_input(struct desktop *, const struct ciuki_input_event *);

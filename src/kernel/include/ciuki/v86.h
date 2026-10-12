@@ -60,6 +60,7 @@ struct v86 {
     struct v86_stats stats;
     enum v86_state state;
     uint64_t deadline, ticks;
+    uint32_t max_call_ms; /* zero: ordinary 500 ms bound; firmware video: 2000 */
     bool vif, shadow;
     uint16_t vflags; /* DOS VMs: guest-visible IOPL/NT (bits 12-14), never applied to the CPU */
     bool track_boundaries; /* DOS: software MOV-SS tracking, firmware unchanged */

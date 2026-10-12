@@ -14,6 +14,7 @@ struct ciuki_boot_info g_boot;
 static uint64_t msrs[0x400];
 static uint32_t host_cr0, host_cr3, host_cr4, host_flags;
 static unsigned msr_reads, msr_writes, cpuid_reads;
+static uint32_t revoked_aliases[3];
 static uint32_t leaf_max, leaf_features, leaf_ecx, extended_max, physical_bits;
 static bool tcg, ignored_writes;
 static char log_line[240];
@@ -50,6 +51,8 @@ static void host_wrmsr(uint32_t reg, uint64_t value)
 {
     CHECK(!(host_flags & 0x200) && (host_cr0 & CR0_CD) && !(host_cr0 & CR0_NW));
     CHECK(reg == 0x2FF || (reg >= 0x200 && reg < 0x210));
+    for (unsigned i = 0; i < ARRAY_SIZE(revoked_aliases); i++)
+        if (revoked_aliases[i]) CHECK(!vmm_kernel_pte(revoked_aliases[i]));
     event('M', reg, value); msr_writes++;
     if (!ignored_writes) msrs[reg] = value;
 }
@@ -97,7 +100,7 @@ static void bios_range(unsigned slot, uint64_t base, uint64_t size, unsigned typ
 static void fresh(void)
 {
     memset(&g_boot, 0, sizeof(g_boot)); memset(msrs, 0, sizeof(msrs));
-    memset(&state, 0, sizeof(state)); attempted = enabled = false;
+    memset(revoked_aliases, 0, sizeof(revoked_aliases)); memset(&state, 0, sizeof(state)); memset(&owned, 0, sizeof(owned)); memset(original, 0, sizeof(original)); attempted = enabled = false;
     host_cr0 = CR0_PE | CR0_PG | CR0_WP; host_cr3 = 0x1000; host_cr4 = CR4_PGE | CR4_PSE;
     host_flags = 0x202; leaf_max = 1; leaf_features = (1u << 5) | (1u << 12) | (1u << 16);
     leaf_ecx = 0; extended_max = 0x80000008; physical_bits = 36; tcg = ignored_writes = false;
@@ -271,12 +274,82 @@ static void mapping_tests(void)
     fresh(); mmio_next = MMIO_END - PAGE_SIZE;
     CHECK(!vmm_map_framebuffer(g_boot.fb_phys, 3u << 20) && !msr_reads && !msr_writes);
 }
+/* Boot aliases, new pitch/base, slot retirement, repeated restore and UC
+ * fallback all use the production range planner and PTE writer. */
+static void runtime_mapping_tests(void)
+{
+    fresh();
+    /* An invalid pair can contain stale fields; retirement restores them. */
+    msrs[0x204] = 0xD0000006;
+    msrs[0x205] = address_mask(36) & ~((1u << 20) - 1);
+    uint64_t spare_base = msrs[0x204], spare_mask = msrs[0x205];
+    g_boot.version = 2;
+    g_boot.display.tag = CBI_DISPLAY_TAG;
+    g_boot.display.size = sizeof(g_boot.display);
+    g_boot.display.vram_bytes = 8u << 20;
+    g_boot.flags &= ~CBI_F_VBE_CTRL_VALID; /* v2 extent supplies padding bounds */
+    void *console = vmm_map_framebuffer(g_boot.fb_phys, 3u << 20);
+    void *presenter = vmm_map_framebuffer(g_boot.fb_phys, 3u << 20);
+    CHECK(console && presenter && enabled);
+    vmm_revoke_mmio(console, 3u << 20);
+    vmm_revoke_mmio(presenter, 3u << 20);
+    CHECK(!vmm_kernel_pte((uint32_t)(uintptr_t)console));
+    CHECK(!vmm_kernel_pte((uint32_t)(uintptr_t)presenter));
+    void *window = vmm_reserve_mmio(9u << 20);
+    CHECK(window != 0);
+    revoked_aliases[0] = (uint32_t)(uintptr_t)console;
+    revoked_aliases[1] = (uint32_t)(uintptr_t)presenter;
+    revoked_aliases[2] = (uint32_t)(uintptr_t)window;
+    uint64_t bios_base = msrs[0x200], bios_mask = msrs[0x201];
+    const uint32_t bases[] = {0xE0000000, 0xE0100000, 0xE0000000, 0xE0100000, 0xE0000000};
+    const uint32_t sizes[] = {5u << 20, 3u << 20, 1u << 20, 3u << 20, 3u << 20};
+    for (unsigned n = 0; n < ARRAY_SIZE(bases); n++) {
+        event_count = 0;
+        CHECK(vmm_replace_framebuffer(window, 9u << 20, bases[n], sizes[n]) == window);
+        CHECK(enabled && owned.count == (n == 1 || n == 3 ? 2u : 1u));
+        for (unsigned i = 0; i < sizes[n]; i += PAGE_SIZE)
+            CHECK(vmm_kernel_pte((uint32_t)(uintptr_t)window + i) == (bases[n] + i + PTE_P + PTE_W));
+        CHECK(!vmm_kernel_pte((uint32_t)(uintptr_t)window + sizes[n]));
+        CHECK(msrs[0x200] == bios_base && msrs[0x201] == bios_mask);
+        CHECK(!(msrs[0x205] & MTRR_VALID) || owned.count == 2);
+        if (owned.count == 1) CHECK(msrs[0x204] == spare_base && msrs[0x205] == spare_mask);
+        CHECK(owned.range[0].slot == 1 && !(msrs[0x207] & MTRR_VALID));
+        CHECK(host_flags == 0x202 && !(host_cr0 & (CR0_CD | CR0_NW)));
+    }
+    unsigned writes = msr_writes;
+    event_count = 0;
+    CHECK(vmm_replace_mmio(window, 9u << 20, 0xE0000000, PAGE_SIZE) == window);
+    CHECK(msr_writes == writes && (vmm_kernel_pte((uint32_t)(uintptr_t)window) & (PTE_PCD | PTE_PWT)) == (PTE_PCD | PTE_PWT));
+    event_count = 0;
+    CHECK(vmm_replace_framebuffer(window, 9u << 20, 0xE0000003, PAGE_SIZE));
+    CHECK(!enabled && msr_writes == writes);
+    CHECK((vmm_kernel_pte((uint32_t)(uintptr_t)window) & (PTE_PCD | PTE_PWT)) == (PTE_PCD | PTE_PWT));
+    event_count = 0;
+    CHECK(vmm_replace_framebuffer(window, 9u << 20, 0x100000, PAGE_SIZE));
+    CHECK(!enabled && msr_writes == writes); /* BIOS RAM + E820 refuse WC */
+    event_count = 0;
+    CHECK(vmm_replace_framebuffer(window, 9u << 20, 0xE0000000, 3u << 20) && enabled);
+    writes = msr_writes;
+    msrs[0x202] = 0xE0000000; /* firmware changed owned WC into UC */
+    event_count = 0;
+    CHECK(vmm_replace_framebuffer(window, 9u << 20, 0xE1000000, 3u << 20));
+    CHECK(!enabled && msr_writes == writes && msrs[0x202] == 0xE0000000);
+    CHECK(strstr(log_line, "owned-range-changed"));
+    CHECK((vmm_kernel_pte((uint32_t)(uintptr_t)window) & (PTE_PCD | PTE_PWT)) == (PTE_PCD | PTE_PWT));
+    fresh(); leaf_features &= ~(1u << 12);
+    window = vmm_reserve_mmio(4u << 20);
+    CHECK(vmm_replace_framebuffer(window, 4u << 20, 0xE0000000, 3u << 20));
+    CHECK(!enabled && !msr_reads && !msr_writes);
+    CHECK((vmm_kernel_pte((uint32_t)(uintptr_t)window) & (PTE_PCD | PTE_PWT)) == (PTE_PCD | PTE_PWT));
+    fresh(); window = vmm_reserve_mmio(PAGE_SIZE);
+    CHECK(!vmm_replace_framebuffer(window, PAGE_SIZE, 0xE0000000, 3u << 20) && !msr_reads && !msr_writes);
+}
 int main(void)
 {
     arithmetic_tests();
     for (unsigned g = 0; g < 2; g++) for (unsigned i = 0; i < 2; i++) for (unsigned s = 0; s < 2; s++)
         sequence_tests(g, i, s);
-    gating_tests(); mapping_tests();
+    gating_tests(); mapping_tests(); runtime_mapping_tests();
     printf("MTRR host tests: %s (%u checks, %u failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;
 }

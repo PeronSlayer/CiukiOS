@@ -21,9 +21,9 @@ int bootinfo_validate(const struct ciuki_boot_info *bi, const char **why)
         *why = "ok";
     if (bi->magic != CIUKI_BOOT_INFO_MAGIC)
         FAIL("magic");
-    if (bi->version != CIUKI_BOOT_INFO_VER)
+    if (bi->version != 1 && bi->version != CIUKI_BOOT_INFO_VER)
         FAIL("version");
-    if (bi->size != CIUKI_BOOT_INFO_SIZE)
+    if (bi->size != (bi->version == 1 ? CIUKI_BOOT_INFO_V1_SIZE : CIUKI_BOOT_INFO_SIZE))
         FAIL("size");
     if (bi->flags & ~CBI_F_DEFINED_MASK)
         FAIL("undefined_flag_bits");
@@ -129,6 +129,36 @@ int bootinfo_validate(const struct ciuki_boot_info *bi, const char **why)
         }
     } else if (bi->fb_phys) {
         FAIL("fb_in_text_mode");
+    }
+    if (bi->version >= 2) {
+        const struct ciuki_boot_display *d = &bi->display;
+        if (d->tag != CBI_DISPLAY_TAG || d->size != sizeof(*d)) FAIL("display_tag_size");
+        if (d->mode_count > CBI_DISPLAY_MAX) FAIL("display_count");
+        const char *strings[] = {d->oem, d->vendor, d->product};
+        for (unsigned s = 0; s < 3; s++) {
+            unsigned i = 0;
+            for (; i < 64 && strings[s][i]; i++)
+                if ((unsigned char)strings[s][i] < 32 || (unsigned char)strings[s][i] > 126)
+                    FAIL("display_string_ascii");
+            if (i == 64) FAIL("display_string_nul");
+        }
+        if (bi->flags & CBI_F_VBE_CTRL_VALID) {
+            uint32_t version = bi->vbe_ctrl[4] | (uint32_t)bi->vbe_ctrl[5] << 8;
+            uint32_t memory = (bi->vbe_ctrl[18] | (uint32_t)bi->vbe_ctrl[19] << 8) << 16;
+            if (d->vbe_version != version || d->vram_bytes != memory) FAIL("display_controller_copy");
+        } else if (d->vbe_version || d->vram_bytes || d->mode_count) FAIL("display_controller_copy");
+        if ((d->vbe_version && d->vbe_version < 0x200) ||
+            (d->mode_count && (!d->vram_bytes || !d->vbe_version)) || (d->vram_bytes & 0xffff))
+            FAIL("display_controller");
+        for (unsigned i = 0; i < d->mode_count; i++) {
+            const struct ciuki_boot_display_mode *m = &d->modes[i];
+            if (m->id < 0x100 || m->id >= 0x200 || m->width < 640 || m->width > 1600 ||
+                m->height < 480 || m->height > 1200 || (m->bpp != 16 && m->bpp != 24 && m->bpp != 32) ||
+                m->linear != 1 || m->reserved || m->pitch < m->width * (m->bpp / 8) ||
+                (uint32_t)m->pitch * m->height > d->vram_bytes)
+                FAIL("display_mode");
+            for (unsigned j = 0; j < i; j++) if (d->modes[j].id == m->id) FAIL("display_duplicate");
+        }
     }
     return 0;
 }

@@ -28,7 +28,7 @@ Larger loader reads alone cannot reduce disk command count.
 
 Implementation decision: measure click, spawn entry, ELF completion, surface
 setup, desktop CONFIGURE, first accepted DAMAGE and successful desktop present.
-An additive diagnostic syscall (74, LAUNCH_MARK) lets the supervisor's desktop
+An additive diagnostic syscall (75, LAUNCH_MARK) lets the supervisor's desktop
 mark these events without modifying the desktop wire protocol or environment.
 STATUS returns whether the console is verbose. Other markers are accepted only
 from that desktop and only for its directly launched children. Quiet boot
