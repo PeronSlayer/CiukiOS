@@ -109,8 +109,8 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
   the public read-only state, without `/dev/mixer` "No audio device".
-- **Desktop icons:** Computer (Files at `/`; the icon carries the Ciuki
-  portrait), Documents (Files at `/home`), DOS Box, CiukNote, Control Panel and
+- **Desktop icons:** Computer (Files at Computer; the icon carries the Ciuki
+  portrait), Documents (Files at `C:\Documents`), DOS Box, CiukNote, Control Panel and
   Trash (a placeholder: nothing in CiukiOS keeps deleted files yet). Click
   selects, a double click (desktop.cfg `double_click_ms`) or Enter opens, right
   click opens Open/Properties; the background menu has Arrange Icons, Refresh,
@@ -464,23 +464,32 @@ message box, a dedicated text-editor icon (the generic text-document icon is use
 
 ## Files
 
-Files is the CiukiOS file manager (`/bin/files`), started from the Ciuki menu
+Files is the CiukiOS file manager (`/Programs/files`), started from the Ciuki menu
 ("Files", with the Tango file-manager icon). Its window follows the Windows 98
 Explorer layout in the CiukiOS colours.
 
 - **Menus.** File (Open, Open with CiukNote, New Folder, New Text Document,
   Delete, Rename, Properties, Close), Edit (Cut, Copy, Paste, Select All,
   Invert Selection), View (Large Icons, List, Details, Sort by Name/Size/Type/
-  Modified, Refresh), Go (Back, Forward, Up One Level, Address Bar, CiukiOS,
-  Applications, System) and Help (Help Topics, About Files). Alt or F10 opens
+  Modified, Refresh), Go (Back, Forward, Up One Level, Address Bar, Computer,
+  Programs, Documents, System, Games) and Help (Help Topics, About Files). Alt or F10 opens
   the menu bar; underlined letters work with Alt and inside open menus.
 - **Toolbar.** Back, Forward, Up, Cut, Copy, Paste, Delete, Properties and
   Views (click to cycle views; the arrow lists them).
-- **Address bar.** Type a path such as `/system/assets` and press Enter; Esc
-  restores the current folder. Letter case does not matter on FAT volumes.
-- **Left pane.** Places lists CiukiOS (`/`), Applications (`/bin`), System
-  (`/system`) and every volume mounted under `/mnt`. Folders shows the tree,
-  opened along the current folder; [+] and [-] expand and collapse it.
+- **Address bar.** Shows drive-letter paths such as `C:\Programs` and
+  `D:\Games`. Type either a drive-letter path or an absolute POSIX path
+  such as `/system/assets` and press Enter; Esc restores the current location.
+  Letter case does not matter on FAT volumes.
+- **Left pane.** Places lists Computer, Programs (`/Programs`), Documents
+  (`/Documents`), System (`/system`) and Games (`/Games`, when present).
+  Folders starts at Computer, then C: and the other mounted drives, followed
+  by their folders; [+] and [-] expand and collapse branches.
+- **Computer.** The top location lists C: (the boot volume `/`) and D:..Z:
+  for directory entries `/mnt/d`..`/mnt/z`. Up from any drive root returns
+  to Computer. Drives open like folders; filesystem operations and Properties
+  are disabled at Computer. In `C:\`, only `dev`, `mnt` and `tmp` are hidden,
+  in both the list and the tree. The mount directory is presented as Computer.
+  Programs continue to use the POSIX VFS paths.
 - **Views.** Details (Name, Size, Type, Modified; click a header to sort, again
   to reverse; drag a header edge to resize), Large Icons and List. Folders
   always come first.
@@ -501,7 +510,7 @@ Explorer layout in the CiukiOS colours.
   is no Recycle Bin yet). Properties shows type, location, size, contents,
   modification time and the read-only attribute.
 - **Opening.** Enter or double-click opens folders; text documents and scripts
-  open in `/bin/ciuknote` when it is installed; programs run directly.
+  open in `/Programs/ciuknote` when it is installed; programs run directly.
 - **Keys.** Enter, Backspace (up one level, as in Windows 98), Alt+Left/Right/
   Up, F2, F4 or Alt+D (address bar), F5, Del, Alt+Enter, Ctrl+C/X/V, Ctrl+A,
   Alt+F4.
@@ -510,6 +519,26 @@ Explorer layout in the CiukiOS colours.
   started from Files have no desktop window, except CiukNote, which the desktop
   starts on Files' request (f2-32, LAUNCH with a path). Drag and drop, removable
   media and the Recycle Bin come later.
+
+The path presentation follows [Microsoft’s path naming documentation](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file):
+a drive root includes the backslash, and folder separators are backslashes.
+Drive-relative forms such as `C:Programs` are rejected; bare `C:` opens its
+root. Absolute slash paths retain their POSIX meaning, consistent with
+[POSIX pathname resolution](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html#tag_04_16).
+Conversion preserves component case and normalises separators. Files resolves
+the stored spelling through its existing FAT-aware canonicaliser. The VFS
+metadata currently has no optical-volume type, so Computer uses the catalog’s
+generic Tango drive icon; no optical type is inferred from names.
+
+Files updates its title (`Files - C:\Programs`, or `Files - Computer`) as
+locations change, following the window-caption behaviour described by
+[Microsoft’s SetWindowText API](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowtexta).
+The existing protocol had only a creation title, so the additive v2
+`SET_TITLE` request (opcode 23) carries a 32-bit length and 1..63 printable
+ASCII bytes after the 4-byte header. It takes no descriptors or target ID
+and changes only the sending client’s existing window. The desktop damages
+the frame and taskbar; libdeskui queues the request. Files retries when its
+queue is full and respects the existing 63-character caption limit.
 
 ## libdeskui
 

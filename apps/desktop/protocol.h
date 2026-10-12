@@ -25,7 +25,10 @@ enum desk_opcode {
     /* Legacy recovery (Volume Control), version 2, client to desktop: serial,
      * left, right (0..100), mute (0/1). The desktop applies it through its
      * delegated /dev/mixer control handle (F4) and answers TASK_RESULT. */
-    DESK_MIXER_SET
+    DESK_MIXER_SET,
+    /* f2-36, version 2, client to desktop: uint32 length, then 1..63
+     * printable ASCII bytes. Updates only the sending client's window. */
+    DESK_SET_TITLE
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_MASTER 2u   /* set the master volume: left, right 0..100, mute 0/1 */

@@ -805,8 +805,8 @@ static void icons_layout(struct desktop *d)
 static void icons_build(struct desktop *d)
 {
     d->sh.icon_count = 0;
-    icon_add(d, "Computer", "files", "/", "ciuki-computer", SH_ACT_LAUNCH, 1);
-    icon_add(d, "Documents", "files", "/home", "user-home", SH_ACT_LAUNCH, 0);
+    icon_add(d, "Computer", "files", "Computer", "ciuki-computer", SH_ACT_LAUNCH, 1);
+    icon_add(d, "Documents", "files", "/Documents", "user-home", SH_ACT_LAUNCH, 0);
     icon_add(d, "DOS Box", "dosbox", "", "utilities-terminal", SH_ACT_LAUNCH, 0);
     icon_add(d, "CiukNote", "ciuknote", "", "accessories-text-editor", SH_ACT_LAUNCH, 0);
     icon_add(d, "Control Panel", "control", "", "preferences-desktop", SH_ACT_LAUNCH, 0);

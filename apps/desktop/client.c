@@ -145,7 +145,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         (!c->hello && p.opcode != DESK_HELLO) ||
         (c->hello && p.opcode == DESK_HELLO) ||
         (p.opcode == DESK_CREATE_WINDOW && c->window) ||
-        ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE) && !c->window)) {
+        ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE || p.opcode == DESK_SET_TITLE) && !c->window)) {
         close_attachments(d, m, -1);
         struct ciuki_message closed;
         desk_message(&closed, DESK_CLOSED, 4);
@@ -196,6 +196,13 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
         break;
     }
+    case DESK_SET_TITLE:
+        if (strcmp(c->title, p.title)) {
+            memcpy(c->title, p.title, sizeof(c->title));
+            if (!c->minimized) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+            if (d->shell) desk_damage_add(&d->damage, desk_taskbar(d), d->width, d->height);
+        }
+        break;
     case DESK_MOVE: desk_move(d, i, p.x, p.y); break;
     case DESK_CLOSE:
         desk_message(&reply, DESK_CLOSED, 4);

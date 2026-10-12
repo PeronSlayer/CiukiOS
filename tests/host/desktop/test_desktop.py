@@ -401,7 +401,7 @@ class AppCaseReplayTests(unittest.TestCase):
         script = Path(self.temp.name) / f"{case_id}.script"
         script.write_text("\n".join(lines) + "\n")
         result = subprocess.run([str(self.binary), "--script", str(script), "--case", kind, "--bin", ",".join(self.programs),
-                                 "--limit-s", "200", *SHELL_MODELS[model]],
+                                 "--limit-s", "200", *(["--trace"] if kind == "files" else []), *SHELL_MODELS[model]],
                                 capture_output=True, text=True, env=self.env, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr[-4000:])
         out = {"checkpoints": [], "system": [], "text": result.stdout}
@@ -445,6 +445,7 @@ class AppCaseReplayTests(unittest.TestCase):
             self.assertEqual(out["DESKTOP"]["app_done"], "1")
             # The host checker lists ::/SYSTEM for CIUKI (the renamed folder); the copy was deleted again.
             self.assertIn("Ciuki", out["system"])
+            self.assertIn('title="Files - C:\\System\\Ciuki"', out["text"])
 
     def test_shell_case_replay(self):
         """desktop-shell-qemu-t23 (F12): the demo launched from the Start menu, dragged by its title, closed and

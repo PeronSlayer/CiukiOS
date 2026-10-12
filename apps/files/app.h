@@ -28,7 +28,7 @@ struct files_app {
     int width, height, split, test, stage, rename_index, rename_new, job_active, close_pending, context_folder, tree_dirty;
     char note[160], rename_original[FM_NAME];
     struct du_menu menus[5];
-    struct du_menu_item file_items[12], edit_items[6], view_items[10], go_items[9], help_items[3];
+    struct du_menu_item file_items[12], edit_items[6], view_items[10], go_items[11], help_items[3];
     struct du_menu_item popup[18]; unsigned popup_count;
     int (*spawn)(struct files_app *, const char *program, char *const argv[]);
     void (*close)(struct files_app *);

@@ -11,11 +11,11 @@
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
-struct files_main { struct files_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; uint32_t launch_serial; };
+struct files_main { struct files_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; uint32_t launch_serial; char title[DESK_TITLE_MAX + 1]; };
 
 /* CiukNote is a window: only the desktop can give it a channel and the display grants, so Files
  * asks it (protocol v2 LAUNCH with the path as the single argument; the desktop honours this for
- * /bin/ciuknote from a Files it launched). The answer, TASK_RESULT, arrives later: 0 here means
+ * /Programs/ciuknote from a Files it launched). The answer, TASK_RESULT, arrives later: 0 here means
  * the request was queued. Everything else is spawned directly, as before. */
 static int launch_window(struct files_main *m, const char *name, const char *path)
 {
@@ -40,9 +40,9 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 static int launch(struct files_app *a, const char *program, char *const argv[])
 {
     /* Windows that open a file: CiukNote and the Image Viewer (the desktop launches them). */
-    if ((!strcmp(program, "/bin/ciuknote") || !strcmp(program, "/bin/viewer")) && argv[0] && argv[1] && !argv[2])
-        return launch_window(a->user, program + 5, argv[1]);
-    char *env[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/home", "TMPDIR=/tmp", "PATH=/bin", NULL};
+    if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/viewer")) && argv[0] && argv[1] && !argv[2])
+        return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
+    char *env[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);
     return pid < 0 ? -errno : (int)pid;
 }
@@ -70,6 +70,12 @@ static void idle(void *arg)
     struct files_main *m = ((struct files_app *)arg)->user;
     int status;
     while (waitpid(-1, &status, WNOHANG) > 0) { }
+    char display[FM_PATH], title[DESK_TITLE_MAX + 1];
+    if (!fm_display_path(display, m->app.model.path)) {
+        snprintf(title, sizeof(title), "Files - %.*s", (int)sizeof(title) - 9, display);
+        for (unsigned i = 0; title[i]; i++) if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) title[i] = '?';
+        if (strcmp(title, m->title) && !du_window_set_title(&m->window, title)) strcpy(m->title, title);
+    }
     if (m->checkpoint > m->sent && !m->window.damaged && !m->ui.dirty &&
         !du_window_ping(&m->window, CHECKPOINT_SERIAL + (unsigned)m->sent + 1)) m->sent++;
 }
@@ -88,14 +94,14 @@ static void window_size(int *w, int *h)
 int main(int argc, char **argv)
 {
     int channel = 3, test = 0;
-    const char *path = "/";
+    const char *path = FM_COMPUTER;
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--channel-fd=", 13)) {
             char *end; long n = strtol(argv[i] + 13, &end, 10);
             if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
             channel = (int)n;
         } else if (!strcmp(argv[i], "--test=files")) test = 1;
-        else if (argv[i][0] == '/') path = argv[i];
+        else if (argv[i][0] != '-') path = argv[i];
         else return 2;
     }
     struct files_main *m = calloc(1, sizeof(*m));
@@ -103,7 +109,12 @@ int main(int argc, char **argv)
     int width, height;
     window_size(&width, &height);
     if (test) { width = 760; height = 520; }
-    if (du_window_open(&m->window, &m->ui, channel, width, height, "Files")) {
+    char display[FM_PATH], title[DESK_TITLE_MAX + 1];
+    if (fm_display_path(display, path)) { free(m); return 2; }
+    snprintf(title, sizeof(title), "Files - %.*s", (int)sizeof(title) - 9, display);
+    for (unsigned i = 0; title[i]; i++) if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) title[i] = '?';
+    strcpy(m->title, title);
+    if (du_window_open(&m->window, &m->ui, channel, width, height, title)) {
         fprintf(stderr, "Files: desktop connection failed: %s\n", strerror(errno));
         free(m);
         return 1;

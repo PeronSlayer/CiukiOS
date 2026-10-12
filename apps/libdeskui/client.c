@@ -111,6 +111,18 @@ int du_window_move(struct du_window *w, int x, int y)
 
 void du_window_close(struct du_window *w) { if (!w->closing) w->closing = 1; du_release(w->ui); }
 
+int du_window_set_title(struct du_window *w, const char *title)
+{
+    size_t n = title ? strlen(title) : 0;
+    if (!n || n > DESK_TITLE_MAX) { errno = EINVAL; return -1; }
+    for (size_t i = 0; i < n; i++)
+        if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) { errno = EINVAL; return -1; }
+    struct ciuki_message msg;
+    desk_message(&msg, DESK_SET_TITLE, 8 + (unsigned)n);
+    desk_put32(msg.data + 4, (uint32_t)n); memcpy(msg.data + 8, title, n);
+    return queue(w, &msg);
+}
+
 int du_window_turn(struct du_window *w, uint64_t now)
 {
     if (w->closed) return 0;

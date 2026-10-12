@@ -89,6 +89,53 @@ static void test_protocol(void)
 }
 static int covers(struct desk_box b,int x,int y)
 { return x>=b.x && y>=b.y && x<b.x+b.w && y<b.y+b.h; }
+static void test_titles(void)
+{
+    struct ciuki_message m, bad; struct desk_packet p;
+    for (unsigned n = 1; n <= DESK_TITLE_MAX; n += DESK_TITLE_MAX - 1) {
+        request(&m, DESK_SET_TITLE, 8 + n); m.data[0] = DESK_SHELL_VERSION;
+        desk_put32(m.data + 4, n); memset(m.data + 8, 'x', n);
+        assert(desk_parse(&m, 1, NULL, &p) && strlen(p.title) == n);
+        assert(!desk_parse(&m, 0, NULL, &p));
+        bad=m; bad.data[0]=DESK_VERSION; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.length--; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.length++; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.fd_count=1; bad.fds[0]=9; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.data[8]=31; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; bad.data[8]=127; assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; desk_put32(bad.data + 4, 0); assert(!desk_parse(&bad, 1, NULL, &p));
+        bad=m; desk_put32(bad.data + 4, DESK_TITLE_MAX + 1); assert(!desk_parse(&bad, 1, NULL, &p));
+    }
+    setup(640, 480); desk_shell_enable(&d);
+    int indices[2];
+    for (int k = 0; k < 2; k++) {
+        fake_channel(10 + k); indices[k]=desk_add_client(&d, 10 + k); assert(indices[k]>=0);
+        request(&m, DESK_HELLO, 4); m.data[0]=DESK_SHELL_VERSION; desk_receive(&d, indices[k], &m);
+        fake_surface(20 + k, 32, 24, 0xffc0c0c0u);
+        create_message(&m, 20 + k, 32, 24); m.data[0]=DESK_SHELL_VERSION; desk_receive(&d, indices[k], &m);
+        assert(d.clients[indices[k]].window);
+    }
+    request(&m, DESK_SET_TITLE, 21); m.data[0]=DESK_SHELL_VERSION;
+    desk_put32(m.data + 4, 13); memcpy(m.data + 8, "Files - C:\\X", 13);
+    /* The title above includes its terminator: reject it, then send the 12 bytes. */
+    assert(!desk_parse(&m, 1, NULL, &p)); m.length=20; desk_put32(m.data + 4, 12);
+    d.damage.count=0; desk_receive(&d, indices[0], &m);
+    assert(!strcmp(d.clients[indices[0]].title, "Files - C:\\X") && !strcmp(d.clients[indices[1]].title, "Test"));
+    int taskbar=0, frame=0;
+    for (unsigned k=0; k<d.damage.count; k++) {
+        taskbar |= covers(d.damage.boxes[k], 1, 479);
+        frame |= covers(d.damage.boxes[k], d.clients[indices[0]].frame.x, d.clients[indices[0]].frame.y);
+    }
+    assert(taskbar && frame);
+    d.damage.count=0; desk_receive(&d, indices[0], &m); assert(!d.damage.count);
+    m.sender_pid=43; desk_receive(&d, indices[0], &m);
+    assert(d.clients[indices[0]].channel<0 && d.clients[indices[1]].window);
+    fake_channel(12); int empty=desk_add_client(&d, 12); assert(empty>=0);
+    request(&bad, DESK_HELLO, 4); bad.data[0]=DESK_SHELL_VERSION; desk_receive(&d, empty, &bad);
+    m.sender_pid=42; desk_receive(&d, empty, &m); assert(d.clients[empty].channel<0);
+    cleanup();
+    puts("PASS window titles: v2 bounds/direction/ASCII/fds, own window only, frame/taskbar damage, no-op updates, sender/pre-create rejection");
+}
 static void test_damage(void)
 {
     struct desk_damage a={0};
@@ -318,6 +365,6 @@ static void test_menu(void)
 }
 int main(void)
 {
-    test_protocol(); test_damage(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu();
+    test_protocol(); test_titles(); test_damage(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

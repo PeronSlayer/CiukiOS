@@ -629,11 +629,11 @@ static const struct cn_fs replay_cn_fs = {NULL, cn_stat, cn_list, cn_load, cn_sa
 const struct cn_fs *cn_native_fs(void) { return &replay_cn_fs; }
 static void image_tree(void)
 {
-    fake_image_tree();   /* /, /bin, /system as in tests/host/desktop/files_ui_test.c */
-    fake_create("/home", FM_DIR); fake_create("/tmp", FM_DIR);
+    fake_image_tree();   /* /, /Programs, /system as in tests/host/desktop/files_ui_test.c */
+    fake_create("/Documents", FM_DIR); fake_create("/tmp", FM_DIR);
     char list[512]; snprintf(list, sizeof(list), "%s", bin_list);
     for (char *s = strtok(list, ","); s; s = strtok(NULL, ",")) {
-        char path[80]; snprintf(path, sizeof(path), "/bin/%s", s);
+        char path[80]; snprintf(path, sizeof(path), "/Programs/%s", s);
         if (fake_lookup(path) < 0) { int n = fake_file(path, 2000, 1); fake_nodes[n].meta.exec = 1; fake_nodes[n].meta.mode = 0100777; }
     }
 }
@@ -819,7 +819,8 @@ int main(int argc, char **argv)
            arm_ns && last_batch_ns ? (double)(last_batch_ns - arm_ns) / 1e9 : -1.0,
            success_ns ? (double)(success_ns - arm_ns) / 1e9 : -1.0);
     for (int i = 1; i <= probe.checkpoint; i++) printf("CHECKPOINT_AT %d %.3f\n", i, (double)(checkpoint_ns[i] - arm_ns) / 1e9);
-    for (int i = 0; i < FAKE_NODES; i++) if (fake_nodes[i].live && !strncmp(fake_nodes[i].path, "/system/", 8) && !strchr(fake_nodes[i].path + 8, '/'))
+    for (int i = 0; i < FAKE_NODES; i++) if (fake_nodes[i].live && fm_beneath(fake_nodes[i].path, "/system") &&
+        fake_nodes[i].path[7] == '/' && !strchr(fake_nodes[i].path + 8, '/'))
         printf("SYSTEM %s\n", fake_nodes[i].path + 8);
     int note_txt = fake_lookup("/system/tests/note.txt");
     if (note_txt >= 0) {
