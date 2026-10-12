@@ -30,16 +30,16 @@ static uint32_t irq_save(void) { unsigned old = host_if; host_if = 0; return old
 static void irq_restore(uint32_t flags) { host_if = flags; }
 const uint8_t font_cfn_regular[95+95*32] = { [95+('a'-32)*32+1] = 0x80 };
 void serial_write(const char *s, size_t n) { CHECK(s && n); }
-static void *console_map(uint32_t phys, uint32_t size, bool uncached)
+static void *console_map(uint32_t phys, uint32_t size)
 {
-    CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height && uncached);
+    CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height);
     return fake_lfb;
 }
-#define vmm_map_mmio console_map
+#define vmm_map_framebuffer console_map
 #define pack console_pack
 #include "src/kernel/core/console.c"
 #undef pack
-#undef vmm_map_mmio
+#undef vmm_map_framebuffer
 '''
 
 

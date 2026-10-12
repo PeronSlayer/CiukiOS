@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/mm.h>
 #include <ciuki/cpu.h>
+#include <ciuki/mtrr.h>
 
 extern char __text_start[], __rodata_end[];
 
@@ -122,7 +123,23 @@ void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached)
     for (uint32_t i = 0; i < span; i += PAGE_SIZE)
         kmap(va + i, (phys & ~0xFFFu) + i, PTE_W | (uncached ? (PTE_PCD | PTE_PWT) : 0));
     mmio_next += span + PAGE_SIZE;            /* unmapped gap between mappings */
-    return (void *)(va + off);
+    return (void *)(uintptr_t)(va + off);
+}
+
+void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes)
+{
+    uint64_t span = ((uint64_t)bytes + (phys & 0xFFFu) + PAGE_SIZE - 1) &
+                    ~(uint64_t)(PAGE_SIZE - 1);
+    /* Check capacity before changing cache policy. This path runs first from
+     * the early console; the direct map excludes the LFB, so no alias exists. */
+    if (!bytes || (g_boot.flags & CBI_F_TEXT_MODE) || !phys || phys != g_boot.fb_phys ||
+        (uint64_t)g_boot.fb_pitch * g_boot.fb_height != bytes ||
+        (uint64_t)phys + bytes > 0x100000000ull || mmio_next >= MMIO_END ||
+        span + PAGE_SIZE > MMIO_END - mmio_next) return 0;
+    bool wc = mtrr_framebuffer_enable(phys, bytes);
+    /* PCD=PWT=PAT=0: verified PAT[0]=WB, combined with MTRR WC gives WC.
+     * Failure keeps PCD=PWT=1 (PAT[3]=UC). No PAT MSR is rewritten. */
+    return vmm_map_mmio(phys, bytes, !wc);
 }
 
 void *kstack_alloc(void)
