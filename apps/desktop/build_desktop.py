@@ -27,7 +27,7 @@ ACCESSORIES = {
     "mixer": ["mixer_main.c", "mixer_view.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
 }
-PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", *ACCESSORIES)
+PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
 SHELL = ["shell.c", "settings.c", "wallpaper.c", "image.c", "keymap.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
@@ -47,7 +47,7 @@ def digest(path):
 def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
-                                 ROOT / "apps/accessories", ROOT / "third_party/stb")
+                                 ROOT / "apps/ciukide", ROOT / "apps/accessories", ROOT / "third_party/stb")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -154,13 +154,15 @@ def build():
     sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
+    sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
+                          "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["control"] = ["../control/main.c", "../control/app.c", "settings.c", "wallpaper.c", "image.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "control", *ACCESSORIES) else []),
+                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "ciukide", "control", *ACCESSORIES) else []),
                           *(["-lm"] if name in ACCESSORIES else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)

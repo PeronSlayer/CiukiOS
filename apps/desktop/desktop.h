@@ -24,7 +24,7 @@
 #define DESK_TASK_X 4
 #define DESK_BACKGROUND 0x375564u
 #define DESK_PORTRAIT_SIZE 256
-#define DESK_MENU_MAX 16
+#define DESK_MENU_MAX 32
 #define DESK_MENU_ROW 28
 #define DESK_CLOSE_NS 2000000000ull
 /* App scenarios (runtime-selected in the post-fault interaction stage): the
@@ -33,6 +33,7 @@
 #define DESK_APP_FILES 1
 #define DESK_APP_NOTE 2
 #define DESK_APP_CONTROL 3          /* /Programs/control: may send DESK_SETTINGS */
+#define DESK_APP_IDE 4              /* /Programs/ciukide: project LAUNCH only */
 #define DESK_FILES_CHECKPOINT 0xf2310000u
 #define DESK_FILES_CHECKPOINTS 5
 #define DESK_NOTE_CHECKPOINT 0xf2320000u
@@ -74,7 +75,7 @@ struct desk_ops {
     int (*close)(int);
     int (*present)(int, int, const struct ciuki_rect *);
 };
-struct desk_program { char name[64], path[sizeof("/Programs/") + 64]; };
+struct desk_program { char name[64], path[DESK_ARG_MAX + 1]; };
 struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent; };
 #define DESK_POWER_CLOSE_NS 3000000000ull
 #define DESK_POWER_RETRY_NS 250000000ull
@@ -173,6 +174,7 @@ int desk_contains(struct desk_box, int32_t, int32_t);
 int desk_hit(const struct desktop *, int32_t, int32_t);
 int desk_program_add(struct desktop *, const char *name, const uint8_t *elf, size_t);
 int desk_program_graphical(const char *name);
+int desk_ide_launch(struct desktop *, const char *path);
 const char *desk_program_label(const char *name);
 const char *desk_app_program(int kind);          /* "files" / "ciuknote" */
 int desk_program_kind(const char *name);
