@@ -8,11 +8,13 @@ import os
 import re
 import shutil
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import zlib
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
@@ -51,6 +53,21 @@ def load(name, path):
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
+
+
+def xrgb_to_rgb(data):
+    rgb = bytearray(len(data) // 4 * 3)
+    rgb[0::3], rgb[1::3], rgb[2::3] = data[2::4], data[1::4], data[0::4]
+    return bytes(rgb)
+
+
+def write_png(path, width, height, rgb):
+    """An 8-bit RGB PNG of review renders (CIUKI_WALL_FRAMES); never evidence."""
+    raw = b"".join(b"\0" + rgb[y * width * 3:(y + 1) * width * 3] for y in range(height))
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff)
+    Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) +
+                           chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
 class DesktopTests(unittest.TestCase):
@@ -166,6 +183,110 @@ class DesktopTests(unittest.TestCase):
                 Path(target).mkdir(parents=True, exist_ok=True)
                 for n in names: shutil.copy2(frames / n, Path(target) / n)
             print("LOOK_FRAMES", json.dumps(digests, sort_keys=True))
+
+    def test_wallpaper_fill(self):
+        """wallpaper_mode=fill: the uniform cover scale and centred crop against the stretch it crops (4:3, wide,
+        tall, up and down), the desktop.cfg mode names and values, the default (Ciuk2, fill) and its round trip,
+        and the owner's Ciuk2 scene decoded as the desktop decodes it (wallpaper_test.c)."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="desktop-wallpaper-", dir=parent) as temp:
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = Path(temp) / "wallpaper-test"
+            sources = [ROOT / "tests/host/desktop/wallpaper_test.c",
+                       *(ROOT / "apps/desktop" / f"{n}.c" for n in ("settings", "wallpaper", "theme", "image"))]
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+                            "-fno-sanitize-recover=undefined", "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            *map(str, sources), "-o", str(binary)], check=True, env=env)
+            result = subprocess.run([str(binary), str(ROOT / "assets/wallpapers/ciuki/Ciuk2.png")], check=True, env=env,
+                                    capture_output=True, text=True)
+        # 1448x1086 is 4:3: in the 1024x704 work area of 1024x768 it scales by 1024/1448 to 1024x768 and loses
+        # 32 rows (45 source rows) at the top and at the bottom, nothing at the sides.
+        self.assertIn("fill Ciuk2: 1448x1086 into 1024x704: scaled 1024x768, crop 0 columns and 32 rows per side", result.stdout)
+        self.assertIn("PASS wallpaper fill", result.stdout)
+        print(result.stdout.strip())
+
+    def test_default_desktop_wallpaper(self):
+        """The default desktop at 1024x768 as the production shell draws it: the desktop.cfg defaults
+        (/system/wallpapers/Ciuk2.png, fill) with the owner's scene decoded. The scene reaches both sides of the
+        work area (no desktop-colour bands) and run.py's normal-boot screen heuristic passes on the frame.
+        CIUKI_WALL_FRAMES=<dir> keeps default-desktop.png for review."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="desktop-default-wall-", dir=parent) as temp:
+            folder = Path(temp)
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = folder / "capture"
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "image.c")]
+            sources += SHELL_SOURCES + [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
+            subprocess.run(["clang", "-std=c17", "-O1", "-Wall", "-Wextra", "-Werror", "-DCAPTURE_DECODE",
+                            "-fsanitize=address,undefined", "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            *map(str, sources), "-o", str(binary)], check=True, env=env)
+            c = load("wall_portrait", ROOT / "apps/desktop/convert_portrait.py")
+            (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
+            target = folder / "default.xrgb"
+            result = subprocess.run([str(binary), str(folder / "portrait.xrgb"), str(target),
+                                     "wallfile=" + str(ROOT / "assets/wallpapers/ciuki/Ciuk2.png"), "1024x768"],
+                                    check=True, env=env, capture_output=True, text=True)
+            self.assertIn("WALLPAPER /system/wallpapers/Ciuk2.png 1448x1086 mode=fill", result.stdout)
+            data = target.read_bytes()
+            self.assertEqual(len(data), 1024 * 768 * 4)
+            rgb = xrgb_to_rgb(data)
+            ppm = folder / "default.ppm"
+            ppm.write_bytes(b"P6\n1024 768\n255\n" + rgb)
+            path = str(ROOT / "scripts/test")
+            sys.path.insert(0, path)
+            try:
+                runner = load("desktop_wall_runner", ROOT / "scripts/test/run.py")
+            finally:
+                sys.path.remove(path)
+            observed = runner.observe_normal_boot_screen(ppm, {"geometry": [1024, 768]})
+            frames = os.environ.get("CIUKI_WALL_FRAMES")
+            if frames:
+                Path(frames).mkdir(parents=True, exist_ok=True)
+                write_png(Path(frames) / "default-desktop.png", 1024, 768, rgb)
+        self.assertEqual(observed["failures"], [])
+        self.assertLessEqual(observed["regions"]["background"]["fraction"], 0.02)
+        # Fill covers the work area: neither edge column shows the desktop colour (fit would leave 42 px bands).
+        desktop = bytes(((runner.DESK_BACKGROUND >> 16) & 255, (runner.DESK_BACKGROUND >> 8) & 255, runner.DESK_BACKGROUND & 255))
+        for x in (0, 1023):
+            self.assertFalse(any(rgb[(y * 1024 + x) * 3:(y * 1024 + x) * 3 + 3] == desktop for y in range(32, 736)), x)
+        print("DEFAULT_DESKTOP", json.dumps({k: v["fraction"] for k, v in observed["regions"].items()}, sort_keys=True))
+
+    def test_control_display_positions(self):
+        """Control Panel Display page: Center/Tile/Stretch/Fit/Fill in two rows under the monitor, clear of the
+        other widgets; each saves its desktop.cfg mode and the preview follows it (control_test.c).
+        CIUKI_WALL_FRAMES=<dir> keeps the rendered pages as PNG."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="control-display-", dir=parent) as temp:
+            folder = Path(temp)
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = folder / "control-test"
+            icons = load("control_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
+            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c",
+                       *(f"apps/desktop/{n}.c" for n in ("settings", "wallpaper", "image", "compositor", "theme")),
+                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
+                            "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
+                            "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
+                            *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
+            c = load("control_portrait", ROOT / "apps/desktop/convert_portrait.py")
+            (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
+            renders = folder / "renders"
+            renders.mkdir()
+            result = subprocess.run([str(binary), str(folder / "portrait.xrgb"), str(ROOT / "assets/wallpapers/ciuki"), str(renders)],
+                                    check=True, env=env, capture_output=True, text=True)
+            self.assertIn("PASS control display", result.stdout)
+            names = sorted(p.stem for p in renders.glob("*.xrgb"))
+            self.assertEqual(names, ["control-display-classic-fill", "control-display-fill", "control-display-fit"])
+            frames = os.environ.get("CIUKI_WALL_FRAMES")
+            if frames:
+                Path(frames).mkdir(parents=True, exist_ok=True)
+                for name in names:
+                    width, height = map(int, (renders / f"{name}.size").read_text().split())
+                    write_png(Path(frames) / f"{name}.png", width, height, xrgb_to_rgb((renders / f"{name}.xrgb").read_bytes()))
+        print(result.stdout.strip())
 
     def test_shell_launcher(self):
         parent = ROOT / "build/host"

@@ -145,7 +145,7 @@ file before writing it and then asks the desktop to apply it.
 | `version` | 1 | 1 |
 | `theme` | `Platinum`, `Ciuki Blue`, `Classic 98` | `Platinum` |
 | `wallpaper` | `ciuki` (the approved portrait on the desktop colour, exactly where the f2 compositor draws it), `none`, `builtin:<id>` (`dawn`, `pinstripe`, `deepblue`, `twilight`, `linen`, `blueprint`), or an absolute path to a PNG, JPEG or BMP | `/system/wallpapers/Ciuk2.png` |
-| `wallpaper_mode` | `center`, `stretch`, `tile`, `fit` | `center` |
+| `wallpaper_mode` | `center`, `stretch`, `tile`, `fit`, `fill` | `fill` |
 | `desktop_color` | six hex digits RRGGBB | `375564` |
 | `clock_24h` | 0/1 | 1 |
 | `clock_seconds` | 0/1 | 0 |
@@ -164,15 +164,23 @@ them and nothing third-party is drawn. Image files are decoded with the
 vendored stb_image 2.30 (`third_party/stb`, MIT or Public Domain; notice
 installed as `/system/licenses/stb_image.txt`): PNG, baseline and progressive
 JPEG, and uncompressed BMP (4/8/16/24/32 bit; stb_image reads neither 1-bit nor RLE BMP). Images above 4096 x 4096,
-16 Mpixel or 24 MiB are refused. `centre`, `stretch` (area average down,
-bilinear up) and `fit` use the area between the bars; `tile` starts at the
-top-left corner. The image installs the owner's three adaptive Ciuki scenes
-(`assets/wallpapers/ciuki`, 1448 x 1086 PNG, the 0.8-line artwork extended with
-scenery so that the centred 4:3 crop keeps the dog and the lettering) in
-`/system/wallpapers`; `Ciuk2.png` centred is the default (owner decision
-2026-10-12). The Control Panel lists them with any PNG/JPEG/BMP files the
-owner copies there; "Ciuki portrait" is the approved portrait on the desktop
-colour.
+16 Mpixel or 24 MiB are refused. `center` (1:1, centred, cropped or banded),
+`stretch` (non-uniform to the area; area average down, bilinear up), `fit`
+(uniform scale inside the area, bands in the desktop colour) and `fill`
+(uniform scale max(area width / image width, area height / image height), so
+the image covers the area, with the overflow cropped equally on both sides;
+same resampling as `stretch`) use the area between the bars (1024 x 704 at
+1024 x 768); `tile` starts at the top-left corner of the screen. The mode
+names keep their order and values (`fill` was appended), so files written
+before `fill` existed still parse. The image installs the owner's three
+adaptive Ciuki scenes (`assets/wallpapers/ciuki`, 1448 x 1086 PNG, the 0.8-line
+artwork extended with scenery so that a centred, aspect-preserving fill keeps
+the dog and the lettering) in `/system/wallpapers`; `Ciuk2.png` with `fill` is
+the default (owner decision 2026-10-12). At 1024 x 768 the 4:3 scene scales by
+1024/1448 to 1024 x 768 and loses 32 rows (45 source rows) at the top and at
+the bottom of the work area, nothing at the sides. The Control Panel lists
+them with any PNG/JPEG/BMP files the owner copies there; "Ciuki portrait" is
+the approved portrait on the desktop colour.
 **The Windows ME bitmaps of the 0.8 line (`third_party/win_bg`, local and
 git-ignored, Microsoft copyright) are never added to the repository or to the
 image;** the desktop only shows them if the owner copies them into
@@ -181,7 +189,7 @@ image;** the desktop only shows them if the owner copies them into
 ### Control Panel (`/bin/control`)
 
 A libdeskui program (500 x 420) with tabs Display (theme list with preview,
-wallpaper list with preview, Center/Tile/Stretch/Fit, six desktop colours,
+wallpaper list with preview, Center/Tile/Stretch/Fit/Fill, six desktop colours,
 desktop icons on/off), Mouse (pointer speed and double-click speed, applied
 by the desktop), Keyboard (US or Italian), Sounds (master volume and mute
 through the desktop's mixer handle), Date & Time (the clock and the 24 h and

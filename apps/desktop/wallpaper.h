@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: MIT
  * Desktop wallpaper engine: the approved Ciuki portrait on the desktop
- * colour (default), procedural CiukiOS wallpapers rendered at the screen's
+ * colour ("ciuki"), procedural CiukiOS wallpapers rendered at the screen's
  * resolution, and image files (PNG/JPEG/BMP, image.c) placed centred,
- * stretched, tiled or fitted. Pure memory functions, integer-only. */
+ * stretched, tiled, fitted or filled. Pure memory functions, integer-only. */
 #ifndef CIUKI_DESKTOP_WALLPAPER_H
 #define CIUKI_DESKTOP_WALLPAPER_H
 #include <stddef.h>
