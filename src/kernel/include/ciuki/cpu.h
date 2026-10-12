@@ -22,6 +22,8 @@
 #define CR0_TS  (1u << 3)
 #define CR0_NE  (1u << 5)
 #define CR0_WP  (1u << 16)
+#define CR0_NW  (1u << 29)
+#define CR0_CD  (1u << 30)
 #define CR0_PG  (1u << 31)
 #define CR4_PSE (1u << 4)
 #define CR4_PAE (1u << 5)
@@ -51,7 +53,35 @@ static inline void clts(void) { __asm__ volatile("clts" ::: "memory"); }
 
 static inline void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
-    __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf), "c"(0));
+    __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf), "c"(0) : "memory");
+}
+
+static inline uint64_t rdmsr(uint32_t msr)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr) : "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+static inline void wrmsr(uint32_t msr, uint64_t value)
+{
+    __asm__ volatile("wrmsr" :: "c"(msr), "a"((uint32_t)value), "d"((uint32_t)(value >> 32)) : "memory");
+}
+static inline void wbinvd(void) { __asm__ volatile("wbinvd" ::: "memory"); }
+
+/* Integer-only WC drain; valid on the P6 baseline without SSE/SFENCE. */
+static inline void cpu_write_drain(void)
+{
+    uint32_t fence = 0;
+    __asm__ volatile("lock; addl $0, %0" : "+m"(fence) :: "memory", "cc");
+}
+static inline uint64_t read_tsc_serialized(void)
+{
+    uint32_t a, b, c, d, lo, hi;
+    cpuid(0, &a, &b, &c, &d);
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    /* Prevent following copy stores from passing the timestamp as well. */
+    cpuid(0, &a, &b, &c, &d);
+    return ((uint64_t)hi << 32) | lo;
 }
 
 /* Save EFLAGS and disable interrupts; restore. Outermost sections are
