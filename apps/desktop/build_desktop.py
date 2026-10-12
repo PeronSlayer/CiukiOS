@@ -52,6 +52,9 @@ def inputs():
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
     files.extend(ROOT / "assets/icons" / name for name in ICON_NOTICES.values())
+    # UI fonts (apps/desktop/ui_fonts.h is generated from these by convert_fonts.py).
+    for face in ("inter", "inconsolata"):
+        files.extend(p for p in (ROOT / "assets/fonts/upstream" / face).iterdir() if p.is_file())
     if (SDK / "sysroot/include/ciuki/desktop.h").read_bytes() != (ROOT / "apps/desktop/protocol.h").read_bytes():
         raise ValueError("SDK desktop header is stale; rebuild SDK")
     return {"sdk_manifest_sha256": digest(SDK / "manifest.json"),
@@ -73,6 +76,7 @@ def validate_payloads():
     lua.validate_sdk()
     icons = module("desktop_icon_check", ROOT / "apps/desktop/convert_icons.py")
     icons.check()
+    module("desktop_font_check", ROOT / "apps/desktop/convert_fonts.py").check()
     if not current_build(inputs()):
         raise ValueError("missing/stale desktop payloads; run make desktop")
     m = json.loads((OUT / "manifest.json").read_text())
@@ -112,6 +116,7 @@ def build():
     icons = module("desktop_icon_build", ROOT / "apps/desktop/convert_icons.py")
     icons.check()
     icons.check_store_record()
+    module("desktop_font_build", ROOT / "apps/desktop/convert_fonts.py").check()
     c = module("desktop_portrait", ROOT / "apps/desktop/convert_portrait.py")
     data = c.convert(ROOT / "assets/brand/ciuki-logo.png")
     if hashlib.sha256(data).hexdigest() != c.ARRAY_SHA256:
@@ -127,14 +132,14 @@ def build():
     env = os.environ.copy()
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
-    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "assets.c", *SHELL,
+    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
                            "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
-               "demo": ["../demo/demo.c", "protocol.c", "compositor.c"],
+               "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}
     evidence, commands = {}, {}
     sdk = json.loads((SDK / "manifest.json").read_text())
     objects = []
-    for source in [*sorted((ROOT / "apps/libdeskui").glob("*.c")), ROOT / "apps/desktop/protocol.c", ROOT / "apps/desktop/compositor.c"]:
+    for source in [*sorted((ROOT / "apps/libdeskui").glob("*.c")), ROOT / "apps/desktop/protocol.c", ROOT / "apps/desktop/compositor.c", ROOT / "apps/desktop/theme.c"]:
         obj = temp / (source.stem + ".o")
         command = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-ffunction-sections", "-fdata-sections", "-c", str(source), "-o", str(obj)]
         subprocess.run(command, check=True, env=env)
@@ -159,12 +164,13 @@ def build():
                           *(["-lm"] if name in ACCESSORIES else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
-    # Audit compositor code separately: integer drawing must never emit x87.
-    obj = temp / "compositor.o"
-    subprocess.run([str(SDK / "bin/ciuki-cc"), *CFLAGS, "-c", str(ROOT / "apps/desktop/compositor.c"),
-                    "-o", str(obj)], check=True, env=env)
-    audit_integer(obj, sdk)
-    obj.unlink()
+    # Audit compositor and theme code separately: integer drawing must never emit x87.
+    for unit in ("compositor", "theme"):
+        obj = temp / f"{unit}.o"
+        subprocess.run([str(SDK / "bin/ciuki-cc"), *CFLAGS, "-c", str(ROOT / f"apps/desktop/{unit}.c"),
+                        "-o", str(obj)], check=True, env=env)
+        audit_integer(obj, sdk)
+        obj.unlink()
     (OUT / "ciuki-portrait.xrgb").write_bytes(data)
     store, _ = icons.build_store()
     icons.check_store(store)

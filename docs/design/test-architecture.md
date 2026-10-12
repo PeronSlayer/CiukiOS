@@ -97,10 +97,11 @@ therefore never covered. A case with `"kind": "normal-boot"` (and
   so the following diagnostic lines reach `serial.log`.
 - `settle_seconds` after the desktop line the runner takes one QMP
   [`screendump`](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-screendump)
-  (`screen.ppm`) and checks layout colours taken from `apps/desktop`, not a
-  frame digest (the taskbar clock changes): the bottom 32 rows are mostly the
-  taskbar colour `b8c9cc`, the start button `e8d7b9` (or `607a85` with the
-  menu open), the top-left 256x32 is mostly the top bar `213c4c` and has at
+  (`screen.ppm`) and checks layout colours taken from `apps/desktop` (its
+  default theme, Platinum, in `theme.c`), not a frame digest (the taskbar
+  clock changes): the bottom 32 rows are mostly the taskbar colour `d6d6d6`,
+  the start button `f2f2f2` (or `b9b9b9` with the menu open), the top-left
+  256x32 is mostly the top bar `dcdcdc` and has at
   most 2 % kernel console colours (`10243c`, `e8e8e8`, panic `800000`), and
   the area between the bars is at least 25 % desktop background `375564`;
   per-channel tolerance 8. A host test checks these colours against the C

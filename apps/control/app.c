@@ -6,8 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern uint8_t desk_glyph_row(unsigned, unsigned);
-
 enum {
     C_TABS = 1, C_CLOSE, C_STATUS,
     C_THEME_L, C_THEME, C_WALL_L, C_WALL, C_POS_L, C_POS0, C_POS1, C_POS2, C_POS3, C_COL_L,
@@ -67,14 +65,16 @@ static void changed(struct cp_app *a)
 }
 
 /* ---- display preview ---- */
-struct palette { uint32_t face, title, ink; };
-static struct palette theme_palette(const char *theme)
+/* The desktop colour as the desktop paints it: the unchanged default
+ * follows the theme's desktop (shell.c desktop_colour). */
+static uint32_t desktop_colour(const struct cp_app *a, const struct desk_theme *t)
 {
-    /* Preview only; the toolkit's theme engine draws the real thing. */
-    if (!strcmp(theme, "Classic 98")) return (struct palette){0xc0c0c0u, 0x000080u, 0xffffffu};
-    if (!strcmp(theme, "Ciuki Blue")) return (struct palette){0xb8c9ccu, 0x213c4cu, 0xffffffu};
-    return (struct palette){0xdededeu, 0x5d6f8cu, 0xffffffu};
+    struct ciuki_settings defaults;
+    cfg_defaults(&defaults);
+    return a->cfg.desktop_color == defaults.desktop_color ? t->desktop : a->cfg.desktop_color;
 }
+static const struct desk_theme *chosen(const struct cp_app *a)
+{ const struct desk_theme *t = desk_theme_named(a->cfg.theme); return t ? t : desk_theme; }
 static void preview_build(struct cp_app *a)
 {
     uint32_t sw = a->host.screen_w ? a->host.screen_w : 1024, sh = a->host.screen_h ? a->host.screen_h : 768;
@@ -82,23 +82,16 @@ static void preview_build(struct cp_app *a)
     desk_image_free(&a->image);
     if (a->cfg.wallpaper[0] == '/' && a->host.decode) a->host.decode(a->host.ctx, a->cfg.wallpaper, &a->image);
     if (full) {
-        desk_wallpaper_render(full, sw, sh, 32, 32, a->cfg.wallpaper, a->cfg.wallpaper_mode, a->cfg.desktop_color, &a->image, a->host.portrait);
+        desk_wallpaper_render(full, sw, sh, 32, 32, a->cfg.wallpaper, a->cfg.wallpaper_mode, desktop_colour(a, chosen(a)), &a->image, a->host.portrait);
         struct desk_image src = {full, sw, sh};
         for (size_t i = 0; i < (size_t)sw * sh; i++) full[i] |= 0xff000000u;
-        desk_image_scale(&src, a->preview, 192, 144, CFG_WALL_STRETCH, a->cfg.desktop_color);
+        desk_image_scale(&src, a->preview, 192, 144, CFG_WALL_STRETCH, desktop_colour(a, chosen(a)));
         free(full);
-    } else for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = a->cfg.desktop_color;
+    } else for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
     desk_image_free(&a->image);
     a->preview_valid = 1;
 }
 static void put(struct du_canvas *c, int x, int y, int w, int h, uint32_t colour) { du_fill(c, (struct du_rect){x, y, w, h}, colour); }
-static void big_text(struct du_canvas *c, int x, int y, const char *s, int scale, uint32_t colour)
-{
-    for (; *s; s++, x += 6 * scale) for (unsigned row = 0; row < 7; row++) {
-        uint8_t bits = desk_glyph_row((unsigned char)*s, row);
-        for (unsigned col = 0; col < 5; col++) if (bits & (1u << (4 - col))) put(c, x + (int)col * scale, y + (int)row * scale, scale, scale, colour);
-    }
-}
 static void paint(struct du_ui *u, void *user)
 {
     struct cp_app *a = user;
@@ -111,26 +104,32 @@ static void paint(struct du_ui *u, void *user)
         du_edge(c, (struct du_rect){30, 50, 196, 148}, DU_SUNKEN);
         for (int y = 0; y < 144; y++) for (int x = 0; x < 192; x++) put(c, 32 + x, 52 + y, 1, 1, a->preview[y * 192 + x]);
         put(c, 108, 204, 40, 6, DU_SHADOW); put(c, 92, 210, 72, 4, DU_FACE); du_edge(c, (struct du_rect){92, 210, 72, 5}, DU_RAISED_THIN);
-        struct palette p = theme_palette(a->cfg.theme);
-        put(c, 32, 52, 192, 6, 0x213c4cu);                      /* top bar */
-        put(c, 32, 190, 192, 6, p.face); put(c, 33, 191, 16, 4, 0xe8d7b9u);   /* taskbar and start button */
-        put(c, 40, 132, 70, 50, p.face); du_outline(c, (struct du_rect){40, 132, 70, 50}, 0x000000u);
-        put(c, 42, 134, 66, 7, p.title); put(c, 44, 143, 62, 37, 0xffffffu);
+        /* The chosen theme in miniature: top bar, taskbar, start button and a window. */
+        const struct desk_theme *t = chosen(a);
+        struct desk_paint pp = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+        put(c, 32, 52, 192, 6, t->topbar); put(c, 32, 57, 192, 1, t->topbar_edge);
+        put(c, 32, 190, 192, 6, t->taskbar); put(c, 33, 191, 16, 4, t->start);
+        put(c, 40, 132, 70, 50, t->face); du_outline(c, (struct du_rect){40, 132, 70, 50}, t->frame);
+        if (t->title_style == DESK_TITLE_PINSTRIPE) {
+            desk_paint_vgradient(&pp, 41, 133, 68, 8, t->title[0], t->title[1]);
+            desk_paint_pinstripes(&pp, 43, 134, 64, 6, t->stripe_light, t->stripe_dark);
+        } else desk_paint_hgradient(&pp, 42, 134, 66, 7, t->title[0], t->title[1]);
+        put(c, 44, 143, 62, 37, t->window);
         for (int k = 0; k < 6; k++) {
             struct du_widget *w = du_get(u, C_COL0 + k);
             if (!w || w->hidden) continue;
-            put(c, w->box.x + 4, w->box.y + 4, w->box.w - 8, w->box.h - 8, swatches[k]);
+            put(c, w->box.x + 4, w->box.y + 4, w->box.w - 8, w->box.h - 8, k ? swatches[k] : chosen(a)->desktop);
             du_outline(c, (struct du_rect){w->box.x + 3, w->box.y + 3, w->box.w - 6, w->box.h - 6}, DU_DARK);
             if (swatches[k] == a->cfg.desktop_color) du_outline(c, (struct du_rect){w->box.x - 1, w->box.y - 1, w->box.w + 2, w->box.h + 2}, DU_SELECT);
         }
     } else if (a->page == CP_DATETIME) {
-        du_fill(c, (struct du_rect){24, 44, 452, 54}, DU_WINDOW);
-        du_edge(c, (struct du_rect){24, 44, 452, 54}, DU_SUNKEN);
-        big_text(c, 24 + (452 - (int)strlen(a->clock_line) * 24) / 2, 57, a->clock_line, 4, DU_SELECT);
+        du_well(c, (struct du_rect){24, 44, 452, 54}, DU_WINDOW);
+        int font = desk_theme->font_large;
+        du_text_font(c, font, 24 + (452 - du_text_width_font(font, a->clock_line)) / 2, 71 - desk_font_cap(font) / 2, a->clock_line, DU_SELECT);
     } else if (a->page == CP_SYSTEM && a->host.portrait) {
         du_edge(c, (struct du_rect){22, 46, 100, 100}, DU_SUNKEN);
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) put(c, 24 + x, 48 + y, 1, 1, a->host.portrait[(y * 256 / 96) * 256 + x * 256 / 96]);
-        big_text(c, 140, 50, "CiukiOS", 2, DU_SELECT);
+        du_text_font(c, desk_theme->font_large, 140, 50, "CiukiOS", DU_SELECT);
     }
 }
 
@@ -202,6 +201,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     case C_THEME:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CFG_THEMES) {
             snprintf(a->cfg.theme, sizeof(a->cfg.theme), "%s", cfg_theme_names[e->index]); save = 1; a->preview_valid = 0;
+            du_theme_use(a->ui, a->cfg.theme);   /* this window at once; the desktop on DESK_SETTINGS reload, others by poll */
         }
         break;
     case C_WALL:
@@ -266,6 +266,7 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
 {
     a->ui = u; a->page = page >= 0 && page < CP_PAGES ? page : CP_DISPLAY;
     load(a, &a->cfg);
+    du_theme_use(u, a->cfg.theme);
     a->wall_count = a->host.wallpapers ? (unsigned)a->host.wallpapers(a->host.ctx, a->wall_names, CP_WALLPAPERS) : 0;
     if (a->wall_count > CP_WALLPAPERS) a->wall_count = 0;
     a->mixer_ok = a->host.mixer && !a->host.mixer(a->host.ctx, &a->volume, &a->muted);

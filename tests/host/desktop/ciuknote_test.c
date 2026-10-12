@@ -578,8 +578,8 @@ static void test_file_dialogs(void)
 static int item_y(const struct du_menu_item *items, unsigned n, struct du_rect box, unsigned index)
 {
     int y = box.y + 3;
-    for (unsigned i = 0; i < index; i++) y += items[i].flags & DU_ITEM_SEPARATOR ? 9 : 17;
-    (void)n; return y + 8;
+    for (unsigned i = 0; i < index; i++) y += items[i].flags & DU_ITEM_SEPARATOR ? DU_MENU_SEP_H : DU_MENU_ITEM_H;
+    (void)n; return y + DU_MENU_ITEM_H / 2;
 }
 
 static void test_menus_and_context(void)

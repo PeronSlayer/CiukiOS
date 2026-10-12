@@ -3,7 +3,8 @@
  * built-in windows, keyboard shortcuts). State lives in struct desktop
  * (desk_init zeroes it); shell.c never touches files or the kernel: it
  * raises requests that desktop.c serves (settings, wallpaper, power,
- * mixer, launches). Colours and metrics come from the libdeskui toolkit. */
+ * mixer, launches). Colours, faces and bevels come from the current theme
+ * (theme.h) through the libdeskui toolkit; icons from the Tango store. */
 #ifndef CIUKI_DESKTOP_SHELL_H
 #define CIUKI_DESKTOP_SHELL_H
 #include "settings.h"
@@ -86,5 +87,6 @@ int desk_task_count(const struct desktop *);
 const char *desk_program_icon_name(const char *program);
 const char *desk_program_category(const char *program);
 const uint32_t *desk_shell_icon(const char *tango_name, int size);
+const uint32_t *desk_shell_window_icon(struct desktop *, int index, int size);   /* title-bar icon (compositor) */
 int desk_shell_wallpaper_update(struct desktop *);
 #endif

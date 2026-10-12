@@ -9,10 +9,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define TITLE_H 18
+#define TITLE_H 20
 #define BTN_W 75
 #define BTN_H 23
-#define LINE_H 13
+#define LINE_H 15
 #define TAB_X 84
 
 enum { ID_BUTTON = -1000, ID_UP = -2000, ID_LIST = -3000, ID_NAME = -4000, ID_FOLDER = -5000, ID_EDIT = -6000, ID_BAR = -7000 };
@@ -392,7 +392,7 @@ void du_dialog_key(struct du_ui *u, unsigned code)
 }
 
 static struct du_rect close_box(const struct du_dialog *d)
-{ return (struct du_rect){d->box.x + d->box.w - 3 - 2 - 16, d->box.y + 5, 16, 14}; }
+{ return (struct du_rect){d->box.x + d->box.w - 3 - 2 - 16, d->box.y + 4, 16, 16}; }
 
 void du_dialog_press(struct du_ui *u, int button)
 {
@@ -449,16 +449,32 @@ void du_draw_dialog(struct du_ui *u)
     if (!d->kind) return;
     struct du_canvas *c = &u->canvas;
     struct du_rect b = d->box;
+    const struct desk_theme *t = desk_theme;
+    struct desk_paint p = {c->pixels, c->width, c->height, 0, 0, c->width, c->height};
+    if (t->shadow_size) du_shadow(c, b, t->shadow_size);
     du_fill(c, b, DU_FACE);
     du_edge(c, b, DU_RAISED);
     struct du_rect title = {b.x + 3, b.y + 3, b.w - 6, TITLE_H};
-    du_fill(c, title, DU_SELECT);
-    du_text_fit(c, title.x + 5, title.y + (TITLE_H - DU_GLYPH_H) / 2, title.w - 30, d->title, DU_SELECT_INK);
     struct du_rect x = close_box(d);
-    du_fill(c, x, DU_FACE); du_edge(c, x, DU_BUTTON_EDGE);
-    for (int i = 0; i < 6; i++) {
-        du_fill(c, (struct du_rect){x.x + 4 + i, x.y + 3 + i, 2, 1}, DU_INK);
-        du_fill(c, (struct du_rect){x.x + 9 - i, x.y + 3 + i, 2, 1}, DU_INK);
+    int font = t->font_title, tw = desk_text_measure(font, d->title), baseline = title.y + 15;
+    if (t->title_style == DESK_TITLE_PINSTRIPE) {
+        /* Platinum dialog: the window title bar in miniature. */
+        desk_paint_vgradient(&p, title.x, title.y, title.w, title.h, t->title[0], t->title[1]);
+        int tx = title.x + (title.w - 24 - tw) / 2;
+        if (tx < title.x + 12) tx = title.x + 12;
+        if (tx - 8 > title.x + 4) desk_paint_pinstripes(&p, title.x + 4, title.y + 4, tx - 8 - title.x - 4, 12, t->stripe_light, t->stripe_dark);
+        if (x.x - 6 > tx + tw + 8) desk_paint_pinstripes(&p, tx + tw + 8, title.y + 4, x.x - 6 - tx - tw - 8, 12, t->stripe_light, t->stripe_dark);
+        struct du_rect keep = c->clip; c->clip = du_intersection(keep, (struct du_rect){title.x, title.y, x.x - title.x - 4, title.h});
+        du_text_font(c, font, tx, baseline - desk_font_cap(font), d->title, t->title_text);
+        c->clip = keep;
+        du_hline(c, b.x + 3, title.y + title.h, b.w - 6, DU_SHADOW);
+        desk_paint_title_button(&p, x.x + 1, x.y + 1, 13, DESK_GLYPH_CLOSE, 1, 0, 0);
+    } else {
+        desk_paint_hgradient(&p, title.x, title.y, title.w, title.h, t->title[0], t->title[1]);
+        struct du_rect keep = c->clip; c->clip = du_intersection(keep, (struct du_rect){title.x, title.y, title.w - 24, title.h});
+        du_text_font(c, font, title.x + 5, baseline - desk_font_cap(font), d->title, t->title_text);
+        c->clip = keep;
+        desk_paint_title_button(&p, x.x - 1, x.y + 1, 15, DESK_GLYPH_CLOSE, 1, 0, 0);
     }
     int top = body_y(d);
     if (d->kind == DU_DLG_MESSAGE) {

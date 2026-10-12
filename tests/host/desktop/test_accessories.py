@@ -17,7 +17,7 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
          "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
            "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/libdeskui/recent.c", "apps/libdeskui/keymap.c",
-           "apps/desktop/compositor.c"]
+           "apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 INCLUDES = ["-I", str(ROOT / "apps/accessories"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/desktop"),
             "-I", str(ROOT / "src/kernel/include")]
 ACC = "apps/accessories/"
@@ -71,7 +71,9 @@ class AccessoriesTests(unittest.TestCase):
             sources = [*TESTS[name], *TOOLKIT, f"tests/host/desktop/{name}_test.c"]
             if name != "keymap":
                 sources.append(ACC + "acc.c")
-            subprocess.run([*FLAGS, *INCLUDES, *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)], check=True, env=env)
+            icons = load("acc_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
+            subprocess.run([*FLAGS, *icons.defines(), *INCLUDES, *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)],
+                           check=True, env=env)
             args = {"viewer": [str(scratch), str(ROOT / "misc/CiukiOS_SplashScreen.png"), str(renders)],
                     "help": [str(scratch), str(renders)], "keymap": []}.get(name, [str(renders)])
             result = subprocess.run([str(binary), *args], check=True, env=env, capture_output=True, text=True)

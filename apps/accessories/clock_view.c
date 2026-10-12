@@ -11,10 +11,12 @@
 #define GRID_Y 74
 #define CELL_W 24
 #define CELL_H 20
-#define FACE_COLOR 0xf4efe4u
-#define HAND_COLOR 0x10212au
+/* Theme colours (theme.h): the dial is the window paper, the hands the ink,
+ * today the accent; the second hand stays red. */
+#define FACE_COLOR DU_WINDOW
+#define HAND_COLOR DU_INK
 #define SECOND_COLOR 0xb03a2eu
-#define TODAY_COLOR 0xb03a2eu
+#define TODAY_COLOR (desk_theme->accent)
 
 struct du_rect clock_grid_cell(int cell)
 { return (struct du_rect){GRID_X + (cell % 7) * CELL_W, GRID_Y + (cell / 7) * CELL_H, CELL_W, CELL_H}; }

@@ -90,26 +90,28 @@ static struct du_rect cell(const struct du_widget *w, const struct layout *l, un
 static int tree_x(const struct du_widget *w, const struct layout *l, unsigned depth)
 { (void)w; return l->area.x + 9 + (int)depth * 16; }
 
-/* Two centred lines of at most CELL_W/6 cells for Large Icons labels. */
+/* Two centred lines that fit CELL_W - 6 pixels for Large Icons labels. */
 static unsigned wrap(const char *s, char lines[2][64])
 {
-    size_t room = (CELL_W - 6) / DU_CHAR_W, cells = du_cells(s);
+    int font = desk_theme->font_ui, room = CELL_W - 6;
     lines[0][0] = lines[1][0] = 0;
-    if (cells <= room) { strncpy(lines[0], s, 63); lines[0][63] = 0; return 1; }
-    size_t at = 0, n = 0, brk = 0, brk_cells = 0;
-    while (s[at] && n < room) {
-        if (s[at] == ' ' || s[at] == '.' || s[at] == '-' || s[at] == '_') { brk = at + 1; brk_cells = n + 1; }
+    if (desk_text_measure(font, s) <= room) { strncpy(lines[0], s, 63); lines[0][63] = 0; return 1; }
+    size_t fit = desk_text_fit_chars(font, s, room);
+    size_t at = 0, n = 0, brk = 0, brk_chars = 0;
+    while (s[at] && n < fit) {
+        if (s[at] == ' ' || s[at] == '.' || s[at] == '-' || s[at] == '_') { brk = at + 1; brk_chars = n + 1; }
         at = du_utf8_next(s, at); n++;
     }
-    if (!brk || brk_cells < room / 2) { brk = at; }
+    if (!brk || brk_chars < fit / 2) brk = at;
     size_t first = brk < 63 ? brk : 63;
     memcpy(lines[0], s, first); lines[0][first] = 0;
     const char *rest = s + brk;
-    if (du_cells(rest) <= room) { strncpy(lines[1], rest, 63); lines[1][63] = 0; }
+    if (desk_text_measure(font, rest) <= room) { strncpy(lines[1], rest, 63); lines[1][63] = 0; }
     else {
-        size_t k = 0, m = 0;
-        while (rest[k] && m + 3 < room && k < 56) { k = du_utf8_next(rest, k); m++; }
-        memcpy(lines[1], rest, k); strcpy(lines[1] + k, "...");
+        static const char dots[] = "\xe2\x80\xa6";
+        size_t k = 0, m = 0, keep = desk_text_fit_chars(font, rest, room - desk_text_measure(font, dots));
+        while (rest[k] && m < keep && k < 56) { k = du_utf8_next(rest, k); m++; }
+        memcpy(lines[1], rest, k); strcpy(lines[1] + k, dots);
     }
     return 2;
 }
@@ -126,7 +128,7 @@ static struct du_rect label_rect(const struct du_widget *w, const struct layout 
     if (w->view == DU_ICONS) {
         char lines[2][64]; unsigned n = wrap(name, lines);
         int lw = du_text_width(lines[0]); if (n > 1 && du_text_width(lines[1]) > lw) lw = du_text_width(lines[1]);
-        return (struct du_rect){r.x + (CELL_W - lw) / 2 - 2, r.y + 39, lw + 4, (int)n * 11 + 3};
+        return (struct du_rect){r.x + (CELL_W - lw) / 2 - 2, r.y + 38, lw + 4, (int)n * 13 + 3};
     }
     int limit = (w->view == DU_DETAILS ? (w->column_count ? w->columns[0].width : r.w) : l->colw) - 26;
     if (tw > limit) tw = limit;
@@ -247,19 +249,26 @@ static void draw_label(struct du_canvas *c, struct du_rect lab, const char *text
 
 static void draw_header(struct du_canvas *c, const struct du_widget *w, const struct layout *l)
 {
-    int x = l->header.x;
+    int x = l->header.x, platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
     struct du_rect old = c->clip;
     c->clip = du_intersection(old, l->header);
     for (unsigned i = 0; i <= w->column_count; i++) {
         int width = i < w->column_count ? w->columns[i].width : l->header.x + l->header.w - x;
         if (width <= 0) break;
         struct du_rect b = {x, l->header.y, width, HEADER_H};
-        du_fill(c, b, DU_FACE); du_edge(c, b, DU_BUTTON_EDGE);
+        if (platinum) {
+            struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+            int sorted = w->sort == (int)i;
+            desk_paint_vgradient(&p, b.x, b.y, b.w, b.h, sorted ? desk_mix(DU_ACCENT, desk_theme->face_top, 40) : desk_theme->face_top,
+                                 sorted ? desk_mix(DU_ACCENT, desk_theme->face_bottom, 60) : desk_theme->face_bottom);
+            du_hline(c, b.x, b.y + b.h - 1, b.w, DU_SHADOW);
+            du_vline(c, b.x + b.w - 1, b.y + 3, b.h - 6, DU_SHADOW); du_vline(c, b.x, b.y + 3, b.h - 6, DU_HILITE);
+        } else { du_fill(c, b, DU_FACE); du_edge(c, b, DU_BUTTON_EDGE); }
         if (i < w->column_count) {
             struct du_rect keep = c->clip; c->clip = du_intersection(keep, (struct du_rect){b.x + 2, b.y, b.w - 4, b.h});
             const char *t = w->columns[i].title ? w->columns[i].title : "";
             int tw = du_text_width(t), tx = w->columns[i].right ? b.x + b.w - 8 - tw : b.x + 6;
-            du_text(c, tx, b.y + 5, t, DU_INK);
+            du_text(c, tx, b.y + (HEADER_H - DU_GLYPH_H) / 2, t, DU_INK);
             if (w->sort == (int)i) {
                 int ax = w->columns[i].right ? tx - 10 : tx + tw + 8;
                 if (ax + 4 < b.x + b.w - 3) du_triangle(c, ax, b.y + 9, w->descending ? 1 : 0, 4, DU_SHADOW);
@@ -274,8 +283,7 @@ static void draw_header(struct du_canvas *c, const struct du_widget *w, const st
 void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int window)
 {
     struct layout l = compute(w);
-    du_fill(c, w->box, DU_WINDOW);
-    du_edge(c, w->box, DU_SUNKEN);
+    du_well(c, w->box, DU_WINDOW);
     if (w->view == DU_DETAILS) draw_header(c, w, &l);
     struct du_rect old = c->clip;
     c->clip = du_intersection(old, l.area);
@@ -295,7 +303,7 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
             if (sel && focused && window) { du_fill(c, lab, DU_SELECT); ink = DU_SELECT_INK; }
             else if (sel && w->inactive_selection) du_fill(c, lab, DU_FACE);
             for (unsigned k = 0; k < n; k++)
-                du_text(c, r.x + (CELL_W - du_text_width(lines[k])) / 2, lab.y + 2 + (int)k * 11, lines[k], ink);
+                du_text(c, r.x + (CELL_W - du_text_width(lines[k])) / 2, lab.y + 2 + (int)k * 13, lines[k], ink);
             if (act && focused && window) du_dotted(c, lab);
             continue;
         }
@@ -323,6 +331,7 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
     c->clip = old;
     if (l.has_v) { l.v.value = w->scroll; du_sb_draw(c, &l.v, w->drag >= 10 && w->drag < 20 ? w->drag - 10 : 0); }
     if (l.has_h) { l.h.value = w->hscroll; du_sb_draw(c, &l.h, w->drag >= 20 && w->drag < 30 ? w->drag - 20 : 0); }
+    if (focused && window && desk_theme->focus_style == DESK_FOCUS_RING) du_focus_ring(c, w->box);
 }
 
 static int sibling_below(const struct du_widget *w, unsigned i, unsigned level)
@@ -338,8 +347,7 @@ static int sibling_below(const struct du_widget *w, unsigned i, unsigned level)
 void du_draw_tree(struct du_canvas *c, struct du_widget *w, int focused, int window)
 {
     struct layout l = compute(w);
-    du_fill(c, w->box, DU_WINDOW);
-    du_edge(c, w->box, DU_SUNKEN);
+    du_well(c, w->box, DU_WINDOW);
     struct du_rect old = c->clip;
     c->clip = du_intersection(old, l.area);
     for (unsigned i = 0; i < w->count; i++) {
@@ -347,14 +355,20 @@ void du_draw_tree(struct du_canvas *c, struct du_widget *w, int focused, int win
         if (r.y + r.h <= l.area.y || r.y >= l.area.y + l.area.h) continue;
         const struct du_item *it = &w->items[i];
         int d = it->depth, cy = r.y + DU_ROW / 2, cx = tree_x(w, &l, (unsigned)d);
-        for (int k = 0; k + 1 < d; k++) if (sibling_below(w, i, (unsigned)k)) dotted_v(c, tree_x(w, &l, (unsigned)k), r.y, r.y + r.h);
-        if (d > 0) {
-            int px = tree_x(w, &l, (unsigned)d - 1);
-            dotted_v(c, px, r.y, sibling_below(w, i, (unsigned)d - 1) ? r.y + r.h : cy + 1);
-            dotted_h(c, px, cx + 6, cy);
+        if (desk_theme->control_style != DESK_CONTROLS_PLATINUM) {   /* Platinum trees have no connector lines */
+            for (int k = 0; k + 1 < d; k++) if (sibling_below(w, i, (unsigned)k)) dotted_v(c, tree_x(w, &l, (unsigned)k), r.y, r.y + r.h);
+            if (d > 0) {
+                int px = tree_x(w, &l, (unsigned)d - 1);
+                dotted_v(c, px, r.y, sibling_below(w, i, (unsigned)d - 1) ? r.y + r.h : cy + 1);
+                dotted_h(c, px, cx + 6, cy);
+            }
+            if (it->expanded && it->children) dotted_v(c, cx + 16, cy + 8, r.y + r.h);
         }
-        if (it->expanded && it->children) dotted_v(c, cx + 16, cy + 8, r.y + r.h);
-        if (it->children) {
+        if (it->children && desk_theme->control_style == DESK_CONTROLS_PLATINUM) {
+            /* Platinum disclosure triangle: right when closed, down when open. */
+            du_fill(c, (struct du_rect){cx - 5, cy - 5, 11, 11}, DU_WINDOW);
+            du_triangle(c, cx, cy, it->expanded ? 1 : 3, 4, desk_mix(DU_INK, DU_SHADOW, 140));
+        } else if (it->children) {
             struct du_rect box = {cx - 4, cy - 4, 9, 9};
             du_fill(c, box, DU_WINDOW); du_outline(c, box, DU_SHADOW);
             du_hline(c, cx - 2, cy, 5, DU_INK);
@@ -367,6 +381,7 @@ void du_draw_tree(struct du_canvas *c, struct du_widget *w, int focused, int win
     }
     c->clip = old;
     if (l.has_v) { l.v.value = w->scroll; du_sb_draw(c, &l.v, w->drag >= 10 && w->drag < 20 ? w->drag - 10 : 0); }
+    if (focused && window && desk_theme->focus_style == DESK_FOCUS_RING) du_focus_ring(c, w->box);
 }
 
 /* ---- input ---- */

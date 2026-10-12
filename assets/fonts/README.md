@@ -55,3 +55,15 @@ at the size whose capital H matches its height.
   --output MYFONT.CFN` converts any TrueType or OpenType font (`--bold`
   gives its bold face). Copy the `.CFN` to the CiukiOS disk and open it:
   the Fonts applet previews and installs it.
+
+## Desktop UI fonts (F2 desktop, 2026-10-12)
+
+The new desktop does not read `.CFN` files. `apps/desktop/convert_fonts.py`
+rasterizes Inter (12 regular, 12 SemiBold, 13 Bold, 22 Bold) and
+Inconsolata (12 regular and Bold) from `upstream/` with the 0.8 pipeline's
+variable-axis settings, as 8-bit anti-aliased coverage, into
+`apps/desktop/ui_fonts.h`; `apps/desktop/ui-fonts.json` pins the source and
+header SHA-256. Both fonts are under the SIL OFL 1.1 without a Reserved Font
+Name; the conversions are Modified Versions and keep their family names.
+Their notices and the licence text are in `LICENSES.TXT` and in
+`upstream/inter/OFL.txt` and `upstream/inconsolata/OFL.txt`.

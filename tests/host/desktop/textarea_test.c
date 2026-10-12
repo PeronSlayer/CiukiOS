@@ -308,30 +308,49 @@ static void dump(const char *prefix, const char *name)
     FILE *f = fopen(path, "wb"); assert(f); assert(fwrite(canvas, 4, 240 * 320, f) == 240 * 320); fclose(f);
 }
 static uint32_t at_px(int x, int y) { return canvas[y * 320 + x]; }
+/* Darkness of one 6x13 cell against the window colour (green channel). */
+static unsigned ink_in(int x0, int y0)
+{
+    unsigned sum = 0;
+    for (int y = y0; y < y0 + DU_TA_CELL_H; y++) for (int x = x0; x < x0 + DU_TA_CELL_W; x++) {
+        unsigned g = (at_px(x, y) >> 8) & 255, w = (DU_WINDOW >> 8) & 255;
+        sum += g < w ? w - g : 0;
+    }
+    return sum;
+}
+static unsigned off_colour(int x0, int y0, uint32_t colour)
+{
+    unsigned n = 0;
+    for (int y = y0; y < y0 + DU_TA_CELL_H; y++) for (int x = x0; x < x0 + DU_TA_CELL_W; x++) n += at_px(x, y) != colour;
+    return n;
+}
 static void test_render(const char *prefix)
 {
     struct du_rect box = {10, 10, 200, 120};
     canvas[239 * 320 + 319] = 0xaabbccddu;
     load("A\xc3\xa9 x\n\tB", DU_TA_LIMIT);
     du_ta_draw(&surface, box, &ta, 1); dump(prefix, "plain");
-    /* 'A' row 0 is 01110: pixels at columns 1..3 of the glyph, cell origin (14,14), glyph 3 rows down. */
-    assert(at_px(14 + 1, 17) == DU_INK && at_px(14 + 3, 17) == DU_INK && at_px(14, 17) == DU_WINDOW);
-    /* The e-acute is a hollow 5x7 placeholder box in the next cell. */
-    assert(at_px(20, 17) == DU_INK && at_px(24, 17) == DU_INK && at_px(20, 20) == DU_INK && at_px(22, 20) == DU_WINDOW && at_px(22, 23) == DU_INK);
+    /* ui-look: glyphs come from the anti-aliased monospace face (Inconsolata 12)
+     * in 6x13 cells from the origin (14,14). 'A' inks its cell; the e-acute is
+     * a Latin-1 glyph of the face now, not a placeholder box; a control
+     * character would still be one. */
+    assert(ink_in(14, 14) > 0 && ink_in(20, 14) > 0 && ink_in(26, 14) == 0 && ink_in(14, 14 + 13) == 0);
     /* Caret one pixel left of the origin cell: focused only. */
     assert(at_px(13, 15) == DU_INK && at_px(13, 25) == DU_INK);
     du_ta_draw(&surface, box, &ta, 0); assert(at_px(13, 15) == DU_WINDOW);
     /* Selection fills whole cells; ink inverts. Unfocused it is gray. */
     du_ta_select(&ta, 0, 1); du_ta_draw(&surface, box, &ta, 1);
     assert(at_px(14, 14 + 12) == DU_SELECT && at_px(14 + 5, 14) == DU_SELECT && at_px(14 + 6 + 5, 14) == DU_WINDOW);
-    assert(at_px(14 + 1, 17) == DU_SELECT_INK);
+    assert(off_colour(14, 14, DU_SELECT) > 0);   /* the glyph is drawn over the selection */
     du_ta_draw(&surface, box, &ta, 0); assert(at_px(14, 14 + 12) == DU_GRAY);
     /* A selected line break highlights one cell after the line. */
     du_ta_select(&ta, 3, 6); du_ta_draw(&surface, box, &ta, 1);
     assert(at_px(14 + 4 * 6 + 3, 14 + 5) == DU_SELECT);
     /* Bold doubles the stems horizontally. */
-    du_ta_select(&ta, 0, 0); ta.bold = 1; du_ta_draw(&surface, box, &ta, 0); dump(prefix, "bold");
-    assert(at_px(14 + 4, 17) == DU_INK); /* 'A' top row becomes columns 1..4 */
+    du_ta_select(&ta, 0, 0); ta.bold = 0; du_ta_draw(&surface, box, &ta, 0);
+    unsigned regular = ink_in(14, 14);
+    ta.bold = 1; du_ta_draw(&surface, box, &ta, 0); dump(prefix, "bold");
+    assert(ink_in(14, 14) > regular);   /* the bold face inks more of the 'A' cell */
     /* Nothing is drawn outside the box. */
     assert(canvas[239 * 320 + 319] == 0xaabbccddu && at_px(9, 10) == 0 && at_px(10, 9) == 0 && at_px(210, 130) == 0);
     /* Scrollbars: both arrows are drawn; with everything visible they are gray. */

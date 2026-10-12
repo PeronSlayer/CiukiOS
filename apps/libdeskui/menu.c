@@ -3,19 +3,10 @@
 #include "internal.h"
 #include <string.h>
 
-#define ITEM_H 17
-#define SEP_H 9
+#define ITEM_H DU_MENU_ITEM_H
+#define SEP_H DU_MENU_SEP_H
 
-static int label_width(const char *s)
-{
-    int n = 0;
-    for (; *s; s++) {
-        if (*s == '&' && s[1] != '&') continue;
-        if (*s == '&') s++;
-        if (((unsigned char)*s & 0xc0) != 0x80) n++;
-    }
-    return n * DU_CHAR_W;
-}
+static int label_width(const char *s) { return du_label_width(s); }
 
 static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 
@@ -31,8 +22,8 @@ static unsigned mnemonic(const char *s)
 struct du_rect du_menu_title(const struct du_ui *u, unsigned index)
 {
     int x = 2;
-    for (unsigned i = 0; i < index && i < u->menu_count; i++) x += label_width(u->menus[i].label) + 14;
-    int w = index < u->menu_count ? label_width(u->menus[index].label) + 14 : 0;
+    for (unsigned i = 0; i < index && i < u->menu_count; i++) x += label_width(u->menus[i].label) + 16;
+    int w = index < u->menu_count ? label_width(u->menus[index].label) + 16 : 0;
     return (struct du_rect){x, 1, w, DU_MENUBAR - 2};
 }
 
@@ -90,9 +81,13 @@ static void check(struct du_canvas *c, int x, int y, uint32_t ink, int radio)
 static void draw_dropdown(struct du_ui *u, const struct du_menu_item *items, unsigned n, struct du_rect box)
 {
     struct du_canvas *c = &u->canvas;
-    int labels, accel = accel_width(items, n, &labels);
-    du_fill(c, box, DU_FACE);
-    du_edge(c, box, DU_RAISED);
+    int labels, accel = accel_width(items, n, &labels), platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
+    if (platinum) {
+        /* Platinum menu: light face, thin outline and a soft shadow. */
+        du_shadow(c, box, 4);
+        du_fill(c, box, desk_mix(DU_HILITE, DU_FACE, 110));
+        du_outline(c, box, desk_mix(desk_theme->outline, DU_SHADOW, 120));
+    } else { du_fill(c, box, DU_FACE); du_edge(c, box, DU_RAISED); }
     int y = box.y + 3;
     for (unsigned i = 0; i < n; i++) {
         const struct du_menu_item *it = &items[i];
@@ -103,20 +98,28 @@ static void draw_dropdown(struct du_ui *u, const struct du_menu_item *items, uns
         }
         int sel = (int)i == u->menu_item, disabled = (it->flags & DU_ITEM_DISABLED) != 0;
         uint32_t ink = sel ? DU_SELECT_INK : DU_INK;
-        if (sel) { du_fill(c, (struct du_rect){box.x + 3, y, box.w - 6, h}, DU_SELECT); if (disabled) ink = DU_GRAY; }
+        if (sel) {
+            struct du_rect hl = {box.x + (platinum ? 1 : 3), y, box.w - (platinum ? 2 : 6), h};
+            if (platinum) {
+                struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+                desk_paint_vgradient(&p, hl.x, hl.y, hl.w, hl.h, desk_mix(0xffffffu, DU_SELECT, 50), DU_SELECT);
+            } else du_fill(c, hl, DU_SELECT);
+            if (disabled) ink = DU_GRAY;
+        }
         int ty = y + (h - DU_GLYPH_H) / 2;
         char key[32] = "";
         if (it->key) du_format_key(key, sizeof(key), it->key, it->modifiers);
         int ax = box.x + 3 + 20 + labels + 20;
         if (disabled && !sel) {
-            du_label(c, box.x + 24, ty + 1, it->label, DU_HILITE, 1); du_label(c, box.x + 23, ty, it->label, DU_GRAY, 1);
-            if (key[0]) { du_text(c, ax + 1, ty + 1, key, DU_HILITE); du_text(c, ax, ty, key, DU_GRAY); }
+            if (!platinum) du_label(c, box.x + 24, ty + 1, it->label, DU_HILITE, 1);
+            du_label(c, box.x + 23, ty, it->label, DU_GRAY, 1);
+            if (key[0]) { if (!platinum) du_text(c, ax + 1, ty + 1, key, DU_HILITE); du_text(c, ax, ty, key, DU_GRAY); }
         } else {
             du_label(c, box.x + 23, ty, it->label, ink, 1);
-            if (key[0]) du_text(c, ax, ty, key, ink);
+            if (key[0]) du_text(c, ax, ty, key, sel ? ink : desk_mix(ink, DU_FACE, 190));
         }
         if (it->flags & (DU_ITEM_CHECKED | DU_ITEM_RADIO) && it->flags & DU_ITEM_CHECKED)
-            check(c, box.x + 9, ty, ink, (it->flags & DU_ITEM_RADIO) != 0);
+            check(c, box.x + 9, ty + 1, ink, (it->flags & DU_ITEM_RADIO) != 0);
         (void)accel;
         y += h;
     }
@@ -136,11 +139,19 @@ static const struct du_menu_item *open_items(const struct du_ui *u, unsigned *n,
 void du_draw_menus(struct du_ui *u)
 {
     struct du_canvas *c = &u->canvas;
+    int platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
+    if (u->menu_count && platinum) {
+        struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+        desk_paint_vgradient(&p, 0, 0, c->width, DU_MENUBAR, desk_theme->face_top, desk_theme->face);
+    }
     for (unsigned i = 0; i < u->menu_count; i++) {
         struct du_rect t = du_menu_title(u, i);
-        if ((int)i == u->menu && !u->popup) du_edge(c, t, DU_SUNKEN_THIN);
-        int down = (int)i == u->menu && !u->popup;
-        du_label(c, t.x + 7 + down, t.y + (t.h - DU_GLYPH_H) / 2 + down, u->menus[i].label, DU_INK, 1);
+        int open = (int)i == u->menu && !u->popup;
+        if (open && platinum) du_fill(c, t, DU_SELECT);
+        else if (open) du_edge(c, t, DU_SUNKEN_THIN);
+        int down = open && !platinum;
+        du_label(c, t.x + 8 + down, t.y + (t.h - DU_GLYPH_H) / 2 + down, u->menus[i].label,
+                 open && platinum ? DU_SELECT_INK : DU_INK, 1);
     }
     unsigned n; struct du_rect box;
     const struct du_menu_item *items = open_items(u, &n, &box);

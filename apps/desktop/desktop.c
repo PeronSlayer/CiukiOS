@@ -447,10 +447,6 @@ static void shell_setup(struct desktop *d, int gate)
 #endif
     }
     scan_programs(d);
-    /* The supervisor delegates the writable mixer handle to the desktop (F4). */
-    const char *mixer=getenv("CIUKI_MIXER_FD");
-    int mfd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
-    d->mixer_fd=mfd>=3 && fcntl(mfd,F_GETFD)>=0 ? mfd : -1;
     /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
     d->sh.gate=gate;
     if (!gate) settings_load(d);
@@ -537,6 +533,10 @@ int main(int argc, char **argv)
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
+        /* The shell follows the theme key of DESK_SETTINGS_PATH (gates keep the default). */
+        if (d->shell && !gate && desk_theme_poll(DESK_SETTINGS_PATH,now)) {
+            desk_theme_changed(d); d->sh.wall_valid=0; desk_shell_wallpaper_update(d);   /* theme colours in the wallpaper */
+        }
         if (d->shell) {
             struct timespec rtc;
             if (!clock_gettime(CLOCK_REALTIME,&rtc) && rtc.tv_sec>=0 && d->realtime_second!=(uint64_t)rtc.tv_sec) {

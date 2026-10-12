@@ -38,13 +38,13 @@ void desk_focus(struct desktop *d, int i)
     desk_message(&m, DESK_FOCUS, 8);
     if (d->focus >= 0) {
         desk_queue(d, d->focus, &m);
-        desk_damage_add(&d->damage, d->clients[d->focus].frame, d->width, d->height);
+        desk_damage_add(&d->damage, desk_outer(&d->clients[d->focus]), d->width, d->height);
     }
     d->focus = i;
     if (i >= 0) {
         d->clients[i].order = ++d->order;
         desk_put32(m.data + 4, 1); desk_queue(d, i, &m);
-        desk_damage_add(&d->damage, d->clients[i].frame, d->width, d->height);
+        desk_damage_add(&d->damage, desk_outer(&d->clients[i]), d->width, d->height);
     }
     if (d->shell) {
         desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
@@ -130,7 +130,19 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
                 if (d->shell && desk_contains(desk_min_box(c),d->mouse_x,d->mouse_y)) {
                     desk_minimize(d,i); break;
                 }
+                if (d->shell && desk_contains(desk_shade_box(c),d->mouse_x,d->mouse_y)) {
+                    desk_collapse(d,i); break;
+                }
                 if (d->mouse_y < c->frame.y + DESK_TITLE) {
+                    /* Shell: a double-click on the title bar rolls the window
+                     * up to its title (Mac OS 8/9 windowshade) or back down. */
+                    int32_t dx = d->mouse_x - d->title_click_x, dy = d->mouse_y - d->title_click_y;
+                    if (d->shell && d->title_click_window == i && e.monotonic_ns >= d->title_click_ns &&
+                        e.monotonic_ns - d->title_click_ns < 500000000ull && dx <= 4 && dx >= -4 && dy <= 4 && dy >= -4) {
+                        d->title_click_window = -1; desk_collapse(d,i); break;
+                    }
+                    d->title_click_window = i; d->title_click_ns = e.monotonic_ns;
+                    d->title_click_x = d->mouse_x; d->title_click_y = d->mouse_y;
                     d->drag = i; d->drag_x = d->mouse_x - c->frame.x;
                     d->drag_y = d->mouse_y - c->frame.y; break;
                 }
