@@ -1289,6 +1289,12 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if profile.get('icount'):
         if profile['accelerator']!='tcg':raise res.Refusal('icount requires the tcg accelerator')
         args+=['-icount',profile['icount']]
+        # QEMU 10.2-11.1 (commit ebf7a5d2) keeps a stale last_tb across the synchronous
+        # code-buffer flush of single-threaded TCG and crashes in tb_jmp_unlink when a
+        # self-modifying guest (DOOM, Wolf3D) invalidates the first post-flush block.
+        # Without direct block chaining the stale link is never made (lead, 2026-10-12;
+        # docs/validation/2026-10-09-f0/README.md).
+        args+=['-d','nochain']
     # A FIFO file backend keeps COM1 file output bounded by the host collector.
     args+=['-serial','none' if devices.get('serial')=='none' else 'file:serial.fifo']
     audio_exception = devices.get('audio')
