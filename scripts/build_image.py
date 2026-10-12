@@ -78,7 +78,21 @@ def desktop_payloads():
     # time); the owner may add PNG/JPEG/BMP files to /system/wallpapers. Never Microsoft's
     # third_party/win_bg bitmaps: see docs/desktop.md.
     sources.update({f"/system/wallpapers/{name}": ROOT / "assets/wallpapers/ciuki" / name for name in WALLPAPERS})
-    return sources, {"/Programs", "/System", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
+    sound_sources, sounds = sound_payloads()
+    sources.update(sound_sources)
+    metadata["sounds"] = sounds
+    return sources, {"/system/sounds", "/Programs", "/System", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
+
+
+def sound_payloads():
+    """Validate and map the bounded provisional sound pack; no image build."""
+    spec = importlib.util.spec_from_file_location("build_sounds", ROOT / "scripts/build_sounds.py")
+    sound_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sound_build)
+    sounds = sound_build.validate()
+    sources = {(f"/system/sounds/{name}" if name != "sounds.cfg" else "/system/settings/sounds.cfg"):
+               sound_build.OUTPUT / name for name in sounds["files"]}
+    return sources, sounds
 
 
 def application_payloads():

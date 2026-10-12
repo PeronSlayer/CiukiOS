@@ -294,6 +294,7 @@ file before writing it and then asks the desktop to apply it.
 | `mouse_speed` | 1..10 (5 = one pixel per count; 2/8 .. 20/8) | 5 |
 | `double_click_ms` | 200..900 | 500 |
 | `keyboard` | `us`, `it` | `us` |
+| `display_mode` | confirmed VBE mode id, decimal 1..65535; 0 leaves the boot mode | 0 |
 | `recent` | absolute path; repeated, newest first, at most 8 | none |
 
 ### Wallpapers
@@ -329,24 +330,98 @@ image;** the desktop only shows them if the owner copies them into
 
 ### Control Panel (`/Programs/control`)
 
-A libdeskui program (500 x 420) with tabs Display (theme list with preview,
+f2-37 display research (2026-10-12):
+[Microsoft ChangeDisplaySettingsEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-changedisplaysettingsexw)
+distinguishes testing a mode from persisting it. CiukiOS therefore requests a
+temporary mode through the desktop and writes `display_mode` only after the
+user confirms a successful switch. The 15-second confirmation interval is
+the f2-37 requirement; it uses libdeskui's monotonic timer, not the UTC clock.
+[VESA VBE 3.0, controller and mode information](https://pdos.csail.mit.edu/6.828/2012/readings/hardware/vbe3.pdf)
+defines the BCD version, bytes per scanline and video memory units; the panel
+displays the normalized f1-23 record and offers only its linear 16/24/32-bit
+modes. It does not invent refresh rates or EDID information.
+[Upstream Linux PCI IDs](https://kernel.googlesource.com/pub/scm/linux/kernel/git/ralf/linux/+/linux-2.5.53/drivers/pci/pci.ids)
+identifies the SuperSavage IX/C (`5333:8c2e/8c2f`), Rage Mobility M/P
+(`1002:4c4d/4c52`) and contemporary Intel, NVIDIA, S3/VIA and 3dfx entries.
+The adapter table is descriptive; a match does not imply an accelerated
+driver. Unknown device pairs remain numeric. Repository comparison: the
+existing panel exposed wallpaper/theme only, with immediate settings reload;
+f1-23 owns the actual mode switch and compositor relayout.
+[The PCI ID project's upstream database](https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids)
+also confirms VIA CLE266 (`1106:3122`), KM400/KN400/P4M800 (`1106:7205`),
+and Intel 865G (`8086:2572`) and 915G (`8086:2582`) for the later baseline.
+
+A libdeskui program (560 x 420) with tabs Display (theme list with preview,
 wallpaper list with preview, Center/Tile/Stretch/Fit/Fill, six desktop colours,
-desktop icons on/off), Mouse (pointer speed and double-click speed, applied
+desktop icons on/off, Screen area and filtered Colours lists), Mouse (pointer speed and double-click speed, applied
 by the desktop), Keyboard (US or Italian), Sounds (master volume and mute
 through the desktop's mixer handle), Date & Time (the clock and the 24 h and
 seconds options; setting the clock is not offered because the ABI has no
-clock-setting call) and System (portrait, version, build, memory). Every
-change is saved and applied at once. `--panel=display|mouse|keyboard|sounds|
-datetime|system` selects the first tab (the Settings menu uses it).
+clock-setting call), System (portrait, version, build, memory and current
+display), and Adapter (current geometry/depth/pitch, VBE version/video memory,
+PCI adapter identity, VBE strings, monitor placeholder and Refresh).
+`--panel=display|mouse|keyboard|sounds|datetime|system|adapter` selects the
+first tab (the Settings menu uses it).
+
+Wallpaper and other preferences still save immediately. Resolution and colour
+depth stay staged until Apply. A successful desktop reply and matching query
+open “Keep these settings?” with a 15-second countdown; Revert is the default
+and Escape choice. Keep merges only `display_mode` into the latest settings
+file, preserving recent documents and unknown keys, then requests a reload.
+Revert, timeout, save failure and panel close request the previous active mode
+through the desktop relay. Main persists each successfully presented mode
+(see the integration note below). There is a separate 15-second
+reply timeout before confirmation and during rollback; missed rollback replies
+are reported, never described as a successful restore. Apply is disabled when
+the query is unavailable or the active mode cannot be identified for rollback.
+The two scrollable mode lists live below the wallpaper controls; the monitor
+preview and five Position buttons retain their geometry. libdeskui now has 64
+widget slots to accommodate the extra controls and seventh tab.
+
+**f1-23 integration:** the SDK overlay's `<ciuki/display.h>` now imports the
+canonical records from `<ciuki/abi.h>` (12-byte mode, 612-byte query info).
+The older 48-byte call-67 record is `struct ciuki_framebuffer_info`; no host
+ABI renaming shim or provisional desktop bridge remains. The SDK supplies
+call-74 query/set and `display_start` installs the real desktop callback,
+including pending-frame tracking, counter polling, relayout and startup replay.
+SETTINGS retains main's uint16 wire validation (including zero, which the kernel
+rejects if unlisted), reserved-zero fields, permission check and shutdown EBUSY
+guard. The relay calls the callback once and returns its result and serial.
+
+Integration research rechecked the [VESA VBE 2.0 Core Functions standard,
+sections 4.3–4.5](https://www.phatcode.net/res/221/files/vbe20.pdf): controller
+information supplies the mode list, strings and VRAM in 64 KiB units; mode
+information supplies geometry/pitch; setting an LFB uses bit 14. The existing
+f1-23 kernel owns that firmware operation. The Control Panel consumes its
+queried table and authenticated desktop relay; it adds no firmware calls.
+Main's desktop persists a mode after its first successful presented frame,
+including a preview or rollback. The panel's Keep/Revert timer remains, but
+strict persistence only after Keep needs a separate lead decision about that
+existing service contract.
 
 v2 opcode for it, client to desktop, version 2 only:
 
 | Opcode | Payload bytes | Fields |
 | --- | ---: | --- |
-| SETTINGS=21 | 24 | u32 serial@4, request@8 (1 reload desktop.cfg: the other fields zero; 2 master volume), left@12, right@16 (0..100), mute@20 (0/1) |
+| SETTINGS=21 | 24 | u32 serial@4, request@8: 1 reload (all three values zero); 2 master volume (left@12/right@16 0..100, mute@20 0/1); 3 temporary display mode (id@12 1..65535, @16/@20 reserved zero) |
 
 The desktop answers TASK_RESULT (request 21): 0, EPERM for any client it did
-not launch as `/Programs/control`, ENODEV for request 2 without the mixer handle.
+not launch as `/Programs/control`, ENODEV for request 2 without the mixer handle,
+ENOSYS for request 3 without a display callback, or the mode-set error (for
+example EBUSY while a DOS guest holds the display). The panel correlates display
+replies with the latest request serial; older replies cannot confirm a mode.
+The desktop callback applies temporary requests without setting `want_save`
+or `want_reload`. The confirmed key follows the existing settings reload path.
+
+Host coverage: `DesktopTests.test_control_display_modes` exercises the synthetic
+query table, duplicate resolution filtering, supported colour depths, control
+layout, acknowledgement/confirmation/revert, Escape and delayed timer ticks,
+query/queue/save failures, config merge and wire validation, PCI table lookups,
+Adapter rendering/Refresh and the System summary under ASan/UBSan.
+`test_shell_launcher` verifies the production desktop request permissions,
+result serial, mode callback, EBUSY/ENOSYS and lack of premature persistence.
+`CIUKI_WALL_FRAMES=build/f2-37` exports the host review PNGs; they are not guest
+or hardware qualification.
 
 ### Keyboard layouts
 
@@ -1207,3 +1282,49 @@ bootstrap/probe/SDK-header boundaries above remain lead-owned.
 
 No QEMU, systemd scope, full image build, commit, push or Git command is part of
 this implementer's evidence.
+
+## Display mode service (f1-23)
+
+The SDK's `<ciuki/display.h>` exposes `ciuki_display_query(info)` to any process
+and `ciuki_display_set(mode_id)` to the supervisor's desktop. Initialize
+`info.version=CIUKI_DISPLAY_VERSION` and `info.size=sizeof(info)`; the version-1
+record is 612 bytes and contains current width/height/depth/pitch, VRAM bytes,
+VBE BCD version, copied OEM/vendor/product strings, PCI adapter identity and
+up to 32 LFB modes. Query/set return 0 or **negative errno directly**. The
+existing syscall-67 framebuffer function and its 48-byte wire layout remain;
+its C record is now `struct ciuki_framebuffer_info`.
+
+Control Panel must ask the desktop to switch through its existing authenticated
+v2 settings channel: `DESK_SETTINGS_DISPLAY` (=3), 24-byte `DESK_SETTINGS`,
+serial at byte 4, request at 8, uint16 mode id encoded as u32 at 12, zeros at
+16/20. Only the Control Panel launched by this desktop is accepted. The desktop
+returns `DESK_TASK_RESULT` with request `DESK_SETTINGS` and 0 or negative errno.
+Send this request instead of calling set from the applet process or writing an
+unconfirmed mode into the configuration file. The UI belongs to f2-37.
+
+Each desktop frame polls the readable u32 change counter on its display
+fd (`read(fd,&counter,4)`). A committed mode or restore changes it. The desktop
+queries the active mode, allocates/maps a replacement XRGB8888 output surface,
+releases its previous mapping/fd, clamps windows and the pointer to the new work
+area, sends CONFIGURE to resizable clients and lays out bars/icons again.
+Client minimum/step constraints remain binding; an oversized fixed/minimum-size
+client is positioned with its title reachable and clipped by the compositor.
+The wallpaper cache is rebuilt for the new geometry and a full screen is
+presented. If output allocation fails, the old surface remains private and
+the kernel's independent 10 s frame watchdog restores the preceding mode.
+
+`/system/settings/desktop.cfg` gains `display_mode=<decimal VBE id>`; zero
+keeps the loader default. At startup the desktop tries it once only if it is
+still listed. Settings reloads preserve the confirmed mode; runtime changes
+use the settings-channel request above. The desktop saves the selected id only
+after a complete successful frame in that mode, and saves a restored mode after
+its recovery frame. The loader never reads this setting, so the next boot
+starts with its ordinary boot-mode selection before applying a qualified saved
+preference.
+
+The ABI, transaction/firmware ownership, source research and qualification
+matrix are specified in the [f1-23 acceptance amendment](design/f1-acceptance.md#amendment-f1-23--display-inventory-and-runtime-vbe-modes-2026-10-12).
+Host coverage: `tests/host/test_display_modes.py`, `display_test.c`, the firmware
+worker cases in `v86_test.c`, bootinfo cases in `kernel_lib_test.c`, and RGB565
+reference fixtures in `fbdev_test.c`. Real QEMU/T23/E500 mode changes remain
+lead-owned qualification.

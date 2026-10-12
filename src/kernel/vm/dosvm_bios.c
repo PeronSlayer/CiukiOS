@@ -459,6 +459,9 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
             uint32_t flags = shared ? irq_save() : 0;
             int result = v->ports[i].handler(v, port, width, write, value, v->ports[i].arg);
             if (shared) irq_restore(flags);
+            if (!result && write && ((port >= 0x40 && port <= 0x42) ||
+                (port == 0x43 && ((uint8_t)*value >> 6) < 3 && (*value & 0x30))))
+                dosvm_trace(v, DOSVM_TRACE_PIT, &v->frame, port, (uint8_t)*value, 0);
             return result;
         }
     if (port == DOSVM_FAULT_PORT) return -V86_EPERM;

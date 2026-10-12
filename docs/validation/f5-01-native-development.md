@@ -55,3 +55,33 @@ LGPL notice and runtime licence exception remain present.
 
 Host commands and their results, limitations and lead follow-up are recorded
 in `build/codex/f5-01-report.md`.
+
+## f5-01b merge preservation (2026-10-12)
+
+Rechecked the [TinyCC 0.9.27 manual](https://bellard.org/tcc/tcc-doc.html)
+before resolving the integration conflicts: the compiler's explicit source,
+output and library inputs still require the existing compiler/SDK payloads.
+Compared both merge sides with `build_desktop.py`, `client.c` and the image
+payload inventory. Keep CiukIDE and its desktop-authorized project launch,
+the Control Panel display and sound units, and the successful End Task sound.
+The desktop inventory now has 40 files: 23 desktop/IDE/icon/wallpaper files
+and 17 sound payloads. Retain both branches' tests and hash checks; update
+only expectations and host harness dependencies affected by their union.
+Host checks and remaining lead work are recorded in
+`build/codex/f5-01b-report.md`; guest qualification remains with the lead.
+
+The first desktop build exposed a read-only shared download-cache path.
+The [Python ZipFile documentation](https://docs.python.org/3/library/zipfile.html#zipfile.ZipFile)
+confirms that an existing archive can be opened directly in read mode.
+`scripts/build_sounds.py` previously copied the already vendored archive to
+the cache before reading it. Use that vendored archive directly when the
+cache is absent, retaining archive/member SHA-256 checks and the existing
+validated download fallback when neither archive is present.
+
+Regenerated `docs/developer-api.md` from the merged public headers (display
+API, display/launch syscall numbers, sound protocol and toolkit changes).
+Rebuilt the SDK and desktop, then refreshed Lua and TinyCC because their
+cached payloads referenced the pre-merge SDK/desktop manifests. The desktop
+suite passed all 64 tests; payload and native-development suites passed with
+one skip each (missing DOS boot fixture and sandbox-blocked Linux i386
+execution respectively). No canonical image or guest run was produced.

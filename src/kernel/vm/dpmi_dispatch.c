@@ -42,6 +42,17 @@ void dpmi_watch_hits(struct dosvm *v, uint32_t dr6)
         if ((dr6 & (1u << i)) && v->dpmi.watch[i].used) v->dpmi.watch[i].hit = true;
 }
 
+/* Intel SDM Vol. 3B 18.2.3: B0-B3 can include disabled breakpoint
+ * comparisons. Only allocated, locally enabled slots belong to this VM.
+ * BS/BD/BT are independent causes and must survive this filtering. */
+uint32_t dpmi_debug_status(const struct dosvm *v, uint32_t dr6)
+{
+    uint32_t enabled = 0;
+    for (unsigned i = 0; i < DPMI_WATCH; i++)
+        if (v->dpmi.watch[i].used && (v->dpmi.dr7 & (1u << (2 * i)))) enabled |= 1u << i;
+    return (dr6 & ~15u) | (dr6 & enabled);
+}
+
 /* Software interrupt n through the protected-mode vector table (0.9 2.4.2:
  * client stack, IF unchanged except INT 0-7, which run with it clear). */
 int dpmi_pm_interrupt(struct dosvm *v, struct v86_frame *f, uint8_t n)
@@ -228,6 +239,16 @@ static int pmint_return(struct dosvm *v, struct v86_frame *f)
         f->tf.eflags = (f->tf.eflags & ~0x08D5u) | (result.tf.eflags & 0x08D5u);
     }
     v->monitor.vif = rec.vif;           /* the virtual state saved at delivery */
+    if (rec.flags & DPMI_RF_HWINT) {
+        d->decode_valid = rec.decode_valid;
+        d->decode_cs = rec.decode_cs;
+        d->decode_eip = rec.decode_eip;
+        d->decode_stack_valid = rec.decode_stack_valid;
+        memcpy(d->decode_stack, rec.decode_stack, sizeof(d->decode_stack));
+        d->decode_ds_valid = rec.decode_ds_valid;
+        d->decode_stack_linear = rec.decode_stack_linear;
+        d->decode_ds_base = rec.decode_ds_base;
+    }
     return 0;
 }
 
@@ -373,11 +394,11 @@ static unsigned flags_instruction(const uint8_t *b, unsigned n, bool big, uint8_
     return at <= n && at <= 15 ? at : 0;
 }
 static bool flags_preceding(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
-                            uint8_t *pop, unsigned *width)
+                            uint8_t *pop, unsigned *width, bool boundary_only)
 {
     struct dpmi *d = &v->dpmi;
     uint32_t at = d->decode_eip, end = f->tf.eip;
-    if (!d->decode_valid || d->decode_cs != (uint16_t)f->tf.cs || at >= end ||
+    if (!d->decode_valid || d->decode_cs != (uint16_t)f->tf.cs || at > end ||
         end > cs->limit || end - at > 4096) return false;
     uint8_t previous = 0, last = 0;
     unsigned previous_w = 0, last_w = 0;
@@ -390,15 +411,205 @@ static bool flags_preceding(struct dosvm *v, struct v86_frame *f, const struct d
         previous = last; previous_w = last_w; last = op; last_w = w;
         at += len;
     }
+    if (boundary_only) return true;
     if (last == 0x9C) { *pop = 0; *width = last_w; return true; }
     if (previous != 0x9C || previous_w != last_w || !pop_register(f, last)) return false;
     *pop = last; *width = last_w; return true;
+}
+
+/* A save can live in a lower-addressed function called after the last
+ * trapped OUT (DMX timer setup). Decode control flow from that known
+ * boundary, never backwards from CLI. The snapshot permits root RET only
+ * along paths with known stack effects and no writes that could replace
+ * its return slots (absolute stores outside the stack are harmless).
+ * Calls have their own checked return slots; indirect transfers stop. */
+struct flags_path {
+    uint32_t at;
+    int32_t sp;
+    uint8_t previous, last, previous_w, last_w, depth;
+    bool stack_valid, ds_valid;
+    struct { uint32_t pc; int32_t sp; bool valid; uint8_t width; } call[4];
+};
+static void flags_stack_store(struct flags_path *p, const struct dpmi *d, bool known, uint32_t address, unsigned bytes)
+{
+    uint64_t end = (uint64_t)address + bytes;
+    if (!known || (address < (uint64_t)d->decode_stack_linear + sizeof(d->decode_stack) && end > d->decode_stack_linear))
+        p->stack_valid = false;
+    for (unsigned i = 0; i < p->depth; i++) {
+        uint32_t slot = d->decode_stack_linear + (uint32_t)p->call[i].sp;
+        if (!known || (address < (uint64_t)slot + 4 && end > slot)) p->call[i].valid = false;
+    }
+}
+static unsigned flags_opcode(const uint8_t *b, unsigned n, bool big, unsigned *w)
+{
+    *w = big ? 4 : 2;
+    for (unsigned i = 0; i < n; i++) {
+        uint8_t op = b[i];
+        if (op == 0x66) { *w = big ? 2 : 4; continue; }
+        if (op == 0x67 || op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E || op == 0x64 || op == 0x65) continue;
+        return i;
+    }
+    return n;
+}
+static bool flags_stack_effect(struct flags_path *p, const struct dpmi *d, const uint8_t *b,
+                                unsigned pos, unsigned len, unsigned w, bool big)
+{
+    uint8_t op = b[pos];
+    unsigned a = big ? 4 : 2;
+    bool absolute = p->ds_valid;
+    for (unsigned i = 0; i < pos; i++) {
+        if (b[i] == 0x67) a = big ? 2 : 4;
+        if (b[i] != 0x66 && b[i] != 0x67) absolute = false;
+    }
+    if ((op >= 0x50 && op <= 0x57) || op == 0x9C || op == 0x68 || op == 0x6A ||
+        op == 0x06 || op == 0x0E || op == 0x16 || op == 0x1E) {
+        p->sp -= w;
+        flags_stack_store(p, d, true, d->decode_stack_linear + (uint32_t)p->sp, w);
+    } else if ((op >= 0x58 && op <= 0x5F) || op == 0x9D || op == 0x07 || op == 0x1F) {
+        if (op == 0x5C) return false; /* POP ESP */
+        if (op == 0x1F) p->ds_valid = false;
+        p->sp += w;
+    } else if (op == 0x60) {
+        p->sp -= 8 * w;
+        flags_stack_store(p, d, true, d->decode_stack_linear + (uint32_t)p->sp, 8 * w);
+    }
+    else if (op == 0x61) p->sp += 8 * w;
+    else if (op == 0x44 || op == 0x4C || op == 0x94 || op == 0xBC || op == 0x17) return false;
+    else if (op == 0xA2 || op == 0xA3) {
+        uint32_t off = a == 4 ? vm_u32(b + pos + 1) : vm_u16(b + pos + 1);
+        flags_stack_store(p, d, absolute, d->decode_ds_base + off, op == 0xA2 ? 1 : w);
+    }
+    else {
+        bool alu = op < 0x40 && (op & 7) < 4;
+        bool group = op >= 0x80 && op <= 0x83;
+        bool move = op == 0x88 || op == 0x89 || op == 0x8C || op == 0xC6 || op == 0xC7;
+        bool load = op == 0x8A || op == 0x8B || op == 0x8D;
+        bool rm_write = move || (alu && !(op & 2) && op < 0x38);
+        if (alu || group || move || load || op == 0x86 || op == 0x87 || op == 0x8F ||
+            op == 0x8E || op == 0xC0 || op == 0xC1 || (op >= 0xD0 && op <= 0xD3) ||
+            op == 0xF6 || op == 0xF7 || op == 0xFE || op == 0xFF) {
+            unsigned m = b[pos + 1], mod = m >> 6, reg = (m >> 3) & 7, rm = m & 7;
+            if (op == 0x8E && reg == 2) return false; /* SS assignment */
+            if (op == 0x8E && reg == 3) p->ds_valid = false;
+            if ((load || (alu && (op & 2) && op < 0x38)) && reg == 4) return false;
+            if (group && reg != 7) rm_write = true;
+            if (op == 0x86 || op == 0x87) { rm_write = true; if (reg == 4) return false; }
+            if (op == 0x8F) { rm_write = true; p->sp += w; }
+            if (op == 0xC0 || op == 0xC1 || (op >= 0xD0 && op <= 0xD3) || op == 0xFE || op == 0xFF ||
+                ((op == 0xF6 || op == 0xF7) && (reg == 2 || reg == 3))) rm_write = true;
+            if (rm_write && mod != 3) {
+                bool known = absolute && mod == 0 && rm == (a == 4 ? 5u : 6u);
+                uint32_t off = known ? (a == 4 ? vm_u32(b + pos + 2) : vm_u16(b + pos + 2)) : 0;
+                bool byte = op == 0x88 || op == 0x86 || op == 0x80 || op == 0x82 || op == 0xC6 ||
+                    op == 0xC0 || op == 0xD0 || op == 0xD2 || op == 0xF6 || op == 0xFE;
+                flags_stack_store(p, d, known, d->decode_ds_base + off, byte ? 1 : op == 0x8C ? 2 : w);
+            }
+            if (rm_write && mod == 3 && rm == 4) {
+                if ((op != 0x81 && op != 0x83) || (reg != 0 && reg != 5)) return false;
+                int32_t imm = op == 0x83 ? (int8_t)b[len - 1] : w == 4 ? (int32_t)vm_u32(b + len - 4) : (int16_t)vm_u16(b + len - 2);
+                if (imm < -4096 || imm > 4096) return false;
+                p->sp += reg == 0 ? imm : -imm;
+            }
+        } else if (op == 0x0F) {
+            /* The supported two-byte instructions with a register result
+             * cannot assign ESP in a return proof. SETcc writes invalidate
+             * the root snapshot if their destination is memory. */
+            unsigned ext = b[pos + 1], m = b[pos + 2];
+            if (ext >= 0x90 && ext <= 0x9F) {
+                if ((m >> 6) != 3) flags_stack_store(p, d, false, 0, 1);
+            }
+            else if (((m >> 3) & 7) == 4) return false;
+        }
+    }
+    return p->sp >= -4096 && p->sp <= 4096;
+}
+static bool flags_control_preceding(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
+                                    uint8_t *pop, unsigned *width)
+{
+    struct dpmi *d = &v->dpmi;
+    if (!d->decode_valid || d->decode_cs != (uint16_t)f->tf.cs || f->tf.eip > cs->limit) return false;
+    struct flags_path paths[32] = {{.at=d->decode_eip, .stack_valid=d->decode_stack_valid, .ds_valid=d->decode_ds_valid}};
+    struct { uint32_t at; int32_t sp; unsigned depth; } seen[64];
+    unsigned head = 0, tail = 1, visited = 0, budget = 4096;
+    while (head < tail && budget) {
+        struct flags_path p = paths[head++];
+        while (budget && p.at <= cs->limit) {
+            if (p.at == f->tf.eip) {
+                if (p.last == 0x9C) { *pop = 0; *width = p.last_w; return true; }
+                if (p.previous == 0x9C && p.previous_w == p.last_w && pop_register(f, p.last)) {
+                    *pop = p.last; *width = p.last_w; return true;
+                }
+                break;
+            }
+            bool duplicate = false;
+            for (unsigned i = 0; i < visited; i++)
+                if (seen[i].at == p.at && seen[i].sp == p.sp && seen[i].depth == p.depth) { duplicate = true; break; }
+            if (duplicate) break;
+            if (visited < ARRAY_SIZE(seen)) {
+                seen[visited].at = p.at; seen[visited].sp = p.sp; seen[visited++].depth = p.depth;
+            }
+            uint8_t b[15], op;
+            unsigned n = cs->limit - p.at >= 14 ? 15 : cs->limit - p.at + 1, w;
+            if (dosvm_read(v, cs->base + p.at, b, n)) break;
+            unsigned pos = flags_opcode(b, n, cs->big, &w);
+            if (pos == n) break;
+            op = b[pos];
+            bool call = op == 0xE8, jump = op == 0xE9 || op == 0xEB;
+            bool cond = op >= 0x70 && op <= 0x7F;
+            bool near_cond = op == 0x0F && pos + 1 < n && b[pos + 1] >= 0x80 && b[pos + 1] <= 0x8F;
+            if (call || jump || cond || near_cond) {
+                unsigned imm_at = pos + (near_cond ? 2 : 1), iw = cond || op == 0xEB ? 1 : w;
+                unsigned len = imm_at + iw;
+                if (len > n || len > budget) break;
+                budget -= len;
+                int32_t rel = iw == 1 ? (int8_t)b[imm_at] : iw == 2 ? (int16_t)vm_u16(b + imm_at) : (int32_t)vm_u32(b + imm_at);
+                uint32_t next = p.at + len, target = next + (uint32_t)rel;
+                if (iw == 2 || !cs->big) target &= 0xFFFF;
+                p.previous = p.last = 0;
+                if (call) {
+                    if (p.depth == ARRAY_SIZE(p.call)) break;
+                    p.sp -= w;
+                    flags_stack_store(&p, d, true, d->decode_stack_linear + (uint32_t)p.sp, w);
+                    p.call[p.depth].pc = w == 2 ? next & 0xFFFFu : next;
+                    p.call[p.depth].sp = p.sp; p.call[p.depth].width = (uint8_t)w; p.call[p.depth++].valid = true;
+                    p.at = target;
+                } else if (jump) p.at = target;
+                else {
+                    if (tail < ARRAY_SIZE(paths)) { paths[tail] = p; paths[tail++].at = target; }
+                    p.at = next;
+                }
+                continue;
+            }
+            if (op == 0xC3) {
+                if (pos + 1 > budget) break;
+                budget -= pos + 1;
+                uint32_t target = 0;
+                if (p.depth) {
+                    if (p.sp != p.call[p.depth - 1].sp || !p.call[p.depth - 1].valid || p.call[p.depth - 1].width != w) break;
+                    target = p.call[--p.depth].pc;
+                } else {
+                    if (!p.stack_valid || p.sp < 0 || (unsigned)p.sp > sizeof(d->decode_stack) - w) break;
+                    memcpy(&target, (const uint8_t *)d->decode_stack + p.sp, w);
+                }
+                p.sp += w; p.at = target; p.previous = p.last = 0;
+                continue;
+            }
+            unsigned len = flags_instruction(b, n, cs->big, &op, &w);
+            if (!len || len > budget || !flags_stack_effect(&p, d, b, pos, len, w, cs->big)) break;
+            budget -= len;
+            p.previous = p.last; p.previous_w = p.last_w; p.last = op; p.last_w = (uint8_t)w;
+            p.at += len;
+            if (!cs->big) p.at &= 0xFFFF;
+        }
+    }
+    return false;
 }
 static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs)
 {
     uint8_t pop;
     unsigned width;
-    if (!flags_preceding(v, f, cs, &pop, &width)) return false;
+    if (!flags_preceding(v, f, cs, &pop, &width, false) &&
+        !flags_control_preceding(v, f, cs, &pop, &width)) return false;
     /* PUSHF's image of the real flags: IF set (the host never runs a client
      * disabled), IOPL 0, NT and TF clear, status flags as now (POP and the
      * trapped CLI change none). */
@@ -430,6 +641,7 @@ static bool flags_restored(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
     f->tf.eflags &= ~V86_TF;
     v->monitor.vif = true;
     d->stats.if_restored++;
+    dosvm_trace(v, DOSVM_TRACE_FLAGS, f, 1, 1, 0);
     return true;
 }
 
@@ -463,13 +675,16 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
     uint32_t next = f->tf.eip + len, mask = cs.big ? 0xFFFFFFFFu : 0xFFFFu;
     unsigned w = op32 ? 4 : 2;
     switch (op) {
-    case 0xFA:
-        if (v->monitor.vif && arm_flags_image(v, f, &cs)) {
+    case 0xFA: {
+        bool armed = v->monitor.vif && arm_flags_image(v, f, &cs);
+        if (armed) {
             d->if_armed = true;
             d->stats.if_armed++;
         }
         v->monitor.vif = false;
+        dosvm_trace(v, DOSVM_TRACE_FLAGS, f, 0, armed, 0);
         break;
+    }
     case 0xFB:
         if (!v->monitor.vif) {
             /* STI shadow: no IRQ before the next instruction retires. Not
@@ -589,12 +804,37 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
 
 int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
 {
+    /* A physical IRQ can land between PUSHF, POP and CLI without changing
+     * the guest context. Keep the older boundary only with a forward proof;
+     * otherwise the IRQ PC becomes the new seed as before. */
+    struct dpmi_seg cs;
+    bool irq = f->tf.vector >= 0x20 && f->tf.vector < 0x30;
+    bool keep = irq && dpmi_seg(v, (uint16_t)f->tf.cs, &cs) &&
+                flags_preceding(v, f, &cs, 0, 0, true);
+    /* The host IRQ-return stub restores an unchanged interrupted context,
+     * including its forward-decode seed. Do not replace it with the CLI PC. */
+    bool irq_return = f->tf.vector == 13 && !f->tf.err && (uint16_t)f->tf.cs == DPMI_HOST_CS &&
+        f->tf.eip == DPMI_PM_IRQRET && v->dpmi.depth &&
+        v->dpmi.rec[v->dpmi.depth - 1].kind == DPMI_REC_PMINT;
+    dr6 = dpmi_debug_status(v, dr6);
     int e = pm_trap(v, f, cr2, dr6);
     /* The returned PC (including handler entry and emulated fall-through) is
      * a known instruction boundary. Never seed from a backwards guess. */
-    v->dpmi.decode_valid = !e && v->frame_pm;
-    v->dpmi.decode_cs = (uint16_t)f->tf.cs;
-    v->dpmi.decode_eip = f->tf.eip;
+    if ((!keep && !irq_return) || e || !v->frame_pm) {
+        v->dpmi.decode_valid = !e && v->frame_pm;
+        v->dpmi.decode_cs = (uint16_t)f->tf.cs;
+        v->dpmi.decode_eip = f->tf.eip;
+        struct dpmi_seg ss, code, ds;
+        uint32_t lin;
+        v->dpmi.decode_stack_valid = !e && v->frame_pm &&
+            dpmi_seg(v, (uint16_t)f->tf.cs, &code) && dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss) &&
+            code.big == ss.big && dpmi_ptr(v, (uint16_t)f->tf.user_ss,
+                ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp, sizeof(v->dpmi.decode_stack), false, &lin) &&
+            !dosvm_read(v, lin, v->dpmi.decode_stack, sizeof(v->dpmi.decode_stack));
+        if (v->dpmi.decode_stack_valid) v->dpmi.decode_stack_linear = lin;
+        v->dpmi.decode_ds_valid = !e && v->frame_pm && dpmi_seg(v, (uint16_t)f->tf.ds, &ds) && ds.present;
+        if (v->dpmi.decode_ds_valid) v->dpmi.decode_ds_base = ds.base;
+    }
     return e;
 }
 
@@ -612,9 +852,13 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
     uint8_t vector = (uint8_t)(v->monitor.pic[irq >> 3].base + (irq & 7));
     struct dpmi_vec h = d->vec[vector];
     bool hooked = !is_default(h, DPMI_PM_INT, 256);
+    struct v86_frame from;
+    if (!irq && (g_boot.flags & CBI_F_VERBOSE)) from = *f;
     if (!hooked && !v->frame_pm) {
         int e = v86_irq_deliver(&v->monitor, f);
         irq_restore(flags);
+        if (!irq && !e && (g_boot.flags & CBI_F_VERBOSE))
+            dosvm_trace(v, DOSVM_TRACE_IRQ0, &from, vector, f->tf.cs & 0xFFFF, f->tf.eip);
         return e;
     }
     if (d->depth >= DPMI_DEPTH || (!hooked && d->rstack_top < DPMI_RSTACK_LEVEL)) {
@@ -627,7 +871,10 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
     v->monitor.stats.last_vector = vector;
     irq_restore(flags);
     v->monitor.state = V86_RUNNING;
-    if (!hooked) return dpmi_to_real_int(v, f, DPMI_REC_REFLECT, (uint8_t)(h.off - DPMI_PM_INT), DPMI_RF_HWINT);
-    d->stats.irqs_pm++;
-    return dpmi_enter_pm_handler(v, f, vector, DPMI_RF_HWINT);
+    int e;
+    if (!hooked) e = dpmi_to_real_int(v, f, DPMI_REC_REFLECT, (uint8_t)(h.off - DPMI_PM_INT), DPMI_RF_HWINT);
+    else { d->stats.irqs_pm++; e = dpmi_enter_pm_handler(v, f, vector, DPMI_RF_HWINT); }
+    if (!irq && !e && (g_boot.flags & CBI_F_VERBOSE))
+        dosvm_trace(v, DOSVM_TRACE_IRQ0, &from, vector, f->tf.cs & 0xFFFF, f->tf.eip);
+    return e;
 }

@@ -14,7 +14,9 @@
 #include <ciuki/registry.h>
 #include <ciuki/storage.h>
 #include <ciuki/audio.h>
+#include <ciuki/net.h>
 #pragma weak audio_init
+#pragma weak net_init
 
 static struct drivers_state state;
 static struct activation_entry activation_ledger[ACTIVATION_LEDGER_MAX];
@@ -142,5 +144,6 @@ void drivers_init(void)
     klog("[init] files result=%d; audio init", native_files);
     if (audio_init) audio_init(&storage_get()->vfs);
     klog("[init] audio init done");
+    if (net_init) net_init();
     if (native_files) klog("[files] initialization failed: %d", native_files);
 }

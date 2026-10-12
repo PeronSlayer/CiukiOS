@@ -33,7 +33,7 @@ int v86_begin(struct v86 *v, uint64_t now, uint32_t ticks)
 {
     if (v->state == V86_DISABLED)
         return -V86_EIO;
-    if (v->state == V86_RUNNING || v->state == V86_HALTED || !ticks || ticks > 500)
+    if (v->state == V86_RUNNING || v->state == V86_HALTED || !ticks || ticks > (v->max_call_ms ? v->max_call_ms : 500))
         return -EINVAL;
     v->state = V86_RUNNING;
     v->ticks = now;

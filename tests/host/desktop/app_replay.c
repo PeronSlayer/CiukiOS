@@ -306,7 +306,7 @@ int ciuki_surface_info(int fd, struct ciuki_surface_info *s)
     if (!o || o->kind != K_SURFACE) { errno = EBADF; return -1; }
     *s = o->surface->info; return 0;
 }
-int ciuki_display_info(int fd, struct ciuki_display_info *s)
+int ciuki_display_info(int fd, struct ciuki_framebuffer_info *s)
 {
     struct obj *o = fd_obj(cur, fd);
     if (!o || o->kind != K_DISPLAY) { errno = EBADF; return -1; }
@@ -938,3 +938,6 @@ int main(int argc, char **argv)
     fflush(stdout);
     _exit(0);
 }
+
+int ciuki_display_query(struct ciuki_display_info *i) { (void)i; return -ENOSYS; }
+int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }

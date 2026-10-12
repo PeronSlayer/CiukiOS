@@ -216,6 +216,7 @@ int dpmi_entry_complete(struct dosvm *v, struct v86_frame *f, uint16_t psp)
     d->decode_valid = true;
     d->decode_cs = (uint16_t)p.tf.cs;
     d->decode_eip = p.tf.eip;
+    d->decode_stack_valid = d->decode_ds_valid = false; /* entry is a new stack context */
     d->stats.entries++;
     return 0;
 }
@@ -587,7 +588,9 @@ static int service(struct dosvm *v, struct v86_frame *f, unsigned ax)
         }
         case 0x0201: {
             uint16_t ivt[2] = {dx, cx};
-            return dosvm_write(v, (uint32_t)bl * 4, ivt, 4) ? 1 : 0;
+            int e = dosvm_write(v, (uint32_t)bl * 4, ivt, 4) ? 1 : 0;
+            if (!e) dosvm_trace(v, DOSVM_TRACE_VECTOR, f, (ax << 8) | bl, cx, dx);
+            return e;
         }
         case 0x0202: case 0x0204: {
             if (ax == 0x0202 && bl > 0x1F) return 1;
@@ -604,6 +607,7 @@ static int service(struct dosvm *v, struct v86_frame *f, unsigned ax)
                 if (!vector_ok(v, cx, off, DPMI_PM_INT, 256)) return 1;
                 d->vec[bl] = (struct dpmi_vec){off, cx};
             }
+            dosvm_trace(v, DOSVM_TRACE_VECTOR, f, (ax << 8) | bl, cx, off);
             return 0;
         }
         default: return 1;              /* 0210h-0213h are DPMI 1.0 */

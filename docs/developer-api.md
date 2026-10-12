@@ -504,7 +504,8 @@ enum ciuki_syscall {
     CIUKI_SYS_PROC_TERMINATE = 71,
     CIUKI_SYS_DOSVM = 72,
     CIUKI_SYS_POWER = 73,
-    CIUKI_SYS_LAUNCH_MARK = 74,
+    CIUKI_SYS_DISPLAY = 74,
+    CIUKI_SYS_LAUNCH_MARK = 75,
 };
 ```
 
@@ -1362,8 +1363,48 @@ uint32_t allocation_bytes;
 
 ```c
 };
+```
 
+f1-23: syscall 74. Query=0 (ECX pointer), set=1 (ECX mode id).
+Syscall 67 retains its original 48-byte framebuffer wire record below.
+
+```c
+#define CIUKI_DISPLAY_VERSION 1
+#define CIUKI_DISPLAY_QUERY 0u
+#define CIUKI_DISPLAY_SET 1u
+struct ciuki_display_mode {
+    uint16_t id;
+    uint16_t width;
+    uint16_t height;
+    uint16_t bpp;
+    uint16_t pitch;
+    uint8_t linear;
+    uint8_t current;
+};
 struct ciuki_display_info {
+    uint32_t version;
+    uint32_t size;
+    uint16_t width;
+    uint16_t height;
+    uint16_t bpp;
+    uint16_t pitch;
+    uint32_t vram_bytes;
+    uint32_t vbe_version;
+    char oem[64];
+    char vendor[64];
+    char product[64];
+    uint16_t pci_vendor;
+    uint16_t pci_device;
+    uint16_t pci_class;
+    uint16_t pci_subclass;
+    uint32_t mode_count;
+    struct ciuki_display_mode modes[32];
+};
+
+
+
+
+struct ciuki_framebuffer_info {
     uint32_t size;
 ```
 
@@ -2120,7 +2161,13 @@ f2-36, version 2, client to desktop: uint32 length, then 1..63
 printable ASCII bytes. Updates only the sending client's window.
 
 ```c
-DESK_SET_TITLE
+DESK_SET_TITLE,
+    DESK_SOUND
+```
+
+v2: uint32 event; toolkit menu and dialog events
+
+```c
 };
 #define DESK_SETTINGS_RELOAD 1u
 ```
@@ -2128,10 +2175,29 @@ DESK_SET_TITLE
 re-read /system/settings/desktop.cfg and apply it
 
 ```c
+#define DESK_SETTINGS_DISPLAY 3u
+```
+
+VBE mode id in value[0]; value[1..2]=0; desktop persists after frame
+
+```c
 #define DESK_SETTINGS_MASTER 2u
 ```
 
 set the master volume: left, right 0..100, mute 0/1
+
+```c
+#define DESK_SETTINGS_SOUND_RELOAD 4u
+#define DESK_SETTINGS_SOUND_TEST 5u
+```
+
+values[0]: event index
+
+```c
+#define DESK_SETTINGS_AUDIO_TEST 6u
+```
+
+full tone accepted: asynchronous TASK_RESULT
 
 ```c
 #define DESK_WINDOW_UNRESPONSIVE 1u
@@ -2162,7 +2228,7 @@ struct ciuki_input_event event;
     uint32_t values[3];
 ```
 
-SETTINGS: left, right, mute
+SETTINGS: left/right/mute or mode id/0/0
 
 ```c
 uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
@@ -2180,6 +2246,27 @@ Surface info is required for CREATE and DAMAGE (the attachment on a swap).
 int desk_parse(const struct ciuki_message *m, int from_client,
                const struct ciuki_surface_info *surface, struct desk_packet *out);
 int desk_surface_valid(const struct ciuki_surface_info *s);
+#endif
+```
+
+## `ciuki/display.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/display.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_DISPLAY_H
+#define CIUKI_DISPLAY_H
+#include <ciuki/abi.h>
+```
+
+These two calls return 0 or a negative errno (they do not translate to -1).
+Query requires version=CIUKI_DISPLAY_VERSION and size=sizeof(*info).
+
+```c
+int ciuki_display_query(struct ciuki_display_info *);
+int ciuki_display_set(uint16_t mode_id);
 #endif
 ```
 
@@ -2338,7 +2425,7 @@ int ciuki_surface_create(uint32_t,uint32_t,uint32_t);
 void *ciuki_surface_map(int,int);
 int ciuki_surface_info(int,struct ciuki_surface_info *);
 int ciuki_present(int,int,const struct ciuki_rect *);
-int ciuki_display_info(int,struct ciuki_display_info *);
+int ciuki_display_info(int,struct ciuki_framebuffer_info *);
 int ciuki_input_read(int,struct ciuki_input_event *,uint32_t);
 #endif
 ```
@@ -2407,7 +2494,7 @@ Icon slots (16 menus/lists, 22 toolbars, 32 large icons and dialogs).
 #define DU_ICON_TOOLBAR (desk_theme->icon_toolbar)
 #define DU_ICON_LARGE   (desk_theme->icon_large)
 
-#define DU_WIDGETS       48
+#define DU_WIDGETS       64
 #define DU_DIALOG_ITEMS  10
 #define DU_TIMERS        8
 #define DU_TEXT_MAX      1040
@@ -2786,6 +2873,8 @@ struct du_event pending[4]; unsigned pending_count;
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
 
 struct du_ui {
+    void (*sound)(void *, unsigned);
+    void *sound_ctx;
     struct du_canvas canvas;
     struct du_widget widgets[DU_WIDGETS];
     unsigned count;

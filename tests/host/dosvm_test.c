@@ -38,6 +38,7 @@ struct task *g_current = &caller;
 uint32_t g_task_count, g_user_mappings;
 volatile uint64_t g_ticks;
 volatile bool g_need_resched;
+struct ciuki_boot_info g_boot;
 static uint32_t read_cr3(void) { return cpu_cr3; }
 static void write_cr3(uint32_t x) { cpu_cr3 = x; }
 static uint32_t fake_cr2 = 0xDEAD000;
@@ -241,6 +242,15 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     n=snprintf(last_record,sizeof(last_record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s %s",++records,probe,event,extra);
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
     if (strstr(extra,"group=guest ")) guest_records++;
+}
+void rec_diag(const char *probe, const char *fmt, ...)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    CHECK(cpu_flags & V86_IF);
+    char extra[240]; va_list ap; va_start(ap,fmt);
+    int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
+    CHECK(n>=0 && n<(int)sizeof(extra));
+    rec_emit(probe,"DATA","%s",extra);
 }
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
@@ -530,6 +540,7 @@ static void test_memory_services(void)
 #include "dosvm_video_test.inc"
 #include "dosvm_audio_test.inc"
 #include "dosvm_dpmi_test.inc"
+#include "dosvm_timer_test.inc"
 #include "dosvm_vmaudio_test.inc"  /* f4-05: VM sources in the mixer (separate units) */
 #include "dosvm_workloads_test.inc"
 int main(void)
@@ -539,6 +550,7 @@ int main(void)
     test_video();
     test_vm_audio();
     test_workloads();
+    test_timer();
     CHECK(guest_enters==2 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

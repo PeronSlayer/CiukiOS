@@ -28,6 +28,8 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/storage.h>
 #include <ciuki/reboot.h>
+#include <ciuki/net.h>
+#pragma weak net_shutdown
 #endif
 
 #define ACPI_TABLE_MAX   (256u * 1024u)   /* a DSDT above this is refused */
@@ -364,6 +366,7 @@ int32_t power_syscall(uint32_t action)
     if (off) soft_off_available();       /* parse before storage stops */
     int e = flush_storage();
     if (e) return e;
+    if (net_shutdown) net_shutdown();
     if (!off) kernel_reboot();
     if (soft_off_state <= 0) {
         klog("[power] no soft-off method; storage stopped, safe to turn off");

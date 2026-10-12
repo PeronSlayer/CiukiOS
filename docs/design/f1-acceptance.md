@@ -455,3 +455,92 @@ Consequently the hardware cold-reopen import cannot pass that predicate until
 a reviewed contract distinguishes cursor persistence from workload writes.
 FAT write/read qualification and panic write baselines likewise must account
 for the explicit cursor writer without concealing its I/O.
+
+## Amendment f1-23 — Display inventory and runtime VBE modes (2026-10-12)
+
+The owner's display-properties directive advances a bounded VBE switch from
+F4 to F1. This amendment supersedes the earlier boot-only framebuffer rule
+for this operation; it does not enable GPU acceleration or arbitrary BIOS I/O.
+Research compared `ciukldr/video.inc`, `bootinfo.c`, `fbdev.c`, `grants.c` and
+`biosvm.c` against [VESA VBE 3.0, functions 00h–03h](https://www.cs.utexas.edu/~dahlin/Classes/UGOS/reading/vbe3.pdf),
+[SeaBIOS 1.16.3 VBE implementation](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/vgasrc/vbe.c)
+and the [QEMU Standard VGA specification](https://www.qemu.org/docs/master/specs/standard-vga.html).
+The resulting decision uses controller TotalMemory in 64 KiB units, copied
+ASCII strings, bit 14 for LFB mode sets, VBE 2.x ordinary pitch/masks and VBE
+3.x Lin* fields. Runtime confirmation includes 4F01 and 4F03; never guess a
+pitch from width or retain a cached physical address across a switch.
+
+**Loader handoff.** Version 2 preserves every byte of the v1 `0x10F0` prefix
+and appends a 596-byte `DISP` block, total size `0x1344`. Block fields are
+u32 tag=`0x50534944`, size=596, VBE BCD version, VRAM bytes; three 64-byte
+OEM/vendor/product strings; u32 mode_count; 32 packed 12-byte modes
+(u16 id,width,height,bpp,pitch; u8 linear,reserved). Strings are bounded to
+63 printable ASCII bytes plus NUL; invalid characters become `?`, far pointers
+outside the first MiB produce empty strings. Only unique validated LFB direct
+colour modes, one plane, 640..1600 by 480..1200 and 16/24/32 bpp are exported.
+The first 32 are retained, replacing the last slot with the actual boot mode
+if necessary. The kernel checks tag, size, controller-copy agreement, strings,
+count, ids, duplicates, geometry, pitch, capacity and reserved fields. Version 1
+remains accepted at its original size and is copied without reading an extension;
+its inventory/strings are unavailable and runtime sets are refused.
+
+**ABI.** Call 74, `CIUKI_SYS_DISPLAY`: EBX=0 queries the ECX pointer to the
+612-byte `ciuki_display_info`; EBX=1 sets the uint16 mode id in ECX. All other
+argument registers are zero. Query checks caller version=1 and size=612 before
+copying the result; any process may query. The exact public structures and
+wrappers are in `src/sdk/include/ciuki/display.h` and the SDK installation
+source `sdk/sysroot-overlay/include/ciuki/display.h` (identical headers using
+`ciuki/abi.h`). These wrappers return negative errno directly. Call 67 retains
+its 48-byte binary record, now named `ciuki_framebuffer_info`, and the existing
+`ciuki_display_info(fd, ...)` function. Recompile clients using the new headers.
+PCI identity comes from the first class-03 function in the read-only registry;
+zero means unknown. No physical framebuffer address is exported.
+
+**Ownership and transaction.** Set requires the live supervisor desktop PID
+and its exclusive display descriptor. Unknown ids, competing grants and an
+in-progress presentation/switch are refused. A boot mode outside the exported
+range prevents switching because restoration cannot be promised. Current DOS windows render into
+private surfaces and have no physical display grant; they do not contend with
+the desktop's grant. Firmware dependencies are prepared before altering the framebuffer.
+Presentations are drained, the registry claim is quiesced,
+and both the console alias and presenter mapping are revoked before firmware.
+No registry or presenter lock crosses firmware entry. The one BIOS worker
+serializes 4F02(LFB), 4F01 into private scratch at 1000:0800, and 4F03, within
+a 2 s total budget. The ordinary `biosvm_call` allowlist remains input-only.
+Video owns VGA port/aperture leases and temporarily maps A0000..BFFFF in that
+VM. Bochs DISPI word ports 1CE/1CF/1D0 are allowed only for detected QEMU
+`1234:1111`. PIC/PIT remain virtual, native input ports stay unavailable to
+INT10, and unknown hardware dependencies fail closed. An unexpected VM fault
+retains/quarantines leases and cannot be reset to force a restore.
+
+The returned mode must match listed geometry/depth, have valid RGB masks and
+fit controller memory; RAM/kernel aliases are rejected. A reusable uncached
+MMIO window remaps the confirmed base/pitch, avoiding growth on every switch.
+The old claim is released only after quiescence. A failed set or validation
+attempts the same confirmed sequence for the previous mode and returns EIO.
+If restoration cannot be proven, pixels remain unavailable with mappings
+revoked; there is no competing CPU fallback onto uncertain hardware.
+`[display] mode=<decimal id> <w>x<h>x<bpp> pitch=<n> result=<e>` records each
+set/restore result on serial.
+
+**Notification and frame watchdog.** Reading exactly four bytes from the
+owner's display descriptor returns a nonblocking u32 change counter. It advances
+on a committed mode and on a confirmed restore. A separate kernel task checks
+for a complete successful desktop present within 10 seconds, with the active
+framebuffer generation. Partial, stale or late presents do not acknowledge it.
+Expiry restores the previous mode and advances the counter; a pending switch
+blocks another set. The desktop reallocates its output surface, clamps/reconfigures
+windows, lays out bars/icons and rebuilds wallpaper before a full repaint. It
+persists `display_mode` only after that frame; a failed allocation keeps the
+previous saved id and leaves watchdog recovery armed. Boot selection is unchanged.
+
+| Tier | Required f1-23 evidence |
+| --- | --- |
+| T0 | Synthetic loader inventory, controller strings and v1/v2 parsing; ABI/version/size/pointer/id/rights validation; revoke/confirm/remap order, success/failure/restore; RGB565 reference comparisons; 10 s watchdog including tick wrap; compositor relayout and configuration round trip. |
+| T0 | Production BIOS worker/monitor harness: 4F02→4F01→4F03, failure then restore, temporary aperture removal, native-input isolation and timeout quarantine. Host ROM responses are synthetic, not real BIOS qualification. |
+| T1 | Lead's canonical build/image checks, including v2 loader/bootinfo agreement and freshly built SDK/desktop payloads. |
+| T2–T3 | Lead runs existing QEMU gates, then `-vga std`: query inventory/PCI/OEM/memory, switch resolutions and all advertised depths, confirm pixels/geometry/serial log, client CONFIGURE and full repaint, config reopen, failure recovery and killed/stalled desktop watchdog. |
+| T4 | Same image on T23 and E500: record BIOS/image identity, controller strings, VRAM, advertised modes and PCI device; verify real VBE changes/restores, pitch/base/masks and input/timer continuity. T23 requires actual S3 SuperSavage `5333:8C2E` evidence. Unknown non-VGA dependencies must remain refused until separately mediated and qualified. |
+
+Implementer evidence is host-only. No QEMU, image build, hardware qualification,
+commit or diary is implied by this amendment.

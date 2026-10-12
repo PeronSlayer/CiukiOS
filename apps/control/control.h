@@ -7,20 +7,28 @@
 #define CIUKI_CONTROL_H
 #include "../libdeskui/deskui.h"
 #include "../desktop/settings.h"
+#include "../desktop/sounds.h"
 #include "../desktop/wallpaper.h"
+#include <ciuki/display.h>
 #include <stdint.h>
-#define CP_WIDTH 500
+#define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
-enum { CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM, CP_PAGES };
+enum { CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM, CP_ADAPTER, CP_PAGES };
+enum { CP_AREA_LABEL = 800, CP_AREA, CP_DEPTH_LABEL, CP_DEPTH, CP_APPLY, CP_MODE_NOTE,
+       CP_REFRESH, CP_SUMMARY, CP_CONFIRM, CP_MODE_TIMER };
+enum { CP_MODE_IDLE, CP_MODE_WAIT, CP_MODE_CONFIRM, CP_MODE_REVERT };
 struct cp_host {
     int (*load)(void *, char *text, size_t size, size_t *length);      /* desktop.cfg; -1 when absent */
     int (*save)(void *, const char *text, size_t length);
     int (*wallpapers)(void *, char names[][CFG_PATH_MAX], unsigned capacity);   /* absolute paths */
     int (*decode)(void *, const char *path, struct desk_image *out);
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
-    int (*apply)(void *, unsigned request, int volume, int muted);      /* DESK_SETTINGS */
+    int (*apply)(void *, unsigned request, int value, int flag);        /* DESK_SETTINGS: volume/mute or temporary mode id/0 */
     uint64_t (*now)(void *);                                          /* UTC seconds */
+    int (*load_sounds)(void *, char *, size_t, size_t *);
+    int (*save_sounds)(void *, const char *, size_t);
+    int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
     uint32_t screen_w, screen_h;
@@ -31,7 +39,10 @@ struct cp_app {
     struct du_ui *ui;
     struct cp_host host;
     struct ciuki_settings cfg;
-    int page, volume, muted, mixer_ok;
+    int page, volume, muted, mixer_ok, audio_testing;
+    char sound_text[SOUND_TEXT_MAX+1];
+    struct sound_scheme sounds; unsigned sound_selected;
+    struct du_item sound_items[SOUND_EVENTS];
     char wall_names[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
     struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 8], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
     char wall_labels[CP_WALLPAPERS + 8][48];
@@ -42,9 +53,27 @@ struct cp_app {
     char image_path[128];           /* path of the wallpaper decoded into image (preview_build cache) */
     char status[96], clock_line[64], date_line[64];
     int quit;
+    struct ciuki_display_info display;
+    struct du_item area_items[32], depth_items[3];
+    char area_labels[32][32];
+    uint16_t area_w[32], area_h[32], depths[3];
+    unsigned area_count, depth_count, area, depth;
+    int display_ok, mode_state;
+    uint16_t previous_mode, pending_mode;
+    uint64_t mode_deadline;
+    char adapter_lines[10][160];
 };
 int cp_attach(struct cp_app *, struct du_ui *, int page);
 void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);
+void cp_audio_result(struct cp_app *, int result);
+int cp_display_refresh(struct cp_app *);
+void cp_display_sync(struct cp_app *);
+int cp_display_event(struct cp_app *, const struct du_event *);
+void cp_display_result(struct cp_app *, int result);
+void cp_display_cancel(struct cp_app *);
+void cp_adapter_paint(struct cp_app *, struct du_canvas *);
+const char *cp_adapter_name(uint16_t vendor, uint16_t device, char *out, size_t size);
+void cp_settings_message(struct ciuki_message *, uint32_t serial, unsigned request, int value, int flag);
 #endif
