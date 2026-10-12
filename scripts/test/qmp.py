@@ -60,7 +60,10 @@ class QMP:
             if result.get('id')==identifier:
                 if 'error' in result: raise RuntimeError('QMP command failed: '+str(result['error']))
                 return result.get('return')
-        raise RuntimeError('QMP response deadline')
+        # TimeoutError: run.py classifies it as a case timeout (timeout.occurred),
+        # like a socket timeout; a RuntimeError here bypassed that classification
+        # (runner test test_timeout_identifies_pending_cut_and_arm, qmp phase).
+        raise TimeoutError('QMP response deadline')
 
     def input_events(self,events):
         """QAPI InputEvent, qcode keys and PS/2 relative motion only."""
