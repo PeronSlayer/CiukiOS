@@ -161,6 +161,28 @@ def application_provenance(sources, manifest, sdk):
     return "".join(lines)
 
 
+def games_payloads(dos_image, out=None):
+    """Owner decision 2026-10-12: Wolfenstein 3-D and DOOM shareware are
+    pre-installed. The games disk (the DOS system plus \\WOLF3D and \\DOOM,
+    from the pinned archives in third_party/games) is the base of every
+    /bin/dosbox window VM (dosvm_disk.c, C:\\GAMES\\CIUKIGAM.IMG); the
+    packages' licence documents and provenance go to /system/licenses.
+    Returns sources, directories, metadata and the SHA-256 set of pinned
+    shareware files the local-payload guard accepts. out: the disk's path
+    (default build/f0/games/CIUKIGAM.IMG; host tests write elsewhere)."""
+    spec = importlib.util.spec_from_file_location("build_games_disk", ROOT / "scripts/build_games_disk.py")
+    games = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(games)
+    image, manifest = games.build(out, dos_image)
+    sources = {"/GAMES/CIUKIGAM.IMG": image}
+    for record in manifest["licenses"]:
+        sources[f"/system/licenses/{record['package']}-{record['name']}"] = ROOT / record["path"]
+    for package in manifest["packages"]:
+        sources[f"/system/licenses/{package['name']}-UPSTREAM.json"] = ROOT / games.GAMES / package["name"] / "UPSTREAM.json"
+    metadata = {k: v for k, v in manifest.items() if k not in ("checkers", "geometry")}
+    return sources, {"/GAMES", "/system/licenses"}, metadata, games.free_hashes()
+
+
 def payload_records(sources):
     return [{"path": name, "sha256": sha256(source), "size": source.stat().st_size}
             for name, source in sorted(sources.items())]
@@ -266,6 +288,9 @@ def build(kernel, out, boot_cfg):
     sources["/system/dos/DOSBOOT.IMG"] = dos_image
     directories.add("/system/dos")
     metadata["dos"] = dos_manifest
+    games_sources, games_directories, metadata["games"], free = games_payloads(dos_image)
+    sources.update(games_sources)
+    directories.update(games_directories)
     out.parent.mkdir(parents=True, exist_ok=True)
     # Large scratch files stay on disk beside the output, never in /tmp.
     with tempfile.TemporaryDirectory(prefix=".image-", dir=out.parent) as directory:
@@ -297,8 +322,9 @@ def build(kernel, out, boot_cfg):
             "-n", "CIUKIOS", volume)
         sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
         payloads = payload_records(sources)
-        # f3-06: owner-local game files never enter the canonical image.
-        dos_build.refuse_local_payloads({p["path"]: p["sha256"] for p in payloads})
+        # f3-06: owner-local game files never enter the canonical image; only
+        # files pinned in the vendored shareware packages may equal one.
+        dos_build.refuse_local_payloads({p["path"]: p["sha256"] for p in payloads}, free=free)
         populate_payloads(volume, sources, directories)
         # mtools updates the primary allocation hint but not its backup.
         with volume.open("r+b") as stream:

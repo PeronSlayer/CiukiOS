@@ -382,6 +382,71 @@ static void test_workload_base_image(void)
     printf("f3-06 base image: further read-only image, workload disk lookup within the kernel heap limit, window VMs (syscall 72, mixer attached) boot it with the staged DPMI host\n");
 }
 
+/* Owner decision 2026-10-12: the bundled shareware games disk
+ * (C:\GAMES\CIUKIGAM.IMG, scripts/build_games_disk.py) is the window VMs'
+ * base when no local fixture disk is attached; the workload probes keep the
+ * fixture only (their pins are the owner's data); a base cut after its last
+ * used sector reads as zeros past its end. */
+static void test_bundled_games_base(void)
+{
+    char path[24] = "x";
+    struct dosvm *v = 0;
+    workload_disk = false; bundled_disk = true; bundled_bytes = 4096u * 512u;
+    unsigned scans = bundled_scans;
+    CHECK(dosvm_workload_base(path) == -ENOENT && !path[0] && bundled_scans == scans && !tables);
+    CHECK(!dosvm_window_base(path) && !strcmp(path, "C:\\GAMES\\CIUKIGAM.IMG") && bundled_scans == scans + 1);
+    CHECK(!tables && !workload_busy && !heap_blocks);
+    workload_disk = true;                                   /* the owner's local disk takes precedence */
+    CHECK(!dosvm_window_base(path) && !strcmp(path, "D:\\CIUKIGAM.IMG") && bundled_scans == scans + 1);
+    workload_disk = false;
+    /* A cut base: no VFS read past its end, zeros instead; writes there go to the overlay. */
+    struct dosvm_config c = {.commitment = DOSVM_LOW_CAP, .base = "C:\\GAMES\\CIUKIGAM.IMG"};
+    CHECK(!dosvm_create(&c, &v) && v && v->base_sectors == 4096u);
+    uint8_t got[512], bytes[512];
+    unsigned reads = disk_reads;
+    CHECK(!dosvm_disk_read(v, 4095, got) && got[0] == (uint8_t)(4095 % 251) && disk_reads == reads + 1);
+    memset(got, 0x5A, sizeof(got));
+    CHECK(!dosvm_disk_read(v, 4096, got) && disk_reads == reads + 1);
+    for (unsigned i = 0; i < sizeof(got); i++) CHECK(!got[i]);
+    memset(got, 0x5A, sizeof(got));
+    CHECK(!dosvm_disk_read(v, DOSVM_SECTORS - 1, got) && !got[0] && !got[511] && disk_reads == reads + 1);
+    memset(bytes, 0x3C, sizeof(bytes));
+    CHECK(!dosvm_disk_write(v, 200000, bytes) && !dosvm_disk_read(v, 200000, got) && !memcmp(bytes, got, 512));
+    CHECK(dosvm_disk_read(v, DOSVM_SECTORS, got) == -EINVAL);
+    destroy(v, true); empty();
+    /* Sizes outside the geometry: refused by the VM, absent for the lookup. */
+    static const uint32_t bad[] = {DOSVM_SECTORS * 512u + 512u, (DOSVM_BASE_MIN_SECTORS - 1u) * 512u, 4096u * 512u + 1u, 0};
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        bundled_bytes = bad[i];
+        v = (void *)1;
+        CHECK(dosvm_create(&c, &v) == -EINVAL && !v); empty();
+        CHECK(dosvm_window_base(path) == -ENOENT && !path[0]);
+    }
+    bundled_bytes = DOSVM_BASE_MIN_SECTORS * 512u;
+    CHECK(!dosvm_window_base(path));
+    bundled_bytes = DOSVM_SECTORS * 512u;                   /* an uncut image is valid too */
+    CHECK(!dosvm_window_base(path));
+    bundled_directory = true;
+    CHECK(dosvm_window_base(path) == -ENOENT && !path[0]);
+    bundled_directory = false;
+    /* Window VM (syscall 72): the bundled disk with the staged DPMI host. */
+    bundled_bytes = 4096u * 512u;
+    struct process *saved_current = fake_current;
+    fake_current = &fake_proc[0];
+    struct ciuki_dosvm_command w;
+    vq_begin();
+    CHECK(!create_window(0, "Games", &w) && !workload_busy);
+    v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+    CHECK(v && v->dpmi_enabled && v->base_sectors == 4096u && !strcmp(last_base, "C:\\GAMES\\CIUKIGAM.IMG"));
+    struct ciuki_dosvm_command shut = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut)));
+    vq_end();
+    empty();
+    fake_current = saved_current;
+    bundled_disk = false; bundled_bytes = DOSVM_SECTORS * 512u;
+    printf("bundled games disk: window VMs use C:\\GAMES\\CIUKIGAM.IMG after the local fixture disk (probes: fixture only), a cut base reads zeros past its end, invalid sizes refused\n");
+}
+
 /* The verdict line latches the text screen: a child's output that the shell
  * later overwrites (its row-0 title bar) stays readable (QEMU zz-doom). */
 static void text_row(struct dosvm *v, unsigned row, const char *text)
@@ -629,4 +694,5 @@ static void test_workloads(void)
     test_workload_pm_vga();
     test_workload_direct_window();
     test_workload_base_image();
+    test_bundled_games_base();
 }

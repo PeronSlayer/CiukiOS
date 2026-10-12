@@ -12,6 +12,12 @@
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
+/* A base image may stop before the geometry's end (owner decision
+ * 2026-10-12, the bundled shareware games disk): trailing all-zero sectors
+ * are cut by scripts/build_games_disk.py and read back as zeros. It must
+ * still hold the boot sector, loader area, both FATs and the root directory
+ * of the private FAT16 geometry (scripts/build_dos_image.py DATA_LBA). */
+#define DOSVM_BASE_MIN_SECTORS 361u
 #define DOSVM_PORTS 16u
 /* f3-02 presenter: fixed 640x480 XRGB window surface, integer scale only.
  * One presented frame per 33 host ticks. Input status 1 follows the guest's
@@ -54,6 +60,7 @@ struct dosvm {
     const char *probe;
     struct vfs_table disk_table;
     int base, overlay;
+    uint32_t base_sectors;   /* sectors the base image holds; zeros after them */
     char overlay_path[48];
     struct { uint32_t lba, offset; } sectors[DOSVM_OVERLAY_SECTORS];
     unsigned sector_count;

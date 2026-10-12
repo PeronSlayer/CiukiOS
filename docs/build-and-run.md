@@ -214,15 +214,61 @@ python3 scripts/test/dos_fixtures.py wolf3d build/host/f306-wolf
 ```
 
 Delete `build/host/f306-*` afterwards (each holds a 160 MiB sparse image).
-For an interactive DOOM window, attach that `fixture-0.img` as a further IDE
-disk of a manual QEMU run (or copy its `CIUKIGAM.IMG` to the root of another
-FAT drive on a test PC): a DOS window (`/bin/dosbox`) then boots the workload
-image, with the kernel DPMI host, instead of `DOSBOOT.IMG`; type
-`\RUNREC.COM \DOOM DOOM.EXE` or `CD \DOOM` and `DOOM`. Without the disk the
-window is unchanged.
+For an interactive DOOM window with the owner's registered data, attach that
+`fixture-0.img` as a further IDE disk of a manual QEMU run (or copy its
+`CIUKIGAM.IMG` to the root of another FAT drive on a test PC): a DOS window
+(`/bin/dosbox`) then boots the workload image, with the kernel DPMI host,
+instead of the bundled shareware games disk below; type
+`\RUNREC.COM \DOOM DOOM.EXE` or `CD \DOOM` and `DOOM`.
 The probes are `f3:dos4gw`, `f3:doom`, `f3:doom-sound`, `f3:wolf3d` and
 `f3:vm-starve` (also in the loader menu and the F3 sweep, where the game
 probes end `NOT_RUN reason=fixtures_absent` without the fixture disk).
+
+### Pre-installed shareware games
+
+Owner decision 2026-10-12: Wolfenstein 3-D and DOOM are pre-installed in
+their shareware releases, the only ones whose packages may be passed on
+(the registered data above stays local). The original archives are vendored
+under `third_party/games/` with their licence documents and an
+`UPSTREAM.json` that pins the archive (size, SHA-256, SHA-1, MD5, two
+published references) and every installed member:
+
+| Package | Archive | SHA-256 | Installed as |
+| --- | --- | --- | --- |
+| `wolf3d-shareware` | `1wolf14.zip` (Wolfenstein 3-D 1.4, episode 1) | `cb2a2ef7…59451a8` | `\WOLF3D` (all 12 files of `W3DSW14.SHR`) |
+| `doom-shareware` | `doom19s.zip` (DOOM 1.9, episode 1) | `cacf0142…1b486e6` | `\DOOM` (16 files of `DOOMS_19.1`+`.2`, without the DOOM FAQ) plus `CIUKI.CFG` |
+
+The image build never downloads: `scripts/build_image.py` calls
+`scripts/build_games_disk.py`, which checks each archive against its pins,
+unpacks it (ZIP; Apogee's `.SHR` container with PKWARE DCL "implode"
+members, decoded by a port of zlib's `blast.c`), checks every member,
+refuses registered data names (`DOOM.WAD`, `*.WL6`, …) and any other
+match with the owner's local files that is not a pinned shareware file, and
+writes `build/f0/games/CIUKIGAM.IMG` and its manifest `CIUKIGAM.json`. The
+disk has the `DOSBOOT.IMG` geometry (the DOS system read back from
+`DOSBOOT.IMG` and checked against its manifest) with `\WOLF3D` and `\DOOM`;
+its trailing zero sectors are cut (7,262,208 bytes of the 128 MiB volume;
+the kernel reads sectors past the end as zeros). The image holds it at
+`/GAMES/CIUKIGAM.IMG`, and the licence documents and `UPSTREAM.json` files
+at `/system/licenses/<package>-<file>`. To build or inspect it alone:
+
+```bash
+python3 scripts/build_dos_image.py
+python3 scripts/build_games_disk.py
+mdir -/ -i build/f0/games/CIUKIGAM.IMG ::/
+```
+
+Every DOS window (`/bin/dosbox`) boots this disk with the kernel DPMI host,
+unless the owner's local fixture disk above is attached (it takes
+precedence); the f3-06 workload probes use only the local fixture disk.
+The Start menu's Programs > Games lists "Wolfenstein 3D (shareware)" and
+"DOOM (shareware)": each opens a DOS window titled after the game, which
+types `CD \WOLF3D` and `WOLF3D.EXE` (or `CD \DOOM` and
+`DOOM.EXE -config CIUKI.CFG`) at the DOS prompt once the window has the
+keyboard focus. The same works from Run…: `dosbox \WOLF3D\WOLF3D.EXE`
+(`dosbox [--name=TITLE] [COMMAND...]`; letters, digits and `\ . - _ : / = ,`
+and spaces). Licence status, including the Wolfenstein 3-D bundling clause
+still open with the owner: `docs/design/f3-acceptance.md`, f3-06 amendment.
 
 ## Test requests
 
