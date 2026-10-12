@@ -350,6 +350,7 @@ void du_window_present(struct du_window *);
 int du_window_ping(struct du_window *, uint32_t serial);
 int du_window_queue(struct du_window *, struct ciuki_message *);  /* f2-33: any v2 request */
 int du_window_move(struct du_window *, int x, int y);
+int du_window_set_title(struct du_window *, const char *title);
 void du_window_close(struct du_window *);
 void du_window_destroy(struct du_window *);
 int du_run(struct du_window *, void (*idle)(void *), void *);

@@ -11,7 +11,7 @@
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
-struct files_main { struct files_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; uint32_t launch_serial; };
+struct files_main { struct files_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; uint32_t launch_serial; char title[DESK_TITLE_MAX + 1]; };
 
 /* CiukNote is a window: only the desktop can give it a channel and the display grants, so Files
  * asks it (protocol v2 LAUNCH with the path as the single argument; the desktop honours this for
@@ -70,6 +70,12 @@ static void idle(void *arg)
     struct files_main *m = ((struct files_app *)arg)->user;
     int status;
     while (waitpid(-1, &status, WNOHANG) > 0) { }
+    char display[FM_PATH], title[DESK_TITLE_MAX + 1];
+    if (!fm_display_path(display, m->app.model.path)) {
+        snprintf(title, sizeof(title), "Files - %.*s", (int)sizeof(title) - 9, display);
+        for (unsigned i = 0; title[i]; i++) if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) title[i] = '?';
+        if (strcmp(title, m->title) && !du_window_set_title(&m->window, title)) strcpy(m->title, title);
+    }
     if (m->checkpoint > m->sent && !m->window.damaged && !m->ui.dirty &&
         !du_window_ping(&m->window, CHECKPOINT_SERIAL + (unsigned)m->sent + 1)) m->sent++;
 }
@@ -88,14 +94,14 @@ static void window_size(int *w, int *h)
 int main(int argc, char **argv)
 {
     int channel = 3, test = 0;
-    const char *path = "/";
+    const char *path = FM_COMPUTER;
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--channel-fd=", 13)) {
             char *end; long n = strtol(argv[i] + 13, &end, 10);
             if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
             channel = (int)n;
         } else if (!strcmp(argv[i], "--test=files")) test = 1;
-        else if (argv[i][0] == '/') path = argv[i];
+        else if (argv[i][0] != '-') path = argv[i];
         else return 2;
     }
     struct files_main *m = calloc(1, sizeof(*m));
@@ -103,7 +109,12 @@ int main(int argc, char **argv)
     int width, height;
     window_size(&width, &height);
     if (test) { width = 760; height = 520; }
-    if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Files", 600, 360)) {
+    char display[FM_PATH], title[DESK_TITLE_MAX + 1];
+    if (fm_display_path(display, path)) { free(m); return 2; }
+    snprintf(title, sizeof(title), "Files - %.*s", (int)sizeof(title) - 9, display);
+    for (unsigned i = 0; title[i]; i++) if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) title[i] = '?';
+    strcpy(m->title, title);
+    if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, title, 600, 360)) {
         fprintf(stderr, "Files: desktop connection failed: %s\n", strerror(errno));
         free(m);
         return 1;

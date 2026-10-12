@@ -124,6 +124,17 @@ int desk_parse(const struct ciuki_message *m, int client,
         }
         break;
     }
+    case DESK_SET_TITLE: {
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length < 9) return 0;
+        unsigned t = desk_get32(m->data + 4);
+        if (!t || t > DESK_TITLE_MAX || m->length != 8 + t) return 0;
+        for (unsigned i = 0; i < t; i++) {
+            if (m->data[8 + i] < 32 || m->data[8 + i] > 126) return 0;
+            p->title[i] = (char)m->data[8 + i];
+        }
+        n = 8 + t;
+        break;
+    }
     case DESK_DAMAGE:
         if (!client || m->length != (resize ? 24u : 20u) || !desk_surface_valid(s)) return 0;
         p->x = (int32_t)desk_get32(m->data + 4);

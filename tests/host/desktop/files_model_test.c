@@ -28,8 +28,67 @@ static void same(const char *a, const char *b)
 static unsigned index_of(struct fm_model *m, const char *name)
 { for (unsigned i = 0; i < m->count; i++) if (!strcmp(m->entries[i].name, name)) return i; assert(!"missing entry"); return 0; }
 
+static void computer_tests(void)
+{
+    static const struct { const char *posix, *display; } paths[] = {
+        {"/", "C:\\"}, {"/Programs", "C:\\Programs"}, {"/Documents/My File.txt", "C:\\Documents\\My File.txt"},
+        {"/mnt/d", "D:\\"}, {"/mnt/d/Games/MiXeD", "D:\\Games\\MiXeD"}, {"/mnt/z/x", "Z:\\x"},
+        {"/mnt/data/x", "C:\\mnt\\data\\x"}, {FM_COMPUTER, "Computer"}
+    };
+    char out[FM_PATH], back[FM_PATH];
+    for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        assert(!fm_display_path(out, paths[i].posix) && !strcmp(out, paths[i].display));
+        assert(!fm_posix_path(back, out) && !strcmp(back, paths[i].posix));
+    }
+    assert(!fm_posix_path(out, "d:/Games\\MiXeD\\\\") && !strcmp(out, "/mnt/d/Games/MiXeD"));
+    assert(!fm_posix_path(out, "/Programs///MiXeD//") && !strcmp(out, "/Programs/MiXeD"));
+    assert(!fm_display_path(out, "/mnt/D/Games///") && !strcmp(out, "D:\\Games"));
+    assert(!fm_posix_path(out, "C:") && !strcmp(out, "/"));
+    assert(!fm_posix_path(out, "D:") && !strcmp(out, "/mnt/d"));
+    assert(fm_posix_path(out, "C:Programs") == -EINVAL && fm_posix_path(out, "A:\\") == -EINVAL);
+    assert(fm_posix_path(out, "relative") == -EINVAL && fm_posix_path(out, NULL) == -EINVAL);
+    char long_path[FM_PATH + 4]; memset(long_path, 'x', sizeof(long_path));
+    long_path[0] = '/'; long_path[sizeof(long_path) - 1] = 0;
+    assert(fm_posix_path(out, long_path) == -ENAMETOOLONG);
+    long_path[FM_PATH - 2] = 0; assert(fm_display_path(out, long_path) == -ENAMETOOLONG);
+    strcpy(out, "D:\\Games\\"); assert(!fm_posix_path(out, out) && !strcmp(out, "/mnt/d/Games"));
+    assert(!fm_display_path(out, out) && !strcmp(out, "D:\\Games"));
+    assert(fm_hidden("/", "DEV") && fm_hidden("/", "mnt") && fm_hidden("/", "tmp"));
+    assert(!fm_hidden("/", ".config") && !fm_hidden("/Games", "tmp"));
+
+    fake_reset(); fake_create("/Programs", FM_DIR); fake_create("/Documents", FM_DIR);
+    fake_create("/dev", FM_DIR); fake_create("/tmp", FM_DIR); fake_create("/.config", FM_DIR);
+    struct fm_model m; fm_init(&m, &fake_vfs);
+    assert(!fm_navigate(&m, "Computer") && !m.path[0] && m.count == 1 && !strcmp(m.entries[0].name, "C:"));
+    assert(!fm_entry_path(&m, 0, out) && !strcmp(out, "/"));
+    fm_select(&m, 0, 0);
+    assert(fm_create(&m, "No", 1) == -EPERM && fm_rename(&m, 0, "No") == -EPERM && fm_clipboard(&m, 1) == -EPERM);
+    assert(!fm_navigate(&m, "C:\\") && m.count == 3);
+    assert(!strcmp(m.entries[0].name, ".config"));
+    assert(!fm_up(&m) && !m.path[0] && m.entries[m.active].selected && !strcmp(m.entries[m.active].name, "C:"));
+    assert(!fm_history(&m, -1) && !strcmp(m.path, "/"));
+    fake_create("/mnt", FM_DIR); fake_create("/mnt/d", FM_DIR); fake_create("/mnt/d/Games", FM_DIR);
+    fake_create("/mnt/d/Games/tmp", FM_DIR); fake_create("/mnt/not-a-drive", FM_DIR); fake_file("/mnt/e", 1, 1);
+    assert(!fm_navigate(&m, FM_COMPUTER) && m.count == 2);
+    assert(!strcmp(m.entries[0].name, "C:") && !strcmp(m.entries[1].name, "D:"));
+    assert(!fm_entry_path(&m, 1, out) && !strcmp(out, "/mnt/d"));
+    assert(!fm_navigate(&m, "D:\\Games\\") && !strcmp(m.path, "/mnt/d/Games") && m.count == 1);
+    assert(!fm_up(&m) && !strcmp(m.path, "/mnt/d"));
+    assert(!fm_up(&m) && !m.path[0] && !strcmp(m.entries[m.active].name, "D:"));
+    assert(!fm_navigate(&m, "/mnt") && !m.path[0]);
+    fake_nodes[fake_lookup("/mnt/d")].live = 0;
+    assert(!fm_refresh(&m) && m.count == 1);
+    fake_create("/mnt/z", FM_DIR); fake_create("/mnt/D", FM_DIR);
+    assert(!fm_refresh(&m) && m.count == 3 && !strcmp(m.entries[1].name, "D:") && !strcmp(m.entries[2].name, "Z:"));
+    assert(!fm_navigate(&m, "D:\\") && !strcmp(m.path, "/mnt/D"));
+    assert(!fm_up(&m) && !m.path[0]);
+    fm_destroy(&m); fake_assert_clean();
+    puts("PASS Files Computer model: one/two volumes, drive paths both ways, case/separators/limits, hidden nodes, drive Up/history, protected drives");
+}
+
 int main(void)
 {
+    computer_tests();
     /* Paths and names. */
     char out[FM_PATH];
     assert(!fm_join(out, "/", "Programs") && !strcmp(out, "/Programs") && !fm_join(out, "/Programs", "x") && !strcmp(out, "/Programs/x"));

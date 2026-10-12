@@ -157,20 +157,20 @@ void fake_assert_clean(void)
 void fake_image_tree(void)
 {
     fake_reset();
-    static const char *const dirs[] = {"/Programs", "/System", "/system/assets", "/system/dos", "/system/licenses",
-                                       "/system/tests", "/system/tests/lua-5.4.8-tests", "/system/LOGS"};
+    static const char *const dirs[] = {"/Programs", "/Documents", "/Games", "/System", "/dev", "/mnt", "/tmp", "/System/assets", "/System/dos", "/System/licenses",
+                                       "/System/tests", "/System/tests/lua-5.4.8-tests", "/System/LOGS"};
     for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) fake_create(dirs[i], FM_DIR);
     static const char *const programs[] = {"/Programs/demo", "/Programs/desktop", "/Programs/files", "/Programs/hello", "/Programs/libc_smoke", "/Programs/lua"};
     for (unsigned i = 0; i < sizeof(programs) / sizeof(programs[0]); i++) {
         int n = fake_file(programs[i], 1000 + 37 * i, 1); fake_nodes[n].meta.exec = 1; fake_nodes[n].meta.mode = 0100777;
     }
-    fake_file("/system/BOOT.CFG", 16, 'a');
-    fake_file("/system/VMM.ELF", 30000, 7);
-    fake_file("/system/assets/ciuki-portrait.xrgb", 26214, 9);
-    fake_file("/system/dos/DOSBOOT.IMG", 32768, 3);
-    fake_file("/system/licenses/COPYING.NEWLIB", 4096, 4);
-    fake_file("/system/licenses/SDK-MIT.txt", 1077, 5);
-    fake_file("/system/licenses/lua-5.4.8.txt", 1090, 6);
-    fake_file("/system/tests/app-gate.meta", 900, 8);
-    fake_file("/system/tests/ciuki-f2.lua", 2100, 10);
+    fake_file("/System/BOOT.CFG", 16, 'a');
+    fake_file("/System/VMM.ELF", 30000, 7);
+    fake_file("/System/assets/ciuki-portrait.xrgb", 26214, 9);
+    fake_file("/System/dos/DOSBOOT.IMG", 32768, 3);
+    fake_file("/System/licenses/COPYING.NEWLIB", 4096, 4);
+    fake_file("/System/licenses/SDK-MIT.txt", 1077, 5);
+    fake_file("/System/licenses/lua-5.4.8.txt", 1090, 6);
+    fake_file("/System/tests/app-gate.meta", 900, 8);
+    fake_file("/System/tests/ciuki-f2.lua", 2100, 10);
 }

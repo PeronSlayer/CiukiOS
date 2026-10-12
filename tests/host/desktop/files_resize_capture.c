@@ -67,7 +67,8 @@ int main(int argc,char **argv)
             assert(!desk_redraw(&desktop));
             roundtrip();assert(desktop.clients[0].surface!=old_surface);
             assert(app.width==w && app.height==h && app.model.count==count && app.model.active==active);
-            assert(!strcmp(app.model.path,"/system") && du_focused(&ui)==107);
+            assert(!strcmp(app.model.path,"/System") && du_focused(&ui)==107);
+            assert(!strcmp(du_get(&ui,100)->text,"C:\\System"));
             struct du_widget *list=du_get(&ui,107),*status=du_get(&ui,108);
             assert(list->box.x+list->box.w==w && status->box.y+status->box.h==h);
             assert(!desk_redraw(&desktop));check_frame();
