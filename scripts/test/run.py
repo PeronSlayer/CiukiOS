@@ -738,9 +738,15 @@ def read_ppm(path):
 def observe_desktop_screen(before, after, root=ROOT):
     """Independent pixels from the pinned portrait converter used by T0.
 
-    The upper-right 64x96 portrait region avoids the demo at (20,52) and
-    the initial centre cursor even at 640x480. Clock changes cannot establish
-    interaction: require changes within the old cursor's 8x16 footprint.
+    Since the Ciuki button moved into the top bar and the default wallpaper
+    became the owner's scene (2026-10-12), the approved portrait on the
+    desktop is the 18 px area average drawn in that button (shell.c
+    desk_shell_icon "ciuki"; desktop.h DESK_START_*, Inter 13 Bold "CiukiOS"
+    53 px wide): every mark cell fully covered by portrait ink must equal the
+    exact average of its 256 px source block, in both screens, with the
+    button released (shift 0) or pressed (shift 1). Clock changes cannot
+    establish interaction: require changes within the old cursor's 8x16
+    footprint.
     """
     import importlib.util
     spec = importlib.util.spec_from_file_location('screen_portrait',root/'apps/desktop/convert_portrait.py')
@@ -748,19 +754,28 @@ def observe_desktop_screen(before, after, root=ROOT):
     portrait = converter.convert(root/'assets/brand/ciuki-logo.png')
     bw,bh,bp = read_ppm(before);width,height,pixels = read_ppm(after)
     if (bw,bh) != (width,height):raise EvidenceError('desktop screen geometry changed')
-    x0 = (width-256)//2; y0 = max(32,32+(height-32-256-36)//2)
-    for y in range(96):
-        for x in range(192,256):
-            source = portrait[(y*256+x)*4:(y*256+x)*4+3][::-1]
-            off = ((y0+y)*width+x0+x)*3
-            if bp[off:off+3] != source or pixels[off:off+3] != source:
-                raise EvidenceError('approved Ciuki portrait region mismatch')
+    size = 18
+    cells = []
+    for y in range(size):
+        for x in range(size):
+            block = [portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
+                     for yy in range(y*256//size,(y+1)*256//size) for xx in range(x*256//size,(x+1)*256//size)]
+            if any(b == bytes((0x64,0x55,0x37)) for b in block):continue   # transparent surround (#375564, BGR bytes)
+            cells.append((x,y,bytes(sum(b[k] for b in block)//len(block) for k in range(3))[::-1]))   # RGB
+    if len(cells) <= 100:raise EvidenceError('portrait mark model has too few covered cells')
+    def mark_matches(frame, shift):
+        x0 = 4+(96-size-6-53)//2+shift; y0 = 4+(24-size)//2+shift
+        return all(frame[((y0+y)*width+x0+x)*3:((y0+y)*width+x0+x)*3+3] == rgb for x,y,rgb in cells)
+    shifts = [s for s in (0,1) if mark_matches(bp,s)]
+    if not shifts or not any(mark_matches(pixels,s) for s in (0,1)):
+        raise EvidenceError('approved Ciuki portrait region mismatch')
+    x0 = 4+(96-size-6-53)//2+shifts[0]; y0 = 4+(24-size)//2+shifts[0]
     changed = sum(bp[(y*width+x)*3:(y*width+x)*3+3] != pixels[(y*width+x)*3:(y*width+x)*3+3]
                   for y in range(height//2,height//2+16) for x in range(width//2,width//2+8))
     if changed < 16:raise EvidenceError('post-fault cursor footprint did not change')
     return {'before_ppm_sha256':sha(before),'ppm_sha256':sha(after),'width':width,'height':height,
-            'portrait_array_sha256':converter.ARRAY_SHA256,'portrait_region':[x0+192,y0,64,96],
-            'portrait_pixels_checked':6144,'cursor_changed_pixels':changed}
+            'portrait_array_sha256':converter.ARRAY_SHA256,'portrait_region':[x0,y0,size,size],
+            'portrait_pixels_checked':len(cells),'cursor_changed_pixels':changed}
 
 
 def observe_window_screen(path, spec, arm):
