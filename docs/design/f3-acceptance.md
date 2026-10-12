@@ -328,10 +328,29 @@ AX=014Fh. Text mode sets select eight-dot character clocks (SR01 bit 0), so
 80-column text is 640 pixels wide. Ports 3B0h-3DFh are the VM's model;
 multi-byte accesses decompose low byte first; bytes past 3DFh read FFh.
 
-Retrace: the presenter's frame clock is 33 host ticks; the last three are
-vertical retrace (status bits 3 and 0). In the active period bit 0
-alternates on successive reads as a horizontal-blanking stand-in, so
-snow-avoiding loops progress; polling never advances the frame clock.
+Retrace (superseded 2026-10-12, see below): the presenter's frame clock
+was 33 host ticks, the last three vertical retrace (status bits 3 and 0);
+in the active period bit 0 alternates on successive reads as a
+horizontal-blanking stand-in.
+
+Retrace after wolf3d-qemu-t23 (2026-10-12): Wolf3D spun in id's
+`VL_SetScreen` (WOLFSRC/ID_VL_A.ASM,
+<https://github.com/id-Software/wolf3d/blob/master/WOLFSRC/ID_VL_A.ASM>),
+called as `VW_SetScreen(0x8000,0)` from `SignonScreen` before `SD_Startup`
+(WOLFSRC/WL_MAIN.C), so its `TimeCount` escape cannot fire; the loop then
+needs five successive 3DAh reads with display disabled (bit 0) and no
+vertical sync (bit 3), "the bottom of the screen", which the old model never
+produced twice in a row. Input status 1 now ends every frame of the
+programmed timing with the vertical non-display region (FreeVGA: bit 0 is
+the inverted display enable, set in horizontal and vertical blanking; bit 3
+the vertical sync): 16 reads display disabled, 4 reads sync, 16 reads display
+disabled, then the active period with bit 0 alternating. Frames are due at
+the programmed vertical total (CR06 with CR07 bits 0 and 5, plus 2) at the
+31.469 kHz line rate of the standard VGA modes, on the host tick (independent
+of the guest's IF): 70.09 Hz for 449-line modes, 59.94 Hz for 525-line
+modes. The read floors make each region visible whatever the trap cost.
+Only 3BAh/3DAh reads advance the sequence. The presenter cadence (33 ticks)
+is unchanged.
 
 Fonts: the synthetic ROM (F000:2000 8x16, F000:3000 8x8, F000:4000 8x14) is
 a deterministic conversion of the kernel's Inconsolata console bitmap

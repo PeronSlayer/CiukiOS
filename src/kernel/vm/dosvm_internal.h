@@ -14,11 +14,11 @@
 #define DOSVM_OVERLAY_SECTORS 1024u
 #define DOSVM_PORTS 16u
 /* f3-02 presenter: fixed 640x480 XRGB window surface, integer scale only.
- * One frame per 33 host ticks; the last three ticks are vertical retrace. */
+ * One presented frame per 33 host ticks. Input status 1 follows the guest's
+ * own VGA timing instead (dosvm_vga_status). */
 #define DOSVM_VIDEO_WIDTH 640u
 #define DOSVM_VIDEO_HEIGHT 480u
 #define DOSVM_FRAME_TICKS 33u
-#define DOSVM_RETRACE_TICKS 3u
 #define DOSVM_CURSOR_TICKS 250u
 #define DOSVM_BLINK_TICKS 500u
 #include "dosvm_memory.h"
@@ -66,6 +66,8 @@ struct dosvm {
     cvx_bus video_bus;
     bool video_bus_fault, video_presented;
     uint8_t video_hsync;
+    unsigned video_blank;      /* read index in the vertical blank, 0 outside */
+    uint64_t video_vblank_us;  /* host time (us) the next vertical blank is due */
     uint64_t video_tick;
     uint32_t video_display, video_phase, owner_pid;
     uint32_t video_faults, video_frames;

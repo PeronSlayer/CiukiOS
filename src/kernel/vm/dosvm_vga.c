@@ -35,14 +35,49 @@ static int video_fetch(void *arg, uint32_t address, uint8_t *value)
     return video_read(arg, address, value);
 }
 
-/* Input status 1 (3BAh/3DAh). Bit 3: vertical retrace during the last
- * DOSVM_RETRACE_TICKS of each presenter frame. Bit 0 (display disabled) is
- * set throughout vertical retrace and alternates on successive reads in the
- * active period, standing in for horizontal blanking. Polling never advances
- * the frame clock. */
+/* Input status 1 (3BAh/3DAh). Bit 0 is the inverted display enable (set in
+ * horizontal and vertical blanking), bit 3 the vertical sync (FreeVGA, Input
+ * Status #1). Each frame of the programmed timing ends with the vertical
+ * non-display region: display disabled before the sync, the sync, display
+ * disabled after it. id's VL_SetScreen (Wolf3D ID_VL_A.ASM) leaves its loop
+ * only on five successive reads with bit 0 set and bit 3 clear (the bottom
+ * of the screen) when its TimeCount escape cannot fire, as in SignonScreen
+ * before SD_Startup; the former model (sync in the last 3 of every 33 host
+ * ticks, bit 0 alternating otherwise) never gave two such reads in a row and
+ * Wolf3D spun at VW_SetScreen(0x8000,0) (wolf3d-qemu-t23, 2026-10-12).
+ * The frame schedule follows the host tick (1 kHz, independent of the
+ * guest's IF): one frame per programmed vertical total (CR06, CR07 bits 0
+ * and 5, plus 2) at the 31.469 kHz line rate of every standard VGA mode,
+ * i.e. 70.09 Hz for 449-line modes (text, 13h, Mode Y) and 59.94 Hz for
+ * 525-line modes (12h, Mode X). The model's 8-dot text clocks are a
+ * presenter choice (dosvm_vga_bios), so the dot clock is not used. Each
+ * region of the vertical blank lasts a minimum number of reads, so any
+ * poller sees it whatever the trap cost. In the active period bit 0
+ * alternates on successive reads, standing in for horizontal blanking. */
+#define VGA_BLANK_TOP 16u
+#define VGA_BLANK_SYNC 4u
+#define VGA_BLANK_BOTTOM 16u
+#define VGA_LINE_HZ 31469u
+static uint64_t vga_frame_us(const cvga_state *g)
+{
+    uint64_t lines = (uint64_t)g->crtc[6] + ((g->crtc[7] & 1u) << 8) + ((g->crtc[7] & 0x20u) << 4) + 2;
+    if (lines < 262) lines = 449;                 /* unprogrammed or nonsensical: 70 Hz */
+    return lines * 1000000u / VGA_LINE_HZ;
+}
 uint8_t dosvm_vga_status(struct dosvm *v, uint64_t tick)
 {
-    if (tick % DOSVM_FRAME_TICKS >= DOSVM_FRAME_TICKS - DOSVM_RETRACE_TICKS) return 9;
+    uint64_t now = tick * 1000u;
+    if (v->video_blank || now >= v->video_vblank_us) {
+        unsigned step = v->video_blank++;
+        if (step < VGA_BLANK_TOP) return 1;
+        if (step < VGA_BLANK_TOP + VGA_BLANK_SYNC) return 9;
+        if (step < VGA_BLANK_TOP + VGA_BLANK_SYNC + VGA_BLANK_BOTTOM) return 1;
+        /* Next frame's blank: one period after this one was due, or the
+         * next due time after now when polling stopped for longer. */
+        v->video_blank = 0;
+        uint64_t period = vga_frame_us(&v->vga), next = v->video_vblank_us + period;
+        v->video_vblank_us = next > now ? next : now + period - (now - next) % period;
+    }
     return (v->video_hsync++ & 1) ? 1 : 0;
 }
 
@@ -65,7 +100,10 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
                 window |= p >= 0x3C2 && p <= 0x3CF;
                 cvga_write_port(&v->vga, (uint16_t)p, (uint8_t)(*value >> (8 * i)));
             }
-            else byte = cvga_read_port(&v->vga, (uint16_t)p, dosvm_vga_status(v, g_ticks));
+            /* Only input status 1 reads advance the status sequence (not
+             * DAC, CRTC or other reads in the same range). */
+            else byte = cvga_read_port(&v->vga, (uint16_t)p,
+                                       p == 0x3DA || p == 0x3BA ? dosvm_vga_status(v, g_ticks) : 0);
         }
         result |= (uint32_t)byte << (8 * i);
     }
