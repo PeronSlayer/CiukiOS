@@ -63,6 +63,8 @@ def desktop_payloads():
     sources = {"/bin/desktop": DESKTOP / "desktop", "/bin/demo": DESKTOP / "demo", "/bin/dosbox": DESKTOP / "dosbox",
                "/bin/files": DESKTOP / "files", "/bin/tasks": DESKTOP / "tasks", "/bin/ciuknote": DESKTOP / "ciuknote",
                "/bin/control": DESKTOP / "control",
+               "/bin/calc": DESKTOP / "calc", "/bin/charmap": DESKTOP / "charmap", "/bin/clock": DESKTOP / "clock",
+               "/bin/help": DESKTOP / "help", "/bin/mixer": DESKTOP / "mixer", "/bin/viewer": DESKTOP / "viewer",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
                "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
     # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.

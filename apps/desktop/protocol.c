@@ -205,7 +205,7 @@ int desk_parse(const struct ciuki_message *m, int client,
         p->request = desk_get32(m->data + 8);
         p->result = (int32_t)desk_get32(m->data + 12);
         if ((p->request != DESK_WINDOWS_QUERY && p->request != DESK_END_TASK &&
-             p->request != DESK_SWITCH_TO && p->request != DESK_LAUNCH && p->request != DESK_SETTINGS) ||
+             p->request != DESK_SWITCH_TO && p->request != DESK_LAUNCH && p->request != DESK_SETTINGS && p->request != DESK_MIXER_SET) ||
             p->result < -4095) return 0;
         n = 16;
         break;
@@ -217,6 +217,15 @@ int desk_parse(const struct ciuki_message *m, int client,
         if (p->request == DESK_SETTINGS_RELOAD ? p->values[0] || p->values[1] || p->values[2] :
             p->request != DESK_SETTINGS_MASTER || p->values[0] > 100 || p->values[1] > 100 || p->values[2] > 1) return 0;
         n = 24;
+        break;
+    case DESK_MIXER_SET:
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 20) return 0;
+        p->serial = desk_get32(m->data + 4);
+        p->width = desk_get32(m->data + 8);    /* left */
+        p->height = desk_get32(m->data + 12);  /* right */
+        p->flags = desk_get32(m->data + 16);   /* mute */
+        if (p->width > 100 || p->height > 100 || p->flags > 1) return 0;
+        n = 20;
         break;
     case DESK_KEY: case DESK_MOTION: case DESK_BUTTON:
         if (client || m->length != 44) return 0;

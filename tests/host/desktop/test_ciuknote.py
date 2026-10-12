@@ -187,7 +187,7 @@ class CiuknoteTests(unittest.TestCase):
         Programs submenu (tests/host/desktop/shell_menu.py). Adding or removing a /bin program can move a
         submenu row; this test names the inventory, and the desktop cases must follow."""
         programs = bin_programs()
-        self.assertEqual(programs, ["ciuknote", "control", "demo", "dosbox", "files", "hello", "libc_smoke", "lua", "tasks"],
+        self.assertEqual(programs, ["calc", "charmap", "ciuknote", "clock", "control", "demo", "dosbox", "files", "hello", "help", "libc_smoke", "lua", "mixer", "tasks", "viewer"],
                          "the image's /bin changed: check the Programs submenu rows of the desktop cases")
         menu = load("note_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         c, _ = case()

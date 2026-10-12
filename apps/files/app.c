@@ -533,6 +533,15 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
         if (r < 0) error_box(a, "Files", "Cannot start CiukNote:", r);
         return;
     }
+    if (kind == FM_KIND_IMAGE) {   /* pictures open in the Image Viewer (legacy recovery) */
+        struct fm_meta meta;
+        if (!a->model.fs.stat_path(a->model.fs.ctx, "/bin/viewer", &meta) && meta.type == FM_FILE) {
+            char *argv[] = {"viewer", path, NULL};
+            int r = spawn(a, "/bin/viewer", argv);
+            if (r < 0) error_box(a, "Files", "Cannot start the Image Viewer:", r);
+            return;
+        }
+    }
     char text[FM_NAME + 160], type[40];
     snprintf(text, sizeof(text), "Files cannot open '%s'.\nNo program is registered for files of type\n'%s'.",
              e->name, fm_type_name(e, type, sizeof(type)));

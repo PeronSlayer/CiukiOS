@@ -10,6 +10,7 @@ extern void desk_shell_background(struct desktop *, struct desk_box) __attribute
 extern void desk_shell_topbar(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_overlay(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_internal_paint(struct desktop *, int, struct desk_box, struct desk_box) __attribute__((weak));
+#include "catalog.h"
 int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out)
 {
     int64_t x = a.x > b.x ? a.x : b.x, y = a.y > b.y ? a.y : b.y;
@@ -206,12 +207,15 @@ static void window(struct desktop *d, int i, struct desk_box clip)
 /* Programs that open a desktop window receive their channel at fd 3. */
 int desk_program_graphical(const char *name)
 { return !strcmp(name,"demo") || !strcmp(name,"dosbox") || !strcmp(name,"files") || !strcmp(name,"tasks") || !strcmp(name,"ciuknote") ||
-         !strcmp(name,"control"); }
+         !strcmp(name,"control") || desk_catalog_find(name); }
 const char *desk_program_label(const char *name)
 {
+    const struct desk_catalog_entry *e=desk_catalog_find(name);
     return !strcmp(name,"demo") ? "Ciuki Demo" : !strcmp(name,"files") ? "Files" : !strcmp(name,"tasks") ? "Task Manager" :
-           !strcmp(name,"ciuknote") ? "CiukNote" : !strcmp(name,"control") ? "Control Panel" : name;
+           !strcmp(name,"ciuknote") ? "CiukNote" : !strcmp(name,"control") ? "Control Panel" : e ? e->label : name;
 }
+int desk_catalog_takes_file(const char *name)
+{ const struct desk_catalog_entry *e=desk_catalog_find(name); return e && e->takes_file; }
 const char *desk_app_program(int kind) { return kind==DESK_APP_NOTE ? "ciuknote" : "files"; }
 int desk_program_kind(const char *name)
 { return !strcmp(name,"files") ? DESK_APP_FILES : !strcmp(name,"ciuknote") ? DESK_APP_NOTE : !strcmp(name,"control") ? DESK_APP_CONTROL : 0; }

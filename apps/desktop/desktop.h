@@ -34,6 +34,7 @@ struct desk_client {
     int configure_pending, focus_pending, close_pending;
     int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
     int taskman;                  /* f2-33: launched /bin/tasks; may send task requests */
+    int mixer;                    /* launched /bin/mixer (Volume Control); may send MIXER_SET */
     uint32_t pid, serial, version, window_id;
     uint64_t ping_sent_ns, next_ping_ns, order;
     struct ciuki_surface_info info;
@@ -90,6 +91,9 @@ struct desktop {
     int mixer_fd;                /* delegated /dev/mixer control handle (CIUKI_MIXER_FD) or -1 */
     const char *launch_argv[6];  /* Run dialog: extra arguments for the next launch */
     struct desk_shell sh;
+    /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
+     * control handle; NULL on hosts without one. 0 or -errno. */
+    int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -111,7 +115,8 @@ int desk_program_add(struct desktop *, const char *name, const uint8_t *elf, siz
 int desk_program_graphical(const char *name);
 const char *desk_program_label(const char *name);
 const char *desk_app_program(int kind);          /* "files" / "ciuknote" */
-int desk_program_kind(const char *name);         /* 1 Files, 2 CiukNote, else 0 */
+int desk_program_kind(const char *name);
+int desk_catalog_takes_file(const char *name);   /* catalog.h accessories that open a file argument */         /* 1 Files, 2 CiukNote, else 0 */
 void desk_shell_enable(struct desktop *);
 void desk_minimize(struct desktop *, int index);
 void desk_request_close(struct desktop *, int index);

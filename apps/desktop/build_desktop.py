@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and inspect desktop, demo, libdeskui, Files, Tasks, CiukNote and the Control Panel using the static Ciuki SDK."""
+"""Build and inspect desktop, demo, libdeskui, Files, Tasks, CiukNote, the Control Panel and the accessories using the static Ciuki SDK."""
 # SPDX-License-Identifier: MIT
 import hashlib
 import importlib.util
@@ -18,7 +18,16 @@ CFLAGS = ["-O2", "-Wall", "-Wextra", "-Werror"]
 # Tango store and its notices: /system/icons/<key> in the image (scripts/build_image.py).
 ICON_NOTICES = {"TANGO.TXT": "upstream/COPYING", "AUTHORS.TXT": "upstream/AUTHORS", "CREDITS.TXT": "CREDITS.TXT"}
 ICON_FILES = ("tango.cis", *ICON_NOTICES)
-PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control")
+# Accessories recovered from the 0.8 line (apps/accessories; launcher names in apps/desktop/catalog.h).
+ACCESSORIES = {
+    "calc": ["calc_main.c", "calc_view.c", "calc_model.c"],
+    "charmap": ["charmap_main.c", "charmap_view.c"],
+    "clock": ["clock_main.c", "clock_view.c", "clock_model.c"],
+    "help": ["help_main.c", "help_view.c", "help_topics.c"],
+    "mixer": ["mixer_main.c", "mixer_view.c"],
+    "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
+}
+PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
 SHELL = ["shell.c", "settings.c", "wallpaper.c", "image.c", "keymap.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
@@ -38,7 +47,7 @@ def digest(path):
 def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
-                                 ROOT / "third_party/stb")
+                                 ROOT / "apps/accessories", ROOT / "third_party/stb")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -141,10 +150,13 @@ def build():
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["control"] = ["../control/main.c", "../control/app.c", "settings.c", "wallpaper.c", "image.c"]
+    for name, files in ACCESSORIES.items():
+        sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "control") else []), "-o", str(OUT / name)]
+                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "control", *ACCESSORIES) else []),
+                          *(["-lm"] if name in ACCESSORIES else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Audit compositor code separately: integer drawing must never emit x87.

@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "prerequisites": [],
+  "cases": [
+    {
+      "id": "wolf3d-qemu-t23",
+      "probe": "wolf3d",
+      "profile": "qemu-t23",
+      "selector": "f3:wolf3d run={run_id}",
+      "timeout": 3600,
+      "fixtures": [
+        {
+          "generator": "dos-local",
+          "workload": "wolf3d",
+          "source": "third_party/WOLF3D",
+          "target": "/WOLF3D",
+          "redistribution": "local-only"
+        }
+      ],
+      "pin_from_first_run": {
+        "case=frame stage=signon digest": "PIN-FROM-FIRST-RUN (same in all 5 loops)",
+        "case=frame stage=<n> digest": "PIN-FROM-FIRST-RUN (NonShareware/PG13/title screens)",
+        "case=loop screens": "PIN-FROM-FIRST-RUN"
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "loops": {
+                "eq": 5
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "status": "present",
+              "base": "CIUKIGAM.IMG"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "workload_file"
+            },
+            "fields": {
+              "size": {
+                "ge": 1
+              },
+              "sha256": {
+                "encoding": "hex",
+                "width": 64,
+                "ge": 0
+              },
+              "redistribution": "local-only"
+            },
+            "count": 4,
+            "unique": "path"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "extender"
+            },
+            "fields": {
+              "path": "/WOLF3D/WOLF3D.EXE",
+              "kind": "real_mode",
+              "files": {
+                "ge": 4
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frame",
+              "stage": "signon"
+            },
+            "fields": {
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 200
+              },
+              "digest": {
+                "encoding": "hex",
+                "width": 64,
+                "ge": 0
+              }
+            },
+            "exact_count": 5,
+            "unique": "loop"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "play"
+            },
+            "fields": {
+              "playing": {
+                "eq": 1
+              },
+              "flips": {
+                "ge": 10
+              },
+              "digest": {
+                "encoding": "hex",
+                "width": 64,
+                "ge": 0
+              }
+            },
+            "exact_count": 5,
+            "unique": "loop"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loop"
+            },
+            "fields": {
+              "launch_ms": {
+                "ge": 1
+              },
+              "run_ms": {
+                "ge": "$launch_ms"
+              },
+              "screens": {
+                "ge": 1
+              },
+              "status": {
+                "eq": 1
+              },
+              "rc": {
+                "eq": 0
+              },
+              "type": {
+                "eq": 0
+              },
+              "xms_calls": {
+                "ge": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 5,
+            "unique": "loop"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loop_cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 5,
+            "unique": "loop"
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loops"
+            },
+            "fields": {
+              "completed": {
+                "eq": 5
+              },
+              "required": {
+                "eq": 5
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 6
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "vm": {
+                "ge": 1,
+                "le": 4
+              },
+              "generation": {
+                "ge": 1
+              },
+              "error": {
+                "encoding": "signed",
+                "eq": 0
+              }
+            },
+            "exact_count": 6
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -177,7 +177,8 @@ class DesktopTests(unittest.TestCase):
         m = build.validate_payloads()
         self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /bin/dosbox; desktop shell /bin/control
-                                           "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT"})  # Tango store
+                                           "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
+                                           "calc", "charmap", "clock", "help", "mixer", "viewer"})  # legacy-recovery accessories
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
@@ -185,15 +186,17 @@ class DesktopTests(unittest.TestCase):
         self.assertFalse(build.current_build(expected))
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
+        accessories = {f"/bin/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
         self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/bin/dosbox", "/bin/files", "/bin/tasks",
-                                        "/bin/ciuknote", "/bin/control", "/system/assets/ciuki-portrait.xrgb",
+                                        "/bin/ciuknote", "/bin/control", "/bin/calc", "/bin/charmap", "/bin/clock", "/bin/help", "/bin/mixer", "/bin/viewer",
+                                        "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT"})
         self.assertTrue({"/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 13)
+        self.assertEqual(len(records), 19)
         for r in records:
             if r["path"] == "/system/licenses/stb_image.txt":
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
@@ -216,7 +219,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp)
             volume = Path(temp) / "fixture.fat"
             with volume.open("wb") as f:
-                f.truncate(8*1024*1024)
+                f.truncate(16*1024*1024)   # desktop programs plus the accessories
             subprocess.run(["mkfs.fat", str(volume)], check=True, env=env, stdout=subprocess.DEVNULL)
             image.populate_payloads(volume, sources, directories)
             with patch.object(image, "PART_LBA", 0):
@@ -278,6 +281,7 @@ class AppCaseReplayTests(unittest.TestCase):
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
+                 ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix, ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
                  ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),

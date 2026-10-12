@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include "catalog.h"
 #include "gate.h"
 #include "../libdeskui/deskui.h"
 #include <ciuki/raw.h>
@@ -160,6 +161,8 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     /* f2-33: only the Task Manager receives the delegated termination
      * authority, explicitly mapped to fd 4; it also may send task requests. */
     int tasks=!strcmp(program->name,"tasks");
+    /* Accessories that open a file (Image Viewer, Help) take the LAUNCH argument as CiukNote does. */
+    int takes_file=kind==DESK_APP_NOTE || desk_catalog_takes_file(program->name);
     char *argv[]={(char *)program->name,NULL,NULL,NULL,NULL,NULL};
     unsigned at=1;
     if (graphical) argv[at++]="--channel-fd=3";
@@ -169,7 +172,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     if (tasks && d->tasks_test) argv[at++]="--test=tasks";
     /* LAUNCH from Files: the path of the text file CiukNote opens (the client validated it).
      * The shell also opens Files on a folder and the Control Panel on a page. */
-    if (graphical && kind && d->launch_arg) argv[at++]=(char *)d->launch_arg;
+    if (graphical && (kind || takes_file) && d->launch_arg) argv[at++]=(char *)d->launch_arg;
     char *full[12];
     if (d->launch_argv[0]) {   /* Run dialog: the typed arguments after the desktop's own */
         unsigned n=0;
@@ -201,6 +204,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].pid=(uint32_t)pid;
     d->clients[index].program=kind;
     d->clients[index].taskman=tasks;
+    d->clients[index].mixer=!strcmp(program->name,"mixer");
     d->children[child].pid=(uint32_t)pid;
     return pid;
 }
@@ -225,6 +229,26 @@ static int tasks_verify(const struct desktop *d)
 }
 /* Start menu and taskbar icons: the Tango store through icon_map.c. */
 static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
+/* Volume Control requests (DESK_MIXER_SET): the desktop holds the delegated
+ * /dev/mixer control handle (F4 contract, Volume and persistence); the kernel
+ * validates the record and saves C:\\SYSTEM\\AUDIO.CFG. */
+#ifdef __i386__   /* the SDK target; host replays (x86-64) have no mixer device */
+#include <ciuki/audio.h>
+#endif
+static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_t mute)
+{
+#ifndef __i386__
+    (void)d; (void)left; (void)right; (void)mute;
+    return -ENODEV;   /* host replays: no mixer device */
+#else
+    struct ciuki_mixer_master m;
+    if (d->mixer_fd<0) return -ENODEV;
+    memset(&m,0,sizeof(m)); m.version=1; m.size=sizeof(m);
+    if (ciuki_devctl(d->mixer_fd,MIXER_GET_MASTER,&m,sizeof(m))) return -errno;
+    m.left=left; m.right=right; m.mute=mute; m.save_state=0; m.save_error=0; m.reserved=0;
+    return ciuki_devctl(d->mixer_fd,MIXER_SET_MASTER,&m,sizeof(m)) ? -errno : 0;
+#endif
+}
 /* ---- desktop shell services: the file and kernel side of shell.c ---- */
 static int read_file(const char *path, size_t limit, uint8_t **out, size_t *size)
 {
@@ -403,11 +427,15 @@ static void shell_service(struct desktop *d)
 }
 static void shell_setup(struct desktop *d, int gate)
 {
-    d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon;
+    d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
     int fd=authority ? number(authority,CIUKI_OPEN_MAX-1) : -1;
     d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
+    const char *mixer=getenv("CIUKI_MIXER_FD");
+    fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
+    d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
+    d->mixer_set=mixer_apply;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");
     d->version[0]=0;

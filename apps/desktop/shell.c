@@ -181,6 +181,12 @@ static const struct program_info programs[] = {
     {"demo", "Ciuki Demo", "applications-games", "programs"},
     {"lua", "Lua", "text-x-script", "programs"},
     {"control", "Control Panel", "preferences-desktop", "programs"},
+    {"calc", "Calculator", "accessories-calculator", "accessories"},
+    {"charmap", "Character Map", "accessories-character-map", "accessories"},
+    {"clock", "Clock", "office-calendar", "accessories"},
+    {"help", "CiukiOS Help", "help-browser", "accessories"},
+    {"mixer", "Volume Control", "audio-volume-high", "accessories"},
+    {"viewer", "Image Viewer", "image-x-generic", "accessories"},
     {"hello", "Hello", "application-x-executable", "developer"},
     {"libc_smoke", "libc smoke test", "application-x-executable", "developer"},
 };
@@ -241,18 +247,26 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;
     case SH_MENU_PROGRAMS: {
-        int developer = 0;
+        int developer = 0, accessories = 0;
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
             if (at < 0) continue;
+            if (!strcmp(programs[k].category, "accessories")) { accessories = 1; continue; }
             if (strcmp(programs[k].category, "programs")) { developer = 1; continue; }
             item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
         for (unsigned k = 0; k < d->program_count; k++) if (!program_find(d->programs[k].name)) developer = 1;
         if (!m->count) item(m, "(No programs)", NULL, SH_ACT_NONE, 0, SH_ITEM_DISABLED);
+        if (accessories) item(m, "Accessories", "applications-accessories", SH_ACT_SUBMENU, SH_MENU_ACCESSORIES, 0);
         if (developer) { separator(m); item(m, "Developer", "applications-development", SH_ACT_SUBMENU, SH_MENU_DEVELOPER, 0); }
         break;
     }
+    case SH_MENU_ACCESSORIES:
+        for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
+            int at = program_index(d, programs[k].name);
+            if (at >= 0 && !strcmp(programs[k].category, "accessories")) item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
+        }
+        break;
     case SH_MENU_DEVELOPER:
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
             const struct program_info *p = program_find(d->programs[k].name);
