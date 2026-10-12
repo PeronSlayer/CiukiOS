@@ -173,7 +173,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_demo_arguments_summaries_pacing_and_faults(self):
         include=self.folder/'include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* host transport declaration supplied by harness */\n')
         binary=self.folder/'demo-test'
@@ -209,7 +209,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_desktop_gate_loop(self):
         include=self.folder/'desktop-include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* declarations supplied by harness */\n')
         binary=self.folder/'desktop-gate-test'
@@ -220,7 +220,8 @@ void klog(const char *f,...) {(void)f;}
             '-I',str(self.folder/'desktop-include'),'-I',str(ROOT/'apps/desktop'),
             '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
             *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
-            *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c')),  # desktop.c's shell icons
+            *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c')),  # desktop.c's shell icons
+            *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','settings.c','wallpaper.c','image.c','keymap.c')),  # desktop shell
             *bridge,
             '-o',str(binary)],check=True,env=env)
         result=subprocess.run([str(binary)],capture_output=True,text=True,env=env,timeout=10)
@@ -245,7 +246,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_handshake_reports_through_kernel_hook(self):
         include=self.folder/'handshake-include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):
             (include/name).write_text('/* declarations supplied by host harness */\n')
@@ -259,7 +260,8 @@ void klog(const char *f,...) {(void)f;}
                         '-o',str(demo)],check=True,env=env)
         subprocess.run([*common,str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
                         *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c')),
-                        *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c')),
+                        *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c')),
+                        *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','settings.c','wallpaper.c','image.c','keymap.c')),
                         '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
                         *self.kernel_spawn_bridge(env),
                         '-o',str(desktop)],check=True,env=env)
