@@ -51,6 +51,8 @@ struct desk_client {
     int32_t shade_height;
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
     int mixer;                    /* launched /Programs/mixer (Volume Control); may send MIXER_SET */
+    int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
+    uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;

@@ -52,15 +52,39 @@ static int gate_error(const char *path, int error, unsigned generation)
 static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
 {
     desk_input(d,event);
+    /* f2-30 shell: the A edges count whenever they follow F12; gate_report publishes them only at stage 6
+     * (launch, drag, close, reap). Their arrival is not ordered after the close click: the last shell step
+     * is a mouse click, and the 8042 hands out a pending keyboard byte before pending aux bytes (QEMU
+     * hw/input/pckbd.c kbd_update_irq), so on the firmware input path of qemu-e500 the A edges reached
+     * the desktop before the close click (image 639bcca5: stage 6 with keys=0). f2-33 tasks and the app
+     * scenarios end with keyboard steps and keep the arrival rule (stage 5 / last checkpoint first; the
+     * final report requires DESK_TASKS_DONE / app_done). */
     if (event->type==CIUKI_INPUT_KEY && event->code==0x1e &&
-        (event->value==0 || event->value==1) &&
-        (!d->shell_test || d->shell_stage>=5) && (!d->tasks_test || d->tasks_stage>=5) &&
-        (!d->app_test || d->app_checkpoint>=DESK_APP_CHECKPOINTS(d->app_test))) gate_keys++; /* f2-30: shell sequence first; stage 5 = close requested (the reap to 6 is asynchronous; the final report still requires 6). f2-33: the same for the tasks scenario (final report requires DESK_TASKS_DONE) */
+        (event->value==0 || event->value==1) && (!d->tasks_test || d->tasks_stage>=5) &&
+        (!d->app_test || d->app_checkpoint>=DESK_APP_CHECKPOINTS(d->app_test))) gate_keys++;
     if (event->type==CIUKI_INPUT_MOTION) gate_motion++;
     /* The input grant delivers separate button edges, not a motion mask.
      * Count consumption even when the click focuses the background/title. */
     if (event->type==CIUKI_INPUT_BUTTON && event->code>=1 && event->code<=3 &&
         (event->value==0 || event->value==1)) gate_buttons++;
+}
+/* Gate scenarios: the desktop reads input into a FIFO. While a graphical program it launched has not sent
+ * its first frame, the scripted input stays there; then it is replayed with its recorded spacing, shifted
+ * by the wait. A scripted case then no longer depends on how long the program takes to start: on image
+ * 2fdd515a Files was not ready (not yet at its --test frame) when files-qemu-t23 clicked File at (27,70),
+ * the click raised the survivor demo's window (20,52) behind it, the typed keys went to the survivor and
+ * the shell's Alt+F4 closed it (survivor_exit:0, keys=0). The hold ends after GATE_HOLD_MAX_NS at most. */
+#define GATE_INPUT_FIFO 512
+#define GATE_HOLD_MAX_NS 30000000000ull
+static struct ciuki_input_event input_fifo[GATE_INPUT_FIFO];
+static unsigned fifo_head, fifo_count;
+static int scenario_hold(const struct desktop *d, uint64_t now)
+{
+    for (int i=0; i<DESK_CLIENTS; i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (c->channel>=0 && c->awaiting_frame && now-c->launched_ns<GATE_HOLD_MAX_NS) return 1;
+    }
+    return 0;
 }
 static int gate_setup_error(int gate, unsigned step, int error)
 {
@@ -205,6 +229,8 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].program=kind;
     d->clients[index].taskman=tasks;
     d->clients[index].mixer=!strcmp(program->name,"mixer");
+    d->clients[index].awaiting_frame=graphical;
+    d->clients[index].launched_ns=monotonic();
     d->children[child].pid=(uint32_t)pid;
     return pid;
 }
@@ -532,6 +558,8 @@ int main(int argc, char **argv)
     unsigned report_send=0;
     uint64_t report_deadline=0, next_input_report=0;
     unsigned reported_progress=0;
+    int holding=0, shifted=0;
+    uint64_t shift_base=0, shift_release=0;
     for (;;) {
         uint64_t now = monotonic();
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
@@ -590,16 +618,36 @@ int main(int argc, char **argv)
             }
             desk_flush(d,i);
         }
-        struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
-        int n=ciuki_input_read(input,events,CIUKI_INPUT_READ_MAX);
-        if (n>0) { for (int i=0; i<n; i++) {
+        if (fifo_count+CIUKI_INPUT_READ_MAX<=GATE_INPUT_FIFO) {
+            struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
+            int n=ciuki_input_read(input,events,CIUKI_INPUT_READ_MAX);
+            for (int i=0; i<n; i++) input_fifo[(fifo_head+fifo_count++)%GATE_INPUT_FIFO]=events[i];
+            if (n>0) input_reported=0;
+            else if (n<0 && errno!=EAGAIN && errno!=EINTR && !input_reported) {
+                fprintf(stderr,"desktop: input unavailable (errno=%d)\n",errno); input_reported=1;
+                struct ciuki_input_event resync={.type=CIUKI_INPUT_RESYNC}; desk_input(d,&resync);
+            }
+        }
+        int scenario=gate && (d->shell_test || d->tasks_test || d->app_test);
+        int hold=scenario && scenario_hold(d,now);
+        if (hold) holding=1;
+        else if (holding) {
+            holding=0;
+            if (fifo_count) { shift_base=input_fifo[fifo_head].monotonic_ns; shift_release=now; shifted=1; }
+        }
+        while (fifo_count && !holding) {
+            /* A launch starts its hold before the input that follows the launching click. */
+            if (gate && (d->shell_test || d->tasks_test || d->app_test) && d->action>=0) break;
+            struct ciuki_input_event ev=input_fifo[fifo_head];
+            if (shifted && (int64_t)(now-shift_release)<(int64_t)(ev.monotonic_ns-shift_base)) break;
+            fifo_head=(fifo_head+1)%GATE_INPUT_FIFO; fifo_count--;
             /* Runtime scenario selection. Old gates never send these keys: one of them, pressed
              * once inside the controller's post-fault interaction stage before the shell exists,
              * selects the case. F12: shell, F9: Task Manager (stage machines of their own);
              * F11: Files, F10: CiukNote (app scenarios: the launched program gets
              * --test=<its name>, checkpoint PINGs, a fixed clock and the storage write gate). */
-            if (gate && interaction && !d->shell && events[i].type==CIUKI_INPUT_KEY && events[i].value==1) {
-                int code=events[i].code;
+            if (gate && interaction && !d->shell && ev.type==CIUKI_INPUT_KEY && ev.value==1) {
+                int code=ev.code;
                 int app=code==0x57 ? DESK_APP_FILES : code==0x44 ? DESK_APP_NOTE : 0;
                 if (code==0x58 || code==0x43 || app) {
                     if (code==0x58) d->shell_test=1;
@@ -612,18 +660,14 @@ int main(int argc, char **argv)
                 }
             }
             /* Its release is the scenario's second key edge; later F-key use belongs to the programs. */
-            if (gate && scenario_key && !scenario_released && events[i].type==CIUKI_INPUT_KEY &&
-                events[i].code==scenario_key && events[i].value==0) {
+            if (gate && scenario_key && !scenario_released && ev.type==CIUKI_INPUT_KEY &&
+                ev.code==scenario_key && ev.value==0) {
                 scenario_released=1; d->shell_keys++; input_dirty=1; continue;
             }
             if (gate && interaction) {
-                gate_input(d,&events[i]);
+                gate_input(d,&ev);
                 input_dirty=1;
-            } else desk_input(d,&events[i]);
-        } input_reported=0; }
-        else if (n<0 && errno!=EAGAIN && errno!=EINTR && !input_reported) {
-            fprintf(stderr,"desktop: input unavailable (errno=%d)\n",errno); input_reported=1;
-            struct ciuki_input_event resync={.type=CIUKI_INPUT_RESYNC}; desk_input(d,&resync);
+            } else desk_input(d,&ev);
         }
         if (d->action>=0) {
             unsigned selected=(unsigned)d->action; d->action=-1;

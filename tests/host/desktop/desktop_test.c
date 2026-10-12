@@ -257,6 +257,7 @@ static void test_resize(void)
     fake_surface(11,320,240,0x112233);resize_create(&m,11);desk_receive(&d,i,&m);flush_all();
     struct desk_client *c=&d.clients[i];struct desk_box f=c->frame;
     assert(c->resizable && fake_live()==3);
+    c->awaiting_frame=1; /* A resize acknowledgement may be the first rendered frame. */
     int x[8]={f.x-6,f.x+f.w+6,f.x+100,f.x+100,f.x-6,f.x+f.w+6,f.x-6,f.x+f.w+6};
     int y[8]={f.y+100,f.y+100,f.y-6,f.y+f.h+6,f.y-6,f.y-6,f.y+f.h+6,f.y+f.h+6};
     unsigned edges[8]={1,2,4,8,5,6,9,10};
@@ -267,10 +268,11 @@ static void test_resize(void)
     pointer(d.mouse_x+83,d.mouse_y+51);event(CIUKI_INPUT_BUTTON,1,0,0);
     assert(d.drag==-1 && c->frame.w==406 && c->frame.h==315 && c->info.width==320 && c->surface==11);
     assert(c->resize_serial==1);
+    assert(c->awaiting_frame); /* CREATE/CONFIGURE do not release scripted input. */
     flush_all();fake_surface(12,400,288,0x445566);
     request(&m,DESK_DAMAGE,24);m.data[0]=2;m.data[2]=1;m.fd_count=1;m.fds[0]=12;
     desk_put32(m.data+12,400);desk_put32(m.data+16,288);desk_put32(m.data+20,1);desk_receive(&d,i,&m);
-    assert(c->surface==12 && c->info.width==400 && c->applied_serial==1 && fake_live()==3);flush_all();
+    assert(!c->awaiting_frame && c->surface==12 && c->info.width==400 && c->applied_serial==1 && fake_live()==3);flush_all();
     struct desk_box user=c->frame;desk_zoom(&d,i);
     assert(c->zoomed && !c->collapsed && c->frame.x==0 && c->frame.y==32 && c->frame.w<=800 && c->frame.h<=536);
     desk_collapse(&d,i);assert(c->collapsed);desk_collapse(&d,i);assert(!c->collapsed);

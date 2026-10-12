@@ -273,6 +273,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_DAMAGE: {
+        c->awaiting_frame = 0;   /* its first frame: a launched program is ready for input (desktop.c) */
         if (p.serial) {
             void *pixels = d->ops.map(m->fds[0], PROT_READ);
             if (!pixels || pixels == MAP_FAILED) { close_attachments(d, m, -1); desk_drop_client(d, i); return; }

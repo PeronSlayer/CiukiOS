@@ -492,6 +492,17 @@ int main(void)
     desk_put32(m.data+4,240); desk_put32(m.data+8,160); desk_put32(m.data+12,4);
     memcpy(m.data+16,"Demo",4); desk_receive(&d,0,&m);
     assert(d.clients[0].window && d.shell_stage==3);
+    /* The gate scenarios hold input for a launched program until its first frame (desktop.c scenario_hold). */
+    assert(d.clients[0].awaiting_frame && scenario_hold(&d,d.clients[0].launched_ns));
+    assert(!scenario_hold(&d,d.clients[0].launched_ns+GATE_HOLD_MAX_NS));
+    desk_message(&m,DESK_DAMAGE,20); m.data[0]=2; m.sender_pid=100; desk_put32(m.data+12,240); desk_put32(m.data+16,160);
+    desk_receive(&d,0,&m); assert(!d.clients[0].awaiting_frame && !scenario_hold(&d,d.clients[0].launched_ns));
+    /* f2-30: the A edges count whatever shell stage they arrive in (the 8042 may deliver them before the
+     * close click); gate_report publishes them only at stage 6 (below). */
+    struct ciuki_input_event a={.type=CIUKI_INPUT_KEY,.code=0x1e,.value=1};
+    gate_keys=0; gate_input(&d,&a); a.value=0; gate_input(&d,&a); assert(gate_keys==2 && d.shell_stage==3);
+    gate_keys=2; d.shell_keys=2; gate_report(&d,0,1,42,0,100); assert(strstr(captured_report," keys=0 "));
+    gate_keys=0; d.shell_keys=0;
     desk_menu_close(&d);   /* as a menu launch does (shell.c activate): the menu drops over the demo's title now */
     assert(!d.menu_open && d.focus==0);
     struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
