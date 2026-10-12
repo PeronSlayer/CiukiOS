@@ -111,3 +111,4 @@ Documenti di design, validazione, fonti esterne.
 | [Correzioni UI del proprietario, giochi DOS verdi, f3-07 e revisione del kernel](2026-10-12-02-correzioni-ui-giochi-f3-07.md) | 12 ott | modifica e verifica; decisioni f2-34, f3-08, giochi shareware |
 | [Decisioni su identità e albero retrò; fusioni f2-34, f2-35, f3-08, sfondi Fill](2026-10-12-03-decisioni-identita-namespace-retro.md) | 12 ott | decisioni (design) e modifiche; qualifica QEMU in corso |
 | [Integrazione completa 0.9.0: immagine 8435a16a e immagine T23 893a83e0](2026-10-12-04-integrazione-completa-immagine-t23.md) | 12 ott | fusioni finali, verifica host, consegna hardware; campagna QEMU rinviata |
+| [Fusione di wt/integ2 in main: pre-alpha 0.9.0 integrata](2026-10-12-05-fusione-in-main.md) | 12 ott | fusione; decisione del proprietario (campagna interrotta) |
