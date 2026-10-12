@@ -461,7 +461,7 @@ class DesktopTests(unittest.TestCase):
         if not (build.OUT / "manifest.json").is_file():
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
-        self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", "libdeskui.a",
+        self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
                                            "calc", "charmap", "clock", "help", "mixer", "viewer"})  # legacy-recovery accessories
@@ -474,7 +474,7 @@ class DesktopTests(unittest.TestCase):
         sources, directories, metadata = image.desktop_payloads()
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
         self.assertEqual(set(sources), {"/Programs/desktop", "/Programs/demo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
-                                        "/Programs/ciuknote", "/Programs/control", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer",
+                                        "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
@@ -485,7 +485,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 39)  # 22 desktop/icon/wallpaper files plus 17 sound payloads
+        self.assertEqual(len(records), 40)  # 23 desktop/IDE/icon/wallpaper files plus 17 sound payloads
         for r in records:
             if r["path"] == "/system/licenses/stb_image.txt":
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())

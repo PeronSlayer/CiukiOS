@@ -32,13 +32,18 @@ def archive():
     upstream = ROOT / "assets/sounds/kenney-interface"
     pin = json.loads((upstream / "UPSTREAM.json").read_text())
     cache = ROOT / "build/downloads/kenney_interface-sounds.zip"
-    cache.parent.mkdir(parents=True, exist_ok=True)
     if not cache.exists():
         existing = upstream / "upstream.zip"
-        data = existing.read_bytes() if existing.exists() else urllib.request.urlopen(pin["download"], timeout=60).read()
-        if sha(data) != pin["archive_sha256"]:
-            raise ValueError("Kenney archive SHA-256 mismatch")
-        cache.write_bytes(data)
+        if existing.exists():
+            # Use the pinned vendored archive directly, including in worktrees
+            # whose shared download cache is read-only.
+            cache = existing
+        else:
+            data = urllib.request.urlopen(pin["download"], timeout=60).read()
+            if sha(data) != pin["archive_sha256"]:
+                raise ValueError("Kenney archive SHA-256 mismatch")
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_bytes(data)
     if sha(cache.read_bytes()) != pin["archive_sha256"]:
         raise ValueError("Kenney cached archive SHA-256 mismatch")
     return pin, zipfile.ZipFile(cache)

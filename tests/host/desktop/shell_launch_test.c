@@ -545,8 +545,8 @@ static void test_menu_icons(void)
 {
     struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
-    static const char *const bin[]={"calc","charmap","ciuknote","clock","control","demo","dosbox","files","hello","help",
-                                    "libc_smoke","lua","mixer","tasks","viewer","newtool"};
+    static const char *const bin[]={"calc","charmap","ciukide","ciuknote","clock","control","demo","dosbox","files","hello","help",
+                                    "libc_smoke","lua","mixer","tasks","tcc","viewer","newtool"};
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     for (unsigned i=0;i<sizeof(bin)/sizeof(bin[0]);i++) desk_program_add(&d,bin[i],elf,sizeof(elf));
     d.sh.cfg.recent_count=1; snprintf(d.sh.cfg.recent[0],sizeof(d.sh.cfg.recent[0]),"/notes.txt");
@@ -561,7 +561,8 @@ static void test_menu_icons(void)
             if (x->icon && y->icon && !(x->action==SH_ACT_GAME && y->action==SH_ACT_GAME)) assert(strcmp(x->icon,y->icon));
         }
         if (kinds[k]==SH_MENU_DEVELOPER) {   /* only programs outside Programs and Accessories */
-            assert(m->count==3 && item_at(m,"Hello")>=0 && item_at(m,"libc smoke test")>=0 && item_at(m,"newtool")>=0);
+            assert(m->count==5 && item_at(m,"Hello")>=0 && item_at(m,"libc smoke test")>=0 && item_at(m,"newtool")>=0 &&
+                   item_at(m,"CiukIDE")>=0 && item_at(m,"Tiny C Compiler")>=0);
             assert(item_at(m,"Calculator")<0 && item_at(m,"CiukNote")<0);
         }
         desk_menu_close(&d);

@@ -239,6 +239,8 @@ static const struct program_info programs[] = {
     {"mixer", "Volume Control", "audio-volume-high", "accessories"},
     {"viewer", "Image Viewer", "image-x-generic", "accessories"},
     {"hello", "Hello", "face-smile", "developer"},
+    {"ciukide", "CiukIDE", "applications-development", "developer"},
+    {"tcc", "Tiny C Compiler", "text-x-script", "developer"},
     {"libc_smoke", "libc smoke test", "applications-system", "developer"},
 };
 static const struct program_info *program_find(const char *name)

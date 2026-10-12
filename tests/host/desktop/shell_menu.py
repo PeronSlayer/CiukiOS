@@ -84,7 +84,8 @@ def check_launch(test, clicks, programs, name, label=""):
 
 def image_programs(root):
     import re
-    return sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (root / "scripts/build_image.py").read_text())) - {"desktop"})
+    recipes = (root / "scripts/build_image.py", root / "apps/tcc/build_tcc.py")
+    return sorted({n for p in recipes for n in re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', p.read_text())} - {"desktop"})
 
 
 def walk(case):

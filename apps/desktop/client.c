@@ -392,10 +392,14 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
          * LAUNCH /Programs/ciuknote with one absolute path argument (opening a text file). */
         int files_open = p.opcode == DESK_LAUNCH && c->program == DESK_APP_FILES && !c->taskman &&
                          (!strcmp(p.title, "ciuknote") || desk_catalog_takes_file(p.title)) && p.argument[0] == '/';
-        int32_t result = !c->taskman && !files_open ? -EPERM :
+        int ide_run = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
+                      !strcmp(p.title,"ciukide-run");
+        int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
+                        !strcmp(p.title,"ciuknote") && !strcmp(p.argument,"/Documents/Developer/Guide.txt");
+        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide ? -EPERM :
             p.opcode == DESK_END_TASK ? desk_task_end(d, p.window_id, p.pid) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
-            c->taskman && p.argument[0] ? -EPERM : desk_task_launch(d, p.title, p.argument);
+            c->taskman && p.argument[0] ? -EPERM : ide_run ? desk_ide_launch(d,p.argument) : desk_task_launch(d, p.title, p.argument);
         if (p.opcode == DESK_END_TASK && !result) desk_sound(d,SOUND_END_TASK);
         /* Documents menu: files opened from Files (never in the runtime gate scenarios). */
         if (files_open && result > 0 && d->shell && !d->sh.gate) { cfg_recent_add(&d->sh.cfg, p.argument); d->sh.want_save = 1; }
@@ -686,6 +690,31 @@ int desk_task_launch(struct desktop *d, const char *name, const char *argument)
         return pid<0 ? -(error ? error : EIO) : pid;
     }
     return -ENOENT;
+}
+
+int desk_ide_launch(struct desktop *d,const char *path)
+{
+    if (d->power.state) return -EBUSY;
+    size_t n=strlen(path);
+    if (n<=11 || n>DESK_ARG_MAX || strncmp(path,"/Documents/",11)) return -EPERM;
+    const char *start=path+11;
+    for (const char *p=start;;++p) {
+        unsigned char ch=(unsigned char)*p;
+        if (!ch || ch=='/') {
+            size_t len=(size_t)(p-start);
+            if (!len || (len==1 && *start=='.') || (len==2 && start[0]=='.' && start[1]=='.')) return -EINVAL;
+            if (!ch) break;
+            start=p+1;
+        } else if (ch<32 || ch>126 || ch=='\\' || ch==':') return -EINVAL;
+    }
+    if (!d->launch) return -ENOSYS;
+    /* The ordinary launcher owns channel creation, child tracking and reap.
+       Kernel ELF validation still admits/rejects the actual file. A generic
+       project app gets no Task Manager, mixer, Files or IDE privileges. */
+    struct desk_program program={0};
+    strcpy(program.name,"ciukide-app"); memcpy(program.path,path,n+1);
+    int pid=d->launch(d,&program), error=errno;
+    return pid<0 ? -(error ? error : EIO) : pid;
 }
 
 /* Shutdown is driven by the ordinary IPC/reap/paint loop, never by sleeps.
