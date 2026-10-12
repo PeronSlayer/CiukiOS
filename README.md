@@ -23,10 +23,9 @@ narrower and more useful today:
 
 - a system that boots quickly, plays reliably, and whose source you can read;
 - **DOS games** running natively, with sound, full screen or in a window;
-- the classic games whose engines have public source code, **built for
-  CiukiOS itself**: Doom, Quake, Half-Life (through Xash3D), Descent, Duke
-  Nukem 3D and others; the game data stays the player's own copy;
-- **LAN play**, for DOS games and native games alike, with the network cards
+- the **Windows games** of those years installed and started as on Windows,
+  through a compatible Win32 API; the game data stays the player's own copy;
+- **LAN play**, for DOS and Windows games alike, with the network cards
   those machines have;
 - later, the original **Windows 95/98 games** through a Win32 layer based on
   Wine, and **3D acceleration** on a chosen set of graphics chips.
