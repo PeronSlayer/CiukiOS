@@ -38,6 +38,7 @@ struct cp_app {
     uint32_t preview[192 * 144];
     int preview_valid;
     struct desk_image image;
+    char image_path[128];           /* path of the wallpaper decoded into image (preview_build cache) */
     char status[96], clock_line[64], date_line[64];
     int quit;
 };

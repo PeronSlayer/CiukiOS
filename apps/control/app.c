@@ -80,9 +80,24 @@ static const struct desk_theme *chosen(const struct cp_app *a)
 static void preview_build(struct cp_app *a)
 {
     uint32_t sw = a->host.screen_w ? a->host.screen_w : 1024, sh = a->host.screen_h ? a->host.screen_h : 768;
+    if (a->cfg.wallpaper[0] == '/') {
+        /* Image wallpapers: decode once per path (kept across theme, mode and
+         * colour changes) and render straight at preview size. A full-screen
+         * fill of the 1448x1086 default scene followed by a 1024x768 -> 192x144
+         * downscale took seconds under TCG and the window opened black
+         * (lead fix, 2026-10-12). */
+        if (!a->image.pixels || strncmp(a->image_path, a->cfg.wallpaper, sizeof(a->image_path))) {
+            desk_image_free(&a->image);
+            if (a->host.decode) a->host.decode(a->host.ctx, a->cfg.wallpaper, &a->image);
+            snprintf(a->image_path, sizeof(a->image_path), "%s", a->cfg.wallpaper);
+        }
+        uint32_t bar = sh ? (32u * 144u) / sh : 6;
+        desk_wallpaper_render(a->preview, 192, 144, bar, bar, a->cfg.wallpaper, a->cfg.wallpaper_mode,
+                              desktop_colour(a, chosen(a)), &a->image, a->host.portrait);
+        a->preview_valid = 1;   /* no alpha: the scaled path never carried one either */
+        return;
+    }
     uint32_t *full = malloc((size_t)sw * sh * 4u);
-    desk_image_free(&a->image);
-    if (a->cfg.wallpaper[0] == '/' && a->host.decode) a->host.decode(a->host.ctx, a->cfg.wallpaper, &a->image);
     if (full) {
         desk_wallpaper_render(full, sw, sh, 32, 32, a->cfg.wallpaper, a->cfg.wallpaper_mode, desktop_colour(a, chosen(a)), &a->image, a->host.portrait);
         struct desk_image src = {full, sw, sh};
@@ -90,7 +105,6 @@ static void preview_build(struct cp_app *a)
         desk_image_scale(&src, a->preview, 192, 144, CFG_WALL_STRETCH, desktop_colour(a, chosen(a)));
         free(full);
     } else for (size_t i = 0; i < 192 * 144; i++) a->preview[i] = desktop_colour(a, chosen(a));
-    desk_image_free(&a->image);
     a->preview_valid = 1;
 }
 static void put(struct du_canvas *c, int x, int y, int w, int h, uint32_t colour) { du_fill(c, (struct du_rect){x, y, w, h}, colour); }

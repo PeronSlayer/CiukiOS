@@ -66,7 +66,9 @@ static void check_marked(int mode)
 {
     for (int k = 0; k < 5; k++) assert(find(DU_BUTTON, labels[k])->def == (modes[k] == mode));
 }
-/* The preview is the full 1024x768 render of the chosen mode, scaled to 192x144. */
+/* An image wallpaper is rendered straight at preview size (bars 32*144/768 =
+ * 6 px, decoded image cached in the app); any other spec is the full 1024x768
+ * render of the chosen mode scaled to 192x144. */
 static void check_preview(void)
 {
     assert(a.preview_valid);
@@ -74,11 +76,16 @@ static void check_preview(void)
     struct desk_image image;
     assert(!decode(NULL, a.cfg.wallpaper, &image));
     uint32_t colour = desk_theme_named(a.cfg.theme)->desktop;
-    assert(!desk_wallpaper_render(full, 1024, 768, 32, 32, a.cfg.wallpaper, a.cfg.wallpaper_mode, colour, &image, portrait));
+    if (a.cfg.wallpaper[0] == '/') {
+        assert(!desk_wallpaper_render(expected, 192, 144, 6, 6, a.cfg.wallpaper, a.cfg.wallpaper_mode, colour, &image, portrait));
+        assert(a.image.pixels && !strcmp(a.image_path, a.cfg.wallpaper));
+    } else {
+        assert(!desk_wallpaper_render(full, 1024, 768, 32, 32, a.cfg.wallpaper, a.cfg.wallpaper_mode, colour, &image, portrait));
+        for (size_t i = 0; i < 1024 * 768; i++) full[i] |= 0xff000000u;
+        struct desk_image src = {full, 1024, 768};
+        desk_image_scale(&src, expected, 192, 144, CFG_WALL_STRETCH, colour);
+    }
     desk_image_free(&image);
-    for (size_t i = 0; i < 1024 * 768; i++) full[i] |= 0xff000000u;
-    struct desk_image src = {full, 1024, 768};
-    desk_image_scale(&src, expected, 192, 144, CFG_WALL_STRETCH, colour);
     assert(!memcmp(expected, a.preview, sizeof(expected)));
 }
 /* Preview column 0 at mid-height: Fit leaves desktop-colour bands beside a
@@ -147,7 +154,7 @@ int main(int argc, char **argv)
         check_marked(modes[k]);
         assert(!a.preview_valid);
         du_render(&u);
-        assert(decodes > d0);
+        assert(decodes == d0);   /* a mode change reuses the decoded image cached per path */
         check_preview();
         assert(preview_band() == (modes[k] == CFG_WALL_FIT));
         if (modes[k] == CFG_WALL_FIT) at_save(renders, "control-display-fit", &u);
