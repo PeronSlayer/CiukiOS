@@ -105,11 +105,12 @@ struct dosvm_video_info {
     uint32_t mode;            /* BDA 0049h */
     uint32_t unchained;       /* SR04 chain-4 clear, odd/even disabled: Mode X/Y planes */
     uint32_t width, height;   /* model scanout geometry, 0 when unsupported */
-    uint32_t faults, pm_faults; /* aperture instructions emulated; of which from DPMI clients */
+    uint32_t faults, pm_faults; /* aperture faults emulated or retried; of which from DPMI clients */
     uint32_t starts;          /* CRTC start-address-high writes (page flips) */
     uint32_t maps, flushes;   /* direct plane windows opened; window pages copied back */
     uint32_t frames;          /* presenter frames produced */
     uint32_t burst;           /* instructions emulated after a fault without trapping */
+    uint32_t linear_maps, linear_harvests; /* chain-4 windows opened; dirty pages harvested */
 };
 bool dosvm_video_info(struct dosvm_key, struct dosvm_video_info *);
 /* Host-testable private-sector and BIOS boundaries. */

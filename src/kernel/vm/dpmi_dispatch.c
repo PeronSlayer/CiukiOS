@@ -490,7 +490,10 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
          * interrupts were enabled) is a trapped device cycle, emulated on
          * the VM's VGA model with the client's 16/32-bit decoding. DOOM's
          * mode 13h/Y frame writes reach the model this way. */
-        if (cr2 >= 0xA0000 && cr2 < 0xC0000 && (f->tf.err & 5) == 5) return dosvm_vga_fault_pm(v, f);
+        if (cr2 >= 0xA0000 && cr2 < 0xC0000 && (f->tf.err & 5) == 5) {
+            if (dosvm_vga_retry(v, cr2, dpmi_fault_linear(v, f), true)) return 0;
+            return dosvm_vga_fault_pm(v, f);
+        }
         return dpmi_exception(v, f, 14, f->tf.err);
     default:
         if (vector < 32) return dpmi_exception(v, f, vector, f->tf.err);

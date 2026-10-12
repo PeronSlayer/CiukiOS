@@ -1416,3 +1416,119 @@ worktree's three compile fixes, applied identically):
 - DOS/4GW 1.97 (`DPMI4GW.EXE`'s extender) redistribution text is still not
   located (`redistribution=open_question`); DOOM's bound 1.95 extender is
   part of the owner's local payload.
+
+## f3-07
+
+Direct chained-mode window (directive f3-07). QEMU and hardware acceptance
+belong to the lead; host evidence does not qualify either. Supersedes the
+f3-06 limitation that chained mode-13h stores always trap per instruction.
+
+### Research checked before implementation (2026-10-12)
+
+- [FreeVGA sequencer registers](https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/seqreg.htm):
+  SR04 chain-4 selects the plane using address bits 0–1; SR02 still enables
+  individual planes. Odd/even must be disabled and extended memory enabled.
+- [FreeVGA graphics registers](https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/graphreg.htm)
+  and [display-memory access](https://web.stanford.edu/class/cs140/projects/pintos/specs/freevga/vga/vgamem.htm):
+  write mode 0 is a plain byte store only with enable-set/reset clear,
+  rotate/logical operation zero and bit mask FFh. Read mode 1 and odd/even
+  reads cannot use a linear mapping. Hardware reads load all four latches;
+  those latches do not affect identity write-mode-0 stores.
+- [DOSBox Staging upstream `vga_memory.cpp`](https://raw.githubusercontent.com/dosbox-staging/dosbox-staging/main/src/hardware/video/vga_memory.cpp):
+  chained handlers separate CPU byte addressing from plane storage and
+  scanout caches. Consulted for behavior only; no upstream code copied.
+  The repository's `memory_address`, `read_vram`, `cvga_write_vram` and
+  scanout use physical plane offsets: byte `o` selects plane `o & 3` at
+  `o & FFFCh`, rather than a compacted `o >> 2`. That existing layout is
+  retained, including the untouched intervening plane bytes.
+
+### Decisions
+
+- Reuse the VM's sixteen already allocated A0000h–AFFFFh backing pages as
+  the linear 64 KiB buffer, seeded from the four planes on opening. No new
+  allocation, commitment, residency or memory limit is required. These
+  pages may be physically noncontiguous; the shared V86/DPMI page table
+  maps each one user-writable. B0000h–BFFFFh remains trapped. The existing
+  single-plane mapping and its counters retain their behavior.
+- Enable only the standard chained 320x200 graphics state: SR04 bits 1–3
+  set, SR02=0Fh, A0000h 64 KiB aperture, read/write mode 0, GC01/03 zero,
+  GC08=FFh, 256-color shift, and mode-13h CRTC addressing. Palette and
+  start-address changes remain trapped and counted.
+- Harvest CPU-dirty linear pages using the existing PTE dirty-bit/TLB
+  machinery. Deinterleave only those pages into the model using
+  `cvga_store_plane`; dirty presenter granules are set for changed bytes.
+  Close before BIOS/VBE calls, register changes that affect access or CRTC
+  mode, model reads/writes, presentation, VM stop and low-page restoration.
+  Palette/start-address writes do not need to close the linear mapping.
+  Re-evaluate after port/BIOS changes; an eligible aperture protection
+  fault after closure opens the mapping and retries the original instruction,
+  with no EIP/register advancement or V86 burst. Retry faults are counted.
+- Direct reads return the same bytes as trapped read mode 0, independent of
+  GC04. As for the existing plane window, direct reads do not load latches:
+  no load is needed for identity chain-4 write-mode-0 stores. Enabling a
+  latch-dependent operation closes the mapping before subsequent reads.
+  A program which reads while mapped, switches to write mode 1 and consumes
+  that earlier read's latches without another read retains the f3-06
+  limitation; this optimization does not claim to track native CPU reads.
+- `linear_maps` counts openings and `linear_harvests` counts dirty linear
+  pages harvested; plane `maps`/`flushes` remain separate. The DOOM
+  `case=video` row gains both counters; `faults`/`flushes` move to a
+  companion `case=video_detail` row so the 240-byte record envelope holds
+  even with maximum 32-bit counters. Existing suite fields stay available.
+
+### Host verification (worktree `wt/f3-07`, 2026-10-12)
+
+- `make kernel`: PASS, clang i686 `-Werror`, FPU/SIMD audit PASS;
+  `build/f0/VMM.ELF` 3,471,736 bytes, base `af6369cd5a34` with local changes.
+- `ASAN_OPTIONS=detect_leaks=0 bash scripts/test/host_kernel_tests.sh`: PASS.
+  The initial unmodified environment failed at LeakSanitizer because this
+  sandbox denies its process inspection; ASan and UBSan remain enabled.
+  The pre-existing Wolf3D replay was missing its closing `}` in the base;
+  that compile blocker was corrected without changing the replay.
+- DOS VM harness: **4,811,002 checks**, PASS. V86 replay through
+  `dosvm_trap`: 32,768 stores, 32,768 trapped faults versus **1** with the
+  linear window. Flat-selector PM replay through `dosvm_trap` /
+  `dpmi_pm_trap`: 16,384 stores, 16,384 trapped faults versus **1** with the
+  window. That one fault retries after a deliberate mid-frame closure.
+  The no-window replay disables only GC06 graphics scanout while preserving
+  identical chain-4 memory cycles, restoring graphics before presentation.
+  Both compare every plane byte (including sentinel holes), every mapped
+  read for all four GC04 selections and the unused end of the 64 KiB window.
+  Closure tests cover the directive's indexed port writes (both selected
+  CRTC pairs), set/reset, odd/even, aperture, BIOS clear/preserve, VBE,
+  kernel peek/store, latch copy, presenter and VM stop/destruction. Clean
+  pages are not harvested twice; granules represent only changed bytes.
+- All five f3-02 goldens unchanged, including a mode-13h pattern written
+  through the actual linear backing/PTE dirty-bit seam (stage 3) and the
+  stage-4 Mode X golden. Wolf3D replays unchanged: 76 / 152 / 0 faults,
+  0 / 0 / 304 plane maps, one flip each. Independent VGA vectors:
+  173,117 assertions PASS; `cvga_state` remains 267,092 bytes.
+- Standard libx86emu guest probes: PASS (27,156,373 instructions,
+  212,345 traps, 0 unexpected); TCG-model guest probes PASS (853,698
+  instructions, 174,763 traps, 0 unexpected).
+- `python3 scripts/build_dos_image.py`: T1 DOS PASS, 24 payloads read back,
+  SHA-256 `0a48c8e347c4211033443ca7d9dab2d34ef3362be29732ee2eb97d95f58d3e62`.
+  DOOM fixture fsck/mtools read-back PASS; supplemental libx86emu run of
+  `-nosound -timedemo demo1`: **timed 1710 gametics in 15162 realtics**,
+  **1714 flips**, RUNREC `R01_T00` (the expected timedemo exit 1), DPMI
+  resources released, guest runner PASS (2,584,560,273 instructions,
+  5,189,202 traps, 0 unexpected). The runner writes the model directly:
+  its zero `pm_faults` is not evidence for the mapped window or QEMU timing.
+- Focused Python tests (`test_f3_workloads`, `test_dosvm`, `test_vga_x86`):
+  19 tests PASS. Record-envelope tests retain the existing suite fields
+  and cover maximum counters plus maximum CRTC geometry (231-byte video
+  row for `doom-sound`). `git diff --check`: PASS.
+
+### Lead gate and limitations
+
+Build the canonical image once after review/integration, then qualify
+`doom-qemu-t23` (five loops: gametics=1710, flips approximately 1714,
+pm_faults <= 1000 per loop, at least 100x below the previous result).
+Inspect `linear_maps`/`linear_harvests` and the companion video-detail rows;
+retain the vm-video and vm-window digests and wolf3d-qemu-t23 evidence.
+The existing workload suite still has its previous PM-fault lower-bound
+predicate; tightening the performance gate belongs to the lead's QEMU
+qualification. Run the earlier integrated F0/F1/F2/F3 gates and complete
+the T23 DOOM hardware run. No QEMU, full image/CD build, hardware test,
+commit or push was performed here. The complete verbatim host outputs and
+handoff are in `build/codex/f3-07-report.md`.
