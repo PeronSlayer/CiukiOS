@@ -76,7 +76,7 @@ class IconStoreTests(unittest.TestCase):
         cls.binary = cls.folder / "icons_test"
         subprocess.run([*FLAGS, "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                         *cls.assets.defines(), str(ROOT / "tests/host/desktop/icons_test.c"),
-                        *(str(ROOT / s) for s in ["apps/libdeskui/draw.c", *cls.assets.SOURCES, "apps/desktop/compositor.c"]),
+                        *(str(ROOT / s) for s in ["apps/libdeskui/draw.c", *cls.assets.SOURCES, "apps/desktop/compositor.c", "apps/desktop/theme.c"]),
                         "-o", str(cls.binary)], check=True, env=cls.env)
 
     @classmethod

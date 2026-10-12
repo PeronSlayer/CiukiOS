@@ -29,18 +29,14 @@ void charmap_paint(struct du_ui *u, void *user)
         char s[2] = {(char)(CHARMAP_FIRST + i), 0};
         int sel = i == a->selected;
         if (sel) du_fill(c, r, DU_SELECT);
-        du_text(c, r.x + (r.w - DU_CHAR_W) / 2 + 1, r.y + (r.h - DU_GLYPH_H) / 2, s, sel ? DU_SELECT_INK : DU_INK);
+        du_text(c, r.x + (r.w - du_text_width(s)) / 2, r.y + (r.h - DU_GLYPH_H) / 2, s, sel ? DU_SELECT_INK : DU_INK);
     }
-    /* Enlarged preview of the selected character (the glyph scaled by 6). */
+    /* Enlarged preview of the selected character in the theme's large face. */
     struct du_rect box = {GRID_X + CHARMAP_COLS * CELL - 64, GRID_Y + rows() * CELL + 8, 64, 64};
-    du_fill(c, box, DU_WINDOW); du_edge(c, box, DU_SUNKEN);
-    uint32_t cell[DU_CHAR_W * 9]; struct du_canvas tiny = { cell, DU_CHAR_W, 9, {0, 0, DU_CHAR_W, 9} };
-    for (unsigned i = 0; i < DU_CHAR_W * 9; i++) cell[i] = DU_WINDOW;
+    du_well(c, box, DU_WINDOW);
     char s[2] = {(char)(CHARMAP_FIRST + a->selected), 0};
-    du_text(&tiny, 0, 1, s, DU_INK);
-    for (int y = 0; y < 9; y++) for (int x = 0; x < DU_CHAR_W; x++)
-        if (cell[y * DU_CHAR_W + x] != DU_WINDOW)
-            du_fill(c, (struct du_rect){box.x + 14 + x * 6, box.y + 5 + y * 6, 6, 6}, cell[y * DU_CHAR_W + x]);
+    int font = desk_theme->font_large;
+    du_text_font(c, font, box.x + (box.w - du_text_width_font(font, s)) / 2, box.y + (box.h - desk_font_cap(font)) / 2, s, DU_INK);
 }
 static const struct du_menu_item help_template[] = { {"&About Character Map", CM_M_ABOUT, 0, 0, 0} };
 void charmap_attach(struct charmap_app *a, struct du_ui *u)
@@ -49,7 +45,7 @@ void charmap_attach(struct charmap_app *a, struct du_ui *u)
     memcpy(a->help_items, help_template, sizeof(help_template));
     a->menus[0] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 1;
-    du_add(u, DU_LABEL, CM_LABEL, (struct du_rect){8, 24, 200, 18}, "Font: CiukiOS System (5x7)");
+    du_add(u, DU_LABEL, CM_LABEL, (struct du_rect){8, 24, 200, 18}, "Font: Inter (CiukiOS UI)");
     du_add(u, DU_TOOLBUTTON, CM_GRID, (struct du_rect){GRID_X, GRID_Y, CHARMAP_COLS * CELL, rows() * CELL}, "");
     int y = GRID_Y + rows() * CELL + 10;
     du_add(u, DU_LABEL, CM_LABEL + 1, (struct du_rect){8, y, 140, 18}, "Characters to copy:");

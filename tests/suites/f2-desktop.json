@@ -2829,7 +2829,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 84
+                    "value": 66
                   }
                 }
               ],
@@ -2872,7 +2872,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -146
+                    "value": -128
                   }
                 }
               ],
@@ -3737,7 +3737,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 84
+                    "value": 66
                   }
                 }
               ],
@@ -3780,7 +3780,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -146
+                    "value": -128
                   }
                 }
               ],
@@ -4648,7 +4648,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 18
+                    "value": 1
                   }
                 }
               ],
@@ -4691,7 +4691,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -24
+                    "value": -7
                   }
                 }
               ],
@@ -5051,7 +5051,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -103
+                    "value": -187
                   }
                 }
               ],
@@ -5094,7 +5094,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 37
+                    "value": 40
                   }
                 }
               ],
@@ -5106,7 +5106,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": 21
+                    "value": 18
                   }
                 },
                 {
@@ -5137,14 +5137,14 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -62
+                    "value": -56
                   }
                 },
                 {
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 107
+                    "value": 104
                   }
                 },
                 {
@@ -5295,7 +5295,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": -35
+                    "value": -39
                   }
                 },
                 {
@@ -5345,7 +5345,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 63
+                    "value": 68
                   }
                 }
               ],
@@ -5357,7 +5357,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "x",
-                    "value": 21
+                    "value": 22
                   }
                 },
                 {
@@ -6798,7 +6798,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 40
+                    "value": 22
                   }
                 }
               ],
@@ -6841,7 +6841,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 66
+                    "value": 84
                   }
                 }
               ],
@@ -7159,7 +7159,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 113
+                    "value": 85
                   }
                 }
               ],
@@ -7870,7 +7870,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -4
+                    "value": -22
                   }
                 }
               ],
@@ -7913,7 +7913,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -86
+                    "value": -68
                   }
                 }
               ],

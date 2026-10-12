@@ -68,9 +68,9 @@ static void script_coordinates(void)
     struct du_widget *places = du_get(&ui, 103);
     struct du_rect system = du_list_label(places, 2);
     printf("SCRIPT view_title=%d,%d list_item=%d,%d places_system=%d,%d file_title=%d,%d new_folder=%d,%d\n",
-           view.x + view.w / 2, view.y + view.h / 2, vbox.x + 40, vbox.y + 3 + 17 + 8,
+           view.x + view.w / 2, view.y + view.h / 2, vbox.x + 40, vbox.y + 3 + DU_MENU_ITEM_H + DU_MENU_ITEM_H / 2,
            system.x + system.w / 2, system.y + system.h / 2, file.x + file.w / 2, file.y + file.h / 2,
-           fbox.x + 40, fbox.y + 3 + 17 + 17 + 9 + 8);
+           fbox.x + 40, fbox.y + 3 + 2 * DU_MENU_ITEM_H + DU_MENU_SEP_H + DU_MENU_ITEM_H / 2);
 }
 
 int main(int argc, char **argv)

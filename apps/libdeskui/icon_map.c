@@ -24,6 +24,13 @@ const struct du_icon_map du_icon_map[] = {
     {"program:libc_smoke", "applications-system"},     /* C library self-test */
     {"program:desktop", "user-desktop"},
     {"program:setup", "system-installer"},
+    /* Accessories (apps/desktop/catalog.h: the launcher's Tango names). */
+    {"program:calc", "accessories-calculator"},
+    {"program:charmap", "accessories-character-map"},
+    {"program:clock", "office-calendar"},
+    {"program:help", "help-browser"},
+    {"program:mixer", "audio-volume-high"},
+    {"program:viewer", "image-x-generic"},
 
     /* Start menu */
     {"menu:*", "application-x-executable"},

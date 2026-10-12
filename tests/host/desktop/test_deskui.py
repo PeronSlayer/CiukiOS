@@ -19,50 +19,63 @@ import unittest
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
-           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c",
+           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
            "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 
 # Reviewed frames (2026-10-11): an unpinned run prints the new digests. Convert
 # the harness frames (XRGB8888, 400x300 toolkit, 760x520 Files) to PNG and
 # re-pin only after a visual review.
-# Re-pinned 2026-10-12 after review: Tango store icons (libdeskui du_icon) in the
-# Files places/tree/bin/type icons and the open dialog's file-type icons.
+# wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
+# every frame is PIN-FROM-FIRST-RUN until the lead's visual review.
 TOOLKIT_FRAMES = {
-    "deskui-input.xrgb": "cd7aed148d6c9ae54c23e13eb17563a2ae8488f4d40664d1fe81fe99170251c8",
-    "deskui-menu.xrgb": "6a3b7c78ec5576f2f237e4abf344d850a49f92c281e29a86880f0f41c13aabe0",
-    "deskui-message.xrgb": "e652a4f707dd38bfc4486703d669a9bb5a0a3e591f062aa96313b6ac9c1972a8",
-    "deskui-open.xrgb": "66ef7ebe0f2b563c54c56333bcd3db4578ff901021b602667b955dc0b66741b2",
-    "deskui-popup.xrgb": "448045458ae3a455eeceff6e6629169ce00810984182c38c797ac3b36754c185",
-    "deskui-progress.xrgb": "6915fefe563a3a461bc144867bc3b7926cdd5c41dcf5ddbda76f0209d46f8dac",
-    "deskui-view0.xrgb": "b7b45a87702afd0c8a4fea32a8bd87a0728f75743b6a4b938c1c50f886dd1fcc",
-    "deskui-view1.xrgb": "5379566410cd35344722e958d9f382afebd24d5fee6ab14afbd47d345bceeede",
-    "deskui-view2.xrgb": "0bc25854712e0ea58ce7c8ed9dfb779b5951ad2ded3832ac75587d2ce726f51b",
+    "deskui-input.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-menu.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-message.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-open.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-popup.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-progress.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-view0.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-view1.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-view2.xrgb": "PIN-FROM-FIRST-RUN",
 }
 FILES_FRAMES = {
-    "files-about.xrgb": "4e9a6df7bccc68089d1330c9aab409f535dc55c82e9123f8de05d9e4b129a821",
-    "files-bin-icons.xrgb": "45d901bbcb4bafe96763bcc3a0ec3bcb45992f88224d5d3bfaeacc8ea032178d",
-    "files-confirm-delete.xrgb": "838513dfbc9fa394fa0b1527dd81e8f27d9b6a27d6d52e19d3921ffc012cdc64",
-    "files-context-background.xrgb": "913bbfc0fdad940f6c615357810782254b312094de23fdf3521fcf03857e54a9",
-    "files-context-item.xrgb": "ef79f6a5bdc0b1d24a2c0b0c25ecc4d27e0d0dd5b7c0d261a36e7135fff79482",
-    "files-copy-progress.xrgb": "c2cfd6335896196969bef87114e720d4b1a40107f5c5203bae71bde6b1fa4e37",
-    "files-cp1-system.xrgb": "e3a5e0fced0541b2d05317fea6b38c02608a5e5831cda8bf31d509072fd3ea9b",
-    "files-cp2-new-folder.xrgb": "788bac2a40c1d63df676377c22d384241f12d66f4fe6d173c6c3c21e00f6b58b",
-    "files-cp3-renamed.xrgb": "6a95eaee30d7094c5f2b19fbb9f8cc0c0a2ba9ad20c8b70733c756d0f644381d",
-    "files-cp4-copied.xrgb": "3f78909f9dd88bbf60f6ea6d67787c8756244e1f9ec62320857ec61a26110be8",
-    "files-cp5-deleted.xrgb": "92e1ea862278f9bd7fd8dd4517a90dcc28aac821330ef8c36c2450464be7e1d7",
-    "files-help.xrgb": "1736a56b35cdcb1d55c515915ced93303301754fab88223d4cfa5726fe0fbd00",
-    "files-menu-file.xrgb": "8e7cb258ae8339b909323c42377c4fe13e7036a30759abe16d86f57986423d00",
-    "files-menu-view.xrgb": "18260f7cf633da2209fbfcb728b0ef12137a5e188e6adef3e028cc0cafafdde5",
-    "files-multi-select.xrgb": "70407eb59478acb9903db53c63b204308db3218b109727a7ec6aa265a9568256",
-    "files-properties.xrgb": "bee3f324de75e47546a40025ab000783ac0d919e651e43ebb30e5dc46e1831f5",
-    "files-rename-error.xrgb": "04e896519e40cb106b558988b8231048f2dfe195df6cdc01dbfac57fb41b9b63",
-    "files-replace-prompt.xrgb": "9fefe01913eff1b88db45bdd018bcd3da3ea56f2a8d4d9ceecfdc360f1e01ed6",
-    "files-root-details.xrgb": "07670c675c49e9c31b11700b7bb88dbf671ff94fd2ce4ca6d5e6a72e2eaca80d",
-    "files-sort-size-desc.xrgb": "de6d3b701fb83d2ba896b0eb0578a39a776c534ad4f9272c7dca7202423b178c",
-    "files-system-details.xrgb": "c5552601f63c2267ca76389c14774b0d00079fb3d91148f02b01f9e172d74089",
-    "files-system-icons.xrgb": "7c7e55fdff5fce2315ab1d8b1f34cb5a974aff413742f3e0c3681f92e1d92e20",
-    "files-tree.xrgb": "5e5c80a147ddf098c88b3d49cb05572ff6f5d11e2010af3ccf928875777d01b2",
+    "files-about.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-bin-icons.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-confirm-delete.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-context-background.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-context-item.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-copy-progress.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-cp1-system.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-cp2-new-folder.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-cp3-renamed.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-cp4-copied.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-cp5-deleted.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-help.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-menu-file.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-menu-view.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-multi-select.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-properties.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-rename-error.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-replace-prompt.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-root-details.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-sort-size-desc.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-system-details.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-system-icons.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-tree.xrgb": "PIN-FROM-FIRST-RUN",
 }
+
+# ui-look (2026-10-12): the new theme engine, fonts and controls changed every
+# rendered frame. Entries set to PIN-FROM-FIRST-RUN print their new digest and
+# are re-pinned by the lead after a visual review; pinned entries still compare.
+PIN = "PIN-FROM-FIRST-RUN"
+
+
+def assert_pins(test, actual, pinned, label):
+    test.assertEqual(sorted(actual), sorted(pinned))
+    fresh = {k: v for k, v in actual.items() if pinned[k] == PIN}
+    if fresh:
+        print(label, PIN, json.dumps(fresh, indent=1, sort_keys=True))
+    test.assertEqual({k: v for k, v in actual.items() if pinned[k] != PIN}, {k: v for k, v in pinned.items() if v != PIN})
 
 
 def load(name, path):
@@ -105,7 +118,7 @@ class DeskuiTests(unittest.TestCase):
         if not pinned:
             print(label + "_FRAMES", json.dumps(actual, indent=1, sort_keys=True))
             self.fail(label + " frames are not pinned")
-        self.assertEqual(actual, pinned)
+        assert_pins(self, actual, pinned, label + "_FRAMES")
 
     def test_toolkit_widgets_and_frames(self):
         _, digests = self.run_harness("deskui", ["tests/host/desktop/deskui_test.c", *TOOLKIT], frames=True)

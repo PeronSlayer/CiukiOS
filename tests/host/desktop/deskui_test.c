@@ -59,7 +59,8 @@ int main(int argc, char **argv)
     assert(du_contains((struct du_rect){0, 0, 2, 2}, 1, 1) && !du_contains((struct du_rect){0, 0, 2, 2}, 2, 0));
     struct du_rect i = du_intersection((struct du_rect){0, 0, 10, 10}, (struct du_rect){5, 5, 10, 10});
     assert(i.x == 5 && i.w == 5 && !du_intersection((struct du_rect){0, 0, 1, 1}, (struct du_rect){2, 2, 1, 1}).w);
-    assert(du_text_width("Files") == 30 && du_cells("caf\xc3\xa9") == 4);
+    /* ui-look: proportional faces (Inter 12): narrow letters advance less than wide ones. */
+    assert(du_text_width("Files") == 26 && du_text_width("iiii") < du_text_width("MMMM") && du_cells("caf\xc3\xa9") == 4);
     char key_name[32]; du_format_key(key_name, sizeof(key_name), 0x2e, DU_CTRL); assert(!strcmp(key_name, "Ctrl+C"));
     du_format_key(key_name, sizeof(key_name), DU_KEY_ENTER, DU_ALT); assert(!strcmp(key_name, "Alt+Enter"));
     du_format_key(key_name, sizeof(key_name), DU_KEY_F5, 0); assert(!strcmp(key_name, "F5"));
@@ -148,13 +149,13 @@ int main(int argc, char **argv)
     static struct du_menu menus[] = {{"&File", file_items, 5}, {"&View", view_items, 2}};
     u.menus = menus; u.menu_count = 2;
     struct du_rect t0 = du_menu_title(&u, 0), t1 = du_menu_title(&u, 1);
-    assert(t0.x == 2 && t0.w == 24 + 14 && t1.x == t0.x + t0.w && t0.h == 18);
+    assert(t0.x == 2 && t0.w == du_label_width("&File") + 16 && t1.x == t0.x + t0.w && t0.h == 18);
     click(t0.x + 5, 8, 1); assert(u.menu == 0);
     struct du_rect box = du_menu_box(&u, file_items, 5, t0.x, t0.y + t0.h);
-    assert(box.y == 19 && box.h == 6 + 17 * 4 + 9);
-    assert(du_menu_item_at(file_items, 5, box, box.y + 3 + 17 + 4) == -1 && du_menu_item_at(file_items, 5, box, box.y + 3 + 17 + 9 + 2) == 2);
+    assert(box.y == 19 && box.h == 6 + DU_MENU_ITEM_H * 4 + DU_MENU_SEP_H);
+    assert(du_menu_item_at(file_items, 5, box, box.y + 3 + DU_MENU_ITEM_H + 4) == -1 && du_menu_item_at(file_items, 5, box, box.y + 3 + DU_MENU_ITEM_H + DU_MENU_SEP_H + 2) == 2);
     frame("menu");
-    before = count; click(box.x + 30, box.y + 3 + 17 + 9 + 5, 1); assert(count == before && u.menu == 0);   /* disabled: stays open */
+    before = count; click(box.x + 30, box.y + 3 + DU_MENU_ITEM_H + DU_MENU_SEP_H + 5, 1); assert(count == before && u.menu == 0);   /* disabled: stays open */
     click(box.x + 30, box.y + 3 + 8, 1); assert(last()->type == DU_EV_ACTIVATE && last()->id == 10 && u.menu < 0);
     key(DU_KEY_F10); assert(u.menu == 0 && u.menu_item == 0);
     key(DU_KEY_DOWN); assert(u.menu_item == 2); key(DU_KEY_RIGHT); assert(u.menu == 1 && u.menu_item == 0);
@@ -171,7 +172,7 @@ int main(int argc, char **argv)
     du_popup(&u, file_items, 5, 380, 290, 3);
     struct du_rect pbox = du_menu_box(&u, file_items, 5, 380, 290);
     assert(pbox.x + pbox.w == W && pbox.y + pbox.h == H);
-    input(CIUKI_INPUT_MOTION, 0, pbox.x + 20, pbox.y + 3 + 17 + 9 + 17 + 17 + 5);
+    input(CIUKI_INPUT_MOTION, 0, pbox.x + 20, pbox.y + 3 + DU_MENU_ITEM_H * 3 + DU_MENU_SEP_H + 5);
     assert(u.menu_item == 4);
     frame("popup");
     input(CIUKI_INPUT_BUTTON, 1, 1, 0); input(CIUKI_INPUT_BUTTON, 1, 0, 0);

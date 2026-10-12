@@ -3,10 +3,10 @@
  * deterministic for a given resolution; no third-party artwork. */
 #include "wallpaper.h"
 #include "settings.h"
+#include "theme.h"
 #include <stdlib.h>
 #include <string.h>
 
-extern uint8_t desk_glyph_row(unsigned, unsigned);
 
 const struct desk_builtin_wallpaper desk_builtin_wallpapers[DESK_BUILTIN_WALLPAPERS] = {
     {"dawn", "Platinum Dawn"}, {"pinstripe", "Platinum Pinstripe"}, {"deepblue", "Ciuki Blue"},
@@ -170,17 +170,13 @@ void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, u
     for (uint32_t y = oy; y < oy + th; y++) for (uint32_t x = ox; x < ox + tw; x++) dst[(size_t)y * w + x] &= 0xffffffu;
 }
 
-static void caption(uint32_t *out, uint32_t width, uint32_t height, int32_t x, int32_t y, const char *s, uint32_t colour)
+static void caption(uint32_t *out, uint32_t width, uint32_t height, int32_t y0)
 {
-    /* The compositor's 5x7 glyphs at scale 2, as the plain desktop draws "CiukiOS". */
-    for (; *s; s++, x += 12) for (unsigned row = 0; row < 7; row++) {
-        uint8_t bits = desk_glyph_row((unsigned char)*s, row);
-        for (unsigned col = 0; col < 5; col++) if (bits & (1u << (4 - col)))
-            for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
-                int32_t px = x + (int32_t)col * 2 + dx, py = y + (int32_t)row * 2 + dy;
-                if (px >= 0 && py >= 0 && (uint32_t)px < width && (uint32_t)py < height) out[(size_t)py * width + (uint32_t)px] = colour;
-            }
-    }
+    /* "CiukiOS" under the portrait in the theme's large face and desktop
+     * label colour, where the plain compositor puts it (compositor.c portrait). */
+    struct desk_paint p = {out, (int)width, (int)height, 0, 0, (int)width, (int)height};
+    int font = desk_theme->font_large, w = desk_text_measure(font, "CiukiOS");
+    desk_paint_text(&p, font, ((int32_t)width - w) / 2, y0 + 256 + 28, "CiukiOS", desk_theme->desktop_label);
 }
 
 int desk_wallpaper_render(uint32_t *out, uint32_t width, uint32_t height, uint32_t top, uint32_t bottom,
@@ -205,7 +201,7 @@ int desk_wallpaper_render(uint32_t *out, uint32_t width, uint32_t height, uint32
                 out[(size_t)(y0 + y) * width + (uint32_t)(x0 + x)] = p == 0x375564u ? colour : p;
             }
         }
-        caption(out, width, height, ((int32_t)width - 84) / 2, y0 + 256 + 10, "CiukiOS", 0xf6dfb6u);
+        caption(out, width, height, y0);
         return 0;
     }
     uint32_t area_h = height > top + bottom ? height - top - bottom : height;

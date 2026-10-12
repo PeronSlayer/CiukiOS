@@ -811,15 +811,17 @@ NORMAL_BOOT_NEGATIVE = (
 )
 NORMAL_BOOT_CASE_KEYS = {'id','kind','probe','profile','timeout','expected','attempt','boot_kind','_smoke','_run_id'}
 NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
-# Colours drawn by apps/desktop (desktop.h DESK_BAR/DESK_BACKGROUND;
-# compositor.c desk_composite top bar, desk_shell_draw taskbar and start
-# button) and by the kernel console (src/kernel/core/console.c fg/bg,
-# output.c panic background). test_normal_boot.py checks these literals
-# against those sources.
+# Colours drawn by apps/desktop in its default theme (desktop.h DESK_BAR/
+# DESK_BACKGROUND; theme.c "Platinum" topbar, taskbar, start/start_open,
+# desktop, painted by compositor.c desk_composite and desk_shell_draw) and by
+# the kernel console (src/kernel/core/console.c fg/bg, output.c panic
+# background). test_normal_boot.py checks these literals against those
+# sources. A persisted non-default theme (/system/settings/desktop.cfg) is
+# outside this heuristic: test images carry no settings file.
 DESK_BAR_ROWS = 32
-DESK_TOP_BAR = 0x213c4c
-DESK_TASKBAR = 0xb8c9cc
-DESK_START_BUTTON = (0xe8d7b9, 0x607a85)  # menu closed / open
+DESK_TOP_BAR = 0xdcdcdc
+DESK_TASKBAR = 0xd6d6d6
+DESK_START_BUTTON = (0xf2f2f2, 0xb9b9b9)  # menu closed / open
 DESK_BACKGROUND = 0x375564
 CONSOLE_COLOURS = (0x10243c, 0xe8e8e8, 0x800000)  # console bg, fg, panic bg
 SCREEN_TOLERANCE = 8  # per channel: also accepts a 16-bpp (565) framebuffer
