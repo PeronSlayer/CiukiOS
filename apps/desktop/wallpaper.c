@@ -95,17 +95,22 @@ static uint32_t over(uint32_t argb, uint32_t back)
     return out;
 }
 
-/* Area average (downscale) or bilinear (upscale) of src into dst w*h. */
-static void resample(const struct desk_image *s, uint32_t *dst, uint32_t w, uint32_t h, uint32_t stride, uint32_t colour)
+/* Area average (downscale) or bilinear (upscale) of src scaled to tw*th;
+ * only the w*h window whose top-left corner is cx,cy in that scaled image
+ * is written to dst (the whole image for stretch and fit, the centred crop
+ * for fill), so every mode samples a pixel the same way. */
+static void resample(const struct desk_image *s, uint32_t *dst, uint32_t tw, uint32_t th, uint32_t cx, uint32_t cy,
+                     uint32_t w, uint32_t h, uint32_t stride, uint32_t colour)
 {
-    if (!w || !h || !s->width || !s->height) return;
-    int up = w >= s->width && h >= s->height;
+    if (!tw || !th || !s->width || !s->height) return;
+    int up = tw >= s->width && th >= s->height;
     for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
+        uint64_t vx = (uint64_t)x + cx, vy = (uint64_t)y + cy;   /* position in the scaled image */
         uint32_t px;
         if (up) {
             /* Centre-aligned bilinear in 8.8 fixed point. */
-            int64_t fx = ((int64_t)(2 * x + 1) * s->width * 128) / w - 128;
-            int64_t fy = ((int64_t)(2 * y + 1) * s->height * 128) / h - 128;
+            int64_t fx = ((int64_t)(2 * vx + 1) * s->width * 128) / tw - 128;
+            int64_t fy = ((int64_t)(2 * vy + 1) * s->height * 128) / th - 128;
             if (fx < 0) fx = 0;
             if (fy < 0) fy = 0;
             uint32_t x0 = (uint32_t)(fx >> 8), y0 = (uint32_t)(fy >> 8);
@@ -122,8 +127,8 @@ static void resample(const struct desk_image *s, uint32_t *dst, uint32_t w, uint
                 px |= ((top * (256 - ay) + bot * ay + 32768) >> 16) << shift;
             }
         } else {
-            uint32_t sx0 = (uint32_t)((uint64_t)x * s->width / w), sx1 = (uint32_t)((uint64_t)(x + 1) * s->width / w);
-            uint32_t sy0 = (uint32_t)((uint64_t)y * s->height / h), sy1 = (uint32_t)((uint64_t)(y + 1) * s->height / h);
+            uint32_t sx0 = (uint32_t)(vx * s->width / tw), sx1 = (uint32_t)((vx + 1) * s->width / tw);
+            uint32_t sy0 = (uint32_t)(vy * s->height / th), sy1 = (uint32_t)((vy + 1) * s->height / th);
             if (sx1 <= sx0) sx1 = sx0 + 1;
             if (sy1 <= sy0) sy1 = sy0 + 1;
             uint64_t sum[4] = {0, 0, 0, 0}, n = 0;
@@ -143,7 +148,7 @@ static void resample(const struct desk_image *s, uint32_t *dst, uint32_t w, uint
 void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, uint32_t h, int mode, uint32_t colour)
 {
     for (size_t i = 0; i < (size_t)w * h; i++) dst[i] = colour;
-    if (!src || !src->pixels || !w || !h) return;
+    if (!src || !src->pixels || !src->width || !src->height || !w || !h) return;
     if (mode == CFG_WALL_TILE) {
         for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++)
             dst[(size_t)y * w + x] = over(src->pixels[(size_t)(y % src->height) * src->width + x % src->width], colour);
@@ -158,6 +163,18 @@ void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, u
         }
         return;
     }
+    if (mode == CFG_WALL_FILL) {
+        /* Uniform scale max(w/width, h/height): the image covers the whole
+         * box and the overflow on one axis is cropped equally on both sides. */
+        uint32_t tw = w, th = h;
+        if ((uint64_t)w * src->height >= (uint64_t)h * src->width) th = (uint32_t)((uint64_t)src->height * w / src->width);
+        else tw = (uint32_t)((uint64_t)src->width * h / src->height);
+        if (th < h) th = h;
+        if (tw < w) tw = w;
+        resample(src, dst, tw, th, (tw - w) / 2, (th - h) / 2, w, h, w, colour);
+        for (size_t i = 0; i < (size_t)w * h; i++) dst[i] &= 0xffffffu;
+        return;
+    }
     uint32_t tw = w, th = h, ox = 0, oy = 0;
     if (mode == CFG_WALL_FIT) {
         if ((uint64_t)src->width * h > (uint64_t)src->height * w) th = (uint32_t)((uint64_t)src->height * w / src->width);
@@ -166,7 +183,7 @@ void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, u
         if (!th) th = 1;
         ox = (w - tw) / 2; oy = (h - th) / 2;
     }
-    resample(src, dst + (size_t)oy * w + ox, tw, th, w, colour);
+    resample(src, dst + (size_t)oy * w + ox, tw, th, 0, 0, tw, th, w, colour);
     for (uint32_t y = oy; y < oy + th; y++) for (uint32_t x = ox; x < ox + tw; x++) dst[(size_t)y * w + x] &= 0xffffffu;
 }
 
@@ -215,7 +232,7 @@ int desk_wallpaper_render(uint32_t *out, uint32_t width, uint32_t height, uint32
         desk_image_scale(image, out, width, height, mode, colour);
         return 0;
     }
-    /* Centre, stretch and fit use the area between the top bar and the taskbar. */
+    /* Centre, stretch, fit and fill use the area between the top bar and the taskbar. */
     uint32_t *box = malloc((size_t)width * area_h * 4u);
     if (!box) return -1;
     desk_image_scale(image, box, width, area_h, mode, colour);
