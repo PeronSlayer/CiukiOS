@@ -235,10 +235,40 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   CLOSE_REQUEST to the active window (the Shut Down window when none is
   active). Alt is held back until the next key, so a program never sees an Alt
   press for a chord the desktop consumed; a lone Alt tap still reaches it.
-- **Power:** Shut Down calls `ciuki_power(action)` (SDK `ciuki/power.h`,
-  kernel call 73; 1 reboot, 2 power off) after saving desktop.cfg. The SDK
-  definition is weak; with ENOSYS the desktop says that the kernel has no
-  power interface yet.
+- **Shut Down and Restart:** confirmation saves desktop.cfg and opens a
+  built-in "Shutting down..." window using the ordinary frame painter.
+  Every client receives the same close request as Alt+F4, including DOS
+  windows; their process exit lets the kernel tear down the VM. Clients get
+  three seconds to exit, concurrently, then survivors are terminated through
+  the existing call 71 path. IPC, painting and child reaping continue; normal
+  input and launches are blocked. Escape or Cancel returns to the desktop;
+  programs already closed are not relaunched.
+  Settings streams are closed by the save operation; the delegated mixer
+  descriptor and any regular-file/directory descriptors (including redirected
+  logs) are closed before `ciuki_power` (call 73; 1 reboot, 2 power off).
+  EBUSY is retried every 250 ms for five seconds. Persistent EBUSY shows
+  "Some programs are still running:" and the remaining client names, with
+  Cancel and Force. Force terminates remaining targets and retries once after
+  allowing 250 ms for teardown. If no client is still known,
+  the message identifies an unknown storage holder rather than inventing a
+  program name. Other failures retain the power error message with errno text,
+  including the existing ENOSYS explanation. Cancel/error restores normal
+  input; after the delegated mixer descriptor has been closed, public mixer
+  reads remain available but control requires a new desktop session (only
+  PID 1 can delegate that capability).
+  Runtime gates and the crash-isolation probe never enter this sequence.
+
+  Research (f2-38): [POSIX monotonic clocks](https://pubs.opengroup.org/onlinepubs/000095399/functions/clock_getres.html)
+  provide elapsed-time deadlines unaffected by wall-clock changes;
+  [WNOHANG](https://pubs.opengroup.org/onlinepubs/9699919799/functions/wait.html)
+  allows reaping without blocking the compositor;
+  [close](https://pubs.opengroup.org/onlinepubs/009604499/functions/close.html)
+  releases descriptors; and [SDL's close event](https://wiki.libsdl.org/SDL2/SDL_WindowEventID)
+  is a request for application cleanup. Repository checks: `desk_request_close`
+  already queues CLOSE_REQUEST/CLOSED and `desk_child_exited` releases clients;
+  `storage_shutdown` refuses referenced VFS nodes before detaching volumes.
+  Decision: reuse that protocol and monotonic event-loop deadlines, leaving
+  the kernel's storage refusal and VM lifecycle unchanged.
 - **Runtime gate scenarios** (F12/F11/F10/F9) keep the built-in defaults, never
   read or write desktop.cfg and never touch the mixer; the f2-desktop scripts
   reach the programs through Start, Programs and the program row.

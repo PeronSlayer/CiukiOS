@@ -260,7 +260,7 @@ static const char *client_icon(const struct desktop *d, int i)
     const struct desk_client *c = &d->clients[i];
     if (c->internal == DESK_INTERNAL_ABOUT) return "ciuki";
     if (c->internal == DESK_INTERNAL_RUN) return "go-jump";
-    if (c->internal == DESK_INTERNAL_SHUTDOWN) return "system-shutdown";
+    if (c->internal == DESK_INTERNAL_SHUTDOWN || c->internal == DESK_INTERNAL_POWER) return "system-shutdown";
     if (c->internal) return d->sh.message_kind ? "dialog-error" : "dialog-information";
     if (c->program == DESK_APP_FILES) return "system-file-manager";
     if (c->program == DESK_APP_NOTE) return "accessories-text-editor";
@@ -1125,6 +1125,13 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
     case DESK_INTERNAL_ABOUT: *w = 440; *h = 300; break;
     case DESK_INTERNAL_RUN: *w = 372; *h = 128; break;
     case DESK_INTERNAL_SHUTDOWN: *w = 352; *h = 132; break;
+    case DESK_INTERNAL_POWER: {
+        unsigned lines=1;
+        for (const char *s=d->power.text; *s; s++) lines+=*s=='\n';
+        *w=420; *h=lines*(unsigned)line_h()+70;
+        if (*h<132) *h=132;
+        break;
+    }
     default: {
         unsigned lines = 1;
         for (const char *s = d->sh.message_text; *s; s++) lines += *s == '\n';
@@ -1168,7 +1175,7 @@ int desk_internal_open(struct desktop *d, int kind)
     c->window_id = d->next_window_id;
     c->info.width = w; c->info.height = h;
     snprintf(c->title, sizeof(c->title), "%s", kind == DESK_INTERNAL_ABOUT ? "About CiukiOS" : kind == DESK_INTERNAL_RUN ? "Run" :
-             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : d->sh.message_title);
+             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : d->sh.message_title);
     c->frame = desk_frame(w, h, 0, DESK_BAR);
     if (kind == DESK_INTERNAL_ABOUT) { d->about = i; d->sh.about_tab = 0; d->sh.want_reload |= 2; }
     if (kind == DESK_INTERNAL_RUN) { d->sh.run_length = 0; d->sh.run_text[0] = 0; }
@@ -1380,11 +1387,16 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         du_icon_blit(&c, content.x + 14, content.y + 16, desk_shell_icon("system-shutdown", 32), 32, DU_ICON_NORMAL);
         du_icon_blit(&c, content.x + 30, content.y + 32, desk_shell_icon("ciuki", 20), 20, DU_ICON_NORMAL);
         bold(&c, content.x + 64, content.y + 18, "What do you want CiukiOS to do?", SH_INK);
-        multiline(&c, content.x + 64, content.y + 38, "Your settings are saved first. Close your\ndocuments before you continue.", SH_INK);
+        multiline(&c, content.x + 64, content.y + 38, "Your settings are saved first. Programs\nand virtual machines will be closed.", SH_INK);
         static const char *const labels[] = {"&Restart", "&Shut Down", "Cancel"};
         for (int k = 0; k < 3; k++) push_button(&c, button_box(content, k, 3), labels[k], k == 1 + 0 * d->sh.shutdown_choice);
         break;
     }
+    case DESK_INTERNAL_POWER:
+        multiline(&c, content.x + 14, content.y + 18, d->power.text, SH_INK);
+        push_button(&c, button_box(content, 0, d->power.state==DESK_POWER_BUSY ? 2 : 1), "Cancel", 1);
+        if (d->power.state==DESK_POWER_BUSY) push_button(&c, button_box(content, 1, 2), "&Force", 0);
+        break;
     default:
         du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(d->sh.message_kind ? "dialog-error" : "dialog-information", 32), 32, DU_ICON_NORMAL);
         multiline(&c, content.x + 60, content.y + 18, d->sh.message_text, SH_INK);
@@ -1397,6 +1409,24 @@ static void run_commit(struct desktop *d, int index)
     if (!d->sh.run_length) return;
     snprintf(d->sh.want_run, sizeof(d->sh.want_run), "%s", d->sh.run_text);
     desk_request_close(d, index);
+}
+/* Modal shutdown input never reaches a client, the menu, or title dragging. */
+int desk_power_input(struct desktop *d, const struct ciuki_input_event *e)
+{
+    if (!d->power.state) return 0;
+    if (d->power.state==DESK_POWER_DONE) return 1;
+    int i=d->power.window;
+    if (e->type==CIUKI_INPUT_KEY && e->value==1) {
+        if (e->code==DU_KEY_ESC || e->code==DU_KEY_ENTER) desk_power_cancel(d);
+        else if (e->code==0x21 && d->power.state==DESK_POWER_BUSY) desk_power_force(d);
+    } else if (e->type==CIUKI_INPUT_BUTTON && e->code==CIUKI_BUTTON_LEFT && e->value==1 && i>=0) {
+        struct desk_box content=desk_content(&d->clients[i]);
+        int count=d->power.state==DESK_POWER_BUSY ? 2 : 1;
+        if (desk_contains(button_box(content,0,count),d->mouse_x,d->mouse_y) ||
+            desk_contains(desk_close_box(&d->clients[i]),d->mouse_x,d->mouse_y)) desk_power_cancel(d);
+        else if (count==2 && desk_contains(button_box(content,1,2),d->mouse_x,d->mouse_y)) desk_power_force(d);
+    }
+    return 1;
 }
 int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
 {

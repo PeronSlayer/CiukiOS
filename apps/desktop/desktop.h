@@ -75,6 +75,23 @@ struct desk_ops {
 };
 struct desk_program { char name[64], path[sizeof("/Programs/") + 64]; };
 struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent; };
+#define DESK_POWER_CLOSE_NS 3000000000ull
+#define DESK_POWER_RETRY_NS 250000000ull
+#define DESK_POWER_BUSY_NS 5000000000ull
+enum { DESK_POWER_IDLE, DESK_POWER_CLOSING, DESK_POWER_RETRY,
+       DESK_POWER_BUSY, DESK_POWER_FORCE, DESK_POWER_DONE };
+struct desk_power_target {
+    uint32_t pid;
+    int owned, terminated, gone;
+    char name[DESK_TITLE_MAX + 1];
+};
+struct desk_power_sequence {
+    int state, action, window, previous_focus, prepared;
+    unsigned count;
+    uint64_t close_deadline, busy_deadline, next_try;
+    struct desk_power_target targets[DESK_CLIENTS * 2];
+    char text[320];
+};
 struct desktop {
     struct desk_ops ops;
     int display, input, output, focus, drag;
@@ -114,6 +131,12 @@ struct desktop {
     int mixer_fd;                /* delegated /dev/mixer control handle (CIUKI_MIXER_FD) or -1 */
     const char *launch_argv[6];  /* Run dialog: extra arguments for the next launch */
     struct desk_shell sh;
+    struct desk_power_sequence power;
+    /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
+     * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
+    int (*power_request)(int action);
+    void (*power_prepare)(struct desktop *);
+    int (*power_alive)(struct desktop *, uint32_t pid);
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
      * control handle; NULL on hosts without one. 0 or -errno. */
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
@@ -156,6 +179,11 @@ void desk_minimize(struct desktop *, int index);
 void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
+void desk_power_begin(struct desktop *, int action);
+void desk_power_tick(struct desktop *);
+void desk_power_cancel(struct desktop *);
+void desk_power_force(struct desktop *);
+int desk_power_input(struct desktop *, const struct ciuki_input_event *);
 void desk_about(struct desktop *);
 void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
