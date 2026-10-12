@@ -710,3 +710,69 @@ secondary slave (QEMU's default empty CD at index 2 had hidden the real
 medium); QMP command replies awaited up to 10 s; identical `query-status`
 exchanges not repeated in the QMP log (the 25 ms poll had filled the 4 MiB
 cap in a 17-minute case).
+
+## 2026-10-12 integration images (afternoon: games bundle, retro namespace, window resizing, Computer view, icons, review fixes)
+
+Branch `wt/integ2`. Each result below is evidence only for the image named
+with it (QEMU TCG, scratch suites run from the integration worktree, one
+QEMU at a time). Image prefixes are the first eight hex digits of
+`build-manifest.json`'s `image_sha256`.
+
+- `8362fa73…` (VGA burst emulation `cde08ba7` and the DPMI virtual-IF
+  restore `92240533`, before f3-07): `doom-qemu-t23` PASS (five loops, each 1,710
+  gametics), `doom-sound-qemu-t23` PASS (4,355 DMA blocks, 557,468 frames,
+  6,699 OPL writes, 0 DMA faults), `wolf3d-qemu-t23` PASS (five rounds with
+  211 page flips each, identical digest `39d8aa3b…`, about 30,300 faults and
+  149,000 burst-served stores per loop).
+- `639bcca5…` (uniform title bars, Ciuki button in the top bar): used for
+  the owner's screenshot session of 11 captures; no suite result is recorded
+  for it here.
+- `2fdd515a…` (commit `5f8a09e2`: shareware games bundle `C:\GAMES\CIUKIGAM.IMG`
+  and f3-07 linear window for mode 13h; without f3-08): `f0-smoke` 4 PASS
+  (two probe boots and the two `normal-boot` cases); scratch suite
+  `zz-games` 3 PASS (`doom-qemu-t23`, `doom-sound-qemu-t23`,
+  `wolf3d-qemu-t23`, on the local fixture disk with the f3-07 window);
+  `desktop-shell-qemu-t23` PASS. `files-qemu-t23` FAIL with `keys=0` (108
+  events delivered, 39 moves and 16 button edges counted, no key): the same
+  symptom as `desktop-shell-qemu-e500`. The host replay (commit `96027a71`)
+  found two causes: on the E500 profile the firmware input path reordered
+  the `A` key before the close click, and the Files script clicked before
+  Files had shown its first frame. Gate scenarios now hold their input until
+  the launched program's first frame and replay it with the original
+  spacing; the fix is verified on the host replay model only. The runner
+  message "invalid desktop interaction fields" for this case was misleading
+  (a contract failure rewound as a field error); it now names the contract.
+- `5dd760ee…` (f3-08 merged: DPMI virtual-IF trap, VGA burst preflight,
+  power and audio-tail fixes): `doom-qemu-t23` PASS. `normal-boot-qemu-t23`
+  FAIL: the loader stood for 258 s while the host was swapping (7 GiB)
+  under the host tests of three agents running beside the suite; the case
+  was not repeated on this image and the failure is not attributed to the
+  image.
+- Host suites on commit `96027a71` with the machine quiet: desktop 56 OK,
+  normal-boot 14 OK, gate 10 OK, kernel host tests OK, runner 85 OK (2
+  skipped); the Lua inventory test fails only when run before the build. The
+  f3-08 findings are reproduced and fixed with host tests
+  (`docs/validation/2026-10-12-f3-08-host.md`). Commit `70315129` (Control
+  Panel wallpaper preview decoded on a 20 ms timer after the first paint)
+  is later than the image below and carries its own host test.
+- `8435a16a…` (SHA-256
+  `8435a16a5840987255f6573b446fce53fbedca9181fe0a8797b05379e1e3374d`,
+  commit `96027a71`, kernel `c2141a8d…`): built and used for the ten
+  screenshots of `docs/screenshots/0.9.0/` (Pentium III profile, TCG, AC'97
+  silenced). Its manifest records `git_dirty: true`. **No suite ran on it:**
+  `f0-smoke`, `f2-desktop`, `f2-process`, `f3-vm`, `f3-workloads` and the F4
+  suites are not run on this image. Owner decision: the owner tests the
+  hardware image directly on the T23 first; the full QEMU campaign follows
+  before the merge into `main`.
+- Hardware image for the T23: `build/hw/ciukios-hw.img`, SHA-256
+  `893a83e0f24b515b1daa24d06da8fb22fc2c434a805d7b48343624d06bdc3421`,
+  built from the same tree and kernel as `8435a16a…` (manifest
+  `build/hw/build-manifest.json`, `BOOT.CFG` `safe=0 serial=1`) and handed
+  to the owner. No hardware result is recorded for it in this file.
+
+Not covered by any QEMU result on the images above: window resizing (f2-34),
+the namespace rename (f2-35), the Files Computer view (f2-36), the icon and
+label changes, `files-qemu-t23`, `ciuknote-qemu-t23` and `tasks-qemu-t23`
+after the gate change, `desktop-shell-qemu-e500`, and f3-08 beyond DOOM. The Wolfenstein 3D bundling clause (`VENDOR.DOC` [3][C],
+written permission from Apogee for distribution in a software package) is
+an open owner decision, not a test result.

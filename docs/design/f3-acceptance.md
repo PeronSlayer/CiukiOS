@@ -1557,7 +1557,8 @@ window's taskbar/title icon is `applications-games`. The Programs submenu
 grows by one row after the program rows: `tests/host/desktop/shell_menu.py`
 models it; with the submenu top-aligned under the top-bar Ciuki button
 (wt/ui-polish) no program row moves, so `--regenerate` leaves the five
-scripted desktop cases (`f2-desktop.json`, `zz-ui.json`) unchanged.
+scripted desktop cases of `f2-desktop.json` unchanged (the scratch `zz-ui.json`
+copy is no longer tracked).
 
 **Licence status (owner).** DOOM's package terms permit free
 redistribution and CiukiOS charges nothing. Wolfenstein 3-D's `VENDOR.DOC`

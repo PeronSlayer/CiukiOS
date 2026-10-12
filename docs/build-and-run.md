@@ -51,8 +51,9 @@ takes the production path up to `/Programs/desktop`. A case passes when
 `[supervisor] bootstrap: spawning /Programs/desktop` and
 `[supervisor] desktop pid=<n> pgid=<n>` within 300 s, with no panic,
 CIUKI_TEST record, `desktop unavailable` or `desktop stopped` line, and the
-screendump taken 8 s after the desktop line shows the desktop taskbar, start
-button, top bar and background colours instead of the kernel console.
+screendump taken 8 s after the desktop line shows the taskbar, the Ciuki
+button and the top bar, and a work area free of the kernel console colours
+(the default wallpaper is a photograph, so no background colour is required).
 The run directory keeps `screen.ppm` also on a pass; `result.json` has
 `evidence_kind: "normal-boot"`, `normal_boot` (milestones, desktop PID,
 timings) and `screen` (PPM SHA-256, measured colour fractions). A failure
@@ -262,7 +263,7 @@ mdir -/ -i build/f0/games/CIUKIGAM.IMG ::/
 Every DOS window (`/Programs/dosbox`) boots this disk with the kernel DPMI host,
 unless the owner's local fixture disk above is attached (it takes
 precedence); the f3-06 workload probes use only the local fixture disk.
-The Start menu's Programs > Games lists "Wolfenstein 3D (shareware)" and
+The Ciuki menu's Programs > Games lists "Wolfenstein 3D (shareware)" and
 "DOOM (shareware)": each opens a DOS window titled after the game, which
 types `CD \WOLF3D` and `WOLF3D.EXE` (or `CD \DOOM` and
 `DOOM.EXE -config CIUKI.CFG`) at the DOS prompt once the window has the
@@ -294,6 +295,14 @@ photographs. With an RS-232 to USB adapter and a null-modem cable on the
 laptop's serial port, `scripts/test/serial_capture.sh <run-id>` records
 COM1 (38400 8N1) into `legacy/local/physical/<run-id>/serial.log`; start
 it before power-on, then `f0:all run=<run-id>` also covers `panic`.
+
+A user boot (no test request) is what the image's default `BOOT.CFG`
+(`safe=0 serial=1`, `DEFAULT_CONFIG` in `scripts/build_image.py`) gives: the
+quiet boot of [boot.md](boot.md) to the desktop, with the log on COM1 and in
+`C:\SYSTEM\LOGS`. The builder writes `build-manifest.json` beside the image;
+a physical run is evidence only for the SHA-256 recorded there, which goes in
+the validation record of that test
+(`docs/validation/2026-10-11-integrated-image-f0-regression.md`).
 
 
 ### Unattended hardware sweep

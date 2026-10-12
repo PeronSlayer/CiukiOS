@@ -47,7 +47,7 @@ Immagine `8435a16a…` costruita da `96027a71`; immagine hardware
 `build/hw/ciukios-hw.img` SHA-256
 `893a83e0f24b515b1daa24d06da8fb22fc2c434a805d7b48343624d06bdc3421`
 (`BOOT.CFG safe=0 serial=1`) consegnata al proprietario. Sessione screenshot
-su QEMU (13 catture, `docs/screenshots/0.9.0`): desktop con Ciuk2, menu,
+su QEMU (13 catture, di cui 10 pubblicate in `docs/screenshots/0.9.0`): desktop con Ciuk2, menu,
 Files in vista Computer, CiukNote, Task Manager, Control Panel,
 Calcolatrice, menu Games, Wolfenstein 3D e DOOM in finestra.
 

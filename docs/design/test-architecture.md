@@ -104,8 +104,10 @@ therefore never covered. A case with `"kind": "normal-boot"` (and
   mostly `f2f2f2` (or `b9b9b9` with the menu open), the top bar right of it
   up to x 256 is mostly `dcdcdc` and has at
   most 2 % kernel console colours (`10243c`, `e8e8e8`, panic `800000`), and
-  the area between the bars is at least 25 % desktop background `375564`;
-  per-channel tolerance 8. A host test checks these colours against the C
+  the area between the bars has at most 2 % of those console colours
+  (heuristic 3, 2026-10-12: the default wallpaper is the owner's Ciuk2
+  photograph, so the earlier 25 % `375564` desktop-colour requirement no
+  longer applies); per-channel tolerance 8. A host test checks these colours against the C
   sources and runs the heuristic on frames from the production compositor.
 - `result.json` records `evidence_kind: "normal-boot"` (probe cases record
   `ciuki-test-records`), `selector: null`, `normal_boot` (milestones with

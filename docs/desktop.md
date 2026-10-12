@@ -773,7 +773,8 @@ window VM boots the bundled games disk `C:\GAMES\CIUKIGAM.IMG`
 (docs/build-and-run.md, "Pre-installed shareware games"). The Games row
 follows the program rows in the top-aligned Programs submenu, so the
 scripted cases' rows do not move (`tests/host/desktop/shell_menu.py` models
-it; `--regenerate` leaves `f2-desktop.json` and `zz-ui.json` unchanged).
+it; `--regenerate` leaves `f2-desktop.json` unchanged; the scratch `zz-ui.json`
+copy of those cases is no longer tracked).
 
 ## f2-30 decisions (2026-10-11)
 
