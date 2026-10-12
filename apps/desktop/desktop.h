@@ -44,6 +44,8 @@ struct desk_client {
     int collapsed;                /* windowshade: only the title bar shows (double-click or shade box) */
     int taskman;                  /* f2-33: launched /bin/tasks; may send task requests */
     int mixer;                    /* launched /bin/mixer (Volume Control); may send MIXER_SET */
+    int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
+    uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     uint32_t pid, serial, version, window_id;
     uint64_t ping_sent_ns, next_ping_ns, order;
     struct ciuki_surface_info info;

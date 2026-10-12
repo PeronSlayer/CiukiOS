@@ -308,9 +308,20 @@ void klog(const char *f,...) {(void)f;}
 
     def test_guest_interaction_binding_and_failures(self):
         rows=self.interaction_records();runner.desktop_interaction(rows)
-        for key,value in (('presents','10'),('input_events','0'),('pixel_digest','12345678'),('keys','1'),('motion','0'),('buttons','1')):
+        for key,value,message in (('presents','10','counter did not increase: presents'),
+                                  ('input_events','0','counter did not increase: input_events'),
+                                  ('pixel_digest','12345678','digest did not change'),
+                                  ('keys','1','did not consume every input kind: keys=1 '),
+                                  ('motion','0','did not consume every input kind: keys=2 motion=0'),
+                                  ('buttons','1','buttons=1')):
             bad=copy.deepcopy(rows);bad[-1][key]=value
-            with self.assertRaises(EvidenceError):runner.desktop_interaction(bad)
+            # The failed contract is named: it is not re-wrapped as a field error (image 639bcca5 keys=0).
+            with self.assertRaisesRegex(EvidenceError,message):runner.desktop_interaction(bad)
+        for key,value in (('keys','x'),('presents','')):
+            bad=copy.deepcopy(rows);bad[-1][key]=value
+            with self.assertRaisesRegex(EvidenceError,'invalid desktop interaction fields'):runner.desktop_interaction(bad)
+        bad=copy.deepcopy(rows);del bad[-1]['motion']
+        with self.assertRaisesRegex(EvidenceError,'invalid desktop interaction fields'):runner.desktop_interaction(bad)
         bad=copy.deepcopy(rows);bad[1]['presents']='9'
         with self.assertRaises(EvidenceError):runner.desktop_interaction(bad)
         with self.assertRaises(EvidenceError):runner.desktop_interaction(rows+rows[-1:])

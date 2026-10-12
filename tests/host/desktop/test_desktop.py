@@ -37,13 +37,19 @@ REPLAY_MODELS = {
     "measured": ["--overhead-ms", "90", "--pause-scale-pct", "240", "--start-delay-ms", "2500",
                  "--desktop-cost-ms", "60", "--app-cost-ms", "20"],
 }
+# Programs ready only 8 s after their spawn, longer than every script's wait after a launch, at the runner
+# pace of images 639bcca5/2fdd515a (about 110 ms per 100 ms batch): on 2fdd515a files-qemu-t23 clicked
+# into a Files window that was not ready (keys=0, survivor_exit:0). The desktop holds the scripted input
+# until the launched program's first frame (desktop.c scenario_hold) and replays it with its spacing.
+REPLAY_MODELS["late-start"] = ["--overhead-ms", "10", "--start-delay-ms", "8000", "--desktop-cost-ms", "60",
+                               "--app-cost-ms", "20"]
 # The F12 shell case also runs with a slow desktop turn (300 ms per loop): its final stage (the
 # demo's reap) then lands after the last input event, as on QEMU image d964369f (keys=0 there).
 SHELL_MODELS = {**REPLAY_MODELS, "slow-desktop": ["--start-delay-ms", "800", "--desktop-cost-ms", "300"]}
-# The probe's interaction window (src/kernel/probes/f2_probes_desktop.c): 15 s, 40 s once an app case
-# (files=1/note=1) reports. The Task Manager scenario sends no app flag, so it keeps 15 s.
-TASKS_WINDOW_S = 15
-APP_WINDOW_S = 40
+# The probe's interaction window (src/kernel/probes/f2_probes_desktop.c, interaction stage): 60 s, 180 s
+# once an app case (files=1/note=1) reports. The Task Manager scenario sends no app flag, so it keeps 60 s.
+TASKS_WINDOW_S = 60
+APP_WINDOW_S = 180
 
 
 def load(name, path):
@@ -383,7 +389,7 @@ class AppCaseReplayTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temp.cleanup()
 
-    def replay(self, case_id, kind, model):
+    def replay(self, case_id, kind, model, args=None):
         case = next(c for c in self.suite["cases"] if c["id"] == case_id)
         lines = []
         for batch in case["actions"][0]["batches"]:
@@ -397,7 +403,7 @@ class AppCaseReplayTests(unittest.TestCase):
         script = Path(self.temp.name) / f"{case_id}.script"
         script.write_text("\n".join(lines) + "\n")
         result = subprocess.run([str(self.binary), "--script", str(script), "--case", kind, "--bin", ",".join(self.programs),
-                                 "--limit-s", "200", *SHELL_MODELS[model]],
+                                 "--limit-s", "200", *(args if args is not None else SHELL_MODELS[model])],
                                 capture_output=True, text=True, env=self.env, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr[-4000:])
         out = {"checkpoints": [], "system": [], "text": result.stdout}
@@ -413,9 +419,9 @@ class AppCaseReplayTests(unittest.TestCase):
         return case, out
 
     def check(self, case_id, kind, checkpoints, window, models=REPLAY_MODELS):
-        for model in models:
+        for model, args in models.items():
             with self.subTest(model=model):
-                case, out = self.replay(case_id, kind, model)
+                case, out = self.replay(case_id, kind, model, args)
                 self.assertEqual(out["RESULT"]["success"], "1", out["text"][-3000:])
                 # Every checkpoint, in order, each reported once (the probe's checkpoint_order rule).
                 self.assertEqual([n for n, _ in out["checkpoints"]], list(range(1, checkpoints + 1)))
@@ -449,6 +455,25 @@ class AppCaseReplayTests(unittest.TestCase):
         for model, out in self.check("desktop-shell-qemu-t23", "shell", 0, TASKS_WINDOW_S, SHELL_MODELS):
             self.assertEqual(out["DESKTOP"]["notice"], '"shell stage 6 programs %d"' % (len(self.programs) - 1), model)
             self.assertEqual(int(out["PROBE"]["keys"]), 4, model)
+
+    def test_shell_case_firmware_input_order(self):
+        """desktop-shell-qemu-e500 on image 639bcca5: stage 6 reached, keys=0, motion=47 buttons=12. On the
+        firmware input path the guest reads the controller bytes through the BIOS VM; while it does not read
+        them, the 8042 serves a pending keyboard byte before the queued aux bytes, so the A press reaches the
+        desktop before the close click. The model stalls the reader from the close click's batch for 400 ms
+        (the A batch follows 200 ms later): the A edges precede the click (reordered=2) and must still count."""
+        case = next(c for c in self.suite["cases"] if c["id"] == "desktop-shell-qemu-e500")
+        batches = case["actions"][0]["batches"]
+        first_key = next(i for i, b in enumerate(batches) if i > 1 and any(e["type"] == "key" for e in b["events"]))
+        close = max(i for i, b in enumerate(batches[:first_key])
+                    if any(e["type"] == "btn" and e["data"]["down"] for e in b["events"]))
+        stall = ["--i8042-byte-ms", "1", "--i8042-stall-batch", str(close), "--i8042-stall-ms", "400"]
+        models = {"firmware-stall": ["--start-delay-ms", "800", *stall],
+                  "firmware-stall-late": [*REPLAY_MODELS["late-start"], "--i8042-byte-ms", "2", *stall[2:]]}
+        for model, out in self.check("desktop-shell-qemu-e500", "shell", 0, TASKS_WINDOW_S, models):
+            self.assertEqual(out["DESKTOP"]["notice"], '"shell stage 6 programs %d"' % (len(self.programs) - 1), model)
+            self.assertEqual(out["PS2"]["reordered"], "2", model)
+            self.assertEqual((out["PROBE"]["keys"], out["PROBE"]["motion"], out["PROBE"]["buttons"]), ("4", "47", "12"), model)
 
     def test_tasks_case_replay(self):
         for _, out in self.check("tasks-qemu-t23", "tasks", 0, TASKS_WINDOW_S):

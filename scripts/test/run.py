@@ -977,15 +977,21 @@ def desktop_interaction(records):
     arm=one('ARM',action='post_fault_input')
     before=one('DATA',case='interaction',stage='before')
     after=one('DATA',case='interaction',stage='after')
+    # Field parsing only: a contract failure below must keep its own message
+    # (EvidenceError is a ValueError, so it may not be raised inside this try).
     try:
-        for key in ('presents','input_events','pixel_digest'):
-            if before[key]!=arm[key]:raise EvidenceError('desktop interaction baseline differs from ARM')
-        for key in ('presents','input_events'):
-            if int(after[key])<=int(before[key]):raise EvidenceError('desktop interaction counter did not increase')
-        if after['pixel_digest']==before['pixel_digest']:raise EvidenceError('desktop interaction digest did not change')
-        if int(after['keys'])<2 or int(after['motion'])<1 or int(after['buttons'])<2:
-            raise EvidenceError('desktop did not consume every input kind')
+        baseline={k:(arm[k],before[k]) for k in ('presents','input_events','pixel_digest')}
+        counts={k:(int(before[k]),int(after[k])) for k in ('presents','input_events')}
+        digests=(before['pixel_digest'],after['pixel_digest'])
+        kinds={k:int(after[k]) for k in ('keys','motion','buttons')}
     except (KeyError,ValueError) as error:raise EvidenceError('invalid desktop interaction fields') from error
+    for key,(armed,base) in baseline.items():
+        if armed!=base:raise EvidenceError(f'desktop interaction baseline differs from ARM: {key}')
+    for key,(old,new) in counts.items():
+        if new<=old:raise EvidenceError(f'desktop interaction counter did not increase: {key} {old}->{new}')
+    if digests[0]==digests[1]:raise EvidenceError('desktop interaction digest did not change')
+    if kinds['keys']<2 or kinds['motion']<1 or kinds['buttons']<2:
+        raise EvidenceError('desktop did not consume every input kind: '+' '.join(f'{k}={v}' for k,v in kinds.items()))
     return {'before':{k:before[k] for k in ('presents','input_events','pixel_digest')},
             'after':{k:after[k] for k in ('presents','input_events','pixel_digest','keys','motion','buttons')}}
 

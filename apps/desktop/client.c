@@ -191,6 +191,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_DAMAGE: {
+        c->awaiting_frame = 0;   /* its first frame: a launched program is ready for input (desktop.c) */
         struct desk_box b = desk_content(c);
         b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
         if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);

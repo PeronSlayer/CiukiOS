@@ -398,6 +398,21 @@ then do the A key edges count, so `keys=4` (two scenario edges, two A edges) can
 reached by an app that did not run to the end. After teardown the controller flushes
 storage (`files-durable` or `note-durable`).
 
+**Scripted input and program start (2026-10-12).** In the gate scenarios the desktop reads its input
+grant into a FIFO (512 events). While a graphical program it launched has not sent its first DAMAGE
+(`awaiting_frame`, at most 30 s), the scripted input stays there; it is then replayed with its recorded
+spacing (kernel event timestamps), shifted by the wait, so a script no longer depends on how long a
+program takes to start. Files and CiukNote move to their `--test` frame before their first frame, so the
+held clicks land on the moved window. Motivation: on image `2fdd515a` Files was not ready when
+`files-qemu-t23` clicked File at (27,70); the click raised the survivor demo's window (20,52) behind it,
+the typed keys went to the survivor, the shell's Alt+F4 closed it (`survivor_exit:0`) and `keys=0`.
+The shell scenario counts its A edges whenever they follow F12 (still published only at stage 6): its
+last step is a mouse click, and the 8042 hands out a pending keyboard byte before queued aux bytes
+(QEMU `hw/input/pckbd.c` `kbd_update_irq`), so on the `qemu-e500` firmware input path the A edges
+reached the desktop before the close click (image `639bcca5`: stage 6, `keys=0`). Task Manager and the
+app scenarios keep the arrival rule (their last steps are keyboard input). Host replay models:
+`late-start` (programs ready 8 s after spawn) and `--i8042-stall-*` (`app_replay.c`).
+
 In `--test=ciuknote` mode the window moves to (24,48), Time/Date and `.LOG` use the fixed
 time 2026-10-11 09:41 UTC (`9:41 AM 10/11/2026`) and the application prints one
 `CiukNote checkpoint=N event=ready|saved|opened path=... text=... digest=XXXXXXXX` line on
