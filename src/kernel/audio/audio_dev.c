@@ -123,14 +123,26 @@ void audio_service(void)
     bool active = false;
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i] && audio.streams[i]->started) active = true;
     if (audio_vm_active && audio_vm_active()) active = true;
-    ac97.idle_tail = !active && audio.running;
+    /* The queue holds only tail silence while the idle tail runs, also in the
+     * service where a source arrives (idle_since is cleared at its end). */
+    bool tail = audio.running && (!active || idle_since);
+    ac97.idle_tail = tail;
     bool control = false; /* a transport stop has its own deadline, not the 1 ms service budget */
     int err = ac97_progress(&ac97);
-    if (err && !active && audio.running) {
-        /* Idle tail (no started source): an underrun carries no client data.
-         * Stop the transport normally instead of failing the backend. */
+    if (err && tail) {
+        /* Idle tail: an underrun carries no client data. Stop the transport
+         * normally instead of failing the backend; a source restarts it. */
         klog("[audio] idle-tail transport stop err=%d published=%llu retired=%llu halts=%llu tail_ms=%llu",
-             err, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)ac97.dma_halts, (unsigned long long)(g_ticks - idle_since));
+             err, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)ac97.dma_halts, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
+        err = ac97_stop(&ac97); audio.running = false; ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
+    } else if (!err && tail && ac97.published - ac97.retired <= 1) {
+        /* Drained to the period the DMA plays: ac97_publish never rewrites the
+         * CIV/PIV slots, so the queue cannot be extended and the refusal
+         * failed the backend (QEMU campaign 13, image 22320ccc: the AUDIO_LEAD
+         * tail kept while a DOS VM is attached drained between VMPLAY stages
+         * 4 and 5). Inside the tail that period is silence: stop as above. */
+        klog("[audio] idle-tail transport stop drained published=%llu retired=%llu tail_ms=%llu",
+             (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
         err = ac97_stop(&ac97); audio.running = false; ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
     } else if (err) {
         struct ac97_cursor c; int oe = ac97_observe(&ac97, &c);
@@ -180,7 +192,11 @@ void audio_service(void)
     /* Transport control (stop, the idle-tail burst) is accounted apart from refill work. */
     uint32_t *peak = control ? &audio.max_control_us : &audio.max_service_us;
     if (elapsed > *peak) *peak = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
-    if (err) { audio_fail(-EIO); kmutex_lock(&control_lock); ac97_shutdown(); kmutex_unlock(&control_lock); }
+    if (err) {
+        klog("[audio] backend failure err=%d published=%llu retired=%llu running=%u active=%u",
+             err, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, audio.running, active);
+        audio_fail(-EIO); kmutex_lock(&control_lock); ac97_shutdown(); kmutex_unlock(&control_lock);
+    }
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
 static bool refill_pending(void *arg) { (void)arg; return audio.pending || audio.error; }
