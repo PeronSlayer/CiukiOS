@@ -132,7 +132,7 @@ def build():
     env = os.environ.copy()
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
-    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
+    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", "display_mode.c", *SHELL,
                            "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}
@@ -154,7 +154,7 @@ def build():
     sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["control"] = ["../control/main.c", "../control/app.c", "settings.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "settings.c", "wallpaper.c", "image.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():

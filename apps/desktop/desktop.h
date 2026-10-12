@@ -117,6 +117,7 @@ struct desktop {
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
      * control handle; NULL on hosts without one. 0 or -errno. */
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
+    int (*display_set)(struct desktop *, uint16_t mode); /* f1-23 runtime; 0 or -errno */
     /* Title-bar double-click (windowshade). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
     /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
@@ -127,6 +128,7 @@ struct desktop {
  * 6 demo reaped with status 0, 7 Tasks reported the PID gone and the
  * desktop's own process list confirmed it (desktop.c). */
 #define DESK_TASKS_DONE 7
+int desk_display_mode_set(struct desktop *, uint16_t mode);
 int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out);
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);

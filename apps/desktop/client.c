@@ -349,10 +349,12 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_SETTINGS: {
-        /* Control Panel: apply desktop.cfg again, or set the master volume
-         * through the desktop's delegated mixer handle (desktop.c). */
+        /* Control Panel: reload preferences, set the master volume or ask
+         * f1-23's display callback for a temporary mode. */
         int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : 0;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
+        if (!result && p.request == DESK_SETTINGS_DISPLAY)
+            result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
         if (!result && p.request == DESK_SETTINGS_MASTER) {
             if (d->mixer_fd < 0) result = -ENODEV;
             else {

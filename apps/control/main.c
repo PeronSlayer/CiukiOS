@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
- * NAME: display, mouse, keyboard, sounds, datetime, system. */
+ * NAME: display, mouse, keyboard, sounds, datetime, system, adapter. */
 #include "control.h"
 #include <ciuki/audio.h>
 #include <ciuki/proc.h>
@@ -15,7 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 
-struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; uint32_t portrait[256 * 256]; uint32_t serial; uint64_t last_tick; };
+struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; uint32_t portrait[256 * 256]; uint32_t serial, display_serial; uint64_t last_tick; };
 
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
@@ -102,23 +102,29 @@ static int apply(void *ctx, unsigned request, int volume, int muted)
 {
     struct cp_main *m = ctx;
     struct ciuki_message msg;
-    desk_message(&msg, DESK_SETTINGS, 24); msg.data[0] = DESK_SHELL_VERSION;
-    desk_put32(msg.data + 4, ++m->serial); desk_put32(msg.data + 8, request);
-    if (request == DESK_SETTINGS_MASTER) {
-        desk_put32(msg.data + 12, (uint32_t)volume); desk_put32(msg.data + 16, (uint32_t)volume); desk_put32(msg.data + 20, (uint32_t)(muted != 0));
-    }
-    return du_window_queue(&m->window, &msg);
+    if (!++m->serial) ++m->serial;
+    cp_settings_message(&msg, m->serial, request, volume, muted);
+    int r = du_window_queue(&m->window, &msg);
+    if (!r && request == DESK_SETTINGS_DISPLAY) m->display_serial = m->serial;
+    return r;
 }
+static int display_query(void *ctx, struct ciuki_display_info *info)
+{ (void)ctx; return ciuki_display_query(info); }
 static void on_message(struct du_window *w, const struct desk_packet *p, void *user)
 {
     (void)w;
     struct cp_main *m = user;
+    if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && p->serial == m->display_serial) {
+        cp_display_result(&m->app, p->result); return;
+    }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && p->result < 0) {
         struct du_widget *s = du_get(&m->ui, 3);   /* the status line */
         if (s) { du_set_text(s, p->result == -ENODEV ? "No writable mixer: the volume is read-only." : "The desktop refused the change."); m->ui.dirty = 1; }
     }
 }
 static uint64_t now(void *ctx) { (void)ctx; struct timespec t; return clock_gettime(CLOCK_REALTIME, &t) || t.tv_sec < 0 ? 0 : (uint64_t)t.tv_sec; }
+static int close_request(struct du_window *w, void *user)
+{ (void)w; struct cp_main *m = user; cp_display_cancel(&m->app); return 1; }
 static void idle(void *arg)
 {
     struct cp_main *m = arg;
@@ -141,6 +147,7 @@ int main(int argc, char **argv)
     if (!m) return 1;
     struct cp_host *h = &m->app.host;
     h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
+    h->display = display_query;
     FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
     if (f) { if (fread(m->portrait, 4, 256 * 256, f) == 256 * 256) h->portrait = m->portrait; fclose(f); }
     const char *display = getenv("CIUKI_DISPLAY");
@@ -156,7 +163,7 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
-    m->window.message = on_message; m->window.user = m;
+    m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
     if (cp_attach(&m->app, &m->ui, page)) { du_window_destroy(&m->window); free(m); return 1; }
     int r = du_run(&m->window, idle, m);
     cp_detach(&m->app); du_window_destroy(&m->window); free(m);

@@ -454,6 +454,7 @@ static void shell_service(struct desktop *d)
 static void shell_setup(struct desktop *d, int gate)
 {
     d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
+    d->display_set=desk_display_mode_set;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
     int fd=authority ? number(authority,CIUKI_OPEN_MAX-1) : -1;
