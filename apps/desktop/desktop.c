@@ -447,10 +447,6 @@ static void shell_setup(struct desktop *d, int gate)
 #endif
     }
     scan_programs(d);
-    /* The supervisor delegates the writable mixer handle to the desktop (F4). */
-    const char *mixer=getenv("CIUKI_MIXER_FD");
-    int mfd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
-    d->mixer_fd=mfd>=3 && fcntl(mfd,F_GETFD)>=0 ? mfd : -1;
     /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
     d->sh.gate=gate;
     if (!gate) settings_load(d);
