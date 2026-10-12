@@ -47,6 +47,12 @@ clang "${abi_flags[@]}" -I "$root/src/kernel/include" \
     "$root/tests/host/abi_layout_test.c" -o "$out/abi_layout_test"
 "$out/abi_layout_test" "$out/abi-layout.json"
 
+# f2-41: exact production snapshot and read-only user marshalling.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -fsanitize=address,undefined -fno-sanitize-recover=undefined -I "$root/src/kernel/include" \
+    "$root/tests/host/devices_test.c" -Wl,--gc-sections -o "$out/devices_test"
+"$out/devices_test"
+
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_lib_test.c" -o "$out/kernel_lib_test"
 "$out/kernel_lib_test"

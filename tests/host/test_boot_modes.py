@@ -284,7 +284,7 @@ int main(void)
 
     def test_power_call_wiring_and_sdk_wrapper(self):
         abi = (ROOT / 'src/kernel/include/ciuki/abi.h').read_text()
-        self.assertRegex(abi, r'CIUKI_SYS_DOSVM = 72,\n    CIUKI_SYS_POWER = 73,\n    CIUKI_SYS_DISPLAY = 74,\n    CIUKI_SYS_LAUNCH_MARK = 75,\n};')
+        self.assertRegex(abi, r'CIUKI_SYS_DOSVM = 72,\n    CIUKI_SYS_POWER = 73,\n    CIUKI_SYS_DISPLAY = 74,\n    CIUKI_SYS_LAUNCH_MARK = 75,\n    CIUKI_SYS_DEVICES = 76,\n};')
         for name, value in (('REBOOT', 1), ('OFF', 2), ('QUERY', 3), ('CAN_REBOOT', 1), ('CAN_OFF', 2)):
             self.assertIn(f'#define CIUKI_POWER_{name} {value}u', abi)
         syscall = (ROOT / 'src/kernel/core/syscall.c').read_text()

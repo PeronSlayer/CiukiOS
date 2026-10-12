@@ -39,8 +39,8 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 
 static int launch(struct files_app *a, const char *program, char *const argv[])
 {
-    /* Windows that open a file: CiukNote and the Image Viewer (the desktop launches them). */
-    if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/viewer")) && argv[0] && argv[1] && !argv[2])
+    /* The desktop supplies a channel to file windows and Control Panel. */
+    if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/viewer") || !strcmp(program, "/Programs/control")) && argv[0] && argv[1] && !argv[2])
         return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
     char *env[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);

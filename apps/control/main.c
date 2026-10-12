@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: MIT
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
- * NAME: display, mouse, keyboard, sounds, datetime, system, adapter. */
+ * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter. */
 #include "control.h"
 #include <ciuki/audio.h>
 #include <ciuki/proc.h>
+#include <ciuki/devices.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -41,6 +42,47 @@ static int save(void *ctx, const char *text, size_t length)
     if (!ok) unlink(temp);
     return ok ? 0 : -1;
 }
+/* BOOT.CFG is a pre-existing bounded boot file. In-place replacement fits
+ * its existing cluster and works with the native VFS's rename semantics. */
+static int boot_load(void *ctx, char *text, size_t size, size_t *length)
+{
+    (void)ctx;
+    int fd = open("/system/BOOT.CFG", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    size_t n = 0; int ok = 1;
+    while (n < size) {
+        ssize_t got = read(fd, text + n, size - n);
+        if (got < 0) { ok = 0; break; }
+        if (!got) break;
+        n += (size_t)got;
+    }
+    if (close(fd)) ok = 0;
+    if (n >= size) ok = 0;
+    if (ok) { text[n] = 0; *length = n; }
+    return ok ? 0 : -1;
+}
+static int boot_write(int fd, const char *text, size_t length)
+{
+    size_t at = 0;
+    while (at < length) {
+        ssize_t n = pwrite(fd, text + at, length - at, (off_t)at);
+        if (n <= 0) return -1;
+        at += (size_t)n;
+    }
+    return ftruncate(fd, (off_t)length) || fsync(fd) ? -1 : 0;
+}
+static int boot_save(void *ctx, const char *text, size_t length)
+{
+    char previous[CP_BOOT_MAX]; size_t n = 0;
+    if (length >= CP_BOOT_MAX || boot_load(ctx, previous, sizeof(previous), &n)) return -1;
+    int fd = open("/system/BOOT.CFG", O_RDWR | O_CLOEXEC);
+    if (fd < 0) return -1;
+    int r = boot_write(fd, text, length);
+    if (r) (void)boot_write(fd, previous, n); /* best effort after an I/O error */
+    if (close(fd)) r = -1;
+    return r;
+}
+static int devices(void *ctx, struct ciuki_devices_info *out) { (void)ctx; return ciuki_devices(out); }
 static int load_sounds(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx; FILE *f = fopen(SOUND_CFG,"rb"); if (!f) return -1;
@@ -142,6 +184,7 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
         if (s) { du_set_text(s, p->result == -ENODEV ? "No writable mixer: the volume is read-only." : "The desktop refused the change."); m->ui.dirty = 1; }
     }
 }
+static uint64_t monotonic(void *ctx) { (void)ctx; return du_now(); }
 static uint64_t now(void *ctx) { (void)ctx; struct timespec t; return clock_gettime(CLOCK_REALTIME, &t) || t.tv_sec < 0 ? 0 : (uint64_t)t.tv_sec; }
 static int close_request(struct du_window *w, void *user)
 { (void)w; struct cp_main *m = user; cp_display_cancel(&m->app); return 1; }
@@ -154,7 +197,7 @@ static void idle(void *arg)
 }
 int main(int argc, char **argv)
 {
-    int channel = 3, page = CP_DISPLAY;
+    int channel = 3, page = CP_HOME;
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--channel-fd=", 13)) {
             char *end; long n = strtol(argv[i] + 13, &end, 10);
@@ -168,6 +211,7 @@ int main(int argc, char **argv)
     struct cp_host *h = &m->app.host;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
+    h->devices = devices; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
     FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
     if (f) { if (fread(m->portrait, 4, 256 * 256, f) == 256 * 256) h->portrait = m->portrait; fclose(f); }
     const char *display = getenv("CIUKI_DISPLAY");

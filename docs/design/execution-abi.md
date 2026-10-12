@@ -1387,3 +1387,35 @@ uses the existing klog sinks; launch timestamps are captured before emitting
 the record. Counters stop at FRAME. No launch output is emitted in quiet boot.
 Sources, host evidence and pending T23 qualification:
 `docs/validation/f2-39-app-launch-latency.md`, `build/codex/f2-39-report.md`.
+
+
+## F2-41 amendment — read-only devices (2026-10-12)
+
+Call 76 `DEVICES`: `ebx=output`, `ecx=34696`, other argument registers
+ignored. The SDK `ciuki_devices(struct ciuki_devices_info *)` supplies the
+extent. The first two caller words must be version 1 and size 34696.
+Returns 0 on success, EINVAL for an unsupported extent/version/size,
+EFAULT for an inaccessible/overflowing full readable and writable range,
+or EAGAIN if resource quarantine changes the generation during both bounded
+snapshot attempts. The output is a pointer-free pack(4) record. Counts never
+exceed 64 devices, 16 drivers and 64 leases; resource lists stop at 8.
+Unfilled array slots, unused bytes and string tails are zero. The target
+layout has literal expectations in `tests/host/abi_layout_test.c`.
+
+Device states are ready (0), absent/inactive (1), quarantined (2),
+firmware-first (3). PCI identity alone never proves a native binding. Lease
+states preserve the registry's firmware (0), claimed (1), active (2),
+quiescing (3), released (4), quarantined (5), discovered (6); released
+leases are omitted. Resource types are I/O (0), IRQ (1), ISA DMA (2), memory
+(3), with start inclusive/end exclusive. UNKNOWN_SIZE (bit 0) has end=start
+and conveys a PCI BAR base without an extent. TRUNCATED (bit 0) in the
+snapshot means device/PCI discovery reached a bound; in a device record
+it means additional resources are omitted. CPU vendor/brand/family/model,
+uptime milliseconds and current boot policy are read-only metadata.
+
+N-class: no allocation, waits, hardware I/O, BAR sizing, probing, activation,
+lease changes or quarantine recovery. A private static buffer follows call
+70's UP non-preemptible-kernel rule. Registry capture holds a short IRQ lock;
+CPUID and formatting run after restoring interrupts. Static snapshot storage
+is approximately 38 KiB including its private registry copy. See
+[device-manager.md](device-manager.md) for sources and Control Panel behavior.

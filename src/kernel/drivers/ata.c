@@ -856,6 +856,13 @@ struct ata_device *ata_device_get(unsigned channel, unsigned unit)
     return d->identified && !d->block.quarantined && !d->channel->quiescing ? d : 0;
 }
 
+const struct ata_device *ata_inventory_get(unsigned channel, unsigned unit)
+{
+    if (!initialized || channel >= ATA_CHANNELS || unit >= ATA_DEVICES) return 0;
+    const struct ata_device *d = &channels[channel].devices[unit];
+    return d->identified ? d : 0;
+}
+
 uint64_t ata_command_count(void)
 {
     uint64_t n = 0;

@@ -131,7 +131,7 @@ int main(int argc, char **argv)
         struct du_widget *p = &u.widgets[i];
         if (p->hidden || p->kind == DU_TABS) continue;
         visible++;
-        if (p->box.y + p->box.h <= CP_HEIGHT - 52 + 8) {   /* inside the tab sheet (the status line and Close are below it) */
+        if (p->box.y + p->box.h <= tabs->box.y + tabs->box.h) {   /* inside the tab sheet (the status line and Close are below it) */
             assert(inside(p->box, tabs->box) && !overlap(p->box, monitor));
         }
         for (unsigned j = i + 1; j < u.count; j++) {
@@ -170,7 +170,7 @@ int main(int argc, char **argv)
     cp_detach(&a);
     /* Other pages hide the buttons. */
     attach(CP_MOUSE);
-    for (int k = 0; k < 5; k++) assert(find(DU_BUTTON, labels[k])->hidden);
+    for (int k = 0; k < 5; k++) assert(!find(DU_BUTTON, labels[k]));
     cp_detach(&a);
 
     /* A file written before fill keeps its mode; Ciuk1 is selected. */

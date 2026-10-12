@@ -10,11 +10,15 @@
 #include "../desktop/sounds.h"
 #include "../desktop/wallpaper.h"
 #include <ciuki/display.h>
+#include <ciuki/abi.h>
 #include <stdint.h>
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
-enum { CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM, CP_ADAPTER, CP_PAGES };
+enum { CP_HOME = -1, CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM,
+       CP_DEVICES, CP_DRIVERS, CP_NETWORK, CP_POWER, CP_ADAPTER, CP_PAGES };
+#define CP_TREE_MAX (1 + CIUKI_DEVICE_CLASSES + CIUKI_DEVICES_MAX)
+#define CP_BOOT_MAX 128
 enum { CP_AREA_LABEL = 800, CP_AREA, CP_DEPTH_LABEL, CP_DEPTH, CP_APPLY, CP_MODE_NOTE,
        CP_REFRESH, CP_SUMMARY, CP_CONFIRM, CP_MODE_TIMER };
 enum { CP_MODE_IDLE, CP_MODE_WAIT, CP_MODE_CONFIRM, CP_MODE_REVERT };
@@ -24,8 +28,12 @@ struct cp_host {
     int (*wallpapers)(void *, char names[][CFG_PATH_MAX], unsigned capacity);   /* absolute paths */
     int (*decode)(void *, const char *path, struct desk_image *out);
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
-    int (*apply)(void *, unsigned request, int value, int flag);        /* DESK_SETTINGS: volume/mute or temporary mode id/0 */
+    int (*apply)(void *, unsigned request, int value, int flag);      /* DESK_SETTINGS */
+    uint64_t (*monotonic)(void *);                                    /* nanoseconds */
     uint64_t (*now)(void *);                                          /* UTC seconds */
+    int (*devices)(void *, struct ciuki_devices_info *);
+    int (*boot_load)(void *, char *, size_t, size_t *);
+    int (*boot_save)(void *, const char *, size_t);
     int (*load_sounds)(void *, char *, size_t, size_t *);
     int (*save_sounds)(void *, const char *, size_t);
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
@@ -52,6 +60,19 @@ struct cp_app {
     int preview_pending;            /* an image wallpaper decode is scheduled after the first paint */
     char image_path[128];           /* path of the wallpaper decoded into image (preview_build cache) */
     char status[96], clock_line[64], date_line[64];
+    struct ciuki_devices_info devices;
+    int devices_ok, system_tab, properties_device, detail_list;
+    unsigned detail_index;
+    uint64_t snapshot_time;
+    unsigned collapsed;
+    uint32_t selected_device_id;
+    struct du_item applet_items[CP_PAGES], system_tabs[3];
+    struct du_item tree_items[CP_TREE_MAX], driver_items[CIUKI_DRIVERS_MAX], lease_items[CIUKI_LEASES_MAX];
+    int tree_device[CP_TREE_MAX]; unsigned tree_count;
+    char device_names[CIUKI_DEVICES_MAX][96];
+    char driver_bound[CIUKI_DRIVERS_MAX][16], lease_range[CIUKI_LEASES_MAX][48], lease_gen[CIUKI_LEASES_MAX][16];
+    char boot_text[CP_BOOT_MAX]; size_t boot_length;
+    int boot_ok, serial_next;
     int quit;
     struct ciuki_display_info display;
     struct du_item area_items[32], depth_items[3];
@@ -67,6 +88,13 @@ int cp_attach(struct cp_app *, struct du_ui *, int page);
 void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);
+void cp_open(struct cp_app *, int page);
+int cp_snapshot_valid(const struct ciuki_devices_info *);
+void cp_tree_build(struct cp_app *);
+const char *cp_device_class(unsigned);
+const char *cp_device_state(unsigned);
+/* Preserve every other BOOT.CFG token, including test selectors. */
+int cp_boot_serial(const char *text, size_t length, int serial, char *out, size_t capacity);
 void cp_audio_result(struct cp_app *, int result);
 int cp_display_refresh(struct cp_app *);
 void cp_display_sync(struct cp_app *);

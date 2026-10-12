@@ -15,7 +15,7 @@ enum {
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS,
-    C_GO_DOCUMENTS = 300, C_GO_GAMES,
+    C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL,
     T_JOB = 1
 };
 #define PANE_TOP 92
@@ -44,7 +44,7 @@ static const struct du_menu_item go_template[] = {
     {"&Up One Level", C_UP, DU_KEY_UP, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Address Bar", C_ADDRESS, 0x20, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Computer", C_GO_ROOT, 0, 0, 0}, {"&Programs", C_GO_BIN, 0, 0, 0},
-    {"&Documents", C_GO_DOCUMENTS, 0, 0, 0}, {"&System", C_GO_SYSTEM, 0, 0, 0}, {"&Games", C_GO_GAMES, 0, 0, 0}};
+    {"&Documents", C_GO_DOCUMENTS, 0, 0, 0}, {"&System", C_GO_SYSTEM, 0, 0, 0}, {"&Games", C_GO_GAMES, 0, 0, 0}, {"Control &Panel", C_GO_CONTROL, 0, 0, 0}};
 static const struct du_menu_item help_template[] = {
     {"&Help Topics", C_HELP, DU_KEY_F1, 0, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&About Files", C_ABOUT, 0, 0, 0}};
 
@@ -247,11 +247,11 @@ static void sort_names(struct names *n)
 
 static void places_build(struct files_app *a)
 {
-    static const char *const names[] = {"Computer", "Programs", "Documents", "System", "Games"};
-    static const char *const paths[] = {FM_COMPUTER, "/Programs", "/Documents", "/system", "/Games"};
-    static const char *const icons[] = {"place:computer", "place:applications", "place:documents", "place:system", "place:folder"};
+    static const char *const names[] = {"Computer", "Programs", "Documents", "System", "Games", "Control Panel"};
+    static const char *const paths[] = {FM_COMPUTER, "/Programs", "/Documents", "/system", "/Games", "control:"};
+    static const char *const icons[] = {"place:computer", "place:applications", "place:documents", "place:system", "place:folder", "menu:control-panel"};
     a->place_count = 0;
-    for (unsigned i = 0; i < 5; i++) {
+    for (unsigned i = 0; i < 6; i++) {
         struct fm_meta meta;
         if (i == 4 && (a->model.fs.stat_path(a->model.fs.ctx, paths[i], &meta) || meta.type != FM_DIR)) continue;
         struct files_place *p = &a->places[a->place_count++];
@@ -261,7 +261,7 @@ static void places_build(struct files_app *a)
         struct du_item *it = &a->place_items[i];
         memset(it, 0, sizeof(*it));
         it->text[0] = a->places[i].name;
-        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(icons[i], 16);
+        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(!strcmp(a->places[i].path, "control:") ? "menu:control-panel" : icons[i], 16);
     }
     struct du_widget *w = W(a, W_PLACES);
     w->items = a->place_items; w->count = a->place_count;
@@ -429,10 +429,10 @@ void files_update(struct files_app *a)
     set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || !m->clipboard_count);
-    set_flag(a->go_items, 11, C_BACK, DU_ITEM_DISABLED, !m->history_at);
-    set_flag(a->go_items, 11, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
-    set_flag(a->go_items, 11, C_UP, DU_ITEM_DISABLED, root);
-    set_flag(a->go_items, 11, C_GO_GAMES, DU_ITEM_DISABLED, a->place_count < 5);
+    set_flag(a->go_items, 12, C_BACK, DU_ITEM_DISABLED, !m->history_at);
+    set_flag(a->go_items, 12, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
+    set_flag(a->go_items, 12, C_UP, DU_ITEM_DISABLED, root);
+    set_flag(a->go_items, 12, C_GO_GAMES, DU_ITEM_DISABLED, a->place_count < 6);
     set_flag(a->view_items, 10, C_ICONS, DU_ITEM_CHECKED, list->view == DU_ICONS);
     set_flag(a->view_items, 10, C_LIST, DU_ITEM_CHECKED, list->view == DU_LIST);
     set_flag(a->view_items, 10, C_DETAILS, DU_ITEM_CHECKED, list->view == DU_DETAILS);
@@ -865,6 +865,13 @@ static void about(struct files_app *a)
     if (a->ciuki) du_dialog_icon(a->ui, a->ciuki32);
 }
 
+static void open_control(struct files_app *a)
+{
+    char *argv[] = {"control", "--panel=home", NULL};
+    int r = a->spawn ? a->spawn(a, "/Programs/control", argv) : -ENOSYS;
+    if (r < 0) error_box(a, "Control Panel", "Cannot open Control Panel:", r);
+}
+
 static void command(struct files_app *a, int id)
 {
     struct fm_model *m = &a->model;
@@ -877,10 +884,11 @@ static void command(struct files_app *a, int id)
     case C_BACK: after_history(a, fm_history(m, -1)); break;
     case C_FORWARD: after_history(a, fm_history(m, 1)); break;
     case C_UP: after_history(a, fm_up(m)); if (fm_same_path(m->path, "/system")) checkpoint(a, 1); break;
+    case C_GO_CONTROL: open_control(a); break;
     case C_GO_ROOT: files_navigate(a, FM_COMPUTER); break;
     case C_GO_BIN: files_navigate(a, "/Programs"); break;
     case C_GO_DOCUMENTS: files_navigate(a, "/Documents"); break;
-    case C_GO_GAMES: if (a->place_count == 5) files_navigate(a, "/Games"); break;
+    case C_GO_GAMES: if (a->place_count == 6) files_navigate(a, "/Games"); break;
     case C_GO_SYSTEM: files_navigate(a, "/system"); break;
     case C_TREE_OPEN: files_update(a); break;
     case C_ADDRESS: { struct du_widget *e = W(a, W_ADDRESS); du_focus(a->ui, W_ADDRESS); e->anchor = 0; e->cursor = strlen(e->text); break; }
@@ -1029,7 +1037,8 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
             if (!fm_same_path(a->tree[e->index].path, a->model.path)) { char p[FM_PATH]; strcpy(p, a->tree[e->index].path); files_navigate(a, p); }
             du_focus(a->ui, W_TREE);
         } else if (e->id == W_PLACES && e->index >= 0 && (unsigned)e->index < a->place_count) {
-            if (!fm_same_path(a->places[e->index].path, a->model.path)) files_navigate(a, a->places[e->index].path);
+            if (!strcmp(a->places[e->index].path, "control:")) open_control(a);
+            else if (!fm_same_path(a->places[e->index].path, a->model.path)) files_navigate(a, a->places[e->index].path);
         }
         break;
     case DU_EV_OPEN:
@@ -1061,11 +1070,11 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;
     copy_menu(a->file_items, file_template, 11); copy_menu(a->edit_items, edit_template, 6);
-    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 11); copy_menu(a->help_items, help_template, 3);
+    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 12); copy_menu(a->help_items, help_template, 3);
     a->menus[0] = (struct du_menu){"&File", a->file_items, 11};
     a->menus[1] = (struct du_menu){"&Edit", a->edit_items, 6};
     a->menus[2] = (struct du_menu){"&View", a->view_items, 10};
-    a->menus[3] = (struct du_menu){"&Go", a->go_items, 11};
+    a->menus[3] = (struct du_menu){"&Go", a->go_items, 12};
     a->menus[4] = (struct du_menu){"&Help", a->help_items, 3};
     u->menus = a->menus; u->menu_count = 5;
     struct du_rect zero = {0, 0, 0, 0};

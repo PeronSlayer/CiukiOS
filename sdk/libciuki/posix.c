@@ -2,6 +2,7 @@
 #include <ciuki/runtime.h>
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
+#include <ciuki/devices.h>
 #include <ciuki/display.h>
 #include <ciuki/channel.h>
 #include <sys/stat.h>
@@ -149,5 +150,6 @@ char *tmpnam(char *out) {
     snprintf(out,L_tmpnam,"/tmp/c%lx-%lx",(unsigned long)getpid(),(unsigned long)counter);return out;
 }
 
+int ciuki_devices(struct ciuki_devices_info *i) { return RET(CU_CALL(DEVICES,CU_PTR(i),sizeof(*i),0,0,0,0)); }
 int ciuki_display_query(struct ciuki_display_info *i) { return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_QUERY,CU_PTR(i),0,0,0,0); }
 int ciuki_display_set(uint16_t id) { return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SET,id,0,0,0,0); }
