@@ -34,7 +34,7 @@ ALLOWED = {
     'drivers/i8042_probe.c',
 }
 TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.S)
-CALL = re.compile(r'\brec_emit(?:_panicsafe)?\s*\(')
+CALL = re.compile(r'\b(?:rec_emit(?:_panicsafe)?|rec_diag)\s*\(')
 
 
 def calls(source):

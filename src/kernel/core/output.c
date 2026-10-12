@@ -102,6 +102,17 @@ void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
     emit_line(probe, event, extra, false);
 }
 
+void rec_diag(const char *probe, const char *fmt, ...)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE) || (run_selected && !run_begun)) return;
+    char extra[240];
+    va_list ap;
+    va_start(ap, fmt);
+    kvsnprintf(extra, sizeof(extra), fmt, ap);
+    va_end(ap);
+    emit_line(probe, "DATA", extra, true);
+}
+
 static volatile int in_panic;
 
 static __attribute__((noreturn)) void halt_forever(void)
