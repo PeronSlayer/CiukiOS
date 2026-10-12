@@ -75,7 +75,7 @@ int main(void)
     struct acpi_soft_off r;
     const char *why;
     /* QEMU: Scope(\) { Name(_S5, Package(4){Zero, Zero, Zero, Zero}) }. */
-    static const uint8_t qemu[] = { 0x10, 0x0E, 0x5C, 0x08, '_', 'S', '5', '_', 0x12, 0x06, 0x04, 0, 0, 0, 0, 0xA3 };
+    static const uint8_t qemu[] = { 0x10, 0x0F, 0x5C, 0x00, 0x08, '_', 'S', '5', '_', 0x12, 0x06, 0x04, 0, 0, 0, 0, 0xA3 };
     tables(qemu, sizeof(qemu), 0x604, 0);
     CHECK(parse(&r, &why) == 0 && !strcmp(why, "ok"));
     CHECK(r.pm1a_cnt == 0x604 && r.pm1b_cnt == 0 && r.slp_typa == 0 && r.slp_typb == 0);
@@ -89,10 +89,31 @@ int main(void)
     CHECK(parse(&r, &why) == 0 && r.slp_typa == 7 && r.slp_typb == 7);
     CHECK(r.pm1a_cnt == 0x1004 && r.pm1b_cnt == 0x1044);
 
-    /* A two-byte PkgLength and a single-element package (SLP_TYPb = 0). */
+    /* A zero PkgLength cannot contain any elements (old parser accepted it). */
     static const uint8_t wide[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x40, 0x00, 0x01, 0x01 };
     uint8_t a = 9, b = 9;
-    CHECK(acpi_s5_find(wide, sizeof(wide), &a, &b) == 0 && a == 1 && b == 0);
+    CHECK(acpi_s5_find(wide, sizeof(wide), &a, &b) == -ENOENT && a == 9 && b == 9);
+    static const uint8_t escaped[] = {0x08, '_','S','5','_', 0x12, 0x03, 0x02, 0x01, 0x01};
+    CHECK(acpi_s5_find(escaped, sizeof(escaped), &a, &b) == -ENOENT);
+    static const uint8_t buffer[] = {0x08, 'B','U','F','0', 0x11, 0x0F, 0x0A, 0x0B,
+        0x08, '_','S','5','_', 0x12, 0x06, 0x04, 0, 0, 0, 0};
+    CHECK(acpi_s5_find(buffer, sizeof(buffer), &a, &b) == -ENOENT);
+    static const uint8_t nested[] = {0x10, 0x10, '_','S','B','_',
+        0x08, '_','S','5','_', 0x12, 0x06, 0x04, 0, 0, 0, 0};
+    CHECK(acpi_s5_find(nested, sizeof(nested), &a, &b) == -ENOENT);
+    static const uint8_t nested_absolute[] = {0x10, 0x11, '_','S','B','_',
+        0x08, 0x5C, '_','S','5','_', 0x12, 0x06, 0x04, 0, 0, 0, 0};
+    CHECK(acpi_s5_find(nested_absolute, sizeof(nested_absolute), &a, &b) == -ENOENT);
+    /* Non-minimal but valid multi-byte lengths, complete two-element package. */
+    static const uint8_t wide_valid[] = {0x08,'_','S','5','_',0x12,0x45,0,2,1,0};
+    CHECK(!acpi_s5_find(wide_valid,sizeof(wide_valid),&a,&b) && a==1 && b==0);
+    for (unsigned i=0;i<sizeof(wide_valid);i++) CHECK(acpi_s5_find(wide_valid,i,&a,&b)==-ENOENT);
+    static const uint8_t one[] = {0x08,'_','S','5','_',0x12,3,1,1};
+    CHECK(acpi_s5_find(one,sizeof(one),&a,&b)==-ENOENT);
+    /* Fake signatures in data are skipped even when a real root Name follows. */
+    uint8_t sequence[sizeof(buffer)+sizeof(wide_valid)];
+    memcpy(sequence,buffer,sizeof(buffer)); memcpy(sequence+sizeof(buffer),wide_valid,sizeof(wide_valid));
+    CHECK(!acpi_s5_find(sequence,sizeof(sequence),&a,&b) && a==1 && b==0);
 
     /* Refusals: out-of-range value, truncation, missing object. */
     static const uint8_t big[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x05, 0x02, 0x0A, 0x08, 0x00 };

@@ -244,9 +244,9 @@ inherited, finite stdin, bounded stdout/stderr and a writable test overlay:
 
 ```sh
 # cwd /system/tests/lua-5.4.8-tests
-# LC_ALL=C TZ=UTC0 HOME=/home TMPDIR=/tmp
-/bin/lua -e '_U=true' all.lua
-/bin/lua /system/tests/ciuki-f2.lua
+# LC_ALL=C TZ=UTC0 HOME=/Documents TMPDIR=/tmp
+/Programs/lua -e '_U=true' all.lua
+/Programs/lua /system/tests/ciuki-f2.lua
 ```
 
 Upstream `final OK !!!`, normal exit zero, and all four supplement case results
@@ -308,6 +308,9 @@ checked. The exact path/hash/size inventory is in `build-manifest.json`.
 Git identity was replaced with `unknown` only for this sandbox invocation,
 so no git command was executed. The production manifest recipe retains normal
 Git provenance and now includes SDK and application sources in its dirty check.
+
+This image evidence predates the 2026-10-12 namespace amendment. Subsequent
+canonical builds use `/Programs` and `/Documents` as the contract now specifies.
 
 No new f2-07 contract change is needed. The f2-06 public-header licensing issue
 documented above remains lead-owned. No QEMU, systemd scope, commit or push was

@@ -672,7 +672,7 @@ static const struct ciuki_proc_record *find_record(const struct ciuki_proc_recor
 static void test_enumeration(void)
 {
     struct process probe = { 0 };
-    proc_set_name(&probe, "/bin/tasks"); CHECK(!strcmp(probe.name, "tasks"));
+    proc_set_name(&probe, "/Programs/tasks"); CHECK(!strcmp(probe.name, "tasks"));
     proc_set_name(&probe, "a/b/0123456789abcdefghijklmnopqrstuvwxyz"); CHECK(!strcmp(probe.name, "0123456789abcdefghijklmnopqrstu"));
     proc_set_name(&probe, "x\x01y"); CHECK(!strcmp(probe.name, "x?y"));
     proc_set_name(&probe, "/dir/"); CHECK(!probe.name[0]);
@@ -686,7 +686,7 @@ static void test_enumeration(void)
     struct proc_thread *gt = make_process(child, &grand);
     struct proc_thread *kt = make_process(proc_supervisor(), &keeper); /* keeps other's zombie */
     struct ciuki_file file = fixture_file(); struct proc_strings *s = proc_strings_new();
-    CHECK(s && proc_strings_add(s, "/bin/other", 11, false) == 0);
+    CHECK(s && proc_strings_add(s, "/Programs/other", sizeof("/Programs/other"), false) == 0);
     CHECK(proc_spawn_file(keeper, &file, s, 0, 0, CIUKI_SPAWN_NEW_GROUP, 0, &other) > 0);
     CHECK(proc_spawn_file(proc_supervisor(), &file, s, 0, 0, CIUKI_SPAWN_NEW_GROUP, 0, &desk) > 0);
     proc_strings_free(s);

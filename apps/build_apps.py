@@ -24,12 +24,12 @@ def validate_payloads():
     checker = lua.checker()
     files = {}
     for name in ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote"):
-        files["/bin/" + name] = {"source": "build/apps/desktop/" + name,
+        files["/Programs/" + name] = {"source": "build/apps/desktop/" + name,
                                "sha256": desktop["files"][name], "elf": desktop["elf"][name]}
     for name, source in (("lua", "build/apps/lua/lua"), ("hello", "build/tools/ciuki-sdk/tests/hello.elf"),
                          ("libc_smoke", "build/tools/ciuki-sdk/tests/libc_smoke.elf")):
         path = ROOT / source
-        files["/bin/" + name] = {"source": source, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        files["/Programs/" + name] = {"source": source, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                                "elf": checker.inspect(path)}
     result = {"schema_version": 1, "sdk_manifest_sha256": hashlib.sha256((ROOT / "build/tools/ciuki-sdk/manifest.json").read_bytes()).hexdigest(),
               "applications": files, "newlib": sdk["newlib"], "guest_qualification": "not_run"}

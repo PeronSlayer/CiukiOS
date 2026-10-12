@@ -3,7 +3,9 @@
  * Modes plain, shell and about are pinned by test_desktop.py and
  * test_normal_boot.py at 640x480; the others render the desktop shell for
  * review (start, desktop, wall=<spec>, about-general, about-system, about-credits, run,
- * shutdown, context, volume, switcher, documents, settings).
+ * shutdown, context, volume, switcher, documents, settings). Built with
+ * -DCAPTURE_DECODE and image.c, wallfile=<host image> renders the default
+ * desktop.cfg (wallpaper path and mode) with that file as the decoded image.
  * SPDX-License-Identifier: MIT */
 #include "fake.h"
 #include <assert.h>
@@ -15,7 +17,7 @@ static void programs(struct desktop *d)
     static const char *const names[] = {"ciuknote", "control", "demo", "dosbox", "files", "hello", "libc_smoke", "lua", "tasks"};
     for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         strcpy(d->programs[i].name, names[i]);
-        snprintf(d->programs[i].path, sizeof(d->programs[i].path), "/bin/%s", names[i]);
+        snprintf(d->programs[i].path, sizeof(d->programs[i].path), "/Programs/%s", names[i]);
     }
     d->program_count = sizeof(names) / sizeof(names[0]);
 }
@@ -59,7 +61,7 @@ int main(int argc,char **argv)
     const char *mode=argv[3];
     if (!strcmp(mode,"shell")) {
         desk_shell_enable(d);
-        strcpy(d->programs[0].name,"demo"); strcpy(d->programs[0].path,"/bin/demo");
+        strcpy(d->programs[0].name,"demo"); strcpy(d->programs[0].path,"/Programs/demo");
         d->program_count=1; d->menu_open=1;
     } else if (!strcmp(mode,"about")) {
         desk_shell_enable(d); strcpy(d->build_identity,"f2-30-host-preview"); desk_about(d);
@@ -72,6 +74,17 @@ int main(int argc,char **argv)
         d->sh.system_valid=1; d->sh.mem_total_k=511u*1024; d->sh.mem_free_k=480u*1024; d->sh.processes=6; d->sh.uptime_s=754;
         strcpy(d->sh.cpu_name,"i686");
         if (!strncmp(mode,"wall=",5)) { cfg_defaults(&d->sh.cfg); snprintf(d->sh.cfg.wallpaper,sizeof(d->sh.cfg.wallpaper),"%s",mode+5); }
+#ifdef CAPTURE_DECODE
+        if (!strncmp(mode,"wallfile=",9)) {
+            /* desktop.c wallpaper_load with the default settings: the host file stands in for their path. */
+            cfg_defaults(&d->sh.cfg);
+            FILE *g=fopen(mode+9,"rb"); assert(g && !fseek(g,0,SEEK_END));
+            long size=ftell(g); assert(size>0 && (unsigned long)size<=DESK_IMAGE_FILE_MAX && !fseek(g,0,SEEK_SET));
+            uint8_t *data=malloc((size_t)size); assert(data && fread(data,1,(size_t)size,g)==(size_t)size && !fclose(g));
+            assert(!desk_image_decode(data,(size_t)size,&d->sh.image)); free(data);
+            printf("WALLPAPER %s %ux%u mode=%s\n",d->sh.cfg.wallpaper,d->sh.image.width,d->sh.image.height,cfg_mode_names[d->sh.cfg.wallpaper_mode]);
+        }
+#endif
         desk_shell_enable(d);
         desk_shell_wallpaper_update(d);
         if (!strcmp(mode,"start") || !strcmp(mode,"documents") || !strcmp(mode,"settings")) {
@@ -106,6 +119,9 @@ int main(int argc,char **argv)
     desk_composite(d,(struct desk_box){0,0,(int32_t)W,(int32_t)H});
     f=fopen(argv[2],"wb"); assert(f && fwrite(d->pixels,4,(size_t)W*H,f)==(size_t)W*H && !fclose(f));
     assert(guarded[0]==0xfeedface && guarded[(size_t)W*H+1]==0xfeedface);
+#ifdef CAPTURE_DECODE
+    desk_image_free(&d->sh.image);
+#endif
     free(guarded); free(portrait); free(d->sh.wall); free(d);
     return 0;
 }

@@ -334,13 +334,13 @@ ciuki_pid_t ciuki_spawn(const char *path, char *const argv[], char *const env[],
                         uint32_t count, uint32_t flags)
 {
     static const struct { const char *path; int (*entry)(int, char **); } programs[] = {
-        {"/bin/files", files_main}, {"/bin/ciuknote", ciuknote_main}, {"/bin/tasks", tasks_main}, {"/bin/demo", demo_main}};
+        {"/Programs/files", files_main}, {"/Programs/ciuknote", ciuknote_main}, {"/Programs/tasks", tasks_main}, {"/Programs/demo", demo_main}};
     int (*entry)(int, char **) = NULL;
     for (unsigned i = 0; i < sizeof(programs) / sizeof(programs[0]); i++) if (!strcmp(path, programs[i].path)) entry = programs[i].entry;
     if (!entry) {
-        char name[80]; snprintf(name, sizeof(name), ",%s,", path + (strncmp(path, "/bin/", 5) ? 0 : 5));
+        char name[80]; snprintf(name, sizeof(name), ",%s,", path + (strncmp(path, "/Programs/", sizeof("/Programs/") - 1) ? 0 : sizeof("/Programs/") - 1));
         char list[520]; snprintf(list, sizeof(list), ",%s,", bin_list);
-        if (strncmp(path, "/bin/", 5) || !strstr(list, name)) { errno = ENOENT; return -1; }
+        if (strncmp(path, "/Programs/", sizeof("/Programs/") - 1) || !strstr(list, name)) { errno = ENOENT; return -1; }
         entry = stub_main;
     }
     for (uint32_t i = 0; i < count; i++) {
@@ -348,8 +348,8 @@ ciuki_pid_t ciuki_spawn(const char *path, char *const argv[], char *const env[],
         if (!o || cur->fd[mapping[i].source].cloexec || mapping[i].target < 0 || mapping[i].target >= MAX_FDS) { errno = EBADF; return -1; }
     }
     int argn = 0; while (argv && argv[argn]) argn++;
-    int survivor = !strcmp(path, "/bin/demo") && argn == 4 && !strcmp(argv[3], "--test=crash-isolation");
-    struct proc *p = proc_create(path + 5, entry, argv, env, cur->pid, flags & CIUKI_SPAWN_NEW_GROUP ? 0 : cur->pgid,
+    int survivor = !strcmp(path, "/Programs/demo") && argn == 4 && !strcmp(argv[3], "--test=crash-isolation");
+    struct proc *p = proc_create(path + sizeof("/Programs/") - 1, entry, argv, env, cur->pid, flags & CIUKI_SPAWN_NEW_GROUP ? 0 : cur->pgid,
                                  cur->pid == desktop_pid && !survivor ? app_cost_ns : 2 * MS, survivor ? 0 : start_delay_ns);
     if (!p) return -1;
     for (uint32_t i = 0; i < count; i++) {
@@ -532,11 +532,11 @@ int rp_kill(pid_t pid, int sig)
 }
 pid_t rp_getpid(void) { return cur->pid; }
 
-/* /bin as the desktop scans it: the image's programs (scripts/build_image.py). */
+/* /Programs as the desktop scans it: the image's programs (scripts/build_image.py). */
 struct rp_dir { char names[24][64]; unsigned count, at; struct dirent entry; };
 DIR *rp_opendir(const char *path)
 {
-    if (strcmp(path, "/bin")) { errno = ENOENT; return NULL; }
+    if (strcmp(path, "/Programs")) { errno = ENOENT; return NULL; }
     struct rp_dir *d = calloc(1, sizeof(*d)); assert(d);
     char list[512]; snprintf(list, sizeof(list), "%s", bin_list);
     for (char *s = strtok(list, ","); s && d->count < 24; s = strtok(NULL, ",")) snprintf(d->names[d->count++], 64, "%s", s);
@@ -553,8 +553,8 @@ struct dirent *rp_readdir(DIR *dir)
 int rp_closedir(DIR *dir) { free(dir); return 0; }
 static int in_bin(const char *path)
 {
-    if (strncmp(path, "/bin/", 5)) return 0;
-    char name[80], list[520]; snprintf(name, sizeof(name), ",%s,", path + 5); snprintf(list, sizeof(list), ",%s,", bin_list);
+    if (strncmp(path, "/Programs/", sizeof("/Programs/") - 1)) return 0;
+    char name[80], list[520]; snprintf(name, sizeof(name), ",%s,", path + sizeof("/Programs/") - 1); snprintf(list, sizeof(list), ",%s,", bin_list);
     return strstr(list, name) != NULL;
 }
 int rp_stat(const char *path, struct stat *st)
@@ -762,7 +762,7 @@ int main(int argc, char **argv)
     pthread_mutex_lock(&big);
     /* The supervisor's desktop: display 3, input 4, termination authority 5 (CIUKI_TASKS_FD). */
     char *dargv[] = {"desktop", "--test=crash-isolation", "--gate", NULL};
-    char *denv[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/home", "TMPDIR=/tmp", "PATH=/bin", "CIUKI_TASKS_FD=5", NULL};
+    char *denv[] = {"LC_ALL=C", "TZ=UTC0", "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", "CIUKI_TASKS_FD=5", NULL};
     struct proc *desktop = proc_create("desktop", desktop_main, dargv, denv, 2, 0, desktop_cost_ns, 0);
     desktop_pid = desktop->pid;
     desktop->fd[3].o = obj_new(K_DISPLAY); desktop->fd[4].o = obj_new(K_INPUT); desktop->fd[5].o = obj_new(K_AUTHORITY);
@@ -819,9 +819,11 @@ int main(int argc, char **argv)
            arm_ns && last_batch_ns ? (double)(last_batch_ns - arm_ns) / 1e9 : -1.0,
            success_ns ? (double)(success_ns - arm_ns) / 1e9 : -1.0);
     for (int i = 1; i <= probe.checkpoint; i++) printf("CHECKPOINT_AT %d %.3f\n", i, (double)(checkpoint_ns[i] - arm_ns) / 1e9);
-    for (int i = 0; i < FAKE_NODES; i++) if (fake_nodes[i].live && fm_beneath(fake_nodes[i].path, "/system") &&
-        fake_nodes[i].path[7] == '/' && !strchr(fake_nodes[i].path + 8, '/'))
-        printf("SYSTEM %s\n", fake_nodes[i].path + 8);
+    for (int i = 0; i < FAKE_NODES; i++) if (fake_nodes[i].live) {
+        char parent[FM_PATH];
+        fm_parent(parent, fake_nodes[i].path);
+        if (fm_same_path(parent, "/system")) printf("SYSTEM %s\n", fake_nodes[i].path + sizeof("/system/") - 1);
+    }
     int note_txt = fake_lookup("/system/tests/note.txt");
     if (note_txt >= 0) {
         printf("FILE /system/tests/note.txt ");

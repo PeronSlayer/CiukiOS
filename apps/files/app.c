@@ -155,8 +155,21 @@ static const struct { int id; const char *label; const char *icon; int width; } 
     {C_DELETE, "Delete", "action:delete", 48}, {C_PROPERTIES, "Properties", "action:properties", 70},
     {C_VIEWS, "Views", "action:views", 56}};
 
+static struct du_rect rename_box(struct du_widget *list, unsigned index)
+{
+    du_list_ensure(list, index);
+    struct du_rect label = du_list_label(list, index), body = du_list_body(list);
+    int width = label.w + 30; if (width < 110) width = 110;
+    int x = label.x - 1;
+    if (list->view == DU_ICONS) { width = 96; x = label.x + label.w / 2 - width / 2; }
+    if (x + width > body.x + body.w) width = body.x + body.w - x;
+    if (x < body.x) x = body.x;
+    return (struct du_rect){x, label.y - 2, width, 19};
+}
+
 void files_layout(struct files_app *a)
 {
+    a->width = a->ui->canvas.width; a->height = a->ui->canvas.height;
     int w = a->width, h = a->height;
     if (a->split < 120) a->split = 120;
     if (a->split > w - 260) a->split = w - 260;
@@ -191,8 +204,14 @@ void files_layout(struct files_app *a)
     struct du_widget *status = W(a, W_STATUS);
     status->box = (struct du_rect){0, h - STATUS_H, w, STATUS_H};
     status->panels[0] = w - 250; status->panels[1] = 100; status->panels[2] = 0;
+    if (a->rename_index >= 0) {
+        W(a, W_RENAME)->box = rename_box(list, (unsigned)a->rename_index);
+    }
     a->ui->dirty = 1;
 }
+
+static void resize_layout(struct du_ui *u, void *user)
+{ (void)u; files_layout(user); }
 
 /* ---- places and folder tree ---- */
 struct names { char (*v)[FM_NAME]; unsigned count, capacity; const char *parent; };
@@ -441,14 +460,8 @@ static void rename_start(struct files_app *a, unsigned index, int is_new)
 {
     if (index >= a->model.count) return;
     struct du_widget *list = W(a, W_LIST), *edit = W(a, W_RENAME);
-    list->active = index; du_list_ensure(list, index);
-    struct du_rect label = du_list_label(list, index), body = du_list_body(list);
-    int width = label.w + 30; if (width < 110) width = 110;
-    int x = label.x - 1;
-    if (list->view == DU_ICONS) { width = 96; x = label.x + label.w / 2 - width / 2; }
-    if (x + width > body.x + body.w) width = body.x + body.w - x;
-    if (x < body.x) x = body.x;
-    edit->box = (struct du_rect){x, label.y - 2, width, 19};
+    list->active = index;
+    edit->box = rename_box(list, index);
     edit->def = 1; edit->hidden = 0;
     du_set_text(edit, a->model.entries[index].name);
     edit->anchor = 0;
@@ -1040,7 +1053,7 @@ static void copy_menu(struct du_menu_item *dst, const struct du_menu_item *src, 
 
 int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, const char *path)
 {
-    a->ui = u; u->event = files_event; u->user = a;
+    a->ui = u; u->event = files_event; u->user = a; u->layout = resize_layout;
     a->width = u->canvas.width; a->height = u->canvas.height;
     a->rename_index = -1; a->split = a->width >= 700 ? 180 : 150;
     fm_init(&a->model, fs);

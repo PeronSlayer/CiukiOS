@@ -48,6 +48,15 @@ int main(int argc, char **argv)
     du_ta_select(&app.ta, 0, 7);
     help_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = H_M_COPY}, &app);
     assert(!strcmp(du_clipboard_get(), "CiukiOS"));
+    uint32_t *large = calloc(760 * 520 + 1, 4); assert(large);
+    large[760 * 520] = 0xdeadbeef;
+    size_t cursor = app.ta.cursor, anchor = app.ta.anchor;
+    du_resize(&ui, large, 760, 520);
+    assert(app.ta.cursor == cursor && app.ta.anchor == anchor && app.ta.readonly);
+    assert(!strcmp(app.ta.text, "CiukiOS README\nLine two\n"));
+    assert(du_get(&ui, H_STATUS)->box.y == 500 && du_get(&ui, H_STATUS)->box.h == 20);
+    du_render(&ui); assert(large[760 * 520] == 0xdeadbeef);
+    du_resize(&ui, pixels, HELP_W, HELP_H); free(large);
     help_detach(&app);
     puts("help: PASS");
     return 0;

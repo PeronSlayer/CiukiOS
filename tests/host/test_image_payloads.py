@@ -39,7 +39,7 @@ class ImagePayloadTests(unittest.TestCase):
         a, b = self.work / "binary", self.work / "empty"
         a.write_bytes(bytes(range(256)) * 256)
         b.write_bytes(b"")
-        sources = {"/system/tests/long-name.lua": a, "/bin/empty": b}
+        sources = {"/system/tests/long-name.lua": a, "/Programs/empty": b}
         records = image.payload_records(sources)
         self.assertEqual([p["path"] for p in records], sorted(sources))
         self.assertEqual(records[1], {"path": "/system/tests/long-name.lua",
@@ -61,7 +61,7 @@ class ImagePayloadTests(unittest.TestCase):
         self.assertEqual(image.IMAGE_BYTES, 512 * 1024 * 1024)
         self.assertEqual(image.PART_LBA, 2048)
 
-    @unittest.skipUnless(all(shutil.which(t) for t in ("mkfs.fat", "mmd", "mcopy", "mdir")),
+    @unittest.skipUnless(all(shutil.which(t) for t in ("mkfs.fat", "mmd", "mcopy", "mdir", "mrd")),
                          "requires mtools and mkfs.fat")
     def test_real_fat_readback_rejects_changed_missing_and_wrong_size(self):
         # Small host FAT fixture, not a canonical image build or a copied image.
@@ -73,14 +73,17 @@ class ImagePayloadTests(unittest.TestCase):
         source.write_bytes(bytes(range(256)) * 256 + b"\0\r\n\xff")
         empty = self.work / "empty"
         empty.write_bytes(b"")
-        directories = {"/bin", "/tmp", "/home", "/system", "/system/tests",
+        directories = {"/Programs", "/tmp", "/Documents", "/System", "/Games", "/system/tests",
                        "/system/tests/lua-5.4.8-tests", "/system/tests/lua-5.4.8-tests/libs",
                        "/system/tests/lua-5.4.8-tests/libs/P1"}
-        sources = {"/system/tests/lua-5.4.8-tests/long-name.lua": source, "/bin/empty": empty}
+        sources = {"/system/tests/lua-5.4.8-tests/long-name.lua": source, "/Programs/empty": empty}
         image.populate_payloads(volume, sources, directories)
         records = image.payload_records(sources)
         with patch.object(image, "PART_LBA", 0):
             image.check_payloads(volume, records, directories)
+            # Preserve disk spelling while lowercase System paths and the
+            # kernel's uppercase GAMES path still resolve.
+            image.check_payloads(volume, records, {"/programs", "/documents", "/system", "/GAMES"})
             wrong_size = [dict(records[1], size=records[1]["size"] + 1)]
             with self.assertRaisesRegex(ValueError, "payload size"):
                 image.check_payloads(volume, wrong_size, directories)
@@ -90,25 +93,30 @@ class ImagePayloadTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "payload SHA-256"):
                 image.check_payloads(volume, records, directories)
             with self.assertRaises(subprocess.CalledProcessError):
-                image.check_payloads(volume, [{"path": "/bin/missing", "size": 0,
+                image.check_payloads(volume, [{"path": "/Programs/missing", "size": 0,
                                               "sha256": records[0]["sha256"]}], directories)
+            # Case-insensitive existence is insufficient for the display contract.
+            subprocess.run(["mrd", "-i", str(volume), "::/Games"], check=True)
+            subprocess.run(["mmd", "-i", str(volume), "::/GAMES"], check=True)
+            with self.assertRaisesRegex(ValueError, "directory display name: Games"):
+                image.check_payloads(volume, [], directories)
 
     @unittest.skipUnless((ROOT / "build/f0/dos/DOSBOOT.IMG").is_file() and
                          all(shutil.which(t) for t in ("mkfs.fat", "mmd", "mcopy", "mdir")),
                          "run python3 scripts/build_dos_image.py first; requires mtools")
     def test_games_disk_payloads(self):
-        """Owner decision 2026-10-12: the shareware games disk at /GAMES/CIUKIGAM.IMG with the
+        """Owner decision 2026-10-12: the shareware games disk at /Games/CIUKIGAM.IMG with the
         packages' licence documents and provenance; the guard accepts only pinned shareware files."""
         sources, directories, metadata, free = image.games_payloads(ROOT / "build/f0/dos/DOSBOOT.IMG",
                                                                     self.work / "games/CIUKIGAM.IMG")
         licences = {f"/system/licenses/{p}-{n}" for p, n in (("wolf3d-shareware", "VENDOR.DOC"),
                     ("wolf3d-shareware", "FILE_ID.DIZ"), ("wolf3d-shareware", "UPSTREAM.json"),
                     ("doom-shareware", "README.TXT"), ("doom-shareware", "DOOMS_19.DAT"), ("doom-shareware", "UPSTREAM.json"))}
-        self.assertEqual(set(sources), {"/GAMES/CIUKIGAM.IMG"} | licences)
-        self.assertTrue({"/GAMES", "/system/licenses"} <= directories)
+        self.assertEqual(set(sources), {"/Games/CIUKIGAM.IMG"} | licences)
+        self.assertTrue({"/Games", "/system/licenses"} <= directories)
         self.assertNotIn("checkers", metadata)
         records = image.payload_records(sources)
-        disk = next(r for r in records if r["path"] == "/GAMES/CIUKIGAM.IMG")
+        disk = next(r for r in records if r["path"] == "/Games/CIUKIGAM.IMG")
         self.assertEqual((disk["sha256"], disk["size"]), (metadata["image_sha256"], metadata["size"]))
         self.assertLess(disk["size"], 16 * 1024 * 1024)
         self.assertTrue(all(f["redistribution"] in ("free", "ciukios") for f in metadata["files"]))
@@ -124,14 +132,14 @@ class ImagePayloadTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "local commercial payload"):
             dos.refuse_local_payloads(payloads, self.work)
         with self.assertRaisesRegex(SystemExit, "registered game data"):
-            dos.refuse_local_payloads({**payloads, "/GAMES/DOOM.WAD": hashlib.sha256((local / "DOOM.WAD").read_bytes()).hexdigest()},
+            dos.refuse_local_payloads({**payloads, "/Games/DOOM.WAD": hashlib.sha256((local / "DOOM.WAD").read_bytes()).hexdigest()},
                                       self.work, free=free)
         # The FAT32 read-back the image build performs.
         volume = self.work / "games.fat"
         with volume.open("wb") as stream:
             stream.truncate(32 * 1024 * 1024)
         subprocess.run(["mkfs.fat", str(volume)], check=True, stdout=subprocess.DEVNULL)
-        image.populate_payloads(volume, sources, {"/system"} | directories)
+        image.populate_payloads(volume, sources, {"/System"} | directories)
         with patch.object(image, "PART_LBA", 0):
             image.check_payloads(volume, records, directories)
         # build() installs it and hands the same pin set to the guard.
@@ -176,11 +184,11 @@ class ImagePayloadTests(unittest.TestCase):
         manifest = json.loads((lua.OUT / "manifest.json").read_text())
         expected = {image.TEST_PATH + "/" + n for n in manifest["test_files"]} | {image.TEST_PATH + "/ciuki-f2.lua"}
         self.assertEqual({n for n in sources if n.startswith(image.TEST_PATH + "/")}, expected)
-        self.assertTrue({"/bin", "/tmp", "/home", "/system",
+        self.assertTrue({"/Programs", "/tmp", "/Documents", "/System",
                          image.TEST_PATH + "/libs/P1"}.issubset(directories))
         self.assertEqual(metadata["lua"]["archives"],
                          json.loads((ROOT / "config/sdk-pins.json").read_text())["lua"])
-        for name in ("/bin/lua", "/bin/hello", "/bin/libc_smoke", "/system/tests/ciuki-f2.lua"):
+        for name in ("/Programs/lua", "/Programs/hello", "/Programs/libc_smoke", "/system/tests/ciuki-f2.lua"):
             self.assertIn(name, sources)
         self.assertIn(image.TEST_PATH + "/ciuki-f2.lua", sources)
         self.assertIn("/system/tests/app-gate.meta", sources)

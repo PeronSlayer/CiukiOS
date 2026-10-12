@@ -287,7 +287,7 @@ static bool native_payload_present(void)
 {
     const struct ciuki_file_ops *ops=proc_get_file_ops();
     struct ciuki_file file={0};
-    if (!ops || !ops->open || ops->open(proc_supervisor()->cwd,"/bin/desktop",&file)) return false;
+    if (!ops || !ops->open || ops->open(proc_supervisor()->cwd,"/Programs/desktop",&file)) return false;
     if (file.close) file.close(file.cookie);
     return true;
 }
@@ -314,7 +314,7 @@ static int native_crash_isolation(void)
     if (made<0) { rec_emit(name,"ERROR","server=desktop reason=desktop_launch error=%d",made); native_launch_record(launch_start,"desktop_launch"); pass=false; goto cleanup; }
     server->ppid=owner->pid;
     native_reports.active=true; native_reports.server=server->pid;
-    rec_emit(name,"DATA","case=payload server=desktop path=/bin/desktop clients=/bin/demo");
+    rec_emit(name,"DATA","case=payload server=desktop path=/Programs/desktop clients=/Programs/demo");
     uint32_t server_pid=server->pid,server_cr3=server->memory->as.pd_phys,server_pgid=server->pgid;
     uint64_t deadline=g_ticks+10000;
     while (native_live(server) && !native_reports.survivor_stage && g_ticks<deadline) task_sleep_ms(1);
@@ -700,7 +700,7 @@ int probe_f2_libc_smoke(void)
     if (setup) { rec_emit(name, "END", "status=FAIL reason=write_gate"); return 1; }
     const char *argv[] = { "libc_smoke", 0 };
     struct process *app = 0;
-    int result = supervisor_spawn("/bin/libc_smoke", argv, 0, false, &app);
+    int result = supervisor_spawn("/Programs/libc_smoke", argv, 0, false, &app);
     if (result < 0) {
         rec_emit(name, "ERROR", "status=not_run reason=%s error=%d",
                  result == -ENOENT ? "missing_payload" : "application_setup", result);

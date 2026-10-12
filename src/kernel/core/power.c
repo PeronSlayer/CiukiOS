@@ -19,7 +19,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/abi.h>
 #include <ciuki/power.h>
-#ifndef POWER_HOST
+#if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
@@ -52,57 +52,160 @@ static const uint8_t *table(acpi_map_fn map, void *ctx, uint32_t phys, const cha
     return t;
 }
 
-/* PkgLength: bits 7-6 of the lead byte count the following bytes. */
-static bool pkg_length(const uint8_t *p, uint32_t avail, uint32_t *used)
+/* ACPI 6.6 §20: PkgLength includes its own encoding, not the opcode. */
+static bool pkg_length(const uint8_t *p, uint32_t avail, uint32_t *used, uint32_t *extent)
 {
     if (!avail) return false;
-    uint32_t follow = p[0] >> 6;
-    if (follow && (p[0] & 0x30)) return false;   /* bits 5-4 must be zero */
-    if (1u + follow > avail) return false;
+    unsigned follow = p[0] >> 6;
+    if ((follow && (p[0] & 0x30)) || 1u + follow > avail) return false;
+    uint32_t length = p[0] & (follow ? 15u : 63u);
+    for (unsigned i = 0; i < follow; i++) length |= (uint32_t)p[i + 1] << (4 + 8 * i);
     *used = 1u + follow;
+    if (length < *used || length > avail) return false;
+    *extent = length;
     return true;
 }
-
-/* ZeroOp, OneOp or a Byte/Word/DWord constant; SLP_TYP has 3 bits. */
-static bool aml_small_int(const uint8_t *p, uint32_t avail, uint8_t *value, uint32_t *used)
+static bool aml_integer(const uint8_t *p, uint32_t avail, uint32_t *value, uint32_t *used)
 {
     if (!avail) return false;
-    uint32_t v, n;
+    unsigned n;
     switch (p[0]) {
-    case 0x00: v = 0; n = 1; break;
-    case 0x01: v = 1; n = 1; break;
-    case 0x0A: if (avail < 2) return false; v = p[1]; n = 2; break;
-    case 0x0B: if (avail < 3) return false; v = p[1] | (uint32_t)p[2] << 8; n = 3; break;
-    case 0x0C: if (avail < 5) return false; v = rd32(p + 1); n = 5; break;
+    case 0: case 1: *value = p[0]; *used = 1; return true;
+    case 0xFF: *value = UINT32_MAX; *used = 1; return true;
+    case 0x0A: n = 1; break;
+    case 0x0B: n = 2; break;
+    case 0x0C: n = 4; break;
+    case 0x0E: n = 8; break;
     default: return false;
     }
-    if (v > 7) return false;
-    *value = (uint8_t)v;
-    *used = n;
+    if (avail < n + 1) return false;
+    uint32_t v = 0;
+    for (unsigned i = 0; i < n; i++) {
+        if (i < 4) v |= (uint32_t)p[i + 1] << (8 * i);
+        else if (p[i + 1]) v = UINT32_MAX;
+    }
+    *value = v; *used = n + 1;
     return true;
 }
-
-int acpi_s5_find(const uint8_t *aml, uint32_t len, uint8_t *typa, uint8_t *typb)
+static bool aml_name(const uint8_t *p, uint32_t len, uint32_t *used, bool *s5, bool *root_scope)
 {
-    for (uint32_t i = 1; i + 4 < len; i++) {
-        if (!sig_is(aml + i, "_S5_")) continue;
-        /* Name(_S5, ...) or Name(\_S5, ...); a reference elsewhere is skipped. */
-        bool named = aml[i - 1] == 0x08 || (i >= 2 && aml[i - 1] == 0x5C && aml[i - 2] == 0x08);
-        if (!named || aml[i + 4] != 0x12) continue;
-        uint32_t at = i + 5, used;
-        if (!pkg_length(aml + at, len - at, &used)) continue;
-        at += used;
-        if (at >= len || aml[at] < 1) continue;          /* NumElements */
-        unsigned elements = aml[at++];
-        uint8_t a, b = 0;
-        if (!aml_small_int(aml + at, len - at, &a, &used)) continue;
-        at += used;
-        if (elements >= 2 && !aml_small_int(aml + at, len - at, &b, &used)) continue;
-        *typa = a;
-        *typb = b;
-        return 0;
+    uint32_t at = 0;
+    bool root = len && p[0] == 0x5C, parent = false;
+    if (root) at++;
+    while (at < len && p[at] == 0x5E) { parent = true; at++; }
+    if (at >= len || (root && parent)) return false;
+    unsigned count = 1;
+    if (p[at] == 0) { count = 0; at++; }
+    else if (p[at] == 0x2E) { count = 2; at++; }
+    else if (p[at] == 0x2F) {
+        if (++at >= len || !p[at]) return false;
+        count = p[at++];
+    }
+    if (count > (len - at) / 4) return false;
+    *s5 = !parent && count == 1 && sig_is(p + at, "_S5_");
+    *root_scope = root && !parent && !count;
+    for (unsigned i = 0; i < count * 4; i++) {
+        uint8_t c = p[at + i];
+        if (!(c == '_' || (c >= 'A' && c <= 'Z') || (i % 4 && c >= '0' && c <= '9'))) return false;
+    }
+    *used = at + count * 4;
+    return true;
+}
+/* Skip a data/reference object as a unit. Its bytes cannot declare a Name. */
+static bool aml_data(const uint8_t *p, uint32_t len, uint32_t *used)
+{
+    uint32_t ignored, n, extent;
+    bool s5, root;
+    if (!len) return false;
+    if (aml_integer(p, len, &ignored, used)) return true;
+    if (p[0] == 0x11 || p[0] == 0x12 || p[0] == 0x13) {
+        if (!pkg_length(p + 1, len - 1, &n, &extent) || extent <= n) return false;
+        *used = 1 + extent; return true;
+    }
+    if (p[0] == 0x0D) {
+        for (n = 1; n < len; n++) if (!p[n]) { *used = n + 1; return true; }
+        return false;
+    }
+    if (p[0] >= 0x60 && p[0] <= 0x6E) { *used = 1; return true; }
+    return aml_name(p, len, used, &s5, &root);
+}
+static bool s5_package(const uint8_t *p, uint32_t len, uint8_t *typa, uint8_t *typb)
+{
+    uint32_t n, extent, at, v[2];
+    if (!len || p[0] != 0x12 || !pkg_length(p + 1, len - 1, &n, &extent)) return false;
+    at = 1 + n;
+    uint32_t end = 1 + extent;
+    if (at >= end || p[at] < 2) return false;
+    unsigned elements = p[at++];
+    for (unsigned i = 0; i < elements; i++) {
+        if (i < 2) {
+            if (!aml_integer(p + at, end - at, &v[i], &n) || v[i] > 7) return false;
+        } else if (!aml_data(p + at, end - at, &n)) return false;
+        at += n;
+    }
+    if (at != end) return false;
+    *typa = (uint8_t)v[0]; *typb = (uint8_t)v[1]; return true;
+}
+/* A bounded root TermList walker, not an AML interpreter. Unknown terms
+ * refuse discovery rather than guessing where their data ends. Only Scope(\)
+ * is visited; non-root scopes, methods and data packages are opaque. */
+static int s5_terms(const uint8_t *p, uint32_t len, unsigned depth, uint8_t *a, uint8_t *b)
+{
+    if (depth > 8) return -ENOENT;
+    uint32_t at = 0;
+    while (at < len) {
+        uint8_t op = p[at++];
+        uint32_t n, extent;
+        bool name_s5, root;
+        if (op == 0x08) {
+            if (!aml_name(p + at, len - at, &n, &name_s5, &root)) return -ENOENT;
+            at += n;
+            if (name_s5 && s5_package(p + at, len - at, a, b)) return 0;
+            if (!aml_data(p + at, len - at, &n)) return -ENOENT;
+            at += n;
+        } else if (op == 0x10 || op == 0x14 || op == 0xA0 || op == 0xA1 || op == 0xA2) {
+            if (!pkg_length(p + at, len - at, &n, &extent)) return -ENOENT;
+            if (op == 0x10) {
+                uint32_t name_len;
+                if (!aml_name(p + at + n, extent - n, &name_len, &name_s5, &root)) return -ENOENT;
+                if (root && !s5_terms(p + at + n + name_len, extent - n - name_len, depth + 1, a, b)) return 0;
+            }
+            at += extent;
+        } else if (op == 0x06) { /* Alias: two names */
+            for (unsigned i = 0; i < 2; i++) {
+                if (!aml_name(p + at, len - at, &n, &name_s5, &root)) return -ENOENT;
+                at += n;
+            }
+        } else if (op == 0x70) { /* Store: data source and simple target */
+            for (unsigned i = 0; i < 2; i++) {
+                if (!aml_data(p + at, len - at, &n)) return -ENOENT;
+                at += n;
+            }
+        } else if (op == 0x15) { /* External */
+            if (!aml_name(p + at, len - at, &n, &name_s5, &root) || len - at - n < 2) return -ENOENT;
+            at += n + 2;
+        } else if (op == 0x5B) {
+            if (at >= len) return -ENOENT;
+            op = p[at++];
+            if (op >= 0x81 && op <= 0x87) { /* Field, Device, Processor, PowerResource, ThermalZone, IndexField, BankField */
+                if (!pkg_length(p + at, len - at, &n, &extent)) return -ENOENT;
+                at += extent;
+            } else if (op == 0x01 || op == 0x02 || op == 0x80) {
+                if (!aml_name(p + at, len - at, &n, &name_s5, &root)) return -ENOENT;
+                at += n;
+                if (op != 0x02) { if (at >= len) return -ENOENT; at++; }
+                if (op == 0x80) for (unsigned i = 0; i < 2; i++) {
+                    if (!aml_data(p + at, len - at, &n)) return -ENOENT;
+                    at += n;
+                }
+            } else return -ENOENT;
+        } else if (op != 0xA3) return -ENOENT; /* Noop */
     }
     return -ENOENT;
+}
+int acpi_s5_find(const uint8_t *aml, uint32_t len, uint8_t *typa, uint8_t *typb)
+{
+    return s5_terms(aml, len, 0, typa, typb);
 }
 
 static uint16_t io_port(const uint8_t *fadt, uint32_t len, uint32_t legacy, uint32_t gas)
@@ -167,9 +270,11 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
     return 0;
 }
 
+#if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)
 #ifndef POWER_HOST
 static inline void outw(uint16_t port, uint16_t v) { __asm__ volatile("outw %0, %1" :: "a"(v), "Nd"(port)); }
 static inline uint16_t inw(uint16_t port) { uint16_t v; __asm__ volatile("inw %1, %0" : "=a"(v) : "Nd"(port)); return v; }
+#endif
 
 #define SCI_EN 0x0001u
 #define SLP_TYP_MASK 0x1C00u
@@ -206,12 +311,19 @@ void power_discover(void) { (void)soft_off_available(); }
 static int acpi_power_off(void)
 {
     const struct acpi_soft_off *a = &soft_off;
-    if (!(inw(a->pm1a_cnt) & SCI_EN) && a->smi_cmd && a->acpi_enable) {
+    bool owned = (inw(a->pm1a_cnt) & SCI_EN) && (!a->pm1b_cnt || (inw(a->pm1b_cnt) & SCI_EN));
+    if (!owned && a->smi_cmd && a->acpi_enable) {
         /* Legacy mode: hand the PM registers to the OS first (ACPI enable
          * handshake through SMI_CMD), bounded at three seconds. */
         outb(a->smi_cmd, a->acpi_enable);
-        for (unsigned i = 0; i < 300 && !(inw(a->pm1a_cnt) & SCI_EN); i++)
+        for (unsigned i = 0; i < 300 && !owned; i++) {
             task_sleep_ms(10);
+            owned = (inw(a->pm1a_cnt) & SCI_EN) && (!a->pm1b_cnt || (inw(a->pm1b_cnt) & SCI_EN));
+        }
+    }
+    if (!owned) {
+        klog("[power] ACPI enable failed: SCI_EN not set; rebooting");
+        kernel_reboot();
     }
     uint16_t cnta = (uint16_t)((inw(a->pm1a_cnt) & ~(SLP_TYP_MASK | SLP_EN)) | (uint16_t)(a->slp_typa << 10));
     uint16_t cntb = a->pm1b_cnt ?
@@ -232,7 +344,7 @@ static int acpi_power_off(void)
 static int flush_storage(void)
 {
     struct storage *s = storage_get();
-    if (!s || !s->ready || s->stopped) return 0;
+    if (!s || !s->ready) return 0;
     int e = storage_sync();
     if (e) klog("[power] storage flush failed: %d", e);
     return e;

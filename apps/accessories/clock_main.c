@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/clock: CiukiOS Clock and Calendar (desktop client, protocol v2).
+ * /Programs/clock: CiukiOS Clock and Calendar (desktop client, protocol v2).
  * Usage: clock [--channel-fd=N] [--test=clock] */
 #include "clock.h"
 #include <errno.h>

@@ -59,18 +59,50 @@ void desk_queue(struct desktop *d, int i, const struct ciuki_message *m)
     if (i < 0 || i >= DESK_CLIENTS) return;
     struct desk_client *c = &d->clients[i];
     if (c->channel < 0) return;
+    /* Coalesce unsent size proposals; committed acknowledgements stay in
+     * FIFO order and must reach the client before it releases a surface. */
+    if (m->data[1] == DESK_CONFIGURE && m->length == 20 && !desk_get32(m->data + 16)) {
+        for (unsigned k = 0; k < c->tx_count; k++) {
+            struct ciuki_message *q = &c->tx[(c->tx_head + k) % DESK_TX_MAX];
+            if (q->data[1] == DESK_CONFIGURE && q->length == 20 && !desk_get32(q->data + 16)) {
+                *q = *m; q->data[0] = (uint8_t)c->version; q->data[2] = (uint8_t)c->minor;
+                c->configure_pending = 0; return;
+            }
+        }
+    }
     if (c->tx_count == DESK_TX_MAX) {
         /* A stalled peer cannot block the compositor. Repair its input state
          * once its bounded queue drains. Keep the window and backing alive. */
         c->resync_pending = 1;
-        if (m->data[1]==DESK_CONFIGURE) c->configure_pending=1;
+        if (m->data[1]==DESK_CONFIGURE) {
+            if (c->minor && desk_get32(m->data + 16)) c->commit_pending=1;
+            else c->configure_pending=1;
+        }
         if (m->data[1]==DESK_FOCUS) c->focus_pending=1;
         if (m->data[1]==DESK_CLOSE_REQUEST || m->data[1]==DESK_CLOSED) c->close_pending=1;
         return;
     }
     unsigned slot = (c->tx_head + c->tx_count++) % DESK_TX_MAX;
+    if (m->data[1] == DESK_CONFIGURE) {
+        if (c->minor && desk_get32(m->data + 16)) c->commit_pending = 0;
+        else c->configure_pending = 0;
+    }
     c->tx[slot] = *m;
     if (c->version == DESK_SHELL_VERSION) c->tx[slot].data[0] = DESK_SHELL_VERSION;
+    c->tx[slot].data[2] = (uint8_t)c->minor;
+}
+static void configure(struct desktop *d, int i, int committed)
+{
+    struct desk_client *c = &d->clients[i]; struct ciuki_message m;
+    desk_message(&m, DESK_CONFIGURE, c->minor ? 20 : 12);
+    desk_put32(m.data + 4, committed ? c->info.width : (uint32_t)(c->frame.w - 2 * DESK_BORDER));
+    desk_put32(m.data + 8, committed ? c->info.height :
+        (uint32_t)((c->collapsed ? c->shade_height : c->frame.h) - DESK_TITLE - DESK_BORDER));
+    if (c->minor) {
+        desk_put32(m.data + 12, committed ? c->applied_serial : c->resize_serial);
+        desk_put32(m.data + 16, committed ? DESK_CONFIGURE_COMMITTED : 0);
+    }
+    desk_queue(d, i, &m);
 }
 void desk_flush(struct desktop *d, int i)
 {
@@ -87,10 +119,9 @@ void desk_flush(struct desktop *d, int i)
     }
     if (c->channel >= 0 && !c->tx_count) {
         struct ciuki_message m;
+        if (c->commit_pending) { c->commit_pending = 0; configure(d, i, 1); }
         if (c->configure_pending) {
-            desk_message(&m,DESK_CONFIGURE,12);
-            desk_put32(m.data+4,c->info.width); desk_put32(m.data+8,c->info.height);
-            c->configure_pending=0; desk_queue(d,i,&m);
+            c->configure_pending=0; configure(d,i,!c->minor || !c->resize_serial);
         }
         if (c->focus_pending) {
             desk_message(&m,DESK_FOCUS,8); desk_put32(m.data+4,(uint32_t)(d->focus==i));
@@ -108,6 +139,46 @@ void desk_flush(struct desktop *d, int i)
         c->resync_pending = 0;
         desk_queue(d, i, &m);
     }
+}
+static int32_t size_limit(int32_t v, uint32_t min, uint32_t max, uint32_t step)
+{
+    if (v < (int32_t)min) v = (int32_t)min;
+    if (v > (int32_t)max) v = (int32_t)max;
+    return v - (v - (int32_t)min) % (int32_t)step;
+}
+void desk_resize(struct desktop *d, int i, struct desk_box f)
+{
+    if (i < 0 || i >= DESK_CLIENTS) return;
+    struct desk_client *c = &d->clients[i];
+    if (!c->window || !c->resizable || c->collapsed || c->internal) return;
+    int32_t w = size_limit(f.w - 2 * DESK_BORDER, c->min_width, c->max_width, c->step_width);
+    int32_t h = size_limit(f.h - DESK_TITLE - DESK_BORDER, c->min_height, c->max_height, c->step_height);
+    /* The opposite edge stays put when tracking a left/top edge. */
+    if (d->drag == i && (d->resize_edges & DESK_EDGE_LEFT)) f.x += f.w - w - 2 * DESK_BORDER;
+    if (d->drag == i && (d->resize_edges & DESK_EDGE_TOP)) f.y += f.h - h - DESK_TITLE - DESK_BORDER;
+    f.w = w + 2 * DESK_BORDER; f.h = h + DESK_TITLE + DESK_BORDER;
+    if (f.x < 0) f.x = 0;
+    if (f.y < DESK_BAR) f.y = DESK_BAR;
+    if (!memcmp(&f, &c->frame, sizeof(f))) return;
+    desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+    c->frame = f;
+    if (!++c->resize_serial) ++c->resize_serial;
+    configure(d, i, 0);
+    desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+}
+void desk_zoom(struct desktop *d, int i)
+{
+    if (i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return;
+    struct desk_client *c = &d->clients[i];
+    if (!c->resizable || c->internal) return;
+    if (c->collapsed) desk_collapse(d, i);
+    struct desk_box f;
+    if (c->zoomed) f = c->restore;
+    else {
+        c->restore = c->frame;
+        f = (struct desk_box){0, DESK_BAR, (int32_t)d->width, (int32_t)d->height - DESK_BAR - (d->shell ? DESK_BAR : 0)};
+    }
+    c->zoomed = !c->zoomed; desk_resize(d, i, f);
 }
 void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
 {
@@ -137,19 +208,27 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     struct desk_client *c = &d->clients[i];
     struct desk_packet p;
     struct ciuki_surface_info s = c->info;
-    int create = m->length >= 4 && m->data[1] == DESK_CREATE_WINDOW && m->fd_count == 1;
+    int create = m->length >= 4 && (m->data[1] == DESK_CREATE_WINDOW || m->data[1] == DESK_DAMAGE) && m->fd_count == 1;
     int info_ok = !create || !d->ops.info(m->fds[0], &s);
     if (c->channel < 0 || !info_ok || !desk_parse(m, 1, &s, &p) ||
         !m->sender_pid || (c->pid && c->pid != m->sender_pid) ||
-        (c->hello && c->version != m->data[0]) ||
+        (c->hello && (c->version != m->data[0] || c->minor != m->data[2])) ||
         (!c->hello && p.opcode != DESK_HELLO) ||
         (c->hello && p.opcode == DESK_HELLO) ||
         (p.opcode == DESK_CREATE_WINDOW && c->window) ||
-        ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE || p.opcode == DESK_SET_TITLE) && !c->window)) {
+        ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE || p.opcode == DESK_SET_TITLE) && !c->window) ||
+        (p.opcode == DESK_DAMAGE && p.serial && (!c->resizable || p.serial > c->resize_serial ||
+            p.serial <= c->applied_serial || s.width < c->min_width || s.height < c->min_height ||
+            s.width > c->max_width || s.height > c->max_height ||
+            (p.serial == c->resize_serial &&
+                (s.width != (uint32_t)(c->frame.w - 2 * DESK_BORDER) ||
+                 s.height != (uint32_t)((c->collapsed ? c->shade_height : c->frame.h) - DESK_TITLE - DESK_BORDER))) ||
+            (s.width - c->min_width) % c->step_width || (s.height - c->min_height) % c->step_height))) {
         close_attachments(d, m, -1);
         struct ciuki_message closed;
         desk_message(&closed, DESK_CLOSED, 4);
         if (c->version==DESK_SHELL_VERSION) closed.data[0]=DESK_SHELL_VERSION;
+        closed.data[2]=(uint8_t)c->minor;
         if (c->channel >= 0) d->ops.send(c->channel, &closed, DONTWAIT);
         desk_drop_client(d, i);
         return;
@@ -161,6 +240,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     case DESK_HELLO:
         c->hello = 1;
         c->version = m->data[0];
+        c->minor = m->data[2];
         c->next_ping_ns = d->now_ns + 1000000000ull;
         break;
     case DESK_CREATE_WINDOW: {
@@ -169,15 +249,17 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             close_attachments(d, m, -1); desk_drop_client(d, i); return;
         }
         c->surface = m->fds[0]; c->info = s; c->pixels = pixels; c->window = 1;
+        c->resizable = (p.flags & DESK_RESIZABLE) != 0;
+        c->min_width = p.min_width; c->min_height = p.min_height;
+        c->max_width = p.max_width; c->max_height = p.max_height;
+        c->step_width = p.step_width; c->step_height = p.step_height;
         if (!++d->next_window_id) ++d->next_window_id;
         c->window_id = d->next_window_id;
         memcpy(c->title, p.title, sizeof(c->title));
         c->frame = desk_frame(s.width, s.height, 0, DESK_BAR);
         desk_move(d, i, 20 + i * 18, DESK_BAR + 20 + i * 18);
         desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
-        desk_message(&reply, DESK_CONFIGURE, 12);
-        desk_put32(reply.data + 4, s.width); desk_put32(reply.data + 8, s.height);
-        desk_queue(d, i, &reply);
+        configure(d, i, 1);
         if (d->shell && d->menu_open) {
             c->order=++d->order; d->menu_focus=i;
             desk_message(&reply,DESK_FOCUS,8); desk_queue(d,i,&reply);
@@ -191,6 +273,17 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_DAMAGE: {
+        if (p.serial) {
+            void *pixels = d->ops.map(m->fds[0], PROT_READ);
+            if (!pixels || pixels == MAP_FAILED) { close_attachments(d, m, -1); desk_drop_client(d, i); return; }
+            desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+            d->ops.unmap((void *)c->pixels, c->info.allocation_bytes); d->ops.close(c->surface);
+            c->pixels = pixels; c->surface = m->fds[0]; c->info = s; c->applied_serial = p.serial;
+            configure(d, i, 1);
+            /* A superseded request already in flight may commit; keep the
+             * newest frame geometry and clip this surface until its swap. */
+            break;
+        }
         struct desk_box b = desk_content(c);
         b.x += p.x; b.y += p.y; b.w = (int32_t)p.width; b.h = (int32_t)p.height;
         if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
@@ -207,6 +300,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     case DESK_CLOSE:
         desk_message(&reply, DESK_CLOSED, 4);
         if (c->version==DESK_SHELL_VERSION) reply.data[0]=DESK_SHELL_VERSION;
+        reply.data[2]=(uint8_t)c->minor;
         d->ops.send(c->channel, &reply, DONTWAIT);
         desk_drop_client(d, i);
         break;
@@ -231,7 +325,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     case DESK_END_TASK: case DESK_SWITCH_TO: case DESK_LAUNCH: {
         /* The Task Manager holds every request. Files, which the desktop itself launched, may only
-         * LAUNCH /bin/ciuknote with one absolute path argument (opening a text file). */
+         * LAUNCH /Programs/ciuknote with one absolute path argument (opening a text file). */
         int files_open = p.opcode == DESK_LAUNCH && c->program == DESK_APP_FILES && !c->taskman &&
                          (!strcmp(p.title, "ciuknote") || desk_catalog_takes_file(p.title)) && p.argument[0] == '/';
         int32_t result = !c->taskman && !files_open ? -EPERM :
@@ -315,7 +409,7 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
     if (d->shell) desk_close_timeouts(d);
 }
 
-/* A bounded /bin entry parser, independent of directory enumeration order.
+/* A bounded /Programs entry parser, independent of directory enumeration order.
  * This is an admission filter, never a replacement for kernel ELF validation. */
 int desk_program_add(struct desktop *d, const char *name, const uint8_t *elf, size_t n)
 {
@@ -334,14 +428,14 @@ int desk_program_add(struct desktop *d, const char *name, const uint8_t *elf, si
     for (size_t k=0; k<=len; k++) lower[k] = name[k]>='A' && name[k]<='Z' ? name[k]+32 : name[k];
     if (!strcmp(lower,"desktop")) return 0;
     unsigned at = 0;
-    while (at < d->program_count && strcmp(d->programs[at].path+5,name) < 0) at++;
-    if (at < d->program_count && !strcmp(d->programs[at].path+5,name)) return 0;
+    while (at < d->program_count && strcmp(d->programs[at].name,name) < 0) at++;
+    if (at < d->program_count && !strcmp(d->programs[at].name,name)) return 0;
     if (at >= DESK_MENU_MAX) return 0;
     unsigned count = d->program_count < DESK_MENU_MAX ? d->program_count+1 : DESK_MENU_MAX;
     memmove(d->programs+at+1,d->programs+at,(count-at-1)*sizeof(d->programs[0]));
     struct desk_program *p = &d->programs[at];
     memcpy(p->name,name,len+1);
-    snprintf(p->path,sizeof(p->path),"/bin/%s",name);
+    snprintf(p->path,sizeof(p->path),"/Programs/%s",name);
     d->program_count = count;
     return 1;
 }
@@ -420,7 +514,7 @@ int desk_shell_click(struct desktop *d)
 { return desk_shell_button(d, CIUKI_BUTTON_LEFT, 1); }
 
 /* f2-33 task-manager requests. Only a client the desktop itself launched as
- * /bin/tasks (taskman) reaches these; every result is a TASK_RESULT. */
+ * /Programs/tasks (taskman) reaches these; every result is a TASK_RESULT. */
 static int window_slot(const struct desktop *d, uint32_t id)
 {
     for (int i=0; i<DESK_CLIENTS; i++) if (id && d->clients[i].window && d->clients[i].window_id==id) return i;
@@ -486,7 +580,7 @@ int desk_task_switch(struct desktop *d, uint32_t window_id)
 int desk_task_launch_args(struct desktop *d, const char *name, const char *const *args, unsigned count)
 {
     if (!count || count > sizeof(d->launch_argv) / sizeof(d->launch_argv[0])) return -EINVAL;
-    if (!strncmp(name,"/bin/",5)) name+=5;
+    if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
         if (!d->launch) return -ENOSYS;
         for (unsigned a=0; a<count; a++) d->launch_argv[a]=args[a];
@@ -499,7 +593,7 @@ int desk_task_launch_args(struct desktop *d, const char *name, const char *const
 }
 int desk_task_launch(struct desktop *d, const char *name, const char *argument)
 {
-    if (!strncmp(name,"/bin/",5)) name+=5;
+    if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
         if (!d->launch) return -ENOSYS;
         d->launch_arg=argument && argument[0] ? argument : NULL;

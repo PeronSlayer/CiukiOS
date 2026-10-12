@@ -288,7 +288,13 @@ int main(int argc, char **argv)
     struct du_widget *tree = du_get(&ui, 105);
     dump("tree");
     chord(DU_KEY_LALT, 0x20); assert(du_focused(&ui) == 100);
-    du_set_text(du_get(&ui, 100), "/Programs");
+    const char *programs = "/Programs";
+    for (const char *p = programs; *p; p++) {
+        static const unsigned char map[128] = {['/'] = 0x35, ['p'] = 0x19, ['r'] = 0x13,
+            ['o'] = 0x18, ['g'] = 0x22, ['a'] = 0x1e, ['m'] = 0x32, ['s'] = 0x1f};
+        if (*p >= 'A' && *p <= 'Z') chord(DU_KEY_LSHIFT, map[(unsigned char)(*p - 'A' + 'a')]);
+        else key(map[(unsigned char)*p]);
+    }
     key(DU_KEY_ENTER); assert(!strcmp(app.model.path, "/Programs") && app.model.count == 6);
     assert(tree->count >= 3);
     dump("programs-icons");

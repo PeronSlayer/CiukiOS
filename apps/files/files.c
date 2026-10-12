@@ -114,7 +114,7 @@ int main(int argc, char **argv)
     snprintf(title, sizeof(title), "Files - %.*s", (int)sizeof(title) - 9, display);
     for (unsigned i = 0; title[i]; i++) if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) title[i] = '?';
     strcpy(m->title, title);
-    if (du_window_open(&m->window, &m->ui, channel, width, height, title)) {
+    if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, title, 600, 360)) {
         fprintf(stderr, "Files: desktop connection failed: %s\n", strerror(errno));
         free(m);
         return 1;

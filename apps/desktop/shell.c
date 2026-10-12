@@ -221,7 +221,7 @@ const uint32_t *desk_shell_icon(const char *name, int size)
 
 /* ---- programs ---------------------------------------------------------- */
 struct program_info { const char *name, *label, *icon, *category; };
-/* Menu order of the known programs; anything else in /bin is "developer". */
+/* Menu order of the known programs; anything else in /Programs is "developer". */
 static const struct program_info programs[] = {
     {"ciuknote", "CiukNote", "accessories-text-editor", "programs"},
     {"files", "Files", "system-file-manager", "programs"},
@@ -476,7 +476,7 @@ static void launch_named(struct desktop *d, const char *name, const char *argume
     int r = desk_task_launch(d, name, argument);
     if (r < 0) {
         char text[160];
-        snprintf(text, sizeof(text), r == -ENOENT ? "CiukiOS cannot find '%s' in /bin." :
+        snprintf(text, sizeof(text), r == -ENOENT ? "CiukiOS cannot find '%s' in /Programs." :
                  "'%s' could not be started (error %d).", name, -r);
         desk_shell_message(d, "Programs", text, 1);
     }
@@ -491,7 +491,7 @@ static void launch_game(struct desktop *d, int index)
     int r = desk_task_launch_args(d, "dosbox", args, 2);
     if (r < 0) {
         char text[160];
-        snprintf(text, sizeof(text), r == -ENOENT ? "CiukiOS cannot find 'dosbox' in /bin." :
+        snprintf(text, sizeof(text), r == -ENOENT ? "CiukiOS cannot find 'dosbox' in /Programs." :
                  "'%s' could not be started (error %d).", desk_games[index].title, -r);
         desk_shell_message(d, "Games", text, 1);
     }
@@ -535,7 +535,7 @@ static void act(struct desktop *d, const struct sh_item *it)
             const struct sh_icon *ic = &d->sh.icons[it->arg];
             char text[200];
             if (ic->action == SH_ACT_LAUNCH)
-                snprintf(text, sizeof(text), "%s\n\nType: Shortcut\nTarget: /bin/%s%s%s", ic->label, ic->program,
+                snprintf(text, sizeof(text), "%s\n\nType: Shortcut\nTarget: /Programs/%s%s%s", ic->label, ic->program,
                          ic->argument[0] ? " " : "", ic->argument);
             else snprintf(text, sizeof(text), "%s\n\nType: System folder\nThe Trash is not available yet:\nCiukiOS deletes files permanently.", ic->label);
             desk_shell_message(d, "Properties", text, 0);
@@ -1298,7 +1298,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         break;
     case DESK_INTERNAL_RUN: {
         du_icon_blit(&c, content.x + 12, content.y + 12, desk_shell_icon("application-x-executable", 32), 32, DU_ICON_NORMAL);
-        multiline(&c, content.x + 56, content.y + 14, "Type the name of a program in /bin, followed by\nits arguments, and CiukiOS will start it.", SH_INK);
+        multiline(&c, content.x + 56, content.y + 14, "Type the name of a program in /Programs, followed by\nits arguments, and CiukiOS will start it.", SH_INK);
         du_label(&c, content.x + 12, content.y + 52 + (22 - DU_GLYPH_H) / 2, "&Open:", SH_INK, 1);
         struct du_rect field = {content.x + 56, content.y + 52, content.w - 68, 22};
         du_well(&c, field, SH_WINDOW);

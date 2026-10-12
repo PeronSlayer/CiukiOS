@@ -16,8 +16,10 @@
 #define CFG_PATH_MAX 128
 #define CFG_RECENT_MAX 8
 #define CFG_EXTRA_MAX 1024
-/* Wallpaper placement (wallpaper_mode). */
-enum { CFG_WALL_CENTER, CFG_WALL_STRETCH, CFG_WALL_TILE, CFG_WALL_FIT, CFG_WALL_MODES };
+/* Wallpaper placement (wallpaper_mode). The values are the order of
+ * cfg_mode_names; new modes are appended so existing files keep parsing.
+ * Fill: uniform scale that covers the area, centred crop of the overflow. */
+enum { CFG_WALL_CENTER, CFG_WALL_STRETCH, CFG_WALL_TILE, CFG_WALL_FIT, CFG_WALL_FILL, CFG_WALL_MODES };
 /* Keyboard layouts (keyboard). */
 enum { CFG_KEYS_US, CFG_KEYS_IT, CFG_KEYS_COUNT };
 #define CFG_THEMES 3

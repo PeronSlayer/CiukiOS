@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/control: the CiukiOS Control Panel on libdeskui. The panel edits
+ * /Programs/control: the CiukiOS Control Panel on libdeskui. The panel edits
  * /system/settings/desktop.cfg (apps/desktop/settings.h) and asks the
  * desktop to apply it at once (DESK_SETTINGS); the master volume goes
  * through the desktop, which holds the writable mixer handle. */
