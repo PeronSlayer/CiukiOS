@@ -528,6 +528,7 @@ int main(int argc, char **argv)
     int report=0, input_dirty=0, shell_stage_shown=0, scenario_key=0, scenario_released=0;
     unsigned report_send=0;
     uint64_t report_deadline=0, next_input_report=0;
+    unsigned reported_progress=0;
     for (;;) {
         uint64_t now = monotonic();
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
@@ -710,6 +711,11 @@ int main(int argc, char **argv)
             int status, pid=(int)d->children[i].pid;
             if (waitpid(pid,&status,WNOHANG)==pid) desk_child_exited(d,(uint32_t)pid,status);
         }
+        /* Scenario progress that completes without input (the shell demo's reap: stage 6; the app's
+         * exit: app_done) changes the reported keys (gate_report): report it even when no input
+         * follows, or the probe keeps the last input's keys=0 (QEMU image d964369f). */
+        unsigned progress=(unsigned)d->shell_stage|(unsigned)d->tasks_stage<<8|(unsigned)d->app_done<<16;
+        if (gate && progress!=reported_progress) { reported_progress=progress; input_dirty=1; }
         if (test && victim && victim_pid<0 && completed<cycles && now>=next_victim)
             victim_pid=spawn_demo(d,victim,0);
         struct timespec pause={.tv_sec=0,.tv_nsec=gate ? 1000000 : 10000000}; nanosleep(&pause,NULL);

@@ -37,6 +37,9 @@ REPLAY_MODELS = {
     "measured": ["--overhead-ms", "90", "--pause-scale-pct", "240", "--start-delay-ms", "2500",
                  "--desktop-cost-ms", "60", "--app-cost-ms", "20"],
 }
+# The F12 shell case also runs with a slow desktop turn (300 ms per loop): its final stage (the
+# demo's reap) then lands after the last input event, as on QEMU image d964369f (keys=0 there).
+SHELL_MODELS = {**REPLAY_MODELS, "slow-desktop": ["--start-delay-ms", "800", "--desktop-cost-ms", "300"]}
 # The probe's interaction window (src/kernel/probes/f2_probes_desktop.c): 15 s, 40 s once an app case
 # (files=1/note=1) reports. The Task Manager scenario sends no app flag, so it keeps 15 s.
 TASKS_WINDOW_S = 15
@@ -366,7 +369,7 @@ class AppCaseReplayTests(unittest.TestCase):
         script = Path(self.temp.name) / f"{case_id}.script"
         script.write_text("\n".join(lines) + "\n")
         result = subprocess.run([str(self.binary), "--script", str(script), "--case", kind, "--bin", ",".join(self.programs),
-                                 "--limit-s", "200", *REPLAY_MODELS[model]],
+                                 "--limit-s", "200", *SHELL_MODELS[model]],
                                 capture_output=True, text=True, env=self.env, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr[-4000:])
         out = {"checkpoints": [], "system": [], "text": result.stdout}
@@ -381,8 +384,8 @@ class AppCaseReplayTests(unittest.TestCase):
                                                          if l.startswith(("PROBE", "GATE", "PS2", "TIMING", "CHECKPOINT_AT"))))
         return case, out
 
-    def check(self, case_id, kind, checkpoints, window):
-        for model in REPLAY_MODELS:
+    def check(self, case_id, kind, checkpoints, window, models=REPLAY_MODELS):
+        for model in models:
             with self.subTest(model=model):
                 case, out = self.replay(case_id, kind, model)
                 self.assertEqual(out["RESULT"]["success"], "1", out["text"][-3000:])
@@ -410,6 +413,14 @@ class AppCaseReplayTests(unittest.TestCase):
             self.assertEqual(out["DESKTOP"]["app_done"], "1")
             # The host checker lists ::/SYSTEM for CIUKI (the renamed folder); the copy was deleted again.
             self.assertIn("Ciuki", out["system"])
+
+    def test_shell_case_replay(self):
+        """desktop-shell-qemu-t23 (F12): the demo launched from the Start menu, dragged by its title, closed and
+        reaped (stage 6), then the final a press and release. The reap completes without input, so the desktop
+        must report it on its own: otherwise the probe keeps the keys=0 of the last input's report."""
+        for model, out in self.check("desktop-shell-qemu-t23", "shell", 0, TASKS_WINDOW_S, SHELL_MODELS):
+            self.assertEqual(out["DESKTOP"]["notice"], '"shell stage 6 programs %d"' % (len(self.programs) - 1), model)
+            self.assertEqual(int(out["PROBE"]["keys"]), 4, model)
 
     def test_tasks_case_replay(self):
         for _, out in self.check("tasks-qemu-t23", "tasks", 0, TASKS_WINDOW_S):
