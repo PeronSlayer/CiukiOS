@@ -101,6 +101,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
     return 0;
 }
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
+static uint64_t non_silent_end; /* output position after the last nonzero published quantum */
 void audio_wake(void)
 {
     audio.pending = true; kwait_wake_all(&audio.changed);
@@ -123,19 +124,22 @@ void audio_service(void)
     bool active = false;
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i] && audio.streams[i]->started) active = true;
     if (audio_vm_active && audio_vm_active()) active = true;
-    /* The queue holds only tail silence while the idle tail runs, also in the
-     * service where a source arrives (idle_since is cleared at its end). */
+    /* An inactive VM can still have nonzero PCM queued. Source state alone
+     * does not prove that the DMA lead is silence. */
     bool tail = audio.running && (!active || idle_since);
-    ac97.idle_tail = tail;
+    ac97.idle_tail = tail && ac97.frame_base + ac97.retired * AUDIO_QUANTUM >= non_silent_end;
     bool control = false; /* a transport stop has its own deadline, not the 1 ms service budget */
     int err = ac97_progress(&ac97);
-    if (err && tail) {
+    /* Even the current period must be known silence: DCH proves fetch,
+     * not that nonzero data in the codec FIFO has reached the output. */
+    bool silent = ac97.frame_base + ac97.retired * AUDIO_QUANTUM >= non_silent_end;
+    if (err && tail && silent && ac97.tail_drained) {
         /* Idle tail: an underrun carries no client data. Stop the transport
          * normally instead of failing the backend; a source restarts it. */
         klog("[audio] idle-tail transport stop err=%d published=%llu retired=%llu halts=%llu tail_ms=%llu",
              err, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)ac97.dma_halts, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
         err = ac97_stop(&ac97); audio.running = false; ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
-    } else if (!err && tail && ac97.published - ac97.retired <= 1) {
+    } else if (!err && tail && silent && ac97.published - ac97.retired <= 1) {
         /* Drained to the period the DMA plays: ac97_publish never rewrites the
          * CIV/PIV slots, so the queue cannot be extended and the refusal
          * failed the backend (QEMU campaign 13, image 22320ccc: the AUDIO_LEAD
@@ -145,7 +149,7 @@ void audio_service(void)
              (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
         err = ac97_stop(&ac97); audio.running = false; ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
     } else if (err) {
-        struct ac97_cursor c; int oe = ac97_observe(&ac97, &c);
+        struct ac97_cursor c = {0}; int oe = ac97_observe(&ac97, &c);
         klog("[audio] progress err=%d observe=%d civ=%u piv=%u remaining=%u status=%04x published=%llu retired=%llu running=%u halts=%llu",
              err, oe, c.civ, c.piv, c.remaining, c.status, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, audio.running, (unsigned long long)ac97.dma_halts);
     }
@@ -170,6 +174,9 @@ void audio_service(void)
             memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
         } else audio_mix(quantum, AUDIO_QUANTUM);
         err = ac97_publish(&ac97, quantum);
+        if (!err) for (unsigned i = 0; i < AUDIO_QUANTUM; i++) {
+            if (quantum[i].left || quantum[i].right) { non_silent_end = audio.output; break; }
+        }
         if (!err && !audio.running && ac97.published == AUDIO_LEAD) {
             err = ac97_start(&ac97); audio.running = !err;
         }
@@ -180,7 +187,7 @@ void audio_service(void)
          * silence for an idle tail before stopping: the QEMU AC97 backend
          * dropped the last ~0.3 s of fetched audio when the channel was reset
          * at once (evidence 2026-10-11), and codecs settle without clicks. */
-        if (g_ticks - idle_since >= AUDIO_IDLE_TAIL_MS) {
+        if (g_ticks - idle_since >= AUDIO_IDLE_TAIL_MS && silent) {
             err = ac97_stop(&ac97); audio.running = false;
             ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
         }

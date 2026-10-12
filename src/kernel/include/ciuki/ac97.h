@@ -34,6 +34,7 @@ struct ac97_device {
     bool ready, running, stopping, quarantine, irq_attached, touched;
     bool observed_halt, codec_changed;
     bool idle_tail; /* no started source: silence cushion, halts not counted */
+    bool tail_drained; /* progress proved DCH at the fully fetched last period */
     uint16_t saved_master, saved_pcm, saved_headphone, saved_ext, saved_rate;
 };
 extern struct ac97_device ac97;

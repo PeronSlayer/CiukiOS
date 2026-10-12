@@ -622,6 +622,8 @@ static void test_dpmi_memory_misc(void)
         int31(v, refused[i]);
         CHECK(cf() && r16(cur.tf.eax) == refused[i] && cur.tf.ebx == regs.tf.ebx && cur.tf.ecx == regs.tf.ecx && cur.tf.edx == regs.tf.edx);
         snap.stats = d->stats;
+        /* Trap-boundary cache advances independently of INT 31h state. */
+        snap.decode_valid = d->decode_valid; snap.decode_cs = d->decode_cs; snap.decode_eip = d->decode_eip;
         CHECK(!memcmp(&snap, d, sizeof(snap)));
     }
     destroy(v, true); empty();
@@ -985,6 +987,7 @@ static void test_dpmi_32bit_nested(void)
     pm_retf(v); at_stub(v, DPMI_PM_EXCRET);
     CHECK(cur.tf.eip == before.tf.eip + 3 && !d->depth);
     /* A 32-bit nested client: allocates, hooks, terminates; parent survives. */
+    d->if_armed = true; /* parent has an unloaded flags image */
     struct v86_frame parent = cur;
     cur.tf.ebx = 0; cur.tf.ecx = 0x2000; int31(v, 0x0501); uint32_t pblock = ((uint32_t)r16(cur.tf.ebx) << 16) | r16(cur.tf.ecx);
     struct dpmi_vec pvec = d->vec[0x68];
@@ -997,6 +1000,7 @@ static void test_dpmi_32bit_nested(void)
     (void)psp;
     enter(v, true);
     CHECK(in_pm() && d->clients == 2 && d->client[1].depth_base == 1);
+    CHECK(!d->if_armed && d->client[0].suspended_if_armed);
     cur.tf.ebx = 0; cur.tf.ecx = 0x3000; int31(v, 0x0501); CHECK(!cf());
     cur.tf.ebx = 0x68; cur.tf.ecx = cur.tf.cs; cur.tf.edx = 0x50; int31(v, 0x0205); CHECK(!cf() && d->vec[0x68].sel != pvec.sel);
     cur.tf.ds = cur.tf.cs; cur.tf.esi = 0x60; cur.tf.es = cur.tf.user_ss; cur.tf.edi = 0x100; int31(v, 0x0303); CHECK(!cf());
@@ -1005,6 +1009,7 @@ static void test_dpmi_32bit_nested(void)
     /* Opposite width inside the child fails (no third client). */
     cur.tf.eax = 0x4C00; pm_int(v, 0x21);                                 /* child exits */
     CHECK(!in_pm() && cur.tf.cs == DOS_SEG && d->clients == 1 && d->depth == 1 && d->active);
+    CHECK(d->if_armed); /* child cleanup preserves only the parent's armed image */
     CHECK(d->vec[0x68].sel == pvec.sel && d->vec[0x68].off == pvec.off && !d->client[1].used);
     for (unsigned i = 0; i < DPMI_LDT_ENTRIES; i++) CHECK(d->owner[i] != 2);
     CHECK(v->info.pool_used == DPMI_HSTACK_BYTES + 0x2000 && d->block[0].b.base == pblock);

@@ -383,7 +383,7 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
     emu->x86.R_EAX = s->eax; emu->x86.R_EBX = s->ebx; emu->x86.R_ECX = s->ecx; emu->x86.R_EDX = s->edx;
     emu->x86.R_ESI = s->esi; emu->x86.R_EDI = s->edi; emu->x86.R_EBP = s->ebp; emu->x86.R_ESP = s->esp;
     emu->x86.R_EIP = s->eip;
-    emu->x86.R_EFLG = (s->eflags & 0x00000DD5u & ~0x100u) | 0x202u;
+    emu->x86.R_EFLG = (s->eflags & 0x00000DD5u) | 0x202u;
     load_seg(emu->x86.R_CS_SEL, s->cs, s->pm, true);
     load_seg(emu->x86.R_SS_SEL, s->ss, s->pm, false);
     load_seg(emu->x86.R_DS_SEL, s->ds, s->pm, false);
@@ -420,7 +420,7 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
         executed++;
         ev->ss_shadow = first == 0x17 || (first == 0x8E && ((second >> 3) & 7) == 2);
         if (watch_hits) {                  /* data breakpoint: #DB trap after the access */
-            ev->vector = 1; ev->err = 0; ev->fault = false; ev->dr6 = watch_hits;
+            ev->vector = 1; ev->err = 0; ev->fault = false; ev->dr6 = watch_hits | ((tf || tf_loaded) ? 0x4000u : 0);
             rc = GCPU_TRAP;
             break;
         }
@@ -430,11 +430,11 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
         if (tf_loaded && executed == budget) { tf = true; break; }
     }
     ev->executed = executed;
-    if (rc == GCPU_BUDGET && tf && executed) { ev->vector = 1; ev->err = 0; ev->fault = false; rc = GCPU_TRAP; }
+    if (rc == GCPU_BUDGET && tf && executed) { ev->vector = 1; ev->err = 0; ev->fault = false; ev->dr6 = 0x4000; rc = GCPU_TRAP; }
     s->eax = emu->x86.R_EAX; s->ebx = emu->x86.R_EBX; s->ecx = emu->x86.R_ECX; s->edx = emu->x86.R_EDX;
     s->esi = emu->x86.R_ESI; s->edi = emu->x86.R_EDI; s->ebp = emu->x86.R_EBP; s->esp = emu->x86.R_ESP;
     s->eip = emu->x86.R_EIP;
-    s->eflags = (emu->x86.R_EFLG & 0x00000CD5u) | ((s->eflags | emu->x86.R_EFLG) & 0x100u) | 0x202u;
+    s->eflags = (emu->x86.R_EFLG & 0x00000DD5u) | 0x202u;
     s->cs = emu->x86.R_CS; s->ss = emu->x86.R_SS; s->ds = emu->x86.R_DS; s->es = emu->x86.R_ES;
     s->fs = emu->x86.R_FS; s->gs = emu->x86.R_GS;
     return rc;

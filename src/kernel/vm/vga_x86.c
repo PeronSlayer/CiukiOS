@@ -593,7 +593,9 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
         case 0x65: d.seg = CVX_GS; continue;
         case 0x66: d.osize = cpu->code32 ? 2 : 4; continue;
         case 0x67: d.asize = cpu->code32 ? 2 : 4; continue;
-        case 0xf0: continue;
+        /* Leave every LOCK form to the native CPU. In particular MOV and
+         * strings with LOCK must raise #UD; the burst cannot suppress it. */
+        case 0xf0: return CVX_UNSUPPORTED;
         case 0xf2: case 0xf3: d.rep = (unsigned)op; continue;
         default: break;
         }

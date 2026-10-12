@@ -197,6 +197,7 @@ int dpmi_entry_complete(struct dosvm *v, struct v86_frame *f, uint16_t psp)
     cl->depth_base = d->depth;
     memcpy(cl->saved_vec, d->vec, sizeof(d->vec));
     memcpy(cl->saved_exc, d->exc, sizeof(d->exc));
+    if (c) d->client[c - 1].suspended_if_armed = d->if_armed;
     d->clients++;
     struct v86_frame p;
     memset(&p, 0, sizeof(p));
@@ -211,6 +212,10 @@ int dpmi_entry_complete(struct dosvm *v, struct v86_frame *f, uint16_t psp)
     p.tf.eflags = (n.tf.eflags & 0x0CD5u & ~(V86_TF | V86_CF)) | V86_IF | 2u;
     dpmi_set_pm(v, true);
     *f = p;
+    d->if_armed = false;
+    d->decode_valid = true;
+    d->decode_cs = (uint16_t)p.tf.cs;
+    d->decode_eip = p.tf.eip;
     d->stats.entries++;
     return 0;
 }
@@ -223,6 +228,7 @@ int dpmi_terminate(struct dosvm *v, bool from_pm)
     struct dpmi *d = &v->dpmi;
     (void)from_pm;
     if (!d->clients) return 0;
+    d->decode_valid = false;
     unsigned c = d->clients - 1;
     uint8_t id = (uint8_t)(c + 1);
     struct dpmi_client *cl = &d->client[c];
@@ -247,7 +253,10 @@ int dpmi_terminate(struct dosvm *v, bool from_pm)
     d->clients--;
     d->stats.terminations++;
     if (!d->clients) { dpmi_unwind(v, 0); reset(v); }
-    else dpmi_reload_debug(v);
+    else {
+        d->if_armed = d->client[d->clients - 1].suspended_if_armed;
+        dpmi_reload_debug(v);
+    }
     return 0;
 }
 

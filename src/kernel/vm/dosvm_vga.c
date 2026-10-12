@@ -343,10 +343,14 @@ int dosvm_vga_init(struct dosvm *v)
  * so the guest observes exactly the sequential result, only sooner. */
 #define VIDEO_BURST 1024u
 #define VIDEO_BURST_IDLE 4u
-struct video_burst_bus { struct dosvm *v; bool vram; };
+struct video_burst_bus { struct dosvm *v; bool vram, preflight; };
 static int burst_read(void *arg, uint32_t address, uint8_t *value)
 {
     struct video_burst_bus *b = arg;
+    if (b->preflight) {
+        if (vram(address)) { *value = cvga_peek_vram(&b->v->vga, address); return 0; }
+        return dosvm_read(b->v, address, value, 1);
+    }
     if (vram(address)) b->vram = true;
     return video_read(b->v, address, value);
 }
@@ -354,6 +358,7 @@ static int burst_write(void *arg, uint32_t address, uint8_t value)
 {
     struct video_burst_bus *b = arg;
     if (!vram(address)) return -EFAULT;             /* refused before any byte moves */
+    if (b->preflight) return 0;
     b->vram = true;
     return video_write(b->v, address, value);
 }
@@ -364,7 +369,7 @@ static int burst_fetch(void *arg, uint32_t address, uint8_t *value)
 }
 static void video_burst(struct dosvm *v, struct v86_frame *f, const cvx_cpu *first)
 {
-    struct video_burst_bus ctx = {v, false};
+    struct video_burst_bus ctx = {v, false, false};
     const cvx_bus bus = {burst_read, burst_write, burst_fetch, &ctx, 0};
     cvx_cpu c = *first;
     c.gpr[0] = f->tf.eax; c.gpr[1] = f->tf.ecx; c.gpr[2] = f->tf.edx; c.gpr[3] = f->tf.ebx;
@@ -376,9 +381,18 @@ static void video_burst(struct dosvm *v, struct v86_frame *f, const cvx_cpu *fir
             (v->monitor.vif && v86_irq_pending(&v->monitor) >= 0)) break;
         cvx_cpu next = c;
         cvx_result result;
+        /* Same decoder and bounded REP budget, but reads only peek and
+         * writes only validate. Validate every access before any latch or
+         * plane changes, including all bytes of an element and both DF
+         * directions. Callbacks cannot yield or change mapping here. */
+        ctx.preflight = true;
+        int e = cvx_execute(&next, &bus, VIDEO_STRING_BUDGET, &result);
+        ctx.preflight = false;
+        if (e != CVX_DONE && e != CVX_PARTIAL) break;
+        next = c;
         ctx.vram = false;
         v->video_bus_fault = false;
-        int e = cvx_execute(&next, &bus, VIDEO_STRING_BUDGET, &result);
+        e = cvx_execute(&next, &bus, VIDEO_STRING_BUDGET, &result);
         if ((e != CVX_DONE && e != CVX_PARTIAL) || v->video_bus_fault) {
             v->video_bus_fault = false;              /* nothing moved: the CPU repeats it natively */
             break;
