@@ -1,5 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "cache.h"
+/* Optional in the standalone F1 host model; attributes a successful physical
+ * read to the native caller (or the child it is preparing), never a global delta. */
+void proc_launch_disk_read(uint32_t bytes);
+#pragma weak proc_launch_disk_read
 
 /* f4-04 page layouts (docs/design/f4-acceptance.md, "## f4-04"). Data pages
  * hold only media bytes: a page is two 2048-byte halves and a half is four
@@ -158,6 +162,7 @@ static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read,
     if ((e=write_block(c,b))) return e;
     unhash(c,b);
     if (read && (e=d->read(d,lba,1,b->data))) return e;
+    if (read && proc_launch_disk_read) proc_launch_disk_read(d->sector_size);
     b->dev=d; b->lba=lba; b->generation=d->media_generation; b->sector_size=(uint16_t)d->sector_size;
     unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
     touch(c,b); *out=b; return 0;

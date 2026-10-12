@@ -176,6 +176,10 @@ static int terminate_child(uint32_t pid, int sig)
 static int launch_program(struct desktop *d, const struct desk_program *program)
 {
     if (d->power.state) { errno=EBUSY; return -1; }
+    /* Recheck each launch: the operator can change console verbosity at run time. */
+    d->launch_mark = ciuki_launch_mark(CIUKI_LAUNCH_STATUS,0,0) > 0 ? ciuki_launch_mark : NULL;
+    uint64_t click_ns = d->launch_click_ns ? d->launch_click_ns : monotonic();
+    d->launch_click_ns = 0;
     int child=-1;
     for (int j=0; j<DESK_CLIENTS; j++) if (!d->children[j].pid) { child=j; break; }
     if (child<0) { errno=EAGAIN; return -1; }
@@ -216,7 +220,10 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     uint32_t mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     if (!fcntl(pair[1],F_SETFD,0)) {
         index=desk_add_client(d,pair[0]);
-        if (index>=0) pid=ciuki_spawn(program->path,d->launch_argv[0] ? full : argv,env,mapping,mappings,0);
+        if (index>=0) {
+            if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_BEGIN,0,click_ns/1000);
+            pid=ciuki_spawn(program->path,d->launch_argv[0] ? full : argv,env,mapping,mappings,0);
+        }
         else errno=ENOSPC;
     }
     int error=errno;
@@ -806,6 +813,6 @@ int main(int argc, char **argv)
         if (gate && progress!=reported_progress) { reported_progress=progress; input_dirty=1; }
         if (test && victim && victim_pid<0 && completed<cycles && now>=next_victim)
             victim_pid=spawn_demo(d,victim,0);
-        struct timespec pause={.tv_sec=0,.tv_nsec=gate ? 1000000 : 10000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=(long)(gate ? 1000000 : desk_launch_wait(d,monotonic()))}; nanosleep(&pause,NULL);
     }
 }

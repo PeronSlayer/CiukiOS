@@ -489,7 +489,15 @@ enum ciuki_syscall {
     CIUKI_SYS_PROC_TERMINATE = 71,
     CIUKI_SYS_DOSVM = 72,
     CIUKI_SYS_POWER = 73,
+    CIUKI_SYS_LAUNCH_MARK = 74,
 };
+
+/* f2-39: diagnostic markers, no copied wire record. See execution-abi.md. */
+#define CIUKI_LAUNCH_STATUS 0u
+#define CIUKI_LAUNCH_BEGIN 1u
+#define CIUKI_LAUNCH_CONFIGURE 2u
+#define CIUKI_LAUNCH_DAMAGE 3u
+#define CIUKI_LAUNCH_FRAME 4u
 
 /* pack(4) is scoped and restores the includer's previous setting. */
 #pragma pack(push, 4)

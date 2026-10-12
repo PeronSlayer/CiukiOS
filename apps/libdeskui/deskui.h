@@ -128,6 +128,12 @@ int du_icon_paths(const char *store, const char *portrait);   /* before the firs
 unsigned du_icon_count(void);                                /* names in the store */
 const char *du_icon_store_name(unsigned index);
 const char *du_icon_notice(void);                            /* the store's Tango licence notice */
+/* Read-only launch diagnostics; does not open a store or decode an icon. */
+struct du_icon_stats {
+    uint64_t store_bytes, portrait_bytes, read_requests;
+    uint32_t read_max, decoded, cached, heap_bytes, peak_bytes;
+};
+void du_icon_snapshot(struct du_icon_stats *);
 
 /* CiukiOS objects -> Tango names (icon_map.c). Keys are "<kind>:<object>":
  * program:<name in /Programs>, menu:, action:, place:, type:folder|executable|unknown,

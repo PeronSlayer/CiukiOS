@@ -264,10 +264,12 @@ protocol_error:
 int du_run(struct du_window *w, void (*idle)(void *), void *arg)
 {
     int r;
+    uint64_t started = du_now();
     while ((r = du_window_turn(w, du_now())) > 0) {
         if (idle) idle(arg);
         /* No poll/select in the F2 ABI: nonblocking turns plus a short sleep. */
         uint64_t now = du_now(), next = du_next_deadline(w->ui), wait = 10000000u;
+        if (!w->configured && now >= started && now - started < 5000000000ull) wait = 1000000u;
         if (next > now && next - now < wait) wait = next - now;
         if (next <= now || w->ui->dirty) wait = 1000000u;
         struct timespec pause = {.tv_sec = 0, .tv_nsec = (long)wait};

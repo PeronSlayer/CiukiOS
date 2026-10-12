@@ -10,6 +10,7 @@
  * The store and portrait paths come from -DDU_ICON_STORE_PATH/-DDU_ICON_PORTRAIT_PATH
  * or, when ICONS_STORE/ICONS_PORTRAIT are set, from du_icon_paths(). */
 #include "deskui.h"
+#include <time.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +71,41 @@ static uint32_t fnv(const struct du_icon *icon)
     }
     return h;
 }
+static uint64_t now_us(void)
+{
+    struct timespec t; assert(!clock_gettime(CLOCK_MONOTONIC,&t));
+    return (uint64_t)t.tv_sec*1000000u+(unsigned)t.tv_nsec/1000u;
+}
+static void stats_line(const char *phase, uint64_t start)
+{
+    struct du_icon_stats s; du_icon_snapshot(&s);
+    printf("ICONS phase=%s elapsed_us=%llu store_bytes=%llu portrait_bytes=%llu requests=%llu max=%u decoded=%u cached=%u heap=%u peak=%u\n",
+           phase,(unsigned long long)(now_us()-start),(unsigned long long)s.store_bytes,
+           (unsigned long long)s.portrait_bytes,(unsigned long long)s.read_requests,
+           s.read_max,s.decoded,s.cached,s.heap_bytes,s.peak_bytes);
+}
+static int stats(void)
+{
+    struct du_icon_stats before, after;
+    uint64_t start=now_us(); du_icon_snapshot(&before);
+    assert(!before.store_bytes && !before.heap_bytes);
+    assert(du_icon_count()==246); stats_line("directory",start);
+    du_icon_snapshot(&before); assert(!before.decoded && !before.cached);
+    const struct du_icon *a=du_icon("folder",32); assert(a); stats_line("folder",start);
+    du_icon_snapshot(&before);
+    for (unsigned i=0;i<100;i++) assert(a==du_icon("places/folder",32));
+    assert(!du_icon("absent",32) && !du_icon("folder",24));
+    du_icon_snapshot(&after); assert(!memcmp(&before,&after,sizeof(before)));
+    assert(after.cached==1 && after.decoded==1 && after.store_bytes<65536 && after.peak_bytes<131072);
+    assert(du_icon("folder",48)); stats_line("scaled",start);
+    for (unsigned s=0;s<4;s++) assert(du_icon("ciuki",sizes[s]));
+    stats_line("portrait",start); du_icon_snapshot(&before);
+    assert(before.portrait_bytes==256u*256u*4u && before.peak_bytes<512u*1024u);
+    for (unsigned i=0;i<100;i++) for (unsigned s=0;s<4;s++) assert(du_icon("ciuki",sizes[s]));
+    du_icon_snapshot(&after); assert(!memcmp(&before,&after,sizeof(before)));
+    puts("PASS lazy cache: directory only, requested entries only, cache hits issue no reads, bounded heap, one portrait read");
+    return 0;
+}
 
 /* Contact sheet: four columns of 32-pixel icons with their labels. */
 static int sheet(const char *list, const char *out)
@@ -125,6 +161,7 @@ int main(int argc, char **argv)
     if (store || portrait) assert(!du_icon_paths(store, portrait));
     if (argc == 3 && !strcmp(argv[1], "dump")) return dump(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "map")) return map();
+    if (argc == 2 && !strcmp(argv[1], "stats")) return stats();
     if (argc == 4 && !strcmp(argv[1], "probe")) {
         const struct du_icon *icon = du_icon(argv[2], (unsigned)atoi(argv[3]));
         if (icon) printf("OK %08x\n", fnv(icon)); else printf("NULL\n");

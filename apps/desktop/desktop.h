@@ -52,6 +52,7 @@ struct desk_client {
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
     int mixer;                    /* launched /Programs/mixer (Volume Control); may send MIXER_SET */
     int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
+    int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
@@ -116,6 +117,8 @@ struct desktop {
     uint32_t app_pid;
     const char *launch_arg;      /* single argument for the next launch (LAUNCH from Files) */
     int (*launch)(struct desktop *, const struct desk_program *);
+    uint64_t launch_click_ns;
+    int (*launch_mark)(uint32_t event, ciuki_pid_t pid, uint64_t click_us);
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
     int realtime_source;
@@ -214,5 +217,6 @@ void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,
                const char *, int, uint32_t);
 uint8_t desk_glyph_row(unsigned, unsigned);
 int desk_redraw(struct desktop *);
+uint64_t desk_launch_wait(const struct desktop *, uint64_t now); /* ns; short startup polling only */
 int desk_load_portrait(uint32_t *pixels);
 #endif

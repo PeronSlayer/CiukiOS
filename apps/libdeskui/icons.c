@@ -11,10 +11,24 @@
  * (/system/assets/ciuki-portrait.xrgb, pinned by convert_portrait.py)
  * reduced with the same area filter. Integer arithmetic only, 32-bit
  * intermediates; not thread-safe (call from the UI thread). */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "deskui.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef __linux__ /* The native host's unistd enums follow different _SC values. */
+#undef _SC_ARG_MAX
+#undef _SC_OPEN_MAX
+#undef _SC_PAGESIZE
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#endif
+#include <unistd.h>
 
 #ifndef DU_ICON_STORE_PATH
 #define DU_ICON_STORE_PATH "/system/icons/tango.cis"
@@ -36,14 +50,46 @@ static const unsigned sizes[4] = {16, 22, 32, 48};
 static struct du_icon unavailable;   /* negative cache marker */
 static struct {
     int state;                      /* 0 not opened, 1 open, -1 unavailable */
-    FILE *file;
+    int file;
     uint8_t *index;                 /* store bytes [0, data offset) */
     uint32_t images_off, strings_off, strings_len, data_off, data_len, notice;
     unsigned names, images;
     const struct du_icon **cache;   /* names * 4 */
     const struct du_icon *ciuki[4];
     char store[256], portrait[256];
+    struct du_icon_stats stats;
 } S;
+
+void du_icon_snapshot(struct du_icon_stats *out) { if (out) *out = S.stats; }
+static void *allocate(size_t bytes, int zero)
+{
+    void *p = zero ? calloc(1, bytes) : malloc(bytes);
+    if (p) {
+        S.stats.heap_bytes += (uint32_t)bytes;
+        if (S.stats.heap_bytes > S.stats.peak_bytes) S.stats.peak_bytes = S.stats.heap_bytes;
+    }
+    return p;
+}
+static void release(void *p, size_t bytes)
+{ if (p) { S.stats.heap_bytes -= (uint32_t)bytes; free(p); } }
+
+/* No stdio read-ahead or repeated header read: exactly the requested range.
+ * POSIX pread may be short, interrupted, or return EOF before completion. */
+static int read_range(int fd, uint32_t off, void *buffer, uint32_t bytes, int portrait)
+{
+    uint8_t *p = buffer;
+    while (bytes) {
+        S.stats.read_requests++;
+        if (bytes > S.stats.read_max) S.stats.read_max = bytes;
+        ssize_t n = pread(fd, p, bytes, (off_t)off);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        if (portrait) S.stats.portrait_bytes += (uint64_t)n;
+        else S.stats.store_bytes += (uint64_t)n;
+        off += (uint32_t)n; p += n; bytes -= (uint32_t)n;
+    }
+    return 0;
+}
 
 static uint32_t le16(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8; }
 static uint32_t le32(const uint8_t *p)
@@ -68,10 +114,10 @@ static int open_store(void)
 {
     if (S.state) return S.state > 0 ? 0 : -1;
     S.state = -1;
-    FILE *f = fopen(S.store[0] ? S.store : DU_ICON_STORE_PATH, "rb");
+    int f = open(S.store[0] ? S.store : DU_ICON_STORE_PATH, O_RDONLY);
     uint8_t h[HEADER];
-    if (!f) return -1;
-    if (fread(h, 1, HEADER, f) != HEADER || memcmp(h, "CIUKICS1", 8) || le16(h + 8) != 1 || le16(h + 10) != HEADER ||
+    if (f < 0) return -1;
+    if (read_range(f, 0, h, HEADER, 0) || memcmp(h, "CIUKICS1", 8) || le16(h + 8) != 1 || le16(h + 10) != HEADER ||
         h[16] != 16 || h[17] != 22 || h[18] != 32 || h[19] != 48) goto fail;
     unsigned names = le16(h + 12), images = le16(h + 14);
     uint32_t names_off = le32(h + 20), images_off = le32(h + 24), strings_off = le32(h + 28);
@@ -80,17 +126,19 @@ static int open_store(void)
         images_off != names_off + ENTRY * names || strings_off != images_off + ENTRY * images ||
         !strings_len || strings_len > INDEX_MAX || data_off > INDEX_MAX || strings_off + strings_len > data_off ||
         data_len > DATA_MAX || notice >= strings_len) goto fail;
-    long end;
-    if (fseek(f, 0, SEEK_END) || (end = ftell(f)) < 0 || (uint32_t)end != data_off + data_len || fseek(f, 0, SEEK_SET)) goto fail;
-    uint8_t *index = malloc(data_off);
-    const struct du_icon **cache = calloc((size_t)names * 4, sizeof(*cache));
-    if (!index || !cache || fread(index, 1, data_off, f) != data_off || index[strings_off + strings_len - 1]) {
-        free(index); free(cache); goto fail;
+    struct stat st;
+    if (fstat(f, &st) || st.st_size != (off_t)(data_off + data_len)) goto fail;
+    uint8_t *index = allocate(data_off, 0);
+    size_t cache_bytes = (size_t)names * 4 * sizeof(*S.cache);
+    const struct du_icon **cache = allocate(cache_bytes, 1);
+    if (index) memcpy(index, h, HEADER);
+    if (!index || !cache || read_range(f, HEADER, index + HEADER, data_off - HEADER, 0) || index[strings_off + strings_len - 1]) {
+        release(index, data_off); release(cache, cache_bytes); goto fail;
     }
     /* Every name and context offset must point inside the NUL-terminated pool. */
     for (unsigned i = 0; i < names; i++) {
         const uint8_t *e = index + names_off + ENTRY * i;
-        if (le32(e) >= strings_len || le32(e + 4) >= strings_len) { free(index); free(cache); goto fail; }
+        if (le32(e) >= strings_len || le32(e + 4) >= strings_len) { release(index, data_off); release(cache, cache_bytes); goto fail; }
     }
     S.file = f; S.index = index; S.cache = cache; S.names = names; S.images = images;
     S.images_off = images_off; S.strings_off = strings_off; S.strings_len = strings_len;
@@ -98,7 +146,7 @@ static int open_store(void)
     S.state = 1;
     return 0;
 fail:
-    fclose(f);
+    close(f);
     return -1;
 }
 
@@ -206,17 +254,18 @@ static int decode(unsigned k, uint32_t *out, unsigned size, int depth)
     if (e[0] != size) return -1;
     if (encoding == 0) {
         if (off > S.data_len || len > S.data_len - off || !len || len > count * 5) return -1;
-        uint8_t *buffer = malloc(len);
-        int ok = buffer && !fseek(S.file, (long)(S.data_off + off), SEEK_SET) && fread(buffer, 1, len, S.file) == len &&
+        uint8_t *buffer = allocate(len, 0);
+        int ok = buffer && !read_range(S.file, S.data_off + off, buffer, len, 0) &&
                  !qoi(buffer, len, out, count);
-        free(buffer);
+        release(buffer, len);
         if (!ok) return -1;
+        S.stats.decoded++;
     } else if (encoding == 1 && !depth && source < S.images) {
         unsigned from = image_entry(source)[0];
-        uint32_t *temp = from ? malloc((size_t)from * from * 4) : NULL;
+        uint32_t *temp = from ? allocate((size_t)from * from * 4, 0) : NULL;
         int ok = temp && image_entry(source)[1] == 0 && !decode(source, temp, from, 1);
         if (ok) area(temp, from, out, size);
-        free(temp);
+        release(temp, (size_t)from * from * 4);
         if (!ok) return -1;
     } else return -1;
     return fnv(out, count) == le32(e + 12) ? 0 : -1;
@@ -225,24 +274,27 @@ static int decode(unsigned k, uint32_t *out, unsigned size, int depth)
 static const struct du_icon *ciuki(int slot)
 {
     if (S.ciuki[slot]) return S.ciuki[slot] == &unavailable ? NULL : S.ciuki[slot];
-    unsigned size = sizes[slot];
-    uint32_t *portrait = malloc(PORTRAIT * PORTRAIT * 4);
-    struct cached *icon = malloc(sizeof(*icon) + (size_t)size * size * 4);
-    FILE *f = fopen(S.portrait[0] ? S.portrait : DU_ICON_PORTRAIT_PATH, "rb");
-    int ok = portrait && icon && f && fread(portrait, 4, PORTRAIT * PORTRAIT, f) == PORTRAIT * PORTRAIT && fgetc(f) == EOF;
-    if (f) fclose(f);
-    if (ok) {
-        /* XRGB words (B,G,R,0 bytes) of the pinned conversion: opaque. */
-        for (unsigned i = 0; i < PORTRAIT * PORTRAIT; i++) portrait[i] = 0xff000000u | (portrait[i] & 0xffffffu);
-        area(portrait, PORTRAIT, icon->pixels, size);
-        icon->icon.size = size; icon->icon.argb = icon->pixels;
-        S.ciuki[slot] = &icon->icon;
-    } else {
-        free(icon);
-        S.ciuki[slot] = &unavailable;
+    /* Read the approved conversion once. Four small derived caches use
+     * 16,272 pixel bytes, versus retaining a 256 KiB source per process. */
+    uint32_t *portrait = allocate(PORTRAIT * PORTRAIT * 4, 0);
+    int f = open(S.portrait[0] ? S.portrait : DU_ICON_PORTRAIT_PATH, O_RDONLY);
+    struct stat st;
+    int ok = portrait && f >= 0 && !fstat(f, &st) && st.st_size == PORTRAIT * PORTRAIT * 4 &&
+             !read_range(f, 0, portrait, PORTRAIT * PORTRAIT * 4, 1);
+    if (f >= 0) close(f);
+    if (ok) for (unsigned i = 0; i < PORTRAIT * PORTRAIT; i++) portrait[i] = 0xff000000u | (portrait[i] & 0xffffffu);
+    for (int s = 0; s < 4; s++) {
+        unsigned size = sizes[s];
+        size_t bytes = sizeof(struct cached) + (size_t)size * size * 4;
+        struct cached *icon = ok ? allocate(bytes, 0) : NULL;
+        if (icon) {
+            area(portrait, PORTRAIT, icon->pixels, size);
+            icon->icon.size = size; icon->icon.argb = icon->pixels;
+            S.ciuki[s] = &icon->icon; S.stats.cached++;
+        } else S.ciuki[s] = &unavailable;
     }
-    free(portrait);
-    return ok ? S.ciuki[slot] : NULL;
+    release(portrait, PORTRAIT * PORTRAIT * 4);
+    return S.ciuki[slot] == &unavailable ? NULL : S.ciuki[slot];
 }
 
 const struct du_icon *du_icon(const char *tango_name, unsigned size)
@@ -256,13 +308,15 @@ const struct du_icon *du_icon(const char *tango_name, unsigned size)
     const struct du_icon **cell = &S.cache[(unsigned)n * 4 + (unsigned)slot];
     if (*cell) return *cell == &unavailable ? NULL : *cell;
     unsigned k = le16(name_entry((unsigned)n) + 8 + 2 * (unsigned)slot);
-    struct cached *icon = k < S.images ? malloc(sizeof(*icon) + (size_t)size * size * 4) : NULL;
+    size_t bytes = sizeof(struct cached) + (size_t)size * size * 4;
+    struct cached *icon = k < S.images ? allocate(bytes, 0) : NULL;
     if (!icon || decode(k, icon->pixels, size, 0)) {
-        free(icon);
+        release(icon, bytes);
         *cell = &unavailable;
         return NULL;
     }
     icon->icon.size = size; icon->icon.argb = icon->pixels;
+    S.stats.cached++;
     return *cell = &icon->icon;
 }
 

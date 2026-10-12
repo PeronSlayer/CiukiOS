@@ -40,6 +40,8 @@ static struct fat_volume volumes[2];
 static struct vfs vfs;
 static struct px_namespace *space;
 static struct process *client;
+static bool files_launch_verbose;
+bool console_quiet(void) { return !files_launch_verbose; }
 static struct proc_thread *client_thread;
 #define USER (CIUKI_IMAGE_BASE + PAGE_SIZE)
 #define USER2 (USER + 1024)
@@ -564,6 +566,32 @@ static void test_optical_native(void)
     CHECK(!vfs_detach(&vfs,4)); CHECK(!optical_writes); fclose(f);
     puts("native optical: PASS (64-bit metadata/read, EROFS mutations, stale descriptions/cwd, remount identity, zero writes)");
 }
+static void test_launch_reads(void)
+{
+    files_launch_verbose=true;
+    int fd=file_open(client,"/launch-read.bin",O_CREAT|O_RDWR,0666); CHECK(fd>=0);
+    unsigned char buffer[5000]; memset(buffer,0x71,sizeof(buffer));
+    CHECK(io(fd,buffer,sizeof(buffer),true,false,0)==sizeof(buffer));
+    client->launch=(struct proc_launch){.active=true};
+    CHECK(io(fd,buffer,4096,false,true,0)==4096);
+    CHECK(client->launch.volume_reads==1 && client->launch.volume_bytes==4096 && client->launch.volume_max==4096);
+    CHECK(io(fd,buffer,4096,false,true,4096)==904);
+    CHECK(client->launch.volume_reads==2 && client->launch.volume_bytes==5000);
+    CHECK(io(fd,buffer,4096,false,true,5000)==0);
+    CHECK(client->launch.volume_reads==3 && client->launch.volume_bytes==5000);
+    struct ciuki_file snapshot; CHECK(!image_open(client->cwd,"/launch-read.bin",&snapshot));
+    CHECK(client->launch.volume_reads==5 && client->launch.volume_bytes==10000 && client->launch.volume_max==4096);
+    uint64_t reads=client->launch.volume_reads;
+    CHECK(!snapshot.read(snapshot.cookie,0,buffer,sizeof(buffer)));
+    CHECK(client->launch.volume_reads==reads); /* immutable RAM snapshot isn't disk payload */
+    snapshot.close(snapshot.cookie);
+    client->launch.finished=true;
+    CHECK(io(fd,buffer,10,false,true,0)==10 && client->launch.volume_reads==reads);
+    memset(&client->launch,0,sizeof(client->launch)); CHECK(!file_close(client,fd));
+    CHECK(!remove_path_native("/launch-read.bin",false));
+    files_launch_verbose=false;
+    puts("PASS native launch read accounting: short final page, EOF, immutable snapshot once, stop at first frame");
+}
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4);
@@ -578,6 +606,7 @@ int main(int argc, char **argv)
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks();
     test_uname(); test_optical_native();
+    test_launch_reads();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
     CHECK(f2_files_post_commit_fault());
     CHECK(pages_used == prior_pages && heap_blocks == prior_heap);

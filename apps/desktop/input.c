@@ -105,6 +105,9 @@ static int32_t axis(int32_t old, int32_t delta, uint32_t limit)
 }
 void desk_input(struct desktop *d, const struct ciuki_input_event *in)
 {
+    /* Preserve the timestamp of a deferred menu action across the remaining
+     * input batch. Immediate icon/menu actions consume it in launch_program. */
+    if (d->action < 0) d->launch_click_ns = in->monotonic_ns ? in->monotonic_ns : d->now_ns;
     d->inputs++;
     struct ciuki_input_event e = *in;
     if (d->sh.want_power && !d->sh.gate && !d->power.state) return;
