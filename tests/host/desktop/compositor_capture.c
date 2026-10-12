@@ -75,7 +75,7 @@ int main(int argc,char **argv)
         desk_shell_enable(d);
         desk_shell_wallpaper_update(d);
         if (!strcmp(mode,"start") || !strcmp(mode,"documents") || !strcmp(mode,"settings")) {
-            hover(d,40,(int32_t)H-16); press(d,1);
+            hover(d,40,16); press(d,1);   /* the Ciuki button in the top bar */
             struct desk_box m=desk_menu_box(d);
             int row = !strcmp(mode,"start") ? 0 : !strcmp(mode,"documents") ? 1 : 2;
             hover(d,60,m.y+3+row*SH_START_ROW+14);

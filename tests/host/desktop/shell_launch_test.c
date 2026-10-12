@@ -65,7 +65,8 @@ int shell_fcntl(int fd, int command, ...)
 }
 int shell_close(int fd) { return fake_ops.close(fd); }
 static int expect_files_test, expect_note_test, expect_authority=-1, expect_test=0;
-static const char *expect_note_arg;
+static const char *expect_note_arg, *expect_dosbox[2];
+static unsigned dosbox_spawns;
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
@@ -81,6 +82,11 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         if (expect_note_test) assert(!strcmp(argv[at++],"--test=ciuknote"));
         if (expect_note_arg) assert(!strcmp(argv[at++],expect_note_arg));
         assert(!argv[at]);
+    } else if (!strcmp(path,"/bin/dosbox")) {
+        /* Programs > Games: the window title, then the command dosbox types at the DOS prompt. */
+        assert(!strcmp(argv[0],"dosbox") && !strcmp(argv[1],"--channel-fd=3") && count==1 && expect_dosbox[0]);
+        assert(!strcmp(argv[2],expect_dosbox[0]) && !strcmp(argv[3],expect_dosbox[1]) && !argv[4]);
+        dosbox_spawns++;
     } else if (!strcmp(path,"/bin/hello")) assert(!strcmp(argv[0],"hello") && !argv[1] && count==1);
     else if (!strcmp(path,"/bin/tasks")) {
         /* f2-33: only the Task Manager receives the authority, at fd 4. */
@@ -380,6 +386,49 @@ static void message(struct desktop *d,int index,unsigned opcode,unsigned length)
     desk_message(&m,opcode,length); m.data[0]=DESK_SHELL_VERSION; m.sender_pid=d->shell_pid;
     desk_receive(d,index,&m);
 }
+/* Owner decision 2026-10-12: Programs > Games (present with /bin/dosbox)
+ * lists the bundled shareware games; each starts /bin/dosbox titled after
+ * the game with its command (apps/desktop/catalog.h desk_games). */
+static int item_at(const struct sh_menu *m, const char *label)
+{ for (int k=0;k<m->count;k++) if (!strcmp(m->items[k].label,label)) return k; return -1; }
+static void key(struct desktop *d,int code) { desk_shell_key(d,code,1); desk_shell_key(d,code,0); }
+static void test_games_menu(void)
+{
+    struct desktop d;
+    uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
+    d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
+    desk_program_add(&d,"files",elf,sizeof(elf)); desk_program_add(&d,"calc",elf,sizeof(elf));
+    desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
+    assert(item_at(&d.sh.menus[0],"Games")<0);                         /* no /bin/dosbox: no Games */
+    desk_menu_close(&d);
+    desk_program_add(&d,"dosbox",elf,sizeof(elf));
+    desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
+    const struct sh_menu *programs=&d.sh.menus[0];
+    int games=item_at(programs,"Games"), accessories=item_at(programs,"Accessories");
+    assert(games==accessories+1 && programs->items[games].action==SH_ACT_SUBMENU &&
+           programs->items[games].arg==SH_MENU_GAMES && !strcmp(programs->items[games].icon,"applications-games"));
+    desk_menu_close(&d);
+    for (unsigned g=0; g<DESK_GAME_COUNT; g++) {
+        /* Start menu, Programs, Games, then the game's row: the keyboard path a user takes. */
+        desk_menu_open(&d,SH_MENU_START,0,0);
+        key(&d,DU_KEY_DOWN); assert(d.sh.menus[0].hot==0);
+        key(&d,DU_KEY_RIGHT); assert(d.sh.levels==2 && d.sh.menus[1].kind==SH_MENU_PROGRAMS);
+        while (d.sh.menus[1].hot!=games) key(&d,DU_KEY_DOWN);
+        key(&d,DU_KEY_RIGHT); assert(d.sh.levels==3 && d.sh.menus[2].kind==SH_MENU_GAMES && d.sh.menus[2].count==(int)DESK_GAME_COUNT);
+        assert(!strcmp(d.sh.menus[2].items[g].label,desk_games[g].label) && d.sh.menus[2].items[g].action==SH_ACT_GAME);
+        while (d.sh.menus[2].hot!=(int)g) key(&d,DU_KEY_DOWN);
+        char title[48]; snprintf(title,sizeof(title),"--name=%s",desk_games[g].title);
+        expect_dosbox[0]=title; expect_dosbox[1]=desk_games[g].command;
+        unsigned before=dosbox_spawns;
+        key(&d,DU_KEY_ENTER);
+        assert(dosbox_spawns==before+1 && !d.sh.levels && !d.launch_argv[0] && !d.launch_argv[1]);
+        expect_dosbox[0]=expect_dosbox[1]=NULL;
+    }
+    assert(!strcmp(desk_games[0].command,"\\WOLF3D\\WOLF3D.EXE") && !strcmp(desk_games[1].command,"\\DOOM\\DOOM.EXE -config CIUKI.CFG"));
+    drop_all(&d); fake_reset();
+    puts("PASS games menu: Programs > Games with /bin/dosbox, keyboard path to each shareware game, dosbox --name=<title> <command>");
+}
 int main(void)
 {
     struct desktop d;
@@ -389,7 +438,7 @@ int main(void)
     fail_mapping=0; fail_spawn=1;
     assert(launch_program(&d,&program)==-1 && errno==ENOEXEC && !fake_live());
     fail_spawn=0;
-    d.shell_test=1; d.mouse_x=40; d.mouse_y=464;
+    d.shell_test=1; d.mouse_x=40; d.mouse_y=16;   /* the Ciuki button in the top bar */
     assert(desk_shell_click(&d) && d.menu_open && d.shell_stage==1);
     int pid=launch_program(&d,&program);
     assert(pid==100 && d.clients[0].pid==100 && d.children[0].pid==100 && fake_live()==1);
@@ -402,7 +451,8 @@ int main(void)
     desk_put32(m.data+4,240); desk_put32(m.data+8,160); desk_put32(m.data+12,4);
     memcpy(m.data+16,"Demo",4); desk_receive(&d,0,&m);
     assert(d.clients[0].window && d.shell_stage==3);
-    d.menu_open=0;
+    desk_menu_close(&d);   /* as a menu launch does (shell.c activate): the menu drops over the demo's title now */
+    assert(!d.menu_open && d.focus==0);
     struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
     d.mouse_x=40; d.mouse_y=60; desk_input(&d,&e); assert(d.drag==0);
     e.type=CIUKI_INPUT_MOTION; e.code=0; e.value=60; e.value2=60; desk_input(&d,&e);
@@ -461,5 +511,6 @@ int main(void)
     test_tasks_scenario();
     test_launch_protocol();
     test_note_scenario();
+    test_games_menu();
     return 0;
 }

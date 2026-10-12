@@ -468,7 +468,7 @@ static void menu_command(struct cn_app *a, int id)
         break;
     case M_ABOUT:
         box(a, D_INFO, "About CiukNote", DU_DLG_ICON_INFO, NULL, 0, 0, 0,
-            "CiukiOS CiukNote\nA modern Retro OS\n---\nDedicated to Ciuki.\nTango 0.8.90 icons: Public Domain.\n"
+            "CiukiOS CiukNote\nClassic computing, one woof at a time.\n---\nDedicated to Ciuki.\nTango 0.8.90 icons: Public Domain.\n"
             "Ciuki portrait: separate project asset.\nlibdeskui and CiukNote: MIT licence.");
         if (a->ciuki) du_dialog_icon(a->ui, a->ciuki32);
         break;

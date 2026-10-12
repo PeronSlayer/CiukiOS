@@ -127,7 +127,7 @@ void calc_event(struct du_ui *u, const struct du_event *e, void *user)
                        "@ : square root     r : 1/x     % : percent     F9 : +/-\n"
                        "Ctrl+L MC   Ctrl+R MR   Ctrl+M MS   Ctrl+P M+", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         else if (e->id == CALC_M_ABOUT)
-            du_message(u, 2, "About Calculator", "CiukiOS Calculator - A modern Retro OS\nStandard mode, double precision.\nCode: MIT.",
+            du_message(u, 2, "About Calculator", "CiukiOS Calculator - Classic computing, one woof at a time.\nStandard mode, double precision.\nCode: MIT.",
                        DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         break;
     case DU_EV_KEY:

@@ -2,7 +2,7 @@
 
 # CiukiOS
 
-**A modern Retro OS.** An open-source operating system for playing the games
+**Classic computing, one woof at a time.** An open-source operating system for playing the games
 of the 1990s on the computers of the 1990s. Dedicated to **Ciuki**, the dog
 in the boot splash. Code under [GNU GPLv2](LICENSE).
 

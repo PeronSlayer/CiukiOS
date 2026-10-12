@@ -104,16 +104,17 @@ static void paint(struct du_ui *u, void *user)
         du_edge(c, (struct du_rect){30, 50, 196, 148}, DU_SUNKEN);
         for (int y = 0; y < 144; y++) for (int x = 0; x < 192; x++) put(c, 32 + x, 52 + y, 1, 1, a->preview[y * 192 + x]);
         put(c, 108, 204, 40, 6, DU_SHADOW); put(c, 92, 210, 72, 4, DU_FACE); du_edge(c, (struct du_rect){92, 210, 72, 5}, DU_RAISED_THIN);
-        /* The chosen theme in miniature: top bar, taskbar, start button and a window. */
+        /* The chosen theme in miniature: top bar with the Ciuki button, taskbar and a window. */
         const struct desk_theme *t = chosen(a);
         struct desk_paint pp = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
-        put(c, 32, 52, 192, 6, t->topbar); put(c, 32, 57, 192, 1, t->topbar_edge);
-        put(c, 32, 190, 192, 6, t->taskbar); put(c, 33, 191, 16, 4, t->start);
+        put(c, 32, 52, 192, 6, t->topbar); put(c, 32, 57, 192, 1, t->topbar_edge); put(c, 33, 53, 16, 4, t->start);
+        put(c, 32, 190, 192, 6, t->taskbar);
         put(c, 40, 132, 70, 50, t->face); du_outline(c, (struct du_rect){40, 132, 70, 50}, t->frame);
         if (t->title_style == DESK_TITLE_PINSTRIPE) {
             desk_paint_vgradient(&pp, 41, 133, 68, 8, t->title[0], t->title[1]);
             desk_paint_pinstripes(&pp, 43, 134, 64, 6, t->stripe_light, t->stripe_dark);
-        } else desk_paint_hgradient(&pp, 42, 134, 66, 7, t->title[0], t->title[1]);
+        } else if (t->control_style == DESK_CONTROLS_CLASSIC) desk_paint_hgradient(&pp, 42, 134, 66, 7, t->title[0], t->title[1]);
+        else desk_paint_vgradient(&pp, 41, 133, 68, 8, t->title[0], t->title[1]);
         put(c, 44, 143, 62, 37, t->window);
         for (int k = 0; k < 6; k++) {
             struct du_widget *w = du_get(u, C_COL0 + k);
@@ -257,7 +258,7 @@ static void list_style(struct du_widget *w, const char *title)
 static const char *wall_label(struct cp_app *a, unsigned k)
 {
     if (k == 0) return "(None)";
-    if (k == 1) return "Ciuki (default)";
+    if (k == 1) return "Ciuki portrait";
     if (k < 2 + DESK_BUILTIN_WALLPAPERS) return desk_builtin_wallpapers[k - 2].label;
     const char *path = a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS], *base = strrchr(path, '/');
     return base ? base + 1 : path;
@@ -329,7 +330,7 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     snprintf(line, sizeof(line), "Memory %llu MB, %llu MB available, %u processes", (unsigned long long)(a->host.mem_total_k / 1024),
              (unsigned long long)(a->host.mem_free_k / 1024), a->host.processes);
     add(a, DU_LABEL, C_SYS3, 140, 122, 336, 14, line);
-    add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "A modern Retro OS. About CiukiOS is in the Start menu, under Help.");
+    add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "Classic computing, one woof at a time. About CiukiOS is in the Start menu, under Help.");
     cp_tick(a);
     sync(a);
     /* Keep the preview and controls at their existing minimum size while

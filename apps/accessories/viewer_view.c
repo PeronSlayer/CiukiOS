@@ -218,7 +218,7 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
         case V_M_ACTUAL: case V_ACTUAL: zoom(a, 100); break;
         case V_M_EXIT: if (a->quit) a->quit(a->host); break;
         case V_M_ABOUT:
-            du_message(u, V_D_INFO, "About Image Viewer", "CiukiOS Image Viewer - A modern Retro OS\n"
+            du_message(u, V_D_INFO, "About Image Viewer", "CiukiOS Image Viewer - Classic computing, one woof at a time.\n"
                        "PNG, JPEG, BMP and GIF by stb_image v2.30\n(MIT or Public Domain). Viewer code: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
             break;
         default: break;

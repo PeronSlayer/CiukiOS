@@ -206,7 +206,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *ctx)
     case M_HIGH: case M_NORMAL: case M_LOW: case M_PAUSED: tv_speed(v, (enum tv_speed)(e->id - M_HIGH)); timers(a); tv_update(v, m); break;
     case M_EXIT: du_window_close(&a->window); break;
     case M_ABOUT:
-        message_box(a, "About Task Manager", "CiukiOS Task Manager - A modern Retro OS\nProcesses: kernel call 70. End Process: the\ndesktop or the delegated authority (call 71).\nlibdeskui and Task Manager code: MIT.", DU_DLG_ICON_INFO);
+        message_box(a, "About Task Manager", "CiukiOS Task Manager - Classic computing, one woof at a time.\nProcesses: kernel call 70. End Process: the\ndesktop or the delegated authority (call 71).\nlibdeskui and Task Manager code: MIT.", DU_DLG_ICON_INFO);
         break;
     default: break;
     }

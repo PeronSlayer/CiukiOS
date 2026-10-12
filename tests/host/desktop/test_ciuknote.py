@@ -102,12 +102,6 @@ def bin_programs():
     return sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', text)) - {"desktop"})
 
 
-def menu_distance(programs, name):
-    """Pointer travel from the Ciuki button (cursor 16 px above the corner) to the middle of a menu row:
-    dy = -1 - 28 * (n + 2 - k) for the 28 px rows anchored to the bottom bar (see docs/desktop.md)."""
-    return -1 - 28 * (len(programs) + 2 - programs.index(name))
-
-
 class CiuknoteTests(unittest.TestCase):
     def compile(self, folder, name, sources):
         binary = folder / name
@@ -214,12 +208,15 @@ class CiuknoteTests(unittest.TestCase):
                 elif event["type"] == "btn" and event["data"]["down"]: clicks.append((x, y))
         menu.check_launch(self, clicks, programs, "ciuknote")
         self.assertEqual(len(clicks), 3, "the case clicks only the Ciuki button, Programs and CiukNote")
-        # Apart from the corner clamp (+381 twice) and the button approach (-16): up to Programs, the
-        # CiukNote row offset in the submenu and the move back to the f2-32 pointer position.
+        # Apart from the corner clamp (-381 twice, to the top edge) and the approach onto the Ciuki button
+        # in the top bar: down to Programs, the CiukNote row offset in the submenu and the move back to the
+        # f2-32 pointer position.
+        start, programs_y = menu.START_CLICK[1], menu.PROGRAMS_CLICK_Y
         moves = [e["data"]["value"] for b in c["actions"][0]["batches"] for e in b["events"]
-                 if e["type"] == "rel" and e["data"]["axis"] == "y" and e["data"]["value"] not in (381, -16)]
+                 if e["type"] == "rel" and e["data"]["axis"] == "y"]
+        self.assertEqual(moves[:3], [-381, -381, start])
         row = menu.submenu_row_y(programs, "ciuknote")
-        self.assertEqual(moves, [560 - 751, row - 560, 470 - row])
+        self.assertEqual(moves[3:], [programs_y - start, row - programs_y, 470 - row])
 
     def key_script(self):
         """The case's keys after the launch click, as the replay harness reads them: K <code> <down> per key

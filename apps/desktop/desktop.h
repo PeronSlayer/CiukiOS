@@ -8,13 +8,20 @@
 #define DESK_DAMAGE_MAX 32
 #define DESK_TX_MAX 64
 #define DESK_BAR 32
-#define DESK_BORDER 3
-#define DESK_TITLE 24
+#define DESK_BORDER DESK_FRAME_BORDER   /* theme.h: one frame geometry for windows and dialogs */
+#define DESK_TITLE DESK_FRAME_TITLE
 #define DESK_RESIZE_MARGIN 7
 #define DESK_EDGE_LEFT 1u
 #define DESK_EDGE_RIGHT 2u
 #define DESK_EDGE_TOP 4u
 #define DESK_EDGE_BOTTOM 8u
+/* The Ciuki (Start) button at the left end of the top bar; the Start menu
+ * drops from it. Task buttons start DESK_TASK_X from the taskbar's left edge. */
+#define DESK_START_X 4
+#define DESK_START_Y 4
+#define DESK_START_W 96
+#define DESK_START_H 24
+#define DESK_TASK_X 4
 #define DESK_BACKGROUND 0x375564u
 #define DESK_PORTRAIT_SIZE 256
 #define DESK_MENU_MAX 16
@@ -110,6 +117,8 @@ struct desktop {
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
     /* Title-bar double-click (windowshade). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
+    /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
+    int title_hot, title_down;
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -126,6 +135,9 @@ struct desk_box desk_outer(const struct desk_client *c);       /* frame plus dro
 void desk_collapse(struct desktop *, int index);                /* toggle windowshade */
 void desk_theme_changed(struct desktop *);                       /* repaint after desk_theme_use */
 struct desk_box desk_taskbar(const struct desktop *);
+struct desk_box desk_start_button(const struct desktop *);       /* top bar, left end */
+int desk_title_code(const struct desktop *, int32_t x, int32_t y);   /* title button under (x, y): index*4+k+1, or 0 */
+struct desk_box desk_title_code_box(const struct desktop *, int code);
 struct desk_box desk_task_button(const struct desktop *, int index);
 struct desk_box desk_menu_box(const struct desktop *);
 int32_t desk_menu_row(const struct desktop *);
@@ -147,6 +159,8 @@ void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
 int desk_task_switch(struct desktop *, uint32_t window_id);
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
+/* Launch with several arguments after the desktop's own (Programs > Games: /bin/dosbox). */
+int desk_task_launch_args(struct desktop *, const char *name, const char *const *args, unsigned count);
 int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);

@@ -570,6 +570,20 @@ int desk_task_switch(struct desktop *d, uint32_t window_id)
     if (d->clients[i].minimized) desk_minimize(d,i); else desk_focus(d,i);
     return 0;
 }
+int desk_task_launch_args(struct desktop *d, const char *name, const char *const *args, unsigned count)
+{
+    if (!count || count > sizeof(d->launch_argv) / sizeof(d->launch_argv[0])) return -EINVAL;
+    if (!strncmp(name,"/bin/",5)) name+=5;
+    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
+        if (!d->launch) return -ENOSYS;
+        for (unsigned a=0; a<count; a++) d->launch_argv[a]=args[a];
+        int pid=d->launch(d,&d->programs[k]);
+        int error=errno;
+        for (unsigned a=0; a<count; a++) d->launch_argv[a]=NULL;
+        return pid<0 ? -(error ? error : EIO) : pid;
+    }
+    return -ENOENT;
+}
 int desk_task_launch(struct desktop *d, const char *name, const char *argument)
 {
     if (!strncmp(name,"/bin/",5)) name+=5;

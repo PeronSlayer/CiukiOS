@@ -26,6 +26,7 @@ SDK = ROOT / "build/tools/ciuki-sdk"
 LUA = ROOT / "build/apps/lua"
 DESKTOP = ROOT / "build/apps/desktop"
 TEST_PATH = "/system/tests/lua-5.4.8-tests"
+WALLPAPERS = ("Ciuk1.png", "Ciuk2.png", "Ciuk3.png")
 
 
 def run(*args):
@@ -72,8 +73,11 @@ def desktop_payloads():
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],
                 "elf": desktop["elf"], "portrait": desktop["portrait"], "icons": desktop["icons"]}
-    # /system/settings holds desktop.cfg (written at run time); /system/wallpapers is where the owner may
-    # copy wallpapers (PNG, JPEG, BMP). Never Microsoft's third_party/win_bg bitmaps: see docs/desktop.md.
+    # The owner's three adaptive Ciuki scenes (assets/wallpapers/ciuki, 1448x1086 PNG; Ciuk2 is the
+    # default wallpaper of apps/desktop/settings.c). /system/settings holds desktop.cfg (written at run
+    # time); the owner may add PNG/JPEG/BMP files to /system/wallpapers. Never Microsoft's
+    # third_party/win_bg bitmaps: see docs/desktop.md.
+    sources.update({f"/system/wallpapers/{name}": ROOT / "assets/wallpapers/ciuki" / name for name in WALLPAPERS})
     return sources, {"/bin", "/system", "/system/assets", "/system/icons", "/system/licenses", "/system/settings", "/system/wallpapers"}, metadata
 
 
@@ -159,6 +163,28 @@ def application_provenance(sources, manifest, sdk):
             require(len(path) <= 80, "app-gate payload path exceeds evidence bound")
             lines.append(f"P {path} {sha256(source)}\n")
     return "".join(lines)
+
+
+def games_payloads(dos_image, out=None):
+    """Owner decision 2026-10-12: Wolfenstein 3-D and DOOM shareware are
+    pre-installed. The games disk (the DOS system plus \\WOLF3D and \\DOOM,
+    from the pinned archives in third_party/games) is the base of every
+    /bin/dosbox window VM (dosvm_disk.c, C:\\GAMES\\CIUKIGAM.IMG); the
+    packages' licence documents and provenance go to /system/licenses.
+    Returns sources, directories, metadata and the SHA-256 set of pinned
+    shareware files the local-payload guard accepts. out: the disk's path
+    (default build/f0/games/CIUKIGAM.IMG; host tests write elsewhere)."""
+    spec = importlib.util.spec_from_file_location("build_games_disk", ROOT / "scripts/build_games_disk.py")
+    games = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(games)
+    image, manifest = games.build(out, dos_image)
+    sources = {"/GAMES/CIUKIGAM.IMG": image}
+    for record in manifest["licenses"]:
+        sources[f"/system/licenses/{record['package']}-{record['name']}"] = ROOT / record["path"]
+    for package in manifest["packages"]:
+        sources[f"/system/licenses/{package['name']}-UPSTREAM.json"] = ROOT / games.GAMES / package["name"] / "UPSTREAM.json"
+    metadata = {k: v for k, v in manifest.items() if k not in ("checkers", "geometry")}
+    return sources, {"/GAMES", "/system/licenses"}, metadata, games.free_hashes()
 
 
 def payload_records(sources):
@@ -266,6 +292,9 @@ def build(kernel, out, boot_cfg):
     sources["/system/dos/DOSBOOT.IMG"] = dos_image
     directories.add("/system/dos")
     metadata["dos"] = dos_manifest
+    games_sources, games_directories, metadata["games"], free = games_payloads(dos_image)
+    sources.update(games_sources)
+    directories.update(games_directories)
     out.parent.mkdir(parents=True, exist_ok=True)
     # Large scratch files stay on disk beside the output, never in /tmp.
     with tempfile.TemporaryDirectory(prefix=".image-", dir=out.parent) as directory:
@@ -297,8 +326,9 @@ def build(kernel, out, boot_cfg):
             "-n", "CIUKIOS", volume)
         sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
         payloads = payload_records(sources)
-        # f3-06: owner-local game files never enter the canonical image.
-        dos_build.refuse_local_payloads({p["path"]: p["sha256"] for p in payloads})
+        # f3-06: owner-local game files never enter the canonical image; only
+        # files pinned in the vendored shareware packages may equal one.
+        dos_build.refuse_local_payloads({p["path"]: p["sha256"] for p in payloads}, free=free)
         populate_payloads(volume, sources, directories)
         # mtools updates the primary allocation hint but not its backup.
         with volume.open("r+b") as stream:

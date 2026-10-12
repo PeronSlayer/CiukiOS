@@ -72,9 +72,28 @@ unsigned desk_resize_hit(const struct desk_client *c, int32_t x, int32_t y)
     if (x >= f.x+f.w-DESK_BORDER) edge |= DESK_EDGE_RIGHT;
     if (y < f.y+DESK_BORDER) edge |= DESK_EDGE_TOP;
     if (y >= f.y+f.h-DESK_BORDER) edge |= DESK_EDGE_BOTTOM;
-    /* The bottom-right grip also catches the last 12 pixels of the frame. */
-    if (x >= f.x+f.w-12 && y >= f.y+f.h-12) edge = DESK_EDGE_RIGHT | DESK_EDGE_BOTTOM;
+    /* Keep the 12 px bottom-right grip below the title buttons, even for
+     * short client surfaces. Title buttons are dispatched before edges. */
+    if (x >= f.x+f.w-12 && y >= f.y+f.h-12 && y >= f.y+DESK_TITLE)
+        edge = DESK_EDGE_RIGHT | DESK_EDGE_BOTTOM;
     return edge;
+}
+/* Title-button hover and press: the compositor paints them from the pointer
+ * (desk_title_code); this repaints the boxes whose state changed. */
+static void title_track(struct desktop *d)
+{
+    int hot = desk_title_code(d, d->mouse_x, d->mouse_y);
+    if (hot == d->title_hot) return;
+    desk_damage_add(&d->damage, desk_title_code_box(d, d->title_hot), d->width, d->height);
+    desk_damage_add(&d->damage, desk_title_code_box(d, hot), d->width, d->height);
+    d->title_hot = hot;
+}
+static void title_press(struct desktop *d, int code)
+{
+    if (code == d->title_down) return;
+    desk_damage_add(&d->damage, desk_title_code_box(d, d->title_down), d->width, d->height);
+    desk_damage_add(&d->damage, desk_title_code_box(d, code), d->width, d->height);
+    d->title_down = code;
 }
 static int32_t axis(int32_t old, int32_t delta, uint32_t limit)
 {
@@ -126,7 +145,8 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
                 if (f.y+f.h > bottom) f.h = bottom-f.y;
                 desk_resize(d, d->drag, f);
             } else desk_move(d, d->drag, d->mouse_x - d->drag_x, d->mouse_y - d->drag_y);
-        } else if (d->focus >= 0) {
+        } else title_track(d);
+        if (d->drag < 0 && d->focus >= 0) {
             struct desk_box content = desk_content(&d->clients[d->focus]);
             /* MOTION carries client-relative absolute position in value/value2;
              * original delta is intentionally replaced at the protocol boundary. */
@@ -138,6 +158,7 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
         if (e.code < 1 || e.code > 3 || (e.value != 0 && e.value != 1)) break;
         uint32_t mask = 1u << (e.code-1);
         if (e.value) d->buttons |= mask; else d->buttons &= ~mask;
+        if (!e.value && e.code == CIUKI_BUTTON_LEFT) title_press(d, 0);
         if (!e.value && d->drag >= 0 && e.code == CIUKI_BUTTON_LEFT) {
             d->drag = -1; break;
         }
@@ -148,12 +169,7 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
             desk_focus(d, i);
             if (i >= 0) {
                 struct desk_client *c = &d->clients[i];
-                unsigned edges = desk_resize_hit(c,d->mouse_x,d->mouse_y);
-                if (edges) {
-                    c->zoomed = 0; d->drag = i; d->resize_edges = edges;
-                    d->resize_start = c->frame; d->drag_x = d->mouse_x; d->drag_y = d->mouse_y;
-                    d->title_click_window = -1; break;
-                }
+                title_press(d, desk_title_code(d, d->mouse_x, d->mouse_y));
                 if (desk_contains(desk_close_box(c), d->mouse_x, d->mouse_y)) {
                     if (d->shell) { desk_request_close(d,i); break; }
                     struct ciuki_message m;
@@ -167,6 +183,12 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
                 }
                 if (d->shell && desk_contains(desk_shade_box(c),d->mouse_x,d->mouse_y)) {
                     desk_zoom(d,i); break;
+                }
+                unsigned edges = desk_resize_hit(c,d->mouse_x,d->mouse_y);
+                if (edges) {
+                    c->zoomed = 0; d->drag = i; d->resize_edges = edges;
+                    d->resize_start = c->frame; d->drag_x = d->mouse_x; d->drag_y = d->mouse_y;
+                    d->title_click_window = -1; break;
                 }
                 if (d->mouse_y < c->frame.y + DESK_TITLE) {
                     /* Shell: a double-click on the title bar rolls the window

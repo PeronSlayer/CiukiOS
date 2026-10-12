@@ -18,15 +18,18 @@
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
 #define SH_SEPARATOR 8
+#define SH_START_RADIUS 7       /* the Ciuki button's corners */
+#define SH_START_MARK 18        /* the portrait mark in the Ciuki button */
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
        DESK_INTERNAL_MESSAGE, DESK_INTERNAL_KINDS };
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
-                    SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES };
+                    SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
+                    SH_MENU_GAMES };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
-                 SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT };
+                 SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -45,6 +48,7 @@ struct desk_shell {
     uint64_t click_ns; int click_icon;
     int volume_open, volume, muted, mixer_state;   /* mixer_state: 0 unknown, 1 read-only, 2 controllable, -1 absent */
     int volume_drag;
+    int start_hot;                  /* the pointer is over the Ciuki button */
     int tooltip; uint64_t hover_since; int32_t hover_x, hover_y;
     int switcher, switch_pick, switch_count, switch_list[16];
     int about_tab, shutdown_choice, message_kind;

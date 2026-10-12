@@ -266,6 +266,8 @@ static const char *client_icon(const struct desktop *d, int i)
     if (c->taskman) return "utilities-system-monitor";
     for (unsigned k = 0; k < DESK_CATALOG_COUNT; k++)   /* accessories: the launcher's Tango name by window title */
         if (strstr(c->title, desk_catalog[k].label)) return desk_catalog[k].tango;
+    for (unsigned k = 0; k < DESK_GAME_COUNT; k++)   /* Programs > Games: the DOS Box window carries the game's title */
+        if (!strcmp(c->title, desk_games[k].title)) return desk_games[k].tango;
     if (!strncmp(c->title, "DOS", 3)) return "utilities-terminal";
     if (strstr(c->title, "Demo") || strstr(c->title, "demo")) return "applications-games";
     return "application-x-executable";
@@ -309,6 +311,8 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         for (unsigned k = 0; k < d->program_count; k++) if (!program_find(d->programs[k].name)) developer = 1;
         if (!m->count) item(m, "(No programs)", NULL, SH_ACT_NONE, 0, SH_ITEM_DISABLED);
         if (accessories) item(m, "Accessories", "applications-accessories", SH_ACT_SUBMENU, SH_MENU_ACCESSORIES, 0);
+        /* The bundled shareware games run in a DOS Box window (catalog.h desk_games). */
+        if (program_index(d, "dosbox") >= 0) item(m, "Games", "applications-games", SH_ACT_SUBMENU, SH_MENU_GAMES, 0);
         if (developer) { separator(m); item(m, "Developer", "applications-development", SH_ACT_SUBMENU, SH_MENU_DEVELOPER, 0); }
         break;
     }
@@ -317,6 +321,9 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
             int at = program_index(d, programs[k].name);
             if (at >= 0 && !strcmp(programs[k].category, "accessories")) item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
+        break;
+    case SH_MENU_GAMES:
+        for (unsigned k = 0; k < DESK_GAME_COUNT; k++) item(m, desk_games[k].label, desk_games[k].tango, SH_ACT_GAME, (int)k, 0);
         break;
     case SH_MENU_DEVELOPER:
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
@@ -415,11 +422,12 @@ void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
     d->sh.levels = 1;
     build(d, &d->sh.menus[0], kind);
     if (kind == SH_MENU_START) {
-        layout(d, &d->sh.menus[0], 2, (int32_t)d->height - DESK_BAR, 1);
+        /* Drops from the Ciuki button at the left end of the top bar. */
+        layout(d, &d->sh.menus[0], desk_start_button(d).x, DESK_BAR, 0);
         if (!d->menu_open) { d->menu_focus = d->focus; desk_focus(d, -1); }
         d->menu_open = 1;
         if (d->shell_test && d->shell_stage == 0) d->shell_stage = 1;
-        damage(d, desk_taskbar(d));
+        damage(d, desk_start_button(d));
     } else layout(d, &d->sh.menus[0], x, y, 0);
     damage(d, outer(d->sh.menus[0].box));
 }
@@ -432,7 +440,7 @@ void desk_menu_close(struct desktop *d)
     if (start) {
         d->menu_open = 0;
         desk_focus(d, d->menu_focus);
-        damage(d, desk_taskbar(d));
+        damage(d, desk_start_button(d));
     }
 }
 static void submenu(struct desktop *d, int level, int index)
@@ -473,6 +481,21 @@ static void launch_named(struct desktop *d, const char *name, const char *argume
         desk_shell_message(d, "Programs", text, 1);
     }
 }
+/* Programs > Games: a DOS Box window titled after the game, typing its command. */
+static void launch_game(struct desktop *d, int index)
+{
+    if (index < 0 || (unsigned)index >= DESK_GAME_COUNT) return;
+    char name[48];
+    snprintf(name, sizeof(name), "--name=%s", desk_games[index].title);
+    const char *args[] = {name, desk_games[index].command};
+    int r = desk_task_launch_args(d, "dosbox", args, 2);
+    if (r < 0) {
+        char text[160];
+        snprintf(text, sizeof(text), r == -ENOENT ? "CiukiOS cannot find 'dosbox' in /bin." :
+                 "'%s' could not be started (error %d).", desk_games[index].title, -r);
+        desk_shell_message(d, "Games", text, 1);
+    }
+}
 static void act(struct desktop *d, const struct sh_item *it)
 {
     char argument[24];
@@ -489,6 +512,7 @@ static void act(struct desktop *d, const struct sh_item *it)
         else { snprintf(argument, sizeof(argument), "--panel=%s", panel_names[it->arg]); launch_named(d, "control", argument); }
         break;
     case SH_ACT_TASKMAN: launch_named(d, "tasks", NULL); break;
+    case SH_ACT_GAME: launch_game(d, it->arg); break;
     case SH_ACT_KEYS:
         desk_shell_message(d, "Keyboard Shortcuts",
             "Win or Ctrl+Esc   Open the Start menu\nAlt+Tab           Switch between windows\n"
@@ -667,10 +691,7 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
     struct desk_box bar = desk_taskbar(d), b;
     if (!desk_intersect(bar, clip, &b)) return;
     struct du_canvas c = canvas(d, b);
-    /* Start button: the compositor draws its face, bevel and the approved
-     * portrait (desk_shell_draw); the shell adds the label. */
-    int open = d->menu_open;
-    du_text_font(&c, t->font_bold, 34 + open, bar.y + 20 + open - desk_font_cap(t->font_bold), "Ciuki", t->start_text);
+    /* Task buttons from the left margin (the Ciuki button is in the top bar), tray at the right. */
     for (int i = 0; i < DESK_CLIENTS; i++) {
         struct desk_box button = desk_task_button(d, i), part;
         if (!desk_intersect(button, b, &part)) continue;
@@ -958,18 +979,49 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
     }
     draw_icons(d, clip);
 }
+/* The Ciuki (Start) button: the approved portrait (deterministic area
+ * scaling of the exact asset) and "CiukiOS" on a rounded, softly bevelled
+ * gradient face; pressed in while its menu is open, lit under the pointer.
+ * Classic 98 draws the raised 3-D button of that theme. */
+static void draw_start(struct desktop *d, struct du_canvas *c)
+{
+    const struct desk_theme *t = desk_theme;
+    struct desk_box b = desk_start_button(d);
+    struct desk_paint p = painter(c);
+    int open = d->menu_open, hot = d->sh.start_hot && !open;
+    uint32_t base = open ? t->start_open : t->start;
+    if (t->control_style == DESK_CONTROLS_CLASSIC) desk_paint_raised(&p, b.x, b.y, b.w, b.h, open, 0);
+    else {
+        /* A soft gradient around the theme's start colour (the normal-boot
+         * heuristic of scripts/test/run.py reads that colour), lighter on hover. */
+        uint32_t top = open ? desk_mix(t->dark, base, 24) : desk_mix(t->hilite, base, hot ? 190 : 100);
+        uint32_t bottom = open ? desk_mix(t->hilite, base, 24) : desk_mix(t->shadow, base, hot ? 30 : 22);
+        desk_paint_round_rect(&p, b.x, b.y, b.w, b.h, SH_START_RADIUS, top, bottom,
+                              open ? t->outline : desk_mix(t->outline, t->topbar, 170), 255);
+        /* Soft bevel: a light line under the top edge, or a shade while pressed. */
+        desk_paint_blend(&p, b.x + SH_START_RADIUS, b.y + 1, b.w - 2 * SH_START_RADIUS, 1, open ? t->dark : t->hilite, open ? 70 : 200);
+        if (!open) desk_paint_blend(&p, b.x + SH_START_RADIUS, b.y + b.h - 2, b.w - 2 * SH_START_RADIUS, 1, t->shadow, 60);
+    }
+    int font = t->font_title, shift = open ? 1 : 0, tw = desk_text_measure(font, "CiukiOS");
+    int x = b.x + (b.w - SH_START_MARK - 6 - tw) / 2 + shift, y = b.y + (b.h - SH_START_MARK) / 2 + shift;
+    du_icon_blit(c, x, y, desk_shell_icon("ciuki", SH_START_MARK), SH_START_MARK, DU_ICON_NORMAL);
+    if (t->text_aa && !open) desk_paint_text(&p, font, x + SH_START_MARK + 6, b.y + 17 + shift, "CiukiOS", desk_mix(t->hilite, base, 150));
+    desk_paint_text(&p, font, x + SH_START_MARK + 6, b.y + 16 + shift, "CiukiOS", t->start_text);
+}
 void desk_shell_topbar(struct desktop *d, struct desk_box clip)
 {
     /* The compositor fills the bar and its edges in the theme; the shell
-     * adds the Ciuki mark, the name, the active window and the date. */
+     * adds the Ciuki button, the active window title or notice (no tagline:
+     * owner request 2026-10-12) and the date. */
     const struct desk_theme *t = desk_theme;
     struct desk_box bar = {0, 0, (int32_t)d->width, DESK_BAR}, b;
     if (!desk_intersect(bar, clip, &b)) return;
     bind(d);
     struct du_canvas c = canvas(d, b);
     struct desk_paint p = painter(&c);
-    du_icon_blit(&c, 8, 6, desk_shell_icon("ciuki", 20), 20, DU_ICON_NORMAL);
-    int x = 34 + desk_paint_text(&p, t->font_bold, 34, 20, "CiukiOS", t->topbar_text);
+    draw_start(d, &c);
+    struct desk_box start = desk_start_button(d);
+    int x = start.x + start.w;
     const char *what = d->notice[0] ? d->notice : NULL;
     char line[96];
     if (!what && d->focus >= 0 && d->clients[d->focus].window) { snprintf(line, sizeof(line), "%s", d->clients[d->focus].title); what = line; }
@@ -979,9 +1031,9 @@ void desk_shell_topbar(struct desktop *d, struct desk_box clip)
     if (room > 0) {
         struct desk_paint tp = p;
         struct desk_box tb;
-        if (desk_intersect((struct desk_box){x + 14, 0, room, DESK_BAR}, b, &tb)) {
+        if (what && desk_intersect((struct desk_box){x + 14, 0, room, DESK_BAR}, b, &tb)) {
             tp.cx = tb.x; tp.cy = tb.y; tp.cw = tb.w; tp.ch = tb.h;
-            desk_paint_text(&tp, t->font_ui, x + 14, 20, what ? what : "A modern Retro OS",
+            desk_paint_text(&tp, t->font_ui, x + 14, 20, what,
                             d->notice[0] ? t->topbar_accent : desk_mix(t->topbar_text, t->topbar, 170));
         }
     }
@@ -1061,7 +1113,7 @@ int desk_internal_open(struct desktop *d, int kind)
     if (kind == DESK_INTERNAL_RUN) { d->sh.run_length = 0; d->sh.run_text[0] = 0; }
     if (kind == DESK_INTERNAL_SHUTDOWN) d->sh.shutdown_choice = 0;
     int32_t x = ((int32_t)d->width - c->frame.w) / 2, y = DESK_BAR + 20;
-    if (kind == DESK_INTERNAL_RUN) { x = 8; y = (int32_t)d->height - DESK_BAR - c->frame.h - 8; }
+    if (kind == DESK_INTERNAL_RUN) { x = 8; y = DESK_BAR + 8; }   /* under the Ciuki button and its menu */
     else if (kind != DESK_INTERNAL_ABOUT) y = ((int32_t)d->height - c->frame.h) / 2 - 20;
     desk_move(d, i, x, y);
     if (d->sh.levels) desk_menu_close(d);
@@ -1178,7 +1230,7 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         }
         int32_t tx = x + 132, right = page.x + page.w - tx - 8;
         du_text_font(c, t->font_large, tx, y + 2, "CiukiOS", t->select);
-        du_text(c, tx, y + 30, "A modern Retro OS", SH_INK);
+        du_text(c, tx, y + 30, "Classic computing, one woof at a time.", SH_INK);
         du_text_font(c, t->font_bold, tx, y + 30 + step, "Dedicated to Ciuki", t->dark);
         snprintf(line, sizeof(line), "Version: %s", d->version[0] ? d->version : "unknown");
         du_text_fit(c, tx, y + 36 + 2 * step, right, line, SH_INK);
@@ -1311,7 +1363,7 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
 }
 
 /* ---- input ------------------------------------------------------------- */
-static struct desk_box start_button(const struct desktop *d) { return (struct desk_box){4, (int32_t)d->height - DESK_BAR + 3, 76, 26}; }
+static struct desk_box start_button(const struct desktop *d) { return desk_start_button(d); }
 static void volume_set_from(struct desktop *d, int32_t y)
 {
     struct desk_box t = volume_track(d);
@@ -1428,6 +1480,8 @@ void desk_shell_motion(struct desktop *d)
         }
         break;
     }
+    int over_start = desk_contains(start_button(d), x, y);
+    if (over_start != d->sh.start_hot) { d->sh.start_hot = over_start; damage(d, start_button(d)); }
     int over_clock = desk_contains(clock_box(d), x, y);
     if (!over_clock) { tooltip_hide(d); d->sh.hover_since = 0; }
     else if (!d->sh.hover_since) d->sh.hover_since = d->now_ns ? d->now_ns : 1;

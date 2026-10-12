@@ -17,6 +17,18 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"viewer", "Image Viewer", "image-x-generic", 1, "png|jpg|jpeg|jpe|bmp|gif|xrgb"},
 };
 #define DESK_CATALOG_COUNT (sizeof(desk_catalog) / sizeof(desk_catalog[0]))
+/* Pre-installed DOS games (owner decision 2026-10-12): the shareware
+ * releases on the bundled games disk (C:\GAMES\CIUKIGAM.IMG, built by
+ * scripts/build_games_disk.py), which every /bin/dosbox window boots.
+ * Programs > Games starts "/bin/dosbox --name=<title> <command>"; dosbox
+ * types the command at the DOS prompt (apps/dosbox/autorun.h). Commands
+ * use only characters autorun.h can type; title is the window title. */
+struct desk_game_entry { const char *label, *title, *command, *tango; };
+static const struct desk_game_entry desk_games[] = {
+    {"Wolfenstein 3D (shareware)", "Wolfenstein 3D", "\\WOLF3D\\WOLF3D.EXE", "applications-games"},
+    {"DOOM (shareware)", "DOOM", "\\DOOM\\DOOM.EXE -config CIUKI.CFG", "applications-games"},
+};
+#define DESK_GAME_COUNT (sizeof(desk_games) / sizeof(desk_games[0]))
 static inline const struct desk_catalog_entry *desk_catalog_find(const char *name)
 {
     for (unsigned i = 0; i < DESK_CATALOG_COUNT; i++) if (!strcmp(desk_catalog[i].name, name)) return &desk_catalog[i];

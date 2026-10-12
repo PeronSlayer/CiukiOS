@@ -107,11 +107,26 @@ class DesktopTests(unittest.TestCase):
                     else:
                         self.assertEqual(actual, pinned)
                 else:
-                    for y in range(20):
-                        for x in range(20):
-                            offset = ((454+y)*640+8+x)*4
-                            src = ((y*256//20)*256+x*256//20)*4
-                            self.assertEqual(pixels[offset:offset+4], portrait[src:src+4])
+                    # The Ciuki button at the left end of the top bar (desktop.h DESK_START_*) shows the
+                    # approved portrait area-averaged to 18 px (shell.c desk_shell_icon "ciuki"), centred
+                    # with "CiukiOS" in the title face and pressed in by 1 px while the menu is open
+                    # ("shell" mode). Every cell the portrait covers fully is the exact average of its
+                    # source block.
+                    size, shift = 18, 1 if mode == "shell" else 0
+                    x0, y0 = 4 + (96 - size - 6 - 53) // 2 + shift, 4 + (24 - size) // 2 + shift
+                    full = 0
+                    for y in range(size):
+                        for x in range(size):
+                            block = [portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
+                                     for yy in range(y*256//size, (y+1)*256//size) for xx in range(x*256//size, (x+1)*256//size)]
+                            ink = [b for b in block if b != bytes((0x64, 0x55, 0x37))]
+                            if len(ink) != len(block):
+                                continue
+                            full += 1
+                            expected = bytes(sum(b[k] for b in ink) // len(ink) for k in range(3))
+                            offset = ((y0+y)*640+x0+x)*4
+                            self.assertEqual(pixels[offset:offset+3], expected, (mode, x, y))
+                    self.assertGreater(full, 100)
 
     def test_look_reference_frames(self):
         """ui-look: every theme renders the reference desktop and dialogs frames, and the themes differ."""
@@ -173,6 +188,19 @@ class DesktopTests(unittest.TestCase):
                             "-I", str(ROOT / "src/kernel/include"), *(str(p) for p in sources), "-o", str(binary)],
                            check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
+
+    def test_dosbox_autorun(self):
+        """/bin/dosbox COMMAND (Programs > Games): the typed key events (apps/dosbox/autorun.h)."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="dosbox-autorun-", dir=parent) as temp:
+            binary = Path(temp) / "autorun-test"
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+                            "-I", str(ROOT / "src/kernel/include"), str(ROOT / "tests/host/desktop/dosbox_autorun_test.c"),
+                            "-o", str(binary)], check=True)
+            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True,
+                                    env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
+            self.assertIn("PASS dosbox autorun", result.stdout)
 
     def test_tango_icon_provenance(self):
         c = load("shell_icon_test", ROOT / "apps/desktop/convert_icons.py")
@@ -237,15 +265,19 @@ class DesktopTests(unittest.TestCase):
                                         "/bin/ciuknote", "/bin/control", "/bin/calc", "/bin/charmap", "/bin/clock", "/bin/help", "/bin/mixer", "/bin/viewer",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/icons/tango.cis",
-                                        "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT"})
+                                        "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
+                                        "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png"})
         self.assertTrue({"/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 19)
+        self.assertEqual(len(records), 22)
         for r in records:
             if r["path"] == "/system/licenses/stb_image.txt":
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
+            elif r["path"].startswith("/system/wallpapers/"):
+                # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
+                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())
             else:
                 self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
         # Microsoft's ME wallpapers (third_party/win_bg, local only) never enter the image.
@@ -265,7 +297,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp)
             volume = Path(temp) / "fixture.fat"
             with volume.open("wb") as f:
-                f.truncate(16*1024*1024)   # desktop programs plus the accessories
+                f.truncate(32*1024*1024)   # desktop programs, the accessories and the three Ciuki wallpaper scenes (8.4 MiB)
             subprocess.run(["mkfs.fat", str(volume)], check=True, env=env, stdout=subprocess.DEVNULL)
             image.populate_payloads(volume, sources, directories)
             with patch.object(image, "PART_LBA", 0):

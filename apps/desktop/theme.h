@@ -41,8 +41,40 @@ int desk_paint_text_n(struct desk_paint *, int font, int x, int baseline, const 
 /* Title-bar and control ornaments drawn in the current theme. */
 void desk_paint_pinstripes(struct desk_paint *, int x, int y, int w, int h, uint32_t light, uint32_t dark);
 void desk_paint_raised(struct desk_paint *, int x, int y, int w, int h, int pressed, int hot);
-void desk_paint_title_button(struct desk_paint *, int x, int y, int size, int kind, int active, int pressed, int disabled);
-enum { DESK_GLYPH_CLOSE, DESK_GLYPH_MINIMIZE, DESK_GLYPH_ZOOM, DESK_GLYPH_COLLAPSE };
+/* Rounded rectangle (radius r, anti-aliased corners): vertical gradient face
+ * and a 1 px outline; outline 0 alpha draws none (alpha 0..255). */
+void desk_paint_round_rect(struct desk_paint *, int x, int y, int w, int h, int r,
+                           uint32_t top, uint32_t bottom, uint32_t outline, unsigned outline_alpha);
+/* A 16x16 (or size x size) ARGB icon, alpha in the top byte, blended at (x, y). */
+void desk_paint_icon(struct desk_paint *, int x, int y, const uint32_t *argb, int size);
+enum { DESK_GLYPH_CLOSE, DESK_GLYPH_MINIMIZE, DESK_GLYPH_ZOOM, DESK_GLYPH_COLLAPSE, DESK_GLYPH_EXPAND };
+/* One title-bar button in the current theme at its hit box (x, y, w, h):
+ * the theme's square (or Classic caption button) centred in that box. */
+void desk_paint_title_button(struct desk_paint *, int x, int y, int w, int h, int kind, int active, int hot, int pressed);
+
+/* ---- window frames ----
+ * One painter for every frame: desktop windows (applications, the built-in
+ * About, Run, Shut Down and message windows, the DOS window) and libdeskui's
+ * modal dialogs. Frame geometry and title-button hit boxes are the same in
+ * every theme; only colours and ornaments change. */
+#define DESK_FRAME_BORDER 3
+#define DESK_FRAME_TITLE 24
+#define DESK_FRAME_BUTTON 18                          /* square hit box of a title button */
+enum { DESK_TB_CLOSE = 1, DESK_TB_MINIMIZE = 2, DESK_TB_COLLAPSE = 4 };
+struct desk_frame_style {
+    const char *title;
+    const uint32_t *icon;         /* 16x16 ARGB window icon (gradient captions), or NULL */
+    int active, alert, collapsed; /* alert: not responding */
+    unsigned buttons;             /* DESK_TB_* drawn (each only when the frame is wide enough) */
+    unsigned hot, pressed;        /* the DESK_TB_* button under the pointer / held down, or 0 */
+};
+/* Hit box (x, y, w, h) of title button `button` (DESK_TB_*) of a frame at
+ * (x, y) of width w; w and h are 0 when the frame is too narrow for it. */
+void desk_title_button_box(int x, int y, int w, unsigned button, int box[4]);
+/* Paints the whole frame: face, title bar, buttons, content well and the
+ * 1 px outline with the theme's corners. The caller draws the content at
+ * (x + DESK_FRAME_BORDER, y + DESK_FRAME_TITLE) and the drop shadow. */
+void desk_paint_frame(struct desk_paint *, int x, int y, int w, int h, const struct desk_frame_style *);
 
 /* ---- themes ---- */
 enum { DESK_TITLE_FLAT, DESK_TITLE_GRADIENT, DESK_TITLE_PINSTRIPE };

@@ -160,8 +160,11 @@ static uint64_t pos[2];
 struct storage *storage_get(void) { return &store; }
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive) { (void)vfs; (void)table; (void)drive; return 0; }
 void vfs_table_destroy(struct vfs_table *table) { (void)table; }
+/* The image's real size: a cut base (the bundled games disk, owner decision
+ * 2026-10-12) must be read through dosvm_disk.c's zero fill, never past its end. */
+static uint64_t disk_bytes;
 int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
-{ (void)table; (void)path; memset(entry, 0, sizeof(*entry)); entry->size = DOSVM_SECTORS * 512u; return 0; }
+{ (void)table; (void)path; memset(entry, 0, sizeof(*entry)); entry->size = (uint32_t)disk_bytes; return 0; }
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     (void)table; (void)access; (void)share; (void)attr;
@@ -179,6 +182,7 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
 {
     (void)table;
     FILE *f = handle ? cow : disk_image;
+    CHECK(handle || pos[0] + bytes <= disk_bytes);
     CHECK(fseek(f, (long)pos[handle], SEEK_SET) == 0);
     size_t n = fread(data, 1, bytes, f);
     if (n < bytes) memset((uint8_t *)data + n, 0, bytes - n);
@@ -547,10 +551,11 @@ static void stats(const char *name)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: %s DOSBOOT.IMG [COMMAND NAME]...\n", argv[0]); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: %s DOSBOOT.IMG|CIUKIGAM.IMG [COMMAND NAME]...\n", argv[0]); return 2; }
     setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     disk_image = fopen(argv[1], "rb"); CHECK(disk_image);
+    CHECK(fseek(disk_image, 0, SEEK_END) == 0); disk_bytes = (uint64_t)ftell(disk_image);
     gcpu_init(&guest_ops);
     struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = true};
     CHECK(dosvm_create(&config, &gv) == 0);

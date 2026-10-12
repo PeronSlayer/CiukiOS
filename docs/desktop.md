@@ -184,20 +184,24 @@ The non-shell compositor path (crash-isolation gate, `plain` digest) is
 unchanged; compositor.c references the shell through weak symbols so the demo
 and the libdeskui programs, which reuse compositor.c, link without it.
 
-- **Start menu** ("Ciuki" button, the approved portrait): Programs (CiukNote,
-  Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then a
-  Developer submenu with Hello, libc_smoke and any unknown `/bin` program),
+- **Start menu** (the Ciuki button at the left end of the top bar: the
+  approved portrait and "CiukiOS" on a rounded gradient face, pressed in while
+  the menu is open; the menu drops below the bar, submenus open to the
+  right): Programs (CiukNote,
+  Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
+  Accessories and Games submenus, then a Developer submenu with Hello,
+  libc_smoke and any unknown `/bin` program),
   Documents (recent files, My Documents, Clear Recent Documents), Settings
   (Control Panel and its pages, Task Manager), Help (Keyboard Shortcuts, About
   CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
   keyboard works (arrows, Enter, Esc). A vertical banner shows the portrait
   and "CiukiOS". Menus are 30 px (top) and 22 px rows.
-- **Taskbar:** start button, task buttons (icon, title, pressed state for the
-  active window; right click: Restore, Minimize, Close), tray with a volume
-  icon and the clock (24/12 h, optional seconds; the date as a tooltip after
-  0.6 s). The task button geometry (x 84, at most 160 px each) is unchanged
-  for the f2 scripts. The top bar keeps the identity colours and shows the
-  focused window's title (or a notice) and the date.
+- **Taskbar:** task buttons (icon, title, pressed state for the active
+  window; right click: Restore, Minimize, Close) from x 4, at most 160 px
+  each, and a tray with a volume icon and the clock (24/12 h, optional
+  seconds; the date as a tooltip after 0.6 s). The top bar keeps the identity
+  colours and shows the Ciuki button, the focused window's title (or a
+  notice) and the date.
 - **Volume:** the supervisor delegates the writable `/dev/mixer` handle to the
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
@@ -237,7 +241,7 @@ file before writing it and then asks the desktop to apply it.
 | --- | --- | --- |
 | `version` | 1 | 1 |
 | `theme` | `Platinum`, `Ciuki Blue`, `Classic 98` | `Platinum` |
-| `wallpaper` | `ciuki` (the approved portrait on the desktop colour, exactly where the f2 compositor draws it), `none`, `builtin:<id>` (`dawn`, `pinstripe`, `deepblue`, `twilight`, `linen`, `blueprint`), or an absolute path to a PNG, JPEG or BMP | `ciuki` |
+| `wallpaper` | `ciuki` (the approved portrait on the desktop colour, exactly where the f2 compositor draws it), `none`, `builtin:<id>` (`dawn`, `pinstripe`, `deepblue`, `twilight`, `linen`, `blueprint`), or an absolute path to a PNG, JPEG or BMP | `/system/wallpapers/Ciuk2.png` |
 | `wallpaper_mode` | `center`, `stretch`, `tile`, `fit` | `center` |
 | `desktop_color` | six hex digits RRGGBB | `375564` |
 | `clock_24h` | 0/1 | 1 |
@@ -259,8 +263,13 @@ installed as `/system/licenses/stb_image.txt`): PNG, baseline and progressive
 JPEG, and uncompressed BMP (4/8/16/24/32 bit; stb_image reads neither 1-bit nor RLE BMP). Images above 4096 x 4096,
 16 Mpixel or 24 MiB are refused. `centre`, `stretch` (area average down,
 bilinear up) and `fit` use the area between the bars; `tile` starts at the
-top-left corner. The image contains an empty `/system/wallpapers`: the
-Control Panel lists the PNG/JPEG/BMP files the owner copies there.
+top-left corner. The image installs the owner's three adaptive Ciuki scenes
+(`assets/wallpapers/ciuki`, 1448 x 1086 PNG, the 0.8-line artwork extended with
+scenery so that the centred 4:3 crop keeps the dog and the lettering) in
+`/system/wallpapers`; `Ciuk2.png` centred is the default (owner decision
+2026-10-12). The Control Panel lists them with any PNG/JPEG/BMP files the
+owner copies there; "Ciuki portrait" is the approved portrait on the desktop
+colour.
 **The Windows ME bitmaps of the 0.8 line (`third_party/win_bg`, local and
 git-ignored, Microsoft copyright) are never added to the repository or to the
 image;** the desktop only shows them if the owner copies them into
@@ -500,11 +509,10 @@ surface bytes (little-endian words), which contains no clock, so the host reprod
 
 **QEMU case `ciuknote-qemu-t23`** (`tests/suites/f2-desktop.json`; the selector and
 predicates of `files-qemu-t23` with `note-*` records and three checkpoints): F10 down/up;
-the cursor is clamped to the bottom-left corner (two (-381, +381) moves); click the
-Ciuki button; move up to row 0 of the menu and click `ciuknote` (rows are 28 px and
-anchored to the bar: from the button, dy = -1 - 28 * (n + 2 - k) for n programs sorted
-by strcmp and the 0-based row k; `/bin` lists eight programs (ciuknote, demo, dosbox,
-files, hello, libc_smoke, lua, tasks), so `ciuknote` is 281 px up); wait 3.6 s; type `Hello
+the cursor is clamped to the top-left corner (two (-381, -381) moves); click the
+Ciuki button in the top bar at (40, 16), Programs at (40, 50) and the `ciuknote` row of
+the Programs submenu (`tests/host/desktop/shell_menu.py` models the geometry and
+regenerates the scripted cases); wait 3.6 s; type `Hello
 CiukNote`, Enter, `Ciuki says woof.`, Enter, F5; Ctrl+S, type `/system/tests/note.txt`,
 Enter (checkpoint 2); Ctrl+N, Ctrl+O, type `note.txt`, Enter (checkpoint 3); File > Exit
 by its mnemonics, Alt+F then X (the clean document closes and CiukNote exits 0; neither
@@ -638,6 +646,20 @@ passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/bin` menu
 program at shell start through the menu-click path; the `f3:vm-window` probe
 uses it. Menu click offsets for the scripted cases follow the formula in
 docs/design/f2-acceptance.md, section F2-33. Details: docs/design/f3-acceptance.md, section f3-02.
+
+## Games (owner decision 2026-10-12)
+
+Programs > Games (present with `/bin/dosbox`) lists the pre-installed
+shareware games of `apps/desktop/catalog.h` (`desk_games`): "Wolfenstein 3D
+(shareware)" and "DOOM (shareware)", Tango `applications-games`. Each starts
+`/bin/dosbox --name=<game> <command>`; dosbox types the command at the DOS
+prompt of its window (`apps/dosbox/autorun.h`: `\DIR\PROGRAM` becomes
+`CD \DIR` and `PROGRAM`) once DOS is ready and the window has the focus. The
+window VM boots the bundled games disk `C:\GAMES\CIUKIGAM.IMG`
+(docs/build-and-run.md, "Pre-installed shareware games"). The Games row
+follows the program rows in the top-aligned Programs submenu, so the
+scripted cases' rows do not move (`tests/host/desktop/shell_menu.py` models
+it; `--regenerate` leaves `f2-desktop.json` and `zz-ui.json` unchanged).
 
 ## f2-30 decisions (2026-10-11)
 
@@ -793,7 +815,7 @@ and from the application's MIT code. F2 adds no replacement system icon family.
 
 The compositor centres the converted portrait against a solid blue-grey
 background. Its quiet dark top bar displays `CiukiOS`, the exact English
-tagline `A modern Retro OS`, and MONOTONIC uptime as HH:MM:SS (hours modulo 100).
+tagline `Classic computing, one woof at a time.`, and MONOTONIC uptime as HH:MM:SS (hours modulo 100).
 Window frames use a cream close button, a dark focused title and a muted
 unfocused title. `Not responding` is the five-second heartbeat warning.
 Original 5x7 bitmap glyphs render English UI and printable ASCII titles; the

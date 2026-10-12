@@ -162,7 +162,7 @@ static void run_worker(struct dosvm *v)
 
 /* File-backed fake VFS transport. Production overlay indexing remains real. */
 static struct storage store = {.ready=true};
-static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open; uint64_t pos[2]; char path[80]; } files[DOSVM_LIMIT];
+static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open; uint64_t pos[2], base_bytes; char path[80]; } files[DOSVM_LIMIT];
 static unsigned handles, tables, scratch, disk_reads, disk_writes, commits, deletes;
 static unsigned io_calls, io_fail_at;
 static bool short_read, short_write, fail_delete, fail_commit, fail_close, bad_signature;
@@ -181,11 +181,15 @@ int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive)
 void vfs_table_destroy(struct vfs_table *table)
 { unsigned i=file_slot(table); CHECK(!files[i].cow && !files[i].base_open && !files[i].cow_open); files[i].table=0; tables--; }
 /* f3-06: the canonical payload or a further workload base image. The fake
- * workload disk is drive D: and exists only while workload_disk is set. */
+ * workload disk is drive D: and exists only while workload_disk is set; the
+ * bundled games disk (owner decision 2026-10-12) is C:\\GAMES\\CIUKIGAM.IMG,
+ * present while bundled_disk is set, bundled_bytes long (cut images). */
 static char last_base[32];
-static bool workload_disk;
-static unsigned workload_scans;
-static bool base_path(const char *path) { return !strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG") || !strcmp(path,"D:\\CIUKIGAM.IMG"); }
+static bool workload_disk, bundled_disk, bundled_directory;
+static uint32_t bundled_bytes = DOSVM_SECTORS * 512u;
+static unsigned workload_scans, bundled_scans;
+static bool base_path(const char *path) { return !strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG") || !strcmp(path,"D:\\CIUKIGAM.IMG") || !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG"); }
+static uint64_t base_bytes(const char *path) { return !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") ? bundled_bytes : DOSVM_SECTORS * 512u; }
 int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 {
     (void)file_slot(table);
@@ -194,13 +198,16 @@ int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
         if (path[0] == 'D') workload_scans++;
         if (!workload_disk || path[0] != 'D') return -ENOENT;
     }
+    if (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG")) { bundled_scans++; if (!bundled_disk) return -ENOENT; }
     CHECK(base_path(path)); snprintf(last_base,sizeof(last_base),"%s",path); if (io_fails()) return -V86_EIO;
-    memset(entry,0,sizeof(*entry)); entry->size=DOSVM_SECTORS*512u; return 0;
+    memset(entry,0,sizeof(*entry)); entry->size=(uint32_t)base_bytes(path);
+    if (bundled_directory && !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG")) entry->attr=0x10;
+    return 0;
 }
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     unsigned i=file_slot(table); CHECK(attr==0); if (io_fails()) return -V86_EIO;
-    if (base_path(path)) { CHECK(access==VFS_READ && share==VFS_DENY_WRITE); files[i].base_open=true; handles++; return 0; }
+    if (base_path(path)) { CHECK(access==VFS_READ && share==VFS_DENY_WRITE); files[i].base_open=true; files[i].base_bytes=base_bytes(path); handles++; return 0; }
     CHECK(access==(VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE) && share==VFS_DENY_ALL && strstr(path,".COW"));
     snprintf(files[i].path,sizeof(files[i].path),"build/host/dosvm-cow-XXXXXX");
     int fd=mkstemp(files[i].path); CHECK(fd>=0); files[i].cow=fdopen(fd,"w+b"); CHECK(files[i].cow);
@@ -216,7 +223,7 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
 {
     unsigned i=file_slot(table); disk_owned(table); CHECK(bytes==512); disk_reads++; if (io_fails()) return -V86_EIO;
     *done=short_read ? 511 : bytes;
-    if (!handle) { memset(data,(files[i].pos[0]/512)%251,bytes); if (!files[i].pos[0]) { ((uint8_t *)data)[0]=0xEE; ((uint8_t *)data)[510]=bad_signature ? 0 : 0x55; ((uint8_t *)data)[511]=0xAA; } }
+    if (!handle) { CHECK(files[i].pos[0]+bytes<=files[i].base_bytes); memset(data,(files[i].pos[0]/512)%251,bytes); if (!files[i].pos[0]) { ((uint8_t *)data)[0]=0xEE; ((uint8_t *)data)[510]=bad_signature ? 0 : 0x55; ((uint8_t *)data)[511]=0xAA; } }
     else { CHECK(fseek(files[i].cow,(long)files[i].pos[1],SEEK_SET)==0); CHECK(fread(data,1,*done,files[i].cow)==*done); }
     return 0;
 }

@@ -12,6 +12,12 @@
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
+/* A base image may stop before the geometry's end (owner decision
+ * 2026-10-12, the bundled shareware games disk): trailing all-zero sectors
+ * are cut by scripts/build_games_disk.py and read back as zeros. It must
+ * still hold the boot sector, loader area, both FATs and the root directory
+ * of the private FAT16 geometry (scripts/build_dos_image.py DATA_LBA). */
+#define DOSVM_BASE_MIN_SECTORS 361u
 #define DOSVM_PORTS 16u
 /* f3-02 presenter: fixed 640x480 XRGB window surface, integer scale only.
  * One presented frame per 33 host ticks. Input status 1 follows the guest's
@@ -54,6 +60,7 @@ struct dosvm {
     const char *probe;
     struct vfs_table disk_table;
     int base, overlay;
+    uint32_t base_sectors;   /* sectors the base image holds; zeros after them */
     char overlay_path[48];
     struct { uint32_t lba, offset; } sectors[DOSVM_OVERLAY_SECTORS];
     unsigned sector_count;
@@ -71,11 +78,12 @@ struct dosvm {
     uint64_t video_tick;
     uint32_t video_display, video_phase, owner_pid;
     uint32_t video_faults, video_frames;
-    /* f3-06: direct plane window (0 none, else plane + 1) and counters. While
-     * open, the window pages A0000h-AFFFFh map that model plane user-
-     * writable; dosvm_destroy restores the VM's frames (dosvm_vga.c). */
+    /* f3-06/07: direct window (0 none, 1..4 plane + 1, 5 linear). A0000h-
+     * AFFFFh maps a model plane or the VM's own linear backing user-writable;
+     * sync closes it before the VM's low-page restoration (dosvm_vga.c). */
     unsigned video_direct;
     uint32_t video_pm_faults, video_starts, video_maps, video_flushes, video_burst;
+    uint32_t video_linear_maps, video_linear_harvests;
     cvga_geometry video_geometry;
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
     uint8_t video_row[DOSVM_VIDEO_WIDTH];
@@ -109,6 +117,10 @@ int dosvm_vga_fault_pm(struct dosvm *, struct v86_frame *);
  * window, restoring the VM's own frames, if unmap). */
 void dosvm_vga_direct(struct dosvm *);
 void dosvm_vga_sync(struct dosvm *, bool unmap);
+/* Close only the linear window before a consumer uses/modifies the planes. */
+void dosvm_vga_model(struct dosvm *);
+/* Eligible protection fault: open the linear window and retry the CPU cycle. */
+bool dosvm_vga_retry(struct dosvm *, uint32_t address, uint32_t instruction, bool pm);
 /* Writes changed rows of the 640x480 frame through row(arg, y, pixels, bytes).
  * Returns 1 with *damage set when rows changed, 0 when nothing changed or the
  * frame period has not elapsed, or the negative row-writer error. */

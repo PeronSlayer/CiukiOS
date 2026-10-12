@@ -546,9 +546,10 @@ static int doom_probe(const char *name, bool sound)
         if (v) dosvm_audio_info(dosvm_key(v), &a);
         rec_emit(name, "DATA", "case=loop loop=%u dpmi_ms=%u launch_ms=%u run_ms=%u gametics=%u realtics=%u timed=%u status=%u rc=%u type=%u error=%d",
                  loop, (uint32_t)w.dpmi_ms, (uint32_t)w.flip_ms, (uint32_t)w.end_ms, gametics, realtics, timed, status, rc, type, e);
-        rec_emit(name, "DATA", "case=video loop=%u graphics=%u width=%u height=%u flips=%u faults=%u pm_faults=%u maps=%u flushes=%u mode=%u",
-                 loop, w.graphics, w.width, w.height, w.video.starts, w.video.faults, w.video.pm_faults,
-                 w.video.maps, w.video.flushes, w.video.mode);
+        rec_emit(name, "DATA", "case=video loop=%u graphics=%u width=%u height=%u flips=%u pm_faults=%u maps=%u mode=%u linear_maps=%u linear_harvests=%u",
+                 loop, w.graphics, w.width, w.height, w.video.starts, w.video.pm_faults,
+                 w.video.maps, w.video.mode, w.video.linear_maps, w.video.linear_harvests);
+        rec_emit(name, "DATA", "case=video_detail loop=%u faults=%u flushes=%u", loop, w.video.faults, w.video.flushes);
         rec_emit(name, "DATA", "case=dpmi loop=%u entries=%u terminations=%u exceptions=%u irq_pm=%u faults=%u stale=%u released=%u popf=%u",
                  loop, w.dpmi.stats.entries, w.dpmi.stats.terminations, w.dpmi.stats.exceptions, w.dpmi.stats.irqs_pm,
                  w.dpmi.stats.faults, w.dpmi.stats.stale, dpmi_released(&w.dpmi), w.dpmi.stats.if_restored);

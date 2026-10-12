@@ -170,6 +170,38 @@ static void event(unsigned type,int code,int value,int value2)
 { struct ciuki_input_event e={.type=type,.code=code,.value=value,.value2=value2}; desk_input(&d,&e); }
 static void pointer(int x,int y)
 { event(CIUKI_INPUT_MOTION,0,x-d.mouse_x,y-d.mouse_y); }
+static void test_resize_title_buttons(void)
+{
+    setup(800,600);desk_shell_enable(&d);
+    fake_channel(10);int i=desk_add_client(&d,10);assert(i>=0);
+    struct ciuki_message m;request(&m,DESK_HELLO,4);m.data[0]=2;m.data[2]=1;desk_receive(&d,i,&m);
+    fake_surface(11,320,240,0x112233);resize_create(&m,11);desk_receive(&d,i,&m);flush_all();
+    struct desk_client *c=&d.clients[i];struct desk_box original=c->frame;
+    struct desk_box zoom=desk_shade_box(c);
+    pointer(zoom.x+1,zoom.y+1);assert(d.title_hot==i*4+3);
+    event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(c->zoomed && d.drag==-1 && d.title_down==i*4+3 && !d.routed_buttons);
+    event(CIUKI_INPUT_BUTTON,1,0,0);assert(!d.title_down);
+    zoom=desk_shade_box(c);pointer(zoom.x+1,zoom.y+1);
+    event(CIUKI_INPUT_BUTTON,1,1,0);event(CIUKI_INPUT_BUTTON,1,0,0);
+    assert(!c->zoomed && !memcmp(&original,&c->frame,sizeof(original)));
+    pointer(c->frame.x+c->frame.w-8,c->frame.y+c->frame.h-8);
+    assert(!d.title_hot);event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(d.drag==i && d.resize_edges==(DESK_EDGE_RIGHT|DESK_EDGE_BOTTOM) && !d.title_down);
+    event(CIUKI_INPUT_BUTTON,1,0,0);
+    pointer(c->frame.x+60,c->frame.y+10);event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(d.drag==i && !d.resize_edges && !d.title_down);
+    pointer(d.mouse_x+16,d.mouse_y+12);event(CIUKI_INPUT_BUTTON,1,0,0);
+    assert(c->frame.x==original.x+16 && c->frame.y==original.y+12);
+    /* A short surface must not extend its corner grab region into Close. */
+    c->frame=desk_frame(320,1,20,52);
+    struct desk_box close=desk_close_box(c);pointer(close.x+close.w-1,close.y+close.h-1);
+    assert(!desk_resize_hit(c,d.mouse_x,d.mouse_y) && d.title_hot==i*4+1);
+    event(CIUKI_INPUT_BUTTON,1,1,0);
+    assert(c->closing && d.drag==-1 && d.title_down==i*4+1);
+    event(CIUKI_INPUT_BUTTON,1,0,0);assert(!d.title_down);cleanup();
+    puts("PASS merged title/resize input: zoom hover/press/release, corner capture, title drag, short-frame Close priority");
+}
 static void test_resize(void)
 {
     setup(800,600);desk_shell_enable(&d);
@@ -367,8 +399,11 @@ static void test_shell(void)
     assert(d.clients[b].frame.y+d.clients[b].frame.h==448);
     pointer(d.clients[b].frame.x+5,d.clients[b].frame.y+8); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.drag==b); event(CIUKI_INPUT_RESYNC,0,0,0); assert(d.drag<0);
-    desk_focus(&d,a); pointer(40,464); event(CIUKI_INPUT_BUTTON,1,1,0);
+    /* The Ciuki button at the left end of the top bar; its menu drops below the bar. */
+    desk_focus(&d,a); pointer(40,16); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.menu_open && d.focus<0);
+    { struct desk_box m=desk_menu_box(&d), s=desk_start_button(&d);
+      assert(s.x==DESK_START_X && s.y+s.h<=DESK_BAR && m.x==s.x && m.y==DESK_BAR && m.y+m.h<=448); }
     event(CIUKI_INPUT_KEY,1,1,0); assert(!d.menu_open && d.focus==a);
     event(CIUKI_INPUT_BUTTON,1,0,0);
     /* Negotiated v2, request survives backlog and deadline survives EOF. */
@@ -415,12 +450,12 @@ static void test_menu(void)
     assert(d.program_count==DESK_MENU_MAX && !strcmp(d.programs[0].name,"app00") && !strcmp(d.programs[15].name,"app15"));
     desk_shell_enable(&d);
     struct desk_box menu=desk_menu_box(&d);
-    /* The Start menu (shell.c) may cover the top bar on a 240-line screen; it ends on the taskbar. */
-    assert(menu.y>=0 && menu.y+menu.h==208 && menu.x+menu.w<=320);
+    /* The Start menu (shell.c) drops from the top bar; on a 240-line screen it moves up to end on the taskbar. */
+    assert(menu.y>=0 && menu.y+menu.h==208 && menu.x==DESK_START_X && menu.x+menu.w<=320);
     for (int i=0;i<DESK_CLIENTS;i++) {
         d.clients[i].window=1;
         struct desk_box task=desk_task_button(&d,i);
-        assert(task.x>=84 && task.x+task.w<=240 && task.w>0);
+        assert(task.x>=DESK_TASK_X && task.x+task.w<=320-SH_TRAY_W-8 && task.w>0);
     }
     for (int i=0;i<DESK_CLIENTS;i++) d.clients[i].window=0;
     cleanup();
@@ -428,6 +463,6 @@ static void test_menu(void)
 }
 int main(void)
 {
-    test_protocol(); test_resize_protocol(); test_damage(); test_resize(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu();
+    test_protocol(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

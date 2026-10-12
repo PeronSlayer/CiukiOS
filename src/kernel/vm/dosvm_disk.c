@@ -6,9 +6,20 @@
 #include "dosvm_internal.h"
 
 /* f3-06: base names a read-only image of the same private geometry (a
- * local workload disk built by scripts/test/dos_fixtures.py); the canonical
- * C: payload otherwise. Only the overlay below is ever opened writable. */
+ * local workload disk built by scripts/test/dos_fixtures.py, or the bundled
+ * shareware games disk); the canonical C: payload otherwise. Only the
+ * overlay below is ever opened writable. */
 #define DOSVM_DEFAULT_BASE "C:\\SYSTEM\\DOS\\DOSBOOT.IMG"
+/* Owner decision 2026-10-12: Wolfenstein 3-D and DOOM shareware are
+ * pre-installed. scripts/build_games_disk.py builds this image (the DOS
+ * system plus \WOLF3D and \DOOM, trailing zero sectors cut) and
+ * scripts/build_image.py installs it on the boot volume. */
+#define DOSVM_BUNDLED_BASE "C:\\GAMES\\CIUKIGAM.IMG"
+/* A full image, or one cut after its last used sector (zeros follow). */
+static bool base_size_valid(uint32_t size)
+{
+    return !(size % 512u) && size >= DOSVM_BASE_MIN_SECTORS * 512u && size <= DOSVM_SECTORS * 512u;
+}
 /* The lookup table (20596 bytes on i686) is larger than the kernel heap's
  * biggest class (2040 bytes, core/kheap.c), so a kmalloc'd table failed with
  * ENOMEM on every call: /bin/dosbox create was refused ("Not enough space",
@@ -17,7 +28,7 @@
  * the storage lock). */
 static struct vfs_table workload_table;
 static bool workload_busy;
-int dosvm_workload_base(char path[24])
+static int base_lookup(char path[24], bool bundled)
 {
     struct storage *s = storage_get();
     if (!s || !s->ready || s->stopped) return -V86_EIO;
@@ -31,10 +42,18 @@ int dosvm_workload_base(char path[24])
     int e = vfs_table_init(&s->vfs, t, 2);
     if (!e) {
         e = -ENOENT;
+        struct fat_entry entry;
+        /* The owner's local fixture disk first: exactly the full geometry
+         * (dos_fixtures.py never cuts it) on the first drive after C:. */
         for (unsigned d = 3; d < 26 && e == -ENOENT; d++) {
-            struct fat_entry entry;
             ksnprintf(path, 24, "%c:\\CIUKIGAM.IMG", 'A' + d);
             if (!vfs_stat(t, path, &entry) && entry.size == DOSVM_SECTORS * 512u && !(entry.attr & 0x10)) e = 0;
+        }
+        /* Then the bundled games disk; like a drive without the fixture, a
+         * missing or unusable C:\GAMES\CIUKIGAM.IMG is simply absent. */
+        if (e == -ENOENT && bundled) {
+            ksnprintf(path, 24, "%s", DOSVM_BUNDLED_BASE);
+            if (!vfs_stat(t, path, &entry) && base_size_valid(entry.size) && !(entry.attr & 0x10)) e = 0;
         }
         vfs_table_destroy(t);
     }
@@ -42,6 +61,8 @@ int dosvm_workload_base(char path[24])
     if (e) path[0] = 0;
     return e;
 }
+int dosvm_workload_base(char path[24]) { return base_lookup(path, false); }
+int dosvm_window_base(char path[24]) { return base_lookup(path, true); }
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
     struct storage *s = storage_get();
@@ -56,7 +77,8 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
     struct fat_entry entry;
     e = vfs_stat(&v->disk_table, base, &entry);
     if (e) return e;
-    if (entry.size != DOSVM_SECTORS * 512u) return -EINVAL;
+    if (!base_size_valid(entry.size)) return -EINVAL;
+    v->base_sectors = entry.size / 512u;
     v->base = vfs_open(&v->disk_table, base, VFS_READ, VFS_DENY_WRITE, 0);
     if (v->base < 0) return v->base;
     v->base_open = true;
@@ -101,6 +123,8 @@ static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
     for (unsigned i = 0; i < v->sector_count; i++)
         if (v->sectors[i].lba == lba)
             return sector_io(v, v->overlay, v->sectors[i].offset, sector, false);
+    /* Past the end of a cut base image: the free FAT16 area, all zeros. */
+    if (lba >= v->base_sectors) { memset(sector, 0, 512); return 0; }
     return sector_io(v, v->base, lba * 512u, sector, false);
 }
 
