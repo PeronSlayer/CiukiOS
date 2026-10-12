@@ -829,7 +829,7 @@ static void help(struct files_app *a)
 static void about(struct files_app *a)
 {
     du_message(a->ui, D_INFO, "About Files",
-               "CiukiOS Files\nA modern Retro OS\n---\nDedicated to Ciuki.\nTango 0.8.90 icons: Public Domain.\n"
+               "CiukiOS Files\nClassic computing, one woof at a time.\n---\nDedicated to Ciuki.\nTango 0.8.90 icons: Public Domain.\n"
                "Ciuki portrait: separate project asset.\nlibdeskui and Files: MIT licence.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
     if (a->ciuki) du_dialog_icon(a->ui, a->ciuki32);
 }

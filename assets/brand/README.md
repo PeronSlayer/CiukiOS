@@ -15,7 +15,7 @@ were rejected. Do not substitute, redraw or regenerate the approved portrait.
   records the prompts and distinguishes the unselected alternative.
 
 The dedication and the exact source requirement are also recorded in the root
-`AGENTS.md`. UI copy stays English and the tagline remains `A modern Retro OS`.
+`AGENTS.md`. UI copy stays English and the tagline is `Classic computing, one woof at a time.` (owner, 2026-10-12).
 
 ## Native icons derived from the approved image
 

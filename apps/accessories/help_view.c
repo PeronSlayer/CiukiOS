@@ -134,7 +134,7 @@ void help_event(struct du_ui *u, const struct du_event *e, void *user)
             }
         } else if (e->id == H_M_SELALL) { du_ta_select_all(&a->ta); du_focus(u, H_TEXT); }
         else if (e->id == H_M_ABOUT)
-            du_message(u, H_D_INFO, "About CiukiOS Help", "CiukiOS Help - A modern Retro OS\nTopics and a read-only text viewer.\nCode: MIT.",
+            du_message(u, H_D_INFO, "About CiukiOS Help", "CiukiOS Help - Classic computing, one woof at a time.\nTopics and a read-only text viewer.\nCode: MIT.",
                        DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         break;
     default: return;

@@ -330,7 +330,7 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     snprintf(line, sizeof(line), "Memory %llu MB, %llu MB available, %u processes", (unsigned long long)(a->host.mem_total_k / 1024),
              (unsigned long long)(a->host.mem_free_k / 1024), a->host.processes);
     add(a, DU_LABEL, C_SYS3, 140, 122, 336, 14, line);
-    add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "A modern Retro OS. About CiukiOS is in the Start menu, under Help.");
+    add(a, DU_LABEL, C_SYS4, 24, 160, 452, 14, "Classic computing, one woof at a time. About CiukiOS is in the Start menu, under Help.");
     cp_tick(a);
     sync(a);
     du_focus(u, C_TABS);

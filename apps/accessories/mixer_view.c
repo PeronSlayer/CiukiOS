@@ -124,7 +124,7 @@ void mixer_event(struct du_ui *u, const struct du_event *e, void *user)
         if (e->id == MX_MUTE) { a->mute = !a->mute; apply(a); }
         else if (e->id == MX_M_REFRESH) mixer_refresh(a);
         else if (e->id == MX_M_ABOUT)
-            du_message(u, 1, "About Volume Control", "CiukiOS Volume Control - A modern Retro OS\n"
+            du_message(u, 1, "About Volume Control", "CiukiOS Volume Control - Classic computing, one woof at a time.\n"
                        "Master volume of the F4 mixer (0-100, balance, mute).\nCode: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         u->focus = -1;
         break;

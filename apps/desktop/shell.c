@@ -1230,7 +1230,7 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         }
         int32_t tx = x + 132, right = page.x + page.w - tx - 8;
         du_text_font(c, t->font_large, tx, y + 2, "CiukiOS", t->select);
-        du_text(c, tx, y + 30, "A modern Retro OS", SH_INK);
+        du_text(c, tx, y + 30, "Classic computing, one woof at a time.", SH_INK);
         du_text_font(c, t->font_bold, tx, y + 30 + step, "Dedicated to Ciuki", t->dark);
         snprintf(line, sizeof(line), "Version: %s", d->version[0] ? d->version : "unknown");
         du_text_fit(c, tx, y + 36 + 2 * step, right, line, SH_INK);
