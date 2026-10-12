@@ -3,6 +3,8 @@
  * Every buffer is validated completely before any visible side effect.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/devices.h>
+#pragma weak devices_query
 #include <ciuki/files.h>
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
@@ -124,6 +126,9 @@ void syscall_dispatch(struct trap_frame *tf)
     case CIUKI_SYS_DOSVM:
         /* Weak like dosvm_trap: host harnesses link syscall.c without the VM. */
         r = dosvm_client_syscall ? dosvm_client_syscall(tf) : -ENOSYS;
+        break;
+    case CIUKI_SYS_DEVICES:
+        r = devices_query ? devices_query(tf->ebx, tf->ecx) : -ENOSYS;
         break;
     case CIUKI_SYS_POWER:
         /* Weak: host harnesses link syscall.c without core/power.c. */

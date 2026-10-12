@@ -1,0 +1,283 @@
+/* Read-only inventory. Sources and invariants: docs/design/device-manager.md.
+ * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kernel.h>
+#include <ciuki/cpu.h>
+#include <ciuki/devices.h>
+#include <ciuki/registry.h>
+#include <ciuki/init.h>
+#include <ciuki/ata.h>
+#include <ciuki/i8042.h>
+#include <ciuki/fbdev.h>
+#include <ciuki/ac97.h>
+#include <ciuki/process.h>
+#include <ciuki/uaddr.h>
+#ifndef CIUKI_BUILD_ID
+#define CIUKI_BUILD_ID "unknown"
+#endif
+
+/* Like proc_list: UP, non-preemptible kernel, no waits between fill and copy.
+ * Keeping these out of the 16 KiB task stack also avoids heap size limits. */
+static struct registry_inventory_copy inventory;
+static struct ciuki_devices_info query_buffer;
+
+static void string(char *out, unsigned size, const char *in)
+{
+    unsigned i = 0;
+    if (in) for (; i + 1 < size && in[i]; i++) out[i] = in[i];
+    out[i] = 0;
+}
+static bool equal(const char *a, const char *b)
+{ return a && b && !strncmp(a, b, strlen(b) + 1); }
+static struct ciuki_device_record *append(struct ciuki_devices_info *out, unsigned id,
+                                         unsigned class_id, unsigned bus, const char *name,
+                                         const char *driver, unsigned state, const char *reason)
+{
+    if (out->count == CIUKI_DEVICES_MAX) { out->flags |= CIUKI_DEVICES_TRUNCATED; return 0; }
+    struct ciuki_device_record *d = &out->devices[out->count++];
+    d->id = id; d->class_id = class_id; d->bus_type = bus; d->state = state;
+    string(d->name, sizeof(d->name), name); string(d->driver, sizeof(d->driver), driver);
+    string(d->reason, sizeof(d->reason), reason);
+    return d;
+}
+static void resource(struct ciuki_device_record *d, unsigned type, uint64_t start, uint64_t end, unsigned flags)
+{
+    if (!d) return;
+    for (unsigned k = 0; k < d->resource_count; k++) {
+        struct ciuki_device_resource *r = &d->resources[k];
+        if (r->type == type && r->start == start) {
+            if (!(flags & CIUKI_RESOURCE_UNKNOWN_SIZE)) *r = (struct ciuki_device_resource){type, flags, start, end};
+            return;
+        }
+    }
+    if (d->resource_count == CIUKI_DEVICE_RESOURCES) { d->flags |= CIUKI_DEVICES_TRUNCATED; return; }
+    d->resources[d->resource_count++] = (struct ciuki_device_resource){type, flags, start, end};
+}
+static void owner_resources(struct ciuki_device_record *d, const char *owner)
+{
+    if (!d) return;
+    for (unsigned k = 0; k < inventory.resource_count; k++) {
+        const struct resource *r = &inventory.resources[k];
+        if (r->state == RS_RELEASED || !equal(r->owner, owner)) continue;
+        resource(d, r->type, r->start, r->end, 0);
+        if (r->generation > d->generation) d->generation = r->generation;
+        if (r->state == RS_QUARANTINED) {
+            d->state = CIUKI_DEVICE_QUARANTINED;
+            string(d->reason, sizeof(d->reason), "Resource lease quarantined; retained until reboot.");
+        }
+    }
+}
+static void activation(struct ciuki_device_record *d, const char *name)
+{
+    if (!d) return;
+    for (unsigned i = 0; i < drivers_activation_count(); i++) {
+        const struct activation_entry *e = drivers_activation_get(i);
+        if (e && e->kind == ACTIVATION_DEVICE && equal(e->device, name)) {
+            d->activation_seq = e->seq;
+            string(d->reason, sizeof(d->reason), e->reason);
+            break;
+        }
+    }
+}
+static unsigned pci_class(const struct pci_func *p)
+{
+    if (p->class_code == 3) return CIUKI_DEVICE_DISPLAY;
+    if (p->class_code == 2) return CIUKI_DEVICE_NETWORK;
+    if (p->class_code == 4) return CIUKI_DEVICE_SOUND;
+    if (p->class_code == 7) return CIUKI_DEVICE_PORT;
+    return CIUKI_DEVICE_SYSTEM;
+}
+static void cpu_info(struct ciuki_devices_info *out)
+{
+    uint32_t a, b, c, d;
+    cpuid(0, &a, &b, &c, &d);
+    uint32_t max = a;
+    memcpy(out->cpu_vendor, &b, 4); memcpy(out->cpu_vendor + 4, &d, 4); memcpy(out->cpu_vendor + 8, &c, 4);
+    if (max >= 1) {
+        cpuid(1, &a, &b, &c, &d);
+        unsigned family = (a >> 8) & 15;
+        out->cpu_family = family == 15 ? family + ((a >> 20) & 255) : family;
+        out->cpu_model = (a >> 4) & 15;
+        if (family == 6 || family == 15) out->cpu_model |= ((a >> 16) & 15) << 4;
+        out->cpu_stepping = a & 15;
+    }
+    cpuid(0x80000000u, &a, &b, &c, &d);
+    if (a >= 0x80000004u) for (unsigned k = 0; k < 3; k++) {
+        cpuid(0x80000002u + k, &a, &b, &c, &d);
+        memcpy(out->cpu_brand + k * 16, &a, 4); memcpy(out->cpu_brand + k * 16 + 4, &b, 4);
+        memcpy(out->cpu_brand + k * 16 + 8, &c, 4); memcpy(out->cpu_brand + k * 16 + 12, &d, 4);
+    }
+    /* Vendor-defined bytes must not inject UI control characters. */
+    for (unsigned k = 0; k < 48 && out->cpu_brand[k]; k++)
+        if ((unsigned char)out->cpu_brand[k] < 32 || (unsigned char)out->cpu_brand[k] > 126) out->cpu_brand[k] = '?';
+}
+static const char *driver_for(const char *owner)
+{
+    if (equal(owner, "timer") || equal(owner, "timer/speaker")) return "pit";
+    if (equal(owner, "rtc")) return "rtc";
+    if (equal(owner, "pic") || equal(owner, "pic-cascade")) return "pic";
+    if (equal(owner, "pci")) return "pci-inventory";
+    if (equal(owner, "uart")) return "uart";
+    if (equal(owner, "dma") || equal(owner, "dma-page") || equal(owner, "dma-cascade")) return "isa-dma-guard";
+    return "loader";
+}
+static const char *legacy_name(const char *owner)
+{
+    if (equal(owner, "timer")) return "8254 programmable interval timer";
+    if (equal(owner, "rtc")) return "Real-time clock (CMOS calendar)";
+    if (equal(owner, "pic")) return "8259 interrupt controllers";
+    if (equal(owner, "uart")) return "16550 serial port";
+    return owner;
+}
+static void drivers(struct ciuki_devices_info *out)
+{
+    static const struct { const char *name, *policy; } builtins[] = {
+        {"loader", "Firmware reservations retained"}, {"pic", "Core IRQ dispatcher"},
+        {"pit", "Core scheduler timer"}, {"rtc", "Native CMOS calendar; IRQ8 remains masked"},
+        {"uart", "Serial diagnostics; boot policy"}, {"isa-dma-guard", "Inherited ISA DMA masked"},
+        {"pci-inventory", "Boot configuration only; no BAR sizing"},
+        {"fbdev", "Loader-selected VBE framebuffer"},
+        {"i8042", "Native PS/2 only when selected at boot"},
+        {"firmware-input", "Sole firmware-first PS/2 controller lease"},
+        {"ata-pio", "Legacy ATA/ATAPI; disabled in safe mode"},
+        {"ac97", "Qualified Intel ICH AC97 only"},
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(builtins); i++) {
+        struct ciuki_driver_record *r = &out->drivers[out->driver_count++];
+        string(r->name, sizeof(r->name), builtins[i].name);
+        string(r->build, sizeof(r->build), CIUKI_BUILD_ID);
+        string(r->policy, sizeof(r->policy), builtins[i].policy);
+        r->state = CIUKI_DEVICE_ABSENT;
+        for (unsigned k = 0; k < out->count; k++) {
+            const struct ciuki_device_record *d = &out->devices[k];
+            if (!equal(d->driver, r->name) || d->state == CIUKI_DEVICE_ABSENT) continue;
+            r->bound_devices++;
+            if (r->state != CIUKI_DEVICE_QUARANTINED) r->state = d->state;
+        }
+    }
+}
+void devices_snapshot(struct ciuki_devices_info *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->version = CIUKI_DEVICES_VERSION; out->size = sizeof(*out);
+    registry_inventory(&inventory);
+    out->generation = inventory.generation;
+    if (inventory.truncated) out->flags |= CIUKI_DEVICES_TRUNCATED;
+    out->boot_flags = g_boot.flags; out->input_policy = g_boot.input_policy;
+    string(out->boot_options, sizeof(out->boot_options), g_boot.options);
+    uint32_t f = irq_save(); out->uptime_ms = g_ticks; irq_restore(f);
+    cpu_info(out);
+    struct drivers_state state; drivers_snapshot(&state);
+    struct i8042_stats input; i8042_snapshot(&input);
+    for (unsigned k = 0; k < inventory.resource_count; k++) {
+        const struct resource *r = &inventory.resources[k];
+        if (r->state == RS_RELEASED) continue;
+        struct ciuki_device_lease *l = &out->leases[out->lease_count++];
+        string(l->owner, sizeof(l->owner), r->owner);
+        l->type = r->type; l->state = r->state; l->generation = r->generation;
+        l->start = r->start; l->end = r->end;
+    }
+    for (unsigned k = 0; k < inventory.function_count; k++) {
+        const struct pci_func *p = &inventory.functions[k];
+        unsigned id = 0x10000u | ((unsigned)p->bus << 8) | ((unsigned)p->dev << 3) | p->fn;
+        bool bound = ac97.pci.vendor && p->bus == ac97.pci.bus && p->dev == ac97.pci.dev && p->fn == ac97.pci.fn &&
+                     p->vendor == ac97.pci.vendor && p->device == ac97.pci.device && (ac97.touched || ac97.ready || ac97.quarantine);
+        struct ciuki_device_record *d = append(out, id, pci_class(p), CIUKI_BUS_PCI,
+            "PCI function", bound ? "ac97" : "", bound ? (audio.quarantined ? CIUKI_DEVICE_QUARANTINED :
+            audio.ready ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT) : CIUKI_DEVICE_FIRMWARE_FIRST,
+            bound ? audio.reason : "No native driver bound; firmware configuration retained.");
+        if (!d) continue;
+        d->bus = p->bus; d->slot = p->dev; d->function = p->fn;
+        d->vendor = p->vendor; d->device = p->device; d->sub_vendor = p->sub_vendor; d->sub_device = p->sub_device;
+        d->pci_class = p->class_code; d->subclass = p->subclass; d->prog_if = p->prog_if; d->revision = p->revision;
+        for (unsigned bar = 0; bar < 6; bar++) {
+            uint32_t v = p->bar[bar];
+            if (!v || v == UINT32_MAX) continue;
+            unsigned type = (v & 1) ? RES_PORT : RES_MMIO;
+            uint64_t base = v & ((v & 1) ? ~3u : ~15u);
+            if (!(v & 1) && (v & 6) == 4) {
+                if (bar == 5) continue;
+                base |= (uint64_t)p->bar[++bar] << 32;
+            }
+            if (base) resource(d, type, base, base, CIUKI_RESOURCE_UNKNOWN_SIZE);
+        }
+        if (p->irq_pin && p->irq_line < 16) resource(d, RES_IRQ, p->irq_line, p->irq_line + 1, 0);
+        if (bound) { owner_resources(d, "ac97"); d->generation = ac97.generation ? ac97.generation : d->generation; }
+    }
+    /* Registry owners become legacy logical devices. Special owners below
+     * are represented once by their actual backend rather than inferred PCI bindings. */
+    for (unsigned k = 0; k < inventory.resource_count; k++) {
+        const struct resource *r = &inventory.resources[k];
+        if (r->state == RS_RELEASED || equal(r->owner, "input") || equal(r->owner, "i8042") ||
+            equal(r->owner, "firmware-input") || equal(r->owner, "boot-framebuffer") || equal(r->owner, "fbdev") ||
+            equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma")) continue;
+        bool seen = false;
+        for (unsigned j = 0; j < k; j++) if (inventory.resources[j].state != RS_RELEASED && equal(inventory.resources[j].owner, r->owner)) seen = true;
+        if (seen) continue;
+        const char *driver = driver_for(r->owner);
+        bool core = equal(driver, "pit") || equal(driver, "pic") || equal(driver, "rtc") || equal(driver, "isa-dma-guard");
+        bool uart = equal(driver, "uart") && (g_boot.flags & CBI_F_SERIAL_LOG);
+        struct ciuki_device_record *d = append(out, 0x20000u + k, equal(r->owner, "uart") ? CIUKI_DEVICE_PORT : CIUKI_DEVICE_SYSTEM,
+            CIUKI_BUS_LEGACY, legacy_name(r->owner), driver,
+            core || uart || r->state == RS_ACTIVE ? CIUKI_DEVICE_READY :
+            r->state == RS_FIRMWARE ? CIUKI_DEVICE_FIRMWARE_FIRST : CIUKI_DEVICE_ABSENT,
+            core || uart ? "Core driver initialized before process startup." :
+            r->state == RS_FIRMWARE ? "Boot reservation retained." : "Lease retained; no active driver recorded.");
+        owner_resources(d, r->owner);
+    }
+    bool uart_found = false;
+    for (unsigned k = 0; k < inventory.resource_count; k++)
+        if (inventory.resources[k].state != RS_RELEASED && equal(inventory.resources[k].owner, "uart")) uart_found = true;
+    if (!uart_found) append(out, 0x200ffu, CIUKI_DEVICE_PORT, CIUKI_BUS_LEGACY, "Serial port", "uart",
+                            CIUKI_DEVICE_ABSENT, "No UART reservation from the loader.");
+    struct ciuki_device_record *d = append(out, 0x30000, CIUKI_DEVICE_DISPLAY, CIUKI_BUS_LOADER,
+        "VBE framebuffer", "fbdev", fbdev_get()->present ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT, "No framebuffer.");
+    activation(d, "framebuffer"); owner_resources(d, "fbdev"); owner_resources(d, "boot-framebuffer");
+    unsigned input_state = input.quarantined ? CIUKI_DEVICE_QUARANTINED :
+                           !state.initialized || state.input_error || (!state.firmware && !input.active) ? CIUKI_DEVICE_ABSENT :
+                           state.firmware ? CIUKI_DEVICE_FIRMWARE_FIRST : CIUKI_DEVICE_READY;
+    for (unsigned k = 0; k < 3; k++) {
+        d = append(out, 0x30001 + k, k == 0 ? CIUKI_DEVICE_SYSTEM : k == 1 ? CIUKI_DEVICE_KEYBOARD : CIUKI_DEVICE_MOUSE,
+            CIUKI_BUS_LEGACY, k == 0 ? "8042 PS/2 controller" : k == 1 ? "PS/2 keyboard" : "PS/2 mouse",
+            state.firmware ? "firmware-input" : "i8042", input_state, "Input backend.");
+        activation(d, "input"); owner_resources(d, "i8042"); owner_resources(d, "firmware-input"); owner_resources(d, "input");
+    }
+    for (unsigned c = 0; c < ATA_CHANNELS; c++) {
+        const char *owner = c ? "ata1" : "ata0";
+        bool present = false;
+        for (unsigned unit = 0; unit < ATA_DEVICES; unit++) if (ata_inventory_get(c, unit)) present = true;
+        d = append(out, 0x40000 + c, CIUKI_DEVICE_SYSTEM, CIUKI_BUS_LEGACY,
+            c ? "Secondary ATA channel" : "Primary ATA channel", "ata-pio",
+            present ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT, "No identified units.");
+        activation(d, "ata"); owner_resources(d, owner);
+        for (unsigned unit = 0; unit < ATA_DEVICES; unit++) {
+            const struct ata_device *disk = ata_inventory_get(c, unit);
+            if (!disk) continue;
+            d = append(out, 0x40100 + c * 2 + unit, disk->atapi ? CIUKI_DEVICE_CDROM : CIUKI_DEVICE_DISK,
+                CIUKI_BUS_LEGACY, disk->model, "ata-pio", disk->block.quarantined || disk->channel->quiescing ?
+                CIUKI_DEVICE_QUARANTINED : CIUKI_DEVICE_READY, "Identified ATA/ATAPI unit.");
+            if (d) { d->slot = c; d->function = unit; d->generation = disk->generation; }
+            activation(d, "ata"); owner_resources(d, owner);
+        }
+    }
+    bool sound = false;
+    for (unsigned k = 0; k < out->count; k++) if (out->devices[k].class_id == CIUKI_DEVICE_SOUND) sound = true;
+    if (!sound) append(out, 0x50000, CIUKI_DEVICE_SOUND, CIUKI_BUS_LEGACY, "Audio output", "ac97",
+                       CIUKI_DEVICE_ABSENT, audio.reason ? audio.reason : "No supported audio device.");
+    drivers(out);
+}
+int devices_query(uint32_t address, uint32_t bytes)
+{
+    if (bytes != sizeof(query_buffer)) return -EINVAL;
+    struct process *p = proc_current();
+    if (!p || address > UINT32_MAX - bytes || !ua_range(p->memory, address, bytes, PROT_READ | PROT_WRITE)) return -EFAULT;
+    uint32_t header[2];
+    int err = copy_from_user(header, address, sizeof(header));
+    if (err) return err;
+    if (header[0] != CIUKI_DEVICES_VERSION || header[1] != sizeof(query_buffer)) return -EINVAL;
+    devices_snapshot(&query_buffer);
+    /* An interrupt may quarantine a resource while formatting. Retry once
+     * from retained state, then refuse an incoherent snapshot before copy. */
+    if (registry_generation() != query_buffer.generation) devices_snapshot(&query_buffer);
+    if (registry_generation() != query_buffer.generation) return -EAGAIN;
+    return copy_to_user(address, &query_buffer, sizeof(query_buffer));
+}

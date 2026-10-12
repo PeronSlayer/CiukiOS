@@ -2,6 +2,7 @@
 #include <ciuki/runtime.h>
 #include <ciuki/spawn.h>
 #include <ciuki/surface.h>
+#include <ciuki/devices.h>
 #include <ciuki/channel.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -147,3 +148,5 @@ char *tmpnam(char *out) {
     unsigned counter=++temp_counter;int e=pthread_mutex_unlock(&temp_lock);if(e) { errno=e;return NULL; }
     snprintf(out,L_tmpnam,"/tmp/c%lx-%lx",(unsigned long)getpid(),(unsigned long)counter);return out;
 }
+
+int ciuki_devices(struct ciuki_devices_info *i) { return RET(CU_CALL(DEVICES,CU_PTR(i),sizeof(*i),0,0,0,0)); }

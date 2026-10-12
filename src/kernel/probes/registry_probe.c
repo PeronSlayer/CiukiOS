@@ -57,6 +57,8 @@ static void fixture_seed(void) { }
 /* Namespace the fixture, including static symbols for host inclusion. */
 #define res fixture_res
 #define nres fixture_nres
+#define inventory_generation fixture_inventory_generation
+#define inventory_truncated fixture_inventory_truncated
 #define idle_proven fixture_idle_proven
 #define counters fixture_counters
 #define pci fixture_pci
@@ -88,6 +90,8 @@ static void fixture_seed(void) { }
 #define registry_quiesce fixture_registry_quiesce
 #define registry_release fixture_registry_release
 #define registry_snapshot fixture_registry_snapshot
+#define registry_inventory fixture_registry_inventory
+#define registry_generation fixture_registry_generation
 #define registry_count fixture_registry_count
 #define registry_get fixture_registry_get
 #define pci_count fixture_pci_count
@@ -110,6 +114,8 @@ static void fixture_seed(void) { }
 #include "../core/registry.c"
 #undef res
 #undef nres
+#undef inventory_generation
+#undef inventory_truncated
 #undef idle_proven
 #undef counters
 #undef pci
@@ -141,6 +147,8 @@ static void fixture_seed(void) { }
 #undef registry_quiesce
 #undef registry_release
 #undef registry_snapshot
+#undef registry_inventory
+#undef registry_generation
 #undef registry_count
 #undef registry_get
 #undef pci_count
