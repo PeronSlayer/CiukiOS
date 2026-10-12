@@ -25,7 +25,7 @@ int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out)
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y)
 { return (struct desk_box){x,y,(int32_t)w+DESK_BORDER*2,(int32_t)h+DESK_TITLE+DESK_BORDER}; }
 struct desk_box desk_content(const struct desk_client *c)
-{ return (struct desk_box){c->frame.x+DESK_BORDER,c->frame.y+DESK_TITLE,(int32_t)c->info.width,c->collapsed ? 0 : (int32_t)c->info.height}; }
+{ return (struct desk_box){c->frame.x+DESK_BORDER,c->frame.y+DESK_TITLE,c->frame.w-2*DESK_BORDER,c->collapsed ? 0 : c->frame.h-DESK_TITLE-DESK_BORDER}; }
 /* The frame plus its theme's drop shadow: the area a frame change repaints. */
 struct desk_box desk_outer(const struct desk_client *c)
 {
@@ -47,7 +47,7 @@ struct desk_box desk_min_box(const struct desk_client *c)
     int32_t w=available<18 ? available : 18;
     return (struct desk_box){close.x-w-2,close.y,w,close.h};
 }
-/* Windowshade (collapse to the title bar), left of the minimise box. */
+/* Zoom button, left of the minimise box (the old function name is retained). */
 struct desk_box desk_shade_box(const struct desk_client *c)
 {
     struct desk_box min=desk_min_box(c);
@@ -61,7 +61,8 @@ void desk_collapse(struct desktop *d, int i)
     struct desk_client *c=&d->clients[i];
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     c->collapsed=!c->collapsed;
-    c->frame.h=c->collapsed ? DESK_TITLE : (int32_t)c->info.height+DESK_TITLE+DESK_BORDER;
+    if (c->collapsed) { c->shade_height = c->frame.h; c->frame.h = DESK_TITLE; }
+    else c->frame.h = c->shade_height;
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
 }
@@ -351,11 +352,11 @@ static void window(struct desktop *d, int i, struct desk_box clip)
     if (desk_intersect((struct desk_box){buttons_x,f.y,f.x+f.w-buttons_x,DESK_TITLE},clip,&bb)) {
         bp=paint_of(d,bb);
         int s=t->button, by=platinum ? f.y+(DESK_TITLE-s)/2 : f.y+4;
-        struct desk_box boxes[3]={close,min,shade}; int kinds[3]={DESK_GLYPH_CLOSE,DESK_GLYPH_MINIMIZE,DESK_GLYPH_COLLAPSE};
+        struct desk_box boxes[3]={close,min,shade}; int kinds[3]={DESK_GLYPH_CLOSE,DESK_GLYPH_MINIMIZE,DESK_GLYPH_ZOOM};
         for (int k=0; k<3; k++) {
             if (k && (!d->shell || boxes[k].w<=0)) continue;
             int bx=platinum ? boxes[k].x+(boxes[k].w-s)/2 : boxes[k].x+boxes[k].w-s-1;
-            desk_paint_title_button(&bp,bx,by,s,kinds[k],active || !platinum,0,0);
+            desk_paint_title_button(&bp,bx,by,s,kinds[k],(active || !platinum) && (k!=2 || c->resizable),0,0);
         }
     }
     if (platinum) {
@@ -379,10 +380,20 @@ static void window(struct desktop *d, int i, struct desk_box clip)
         if (desk_internal_paint && desk_intersect(content,clip,&b)) desk_internal_paint(d,i,content,b);
         return;
     }
-    if (desk_intersect(content,clip,&b))
+    /* While resizing, the previous client surface is clipped in the new
+     * content well. The frame fill above clears all newly exposed pixels. */
+    struct desk_box old = {content.x,content.y,(int32_t)c->info.width,(int32_t)c->info.height};
+    if (desk_intersect(content,old,&b) && desk_intersect(b,clip,&b))
         for (int32_t y=b.y; y<b.y+b.h; y++) for (int32_t x=b.x; x<b.x+b.w; x++)
             d->pixels[(uint32_t)y*d->width+(uint32_t)x] =
                 c->pixels[(uint32_t)(y-content.y)*c->info.width+(uint32_t)(x-content.x)] & 0xffffffu;
+    if (c->resizable && !c->zoomed) {
+        /* A visible grip in the 3 px bottom/right frame, outside app pixels. */
+        for (int k=0; k<3; k++) {
+            desk_paint_fill(&fp.p,f.x+f.w-5-k*4,f.y+f.h-3,2,1,t->dark);
+            desk_paint_fill(&fp.p,f.x+f.w-3,f.y+f.h-5-k*4,1,2,t->dark);
+        }
+    }
 }
 /* Programs that open a desktop window receive their channel at fd 3. */
 int desk_program_graphical(const char *name)

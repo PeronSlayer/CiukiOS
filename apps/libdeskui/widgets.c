@@ -28,6 +28,46 @@ void du_init(struct du_ui *u, uint32_t *pixels, int width, int height)
     u->last_click_widget = -1; u->focused_window = 1; u->dirty = 1;
 }
 
+void du_resize(struct du_ui *u, uint32_t *pixels, int width, int height)
+{
+    int dx = width - u->canvas.width, dy = height - u->canvas.height;
+    if (!pixels || width <= 0 || height <= 0) return;
+    du_menu_close(u);
+    u->capture = u->hover = -1;
+    for (unsigned i = 0; i < u->count; i++) {
+        struct du_widget *w = &u->widgets[i];
+        w->pressed = w->hot = 0; w->drag = 0;
+        if (w->kind == DU_TEXTAREA && w->data) du_ta_mouse_up(w->data);
+        if (w->anchors & DU_ANCHOR_RIGHT) {
+            if (w->anchors & DU_ANCHOR_LEFT) w->box.w += dx;
+            else w->box.x += dx;
+        }
+        if (w->anchors & DU_ANCHOR_BOTTOM) {
+            if (w->anchors & DU_ANCHOR_TOP) w->box.h += dy;
+            else w->box.y += dy;
+        }
+    }
+    u->canvas = (struct du_canvas){pixels, width, height, {0, 0, width, height}};
+    if (u->layout) u->layout(u, u->user);
+    /* Keep an open dialog's entries, selection and typed text. Move it back
+     * into reach when a shrink would put its buttons outside the canvas. */
+    struct du_dialog *d = &u->dialog;
+    if (d->kind) {
+        int x = d->box.x, y = d->box.y;
+        if (x + d->box.w > width) x = width - d->box.w;
+        if (y + d->box.h > height) y = height - d->box.h;
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        for (unsigned i = 0; i < d->count; i++) {
+            d->items[i].box.x += x - d->box.x;
+            d->items[i].box.y += y - d->box.y;
+            d->items[i].pressed = 0; d->items[i].drag = 0;
+        }
+        d->box.x = x; d->box.y = y; d->dragging = 0; d->capture = -1;
+    }
+    u->dirty = 1;
+}
+
 struct du_widget *du_add(struct du_ui *u, enum du_kind kind, int id, struct du_rect r, const char *text)
 {
     if (u->count == DU_WIDGETS || du_get(u, id)) return NULL;

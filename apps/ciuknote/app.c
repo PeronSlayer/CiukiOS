@@ -557,9 +557,12 @@ void cn_event(struct du_ui *u, const struct du_event *e, void *ctx)
 
 /* ---- lifecycle ---------------------------------------------------------- */
 
+static void resize_layout(struct du_ui *u, void *user)
+{ (void)u; cn_layout(user); }
+
 int cn_attach(struct cn_app *a, struct du_ui *u)
 {
-    a->ui = u; u->event = cn_event; u->user = a;
+    a->ui = u; u->event = cn_event; u->user = a; u->layout = resize_layout;
     if (du_ta_init(&a->ta, CN_LIMIT)) return -ENOMEM;
     a->crlf = 1; a->show_status = 1; strcpy(a->dir, "/"); strcpy(a->filter, TEXT_FILTER);
     memcpy(a->file_items, file_template, sizeof(file_template));

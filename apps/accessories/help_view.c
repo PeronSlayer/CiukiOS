@@ -86,9 +86,12 @@ static const struct du_menu_item edit_template[] = {
     {"&Copy", H_M_COPY, 0x2e, DU_CTRL, 0}, {"Select &All", H_M_SELALL, 0x1e, DU_CTRL, 0} };
 static const struct du_menu_item help_template[] = { {"&About CiukiOS Help", H_M_ABOUT, 0, 0, 0} };
 
+static void resize_layout(struct du_ui *u, void *user)
+{ (void)u; help_layout(user); }
+
 int help_attach(struct help_app *a, struct du_ui *u)
 {
-    a->ui = u; u->event = help_event; u->user = a;
+    a->ui = u; u->event = help_event; u->user = a; u->layout = resize_layout;
     if (du_ta_init(&a->ta, HELP_FILE_MAX)) return -ENOMEM;
     a->ta.wrap = 1; a->ta.readonly = 1;
     memcpy(a->file_items, file_template, sizeof(file_template));

@@ -77,6 +77,15 @@ void tv_init(struct tasks_view *v, struct du_ui *u, const uint32_t *app_icon)
     add(u, DU_LABEL, A_TOTAL_UPTIME, 252, 248, 130, 12, "");
     w = add(u, DU_STATUS, A_STATUS, 0, TV_HEIGHT - 22, TV_WIDTH, 22, "");
     w->panels[0] = 100; w->panels[1] = 110;
+    /* Lists fill the page; buttons/status keep their height and bottom gap. */
+    du_get(u, A_TABS)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
+    du_get(u, A_APPS)->anchors = du_get(u, A_PROCS)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
+    static const int buttons[] = {A_END_TASK, A_SWITCH, A_NEW, A_END_PROCESS};
+    for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++)
+        du_get(u, buttons[i])->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+    du_get(u, A_STATUS)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
+    du_get(u, A_HISTORY_GROUP)->anchors = du_get(u, A_HISTORY)->anchors = DU_ANCHOR_GROW_X;
+    du_get(u, A_TOTALS_GROUP)->anchors = DU_ANCHOR_GROW_X;
     tv_page(v, TV_APPS);
 }
 void tv_page(struct tasks_view *v, int page)
