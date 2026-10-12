@@ -665,3 +665,48 @@ F0–F2 prefix and `f3-vm`), `f4-media` and `f4-audio`; the hardware image
   `vm-audio-qemu-t23` FAIL with `END status=FAIL error=-14` after a VM
   stop with `data_loss=1` (the f4-05 probe and VMPLAY.COM pass in the
   libx86emu guest runner but not under QEMU); diagnosis assigned.
+
+## Integration images of the night of 2026-10-12 (`wt/integ2`: clean boot, Tango store, desktop shell, workload-disk lookup, DPMI TCG rule, VM audio transport, VGA timing)
+
+Scratch suites run from the integration worktree, image per step:
+
+- `f51e5df7…` (7fce2583): `normal-boot-qemu-t23`, `normal-boot-qemu-desktop-2002`
+  PASS (quiet boot with the kernel-drawn splash, `[console] quiet boot`,
+  `[power] acpi soft-off … pm1a_cnt=0604`), `vm-window-qemu-desktop-2002`
+  and `-1998` PASS (first QEMU pass of the DOS window after the INT 16h
+  fix, with the window VM created by `/bin/dosbox` once the workload-disk
+  lookup stopped asking the heap for 20 KiB); `doom-qemu-t23` NOT_RUN
+  (`fixtures_absent`: the worktree had no local game directory).
+- `d70cf673…` (e03935c6): `dpmi-qemu-t23/e500/min128` PASS (DPMI16, DPMI32,
+  DOS/4GW client, gate and fault rows, with the TCG data-limit note);
+  `vm-audio-qemu-t23/e500/min128` PASS after the idle-tail transport fixes
+  and the first-run pins (OPL rms, pacing and clock values as ranges).
+- `138a457a…` (1319441f): `doom-qemu-t23` PASS, five loops, each
+  `gametics=1710 timed=1 rc=1` (realtics about 1527 under TCG), 1751 page
+  flips per loop, DPMI entries = terminations, DOS/4GW Professional bound
+  in the owner's DOOM.EXE. `doom-sound-qemu-t23` FAIL: with sound enabled
+  DOOM never reaches graphics mode (`launch_ms=0`, DSP `resets=0` after the
+  1200 s loop deadline); diagnosis open. `wolf3d-qemu-t23` FAIL at launch:
+  Wolf3D spun in `VL_SetScreen` on 3DAh.
+- `97f889aa…` (8ec3…, VGA input status 1 with the programmed vertical
+  timing): `vm-video-qemu-t23/e500/min128` and `vm-window-qemu-desktop-2002/
+  1998` PASS with unchanged digests; `wolf3d-qemu-t23` reached the signon
+  frame and stages 1–3 (digests recorded in the run) before QEMU itself
+  died; `doom-qemu-t23` completed loop 1 and QEMU died at the start of
+  loop 2.
+
+**QEMU deviation found:** three `qemu-system-i386` 11.1 core dumps during
+the DOS workload cases (02:29, 03:50 and 03:54 CEST), signal SIGSEGV in
+`tb_invalidate_phys_range_fast` (TCG translation-block invalidation),
+intermittent: the same DOOM case completed five loops in one run and
+crashed QEMU in loop 2 of another. The runner reports these as
+"Connection reset by peer" or a socket timeout, not as a guest failure.
+Workload cases are retried for pins; the kernel's own evidence (loop,
+video, DPMI and audio records before the crash) is not affected.
+
+Runner changes of the night: a five-second reaping grace before counting a
+surviving QEMU process; optical fixtures as an explicit `ide-cd` on the
+secondary slave (QEMU's default empty CD at index 2 had hidden the real
+medium); QMP command replies awaited up to 10 s; identical `query-status`
+exchanges not repeated in the QMP log (the 25 ms poll had filled the 4 MiB
+cap in a 17-minute case).
