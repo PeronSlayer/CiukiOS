@@ -32,11 +32,15 @@ enum desk_opcode {
     DESK_MIXER_SET,
     /* f2-36, version 2, client to desktop: uint32 length, then 1..63
      * printable ASCII bytes. Updates only the sending client's window. */
-    DESK_SET_TITLE
+    DESK_SET_TITLE,
+    DESK_SOUND /* v2: uint32 event; toolkit menu and dialog events */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */
 #define DESK_SETTINGS_MASTER 2u   /* set the master volume: left, right 0..100, mute 0/1 */
+#define DESK_SETTINGS_SOUND_RELOAD 4u
+#define DESK_SETTINGS_SOUND_TEST 5u /* values[0]: event index */
+#define DESK_SETTINGS_AUDIO_TEST 6u /* full tone accepted: asynchronous TASK_RESULT */
 #define DESK_WINDOW_UNRESPONSIVE 1u
 #define DESK_WINDOW_MINIMIZED 2u
 #define DESK_WINDOW_FOCUSED 4u

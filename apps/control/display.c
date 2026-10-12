@@ -43,7 +43,8 @@ void cp_settings_message(struct ciuki_message *m, uint32_t serial, unsigned requ
     if (request == DESK_SETTINGS_MASTER) {
         desk_put32(m->data + 12, (uint32_t)value); desk_put32(m->data + 16, (uint32_t)value);
         desk_put32(m->data + 20, (uint32_t)(flag != 0));
-    } else if (request == DESK_SETTINGS_DISPLAY) desk_put32(m->data + 12, (uint32_t)value);
+    } else if (request == DESK_SETTINGS_DISPLAY || request == DESK_SETTINGS_SOUND_TEST)
+        desk_put32(m->data + 12, (uint32_t)value);
 }
 
 static void label(struct cp_app *a, int id, const char *s)

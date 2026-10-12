@@ -7,6 +7,7 @@
 #define CIUKI_CONTROL_H
 #include "../libdeskui/deskui.h"
 #include "../desktop/settings.h"
+#include "../desktop/sounds.h"
 #include "../desktop/wallpaper.h"
 #include <ciuki/display.h>
 #include <stdint.h>
@@ -25,6 +26,8 @@ struct cp_host {
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
     int (*apply)(void *, unsigned request, int value, int flag);        /* DESK_SETTINGS: volume/mute or temporary mode id/0 */
     uint64_t (*now)(void *);                                          /* UTC seconds */
+    int (*load_sounds)(void *, char *, size_t, size_t *);
+    int (*save_sounds)(void *, const char *, size_t);
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
@@ -36,7 +39,10 @@ struct cp_app {
     struct du_ui *ui;
     struct cp_host host;
     struct ciuki_settings cfg;
-    int page, volume, muted, mixer_ok;
+    int page, volume, muted, mixer_ok, audio_testing;
+    char sound_text[SOUND_TEXT_MAX+1];
+    struct sound_scheme sounds; unsigned sound_selected;
+    struct du_item sound_items[SOUND_EVENTS];
     char wall_names[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
     struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 8], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
     char wall_labels[CP_WALLPAPERS + 8][48];
@@ -61,6 +67,7 @@ int cp_attach(struct cp_app *, struct du_ui *, int page);
 void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);
+void cp_audio_result(struct cp_app *, int result);
 int cp_display_refresh(struct cp_app *);
 void cp_display_sync(struct cp_app *);
 int cp_display_event(struct cp_app *, const struct du_event *);

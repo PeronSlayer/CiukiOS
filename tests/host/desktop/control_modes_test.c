@@ -164,6 +164,16 @@ int main(int argc, char **argv)
     cp_settings_message(&wire, 42, DESK_SETTINGS_DISPLAY, 65536, 0); assert(!desk_parse(&wire, 1, NULL, &p));
     cp_settings_message(&wire, 42, DESK_SETTINGS_DISPLAY, 0, 0); assert(desk_parse(&wire, 1, NULL, &p) && !p.values[0]); /* main delegates id validation to the kernel */
     cp_settings_message(&wire, 42, DESK_SETTINGS_MASTER, 70, 1); assert(desk_parse(&wire, 1, NULL, &p) && p.values[0] == 70 && p.values[1] == 70 && p.values[2] == 1);
+    cp_settings_message(&wire, 43, DESK_SETTINGS_SOUND_RELOAD, 0, 0);
+    assert(desk_parse(&wire, 1, NULL, &p) && p.request == DESK_SETTINGS_SOUND_RELOAD && !p.values[0]);
+    desk_put32(wire.data + 12, 1); assert(!desk_parse(&wire, 1, NULL, &p));
+    cp_settings_message(&wire, 44, DESK_SETTINGS_SOUND_TEST, SOUND_ERROR, 0);
+    assert(desk_parse(&wire, 1, NULL, &p) && p.request == DESK_SETTINGS_SOUND_TEST && p.values[0] == SOUND_ERROR);
+    cp_settings_message(&wire, 44, DESK_SETTINGS_SOUND_TEST, SOUND_EVENTS, 0); assert(!desk_parse(&wire, 1, NULL, &p));
+    cp_settings_message(&wire, 45, DESK_SETTINGS_AUDIO_TEST, 0, 0);
+    assert(desk_parse(&wire, 1, NULL, &p) && p.request == DESK_SETTINGS_AUDIO_TEST && !p.values[0]);
+    desk_put32(wire.data + 20, 1); assert(!desk_parse(&wire, 1, NULL, &p));
+    puts("PASS Control Panel wire coexistence: display, sound reload/preview, hardware test, reserved fields");
     puts("PASS control display modes: ABI, synthetic mode lists, filtering, layout, Apply/ack/Keep/Revert/Esc, monotonic timeout, save/queue/query failures, close rollback, settings merge, wire validation, adapter lookup/render/refresh, System summary");
     return 0;
 }

@@ -92,6 +92,9 @@ static void shutdown_key(int code)
     struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=code,.value=1};
     desk_input(&shutdown_desktop,&e);
 }
+static uint64_t shutdown_sound_deadline;
+static unsigned shutdown_sound_checks;
+static int shutdown_sound(struct desktop *d) { shutdown_sound_checks++; return d->now_ns>=shutdown_sound_deadline; }
 static unsigned shutdown_mode_sets;
 static int shutdown_display_set(struct desktop *d, uint16_t id)
 {
@@ -102,6 +105,18 @@ static int shutdown_display_set(struct desktop *d, uint16_t id)
 static void test_shutdown_sequence(void)
 {
     struct desktop *d=&shutdown_desktop;
+    /* The audio completion seam precedes descriptor cleanup and the power syscall. */
+    shutdown_setup(); d->sound_shutdown=shutdown_sound; shutdown_sound_checks=0;
+    shutdown_client(210,"Files",1,2);
+    uint64_t sound_start=d->now_ns; shutdown_sound_deadline=sound_start+700000000ull;
+    desk_power_begin(d,2); shutdown_at(sound_start);
+    assert(!shutdown_prepares && !shutdown_calls && !shutdown_sound_checks);
+    shutdown_reap(210,0); shutdown_at(sound_start+100000000ull);
+    assert(!shutdown_prepares && !shutdown_calls && shutdown_sound_checks==1);
+    shutdown_at(sound_start+699999999ull); assert(!shutdown_prepares && !shutdown_calls);
+    shutdown_at(shutdown_sound_deadline); assert(shutdown_prepares==1 && shutdown_calls==1);
+    shutdown_cleanup();
+    puts("PASS shutdown sound: audio completion precedes descriptor cleanup and the power request");
     /* The merged settings path applies display requests only while idle. */
     shutdown_setup();
     int control=shutdown_client(200,"Control Panel",1,2);

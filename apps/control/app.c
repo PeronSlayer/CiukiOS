@@ -13,7 +13,7 @@ enum {
     C_COL0, C_COL1, C_COL2, C_COL3, C_COL4, C_COL5, C_ICONS,
     C_SPEED_L, C_SPEED, C_SPEED_V, C_SLOW, C_FAST, C_DBL_L, C_DBL, C_DBL_V, C_MOUSE_NOTE,
     C_KEY_L, C_KEY, C_KEY_NOTE1, C_KEY_NOTE2,
-    C_VOL_L, C_VOL, C_VOL_V, C_MUTE, C_AUDIO,
+    C_VOL_L, C_VOL, C_VOL_V, C_MUTE, C_SOUND_LIST, C_SOUND_TEST, C_SOUND_ENABLED, C_HARDWARE, C_AUDIO,
     C_DATE, C_H24, C_SECONDS, C_TIME_NOTE1, C_TIME_NOTE2,
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4
 };
@@ -203,10 +203,20 @@ static void sync(struct cp_app *a)
     toggle_label(a, C_MUTE, "Mute", a->muted);
     if ((w = du_get(u, C_MUTE))) w->disabled = !a->mixer_ok;
     text(a, C_AUDIO, a->mixer_ok ? "Master output of the sound card (/dev/mixer)." : "No audio device: /dev/mixer is unavailable.");
+    for (unsigned k = 0; k < SOUND_EVENTS; k++) a->sound_items[k].selected = k == a->sound_selected;
+    if ((w = du_get(u,C_SOUND_LIST))) w->active = a->sound_selected;
+    if ((w = du_get(u,C_SOUND_ENABLED))) w->value = a->sounds.enabled;
+    if ((w = du_get(u,C_HARDWARE))) w->disabled = a->audio_testing;
     toggle_label(a, C_H24, "24-hour clock", a->cfg.clock_24h);
     toggle_label(a, C_SECONDS, "Show seconds", a->cfg.clock_seconds);
     cp_display_sync(a);
     u->dirty = 1;
+}
+void cp_audio_result(struct cp_app *a, int result)
+{
+    a->audio_testing = 0;
+    text(a,C_STATUS,result ? "Device did not accept the full tone." : "Device accepted the full 1 kHz tone.");
+    sync(a);
 }
 void cp_tick(struct cp_app *a)
 {
@@ -270,6 +280,29 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             text(a, C_STATUS, r ? "The volume could not be changed." : "Volume applied.");
         }
         break;
+    case C_SOUND_LIST:
+        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < SOUND_EVENTS) a->sound_selected = (unsigned)e->index;
+        break;
+    case C_SOUND_TEST: case C_HARDWARE:
+        if (e->type == DU_EV_ACTIVATE) {
+            int r = a->host.apply ? a->host.apply(a->host.ctx,e->id == C_HARDWARE ? DESK_SETTINGS_AUDIO_TEST : DESK_SETTINGS_SOUND_TEST,
+                                               e->id == C_HARDWARE ? 0 : (int)a->sound_selected,0) : -1;
+            if (!r && e->id == C_HARDWARE) a->audio_testing = 1;
+            text(a,C_STATUS,r ? "Audio test could not start." : e->id == C_HARDWARE ? "Testing audio hardware..." : "Playing selected sound.");
+        }
+        break;
+    case C_SOUND_ENABLED:
+        if (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE) {
+            struct sound_scheme next = a->sounds; next.enabled = !next.enabled;
+            size_t n = sound_format(&next,a->sound_text,sizeof(a->sound_text));
+            if (!n || !a->host.save_sounds || a->host.save_sounds(a->host.ctx,a->sound_text,n)) text(a,C_STATUS,"Sound settings could not be saved.");
+            else {
+                a->sounds = next;
+                int r = a->host.apply ? a->host.apply(a->host.ctx,DESK_SETTINGS_SOUND_RELOAD,0,0) : -1;
+                text(a,C_STATUS,r ? "Saved. Restart to apply sound settings." : "Sound settings saved and applied.");
+            }
+        }
+        break;
     case C_H24: if (e->type == DU_EV_ACTIVATE) { a->cfg.clock_24h = !a->cfg.clock_24h; save = 1; cp_tick(a); } break;
     case C_SECONDS: if (e->type == DU_EV_ACTIVATE) { a->cfg.clock_seconds = !a->cfg.clock_seconds; save = 1; cp_tick(a); } break;
     default: break;
@@ -302,6 +335,9 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
 {
     a->ui = u; a->page = page >= 0 && page < CP_PAGES ? page : CP_DISPLAY;
     load(a, &a->cfg);
+    sound_defaults(&a->sounds);
+    if (a->host.load_sounds) { size_t n = 0;
+        if (!a->host.load_sounds(a->host.ctx,a->sound_text,sizeof(a->sound_text),&n)) (void)sound_parse(&a->sounds,a->sound_text,n); }
     du_theme_use(u, a->cfg.theme);
     a->wall_count = a->host.wallpapers ? (unsigned)a->host.wallpapers(a->host.ctx, a->wall_names, CP_WALLPAPERS) : 0;
     if (a->wall_count > CP_WALLPAPERS) a->wall_count = 0;
@@ -357,7 +393,16 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     w = add(a, DU_SCROLLBAR, C_VOL, 24, 62, 300, 17, ""); w->vertical = 0; w->total = 101; w->page = 1;
     add(a, DU_LABEL, C_VOL_V, 336, 62, 80, 17, "");
     add(a, DU_BUTTON, C_MUTE, 24, 94, 140, 24, "");
-    add(a, DU_LABEL, C_AUDIO, 24, 132, 452, 14, "");
+    add(a, DU_CHECKBOX, C_SOUND_ENABLED, 184, 94, 290, 24, "Play system sounds");
+    for (unsigned k = 0; k < SOUND_EVENTS; k++) {
+        a->sound_items[k].text[0] = sound_labels[k]; a->sound_items[k].text[1] = a->sounds.file[k];
+    }
+    w = add(a,DU_LISTVIEW,C_SOUND_LIST,24,126,452,154,""); w->items = a->sound_items; w->count = SOUND_EVENTS;
+    list_style(w,"Event"); w->column_count = 2;
+    w->columns[0] = (struct du_column){"Event",170,0}; w->columns[1] = (struct du_column){"Assigned sound",258,0};
+    add(a,DU_BUTTON,C_SOUND_TEST,24,290,90,24,"Test");
+    add(a,DU_BUTTON,C_HARDWARE,124,290,220,24,"Test audio hardware");
+    add(a,DU_LABEL,C_AUDIO,24,326,452,14,"");
     /* Date & Time */
     add(a, DU_LABEL, C_DATE, 24, 106, 452, 14, "");
     add(a, DU_BUTTON, C_H24, 24, 134, 200, 24, "");

@@ -323,7 +323,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "control-test"
             icons = load("control_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
             sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/control/display.c", "apps/desktop/protocol.c",
-                       *(f"apps/desktop/{n}.c" for n in ("settings", "wallpaper", "image", "compositor", "theme")),
+                       *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
@@ -357,7 +357,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "control-modes-test"
             icons = load("control_modes_icons", ROOT / "tests/host/desktop/icon_assets.py")
             sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/control/display.c",
-                       *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "wallpaper", "image", "compositor", "theme")),
+                       *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
@@ -478,15 +478,19 @@ class DesktopTests(unittest.TestCase):
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
-                                        "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png"})
+                                        "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png",
+                                        "/system/settings/sounds.cfg",
+                                        *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "sounds.cfg")})
         self.assertTrue({"/Programs", "/System", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 22)
+        self.assertEqual(len(records), 39)  # 22 desktop/icon/wallpaper files plus 17 sound payloads
         for r in records:
             if r["path"] == "/system/licenses/stb_image.txt":
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
+            elif r["path"].startswith("/system/sounds/") or r["path"] == "/system/settings/sounds.cfg":
+                self.assertEqual(r["sha256"], metadata["sounds"]["files"][Path(r["path"]).name])
             elif r["path"].startswith("/system/wallpapers/"):
                 # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())

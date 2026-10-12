@@ -41,6 +41,8 @@
 #define DESK_APP_CHECKPOINTS(kind) ((kind)==DESK_APP_NOTE ? DESK_NOTE_CHECKPOINTS : DESK_FILES_CHECKPOINTS)
 struct desk_box { int32_t x, y, w, h; };
 #include "shell.h"
+#include "sounds.h"
+#define DESK_SOUND_PENDING 1
 struct desk_damage { unsigned count; struct desk_box boxes[DESK_DAMAGE_MAX]; };
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
@@ -137,6 +139,11 @@ struct desktop {
     struct desk_power_sequence power;
     /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
      * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
+    void (*sound_event)(struct desktop *, unsigned event);
+    /* sound_request: 0/-errno, or DESK_SOUND_PENDING for a deferred reply. */
+    int (*sound_request)(struct desktop *, int client, unsigned request, unsigned event, uint32_t serial);
+    int (*sound_shutdown)(struct desktop *); /* 1 complete, 0 still within the 2 s allowance */
+    void (*sound_cancel)(struct desktop *);
     int (*power_request)(int action);
     void (*power_prepare)(struct desktop *);
     int (*power_alive)(struct desktop *, uint32_t pid);
@@ -201,6 +208,7 @@ int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);
 void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);
+static inline void desk_sound(struct desktop *d, unsigned e) { if (d->sound_event) d->sound_event(d,e); }
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);
 int desk_ignore_sigpipe(void);
 int desk_add_client(struct desktop *, int channel);

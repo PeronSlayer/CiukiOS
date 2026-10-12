@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include "sound_runtime.h"
 #include "catalog.h"
 #include "gate.h"
 #include "../libdeskui/deskui.h"
@@ -534,6 +535,7 @@ static void shell_service(struct desktop *d)
         sh->icon_count=0; desk_shell_apply(d); wallpaper_load(d);
     }
     if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
+    int volume_feedback = sh->want_reload & 8;
     if (sh->want_reload & 4) mixer_read(d);
     sh->want_reload=0;
     if (!sh->wall_valid) desk_shell_wallpaper_update(d);
@@ -542,6 +544,7 @@ static void shell_service(struct desktop *d)
         if (settings_save(d)) snprintf(d->notice,sizeof(d->notice),"Settings not saved (errno %d)",errno);
     }
     if (sh->want_mixer) { sh->want_mixer=0; mixer_write(d); }
+    if (volume_feedback) desk_sound(d,SOUND_VOLUME);
     if (sh->want_run[0]) {
         char line[sizeof(sh->want_run)];
         memcpy(line,sh->want_run,sizeof(line)); sh->want_run[0]=0;
@@ -576,6 +579,7 @@ static void shell_setup(struct desktop *d, int gate)
     d->sh.gate=gate;
     if (!gate) settings_load(d);
     desk_shell_enable(d);
+    if (!gate) desk_sound_init(d);
     /* The first frame shows the desktop colour, bars and icons at once; the
      * image wallpaper (the default Ciuk2 PNG takes seconds to decode under
      * TCG) is loaded two loop iterations later (lead fix, 2026-10-12). */
@@ -658,7 +662,7 @@ int main(int argc, char **argv)
     unsigned report_send=0;
     uint64_t report_deadline=0, next_input_report=0;
     unsigned reported_progress=0;
-    int holding=0, shifted=0;
+    int holding=0, shifted=0, startup_sound=0;
     uint64_t shift_base=0, shift_release=0;
     for (;;) {
         uint64_t now = monotonic();
@@ -666,6 +670,7 @@ int main(int argc, char **argv)
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
+        if (!gate) desk_sound_results(d);
         if (d->shell && !d->power.state && d->sh.wallpaper_deferred && !--d->sh.wallpaper_deferred) wallpaper_load(d);
         /* The shell follows the theme key of DESK_SETTINGS_PATH (gates keep the default). */
         if (d->shell && !gate && !d->power.state && desk_theme_poll(DESK_SETTINGS_PATH,now)) {
@@ -806,6 +811,7 @@ int main(int argc, char **argv)
         if (redraw && errno!=EINTR && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
+        if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); }
         if (desk_display_frame_commit(d, redraw)) {
             if (d->shell && !d->sh.gate && settings_save(d))
                 snprintf(d->notice, sizeof(d->notice), "Display applied; settings not saved");

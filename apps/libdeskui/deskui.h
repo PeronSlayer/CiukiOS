@@ -249,6 +249,8 @@ struct du_dialog {
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
 
 struct du_ui {
+    void (*sound)(void *, unsigned);
+    void *sound_ctx;
     struct du_canvas canvas;
     struct du_widget widgets[DU_WIDGETS];
     unsigned count;
