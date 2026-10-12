@@ -107,11 +107,26 @@ class DesktopTests(unittest.TestCase):
                     else:
                         self.assertEqual(actual, pinned)
                 else:
-                    for y in range(20):
-                        for x in range(20):
-                            offset = ((454+y)*640+8+x)*4
-                            src = ((y*256//20)*256+x*256//20)*4
-                            self.assertEqual(pixels[offset:offset+4], portrait[src:src+4])
+                    # The Ciuki button at the left end of the top bar (desktop.h DESK_START_*) shows the
+                    # approved portrait area-averaged to 18 px (shell.c desk_shell_icon "ciuki"), centred
+                    # with "CiukiOS" in the title face and pressed in by 1 px while the menu is open
+                    # ("shell" mode). Every cell the portrait covers fully is the exact average of its
+                    # source block.
+                    size, shift = 18, 1 if mode == "shell" else 0
+                    x0, y0 = 4 + (96 - size - 6 - 53) // 2 + shift, 4 + (24 - size) // 2 + shift
+                    full = 0
+                    for y in range(size):
+                        for x in range(size):
+                            block = [portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
+                                     for yy in range(y*256//size, (y+1)*256//size) for xx in range(x*256//size, (x+1)*256//size)]
+                            ink = [b for b in block if b != bytes((0x64, 0x55, 0x37))]
+                            if len(ink) != len(block):
+                                continue
+                            full += 1
+                            expected = bytes(sum(b[k] for b in ink) // len(ink) for k in range(3))
+                            offset = ((y0+y)*640+x0+x)*4
+                            self.assertEqual(pixels[offset:offset+3], expected, (mode, x, y))
+                    self.assertGreater(full, 100)
 
     def test_look_reference_frames(self):
         """ui-look: every theme renders the reference desktop and dialogs frames, and the themes differ."""

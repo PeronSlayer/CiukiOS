@@ -100,8 +100,9 @@ therefore never covered. A case with `"kind": "normal-boot"` (and
   (`screen.ppm`) and checks layout colours taken from `apps/desktop` (its
   default theme, Platinum, in `theme.c`), not a frame digest (the taskbar
   clock changes): the bottom 32 rows are mostly the taskbar colour `d6d6d6`,
-  the start button `f2f2f2` (or `b9b9b9` with the menu open), the top-left
-  256x32 is mostly the top bar `dcdcdc` and has at
+  the Ciuki button at the left end of the top bar (x 4..100, y 4..28) is
+  mostly `f2f2f2` (or `b9b9b9` with the menu open), the top bar right of it
+  up to x 256 is mostly `dcdcdc` and has at
   most 2 % kernel console colours (`10243c`, `e8e8e8`, panic `800000`), and
   the area between the bars is at least 25 % desktop background `375564`;
   per-channel tolerance 8. A host test checks these colours against the C

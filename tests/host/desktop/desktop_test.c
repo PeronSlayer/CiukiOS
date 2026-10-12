@@ -254,8 +254,11 @@ static void test_shell(void)
     assert(d.clients[b].frame.y+d.clients[b].frame.h==448);
     pointer(d.clients[b].frame.x+5,d.clients[b].frame.y+8); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.drag==b); event(CIUKI_INPUT_RESYNC,0,0,0); assert(d.drag<0);
-    desk_focus(&d,a); pointer(40,464); event(CIUKI_INPUT_BUTTON,1,1,0);
+    /* The Ciuki button at the left end of the top bar; its menu drops below the bar. */
+    desk_focus(&d,a); pointer(40,16); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.menu_open && d.focus<0);
+    { struct desk_box m=desk_menu_box(&d), s=desk_start_button(&d);
+      assert(s.x==DESK_START_X && s.y+s.h<=DESK_BAR && m.x==s.x && m.y==DESK_BAR && m.y+m.h<=448); }
     event(CIUKI_INPUT_KEY,1,1,0); assert(!d.menu_open && d.focus==a);
     event(CIUKI_INPUT_BUTTON,1,0,0);
     /* Negotiated v2, request survives backlog and deadline survives EOF. */
@@ -302,12 +305,12 @@ static void test_menu(void)
     assert(d.program_count==DESK_MENU_MAX && !strcmp(d.programs[0].name,"app00") && !strcmp(d.programs[15].name,"app15"));
     desk_shell_enable(&d);
     struct desk_box menu=desk_menu_box(&d);
-    /* The Start menu (shell.c) may cover the top bar on a 240-line screen; it ends on the taskbar. */
-    assert(menu.y>=0 && menu.y+menu.h==208 && menu.x+menu.w<=320);
+    /* The Start menu (shell.c) drops from the top bar; on a 240-line screen it moves up to end on the taskbar. */
+    assert(menu.y>=0 && menu.y+menu.h==208 && menu.x==DESK_START_X && menu.x+menu.w<=320);
     for (int i=0;i<DESK_CLIENTS;i++) {
         d.clients[i].window=1;
         struct desk_box task=desk_task_button(&d,i);
-        assert(task.x>=84 && task.x+task.w<=240 && task.w>0);
+        assert(task.x>=DESK_TASK_X && task.x+task.w<=320-SH_TRAY_W-8 && task.w>0);
     }
     for (int i=0;i<DESK_CLIENTS;i++) d.clients[i].window=0;
     cleanup();

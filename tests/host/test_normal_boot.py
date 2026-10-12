@@ -79,11 +79,12 @@ def frame(width=1024, height=768, background=0x375564, top=0xdcdcdc, taskbar=0xd
         for row in range(y, y + h):
             pixels[(row * width + x) * 3:(row * width + x + w) * 3] = colour(c) * w
     fill(0, 0, width, 32, top)
-    fill(34, 11, 40, 9, 0x161616)                      # "CiukiOS"
+    fill(4, 4, 96, 24, button)                         # the Ciuki button at the left of the top bar
+    fill(13, 7, 18, 18, 0x9a7a5a)                      # its portrait mark
+    fill(37, 11, 53, 9, 0x161616)                      # "CiukiOS"
+    fill(118, 11, 100, 9, 0x6a6a6a)                    # tagline
     fill((width - 256) // 2, 200, 256, 256, 0x9a7a5a)  # portrait stand-in
     fill(0, height - 32, width, 32, taskbar)
-    fill(4, height - 29, 76, 26, button)
-    fill(8, height - 26, 20, 20, 0x9a7a5a)            # start button portrait
     fill(width - 64, height - 20, 48, 7, 0x161616)    # taskbar clock
     return b'P6\n%d %d\n255\n' % (width, height) + bytes(pixels)
 
@@ -284,8 +285,12 @@ class NormalBootUnitTests(unittest.TestCase):
         self.assertIn('.start = 0x%06xu, .start_open = 0x%06xu,' % runner.DESK_START_BUTTON, default)
         self.assertIn('DESK_BAR},clip,t->topbar);', compositor)
         self.assertIn('fill(d,bar,clip,t->taskbar);', compositor)
-        self.assertIn('struct desk_box start={4,bar.y+3,76,26};', compositor)
-        self.assertIn('fill(d,start,clip,d->menu_open ? t->start_open : t->start);', compositor)
+        # The Ciuki button: its box (desktop.h, compositor.c) and its face colours (shell.c draw_start).
+        for name, value in zip(('X', 'Y', 'W', 'H'), runner.DESK_START_BOX):
+            self.assertIn('#define DESK_START_%s %d\n' % (name, value), header)
+        self.assertIn('return (struct desk_box){DESK_START_X,DESK_START_Y,DESK_START_W,DESK_START_H};', compositor)
+        shell = (ROOT / 'apps/desktop/shell.c').read_text()
+        self.assertIn('uint32_t base = open ? t->start_open : t->start;', shell)
         self.assertIn('{0,(int32_t)d->height-DESK_BAR,(int32_t)d->width,DESK_BAR}', compositor)
         self.assertIn('fg = 0x%06X, bg = 0x%06X;' % (runner.CONSOLE_COLOURS[1], runner.CONSOLE_COLOURS[0]), console)
         self.assertIn('console_set_color(0xFFFFFF, 0x%06X);' % runner.CONSOLE_COLOURS[2], output)

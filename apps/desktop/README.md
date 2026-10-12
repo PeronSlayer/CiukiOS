@@ -84,6 +84,37 @@ Microsoft title-bar guidance (caption buttons at the upper right, 16x16
 caption icon), [Microsoft Learn: title bar](https://learn.microsoft.com/en-us/windows/apps/design/basics/titlebar-design).
 Client surfaces have a fixed size in protocol v2, so windows are not
 resizable and "zoom" is the Mac OS 8 windowshade, not a maximise.
+
+Frames and the Ciuki button (ui-polish, 2026-10-12):
+
+- One frame painter, `desk_paint_frame()` in `theme.c`, draws every frame:
+  program windows, the DOS window, the built-in About/Run/Shut Down/message
+  windows (compositor.c) and libdeskui's modal dialogs (dialog.c), so title
+  height (`DESK_FRAME_TITLE` 24, body at +24), outline, corners and buttons
+  never diverge. Title-button hit boxes come from `desk_title_button_box()`
+  (18x18, 2 px apart, the same in every theme); dialogs show only the close
+  button, at the same place (a modal dialog cannot be minimised or rolled up
+  on its own). Platinum: pinstripes blended over a soft vertical gradient,
+  centred bold title with a light emboss, 15 px bevelled square buttons with
+  7x7 glyphs (anti-aliased cross, bar, roll-up/roll-down triangle), a blue
+  hover face and a pressed face; inactive frames keep quiet flat buttons and
+  no stripes. Ciuki Blue: the same layout on a vertical slate-blue gradient
+  with glassy buttons, tan hover outline and the window icon at the left.
+  Classic 98: 3-D bevel, navy caption, left title, 16x14 caption buttons.
+  Hover follows the pointer (`desk_title_code`), pressed the held left button.
+- The Ciuki (Start) button is at the left end of the top bar
+  (`DESK_START_X/Y/W/H` = 4, 4, 96, 24; owner request, 2026-10-12), in the
+  spirit of the classic Mac OS menu bar, whose pull-down menus drop from
+  their titles and whose system menu is a standard menu
+  ([Inside Macintosh: Overview, "About Menus"](https://discmaster.textfiles.com/file/32774/Dev.CD%20Dec%2098%20RL2.toast/Technical%20Publications/mac/IMOverview/IMOverview-45.html?html=true);
+  platinum menu bar with bevelled edges and anti-aliased corners:
+  [Mac OS 8 HIG, "Menu Bar Changes"](https://discmaster.textfiles.com/file/32774/Dev.CD%20Dec%2098%20RL2.toast/Technical%20Publications/mac/HIGOS8Guide/thig-54.html?html=true)):
+  the approved portrait (area-averaged, 18 px) and "CiukiOS" on a rounded
+  (radius 7, anti-aliased) softly bevelled gradient face around the theme's
+  `start` colour, lit on hover, pressed in (`start_open`) while the menu is
+  open. The Start menu drops from it at (4, 32), submenus open to the right;
+  Win and Ctrl+Esc still open it. The taskbar keeps the task buttons (from
+  `DESK_TASK_X` 4, at most 160 px) and the tray.
 Reference frames: `DesktopTests.test_look_reference_frames` builds
 `tests/host/desktop/look_capture.c` (desktop with a window of every control,
 dialogs, Start menu, one pair of 1024x768 frames per theme); with

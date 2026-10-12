@@ -812,15 +812,18 @@ NORMAL_BOOT_NEGATIVE = (
 NORMAL_BOOT_CASE_KEYS = {'id','kind','probe','profile','timeout','expected','attempt','boot_kind','_smoke','_run_id'}
 NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
 # Colours drawn by apps/desktop in its default theme (desktop.h DESK_BAR/
-# DESK_BACKGROUND; theme.c "Platinum" topbar, taskbar, start/start_open,
-# desktop, painted by compositor.c desk_composite and desk_shell_draw) and by
-# the kernel console (src/kernel/core/console.c fg/bg, output.c panic
+# DESK_BACKGROUND/DESK_START_*; theme.c "Platinum" topbar, taskbar,
+# start/start_open, desktop, painted by compositor.c desk_composite and
+# desk_shell_draw and by shell.c draw_start, the Ciuki button at the left end
+# of the top bar: a soft gradient within the tolerance of its base colour)
+# and by the kernel console (src/kernel/core/console.c fg/bg, output.c panic
 # background). test_normal_boot.py checks these literals against those
 # sources. A persisted non-default theme (/system/settings/desktop.cfg) is
 # outside this heuristic: test images carry no settings file.
 DESK_BAR_ROWS = 32
 DESK_TOP_BAR = 0xdcdcdc
 DESK_TASKBAR = 0xd6d6d6
+DESK_START_BOX = (4, 4, 96, 24)  # x, y, w, h: the Ciuki button in the top bar
 DESK_START_BUTTON = (0xf2f2f2, 0xb9b9b9)  # menu closed / open
 DESK_BACKGROUND = 0x375564
 CONSOLE_COLOURS = (0x10243c, 0xe8e8e8, 0x800000)  # console bg, fg, panic bg
@@ -919,12 +922,14 @@ class NormalBootParser:
 
 def normal_boot_regions(width, height):
     """(name, box, colours, bound, limit, step): cheap layout facts of the
-    shell desktop, never a full-frame digest (the taskbar clock changes)."""
-    top = min(width,256)
-    return (('top_bar',(0,0,top,DESK_BAR_ROWS),(DESK_TOP_BAR,),'min',0.5,1),
-            ('console_absent',(0,0,top,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
+    shell desktop, never a full-frame digest (the taskbar clock changes).
+    The top bar regions start right of the Ciuki button, which has its own."""
+    x, y, w, h = DESK_START_BOX
+    left = x+w+4; top = max(min(width,256),left+64)
+    return (('top_bar',(left,0,top-left,DESK_BAR_ROWS),(DESK_TOP_BAR,),'min',0.5,1),
+            ('console_absent',(left,0,top-left,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
             ('taskbar',(0,height-DESK_BAR_ROWS,width,DESK_BAR_ROWS),(DESK_TASKBAR,),'min',0.5,1),
-            ('start_button',(4,height-DESK_BAR_ROWS+3,76,26),DESK_START_BUTTON,'min',0.4,1),
+            ('start_button',DESK_START_BOX,DESK_START_BUTTON,'min',0.4,1),
             ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),(DESK_BACKGROUND,),'min',0.25,2))
 
 
@@ -942,11 +947,12 @@ def colour_fraction(pixels, width, box, colours, step=1, tolerance=SCREEN_TOLERA
 
 
 def observe_normal_boot_screen(path, spec):
-    """Taskbar, start button, top bar and background colours of the shell
-    desktop; the top-left must not show the kernel console colours."""
+    """Taskbar, Ciuki button (top-left), top bar and background colours of
+    the shell desktop; the top bar must not show the kernel console colours.
+    Heuristic 2: the Ciuki button moved from the taskbar to the top bar."""
     width, height, pixels = read_ppm(path)
     observed = {'artifact':Path(path).name, 'ppm_sha256':sha(path), 'width':width, 'height':height,
-                'heuristic':'normal-boot-desktop-1', 'colour_tolerance':SCREEN_TOLERANCE,
+                'heuristic':'normal-boot-desktop-2', 'colour_tolerance':SCREEN_TOLERANCE,
                 'regions':{}, 'failures':[]}
     geometry = spec.get('geometry')
     if geometry is not None and [width,height] != list(geometry):

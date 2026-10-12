@@ -33,27 +33,40 @@ struct desk_box desk_outer(const struct desk_client *c)
     if (!s) return c->frame;
     return (struct desk_box){c->frame.x-s+s/3,c->frame.y-s+s/2,c->frame.w+2*s,c->frame.h+2*s};
 }
-struct desk_box desk_close_box(const struct desk_client *c)
+/* Title-bar hit boxes: theme.c desk_title_button_box, the same in every theme. */
+static struct desk_box title_box(const struct desk_client *c, unsigned button)
 {
-    int32_t w = c->frame.w - DESK_BORDER*2;
-    if (w > 18) w = 18;
-    return (struct desk_box){c->frame.x+c->frame.w-DESK_BORDER-w,c->frame.y+3,w,18};
+    int b[4];
+    desk_title_button_box(c->frame.x,c->frame.y,c->frame.w,button,b);
+    return (struct desk_box){b[0],b[1],b[2],b[3]};
 }
-struct desk_box desk_min_box(const struct desk_client *c)
-{
-    struct desk_box close=desk_close_box(c);
-    int32_t available=close.x-c->frame.x-DESK_BORDER-2;
-    if (available<=0) return (struct desk_box){0,0,0,0};
-    int32_t w=available<18 ? available : 18;
-    return (struct desk_box){close.x-w-2,close.y,w,close.h};
-}
+struct desk_box desk_close_box(const struct desk_client *c) { return title_box(c,DESK_TB_CLOSE); }
+struct desk_box desk_min_box(const struct desk_client *c) { return title_box(c,DESK_TB_MINIMIZE); }
 /* Windowshade (collapse to the title bar), left of the minimise box. */
-struct desk_box desk_shade_box(const struct desk_client *c)
+struct desk_box desk_shade_box(const struct desk_client *c) { return title_box(c,DESK_TB_COLLAPSE); }
+/* The title button (DESK_TB_*) of the topmost window under the pointer, as
+ * index*4+k+1 (k: 0 close, 1 minimise, 2 collapse), or 0: hover tracking. */
+static int inside(struct desk_box b, int32_t x, int32_t y)
+{ return x>=b.x && y>=b.y && (int64_t)x<(int64_t)b.x+b.w && (int64_t)y<(int64_t)b.y+b.h; }
+int desk_title_code(const struct desktop *d, int32_t x, int32_t y)
 {
-    struct desk_box min=desk_min_box(c);
-    int32_t available=min.w>0 ? min.x-c->frame.x-DESK_BORDER-40 : 0;
-    if (available<18) return (struct desk_box){0,0,0,0};
-    return (struct desk_box){min.x-20,min.y,18,min.h};
+    /* desk_hit's rule (topmost visible window), kept here: the toolkit
+     * programs link this file without input.c. */
+    int i=-1;
+    for (int k=0; k<DESK_CLIENTS; k++) if (d->clients[k].window && !d->clients[k].minimized &&
+        inside(d->clients[k].frame,x,y) && (i<0 || d->clients[k].order>d->clients[i].order)) i=k;
+    if (i<0) return 0;
+    for (int k=0; k<3; k++) {
+        if (k && !d->shell) break;
+        struct desk_box b=title_box(&d->clients[i],1u<<k);
+        if (b.w>0 && inside(b,x,y)) return i*4+k+1;
+    }
+    return 0;
+}
+struct desk_box desk_title_code_box(const struct desktop *d, int code)
+{
+    if (code<=0 || (code-1)/4>=DESK_CLIENTS || !d->clients[(code-1)/4].window) return (struct desk_box){0,0,0,0};
+    return title_box(&d->clients[(code-1)/4],1u<<((code-1)%4));
 }
 void desk_collapse(struct desktop *d, int i)
 {
@@ -75,21 +88,26 @@ struct desk_box desk_task_button(const struct desktop *d, int index)
         if (i<index) position++;
         count++;
     }
-    int32_t available=(int32_t)d->width-84-SH_TRAY_W-12;   /* start button, tray */
+    int32_t available=(int32_t)d->width-DESK_TASK_X-SH_TRAY_W-12;   /* left margin, tray */
     if (available<=0 || !count) return (struct desk_box){0,0,0,0};
     int32_t w=available/(int32_t)count;
     if (w>160) w=160;
-    int32_t left=84+(int32_t)position*w;
+    int32_t left=DESK_TASK_X+(int32_t)position*w;
     return (struct desk_box){left,(int32_t)d->height-DESK_BAR+3,w,26};
 }
 int32_t desk_menu_row(const struct desktop *d)
 { (void)d; return SH_START_ROW; }
-/* The Start menu's box (open or not): shell.c lays it out above the start button. */
+/* The Ciuki (Start) button at the left end of the top bar. */
+struct desk_box desk_start_button(const struct desktop *d)
+{ (void)d; return (struct desk_box){DESK_START_X,DESK_START_Y,DESK_START_W,DESK_START_H}; }
+/* The Start menu's box (open or not): shell.c drops it from the start
+ * button, under the top bar, kept above the taskbar on short screens. */
 struct desk_box desk_menu_box(const struct desktop *d)
 {
     if (d->sh.levels && d->sh.menus[0].kind == SH_MENU_START) return d->sh.menus[0].box;
-    int32_t h = 6 + 6 * SH_START_ROW + SH_SEPARATOR, y = (int32_t)d->height - DESK_BAR - h;
-    return (struct desk_box){2, y < 0 ? 0 : y, 184, h};
+    int32_t h = 6 + 6 * SH_START_ROW + SH_SEPARATOR, y = DESK_BAR, limit = (int32_t)d->height - DESK_BAR;
+    if (y + h > limit) y = limit - h;
+    return (struct desk_box){DESK_START_X, y < 0 ? 0 : y, 184, h};
 }
 static struct desk_box unite(struct desk_box a, struct desk_box b)
 {
@@ -209,170 +227,30 @@ static void portrait_at(struct desktop *d, struct desk_box clip, int32_t x, int3
         d->pixels[(uint32_t)yy*d->width+(uint32_t)xx]=
             d->portrait[((yy-y)*DESK_PORTRAIT_SIZE/size)*DESK_PORTRAIT_SIZE+(xx-x)*DESK_PORTRAIT_SIZE/size];
 }
-static void icon(struct desktop *d, struct desk_box clip, int32_t x, int32_t y, const uint32_t *pixels)
-{
-    struct desk_box b;
-    if (!desk_intersect((struct desk_box){x,y,16,16},clip,&b)) return;
-    for (int32_t yy=b.y; yy<b.y+b.h; yy++) for (int32_t xx=b.x; xx<b.x+b.w; xx++) {
-        uint32_t src=pixels[(yy-y)*16+xx-x], *dst=&d->pixels[(uint32_t)yy*d->width+(uint32_t)xx];
-        *dst=desk_mix(src,*dst,src>>24);
-    }
-}
-/* Rounded top corners: pixels a row of the frame skips at either side. */
-static int corner_inset(int radius, int row)
-{
-    if (row<0 || row>=radius) return 0;
-    int d=2*radius-2*row-1, v=4*radius*radius-d*d, r=0;
-    while ((r+1)*(r+1)<=v) r++;
-    return radius-(r+1)/2;
-}
-struct frame_painter { struct desk_paint p; struct desk_box f; int radius; };
-static void ffill(struct frame_painter *fp, int x, int y, int w, int h, uint32_t colour)
-{
-    for (int yy=y; yy<y+h; yy++) {
-        int in=corner_inset(fp->radius,yy-fp->f.y), x0=x, x1=x+w;
-        if (x0<fp->f.x+in) x0=fp->f.x+in;
-        if (x1>fp->f.x+fp->f.w-in) x1=fp->f.x+fp->f.w-in;
-        if (x1>x0) desk_paint_fill(&fp->p,x0,yy,x1-x0,1,colour);
-    }
-}
-static void fgradient(struct frame_painter *fp, int x, int y, int w, int h, uint32_t top, uint32_t bottom, int horizontal)
-{
-    if (horizontal) {
-        struct desk_paint keep=fp->p;
-        for (int yy=y; yy<y+h; yy++) {
-            int in=corner_inset(fp->radius,yy-fp->f.y);
-            fp->p.cx=keep.cx; fp->p.cw=keep.cw;
-            struct desk_box row={fp->f.x+in,yy,fp->f.w-2*in,1}, a={keep.cx,keep.cy,keep.cw,keep.ch}, out;
-            if (!desk_intersect(row,a,&out)) continue;
-            fp->p.cx=out.x; fp->p.cw=out.w;
-            desk_paint_hgradient(&fp->p,x,yy,w,1,top,bottom);
-        }
-        fp->p=keep;
-        return;
-    }
-    for (int r=0; r<h; r++) ffill(fp,x,y+r,w,1,desk_mix(bottom,top,h>1 ? (unsigned)(r*255/(h-1)) : 0));
-}
-static void frame_outline(struct frame_painter *fp, uint32_t c)
-{
-    struct desk_box f=fp->f;
-    int r=fp->radius;
-    for (int i=0; i<r && i<f.h; i++) {
-        int in=corner_inset(r,i), prev=i ? corner_inset(r,i-1) : f.w;
-        int run=i ? (prev-1>in ? prev-1-in : 1) : f.w-2*in;
-        if (!i) { desk_paint_fill(&fp->p,f.x+in,f.y,f.w-2*in,1,c); continue; }
-        desk_paint_fill(&fp->p,f.x+in,f.y+i,run,1,c);
-        desk_paint_fill(&fp->p,f.x+f.w-in-run,f.y+i,run,1,c);
-    }
-    if (!r) desk_paint_fill(&fp->p,f.x,f.y,f.w,1,c);
-    int top=r ? r : 1;
-    desk_paint_fill(&fp->p,f.x,f.y+top,1,f.h-top,c);
-    desk_paint_fill(&fp->p,f.x+f.w-1,f.y+top,1,f.h-top,c);
-    desk_paint_fill(&fp->p,f.x,f.y+f.h-1,f.w,1,c);
-}
 static void window(struct desktop *d, int i, struct desk_box clip)
 {
+    /* Every window (programs, the DOS window, the built-in About/Run/Shut
+     * Down/message windows) goes through theme.c desk_paint_frame, the
+     * painter libdeskui's dialogs use as well. */
     struct desk_client *c = &d->clients[i];
     const struct desk_theme *t = desk_theme;
-    struct desk_box outer=desk_outer(c), area;
+    struct desk_box outer=desk_outer(c), area, f=c->frame;
     if (!desk_intersect(outer,clip,&area)) return;
-    struct frame_painter fp={paint_of(d,area),c->frame,t->radius};
-    struct desk_box f=c->frame;
-    int active=i==d->focus && !c->unresponsive, platinum=t->title_style==DESK_TITLE_PINSTRIPE;
-    if (t->shadow_size) desk_paint_shadow(&fp.p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow);
+    struct desk_paint p=paint_of(d,area);
+    if (t->shadow_size) desk_paint_shadow(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow);
     if (!desk_intersect(f,clip,&clip)) return;
-    fp.p=paint_of(d,clip);
-    uint32_t edge=active ? t->frame : t->frame_inactive;
-    ffill(&fp,f.x,f.y,f.w,f.h,t->face);
-    struct desk_box close = desk_close_box(c), min=desk_min_box(c), shade=desk_shade_box(c);
-    int buttons_x=d->shell && shade.w>0 ? shade.x : d->shell && min.w>0 ? min.x : close.x;
-    const char *title=c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title;
-    int font=active ? t->font_title : t->font_title;
-    uint32_t ink=active ? t->title_text : t->title_text_inactive;
-    if (platinum) {
-        /* Platinum: rounded outline, light bevel, title gradient with
-         * pinstripes either side of the centred title when active. */
-        fgradient(&fp,f.x+1,f.y+1,f.w-2,DESK_TITLE-2,active ? t->title[0] : t->title_inactive[0],
-                  active ? t->title[1] : t->title_inactive[1],0);
-        ffill(&fp,f.x+1,f.y+1,f.w-2,1,t->hilite);
-        desk_paint_fill(&fp.p,f.x+1,f.y+2,1,f.h-3,t->hilite);
-        desk_paint_fill(&fp.p,f.x+f.w-2,f.y+2,1,f.h-3,active ? t->shadow : t->light);
-        desk_paint_fill(&fp.p,f.x+1,f.y+f.h-2,f.w-2,1,active ? t->shadow : t->light);
-        int tw=desk_text_measure(font,title), left=f.x+8, right=buttons_x-6;
-        int tx=f.x+(f.w-tw)/2;
-        if (tx+tw+8>right) tx=right-8-tw;
-        if (tx<left+8) tx=left+8;
-        if (active) {
-            int sy=f.y+6, sh=12;
-            if (tx-8>left) desk_paint_pinstripes(&fp.p,left,sy,tx-8-left,sh,t->stripe_light,t->stripe_dark);
-            if (right>tx+tw+8) desk_paint_pinstripes(&fp.p,tx+tw+8,sy,right-tx-tw-8,sh,t->stripe_light,t->stripe_dark);
-        }
-        struct desk_paint tp=fp.p; struct desk_box tb;
-        if (desk_intersect((struct desk_box){left,f.y,right-left,DESK_TITLE},clip,&tb)) {
-            tp=paint_of(d,tb);
-            if (active) desk_paint_text(&tp,font,tx,f.y+17,title,t->hilite==0xffffffu ? 0xf8f8f8u : t->hilite);
-            desk_paint_text(&tp,font,tx,f.y+16,title,ink);
-        }
-    } else {
-        /* Gradient captions: raised frame, caption band, icon and title. */
-        uint32_t a0=active ? t->title[0] : t->title_inactive[0], a1=active ? t->title[1] : t->title_inactive[1];
-        if (c->unresponsive) { a0=desk_mix(0x8a3a2au,a0,140); a1=desk_mix(0x8a3a2au,a1,140); }
-        if (t->control_style==DESK_CONTROLS_CLASSIC) {
-            desk_paint_fill(&fp.p,f.x,f.y,f.w-1,1,t->light); desk_paint_fill(&fp.p,f.x,f.y,1,f.h-1,t->light);
-            desk_paint_fill(&fp.p,f.x+1,f.y+1,f.w-3,1,t->hilite); desk_paint_fill(&fp.p,f.x+1,f.y+1,1,f.h-3,t->hilite);
-            desk_paint_fill(&fp.p,f.x,f.y+f.h-1,f.w,1,t->dark); desk_paint_fill(&fp.p,f.x+f.w-1,f.y,1,f.h,t->dark);
-            desk_paint_fill(&fp.p,f.x+1,f.y+f.h-2,f.w-2,1,t->shadow); desk_paint_fill(&fp.p,f.x+f.w-2,f.y+1,1,f.h-2,t->shadow);
-            desk_paint_hgradient(&fp.p,f.x+3,f.y+3,f.w-6,DESK_TITLE-5,a0,a1);
-        } else {
-            fgradient(&fp,f.x+1,f.y+1,f.w-2,DESK_TITLE-1,a0,a1,1);
-            ffill(&fp,f.x+1,f.y+1,f.w-2,1,desk_mix(0xffffffu,a0,90));
-            desk_paint_fill(&fp.p,f.x+1,f.y+DESK_TITLE-1,f.w-2,1,desk_mix(t->dark,a1,120));
-            desk_paint_fill(&fp.p,f.x+1,f.y+DESK_TITLE,1,f.h-DESK_TITLE-2,t->hilite);
-            desk_paint_fill(&fp.p,f.x+f.w-2,f.y+DESK_TITLE,1,f.h-DESK_TITLE-1,t->shadow);
-            desk_paint_fill(&fp.p,f.x+1,f.y+f.h-2,f.w-2,1,t->shadow);
-        }
-        int tx=f.x+7;
-        struct desk_box tb;
-        if (desk_intersect((struct desk_box){f.x+4,f.y,buttons_x-f.x-6,DESK_TITLE},clip,&tb)) {
-            struct desk_paint tp=paint_of(d,tb);
-            /* Window icon: the shell's Tango icon for the client (the Ciuki
-             * portrait for About); without the shell only built-in windows. */
-            const uint32_t *ic=desk_shell_window_icon ? desk_shell_window_icon(d,i,16) : NULL;
-            if (ic || c->internal) {
-                struct desk_box ib; if (desk_intersect((struct desk_box){f.x+5,f.y+4,16,16},tb,&ib)) {
-                    if (ic) icon(d,ib,f.x+5,f.y+4,ic); else portrait_at(d,ib,f.x+5,f.y+4,16);
-                }
-                tx=f.x+25;
-            }
-            desk_paint_text(&tp,font,tx,f.y+17,title,ink);
-        }
-    }
-    struct desk_paint bp=fp.p; struct desk_box bb;
-    if (desk_intersect((struct desk_box){buttons_x,f.y,f.x+f.w-buttons_x,DESK_TITLE},clip,&bb)) {
-        bp=paint_of(d,bb);
-        int s=t->button, by=platinum ? f.y+(DESK_TITLE-s)/2 : f.y+4;
-        struct desk_box boxes[3]={close,min,shade}; int kinds[3]={DESK_GLYPH_CLOSE,DESK_GLYPH_MINIMIZE,DESK_GLYPH_COLLAPSE};
-        for (int k=0; k<3; k++) {
-            if (k && (!d->shell || boxes[k].w<=0)) continue;
-            int bx=platinum ? boxes[k].x+(boxes[k].w-s)/2 : boxes[k].x+boxes[k].w-s-1;
-            desk_paint_title_button(&bp,bx,by,s,kinds[k],active || !platinum,0,0);
-        }
-    }
-    if (platinum) {
-        /* Content well: a dark line under the title and round the content. */
-        uint32_t well=active ? t->dark : t->shadow;
-        desk_paint_fill(&fp.p,f.x+2,f.y+DESK_TITLE-1,f.w-4,1,well);
-        if (!c->collapsed) {
-            desk_paint_fill(&fp.p,f.x+2,f.y+DESK_TITLE,1,f.h-DESK_TITLE-2,well);
-            desk_paint_fill(&fp.p,f.x+f.w-3,f.y+DESK_TITLE,1,f.h-DESK_TITLE-2,well);
-            desk_paint_fill(&fp.p,f.x+2,f.y+f.h-3,f.w-4,1,well);
-        }
-    }
-    frame_outline(&fp,platinum || t->control_style!=DESK_CONTROLS_CLASSIC ? edge : t->dark);
-    if (t->control_style==DESK_CONTROLS_CLASSIC && !platinum) {
-        /* Classic frames are bevels only: restore the raised outer edge. */
-        desk_paint_fill(&fp.p,f.x,f.y,f.w-1,1,t->light); desk_paint_fill(&fp.p,f.x,f.y,1,f.h-1,t->light);
-    }
+    p=paint_of(d,clip);
+    /* Hover and pressed title buttons follow the pointer (input.c tracks
+     * the damage): the button under it, held while the left button is down. */
+    int code=desk_title_code(d,d->mouse_x,d->mouse_y);
+    unsigned hot=code && (code-1)/4==i ? 1u<<((code-1)%4) : 0;
+    struct desk_frame_style s={
+        .title=c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title,
+        .icon=desk_shell_window_icon ? desk_shell_window_icon(d,i,16) : NULL,
+        .active=i==d->focus && !c->unresponsive, .alert=c->unresponsive, .collapsed=c->collapsed,
+        .buttons=d->shell ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|DESK_TB_COLLAPSE : DESK_TB_CLOSE,
+        .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
+    desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s);
     struct desk_box content = desk_content(c), b;
     if (c->collapsed) return;
     if (c->internal) {
@@ -399,35 +277,18 @@ int desk_catalog_takes_file(const char *name)
 const char *desk_app_program(int kind) { return kind==DESK_APP_NOTE ? "ciuknote" : "files"; }
 int desk_program_kind(const char *name)
 { return !strcmp(name,"files") ? DESK_APP_FILES : !strcmp(name,"ciuknote") ? DESK_APP_NOTE : !strcmp(name,"control") ? DESK_APP_CONTROL : 0; }
-static void bevel(struct desk_paint *p, struct desk_box b, int sunken)
-{
-    const struct desk_theme *t=desk_theme;
-    uint32_t tl=sunken ? t->shadow : t->hilite, br=sunken ? t->hilite : t->dark;
-    desk_paint_fill(p,b.x,b.y,b.w-1,1,tl); desk_paint_fill(p,b.x,b.y,1,b.h-1,tl);
-    desk_paint_fill(p,b.x,b.y+b.h-1,b.w,1,br); desk_paint_fill(p,b.x+b.w-1,b.y,1,b.h,br);
-    if (!sunken) {
-        desk_paint_fill(p,b.x+1,b.y+b.h-2,b.w-2,1,t->shadow); desk_paint_fill(p,b.x+b.w-2,b.y+1,1,b.h-2,t->shadow);
-    } else {
-        desk_paint_fill(p,b.x+1,b.y+1,b.w-2,1,t->dark==0 ? t->dark : desk_mix(t->dark,t->shadow,90));
-    }
-}
 void desk_shell_draw(struct desktop *d, struct desk_box clip)
 {
-    /* Taskbar in the current theme: flat face with a light top edge and the
-     * Ciuki start button (face, bevel, approved portrait); the shell
-     * (shell.c) adds its label, the task buttons, the tray, menus and popups. */
+    /* Taskbar in the current theme: flat face with a light top edge; the
+     * shell (shell.c) adds the task buttons, the tray, menus and popups.
+     * The Ciuki (Start) button lives in the top bar (desk_shell_topbar). */
     const struct desk_theme *t=desk_theme;
     struct desk_box bar=desk_taskbar(d);
     struct desk_paint p=paint_of(d,clip);
     fill(d,bar,clip,t->taskbar);
     desk_paint_fill(&p,bar.x,bar.y,bar.w,1,t->light);
     desk_paint_fill(&p,bar.x,bar.y+1,bar.w,1,t->hilite);
-    struct desk_box start={4,bar.y+3,76,26};
-    fill(d,start,clip,d->menu_open ? t->start_open : t->start);
-    bevel(&p,start,d->menu_open);
-    portrait_at(d,clip,8,bar.y+6,20);
-    if (desk_shell_overlay) { desk_shell_overlay(d,clip); return; }
-    desk_paint_text(&p,t->font_bold,34+d->menu_open,bar.y+20+d->menu_open,"Ciuki",t->start_text);
+    if (desk_shell_overlay) desk_shell_overlay(d,clip);
 }
 /* Arrow pointer, 11x17: '#' outline, 'o' fill. */
 static const char *const arrow[17] = {

@@ -2615,7 +2615,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -2634,7 +2634,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -2653,7 +2653,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -2672,7 +2672,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -2691,7 +2691,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -2710,7 +2710,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -2729,7 +2729,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -16
+                    "value": 16
                   }
                 }
               ],
@@ -2765,7 +2765,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -191
+                    "value": 34
                   }
                 }
               ],
@@ -2813,7 +2813,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 66
+                    "value": 84
                   }
                 }
               ],
@@ -2856,7 +2856,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -128
+                    "value": 364
                   }
                 }
               ],
@@ -3523,7 +3523,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -3542,7 +3542,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -3561,7 +3561,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -3580,7 +3580,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -3599,7 +3599,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -3618,7 +3618,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 127
+                    "value": -127
                   }
                 }
               ],
@@ -3637,7 +3637,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -16
+                    "value": 16
                   }
                 }
               ],
@@ -3673,7 +3673,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -191
+                    "value": 34
                   }
                 }
               ],
@@ -3721,7 +3721,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 66
+                    "value": 84
                   }
                 }
               ],
@@ -3764,7 +3764,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -128
+                    "value": 364
                   }
                 }
               ],
@@ -4515,7 +4515,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 381
+                    "value": -381
                   }
                 }
               ],
@@ -4534,7 +4534,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 381
+                    "value": -381
                   }
                 }
               ],
@@ -4553,7 +4553,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -16
+                    "value": 16
                   }
                 },
                 {
@@ -4584,7 +4584,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -191
+                    "value": 34
                   }
                 }
               ],
@@ -4632,7 +4632,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 1
+                    "value": 18
                   }
                 }
               ],
@@ -4675,7 +4675,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -7
+                    "value": 486
                   }
                 }
               ],
@@ -6665,7 +6665,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 381
+                    "value": -381
                   }
                 }
               ],
@@ -6684,7 +6684,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 381
+                    "value": -381
                   }
                 }
               ],
@@ -6703,7 +6703,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -16
+                    "value": 16
                   }
                 },
                 {
@@ -6734,7 +6734,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -191
+                    "value": 34
                   }
                 }
               ],
@@ -6782,7 +6782,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 22
+                    "value": 40
                   }
                 }
               ],
@@ -6825,7 +6825,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 84
+                    "value": 576
                   }
                 }
               ],
@@ -7737,7 +7737,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 381
+                    "value": -381
                   }
                 }
               ],
@@ -7756,7 +7756,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": 381
+                    "value": -381
                   }
                 }
               ],
@@ -7775,7 +7775,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -16
+                    "value": 16
                   }
                 },
                 {
@@ -7806,7 +7806,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -191
+                    "value": 34
                   }
                 }
               ],
@@ -7854,7 +7854,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -22
+                    "value": -4
                   }
                 }
               ],
@@ -7897,7 +7897,7 @@
                   "type": "rel",
                   "data": {
                     "axis": "y",
-                    "value": -68
+                    "value": 424
                   }
                 }
               ],
