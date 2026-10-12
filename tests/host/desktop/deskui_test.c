@@ -233,7 +233,7 @@ int main(int argc, char **argv)
     du_add(&u, DU_SCROLLBAR, 90, (struct du_rect){300, 60, 16, 150}, "")->total = 50;
     du_get(&u, 90)->page = 10; du_get(&u, 90)->value = 20;
     struct du_widget *tree = du_add(&u, DU_TREE, 91, (struct du_rect){320, 60, 78, 150}, "");
-    static struct du_item nodes[4] = {{{"Root"}, NULL, NULL, 0, 0, 0, 1, 1}, {{"bin"}, NULL, NULL, 0, 0, 1, 0, 1},
+    static struct du_item nodes[4] = {{{"Root"}, NULL, NULL, 0, 0, 0, 1, 1}, {{"Programs"}, NULL, NULL, 0, 0, 1, 0, 1},
                                       {{"system"}, NULL, NULL, 1, 0, 1, 1, 1}, {{"logs"}, NULL, NULL, 0, 0, 2, 0, 0}};
     tree->items = nodes; tree->count = 4; tree->active = 2;
     assert(du_tree_toggle_hit(tree, 322 + 9 + 16, 62 + 17 + 8) == 1 && du_tree_toggle_hit(tree, 322 + 9 + 32, 62 + 17 * 3 + 8) == -1);

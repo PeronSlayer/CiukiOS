@@ -27,7 +27,7 @@
  * PINGs whose serials are base+n. */
 #define DESK_APP_FILES 1
 #define DESK_APP_NOTE 2
-#define DESK_APP_CONTROL 3          /* /bin/control: may send DESK_SETTINGS */
+#define DESK_APP_CONTROL 3          /* /Programs/control: may send DESK_SETTINGS */
 #define DESK_FILES_CHECKPOINT 0xf2310000u
 #define DESK_FILES_CHECKPOINTS 5
 #define DESK_NOTE_CHECKPOINT 0xf2320000u
@@ -42,8 +42,8 @@ struct desk_client {
     int configure_pending, focus_pending, close_pending;
     int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
     int collapsed;                /* windowshade: only the title bar shows (double-click or shade box) */
-    int taskman;                  /* f2-33: launched /bin/tasks; may send task requests */
-    int mixer;                    /* launched /bin/mixer (Volume Control); may send MIXER_SET */
+    int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
+    int mixer;                    /* launched /Programs/mixer (Volume Control); may send MIXER_SET */
     uint32_t pid, serial, version, window_id;
     uint64_t ping_sent_ns, next_ping_ns, order;
     struct ciuki_surface_info info;
@@ -61,7 +61,7 @@ struct desk_ops {
     int (*close)(int);
     int (*present)(int, int, const struct ciuki_rect *);
 };
-struct desk_program { char name[64], path[70]; };
+struct desk_program { char name[64], path[sizeof("/Programs/") + 64]; };
 struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent; };
 struct desktop {
     struct desk_ops ops;
@@ -147,7 +147,7 @@ void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
 int desk_task_switch(struct desktop *, uint32_t window_id);
 int desk_task_launch(struct desktop *, const char *name, const char *argument);
-/* Launch with several arguments after the desktop's own (Programs > Games: /bin/dosbox). */
+/* Launch with several arguments after the desktop's own (Programs > Games: /Programs/dosbox). */
 int desk_task_launch_args(struct desktop *, const char *name, const char *const *args, unsigned count);
 int desk_shell_click(struct desktop *);
 void desk_route_key(struct desktop *, int code, int value);

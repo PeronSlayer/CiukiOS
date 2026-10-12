@@ -29,12 +29,12 @@ static void fs_reset(void)
 {
     for (unsigned i = 0; i < node_count; i++) { free(nodes[i].data); memset(&nodes[i], 0, sizeof(nodes[i])); }
     node_count = 0; fail_save = fail_load = fail_list = saves = 0;
-    add_dir("/home"); add_dir("/system"); add_dir("/system/tests"); add_dir("/system/tests/sub"); add_dir("/bin");
+    add_dir("/Documents"); add_dir("/system"); add_dir("/system/tests"); add_dir("/system/tests/sub"); add_dir("/Programs");
     add_file("/system/tests/beta.txt", "lf only\nsecond\n", 15, 1791000000);
     add_file("/system/tests/Alpha.TXT", "Alpha\r\nline two\r\n", 17, 1790000000);
     add_file("/system/tests/data.bin", "\1\2\3", 3, 1792000000);
     add_file("/system/hello.txt", "hello", 5, 1791500000);
-    add_file("/bin/ciuknote", "ELF", 3, 1);
+    add_file("/Programs/ciuknote", "ELF", 3, 1);
 }
 static int f_stat(void *ctx, const char *path, struct cn_stat *st)
 {
@@ -521,7 +521,7 @@ static void test_file_dialogs(void)
 {
     reset(0);
     CTRL(0x18);
-    assert(dialog_is(D_OPEN) && ui.dialog.entry_count == 3 && entry_is(0, "bin") && entry_is(1, "home") && entry_is(2, "system"));
+    assert(dialog_is(D_OPEN) && ui.dialog.entry_count == 3 && entry_is(0, "Documents") && entry_is(1, "Programs") && entry_is(2, "system"));
     screen("open-root");
     type("/system/tests"); ENTER;                      /* an absolute folder in the name box navigates */
     assert(dialog_is(D_OPEN) && !strcmp(ui.dialog.folder, "/system/tests") && !name_box()[0]);
@@ -569,8 +569,8 @@ static void test_file_dialogs(void)
     CTRL(0x1f); menu_pick(0x21, 3); assert(dialog_is(D_SAVE) && !strcmp(ui.dialog.folder, "/system/tests/sub") && !strcmp(name_box(), "copy.log")); ESC;
     /* Saving over a folder name is refused. */
     reset(0); type("x"); CTRL(0x1f); type("/system/tests"); ENTER; assert(dialog_is(D_SAVE)); type("sub"); ENTER; assert(dialog_is(D_SAVE)); ESC;
-    reset(0); type("x"); CTRL(0x1f); type("/home/sub.txt"); fail_save = -EIO; ENTER; assert(dialog_is(D_INFO)); fail_save = 0; ENTER;
-    add_dir("/home/dir.txt"); CTRL(0x1f); type("/home/dir"); ENTER; assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "That name is a folder:")); ENTER;
+    reset(0); type("x"); CTRL(0x1f); type("/Documents/sub.txt"); fail_save = -EIO; ENTER; assert(dialog_is(D_INFO)); fail_save = 0; ENTER;
+    add_dir("/Documents/dir.txt"); CTRL(0x1f); type("/Documents/dir"); ENTER; assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "That name is a folder:")); ENTER;
     /* The Save As dialog's own cancel button keeps the document and the prompt chain stops. */
     reset(0); type("x"); CTRL(0x31); ENTER; assert(dialog_is(D_SAVE) && app.after == CN_AFTER_NEW); ESC; assert(!ui.dialog.kind && app.after == CN_AFTER_NONE && has_text("x"));
 }

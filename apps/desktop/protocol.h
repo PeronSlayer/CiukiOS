@@ -19,7 +19,7 @@ enum desk_opcode {
      * client; the other four flow client to desktop. */
     DESK_WINDOWS_QUERY, DESK_WINDOW_INFO, DESK_END_TASK, DESK_SWITCH_TO,
     DESK_LAUNCH, DESK_TASK_RESULT,
-    /* Desktop shell, version 2 only, client to desktop: only /bin/control
+    /* Desktop shell, version 2 only, client to desktop: only /Programs/control
      * launched by the desktop may send it (others get TASK_RESULT EPERM). */
     DESK_SETTINGS,
     /* Legacy recovery (Volume Control), version 2, client to desktop: serial,

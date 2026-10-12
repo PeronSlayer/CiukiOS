@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
+ * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
  * NAME: display, mouse, keyboard, sounds, datetime, system. */
 #include "control.h"
 #include <ciuki/audio.h>

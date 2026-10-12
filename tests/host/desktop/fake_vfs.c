@@ -157,10 +157,10 @@ void fake_assert_clean(void)
 void fake_image_tree(void)
 {
     fake_reset();
-    static const char *const dirs[] = {"/bin", "/system", "/system/assets", "/system/dos", "/system/licenses",
+    static const char *const dirs[] = {"/Programs", "/System", "/system/assets", "/system/dos", "/system/licenses",
                                        "/system/tests", "/system/tests/lua-5.4.8-tests", "/system/LOGS"};
     for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) fake_create(dirs[i], FM_DIR);
-    static const char *const programs[] = {"/bin/demo", "/bin/desktop", "/bin/files", "/bin/hello", "/bin/libc_smoke", "/bin/lua"};
+    static const char *const programs[] = {"/Programs/demo", "/Programs/desktop", "/Programs/files", "/Programs/hello", "/Programs/libc_smoke", "/Programs/lua"};
     for (unsigned i = 0; i < sizeof(programs) / sizeof(programs[0]); i++) {
         int n = fake_file(programs[i], 1000 + 37 * i, 1); fake_nodes[n].meta.exec = 1; fake_nodes[n].meta.mode = 0100777;
     }

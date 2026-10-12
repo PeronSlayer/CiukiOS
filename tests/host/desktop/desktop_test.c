@@ -292,8 +292,13 @@ static void test_menu(void)
     uint8_t elf[52]={0}; memcpy(elf,"\177ELF\1\1\1",7);
     elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     assert(desk_program_add(&d,"lua",elf,sizeof(elf)));
-    assert(desk_program_add(&d,"demo",elf,sizeof(elf)) && !strcmp(d.programs[0].path,"/bin/demo"));
+    assert(desk_program_add(&d,"demo",elf,sizeof(elf)) && !strcmp(d.programs[0].path,"/Programs/demo"));
     assert(!desk_program_add(&d,"demo",elf,sizeof(elf)));
+    char longest[64]; memset(longest,'z',sizeof(longest)-1); longest[sizeof(longest)-1]=0;
+    assert(desk_program_add(&d,longest,elf,sizeof(elf)));
+    assert(strlen(d.programs[2].path)==strlen("/Programs/")+strlen(longest) &&
+           !strcmp(d.programs[2].path+strlen("/Programs/"),longest));
+    assert(!desk_program_add(&d,longest,elf,sizeof(elf)));
     const char *bad[]={"", ".", "..", ".hidden", "a/b", "a\\b", "a:b", "a b", "desktop", "DESKTOP", "\xff"};
     for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) assert(!desk_program_add(&d,bad[i],elf,sizeof(elf)));
     char huge[80]; memset(huge,'a',sizeof(huge)); huge[79]=0;

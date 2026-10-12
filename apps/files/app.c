@@ -42,7 +42,7 @@ static const struct du_menu_item go_template[] = {
     {"&Back", C_BACK, DU_KEY_LEFT, DU_ALT, 0}, {"&Forward", C_FORWARD, DU_KEY_RIGHT, DU_ALT, 0},
     {"&Up One Level", C_UP, DU_KEY_UP, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Address Bar", C_ADDRESS, 0x20, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
-    {"&CiukiOS (/)", C_GO_ROOT, 0, 0, 0}, {"A&pplications (/bin)", C_GO_BIN, 0, 0, 0}, {"&System (/system)", C_GO_SYSTEM, 0, 0, 0}};
+    {"&CiukiOS (/)", C_GO_ROOT, 0, 0, 0}, {"A&pplications (/Programs)", C_GO_BIN, 0, 0, 0}, {"&System (/system)", C_GO_SYSTEM, 0, 0, 0}};
 static const struct du_menu_item help_template[] = {
     {"&Help Topics", C_HELP, DU_KEY_F1, 0, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&About Files", C_ABOUT, 0, 0, 0}};
 
@@ -225,7 +225,7 @@ static void sort_names(struct names *n)
 
 static void places_build(struct files_app *a)
 {
-    static const char *const names[] = {"CiukiOS", "Applications", "System"}, *const paths[] = {"/", "/bin", "/system"};
+    static const char *const names[] = {"CiukiOS", "Applications", "System"}, *const paths[] = {"/", "/Programs", "/system"};
     a->place_count = 0;
     for (unsigned i = 0; i < 3; i++) {
         struct files_place *p = &a->places[a->place_count++];
@@ -523,21 +523,21 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
     }
     if (with_note || kind == FM_KIND_TEXT || kind == FM_KIND_SCRIPT) {
         struct fm_meta meta;
-        if (a->model.fs.stat_path(a->model.fs.ctx, "/bin/ciuknote", &meta) || meta.type != FM_FILE) {
-            du_message(a->ui, D_INFO, "Files", "CiukNote is not installed.\nText files open in /bin/ciuknote once it is available.",
+        if (a->model.fs.stat_path(a->model.fs.ctx, "/Programs/ciuknote", &meta) || meta.type != FM_FILE) {
+            du_message(a->ui, D_INFO, "Files", "CiukNote is not installed.\nText files open in /Programs/ciuknote once it is available.",
                        DU_DLG_ICON_INFO, NULL, 0, 0, 0);
             return;
         }
         char *argv[] = {"ciuknote", path, NULL};
-        int r = spawn(a, "/bin/ciuknote", argv);
+        int r = spawn(a, "/Programs/ciuknote", argv);
         if (r < 0) error_box(a, "Files", "Cannot start CiukNote:", r);
         return;
     }
     if (kind == FM_KIND_IMAGE) {   /* pictures open in the Image Viewer (legacy recovery) */
         struct fm_meta meta;
-        if (!a->model.fs.stat_path(a->model.fs.ctx, "/bin/viewer", &meta) && meta.type == FM_FILE) {
+        if (!a->model.fs.stat_path(a->model.fs.ctx, "/Programs/viewer", &meta) && meta.type == FM_FILE) {
             char *argv[] = {"viewer", path, NULL};
-            int r = spawn(a, "/bin/viewer", argv);
+            int r = spawn(a, "/Programs/viewer", argv);
             if (r < 0) error_box(a, "Files", "Cannot start the Image Viewer:", r);
             return;
         }
@@ -845,7 +845,7 @@ static void command(struct files_app *a, int id)
     case C_FORWARD: after_history(a, fm_history(m, 1)); break;
     case C_UP: if (strcmp(m->path, "/")) { char p[FM_PATH]; fm_parent(p, m->path); files_navigate(a, p); } break;
     case C_GO_ROOT: files_navigate(a, "/"); break;
-    case C_GO_BIN: files_navigate(a, "/bin"); break;
+    case C_GO_BIN: files_navigate(a, "/Programs"); break;
     case C_GO_SYSTEM: files_navigate(a, "/system"); break;
     case C_TREE_OPEN: files_update(a); break;
     case C_ADDRESS: { struct du_widget *e = W(a, W_ADDRESS); du_focus(a->ui, W_ADDRESS); e->anchor = 0; e->cursor = strlen(e->text); break; }

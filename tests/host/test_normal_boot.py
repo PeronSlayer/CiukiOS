@@ -35,7 +35,7 @@ GOOD_SERIAL = [
     'CiukiOS 0.9.0 pre-alpha',
     '[init] flag safe_mode=0 boot_flags=0000016e activation_seq=1',
     '[records] dropped premature evidence record',
-    '[supervisor] bootstrap: spawning /bin/desktop',
+    '[supervisor] bootstrap: spawning /Programs/desktop',
     '[spawn] open err=0',
     '[supervisor] desktop pid=3 pgid=3',
 ]

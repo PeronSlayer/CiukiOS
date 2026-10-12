@@ -62,7 +62,7 @@ static void controls(struct du_ui *u, uint32_t *pixels, int w, int h)
         if (tools[i].sep) { du_add(u, DU_SEPARATOR, 130 + i, (struct du_rect){x + 2, 26, 2, 32}, ""); x += 7; }
     }
     du_add(u, DU_LABEL, 140, (struct du_rect){8, 68, 52, 22}, "A&ddress");
-    du_add(u, DU_EDIT, 141, (struct du_rect){62, 68, w - 70, 22}, "/home/ciuki")->icon = desk_icon_folder;
+    du_add(u, DU_EDIT, 141, (struct du_rect){62, 68, w - 70, 22}, "/Documents/ciuki")->icon = desk_icon_folder;
     struct du_widget *t = du_add(u, DU_TABS, 150, (struct du_rect){8, 98, w - 16, 196}, "");
     tabs[0].text[0] = "General"; tabs[1].text[0] = "Appearance"; tabs[2].text[0] = "About";
     t->items = tabs; t->count = 3; t->active = 1;
@@ -96,7 +96,7 @@ static void controls(struct du_ui *u, uint32_t *pixels, int w, int h)
     l->columns[0] = (struct du_column){"Name", 120, 0}; l->columns[1] = (struct du_column){"Size", 60, 1};
     l->columns[2] = (struct du_column){"Type", 130, 0};
     struct du_widget *tr = du_add(u, DU_TREE, 171, (struct du_rect){344, 302, w - 352, h - 302 - 26}, "");
-    static const char *const tree[6] = {"CiukiOS", "bin", "home", "ciuki", "system", "tmp"};
+    static const char *const tree[6] = {"CiukiOS", "Programs", "Documents", "ciuki", "System", "tmp"};
     static const uint8_t depth[6] = {0, 1, 1, 2, 1, 1}, kids[6] = {1, 0, 1, 0, 1, 0}, open[6] = {1, 0, 1, 0, 0, 0};
     for (int i = 0; i < 6; i++)
         nodes[i] = (struct du_item){{tree[i]}, i ? desk_icon_folder : desk_icon_harddisk, NULL, (uint8_t)(i == 3), 0, depth[i], open[i], kids[i]};
@@ -167,7 +167,7 @@ int main(int argc, char **argv)
             static const char *const programs[] = {"ciuknote", "demo", "dosbox", "files", "lua", "tasks"};
             for (int i = 0; i < 6; i++) {
                 snprintf(d->programs[i].name, sizeof(d->programs[i].name), "%s", programs[i]);
-                snprintf(d->programs[i].path, sizeof(d->programs[i].path), "/bin/%s", programs[i]);
+                snprintf(d->programs[i].path, sizeof(d->programs[i].path), "/Programs/%s", programs[i]);
             }
             d->program_count = 6;
             desk_shell_enable(d);
@@ -187,7 +187,7 @@ int main(int argc, char **argv)
                 du_message(&ua, 9, "Apply Theme", "Switch the desktop to this theme?\nOpen windows repaint at once.",
                            DU_DLG_ICON_QUESTION, yes, 3, 0, 2);
                 du_window_focus(&ua, 0);
-                assert(!du_file_dialog(&ub, 8, 0, "Open", "/home/ciuki", "ciuki.txt", lister, NULL));
+                assert(!du_file_dialog(&ub, 8, 0, "Open", "/Documents/ciuki", "ciuki.txt", lister, NULL));
                 window(d, 0, "Display Properties", a, 520, 430, 36, 60, DESK_APP_FILES);
                 window(d, 1, "notes.txt - CiukNote", b, 440, 300, 420, 200, DESK_APP_NOTE);
                 du_menu_open(&ua, 2, 1);

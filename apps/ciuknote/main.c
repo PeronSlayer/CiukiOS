@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * /bin/ciuknote: a Notepad-class text editor on libdeskui (f2-32).
+ * /Programs/ciuknote: a Notepad-class text editor on libdeskui (f2-32).
  * Usage: ciuknote [--channel-fd=N] [--test=ciuknote] [path] */
 #include "app.h"
 #include "../libdeskui/recent.h"

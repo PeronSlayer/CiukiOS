@@ -130,7 +130,7 @@ const char *du_icon_store_name(unsigned index);
 const char *du_icon_notice(void);                            /* the store's Tango licence notice */
 
 /* CiukiOS objects -> Tango names (icon_map.c). Keys are "<kind>:<object>":
- * program:<name in /bin>, menu:, action:, place:, type:folder|executable|unknown,
+ * program:<name in /Programs>, menu:, action:, place:, type:folder|executable|unknown,
  * type:.<extension>, status:, dialog:, device:, settings:, category:, emblem:, wm:.
  * An unknown object of a known kind gets that kind's default; a key without
  * a colon is returned unchanged (a Tango name). */

@@ -1,5 +1,13 @@
 # F2 ring-3 desktop and client protocol
 
+Owner decision 2026-10-12 (f2-35): native applications live in `/Programs`,
+with `PATH=/Programs` and `HOME=/Documents`. The Documents shortcut and recent
+list use `/Documents` and `/Documents/recent.lst`. The canonical FAT32 image
+preserves the display names `Programs`, `Documents`, `System` and `Games`;
+runtime `/system` paths and `C:\GAMES\CIUKIGAM.IMG` retain case-insensitive
+lookup. `/tmp`, synthetic `/dev` and `/mnt`, and the drive mapping are unchanged.
+See [the POSIX namespace contract](design/posix-subset.md#posix-paths-over-the-drive-vfs).
+
 ## System icons: the Tango store (2026-10-12)
 
 The owner asked for a complete copyright-free icon set as the default and only
@@ -58,7 +66,7 @@ size and pinned hashes: [`assets/icons/README.md`](../assets/icons/README.md).
   before); devices; settings items; emblems; window-manager buttons for a
   toolkit that wants them. `du_icon_name()` falls back to a kind's `*` entry;
   `du_icon_file(name, directory, executable)` picks folder, then a native
-  executable's `/bin` program icon, then the extension, then unknown.
+  executable's `/Programs` program icon, then the extension, then unknown.
 - **Users.** Files (toolbar, address bar, places, tree, list/icon views,
   properties), the open/save dialog (file-type icons), message boxes, Task
   Manager (Applications rows show the owning process's program icon), and the
@@ -93,7 +101,7 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   right): Programs (CiukNote,
   Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
   Accessories and Games submenus, then a Developer submenu with Hello,
-  libc_smoke and any unknown `/bin` program),
+  libc_smoke and any unknown `/Programs` program),
   Documents (recent files, My Documents, Clear Recent Documents), Settings
   (Control Panel and its pages, Task Manager), Help (Keyboard Shortcuts, About
   CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
@@ -110,14 +118,14 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
   the public read-only state, without `/dev/mixer` "No audio device".
 - **Desktop icons:** Computer (Files at `/`; the icon carries the Ciuki
-  portrait), Documents (Files at `/home`), DOS Box, CiukNote, Control Panel and
+  portrait), Documents (Files at `/Documents`), DOS Box, CiukNote, Control Panel and
   Trash (a placeholder: nothing in CiukiOS keeps deleted files yet). Click
   selects, a double click (desktop.cfg `double_click_ms`) or Enter opens, right
   click opens Open/Properties; the background menu has Arrange Icons, Refresh,
   Display Settings... and Properties.
 - **Built-in windows** (internal clients, framed by the compositor): About
   CiukiOS (tabs General, System from call 70's system record and `uname`,
-  Credits), Run (a `/bin` program and up to six arguments, double quotes
+  Credits), Run (a `/Programs` program and up to six arguments, double quotes
   group), Shut Down CiukiOS (Restart, Shut Down, Cancel) and message boxes.
 - **Shortcuts:** Win (tap) or Ctrl+Esc opens the Start menu; Alt+Tab and
   Shift+Alt+Tab switch windows with an overlay; Alt+F4 sends the v2
@@ -178,7 +186,7 @@ git-ignored, Microsoft copyright) are never added to the repository or to the
 image;** the desktop only shows them if the owner copies them into
 `/system/wallpapers` himself (they are 8/4-bit tiles; choose Tile).
 
-### Control Panel (`/bin/control`)
+### Control Panel (`/Programs/control`)
 
 A libdeskui program (500 x 420) with tabs Display (theme list with preview,
 wallpaper list with preview, Center/Tile/Stretch/Fit, six desktop colours,
@@ -197,7 +205,7 @@ v2 opcode for it, client to desktop, version 2 only:
 | SETTINGS=21 | 24 | u32 serial@4, request@8 (1 reload desktop.cfg: the other fields zero; 2 master volume), left@12, right@16 (0..100), mute@20 (0/1) |
 
 The desktop answers TASK_RESULT (request 21): 0, EPERM for any client it did
-not launch as `/bin/control`, ENODEV for request 2 without the mixer handle.
+not launch as `/Programs/control`, ENODEV for request 2 without the mixer handle.
 
 ### Keyboard layouts
 
@@ -218,7 +226,7 @@ approved portrait, whose `#375564` surround is made transparent.
 
 ## f2-33 Task Manager and the v2 task extension (2026-10-11)
 
-`/bin/tasks` is the CiukiOS Task Manager (menu label "Task Manager", a
+`/Programs/tasks` is the CiukiOS Task Manager (menu label "Task Manager", a
 400x420 window): tabs Applications, Processes and
 Performance (the Virtual Machines tab arrives with F3, f3-02), menus File
 (New Task (Run...), Exit Task Manager), View (Refresh Now F5; Update Speed
@@ -232,8 +240,8 @@ Research and decisions are in docs/design/f2-acceptance.md, section F2-33.
   the desktop's heartbeat), sorted by title, PID and window id. End Task
   (Alt+E or Delete) sends END_TASK, the desktop's close path: CLOSE_REQUEST, SIGTERM
   after 2 s for its own children. Switch To (Alt+S, Enter, double-click) restores and
-  focuses. New Task (Alt+N) asks the desktop to launch an admitted `/bin`
-  program (name or `/bin/name`), so graphical programs get their channel and
+  focuses. New Task (Alt+N) asks the desktop to launch an admitted `/Programs`
+  program (name or `/Programs/name`), so graphical programs get their channel and
   appear here; the launched program's row is selected once it appears.
 - **Processes:** Image Name, PID, PPID, Threads, Mem Usage (resident pages x
   4 KiB), CPU (percent of the last interval), sortable by header click
@@ -249,7 +257,7 @@ Research and decisions are in docs/design/f2-acceptance.md, section F2-33.
 The v2 task extension follows f2-30's rules: version 2 only, a v1 client or
 a wrong direction is a protocol error (that peer is disconnected), payload
 tails are zero and integers little-endian. Requests from a client that the
-desktop did not launch as `/bin/tasks` receive TASK_RESULT with EPERM; no
+desktop did not launch as `/Programs/tasks` receive TASK_RESULT with EPERM; no
 other client gains any right.
 
 | Opcode | Direction | Payload bytes | Fields |
@@ -258,12 +266,12 @@ other client gains any right.
 | WINDOW_INFO=16 | Desktop → client | 32+n | u32 serial@4, index@8, count@12 (0..16), window_id@16, pid@20, flags@24 (1 unresponsive, 2 minimized, 4 focused, 8 internal, 16 closing), n@28; title@32, 0..63 printable bytes. count=0 is one message with every field zero. |
 | END_TASK=17 | Client → desktop | 16 | u32 serial@4, window_id@8, pid@12; not both zero. window_id selects a window (pid, when nonzero, must match); window_id=0 ends a desktop child by PID: its windows get close requests, a windowless child gets SIGTERM. |
 | SWITCH_TO=18 | Client → desktop | 12 | u32 serial@4, window_id@8 (nonzero) |
-| LAUNCH=19 | Client → desktop | 12+n, or 16+n+a with an argument (f2-32) | u32 serial@4, n@8 (1..63); name@12, visible ASCII without spaces, matched against the `/bin` menu list. Optional argument after the name: u32 a@12+n (1..160), then a bytes (32..255 except 127), one `argv[1]` for the program; a message of any other length is a protocol error. |
+| LAUNCH=19 | Client → desktop | 12+n, or 16+n+a with an argument (f2-32) | u32 serial@4, n@8 (1..63); name@12, visible ASCII without spaces, matched against the `/Programs` menu list. Optional argument after the name: u32 a@12+n (1..160), then a bytes (32..255 except 127), one `argv[1]` for the program; a message of any other length is a protocol error. |
 | TASK_RESULT=20 | Desktop → client | 16 | u32 serial@4, request@8 (15, 17, 18 or 19), i32 result@12: 0, the launched PID, or -errno (EPERM, ESRCH, ENOENT, EAGAIN when the reply queue cannot hold a whole list, or the spawn error) |
 
 Window ids are assigned by the desktop at window creation (never 0) and are
 not reused while the counter does not wrap. The desktop never sends a partial
-window list. The desktop launches `/bin/tasks` like Files (a graphical menu program:
+window list. The desktop launches `/Programs/tasks` like Files (a graphical menu program:
 `--channel-fd=3`, `CIUKI_DISPLAY`), plus the authority at fd 4 and
 `--authority-fd=4` (absent when PID 1 installed none);
 other programs never receive it.
@@ -299,7 +307,7 @@ message/input dialogs, timers and `du_run`.
 
 ## f2-32 CiukNote (2026-10-11)
 
-`/bin/ciuknote` is a Notepad-class editor on libdeskui (menu label "CiukNote",
+`/Programs/ciuknote` is a Notepad-class editor on libdeskui (menu label "CiukNote",
 Tango text-document icon in the menu and the taskbar): `apps/ciuknote/app.c` commands,
 dialogs and find bar, `doc.c` file and text rules, `vfs.c` the POSIX boundary, `main.c`
 the window glue, `apps/libdeskui/textarea.{h,c}` the multi-line widget (`DU_TEXTAREA`).
@@ -365,7 +373,7 @@ conventions of the other desktop cases. These were checked against `apps/libdesk
 the display grants of a client. A Files that the desktop launched therefore sends LAUNCH
 (protocol v2) with the name `ciuknote` and the file's absolute path as the single
 argument. The desktop honours exactly that: the requester must be a client it launched as
-`/bin/files` (`program == 1`, kernel-stamped PID), the name must be `ciuknote`, and the
+`/Programs/files` (`program == 1`, kernel-stamped PID), the name must be `ciuknote`, and the
 argument must start with `/`; every other request with an argument, from any client
 including the Task Manager, is answered `-EPERM`, and the Task Manager keeps its
 argument-less LAUNCH. The program is started as `ciuknote --channel-fd=3 <path>` and the
@@ -464,7 +472,7 @@ message box, a dedicated text-editor icon (the generic text-document icon is use
 
 ## Files
 
-Files is the CiukiOS file manager (`/bin/files`), started from the Ciuki menu
+Files is the CiukiOS file manager (`/Programs/files`), started from the Ciuki menu
 ("Files", with the Tango file-manager icon). Its window follows the Windows 98
 Explorer layout in the CiukiOS colours.
 
@@ -478,7 +486,7 @@ Explorer layout in the CiukiOS colours.
   Views (click to cycle views; the arrow lists them).
 - **Address bar.** Type a path such as `/system/assets` and press Enter; Esc
   restores the current folder. Letter case does not matter on FAT volumes.
-- **Left pane.** Places lists CiukiOS (`/`), Applications (`/bin`), System
+- **Left pane.** Places lists CiukiOS (`/`), Applications (`/Programs`), System
   (`/system`) and every volume mounted under `/mnt`. Folders shows the tree,
   opened along the current folder; [+] and [-] expand and collapse it.
 - **Views.** Details (Name, Size, Type, Modified; click a header to sort, again
@@ -501,7 +509,7 @@ Explorer layout in the CiukiOS colours.
   is no Recycle Bin yet). Properties shows type, location, size, contents,
   modification time and the read-only attribute.
 - **Opening.** Enter or double-click opens folders; text documents and scripts
-  open in `/bin/ciuknote` when it is installed; programs run directly.
+  open in `/Programs/ciuknote` when it is installed; programs run directly.
 - **Keys.** Enter, Backspace (up one level, as in Windows 98), Alt+Left/Right/
   Up, F2, F4 or Alt+D (address bar), F5, Del, Alt+Enter, Ctrl+C/X/V, Ctrl+A,
   Alt+F4.
@@ -541,21 +549,21 @@ change must be reviewed and re-pinned.
 
 ## f3-02 additions (2026-10-11)
 
-`/bin/dosbox` (apps/dosbox) is an ordinary protocol-v2 client that owns one
+`/Programs/dosbox` (apps/dosbox) is an ordinary protocol-v2 client that owns one
 DOS virtual machine through syscall 72 (execution-abi.md, F3-02 amendment);
 the kernel renders the VM into the client's 640x480 surface and the desktop
-composites it unchanged. The menu lists it from `/bin` like any program and
-passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/bin` menu
+composites it unchanged. The menu lists it from `/Programs` like any program and
+passes it `--channel-fd=3`. `desktop --launch=<name>` starts one `/Programs` menu
 program at shell start through the menu-click path; the `f3:vm-window` probe
 uses it. Menu click offsets for the scripted cases follow the formula in
 docs/design/f2-acceptance.md, section F2-33. Details: docs/design/f3-acceptance.md, section f3-02.
 
 ## Games (owner decision 2026-10-12)
 
-Programs > Games (present with `/bin/dosbox`) lists the pre-installed
+Programs > Games (present with `/Programs/dosbox`) lists the pre-installed
 shareware games of `apps/desktop/catalog.h` (`desk_games`): "Wolfenstein 3D
 (shareware)" and "DOOM (shareware)", Tango `applications-games`. Each starts
-`/bin/dosbox --name=<game> <command>`; dosbox types the command at the DOS
+`/Programs/dosbox --name=<game> <command>`; dosbox types the command at the DOS
 prompt of its window (`apps/dosbox/autorun.h`: `\DIR\PROGRAM` becomes
 `CD \DIR` and `PROGRAM`) once DOS is ready and the window has the focus. The
 window VM boots the bundled games disk `C:\GAMES\CIUKIGAM.IMG`
@@ -574,7 +582,7 @@ children inherit the desktop's supervisor-created process group (flags=0), so
 the existing group-local `kill` can send SIGTERM after a two-second close grace.
 The crash gate retains NEW_GROUP and its original transport and pacing.
 
-Choose a sorted `/bin` scan, bounded to 16 regular i386 ELF candidates, excluding
+Choose a sorted `/Programs` scan, bounded to 16 regular i386 ELF candidates, excluding
 `desktop` itself. Validate printable, bounded basenames and an ELF32 little-endian
 ET_EXEC/i386 prefix before admitting a menu entry; the kernel loader remains the
 authority on executable validity. Children receive only stdio and an explicit
@@ -682,7 +690,7 @@ integer arithmetic. The libc may use the SDK's qualified x87 instructions.
 
 `build/apps/desktop/manifest.json` records commands, source/SDK hashes, ELF
 sizes/LOAD memory, conversion parameters and hashes. `scripts/build_image.py`
-validates these before image creation and adds `/bin/desktop`, `/bin/demo`,
+validates these before image creation and adds `/Programs/desktop`, `/Programs/demo`,
 and `/system/assets/ciuki-portrait.xrgb` (since 2026-10-12 also
 `/system/icons/tango.cis` and its three notices). The image manifest includes each
 payload's size and SHA-256 plus desktop/portrait provenance, and existing T1
@@ -809,7 +817,7 @@ are enforced by the kernel/supervisor, not invented by the compositor.
 
 ## Bootstrap and f2-09 wiring
 
-Normal launch is `/bin/desktop`; current supervisor stdio uses fd 0–2 and
+Normal launch is `/Programs/desktop`; current supervisor stdio uses fd 0–2 and
 `grants_install` chooses the next free slots, so display/input default to 3/4.
 The supervisor must pass `--display-fd=N --input-fd=N` if it reserves other
 descriptors first. Repeated `--channel=N` registers explicitly inherited
@@ -824,7 +832,7 @@ desktop --test=crash-isolation --demo=none --victim=bad-pointer --cycles=100
 ```
 
 The desktop creates each test pair, explicitly maps the child's endpoint to
-fd 3, spawns `/bin/demo` with CIUKI_SPAWN_NEW_GROUP, and closes its own duplicate
+fd 3, spawns `/Programs/demo` with CIUKI_SPAWN_NEW_GROUP, and closes its own duplicate
 of the child's endpoint. Sequential victims are reaped with waitpid and a
 120 ms minimum interval before the next spawn. The survivor stays alive and
 exchanges PING/PONG turns. Cycle output is plain application output with PID,
@@ -913,6 +921,9 @@ ELF/SDK/source/output provenance and the production image payload inventory.
 The final `ciuki-cc` build and inspections completed in 0.761 seconds. A repeat
 build accepted the same source/output hashes without recompilation. These ELF
 sizes include debug information, which remains in the image payloads:
+
+The names and measurements below record the earlier build, before the
+2026-10-12 namespace amendment; current builds use `/Programs`.
 
 | Payload | File bytes | Text | Data | BSS | Page-rounded LOAD bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |

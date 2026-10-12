@@ -199,7 +199,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *ctx)
     case A_SWITCH: if (tv_window(v, m)) request(a, DESK_SWITCH_TO, tv_window(v, m)->id, 0, NULL); break;
     case A_END_TASK: end_task(a); break;
     case A_NEW: case M_NEW:
-        du_input_box(u, D_NEW, "Create New Task", "Type the name of a program in /bin, and CiukiOS\nwill open it for you.", "");
+        du_input_box(u, D_NEW, "Create New Task", "Type the name of a program in /Programs, and CiukiOS\nwill open it for you.", "");
         break;
     case A_END_PROCESS: confirm_end_process(a); break;
     case M_REFRESH: refresh(a); break;

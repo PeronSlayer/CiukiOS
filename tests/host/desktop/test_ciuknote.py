@@ -97,9 +97,9 @@ def case():
 
 
 def bin_programs():
-    """The desktop menu lists /bin of the image, sorted by strcmp (the desktop itself is not listed)."""
+    """The desktop menu lists /Programs of the image, sorted by strcmp (the desktop itself is not listed)."""
     text = (ROOT / "scripts/build_image.py").read_text()
-    return sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', text)) - {"desktop"})
+    return sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', text)) - {"desktop"})
 
 
 class CiuknoteTests(unittest.TestCase):
@@ -192,11 +192,11 @@ class CiuknoteTests(unittest.TestCase):
 
     def test_menu_row_arithmetic_follows_the_image_inventory(self):
         """The script reaches CiukNote through the Ciuki button, Programs and the CiukNote row of the
-        Programs submenu (tests/host/desktop/shell_menu.py). Adding or removing a /bin program can move a
+        Programs submenu (tests/host/desktop/shell_menu.py). Adding or removing a /Programs program can move a
         submenu row; this test names the inventory, and the desktop cases must follow."""
         programs = bin_programs()
         self.assertEqual(programs, ["calc", "charmap", "ciuknote", "clock", "control", "demo", "dosbox", "files", "hello", "help", "libc_smoke", "lua", "mixer", "tasks", "viewer"],
-                         "the image's /bin changed: check the Programs submenu rows of the desktop cases")
+                         "the image's /Programs changed: check the Programs submenu rows of the desktop cases")
         menu = load("note_shell_menu", ROOT / "tests/host/desktop/shell_menu.py")
         c, _ = case()
         x, y, clicks = 512, 384, []   # 1024x768 (QEMU std VGA mode 0x144); the cursor starts at the centre

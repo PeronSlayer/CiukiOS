@@ -1181,7 +1181,7 @@ group-local rule unchanged.
 authority object at the lowest free fd >= 3 of the trusted desktop, FD_CLOEXEC
 clear, and passes its number as `CIUKI_TASKS_FD`. Default inheritance covers
 only fds 0-2, so it never travels implicitly; the desktop names it in the
-explicit spawn list (target fd 4) only for `/bin/tasks`. Close, dup, dup2 and
+explicit spawn list (target fd 4) only for `/Programs/tasks`. Close, dup, dup2 and
 fcntl treat it as a generic object; fstat gives EOPNOTSUPP, byte I/O EBADF.
 The object is freed with its last descriptor. The F0/F2 ledgers count it as a
 handle of its holder; no device, description or grant counter changes.
@@ -1219,7 +1219,7 @@ any reservation or sleep; results are copied back only on success.
 | STATUS | 6 | State, reason, focus and video mode. |
 
 Authority is not a descriptor. The kernel marks a process at spawn only when
-its exact path is `/bin/dosbox` and its parent is the bootstrap supervisor or
+its exact path is `/Programs/dosbox` and its parent is the bootstrap supervisor or
 owns both a display and an input grant (the desktop); grants never leave
 their owner, so no other launcher can confer it. Keys belong to the owner:
 another process, a stale generation or a closed VM gets ESRCH. Owner death
@@ -1273,7 +1273,7 @@ in `ciuki/power.h` (`-1` with errno on failure).
 | `CIUKI_POWER_QUERY` | 3 | Returns `CIUKI_POWER_CAN_REBOOT` (1) and, when ACPI soft-off was found, `CIUKI_POWER_CAN_OFF` (2). No side effect except the one-time table parse. |
 
 **Authority.** Only the process whose PID is the supervisor's live desktop
-(`supervisor_desktop_pid()`, the `/bin/desktop` spawned by PID 1 with
+(`supervisor_desktop_pid()`, the `/Programs/desktop` spawned by PID 1 with
 `desktop=true`) may call it; every other caller gets `EPERM`, including
 queries. Unknown actions give `EINVAL`.
 

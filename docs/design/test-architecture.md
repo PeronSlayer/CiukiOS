@@ -73,7 +73,7 @@ used copy-on-write. Earlier, `/tmp` (a 7.4 GiB tmpfs, that is RAM) filled with
 Every probe case boots with the fw_cfg request, and with
 `CBI_F_TEST_REQUEST` the kernel's `probes_main` never calls `drivers_init()`
 or `supervisor_bootstrap()`. The path a user boots (drivers, storage with the
-boot log and timer, files, audio, supervisor spawning `/bin/desktop`) was
+boot log and timer, files, audio, supervisor spawning `/Programs/desktop`) was
 therefore never covered. A case with `"kind": "normal-boot"` (and
 `"probe": "normal-boot"`) closes that gap:
 
@@ -87,7 +87,7 @@ therefore never covered. A case with `"kind": "normal-boot"` (and
 - Evidence is serial text, not CIUKI_TEST records. Milestones are whole-line
   prefixes, once each and in this order: `L:CPU signature=`,
   `L:SELECT_SOURCE=menu`, `Ciuki VMM F0 build <id> - CiukiOS`,
-  `[supervisor] bootstrap: spawning /bin/desktop`,
+  `[supervisor] bootstrap: spawning /Programs/desktop`,
   `[supervisor] desktop pid=<n> pgid=<n>`. The case fails on a line starting
   with `Ciuki VMM panic`/`Ciuki VMM double fault`, any `CIUKI_TEST` record
   (a panic record or a probe record without a request), another

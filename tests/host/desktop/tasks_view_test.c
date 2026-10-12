@@ -119,7 +119,7 @@ int main(int argc, char **argv)
     tv_page(&v, TV_APPS); tv_speed(&v, TV_PAUSED); tv_update(&v, &m);
     assert(strstr(du_get(&ui, A_STATUS)->text, "(paused)") && v.view_items[5].flags == (DU_ITEM_RADIO | DU_ITEM_CHECKED));
     /* New Task: typed set-1 keys, Enter reports the edit text. */
-    du_input_box(&ui, D_NEW, "Create New Task", "Type the name of a program in /bin, and CiukiOS\nwill open it for you.", "");
+    du_input_box(&ui, D_NEW, "Create New Task", "Type the name of a program in /Programs, and CiukiOS\nwill open it for you.", "");
     tap(&ui, 0x20); tap(&ui, 0x12); tap(&ui, 0x32); tap(&ui, 0x18);
     du_render(&ui); save(folder, "newtask", pixels);
     event_count = 0; tap(&ui, DU_KEY_ENTER);

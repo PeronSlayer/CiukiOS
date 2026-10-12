@@ -40,9 +40,9 @@ the installed SDK and license hashes before building and verifies the untouched
 upstream files afterwards. Unchanged inputs and matching output hashes reuse
 the build; a digest mismatch is rejected before replacing existing outputs.
 
-The image contains `/bin/lua`, `/bin/hello`, `/bin/libc_smoke`, the complete
+The image contains `/Programs/lua`, `/Programs/hello`, `/Programs/libc_smoke`, the complete
 `/system/tests/lua-5.4.8-tests/` directory (including `libs/P1/`), and the
-separate `/system/tests/ciuki-f2.lua`. `/tmp` and `/home` are initially empty.
+separate `/system/tests/ciuki-f2.lua`. `/tmp` and `/Documents` are initially empty.
 Kernel, boot options and license files also appear in the payload inventory.
 `luac` is built and inspected for the SDK but is not an image payload in this
 directive. Every file is listed by path, size and SHA-256 in
@@ -52,8 +52,8 @@ are retained.
 
 ## Supplement interface
 
-The controller starts a separate run of `/bin/lua /system/tests/ciuki-f2.lua`
-with `LC_ALL=C`, `TZ=UTC0`, `HOME=/home`, `TMPDIR=/tmp`, `PATH=/bin`. The script emits bounded
+The controller starts a separate run of `/Programs/lua /system/tests/ciuki-f2.lua`
+with `LC_ALL=C`, `TZ=UTC0`, `HOME=/Documents`, `TMPDIR=/tmp`, `PATH=/Programs`. The script emits bounded
 printable `case=<name> ok=1|0` lines for `file-roundtrip`, `allocation`,
 `time-utc` and `console`, then exits zero only if all four succeed. It emits
 no controller BEGIN/DATA/END framing or sequence numbers.

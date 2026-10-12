@@ -190,7 +190,7 @@ class DesktopTests(unittest.TestCase):
             subprocess.run([str(binary)], check=True, env=env)
 
     def test_dosbox_autorun(self):
-        """/bin/dosbox COMMAND (Programs > Games): the typed key events (apps/dosbox/autorun.h)."""
+        """/Programs/dosbox COMMAND (Programs > Games): the typed key events (apps/dosbox/autorun.h)."""
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="dosbox-autorun-", dir=parent) as temp:
@@ -250,7 +250,7 @@ class DesktopTests(unittest.TestCase):
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
         self.assertEqual(set(m["files"]), {"desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "control", "libdeskui.a",
-                                           "ciuki-portrait.xrgb",  # f3-02 /bin/dosbox; desktop shell /bin/control
+                                           "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
                                            "calc", "charmap", "clock", "help", "mixer", "viewer"})  # legacy-recovery accessories
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
@@ -260,14 +260,14 @@ class DesktopTests(unittest.TestCase):
         self.assertFalse(build.current_build(expected))
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
-        accessories = {f"/bin/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
-        self.assertEqual(set(sources), {"/bin/desktop", "/bin/demo", "/bin/dosbox", "/bin/files", "/bin/tasks",
-                                        "/bin/ciuknote", "/bin/control", "/bin/calc", "/bin/charmap", "/bin/clock", "/bin/help", "/bin/mixer", "/bin/viewer",
+        accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
+        self.assertEqual(set(sources), {"/Programs/desktop", "/Programs/demo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
+                                        "/Programs/ciuknote", "/Programs/control", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
                                         "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png"})
-        self.assertTrue({"/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
+        self.assertTrue({"/Programs", "/System", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
@@ -380,8 +380,8 @@ class AppCaseReplayTests(unittest.TestCase):
         subprocess.run(["clang", "-fsanitize=address,undefined", "-pthread", *map(str, objects), "-o", str(cls.binary)],
                        check=True, env=cls.env)
         cls.suite = json.loads((ROOT / "tests/suites/f2-desktop.json").read_text())
-        # The image's /bin, as the desktop scans it (the menu lists it without the desktop itself).
-        cls.programs = sorted(set(re.findall(r'"/bin/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())))
+        # The image's /Programs, as the desktop scans it (the menu lists it without the desktop itself).
+        cls.programs = sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())))
 
     @classmethod
     def tearDownClass(cls):
