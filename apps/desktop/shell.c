@@ -988,7 +988,8 @@ static void draw_start(struct desktop *d, struct du_canvas *c)
 void desk_shell_topbar(struct desktop *d, struct desk_box clip)
 {
     /* The compositor fills the bar and its edges in the theme; the shell
-     * adds the Ciuki button, the active window (or the tagline) and the date. */
+     * adds the Ciuki button, the active window title or notice (no tagline:
+     * owner request 2026-10-12) and the date. */
     const struct desk_theme *t = desk_theme;
     struct desk_box bar = {0, 0, (int32_t)d->width, DESK_BAR}, b;
     if (!desk_intersect(bar, clip, &b)) return;
@@ -1007,9 +1008,9 @@ void desk_shell_topbar(struct desktop *d, struct desk_box clip)
     if (room > 0) {
         struct desk_paint tp = p;
         struct desk_box tb;
-        if (desk_intersect((struct desk_box){x + 14, 0, room, DESK_BAR}, b, &tb)) {
+        if (what && desk_intersect((struct desk_box){x + 14, 0, room, DESK_BAR}, b, &tb)) {
             tp.cx = tb.x; tp.cy = tb.y; tp.cw = tb.w; tp.ch = tb.h;
-            desk_paint_text(&tp, t->font_ui, x + 14, 20, what ? what : "A modern Retro OS",
+            desk_paint_text(&tp, t->font_ui, x + 14, 20, what,
                             d->notice[0] ? t->topbar_accent : desk_mix(t->topbar_text, t->topbar, 170));
         }
     }

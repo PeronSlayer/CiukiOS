@@ -309,8 +309,7 @@ void desk_composite(struct desktop *d, struct desk_box clip)
     if (d->shell && desk_shell_topbar) desk_shell_topbar(d,clip);
     else {
         portrait_at(d,clip,8,6,20);
-        int x=34+desk_paint_text(&p,t->font_bold,34,20,"CiukiOS",t->topbar_text);
-        desk_paint_text(&p,t->font_ui,x+14,20,"A modern Retro OS",desk_mix(t->topbar_text,t->topbar,170));
+        desk_paint_text(&p,t->font_bold,34,20,"CiukiOS",t->topbar_text);   /* no tagline in the top bar (owner, 2026-10-12) */
     }
     char clock[24];
     uint64_t s = d->now_ns / 1000000000ull;
