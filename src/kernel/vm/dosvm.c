@@ -255,8 +255,10 @@ bool dosvm_trap(struct trap_frame *tf)
             }
             e = v86_debug_step(&v->monitor, f);
         }
-        else if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000)
+        else if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000) {
             e = dosvm_vga_fault(v, f);
+            if (!e) dosvm_vga_burst(v, f);   /* f3-06: the rest of a store run */
+        }
         else if (tf->vector == 7) fpu_handle_nm();
         else if (tf->vector == 3 || tf->vector == 4) e = v86_reflect(&v->monitor, f, tf->vector);
         else if (tf->vector < 0x20 || tf->vector >= 0x30) e = -EFAULT;

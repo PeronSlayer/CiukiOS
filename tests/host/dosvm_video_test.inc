@@ -209,10 +209,21 @@ static void test_video_faults(void)
     g_current = v->task; v->continuation = 0x12345678;
     f = vf(0x2F42, 0, 0, 0); f.tf.cs = 0x3000; f.es = 0xB800; f.tf.edi = 4; f.tf.vector = 14; f.tf.err = 7;
     f.tf.user_ss = 0x2000; f.tf.user_esp = 0x100;
-    unsigned faults = v->video_faults;
+    unsigned faults = v->video_faults, burst = v->video_burst;
     fake_cr2 = 0xB8004;
-    CHECK(dosvm_trap(&f.tf) && f.tf.eip == 3 && cvga_peek_vram(&v->vga, 0xB8004) == 'B' &&
-          v->info.state < DOSVM_STOPPING && v->video_faults == faults + 1);
+    /* f3-06 burst: after the faulting store the trap path also runs REP STOSW
+     * (CX=0) and the aperture load, then stops before the FLD it cannot
+     * decode; only the first instruction counts as a fault. */
+    CHECK(dosvm_trap(&f.tf) && f.tf.eip == 8 && cvga_peek_vram(&v->vga, 0xB8004) == 'B' &&
+          (f.tf.eax & 0xFFFF) == 0x2F42 && v->info.state < DOSVM_STOPPING && v->video_faults == faults + 1 &&
+          v->video_burst == burst + 2);
+    sti();
+    /* A REP STOSW longer than the string budget: its progress is committed
+     * and the burst stops on it, as an interrupted REP. */
+    f.tf.eip = 0; f.tf.edi = 4; f.tf.ecx = 5000; f.tf.eax = 0x0743; f.tf.vector = 14; burst = v->video_burst;
+    CHECK(dosvm_trap(&f.tf) && f.tf.eip == 3 && (f.tf.ecx & 0xFFFF) == 5000 - VIDEO_STRING_BUDGET &&
+          (f.tf.edi & 0xFFFF) == 4 + VIDEO_STRING_BUDGET * 2 && v->video_burst == burst + 1 &&
+          cvga_peek_vram(&v->vga, 0xB8004 + VIDEO_STRING_BUDGET * 2 - 2) == 0x43);
     sti();
     fake_cr2 = 0x500000; f.tf.eip = 0;
     if (!setjmp(guest_return)) { dosvm_trap(&f.tf); CHECK(false); }

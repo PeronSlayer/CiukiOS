@@ -328,6 +328,72 @@ int dosvm_vga_init(struct dosvm *v)
  * V86 frames use segment:offset bases; a DPMI client frame (f3-06) uses its
  * descriptors' bases and the code segment's D bit, looked up on first use. */
 #define VIDEO_STRING_BUDGET 4096u
+/* f3-06 (wolf3d-qemu-t23, 2026-10-12): a Wolf3D wall strip wider than one
+ * pixel sets a multi-plane map mask (WL_SCALE.C mapmasks1-3: 3, 7, 15, 6,
+ * 14, 12), which no single-plane window can carry, and its compiled scaler
+ * (WL_SCALE.C BuildCompScale) is a straight run of "mov al,[si+d8]" and
+ * "mov es:[di+d16],al" ending in RETF: one #PF per stored byte, about 1.1
+ * million in the 7 s play stage. After a V86 aperture fault the monitor
+ * therefore keeps emulating the following instructions with the same
+ * decoder while they keep touching the aperture (at most VIDEO_BURST_IDLE
+ * in a row without), up to VIDEO_BURST instructions. It stops before any
+ * instruction it does not decode (register forms, I/O, control transfers),
+ * any store outside the aperture (those stay native), a guest or monitor
+ * single-step (TF), an open STI/MOV SS shadow and a deliverable interrupt,
+ * so the guest observes exactly the sequential result, only sooner. */
+#define VIDEO_BURST 1024u
+#define VIDEO_BURST_IDLE 4u
+struct video_burst_bus { struct dosvm *v; bool vram; };
+static int burst_read(void *arg, uint32_t address, uint8_t *value)
+{
+    struct video_burst_bus *b = arg;
+    if (vram(address)) b->vram = true;
+    return video_read(b->v, address, value);
+}
+static int burst_write(void *arg, uint32_t address, uint8_t value)
+{
+    struct video_burst_bus *b = arg;
+    if (!vram(address)) return -EFAULT;             /* refused before any byte moves */
+    b->vram = true;
+    return video_write(b->v, address, value);
+}
+static int burst_fetch(void *arg, uint32_t address, uint8_t *value)
+{
+    struct video_burst_bus *b = arg;
+    return video_fetch(b->v, address, value);
+}
+static void video_burst(struct dosvm *v, struct v86_frame *f, const cvx_cpu *first)
+{
+    struct video_burst_bus ctx = {v, false};
+    const cvx_bus bus = {burst_read, burst_write, burst_fetch, &ctx, 0};
+    cvx_cpu c = *first;
+    c.gpr[0] = f->tf.eax; c.gpr[1] = f->tf.ecx; c.gpr[2] = f->tf.edx; c.gpr[3] = f->tf.ebx;
+    c.gpr[4] = f->tf.user_esp; c.gpr[5] = f->tf.ebp; c.gpr[6] = f->tf.esi; c.gpr[7] = f->tf.edi;
+    c.eip = f->tf.eip; c.eflags = f->tf.eflags;
+    unsigned idle = 0;
+    for (unsigned n = 0; n < VIDEO_BURST && idle < VIDEO_BURST_IDLE; n++) {
+        if ((f->tf.eflags & V86_TF) || v->monitor.shadow || v->info.state >= DOSVM_STOPPING ||
+            (v->monitor.vif && v86_irq_pending(&v->monitor) >= 0)) break;
+        cvx_cpu next = c;
+        cvx_result result;
+        ctx.vram = false;
+        v->video_bus_fault = false;
+        int e = cvx_execute(&next, &bus, VIDEO_STRING_BUDGET, &result);
+        if ((e != CVX_DONE && e != CVX_PARTIAL) || v->video_bus_fault) {
+            v->video_bus_fault = false;              /* nothing moved: the CPU repeats it natively */
+            break;
+        }
+        /* PARTIAL: a REP string moved its budget; its count/index registers
+         * are committed and EIP stays on it, as after an interrupted REP. */
+        c = next;
+        idle = ctx.vram ? 0 : idle + 1;
+        v->video_burst++;
+        f->tf.eax = c.gpr[0]; f->tf.ecx = c.gpr[1]; f->tf.edx = c.gpr[2]; f->tf.ebx = c.gpr[3];
+        f->tf.user_esp = c.gpr[4]; f->tf.ebp = c.gpr[5]; f->tf.esi = c.gpr[6]; f->tf.edi = c.gpr[7];
+        f->tf.eip = c.eip; f->tf.eflags = c.eflags;
+        if (e == CVX_PARTIAL) break;
+    }
+}
 static int video_emulate(struct dosvm *v, struct v86_frame *f, cvx_cpu *c, const cvx_bus *bus, bool pm)
 {
     c->gpr[0] = f->tf.eax; c->gpr[1] = f->tf.ecx; c->gpr[2] = f->tf.edx; c->gpr[3] = f->tf.ebx;
@@ -360,6 +426,19 @@ int dosvm_vga_fault(struct dosvm *v, struct v86_frame *f)
         c.sreg[i] = (uint16_t)segments[i]; c.seg_base[i] = segments[i] << 4;
     }
     return video_emulate(v, f, &c, &v->video_bus, false);
+}
+/* The trap path's continuation of a V86 aperture fault (dosvm_trap); the
+ * instruction-level entry above stays one instruction. */
+void dosvm_vga_burst(struct dosvm *v, struct v86_frame *f)
+{
+    if (v->frame_pm) return;
+    cvx_cpu c = {0};
+    uint32_t segments[] = {f->es, f->tf.cs, f->tf.user_ss, f->ds, f->fs, f->gs};
+    for (unsigned i = 0; i < 6; i++) {
+        if (segments[i] > 65535) return;
+        c.sreg[i] = (uint16_t)segments[i]; c.seg_base[i] = segments[i] << 4;
+    }
+    video_burst(v, f, &c);
 }
 /* Selector base for the decoder. A selector the client could not have
  * loaded (null, absent) makes the access a bus fault: the VM stops with
@@ -400,7 +479,7 @@ bool dosvm_video_info(struct dosvm_key key, struct dosvm_video_info *out)
     if (cvga_get_geometry(&v->vga, &g)) { out->width = g.width; out->height = g.height; }
     out->faults = v->video_faults; out->pm_faults = v->video_pm_faults;
     out->starts = v->video_starts; out->maps = v->video_maps; out->flushes = v->video_flushes;
-    out->frames = v->video_frames;
+    out->frames = v->video_frames; out->burst = v->video_burst;
     return true;
 }
 

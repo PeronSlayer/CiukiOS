@@ -75,7 +75,7 @@ struct dosvm {
      * open, the window pages A0000h-AFFFFh map that model plane user-
      * writable; dosvm_destroy restores the VM's frames (dosvm_vga.c). */
     unsigned video_direct;
-    uint32_t video_pm_faults, video_starts, video_maps, video_flushes;
+    uint32_t video_pm_faults, video_starts, video_maps, video_flushes, video_burst;
     cvga_geometry video_geometry;
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
     uint8_t video_row[DOSVM_VIDEO_WIDTH];
@@ -101,6 +101,7 @@ struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
+void dosvm_vga_burst(struct dosvm *, struct v86_frame *);
 /* f3-06: a ring-3 DPMI client's access to the supervisor-only window. */
 int dosvm_vga_fault_pm(struct dosvm *, struct v86_frame *);
 /* f3-06: open, move or close the direct plane window for the current VGA

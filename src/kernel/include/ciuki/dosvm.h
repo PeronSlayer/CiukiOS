@@ -109,6 +109,7 @@ struct dosvm_video_info {
     uint32_t starts;          /* CRTC start-address-high writes (page flips) */
     uint32_t maps, flushes;   /* direct plane windows opened; window pages copied back */
     uint32_t frames;          /* presenter frames produced */
+    uint32_t burst;           /* instructions emulated after a fault without trapping */
 };
 bool dosvm_video_info(struct dosvm_key, struct dosvm_video_info *);
 /* Host-testable private-sector and BIOS boundaries. */

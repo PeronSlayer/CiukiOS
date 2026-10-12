@@ -352,6 +352,27 @@ modes. The read floors make each region visible whatever the trap cost.
 Only 3BAh/3DAh reads advance the sequence. The presenter cadence (33 ticks)
 is unchanged.
 
+Wolf3D play stage (wolf3d-qemu-t23 with the retrace fix, 2026-10-12): no
+flip in the 3 s window and 1.14 million emulated aperture stores. Wall
+strips wider than one pixel set multi-plane map masks (WOLFSRC/WL_SCALE.C
+`mapmasks1-3`: 3, 7, 15, 6, 14, 12) that the single-plane direct window
+cannot carry, and the compiled scalers (`BuildCompScale`: `mov al,[si+d8]`,
+`mov es:[di+d16],al`, ..., `RETF`) store one byte per instruction, so every
+stored byte was a #PF. Decision: after a V86 aperture #PF the trap path
+keeps emulating the following instructions with the same decoder
+(`dosvm_vga_burst`) while they touch the aperture (at most 4 in a row
+without), up to 1024; it stops before anything the decoder does not handle,
+any store outside the aperture, TF, an STI/MOV SS shadow or a deliverable
+interrupt, so the guest sees the sequential result. Host replay of one view
+through `dosvm_trap` (tests/host/dosvm_workloads_test.inc): near wall, 4-pixel
+strips, 11552 -> 76 #PF per frame; mid wall, 2-pixel strips, 15200 -> 152;
+1-pixel strips stay on the direct window (304 remaps, 0 #PF); planes
+identical to the reference. Flips were already counted (CRTC 0Ch data
+writes, byte OUTs as in `ThreeDRefresh` or OUTW); the probe now starts its
+3 s flip window only once flipping is steady (3 flips in one second, within
+90 s of the last menu key) and reports `start_ms`, `burst` and per-window
+`faults`/`maps`.
+
 Fonts: the synthetic ROM (F000:2000 8x16, F000:3000 8x8, F000:4000 8x14) is
 a deterministic conversion of the kernel's Inconsolata console bitmap
 (OFL-1.1) for printable ASCII. CP437 accented letters use their base letter,

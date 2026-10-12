@@ -223,8 +223,144 @@ static void test_workload_verdict_screen(void)
     printf("f3-06 verdict screen: latched at the payload's verdict line, kept over the shell redraw, reset by dosvm_expect\n");
 }
 
+/* f3-06 QEMU finding (wolf3d-qemu-t23, 2026-10-12): the play stage saw no
+ * page flip in 3 s and 1.14 million emulated aperture stores. Replay of one
+ * Wolf3D 3D-view frame in Mode Y, as WL_DRAW.C ScalePost and WL_SCALE.C
+ * BuildCompScale produce it: per wall strip an OUT 3C5h with the strip's
+ * map mask (mapmasks1-3), then a FAR CALL into a compiled scaler, a straight
+ * run of "mov al,[si+d8]" / "mov es:[di+d16],al" ending in RETF; then
+ * ThreeDRefresh's flip (OUT 3D4h,0Ch; OUT 3D5h,high). The harness is the
+ * CPU for what does not trap: the scaler's loads, stores into a writable
+ * mapped window page (setting its dirty bit), the call and RETF. What traps
+ * on hardware enters the production monitor through dosvm_trap: each OUT
+ * (#GP) and each aperture store without a writable mapping (#PF). */
+static const uint8_t wolf_masks1[4][8] = {{1,3,7,15,15,15,15,15},{2,6,14,14,14,14,14,14},{4,12,12,12,12,12,12,12},{8,8,8,8,8,8,8,8}};
+static const uint8_t wolf_masks2[4][8] = {{0,0,0,0,1,3,7,15},{0,0,0,1,3,7,15,15},{0,0,1,3,7,15,15,15},{0,1,3,7,15,15,15,15}};
+static const uint8_t wolf_masks3[4][8] = {{0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,1},{0,0,0,0,0,0,1,3},{0,0,0,0,0,1,3,7}};
+#define WOLF_VIEW_HEIGHT 152
+#define WOLF_CODE 0x20000u
+#define WOLF_TEXTURE 0x30000u
+static unsigned wolf_traps, wolf_pf;
+/* WL_SCALE.C BuildCompScale for one wall height, into guest RAM. */
+static void wolf_build_scaler(struct dosvm *v, int height)
+{
+    uint8_t code[4096]; unsigned n = 0;
+    long step = ((long)height << 16) / 64, fix = 0;
+    int toppix = (WOLF_VIEW_HEIGHT - height) / 2;
+    for (int src = 0; src <= 64; src++) {
+        int startpix = (int)(fix >> 16); fix += step; int endpix = (int)(fix >> 16);
+        startpix += toppix; endpix += toppix;
+        if (startpix == endpix || endpix < 0 || startpix >= WOLF_VIEW_HEIGHT || src == 64) continue;
+        code[n++] = 0x8A; code[n++] = 0x44; code[n++] = (uint8_t)src;
+        for (; startpix < endpix; startpix++) {
+            if (startpix >= WOLF_VIEW_HEIGHT) break;
+            if (startpix < 0) continue;
+            unsigned ofs = (unsigned)startpix * 80;
+            code[n++] = 0x26; code[n++] = 0x88; code[n++] = 0x85; code[n++] = (uint8_t)ofs; code[n++] = (uint8_t)(ofs >> 8);
+        }
+    }
+    code[n++] = 0xCB;
+    CHECK(n <= sizeof(code) && !dosvm_write(v, WOLF_CODE, code, n));
+}
+static void wolf_out(struct dosvm *v, struct v86_frame *f, uint16_t port, uint8_t value)
+{
+    static const uint8_t out_dx_al = 0xEE;
+    f->tf.cs = 0x1000; f->tf.eip = 0; f->tf.edx = port;
+    CHECK(device_insn(v, f, value, &out_dx_al, 1) && f->tf.eip == 1);
+    wolf_traps++;
+}
+/* CALL DWORD PTR [bp] into the scaler with ES:DI at the strip byte. */
+static void wolf_call_scaler(struct dosvm *v, struct v86_frame *f, uint16_t di)
+{
+    f->tf.cs = WOLF_CODE >> 4; f->tf.eip = 0; f->tf.edi = di; f->tf.esi = 0;
+    f->ds = WOLF_TEXTURE >> 4; f->es = 0xA000;
+    for (unsigned steps = 0; steps < 100000; steps++) {
+        uint8_t op[5] = {0};
+        CHECK(!dosvm_read(v, (f->tf.cs << 4) + f->tf.eip, op, sizeof(op)));
+        if (op[0] == 0xCB) return;                                   /* RETF */
+        if (op[0] == 0x8A && op[1] == 0x44) {                        /* mov al,[si+d8] */
+            uint8_t al = 0;
+            CHECK(!dosvm_read(v, (f->ds << 4) + (uint16_t)(f->tf.esi + op[2]), &al, 1));
+            f->tf.eax = (f->tf.eax & ~0xFFu) | al; f->tf.eip += 3; continue;
+        }
+        CHECK(op[0] == 0x26 && op[1] == 0x88 && op[2] == 0x85);     /* mov es:[di+d16],al */
+        uint32_t linear = (f->es << 4) + (uint16_t)(f->tf.edi + (op[3] | (unsigned)op[4] << 8));
+        uint32_t *pte = window_pte(v, linear);
+        if ((*pte & (PTE_U | PTE_W)) == (PTE_U | PTE_W)) {           /* the CPU stores into the mapped plane */
+            CHECK(v->video_direct && linear < 0xB0000);
+            v->vga.plane[v->video_direct - 1][linear - 0xA0000] = (uint8_t)f->tf.eax;
+            *pte |= DOSVM_PTE_DIRTY; f->tf.eip += 5; continue;
+        }
+        fake_cr2 = linear; CHECK(device_trap(v, f, 14)); wolf_traps++; wolf_pf++;   /* #PF */
+    }
+    CHECK(false);
+}
+/* One 304-pixel view of strips of `width` pixels from a scaler of `height`. */
+static void wolf_frame(struct dosvm *v, struct v86_frame *f, int height, unsigned width, uint16_t bufferofs, uint8_t ref[4][16384])
+{
+    wolf_build_scaler(v, height);
+    wolf_out(v, f, 0x3C4, 2);                                        /* SC_INDEX: map mask */
+    for (unsigned postx = 0; postx < 304; postx += width) {
+        unsigned w = postx + width <= 304 ? width : 304 - postx, plane = postx & 3;
+        const uint8_t masks[3] = {wolf_masks1[plane][w - 1], wolf_masks2[plane][w - 1], wolf_masks3[plane][w - 1]};
+        uint16_t di = (uint16_t)(postx / 4 + bufferofs);
+        for (unsigned k = 0; k < 3 && masks[k]; k++, di++) {
+            wolf_out(v, f, 0x3C5, masks[k]);
+            wolf_call_scaler(v, f, di);
+            /* Reference: the stored texel in every plane of the mask. */
+            long step = ((long)height << 16) / 64, fix = 0;
+            int toppix = (WOLF_VIEW_HEIGHT - height) / 2;
+            for (int src = 0; src < 64; src++) {
+                int a = (int)(fix >> 16) + toppix; fix += step; int b = (int)(fix >> 16) + toppix;
+                for (int y = a < 0 ? 0 : a; y < b && y < WOLF_VIEW_HEIGHT; y++)
+                    for (unsigned p = 0; p < 4; p++) if (masks[k] & (1u << p))
+                        ref[p][(uint16_t)(di + y * 80) & 16383] = (uint8_t)(src * 3 + 7);
+            }
+        }
+    }
+    wolf_out(v, f, 0x3D4, 0x0C); wolf_out(v, f, 0x3D5, (uint8_t)(bufferofs >> 8));  /* ThreeDRefresh flip */
+}
+static void test_workload_wolf_frame(void)
+{
+    static uint8_t ref[4][16384];
+    struct dosvm *v = create();
+    CHECK(!dosvm_boot(v)); v->info.dos_ready = true;
+    int10(v, 0x0013, 0, 0, 0);
+    vga_out(v, 0x3C4, 4); vga_out(v, 0x3C5, 0x06);                     /* VL_DePlaneVGA */
+    vga_out(v, 0x3D4, 0x14); vga_out(v, 0x3D5, 0x00); vga_out(v, 0x3D4, 0x17); vga_out(v, 0x3D5, 0xE3);
+    uint8_t texture[64];
+    for (unsigned i = 0; i < 64; i++) texture[i] = (uint8_t)(i * 3 + 7);
+    CHECK(!dosvm_write(v, WOLF_TEXTURE, texture, sizeof(texture)));
+    struct v86_frame f = {0};
+    f.tf.user_ss = 0x9000; f.tf.user_esp = 0xFFF0; f.tf.eflags = V86_VM | V86_IF | 2;
+    v->monitor.vif = false;                                          /* no IRQ in the walk */
+    static const struct { int height; unsigned width; const char *name; } views[] = {
+        {300, 4, "near wall, 4-pixel strips"}, {100, 2, "mid wall, 2-pixel strips"}, {50, 1, "far wall, 1-pixel strips"}};
+    unsigned total_traps = 0, total_faults = 0;
+    for (unsigned i = 0; i < 3; i++) {
+        memset(ref, 0, sizeof(ref));
+        for (unsigned p = 0; p < 4; p++) memset(v->vga.plane[p], 0, 16384);
+        dosvm_vga_sync(v, false);
+        unsigned traps = wolf_traps, pf = wolf_pf, faults = v->video_faults, maps = v->video_maps,
+                 burst = v->video_burst, starts = v->video_starts;
+        wolf_frame(v, &f, views[i].height, views[i].width, 0, ref);
+        dosvm_vga_sync(v, false);
+        printf("Wolf3D frame replay, %s: %u traps (%u #PF), %u emulated aperture faults, %u burst instructions, %u window maps, %u flips\n",
+               views[i].name, wolf_traps - traps, wolf_pf - pf, v->video_faults - faults,
+               v->video_burst - burst, v->video_maps - maps, v->video_starts - starts);
+        CHECK(v->video_starts == starts + 1);                        /* the flip is counted */
+        for (unsigned p = 0; p < 4; p++) CHECK(!memcmp(v->vga.plane[p], ref[p], 16384));
+        total_traps += wolf_traps - traps; total_faults += v->video_faults - faults;
+    }
+    /* At most one #PF per strip byte (each scaler call), not one per pixel. */
+    CHECK(wolf_pf <= 3 * 304 && total_faults <= 3 * 304);
+    destroy(v, true); empty();
+    printf("f3-06 Wolf3D frame replay: ScalePost strips and compiled scalers through dosvm_trap, planes exact, flips counted, %u traps for three views\n", total_traps);
+}
+
 static void test_workloads(void)
 {
+    test_workload_wolf_frame();
     test_workload_verdict_screen();
     test_workload_pm_vga();
     test_workload_direct_window();
