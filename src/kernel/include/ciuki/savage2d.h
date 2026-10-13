@@ -33,6 +33,11 @@ struct savage2d {
     bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded, status_logged;
 };
 bool savage2d_supported(const struct pci_func *);
+/* Attempt marker file I/O for kernel callers, outside presenter locks. */
+struct vfs;
+int savage2d_attempt_begin(struct vfs *);
+int savage2d_attempt_end(struct vfs *);
+void savage2d_quarantine(const char *reason);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset);
 #endif

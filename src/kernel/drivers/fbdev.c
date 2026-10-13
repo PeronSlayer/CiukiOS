@@ -9,6 +9,9 @@
 #include <ciuki/work.h>
 extern const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *) __attribute__((weak));
 extern bool kwork_queue(kwork_fn, void *) __attribute__((weak));
+extern int savage2d_attempt_begin(struct vfs *) __attribute__((weak));
+extern int savage2d_attempt_end(struct vfs *) __attribute__((weak));
+extern void savage2d_quarantine(const char *) __attribute__((weak));
 extern void savage2d_record(void) __attribute__((weak));
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
@@ -182,6 +185,10 @@ int fbdev_init(void)
 static void accel_work(void *arg)
 {
     (void)arg;
+    /* The attempt marker is file I/O (VFS, ATA channel mutex): never under
+     * the presenter mutex. The T23 panicked on lock order (presenter held,
+     * ata channels[0] taken in device-work) on 2026-10-13. */
+    if (!savage2d_attempt_begin || savage2d_attempt_begin(accel_vfs)) { accel_queued = false; return; }
     kmutex_lock(&presenter);
     if (!changing && device.present && !acceleration) {
         unsigned idle = 0;
@@ -189,12 +196,20 @@ static void accel_work(void *arg)
          * console as well as mutex-owned presenters for that whole interval. */
         if (__atomic_compare_exchange_n(&drawing, &idle, PRESENT_BUSY, false,
                                         __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-            acceleration = savage2d_init(&device, accel_vfs);
+            acceleration = savage2d_init(&device, 0);   /* marker handled above */
             __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
         } else klog("[accel] savage quarantined reason=console_busy");
     }
-    accel_queued = false;
     kmutex_unlock(&presenter);
+    if (acceleration && savage2d_attempt_end && savage2d_attempt_end(accel_vfs)) {
+        /* The clear did not reach the disk: the next boot would skip the
+         * accelerator anyway; keep the software presenter now as well. */
+        kmutex_lock(&presenter);
+        if (acceleration) { acceleration->stop(acceleration->ctx); acceleration = 0; }
+        kmutex_unlock(&presenter);
+        if (savage2d_quarantine) savage2d_quarantine("marker_clear_failed");
+    }
+    accel_queued = false;
 }
 
 void fbdev_accel_schedule(struct vfs *vfs)

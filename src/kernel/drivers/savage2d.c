@@ -492,15 +492,21 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         return decline("invalid_aperture");
     /* No side effects for unsupported geometry. */
     if (!mode_supported(d)) return decline("unsupported_mode");
+    /* With a VFS the marker is handled here (host harness); the kernel caller
+     * passes NULL and persists/clears it outside the presenter mutex
+     * (savage2d_attempt_begin/end): file I/O takes the ATA channel mutex and
+     * the T23 panicked on lock order on 2026-10-13. */
     bool previous = false;
-    int marker = attempt_marker(vfs, false, &previous);
-    if (previous) {
-        attempt_blocked = true;
-        klog("[accel] savage skipped after a failed attempt");
-        return decline("previous_attempt");
+    if (vfs) {
+        int marker = attempt_marker(vfs, false, &previous);
+        if (previous) {
+            attempt_blocked = true;
+            klog("[accel] savage skipped after a failed attempt");
+            return decline("previous_attempt");
+        }
+        if (marker) { attempt_blocked = true; return decline("marker_unavailable"); }
+        klog("[accel] savage attempt persisted");
     }
-    if (marker) { attempt_blocked = true; return decline("marker_unavailable"); }
-    klog("[accel] savage attempt persisted");
     if (g_boot.flags & CBI_F_VERBOSE)
         klog("[accel] savage probe pci=%04x:%04x cmd=%04x bar0=%08x bar1=%08x lfb=%08x vram=%u",
             gpu->vendor, gpu->device, gpu->command, gpu->bar[0], gpu->bar[1], d->phys,
@@ -551,15 +557,46 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         if (!engine.quarantined) { engine.quarantined = true; hw_fault(0); }
         return decline(engine.reason ? engine.reason : "init_failed");
     }
-    marker = attempt_marker(vfs, true, &previous);
-    if (marker) {
-        /* Init submitted no commands. Do not introduce another status-read
-         * exposure after the clear may have reached disk despite an error. */
-        engine.quarantined = true; hw_fault(0);
-        return decline("marker_clear_failed");
+    if (vfs) {
+        int marker = attempt_marker(vfs, true, &previous);
+        if (marker) {
+            /* Init submitted no commands. Do not introduce another status-read
+             * exposure after the clear may have reached disk despite an error. */
+            engine.quarantined = true; hw_fault(0);
+            return decline("marker_clear_failed");
+        }
     }
     klog("[accel] savage ready");
     return &engine.ops;
+}
+
+/* Kernel callers: marker file I/O outside any presenter lock. */
+int savage2d_attempt_begin(struct vfs *vfs)
+{
+    if (engine.quarantined || attempt_blocked) return -1;
+    bool previous = false;
+    int marker = attempt_marker(vfs, false, &previous);
+    if (previous) {
+        attempt_blocked = true;
+        klog("[accel] savage skipped after a failed attempt");
+        klog("[accel] savage quarantined reason=previous_attempt");
+        return -1;
+    }
+    if (marker) { attempt_blocked = true; klog("[accel] savage quarantined reason=marker_unavailable"); return -1; }
+    klog("[accel] savage attempt persisted");
+    return 0;
+}
+
+int savage2d_attempt_end(struct vfs *vfs)
+{
+    bool previous = false;
+    return attempt_marker(vfs, true, &previous);
+}
+
+void savage2d_quarantine(const char *reason)
+{
+    engine.quarantined = true; engine.reason = reason; hw_fault(0);
+    klog("[accel] savage quarantined reason=%s", reason);
 }
 const struct accel_ops *savage2d_init(const struct fb_device *d, struct vfs *vfs)
 {
