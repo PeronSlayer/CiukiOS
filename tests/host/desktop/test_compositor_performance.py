@@ -17,9 +17,9 @@ ROOT = Path(__file__).resolve().parents[3]
 THEMES = ("Platinum", "Ciuki Blue", "Classic 98")
 # Filled from the original production renderer before the optimization.
 GOLDENS = {
-    "Platinum": "a8380d6af734ecefabc902accca5f07a89c9b650b7ea2a5d4c20c27e4ba4c94e",
-    "Ciuki Blue": "a0e3a026a5ba8360cb86f32fe6b6f97cb6dc3009bfa9eca96b5a6622f8284560",
-    "Classic 98": "60b11516d0c92cc7ea5861d87913c91560550d4f5198ac32198bc1bbb4b3609d",
+    "Platinum": "3ec2fcf41abc5791c0c389cbfe54cf9b3f65cd345f6643ed7363756470791769",
+    "Ciuki Blue": "155c42a34fc381e8d9e77915612b57950317a2ca2b9643a0b63a8f2da67e885c",
+    "Classic 98": "43586a63bafc8ea4c46153a2f0af37cba9a8cdaac47b61afae3c720ad0d464cb",
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "settings",

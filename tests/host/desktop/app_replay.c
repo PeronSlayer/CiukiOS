@@ -496,6 +496,16 @@ char *rp_getenv(const char *name)
     for (char **e = cur ? cur->env : NULL; e && *e; e++) if (!strncmp(*e, name, n) && (*e)[n] == '=') return *e + n + 1;
     return NULL;
 }
+int rp_open(const char *path, int flags, ...)
+{
+    /* The virtual kernel publishes no device nodes: a production open of
+     * /dev/mixer or /dev/net must fail here, never reach the host (whose
+     * /dev/net directory opens, and whose fd numbers collide with ours). */
+    if (!strncmp(path, "/dev/", 5)) { errno = ENOENT; return -1; }
+    mode_t mode = 0;
+    if (flags & O_CREAT) { va_list ap; va_start(ap, flags); mode = (mode_t)va_arg(ap, int); va_end(ap); }
+    return open(path, flags, mode);
+}
 int rp_close(int fd)
 {
     struct obj *o = fd_obj(cur, fd);

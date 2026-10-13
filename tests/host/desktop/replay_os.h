@@ -9,6 +9,7 @@
 int rp_nanosleep(const struct timespec *, struct timespec *);
 int rp_clock_gettime(clockid_t, struct timespec *);
 char *rp_getenv(const char *);
+int rp_open(const char *, int, ...);
 int rp_close(int);
 int rp_munmap(void *, size_t);
 void *rp_mmap(void *, size_t, int, int, int, off_t);
@@ -26,6 +27,7 @@ _Noreturn void rp_exit(int);
 #define nanosleep(a, b) rp_nanosleep(a, b)
 #define clock_gettime(a, b) rp_clock_gettime(a, b)
 #define getenv(a) rp_getenv(a)
+#define open(...) rp_open(__VA_ARGS__)
 #define close(a) rp_close(a)
 #define munmap(a, b) rp_munmap(a, b)
 #define mmap(...) rp_mmap(__VA_ARGS__)

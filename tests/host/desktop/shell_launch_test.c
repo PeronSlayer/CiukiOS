@@ -753,6 +753,8 @@ static void test_wallpaper_startup(void)
     desk_wall_worker_stop(&wallpaper_worker); wallpaper_worker_started=0;
     free(d.pixels); drop_all(&d); fake_reset(); assert(!unlink(path));
     puts("PASS startup: first solid frame before worker, Start input/reaction under 50 ms while loader held, pointer ownership, theme retention, colour/geometry invalidation");
+}
+
 static void test_network_service(void)
 {
     struct desktop d; fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
