@@ -1,5 +1,61 @@
 # F4 implementation and acceptance evidence
 
+## f4-10: CS4297A analog readiness and codec response
+
+Directive: [codec power](../directives/f4-10-ac97-cs4297a-codec-power.md).
+This supersedes the 500 ms activation budget and mandatory analog-ready gate
+below; the f4-09 silent transport proof remains mandatory.
+
+Research checked on 2026-10-13:
+
+- Cirrus [CS4297A DS318PP6](https://statics.cirrus.com/pubs/proDatasheet/CS4297A_PP6.pdf),
+  printed pp. 7, 20, 27, 29–33 (body §§4.1, 4.13, 4.17–19, 5.1–2;
+  the contents page's section numbers differ): 26h defaults to zero; its low
+  nibble reports calibration, independently of link readiness. Mixer writes
+  normally wait for ANL. PR5 requires cold reset; PR4 permits warm or cold
+  reset. Register reset (write 00h while link ready) restores 00h–38h and
+  vendor 5Ah–7Ah. Defined vendor controls include slot mapping/direct DAC
+  (5Eh), loss-of-SYNC mute (60h), and S/PDIF (68h); there is no documented
+  extra analog-power unlock. Reset timing gives 40 us typical BIT_CLK startup
+  and 62.5 us typical SYNC-to-codec-ready, **not an analog-calibration maximum**.
+  Do not claim a guaranteed calibration duration from these link timings.
+- Intel [82801CAM ICH3-M 290716-001](https://datasheet.lcsc.com/datasheet/pdf/7d520883a0f21f1845e4892c5243848a.pdf?productCode=C3247608),
+  §§5.18.1.23, 5.18.2–4, 13.2.8–10: GLOB_CNT bit 3 disables the link;
+  bit 1 releases cold reset. Warm reset wakes a stopped BIT_CLK and is
+  ignored when that clock runs. CAS reads acquire the semaphore; each
+  acquired semaphore must be followed by a codec access, including after
+  posted writes. RCS (GLOB_STA bit 15) means timeout, not successful read
+  completion; clear only that W1C bit. Section 14.2.9's shared-link note
+  describes four-frame timeout returning all ones. Zero without RCS is not
+  documented as a stale-data signature. Keep cold reset with idle/modem
+  admission checks; verify link/primary-ready on accesses, preserve error
+  evidence before clearing RCS, and never read CAS just for logging.
+- Linux [`intel8x0.c`, v6.12](https://github.com/torvalds/linux/blob/v6.12/sound/pci/intel8x0.c),
+  `snd_intel8x0_ich_chip_reset`, `snd_intel8x0_ich_chip_init`,
+  `snd_intel8x0_codec_semaphore/read`: clear link-off, cold/warm reset, wait
+  up to one second for a codec, serialize accesses and check RCS after reads.
+  Its semaphore workaround can attempt access despite failure; Ciuki retains
+  strict bounded failure instead of adopting that workaround without evidence.
+- Linux [`ac97_codec.c`](https://github.com/torvalds/linux/blob/master/sound/pci/ac97/ac97_codec.c),
+  `snd_ac97_mixer`: register reset, response/identity checks, power-on, register
+  reset and 100 us delay, power-on again, then up to **5000 ms** for 26h[3:0].
+  Expiry warns and initialization continues. `snd_ac97_resume` also checks
+  muted master-volume write/read-back. Ciuki uses this five-second policy,
+  with 1 ms scheduling granularity after its register reset.
+
+Implementation decision: allow at most seven seconds for activation, retaining
+100 ms codec transactions and 500 ms transport operations. Give calibration
+its own five-second wait and a fresh bounded configuration interval afterward.
+Only calibration-bit expiry is a warning: a valid ID and two distinct muted
+master patterns (8101h, 8000h) must read back before mixer/rate setup and silent
+DMA start/pause/reset. This deliberately adopts Linux's compatibility policy
+when the codec's status bits never assert; it does not prove audible output.
+All-zero IDs, ignored writes, CAS/RCS failures, and disabled/lost links fail.
+Saved settings are post-register-reset values, never purported BIOS state.
+Stage records carry cached register values with a validity mask, monotonic time,
+controller state and access error details, without extra semaphore reads.
+Physical desktop sounds and Music Player qualification remain with the lead.
+
 ## f4-09: ICH3-M / CS4297A transport proof
 
 Directive: [stop-unproved bring-up](../directives/f4-09-ac97-cs4297a-stop-unproved.md).

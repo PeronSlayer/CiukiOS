@@ -41,6 +41,10 @@ struct ac97_device {
     uint16_t power, master, pcm_volume, rate; /* rate is effective output Hz */
     uint16_t raw_ext_control, raw_rate;
     const char *activation_stage;
+    const char *codec_error;
+    uint16_t access_reg, access_value;
+    uint8_t last_cas, codec_valid; /* bit 0=26h, 1=02h, 2=18h */
+    bool analog_warning;
     struct ac97_failure failure;
     struct ac97_cursor cursor;
     bool ready, running, stopping, quarantine, irq_attached, touched;
