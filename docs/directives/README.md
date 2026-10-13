@@ -134,4 +134,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f4-12-ui-sounds](f4-12-ui-sounds.md) | F4 | gpt-6.1-sol / high | delivered and merged 2026-10-14 (event sounds, scheme.cfg + registry, Sounds page, volume ticks, VM priority) |
 | [f4-13-dos-vm-audio-on-hardware](f4-13-dos-vm-audio-on-hardware.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (native backend failed after boot: AC97 hand-off race and serial output stall fixed; VMs then attach); T23 listening test pending |
 | [f2-54-performance-counters-after-f2-52](f2-54-performance-counters-after-f2-52.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (expectation follows the f2-53 tray layout; presenter unchanged) |
-| [f2-55-desktop-memory-footprint-probe](f2-55-desktop-memory-footprint-probe.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-14 (desktop heap grows one extent during the probe cycle: extents 22/23) |
+| [f2-55-desktop-memory-footprint-probe](f2-55-desktop-memory-footprint-probe.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (chrome caches and first-use buffers preallocated; allocation-audit harness) |
