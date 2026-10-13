@@ -7,10 +7,12 @@ compiler/flags/scene on the same host before and after changing the painter.
 import argparse
 import hashlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tarfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -38,35 +40,22 @@ def assets():
 
 
 def reference_sources(folder, revision, profile):
-    """Read the reference through git; annotate only host timing, never painting."""
-    replacements = {}
-    for path in ("apps/desktop/compositor.c", "apps/desktop/input.c", "apps/libdeskui/draw.c"):
-        source = subprocess.run(["git", "show", f"{revision}:{path}"], cwd=ROOT,
-                                check=True, capture_output=True, text=True).stdout
-        if profile and path.endswith("compositor.c"):
-            source = source.replace("if (t->shadow_size) desk_shadow_rows(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow);",
-                'if (t->shadow_size) DESK_PROFILE("shadows", desk_shadow_rows(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow));')
-            source = source.replace("if (c->internal || c->collapsed) desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s);\n    else frame_border(&p,i,f,&s);",
-                'DESK_PROFILE("captions", { if (c->internal || c->collapsed) desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s); else frame_border(&p,i,f,&s); });')
-            source = source.replace("if (!visible) desk_shell_background(d,(struct desk_box){0,0,0,0});\n        for (unsigned k=0; k<visible; k++) desk_shell_background(d,boxes[k]);",
-                'DESK_PROFILE("background_rows", { if (!visible) desk_shell_background(d,(struct desk_box){0,0,0,0}); for (unsigned k=0; k<visible; k++) desk_shell_background(d,boxes[k]); });')
-            source = source.replace("desk_shell_topbar(d,clip);", 'DESK_PROFILE("bars_menus", desk_shell_topbar(d,clip));')
-            source = source.replace("window(d,windows[n],boxes[k]);", 'DESK_PROFILE("windows", window(d,windows[n],boxes[k]));')
-            source = source.replace("desk_shell_draw(d,clip);", 'DESK_PROFILE("bars_menus", desk_shell_draw(d,clip));')
-            source = source.replace("scene(d,clip); cursor(d,clip);", 'scene(d,clip); DESK_PROFILE("cursor", cursor(d,clip));')
-            source = source.replace("if (d->accel_front) for (int32_t y=b.y; y<b.y+b.h; y++)\n            memcpy(d->accel_front+(uint32_t)y*d->width+(uint32_t)b.x,d->pixels+(uint32_t)y*d->width+(uint32_t)b.x,(uint32_t)b.w*4);",
-                'if (d->accel_front) DESK_PROFILE("present_front_copy", { for (int32_t y=b.y; y<b.y+b.h; y++) memcpy(d->accel_front+(uint32_t)y*d->width+(uint32_t)b.x,d->pixels+(uint32_t)y*d->width+(uint32_t)b.x,(uint32_t)b.w*4); });')
-        if profile and path.endswith("draw.c"):
-            source = source.replace("desk_shadow_rows(&p, r.x, r.y, r.w, r.h, size, desk_theme->drop_shadow);",
-                'DESK_PROFILE("shadows", desk_shadow_rows(&p, r.x, r.y, r.w, r.h, size, desk_theme->drop_shadow));')
-            source = source.replace("static void text_font_n(", "static void text_font_rows(")
-            source = source.replace("void du_text_font(",
-                'static void text_font_n(struct du_canvas *c, int font, int x, int y, const char *s, size_t chars, uint32_t colour)\n'
-                '{ DESK_PROFILE("text", text_font_rows(c,font,x,y,s,chars,colour)); }\n\nvoid du_text_font(', 1)
-        target = folder / Path(path).name
-        target.write_text(source)
-        replacements[path] = target
-    return replacements
+    """Build a coherent reference: structures and callers must share a revision.
+
+    Keep the small tracked source snapshot under the benchmark's temporary
+    folder. No disk image, worktree, git index or repository file is changed.
+    f2-48 references already contain the exclusive painter instrumentation.
+    """
+    snapshot = folder / "reference"
+    snapshot.mkdir()
+    archive = subprocess.run(["git", "archive", "--format=tar", revision,
+                              "apps/desktop", "apps/libdeskui", "apps/files", "tests/host/desktop"],
+                             cwd=ROOT, check=True, capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as sources:
+        sources.extractall(snapshot, filter="data")
+    if profile and "compositor_profile_enter" not in (snapshot / "tests/host/desktop/compositor_benchmark.c").read_text():
+        raise ValueError("profile reference requires the f2-48 painter harness")
+    return {path: snapshot / path for path in SOURCES}, snapshot
 
 
 def build(folder, sanitize=False, extra=(), rows=False, compiler="clang", profile=False, reference=None):
@@ -81,10 +70,10 @@ def build(folder, sanitize=False, extra=(), rows=False, compiler="clang", profil
         sources = [source for source in SOURCES if source != "apps/desktop/compositor.c"]
         sources = [source.replace("compositor_benchmark.c", "compositor_rows_test.c") for source in sources]
         extra = [*extra, "-Wl,--wrap=malloc"]
-    replacements = reference_sources(folder, reference, profile) if reference else {}
+    replacements, snapshot = reference_sources(folder, reference, profile) if reference else ({}, ROOT)
     subprocess.run([compiler, "-std=c17", *flags, *extra, "-Wall", "-Wextra", "-Werror",
-                    "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
-                    "-I", str(ROOT / "apps/libdeskui"),
+                    "-I", str(snapshot / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                    "-I", str(snapshot / "apps/libdeskui"),
                     *(str(replacements.get(source, ROOT / source)) for source in sources), "-o", str(binary)], check=True)
     return binary
 

@@ -347,12 +347,12 @@ static void portrait_at(struct desktop *d, struct desk_box clip, int32_t x, int3
         for (int32_t xx=0; xx<b.w; xx++) dst[xx]=src[(b.x+xx-x)*DESK_PORTRAIT_SIZE/size];
     }
 }
-/* Frames are opaque away from their rounded corners. Keep four bounded
+/* Frames are opaque away from their rounded corners. Keep per-window bounded
  * caption/edge rasters from the shared theme painter and copy those spans on
  * moves/exposure. Corners still blend over the current scene. Nothing in
  * theme.c is duplicated here; title, icon bytes and every style input key
  * the cache. Small/unusual frames and allocation failure use the painter. */
-enum { CAPTION_CACHES=4, CAPTION_MAX_WIDTH=2048 };
+enum { CAPTION_CACHES=DESK_CLIENTS, CAPTION_MAX_WIDTH=2048 };
 static struct caption_cache {
     uint32_t *pixels;
     const struct desk_theme *theme;
@@ -548,40 +548,51 @@ static const char *const arrow[17] = {
     "#..........", "##.........", "#o#........", "#oo#.......", "#ooo#......", "#oooo#.....",
     "#ooooo#....", "#oooooo#...", "#ooooooo#..", "#oooooooo#.", "#ooooo#####", "#oo#oo#....",
     "#o#.#oo#...", "##..#oo#...", "#....#oo#..", ".....#oo#..", "......##..."};
-/* Remove only client wells known to be opaque. Frames, corners, shadows,
- * internal windows and exposed space while resizing are never occluders.
- * Bound subdivision to the existing damage capacity and fall back to the
- * original clip if the scene is unusually fragmented. */
-static unsigned visible_boxes(struct desktop *d, struct desk_box clip,
-                              const int *windows, unsigned count, struct desk_box *boxes)
+/* Exact horizontal opaque-region sweep. At most N+1 spans survive N
+ * occluders on a row; geometry boundaries join rows into bands. No region
+ * fragmentation can force painting beneath an opaque window. */
+static void visible_paint(struct desktop *d, struct desk_box clip,
+                          const int *windows, unsigned count,
+                          void (*paint)(struct desktop *, int, struct desk_box), int index)
 {
-    struct desk_box next[DESK_DAMAGE_MAX];
-    unsigned n=1; boxes[0]=clip;
-    for (unsigned k=0; k<count && n; k++) {
-        struct desk_client *c=&d->clients[windows[k]];
-        if (c->internal || c->collapsed || !c->pixels) continue;
-        struct desk_box well=desk_content(c), opaque;
-        if (!desk_intersect(well,(struct desk_box){well.x,well.y,(int32_t)c->info.width,(int32_t)c->info.height},&opaque)) continue;
-        unsigned used=0;
-        for (unsigned i=0; i<n; i++) {
-            struct desk_box a=boxes[i], cut;
-            if (!desk_intersect(a,opaque,&cut)) {
-                if (used==DESK_DAMAGE_MAX) { boxes[0]=clip; return 1; }
-                next[used++]=a; continue;
-            }
-            struct desk_box parts[4]={{a.x,a.y,a.w,cut.y-a.y},
-                {a.x,cut.y+cut.h,a.w,a.y+a.h-cut.y-cut.h},
-                {a.x,cut.y,cut.x-a.x,cut.h},
-                {cut.x+cut.w,cut.y,a.x+a.w-cut.x-cut.w,cut.h}};
-            for (unsigned j=0; j<4; j++) if (parts[j].w>0 && parts[j].h>0) {
-                if (used==DESK_DAMAGE_MAX) { boxes[0]=clip; return 1; }
-                next[used++]=parts[j];
+    for (int y=clip.y; y<clip.y+clip.h;) {
+        int bottom=clip.y+clip.h;
+        struct desk_dirty_row spans[DESK_CLIENTS+1]={{clip.x,clip.x+clip.w}};
+        unsigned n=1;
+        for (unsigned k=0;k<count;k++) {
+            struct desk_client *c=&d->clients[windows[k]];
+            if (!c->internal && !c->collapsed && !c->pixels) continue;
+            struct desk_box f=c->frame;
+            int boundaries[3]={f.y,f.y+desk_theme->radius,f.y+f.h};
+            for (unsigned j=0;j<3;j++) if (boundaries[j]>y && boundaries[j]<bottom) bottom=boundaries[j];
+            if (y<f.y || y>=f.y+f.h) continue;
+            int pad=y<f.y+desk_theme->radius ? desk_theme->radius+1 : 0;
+            int left=f.x+pad, right=f.x+f.w-pad;
+            if (left>=right) continue;
+            for (unsigned j=0;j<n;) {
+                struct desk_dirty_row a=spans[j];
+                if (right<=a.left || left>=a.right) { j++; continue; }
+                if (left>a.left && right<a.right) {
+                    memmove(spans+j+2,spans+j+1,(n-j-1)*sizeof(*spans));
+                    spans[j].right=left; spans[j+1]=(struct desk_dirty_row){right,a.right};
+                    n++; j+=2;
+                } else if (left>a.left) { spans[j++].right=left; }
+                else if (right<a.right) { spans[j++].left=right; }
+                else { memmove(spans+j,spans+j+1,(--n-j)*sizeof(*spans)); }
             }
         }
-        n=used; memcpy(boxes,next,n*sizeof(*boxes));
+        for (unsigned k=0;k<n;k++) paint(d,index,(struct desk_box){spans[k].left,y,spans[k].right-spans[k].left,bottom-y});
+        y=bottom;
     }
-    return n;
 }
+static void paint_background(struct desktop *d, int index, struct desk_box clip)
+{
+    (void)index;
+    if (d->shell && desk_shell_background) DESK_PROFILE("background_rows", desk_shell_background(d,clip));
+    else { fill(d,clip,clip,desk_theme->desktop); portrait(d,clip); }
+}
+static void visible_window(struct desktop *d, int index, struct desk_box clip)
+{ DESK_PROFILE("windows", window(d,index,clip)); }
 static void scene(struct desktop *d, struct desk_box clip)
 {
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
@@ -596,18 +607,9 @@ static void scene(struct desktop *d, struct desk_box clip)
         if (next<0) break;
         last=d->clients[next].order; windows[count++]=next;
     }
-    struct desk_box boxes[DESK_DAMAGE_MAX];
-    unsigned visible=visible_boxes(d,clip,windows,count,boxes);
-    if (d->shell && desk_shell_background) {
-        /* Also retain shell binding/cache maintenance when a clip is fully
-         * covered, without copying any background pixels into the scene. */
-        DESK_PROFILE("background_rows", {
-            if (!visible) desk_shell_background(d,(struct desk_box){0,0,0,0});
-            for (unsigned k=0; k<visible; k++) desk_shell_background(d,boxes[k]);
-        });
-    } else for (unsigned k=0; k<visible; k++) {
-        fill(d,boxes[k],boxes[k],t->desktop); portrait(d,boxes[k]);
-    }
+    /* Cache maintenance does not write pixels, even with a covered desktop. */
+    if (d->shell && desk_shell_background) desk_shell_background(d,(struct desk_box){0,0,0,0});
+    visible_paint(d,clip,windows,count,paint_background,-1);
     /* Top bar: a Platinum-style menu bar with the Ciuki mark. */
     fill(d,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},clip,t->topbar);
     desk_paint_fill(&p,0,DESK_BAR-1,(int)d->width,1,t->topbar_edge);
@@ -621,10 +623,8 @@ static void scene(struct desktop *d, struct desk_box clip)
     uint64_t s = d->now_ns / 1000000000ull;
     snprintf(clock,sizeof(clock),"%02u:%02u:%02u",(unsigned)(s/3600%100),(unsigned)(s/60%60),(unsigned)(s%60));
     if (!d->shell) desk_paint_text(&p,t->font_ui,(int)d->width-12-desk_text_measure(t->font_ui,clock),20,clock,t->topbar_text);
-    for (unsigned n=0; n<count; n++) {
-        visible=visible_boxes(d,clip,windows+n+1,count-n-1,boxes);
-        for (unsigned k=0; k<visible; k++) DESK_PROFILE("windows", window(d,windows[n],boxes[k]));
-    }
+    for (unsigned n=0; n<count; n++)
+        visible_paint(d,clip,windows+n+1,count-n-1,visible_window,windows[n]);
     if (d->shell) DESK_PROFILE("bars_menus", desk_shell_draw(d,clip));
 }
 static void cursor(struct desktop *d, struct desk_box clip)
@@ -651,20 +651,15 @@ void desk_composite(struct desktop *d, struct desk_box clip)
 void desk_render_release(struct desktop *d)
 {
     for (unsigned i=0; i<CAPTION_CACHES; i++) { free(captions[i].pixels); captions[i]=(struct caption_cache){0}; }
-    free(d->accel_front); d->accel_front=NULL; d->accel_front_valid=0;
-    d->copy_pending=0;
-    free(d->scene); d->scene=NULL; d->scene_bytes=0;
+    d->scanout_valid=d->frame_valid=0;
+    d->copy_pending=0; d->move_damage.count=0;
+    free(d->rows); d->rows=NULL; d->row_height=0;
     free(d->sh.background); d->sh.background=NULL; d->sh.background_valid=0;
     d->cursor_valid=0; d->cursor_dirty=1; d->present_damage.count=0;
 }
 int desk_frame_due(const struct desktop *d, uint64_t now)
-{ return now>=d->next_frame_ns && (d->damage.count || d->present_damage.count || d->cursor_dirty); }
+{ return now>=d->next_frame_ns && (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty); }
 static uint64_t time_now(struct desktop *d) { return d->time_ns ? d->time_ns() : 0; }
-static void copy_box(uint32_t *dst, const uint32_t *src, uint32_t width, struct desk_box b)
-{
-    for (int y=b.y;y<b.y+b.h;y++)
-        memcpy(dst+(size_t)y*width+b.x,src+(size_t)y*width+b.x,(size_t)b.w*4);
-}
 static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
 {
     q->size=sizeof(*q); q->generation=d->accel_generation;
@@ -672,14 +667,12 @@ static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
 }
 void desk_accel_reset(struct desktop *d, uint32_t generation)
 {
-    free(d->accel_front); d->accel_front=NULL; d->accel_front_valid=0;
+    d->scanout_valid=0; d->move_damage.count=0;
     d->hw_cursor=0; d->cursor_dirty=1; d->copy_pending=0;
     d->accel_generation=generation;
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-    if (d->accel_caps&1u) d->accel_front=calloc((size_t)d->width*d->height,4);
-    if (!d->accel_front) d->accel_caps&=~1u;
     if (d->accel_caps&2u) {
         q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
         for (unsigned y=0; y<17; y++) for (unsigned x=0; x<11; x++) {
@@ -698,15 +691,15 @@ static void ram_copy(struct desktop *d, const struct ciuki_rect *r)
 {
     for (uint32_t n=0; n<r->height; n++) {
         uint32_t y=r->dst_y>r->src_y ? r->height-1-n : n;
-        memmove(d->accel_front+((uint32_t)r->dst_y+y)*d->width+(uint32_t)r->dst_x,
-                d->accel_front+((uint32_t)r->src_y+y)*d->width+(uint32_t)r->src_x,r->width*4);
+        memmove(d->pixels+((uint32_t)r->dst_y+y)*d->width+(uint32_t)r->dst_x,
+                d->pixels+((uint32_t)r->src_y+y)*d->width+(uint32_t)r->src_x,r->width*4);
     }
 }
 static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
 {
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_COPY,.rect=*r};
     if (accel_call(d,&q)) {
-        d->accel_front_valid=0;
+        d->scanout_valid=0;
         q.operation=CIUKI_ACCEL_QUERY;
         int caps=accel_call(d,&q);
         d->accel_caps=caps>0 ? (uint32_t)caps : 0;
@@ -714,15 +707,15 @@ static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         return -1;
     }
-    ram_copy(d,r); d->presents++; d->frame_stats.presents++;
+    d->presents++; d->frame_stats.presents++;
     return 0;
 }
 /* A scroll is accelerated only after comparing every translated client pixel
  * with the last completed RAM frame. Samples merely reject candidates early. */
-static int scroll_copy(struct desktop *d)
+static int scroll_plan(struct desktop *d, struct ciuki_rect *out)
 {
-    if (!(d->accel_caps&1u) || !d->hw_cursor || !d->accel_front_valid ||
-        !d->damage.count || d->menu_open || d->sh.levels || d->sh.volume_open ||
+    if (!(d->accel_caps&1u) || !d->hw_cursor || !d->scanout_valid ||
+        !d->damage.count || d->menu_open || d->sh.levels || d->sh.volume_open || d->sh.network_open || d->sh.media_open ||
         d->sh.switcher || d->sh.tooltip || d->power.state) return 0;
     for (unsigned i=0; i<DESK_CLIENTS; i++) {
         struct desk_client *c=&d->clients[i];
@@ -738,89 +731,182 @@ static int scroll_copy(struct desktop *d)
         for (int delta=1; delta<=64 && delta<b.h/2; delta++) for (int dir=-1; dir<=1; dir+=2) {
             int sy=dir<0 ? delta : 0, dy=dir<0 ? 0 : delta, same=1, changed=0;
             const uint32_t *a=c->pixels+(uint32_t)dy*c->info.width;
-            const uint32_t *old=d->accel_front+(uint32_t)(b.y+sy)*d->width+(uint32_t)b.x;
+            const uint32_t *old=d->pixels+(uint32_t)(b.y+sy)*d->width+(uint32_t)b.x;
             if ((a[0]&0xffffffu)!=old[0] || (a[b.w/2]&0xffffffu)!=old[b.w/2] || (a[b.w-1]&0xffffffu)!=old[b.w-1]) continue;
-            const uint32_t *at=d->accel_front+(uint32_t)(b.y+dy)*d->width+(uint32_t)b.x;
+            const uint32_t *at=d->pixels+(uint32_t)(b.y+dy)*d->width+(uint32_t)b.x;
             if ((a[0]&0xffffffu)==at[0] && (a[b.w/2]&0xffffffu)==at[b.w/2] && (a[b.w-1]&0xffffffu)==at[b.w-1]) continue;
             for (int y=0; y<b.h-delta && same; y++) for (int x=0; x<b.w; x++) {
                 uint32_t v=c->pixels[(uint32_t)(dy+y)*c->info.width+(uint32_t)x]&0xffffffu;
-                if (v!=d->accel_front[(uint32_t)(b.y+sy+y)*d->width+(uint32_t)(b.x+x)]) { same=0; break; }
-                if (v!=d->accel_front[(uint32_t)(b.y+dy+y)*d->width+(uint32_t)(b.x+x)]) changed=1;
+                if (v!=d->pixels[(uint32_t)(b.y+sy+y)*d->width+(uint32_t)(b.x+x)]) { same=0; break; }
+                if (v!=d->pixels[(uint32_t)(b.y+dy+y)*d->width+(uint32_t)(b.x+x)]) changed=1;
             }
             if (same && changed) {
                 struct ciuki_rect r={b.x,b.y+sy,b.x,b.y+dy,(uint32_t)b.w,(uint32_t)(b.h-delta)};
-                return screen_copy(d,&r); /* one candidate per frame */
+                *out=r; return 1; /* one candidate per frame */
             }
         }
     }
     return 0;
 }
+/* Present the composite surface directly. There is no second frame to copy
+ * or compare. COPY's exact destination is excluded from upload rows by the
+ * caller; FILL is used only after checking every pixel in its span. */
 static int present_box(struct desktop *d, struct desk_box b)
 {
-    int rectangles=d->accel && (d->accel_caps&1u) && d->accel_front;
-    if (!rectangles || !d->accel_front_valid) {
+    if (!(d->accel_caps&1u) || !d->accel || !d->scanout_valid) {
         struct ciuki_rect r={b.x,b.y,b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
         if (d->ops.present(d->display,d->output,&r)) return -1;
-        d->frame_stats.lfb_bytes+=(uint64_t)r.width*r.height*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
-        if (rectangles) DESK_PROFILE("present_front_copy", {
-            for (int32_t y=b.y; y<b.y+b.h; y++)
-                memcpy(d->accel_front+(uint32_t)y*d->width+(uint32_t)b.x,d->pixels+(uint32_t)y*d->width+(uint32_t)b.x,(uint32_t)b.w*4);
-        });
-        if (!rectangles) d->accel_front_valid=0;
-        else if (!b.x && !b.y && b.w==(int32_t)d->width && b.h==(int32_t)d->height) d->accel_front_valid=1;
+        d->frame_stats.lfb_bytes+=(uint64_t)b.w*b.h*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
         d->presents++; d->frame_stats.presents++; return 0;
     }
-    for (int32_t y=b.y; y<b.y+b.h;) {
-        uint32_t *row=d->pixels+(uint32_t)y*d->width, *front=d->accel_front+(uint32_t)y*d->width;
-        int32_t left=b.x, right=b.x+b.w;
-        while (left<right && row[left]==front[left]) left++;
-        while (right>left && row[right-1]==front[right-1]) right--;
-        if (left==right) { y++; continue; }
-        int solid=right-left>=64 && (d->accel_caps&1u);
-        for (int32_t x=left+1; solid && x<right; x++) if (row[x]!=row[left]) solid=0;
-        int32_t bottom=y+1;
-        while (bottom<b.y+b.h) {
-            uint32_t *next=d->pixels+(uint32_t)bottom*d->width, *old=d->accel_front+(uint32_t)bottom*d->width;
-            int32_t l=b.x,r=b.x+b.w;
-            while (l<r && next[l]==old[l]) l++;
-            while (r>l && next[r-1]==old[r-1]) r--;
-            if (l!=left || r!=right) break;
-            int next_solid=r-l>=64 && (d->accel_caps&1u);
-            for (int32_t x=l+1; next_solid && x<r; x++) if (next[x]!=next[l]) next_solid=0;
-            if (next_solid!=solid || (solid && next[left]!=row[left])) break;
-            bottom++;
-        }
+    for (int y=b.y;y<b.y+b.h;) {
+        const uint32_t *row=d->pixels+(size_t)y*d->width+b.x;
+        int solid=b.w>=64;
+        for (int x=1;solid && x<b.w;x++) if (row[x]!=row[0]) solid=0;
+        int bottom=y+1;
         if (solid) {
-            struct ciuki_accel_request q={.operation=CIUKI_ACCEL_FILL,.colour=row[left],
-                .rect={left,y,left,y,(uint32_t)(right-left),(uint32_t)(bottom-y)}};
-            if (accel_call(d,&q)) {
-                struct ciuki_rect r={left,y,left,y,(uint32_t)(right-left),(uint32_t)(bottom-y)};
-                if (d->ops.present(d->display,d->output,&r)) return -1;
-                d->frame_stats.lfb_bytes+=(uint64_t)r.width*r.height*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
+            for (;bottom<b.y+b.h;bottom++) {
+                const uint32_t *next=d->pixels+(size_t)bottom*d->width+b.x;
+                int same=1;
+                for (int x=0;x<b.w;x++) if (next[x]!=row[0]) { same=0; break; }
+                if (!same) break;
             }
-        } else {
-            struct ciuki_rect r={left,y,left,y,(uint32_t)(right-left),(uint32_t)(bottom-y)};
+        } else bottom=b.y+b.h;
+        struct ciuki_rect r={b.x,y,b.x,y,(uint32_t)b.w,(uint32_t)(bottom-y)};
+        int filled=0;
+        if (solid) {
+            struct ciuki_accel_request q={.operation=CIUKI_ACCEL_FILL,.colour=row[0],.rect=r};
+            if (!accel_call(d,&q)) filled=1;
+            else {
+                /* A failed engine may have changed part of scanout. Retain
+                 * a full software recovery frame rather than trusting it. */
+                d->scanout_valid=0;
+                desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+                return -1;
+            }
+        }
+        if (!filled) {
             if (d->ops.present(d->display,d->output,&r)) return -1;
             d->frame_stats.lfb_bytes+=(uint64_t)r.width*r.height*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
         }
-        DESK_PROFILE("present_front_copy", {
-            for (int32_t i=y;i<bottom;i++)
-                memcpy(d->accel_front+(uint32_t)i*d->width+(uint32_t)left,
-                       d->pixels+(uint32_t)i*d->width+(uint32_t)left,(uint32_t)(right-left)*4);
-        });
         d->presents++; d->frame_stats.presents++; y=bottom;
     }
     return 0;
 }
+static void rows_clear(struct desktop *d)
+{
+    for (uint32_t y=0;y<d->height;y++) d->rows[y].count=0;
+}
+static void rows_add(struct desktop *d, struct desk_box box)
+{
+    if (!desk_intersect(box,(struct desk_box){0,0,(int)d->width,(int)d->height},&box)) return;
+    for (int y=box.y;y<box.y+box.h;y++) {
+        struct desk_dirty_runs *r=&d->rows[y];
+        int left=box.x, right=box.x+box.w;
+        unsigned i=0;
+        while (i<r->count && r->spans[i].right<left) i++;
+        unsigned first=i;
+        while (i<r->count && r->spans[i].left<=right) {
+            if (r->spans[i].left<left) left=r->spans[i].left;
+            if (r->spans[i].right>right) right=r->spans[i].right;
+            i++;
+        }
+        /* There are at most DESK_DAMAGE_MAX source boxes in this pass. */
+        memmove(r->spans+first+1,r->spans+i,(r->count-i)*sizeof(*r->spans));
+        r->count=r->count-(i-first)+1;
+        r->spans[first]=(struct desk_dirty_row){left,right};
+    }
+}
+/* Equal adjacent span lists form a band. A copied destination splits its
+ * spans without filling the clean gaps between separate text updates. */
+static unsigned row_boxes(struct desktop *d, uint32_t *y, struct desk_box cut,
+                          struct desk_box out[DESK_DAMAGE_MAX+1])
+{
+    while (*y<d->height && !d->rows[*y].count) ++*y;
+    if (*y==d->height) return 0;
+    int top=(int)*y, bottom=top+1;
+    struct desk_dirty_runs *r=&d->rows[top];
+    int in_cut=cut.w>0 && top>=cut.y && top<cut.y+cut.h;
+    while (bottom<(int)d->height && d->rows[bottom].count==r->count &&
+           !memcmp(d->rows[bottom].spans,r->spans,r->count*sizeof(*r->spans)) &&
+           in_cut==(cut.w>0 && bottom>=cut.y && bottom<cut.y+cut.h)) bottom++;
+    *y=(uint32_t)bottom;
+    unsigned n=0;
+    for (unsigned k=0;k<r->count;k++) {
+        struct desk_dirty_row row=r->spans[k];
+        if (!in_cut || cut.x>=row.right || cut.x+cut.w<=row.left)
+            out[n++]=(struct desk_box){row.left,top,row.right-row.left,bottom-top};
+        else {
+            if (cut.x>row.left) out[n++]=(struct desk_box){row.left,top,cut.x-row.left,bottom-top};
+            if (cut.x+cut.w<row.right) out[n++]=(struct desk_box){cut.x+cut.w,top,row.right-cut.x-cut.w,bottom-top};
+        }
+    }
+    return n;
+}
+static void render_rows(struct desktop *d, struct desk_box cut)
+{
+    uint32_t y=0;
+    while (y<d->height) {
+        struct desk_box boxes[DESK_DAMAGE_MAX+1]; unsigned n=row_boxes(d,&y,cut,boxes);
+        for (unsigned k=0;k<n;k++) {
+            scene(d,boxes[k]); d->frame_stats.scene_px+=(uint64_t)boxes[k].w*boxes[k].h;
+        }
+    }
+}
+static int present_rows(struct desktop *d, struct desk_box cut)
+{
+    uint32_t y=0;
+    while (y<d->height) {
+        struct desk_box boxes[DESK_DAMAGE_MAX+1]; unsigned n=row_boxes(d,&y,cut,boxes);
+        for (unsigned k=0;k<n;k++) {
+            d->frame_stats.damage_px+=(uint64_t)boxes[k].w*boxes[k].h;
+            if (present_box(d,boxes[k])) return -1;
+        }
+    }
+    return 0;
+}
+static int rows_cover(struct desktop *d, struct desk_box box)
+{
+    for (int y=box.y;y<box.y+box.h;y++) {
+        const struct desk_dirty_runs *r=&d->rows[y];
+        int covered=0;
+        for (unsigned k=0;k<r->count;k++)
+            if (r->spans[k].left<=box.x && r->spans[k].right>=box.x+box.w) { covered=1; break; }
+        if (!covered) return 0;
+    }
+    return 1;
+}
+static void latency_record(struct desktop *d, uint64_t latency)
+{
+    struct desk_frame_stats *s=&d->stats;
+    uint64_t bucket=latency/1000000ull;
+    if (bucket>=DESK_LATENCY_BUCKETS) bucket=DESK_LATENCY_BUCKETS-1;
+    d->latency_buckets[bucket]++; s->completed++;
+    if (latency>s->frame_max_ns) s->frame_max_ns=latency;
+    uint64_t rank=s->completed-s->completed/20, count=0;
+    for (unsigned i=0;i<DESK_LATENCY_BUCKETS;i++) {
+        count+=d->latency_buckets[i];
+        if (count>=rank) {
+            s->frame_p95_ns=i==DESK_LATENCY_BUCKETS-1 ? s->frame_max_ns : (i+1)*1000000ull;
+            break;
+        }
+    }
+}
+void desk_stats_sample(struct desktop *d)
+{
+    d->sample=d->stats;
+    memset(&d->stats,0,sizeof(d->stats));
+    memset(d->latency_buckets,0,sizeof(d->latency_buckets));
+}
 int desk_redraw(struct desktop *d)
 {
-    if (!d->damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
-    size_t bytes=(size_t)d->width*d->height*4;
-    if (!d->scene || bytes!=d->scene_bytes) {
-        uint32_t *next=malloc(bytes);
-        if (!next) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; errno=ENOMEM; return -1; }
-        free(d->scene); d->scene=next; d->scene_bytes=bytes;
-        d->cursor_valid=0;
+    if (!d->damage.count && !d->move_damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
+    uint64_t frame_begin=time_now(d);
+    if (!d->rows || d->row_height!=d->height) {
+        struct desk_dirty_runs *next=malloc((size_t)d->height*sizeof(*next));
+        if (!next) { d->next_frame_ns=frame_begin+DESK_FRAME_NS; errno=ENOMEM; return -1; }
+        free(d->rows); d->rows=next; d->row_height=d->height;
+        d->frame_valid=d->scanout_valid=0; d->cursor_valid=0;
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
     }
     struct desk_frame_stats *s=&d->frame_stats;
@@ -828,107 +914,122 @@ int desk_redraw(struct desktop *d)
     uint64_t begin=time_now(d);
     if (d->accel) {
         struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
-        int caps=accel_call(d,&q);
-        d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+        int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
         if (d->hw_cursor && !(d->accel_caps&2u)) {
-            d->hw_cursor=0; d->cursor_dirty=1;
+            d->hw_cursor=0; d->cursor_dirty=1; d->scanout_valid=0;
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
         }
     }
     s->present_ns+=time_now(d)-begin;
     begin=time_now(d);
-    uint32_t *output=d->pixels;
-    d->pixels=d->scene;
-    for (unsigned i=0;i<d->damage.count;i++) {
-        struct desk_box b=d->damage.boxes[i];
-        scene(d,b); s->scene_px+=(uint64_t)b.w*b.h;
-    }
-    d->pixels=output;
-    /* No intermediate scene is published. Restore the old arrow before any
-     * completed scene copies, then save the final underlay (including overlaps). */
     if (d->cursor_valid) {
         struct desk_box b=d->cursor_box;
         for (int y=0;y<b.h;y++)
-            memcpy(output+(size_t)(b.y+y)*d->width+b.x,d->cursor_under+y*11,(size_t)b.w*4);
-        if (d->cursor_dirty)
-            desk_damage_add(&d->present_damage,b,d->width,d->height);
+            memcpy(d->pixels+(size_t)(b.y+y)*d->width+b.x,d->cursor_under+y*11,(size_t)b.w*4);
+        if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     }
-    for (unsigned i=0;i<d->damage.count;i++) {
-        struct desk_box b=d->damage.boxes[i];
-        copy_box(output,d->scene,d->width,b);
-        desk_damage_add(&d->present_damage,b,d->width,d->height);
+    struct ciuki_rect copy=d->copy_rect;
+    int moving=d->copy_pending && d->frame_valid;
+    int engine_copy=moving && d->accel && (d->accel_caps&1u) && d->hw_cursor && d->scanout_valid;
+    int scrolling=!moving && scroll_plan(d,&copy);
+    engine_copy|=scrolling;
+    struct desk_box copied={copy.dst_x,copy.dst_y,(int)copy.width,(int)copy.height};
+    if (moving) {
+        DESK_PROFILE("windows", ram_copy(d,&copy));
+        rows_clear(d);
+        for (unsigned i=0;i<d->move_damage.count;i++) rows_add(d,d->move_damage.boxes[i]);
+        render_rows(d,copied);
     }
+    rows_clear(d);
+    for (unsigned i=0;i<d->damage.count;i++) rows_add(d,d->damage.boxes[i]);
+    render_rows(d,(struct desk_box){0});
+    d->frame_valid=1;
     struct desk_box b;
     if (!d->hw_cursor && desk_intersect((struct desk_box){d->mouse_x,d->mouse_y,11,17},
                        (struct desk_box){0,0,(int)d->width,(int)d->height},&b)) {
         for (int y=0;y<b.h;y++)
-            memcpy(d->cursor_under+y*11,output+(size_t)(b.y+y)*d->width+b.x,(size_t)b.w*4);
-        d->cursor_box=b; d->cursor_valid=1; cursor(d,b);
+            memcpy(d->cursor_under+y*11,d->pixels+(size_t)(b.y+y)*d->width+b.x,(size_t)b.w*4);
+        d->cursor_box=b; d->cursor_valid=1; DESK_PROFILE("cursor", cursor(d,b));
         if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     } else d->cursor_valid=0;
     if (!d->hw_cursor) d->cursor_dirty=0;
     s->composite_ns=time_now(d)-begin;
-    /* Enter the presentation phase only with a completed RAM frame. A
-     * partially failed copy invalidates scanout; reconstruct it next frame
-     * from full scene damage before attempting any upload. */
     begin=time_now(d);
-    int copy_error=0;
-    if (d->copy_pending) {
-        if (d->accel_front && d->accel_front_valid && (d->accel_caps&1u)) copy_error=screen_copy(d,&d->copy_rect);
-        d->copy_pending=0;
-    } else copy_error=scroll_copy(d);
-    if (copy_error) d->cursor_dirty=1;
-    for (unsigned i=0;i<d->present_damage.count;i++)
-        s->damage_px+=(uint64_t)d->present_damage.boxes[i].w*d->present_damage.boxes[i].h;
-    unsigned done = 0;
-    for (; !copy_error && done < d->present_damage.count; done++) {
-        struct desk_box b = d->present_damage.boxes[done];
-        if (present_box(d,b)) break;
+    int complete=1;
+    if (engine_copy && screen_copy(d,&copy)) complete=0;
+    /* Move exposure excludes the exact scanout copy. General damage (new
+     * client pixels, changed captions) must still overwrite that destination. */
+    if (complete && moving) {
+        rows_clear(d);
+        for (unsigned i=0;i<d->move_damage.count;i++) rows_add(d,d->move_damage.boxes[i]);
+        if (present_rows(d,engine_copy ? copied : (struct desk_box){0})) complete=0;
     }
-    int complete=!copy_error && done==d->present_damage.count;
-    if (done) {
-        d->present_damage.count -= done;
-        memmove(d->present_damage.boxes,d->present_damage.boxes+done,d->present_damage.count*sizeof(d->present_damage.boxes[0]));
-        if (complete) for (int i=0; i<DESK_CLIENTS; i++) {
-            struct desk_client *c=&d->clients[i];
-            if (c->launch_frame_pending && c->window && !c->minimized && !c->collapsed) {
-                c->launch_frame_pending=0;
-                if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_FRAME,c->pid,0);
-            }
-        }
+    if (complete) {
+        rows_clear(d);
+        for (unsigned i=0;i<d->damage.count;i++) rows_add(d,d->damage.boxes[i]);
+        if (present_rows(d,scrolling ? copied : (struct desk_box){0})) complete=0;
     }
-    if (complete) d->damage.count=0;
-    /* A failed engine operation may have hidden the hardware pointer.
-     * Retain a full software recovery frame until it is successfully uploaded. */
+    if (complete) for (unsigned i=0;i<d->present_damage.count;i++) {
+        struct desk_box dirty=d->present_damage.boxes[i];
+        if (rows_cover(d,dirty) && !scrolling) continue;
+        s->damage_px+=(uint64_t)dirty.w*dirty.h;
+        if (present_box(d,dirty)) { complete=0; break; }
+    }
+    /* Faults may hide the hardware pointer. Reconstruct with a software
+     * cursor before acknowledging either launch or a display-mode change. */
     if (d->hw_cursor) {
         struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
-        int caps=accel_call(d,&q);
-        d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-        if (!(d->accel_caps&2u)) {
-            d->hw_cursor=0; d->cursor_dirty=1;
-            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
-            complete=0;
-        }
+        int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+        if (!(d->accel_caps&2u)) { d->hw_cursor=0; d->cursor_dirty=1; complete=0; }
     }
     if (d->hw_cursor && d->cursor_dirty && complete) {
         struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_MOVE,
             .rect={0,0,d->mouse_x,d->mouse_y,0,0}};
-        int error=accel_call(d,&q);
-        q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
+        int error=accel_call(d,&q); q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
         if (!error) error=accel_call(d,&q);
-        if (error) {
-            d->hw_cursor=0;
-            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
-            complete=0;
-        } else { d->cursor_dirty=0; d->cursor_x=d->mouse_x; d->cursor_y=d->mouse_y; }
+        if (error) { d->hw_cursor=0; complete=0; }
+        else { d->cursor_dirty=0; d->cursor_x=d->mouse_x; d->cursor_y=d->mouse_y; }
     }
-    s->present_ns+=time_now(d)-begin;
+    uint64_t end=time_now(d);
+    s->present_ns+=end-begin;
+    uint64_t input=d->frame_input_ns;
+    if (complete) {
+        for (int i=0;i<DESK_CLIENTS;i++) {
+            struct desk_client *c=&d->clients[i];
+            if (c->launch_frame_pending && c->window && !c->minimized && !c->collapsed) {
+                uint64_t click=c->launch_input_ns ? c->launch_input_ns : c->launched_ns;
+                if (click && (!input || click<input)) input=click;
+                c->launch_frame_pending=0;
+                if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_FRAME,c->pid,0);
+            }
+        }
+        uint64_t start=input && input<=end ? input : frame_begin;
+        s->frame_ns=end>=start ? end-start : 0; s->completed=1;
+        latency_record(d,s->frame_ns); d->frame_input_ns=0;
+        d->damage.count=d->present_damage.count=0; d->scanout_valid=1;
+    } else {
+        d->scanout_valid=0;
+        if (d->accel) d->cursor_dirty=1;
+        /* The copied source no longer exists in RAM; retries reconstruct. */
+        for (unsigned i=0;i<d->move_damage.count;i++)
+            desk_damage_add(&d->damage,d->move_damage.boxes[i],d->width,d->height);
+        if (engine_copy || d->accel)
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+    }
+    d->copy_pending=0; d->move_damage.count=0;
     s->input_ns=d->pending_input_ns; s->input_lag_ns=d->pending_input_lag_ns;
     d->pending_input_ns=d->pending_input_lag_ns=0;
     d->stats.frames++; d->stats.damage_px+=s->damage_px; d->stats.scene_px+=s->scene_px;
     d->stats.presents+=s->presents; d->stats.lfb_bytes+=s->lfb_bytes;
     d->stats.composite_ns+=s->composite_ns; d->stats.present_ns+=s->present_ns;
-    d->next_frame_ns=time_now(d)+DESK_FRAME_NS;
+    uint64_t deadline=frame_begin+DESK_FRAME_NS;
+    if (end>deadline) {
+        s->overruns=1; s->dropped=(end-deadline)/DESK_FRAME_NS+1;
+        deadline+=s->dropped*DESK_FRAME_NS;
+    }
+    d->stats.overruns+=s->overruns; d->stats.dropped+=s->dropped;
+    s->frame_p95_ns=d->stats.frame_p95_ns; s->frame_max_ns=d->stats.frame_max_ns;
+    d->next_frame_ns=deadline;
     return complete ? 0 : -1;
 }
 uint64_t desk_launch_wait(const struct desktop *d, uint64_t now)

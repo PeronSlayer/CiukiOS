@@ -131,6 +131,19 @@ static void assertions(void)
     d.sh.icon_selected=0; desk_damage_add(&d.damage,d.sh.icons[0].box,d.width,d.height); redraw();
     desk_menu_open(&d,SH_MENU_START,4,32); redraw(); desk_menu_close(&d); redraw();
     assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
+    /* Tray popups lie above client pixels. Copying the completed window
+     * under them would carry their old pixels into the new destination. */
+    for (int popup=0;popup<2;popup++) {
+        d.sh.network_open=!popup; d.sh.media_open=popup;
+        desk_move(&d,0,680,500);
+        desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+        redraw();
+        desk_move(&d,0,640,480); assert(!d.copy_pending); redraw();
+        assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
+        d.sh.network_open=d.sh.media_open=0;
+        desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+        redraw();
+    }
     /* Title-button hover adds bounded scene damage, without a full present. */
     struct desk_box close=desk_close_box(&d.clients[0]);
     struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=close.x-d.mouse_x,.value2=close.y-d.mouse_y};

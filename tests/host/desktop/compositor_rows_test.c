@@ -97,76 +97,135 @@ static void text(void)
     }
 }
 
+static unsigned coverage[RW*RH];
+static void cover(struct desktop *d, int index, struct desk_box box)
+{
+    (void)d; (void)index;
+    for (int y=box.y;y<box.y+box.h;y++) for (int x=box.x;x<box.x+box.w;x++) coverage[y*RW+x]++;
+}
 static void visibility(void)
 {
     static struct desktop d;
     uint32_t pixel=0;
     int windows[DESK_CLIENTS];
-    struct desk_box boxes[DESK_DAMAGE_MAX], clip={5,9,140,107};
-    for (unsigned k=0; k<96; k++) {
-        unsigned count=k%(DESK_CLIENTS+1);
-        for (unsigned i=0; i<count; i++) {
+    struct desk_box clip={5,9,140,107};
+    for (unsigned k=0;k<112;k++) {
+        unsigned count=k<96 ? k%(DESK_CLIENTS+1) : DESK_CLIENTS;
+        for (unsigned i=0;i<count;i++) {
             struct desk_client *c=&d.clients[i]; windows[i]=(int)i;
             c->pixels=&pixel; c->internal=i%5==1; c->collapsed=(i+k)%7==0;
-            c->frame=desk_frame(43,31,(int)((i*37+k)%140)-10,(int)((i*17+k)%110)-20);
-            c->info.width=i%3 ? 43 : 17; c->info.height=i%4 ? 31 : 11;
+            c->frame=k<96 ? desk_frame(43,31,(int)((i*37+k)%140)-10,(int)((i*17+k)%110)-20) :
+                desk_frame(2,2,10+i*7,5+i*5);
         }
-        unsigned n=visible_boxes(&d,clip,windows,count,boxes);
-        assert(n<=DESK_DAMAGE_MAX);
-        int fallback=n==1 && !memcmp(&boxes[0],&clip,sizeof(clip));
-        for (int y=0; y<RH; y++) for (int x=0; x<RW; x++) {
-            int covered=0, hidden=0;
-            for (unsigned i=0; i<n; i++) covered+=desk_contains(boxes[i],x,y);
-            assert(covered<=1);
-            if (!desk_contains(clip,x,y)) { assert(!covered); continue; }
-            for (unsigned i=0; i<count; i++) {
-                struct desk_client *c=&d.clients[i];
-                struct desk_box well=desk_content(c);
-                hidden|=!c->internal && !c->collapsed && desk_contains(well,x,y) &&
-                    desk_contains((struct desk_box){well.x,well.y,(int)c->info.width,(int)c->info.height},x,y);
+        memset(coverage,0,sizeof(coverage));
+        visible_paint(&d,clip,windows,count,cover,-1);
+        for (int y=0;y<RH;y++) for (int x=0;x<RW;x++) {
+            int hidden=0;
+            for (unsigned i=0;i<count;i++) {
+                struct desk_box f=d.clients[i].frame;
+                int pad=y<f.y+desk_theme->radius ? desk_theme->radius+1 : 0;
+                hidden|=desk_contains((struct desk_box){f.x+pad,f.y,f.w-2*pad,f.h},x,y);
             }
-            assert(fallback ? covered==1 : covered==!hidden);
+            assert(coverage[y*RW+x]==(unsigned)(desk_contains(clip,x,y) && !hidden));
         }
     }
-    /* Sixteen separated tiny opaque holes exceed the rectangle budget. */
-    for (int i=0; i<DESK_CLIENTS; i++) {
-        struct desk_client *c=&d.clients[i];
-        windows[i]=i; c->internal=c->collapsed=0; c->pixels=&pixel;
-        c->info.width=c->info.height=2;
-        c->frame=desk_frame(2,2,10+i*7,5+i*5);
-    }
-    unsigned n=visible_boxes(&d,clip,windows,DESK_CLIENTS,boxes);
-    assert(n==1 && !memcmp(&boxes[0],&clip,sizeof(clip)));
 }
 
 static int uploads, fail_present;
+static void dirty_rows(void)
+{
+    struct desktop d={.width=RW,.height=RH};
+    d.rows=calloc(RH,sizeof(*d.rows)); assert(d.rows);
+    struct desk_box dirty[DESK_DAMAGE_MAX];
+    for (unsigned i=0;i<DESK_DAMAGE_MAX;i++) {
+        dirty[i]=(struct desk_box){(int)i*6,5+(int)i%3,3,20};
+        rows_add(&d,dirty[i]);
+    }
+    for (int clipped=0;clipped<2;clipped++) {
+        struct desk_box cut=clipped ? (struct desk_box){7,5,1,20} : (struct desk_box){0};
+        memset(coverage,0,sizeof(coverage)); uint32_t y=0;
+        while (y<RH) {
+            struct desk_box boxes[DESK_DAMAGE_MAX+1]; unsigned n=row_boxes(&d,&y,cut,boxes);
+            for (unsigned i=0;i<n;i++) cover(&d,0,boxes[i]);
+        }
+        for (int y=0;y<RH;y++) for (int x=0;x<RW;x++) {
+            int wanted=0;
+            for (unsigned i=0;i<DESK_DAMAGE_MAX;i++) wanted|=desk_contains(dirty[i],x,y);
+            wanted&=!desk_contains(cut,x,y);
+            assert(coverage[y*RW+x]==(unsigned)wanted);
+        }
+    }
+    free(d.rows);
+}
 static int upload(int display, int output, const struct ciuki_rect *r)
 { (void)display; (void)output; (void)r; uploads++; return fail_present ? -1 : 0; }
 static int accelerator(int display, const struct ciuki_accel_request *q)
 { (void)display; (void)q; return 0; }
 static void presentation(void)
 {
-    struct desktop d={.width=RW,.height=RH,.pixels=a,.accel_front=b,.ops={.present=upload}};
+    struct desktop d={.width=RW,.height=RH,.pixels=a,.ops={.present=upload}};
     struct desk_box full={0,0,RW,RH};
     for (unsigned caps=0;caps<4;caps++) for (int active=0;active<2;active++) {
         background(731); a[17]^=1;
-        d.accel=active ? accelerator : NULL; d.accel_caps=caps; d.accel_front_valid=0;
+        d.accel=active ? accelerator : NULL; d.accel_caps=caps; d.scanout_valid=0;
         uploads=fail_present=0; assert(!present_box(&d,full) && uploads==1);
-        int rectangles=active && (caps&1);
-        assert(d.accel_front_valid==rectangles);
-        assert(rectangles ? !memcmp(a,b,sizeof(a)) : a[17]!=b[17]);
-        /* A retained front after capability loss must not be compared/copied. */
+        /* Presentation never writes a second RAM frame. */
+        assert(a[17]!=b[17]);
         d.accel_caps=0; a[17]^=1; uploads=0;
-        assert(!present_box(&d,full) && uploads==1 && !d.accel_front_valid);
+        assert(!present_box(&d,full) && uploads==1);
     }
-    d.accel=accelerator; d.accel_caps=1; d.accel_front_valid=0; fail_present=1;
+    d.accel=accelerator; d.accel_caps=1; d.scanout_valid=0; fail_present=1;
     background(923); a[17]^=1;
-    assert(present_box(&d,full)==-1 && a[17]!=b[17] && !d.accel_front_valid);
+    assert(present_box(&d,full)==-1 && a[17]!=b[17]);
+}
+
+static uint64_t clock_ns, present_cost;
+static int timing_failure;
+static uint64_t clock_read(void) { return clock_ns; }
+static int timing_present(int display, int output, const struct ciuki_rect *r)
+{
+    (void)display; (void)output; (void)r;
+    clock_ns+=present_cost;
+    return timing_failure ? -1 : 0;
+}
+static void pacing_latency(void)
+{
+    struct desk_ops ops={.present=timing_present};
+    struct desktop d; desk_init(&d,&ops,64,48);
+    d.pixels=calloc(64*48,4); assert(d.pixels); d.time_ns=clock_read;
+    clock_ns=1000000000ull; d.now_ns=clock_ns;
+    present_cost=5000000; timing_failure=0;
+    struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=1,.monotonic_ns=990000000};
+    desk_input(&d,&e); assert(!desk_redraw(&d));
+    /* Includes 10 ms input wait and 5 ms presentation. Deadline is anchored
+     * to render start, not to the 5 ms later completion. */
+    assert(d.frame_stats.frame_ns==15000000 && d.stats.completed==1);
+    assert(d.next_frame_ns==1000000000ull+DESK_FRAME_NS);
+    assert(d.stats.frame_p95_ns==16000000 && d.stats.frame_max_ns==15000000);
+    clock_ns=d.next_frame_ns; d.now_ns=clock_ns; e.monotonic_ns=clock_ns-2000000;
+    desk_input(&d,&e); timing_failure=1; present_cost=1000000;
+    assert(desk_redraw(&d)==-1 && d.stats.completed==1 && d.frame_input_ns==e.monotonic_ns);
+    clock_ns=d.next_frame_ns; d.now_ns=clock_ns; timing_failure=0; present_cost=0;
+    assert(!desk_redraw(&d) && d.stats.completed==2);
+    assert(d.frame_stats.frame_ns==clock_ns-e.monotonic_ns && !d.frame_input_ns);
+    assert(d.stats.frame_max_ns==d.frame_stats.frame_ns);
+    desk_stats_sample(&d); assert(d.sample.completed==2 && !d.stats.completed);
+    clock_ns=d.next_frame_ns; present_cost=40000000;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,64,48},64,48);
+    uint64_t begin=clock_ns; assert(!desk_redraw(&d));
+    assert(d.frame_stats.overruns==1 && d.frame_stats.dropped==2);
+    assert(d.next_frame_ns==begin+3*DESK_FRAME_NS && d.next_frame_ns>clock_ns);
+    assert(d.stats.completed==1 && d.stats.frame_p95_ns==41000000);
+    /* Long waits retain their exact maximum beyond the histogram range. */
+    clock_ns=d.next_frame_ns; d.frame_input_ns=clock_ns-300000000ull; present_cost=0;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,1,1},64,48); assert(!desk_redraw(&d));
+    assert(d.stats.frame_max_ns==300000000 && d.stats.frame_p95_ns==300000000);
+    desk_render_release(&d); free(d.pixels);
 }
 
 int main(void)
 {
-    frames(); shadows(); text(); visibility(); presentation();
+    frames(); shadows(); text(); visibility(); dirty_rows(); presentation(); pacing_latency();
     struct desktop d={0}; desk_render_release(&d);
     background(37);
     struct desk_paint p={a,RW,RH,0,0,RW,RH}, q=p; q.pixels=b;
