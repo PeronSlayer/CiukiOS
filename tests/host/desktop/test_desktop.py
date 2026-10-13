@@ -182,9 +182,9 @@ class DesktopTests(unittest.TestCase):
             subprocess.run([str(binary), str(folder / "portrait.xrgb"), str(frames)], check=True, env=env, capture_output=True)
             names = sorted(p.name for p in frames.glob("*.ppm"))
             self.assertEqual(names, sorted(f"{t}-{w}.ppm" for t in ("platinum", "ciuki-blue", "classic-98")
-                                           for w in ("desktop", "dialogs")))
+                                           for w in ("desktop", "dialogs", "tray-disabled", "tray-media")))
             digests = {n: hashlib.sha256((frames / n).read_bytes()).hexdigest() for n in names}
-            self.assertEqual(len(set(digests.values())), 6)
+            self.assertEqual(len(set(digests.values())), 12)
             # Desktop icon labels over the default wallpaper, the owner's Ciuk2 scene (owner feedback 2026-10-12:
             # labels must stay readable on any wallpaper): look_capture's wallpaper mode renders the six desktop
             # icons with Documents selected, and the same desktop with the icons off.

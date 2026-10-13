@@ -17,11 +17,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 THEMES = ("Platinum", "Ciuki Blue", "Classic 98")
-# Filled from the original production renderer before the optimization.
+# F2-53: re-pinned after reviewing the tray layout with the production renderer.
 GOLDENS = {
-    "Platinum": "20efa8ab5b7252383bec73ac5ff07b667be3e70689a41e0b6efcbe351a9129fe",
-    "Ciuki Blue": "38233d6ca1f5d0758eb541348e60d36106bd3ce3d1104f59e7375b62d7ee7880",
-    "Classic 98": "b172a5fc9a7afd162f8c11ab71de6d787e6a78024eb05217b9adb311d31f37c7",
+    "Platinum": "c105449aba076be0c9f330f4c8dd4b7cc13dbfa259ee83e8787cd7b59b63373a",
+    "Ciuki Blue": "df7b0b06b8710a75a4a22de425a713c443c781968a9b422d1c8936782f770979",
+    "Classic 98": "17e98daaaefd11df154da275151a503cf426b1030cc68c4d0d11b1cdb04a9004",
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "settings",

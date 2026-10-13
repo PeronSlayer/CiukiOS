@@ -1,10 +1,15 @@
 """Start menu geometry of the desktop shell (apps/desktop/shell.c) at 1024x768, for the scripted QEMU cases.
 
-The 132 px network/speaker/clock tray spans x 888..1020, y 740..765.
-Network occupies x 892..908, the speaker x 912..928 and the clock x 932..1018.
-The speaker/clock and the scripted Task Manager click (300, 751) keep their
-positions; the task-button area ends 20 px earlier. f2-desktop.json needs no
-input-coordinate or literal digest changes (its desktop digests are relations).
+The tray ends at x 1020 and spans y 740..765. Its width is 12 px of inner
+margins plus the displayed clock's measured text width C and 20 px per visible
+icon (16 px icon + 4 px gap). At the default 24-hour time 12:00, C=31, so
+without removable media the tray spans x 937..1020; network x 943..959,
+volume x 963..979, clock x 983..1014. Visible media adds a slot at x 923..939
+and moves the tray's left edge to x 917. All icons span y 744..760; the clock's
+capital top is y 748. With seconds or 12-hour time, measure the formatted text
+instead of assuming C=31. Task buttons stop 8 px before the tray's left edge.
+The scripted Task Manager click (300, 751) remains within its button; desktop
+case digests are relations and need no literal digest updates.
 
 The Ciuki (Start) button sits at the left end of the 32 px top bar, x 4..100, y 4..28 (desktop.h
 DESK_START_*). Its menu drops from it: 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px)

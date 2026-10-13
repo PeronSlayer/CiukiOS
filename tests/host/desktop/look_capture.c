@@ -241,6 +241,19 @@ int main(int argc, char **argv)
             if (pass) { struct du_rect r = du_menu_title(&ua, 2); (void)r; }
             desk_composite(d, (struct desk_box){0, 0, W, H});
             save(d, argv[2], desk_theme->name, pass ? "dialogs" : "desktop");
+            if (!pass) {
+                d->sh.mixer_state = -1;
+                d->sh.muted = 1;
+                desk_composite(d, (struct desk_box){0, 0, W, H});
+                save(d, argv[2], desk_theme->name, "tray-disabled");
+                d->sh.mixer_state = 2;
+                d->sh.muted = 0;
+                d->sh.network.present = 1;
+                d->sh.network.link = CIUKI_NET_LINK_UP;
+                d->sh.media.removable_mask = 1u << 4;
+                desk_composite(d, (struct desk_box){0, 0, W, H});
+                save(d, argv[2], desk_theme->name, "tray-media");
+            }
             du_dialog_close(&ua); du_dialog_close(&ub); du_ta_free(&ta);
             free(d->sh.wall); free(d);
         }
