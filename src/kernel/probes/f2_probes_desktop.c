@@ -384,7 +384,9 @@ static int native_crash_isolation(void)
         rec_emit(name,"DATA","case=progress server=desktop cycle=%u server_replies=%u replies=%u ticks=%llu unauthorized_access=%u desktop_restarts=%u",
             cycles+1,native_reports.replies-start_server,native_reports.survivor_turns-start_client,g_ticks-start_tick,
             native_reports.unauthorized,supervisor_desktop_deaths()-deaths);
-        rec_emit(name,"DATA","case=restored server=desktop cycle=%u equal=%u processes_equal=%u",cycles+1,desktop_ledgers_equal(&baseline,&restored),native_proc_equal(&baseline_proc,&restored_proc));
+        rec_emit(name,"DATA","case=restored server=desktop cycle=%u equal=%u processes_equal=%u procs=%u/%u threads=%u/%u zombies=%u/%u handles=%u/%u extents=%u/%u backing=%u/%u tables=%u/%u",cycles+1,desktop_ledgers_equal(&baseline,&restored),native_proc_equal(&baseline_proc,&restored_proc),
+                 baseline_proc.processes,restored_proc.processes,baseline_proc.threads,restored_proc.threads,baseline_proc.zombies,restored_proc.zombies,baseline_proc.handles,restored_proc.handles,
+                 baseline_proc.extents,restored_proc.extents,baseline_proc.backing,restored_proc.backing,baseline_proc.tables,restored_proc.tables);
         if (!pass) native_step_record(GATE_SNAPSHOT,generation,"restored_contract");
     }
     rec_emit(name,"DATA","case=cycles server=desktop cycles=%u desktop_restarts=%u",cycles,supervisor_desktop_deaths()-deaths);
