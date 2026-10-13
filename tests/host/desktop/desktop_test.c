@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "fake.h"
+#include "../../../apps/libdeskui/deskui.h"
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>
@@ -640,8 +641,30 @@ static void test_terminal(void)
     desk_receive(&d,i,&m); assert(terminal_result(i)==0 && d.power.state==DESK_POWER_CLOSING && d.power.action==CIUKI_POWER_REBOOT);
     d.power.state=0; cleanup(); puts("PASS Terminal: menu, launch authorization, protected PIDs, mixer, protocol, desktop power path");
 }
+static void test_volume_steps(void)
+{
+    setup(640,480);desk_shell_enable(&d);d.sh.mixer_state=2;d.sh.volume_open=1;d.sh.volume=50;
+    assert(desk_shell_key(&d,DU_KEY_UP,1) && d.sh.volume==51 && d.sh.want_mixer);
+    d.sh.want_mixer=0;assert(desk_shell_key(&d,DU_KEY_UP,0) && d.sh.volume==51 && !d.sh.want_mixer);
+    assert(desk_shell_key(&d,DU_KEY_DOWN,2) && d.sh.volume==50 && d.sh.want_mixer);
+    d.sh.volume_open=0;d.sh.want_mixer=0;
+    assert(desk_shell_key(&d,0x130,1) && d.sh.volume==51 && d.sh.want_mixer);
+    assert(desk_shell_key(&d,0x12e,1) && d.sh.volume==50);
+    assert(desk_shell_key(&d,0x120,1) && d.sh.muted);
+    d.sh.want_mixer=0;assert(desk_shell_key(&d,0x120,2) && d.sh.muted && !d.sh.want_mixer);
+    d.sh.volume=100;d.sh.want_mixer=0;assert(desk_shell_key(&d,0x130,1) && !d.sh.want_mixer);
+    d.sh.volume=0;assert(desk_shell_key(&d,0x12e,1) && !d.sh.want_mixer);
+    d.sh.volume_open=1;d.sh.volume=50;
+    /* Production popup track: x=584, y=310..410 at this geometry. */
+    d.mouse_x=590;d.mouse_y=330;assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));
+    assert(d.sh.volume_drag && d.sh.volume==80 && d.sh.want_mixer);
+    d.sh.want_mixer=0;d.mouse_y=340;desk_shell_motion(&d);assert(d.sh.volume==70 && d.sh.want_mixer);
+    d.sh.want_mixer=0;desk_shell_motion(&d);assert(!d.sh.want_mixer);
+    desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);assert(!d.sh.volume_drag && !d.sh.want_mixer);
+    cleanup();puts("PASS UI volume: tray steps during drag, unchanged/release silence, popup/extended keyboard, repeat and bounds");
+}
 int main(void)
 {
-    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_media_shell(); test_menu(); test_ide_launch(); test_terminal();
+    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_media_shell(); test_menu(); test_ide_launch(); test_terminal(); test_volume_steps();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

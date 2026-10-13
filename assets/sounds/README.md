@@ -12,7 +12,9 @@ in `kenney-interface/`. `scripts/build_sounds.py` verifies the archive into
 metadata or dithering), and writes canonical mono 16-bit PCM WAV at 22050 Hz.
 It records output hashes and the converter version; reproducibility is for
 that converter version. The canonical image installs the WAVs and credit and
-licence notices in `/system/sounds`, and `/system/settings/sounds.cfg`.
+licence notices and the default `scheme.cfg` in `/System/sounds`. User event
+assignments and UI volume now persist in `Desktop\Sounds` through F2-47
+(`docs/design/f4-ui-sounds.md`); the former settings file is a migration overlay.
 The installed set is less than 1 MiB. The owner will compose replacements.
 
 The old `native/` raw-PCM files and converter remain for the legacy line;

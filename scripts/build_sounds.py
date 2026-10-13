@@ -20,6 +20,8 @@ EVENTS = {
     "error": "error_001", "information": "confirmation_001",
     "question": "question_002", "end_task": "close_003",
     "volume": "tick_001", "empty_recycle": "drop_001",
+    "logon": "confirmation_001", "device_connect": "open_003",
+    "device_disconnect": "close_001", "autoplay": "confirmation_002",
 }
 OUTPUT = ROOT / "build/external/system-sounds"
 
@@ -72,10 +74,10 @@ def build(output=OUTPUT):
                 wav.writeframes(pcm)
         shutil.copyfile(ROOT / "assets/sounds/LICENSE.txt", output / "LICENSE.txt")
         shutil.copyfile(ROOT / "assets/sounds/CREDITS.TXT", output / "CREDITS.TXT")
-        (output / "sounds.cfg").write_text("# Provisional Kenney CC0 system sound scheme\nenabled=1\n" +
+        (output / "scheme.cfg").write_text("# Provisional Kenney CC0 system sound scheme\nenabled=1\nui_volume=100\n" +
                                           "".join(f"{e}={e}.wav\n" for e in EVENTS), encoding="ascii")
     manifest["files"] = {n: sha((output / n).read_bytes()) for n in
-                         [*(e + ".wav" for e in EVENTS), "LICENSE.txt", "CREDITS.TXT", "sounds.cfg"]}
+                         [*(e + ".wav" for e in EVENTS), "LICENSE.txt", "CREDITS.TXT", "scheme.cfg"]}
     total = sum((output / n).stat().st_size for n in manifest["files"])
     if total >= 1024 * 1024:
         raise ValueError("sound pack exceeds 1 MiB")
@@ -90,7 +92,7 @@ def validate(output=OUTPUT):
     pin = json.loads((ROOT / "assets/sounds/kenney-interface/UPSTREAM.json").read_text())
     if m["archive_sha256"] != pin["archive_sha256"] or m["events"] != EVENTS:
         raise ValueError("stale sound pack provenance")
-    expected = {*(e + ".wav" for e in EVENTS), "LICENSE.txt", "CREDITS.TXT", "sounds.cfg"}
+    expected = {*(e + ".wav" for e in EVENTS), "LICENSE.txt", "CREDITS.TXT", "scheme.cfg"}
     if set(m["files"]) != expected or not m["provisional"] or m["license"] != pin["license"] or m["source"] != pin["source"]:
         raise ValueError("invalid sound inventory or provenance")
     for name in ("LICENSE.txt", "CREDITS.TXT"):

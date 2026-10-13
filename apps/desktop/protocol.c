@@ -270,7 +270,8 @@ int desk_parse(const struct ciuki_message *m, int client,
         if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 8) return 0;
         p->flags = desk_get32(m->data+4);
         if (p->flags != SOUND_MENU_OPEN && p->flags != SOUND_MENU_SELECT &&
-            p->flags != SOUND_ERROR && p->flags != SOUND_INFORMATION && p->flags != SOUND_QUESTION) return 0;
+            p->flags != SOUND_ERROR && p->flags != SOUND_INFORMATION && p->flags != SOUND_QUESTION &&
+            p->flags != SOUND_AUTOPLAY) return 0;
         n = 8; break;
     case DESK_SETTINGS:
         if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 24) return 0;

@@ -615,6 +615,19 @@ void audio_vm_diagnostic(struct dosvm_key key, struct audio_vm_diagnostic *out)
     }
     irq_restore(f);
 }
+/* Public diagnostics must only observe; do not revoke tokens or arm wakeups. */
+bool audio_vm_playing(void)
+{
+    for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
+        struct vm_slot *s = &vm_slots[i];
+        if (s->state == AUDIO_VM_FREE) continue;
+        if (s->busy && s->live_epoch == s->epoch) return true;
+        struct dosvm_audio_info info;
+        if (dosvm_audio_info(s->key, &info) && (info.active || info.pcm_queued || info.blocks_queued || info.events_queued))
+            return true;
+    }
+    return false;
+}
 bool audio_vm_active(void)
 {
     bool any = false;

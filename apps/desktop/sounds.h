@@ -8,22 +8,28 @@
 #define SOUND_TEXT_MAX 4096u
 #define SOUND_NAME_MAX 64u
 #define SOUND_DIR "/system/sounds"
-#define SOUND_CFG "/system/settings/sounds.cfg"
+#define SOUND_CFG SOUND_DIR "/scheme.cfg"
+#define SOUND_LEGACY_CFG "/system/settings/sounds.cfg"
+#define SOUND_VOLUME_INTERVAL_NS 60000000ull
 enum sound_event {
     SOUND_STARTUP, SOUND_SHUTDOWN, SOUND_MENU_OPEN, SOUND_MENU_SELECT,
     SOUND_WINDOW_OPEN, SOUND_WINDOW_CLOSE, SOUND_MINIMISE, SOUND_RESTORE,
     SOUND_ERROR, SOUND_INFORMATION, SOUND_QUESTION, SOUND_END_TASK,
-    SOUND_VOLUME, SOUND_EMPTY_RECYCLE, SOUND_EVENTS
+    SOUND_VOLUME, SOUND_EMPTY_RECYCLE, SOUND_LOGON, SOUND_DEVICE_CONNECT,
+    SOUND_DEVICE_DISCONNECT, SOUND_AUTOPLAY, SOUND_EVENTS
 };
 extern const char *const sound_keys[SOUND_EVENTS], *const sound_labels[SOUND_EVENTS];
-struct sound_scheme { int enabled; char file[SOUND_EVENTS][SOUND_NAME_MAX]; };
+struct sound_scheme { int enabled, volume; char file[SOUND_EVENTS][SOUND_NAME_MAX]; };
 struct sound_clip { const uint8_t *pcm; unsigned frames; };
 struct sound_voice { struct sound_clip clip; unsigned position; };
 struct sound_player {
     struct sound_voice voice[2];
     int16_t pending[256]; unsigned count, offset;
-    int error;
+    int error; unsigned volume; /* UI gain, applied before saturation */
 };
+struct sound_throttle { uint64_t last_volume; int volume_seen; };
+int sound_coalesce(struct sound_throttle *, unsigned event, uint64_t now);
+int sound_allowed(const struct sound_scheme *, int preview, int muted, int vm_active);
 void sound_defaults(struct sound_scheme *);
 int sound_parse(struct sound_scheme *, const char *, size_t);
 size_t sound_format(const struct sound_scheme *, char *, size_t);

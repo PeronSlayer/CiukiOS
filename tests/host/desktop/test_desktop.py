@@ -485,14 +485,14 @@ class DesktopTests(unittest.TestCase):
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
                                         "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png",
                                         "/System/hwids/pci-ids.json", "/System/hwids/usb-ids.json",
-                                        "/system/settings/sounds.cfg",
+                                        "/system/sounds/scheme.cfg",
                                         *(f"/System/cache/wallpaper/{n}" for n in metadata["wallpaper_cache"]["files"]),
-                                        *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "sounds.cfg")})
+                                        *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "scheme.cfg")})
         self.assertTrue({"/Programs", "/System", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers", "/Documents/Music", "/Documents/Pictures"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 82)  # f2-46 Terminal, f2-44 wallpaper frames, f2-49 twelve faces with notices, f2-47 Registry Editor
+        self.assertEqual(len(records), 86)  # f2-46 Terminal, f2-44 wallpaper frames, f2-49 twelve faces with notices, f2-47 Registry Editor
         for r in records:
             if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt", "/system/licenses/stb_truetype.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
@@ -503,7 +503,7 @@ class DesktopTests(unittest.TestCase):
             elif r["path"].startswith("/system/fonts/"):
                 source = str(sources[r["path"]].relative_to(ROOT))
                 self.assertEqual(r["sha256"], m["inputs"]["sources"][source])
-            elif r["path"].startswith("/system/sounds/") or r["path"] == "/system/settings/sounds.cfg":
+            elif r["path"].startswith("/system/sounds/"):
                 self.assertEqual(r["sha256"], metadata["sounds"]["files"][Path(r["path"]).name])
             elif r["path"].startswith("/System/hwids/"):
                 # f2-43: hardware id tables generated into assets/hwids, byte-identical.

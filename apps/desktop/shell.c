@@ -750,6 +750,14 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
 {
     if (!memcmp(&d->sh.media,state,sizeof(*state))) return;
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
+    if (d->sh.media.version == CIUKI_MEDIA_VERSION) {
+        unsigned added = state->removable_mask & ~d->sh.media.removable_mask;
+        unsigned removed = d->sh.media.removable_mask & ~state->removable_mask;
+        for (unsigned i = 4; i < 26; i++) if ((state->removable_mask & d->sh.media.removable_mask & (1u<<i)) &&
+            state->generation[i] != d->sh.media.generation[i]) { added |= 1u<<i; removed |= 1u<<i; }
+        if (removed) desk_sound(d,SOUND_DEVICE_DISCONNECT);
+        if (added) desk_sound(d,SOUND_DEVICE_CONNECT);
+    }
     d->sh.media=*state; d->sh.media_scroll=0;
     if (!state->removable_mask) d->sh.media_open=0;
     damage(d,tray_box(d));
@@ -1718,7 +1726,10 @@ static void volume_set_from(struct desktop *d, int32_t y)
     int v = (t.y + t.h - y) * 100 / t.h;
     if (v < 0) v = 0;
     if (v > 100) v = 100;
-    if (v != d->sh.volume) { d->sh.volume = v; damage(d, outer(volume_popup(d))); }
+    if (v != d->sh.volume) {
+        d->sh.volume = v; d->sh.want_mixer = 1;
+        damage(d, outer(volume_popup(d))); damage(d,tray_box(d));
+    }
 }
 static void tooltip_hide(struct desktop *d)
 {
@@ -1760,7 +1771,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
                 return 1;
             }
         }
-        if (button == CIUKI_BUTTON_LEFT && d->sh.volume_drag) { d->sh.volume_drag = 0; d->sh.want_mixer = 1; return 1; }
+        if (button == CIUKI_BUTTON_LEFT && d->sh.volume_drag) { d->sh.volume_drag = 0; return 1; }
         return 0;
     }
     tooltip_hide(d);
@@ -2108,6 +2119,25 @@ int desk_shell_key(struct desktop *d, int code, int value)
         if (value && code==DU_KEY_UP && d->sh.media_scroll) { d->sh.media_scroll--; damage(d,outer(media_popup(d))); return 1; }
     }
     if (d->sh.network_open && code == DU_KEY_ESC) { if (value) { d->sh.network_open = 0; damage(d, outer(network_popup(d))); } return 1; }
+    if (d->sh.mixer_state == 2 && (code == 0x130 || code == 0x12e || code == 0x120 ||
+        (d->sh.volume_open && (code == DU_KEY_UP || code == DU_KEY_DOWN)))) {
+        if (value) {
+            if (code == 0x120) {
+                if (value != 1) return 1; /* mute is a toggle, not a repeating step */
+                d->sh.muted = !d->sh.muted;
+            }
+            else {
+                int v = d->sh.volume + ((code == 0x130 || code == DU_KEY_UP) ? 1 : -1);
+                if (v < 0) v = 0;
+                if (v > 100) v = 100;
+                if (v == d->sh.volume) return 1;
+                d->sh.volume = v;
+            }
+            d->sh.want_mixer = 1;
+            damage(d,outer(volume_popup(d))); damage(d,tray_box(d));
+        }
+        return 1;
+    }
     if (d->sh.volume_open && code == DU_KEY_ESC) { if (value) { d->sh.volume_open = 0; damage(d, outer(volume_popup(d))); } return 1; }
     if (d->focus >= 0 && d->clients[d->focus].internal) {
         /* AltGr characters reach the Run field; other Alt chords are ignored here. */

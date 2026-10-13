@@ -11,22 +11,33 @@
 #include <assert.h>
 #include "desktop.h"
 #include <ciuki/audio.h>
+#include <ciuki/devices.h>
+#include "sound_storage.h"
+int ciuki_devices(struct ciuki_devices_info *s) { (void)s; errno=ENODEV; return -1; }
 static pthread_mutex_t fake_lock=PTHREAD_MUTEX_INITIALIZER;
+static int muted, vm_active;
 static uint64_t accepted, total; static int unavailable, failing, stalled, delay_consumed, writes, closed;
+static int fake_sound_load_at(struct sound_scheme *s,const char *cfg,const char *legacy,const char *dir)
+{
+    (void)cfg;(void)legacy;(void)dir;
+    return sound_load_at(s,"build/external/system-sounds/scheme.cfg",NULL,"build/host/no-sound-registry");
+}
 static FILE *fake_fopen(const char *path,const char *mode)
 {
     char p[512];
-    if (!strcmp(path,SOUND_CFG)) snprintf(p,sizeof(p),"build/external/system-sounds/sounds.cfg");
+    if (!strcmp(path,SOUND_LEGACY_CFG)) { errno=ENOENT; return NULL; }
+    if (!strcmp(path,SOUND_CFG)) snprintf(p,sizeof(p),"build/external/system-sounds/scheme.cfg");
     else { assert(!strncmp(path,SOUND_DIR "/",sizeof(SOUND_DIR)));snprintf(p,sizeof(p),"build/external/system-sounds/%s",path+sizeof(SOUND_DIR)); }
     return fopen(p,mode);
 }
 static int fake_open(const char *path,int flags,...)
 {
+    if (!strcmp(path,"/dev/mixer")) { assert((flags&O_ACCMODE)==O_RDONLY); return 101; }
     assert(!strcmp(path,"/dev/audio") && (flags&O_NONBLOCK) && (flags&O_CLOEXEC));
     pthread_mutex_lock(&fake_lock);accepted=0;int bad=unavailable;pthread_mutex_unlock(&fake_lock);
     if(bad){errno=ENODEV;return -1;}return 100;
 }
-static int fake_close(int fd){assert(fd==100);pthread_mutex_lock(&fake_lock);closed++;pthread_mutex_unlock(&fake_lock);return 0;}
+static int fake_close(int fd){if(fd==101)return 0;assert(fd==100);pthread_mutex_lock(&fake_lock);closed++;pthread_mutex_unlock(&fake_lock);return 0;}
 static ssize_t fake_write(int fd,const void *p,size_t bytes)
 {
     (void)p;assert(fd==100 && bytes<=512 && !(bytes%2));
@@ -37,19 +48,23 @@ static ssize_t fake_write(int fd,const void *p,size_t bytes)
 }
 int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
 {
-    assert(fd==100);pthread_mutex_lock(&fake_lock);
-    if(op==AUDIO_GET_CAPS){assert(size==sizeof(struct ciuki_audio_caps));struct ciuki_audio_caps *c=record;c->output_rate=48000;c->drain_ms=20;}
+    assert(fd==100 || fd==101);pthread_mutex_lock(&fake_lock);
+    if(op==MIXER_GET_MASTER){assert(fd==101);((struct ciuki_mixer_master *)record)->mute=(unsigned)muted;}
+    else if(op==MIXER_GET_DIAGNOSTICS){assert(fd==101);((struct ciuki_audio_diagnostics *)record)->flags=vm_active ? CIUKI_AUDIO_DIAG_VM_ACTIVE : 0;}
+    else if(op==AUDIO_GET_CAPS){assert(size==sizeof(struct ciuki_audio_caps));struct ciuki_audio_caps *c=record;c->output_rate=48000;c->drain_ms=20;}
     else if(op==AUDIO_SET_FORMAT){struct ciuki_audio_format *f=record;assert(f->rate==SOUND_RATE && f->channels==1 && f->format==CIUKI_AUDIO_S16LE);}
     else if(op==AUDIO_GET_STATUS){struct ciuki_audio_status *s=record;s->accepted_frames=accepted;s->consumed_frames=delay_consumed?0:accepted;s->output_rate=48000;s->transport_frames=256;}
     else assert(0);
     pthread_mutex_unlock(&fake_lock);return 0;
 }
 void desk_queue(struct desktop *d,int client,const struct ciuki_message *m){(void)d;(void)client;(void)m;}
+#define sound_load_at fake_sound_load_at
 #define fopen fake_fopen
 #define open fake_open
 #define close fake_close
 #define write fake_write
 #include "../../../apps/desktop/sound_runtime.c"
+#undef sound_load_at
 #undef fopen
 #undef open
 #undef close
@@ -69,6 +84,9 @@ static void wait_idle(void)
 }
 int main(void)
 {
+    rt.live=1;
+    for(unsigned i=0;i<50;i++)assert(!push(SOUND_VOLUME,0));
+    assert(rt.count==1);rt.count=rt.head=rt.busy=0;rt.queued=(struct sound_throttle){0};rt.live=0;
     static struct desktop d;d.clients[0].window=1;d.clients[0].window_id=1;d.now_ns=now_ns();desk_sound_init(&d);
     assert(d.sound_request && d.sound_shutdown); /* defaults loading may still be in progress */
     assert(request(&d,0,DESK_SETTINGS_AUDIO_TEST,0,1)==DESK_SOUND_PENDING);
@@ -76,6 +94,31 @@ int main(void)
     assert(complete());pthread_mutex_lock(&rt.lock);assert(!rt.hardware_result);pthread_mutex_unlock(&rt.lock);
     pthread_mutex_lock(&fake_lock);assert(total==SOUND_RATE);pthread_mutex_unlock(&fake_lock);
     desk_sound_results(&d);wait_idle();
+    uint64_t before;
+    for (int vm=0;vm<2;vm++) {
+        pthread_mutex_lock(&fake_lock);before=total;muted=!vm;vm_active=vm;pthread_mutex_unlock(&fake_lock);
+        notify(&d,SOUND_ERROR);assert(!request(&d,0,DESK_SETTINGS_SOUND_TEST,SOUND_VOLUME,1));wait_idle();
+        pthread_mutex_lock(&fake_lock);assert(total==before);muted=vm_active=0;pthread_mutex_unlock(&fake_lock);
+        wait_idle();assert(total==before); /* skipped events do not resume */
+    }
+    before=total;notify(&d,SOUND_ERROR);wait_idle();assert(total>before);
+    /* A newly active VM or mute cancels an already admitted UI stream. */
+    for(int vm=0;vm<2;vm++) {
+        pthread_mutex_lock(&fake_lock);stalled=1;int previous=writes;pthread_mutex_unlock(&fake_lock);
+        notify(&d,SOUND_ERROR);
+        uint64_t deadline=now_ns()+1000000000ull;
+        for(;;) {
+            pthread_mutex_lock(&fake_lock);int advanced=writes>previous;pthread_mutex_unlock(&fake_lock);
+            if(advanced)break;
+            assert(now_ns()<deadline);struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+        }
+        pthread_mutex_lock(&fake_lock);before=total;muted=!vm;vm_active=vm;pthread_mutex_unlock(&fake_lock);
+        wait_idle();pthread_mutex_lock(&fake_lock);assert(total==before);muted=vm_active=stalled=0;pthread_mutex_unlock(&fake_lock);
+    }
+    /* Holding the queue mutex while filling a burst makes admission deterministic. */
+    pthread_mutex_lock(&rt.lock);rt.queued=(struct sound_throttle){.volume_seen=1,.last_volume=now_ns()};pthread_mutex_unlock(&rt.lock);
+    for(unsigned i=0;i<50;i++)notify(&d,SOUND_VOLUME);
+    wait_idle();pthread_mutex_lock(&rt.lock);assert(!rt.count);pthread_mutex_unlock(&rt.lock);
     pthread_mutex_lock(&fake_lock);unavailable=1;pthread_mutex_unlock(&fake_lock);
     assert(request(&d,0,DESK_SETTINGS_AUDIO_TEST,0,3)==DESK_SOUND_PENDING);assert(complete());assert(rt.hardware_result==-ENODEV);
     desk_sound_results(&d);wait_idle();

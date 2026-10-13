@@ -20,6 +20,7 @@ static struct audio_frame quantum[AUDIO_QUANTUM];
 /* f4-05: an active DOS VM source keeps the transport running (weak: the
  * native-only host harness does not link audio/vm_source.c). */
 extern bool audio_vm_active(void) __attribute__((weak));
+extern bool audio_vm_playing(void) __attribute__((weak));
 extern bool audio_vm_attached(void) __attribute__((weak));
 extern void audio_vm_published(void) __attribute__((weak));
 extern void serial_buffered(bool) __attribute__((weak));
@@ -116,7 +117,8 @@ void audio_diagnostics(struct ciuki_audio_diagnostics *out)
     *out = (struct ciuki_audio_diagnostics){ .version=1, .size=sizeof(*out),
         .codec_id=b.codec_id, .controller=(uint32_t)pci->vendor << 16 | pci->device,
         .flags=(audio.ready ? CIUKI_AUDIO_DIAG_READY : 0) | (b.running ? CIUKI_AUDIO_DIAG_RUNNING : 0) |
-               (b.quarantine ? CIUKI_AUDIO_DIAG_QUARANTINE : 0),
+               (b.quarantine ? CIUKI_AUDIO_DIAG_QUARANTINE : 0) |
+               (audio_vm_playing && audio_vm_playing() ? CIUKI_AUDIO_DIAG_VM_ACTIVE : 0),
         .irq_line=b.irq, .civ=b.slot, .picb=b.remaining,
         .fetched_frames=b.fetched, .irqs=b.irqs, .last_error=audio.error ? audio.error : audio.init_error,
         .power=b.power, .master=b.master, .pcm=b.pcm_volume, .rate=b.rate };

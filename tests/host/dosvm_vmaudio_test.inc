@@ -74,6 +74,8 @@ static void test_vm_attach(void)
     unsigned wakes = audio_wakes;
     v = audio_vm_create(); key = dosvm_key(v);
     CHECK(audio_vm_stats(key, &st) && st.state == AUDIO_VM_PENDING && st.epoch && audio_wakes == wakes + 1 && ainfo(v).consumer);
+    unsigned observed_wakes = audio_wakes;
+    CHECK(!audio_vm_playing() && audio_wakes == observed_wakes); /* observation never wakes the worker */
     vq_time(1200); /* 25 ms of VM clock: the anchor lies inside the timeline */
     vq_run(1);
     st = vstats(v); CHECK(st.state == AUDIO_VM_ACTIVE && st.rendered == AUDIO_QUANTUM && st.lead == (int32_t)AUDIO_VM_LATENCY);
@@ -456,7 +458,8 @@ static void test_vm_opl(void)
     vq_time(1200); vq_run(2);
     static struct opl3_chip ref; opl3_init(&ref);
     unsigned start = vq_n;
-    opl_note(v, &ref); /* one burst: the writes share a timeline frame (or the next) */
+    opl_note(v, &ref); CHECK(audio_vm_playing()); /* queued events take priority before mixing */
+    /* one burst: the writes share a timeline frame (or the next) */
     vq_run(48);
     opl3_generate(&ref, &opl_ref[0][0], 4096);
     unsigned r0 = 0; while (r0 < 4096 && !opl_ref[r0][0]) r0++;
@@ -470,7 +473,7 @@ static void test_vm_opl(void)
     CHECK(hz10 >= 4350 && hz10 <= 4450);
     opl_w(v, 0x388, 0, 0xB0, 0x12); vq_run(10);  /* key off: release 15 */
     CHECK(first_sound(vq_n - 512) == vq_n);
-    CHECK(audio_vm_active() == false);
+    CHECK(audio_vm_active() == false && !audio_vm_playing());
     /* OPL3 NEW, output A only. */
     audio_vm_tap_reset(key);
     opl_w(v, 0x388, 1, 0x05, 0x01); opl_w(v, 0x388, 0, 0xC0, 0x11); opl_w(v, 0x388, 0, 0xB0, 0x36);

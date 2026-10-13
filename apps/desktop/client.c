@@ -522,7 +522,6 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             else {
                 d->sh.volume = (int)((p.values[0] + p.values[1]) / 2); d->sh.muted = (int)p.values[2];
                 d->sh.want_mixer = 1;
-                d->sh.want_reload |= 8; /* volume feedback after applying gain */
                 desk_damage_add(&d->damage, desk_taskbar(d), d->width, d->height);
             }
         }

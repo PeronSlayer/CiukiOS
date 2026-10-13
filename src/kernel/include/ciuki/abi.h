@@ -683,6 +683,7 @@ _Static_assert(sizeof(struct ciuki_media_remove) == 16, "media removal ABI");
 #define CIUKI_AUDIO_DIAG_READY 1u
 #define CIUKI_AUDIO_DIAG_RUNNING 2u
 #define CIUKI_AUDIO_DIAG_QUARANTINE 4u
+#define CIUKI_AUDIO_DIAG_VM_ACTIVE 8u /* VM source busy or holding queued audio */
 /* Read-only kernel observations, also available on an absent/failed backend. */
 struct ciuki_audio_diagnostics {
     uint32_t version;
