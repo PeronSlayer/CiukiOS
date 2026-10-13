@@ -33,11 +33,19 @@ static struct task *survivor_create(uint32_t *data_phys);
  * sector-filtered blkdebug view faults this read, after the ARM record. */
 static bool read_fault(struct ata_device *d, uint8_t data[512])
 {
+    /* This existing F1 gate qualifies PIO's issued-failure/channel quarantine
+     * contract. DMA has a separate per-device fallback contract (F1-44).
+     * The preceding hash reads use the detected transport; only this
+     * explicitly injected fault section selects PIO at run time. */
+    bool dma = d->dma_enabled;
+    d->dma_enabled = false;
+    rec_emit("ata", "DATA", "case=fault_transport transport=pio dma_before=%u", dma);
     uint64_t lba = d->block.capacity - 1;
     rec_emit("ata", "ARM", "action=read_fault lba=%llu", lba);
     uint64_t before = ata_command_count();
     int result = d->block.read(&d->block, lba, 1, data);
     if (!result) {
+        d->dma_enabled = dma;
         rec_emit("ata", "DATA", "case=tail lba=%llu result=0", lba);
         return true;
     }
@@ -68,6 +76,10 @@ static bool read_fault(struct ata_device *d, uint8_t data[512])
         if (r && r->state == RS_QUARANTINED && r->generation == d->channel->generations[i]) claims++;
     }
     retained = retained && claims == ARRAY_SIZE(d->channel->claims);
+    if (d->channel->dma.claim >= 0) {
+        const struct resource *r = registry_get((unsigned)d->channel->dma.claim);
+        retained = retained && r && r->state == RS_QUARANTINED && r->generation == d->channel->dma.generation;
+    }
     rec_emit("ata", "DATA", "group=ata-fault-blkdebug next_result=%d subsequent_commands=%llu quarantine_retained=%u bios_calls=0",
              next, further, retained);
     rec_emit("ata", "DATA", "case=retained owner=ata%u generation=%u claims=%u",

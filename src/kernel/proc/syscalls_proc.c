@@ -57,6 +57,14 @@ void proc_launch_disk_read(uint32_t bytes)
     l->disk_reads++; l->disk_bytes += bytes;
     if (bytes > l->disk_max) l->disk_max = bytes;
 }
+void proc_launch_dma_read(uint32_t bytes, uint64_t ms, bool bounce)
+{
+    struct proc_launch *l = launch_io();
+    if (!l) return;
+    l->dma_reads++; l->dma_bytes += bytes; l->dma_ms += ms;
+    if (bounce) l->dma_bounces++;
+    if (bytes > l->dma_max) l->dma_max = bytes;
+}
 void proc_launch_image_read(uint32_t bytes)
 {
     struct proc_launch *l = launch_io();
@@ -101,6 +109,9 @@ int proc_launch_mark(struct process *caller, uint32_t event, uint32_t pid, uint6
                  p->pid, l->surface_us, l->configure_us, l->damage_us, l->page_faults);
             klog("[launch-io] pid=%u read_bytes=%llu read_requests=%llu read_max=%u disk_bytes=%llu disk_requests=%llu disk_max=%u",
                  p->pid, l->volume_bytes, l->volume_reads, l->volume_max, l->disk_bytes, l->disk_reads, l->disk_max);
+            /* Separate bounded record: the console/serial sink has 256 bytes. */
+            klog("[launch-io] pid=%u dma_bytes=%llu dma_requests=%llu dma_max=%u dma_bounces=%llu dma_ms=%llu",
+                 p->pid, l->dma_bytes, l->dma_reads, l->dma_max, l->dma_bounces, l->dma_ms);
             klog("[launch-image] pid=%u image_bytes=%llu image_requests=%llu image_max=%u",
                  p->pid,
                  l->image_bytes, l->image_reads, l->image_max);
