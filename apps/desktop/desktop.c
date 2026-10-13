@@ -2,6 +2,7 @@
 #include "desktop.h"
 #include "sound_runtime.h"
 #include "settings_io.h"
+#include "wallpaper_io.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
 #endif
@@ -36,6 +37,27 @@ static uint64_t monotonic(void)
     if (clock_gettime(CLOCK_MONOTONIC,&t)) return 0;
     return (uint64_t)t.tv_sec*1000000000ull+(uint32_t)t.tv_nsec;
 }
+static uint64_t startup_begin;
+static uint32_t startup_us[CFG_STARTUP_STAGES];
+static unsigned startup_cached;
+static unsigned startup_sent;
+static void startup_stage(const char *name)
+{
+    if (!strcmp(name,"wallpaper_cache_read")) {
+        for (unsigned i=4;i<=6;i++) if (!__atomic_load_n(&startup_us[i],__ATOMIC_ACQUIRE)) {
+            __atomic_fetch_or(&startup_cached,1u<<i,__ATOMIC_RELAXED);
+            startup_stage(cfg_startup_stage_names[i]);
+        }
+    }
+    for (unsigned i=0;i<CFG_STARTUP_STAGES;i++) if (!strcmp(name,cfg_startup_stage_names[i])) {
+        if (__atomic_load_n(&startup_us[i],__ATOMIC_ACQUIRE)) return;
+        uint64_t elapsed=(monotonic()-startup_begin)/1000;
+        uint32_t value=elapsed>=UINT32_MAX-1 ? UINT32_MAX : (uint32_t)elapsed+1, empty=0;
+        __atomic_compare_exchange_n(&startup_us[i],&empty,value,0,__ATOMIC_RELEASE,__ATOMIC_RELAXED);
+        return;
+    }
+}
+static void wallpaper_update(struct desktop *);
 static int number(const char *s, int max)
 {
     char *end;
@@ -272,6 +294,21 @@ static int tasks_verify(const struct desktop *d)
 static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
 static struct cfg_writer settings_writer;
 static int settings_writer_started, verbose_boot;
+static struct desk_wall_worker wallpaper_worker;
+static int wallpaper_worker_started, wallpaper_worker_failed;
+static struct desk_wall_request wallpaper_request;
+static unsigned wallpaper_serial;
+static void startup_flush(void)
+{
+    if (!verbose_boot || !settings_writer_started) return;
+    for (unsigned i=0;i<CFG_STARTUP_STAGES;i++) {
+        uint32_t value=__atomic_load_n(&startup_us[i],__ATOMIC_ACQUIRE);
+        if (value && !(startup_sent&(1u<<i))) {
+            cfg_writer_stage(&settings_writer,i,(uint64_t)value-1,!!(__atomic_load_n(&startup_cached,__ATOMIC_RELAXED)&(1u<<i)));
+            startup_sent|=1u<<i;
+        }
+    }
+}
 struct mixer_job { int fd; struct ciuki_mixer_master master; };
 static int mixer_job_run(void *record, size_t n)
 {
@@ -362,6 +399,7 @@ static int settings_save(struct desktop *d)
 }
 static int shutdown_wait(struct desktop *d)
 {
+    if (wallpaper_worker_started && desk_wall_worker_busy(&wallpaper_worker)) return 0;
     if (settings_writer_started && cfg_writer_busy(&settings_writer)) return 0;
     return !audio_shutdown_wait || audio_shutdown_wait(d);
 }
@@ -411,7 +449,7 @@ static void display_poll(struct desktop *d)
     desk_display_relayout(d, info.width, info.height);
     struct ciuki_framebuffer_info fb;
     if (!ciuki_display_info(d->display,&fb)) desk_accel_reset(d,fb.generation);
-    if (d->shell) desk_shell_wallpaper_update(d);
+    if (d->shell) wallpaper_update(d);
     d->display_counter = counter;
     d->display_mode = mode;
     d->lfb_bytes_per_pixel=(info.bpp+7)/8;
@@ -441,16 +479,57 @@ static void wallpaper_load(struct desktop *d)
 {
     desk_image_free(&d->sh.image);
     d->sh.wall_valid=0;
-    const char *spec=d->sh.cfg.wallpaper;
-    if (spec[0]=='/') {
-        uint8_t *data; size_t n;
-        if (read_file(spec,DESK_IMAGE_FILE_MAX,&data,&n) || desk_image_decode(data,n,&d->sh.image)) {
-            snprintf(d->notice,sizeof(d->notice),"Wallpaper %.40s cannot be shown",strrchr(spec,'/')+1);
-            desk_image_free(&d->sh.image);
-        }
-        if (data) free(data);
-    }
+    memset(&wallpaper_request,0,sizeof(wallpaper_request));
+    snprintf(wallpaper_request.path,sizeof(wallpaper_request.path),"%s",d->sh.cfg.wallpaper);
+    wallpaper_request.width=d->width; wallpaper_request.height=d->height;
+    wallpaper_request.top=wallpaper_request.bottom=DESK_BAR;
+    wallpaper_request.mode=d->sh.cfg.wallpaper_mode;
+    wallpaper_request.colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
+    d->sh.wallpaper_pending=wallpaper_request.path[0]=='/' && !wallpaper_worker_failed;
+    /* An empty image draws only the colour; no decoding/scaling on this turn. */
     desk_shell_wallpaper_update(d);
+    d->sh.image_failed=0;
+    if (wallpaper_worker_started) wallpaper_serial=desk_wall_worker_submit(&wallpaper_worker,&wallpaper_request);
+}
+static void wallpaper_update(struct desktop *d)
+{
+    if (!d->shell) return;
+    if (d->sh.gate) { desk_shell_wallpaper_update(d); return; }
+    uint32_t colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
+    if (strcmp(wallpaper_request.path,d->sh.cfg.wallpaper) || wallpaper_request.width!=d->width ||
+        wallpaper_request.height!=d->height || wallpaper_request.mode!=d->sh.cfg.wallpaper_mode || wallpaper_request.colour!=colour) {
+        wallpaper_load(d); return;
+    }
+    if (!d->sh.wall_valid && wallpaper_request.path[0]=='/' && d->sh.wall &&
+        d->sh.wall_w==d->width && d->sh.wall_h==d->height) {
+        /* A theme/icon-only invalidation retains the already rendered frame. */
+        d->sh.wall_valid=1; d->sh.background_valid=0;
+        desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+    } else if (!d->sh.wall_valid) desk_shell_wallpaper_update(d);
+}
+static void wallpaper_poll(struct desktop *d)
+{
+    if (!d->shell || d->sh.gate || d->power.state || !__atomic_load_n(&startup_us[3],__ATOMIC_ACQUIRE)) return;
+    wallpaper_update(d);
+    if (!d->sh.wallpaper_pending) return;
+    if (!wallpaper_worker_started && !wallpaper_worker_failed) {
+        int e=desk_wall_worker_start(&wallpaper_worker,DESK_WALL_CACHE,startup_stage);
+        if (e) {
+            wallpaper_worker_failed=1; d->sh.wallpaper_pending=0;
+            snprintf(d->notice,sizeof(d->notice),"Wallpaper worker unavailable (error %d)",e); return;
+        }
+        wallpaper_worker_started=1;
+        wallpaper_serial=desk_wall_worker_submit(&wallpaper_worker,&wallpaper_request);
+    }
+    uint32_t *pixels=NULL; int error=0, hit=0;
+    if (!wallpaper_worker_started || !desk_wall_worker_take(&wallpaper_worker,wallpaper_serial,&pixels,&error,&hit)) return;
+    (void)hit;
+    d->sh.wallpaper_pending=0; d->sh.image_failed=error!=0;
+    if (!error) {
+        free(d->sh.wall); d->sh.wall=pixels; d->sh.wall_w=d->width; d->sh.wall_h=d->height;
+        d->sh.wall_valid=1; d->sh.background_valid=0; startup_stage("wallpaper_applied");
+    } else snprintf(d->notice,sizeof(d->notice),"Wallpaper %.40s cannot be shown",strrchr(wallpaper_request.path,'/')+1);
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
 }
 static void mixer_read(struct desktop *d)
 {
@@ -600,7 +679,7 @@ static void shell_service(struct desktop *d)
                    old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
         if (visual) {
             sh->icon_count=0; desk_shell_apply(d);
-            if (image_changed) wallpaper_load(d); else desk_shell_wallpaper_update(d);
+            if (image_changed) wallpaper_load(d); else wallpaper_update(d);
         } else desk_damage_add(&d->damage,(struct desk_box){(int)d->width-SH_TRAY_W-4,
             (int)d->height-DESK_BAR+4,SH_TRAY_W,DESK_BAR-7},d->width,d->height);
         sh->want_wallpaper=0;
@@ -609,7 +688,8 @@ static void shell_service(struct desktop *d)
     int volume_feedback = sh->want_reload & 8;
     if (sh->want_reload & 4) mixer_read(d);
     sh->want_reload=0;
-    if (!sh->wall_valid) desk_shell_wallpaper_update(d);
+    wallpaper_poll(d);
+    if (!sh->wall_valid) wallpaper_update(d);
     if (sh->want_save) {
         sh->want_save=0;
         if (settings_save(d)) {
@@ -652,6 +732,7 @@ static void shell_setup(struct desktop *d, int gate)
     /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
     d->sh.gate=gate;
     if (!gate) settings_load(d);
+    if (!gate) startup_stage("settings_read");
     struct stat pictures;
     d->pictures_exists = !stat("/Documents/Pictures", &pictures) && S_ISDIR(pictures.st_mode);
     desk_shell_enable(d);
@@ -662,20 +743,18 @@ static void shell_setup(struct desktop *d, int gate)
         settings_writer.run_job=mixer_job_run;
         settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
-#ifdef __i386__
-        static struct ciuki_devices_info devices;
-        devices.version=CIUKI_DEVICES_VERSION; devices.size=sizeof(devices);
-        if (!ciuki_devices(&devices)) verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
-#endif
     }
-    /* The first frame shows the desktop colour, bars and icons at once; the
-     * image wallpaper (the default Ciuk2 PNG takes seconds to decode under
-     * TCG) is loaded two loop iterations later (lead fix, 2026-10-12). */
-    if (!gate) { d->sh.wallpaper_deferred=2; mixer_read(d); system_read(d); }
-    desk_shell_wallpaper_update(d);
+    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); }
+    else desk_shell_wallpaper_update(d);
 }
 int main(int argc, char **argv)
 {
+    startup_begin=monotonic(); startup_stage("entry");
+#ifdef __i386__
+    static struct ciuki_devices_info devices;
+    devices.version=CIUKI_DEVICES_VERSION; devices.size=sizeof(devices);
+    if (!ciuki_devices(&devices)) verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
+#endif
     int display = 3, input = 4, test = 0, gate = 0, cycles = 1, demo_count = 0;
     int channels[DESK_CLIENTS], channel_count = 0;
     const char *demos[DESK_CLIENTS], *victim = NULL, *launch = NULL;
@@ -878,9 +957,9 @@ int main(int argc, char **argv)
             (void)desk_drain_input(d,ciuki_input_read);
         }
         display_poll(d);
-        if (d->shell && !d->power.state && d->sh.wallpaper_deferred && !--d->sh.wallpaper_deferred) wallpaper_load(d);
+        if (!gate && d->inputs) startup_stage("first_input_handled");
         if (d->shell && !gate && !d->power.state && theme_poll_async(now)) {
-            desk_theme_changed(d); d->sh.wall_valid=0; desk_shell_wallpaper_update(d);
+            desk_theme_changed(d); d->sh.wall_valid=0; wallpaper_update(d);
         }
         if (d->sh.want_power && !d->sh.gate) d->action=-1;
         if (d->action>=0) {
@@ -919,6 +998,8 @@ int main(int argc, char **argv)
         if (render_ready && redraw && errno!=EINTR && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
+        if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
+        startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); }
         if (desk_display_frame_commit(d, redraw)) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);

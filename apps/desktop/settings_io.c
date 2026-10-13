@@ -7,6 +7,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+const char *const cfg_startup_stage_names[CFG_STARTUP_STAGES]={"entry","settings_read","fonts_icons_ready",
+    "first_frame_presented","wallpaper_file_read","wallpaper_decoded","wallpaper_scaled",
+    "wallpaper_applied","first_input_handled","wallpaper_cache_read"};
 int cfg_write_file(struct cfg_writer *w, const char *text, size_t n)
 {
     if (mkdir(CFG_DIR,0755) && errno!=EEXIST) return errno;
@@ -28,20 +31,31 @@ static void *worker(void *arg)
     char *text=w->scratch;
     pthread_mutex_lock(&w->lock);
     for (;;) {
-        while (!w->pending && !w->log_pending && !w->read_pending && !w->job_pending && !w->stopping) pthread_cond_wait(&w->changed,&w->lock);
-        if (!w->pending && !w->log_pending && !w->read_pending && !w->job_pending && w->stopping) break;
+        while (!w->pending && !w->log_pending && !w->stage_pending && !w->read_pending && !w->job_pending && !w->stopping) pthread_cond_wait(&w->changed,&w->lock);
+        if (!w->pending && !w->log_pending && !w->stage_pending && !w->read_pending && !w->job_pending && w->stopping) break;
         int job=w->job_pending;
-        int reading=!job && !w->pending && !w->log_pending;
-        int logging=!job && !w->pending && !reading;
+        int staging=!job && w->stage_pending;
+        unsigned stage=0; uint64_t us=0; int cached=0;
+        if (staging) {
+            while (!(w->stage_pending&(1u<<stage))) stage++;
+            us=w->stage_us[stage]; cached=!!(w->stage_cached&(1u<<stage)); w->stage_pending&=~(1u<<stage);
+        }
+        int reading=!job && !staging && !w->pending && !w->log_pending;
+        int logging=!job && !staging && !w->pending && !reading;
         size_t n=job ? w->job_length : logging ? strlen(w->log) : w->length;
-        if (!reading) memcpy(text,job ? (char *)w->job : logging ? w->log : w->text,n);
+        if (!reading && !staging) memcpy(text,job ? (char *)w->job : logging ? w->log : w->text,n);
         if (job) w->job_pending=0;
+        else if (staging) { /* distinct bounded mailbox: startup records never coalesce */ }
         else if (reading) w->read_pending=0;
         else if (logging) w->log_pending=0; else w->pending=0;
         w->busy=1;
         pthread_mutex_unlock(&w->lock);
         int e=0;
-        if (job) e=w->run_job(text,n);
+        if (staging) {
+            n=(size_t)snprintf(text,CFG_TEXT_MAX,"[desktop] stage=%s us=%llu%s\n",cfg_startup_stage_names[stage],(unsigned long long)us,
+                cached ? (stage==4 ? " cache_hit=1" : " cache_hit=1 skipped=1") : "");
+            e=fwrite(text,1,n,stderr)==n ? 0 : EIO;
+        } else if (job) e=w->run_job(text,n);
         else if (reading) {
             FILE *f=fopen(w->path,"rb"); n=0;
             if (!f) e=errno;
@@ -52,7 +66,7 @@ static void *worker(void *arg)
         if (job) {
             if (!w->job_pending) { memcpy(w->job,text,n); w->job_length=n; w->job_error=e; w->job_ready=1; }
         } else if (reading) { memcpy(w->read_text,text,n); w->read_length=n; w->read_error=e; w->read_ready=1; }
-        else if (!logging && !w->pending) { w->error=e; w->completed=1; }
+        else if (!logging && !staging && !w->pending) { w->error=e; w->completed=1; }
     }
     w->live=0; pthread_mutex_unlock(&w->lock); free(text); return NULL;
 }
@@ -80,7 +94,7 @@ int cfg_writer_submit(struct cfg_writer *w, const char *text, size_t n)
 }
 int cfg_writer_busy(struct cfg_writer *w)
 {
-    pthread_mutex_lock(&w->lock); int busy=w->busy || w->pending || w->log_pending || w->read_pending || w->job_pending;
+    pthread_mutex_lock(&w->lock); int busy=w->busy || w->pending || w->log_pending || w->stage_pending || w->read_pending || w->job_pending;
     pthread_mutex_unlock(&w->lock); return busy;
 }
 void cfg_writer_log(struct cfg_writer *w, const char *text)
@@ -88,6 +102,17 @@ void cfg_writer_log(struct cfg_writer *w, const char *text)
     pthread_mutex_lock(&w->lock);
     if (w->live && !w->stopping) {
         snprintf(w->log,sizeof(w->log),"%s",text); w->log_pending=1; pthread_cond_signal(&w->changed);
+    }
+    pthread_mutex_unlock(&w->lock);
+}
+void cfg_writer_stage(struct cfg_writer *w, unsigned stage, uint64_t us, int cached)
+{
+    if (stage>=CFG_STARTUP_STAGES) return;
+    pthread_mutex_lock(&w->lock);
+    if (w->live && !w->stopping) {
+        w->stage_us[stage]=us; w->stage_pending|=1u<<stage;
+        if (cached) w->stage_cached|=1u<<stage; else w->stage_cached&=~(1u<<stage);
+        pthread_cond_signal(&w->changed);
     }
     pthread_mutex_unlock(&w->lock);
 }

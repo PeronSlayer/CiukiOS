@@ -40,6 +40,8 @@ int main(void)
     assert(!cfg_writer_submit(&w,"first",5));
     pthread_mutex_lock(&lock); while (!entered) pthread_cond_wait(&changed,&lock); pthread_mutex_unlock(&lock);
     assert(cfg_writer_busy(&w));
+    for (unsigned i=0;i<CFG_STARTUP_STAGES;i++) cfg_writer_stage(&w,i,100+i,i==5 || i==6);
+    pthread_mutex_lock(&w.lock); assert(w.stage_pending==((1u<<CFG_STARTUP_STAGES)-1)); pthread_mutex_unlock(&w.lock);
     assert(!cfg_writer_submit(&w,"second",6)); assert(!cfg_writer_submit(&w,"latest",6));
     int value=20; assert(!cfg_writer_job(&w,&value,sizeof(value)));
     value=30; assert(!cfg_writer_job(&w,&value,sizeof(value))); value=999;
