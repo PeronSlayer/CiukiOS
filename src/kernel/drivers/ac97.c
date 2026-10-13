@@ -8,6 +8,8 @@
 #include <ciuki/timing.h>
 
 struct ac97_device ac97;
+#define AC97_ANALOG_WAIT_MS 5000u
+#define AC97_ACTIVATION_MS 7000u
 static uint32_t read_io(void *cookie, uint16_t port, unsigned width)
 {
     (void)cookie;
@@ -28,9 +30,26 @@ static uint32_t rd(struct ac97_device *d, unsigned off, unsigned width)
 { return d->io.read(d->io.cookie, d->nabm + off, width); }
 static void wr(struct ac97_device *d, unsigned off, uint32_t v, unsigned width)
 { d->io.write(d->io.cookie, d->nabm + off, v, width); }
+static void stage_log(struct ac97_device *d, const char *stage, const char *result)
+{
+    /* Cached NAM reads only. Reading CAS for diagnostics would acquire it
+     * without issuing the codec transaction that releases it (ICH3 13.2.10). */
+    klog("[audio] stage=%s reg26=%04x reg02=%04x reg18=%04x valid=%02x cnt=%08x sta=%08x cas=%02x codec=%08x time=%llu result=%s access=%s reg=%02x value=%04x",
+         stage, d->power, d->master, d->pcm_volume, d->codec_valid,
+         rd(d, 0x2c, 4), d->global_status, d->last_cas, d->codec_id,
+         d->io.now(d->io.cookie), result, d->codec_error ? d->codec_error : "ok",
+         d->access_reg, d->access_value);
+}
+static void stage_next(struct ac97_device *d, const char *stage)
+{
+    if (d->activation_stage) stage_log(d, d->activation_stage,
+        d->analog_warning && !strncmp(d->activation_stage, "codec_power", sizeof("codec_power")) ? "analog_not_ready" : "ok");
+    d->activation_stage = stage;
+}
 static void failure_snapshot(struct ac97_device *d, const char *stage)
 {
     if (d->failure.stage) return;
+    stage_log(d, stage, "failed");
     struct ac97_failure *f = &d->failure;
     f->stage = stage;
     f->ext_control = d->raw_ext_control; f->rate = d->raw_rate;
@@ -41,11 +60,13 @@ static void failure_snapshot(struct ac97_device *d, const char *stage)
 }
 static bool expired(struct ac97_device *d, uint64_t deadline)
 { return (int64_t)(d->io.now(d->io.cookie) - deadline) >= 0; }
-static uint64_t operation_deadline(struct ac97_device *d)
+static uint64_t bounded_deadline(struct ac97_device *d, uint32_t ms)
 {
-    uint64_t deadline = d->io.now(d->io.cookie) + 500;
+    uint64_t deadline = d->io.now(d->io.cookie) + ms;
     return d->activation_deadline && (int64_t)(deadline - d->activation_deadline) > 0 ? d->activation_deadline : deadline;
 }
+static uint64_t operation_deadline(struct ac97_device *d)
+{ return bounded_deadline(d, 500); }
 static uint64_t codec_deadline(struct ac97_device *d, uint64_t limit)
 {
     uint64_t deadline = d->io.now(d->io.cookie) + 100;
@@ -53,7 +74,7 @@ static uint64_t codec_deadline(struct ac97_device *d, uint64_t limit)
 }
 int ac97_controller_reset(struct ac97_device *d)
 {
-    uint64_t limit = operation_deadline(d);
+    uint64_t limit = bounded_deadline(d, 1000);
     /* Caller proved idle audio engines and excluded a modem dependency.
      * Cold Reset# is active low. 1 ms exceeds the specified 1 us pulse. */
     wr(d, 0x2c, 0, 4);
@@ -73,29 +94,50 @@ int ac97_controller_reset(struct ac97_device *d)
     } while (!expired(d, limit));
     return -ETIMEDOUT;
 }
-static int cas(struct ac97_device *d, uint64_t deadline)
+static int codec_error(struct ac97_device *d, const char *reason, int err)
 {
+    d->codec_error = reason;
+    stage_log(d, d->activation_stage ? d->activation_stage : "codec_access", "access_failed");
+    return err;
+}
+static int cas(struct ac97_device *d, uint16_t reg, uint64_t deadline)
+{
+    d->access_reg = reg; d->access_value = 0xffff; d->codec_error = 0;
     while (!expired(d, deadline)) {
-        uint8_t v = (uint8_t)rd(d, 0x34, 1);
-        if (v == 0xff) return -EIO;
+        uint32_t control = rd(d, 0x2c, 4);
+        d->global_status = rd(d, 0x30, 4);
+        if (control == UINT32_MAX || d->global_status == UINT32_MAX)
+            return codec_error(d, "controller_absent", -EIO);
+        if ((control & 0x0e) != 2) return codec_error(d, "link_off_or_reset", -EIO);
+        if (!(d->global_status & 0x100)) return codec_error(d, "primary_not_ready", -EIO);
+        uint8_t v = d->last_cas = (uint8_t)rd(d, 0x34, 1);
+        if (v == 0xff) return codec_error(d, "cas_invalid", -EIO);
         if (!(v & 1)) return 0;
         d->io.sleep(d->io.cookie, 1);
     }
-    return -ETIMEDOUT;
+    return codec_error(d, "cas_timeout", -ETIMEDOUT);
 }
 int ac97_codec_read(struct ac97_device *d, uint16_t reg, uint16_t *out, uint64_t limit)
 {
     uint64_t deadline = codec_deadline(d, limit);
-    int err = cas(d, deadline);
+    int err = cas(d, reg, deadline);
     if (err) return err;
-    *out = (uint16_t)d->io.read(d->io.cookie, d->nam + reg, 2);
-    if (*out == 0xffff || (rd(d, 0x30, 4) & (1u << 15))) return -EIO;
-    if (expired(d, deadline)) return -ETIMEDOUT;
+    *out = d->access_value = (uint16_t)d->io.read(d->io.cookie, d->nam + reg, 2);
+    d->global_status = rd(d, 0x30, 4);
+    if (d->global_status == UINT32_MAX) return codec_error(d, "controller_absent", -EIO);
+    if (d->global_status & (1u << 15)) {
+        err = codec_error(d, "read_timeout", -EIO);
+        wr(d, 0x30, 1u << 15, 4); /* RCS only; preserve all unrelated W1C bits */
+        return err;
+    }
+    if (!(d->global_status & 0x100)) return codec_error(d, "primary_not_ready", -EIO);
+    if (*out == 0xffff) return codec_error(d, "read_invalid", -EIO);
+    if (expired(d, deadline)) return codec_error(d, "access_timeout", -ETIMEDOUT);
     /* Diagnostics retain the last successful hardware read, including
      * mismatches and restoration; never report a desired write as readback. */
-    if (reg == 0x26) d->power = *out;
-    else if (reg == 0x02) d->master = *out;
-    else if (reg == 0x18) d->pcm_volume = *out;
+    if (reg == 0x26) { d->power = *out; d->codec_valid |= 1; }
+    else if (reg == 0x02) { d->master = *out; d->codec_valid |= 2; }
+    else if (reg == 0x18) { d->pcm_volume = *out; d->codec_valid |= 4; }
     else if (reg == 0x2a) d->raw_ext_control = *out;
     else if (reg == 0x2c) d->raw_rate = *out;
     return 0;
@@ -103,12 +145,12 @@ int ac97_codec_read(struct ac97_device *d, uint16_t reg, uint16_t *out, uint64_t
 int ac97_codec_write(struct ac97_device *d, uint16_t reg, uint16_t value, uint64_t limit)
 {
     uint64_t deadline = codec_deadline(d, limit);
-    int err = cas(d, deadline);
+    int err = cas(d, reg, deadline);
     if (err) return err;
     d->io.write(d->io.cookie, d->nam + reg, value, 2);
     uint16_t got;
     err = ac97_codec_read(d, reg, &got, deadline);
-    return err ? err : got != value ? -EIO : 0;
+    return err ? err : got != value ? codec_error(d, "write_mismatch", -EIO) : 0;
 }
 /* Read-only readiness bits must not participate in power/extended-control
  * write verification. Volume controls get one bounded retry for sticky mute. */
@@ -117,7 +159,7 @@ static int codec_update(struct ac97_device *d, uint16_t reg, uint16_t value,
 {
     uint64_t deadline = codec_deadline(d, limit);
     for (unsigned attempt = 0; attempt < (retry ? 2u : 1u); attempt++) {
-        int err = cas(d, deadline);
+        int err = cas(d, reg, deadline);
         if (err) return err;
         d->io.write(d->io.cookie, d->nam + reg, value, 2);
         uint16_t got;
@@ -126,7 +168,7 @@ static int codec_update(struct ac97_device *d, uint16_t reg, uint16_t value,
         if (!((got ^ value) & mask)) return 0;
         if (!attempt && retry) d->io.sleep(d->io.cookie, 1);
     }
-    return -EIO;
+    return codec_error(d, "write_mismatch", -EIO);
 }
 static unsigned attenuation(unsigned percent)
 {
@@ -178,61 +220,87 @@ int ac97_codec_restore(struct ac97_device *d)
 }
 int ac97_codec_prepare(struct ac97_device *d)
 {
-    uint64_t limit = operation_deadline(d);
-    d->activation_stage = "codec_ready";
+    uint64_t limit = bounded_deadline(d, 1000);
+    d->analog_warning = false;
+    stage_next(d, "codec_ready");
     while (!((d->global_status = rd(d, 0x30, 4)) & 0x100)) {
         if (expired(d, limit)) return -ETIMEDOUT;
         d->io.sleep(d->io.cookie, 1);
     }
     if (d->global_status == UINT32_MAX) return -EIO;
-    d->activation_stage = "codec_identity";
+    stage_next(d, "codec_identity");
+    limit = operation_deadline(d);
     uint16_t id1, id2, ext;
     int err = ac97_codec_read(d, 0x7c, &id1, limit);
     if (!err) err = ac97_codec_read(d, 0x7e, &id2, limit);
-    if (!err && (!id1 || !id2)) err = -EIO;
+    if (!err && (!id1 || !id2)) err = codec_error(d, "identity_invalid", -EIO);
     if (err) return err;
     d->codec_id = (uint32_t)id1 << 16 | id2;
-    err = ac97_codec_read(d, 0, &d->codec_caps, limit);
+    stage_next(d, "codec_reset");
+    /* Register 00h is a reset command on write and capabilities on read,
+     * not an ordinary value to verify. Drain the posted write through CAS
+     * after 1 ms (Linux uses 100 us), then read capabilities and identity. */
+    uint64_t reset_limit = codec_deadline(d, limit);
+    err = cas(d, 0, reset_limit);
+    if (!err) {
+        d->io.write(d->io.cookie, d->nam, 0, 2);
+        d->codec_valid = 0;
+        d->io.sleep(d->io.cookie, 1);
+        err = ac97_codec_read(d, 0, &d->codec_caps, reset_limit);
+    }
+    if (!err) err = ac97_codec_read(d, 0x7c, &id1, limit);
+    if (!err) err = ac97_codec_read(d, 0x7e, &id2, limit);
+    if (!err && ((uint32_t)id1 << 16 | id2) != d->codec_id)
+        err = codec_error(d, "identity_changed", -EIO);
     if (!err) err = ac97_codec_read(d, 0x26, &d->power, limit);
     /* Digital control/rate snapshots are readable before analog calibration;
      * retain them even if the subsequent power-ready wait expires. */
     if (!err) err = ac97_codec_read(d, 0x28, &ext, limit);
     if (!err) err = ac97_codec_read(d, 0x2a, &d->saved_ext, limit);
     if (!err) err = ac97_codec_read(d, 0x2c, &d->saved_rate, limit);
-    if (err) return err;
+    if (err) { failure_snapshot(d, d->activation_stage); d->quarantine = true; return err; }
     d->saved_power = d->power;
     /* Power control has RO ready bits; EAPD=0 enables the external amp.
      * No guessed vendor amplifier polarity/registers. */
     d->codec_changed = true;
-    d->activation_stage = "codec_power";
+    stage_next(d, "codec_power");
     err = codec_update(d, 0x26, 0, 0xff00, false, limit);
-    while (!err) {
+    limit = bounded_deadline(d, AC97_ANALOG_WAIT_MS);
+    while (!err && !expired(d, limit)) {
         err = ac97_codec_read(d, 0x26, &d->power, limit);
         if (err || (d->power & 0xf) == 0xf) break;
-        if (expired(d, limit)) { err = -ETIMEDOUT; break; }
         d->io.sleep(d->io.cookie, 1);
     }
-    /* Mixer snapshots are meaningful only once analog sections are ready.
-     * A power failure cannot safely restore an incomplete mixer snapshot. */
+    /* Only absent analog-ready bits are advisory. An access error or the
+     * caller's shorter overall deadline is still a hard failure. */
+    if (!err && d->activation_deadline && expired(d, d->activation_deadline)) err = -ETIMEDOUT;
+    d->analog_warning = !err && (d->power & 0xf) != 0xf;
     if (err) { failure_snapshot(d, d->activation_stage); d->quarantine = true; return err; }
-    d->activation_stage = "codec_snapshot";
+    stage_next(d, "codec_snapshot");
+    limit = operation_deadline(d);
     if (!err) err = ac97_codec_read(d, 0x02, &d->saved_master, limit);
     if (!err) err = ac97_codec_read(d, 0x18, &d->saved_pcm, limit);
     if (!err && (d->codec_caps & 0x10)) err = ac97_codec_read(d, 0x04, &d->saved_headphone, limit);
     /* PC beep is optional; ffff/absent is not a playback failure. */
     if (!err) {
         int beep = ac97_codec_read(d, 0x0a, &d->saved_beep, limit);
-        if (beep && (beep != -EIO || d->saved_beep != 0xffff)) err = beep;
-        else if (beep && (rd(d, 0x30, 4) & (1u << 15))) wr(d, 0x30, 1u << 15, 4);
-        else d->beep_present = !beep && d->saved_beep != 0;
+        if (beep && (beep != -EIO || d->saved_beep != 0xffff ||
+            !d->codec_error || strncmp(d->codec_error, "read_invalid", sizeof("read_invalid")))) err = beep;
+        else { d->beep_present = !beep && d->saved_beep != 0; d->codec_error = 0; }
     }
     d->cirrus_spdif = (d->codec_id & 0xfffffff8u) == 0x43525930;
     if (!err && d->cirrus_spdif) err = ac97_codec_read(d, 0x68, &d->saved_spdif, limit);
     if (err) { failure_snapshot(d, d->activation_stage); d->quarantine = true; return err; }
-    d->activation_stage = "codec_rate";
+    stage_next(d, "codec_response");
+    /* Two different muted values reject both stale zero and a stuck reset
+     * mute value. No DMA/ready admission on identity alone. */
+    err = codec_update(d, 0x02, 0x8101, 0x9f1f, true, limit);
+    if (!err) err = codec_update(d, 0x02, 0x8000, 0x9f1f, true, limit);
+    if (!err && d->analog_warning) stage_log(d, "codec_response", "analog_warning_accepted");
+    if (!err) stage_next(d, "codec_rate");
     uint16_t control = d->saved_ext & ~0x000fu; /* VRA/DRA/S/PDIF/VRM */
     if (ext & 1) control |= 1;
-    err = codec_update(d, 0x2a, control, (ext & 1) ? 0x000e : 0x000f, false, limit);
+    if (!err) err = codec_update(d, 0x2a, control, (ext & 1) ? 0x000e : 0x000f, false, limit);
     if (!err && (ext & 1) && (d->raw_ext_control & 1))
         err = codec_update(d, 0x2c, AUDIO_RATE, 0, false, limit);
     else if (!err) err = ac97_codec_read(d, 0x2c, &d->raw_rate, limit);
@@ -243,7 +311,7 @@ int ac97_codec_prepare(struct ac97_device *d)
         if (!err) err = ac97_codec_read(d, 0x2c, &d->raw_rate, limit);
     }
     if (!err) d->rate = AUDIO_RATE;
-    if (!err) d->activation_stage = "codec_mixer";
+    if (!err) stage_next(d, "codec_mixer");
     if (!err && d->cirrus_spdif) err = ac97_codec_write(d, 0x68, d->saved_spdif & ~0x8000u, limit);
     if (!err && d->beep_present) err = codec_update(d, 0x0a, 0, 0x801e, true, limit);
     if (!err) err = master_until(d, &audio.master, limit);
@@ -380,7 +448,7 @@ static void transport_publish(struct ac97_device *d)
 static int transport_prove(struct ac97_device *d)
 {
     uint64_t limit = operation_deadline(d);
-    d->activation_stage = "dma_start";
+    stage_next(d, "dma_start");
     if (expired(d, limit)) { failure_snapshot(d, "dma_start"); return -ETIMEDOUT; }
     d->running = true; /* cleanup must prove stop even if start readback fails */
     wr(d, 0x1b, 1, 1);
@@ -391,8 +459,12 @@ static int transport_prove(struct ac97_device *d)
         }
         /* Also accept a complete two-buffer fetch if polling missed RUN. */
         if (!(c.status & AC97_DCH) || (c.civ == 1 && !c.remaining &&
-            (c.status & (AC97_CELV | AC97_LVBCI)) == (AC97_CELV | AC97_LVBCI)))
-            return ac97_stop(d);
+            (c.status & (AC97_CELV | AC97_LVBCI)) == (AC97_CELV | AC97_LVBCI))) {
+            stage_next(d, "dma_stop");
+            int err = ac97_stop(d);
+            if (!err) stage_next(d, "dma_proved");
+            return err;
+        }
         d->io.sleep(d->io.cookie, 1);
     }
     failure_snapshot(d, "dma_start"); return -ETIMEDOUT;
@@ -414,22 +486,23 @@ static void config_command(const struct pci_func *p, uint16_t value)
 static int controller_activate(struct ac97_device *d)
 {
     const struct pci_func *p = &d->pci;
-    d->activation_deadline = d->io.now(d->io.cookie) + 500;
+    d->activation_deadline = d->io.now(d->io.cookie) + AC97_ACTIVATION_MS;
     d->touched = true;
     d->activation_stage = "pci_decode";
     config_command(p, (p->command | 1) & ~4u); /* no DMA before descriptors */
     int err = (config_read(p, 4) & 0xffff) != ((p->command | 1u) & ~4u) ? -EIO : 0;
-    if (!err) { d->activation_stage = "controller_reset"; err = ac97_controller_reset(d); }
-    if (!err) { d->activation_stage = "dma_reset"; err = channel_reset(d, operation_deadline(d)); }
+    if (!err) { stage_next(d, "controller_reset"); err = ac97_controller_reset(d); }
+    if (!err) { stage_next(d, "dma_reset"); err = channel_reset(d, operation_deadline(d)); }
     if (!err) err = ac97_codec_prepare(d);
     if (!err) {
         transport_publish(d);
-        d->activation_stage = "pci_master";
+        stage_next(d, "pci_master");
         config_command(p, p->command | 5);
         if ((config_read(p, 4) & 0xffff) != (p->command | 5u)) err = -EIO;
     }
     if (!err) err = transport_prove(d);
     if (err) failure_snapshot(d, d->activation_stage);
+    else stage_log(d, d->activation_stage, "ok");
     return err;
 }
 static bool supported(const struct pci_func *p)
@@ -620,13 +693,15 @@ int ac97_init(void)
     if (!err) {
         err = controller_activate(d);
         if (!err) {
-            d->activation_stage = "irq_attach";
+            stage_next(d, "irq_attach");
             d->ready = true; err = irq_chain_add(p->irq_line, ac97_irq, "ac97"); d->irq_attached = !err;
         }
     }
     if (err) {
         if (d->touched) failure_snapshot(d, d->activation_stage);
-        audio.reason = "activation_failed"; ac97_shutdown(); return err;
+        audio.reason = d->failure.stage ? d->failure.stage : "activation_failed";
+        d->activation_deadline = 0; /* cleanup has its own bounded stop budget */
+        ac97_shutdown(); return err;
     }
     d->generation = gen_alloc();
     if (!d->generation) { audio.reason = "generation_exhausted"; ac97_shutdown(); return -ENOMEM; }
@@ -638,5 +713,7 @@ int ac97_init(void)
         .subsystem=(uint32_t)p->sub_vendor | (uint32_t)p->sub_device << 16,
         .revision=p->revision, .codec_id=d->codec_id, .drain_ms=20 };
     audio.reason = "ready";
+    stage_next(d, "ready");
+    stage_log(d, "ready", d->analog_warning ? "analog_warning" : "ok");
     return 0;
 }

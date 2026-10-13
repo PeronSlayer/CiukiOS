@@ -15,7 +15,14 @@ static void outl(uint16_t p, uint32_t v) { (void)p; (void)v; }
 uint64_t ktime_cycles(void) { return g_ticks * 1000; }
 static char audio_log[2048];
 static unsigned audio_log_count;
-void klog(const char *fmt, ...) { va_list a; va_start(a, fmt); vsnprintf(audio_log,sizeof(audio_log),fmt,a); va_end(a); puts(audio_log); audio_log_count++; }
+static unsigned analog_warning_logs, response_warning_logs;
+void klog(const char *fmt, ...)
+{
+    va_list a; va_start(a, fmt); vsnprintf(audio_log,sizeof(audio_log),fmt,a); va_end(a);
+    puts(audio_log); audio_log_count++;
+    if(strstr(audio_log,"result=analog_not_ready"))analog_warning_logs++;
+    if(strstr(audio_log,"result=analog_warning_accepted"))response_warning_logs++;
+}
 bool ktime_elapsed_us(uint64_t start, uint32_t us) { return ktime_cycles() - start >= us; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t deadline) { return (int64_t)(g_ticks - deadline) >= 0; }
@@ -78,6 +85,10 @@ struct mock_hw {
     unsigned ready_delay, power_delay, volume_writes[128];
     bool ready_stuck, cold_stuck, power_stuck, sticky_mute, rate_stuck;
     bool codec_model, vra_enable_stuck, vra_disable_stuck;
+    bool cas_owned, zero_reads, mixer_zero, master_stuck, reset_defaults;
+    uint16_t read_timeout_reg;
+    unsigned codec_resets, codec_reads;
+    uint64_t analog_wait_started;
     bool ich3, start_stuck, exhausted_start, bdbar_stuck, run_clear_stuck;
     unsigned reset_delay, start_delay, resets, starts;
     uint64_t reset_at, start_at;
@@ -100,16 +111,31 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
         return 0;
     }
     if (port >= 0x100 && port < 0x200) {
+        CHECK(width==2 && h->cas_owned && !h->posted);
+        h->cas_owned=false;h->codec_reads++;
         unsigned reg=port-0x100;
+        if(reg==h->read_timeout_reg)h->global_status|=1u<<15;
+        if(h->zero_reads || (h->mixer_zero && (reg==2 || reg==0x18 || reg==0x26)))return 0;
+        if(h->master_stuck && reg==2)return 0x8000;
         if(reg==0x26) return (h->codec[reg/2]&0xff00) | (!h->power_stuck && h->tick>=h->power_ready_at ? 0xf : 0);
         return h->codec[reg/2];
     }
     unsigned off=port-0x200;
     if(off==0x34) {
-        if(h->busy || h->tick < h->busy_until)return 1;
+        CHECK(width==1);
+        if(h->busy || h->cas_owned || h->tick < h->busy_until)return 1;
         if(h->posted) {
             uint16_t reg=h->posted_reg, value=h->posted_value;
-            if(reg==0x26) { value&=0xff00;h->power_ready_at=h->tick+h->power_delay; }
+            if(reg==0) {
+                h->codec_resets++;
+                if(h->reset_defaults) {
+                    h->codec[2/2]=h->codec[4/2]=0x8000;h->codec[0x18/2]=0x8808;
+                    h->codec[0x26/2]=h->codec[0x2a/2]=0;h->codec[0x2c/2]=48000;
+                    h->codec[0x5e/2]=0x80;h->codec[0x60/2]=1;h->codec[0x68/2]=0;
+                }
+                value=h->codec[0]; /* reset is a command; capabilities are RO */
+            }
+            if(reg==0x26) { value&=0xff00;h->power_ready_at=h->tick+h->power_delay;h->analog_wait_started=h->tick; }
             if(h->rate_stuck && reg==0x2c) value=h->codec[reg/2];
             if(h->codec_model && reg==0x2a) {
                 if(!(h->codec[0x28/2]&1) || h->vra_enable_stuck) value&=~1u;
@@ -120,8 +146,10 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
                 if(h->sticky_mute && !h->volume_writes[reg/2] && !(value&0x8000)) value|=0x8000;
                 h->volume_writes[reg/2]++;
             }
-            h->codec[reg/2]=value;h->posted=false;
+            if(!h->zero_reads && !(h->mixer_zero && (reg==2 || reg==0x18 || reg==0x26)))h->codec[reg/2]=value;
+            h->posted=false;
         }
+        h->cas_owned=true;
         return 0;
     }
     if(off==0x2c)return h->global_control;
@@ -164,6 +192,8 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
         h->pci_command=value;return;
     }
     if(port>=0x100 && port<0x200) {
+        CHECK(width==2 && h->cas_owned && !h->posted);
+        h->cas_owned=false;
         h->posted=true;h->posted_reg=port-0x100;h->posted_value=h->reject ? value^1u : value;
         h->busy_until=h->tick+h->post_delay;return;
     }
@@ -196,7 +226,9 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
                 h->starts++;h->start_at=h->tick+h->start_delay;
                 if(h->ich3) {
                     CHECK(h->pci_command&4);CHECK(h->bdbar==h->device->bdl_phys && h->bdbar);
-                    CHECK(h->tick>=h->power_ready_at && !h->power_stuck);
+                    CHECK(!h->device->ready); /* admission follows this proof */
+                    CHECK((h->tick>=h->power_ready_at && !h->power_stuck) ||
+                          (h->device->analog_warning && h->tick>=h->analog_wait_started+5000));
                     for(unsigned i=0;i<2;i++)for(unsigned j=0;j<AUDIO_QUANTUM;j++)
                         CHECK(!h->device->pcm[i][j].left && !h->device->pcm[i][j].right);
                 } else { h->sr&=~AC97_DCH;h->remaining=512;h->piv=(h->civ+1)%32; }
@@ -211,6 +243,7 @@ static struct mock_hw hw;
 static void hardware_setup(struct ac97_device *d)
 {
     memset(d,0,sizeof(*d));memset(&hw,0,sizeof(hw));hw.device=d;
+    hw.read_timeout_reg=0xffff;
     d->nam=0x100;d->nabm=0x200;d->pcm_unity=0x0808;
     d->software_master=true;hw.global_control=2;
     d->raw_ext_control=d->raw_rate=0xffff;
@@ -272,7 +305,7 @@ static void test_physical_codec(void)
     CHECK(d.codec_id==0x43525931 && d.power==0xf && hw.codec[0x26/2]==0);
     CHECK(hw.codec[2/2]==0x0404 && hw.codec[4/2]==0x0404 && hw.codec[0x18/2]==0x0808);
     CHECK(hw.codec[0x0a/2]==0 && hw.codec[0x68/2]==0 && hw.codec[0x2a/2]==0x0401 && d.rate==48000);
-    CHECK(hw.volume_writes[2/2]==2 && hw.volume_writes[4/2]==2 && hw.volume_writes[0x18/2]==2 && hw.volume_writes[0x0a/2]==2);
+    CHECK(hw.volume_writes[2/2]==3 && hw.volume_writes[4/2]==2 && hw.volume_writes[0x18/2]==2 && hw.volume_writes[0x0a/2]==2);
     CHECK(trace_at(0x126,0)<trace_at(0x102,0x0404));
     CHECK(trace_at(0x12a,0x0401)<trace_at(0x12c,48000));
     struct ciuki_mixer_master m={.left=25,.right=100};
@@ -373,7 +406,7 @@ static void test_cs4297a_codec(void)
     CHECK(ac97_codec_prepare(&d)==-EIO && !strcmp(d.failure.stage,"codec_rate"));
     CHECK(d.failure.ext_control==1 && d.failure.rate==44100 && !d.rate);
     cs4297a_setup(&d,false);hw.codec[0x2c/2]=0xffff;
-    CHECK(ac97_codec_prepare(&d)==-EIO && !d.rate && !d.codec_changed);
+    CHECK(ac97_codec_prepare(&d)==-EIO && !d.rate && !d.codec_changed && d.quarantine);
     puts("audio CS4297A: fixed48/read-only rate, synthetic VRA enable/readback/fallback, slow ready and invalid reads PASS");
 }
 static void ich3_setup(void)
@@ -418,26 +451,88 @@ static void test_ich3_bringup(void)
         if(fault==2)hw.reset_stuck=true;
         if(fault==3)hw.run_clear_stuck=true;
         int err=controller_activate(&ac97);
-        CHECK(err==(fault==0?-ETIMEDOUT:-EIO) && hw.tick==500 && ac97.failure.stage);
+        CHECK(err==(fault==0?-ETIMEDOUT:-EIO) && hw.tick>=500 && hw.tick<510 && ac97.failure.stage);
         CHECK(!strcmp(ac97.failure.stage,fault==0?"dma_start":fault==2?"dma_reset":"dma_pause"));
         unsigned resets=hw.resets;uint32_t canary=ac97.bdl[0].address;
-        ac97_shutdown();CHECK(ac97.quarantine && audio.quarantined && hw.resets==resets && ac97.bdl[0].address==canary);
+        /* A start timeout can still prove a safe stop within cleanup's budget. */
+        if(fault==0) { CHECK(!ac97_pause(&ac97) && !ac97.quarantine); }
+        else { ac97_shutdown();CHECK(ac97.quarantine && audio.quarantined && hw.resets==resets && ac97.bdl[0].address==canary); }
         audio.quarantined=false;
     }
     ich3_setup();hw.bdbar_stuck=true;
     CHECK(controller_activate(&ac97)==-EIO && !strcmp(ac97.failure.stage,"dma_bdbar") && !hw.starts && !(hw.pci_command&4));
-    /* Reproduce -110 + stop_unproved without assuming a DMA silicon defect:
-     * power calibration consumes the shared deadline, then shutdown cannot
-     * enter its pause-proof loop even though reset-state DCH is already set. */
+    /* The captured T23 power=0000 case now reaches the silent DMA proof. */
     ich3_setup();hw.power_stuck=true;hw.input_sr=AC97_DCH|AC97_BCIS;hw.mic_sr=AC97_DCH|AC97_LVBCI;
-    CHECK(controller_activate(&ac97)==-ETIMEDOUT && hw.tick==500 && !hw.starts);
-    CHECK(!strcmp(ac97.failure.stage,"codec_power") && !ac97.failure.ext_control && ac97.failure.rate==48000);
-    ac97_shutdown();CHECK(audio.quarantined && !strcmp(audio.reason,"stop_unproved"));
-    audio_init_log(-ETIMEDOUT);
-    CHECK(!strcmp(audio_log,"[audio] failure stage=codec_power ext2a=0000 rate2c=bb80 pisr=0009 posr=0001 mcsr=0005 pocr=00 civ=0 lvi=0 piv=0 picb=0"));
-    CHECK(!strcmp(ac97.failure.stage,"codec_power"));
+    CHECK(!controller_activate(&ac97) && hw.tick>=5000 && hw.tick<5010 && hw.starts==1);
+    CHECK(ac97.analog_warning && !ac97.power && !ac97.failure.stage && !ac97.quarantine && !ac97.running);
     audio.quarantined=false;memset(&ac97,0,sizeof(ac97));
-    puts("audio ICH3: reset/default DCH, valid silent BDL before BME, bounded start/stop, failures retained and -110/stop_unproved reproduction PASS");
+    puts("audio ICH3: reset/default DCH, valid silent BDL before BME, bounded start/stop, failures retained and analog warning PASS");
+}
+static void test_codec_power_policy(void)
+{
+    ich3_setup();hw.power_stuck=hw.reset_defaults=true;hw.post_delay=2;
+    hw.global_control=0x0a; /* BIOS link off; cold reset must clear it. */
+    hw.codec[0x26/2]=0xff00;hw.codec[0x5e/2]=0xffff;hw.codec[0x60/2]=0;
+    hw.codec[2/2]=hw.codec[0x18/2]=0; /* the physical capture's zeros */
+    unsigned warnings=analog_warning_logs, accepted=response_warning_logs;
+    CHECK(!controller_activate(&ac97) && ac97.analog_warning && !ac97.quarantine);
+    CHECK(hw.codec_resets==1 && hw.starts==1 && hw.resets==2 && !hw.cas_owned && !hw.posted);
+    CHECK(hw.tick>=5000 && hw.tick<5200 && !ac97.ready && !ac97.running && !ac97.failure.stage);
+    CHECK(analog_warning_logs==warnings+1 && response_warning_logs==accepted+1);
+    CHECK(!ac97.power && ac97.master==0x0404 && ac97.pcm_volume==0x0808 && ac97.codec_valid==7);
+    CHECK(hw.codec[0x5e/2]==0x80 && hw.codec[0x60/2]==1 && !hw.codec[0x68/2]);
+    CHECK(ac97.saved_master==0x8000 && ac97.saved_pcm==0x8808 && !ac97.saved_power);
+    CHECK(trace_at(0x100,0)<trace_at(0x126,0));
+    CHECK(trace_at(0x126,0)<trace_at(0x102,0x8101) && trace_at(0x102,0x8101)<trace_at(0x102,0x8000));
+    CHECK(trace_at(0x102,0x8000)<trace_at(0x21b,1));
+    CHECK(strstr(audio_log,"stage=dma_proved reg26=0000 reg02=0404 reg18=0808 valid=07"));
+    CHECK(!ac97_codec_restore(&ac97) && hw.codec[2/2]==0x8000 && hw.codec[0x18/2]==0x8808);
+
+    /* Calibration beyond the old 500 ms cap, still below five seconds. */
+    ich3_setup();hw.power_delay=750;
+    CHECK(!controller_activate(&ac97) && !ac97.analog_warning && hw.tick>=750 && hw.tick<800 && hw.starts==1);
+    /* The warning never grants admission if DMA cannot start. */
+    ich3_setup();hw.power_stuck=hw.start_stuck=true;
+    CHECK(controller_activate(&ac97)==-ETIMEDOUT && !ac97.ready && ac97.analog_warning);
+    CHECK(!strcmp(ac97.failure.stage,"dma_start") && hw.tick>=5500 && hw.tick<5510);
+
+    /* Entire codec absent, including ID, despite the controller ready flag. */
+    ich3_setup();hw.zero_reads=true;
+    CHECK(controller_activate(&ac97)==-EIO && !hw.starts && !hw.codec_resets);
+    CHECK(!strcmp(ac97.failure.stage,"codec_identity") && !strcmp(ac97.codec_error,"identity_invalid"));
+    CHECK(strstr(audio_log,"stage=codec_identity") && strstr(audio_log,"access=identity_invalid"));
+    /* Plausible ID/rate cannot excuse stale/ignored analog-register writes. */
+    ich3_setup();hw.mixer_zero=true;
+    accepted=response_warning_logs;
+    CHECK(controller_activate(&ac97)==-EIO && !hw.starts && !ac97.ready);
+    CHECK(!strcmp(ac97.failure.stage,"codec_response") && strstr(audio_log,"access=write_mismatch"));
+    CHECK(response_warning_logs==accepted && !ac97.power && !ac97.master && !ac97.pcm_volume);
+    ich3_setup();hw.master_stuck=true;
+    CHECK(controller_activate(&ac97)==-EIO && !hw.starts && !strcmp(ac97.failure.stage,"codec_response"));
+
+    /* Timeout with zero data is never downgraded to an analog warning. RCS
+     * clear must not consume unrelated W1C GPI/resume status. */
+    ich3_setup();hw.read_timeout_reg=0x26;hw.power_stuck=true;hw.global_status=0xc01;
+    CHECK(controller_activate(&ac97)==-EIO && !hw.starts && !ac97.analog_warning);
+    CHECK(!strcmp(ac97.codec_error,"read_timeout") && !strcmp(ac97.failure.stage,"codec_reset"));
+    CHECK((hw.global_status&0x8c01)==0xc01 && (ac97.global_status&(1u<<15)));
+    ich3_setup();hw.busy=true;
+    CHECK(controller_activate(&ac97)==-ETIMEDOUT && hw.tick==101 && !hw.codec_resets && !hw.starts);
+    CHECK(!strcmp(ac97.codec_error,"cas_timeout"));
+    uint16_t value;
+    for(unsigned fault=0;fault<2;fault++) {
+        ich3_setup();
+        if(fault)hw.ready_stuck=true;else hw.global_control=0x0a;
+        CHECK(ac97_codec_read(&ac97,2,&value,500)==-EIO && !hw.codec_reads && !hw.cas_owned && !hw.writes);
+        CHECK(!strcmp(ac97.codec_error,fault?"primary_not_ready":"link_off_or_reset"));
+    }
+    /* QEMU-style codec identity/software gain still traverses the proof. */
+    ich3_setup();hw.codec[0x7c/2]=0x8384;hw.codec[0x7e/2]=0x7600;
+    ac97.software_master=true;ac97.pcm_unity=0;
+    CHECK(!controller_activate(&ac97) && !ac97.analog_warning && hw.starts==1 && hw.resets==2);
+    CHECK(!ac97.master && !ac97.pcm_volume && ac97.rate==48000 && hw.tick<500);
+    memset(&ac97,0,sizeof(ac97));
+    puts("audio codec power: register reset, 5s warning with response+DMA proof, zero/stale reads, CAS ownership, RCS/link errors, QEMU model PASS");
 }
 static uint64_t boot_host_tick;
 static unsigned boot_mixed_frames;
@@ -830,7 +925,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_boot_transport();test_bdl();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;
