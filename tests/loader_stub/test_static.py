@@ -93,7 +93,7 @@ class StaticTests(unittest.TestCase):
                           "\ndw ciuki_boot_info_size, ciuki_e820_size\n")
         run("nasm", "-f", "bin", source, "-o", binary)
         actual = struct.unpack("<" + "H"*(len(OFFSETS)+2), binary.read_bytes())
-        self.assertEqual(actual, tuple(OFFSETS.values()) + (0x10F0, 24))
+        self.assertEqual(actual, tuple(OFFSETS.values()) + (0x1344, 24))  # v2 size since f1-23 (VBE mode table)
         cc = shutil.which("cc")
         self.assertIsNotNone(cc, "a C compiler is needed for C/NASM ABI agreement")
         source_c = self.scratch / "offsets.c"
