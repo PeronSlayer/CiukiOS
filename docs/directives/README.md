@@ -133,5 +133,5 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f3-13-dosbox-loading-and-speed](f3-13-dosbox-loading-and-speed.md) | F3 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (loading panel, boot text to the VM log, band presenter, VM quantum caps); T23 measurement pending |
 | [f4-12-ui-sounds](f4-12-ui-sounds.md) | F4 | gpt-6.1-sol / high | delivered and merged 2026-10-14 (event sounds, scheme.cfg + registry, Sounds page, volume ticks, VM priority) |
 | [f4-13-dos-vm-audio-on-hardware](f4-13-dos-vm-audio-on-hardware.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (native backend failed after boot: AC97 hand-off race and serial output stall fixed; VMs then attach); T23 listening test pending |
-| [f2-54-performance-counters-after-f2-52](f2-54-performance-counters-after-f2-52.md) | F2+ | gpt-6.1-sol / high | running 2026-10-14 (performance counters test stale after the f2-52 port) |
+| [f2-54-performance-counters-after-f2-52](f2-54-performance-counters-after-f2-52.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (expectation follows the f2-53 tray layout; presenter unchanged) |
 | [f2-55-desktop-memory-footprint-probe](f2-55-desktop-memory-footprint-probe.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-14 (desktop heap grows one extent during the probe cycle: extents 22/23) |
