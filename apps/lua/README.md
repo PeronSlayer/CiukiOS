@@ -44,6 +44,8 @@ The image contains `/Programs/lua`, `/Programs/hello`, `/Programs/libc_smoke`, t
 `/system/tests/lua-5.4.8-tests/` directory (including `libs/P1/`), and the
 separate `/system/tests/ciuki-f2.lua`. `/tmp` and `/Documents` are initially empty.
 Kernel, boot options and license files also appear in the payload inventory.
+`liblua.a` is also recorded as a build output and linked into the native
+Terminal (f2-46); it is not copied onto the system volume.
 `luac` is built and inspected for the SDK but is not an image payload in this
 directive. Every file is listed by path, size and SHA-256 in
 `build/f0/build-manifest.json`; T1 reads each file back from the final disk with

@@ -2129,6 +2129,14 @@ v2: copy flag, client-relative release x/y; Files only
 f1-25: explicit opt-in, v2 desktop performance sample
 
 ```c
+,
+```
+
+f2-46: desktop-launched Terminal only, v2: serial, action (1 reboot, 2 off).
+The client confirms first; desktop runs the existing close/flush/power path.
+
+```c
+DESK_TERMINAL_POWER
 };
 #define DESK_SETTINGS_RELOAD 1u
 ```
@@ -2773,6 +2781,12 @@ const uint32_t *icon; int icon_size;
 ```
 
 buttons, edit prefix icon
+
+```c
+int accepts_tab;
+```
+
+DU_CANVAS: deliver Tab as DU_EV_KEY
 
 ```c
 int dropdown;

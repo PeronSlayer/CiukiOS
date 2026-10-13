@@ -250,6 +250,11 @@ int desk_parse(const struct ciuki_message *m, int client,
         }
         break;
     }
+    case DESK_TERMINAL_POWER:
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 12) return 0;
+        p->serial = desk_get32(m->data + 4); p->flags = desk_get32(m->data + 8);
+        if (p->flags != CIUKI_POWER_REBOOT && p->flags != CIUKI_POWER_OFF) return 0;
+        n = 12; break;
     case DESK_TASK_RESULT:
         if (client || m->data[0] != DESK_SHELL_VERSION || m->length != 16) return 0;
         p->serial = desk_get32(m->data + 4);
@@ -257,7 +262,7 @@ int desk_parse(const struct ciuki_message *m, int client,
         p->result = (int32_t)desk_get32(m->data + 12);
         if ((p->request != DESK_WINDOWS_QUERY && p->request != DESK_END_TASK &&
              p->request != DESK_SWITCH_TO && p->request != DESK_LAUNCH && p->request != DESK_SETTINGS && p->request != DESK_MIXER_SET &&
-             p->request != DESK_SYSTEM_QUERY) ||
+             p->request != DESK_SYSTEM_QUERY && p->request != DESK_TERMINAL_POWER) ||
             p->result < -4095) return 0;
         n = 16;
         break;

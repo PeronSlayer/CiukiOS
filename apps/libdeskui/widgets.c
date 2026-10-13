@@ -940,7 +940,7 @@ static void key_down(struct du_ui *u, unsigned code)
             select_tab(u, t, (int)(t->active + (back ? t->count - 1 : 1)) % (int)t->count);
             return;
         }
-    if (code == DU_KEY_TAB && !(u->modifiers & (DU_CTRL | DU_ALT)) && !(f && f->kind == DU_TEXTAREA)) { focus_next(u, (u->modifiers & DU_SHIFT) != 0); return; }
+    if (code == DU_KEY_TAB && !(u->modifiers & (DU_CTRL | DU_ALT)) && !(f && (f->kind == DU_TEXTAREA || (f->kind == DU_CANVAS && f->accepts_tab)))) { focus_next(u, (u->modifiers & DU_SHIFT) != 0); return; }
     if (f && (code == DU_KEY_MENU || (code == DU_KEY_F10 && u->modifiers == DU_SHIFT)) && (f->kind == DU_LISTVIEW || f->kind == DU_TREE)) {
         struct du_rect r = f->count && f->active < f->count ? du_list_label(f, f->active) : du_list_body(f);
         du_emit(u, (struct du_event){.type = DU_EV_CONTEXT, .id = f->id, .index = f->count ? (int)f->active : -1,

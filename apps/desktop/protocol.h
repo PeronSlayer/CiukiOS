@@ -35,7 +35,10 @@ enum desk_opcode {
     DESK_SET_TITLE,
     DESK_SOUND, /* v2: uint32 event; toolkit menu and dialog events */
     DESK_FILE_DROP /* v2: copy flag, client-relative release x/y; Files only */,
-    DESK_SYSTEM_QUERY, DESK_SYSTEM_INFO /* f1-25: explicit opt-in, v2 desktop performance sample */
+    DESK_SYSTEM_QUERY, DESK_SYSTEM_INFO /* f1-25: explicit opt-in, v2 desktop performance sample */,
+    /* f2-46: desktop-launched Terminal only, v2: serial, action (1 reboot, 2 off).
+     * The client confirms first; desktop runs the existing close/flush/power path. */
+    DESK_TERMINAL_POWER
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */

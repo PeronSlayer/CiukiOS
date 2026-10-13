@@ -266,7 +266,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].pid=(uint32_t)pid;
     d->clients[index].program=kind;
     d->clients[index].taskman=tasks;
-    d->clients[index].mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music");
+    d->clients[index].mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
     d->clients[index].awaiting_frame=graphical;
     d->clients[index].launched_ns=monotonic();
     d->children[child].pid=(uint32_t)pid;

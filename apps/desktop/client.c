@@ -454,10 +454,18 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
                       !strcmp(p.title,"ciukide-run");
         int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
                         !strcmp(p.title,"ciuknote") && !strcmp(p.argument,"/Documents/Developer/Guide.txt");
-        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide ? -EPERM :
-            p.opcode == DESK_END_TASK ? desk_task_end(d, p.window_id, p.pid) :
+        int terminal = c->program == DESK_APP_TERMINAL;
+        int terminal_launch = terminal && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) &&
+                              (!p.argument[0] || p.argument[0] == '/');
+        int terminal_end = terminal && p.opcode == DESK_END_TASK && !p.window_id && p.pid;
+        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end ? -EPERM :
+            p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             c->taskman && p.argument[0] ? -EPERM : ide_run ? desk_ide_launch(d,p.argument) : desk_task_launch(d, p.title, p.argument);
+        /* Outside the desktop's child group use its existing kernel authority.
+         * Protect PID 1 and the desktop even if a provider is misconfigured. */
+        if (terminal_end && result == -EPERM && p.pid != 1 && p.pid != d->self_pid && !d->power.state)
+            result = !d->terminate ? -ENOSYS : d->terminate(p.pid, SIGKILL) ? -(errno ? errno : EIO) : 0;
         if (p.opcode == DESK_END_TASK && !result) desk_sound(d,SOUND_END_TASK);
         /* Documents menu: files opened from Files (never in the runtime gate scenarios). */
         if (files_open && result > 0 && d->shell && !d->sh.gate) { cfg_recent_add(&d->sh.cfg, p.argument); d->sh.want_save = 1; }
@@ -472,6 +480,14 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, p.opcode); desk_put32(reply.data + 12, (uint32_t)result);
         desk_queue(d, i, &reply);
+        break;
+    }
+    case DESK_TERMINAL_POWER: {
+        int result = c->program != DESK_APP_TERMINAL || !d->shell || d->sh.gate ? -EPERM : d->power.state ? -EBUSY : 0;
+        desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
+        desk_put32(reply.data + 8, DESK_TERMINAL_POWER); desk_put32(reply.data + 12, (uint32_t)result);
+        desk_queue(d, i, &reply);
+        if (!result) desk_power_begin(d, (int)p.flags);
         break;
     }
     case DESK_SETTINGS: {
@@ -510,7 +526,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         desk_sound(d,p.flags);
         break;
     case DESK_MIXER_SET: {
-        /* Only desktop-launched Volume Control and Music Player may change the master volume. */
+        /* Desktop-launched Volume Control, Music Player and Terminal use the master control handle. */
         int32_t result = !c->mixer ? -EPERM : d->power.state ? -EBUSY : d->mixer_set ? d->mixer_set(d, p.width, p.height, p.flags) : -ENODEV;
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, DESK_MIXER_SET); desk_put32(reply.data + 12, (uint32_t)result);

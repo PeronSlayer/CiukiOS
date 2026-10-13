@@ -238,6 +238,7 @@ static const struct program_info programs[] = {
     {"music", "Music Player", "audio-x-generic", "programs"},
     {"viewer", "Image Viewer", "image-x-generic", "programs"},
     {"paint", "CiukPaint", "applications-graphics", "programs"},
+    {"terminal", "Terminal", "utilities-terminal", "programs"},
     {"calc", "Calculator", "accessories-calculator", "accessories"},
     {"charmap", "Character Map", "accessories-character-map", "accessories"},
     {"clock", "Clock", "appointment-new", "accessories"},
@@ -270,6 +271,7 @@ static const char *client_icon(const struct desktop *d, int i)
     if (c->internal == DESK_INTERNAL_RUN) return "go-jump";
     if (c->internal == DESK_INTERNAL_SHUTDOWN || c->internal == DESK_INTERNAL_POWER) return "system-shutdown";
     if (c->internal) return d->sh.message_kind ? "dialog-error" : "dialog-information";
+    if (c->program == DESK_APP_TERMINAL) return "utilities-terminal";
     if (c->program == DESK_APP_FILES) return "system-file-manager";
     if (c->program == DESK_APP_NOTE) return "accessories-text-editor";
     if (c->program == DESK_APP_CONTROL) return "preferences-desktop";

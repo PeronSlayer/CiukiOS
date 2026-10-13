@@ -24,7 +24,7 @@ def validate_payloads():
     sdk = lua.validate_sdk()
     checker = lua.checker()
     files = {}
-    for name in ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "paint"):
+    for name in ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "paint", "terminal"):
         files["/Programs/" + name] = {"source": "build/apps/desktop/" + name,
                                "sha256": desktop["files"][name], "elf": desktop["elf"][name]}
     for name, source in (("lua", "build/apps/lua/lua"), ("hello", "build/tools/ciuki-sdk/tests/hello.elf"),
