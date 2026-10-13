@@ -51,6 +51,7 @@ REQUIRED = {
     "type:.cfg": None, "type:.ini": None,
     "status:volume-high": "audio-volume-high", "status:volume-medium": "audio-volume-medium",
     "status:volume-low": "audio-volume-low", "status:volume-muted": "audio-volume-muted", "status:battery": "battery",
+    "device:network": "network-wired", "status:network-offline": "network-offline", "status:network-error": "network-error",
     "dialog:info": "dialog-information", "dialog:warning": "dialog-warning", "dialog:error": "dialog-error",
     "dialog:question": "help-browser",
 }

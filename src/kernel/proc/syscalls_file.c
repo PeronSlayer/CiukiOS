@@ -7,9 +7,11 @@
 #include <ciuki/clock.h>
 #include <ciuki/signal.h>
 #include <ciuki/audio.h>
+#include <ciuki/net.h>
 #include <ciuki/version.h>
 #pragma weak audio_write_user
 #pragma weak audio_devctl
+#pragma weak net_devctl
 
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
@@ -96,7 +98,7 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     if (media_error) return media_error;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
-    if (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER) {
+    if (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET) {
         if (positioned) return -ESPIPE;
         if (d->node->kind == PX_MIXER || !write) return -EBADF;
         return -EBADF; /* audio write dispatch owns its own cancellable operation */
@@ -149,7 +151,7 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     int err = 0;
     if (tf->eax == CIUKI_SYS_GETDENTS && d->node->kind != PX_DIRECTORY &&
         d->node->kind != PX_MNT && d->node->kind != PX_DEV) return -ENOTDIR;
-    if (tf->eax == CIUKI_SYS_LSEEK64 && (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER)) return -ESPIPE;
+    if (tf->eax == CIUKI_SYS_LSEEK64 && (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET)) return -ESPIPE;
     if (tf->eax == CIUKI_SYS_LSEEK64)
         err = output_pin(op, tf->edi, sizeof(int64_t), true);
     else if (tf->eax == CIUKI_SYS_FSTAT)
@@ -251,7 +253,13 @@ static int pathname_call(struct file_operation *op, const struct trap_frame *tf)
 static int file_dispatch(struct process *p, struct trap_frame *tf)
 {
     uint32_t nr = tf->eax;
-    if (nr == CIUKI_SYS_DEVCTL) return audio_devctl ? audio_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
+    if (nr == CIUKI_SYS_DEVCTL) {
+        struct file_description *d = file_fd(p, (int32_t)tf->ebx);
+        if (d && d->node->kind == PX_NET)
+            return net_devctl ? net_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
+        return audio_devctl ? audio_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) :
+               file_fd_object(p, (int32_t)tf->ebx) ? -ENOTTY : -EBADF;
+    }
     if (nr == CIUKI_SYS_UNAME) return file_uname(tf->ebx);
     /* Flags/structure checks precede descriptor and pointer validation. */
     if (nr == CIUKI_SYS_OPEN) { int err = file_open_flags(tf->ecx, tf->edx); if (err) return err; }

@@ -33,6 +33,11 @@ void channel_release(struct desktop_description *d) { (void)d; }
 #include "../../../src/kernel/proc/fdtable.c"
 #include "../../../src/kernel/proc/devnodes.c"
 #include "../../../src/kernel/proc/syscalls_file.c"
+#include "../../../src/kernel/drivers/net_dev.c"
+/* Register-model net suite checks the production snapshot. This boundary
+ * fixture exercises the real namespace/fd/syscall/user-copy path without a NIC. */
+void net_state_snapshot(struct ciuki_net_state *out)
+{ *out = (struct ciuki_net_state){ .version = 1, .size = sizeof(*out), .reason = "no_adapter" }; }
 
 static struct fake disk[2];
 static struct block_cache cache;
@@ -592,6 +597,33 @@ static void test_launch_reads(void)
     files_launch_verbose=false;
     puts("PASS native launch read accounting: short final page, EOF, immutable snapshot once, stop at first frame");
 }
+static void test_net_node(void)
+{
+    struct px_path path; CHECK(!resolve_path("/dev/net", &path) && path.node == space->net);
+    struct ciuki_stat st; CHECK(!px_stat_locked(path.node, &st) && st.st_mode == (S_IFCHR | 0444) && st.st_rdev == 5);
+    CHECK(file_open(client, "/dev/net", O_RDWR, 0) == -EACCES);
+    CHECK(file_open(client, "/dev/net", O_WRONLY, 0) == -EACCES);
+    CHECK(file_open(client, "/dev/net", O_RDONLY | O_TRUNC, 0) == -EINVAL);
+    int fd = file_open(client, "/dev/net", O_RDONLY | O_CLOEXEC, 0); CHECK(fd >= 0);
+    CHECK(file_fcntl(client, fd, F_GETFD, 0) == FD_CLOEXEC);
+    CHECK(file_fcntl(client, fd, F_SETFL, O_APPEND) == -EINVAL);
+    CHECK(call(CIUKI_SYS_READ, fd, USER, 1, 0, 0) == -EBADF);
+    CHECK(call(CIUKI_SYS_WRITE, fd, USER, 1, 0, 0) == -EBADF);
+    CHECK(call(CIUKI_SYS_LSEEK64, fd, 0, 0, SEEK_SET, USER) == -ESPIPE);
+    struct ciuki_net_state state = { .version = 1, .size = sizeof(state) };
+    CHECK(!ua_write(client->memory, USER, &state, sizeof(state)));
+    CHECK(!call(CIUKI_SYS_DEVCTL, fd, NET_GET_STATE, USER, sizeof(state), 0));
+    CHECK(!ua_read(client->memory, &state, USER, sizeof(state)) && !state.present && !strcmp(state.reason, "no_adapter"));
+    CHECK(call(CIUKI_SYS_DEVCTL, fd, NET_GET_STATE, UINT32_MAX, sizeof(state), 0) == -EFAULT);
+    CHECK(!file_close(client, fd));
+    CHECK(call(CIUKI_SYS_DEVCTL, fd, NET_GET_STATE, USER, sizeof(state), 0) == -EBADF);
+    int dir = file_open(client, "/dev", O_RDONLY | O_DIRECTORY, 0); CHECK(dir >= 0);
+    struct ciuki_dirent entry; bool seen = false; int n;
+    while ((n = px_getdents_locked(file_fd(client, dir), &entry)) > 0)
+        if (!strcmp(entry.d_name, "net")) { CHECK(entry.d_type == DT_CHR && !seen); seen = true; }
+    CHECK(n == 0 && seen); CHECK(!file_close(client, dir));
+    puts("PASS /dev/net namespace: lookup/stat/getdents, readonly fd/close, seek/stream rejection, actual devctl dispatch and user copies");
+}
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4);
@@ -604,7 +636,7 @@ int main(int argc, char **argv)
     CHECK(!files_attach(&vfs,&space));
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
-    test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks();
+    test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks(); test_net_node();
     test_uname(); test_optical_native();
     test_launch_reads();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;

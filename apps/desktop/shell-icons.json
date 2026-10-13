@@ -1,7 +1,7 @@
 {
   "archive_sha256": "6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e",
   "conversion": "original 16x16, 22x22 or 32x32 PNG RGBA8, no resizing; AARRGGBB",
-  "header_sha256": "a6cc55820e2b14bf8427dc125bb1afb5a7ae16c2ac65a0d0769854d8dfde1389",
+  "header_sha256": "0f40c853b4a9a48c8c0a6d15686a6eed9a1ec608abd0748484e4be3c24de6a2e",
   "icons": {
     "audio": {
       "rgba_sha256": "93a4e8df344b67a293f213fd24f85aabe82e815de2f1e89288e71cb65ec8f08b",
@@ -137,6 +137,21 @@
       "rgba_sha256": "db6ba64d47c1b60445e52c86ff63fb05975259909f377db6b0993379ddb5e755",
       "source": "tango-icon-theme-0.8.90/32x32/mimetypes/image-x-generic.png",
       "source_sha256": "bc3a72813290c67bd8166d04e07f55fb9bbd9387856982d7611215b278ec2d6d"
+    },
+    "network_error": {
+      "rgba_sha256": "d47f3d910e857a009bce1f1930f0a1e49580033818ad0b34bcace4cad9268625",
+      "source": "tango-icon-theme-0.8.90/16x16/status/network-error.png",
+      "source_sha256": "5a58e7a36c630df51723287e1f80c6e34fdc5ec5ca82f1c8a9fd0842e93e66af"
+    },
+    "network_offline": {
+      "rgba_sha256": "42fef441d765d441794deebeb48be1f3dc9c50ea91000069ee0c7fbb8dfe6d7f",
+      "source": "tango-icon-theme-0.8.90/16x16/status/network-offline.png",
+      "source_sha256": "a6090057c2b83b13189349ca221d756ab0a11571a909e6df76bbc48f62e339c0"
+    },
+    "network_wired": {
+      "rgba_sha256": "980452185ede4e3c212ba9555ded0b8bd2320c63b35c691c585533eb31956621",
+      "source": "tango-icon-theme-0.8.90/16x16/devices/network-wired.png",
+      "source_sha256": "6dd76f1cc2ffa882055669b2b144ff00ad3b92cd895cb5a6dd6c3f78b5562e6b"
     },
     "paste": {
       "rgba_sha256": "f35bd3a51d84584ba9ccf5d54e0d22f1602d08f7d85c3b5e41856c0c6362b1a3",

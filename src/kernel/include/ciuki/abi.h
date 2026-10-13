@@ -602,6 +602,34 @@ struct ciuki_devices_info {
     struct ciuki_device_lease leases[64];
 };
 
+/* Read-only /dev/net carrier snapshot. IP configuration is reserved for lwIP.
+ * Initialize version/size and zero reserved fields before NET_GET_STATE. */
+#define CIUKI_NET_VERSION 1u
+#define NET_GET_STATE 0x4301u
+#define CIUKI_NET_LINK_UNKNOWN 0u
+#define CIUKI_NET_LINK_DOWN 1u
+#define CIUKI_NET_LINK_UP 2u
+#define CIUKI_NET_STOPPED 0u
+#define CIUKI_NET_RUNNING 1u
+#define CIUKI_NET_QUARANTINED 2u
+struct ciuki_net_state {
+    uint32_t version;
+    uint32_t size;
+    uint32_t present;
+    char driver[16];
+    uint8_t mac[6];
+    uint8_t reserved0[2];
+    uint32_t link;
+    uint32_t state;
+    char reason[24];
+    uint32_t reserved1;
+    uint64_t rx_frames;
+    uint64_t tx_frames;
+    uint32_t address_configured;
+    uint8_t ipv4[4];
+};
+_Static_assert(sizeof(struct ciuki_net_state) == 96, "network state ABI");
+
 /* F4-01: fixed copied device-control extension. */
 #define CIUKI_AUDIO_VERSION 1u
 #define CIUKI_AUDIO_U8 1u

@@ -338,6 +338,30 @@ void netif_snapshot(struct netif *d, struct net_stats *out)
     if (!d || !out) return;
     uint32_t f = irq_save(); *out = d->stats; out->queued = d->queue_count; irq_restore(f);
 }
+void net_state_snapshot(struct ciuki_net_state *out)
+{
+    *out = (struct ciuki_net_state){ .version = CIUKI_NET_VERSION, .size = sizeof(*out),
+                                   .state = CIUKI_NET_STOPPED };
+    struct netif *d = net_get(0);
+    for (unsigned i = 0; i < net_count(); i++) {
+        struct netif *candidate = net_get(i);
+        if (candidate->running && !candidate->quarantined) { d = candidate; break; }
+    }
+    if (!d) {
+        ksnprintf(out->reason, sizeof(out->reason), "%s", g_boot.flags & CBI_F_SAFE_MODE ? "safe_mode" : "no_adapter");
+        return;
+    }
+    kmutex_lock(&d->mutex);
+    out->present = 1;
+    ksnprintf(out->driver, sizeof(out->driver), "%s", d->driver->name);
+    memcpy(out->mac, d->address, sizeof(out->mac));
+    out->link = d->link;
+    out->state = d->quarantined ? CIUKI_NET_QUARANTINED : d->running ? CIUKI_NET_RUNNING : CIUKI_NET_STOPPED;
+    ksnprintf(out->reason, sizeof(out->reason), "%s", d->reason ? d->reason : "unknown");
+    out->rx_frames = d->stats.rx_packets;
+    out->tx_frames = d->stats.tx_completed;
+    kmutex_unlock(&d->mutex);
+}
 void net_set_input(net_input_fn fn, void *cookie)
 {
     /* UP, non-preemptible kernel: publish callback revocation before a wait.

@@ -50,6 +50,41 @@ reads. These are existing mechanisms, not evidence of working networking:
 | `src/apps/control.c` and `devices.c`: retained legacy networking inventory/UI | These are not the F2 native configuration service. The F6 applet MUST consume the kernel status/control boundary below. |
 | [f6-01-nic-drivers.md](../directives/f6-01-nic-drivers.md) | Its three register-level drivers and ARP probe are independent of sockets. Its interface MUST be reconciled with this contract before integration. It does not assign 3c905 or the DOS bridge implementation. |
 
+### Public carrier snapshot (network tray directive, 2026-10-13)
+
+The tray directive `f6-02-network-tray-icon.md` adds a public, read-only
+`/dev/net` character node using the existing `ciuki_devctl` syscall, independently
+of the later stack/socket gate also numbered F6-02 below. It is present even
+without a supported adapter. Open requires `O_RDONLY` (optionally `O_CLOEXEC`
+or `O_NONBLOCK`); create/truncate/append/directory flags and write access are
+rejected. Read/write byte streams are unsupported; seek returns `ESPIPE`.
+
+`NET_GET_STATE` (`0x4301`) copies the 96-byte version-1 `ciuki_net_state` in
+`ciuki/abi.h`: version, size, present, NUL-terminated driver[16], mac[6], two
+zero padding bytes, link (0 unknown/1 down/2 up), state (0 stopped/1 running/
+2 quarantined), NUL-terminated reason[24], four zero padding bytes, 64-bit
+rx_frames/tx_frames, address_configured and ipv4[4]. The caller supplies
+version/size and zero reserved fields. Invalid fd/op/size/version/user memory
+return `EBADF`/`ENOTTY`/`EINVAL`/`EOPNOTSUPP`/`EFAULT` respectively. A mutex
+protects the copied adapter state; the query performs no NIC I/O or writes.
+Selection is the first running adapter, otherwise the first supported adapter
+detected at boot. An absent adapter yields present=0, unknown link, stopped
+state, empty driver/MAC and reason `no_adapter` (or `safe_mode`). RX counts
+received frames; TX counts completed frames. IP fields remain zero until the
+lwIP configuration work is assigned.
+
+Research checked the [freedesktop icon naming specification](https://specifications.freedesktop.org/icon-naming/latest/)
+and [lwIP netif link flags](https://www.nongnu.org/lwip/2_1_x/netif_8h.html)
+against `net.c`'s one-second link poll and the Tango archive. The decision is
+to show physical carrier, independently of addressing or Internet reachability:
+`network-wired` for up, `network-offline` for down/unknown, and a disabled
+`network-error` for no adapter. Quarantined/stopped adapters retain their
+identity and actual reported link; the status popup exposes lifecycle state.
+The desktop requests a snapshot every two seconds via its timer/want_reload
+path; unchanged display fields and counter-only changes cause no tray damage.
+Changed visible fields damage the tray, plus an open status popup or visible
+network tooltip as needed. No configuration controls are exposed.
+
 ### Research and source decisions
 
 Research performed on 2026-10-12 used the following primary sources. Archived

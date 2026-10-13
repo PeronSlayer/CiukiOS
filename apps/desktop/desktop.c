@@ -16,6 +16,7 @@
 #include <ciuki/display.h>
 #include <ciuki/proc.h>
 #include <ciuki/audio.h>
+#include <ciuki/net.h>
 #include <ciuki/power.h>
 #include <errno.h>
 #include <dirent.h>
@@ -452,6 +453,17 @@ static void wallpaper_load(struct desktop *d)
     }
     desk_shell_wallpaper_update(d);
 }
+static void network_read(struct desktop *d)
+{
+    int fd = open("/dev/net", O_RDONLY | O_CLOEXEC);
+    struct ciuki_net_state state = { .version = CIUKI_NET_VERSION, .size = sizeof(state) };
+    if (fd >= 0) {
+        if (ciuki_devctl(fd, NET_GET_STATE, &state, sizeof(state)) < 0)
+            state = (struct ciuki_net_state){ .version = CIUKI_NET_VERSION, .size = sizeof(state) };
+        close(fd);
+    }
+    desk_shell_network_update(d, &state);
+}
 static void mixer_read(struct desktop *d)
 {
     int fd=d->mixer_fd, own=0;
@@ -608,6 +620,7 @@ static void shell_service(struct desktop *d)
     if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
     int volume_feedback = sh->want_reload & 8;
     if (sh->want_reload & 4) mixer_read(d);
+    if (sh->want_reload & 16) network_read(d);
     sh->want_reload=0;
     if (!sh->wall_valid) desk_shell_wallpaper_update(d);
     if (sh->want_save) {

@@ -11,10 +11,11 @@
 #include "folder.h"
 #include "wallpaper.h"
 #include <stdint.h>
+#include <ciuki/abi.h>
 #define SH_LEVELS 3
 #define SH_ITEMS 20
 #define SH_ICONS (FM_ENTRIES + 4)
-#define SH_TRAY_W 112
+#define SH_TRAY_W 132
 #define SH_START_ROW 30
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
@@ -51,6 +52,9 @@ struct desk_shell {
     uint64_t click_ns; int click_icon;
     int volume_open, volume, muted, mixer_state;   /* mixer_state: 0 unknown, 1 read-only, 2 controllable, -1 absent */
     int volume_drag;
+    struct ciuki_net_state network;
+    int network_open;
+    uint64_t network_poll_ns;
     int start_hot;                  /* the pointer is over the Ciuki button */
     int tooltip; uint64_t hover_since; int32_t hover_x, hover_y;
     int switcher, switch_pick, switch_count, switch_list[16];
@@ -87,6 +91,7 @@ int desk_shell_key(struct desktop *, int code, int value);
 int desk_internal_click(struct desktop *, int index, int32_t x, int32_t y);
 void desk_shell_scale_motion(struct desktop *, int32_t *dx, int32_t *dy);
 void desk_shell_tick(struct desktop *);
+void desk_shell_network_update(struct desktop *, const struct ciuki_net_state *);
 void desk_shell_clock_damage(struct desktop *, uint64_t previous_second);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);
