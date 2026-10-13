@@ -491,7 +491,9 @@ static void wallpaper_load(struct desktop *d)
     /* An empty image draws only the colour; no decoding/scaling on this turn. */
     desk_shell_wallpaper_update(d);
     d->sh.image_failed=0;
-    if (wallpaper_worker_started) wallpaper_serial=desk_wall_worker_submit(&wallpaper_worker,&wallpaper_request);
+    /* The thread may exist before the first frame; decoding never starts before it. */
+    if (wallpaper_worker_started && __atomic_load_n(&startup_us[3],__ATOMIC_ACQUIRE))
+        wallpaper_serial=desk_wall_worker_submit(&wallpaper_worker,&wallpaper_request);
 }
 static void wallpaper_update(struct desktop *d)
 {
@@ -509,6 +511,17 @@ static void wallpaper_update(struct desktop *d)
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
     } else if (!d->sh.wall_valid) desk_shell_wallpaper_update(d);
 }
+/* Create the idle wallpaper thread during initialisation: the kernel's crash-isolation
+ * probe compares the desktop's thread count across its cycles, and a thread born after the
+ * first frame made the ledgers differ (processes_equal=0, f1-usb 2026-10-13). The thread
+ * waits on its mailbox; requests are submitted only after the first frame. */
+static void wallpaper_worker_prepare(struct desktop *d)
+{
+    if (!d->shell || d->sh.gate || wallpaper_worker_started || wallpaper_worker_failed) return;
+    int e=desk_wall_worker_start(&wallpaper_worker,DESK_WALL_CACHE,startup_stage);
+    if (e) { wallpaper_worker_failed=1; snprintf(d->notice,sizeof(d->notice),"Wallpaper worker unavailable (error %d)",e); return; }
+    wallpaper_worker_started=1;
+}
 static void wallpaper_poll(struct desktop *d)
 {
     if (!d->shell || d->sh.gate || d->power.state || !__atomic_load_n(&startup_us[3],__ATOMIC_ACQUIRE)) return;
@@ -521,8 +534,9 @@ static void wallpaper_poll(struct desktop *d)
             snprintf(d->notice,sizeof(d->notice),"Wallpaper worker unavailable (error %d)",e); return;
         }
         wallpaper_worker_started=1;
-        wallpaper_serial=desk_wall_worker_submit(&wallpaper_worker,&wallpaper_request);
     }
+    if (wallpaper_worker_started && !wallpaper_serial)
+        wallpaper_serial=desk_wall_worker_submit(&wallpaper_worker,&wallpaper_request);
     uint32_t *pixels=NULL; int error=0, hit=0;
     if (!wallpaper_worker_started || !desk_wall_worker_take(&wallpaper_worker,wallpaper_serial,&pixels,&error,&hit)) return;
     (void)hit;
@@ -781,7 +795,7 @@ static void shell_setup(struct desktop *d, int gate)
         settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
     }
-    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); }
+    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
 }
 int main(int argc, char **argv)
