@@ -129,7 +129,7 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-50-rendering-architecture](f2-50-rendering-architecture.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (rendering contract, backing-store drags, span occlusion, direct composition, 60 Hz pacing, p95 counters); T23 measurement pending |
 | [f2-51-autoplay](f2-51-autoplay.md) | F2+ | gpt-6.1-sol / high | running 2026-10-13 (owner: AutoPlay for sticks and CDs) |
 | [f2-52-graphics-demo](f2-52-graphics-demo.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner: a demo to see the accelerator; 2D benchmark, software 3D) |
-| [f2-53-tray-polish](f2-53-tray-polish.md) | F2+ | gpt-6.1-sol / high | running 2026-10-13 (owner: tray icons too far from the clock) |
+| [f2-53-tray-polish](f2-53-tray-polish.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (measured tray width, icons packed next to the clock, anchored popups) |
 | [f3-13-dosbox-loading-and-speed](f3-13-dosbox-loading-and-speed.md) | F3 | gpt-6.1-sol / xhigh | running 2026-10-13 (owner: hide the DOS boot, loading window; DOOM lags on the T23) |
 | [f4-12-ui-sounds](f4-12-ui-sounds.md) | F4 | gpt-6.1-sol / high | delivered and merged 2026-10-14 (event sounds, scheme.cfg + registry, Sounds page, volume ticks, VM priority) |
 | [f4-13-dos-vm-audio-on-hardware](f4-13-dos-vm-audio-on-hardware.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (native backend failed after boot: AC97 hand-off race and serial output stall fixed; VMs then attach); T23 listening test pending |
