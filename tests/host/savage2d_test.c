@@ -7,6 +7,7 @@
 #undef main
 #include <ciuki/savage2d.h>
 #include <ciuki/cpu.h>
+#include <time.h>
 static unsigned binding_claims, binding_pci_count;
 static struct pci_func binding_gpu;
 static bool binding_allowed;
@@ -85,6 +86,8 @@ static char disk_marker[16], cache_marker[16];
 static unsigned disk_size, cache_size, marker_commits;
 static bool marker_exists, table_open, marker_open, marker_error, clear_error;
 static unsigned marker_fault;
+static uint32_t marker_cost_us;
+static void marker_delay(void);
 int vfs_table_init(struct vfs *v, struct vfs_table *t, unsigned drive)
 { CHECK(v==&settings_vfs && drive==2 && !table_open); if (marker_fault==1) return -FS_ENOMEM; table_open=true; t->vfs=v; return 0; }
 void vfs_table_destroy(struct vfs_table *t)
@@ -107,6 +110,7 @@ int vfs_truncate(struct vfs_table *t,int fd,uint64_t n)
 int vfs_commit(struct vfs_table *t,int fd)
 {
     CHECK(t==&attempt_table && fd==0 && marker_open);
+    marker_delay();
     if ((!cache_size && clear_error) || marker_fault==5) return -FS_EIO;
     memcpy(disk_marker,cache_marker,sizeof(disk_marker)); disk_size=cache_size; marker_exists=true; marker_commits++; return 0;
 }
@@ -121,7 +125,8 @@ struct model {
     bool stuck, frozen, bad_readback, fail_after_submit, partial, locked, dead, wrong_offset, delay_failed, bci_locked;
     uint8_t misc, seq[256], seq_index;
     uint8_t vga_enable, cr_index;
-    bool alias_dead, mmio_enable_failed, locked39;
+    bool alias_dead, mmio_enable_failed, locked39, decorated, reserved_readbacks, pipe_locked, alias_lock_mismatch;
+    unsigned reset_fault, cr66_reads;
     unsigned port_reads, port_writes, alias_reads, alias_writes, engine_writes;
     unsigned port_cr_reads[256];
     unsigned status_reads, delays, reset_phase;
@@ -130,9 +135,12 @@ struct model {
     uint64_t reset_set_us, reset_clear_us, last_status_us;
     uint32_t status_value;
     uint64_t us;
+    bool exact_clock, last_status_busy;
 };
 static struct model m;
 static struct savage2d test_engine;
+uint64_t ktime_cycles(void) { return m.us * 1000; }
+static void marker_delay(void) { m.us+=marker_cost_us; }
 static void marker_before_register(void)
 {
     if (initializing)
@@ -188,13 +196,14 @@ static uint32_t model_read(void *ctx,uint32_t offset)
     uint32_t value;
     if (offset==SAVAGE_STATUS) {
         CHECK(p->reset_phase==2 && p->reset_set_us>=10000 && p->reset_clear_us>=10000);
-        if (p->status_reads) CHECK(p->us-p->last_status_us>=POLL_US);
+        if (p->last_status_busy) CHECK(p->us-p->last_status_us>=POLL_US);
         p->last_status_us=p->us; p->status_reads++;
         if (p->dead) value=UINT32_MAX;
         else if (p->wrong_offset || p->stuck) value=0;
         else if (p->busy) { p->busy--; value=0x00e00001u; }
         else if (p->contradictory && p->status_reads>1) value=0x004e0000;
         else value=p->status_value ? p->status_value : 0x00e00000u;
+        p->last_status_busy = p->busy || (value & 0x1ffffu);
     } else {
         if (offset>=0x8100 && offset<0x8180) CHECK(!(p->reg[BCI_CONTROL/4]&8));
         value=p->reg[offset/4];
@@ -232,7 +241,17 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
 static uint8_t chip_cr_read(struct model *p,uint8_t index)
 {
     if (index==0x45) p->colour_at=0;
-    return p->cr[index];
+    uint8_t value=p->cr[index];
+    if (p->decorated) {
+        if (index==0x38) value|=0x20;
+        if (index==0x39) value|=8;
+    }
+    if (p->reserved_readbacks) {
+        if (index==0x40) value^=0x80;
+        if (index==0x66 && (++p->cr66_reads&1u)) value|=0x44;
+    }
+    if (index==0x66 && p->reset_fault==3 && p->reset_phase) value^=1u;
+    return value;
 }
 static void chip_cr_write(struct model *p,uint8_t index,uint8_t value)
 {
@@ -243,10 +262,12 @@ static void chip_cr_write(struct model *p,uint8_t index,uint8_t value)
         p->colour[index==0x4b][p->colour_at++]=value;
     }
     if (p->locked || (index==0x39 && p->locked39)) return;
-    if (index>=0x40 && (p->cr[0x38]!=0x48 || (p->cr[0x39]&0xe0)!=0xa0)) return;
+    if (index>=0x40 && ((p->cr[0x38]&0xcc)!=0x48 || (p->cr[0x39]&0xe0)!=0xa0)) return;
     if (index==0x40 && p->mmio_enable_failed) value=(value&~1u)|(p->cr[0x40]&1u);
     if (index==0x66) {
         CHECK((p->cr[index]&1u)==(value&1u));
+        if (p->reset_fault==1) value&=~2u;
+        if (p->reset_fault==2 && p->reset_phase) value|=2u;
         p->reset_phase=value&2u ? 1 : 2;
         if (value&2u) { p->reset_set_us=0; p->reset_clear_us=0; p->status_reads=0; }
     }
@@ -258,6 +279,7 @@ static uint8_t model_cr_read(void *ctx,uint8_t index)
     struct model *p=ctx; marker_before_register(); p->alias_reads++;
     bool logged=trace_read_begin("crr",0x80000000u|index,index);
     uint8_t value=alias_live(p) ? chip_cr_read(p,index) : 0xff;
+    if (index==0x38 && p->alias_lock_mismatch) value^=0x20;
     if (logged) trace_value("crr",index,value);
     return value;
 }
@@ -298,7 +320,7 @@ static void test_outb(uint16_t port,uint8_t value) { model_port_write(&m,port,va
 static uint64_t model_now(void *ctx)
 {
     struct model *p=ctx;
-    if (!p->frozen) p->us+=100;
+    if (!p->frozen && !p->exact_clock) p->us+=100;
     return p->frozen ? 0 : p->us;
 }
 static int model_delay(void *ctx,uint32_t us)
@@ -328,7 +350,7 @@ static void model_write8(void *ctx,uint32_t offset,uint8_t value)
     p->alias_writes++;
     if (!alias_live(p)) return;
     if (offset==0x83c4) p->seq_index=value;
-    else if (offset==0x83c5) p->seq[p->seq_index]=value;
+    else if (offset==0x83c5) { if (!(p->seq_index==0x26 && p->pipe_locked)) p->seq[p->seq_index]=value; }
     else { CHECK(offset==0x83c2); p->misc=value; }
 }
 static void model_drain(void *ctx) { (void)ctx; framebuffer_write_drain(); }
@@ -344,6 +366,7 @@ static uint8_t *storage;
 static void prepare(unsigned bpp)
 {
     memset(&m,0,sizeof(m)); memset(&test_engine,0,sizeof(test_engine));
+    g_cpu_tsc=false; g_tsc_per_ms=0; accel_log_cost=NULL; marker_cost_us=0;
     m.cr[0x66]=1;
     initialized=true; changing=false; drawing=0; console_rows=8;
     g_boot.flags=0; acceleration=NULL;
@@ -488,7 +511,7 @@ static void glue_stalled_clock(uint32_t status)
     CHECK(savage2d_start(&e, &io, &device, true, NULL, 0) == -EIO);
     CHECK(e.quarantined && !e.touched && !e.active && e.idle_waits == 1 && e.timeouts == 1);
     CHECK(step_count>=14);
-    CHECK(!strcmp(step_log[0], "[accel] savage step op=pr8 reg=003c3 value=pending"));
+    CHECK(strstr(step_log[0], "[accel] savage step op=pr8 reg=003c3 value=pending us=")==step_log[0]);
     CHECK(log_matches("op=crr reg=00038 value=00000048")==1);
     CHECK(log_matches("op=r8 reg=083c5 value=00000040")==1);
     CHECK(log_matches(status==UINT32_MAX ? "op=r32 reg=48c60 value=ffffffff" : "op=r32 reg=48c60 value=00000000")==1);
@@ -515,6 +538,7 @@ static void boot_fixture_accel(bool retain_marker)
     if (!retain_marker) { disk_size=0; marker_exists=false; memset(disk_marker,0,sizeof(disk_marker)); }
     CHECK(!queued_work && !table_open && !marker_open);
     queue_allowed=true; g_boot.flags=CBI_F_VERBOSE; step_count=accel_count=0;
+    attempt_in_progress=false;
 }
 static void run_accel_work(void)
 {
@@ -606,7 +630,7 @@ static void deferred_boots(void)
 static void port_bootstrap(void)
 {
     static const char *reasons[]={NULL,NULL,"crtc_locked","crtc_locked",
-        "mmio_enable_failed","mmio_alias_dead","engine_disabled","delay_failed","descriptor_readback_failed"};
+        "crtc_locked","mmio_alias_dead","engine_disabled","delay_failed","descriptor_readback_failed"};
     for (unsigned variant=0;variant<ARRAY_SIZE(reasons);variant++) {
         prepare(32);
         memset(&m,0,sizeof(m)); m.cr[0x66]=variant==6 ? 0 : 1;
@@ -688,6 +712,92 @@ static void port_ownership(void)
     finish();
     binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
 }
+static void decorated_readbacks(void)
+{
+    static const char *reasons[]={NULL,"crtc_locked","crtc_locked","mmio_alias_dead",
+        "reset_readback_failed","reset_readback_failed","reset_readback_failed",
+        "pipe_select_failed"};
+    for (unsigned variant=0;variant<ARRAY_SIZE(reasons);variant++) {
+        boot_fixture_accel(false);
+        m.decorated=true; m.reserved_readbacks=true;
+        if (variant==1) m.locked=true;
+        if (variant==2) m.locked39=true;
+        if (variant==3) m.alias_lock_mismatch=true;
+        if (variant>=4 && variant<=6) m.reset_fault=variant-3;
+        if (variant==7) m.pipe_locked=true;
+        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        CHECK(!!acceleration==(variant==0));
+        CHECK(log_matches(variant==1 ? "op=pr8 reg=003d5 value=00000020 us=" : "op=pr8 reg=003d5 value=00000068 us=")==1);
+        if (variant!=1 && variant!=2) CHECK(log_matches("op=pr8 reg=003d5 value=000000a8 us=")==1);
+        if (!variant) {
+            CHECK(m.status_reads==2 && m.delays==2); /* only the reset delays */
+            CHECK(log_matches("op=crr reg=00038 value=00000068 us=")==1);
+            CHECK(disk_size==0 && engine.active && !engine.quarantined);
+        } else {
+            char reason[96]; snprintf(reason,sizeof(reason),"quarantined reason=%s us=",reasons[variant]);
+            CHECK(log_matches(reason)==1 && disk_size==14);
+            CHECK(!m.status_reads && !m.engine_writes && !engine.status_ready);
+            if (variant<3) CHECK(!m.alias_reads && !m.alias_writes);
+            software_desktop();
+        }
+        for (unsigned i=0;i<step_count && i<128;i++) CHECK(strstr(step_log[i]," us="));
+        finish();
+    }
+}
+static uint64_t simulated_trace_us, simulated_bytes, simulated_log_us;
+static uint64_t host_time_us(void)
+{
+    struct timespec ts;
+    CHECK(!clock_gettime(CLOCK_MONOTONIC,&ts));
+    return (uint64_t)ts.tv_sec*1000000+(uint64_t)ts.tv_nsec/1000;
+}
+static void serial_log_cost(const char *line)
+{
+    /* Default UART: divisor 3, 38400 baud, 8N1, plus CR/LF per line.
+     * Inject elapsed cost, never sleep or claim a physical measurement. */
+    uint64_t bytes=strlen(line)+2, us=(bytes*10000000+38399)/38400;
+    simulated_bytes+=bytes; simulated_log_us+=us; m.us+=us;
+    if (!strncmp(line,"[accel] savage step ",20)) simulated_trace_us+=us;
+}
+static uint64_t log_number(const char *line,const char *field)
+{
+    const char *at=strstr(line,field); CHECK(at!=NULL);
+    return at ? strtoull(at+strlen(field),NULL,10) : 0;
+}
+static void activation_timing(void)
+{
+    for (unsigned variant=0;variant<3;variant++) {
+        boot_fixture_accel(false);
+        m.exact_clock=true; m.decorated=true; m.locked=variant==0;
+        g_cpu_tsc=true; g_tsc_per_ms=1000000;
+        marker_cost_us=8000;
+        simulated_trace_us=simulated_bytes=simulated_log_us=0;
+        accel_log_cost=serial_log_cost;
+        if (variant==2) g_boot.flags=0;
+        uint64_t host_start=host_time_us();
+        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        uint64_t host_us=host_time_us()-host_start;
+        CHECK(log_matches("phase=marker_write us=8000 error=0")==1);
+        if (variant) CHECK(log_matches("phase=marker_clear us=8000 error=0")==1);
+        const char *terminal=NULL;
+        for (unsigned i=0;i<accel_count && i<128;i++)
+            if (strstr(accel_log[i],variant ? "savage ready us=" : "quarantined reason=crtc_locked us=")) terminal=accel_log[i];
+        CHECK(terminal!=NULL);
+        uint64_t us=terminal ? log_number(terminal," us=") : 0;
+        CHECK(terminal && log_number(terminal," trace_us=")==simulated_trace_us);
+        if (!variant) CHECK(!m.status_reads && !m.delays && us>=8000+simulated_trace_us);
+        if (variant==2) CHECK(m.delays==2 && engine.reset_us==20000 && engine.poll_us<=simulated_log_us && !simulated_trace_us);
+        /* Clock conversion and tick fallback both execute production code. */
+        CHECK(hw_now(NULL)==m.us);
+        g_cpu_tsc=false; g_ticks=7; CHECK(hw_now(NULL)==7000);
+        printf("savage timing model variant=%u activation_us=%llu trace_us=%llu reset_us=%llu poll_us=%llu serial_bytes=%llu serial_us=%llu marker_us=%u host_us=%llu\n",
+            variant,(unsigned long long)us,(unsigned long long)simulated_trace_us,
+            (unsigned long long)engine.reset_us,(unsigned long long)engine.poll_us,
+            (unsigned long long)simulated_bytes,(unsigned long long)simulated_log_us,marker_cost_us,(unsigned long long)host_us);
+        accel_log_cost=NULL; marker_cost_us=0;
+        finish();
+    }
+}
 int main(void)
 {
     CHECK(!framebuffer_regression_main());
@@ -697,6 +807,7 @@ int main(void)
     glue_stalled_clock(UINT32_MAX);   /* master-aborted (dead) aperture */
     deferred_boots();
     port_bootstrap(); port_ownership();
+    decorated_readbacks(); activation_timing();
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);
     return failures ? 1 : 0;
 }

@@ -188,6 +188,48 @@ retain quarantined leases. `fbdev_change_end` then schedules the next attempt.
 No shared port lease or overlapping access is allowed. Attempt-marker ordering
 and durability remain unchanged.
 
+## f1-41: functional unlock and activation timing
+
+Research checked on 2026-10-13 against [RE046-B](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf#page=79),
+printed pp. 75–76, 78 and 89. CR38 accepts key pattern 01xx10xx;
+CR39 accepts 101xxxxx. CR38.5 and CR39.3 are unspecified key bits,
+so 68h/A8h satisfy the keys. The reference does not label those bits
+as read-only status, fixed-one reserved bits or lock-state indicators.
+RE046-B describes Savage4; the T23 SuperSavage observations establish the
+actual readback, not an additional documented meaning for those bits.
+
+Keep both port lock readbacks for diagnosis. Unlock success requires
+setting CR40.0 through the ports and reading it back set (`crtc_locked`
+otherwise), preserving the other fields. An already-set bit is accepted.
+Compare the MMIO CR38 alias with the actual port readback, including its
+unspecified bits. CR66 verification ignores reserved bits 2 and 6 but
+checks all defined controls (mask BBh), including engine enable and both
+reset edges. MISC already checks only colour-decode bit 0. SR26 does not
+appear in RE046-B; the retrieved [X.Org source](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c)
+uses named IGA selectors but does not define their bit fields. Retain its
+full readback check until a primary reference establishes a safe mask.
+GBD descriptor and BCI control checks retain their existing semantics.
+The two upstream 10-ms reset intervals and the prohibition on MM48C60
+before a verified completed reset remain binding.
+
+Timing records use calibrated TSC microseconds, falling back to PIT
+milliseconds. Each register breadcrumb carries cumulative `us=`; final
+ready/quarantine records carry activation elapsed time, reset and idle-wait
+time, and time spent emitting register breadcrumbs. Marker write/clear
+records separately time the durable file operation outside the presenter
+mutex. Elapsed values include scheduling and synchronous logging, and a
+pending read is still emitted before the bus cycle. The driver polls idle
+immediately, delaying 5 us only between busy reads; it keeps the elapsed
+deadline and frozen-clock read cap. No reset interval is shortened.
+
+The f1-41 capture fails before CR40/reset/status, so neither reset delays
+nor idle polling account for its 385566-us work overrun. `klog` writes
+synchronously through `core/output.c` and `core/serial.c`; at the default
+38400-baud 8N1 setting each serial byte occupies about 260 us. The host
+harness accounts for breadcrumb bytes and injects logging/marker costs to
+check attribution. This is a timing model; the lead's T23 capture must
+measure the actual marker, logging and bus-access costs.
+
 ## Display grant wire service
 
 Syscall 77, `CIUKI_SYS_DISPLAY_ACCEL`: EBX is the noninheritable display

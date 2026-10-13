@@ -9,6 +9,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/savage2d.h>
 #include <ciuki/work.h>
+#include <ciuki/timing.h>
 #include "../fs/vfs.h"
 #define RECT 0x48000000u
 #define XP 0x01000000u
@@ -64,17 +65,23 @@ static int wait_idle(struct savage2d *s)
     s->idle_waits++;
     uint64_t start = s->io.now_us(s->io.ctx);
     for (unsigned i = 0; i < WAIT_POLLS; i++) {
-        if (s->io.delay_us(s->io.ctx, POLL_US)) { s->reason = "delay_failed"; break; }
+        /* No pacing before the first read of a new idle check. Reset has
+         * already settled; only consecutive busy reads need the interval. */
+        if (i && s->io.delay_us(s->io.ctx, POLL_US)) { s->reason = "delay_failed"; break; }
         uint32_t status = s->io.read32(s->io.ctx, SAVAGE_STATUS);
         if (!s->status_logged) {
             klog("[accel] savage status reg=48c60 raw=%08x", status);
             s->status_logged = true;
         }
-        if (idle_status(s, status)) { s->cpu_safe = true; return 0; }
+        if (idle_status(s, status)) {
+            s->poll_us += s->io.now_us(s->io.ctx) - start;
+            s->cpu_safe = true; return 0;
+        }
         if (status == UINT32_MAX || (s->reason && !strncmp(s->reason, "status_contradiction", sizeof("status_contradiction"))) ||
             s->io.now_us(s->io.ctx) - start >= WAIT_US) break;
     }
     if (!s->reason) s->reason = "idle_timeout";
+    s->poll_us += s->io.now_us(s->io.ctx) - start;
     s->cpu_safe = false;
     return -EIO;
 }
@@ -269,6 +276,7 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
         cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready};
     s->reason = 0; s->idle_mask = 0; s->status_logged = false;
     s->status_ready = false;
+    s->reset_us = s->poll_us = 0;
     /* Bootstrap through legacy I/O: the MMIO VGA alias is not yet proven.
      * RE046-B CR39: A0 unlocks extensions without the extra A5 permissions. */
     uint8_t vga = io->read_port(io->ctx, 0x3c3);
@@ -276,13 +284,14 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     uint8_t port_misc = io->read_port(io->ctx, 0x3cc);
     io->write_port(io->ctx, 0x3c2, port_misc | 1u);
     port_cr_write(s, 0x38, 0x48); port_cr_write(s, 0x39, 0xa0);
-    uint8_t cr38 = port_cr_read(s, 0x38), cr39 = port_cr_read(s, 0x39);
-    if (cr38 != 0x48 || cr39 != 0xa0)
-        return fail(s, "crtc_locked");
+    /* RE046-B pp. 75–76: unspecified key bits need not read back as
+     * written (T23: 68/A8). Keep both reads in the diagnostic transport. */
+    uint8_t cr38 = port_cr_read(s, 0x38);
+    (void)port_cr_read(s, 0x39);
     s->saved40 = port_cr_read(s, 0x40); s->mmio_saved = true;
     port_cr_write(s, 0x40, s->saved40 | 1u);
-    if (port_cr_read(s, 0x40) != (uint8_t)(s->saved40 | 1u))
-        return fail(s, "mmio_enable_failed");
+    if (!(port_cr_read(s, 0x40) & 1u))
+        return fail(s, "crtc_locked");
     if (io->read_cr(io->ctx, 0x38) != cr38) return fail(s, "mmio_alias_dead");
     /* Nothing in the engine domain, especially MM48C60, before CR66 reset. */
     io->write8(io->ctx, 0x83c4, 0x08); io->write8(io->ctx, 0x83c5, 0x06);
@@ -296,18 +305,23 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     if (!(io->read8(io->ctx, 0x83cc) & 1u)) return fail(s, "crtc_select_failed");
     /* CR66.0 may only change during blank/retrace. Preserve the VBE engine
      * enablement; a firmware mode without it retains software presentation. */
-    uint8_t cr66 = io->read_cr(io->ctx, 0x66);
+    uint8_t cr66 = io->read_cr(io->ctx, 0x66) & 0xbbu;
     if (!(cr66 & 1u)) {
         s->cpu_safe=true; s->reason="engine_disabled"; restore_mmio(s); return -ENODEV;
     }
+    uint64_t reset_start = io->now_us(io->ctx);
     io->write_cr(io->ctx, 0x66, cr66 | 2u);
     int delay = io->delay_us(io->ctx, 10000);
     uint8_t asserted = io->read_cr(io->ctx, 0x66);
     /* Always deassert reset even when pacing failed. Never change CR66.0. */
     io->write_cr(io->ctx, 0x66, cr66 & ~2u);
     int settled = io->delay_us(io->ctx, 10000);
+    s->reset_us = io->now_us(io->ctx) - reset_start;
     if (delay || settled) return fail(s, "delay_failed");
-    if (asserted != (uint8_t)(cr66 | 2u) || io->read_cr(io->ctx, 0x66) != (uint8_t)(cr66 & ~2u))
+    /* Reserved CR66.2/.6 have undefined reads. All defined controls,
+     * especially enable and both reset edges, must still agree. */
+    if ((asserted & 0xbbu) != ((cr66 | 2u) & 0xbbu) ||
+        (io->read_cr(io->ctx, 0x66) & 0xbbu) != ((cr66 & ~2u) & 0xbbu))
         return fail(s, "reset_readback_failed");
     s->status_ready = true;
     if (sync_engine(s)) return -EIO;
@@ -356,15 +370,34 @@ static uint64_t last_log;
  * bus (T23, 2026-10-13). Repeated accesses (polling) print only once. */
 static bool tracing;
 static uint32_t trace_last = UINT32_MAX;
+static uint64_t hw_now(void *ctx)
+{
+    (void)ctx;
+    if (!g_cpu_tsc || !g_tsc_per_ms) return g_ticks * 1000;
+    uint64_t cycles = ktime_cycles();
+    return cycles / g_tsc_per_ms * 1000 + cycles % g_tsc_per_ms * 1000 / g_tsc_per_ms;
+}
+static uint64_t (*activation_now)(void *) = hw_now;
+static void *activation_ctx;
+static uint64_t activation_start, trace_us;
+static bool attempt_in_progress;
+static uint64_t activation_elapsed(void)
+{ return activation_now(activation_ctx) - activation_start; }
 static bool trace_read_begin(const char *op, uint32_t key, uint32_t reg)
 {
     if (!tracing || key == trace_last) return false;
     trace_last = key;
-    klog("[accel] savage step op=%s reg=%05x value=pending", op, reg);
+    uint64_t start = activation_now(activation_ctx);
+    klog("[accel] savage step op=%s reg=%05x value=pending us=%llu", op, reg, start - activation_start);
+    trace_us += activation_now(activation_ctx) - start;
     return true;
 }
 static void trace_value(const char *op, uint32_t reg, uint32_t value)
-{ klog("[accel] savage step op=%s reg=%05x value=%08x", op, reg, value); }
+{
+    uint64_t start = activation_now(activation_ctx);
+    klog("[accel] savage step op=%s reg=%05x value=%08x us=%llu", op, reg, value, start - activation_start);
+    trace_us += activation_now(activation_ctx) - start;
+}
 static void trace_write(const char *op, uint32_t key, uint32_t reg, uint32_t value)
 {
     if (!tracing) return;
@@ -432,7 +465,6 @@ static void hw_port_write(void *ctx, uint16_t port, uint8_t value)
     (void)ctx; trace_write("pw8", 0x50000000u | port, port, value);
     if (port >= 0x3b0 && port < 0x3e0) outb(port, value);
 }
-static uint64_t hw_now(void *ctx) { (void)ctx; return g_ticks * 1000; }
 static bool initializing;
 static int hw_delay(void *ctx, uint32_t us)
 {
@@ -524,7 +556,7 @@ static int runtime_stop(void *ctx)
 #define ATTEMPT_PATH "C:/system/settings/accel.cfg"
 static struct vfs_table attempt_table;
 static bool attempt_blocked;
-static int attempt_marker(struct vfs *vfs, bool clear, bool *previous)
+static int attempt_marker_io(struct vfs *vfs, bool clear, bool *previous)
 {
     if (!vfs || !vfs->volumes[2] || !vfs->volumes[2]->mounted) return -FS_ENOENT;
     int err = vfs_table_init(vfs, &attempt_table, 2);
@@ -552,14 +584,28 @@ out:
     vfs_table_destroy(&attempt_table);
     return err;
 }
+static int attempt_marker(struct vfs *vfs, bool clear, bool *previous)
+{
+    uint64_t start = hw_now(0);
+    int err = attempt_marker_io(vfs, clear, previous);
+    klog("[accel] savage phase=marker_%s us=%llu error=%d", clear ? "clear" : "write", hw_now(0) - start, err);
+    return err;
+}
 static const struct accel_ops *decline(const char *reason)
 {
-    klog("[accel] savage quarantined reason=%s", reason);
+    klog("[accel] savage quarantined reason=%s us=%llu reset_us=%llu poll_us=%llu trace_us=%llu",
+        reason, activation_elapsed(), engine.reset_us, engine.poll_us, trace_us);
+    attempt_in_progress = false;
     return 0;
 }
 static const struct accel_ops *init_with_io(const struct fb_device *d, struct vfs *vfs,
                                           const struct savage_io *io)
 {
+    if (vfs || !attempt_in_progress) {
+        activation_now = io->now_us; activation_ctx = io->ctx;
+        activation_start = activation_now(activation_ctx);
+    }
+    trace_us = 0;
     if (engine.quarantined || attempt_blocked)
         return decline(engine.reason ? engine.reason : "attempt_blocked");
     const struct pci_func *gpu = 0; unsigned displays = 0;
@@ -661,23 +707,27 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
             return decline("marker_clear_failed");
         }
     }
-    klog("[accel] savage ready");
+    klog("[accel] savage ready us=%llu reset_us=%llu poll_us=%llu trace_us=%llu",
+        activation_elapsed(), engine.reset_us, engine.poll_us, trace_us);
+    attempt_in_progress = false;
     return &engine.ops;
 }
 
 /* Kernel callers: marker file I/O outside any presenter lock. */
 int savage2d_attempt_begin(struct vfs *vfs)
 {
-    if (engine.quarantined || attempt_blocked) return -1;
+    activation_now = hw_now; activation_ctx = 0; activation_start = hw_now(0);
+    trace_us = 0; attempt_in_progress = true;
+    if (engine.quarantined || attempt_blocked) { attempt_in_progress = false; return -1; }
     bool previous = false;
     int marker = attempt_marker(vfs, false, &previous);
     if (previous) {
         attempt_blocked = true;
         klog("[accel] savage skipped after a failed attempt");
-        klog("[accel] savage quarantined reason=previous_attempt");
+        decline("previous_attempt");
         return -1;
     }
-    if (marker) { attempt_blocked = true; klog("[accel] savage quarantined reason=marker_unavailable"); return -1; }
+    if (marker) { attempt_blocked = true; decline("marker_unavailable"); return -1; }
     klog("[accel] savage attempt persisted");
     return 0;
 }
@@ -694,7 +744,7 @@ void savage2d_quarantine(const char *reason)
         engine.io.write_cr(engine.io.ctx, 0x45, engine.saved45 & ~1u);
     engine.quarantined = true; engine.active = false; engine.reason = reason;
     hw_fault(0);
-    klog("[accel] savage quarantined reason=%s", reason);
+    decline(reason);
 }
 const struct accel_ops *savage2d_init(const struct fb_device *d, struct vfs *vfs)
 {

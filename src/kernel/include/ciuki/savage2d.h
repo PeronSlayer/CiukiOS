@@ -33,6 +33,7 @@ struct savage2d {
     uint32_t idle_mask, idle_value;
     const char *reason;
     uint64_t operations, idle_waits, fallbacks, timeouts;
+    uint64_t reset_us, poll_us;
     bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded, status_logged;
     bool mmio_saved, status_ready;
 };
