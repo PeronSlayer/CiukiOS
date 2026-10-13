@@ -6,14 +6,22 @@
 
 Both the `N` and `L` boots stop right after `[init] flag safe_mode=0 boot_flags=00000a08 activation_seq=1`; no `[init] framebuffer` line follows. `fbdev_init()` (src/kernel/drivers/fbdev.c ~175) called `savage2d_init(&device)` during the framebuffer activation; the lead made that call compile-time opt-in (`CIUKI_ACCEL_SAVAGE`, commit 03bf0427) as a stopgap. The owner wants the driver working, not disabled. The adapter is the SuperSavage IX/C, PCI 5333:8c2e (two `[display] mtrr wc` lines show the LFB at e8000000, 4 MiB WC range).
 
-## Likely defects to verify and fix (`src/kernel/drivers/savage2d.c`, the fbdev glue)
+## Findings of the independent review (lead and Opus agent, 2026-10-13, `../CiukiOS-wt-savage-review/build/savage-review.md`, branch `wt/savage-review`)
 
-1. **Waits that cannot end**: `wait_idle`/`sync_engine` bound their loops with `io->now_us`; at framebuffer activation the time source may not be calibrated yet (TSC/PIT), so a wait never expires. Bound every wait by an iteration count as well as time, and make a stuck clock a quarantine reason.
-2. **MMIO base and BAR validation**: on Savage4/ProSavage/SuperSavage the MMIO registers live at the LFB BAR base + 0x1000000 (new-style MMIO), on Savage3D/MX elsewhere; the BAR must be large enough (the 0x8c2e aperture), the PCI command register must have memory space enabled, and the mapping must be uncached. Before any engine register is used, read a known register (status/BCI) and refuse (quarantine) on 0xFFFFFFFF or on values that contradict the VBE mode (pitch/bpp). Record the BAR, the computed MMIO base and the first reads in verbose boot.
-3. **Register access order on real silicon**: CR66.0 (engine enable) read through the VGA CRTC ports requires the CRTC extended registers unlocked (CR38/CR39/CR40 S3 unlock sequence) on real chips; verify the unlock is done before reading/writing CR31/CR40/CR45/CR50/CR55/CR66; verify the BCI enable bits and the GBD/PBD descriptors against the documentation for the SuperSavage (tiled versus linear, BCI buffer size bits 0x48c18).
-4. **Late initialisation**: do not initialise the engine inside `fbdev_init()`; do it from a kernel work item after timers are calibrated and the console is quiet (before the desktop's first present, or lazily at the first accelerated operation), under a watchdog: if the engine does not answer within 100 ms the driver quarantines itself and the software presenter continues. The boot must reach the desktop even when the chip does not answer at all.
-5. **Records**: `[accel] savage bar=.. mmio=.. status=.. cr66=.. step=..` for each step in verbose boot, `[accel] savage ready` or `[accel] savage quarantined reason=..` always (one line), so a single `L` capture explains a failure.
-6. Remove the compile-time gate once 1–5 are in place (acceleration on by default, with the quarantine as the safety net); keep an explicit `accel=0` BOOT.CFG key only if the loader already parses keys cheaply, otherwise leave it for later and say so.
+Read that report first and merge its patch (`git merge wt/savage-review` is done by the lead; its files may already be in this worktree: breadcrumb records `[accel] savage probe/mapped/step op=.. reg=..` and the stalled-clock/dead-aperture host tests). Facts established:
+
+- Every software loop on the init path terminates (`wait_idle` has a 100000-poll cap; `g_ticks` and `timing_calibrate()` run before `drivers_init()`), serial output precedes the screen, and no `[accel]` line appears: the CPU stopped inside one register access that never completed. An unmapped BAR read returns all-ones, it does not hang.
+- For the SuperSavage IX/C (8c2e) the register window is **BAR0 + 0, 512 KiB**, which the driver maps uncached and correctly; "BAR + 16 MiB" is the Savage3D/MX/IX layout and must NOT be used for this chip. PCI memory-space enable is checked. CR38 = 48h / CR39 = A5h unlock is correct.
+- The most likely stall is the **first read of the engine status register 0x48c60**: X.Org's savage driver documents a chip bug that can lock the bus on that read, and ThinkWiki lists the ThinkPad T20–T23 among the affected machines; the driver reads it right after CR66 without resetting the engine. X.Org and Linux savagefb pulse **CR66 bit 1** (and Linux also CR3F bit 3) before using the engine. Second candidate: writes to 0x8128–0x8134 or the descriptors 0x8168/0x816c while the command interface is active (register manual RE046-B).
+
+## Required changes
+
+1. Before the first status read: unlock (CR38/CR39), select display pipe 1 (SR26 = 40h), set the CRTC to 3D4 (MISC bit 0), then pulse CR66 bit 1 (about 10 ms set, 10 ms clear), as the reference drivers do; only then read 0x48c60 **sparsely** (short delay between polls, a cap of a few hundred reads, never a tight loop of 100000).
+2. Keep the engine descriptors untouched while the command interface is active (check the BCI/CI state and disable it first per RE046-B), then program them.
+3. Log the raw 0x48c60 value once before choosing the idle mask (the manual and the two reference drivers disagree on the idle bits); quarantine on contradictions.
+4. **Persistent attempt marker**: write `accel=attempt` into the settings volume before touching the engine and clear it after success; a boot that finds the marker set skips the accelerator (software presenter) and logs `[accel] savage skipped after a failed attempt`, so a bus lock can never brick the boot twice. Initialise late (a kernel work item after storage is mounted and timers run), never inside `fbdev_init()`.
+5. Keep the breadcrumb records of the review in verbose boot; always emit one summary line (`ready` or `quarantined reason=..`).
+6. Remove the compile-time gate so the accelerator is on by default with these guards.
 
 ## Tests (host)
 
