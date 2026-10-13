@@ -62,7 +62,7 @@ void desk_autoplay_service(struct desktop *d)
     if (a->open || !a->waiting) return;
     for (unsigned i=3;i<26;i++) if (a->waiting&(1u<<i)) {
         a->waiting&=~(1u<<i); a->active=a->pending[i]; a->selected=AP_FOLDER; a->always=0;
-        if (ap_probe(d->autoplay_fs,i,&a->content)) {
+        if (ap_probe_workspace(d->autoplay_fs,i,&a->content,a->workspace)) {
             memset(&a->content,0,sizeof(a->content));
             snprintf(a->content.root,sizeof(a->content.root),"/mnt/%c",'a'+i);
         }

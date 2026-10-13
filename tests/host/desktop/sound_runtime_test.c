@@ -58,6 +58,25 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
     pthread_mutex_unlock(&fake_lock);return 0;
 }
 void desk_queue(struct desktop *d,int client,const struct ciuki_message *m){(void)d;(void)client;(void)m;}
+#ifdef DESK_FOOTPRINT_TEST
+#include "footprint_alloc.h"
+/* Hold the newly created worker until the first-frame boundary. This makes
+ * late startup allocations reproducible, independent of host scheduling. */
+static pthread_mutex_t start_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t start_changed=PTHREAD_COND_INITIALIZER;
+static int start_held=1;
+static void *(*start_function)(void *);
+static void *start_argument;
+static void *held_worker(void *unused)
+{
+    (void)unused; pthread_mutex_lock(&start_lock);
+    while (start_held) pthread_cond_wait(&start_changed,&start_lock);
+    pthread_mutex_unlock(&start_lock); return start_function(start_argument);
+}
+static int footprint_thread_create(pthread_t *t,const pthread_attr_t *a,void *(*fn)(void *),void *arg)
+{ start_function=fn; start_argument=arg; return pthread_create(t,a,held_worker,NULL); }
+#define pthread_create footprint_thread_create
+#endif
 #define sound_load_at fake_sound_load_at
 #define fopen fake_fopen
 #define open fake_open
@@ -69,6 +88,9 @@ void desk_queue(struct desktop *d,int client,const struct ciuki_message *m){(voi
 #undef open
 #undef close
 #undef write
+#ifdef DESK_FOOTPRINT_TEST
+#undef pthread_create
+#endif
 static int complete(void)
 {
     uint64_t deadline=now_ns()+3000000000ull;
@@ -88,6 +110,10 @@ int main(void)
     for(unsigned i=0;i<50;i++)assert(!push(SOUND_VOLUME,0));
     assert(rt.count==1);rt.count=rt.head=rt.busy=0;rt.queued=(struct sound_throttle){0};rt.live=0;
     static struct desktop d;d.clients[0].window=1;d.clients[0].window_id=1;d.now_ns=now_ns();desk_sound_init(&d);
+#ifdef DESK_FOOTPRINT_TEST
+    footprint_begin("sound_after_init");
+    pthread_mutex_lock(&start_lock); start_held=0; pthread_cond_signal(&start_changed); pthread_mutex_unlock(&start_lock);
+#endif
     assert(d.sound_request && d.sound_shutdown); /* defaults loading may still be in progress */
     assert(request(&d,0,DESK_SETTINGS_AUDIO_TEST,0,1)==DESK_SOUND_PENDING);
     assert(request(&d,0,DESK_SETTINGS_AUDIO_TEST,0,2)==-EBUSY);
@@ -134,6 +160,10 @@ int main(void)
     pthread_mutex_lock(&fake_lock);delay_consumed=0;pthread_mutex_unlock(&fake_lock);
     d.now_ns=now_ns();assert(!shutdown_wait(&d));wait_idle();d.now_ns=now_ns();assert(shutdown_wait(&d));cancel(&d);wait_idle();
     pthread_mutex_lock(&fake_lock);assert(closed>=5);pthread_mutex_unlock(&fake_lock);
+#ifdef DESK_FOOTPRINT_TEST
+    unsigned allocations=footprint_end();
+    if (!getenv("CIUKI_FOOTPRINT_AUDIT")) assert(!allocations);
+#endif
     puts("PASS sound worker: full tone acceptance, EAGAIN/EINTR/short writes, absent device, failure, timeout, shutdown drain/deadline/cancel");
     return 0;
 }

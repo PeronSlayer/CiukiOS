@@ -85,7 +85,47 @@ is 768 bytes so long latency records keep their final fields and newline.
 
 At 1024x768, removing two duplicate frames saves 6 MiB when acceleration is
 available (3 MiB in software). Row metadata costs 195 KiB at this resolution.
-Sixteen 400x300 chrome caches cost approximately 0.8 MiB total; client surfaces were already allocated.
+### F2-55 stable first-frame memory (2026-10-14)
+
+Newlib's [allocator documentation](https://sourceware.org/newlib/libc.html#malloc)
+distinguishes allocated objects from free space retained in the malloc arena;
+[mallopt](https://sourceware.org/newlib/libc.html#mallinfo) describes returning
+topmost free space through a negative `_sbrk_r`. In this repository,
+`sdk/libciuki/posix.c:_sbrk_r` passes changes to `ua_brk`; this does not promise
+that freeing a particular buffer immediately removes its extent. Do not change
+the allocator, memory limits or crash-isolation equality rule to hide a cache
+allocation. Reserve the desktop's steady-state storage before its first frame.
+
+The host allocation harness reproduced a 31,056-byte chrome allocation when
+a 240x160 client first appeared in an unused slot, including the victim slot
+after the survivor baseline. This fits the observed eight-page growth, although
+only the lead's QEMU run can establish the guest allocator's exact extent change.
+The native probe uses `--gate`, which skips audio, folder polling, AutoPlay and
+image-file wallpaper loading; those cannot explain that probe's growth.
+
+Reserve one chrome pool before composition, with sixteen fixed slices. Each
+slice contains `4 * (W * (DESK_TITLE + DESK_BORDER) + 2 * DESK_BORDER * H)`
+bytes, where W/H are the display dimensions capped at 2048. At 1024x768 this
+is 129,024 bytes per slot, 2,064,384 bytes total, plus cache keys. It covers
+caption, both sides and bottom at every size within those bounds. Reusing a
+slot, changing its size/title/theme, or recovering a crashed client only
+repaints its slice. Larger frames use the same uncached theme painter. Failed
+pool allocation also selects that painter until renderer teardown; it never
+retries on a later client event. Display-mode changes explicitly release and
+prepare storage for the new dimensions before the replacement frame.
+
+AutoPlay reserves one content-discovery workspace when the shell is enabled;
+its bound is two directory-scan records plus `AP_INF_MAX+1` bytes (10,392 bytes
+on the 64-bit host). It is owned by that desktop and reused serially. Standalone
+Files/Control Panel discovery retains the existing independently owned API.
+
+Audio initialisation owns one worker block containing all eighteen
+`SOUND_FILE_MAX+1` WAV slots, player metadata and the 22,050-sample hardware-test
+tone. The file slots total 1,661,346 bytes; initial scheme/registry loading
+finishes before thread creation. WAV reads and playback remain asynchronous on
+the worker, including when its first turn occurs after the first frame. Reload
+reuses the same WAV slots; explicit preference changes may still parse registry
+data. Volume/window/menu/device events never allocate decode or mix buffers.
 No allocator limit, E820 policy or supported hardware memory floor changes.
 
 Budget estimates for a 1 GHz Pentium III are hypotheses, not qualification:
