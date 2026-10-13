@@ -68,6 +68,10 @@ void fbdev_console_end(void);
 /* Live damage operations: */
 int fbdev_present(const struct fb_surface *src, const struct fb_rect *dst);
 int fbdev_fill(const struct fb_rect *rect, uint32_t colour);
+struct ciuki_accel_request;
+int fbdev_accel_request(const struct ciuki_accel_request *);
+void fbdev_cursor_hide(void);
+int fbdev_copy_to(const struct fb_device *, const struct fb_rect *, int32_t, int32_t);
 /* Same production renderer for private shadow fixtures. These do not claim
  * hardware or mutate the live device. Caller owns and serializes the target;
  * metadata must describe the complete mapped allocation. */

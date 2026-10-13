@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 /* The shell (shell.c) is linked only into /Programs/desktop; the demo and the
  * libdeskui programs reuse this file for glyphs and frames without it. */
 extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
@@ -339,20 +340,169 @@ void desk_composite(struct desktop *d, struct desk_box clip)
         last = d->clients[next].order; window(d,next,clip);
     }
     if (d->shell) desk_shell_draw(d,clip);
-    for (int y = 0; y < 17; y++) for (int i = 0; i < 11; i++) {
+    for (int y = 0; !d->hw_cursor && y < 17; y++) for (int i = 0; i < 11; i++) {
         char k=arrow[y][i];
         if (k!='.') fill(d,(struct desk_box){d->mouse_x+i,d->mouse_y+y,1,1},clip,k=='#' ? 0x101010u : 0xffffffu);
     }
 }
+static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
+{
+    q->size=sizeof(*q); q->generation=d->accel_generation;
+    return d->accel ? d->accel(d->display,q) : -ENOSYS;
+}
+void desk_accel_reset(struct desktop *d, uint32_t generation)
+{
+    free(d->accel_front); d->accel_front=NULL; d->accel_front_valid=0;
+    d->hw_cursor=0; d->cursor_dirty=1; d->copy_pending=0;
+    d->accel_generation=generation;
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
+    int caps=accel_call(d,&q);
+    d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+    if (d->accel_caps&1u) d->accel_front=calloc((size_t)d->width*d->height,4);
+    if (!d->accel_front) d->accel_caps&=~1u;
+    if (d->accel_caps&2u) {
+        q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
+        for (unsigned y=0; y<17; y++) for (unsigned x=0; x<11; x++) {
+            if (arrow[y][x]!='.') q.cursor_mask[y]|=0x80000000u>>x;
+            if (arrow[y][x]=='o') q.cursor_image[y]|=0x80000000u>>x;
+        }
+        if (!accel_call(d,&q)) d->hw_cursor=1;
+    }
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+}
+void desk_cursor_motion(struct desktop *d)
+{
+    if (d->hw_cursor) d->cursor_dirty=1;
+    else desk_damage_add(&d->damage,(struct desk_box){d->mouse_x,d->mouse_y,12,18},d->width,d->height);
+}
+static void ram_copy(struct desktop *d, const struct ciuki_rect *r)
+{
+    for (uint32_t n=0; n<r->height; n++) {
+        uint32_t y=r->dst_y>r->src_y ? r->height-1-n : n;
+        memmove(d->accel_front+((uint32_t)r->dst_y+y)*d->width+(uint32_t)r->dst_x,
+                d->accel_front+((uint32_t)r->src_y+y)*d->width+(uint32_t)r->src_x,r->width*4);
+    }
+}
+static int screen_copy(struct desktop *d, const struct ciuki_rect *r)
+{
+    struct ciuki_accel_request q={.operation=CIUKI_ACCEL_COPY,.rect=*r};
+    if (accel_call(d,&q)) {
+        d->accel_front_valid=0;
+        q.operation=CIUKI_ACCEL_QUERY;
+        int caps=accel_call(d,&q);
+        d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+        if (!(d->accel_caps&2u)) d->hw_cursor=0;
+        desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+        return -1;
+    }
+    ram_copy(d,r); d->presents++;
+    return 0;
+}
+/* A scroll is accelerated only after comparing every translated client pixel
+ * with the last completed RAM frame. Samples merely reject candidates early. */
+static void scroll_copy(struct desktop *d)
+{
+    if (!(d->accel_caps&1u) || !d->hw_cursor || !d->accel_front_valid ||
+        !d->damage.count || d->menu_open || d->sh.levels || d->sh.volume_open ||
+        d->sh.switcher || d->sh.tooltip || d->power.state) return;
+    for (unsigned i=0; i<DESK_CLIENTS; i++) {
+        struct desk_client *c=&d->clients[i];
+        struct desk_box b=desk_content(c), ignored;
+        if (!c->window || c->internal || c->minimized || c->collapsed || !c->pixels ||
+            b.w<64 || b.h<32 || b.x<0 || b.y<0 || b.x+b.w>(int32_t)d->width || b.y+b.h>(int32_t)d->height ||
+            b.w!=(int32_t)c->info.width || b.h!=(int32_t)c->info.height) continue;
+        int visible=1, damaged=0;
+        for (unsigned j=0; j<DESK_CLIENTS; j++) if (j!=i && d->clients[j].window && !d->clients[j].minimized &&
+            d->clients[j].order>c->order && desk_intersect(desk_outer(&d->clients[j]),b,&ignored)) visible=0;
+        for (unsigned j=0; j<d->damage.count; j++) if (desk_intersect(d->damage.boxes[j],b,&ignored)) damaged=1;
+        if (!visible || !damaged) continue;
+        for (int delta=1; delta<=64 && delta<b.h/2; delta++) for (int dir=-1; dir<=1; dir+=2) {
+            int sy=dir<0 ? delta : 0, dy=dir<0 ? 0 : delta, same=1, changed=0;
+            const uint32_t *a=c->pixels+(uint32_t)dy*c->info.width;
+            const uint32_t *old=d->accel_front+(uint32_t)(b.y+sy)*d->width+(uint32_t)b.x;
+            if ((a[0]&0xffffffu)!=old[0] || (a[b.w/2]&0xffffffu)!=old[b.w/2] || (a[b.w-1]&0xffffffu)!=old[b.w-1]) continue;
+            const uint32_t *at=d->accel_front+(uint32_t)(b.y+dy)*d->width+(uint32_t)b.x;
+            if ((a[0]&0xffffffu)==at[0] && (a[b.w/2]&0xffffffu)==at[b.w/2] && (a[b.w-1]&0xffffffu)==at[b.w-1]) continue;
+            for (int y=0; y<b.h-delta && same; y++) for (int x=0; x<b.w; x++) {
+                uint32_t v=c->pixels[(uint32_t)(dy+y)*c->info.width+(uint32_t)x]&0xffffffu;
+                if (v!=d->accel_front[(uint32_t)(b.y+sy+y)*d->width+(uint32_t)(b.x+x)]) { same=0; break; }
+                if (v!=d->accel_front[(uint32_t)(b.y+dy+y)*d->width+(uint32_t)(b.x+x)]) changed=1;
+            }
+            if (same && changed) {
+                struct ciuki_rect r={b.x,b.y+sy,b.x,b.y+dy,(uint32_t)b.w,(uint32_t)(b.h-delta)};
+                (void)screen_copy(d,&r); return; /* one candidate per frame */
+            }
+        }
+    }
+}
+static int present_box(struct desktop *d, struct desk_box b)
+{
+    if (!d->accel_front || !d->accel_front_valid) {
+        struct ciuki_rect r={b.x,b.y,b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
+        if (d->ops.present(d->display,d->output,&r)) return -1;
+        if (d->accel_front) for (int32_t y=b.y; y<b.y+b.h; y++)
+            memcpy(d->accel_front+(uint32_t)y*d->width+(uint32_t)b.x,d->pixels+(uint32_t)y*d->width+(uint32_t)b.x,(uint32_t)b.w*4);
+        if (!b.x && !b.y && b.w==(int32_t)d->width && b.h==(int32_t)d->height) d->accel_front_valid=d->accel_front!=NULL;
+        d->presents++; return 0;
+    }
+    for (int32_t y=b.y; y<b.y+b.h;) {
+        uint32_t *row=d->pixels+(uint32_t)y*d->width, *front=d->accel_front+(uint32_t)y*d->width;
+        int32_t left=b.x, right=b.x+b.w;
+        while (left<right && row[left]==front[left]) left++;
+        while (right>left && row[right-1]==front[right-1]) right--;
+        if (left==right) { y++; continue; }
+        int solid=right-left>=64 && (d->accel_caps&1u);
+        for (int32_t x=left+1; solid && x<right; x++) if (row[x]!=row[left]) solid=0;
+        int32_t bottom=y+1;
+        while (bottom<b.y+b.h) {
+            uint32_t *next=d->pixels+(uint32_t)bottom*d->width, *old=d->accel_front+(uint32_t)bottom*d->width;
+            int32_t l=b.x,r=b.x+b.w;
+            while (l<r && next[l]==old[l]) l++;
+            while (r>l && next[r-1]==old[r-1]) r--;
+            if (l!=left || r!=right) break;
+            int next_solid=r-l>=64 && (d->accel_caps&1u);
+            for (int32_t x=l+1; next_solid && x<r; x++) if (next[x]!=next[l]) next_solid=0;
+            if (next_solid!=solid || (solid && next[left]!=row[left])) break;
+            bottom++;
+        }
+        if (solid) {
+            struct ciuki_accel_request q={.operation=CIUKI_ACCEL_FILL,.colour=row[left],
+                .rect={left,y,left,y,(uint32_t)(right-left),(uint32_t)(bottom-y)}};
+            if (accel_call(d,&q)) {
+                struct ciuki_rect r={left,y,left,y,(uint32_t)(right-left),(uint32_t)(bottom-y)};
+                if (d->ops.present(d->display,d->output,&r)) return -1;
+            }
+        } else {
+            struct ciuki_rect r={left,y,left,y,(uint32_t)(right-left),(uint32_t)(bottom-y)};
+            if (d->ops.present(d->display,d->output,&r)) return -1;
+        }
+        for (int32_t i=y;i<bottom;i++)
+            memcpy(d->accel_front+(uint32_t)i*d->width+(uint32_t)left,
+                   d->pixels+(uint32_t)i*d->width+(uint32_t)left,(uint32_t)(right-left)*4);
+        d->presents++; y=bottom;
+    }
+    return 0;
+}
 int desk_redraw(struct desktop *d)
 {
+    if (d->accel) {
+        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
+        int caps=accel_call(d,&q);
+        d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+        if (d->hw_cursor && !(d->accel_caps&2u)) {
+            d->hw_cursor=0;
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+        }
+    }
+    if (d->copy_pending) {
+        if (d->accel_front && d->accel_front_valid && (d->accel_caps&1u)) (void)screen_copy(d,&d->copy_rect);
+        d->copy_pending=0;
+    } else scroll_copy(d);
     unsigned done = 0;
     for (; done < d->damage.count; done++) {
         struct desk_box b = d->damage.boxes[done];
         desk_composite(d,b);
-        struct ciuki_rect r = {b.x,b.y,b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
-        if (d->ops.present(d->display,d->output,&r)) break;
-        d->presents++;
+        if (present_box(d,b)) break;
     }
     if (done) {
         d->damage.count -= done;
@@ -364,6 +514,28 @@ int desk_redraw(struct desktop *d)
                 if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_FRAME,c->pid,0);
             }
         }
+    }
+    /* A fill may fail after the frame's initial capability query. Do not
+     * finish that frame with a disappeared hardware pointer. */
+    if (d->hw_cursor) {
+        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
+        int caps=accel_call(d,&q);
+        d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+        if (!(d->accel_caps&2u)) {
+            d->hw_cursor=0;
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+        }
+    }
+    if (d->hw_cursor && d->cursor_dirty && !d->damage.count) {
+        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_MOVE,
+            .rect={0,0,d->mouse_x,d->mouse_y,0,0}};
+        int error=accel_call(d,&q);
+        q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
+        if (!error) error=accel_call(d,&q);
+        if (error) {
+            d->hw_cursor=0;
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+        } else { d->cursor_dirty=0; d->cursor_x=d->mouse_x; d->cursor_y=d->mouse_y; }
     }
     return d->damage.count ? -1 : 0;
 }

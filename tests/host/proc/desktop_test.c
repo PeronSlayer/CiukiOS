@@ -519,6 +519,36 @@ static void test_desktop_present(void)
         desktop_resource.state = RS_ACTIVE;
     }
     int wide_fd = surface_create(p, 2048, 2, 1); CHECK(wide_fd >= 0);
+    /* f1-26: real syscall marshalling, grant ownership and software backend. */
+    struct ciuki_accel_request q={.size=sizeof(q),.operation=CIUKI_ACCEL_QUERY,.generation=1};
+    CHECK(!ua_write(p->memory,BUFFER,&q,sizeof(q)));
+    struct trap_frame accel_call={.eax=CIUKI_SYS_DISPLAY_ACCEL,.ebx=(uint32_t)grants[0],.ecx=BUFFER};
+    unsigned references=desktop_fd(p,grants[0])->references;
+    CHECK(desktop_syscall(&accel_call)==0 && !grants_display_busy() &&
+        !t->cleanup && !t->operation && desktop_fd(p,grants[0])->references==references);
+    accel_call.ecx=0; CHECK(desktop_syscall(&accel_call)==-EFAULT);
+    accel_call.ebx=grants[1]; CHECK(desktop_syscall(&accel_call)==-EBADF);
+    accel_call.ebx=grants[0]; desktop_fd(p,grants[0])->maximum=0;
+    CHECK(desktop_syscall(&accel_call)==-EACCES);
+    desktop_fd(p,grants[0])->maximum=PROT_WRITE;
+    unsigned owner=desktop_fd(p,grants[0])->owner;desktop_fd(p,grants[0])->owner=owner+1;
+    CHECK(desktop_syscall(&accel_call)==-EACCES);desktop_fd(p,grants[0])->owner=owner;
+    q.generation=2;CHECK(grant_accel(p,grants[0],&q)==-EAGAIN);q.generation=1;
+    q.size--;CHECK(grant_accel(p,grants[0],&q)==-EINVAL);q.size++;
+    q.operation=CIUKI_ACCEL_CURSOR_SET;CHECK(grant_accel(p,grants[0],&q)==-EOPNOTSUPP);
+    q.operation=CIUKI_ACCEL_FILL;q.colour=0x654321;q.rect=(struct ciuki_rect){0,0,1,2,4,3};
+    CHECK(!grant_accel(p,grants[0],&q));
+    for (unsigned y=2;y<5;y++) for (unsigned x=1;x<5;x++) {
+        uint32_t value;memcpy(&value,target+y*device.pitch+x*4,4);
+        CHECK(value==(((q.colour>>19)&31)*8+((q.colour>>8)&255)*256+((q.colour&255)/4)*65536));
+    }
+    memcpy(expected,target,sizeof(target));
+    q.operation=CIUKI_ACCEL_COPY;q.rect=(struct ciuki_rect){1,2,2,3,4,3};
+    CHECK(!grant_accel(p,grants[0],&q));
+    for (unsigned y=0;y<3;y++) for (unsigned x=0;x<4;x++)
+        CHECK(!memcmp(target+(3+y)*device.pitch+(2+x)*4,expected+(2+y)*device.pitch+(1+x)*4,4));
+    CHECK(!grants_display_busy() && !t->cleanup && !t->operation);
+    puts("display accel syscall: grant/pointer/error ordering, wire/generation, software fill/overlap copy and lifetime cleanup PASS");
     struct surface *wide = desktop_fd(p, wide_fd)->u.surface;
     uint32_t pitch = 2048*4+3, size = pitch*2;
     uint8_t *wide_target = malloc(size); CHECK(wide_target); memset(wide_target, 0x55, size);

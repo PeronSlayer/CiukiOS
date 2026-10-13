@@ -158,6 +158,16 @@ struct desktop {
     uint32_t display_counter;
     uint16_t display_mode, display_pending;
     int (*display_set)(struct desktop *, uint16_t);
+    /* Optional privileged presenter; NULL retains ordinary surface presents. */
+    int (*accel)(int, const struct ciuki_accel_request *);
+    uint32_t accel_generation, accel_caps;
+    int hw_cursor, cursor_dirty;
+    int32_t cursor_x, cursor_y;
+    uint32_t *accel_front; /* last completed RAM frame; allocated only with rectangles */
+    int accel_front_valid;
+    /* A move can copy only a clean, unobscured window. Other exposure is damage. */
+    int copy_pending, copy_client;
+    struct ciuki_rect copy_rect;
 };
 /* f2-33 tasks scenario stages: 1 Tasks launched from the menu, 2 its window,
  * 3 demo launched through LAUNCH, 4 demo window, 5 End Task requested,
@@ -228,6 +238,8 @@ void desk_zoom(struct desktop *, int index);
 unsigned desk_resize_hit(const struct desk_client *, int32_t x, int32_t y);
 void desk_input(struct desktop *, const struct ciuki_input_event *);
 void desk_composite(struct desktop *, struct desk_box);
+void desk_accel_reset(struct desktop *, uint32_t generation);
+void desk_cursor_motion(struct desktop *);
 void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,
                const char *, int, uint32_t);
 uint8_t desk_glyph_row(unsigned, unsigned);
