@@ -23,6 +23,17 @@ static void capture(const char *name)
     char path[1024]; snprintf(path,sizeof(path),"%s/%s.xrgb",out,name);
     FILE *f=fopen(path,"wb"); assert(f && fwrite(d.pixels,4,1024*768,f)==1024*768 && !fclose(f));
 }
+/* A cached repaint must match a fresh wallpaper/icon render, including
+ * live rename text and icons moved by the actual input path. */
+static void cache_equivalent(void)
+{
+    size_t bytes=(size_t)d.width*d.height*4;
+    uint32_t *cached=malloc(bytes); assert(cached);
+    struct desk_box full={0,0,(int)d.width,(int)d.height};
+    desk_shell_background(&d,full); memcpy(cached,d.pixels,bytes);
+    d.sh.background_valid=0; desk_shell_background(&d,full);
+    assert(!memcmp(cached,d.pixels,bytes)); free(cached);
+}
 static void command(int command, int index)
 { d.sh.folder->command=command; d.sh.folder->index=index; desk_folder_service(&d); }
 static int named(const char *name)
@@ -165,6 +176,19 @@ int main(int argc,char **argv)
     command(DF_DELETE,file_pictures-3);
     assert(fake_lookup(DESK_FOLDER "/Pictures")<0 && fake_lookup(DESK_TRASH "/Pictures")>=0);
     d.pictures_exists=0; desk_folder_changed(&d); assert(named("Pictures")<0);
+    d.sh.wall=malloc((size_t)d.width*d.height*4); assert(d.sh.wall);
+    for (unsigned i=0;i<d.width*d.height;i++) d.sh.wall[i]=0x234567;
+    d.sh.wall_w=d.width; d.sh.wall_h=d.height; d.sh.wall_valid=1;
+    cache_equivalent(); assert(d.sh.background_valid);
+    n=named("readme.txt"); assert(n>=3);
+    desk_folder_rename(&d,n); cache_equivalent();
+    key(0x1e); cache_equivalent(); key(DU_KEY_ESC); cache_equivalent();
+    b=d.sh.icons[n].box; d.mouse_x=b.x+30; d.mouse_y=b.y+20;
+    d.now_ns=10000000000ull; desk_shell_button(&d,1,1);
+    d.mouse_x=650; d.mouse_y=600; desk_shell_motion(&d); desk_shell_button(&d,1,0);
+    assert(d.sh.icons[n].box.x==602); cache_equivalent();
+    puts("PASS desktop folder wallpaper cache: live rename, cancel and icon drag match fresh render");
+    desk_render_release(&d);
     fake_assert_clean(); desk_folder_destroy(&d); free(d.sh.icons); free(d.sh.wall); free((void *)d.portrait); free(d.pixels);
     puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange, conditional Pictures isolation");
     return 0;

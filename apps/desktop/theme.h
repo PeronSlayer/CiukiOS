@@ -81,6 +81,8 @@ void desk_title_button_box(int x, int y, int w, unsigned button, int box[4]);
  * 1 px outline with the theme's corners. The caller draws the content at
  * (x + DESK_FRAME_BORDER, y + DESK_FRAME_TITLE) and the drop shadow. */
 void desk_paint_frame(struct desk_paint *, int x, int y, int w, int h, const struct desk_frame_style *);
+/* Same decorations; caller supplies every pixel of the content well. */
+void desk_paint_frame_border(struct desk_paint *, int x, int y, int w, int h, const struct desk_frame_style *);
 
 /* ---- themes ---- */
 enum { DESK_TITLE_FLAT, DESK_TITLE_GRADIENT, DESK_TITLE_PINSTRIPE };

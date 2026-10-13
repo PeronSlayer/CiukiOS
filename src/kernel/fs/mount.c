@@ -429,13 +429,15 @@ int storage_sync(void)
 }
 #ifndef FS_HOST
 static bool initialized, work_pending;
+static uint64_t next_log_drain;
 static void storage_work(void *arg)
 {
     struct storage *s = arg;
     if (!s->stopped) {
         fs_worker_enter();
-        bootlog_drain();
-        storage_writeback(s, fs_now_ms());
+        uint64_t now=fs_now_ms();
+        if (now>=next_log_drain) { bootlog_drain(); next_log_drain=now+250; }
+        storage_writeback(s, now);
         fs_worker_leave();
     }
     work_pending = false;
@@ -447,7 +449,9 @@ static void storage_timer(void *arg)
         task_sleep_ms(1);
         struct bootlog_stats log;
         bootlog_snapshot(&log);
-        bool due = cache_writeback_due(&s->cache, fs_now_ms()) || (log.active && log.queued);
+        uint64_t now=fs_now_ms();
+        bool log_due=log.active && log.queued && now>=next_log_drain;
+        bool due = cache_writeback_due(&s->cache, now) || log_due;
         if (due && !work_pending && !s->stopped) {
             work_pending = true;
             if (!kwork_queue(storage_work, s)) work_pending = false;

@@ -460,6 +460,7 @@ static void menus_damage(struct desktop *d)
 }
 void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
 {
+    if (d->sh.icon_selected>=0) damage(d,d->sh.icons[d->sh.icon_selected].box);
     desk_sound(d,SOUND_MENU_OPEN);
     menus_damage(d);
     d->sh.levels = 1;
@@ -477,6 +478,7 @@ void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
 void desk_menu_close(struct desktop *d)
 {
     if (!d->sh.levels) return;
+    if (d->sh.icon_selected>=0) damage(d,d->sh.icons[d->sh.icon_selected].box);
     menus_damage(d);
     int start = d->sh.menus[0].kind == SH_MENU_START;
     d->sh.levels = 0;
@@ -574,7 +576,10 @@ static void act(struct desktop *d, const struct sh_item *it)
         desk_shell_apply(d);
         break;
     }
-    case SH_ACT_REFRESH: if (d->sh.folder) d->sh.folder->command=DF_REFRESH; else d->sh.want_reload=1; break;
+    case SH_ACT_REFRESH:
+        d->sh.want_reload=1; d->sh.want_wallpaper=1;
+        if (d->sh.folder) d->sh.folder->command=DF_REFRESH;
+        break;
     case SH_ACT_RENAME: desk_folder_rename(d,it->arg); break;
     case SH_ACT_FILE:
         if (d->sh.folder) { d->sh.folder->command=it->arg; d->sh.folder->index=d->sh.menu_owner-3; }
@@ -870,6 +875,7 @@ static void icon_add(struct desktop *d, const char *label, const char *program, 
 }
 static void icons_layout(struct desktop *d)
 {
+    d->sh.background_valid=0;
     int32_t top = DESK_BAR + 10, bottom = (int32_t)d->height - DESK_BAR - 4;
     int32_t x = 8, y = top;
     for (int k = 0; k < d->sh.icon_count; k++) {
@@ -1120,6 +1126,34 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
 {
     bind(d);
     if (d->sh.wall && d->sh.wall_valid && d->sh.wall_w == d->width && d->sh.wall_h == d->height) {
+        struct desk_shell *s=&d->sh;
+        int outline=d->focus<0 && !s->levels;
+        if (!s->background) s->background=malloc((size_t)d->width*d->height*4);
+        /* Inline rename changes text/caret on every key. Keep it out of the
+         * stable wallpaper/icon cache and rebuild once editing finishes. */
+        if (s->folder && s->folder->editing>=0) s->background_valid=0;
+        if (s->background && (!s->folder || s->folder->editing<0)) {
+            uint32_t *out=d->pixels; d->pixels=s->background;
+            if (!s->background_valid) {
+                memcpy(s->background,s->wall,(size_t)d->width*d->height*4);
+                draw_icons(d,(struct desk_box){0,DESK_BAR,(int)d->width,(int)d->height-2*DESK_BAR});
+                s->background_rebuilds++; s->background_valid=1;
+            } else if (s->background_selected!=s->icon_selected || s->background_outline!=outline) {
+                int changed[2]={s->background_selected,s->icon_selected};
+                for (int k=0;k<2;k++) if (changed[k]>=0 && changed[k]<s->icon_count) {
+                    struct desk_box b;
+                    if (!desk_intersect(s->icons[changed[k]].box,
+                            (struct desk_box){0,0,(int)d->width,(int)d->height},&b)) continue;
+                    for (int y=b.y;y<b.y+b.h;y++) memcpy(s->background+(size_t)y*d->width+b.x,
+                        s->wall+(size_t)y*d->width+b.x,(size_t)b.w*4);
+                    draw_icons(d,b);
+                }
+            }
+            d->pixels=out; s->background_selected=s->icon_selected; s->background_outline=outline;
+            for (int y=clip.y;y<clip.y+clip.h;y++) memcpy(out+(size_t)y*d->width+clip.x,
+                    s->background+(size_t)y*d->width+clip.x,(size_t)clip.w*4);
+            return;
+        }
         for (int32_t y = clip.y; y < clip.y + clip.h; y++)
             memcpy(d->pixels + (size_t)y * d->width + (uint32_t)clip.x, d->sh.wall + (size_t)y * d->width + (uint32_t)clip.x,
                    (size_t)clip.w * 4u);
@@ -1594,6 +1628,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
                 if (icon_is_entry(d, index) && (desk_hit(d,x,y)>=0 || folder_target)) desk_folder_drop(d,-1,(d->sh.modifiers&DU_CTRL)!=0);
                 else if (desk_hit(d,x,y)<0) {
                     struct desk_box *b=&d->sh.icons[index].box; damage(d,*b);
+                    d->sh.background_valid=0;
                     b->x=x-b->w/2; b->y=y-b->h/2;
                     if (b->x<0) b->x=0;
                     if (b->x+b->w>(int)d->width) b->x=(int)d->width-b->w;
@@ -1730,6 +1765,17 @@ void desk_shell_scale_motion(struct desktop *d, int32_t *dx, int32_t *dy)
     int32_t ax = *dx * num + d->sh.motion_rx, ay = *dy * num + d->sh.motion_ry;
     *dx = ax / 8; *dy = ay / 8;
     d->sh.motion_rx = ax - *dx * 8; d->sh.motion_ry = ay - *dy * 8;
+}
+void desk_shell_clock_damage(struct desktop *d, uint64_t previous)
+{
+    if (d->realtime_second/60!=previous/60) {
+        /* Date text changes only at midnight; its right-aligned previous
+         * width can differ, so clear the bounded date region at that edge. */
+        if (d->realtime_second/86400!=previous/86400)
+            damage(d,(struct desk_box){(int)d->width-300,0,300,DESK_BAR});
+        if (d->sh.tooltip) damage(d,tooltip_box(d));
+    }
+    if (d->sh.cfg.clock_seconds || d->realtime_second/60!=previous/60) damage(d,clock_box(d));
 }
 static int menu_step(const struct sh_menu *m, int from, int dir)
 {
@@ -1962,6 +2008,7 @@ int desk_shell_wallpaper_update(struct desktop *d)
     if (!d->shell) return 0;
     if (d->sh.wall_valid && d->sh.wall && d->sh.wall_w == d->width && d->sh.wall_h == d->height) return 0;
     if (!d->sh.wall || d->sh.wall_w != d->width || d->sh.wall_h != d->height) {
+        free(d->sh.background); d->sh.background=NULL;
         free(d->sh.wall);
         d->sh.wall = malloc((size_t)d->width * d->height * 4u);
         d->sh.wall_w = d->sh.wall ? d->width : 0; d->sh.wall_h = d->sh.wall ? d->height : 0;
@@ -1970,6 +2017,7 @@ int desk_shell_wallpaper_update(struct desktop *d)
     int r = desk_wallpaper_render(d->sh.wall, d->width, d->height, DESK_BAR, DESK_BAR, d->sh.cfg.wallpaper,
                                   d->sh.cfg.wallpaper_mode, desktop_colour(d), &d->sh.image, d->portrait);
     d->sh.wall_valid = 1;
+    d->sh.background_valid=0;
     d->sh.image_failed = r < 0;
     damage_all(d);
     return r;

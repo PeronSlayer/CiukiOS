@@ -21,10 +21,20 @@ static int upload(int display,int surface,const struct ciuki_rect *r)
     uploads++; uploaded_pixels+=(uint64_t)r->width*r->height;
     return 0;
 }
+static void completed_ram_frame(void)
+{
+    uint32_t *expected=calloc((size_t)d.width*d.height,4); assert(expected);
+    struct desktop *oracle=malloc(sizeof(d)); assert(oracle); *oracle=d;
+    oracle->pixels=expected;
+    desk_composite(oracle,(struct desk_box){0,0,(int)d.width,(int)d.height});
+    assert(!memcmp(d.pixels,expected,(size_t)d.width*d.height*4));
+    free(oracle); free(expected);
+}
 static int service(int display,const struct ciuki_accel_request *q)
 {
     assert(display==7 && q->size==sizeof(*q) && q->generation==55);
     if (q->operation==CIUKI_ACCEL_QUERY) return caps;
+    if (q->operation==CIUKI_ACCEL_COPY || q->operation==CIUKI_ACCEL_FILL) completed_ram_frame();
     if (q->operation==CIUKI_ACCEL_COPY) {
         copies++;
         for (uint32_t n=0;n<q->rect.height;n++) {
@@ -101,7 +111,11 @@ static void scenario(unsigned available)
     struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=13,.value2=5};
     desk_input(&d,&e);redraw();
     unsigned cursor_uploads=uploads-before_uploads;
-    if (available&2u) assert(cursor_uploads==0 && cursor_moves>=2);
+    assert(d.frame_stats.scene_px==0);
+    if (available&2u) {
+        assert(cursor_uploads==0 && cursor_moves>=2);
+        assert(!d.frame_stats.presents && !d.frame_stats.lfb_bytes && !d.frame_stats.damage_px);
+    } else assert(d.frame_stats.damage_px<=374);
     unsigned before_copies=copies;
     desk_move(&d,i,80,95);desk_move(&d,i,90,100);redraw();
     if (available&2u) assert(copies==before_copies+1);
@@ -125,6 +139,8 @@ static void scenario(unsigned available)
     desk_drop_client(&d,j);redraw();
     printf("desktop accel=%u normal frames identical: copies=%u fills=%u uploads=%u uploaded_pixels=%llu cursor_motion_uploads=%u\n",
         available,copies,fills,uploads,(unsigned long long)uploaded_pixels,cursor_uploads);
+    assert(d.stats.presents==copies+fills+uploads);
+    assert(d.stats.lfb_bytes==uploaded_pixels*4);
     /* A partially completed engine copy is reconstructed from client RAM. */
     if (available&2u) {
         fail_copy=1;desk_move(&d,i,160,130);redraw();redraw();assert(caps==0 && !d.hw_cursor);
@@ -141,7 +157,7 @@ static void scenario(unsigned available)
         available,copies,fills,uploads,(unsigned long long)uploaded_pixels,cursor_uploads,
         (unsigned long long)(uploaded_pixels-before_pixels));
     for (int k=0;k<DESK_CLIENTS;k++) desk_drop_client(&d,k);
-    free(d.accel_front);free(d.pixels);free(scanout);assert(!fake_live());
+    desk_render_release(&d);free(d.pixels);free(scanout);assert(!fake_live());
 }
 int main(void)
 { scenario(0);scenario(1);scenario(3);puts("desktop acceleration/fallback visible-frame equivalence: PASS");return 0; }

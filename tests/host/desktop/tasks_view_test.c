@@ -59,6 +59,11 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < 256; i++) icon[i] = 0xff000000u | (i * 0x010203u);
     du_init(&ui, pixels, TV_WIDTH, TV_HEIGHT); ui.event = record;
     tm_init(&m); tv_init(&v, &ui, icon);
+    m.performance[0]=120; m.performance[1]=44880; m.performance[2]=240; m.performance[3]=179520;
+    m.performance[4]=600000; m.performance[5]=1200000; m.performance[7]=2000000; m.performance[8]=2000000000;
+    tv_update(&v,&m);
+    assert(strstr(du_get(&ui,A_SYSTEM)->text,"60 fps") && strstr(du_get(&ui,A_SYSTEM)->text,"374 px"));
+    assert(strstr(du_get(&ui,A_SYSTEM_IO)->text,"2000 us"));
     assert(ui.menu_count == 3 && !strcmp(ui.menus[1].label, "&View") && ui.menus[1].count == 6);
     assert(v.view_items[3].flags == (DU_ITEM_RADIO | DU_ITEM_CHECKED) && v.view_items[2].flags == DU_ITEM_RADIO && v.speed == TV_NORMAL);
     assert(tv_interval_ns(TV_HIGH) == 500000000ull && tv_interval_ns(TV_NORMAL) == 1000000000ull &&

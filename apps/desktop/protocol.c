@@ -82,6 +82,15 @@ int desk_parse(const struct ciuki_message *m, int client,
     if (m->fd_count != fds) return 0;
     unsigned n = 4;
     switch (p->opcode) {
+    case DESK_SYSTEM_QUERY:
+        if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=8) return 0;
+        p->serial=desk_get32(m->data+4); n=8; break;
+    case DESK_SYSTEM_INFO:
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=80) return 0;
+        p->serial=desk_get32(m->data+4);
+        for (unsigned i=0;i<9;i++) p->performance[i]=(uint64_t)desk_get32(m->data+8+i*8) |
+            (uint64_t)desk_get32(m->data+12+i*8)<<32;
+        n=80; break;
     case DESK_FILE_DROP:
         if (m->data[0]!=DESK_SHELL_VERSION || m->length!=16) return 0;
         p->flags=desk_get32(m->data+4); p->x=(int32_t)desk_get32(m->data+8); p->y=(int32_t)desk_get32(m->data+12);
@@ -247,7 +256,8 @@ int desk_parse(const struct ciuki_message *m, int client,
         p->request = desk_get32(m->data + 8);
         p->result = (int32_t)desk_get32(m->data + 12);
         if ((p->request != DESK_WINDOWS_QUERY && p->request != DESK_END_TASK &&
-             p->request != DESK_SWITCH_TO && p->request != DESK_LAUNCH && p->request != DESK_SETTINGS && p->request != DESK_MIXER_SET) ||
+             p->request != DESK_SWITCH_TO && p->request != DESK_LAUNCH && p->request != DESK_SETTINGS && p->request != DESK_MIXER_SET &&
+             p->request != DESK_SYSTEM_QUERY) ||
             p->result < -4095) return 0;
         n = 16;
         break;

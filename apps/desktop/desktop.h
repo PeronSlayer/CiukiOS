@@ -45,6 +45,12 @@ struct desk_box { int32_t x, y, w, h; };
 #include "sounds.h"
 #define DESK_SOUND_PENDING 1
 struct desk_damage { unsigned count; struct desk_box boxes[DESK_DAMAGE_MAX]; };
+/* Per completed/attempted frame, plus totals for the 2 s hardware sample. */
+struct desk_frame_stats {
+    uint64_t frames, damage_px, scene_px, presents, lfb_bytes;
+    uint64_t composite_ns, present_ns, input_ns, input_lag_ns;
+};
+#define DESK_FRAME_NS 16666667ull /* VBE does not expose measured refresh; conservative 60 Hz */
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
@@ -111,6 +117,16 @@ struct desktop {
     uint32_t buttons, routed_buttons;
     uint64_t order, now_ns, clock_second, presents, inputs, received, replied;
     struct desk_damage damage;
+    struct desk_damage present_damage;
+    uint32_t *scene; size_t scene_bytes;
+    uint32_t cursor_under[11*17]; struct desk_box cursor_box;
+    int cursor_valid, cursor_dirty;
+    unsigned lfb_bytes_per_pixel;
+    uint64_t next_frame_ns;
+    uint64_t pending_input_ns, pending_input_lag_ns;
+    uint64_t (*time_ns)(void);
+    struct desk_frame_stats frame_stats, stats;
+    struct desk_frame_stats sample; uint64_t sample_ns, sample_begin_ns;
     struct desk_client clients[DESK_CLIENTS];
     int shell, menu_open, menu_focus, about, action, shell_test, shell_stage;
     uint32_t shell_pid, shell_keys;
@@ -159,10 +175,12 @@ struct desktop {
     uint32_t display_counter;
     uint16_t display_mode, display_pending;
     int (*display_set)(struct desktop *, uint16_t);
+    int display_reply_client; uint32_t display_reply_pid, display_reply_serial;
+    uint16_t display_reply_mode;
     /* Optional privileged presenter; NULL retains ordinary surface presents. */
     int (*accel)(int, const struct ciuki_accel_request *);
     uint32_t accel_generation, accel_caps;
-    int hw_cursor, cursor_dirty;
+    int hw_cursor;
     int32_t cursor_x, cursor_y;
     uint32_t *accel_front; /* last completed RAM frame; allocated only with rectangles */
     int accel_front_valid;
@@ -238,6 +256,7 @@ void desk_display_relayout(struct desktop *, uint32_t width, uint32_t height);
 void desk_zoom(struct desktop *, int index);
 unsigned desk_resize_hit(const struct desk_client *, int32_t x, int32_t y);
 void desk_input(struct desktop *, const struct ciuki_input_event *);
+int desk_drain_input(struct desktop *, int (*read_events)(int, struct ciuki_input_event *, uint32_t));
 void desk_composite(struct desktop *, struct desk_box);
 void desk_accel_reset(struct desktop *, uint32_t generation);
 void desk_cursor_motion(struct desktop *);
@@ -245,6 +264,9 @@ void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,
                const char *, int, uint32_t);
 uint8_t desk_glyph_row(unsigned, unsigned);
 int desk_redraw(struct desktop *);
+void desk_render_release(struct desktop *);
+int desk_frame_due(const struct desktop *, uint64_t now);
+void desk_display_reply(struct desktop *, int result);
 uint64_t desk_launch_wait(const struct desktop *, uint64_t now); /* ns; short startup polling only */
 int desk_load_portrait(uint32_t *pixels);
 #endif

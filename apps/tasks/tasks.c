@@ -32,12 +32,12 @@ static void error_box(struct tasks_app *a, const char *what, int error)
 static int request(struct tasks_app *a, unsigned opcode, uint32_t first, uint32_t second, const char *name)
 {
     struct ciuki_message m; unsigned n = name ? (unsigned)strlen(name) : 0;
-    unsigned length = opcode == DESK_WINDOWS_QUERY ? 8 : opcode == DESK_SWITCH_TO ? 12 : opcode == DESK_END_TASK ? 16 : 12 + n;
+    unsigned length = opcode == DESK_WINDOWS_QUERY || opcode==DESK_SYSTEM_QUERY ? 8 : opcode == DESK_SWITCH_TO ? 12 : opcode == DESK_END_TASK ? 16 : 12 + n;
     desk_message(&m, opcode, length);
     uint32_t serial = ++a->serial ? a->serial : ++a->serial;
     desk_put32(m.data + 4, serial);
     if (opcode == DESK_LAUNCH) { desk_put32(m.data + 8, n); memcpy(m.data + 12, name, n); }
-    else if (opcode != DESK_WINDOWS_QUERY) { desk_put32(m.data + 8, first); if (opcode == DESK_END_TASK) desk_put32(m.data + 12, second); }
+    else if (opcode != DESK_WINDOWS_QUERY && opcode!=DESK_SYSTEM_QUERY) { desk_put32(m.data + 8, first); if (opcode == DESK_END_TASK) desk_put32(m.data + 12, second); }
     return du_window_queue(&a->window, &m) ? 0 : (int)serial;
 }
 static void query_windows(struct tasks_app *a, uint64_t now)
@@ -67,6 +67,7 @@ static void refresh(struct tasks_app *a)
         status_text(a, text);
     } else tv_update(&a->view, &a->model);
     query_windows(a, du_now());
+    request(a,DESK_SYSTEM_QUERY,0,0,NULL);
     /* Test scenario: the ended PID has left the kernel list (reaped). */
     if (a->test && a->ended_pid && !a->checkpoint_sent && n >= 0 && !tm_find(&a->model, a->ended_pid) &&
         refusals(a) && !du_window_ping(&a->window, DESK_TASKS_CHECKPOINT)) {
@@ -143,6 +144,9 @@ static void launch(struct tasks_app *a, const char *text)
 static void on_message(struct du_window *w, const struct desk_packet *p, void *ctx)
 {
     (void)w; struct tasks_app *a = ctx;
+    if (p->opcode==DESK_SYSTEM_INFO) {
+        memcpy(a->model.performance,p->performance,sizeof(p->performance)); tv_update(&a->view,&a->model); return;
+    }
     if (p->opcode == DESK_WINDOW_INFO) {
         int r = tm_window_info(&a->model, p->serial, p->index, p->count, p->window_id, p->pid, p->flags, p->title);
         if (r <= 0) return;

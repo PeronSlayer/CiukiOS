@@ -31,7 +31,7 @@ ACCESSORIES = {
 }
 PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
-SHELL = ["sounds.c", "sound_runtime.c", "shell.c", "settings.c", "wallpaper.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
+SHELL = ["sounds.c", "sound_runtime.c", "shell.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
 
 
@@ -164,7 +164,7 @@ def build():
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "sounds.c", "settings.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "sounds.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
