@@ -9,6 +9,7 @@
 #include <string.h>
 struct desk_catalog_entry { const char *name, *label, *tango; int takes_file; const char *extensions; };
 static const struct desk_catalog_entry desk_catalog[] = {
+    {"regedit", "Registry Editor", "preferences-system", 0, ""},
     {"calc", "Calculator", "accessories-calculator", 0, ""},
     {"charmap", "Character Map", "accessories-character-map", 0, ""},
     {"clock", "Clock", "appointment-new", 0, ""},   /* a clock face; Settings > Date & Time keeps office-calendar */

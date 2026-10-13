@@ -35,6 +35,31 @@ class ImagePayloadTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.work = Path(self.temp.name)
 
+    def test_registry_seed_and_payload_readback(self):
+        with patch.object(image, "git_identity", return_value=("abc123", "clean")):
+            sources, directories = image.registry_payloads(self.work / "registry")
+        self.assertEqual(set(sources), {"/System/Registry/System.reg"})
+        self.assertEqual(directories, {"/System", "/System/Registry"})
+        text = sources["/System/Registry/System.reg"].read_text(encoding="utf-8")
+        self.assertIn("; ciuki-registry generation=1", text)
+        self.assertIn("[System\\Version]", text)
+        self.assertIn('name = "CiukiOS"', text)
+        self.assertIn('version = ' + json.dumps(image.read_version()["display"]), text)
+        self.assertIn('build = "abc123"', text)
+        self.assertIn("[System\\Identity]", text)
+        self.assertIn('Tagline = "Classic computing, one woof at a time."', text)
+        records = image.payload_records(sources)
+        self.assertEqual(records[0]["size"], len(text.encode("utf-8")))
+        self.assertEqual(records[0]["sha256"], hashlib.sha256(text.encode("utf-8")).hexdigest())
+        if all(shutil.which(t) for t in ("mkfs.fat", "mmd", "mcopy", "mdir")):
+            volume = self.work / "registry.fat"
+            with volume.open("wb") as stream:
+                stream.truncate(8 * 1024 * 1024)
+            subprocess.run(["mkfs.fat", str(volume)], check=True, stdout=subprocess.DEVNULL)
+            image.populate_payloads(volume, sources, directories)
+            with patch.object(image, "PART_LBA", 0):
+                image.check_payloads(volume, records, directories)
+
     def test_records_and_manifest_include_every_payload(self):
         a, b = self.work / "binary", self.work / "empty"
         a.write_bytes(bytes(range(256)) * 256)

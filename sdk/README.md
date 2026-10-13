@@ -27,3 +27,9 @@ newlib retains its individual notices and `COPYING.NEWLIB`, with a compiled-file
 inventory in the installed manifest. The copied ABI header retains its exact
 GPL-2.0-only notice: the lead must resolve the public-header licensing boundary
 before claiming that the entire installed header set is permissively licensed.
+
+The F2-47 SDK also installs `libreg.a` and `<ciuki/registry.h>`. Link with
+`ciuki-cc program.c -lreg -o program`. See the [registry contract](../docs/design/registry-contract.md)
+for UTF-8 text storage, generations, recovery and the one-writer-per-root rule.
+Hardware is an inventory snapshot and is always read-only. Existing desktop
+and audio settings remain owned by their existing persistence code.

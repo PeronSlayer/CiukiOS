@@ -108,6 +108,7 @@ def desktop_payloads():
     desktop = desktop_build.validate_payloads()
     sources = {"/Programs/desktop": DESKTOP / "desktop", "/Programs/demo": DESKTOP / "demo", "/Programs/dosbox": DESKTOP / "dosbox",
                "/Programs/files": DESKTOP / "files", "/Programs/tasks": DESKTOP / "tasks", "/Programs/ciuknote": DESKTOP / "ciuknote",
+               "/Programs/regedit": DESKTOP / "regedit",
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
                "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
@@ -387,6 +388,26 @@ def check_image(image, volume):
     print("T1 PASS: MBR, FAT32 geometry, fsck, loader size and CRC32")
 
 
+def registry_payloads(directory):
+    """Seed the persistent identity root using libreg's UTF-8 text dialect."""
+    revision, _ = git_identity()
+    # JSON quoting shares the registry string escapes for this ASCII metadata.
+    # ensure_ascii=False keeps the UTF-8 storage contract explicit.
+    quote = lambda value: json.dumps(value, ensure_ascii=False)
+    text = ("; ciuki-registry generation=1\n"
+            "; System identity seeded by the image builder\n"
+            "[System\\Version]\n"
+            f"name = {quote('CiukiOS')}\n"
+            f"version = {quote(read_version()['display'])}\n"
+            f"build = {quote(revision)}\n"
+            "[System\\Identity]\n"
+            f"Tagline = {quote('Classic computing, one woof at a time.')}\n")
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "System.reg"
+    path.write_text(text, encoding="utf-8")
+    return {"/System/Registry/System.reg": path}, {"/System", "/System/Registry"}
+
+
 def build(kernel, out, boot_cfg):
     for tool in ("nasm", "mkfs.fat", "mmd", "mdir", "mcopy", "fsck.fat"):
         if not shutil.which(tool):
@@ -403,6 +424,9 @@ def build(kernel, out, boot_cfg):
     if len(options) > 127 or b"\0" in options or any(c > 127 for c in options):
         raise SystemExit("BOOT.CFG must be <=127 ASCII bytes without NUL")
     sources, directories, metadata = application_payloads()
+    registry_sources, registry_directories = registry_payloads(out.parent / "registry")
+    sources.update(registry_sources)
+    directories.update(registry_directories)
     dos_spec = importlib.util.spec_from_file_location("build_dos_image", ROOT / "scripts/build_dos_image.py")
     dos_build = importlib.util.module_from_spec(dos_spec)
     dos_spec.loader.exec_module(dos_build)

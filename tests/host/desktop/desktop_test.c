@@ -498,7 +498,13 @@ static void test_media_shell(void)
         music+=!strcmp(d.sh.menus[0].items[i].label,"Music Player"); viewer+=!strcmp(d.sh.menus[0].items[i].label,"Image Viewer");
     }
     assert(music==1 && viewer==1);
+    strcpy(d.programs[3].name,"regedit"); d.program_count=4;
+    assert(!strcmp(desk_program_category("regedit"),"accessories"));
+    assert(!strcmp(desk_program_icon_name("regedit"),"preferences-system"));
     desk_menu_open(&d,SH_MENU_ACCESSORIES,4,32); viewer=0;
+    int registry=0;
+    for (int i=0;i<d.sh.menus[0].count;i++) registry+=!strcmp(d.sh.menus[0].items[i].label,"Registry Editor");
+    assert(registry==1);
     for (int i=0;i<d.sh.menus[0].count;i++) viewer+=!strcmp(d.sh.menus[0].items[i].label,"Image Viewer");
     assert(viewer==1); cleanup(); puts("PASS media shell: Programs entries, Accessories viewer and conditional Pictures");
 }
