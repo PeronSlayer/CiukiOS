@@ -61,6 +61,7 @@ extern uint32_t dosvm_task_cr3(const struct task *, uint32_t) __attribute__((wea
 extern uint32_t dosvm_task_esp0(const struct task *, uint32_t) __attribute__((weak));
 extern void dosvm_task_switch(const struct task *) __attribute__((weak));
 extern void dosvm_tick(void) __attribute__((weak));
+extern void serial_tick(void) __attribute__((weak));
 #define vmm_kernel_pd() 0u
 #define tss_set_kernel_stack(value) ((void)(value))
 #define crit_begin() ((void)0)

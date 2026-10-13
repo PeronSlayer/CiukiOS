@@ -40,6 +40,8 @@ int bootinfo_validate(const struct ciuki_boot_info *bi, const char **why);
 void serial_init(uint16_t base, uint16_t divisor);
 bool serial_present(void);
 void serial_write(const char *s, size_t n);
+void serial_buffered(bool enabled);       /* bounded, nonblocking playback logs */
+void serial_tick(void);                   /* one ready FIFO burst, no polling */
 void console_init_text(void);
 bool console_init_lfb(void);
 void console_write(const char *s, size_t n);

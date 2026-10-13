@@ -346,14 +346,32 @@ int ac97_progress(struct ac97_device *d)
     d->tail_drained = false;
     if (!d->running) return 0;
     struct ac97_cursor c;
-    int err = ac97_observe(d, &c);
-    if (err) return err;
-    unsigned delta = (c.civ - (unsigned)(d->retired % 32)) & 31;
-    uint64_t outstanding = d->published - d->retired;
-    if (delta >= outstanding || c.piv != ((c.civ + 1) & 31)) return -EIO;
-    if (delta) { d->retired += delta; d->last_progress = d->io.now(d->io.cookie); }
-    uint64_t fetched = d->retired * AUDIO_QUANTUM + (ac97_units(d) - c.remaining) / (d->sis ? 4 : 2);
-    if (fetched < d->generation_fetched) return -EIO;
+    unsigned delta = 0;
+    uint64_t fetched = 0;
+    bool coherent = false;
+    /* Linux intel8x0 retries zero PICB and a count reloading before CIV
+     * advances. Never commit a transitional fetched/retired position. */
+    for (unsigned attempt = 0; attempt < 8; attempt++) {
+        int err = ac97_observe(d, &c);
+        if (err) return err;
+        delta = (c.civ - (unsigned)(d->retired % 32)) & 31;
+        uint64_t outstanding = d->published - d->retired;
+        if (delta >= outstanding || c.piv != ((c.civ + 1) & 31)) return -EIO;
+        fetched = (d->retired + delta) * AUDIO_QUANTUM + (ac97_units(d) - c.remaining) / (d->sis ? 4 : 2);
+        if (!(c.status & AC97_DCH) && (!c.remaining || fetched < d->generation_fetched)) continue;
+        if (fetched < d->generation_fetched) return -EIO;
+        coherent = true; break;
+    }
+    uint64_t now = d->io.now(d->io.cookie);
+    if (!coherent) {
+        if (!d->cursor_retrying) { d->cursor_retrying = true; d->cursor_retry_since = now; }
+        if (now - d->cursor_retry_since > 2 || now - d->last_progress > 100) {
+            d->deadline_misses++; return -EIO;
+        }
+        return -EAGAIN;
+    }
+    d->cursor_retrying = false;
+    if (delta) { d->retired += delta; d->last_progress = now; }
     d->fetched += fetched - d->generation_fetched;
     d->generation_fetched = fetched;
     if (c.status & AC97_FIFOE) { d->fifo_errors++; wr(d, 0x16, AC97_FIFOE, 2); }
@@ -391,7 +409,7 @@ int ac97_start(struct ac97_device *d)
 {
     if (!d->ready || d->quarantine || d->published - d->retired != AUDIO_LEAD) return -EIO;
     wr(d, 0x1b, 0x1d, 1);
-    d->running = true; d->last_progress = d->io.now(d->io.cookie);
+    d->running = true; d->last_progress = d->io.now(d->io.cookie); d->cursor_retrying = false;
     return 0;
 }
 int ac97_pause(struct ac97_device *d)

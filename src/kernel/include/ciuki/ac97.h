@@ -35,6 +35,8 @@ struct ac97_device {
     int claims[12];
     gen_t claim_generation[12];
     uint64_t retired, published, frame_base, fetched, generation_fetched, last_progress;
+    uint64_t cursor_retry_since;
+    bool cursor_retrying;
     uint64_t activation_deadline;
     uint64_t fifo_errors, dma_halts, deadline_misses, irqs;
     uint32_t global_status;

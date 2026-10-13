@@ -345,7 +345,8 @@ void audio_backend_snapshot(struct audio_transport *s)
         .generation_fetched=d->generation_fetched,.frame_base=d->frame_base,.fifo_errors=d->fifo_errors,
         .dma_halts=d->dma_halts,.deadline_misses=d->deadline_misses,.irqs=d->irqs,.codec_id=d->codec_id,
         .rate=d->rate,.power=d->power,.master=d->master,.pcm_volume=d->pcm_volume,.remaining=d->cursor.remaining,
-        .slot=d->cursor.civ,.irq=d->pci.irq_line,.ready=d->ready,.running=d->running,.quarantine=d->quarantine,
+        .slot=d->cursor.civ,.prefetch=d->cursor.piv,.status=d->cursor.status,
+        .irq=d->pci.irq_line,.ready=d->ready,.running=d->running,.quarantine=d->quarantine,
         .idle_tail=d->idle_tail,.tail_drained=d->tail_drained};
 }
 void audio_backend_idle(bool idle) { if (dma_selected) audio_dma.state.idle_tail=idle; else ac97.idle_tail=idle; }

@@ -15,6 +15,7 @@ extern uint32_t dosvm_task_cr3(const struct task *, uint32_t) __attribute__((wea
 extern uint32_t dosvm_task_esp0(const struct task *, uint32_t) __attribute__((weak));
 extern void dosvm_task_switch(const struct task *) __attribute__((weak)); /* f3-04 LDT/watchpoints */
 extern void dosvm_tick(void) __attribute__((weak));
+extern void serial_tick(void) __attribute__((weak));
 
 extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
 extern void task_first_entry(void);
@@ -300,6 +301,7 @@ void schedule(void)
 
 void sched_tick(void)
 {
+    if (serial_tick) serial_tick();
     file_clock_tick();
     if (dosvm_tick) dosvm_tick();
     for (struct task *t = all_tasks; t; t = t->all_next) {

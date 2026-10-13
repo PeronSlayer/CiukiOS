@@ -16,10 +16,15 @@ uint64_t ktime_cycles(void) { return g_ticks * 1000; }
 static char audio_log[2048];
 static unsigned audio_log_count;
 static unsigned analog_warning_logs, response_warning_logs;
+static bool slow_playback_log;
+static bool serial_is_buffered;
 void klog(const char *fmt, ...)
 {
     va_list a; va_start(a, fmt); vsnprintf(audio_log,sizeof(audio_log),fmt,a); va_end(a);
     puts(audio_log); audio_log_count++;
+    /* A physical polled UART record can take 84 ms (T23 transcript).
+     * Let the fake DMA clock observe that delay on the next worker call. */
+    if (slow_playback_log && !serial_is_buffered) g_ticks += 84;
     if(strstr(audio_log,"result=analog_not_ready"))analog_warning_logs++;
     if(strstr(audio_log,"result=analog_warning_accepted"))response_warning_logs++;
 }
@@ -112,6 +117,7 @@ uint32_t pmm_alloc_dma_run(uint32_t pages,uint32_t alignment)
 #include "../../../src/kernel/drivers/via82xx.c"
 #include "../../../src/kernel/audio/backend.c"
 #include "../../../src/kernel/audio/audio_dev.c"
+void serial_buffered(bool enabled) { serial_is_buffered=enabled; }
 
 struct mock_hw {
     unsigned bad_civ_reads;
@@ -584,6 +590,7 @@ static void test_codec_power_policy(void)
 }
 static uint64_t boot_host_tick;
 static unsigned boot_mixed_frames;
+static bool boot_traffic_logged;
 static void boot_host_worker(void)
 {
     unsigned elapsed=(unsigned)(g_ticks-boot_host_tick);boot_host_tick=g_ticks;hw.tick=g_ticks;
@@ -596,6 +603,10 @@ static void boot_host_worker(void)
         hw.remaining-=samples;
     }
     audio_service();
+    if (slow_playback_log && audio.running && !boot_traffic_logged) {
+        boot_traffic_logged=true; klog("[usb] verbose traffic during native playback");
+        CHECK(serial_is_buffered);
+    }
     if(audio.streams[0]) boot_mixed_frames=(unsigned)audio.streams[0]->consumed;
 }
 static void test_boot_transport(void)
@@ -610,8 +621,11 @@ static void test_boot_transport(void)
     uint16_t volume=ac97.master;unsigned pages=pages_used, heap=heap_blocks;
     first_playback=playback_logged=false;idle_since=non_silent_end=0;
     g_ticks=boot_host_tick=5000;hw.tick=g_ticks;g_boot.flags=CBI_F_VERBOSE;audio.caps.drain_ms=20;
+    slow_playback_log=true; boot_traffic_logged=false;
     on_schedule=boot_host_worker;audio_boot_tone();on_schedule=0;
+    slow_playback_log=false;
     CHECK(!audio.error && boot_mixed_frames==AUDIO_RATE && ac97.fetched>=AUDIO_RATE && ac97.irqs>0);
+    CHECK(boot_traffic_logged && serial_is_buffered);
     CHECK(strstr(audio_log,"boot_tone=1khz frames=48000 result=0 restore=0"));
     CHECK(audio.master.left==0 && audio.master.right==25 && audio.master.mute && audio.master.save_state==CIUKI_MIXER_SAVED && ac97.master==volume);
     CHECK(!audio.streams[0] && pages_used==pages && heap_blocks==heap && !audio.commitment_pages);
@@ -661,6 +675,38 @@ static void test_bdl(void)
     hardware_setup(&d);d.running=true;hw.cr=1;hw.sr=0;hw.stop_after=400;hw.reset_stuck=true;d.bdl=(struct ac97_bd *)canary;
     CHECK(ac97_stop(&d)==-EIO && d.quarantine && hw.tick==500 && canary[0]==1);
     puts("audio DMA: 3 wraps, prefetched/current canaries, release-before-LVI, W1C, ambiguity and failed-stop retention PASS");
+}
+static void test_cursor_handoff(void)
+{
+    struct ac97_device d; hardware_setup(&d);
+    d.running=true; d.published=160; d.retired=152; d.last_progress=hw.tick;
+    d.generation_fetched=152*AUDIO_QUANTUM+200; d.fetched=d.generation_fetched;
+    hw.cr=1; hw.sr=0; hw.civ=24; hw.piv=25; hw.remaining=0;
+    uint64_t fetched=d.fetched;
+    CHECK(ac97_progress(&d)==-EAGAIN && d.fetched==fetched && d.retired==152);
+    /* PICB reloads before CIV changes, another documented handoff sample. */
+    hw.remaining=512; hw.tick++;
+    CHECK(ac97_progress(&d)==-EAGAIN && d.fetched==fetched && d.retired==152);
+    hw.civ=25; hw.piv=26; hw.remaining=448; hw.tick++;
+    CHECK(!ac97_progress(&d) && d.retired==153 && d.generation_fetched==153*AUDIO_QUANTUM+32 && !d.cursor_retrying);
+    /* Ring wrap: zero PICB with a new CIV must not commit a full buffer. */
+    d.retired=159; d.published=167; d.generation_fetched=159*AUDIO_QUANTUM+200;
+    d.fetched=d.generation_fetched; d.last_progress=hw.tick;
+    hw.civ=0; hw.piv=1; hw.remaining=0; fetched=d.fetched;
+    CHECK(ac97_progress(&d)==-EAGAIN && d.retired==159 && d.fetched==fetched);
+    hw.remaining=448; hw.tick++;
+    CHECK(!ac97_progress(&d) && d.retired==160 && d.generation_fetched==160*AUDIO_QUANTUM+32);
+    /* A stuck zero count and a persistent regression still fail locally. */
+    hw.remaining=0;
+    CHECK(ac97_progress(&d)==-EAGAIN); hw.tick+=3;
+    CHECK(ac97_progress(&d)==-EIO && d.deadline_misses==1);
+    d.cursor_retrying=false; hw.remaining=512; d.last_progress=hw.tick;
+    CHECK(ac97_progress(&d)==-EAGAIN); hw.tick+=3;
+    CHECK(ac97_progress(&d)==-EIO && d.deadline_misses==2);
+    /* A real DCH is never retried or replayed. */
+    d.cursor_retrying=false; hw.remaining=0; hw.sr=AC97_DCH;
+    CHECK(ac97_progress(&d)==-EIO && d.dma_halts==1);
+    puts("audio physical cursor: zero/reload handoffs, wrap, bounded retries and genuine halt PASS");
 }
 static void test_formats(void)
 {
@@ -844,6 +890,10 @@ static void test_idle_tail_cursor_error(void)
     if(fault==2) ac97.generation_fetched=AUDIO_QUANTUM+200;
     if(fault==3) hw.tick=ac97.last_progress+101;
     g_ticks++; audio_service();
+    if(fault==2) {
+        CHECK(!audio.error && audio.ready); /* transient backwards count: retry without consuming sources */
+        hw.tick+=3; g_ticks+=3; audio_service();
+    }
     printf("idle cursor error with queued PCM: error=%d ready=%u running=%u published=%llu\n",audio.error,audio.ready,audio.running,(unsigned long long)ac97.published);
     CHECK(audio.error==-EIO && !audio.ready); /* no successful silent-tail reset */
     vm_active_hook=vm_attached_hook=false; audio.ready=audio.running=false; idle_since=0;
@@ -974,7 +1024,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();test_second_set();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();test_second_set();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

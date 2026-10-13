@@ -536,6 +536,7 @@ bool dosvm_trap(struct trap_frame *tf)
         else if (tf->vector < 0x20 || tf->vector >= 0x30) e = -EFAULT;
     }
     dosvm_trace_flush(v);
+    if (!dosvm_in_irq(v)) dosvm_audio_log(v);
     if (e < 0) {
         v->info.fault_vector = tf->vector;
         v->info.fault_eip = pm ? dpmi_fault_linear(v, (const struct v86_frame *)tf) : (tf->cs << 4) + tf->eip;
@@ -582,6 +583,7 @@ bool dosvm_trap(struct trap_frame *tf)
         kwait_wait_until(&v->wake, wake_condition, v, deadline_after_ms(10));
         dosvm_pic_stall(v, f);
         dosvm_heartbeat(v, f); /* a guest HLT with IF clear also needs samples */
+        if (!dosvm_in_irq(v)) dosvm_audio_log(v);
     }
     /* A protected-mode frame must let the kernel IRET succeed. */
     if (v->info.state != DOSVM_STOPPING && v->frame_pm && !dpmi_frame_check(v, f)) {
@@ -795,7 +797,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
         v->info.resident > commitment) { e = -ENOMEM; goto fail; }
     /* f4-05: the VM's SB16/OPL output joins the mixer when a backend is
      * ready; without one f3-05 keeps discarding with its counter. */
-    if (audio_vm_attach) audio_vm_attach(v->info.key);
+    v->audio.diag.attach_error = audio_vm_attach ? audio_vm_attach(v->info.key) : -ENODEV;
     *out = v;
     return 0;
 fail:

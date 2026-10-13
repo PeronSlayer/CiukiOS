@@ -11,6 +11,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections 
     -Wl,--gc-sections -fsanitize=address,undefined -I "$root/src/kernel/include" \
     "$root/tests/host/record_runtime_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/record_runtime_test"
 "$out/record_runtime_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/serial_audio_test.c" -o "$out/serial_audio_test"
+"$out/serial_audio_test"
 python3 "$root/tests/host/fbdev_fixture_size_test.py"
 
 # F2 ABI: always extract the actual i686 layout using the kernel's flags.
@@ -216,6 +219,12 @@ import sys
 root, out = map(Path, sys.argv[1:])
 source = (root / "src/kernel/core/vmm.c").read_text()
 (out / "dosvm_aspace.inc").write_text(source.split("/* ---- user address spaces ---- */", 1)[1])
+# F4-13: replay the exact production cursor functions beside VM sources,
+# replacing only the register transport, as for the paging functions above.
+source = (root / "src/kernel/drivers/ac97.c").read_text()
+helpers = source[source.index("static unsigned ac97_offset("):source.index("static void stage_log(")]
+cursor = source[source.index("int ac97_observe("):source.index("int ac97_publish(")]
+(out / "dosvm_audio_cursor.inc").write_text(helpers + cursor)
 # f3-02: the exact bytes src/kernel/arch/font.asm includes (offset 64,
 # 95 widths + 95 glyphs x 16 u16 rows), for the VM's synthetic ROM fonts.
 font = (root / "assets/fonts/native/INCONSOL.CFN").read_bytes()[64:64 + 95 + 95 * 32]

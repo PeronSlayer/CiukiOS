@@ -27,6 +27,8 @@
 
 enum dosvm_audio_error { DOSVM_AUDIO_OK, DOSVM_AUDIO_DMA_FAULT, DOSVM_AUDIO_DMA_MODE };
 enum dosvm_sb_kind { DOSVM_SB_PCM, DOSVM_SB_SILENCE, DOSVM_SB_ADPCM };
+enum dosvm_audio_record_kind { DOSVM_AUDIO_RESET=1, DOSVM_AUDIO_VERSION,
+    DOSVM_AUDIO_PLAY, DOSVM_AUDIO_DMA };
 
 struct dosvm_dma_channel {
     uint16_t base_address, base_count, address, count;
@@ -95,6 +97,16 @@ struct dosvm_audio {
     struct dosvm_sb16 sb;
     struct dosvm_opl opl;
     struct dosvm_audio_queue q;
+    /* Bounded first discovery/programming records; produced without I/O,
+     * emitted by the VM worker outside guest interrupt chains. */
+    struct {
+        struct { uint32_t a, b, c; uint8_t kind; } event[16];
+        uint8_t head, count, used[5];
+        uint32_t dropped;
+        bool attachment, environment, summary_pending;
+        int attach_error;
+        uint64_t next_log, next_summary, last_summary, published;
+    } diag;
 };
 
 struct dosvm;
@@ -102,6 +114,8 @@ int dosvm_audio_init(struct dosvm *);
 void dosvm_audio_close(struct dosvm *);
 void dosvm_audio_advance(struct dosvm *, uint64_t elapsed_ms);
 int dosvm_audio_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *);
+void dosvm_audio_log(struct dosvm *);
+void dosvm_audio_record(struct dosvm *, unsigned kind, uint32_t, uint32_t, uint32_t);
 /* 8237A */
 void dosvm_dma_init(struct dosvm *);
 uint8_t dosvm_dma_io(struct dosvm *, uint16_t port, bool write, uint8_t value);

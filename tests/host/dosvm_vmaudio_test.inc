@@ -32,6 +32,7 @@ static void vq_mix(void)
 {
     audio.played_output = audio.output - 7 * AUDIO_QUANTUM; /* the fake transport: seven periods queued */
     audio_mix(vq_out, AUDIO_QUANTUM);
+    audio_vm_published(); /* this fake transport accepts the complete period */
     for (unsigned k = 0; k < AUDIO_QUANTUM; k++) if (vq_n < VQ_CAP) {
         vq_cap[vq_n][0] = vq_out[k].left; vq_cap[vq_n][1] = vq_out[k].right; vq_n++;
     }

@@ -57,7 +57,16 @@ uint8_t dosvm_dma_io(struct dosvm *v, uint16_t port, bool write, uint8_t value)
     if (port <= 0x0F) { c = 0; reg = port; }
     else if (port >= 0xC0 && port <= 0xDF && !(port & 1)) { c = 1; reg = (port - 0xC0) >> 1; }
     else return 0xFF; /* master odd ports are not decoded */
-    if (reg >= 8) return dma_control(d, c, reg, write, value);
+    if (reg >= 8) {
+        uint8_t result = dma_control(d, c, reg, write, value);
+        if (write && reg == 10 && !(value & 4)) {
+            unsigned channel = c * 4 + (value & 3);
+            const struct dosvm_dma_channel *ch = &d->ch[channel];
+            uint32_t address = ((uint32_t)(d->page[dma_page_of[channel]] & (c ? 0xFE : 0xFF)) << 16) | ((uint32_t)ch->address << c);
+            dosvm_audio_record(v, DOSVM_AUDIO_DMA, channel, address, ((uint32_t)ch->count + 1) << c);
+        }
+        return result;
+    }
     struct dosvm_dma_channel *ch = &d->ch[c * 4 + (reg >> 1)];
     bool count = reg & 1, high = d->flipflop[c];
     d->flipflop[c] ^= 1;
