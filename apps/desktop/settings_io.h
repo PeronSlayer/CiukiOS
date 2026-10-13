@@ -3,6 +3,8 @@
 #define CIUKI_SETTINGS_IO_H
 #include "settings.h"
 #include <pthread.h>
+#define CFG_STARTUP_STAGES 10
+extern const char *const cfg_startup_stage_names[CFG_STARTUP_STAGES];
 /* One bounded latest-snapshot mailbox. Disk I/O never holds lock. The caller
  * owns lifetime; stop only after busy() is false (join then cannot wait on I/O). */
 struct cfg_writer {
@@ -11,6 +13,7 @@ struct cfg_writer {
     char text[CFG_TEXT_MAX]; size_t length;
     char *scratch;
     char log[384]; int log_pending;
+    uint64_t stage_us[CFG_STARTUP_STAGES]; unsigned stage_pending, stage_cached;
     char read_text[CFG_TEXT_MAX]; size_t read_length;
     int read_pending, read_ready, read_error;
     unsigned char job[64]; size_t job_length;
@@ -24,6 +27,7 @@ int cfg_writer_submit(struct cfg_writer *, const char *, size_t);
 int cfg_writer_busy(struct cfg_writer *);
 int cfg_writer_result(struct cfg_writer *, int *error);
 void cfg_writer_log(struct cfg_writer *, const char *);
+void cfg_writer_stage(struct cfg_writer *, unsigned stage, uint64_t us, int cached);
 void cfg_writer_read(struct cfg_writer *);
 int cfg_writer_read_result(struct cfg_writer *, char *, size_t *, int *);
 int cfg_writer_job(struct cfg_writer *, const void *, size_t);

@@ -664,6 +664,64 @@ static void test_launch_timing(void)
     puts("PASS launch timing: three policies/models, quiet mode, CREATE/DAMAGE/present distinction, failed present retry, no duplicate frames, bounded startup polling, shutdown blocks launch before tracing");
 }
 #include "shutdown_sequence_test.h"
+static pthread_mutex_t wallpaper_test_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t wallpaper_test_changed=PTHREAD_COND_INITIALIZER;
+static int wallpaper_test_entered, wallpaper_test_release;
+static void wallpaper_test_stage(const char *name)
+{
+    startup_stage(name);
+    if (strcmp(name,"wallpaper_file_read")) return;
+    pthread_mutex_lock(&wallpaper_test_lock); wallpaper_test_entered=1;
+    pthread_cond_signal(&wallpaper_test_changed);
+    while (!wallpaper_test_release) pthread_cond_wait(&wallpaper_test_changed,&wallpaper_test_lock);
+    pthread_mutex_unlock(&wallpaper_test_lock);
+}
+static void test_wallpaper_startup(void)
+{
+    /* Hold the loader after file I/O, before decoding; run production wallpaper
+     * service, menu input and rendering while it is still held. */
+    unsigned char bmp[70]={ 'B','M',70,0,0,0,0,0,0,0,54,0,0,0,40,0,0,0,
+        2,0,0,0,2,0,0,0,1,0,24,0,0,0,0,0,16,0,0,0 };
+    for (unsigned i=54;i<70;i++) bmp[i]=(unsigned char)(i*3);
+    char path[]="/tmp/f2-44-XXXXXX"; int fd=mkstemp(path); assert(fd>=0);
+    assert(write(fd,bmp,sizeof(bmp))==sizeof(bmp)); assert(!close(fd));
+    struct desktop d; fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    d.pixels=calloc(640*480,4); assert(d.pixels);
+    snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"%s",path);
+    memset(startup_us,0,sizeof(startup_us)); startup_cached=startup_sent=0;
+    startup_begin=monotonic(); wallpaper_worker_failed=0;
+    wallpaper_load(&d);
+    wallpaper_poll(&d); assert(!wallpaper_worker_started); /* no loader before first frame */
+    assert(!desk_redraw(&d)); startup_stage("first_frame_presented");
+    assert(!desk_wall_worker_start(&wallpaper_worker,NULL,wallpaper_test_stage)); wallpaper_worker_started=1;
+    wallpaper_serial=desk_wall_worker_submit(&wallpaper_worker,&wallpaper_request);
+    pthread_mutex_lock(&wallpaper_test_lock);
+    while (!wallpaper_test_entered) pthread_cond_wait(&wallpaper_test_changed,&wallpaper_test_lock);
+    pthread_mutex_unlock(&wallpaper_test_lock);
+    uint64_t start=monotonic();
+    struct ciuki_input_event key={.type=CIUKI_INPUT_KEY,.code=0x15b,.value=1}; desk_input(&d,&key);
+    key.value=0; desk_input(&d,&key); /* left Logo opens Start on release */
+    assert(d.menu_open);
+    wallpaper_poll(&d); assert(d.sh.wallpaper_pending);
+    assert(!desk_redraw(&d));
+    assert(monotonic()-start<50000000ull);
+    assert(!startup_us[7]); /* wallpaper not applied, input and a reaction already drawn */
+    pthread_mutex_lock(&wallpaper_test_lock); wallpaper_test_release=1;
+    pthread_cond_signal(&wallpaper_test_changed); pthread_mutex_unlock(&wallpaper_test_lock);
+    for (unsigned i=0;i<10000 && d.sh.wallpaper_pending;i++) {
+        wallpaper_poll(&d);
+        if (d.sh.wallpaper_pending) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+    }
+    assert(!d.sh.wallpaper_pending && !d.sh.image_failed && startup_us[7]);
+    assert(!d.sh.image.pixels && d.sh.wall_valid && d.menu_open);
+    /* A theme/icon invalidation keeps the image; colour/size changes resubmit. */
+    uint32_t *frame=d.sh.wall; d.sh.wall_valid=0; wallpaper_update(&d); assert(d.sh.wall==frame && d.sh.wall_valid);
+    d.sh.cfg.desktop_color++; wallpaper_update(&d); assert(d.sh.wallpaper_pending);
+    d.width=800; d.height=600; wallpaper_update(&d); assert(wallpaper_request.width==800 && wallpaper_request.height==600);
+    desk_wall_worker_stop(&wallpaper_worker); wallpaper_worker_started=0;
+    free(d.pixels); drop_all(&d); fake_reset(); assert(!unlink(path));
+    puts("PASS startup: first solid frame before worker, Start input/reaction under 50 ms while loader held, pointer ownership, theme retention, colour/geometry invalidation");
+}
 int main(void)
 {
     test_music_mixer();
@@ -768,6 +826,7 @@ int main(void)
     test_games_menu();
     test_menu_icons();
     test_launch_timing();
+    test_wallpaper_startup();
     test_shutdown_sequence();
     return 0;
 }

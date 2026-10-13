@@ -394,7 +394,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "launch-test"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
-            sources += [ROOT / "apps/desktop/image.c"]  # shell_service's production shutdown/gate guard
+            sources += [ROOT / "apps/desktop/image.c", ROOT / "apps/desktop/wallpaper_io.c"]  # shell_service's workers
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),
@@ -485,12 +485,13 @@ class DesktopTests(unittest.TestCase):
                                         "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png",
                                         "/System/hwids/pci-ids.json", "/System/hwids/usb-ids.json",
                                         "/system/settings/sounds.cfg",
+                                        *(f"/System/cache/wallpaper/{n}" for n in metadata["wallpaper_cache"]["files"]),
                                         *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "sounds.cfg")})
-        self.assertTrue({"/Programs", "/System", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers", "/Documents/Music", "/Documents/Pictures"} <= directories)
+        self.assertTrue({"/Programs", "/System", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers", "/Documents/Music", "/Documents/Pictures"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 59)  # F4-07 Music Player and decoder notices; f2-43 hardware id tables
+        self.assertEqual(len(records), 64)  # f2-44: five pre-rendered default wallpaper frames
         for r in records:
             if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
@@ -507,6 +508,8 @@ class DesktopTests(unittest.TestCase):
             elif r["path"].startswith("/system/wallpapers/"):
                 # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())
+            elif r["path"].startswith("/System/cache/wallpaper/"):
+                self.assertEqual(r["sha256"], metadata["wallpaper_cache"]["files"][Path(r["path"]).name]["sha256"])
             else:
                 self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
         # Microsoft's ME wallpapers (third_party/win_bg, local only) never enter the image.
@@ -526,7 +529,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp)
             volume = Path(temp) / "fixture.fat"
             with volume.open("wb") as f:
-                f.truncate(32*1024*1024)   # desktop programs, the accessories and the three Ciuki wallpaper scenes (8.4 MiB)
+                f.truncate(64*1024*1024)   # includes five raw wallpaper frames (~19 MiB)
             subprocess.run(["mkfs.fat", str(volume)], check=True, env=env, stdout=subprocess.DEVNULL)
             image.populate_payloads(volume, sources, directories)
             with patch.object(image, "PART_LBA", 0):
@@ -584,7 +587,7 @@ class AppCaseReplayTests(unittest.TestCase):
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
-                                                                                  "shell", "settings", "settings_io", "wallpaper", "keymap", "image", "folder")),
+                                                                                  "shell", "settings", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),

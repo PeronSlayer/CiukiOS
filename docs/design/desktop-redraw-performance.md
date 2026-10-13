@@ -25,7 +25,7 @@ QEMU and hardware qualification).
   mailbox mutex. Keep errors visible and shutdown pending while the writer is
   busy. The existing sound worker establishes native pthread support.
   Theme polling also uses the worker's bounded read mailbox; changing mouse,
-  keyboard or clock preferences retains the decoded wallpaper instead of
+  keyboard or clock preferences retains the rendered wallpaper instead of
   decoding the default PNG again on each reload.
   Display inventory is copied only after its notification counter changes,
   so the 1 ms input cadence does not rescan PCI/mode information every turn.
@@ -78,6 +78,42 @@ Logging: bootlog producers already capture bounded RAM chunks; disk draining
 uses the existing storage worker. Batch normal drains at 250 ms rather than
 on every log byte at the 1 ms timer cadence, leaving explicit shutdown drains
 and writeback deadlines intact.
+
+Wallpaper startup (f2-44, 2026-10-13): the native pthread contract in
+`posix-subset.md`, `src/kernel/proc/thread.c` and the SDK's `pthread.h` provides
+kernel-scheduled worker threads. Following [POSIX thread creation](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html)
+and [mutex memory synchronization](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html),
+use a bounded latest-request mailbox and transfer ownership of a completed
+XRGB frame under its mutex. No filesystem, decoder or scaler operation holds
+that mutex; the desktop polls with trylock and never joins a busy worker.
+The first frame is solid colour. Start wallpaper work only after presentation;
+obsolete requests cannot publish over a newer path, mode, colour or geometry.
+[stb_image 2.30](https://raw.githubusercontent.com/nothings/stb/master/stb_image.h)
+decodes memory buffers; serialize wallpaper decoding in this worker and retain
+the existing integer renderer. Cache reads and writes also belong to the worker,
+including a cache hit (a multi-MiB disk read cannot run on the input thread).
+The actual native API limits a file syscall to 1 MiB and `byte_io` currently
+returns at most one 4 KiB page (`syscalls_file.c`, SDK `posix.c`, F2 file-I/O
+contract). Following [POSIX read](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html),
+loop over bounded requests and handle short transfers/EINTR in the worker for
+both source and cache files, and likewise for writes. A literal one-syscall
+3 MiB frame read is unavailable; the UI instead receives one completed pointer
+and does no read at all. No kernel/API scope change is needed.
+Use a temporary file and [atomic rename](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html)
+before publishing cache files. Cache failure leaves the in-memory result usable.
+The namespace is `/System/cache/wallpaper`; its filename uses the first eight
+hex digits of SHA-256 of a versioned canonical string including the source
+path, size, mtime, geometry, mode, effective colour and bar sizes. Keep the last
+three runtime frames by eviction on use/write. Five default frames are seeded
+by the image builder; the first runtime access trims them to three. FAT mtimes
+are UTC with two-second precision in Ciuki (`px_stat_locked`); image population
+preserves the source mtime and pre-render keys use the same FAT normalization.
+Host tests establish mailbox/cache behaviour and pixel equivalence, not the
+T23's 50 ms reaction bound or hardware memory qualification.
+Verbose startup stages are captured at their monotonic event times and drained
+by the settings writer's separate ten-record mailbox. A cache hit reports the
+read stage with `cache_hit=1` and the decoder/scaler stages with
+`cache_hit=1 skipped=1`, distinguishing pre-rendered work from live decoding.
 
 Integration with f1-26/f2-42 (2026-10-13): rechecked the
 [SDL queue-draining guidance](https://wiki.libsdl.org/SDL3/SDL_PollEvent) and

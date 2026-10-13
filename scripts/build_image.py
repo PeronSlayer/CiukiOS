@@ -27,6 +27,51 @@ LUA = ROOT / "build/apps/lua"
 DESKTOP = ROOT / "build/apps/desktop"
 TEST_PATH = "/system/tests/lua-5.4.8-tests"
 WALLPAPERS = ("Ciuk1.png", "Ciuk2.png", "Ciuk3.png")
+WALLPAPER_SIZES = ((800, 600), (1024, 768), (1280, 800), (1280, 1024), (1400, 1050))
+
+
+def wallpaper_cache_payloads(out=None):
+    """Pre-render the default with the production C renderer, never a PIL substitute."""
+    out = Path(out) if out is not None else DESKTOP / "wallpaper-cache"
+    source = ROOT / "assets/wallpapers/ciuki/Ciuk2.png"
+    # Ciuki interprets FAT timestamps as UTC; mcopy -m with TZ=UTC below
+    # preserves this exact source timestamp, truncated to two seconds.
+    mtime = int(source.stat().st_mtime) & ~1
+    units = ("render_wallpaper.c", "wallpaper_io.c", "wallpaper.c", "image.c", "settings.c", "theme.c")
+    inputs = {"sources": {name: sha256(ROOT / "apps/desktop" / name) for name in (*units, "wallpaper_io.h", "wallpaper.h", "settings.h", "theme.h", "ui_fonts.h", "desktop.h", "shell.h", "protocol.h")},
+              "stb_sha256": sha256(ROOT / "third_party/stb/stb_image.h"),
+              "source_sha256": sha256(source), "source_size": source.stat().st_size, "source_mtime": mtime}
+    manifest = out / "manifest.json"
+    try:
+        record = json.loads(manifest.read_text())
+        valid = record["inputs"] == inputs and len(record["files"]) == len(WALLPAPER_SIZES) and all(
+            (out / name).stat().st_size == frame["size"] and sha256(out / name) == frame["sha256"]
+            for name, frame in record["files"].items())
+    except (OSError, ValueError, KeyError):
+        valid = False
+    if not valid:
+        out.mkdir(parents=True, exist_ok=True)
+        # Regenerate this derived staging directory, including obsolete keys.
+        for path in out.glob("*.raw"):
+            path.unlink()
+        with tempfile.TemporaryDirectory(prefix="render-", dir=out) as temporary:
+            tool = Path(temporary) / "render-wallpaper"
+            subprocess.run(["nice", "-n", "19", "clang", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
+                            "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            *(str(ROOT / "apps/desktop" / name) for name in units), "-o", str(tool)], check=True)
+            result = subprocess.run(["nice", "-n", "19", str(tool), str(source), str(out), str(mtime)], check=True,
+                                    capture_output=True, text=True)
+        names = result.stdout.splitlines()
+        require(len(names) == len(WALLPAPER_SIZES), "default wallpaper cache resolutions")
+        record = {"inputs": inputs, "format": "XRGB8888 little-endian B,G,R,0", "mode": "fill", "colour": "375564",
+                  "source_path": "/system/wallpapers/Ciuk2.png", "files": {}}
+        for name, (width, height) in zip(names, WALLPAPER_SIZES):
+            require(Path(name).name == name and name.endswith(f"-{width}x{height}-fill.raw"), "wallpaper cache key")
+            path = out / name
+            require(path.stat().st_size == width * height * 4, "wallpaper cache frame size")
+            record["files"][name] = {"sha256": sha256(path), "size": path.stat().st_size, "width": width, "height": height}
+        manifest.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return {f"/System/cache/wallpaper/{name}": out / name for name in record["files"]}, record
 
 
 def run(*args):
@@ -87,10 +132,13 @@ def desktop_payloads():
     # time); the owner may add PNG/JPEG/BMP files to /system/wallpapers. Never Microsoft's
     # third_party/win_bg bitmaps: see docs/desktop.md.
     sources.update({f"/system/wallpapers/{name}": ROOT / "assets/wallpapers/ciuki" / name for name in WALLPAPERS})
+    cache_sources, cache = wallpaper_cache_payloads()
+    sources.update(cache_sources)
+    metadata["wallpaper_cache"] = cache
     sound_sources, sounds = sound_payloads()
     sources.update(sound_sources)
     metadata["sounds"] = sounds
-    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/hwids", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def sound_payloads():
@@ -226,7 +274,11 @@ def populate_payloads(volume, sources, directories):
     for directory in sorted(directories, key=lambda p: (p.count("/"), p)):
         run("mmd", "-i", volume, "::" + directory)
     for name, source in sorted(sources.items()):
-        run("mcopy", "-i", volume, source, "::" + name)
+        if name.startswith("/system/wallpapers/"):
+            subprocess.run(["mcopy", "-m", "-i", str(volume), str(source), "::" + name], cwd=ROOT,
+                           env=dict(os.environ, TZ="UTC"), check=True)
+        else:
+            run("mcopy", "-i", volume, source, "::" + name)
 
 
 def check_payloads(image, payloads, directories):
