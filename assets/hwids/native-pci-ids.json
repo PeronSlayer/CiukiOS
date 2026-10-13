@@ -1,0 +1,8 @@
+{
+  "1011:0009": "DEC 21140 Fast Ethernet Controller",
+  "1011:0019": "DEC/Intel 21143 Fast Ethernet Controller",
+  "1106:3043": "VIA VT86C100A Rhine Fast Ethernet Controller",
+  "1106:3065": "VIA VT6102 Rhine II Fast Ethernet Controller",
+  "1106:3106": "VIA VT6105 Rhine III Fast Ethernet Controller",
+  "8086:1017": "Intel PRO/1000 MT Desktop Connection (82540EP)"
+}

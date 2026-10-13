@@ -69,9 +69,10 @@ unsigned dispatch(void) {
         self.assertEqual(self.native.validate(forced.encode(), len(forced), 0), 0)
 
     def test_twin_matrix_and_explicit_network(self):
-        self.assertEqual(len(self.cases), 12)
+        self.assertEqual(len(self.cases), 24)
         pairs = {(c['profile'], c['device_exceptions']['network']) for c in self.cases}
-        self.assertEqual(len(pairs), 12)
+        self.assertEqual(len(pairs), 24)
+        self.assertEqual({nic for _, nic in pairs}, {'rtl8139', 'ne2k_pci', 'i82559er', 'e1000', 'pcnet', 'tulip'})
         for case in self.cases:
             profile = json.loads((ROOT / 'tests/profiles' / (case['profile'] + '.json')).read_text())
             args, request = runner.qemu_args('qemu-fixture', profile, case, '12345678', Path('overlay.qcow2'), Path('bios'))
@@ -81,7 +82,7 @@ unsigned dispatch(void) {
             self.assertTrue(request.startswith('f6:net-arp run=12345678'))
             self.assertEqual('platform=e500' in request, case['profile'] == 'qemu-e500')
         profile = json.loads((ROOT / 'tests/profiles/qemu-t23.json').read_text())
-        for nic in ('e1000', '', 'rtl8139,hostfwd=tcp::22-:22'):
+        for nic in ('e1000e', '3c905', 'rhine', '', 'rtl8139,hostfwd=tcp::22-:22'):
             bad = copy.deepcopy(self.cases[0]); bad['device_exceptions']['network'] = nic
             with self.assertRaises(res.Refusal):
                 runner.qemu_args('fixture', profile, bad, '12345678', Path('overlay'), Path('bios'))
@@ -112,3 +113,25 @@ unsigned dispatch(void) {
                 parse(broken)
         with self.assertRaises(EvidenceError):
             parse(records[:2] + records[3:])
+
+    def test_second_set_requires_identity_carrier_and_complete_evidence(self):
+        for case in self.cases:
+            name = case['device_exceptions']['network']
+            if name not in ('e1000', 'pcnet', 'tulip'):
+                continue
+            def check(driver, link):
+                parser = Parser('12345678', 'net-arp')
+                rows = [f'event=BEGIN',
+                        f'event=READY driver={driver} mac=52:54:00:12:34:56 mode=intx link={link}',
+                        'event=DATA case=arp arp=ok mac=52:55:0a:00:02:02 tx=1 rx=1 errors=0 dropped=0',
+                        'event=DATA case=budget max_irq_us=10 violations=0 interrupts=1 quarantine=0',
+                        'event=DATA case=cleanup stopped=1 dma_pages=0 irq_attached=0',
+                        'event=END status=PASS']
+                for seq, row in enumerate(rows, 1):
+                    parser.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=net-arp {row}'.encode())
+                parser.check(case['expected'])
+            check(name, 'up')
+            with self.assertRaises(EvidenceError):
+                check(name, 'down')
+            with self.assertRaises(EvidenceError):
+                check('rtl8139', 'up')

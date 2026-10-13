@@ -29,3 +29,13 @@ F4-11 adds three AudioPCI controller names absent from the INF-derived table
 referenced in [the transport notes](../../docs/design/f4-audio-second-set.md).
 These are supplementary names; they do not alter the INF generation counts
 above or imply physical qualification.
+
+## Native NIC supplements (F6-08)
+
+`native-pci-ids.json` supplies six labels missing from the INF-derived PCI
+database: DEC 21140/21143, VIA Rhine I/II/III and Intel 82540EP. Names and IDs
+come from the manufacturer programming references recorded in
+`docs/validation/f6-08-nic-drivers.md`, checked against the Linux family ID
+tables. `scripts/build_hwids.py` fills only missing IDs when regenerating;
+existing INF-derived labels retain precedence. The merged PCI file has
+1,161 entries; the historical INF extraction counts above remain unchanged.

@@ -1058,6 +1058,1074 @@
           }
         ]
       }
+    },
+    {
+      "id": "e1000-qemu-t23",
+      "probe": "net-arp",
+      "profile": "qemu-t23",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "e1000",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "pcnet-qemu-t23",
+      "probe": "net-arp",
+      "profile": "qemu-t23",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "pcnet"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "pcnet",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "tulip-qemu-t23",
+      "probe": "net-arp",
+      "profile": "qemu-t23",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "tulip"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "tulip",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "e1000-qemu-e500",
+      "probe": "net-arp",
+      "profile": "qemu-e500",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "e1000",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "pcnet-qemu-e500",
+      "probe": "net-arp",
+      "profile": "qemu-e500",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "pcnet"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "pcnet",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "tulip-qemu-e500",
+      "probe": "net-arp",
+      "profile": "qemu-e500",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "tulip"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "tulip",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "e1000-qemu-desktop-1998",
+      "probe": "net-arp",
+      "profile": "qemu-desktop-1998",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "e1000",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "pcnet-qemu-desktop-1998",
+      "probe": "net-arp",
+      "profile": "qemu-desktop-1998",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "pcnet"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "pcnet",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "tulip-qemu-desktop-1998",
+      "probe": "net-arp",
+      "profile": "qemu-desktop-1998",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "tulip"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "tulip",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "e1000-qemu-desktop-2002",
+      "probe": "net-arp",
+      "profile": "qemu-desktop-2002",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "e1000"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "e1000",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "pcnet-qemu-desktop-2002",
+      "probe": "net-arp",
+      "profile": "qemu-desktop-2002",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "pcnet"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "pcnet",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "tulip-qemu-desktop-2002",
+      "probe": "net-arp",
+      "profile": "qemu-desktop-2002",
+      "selector": "f6:net-arp run={run_id}",
+      "device_exceptions": {
+        "network": "tulip"
+      },
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "READY"
+            },
+            "fields": {
+              "driver": "tulip",
+              "mac": "52:54:00:12:34:56",
+              "mode": "intx",
+              "link": "up"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "arp"
+            },
+            "fields": {
+              "arp": "ok",
+              "mac": "52:55:0a:00:02:02",
+              "tx": {
+                "ge": 1
+              },
+              "rx": {
+                "ge": 1
+              },
+              "errors": {
+                "eq": 0
+              },
+              "dropped": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "budget"
+            },
+            "fields": {
+              "max_irq_us": {
+                "le": 50
+              },
+              "violations": {
+                "eq": 0
+              },
+              "quarantine": {
+                "eq": 0
+              },
+              "interrupts": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "stopped": {
+                "eq": 1
+              },
+              "dma_pages": {
+                "eq": 0
+              },
+              "irq_attached": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
     }
   ]
 }

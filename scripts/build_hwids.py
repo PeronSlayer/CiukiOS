@@ -115,6 +115,20 @@ def encoded(data):
     return (json.dumps(data, ensure_ascii=True, sort_keys=True, indent=2) + '\n').encode('ascii')
 
 
+def native_names(pci):
+    """Fill missing native NIC labels from manufacturer programming manuals.
+
+    Owner-derived INF labels keep precedence; no Windows payload is added.
+    """
+    result = dict(pci)
+    extra = json.loads((ROOT / 'assets/hwids/native-pci-ids.json').read_text())
+    for key, name in extra.items():
+        if not re.fullmatch(r'[0-9a-f]{4}:[0-9a-f]{4}', key) or ascii_name(name) != name:
+            raise ValueError(f'invalid native hardware label: {key}')
+        result.setdefault(key, name)
+    return dict(sorted(result.items()))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('inf_dir', nargs='?', type=Path, default=os.environ.get('CIUKIOS_INF_DIR'))
@@ -126,6 +140,7 @@ def main(argv=None):
     if not root.is_dir():
         parser.error(f'not an INF collection directory: {root}')
     infs, pci, usb = collect(root)
+    pci = native_names(pci)
     pbytes, ubytes = encoded(pci), encoded(usb)
     if len(pbytes) + len(ubytes) > MAX_JSON:
         print(f'error: combined JSON size {len(pbytes) + len(ubytes)} exceeds {MAX_JSON}', file=sys.stderr)
