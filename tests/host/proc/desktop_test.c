@@ -544,11 +544,19 @@ static void test_desktop_present(void)
     }
     memcpy(expected,target,sizeof(target));
     q.operation=CIUKI_ACCEL_COPY;q.rect=(struct ciuki_rect){1,2,2,3,4,3};
-    CHECK(!grant_accel(p,grants[0],&q));
-    for (unsigned y=0;y<3;y++) for (unsigned x=0;x<4;x++)
-        CHECK(!memcmp(target+(3+y)*device.pitch+(2+x)*4,expected+(2+y)*device.pitch+(1+x)*4,4));
+    CHECK(grant_accel(p,grants[0],&q)==-EAGAIN);
+    CHECK(!memcmp(target,expected,sizeof(target)));
+    /* Recover through the normal RAM-surface upload, without an LFB read. */
+    struct ciuki_rect recovery={0,0,2,3,4,3};
+    CHECK(!grant_present(p,grants[0],fd,&recovery));
+    for (unsigned y=0;y<3;y++) for (unsigned x=0;x<4;x++) {
+        uint32_t rgb=pixels[y*7+x];
+        uint32_t value=((rgb>>19)&31)*8+((rgb>>8)&255)*256+((rgb&255)/4)*65536;
+        for (unsigned j=0;j<4;j++) expected[(3+y)*device.pitch+(2+x)*4+j]=(uint8_t)(value>>(8*j));
+    }
+    CHECK(!memcmp(target,expected,sizeof(target)));
     CHECK(!grants_display_busy() && !t->cleanup && !t->operation);
-    puts("display accel syscall: grant/pointer/error ordering, wire/generation, software fill/overlap copy and lifetime cleanup PASS");
+    puts("display accel syscall: grant/pointer/error ordering, wire/generation, software fill/copy retry, RAM re-present and lifetime cleanup PASS");
     struct surface *wide = desktop_fd(p, wide_fd)->u.surface;
     uint32_t pitch = 2048*4+3, size = pitch*2;
     uint8_t *wide_target = malloc(size); CHECK(wide_target); memset(wide_target, 0x55, size);

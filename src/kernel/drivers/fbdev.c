@@ -29,7 +29,7 @@ static void *change_window;
 static uint32_t change_capacity;
 static unsigned console_rows;
 static unsigned drawing;
-static uint64_t full_count, full_total_us, full_last_us, full_max_us, full_log_tick;
+static uint64_t full_count, full_bytes, full_total_us, full_last_us, full_max_us, full_log_tick;
 enum { CONSOLE_BUSY = 1, PRESENT_BUSY = 2 };
 
 void fbdev_console_region(unsigned rows)
@@ -248,28 +248,104 @@ static bool clip(const struct fb_device *d, const struct fb_rect *r, struct fb_r
     return true;
 }
 
+struct pixel_layout {
+    unsigned bytes, red_shift, red_pos, green_shift, green_pos, blue_shift, blue_pos;
+};
+
+static struct pixel_layout pixel_layout(const struct fb_device *d)
+{
+    return (struct pixel_layout){ d->bpp / 8, 8 - d->red_size, d->red_pos,
+                                 8 - d->green_size, d->green_pos, 8 - d->blue_size, d->blue_pos };
+}
+
+static uint32_t pack_layout(const struct pixel_layout *l, uint32_t rgb)
+{
+    return ((((rgb >> 16) & 255u) >> l->red_shift) << l->red_pos) |
+           ((((rgb >> 8) & 255u) >> l->green_shift) << l->green_pos) |
+           (((rgb & 255u) >> l->blue_shift) << l->blue_pos);
+}
+
 static uint32_t pack(const struct fb_device *d, uint32_t rgb)
 {
-    return ((((rgb >> 16) & 255u) >> (8 - d->red_size)) << d->red_pos) |
-           ((((rgb >> 8) & 255u) >> (8 - d->green_size)) << d->green_pos) |
-           (((rgb & 255u) >> (8 - d->blue_size)) << d->blue_pos);
+    const struct pixel_layout l = pixel_layout(d);
+    return pack_layout(&l, rgb);
 }
+
+/* Unaligned RAM loads and generic integer stores are valid on i686. The
+ * lowered C alignment and alias permission also cover arbitrary row pitch. */
+typedef uint32_t fb_word __attribute__((aligned(1), may_alias));
+typedef uint16_t fb_half __attribute__((aligned(1), may_alias));
 
 static void pixel(uint8_t *p, unsigned bytes, uint32_t colour)
 {
-    /* i386 supports unaligned integer stores. Lower the C alignment too,
-     * so arbitrary pitch/base does not introduce alignment or aliasing UB. */
-    typedef uint32_t fb_word __attribute__((aligned(1), may_alias));
-    if (bytes == 2) {
-        p[0] = (uint8_t)colour;
-        p[1] = (uint8_t)(colour >> 8);
-    } else if (bytes == 4)
-        *(volatile fb_word *)p = colour;
+    if (bytes == 2)
+        *(fb_half *)p = (uint16_t)colour;
+    else if (bytes == 4)
+        *(fb_word *)p = colour;
     else {
         p[0] = (uint8_t)colour;
         p[1] = (uint8_t)(colour >> 8);
         p[2] = (uint8_t)(colour >> 16);
     }
+}
+
+/* Intel SDM Vol. 3A, 253668-084US, sections 12.3/12.3.1 and 9.2.5:
+ * https://cdrdv2-public.intel.com/825758/253668-sdm-vol-3a.pdf
+ * Consecutive WC writes combine; partially filled buffers drain at the next
+ * serializing event. A compiler barrier per row preserves generated stores,
+ * without volatile per pixel or a hardware fence per row. Keep the existing
+ * framebuffer_write_drain() before ownership release and the end timestamp. */
+static void row_written(void) { __asm__ volatile("" ::: "memory"); }
+
+/* Both pointers must be dword aligned; count is in dwords, not bytes. */
+static void row_copy(uint8_t *dst, const void *src, size_t count)
+{
+    __asm__ volatile("cld\n\trep movsl" : "+D"(dst), "+S"(src), "+c"(count) : : "memory", "cc");
+}
+
+static void row_fill(uint8_t *dst, uint32_t colour, size_t count)
+{
+    __asm__ volatile("cld\n\trep stosl" : "+D"(dst), "+c"(count) : "a"(colour) : "memory", "cc");
+}
+
+static void present_xrgb_row(uint8_t *dst, const uint8_t *src, unsigned width)
+{
+    uint32_t used = 0;
+    for (unsigned x = 0; x < width; x++) used |= ((const fb_word *)src)[x];
+    if (!(used & 0xff000000u)) {
+        row_copy(dst, src, width);
+        return;
+    }
+    /* X is ignored by the public surface contract. Normalize in RAM, never
+     * by reading or masking a destination word in the WC framebuffer. */
+    uint32_t pixels[64];
+    while (width) {
+        unsigned n = width > ARRAY_SIZE(pixels) ? ARRAY_SIZE(pixels) : width;
+        for (unsigned x = 0; x < n; x++) pixels[x] = ((const fb_word *)src)[x] & 0xffffffu;
+        row_copy(dst, pixels, n);
+        src += n * 4; dst += n * 4; width -= n;
+    }
+}
+
+static uint16_t pack_565(uint32_t rgb)
+{
+    return (uint16_t)(((rgb >> 8) & 0xf800u) | ((rgb >> 5) & 0x07e0u) | ((rgb >> 3) & 0x001fu));
+}
+
+static void present_565_row(uint8_t *dst, const uint8_t *src, unsigned width)
+{
+    if ((uintptr_t)dst & 2u) {
+        pixel(dst, 2, pack_565(*(const fb_word *)src));
+        dst += 2; src += 4; width--;
+    }
+    uint16_t pixels[64] __attribute__((aligned(4)));
+    while (width >= 2) {
+        unsigned n = width > ARRAY_SIZE(pixels) ? ARRAY_SIZE(pixels) : width & ~1u;
+        for (unsigned x = 0; x < n; x++) pixels[x] = pack_565(((const fb_word *)src)[x]);
+        row_copy(dst, pixels, n / 2);
+        src += n * 4; dst += n * 2; width -= n;
+    }
+    if (width) pixel(dst, 2, pack_565(*(const fb_word *)src));
 }
 
 int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, const struct fb_rect *r)
@@ -293,15 +369,21 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
                  !c.x && !c.y && c.width == (int32_t)d->width && c.height == (int32_t)d->height;
     uint64_t start = timed ? framebuffer_cycles() : 0;
     uint32_t sx = (uint32_t)((int64_t)c.x - r->x), sy = (uint32_t)((int64_t)c.y - r->y);
-    unsigned bytes = d->bpp / 8;
+    const struct pixel_layout l = pixel_layout(d);
+    bool xrgb = l.bytes == 4 && !l.red_shift && l.red_pos == 16 &&
+                !l.green_shift && l.green_pos == 8 && !l.blue_shift && !l.blue_pos;
+    bool rgb565 = l.bytes == 2 && l.red_shift == 3 && l.red_pos == 11 &&
+                  l.green_shift == 2 && l.green_pos == 5 && l.blue_shift == 3 && !l.blue_pos;
     for (int32_t y = 0; y < c.height; y++) {
         const uint8_t *sp = (const uint8_t *)s->pixels + (sy + (uint32_t)y) * s->pitch + sx * 4;
-        uint8_t *dp = d->mapped + (c.y + (uint32_t)y) * d->pitch + (uint32_t)c.x * bytes;
-        for (int32_t x = 0; x < c.width; x++) {
-            uint32_t rgb;
-            memcpy(&rgb, sp + (uint32_t)x * 4, 4);
-            pixel(dp + (uint32_t)x * bytes, bytes, pack(d, rgb));
-        }
+        uint8_t *dp = d->mapped + (c.y + (uint32_t)y) * d->pitch + (uint32_t)c.x * l.bytes;
+        if (xrgb && !(((uintptr_t)sp | (uintptr_t)dp) & 3u))
+            present_xrgb_row(dp, sp, (unsigned)c.width);
+        else if (rgb565 && !((uintptr_t)dp & 1u))
+            present_565_row(dp, sp, (unsigned)c.width);
+        else for (int32_t x = 0; x < c.width; x++)
+            pixel(dp + (uint32_t)x * l.bytes, l.bytes, pack_layout(&l, ((const fb_word *)sp)[x]));
+        row_written();
     }
     uint64_t end = present_end(d, &c, timed);
     if (timed) {
@@ -310,13 +392,17 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
         full_last_us = (cycles / g_tsc_per_ms) * 1000 +
                        (cycles % g_tsc_per_ms) * 1000 / g_tsc_per_ms;
         full_count++;
+        full_bytes += (uint64_t)(uint32_t)c.width * (uint32_t)c.height * l.bytes;
         full_total_us += full_last_us;
         if (full_last_us > full_max_us) full_max_us = full_last_us;
         uint64_t now = g_ticks;
         if ((g_boot.flags & CBI_F_VERBOSE) && (full_count == 1 || now - full_log_tick >= 1000)) {
             full_log_tick = now;
-            klog("[display] present full count=%llu total_us=%llu last_us=%llu max_us=%llu tsc_khz=%llu",
-                 full_count, full_total_us, full_last_us, full_max_us, g_tsc_per_ms);
+            /* bytes/us is decimal MB/s; count pixels, excluding pitch padding.
+             * Accumulate bytes so mode changes cannot distort the average. */
+            klog("[display] present full count=%llu total_us=%llu last_us=%llu max_us=%llu tsc_khz=%llu lfb_mb_s=%llu",
+                 full_count, full_total_us, full_last_us, full_max_us, g_tsc_per_ms,
+                 full_total_us ? full_bytes / full_total_us : 0);
         }
     }
     return 0;
@@ -342,8 +428,16 @@ int fbdev_fill_to(const struct fb_device *d, const struct fb_rect *r, uint32_t c
     }
     for (int32_t y = 0; y < c.height; y++) {
         uint8_t *dp = d->mapped + (c.y + (uint32_t)y) * d->pitch + (uint32_t)c.x * bytes;
-        for (int32_t x = 0; x < c.width; x++)
+        unsigned width = (unsigned)c.width;
+        if (bytes == 4 && !((uintptr_t)dp & 3u))
+            row_fill(dp, colour, width);
+        else if (bytes == 2 && !((uintptr_t)dp & 1u)) {
+            if ((uintptr_t)dp & 2u) { pixel(dp, 2, colour); dp += 2; width--; }
+            row_fill(dp, colour | (colour << 16), width / 2);
+            if (width & 1u) pixel(dp + (width & ~1u) * 2, 2, colour);
+        } else for (int32_t x = 0; x < c.width; x++)
             pixel(dp + (uint32_t)x * bytes, bytes, colour);
+        row_written();
     }
     (void)present_end(d, &c, false);
     return 0;
@@ -393,7 +487,7 @@ int fbdev_copy_to(const struct fb_device *d, const struct fb_rect *r, int32_t x,
     struct fb_rect busy = dst;
     if (r->y < busy.y) busy.y = r->y;
     if (!present_begin(d, &busy)) return -EBUSY;
-    if (d == &device && acceleration && acceleration->capabilities(acceleration->ctx)) {
+    if (d == &device && acceleration && (acceleration->capabilities(acceleration->ctx) & 1u)) {
         int e = acceleration->copy_rect(acceleration->ctx,r,x,y);
         (void)present_end(d,&busy,false);
         /* A partially executed overlapping blit has lost its original source.
@@ -403,14 +497,11 @@ int fbdev_copy_to(const struct fb_device *d, const struct fb_rect *r, int32_t x,
     if (d == &device && acceleration && acceleration->sync(acceleration->ctx)) {
         (void)present_end(d,&busy,false); return -EIO;
     }
-    unsigned bytes = d->bpp / 8;
-    for (int32_t row = 0; row < r->height; row++) {
-        int32_t i = y > r->y ? r->height - 1 - row : row;
-        memmove(d->mapped + (uint32_t)(y+i)*d->pitch + (uint32_t)x*bytes,
-                d->mapped + (uint32_t)(r->y+i)*d->pitch + (uint32_t)r->x*bytes, (uint32_t)r->width*bytes);
-    }
+    /* LFB reads are uncached, even when WC accelerates its stores. The
+     * desktop's screen_copy/scroll_copy recovery rebuilds scene damage from
+     * the authoritative RAM surface and re-presents it after -EAGAIN. */
     (void)present_end(d,&busy,false);
-    return 0;
+    return -EAGAIN;
 }
 
 int fbdev_accel_request(const struct ciuki_accel_request *q)
@@ -448,9 +539,12 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
         if (err && (!acceleration || !acceleration->sync(acceleration->ctx))) {
             unsigned bytes=device.bpp/8;
             uint32_t fg=pack(&device,q->colour), bg=pack(&device,q->background);
-            for (int32_t y=c.y; y<c.y+c.height; y++) for (int32_t x=c.x; x<c.x+c.width; x++)
-                pixel(device.mapped+(uint32_t)y*device.pitch+(uint32_t)x*bytes,bytes,
-                      q->pattern[y&7] & (0x80u >> (x&7)) ? fg : bg);
+            for (int32_t y=c.y; y<c.y+c.height; y++) {
+                for (int32_t x=c.x; x<c.x+c.width; x++)
+                    pixel(device.mapped+(uint32_t)y*device.pitch+(uint32_t)x*bytes,bytes,
+                          q->pattern[y&7] & (0x80u >> (x&7)) ? fg : bg);
+                row_written();
+            }
             err=0;
         }
         (void)present_end(&device,&c,false); goto done;

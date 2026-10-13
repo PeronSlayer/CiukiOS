@@ -75,6 +75,9 @@ int fbdev_fill(const struct fb_rect *rect, uint32_t colour);
 struct ciuki_accel_request;
 int fbdev_accel_request(const struct ciuki_accel_request *);
 void fbdev_cursor_hide(void);
+/* Strictly bounded screen copy, hardware only. No software LFB reads.
+ * -EAGAIN requires reconstruction/presentation from the caller's RAM frame;
+ * failed overlapping hardware copies may already have modified scanout. */
 int fbdev_copy_to(const struct fb_device *, const struct fb_rect *, int32_t, int32_t);
 /* Same production renderer for private shadow fixtures. These do not claim
  * hardware or mutate the live device. Caller owns and serializes the target;

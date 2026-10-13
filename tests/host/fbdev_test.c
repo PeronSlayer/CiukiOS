@@ -1,6 +1,7 @@
 /* T0: production framebuffer renderer/probe with heap-backed LFB.
  * Build: scripts/test/host_kernel_tests.sh (ASan/UBSan).
  * SPDX-License-Identifier: GPL-2.0-only */
+#define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,12 @@
 #include <ciuki/mm.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/registry.h>
+
+/* _DEFAULT_SOURCE exposes host wait macros; the kernel supplies its own. */
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
 
 static unsigned failures, cases;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -139,6 +146,19 @@ int registry_claim(enum res_type t, uint32_t s, uint32_t e, const char *o, bool 
 
 #include "../../src/kernel/drivers/fbdev.c"
 #include "../../src/kernel/drivers/fbdev_probe.c"
+
+/* The included kernel uses Ciuki's ABI constants. These test-only headers
+ * supply the host mmap/sysconf constants after that code is compiled. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmacro-redefined"
+#include <sys/mman.h>
+#undef _SC_PAGESIZE
+#undef _SC_OPEN_MAX
+#undef _SC_ARG_MAX
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#include <unistd.h>
+#pragma clang diagnostic pop
 
 /* Obvious pixel reference: enumerate every source pixel, test destination
  * membership in 64-bit arithmetic, encode channels independently and write
@@ -299,6 +319,122 @@ static void render_tests(unsigned bpp, unsigned padding, unsigned format, unsign
     free(saved); free(source); free(expected); free(raw);
 }
 
+/* Wide rows exercise multiple conversion buffers and their odd tails. An
+ * odd-address destination also exercises the production generic path; compare both
+ * renderers with the independent byte oracle, including untouched padding. */
+static void fast_row_tests(unsigned format, unsigned padding, unsigned source_padding,
+                           unsigned source_offset, unsigned destination_offset, bool zero_x)
+{
+    enum { W = 173, H = 9, SWIDE = 181, SHIGH = 13, G = 32 };
+    unsigned bpp = format == 1 ? 16 : format == 2 ? 24 : 32;
+    unsigned pitch = W * (bpp / 8) + padding, size = pitch * H;
+    unsigned source_pitch = SWIDE * 4 + source_padding, source_size = source_pitch * SHIGH;
+    uint8_t *raw = malloc(size + 2 * G + destination_offset);
+    uint8_t *generic = malloc(size + 2 * G + 1), *expected = malloc(size);
+    uint8_t *source = malloc(source_size + 2 * G + source_offset), *saved = malloc(source_size);
+    CHECK(raw && generic && expected && source && saved);
+    if (!raw || !generic || !expected || !source || !saved) exit(2);
+    uint8_t *pixels = source + G + source_offset;
+    memset(source, 0x5a, source_size + 2 * G + source_offset);
+    for (unsigned y = 0; y < SHIGH; y++) for (unsigned x = 0; x < SWIDE; x++) {
+        uint32_t rgb = random_u32();
+        rgb = zero_x ? rgb & 0xffffffu : rgb | 0xff000000u;
+        memcpy(pixels + y * source_pitch + x * 4, &rgb, 4);
+    }
+    memcpy(saved, pixels, source_size);
+    struct fb_surface s = { pixels, SWIDE, SHIGH, source_pitch, source_size };
+    struct fb_device d = {
+        .width = W, .height = H, .pitch = pitch, .size = size, .mapped = raw + G + destination_offset,
+        .bpp = bpp, .present = true, .red_size = 8, .red_pos = 16,
+        .green_size = 8, .green_pos = 8, .blue_size = 8,
+        .rsvd_size = bpp == 32 ? 8 : 0, .rsvd_pos = 24,
+    };
+    if (format == 1) {
+        d.red_size = 5; d.red_pos = 11; d.green_size = 6; d.green_pos = 5; d.blue_size = 5;
+    } else if (format == 3) { d.red_pos = 0; d.blue_pos = 16; }
+    struct fb_device slow = d; slow.mapped = generic + G + 1;
+    const struct fb_rect edges[] = {
+        {0,0,W,H}, {-3,-1,SWIDE,SHIGH}, {1,1,1,1}, {3,2,63,3}, {3,2,64,3},
+        {3,2,65,3}, {3,2,127,3}, {3,2,128,3}, {3,2,129,3}, {W-3,H-2,11,5},
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(edges) + 80; i++) {
+        struct fb_rect r = i < ARRAY_SIZE(edges) ? edges[i] : (struct fb_rect){
+            (int32_t)(random_u32() % 81) - 40, (int32_t)(random_u32() % 19) - 8,
+            (int32_t)(random_u32() % (SWIDE + 1)), (int32_t)(random_u32() % (SHIGH + 1)) };
+        memset(raw, 0xa5, size + 2 * G + destination_offset);
+        memset(generic, 0xa5, size + 2 * G + 1); memset(expected, 0xa5, size);
+        CHECK(!fbdev_present_to(&d, &s, &r) && !fbdev_present_to(&slow, &s, &r));
+        fb_reference_present(&d, expected, &s, &r);
+        CHECK(!memcmp(d.mapped, expected, size) && !memcmp(d.mapped, slow.mapped, size));
+        uint32_t colour = random_u32();
+        CHECK(!fbdev_fill_to(&d, &r, colour) && !fbdev_fill_to(&slow, &r, colour));
+        reference_fill(&d, expected, &r, colour);
+        CHECK(!memcmp(d.mapped, expected, size) && !memcmp(d.mapped, slow.mapped, size));
+        for (unsigned g = 0; g < G; g++)
+            CHECK(raw[g] == 0xa5 && raw[G + destination_offset + size + g] == 0xa5 &&
+                  generic[g] == 0xa5 && generic[G + 1 + size + g] == 0xa5);
+        cases += 2;
+    }
+    CHECK(!memcmp(pixels, saved, source_size));
+    free(saved); free(source); free(expected); free(generic); free(raw);
+}
+
+static unsigned copy_caps, copy_calls, copy_syncs;
+static int copy_result, copy_sync_result;
+static unsigned copy_capabilities(void *ctx) { (void)ctx; return copy_caps; }
+static int copy_sync(void *ctx) { (void)ctx; copy_syncs++; return copy_sync_result; }
+static int copy_hardware(void *ctx, const struct fb_rect *r, int32_t x, int32_t y)
+{
+    (void)ctx; CHECK(r->x == 1 && r->y == 1 && r->width == 8 && r->height == 6 && x == 2 && y == 2);
+    copy_calls++; return copy_result;
+}
+
+static void copy_fallback_tests(void)
+{
+    long page = sysconf(_SC_PAGESIZE); CHECK(page > 0);
+    uint8_t *unreadable = mmap(0, (size_t)page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(unreadable != MAP_FAILED);
+    if (unreadable == MAP_FAILED) exit(2);
+    struct fb_device d = {
+        .width = 17, .height = 13, .pitch = 17 * 4, .size = 13 * 17 * 4, .mapped = unreadable,
+        .bpp = 32, .present = true, .red_size = 8, .red_pos = 16,
+        .green_size = 8, .green_pos = 8, .blue_size = 8, .rsvd_size = 8, .rsvd_pos = 24,
+    };
+    struct fb_rect r = {1,1,8,6};
+    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+        CHECK(fbdev_copy_to(&d, &r, r.x + dx, r.y + dy) == -EAGAIN);
+    CHECK(fbdev_copy_to(&d, 0, 0, 0) == -EINVAL);
+    CHECK(fbdev_copy_to(&d, &r, -1, 0) == -EINVAL);
+    CHECK(fbdev_copy_to(&d, &r, 16, 0) == -EINVAL);
+    struct fb_rect empty = {0,0,0,13}; CHECK(!fbdev_copy_to(&d, &empty, 0, 0));
+    d.present = false; CHECK(fbdev_copy_to(&d, &r, 0, 0) == -ENODEV);
+    d.present = true; device = d; device.handle = 0; device.generation = 7; initialized = true;
+    reservation = (struct resource){.state = RS_ACTIVE, .generation = 7};
+    struct ciuki_accel_request q = {
+        .size = sizeof(q), .operation = CIUKI_ACCEL_COPY, .generation = 7,
+        .rect = {1,1,2,2,8,6},
+    };
+    CHECK(fbdev_accel_request(&q) == -EAGAIN && !locks);
+    struct accel_ops ops = {.sync = copy_sync, .copy_rect = copy_hardware, .capabilities = copy_capabilities};
+    acceleration = &ops;
+    for (copy_caps = 0; copy_caps <= 3; copy_caps++) {
+        copy_calls = copy_syncs = 0;
+        CHECK(fbdev_accel_request(&q) == ((copy_caps & 1u) ? 0 : -EAGAIN));
+        CHECK(copy_calls == ((copy_caps & 1u) ? 1u : 0u) && copy_syncs == ((copy_caps & 1u) ? 0u : 1u));
+        CHECK(!locks && !drawing);
+    }
+    copy_caps = 1; copy_result = -EIO;
+    CHECK(fbdev_accel_request(&q) == -EAGAIN && !drawing);
+    copy_caps = 0; copy_sync_result = -EIO;
+    CHECK(fbdev_accel_request(&q) == -EIO && !drawing);
+    copy_sync_result = copy_result = 0;
+    console_rows = 13; drawing = CONSOLE_BUSY;
+    CHECK(fbdev_accel_request(&q) == -EBUSY && drawing == CONSOLE_BUSY && !locks);
+    drawing = console_rows = 0; acceleration = 0; initialized = false;
+    memset(&device, 0, sizeof(device)); memset(&reservation, 0, sizeof(reservation));
+    CHECK(!munmap(unreadable, (size_t)page));
+}
+
 static void boot_fixture(bool vbe3)
 {
     memset(&g_boot, 0, sizeof(g_boot));
@@ -309,7 +445,7 @@ static void boot_fixture(bool vbe3)
     g_cpu_tsc = false; g_tsc_per_ms = 0;
     g_ticks = fake_cycles = copy_cycles = 0;
     drains = stamps = present_logs = 0;
-    full_count = full_total_us = full_last_us = full_max_us = full_log_tick = 0;
+    full_count = full_bytes = full_total_us = full_last_us = full_max_us = full_log_tick = 0;
     g_boot.flags = CBI_F_VBE_CTRL_VALID;
     g_boot.vbe_ctrl[5] = vbe3 ? 3 : 2;
     g_boot.fb_phys = 0xE0000000;
@@ -440,6 +576,7 @@ static void timing_tests(void)
     CHECK(fbdev_present(&s, &all) == 0 && stamps == 2 && full_count == 1);
     CHECK(full_total_us == 2000 && full_max_us == 2000 && present_logs == 1);
     CHECK(strstr(last_present, "count=1 total_us=2000 last_us=2000 max_us=2000 tsc_khz=900123"));
+    CHECK(full_bytes == 17 * 13 * 4 && strstr(last_present, "lfb_mb_s=0"));
     copy_cycles = 450062;
     CHECK(fbdev_present(&s, &all) == 0 && full_last_us == 500 && present_logs == 1);
     g_ticks = 1000;
@@ -448,6 +585,7 @@ static void timing_tests(void)
     CHECK(fbdev_fill(&all, 0) == 0 && full_count == 3 && stamps == 6);
     struct fb_device fixture = device;
     CHECK(fbdev_present_to(&fixture, &s, &all) == 0 && full_count == 3);
+    CHECK(full_bytes == 3 * 17 * 13 * 4); /* no partial/fill/fixture traffic */
     console_rows = 13; drawing = CONSOLE_BUSY;
     CHECK(fbdev_present(&s, &all) == -EBUSY && full_count == 3 && stamps == 6);
     drawing = 0;
@@ -456,6 +594,19 @@ static void timing_tests(void)
     reservation.state = RS_ACTIVE;
     g_boot.flags &= ~CBI_F_VERBOSE; g_ticks = 2000;
     CHECK(fbdev_present(&s, &all) == 0 && full_count == 4 && present_logs == 2);
+    /* Decimal MB/s counts pixel bytes, not padded pitch, across modes. */
+    g_boot.flags |= CBI_F_VERBOSE; g_ticks = 3000; copy_cycles = 900123;
+    full_count = full_bytes = full_total_us = full_last_us = full_max_us = 0;
+    CHECK(!fbdev_present(&s, &all) && full_bytes == 884 && full_total_us == 1000);
+    device.height = 1; struct fb_rect row = {0,0,17,1};
+    CHECK(!fbdev_present(&s, &row) && full_bytes == 952 && full_total_us == 2000);
+    device.height = 13;
+    full_count = full_bytes = full_total_us = full_last_us = full_max_us = 0;
+    copy_cycles = 9001;
+    CHECK(!fbdev_present(&s, &all) && full_last_us == 9 && strstr(last_present, "lfb_mb_s=98"));
+    full_count = full_bytes = full_total_us = full_last_us = full_max_us = 0;
+    copy_cycles = 1;
+    CHECK(!fbdev_present(&s, &all) && !full_total_us && strstr(last_present, "lfb_mb_s=0"));
     free(fake_lfb);
 }
 
@@ -469,6 +620,14 @@ int main(void)
     for (unsigned pad = 0; pad <= 7; pad += 7)
         for (unsigned source_pad = 0; source_pad <= 7; source_pad += 7)
             render_tests(16, pad, 2, source_pad);
+    const unsigned pads[] = {0,4,7};
+    for (unsigned format = 0; format < 4; format++)
+        for (unsigned p = 0; p < ARRAY_SIZE(pads); p++)
+            for (unsigned sp = 0; sp < ARRAY_SIZE(pads); sp++)
+                for (unsigned offset = 0; offset < 4; offset++)
+                    for (unsigned zero_x = 0; zero_x < 2; zero_x++)
+                        fast_row_tests(format, pads[p], pads[sp], offset, format == 1 ? 2 : 0, zero_x != 0);
+    copy_fallback_tests();
     boot_tests();
     timing_tests();
     printf("framebuffer host tests: %s (%u reference comparisons, %u failures)\n",
