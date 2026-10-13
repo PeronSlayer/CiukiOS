@@ -4,6 +4,9 @@
 #include "deskui.h"
 #include <stdio.h>
 #include <string.h>
+#ifndef DESK_PROFILE
+#define DESK_PROFILE(name, ...) do { __VA_ARGS__; } while (0)
+#endif
 
 /* Integer row painter in compositor.c, also linked into libdeskui. */
 extern void desk_shadow_rows(struct desk_paint *, int, int, int, int, int, uint32_t);
@@ -105,7 +108,7 @@ void du_raised(struct du_canvas *c, struct du_rect r, int pressed, int hot)
 { struct desk_paint p = painter(c); desk_paint_raised(&p, r.x, r.y, r.w, r.h, pressed, hot); }
 
 void du_shadow(struct du_canvas *c, struct du_rect r, int size)
-{ struct desk_paint p = painter(c); desk_shadow_rows(&p, r.x, r.y, r.w, r.h, size, desk_theme->drop_shadow); }
+{ struct desk_paint p = painter(c); DESK_PROFILE("shadows", desk_shadow_rows(&p, r.x, r.y, r.w, r.h, size, desk_theme->drop_shadow)); }
 
 void du_well(struct du_canvas *c, struct du_rect r, uint32_t colour)
 {
@@ -196,7 +199,7 @@ size_t du_cells(const char *s)
 int du_text_width(const char *s) { return desk_text_measure(desk_theme->font_ui, s); }
 int du_text_width_font(int font, const char *s) { return desk_text_measure(font, s); }
 
-static void text_font_n(struct du_canvas *c, int font, int x, int y, const char *s, size_t chars, uint32_t colour)
+static void text_font_rows(struct du_canvas *c, int font, int x, int y, const char *s, size_t chars, uint32_t colour)
 {
     if (x > c->clip.x + c->clip.w || y > c->clip.y + c->clip.h) return;
     struct desk_paint p = painter(c);
@@ -229,6 +232,9 @@ static void text_font_n(struct du_canvas *c, int font, int x, int y, const char 
         if (x>p.cx+p.cw+64) break;
     }
 }
+
+static void text_font_n(struct du_canvas *c, int font, int x, int y, const char *s, size_t chars, uint32_t colour)
+{ DESK_PROFILE("text", text_font_rows(c,font,x,y,s,chars,colour)); }
 
 void du_text_font(struct du_canvas *c, int font, int x, int y, const char *s, uint32_t colour)
 { text_font_n(c, font, x, y, s, (size_t)-1, colour); }

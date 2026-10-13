@@ -45,6 +45,17 @@ static void release(struct desktop *d, const struct ciuki_input_event *base)
     }
     d->routed_buttons = 0;
 }
+/* Focus changes tint the caption and thin frame edges, never the client well. */
+static void focus_damage(struct desktop *d, int i)
+{
+    struct desk_box f=d->clients[i].frame;
+    struct desk_box parts[4]={{f.x,f.y,f.w,DESK_TITLE},
+        {f.x,f.y+DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE},
+        {f.x+f.w-DESK_BORDER,f.y+DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE},
+        {f.x,f.y+f.h-DESK_BORDER,f.w,DESK_BORDER}};
+    for (unsigned k=0;k<4;k++) desk_damage_add(&d->damage,parts[k],d->width,d->height);
+    if (d->shell) desk_damage_add(&d->damage,desk_task_button(d,i),d->width,d->height);
+}
 void desk_focus(struct desktop *d, int i)
 {
     if (d->power.state && i>=0 && i<DESK_CLIENTS && d->clients[i].internal!=DESK_INTERNAL_POWER) return;
@@ -57,16 +68,19 @@ void desk_focus(struct desktop *d, int i)
     desk_message(&m, DESK_FOCUS, 8);
     if (d->focus >= 0) {
         desk_queue(d, d->focus, &m);
-        desk_damage_add(&d->damage, desk_outer(&d->clients[d->focus]), d->width, d->height);
+        focus_damage(d,d->focus);
     }
     d->focus = i;
     if (i >= 0) {
+        int raised=0;
+        for (int k=0;k<DESK_CLIENTS;k++) if (k!=i && d->clients[k].window && !d->clients[k].minimized &&
+            d->clients[k].order>d->clients[i].order) raised=1;
         d->clients[i].order = ++d->order;
         desk_put32(m.data + 4, 1); desk_queue(d, i, &m);
-        desk_damage_add(&d->damage, desk_outer(&d->clients[i]), d->width, d->height);
+        if (raised) desk_damage_add(&d->damage,desk_outer(&d->clients[i]),d->width,d->height);
+        focus_damage(d,i);
     }
     if (d->shell) {
-        desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);   /* top bar title */
     }
 }

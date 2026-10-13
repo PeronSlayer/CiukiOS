@@ -13,19 +13,23 @@
 #include <unistd.h>
 static int read_only;
 static unsigned read_calls, write_calls;
+static size_t read_limit=512, write_limit=512;
+static unsigned full_reads, full_writes;
 ssize_t __real_read(int, void *, size_t);
 ssize_t __real_write(int, const void *, size_t);
 ssize_t __wrap_read(int fd, void *data, size_t n)
 {
-    assert(n<=4096); /* Native CIUKI_IO_MAX=1 MiB, byte_io short transfer <=4 KiB. */
+    assert(n<=65536);
+    full_reads+=n==65536;
     if (!read_calls++) { errno=EINTR; return -1; }
-    return __real_read(fd,data,n>512 ? 512 : n);
+    return __real_read(fd,data,read_limit && n>read_limit ? read_limit : n);
 }
 ssize_t __wrap_write(int fd, const void *data, size_t n)
 {
-    assert(n<=4096);
+    assert(n<=65536);
+    full_writes+=n==65536;
     if (!write_calls++) { errno=EINTR; return -1; }
-    return __real_write(fd,data,n>512 ? 512 : n);
+    return __real_write(fd,data,write_limit && n>write_limit ? write_limit : n);
 }
 int __real_mkdir(const char *, mode_t);
 int __wrap_mkdir(const char *path, mode_t mode)
@@ -72,6 +76,30 @@ static void check_keys(struct desk_wall_request r)
     other.top++; desk_wall_cache_name(name,&other,1234,5678); assert(strcmp(base,name)); other=r;
     strcat(other.path,"x"); desk_wall_cache_name(name,&other,1234,5678); assert(strcmp(base,name));
 }
+static unsigned cache_stages;
+static void cache_stage(const char *name)
+{
+    assert(!strcmp(name,"wallpaper_cache_read")); cache_stages++;
+}
+static void bulk_io(struct desk_wall_request r, const char *root)
+{
+    char dir[512]; snprintf(dir,sizeof(dir),"%s/bulk/wallpaper",root);
+    r.width=1024; r.height=768;
+    read_limit=0; write_limit=0;
+    read_calls=write_calls=1; full_reads=full_writes=0; /* EINTR covered by the short-transfer tests. */
+    uint32_t *pixels; int hit;
+    assert(!desk_wall_prepare(&r,dir,&pixels,&hit,NULL) && !hit); free(pixels);
+    assert(full_reads && full_writes==48 && write_calls==50); /* frame + journal */
+    read_calls=write_calls=1; full_reads=full_writes=0;
+    assert(!desk_wall_prepare(&r,dir,&pixels,&hit,cache_stage) && hit); free(pixels);
+    assert(read_calls==49 && full_reads==48 && write_calls==2 && cache_stages==1);
+    printf("WALLPAPER cache_bytes=3145728 request_bytes=65536 cache_read_calls=%u stage=wallpaper_cache_read\n",full_reads);
+    r.colour++;
+    write_limit=4096; write_calls=1; full_writes=0;
+    assert(!desk_wall_prepare(&r,dir,&pixels,&hit,NULL) && !hit); free(pixels);
+    assert(full_writes && write_calls==770); /* native writes may still be one page */
+    read_limit=write_limit=512;
+}
 int main(int argc, char **argv)
 {
     assert(argc==3);
@@ -106,6 +134,7 @@ int main(int argc, char **argv)
     read_only=1;
     assert(!desk_wall_prepare(&r,absent,&pixels,&hit,NULL) && !hit && pixels); free(pixels);
     assert(access(absent,F_OK)==-1 && errno==ENOENT); read_only=0;
+    bulk_io(r,argv[2]);
     /* Golden frames are generated with the identical production cache path. */
     for (int mode=0;mode<CFG_WALL_MODES;mode++) {
         r.width=1024; r.height=768; r.mode=mode;

@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* The host benchmark supplies this macro; native builds contain no timers. */
+#ifndef DESK_PROFILE
+#define DESK_PROFILE(name, ...) do { __VA_ARGS__; } while (0)
+#endif
 /* The shell (shell.c) is linked only into /Programs/desktop; the demo and the
  * libdeskui programs reuse this file for glyphs and frames without it. */
 extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
@@ -122,16 +126,42 @@ void desk_damage_add(struct desk_damage *d, struct desk_box b, uint32_t w, uint3
 {
     if (!desk_intersect(b, (struct desk_box){0,0,(int32_t)w,(int32_t)h}, &b)) return;
     for (unsigned i = 0; i < d->count;) {
-        struct desk_box a = d->boxes[i];
-        if (b.x <= a.x+a.w && a.x <= b.x+b.w && b.y <= a.y+a.h && a.y <= b.y+b.h) {
-            b = unite(a,b); d->boxes[i] = d->boxes[--d->count]; i = 0;
+        struct desk_box a = d->boxes[i], overlap, bound=unite(a,b);
+        uint64_t area=(uint64_t)a.w*a.h+(uint64_t)b.w*b.h;
+        if (desk_intersect(a,b,&overlap)) area-=(uint64_t)overlap.w*overlap.h;
+        /* Merge only rectangular unions. A diagonal drag or a narrow menu
+         * touching a wide bar must not fill the clean corners of its bounds. */
+        if ((uint64_t)bound.w*bound.h==area) {
+            b = bound; d->boxes[i] = d->boxes[--d->count]; i = 0;
         } else i++;
     }
-    if (d->count == DESK_DAMAGE_MAX) {
-        for (unsigned i = 0; i < d->count; i++) b = unite(b,d->boxes[i]);
-        d->count = 0;
+    struct desk_box pending[DESK_DAMAGE_MAX], next[DESK_DAMAGE_MAX];
+    unsigned count=1; pending[0]=b;
+    for (unsigned i=0;i<d->count && count;i++) {
+        unsigned used=0;
+        for (unsigned k=0;k<count;k++) {
+            struct desk_box a=pending[k], cut;
+            if (!desk_intersect(a,d->boxes[i],&cut)) {
+                if (used==DESK_DAMAGE_MAX) goto saturated;
+                next[used++]=a; continue;
+            }
+            struct desk_box parts[4]={{a.x,a.y,a.w,cut.y-a.y},
+                {a.x,cut.y+cut.h,a.w,a.y+a.h-cut.y-cut.h},
+                {a.x,cut.y,cut.x-a.x,cut.h},
+                {cut.x+cut.w,cut.y,a.x+a.w-cut.x-cut.w,cut.h}};
+            for (unsigned j=0;j<4;j++) if (parts[j].w>0 && parts[j].h>0) {
+                if (used==DESK_DAMAGE_MAX) goto saturated;
+                next[used++]=parts[j];
+            }
+        }
+        count=used; memcpy(pending,next,count*sizeof(*pending));
     }
-    d->boxes[d->count++] = b;
+    if (d->count+count>DESK_DAMAGE_MAX) goto saturated;
+    memcpy(d->boxes+d->count,pending,count*sizeof(*pending)); d->count+=count;
+    return;
+saturated:
+    for (unsigned i=0;i<d->count;i++) b=unite(b,d->boxes[i]);
+    d->count=1; d->boxes[0]=b;
 }
 static void fill(struct desktop *d, struct desk_box b, struct desk_box clip, uint32_t colour)
 {
@@ -334,10 +364,13 @@ static struct caption_cache {
 
 static void xrgb_row(uint32_t *restrict dst, const uint32_t *restrict src, int w)
 {
+    typedef uint64_t unaligned_pair __attribute__((aligned(1),may_alias));
     int x=0;
-    for (; x+4<=w; x+=4) {
-        dst[x]=src[x]&0xffffffu; dst[x+1]=src[x+1]&0xffffffu;
-        dst[x+2]=src[x+2]&0xffffffu; dst[x+3]=src[x+3]&0xffffffu;
+    for (; x+8<=w; x+=8) {
+        /* Rows need only four-byte alignment. Integer pairs keep the exact
+         * zero X byte without SSE/MMX; i686 splits them into ordinary words. */
+        for (int k=0;k<8;k+=2)
+            *(unaligned_pair *)(dst+x+k)=*(const unaligned_pair *)(src+x+k)&0x00ffffff00ffffffull;
     }
     for (; x<w; x++) dst[x]=src[x]&0xffffffu;
 }
@@ -430,7 +463,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
     struct desk_box outer=desk_outer(c), area, f=c->frame;
     if (!desk_intersect(outer,clip,&area)) return;
     struct desk_paint p=paint_of(d,area);
-    if (t->shadow_size) desk_shadow_rows(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow);
+    if (t->shadow_size) DESK_PROFILE("shadows", desk_shadow_rows(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow));
     if (!desk_intersect(f,clip,&clip)) return;
     p=paint_of(d,clip);
     /* Hover and pressed title buttons follow the pointer (input.c tracks
@@ -443,8 +476,10 @@ static void window(struct desktop *d, int i, struct desk_box clip)
         .active=i==d->focus && !c->unresponsive, .alert=c->unresponsive, .collapsed=c->collapsed,
         .buttons=d->shell ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|DESK_TB_COLLAPSE : DESK_TB_CLOSE,
         .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
-    if (c->internal || c->collapsed) desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s);
-    else frame_border(&p,i,f,&s);
+    DESK_PROFILE("captions", {
+        if (c->internal || c->collapsed) desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s);
+        else frame_border(&p,i,f,&s);
+    });
     struct desk_box content = desk_content(c), b;
     if (c->collapsed) return;
     if (c->internal) {
@@ -566,8 +601,10 @@ static void scene(struct desktop *d, struct desk_box clip)
     if (d->shell && desk_shell_background) {
         /* Also retain shell binding/cache maintenance when a clip is fully
          * covered, without copying any background pixels into the scene. */
-        if (!visible) desk_shell_background(d,(struct desk_box){0,0,0,0});
-        for (unsigned k=0; k<visible; k++) desk_shell_background(d,boxes[k]);
+        DESK_PROFILE("background_rows", {
+            if (!visible) desk_shell_background(d,(struct desk_box){0,0,0,0});
+            for (unsigned k=0; k<visible; k++) desk_shell_background(d,boxes[k]);
+        });
     } else for (unsigned k=0; k<visible; k++) {
         fill(d,boxes[k],boxes[k],t->desktop); portrait(d,boxes[k]);
     }
@@ -575,7 +612,7 @@ static void scene(struct desktop *d, struct desk_box clip)
     fill(d,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},clip,t->topbar);
     desk_paint_fill(&p,0,DESK_BAR-1,(int)d->width,1,t->topbar_edge);
     desk_paint_fill(&p,0,0,(int)d->width,1,desk_mix(0xffffffu,t->topbar,160));
-    if (d->shell && desk_shell_topbar) desk_shell_topbar(d,clip);
+    if (d->shell && desk_shell_topbar) DESK_PROFILE("bars_menus", desk_shell_topbar(d,clip));
     else {
         portrait_at(d,clip,8,6,20);
         desk_paint_text(&p,t->font_bold,34,20,"CiukiOS",t->topbar_text);   /* no tagline in the top bar (owner, 2026-10-12) */
@@ -586,9 +623,9 @@ static void scene(struct desktop *d, struct desk_box clip)
     if (!d->shell) desk_paint_text(&p,t->font_ui,(int)d->width-12-desk_text_measure(t->font_ui,clock),20,clock,t->topbar_text);
     for (unsigned n=0; n<count; n++) {
         visible=visible_boxes(d,clip,windows+n+1,count-n-1,boxes);
-        for (unsigned k=0; k<visible; k++) window(d,windows[n],boxes[k]);
+        for (unsigned k=0; k<visible; k++) DESK_PROFILE("windows", window(d,windows[n],boxes[k]));
     }
-    if (d->shell) desk_shell_draw(d,clip);
+    if (d->shell) DESK_PROFILE("bars_menus", desk_shell_draw(d,clip));
 }
 static void cursor(struct desktop *d, struct desk_box clip)
 {
@@ -609,7 +646,7 @@ static void cursor(struct desktop *d, struct desk_box clip)
 void desk_composite(struct desktop *d, struct desk_box clip)
 {
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
-    scene(d,clip); cursor(d,clip);
+    scene(d,clip); DESK_PROFILE("cursor", cursor(d,clip));
 }
 void desk_render_release(struct desktop *d)
 {
@@ -720,13 +757,17 @@ static int scroll_copy(struct desktop *d)
 }
 static int present_box(struct desktop *d, struct desk_box b)
 {
-    if (!d->accel_front || !d->accel_front_valid) {
+    int rectangles=d->accel && (d->accel_caps&1u) && d->accel_front;
+    if (!rectangles || !d->accel_front_valid) {
         struct ciuki_rect r={b.x,b.y,b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
         if (d->ops.present(d->display,d->output,&r)) return -1;
         d->frame_stats.lfb_bytes+=(uint64_t)r.width*r.height*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
-        if (d->accel_front) for (int32_t y=b.y; y<b.y+b.h; y++)
-            memcpy(d->accel_front+(uint32_t)y*d->width+(uint32_t)b.x,d->pixels+(uint32_t)y*d->width+(uint32_t)b.x,(uint32_t)b.w*4);
-        if (!b.x && !b.y && b.w==(int32_t)d->width && b.h==(int32_t)d->height) d->accel_front_valid=d->accel_front!=NULL;
+        if (rectangles) DESK_PROFILE("present_front_copy", {
+            for (int32_t y=b.y; y<b.y+b.h; y++)
+                memcpy(d->accel_front+(uint32_t)y*d->width+(uint32_t)b.x,d->pixels+(uint32_t)y*d->width+(uint32_t)b.x,(uint32_t)b.w*4);
+        });
+        if (!rectangles) d->accel_front_valid=0;
+        else if (!b.x && !b.y && b.w==(int32_t)d->width && b.h==(int32_t)d->height) d->accel_front_valid=1;
         d->presents++; d->frame_stats.presents++; return 0;
     }
     for (int32_t y=b.y; y<b.y+b.h;) {
@@ -762,9 +803,11 @@ static int present_box(struct desktop *d, struct desk_box b)
             if (d->ops.present(d->display,d->output,&r)) return -1;
             d->frame_stats.lfb_bytes+=(uint64_t)r.width*r.height*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
         }
-        for (int32_t i=y;i<bottom;i++)
-            memcpy(d->accel_front+(uint32_t)i*d->width+(uint32_t)left,
-                   d->pixels+(uint32_t)i*d->width+(uint32_t)left,(uint32_t)(right-left)*4);
+        DESK_PROFILE("present_front_copy", {
+            for (int32_t i=y;i<bottom;i++)
+                memcpy(d->accel_front+(uint32_t)i*d->width+(uint32_t)left,
+                       d->pixels+(uint32_t)i*d->width+(uint32_t)left,(uint32_t)(right-left)*4);
+        });
         d->presents++; d->frame_stats.presents++; y=bottom;
     }
     return 0;
