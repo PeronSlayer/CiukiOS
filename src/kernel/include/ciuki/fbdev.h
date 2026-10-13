@@ -37,6 +37,10 @@ struct fb_device {
  * Missing LFB succeeds with present=false. Invalid metadata/claim fails
  * before framebuffer access. Further calls leave the active mode untouched. */
 int fbdev_init(void);
+struct vfs;
+/* Queue only after storage mount and driver activation; never touches the
+ * engine synchronously. Safe mode retains software presentation. */
+void fbdev_accel_schedule(struct vfs *);
 const struct fb_device *fbdev_get(void);
 /* f1-23 transaction: submissions stop and both presenter/console mappings
  * are revoked before firmware. commit remaps validated, claimed geometry;

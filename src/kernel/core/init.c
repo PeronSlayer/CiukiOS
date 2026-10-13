@@ -17,6 +17,7 @@
 #include <ciuki/net.h>
 #pragma weak audio_init
 #pragma weak net_init
+#pragma weak fbdev_accel_schedule
 
 static struct drivers_state state;
 static struct activation_entry activation_ledger[ACTIVATION_LEDGER_MAX];
@@ -146,4 +147,5 @@ void drivers_init(void)
     klog("[init] audio init done");
     if (net_init) net_init();
     if (native_files) klog("[files] initialization failed: %d", native_files);
+    if (fbdev_accel_schedule) fbdev_accel_schedule(&storage_get()->vfs);
 }

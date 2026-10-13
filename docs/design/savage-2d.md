@@ -85,6 +85,56 @@ solid runs and verified screen translations for moves/scrolls, but normal
 pixels and exposure still come from RAM. f1-25 is a separate worktree;
 integration must retain its newer buffers/damage accounting when merging.
 
+## f1-27: reset before status, deferred activation and durable attempts
+
+Research rechecked on 2026-10-13 against RE046-B §1.2, CR66 (p. 89),
+MM48C18 (p. 227) and MM48C60 (p. 231), the X.Org references above
+(`SavageEnableMMIO`, PreInit's reset, `WaitIdleEmpty4`) and
+[Linux savagefb_driver.c](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c)
+(`savage4_waitidle`, `savage_init_hw`). The
+[X.Org manual](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/man/savage.man)
+documents the status-read bus-lock erratum. The independent review's corrected
+BAR0 + 0 mapping is retained; BAR0 + 16 MiB applies to older Savage3D/MX/IX,
+not the SuperSavage IX/C 8c2e.
+
+This amendment supersedes the early activation and fixed status mask above.
+Framebuffer activation performs no engine accesses. After storage, file services
+and driver activation finish, a kernel work item takes the framebuffer mutex.
+Before claiming/mapping the engine it reads C:/system/settings/accel.cfg.
+Any nonempty marker skips acceleration, including on read-only mounts. An absent
+or empty marker permits an attempt only after `accel=attempt\n` is written,
+committed and closed successfully on a writable settings volume. Success clears
+the file by durable truncation. Failures retain the marker and resources, and
+never expose failed initialization to the software presenter. Missing storage,
+read/write/commit/close failures, safe mode and unavailable work queues make no
+engine attempt. Runtime mode reactivation follows the same work/marker path.
+
+Unlock CR38=48h/CR39=A5h, unlock extended sequencer SR08=06h, select IGA1
+SR26=40h, force MISC bit 0, then preserve CR66.0 while pulsing bit 1 for
+10 ms set / 10 ms clear. Check unlock/pipe/MISC/reset readbacks before status.
+Only CR66 is reset: CR3F's broader memory/3D/AGP reset is outside this directive.
+Delays use bounded calibrated `udelay`, in <=500-us slices with worker yields;
+delay failures quarantine before another status read. Status waits have both
+20-ms deadlines and a 256-read cap, with 5 us between busy reads, independent
+of PIT progress. No software timeout claims to interrupt a stalled bus cycle.
+
+Log the first raw MM48C60 before selecting a mask. Accept the strict X.Org
+empty/idle signature (mask e1ffff, value e00000), or the documented Rev-B
+empty/idle signature (mask cfffff, value 4e0000, including PF=0). Both require
+an empty 17-bit FIFO; the layout is fixed for the attempt. Linux's a00000-only
+signature lacks X.Org's bit 22 and contradicts the manual's PF semantics, so
+it does not establish idle. Contradictory layouts quarantine; busy/zero status
+may answer late within the cap. Hardware qualification must confirm the raw
+value and selected layout; a host model cannot establish the silicon's layout.
+
+After proven idle, read MM48C18, reject firmware shadow/overflow state, clear
+BCI/CI low bits and verify disabled state before **reading or writing** packed
+2D registers or GBD. Program masks, mix and descriptors while disabled; verify
+GBD/CR40 before enabling BCI and verifying its control readback. Shutdown also
+verifies BCI disabled before restoring descriptors. Verbose breadcrumbs remain;
+each attempted/declined supported activation emits `ready` or
+`quarantined reason=...`, with a separate previous-attempt skip record.
+
 ## Display grant wire service
 
 Syscall 77, `CIUKI_SYS_DISPLAY_ACCEL`: EBX is the noninheritable display

@@ -1,32 +1,115 @@
 /* Production register driver + production framebuffer renderer, ASan/UBSan.
  * SPDX-License-Identifier: GPL-2.0-only */
 #define main framebuffer_regression_main
+#define savage2d_init boot_init
 #include "fbdev_test.c"
+#undef savage2d_init
 #undef main
 #include <ciuki/savage2d.h>
 static unsigned binding_claims, binding_pci_count;
 static struct pci_func binding_gpu;
+static bool binding_allowed;
+static struct resource binding_resource;
 static int binding_claim(enum res_type t,uint32_t s,uint32_t e,const char *o,bool share)
-{ binding_claims++;return registry_claim(t,s,e,o,share); }
+{
+    (void)t; (void)s; (void)e; (void)o; (void)share;
+    binding_claims++;
+    if (!binding_allowed) return -EBUSY;
+    binding_resource=(struct resource){.state=RS_CLAIMED,.generation=43};
+    return 1;
+}
+static const struct resource *binding_get(unsigned i)
+{ return i==1 ? &binding_resource : registry_get(i); }
+static int binding_activate(int h, gen_t gen)
+{ CHECK(h==1 && gen==43); binding_resource.state=RS_ACTIVE; return 0; }
+static int binding_quarantine(int h, gen_t gen)
+{ CHECK(h==1 && gen==43); binding_resource.state=RS_QUARANTINED; return 0; }
+static void *binding_reserve(uint32_t capacity)
+{ CHECK(capacity==SAVAGE_MMIO_BYTES); return (void *)(uintptr_t)0x1000; }
 #define registry_claim binding_claim
+#define registry_get binding_get
+#define registry_activate binding_activate
+#define registry_quarantine binding_quarantine
+#define vmm_reserve_mmio binding_reserve
 #include "../../src/kernel/drivers/savage2d.c"
 #undef registry_claim
+#undef registry_get
+#undef registry_activate
+#undef registry_quarantine
+#undef vmm_reserve_mmio
 
 unsigned pci_count(void) { return binding_pci_count; }
 const struct pci_func *pci_get(unsigned i) { return i<binding_pci_count ? &binding_gpu : NULL; }
 void *vmm_map_mmio(uint32_t p, uint32_t n, bool uc) { (void)p; (void)n; (void)uc; return NULL; }
-void *vmm_replace_mmio(void *w,uint32_t c,uint32_t p,uint32_t n) { (void)w;(void)c;(void)p;(void)n;return NULL; }
+static uint8_t binding_window[SAVAGE_MMIO_BYTES];
+void *vmm_replace_mmio(void *w,uint32_t c,uint32_t p,uint32_t n)
+{ (void)w; CHECK(c==SAVAGE_MMIO_BYTES && n==c && p==(binding_gpu.bar[0]&~15u)); return binding_window; }
+int udelay(uint32_t us) { CHECK(us<=500); return 0; }
+void kwork_yield(void) { }
+static kwork_fn queued_work;
+static void *queued_arg;
+static bool queue_allowed=true;
+static unsigned boot_calls;
+bool kwork_queue(kwork_fn fn, void *arg)
+{ CHECK(!queued_work); if (!queue_allowed) return false; queued_work=fn; queued_arg=arg; return true; }
+
+/* Durable settings boundary: distinguish cache bytes from committed bytes.
+ * An interrupted attempt is tested by retaining only disk_marker. */
+static struct vfs settings_vfs;
+static struct fat_volume settings_volume;
+static char disk_marker[16], cache_marker[16];
+static unsigned disk_size, cache_size, marker_commits;
+static bool marker_exists, table_open, marker_open, marker_error, clear_error;
+static unsigned marker_fault;
+int vfs_table_init(struct vfs *v, struct vfs_table *t, unsigned drive)
+{ CHECK(v==&settings_vfs && drive==2 && !table_open); if (marker_fault==1) return -FS_ENOMEM; table_open=true; t->vfs=v; return 0; }
+void vfs_table_destroy(struct vfs_table *t)
+{ CHECK(t==&attempt_table && table_open && !marker_open); table_open=false; }
+int vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *e)
+{ CHECK(t==&attempt_table && !strcmp(path,ATTEMPT_PATH)); if (marker_fault==2) return -FS_EIO; e->size=disk_size; return marker_exists ? 0 : -FS_ENOENT; }
+int vfs_open(struct vfs_table *t,const char *path,unsigned flags,enum vfs_share deny,uint8_t attr)
+{
+    CHECK(t==&attempt_table && !strcmp(path,ATTEMPT_PATH) && flags==(VFS_WRITE|VFS_CREATE) && deny==VFS_DENY_ALL && !attr);
+    if (marker_error) return -FS_EIO;
+    marker_open=true; memcpy(cache_marker,disk_marker,sizeof(cache_marker)); cache_size=disk_size; return 0;
+}
+int vfs_write(struct vfs_table *t,int fd,const void *buf,size_t n,size_t *done)
+{
+    CHECK(t==&attempt_table && fd==0 && marker_open && n==14 && !memcmp(buf,"accel=attempt\n",n));
+    memcpy(cache_marker,buf,n); cache_size=n; *done=marker_fault==3 ? n-1 : n; return marker_fault==4 ? -FS_EIO : 0;
+}
+int vfs_truncate(struct vfs_table *t,int fd,uint64_t n)
+{ CHECK(t==&attempt_table && fd==0 && marker_open && !n); cache_size=0; return 0; }
+int vfs_commit(struct vfs_table *t,int fd)
+{
+    CHECK(t==&attempt_table && fd==0 && marker_open);
+    if ((!cache_size && clear_error) || marker_fault==5) return -FS_EIO;
+    memcpy(disk_marker,cache_marker,sizeof(disk_marker)); disk_size=cache_size; marker_exists=true; marker_commits++; return 0;
+}
+int vfs_close(struct vfs_table *t,int fd)
+{ CHECK(t==&attempt_table && fd==0 && marker_open); marker_open=false; return marker_fault==6 ? -FS_EIO : 0; }
 
 struct model {
     uint32_t reg[SAVAGE_MMIO_BYTES/4], packet[16];
     uint8_t cr[256], cursor_page[4096], colour[2][3];
     unsigned words, expected, packets, fault_count, busy, cr_writes, colour_at;
     uint8_t cr_sequence[128];
-    bool stuck, frozen, bad_readback, fail_after_submit, partial;
+    bool stuck, frozen, bad_readback, fail_after_submit, partial, locked, dead, wrong_offset, delay_failed, bci_locked;
+    uint8_t misc, seq[256], seq_index;
+    unsigned status_reads, delays, reset_phase;
+    bool contradictory;
+    bool control_reserved;
+    uint64_t reset_set_us, reset_clear_us, last_status_us;
+    uint32_t status_value;
     uint64_t us;
 };
 static struct model m;
 static struct savage2d test_engine;
+static void marker_before_register(void)
+{
+    if (initializing)
+        CHECK(disk_size==14 && marker_commits==1 && !marker_open && !table_open && locks==1);
+}
 static void execute_packet(struct model *p)
 {
     CHECK(p->packet[1]==0);
@@ -71,18 +154,30 @@ static void execute_packet(struct model *p)
 static uint32_t model_read(void *ctx,uint32_t offset)
 {
     struct model *p=ctx;
+    trace("r32",offset,offset);
     CHECK(offset<SAVAGE_MMIO_BYTES && !(offset&3u));
+    marker_before_register();
     if (offset==SAVAGE_STATUS) {
+        CHECK(p->reset_phase==2 && p->reset_set_us>=10000 && p->reset_clear_us>=10000);
+        if (p->status_reads) CHECK(p->us-p->last_status_us>=POLL_US);
+        p->last_status_us=p->us; p->status_reads++;
+        if (p->dead) return UINT32_MAX;
+        if (p->wrong_offset) return 0;
         if (p->stuck) return 0;
         if (p->busy) { p->busy--; return 0x00e00001u; }
-        return 0x00e00000u;
+        if (p->contradictory && p->status_reads>1) return 0x004e0000;
+        return p->status_value ? p->status_value : 0x00e00000u;
     }
+    if (offset>=0x8100 && offset<0x8180) CHECK(!(p->reg[BCI_CONTROL/4]&8));
+    if (offset==BCI_CONTROL && p->control_reserved) return p->reg[offset/4]|0x4000;
     if (offset==0x816c && p->bad_readback) return p->reg[offset/4]^16u;
     return p->reg[offset/4];
 }
 static void model_write(void *ctx,uint32_t offset,uint32_t value)
 {
     struct model *p=ctx;
+    marker_before_register();
+    trace("w32",0x40000000u|offset,offset);
     CHECK(offset<SAVAGE_MMIO_BYTES && !(offset&3u));
     if (offset>=SAVAGE_BCI && offset<SAVAGE_BCI+64) {
         unsigned at=(offset-SAVAGE_BCI)/4;
@@ -97,22 +192,36 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
             execute_packet(p); p->packets++; p->words=0; p->busy=3;
             if (p->fail_after_submit) p->stuck=true;
         }
-    } else p->reg[offset/4]=value;
+    } else {
+        if (offset>=0x8100 && offset<0x8180) CHECK(!(p->reg[BCI_CONTROL/4]&8));
+        if (offset==BCI_CONTROL && p->bci_locked) return;
+        p->reg[offset/4]=value;
+    }
 }
 static uint8_t model_cr_read(void *ctx,uint8_t index)
 {
     struct model *p=ctx;
+    marker_before_register();
+    trace("crr",0x80000000u|index,index);
     if (index==0x45) p->colour_at=0;
     return p->cr[index];
 }
 static void model_cr_write(void *ctx,uint8_t index,uint8_t value)
 {
     struct model *p=ctx;
+    marker_before_register();
+    trace("crw",0xc0000000u|index,index);
     if (p->cr_writes<sizeof(p->cr_sequence)) p->cr_sequence[p->cr_writes]=index;
     p->cr_writes++;
     if (index==0x4a || index==0x4b) {
         CHECK(p->colour_at<3);
         p->colour[index==0x4b][p->colour_at++]=value;
+    }
+    if (p->locked) return;
+    if (index==0x66) {
+        CHECK((p->cr[index]&1u)==(value&1u));
+        p->reset_phase=value&2u ? 1 : 2;
+        if (value&2u) { p->reset_set_us=0; p->reset_clear_us=0; p->status_reads=0; }
     }
     p->cr[index]=value;
 }
@@ -120,16 +229,42 @@ static uint64_t model_now(void *ctx)
 {
     struct model *p=ctx;
     if (!p->frozen) p->us+=100;
-    return p->us;
+    return p->frozen ? 0 : p->us;
 }
-static void model_relax(void *ctx) { (void)ctx; }
+static int model_delay(void *ctx,uint32_t us)
+{
+    struct model *p=ctx; p->delays++;
+    if (initializing) CHECK(disk_size==14 && marker_commits==1 && !fbdev_console_begin() && locks==1);
+    if (p->delay_failed) return -EFAULT;
+    p->us+=us;
+    if (p->reset_phase==1) p->reset_set_us+=us;
+    else if (p->reset_phase==2) p->reset_clear_us+=us;
+    return 0;
+}
+static uint8_t model_read8(void *ctx,uint32_t offset)
+{
+    struct model *p=ctx; trace("r8",0x10000000u|offset,offset);
+    marker_before_register();
+    CHECK(offset==0x83cc || offset==0x83c5);
+    return offset==0x83cc ? p->misc : p->seq[p->seq_index];
+}
+static void model_write8(void *ctx,uint32_t offset,uint8_t value)
+{
+    struct model *p=ctx; trace("w8",0x20000000u|offset,offset);
+    marker_before_register();
+    if (offset==0x83c4) p->seq_index=value;
+    else if (offset==0x83c5) p->seq[p->seq_index]=value;
+    else { CHECK(offset==0x83c2); p->misc=value; }
+}
 static void model_drain(void *ctx) { (void)ctx; framebuffer_write_drain(); }
 static void model_fault(void *ctx) { ((struct model *)ctx)->fault_count++; }
 static struct savage_io model_io(void)
 {
     return (struct savage_io){&m,model_read,model_write,model_cr_read,model_cr_write,
-        model_now,model_relax,model_drain,model_fault};
+        model_now,model_delay,model_drain,model_fault,model_read8,model_write8};
 }
+const struct accel_ops *boot_init(const struct fb_device *d, struct vfs *vfs)
+{ boot_calls++; struct savage_io io=model_io(); return init_with_io(d,vfs,&io); }
 static uint8_t *storage;
 static void prepare(unsigned bpp)
 {
@@ -237,9 +372,9 @@ static void failures_and_fallback(void)
     CHECK(!savage2d_start(&other,&io,&device,false,NULL,0));
     CHECK(m.reg[0x816c/4]==(other.descriptor|9u) && other.ops.capabilities(&other)==1u);
     CHECK(!other.ops.stop(&other));
-    m.cr[0x66]=0;other=(struct savage2d){0};unsigned writes=m.cr_writes;
+    m.cr[0x66]=0;other=(struct savage2d){0};
     CHECK(savage2d_start(&other,&io,&device,true,NULL,0)==-ENODEV);
-    CHECK(m.cr_writes==writes && !other.active && !other.quarantined && other.cpu_safe);
+    CHECK(!other.active && !other.quarantined && other.cpu_safe);
     device.bpp=24;CHECK(savage2d_start(&other,&io,&device,true,NULL,0)==-EINVAL);
     device.bpp=32;device.pitch++;CHECK(savage2d_start(&other,&io,&device,true,NULL,0)==-EINVAL);device.pitch--;
     finish();
@@ -250,42 +385,153 @@ static void failures_and_fallback(void)
     binding_gpu=(struct pci_func){.class_code=3,.vendor=0x5333,.device=0x8c2e,
         .command=2,.bar={0xe1000000,0xe0000000}};
     binding_pci_count=1;binding_claims=0;
-    CHECK(!savage2d_init(&device) && binding_claims==1); /* exclusive ownership conflict */
-    binding_gpu.command=0;CHECK(!savage2d_init(&device) && binding_claims==1);
-    binding_gpu.command=2;binding_gpu.bar[0]|=4;CHECK(!savage2d_init(&device) && binding_claims==1); /* 64-bit BAR */
-    binding_gpu.bar[0]=0xe1000000;binding_gpu.bar[1]=0xe2000000;CHECK(!savage2d_init(&device) && binding_claims==1);
-    binding_gpu.bar[1]=device.phys;binding_pci_count=2;CHECK(!savage2d_init(&device) && binding_claims==1);
+    settings_volume=(struct fat_volume){.mounted=true}; settings_vfs.volumes[2]=&settings_volume;
+    CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1); /* exclusive ownership conflict */
+    binding_gpu.command=0;CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1);
+    binding_gpu.command=2;binding_gpu.bar[0]|=4;CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1); /* 64-bit BAR */
+    binding_gpu.bar[0]=0xe1000000;binding_gpu.bar[1]=0xe2000000;CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1);
+    binding_gpu.bar[1]=device.phys;binding_pci_count=2;CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1);
     binding_pci_count=0;finish();
 }
-/* T23 stall (2026-10-13): the production register glue with a clock that
- * never advances. The wait is bounded by WAIT_POLLS, so a silent stop on
- * hardware is one register access that never completes, not a software
- * loop. The breadcrumbs show the first engine-domain access: the status
- * read MM48C60, preceded only by CRTC accesses and no engine reset. */
+static unsigned log_matches(const char *part)
+{
+    unsigned found=0;
+    for (unsigned i=0;i<accel_count && i<128;i++) if (strstr(accel_log[i],part)) found++;
+    return found;
+}
+/* Real MMIO dword glue and frozen production hw_now; VGA indexing is a
+ * transport model because a byte array cannot implement indexed registers. */
 static void glue_stalled_clock(uint32_t status)
 {
     prepare(32);
     uint8_t *window = calloc(1, SAVAGE_MMIO_BYTES); CHECK(window != NULL);
-    window[0x83d5] = 1;                                  /* CR66.0 reads set */
     memcpy(window + SAVAGE_STATUS, &status, sizeof(status));
     registers = window; g_ticks = 0; g_boot.flags = CBI_F_VERBOSE;
-    tracing = true; trace_last = UINT32_MAX; step_count = 0;
-    struct savage_io io = {0, hw_read, hw_write, hw_cr_read, hw_cr_write, hw_now, hw_relax, hw_drain, hw_fault};
+    tracing = true; trace_last = UINT32_MAX; step_count = accel_count = 0;
+    struct savage_io io = model_io(); io.read32=hw_read; io.write32=hw_write; io.now_us=hw_now;
     struct savage2d e = {0};
     CHECK(savage2d_start(&e, &io, &device, true, NULL, 0) == -EIO);
     CHECK(e.quarantined && !e.touched && !e.active && e.idle_waits == 1 && e.timeouts == 1);
-    CHECK(step_count == 2);
-    CHECK(!strcmp(step_log[0], "[accel] savage step op=crr reg=00066"));
-    CHECK(!strcmp(step_log[1], "[accel] savage step op=r32 reg=48c60"));
+    CHECK(step_count>=14);
+    CHECK(!strcmp(step_log[0], "[accel] savage step op=crw reg=00038"));
+    CHECK(!strcmp(step_log[step_count-1], "[accel] savage step op=r32 reg=48c60"));
+    CHECK(log_matches("savage status reg=48c60 raw=")==1 && !e.idle_mask);
     tracing = false; registers = NULL; g_boot.flags = 0; free(window);
     finish();
+}
+
+static void boot_fixture_accel(bool retain_marker)
+{
+    /* Allocate the actual framebuffer, but make initialization entirely late. */
+    prepare(32); acceleration=NULL;
+    memset(&m,0,sizeof(m)); m.cr[0x66]=1;
+    engine=(struct savage2d){0}; attempt_blocked=false; reg_claim=cursor_claim=-1;
+    registers=NULL; register_window=cursor_window=NULL; accel_vfs=NULL; accel_queued=false;
+    binding_allowed=true; binding_claims=0; binding_pci_count=1;
+    binding_gpu=(struct pci_func){.class_code=3,.vendor=0x5333,.device=0x8c2e,.command=2,
+        .bar={0xe1000000,device.phys}};
+    settings_volume=(struct fat_volume){.mounted=true};
+    memset(&settings_vfs,0,sizeof(settings_vfs)); settings_vfs.volumes[2]=&settings_volume;
+    marker_commits=marker_fault=0; marker_error=clear_error=false;
+    if (!retain_marker) { disk_size=0; marker_exists=false; memset(disk_marker,0,sizeof(disk_marker)); }
+    CHECK(!queued_work && !table_open && !marker_open);
+    queue_allowed=true; g_boot.flags=CBI_F_VERBOSE; step_count=accel_count=0;
+}
+static void run_accel_work(void)
+{
+    CHECK(queued_work && m.status_reads==0 && !binding_claims);
+    kwork_fn fn=queued_work; void *arg=queued_arg; queued_work=NULL;
+    fn(arg); CHECK(!accel_queued && !table_open && !marker_open && !locks);
+}
+static void software_desktop(void)
+{
+    CHECK(fbdev_get()->present);
+    struct fb_rect r={16,16,10,10}; unsigned packets=m.packets;
+    CHECK(!fbdev_fill(&r,0x123456));
+    uint8_t expected[4]; reference_pixel(&device,expected,0x123456);
+    CHECK(!memcmp(device.mapped+16*device.pitch+16*4,expected,4));
+    if (!acceleration) {
+        CHECK(m.packets==packets);
+        struct ciuki_accel_request q=request(CIUKI_ACCEL_QUERY);
+        CHECK(fbdev_accel_request(&q)==0);
+    }
+}
+static void deferred_boots(void)
+{
+    /* Every failure reaches the actual software framebuffer presenter, while
+     * the queued callback runs the production marker and register decisions. */
+    for (unsigned variant=0;variant<11;variant++) {
+        boot_fixture_accel(false);
+        if (variant==0) { m.stuck=true; m.frozen=true; }
+        if (variant==1) m.dead=true;
+        if (variant==2) m.wrong_offset=true;
+        if (variant==3) m.locked=true;
+        if (variant==4) m.busy=24;
+        if (variant==5) { m.reg[BCI_CONTROL/4]=8; m.bci_locked=true; }
+        if (variant==6) m.delay_failed=true;
+        if (variant==7) { m.busy=8; m.status_value=0x004e0000; }
+        if (variant==8) m.status_value=0x00a00000; /* Linux-only cannot prove idle */
+        if (variant==9) m.contradictory=true;
+        if (variant==10) m.control_reserved=true;
+        fbdev_accel_schedule(&settings_vfs); fbdev_accel_schedule(&settings_vfs);
+        CHECK(queued_work && !m.cr_writes && !binding_claims);
+        software_desktop(); /* desktop can draw even before the callback */
+        run_accel_work();
+        bool ready=variant==4 || variant==7 || variant==10;
+        CHECK(!!acceleration==ready && marker_commits==(ready ? 2u : 1u));
+        CHECK(disk_size==(ready ? 0u : 14u) && m.status_reads<=WAIT_POLLS+1);
+        CHECK(log_matches(ready ? "[accel] savage ready" : "[accel] savage quarantined reason=")==1);
+        if (variant==3 || variant==6) CHECK(!m.status_reads);
+        else CHECK(log_matches("savage status reg=48c60 raw=")==1);
+        if (!ready) software_desktop();
+        if (variant==9) CHECK(log_matches("quarantined reason=status_contradiction")==1);
+        printf("deferred savage boot variant=%u ready=%u status_reads=%u marker_bytes=%u desktop=visible\n",
+            variant,ready,m.status_reads,disk_size);
+        finish();
+    }
+    /* Simulated hard reset retains only the committed attempt, including on
+     * a read-only second mount. Absolutely no register/claim follows it. */
+    boot_fixture_accel(false);
+    bool previous=false; CHECK(!attempt_marker(&settings_vfs,false,&previous) && !previous && disk_size==14);
+    finish(); boot_fixture_accel(true); settings_volume.readonly=true;
+    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    CHECK(!acceleration && !binding_claims && !m.cr_writes && !m.status_reads && !marker_commits);
+    CHECK(log_matches("skipped after a failed attempt")==1 && log_matches("quarantined reason=previous_attempt")==1);
+    software_desktop(); finish();
+    for (unsigned variant=0;variant<5;variant++) {
+        boot_fixture_accel(false);
+        if (variant==0) settings_vfs.volumes[2]=NULL;
+        if (variant==1) settings_volume.readonly=true;
+        if (variant==2) marker_error=true;
+        if (variant==3) { g_boot.flags|=CBI_F_SAFE_MODE; }
+        if (variant==4) queue_allowed=false;
+        fbdev_accel_schedule(&settings_vfs);
+        if (queued_work) run_accel_work();
+        CHECK(!acceleration && !binding_claims && !m.cr_writes && !m.status_reads);
+        software_desktop(); finish();
+    }
+    boot_fixture_accel(false); clear_error=true;
+    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    CHECK(!acceleration && engine.quarantined && disk_size==14);
+    CHECK(log_matches("quarantined reason=marker_clear_failed")==1);
+    software_desktop(); finish();
+    for (unsigned failure=1;failure<=6;failure++) {
+        boot_fixture_accel(false); marker_fault=failure;
+        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        CHECK(!acceleration && !binding_claims && !m.cr_writes && !m.status_reads);
+        CHECK(log_matches("quarantined reason=marker_unavailable")==1);
+        software_desktop(); finish();
+    }
+    binding_allowed=false; binding_pci_count=0; queued_work=NULL; accel_vfs=NULL;
 }
 int main(void)
 {
     CHECK(!framebuffer_regression_main());
+    CHECK(boot_calls==0); /* framebuffer activation never enters the engine */
     commands(16); commands(32); failures_and_fallback();
     glue_stalled_clock(0);            /* never idle, frozen clock */
     glue_stalled_clock(UINT32_MAX);   /* master-aborted (dead) aperture */
+    deferred_boots();
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);
     return failures ? 1 : 0;
 }

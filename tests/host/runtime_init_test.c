@@ -213,7 +213,13 @@ void file_clock_start(int64_t build_epoch, bool rtc_qualified)
 {
     CHECK(build_epoch == 0 && rtc_qualified);
 }
-int files_bootstrap(struct vfs *vfs) { CHECK(vfs); return 0; }
+static bool files_ready;
+int files_bootstrap(struct vfs *vfs) { CHECK(vfs); files_ready=true; return 0; }
+void fbdev_accel_schedule(struct vfs *vfs)
+{
+    CHECK(vfs==&storage_get()->vfs && state.initialized && files_ready);
+    CHECK(state.ata_sequence==4 && drivers_activation_count()>=3);
+}
 int probe_bootlog(void) { CHECK(false); return 1; } /* registration only */
 #include "../../src/kernel/probes/safe_probe.c"
 
@@ -240,6 +246,7 @@ static void reset(uint32_t flags, bool firmware, bool lfb)
     fb_result = input_result = bios_result = adapter_result = ata_result = 0;
     disk = quarantined = fail_expected = false;
     calls = optional_records = consoles = logs = 0;
+    files_ready = false;
     order[0] = provenance[0] = 0;
     display = (struct fb_device){ 0 };
 }
