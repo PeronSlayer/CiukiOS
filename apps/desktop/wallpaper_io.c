@@ -10,9 +10,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-/* Native byte_io uses a page bounce buffer, accepts at most 1 MiB and may
- * return short counts. Keep each pin/transfer bounded to its 4 KiB page. */
-#define WALL_IO_CHUNK 4096u
+/* f1-39 reads regular files in 64 KiB transfers. Writes can still return
+ * a page at a time; both loops advance by the actual count and retry EINTR. */
+#define WALL_IO_CHUNK (64u * 1024u)
 
 /* SHA-256 of the short, versioned cache identity. All inputs fit four blocks. */
 static uint32_t rotate(uint32_t x, unsigned n) { return x>>n | x<<(32-n); }

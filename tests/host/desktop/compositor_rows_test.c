@@ -139,9 +139,34 @@ static void visibility(void)
     assert(n==1 && !memcmp(&boxes[0],&clip,sizeof(clip)));
 }
 
+static int uploads, fail_present;
+static int upload(int display, int output, const struct ciuki_rect *r)
+{ (void)display; (void)output; (void)r; uploads++; return fail_present ? -1 : 0; }
+static int accelerator(int display, const struct ciuki_accel_request *q)
+{ (void)display; (void)q; return 0; }
+static void presentation(void)
+{
+    struct desktop d={.width=RW,.height=RH,.pixels=a,.accel_front=b,.ops={.present=upload}};
+    struct desk_box full={0,0,RW,RH};
+    for (unsigned caps=0;caps<4;caps++) for (int active=0;active<2;active++) {
+        background(731); a[17]^=1;
+        d.accel=active ? accelerator : NULL; d.accel_caps=caps; d.accel_front_valid=0;
+        uploads=fail_present=0; assert(!present_box(&d,full) && uploads==1);
+        int rectangles=active && (caps&1);
+        assert(d.accel_front_valid==rectangles);
+        assert(rectangles ? !memcmp(a,b,sizeof(a)) : a[17]!=b[17]);
+        /* A retained front after capability loss must not be compared/copied. */
+        d.accel_caps=0; a[17]^=1; uploads=0;
+        assert(!present_box(&d,full) && uploads==1 && !d.accel_front_valid);
+    }
+    d.accel=accelerator; d.accel_caps=1; d.accel_front_valid=0; fail_present=1;
+    background(923); a[17]^=1;
+    assert(present_box(&d,full)==-1 && a[17]!=b[17] && !d.accel_front_valid);
+}
+
 int main(void)
 {
-    frames(); shadows(); text(); visibility();
+    frames(); shadows(); text(); visibility(); presentation();
     struct desktop d={0}; desk_render_release(&d);
     background(37);
     struct desk_paint p={a,RW,RH,0,0,RW,RH}, q=p; q.pixels=b;

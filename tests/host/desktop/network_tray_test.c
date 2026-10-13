@@ -85,7 +85,16 @@ int main(void)
     desk_shell_network_update(&d, &n); assert(!d.damage.count);
     click(nx, ny); n.state = CIUKI_NET_QUARANTINED; strcpy(n.reason, "link_fault");
     d.damage.count = 0; desk_shell_network_update(&d, &n);
-    assert(d.damage.count >= 1 && d.damage.count <= 2); /* Popup shadow may touch/merge the tray. */
+    assert(d.damage.count && d.damage.count<=DESK_DAMAGE_MAX);
+    /* Preserve the exact union even where the popup shadow overlaps the
+     * tray; bounding-box merging used to include clean corner pixels. */
+    struct desk_box popup={360,332,282,122};
+    for (int y=0;y<480;y++) for (int x=0;x<640;x++) {
+        unsigned covered=0;
+        for (unsigned i=0;i<d.damage.count;i++) covered+=(unsigned)desk_contains(d.damage.boxes[i],x,y);
+        unsigned wanted=desk_contains(tray,x,y)||desk_contains(popup,x,y);
+        assert(covered==wanted);
+    }
     for (unsigned i = 0; i < d.damage.count; i++) {
         struct desk_box b = d.damage.boxes[i];
         assert(b.x >= 360 && b.y >= 332 && b.x + b.w <= 640 && b.y + b.h <= 478);
