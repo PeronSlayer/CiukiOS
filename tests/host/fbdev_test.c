@@ -40,16 +40,18 @@ uint64_t framebuffer_cycles(void)
     fake_cycles += copy_cycles;
     return result;
 }
-static char step_log[128][64];   /* savage2d_test: verbose register breadcrumbs */
+static char step_log[128][96];   /* savage2d_test: verbose register breadcrumbs */
 static unsigned step_count;
 static char accel_log[128][192];
 static unsigned accel_count;
+static void (*accel_log_cost)(const char *);
 void klog(const char *fmt, ...)
 {
     if (!strncmp(fmt, "[accel] ", 8)) {
         va_list ap; va_start(ap, fmt);
         vsnprintf(accel_log[accel_count++ % 128], sizeof(accel_log[0]), fmt, ap);
         va_end(ap);
+        if (accel_log_cost) accel_log_cost(accel_log[(accel_count-1) % 128]);
     }
     if (!strncmp(fmt, "[accel] savage step ", 20)) {
         va_list ap; va_start(ap, fmt);
