@@ -118,6 +118,6 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-42-usb-host-hid](f1-42-usb-host-hid.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (usb-contract, UHCI/OHCI, hubs, HID boot keyboards and mice, EHCI companion routing); QEMU USB-only check and hardware pending |
 | [f1-43-usb-mass-storage](f1-43-usb-mass-storage.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-13 after the f1-42 merge (USB sticks as removable volumes) |
 | [f1-44-ata-busmaster-dma](f1-44-ata-busmaster-dma.md) | F1 | gpt-6.1-sol / xhigh | queued 2026-10-13 (UDMA on PIIX/VIA/SiS/ALi/nForce) |
-| [f6-08-nic-drivers-second-set](f6-08-nic-drivers-second-set.md) | F6 | gpt-6.1-sol / xhigh | queued 2026-10-13 (e1000, pcnet, tulip, 3c90x, via-rhine) |
+| [f6-08-nic-drivers-second-set](f6-08-nic-drivers-second-set.md) | F6 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (e1000, pcnet, tulip, 3c90x, rhine; twelve new f6-net cases, QEMU check pending) |
 | [f4-11-audio-drivers-second-set](f4-11-audio-drivers-second-set.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (ES1370/ES1371/CT5880, SB16 ISA, VIA 686/8233/8235, SiS 7012, nForce behind one backend; QEMU es1370/sb16 check pending) |
-| [runner-02-usb-devices](runner-02-usb-devices.md) | runner | gpt-6.1-sol / high | running 2026-10-13 (USB controllers and HID devices in profiles, i8042 off, suite f1-usb) |
+| [runner-02-usb-devices](runner-02-usb-devices.md) | runner | gpt-6.1-sol / high | delivered and merged 2026-10-13 (usb profile lists, i8042=off, serial_patterns, suite f1-usb); QEMU run pending |
