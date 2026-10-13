@@ -6,6 +6,11 @@
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
 #include <ciuki/input.h>
+#include <ciuki/storage.h>
+struct storage *storage_get(void) { return NULL; }
+int storage_add_removable(struct storage *s,struct blkdev *b) { (void)s;(void)b;assert(0);return -FS_EIO; }
+int storage_remove_removable(struct storage *s,struct blkdev *b,bool surprise) { (void)s;(void)b;(void)surprise;assert(0);return -FS_EIO; }
+int storage_remove_removable_locked(struct storage *s,struct blkdev *b,bool surprise) { return storage_remove_removable(s,b,surprise); }
 struct ciuki_boot_info g_boot;
 static struct resource leases[64];
 static unsigned lease_count, generation;
@@ -50,6 +55,8 @@ struct model {
     unsigned hub_change[2],hub_status[2];
     uint64_t now;
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
+    bool bulk_test;
+    unsigned bulk_in_toggle, bulk_out_toggle, bulk_packets;
     unsigned packets, setups, dma_checks, protocol_requests, led_requests;
 };
 static struct model m;
@@ -92,6 +99,14 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
     m->packets++;assert(toggle<2 && len<=64);
     if(m->silent)return -USB_EAGAIN;
     if(m->stall) return -USB_EPIPE;
+    if(ep && m->bulk_test) {
+        assert(ep==(pid==USB_PID_IN ? 1u:2u));
+        unsigned *expected=pid==USB_PID_IN ? &m->bulk_in_toggle:&m->bulk_out_toggle;
+        assert(toggle==*expected); *expected^=1; m->bulk_packets++;
+        if(pid==USB_PID_IN) memset(buf,0x5a,len);
+        else for(unsigned i=0;i<len;i++) assert(buf[i]==0xa7);
+        return (int)len;
+    }
     if(ep) {
         assert(ep==1 && pid==USB_PID_IN);
         if(m->nak || !d->report_len) return -USB_EAGAIN;
@@ -175,8 +190,8 @@ static void sleep_ms(void *arg,unsigned ms)
     if(m->ohci) {
         if(!m->ownership_stuck && (m->regs[2]&8)) {m->regs[1]&=~0x100u;m->regs[2]&=~8u;}
         if(!m->reset_stuck)m->regs[2]&=~1u;
-        if(!(m->config[1]&4) || !(m->regs[1]&(4|0x10)))return;
-        unsigned ed_addr=m->regs[1]&4 ? *(uint32_t *)m->dma:m->regs[0x20/4];
+        if(!(m->config[1]&4) || !(m->regs[1]&(4|0x10|0x20)))return;
+        unsigned ed_addr=m->regs[1]&4 ? *(uint32_t *)m->dma:m->regs[(m->regs[1]&0x20 ? 0x28:0x20)/4];
         if(!ed_addr)return;
         volatile uint32_t *ed=(volatile uint32_t *)dma_at(m,ed_addr,16);
         if((ed[0]&(1u<<14)) || (ed[2]&~15u)==ed[1])return;
@@ -185,6 +200,10 @@ static void sleep_ms(void *arg,unsigned ms)
         unsigned len=td[1] ? td[3]-td[1]+1:0;
         uint8_t *buf=len ? dma_at(m,td[1],len):NULL;
         assert(len<=64 && (td[2]&15)==0);
+        if(m->bulk_test) {
+            assert((m->regs[1]&0x20) && !(m->regs[1]&0x10) && (m->regs[2]&4));
+            assert(((ed[0]>>16)&0x7ff)==64); /* descriptor MPS, including short wrappers */
+        }
         unsigned dir=(td[0]>>19)&3;
         int n=transaction(m,ed[0]&127,(ed[0]>>7)&15,dir==0?USB_PID_SETUP:dir==1?USB_PID_OUT:USB_PID_IN,((td[0]>>24)&3)&1,buf,len);
         if(n==-USB_EAGAIN)return;
@@ -335,8 +354,30 @@ static void policy(void)
     assert(m.regs[1]&0x100); /* never force firmware-owned IR */
     puts("PASS USB firmware-first/safe/invalid DMA/OHCI handoff guards");
 }
+static void bulk_engine(bool ohci)
+{
+    setup(ohci,false);assert(!attach());assert(!m.host.ops->port_reset(&m.host,0));m.bulk_test=true;
+    struct usb_device *d=&m.host.devices[0];*d=(struct usb_device){.host=&m.host,.present=true,.configured=true,.ep0=64};
+    uint8_t cfg[]={9,2,32,0,1,1,0,0x80,50,9,4,0,0,2,8,6,0x50,0,7,5,0x81,2,64,0,0,7,5,2,2,64,0,0};
+    assert(!usb_parse_config(d,cfg,sizeof(cfg)) && d->storage.bound && d->storage.in==1 && d->storage.out==2);
+    uint8_t data[512];unsigned n;memset(data,0xa7,sizeof(data));
+    fs_lock_take(&m.host.transfer_lock);
+    assert(!usb_bulk(d,false,data,31,&n) && n==31);
+    assert(!usb_bulk(d,true,data,13,&n) && n==13);
+    assert(!usb_bulk(d,true,data,sizeof(data),&n) && n==sizeof(data));
+    for(unsigned i=0;i<sizeof(data);i++) assert(data[i]==0x5a);
+    memset(data,0xa7,sizeof(data));assert(!usb_bulk(d,false,data,sizeof(data),&n) && n==sizeof(data));
+    fs_lock_drop(&m.host.transfer_lock);assert(m.bulk_packets==18 && m.dma_checks);
+    if(ohci) assert(!m.regs[0x28/4] && !m.regs[0x2c/4] && m.regs[1]==0x80);
+    cfg[30]=2;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);cfg[30]=0;
+    cfg[28]=3;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);cfg[28]=2;
+    cfg[27]=0x81;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);cfg[27]=2;
+    d->low_speed=true;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);
+    printf("PASS USB %s bulk: CBW/CSW-sized packets, 512-byte IN/OUT, toggles, descriptor MPS, retired DMA, invalid endpoints/speed\n",ohci?"OHCI":"UHCI");
+}
 int main(void)
 {
+    bulk_engine(false);bulk_engine(true);
     assert(usb_mouse_wheel_layout(wheel_desc,sizeof(wheel_desc)));
     for(unsigned i=0;i<sizeof(wheel_desc)-1;i++) {
         /* Truncation can omit final collection ends, but never inputs. */

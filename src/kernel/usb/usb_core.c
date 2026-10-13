@@ -46,6 +46,7 @@ int usb_retire_frames(struct usb_host *h, unsigned off, unsigned width, unsigned
 }
 void usb_detach(struct usb_device *d, const char *reason)
 {
+    usb_storage_detach(d);
     for (unsigned i = 0; i < USB_HID_MAX; i++) usb_hid_release(d, &d->hid[i]);
     for (unsigned i = 0; i < d->hub_ports; i++) if (d->hub_child[i]) {
         usb_detach(&d->host->devices[d->hub_child[i] - 1], reason); d->hub_child[i] = 0;
@@ -147,6 +148,7 @@ int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io
     if (h->attempted) return -USB_EIO;
     void *mapping = h->mmio;
     memset(h, 0, sizeof(*h)); h->mmio = mapping; h->attempted = true; h->pci = *p; h->io = *io;
+    fs_lock_init(&h->transfer_lock);
     for (unsigned i = 0; i < 3; i++) h->claims[i] = -1;
     h->reason = "unsupported_controller";
     if (p->class_code != 0x0c || p->subclass != 3 || (p->prog_if != 0 && p->prog_if != 0x10 && p->prog_if != 0x20)) return -ENOSYS;
@@ -221,6 +223,9 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
     if (len < 9 || len > USB_CONFIG_MAX || b[0] != 9 || b[1] != 2 || le16(b + 2) != len || !b[5]) return -USB_EPROTO;
     d->config = b[5];
     struct usb_hid *hid = 0;
+    struct usb_storage *storage = 0;
+    unsigned storage_endpoints = 0;
+    memset(&d->storage, 0, sizeof(d->storage));
     unsigned count = 0, report_len = 0, endpoints = 0, interfaces = 0;
     uint8_t seen_interface[32] = {0};
     for (unsigned at = 9; at < len; ) {
@@ -228,11 +233,15 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
         unsigned size = b[at]; const uint8_t *p = b + at;
         if (p[1] == 4) {
             if (size < 9) return -USB_EPROTO;
-            hid = 0; report_len = 0;
+            hid = 0; storage = 0; report_len = 0;
             if (!p[3]) {
                 unsigned bit = 1u << (p[2] & 7);
                 if (seen_interface[p[2] / 8] & bit) return -USB_EPROTO;
                 seen_interface[p[2] / 8] |= (uint8_t)bit; interfaces++;
+            }
+            if (!p[3] && p[5] == 8 && p[6] == 6 && p[7] == 0x50) {
+                if (d->low_speed || d->storage.bound || p[4] != 2) return -USB_EPROTO;
+                storage = &d->storage; storage->bound = true; storage->interface = p[2];
             }
             if (!p[3] && p[5] == 3 && p[6] == 1 && (p[7] == 1 || p[7] == 2)) {
                 if (count == USB_HID_MAX) return -ENOSPC;
@@ -245,11 +254,25 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
             hid->report_length = (uint16_t)report_len;
         } else if (p[1] == 5) {
             if (size < 7) return -USB_EPROTO;
+            if (storage) {
+                unsigned mps = le16(p + 4), ep = p[2] & 15;
+                unsigned bit = 1u << (ep + (p[2] & 0x80 ? 16 : 0));
+                if (!ep || (p[2] & 0x70) || p[3] != 2 ||
+                    (mps != 8 && mps != 16 && mps != 32 && mps != 64) || (storage_endpoints & bit) || ((p[2] & 0x80) && (endpoints & (1u<<ep)))) return -USB_EPROTO;
+                storage_endpoints |= bit;
+                if (p[2] & 0x80) {
+                    if (storage->in) return -USB_EPROTO;
+                    storage->in = (uint8_t)ep; storage->in_packet = (uint8_t)mps;
+                } else {
+                    if (storage->out) return -USB_EPROTO;
+                    storage->out = (uint8_t)ep; storage->out_packet = (uint8_t)mps;
+                }
+            }
             if (hid && (p[2] & 0x80) && (p[3] & 3) == 3) {
                 unsigned mps = le16(p + 4);
                 if (!(p[2] & 15) || (p[2] & 0x70) || !p[6] || mps > (d->low_speed ? 8u : 64u) || mps < (hid->protocol == 1 ? 8u : 3u) || hid->endpoint) return -USB_EPROTO;
                 unsigned bit = 1u << (p[2] & 15);
-                if (endpoints & bit) return -USB_EPROTO;
+                if ((endpoints & bit) || (storage_endpoints & (bit<<16))) return -USB_EPROTO;
                 endpoints |= bit;
                 hid->endpoint = p[2] & 15; hid->packet = (uint8_t)mps;
                 hid->interval = p[6]; if (d->low_speed && hid->interval < 10) hid->interval = 10;
@@ -257,6 +280,7 @@ int usb_parse_config(struct usb_device *d, const uint8_t *b, unsigned len)
         }
         at += size;
     }
+    if (d->storage.bound && (!d->storage.in || !d->storage.out)) return -USB_EPROTO;
     if (interfaces != b[4]) return -USB_EPROTO;
     for (unsigned i = 0; i < count; i++) if (!d->hid[i].endpoint) return -USB_EPROTO;
     return 0;
@@ -300,6 +324,10 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
         err = usb_hid_attach(d, &d->hid[i], report_len); if (err) goto failed;
         d->reason = "hid_ready";
     }
+    if (d->storage.bound) {
+        err = usb_storage_attach(d);
+        klog("[usb-storage] attach addr=%u result=%d", d->address, err);
+    }
     return (int)slot + 1;
 failed:
     usb_device_quarantine(d, err < 0 ? "enumeration_transfer" : "descriptor_or_topology");
@@ -307,10 +335,12 @@ failed:
 }
 void usb_step(struct usb_host *h)
 {
-    if (!h || !h->ready || h->quarantined || h->busy) return;
+    if (!h || h->busy) return;
+    if (!h->ready || h->quarantined) { usb_storage_service(h); return; }
+    fs_lock_take(&h->transfer_lock);
     h->busy = true;
     for (unsigned i = 0; i < 3; i++) if (h->claims[i] >= 0 && !registry_valid(h->claims[i], h->claim_gen[i])) {
-        usb_host_quarantine(h, "lease_invalid"); h->busy = false; return;
+        usb_host_quarantine(h, "lease_invalid"); h->busy = false; fs_lock_drop(&h->transfer_lock); return;
     }
     if (usb_expired(h, h->next_scan)) {
         h->next_scan = h->io.now(h->io.cookie) + 250;
@@ -352,6 +382,8 @@ void usb_step(struct usb_host *h)
         h->io.sleep(h->io.cookie, 1);
     }
     h->busy = false;
+    fs_lock_drop(&h->transfer_lock);
+    usb_storage_service(h);
 }
 #ifndef CIUKI_USB_HOST
 static uint32_t native_read(void *arg, unsigned at, unsigned width)

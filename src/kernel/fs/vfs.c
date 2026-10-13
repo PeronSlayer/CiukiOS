@@ -11,9 +11,9 @@
 struct resolved { unsigned drive; uint32_t parent; char name[FS_NAME_BYTES]; };
 void vfs_init(struct vfs *v) { memset(v,0,sizeof(*v)); fs_lock_init(&v->lock); }
 void vfs_destroy(struct vfs *v) { if (files_detach) files_detach(v); fs_lock_destroy(&v->lock); }
-int vfs_attach(struct vfs *v, unsigned d, struct fat_volume *vol) {
+int vfs_attach_locked(struct vfs *v, unsigned d, struct fat_volume *vol) {
     if (d>=26 || !vol || !vol->mounted) return -FS_EINVAL;
-    fs_lock_take(&v->lock); int e=0;
+    int e=0;
     if (vfs_drive_present(v,d)) e=-FS_EBUSY;
     for (unsigned i=0;i<26;i++) if (v->volumes[i]) {
         struct fat_volume *other=v->volumes[i];
@@ -21,6 +21,10 @@ int vfs_attach(struct vfs *v, unsigned d, struct fat_volume *vol) {
         if (other->dev==vol->dev && other->start<vol->start+vol->sectors && vol->start<other->start+other->sectors) e=-FS_EBUSY;
     }
     if (!e) { v->volumes[d]=vol; v->generation[d]++; }
+    return e;
+}
+int vfs_attach(struct vfs *v, unsigned d, struct fat_volume *vol) {
+    fs_lock_take(&v->lock); int e=vfs_attach_locked(v,d,vol);
     fs_lock_drop(&v->lock); return e;
 }
 bool vfs_drive_present(struct vfs *v, unsigned d) { return d < 26 && (v->volumes[d] || v->ro_volumes[d]); }

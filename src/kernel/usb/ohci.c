@@ -73,7 +73,10 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     if (length > 64 || (d->low_speed && length > 8) || ep > 15) return -EINVAL;
     volatile uint32_t *ed = words(h, USB_ED), *td = words(h, USB_TD);
     unsigned direction = pid == USB_PID_SETUP ? 0 : pid == USB_PID_OUT ? 1 : 2;
-    unsigned mps = ep ? length : d->ep0; if (!mps) mps = 8;
+    bool bulk = ep && !periodic;
+    unsigned mps = bulk ? (pid == USB_PID_IN ? d->storage.in_packet : d->storage.out_packet) : ep ? length : d->ep0;
+    if (!mps) mps = 8;
+    unsigned head = bulk ? 0x28u : 0x20u, current = bulk ? 0x2cu : 0x24u;
     memset(h->dma + USB_TAIL, 0, 16);
     td[0] = (0xfu << 28) | (7u << 21) | ((2u | toggle) << 24) | direction << 19 | (1u << 18);
     td[1] = length ? h->dma_phys + USB_BUFFER : 0;
@@ -84,10 +87,10 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     ed[1] = h->dma_phys + USB_TAIL; ed[2] = h->dma_phys + USB_TD; ed[3] = 0;
     words(h, 0x84)[0] = 0; /* old HCCA DoneHead */
     usb_write(h, 0x0c, 0x7f, 4);
-    if (!periodic) { usb_write(h, 0x24, 0, 4); usb_write(h, 0x20, h->dma_phys + USB_ED, 4); }
+    if (!periodic) { usb_write(h, current, 0, 4); usb_write(h, head, h->dma_phys + USB_ED, 4); }
     usb_barrier(); ed[0] &= ~(1u << 14); usb_barrier();
-    usb_write(h, 4, 0x80 | (periodic ? 4 : 0x10), 4);
-    if (!periodic) usb_write(h, 8, 2, 4); /* ControlListFilled */
+    usb_write(h, 4, 0x80 | (periodic ? 4 : bulk ? 0x20 : 0x10), 4);
+    if (!periodic) usb_write(h, 8, bulk ? 4 : 2, 4); /* Bulk/ControlListFilled */
     uint64_t end = h->io.now(h->io.cookie) + (periodic ? 2 : USB_TIMEOUT_MS);
     unsigned tries = periodic ? 3 : USB_TIMEOUT_MS + 1;
     int result = -USB_ETIMEDOUT;
@@ -105,7 +108,7 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     ed[0] |= 1u << 14; usb_barrier();
     usb_write(h, 4, 0x80, 4);
     if (usb_retire_frames(h, 0x3c, 4, 0xffff)) return -USB_EIO;
-    usb_write(h, 0x20, 0, 4); usb_write(h, 0x24, 0, 4);
+    usb_write(h, head, 0, 4); usb_write(h, current, 0, 4);
     /* A packet may finish between the last poll and ED skip. Decode the
      * retired TD so a late ACK advances the software toggle exactly once. */
     usb_barrier(); unsigned cc = td[0] >> 28;

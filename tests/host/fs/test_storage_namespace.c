@@ -206,6 +206,30 @@ static void detach_tests(void)
     OK(storage_sync()); namespace_stop(s, true);
     puts("PASS namespace detach: cwd expires, legacy cwd resets, absolute chdir recovers; reattach never revives old identities");
 }
+static void removable_namespace_tests(void)
+{
+    struct px_namespace *space;struct storage *s=namespace_start(&space);
+    OK(storage_add_removable(s,&media[2].dev));CHECK(s->vfs.volumes[4] && s->vfs.drive_flags[4]==VFS_DRIVE_REMOVABLE);
+    int fd=file_open(&supervisor,"/mnt/e/SHORT.BIN",O_RDONLY,0);CHECK(fd>=3);
+    struct px_node *node=file_fd(&supervisor,fd)->node;px_retain(node);
+    int legacy=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);CHECK(legacy>=0);
+    unsigned writes=media[2].writes,flushes=media[2].flushes;
+    CHECK(storage_remove_removable(s,&media[2].dev,false)==-FS_EBUSY);
+    CHECK(media[2].writes==writes && media[2].flushes==flushes);
+    OK(storage_remove_removable(s,&media[2].dev,true));CHECK(!s->vfs.volumes[4]);
+    struct ciuki_stat stat;CHECK(px_stat_locked(node,&stat)==-EIO);
+    uint8_t bytes[512];size_t done;CHECK(vfs_read(&table,legacy,bytes,sizeof(bytes),&done)<0);
+    CHECK(resolve_cwd(space,node,".")==-ENOENT);
+    OK(file_close(&supervisor,fd));OK(vfs_close(&table,legacy));
+    CHECK(media[2].writes==writes && media[2].flushes==flushes);
+    media[2].dev.quarantined=false;
+    OK(storage_add_removable(s,&media[2].dev));CHECK(s->vfs.volumes[5] && !s->vfs.volumes[4]);
+    CHECK(px_stat_locked(node,&stat)==-EIO); /* expired mount root is retained separately */
+    OK(storage_remove_removable(s,&media[2].dev,false));CHECK(!s->vfs.volumes[5]);
+    px_release(node);
+    namespace_stop(s,true);
+    puts("PASS USB removable native/legacy namespace: E: onward, busy preflight, surprise expiry, stale reads/stat/cwd, no teardown writes, fresh F: mount and safe detach");
+}
 static void namespace_probe_tests(void)
 {
     int (*probes[])(void) = { probe_fat_write, probe_cache, probe_bootlog };
@@ -230,7 +254,7 @@ int main(int argc, char **argv)
     CHECK(argc == 4);
     for (unsigned i = 0; i < 3; i++) OK(fake_open(&media[i], argv[i + 1]));
     baseline(); media[2].undo_enabled = true;
-    cwd_tests(); busy_tests(); detach_tests(); namespace_probe_tests();
+    cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests();
     for (unsigned i = 0; i < 3; i++) fake_close(&media[i]);
     printf("STORAGE NAMESPACE RESULT checks=%u records=%u failures=0 ASan/UBSan=enabled\n", checks, records);
     return 0;

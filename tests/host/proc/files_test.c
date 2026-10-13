@@ -4,6 +4,7 @@
 #include "proc_test.c"
 #undef main
 #include <ciuki/files.h>
+#include <ciuki/storage.h>
 #include <ciuki/clock.h>
 #include <ciuki/files_probe.h>
 #include <ciuki/desktop.h>
@@ -645,6 +646,41 @@ static void test_launch_throughput(void)
     puts("PASS native 64 KiB syscall/snapshot bytes, temporary buffer rollback, original page-sized writes");
 }
 
+/* Native devctl copies/dispatch use a bounded observation backend; the
+ * BOT suite independently exercises actual mount/eject and physical I/O. */
+static struct storage media_observation;
+static unsigned media_removals;
+static int media_result;
+struct storage *storage_get(void) { return &media_observation; }
+int usb_storage_eject(struct storage *s,unsigned drive,uint32_t gen)
+{ CHECK(s==&media_observation && drive==4 && gen==123); media_removals++; return media_result; }
+#include "../../../src/kernel/drivers/media_dev.c"
+static void test_media_node(void)
+{
+    struct px_path path;CHECK(!resolve_path("/dev/media",&path)&&path.node==space->media);
+    struct ciuki_stat st;CHECK(!px_stat_locked(path.node,&st)&&st.st_mode==(S_IFCHR|0444)&&st.st_rdev==6);
+    CHECK(file_open(client,"/dev/media",O_RDWR,0)==-EACCES);
+    int fd=file_open(client,"/dev/media",O_RDONLY|O_CLOEXEC,0);CHECK(fd>=0);
+    CHECK(call(CIUKI_SYS_READ,fd,USER,1,0,0)==-EBADF && call(CIUKI_SYS_LSEEK64,fd,0,0,SEEK_SET,USER)==-ESPIPE);
+    vfs_init(&media_observation.vfs);media_observation.ready=true;
+    struct blkdev b={.media_generation=123};
+    media_observation.volumes[4]=(struct storage_volume){.present=true,.removable=true,.part={.parent=&b}};
+    media_observation.vfs.volumes[4]=&media_observation.volumes[4].fat;
+    struct ciuki_media_state s={.version=1,.size=sizeof(s)};CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0));CHECK(!ua_read(client->memory,&s,USER,sizeof(s)));
+    CHECK(s.removable_mask==(1u<<4)&&s.generation[4]==123&&!s.generation[2]);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,UINT32_MAX,sizeof(s),0)==-EFAULT);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s)-1,0)==-EINVAL);
+    s.reserved=1;CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0)==-EINVAL);
+    struct ciuki_media_remove r={1,sizeof(r),4,123};CHECK(!ua_write(client->memory,USER,&r,sizeof(r)));
+    media_result=-FS_EBUSY;CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0)==-EBUSY&&media_removals==1);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,UINT32_MAX,sizeof(r),0)==-EFAULT&&media_removals==1);
+    media_result=0;CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0)&&media_removals==2);
+    r.generation=0;CHECK(!ua_write(client->memory,USER,&r,sizeof(r)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0)==-EINVAL&&media_removals==2);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,0xffffffff,USER,sizeof(r),0)==-ENOTTY);
+    CHECK(!file_close(client,fd));media_observation.vfs.volumes[4]=0;vfs_destroy(&media_observation.vfs);media_observation.ready=false;
+    puts("PASS /dev/media namespace/devctl: readonly/stream rules, copied state and removal, version/size/reserved/fault checks, busy/success, no invalid-pointer side effects");
+}
 static void test_net_node(void)
 {
     struct px_path path; CHECK(!resolve_path("/dev/net", &path) && path.node == space->net);
@@ -684,7 +720,7 @@ int main(int argc, char **argv)
     CHECK(!files_attach(&vfs,&space));
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
-    test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks(); test_net_node();
+    test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;

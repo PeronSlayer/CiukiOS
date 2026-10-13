@@ -11,6 +11,12 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class NetworkTrayTests(unittest.TestCase):
     def test_tray(self):
+        self.run_tray("network")
+
+    def test_removable_tray(self):
+        self.run_tray("media")
+
+    def run_tray(self, kind):
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="network-tray-", dir=parent) as temp:
@@ -18,7 +24,7 @@ class NetworkTrayTests(unittest.TestCase):
                        ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c",
                         "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
             sources += [ROOT / "apps/libdeskui/draw.c", ROOT / "tests/host/desktop/fake.c",
-                        ROOT / "tests/host/desktop/network_tray_test.c"]
+                        ROOT / f"tests/host/desktop/{kind}_tray_test.c"]
             binary = Path(temp) / "network-tray"
             env = {**os.environ, "TMPDIR": temp, "ASAN_OPTIONS": "detect_leaks=0"}
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",

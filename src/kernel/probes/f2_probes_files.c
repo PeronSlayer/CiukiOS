@@ -91,10 +91,11 @@ bool f2_files_post_commit_fault(void)
     if (err) return false;
     err = fat_mount(&fault_volume, &fault_cache, &fault_disk.dev, 0, fault_disk.dev.capacity, true);
     vfs_init(&fault_vfs);
+    if (!err) err = vfs_attach(&fault_vfs, 2, &fault_volume);
     fault_space = (struct px_namespace){ .vfs = &fault_vfs };
     memset(&fault_node, 0, sizeof(fault_node));
     fault_node.space = &fault_space; fault_node.volume = &fault_volume; fault_node.kind = PX_FILE;
-    fault_node.linked = true;
+    fault_node.linked = true; fault_node.drive = 2; fault_node.generation = fault_vfs.generation[2];
     if (!err) err = fat_create(&fault_volume, 2, "fault.bin", 0, &fault_node.entry);
     struct file_description d = { .node = &fault_node, .flags = O_RDWR };
     size_t done = 0;
@@ -113,7 +114,7 @@ bool f2_files_post_commit_fault(void)
     rec_emit("fd-table", "DATA", "case=post-commit-fault owner=synthetic_block issued_errors=%u count=%u error=%d fsync=%d sticky=%d committed=%u quarantined=%u",
              fault_disk.failures, (unsigned)done, err, sync, again, fault_node.entry.first != old_first, fault_disk.dev.quarantined);
     /* Destroy discards only this disposable device's dirty/error state. */
-    cache_destroy(&fault_cache);
+    vfs_destroy(&fault_vfs); cache_destroy(&fault_cache);
     return pass;
 }
 

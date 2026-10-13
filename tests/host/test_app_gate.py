@@ -226,8 +226,8 @@ class AppGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, env=self.env)
         self.assertEqual(result.stderr, "")
-        self.assertEqual(result.stdout, "namespace teardown: gate_nodes_before=8 gate_nodes_after=9 "
-                                      "detached_nodes=9 freed_nodes=9 live_allocations=0\n")
+        self.assertEqual(result.stdout, "namespace teardown: gate_nodes_before=9 gate_nodes_after=10 "
+                                      "detached_nodes=10 freed_nodes=10 live_allocations=0\n")
 
     def test_gate_launch_environment_matches_metadata(self):
         source = (ROOT / "src/kernel/proc/supervisor.c").read_text()

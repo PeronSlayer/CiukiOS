@@ -12,6 +12,8 @@
 #pragma weak audio_write_user
 #pragma weak audio_devctl
 #pragma weak net_devctl
+int media_devctl(struct process *, int32_t, uint32_t, uint32_t, uint32_t);
+#pragma weak media_devctl
 
 #ifndef CIUKI_BUILD_ID
 #define CIUKI_BUILD_ID "unknown"
@@ -102,7 +104,7 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     if (media_error) return media_error;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
-    if (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET) {
+    if (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA) {
         if (positioned) return -ESPIPE;
         if (d->node->kind == PX_MIXER || !write) return -EBADF;
         return -EBADF; /* audio write dispatch owns its own cancellable operation */
@@ -159,7 +161,7 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     int err = 0;
     if (tf->eax == CIUKI_SYS_GETDENTS && d->node->kind != PX_DIRECTORY &&
         d->node->kind != PX_MNT && d->node->kind != PX_DEV) return -ENOTDIR;
-    if (tf->eax == CIUKI_SYS_LSEEK64 && (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET)) return -ESPIPE;
+    if (tf->eax == CIUKI_SYS_LSEEK64 && (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA)) return -ESPIPE;
     if (tf->eax == CIUKI_SYS_LSEEK64)
         err = output_pin(op, tf->edi, sizeof(int64_t), true);
     else if (tf->eax == CIUKI_SYS_FSTAT)
@@ -263,6 +265,8 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     uint32_t nr = tf->eax;
     if (nr == CIUKI_SYS_DEVCTL) {
         struct file_description *d = file_fd(p, (int32_t)tf->ebx);
+        if (d && d->node->kind == PX_MEDIA)
+            return media_devctl ? media_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
         if (d && d->node->kind == PX_NET)
             return net_devctl ? net_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
         return audio_devctl ? audio_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) :

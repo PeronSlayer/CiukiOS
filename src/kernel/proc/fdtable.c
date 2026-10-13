@@ -122,7 +122,7 @@ int file_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg)
     uint32_t *status = d ? &d->flags : desktop ? &desktop->flags : 0;
     if (!status) return -EINVAL;
     if (cmd == F_GETFL) return (int)*status;
-    if (cmd == F_SETFL && d && (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET) && (arg & O_APPEND)) return -EINVAL;
+    if (cmd == F_SETFL && d && (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA) && (arg & O_APPEND)) return -EINVAL;
     if (cmd == F_SETFL) { *status = (*status & O_ACCMODE) | arg; return 0; }
     return -EINVAL;
 }
@@ -156,7 +156,7 @@ int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, i
 {
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (whence > SEEK_END) return -EINVAL;
-    if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET) return -ESPIPE;
+    if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA) return -ESPIPE;
     if (d->node->kind != PX_FILE) {
         if (off || whence != SEEK_SET) return -EINVAL;
         d->position = 0; d->cursor = 0; *out = 0; return 0;

@@ -8,6 +8,7 @@ struct blkdev *blkpart_device(struct blkpart *v)
 {
     if (!v || !v->parent)
         return 0;
+    v->block.media_generation = v->parent->media_generation;
     v->block.quarantined = v->parent->quarantined;
     v->block.write_cache_state = v->parent->write_cache_state;
     v->block.flush = v->parent->flush ? part_flush : 0;

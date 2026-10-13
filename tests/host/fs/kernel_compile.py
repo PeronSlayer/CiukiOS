@@ -34,6 +34,8 @@ sources += [root/'src/kernel/core/bootlog.c', root/'src/kernel/probes/fat_probes
 # with the real target flags, including the unchanged 4096-byte frame guard.
 sources += [root/'src/kernel/drivers/ata.c', root/'src/kernel/drivers/ata_dma.c', root/'src/kernel/drivers/ata_probe.c',
             root/'src/kernel/proc/fdtable.c', root/'src/kernel/proc/syscalls_file.c', root/'src/kernel/proc/syscalls_proc.c']
+sources += sorted((root/'src/kernel/usb').glob('*.c'))
+sources += [root/'src/kernel/drivers/blkpart.c', root/'src/kernel/drivers/media_dev.c', root/'src/kernel/proc/posixpath.c', root/'src/kernel/proc/devnodes.c']
 for source in sources:
     subprocess.run(['clang',*flags,'-I'+str(root/'src/kernel/include'),'-fstack-usage','-c',str(source),
                     '-o',str(out/(source.stem+'.o'))],check=True)

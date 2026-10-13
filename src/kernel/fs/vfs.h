@@ -3,6 +3,7 @@
 #ifndef CIUKI_VFS_H
 #define CIUKI_VFS_H
 #include "fat.h"
+#define VFS_DRIVE_REMOVABLE 1u
 #include <ciuki/fs_ro.h>
 #define VFS_NODES 64u
 #define VFS_DESCRIPTIONS 128u
@@ -23,6 +24,7 @@ struct vfs_table;
 struct vfs {
     fs_lock lock; /* namespace -> cache -> device; no IRQ/interrupts-off I/O */
     struct fat_volume *volumes[26];
+    uint32_t drive_flags[26];
     struct fs_ro_volume *ro_volumes[26];
     uint32_t generation[26];
     struct vfs_node nodes[VFS_NODES];
@@ -47,6 +49,7 @@ struct vfs_find {
 void vfs_init(struct vfs *);
 void vfs_destroy(struct vfs *);
 int vfs_attach(struct vfs *, unsigned drive, struct fat_volume *);
+int vfs_attach_locked(struct vfs *, unsigned drive, struct fat_volume *);
 int vfs_attach_ro(struct vfs *, unsigned drive, struct fs_ro_volume *);
 bool vfs_drive_present(struct vfs *, unsigned drive);
 /* Namespace lock held. EIO invalidates media cache/names/nodes/cwd and

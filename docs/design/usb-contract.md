@@ -1,4 +1,4 @@
-# F1 USB host and boot HID contract
+# F1 USB host, boot HID and mass storage contract
 
 Written for directive `f1-42`, 2026-10-13. Lead cross-review and QEMU/hardware
 qualification remain required before integration; host fixtures are not boot evidence.
@@ -43,7 +43,8 @@ but only loads PCI IDs; USB lookup is added without changing record layout.
 
 PCI class 0C/03 prog-if 00/10 selects UHCI/OHCI; prog-if 20 receives only
 EHCI ownership/stop/companion routing, never an EHCI transfer schedule.
-No xHCI, bulk, isochronous, storage or general HID report parser.
+No xHCI, isochronous or general HID report parser. F1-43 adds the bounded
+bulk/storage extension below.
 All native USB activation and EHCI routing return before config/register
 writes, claims or allocations in safe mode or firmware-first input policy
 (including INPUT_FORCED). This deliberately preserves the E500 BIOS lease.
@@ -69,9 +70,10 @@ pages become bus addresses; callers' pointers never do. PCI command writes
 are 16-bit and never echo W1C status. Controllers poll with USB interrupt
 enables off; no unqualified IRQ handler or routing is installed.
 
-One P_DEVICE service thread serializes enumeration and transfers, including
-address zero. It sleeps after each bounded poll and each device, keeping IF
-enabled and permitting scheduler progress. USB does not block the common
+One P_DEVICE service thread owns enumeration, including address zero. The
+host transfer mutex also serializes synchronous storage callers against HID
+and enumeration; all controller schedule/bounce-buffer access takes it.
+The service sleeps after each bounded poll and each device, keeping IF enabled and permitting scheduler progress. USB does not block the common
 work queue with enumeration. Every transfer uses at most one live packet TD;
 control data stages split at endpoint-zero max packet size. NAK is normal for
 interrupt polling, STALL/timeout/protocol errors quarantine the device. Host
@@ -121,3 +123,111 @@ input source=3, WHEEL type=6 (signed detents in value; other fields zero).
 The DOS window filters WHEEL because the current DOS VM mouse ABI has no
 wheel consumer. Native clients receive it through the existing DESK_MOTION
 message with its distinct input event type.
+
+
+## F1-43: USB mass storage (2026-10-13)
+
+Implementation directive: `docs/directives/f1-43-usb-mass-storage.md`.
+This extends F1-42 without adding a controller family or IRQ routing. Cross-review,
+canonical link, QEMU file-copy and physical-device evidence belong to the lead.
+
+### Research and repository comparison
+
+- [USB-IF Bulk-Only Transport 1.0](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf),
+  sections 3–6: interface 08/06/50, Get Max LUN stall allowance, 31-byte CBW,
+  13-byte CSW, tag/residue/status validation, endpoint halt and reset recovery.
+- [T10 SBC-3 working draft](https://www.t10.org/ftp/t10/document.05/05-344r0.pdf),
+  READ/WRITE(10), capacity and SYNCHRONIZE CACHE(10): USB ACK or successful
+  WRITE status does not by itself certify stable-media durability.
+- [QEMU 9.2 USB storage](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/usb/dev-storage.c)
+  and [SCSI disk](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/scsi/scsi-disk.c):
+  full-speed bulk endpoints, BOT state transitions, fixed-format sense,
+  capacity and synchronous cache completion (reference, no imported code).
+- The UHCI/OHCI manuals above define bulk scheduling: UHCI uses its existing
+  nonperiodic QH, OHCI uses BulkHeadED/BulkCurrentED, BLE and BulkListFilled.
+
+Repository findings: `blkdev_durable()` admits enabled caches only with a
+qualified flush callback. `fat_enable_write()` can recover the dirty flag,
+so removable orchestration explicitly refuses that transition. `blkpart`
+and the counted storage view must forward media generations. Native Files
+already lists `/mnt/<letter>` and displays drive letters; its old 16-bit
+predecessor in `src/apps/` is outside this implementation. Namespace/cache/host
+lock order is preserved by dropping the USB service's host lock before mount
+or detach. Storage records, views and letters remain allocated for the boot.
+
+### Admission and command transport
+
+One alternate-zero transparent SCSI BOT interface per full-speed device,
+exactly one bulk IN and one bulk OUT endpoint, legal 8/16/32/64-byte packet
+sizes. LUN zero only; other LUNs remain unmounted. Low-speed, UAS, CBI,
+additional BOT interfaces, READ CAPACITY(16) and non-512-byte media are
+unsupported. Existing controller/device/address bounds still apply.
+
+`usb_bulk` splits at endpoint packet size and advances DATA toggles only
+on ACK, including short/ZLP packets. Caller buffers use the existing DMA
+bounce buffer; no user/stack pointer becomes a bus address. OHCI's endpoint
+max packet field uses descriptor size even on the 13-byte CSW. Retirement
+retains F1-42's two-frame rule. Each bulk stage is bounded at 64 KiB/10 s;
+each packet retains the controller's 500 ms limit and sleepable polling.
+
+Commands: INQUIRY, TEST UNIT READY, REQUEST SENSE, READ CAPACITY(10),
+READ(10), WRITE(10); SYNCHRONIZE CACHE(10) qualifies and implements
+flush; a four-byte MODE SENSE(6) header observes write protection. Initial
+power-on unit attention may be consumed with at most three readiness probes,
+before publishing a mount or issuing writes. Capacity sentinel FFFFFFFFh and
+any block length other than 512 are rejected. Block requests are at most
+128 sectors; range and READ/WRITE(10) arithmetic are checked before issuance.
+
+CBW/CSW are encoded bytewise with correct little-endian wrappers and
+big-endian SCSI fields. Validate exact wrapper lengths, signatures, matching
+tag, bounded residue and status. Data-stage STALL clears the affected halt
+and reads CSW; CSW STALL permits one halt-clear/CSW retry. Phase errors,
+malformed wrappers and uncertain transfers perform class reset then clear
+IN then OUT and quarantine storage. This restores framing only: never resend
+a failed CBW, never retry an issued write, never recover a writable mount
+from a transport error. Command-failed status obtains fixed-format sense.
+Published-media unit attention or medium absence revokes the old medium.
+
+### Mounts, hot-plug and removal
+
+Each admitted disk is a `blkdev` beside ATA. Scan the existing MBR/EBR parser
+and make `blkpart` views; validated whole-disk FAT is also admitted. FAT12,
+FAT16 and FAT32 use the existing read-first validation/cache/native mount path.
+USB volumes have `VFS_DRIVE_REMOVABLE` and receive E: onward, skipping existing
+letters; exhausted letters/record slots fail explicitly and are never recycled.
+
+Clean validated FAT may enable writes only after a successful synchronous
+cache probe. Unsupported flush or write-protected media remain read-only.
+Dirty FAT stays read-only with its diagnostic reason, including calls to
+`storage_enable_write`; this step supplies no confirmation/recovery override.
+
+The USB service polls readiness once per second; physical block I/O probes
+readiness before READ/WRITE. Root disconnect/change/overcurrent is also checked
+between packets; child detach follows the hub scan. A media-change or uncertain
+I/O condition discards cached blocks/names and detaches all the device's FAT
+partitions without clean flags or flushes. Old native descriptions and directory
+cursors fail rather than reaching replacement media. F1-42's no-runtime-recovery
+policy remains: absent media at admission or changed media require unplug/replug
+(or reboot if the controller/port is quarantined). A new device gets a fresh
+retained record and generation. This intentionally excludes live card-reader
+media reinsertion without reconnecting the USB device in this step.
+
+`/dev/media` exposes copied, versioned `MEDIA_GET_STATE` (120 bytes: version,
+size, mounted-removable mask, reserved=0, 26 generation values) and
+`MEDIA_SAFE_REMOVE` (16 bytes: version, size, drive index, media generation)
+through existing devctl call 69. Existing syscall numbers/record sizes stay
+unchanged. The removal generation prevents a stale menu from removing another
+medium. Requesting one partition removes the entire physical USB device.
+All partitions are preflighted for native and legacy open descriptions before
+any commit/clean flag. Busy handles return EBUSY. Commit caches, synchronize
+media, then detach/clean FAT and invalidate cache under the namespace lock.
+Any failure keeps the action unsuccessful and reports an error; no UI claims
+that unplugging is safe. After success, block I/O is disabled until reconnect.
+
+Files Computer view shows mounted removable letters with the Tango removable
+icon/type. The File menu and drive context menu provide “Safely remove”; the
+tray has a Tango removable icon and one removal row per mounted letter.
+Keyboard Up/Down scroll long tray lists; Escape dismisses them. Both report
+busy/errors and only successful removal displays the safe-to-unplug message.
+Verbose lifecycle, SCSI sense, transport faults and mount/eject records begin
+`[usb-storage]`. No QEMU or physical qualification is claimed by host fixtures.

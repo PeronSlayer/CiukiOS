@@ -416,6 +416,7 @@ bash "$root/tests/host/audio/run.sh"
 
 # F1 USB: production UHCI/OHCI register/DMA models.
 bash "$root/tests/host/usb/run.sh"
+bash "$root/tests/host/usb/storage_run.sh"
 
 # F6: production ownership/queues and three register-level NIC models.
 bash "$root/tests/host/net/run.sh"

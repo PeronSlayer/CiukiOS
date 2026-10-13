@@ -35,7 +35,11 @@ static bool node_available(const struct px_node *n)
 int px_ro_check_locked(struct px_node *n)
 {
     struct vfs *v=n->space->vfs;
-    if (!n->ro) return 0;
+    if (!n->ro) {
+        if (!n->volume) return 0;
+        return n->drive<26 && n->volume->mounted && !n->volume->dev->quarantined &&
+            v->volumes[n->drive]==n->volume && v->generation[n->drive]==n->generation ? 0 : -EIO;
+    }
     if (!n->linked || n->drive>=26 || v->generation[n->drive]!=n->generation || v->ro_volumes[n->drive]!=n->ro) return -EIO;
     return px_error(vfs_ro_check_locked(v,n->drive));
 }
@@ -158,12 +162,14 @@ int files_attach(struct vfs *v, struct px_namespace **out)
             s->audio = node_new(s, s->dev, PX_AUDIO);
             s->mixer = node_new(s, s->dev, PX_MIXER);
             s->net = node_new(s, s->dev, PX_NET);
-            if (!s->null || !s->console || !s->audio || !s->mixer || !s->net) err = -ENOMEM;
+            s->media = node_new(s, s->dev, PX_MEDIA);
+            if (!s->null || !s->console || !s->audio || !s->mixer || !s->net || !s->media) err = -ENOMEM;
         }
         if (!err) {
             memcpy(s->null->entry.name, "null", 5); memcpy(s->console->entry.name, "console", 8);
             memcpy(s->audio->entry.name, "audio", 6); memcpy(s->mixer->entry.name, "mixer", 6);
             memcpy(s->net->entry.name, "net", 4);
+            memcpy(s->media->entry.name, "media", 6);
         }
         if (err) files_detach(v);
     }
@@ -252,6 +258,7 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
         else if (path_equal(name, "audio")) *out = s->audio;
         else if (path_equal(name, "mixer")) *out = s->mixer;
         else if (path_equal(name, "net")) *out = s->net;
+        else if (path_equal(name, "media")) *out = s->media;
         else return -ENOENT;
         return 0;
     }
@@ -395,14 +402,14 @@ int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
     memset(out, 0, sizeof(*out));
     out->st_ino = n->ino; out->st_nlink = n->linked ? 1 : 0;
     out->st_mode = directory(n) ? S_IFDIR | 0777 : n->kind == PX_FILE ?
-        S_IFREG | (n->entry.attr & FAT_ATTR_RO ? 0444 : 0666) : S_IFCHR | (n->kind == PX_NET ? 0444 : 0666);
+        S_IFREG | (n->entry.attr & FAT_ATTR_RO ? 0444 : 0666) : S_IFCHR | ((n->kind == PX_NET || n->kind == PX_MEDIA) ? 0444 : 0666);
     out->st_blksize = 4096;
     if (n->ro) {
         out->st_dev=n->drive+1; out->st_size=n->kind==PX_FILE ? (int64_t)n->ro_size : 0;
         out->st_blksize=n->ro->dev->sector_size; out->st_blocks=(n->ro_size+511)/512;
         out->st_mode=directory(n) ? S_IFDIR|0555 : S_IFREG|0444; return 0;
     }
-    if (!n->volume) { out->st_rdev = n->kind == PX_NULL ? 1 : n->kind == PX_CONSOLE ? 2 : n->kind == PX_AUDIO ? 3 : n->kind == PX_MIXER ? 4 : n->kind == PX_NET ? 5 : 0; return 0; }
+    if (!n->volume) { out->st_rdev = n->kind == PX_NULL ? 1 : n->kind == PX_CONSOLE ? 2 : n->kind == PX_AUDIO ? 3 : n->kind == PX_MIXER ? 4 : n->kind == PX_NET ? 5 : n->kind == PX_MEDIA ? 6 : 0; return 0; }
     out->st_dev = n->drive + 1;
     out->st_size = n->kind == PX_FILE ? n->entry.size : 0;
     out->st_blksize = n->volume->spc * 512;
@@ -434,7 +441,7 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
     if (((r.node && r.node->ro) || (r.parent && r.parent->ro)) &&
         ((flags&O_ACCMODE)!=O_RDONLY || (flags&(O_CREAT|O_TRUNC)))) return -EROFS;
     if (r.node && r.node->ro && (err=px_share_locked(r.node,VFS_READ,d->deny))) return err;
-    if (r.node && (r.node->kind == PX_NULL || r.node->kind == PX_CONSOLE || r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER || r.node->kind == PX_NET)) {
+    if (r.node && (r.node->kind == PX_NULL || r.node->kind == PX_CONSOLE || r.node->kind == PX_AUDIO || r.node->kind == PX_MIXER || r.node->kind == PX_NET || r.node->kind == PX_MEDIA)) {
         if ((err = device_open(r.node->kind, flags))) return err;
     } else if (r.node && directory(r.node)) {
         if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) return -EISDIR;
@@ -517,6 +524,10 @@ int px_drop_locked(struct px_node *n)
 {
     px_release(n);
     if (!n->ro && !n->refs && !n->linked && n->kind == PX_FILE && !legacy_open(n) && n->entry.first) {
+        /* Detached media names are not open-unlinked files on a live FAT.
+         * Closing an expired description must never release its old chain. */
+        if (n->drive>=26 || n->space->vfs->generation[n->drive]!=n->generation ||
+            n->space->vfs->volumes[n->drive]!=n->volume) { node_forget(n); return 0; }
         int err = fat_remove(n->volume, &n->entry, false);
         n->entry.first = 0; n->entry.size = 0;
         node_forget(n);
@@ -615,8 +626,8 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     uint32_t cursor = d->cursor;
     if (d->position < 2) { name = d->position ? ".." : "."; n = d->position ? dir->parent : dir; }
     else if (dir == dir->space->dev) {
-        if (d->position > 6) return 0;
-        struct px_node *devices[] = { dir->space->null, dir->space->console, dir->space->audio, dir->space->mixer, dir->space->net };
+        if (d->position > 7) return 0;
+        struct px_node *devices[] = { dir->space->null, dir->space->console, dir->space->audio, dir->space->mixer, dir->space->net, dir->space->media };
         n = devices[d->position - 2]; name = n->entry.name;
     } else if (dir == dir->space->mnt) {
         if (!cursor) cursor = 3;

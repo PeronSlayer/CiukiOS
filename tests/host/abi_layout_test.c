@@ -7,6 +7,23 @@
 
 struct expectation { const char *key; uint32_t native, expected; };
 static const struct expectation expectations[] = {
+    /* F1-43: literal copied media contract. */
+    {"constant.CIUKI_MEDIA_VERSION", CIUKI_MEDIA_VERSION, 1u},
+    {"constant.MEDIA_GET_STATE", MEDIA_GET_STATE, 19713u},
+    {"constant.MEDIA_SAFE_REMOVE", MEDIA_SAFE_REMOVE, 19714u},
+    {"sizeof.ciuki_media_state", sizeof(struct ciuki_media_state), 120u},
+    {"alignof.ciuki_media_state", _Alignof(struct ciuki_media_state), 4u},
+    {"offsetof.ciuki_media_state.version", __builtin_offsetof(struct ciuki_media_state, version), 0u},
+    {"offsetof.ciuki_media_state.size", __builtin_offsetof(struct ciuki_media_state, size), 4u},
+    {"offsetof.ciuki_media_state.removable_mask", __builtin_offsetof(struct ciuki_media_state, removable_mask), 8u},
+    {"offsetof.ciuki_media_state.reserved", __builtin_offsetof(struct ciuki_media_state, reserved), 12u},
+    {"offsetof.ciuki_media_state.generation", __builtin_offsetof(struct ciuki_media_state, generation), 16u},
+    {"sizeof.ciuki_media_remove", sizeof(struct ciuki_media_remove), 16u},
+    {"alignof.ciuki_media_remove", _Alignof(struct ciuki_media_remove), 4u},
+    {"offsetof.ciuki_media_remove.version", __builtin_offsetof(struct ciuki_media_remove, version), 0u},
+    {"offsetof.ciuki_media_remove.size", __builtin_offsetof(struct ciuki_media_remove, size), 4u},
+    {"offsetof.ciuki_media_remove.drive", __builtin_offsetof(struct ciuki_media_remove, drive), 8u},
+    {"offsetof.ciuki_media_remove.generation", __builtin_offsetof(struct ciuki_media_remove, generation), 12u},
     /* Network tray: independent literal wire contract, including padding. */
     {"constant.CIUKI_NET_VERSION", CIUKI_NET_VERSION, 1u},
     {"constant.NET_GET_STATE", NET_GET_STATE, 0x4301u},

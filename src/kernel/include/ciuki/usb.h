@@ -3,6 +3,7 @@
 #ifndef CIUKI_USB_H
 #define CIUKI_USB_H
 #include <ciuki/registry.h>
+#include "../../fs/blkdev.h"
 #define USB_HOST_MAX 4u
 #define USB_DEVICE_MAX 16u
 #define USB_PORT_MAX 8u
@@ -48,6 +49,16 @@ struct usb_hid {
     uint64_t next_poll, repeat_at;
     bool active, wheel;
 };
+/* One transparent SCSI/BOT interface, LUN zero. Records and block views are
+ * retained until reboot; an uncertain command never becomes a new medium. */
+struct usb_storage {
+    struct blkdev block;
+    uint32_t tag;
+    uint64_t next_check;
+    uint8_t interface, in, out, in_packet, out_packet, in_toggle, out_toggle;
+    uint8_t sense_key, asc, ascq;
+    bool bound, online, published, ejected, write_protected;
+};
 struct usb_device {
     struct usb_host *host;
     gen_t generation;
@@ -56,6 +67,7 @@ struct usb_device {
     uint8_t address, ep0, class_code, root_port, parent, port, hub_ports, config;
     bool present, configured, quarantined, low_speed;
     struct usb_hid hid[USB_HID_MAX];
+    struct usb_storage storage;
     bool hub_blocked[USB_PORT_MAX];
     uint8_t hub_child[USB_PORT_MAX]; /* index+1; zero = not enumerated */
 };
@@ -84,6 +96,7 @@ struct usb_host {
     uint8_t root_child[USB_PORT_MAX];
     bool attempted, ready, quarantined, touched, owned, busy;
     uint64_t next_scan;
+    fs_lock transfer_lock; /* namespace -> cache -> host; service drops before mount */
     struct usb_device devices[USB_DEVICE_MAX];
 };
 extern const struct usb_hc_ops usb_uhci_ops, usb_ohci_ops;
@@ -110,6 +123,12 @@ int usb_hid_attach(struct usb_device *, struct usb_hid *, unsigned report_length
 int usb_hid_report(struct usb_device *, struct usb_hid *, const uint8_t *, unsigned);
 void usb_hid_poll(struct usb_device *, struct usb_hid *);
 void usb_hid_release(struct usb_device *, struct usb_hid *);
+int usb_bulk(struct usb_device *, bool in, void *, unsigned, unsigned *actual);
+int usb_storage_attach(struct usb_device *); /* host lock held */
+void usb_storage_detach(struct usb_device *); /* host lock held, no namespace I/O */
+struct storage;
+int usb_storage_eject(struct storage *, unsigned drive, uint32_t generation);
+void usb_storage_service(struct usb_host *); /* host lock NOT held */
 bool usb_mouse_wheel_layout(const uint8_t *, unsigned);
 void usb_init(void);
 bool usb_input_ready(void);
