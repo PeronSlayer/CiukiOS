@@ -110,7 +110,7 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-41-savage-lock-readback](f1-41-savage-lock-readback.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (CR40.0 functional lock test, alias compared with the port read-back, CR66 defined-bit mask); T23 result pending |
 | [f4-10-ac97-cs4297a-codec-power](f4-10-ac97-cs4297a-codec-power.md) | F4 | gpt-6-astra / xhigh | delivered and merged 2026-10-13 (analog-ready expiry as a warning, response proof, stage records); T23 result pending |
 | [f3-12-doom-irq0-handler-target](f3-12-doom-irq0-handler-target.md) | F3 | gpt-6-astra / xhigh | delivered and merged 2026-10-13 (cause: synchronous serial diagnostics inside the guest IRQ handler caused recursive IRQ0s and a missed EOI; diagnostics buffered; 00ff:0020 is DOS/4GW's stub); T23 retest pending |
-| [f2-46-terminal](f2-46-terminal.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner approval: native Terminal with system commands and Lua) |
+| [f2-46-terminal](f2-46-terminal.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (grid, built-ins with aliases, NET/AUDIO/TASKS/DISPLAY/SHUTDOWN, Lua 5.4.8, docs/terminal.md) |
 | [f2-47-registry](f2-47-registry.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner approval: text-stored key tree, Hardware root, Registry Editor) |
 | [f2-48-compositor-round-two](f2-48-compositor-round-two.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (58 ms composite on the T23; 64 KiB wallpaper reads) |
 | [f2-49-truetype-fonts](f2-49-truetype-fonts.md) | F2+/F5 prerequisite | gpt-6.1-sol / xhigh | running 2026-10-13 (rasteriser library, Liberation fonts, Fonts page) |
