@@ -131,5 +131,5 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-52-graphics-demo](f2-52-graphics-demo.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner: a demo to see the accelerator; 2D benchmark, software 3D) |
 | [f2-53-tray-polish](f2-53-tray-polish.md) | F2+ | gpt-6.1-sol / high | running 2026-10-13 (owner: tray icons too far from the clock) |
 | [f3-13-dosbox-loading-and-speed](f3-13-dosbox-loading-and-speed.md) | F3 | gpt-6.1-sol / xhigh | running 2026-10-13 (owner: hide the DOS boot, loading window; DOOM lags on the T23) |
-| [f4-12-ui-sounds](f4-12-ui-sounds.md) | F4 | gpt-6.1-sol / high | running 2026-10-13 (owner: event sounds like Windows, volume ticks) |
+| [f4-12-ui-sounds](f4-12-ui-sounds.md) | F4 | gpt-6.1-sol / high | delivered and merged 2026-10-14 (event sounds, scheme.cfg + registry, Sounds page, volume ticks, VM priority) |
 | [f4-13-dos-vm-audio-on-hardware](f4-13-dos-vm-audio-on-hardware.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (native backend failed after boot: AC97 hand-off race and serial output stall fixed; VMs then attach); T23 listening test pending |
