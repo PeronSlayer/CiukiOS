@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
- * Control Panel pages (control.h). No direct I/O: everything goes through
- * struct cp_host, so the host capture can render every page. */
+ * Control Panel pages (control.h). Settings I/O goes through cp_host; the
+ * optional Fonts page reads its trusted store through libfont. */
 #include "control.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,10 +20,10 @@ enum {
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, D_PROPERTIES = 200, D_INFO
 };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter"};
-static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System", "Device Manager", "Drivers", "Network", "Power", "Adapter"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts"};
+static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System", "Device Manager", "Drivers", "Network", "Power", "Adapter", "Fonts"};
 static const char *const page_icons[CP_PAGES] = {"device:display", "device:mouse", "device:keyboard", "device:sound-card",
-    "settings:date-time", "device:computer", "settings:peripherals", "system-software-update", "device:network", "system-shutdown", "device:display"};
+    "settings:date-time", "device:computer", "settings:peripherals", "system-software-update", "device:network", "system-shutdown", "device:display", "preferences-desktop-font"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
@@ -156,6 +156,7 @@ static void paint(struct du_ui *u, void *user)
         int font = desk_theme->font_large;
         du_text_font(c, font, 24 + (452 - du_text_width_font(font, a->clock_line)) / 2, 71 - desk_font_cap(font) / 2, a->clock_line, DU_SELECT);
     } else if (a->page == CP_ADAPTER) cp_adapter_paint(a, c);
+    else if (a->page == CP_FONTS) cp_fonts_paint(a, c);
     else if (a->page == CP_SYSTEM && a->system_tab == 0 && a->host.portrait) {
         du_edge(c, (struct du_rect){22, 46, 100, 100}, DU_SUNKEN);
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) put(c, 24 + x, 48 + y, 1, 1, a->host.portrait[(y * 256 / 96) * 256 + x * 256 / 96]);
@@ -264,6 +265,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     struct cp_app *a = user;
     int save = 0;
     if (cp_display_event(a, e)) return;
+    if (cp_fonts_event(a, e)) return;
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
         a->preview_pending = 2; a->preview_valid = 0; u->dirty = 1;
         return;
@@ -839,6 +841,7 @@ static void build(struct cp_app *a)
     } else {
         system_pages(a);
     }
+    if (a->page == CP_FONTS) cp_fonts_build(a);
     if (a->page == CP_DISPLAY || a->page == CP_ADAPTER || a->page == CP_SYSTEM) cp_display_refresh(a);
     cp_tick(a); sync(a);
     if (a->page == CP_DISPLAY) {
@@ -861,6 +864,7 @@ void cp_open(struct cp_app *a, int page)
 {
     if (a->mode_state==CP_MODE_SAVE) { text(a,C_STATUS,"Waiting for display settings to finish saving..."); return; }
     if (page != a->page && a->mode_state) cp_display_cancel(a);
+    if (a->page == CP_FONTS && page != CP_FONTS) cp_fonts_close(a);
     a->page = page >= 0 && page < CP_PAGES ? page : CP_HOME;
     a->status[0] = 0;
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
@@ -883,4 +887,4 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     cp_open(a, page);
     return 0;
 }
-void cp_detach(struct cp_app *a) { cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }
+void cp_detach(struct cp_app *a) { cp_fonts_close(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }

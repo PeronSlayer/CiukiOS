@@ -107,12 +107,12 @@ def main():
         run([tool_info['clang']['path'],*cflags,'-Werror','-nostdinc','-isystem',str(Path(run([tool_info['clang']['path'],'-print-resource-dir'],capture_output=True,text=True).stdout.strip())/'include'),'-I',inc,'-I',work,'-c',path,'-o',obj],env=env)
     compile(ROOT/'sdk/crt/crt0.S',lib/'crt0.o')
     objects={}
-    for family in ('crt','libciuki','libpthread'):
+    for family in ('crt','libciuki','libpthread','libfont'):
         objects[family]=[]
         for path in sorted((ROOT/'sdk'/family).glob('*.c')):
             obj=work/(family+'_'+path.stem+'.o'); compile(path,obj); objects[family].append(obj)
     obj=work/'syscalls.o'; compile(work/'syscalls.S',obj); objects['libciuki'].append(obj)
-    for name,objs in [('libciuki',objects['crt']+objects['libciuki']),('libpthread',objects['libpthread'])]:
+    for name,objs in [('libciuki',objects['crt']+objects['libciuki']),('libpthread',objects['libpthread']),('libfont',objects['libfont'])]:
         run([tool_info['llvm-ar']['path'],'rcsD',lib/(name+'.a'),*objs])
     helpers=work/'helpers.o'; compile(ROOT/'sdk/newlib/helpers.c',helpers)
     run([tool_info['llvm-ar']['path'],'rcsD',lib/'libcompiler.a',helpers])
@@ -123,6 +123,10 @@ def main():
     notice_dir=OUT/'licenses'; notice_dir.mkdir()
     shutil.copy2(src/'COPYING.NEWLIB',notice_dir/'COPYING.NEWLIB')
     shutil.copy2(ROOT/'sdk/LICENSE',notice_dir/'SDK-MIT.txt')
+    shutil.copy2(ROOT/'third_party/stb/LICENSE',notice_dir/'stb-truetype.txt')
+    manifest['font_backend']={'name':'stb_truetype','version':'1.26','rasterizer':1,
+                             'source':'third_party/stb/stb_truetype.h','sha256':digest(ROOT/'third_party/stb/stb_truetype.h'),
+                             'license_choice':'Public Domain','notice':'licenses/stb-truetype.txt'}
     inventory=[]
     # make's compile commands identify every compiled newlib file (a superset of linked members).
     dependency_text='\n'.join(p.read_text() for p in build.rglob('*.Po'))
@@ -145,6 +149,7 @@ def main():
          'excluded':'libgloss, libnosys, libc/sys board ports, POSIX/unix/signal sample wrappers'}
     manifest['files']={str(p.relative_to(OUT)):digest(p) for p in sorted((OUT/'sysroot').rglob('*')) if p.is_file()}
     manifest['sdk_sources']={str(p.relative_to(ROOT)):digest(p) for p in sorted((ROOT/'sdk').rglob('*')) if p.is_file() and '__pycache__' not in str(p)}
+    manifest['sdk_sources'].update({str(p.relative_to(ROOT)):digest(p) for p in (ROOT/'third_party/stb/stb_truetype.h',ROOT/'third_party/stb/LICENSE')})
     (OUT/'manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
     run([binpath/'ciuki-cc','--self-test'],env=env)
     run(['python3',ROOT/'sdk/tests/check_sdk.py'],env=env)
@@ -152,7 +157,7 @@ def main():
     linked={}
     for mapfile in (OUT/'tests').glob('*.elf.map'):
         members=sorted(set(re.findall(r'([^\s/]+\.a)\(([^)]+)\)',mapfile.read_text())))
-        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
+        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','licenses/stb-truetype.txt'] if a=='libfont.a' else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
     manifest['linked_file_licenses']=linked
     manifest['test_evidence']=json.loads((OUT/'tests/host-checks.json').read_text())
     manifest['installed_bytes']=sum(p.stat().st_size for p in (OUT/'sysroot').rglob('*') if p.is_file())

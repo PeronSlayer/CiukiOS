@@ -99,6 +99,13 @@ void du_format_key(char *out, size_t size, unsigned key, unsigned modifiers);
 /* ui-look: faces, mnemonic labels, theme-drawn faces and focus. */
 void du_text_font(struct du_canvas *, int font, int x, int y, const char *, uint32_t);   /* y: capital top */
 int du_text_width_font(int font, const char *);
+/* Optional scalable grey-AA text, 26.6 em pixels. y is the baseline. Link
+ * with -lfont; retain a face for repeated painting. Errors return -1/errno. */
+struct ciuki_font_face;
+int du_text_face(struct du_canvas *, struct ciuki_font_face *, unsigned em_size,
+                 int x, int y, const char *, uint32_t);
+int du_text_ttf(struct du_canvas *, const char *font_path, unsigned em_size,
+                int x, int y, const char *, uint32_t);
 int du_label_width(const char *mnemonic);                                               /* '&' not counted */
 void du_raised(struct du_canvas *, struct du_rect, int pressed, int hot);                /* theme button face */
 void du_focus_ring(struct du_canvas *, struct du_rect);                                  /* theme focus cue */

@@ -117,6 +117,9 @@ def desktop_payloads():
                "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
     sources.update({f"/system/fonts/{p.name}": p for p in (ROOT / "assets/fonts/native").glob("*.CFN")})
     sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
+    font_sources, fonts = font_payloads()
+    sources.update(font_sources)
+    sources["/system/licenses/stb_truetype.txt"] = ROOT / "third_party/stb/LICENSE"
     sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
     sources["/system/licenses/stb_vorbis.txt"] = ROOT / "third_party/stb/LICENSE"
     sources["/system/licenses/stb_image_write.txt"] = ROOT / "third_party/stb/LICENSE"
@@ -127,7 +130,7 @@ def desktop_payloads():
     sources["/System/hwids/usb-ids.json"] = hwids / "usb-ids.json"
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],
-                "elf": desktop["elf"], "portrait": desktop["portrait"], "icons": desktop["icons"]}
+                "elf": desktop["elf"], "portrait": desktop["portrait"], "icons": desktop["icons"], "fonts": fonts}
     # The owner's three adaptive Ciuki scenes (assets/wallpapers/ciuki, 1448x1086 PNG; Ciuk2 is the
     # default wallpaper of apps/desktop/settings.c). /system/settings holds desktop.cfg (written at run
     # time); the owner may add PNG/JPEG/BMP files to /system/wallpapers. Never Microsoft's
@@ -140,6 +143,28 @@ def desktop_payloads():
     sources.update(sound_sources)
     metadata["sounds"] = sounds
     return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+
+
+def font_payloads():
+    """Pinned, unchanged Liberation files, independently of SDK/image builds."""
+    folder = ROOT / "assets/fonts/liberation"
+    record = json.loads((folder / "UPSTREAM.json").read_text())
+    expected = {f"Liberation{family}-{style}.ttf" for family in ("Sans", "Serif", "Mono")
+                for style in ("Regular", "Bold", "Italic", "BoldItalic")}
+    require(set(record["files"]) == expected, "Liberation inventory must contain twelve faces")
+    require({p.name for p in folder.glob("*.ttf")} == expected, "unexpected Liberation files")
+    sources = {}
+    for name, digest in record["files"].items():
+        require(sha256(folder / name) == digest, f"changed Liberation font: {name}")
+        sources[f"/System/fonts/{name}"] = folder / name
+    require(sha256(folder / "LICENSE") == record["license_sha256"], "changed Liberation license")
+    sources["/System/fonts/LIBERATION-LICENSE.txt"] = folder / "LICENSE"
+    sources["/System/fonts/LIBERATION-UPSTREAM.json"] = folder / "UPSTREAM.json"
+    sources["/System/fonts/LIBERATION-AUTHORS.txt"] = folder / "AUTHORS"
+    require(sha256(folder / "AUTHORS") == record["authors_sha256"], "changed Liberation authors")
+    return sources, {"version": record["version"], "record_sha256": sha256(folder / "UPSTREAM.json"),
+                     "files": {name: sha256(source) for name, source in sorted(sources.items())},
+                     "bytes": sum(p.stat().st_size for p in sources.values())}
 
 
 def sound_payloads():

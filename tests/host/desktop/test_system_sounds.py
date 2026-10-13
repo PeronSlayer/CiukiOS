@@ -23,13 +23,13 @@ class SystemSoundsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix=name, dir=scratch) as temp:
             binary = Path(temp) / name
             inc = Path(temp) / "include/ciuki"; inc.mkdir(parents=True)
-            for header in ("audio.h", "display.h"):
+            for header in ("audio.h", "display.h", "font.h"):
                 (inc / header).write_bytes((ROOT / "sdk/sysroot-overlay/include/ciuki" / header).read_bytes())
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-D_POSIX_C_SOURCE=200809L", "-Wno-macro-redefined", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/control"),
                             "-I", str(Path(temp) / "include"), "-I", str(ROOT / "src/kernel/include"), "-pthread",
-                            *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True)
+                            *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)], check=True)
             subprocess.run([str(binary), *map(str, args)], check=True, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
 
     def test_image_sound_mapping(self):
@@ -63,7 +63,8 @@ class SystemSoundsTests(unittest.TestCase):
         folder = ROOT / "build/codex"; folder.mkdir(parents=True, exist_ok=True)
         frame = folder / "f4-06-sounds.xrgb"
         self.harness("sounds-control", ["tests/host/desktop/sounds_control_test.c", "apps/control/app.c", "apps/control/display.c", "apps/desktop/protocol.c", "apps/desktop/sounds.c",
-                    "apps/desktop/settings.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c", *desktop.TOOLKIT], frame)
+                    "apps/desktop/settings.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c", "apps/control/fonts.c",
+                    "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", *desktop.TOOLKIT], frame)
         self.assertEqual(frame.stat().st_size, 560*420*4)
         from PIL import Image
         Image.frombytes("RGB", (560,420), frame.read_bytes(), "raw", "BGRX").save(folder / "f4-06-sounds.png")

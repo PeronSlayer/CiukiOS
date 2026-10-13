@@ -323,14 +323,14 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-test"
             icons = load("control_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
-            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/control/display.c", "apps/desktop/protocol.c",
+            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                        *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                             "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
-                            *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
+                            *(str(ROOT / s) for s in sources), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
             c = load("control_portrait", ROOT / "apps/desktop/convert_portrait.py")
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
             renders = folder / "renders"
@@ -357,14 +357,14 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-modes-test"
             icons = load("control_modes_icons", ROOT / "tests/host/desktop/icon_assets.py")
-            sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/control/display.c",
+            sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                             "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
-                            *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
+                            *(str(ROOT / s) for s in sources), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
             c = load("control_modes_portrait", ROOT / "apps/desktop/convert_portrait.py")
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
             renders = folder / "renders"; renders.mkdir()
@@ -478,7 +478,8 @@ class DesktopTests(unittest.TestCase):
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt",
-                                        "/system/licenses/minimp3.txt", "/system/fonts/LICENSES.TXT",
+                                        "/system/licenses/minimp3.txt", "/system/licenses/stb_truetype.txt", "/system/fonts/LICENSES.TXT",
+                                        *image.font_payloads()[0],
                                         *(f"/system/fonts/{p.name}" for p in (ROOT / "assets/fonts/native").glob("*.CFN")),
                                         "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
@@ -491,12 +492,14 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 65)  # f2-46: Terminal plus the f2-44 wallpaper frames
+        self.assertEqual(len(records), 81)  # f2-46 Terminal, f2-44 wallpaper frames, f2-49 twelve faces with notices
         for r in records:
-            if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt"):
+            if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt", "/system/licenses/stb_truetype.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
             elif r["path"] == "/system/licenses/minimp3.txt":
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/minimp3/LICENSE").read_bytes()).hexdigest())
+            elif r["path"].startswith("/System/fonts/"):
+                self.assertEqual(r["sha256"], metadata["fonts"]["files"][r["path"]])
             elif r["path"].startswith("/system/fonts/"):
                 source = str(sources[r["path"]].relative_to(ROOT))
                 self.assertEqual(r["sha256"], m["inputs"]["sources"][source])

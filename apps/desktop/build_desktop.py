@@ -168,7 +168,7 @@ def build():
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
-    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "sounds.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
@@ -176,7 +176,7 @@ def build():
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
-                          *(["-lm"] if name in ACCESSORIES else []), "-o", str(OUT / name)]
+                          *(["-lm"] if name in ACCESSORIES else []), *(["-lfont"] if name == "control" else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Audit compositor and theme code separately: integer drawing must never emit x87.

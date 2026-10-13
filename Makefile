@@ -12,6 +12,7 @@ SDK_ARGS ?= --archive $(SDK_ARCHIVE) --jobs 2
 SDK_INPUTS = $(shell find sdk -type f ! -path '*/__pycache__/*') \
              scripts/build_sdk.sh scripts/build_kernel.py config/sdk-pins.json \
              config/toolchain.json src/kernel/include/ciuki/abi.h apps/desktop/protocol.h \
+             third_party/stb/stb_truetype.h third_party/stb/LICENSE \
              $(wildcard $(SDK_ARCHIVE))
 LUA_SOURCE_ARCHIVE ?= build/downloads/newlib/lua-5.4.8.tar.gz
 LUA_TESTS_ARCHIVE ?= build/downloads/newlib/lua-5.4.8-tests.tar.gz
@@ -66,6 +67,7 @@ test-host:
 	@bash scripts/test/host_kernel_tests.sh
 	@python3 tests/loader_stub/test_static.py
 	@python3 -m unittest discover -s tests/host
+	@python3 -B -m unittest discover -s tests/host/font
 
 qemu-test-full:
 	@python3 scripts/test/run.py f0-smoke --image $(IMAGE)
