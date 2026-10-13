@@ -140,6 +140,9 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
     /* Preserve the timestamp of a deferred menu action across the remaining
      * input batch. Immediate icon/menu actions consume it in launch_program. */
     if (d->action < 0) d->launch_click_ns = in->monotonic_ns ? in->monotonic_ns : d->now_ns;
+    uint64_t stamp=in->monotonic_ns ? in->monotonic_ns : d->now_ns;
+    if (stamp && stamp<=d->now_ns && (!d->frame_input_ns || stamp<d->frame_input_ns))
+        d->frame_input_ns=stamp;
     d->inputs++;
     if (in->monotonic_ns && d->now_ns>=in->monotonic_ns &&
         d->now_ns-in->monotonic_ns>d->stats.input_lag_ns)

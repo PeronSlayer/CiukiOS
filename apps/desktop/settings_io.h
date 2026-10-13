@@ -4,6 +4,7 @@
 #include "settings.h"
 #include <pthread.h>
 #define CFG_STARTUP_STAGES 10
+#define CFG_LOG_MAX 768 /* display latency record, including maximum u64 fields */
 extern const char *const cfg_startup_stage_names[CFG_STARTUP_STAGES];
 /* One bounded latest-snapshot mailbox. Disk I/O never holds lock. The caller
  * owns lifetime; stop only after busy() is false (join then cannot wait on I/O). */
@@ -12,7 +13,7 @@ struct cfg_writer {
     int live, stopping, busy, pending, completed, error;
     char text[CFG_TEXT_MAX]; size_t length;
     char *scratch;
-    char log[384]; int log_pending;
+    char log[CFG_LOG_MAX]; int log_pending;
     uint64_t stage_us[CFG_STARTUP_STAGES]; unsigned stage_pending, stage_cached;
     char read_text[CFG_TEXT_MAX]; size_t read_length;
     int read_pending, read_ready, read_error;

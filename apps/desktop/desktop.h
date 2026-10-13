@@ -50,7 +50,11 @@ struct desk_damage { unsigned count; struct desk_box boxes[DESK_DAMAGE_MAX]; };
 struct desk_frame_stats {
     uint64_t frames, damage_px, scene_px, presents, lfb_bytes;
     uint64_t composite_ns, present_ns, input_ns, input_lag_ns;
+    uint64_t completed, frame_ns, frame_p95_ns, frame_max_ns, overruns, dropped;
 };
+#define DESK_LATENCY_BUCKETS 256
+struct desk_dirty_row { int32_t left, right; };
+struct desk_dirty_runs { unsigned count; struct desk_dirty_row spans[DESK_DAMAGE_MAX]; };
 #define DESK_FRAME_NS 16666667ull /* VBE does not expose measured refresh; conservative 60 Hz */
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
@@ -63,6 +67,7 @@ struct desk_client {
     int mixer;                    /* launched Volume Control or Music Player; may send MIXER_SET */
     int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
     int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
+    uint64_t launch_input_ns;     /* original click, retained through first-frame presentation */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
@@ -119,12 +124,15 @@ struct desktop {
     uint64_t order, now_ns, clock_second, presents, inputs, received, replied;
     struct desk_damage damage;
     struct desk_damage present_damage;
-    uint32_t *scene; size_t scene_bytes;
+    struct desk_dirty_runs *rows; uint32_t row_height;
+    int frame_valid, scanout_valid;
+    struct desk_damage move_damage;
     uint32_t cursor_under[11*17]; struct desk_box cursor_box;
     int cursor_valid, cursor_dirty;
     unsigned lfb_bytes_per_pixel;
     uint64_t next_frame_ns;
-    uint64_t pending_input_ns, pending_input_lag_ns;
+    uint64_t pending_input_ns, pending_input_lag_ns, frame_input_ns;
+    uint64_t latency_buckets[DESK_LATENCY_BUCKETS];
     uint64_t (*time_ns)(void);
     struct desk_frame_stats frame_stats, stats;
     struct desk_frame_stats sample; uint64_t sample_ns, sample_begin_ns;
@@ -183,8 +191,6 @@ struct desktop {
     uint32_t accel_generation, accel_caps;
     int hw_cursor;
     int32_t cursor_x, cursor_y;
-    uint32_t *accel_front; /* last completed RAM frame; allocated only with rectangles */
-    int accel_front_valid;
     /* A move can copy only a clean, unobscured window. Other exposure is damage. */
     int copy_pending, copy_client;
     struct ciuki_rect copy_rect;
@@ -267,6 +273,7 @@ uint8_t desk_glyph_row(unsigned, unsigned);
 int desk_redraw(struct desktop *);
 void desk_render_release(struct desktop *);
 int desk_frame_due(const struct desktop *, uint64_t now);
+void desk_stats_sample(struct desktop *);
 void desk_display_reply(struct desktop *, int result);
 uint64_t desk_launch_wait(const struct desktop *, uint64_t now); /* ns; short startup polling only */
 int desk_load_portrait(uint32_t *pixels);

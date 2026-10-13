@@ -1,0 +1,34 @@
+# Fixed host interaction recording, milliseconds from replay start.
+# Based on the f2-48 400x300 golden interaction; not a T23 input capture.
+# time_ms,action,arg1,arg2. Motion is absolute; button/key are native codes.
+5,motion,560,350
+6,button,1,1
+22,motion,568,354
+30,motion,576,358
+38,motion,584,362
+46,motion,592,366
+54,motion,600,370
+62,motion,608,374
+70,motion,616,378
+78,motion,624,382
+86,motion,632,386
+94,motion,640,390
+102,motion,632,386
+110,motion,624,382
+118,motion,616,378
+126,motion,608,374
+134,motion,600,370
+142,motion,592,366
+150,motion,584,362
+158,motion,576,358
+166,motion,568,354
+174,motion,560,350
+182,button,1,0
+220,motion,20,12
+221,button,1,1
+222,button,1,0
+278,key,1,1
+279,key,1,0
+320,launch,0,0
+344,first_frame,0,0
+400,full,0,0

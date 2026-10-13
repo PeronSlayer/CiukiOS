@@ -260,11 +260,10 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
         d->shell_stage = 4;
     struct desk_box old = desk_outer(c), frame = c->frame;
     int continuing=d->copy_pending && d->copy_client==i &&
-        d->copy_rect.width==(uint32_t)frame.w && d->copy_rect.height==(uint32_t)frame.h;
-    int copy = d->accel && (d->accel_caps & 1u) && d->hw_cursor &&
-        d->accel_front_valid && !d->present_damage.count && (continuing || (!d->copy_pending && !d->damage.count)) && !d->menu_open && !d->sh.levels &&
-        !d->sh.volume_open && !d->sh.switcher && !d->sh.tooltip && !d->power.state &&
-        !c->internal && !c->collapsed && !c->minimized;
+        d->copy_rect.width==(uint32_t)frame.w && d->copy_rect.height==(uint32_t)(frame.h-desk_theme->radius);
+    int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && !d->damage.count)) && !d->menu_open && !d->sh.levels &&
+        !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.switcher && !d->sh.tooltip && !d->power.state &&
+        !c->internal && !c->collapsed && !c->minimized && c->order>0;
     struct desk_box next = {x,y,frame.w,frame.h}, ignored;
     if (frame.x < 0 || frame.y < 0 || frame.x+frame.w > (int32_t)d->width ||
         frame.y+frame.h > (int32_t)d->height) copy=0;
@@ -273,15 +272,29 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
         if (j!=i && other->window && !other->minimized && other->order>c->order &&
             (desk_intersect(desk_outer(other),frame,&ignored) || desk_intersect(desk_outer(other),next,&ignored))) copy=0;
     }
-    if (d->copy_pending && !copy) { d->copy_pending=0; desk_damage_add(&d->damage,frame,d->width,d->height); }
+    if (d->copy_pending && !copy) {
+        for (unsigned k=0;k<d->move_damage.count;k++)
+            desk_damage_add(&d->damage,d->move_damage.boxes[k],d->width,d->height);
+        d->move_damage.count=0; d->copy_pending=0;
+        desk_damage_add(&d->damage,frame,d->width,d->height);
+    }
     c->frame.x = x; c->frame.y = y;
     if (copy) {
-        if (continuing) { d->copy_rect.dst_x=x; d->copy_rect.dst_y=y; }
-        else d->copy_rect=(struct ciuki_rect){frame.x,frame.y,x,y,(uint32_t)frame.w,(uint32_t)frame.h};
+        if (continuing) { d->copy_rect.dst_x=x; d->copy_rect.dst_y=y+desk_theme->radius; }
+        else d->copy_rect=(struct ciuki_rect){frame.x,frame.y+desk_theme->radius,x,y+desk_theme->radius,(uint32_t)frame.w,(uint32_t)(frame.h-desk_theme->radius)};
         d->copy_pending=1; d->copy_client=i;
     }
-    desk_damage_add(&d->damage,old,d->width,d->height);
-    desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+    struct desk_damage *damage=copy ? &d->move_damage : &d->damage;
+    /* Drop intermediate move footprints: RAM/scanout still hold the original. */
+    if (copy && continuing) {
+        /* Reconstruct the original outer box from the retained source. */
+        old=desk_outer(c);
+        old.x+=d->copy_rect.src_x-c->frame.x;
+        old.y+=d->copy_rect.src_y-desk_theme->radius-c->frame.y;
+        damage->count=0;
+    }
+    desk_damage_add(damage,old,d->width,d->height);
+    desk_damage_add(damage,desk_outer(c),d->width,d->height);
 }
 static void close_attachments(struct desktop *d, const struct ciuki_message *m, int keep)
 {

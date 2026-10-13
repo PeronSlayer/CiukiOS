@@ -93,23 +93,22 @@ static int front_accel(int display, const struct ciuki_accel_request *q)
 static void profile_front(struct desktop *d, unsigned frames, const char *theme)
 {
     d->ops.present=discard_present;
-    d->accel_front=malloc(W*H*4); assert(d->accel_front);
     for (int active=0;active<2;active++) {
         memset(painter_cycles,0,sizeof(painter_cycles)); memset(painter_calls,0,sizeof(painter_calls));
         d->accel=active ? front_accel : NULL; d->accel_caps=active ? 1 : 0;
         profiling=1;
         for (unsigned n=0;n<frames;n++) {
-            d->accel_front_valid=0; d->damage.count=0;
+            d->scanout_valid=0; d->damage.count=0;
             desk_damage_add(&d->damage,screen,W,H); assert(!desk_redraw(d));
         }
         profiling=0;
         assert(!profile_depth);
-        if (!getenv("CIUKI_BENCH_REFERENCE")) assert(painter_calls[8]==(active ? frames : 0));
+        if (!getenv("CIUKI_BENCH_REFERENCE")) assert(painter_calls[8]==0);
         printf("FRONT_COPY theme=%s accelerator=%d cycles_per_frame=%llu calls_per_frame=%llu\n",theme,active,
             (unsigned long long)(painter_cycles[8]/frames),(unsigned long long)(painter_calls[8]/frames));
     }
     d->accel=NULL; d->accel_caps=0;
-    free(d->accel_front); d->accel_front=NULL; d->accel_front_valid=0;
+    d->scanout_valid=0;
 }
 #endif
 
@@ -122,7 +121,8 @@ static void setup(struct desktop *d, const char *portrait, const char *store, co
     assert(f && fread(p, 4, DESK_PORTRAIT_SIZE * DESK_PORTRAIT_SIZE, f) ==
            DESK_PORTRAIT_SIZE * DESK_PORTRAIT_SIZE && !fclose(f));
     d->portrait = p; d->icon = icon;
-    assert(!du_icon_paths(store, portrait));
+    static int assets_configured;
+    if (!assets_configured) { assert(!du_icon_paths(store,portrait)); assets_configured=1; }
     d->pixels = malloc((W * H + 2) * 4); assert(d->pixels);
     d->pixels[0] = d->pixels[W * H + 1] = 0xfeedface; d->pixels++;
     desk_shell_enable(d);
@@ -223,6 +223,7 @@ static uint64_t damage_union(struct desktop *d, const struct desk_box *allowed, 
     for (int y=0;y<H;y++) for (int x=0;x<W;x++) {
         unsigned dirty=0, wanted=0;
         for (unsigned k=0;k<d->damage.count;k++) dirty+=(unsigned)desk_contains(d->damage.boxes[k],x,y);
+        for (unsigned k=0;k<d->move_damage.count;k++) dirty+=(unsigned)desk_contains(d->move_damage.boxes[k],x,y);
         for (unsigned k=0;k<n;k++) wanted|=(unsigned)desk_contains(allowed[k],x,y);
         assert(dirty<=1 && (!dirty || wanted)); count+=dirty;
     }
@@ -251,11 +252,12 @@ static void drag_and_menu_damage(struct desktop *d)
     for (int y=0;y<H;y++) for (int x=0;x<W;x++) {
         unsigned wanted=desk_contains(regions[0],x,y)||desk_contains(regions[1],x,y), got=0;
         for (unsigned k=0;k<d->damage.count;k++) got|=(unsigned)desk_contains(d->damage.boxes[k],x,y);
+        for (unsigned k=0;k<d->move_damage.count;k++) got|=(unsigned)desk_contains(d->move_damage.boxes[k],x,y);
         assert(got==wanted);
     }
-    redraw_exact(d); assert(d->frame_stats.scene_px==area && area<=W*H/4);
-    printf("DAMAGE theme=%s action=drag client=400x300 dx=64 dy=32 scene_px=%llu full_px=%d\n",
-           desk_theme->name,(unsigned long long)area,W*H);
+    redraw_exact(d); assert(d->frame_stats.scene_px<area && area<=W*H/4);
+    printf("DAMAGE theme=%s action=drag client=400x300 dx=64 dy=32 scene_px=%llu affected_px=%llu full_px=%d\n",
+           desk_theme->name,(unsigned long long)d->frame_stats.scene_px,(unsigned long long)area,W*H);
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT}; desk_input(d,&e);
     redraw_exact(d);
     desk_menu_open(d,SH_MENU_START,DESK_START_X,DESK_BAR);

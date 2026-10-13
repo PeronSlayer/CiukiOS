@@ -40,6 +40,15 @@ int main(void)
     assert(!cfg_writer_submit(&w,"first",5));
     pthread_mutex_lock(&lock); while (!entered) pthread_cond_wait(&changed,&lock); pthread_mutex_unlock(&lock);
     assert(cfg_writer_busy(&w));
+    char telemetry[700];
+    memset(telemetry,'x',sizeof(telemetry));
+    const char prefix[]="[display] frame_p95_us=18446744073709551615 ";
+    memcpy(telemetry,prefix,sizeof(prefix)-1);
+    telemetry[sizeof(telemetry)-2]='\n'; telemetry[sizeof(telemetry)-1]=0;
+    cfg_writer_log(&w,telemetry);
+    pthread_mutex_lock(&w.lock);
+    assert(w.log_pending && !strcmp(w.log,telemetry));
+    pthread_mutex_unlock(&w.lock);
     for (unsigned i=0;i<CFG_STARTUP_STAGES;i++) cfg_writer_stage(&w,i,100+i,i==5 || i==6);
     pthread_mutex_lock(&w.lock); assert(w.stage_pending==((1u<<CFG_STARTUP_STAGES)-1)); pthread_mutex_unlock(&w.lock);
     assert(!cfg_writer_submit(&w,"second",6)); assert(!cfg_writer_submit(&w,"latest",6));

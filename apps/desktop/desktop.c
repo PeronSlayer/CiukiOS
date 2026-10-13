@@ -270,6 +270,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
     d->clients[index].awaiting_frame=graphical;
     d->clients[index].launched_ns=monotonic();
+    d->clients[index].launch_input_ns=click_ns;
     d->children[child].pid=(uint32_t)pid;
     return pid;
 }
@@ -409,16 +410,18 @@ static void performance_sample(struct desktop *d, uint64_t now)
 {
     if (!d->sample_begin_ns) { d->sample_begin_ns=now; return; }
     if (now-d->sample_begin_ns<2000000000ull) return;
-    d->sample=d->stats; d->sample_ns=now-d->sample_begin_ns;
-    memset(&d->stats,0,sizeof(d->stats)); d->sample_begin_ns=now;
+    desk_stats_sample(d); d->sample_ns=now-d->sample_begin_ns;
+    d->sample_begin_ns=now;
     if (verbose_boot) {
         const struct desk_frame_stats *s=&d->sample;
-        char line[384];
-        snprintf(line,sizeof(line),"[display] frames=%llu damage_px=%llu presents=%llu lfb_bytes=%llu present_us=%llu composite_us=%llu input_us=%llu input_lag_us=%llu interval_us=%llu\n",
+        char line[CFG_LOG_MAX];
+        snprintf(line,sizeof(line),"[display] frames=%llu damage_px=%llu presents=%llu lfb_bytes=%llu present_us=%llu composite_us=%llu input_us=%llu input_lag_us=%llu interval_us=%llu frame_p95_us=%llu frame_max_us=%llu completed=%llu overruns=%llu dropped=%llu\n",
                 (unsigned long long)s->frames,(unsigned long long)s->damage_px,(unsigned long long)s->presents,
                 (unsigned long long)s->lfb_bytes,(unsigned long long)(s->present_ns/1000),
                 (unsigned long long)(s->composite_ns/1000),(unsigned long long)(s->input_ns/1000),
-                (unsigned long long)(s->input_lag_ns/1000),(unsigned long long)(d->sample_ns/1000));
+                (unsigned long long)(s->input_lag_ns/1000),(unsigned long long)(d->sample_ns/1000),
+                (unsigned long long)(s->frame_p95_ns/1000),(unsigned long long)(s->frame_max_ns/1000),
+                (unsigned long long)s->completed,(unsigned long long)s->overruns,(unsigned long long)s->dropped);
         if (settings_writer_started) cfg_writer_log(&settings_writer,line);
     }
 }
