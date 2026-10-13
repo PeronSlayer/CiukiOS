@@ -1014,6 +1014,12 @@ def desktop_interaction(records):
             'after':{k:after[k] for k in ('presents','input_events','pixel_digest','keys','motion','buttons')}}
 
 
+def atomic_write(path,text):
+    """Write-then-rename so concurrent slots never expose a torn summary.json."""
+    path=Path(path);tmp=path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+    tmp.write_text(text);os.replace(tmp,path)
+
+
 class Host:
     """Production boundary; host tests substitute only this boundary."""
     def preflight(self,root): return res.preflight(root)
@@ -1022,6 +1028,7 @@ class Host:
     def verify(self,unit): return res.verify_scope(unit)
     def connect_qmp(self,path,log): return QMP(path,log)
     def unowned_qemu_count(self): return res.qemu_count()
+    def own_qemu_count(self,unit): return res.qemu_count(unit)
     def kill_scope(self,unit,sig):
         subprocess.run(['systemctl','--user','kill','--kill-whom=all','--signal='+sig,unit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3)
     def scope_pids(self,path):
@@ -1723,9 +1730,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # The wrapper and the scope end before systemd reaps the QEMU process;
         # allow a few seconds before a lingering process counts as a survivor
         # (campaigns 11/12 lost safe-mode cases to this race, lead 2026-10-12).
-        count=host.unowned_qemu_count();until=time.monotonic()+5
+        count=host.own_qemu_count(unit);until=time.monotonic()+5
         while count and time.monotonic()<until:
-            time.sleep(.05);count=host.unowned_qemu_count()
+            time.sleep(.05);count=host.own_qemu_count(unit)
         result['cleanup']['qemu_process_count']=count
         if result['cleanup']['qemu_process_count']:
             result['cleanup']['clean']=False
@@ -2104,7 +2111,7 @@ def main(argv=None):
         if not all(c.isalnum() or c in '-_' for c in options.suite):raise res.Refusal('invalid suite name')
         suite=load_suite(options.suite)
         if suite.get('image')!='full':raise res.Refusal('only canonical full HDD suites are supported in F0')
-        with res.ExclusiveLock(res.common_lock(ROOT)):
+        with res.SlotLock(res.common_lock(ROOT)):
             Host().preflight(ROOT/'build/test-runs')
             if options.physical_capture:
                 from physical import import_sweep
@@ -2122,7 +2129,7 @@ def main(argv=None):
                 dest=ROOT/'build/test-runs'/options.suite/'summary.json'
                 dest.parent.mkdir(parents=True,exist_ok=True)
                 complete = all(r['sweep_complete'] for r in summary)
-                dest.write_text(json.dumps({'schema_version':1,'suite':options.suite,'profile':'physical',
+                atomic_write(dest,json.dumps({'schema_version':1,'suite':options.suite,'profile':'physical',
                                             'sweep_complete':complete,'image_sha256':options.image_sha256 or canonical_hash,
                                             'canonical_image_sha256':canonical_hash,
                                             'historical_image':bool(options.image_sha256 and options.image_sha256 != canonical_hash),
@@ -2163,7 +2170,7 @@ def main(argv=None):
                 # Preserve essential textual evidence before the next run can
                 # prune old directories (the ten-boot matrix exceeds five runs).
                 checkpoint=ROOT/'build/test-runs'/options.suite/'summary.json'
-                checkpoint.write_text(json.dumps({'schema_version':1,'suite':options.suite,'cases':summary},indent=2)+'\n')
+                atomic_write(checkpoint,json.dumps({'schema_version':1,'suite':options.suite,'cases':summary},indent=2)+'\n')
                 print(result['outcome'].upper()+': '+summary[-1]['case']+' — '+result['reason'],flush=True)
                 if failed_prerequisite(case,result):
                     summary.extend({'case':c.get('id',c['probe']),'outcome':'not_run','reason':'prerequisite failed'} for c in cases[index+1:]);break
@@ -2195,7 +2202,7 @@ def main(argv=None):
                     summary.append({'case':'physical-selector/evidence-import','outcome':'pass' if imports else 'not_run',
                                     'reason':'operator-confirmed evidence imported' if imports else 'operator-confirmed physical records required','imports':imports})
             dest=ROOT/'build/test-runs'/options.suite/'summary.json'
-            dest.write_text(json.dumps({'schema_version':1,'suite':options.suite,'cases':summary},indent=2)+'\n')
+            atomic_write(dest,json.dumps({'schema_version':1,'suite':options.suite,'cases':summary},indent=2)+'\n')
             return 0 if all(r['outcome']=='pass' for r in summary) else 1
     except (res.Refusal,OSError,ValueError,subprocess.SubprocessError) as e:
         print('REFUSED: '+str(e),file=sys.stderr);return 2

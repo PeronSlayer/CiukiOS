@@ -47,8 +47,17 @@ used copy-on-write. Earlier, `/tmp` (a 7.4 GiB tmpfs, that is RAM) filled with
    `cd`), QEMU profile (machine, CPU, RAM, devices), the fw_cfg command, the
    expected serial markers or screen checks, and a timeout. Common QEMU and
    serial/QMP code lives in one module instead of being copied into each test.
-5. **Resource limits are built into the runner.** One QEMU at a time
-   (a lock file); each run under
+5. **Resource limits are built into the runner.** At most N runner slots
+   (owner decision 2026-10-12; N = 2 by default, `CIUKI_RUNNER_SLOTS` 1..4),
+   still one QEMU per case. Each runner process takes the first free slot lock
+   `build/test-runs/.qemu.slotN` (flock) for its whole run and is refused when
+   all are busy. Preflight requires 2 GiB of `MemAvailable` plus 2 GiB per other
+   running slot, and refuses while a QEMU outside every runner scope (a manual
+   one) or a heavy build exists; a guest inside another slot's
+   `ciuki-test-*.scope` is never foreign, and the teardown check counts only the
+   case's own scope. `summary.json` is written by atomic rename. Slots are taken
+   automatically (no `--slot` option). Evidence semantics (image SHA, overlays,
+   TCG flags, records) are unchanged. Each run under
    `systemd-run --user --scope -p MemoryMax=1500M -p MemorySwapMax=0`; free
    memory checked first; no `pmemsave` or RAM dumps unless a diagnosis needs
    them; no orphan `qemu-system` processes left behind.
