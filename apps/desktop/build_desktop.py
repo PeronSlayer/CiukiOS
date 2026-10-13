@@ -29,7 +29,7 @@ ACCESSORIES = {
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
 }
-PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", *ACCESSORIES)
+PROGRAMS = ("desktop", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
 SHELL = ["sounds.c", "sound_runtime.c", "shell.c", "settings.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
@@ -47,7 +47,7 @@ def digest(path):
 
 
 def inputs():
-    files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
+    files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/gfxdemo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
                                  ROOT / "apps/ciukide", ROOT / "apps/regedit", ROOT / "apps/accessories", ROOT / "apps/paint",
                                  ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
@@ -170,20 +170,21 @@ def build():
     sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
     sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
+    sources["gfxdemo"] = ["../gfxdemo/main.c", "../gfxdemo/app.c", "../gfxdemo/scene.c", "../accessories/acc.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", *ACCESSORIES) else []),
+                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
                           *(["-lm"] if name in ACCESSORIES else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name == "regedit" else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
-    # Audit compositor and theme code separately: integer drawing must never emit x87.
-    for unit in ("compositor", "theme"):
-        obj = temp / f"{unit}.o"
-        subprocess.run([str(SDK / "bin/ciuki-cc"), *CFLAGS, "-c", str(ROOT / f"apps/desktop/{unit}.c"),
+    # Audit integer drawing separately, including the fixed-point demo rasterizer.
+    for source in ("apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/gfxdemo/app.c", "apps/gfxdemo/scene.c"):
+        obj = temp / f"{Path(source).stem}.audit.o"
+        subprocess.run([str(SDK / "bin/ciuki-cc"), *CFLAGS, "-c", str(ROOT / source),
                         "-o", str(obj)], check=True, env=env)
         audit_integer(obj, sdk)
         obj.unlink()
@@ -198,6 +199,7 @@ def build():
          "inputs": expected, "commands": commands, "elf": evidence,
          "files": {name: digest(OUT / name) for name in (*sources, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES)},
          "portrait": portrait_record(c), "icons": icon_record(icons), "integer_compositor_audit": "PASS",
+         "integer_graphics_demo_audit": "PASS",
          "build_seconds": round(time.monotonic()-start, 3), "guest_qualification": "not_run"}
     (OUT / "manifest.json").write_text(json.dumps(m, indent=2, sort_keys=True)+"\n")
     for obj in objects:

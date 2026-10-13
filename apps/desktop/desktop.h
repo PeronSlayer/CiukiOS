@@ -60,6 +60,7 @@ struct desk_client {
     int collapsed;                /* windowshade: only the title bar shows (double-click) */
     int32_t shade_height;
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
+    int gfxdemo;                  /* launch-bound graphics diagnostics authority */
     int mixer;                    /* launched Volume Control or Music Player; may send MIXER_SET */
     int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
     int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
@@ -180,11 +181,15 @@ struct desktop {
     uint16_t display_reply_mode;
     /* Optional privileged presenter; NULL retains ordinary surface presents. */
     int (*accel)(int, const struct ciuki_accel_request *);
+    int (*accel_info)(int, uint32_t, struct ciuki_accel_info *);
+    int (*gfx_benchmark)(struct desktop *, unsigned, uint64_t result[3]);
+    uint64_t gfx_next_bench_ns;
     uint32_t accel_generation, accel_caps;
     int hw_cursor;
     int32_t cursor_x, cursor_y;
     uint32_t *accel_front; /* last completed RAM frame; allocated only with rectangles */
     int accel_front_valid;
+    int accel_front_attempted; /* one cache allocation per display generation */
     /* A move can copy only a clean, unobscured window. Other exposure is damage. */
     int copy_pending, copy_client;
     struct ciuki_rect copy_rect;

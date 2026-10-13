@@ -1727,8 +1727,22 @@ MSB first
 ```c
 uint32_t cursor_image[32];
 };
+```
 
+DISPLAY_ACCEL/QUERY optionally writes this snapshot to EDX (zero keeps
+the original capability-only query). No register reads or activation.
 
+```c
+enum { CIUKI_ACCEL_DRIVER_NONE, CIUKI_ACCEL_DRIVER_SAVAGE };
+struct ciuki_accel_info {
+    uint32_t driver;
+    uint32_t capabilities;
+    uint32_t quarantined;
+    uint32_t generation;
+    uint64_t operations;
+    uint64_t idle_waits;
+    uint64_t fallbacks;
+};
 
 
 
@@ -2160,7 +2174,14 @@ f2-46: desktop-launched Terminal only, v2: serial, action (1 reboot, 2 off).
 The client confirms first; desktop runs the existing close/flush/power path.
 
 ```c
-DESK_TERMINAL_POWER
+DESK_TERMINAL_POWER,
+```
+
+f2-52: desktop-launched Graphics Demo only; query or one fixed sample.
+No client coordinates, display grants or hardware commands.
+
+```c
+DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT
 };
 #define DESK_SETTINGS_RELOAD 1u
 ```
@@ -2230,6 +2251,14 @@ uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
 
 frames, damage px, presents, LFB bytes, composite,
 present, input, max input lag (all ns), interval ns
+
+```c
+struct ciuki_accel_info accelerator;
+    uint32_t bpp;
+    uint64_t benchmark[3];
+```
+
+destination bytes, elapsed ns, completed kernel ops
 
 ```c
 };
@@ -2670,6 +2699,12 @@ Returns the service result or a negative errno, without errno translation.
 
 ```c
 int ciuki_display_accel(int,const struct ciuki_accel_request *);
+```
+
+Read-only snapshot; returns zero or a negative errno.
+
+```c
+int ciuki_display_accel_info(int,uint32_t,struct ciuki_accel_info *);
 int ciuki_display_info(int,struct ciuki_framebuffer_info *);
 int ciuki_input_read(int,struct ciuki_input_event *,uint32_t);
 #endif

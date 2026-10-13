@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include "../gfxdemo/benchmark.h"
 #include "sound_runtime.h"
 #include "settings_io.h"
 #include "wallpaper_io.h"
@@ -267,6 +268,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].pid=(uint32_t)pid;
     d->clients[index].program=kind;
     d->clients[index].taskman=tasks;
+    d->clients[index].gfxdemo=!strcmp(program->name,"gfxdemo");
     d->clients[index].mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
     d->clients[index].awaiting_frame=graphical;
     d->clients[index].launched_ns=monotonic();
@@ -404,6 +406,52 @@ static int shutdown_wait(struct desktop *d)
     if (wallpaper_worker_started && desk_wall_worker_busy(&wallpaper_worker)) return 0;
     if (settings_writer_started && cfg_writer_busy(&settings_writer)) return 0;
     return !audio_shutdown_wait || audio_shutdown_wait(d);
+}
+struct gfx_display_target { struct desktop *desktop; int surface; };
+static uint64_t gfx_clock(void *ctx) { (void)ctx; return monotonic(); }
+static int gfx_info(void *ctx, struct ciuki_accel_info *out)
+{
+    struct desktop *d=((struct gfx_display_target *)ctx)->desktop;
+    return d->accel_info ? d->accel_info(d->display,d->accel_generation,out) : -ENOSYS;
+}
+static int gfx_accel(void *ctx, const struct ciuki_accel_request *q)
+{
+    struct desktop *d=((struct gfx_display_target *)ctx)->desktop;
+    return d->accel ? d->accel(d->display,q) : -ENODEV;
+}
+static int gfx_upload(void *ctx, const struct ciuki_rect *r)
+{
+    struct gfx_display_target *t=ctx;
+    return t->desktop->ops.present(t->desktop->display,t->surface,r) ? -errno : 0;
+}
+static int gfx_benchmark(struct desktop *d, unsigned index, uint64_t values[3])
+{
+    /* The composite remains authoritative. This separate surface is only the
+     * software baseline; restore scanout on success and partial failure alike. */
+    struct gfx_display_target ctx={d,-1};
+    struct gfx_bench_target t={.ctx=&ctx,.width=d->width,.height=d->height,
+        .bpp=d->lfb_bytes_per_pixel*8,.generation=d->accel_generation,
+        .now=gfx_clock,.info=gfx_info,.accel=gfx_accel,.upload=gfx_upload};
+    struct ciuki_surface_info info={0};
+    if (index>=3) {
+        ctx.surface=ciuki_surface_create(d->width,d->height,CIUKI_SURFACE_XRGB8888);
+        if (ctx.surface<0) return -errno;
+        if (ciuki_surface_info(ctx.surface,&info)) { int e=errno; close(ctx.surface); return -e; }
+        t.pixels=ciuki_surface_map(ctx.surface,PROT_READ|PROT_WRITE);
+        if (t.pixels==MAP_FAILED) { int e=errno; close(ctx.surface); return -e; }
+        memcpy(t.pixels,d->pixels,(size_t)d->width*d->height*4);
+    }
+    struct gfx_bench_result result;
+    int e=gfx_bench_sample(&t,index,&result);
+    struct ciuki_rect full={0,0,0,0,d->width,d->height};
+    if (d->ops.present(d->display,d->output,&full)) {
+        e=-errno;
+        desk_damage_add(&d->present_damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+    }
+    d->accel_front_valid=0; d->copy_pending=0;
+    if (ctx.surface>=0) { munmap(t.pixels,info.allocation_bytes); close(ctx.surface); }
+    if (!e) { values[0]=result.bytes; values[1]=result.ns; values[2]=result.operations; }
+    return e;
 }
 static void performance_sample(struct desktop *d, uint64_t now)
 {
@@ -832,6 +880,8 @@ int main(int argc, char **argv)
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
     d->time_ns=monotonic; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     d->accel=ciuki_display_accel;
+    d->accel_info=ciuki_display_accel_info;
+    d->gfx_benchmark=gfx_benchmark;
     if (desk_load_portrait(portrait)) { fprintf(stderr,"desktop: approved Ciuki asset unavailable\n"); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_PORTRAIT,EIO); }
     d->portrait=portrait;
     d->output=ciuki_surface_create(info.width,info.height,CIUKI_SURFACE_XRGB8888);

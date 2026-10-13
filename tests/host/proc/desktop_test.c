@@ -551,6 +551,18 @@ static void test_desktop_present(void)
     unsigned references=desktop_fd(p,grants[0])->references;
     CHECK(desktop_syscall(&accel_call)==0 && !grants_display_busy() &&
         !t->cleanup && !t->operation && desktop_fd(p,grants[0])->references==references);
+    /* f2-52 optional read-only QUERY output, legacy query unchanged. */
+    accel_call.edx=BUFFER+512;
+    CHECK(!desktop_syscall(&accel_call));
+    struct ciuki_accel_info ai;
+    CHECK(!ua_read(p->memory,&ai,BUFFER+512,sizeof(ai)) && ai.generation==1 &&
+        ai.driver==CIUKI_ACCEL_DRIVER_NONE && !ai.operations && !ai.capabilities && !ai.quarantined);
+    accel_call.edx=1; CHECK(desktop_syscall(&accel_call)==-EFAULT);
+    accel_call.edx=BUFFER+512; q.generation=2; CHECK(!ua_write(p->memory,BUFFER,&q,sizeof(q)));
+    CHECK(desktop_syscall(&accel_call)==-EAGAIN);
+    q.generation=1; q.size--; CHECK(!ua_write(p->memory,BUFFER,&q,sizeof(q)));
+    CHECK(desktop_syscall(&accel_call)==-EINVAL);
+    q.size++; CHECK(!ua_write(p->memory,BUFFER,&q,sizeof(q))); accel_call.edx=0;
     accel_call.ecx=0; CHECK(desktop_syscall(&accel_call)==-EFAULT);
     accel_call.ebx=grants[1]; CHECK(desktop_syscall(&accel_call)==-EBADF);
     accel_call.ebx=grants[0]; desktop_fd(p,grants[0])->maximum=0;

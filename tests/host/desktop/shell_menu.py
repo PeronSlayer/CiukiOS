@@ -30,7 +30,7 @@ from pathlib import Path
 import sys
 
 PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "control", "music", "viewer", "paint", "terminal"]
-ACCESSORIES = ["calc", "charmap", "clock", "help", "mixer", "viewer", "regedit"]
+ACCESSORIES = ["calc", "gfxdemo", "charmap", "clock", "help", "mixer", "viewer", "regedit"]
 SCREEN_W, SCREEN_H = 1024, 768
 TOP_BAR = 32
 START_BUTTON = (4, 4, 96, 24)              # x, y, w, h (desktop.h DESK_START_X/Y/W/H)

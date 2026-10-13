@@ -62,6 +62,16 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_accel_request.pattern", __builtin_offsetof(struct ciuki_accel_request,pattern), 44u},
     {"offsetof.ciuki_accel_request.cursor_mask", __builtin_offsetof(struct ciuki_accel_request,cursor_mask), 52u},
     {"offsetof.ciuki_accel_request.cursor_image", __builtin_offsetof(struct ciuki_accel_request,cursor_image), 180u},
+    /* f2-52: optional QUERY output, independent literal oracle. */
+    {"sizeof.ciuki_accel_info", sizeof(struct ciuki_accel_info), 40u},
+    {"alignof.ciuki_accel_info", _Alignof(struct ciuki_accel_info), 4u},
+    {"offsetof.ciuki_accel_info.driver", __builtin_offsetof(struct ciuki_accel_info,driver), 0u},
+    {"offsetof.ciuki_accel_info.capabilities", __builtin_offsetof(struct ciuki_accel_info,capabilities), 4u},
+    {"offsetof.ciuki_accel_info.quarantined", __builtin_offsetof(struct ciuki_accel_info,quarantined), 8u},
+    {"offsetof.ciuki_accel_info.generation", __builtin_offsetof(struct ciuki_accel_info,generation), 12u},
+    {"offsetof.ciuki_accel_info.operations", __builtin_offsetof(struct ciuki_accel_info,operations), 16u},
+    {"offsetof.ciuki_accel_info.idle_waits", __builtin_offsetof(struct ciuki_accel_info,idle_waits), 24u},
+    {"offsetof.ciuki_accel_info.fallbacks", __builtin_offsetof(struct ciuki_accel_info,fallbacks), 32u},
     /* f2-41: fixed inventory contract. */
     {"constant.CIUKI_SYS_DEVICES", (uint32_t)(CIUKI_SYS_DEVICES), 76u},
     {"constant.CIUKI_DEVICES_VERSION", (uint32_t)(CIUKI_DEVICES_VERSION), 1u},

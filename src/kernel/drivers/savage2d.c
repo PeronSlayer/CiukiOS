@@ -487,6 +487,16 @@ static void record(void)
 }
 void savage2d_record(void)
 { if (reg_claim >= 0 && g_ticks - last_log >= 2000) { last_log = g_ticks; record(); } }
+/* Caller holds the fbdev presenter mutex; this never reads hardware. */
+void savage2d_snapshot(struct ciuki_accel_info *out)
+{
+    if (reg_claim < 0 && !engine.touched && !engine.quarantined) return;
+    out->driver = CIUKI_ACCEL_DRIVER_SAVAGE;
+    out->quarantined = engine.quarantined;
+    out->operations = engine.operations;
+    out->idle_waits = engine.idle_waits;
+    out->fallbacks = engine.fallbacks;
+}
 static void hw_fault(void *ctx)
 {
     (void)ctx;

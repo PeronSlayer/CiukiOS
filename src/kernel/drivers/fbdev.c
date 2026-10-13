@@ -13,6 +13,7 @@ extern int savage2d_attempt_begin(struct vfs *) __attribute__((weak));
 extern int savage2d_attempt_end(struct vfs *) __attribute__((weak));
 extern void savage2d_quarantine(const char *) __attribute__((weak));
 extern void savage2d_record(void) __attribute__((weak));
+extern void savage2d_snapshot(struct ciuki_accel_info *) __attribute__((weak));
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
 
@@ -502,6 +503,22 @@ int fbdev_copy_to(const struct fb_device *d, const struct fb_rect *r, int32_t x,
      * the authoritative RAM surface and re-presents it after -EAGAIN. */
     (void)present_end(d,&busy,false);
     return -EAGAIN;
+}
+
+int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *out)
+{
+    if (!out) return -EINVAL;
+    if (changing) return -EBUSY;
+    kmutex_lock(&presenter);
+    int err = !live() ? -ENODEV : generation != device.generation ? -EAGAIN : 0;
+    if (!err) {
+        memset(out, 0, sizeof(*out));
+        out->generation = device.generation;
+        out->capabilities = acceleration ? acceleration->capabilities(acceleration->ctx) : 0;
+        if (savage2d_snapshot) savage2d_snapshot(out);
+    }
+    kmutex_unlock(&presenter);
+    return err;
 }
 
 int fbdev_accel_request(const struct ciuki_accel_request *q)

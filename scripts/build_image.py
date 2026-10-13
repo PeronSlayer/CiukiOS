@@ -107,6 +107,7 @@ def desktop_payloads():
     spec.loader.exec_module(desktop_build)
     desktop = desktop_build.validate_payloads()
     sources = {"/Programs/desktop": DESKTOP / "desktop", "/Programs/demo": DESKTOP / "demo", "/Programs/dosbox": DESKTOP / "dosbox",
+               "/Programs/gfxdemo": DESKTOP / "gfxdemo",
                "/Programs/files": DESKTOP / "files", "/Programs/tasks": DESKTOP / "tasks", "/Programs/ciuknote": DESKTOP / "ciuknote",
                "/Programs/regedit": DESKTOP / "regedit",
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",

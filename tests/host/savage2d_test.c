@@ -699,6 +699,18 @@ static void port_ownership(void)
     boot_fixture_accel(false);
     fbdev_accel_schedule(&settings_vfs); run_accel_work();
     CHECK(acceleration && binding_claims==2 && binding_resources[1].state==RS_ACTIVE);
+    struct ciuki_accel_info snapshot;
+    unsigned status_reads=m.status_reads,port_reads=m.port_reads;
+    CHECK(!fbdev_accel_info(device.generation,&snapshot));
+    CHECK(snapshot.driver==CIUKI_ACCEL_DRIVER_SAVAGE && (snapshot.capabilities&1) &&
+        snapshot.capabilities==acceleration->capabilities(acceleration->ctx) &&
+        !snapshot.quarantined && snapshot.operations==engine.operations && snapshot.idle_waits==engine.idle_waits);
+    CHECK(m.status_reads==status_reads && m.port_reads==port_reads); /* purely cached */
+    uint64_t operations=snapshot.operations;
+    struct ciuki_accel_request sample={.size=sizeof(sample),.operation=CIUKI_ACCEL_FILL,
+        .generation=device.generation,.rect={0,0,0,0,1,1},.colour=0x123456};
+    CHECK(!fbdev_accel_request(&sample));
+    CHECK(!fbdev_accel_info(device.generation,&snapshot) && snapshot.operations==operations+1);
     CHECK(!acceleration->stop(acceleration->ctx)); acceleration=NULL;
     CHECK(port_claim<0 && reg_claim<0 && !registers && !(m.cr[0x40]&1u));
     CHECK(binding_resources[1].state==RS_RELEASED && binding_resources[2].state==RS_RELEASED);
@@ -707,6 +719,8 @@ static void port_ownership(void)
     fbdev_accel_schedule(&settings_vfs); run_accel_work();
     CHECK(acceleration && binding_claims==4 && (m.cr[0x40]&1u));
     savage2d_quarantine("ownership_test"); acceleration=NULL;
+    CHECK(!fbdev_accel_info(device.generation,&snapshot) && snapshot.quarantined && !snapshot.capabilities &&
+        snapshot.driver==CIUKI_ACCEL_DRIVER_SAVAGE);
     CHECK(!(m.cr[0x40]&1u) && !engine.active && binding_resources[1].state==RS_QUARANTINED);
     CHECK(binding_resources[2].state==RS_QUARANTINED && port_claim>=0 && reg_claim>=0);
     finish();

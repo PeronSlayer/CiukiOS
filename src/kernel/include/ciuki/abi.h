@@ -1065,6 +1065,22 @@ _Static_assert(__builtin_offsetof(struct ciuki_accel_request, rect) == 20, "ciuk
 _Static_assert(__builtin_offsetof(struct ciuki_accel_request, cursor_mask) == 52, "ciuki_accel_request cursor mask");
 _Static_assert(__builtin_offsetof(struct ciuki_accel_request, cursor_image) == 180, "ciuki_accel_request cursor image");
 
+/* DISPLAY_ACCEL/QUERY optionally writes this snapshot to EDX (zero keeps
+ * the original capability-only query). No register reads or activation. */
+enum { CIUKI_ACCEL_DRIVER_NONE, CIUKI_ACCEL_DRIVER_SAVAGE };
+struct ciuki_accel_info {
+    uint32_t driver;
+    uint32_t capabilities;
+    uint32_t quarantined;
+    uint32_t generation;
+    uint64_t operations;
+    uint64_t idle_waits;
+    uint64_t fallbacks;
+};
+_Static_assert(sizeof(struct ciuki_accel_info) == 40, "ciuki_accel_info size");
+_Static_assert(_Alignof(struct ciuki_accel_info) == 4, "ciuki_accel_info alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_accel_info, operations) == 16, "ciuki_accel_info operations");
+
 struct ciuki_input_event {
     uint32_t sequence; /* 0 */
     uint32_t source; /* 4 */

@@ -673,12 +673,16 @@ static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
 void desk_accel_reset(struct desktop *d, uint32_t generation)
 {
     free(d->accel_front); d->accel_front=NULL; d->accel_front_valid=0;
+    d->accel_front_attempted=0;
     d->hw_cursor=0; d->cursor_dirty=1; d->copy_pending=0;
     d->accel_generation=generation;
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-    if (d->accel_caps&1u) d->accel_front=calloc((size_t)d->width*d->height,4);
+    if (d->accel_caps&1u) {
+        d->accel_front_attempted=1;
+        d->accel_front=calloc((size_t)d->width*d->height,4);
+    }
     if (!d->accel_front) d->accel_caps&=~1u;
     if (d->accel_caps&2u) {
         q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
@@ -778,6 +782,26 @@ static int present_box(struct desktop *d, struct desk_box b)
         if (left==right) { y++; continue; }
         int solid=right-left>=64 && (d->accel_caps&1u);
         for (int32_t x=left+1; solid && x<right; x++) if (row[x]!=row[left]) solid=0;
+        /* Repeated rows in a scaled software scene are real 2D screen blits.
+         * The preceding row is in the completed front cache, so it is a safe
+         * source even if the corresponding client surface changes again. */
+        if (!solid && right-left>=64 && y>b.y &&
+            !memcmp(row+left,d->accel_front+(uint32_t)(y-1)*d->width+(uint32_t)left,(size_t)(right-left)*4)) {
+            struct ciuki_accel_request q={.operation=CIUKI_ACCEL_COPY,
+                .rect={left,y-1,left,y,(uint32_t)(right-left),1}};
+            if (!accel_call(d,&q)) {
+                memcpy(front+left,row+left,(size_t)(right-left)*4);
+                d->presents++; d->frame_stats.presents++; y++; continue;
+            }
+            /* Partial copies recover from RAM, never from the LFB source. */
+            struct ciuki_rect r={b.x,y,b.x,y,(uint32_t)b.w,(uint32_t)(b.y+b.h-y)};
+            if (d->ops.present(d->display,d->output,&r)) return -1;
+            d->frame_stats.lfb_bytes+=(uint64_t)r.width*r.height*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
+            d->accel_front_valid=0;
+            q.operation=CIUKI_ACCEL_QUERY;
+            int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+            d->presents++; d->frame_stats.presents++; return 0;
+        }
         int32_t bottom=y+1;
         while (bottom<b.y+b.h) {
             uint32_t *next=d->pixels+(uint32_t)bottom*d->width, *old=d->accel_front+(uint32_t)bottom*d->width;
@@ -788,6 +812,8 @@ static int present_box(struct desktop *d, struct desk_box b)
             int next_solid=r-l>=64 && (d->accel_caps&1u);
             for (int32_t x=l+1; next_solid && x<r; x++) if (next[x]!=next[l]) next_solid=0;
             if (next_solid!=solid || (solid && next[left]!=row[left])) break;
+            if (!solid && r-l>=64 &&
+                !memcmp(next+l,d->pixels+(uint32_t)(bottom-1)*d->width+(uint32_t)l,(size_t)(r-l)*4)) break;
             bottom++;
         }
         if (solid) {
@@ -830,6 +856,15 @@ int desk_redraw(struct desktop *d)
         struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
         int caps=accel_call(d,&q);
         d->accel_caps=caps>0 ? (uint32_t)caps : 0;
+        /* The kernel's deferred engine may become ready after boot or a mode
+         * switch. Prepare its authoritative cache once, without an allocation
+         * retry on every frame when memory is tight. */
+        if ((d->accel_caps&1u) && !d->accel_front_attempted) {
+            d->accel_front_attempted=1;
+            d->accel_front=calloc((size_t)d->width*d->height,4);
+            if (d->accel_front)
+                desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+        }
         if (d->hw_cursor && !(d->accel_caps&2u)) {
             d->hw_cursor=0; d->cursor_dirty=1;
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);

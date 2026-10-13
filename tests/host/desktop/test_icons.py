@@ -204,8 +204,8 @@ class IconStoreTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer)"\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 22)  # f2-46 Terminal, f2-47 Registry Editor
-        self.assertEqual(len(accessories), 9)  # f2-47 Registry Editor
+        self.assertEqual(len(programs), 23)  # f2-52 Graphics Demo
+        self.assertEqual(len(accessories), 10)  # f2-52 Graphics Demo
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         games = re.findall(r'\{"[^"]+", "[^"]+", "[^"]+", "([a-z-]+)"\}', catalog)
