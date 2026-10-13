@@ -70,9 +70,7 @@ static void changed(struct cp_app *a)
  * follows the theme's desktop (shell.c desktop_colour). */
 static uint32_t desktop_colour(const struct cp_app *a, const struct desk_theme *t)
 {
-    struct ciuki_settings defaults;
-    cfg_defaults(&defaults);
-    return a->cfg.desktop_color == defaults.desktop_color ? t->desktop : a->cfg.desktop_color;
+    return a->cfg.desktop_color == CFG_DESKTOP_COLOR ? t->desktop : a->cfg.desktop_color;
 }
 static const struct desk_theme *chosen(const struct cp_app *a)
 { const struct desk_theme *t = desk_theme_named(a->cfg.theme); return t ? t : desk_theme; }

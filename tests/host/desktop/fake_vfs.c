@@ -162,7 +162,7 @@ void fake_assert_clean(void)
 void fake_image_tree(void)
 {
     fake_reset();
-    static const char *const dirs[] = {"/Programs", "/Documents", "/Games", "/System", "/dev", "/mnt", "/tmp", "/System/assets", "/System/dos", "/System/licenses",
+    static const char *const dirs[] = {"/Programs", "/Documents", "/Documents/Desktop", "/Documents/Trash", "/Games", "/System", "/dev", "/mnt", "/tmp", "/System/assets", "/System/dos", "/System/licenses",
                                        "/System/tests", "/System/tests/lua-5.4.8-tests", "/System/LOGS"};
     for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) fake_create(dirs[i], FM_DIR);
     static const char *const programs[] = {"/Programs/demo", "/Programs/desktop", "/Programs/files", "/Programs/hello", "/Programs/libc_smoke", "/Programs/lua"};

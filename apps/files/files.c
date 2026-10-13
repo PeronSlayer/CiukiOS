@@ -12,7 +12,7 @@
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
-struct files_main { struct files_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; uint32_t launch_serial; char title[DESK_TITLE_MAX + 1]; };
+struct files_main { struct files_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; uint32_t launch_serial; uint64_t file_poll; char title[DESK_TITLE_MAX + 1]; };
 
 /* CiukNote is a window: only the desktop can give it a channel and the display grants, so Files
  * asks it (protocol v2 LAUNCH with the path as the single argument; the desktop honours this for
@@ -34,10 +34,18 @@ static int launch_window(struct files_main *m, const char *name, const char *pat
 static void on_message(struct du_window *w, const struct desk_packet *p, void *user)
 {
     struct files_app *a = user; struct files_main *m = a->user; (void)w;
+    if (p->opcode == DESK_FILE_DROP) files_drop(a,p->x,p->y,(int)p->flags);
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_LAUNCH && p->serial == m->launch_serial && p->result < 0)
         files_launch_failed(a, -p->result);
 }
 
+static void drop(struct files_app *a, int x, int y, int copy)
+{
+    struct files_main *m=a->user; struct ciuki_message msg;
+    desk_message(&msg,DESK_FILE_DROP,16); desk_put32(msg.data+4,copy ? 1u : 0u);
+    desk_put32(msg.data+8,(uint32_t)x); desk_put32(msg.data+12,(uint32_t)y);
+    if (du_window_queue(&m->window,&msg)) files_launch_failed(a,errno);
+}
 static int launch(struct files_app *a, const char *program, char *const argv[])
 {
     /* File-taking desktop clients (catalog takes_file) and Control Panel need the desktop's channel and grants. */
@@ -71,6 +79,11 @@ static int close_request(struct du_window *w, void *user) { (void)w; return file
 static void idle(void *arg)
 {
     struct files_main *m = ((struct files_app *)arg)->user;
+    if (!m->app.job_active && m->app.rename_index<0 && !du_dialog_id(&m->ui) && m->ui.now-m->file_poll>=1000000000ull) {
+        m->file_poll=m->ui.now;
+        fm_clipboard_load(&m->app.model);
+        fm_refresh(&m->app.model); m->app.tree_dirty=1; files_update(&m->app);
+    }
     int status;
     while (waitpid(-1, &status, WNOHANG) > 0) { }
     char display[FM_PATH], title[DESK_TITLE_MAX + 1];
@@ -123,7 +136,7 @@ int main(int argc, char **argv)
         return 1;
     }
     struct files_app *a = &m->app;
-    a->user = m; a->test = test; a->spawn = launch; a->close = close_window; a->portrait = portrait;
+    a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->close = close_window; a->portrait = portrait;
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }

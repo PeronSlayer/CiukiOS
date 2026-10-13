@@ -99,7 +99,7 @@ static void computer_ui_tests(void)
     fake_image_tree(); memset(&app, 0, sizeof(app));
     du_init(&ui, pixels, WIDTH, HEIGHT); app.portrait = portrait; app.spawn = control_spawn;
     assert(!files_setup(&app, &ui, &fake_vfs, NULL));
-    assert(!app.model.path[0] && app.model.count == 1 && app.place_count == 6);
+    assert(!app.model.path[0] && app.model.count == 1 && app.place_count == 7);
     assert(!strcmp(du_get(&ui, 100)->text, "Computer"));
     fm_select(&app.model, 0, 0); files_update(&app);
     assert(app.rows[0].icon16 && app.rows[0].icon32 && !strcmp(app.rows[0].text[2], "Disk Drive"));
@@ -146,7 +146,7 @@ static void computer_ui_tests(void)
     assert(dot); fake_nodes[fake_lookup("/.config")].live=0; activate(25);
     dump("c-drive");
     fake_nodes[fake_lookup("/Games")].live = 0; activate(25);
-    assert(app.place_count == 5);
+    assert(app.place_count == 6);
     files_destroy(&app); fake_assert_clean();
     puts("PASS Files Computer UI: drive open/Up, protected commands/menus, typed POSIX/drive addresses, Places, D: create/rename/properties/delete, hidden tree, optional Games");
 }
@@ -164,6 +164,47 @@ static void script_coordinates(void)
            view.x + view.w / 2, view.y + view.h / 2, vbox.x + 40, vbox.y + 3 + DU_MENU_ITEM_H + DU_MENU_ITEM_H / 2,
            system.x + system.w / 2, system.y + system.h / 2, file.x + file.w / 2, file.y + file.h / 2,
            fbox.x + 40, fbox.y + 3 + 2 * DU_MENU_ITEM_H + DU_MENU_SEP_H + DU_MENU_ITEM_H / 2);
+}
+
+static int drop_count, drop_copy, drop_x, drop_y;
+static void on_drop(struct files_app *a, int x, int y, int copy)
+{ (void)a; drop_count++; drop_copy=copy; drop_x=x; drop_y=y; }
+static void drag_name(const char *name, int copy)
+{
+    int index=list_find(name); assert(index>=0);
+    struct du_rect label=du_list_label(du_get(&ui,107),(unsigned)index);
+    motion(label.x+8,label.y+5); press(1);
+    if (copy) event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,1,0);
+    motion(-50,HEIGHT+60); release(1);
+    if (copy) event(CIUKI_INPUT_KEY,DU_KEY_LCTRL,0,0);
+    assert(drop_copy==copy && drop_x==-50 && drop_y==HEIGHT+60);
+}
+static void file_drag_tests(void)
+{
+    fake_image_tree(); fake_file("/Documents/Desktop/Source.txt",100,1);
+    fake_file("/Documents/Desktop/Move.txt",200,2); fake_create("/Documents/Target",FM_DIR);
+    memset(&app,0,sizeof(app)); du_init(&ui,pixels,WIDTH,HEIGHT);
+    assert(!files_setup(&app,&ui,&fake_vfs,"/Documents/Desktop")); app.drop=on_drop;
+    int desktop=0;
+    for (unsigned i=0;i<app.place_count;i++) desktop |= !strcmp(app.places[i].name,"Desktop") && !strcmp(app.places[i].path,"/Documents/Desktop");
+    assert(desktop);
+    int tree=0; for (unsigned i=0;i<app.tree_count;i++) tree |= !strcmp(app.tree[i].path,"/Documents/Desktop"); assert(tree);
+    drag_name("Source.txt",1); assert(drop_count==1);
+    assert(!files_navigate(&app,"/Documents"));
+    int target=list_find("Target"); assert(target>=0);
+    struct du_rect label=du_list_label(du_get(&ui,107),(unsigned)target);
+    files_drop(&app,label.x+8,label.y+5,1); tick();
+    assert(fake_lookup("/Documents/Target/Source.txt")>=0 && fake_lookup("/Documents/Desktop/Source.txt")>=0);
+    assert(!files_navigate(&app,"/Documents/Desktop")); drag_name("Move.txt",0); assert(drop_count==2);
+    assert(!files_navigate(&app,"/Documents/Target"));
+    struct du_rect body=du_list_body(du_get(&ui,107)); files_drop(&app,body.x+body.w-30,body.y+body.h-30,0); tick();
+    assert(fake_lookup("/Documents/Target/Move.txt")>=0 && fake_lookup("/Documents/Desktop/Move.txt")<0);
+    /* Resync cancels a pending drag instead of publishing a drop. */
+    assert(!files_navigate(&app,"/Documents/Desktop"));
+    label=du_list_label(du_get(&ui,107),0); motion(label.x+8,label.y+5); press(1); motion(-50,100);
+    event(CIUKI_INPUT_RESYNC,0,0,0); release(1); assert(drop_count==2);
+    files_destroy(&app); fake_assert_clean();
+    puts("PASS Files drag: Desktop Places/tree, Ctrl-copy, move, folder/background drop, cross-window coordinates, resync cancellation");
 }
 
 int main(int argc, char **argv)
@@ -351,6 +392,7 @@ int main(int argc, char **argv)
         assert(strstr(launch_path,names[i]));
     }
     files_destroy(&app); fake_assert_clean();
+    file_drag_tests();
     free(pixels);
     puts("PASS Files UI: script checkpoints 1-5, views, sorting, selection, context menus, properties, replace, Copy of, rename errors, tree, address, open, help/about");
     return 0;
