@@ -9,13 +9,19 @@
 
 #define INPUT_CAPACITY 256u
 enum input_type { INPUT_KEY = 1, INPUT_REL, INPUT_BTN, INPUT_TEXT, INPUT_RESYNC };
-enum input_axis { INPUT_X, INPUT_Y };
+enum input_axis { INPUT_X, INPUT_Y, INPUT_WHEEL };
 enum input_button { INPUT_LEFT, INPUT_RIGHT, INPUT_MIDDLE };
-enum input_source { INPUT_NATIVE = 1, INPUT_FIRMWARE };
+enum input_source { INPUT_NATIVE = 1, INPUT_FIRMWARE, INPUT_USB };
 #define INPUT_F_RESYNC 1u
 /* Public set-1 positions: ordinary scan byte, E0 positions = 0x100 |
  * scan byte. Pause = 0x200 (a synthetic down/up, no hardware break code).
  * This encoding is independent of the character layout. */
+#define INPUT_REPEAT_DELAY_MS 500u
+#define INPUT_REPEAT_INTERVAL_MS 33u
+/* USB producer: balanced transitions per HID interface, thread context.
+ * Merges with native PS/2 held state, even when i8042 activation failed. */
+void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick);
+
 #define INPUT_KEY_A 0x1Eu
 #define INPUT_KEY_PAUSE 0x200u
 

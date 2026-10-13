@@ -33,6 +33,8 @@ static char last_launch[241], last_step[241];
 static unsigned gate_progress, gate_victims, gate_restored, gate_interactions;
 
 static struct resource desktop_resource = { .generation = 1, .state = RS_ACTIVE };
+static bool usb_ready;
+bool usb_input_ready(void) { return usb_ready; }
 static struct i8042_stats input_state = { .active = true, .generation = 1 };
 static struct input_stats input_status;
 static struct input_event input_events[CIUKI_INPUT_QUEUE_MAX];
@@ -440,7 +442,14 @@ static void test_desktop_grants(void)
     input_state.quarantined = true;
     CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EIO);
     input_state.quarantined = false; input_state.active = false;
-    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -ENODEV); input_state.active = true;
+    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -ENODEV);
+    usb_ready = true; input_state.quarantined = true;
+    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EAGAIN);
+    usb_ready = false; input_state.quarantined = false; input_state.active = true;
+    struct input_event wheel = {.type = INPUT_REL, .code = INPUT_WHEEL, .value = -1, .source = INPUT_USB, .generation = 17};
+    struct ciuki_input_event wheel_user;
+    desktop_input_event(&wheel, 0, 0, &wheel_user);
+    CHECK(wheel_user.type == CIUKI_INPUT_WHEEL && wheel_user.value == -1 && !wheel_user.value2 && wheel_user.source == INPUT_USB && wheel_user.generation == 17);
     input_count = 6; input_at = 0;
     input_events[0] = (struct input_event){ .type = INPUT_KEY, .code = INPUT_KEY_A, .value = 2, .source = INPUT_NATIVE, .generation = 1, .tick = 123, .sequence = 12 };
     input_events[1] = (struct input_event){ .type = INPUT_TEXT, .code = 'a' };

@@ -264,6 +264,7 @@ typedef uint64_t ciuki_sigset_t;
 #define CIUKI_INPUT_MOTION 3
 #define CIUKI_INPUT_BUTTON 4
 #define CIUKI_INPUT_RESYNC 5
+#define CIUKI_INPUT_WHEEL 6
 #define CIUKI_KEY_VALUE_UP 0
 #define CIUKI_KEY_VALUE_DOWN 1
 #define CIUKI_KEY_VALUE_REPEAT 2
@@ -530,6 +531,7 @@ enum ciuki_syscall {
 #define CIUKI_BUS_LEGACY 0u
 #define CIUKI_BUS_PCI 1u
 #define CIUKI_BUS_LOADER 2u
+#define CIUKI_BUS_USB 3u
 #define CIUKI_RESOURCE_IO 0u
 #define CIUKI_RESOURCE_IRQ 1u
 #define CIUKI_RESOURCE_DMA 2u

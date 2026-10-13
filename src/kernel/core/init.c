@@ -15,6 +15,8 @@
 #include <ciuki/storage.h>
 #include <ciuki/audio.h>
 #include <ciuki/net.h>
+#include <ciuki/usb.h>
+#pragma weak usb_init
 #pragma weak audio_init
 #pragma weak net_init
 #pragma weak fbdev_accel_schedule
@@ -146,6 +148,7 @@ void drivers_init(void)
     if (audio_init) audio_init(&storage_get()->vfs);
     klog("[init] audio init done");
     if (net_init) net_init();
+    if (usb_init) usb_init();
     if (native_files) klog("[files] initialization failed: %d", native_files);
     if (fbdev_accel_schedule) fbdev_accel_schedule(&storage_get()->vfs);
 }

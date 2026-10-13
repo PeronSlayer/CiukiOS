@@ -13,6 +13,8 @@ static int fail_query, fail_save, loads, queries, saves;
 static int hwid_queries;
 static int hwid_lookup(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
 { (void)ctx; hwid_queries++; return cp_hwid_lookup_json("{\"8086:2415\": \"Pack AC97 device\"}", vendor, device, out, size); }
+static int usb_hwid_lookup(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
+{ (void)ctx; return cp_hwid_lookup_json("{\"1234:0001\": \"USB Pack Keyboard\"}", vendor, device, out, size); }
 static char boot[128] = "safe=0 serial=1 video=1024x768 input=firmware\n";
 static int settings_load(void *c, char *s, size_t cap, size_t *n)
 { (void)c; const char text[] = "version=1\nwallpaper=none\n"; assert(cap >= sizeof(text)); memcpy(s, text, sizeof(text)); *n = sizeof(text) - 1; return 0; }
@@ -65,7 +67,7 @@ int main(int argc, char **argv)
     char hwid[65];
     assert(!cp_hwid_lookup_json("{\"8086:2485\": \"INF Audio Name\"}", 0x8086, 0x2485, hwid, sizeof(hwid)) && !strcmp(hwid, "INF Audio Name"));
     assert(cp_hwid_lookup_json("{}", 0x8086, 0x2485, hwid, sizeof(hwid)));
-    app.host = (struct cp_host){.load = settings_load, .devices = devices, .hwid_name = hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
+    app.host = (struct cp_host){.load = settings_load, .devices = devices, .hwid_name = hwid_lookup, .usb_hwid_name = usb_hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
         .portrait = portrait, .screen_w = 1024, .screen_h = 768, .mem_total_k = 512 * 1024, .mem_free_k = 480 * 1024,
         .version = "0.9.0 pre-alpha", .build = "host-preview", .machine = "i686", .processes = 6, .fonts_path = argv[3]};
     du_init(&ui, pixels, CP_WIDTH, CP_HEIGHT); ui.focused_window = 1;
@@ -86,6 +88,12 @@ int main(int argc, char **argv)
     cp_open(&app, CP_DEVICES);
     assert(app.tree_count == 19 && !strcmp(app.tree_items[0].text[0], "Computer"));
     for (unsigned k = 0; k < sample.count; k++) assert(app.tree_items[tree_row(k)].depth == 2 && app.tree_items[tree_row(k)].icon16);
+    struct ciuki_device_record usb_sample = sample.devices[0];
+    usb_sample.bus_type = CIUKI_BUS_USB; usb_sample.vendor = 0x1234; usb_sample.device = 1;
+    struct ciuki_device_record original_usb_sample = sample.devices[0];
+    sample.devices[0] = usb_sample; click("Refresh");
+    assert(strstr(app.tree_items[tree_row(0)].text[0], "USB Pack Keyboard"));
+    sample.devices[0] = original_usb_sample; click("Refresh");
     unsigned audio_row = tree_row(6); assert(strstr(app.tree_items[audio_row].text[0], "Pack AC97 device") && hwid_queries > 0);
     assert(strstr(app.tree_items[audio_row].text[0], "quarantined"));
     sample.devices[6].device = 0x2485; click("Refresh");

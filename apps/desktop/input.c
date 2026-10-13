@@ -173,6 +173,9 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
         route(d, d->focus, DESK_KEY, &e);
         break;
     case CIUKI_INPUT_TEXT: route(d, d->focus, DESK_KEY, &e); break;
+    case CIUKI_INPUT_WHEEL:
+        route(d, d->focus, DESK_MOTION, &e);
+        break;
     case CIUKI_INPUT_MOTION:
         d->cursor_dirty=1;
         {
