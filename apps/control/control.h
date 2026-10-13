@@ -11,12 +11,18 @@
 #include "../desktop/wallpaper.h"
 #include <ciuki/display.h>
 #include <ciuki/abi.h>
+#include <ciuki/font.h>
 #include <stdint.h>
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
 enum { CP_HOME = -1, CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM,
-       CP_DEVICES, CP_DRIVERS, CP_NETWORK, CP_POWER, CP_ADAPTER, CP_PAGES };
+       CP_DEVICES, CP_DRIVERS, CP_NETWORK, CP_POWER, CP_ADAPTER, CP_FONTS, CP_PAGES };
+#define CP_FONTS_MAX 32
+#define CP_FONT_LIST 900
+struct cp_font_entry {
+    char family[CIUKI_FONT_NAME_MAX], style[CIUKI_FONT_NAME_MAX], file[128];
+};
 #define CP_TREE_MAX (1 + CIUKI_DEVICE_CLASSES + CIUKI_DEVICES_MAX)
 #define CP_BOOT_MAX 128
 enum { CP_AREA_LABEL = 800, CP_AREA, CP_DEPTH_LABEL, CP_DEPTH, CP_APPLY, CP_MODE_NOTE,
@@ -45,6 +51,7 @@ struct cp_host {
     uint32_t screen_w, screen_h;
     char version[65], build[65], machine[65];
     uint64_t mem_total_k, mem_free_k; unsigned processes;
+    const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
     struct du_ui *ui;
@@ -89,6 +96,12 @@ struct cp_app {
     uint64_t mode_deadline;
     uint64_t mode_retry_ns; int mode_retry;
     char adapter_lines[10][160];
+    struct cp_font_entry fonts[CP_FONTS_MAX];
+    struct du_item font_items[CP_FONTS_MAX];
+    unsigned font_count, font_selected;
+    int fonts_loaded;
+    struct ciuki_font_face *font_face;
+    char font_status[96];
 };
 int cp_attach(struct cp_app *, struct du_ui *, int page);
 void cp_detach(struct cp_app *);
@@ -113,4 +126,8 @@ void cp_settings_saved(struct cp_app *, int error);
 void cp_adapter_paint(struct cp_app *, struct du_canvas *);
 const char *cp_adapter_name(uint16_t vendor, uint16_t device, char *out, size_t size);
 void cp_settings_message(struct ciuki_message *, uint32_t serial, unsigned request, int value, int flag);
+void cp_fonts_build(struct cp_app *);
+void cp_fonts_paint(struct cp_app *, struct du_canvas *);
+int cp_fonts_event(struct cp_app *, const struct du_event *);
+void cp_fonts_close(struct cp_app *);
 #endif

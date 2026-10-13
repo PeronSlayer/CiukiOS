@@ -69,6 +69,9 @@ def main():
     evidence={'hello':inspect(out/'hello.elf')}
     evidence['hello']['compile_link_seconds']=round(hello_time,4)
     if not args.self_test:
+        print('[sdk-test] libfont compile/link/inspect (guest not run)')
+        print(run([SDK/'bin/ciuki-cc',ROOT/'sdk/tests/font_smoke.c','-lfont','-o',out/'font_smoke.elf']).strip())
+        evidence['font_smoke']=inspect(out/'font_smoke.elf')
         for archive in (SDK/'sysroot/lib').glob('*.a'):audit_code(archive,m)
         print('[sdk-test] all runtime/compiler archives x87/SSE/MMX audit PASS')
         for rel,sha in m['files'].items():assert hashlib.sha256((SDK/rel).read_bytes()).hexdigest()==sha,rel

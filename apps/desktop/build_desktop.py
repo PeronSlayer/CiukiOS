@@ -164,14 +164,14 @@ def build():
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "sounds.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "ciukide", "control", *ACCESSORIES) else []),
-                          *(["-lm"] if name in ACCESSORIES else []), "-o", str(OUT / name)]
+                          *(["-lm"] if name in ACCESSORIES else []), *(["-lfont"] if name == "control" else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Audit compositor and theme code separately: integer drawing must never emit x87.

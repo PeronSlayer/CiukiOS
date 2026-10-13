@@ -42,7 +42,7 @@ static unsigned tree_row(unsigned device)
 }
 int main(int argc, char **argv)
 {
-    assert(argc == 3); FILE *f = fopen(argv[1], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
+    assert(argc == 4); FILE *f = fopen(argv[1], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
     const char *renders = argv[2];
     device_fixture(&sample);
     assert(cp_snapshot_valid(&sample));
@@ -67,13 +67,14 @@ int main(int argc, char **argv)
     assert(cp_hwid_lookup_json("{}", 0x8086, 0x2485, hwid, sizeof(hwid)));
     app.host = (struct cp_host){.load = settings_load, .devices = devices, .hwid_name = hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
         .portrait = portrait, .screen_w = 1024, .screen_h = 768, .mem_total_k = 512 * 1024, .mem_free_k = 480 * 1024,
-        .version = "0.9.0 pre-alpha", .build = "host-preview", .machine = "i686", .processes = 6};
+        .version = "0.9.0 pre-alpha", .build = "host-preview", .machine = "i686", .processes = 6, .fonts_path = argv[3]};
     du_init(&ui, pixels, CP_WIDTH, CP_HEIGHT); ui.focused_window = 1;
     assert(!cp_attach(&app, &ui, CP_HOME));
     assert(app.page == CP_HOME && kind(DU_LISTVIEW)->view == DU_ICONS && kind(DU_LISTVIEW)->count == CP_PAGES);
     for (unsigned k = 0; k < CP_PAGES; k++) assert(app.applet_items[k].icon16 && app.applet_items[k].icon32);
     render(renders, "control-folder");
-    static const char *const page_files[] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter"};
+    static const char *const page_files[] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts"};
+    _Static_assert(sizeof(page_files) / sizeof(page_files[0]) == CP_PAGES, "every Control Panel page needs a capture");
     for (int k = 0; k < CP_PAGES; k++) {
         du_focus(&ui, kind(DU_LISTVIEW)->id); at_tap(&ui, DU_KEY_HOME);
         for (int right = 0; right < k; right++) at_tap(&ui, DU_KEY_RIGHT);
@@ -133,6 +134,6 @@ int main(int argc, char **argv)
     strcpy(boot, "serial=0 serial=1"); tab(2); assert(!kind(DU_CHECKBOX)->value);
     strcpy(boot, "safe=0"); tab(2); assert(kind(DU_CHECKBOX)->value);
     assert(loads >= 3); cp_detach(&app);
-    puts("PASS device manager: eleven applets, keyboard navigation, bounded class tree, refresh, Properties, drivers/leases, system and preserving BOOT.CFG edits");
+    puts("PASS device manager: twelve applets, keyboard navigation, bounded class tree, refresh, Properties, drivers/leases, system and preserving BOOT.CFG edits");
     return 0;
 }
