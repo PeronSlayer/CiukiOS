@@ -20,11 +20,11 @@
 #define DOSVM_BASE_MIN_SECTORS 361u
 #define DOSVM_PORTS 16u
 /* f3-02 presenter: fixed 640x480 XRGB window surface, integer scale only.
- * One presented frame per 33 host ticks. Input status 1 follows the guest's
- * own VGA timing instead (dosvm_vga_status). */
+ * Graphics follows completion writes or the guest's programmed refresh;
+ * unchanged pages do not trigger harvest. */
 #define DOSVM_VIDEO_WIDTH 640u
 #define DOSVM_VIDEO_HEIGHT 480u
-#define DOSVM_FRAME_TICKS 33u
+#define DOSVM_VIDEO_BAND 8u
 #define DOSVM_CURSOR_TICKS 250u
 #define DOSVM_BLINK_TICKS 500u
 #define DOSVM_HEARTBEAT_TICKS 2000u
@@ -36,6 +36,11 @@
 enum dosvm_trace_kind { DOSVM_TRACE_VECTOR, DOSVM_TRACE_PIT, DOSVM_TRACE_IRQ0,
     DOSVM_TRACE_DB_PM, DOSVM_TRACE_DB_RM, DOSVM_TRACE_FLAGS, DOSVM_TRACE_TIMER,
     DOSVM_TRACE_FAULT, DOSVM_TRACE_COUNT };
+struct dosvm_perf_sample {
+    uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows;
+    uint32_t exits[6], irqs[16];
+    uint64_t guest_us, monitor_us, present_us, log_us, edges, insn[V86_INSNS];
+};
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -83,7 +88,7 @@ struct dosvm {
     unsigned video_blank;      /* read index in the vertical blank, 0 outside */
     uint64_t video_vblank_us;  /* host time (us) the next vertical blank is due */
     uint64_t video_tick;
-    uint32_t video_display, video_phase, owner_pid;
+    uint32_t video_display, video_changes, video_phase, owner_pid;
     uint32_t video_faults, video_frames;
     /* f3-06/07: direct window (0 none, 1..4 plane + 1, 5 linear). A0000h-
      * AFFFFh maps a model plane or the VM's own linear backing user-writable;
@@ -91,6 +96,31 @@ struct dosvm {
     unsigned video_direct;
     uint32_t video_pm_faults, video_starts, video_maps, video_flushes, video_burst;
     uint32_t video_linear_maps, video_linear_harvests;
+    uint32_t video_seen_start, video_lut_display;
+    bool video_lut_valid;
+    uint32_t video_lut[256];
+    uint64_t video_bands; /* destination 8-line bands written by the last present */
+    struct {
+        uint32_t harvests, direct_pages, trapped_bytes, converted_bytes, rows;
+        uint32_t exits[6]; /* #GP, #PF, #DB, host timer, other, protected-mode total */
+        uint64_t guest_cycles, monitor_cycles, present_cycles, log_cycles;
+        uint64_t stamp, report_tick;
+        unsigned phase; /* 0 suspended, 1 guest, 2 monitor */
+        unsigned resume_phase;
+        uint32_t last_frames, last_starts, last_harvests, last_pages, last_trapped, last_converted, last_rows;
+        uint32_t last_exits[6], last_irqs[16];
+        uint64_t last_guest, last_monitor, last_present, last_log, last_edges;
+        uint64_t last_insn[V86_INSNS];
+        uint32_t sample_count;
+        struct dosvm_perf_sample sample[16]; /* last sixteen complete intervals */
+    } perf;
+    /* Owner-armed command launch. The prompt never arms this gate. */
+    bool launch_armed, launch_enter_consumed, launch_exec, launch_ready, launch_failed;
+    uint16_t launch_cs, launch_ss, launch_sp;
+    uint32_t launch_ip, launch_error;
+    uint16_t boot_log_count;
+    char boot_log[2048], console_line[81];
+    unsigned console_length;
     cvga_geometry video_geometry;
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
     uint8_t video_row[DOSVM_VIDEO_WIDTH];
@@ -141,6 +171,12 @@ static inline void dosvm_boundary(struct dosvm *v, const struct v86_frame *f, co
 }
 void dosvm_trace(struct dosvm *, enum dosvm_trace_kind, const struct v86_frame *,
                  uint32_t a, uint32_t b, uint32_t c);
+void dosvm_console_byte(struct dosvm *, uint8_t);
+void dosvm_launch_video(struct dosvm *);
+uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);
+uint64_t dosvm_perf_clock(void);
+void dosvm_perf_report(struct dosvm *);
+void dosvm_perf_dump(struct dosvm *);
 struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);

@@ -1,7 +1,7 @@
 /* /Programs/dosbox COMMAND: what the window types at the DOS prompt once its VM
  * is running and the window has the input focus (owner decision 2026-10-12:
  * Programs > Games starts "dosbox --name=DOOM \DOOM\DOOM.EXE -config CIUKI.CFG").
- * The VM has no command channel (syscall 72 is unchanged): the program types
+ * The guest command still uses keyboard input: the program types
  * through its own window input as the user would, with the US layout the
  * VM's BIOS keyboard decodes (CIUKI_KEY_* codes are the set-1 make codes).
  * A leading "\DIR\PROGRAM" becomes two lines, "CD \DIR" and "PROGRAM [args]",
@@ -16,7 +16,7 @@
 #include <string.h>
 #define DOSBOX_COMMAND_MAX 96u      /* well below DOS's 127-byte command tail */
 #define DOSBOX_LINES_MAX 2u
-#define DOSBOX_KEYS_MAX (4u * (DOSBOX_COMMAND_MAX + 8u))
+#define DOSBOX_KEYS_MAX (4u * (DOSBOX_COMMAND_MAX + 16u))
 /* One key event. group: index of the first event of its character (a
  * shifted character is Shift down, key down, key up, Shift up); main: the
  * event that types it. line_end: Enter's release, after which the typist
@@ -90,6 +90,21 @@ static inline int dosbox_command_keys(const char *command, struct dosbox_key *ke
         }
     }
     return (int)at;
+}
+
+/* Command launches clear boot text using the DOS shell's own CLS command;
+ * no guest RAM or register is rewritten by the desktop client. */
+static inline int dosbox_launch_keys(const char *command, struct dosbox_key *keys, unsigned max)
+{
+    int prefix = dosbox_command_keys("CLS", keys, max);
+    if (prefix < 0) return -1;
+    int count = dosbox_command_keys(command, keys + prefix, max - (unsigned)prefix);
+    if (count < 0) return -1;
+    for (int i = 0; i < count; i++) {
+        keys[prefix + i].group += (uint16_t)prefix;
+        keys[prefix + i].main += (uint16_t)prefix;
+    }
+    return prefix + count;
 }
 
 /* Where to resume after the window lost the focus at event `failed`: the

@@ -1136,6 +1136,10 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_FOCUS 4u
 #define CIUKI_DOSVM_CLOSE 5u
 #define CIUKI_DOSVM_STATUS 6u
+#define CIUKI_DOSVM_LAUNCH 7u /* arm command visibility before its final Enter */
+#define CIUKI_DOSVM_PRESENT_BANDS 8u /* PRESENT plus destination 8-line damage */
+#define CIUKI_DOSVM_VIDEO_READY 1u /* STATUS.changed launch flags */
+#define CIUKI_DOSVM_LAUNCH_FAILED 2u
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
@@ -1151,7 +1155,10 @@ struct ciuki_dosvm_command {
     uint32_t changed; /* 32 */
     uint32_t video_mode; /* 36 */
     char name[32]; /* 40 */
-    struct ciuki_input_event event; /* 72 */
+    union {
+        struct ciuki_input_event event; /* 72: INPUT */
+        struct { uint32_t bands[2], reserved[8]; } presentation; /* PRESENT_BANDS output */
+    };
     struct ciuki_rect damage; /* 112 */
 };
 
@@ -1425,6 +1432,8 @@ _Static_assert(_Alignof(struct ciuki_dosvm_command) == 4, "ciuki_dosvm_command a
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, surface_fd) == 16, "ciuki_dosvm_command.surface_fd offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, name) == 40, "ciuki_dosvm_command.name offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, event) == 72, "ciuki_dosvm_command.event offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.bands[0]) == 72, "ciuki_dosvm_command.bands low offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.bands[1]) == 76, "ciuki_dosvm_command.bands high offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, damage) == 112, "ciuki_dosvm_command.damage offset");
 
 

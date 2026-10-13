@@ -40,6 +40,9 @@ volatile uint64_t g_ticks;
 volatile bool g_need_resched;
 struct ciuki_boot_info g_boot;
 static uint32_t read_cr3(void) { return cpu_cr3; }
+uint64_t g_tsc_per_ms;
+static uint64_t fake_tsc;
+static uint64_t read_tsc_serialized(void) { return fake_tsc; }
 static void write_cr3(uint32_t x) { cpu_cr3 = x; }
 static uint32_t fake_cr2 = 0xDEAD000;
 static uint32_t read_cr2(void) { return fake_cr2; }
@@ -574,6 +577,7 @@ static void test_memory_services(void)
 #include "dosvm_workloads_test.inc"
 #include "dosvm_menu_test.inc"
 #include "dosvm_irq_stall_test.inc"
+#include "dosvm_speed_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -585,6 +589,7 @@ int main(void)
     test_timer();
     test_menu();
     test_irq_stall();
+    test_speed();
     CHECK(guest_enters==3 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

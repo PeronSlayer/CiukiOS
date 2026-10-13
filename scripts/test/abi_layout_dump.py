@@ -40,7 +40,9 @@ def expressions(header: str) -> dict[str, str]:
         result[f"constant.{name}"] = name
     for name in re.findall(r"^typedef\s+[^;]+\s+(ciuki_\w+)\s*;", header, re.M):
         result[f"sizeof.{name}"] = f"sizeof({name})"
-    for name, body in re.findall(r"struct\s+(ciuki_\w+)\s*\{(.*?)\};", header, re.S):
+    # Public records close in column zero; an anonymous union may contain
+    # indented }; delimiters without ending its enclosing ABI record.
+    for name, body in re.findall(r"^struct\s+(ciuki_\w+)\s*\{(.*?)^\};", header, re.S | re.M):
         result[f"sizeof.{name}"] = f"sizeof(struct {name})"
         result[f"alignof.{name}"] = f"_Alignof(struct {name})"
         for field, extent in re.findall(r"^\s+(?:struct\s+\w+|\w+)\s+(\w+)(?:\[(\d+)\])?;", body, re.M):

@@ -1728,3 +1728,31 @@ qualification. Run the earlier integrated F0/F1/F2/F3 gates and complete
 the T23 DOOM hardware run. No QEMU, full image/CD build, hardware test,
 commit or push was performed here. The complete verbatim host outputs and
 handoff are in `build/codex/f3-07-report.md`.
+
+## f3-13: command loading and DOS window presentation (2026-10-13/14)
+
+Directive: `docs/directives/f3-13-dosbox-loading-and-speed.md`. Research,
+decisions and limitations: `docs/validation/2026-10-13-f3-13-host.md`.
+The version-1, 136-byte syscall amendment is in `execution-abi.md`.
+
+Command launches show a themed loading panel with the catalogue icon and an
+indeterminate progress pulse. The guest's own `CLS` removes boot text before
+the directory/program command. An owner-armed EXEC/video boundary releases
+presentation; text output in the same mode is supported. Startup failures
+retain an error panel. The plain prompt uses its existing visible boot path.
+
+This amendment supersedes f3-07's requirement to close the chain-4 window on
+each window presentation. Dirty bits are harvested and rearmed while the
+writable mapping stays open. Model/digest consumers, latch/mask/mode changes
+and teardown retain their explicit closure rules and physical plane layout.
+Conversion uses indexed rows and an XRGB lookup; source damage groups span
+eight lines, and the native client submits only changed destination band runs.
+Completion writes can present immediately; unmarked linear frames use the
+programmed VGA refresh as a fallback. No 33 ms presentation cap remains.
+
+Host acceptance: kernel suites, five VGA goldens, the native launch replay,
+f3-workloads host controls and before/after production-presenter benchmark.
+Commands/results are in `build/codex/f3-13-report.md`. Integration still
+requires the lead's `f3-workloads` QEMU suite, earlier gates, and T23 evidence
+for the requested DOOM 35 FPS and Wolf3D 70 FPS. Host throughput and completion
+counters alone do not qualify those hardware targets.

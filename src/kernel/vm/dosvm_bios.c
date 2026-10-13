@@ -254,6 +254,8 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
             f->tf.eflags = (f->tf.eflags & ~V86_ZF) | (!v->key_count ? V86_ZF : 0);
             if (v->key_count) {
                 low(&f->tf.eax, v->keyboard[v->key_head]);
+                if (!peek && v->launch_armed && !v->launch_exec && (uint8_t)f->tf.eax == '\r')
+                    v->launch_enter_consumed = true;
                 if (!peek) {
                     v->key_head = (v->key_head + 1) % 16; v->key_count--;
                     uint16_t head = 0x1E + v->key_head * 2;

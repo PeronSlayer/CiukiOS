@@ -112,6 +112,12 @@ void cvga_store_plane(cvga_state *v, unsigned plane, unsigned at, uint8_t value)
     store_plane(v, plane & 3, at & 0xffffu, value);
     ++v->changes;
 }
+void cvga_store_chain4_span(cvga_state *v, unsigned at, const uint8_t *bytes, unsigned count)
+{
+    if (at >= CVGA_PLANE_SIZE || count > CVGA_PLANE_SIZE - at) return;
+    for (unsigned i = 0; i < count; i++, at++) store_plane(v, at & 3, at & ~3u, bytes[i]);
+    ++v->changes;
+}
 
 const cvga_mode_params *cvga_find_mode(unsigned mode)
 {
@@ -542,6 +548,18 @@ unsigned cvga_render_row8(const cvga_state *v, unsigned y, uint8_t *dest,
     if (!setup_row(v, y, &r) || capacity < r.g.width) return 0;
     if (r.g.blank) {
         for (x = 0; x < r.g.width; ++x) dest[x] = 0;
+        return r.g.width;
+    }
+    /* Indexed graphics: four adjacent dots share one CRTC address. Keep
+     * setup_row/scan_address authoritative for pan, split and wrap semantics. */
+    if (!r.g.text && r.shift >= 2) {
+        for (x = 0; x < r.g.width;) {
+            unsigned dot = x + r.pan;
+            at = scan_address(v, r.base + dot / 4);
+            if (!(dot & 3) && r.g.width - x >= 4) {
+                for (plane = 0; plane < 4; plane++) dest[x++] = v->plane[plane][at] & v->dac_mask;
+            } else { dest[x++] = v->plane[dot & 3][at] & v->dac_mask; }
+        }
         return r.g.width;
     }
     for (x = 0; x < r.g.width; ++x) {

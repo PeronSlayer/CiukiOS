@@ -6,6 +6,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/input.h>
 #include <ciuki/abi.h>
+#include <ciuki/timing.h>
 #include "dosvm_internal.h"
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
@@ -31,9 +32,27 @@ static bool dosvm_in_irq(const struct dosvm *v)
     return false;
 }
 
+#include "dosvm_perf.inc"
+
+void dosvm_launch_video(struct dosvm *v)
+{
+    if (v->launch_armed && v->launch_exec && !v->launch_failed) v->launch_ready = true;
+}
+void dosvm_console_byte(struct dosvm *v, uint8_t byte)
+{
+    if (!v->info.dos_ready && v->boot_log_count < sizeof(v->boot_log))
+        v->boot_log[v->boot_log_count++] = (char)byte;
+    if (byte == '\r' || byte == '\n') { v->console_length = 0; return; }
+    if (byte >= 32 && byte < 127 && v->console_length < sizeof(v->console_line) - 1) {
+        v->console_line[v->console_length++] = (char)byte;
+        v->console_line[v->console_length] = 0;
+    }
+}
+
 static void dosvm_trace_flush(struct dosvm *v)
 {
     if (dosvm_in_irq(v) && v->info.state != DOSVM_STOPPING) return;
+    uint64_t begin = v->deferred_trace.count || v->deferred_trace.dropped ? dosvm_perf_clock() : 0;
     for (unsigned i = 0; i < v->deferred_trace.count; i++)
         rec_diag(dosvm_probe(v), "%s", v->deferred_trace.line[i]);
     v->deferred_trace.count = 0;
@@ -42,6 +61,7 @@ static void dosvm_trace_flush(struct dosvm *v)
                  v->info.key.id, v->info.key.generation, v->deferred_trace.dropped);
         v->deferred_trace.dropped = 0;
     }
+    if (begin) v->perf.log_cycles += dosvm_perf_clock() - begin;
 }
 
 static void dosvm_diag(struct dosvm *v, const char *fmt, ...)
@@ -61,7 +81,9 @@ static void dosvm_diag(struct dosvm *v, const char *fmt, ...)
         memcpy(v->deferred_trace.line[v->deferred_trace.count++], line, strlen(line) + 1);
     } else {
         dosvm_trace_flush(v);
+        uint64_t begin = dosvm_perf_clock();
         rec_diag(dosvm_probe(v), "%s", line);
+        v->perf.log_cycles += dosvm_perf_clock() - begin;
     }
 }
 
@@ -342,6 +364,7 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
         if (linear >= 0xA0000 && linear < 0xC0000) {
+            if (write) { v->perf.trapped_bytes += n; dosvm_launch_video(v); }
             dosvm_vga_model(v); /* f3-07: harvest before model peeks/stores */
             /* Kernel reads peek (no latch load); guest cycles use the VGA bus. */
             for (unsigned i = 0; i < n; i++) {
@@ -394,6 +417,7 @@ static struct dosvm *owner(const struct task *t)
 void dosvm_task_switch(const struct task *t)
 {
     struct dosvm *v = owner(t);
+    perf_switch(v);
     if (v && v->dpmi.active) {
         /* Native #DB signal handling need not inspect DR6. Its sticky BS
          * must not become this VM's next breakpoint cause (SDM 18.2.3).
@@ -408,6 +432,14 @@ void dosvm_task_switch(const struct task *t)
         arch_ldt_load(0, 0);
         arch_debug_load((const uint32_t[4]){0}, 0);
     }
+}
+uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
+{
+    struct dosvm *v = owner(t);
+    if (!v || !v->owner_pid || !v->window_input) return normal;
+    bool focused = input_focus.id == v->info.key.id && input_focus.generation == v->info.key.generation;
+    uint32_t cap = focused ? 8u : 4u;
+    return normal < cap ? normal : cap;
 }
 bool dosvm_client(const struct task *t)
 {
@@ -469,6 +501,7 @@ void dosvm_input_poll(struct dosvm *v)
 }
 int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
 {
+    if (keyboard && v->launch_enter_consumed && !v->launch_ready) v->launch_failed = true;
     v->info.state = DOSVM_BLOCKED;
     while (v->info.state != DOSVM_STOPPING) {
         if (keyboard) { dosvm_input_poll(v); if (dosvm_keyboard_refresh(v)) return -EFAULT; }
@@ -499,6 +532,10 @@ bool dosvm_trap(struct trap_frame *tf)
     struct dosvm *v = owner(g_current);
     if (!v || !v->continuation) return false;
     bool pm = !(tf->eflags & V86_VM);
+    perf_phase(v, 2);
+    unsigned cause = tf->vector == 13 ? 0 : tf->vector == 14 ? 1 : tf->vector == 1 ? 2 : tf->vector == 0x20 ? 3 : 4;
+    v->perf.exits[cause]++;
+    if (pm) v->perf.exits[5]++;
     /* CR2/DR6 belong to this trap only while interrupts stay off. */
     uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
     uint32_t dr6 = tf->vector == 1 ? arch_debug_take() : 0;
@@ -537,6 +574,13 @@ bool dosvm_trap(struct trap_frame *tf)
     }
     dosvm_trace_flush(v);
     if (!dosvm_in_irq(v)) dosvm_audio_log(v);
+    dosvm_perf_report(v);
+    /* Observe the completed DOS IRET, before ordinary instructions can
+     * move past the EXEC return address. No stepping or guest patching. */
+    if (!v->frame_pm && v->launch_exec && f->tf.cs == v->launch_cs && f->tf.eip == v->launch_ip &&
+        f->tf.user_ss == v->launch_ss && (uint16_t)f->tf.user_esp == v->launch_sp && (f->tf.eflags & V86_CF)) {
+        v->launch_failed = true; v->launch_error = f->tf.eax & 0xFFFF;
+    }
     if (e < 0) {
         v->info.fault_vector = tf->vector;
         v->info.fault_eip = pm ? dpmi_fault_linear(v, (const struct v86_frame *)tf) : (tf->cs << 4) + tf->eip;
@@ -604,6 +648,7 @@ bool dosvm_trap(struct trap_frame *tf)
         dosvm_trace(v, DOSVM_TRACE_TIMER, f, 0, 0, 0);
     if (g_need_resched) schedule();
     if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
+    perf_phase(v, 1);
     cli();
     if (v->frame_pm != pm) v86_leave(v->continuation);
     memcpy(tf, f, size);
@@ -613,6 +658,11 @@ bool dosvm_trap(struct trap_frame *tf)
 static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
+    if (vector == 0x21 && (f->tf.eax & 0xFFFF) == 0x4B00 && v->launch_armed && !v->launch_exec) {
+        v->launch_exec = true;
+        v->launch_cs = (uint16_t)f->tf.cs; v->launch_ip = f->tf.eip;
+        v->launch_ss = (uint16_t)f->tf.user_ss; v->launch_sp = (uint16_t)f->tf.user_esp;
+    }
     if (vector == 0xFD) return dosvm_mouse_return(v, f);
     if (vector != 0xFE) return dpmi_v86_int(v, f, vector);
     int stub = dpmi_v86_stub(v, f);
@@ -644,7 +694,9 @@ static void worker(void *arg)
     /* f3-04: a mode switch leaves the trap stack and re-enters here with
      * the new frame; only a stopping VM ends the loop. */
     for (;;) {
+        perf_phase(v, 1);
         v86_enter(&v->frame, &v->continuation);
+        perf_phase(v, 2);
         if (v->info.state == DOSVM_STOPPING) break;
     }
     v->continuation = 0;
@@ -697,6 +749,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         task_sleep_ms(1);
     }
     if (v->task) { task_reap(v->task); v->task = 0; }
+    dosvm_perf_dump(v);
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
     if (e && v->info.dirty) v->info.data_loss = true;
@@ -752,6 +805,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->base = v->overlay = -1;
     v->a20 = true;
     v->probe = config ? config->probe : 0;
+    v->perf.report_tick = g_ticks;
     v->dpmi_enabled = config && config->dpmi;
     kwait_init(&v->wake);
     kwait_init(&v->disk_wait); v->disk_busy = false;

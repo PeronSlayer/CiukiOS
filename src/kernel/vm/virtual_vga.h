@@ -70,6 +70,10 @@ typedef struct cvga_geometry {
     unsigned blank;                  /* presenter must output black, not DAC[0] */
 } cvga_geometry;
 
+/* Bulk harvest of a writable chained aperture span. Physical plane offsets
+ * and holes match byte stores; caller bounds the span to the 64 KiB window. */
+void cvga_store_chain4_span(cvga_state *, unsigned at, const uint8_t *, unsigned bytes);
+
 /* Standard IBM VGA BIOS parameter-table values for one mode. seq holds SR1-SR4
  * (SR0 is always 03h after a mode set); attr holds AR00-AR13 (AR14 = 0). The
  * test harness cross-checks these arrays against the QEMU/SeaVGABIOS ROM. */
