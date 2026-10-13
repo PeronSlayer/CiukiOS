@@ -119,4 +119,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-43-usb-mass-storage](f1-43-usb-mass-storage.md) | F1 | gpt-6.1-sol / xhigh | queued 2026-10-13, after f1-42 (USB sticks as removable volumes) |
 | [f1-44-ata-busmaster-dma](f1-44-ata-busmaster-dma.md) | F1 | gpt-6.1-sol / xhigh | queued 2026-10-13 (UDMA on PIIX/VIA/SiS/ALi/nForce) |
 | [f6-08-nic-drivers-second-set](f6-08-nic-drivers-second-set.md) | F6 | gpt-6.1-sol / xhigh | queued 2026-10-13 (e1000, pcnet, tulip, 3c90x, via-rhine) |
-| [f4-11-audio-drivers-second-set](f4-11-audio-drivers-second-set.md) | F4 | gpt-6.1-sol / xhigh | queued 2026-10-13, after f4-10 (ES137x, SB16, AC'97 VIA/SiS/nForce) |
+| [f4-11-audio-drivers-second-set](f4-11-audio-drivers-second-set.md) | F4 | gpt-6.1-sol / xhigh | queued 2026-10-13 (ES137x, SB16, AC'97 VIA/SiS/nForce); f4-10 merged |
