@@ -105,7 +105,8 @@ class AccessoriesTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
-        self.assertEqual(names, sorted(names))
+        # Catalogue order selects defaults: Viewer precedes its Paint alternative.
+        self.assertEqual(sorted(names), ["calc", "charmap", "clock", "help", "mixer", "music", "paint", "viewer"])
         build = load("acc_build", ROOT / "apps/desktop/build_desktop.py")
         self.assertEqual(set(build.ACCESSORIES), set(names))
         image = (ROOT / "scripts/build_image.py").read_text()

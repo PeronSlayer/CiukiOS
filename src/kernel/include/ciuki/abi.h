@@ -492,6 +492,7 @@ enum ciuki_syscall {
     CIUKI_SYS_DISPLAY = 74,
     CIUKI_SYS_LAUNCH_MARK = 75,
     CIUKI_SYS_DEVICES = 76,
+    CIUKI_SYS_DISPLAY_ACCEL = 77,
 };
 
 /* f2-39: diagnostic markers, no copied wire record. See execution-abi.md. */
@@ -613,6 +614,30 @@ struct ciuki_devices_info {
 #define AUDIO_RESET 0x4106u
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
+#define MIXER_GET_DIAGNOSTICS 0x4203u
+#define CIUKI_AUDIO_DIAG_READY 1u
+#define CIUKI_AUDIO_DIAG_RUNNING 2u
+#define CIUKI_AUDIO_DIAG_QUARANTINE 4u
+/* Read-only kernel observations, also available on an absent/failed backend. */
+struct ciuki_audio_diagnostics {
+    uint32_t version;
+    uint32_t size;
+    uint32_t codec_id;
+    uint32_t controller;
+    uint32_t flags;
+    uint32_t irq_line;
+    uint32_t civ;
+    uint32_t picb;
+    uint64_t fetched_frames;
+    uint64_t irqs;
+    int32_t last_error;
+    uint16_t power;
+    uint16_t master;
+    uint16_t pcm;
+    uint16_t rate;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_audio_diagnostics) == 64, "audio diagnostics ABI");
 #define CIUKI_MIXER_DEFAULTS 0u
 #define CIUKI_MIXER_SAVED 1u
 #define CIUKI_MIXER_UNSAVED 2u
@@ -964,6 +989,29 @@ struct ciuki_rect {
     uint32_t width; /* 16 */
     uint32_t height; /* 20 */
 };
+
+/* Optional display-grant service. Native rectangles have software fallback;
+ * cursor returns -EOPNOTSUPP when the desktop must draw its overlay.
+ * Generation prevents stale operations across a firmware mode change. */
+enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
+       CIUKI_ACCEL_PATTERN, CIUKI_ACCEL_CURSOR_SET, CIUKI_ACCEL_CURSOR_MOVE,
+       CIUKI_ACCEL_CURSOR_SHOW };
+struct ciuki_accel_request {
+    uint32_t size;
+    uint32_t operation;
+    uint32_t generation;
+    uint32_t colour;
+    uint32_t background;
+    struct ciuki_rect rect;
+    uint8_t pattern[8];
+    uint32_t cursor_mask[32]; /* MSB first */
+    uint32_t cursor_image[32];
+};
+_Static_assert(sizeof(struct ciuki_accel_request) == 308, "ciuki_accel_request size");
+_Static_assert(_Alignof(struct ciuki_accel_request) == 4, "ciuki_accel_request alignment");
+_Static_assert(__builtin_offsetof(struct ciuki_accel_request, rect) == 20, "ciuki_accel_request rect");
+_Static_assert(__builtin_offsetof(struct ciuki_accel_request, cursor_mask) == 52, "ciuki_accel_request cursor mask");
+_Static_assert(__builtin_offsetof(struct ciuki_accel_request, cursor_image) == 180, "ciuki_accel_request cursor image");
 
 struct ciuki_input_event {
     uint32_t sequence; /* 0 */

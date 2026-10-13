@@ -138,7 +138,7 @@ def application_payloads():
     tcc_spec.loader.exec_module(tcc_build)
     tcc_sources, tcc_directories, tcc_metadata = tcc_build.image_payloads()
     sources.update(tcc_sources)
-    directories = {"/Programs", "/tmp", "/Documents", "/System", "/system/tests",
+    directories = {"/Programs", "/tmp", "/Documents", "/Documents/Desktop", "/Documents/Trash", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
     directories.update(desktop_directories)

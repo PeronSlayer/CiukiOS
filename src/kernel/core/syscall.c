@@ -144,7 +144,7 @@ void syscall_dispatch(struct trap_frame *tf)
     case CIUKI_SYS_SURFACE_CREATE: case CIUKI_SYS_SURFACE_MAP:
     case CIUKI_SYS_SURFACE_INFO: case CIUKI_SYS_PRESENT: case CIUKI_SYS_INPUT_READ:
     case CIUKI_SYS_CHANNEL_PAIR: case CIUKI_SYS_CHANNEL_SEND: case CIUKI_SYS_CHANNEL_RECV:
-    case CIUKI_SYS_DISPLAY_INFO:
+    case CIUKI_SYS_DISPLAY_INFO: case CIUKI_SYS_DISPLAY_ACCEL:
         r = desktop_syscall(tf);
         break;
     default:

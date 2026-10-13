@@ -16,7 +16,7 @@ enum {
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS,
-    C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_MUSIC,
+    C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC,
     T_JOB = 1
 };
 #define PANE_TOP 92
@@ -45,7 +45,7 @@ static const struct du_menu_item go_template[] = {
     {"&Up One Level", C_UP, DU_KEY_UP, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Address Bar", C_ADDRESS, 0x20, DU_ALT, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Computer", C_GO_ROOT, 0, 0, 0}, {"&Programs", C_GO_BIN, 0, 0, 0},
-    {"&Documents", C_GO_DOCUMENTS, 0, 0, 0}, {"&System", C_GO_SYSTEM, 0, 0, 0}, {"&Games", C_GO_GAMES, 0, 0, 0}, {"Control &Panel", C_GO_CONTROL, 0, 0, 0}};
+    {"&Documents", C_GO_DOCUMENTS, 0, 0, 0}, {"Des&ktop", C_GO_DESKTOP, 0, 0, 0}, {"&System", C_GO_SYSTEM, 0, 0, 0}, {"&Games", C_GO_GAMES, 0, 0, 0}, {"Control &Panel", C_GO_CONTROL, 0, 0, 0}};
 static const struct du_menu_item help_template[] = {
     {"&Help Topics", C_HELP, DU_KEY_F1, 0, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&About Files", C_ABOUT, 0, 0, 0}};
 
@@ -194,6 +194,7 @@ void files_layout(struct files_app *a)
     W(a, W_TREE)->box = (struct du_rect){0, fy + 18, a->split, bottom - fy - 18};
     W(a, W_SPLIT)->box = (struct du_rect){a->split, PANE_TOP, 4, bottom - PANE_TOP};
     struct du_widget *list = W(a, W_LIST);
+    list->file_drag=1;
     list->box = (struct du_rect){a->split + 4, PANE_TOP, w - a->split - 4, bottom - PANE_TOP};
     int name = list->box.w - 4 - 16 - 70 - 132 - 108;
     if (name < 120) name = 120;
@@ -248,11 +249,11 @@ static void sort_names(struct names *n)
 
 static void places_build(struct files_app *a)
 {
-    static const char *const names[] = {"Computer", "Programs", "Documents", "System", "Games", "Control Panel"};
-    static const char *const paths[] = {FM_COMPUTER, "/Programs", "/Documents", "/system", "/Games", "control:"};
-    static const char *const icons[] = {"place:computer", "place:applications", "place:documents", "place:system", "place:folder", "menu:control-panel"};
+    static const char *const names[] = {"Computer", "Programs", "Documents", "System", "Games", "Control Panel", "Desktop"};
+    static const char *const paths[] = {FM_COMPUTER, "/Programs", "/Documents", "/system", "/Games", "control:", "/Documents/Desktop"};
+    static const char *const icons[] = {"place:computer", "place:applications", "place:documents", "place:system", "place:folder", "menu:control-panel", "place:desktop"};
     a->place_count = 0;
-    for (unsigned i = 0; i < 6; i++) {
+    for (unsigned i = 0; i < 7; i++) {
         struct fm_meta meta;
         if (i == 4 && (a->model.fs.stat_path(a->model.fs.ctx, paths[i], &meta) || meta.type != FM_DIR)) continue;
         struct files_place *p = &a->places[a->place_count++];
@@ -262,7 +263,7 @@ static void places_build(struct files_app *a)
         struct du_item *it = &a->place_items[i];
         memset(it, 0, sizeof(*it));
         it->text[0] = a->places[i].name;
-        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(!strcmp(a->places[i].path, "control:") ? "menu:control-panel" : icons[i], 16);
+        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(!strcmp(a->places[i].path, "control:") ? "menu:control-panel" : !strcmp(a->places[i].path,"/Documents/Desktop") ? "place:desktop" : !strcmp(a->places[i].path,"/Games") ? "place:folder" : icons[i], 16);
     }
     struct du_widget *w = W(a, W_PLACES);
     w->items = a->place_items; w->count = a->place_count;
@@ -430,10 +431,10 @@ void files_update(struct files_app *a)
     set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || !m->clipboard_count);
-    set_flag(a->go_items, 12, C_BACK, DU_ITEM_DISABLED, !m->history_at);
-    set_flag(a->go_items, 12, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
-    set_flag(a->go_items, 12, C_UP, DU_ITEM_DISABLED, root);
-    set_flag(a->go_items, 12, C_GO_GAMES, DU_ITEM_DISABLED, a->place_count < 6);
+    set_flag(a->go_items, 13, C_BACK, DU_ITEM_DISABLED, !m->history_at);
+    set_flag(a->go_items, 13, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
+    set_flag(a->go_items, 13, C_UP, DU_ITEM_DISABLED, root);
+    set_flag(a->go_items, 13, C_GO_GAMES, DU_ITEM_DISABLED, a->model.fs.stat_path(a->model.fs.ctx, "/Games", &(struct fm_meta){0}) != 0);
     set_flag(a->view_items, 10, C_ICONS, DU_ITEM_CHECKED, list->view == DU_ICONS);
     set_flag(a->view_items, 10, C_LIST, DU_ITEM_CHECKED, list->view == DU_LIST);
     set_flag(a->view_items, 10, C_DETAILS, DU_ITEM_CHECKED, list->view == DU_DETAILS);
@@ -671,7 +672,7 @@ static void job_finished(struct files_app *a)
         fm_select_none(&a->model);
         for (unsigned i = 0; i < j->created_count; i++) fm_select_name(&a->model, j->created[i], 1);
     }
-    if (kind == FM_MOVE && j->state == FM_DONE && !j->skipped && a->model.cut) fm_clipboard_clear(&a->model);
+    if (kind == FM_MOVE && j->state == FM_DONE && !j->skipped && a->model.cut) fm_clipboard_consume(&a->model);
     if (j->state == FM_CANCELLED) snprintf(a->note, sizeof(a->note), "Cancelled; %u item(s) completed", j->completed);
     else if (j->state == FM_DONE)
         snprintf(a->note, sizeof(a->note), "%u item(s) %s%s%s", j->completed - j->skipped,
@@ -719,6 +720,7 @@ static void job_tick(struct files_app *a)
 /* ---- commands ---- */
 static void paste(struct files_app *a, const char *destination)
 {
+    if (fm_clipboard_load(&a->model)) return;
     if (!a->model.clipboard_count) return;
     start_job(a, a->model.cut ? FM_MOVE : FM_COPY, a->model.clipboard, a->model.clipboard_count, destination);
 }
@@ -893,12 +895,13 @@ static void command(struct files_app *a, int id)
     case C_GO_CONTROL: open_control(a); break;
     case C_GO_ROOT: files_navigate(a, FM_COMPUTER); break;
     case C_GO_BIN: files_navigate(a, "/Programs"); break;
+    case C_GO_DESKTOP: files_navigate(a,"/Documents/Desktop"); break;
     case C_GO_DOCUMENTS: files_navigate(a, "/Documents"); break;
-    case C_GO_GAMES: if (a->place_count == 6) files_navigate(a, "/Games"); break;
+    case C_GO_GAMES: files_navigate(a, "/Games"); break;
     case C_GO_SYSTEM: files_navigate(a, "/system"); break;
     case C_TREE_OPEN: files_update(a); break;
     case C_ADDRESS: { struct du_widget *e = W(a, W_ADDRESS); du_focus(a->ui, W_ADDRESS); e->anchor = 0; e->cursor = strlen(e->text); break; }
-    case C_CUT: case C_COPY: if (!fm_clipboard(m, id == C_CUT)) { a->note[0] = 0; files_update(a); } break;
+    case C_CUT: case C_COPY: if (!fm_clipboard(m, id == C_CUT) && !fm_clipboard_save(m)) { a->note[0] = 0; files_update(a); } break;
     case C_PASTE: paste(a, m->path); break;
     case C_PASTE_INTO: {
         char p[FM_PATH];
@@ -1024,6 +1027,10 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         rename_commit(a);
     if (du_dialog_id(a->ui) && e->type != DU_EV_TICK && e->type != DU_EV_DIALOG && e->type != DU_EV_FOCUS) return;
     switch (e->type) {
+    case DU_EV_DRAG:
+        if (e->id==W_LIST && a->drop && !a->job_active && !fm_clipboard(&a->model,!(e->modifiers&DU_CTRL)) && !fm_clipboard_save(&a->model))
+            a->drop(a,e->x,e->y,(e->modifiers&DU_CTRL)!=0);
+        break;
     case DU_EV_TICK: if (e->id == T_JOB) job_tick(a); break;
     case DU_EV_DIALOG: dialog_result(a, e); break;
     case DU_EV_COMMIT:
@@ -1085,11 +1092,11 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;
     copy_menu(a->file_items, file_template, 11); copy_menu(a->edit_items, edit_template, 6);
-    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 12); copy_menu(a->help_items, help_template, 3);
+    copy_menu(a->view_items, view_template, 10); copy_menu(a->go_items, go_template, 13); copy_menu(a->help_items, help_template, 3);
     a->menus[0] = (struct du_menu){"&File", a->file_items, 11};
     a->menus[1] = (struct du_menu){"&Edit", a->edit_items, 6};
     a->menus[2] = (struct du_menu){"&View", a->view_items, 10};
-    a->menus[3] = (struct du_menu){"&Go", a->go_items, 12};
+    a->menus[3] = (struct du_menu){"&Go", a->go_items, 13};
     a->menus[4] = (struct du_menu){"&Help", a->help_items, 3};
     u->menus = a->menus; u->menu_count = 5;
     struct du_rect zero = {0, 0, 0, 0};
@@ -1137,4 +1144,21 @@ void files_destroy(struct files_app *a)
     fm_destroy(&a->model);
     free(a->rows); free(a->texts); free(a->tree); free(a->tree_items);
     a->rows = NULL; a->texts = NULL; a->tree = NULL; a->tree_items = NULL;
+}
+
+void files_drop(struct files_app *a, int x, int y, int copy)
+{
+    if (a->job_active || du_dialog_id(a->ui) || a->rename_index>=0) return;
+    char destination[FM_PATH]; snprintf(destination,sizeof(destination),"%s",a->model.path);
+    int index=du_list_hit(W(a,W_LIST),x,y);
+    if (index>=0 && (unsigned)index<a->model.count && a->model.entries[index].meta.type==FM_DIR)
+        fm_entry_path(&a->model,(unsigned)index,destination);
+    else {
+        index=du_list_hit(W(a,W_TREE),x,y);
+        if (index>=0 && (unsigned)index<a->tree_count) snprintf(destination,sizeof(destination),"%s",a->tree[index].path);
+        else if (!du_contains(du_list_body(W(a,W_LIST)),x,y)) return;
+    }
+    int r=fm_clipboard_load(&a->model);
+    if (r) { error_box(a,"Paste","Cannot read the file clipboard:",r); return; }
+    if (a->model.clipboard_count) start_job(a,copy ? FM_COPY : FM_MOVE,a->model.clipboard,a->model.clipboard_count,destination);
 }

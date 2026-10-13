@@ -367,6 +367,8 @@ static void display_poll(struct desktop *d)
     close(d->output);
     d->pixels = pixels; d->output = output;
     desk_display_relayout(d, info.width, info.height);
+    struct ciuki_framebuffer_info fb;
+    if (!ciuki_display_info(d->display,&fb)) desk_accel_reset(d,fb.generation);
     if (d->shell) desk_shell_wallpaper_update(d);
     d->display_counter = counter;
     d->display_mode = mode;
@@ -522,6 +524,7 @@ static void shell_service(struct desktop *d)
     if (!d->shell) return;
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
     if (d->power.state) { desk_power_tick(d); return; }
+    desk_folder_service(d);
     if (sh->want_power) {
         int action=sh->want_power; sh->want_power=0;
         if (settings_save(d)) { /* still try: settings are a convenience */ }
@@ -581,7 +584,11 @@ static void shell_setup(struct desktop *d, int gate)
     struct stat pictures;
     d->pictures_exists = !stat("/Documents/Pictures", &pictures) && S_ISDIR(pictures.st_mode);
     desk_shell_enable(d);
-    if (!gate) desk_sound_init(d);
+    if (!gate) {
+        int result=desk_folder_init(d,fm_native_vfs());
+        if (result) snprintf(d->notice,sizeof(d->notice),"Desktop folder unavailable (error %d)",-result);
+        desk_sound_init(d);
+    }
     /* The first frame shows the desktop colour, bars and icons at once; the
      * image wallpaper (the default Ciuk2 PNG takes seconds to decode under
      * TCG) is loaded two loop iterations later (lead fix, 2026-10-12). */
@@ -628,11 +635,13 @@ int main(int argc, char **argv)
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    d->accel=ciuki_display_accel;
     if (desk_load_portrait(portrait)) { fprintf(stderr,"desktop: approved Ciuki asset unavailable\n"); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_PORTRAIT,EIO); }
     d->portrait=portrait;
     d->output=ciuki_surface_create(info.width,info.height,CIUKI_SURFACE_XRGB8888);
     d->pixels=d->output < 0 ? MAP_FAILED : ciuki_surface_map(d->output,PROT_READ|PROT_WRITE);
     if (d->pixels==MAP_FAILED) { int error=errno; if (d->output>=0) close(d->output); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_OUTPUT,error); }
+    desk_accel_reset(d,info.generation);
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (!gate) shell_setup(d,0);

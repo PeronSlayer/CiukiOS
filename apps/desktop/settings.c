@@ -15,7 +15,7 @@ void cfg_defaults(struct ciuki_settings *s)
     strcpy(s->theme, "Platinum");
     strcpy(s->wallpaper, "/system/wallpapers/Ciuk2.png");   /* owner's Ciuk2 scene (assets/wallpapers/ciuki) */
     s->wallpaper_mode = CFG_WALL_FILL;     /* the adaptive scenes are made for a centred, aspect-preserving fill */
-    s->desktop_color = 0x375564u;          /* DESK_BACKGROUND */
+    s->desktop_color = CFG_DESKTOP_COLOR;          /* DESK_BACKGROUND */
     s->clock_24h = 1;
     s->desktop_icons = 1;
     s->mouse_speed = CFG_MOUSE_NORMAL;
@@ -133,7 +133,7 @@ int cfg_parse(struct ciuki_settings *s, const char *text, size_t length)
     int rejected = 0, recent_reset = 0;
     size_t at = 0;
     while (at < length) {
-        char line[CFG_PATH_MAX + 64];
+        char line[1600];
         size_t n = 0, start = at;
         while (at < length && text[at] != '\n') at++;
         size_t end = at;
@@ -196,3 +196,53 @@ void cfg_recent_add(struct ciuki_settings *s, const char *path)
     snprintf(s->recent[0], CFG_PATH_MAX, "%s", path);
     if (found >= s->recent_count && s->recent_count < CFG_RECENT_MAX) s->recent_count++;
 }
+
+/* Hex names preserve every byte without conflicting with key=value syntax. */
+static int icon_key(char *out, const char *name)
+{
+    static const char hex[] = "0123456789abcdef";
+    size_t n = strlen(name); if (n > 765) return 0;
+    memcpy(out, "icon.", 5);
+    for (size_t i = 0; i < n; i++) { unsigned c = (unsigned char)name[i]; out[5+i*2] = hex[c>>4]; out[6+i*2] = hex[c&15]; }
+    out[5+n*2] = '='; out[6+n*2] = 0; return 1;
+}
+int cfg_icon_position(const struct ciuki_settings *s, const char *name, int *x, int *y)
+{
+    char key[1538]; if (!icon_key(key, name)) return 0;
+    size_t n = strlen(key);
+    for (const char *p = s->extra; *p;) {
+        if (!strncmp(p,key,n)) {
+            const char *v = p+n, *comma = strchr(v, ','); char first[16];
+            if (!comma || comma-v >= (int)sizeof(first)) return 0;
+            memcpy(first,v,(size_t)(comma-v)); first[comma-v] = 0;
+            const char *end = strchr(comma+1,'\n'); char second[16];
+            if (!end || end-comma-1 >= (int)sizeof(second)) return 0;
+            memcpy(second,comma+1,(size_t)(end-comma-1)); second[end-comma-1] = 0;
+            return number(first,0,65535,x) && number(second,0,65535,y);
+        }
+        const char *end = strchr(p,'\n'); if (!end) break; p = end+1;
+    }
+    return 0;
+}
+static void icon_remove(struct ciuki_settings *s, const char *key)
+{
+    char *p = s->extra; size_t n = key ? strlen(key) : 5;
+    while (*p) {
+        char *end = strchr(p,'\n'); if (!end) break;
+        if (!strncmp(p,key ? key : "icon.",n)) memmove(p,end+1,strlen(end+1)+1);
+        else p = end+1;
+    }
+}
+int cfg_icon_move(struct ciuki_settings *s, const char *name, int x, int y)
+{
+    char key[1538], line[1580]; if (x < 0 || y < 0 || x > 65535 || y > 65535 || !icon_key(key,name)) return 0;
+    snprintf(line,sizeof(line),"%s%d,%d\n",key,x,y);
+    size_t old = strlen(s->extra), len = strlen(line);
+    /* Capacity is checked before removing the old entry. */
+    if (old + len + 1 > sizeof(s->extra)) return 0;
+    icon_remove(s,key); strcat(s->extra,line); return 1;
+}
+void cfg_icons_arrange(struct ciuki_settings *s) { icon_remove(s,NULL); }
+
+void cfg_icon_forget(struct ciuki_settings *s, const char *name)
+{ char key[1538]; if (icon_key(key,name)) icon_remove(s,key); }

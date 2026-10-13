@@ -219,9 +219,8 @@ class IconStoreTests(unittest.TestCase):
                    "Close    Alt+F4": "action:stop", "About CiukiOS": "menu:about"}
         for label, obj in objects.items():
             self.assertEqual(rows[label], table[obj], label)
-        icons = dict(re.findall(r'icon_add\(d, "([^"]+)", "[^"]*", "[^"]*", "([a-z-]+)"', shell))
-        for label, obj in {"Documents": "place:home", "DOS Box": "program:dosbox", "CiukNote": "program:ciuknote",
-                           "Control Panel": "program:control", "Trash": "place:trash"}.items():
+        icons = dict(re.findall(r'icon_add\(d, "([^"]+)", "[^"]*", (?:"[^"]*"|DESK_TRASH), "([a-z-]+)"', shell))
+        for label, obj in {"Documents": "place:home", "Trash": "place:trash", "Pictures": "place:folder"}.items():
             self.assertEqual(icons[label], table[obj], label)
         self.assertEqual(icons["Computer"], "ciuki-computer")    # identity: Tango computer with the approved portrait
         # The shell draws only store sizes: menus and the taskbar 16, dialogs and Alt+Tab 32, desktop icons 48.

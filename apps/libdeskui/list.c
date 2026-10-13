@@ -2,6 +2,7 @@
  * List view (Details, Large Icons, List) and tree view. */
 #include "internal.h"
 #include <string.h>
+#include <stdlib.h>
 
 #define HEADER_H 18
 #define CELL_W 76
@@ -461,6 +462,7 @@ int du_list_press(struct du_ui *u, struct du_widget *w, int button, int x, int y
         u->last_click_widget = -1;
         du_emit(u, (struct du_event){.type = DU_EV_OPEN, .id = w->id, .index = index});
     } else {
+        if (w->file_drag && index>=0) { w->drag=50; w->file_drag_x=x; w->file_drag_y=y; }
         u->last_click_widget = w->id; u->last_click_index = index; u->last_click_ns = u->now;
         u->last_click_x = x; u->last_click_y = y;
     }
@@ -470,6 +472,7 @@ int du_list_press(struct du_ui *u, struct du_widget *w, int button, int x, int y
 void du_list_motion(struct du_ui *u, struct du_widget *w, int x, int y)
 {
     struct layout l = compute(w);
+    if (w->drag==50 && (abs(x-w->file_drag_x)>4 || abs(y-w->file_drag_y)>4)) { w->drag=51; u->last_click_widget=-1; }
     if (w->drag == 13 && l.has_v) { l.v.value = w->scroll; w->scroll = du_sb_drag(&l.v, x, y, w->drag_offset); u->dirty = 1; }
     else if (w->drag == 23 && l.has_h) { l.h.value = w->hscroll; w->hscroll = du_sb_drag(&l.h, x, y, w->drag_offset); u->dirty = 1; }
     else if (w->drag >= 30 && w->drag < 30 + DU_COLUMNS) {
@@ -479,4 +482,8 @@ void du_list_motion(struct du_ui *u, struct du_widget *w, int x, int y)
     }
 }
 
-void du_list_release(struct du_ui *u, struct du_widget *w) { w->drag = 0; u->dirty = 1; }
+void du_list_release(struct du_ui *u, struct du_widget *w)
+{
+    int drag=w->drag; w->drag=0; u->dirty=1;
+    if (drag==51 && w->file_drag) du_emit(u,(struct du_event){.type=DU_EV_DRAG,.id=w->id,.index=(int)w->active,.x=u->mouse_x,.y=u->mouse_y});
+}

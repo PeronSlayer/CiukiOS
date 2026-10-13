@@ -33,7 +33,8 @@ enum desk_opcode {
     /* f2-36, version 2, client to desktop: uint32 length, then 1..63
      * printable ASCII bytes. Updates only the sending client's window. */
     DESK_SET_TITLE,
-    DESK_SOUND /* v2: uint32 event; toolkit menu and dialog events */
+    DESK_SOUND, /* v2: uint32 event; toolkit menu and dialog events */
+    DESK_FILE_DROP /* v2: copy flag, client-relative release x/y; Files only */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */

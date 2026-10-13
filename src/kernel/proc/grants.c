@@ -30,7 +30,10 @@ void grant_release(struct desktop_description *d)
     if (!d->owner) return;
     desktop_objects.grants--;
     /* The last grant description closes: the screen console draws again. */
-    if (!--grant_descriptions) { grant_owner = 0; console_display_owned(false); }
+    if (!--grant_descriptions) {
+        fbdev_cursor_hide();
+        grant_owner = 0; console_display_owned(false);
+    }
 }
 
 int grants_install(struct process *p, int32_t fds[2])
@@ -67,6 +70,29 @@ static int grant_check(struct process *p, int32_t fd, enum desktop_kind kind, ui
     struct desktop_description *d = desktop_fd(p, fd);
     if (!d || d->kind != kind) return -EBADF;
     return d->owner == p->pid && grant_owner == p->pid && (d->maximum & right) ? 0 : -EACCES;
+}
+
+struct accel_operation { struct desktop_description *grant; bool presenting; };
+static void accel_cleanup(void *arg)
+{
+    struct accel_operation *op=arg;
+    if (op->presenting) presenting--;
+    op->grant->object.release(&op->grant->object);
+}
+int grant_accel(struct process *p, int32_t fd, const struct ciuki_accel_request *q)
+{
+    int err = grant_check(p,fd,DESKTOP_DISPLAY,PROT_WRITE);
+    if (err) return err;
+    struct proc_thread *t=proc_thread_for(g_current);
+    if (t && proc_signal_caught(t)) return -EINTR;
+    struct accel_operation op={.grant=desktop_fd(p,fd),.presenting=true};
+    op.grant->object.retain(&op.grant->object);
+    if (t) { t->cleanup=accel_cleanup; t->operation=&op; }
+    presenting++;
+    err = fbdev_accel_request(q);
+    if (t) { t->cleanup=0; t->operation=0; }
+    accel_cleanup(&op);
+    return err;
 }
 
 static int display_live(void)

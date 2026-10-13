@@ -246,9 +246,30 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
     if (c->frame.x == x && c->frame.y == y) return;
     if (d->shell_test && d->shell_stage == 3 && c->pid == d->shell_pid && d->drag == i)
         d->shell_stage = 4;
-    desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+    struct desk_box old = desk_outer(c), frame = c->frame;
+    int continuing=d->copy_pending && d->copy_client==i &&
+        d->copy_rect.width==(uint32_t)frame.w && d->copy_rect.height==(uint32_t)frame.h;
+    int copy = d->accel && (d->accel_caps & 1u) && d->hw_cursor &&
+        d->accel_front_valid && (continuing || (!d->copy_pending && !d->damage.count)) && !d->menu_open && !d->sh.levels &&
+        !d->sh.volume_open && !d->sh.switcher && !d->sh.tooltip && !d->power.state &&
+        !c->internal && !c->collapsed && !c->minimized;
+    struct desk_box next = {x,y,frame.w,frame.h}, ignored;
+    if (frame.x < 0 || frame.y < 0 || frame.x+frame.w > (int32_t)d->width ||
+        frame.y+frame.h > (int32_t)d->height) copy=0;
+    for (int j=0; j<DESK_CLIENTS && copy; j++) {
+        struct desk_client *other=&d->clients[j];
+        if (j!=i && other->window && !other->minimized && other->order>c->order &&
+            (desk_intersect(desk_outer(other),frame,&ignored) || desk_intersect(desk_outer(other),next,&ignored))) copy=0;
+    }
+    if (d->copy_pending && !copy) { d->copy_pending=0; desk_damage_add(&d->damage,frame,d->width,d->height); }
     c->frame.x = x; c->frame.y = y;
-    desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+    if (copy) {
+        if (continuing) { d->copy_rect.dst_x=x; d->copy_rect.dst_y=y; }
+        else d->copy_rect=(struct ciuki_rect){frame.x,frame.y,x,y,(uint32_t)frame.w,(uint32_t)frame.h};
+        d->copy_pending=1; d->copy_client=i;
+    }
+    desk_damage_add(&d->damage,old,d->width,d->height);
+    desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
 }
 static void close_attachments(struct desktop *d, const struct ciuki_message *m, int keep)
 {
@@ -353,6 +374,15 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         c->awaiting_frame = 0;
         break;
     }
+    case DESK_FILE_DROP:
+        if (d->shell && !d->sh.gate && !d->power.state && c->window && c->program==DESK_APP_FILES) {
+            struct desk_box content=desk_content(c);
+            int x=d->mouse_x,y=d->mouse_y;
+            d->mouse_x=content.x+p.x; d->mouse_y=content.y+p.y;
+            desk_folder_drop(d,i,(int)p.flags);
+            d->mouse_x=x; d->mouse_y=y;
+        }
+        break;
     case DESK_SET_TITLE:
         if (strcmp(c->title, p.title)) {
             memcpy(c->title, p.title, sizeof(c->title));
