@@ -25,6 +25,8 @@ struct fat_volume {
     uint64_t start, sectors;
     uint32_t reserved, fat_sectors, root_sector, data_sector, clusters, root, root_entries;
     uint32_t free_clusters, next_free, ro_reasons, lost_clusters;
+    uint32_t volume_serial;
+    char volume_label[12];
     uint16_t fsinfo, backup; uint8_t type, spc, fats, media, active_fat;
     bool mounted, readonly, writable_session, dirty_recovered;
     const char *diagnostic;

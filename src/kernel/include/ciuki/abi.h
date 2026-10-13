@@ -633,6 +633,7 @@ struct ciuki_net_state {
 _Static_assert(sizeof(struct ciuki_net_state) == 96, "network state ABI");
 
 /* /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
+ * removable_mask includes ejectable USB and optical media; type[] distinguishes them.
  * A removal names a generation and ejects the physical USB device or CD. */
 #define CIUKI_MEDIA_VERSION 2u
 #define CIUKI_MEDIA_VERSION_1 1u
@@ -648,6 +649,20 @@ struct ciuki_media_state_v1 {
     uint32_t reserved;
     uint32_t generation[26];
 };
+/* F2-51: independent per-letter arrival metadata; safe-removal ABI is unchanged. */
+#define MEDIA_GET_VOLUME 0x4d03u
+#define CIUKI_MEDIA_REMOVABLE 1u /* ciuki_media_volume.flags: removable FAT volume */
+struct ciuki_media_volume {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t flags;
+    uint32_t generation;
+    char id[40];                 /* stable filesystem identity; empty if unavailable */
+    char label[33];
+    uint8_t reserved[3];
+};
+_Static_assert(sizeof(struct ciuki_media_volume) == 96, "media volume ABI");
 struct ciuki_media_state {
     uint32_t version;
     uint32_t size;

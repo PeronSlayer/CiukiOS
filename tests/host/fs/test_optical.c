@@ -49,6 +49,8 @@ int main(int argc,char **argv)
     CHECK(!cache_init(&cache,128*1024)); vfs_init(&vfs);
     int e=fs_ro_mount(&volume,&iso9660_ops,&cache,&dev,0,dev.capacity);
     if (e) { printf("REFUSED\t%d\n",e); CHECK(!writes && !flushes); cache_destroy(&cache); vfs_destroy(&vfs); fclose(f); return failures ? 1 : 0; }
+    uint64_t identity=volume.volume_identity; char label[33]; memcpy(label,volume.volume_label,sizeof(label));
+    CHECK(identity);
     CHECK(!vfs_attach_ro(&vfs,3,&volume)); CHECK(!vfs_table_init(&vfs,&table,2));
     struct fs_ro_node root; CHECK(!volume.ops->root(&volume,&root)); e=walk(root.id,"",0);
     if (e) printf("REFUSED\t%d\n",e);
@@ -72,7 +74,9 @@ int main(int argc,char **argv)
         CHECK(vfs_seek(&table,h,0,VFS_SEEK_SET,&pos)==-FS_EIO);
         CHECK(vfs_commit(&table,h)==-FS_EIO); CHECK(vfs_find_next(&table,&find,&ent)==-FS_EIO);
         CHECK(!strcmp(table.cwd[3],"/"));
-        CHECK(!fs_ro_mount(&volume,&iso9660_ops,&cache,&dev,0,dev.capacity)); CHECK(!vfs_attach_ro(&vfs,3,&volume));
+        CHECK(!fs_ro_mount(&volume,&iso9660_ops,&cache,&dev,0,dev.capacity));
+        CHECK(volume.volume_identity==identity && !strcmp(volume.volume_label,label));
+        CHECK(!vfs_attach_ro(&vfs,3,&volume));
         CHECK(vfs_read(&table,h,b,1,&n)==-FS_EIO); CHECK(!vfs_close(&table,h));
     }
     vfs_table_destroy(&table); CHECK(!vfs_detach(&vfs,3)); vfs_destroy(&vfs); cache_destroy(&cache);

@@ -562,7 +562,17 @@ static void network_read(struct desktop *d)
     }
     desk_shell_network_update(d, &state);
 }
-static void media_read(struct desktop *d)
+static int autoplay_preference(struct desktop *d,const char *id,const char *label,int action)
+{
+    (void)d;
+    return action<0 ? ap_preference_get(NULL,id) : ap_preference_set(NULL,id,label,action);
+}
+static void media_sound(struct desktop *d,int connected)
+{
+    const char *key=connected ? "device_connect" : "device_disconnect";
+    for (unsigned i=0;i<SOUND_EVENTS;i++) if (!strcmp(sound_keys[i],key)) { desk_sound(d,i); break; }
+}
+static int media_read(struct desktop *d)
 {
     struct ciuki_media_state s={.version=CIUKI_MEDIA_VERSION,.size=sizeof(s)};
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC);
@@ -571,6 +581,21 @@ static void media_read(struct desktop *d)
         close(fd);
     }
     desk_shell_media_update(d,&s);
+    /* A failed observation preserves prior state, never fabricates an eject. */
+    static struct ciuki_media_volume volumes[26];
+    int observe=open("/dev/media",O_RDONLY|O_CLOEXEC);
+    if (observe>=0) {
+        int ok=1;
+        for (unsigned i=3;i<26;i++) {
+            struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=i};
+            if (ciuki_devctl(observe,MEDIA_GET_VOLUME,&v,sizeof(v))) { ok=0; break; }
+            volumes[i]=v;
+        }
+        close(observe);
+        if (ok) desk_autoplay_update(d,volumes);
+        return ok;
+    }
+    return 0;
 }
 static void media_remove(struct desktop *d)
 {
@@ -746,6 +771,11 @@ static void shell_service(struct desktop *d)
     if (sh->want_reload & 16) network_read(d);
     if (sh->want_reload & 32) media_read(d);
     if (sh->want_remove) media_remove(d);
+    if (sh->autoplay.want_commit && !media_read(d)) {
+        sh->autoplay.want_commit=0;
+        desk_shell_message(d,"AutoPlay","The media could not be checked. Please try again.",1);
+    }
+    desk_autoplay_service(d);
     sh->want_reload=0;
     wallpaper_poll(d);
     if (!sh->wall_valid) wallpaper_update(d);
@@ -766,6 +796,7 @@ static void shell_service(struct desktop *d)
 static void shell_setup(struct desktop *d, int gate)
 {
     d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
+    d->autoplay_fs=fm_native_vfs(); d->autoplay_preference=autoplay_preference; d->media_sound=media_sound;
     d->self_pid=(uint32_t)getpid();
     const char *authority=getenv(CIUKI_TASKS_ENV);
     int fd=authority ? number(authority,CIUKI_OPEN_MAX-1) : -1;

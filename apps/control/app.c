@@ -20,10 +20,10 @@ enum {
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts"};
-static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System", "Device Manager", "Drivers", "Network", "Power", "Adapter", "Fonts"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay"};
+static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System", "Device Manager", "Drivers", "Network", "Power", "Adapter", "Fonts", "AutoPlay"};
 static const char *const page_icons[CP_PAGES] = {"device:display", "device:mouse", "device:keyboard", "device:sound-card",
-    "settings:date-time", "device:computer", "settings:peripherals", "system-software-update", "device:network", "system-shutdown", "device:display", "preferences-desktop-font"};
+    "settings:date-time", "device:computer", "settings:peripherals", "system-software-update", "device:network", "system-shutdown", "device:display", "preferences-desktop-font", "drive-removable-media"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
@@ -279,6 +279,16 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         return;
     }
     switch (e->id) {
+    case 950:
+        if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->autoplay_count) a->autoplay_selected=(unsigned)e->index;
+        break;
+    case 951:
+        if (e->type==DU_EV_ACTIVATE && a->autoplay_selected<a->autoplay_count && a->host.autoplay_forget) {
+            int result=a->host.autoplay_forget(a->host.ctx,a->autoplay[a->autoplay_selected].id);
+            build(a); text(a,C_STATUS,result ? "The choice could not be removed." : "This device will ask every time.");
+        }
+        break;
+    case 952: if (e->type==DU_EV_ACTIVATE) build(a); break;
     case C_BACK: if (e->type == DU_EV_ACTIVATE) cp_open(a, CP_HOME); break;
     case C_APPLETS: if (e->type == DU_EV_OPEN && e->index >= 0 && e->index < CP_PAGES) cp_open(a, e->index); break;
     case C_DRIVERS: case C_LEASES:
@@ -861,6 +871,26 @@ static void build(struct cp_app *a)
     add(a, DU_BUTTON, C_SECONDS, 24, 164, 200, 24, "");
     add(a, DU_LABEL, C_TIME_NOTE1, 24, 202, 452, 14, "The clock reads the computer's real-time clock (UTC).");
     add(a, DU_LABEL, C_TIME_NOTE2, 24, 216, 452, 14, "Setting it is not available yet: the kernel has no call for it.");
+    } else if (a->page==CP_AUTOPLAY) {
+        static const char *const actions[]={"Open folder to view files","Play music","View pictures","Run program","Do nothing"};
+        int count=a->host.autoplay_list ? a->host.autoplay_list(a->host.ctx,a->autoplay,AP_PREFS) : -1;
+        a->autoplay_count=count>=0 && count<=AP_PREFS ? (unsigned)count : 0;
+        a->autoplay_selected=0;
+        add(a,DU_LABEL,949,24,48,508,16,"Remembered choices for removable media and CDs");
+        for (unsigned i=0;i<a->autoplay_count;i++) {
+            struct ap_preference *p=&a->autoplay[i];
+            memset(&a->autoplay_items[i],0,sizeof(a->autoplay_items[i]));
+            a->autoplay_items[i].text[0]=p->label[0] ? p->label : p->id;
+            a->autoplay_items[i].text[1]=p->action>=0 && p->action<AP_CHOICES ? actions[p->action] : "Ask every time";
+        }
+        w=add(a,DU_LISTVIEW,950,24,76,508,224,""); w->items=a->autoplay_items; w->count=a->autoplay_count;
+        list_style(w,"Device"); w->column_count=2;
+        w->columns[0]=(struct du_column){"Device",232,0}; w->columns[1]=(struct du_column){"Action",252,0};
+        du_set_text(w,count<0 ? "The registry could not be read." : "No remembered choices. AutoPlay asks every time.");
+        w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
+        add(a,DU_BUTTON,951,24,316,180,24,"Ask every time")->disabled=!a->autoplay_count;
+        add(a,DU_BUTTON,952,216,316,96,24,"Refresh");
+        add(a,DU_LABEL,953,24,350,508,16,"Select an action in AutoPlay to remember a new choice.");
     } else {
         system_pages(a);
     }

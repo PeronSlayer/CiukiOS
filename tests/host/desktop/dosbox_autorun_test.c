@@ -64,7 +64,9 @@ int main(void)
     typed("\\RUNREC.COM \\DOOM DOOM.EXE", "\\RUNREC.COM \\DOOM DOOM.EXE\n");
     typed("DIR /W", "DIR /W\n");
     typed("\\WOLF3D\\", "\\WOLF3D\\\n");
-    typed("C:\\GAMES_1\\A=B,C.EXE x", "C:\\GAMES_1\\A=B,C.EXE x\n");
+    typed("C:\\GAMES_1\\A=B,C.EXE x", "C:\nCD \\GAMES_1\nA=B,C.EXE x\n");
+    typed("E:\\SETUP\\INSTALL.COM /S", "E:\nCD \\SETUP\nINSTALL.COM /S\n");
+    typed("D:\\START.COM", "D:\nCD \\\nSTART.COM\n");
     typed("\\A\\B\\C.EXE 0123456789", "CD \\A\\B\nC.EXE 0123456789\n");
     /* Refused: empty, edge spaces, untypable characters, too long. */
     struct dosbox_key keys[DOSBOX_KEYS_MAX];

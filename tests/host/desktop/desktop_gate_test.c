@@ -376,3 +376,7 @@ int main(int argc,char **argv)
 int ciuki_display_query(struct ciuki_display_info *i) { (void)i; return -ENOSYS; }
 int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }
 int ciuki_display_accel(int fd,const struct ciuki_accel_request *q) { (void)fd;(void)q;return -ENOSYS; }
+
+int ap_preference_get(const char *dir,const char *id) { (void)dir; (void)id; return -1; }
+int ap_preference_set(const char *dir,const char *id,const char *label,int action)
+{ (void)dir; (void)id; (void)label; (void)action; return -1; }

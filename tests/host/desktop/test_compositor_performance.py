@@ -24,7 +24,7 @@ GOLDENS = {
     "Classic 98": "17e98daaaefd11df154da275151a503cf426b1030cc68c4d0d11b1cdb04a9004",
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
-           ("client", "protocol", "input", "compositor", "theme", "shell", "settings",
+           ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",
             "settings_io", "wallpaper", "keymap", "folder")]
 SOURCES += ["apps/files/model.c", "apps/files/transfer.c", "apps/libdeskui/draw.c",
             "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c", "tests/host/desktop/fake.c",

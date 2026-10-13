@@ -412,7 +412,10 @@ void files_update(struct files_app *a)
         const char *drive_icon=optical ? "place:optical" : removable ? "place:removable" : "place:volume";
         char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
-        a->rows[i] = (struct du_item){{e->name, t->size, t->type, t->modified},
+        char volume_label[33]={0};
+        if (computer && a->media_label && e->name[0]>='D' && e->name[0]<='Z') a->media_label((unsigned)(e->name[0]-'A'),volume_label);
+        if (volume_label[0]) snprintf(t->label,sizeof(t->label),"%s (%s)",volume_label,e->name);
+        a->rows[i] = (struct du_item){{volume_label[0] ? t->label : e->name, t->size, t->type, t->modified},
                                       computer ? named(drive_icon, 16) : icon16(e), computer ? named(drive_icon, 32) : icon32(e),
                                       (uint8_t)e->selected, (uint8_t)in_clipboard(a, e->name), 0, 0, 0};
     }

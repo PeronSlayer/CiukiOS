@@ -9,6 +9,7 @@
 #define CIUKI_DESKTOP_SHELL_H
 #include "settings.h"
 #include "folder.h"
+#include "autoplay.h"
 #include "wallpaper.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -29,7 +30,7 @@ enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_MEDIA };
 #define SH_START_MARK 18        /* the portrait mark in the Ciuki button */
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
-       DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_KINDS };
+       DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_AUTOPLAY, DESK_INTERNAL_KINDS };
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH };
@@ -60,6 +61,7 @@ struct desk_shell {
     struct ciuki_net_state network;
     int network_open;
     struct ciuki_media_state media;
+    struct desk_autoplay autoplay;
     int media_open, want_remove;
     unsigned media_scroll;
     uint32_t remove_generation;

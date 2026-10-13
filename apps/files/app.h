@@ -11,7 +11,7 @@
 #define FILES_TREE 256
 #define FILES_CACHE 64
 
-struct files_row { char size[32], type[40], modified[24]; };
+struct files_row { char label[80], size[32], type[40], modified[24]; };
 struct files_place { char name[64], path[FM_PATH]; };
 struct files_node { char name[FM_NAME], path[FM_PATH]; unsigned depth; uint8_t expanded, children; };
 
@@ -37,6 +37,7 @@ struct files_app {
     int (*portrait)(uint32_t *pixels256);
     void (*drop)(struct files_app *, int x, int y, int copy);
     struct ciuki_media_state media;
+    int (*media_label)(unsigned drive, char out[33]);
     int (*media_read)(struct ciuki_media_state *);
     int (*media_remove)(unsigned drive, uint32_t generation);
     void *user;

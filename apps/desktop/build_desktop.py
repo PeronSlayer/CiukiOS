@@ -31,7 +31,7 @@ ACCESSORIES = {
 }
 PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
-SHELL = ["sounds.c", "sound_storage.c", "sound_runtime.c", "shell.c", "settings.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
+SHELL = ["sounds.c", "sound_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
 
 
@@ -162,13 +162,13 @@ def build():
     archive = [sdk["tools"]["llvm-ar"]["path"], "rcsD", str(library), *(str(p) for p in objects)]
     subprocess.run(archive, check=True, env=env)
     commands["libdeskui"] = archive
-    sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
+    sources["files"] = ["autoplay_content.c", "../files/files.c", "../files/app.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
-    sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["autoplay_registry.c", "../control/main.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]

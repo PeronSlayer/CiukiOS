@@ -9,6 +9,33 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
     struct file_description *f=file_fd(p,fd);
     if (!f || f->node->kind!=PX_MEDIA) return -ENOTTY;
     struct storage *s=storage_get();
+    if (op==MEDIA_GET_VOLUME) {
+        struct ciuki_media_volume v;
+        if (bytes!=sizeof(v)) return -EINVAL;
+        int e=copy_from_user(&v,address,bytes); if (e) return e;
+        if (v.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        if (v.size!=sizeof(v) || v.drive<3 || v.drive>=26 || v.flags || v.generation ||
+            v.reserved[0] || v.reserved[1] || v.reserved[2]) return -EINVAL;
+        unsigned d=v.drive;
+        memset(&v,0,sizeof(v)); v.version=CIUKI_MEDIA_VERSION; v.size=sizeof(v); v.drive=d;
+        if (s && s->ready) {
+            fs_lock_take(&s->vfs.lock);
+            struct storage_volume *fat=&s->volumes[d];
+            if (fat->present && fat->removable && s->vfs.volumes[d] && !fat->part.parent->quarantined) {
+                v.flags=CIUKI_MEDIA_REMOVABLE; v.generation=s->vfs.generation[d];
+                if (fat->fat.volume_serial) ksnprintf(v.id,sizeof(v.id),"fat-%08x-%llu",fat->fat.volume_serial,(unsigned long long)fat->fat.sectors);
+                memcpy(v.label,fat->fat.volume_label,sizeof(fat->fat.volume_label));
+            }
+            struct fs_ro_volume *ro=s->vfs.ro_volumes[d];
+            if (ro && ro->ops==&iso9660_ops && ro->mounted && !ro->dev->quarantined && ro->ops->generation(ro)==ro->mount_generation) {
+                v.flags=CIUKI_MEDIA_OPTICAL; v.generation=s->vfs.generation[d];
+                ksnprintf(v.id,sizeof(v.id),"iso-%016llx",(unsigned long long)ro->volume_identity);
+                memcpy(v.label,ro->volume_label,sizeof(v.label));
+            }
+            fs_lock_drop(&s->vfs.lock);
+        }
+        return copy_to_user(address,&v,bytes);
+    }
     if (op==MEDIA_GET_STATE) {
         struct ciuki_media_state state;
         if (bytes!=sizeof(state) && bytes!=sizeof(struct ciuki_media_state_v1)) return -EINVAL;
