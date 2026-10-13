@@ -113,3 +113,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-46-terminal](f2-46-terminal.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner approval: native Terminal with system commands and Lua) |
 | [f2-47-registry](f2-47-registry.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner approval: text-stored key tree, Hardware root, Registry Editor) |
 | [f2-48-compositor-round-two](f2-48-compositor-round-two.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (58 ms composite on the T23; 64 KiB wallpaper reads) |
+| [f2-49-truetype-fonts](f2-49-truetype-fonts.md) | F2+/F5 prerequisite | gpt-6.1-sol / xhigh | running 2026-10-13 (rasteriser library, Liberation fonts, Fonts page) |
