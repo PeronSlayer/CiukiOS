@@ -341,6 +341,15 @@ static void test_input(void)
     event(CIUKI_INPUT_MOTION,0,INT_MIN,INT_MIN); assert(!d.mouse_x && !d.mouse_y);
     struct desk_box close=desk_close_box(&d.clients[a]); pointer(close.x+1,close.y+1);
     event(CIUKI_INPUT_BUTTON,1,1,0); assert(!d.clients[a].window && d.focus==b);
+    int wheel_x=d.mouse_x, wheel_y=d.mouse_y;
+    event(CIUKI_INPUT_WHEEL,0,-1,0);
+    assert(d.mouse_x==wheel_x && d.mouse_y==wheel_y);
+    flush_all();
+    struct ciuki_message wheel_message;
+    struct ciuki_input_event wheel_event={.type=CIUKI_INPUT_WHEEL,.value=-1};
+    struct desk_packet wheel_packet;
+    desk_event_message(&wheel_message,DESK_MOTION,&wheel_event);
+    assert(desk_parse(&wheel_message,0,NULL,&wheel_packet) && wheel_packet.event.type==CIUKI_INPUT_WHEEL && wheel_packet.event.value==-1);
     cleanup(); event(CIUKI_INPUT_KEY,0x1e,1,0); assert(!d.keys[0x1e]);
     event(CIUKI_INPUT_RESYNC,0,0,0); pointer(5,5); event(CIUKI_INPUT_BUTTON,1,1,0);
     puts("PASS focus/input: set-1 A/E0/Pause, TEXT, routing, RESYNC releases, drag/close, empty desktop");

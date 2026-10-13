@@ -1006,7 +1006,10 @@ value at 28, value2 at 32; u32 lost_count at 36. Types MUST be KEY=1
 (code=PS/2 set-1 base scan code, E0 extended codes OR 0x100, Pause=0x200;
 value 1=down, 0=up, 2=repeat), TEXT=2 (code=Unicode scalar), MOTION=3
 (value=dx,value2=dy, positive right/down), BUTTON=4 (code 1=left,2=right,
-3=middle; value down/up), RESYNC=5. Unused fields MUST be zero. Both F1
+3=middle; value down/up), RESYNC=5. **[F1-42]** WHEEL=6 adds signed
+detents in value (positive away from the user), without pointer motion;
+source=3 identifies USB. Existing source 1=native PS/2 and 2=firmware
+retain their meanings. Unused fields MUST be zero. Both F1
 backends MUST normalize to these values; missing physical transitions MUST
 remain an F1 qualification failure.
 

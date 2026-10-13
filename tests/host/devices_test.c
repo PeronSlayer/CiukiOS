@@ -19,6 +19,11 @@ static void irq_restore(uint32_t);
 #include <ciuki/fbdev.h>
 #include <ciuki/ac97.h>
 #include <ciuki/net.h>
+#include <ciuki/usb.h>
+static struct usb_host usb_context;
+static unsigned usb_hosts;
+unsigned usb_count(void) { return usb_hosts; }
+const struct usb_host *usb_get(unsigned i) { return i < usb_hosts ? &usb_context : NULL; }
 #include <ciuki/init.h>
 static unsigned writes, copies, ranges, cpu_calls;
 static uint32_t flags = 0x200;
@@ -131,7 +136,7 @@ int main(void)
     devices_snapshot(&snapshot); nic = device(0x10018);
     assert(nic->state == CIUKI_DEVICE_READY && !strcmp(nic->driver, "rtl8139") && nic->generation == 31);
     assert(nic->resources[0].end == 0xc100 && !nic->resources[0].flags);
-    assert(snapshot.driver_count == 15 && snapshot.drivers[13].bound_devices == 1);
+    assert(snapshot.driver_count == 16 && snapshot.drivers[13].bound_devices == 1);
     for (unsigned i = 0; i < snapshot.count; i++) assert(strcmp(snapshot.devices[i].name, "net-31"));
     nic_context.quarantined = true; nic_context.ready = nic_context.running = false; nic_context.reason = "tx_timeout";
     devices_snapshot(&snapshot); nic = device(0x10018);
@@ -142,6 +147,21 @@ int main(void)
     nic_context.pci.fn = 1;
     devices_snapshot(&snapshot); assert(!device(0x10018)->driver[0]);
     nic_count = 0;
+    usb_hosts = 1;
+    usb_context.pci = pci[0]; usb_context.ready = true; usb_context.generation = 41;
+    usb_context.reason = "ready_polling"; strcpy(usb_context.owner, "usb-41");
+    usb_context.device_count = 1;
+    usb_context.devices[0] = (struct usb_device){.address = 2, .vendor = 0x1234, .product = 1,
+        .configured = true, .present = true, .generation = 42, .reason = "hid_ready"};
+    usb_context.devices[0].hid[0] = (struct usb_hid){.endpoint = 1, .protocol = 1};
+    pci[0].class_code = 0x0c; pci[0].subclass = 3;
+    res[nres++] = (struct resource){RES_PORT, 0xc000, 0xc020, "usb-41", 41, RS_ACTIVE, false};
+    devices_snapshot(&snapshot);
+    assert(!strcmp(device(0x10018)->driver, "usb-host") && device(0x10018)->state == CIUKI_DEVICE_READY);
+    assert(device(0x60000)->bus_type == CIUKI_BUS_USB && device(0x60000)->vendor == 0x1234 && device(0x60000)->generation == 42);
+    usb_context.devices[0].quarantined = true; usb_context.devices[0].reason = "hid_stall";
+    devices_snapshot(&snapshot); assert(device(0x60000)->state == CIUKI_DEVICE_QUARANTINED && !strcmp(device(0x60000)->reason, "hid_stall"));
+    usb_hosts = 0;
     extended = 1; devices_snapshot(&snapshot); assert(!strcmp(snapshot.cpu_brand, "Synthetic Pentium III CPU"));
     /* Count cap and zeroed tail: more unique owners/PCI than device slots. */
     static char owners[64][16]; nres = 64; npci = 32;

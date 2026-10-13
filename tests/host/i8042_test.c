@@ -1528,6 +1528,46 @@ static void test_firmware_mapping(void)
     printf("firmware queue bridge: PASS (set-1/E0/Pause/text/motion/buttons, generation/source/sequence, loss, quarantine)\n");
 }
 
+static void test_usb_shared_queue(void)
+{
+    reset_native();
+    /* A failed PS/2 controller must not prevent independent USB input. */
+    native.stats.quarantined = true;
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 1, 71, 1);
+    struct input_event e;
+    CHECK(input_read(&e) && e.type == INPUT_KEY && e.value == 1 && e.source == INPUT_USB && e.generation == 71);
+    CHECK(input_read(&e) && e.type == INPUT_TEXT && e.code == 'a');
+    key_transition(&native, INPUT_KEY_A, true, 2);
+    CHECK(!input_read(&e));
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 0, 71, 3);
+    CHECK(!input_read(&e) && native.queue.stats.keys_down == 1);
+    key_transition(&native, INPUT_KEY_A, false, 4);
+    CHECK(input_read(&e) && e.type == INPUT_KEY && e.value == 0);
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 1, 72, 5);
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 1, 73, 6);
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 0, 72, 7);
+    CHECK(native.queue.stats.keys_down == 1);
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 2, 73, 8);
+    CHECK(native.queue.stats.repeats == 1);
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 0, 73, 9);
+    CHECK(!native.queue.stats.keys_down);
+    while (input_read(&e)) ;
+    input_usb_event(INPUT_BTN, INPUT_LEFT, 1, 73, 10);
+    mouse_byte(&native, 9, 10); mouse_byte(&native, 0, 10); mouse_byte(&native, 0, 10);
+    CHECK(input_read(&e) && e.type == INPUT_BTN && e.value == 1);
+    input_usb_event(INPUT_BTN, INPUT_LEFT, 0, 73, 11);
+    CHECK(!input_read(&e) && native.queue.stats.buttons == 1);
+    mouse_byte(&native, 8, 12); mouse_byte(&native, 0, 12); mouse_byte(&native, 0, 12);
+    CHECK(input_read(&e) && e.type == INPUT_BTN && !e.value);
+    input_usb_event(INPUT_REL, INPUT_WHEEL, -2, 73, 13);
+    CHECK(input_read(&e) && e.type == INPUT_REL && e.code == INPUT_WHEEL && e.value == -2 && e.source == INPUT_USB);
+    g_boot.input_policy = CBI_INPUT_FIRMWARE;
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 1, 73, 14);
+    CHECK(!input_read(&e) && !native.queue.stats.keys_down);
+    CHECK(!hw.reads && !hw.writes && !pic_changes);
+    printf("USB shared input: PASS (PS/2 absence, merged keys/buttons, two keyboards, repeat, wheel, firmware guard)\n");
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2) {
@@ -1561,6 +1601,7 @@ int main(int argc, char **argv)
     test_firmware_fault_probe(false, false, true);
     test_fault_probe_refusals();
     test_firmware_mapping();
+    test_usb_shared_queue();
     i8042_fault_end();
     printf("i8042: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;

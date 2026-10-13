@@ -413,7 +413,7 @@ int cp_snapshot_valid(const struct ciuki_devices_info *s)
         !memchr(s->boot_options, 0, sizeof(s->boot_options))) return 0;
     for (unsigned i = 0; i < s->count; i++) {
         const struct ciuki_device_record *d = &s->devices[i];
-        if (d->class_id >= CIUKI_DEVICE_CLASSES || d->state > CIUKI_DEVICE_FIRMWARE_FIRST || d->bus_type > CIUKI_BUS_LOADER ||
+        if (d->class_id >= CIUKI_DEVICE_CLASSES || d->state > CIUKI_DEVICE_FIRMWARE_FIRST || d->bus_type > CIUKI_BUS_USB ||
             d->resource_count > CIUKI_DEVICE_RESOURCES || !memchr(d->name, 0, sizeof(d->name)) ||
             !memchr(d->driver, 0, sizeof(d->driver)) || !memchr(d->reason, 0, sizeof(d->reason))) return 0;
         for (unsigned j = 0; j < d->resource_count; j++) {
@@ -489,6 +489,8 @@ static const char *product(struct cp_app *a, const struct ciuki_device_record *d
         if (d->pci_class == 0x0c && d->subclass == 3) return "USB controller";
         return cp_device_class(d->class_id);
     }
+    if (d->bus_type == CIUKI_BUS_USB && a->host.usb_hwid_name &&
+        !a->host.usb_hwid_name(a->host.ctx, d->vendor, d->device, resolved, size) && resolved[0]) return resolved;
     return d->name;
 }
 void cp_tree_build(struct cp_app *a)
@@ -608,7 +610,7 @@ static void properties(struct cp_app *a, int resources)
             "PCI %02X:%02X.%u   ID %04X:%04X\nSubsystem %04X:%04X   Revision %02X\nClass %02X:%02X:%02X\n",
             d->bus, d->slot, d->function, d->vendor, d->device, d->sub_vendor, d->sub_device, d->revision, d->pci_class, d->subclass, d->prog_if);
         else at += (size_t)snprintf(body + at, sizeof(body) - at, "Bus: %s   Channel/unit: %u/%u\n",
-            d->bus_type == CIUKI_BUS_LOADER ? "Loader" : "Legacy", d->slot, d->function);
+            d->bus_type == CIUKI_BUS_LOADER ? "Loader" : d->bus_type == CIUKI_BUS_USB ? "USB" : "Legacy", d->slot, d->function);
         snprintf(body + at, sizeof(body) - at, "Activation sequence: %u   Generation: %u", d->activation_seq, d->generation);
     } else {
         char resolved[65]; const char *name = product(a, d, resolved, sizeof(resolved));

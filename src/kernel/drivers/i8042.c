@@ -80,7 +80,8 @@ struct input_queue {
     struct input_stats stats;
     uint64_t sequence;
     unsigned head, tail;
-    bool down[513], extended, breaking;
+    bool down[513], native_down[513], extended, breaking;
+    uint8_t usb_keys[513], usb_buttons[3], native_buttons;
     uint8_t pause_pos, mouse_pos, packet[3];
 };
 struct controller {
@@ -92,6 +93,8 @@ struct controller {
     int handle[4];
     gen_t claim_gen[4];
     bool initialized, accepting, reply_any, reply_aux, reply_ready;
+    uint16_t event_source;
+    gen_t event_generation;
     uint8_t reply;
     int reply_error;
     struct i8042_init_record init_records[I8042_INIT_STEPS];
@@ -159,8 +162,8 @@ static void queue_event(struct controller *c, uint16_t type, uint16_t code, int3
 {
     struct input_queue *q = &c->queue;
     q->ring[q->tail] = (struct input_event){ .type = type, .code = code, .value = value,
-        .tick = tick, .sequence = ++q->sequence, .generation = c->stats.generation,
-        .source = c->stats.firmware ? INPUT_FIRMWARE : INPUT_NATIVE,
+        .tick = tick, .sequence = ++q->sequence, .generation = c->event_generation ? c->event_generation : c->stats.generation,
+        .source = c->event_source ? c->event_source : c->stats.firmware ? INPUT_FIRMWARE : INPUT_NATIVE,
         .flags = type == INPUT_RESYNC ? INPUT_F_RESYNC : 0, .lost_count = lost };
     q->tail = (q->tail + 1) % INPUT_CAPACITY;
     q->stats.pending++;
@@ -180,7 +183,7 @@ static void enqueue(struct controller *c, uint16_t type, uint16_t code, int32_t 
     queue_event(c, type, code, value, tick, 0);
 }
 
-static void key_transition(struct controller *c, uint16_t code, bool down, uint64_t tick)
+static void key_emit(struct controller *c, uint16_t code, bool down, uint64_t tick)
 {
     struct input_queue *q = &c->queue;
     int32_t value = down;
@@ -198,6 +201,45 @@ static void key_transition(struct controller *c, uint16_t code, bool down, uint6
         char ch = input_unshifted(code);
         if (ch) enqueue(c, INPUT_TEXT, (uint8_t)ch, 0, tick);
     }
+}
+
+static void key_transition(struct controller *c, uint16_t code, bool down, uint64_t tick)
+{
+    bool before = c->queue.native_down[code];
+    c->queue.native_down[code] = down;
+    if (!down && c->queue.usb_keys[code]) return;
+    if (down && !before && c->queue.usb_keys[code]) return;
+    key_emit(c, code, down, tick);
+}
+
+void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick)
+{
+    if (!generation || g_boot.input_policy == CBI_INPUT_FIRMWARE ||
+        (g_boot.flags & CBI_F_INPUT_FORCED)) return;
+    uint32_t f = irq_save();
+    struct input_queue *q = &native.queue;
+    native.event_source = INPUT_USB; native.event_generation = generation;
+    if (type == INPUT_KEY && code < ARRAY_SIZE(q->down) && code) {
+        uint8_t *refs = &q->usb_keys[code];
+        if (value == 1 && *refs < 255) {
+            bool held = q->down[code]; (*refs)++;
+            if (!held) key_emit(&native, code, true, tick);
+        } else if (value == 0 && *refs) {
+            (*refs)--;
+            if (!*refs && !q->native_down[code]) key_emit(&native, code, false, tick);
+        } else if (value == 2 && *refs) key_emit(&native, code, true, tick);
+    } else if (type == INPUT_BTN && code < 3 && (value == 0 || value == 1)) {
+        uint8_t *refs = &q->usb_buttons[code];
+        unsigned before = q->stats.buttons;
+        if (value && *refs < 255) (*refs)++; else if (!value && *refs) (*refs)--;
+        unsigned mask = 1u << code;
+        if (*refs || (q->native_buttons & mask)) q->stats.buttons |= mask;
+        else q->stats.buttons &= ~mask;
+        if ((before ^ q->stats.buttons) & mask) enqueue(&native, INPUT_BTN, code, !!(q->stats.buttons & mask), tick);
+    } else if (type == INPUT_REL && code <= INPUT_WHEEL && value)
+        enqueue(&native, INPUT_REL, code, value, tick);
+    native.event_source = 0; native.event_generation = 0;
+    irq_restore(f);
 }
 
 static void keyboard_byte(struct controller *c, uint8_t b, uint64_t tick)
@@ -250,7 +292,10 @@ static void mouse_byte(struct controller *c, uint8_t b, uint64_t tick)
      * zero (Linux standard-packet convention), not an artificial -256. */
     int x = q->packet[1] ? (int)q->packet[1] - ((h & 0x10) ? 256 : 0) : 0;
     int y = q->packet[2] ? (int)q->packet[2] - ((h & 0x20) ? 256 : 0) : 0;
-    unsigned buttons = h & 7, changed = buttons ^ q->stats.buttons;
+    q->native_buttons = h & 7;
+    unsigned buttons = q->native_buttons;
+    for (unsigned i = 0; i < 3; i++) if (q->usb_buttons[i]) buttons |= 1u << i;
+    unsigned changed = buttons ^ q->stats.buttons;
     q->stats.buttons = buttons;        /* RESYNC snapshots this complete packet */
     if (x) enqueue(c, INPUT_REL, INPUT_X, x, tick);
     if (y) enqueue(c, INPUT_REL, INPUT_Y, -y, tick);
@@ -1164,6 +1209,7 @@ void input_firmware_event(const struct fwinput_event *e, gen_t generation)
     case FWINPUT_RESYNC:
         q->stats.keys_down = 0;
         memset(q->down, 0, sizeof(q->down));
+        memset(q->native_down, 0, sizeof(q->native_down));
         queue_resync(&native, e->tick);
         break;
     default: q->stats.errors++; break;

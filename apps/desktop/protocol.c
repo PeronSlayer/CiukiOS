@@ -59,7 +59,7 @@ static int valid_event(unsigned op, const struct ciuki_input_event *e)
         return 0;
     }
     if (op == DESK_MOTION)
-        return e->type == CIUKI_INPUT_MOTION && !e->code && !e->lost_count;
+        return (e->type == CIUKI_INPUT_MOTION || e->type == CIUKI_INPUT_WHEEL) && !e->code && !e->lost_count;
     return op == DESK_BUTTON && e->type == CIUKI_INPUT_BUTTON &&
            e->code >= 1 && e->code <= 3 && e->value >= 0 &&
            e->value <= 1 && !e->value2 && !e->lost_count;

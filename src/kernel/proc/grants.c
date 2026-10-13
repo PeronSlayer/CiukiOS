@@ -7,6 +7,7 @@ extern uint32_t file_description_count(void) __attribute__((weak));
 #include <ciuki/cpu.h>
 #include <ciuki/desktop.h>
 #include <ciuki/i8042.h>
+#include <ciuki/usb.h>
 #include <ciuki/registry.h>
 #include <ciuki/signal.h>
 
@@ -210,8 +211,9 @@ void desktop_input_event(const struct input_event *in, uint32_t lost, uint32_t b
     case INPUT_KEY: out->type = CIUKI_INPUT_KEY; out->code = in->code; out->value = in->value; break;
     case INPUT_TEXT: out->type = CIUKI_INPUT_TEXT; out->code = in->code; break;
     case INPUT_REL:
-        out->type = CIUKI_INPUT_MOTION;
-        if (in->code == INPUT_X) out->value = in->value;
+        out->type = in->code == INPUT_WHEEL ? CIUKI_INPUT_WHEEL : CIUKI_INPUT_MOTION;
+        if (in->code == INPUT_WHEEL) out->value = in->value;
+        else if (in->code == INPUT_X) out->value = in->value;
         else out->value2 = in->value;
         break;
     case INPUT_BTN: out->type = CIUKI_INPUT_BUTTON; out->code = in->code + 1; out->value = in->value; break;
@@ -223,6 +225,7 @@ void desktop_input_event(const struct input_event *in, uint32_t lost, uint32_t b
 static int input_live(struct i8042_stats *state)
 {
     i8042_snapshot(state);
+    if (usb_input_ready()) return 0;
     if (state->quarantined) return -EIO;
     return state->active ? 0 : -ENODEV;
 }

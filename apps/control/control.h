@@ -34,6 +34,7 @@ struct cp_host {
     uint64_t (*now)(void *);                                          /* UTC seconds */
     int (*devices)(void *, struct ciuki_devices_info *);
     int (*hwid_name)(void *, unsigned vendor, unsigned device, char *out, size_t size);
+    int (*usb_hwid_name)(void *, unsigned vendor, unsigned device, char *out, size_t size);
     int (*boot_load)(void *, char *, size_t, size_t *);
     int (*boot_save)(void *, const char *, size_t);
     int (*load_sounds)(void *, char *, size_t, size_t *);

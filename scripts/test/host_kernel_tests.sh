@@ -414,6 +414,9 @@ python3 -m unittest discover -s "$root/tests/host" -p test_app_gate.py
 # F4: production mixer, stream syscalls, persistent settings and mock AC97.
 bash "$root/tests/host/audio/run.sh"
 
+# F1 USB: production UHCI/OHCI register/DMA models.
+bash "$root/tests/host/usb/run.sh"
+
 # F6: production ownership/queues and three register-level NIC models.
 bash "$root/tests/host/net/run.sh"
 

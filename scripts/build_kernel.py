@@ -209,7 +209,7 @@ def main() -> int:
     for c in sorted(list((SRC / "core").glob("*.c")) + list((SRC / "lib").glob("*.c")) +
                     list((SRC / "arch").glob("*.c")) + list((SRC / "probes").glob("*.c")) +
                     list((SRC / "drivers").glob("*.c")) + list((SRC / "fs").glob("*.c")) +
-                    list((SRC / "audio").glob("*.c")) + list((SRC / "proc").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
+                    list((SRC / "usb").glob("*.c")) + list((SRC / "audio").glob("*.c")) + list((SRC / "proc").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
         run(["clang", *CFLAGS, *frame_flags(c), f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
              f'-DCIUKI_VERSION="{version}"',

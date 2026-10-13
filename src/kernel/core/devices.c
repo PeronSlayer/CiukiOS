@@ -10,6 +10,7 @@
 #include <ciuki/fbdev.h>
 #include <ciuki/ac97.h>
 #include <ciuki/net.h>
+#include <ciuki/usb.h>
 #include <ciuki/process.h>
 #include <ciuki/uaddr.h>
 #ifndef CIUKI_BUILD_ID
@@ -148,6 +149,43 @@ static void network_binding(struct ciuki_device_record *d, const struct pci_func
     }
     irq_restore(flags);
 }
+static void usb_binding(struct ciuki_device_record *d, const struct pci_func *p)
+{
+    for (unsigned i = 0; i < usb_count(); i++) {
+        const struct usb_host *h = usb_get(i);
+        if (!h || h->pci.bus != p->bus || h->pci.dev != p->dev || h->pci.fn != p->fn ||
+            h->pci.vendor != p->vendor || h->pci.device != p->device) continue;
+        string(d->driver, sizeof(d->driver), "usb-host");
+        d->state = h->quarantined ? CIUKI_DEVICE_QUARANTINED :
+            h->ready || (h->touched && p->prog_if == 0x20) ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT;
+        string(d->reason, sizeof(d->reason), h->reason);
+        if (h->owner[0]) owner_resources(d, h->owner);
+        d->generation = h->generation;
+    }
+}
+static void usb_devices(struct ciuki_devices_info *out)
+{
+    for (unsigned i = 0; i < usb_count(); i++) {
+        const struct usb_host *h = usb_get(i); if (!h) continue;
+        for (unsigned k = 0; k < h->device_count; k++) {
+            const struct usb_device *u = &h->devices[k];
+            unsigned class_id = CIUKI_DEVICE_SYSTEM;
+            const char *name = u->class_code == 9 ? "USB hub" : "USB device";
+            for (unsigned j = 0; j < USB_HID_MAX; j++) if (u->hid[j].endpoint) {
+                if (u->hid[j].protocol == 1) { class_id = CIUKI_DEVICE_KEYBOARD; name = "USB HID keyboard"; break; }
+                class_id = CIUKI_DEVICE_MOUSE; name = "USB HID mouse";
+            }
+            struct ciuki_device_record *d = append(out, 0x60000 + i * USB_DEVICE_MAX + k,
+                class_id, CIUKI_BUS_USB, name, "usb-host",
+                u->quarantined || h->quarantined ? CIUKI_DEVICE_QUARANTINED :
+                u->present && u->configured ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT, u->reason);
+            if (!d) continue;
+            d->bus = i; d->slot = u->address; d->function = u->port;
+            d->subclass = u->parent; d->prog_if = u->low_speed;
+            d->vendor = u->vendor; d->device = u->product; d->generation = u->generation;
+        }
+    }
+}
 static void drivers(struct ciuki_devices_info *out)
 {
     static const struct { const char *name, *policy; } builtins[] = {
@@ -163,6 +201,7 @@ static void drivers(struct ciuki_devices_info *out)
         {"e100", "Retained PCI binding; safe mode disables NIC activation"},
         {"rtl8139", "Retained PCI binding; safe mode disables NIC activation"},
         {"ne2000", "Retained PCI binding; safe mode disables NIC activation"},
+        {"usb-host", "UHCI/OHCI polling HID; firmware-first disables takeover"},
     };
     for (unsigned i = 0; i < ARRAY_SIZE(builtins); i++) {
         struct ciuki_driver_record *r = &out->drivers[out->driver_count++];
@@ -225,6 +264,7 @@ void devices_snapshot(struct ciuki_devices_info *out)
         }
         if (p->irq_pin && p->irq_line < 16) resource(d, RES_IRQ, p->irq_line, p->irq_line + 1, 0);
         if (p->class_code == 2) network_binding(d, p);
+        if (p->class_code == 0x0c && p->subclass == 3) usb_binding(d, p);
         if (bound) { owner_resources(d, "ac97"); d->generation = ac97.generation ? ac97.generation : d->generation; }
     }
     /* Registry owners become legacy logical devices. Special owners below
@@ -233,7 +273,7 @@ void devices_snapshot(struct ciuki_devices_info *out)
         const struct resource *r = &inventory.resources[k];
         if (r->state == RS_RELEASED || equal(r->owner, "input") || equal(r->owner, "i8042") ||
             equal(r->owner, "firmware-input") || equal(r->owner, "boot-framebuffer") || equal(r->owner, "fbdev") ||
-            !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma")) continue;
+            !strncmp(r->owner, "usb-", 4) || !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma")) continue;
         bool seen = false;
         for (unsigned j = 0; j < k; j++) if (inventory.resources[j].state != RS_RELEASED && equal(inventory.resources[j].owner, r->owner)) seen = true;
         if (seen) continue;
@@ -287,6 +327,7 @@ void devices_snapshot(struct ciuki_devices_info *out)
     for (unsigned k = 0; k < out->count; k++) if (out->devices[k].class_id == CIUKI_DEVICE_SOUND) sound = true;
     if (!sound) append(out, 0x50000, CIUKI_DEVICE_SOUND, CIUKI_BUS_LEGACY, "Audio output", "ac97",
                        CIUKI_DEVICE_ABSENT, audio.reason ? audio.reason : "No supported audio device.");
+    usb_devices(out);
     drivers(out);
 }
 int devices_query(uint32_t address, uint32_t bytes)

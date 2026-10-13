@@ -143,6 +143,7 @@ int main(int argc, char **argv)
                 if (send_packet(channel, &m)) goto done;
             } else if (packet.opcode == DESK_FOCUS || packet.opcode == DESK_KEY ||
                        packet.opcode == DESK_MOTION || packet.opcode == DESK_BUTTON) {
+                if (packet.opcode == DESK_MOTION && packet.event.type == CIUKI_INPUT_WHEEL) continue;
                 command(&c, id, generation);
                 unsigned op = packet.opcode == DESK_FOCUS ? CIUKI_DOSVM_FOCUS : CIUKI_DOSVM_INPUT;
                 if (op == CIUKI_DOSVM_FOCUS) c.focused = focused = packet.focused ? 1 : 0;

@@ -3,7 +3,7 @@
 `pci-ids.json` and `usb-ids.json` contain only bus ID pairs and plain ASCII
 device labels. They contain no vendor text blocks, INF filenames or driver
 payloads. Names are UI labels only; matching an ID does not establish driver
-support or authorize hardware access. The Device Manager reads the PCI file
+support or authorize hardware access. The Device Manager reads each bus database
 only on its first name lookup. Both files are installed at `/System/hwids/`.
 
 ## Generation provenance

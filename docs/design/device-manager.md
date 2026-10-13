@@ -71,3 +71,13 @@ merge: inventory continues to read retained metadata only. NIC bindings use
 main's retained net_count/net_get contexts under an IRQ lock; exact BDF and IDs
 must match, and resources come from their owner leases. Unattempted adapters
 keep firmware-first status; failed attempts expose their retained reason.
+
+F1-42 USB extension (2026-10-13; [contract](usb-contract.md)): bus value 3
+uses vendor/device as USB VID/PID, bus as host index, slot as address,
+function as downstream port, subclass as parent record index+1 (zero for
+root), and prog_if as low-speed flag. Stable IDs use 0x60000 + host*16 +
+record slot. Record shape/version and the 16-driver limit are unchanged. One
+aggregate usb-host entry covers controllers and HID devices. Both bus ID
+databases are loaded on first lookup; no lookup causes USB enumeration or
+controller access. Controller binding still requires exact retained PCI BDF
+and IDs. Failed/disconnected devices keep their identity and reason.
