@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Integer row painter in compositor.c, also linked into libdeskui. */
+extern void desk_shadow_rows(struct desk_paint *, int, int, int, int, int, uint32_t);
+
 int du_contains(struct du_rect r, int x, int y)
 {
     return r.w > 0 && r.h > 0 && x >= r.x && y >= r.y &&
@@ -27,12 +30,27 @@ static struct du_rect visible(const struct du_canvas *c, struct du_rect r)
     return du_intersection(du_intersection(r, c->clip), (struct du_rect){0, 0, c->width, c->height});
 }
 
+static uint32_t mix(uint32_t a, uint32_t b, unsigned alpha)
+{
+    if (alpha==255) return a&0xffffffu;
+    if (!alpha) return b&0xffffffu;
+    uint32_t rb=(a&0xff00ffu)*alpha+(b&0xff00ffu)*(255-alpha)+0x007f007fu;
+    uint32_t g=((a>>8)&255u)*alpha+((b>>8)&255u)*(255-alpha)+127u;
+    rb=(rb+0x00010001u+((rb>>8)&0xff00ffu))>>8;
+    g=(g+1+(g>>8))>>8;
+    return (rb&0xff00ffu)|(g<<8);
+}
+
 void du_fill(struct du_canvas *c, struct du_rect r, uint32_t colour)
 {
     r = visible(c, r);
-    for (int y = r.y; y < r.y + r.h; y++) {
-        uint32_t *row = c->pixels + (size_t)y * (size_t)c->width + (size_t)r.x;
-        for (int x = 0; x < r.w; x++) row[x] = colour;
+    if (r.w<=0 || r.h<=0) return;
+    int stride=c->width;
+    uint32_t *first=c->pixels+(size_t)r.y*(size_t)stride+(size_t)r.x;
+    for (int y=0; y<r.h; y++) {
+        uint32_t *row=first+(size_t)y*stride;
+        if (y && r.w>=16) memcpy(row,first,(size_t)r.w*sizeof(*row));
+        else for (int x=0; x<r.w; x++) row[x]=colour;
     }
 }
 
@@ -87,7 +105,7 @@ void du_raised(struct du_canvas *c, struct du_rect r, int pressed, int hot)
 { struct desk_paint p = painter(c); desk_paint_raised(&p, r.x, r.y, r.w, r.h, pressed, hot); }
 
 void du_shadow(struct du_canvas *c, struct du_rect r, int size)
-{ struct desk_paint p = painter(c); desk_paint_shadow(&p, r.x, r.y, r.w, r.h, size, desk_theme->drop_shadow); }
+{ struct desk_paint p = painter(c); desk_shadow_rows(&p, r.x, r.y, r.w, r.h, size, desk_theme->drop_shadow); }
 
 void du_well(struct du_canvas *c, struct du_rect r, uint32_t colour)
 {
@@ -133,8 +151,13 @@ void du_dotted(struct du_canvas *c, struct du_rect r)
 void du_checker(struct du_canvas *c, struct du_rect r, uint32_t a, uint32_t b)
 {
     struct du_rect v = visible(c, r);
-    for (int y = v.y; y < v.y + v.h; y++) for (int x = v.x; x < v.x + v.w; x++)
-        c->pixels[(size_t)y * (size_t)c->width + (size_t)x] = ((x + y) & 1) ? a : b;
+    if (v.w <= 0 || v.h <= 0) return;
+    uint32_t *first = c->pixels + (size_t)v.y * (size_t)c->width + (size_t)v.x;
+    int stride=c->width;
+    for (int y = 0; y < v.h; y++) {
+        uint32_t *row=first+(size_t)y*stride;
+        for (int x = 0; x < v.w; x++) row[x] = ((v.x + x + v.y + y) & 1) ? a : b;
+    }
 }
 
 void du_triangle(struct du_canvas *c, int cx, int cy, int dir, int size, uint32_t colour)
@@ -177,7 +200,34 @@ static void text_font_n(struct du_canvas *c, int font, int x, int y, const char 
 {
     if (x > c->clip.x + c->clip.w || y > c->clip.y + c->clip.h) return;
     struct desk_paint p = painter(c);
-    desk_paint_text_n(&p, font, x, y + desk_font_cap(font), s, chars, colour);
+    const struct desk_font *f=desk_font(font);
+    int baseline=y+desk_font_cap(font), aa=desk_theme->text_aa;
+    for (size_t n=0; *s && n<chars; n++) {
+        size_t used; unsigned ch=desk_utf8_decode(s,&used); s+=used;
+        /* Same font coverage as theme.c: ASCII, Latin-1, bullet, ellipsis,
+         * otherwise '?'. Font rasters and pen advances stay unchanged. */
+        int index=ch>=0x20 && ch<0x7f ? (int)ch-0x20 : ch>=0xa0 && ch<=0xff ? 95+(int)ch-0xa0 :
+                  ch==0x2022 ? 191 : ch==0x2026 ? 192 : '?'-0x20;
+        const struct desk_glyph *g=&f->glyphs[index];
+        int gx=x+g->left, gy=baseline+g->top;
+        struct du_rect v=visible(c,(struct du_rect){gx,gy,g->w,g->h});
+        if (v.w>0 && v.h>0 && x<p.cx+p.cw) {
+            const uint8_t *first_src=f->alpha+g->offset+(size_t)(v.y-gy)*g->w+v.x-gx;
+            uint32_t *first_dst=c->pixels+(size_t)v.y*c->width+v.x;
+            int stride=c->width;
+            for (int r=0; r<v.h; r++) {
+                const uint8_t *src=first_src+(size_t)r*g->w;
+                uint32_t *dst=first_dst+(size_t)r*stride;
+                for (int col=0; col<v.w; col++) {
+                    unsigned a=src[col];
+                    if (!aa) a=a>=104 ? 255 : 0;
+                    if (a) dst[col]=mix(colour,dst[col],a);
+                }
+            }
+        }
+        x+=g->advance;
+        if (x>p.cx+p.cw+64) break;
+    }
 }
 
 void du_text_font(struct du_canvas *c, int font, int x, int y, const char *s, uint32_t colour)
@@ -234,14 +284,19 @@ void du_label(struct du_canvas *c, int x, int y, const char *s, uint32_t colour,
     }
 }
 
-static uint32_t mix(uint32_t a, uint32_t b, unsigned alpha) { return desk_mix(a, b, alpha); }
-
 void du_icon_blit(struct du_canvas *c, int x, int y, const uint32_t *argb, int size, enum du_icon_mode mode)
 {
     if (!argb || size <= 0 || size > 64) return;
     struct du_rect v = visible(c, (struct du_rect){x, y, size, size});
-    for (int py = v.y; py < v.y + v.h; py++) for (int px = v.x; px < v.x + v.w; px++) {
-        uint32_t s = argb[(py - y) * size + (px - x)];
+    if (v.w <= 0 || v.h <= 0) return;
+    uint32_t *first_dst = c->pixels + (size_t)v.y * (size_t)c->width + (size_t)v.x;
+    const uint32_t *first_src = argb + (v.y - y) * size + v.x - x;
+    int stride=c->width;
+    for (int py = 0; py < v.h; py++) {
+      uint32_t *dst=first_dst+(size_t)py*stride;
+      const uint32_t *src=first_src+(size_t)py*size;
+      for (int px = 0; px < v.w; px++) {
+        uint32_t s = src[px];
         unsigned alpha = s >> 24;
         if (!alpha) continue;
         uint32_t rgb = s & 0xffffffu;
@@ -251,9 +306,10 @@ void du_icon_blit(struct du_canvas *c, int x, int y, const uint32_t *argb, int s
             rgb = (l << 16) | (l << 8) | l;
             alpha = alpha * 3 / 4;
         } else if (mode == DU_ICON_GHOST) alpha /= 2;
-        uint32_t *p = c->pixels + (size_t)py * (size_t)c->width + (size_t)px;
-        *p = mix(rgb, *p, alpha);
+        uint32_t *p = dst + px;
+        *p = alpha == 255 ? rgb : mix(rgb, *p, alpha);
         if (mode == DU_ICON_SELECTED) *p = mix(DU_SELECT, *p, 128);
+      }
     }
 }
 
