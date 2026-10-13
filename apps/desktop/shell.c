@@ -1377,6 +1377,7 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
 {
     switch (kind) {
     case DESK_INTERNAL_ABOUT: *w = 440; *h = 300; break;
+    case DESK_INTERNAL_AUTOPLAY: *w = 430; *h = 252; break;
     case DESK_INTERNAL_RUN: *w = 372; *h = 128; break;
     case DESK_INTERNAL_SHUTDOWN: *w = 352; *h = 132; break;
     case DESK_INTERNAL_POWER: {
@@ -1431,7 +1432,7 @@ int desk_internal_open(struct desktop *d, int kind)
     c->window_id = d->next_window_id;
     c->info.width = w; c->info.height = h;
     snprintf(c->title, sizeof(c->title), "%s", kind == DESK_INTERNAL_ABOUT ? "About CiukiOS" : kind == DESK_INTERNAL_RUN ? "Run" :
-             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : d->sh.message_title);
+             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : d->sh.message_title);
     c->frame = desk_frame(w, h, 0, DESK_BAR);
     if (kind == DESK_INTERNAL_ABOUT) { d->about = i; d->sh.about_tab = 0; d->sh.want_reload |= 2; }
     if (kind == DESK_INTERNAL_RUN) { d->sh.run_length = 0; d->sh.run_text[0] = 0; }
@@ -1449,6 +1450,7 @@ int desk_internal_open(struct desktop *d, int kind)
 void desk_internal_closed(struct desktop *d, int index)
 {
     if (d->about == index) d->about = -1;
+    if (d->clients[index].internal == DESK_INTERNAL_AUTOPLAY) d->sh.autoplay.open=0;
 }
 void desk_shell_message(struct desktop *d, const char *title, const char *text, int error)
 {
@@ -1617,6 +1619,28 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
     struct du_canvas c = canvas(d, b);
     du_fill(&c, R(content), SH_FACE);
     switch (cl->internal) {
+    case DESK_INTERNAL_AUTOPLAY: {
+        struct desk_autoplay *a=&d->sh.autoplay;
+        char title[96];
+        snprintf(title,sizeof(title),"%.32s (%c:)",a->content.inf.label[0] ? a->content.inf.label :
+                 a->active.label[0] ? a->active.label : "Removable media",'A'+a->active.drive);
+        du_icon_blit(&c,content.x+12,content.y+12,desk_shell_icon(a->active.flags & CIUKI_MEDIA_OPTICAL ? "media-optical" : "drive-removable-media",32),32,DU_ICON_NORMAL);
+        bold(&c,content.x+56,content.y+12,title,SH_INK);
+        du_text(&c,content.x+56,content.y+32,"What do you want CiukiOS to do?",SH_INK);
+        for (int k=0;k<AP_CHOICES;k++) {
+            if ((k==AP_MUSIC && !a->content.music[0]) || (k==AP_PICTURES && !a->content.picture[0]) || (k==AP_RUN && !a->content.inf.open[0])) continue;
+            struct du_rect row={content.x+12,content.y+58+k*24,content.w-24,23};
+            if (a->selected==k) du_fill(&c,row,SH_HOT);
+            char label[100];
+            du_text(&c,row.x+8,row.y+4,desk_autoplay_label(d,k,label,sizeof(label)),desk_autoplay_enabled(d,k) ? (a->selected==k ? SH_HOT_INK : SH_INK) : DU_GRAY);
+        }
+        du_well(&c,(struct du_rect){content.x+12,content.y+184,13,13},SH_WINDOW);
+        if (a->always) check_mark(&c,content.x+15,content.y+187,SH_INK);
+        du_text(&c,content.x+34,content.y+184,"Always do this for this device",a->active.id[0] ? SH_INK : DU_GRAY);
+        push_button(&c,button_box(content,0,2),"OK",1);
+        push_button(&c,button_box(content,1,2),"Cancel",0);
+        break;
+    }
     case DESK_INTERNAL_ABOUT:
         about_page(d, &c, content);
         push_button(&c, button_box(content, 0, 1), "OK", 1);
@@ -1690,6 +1714,15 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
     struct desk_client *cl = &d->clients[index];
     struct desk_box content = desk_content(cl);
     switch (cl->internal) {
+    case DESK_INTERNAL_AUTOPLAY: {
+        struct desk_autoplay *a=&d->sh.autoplay;
+        int row=(y-content.y-58)/24;
+        if (y>=content.y+58 && y<content.y+178 && row<AP_CHOICES && desk_autoplay_enabled(d,row)) a->selected=row;
+        if (y>=content.y+182 && y<content.y+206 && a->active.id[0]) a->always=!a->always;
+        if (desk_contains(button_box(content,0,2),x,y)) a->want_commit=1;
+        else if (desk_contains(button_box(content,1,2),x,y)) desk_request_close(d,index);
+        damage(d,desk_outer(cl)); return 1;
+    }
     case DESK_INTERNAL_ABOUT:
         for (int k = 0; k < 3; k++) if (desk_contains(about_tab(content, k), x, y)) { d->sh.about_tab = k; damage(d, desk_outer(cl)); d->sh.want_reload |= 2; return 1; }
         if (desk_contains(button_box(content, 0, 1), x, y)) desk_request_close(d, index);
@@ -1980,6 +2013,17 @@ static int internal_key(struct desktop *d, int index, int code, int value)
     struct desk_client *c = &d->clients[index];
     if (value == 0) return 1;
     switch (c->internal) {
+    case DESK_INTERNAL_AUTOPLAY: {
+        struct desk_autoplay *a=&d->sh.autoplay;
+        if (code==DU_KEY_ESC) desk_request_close(d,index);
+        else if (code==DU_KEY_ENTER) a->want_commit=1;
+        else if (code==DU_KEY_SPACE && a->active.id[0]) a->always=!a->always;
+        else if (code==DU_KEY_UP || code==DU_KEY_DOWN || code==DU_KEY_TAB) {
+            int step=code==DU_KEY_UP ? -1 : 1;
+            do { a->selected=(a->selected+step+AP_CHOICES)%AP_CHOICES; } while (!desk_autoplay_enabled(d,a->selected));
+        }
+        damage(d,desk_outer(c)); return 1;
+    }
     case DESK_INTERNAL_RUN:
         if (code == DU_KEY_ENTER) run_commit(d, index);
         else if (code == DU_KEY_ESC) desk_request_close(d, index);

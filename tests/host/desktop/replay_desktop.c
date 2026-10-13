@@ -26,3 +26,7 @@ void replay_gate_counts(unsigned out[3])
 {
     out[0] = gate_keys; out[1] = gate_motion; out[2] = gate_buttons;
 }
+
+int ap_preference_get(const char *dir,const char *id) { (void)dir; (void)id; return -1; }
+int ap_preference_set(const char *dir,const char *id,const char *label,int action)
+{ (void)dir; (void)id; (void)label; (void)action; return -1; }

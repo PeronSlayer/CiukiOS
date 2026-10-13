@@ -154,6 +154,9 @@ struct desktop {
     /* Desktop shell (shell.h): settings, menus, icons, tray, built-in windows. */
     int mixer_fd;                /* delegated /dev/mixer control handle (CIUKI_MIXER_FD) or -1 */
     const char *launch_argv[6];  /* Run dialog: extra arguments for the next launch */
+    const struct fm_vfs *autoplay_fs;
+    int (*autoplay_preference)(struct desktop *, const char *id, const char *label, int action);
+    void (*media_sound)(struct desktop *, int connected);
     struct desk_shell sh;
     struct desk_power_sequence power;
     /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,

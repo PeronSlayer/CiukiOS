@@ -214,6 +214,16 @@ static int mount_iso(struct fs_ro_volume *v)
             if (primary) return -FS_EIO;
             e = descriptor(v, lba, b, 0, &primary); if (e) return e;
             blocks = s->blocks;
+            memcpy(v->volume_label,b+40,32); v->volume_label[32]=0;
+            for (unsigned j=0;j<32;j++) if ((uint8_t)v->volume_label[j]<32 || (uint8_t)v->volume_label[j]>126) v->volume_label[j]='?';
+            for (unsigned j=32;j && v->volume_label[j-1]==' ';j--) v->volume_label[j-1]=0;
+            /* FNV-1a over PVD volume/set IDs, size, creation/modification dates.
+             * Independent of drive assignment and media_generation. */
+            uint64_t identity=14695981039346656037ull;
+            for (unsigned j=40;j<88;j++) identity=(identity^b[j])*1099511628211ull;
+            for (unsigned j=190;j<318;j++) identity=(identity^b[j])*1099511628211ull;
+            for (unsigned j=813;j<847;j++) identity=(identity^b[j])*1099511628211ull;
+            v->volume_identity=identity;
         } else if (b[0] == 2 && b[88] == '%' && b[89] == '/') {
             uint8_t level = b[90] == '@' ? 1 : b[90] == 'C' ? 2 : b[90] == 'E' ? 3 : 0;
             if (!level || b[7]) { v->diagnostic = "malformed_joliet"; return -FS_EIO; }

@@ -20,7 +20,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 # The desktop shell's units (apps/desktop/build_desktop.py SHELL, without the stb decoder) and the toolkit
 # primitives it draws with: every host build of the production desktop links them.
-SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "settings.c", "settings_io.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")] + \
+SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "autoplay_content.c", "settings.c", "settings_io.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")] + \
                 [ROOT / "apps/libdeskui/draw.c"]
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -162,7 +162,7 @@ class DesktopTests(unittest.TestCase):
                      "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include")]
             plain = [ROOT / "tests/host/desktop/fake.c", *(ROOT / "apps/desktop" / f"{n}.c" for n in
                                                            ("client", "protocol", "input", "compositor", "theme",
-                                                            "shell", "settings", "wallpaper", "keymap", "image", "folder"))]
+                                                            "shell", "autoplay", "autoplay_content", "settings", "wallpaper", "keymap", "image", "folder"))]
             plain += [ROOT / "apps/files" / n for n in ("model.c","transfer.c")]
             posix = [ROOT / "tests/host/desktop/look_capture.c", *(ROOT / "apps/libdeskui" / f"{n}.c" for n in
                                                                    ("draw", "widgets", "list", "menu", "dialog", "textarea",
@@ -590,7 +590,7 @@ class AppCaseReplayTests(unittest.TestCase):
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
-                                                                                  "shell", "settings", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
+                                                                                  "shell", "autoplay", "autoplay_content", "sounds", "settings", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),

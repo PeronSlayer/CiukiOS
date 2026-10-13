@@ -6,7 +6,8 @@
  * VM's BIOS keyboard decodes (CIUKI_KEY_* codes are the set-1 make codes).
  * A leading "\DIR\PROGRAM" becomes two lines, "CD \DIR" and "PROGRAM [args]",
  * so the game finds its data files in its own directory; anything else is
- * typed as one line. Pure functions, no OS calls (host test:
+ * typed as one line. A drive-qualified path adds a drive switch, then CD
+ * and the program (F2-51 removable media). Pure functions, no OS calls (host test:
  * tests/host/desktop/dosbox_autorun_test.c).
  * SPDX-License-Identifier: MIT */
 #ifndef CIUKI_DOSBOX_AUTORUN_H
@@ -15,7 +16,7 @@
 #include <stdint.h>
 #include <string.h>
 #define DOSBOX_COMMAND_MAX 96u      /* well below DOS's 127-byte command tail */
-#define DOSBOX_LINES_MAX 2u
+#define DOSBOX_LINES_MAX 3u
 #define DOSBOX_KEYS_MAX (4u * (DOSBOX_COMMAND_MAX + 8u))
 /* One key event. group: index of the first event of its character (a
  * shifted character is Shift down, key down, key up, Shift up); main: the
@@ -50,13 +51,25 @@ static inline uint16_t dosbox_key_for(char c, int *shift)
     }
 }
 
-/* Splits the command into at most two lines (see above). 0 or the line
+/* Splits the command into at most three lines (see above). 0 or the line
  * count; -1 for an empty, too long or untypable command. */
 static inline int dosbox_command_lines(const char *command, char lines[DOSBOX_LINES_MAX][DOSBOX_COMMAND_MAX + 4])
 {
     size_t n = strlen(command);
     if (!n || n > DOSBOX_COMMAND_MAX || command[0] == ' ' || command[n - 1] == ' ') return -1;
     for (size_t i = 0; i < n; i++) { int shift; if (!dosbox_key_for(command[i], &shift)) return -1; }
+    /* A host media launch explicitly switches drive before changing directory. */
+    if (n>3 && command[1]==':' && command[2]=='\\' &&
+        ((command[0]>='A' && command[0]<='Z') || (command[0]>='a' && command[0]<='z'))) {
+        lines[0][0]=command[0]; lines[0][1]=':'; lines[0][2]=0;
+        size_t end=strcspn(command," "), last=2;
+        for (size_t i=3;i<end;i++) if (command[i]=='\\') last=i;
+        if (last+1>=end) return -1;
+        memcpy(lines[1],"CD ",3);
+        size_t dir=last==2 ? 1 : last-2;
+        memcpy(lines[1]+3,command+2,dir); lines[1][3+dir]=0;
+        memcpy(lines[2],command+last+1,n-last); return 3;
+    }
     size_t first = strcspn(command, " ");               /* the program token */
     size_t cut = 0;
     for (size_t i = 1; i < first; i++) if (command[i] == '\\') cut = i;

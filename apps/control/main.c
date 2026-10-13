@@ -205,6 +205,10 @@ static int apply(void *ctx, unsigned request, int volume, int muted)
     if (!r && request == DESK_SETTINGS_AUDIO_TEST) m->audio_serial = m->serial;
     return r;
 }
+static int autoplay_list(void *ctx,struct ap_preference *out,unsigned capacity)
+{ (void)ctx; return ap_preference_list(NULL,out,capacity); }
+static int autoplay_forget(void *ctx,const char *id)
+{ (void)ctx; return ap_preference_forget(NULL,id); }
 static int display_query(void *ctx, struct ciuki_display_info *info)
 { (void)ctx; return ciuki_display_query(info); }
 static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
@@ -271,6 +275,7 @@ int main(int argc, char **argv)
     struct cp_host *h = &m->app.host;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
+    h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1;
     h->audio_diagnostics = audio_query;
     h->devices = devices; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;

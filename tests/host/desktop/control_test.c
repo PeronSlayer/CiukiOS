@@ -10,6 +10,16 @@
 #include "acc_test.h"
 #include "display_fixture.h"
 
+static int autoplay_count=2, autoplay_error;
+static int autoplay_list(void *ctx,struct ap_preference *out,unsigned cap)
+{
+    (void)ctx; assert(cap>=2); if (autoplay_error) return -1;
+    out[0]=(struct ap_preference){.id="fat-12345678-100",.label="Music stick",.action=AP_MUSIC};
+    out[1]=(struct ap_preference){.id="iso-1234567890123456",.label="Games CD",.action=AP_NOTHING};
+    return autoplay_count;
+}
+static int autoplay_forget(void *ctx,const char *id)
+{ (void)ctx; assert(!strcmp(id,"iso-1234567890123456")); autoplay_count--; return 0; }
 static char saved[CFG_TEXT_MAX]; static size_t saved_n; static unsigned saves, applies, decodes; static const char *folder;
 static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) return -1; memcpy(t, saved, saved_n); *n = saved_n; return 0; }
 static int save(void *c, const char *t, size_t n) { (void)c; if (n >= sizeof(saved)) return -1; memcpy(saved, t, n); saved[n] = 0; saved_n = n; saves++; return 0; }
@@ -187,6 +197,17 @@ int main(int argc, char **argv)
     render_settled(&u);
     check_preview();
     at_save(renders, "control-display-classic-fill", &u);
+    cp_detach(&a);
+    attach(CP_HOME);
+    a.host.autoplay_list=autoplay_list; a.host.autoplay_forget=autoplay_forget;
+    assert(cp_page_index("autoplay")==CP_AUTOPLAY); cp_open(&a,CP_AUTOPLAY);
+    struct du_widget *choices=du_get(&u,950);
+    assert(choices && choices->count==2 && !strcmp(choices->items[0].text[0],"Music stick") && !strcmp(choices->items[0].text[1],"Play music"));
+    assert(!strcmp(choices->items[1].text[1],"Do nothing"));
+    struct du_event selected={.type=DU_EV_SELECT,.id=950,.index=1}; u.event(&u,&selected,u.user);
+    at_click_widget(&u,951); assert(a.autoplay_count==1 && strstr(du_get(&u,3)->text,"ask every time"));
+    autoplay_count=0; at_click_widget(&u,952); assert(!a.autoplay_count && du_get(&u,951)->disabled);
+    autoplay_error=1; at_click_widget(&u,952); assert(strstr(du_get(&u,950)->text,"could not be read"));
     cp_detach(&a);
     printf("PASS control display: five positions, layout, desktop.cfg modes, preview\n");
     return 0;

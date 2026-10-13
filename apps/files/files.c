@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Files entry point: desktop channel, native VFS, program launching. */
 #include "app.h"
+#include "../desktop/autoplay.h"
 #include <ciuki/media.h>
 #include <fcntl.h>
 #include "../desktop/catalog.h"
@@ -109,6 +110,18 @@ static void window_size(int *w, int *h)
     else { *w = 620; *h = 380; }
 }
 
+static int media_label(unsigned drive,char out[33])
+{
+    out[0]=0;
+    struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=drive};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int result=ciuki_devctl(fd,MEDIA_GET_VOLUME,&v,sizeof(v)); close(fd);
+    if (result || !v.flags) return -1;
+    char label[33];
+    if (!ap_drive_label(fm_native_vfs(),drive,label) && label[0]) memcpy(out,label,33);
+    else memcpy(out,v.label,33);
+    return 0;
+}
 static int media_read(struct ciuki_media_state *s)
 {
     *s=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*s)};
@@ -151,7 +164,7 @@ int main(int argc, char **argv)
     }
     struct files_app *a = &m->app;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->close = close_window; a->portrait = portrait;
-    a->media_read=media_read; a->media_remove=media_remove;
+    a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove;
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }

@@ -1328,3 +1328,97 @@ Host coverage: `tests/host/test_display_modes.py`, `display_test.c`, the firmwar
 worker cases in `v86_test.c`, bootinfo cases in `kernel_lib_test.c`, and RGB565
 reference fixtures in `fbdev_test.c`. Real QEMU/T23/E500 mode changes remain
 lead-owned qualification.
+
+
+## AutoPlay for removable media and CDs (F2-51)
+
+The desktop's one-second media polling also queries `MEDIA_GET_VOLUME` for
+D: through Z:. A new mount generation opens an internal AutoPlay window with
+the volume label and letter. Multiple arrivals are queued in letter order;
+eject, surprise removal or replacement cancels both the dialog and any
+queued confirmation for the old generation. Failed observations preserve
+the previous snapshot and block confirmation until the media can be checked. The desktop refreshes the snapshot before executing
+an accepted choice. Media already present at desktop startup are arrivals.
+
+The actions are **Open folder to view files**, **Play music** for WAV, MP3,
+OGG or FLAC at the root or in a case-insensitive Music folder, **View pictures**
+for PNG, JPEG, BMP, GIF or XRGB at the root or in Pictures, **Run program**
+when declared by AUTORUN.INF, and **Do nothing**. Music Player receives the
+containing directory and builds its playlist through its existing directory
+loader; Image Viewer opens the first matching picture (path order).
+The Music Player's existing directory loader includes subdirectories.
+The UI uses the current shell theme and beveled controls. Up/Down/Tab selects
+an enabled action, Space toggles the always checkbox, Enter accepts, Escape
+or Cancel dismisses. Closing the window does not remember a choice.
+
+AUTORUN.INF is read only from the medium's root (case-insensitive name), with
+a 4096-byte bound and at most 2048 entries per directory inspected. The
+case-insensitive `[autorun]` section recognizes `open`, `icon`, and `label`;
+other sections and keys are ignored. Labels display up to 32 printable ASCII
+characters. Program paths stay on that medium: parent traversal, explicit
+drive names, control characters and commands DOS Box cannot type are rejected.
+DOS executable paths with spaces are disabled because its typist cannot quote
+the program token (quoted paths without spaces are supported).
+[Microsoft PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format)
+defines the extended signature offset in the MZ stub. DOS COM/BAT and MZ
+EXE entries are offered, including small DOS headers described by the
+[Microsoft MS-DOS Encyclopedia](https://www.pcjs.org/documents/books/mspl13/msdos/encyclopedia/section2/); PE/NE/LE/LX executables remain
+visible and disabled (Windows programs require F5). Unreadable or unsupported
+entries are disabled. Explicit DOS commands such as
+`D:\SETUP\INSTALL.COM /S` type three lines: `D:`, `CD \SETUP`, then
+`INSTALL.COM /S`, setting the drive and working directory before execution.
+
+**Current runtime boundary:** DOS Box still supplies only its private disk
+image to the guest (`src/kernel/vm/dosvm_disk.c`). This change implements the
+launch request and command typing, but does not expose host removable drives
+to the DOS guest. Running a DOS program directly from that medium needs that
+VM drive integration; host launch tests do not establish guest execution.
+
+There is no ICO decoder in the current image or Tango store readers. The
+`icon` entry is parsed but does not replace the standard Tango drive icon.
+Files uses the AUTORUN label when available, otherwise the mount-time volume
+label, while keeping the original drive name for navigation. This is the
+label-only fallback permitted by the directive.
+
+**Always do this for this device** saves `Action` (integer 0..4) and `Label`
+in `Desktop\AutoPlay\<volume id>` through libreg. FAT IDs combine the
+nonzero BPB volume serial and volume size. ISO IDs fingerprint the PVD volume
+and volume-set identifiers, volume space size and creation/modification dates.
+These identify a filesystem volume, not a USB port or physical device; cloned
+volumes can share choices. An unavailable ID disables remembering. An
+unavailable remembered action falls back to the dialog; launch or persistence
+errors are reported. Control Panel's **AutoPlay** page lists the remembered
+volume/action pairs and **Ask every time** removes the selected choice.
+Registry operations reopen their root, so edits in Registry Editor and Control
+Panel are observed on the next arrival. libreg's existing concurrent-writer
+limits apply.
+
+The optional media sound callback selects `device_connect` and
+`device_disconnect` from the installed system sound keys. The current F4-06
+sound set contains neither event (F4-12 is absent here), so insertion/removal
+is silent until those events become available. AutoPlay adds no sound assets.
+
+Research and implementation decisions:
+[Microsoft AUTORUN.INF entry reference](https://learn.microsoft.com/en-us/windows/win32/shell/autorun-cmds)
+defines open paths/parameters, icon metadata and label truncation. CiukiOS
+implements the owner's requested chooser and per-volume remembering rather
+than adopting all version-dependent Windows AutoRun policies.
+The [Microsoft FAT specification (original white paper mirror)](https://www.cs.fsu.edu/~cop4610t/assignments/project3/spec/fatspec.pdf)
+defines BPB serial/label fields at 39/43 for FAT12/16 and 67/71 for FAT32,
+qualified by the extended boot signature 0x29. These fields are copied during
+the existing validated mount; the label is the BPB label.
+[ECMA-119, section 8.4](https://www.ecma-international.org/wp-content/uploads/ECMA-119_4th_edition_june_2019.pdf)
+defines the primary volume descriptor fields used for the CD label and
+fingerprint. The fingerprint is a CiukiOS choice, not an ECMA volume UUID.
+Neither query introduces disk I/O in the desktop event loop beyond the bounded
+content scan. The original USB removal query and ABI remain unchanged.
+
+Host coverage: `tests/host/desktop/test_autoplay.py` runs the production shell
+against fake mounted files and real libreg storage under ASan/UBSan, covering
+music, CD autorun, pictures, saved choices across insertions/letters, disabled
+Windows entries, eject during confirmation, replacement and queued media,
+parser bounds, unavailable saved actions, launch failures and optional sound
+notifications. The Control Panel desktop harness also checks listing, resetting,
+empty state and registry-read errors. Kernel file tests verify the new copied
+query, metadata, version/size/reserved/pointer validation and stale CD handling.
+No QEMU or hardware evidence is claimed here.

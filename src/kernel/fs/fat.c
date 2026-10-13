@@ -641,6 +641,14 @@ int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *de
     v->sectors=total; v->root_sector=v->reserved+v->fats*v->fat_sectors; v->data_sector=(uint32_t)data;
     v->clusters=(total-v->data_sector)/v->spc;
     v->type=v->clusters<4085 ? 12 : v->clusters<65525 ? 16 : 32;
+    unsigned ext=v->type==32 ? 64 : 36;
+    if (b[ext+2]==0x29) {
+        v->volume_serial=fs_rd32(b+ext+3);
+        memcpy(v->volume_label,b+ext+7,11);
+        for (unsigned i=0;i<11;i++) if ((uint8_t)v->volume_label[i]<32 || (uint8_t)v->volume_label[i]>126) v->volume_label[i]='?';
+        for (unsigned i=11;i && v->volume_label[i-1]==' ';i--) v->volume_label[i-1]=0;
+        if (!strncmp(v->volume_label,"NO NAME",8)) v->volume_label[0]=0;
+    }
     if (!v->clusters || v->clusters>=0x0ffffff5 || ((uint64_t)(v->clusters+2)*v->type+7)/8>(uint64_t)v->fat_sectors*512) return reject(v,"FAT capacity/cluster count");
     if ((v->type==32 && (fat16 || v->root_entries || fs_rd16(b+19))) || (v->type!=32 && (!fat16 || !v->root_entries || (v->root_entries%16)))) return reject(v,"cluster type contradicts BPB layout");
     if (v->type==32) {

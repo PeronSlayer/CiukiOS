@@ -8,6 +8,7 @@
 #include "../libdeskui/deskui.h"
 #include "../desktop/settings.h"
 #include "../desktop/sounds.h"
+#include "../desktop/autoplay.h"
 #include "../desktop/wallpaper.h"
 #include <ciuki/display.h>
 #include <ciuki/abi.h>
@@ -17,7 +18,7 @@
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
 enum { CP_HOME = -1, CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM,
-       CP_DEVICES, CP_DRIVERS, CP_NETWORK, CP_POWER, CP_ADAPTER, CP_FONTS, CP_PAGES };
+       CP_DEVICES, CP_DRIVERS, CP_NETWORK, CP_POWER, CP_ADAPTER, CP_FONTS, CP_AUTOPLAY, CP_PAGES };
 #define CP_FONTS_MAX 32
 #define CP_FONT_LIST 900
 struct cp_font_entry {
@@ -47,6 +48,8 @@ struct cp_host {
     int (*save_sounds)(void *, const char *, size_t);
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
+    int (*autoplay_list)(void *, struct ap_preference *, unsigned);
+    int (*autoplay_forget)(void *, const char *);
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
     uint32_t screen_w, screen_h;
@@ -58,6 +61,9 @@ struct cp_app {
     struct du_ui *ui;
     struct cp_host host;
     struct ciuki_settings cfg;
+    struct ap_preference autoplay[AP_PREFS];
+    struct du_item autoplay_items[AP_PREFS];
+    unsigned autoplay_count, autoplay_selected;
     int page, volume, muted, mixer_ok, audio_testing;
     struct ciuki_audio_diagnostics audio_before;
     int audio_before_ok;

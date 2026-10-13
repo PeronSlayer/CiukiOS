@@ -21,7 +21,7 @@ class NetworkTrayTests(unittest.TestCase):
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="network-tray-", dir=parent) as temp:
             sources = [ROOT / "apps/desktop" / name for name in
-                       ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c",
+                       ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c", "autoplay_content.c",
                         "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
             sources += [ROOT / "apps/libdeskui/draw.c", ROOT / "tests/host/desktop/fake.c",
                         ROOT / f"tests/host/desktop/{kind}_tray_test.c"]

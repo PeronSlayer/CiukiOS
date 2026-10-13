@@ -68,6 +68,8 @@ struct fs_ro_volume {
     struct blkdev *dev;
     uint64_t start, sectors;
     uint32_t mount_generation, view_count, names_omitted;
+    uint64_t volume_identity; /* ISO PVD identity, not the mount generation */
+    char volume_label[33];
     bool mounted;
     void *state;
     struct fs_ro_view *views; /* host VFS names, never cached media blocks */

@@ -669,6 +669,29 @@ static void test_media_node(void)
     struct ciuki_media_state s={.version=1,.size=sizeof(s)};CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0));CHECK(!ua_read(client->memory,&s,USER,sizeof(s)));
     CHECK(s.removable_mask==(1u<<4)&&s.generation[4]==123&&!s.generation[2]);
+    /* F2-51 copied arrival metadata: optical media do not enter the USB eject mask. */
+    media_observation.vfs.generation[4]=7;
+    media_observation.volumes[4].fat.volume_serial=0x12345678;
+    media_observation.volumes[4].fat.sectors=1234;
+    memcpy(media_observation.volumes[4].fat.volume_label,"MIXTAPE",8);
+    struct ciuki_media_volume volume={.version=1,.size=sizeof(volume),.drive=4};
+    CHECK(!ua_write(client->memory,USER,&volume,sizeof(volume)));
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_VOLUME,USER,sizeof(volume),0)); CHECK(!ua_read(client->memory,&volume,USER,sizeof(volume)));
+    CHECK(volume.flags==CIUKI_MEDIA_REMOVABLE && volume.generation==7 && !strcmp(volume.id,"fat-12345678-1234") && !strcmp(volume.label,"MIXTAPE"));
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_VOLUME,UINT32_MAX,sizeof(volume),0)==-EFAULT);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_VOLUME,USER,sizeof(volume)-1,0)==-EINVAL);
+    volume=(struct ciuki_media_volume){.version=2,.size=sizeof(volume),.drive=4}; CHECK(!ua_write(client->memory,USER,&volume,sizeof(volume)));
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_VOLUME,USER,sizeof(volume),0)==-EOPNOTSUPP);
+    volume.version=1; volume.reserved[0]=1; CHECK(!ua_write(client->memory,USER,&volume,sizeof(volume)));
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_VOLUME,USER,sizeof(volume),0)==-EINVAL);
+    struct fs_ro_volume optical={.ops=&iso9660_ops,.mounted=true,.dev=&b,.mount_generation=123,.volume_identity=0x123456789abcdef0ull,.volume_label="CIUKI_CD"};
+    media_observation.vfs.ro_volumes[3]=&optical; media_observation.vfs.generation[3]=8;
+    volume=(struct ciuki_media_volume){.version=1,.size=sizeof(volume),.drive=3}; CHECK(!ua_write(client->memory,USER,&volume,sizeof(volume)));
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_VOLUME,USER,sizeof(volume),0)); CHECK(!ua_read(client->memory,&volume,USER,sizeof(volume)));
+    CHECK(volume.flags==CIUKI_MEDIA_OPTICAL && volume.generation==8 && !strcmp(volume.id,"iso-123456789abcdef0") && !strcmp(volume.label,"CIUKI_CD"));
+    optical.mount_generation=122; volume=(struct ciuki_media_volume){.version=1,.size=sizeof(volume),.drive=3}; CHECK(!ua_write(client->memory,USER,&volume,sizeof(volume)));
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_VOLUME,USER,sizeof(volume),0)); CHECK(!ua_read(client->memory,&volume,USER,sizeof(volume))); CHECK(!volume.flags && !volume.generation && !volume.id[0]);
+    media_observation.vfs.ro_volumes[3]=NULL;
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,UINT32_MAX,sizeof(s),0)==-EFAULT);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s)-1,0)==-EINVAL);
     s.reserved=1;CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0)==-EINVAL);
@@ -717,6 +740,7 @@ int main(int argc, char **argv)
     disk[0].undo_enabled=disk[1].undo_enabled=true;
     CHECK(!cache_init(&cache,0)); vfs_init(&vfs);
     for (unsigned i=0;i<2;i++) { CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true)); CHECK(!vfs_attach(&vfs,i+2,&volumes[i])); }
+    CHECK(volumes[0].volume_serial==0x00c1a001 && volumes[1].volume_serial==0x00c1a001);
     CHECK(!files_attach(&vfs,&space));
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;

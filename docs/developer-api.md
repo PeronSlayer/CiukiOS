@@ -666,6 +666,30 @@ ejects the entire USB device. The generation rejects stale UI requests.
 #define CIUKI_MEDIA_VERSION 1u
 #define MEDIA_GET_STATE 0x4d01u
 #define MEDIA_SAFE_REMOVE 0x4d02u
+```
+
+F2-51: independent per-letter arrival metadata; safe-removal ABI is unchanged.
+
+```c
+#define MEDIA_GET_VOLUME 0x4d03u
+#define CIUKI_MEDIA_REMOVABLE 1u
+#define CIUKI_MEDIA_OPTICAL 2u
+struct ciuki_media_volume {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t flags;
+    uint32_t generation;
+    char id[40];
+```
+
+stable filesystem identity; empty if unavailable
+
+```c
+char label[33];
+    uint8_t reserved[3];
+};
+
 struct ciuki_media_state {
     uint32_t version;
     uint32_t size;
