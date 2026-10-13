@@ -76,7 +76,18 @@ void pmm_free(uint32_t p) { CHECK(p >= 0x1000000 && !(p & 4095) && p / PAGE_SIZE
 uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages; }
 uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr,"unexpected panic: %s\n",fmt); abort(); }
-void klog(const char *fmt, ...) { (void)fmt; }
+static unsigned dosvm_logs;
+static char last_dosvm_log[256];
+void klog(const char *fmt, ...)
+{
+    if (strncmp(fmt, "[dosvm]", 7)) return;
+    CHECK(cpu_flags & V86_IF);
+    va_list ap; va_start(ap, fmt);
+    int n = vsnprintf(last_dosvm_log, sizeof(last_dosvm_log), fmt, ap);
+    va_end(ap);
+    CHECK(n > 0 && n < (int)sizeof(last_dosvm_log));
+    dosvm_logs++;
+}
 /* The production heap (core/kheap.c) has power-of-two classes up to 2048
  * bytes with an 8-byte header: larger requests always fail there, so they
  * fail here too (f3-06 lookup table, vm-window QEMU 2026-10-12). The fake
@@ -550,6 +561,7 @@ static void test_memory_services(void)
 #include "dosvm_vmaudio_test.inc"  /* f4-05: VM sources in the mixer (separate units) */
 #include "dosvm_workloads_test.inc"
 #include "dosvm_menu_test.inc"
+#include "dosvm_irq_stall_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -559,6 +571,7 @@ int main(void)
     test_workloads();
     test_timer();
     test_menu();
+    test_irq_stall();
     CHECK(guest_enters==3 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

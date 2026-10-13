@@ -25,6 +25,9 @@
  * progress, opens/navigates/closes DOOM's menu through the virtual 8042 and
  * compares the rendered title/menu frames. GUEST_MENU_SOUND=1 additionally
  * requires SB transfer/IRQ progress (leave unset for -nosound).
+ * GUEST_IRQ0_RESTORE=<PM EIP> advances the PIT once at that armed POPF
+ * #DB, before the production monitor restores virtual IF. This forces an
+ * IRQ0 edge in the return-boundary window without changing guest bytes.
  * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -263,6 +266,7 @@ static void input_hook(void)
 }
 static struct v86_frame cpu;
 static uint64_t instructions, traps;
+static uint64_t db_rm, db_flags, db_return, db_other;
 static uint32_t rstack_low = 0xFFFF;   /* lowest SP seen on the DPMI host real-mode stack */
 static int trace = -1, ring_on = -1;
 #define RING 3000u
@@ -351,6 +355,13 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     hw.tf.vector = vector; hw.tf.err = err; fake_cr2 = cr2;
     g_current = gv->task; gv->continuation = 0x12345678; cpu_flags = 0;
     traps++;
+    if (vector == 1) {
+        const char *owner = dosvm_step_owner(gv, &cpu, dpmi_debug_status(gv, debug_dr6));
+        if (!strcmp(owner, "rm_ss") || !strcmp(owner, "rm_irq")) db_rm++;
+        else if (!strcmp(owner, "pm_flags")) db_flags++;
+        else if (!strcmp(owner, "pm_return")) db_return++;
+        else db_other++;
+    }
     if (setjmp(idle_return)) { g_current = &caller; sti(); return; }
     if (!setjmp(guest_return)) { CHECK(dosvm_trap(&hw.tf)); cpu = hw; }
     else cpu = gv->frame;
@@ -360,6 +371,7 @@ static bool stopped(void) { return gv->info.state >= DOSVM_STOPPING; }
 /* f3-09 startup replay: reach the application's unchained graphics and
  * two page flips with a running PM timer. This is not a timedemo verdict. */
 static uint32_t startup_irqs;
+static unsigned restore_edges;
 static bool video_started(void)
 {
     struct dosvm_video_info video;
@@ -404,6 +416,18 @@ static int run(uint64_t budget, bool (*done)(void))
              * breakpoint comparisons are permitted alongside BS (SDM
              * 18.2.3); opt in for replay without altering the guest image. */
             debug_dr6 |= ev.dr6;
+            const char *restore_pc = getenv("GUEST_IRQ0_RESTORE");
+            if (restore_pc && !restore_edges && s.pm && ev.vector == 1 &&
+                (ev.dr6 & (1u << 14)) && gv->dpmi.if_armed &&
+                s.eip == strtoul(restore_pc, 0, 0)) {
+                uint64_t edges = gv->pit.edges;
+                dosvm_pit_advance(gv, 8);
+                restore_edges++;
+                printf("restore edge: pc=%04x:%08x vif=%u armed=%u irr=%02x isr=%02x edges=%llu->%llu\n",
+                       s.cs, s.eip, gv->monitor.vif, gv->dpmi.if_armed,
+                       gv->monitor.pic[0].irr, gv->monitor.pic[0].isr,
+                       (unsigned long long)edges, (unsigned long long)gv->pit.edges);
+            }
             const char *unused = getenv("GUEST_DR6_UNUSED");
             if (unused && (ev.dr6 & 0x4000)) {
                 uint32_t bits = (uint32_t)strtoul(unused, 0, 0) & 15;
@@ -739,6 +763,13 @@ int main(int argc, char **argv)
         stats("after-exit");
         if (r != 2 || gv->dpmi.active) { failures++; screen(); break; }
     }
+    if (getenv("GUEST_IRQ0_RESTORE") && restore_edges != 1) {
+        printf("restore edge: FAIL (requested PM boundary was not reached)\n");
+        failures++;
+    }
+    printf("debug traps: rm=%llu flags=%llu returns=%llu other=%llu\n",
+           (unsigned long long)db_rm, (unsigned long long)db_flags,
+           (unsigned long long)db_return, (unsigned long long)db_other);
     printf("guest runner: %s (%llu instructions, %llu traps, %u unexpected)\n", failures || unexpected ? "FAIL" : "PASS",
            (unsigned long long)instructions, (unsigned long long)traps, unexpected);
     if (cow) { fclose(cow); unlink(cow_path); }

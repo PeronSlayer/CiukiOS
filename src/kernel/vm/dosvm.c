@@ -18,6 +18,48 @@ extern void audio_vm_kick(void) __attribute__((weak));
 static struct dosvm slots[DOSVM_LIMIT];
 static struct dosvm_key input_focus;
 
+/* Called only with physical IF enabled in the worker, never from the timer
+ * hook. Ages come from INTA, including PIC poll acknowledgements. Sampling
+ * ISR alone cannot distinguish an EOI and reinjection in the same trap. */
+static void dosvm_pic_stall(struct dosvm *v, const struct v86_frame *f)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE) || v->info.state >= DOSVM_STOPPING ||
+        v->trace.pic_stalls >= DOSVM_PIC_STALL_LIMIT) return;
+    struct {
+        uint64_t age;
+        uint8_t chip, irq, isr, irr, imr, ae, sm;
+    } sample[16];
+    unsigned count = 0;
+    uint32_t flags = irq_save();
+    uint64_t tick = g_ticks;
+    for (unsigned chip = 0; chip < 2; chip++) {
+        struct v86_pic *p = &v->monitor.pic[chip];
+        uint8_t pending = p->isr & ~p->stall_reported;
+        if (!pending) continue;
+        for (unsigned irq = 0; irq < 8; irq++) {
+            uint8_t bit = 1u << irq;
+            if (!(pending & bit) || v->trace.pic_stalls >= DOSVM_PIC_STALL_LIMIT) continue;
+            uint64_t age = tick - p->service_tick[irq];
+            if (age <= DOSVM_PIC_STALL_TICKS) continue;
+            p->stall_reported |= bit;
+            sample[count].age = age; sample[count].chip = chip; sample[count].irq = irq + chip * 8;
+            sample[count].isr = p->isr; sample[count].irr = p->irr; sample[count].imr = p->imr;
+            sample[count].ae = p->auto_eoi; sample[count].sm = p->special_mask;
+            count++;
+            v->trace.pic_stalls++;
+        }
+    }
+    irq_restore(flags);
+    for (unsigned i = 0; i < count; i++) {
+        klog("[dosvm] event=pic_stall vm=%u gen=%u pic=%u irq=%u ms=%llu cs=%04x eip=%08x isr=%02x irr=%02x imr=%02x vec=%02x to=%04x:%08x boundary=%s at=%04x:%08x pm=%u depth=%u ae=%u sm=%u",
+             v->info.key.id, v->info.key.generation, sample[i].chip, sample[i].irq, sample[i].age,
+             f->tf.cs & 0xFFFF, f->tf.eip, sample[i].isr, sample[i].irr, sample[i].imr,
+             v->monitor.stats.last_vector & 255, v->trace.injected_cs, v->trace.injected_eip,
+             v->trace.boundary ? v->trace.boundary : "none", v->trace.boundary_cs, v->trace.boundary_eip,
+             !(f->tf.eflags & V86_VM), v->dpmi.depth, sample[i].ae, sample[i].sm);
+    }
+}
+
 /* f3-10: sample the interrupted guest, before emulation or IRQ injection can
  * replace CS:EIP with a handler's entry. Device time keeps advancing while
  * virtual IF is clear. Only this preemptible path prints, never the IRQ hook.
@@ -84,11 +126,26 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
 /* Runtime diagnostics live here to keep record ownership in the lifecycle
  * service. Call only from the preemptible monitor, never dosvm_tick or an
  * IF-disabled device transaction (polled UART writes can lose PIT ticks). */
+static const char *dosvm_step_owner(const struct dosvm *v, const struct v86_frame *f, uint32_t dr6)
+{
+    if (!(dr6 & (1u << 14))) return "client";
+    if (f->tf.eflags & V86_VM) {
+        if (v->monitor.shadow) return "rm_ss";
+        return v->monitor.vif && v86_irq_pending(&v->monitor) >= 0 ? "rm_irq" : "rm_tf";
+    }
+    const struct dpmi *d = &v->dpmi;
+    if (d->if_armed) return "pm_flags";
+    if (d->return_steps && (uint16_t)f->tf.cs == d->return_cs && (uint16_t)f->tf.user_ss == d->return_ss &&
+        d->depth == d->return_depth && d->clients == d->return_client) return "pm_return";
+    return "client";
+}
+
 void dosvm_trace(struct dosvm *v, enum dosvm_trace_kind kind, const struct v86_frame *f,
                  uint32_t a, uint32_t b, uint32_t c)
 {
     static const uint8_t limits[DOSVM_TRACE_COUNT] = {32, 24, 10, 32, 8, 64, 10, 1};
     if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    if (kind == DOSVM_TRACE_FLAGS) dosvm_boundary(v, f, a ? "if_restore" : b ? "if_arm" : "cli");
     if (kind == DOSVM_TRACE_FLAGS && !v->trace.timer_programmed && !a && !v->dpmi.if_armed) {
         struct dpmi_seg cs;
         /* Extender initialization contains many 16-bit CLI/STI pairs.
@@ -140,9 +197,10 @@ void dosvm_trace(struct dosvm *v, enum dosvm_trace_kind kind, const struct v86_f
                  f->tf.eip, !!(f->tf.eflags & V86_IF), !!(f->tf.eflags & V86_TF), a, v->frame_pm, b, c);
         break;
     case DOSVM_TRACE_DB_PM: case DOSVM_TRACE_DB_RM:
-        rec_diag(probe, "group=vm_db vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x dr6=%08x cause=%08x tf=%u if=%u vif=%u armed=%u",
+        rec_diag(probe, "group=vm_db vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x dr6=%08x cause=%08x tf=%u if=%u vif=%u armed=%u step=%s",
                  v->info.key.id, v->info.key.generation, n, pm, f->tf.cs & 0xFFFF, f->tf.eip, a, b,
-                 !!(f->tf.eflags & V86_TF), !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed);
+                 !!(f->tf.eflags & V86_TF), !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed,
+                 dosvm_step_owner(v, f, b));
         break;
     case DOSVM_TRACE_FLAGS:
         rec_diag(probe, "group=vm_if vm=%u gen=%u n=%u restore=%u matched=%u cs=%04x eip=%08x vif=%u armed=%u seed=%u seed_cs=%04x seed_ip=%08x",
@@ -404,6 +462,7 @@ bool dosvm_trap(struct trap_frame *tf)
     memcpy(f, tf, size);
     v->frame_pm = pm;
     sti();
+    dosvm_pic_stall(v, f);
     dosvm_heartbeat(v, f);
     if (tf->vector == 1)
         dosvm_trace(v, pm ? DOSVM_TRACE_DB_PM : DOSVM_TRACE_DB_RM, f, dr6, dpmi_debug_status(v, dr6), 0);
@@ -419,6 +478,7 @@ bool dosvm_trap(struct trap_frame *tf)
                     if ((dr6 & (1u << i)) && v->dpmi.watch[i].type == 0) f->tf.eflags |= 1u << 16;
             }
             e = v86_debug_step(&v->monitor, f);
+            dosvm_boundary(v, f, v->monitor.shadow ? "rm_ss" : "rm_step");
         }
         else if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000) {
             if (!dosvm_vga_retry(v, cr2, (f->tf.cs << 4) + f->tf.eip, false)) {
@@ -445,6 +505,7 @@ bool dosvm_trap(struct trap_frame *tf)
             dosvm_stop(v->info.key, DOSVM_TIMEOUT);
             break;
         }
+        uint64_t delivered = v->monitor.stats.reflected_irqs;
         if (v->dpmi.active) {
             e = 0;
             if (!v->frame_pm) {
@@ -459,6 +520,10 @@ bool dosvm_trap(struct trap_frame *tf)
             if (!e) e = v86_irq_deliver(&v->monitor, f);
             irq_restore(flags);
         }
+        if (v->monitor.stats.reflected_irqs != delivered) {
+            v->trace.injected_cs = (uint16_t)f->tf.cs;
+            v->trace.injected_eip = f->tf.eip;
+        }
         if (e < 0) {
             v->info.fault_vector = tf->vector;
             v->info.fault_eip = dpmi_fault_linear(v, f);
@@ -469,6 +534,7 @@ bool dosvm_trap(struct trap_frame *tf)
         if (v->monitor.state != V86_HALTED) break;
         v->info.state = DOSVM_BLOCKED;
         kwait_wait_until(&v->wake, wake_condition, v, deadline_after_ms(10));
+        dosvm_pic_stall(v, f);
         dosvm_heartbeat(v, f); /* a guest HLT with IF clear also needs samples */
     }
     /* A protected-mode frame must let the kernel IRET succeed. */
