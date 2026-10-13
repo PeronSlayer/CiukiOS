@@ -174,7 +174,7 @@ def sound_payloads():
     sound_build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sound_build)
     sounds = sound_build.validate()
-    sources = {(f"/system/sounds/{name}" if name != "sounds.cfg" else "/system/settings/sounds.cfg"):
+    sources = {f"/system/sounds/{name}":
                sound_build.OUTPUT / name for name in sounds["files"]}
     return sources, sounds
 

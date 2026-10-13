@@ -5,15 +5,17 @@
 #include <string.h>
 const char *const sound_keys[SOUND_EVENTS] = {
     "startup", "shutdown", "menu_open", "menu_select", "window_open", "window_close",
-    "minimise", "restore", "error", "information", "question", "end_task", "volume", "empty_recycle"
+    "minimise", "restore", "error", "information", "question", "end_task", "volume", "empty_recycle",
+    "logon", "device_connect", "device_disconnect", "autoplay"
 };
 const char *const sound_labels[SOUND_EVENTS] = {
     "Startup", "Shutdown", "Menu open", "Menu select", "Window open", "Window close",
-    "Minimise", "Restore", "Error", "Information", "Question", "End Task", "Volume", "Empty recycle"
+    "Minimise", "Restore", "Error", "Information", "Question", "End Task", "Volume", "Empty recycle",
+    "Desktop ready", "Device connect", "Device disconnect", "AutoPlay"
 };
 void sound_defaults(struct sound_scheme *s)
 {
-    memset(s, 0, sizeof(*s)); s->enabled = 1;
+    memset(s, 0, sizeof(*s)); s->enabled = 1; s->volume = 100;
     for (unsigned i = 0; i < SOUND_EVENTS; i++) snprintf(s->file[i], SOUND_NAME_MAX, "%s.wav", sound_keys[i]);
 }
 static int name_ok(const char *s)
@@ -44,6 +46,15 @@ int sound_parse(struct sound_scheme *s, const char *text, size_t n)
         if (key_end-a == 7 && !memcmp(text+a, "enabled", 7)) {
             if (b-v != 1 || (text[v] != '0' && text[v] != '1')) return -EINVAL;
             next.enabled = text[v] == '1';
+        } else if (key_end-a == 9 && !memcmp(text+a, "ui_volume", 9)) {
+            unsigned value = 0;
+            if (! (b-v) || b-v > 3) return -EINVAL;
+            for (size_t k = v; k < b; k++) {
+                if (text[k] < '0' || text[k] > '9') return -EINVAL;
+                value = value*10 + (unsigned)(text[k]-'0');
+            }
+            if (value > 100) return -EINVAL;
+            next.volume = (int)value;
         } else if (id >= 0) {
             if (b-v >= SOUND_NAME_MAX) return -EINVAL;
             char value[SOUND_NAME_MAX]; memcpy(value, text+v, b-v); value[b-v] = 0;
@@ -56,7 +67,8 @@ int sound_parse(struct sound_scheme *s, const char *text, size_t n)
 size_t sound_format(const struct sound_scheme *s, char *out, size_t cap)
 {
     size_t n = 0;
-    int written = snprintf(out, cap, "enabled=%d\n", !!s->enabled);
+    if (s->volume < 0 || s->volume > 100) return 0;
+    int written = snprintf(out, cap, "enabled=%d\nui_volume=%d\n", !!s->enabled, s->volume);
     if (written < 0 || (size_t)written >= cap) return 0;
     n = (size_t)written;
     for (unsigned i = 0; i < SOUND_EVENTS; i++) {
@@ -99,7 +111,15 @@ int sound_wav(const void *data, size_t n, struct sound_clip *out)
     if (!fmt || !clip.pcm) return -EINVAL;
     *out = clip; return 0;
 }
-void sound_reset(struct sound_player *p) { memset(p, 0, sizeof(*p)); }
+int sound_coalesce(struct sound_throttle *t, unsigned e, uint64_t now)
+{
+    if (e != SOUND_VOLUME) return 1;
+    if (t->volume_seen && now - t->last_volume < SOUND_VOLUME_INTERVAL_NS) return 0;
+    t->last_volume = now; t->volume_seen = 1; return 1;
+}
+int sound_allowed(const struct sound_scheme *s, int preview, int muted, int vm_active)
+{ return (s->enabled || preview) && s->volume > 0 && !muted && !vm_active; }
+void sound_reset(struct sound_player *p) { memset(p, 0, sizeof(*p)); p->volume = 100; }
 int sound_play(struct sound_player *p, struct sound_clip clip)
 {
     if (!clip.pcm || !clip.frames || clip.frames > SOUND_RATE*2) return -EINVAL;
@@ -125,6 +145,7 @@ int sound_pump(struct sound_player *p, int (*sink)(void *, const int16_t *, unsi
                 sum += sample >= 32768 ? (int)sample - 65536 : (int)sample;
                 if (v->position == v->clip.frames) v->clip.pcm = NULL;
             }
+            sum = sum * (int)p->volume / 100;
             p->pending[p->count++] = (int16_t)(sum > 32767 ? 32767 : sum < -32768 ? -32768 : sum);
         }
     }

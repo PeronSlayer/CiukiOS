@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <ciuki/ac97.h>
 #include <ciuki/timing.h>
+static bool vm_active_hook;
 struct ciuki_boot_info g_boot;
 uint64_t g_tsc_per_ms = 1000;
 static uint8_t inb(uint16_t p) { (void)p; return 0; }
@@ -405,6 +406,8 @@ static void test_diagnostic_records(void)
     struct ciuki_audio_diagnostics info;
     memset(&info,0xff,sizeof(info));audio_diagnostics(&info);
     CHECK(info.codec_id==0x43525931 && info.controller==0x80862485 && info.flags==3 && info.irqs==7 && info.fetched_frames==999 && info.civ==3 && info.picb==234 && !info.reserved);
+    vm_active_hook=true;audio_diagnostics(&info);CHECK(info.flags & CIUKI_AUDIO_DIAG_VM_ACTIVE);
+    vm_active_hook=false;audio_diagnostics(&info);CHECK(!(info.flags & CIUKI_AUDIO_DIAG_VM_ACTIVE));
     first_playback=true;playback_logged=false;playback_start=playback_next=100;g_ticks=100;g_boot.flags=CBI_F_VERBOSE;
     playback_log(false);
     CHECK(!strcmp(audio_log,"[audio] play=running civ=3 picb=234 irqs=7 fetched=999 elapsed_ms=0"));
@@ -770,8 +773,9 @@ static void test_shutdown(void)
     puts("audio shutdown: preactivation claims released; unproved stop retains all nine DMA pages/claims; no quarantine reset PASS");
 }
 /* f4-05 hooks (weak in audio_dev.c; the VM sources are not linked here). */
-static bool vm_active_hook, vm_attached_hook, vm_nonzero_hook;
+static bool vm_attached_hook, vm_nonzero_hook;
 bool audio_vm_active(void) { return vm_active_hook; }
+bool audio_vm_playing(void) { return vm_active_hook; }
 bool audio_vm_attached(void) { return vm_attached_hook; }
 void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
 {

@@ -29,7 +29,7 @@ int main(int argc,char **argv)
     assert(list && !list->hidden && list->count==SOUND_EVENTS && list->column_count==2);
     struct du_event ev={.type=DU_EV_SELECT,.id=list->id,.index=SOUND_ERROR};u.event(&u,&ev,u.user);
     assert(a.sound_selected==SOUND_ERROR);
-    ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Test")->id};u.event(&u,&ev,u.user);
+    ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Preview")->id};u.event(&u,&ev,u.user);
     assert(request==DESK_SETTINGS_SOUND_TEST && arg==SOUND_ERROR);
     ev.id=find(&u,"Test audio hardware")->id;u.event(&u,&ev,u.user);assert(request==DESK_SETTINGS_AUDIO_TEST && a.audio_testing);
     assert(find(&u,"Test audio hardware")->disabled);
@@ -47,8 +47,22 @@ int main(int argc,char **argv)
     assert(!a.sounds.enabled && request==DESK_SETTINGS_SOUND_RELOAD);
     struct sound_scheme scheme;sound_defaults(&scheme);assert(!sound_parse(&scheme,saved,saved_n));
     assert(!scheme.enabled && !strcmp(scheme.file[SOUND_ERROR],"custom.wav"));
+    struct du_widget *schemes = NULL, *ui_volume = NULL;
+    for (unsigned i=0;i<u.count;i++) {
+        if (u.widgets[i].items==a.scheme_items) schemes=&u.widgets[i];
+        if (u.widgets[i].kind==DU_SCROLLBAR && u.widgets[i].box.x==270) ui_volume=&u.widgets[i];
+    }
+    assert(schemes && ui_volume);
+    ev=(struct du_event){.type=DU_EV_SELECT,.id=schemes->id,.index=0};u.event(&u,&ev,u.user);
+    assert(a.sounds.enabled && !strcmp(a.sounds.file[SOUND_ERROR],"error.wav"));
+    ev.index=1;u.event(&u,&ev,u.user);assert(!a.sounds.enabled && schemes->active==1);
+    ev=(struct du_event){.type=DU_EV_CHANGE,.id=ui_volume->id,.index=35};u.event(&u,&ev,u.user);
+    assert(a.sounds.volume==35 && a.volume==70 && request==DESK_SETTINGS_SOUND_RELOAD);
+    sound_defaults(&scheme);assert(!sound_parse(&scheme,saved,saved_n));assert(scheme.volume==35 && !scheme.enabled);
     failed_save=1;u.event(&u,&ev,u.user);assert(!a.sounds.enabled);failed_save=0;
+    ev=(struct du_event){.type=DU_EV_SELECT,.id=schemes->id,.index=0};u.event(&u,&ev,u.user);
     cp_audio_result(&a,0);
+    du_dialog_close(&u);
     du_render(&u);FILE *f=fopen(argv[1],"wb");assert(f && fwrite(pixels,4,CP_WIDTH*CP_HEIGHT,f)==CP_WIDTH*CP_HEIGHT);fclose(f);
     u.sound=sound_event;
     du_message(&u,100,"Error","Error",DU_DLG_ICON_ERROR,NULL,0,0,0);assert(sound_event_seen==SOUND_ERROR);du_dialog_close(&u);

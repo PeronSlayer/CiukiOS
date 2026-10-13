@@ -311,7 +311,8 @@ static void startup_flush(void)
         }
     }
 }
-struct mixer_job { int fd; struct ciuki_mixer_master master; };
+static uint32_t mixer_serial;
+struct mixer_job { uint32_t serial; int fd; struct ciuki_mixer_master master; };
 static int mixer_job_run(void *record, size_t n)
 {
     if (n!=sizeof(struct mixer_job)) return EINVAL;
@@ -338,7 +339,7 @@ static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_
     if (ciuki_devctl(d->mixer_fd,MIXER_GET_MASTER,&m,sizeof(m))) return -errno;
     m.left=left; m.right=right; m.mute=mute; m.save_state=0; m.save_error=0; m.reserved=0;
     if (!settings_writer_started) return -EIO;
-    struct mixer_job job={d->mixer_fd,m};
+    struct mixer_job job={++mixer_serial,d->mixer_fd,m};
     return cfg_writer_job(&settings_writer,&job,sizeof(job)) ? -errno : 0;
 #endif
 }
@@ -573,7 +574,9 @@ static void mixer_read(struct desktop *d)
     if (fd<0 || ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0) d->sh.mixer_state=-1;
     else {
         d->sh.mixer_state=d->mixer_fd>=0 ? 2 : 1;
-        d->sh.volume=(int)((m.left+m.right)/2); d->sh.muted=m.mute!=0;
+        if (!d->sh.volume_drag && !d->sh.want_mixer) {
+            d->sh.volume=(int)((m.left+m.right)/2); d->sh.muted=m.mute!=0;
+        }
     }
     if (own && fd>=0) close(fd);
     desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
@@ -684,7 +687,8 @@ static void shell_service(struct desktop *d)
             snprintf(d->notice,sizeof(d->notice),"Volume applied but not saved (error %d)",(int)job.master.save_error);
         if (job_error || job.master.save_state==CIUKI_MIXER_UNSAVED)
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
-        sh->want_reload|=4;
+        if (!job_error) desk_sound(d,SOUND_VOLUME);
+        if (job.serial == mixer_serial && !sh->volume_drag && !sh->want_mixer) sh->want_reload|=4;
     }
     int save_error;
     if (settings_writer_started && cfg_writer_result(&settings_writer,&save_error) && save_error) {
@@ -719,7 +723,6 @@ static void shell_service(struct desktop *d)
         sh->want_wallpaper=0;
     }
     if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
-    int volume_feedback = sh->want_reload & 8;
     if (sh->want_reload & 4) mixer_read(d);
     if (sh->want_reload & 16) network_read(d);
     if (sh->want_reload & 32) media_read(d);
@@ -735,7 +738,6 @@ static void shell_service(struct desktop *d)
         }
     }
     if (sh->want_mixer) { sh->want_mixer=0; mixer_write(d); }
-    if (volume_feedback) desk_sound(d,SOUND_VOLUME);
     if (sh->want_run[0]) {
         char line[sizeof(sh->want_run)];
         memcpy(line,sh->want_run,sizeof(line)); sh->want_run[0]=0;
@@ -1037,7 +1039,7 @@ int main(int argc, char **argv)
         }
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
         startup_flush();
-        if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); }
+        if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
         if (desk_display_frame_commit(d, redraw)) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);
             if (d->shell && !d->sh.gate && settings_save(d))

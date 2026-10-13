@@ -4,6 +4,7 @@
 #include "desktop.h"
 #include "sounds.h"
 #include "sound_runtime.h"
+#include "sound_storage.h"
 #include <ciuki/audio.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -26,6 +27,7 @@ static struct {
     int live, busy, hardware_pending, hardware_done, hardware_result;
     int client; uint32_t window, serial;
     int shutting; uint64_t shutdown_deadline;
+    struct sound_throttle queued;
 } rt = {.lock=PTHREAD_MUTEX_INITIALIZER, .changed=PTHREAD_COND_INITIALIZER};
 static uint64_t now_ns(void)
 { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec*1000000000ull+(uint64_t)t.tv_nsec; }
@@ -33,6 +35,8 @@ static int push(unsigned kind, unsigned event)
 {
     pthread_mutex_lock(&rt.lock);
     int r = !rt.live ? -ENODEV : rt.count == QMAX ? -EBUSY : 0;
+    if (!r && (kind == SOUND_VOLUME || (kind == CMD_TEST && event == SOUND_VOLUME)) &&
+        !sound_coalesce(&rt.queued,SOUND_VOLUME,now_ns())) { pthread_mutex_unlock(&rt.lock); return 0; }
     if (!r) {
         rt.q[(rt.head+rt.count++)%QMAX] = (struct command){kind,event};
         rt.busy = 1; pthread_cond_signal(&rt.changed);
@@ -91,18 +95,17 @@ static void cancel(struct desktop *d)
 { (void)d; rt.shutting = 0; (void)push(CMD_STOP,0); }
 struct worker {
     struct sound_scheme scheme;
-    char text[SOUND_TEXT_MAX+1];
     uint8_t *files[SOUND_EVENTS]; struct sound_clip clips[SOUND_EVENTS];
     struct sound_player player;
     int16_t tone[SOUND_RATE];
     int fd, hardware; uint64_t hardware_deadline, drain_until;
     uint32_t drain_ms;
+    int mixer; struct sound_throttle played;
 };
 static void reload(struct worker *w)
 {
-    sound_defaults(&w->scheme);
-    FILE *f = fopen(SOUND_CFG,"rb");
-    if (f) { size_t n = fread(w->text,1,sizeof(w->text),f); if (!ferror(f)) (void)sound_parse(&w->scheme,w->text,n); fclose(f); }
+    (void)sound_load_at(&w->scheme,SOUND_CFG,SOUND_LEGACY_CFG,REG_DIRECTORY);
+    FILE *f;
     sound_reset(&w->player);
     if (w->fd >= 0) { close(w->fd); w->fd = -1; }
     w->drain_until = 0;
@@ -144,12 +147,26 @@ static void stop(struct worker *w)
     w->fd = -1; w->drain_until = 0; sound_reset(&w->player);
     if (w->hardware) { hardware_result(-ECANCELED); w->hardware = 0; }
 }
+/* Read-only policy checks stay on the worker, outside the queue lock. Fail
+ * closed if the device cannot be observed: never retain a deferred UI sound. */
+static int permitted(struct worker *w, int preview)
+{
+    if (w->mixer < 0) w->mixer = open("/dev/mixer",O_RDONLY|O_CLOEXEC);
+    if (w->mixer < 0) return 0;
+    struct ciuki_mixer_master m = {.version=1,.size=sizeof(m)};
+    struct ciuki_audio_diagnostics d = {.version=1,.size=sizeof(d)};
+    if (ciuki_devctl(w->mixer,MIXER_GET_MASTER,&m,sizeof(m)) ||
+        ciuki_devctl(w->mixer,MIXER_GET_DIAGNOSTICS,&d,sizeof(d))) {
+        close(w->mixer); w->mixer = -1; return 0;
+    }
+    return sound_allowed(&w->scheme,preview,m.mute != 0,!!(d.flags & CIUKI_AUDIO_DIAG_VM_ACTIVE));
+}
 static void *worker(void *unused)
 {
     (void)unused;
     struct worker *w = calloc(1,sizeof(*w));
     if (!w) { pthread_mutex_lock(&rt.lock); rt.live = rt.busy = 0; pthread_mutex_unlock(&rt.lock); hardware_result(-ENOMEM); return NULL; }
-    w->fd = -1; sound_tone(w->tone); reload(w);
+    w->fd = w->mixer = -1; sound_tone(w->tone); reload(w);
     for (;;) {
         struct command cmd = {0}; int have;
         pthread_mutex_lock(&rt.lock);
@@ -163,12 +180,17 @@ static void *worker(void *unused)
                 stop(w); w->hardware = 1; w->hardware_deadline = now_ns()+2000000000ull;
                 sound_play(&w->player,(struct sound_clip){(const uint8_t *)w->tone,SOUND_RATE});
             } else if (cmd.kind == CMD_SHUTDOWN) {
-                stop(w); if (w->scheme.enabled) sound_play(&w->player,w->clips[SOUND_SHUTDOWN]);
+                stop(w); if (permitted(w,0)) { w->player.volume = (unsigned)w->scheme.volume; sound_play(&w->player,w->clips[SOUND_SHUTDOWN]); }
             } else if (!w->hardware && (w->scheme.enabled || cmd.kind == CMD_TEST)) {
                 unsigned e = cmd.kind == CMD_TEST ? cmd.event : cmd.kind;
-                if (e < SOUND_EVENTS) (void)sound_play(&w->player,w->clips[e]);
+                if (e < SOUND_EVENTS && permitted(w,cmd.kind == CMD_TEST) &&
+                    sound_coalesce(&w->played,e,now_ns())) {
+                    w->player.volume = (unsigned)w->scheme.volume;
+                    (void)sound_play(&w->player,w->clips[e]);
+                }
             }
         }
+        if (!w->hardware && w->fd >= 0 && !permitted(w,1)) stop(w);
         if (sound_active(&w->player)) {
             w->drain_until = 0;
             int err = device(w);

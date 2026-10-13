@@ -63,7 +63,8 @@ struct cp_app {
     int audio_before_ok;
     char sound_text[SOUND_TEXT_MAX+1];
     struct sound_scheme sounds; unsigned sound_selected;
-    struct du_item sound_items[SOUND_EVENTS];
+    struct du_item sound_items[SOUND_EVENTS], scheme_items[3];
+    char sound_volume_label[24];
     char wall_names[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
     struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 8], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
     char wall_labels[CP_WALLPAPERS + 8][48];

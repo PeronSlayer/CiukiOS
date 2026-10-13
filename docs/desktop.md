@@ -354,7 +354,8 @@ and Intel 865G (`8086:2572`) and 915G (`8086:2582`) for the later baseline.
 A libdeskui program (560 x 420) with tabs Display (theme list with preview,
 wallpaper list with preview, Center/Tile/Stretch/Fit/Fill, six desktop colours,
 desktop icons on/off, Screen area and filtered Colours lists), Mouse (pointer speed and double-click speed, applied
-by the desktop), Keyboard (US or Italian), Sounds (master volume and mute
+by the desktop), Keyboard (US or Italian), Sounds (event assignments and Preview,
+Default/No sounds schemes, separate UI sounds volume, master volume and mute
 through the desktop's mixer handle), Date & Time (the clock and the 24 h and
 seconds options; setting the clock is not offered because the ABI has no
 clock-setting call), System (portrait, version, build, memory and current
@@ -362,6 +363,39 @@ display), and Adapter (current geometry/depth/pitch, VBE version/video memory,
 PCI adapter identity, VBE strings, monitor placeholder and Refresh).
 `--panel=display|mouse|keyboard|sounds|datetime|system|adapter` selects the
 first tab (the Settings menu uses it).
+
+System event sounds use the pinned Kenney CC0 pack. Startup and Desktop ready,
+shutdown, menu open/command, window open/close, minimise/restore, error,
+information/question dialogs, volume steps and removable device connect/disconnect
+have individual assignments. AutoPlay has an assignment and a client event hook;
+the current desktop has no AutoPlay action yet. Empty recycle remains the existing
+placeholder until recycling is implemented. The initial removable-media snapshot
+is silent; later arrivals, removals and generation replacements produce events.
+
+`/System/sounds/scheme.cfg` supplies the default WAV basenames. Existing
+`/system/settings/sounds.cfg` preferences are read as a migration overlay. With
+F2-47, typed registry values override both: `Desktop\Sounds` has boolean `Enabled`
+and integer `Volume` (0–100), and `Desktop\Sounds\<event>` has string `File`
+(an empty string disables that event). The Sounds page commits all its preferences
+in one registry branch merge, preserving other Desktop keys, then asks the service
+to reload. Choosing Default restores the pack's mappings while retaining UI volume;
+No sounds disables automatic playback. Preview still works in No sounds, subject
+to UI volume, master mute and VM priority. Custom assignments can be edited in
+Registry Editor and take effect on service reload or desktop restart.
+
+The sound worker owns file access, mixer queries, WAV mixing and nonblocking audio
+writes. Input/compositing only enqueue bounded commands. UI gain scales the two
+voices before saturation and never changes a game's stream gain. Master mute and
+active/queued DOS VM audio suppress UI sounds; a VM taking over also cancels current
+UI playback. Suppressed events are discarded. The existing mixer diagnostics flags
+expose VM activity without changing record size. Preview observes the same policy;
+the separate hardware test retains its fixed 1 kHz diagnostic tone.
+
+Dragging the tray volume slider submits each changed step, and Up/Down in its popup
+change the master by one percent. Extended keyboard Volume Up/Down and Mute keys
+are also handled. Volume feedback follows successful asynchronous mixer completion;
+volume bursts are throttled on enqueue and playback to at most one tick per 60 ms.
+See [F4-12 research and decisions](design/f4-ui-sounds.md).
 
 Wallpaper and other preferences still save immediately. Resolution and colour
 depth stay staged until Apply. A successful desktop reply and matching query

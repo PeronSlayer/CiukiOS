@@ -2,6 +2,7 @@
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
  * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter. */
 #include "control.h"
+#include "../desktop/sound_storage.h"
 #include "../desktop/settings_io.h"
 #include <ciuki/audio.h>
 #include <ciuki/proc.h>
@@ -120,19 +121,15 @@ static int usb_hwid_name(void *ctx, unsigned vendor, unsigned device, char *out,
 }
 static int load_sounds(void *ctx, char *text, size_t size, size_t *length)
 {
-    (void)ctx; FILE *f = fopen(SOUND_CFG,"rb"); if (!f) return -1;
-    *length = fread(text,1,size,f); int ok = !ferror(f) && *length < size; fclose(f); return ok ? 0 : -1;
+    (void)ctx; struct sound_scheme s;
+    (void)sound_load_at(&s,SOUND_CFG,SOUND_LEGACY_CFG,REG_DIRECTORY);
+    *length = sound_format(&s,text,size); return *length ? 0 : -1;
 }
 static int save_sounds(void *ctx, const char *text, size_t length)
 {
-    (void)ctx; if (mkdir(CFG_DIR,0755) && errno != EEXIST) return -1;
-    const char *temp = CFG_DIR "/sounds.cpl"; FILE *f = fopen(temp,"wb"); if (!f) return -1;
-    int ok = fwrite(text,1,length,f) == length;
-    if (fflush(f) || fsync(fileno(f))) ok = 0;
-    if (fclose(f)) ok = 0;
-    if (ok && rename(temp,SOUND_CFG)) ok = !unlink(SOUND_CFG) && !rename(temp,SOUND_CFG);
-    if (!ok) unlink(temp);
-    return ok ? 0 : -1;
+    (void)ctx; struct sound_scheme s; sound_defaults(&s);
+    if (sound_parse(&s,text,length)) return -1;
+    return sound_save_at(&s,REG_DIRECTORY);
 }
 static int image_name(const char *name)
 {

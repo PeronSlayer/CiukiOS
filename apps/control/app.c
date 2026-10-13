@@ -18,7 +18,7 @@ enum {
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
-    C_DETAILS = 130, D_PROPERTIES = 200, D_INFO
+    C_DETAILS = 130, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts"};
 static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System", "Device Manager", "Drivers", "Network", "Power", "Adapter", "Fonts"};
@@ -201,6 +201,14 @@ static void sync(struct cp_app *a)
     for (unsigned k = 0; k < SOUND_EVENTS; k++) a->sound_items[k].selected = k == a->sound_selected;
     if ((w = du_get(u,C_SOUND_LIST))) w->active = a->sound_selected;
     if ((w = du_get(u,C_SOUND_ENABLED))) w->value = a->sounds.enabled;
+    struct sound_scheme defaults; sound_defaults(&defaults);
+    unsigned scheme = !a->sounds.enabled ? 1 : memcmp(defaults.file,a->sounds.file,sizeof(defaults.file)) ? 2 : 0;
+    for (unsigned k = 0; k < 3; k++) a->scheme_items[k].selected = k == scheme;
+    if ((w = du_get(u,C_SCHEME))) w->active = scheme;
+    if ((w = du_get(u,C_UI_VOL))) w->value = a->sounds.volume;
+    snprintf(a->sound_volume_label,sizeof(a->sound_volume_label),"%d%%",a->sounds.volume);
+    text(a,C_UI_VOL_V,a->sound_volume_label);
+    for (unsigned k = 0; k < SOUND_EVENTS; k++) a->sound_items[k].text[1] = a->sounds.file[k][0] ? a->sounds.file[k] : "(None)";
     if ((w = du_get(u,C_HARDWARE))) w->disabled = a->audio_testing;
     toggle_label(a, C_H24, "24-hour clock", a->cfg.clock_24h);
     toggle_label(a, C_SECONDS, "Show seconds", a->cfg.clock_seconds);
@@ -366,9 +374,16 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             text(a,C_STATUS,r ? "Audio test could not start." : e->id == C_HARDWARE ? "Testing audio hardware..." : "Playing selected sound.");
         }
         break;
-    case C_SOUND_ENABLED:
-        if (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE) {
-            struct sound_scheme next = a->sounds; next.enabled = !next.enabled;
+    case C_SOUND_ENABLED: case C_SCHEME: case C_UI_VOL:
+        if ((e->id == C_SCHEME && e->type == DU_EV_SELECT && e->index >= 0 && e->index < 2) ||
+            (e->id == C_UI_VOL && e->type == DU_EV_CHANGE && e->index >= 0 && e->index <= 100) ||
+            (e->id == C_SOUND_ENABLED && (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE))) {
+            struct sound_scheme next = a->sounds;
+            if (e->id == C_SCHEME) {
+                if (!e->index) { int volume = next.volume; sound_defaults(&next); next.volume = volume; }
+                else next.enabled = 0;
+            } else if (e->id == C_UI_VOL) next.volume = e->index;
+            else next.enabled = !next.enabled;
             size_t n = sound_format(&next,a->sound_text,sizeof(a->sound_text));
             if (!n || !a->host.save_sounds || a->host.save_sounds(a->host.ctx,a->sound_text,n)) text(a,C_STATUS,"Sound settings could not be saved.");
             else {
@@ -819,19 +834,25 @@ static void build(struct cp_app *a)
     add(a, DU_LABEL, C_KEY_NOTE2, 24, 140, 452, 14, "afterwards receive it in CIUKI_KEYMAP.");
     } else if (a->page == CP_SOUNDS) {
     /* Sounds */
-    add(a, DU_LABEL, C_VOL_L, 24, 44, 200, 14, "Master &volume:");
-    w = add(a, DU_SCROLLBAR, C_VOL, 24, 62, 300, 17, ""); w->vertical = 0; w->total = 101; w->page = 1;
-    add(a, DU_LABEL, C_VOL_V, 336, 62, 80, 17, "");
-    add(a, DU_BUTTON, C_MUTE, 24, 94, 140, 24, "");
-    add(a, DU_CHECKBOX, C_SOUND_ENABLED, 184, 94, 290, 24, "Play system sounds");
+    add(a, DU_LABEL, C_VOL_L, 24, 44, 180, 14, "Master &volume:");
+    w = add(a, DU_SCROLLBAR, C_VOL, 24, 62, 160, 17, ""); w->vertical = 0; w->total = 101; w->page = 1;
+    add(a, DU_LABEL, C_VOL_V, 194, 62, 48, 17, "");
+    add(a, DU_LABEL, 898, 270, 44, 180, 14, "UI sounds volume:");
+    w = add(a, DU_SCROLLBAR, C_UI_VOL, 270, 62, 150, 17, ""); w->vertical = 0; w->total = 101; w->page = 1;
+    add(a, DU_LABEL, C_UI_VOL_V, 430, 62, 46, 17, "");
+    add(a, DU_BUTTON, C_MUTE, 24, 88, 140, 24, "");
+    add(a, DU_CHECKBOX, C_SOUND_ENABLED, 184, 88, 290, 24, "Play system sounds");
+    static const char *const schemes[] = {"Default", "No sounds", "Custom"};
+    for (unsigned k = 0; k < 3; k++) a->scheme_items[k].text[0] = schemes[k];
+    w = add(a,DU_TABS,C_SCHEME,24,124,452,28,""); w->items = a->scheme_items; w->count = 3;
     for (unsigned k = 0; k < SOUND_EVENTS; k++) {
         a->sound_items[k].text[0] = sound_labels[k]; a->sound_items[k].text[1] = a->sounds.file[k];
     }
-    w = add(a,DU_LISTVIEW,C_SOUND_LIST,24,126,452,154,""); w->items = a->sound_items; w->count = SOUND_EVENTS;
+    w = add(a,DU_LISTVIEW,C_SOUND_LIST,24,176,452,110,""); w->items = a->sound_items; w->count = SOUND_EVENTS;
     list_style(w,"Event"); w->column_count = 2;
     w->columns[0] = (struct du_column){"Event",170,0}; w->columns[1] = (struct du_column){"Assigned sound",258,0};
-    add(a,DU_BUTTON,C_SOUND_TEST,24,290,90,24,"Test");
-    add(a,DU_BUTTON,C_HARDWARE,124,290,220,24,"Test audio hardware");
+    add(a,DU_BUTTON,C_SOUND_TEST,24,294,90,24,"Preview");
+    add(a,DU_BUTTON,C_HARDWARE,124,294,220,24,"Test audio hardware");
     add(a,DU_LABEL,C_AUDIO,24,326,452,14,"");
     } else if (a->page == CP_DATETIME) {
     /* Date & Time */

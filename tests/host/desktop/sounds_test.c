@@ -28,12 +28,22 @@ int main(int argc, char **argv)
     assert(sound_path(&s,SOUND_QUESTION,path,sizeof(path)) == -ENOENT);
     assert(sound_path(&s,SOUND_EVENTS,path,sizeof(path)) == -EINVAL);
     assert(sound_path(&s,SOUND_ERROR,path,3) == -ENAMETOOLONG);
-    static const char *bad[] = {"enabled=2", "enabled=", "error=../bad.wav", "error=/bad.wav", "error=a.ogg", "error=a..wav", "badline"};
+    static const char *bad[] = {"ui_volume=101", "ui_volume=-1", "ui_volume=", "ui_volume=abc", "enabled=2", "enabled=", "error=../bad.wav", "error=/bad.wav", "error=a.ogg", "error=a..wav", "badline"};
     for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) { saved=s; assert(sound_parse(&s,bad[i],strlen(bad[i])) == -EINVAL); assert(!memcmp(&s,&saved,sizeof(s))); }
     assert(sound_parse(&s,"enabled=1\0error=a.wav",21) == -EINVAL);
     assert(sound_parse(&s,"",SOUND_TEXT_MAX+1) == -EINVAL);
     assert(!sound_format(&s,text,3));
     sound_defaults(&s);
+    struct sound_throttle throttle = {0};
+    assert(sound_coalesce(&throttle,SOUND_VOLUME,0));
+    assert(!sound_coalesce(&throttle,SOUND_VOLUME,59999999));
+    assert(sound_coalesce(&throttle,SOUND_VOLUME,60000000));
+    assert(sound_coalesce(&throttle,SOUND_ERROR,60000001));
+    assert(!sound_coalesce(&throttle,SOUND_VOLUME,119999999));
+    assert(sound_coalesce(&throttle,SOUND_VOLUME,120000000));
+    assert(sound_allowed(&s,0,0,0)); assert(!sound_allowed(&s,0,1,0)); assert(!sound_allowed(&s,1,0,1));
+    s.enabled=0; assert(!sound_allowed(&s,0,0,0)); assert(sound_allowed(&s,1,0,0));
+    s.volume=0;assert(!sound_allowed(&s,1,0,0));sound_defaults(&s);
     for (unsigned i=0;i<SOUND_EVENTS;i++) {
         snprintf(path,sizeof(path),"%s/%s",argv[1],s.file[i]); FILE *f=fopen(path,"rb"); assert(f);
         uint8_t data[SOUND_FILE_MAX+1]; n=fread(data,1,sizeof(data),f); fclose(f);
@@ -50,6 +60,10 @@ int main(int argc, char **argv)
     assert(!sound_play(&player,clip)); assert(!sound_play(&player,clip)); assert(sound_play(&player,clip) == -EBUSY);
     mode=1; while (sound_active(&player)) assert(sound_pump(&player,sink,NULL)>=0);
     assert(used==4 && output[0]==32767 && output[1]==-32768 && output[2]==200 && output[3]==-200);
+    sound_reset(&player); player.volume=25; used=0; calls=0;
+    assert(!sound_play(&player,clip)); assert(!sound_play(&player,clip));
+    while(sound_active(&player))assert(sound_pump(&player,sink,NULL)>=0);
+    assert(used==4 && output[0]==15000 && output[1]==-15000 && output[2]==50 && output[3]==-50);
     assert(!sound_play(&player,clip)); assert(sound_pump(&player,fail,NULL)==-EIO); assert(sound_play(&player,clip)==-EIO);
     sound_reset(&player); assert(!sound_active(&player));
     int16_t tone[SOUND_RATE]; sound_tone(tone); assert(!tone[0] && !tone[SOUND_RATE-1]);
@@ -62,6 +76,7 @@ int main(int argc, char **argv)
     desk_message(&msg,DESK_SETTINGS,24); msg.data[0]=DESK_SHELL_VERSION; desk_put32(msg.data+8,DESK_SETTINGS_SOUND_TEST); desk_put32(msg.data+12,SOUND_ERROR);
     assert(desk_parse(&msg,1,NULL,&packet)); desk_put32(msg.data+12,SOUND_EVENTS); assert(!desk_parse(&msg,1,NULL,&packet));
     desk_message(&msg,DESK_SOUND,8); msg.data[0]=DESK_SHELL_VERSION; desk_put32(msg.data+4,SOUND_QUESTION); assert(desk_parse(&msg,1,NULL,&packet));
+    desk_put32(msg.data+4,SOUND_AUTOPLAY); assert(desk_parse(&msg,1,NULL,&packet));
     desk_put32(msg.data+4,SOUND_STARTUP); assert(!desk_parse(&msg,1,NULL,&packet));
     puts("PASS sounds: schemes, paths, WAV bounds/padding, two voices, saturation, partial/EAGAIN/EINTR writes, reset/failure, 1 kHz tone, protocol");
 }
