@@ -7,6 +7,10 @@ mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
 python3 "$root/tests/host/record_scope_test.py"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -fsanitize=address,undefined -I "$root/src/kernel/include" \
+    "$root/tests/host/record_runtime_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/record_runtime_test"
+"$out/record_runtime_test"
 python3 "$root/tests/host/fbdev_fixture_size_test.py"
 
 # F2 ABI: always extract the actual i686 layout using the kernel's flags.

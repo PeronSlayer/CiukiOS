@@ -18,6 +18,69 @@ extern void audio_vm_kick(void) __attribute__((weak));
 static struct dosvm slots[DOSVM_LIMIT];
 static struct dosvm_key input_focus;
 
+/* f3-10: sample the interrupted guest, before emulation or IRQ injection can
+ * replace CS:EIP with a handler's entry. Device time keeps advancing while
+ * virtual IF is clear. Only this preemptible path prints, never the IRQ hook.
+ * Start with graphics, so a slow WAD load cannot use the menu's budget. */
+static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE) || v->info.state >= DOSVM_STOPPING ||
+        v->trace.heartbeats >= DOSVM_HEARTBEAT_LIMIT) return;
+    uint32_t flags = irq_save();
+    uint64_t tick = g_ticks; /* coherent on i686, including the low-word wrap */
+    irq_restore(flags);
+    if (!v->trace.heartbeat_started) {
+        if (!(v->vga.gc[6] & 1)) return;
+        v->trace.heartbeat_started = true;
+        v->trace.heartbeat_tick = tick;
+        return;
+    }
+    if (tick - v->trace.heartbeat_tick < DOSVM_HEARTBEAT_TICKS) return;
+    /* The timer IRQ mutates PIT, PIC and DSP counters. Copy a single coherent
+     * sample before the first UART write, without copying the large queues. */
+    struct {
+        uint64_t tick, edges, lost;
+        struct v86_pic pic[2];
+        struct dosvm_pit_channel pit;
+        struct dosvm_dma_channel dma;
+        struct dosvm_sb_transfer x;
+        uint32_t irq0, irq1, sb_irqs, kq, kr, units, sb_edges, services;
+        uint32_t frames, starts, linear, planes, faults;
+        uint8_t kcmd, sb_irq, causes, error;
+    } r;
+    flags = irq_save();
+    r.tick = g_ticks; r.edges = v->pit.edges; r.lost = v->pit.dropped_ticks;
+    memcpy(r.pic, v->monitor.pic, sizeof(r.pic)); r.pit = v->pit.channel[0];
+    r.irq0 = v->monitor.stats.delivered[0]; r.irq1 = v->monitor.stats.delivered[1];
+    r.kq = v->kbd.count; r.kr = v->kbd.reads; r.kcmd = v->kbd.command;
+    const struct dosvm_sb16 *sb = &v->audio.sb;
+    r.x = sb->x; r.dma = v->audio.dma.ch[r.x.channel & 7];
+    r.units = sb->units; r.sb_edges = sb->irq_edges; r.services = sb->services;
+    r.sb_irq = sb->irq; r.sb_irqs = v->monitor.stats.delivered[sb->irq & 15];
+    r.causes = sb->causes; r.error = sb->last_error;
+    r.frames = v->video_frames; r.starts = v->video_starts;
+    r.linear = v->video_linear_harvests; r.planes = v->video_flushes; r.faults = v->video_faults;
+    v->trace.heartbeat_tick = r.tick;
+    unsigned n = ++v->trace.heartbeats;
+    irq_restore(flags);
+    const char *probe = dosvm_probe(v);
+    unsigned id = v->info.key.id, gen = v->info.key.generation;
+    rec_diag(probe, "group=vm_heartbeat vm=%u gen=%u n=%u tick=%llu pm=%u cs=%04x eip=%08x if=%u vif=%u arm=%u sh=%u depth=%u",
+             id, gen, n, r.tick, !(f->tf.eflags & V86_VM), f->tf.cs & 0xFFFF, f->tf.eip,
+             !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed,
+             v->monitor.shadow || v->dpmi.shadow, v->dpmi.depth);
+    rec_diag(probe, "group=vm_beat_irq vm=%u gen=%u n=%u irr=%02x%02x isr=%02x%02x imr=%02x%02x irq0=%u irq1=%u kq=%u kr=%u kcmd=%02x",
+             id, gen, n, r.pic[1].irr, r.pic[0].irr, r.pic[1].isr, r.pic[0].isr,
+             r.pic[1].imr, r.pic[0].imr, r.irq0, r.irq1, r.kq, r.kr, r.kcmd);
+    rec_diag(probe, "group=vm_beat_pit vm=%u gen=%u n=%u edges=%llu lost=%llu reload=%u pending=%u mode=%u run=%u gate=%u",
+             id, gen, n, r.edges, r.lost, r.pit.reload, r.pit.pending, r.pit.mode, r.pit.running, r.pit.gate);
+    rec_diag(probe, "group=vm_beat_sb vm=%u gen=%u n=%u ch=%u addr=%04x count=%04x units=%u edges=%u irq=%u hits=%u ack=%u a=%u p=%u w=%u m=%u cause=%02x err=%u",
+             id, gen, n, r.x.channel, r.dma.address, r.dma.count, r.units, r.sb_edges, r.sb_irq, r.sb_irqs,
+             r.services, r.x.active, r.x.paused, r.x.waiting, r.dma.masked, r.causes, r.error);
+    rec_diag(probe, "group=vm_beat_vga vm=%u gen=%u n=%u frames=%u flips=%u linear=%u planes=%u faults=%u direct=%u chain=%u",
+             id, gen, n, r.frames, r.starts, r.linear, r.planes, r.faults, v->video_direct, !!(v->vga.seq[4] & 8));
+}
+
 /* Runtime diagnostics live here to keep record ownership in the lifecycle
  * service. Call only from the preemptible monitor, never dosvm_tick or an
  * IF-disabled device transaction (polled UART writes can lose PIT ticks). */
@@ -341,6 +404,7 @@ bool dosvm_trap(struct trap_frame *tf)
     memcpy(f, tf, size);
     v->frame_pm = pm;
     sti();
+    dosvm_heartbeat(v, f);
     if (tf->vector == 1)
         dosvm_trace(v, pm ? DOSVM_TRACE_DB_PM : DOSVM_TRACE_DB_RM, f, dr6, dpmi_debug_status(v, dr6), 0);
     int e = 0;
@@ -405,6 +469,7 @@ bool dosvm_trap(struct trap_frame *tf)
         if (v->monitor.state != V86_HALTED) break;
         v->info.state = DOSVM_BLOCKED;
         kwait_wait_until(&v->wake, wake_condition, v, deadline_after_ms(10));
+        dosvm_heartbeat(v, f); /* a guest HLT with IF clear also needs samples */
     }
     /* A protected-mode frame must let the kernel IRET succeed. */
     if (v->info.state != DOSVM_STOPPING && v->frame_pm && !dpmi_frame_check(v, f)) {
@@ -476,7 +541,7 @@ static void worker(void *arg)
     tss_set_kernel_stack((uint32_t)v->task->kstack + KSTACK_SIZE);
     uint8_t code[8] = {0};
     if (v->info.reason == DOSVM_FAULT) dosvm_read(v, v->info.fault_eip, code, sizeof(code));
-    rec_emit(dosvm_probe(v), "DATA", "group=vm_stop vm=%u generation=%u reason=%u vector=%u eip=%08x address=%08x error=%x code=%02x%02x%02x%02x%02x%02x%02x%02x",
+    if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_stop vm=%u generation=%u reason=%u vector=%u eip=%08x address=%08x error=%x code=%02x%02x%02x%02x%02x%02x%02x%02x",
              v->info.key.id, v->info.key.generation, v->info.reason,
              v->info.fault_vector, v->info.fault_eip, v->info.fault_address, v->info.fault_error,
              code[0], code[1], code[2], code[3], code[4], code[5], code[6], code[7]);
@@ -485,7 +550,7 @@ static void worker(void *arg)
          * and return addresses name the DOS path without a build-time trace. */
         const struct v86_frame *s = &v->frame;
         /* A DPMI frame shows selectors and the protected-mode CS:EIP. */
-        rec_emit(dosvm_probe(v), "DATA", "group=vm_fault pm=%u ax=%04x bx=%04x cx=%04x dx=%04x si=%04x di=%04x bp=%04x ds=%04x es=%04x ss=%04x sp=%04x cs=%04x ip=%08x",
+        if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_fault pm=%u ax=%04x bx=%04x cx=%04x dx=%04x si=%04x di=%04x bp=%04x ds=%04x es=%04x ss=%04x sp=%04x cs=%04x ip=%08x",
                  v->frame_pm, s->tf.eax & 0xFFFF, s->tf.ebx & 0xFFFF, s->tf.ecx & 0xFFFF, s->tf.edx & 0xFFFF,
                  s->tf.esi & 0xFFFF, s->tf.edi & 0xFFFF, s->tf.ebp & 0xFFFF,
                  (v->frame_pm ? s->tf.ds : s->ds) & 0xFFFF, (v->frame_pm ? s->tf.es : s->es) & 0xFFFF,
@@ -497,7 +562,7 @@ static void worker(void *arg)
         for (unsigned part = 0; part < 3; part++) {
             uint16_t w[16] = {0};
             dosvm_read(v, top + part * sizeof(w), w, sizeof(w));
-            rec_emit(dosvm_probe(v), "DATA", "group=vm_stack part=%u words=%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x",
+            if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_stack part=%u words=%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x",
                      part, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
         }
     }
@@ -538,7 +603,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     /* A failed unlink retains the generation/table for retry, never reuses
      * a slot while its private scratch file still exists. */
     v->info.state = v->overlay_created ? DOSVM_STOPPING : DOSVM_DEAD;
-    rec_emit(dosvm_probe(v), "DATA", "group=vm_cleanup vm=%u generation=%u data_loss=%u error=%d",
+    if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_cleanup vm=%u generation=%u data_loss=%u error=%d",
              key.id, key.generation, v->info.data_loss, e);
     return e;
 }
@@ -553,7 +618,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     dosvm_snapshot(&ledger);
     bool admit = dosvm_admit((uint64_t)pmm_free_count() * PAGE_SIZE,
                              ledger.reserved, ledger.resident, commitment, &admission);
-    rec_emit(config && config->probe ? config->probe : "vm-boot", "DATA", "group=admission free=%llu reserved=%llu resident=%llu outstanding=%llu request=%u headroom=%u admitted=%u",
+    if (rec_active()) rec_emit(config && config->probe ? config->probe : "vm-boot", "DATA", "group=admission free=%llu reserved=%llu resident=%llu outstanding=%llu request=%u headroom=%u admitted=%u",
              admission.free_bytes, admission.reserved_bytes, admission.resident_bytes,
              admission.outstanding_bytes, commitment, DOSVM_HEADROOM, admit);
     if (!admit) return -ENOMEM;

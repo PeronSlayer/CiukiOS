@@ -21,6 +21,10 @@
  * ends with the timed line on the screen and RUNREC FAIL R01 T00 (exit 1).
  * With an rc: prefix and GUEST_EXPECT_TEXT='timed 1710 gametics in', the
  * runner goes on to the shell prompt and checks the verdict-time screen.
+ * f3-10 menu:COMMAND NAME continues beyond video startup, checks IRQ0/DMA
+ * progress, opens/navigates/closes DOOM's menu through the virtual 8042 and
+ * compares the rendered title/menu frames. GUEST_MENU_SOUND=1 additionally
+ * requires SB transfer/IRQ progress (leave unset for -nosound).
  * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -52,6 +56,7 @@
 #define V2P(p) ((uint32_t)((uint8_t *)(p) - ram))
 #define HOST_PAGES 32768u
 #define SLICE 4000u
+static unsigned guest_slice = SLICE;
 static unsigned used_pages, unexpected;
 static bool allocated[HOST_PAGES];
 static uint8_t *ram;
@@ -209,6 +214,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     }
     printf("  record %s %s %s\n", probe, event, extra);
 }
+bool rec_active(void) { return true; } /* host replay owns its record scope */
 void rec_diag(const char *probe, const char *fmt, ...)
 {
     if (!(g_boot.flags & CBI_F_VERBOSE)) return;
@@ -412,7 +418,7 @@ static int run(uint64_t budget, bool (*done)(void))
         }
         if (stopped()) break;
         if (ev.executed >= slice_left && !(rc == GCPU_BUDGET && ev.ss_shadow)) {
-            slice_left = SLICE;
+            slice_left = guest_slice;
             g_ticks++;
             dosvm_tick();
             deliver(0x20, 0, 0);        /* the host's 1 kHz timer IRQ: a delivery point */
@@ -559,6 +565,73 @@ static int window_vmvideo(const char *command)
     }
     return prompt() ? 0 : 1;
 }
+static uint64_t menu_until;
+static bool menu_elapsed(void) { return g_ticks >= menu_until; }
+static bool menu_wait(uint32_t ms)
+{
+    menu_until = g_ticks + ms;
+    return run((uint64_t)ms * guest_slice * 4, menu_elapsed) == 1;
+}
+static bool menu_frame(uint8_t digest[32])
+{
+    struct dosvm_frame f;
+    if (dosvm_frame_digest(gv, 0, &f) || f.text || f.mode != 0x13) return false;
+    memcpy(digest, f.digest, sizeof(f.digest));
+    return true;
+}
+/* Compare stable title -> Escape menu -> Down item -> Escape title. Timer
+ * delivery alone is not proof that DOOM consumes its input: rendering must
+ * change and closing the menu must restore the original title pixels. */
+static bool menu_replay(void)
+{
+    bool sound = getenv("GUEST_MENU_SOUND") != 0;
+    uint8_t title[32], menu[32], down[32], closed[32];
+    if (getenv("GUEST_MENU_RING")) ring_on = 1;
+    CHECK(dosvm_input_focus(dosvm_key(gv), true));
+    if (!menu_wait(500) || !menu_frame(title)) return false;
+    uint64_t begin = g_ticks;
+    uint32_t timer = gv->monitor.stats.delivered[0], keys = gv->monitor.stats.delivered[1];
+    uint32_t reads = gv->kbd.reads, units = gv->audio.sb.units, sb_irqs = gv->audio.sb.irq_edges;
+    uint32_t flips = gv->video_starts;
+    window_key(0x01, 1); window_key(0x01, 0);
+    if (!menu_wait(400) || !menu_frame(menu)) return false;
+    window_key(0x150, 1); window_key(0x150, 0);
+    if (!menu_wait(400) || !menu_frame(down)) return false;
+    window_key(0x01, 1); window_key(0x01, 0);
+    if (!menu_wait(400) || !menu_frame(closed)) return false;
+    uint32_t ticks = gv->monitor.stats.delivered[0] - timer;
+    uint32_t irq1 = gv->monitor.stats.delivered[1] - keys, bytes = gv->kbd.reads - reads;
+    uint32_t transfers = gv->audio.sb.units - units, edges = gv->audio.sb.irq_edges - sb_irqs;
+    bool opened = memcmp(title, menu, 32) != 0, moved = memcmp(menu, down, 32) != 0;
+    bool restored = memcmp(title, closed, 32) == 0;
+    bool images = opened && moved && restored;
+    bool pass = images && ticks >= 160 && ticks <= 175 && irq1 == 8 && bytes == 8 && !gv->kbd.count &&
+                gv->video_starts > flips && (!sound || (transfers && edges));
+    printf("menu replay: %s ms=%llu irq0=%u irq1=%u bytes=%u images=%u/%u/%u flips=%u dma_units=%u sb_edges=%u vif=%u pending=%02x/%02x\n",
+           pass ? "PASS" : "FAIL", (unsigned long long)(g_ticks - begin), ticks, irq1, bytes, opened, moved, restored, gv->video_starts - flips,
+           transfers, edges, gv->monitor.vif, gv->monitor.pic[0].irr, gv->monitor.pic[0].isr);
+    if (!pass) {
+        printf("menu PC: %04x:%08x linear=%08x flags=%08x arm=%u sh=%u depth=%u seed=%04x:%08x\n",
+               cpu.tf.cs & 0xFFFF, cpu.tf.eip, dpmi_fault_linear(gv, &cpu), cpu.tf.eflags,
+               gv->dpmi.if_armed, gv->dpmi.shadow, gv->dpmi.depth, gv->dpmi.decode_cs, gv->dpmi.decode_eip);
+        ring_dump();
+    }
+    if (!pass) return false;
+    /* Continue long enough for two periodic verbose samples and for a
+     * stall after the last key to fail. The title digest comparison above
+     * finishes before DOOM's attract sequence can replace that page. */
+    begin = g_ticks; timer = gv->monitor.stats.delivered[0];
+    units = gv->audio.sb.units; sb_irqs = gv->audio.sb.irq_edges; flips = gv->video_starts;
+    if (!menu_wait(2400)) return false;
+    ticks = gv->monitor.stats.delivered[0] - timer;
+    transfers = gv->audio.sb.units - units; edges = gv->audio.sb.irq_edges - sb_irqs;
+    pass = ticks >= 330 && ticks <= 340 && gv->video_starts > flips &&
+           (!sound || (transfers && edges));
+    printf("menu sustain: %s ms=%llu irq0=%u flips=%u dma_units=%u sb_edges=%u heartbeats=%u\n",
+           pass ? "PASS" : "FAIL", (unsigned long long)(g_ticks - begin), ticks,
+           gv->video_starts - flips, transfers, edges, gv->trace.heartbeats);
+    return pass;
+}
 static void stats(const char *name)
 {
     struct dpmi_info info;
@@ -582,6 +655,12 @@ int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: %s DOSBOOT.IMG|CIUKIGAM.IMG [COMMAND NAME]...\n", argv[0]); return 2; }
     setvbuf(stdout, 0, _IOLBF, 0);
+    const char *slice = getenv("GUEST_SLICE");
+    if (slice) {
+        unsigned long value = strtoul(slice, 0, 10);
+        CHECK(value >= 100 && value <= 1000000);
+        slice_left = guest_slice = (unsigned)value;
+    }
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     disk_image = fopen(argv[1], "rb"); CHECK(disk_image);
     if (getenv("GUEST_VERBOSE")) g_boot.flags |= CBI_F_VERBOSE;
@@ -604,13 +683,14 @@ int main(int argc, char **argv)
          * latched at the verdict must still hold GUEST_EXPECT_TEXT. */
         bool rc = !strncmp(argv[i], "rc:", 3);
         bool video = !strncmp(argv[i], "video:", 6);
+        bool menu = !strncmp(argv[i], "menu:", 5);
         if (!strncmp(argv[i], "keys:", 5)) {
             CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
             printf("run %s through window keys (expect VMVIDEO stage 1, then stages 2-6)\n", argv[i] + 5);
             if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
             continue;
         }
-        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : video ? argv[i] + 6 : argv[i];
+        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : video ? argv[i] + 6 : menu ? argv[i] + 5 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
         dosvm_expect(gv, argv[i + 1]);
@@ -619,13 +699,14 @@ int main(int argc, char **argv)
         type(command);
         /* GUEST_BUDGET (instructions per command): long workloads (f3-06 DOOM). */
         const char *budget = getenv("GUEST_BUDGET");
-        r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull, fault ? 0 : video ? video_started : verdict);
-        if (video) {
+        r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull, fault ? 0 : video || menu ? video_started : verdict);
+        if (video || menu) {
             printf("video startup replay: %s (%llu instructions, %llu ms, PM timer IRQs=%u)\n",
                    r == 1 ? "PASS" : "FAIL", (unsigned long long)(instructions - start),
                    (unsigned long long)(g_ticks - ms), gv->dpmi.stats.irqs_pm - startup_irqs);
             stats("video-startup");
             if (r != 1) { failures++; screen(); }
+            else if (menu && !menu_replay()) { failures++; fault_dump(); screen(); }
             break;
         }
         printf("  -> %s %s detail=%s state=%u reason=%u vector=%u after %llu instructions, %llu ms\n",

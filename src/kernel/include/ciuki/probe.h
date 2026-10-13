@@ -27,6 +27,8 @@ void probe_app_output(struct task *t, const char *stream, const void *bytes, uin
 
 /* CIUKI_TEST v=1 run=<id> seq=<n> probe=<p> event=<e> [key=value ...] */
 void rec_set_run(const char *run8);
+/* Runtime services emit evidence only inside a selected, begun test run. */
+bool rec_active(void);
 void rec_emit(const char *probe, const char *event, const char *fmt, ...);
 /* Bounded runtime diagnostics, DATA framing; boot menu L only. Unlike
  * evidence, these also work without a selected/begun test run. */

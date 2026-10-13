@@ -14,6 +14,7 @@ static uint32_t seq, premature_records;
 static bool run_selected, run_begun, premature_noted;
 
 uint32_t rec_premature_records(void) { return premature_records; }
+bool rec_active(void) { return run_selected && run_begun; }
 
 void kputs_raw(const char *s)
 {

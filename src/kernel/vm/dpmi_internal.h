@@ -105,6 +105,10 @@ struct dpmi {
     /* f3-06 POPF compatibility: a flags image saved before a CLI carries
      * TF, so its POPF/IRET traps once (dpmi_dispatch.c). */
     bool if_armed;
+    /* f3-10: bounded, flags-clean boundaries after an extender IRET. */
+    uint16_t return_steps;
+    uint8_t return_depth, return_client;
+    uint16_t return_cs, return_ss;
     bool decode_valid;
     uint16_t decode_cs;
     uint32_t decode_eip;            /* known boundary at entry/previous trap return */
