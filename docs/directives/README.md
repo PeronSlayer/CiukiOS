@@ -123,7 +123,7 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [runner-02-usb-devices](runner-02-usb-devices.md) | runner | gpt-6.1-sol / high | delivered and merged 2026-10-13 (usb profile lists, i8042=off, serial_patterns, suite f1-usb); QEMU run pending |
 | [f1-45-uhci-root-port-enumeration](f1-45-uhci-root-port-enumeration.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (the usb-host task was never started; root-port and enumeration records); f1-usb re-run pending |
 | [f1-46-usb-only-input-startup](f1-46-usb-only-input-startup.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (input grants independent of i8042 state, [input] device records, hub port records); f1-usb re-run pending (processes_equal=0 in the probe to explain) |
-| [f1-47-usb-storage-data-phase](f1-47-usb-storage-data-phase.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-13 (Lexar stick: first bulk data phase faults on the T23) |
+| [f1-47-usb-storage-data-phase](f1-47-usb-storage-data-phase.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (bulk stage budget, error classification, fault diagnostics); T23 retest pending |
 | [f1-48-optical-drive-binding](f1-48-optical-drive-binding.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-13 (ATAPI identified, optical slot never bound on the T23) |
 | [f1-49-savage-ports-only](f1-49-savage-ports-only.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-13 (mmio_alias_dead after CR40.0: VGA registers through the ports) |
 | [f2-50-rendering-architecture](f2-50-rendering-architecture.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner: the desktop still stutters; design and implement backing stores, pacing, no double copy) |
