@@ -115,3 +115,8 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-48-compositor-round-two](f2-48-compositor-round-two.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (58 ms composite on the T23; 64 KiB wallpaper reads) |
 | [f2-49-truetype-fonts](f2-49-truetype-fonts.md) | F2+/F5 prerequisite | gpt-6.1-sol / xhigh | running 2026-10-13 (rasteriser library, Liberation fonts, Fonts page) |
 | [f6-03-ndis-miniport-host-contract](f6-03-ndis-miniport-host-contract.md) | F6 | gpt-6.1-sol / xhigh | running 2026-10-13 (owner: integrate the driver pack; census of the 844 .sys and NDIS host contract, no code yet) |
+| [f1-42-usb-host-hid](f1-42-usb-host-hid.md) | F1 | gpt-6.1-sol / xhigh | queued 2026-10-13 (owner: native driver park; UHCI/OHCI, HID keyboard and mouse, contract first) |
+| [f1-43-usb-mass-storage](f1-43-usb-mass-storage.md) | F1 | gpt-6.1-sol / xhigh | queued 2026-10-13, after f1-42 (USB sticks as removable volumes) |
+| [f1-44-ata-busmaster-dma](f1-44-ata-busmaster-dma.md) | F1 | gpt-6.1-sol / xhigh | queued 2026-10-13 (UDMA on PIIX/VIA/SiS/ALi/nForce) |
+| [f6-08-nic-drivers-second-set](f6-08-nic-drivers-second-set.md) | F6 | gpt-6.1-sol / xhigh | queued 2026-10-13 (e1000, pcnet, tulip, 3c90x, via-rhine) |
+| [f4-11-audio-drivers-second-set](f4-11-audio-drivers-second-set.md) | F4 | gpt-6.1-sol / xhigh | queued 2026-10-13, after f4-10 (ES137x, SB16, AC'97 VIA/SiS/nForce) |
