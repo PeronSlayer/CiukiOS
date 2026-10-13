@@ -184,6 +184,7 @@ int dpmi_default_int(struct dosvm *, struct v86_frame *, uint8_t vector, bool ir
 int dpmi_enter_pm_handler(struct dosvm *, struct v86_frame *, uint8_t vector, uint8_t flags);
 int dpmi_stub_trap(struct dosvm *, struct v86_frame *, uint32_t offset);
 bool dpmi_handler_live(struct dosvm *, struct dpmi_vec);
+void dpmi_trace_irq_target(struct dosvm *, const struct v86_frame *, const char *, uint8_t, struct dpmi_vec);
 
 /* dpmi.c */
 int dpmi_int31(struct dosvm *, struct v86_frame *);

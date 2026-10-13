@@ -18,6 +18,53 @@ extern void audio_vm_kick(void) __attribute__((weak));
 static struct dosvm slots[DOSVM_LIMIT];
 static struct dosvm_key input_focus;
 
+/* A 200-byte polled UART record at 38400 baud costs about one BIOS tick.
+ * Printing inside a guest IRQ that sends early EOI then STI can manufacture
+ * recursive IRQ0s. DMX exhausts its private IRQ stacks after four such
+ * entries and returns without EOI (f3-12 validation). Snapshot now, print
+ * only outside the whole IRQ chain, including its real calls/callbacks.
+ * Never change delivery, virtual IF, device time or the guest's EOI. */
+static bool dosvm_in_irq(const struct dosvm *v)
+{
+    for (unsigned i = 0; i < v->dpmi.depth; i++)
+        if (v->dpmi.rec[i].flags & DPMI_RF_HWINT) return true;
+    return false;
+}
+
+static void dosvm_trace_flush(struct dosvm *v)
+{
+    if (dosvm_in_irq(v) && v->info.state != DOSVM_STOPPING) return;
+    for (unsigned i = 0; i < v->deferred_trace.count; i++)
+        rec_diag(dosvm_probe(v), "%s", v->deferred_trace.line[i]);
+    v->deferred_trace.count = 0;
+    if (v->deferred_trace.dropped) {
+        rec_diag(dosvm_probe(v), "group=vm_trace_drop vm=%u gen=%u count=%u",
+                 v->info.key.id, v->info.key.generation, v->deferred_trace.dropped);
+        v->deferred_trace.dropped = 0;
+    }
+}
+
+static void dosvm_diag(struct dosvm *v, const char *fmt, ...)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    bool defer = dosvm_in_irq(v) && v->info.state != DOSVM_STOPPING;
+    if (defer && v->deferred_trace.count == ARRAY_SIZE(v->deferred_trace.line)) {
+        if (v->deferred_trace.dropped != UINT32_MAX) v->deferred_trace.dropped++;
+        return;
+    }
+    char line[240];
+    va_list ap;
+    va_start(ap, fmt);
+    kvsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (defer) {
+        memcpy(v->deferred_trace.line[v->deferred_trace.count++], line, strlen(line) + 1);
+    } else {
+        dosvm_trace_flush(v);
+        rec_diag(dosvm_probe(v), "%s", line);
+    }
+}
+
 /* Called only with physical IF enabled in the worker, never from the timer
  * hook. Ages come from INTA, including PIC poll acknowledgements. Sampling
  * ISR alone cannot distinguish an EOI and reinjection in the same trap. */
@@ -105,21 +152,20 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
     v->trace.heartbeat_tick = r.tick;
     unsigned n = ++v->trace.heartbeats;
     irq_restore(flags);
-    const char *probe = dosvm_probe(v);
     unsigned id = v->info.key.id, gen = v->info.key.generation;
-    rec_diag(probe, "group=vm_heartbeat vm=%u gen=%u n=%u tick=%llu pm=%u cs=%04x eip=%08x if=%u vif=%u arm=%u sh=%u depth=%u",
+    dosvm_diag(v, "group=vm_heartbeat vm=%u gen=%u n=%u tick=%llu pm=%u cs=%04x eip=%08x if=%u vif=%u arm=%u sh=%u depth=%u",
              id, gen, n, r.tick, !(f->tf.eflags & V86_VM), f->tf.cs & 0xFFFF, f->tf.eip,
              !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed,
              v->monitor.shadow || v->dpmi.shadow, v->dpmi.depth);
-    rec_diag(probe, "group=vm_beat_irq vm=%u gen=%u n=%u irr=%02x%02x isr=%02x%02x imr=%02x%02x irq0=%u irq1=%u kq=%u kr=%u kcmd=%02x",
+    dosvm_diag(v, "group=vm_beat_irq vm=%u gen=%u n=%u irr=%02x%02x isr=%02x%02x imr=%02x%02x irq0=%u irq1=%u kq=%u kr=%u kcmd=%02x",
              id, gen, n, r.pic[1].irr, r.pic[0].irr, r.pic[1].isr, r.pic[0].isr,
              r.pic[1].imr, r.pic[0].imr, r.irq0, r.irq1, r.kq, r.kr, r.kcmd);
-    rec_diag(probe, "group=vm_beat_pit vm=%u gen=%u n=%u edges=%llu lost=%llu reload=%u pending=%u mode=%u run=%u gate=%u",
+    dosvm_diag(v, "group=vm_beat_pit vm=%u gen=%u n=%u edges=%llu lost=%llu reload=%u pending=%u mode=%u run=%u gate=%u",
              id, gen, n, r.edges, r.lost, r.pit.reload, r.pit.pending, r.pit.mode, r.pit.running, r.pit.gate);
-    rec_diag(probe, "group=vm_beat_sb vm=%u gen=%u n=%u ch=%u addr=%04x count=%04x units=%u edges=%u irq=%u hits=%u ack=%u a=%u p=%u w=%u m=%u cause=%02x err=%u",
+    dosvm_diag(v, "group=vm_beat_sb vm=%u gen=%u n=%u ch=%u addr=%04x count=%04x units=%u edges=%u irq=%u hits=%u ack=%u a=%u p=%u w=%u m=%u cause=%02x err=%u",
              id, gen, n, r.x.channel, r.dma.address, r.dma.count, r.units, r.sb_edges, r.sb_irq, r.sb_irqs,
              r.services, r.x.active, r.x.paused, r.x.waiting, r.dma.masked, r.causes, r.error);
-    rec_diag(probe, "group=vm_beat_vga vm=%u gen=%u n=%u frames=%u flips=%u linear=%u planes=%u faults=%u direct=%u chain=%u",
+    dosvm_diag(v, "group=vm_beat_vga vm=%u gen=%u n=%u frames=%u flips=%u linear=%u planes=%u faults=%u direct=%u chain=%u",
              id, gen, n, r.frames, r.starts, r.linear, r.planes, r.faults, v->video_direct, !!(v->vga.seq[4] & 8));
 }
 
@@ -175,35 +221,34 @@ void dosvm_trace(struct dosvm *v, enum dosvm_trace_kind kind, const struct v86_f
         v->trace.timer_tick = g_ticks;
     }
     unsigned n = ++v->trace.used[kind];
-    const char *probe = dosvm_probe(v);
     bool pm = !(f->tf.eflags & V86_VM);
     switch (kind) {
     case DOSVM_TRACE_VECTOR:
-        rec_diag(probe, "group=vm_vec vm=%u gen=%u n=%u api=%04x vec=%02x sel=%04x off=%08x pm=%u cs=%04x eip=%08x",
+        dosvm_diag(v, "group=vm_vec vm=%u gen=%u n=%u api=%04x vec=%02x sel=%04x off=%08x pm=%u cs=%04x eip=%08x",
                  v->info.key.id, v->info.key.generation, n, a >> 8, a & 255, b, c, pm,
                  f->tf.cs & 0xFFFF, f->tf.eip);
         break;
     case DOSVM_TRACE_PIT: {
         unsigned ch = a == 0x43 ? b >> 6 : a - 0x40;
         const struct dosvm_pit_channel *p = &v->pit.channel[ch];
-        rec_diag(probe, "group=vm_pit vm=%u gen=%u n=%u port=%02x byte=%02x ch=%u mode=%u access=%u reload=%u pending=%u half=%u cs=%04x eip=%08x vif=%u armed=%u",
+        dosvm_diag(v, "group=vm_pit vm=%u gen=%u n=%u port=%02x byte=%02x ch=%u mode=%u access=%u reload=%u pending=%u half=%u cs=%04x eip=%08x vif=%u armed=%u",
                  v->info.key.id, v->info.key.generation, n, a, b, ch, p->mode, p->access,
                  p->reload, p->pending, p->write_phase, f->tf.cs & 0xFFFF, f->tf.eip, v->monitor.vif, v->dpmi.if_armed);
         break;
     }
     case DOSVM_TRACE_IRQ0:
-        rec_diag(probe, "group=vm_irq0 vm=%u gen=%u epoch=%u n=%u pm=%u cs=%04x eip=%08x if=%u vif=1 tf=%u vec=%02x to_pm=%u sel=%04x off=%08x",
+        dosvm_diag(v, "group=vm_irq0 vm=%u gen=%u epoch=%u n=%u pm=%u cs=%04x eip=%08x if=%u vif=1 tf=%u vec=%02x to_pm=%u sel=%04x off=%08x",
                  v->info.key.id, v->info.key.generation, v->trace.irq_epochs, n, pm, f->tf.cs & 0xFFFF,
                  f->tf.eip, !!(f->tf.eflags & V86_IF), !!(f->tf.eflags & V86_TF), a, v->frame_pm, b, c);
         break;
     case DOSVM_TRACE_DB_PM: case DOSVM_TRACE_DB_RM:
-        rec_diag(probe, "group=vm_db vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x dr6=%08x cause=%08x tf=%u if=%u vif=%u armed=%u step=%s",
+        dosvm_diag(v, "group=vm_db vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x dr6=%08x cause=%08x tf=%u if=%u vif=%u armed=%u step=%s",
                  v->info.key.id, v->info.key.generation, n, pm, f->tf.cs & 0xFFFF, f->tf.eip, a, b,
                  !!(f->tf.eflags & V86_TF), !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed,
                  dosvm_step_owner(v, f, b));
         break;
     case DOSVM_TRACE_FLAGS:
-        rec_diag(probe, "group=vm_if vm=%u gen=%u n=%u restore=%u matched=%u cs=%04x eip=%08x vif=%u armed=%u seed=%u seed_cs=%04x seed_ip=%08x",
+        dosvm_diag(v, "group=vm_if vm=%u gen=%u n=%u restore=%u matched=%u cs=%04x eip=%08x vif=%u armed=%u seed=%u seed_cs=%04x seed_ip=%08x",
                  v->info.key.id, v->info.key.generation, n, a, b, f->tf.cs & 0xFFFF, f->tf.eip,
                  v->monitor.vif, v->dpmi.if_armed, v->dpmi.decode_valid, v->dpmi.decode_cs, v->dpmi.decode_eip);
         break;
@@ -213,16 +258,16 @@ void dosvm_trace(struct dosvm *v, enum dosvm_trace_kind kind, const struct v86_f
         uint32_t delivered = v->monitor.stats.delivered[0];
         struct v86_pic pic = v->monitor.pic[0];
         irq_restore(flags);
-        rec_diag(probe, "group=vm_clock vm=%u gen=%u n=%u tick=%llu clocks=%llu edges=%llu delivered=%u reload=%u",
+        dosvm_diag(v, "group=vm_clock vm=%u gen=%u n=%u tick=%llu clocks=%llu edges=%llu delivered=%u reload=%u",
                  v->info.key.id, v->info.key.generation, n, tick, clocks, edges, delivered, v->pit.channel[0].reload);
-        rec_diag(probe, "group=vm_gate vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x if=%u vif=%u armed=%u shadow=%u irr=%02x isr=%02x imr=%02x",
+        dosvm_diag(v, "group=vm_gate vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x if=%u vif=%u armed=%u shadow=%u irr=%02x isr=%02x imr=%02x",
                  v->info.key.id, v->info.key.generation, n, pm, f->tf.cs & 0xFFFF, f->tf.eip,
                  !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed,
                  v->monitor.shadow || v->dpmi.shadow, pic.irr, pic.isr, pic.imr);
         break;
     }
     case DOSVM_TRACE_FAULT:
-        rec_diag(probe, "group=vm_fault_pc vm=%u gen=%u pm=%u vec=%u cs=%04x eip=%08x linear=%08x address=%08x error=%x",
+        dosvm_diag(v, "group=vm_fault_pc vm=%u gen=%u pm=%u vec=%u cs=%04x eip=%08x linear=%08x address=%08x error=%x",
                  v->info.key.id, v->info.key.generation, pm, v->info.fault_vector,
                  f->tf.cs & 0xFFFF, f->tf.eip, v->info.fault_eip, v->info.fault_address, v->info.fault_error);
         break;
@@ -490,6 +535,7 @@ bool dosvm_trap(struct trap_frame *tf)
         else if (tf->vector == 3 || tf->vector == 4) e = v86_reflect(&v->monitor, f, tf->vector);
         else if (tf->vector < 0x20 || tf->vector >= 0x30) e = -EFAULT;
     }
+    dosvm_trace_flush(v);
     if (e < 0) {
         v->info.fault_vector = tf->vector;
         v->info.fault_eip = pm ? dpmi_fault_linear(v, (const struct v86_frame *)tf) : (tf->cs << 4) + tf->eip;
@@ -546,6 +592,7 @@ bool dosvm_trap(struct trap_frame *tf)
         dosvm_stop(v->info.key, DOSVM_FAULT);
     }
     if (v->info.state == DOSVM_STOPPING) {
+        dosvm_trace_flush(v);
         cli();
         v86_leave(v->continuation);
     }

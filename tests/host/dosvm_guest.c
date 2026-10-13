@@ -28,6 +28,9 @@
  * GUEST_IRQ0_RESTORE=<PM EIP> advances the PIT once at that armed POPF
  * #DB, before the production monitor restores virtual IF. This forces an
  * IRQ0 edge in the return-boundary window without changing guest bytes.
+ * GUEST_UART_BAUD=38400 with GUEST_VERBOSE=1 advances device time during
+ * monitor diagnostic output (8N1). This models the physical timer running
+ * while the kernel polls the UART; the zero-time logger misses IRQ nesting.
  * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -80,6 +83,21 @@ static void invlpg(uint32_t va) { (void)va; }
 static uint32_t *table_va(uint32_t p) { return P2V(p); }
 static uint32_t irq_save(void) { uint32_t f = cpu_flags; cli(); return f; }
 static void irq_restore(uint32_t f) { cpu_flags = f; }
+static unsigned uart_baud, uart_fraction, uart_records;
+static uint64_t uart_ms;
+static void uart_delay(unsigned bytes)
+{
+    if (!uart_baud) return;
+    CHECK(cpu_flags & V86_IF);
+    /* 8N1: ten wire bits per byte; retain sub-millisecond fractions. */
+    uint64_t wire = uart_fraction + (uint64_t)bytes * 10000;
+    unsigned ms = wire / uart_baud;
+    uart_fraction = wire % uart_baud;
+    uart_records++;
+    uart_ms += ms;
+    g_ticks += ms;
+    dosvm_tick();
+}
 
 void arch_ldt_load(const void *base, unsigned entries) { (void)base; (void)entries; }
 /* Debug registers of the runner's CPU: DR0-DR3/DR7 as loaded by the VM,
@@ -115,7 +133,14 @@ void pmm_free(uint32_t p) { allocated[p / PAGE_SIZE] = false; used_pages--; }
 uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages; }
 uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr, "panic: %s\n", fmt); abort(); }
-void klog(const char *fmt, ...) { (void)fmt; }
+void klog(const char *fmt, ...)
+{
+    if (!uart_baud) return;
+    char line[256];
+    va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof(line), fmt, ap); va_end(ap);
+    printf("  log %s\n", line);
+    uart_delay((unsigned)strlen(line) + 2); /* CRLF */
+}
 void *kmalloc(size_t n) { return malloc(n); }
 void kfree(void *p) { free(p); }
 #include "dosvm_aspace.inc"
@@ -226,6 +251,10 @@ void rec_diag(const char *probe, const char *fmt, ...)
     int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
     CHECK(n>=0 && n<(int)sizeof(extra));
     rec_emit(probe,"DATA","%s",extra);
+    char wire[512];
+    n = snprintf(wire, sizeof(wire), "CIUKI_TEST v=1 run=00000000 seq=000000 probe=%s event=DATA %s\r\n", probe, extra);
+    CHECK(n > 0 && n < (int)sizeof(wire));
+    uart_delay((unsigned)n);
 }
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
@@ -603,6 +632,19 @@ static bool menu_frame(uint8_t digest[32])
     memcpy(digest, f.digest, sizeof(f.digest));
     return true;
 }
+static bool menu_timer_progress(uint32_t ticks, uint64_t begin, uint64_t wire_begin,
+                                unsigned low, unsigned high)
+{
+    if (!uart_baud) return ticks >= low && ticks <= high;
+    /* The PIT keeps running during output but the PIC has one IRR bit:
+     * several edges can coalesce while the worker polls the UART. Bound
+     * deliveries by runnable time and total wall time, retaining the
+     * original eight-tick phase tolerance. A stopped timer cannot pass. */
+    uint64_t elapsed = g_ticks - begin, wire = uart_ms - wire_begin;
+    CHECK(elapsed >= wire);
+    uint64_t minimum = (elapsed - wire) * 140 / 1000;
+    return minimum > 8 && ticks >= minimum - 8 && ticks <= elapsed * 140 / 1000 + 8;
+}
 /* Compare stable title -> Escape menu -> Down item -> Escape title. Timer
  * delivery alone is not proof that DOOM consumes its input: rendering must
  * change and closing the menu must restore the original title pixels. */
@@ -613,7 +655,7 @@ static bool menu_replay(void)
     if (getenv("GUEST_MENU_RING")) ring_on = 1;
     CHECK(dosvm_input_focus(dosvm_key(gv), true));
     if (!menu_wait(500) || !menu_frame(title)) return false;
-    uint64_t begin = g_ticks;
+    uint64_t begin = g_ticks, wire_begin = uart_ms;
     uint32_t timer = gv->monitor.stats.delivered[0], keys = gv->monitor.stats.delivered[1];
     uint32_t reads = gv->kbd.reads, units = gv->audio.sb.units, sb_irqs = gv->audio.sb.irq_edges;
     uint32_t flips = gv->video_starts;
@@ -629,10 +671,10 @@ static bool menu_replay(void)
     bool opened = memcmp(title, menu, 32) != 0, moved = memcmp(menu, down, 32) != 0;
     bool restored = memcmp(title, closed, 32) == 0;
     bool images = opened && moved && restored;
-    bool pass = images && ticks >= 160 && ticks <= 175 && irq1 == 8 && bytes == 8 && !gv->kbd.count &&
+    bool pass = images && menu_timer_progress(ticks, begin, wire_begin, 160, 175) && irq1 == 8 && bytes == 8 && !gv->kbd.count &&
                 gv->video_starts > flips && (!sound || (transfers && edges));
-    printf("menu replay: %s ms=%llu irq0=%u irq1=%u bytes=%u images=%u/%u/%u flips=%u dma_units=%u sb_edges=%u vif=%u pending=%02x/%02x\n",
-           pass ? "PASS" : "FAIL", (unsigned long long)(g_ticks - begin), ticks, irq1, bytes, opened, moved, restored, gv->video_starts - flips,
+    printf("menu replay: %s ms=%llu uart_ms=%llu irq0=%u irq1=%u bytes=%u images=%u/%u/%u flips=%u dma_units=%u sb_edges=%u vif=%u pending=%02x/%02x\n",
+           pass ? "PASS" : "FAIL", (unsigned long long)(g_ticks - begin), (unsigned long long)(uart_ms - wire_begin), ticks, irq1, bytes, opened, moved, restored, gv->video_starts - flips,
            transfers, edges, gv->monitor.vif, gv->monitor.pic[0].irr, gv->monitor.pic[0].isr);
     if (!pass) {
         printf("menu PC: %04x:%08x linear=%08x flags=%08x arm=%u sh=%u depth=%u seed=%04x:%08x\n",
@@ -644,15 +686,15 @@ static bool menu_replay(void)
     /* Continue long enough for two periodic verbose samples and for a
      * stall after the last key to fail. The title digest comparison above
      * finishes before DOOM's attract sequence can replace that page. */
-    begin = g_ticks; timer = gv->monitor.stats.delivered[0];
+    begin = g_ticks; wire_begin = uart_ms; timer = gv->monitor.stats.delivered[0];
     units = gv->audio.sb.units; sb_irqs = gv->audio.sb.irq_edges; flips = gv->video_starts;
     if (!menu_wait(2400)) return false;
     ticks = gv->monitor.stats.delivered[0] - timer;
     transfers = gv->audio.sb.units - units; edges = gv->audio.sb.irq_edges - sb_irqs;
-    pass = ticks >= 330 && ticks <= 340 && gv->video_starts > flips &&
+    pass = menu_timer_progress(ticks, begin, wire_begin, 330, 340) && gv->video_starts > flips &&
            (!sound || (transfers && edges));
-    printf("menu sustain: %s ms=%llu irq0=%u flips=%u dma_units=%u sb_edges=%u heartbeats=%u\n",
-           pass ? "PASS" : "FAIL", (unsigned long long)(g_ticks - begin), ticks,
+    printf("menu sustain: %s ms=%llu uart_ms=%llu irq0=%u flips=%u dma_units=%u sb_edges=%u heartbeats=%u\n",
+           pass ? "PASS" : "FAIL", (unsigned long long)(g_ticks - begin), (unsigned long long)(uart_ms - wire_begin), ticks,
            gv->video_starts - flips, transfers, edges, gv->trace.heartbeats);
     return pass;
 }
@@ -679,6 +721,13 @@ int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: %s DOSBOOT.IMG|CIUKIGAM.IMG [COMMAND NAME]...\n", argv[0]); return 2; }
     setvbuf(stdout, 0, _IOLBF, 0);
+    const char *baud = getenv("GUEST_UART_BAUD");
+    if (baud) {
+        char *end;
+        unsigned long value = strtoul(baud, &end, 10);
+        CHECK(*baud && !*end && value >= 110 && value <= 4000000 && getenv("GUEST_VERBOSE"));
+        uart_baud = (unsigned)value;
+    }
     const char *slice = getenv("GUEST_SLICE");
     if (slice) {
         unsigned long value = strtoul(slice, 0, 10);
@@ -770,6 +819,7 @@ int main(int argc, char **argv)
     printf("debug traps: rm=%llu flags=%llu returns=%llu other=%llu\n",
            (unsigned long long)db_rm, (unsigned long long)db_flags,
            (unsigned long long)db_return, (unsigned long long)db_other);
+    if (uart_baud) printf("UART timing: baud=%u records=%u ms=%llu\n", uart_baud, uart_records, (unsigned long long)uart_ms);
     printf("guest runner: %s (%llu instructions, %llu traps, %u unexpected)\n", failures || unexpected ? "FAIL" : "PASS",
            (unsigned long long)instructions, (unsigned long long)traps, unexpected);
     if (cow) { fclose(cow); unlink(cow_path); }

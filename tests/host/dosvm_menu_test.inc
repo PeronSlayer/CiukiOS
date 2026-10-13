@@ -46,6 +46,10 @@ static void test_menu_heartbeat(void)
     CHECK(strstr(recent_records[(before + 1) % 8], "irr=0001") &&
           strstr(recent_records[(before + 1) % 8], "irq0=0"));
     CHECK(v->monitor.stats.delivered[0] == 1);
+    /* f3-12 buffers routine snapshots until this handler returns. Complete
+     * it before testing the heartbeat's independent wall-clock cadence. */
+    cur.tf.eax = 0x20; const uint8_t eoi[] = {0xE6, 0x20};
+    exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
     /* No duplicate at the same tick and no catch-up burst after a delay. */
     before = records; dosvm_heartbeat(v, &cur); CHECK(records == before);
     g_ticks += 10000; dosvm_heartbeat(v, &cur); CHECK(records == before + 5);

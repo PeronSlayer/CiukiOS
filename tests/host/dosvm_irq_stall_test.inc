@@ -171,7 +171,95 @@ static void test_irq_real_tf(void)
     destroy(v, true); empty();
     puts("f3-11 V86 TF: unarmed SS/successor and pending-IRQ boundaries only, clear on next return, PUSHF hides monitor TF and arbitrary POPF cannot leak TF PASS");
 }
+static struct dosvm *timed_diag_vm;
+static unsigned timed_diag_writes;
+static void irq_diag_time(void)
+{
+    /* Real IRQs remain enabled during UART writes. The PIT is allowed to
+     * produce another edge, but a guest IRQ must not be suspended here. */
+    CHECK(!dosvm_in_irq(timed_diag_vm));
+    timed_diag_writes++;
+    g_ticks += 60;
+    dosvm_pit_advance(timed_diag_vm, 60);
+}
+
+static void test_irq_trace_latency(void)
+{
+    struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
+    uint16_t code = (uint16_t)cur.tf.cs;
+    v->dpmi.vec[8] = (struct dpmi_vec){.sel=code, .off=0x700};
+    g_boot.flags = CBI_F_VERBOSE;
+    timed_diag_vm = v; timed_diag_writes = 0; diag_time_hook = irq_diag_time;
+    unsigned before = records;
+    CHECK(dosvm_irq_raise(v->info.key, 0)); step(v, 0x20, 0);
+    CHECK(cur.tf.eip == 0x700 && v->dpmi.depth == 1 && !timed_diag_writes && records == before);
+    v->trace.timer_programmed = true; /* retain the handler's 16-bit CLI sample */
+    op1(v, 0xFA); /* capture CLI without spending a UART period in the IRQ */
+    CHECK(!timed_diag_writes && v->deferred_trace.count == 2);
+    /* Early EOI does not end the guest IRQ context. Its nested real-mode
+     * call, callback, or child must not make the diagnostic flush early. */
+    cur.tf.eax = 0x20; const uint8_t eoi[] = {0xE6, 0x20}; exec(v, eoi, sizeof(eoi), 13, 0);
+    struct dpmi_record *r;
+    CHECK(!dpmi_push_record(v, &cur, DPMI_REC_REALCALL, &r));
+    dosvm_diag(v, "group=defer_test stage=nested");
+    dosvm_trace_flush(v); CHECK(!timed_diag_writes && v->deferred_trace.count == 3);
+    dpmi_unwind(v, 1);
+    /* Drop excess diagnostics explicitly, never flush inside an IRQ. */
+    for (unsigned i = 0; i < 9; i++) dosvm_diag(v, "group=defer_test stage=full n=%u", i);
+    CHECK(v->deferred_trace.count == 8 && v->deferred_trace.dropped == 4 && records == before);
+    pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+    CHECK(timed_diag_writes == 9 && records == before + 9 && !v->deferred_trace.dropped);
+    CHECK(strstr(last_record, "group=vm_trace_drop") && strstr(last_record, "count=4"));
+    /* Flush generated real PIT edges. A new IRQ is delivered after the
+     * outer return, on a fresh frame; its entry diagnostic is queued. */
+    CHECK(v->monitor.stats.delivered[0] == 2 && v->dpmi.depth == 1 && cur.tf.eip == 0x700 &&
+          v->monitor.pic[0].isr == 1 && v->deferred_trace.count == 1);
+    diag_time_hook = 0;
+    cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+    CHECK(!v->dpmi.depth && !v->deferred_trace.count && !v->monitor.pic[0].isr);
+    /* Quiet boots allocate no queue entries. */
+    g_boot.flags = 0; before = records;
+    dosvm_diag(v, "group=defer_test quiet=1"); CHECK(records == before && !v->deferred_trace.count);
+    destroy(v, true); empty(); timed_diag_vm = 0;
+    puts("f3-12 timed diagnostics: no UART wait inside guest IRQ/nested call even after early EOI, bounded snapshots/drop count, PIT edges delivered after outer IRET PASS");
+}
+
+static void test_irq_target_diagnostics(void)
+{
+    struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
+    uint16_t code = (uint16_t)cur.tf.cs;
+    g_boot.flags = CBI_F_VERBOSE;
+    v->trace.used[DOSVM_TRACE_VECTOR] = 255;
+    unsigned logs = dosvm_logs;
+    for (unsigned vec = 8; vec <= 15; vec++) {
+        cur.tf.ebx = vec; cur.tf.ecx = code; cur.tf.edx = 0x700; int31(v, 0x0205);
+        CHECK(!cf() && dosvm_logs == ++logs && strstr(last_dosvm_log, "event=pm_irq_vector") &&
+              strstr(last_dosvm_log, "valid=1 present=1 live=1") && strstr(last_dosvm_log, "kind=1 owner=1"));
+    }
+    /* Successful repeated sets are all logged, including the host stub. */
+    cur.tf.ebx = 8; cur.tf.ecx = DPMI_HOST_CS; cur.tf.edx = 8; int31(v, 0x0205);
+    CHECK(!cf() && dosvm_logs == ++logs && strstr(last_dosvm_log, "to=1fff:00000008"));
+    /* Never-allocated, freed, non-present, data and out-of-limit targets:
+     * delivery logs the rejected descriptor and leaves the PIC untouched. */
+    for (unsigned failure = 0; failure < 5; failure++) {
+        uint16_t sel = DPMI_SEL(900);
+        if (failure) client_desc(v, 900, 0x30000, 0xFFFF, failure == 2 ? 0x7A : failure == 3 ? 0xF2 : 0xFA, 0);
+        if (failure == 1) dpmi_free_ldt(v, 900);
+        v->dpmi.vec[8] = (struct dpmi_vec){.sel=sel, .off=failure == 4 ? 0x10000 : 0x20};
+        CHECK(dosvm_irq_raise(v->info.key, 0));
+        CHECK(dpmi_deliver(v, &cur) == -EFAULT && dosvm_logs == ++logs &&
+              strstr(last_dosvm_log, "event=pm_irq_invalid") && strstr(last_dosvm_log, "live=0"));
+        CHECK(v->monitor.pic[0].irr == 1 && !v->monitor.pic[0].isr && !v->dpmi.depth);
+        if (failure >= 2) dpmi_free_ldt(v, 900);
+    }
+    g_boot.flags = 0;
+    CHECK(dpmi_deliver(v, &cur) == -EFAULT && dosvm_logs == logs);
+    destroy(v, true); empty();
+    puts("f3-12 target diagnostics: every 0205h 08-0F past startup budget, repeat/default, unallocated/freed/non-present/data/limit rejection, quiet boot and unchanged PIC PASS");
+}
+
 static void test_irq_stall(void)
 {
     test_irq_restore_delivery(); test_irq_frame_commit(); test_irq_stall_diagnostics(); test_irq_real_tf();
+    test_irq_trace_latency(); test_irq_target_diagnostics();
 }
