@@ -5,9 +5,13 @@ static volatile uint32_t *words(struct usb_host *h, unsigned at)
 { return (volatile uint32_t *)(h->dma + at); }
 static int start(struct usb_host *h)
 {
+    unsigned legacy = h->io.config_read(h->io.cookie, 0xc0, 2);
     /* C0: write W1C statuses, leave all SMI/PIRQ enables cleared. */
     h->io.config_write(h->io.cookie, 0xc0, 0x8f00, 2);
-    if (h->io.config_read(h->io.cookie, 0xc0, 2) & ~0xdf40u) return -USB_EIO;
+    unsigned handed = h->io.config_read(h->io.cookie, 0xc0, 2);
+    klog("[usb] uhci handoff controller=%s legsup_before=%04x legsup_after=%04x result=%d",
+         h->owner, legacy, handed, handed & ~0xdf40u ? -USB_EIO : 0);
+    if (handed & ~0xdf40u) return -USB_EIO;
     h->owned = true;
     h->io.config_write(h->io.cookie, 4, (h->pci.command | 1u) & ~4u, 2);
     if (h->io.config_read(h->io.cookie, 4, 2) & 4) return -USB_EIO;
@@ -28,7 +32,10 @@ static int start(struct usb_host *h)
     h->io.config_write(h->io.cookie, 4, h->pci.command | 5u, 2);
     if ((h->io.config_read(h->io.cookie, 4, 2) & 5) != 5) return -USB_EIO;
     usb_write(h, 0, 0xc1, 2); /* configured, max packet 64, RUN */
-    return usb_wait_register(h, 2, 2, 0x20, 0, 100);
+    err = usb_wait_register(h, 2, 2, 0x20, 0, 100);
+    klog("[usb] uhci schedule controller=%s command=%04x status=%04x frame=%u flbase=%08x result=%d",
+         h->owner, usb_read(h, 0, 2), usb_read(h, 2, 2), usb_read(h, 6, 2), usb_read(h, 8, 4), err);
+    return err;
 }
 static unsigned status(struct usb_host *h, unsigned port)
 {
@@ -48,15 +55,19 @@ static int reset(struct usb_host *h, unsigned port)
 {
     if (port >= h->ports) return -EINVAL;
     port_write(h, port, 0x200, 4);
+    usb_port_record(h, port, "reset", 0);
     h->io.sleep(h->io.cookie, 50);
     port_write(h, port, 0, 0x200);
+    usb_port_record(h, port, "reset", 0);
     h->io.sleep(h->io.cookie, 10);
     port_write(h, port, 4, 0);
     int err = usb_wait_register(h, 0x10 + 2 * port, 2, 5, 5, 100);
+    usb_port_record(h, port, "enable", err);
     usb_write(h, 0x10 + 2 * port, (usb_read(h, 0x10 + 2 * port, 2) & ~0x0au) | 0x0a, 2);
     return err;
 }
-static void disable(struct usb_host *h, unsigned port) { port_write(h, port, 0, 4); }
+static void disable(struct usb_host *h, unsigned port)
+{ port_write(h, port, 0, 4); usb_port_record(h, port, "enable", 0); }
 static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigned toggle,
                   void *data, unsigned length, bool periodic)
 {
@@ -84,7 +95,11 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
         h->io.sleep(h->io.cookie, 1);
     }
     qh[1] = 1; usb_barrier();
-    if (usb_retire_frames(h, 6, 2, 0x7ff)) return -USB_EIO;
+    int retired = usb_retire_frames(h, 6, 2, 0x7ff);
+    if (!d->address)
+        klog("[usb] addr0 uhci_packet controller=%s pid=%02x command=%04x status=%04x frame=%u td=%08x retire_result=%d",
+             h->owner, pid, usb_read(h, 0, 2), usb_read(h, 2, 2), usb_read(h, 6, 2), td[1], retired);
+    if (retired) return -USB_EIO;
     /* An ACK racing schedule removal must not be discarded as a NAK. */
     usb_barrier(); unsigned v = td[1];
     if (!(v & (1u << 23))) {

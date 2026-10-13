@@ -17,6 +17,9 @@ static unsigned lease_count, generation;
 static unsigned claims, writes, events, key_downs, key_ups, repeats, wheel_events;
 static unsigned held[513], buttons[3];
 static int last_x,last_y,last_wheel;
+static unsigned connect_records,disconnect_records,reset_records,enable_records;
+static unsigned descriptor_starts,descriptor_results,descriptor_failures;
+static unsigned first_scans,cadence_records,retired_packets,service_entries,service_queues;
 gen_t gen_alloc(void) { return ++generation; }
 int registry_claim(enum res_type t,uint32_t s,uint32_t e,const char *o,bool share)
 {
@@ -28,7 +31,31 @@ const struct resource *registry_get(unsigned i) { return i<lease_count ? &leases
 int registry_activate(int h,gen_t g) { assert(leases[h].generation==g); leases[h].state=RS_ACTIVE; return 0; }
 bool registry_valid(int h,gen_t g) { return leases[h].generation==g && leases[h].state==RS_ACTIVE; }
 int registry_quarantine(int h,gen_t g) { assert(leases[h].generation==g); leases[h].state=RS_QUARANTINED; return 0; }
-void klog(const char *s,...) { (void)s; }
+void klog(const char *s,...)
+{
+    char record[256];va_list ap;va_start(ap,s);kvsnprintf(record,sizeof(record),s,ap);va_end(ap);
+    if(strstr(record,"[usb] port=")) {
+        assert(strstr(record,"status=") && strstr(record,"tick=") && strstr(record,"result="));
+        if(strstr(record,"event=connect")) connect_records++;
+        if(strstr(record,"event=disconnect")) disconnect_records++;
+        if(strstr(record,"event=reset")) reset_records++;
+        if(strstr(record,"event=enable")) enable_records++;
+    }
+    if(strstr(record,"[usb] addr0 get_descriptor")) {
+        if(strstr(record,"phase=start")) descriptor_starts++;
+        if(strstr(record,"result=")) {
+            descriptor_results++;assert(strstr(record,"elapsed_ms="));
+            if(strstr(record,"result=-")) descriptor_failures++;
+        }
+    }
+    if(strstr(record,"first_scan_tick=")) first_scans++;
+    if(strstr(record,"scans_per_second=")) {cadence_records++;assert(strstr(record,"elapsed_ms="));}
+    if(strstr(record,"addr0 uhci_packet")) {
+        assert(strstr(record,"td=") && strstr(record,"frame=") && strstr(record,"retire_result="));retired_packets++;
+    }
+    if(strstr(record,"service=started")) service_entries++;
+    if(strstr(record,"service=queued")) service_queues++;
+}
 void input_usb_event(uint16_t type,uint16_t code,int32_t value,gen_t gen,uint64_t tick)
 {
     (void)tick; assert(gen); events++;
@@ -54,6 +81,8 @@ struct model {
     unsigned regs[128],config[64],selected,setup[8],data_at,pending_addr;
     unsigned hub_change[2],hub_status[2];
     uint64_t now;
+    uint64_t reset_at[2], recovery_at[2];
+    unsigned root_resets[2], root_enables[2];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
     bool bulk_test;
     unsigned bulk_in_toggle, bulk_out_toggle, bulk_packets;
@@ -69,8 +98,13 @@ static uint8_t *dma_at(struct model *m,unsigned ptr,unsigned len)
 }
 static struct peripheral *target(struct model *m,unsigned address)
 {
-    if(!address) return &m->dev[m->selected];
-    for(unsigned i=0;i<4;i++) if(m->dev[i].present && m->dev[i].addr==address) return &m->dev[i];
+    for(unsigned i=0;i<4;i++) {
+        unsigned root=i<2 ? i:0;
+        unsigned status=m->ohci ? m->regs[(0x54+4*root)/4] :
+            (m->regs[0x10/4]>>(16*root))&0xffff;
+        if(!(status&(m->ohci ? 2u:4u))) continue;
+        if(m->dev[i].present && (address ? m->dev[i].addr==address : i==m->selected)) return &m->dev[i];
+    }
     return NULL;
 }
 static unsigned descriptor(struct model *m,struct peripheral *d,uint8_t *b)
@@ -148,6 +182,17 @@ static uint32_t read_reg(void *arg,unsigned off,unsigned width)
 static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
 {
     struct model *m=arg;writes++;
+    if(!m->ohci && off==0 && (value&2) && !m->reset_stuck) {
+        /* QEMU uhci_reset(): stopped, empty schedule, attached devices
+         * reappear with CCS/CSC, but PE stays clear until software sets it. */
+        m->regs[0]=m->regs[1]=m->regs[2]=0;m->regs[0x0c/4]=64;
+        m->regs[0x10/4]=0;
+        for(unsigned p=0;p<2;p++) {
+            unsigned status=0x80|(m->dev[p].present ? 3u:0u)|(p==1 && m->dev[p].present ? 0x100u:0u);
+            m->regs[0x10/4]|=status<<(16*p);m->dev[p].addr=0;
+        }
+        return;
+    }
     if(m->ohci) {
         if(off==0x0c){m->regs[off/4]&=~value;return;}
         if(off>=0x54 && off<0x5c) {
@@ -158,10 +203,23 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
             return;
         }
     } else if(off==0x10 || off==0x12) {
-        unsigned p=(off-0x10)/2;m->selected=p;
-        if(value & 0x200)m->dev[p].addr=0;
+        unsigned p=(off-0x10)/2;
         unsigned old=(m->regs[off/4]>>(8*(off&3)))&0xffff;
-        value=(old&0x1b1)|(value&0x1244)|((old&0x0a)&~value);
+        if((value&0x200) && !(old&0x200)) {
+            m->selected=p;m->dev[p].addr=0;m->reset_at[p]=m->now;m->root_resets[p]++;
+        }
+        if(!(value&0x200) && (old&0x200)) {
+            assert(m->now-m->reset_at[p]>=50);m->recovery_at[p]=m->now;
+        }
+        if((value&4) && !(old&4) && (old&1)) {
+            assert(!(value&0x200) && m->now-m->recovery_at[p]>=10);m->root_enables[p]++;
+        }
+        /* QEMU preserves RO bits, accepts PE only for CCS, and clears
+         * CSC/PEC only on an explicit write of one (uhci_port_write). */
+        if(!(old&1)) value&=~4u;
+        unsigned requested=value;
+        value=(old&0x1bb)|(value&0x1244);
+        value&=~(requested&0x0au);
     }
     unsigned shift=(off&3)*8,mask=width==1 ? 255:width==2 ? 65535:UINT32_MAX;
     m->regs[off/4]=(m->regs[off/4]&~(mask<<shift))|(value&mask)<<shift;
@@ -236,6 +294,9 @@ static struct usb_io io(struct model *m)
 static void setup(bool ohci,bool hub)
 {
     memset(&m,0,sizeof(m));memset(&g_boot,0,sizeof(g_boot));lease_count=0;
+    connect_records=disconnect_records=reset_records=enable_records=0;
+    descriptor_starts=descriptor_results=descriptor_failures=0;
+    first_scans=cadence_records=retired_packets=service_entries=service_queues=0;
     memset(held,0,sizeof(held));memset(buttons,0,sizeof(buttons));
     m.ohci=ohci;m.pending_addr=0;
     m.dev[0]=(struct peripheral){.kind=hub?HUB:KBD,.present=true};
@@ -258,6 +319,9 @@ static void basic(bool ohci,bool hub)
 {
     setup(ohci,hub);assert(!attach());usb_step(&m.host);
     assert(m.host.ready && !m.host.quarantined && m.host.device_count==(hub?3u:2u));
+    assert(connect_records==(hub?1u:2u) && reset_records && enable_records && first_scans==1);
+    assert(descriptor_starts==m.host.device_count && descriptor_results==descriptor_starts && !descriptor_failures);
+    if(!ohci) assert(retired_packets);
     unsigned ki=hub?1:0,mi=hub?2:1;
     struct usb_device *kbd=&m.host.devices[ki],*mouse=&m.host.devices[mi];
     assert(kbd->hid[0].active && mouse->hid[0].active && mouse->hid[0].wheel);
@@ -292,6 +356,7 @@ static void errors(bool ohci)
     for(unsigned i=0;i<lease_count;i++)assert(leases[i].state==RS_QUARANTINED);
     setup(ohci,false);assert(!attach());m.silent=true;begin=m.now;
     usb_step(&m.host);assert(m.host.devices[0].quarantined && m.host.root_blocked[0] && m.now-begin<1500);
+    assert(descriptor_failures==2 && descriptor_results==descriptor_starts);
     setup(ohci,false);assert(!attach());m.malformed=true;usb_step(&m.host);assert(m.host.devices[0].quarantined);
     setup(ohci,false);assert(!attach());usb_step(&m.host);m.freeze=true;
     assert(m.host.ops->packet(&m.host.devices[0],1,USB_PID_IN,0,b,8,true)<0 && m.host.quarantined);
@@ -311,6 +376,7 @@ static void hotplug(bool ohci)
     assert(!usb_hid_report(d,&d->hid[0],report,8) && held[INPUT_KEY_A]==1);
     if(ohci)m.regs[0x54/4]=0x10000;else m.regs[0x10/4]=(m.regs[0x10/4]&0xffff0000)|0x82;
     m.now+=300;usb_step(&m.host);assert(!d->present && !held[INPUT_KEY_A]);
+    assert(disconnect_records==1);
     if(ohci)m.regs[0x54/4]=0x10001;else m.regs[0x10/4]|=3;
     m.now+=300;usb_step(&m.host);
     assert(m.host.device_count==3 && m.host.devices[2].address>old_addr && m.host.devices[2].hid[0].active);

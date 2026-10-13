@@ -20,6 +20,13 @@ uint32_t usb_read(struct usb_host *h, unsigned at, unsigned width)
 { return h->io.read(h->io.cookie, at, width); }
 void usb_write(struct usb_host *h, unsigned at, uint32_t v, unsigned width)
 { h->io.write(h->io.cookie, at, v, width); }
+void usb_port_record(struct usb_host *h, unsigned port, const char *event, int result)
+{
+    bool uhci = h->pci.prog_if == 0;
+    unsigned raw = usb_read(h, uhci ? 0x10 + 2 * port : 0x54 + 4 * port, uhci ? 2 : 4);
+    klog("[usb] port=%u status=%08x event=%s controller=%s tick=%llu result=%d",
+         port + 1, raw, event, h->owner, h->io.now(h->io.cookie), result);
+}
 bool usb_expired(struct usb_host *h, uint64_t deadline)
 { return (int64_t)(h->io.now(h->io.cookie) - deadline) >= 0; }
 int usb_wait_register(struct usb_host *h, unsigned at, unsigned width, uint32_t mask, uint32_t want, unsigned ms)
@@ -297,7 +304,13 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
     d->parent = (uint8_t)parent; d->port = (uint8_t)port; d->present = true;
     d->generation = gen_alloc(); d->reason = "enumerating";
     uint8_t b[USB_CONFIG_MAX];
+    uint64_t descriptor_tick = h->io.now(h->io.cookie);
+    klog("[usb] addr0 get_descriptor controller=%s port=%u parent=%u tick=%llu phase=start length=8",
+         h->owner, port + 1, parent, descriptor_tick);
     int err = usb_control(d, 0x80, 6, 0x100, 0, b, 8);
+    klog("[usb] addr0 get_descriptor controller=%s port=%u parent=%u tick=%llu result=%d elapsed_ms=%llu",
+         h->owner, port + 1, parent, h->io.now(h->io.cookie), err,
+         h->io.now(h->io.cookie) - descriptor_tick);
     if (err != 8 || b[0] != 18 || b[1] != 1 || (b[7] != 8 && b[7] != 16 && b[7] != 32 && b[7] != 64) || (low && b[7] != 8)) goto failed;
     d->ep0 = b[7];
     unsigned addr = h->next_address++;
@@ -343,10 +356,30 @@ void usb_step(struct usb_host *h)
         usb_host_quarantine(h, "lease_invalid"); h->busy = false; fs_lock_drop(&h->transfer_lock); return;
     }
     if (usb_expired(h, h->next_scan)) {
-        h->next_scan = h->io.now(h->io.cookie) + 250;
+        uint64_t tick = h->io.now(h->io.cookie);
+        bool first_scan = !h->scanned;
+        h->next_scan = tick + 250;
+        if (!h->scanned) {
+            h->scanned = true; h->scan_window = tick;
+            klog("[usb] worker controller=%s first_scan_tick=%llu interval_ms=250", h->owner, tick);
+        } else if (tick - h->scan_window >= 1000) {
+            uint64_t elapsed = tick - h->scan_window;
+            unsigned rate = (unsigned)((uint64_t)h->scan_count * 1000000 / elapsed);
+            klog("[usb] worker controller=%s tick=%llu scans=%u elapsed_ms=%llu scans_per_second=%u.%03u",
+                 h->owner, tick, h->scan_count, elapsed, rate / 1000, rate % 1000);
+            h->scan_window = tick; h->scan_count = 0;
+        }
+        h->scan_count++;
         for (unsigned p = 0; p < h->ports && h->ready; p++) {
-            if (h->root_blocked[p]) continue;
             unsigned s = h->ops->port_status(h, p);
+            unsigned previous = h->root_status[p];
+            if (first_scan || ((s ^ previous) & USB_PORT_CONNECTED))
+                usb_port_record(h, p, s & USB_PORT_CONNECTED ? "connect" : "disconnect", 0);
+            else if ((s & USB_PORT_CHANGED) && h->root_child[p])
+                usb_port_record(h, p, s & USB_PORT_CONNECTED ? "connect" : "disconnect", 0);
+            if ((s ^ previous) & USB_PORT_ENABLED) usb_port_record(h, p, "enable", 0);
+            h->root_status[p] = s;
+            if (h->root_blocked[p]) continue;
             if (s & USB_PORT_OVERCURRENT) {
                 if (h->root_child[p]) usb_device_quarantine(&h->devices[h->root_child[p]-1], "overcurrent");
                 h->root_blocked[p] = true;
@@ -364,7 +397,10 @@ void usb_step(struct usb_host *h)
                 }
             } else if (!h->root_child[p]) {
                 h->io.sleep(h->io.cookie, 100);
-                if (!(h->ops->port_status(h, p) & USB_PORT_CONNECTED)) continue;
+                s = h->ops->port_status(h, p);
+                if (!(s & USB_PORT_CONNECTED)) {
+                    usb_port_record(h, p, "disconnect", 0); h->root_status[p] = s; continue;
+                }
                 int err = h->ops->port_reset(h, p);
                 if (err) { usb_host_quarantine(h, "root_port_reset"); break; }
                 s = h->ops->port_status(h, p);
@@ -372,6 +408,7 @@ void usb_step(struct usb_host *h)
                 if (err > 0) h->root_child[p] = (uint8_t)err;
                 else { h->ops->port_disable(h, p); usb_host_quarantine(h, "device_capacity"); break; }
             }
+            h->root_status[p] = h->ops->port_status(h, p);
         }
         for (unsigned i = 0; i < h->device_count && h->ready; i++) if (h->devices[i].present && h->devices[i].hub_ports) usb_hub_scan(&h->devices[i]);
     }
@@ -424,6 +461,7 @@ static void native_sleep(void *arg, unsigned ms) { (void)arg; task_sleep_ms(ms);
 static void service(void *arg)
 {
     (void)arg;
+    klog("[usb] worker service=started tick=%llu controllers=%u", native_now(0), host_count);
     for (;;) { for (unsigned i = 0; i < host_count; i++) usb_step(&hosts[i]); task_sleep_ms(1); }
 }
 void usb_init(void)
@@ -455,7 +493,16 @@ void usb_init(void)
         int err = usb_attach(h, p, &io, phys ? P2V(phys) : 0, phys);
         if (err && !h->touched && !h->quarantined && phys) { pmm_free(phys); pmm_free(phys + PAGE_SIZE); h->dma = 0; }
     }
-    if (host_count && !task_create_kernel("usb-host", service, 0, P_DEVICE))
-        for (unsigned i = 0; i < host_count; i++) if (hosts[i].ready) usb_host_quarantine(&hosts[i], "service_thread_failed");
+    if (host_count) {
+        struct task *worker = task_create_kernel("usb-host", service, 0, P_DEVICE);
+        if (!worker) {
+            for (unsigned i = 0; i < host_count; i++) if (hosts[i].ready)
+                usb_host_quarantine(&hosts[i], "service_thread_failed");
+        } else {
+            /* Creation leaves T_BLOCKED; publish the dedicated service. */
+            task_start(worker);
+            klog("[usb] worker service=queued tick=%llu controllers=%u", native_now(0), host_count);
+        }
+    }
 }
 #endif
