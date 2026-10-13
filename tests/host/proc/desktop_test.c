@@ -365,6 +365,13 @@ static void desktop_interrupt_wait(void)
     on_schedule = 0;
     proc_thread_for(g_current)->interrupted = true;
 }
+static void desktop_keyboard_after_wait(void)
+{
+    on_schedule=0; usb_ready=true;
+    input_count=1; input_at=0;
+    input_events[0]=(struct input_event){.type=INPUT_KEY,.code=INPUT_KEY_A,.value=1,
+        .source=INPUT_USB,.generation=23,.sequence=1};
+}
 static void test_desktop_waits(void)
 {
     for (unsigned success = 0; success < 2; success++) {
@@ -394,12 +401,21 @@ static void test_desktop_waits(void)
         CHECK(p->memory->pins == pins && !t->cleanup && !t->operation);
         t->interrupted = false;
         int32_t grants[2]; CHECK(!grants_install(p, grants));
+        input_state.active=false; input_state.quarantined=true; usb_ready=false;
+        input_count=input_at=0;
         on_schedule = desktop_interrupt_wait;
         CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EINTR);
         CHECK(p->memory->pins == pins && !t->cleanup && !t->operation);
+        t->interrupted=false;
+        on_schedule=desktop_keyboard_after_wait;
+        CHECK(grant_input_read(p,grants[1],BUFFER,1)==1);
+        struct ciuki_input_event key; CHECK(!ua_read(p->memory,&key,BUFFER,sizeof(key)));
+        CHECK(key.type==CIUKI_INPUT_KEY && key.source==INPUT_USB && key.code==INPUT_KEY_A && key.value==1);
+        CHECK(p->memory->pins==pins && !t->cleanup && !t->operation);
+        input_state.active=true; input_state.quarantined=false; usb_ready=false; input_count=input_at=0;
         desktop_clean(p);
     }
-    puts("desktop waits: immutable send snapshot, close while waiting, EINTR and pin/reference cleanup PASS");
+    puts("desktop waits: immutable send snapshot, close while waiting, no-device EINTR/late USB key and pin/reference cleanup PASS");
 }
 
 static void test_desktop_grants(void)
@@ -440,9 +456,9 @@ static void test_desktop_grants(void)
     CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EAGAIN);
     CHECK(grant_input_read(p, grants[1], BUFFER, 0) == -EINVAL);
     input_state.quarantined = true;
-    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EIO);
+    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EAGAIN);
     input_state.quarantined = false; input_state.active = false;
-    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -ENODEV);
+    CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EAGAIN);
     usb_ready = true; input_state.quarantined = true;
     CHECK(grant_input_read(p, grants[1], BUFFER, 1) == -EAGAIN);
     usb_ready = false; input_state.quarantined = false; input_state.active = true;
@@ -1053,6 +1069,26 @@ uint32_t desktop_spawn_host_control(void)
 void desktop_spawn_host_input(const struct input_event *in, struct ciuki_input_event *out)
 {
     desktop_input_event(in, (uint32_t)in->lost_count, (uint32_t)in->value, out);
+}
+void desktop_spawn_host_no_input(void)
+{
+    input_state.active=false; input_state.quarantined=true;
+    usb_ready=false; input_count=input_at=0;
+}
+void desktop_spawn_host_attach_keyboard(void)
+{
+    usb_ready=true;
+    input_count=3; input_at=0;
+    input_events[0]=(struct input_event){.type=INPUT_KEY,.code=INPUT_KEY_A,.value=1,.source=INPUT_USB,.generation=23,.sequence=1};
+    input_events[1]=(struct input_event){.type=INPUT_TEXT,.code='a',.source=INPUT_USB,.generation=23,.sequence=2};
+    input_events[2]=(struct input_event){.type=INPUT_KEY,.code=INPUT_KEY_A,.value=0,.source=INPUT_USB,.generation=23,.sequence=3};
+}
+int desktop_spawn_host_read_input(int fd, struct ciuki_input_event *events, uint32_t capacity)
+{
+    desktop_select(spawn_host_thread);
+    int n=grant_input_read(spawn_host_server,fd,BUFFER,capacity);
+    if (n>0) CHECK(!ua_read(spawn_host_server->memory,events,BUFFER,(uint32_t)n*sizeof(*events)));
+    return n;
 }
 int desktop_spawn_host_pair(int32_t pair[2])
 {

@@ -6,8 +6,6 @@ extern uint32_t file_description_count(void) __attribute__((weak));
 #define FILE_OBJECTS (file_description_count ? file_description_count() : 0)
 #include <ciuki/cpu.h>
 #include <ciuki/desktop.h>
-#include <ciuki/i8042.h>
-#include <ciuki/usb.h>
 #include <ciuki/registry.h>
 #include <ciuki/signal.h>
 
@@ -222,14 +220,6 @@ void desktop_input_event(const struct input_event *in, uint32_t lost, uint32_t b
     }
 }
 
-static int input_live(struct i8042_stats *state)
-{
-    i8042_snapshot(state);
-    if (usb_input_ready()) return 0;
-    if (state->quarantined) return -EIO;
-    return state->active ? 0 : -ENODEV;
-}
-
 struct input_operation {
     struct process *process;
     struct desktop_description *grant;
@@ -247,8 +237,9 @@ int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t ca
     int err = grant_check(p, fd, DESKTOP_INPUT, PROT_READ);
     if (err) return err;
     if (!capacity || capacity > CIUKI_INPUT_READ_MAX) return -EINVAL;
-    struct i8042_stats state;
-    if ((err = input_live(&state))) return err;
+    /* This grant owns the merged queue, not a particular controller. Device
+     * absence (including i8042 quarantine) is an empty queue, not lost access.
+     * Drain detach releases too, after the last producer has disappeared. */
     struct ua_pin pin;
     err = ua_pin(p->memory, &pin, events, capacity * sizeof(struct ciuki_input_event), true);
     if (err) return err;
@@ -260,7 +251,6 @@ int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t ca
     unsigned count = 0;
     for (;;) {
         if (p->state == PROC_STOPPING) { err = -EINTR; break; }
-        if ((err = input_live(&state))) break;
         struct input_event in;
         bool have = input_read(&in);
         if (have) {

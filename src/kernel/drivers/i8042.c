@@ -105,6 +105,30 @@ struct controller {
 };
 struct poll_deadline { uint64_t end; unsigned polls; };
 static struct controller native;
+static unsigned usb_devices;
+void input_devices_snapshot(struct input_devices *out)
+{
+    uint32_t f = irq_save();
+    bool active = native.stats.active && !native.stats.quarantined;
+    *out = (struct input_devices){ .ps2 = active && !native.stats.firmware ? 2 : 0,
+        .firmware = active && native.stats.firmware ? 2 : 0, .usb = usb_devices };
+    irq_restore(f);
+}
+void input_devices_changed(enum input_source source, bool attached)
+{
+    uint32_t f = irq_save();
+    if (source == INPUT_USB) {
+        if (attached) usb_devices++;
+        else if (usb_devices) usb_devices--;
+    }
+    struct input_devices state;
+    input_devices_snapshot(&state);
+    irq_restore(f);
+    klog("[input] devices=%u source=%s event=%s ps2=%u usb=%u firmware=%u",
+         state.ps2 + state.usb + state.firmware,
+         source == INPUT_NATIVE ? "ps2" : source == INPUT_USB ? "usb" : "firmware",
+         attached ? "attach" : "detach", state.ps2, state.usb, state.firmware);
+}
 /* One runtime-selected fixture, separate from the native controller and
  * its physical leases. Its queue exceeds kheap's 2040-byte payload limit;
  * reserve private storage instead of making an impossible heap request. */
@@ -803,10 +827,12 @@ static int init_aux_test(struct controller *c, uint64_t end)
 
 static void quarantine(struct controller *c, int err)
 {
+    bool active = c == &native && c->stats.active;
     c->accepting = c->stats.active = false;
     c->stats.pending_command = false;
     c->stats.last_error = err;
     c->stats.quarantined = true;
+    if (active) input_devices_changed(c->stats.firmware ? INPUT_FIRMWARE : INPUT_NATIVE, false);
     if (c != &native) return;           /* fixtures own no physical resources */
     pic_mask(1);
     pic_mask(12);
@@ -1067,6 +1093,7 @@ int i8042_init(void)
     native.stats.last_elapsed_ms = (uint32_t)(physical_now(0) - start);
     native.stats.last_error = err;
     /* Console/serial latency is outside the hardware transaction deadline. */
+    if (!err) input_devices_changed(INPUT_NATIVE, true);
     for (unsigned i = 0; i < native.init_count; i++) {
         char line[I8042_INIT_LINE];
         i8042_init_format(line, i, &native.init_records[i]);
@@ -1120,6 +1147,7 @@ int i8042_stop(gen_t generation)
             registry_release(native.handle[i], native.claim_gen[i]);
         native.stats.active = false;
         native.initialized = false;    /* fresh generation/state on next activation */
+        input_devices_changed(INPUT_NATIVE, false);
     }
     kmutex_unlock(&native.mutex);
     return err;
@@ -1145,10 +1173,12 @@ bool input_firmware_begin(gen_t generation)
         irq_restore(f);
         return false;
     }
+    bool attached = !native.stats.active;
     memset(&native.queue, 0, sizeof(native.queue));
     native.stats.firmware = native.stats.active = true;
     native.stats.generation = generation;
     irq_restore(f);
+    if (attached) input_devices_changed(INPUT_FIRMWARE, true);
     return true;
 }
 
@@ -1162,12 +1192,14 @@ void input_firmware_loss(uint64_t lost)
 void input_firmware_disable(gen_t generation)
 {
     uint32_t f = irq_save();
+    bool detached = native.stats.active && native.stats.firmware && gen_matches(native.stats.generation, generation);
     if (native.stats.firmware && gen_matches(native.stats.generation, generation)) {
         native.stats.quarantined = true;
         native.stats.active = false;
         native.stats.last_error = -I8042_EIO;
     }
     irq_restore(f);
+    if (detached) input_devices_changed(INPUT_FIRMWARE, false);
 }
 
 void input_firmware_event(const struct fwinput_event *e, gen_t generation)

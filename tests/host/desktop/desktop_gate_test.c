@@ -66,6 +66,8 @@ static uint32_t output_pixels[320*320];
 static uint32_t client_pixels[(240*160*4+4095)/4096*1024];
 static bool handshake;
 static bool input_error, report_error;
+static bool late_input, no_input, keyboard_attached;
+static unsigned empty_reads, ipc_polls, presents_before_attach;
 static bool inherit_error, spawn_error, normal_spawn;
 static bool burst, burst_started, flush_timeout, bad_command;
 static unsigned burst_at, blocked_sends, configure_attempts, interaction_reports;
@@ -77,6 +79,9 @@ void desktop_spawn_host_init(int);
 int desktop_spawn_host_output(void);
 uint32_t desktop_spawn_host_control(void);
 void desktop_spawn_host_input(const struct input_event *,struct ciuki_input_event *);
+void desktop_spawn_host_no_input(void);
+void desktop_spawn_host_attach_keyboard(void);
+int desktop_spawn_host_read_input(int,struct ciuki_input_event *,uint32_t);
 int desktop_spawn_host_pair(int32_t [2]);
 int desktop_spawn_host_fcntl(int,int,uint32_t);
 int desktop_spawn_host_close(int);
@@ -118,6 +123,14 @@ static uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,u
     const char *published=strstr(line," victim=");assert(published);
     registered_victim=atoi(published+8);
     summary_count++;
+    if (late_input || no_input) {
+        if (strstr(line,"generation=0 ")) command(GATE_INTERACT);
+        if (gate_keys==2) {
+            assert(late_input && keyboard_attached && presents_before_attach && empty_reads>100 && ipc_polls>100);
+            longjmp(done,1);
+        }
+        return 0;
+    }
     if (bad_command && strstr(line,"generation=0 ")) { command(99); return 0; }
     if (burst && interact_ready) {
         interaction_reports++;
@@ -197,6 +210,7 @@ int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 }
 int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
 {
+    ipc_polls++;
     assert(flags==DONTWAIT && fd>=6 && fd<64);
     if (normal_spawn) { assert(client_pid[fd]==42); longjmp(done,1); }
     if (handshake) {
@@ -231,6 +245,17 @@ int ciuki_present(int display,int surface,const struct ciuki_rect *r) {assert(di
 int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
 {
     assert(fd==4 && capacity==CIUKI_INPUT_READ_MAX);
+    if (late_input || no_input) {
+        if (late_input && !keyboard_attached && host_now>=5000000000ull) {
+            assert(presents && !gate_keys && ipc_polls>100);
+            presents_before_attach=presents;
+            desktop_spawn_host_attach_keyboard(); keyboard_attached=true;
+        }
+        int n=desktop_spawn_host_read_input(fd,events,capacity);
+        if (n<0) { assert(n==-EAGAIN); empty_reads++; errno=-n; return -1; }
+        for (int i=0;i<n;i++) assert(events[i].source==INPUT_USB && events[i].generation==23);
+        return n;
+    }
     if (burst && !burst_started) { errno=EAGAIN; return -1; }
     if (burst && burst_started) {
         unsigned n=0;
@@ -281,7 +306,15 @@ int clock_gettime(clockid_t clock,struct timespec *out)
     out->tv_sec=host_now/1000000000ull; out->tv_nsec=host_now%1000000000ull; return 0;
 }
 int nanosleep(const struct timespec *t,struct timespec *rest)
-{ (void)rest;assert(t->tv_nsec==1000000);host_now+=1000000;assert(host_now<10000000000ull);if (running && !remaining && pongs==running*100 && !page.command && !interact_ready) command(GATE_SNAPSHOT);return 0; }
+{
+    (void)rest;assert(t->tv_nsec==1000000);host_now+=1000000;assert(host_now<10000000000ull);
+    if (no_input && host_now>=6000000000ull) {
+        assert(presents && empty_reads>100 && ipc_polls>100 && summary_count>=2 && !gate_keys);
+        longjmp(done,1);
+    }
+    if (running && !remaining && pongs==running*100 && !page.command && !interact_ready) command(GATE_SNAPSHOT);
+    return 0;
+}
 int main(int argc,char **argv)
 {
     if (argc==4 && !strcmp(argv[1],"--handshake")) {
@@ -289,6 +322,8 @@ int main(int argc,char **argv)
         client_messages=fopen(argv[2],"rb"); server_messages=fopen(argv[3],"wb");
         assert(client_messages && server_messages);
     } else if (argc==2 && !strcmp(argv[1],"--input-error")) input_error=true;
+    else if (argc==2 && !strcmp(argv[1],"--late-input")) late_input=true;
+    else if (argc==2 && !strcmp(argv[1],"--no-input")) no_input=true;
     else if (argc==2 && !strcmp(argv[1],"--report-error")) report_error=true;
     else if (argc==2 && !strcmp(argv[1],"--inherit-error")) inherit_error=true;
     else if (argc==2 && !strcmp(argv[1],"--spawn-error")) spawn_error=true;
@@ -298,6 +333,7 @@ int main(int argc,char **argv)
     else if (argc==2 && (!strcmp(argv[1],"--normal-spawn") || !strcmp(argv[1],"--capacity"))) normal_spawn=true;
     else assert(argc==1);
     desktop_spawn_host_init(!normal_spawn);
+    if (late_input || no_input) desktop_spawn_host_no_input();
     if (normal_spawn) {
         if (!strcmp(argv[1],"--capacity")) {
             struct desktop *d=calloc(1,sizeof(*d)); assert(d);
@@ -324,6 +360,12 @@ int main(int argc,char **argv)
         assert(!fclose(client_messages) && !fclose(server_messages));
         desktop_spawn_host_finish();
         puts("desktop production HELLO/CREATE_WINDOW -> CONFIGURE/FOCUS/snapshot PASS");return 0;
+    }
+    if (late_input || no_input) {
+        desktop_spawn_host_finish();
+        printf("desktop production main/supervisor/grant: %s draws and services IPC PASS\n",
+               late_input ? "no input at start, USB keyboard attaches at 5 s, keys arrive" : "no input for 6 s");
+        return 0;
     }
     assert(faults==5 && reaped==5 && running==5 && pongs==500 && presents>0 && summary_count>=26);
     desktop_spawn_host_finish();

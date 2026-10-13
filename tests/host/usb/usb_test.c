@@ -20,6 +20,15 @@ static int last_x,last_y,last_wheel;
 static unsigned connect_records,disconnect_records,reset_records,enable_records;
 static unsigned descriptor_starts,descriptor_results,descriptor_failures;
 static unsigned first_scans,cadence_records,retired_packets,service_entries,service_queues;
+static unsigned hub_connects,hub_disconnects,hub_resets,hub_enumerations,hub_failures;
+static unsigned usb_devices,usb_attaches,usb_detaches;
+void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }
+void input_devices_changed(enum input_source source,bool attached)
+{
+    assert(source==INPUT_USB);
+    if(attached) {usb_devices++;usb_attaches++;}
+    else {assert(usb_devices);usb_devices--;usb_detaches++;}
+}
 gen_t gen_alloc(void) { return ++generation; }
 int registry_claim(enum res_type t,uint32_t s,uint32_t e,const char *o,bool share)
 {
@@ -55,6 +64,14 @@ void klog(const char *s,...)
     }
     if(strstr(record,"service=started")) service_entries++;
     if(strstr(record,"service=queued")) service_queues++;
+    if(strstr(record,"[usb] hub=") && strstr(record," port=")) {
+        assert(strstr(record,"status=") && strstr(record,"change=") && strstr(record,"tick=") && strstr(record,"result="));
+        if(strstr(record,"event=connect")) hub_connects++;
+        if(strstr(record,"event=disconnect")) hub_disconnects++;
+        if(strstr(record,"event=reset_complete")) hub_resets++;
+        if(strstr(record,"event=enumerate")) hub_enumerations++;
+        if(strstr(record,"event=failed") || strstr(record,"result=-")) hub_failures++;
+    }
 }
 void input_usb_event(uint16_t type,uint16_t code,int32_t value,gen_t gen,uint64_t tick)
 {
@@ -76,15 +93,17 @@ enum kind {KBD=1,MOUSE,HUB};
 struct peripheral {enum kind kind;unsigned addr;uint8_t report[8];unsigned report_len,leds,protocol;bool present;};
 struct model {
     struct usb_host host;
-    struct peripheral dev[4];
+    struct peripheral dev[2+USB_PORT_MAX];
     _Alignas(4096) uint8_t dma[USB_DMA_BYTES];
     unsigned regs[128],config[64],selected,setup[8],data_at,pending_addr;
-    unsigned hub_change[2],hub_status[2];
+    unsigned hub_change[USB_PORT_MAX],hub_status[USB_PORT_MAX];
     uint64_t now;
     uint64_t reset_at[2], recovery_at[2];
     unsigned root_resets[2], root_enables[2];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
     bool bulk_test;
+    bool hub_stuck,hub_status_error;
+    unsigned hub_power_requests,hub_reset_requests;
     unsigned bulk_in_toggle, bulk_out_toggle, bulk_packets;
     unsigned packets, setups, dma_checks, protocol_requests, led_requests;
 };
@@ -98,11 +117,12 @@ static uint8_t *dma_at(struct model *m,unsigned ptr,unsigned len)
 }
 static struct peripheral *target(struct model *m,unsigned address)
 {
-    for(unsigned i=0;i<4;i++) {
-        unsigned root=i<2 ? i:0;
+    for(unsigned i=0;i<ARRAY_SIZE(m->dev);i++) {
+        unsigned root=i<2 ? i:m->dev[0].kind==HUB ? 0:1;
         unsigned status=m->ohci ? m->regs[(0x54+4*root)/4] :
             (m->regs[0x10/4]>>(16*root))&0xffff;
         if(!(status&(m->ohci ? 2u:4u))) continue;
+        if(i>=2 && !(m->hub_status[i-2]&2)) continue;
         if(m->dev[i].present && (address ? m->dev[i].addr==address : i==m->selected)) return &m->dev[i];
     }
     return NULL;
@@ -112,7 +132,9 @@ static unsigned descriptor(struct model *m,struct peripheral *d,uint8_t *b)
     unsigned type=m->setup[3];
     if(type==1) {
         uint8_t dd[18]={18,1,0x10,1,0,0,0,8,0x34,0x12,0,0,0,1,0,0,0,1};
-        dd[4]=d->kind==HUB ? 9:0; dd[10]=(uint8_t)d->kind;memcpy(b,dd,18);return 18;
+        dd[4]=d->kind==HUB ? 9:0; dd[10]=(uint8_t)d->kind;
+        if(d->kind==HUB) {dd[8]=9;dd[9]=4;dd[10]=0xaa;dd[11]=0x55;}
+        memcpy(b,dd,18);return 18;
     }
     if(type==2) {
         uint8_t cfg[]={9,2,34,0,1,1,0,0x80,50,9,4,0,0,1,3,1,1,0,9,0x21,0x11,1,0,1,0x22,0,0,7,5,0x81,3,8,0,10};
@@ -123,7 +145,7 @@ static unsigned descriptor(struct model *m,struct peripheral *d,uint8_t *b)
         if(m->malformed) cfg[9]=0;
         memcpy(b,cfg,sizeof(cfg));return sizeof(cfg);
     }
-    if(type==0x29) {uint8_t hub[]={9,0x29,2,1,0,1,0,0,0xff};memcpy(b,hub,9);return 9;}
+    if(type==0x29) {uint8_t hub[]={10,0x29,8,0x0a,0,1,0,0,0,0xff};memcpy(b,hub,sizeof(hub));return sizeof(hub);}
     if(type==0x22) {memcpy(b,wheel_desc,sizeof(wheel_desc));return sizeof(wheel_desc);}
     assert(!"unexpected descriptor");return 0;
 }
@@ -155,14 +177,29 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
     if(!len) {
         if(req==5 && !type) d->addr=value;
         if(req==11 && type==0x21){d->protocol=value;m->protocol_requests++;}
-        if(type==0x23 && req==3 && value==4){assert(index>=1 && index<=2);m->selected=index+1;m->dev[m->selected].addr=0;m->hub_status[index-1]|=2;m->hub_change[index-1]|=0x10;}
-        if(type==0x23 && req==1 && value>=16 && value<=20)m->hub_change[index-1]&=~(1u<<(value-16));
+        if(type==0x23) {
+            assert(d->kind==HUB && index>=1 && index<=USB_PORT_MAX);
+            if(req==3 && value==8) m->hub_power_requests++; /* no switching */
+            else if(req==3 && value==4) {
+                m->hub_reset_requests++;m->selected=index+1;
+                m->hub_status[index-1]|=0x10;
+                if(!m->hub_stuck) {
+                    m->hub_status[index-1]&=~0x10u;m->hub_change[index-1]|=0x10;
+                    if(m->dev[m->selected].present) {
+                        m->dev[m->selected].addr=0;
+                        if(!(m->hub_status[index-1]&2)) m->hub_change[index-1]|=2;
+                        m->hub_status[index-1]|=2;
+                    }
+                }
+            } else if(req==1 && value>=16 && value<=20) m->hub_change[index-1]&=~(1u<<(value-16));
+            else {assert(req==1 && value==1);m->hub_status[index-1]&=~2u;}
+        }
         return 0;
     }
     if(pid==USB_PID_IN) {
         uint8_t data[USB_CONFIG_MAX];unsigned n=0;
         if(req==6)n=descriptor(m,d,data);
-        else if(req==0 && type==0xa3){assert(index>=1 && index<=2);unsigned s=m->hub_status[index-1],c=m->hub_change[index-1];data[0]=s;data[1]=s>>8;data[2]=c;data[3]=c>>8;n=4;}
+        else if(req==0 && type==0xa3){assert(d->kind==HUB && index>=1 && index<=USB_PORT_MAX);if(m->hub_status_error)return -USB_EPIPE;unsigned s=m->hub_status[index-1],c=m->hub_change[index-1];data[0]=s;data[1]=s>>8;data[2]=c;data[3]=c>>8;n=4;}
         else assert(!"unexpected control IN");
         unsigned requested=m->setup[6]|m->setup[7]<<8;if(n>requested)n=requested;
         unsigned left=n>m->data_at ? n-m->data_at:0;if(left>len)left=len;
@@ -188,7 +225,7 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
         m->regs[0]=m->regs[1]=m->regs[2]=0;m->regs[0x0c/4]=64;
         m->regs[0x10/4]=0;
         for(unsigned p=0;p<2;p++) {
-            unsigned status=0x80|(m->dev[p].present ? 3u:0u)|(p==1 && m->dev[p].present ? 0x100u:0u);
+            unsigned status=0x80|(m->dev[p].present ? 3u:0u)|(p==1 && m->dev[p].present && m->dev[p].kind!=HUB ? 0x100u:0u);
             m->regs[0x10/4]|=status<<(16*p);m->dev[p].addr=0;
         }
         return;
@@ -297,13 +334,16 @@ static void setup(bool ohci,bool hub)
     connect_records=disconnect_records=reset_records=enable_records=0;
     descriptor_starts=descriptor_results=descriptor_failures=0;
     first_scans=cadence_records=retired_packets=service_entries=service_queues=0;
+    hub_connects=hub_disconnects=hub_resets=hub_enumerations=hub_failures=0;
+    usb_devices=usb_attaches=usb_detaches=0;
     memset(held,0,sizeof(held));memset(buttons,0,sizeof(buttons));
     m.ohci=ohci;m.pending_addr=0;
     m.dev[0]=(struct peripheral){.kind=hub?HUB:KBD,.present=true};
     m.dev[1]=(struct peripheral){.kind=MOUSE,.present=!hub};
     m.dev[2]=(struct peripheral){.kind=KBD,.present=hub};
     m.dev[3]=(struct peripheral){.kind=MOUSE,.present=hub};
-    m.hub_status[0]=m.hub_status[1]=1;m.hub_change[0]=m.hub_change[1]=1;
+    for(unsigned p=0;p<USB_PORT_MAX;p++) m.hub_status[p]=0x100;
+    if(hub) {m.hub_status[0]|=1;m.hub_status[1]|=1;m.hub_change[0]=m.hub_change[1]=1;}
     if(ohci){m.regs[0]=0x110;m.regs[1]=0x100;m.regs[0x48/4]=2|(1u<<9);m.regs[0x54/4]=1;m.regs[0x58/4]=hub?0:0x201;}
     else m.regs[0x10/4]=0x80|1|((hub?0:0x181)<<16);
     m.config[0xc0/4]=0x2f00;
@@ -325,6 +365,10 @@ static void basic(bool ohci,bool hub)
     unsigned ki=hub?1:0,mi=hub?2:1;
     struct usb_device *kbd=&m.host.devices[ki],*mouse=&m.host.devices[mi];
     assert(kbd->hid[0].active && mouse->hid[0].active && mouse->hid[0].wheel);
+    assert(usb_input_ready() && usb_devices==2 && usb_attaches==2);
+    if(hub) assert(m.host.devices[0].hub_ports==8 && m.host.devices[0].vendor==0x0409 &&
+        m.host.devices[0].product==0x55aa && m.hub_power_requests==8 &&
+        hub_connects==2 && hub_disconnects==6 && hub_resets==2 && hub_enumerations==2 && !hub_failures);
     assert(kbd->address!=mouse->address && kbd->vendor==0x1234 && mouse->low_speed==!hub);
     unsigned kp=hub?2:0,mp=hub?3:1;
     m.dev[kp].report[0]=2;m.dev[kp].report[2]=4;m.dev[kp].report_len=8;
@@ -341,6 +385,7 @@ static void basic(bool ohci,bool hub)
     usb_step(&m.host);assert(m.dev[kp].leds==(initial_led^2) && m.led_requests>=2);
     usb_detach(kbd,"test");assert(!held[0x3a]);
     usb_detach(mouse,"test");assert(!buttons[0]);
+    assert(!usb_input_ready() && !usb_devices && usb_detaches==2);
     assert(m.dma_checks>20 && m.protocol_requests>=3 && events && key_downs && key_ups);
     for(unsigned i=0;i<513;i++)assert(!held[i]);
     printf("PASS USB %s %s enumeration/HID/LED/repeat/rollover/detach/DMA\n",ohci?"OHCI":"UHCI",hub?"hub":"root");
@@ -391,6 +436,49 @@ static void hotplug(bool ohci)
     setup(ohci,false);assert(!attach());m.host.device_count=USB_DEVICE_MAX;
     assert(usb_enumerate(&m.host,0,0,0,false)==-ENOSPC);
     printf("PASS USB %s hotplug/duplicate keys/descriptor bounds/nested hub/capacity\n",ohci?"OHCI":"UHCI");
+}
+static void qemu_hub(bool ohci)
+{
+    /* QEMU's auto-inserted topology: keyboard at root 1, 0409:55aa hub
+     * at root 2. Use port 8 to exercise its two-byte removable bitmap. */
+    setup(ohci,false);m.dev[1].kind=HUB;
+    m.dev[9]=(struct peripheral){.kind=MOUSE,.present=true};
+    m.hub_status[7]|=1;m.hub_change[7]=1;
+    if(ohci) m.regs[0x58/4]=1;
+    assert(!attach() && !usb_input_ready());usb_step(&m.host);
+    struct usb_device *hub=&m.host.devices[1],*mouse=&m.host.devices[2];
+    assert(m.host.ready && m.host.device_count==3 && hub->hub_ports==8 && hub->hub_child[7]==3);
+    assert(mouse->parent==2 && mouse->root_port==1 && mouse->port==7 && mouse->hid[0].active);
+    assert(hub_connects==1 && hub_disconnects==7 && hub_resets==1 && hub_enumerations==1 && !hub_failures);
+    assert(m.hub_power_requests==8 && m.hub_reset_requests==1 && !m.hub_change[7]);
+    assert(usb_devices==2 && usb_input_ready());
+    m.dev[0].report[2]=4;m.dev[0].report_len=8;
+    m.dev[9].report[0]=1;m.dev[9].report[1]=3;m.dev[9].report[2]=5;m.dev[9].report[3]=1;m.dev[9].report_len=4;
+    m.now+=20;usb_step(&m.host);assert(held[INPUT_KEY_A] && buttons[0] && last_x==3 && last_y==5 && last_wheel==1);
+    gen_t old=mouse->generation;
+    m.dev[9].present=false;m.hub_status[7]=0x100;m.hub_change[7]=3;
+    m.now+=300;usb_step(&m.host);
+    assert(!mouse->present && !buttons[0] && held[INPUT_KEY_A] && usb_devices==1 && usb_input_ready());
+    m.dev[9].present=true;m.hub_status[7]|=1;m.hub_change[7]=1;
+    m.now+=300;usb_step(&m.host);
+    assert(m.host.device_count==4 && hub->hub_child[7]==4 && m.host.devices[3].generation>old && usb_devices==2);
+    unsigned resets=m.hub_reset_requests,enums=hub_enumerations;
+    m.now+=300;usb_step(&m.host);assert(m.hub_reset_requests==resets && hub_enumerations==enums);
+    if(ohci) m.regs[0x58/4]=0x10000;else m.regs[0x10/4]=(m.regs[0x10/4]&0xffffu)|(0x82u<<16);
+    m.now+=300;usb_step(&m.host);assert(!hub->present && !m.host.devices[3].present && usb_devices==1);
+    if(ohci) m.regs[0x54/4]=0x10000;else m.regs[0x10/4]=(m.regs[0x10/4]&0xffff0000u)|0x82;
+    m.now+=300;usb_step(&m.host);assert(!usb_input_ready() && !held[INPUT_KEY_A] && usb_attaches==usb_detaches);
+    printf("PASS USB %s QEMU eight-port hub at root 2: port 8 mouse, merged input, change clearing, hotplug and recursive detach\n",ohci?"OHCI":"UHCI");
+    for(unsigned mode=0;mode<3;mode++) {
+        setup(ohci,true);assert(!attach());
+        if(mode==0) m.hub_stuck=true;
+        else if(mode==1) m.hub_status_error=true;
+        else m.hub_status[0]|=8;
+        uint64_t begin=m.now;usb_step(&m.host);
+        assert(m.host.devices[0].quarantined && m.host.root_blocked[0] && !usb_input_ready() && m.now-begin<2500);
+        unsigned count=m.host.device_count;m.now+=300;usb_step(&m.host);assert(m.host.device_count==count);
+    }
+    printf("PASS USB %s hub reset timeout/status STALL/overcurrent: bounded quarantine, no retry\n",ohci?"OHCI":"UHCI");
 }
 static void ehci(void)
 {
@@ -451,6 +539,6 @@ int main(void)
     }
     uint8_t bad[sizeof(wheel_desc)];memcpy(bad,wheel_desc,sizeof(bad));bad[35]=0x32;
     assert(!usb_mouse_wheel_layout(bad,sizeof(bad)));
-    policy();ehci();basic(false,false);basic(true,false);basic(false,true);basic(true,true);errors(false);errors(true);hotplug(false);hotplug(true);
+    policy();ehci();basic(false,false);basic(true,false);basic(false,true);basic(true,true);errors(false);errors(true);hotplug(false);hotplug(true);qemu_hub(false);qemu_hub(true);
     puts("PASS usb host suite (production UHCI/OHCI/core/hub/HID, ASan+UBSan)");return 0;
 }
