@@ -33,6 +33,7 @@ struct cp_host {
     uint64_t (*monotonic)(void *);                                    /* nanoseconds */
     uint64_t (*now)(void *);                                          /* UTC seconds */
     int (*devices)(void *, struct ciuki_devices_info *);
+    int (*hwid_name)(void *, unsigned vendor, unsigned device, char *out, size_t size);
     int (*boot_load)(void *, char *, size_t, size_t *);
     int (*boot_save)(void *, const char *, size_t);
     int (*load_sounds)(void *, char *, size_t, size_t *);
@@ -95,6 +96,7 @@ int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);
 void cp_open(struct cp_app *, int page);
 int cp_snapshot_valid(const struct ciuki_devices_info *);
+int cp_hwid_lookup_json(const char *json, unsigned vendor, unsigned device, char *out, size_t size);
 void cp_tree_build(struct cp_app *);
 const char *cp_device_class(unsigned);
 const char *cp_device_state(unsigned);

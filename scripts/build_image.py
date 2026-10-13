@@ -76,6 +76,9 @@ def desktop_payloads():
     sources["/system/licenses/stb_image_write.txt"] = ROOT / "third_party/stb/LICENSE"
     # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
     sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
+    hwids = ROOT / "assets/hwids"
+    sources["/System/hwids/pci-ids.json"] = hwids / "pci-ids.json"
+    sources["/System/hwids/usb-ids.json"] = hwids / "usb-ids.json"
     metadata = {"manifest_sha256": sha256(DESKTOP / "manifest.json"),
                 "protocol_version": desktop["protocol_version"],
                 "elf": desktop["elf"], "portrait": desktop["portrait"], "icons": desktop["icons"]}
@@ -87,7 +90,7 @@ def desktop_payloads():
     sound_sources, sounds = sound_payloads()
     sources.update(sound_sources)
     metadata["sounds"] = sounds
-    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/hwids", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def sound_payloads():
