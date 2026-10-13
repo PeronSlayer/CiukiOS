@@ -113,3 +113,4 @@ Documenti di design, validazione, fonti esterne.
 | [Integrazione completa 0.9.0: immagine 8435a16a e immagine T23 893a83e0](2026-10-12-04-integrazione-completa-immagine-t23.md) | 12 ott | fusioni finali, verifica host, consegna hardware; campagna QEMU rinviata |
 | [Fusione di wt/integ2 in main: pre-alpha 0.9.0 integrata](2026-10-12-05-fusione-in-main.md) | 12 ott | fusione; decisione del proprietario (campagna interrotta) |
 | [Scope: giochi Windows tramite API Win32 compatibile; immagine definitiva 36010476](2026-10-13-01-scope-win32-e-immagine-definitiva.md) | 13 ott | decisione (scope); fusioni finali e consegna hardware |
+| [Consegne della notte dal secondo giro sul T23; immagine 8845b848](2026-10-13-02-consegne-notturne-immagine-8845b848.md) | 13 ott | modifiche (desktop, driver, DOS VM, audio); immagine per il T23 |
