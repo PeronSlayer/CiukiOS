@@ -20,19 +20,23 @@ static bool live(struct usb_device *d)
  * One retired TD per packet uses the existing controller bounce buffer. */
 int usb_bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned *actual)
 {
-    if (!d || !actual || (bytes && !data) || bytes>BLKDEV_READ_BYTES) return -USB_EPROTO;
+    if (actual) *actual=0;
+    if (!d || !d->host || !actual || (bytes && !data) || bytes>BLKDEV_READ_BYTES) return -USB_EPROTO;
+    d->packet_trace=(struct usb_packet_trace){.actual=-1};
     struct usb_storage *s=&d->storage;
     unsigned packet=in ? s->in_packet : s->out_packet, ep=in ? s->in : s->out;
-    if (!s->bound || !packet || !ep || d->low_speed) return -USB_EPROTO;
+    if (!s->bound || (packet!=8 && packet!=16 && packet!=32 && packet!=64) ||
+        !ep || ep>15 || d->low_speed) return -USB_EPROTO;
     uint8_t *toggle=in ? &s->in_toggle : &s->out_toggle;
-    uint64_t end=d->host->io.now(d->host->io.cookie)+10000;
-    *actual=0;
+    uint64_t end=d->host->io.now(d->host->io.cookie)+USB_BULK_TIMEOUT_MS;
     while (*actual<bytes) {
         if (!live(d)) return -USB_EIO;
         if (usb_expired(d->host,end)) return -USB_ETIMEDOUT;
         unsigned n=bytes-*actual; if (n>packet) n=packet;
+        s->bulk_deadline=end;
         int e=d->host->ops->packet(d,ep,in ? USB_PID_IN : USB_PID_OUT,*toggle,
                                   (uint8_t *)data+*actual,n,false);
+        s->bulk_deadline=0;
         if (e<0) return e;
         if ((unsigned)e>n || (!in && (unsigned)e!=n)) return -USB_EPROTO;
         *toggle^=1; *actual+=(unsigned)e;
@@ -40,6 +44,32 @@ int usb_bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned
         if ((unsigned)e<n) break;
     }
     return 0;
+}
+/* Keep transport context separate from packet_trace: halt clear/reset and
+ * REQUEST SENSE reuse the same TD and must not erase the failing stage. */
+static int transfer(struct usb_device *d, const char *stage, bool in, void *data,
+                    unsigned bytes, unsigned *actual)
+{
+    struct usb_storage_trace *t=&d->storage.trace;
+    t->stage=stage; t->expected=bytes;
+    int e=usb_bulk(d,in,data,bytes,actual);
+    t->actual=*actual; t->result=e; t->packet=d->packet_trace;
+    return e;
+}
+static void trace_record(struct usb_device *d, const char *event, const char *reason)
+{
+    struct usb_storage_trace *t=&d->storage.trace;
+    struct usb_packet_trace *p=&t->packet;
+    klog("[usb-storage] %s addr=%u reason=%s tag=%u cmd=%02x stage=%s expected=%u actual=%u result=%d data_expected=%u data_actual=%u",
+         event,d->address,reason,t->tag,t->command,t->stage ? t->stage : "none",
+         t->expected,t->actual,t->result,t->data_expected,t->data_actual);
+    klog("[usb-storage] td addr=%u tag=%u valid=%u ep=%u pid=%02x toggle=%u expected=%u actual=%d td=%08x token=%08x hc_status=%08x result=%d",
+         d->address,t->tag,p->valid,p->endpoint,p->pid,p->toggle,p->expected,p->actual,
+         p->status,p->token,p->hc_status,p->result);
+    klog("[usb-storage] timing addr=%u tag=%u frames=%u elapsed_ms=%llu retired=%d",
+         d->address,t->tag,p->frames,p->elapsed_ms,p->retired);
+    klog("[usb-storage] csw addr=%u tag=%u available=%u signature=%08x csw_tag=%u status=%u residue=%u",
+         d->address,t->tag,t->csw_available,t->csw_signature,t->csw_tag,t->csw_status,t->residue);
 }
 static int clear_halt(struct usb_device *d, bool in)
 {
@@ -52,6 +82,8 @@ static int fault(struct usb_device *d, const char *reason, bool reset)
 {
     struct usb_storage *s=&d->storage;
     s->block.quarantined=true; s->online=false;
+    d->reason=reason;
+    trace_record(d,"fault",reason);
     if (reset && live(d)) {
         /* BOT 5.3.4 ordering. Recovery restores framing only; it never
          * authorizes a second CBW or reuse of an uncertain writable mount. */
@@ -60,8 +92,6 @@ static int fault(struct usb_device *d, const char *reason, bool reset)
         if (!e) e=clear_halt(d,false);
         klog("[usb-storage] reset addr=%u result=%d",d->address,e);
     }
-    d->reason=reason;
-    klog("[usb-storage] fault addr=%u reason=%s tag=%u",d->address,reason,s->tag);
     return -FS_EIO;
 }
 /* 0 passed, 1 SCSI command failed, negative transport failure. */
@@ -70,22 +100,32 @@ static int bot(struct usb_device *d, const uint8_t *cdb, unsigned clen, bool in,
 {
     struct usb_storage *s=&d->storage;
     if (!live(d) || s->ejected || s->block.quarantined) return -FS_EIO;
-    uint8_t cbw[31]={0}, csw[13]; unsigned n=0, got=0;
+    uint8_t cbw[31]={0}, csw[13]={0}; unsigned n=0, got=0;
+    s->trace=(struct usb_storage_trace){.command=cdb[0],.data_expected=bytes};
     fs_wr32(cbw,0x43425355); fs_wr32(cbw+4,++s->tag); fs_wr32(cbw+8,bytes);
+    s->trace.tag=s->tag;
     cbw[12]=in ? 0x80 : 0; cbw[14]=(uint8_t)clen; memcpy(cbw+15,cdb,clen);
-    int e=usb_bulk(d,false,cbw,sizeof(cbw),&n);
+    int e=transfer(d,"cbw",false,cbw,sizeof(cbw),&n);
     if (e || n!=sizeof(cbw)) return fault(d,"cbw",true);
     if (bytes) {
-        e=usb_bulk(d,in,data,bytes,&got);
+        e=transfer(d,"data",in,data,bytes,&got);
+        s->trace.data_actual=got;
         if (e==-USB_EPIPE) {
+            trace_record(d,"stall","data");
             e=clear_halt(d,in);
-            if (e) return fault(d,"data_clear_halt",true);
+            if (e) { s->trace.result=e; return fault(d,"data_clear_halt",true); }
         } else if (e) return fault(d,"data_transfer",true);
     }
-    e=usb_bulk(d,true,csw,sizeof(csw),&n);
+    e=transfer(d,"csw",true,csw,sizeof(csw),&n);
     if (e==-USB_EPIPE) {
+        trace_record(d,"stall","csw");
         e=clear_halt(d,true);
-        if (!e) e=usb_bulk(d,true,csw,sizeof(csw),&n);
+        if (!e) e=transfer(d,"csw",true,csw,sizeof(csw),&n);
+        else s->trace.result=e;
+    }
+    if (!e && n==sizeof(csw)) {
+        s->trace.csw_available=true; s->trace.csw_signature=fs_rd32(csw);
+        s->trace.csw_tag=fs_rd32(csw+4); s->trace.csw_status=csw[12]; s->trace.residue=fs_rd32(csw+8);
     }
     if (e || n!=sizeof(csw) || fs_rd32(csw)!=0x53425355 ||
         fs_rd32(csw+4)!=s->tag || csw[12]>2 || fs_rd32(csw+8)>bytes)
@@ -96,17 +136,20 @@ static int bot(struct usb_device *d, const uint8_t *cdb, unsigned clen, bool in,
     if ((transferred ? got+fs_rd32(csw+8)!=bytes : got!=bytes || fs_rd32(csw+8))) return fault(d,"short_command",true);
     return 0;
 }
-static int command(struct usb_device *d, const uint8_t *cdb, unsigned len,
-                   bool in, void *data, unsigned bytes)
+static int command_result(struct usb_device *d, const uint8_t *cdb, unsigned len,
+                          bool in, void *data, unsigned bytes, unsigned *transferred)
 {
-    int e=bot(d,cdb,len,in,data,bytes,0);
+    int e=bot(d,cdb,len,in,data,bytes,transferred);
     if (e!=1) return e;
+    struct usb_storage_trace failed=d->storage.trace;
+    trace_record(d,"command_failed","csw_status");
     uint8_t sense[18]={0}, req[6]={3,0,0,0,18,0}; unsigned got=0;
     /* REQUEST SENSE is diagnostic, never a retry of the failed command. */
     e=bot(d,req,6,true,sense,sizeof(sense),&got);
     if (e || got<14 || ((sense[0]&0x7f)!=0x70 && (sense[0]&0x7f)!=0x71))
         return fault(d,"sense",false);
     struct usb_storage *s=&d->storage;
+    s->trace=failed;
     s->sense_key=sense[2]&15; s->asc=sense[12]; s->ascq=sense[13];
     klog("[usb-storage] scsi addr=%u cmd=%02x sense=%02x/%02x/%02x",
          d->address,cdb[0],s->sense_key,s->asc,s->ascq);
@@ -114,6 +157,9 @@ static int command(struct usb_device *d, const uint8_t *cdb, unsigned len,
         return fault(d,"media_changed",false);
     return -FS_EIO;
 }
+static int command(struct usb_device *d, const uint8_t *cdb, unsigned len,
+                   bool in, void *data, unsigned bytes)
+{ return command_result(d,cdb,len,in,data,bytes,0); }
 static int ready(struct usb_device *d)
 { uint8_t cdb[6]={0}; return command(d,cdb,6,false,0,0); }
 static int flush_locked(struct usb_device *d)
@@ -165,12 +211,18 @@ int usb_storage_attach(struct usb_device *d)
     s->block=(struct blkdev){.read=block_read,.write=block_write,.media_check=block_media,
         .sector_size=512,.ctx=d,.media_generation=gen_alloc()};
     uint8_t lun=0;
+    s->trace=(struct usb_storage_trace){.stage="max_lun",.expected=1};
     int e=usb_control(d,0xa1,0xfe,0,s->interface,&lun,1);
+    s->trace.result=e; s->trace.actual=e>0 ? (unsigned)e : 0; s->trace.packet=d->packet_trace;
     if (e!=-USB_EPIPE && (e!=1 || lun>15)) return fault(d,"max_lun",false);
     klog("[usb-storage] interface=%u addr=%u max_lun=%u selected=0",s->interface,d->address,lun);
     uint8_t inquiry[36]={0}, cdb[10]={0x12,0,0,0,36,0};
-    e=command(d,cdb,6,true,inquiry,sizeof(inquiry));
+    unsigned got=0;
+    e=command_result(d,cdb,6,true,inquiry,sizeof(inquiry),&got);
     if (e) return e;
+    /* Only the fixed header is consumed; short IN is legal with a passed
+     * CSW and consistent residue. Never infer missing capability bytes. */
+    if (got<5) return fault(d,"short_inquiry",false);
     if ((inquiry[0]&0x1f)!=0 || (inquiry[0]&0xe0)) return fault(d,"unsupported_lun",false);
     /* Clear initial power-on unit attention, bounded before any mount/write. */
     for (unsigned i=0;i<3;i++) {

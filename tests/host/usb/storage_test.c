@@ -16,13 +16,26 @@
 struct ciuki_boot_info g_boot;
 static gen_t generation;
 gen_t gen_alloc(void) { return ++generation; }
-void klog(const char *fmt,...) { if (!getenv("USB_TEST_LOG")) return; va_list ap;va_start(ap,fmt);vfprintf(stderr,fmt,ap);va_end(ap);fputc(10,stderr); }
+static char records[16384];
+static size_t records_at;
+void klog(const char *fmt,...)
+{
+    char record[256];va_list ap;va_start(ap,fmt);int n=kvsnprintf(record,sizeof(record),fmt,ap);va_end(ap);
+    assert(n>=0 && n<(int)sizeof(record));
+    if(records_at+(unsigned)n+2<sizeof(records)) {
+        memcpy(records+records_at,record,(unsigned)n);records_at+=(unsigned)n;
+        records[records_at++]='\n';records[records_at]=0;
+    }
+    if(getenv("USB_TEST_LOG")) fprintf(stderr,"%s\n",record);
+}
 /* usb_attach is intentionally not used by this packet-level peripheral model;
  * the register/DMA engines have their own production suite. */
 void usb_hid_release(struct usb_device *d,struct usb_hid *h) { (void)d;(void)h; }
-const struct usb_hc_ops usb_uhci_ops={0},usb_ohci_ops={0};
+int registry_quarantine(int h,gen_t g) { (void)h;(void)g;assert(!"unexpected host quarantine");return 0; }
+const struct usb_hc_ops usb_ohci_ops={0};
 static struct model {
     struct usb_host h;
+    _Alignas(4096) uint8_t dma[USB_DMA_BYTES];
     uint8_t *image, *second_image;
     unsigned second;
     size_t bytes;
@@ -34,11 +47,54 @@ static struct model {
     bool connected, max_lun_stall, no_flush, wp, phase_error, bad_tag, bad_signature, bad_residue, short_csw;
     bool data_stall, csw_stall, cbw_stall, timeout, remove_data, ua, no_medium, fail_flush;
     unsigned sector_size, initial_ua;
+    bool uhci, data_babble, clear_fail, late_ack, latched;
+    unsigned inquiry_bytes, inquiry_delay, naks, reset_order, frame_offset, late_acks;
+    uint64_t command_at;
+    uint32_t injected_status;
 } m;
+static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
 static uint32_t be32(const uint8_t *b) {return (uint32_t)b[0]<<24|(uint32_t)b[1]<<16|(uint32_t)b[2]<<8|b[3];}
 static void put32(uint8_t *b,uint32_t v) {b[0]=v>>24;b[1]=v>>16;b[2]=v>>8;b[3]=v;}
 static uint64_t now(void *c) { (void)c; return m.now; }
-static void sleep_ms(void *c,unsigned ms) { (void)c; m.now+=ms; }
+static void sleep_ms(void *c,unsigned ms)
+{
+    (void)c;
+    while(ms--) {
+        m.now++;
+        if(!m.uhci) continue;
+        volatile uint32_t *qh=(volatile uint32_t *)(m.dma+USB_ED);
+        volatile uint32_t *td=(volatile uint32_t *)(m.dma+USB_TD);
+        if(qh[1]&1) {
+            if(!m.latched) continue;
+            /* The HC fetched this TD before unlink and completes it while
+             * the driver is waiting for retirement. No new TD is queued. */
+            assert(td[1]&(1u<<23));m.latched=false;m.late_ack=false;
+            m.inquiry_delay=0;m.late_acks++;
+        } else assert(qh[1]==m.h.dma_phys+USB_TD);
+        if(!(td[1]&(1u<<23))) continue;
+        assert(td[0]==1 && td[3]==m.h.dma_phys+USB_BUFFER);
+        unsigned n=(((td[2]>>21)&0x7ff)+1)&0x7ff;
+        assert(n<=64 && ((td[2]>>8)&127)==1);
+        int got=packet(&m.h.devices[0],(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,m.dma+USB_BUFFER,n,false);
+        if(got==-USB_EAGAIN) {td[1]|=1u<<19;m.naks++;if(m.late_ack)m.latched=true;continue;}
+        td[1]&=~(0xffu<<16|0x7ffu);
+        if(got<0) td[1]|=m.injected_status ? m.injected_status : got==-USB_EPIPE ? 1u<<22 : 1u<<18;
+        else td[1]|=((unsigned)got-1)&0x7ff;
+        m.injected_status=0;
+        qh[1]=td[0];
+    }
+}
+static uint32_t read_reg(void *c,unsigned off,unsigned width)
+{
+    (void)c;assert(width==2);
+    if(off==0) return 0xc1;
+    if(off==2) return 0;
+    if(off==6) return (unsigned)(m.now+m.frame_offset)&0x7ff;
+    if(off==0x10) return m.connected ? 0x85 : 0x80;
+    assert(!"unexpected UHCI register");return 0;
+}
+static void write_reg(void *c,unsigned off,uint32_t value,unsigned width)
+{ (void)c;(void)off;(void)value;(void)width;assert(!"unexpected UHCI register write"); }
 static unsigned port_status(struct usb_host *h,unsigned p)
 { (void)h; assert(p==0); return m.connected ? 3 : 0; }
 static void failed(unsigned key,unsigned asc)
@@ -50,6 +106,7 @@ static void start_command(void)
 {
     assert(fs_rd32(m.cbw)==0x43425355 && m.cbw[13]==0 && m.cbw[14]>=6 && m.cbw[14]<=10);
     m.commands++; m.status=0; m.total=fs_rd32(m.cbw+8); m.remaining=m.total; m.at=0;
+    m.command_at=m.now;
     m.stage=m.remaining ? 1 : 2;
     const uint8_t *c=m.cbw+15; memset(m.response,0,sizeof(m.response));
     switch(c[0]) {
@@ -94,15 +151,19 @@ static void medium_bytes(void *buffer,unsigned n,bool write)
 }
 static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,void *buffer,unsigned n,bool periodic)
 {
-    (void)d; assert(!periodic && n<=64); m.packets++;m.now++;
+    (void)d; assert(!periodic && n<=64); m.packets++;if(!m.uhci)m.now++;
     uint8_t *b=buffer;
     if(!ep) {
         if(pid==USB_PID_SETUP) {assert(n==8);memcpy(m.setup,b,8);return 8;}
         unsigned req=m.setup[1];
         if(req==0xfe && pid==USB_PID_IN && n) {if(m.max_lun_stall)return -USB_EPIPE;b[0]=0;return 1;}
         if(!n) {
-            if(req==0xff) {m.resets++;m.stage=0;m.cbw_at=0;}
-            if(req==1) {if(m.setup[4]&0x80){m.clear_in++;m.in_toggle=0;}else{m.clear_out++;m.out_toggle=0;}}
+            if(req==0xff) {m.resets++;m.stage=0;m.cbw_at=0;m.reset_order=1;}
+            if(req==1) {
+                if(m.clear_fail) {m.clear_fail=false;return -USB_EPIPE;}
+                if(m.setup[4]&0x80){m.clear_in++;m.in_toggle=0;if(m.reset_order){assert(m.reset_order==1);m.reset_order=2;}}
+                else{m.clear_out++;m.out_toggle=0;if(m.reset_order){assert(m.reset_order==2);m.reset_order=0;}}
+            }
             return 0;
         }
         assert(!"unexpected control");
@@ -117,12 +178,15 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
         assert(n<=31-m.cbw_at);memcpy(m.cbw+m.cbw_at,b,n);m.cbw_at+=n;
         if(m.cbw_at==31){m.cbw_at=0;start_command();}
     } else if(m.stage==1) {
+        if(m.cbw[15]==0x12 && m.now-m.command_at<m.inquiry_delay) return -USB_EAGAIN;
+        if(m.data_babble) {m.injected_status=(1u<<22)|(1u<<20);m.data_babble=false;return -USB_EIO;}
         if(m.remove_data) {m.remove_data=false;m.connected=false;return -USB_EIO;}
         if(m.data_stall) {m.data_stall=false;failed(3,0x11);m.stage=2;return -USB_EPIPE;}
         assert(n<=m.remaining && (pid==USB_PID_IN)==!!(m.cbw[12]&0x80));
+        if(m.cbw[15]==0x12 && n>m.inquiry_bytes-m.at) n=m.inquiry_bytes-m.at;
         if(m.cbw[15]==0x28 || m.cbw[15]==0x2a) medium_bytes(b,n,pid==USB_PID_OUT);
         else {assert(pid==USB_PID_IN && m.at+n<=sizeof(m.response));memcpy(b,m.response+m.at,n);}
-        m.at+=n;m.remaining-=n;if(!m.remaining){m.stage=2;m.at=0;}
+        m.at+=n;m.remaining-=n;if(!m.remaining || (m.cbw[15]==0x12 && m.at==m.inquiry_bytes)){m.stage=2;m.at=0;}
     } else {
         assert(pid==USB_PID_IN);
         if(m.csw_stall){m.csw_stall=false;return -USB_EPIPE;}
@@ -141,7 +205,8 @@ static struct usb_device *device(void) {return &m.h.devices[0];}
 static struct blkdev *block(void) {return &device()->storage.block;}
 static void setup(const char *path,bool partitioned)
 {
-    memset(&m,0,sizeof(m));m.connected=true;m.sector_size=512;m.offset=partitioned?8:0;
+    memset(&m,0,sizeof(m));records_at=0;records[0]=0;m.inquiry_bytes=36;
+    m.connected=true;m.sector_size=512;m.offset=partitioned?8:0;
     int fd=open(path,O_RDONLY);assert(fd>=0);struct stat st;assert(!fstat(fd,&st));m.bytes=(size_t)st.st_size;
     m.image=mmap(NULL,m.bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE,fd,0);assert(m.image!=MAP_FAILED);close(fd);
     if(partitioned) {fs_wr16(m.mbr+510,0xaa55);m.mbr[450]=fs_rd16(m.image+22) ? (fs_rd16(m.image+19) ? 1 : 6) : 0x0c;
@@ -150,6 +215,13 @@ static void setup(const char *path,bool partitioned)
     struct usb_device *d=device();d->host=&m.h;d->present=d->configured=true;d->ep0=64;d->address=1;
     d->storage=(struct usb_storage){.bound=true,.in=1,.out=2,.in_packet=64,.out_packet=64};
     assert(!storage_setup(storage_get(),CACHE_DEFAULT_BYTES));
+}
+static void use_uhci(void)
+{
+    m.uhci=true;m.h.ops=&usb_uhci_ops;m.h.dma=m.dma;m.h.dma_phys=0x100000;m.frame_offset=1990;
+    m.h.io.read=read_reg;m.h.io.write=write_reg;
+    volatile uint32_t *qh=(volatile uint32_t *)(m.dma+USB_ED);qh[0]=qh[1]=1;
+    for(unsigned i=0;i<1024;i++) ((uint32_t *)m.dma)[i]=(m.h.dma_phys+USB_ED)|2;
 }
 static void cleanup(void)
 {storage_destroy(storage_get());fs_lock_destroy(&m.h.transfer_lock);assert(!munmap(m.image,m.bytes));if(m.second_image)assert(!munmap(m.second_image,m.bytes));}
@@ -247,9 +319,73 @@ static void readonly(const char *path)
     assert(!device()->storage.online && !m.writes);cleanup();
     puts("PASS USB write admission: unsupported flush, protected/dirty FAT without writes/recovery, non-512 sectors rejected");
 }
+static void uhci_transport(const char *path)
+{
+    /* Real frame-paced TD processing, descriptor MPS=64, initial DATA0.
+     * The device NAKs INQUIRY while preparing its response, with no ACK or
+     * toggle change. This exposed the old 500 ms packet timeout. */
+    setup(path,false);use_uhci();m.inquiry_delay=750;attach();
+    assert(m.naks>USB_TIMEOUT_MS && m.commands==5 && device()->storage.online);
+    assert(!m.resets && !m.clear_in && !m.clear_out && !m.writes);
+    cleanup();
+    setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;m.late_ack=true;attach();
+    assert(m.late_acks==1 && m.commands==5 && !m.resets && device()->storage.online);cleanup();
+    /* A short standard INQUIRY is accepted only with consistent residue.
+     * 36/64 is the usual short USB packet; these are genuinely short CDB
+     * responses to the existing 36-byte allocation. */
+    for(unsigned bytes=5;bytes<=35;bytes+=30) {
+        setup(path,false);use_uhci();m.inquiry_bytes=bytes;attach();
+        assert(m.commands==5 && device()->storage.online && !m.resets);cleanup();
+    }
+    setup(path,false);use_uhci();m.inquiry_bytes=4;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(block()->quarantined && m.commands==1 && !m.writes);
+    assert(strstr(records,"reason=short_inquiry") && strstr(records,"status=0 residue=32"));cleanup();
+    setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    struct usb_storage_trace *t=&device()->storage.trace;
+    assert(t->tag==1 && !strcmp(t->stage,"data") && t->expected==36 && !t->actual);
+    assert(t->result==-USB_ETIMEDOUT && t->packet.result==-USB_ETIMEDOUT && t->packet.actual==-1);
+    assert(t->packet.valid && (t->packet.status&(1u<<23)) && (t->packet.status&(1u<<19)));
+    assert(t->packet.endpoint==1 && t->packet.pid==USB_PID_IN && !t->packet.toggle);
+    assert(t->packet.frames==USB_BULK_TIMEOUT_MS+2 && t->packet.elapsed_ms==USB_BULK_TIMEOUT_MS+2 && !t->packet.retired);
+    assert(strstr(records,"stage=data expected=36 actual=0 result=-110") && strstr(records,"frames=10002 elapsed_ms=10002 retired=0"));
+    assert(m.commands==1 && m.resets==1 && m.clear_in==1 && m.clear_out==1 && !m.writes && !m.reset_order);
+    assert(!device()->storage.bulk_deadline && !device()->storage.in_toggle && !device()->storage.out_toggle);
+    cleanup();
+    setup(path,false);use_uhci();m.data_stall=true;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(!device()->storage.online && m.commands==2 && m.clear_in==1 && !m.clear_out && !m.resets && !m.writes);
+    assert(device()->storage.trace.tag==1 && device()->storage.trace.csw_available && device()->storage.trace.csw_status==1);
+    assert(strstr(records,"stall addr=1 reason=data tag=1") && strstr(records,"stage=data expected=36 actual=0 result=-32"));
+    assert(strstr(records,"csw_tag=1 status=1 residue=36"));cleanup();
+    setup(path,false);use_uhci();m.data_babble=true;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(block()->quarantined && m.commands==1 && m.resets==1 && m.clear_in==1 && m.clear_out==1);
+    assert(device()->storage.trace.packet.status&1u<<20);
+    assert(device()->storage.trace.result==-USB_EIO && !strstr(records,"stall addr="));cleanup();
+    setup(path,false);use_uhci();m.data_stall=true;m.clear_fail=true;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(block()->quarantined && m.commands==1 && m.resets==1);
+    assert(strstr(records,"reason=data_clear_halt") && device()->storage.trace.packet.status&1u<<22);cleanup();
+    setup(path,false);use_uhci();m.bad_tag=true;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(strstr(records,"stage=csw expected=13 actual=13") && strstr(records,"csw_tag=2 status=0 residue=0"));
+    assert(device()->storage.trace.packet.toggle==1 && m.commands==1 && m.resets==1);cleanup();
+    setup(path,false);use_uhci();attach();m.csw_stall=true;uint8_t readback[512];
+    assert(!block()->read(block(),0,1,readback) && m.clear_in==1 && !m.resets);
+    assert(strstr(records,"stall addr=1 reason=csw") && !block()->quarantined);cleanup();
+    setup(path,false);use_uhci();attach();m.data_stall=true;uint8_t buffer[512]={0};
+    assert(block()->write(block(),1,1,buffer)<0 && m.writes==1 && block()->quarantined);
+    unsigned commands=m.commands;
+    assert(block()->write(block(),1,1,buffer)<0 && m.commands==commands && m.writes==1);cleanup();
+    puts("PASS USB UHCI/BOT: 1 ms frames, 64-byte MPS, delayed/short INQUIRY, late ACK retirement, first data STALL, CSW stall/tag diagnostics, babble, preserved fault snapshots, wrapped frame count, reset ordering, no write resend");
+}
 int main(int argc,char **argv)
 {
     assert(argc==4);
+    if(getenv("USB_TEST_F1_47_ONLY")) {uhci_transport(argv[2]);return 0;}
+    uhci_transport(argv[2]);
     io_mount(argv[1],false,12);io_mount(argv[2],true,16);io_mount(argv[3],true,32);
     errors(argv[2]);readonly(argv[2]);partitions(argv[2]);
     puts("PASS USB storage production suite (ASan/UBSan)");return 0;

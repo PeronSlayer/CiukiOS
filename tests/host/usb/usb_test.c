@@ -102,6 +102,9 @@ struct model {
     unsigned root_resets[2], root_enables[2];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
     bool bulk_test;
+    bool bulk_short;
+    unsigned bulk_short_bytes;
+    uint64_t bulk_ready_at;
     bool hub_stuck,hub_status_error;
     unsigned hub_power_requests,hub_reset_requests;
     unsigned bulk_in_toggle, bulk_out_toggle, bulk_packets;
@@ -157,8 +160,12 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
     if(m->stall) return -USB_EPIPE;
     if(ep && m->bulk_test) {
         assert(ep==(pid==USB_PID_IN ? 1u:2u));
+        if(m->now<m->bulk_ready_at) return -USB_EAGAIN;
         unsigned *expected=pid==USB_PID_IN ? &m->bulk_in_toggle:&m->bulk_out_toggle;
         assert(toggle==*expected); *expected^=1; m->bulk_packets++;
+        if(pid==USB_PID_IN && m->bulk_short) {
+            assert(m->bulk_short_bytes<=len);len=m->bulk_short_bytes;m->bulk_short=false;
+        }
         if(pid==USB_PID_IN) memset(buf,0x5a,len);
         else for(unsigned i=0;i<len;i++) assert(buf[i]==0xa7);
         return (int)len;
@@ -522,12 +529,37 @@ static void bulk_engine(bool ohci)
     for(unsigned i=0;i<sizeof(data);i++) assert(data[i]==0x5a);
     memset(data,0xa7,sizeof(data));assert(!usb_bulk(d,false,data,sizeof(data),&n) && n==sizeof(data));
     fs_lock_drop(&m.host.transfer_lock);assert(m.bulk_packets==18 && m.dma_checks);
+    fs_lock_take(&m.host.transfer_lock);
+    unsigned toggle=d->storage.in_toggle;
+    memset(data,0xcc,sizeof(data));m.bulk_short=true;m.bulk_short_bytes=36;
+    assert(!usb_bulk(d,true,data,sizeof(data),&n) && n==36 && d->storage.in_toggle==(toggle^1));
+    for(unsigned i=0;i<sizeof(data);i++) assert(data[i]==(i<36 ? 0x5a : 0xcc));
+    assert(d->packet_trace.valid && d->packet_trace.expected==64 && d->packet_trace.actual==36 && !d->packet_trace.retired);
+    m.bulk_short=true;m.bulk_short_bytes=0;
+    assert(!usb_bulk(d,true,data,64,&n) && !n && d->storage.in_toggle==toggle);
+    assert(!d->packet_trace.actual && d->packet_trace.frames>=2);
+    m.bulk_ready_at=m.now+750;
+    assert(!usb_bulk(d,true,data,64,&n) && n==64 && d->storage.in_toggle==(toggle^1));
+    assert(d->packet_trace.frames>=750 && d->packet_trace.elapsed_ms>=750);
+    m.stall=true;
+    assert(usb_bulk(d,true,data,64,&n)==-USB_EPIPE && !n && d->storage.in_toggle==(toggle^1));
+    assert(d->packet_trace.result==-USB_EPIPE && d->packet_trace.actual==-1);
+    m.stall=false;m.bulk_ready_at=m.now+USB_BULK_TIMEOUT_MS+100;
+    assert(usb_bulk(d,true,data,64,&n)==-USB_ETIMEDOUT && !n && d->storage.in_toggle==(toggle^1));
+    assert(d->packet_trace.frames>=USB_BULK_TIMEOUT_MS && d->packet_trace.elapsed_ms>=USB_BULK_TIMEOUT_MS);
+    assert(!d->storage.bulk_deadline);
+    d->storage.bulk_deadline=m.now;
+    unsigned packets=m.packets;
+    assert(d->host->ops->packet(d,1,USB_PID_IN,d->storage.in_toggle,data,64,false)==-USB_ETIMEDOUT);
+    assert(m.packets==packets && !d->packet_trace.valid);
+    d->storage.bulk_deadline=0;
+    fs_lock_drop(&m.host.transfer_lock);
     if(ohci) assert(!m.regs[0x28/4] && !m.regs[0x2c/4] && m.regs[1]==0x80);
     cfg[30]=2;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);cfg[30]=0;
     cfg[28]=3;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);cfg[28]=2;
     cfg[27]=0x81;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);cfg[27]=2;
     d->low_speed=true;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);
-    printf("PASS USB %s bulk: CBW/CSW-sized packets, 512-byte IN/OUT, toggles, descriptor MPS, retired DMA, invalid endpoints/speed\n",ohci?"OHCI":"UHCI");
+    printf("PASS USB %s bulk: CBW/CSW-sized packets, 512-byte IN/OUT, 36-byte short IN, ZLP, NAK budget, STALL/timeout toggles, descriptor MPS, retired DMA, invalid endpoints/speed\n",ohci?"OHCI":"UHCI");
 }
 int main(void)
 {

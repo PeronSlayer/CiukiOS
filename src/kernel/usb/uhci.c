@@ -72,7 +72,15 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
                   void *data, unsigned length, bool periodic)
 {
     struct usb_host *h = d->host;
+    d->packet_trace = (struct usb_packet_trace){.actual=-1};
     if (length > 64 || (d->low_speed && length > 8) || endpoint > 15) return -EINVAL;
+    uint64_t begin = h->io.now(h->io.cookie);
+    unsigned budget = usb_packet_budget(d, endpoint, periodic, begin);
+    if (!budget) { d->packet_trace.result=-USB_ETIMEDOUT; return -USB_ETIMEDOUT; }
+    unsigned frame = usb_read(h, 6, 2) & 0x7ff, frames = 0;
+    struct usb_packet_trace *trace = &d->packet_trace;
+    *trace = (struct usb_packet_trace){.expected=length,.actual=-1,
+        .endpoint=endpoint,.pid=pid,.toggle=toggle,.valid=true};
     volatile uint32_t *td = words(h, USB_TD), *qh = words(h, USB_ED);
     td[0] = 1;
     td[1] = (1u << 23) | (3u << 27) | (d->low_speed ? 1u << 26 : 0) | 0x7ff;
@@ -81,12 +89,20 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
     td[3] = h->dma_phys + USB_BUFFER;
     if (pid != USB_PID_IN && length) memcpy(h->dma + USB_BUFFER, data, length);
     usb_barrier(); qh[1] = h->dma_phys + USB_TD; usb_barrier();
-    uint64_t end = h->io.now(h->io.cookie) + (periodic ? 2 : USB_TIMEOUT_MS);
-    unsigned tries = periodic ? 3 : USB_TIMEOUT_MS + 1;
+    uint64_t end = begin + budget;
+    unsigned tries = budget + 1;
     int result = -USB_ETIMEDOUT;
     for (unsigned i = 0; i < tries; i++) {
         unsigned s = usb_read(h, 2, 2);
-        if (s & 0x38) { usb_host_quarantine(h, "uhci_host_error"); return -USB_EIO; }
+        unsigned next = usb_read(h, 6, 2) & 0x7ff;
+        frames += (next - frame) & 0x7ff; frame = next;
+        trace->hc_status = s;
+        if (s & 0x38) {
+            usb_barrier(); trace->status=td[1]; trace->token=td[2];
+            trace->frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
+            trace->result=trace->retired=-USB_EIO;
+            usb_host_quarantine(h, "uhci_host_error"); return -USB_EIO;
+        }
         usb_barrier(); unsigned v = td[1];
         if (!(v & (1u << 23))) {
             break;
@@ -96,18 +112,27 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
     }
     qh[1] = 1; usb_barrier();
     int retired = usb_retire_frames(h, 6, 2, 0x7ff);
+    frames += (usb_read(h, 6, 2) - frame) & 0x7ff;
+    usb_barrier(); unsigned v = td[1];
+    trace->status=v; trace->token=td[2]; trace->frames=frames;
+    trace->elapsed_ms=h->io.now(h->io.cookie)-begin; trace->retired=retired;
     if (!d->address)
         klog("[usb] addr0 uhci_packet controller=%s pid=%02x command=%04x status=%04x frame=%u td=%08x retire_result=%d",
              h->owner, pid, usb_read(h, 0, 2), usb_read(h, 2, 2), usb_read(h, 6, 2), td[1], retired);
-    if (retired) return -USB_EIO;
+    if (retired) { trace->result=-USB_EIO; return -USB_EIO; }
     /* An ACK racing schedule removal must not be discarded as a NAK. */
-    usb_barrier(); unsigned v = td[1];
     if (!(v & (1u << 23))) {
-        if (v & (1u << 22)) result = -USB_EPIPE;
-        else if (v & 0x00360000u) result = -USB_EIO;
+        /* Babble also sets STALL. It is not an endpoint-halt handshake. */
+        if (v & 0x00360000u) result = -USB_EIO;
+        else if (v & (1u << 22)) result = -USB_EPIPE;
         else result = (int)(((v & 0x7ff) + 1) & 0x7ff);
     }
-    if (result > (int)length) { usb_host_quarantine(h, "uhci_dma_length"); return -USB_EIO; }
+    trace->result=result;
+    if (result >= 0) trace->actual=result;
+    if (result > (int)length) {
+        trace->result=-USB_EIO;
+        usb_host_quarantine(h, "uhci_dma_length"); return -USB_EIO;
+    }
     if (result >= 0 && pid == USB_PID_IN && result) memcpy(data, h->dma + USB_BUFFER, (unsigned)result);
     return result;
 }
