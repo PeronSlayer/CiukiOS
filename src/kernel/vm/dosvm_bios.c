@@ -437,7 +437,7 @@ int dosvm_record_byte(struct dosvm *v, uint8_t byte)
                 encoded[i * 2] = hex[b >> 4]; encoded[i * 2 + 1] = hex[b & 15];
             }
             encoded[n * 2] = 0;
-            rec_emit(dosvm_probe(v), "DATA", "group=guest vm=%u generation=%u part=%u parts=%u data=%s",
+            if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=guest vm=%u generation=%u part=%u parts=%u data=%s",
                      v->info.key.id, v->info.key.generation, part + 1, parts, encoded);
         }
         v->info.guest_records++; v->record_lines++;

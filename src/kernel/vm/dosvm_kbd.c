@@ -21,6 +21,7 @@ static uint8_t kbd_pop(struct dosvm *v)
     if (!k->count) return 0xFF;
     uint8_t b = k->bytes[k->head];
     k->head = (k->head + 1) % DOSVM_KBD_BYTES; k->count--; k->last = b;
+    k->reads++;
     v->monitor.pic[0].irr &= ~2u;
     kbd_signal(v);
     return b;

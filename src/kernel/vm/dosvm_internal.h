@@ -27,6 +27,8 @@
 #define DOSVM_FRAME_TICKS 33u
 #define DOSVM_CURSOR_TICKS 250u
 #define DOSVM_BLINK_TICKS 500u
+#define DOSVM_HEARTBEAT_TICKS 2000u
+#define DOSVM_HEARTBEAT_LIMIT 60u
 #include "dosvm_memory.h"
 #include "dpmi_internal.h"
 enum dosvm_trace_kind { DOSVM_TRACE_VECTOR, DOSVM_TRACE_PIT, DOSVM_TRACE_IRQ0,
@@ -112,6 +114,9 @@ struct dosvm {
         uint8_t used[DOSVM_TRACE_COUNT], irq_epochs;
         bool timer_programmed;
         uint64_t timer_tick;
+        bool heartbeat_started;
+        uint8_t heartbeats;
+        uint64_t heartbeat_tick;
     } trace;
 };
 void dosvm_trace(struct dosvm *, enum dosvm_trace_kind, const struct v86_frame *,

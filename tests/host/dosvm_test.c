@@ -45,7 +45,9 @@ static uint32_t fake_cr2 = 0xDEAD000;
 static uint32_t read_cr2(void) { return fake_cr2; }
 static void cli(void) { cpu_flags = 0; }
 static void sti(void) { cpu_flags = V86_IF; }
-static void invlpg(uint32_t va) { (void)va; }
+static unsigned invalidations;
+static uint32_t invalidated_va;
+static void invlpg(uint32_t va) { invalidations++; invalidated_va = va; }
 static uint32_t *table_va(uint32_t p) { return P2V(p); }
 static uint32_t irq_save(void) { uint32_t f=cpu_flags; cli(); return f; }
 static void irq_restore(uint32_t f) { cpu_flags=f; }
@@ -234,13 +236,17 @@ int vfs_commit(struct vfs_table *table, int handle)
 { unsigned i=file_slot(table); CHECK(handle==1); commits++; if (fail_commit) return -V86_EIO; CHECK(fflush(files[i].cow)==0); return 0; }
 
 static char last_record[256];
+static char recent_records[8][256];
 static unsigned records, guest_records, max_record;
+static bool evidence_active = true;
+bool rec_active(void) { return evidence_active; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[240]; va_list ap; va_start(ap,fmt); int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
     CHECK(n>=0 && n<(int)sizeof(extra) && (!strcmp(probe,"vm-boot") || !strcmp(probe,"vm-video") || !strcmp(probe,"vm-window")));
     n=snprintf(last_record,sizeof(last_record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s %s",++records,probe,event,extra);
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
+    memcpy(recent_records[(records - 1) % 8], last_record, sizeof(last_record));
     if (strstr(extra,"group=guest ")) guest_records++;
 }
 void rec_diag(const char *probe, const char *fmt, ...)
@@ -543,6 +549,7 @@ static void test_memory_services(void)
 #include "dosvm_timer_test.inc"
 #include "dosvm_vmaudio_test.inc"  /* f4-05: VM sources in the mixer (separate units) */
 #include "dosvm_workloads_test.inc"
+#include "dosvm_menu_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -551,6 +558,7 @@ int main(void)
     test_vm_audio();
     test_workloads();
     test_timer();
-    CHECK(guest_enters==2 && deletes>1); free(ram);
+    test_menu();
+    CHECK(guest_enters==3 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

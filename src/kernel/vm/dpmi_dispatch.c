@@ -645,6 +645,147 @@ static bool flags_restored(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
     return true;
 }
 
+/* Acquire actual boundaries through checked near-return epilogues, or
+ * after a cross-selector extender IRETD whose first instruction is RET.
+ * RET cannot save TF. Stop before flags saves, IF changes,
+ * segment transfers or SS shadows, and after at most 512 instructions. No
+ * CLI critical section is stepped and this never changes virtual IF. */
+#define DPMI_RETURN_STEPS 512u
+static bool return_context(const struct dpmi *d, const struct v86_frame *f)
+{
+    return (uint16_t)f->tf.cs == d->return_cs && (uint16_t)f->tf.user_ss == d->return_ss &&
+           d->depth == d->return_depth && d->clients == d->return_client;
+}
+static bool return_step_safe(struct dosvm *v, const struct v86_frame *f)
+{
+    struct dpmi_seg cs;
+    uint8_t b[15];
+    if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs) || f->tf.eip > cs.limit) return false;
+    unsigned n = cs.limit - f->tf.eip >= 14 ? 15 : cs.limit - f->tf.eip + 1;
+    if (dosvm_read(v, cs.base + f->tf.eip, b, n)) return false;
+    /* This PC is an actual CPU boundary, not a static control-flow guess.
+     * Inspect every legacy prefix so even REP/LOCK PUSHF cannot save host
+     * TF. Ordinary instructions are executed/validated by the CPU; faults
+     * cancel tracking in pm_trap. Only operations that save/load flags,
+     * suppress #DB through SS, or change our code/context need exclusion. */
+    unsigned pos = 0;
+    while (pos < n) {
+        uint8_t op = b[pos];
+        if (op == 0x66 || op == 0x67 || op == 0xF0 || op == 0xF2 || op == 0xF3 ||
+            op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E || op == 0x64 || op == 0x65) pos++;
+        else break;
+    }
+    if (pos == n) return false;
+    unsigned op = b[pos];
+    if (op == 0x9C || op == 0x9D || op == 0xFA || op == 0xFB || op == 0x17 ||
+        op == 0xCF || op == 0xCB || op == 0xCA || op == 0xEA || op == 0x9A ||
+        op == 0xCD || op == 0xCC || op == 0xCE || op == 0xF1) return false;
+    if ((op == 0x8E || op == 0xFF) && pos + 1 == n) return false;
+    if (op == 0x8E && ((b[pos + 1] >> 3) & 7) == 2) return false;
+    if (op == 0xFF && (((b[pos + 1] >> 3) & 7) == 3 || ((b[pos + 1] >> 3) & 7) == 5)) return false;
+    if (op == 0x0F) {
+        if (pos + 1 == n) return false;
+        unsigned ext = b[pos + 1];
+        if (ext == 0xB2 || ext == 0x34 || ext == 0x35 || ext == 0x05 || ext == 0x07 || ext == 0xAA) return false;
+    }
+    return true;
+}
+/* A return value may be computed before the pops/RET. These complete
+ * encodings write only registers other than SP; no future return slot can
+ * be replaced. Length/operand bounds are checked by flags_instruction. */
+static bool return_register_instruction(const uint8_t *b, unsigned pos)
+{
+    uint8_t op = b[pos];
+    if (op == 0x8B || op == 0x8D) return ((b[pos + 1] >> 3) & 7) != 4;
+    if (op == 0x89 || op == 0xC1 || op == 0xD1 || op == 0xD3)
+        return (b[pos + 1] >> 6) == 3 && (b[pos + 1] & 7) != 4;
+    if (op < 0x40 && (op & 7) < 4) {
+        if (op >= 0x38) return true; /* CMP never assigns SP or memory */
+        if (op & 2) return ((b[pos + 1] >> 3) & 7) != 4;
+        return (b[pos + 1] >> 6) == 3 && (b[pos + 1] & 7) != 4;
+    }
+    return false;
+}
+static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
+{
+    struct dpmi *d = &v->dpmi;
+    if (d->return_steps) {
+        /* Pause through nested IRQ/callback/child contexts, including a
+         * callback that uses the interrupted client's own CS and SS. */
+        if (!return_context(d, f)) return;
+        if (!v->monitor.vif || !return_step_safe(v, f)) { d->return_steps = 0; f->tf.eflags &= ~V86_TF; }
+        else f->tf.eflags |= V86_TF;
+        return;
+    }
+    if (!v->monitor.vif || d->if_armed || (f->tf.eflags & (V86_TF | (1u << 14)))) return;
+    struct dpmi_seg cs, ss;
+    if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs) || !dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss)) return;
+    uint32_t at = f->tf.eip, consumed = 0;
+    for (unsigned instructions = 0; instructions < 16; instructions++) {
+        uint8_t b[15], decoded; unsigned w;
+        if (at > cs.limit) return;
+        unsigned n = cs.limit - at >= 14 ? 15 : cs.limit - at + 1;
+        if (dosvm_read(v, cs.base + at, b, n)) return;
+        unsigned pos = flags_opcode(b, n, cs.big, &w);
+        if (pos == n) return;
+        unsigned op = b[pos], len;
+        /* Non-writing epilogue: segment pops, POPAD, ADD SP/ESP, IRET. */
+        for (unsigned i = 0; i < pos; i++) if (b[i] != 0x66) return;
+        if (op == 0xC3 || op == 0xC2) {
+            if (op == 0xC2 && pos + 3 > n) return;
+            uint32_t sp = ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+            uint32_t linear, target = 0;
+            if (sp > UINT32_MAX - consumed ||
+                !dpmi_ptr(v, (uint16_t)f->tf.user_ss, sp + consumed, w, false, &linear) ||
+                dosvm_read(v, linear, &target, w) ||
+                !dpmi_handler_live(v, (struct dpmi_vec){.sel=(uint16_t)f->tf.cs, .off=target})) return;
+            /* Start now, at a real trap/restore boundary. Unlike IRET, a
+             * near RET keeps CS, so no deferred flags-image patch is used. */
+            d->return_steps = DPMI_RETURN_STEPS;
+            d->return_depth = (uint8_t)d->depth; d->return_client = (uint8_t)d->clients;
+            d->return_cs = (uint16_t)f->tf.cs; d->return_ss = (uint16_t)f->tf.user_ss;
+            f->tf.eflags |= V86_TF;
+            return;
+        }
+        if (op == 0xCF) {
+            uint32_t sp = ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+            if (consumed > 64 || sp > UINT32_MAX - consumed) return;
+            uint32_t linear, frame[4] = {0};
+            if (!dpmi_ptr(v, (uint16_t)f->tf.user_ss, sp + consumed, 4 * w, true, &linear)) return;
+            for (unsigned i = 0; i < 4; i++) if (dosvm_read(v, linear + i * w, &frame[i], w)) return;
+            uint16_t selector = (uint16_t)frame[1]; /* IRETD discards the upper half */
+            if ((selector & 3) != 3 || ((uint16_t)f->tf.cs & 3) != 3 ||
+                selector == (uint16_t)f->tf.cs || /* tracking must start after IRET */
+                (frame[2] & (V86_VM | V86_TF | (1u << 14))) ||
+                !dpmi_handler_live(v, (struct dpmi_vec){.sel=selector, .off=frame[0]}) ||
+                !dpmi_handler_live(v, (struct dpmi_vec){.sel=selector, .off=frame[3]})) return;
+            struct dpmi_seg target; uint8_t first;
+            if (!dpmi_seg(v, selector, &target) || dosvm_read(v, target.base + frame[0], &first, 1) ||
+                first != 0xC3 || (target.big ? 4u : 2u) != w) return;
+            uint32_t image = frame[2] | V86_TF;
+            if (dosvm_write(v, linear + 2 * w, &image, w)) return;
+            d->return_steps = DPMI_RETURN_STEPS;
+            d->return_depth = (uint8_t)d->depth; d->return_client = (uint8_t)d->clients;
+            d->return_cs = selector; d->return_ss = (uint16_t)f->tf.user_ss;
+            return;
+        }
+        len = flags_instruction(b, n, cs.big, &decoded, &w);
+        if (op == 0x0F && pos + 1 < n && (b[pos + 1] == 0xA1 || b[pos + 1] == 0xA9)) {
+            len = pos + 2; consumed += w;
+        } else if (op == 0x1F || op == 0x07 || (op >= 0x58 && op <= 0x5F && op != 0x5C)) consumed += w;
+        else if (op == 0x61) consumed += 8 * w;
+        else if (op == 0x83 && pos + 2 < n && b[pos + 1] == 0xC4 && (int8_t)b[pos + 2] >= 0) {
+            /* ADD SP updates only the low half even on a 32-bit stack. A
+             * wrap invalidates our monotonically advancing frame offset. */
+            if (w == 2 && (uint16_t)(f->tf.user_esp + consumed) > 0xFFFFu - b[pos + 2]) return;
+            consumed += b[pos + 2];
+        }
+        else if (op != 0x90 && (!len || !return_register_instruction(b, pos))) return;
+        if (!len || consumed > 64 || at > UINT32_MAX - len) return;
+        at += len;
+    }
+}
+
 /* #GP(0): IOPL-sensitive instructions the monitor virtualizes. */
 static int emulate(struct dosvm *v, struct v86_frame *f)
 {
@@ -766,10 +907,19 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
     if (!d->active) return -EFAULT;
     unsigned vector = f->tf.vector;
     bool irq = vector >= 0x20 && vector < 0x30;
-    /* An IRQ taken before the shadowed instruction keeps the STI shadow;
-     * any other trap means that instruction retired or is being handled. */
+    /* Clear a retired STI shadow before consuming an owned #DB: the
+     * early step return below must not extend it through the epilogue. */
     if (d->shadow && !(irq && (uint16_t)f->tf.cs == d->shadow_cs && f->tf.eip == d->shadow_eip))
         d->shadow = false;
+    if (d->return_steps && return_context(d, f)) {
+        if (vector == 1 && (dr6 & (1u << 14)) && (f->tf.eflags & V86_TF)) {
+            f->tf.eflags &= ~V86_TF; d->return_steps--;
+            if (!(dr6 & (15u | (1u << 13) | (1u << 15)))) return 0;
+            d->return_steps = 0; /* preserve an actual client breakpoint */
+        } else if (vector < 0x20 || vector >= 0x30) {
+            d->return_steps = 0; f->tf.eflags &= ~V86_TF;
+        }
+    }
     if (irq) return 0;                                      /* physical IRQ, handled */
     /* Before anything else: an instruction trapping right after the POPF
      * (a CLI, an INT, a host stub) sees the restored IF first. */
@@ -835,6 +985,7 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
         v->dpmi.decode_ds_valid = !e && v->frame_pm && dpmi_seg(v, (uint16_t)f->tf.ds, &ds) && ds.present;
         if (v->dpmi.decode_ds_valid) v->dpmi.decode_ds_base = ds.base;
     }
+    if (!e && v->frame_pm) return_boundary_seed(v, f);
     return e;
 }
 
