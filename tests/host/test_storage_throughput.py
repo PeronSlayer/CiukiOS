@@ -1,0 +1,89 @@
+"""Replay the production storage task with a fake clock and storage sinks."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class StorageTaskTests(unittest.TestCase):
+    def test_log_and_writeback_run_in_storage_task(self):
+        if not shutil.which('clang'):
+            self.skipTest('clang unavailable')
+        source = (ROOT / 'src/kernel/fs/mount.c').read_text()
+        begin = source.index('static void storage_timer(void *arg)\n')
+        end = source.index('\nvoid storage_init(void)\n', begin)
+        # Compile the exact function. All substitutions are outside it at
+        # the scheduler/clock/log/cache boundary; no modeled work loop.
+        function = source[begin:end]
+        prefix = r'''
+#include <ciuki/storage.h>
+#include <ciuki/bootlog.h>
+#include <assert.h>
+#include <setjmp.h>
+static struct storage s;
+static uint64_t next_log_drain;
+static unsigned steps, drains, writebacks, snapshots;
+static uint32_t clock_ms;
+static bool written;
+static jmp_buf exited;
+static uint32_t fixture_now(void) { return clock_ms; }
+#define fs_now_ms fixture_now
+static void task_sleep_ms(uint32_t ms) {
+    const uint32_t times[]={1,100,351,5000,5101};
+    assert(ms==1 && steps<5);
+    clock_ms=times[steps++];
+    if (steps==5) s.stopped=true;
+}
+static void task_exit(int status) { assert(status==0); longjmp(exited,1); }
+void bootlog_snapshot(struct bootlog_stats *out) {
+    snapshots++;
+    *out=(struct bootlog_stats){.active=true,.queued=100};
+}
+int bootlog_drain(void) {
+    assert(!s.stopped);
+    assert(clock_ms==1 || clock_ms==351 || clock_ms==5000);
+    drains++; clock_ms+=50; /* sleeping transfer, no shared work callback */
+    return 0;
+}
+bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
+    assert(c==&s.cache);
+    return !written && now>=5000;
+}
+int storage_writeback(struct storage *arg, uint32_t now) {
+    assert(arg==&s && !s.stopped);
+    assert(now==51 || now==401 || now==5050);
+    writebacks++;
+    if (now>=5000) written=true;
+    return 0;
+}
+'''
+        suffix = r'''
+int main(void) {
+    if (!setjmp(exited)) storage_timer(&s);
+    assert(steps==5 && snapshots==5 && drains==3 && writebacks==3 && written);
+    assert(next_log_drain==5300);
+    return 0;
+}
+'''
+        scratch = ROOT / 'build/host/storage-task'
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as temp:
+            temp = Path(temp)
+            path = temp / 'storage-task.c'
+            path.write_text(prefix + function + suffix)
+            env = dict(os.environ, ASAN_OPTIONS='detect_leaks=0:halt_on_error=1',
+                       UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
+            subprocess.run(['clang', '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L',
+                            '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-pthread',
+                            '-I' + str(ROOT / 'src/kernel/include'), str(path),
+                            '-o', str(temp / 'storage-task')], check=True, env=env)
+            subprocess.run([str(temp / 'storage-task')], check=True, env=env)
+
+
+if __name__ == '__main__':
+    unittest.main()

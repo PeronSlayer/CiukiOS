@@ -137,7 +137,7 @@ void rec_emit(const char *name, const char *event, const char *fmt, ...)
 #include "../../src/kernel/drivers/blkpart.c"
 #include "../../src/kernel/drivers/ata_probe.c"
 
-enum fault { GOOD, ERR, DF, BUSY, NO_DRQ, EXTRA_DRQ, NO_IRQ, BAD_IDENTIFY, BAD_FLUSH, SLOW_FLUSH };
+enum fault { GOOD, ERR, DF, BUSY, NO_DRQ, EXTRA_DRQ, NO_IRQ, BAD_IDENTIFY, BAD_FLUSH, SLOW_FLUSH, BAD_MULTIPLE };
 enum kind { ABSENT, DISK, PACKET, NO_SIGNATURE };
 struct fake {
     struct ata_channel channel;
@@ -148,6 +148,8 @@ struct fake {
     uint8_t selected, status, command, control, head;
     unsigned writes, commands, data_reads, data_writes, words, blocks, irq_acks, delivered, errors;
     unsigned completed_blocks, fail_after;
+    unsigned phase_sectors, phase_left, bursts, max_burst, delays;
+    uint8_t multiple[2];
     uint64_t lba, issued_tick, delayed_irq;
     bool pending, immediate, writing, stalled_clock, fail_delay;
     uint8_t statuses[8];
@@ -203,7 +205,7 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     unsigned r = port - f->channel.base;
     if (port == f->channel.control) {
         f->control = value;
-        if (value & 4) { f->command = 0; f->status = 0x40; f->pending = false; }
+        if (value & 4) { f->command = 0; f->status = 0x40; f->pending = false; memset(f->multiple,0,sizeof(f->multiple)); }
         return;
     }
     if (r == 6) {
@@ -224,8 +226,10 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     f->issued_tick = g_ticks;
     f->words = 0;
     f->completed_blocks = 0;
-    f->writing = value == 0x30 || value == 0x34;
-    bool ext = value == 0x24 || value == 0x34;
+    f->writing = value == 0x30 || value == 0x34 || value == 0xc5 || value == 0x39;
+    bool ext = value == 0x24 || value == 0x34 || value == 0x29 || value == 0x39;
+    bool multiple = value == 0xc4 || value == 0xc5 || value == 0x29 || value == 0x39;
+    if (multiple) CHECK(f->multiple[f->selected]!=0);
     f->lba = f->registers[3][0] | (uint64_t)f->registers[4][0] << 8 | (uint64_t)f->registers[5][0] << 16;
     if (ext)
         f->lba |= (uint64_t)f->registers[3][1] << 24 | (uint64_t)f->registers[4][1] << 32 |
@@ -235,9 +239,17 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     f->blocks = (value == 0xec || value == 0xa1) ? 1 : f->registers[2][0] + (ext ? (unsigned)f->registers[2][1] << 8 : 0);
     if (!f->blocks)
         f->blocks = 256;
+    f->phase_sectors=multiple ? f->multiple[f->selected] : 1;
+    f->phase_left=f->blocks<f->phase_sectors ? f->blocks : f->phase_sectors;
     bool flush = value == 0xe7 || value == 0xea;
-    f->status = flush ? 0x40 : 0x48;
-    if (f->fault == ERR || (f->fault == BAD_IDENTIFY && value == 0xec) || (f->fault == BAD_FLUSH && flush))
+    f->status = flush || value==0xc6 ? 0x40 : 0x48;
+    if (value==0xc6) {
+        CHECK(f->registers[2][0]==(f->identify[f->selected][47]&255));
+        f->multiple[f->selected]=f->registers[2][0];
+        f->identify[f->selected][59]=0x100|f->multiple[f->selected];
+    }
+    if (f->fault == ERR || (f->fault == BAD_IDENTIFY && value == 0xec) || (f->fault == BAD_FLUSH && flush) ||
+        (f->fault == BAD_MULTIPLE && value == 0xc6))
         f->status = 0x41;
     if (f->fault == DF)
         f->status = 0x60;
@@ -257,9 +269,12 @@ static void block_end(struct fake *f)
 {
     f->words = 0;
     CHECK(f->blocks > 0);
+    f->blocks--;
+    if (f->blocks) f->lba++;
+    if (--f->phase_left) return;
     f->completed_blocks++;
-    if (--f->blocks) {
-        f->lba++;
+    if (f->blocks) {
+        f->phase_left=f->blocks<f->phase_sectors ? f->blocks : f->phase_sectors;
         if (f->fail_after && f->completed_blocks == f->fail_after)
             f->status = 0x41;
         interrupt(f);
@@ -294,10 +309,24 @@ static int fake_delay(void *ctx, uint32_t us)
 {
     struct fake *f = ctx;
     CHECK(us == 1 || us == 5);
+    f->delays++;
     return f->fail_delay ? -EFAULT : 0;
+}
+static void fake_insw(void *ctx, uint16_t port, void *buf, uint32_t words)
+{
+    struct fake *f=ctx; f->bursts++;
+    if (words>f->max_burst) f->max_burst=words;
+    for (unsigned i=0;i<words;i++) fs_wr16((uint8_t *)buf+i*2,fake_in16(ctx,port));
+}
+static void fake_outsw(void *ctx, uint16_t port, const void *buf, uint32_t words)
+{
+    struct fake *f=ctx; f->bursts++;
+    if (words>f->max_burst) f->max_burst=words;
+    for (unsigned i=0;i<words;i++) fake_out16(ctx,port,fs_rd16((const uint8_t *)buf+i*2));
 }
 static const struct ata_port_ops fake_ops = {
     fake_in8, fake_out8, fake_in16, fake_out16, fake_now, fake_deadline, fake_delay,
+    fake_insw, fake_outsw,
 };
 static void irq_schedule(void)
 {
@@ -459,6 +488,69 @@ static void test_data(void)
     CHECK(b->write(b, 0, 2, buf) == 0);
     free(buf); free(expected);
     printf("ata PIO (1/2/256 sectors, split 513, IRQ order, unaligned data, bounds): PASS\n");
+}
+
+static void test_multiple(void)
+{
+    struct fake f;
+    uint8_t *buf=malloc(513*512+1), *expected=malloc(513*512);
+    CHECK(buf && expected);
+    static const unsigned counts[]={1,2,15,16,17,127,128,256,513};
+    for (unsigned ext=0;ext<2;ext++) for (unsigned size=16;size<=128;size*=8) {
+        fresh(&f,ext!=0);
+        f.identify[0][47]=0x8000|size;
+        /* Invalid current-setting field must not disable word 47 support. */
+        f.identify[0][59]=size;
+        CHECK(ata_channel_discover(&f.channel)==1 && f.commands==2 && f.channel.devices[0].command==0xc6);
+        struct blkdev *b=&f.channel.devices[0].block;
+        CHECK(f.channel.devices[0].multiple_sectors==size);
+        uint64_t lba=ext ? 0x123456789ull : 0x81234;
+        for (unsigned i=0;i<sizeof(counts)/sizeof(counts[0]);i++) {
+            unsigned n=counts[i], commands=f.commands, irqs=f.delivered, delays=f.delays, y=yields;
+            unsigned phases=(n+size-1)/size;
+            fill(expected,lba,n); memset(buf,0,n*512+1);
+            f.immediate=(i&1)!=0;
+            CHECK(!b->read(b,lba,n,buf+1) && !memcmp(buf+1,expected,n*512) && !buf[0]);
+            CHECK(f.commands-commands==(n+255)/256 && f.delivered-irqs==phases);
+            CHECK(f.command==(ext ? 0x29 : 0xc4) && f.max_burst<=1024);
+            CHECK(f.delays-delays<n*256); /* no microsecond delay per word */
+            if (n>4) CHECK(yields>y);
+            commands=f.commands; irqs=f.delivered;
+            CHECK(!b->write(b,lba,n,buf+1));
+            CHECK(f.commands-commands==(n+255)/256 && f.delivered-irqs==phases);
+            CHECK(f.command==(ext ? 0x39 : 0xc5) && !f.channel.active && !f.channel.mutex.owner);
+            CHECK(f.irq_acks==f.delivered && !b->quarantined);
+        }
+    }
+    /* Valid-but-disabled word 59 also requires SET; invalid word 47 uses
+     * the sector protocol without issuing a speculative SET. */
+    for (unsigned i=0;i<4;i++) {
+        fresh(&f,false); f.identify[0][47]=i==0 ? 16 : i==1 ? 0 : i==2 ? 3 : 255;
+        f.identify[0][59]=0x100;
+        CHECK(ata_channel_discover(&f.channel)==1 && f.commands==(i==0 ? 2u : 1u));
+        CHECK(f.channel.devices[0].multiple_sectors==(i==0 ? 16u : 0u));
+    }
+    /* Failed SET and failed later multiple block never fall back/retry. */
+    fresh(&f,false); f.identify[0][47]=16; f.fault=BAD_MULTIPLE;
+    CHECK(ata_channel_discover(&f.channel)==-FS_EIO && f.channel.stopped && f.commands==2);
+    struct blkdev *b=&f.channel.devices[0].block;
+    for (unsigned write=0;write<2;write++) {
+        fresh(&f,false); f.identify[0][47]=16; CHECK(ata_channel_discover(&f.channel)==1);
+        b=&f.channel.devices[0].block; f.fail_after=1;
+        fill(buf,0,17); unsigned commands=f.commands, words=write ? f.data_writes : f.data_reads;
+        CHECK((write ? b->write(b,0,17,buf) : b->read(b,0,17,buf))==-FS_EIO);
+        CHECK((write ? f.data_writes : f.data_reads)-words==16*256);
+        CHECK(f.commands==commands+1 && b->quarantined);
+        CHECK(b->read(b,0,17,buf)==-FS_EQUARANTINED && f.commands==commands+1);
+    }
+    /* The optional burst boundary may be absent on scripted ports. */
+    fresh(&f,false); struct ata_port_ops word_ops=fake_ops; word_ops.insw=0; word_ops.outsw=0;
+    f.channel.ops=&word_ops; f.identify[0][47]=16; CHECK(ata_channel_discover(&f.channel)==1);
+    b=&f.channel.devices[0].block; fill(expected,0,17);
+    CHECK(!b->read(b,0,17,buf) && !memcmp(buf,expected,17*512));
+    CHECK(!b->write(b,0,17,buf) && !f.bursts);
+    free(buf); free(expected);
+    printf("ata MULTIPLE: 28/48-bit, SET validity, short blocks, 128-sector blocks, IRQ counts, bounded bursts, fallback, quarantine PASS\n");
 }
 
 static void test_faults(void)
@@ -650,7 +742,7 @@ static void test_storage_cache_faults(void)
 #include "atapi_test.inc"
 int main(void)
 {
-    test_identify(); test_data(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
+    test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);

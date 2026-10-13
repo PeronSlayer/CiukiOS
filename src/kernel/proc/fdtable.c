@@ -299,25 +299,34 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
     if (!err && (r.node->ro ? r.node->ro_size : r.node->entry.size) > CIUKI_ELF_BYTES_MAX) err = -ENOEXEC;
     if (!err) err = px_share_locked(r.node, VFS_READ, 0);
     if (!err) image->bytes = (uint32_t)(r.node->ro ? r.node->ro_size : r.node->entry.size);
-    for (uint32_t offset = 0; !err && offset < image->bytes; offset += PAGE_SIZE) {
-        unsigned list_index = image->pages / (PAGE_SIZE / sizeof(uint32_t));
-        if (!image->lists[list_index]) {
-            image->lists[list_index] = pmm_alloc();
-            if (!image->lists[list_index]) { err = -ENOMEM; break; }
-            memset(P2V(image->lists[list_index]), 0, PAGE_SIZE);
-        }
-        uint32_t page = pmm_alloc();
-        if (!page) { err = -ENOMEM; break; }
-        ((uint32_t *)P2V(image->lists[list_index]))[image->pages % (PAGE_SIZE / sizeof(uint32_t))] = page;
-        image->pages++;
+    uint32_t buffer_bytes=image->bytes<BLKDEV_READ_BYTES ? image->bytes : BLKDEV_READ_BYTES;
+    void *buffer=!err && buffer_bytes ? fs_contig_alloc(buffer_bytes) : 0;
+    if (!err && buffer_bytes && !buffer) err=-ENOMEM;
+    for (uint32_t offset = 0; !err && offset < image->bytes; offset += BLKDEV_READ_BYTES) {
         uint32_t bytes = image->bytes - offset;
-        if (bytes > PAGE_SIZE) bytes = PAGE_SIZE;
+        if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
         size_t done = 0;
-        err = px_error(r.node->ro ? fs_ro_read(r.node->ro,r.node->ro_id,offset,P2V(page),bytes,&done) :
-                       fat_read(r.node->volume, &r.node->entry, offset, P2V(page), bytes, &done));
+        err = px_error(r.node->ro ? fs_ro_read(r.node->ro,r.node->ro_id,offset,buffer,bytes,&done) :
+                       fat_read(r.node->volume, &r.node->entry, offset, buffer, bytes, &done));
         proc_launch_volume_read(bytes, done);
         if (!err && done != bytes) err = -EIO;
+        for (uint32_t off=0; !err && off<bytes; off+=PAGE_SIZE) {
+            unsigned list_index = image->pages / (PAGE_SIZE / sizeof(uint32_t));
+            if (!image->lists[list_index]) {
+                image->lists[list_index] = pmm_alloc();
+                if (!image->lists[list_index]) { err = -ENOMEM; break; }
+                memset(P2V(image->lists[list_index]), 0, PAGE_SIZE);
+            }
+            uint32_t page = pmm_alloc();
+            if (!page) { err = -ENOMEM; break; }
+            ((uint32_t *)P2V(image->lists[list_index]))[image->pages % (PAGE_SIZE / sizeof(uint32_t))] = page;
+            image->pages++;
+            uint32_t take=bytes-off;
+            if (take>PAGE_SIZE) take=PAGE_SIZE;
+            memcpy(P2V(page),(uint8_t *)buffer+off,take);
+        }
     }
+    fs_contig_free(buffer,buffer_bytes);
     fs_lock_drop(&s->vfs->lock);
     if (err) { image_close(image); return err; }
     *out = (struct ciuki_file){ image, image->bytes, image_read, image_close };

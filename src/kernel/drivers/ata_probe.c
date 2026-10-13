@@ -213,6 +213,7 @@ static uint64_t fault_deadline(void *ctx, uint64_t d)
 static int fault_delay(void *ctx, uint32_t us) { (void)ctx; (void)us; return 0; }
 static const struct ata_port_ops fault_ops = {
     fault_in8, fault_out8, fault_in16, fault_out16, fault_now, fault_deadline, fault_delay,
+    0, 0,
 };
 
 /* Reuse the F0 ring-3 survivor payload (id=7), mapped identically to the

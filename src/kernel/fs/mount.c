@@ -9,7 +9,6 @@
 #include <ciuki/reboot.h>
 #ifndef FS_HOST
 #include <ciuki/ata.h>
-#include <ciuki/work.h>
 #include <ciuki/sync.h>
 #endif
 
@@ -428,20 +427,8 @@ int storage_sync(void)
     return storage_shutdown(&system_storage);
 }
 #ifndef FS_HOST
-static bool initialized, work_pending;
+static bool initialized;
 static uint64_t next_log_drain;
-static void storage_work(void *arg)
-{
-    struct storage *s = arg;
-    if (!s->stopped) {
-        fs_worker_enter();
-        uint64_t now=fs_now_ms();
-        if (now>=next_log_drain) { bootlog_drain(); next_log_drain=now+250; }
-        storage_writeback(s, now);
-        fs_worker_leave();
-    }
-    work_pending = false;
-}
 static void storage_timer(void *arg)
 {
     struct storage *s = arg;
@@ -452,9 +439,11 @@ static void storage_timer(void *arg)
         uint64_t now=fs_now_ms();
         bool log_due=log.active && log.queued && now>=next_log_drain;
         bool due = cache_writeback_due(&s->cache, now) || log_due;
-        if (due && !work_pending && !s->stopped) {
-            work_pending = true;
-            if (!kwork_queue(storage_work, s)) work_pending = false;
+        if (due && !s->stopped) {
+            /* Disk waits/writeback run on this P_DEVICE task, never on the
+             * shared bounded work queue. fs_service/ATA yield within work. */
+            if (log_due) { bootlog_drain(); next_log_drain=fs_now_ms()+250; }
+            storage_writeback(s, fs_now_ms());
         }
     }
     task_exit(0);
@@ -470,9 +459,8 @@ void storage_init(void)
     bool probe = (g_boot.flags & CBI_F_TEST_REQUEST) && storage_probe_readonly(g_boot.test_request, g_boot.test_request_len);
     struct task *timer = 0;
     if (!probe) {
-        e = kwork_init();
-        if (!e) timer = task_create_kernel("storage-timer", storage_timer, s, P_DEVICE);
-        if (e || !timer) s->writer_error = e ? e : -FS_ENOMEM;
+        timer = task_create_kernel("storage-writer", storage_timer, s, P_DEVICE);
+        if (!timer) s->writer_error = -FS_ENOMEM;
     }
     struct ata_device *devices[STORAGE_DISKS];
     for (unsigned slot = 0; slot < STORAGE_DISKS; slot++) {

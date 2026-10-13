@@ -63,6 +63,9 @@ struct cache_stats {
 void cache_stats(struct block_cache *, struct cache_stats *);
 void cache_destroy(struct block_cache *);
 int cache_read(struct block_cache *, struct blkdev *, uint64_t lba, void *sector);
+/* FAT run read, 512-byte sectors, at most BLKDEV_READ_SECTORS. Shared cache
+ * hits (including dirty data) split physical requests; no private cache. */
+int cache_read_run(struct block_cache *, struct blkdev *, uint64_t lba, uint32_t count, void *buffer);
 int cache_write(struct block_cache *, struct blkdev *, uint64_t lba, const void *sector);
 int cache_barrier(struct block_cache *, struct blkdev *);
 int cache_writeback_tick(struct block_cache *, uint32_t now_ms);

@@ -378,9 +378,34 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
     int e=chain_at(v,file->first,(uint32_t)pos/cluster_bytes,&c); if (e) return e;
     unsigned off=(uint32_t)pos%cluster_bytes; uint32_t walked=0;
     while (size) {
-        uint8_t b[512]; if ((e=readsec(v,cluster_sector(v,c)+off/512,b))) return e;
-        size_t n=512-off%512; if (n>size) n=size;
-        memcpy((uint8_t *)buf+*done,b+off%512,n); *done+=n; size-=n; off+=(unsigned)n;
+        if (off%512 || size<512) {
+            uint8_t b[512]; if ((e=readsec(v,cluster_sector(v,c)+off/512,b))) return e;
+            size_t n=512-off%512; if (n>size) n=size;
+            memcpy((uint8_t *)buf+*done,b+off%512,n); *done+=n; size-=n; off+=(unsigned)n;
+        } else {
+            uint64_t sector=cluster_sector(v,c)+off/512;
+            unsigned limit=(unsigned)(size/512);
+            if (limit>BLKDEV_READ_SECTORS) limit=BLKDEV_READ_SECTORS;
+            unsigned n=0;
+            /* Only adjacent cluster numbers are physically contiguous. Do
+             * not read a fragmented successor or bytes beyond the EOF. */
+            while (n<limit) {
+                unsigned take=(cluster_bytes-off)/512;
+                if (take>limit-n) take=limit-n;
+                n+=take; off+=take*512;
+                if (n==limit) break;
+                uint32_t next;
+                if ((e=fat_get_cluster(v,c,&next))) return e;
+                if (!valid(v,next) || walked+1>=v->clusters) return corrupt(v);
+                if (next!=c+1) break;
+                walked++; c=next; off=0;
+            }
+            if (file_read_cancelled && file_read_cancelled()) return -4;
+            if (sector>=v->sectors || n>v->sectors-sector) return corrupt(v);
+            e=cache_read_run(v->cache,v->dev,v->start+sector,n,(uint8_t *)buf+*done);
+            if (e) return e==-FS_EQUARANTINED ? -FS_EIO : e;
+            *done+=n*512; size-=n*512;
+        }
         if (off==cluster_bytes && size) {
             uint32_t next; if ((e=fat_get_cluster(v,c,&next))) return e;
             if (!valid(v,next) || ++walked>=v->clusters) return corrupt(v); c=next; off=0;

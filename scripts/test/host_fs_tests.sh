@@ -29,6 +29,13 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c \
     tests/host/fs/test_cache.c -o build/host/fs/test_cache
 build/host/fs/test_cache
+# f1-39: production coalescing, shared hits and request accounting.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c \
+    src/kernel/fs/fat.c src/kernel/fs/path.c tests/host/fs/test_throughput.c \
+    -o build/host/fs/test_throughput
+build/host/fs/test_throughput
 python3 tests/host/fs/kernel_compile.py
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
 python3 tests/host/fs/fixtures.py
@@ -67,5 +74,5 @@ logical=sum(p.stat().st_size for p in files)
 allocated=sum(p.stat().st_blocks*512 for p in files)
 assert logical<200_000_000 and allocated<200_000_000,(logical,allocated)
 print(f'ARTIFACTS files={len(files)} logical_bytes={logical} allocated_bytes={allocated} limit=200000000')
-print('PASS host filesystem suite: 15 groups (incl. cache layouts), 3 fsck checks, 3 independent mtools comparisons')
+print('PASS host filesystem suite: 16 groups (incl. cache layouts and throughput), 3 fsck checks, 3 independent mtools comparisons')
 PY

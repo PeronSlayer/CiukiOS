@@ -25,6 +25,9 @@ struct ata_port_ops {
      * Fakes may accelerate time, without changing production timeouts. */
     uint64_t (*deadline_ticks)(void *ctx, uint64_t deadline_ms);
     int (*delay_us)(void *ctx, uint32_t us);
+    /* Optional bounded string-I/O bursts; synthetic ports may use word I/O. */
+    void (*insw)(void *ctx, uint16_t port, void *buffer, uint32_t words);
+    void (*outsw)(void *ctx, uint16_t port, const void *buffer, uint32_t words);
 };
 
 struct ata_channel;
@@ -37,6 +40,7 @@ struct ata_device {
     gen_t generation;              /* last issued command, retained for evidence */
     uint64_t commands, elapsed_ms;
     uint8_t status, error, command;
+    uint8_t multiple_max, multiple_sectors;
     bool issued;
     uint8_t packet_bytes, packet_type, sense_key, asc, ascq;
     enum atapi_media media;

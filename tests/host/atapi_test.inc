@@ -92,7 +92,7 @@ static void packet_out16(void *ctx, uint16_t port, uint16_t value)
 static uint64_t packet_now(void *ctx) { (void)ctx; return g_ticks; }
 static uint64_t packet_deadline(void *ctx, uint64_t deadline) { (void)ctx; return deadline; }
 static int packet_delay(void *ctx, uint32_t us) { (void)ctx; (void)us; return 0; }
-static const struct ata_port_ops packet_ops={packet_in8,packet_out8,packet_in16,packet_out16,packet_now,packet_deadline,packet_delay};
+static const struct ata_port_ops packet_ops={packet_in8,packet_out8,packet_in16,packet_out16,packet_now,packet_deadline,packet_delay,0,0};
 static void packet_yield_check(void)
 {
     /* Task-file ownership remains held even at every deliberate yield. */
