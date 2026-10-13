@@ -1525,3 +1525,21 @@ may start after f5-05.
 - `network-contract.md` (F6): renumbering of its proposed calls after
   75–77, and the Winsock and IPX questions.
 - F7 contract: Direct3D 7/8 behind `ddraw`/`d3d8` and `opengl32` on Mesa.
+
+## Decisions on the open questions (owner and lead, 2026-10-13)
+
+- **Q1** Directive numbers stay f5-02 to f5-18 (f5-01 is the native toolchain).
+- **Q2 (owner)** Option C approved: CiukiOS writes the core DLLs, the installer-facing DLLs are reused from one pinned Wine release. **Lead:** the CiukiOS-written Win32 DLLs are licensed LGPL-2.1-or-later, like the reused parts, so proprietary games may load them.
+- **Q3 (owner)** Win16 is in scope for F5 ("let us include it and close the matter"): a directive for the 16-bit setup stubs and InstallShield 3 installers (WOW-style thunking on the V86/DPMI infrastructure of F3) joins the set as f5-19.
+- **Q4 (lead)** The system reports Windows 98 SE 4.10.2222 A and DirectX 7.0a until F7; 8.1 is reported once Direct3D 8 exists.
+- **Q5 (lead)** Games always present through the kernel copy with the display lease; a direct framebuffer mapping may be added by amendment after the 2D accelerator is qualified.
+- **Q6 (owner: "the most faithful and best made")** General MIDI wavetable synthesis with an open-licence GM bank (FluidR3 GM, MIT, or GeneralUser GS with its licence recorded), resampled to the audio device; OPL3 FM remains the DOS VM path. The bank size counts against the image budget (a reduced bank for the 128 MiB machines is acceptable).
+- **Q7 (lead)** "Playable" on hardware: the gate scene of each title averages at least 25 frames per second at the title's default resolution with no audio underrun over ten minutes, inputs reacting within one frame.
+- **Q8 (lead)** CD audio (MCI cdaudio) is required in F5 after the core phases, since several gate titles use it.
+- **Q9 (lead)** Time stays UTC in the kernel; a time-zone setting for all of CiukiOS (Control Panel Date & Time) is added with F5 and used by the Win32 time functions.
+- **Q10 (lead)** Open-licence metric-compatible fonts (Liberation family) rendered with FreeType are approved for the Win32 GDI text path.
+- **Q11 (lead)** Retail titles that need kernel-mode copy-protection drivers stay out of scope.
+- **Q12 (lead)** Qualification at 128 MiB; the 64 MiB figure is measured and reported, not gated.
+- **Q13 (owner)** Yes: F6 provides Win32 IPX sockets for the LAN play of StarCraft, Diablo and Age of Empires.
+- **Q14 (lead)** The ten titles and the reserves are approved as listed; Quake III Arena and Tomb Raider move to the F7 gate.
+- **Q15 (owner)** Bilingual: English (United States) is the default locale and UI language, Italian is offered as a selectable locale and keyboard layout; UI copy in the repository stays English.

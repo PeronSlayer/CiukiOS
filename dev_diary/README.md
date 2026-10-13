@@ -114,3 +114,4 @@ Documenti di design, validazione, fonti esterne.
 | [Fusione di wt/integ2 in main: pre-alpha 0.9.0 integrata](2026-10-12-05-fusione-in-main.md) | 12 ott | fusione; decisione del proprietario (campagna interrotta) |
 | [Scope: giochi Windows tramite API Win32 compatibile; immagine definitiva 36010476](2026-10-13-01-scope-win32-e-immagine-definitiva.md) | 13 ott | decisione (scope); fusioni finali e consegna hardware |
 | [Consegne della notte dal secondo giro sul T23; immagine 8845b848](2026-10-13-02-consegne-notturne-immagine-8845b848.md) | 13 ott | modifiche (desktop, driver, DOS VM, audio); immagine per il T23 |
+| [Contratto Win32 (F5) e decisioni; runner a due slot; diagnosi del blocco SuperSavage](2026-10-13-03-contratto-win32-decisioni.md) | 13 ott | decisioni (design); analisi hardware |
