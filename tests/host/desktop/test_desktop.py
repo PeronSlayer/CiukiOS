@@ -20,7 +20,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 # The desktop shell's units (apps/desktop/build_desktop.py SHELL, without the stb decoder) and the toolkit
 # primitives it draws with: every host build of the production desktop links them.
-SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "settings.c", "wallpaper.c", "keymap.c")] + \
+SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")] + \
                 [ROOT / "apps/libdeskui/draw.c"]
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -162,7 +162,8 @@ class DesktopTests(unittest.TestCase):
                      "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include")]
             plain = [ROOT / "tests/host/desktop/fake.c", *(ROOT / "apps/desktop" / f"{n}.c" for n in
                                                            ("client", "protocol", "input", "compositor", "theme",
-                                                            "shell", "settings", "wallpaper", "keymap", "image"))]
+                                                            "shell", "settings", "wallpaper", "keymap", "image", "folder"))]
+            plain += [ROOT / "apps/files" / n for n in ("model.c","transfer.c")]
             posix = [ROOT / "tests/host/desktop/look_capture.c", *(ROOT / "apps/libdeskui" / f"{n}.c" for n in
                                                                    ("draw", "widgets", "list", "menu", "dialog", "textarea",
                                                                     "icons", "icon_map"))]
@@ -211,7 +212,7 @@ class DesktopTests(unittest.TestCase):
             return raster
         icons, plain = pixels(icons_ppm), pixels(plain_ppm)
         row = 1024 * 3
-        x0, y0, cw, ch, label_top, cells = 8, 42, 96, 94, 54, 6
+        x0, y0, cw, ch, label_top, cells = 8, 42, 96, 94, 54, 3
         for y in range(768):
             a, b = icons[y * row:(y + 1) * row], plain[y * row:(y + 1) * row]
             if y0 <= y < y0 + cells * ch:
@@ -576,13 +577,14 @@ class AppCaseReplayTests(unittest.TestCase):
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
-                                                                                  "shell", "settings", "wallpaper", "keymap", "image")),
+                                                                                  "shell", "settings", "wallpaper", "keymap", "image", "folder")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix, ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
+                 ("files_transfer", posix, ROOT / "apps/files/transfer.c"),
                  ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),
                  ("note_app", posix, ROOT / "apps/ciuknote/app.c"), ("note_doc", posix, ROOT / "apps/ciuknote/doc.c"),
                  ("tasks_main", os_calls + ["-Dmain=tasks_main"], ROOT / "apps/tasks/tasks.c"),
@@ -595,7 +597,7 @@ class AppCaseReplayTests(unittest.TestCase):
             target = folder / f"{name}.o"
             subprocess.run([*common, *flags, "-c", str(source), "-o", str(target)], check=True, env=cls.env)
             return target
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             objects = list(pool.map(compile_unit, units))
         cls.binary = folder / "app_replay"
         subprocess.run(["clang", "-fsanitize=address,undefined", "-pthread", *map(str, objects), "-o", str(cls.binary)],

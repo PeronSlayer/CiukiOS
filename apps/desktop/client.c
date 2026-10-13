@@ -374,6 +374,15 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         c->awaiting_frame = 0;
         break;
     }
+    case DESK_FILE_DROP:
+        if (d->shell && !d->sh.gate && !d->power.state && c->window && c->program==DESK_APP_FILES) {
+            struct desk_box content=desk_content(c);
+            int x=d->mouse_x,y=d->mouse_y;
+            d->mouse_x=content.x+p.x; d->mouse_y=content.y+p.y;
+            desk_folder_drop(d,i,(int)p.flags);
+            d->mouse_x=x; d->mouse_y=y;
+        }
+        break;
     case DESK_SET_TITLE:
         if (strcmp(c->title, p.title)) {
             memcpy(c->title, p.title, sizeof(c->title));

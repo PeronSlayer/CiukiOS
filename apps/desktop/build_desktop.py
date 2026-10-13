@@ -30,7 +30,7 @@ ACCESSORIES = {
 }
 PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
-SHELL = ["sounds.c", "sound_runtime.c", "shell.c", "settings.c", "wallpaper.c", "image.c", "keymap.c"]
+SHELL = ["sounds.c", "sound_runtime.c", "shell.c", "settings.c", "wallpaper.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
 
 
@@ -158,7 +158,7 @@ def build():
     archive = [sdk["tools"]["llvm-ar"]["path"], "rcsD", str(library), *(str(p) for p in objects)]
     subprocess.run(archive, check=True, env=env)
     commands["libdeskui"] = archive
-    sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/vfs.c"]
+    sources["files"] = ["../files/files.c", "../files/app.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",

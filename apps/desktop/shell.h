@@ -8,11 +8,12 @@
 #ifndef CIUKI_DESKTOP_SHELL_H
 #define CIUKI_DESKTOP_SHELL_H
 #include "settings.h"
+#include "folder.h"
 #include "wallpaper.h"
 #include <stdint.h>
 #define SH_LEVELS 3
 #define SH_ITEMS 20
-#define SH_ICONS 8
+#define SH_ICONS (FM_ENTRIES + 3)
 #define SH_TRAY_W 112
 #define SH_START_ROW 30
 #define SH_SUB_ROW 22
@@ -25,11 +26,11 @@ enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL
        DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_KINDS };
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
-                    SH_MENU_GAMES };
+                    SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
-                 SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE };
+                 SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -37,13 +38,15 @@ struct sh_item { char label[44]; const char *icon; uint8_t action, flags; int16_
 struct sh_menu { int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
-struct sh_icon { char label[24], program[24], argument[64]; const char *icon; int action, ciuki; struct desk_box box; };
+struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki; struct desk_box box; };
 struct desk_shell {
     struct ciuki_settings cfg;
     int gate;                       /* runtime gate scenarios: defaults only, no settings I/O */
     struct sh_menu menus[SH_LEVELS];
     int levels, menu_owner;         /* menu_owner: client for SH_MENU_TASK, icon for SH_MENU_ICON */
-    struct sh_icon icons[SH_ICONS];
+    struct sh_icon *icons; int icon_capacity;
+    struct desk_folder *folder;
+    int icon_drag, icon_dragged, drag_start_x, drag_start_y;
     int icon_count, icon_selected;
     uint64_t click_ns; int click_icon;
     int volume_open, volume, muted, mixer_state;   /* mixer_state: 0 unknown, 1 read-only, 2 controllable, -1 absent */

@@ -524,6 +524,7 @@ static void shell_service(struct desktop *d)
     if (!d->shell) return;
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
     if (d->power.state) { desk_power_tick(d); return; }
+    desk_folder_service(d);
     if (sh->want_power) {
         int action=sh->want_power; sh->want_power=0;
         if (settings_save(d)) { /* still try: settings are a convenience */ }
@@ -581,7 +582,11 @@ static void shell_setup(struct desktop *d, int gate)
     d->sh.gate=gate;
     if (!gate) settings_load(d);
     desk_shell_enable(d);
-    if (!gate) desk_sound_init(d);
+    if (!gate) {
+        int result=desk_folder_init(d,fm_native_vfs());
+        if (result) snprintf(d->notice,sizeof(d->notice),"Desktop folder unavailable (error %d)",-result);
+        desk_sound_init(d);
+    }
     /* The first frame shows the desktop colour, bars and icons at once; the
      * image wallpaper (the default Ciuk2 PNG takes seconds to decode under
      * TCG) is loaded two loop iterations later (lead fix, 2026-10-12). */
