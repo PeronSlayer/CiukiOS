@@ -240,13 +240,32 @@ static uint32_t cursor_phys;
 static uint8_t *cursor_mapping;
 static void *register_window, *cursor_window;
 static uint64_t last_log;
-static uint32_t hw_read(void *ctx, uint32_t offset) { (void)ctx; return registers ? *(volatile uint32_t *)(registers + offset) : UINT32_MAX; }
-static void hw_write(void *ctx, uint32_t offset, uint32_t value) { (void)ctx; if (registers) *(volatile uint32_t *)(registers + offset) = value; }
+/* Verbose-boot breadcrumbs: COM1 output is synchronous, so the last step
+ * line before a silent stop names the register access that stalled the
+ * bus (T23, 2026-10-13). Repeated accesses (polling) print only once. */
+static bool tracing;
+static uint32_t trace_last = UINT32_MAX;
+static void trace(const char *op, uint32_t key, uint32_t reg)
+{
+    if (!tracing || key == trace_last) return;
+    trace_last = key;
+    klog("[accel] savage step op=%s reg=%05x", op, reg);
+}
+static uint32_t hw_read(void *ctx, uint32_t offset)
+{
+    (void)ctx; trace("r32", offset, offset);
+    return registers ? *(volatile uint32_t *)(registers + offset) : UINT32_MAX;
+}
+static void hw_write(void *ctx, uint32_t offset, uint32_t value)
+{
+    (void)ctx; trace("w32", 0x40000000u | offset, offset);
+    if (registers) *(volatile uint32_t *)(registers + offset) = value;
+}
 static uint8_t cr_read(uint8_t index) { registers[0x83d4] = index; return registers[0x83d5]; }
 static void cr_write(uint8_t index, uint8_t value) { registers[0x83d4] = index; registers[0x83d5] = value; }
 static uint8_t hw_cr_read(void *ctx, uint8_t index)
 {
-    (void)ctx;
+    (void)ctx; trace("crr", 0x80000000u | index, index);
     uint8_t a = cr_read(0x38), b = cr_read(0x39);
     cr_write(0x38, 0x48); cr_write(0x39, 0xa5);
     uint8_t value = cr_read(index);
@@ -255,7 +274,7 @@ static uint8_t hw_cr_read(void *ctx, uint8_t index)
 }
 static void hw_cr_write(void *ctx, uint8_t index, uint8_t value)
 {
-    (void)ctx;
+    (void)ctx; trace("crw", 0xc0000000u | index, index);
     uint8_t a = cr_read(0x38), b = cr_read(0x39);
     cr_write(0x38, 0x48); cr_write(0x39, 0xa5);
     cr_write(index,value); cr_write(0x39,b); cr_write(0x38,a);
@@ -334,6 +353,10 @@ const struct accel_ops *savage2d_init(const struct fb_device *d)
         (gpu->bar[1] & ~15u) != d->phys || !safe_extent(gpu->bar[0] & ~15u, SAVAGE_MMIO_BYTES)) return 0;
     /* No side effects for unsupported geometry. */
     if (!mode_supported(d)) return 0;
+    if (g_boot.flags & CBI_F_VERBOSE)
+        klog("[accel] savage probe pci=%04x:%04x cmd=%04x bar0=%08x bar1=%08x lfb=%08x vram=%u",
+            gpu->vendor, gpu->device, gpu->command, gpu->bar[0], gpu->bar[1], d->phys,
+            g_boot.display.tag == CBI_DISPLAY_TAG ? g_boot.display.vram_bytes : 0);
     if (reg_claim < 0) {
         uint32_t base = gpu->bar[0] & ~15u;
         reg_claim = registry_claim(RES_MMIO, base, base + SAVAGE_MMIO_BYTES, "savage2d", false);
@@ -361,7 +384,11 @@ const struct accel_ops *savage2d_init(const struct fb_device *d)
     }
     struct savage_io io = {0, hw_read, hw_write, hw_cr_read, hw_cr_write, hw_now, hw_relax, hw_drain, hw_fault};
     uint8_t *cursor = cursor_mapping && cursor_phys >= d->phys + d->size ? cursor_mapping : 0;
+    if (g_boot.flags & CBI_F_VERBOSE)
+        klog("[accel] savage mapped mmio=%p cursor=%p", (void *)registers, (void *)cursor);
+    tracing = !!(g_boot.flags & CBI_F_VERBOSE); trace_last = UINT32_MAX;
     int err = savage2d_start(&engine, &io, d, gpu->device != 0x8a22, cursor, cursor_phys - d->phys);
+    tracing = false;
     engine.ops.stop = runtime_stop;
     if (g_boot.flags & CBI_F_VERBOSE)
         klog("[accel] savage pci=%04x:%04x mmio=%08x lfb=%08x mode=%u bpp=%u pitch=%u caps=%u init_result=%d",
