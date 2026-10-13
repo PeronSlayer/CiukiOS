@@ -13,7 +13,7 @@
 #include <stdint.h>
 #define SH_LEVELS 3
 #define SH_ITEMS 20
-#define SH_ICONS (FM_ENTRIES + 3)
+#define SH_ICONS (FM_ENTRIES + 4)
 #define SH_TRAY_W 112
 #define SH_START_ROW 30
 #define SH_SUB_ROW 22

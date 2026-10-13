@@ -25,6 +25,7 @@ ACCESSORIES = {
     "clock": ["clock_main.c", "clock_view.c", "clock_model.c"],
     "help": ["help_main.c", "help_view.c", "help_topics.c"],
     "mixer": ["mixer_main.c", "mixer_view.c"],
+    "music": ["../music/main.c", "../music/view.c", "../music/player.c", "../music/runtime.c", "../music/decoder.c", "../music/playlist.c", "../music/vorbis.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
 }
@@ -49,7 +50,7 @@ def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
                                  ROOT / "apps/ciukide", ROOT / "apps/accessories", ROOT / "apps/paint",
-                                 ROOT / "third_party/stb", ROOT / "assets/fonts/native")
+                                 ROOT / "apps/music", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",

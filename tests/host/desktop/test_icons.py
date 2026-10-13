@@ -203,8 +203,8 @@ class IconStoreTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer)"\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 18)
-        self.assertEqual(len(accessories), 7)
+        self.assertEqual(len(programs), 20)
+        self.assertEqual(len(accessories), 8)
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         games = re.findall(r'\{"[^"]+", "[^"]+", "[^"]+", "([a-z-]+)"\}', catalog)
@@ -220,9 +220,12 @@ class IconStoreTests(unittest.TestCase):
         for label, obj in objects.items():
             self.assertEqual(rows[label], table[obj], label)
         icons = dict(re.findall(r'icon_add\(d, "([^"]+)", "[^"]*", (?:"[^"]*"|[A-Z_]+), "([a-z-]+)"', shell))
-        # f2-42: the real Desktop folder follows these three fixed icons;
-        # application icons are selected from the shared catalogue per file.
-        self.assertEqual(set(icons), {"Computer", "Documents", "Trash"})
+        # f2-42: three fixed icons precede the real Desktop folder entries.
+        # f4-07: Pictures is an optional shortcut after those entries.
+        self.assertEqual(set(icons) - {"Pictures"}, {"Computer", "Documents", "Trash"})
+        if "Pictures" in icons:
+            self.assertEqual(icons["Pictures"], table["place:folder"])
+            self.assertRegex(shell, r'if \(d->pictures_exists\) icon_add\(d, "Pictures", "files", "/Documents/Pictures"')
         for label, obj in {"Documents": "place:home", "Trash": "place:trash"}.items():
             self.assertEqual(icons[label], table[obj], label)
         self.assertIn('e->meta.type==FM_DIR ? "folder" : cat ? cat->tango : "text-x-generic"', shell)

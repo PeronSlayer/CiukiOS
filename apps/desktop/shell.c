@@ -232,6 +232,8 @@ static const struct program_info programs[] = {
     {"demo", "Ciuki Demo", "preferences-desktop-peripherals", "programs"},   /* the keyboard/mouse input demo */
     {"lua", "Lua", "text-x-script", "programs"},
     {"control", "Control Panel", "preferences-desktop", "programs"},
+    {"music", "Music Player", "audio-x-generic", "programs"},
+    {"viewer", "Image Viewer", "image-x-generic", "programs"},
     {"paint", "CiukPaint", "applications-graphics", "programs"},
     {"calc", "Calculator", "accessories-calculator", "accessories"},
     {"charmap", "Character Map", "accessories-character-map", "accessories"},
@@ -288,6 +290,17 @@ static void item(struct sh_menu *m, const char *label, const char *icon, int act
 }
 static void separator(struct sh_menu *m) { item(m, "", NULL, SH_ACT_NONE, 0, SH_ITEM_SEPARATOR); }
 static const char *const panel_names[] = {"", "display", "mouse", "keyboard", "sounds", "datetime", "system"};
+/* Only projected Desktop entries may receive filesystem operations. */
+static int icon_is_entry(const struct desktop *d, int index)
+{
+    return d->sh.folder && index >= 3 && index < d->sh.icon_count &&
+        (unsigned)(index - 3) < d->sh.folder->model.count;
+}
+static const char *icon_position_name(const struct desktop *d, int index)
+{
+    if (index < 3) return index == 0 ? "/Computer" : index == 1 ? "/Documents" : "/Trash";
+    return icon_is_entry(d, index) ? d->sh.icons[index].label : "/Pictures";
+}
 static void build(struct desktop *d, struct sh_menu *m, int kind)
 {
     memset(m, 0, sizeof(*m));
@@ -372,7 +385,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m,"Bitmap Image","applications-graphics",SH_ACT_FILE,DF_BITMAP,0);
         break;
     case SH_MENU_OPEN_WITH:
-        if (d->sh.menu_owner >= 3 && d->sh.menu_owner < d->sh.icon_count) {
+        if (icon_is_entry(d, d->sh.menu_owner)) {
             const char *path=d->sh.icons[d->sh.menu_owner].argument;
             for (unsigned i=0;i<DESK_CATALOG_COUNT;i++) if (desk_catalog_supports(&desk_catalog[i],path))
                 item(m,desk_catalog[i].label,desk_catalog[i].tango,SH_ACT_OPEN_WITH,(int)i,0);
@@ -391,7 +404,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         break;
     case SH_MENU_ICON:
         item(m, "Open", NULL, SH_ACT_ICON_OPEN, d->sh.menu_owner, SH_ITEM_DEFAULT);
-        if (d->sh.menu_owner >= 3 && d->sh.folder) {
+        if (icon_is_entry(d, d->sh.menu_owner)) {
             if (d->sh.folder->model.entries[d->sh.menu_owner-3].meta.type != FM_DIR)
                 item(m,"Open With",NULL,SH_ACT_SUBMENU,SH_MENU_OPEN_WITH,0);
             item(m,"Cut", "edit-cut", SH_ACT_FILE, DF_CUT,0);
@@ -572,12 +585,12 @@ static void act(struct desktop *d, const struct sh_item *it)
         if (d->sh.folder) { d->sh.folder->command=it->arg; d->sh.folder->index=d->sh.menu_owner-3; }
         break;
     case SH_ACT_OPEN_WITH:
-        if (d->sh.menu_owner>=3 && d->sh.menu_owner<d->sh.icon_count)
+        if (icon_is_entry(d, d->sh.menu_owner))
             launch_named(d,it->arg<0 ? "ciuknote" : desk_catalog[it->arg].name,d->sh.icons[d->sh.menu_owner].argument);
         break;
     case SH_ACT_ICON_OPEN: icon_open(d, it->arg); break;
     case SH_ACT_ICON_PROPERTIES:
-        if (it->arg>=3 && d->sh.folder) { d->sh.folder->command=DF_PROPERTIES; d->sh.folder->index=it->arg-3; break; }
+        if (icon_is_entry(d, it->arg)) { d->sh.folder->command=DF_PROPERTIES; d->sh.folder->index=it->arg-3; break; }
         if (it->arg >= 0 && it->arg < d->sh.icon_count) {
             const struct sh_icon *ic = &d->sh.icons[it->arg];
             char text[200];
@@ -868,7 +881,7 @@ static void icons_layout(struct desktop *d)
     for (int k = 0; k < d->sh.icon_count; k++) {
         if (y + ICON_CELL_H > bottom && y > top) { y = top; x += ICON_CELL_W; }
         int px=x,py=y;
-        const char *name=k<3 ? (k==0 ? "/Computer" : k==1 ? "/Documents" : "/Trash") : d->sh.icons[k].label;
+        const char *name=icon_position_name(d, k);
         if (cfg_icon_position(&d->sh.cfg,name,&px,&py)) {
             if (px+ICON_CELL_W>(int)d->width) px=(int)d->width-ICON_CELL_W;
             if (px<0) px=0;
@@ -890,12 +903,14 @@ static void icons_build(struct desktop *d)
     if (d->sh.icon_count!=3) return;
     if (d->sh.folder) for (unsigned i=0;i<d->sh.folder->model.count;i++) {
         const struct fm_entry *e=&d->sh.folder->model.entries[i];
-        char path[FM_PATH]; if (fm_join(path,DESK_FOLDER,e->name)) continue;
+        char path[FM_PATH]; if (fm_join(path,DESK_FOLDER,e->name)) return;
         const struct desk_catalog_entry *cat=desk_catalog_file(path);
         icon_add(d,e->name,e->meta.type==FM_DIR ? "files" : cat ? cat->name : "ciuknote",path,
             e->meta.type==FM_DIR ? "folder" : cat ? cat->tango : "text-x-generic", SH_ACT_LAUNCH,0);
-        if (d->sh.icon_count!=(int)i+4) break;
+        if (d->sh.icon_count!=(int)i+4) return;
     }
+    /* Keep folder entries at index 3 + model index; Pictures is a shortcut. */
+    if (d->pictures_exists) icon_add(d, "Pictures", "files", "/Documents/Pictures", "folder", SH_ACT_LAUNCH, 0);
     d->sh.icon_selected = -1;
 }
 static void icon_open(struct desktop *d, int index)
@@ -1608,9 +1623,9 @@ int desk_shell_button(struct desktop *d, int button, int down)
             if (d->sh.icon_dragged) {
                 d->sh.click_icon=-1;
                 int to=icon_hit(d,x,y);
-                int folder_target=to>=3 && to!=index && d->sh.folder &&
+                int folder_target=icon_is_entry(d, to) && to!=index &&
                     d->sh.folder->model.entries[to-3].meta.type==FM_DIR;
-                if (index>=3 && (desk_hit(d,x,y)>=0 || folder_target)) desk_folder_drop(d,-1,(d->sh.modifiers&DU_CTRL)!=0);
+                if (icon_is_entry(d, index) && (desk_hit(d,x,y)>=0 || folder_target)) desk_folder_drop(d,-1,(d->sh.modifiers&DU_CTRL)!=0);
                 else if (desk_hit(d,x,y)<0) {
                     struct desk_box *b=&d->sh.icons[index].box; damage(d,*b);
                     d->sh.background_valid=0;
@@ -1619,7 +1634,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
                     if (b->x+b->w>(int)d->width) b->x=(int)d->width-b->w;
                     if (b->y<DESK_BAR+10) b->y=DESK_BAR+10;
                     if (b->y+b->h>(int)d->height-DESK_BAR) b->y=(int)d->height-DESK_BAR-b->h;
-                    const char *name=index<3 ? (index==0 ? "/Computer" : index==1 ? "/Documents" : "/Trash") : d->sh.icons[index].label;
+                    const char *name=icon_position_name(d, index);
                     if (cfg_icon_move(&d->sh.cfg,name,b->x,b->y)) d->sh.want_save=1;
                     else desk_shell_message(d,"Desktop","No space remains for icon positions in desktop.cfg.",1);
                     damage(d,*b);
@@ -1952,12 +1967,12 @@ int desk_shell_key(struct desktop *d, int code, int value)
             icon_select(d,next); return 1;
         }
         if (d->sh.folder) {
-            if (code==DU_KEY_F2 && s>=3) { desk_folder_rename(d,s); return 1; }
-            if (code==DU_KEY_DELETE && s>=3) { d->sh.folder->command=DF_DELETE; d->sh.folder->index=s-3; return 1; }
+            if (code==DU_KEY_F2 && icon_is_entry(d, s)) { desk_folder_rename(d,s); return 1; }
+            if (code==DU_KEY_DELETE && icon_is_entry(d, s)) { d->sh.folder->command=DF_DELETE; d->sh.folder->index=s-3; return 1; }
             if (code==DU_KEY_F5) { d->sh.folder->command=DF_REFRESH; return 1; }
             if (d->sh.modifiers&DU_CTRL) {
                 int command=code==0x2f ? DF_PASTE : code==0x2e ? DF_COPY : code==0x2d ? DF_CUT : 0;
-                if (command) { d->sh.folder->command=command; d->sh.folder->index=s-3; return 1; }
+                if (command && (command==DF_PASTE || icon_is_entry(d, s))) { d->sh.folder->command=command; d->sh.folder->index=s-3; return 1; }
             }
         }
         if (code == DU_KEY_ENTER && s >= 0) { icon_open(d, s); return 1; }

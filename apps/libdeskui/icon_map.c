@@ -35,6 +35,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:charmap", "accessories-character-map"},
     {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */
     {"program:help", "help-browser"},
+    {"program:music", "audio-x-generic"},
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
     {"program:paint", "applications-graphics"},
@@ -188,7 +189,7 @@ const struct du_icon_map du_icon_map[] = {
     {"type:.wav", "audio-x-generic"}, {"type:.mid", "audio-x-generic"}, {"type:.midi", "audio-x-generic"},
     {"type:.voc", "audio-x-generic"}, {"type:.mod", "audio-x-generic"}, {"type:.s3m", "audio-x-generic"},
     {"type:.xm", "audio-x-generic"}, {"type:.it", "audio-x-generic"}, {"type:.mp3", "audio-x-generic"},
-    {"type:.ogg", "audio-x-generic"}, {"type:.au", "audio-x-generic"}, {"type:.aif", "audio-x-generic"},
+    {"type:.ogg", "audio-x-generic"}, {"type:.m3u", "audio-x-generic"}, {"type:.au", "audio-x-generic"}, {"type:.aif", "audio-x-generic"},
     {"type:.cmf", "audio-x-generic"}, {"type:.rol", "audio-x-generic"}, {"type:.flac", "audio-x-generic"},
     {"type:.avi", "video-x-generic"}, {"type:.mpg", "video-x-generic"}, {"type:.mpeg", "video-x-generic"},
     {"type:.flc", "video-x-generic"}, {"type:.fli", "video-x-generic"}, {"type:.mov", "video-x-generic"},

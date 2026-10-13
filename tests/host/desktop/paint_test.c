@@ -244,8 +244,11 @@ static void files(const char *scratch)
     du_set_text(&ui.dialog.items[5],path); dialog_button(0); assert(!ui.dialog.kind && !state().dirty);
     at_chord(&ui,DU_KEY_LCTRL,0x31); assert(!paint_path()[0] && !state().dirty);
     stroke(T_PENCIL,1,1,4,1,1); assert(state().dirty);
-    assert(!strcmp(desk_catalog_file("/Documents/Art.BmP")->name,"paint"));
-    assert(!strcmp(desk_catalog_file("picture.PNG")->name,"paint"));
+    assert(!strcmp(desk_catalog_file("/Documents/Art.BmP")->name,"viewer"));
+    assert(!strcmp(desk_catalog_file("picture.PNG")->name,"viewer"));
+    assert(desk_catalog_supports(desk_catalog_find("paint"),"/Documents/Art.BmP"));
+    assert(desk_catalog_supports(desk_catalog_find("paint"),"picture.PNG"));
+    assert(!desk_catalog_supports(desk_catalog_find("paint"),"a.jpg"));
     assert(!strcmp(desk_catalog_file("a.jpg")->name,"viewer")); assert(!desk_catalog_file("a.png/noext"));
     /* Save/discard/cancel on close uses the live native modal. */
     assert(paint_request_close() && ui.dialog.kind); dialog_button(2); assert(state().dirty);

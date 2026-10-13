@@ -48,3 +48,21 @@ limit; an exhausted position store reports an error. Icons and label caches are
 allocated as needed, using the existing Files listing bound (4096 entries), and
 allocation failure leaves a consistent prefix rather than changing file indices.
 The existing LAUNCH argument bound (160 bytes) still applies when opening files.
+
+## F4-07 merge integration (2026-10-13)
+
+Rechecked the upstream [MIME applications specification](https://specifications.freedesktop.org/mime-apps/latest/)
+against `catalog.h` and the shell: default association launches and Open With
+remain catalogue-driven, including Music Player's WAV/MP3/OGG/M3U handlers.
+The conditional Pictures shortcut follows the projected Desktop entries;
+Computer, Documents and Trash remain indices 0..2 and model entries remain
+index 3 + model index. Filesystem actions and drop targets check the model
+bounds, so Pictures cannot be renamed, deleted or treated as a Desktop entry.
+Its saved position uses `/Pictures`, distinct from a Desktop file named
+`Pictures`. The icon capacity includes this extra shortcut. Files retains both
+Desktop navigation and Play in Music Player with distinct command IDs.
+
+Image Viewer precedes Paint in the catalogue, retaining F4-07's default image
+associations. Paint still advertises BMP/PNG support so F2-42's Open With menu
+can launch the editor. Regression checks exercise both the default Viewer
+launch and explicit Open With > CiukPaint for the same Desktop BMP.

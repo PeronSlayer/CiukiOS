@@ -168,6 +168,8 @@ static const struct { const char *ext, *type; enum fm_kind kind; } types[] = {
     {"htm", "HTML Document", FM_KIND_TEXT}, {"html", "HTML Document", FM_KIND_TEXT},
     {"bmp", "Bitmap Image", FM_KIND_IMAGE}, {"png", "PNG Image", FM_KIND_IMAGE},
     {"xrgb", "XRGB Image", FM_KIND_IMAGE}, {"pcx", "PCX Image", FM_KIND_IMAGE},
+    {"mp3", "MP3 Audio", FM_KIND_AUDIO}, {"ogg", "Ogg Vorbis Audio", FM_KIND_AUDIO},
+    {"m3u", "Music Playlist", FM_KIND_AUDIO},
     {"wav", "Wave Sound", FM_KIND_AUDIO}, {"mid", "MIDI Sequence", FM_KIND_AUDIO},
     {"com", "MS-DOS Application", FM_KIND_APP}, {"exe", "Application", FM_KIND_APP},
     {"elf", "ELF Program", FM_KIND_FILE}, {"img", "Disk Image", FM_KIND_FILE},

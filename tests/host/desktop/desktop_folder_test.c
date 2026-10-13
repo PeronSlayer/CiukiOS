@@ -58,6 +58,16 @@ int main(int argc,char **argv)
     FILE *p=fopen(argv[2],"rb"); assert(p && fread((void *)d.portrait,4,256*256,p)==256*256 && !fclose(p));
     desk_shell_enable(&d); assert(!desk_folder_init(&d,&fake_vfs));
     assert(d.sh.icon_count==6 && !strcmp(d.sh.icons[0].label,"Computer") && !strcmp(d.sh.icons[1].label,"Documents") && !strcmp(d.sh.icons[2].label,"Trash"));
+    assert(named("Pictures")<0);
+    d.pictures_exists=1; desk_folder_changed(&d);
+    int pictures=d.sh.icon_count-1;
+    assert(d.sh.icon_count==7 && !strcmp(d.sh.icons[pictures].label,"Pictures"));
+    assert(!strcmp(d.sh.icons[pictures].argument,"/Documents/Pictures"));
+    d.sh.icon_selected=pictures; key(DU_KEY_F2); key(DU_KEY_DELETE);
+    assert(d.sh.folder->editing<0 && d.sh.folder->command==DF_NONE);
+    key(DU_KEY_ENTER); assert(!strcmp(program,"files") && !strcmp(launched,"/Documents/Pictures"));
+    d.sh.menu_owner=pictures; desk_menu_open(&d,SH_MENU_ICON,500,200);
+    assert(d.sh.menus[0].count==3); key(DU_KEY_ESC);
     assert(named("Projects")>=3 && named("readme.txt")>=3); capture("listing");
     /* Scripted New > Folder replay through real shell menu keyboard input. */
     d.mouse_x=300; d.mouse_y=220; assert(desk_shell_button(&d,CIUKI_BUTTON_RIGHT,1)); capture("new-menu");
@@ -87,7 +97,13 @@ int main(int argc,char **argv)
     /* Rename carries the position to the new name. */
     desk_folder_rename(&d,n); strcpy(d.sh.folder->edit,"Moved name"); key(DU_KEY_ENTER); desk_folder_service(&d); n=named("Moved name"); assert(d.sh.icons[n].box.x==352);
     d.sh.icon_selected=n; key(DU_KEY_ENTER); assert(!strcmp(program,"files") && !strcmp(launched,DESK_FOLDER "/Moved name"));
-    d.sh.icon_selected=named("Scene.BMP"); key(DU_KEY_ENTER); assert(!strcmp(program,"paint"));
+    d.sh.icon_selected=named("Scene.BMP"); key(DU_KEY_ENTER); assert(!strcmp(program,"viewer"));
+    d.sh.menu_owner=d.sh.icon_selected; desk_menu_open(&d,SH_MENU_OPEN_WITH,500,200);
+    int paint_item=-1;
+    for (int i=0;i<d.sh.menus[0].count;i++) if (!strcmp(d.sh.menus[0].items[i].label,"CiukPaint")) paint_item=i;
+    assert(paint_item>=0);
+    for (int i=0;i<=paint_item;i++) key(DU_KEY_DOWN);
+    key(DU_KEY_ENTER); assert(!strcmp(program,"paint") && !strcmp(launched,DESK_FOLDER "/Scene.BMP"));
     d.sh.icon_selected=named("readme.txt"); key(DU_KEY_ENTER); assert(!strcmp(program,"ciuknote"));
     d.sh.icon_selected=named("Moved name"); key(DU_KEY_DELETE); desk_folder_service(&d);
     assert(fake_lookup(DESK_FOLDER "/Moved name")<0 && fake_lookup(DESK_TRASH "/Moved name")>=0);
@@ -144,6 +160,22 @@ int main(int argc,char **argv)
     /* Arrange resets saved positions through the context action. */
     desk_menu_open(&d,SH_MENU_DESKTOP,500,300); key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_ENTER);
     assert(!cfg_icon_position(&d.sh.cfg,"Moved name",&x,&y)); capture("arranged");
+    /* A Desktop entry called Pictures has an independent position and actions. */
+    fake_file(DESK_FOLDER "/Pictures",1,0); command(DF_REFRESH,-1);
+    pictures=d.sh.icon_count-1; int file_pictures=named("Pictures");
+    assert(file_pictures>=3 && file_pictures<pictures);
+    assert(cfg_icon_move(&d.sh.cfg,"Pictures",200,200));
+    assert(cfg_icon_move(&d.sh.cfg,"/Pictures",400,400)); desk_shell_apply(&d);
+    assert(d.sh.icons[file_pictures].box.x==200 && d.sh.icons[pictures].box.x==400);
+    d.sh.icon_selected=pictures; key(DU_KEY_F2); key(DU_KEY_DELETE);
+    assert(d.sh.folder->editing<0 && d.sh.folder->command==DF_NONE);
+    d.sh.menu_owner=pictures; desk_menu_open(&d,SH_MENU_ICON,500,200);
+    assert(d.sh.menus[0].count==3); key(DU_KEY_ESC);
+    d.sh.menu_owner=file_pictures; desk_menu_open(&d,SH_MENU_ICON,500,200);
+    assert(d.sh.menus[0].count>3); key(DU_KEY_ESC);
+    command(DF_DELETE,file_pictures-3);
+    assert(fake_lookup(DESK_FOLDER "/Pictures")<0 && fake_lookup(DESK_TRASH "/Pictures")>=0);
+    d.pictures_exists=0; desk_folder_changed(&d); assert(named("Pictures")<0);
     d.sh.wall=malloc((size_t)d.width*d.height*4); assert(d.sh.wall);
     for (unsigned i=0;i<d.width*d.height;i++) d.sh.wall[i]=0x234567;
     d.sh.wall_w=d.width; d.sh.wall_h=d.height; d.sh.wall_valid=1;
@@ -158,6 +190,6 @@ int main(int argc,char **argv)
     puts("PASS desktop folder wallpaper cache: live rename, cancel and icon drag match fresh render");
     desk_render_release(&d);
     fake_assert_clean(); desk_folder_destroy(&d); free(d.sh.icons); free(d.sh.wall); free((void *)d.portrait); free(d.pixels);
-    puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange");
+    puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange, conditional Pictures isolation");
     return 0;
 }

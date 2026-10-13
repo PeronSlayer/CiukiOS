@@ -480,6 +480,28 @@ static void test_shell(void)
     cleanup();
     puts("PASS shell: hit/z-order, taskbar restore, releases, drag RESYNC, work area, v2 close/backpressure/EOF timeout, About lifecycle");
 }
+static void test_media_shell(void)
+{
+    setup(1024,768); strcpy(d.programs[0].name,"files"); d.program_count=1; desk_shell_enable(&d);
+    for (int i=0;i<d.sh.icon_count;i++) assert(strcmp(d.sh.icons[i].label,"Pictures"));
+    d.pictures_exists=1; d.sh.icon_count=0; desk_shell_apply(&d);
+    int pictures=0;
+    for (int i=0;i<d.sh.icon_count;i++) if (!strcmp(d.sh.icons[i].label,"Pictures")) {
+        assert(!strcmp(d.sh.icons[i].argument,"/Documents/Pictures")); pictures++;
+    }
+    assert(pictures==1);
+    strcpy(d.programs[1].name,"music"); strcpy(d.programs[2].name,"viewer"); d.program_count=3;
+    assert(desk_program_graphical("music") && desk_program_graphical("viewer"));
+    desk_menu_open(&d,SH_MENU_PROGRAMS,4,32);
+    int music=0,viewer=0;
+    for (int i=0;i<d.sh.menus[0].count;i++) {
+        music+=!strcmp(d.sh.menus[0].items[i].label,"Music Player"); viewer+=!strcmp(d.sh.menus[0].items[i].label,"Image Viewer");
+    }
+    assert(music==1 && viewer==1);
+    desk_menu_open(&d,SH_MENU_ACCESSORIES,4,32); viewer=0;
+    for (int i=0;i<d.sh.menus[0].count;i++) viewer+=!strcmp(d.sh.menus[0].items[i].label,"Image Viewer");
+    assert(viewer==1); cleanup(); puts("PASS media shell: Programs entries, Accessories viewer and conditional Pictures");
+}
 static void test_menu(void)
 {
     setup(320,240);
@@ -547,6 +569,6 @@ static void test_ide_launch(void)
 }
 int main(void)
 {
-    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_menu(); test_ide_launch();
+    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_media_shell(); test_menu(); test_ide_launch();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }
