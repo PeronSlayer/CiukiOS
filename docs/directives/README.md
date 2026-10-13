@@ -107,3 +107,9 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-45-compositor-performance](f2-45-compositor-performance.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (row painting, caption caches, span shadows, pixel-exact; host speed-up 2.8–3.4x, below the 4x gate: second round after the T23 numbers) |
 | [f6-02-network-tray-icon](f6-02-network-tray-icon.md) | F6 | gpt-6.1-sol / high | delivered and merged 2026-10-13 (/dev/net NET_GET_STATE, tray icon, tooltip, popup) |
 | [f3-11-doom-irq0-in-service-stall](f3-11-doom-irq0-in-service-stall.md) | F3 | gpt-6.1-sol / xhigh | partial, merged 2026-10-13 (orphan-ISR defect fixed, in-service watchdog record, TF stepping documented); the T23 stall not reproduced on the host: next step a T23 capture with the new record, then gpt-6-astra |
+| [f1-41-savage-lock-readback](f1-41-savage-lock-readback.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-13 (ports answer; CR38/CR39 read back 68h/A8h: functional lock test) |
+| [f4-10-ac97-cs4297a-codec-power](f4-10-ac97-cs4297a-codec-power.md) | F4 | gpt-6-astra / xhigh | running 2026-10-13 (third attempt: analog-ready bits never set on the CS4297A) |
+| [f3-12-doom-irq0-handler-target](f3-12-doom-irq0-handler-target.md) | F3 | gpt-6-astra / xhigh | running 2026-10-13 (third attempt: IRQ0 delivered to 00ff:0020 after the if_restore boundary) |
+| [f2-46-terminal](f2-46-terminal.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner approval: native Terminal with system commands and Lua) |
+| [f2-47-registry](f2-47-registry.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner approval: text-stored key tree, Hardware root, Registry Editor) |
+| [f2-48-compositor-round-two](f2-48-compositor-round-two.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (58 ms composite on the T23; 64 KiB wallpaper reads) |
