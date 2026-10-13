@@ -15,7 +15,7 @@
 #define SH_LEVELS 3
 #define SH_ITEMS 20
 #define SH_ICONS (FM_ENTRIES + 4)
-#define SH_TRAY_W 132
+#define SH_TRAY_W 152
 #define SH_START_ROW 30
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
@@ -54,6 +54,10 @@ struct desk_shell {
     int volume_drag;
     struct ciuki_net_state network;
     int network_open;
+    struct ciuki_media_state media;
+    int media_open, want_remove;
+    unsigned media_scroll;
+    uint32_t remove_generation;
     uint64_t network_poll_ns;
     int start_hot;                  /* the pointer is over the Ciuki button */
     int tooltip; uint64_t hover_since; int32_t hover_x, hover_y;
@@ -91,6 +95,7 @@ int desk_shell_key(struct desktop *, int code, int value);
 int desk_internal_click(struct desktop *, int index, int32_t x, int32_t y);
 void desk_shell_scale_motion(struct desktop *, int32_t *dx, int32_t *dy);
 void desk_shell_tick(struct desktop *);
+void desk_shell_media_update(struct desktop *, const struct ciuki_media_state *);
 void desk_shell_network_update(struct desktop *, const struct ciuki_net_state *);
 void desk_shell_clock_damage(struct desktop *, uint64_t previous_second);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);

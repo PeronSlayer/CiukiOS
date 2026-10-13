@@ -4,6 +4,7 @@
 #ifndef CIUKI_FILES_APP_H
 #define CIUKI_FILES_APP_H
 #include "model.h"
+#include <ciuki/abi.h>
 #include "../libdeskui/deskui.h"
 
 #define FILES_PLACES 12
@@ -35,6 +36,9 @@ struct files_app {
     void (*checkpoint)(struct files_app *, int stage);
     int (*portrait)(uint32_t *pixels256);
     void (*drop)(struct files_app *, int x, int y, int copy);
+    struct ciuki_media_state media;
+    int (*media_read)(struct ciuki_media_state *);
+    int (*media_remove)(unsigned drive, uint32_t generation);
     void *user;
 };
 

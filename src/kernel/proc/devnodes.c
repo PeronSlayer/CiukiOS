@@ -11,7 +11,7 @@ int device_open(enum px_kind kind, uint32_t flags)
 {
     if (flags & (O_CREAT | O_EXCL | O_TRUNC | O_DIRECTORY)) return -EINVAL;
     if (kind == PX_CONSOLE && (flags & O_ACCMODE) != O_WRONLY) return -EACCES;
-    if (kind == PX_AUDIO || kind == PX_MIXER || kind == PX_NET) {
+    if (kind == PX_AUDIO || kind == PX_MIXER || kind == PX_NET || kind == PX_MEDIA) {
         if (flags & O_APPEND) return -EINVAL;
         if ((flags & O_ACCMODE) != (kind == PX_AUDIO ? O_WRONLY : O_RDONLY)) return -EACCES;
     }

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT
  * Files entry point: desktop channel, native VFS, program launching. */
 #include "app.h"
+#include <ciuki/media.h>
+#include <fcntl.h>
 #include "../desktop/catalog.h"
 #include <ciuki/spawn.h>
 #include <errno.h>
@@ -107,6 +109,18 @@ static void window_size(int *w, int *h)
     else { *w = 620; *h = 380; }
 }
 
+static int media_read(struct ciuki_media_state *s)
+{
+    *s=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*s)};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,MEDIA_GET_STATE,s,sizeof(*s)) ? -errno : 0; close(fd); return e;
+}
+static int media_remove(unsigned d,uint32_t generation)
+{
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),d,generation};
+    int e=ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r)) ? -errno : 0; close(fd); return e;
+}
 int main(int argc, char **argv)
 {
     int channel = 3, test = 0;
@@ -137,6 +151,7 @@ int main(int argc, char **argv)
     }
     struct files_app *a = &m->app;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->close = close_window; a->portrait = portrait;
+    a->media_read=media_read; a->media_remove=media_remove;
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }

@@ -737,7 +737,43 @@ static struct desk_box volume_icon_box(const struct desktop *d)
 static struct desk_box network_icon_box(const struct desktop *d)
 { struct desk_box t = tray_box(d); return (struct desk_box){t.x + 4, t.y + (t.h - 16) / 2, 16, 16}; }
 static struct desk_box clock_box(const struct desktop *d)
-{ struct desk_box t = tray_box(d); return (struct desk_box){t.x + 44, t.y, t.w - 46, t.h}; }
+{ struct desk_box t = tray_box(d); return (struct desk_box){t.x + 64, t.y, t.w - 66, t.h}; }
+static struct desk_box media_icon_box(const struct desktop *d)
+{ struct desk_box t=tray_box(d); return (struct desk_box){t.x+44,t.y+(t.h-16)/2,16,16}; }
+static unsigned media_count(const struct desktop *d)
+{ unsigned n=0; for (unsigned i=4;i<26;i++) if (d->sh.media.removable_mask & (1u<<i)) n++; return n; }
+static unsigned media_rows(const struct desktop *d)
+{ unsigned n=media_count(d), max=((unsigned)d->height-2*DESK_BAR-32)/22; return n<max ? n : max; }
+static struct desk_box media_popup(const struct desktop *d)
+{ struct desk_box t=tray_box(d); int h=28+(int)media_rows(d)*22; return (struct desk_box){t.x+t.w-248,t.y-4-h,248,h}; }
+void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *state)
+{
+    if (!memcmp(&d->sh.media,state,sizeof(*state))) return;
+    if (d->sh.media_open) damage(d,outer(media_popup(d)));
+    d->sh.media=*state; d->sh.media_scroll=0;
+    if (!state->removable_mask) d->sh.media_open=0;
+    damage(d,tray_box(d));
+    if (d->sh.media_open) damage(d,outer(media_popup(d)));
+}
+static unsigned media_at(const struct desktop *d,unsigned row)
+{
+    unsigned at=0;
+    for (unsigned i=4;i<26;i++) if (d->sh.media.removable_mask & (1u<<i)) {
+        if (at++==row+d->sh.media_scroll) return i;
+    }
+    return 26;
+}
+static void draw_media(struct desktop *d,struct desk_box clip)
+{
+    struct desk_box p=media_popup(d);
+    struct du_canvas c=canvas(d,clip); du_edge(&c,R(p),DU_RAISED);
+    du_text(&c,p.x+8,p.y+6,"USB removable media",SH_INK);
+    for (unsigned row=0;row<media_rows(d);row++) {
+        unsigned drive=media_at(d,row); if (drive>=26) break;
+        char label[48]; snprintf(label,sizeof(label),"Safely remove %c:",'A'+drive);
+        du_text(&c,p.x+10,p.y+28+(int)row*22,label,SH_INK);
+    }
+}
 static struct desk_box network_popup(const struct desktop *d)
 { struct desk_box t = tray_box(d); return (struct desk_box){t.x + t.w - 272, t.y - 4 - 112, 272, 112}; }
 static void network_mac(const struct ciuki_net_state *n, char text[18])
@@ -830,6 +866,10 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
     const uint32_t *speaker = desk_shell_icon(d->sh.muted ? "audio-volume-muted" : "audio-volume-high", 16);
     struct desk_box vi = volume_icon_box(d);
     du_icon_blit(&c, vi.x, vi.y, speaker, 16, d->sh.mixer_state < 0 ? DU_ICON_DISABLED : DU_ICON_NORMAL);   /* muted: Tango's red cross */
+    if (d->sh.media.removable_mask) {
+        struct desk_box mi=media_icon_box(d);
+        du_icon_blit(&c,mi.x,mi.y,desk_shell_icon("drive-removable-media",16),16,DU_ICON_NORMAL);
+    }
     char clock[24];
     clock_text(d, clock, sizeof(clock));
     struct desk_box cb = clock_box(d);
@@ -1319,7 +1359,8 @@ void desk_shell_overlay(struct desktop *d, struct desk_box clip)
     for (int l = 0; l < d->sh.levels; l++) draw_menu(d, &d->sh.menus[l], clip);
     if (d->sh.volume_open) draw_volume(d, clip);
     if (d->sh.network_open) draw_network(d, clip);
-    if (d->sh.tooltip && !d->sh.volume_open && !d->sh.network_open && !d->sh.levels) draw_tooltip(d, clip);
+    if (d->sh.media_open) draw_media(d,clip);
+    if (d->sh.tooltip && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.levels) draw_tooltip(d, clip);
     if (d->sh.switcher) draw_switcher(d, clip);
 }
 /* The window icon in a gradient title bar (compositor.c, weak hook). */
@@ -1736,6 +1777,18 @@ int desk_shell_button(struct desktop *d, int button, int down)
         desk_menu_close(d);
         if (start && desk_contains(start_button(d), x, y)) return 1;
     }
+    if (d->sh.media_open) {
+        struct desk_box p=media_popup(d);
+        if (desk_contains(p,x,y)) {
+            if (button==CIUKI_BUTTON_LEFT && y>=p.y+28) {
+                unsigned drive=media_at(d,(unsigned)(y-p.y-28)/22);
+                if (drive<26) { d->sh.want_remove=(int)drive; d->sh.remove_generation=d->sh.media.generation[drive]; }
+            }
+            d->sh.media_open=0; damage(d,outer(p)); return 1;
+        }
+        d->sh.media_open=0; damage(d,outer(p));
+        if (desk_contains(media_icon_box(d),x,y)) return 1;
+    }
     if (d->sh.network_open) {
         struct desk_box p = network_popup(d);
         if (desk_contains(p, x, y)) return 1;
@@ -1763,6 +1816,10 @@ int desk_shell_button(struct desktop *d, int button, int down)
         return 1;
     }
     if (desk_contains(bar, x, y)) {
+        if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y) && button==CIUKI_BUTTON_LEFT) {
+            d->sh.media_open=1; d->sh.want_reload|=32;
+            damage(d,outer(media_popup(d))); return 1;
+        }
         if (desk_contains(network_icon_box(d), x, y) && button == CIUKI_BUTTON_LEFT) {
             d->sh.network_open = 1; d->sh.want_reload |= 16;
             damage(d, outer(network_popup(d)));
@@ -1848,7 +1905,7 @@ void desk_shell_tick(struct desktop *d)
     if (!d->sh.network_poll_ns || (d->now_ns >= d->sh.network_poll_ns &&
         d->now_ns - d->sh.network_poll_ns >= 2000000000ull)) {
         d->sh.network_poll_ns = d->now_ns ? d->now_ns : 1;
-        d->sh.want_reload |= 16;
+        d->sh.want_reload |= 16|32;
     }
     int over_network = desk_contains(network_icon_box(d), d->mouse_x, d->mouse_y);
     if (!d->sh.tooltip && d->sh.hover_since && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open &&
@@ -2045,6 +2102,11 @@ int desk_shell_key(struct desktop *d, int code, int value)
         damage_all(d); return 1;
     }
     if (d->sh.levels) return value ? menu_key(d, code) : 1;
+    if (d->sh.media_open) {
+        if (value && code==DU_KEY_ESC) { d->sh.media_open=0; damage(d,outer(media_popup(d))); return 1; }
+        if (value && code==DU_KEY_DOWN && d->sh.media_scroll+media_rows(d)<media_count(d)) { d->sh.media_scroll++; damage(d,outer(media_popup(d))); return 1; }
+        if (value && code==DU_KEY_UP && d->sh.media_scroll) { d->sh.media_scroll--; damage(d,outer(media_popup(d))); return 1; }
+    }
     if (d->sh.network_open && code == DU_KEY_ESC) { if (value) { d->sh.network_open = 0; damage(d, outer(network_popup(d))); } return 1; }
     if (d->sh.volume_open && code == DU_KEY_ESC) { if (value) { d->sh.volume_open = 0; damage(d, outer(volume_popup(d))); } return 1; }
     if (d->focus >= 0 && d->clients[d->focus].internal) {

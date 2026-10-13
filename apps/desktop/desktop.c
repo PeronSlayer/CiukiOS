@@ -18,6 +18,7 @@
 #include <ciuki/proc.h>
 #include <ciuki/audio.h>
 #include <ciuki/net.h>
+#include <ciuki/media.h>
 #include <ciuki/power.h>
 #include <errno.h>
 #include <dirent.h>
@@ -543,6 +544,27 @@ static void network_read(struct desktop *d)
     }
     desk_shell_network_update(d, &state);
 }
+static void media_read(struct desktop *d)
+{
+    struct ciuki_media_state s={.version=CIUKI_MEDIA_VERSION,.size=sizeof(s)};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC);
+    if (fd>=0) {
+        if (ciuki_devctl(fd,MEDIA_GET_STATE,&s,sizeof(s))) s.removable_mask=0;
+        close(fd);
+    }
+    desk_shell_media_update(d,&s);
+}
+static void media_remove(struct desktop *d)
+{
+    struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),(uint32_t)d->sh.want_remove,d->sh.remove_generation};
+    d->sh.want_remove=0;
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC), e=fd<0 ? errno : 0;
+    if (fd>=0) { if (ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r))) e=errno; close(fd); }
+    snprintf(d->notice,sizeof(d->notice),e==EBUSY ? "Close files on this drive and try again." :
+             e ? "The USB device could not be safely removed (error %d)." : "It is safe to unplug the USB device.",e);
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+    media_read(d);
+}
 static void mixer_read(struct desktop *d)
 {
     int fd=d->mixer_fd, own=0;
@@ -700,6 +722,8 @@ static void shell_service(struct desktop *d)
     int volume_feedback = sh->want_reload & 8;
     if (sh->want_reload & 4) mixer_read(d);
     if (sh->want_reload & 16) network_read(d);
+    if (sh->want_reload & 32) media_read(d);
+    if (sh->want_remove) media_remove(d);
     sh->want_reload=0;
     wallpaper_poll(d);
     if (!sh->wall_valid) wallpaper_update(d);

@@ -94,6 +94,33 @@ static void address(const char *text)
 static void activate(int id)
 { struct du_event e = {.type = DU_EV_ACTIVATE, .id = id}; files_event(&ui, &e, &app); }
 
+static int removal_error, removal_calls;
+static struct ciuki_media_state media_state;
+static int read_media(struct ciuki_media_state *s) { *s=media_state; return 0; }
+static int remove_media(unsigned d,uint32_t gen)
+{
+    assert(d==4 && gen==77); removal_calls++;
+    if (removal_error) return removal_error;
+    fake_nodes[fake_lookup("/mnt/e")].live=0; media_state.removable_mask=0; return 0;
+}
+static void removable_ui_tests(void)
+{
+    fake_image_tree(); fake_create("/mnt/e",FM_DIR);
+    memset(&app,0,sizeof(app));du_init(&ui,pixels,WIDTH,HEIGHT);
+    app.media_read=read_media;app.media_remove=remove_media;
+    media_state=(struct ciuki_media_state){.version=1,.size=sizeof(media_state),.removable_mask=1u<<4};media_state.generation[4]=77;
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    int row=list_find("E:");assert(row>=0);fm_select(&app.model,(unsigned)row,0);files_update(&app);
+    assert(!strcmp(app.rows[row].text[2],"Removable Drive") && app.rows[row].icon16 && app.rows[row].icon32);
+    struct du_event e={.type=DU_EV_CONTEXT,.id=107,.index=row,.x=300,.y=200};files_event(&ui,&e,&app);
+    int action=0;for(unsigned i=0;i<app.popup_count;i++)if(app.popup[i].label && strstr(app.popup[i].label,"Safely"))action=app.popup[i].id;
+    assert(action);du_popup(&ui,NULL,0,0,0,0);
+    removal_error=-EBUSY;activate(action);assert(removal_calls==1 && ui.dialog.kind && media_state.removable_mask);
+    key(DU_KEY_ENTER);removal_error=0;activate(action);
+    assert(removal_calls==2 && !app.model.path[0] && list_find("E:")<0 && strstr(app.note,"safe to unplug"));
+    files_destroy(&app);fake_assert_clean();
+    puts("PASS Files removable Computer view: E: Tango icon/type, context action, busy error, generation, safe detach and refresh");
+}
 static void computer_ui_tests(void)
 {
     fake_image_tree(); memset(&app, 0, sizeof(app));
@@ -379,6 +406,7 @@ int main(int argc, char **argv)
     files_destroy(&app);
     fake_assert_clean();
     computer_ui_tests();
+    removable_ui_tests();
     /* Default associations run through the actual Files controller. */
     fake_image_tree(); fake_file("/Programs/paint",100,1); fake_file("/Programs/viewer",100,1); fake_file("/Programs/music",100,1);
     fake_file("/Documents/Test.BMP",100,1); fake_file("/Documents/Other.PNG",100,1); fake_file("/Documents/Photo.jpg",100,1);

@@ -13,7 +13,7 @@ struct storage_volume {
     struct fat_volume fat;
     unsigned disk, partition, drive;
     int error;
-    bool present, read_gate;
+    bool present, read_gate, removable;
     uint32_t read_sequence, write_sequence;
     uint64_t reads, writes, flushes, refused, writes_before_gate;
     /* Selected crash probe only; notification after synchronous completion.
@@ -49,6 +49,11 @@ int storage_setup(struct storage *, size_t cache_bytes);
 /* disk is the IDE slot, independent of discovery order. Only MBR primary
  * entry 1 on slot 0 may become C:, all other FAT partitions start at D:. */
 int storage_add_disk(struct storage *, unsigned disk, struct blkdev *);
+/* USB records/views are retained for the boot. Letters are E: onward and
+ * never reused. Dirty removable media stay read-only; no recovery writes. */
+int storage_add_removable(struct storage *, struct blkdev *);
+int storage_remove_removable(struct storage *, struct blkdev *, bool surprise);
+int storage_remove_removable_locked(struct storage *, struct blkdev *, bool surprise);
 int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 void storage_refresh_ro(struct storage *);
 /* NTFS slot lifecycle. Mount returns the drive letter index (>= 3) or a
