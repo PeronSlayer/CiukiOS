@@ -9,6 +9,14 @@ int32_t desktop_syscall(struct trap_frame *tf)
     struct process *p = proc_current();
     if (!p) return -ENOSYS;
     switch (tf->eax) {
+    case CIUKI_SYS_DISPLAY_ACCEL: {
+        struct ciuki_accel_request q;
+        struct desktop_description *d = desktop_fd(p, (int32_t)tf->ebx);
+        if (!d || d->kind != DESKTOP_DISPLAY) return -EBADF;
+        if (d->owner != p->pid || !(d->maximum & PROT_WRITE)) return -EACCES;
+        int err = copy_from_user(&q,tf->ecx,sizeof(q));
+        return err ? err : grant_accel(p,(int32_t)tf->ebx,&q);
+    }
     case CIUKI_SYS_SURFACE_CREATE: return surface_create(p, tf->ebx, tf->ecx, tf->edx);
     case CIUKI_SYS_SURFACE_MAP: {
         int32_t result = surface_map(p, (int32_t)tf->ebx, tf->ecx);

@@ -105,6 +105,7 @@ int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f) { return RET(CU_CALL(
 void *ciuki_surface_map(int f,int prot) { uint32_t r=CU_CALL(SURFACE_MAP,f,prot,0,0,0,0);int e=ciuki_error(r);if(e)errno=e;return e?MAP_FAILED:(void *)(uintptr_t)r; }
 int ciuki_surface_info(int f,struct ciuki_surface_info *i) { return RET(CU_CALL(SURFACE_INFO,f,CU_PTR(i),0,0,0,0)); }
 int ciuki_present(int d,int s,const struct ciuki_rect *r) { return RET(CU_CALL(PRESENT,d,s,CU_PTR(r),0,0,0)); }
+int ciuki_display_accel(int d,const struct ciuki_accel_request *q) { return (int32_t)CU_CALL(DISPLAY_ACCEL,d,CU_PTR(q),0,0,0,0); }
 int ciuki_display_info(int d,struct ciuki_framebuffer_info *i) { return RET(CU_CALL(DISPLAY_INFO,d,CU_PTR(i),0,0,0,0)); }
 int ciuki_input_read(int d,struct ciuki_input_event *e,uint32_t n) { return RET(CU_CALL(INPUT_READ,d,CU_PTR(e),n,0,0,0)); }
 int ciuki_channel_pair(int fds[2]) { return RET(CU_CALL(CHANNEL_PAIR,CU_PTR(fds),0,0,0,0,0)); }

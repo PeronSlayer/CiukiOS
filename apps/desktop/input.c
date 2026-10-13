@@ -113,11 +113,11 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
     if (d->sh.want_power && !d->sh.gate && !d->power.state) return;
     if (d->power.state) {
         if (e.type==CIUKI_INPUT_MOTION) {
-            desk_damage_add(&d->damage,(struct desk_box){d->mouse_x,d->mouse_y,12,18},d->width,d->height);
+            desk_cursor_motion(d);
             int32_t dx=e.value, dy=e.value2;
             desk_shell_scale_motion(d,&dx,&dy);
             d->mouse_x=axis(d->mouse_x,dx,d->width); d->mouse_y=axis(d->mouse_y,dy,d->height);
-            desk_damage_add(&d->damage,(struct desk_box){d->mouse_x,d->mouse_y,12,18},d->width,d->height);
+            desk_cursor_motion(d);
         }
         desk_power_input(d,&e);
         return;
@@ -137,14 +137,14 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
         break;
     case CIUKI_INPUT_TEXT: route(d, d->focus, DESK_KEY, &e); break;
     case CIUKI_INPUT_MOTION:
-        desk_damage_add(&d->damage, (struct desk_box){d->mouse_x,d->mouse_y,12,18}, d->width,d->height);
+        desk_cursor_motion(d);
         {
             int32_t dx = e.value, dy = e.value2;
             desk_shell_scale_motion(d, &dx, &dy);   /* Control Panel mouse speed; 1:1 by default */
             d->mouse_x = axis(d->mouse_x, dx, d->width);
             d->mouse_y = axis(d->mouse_y, dy, d->height);
         }
-        desk_damage_add(&d->damage, (struct desk_box){d->mouse_x,d->mouse_y,12,18}, d->width,d->height);
+        desk_cursor_motion(d);
         if (d->shell) desk_shell_motion(d);
         if (d->drag >= 0) {
             if (d->resize_edges) {

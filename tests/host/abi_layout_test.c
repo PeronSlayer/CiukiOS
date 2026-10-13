@@ -7,6 +7,19 @@
 
 struct expectation { const char *key; uint32_t native, expected; };
 static const struct expectation expectations[] = {
+    /* f1-26: optional display-grant accelerator, literal wire contract. */
+    {"constant.CIUKI_SYS_DISPLAY_ACCEL", CIUKI_SYS_DISPLAY_ACCEL, 77u},
+    {"sizeof.ciuki_accel_request", sizeof(struct ciuki_accel_request), 308u},
+    {"alignof.ciuki_accel_request", _Alignof(struct ciuki_accel_request), 4u},
+    {"offsetof.ciuki_accel_request.size", __builtin_offsetof(struct ciuki_accel_request,size), 0u},
+    {"offsetof.ciuki_accel_request.operation", __builtin_offsetof(struct ciuki_accel_request,operation), 4u},
+    {"offsetof.ciuki_accel_request.generation", __builtin_offsetof(struct ciuki_accel_request,generation), 8u},
+    {"offsetof.ciuki_accel_request.colour", __builtin_offsetof(struct ciuki_accel_request,colour), 12u},
+    {"offsetof.ciuki_accel_request.background", __builtin_offsetof(struct ciuki_accel_request,background), 16u},
+    {"offsetof.ciuki_accel_request.rect", __builtin_offsetof(struct ciuki_accel_request,rect), 20u},
+    {"offsetof.ciuki_accel_request.pattern", __builtin_offsetof(struct ciuki_accel_request,pattern), 44u},
+    {"offsetof.ciuki_accel_request.cursor_mask", __builtin_offsetof(struct ciuki_accel_request,cursor_mask), 52u},
+    {"offsetof.ciuki_accel_request.cursor_image", __builtin_offsetof(struct ciuki_accel_request,cursor_image), 180u},
     /* f2-41: fixed inventory contract. */
     {"constant.CIUKI_SYS_DEVICES", (uint32_t)(CIUKI_SYS_DEVICES), 76u},
     {"constant.CIUKI_DEVICES_VERSION", (uint32_t)(CIUKI_DEVICES_VERSION), 1u},
