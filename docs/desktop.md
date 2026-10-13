@@ -1317,6 +1317,48 @@ bootstrap/probe/SDK-header boundaries above remain lead-owned.
 No QEMU, systemd scope, full image build, commit, push or Git command is part of
 this implementer's evidence.
 
+## Graphics Demo (f2-52)
+
+Programs > Accessories > **Graphics Demo** launches `/Programs/gfxdemo`.
+Its three tabs show a 2D benchmark, a rotating textured software cube with
+Flat/Gouraud shading and a bouncing Ciuki sprite scene. Each page displays
+client FPS and ms/frame. Pause freezes scene motion. The window resizes and
+scales its 320×240 scene with nearest-neighbour sampling. The texture is the
+same approved `/system/assets/ciuki-portrait.xrgb` conversion as the desktop.
+
+Run benchmark briefly fills the display, restores it after each sample, and
+compares screen-size fills, 256×256 copies and 8×8 pattern fills per column.
+Each result accumulates four timed batches (at least 8 ms, at most 64 operations
+each) to measure fast copies with Ciuki's 1 ms clock; ms/batch is the average
+batch duration. Accelerator measurements time synchronous scanout operations;
+software measurements include drawing in RAM and CPU upload. Decimal MB/s
+counts destination bytes in the active display bpp, once for a copy. These
+columns measure different presentation paths, so the software result is not
+a pure VRAM fill/copy measurement. Setup and desktop restoration are excluded.
+Missing capability, quarantine, failed uploads, stopped clocks or a missing
+kernel operation increment show **Unavailable**, never fabricated hardware
+numbers. The user must focus the window while the benchmark runs.
+
+The System info strip reports display dimensions/bpp, `driver`, completed
+`ops`, `quarantined`, and average desktop present/composite time from its
+existing two-second samples. Surface uploads use the CPU. When supported,
+the compositor presents repeated non-solid rows of an enlarged software scene
+with actual 2D screen copies, recovering from the RAM composite on failure.
+This does not demonstrate hardware 3D or vsync; 3D acceleration remains F7.
+
+The display grant remains exclusive to the desktop. Only its launch-bound
+Graphics Demo endpoint may send `DESK_GFX_QUERY` (8 bytes, serial),
+`DESK_GFX_BENCH` (12 bytes, serial and fixed index 0–5) or request the existing
+system statistics. Replies are `DESK_GFX_INFO` (64 bytes, display and kernel
+snapshot) and `DESK_GFX_RESULT` (40 bytes, result, bytes, ns and completed ops).
+Samples are limited to one per 100 ms, with no client coordinates or register
+access. The SDK adds `ciuki_display_accel_info(display, generation, &info)`
+using the optional output of the existing grant-authorized QUERY syscall;
+capability-only callers remain compatible. See [graphics-demo.md](design/graphics-demo.md)
+for the research and measurement decisions. Host frame goldens and fake-surface
+coverage are in `tests/host/desktop/test_gfxdemo.py`; no guest qualification is
+claimed from them.
+
 ## Display mode service (f1-23)
 
 The SDK's `<ciuki/display.h>` exposes `ciuki_display_query(info)` to any process

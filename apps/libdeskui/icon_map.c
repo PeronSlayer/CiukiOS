@@ -27,6 +27,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:terminal", "utilities-terminal"},
     {"program:dosbox", "utilities-terminal"},          /* MS-DOS Prompt class VM window */
     {"program:demo", "preferences-desktop-peripherals"}, /* keyboard/mouse input demo window */
+    {"program:gfxdemo", "applications-graphics"},
     {"program:hello", "face-smile"},                   /* prints a greeting */
     {"program:lua", "text-x-script"},                  /* Lua interpreter (runs scripts; the Developer folder is applications-development) */
     {"program:libc_smoke", "applications-system"},     /* C library self-test */

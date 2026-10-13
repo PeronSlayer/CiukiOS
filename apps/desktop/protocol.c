@@ -82,6 +82,29 @@ int desk_parse(const struct ciuki_message *m, int client,
     if (m->fd_count != fds) return 0;
     unsigned n = 4;
     switch (p->opcode) {
+    case DESK_GFX_QUERY: case DESK_GFX_BENCH:
+        if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=(p->opcode==DESK_GFX_QUERY ? 8u : 12u)) return 0;
+        p->serial=desk_get32(m->data+4); n=m->length;
+        if (p->opcode==DESK_GFX_BENCH) { p->index=desk_get32(m->data+8); if (p->index>=6) return 0; }
+        break;
+    case DESK_GFX_INFO:
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=64) return 0;
+        p->serial=desk_get32(m->data+4); p->result=(int32_t)desk_get32(m->data+8);
+        p->width=desk_get32(m->data+12); p->height=desk_get32(m->data+16); p->bpp=desk_get32(m->data+20);
+        p->accelerator.driver=desk_get32(m->data+24); p->accelerator.capabilities=desk_get32(m->data+28);
+        p->accelerator.quarantined=desk_get32(m->data+32); p->accelerator.generation=desk_get32(m->data+36);
+        p->accelerator.operations=(uint64_t)desk_get32(m->data+40)|(uint64_t)desk_get32(m->data+44)<<32;
+        p->accelerator.idle_waits=(uint64_t)desk_get32(m->data+48)|(uint64_t)desk_get32(m->data+52)<<32;
+        p->accelerator.fallbacks=(uint64_t)desk_get32(m->data+56)|(uint64_t)desk_get32(m->data+60)<<32;
+        if (p->result>0 || p->result < -4095 || p->accelerator.driver>CIUKI_ACCEL_DRIVER_SAVAGE ||
+            p->accelerator.capabilities>3 || p->accelerator.quarantined>1) return 0;
+        n=64; break;
+    case DESK_GFX_RESULT:
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=40) return 0;
+        p->serial=desk_get32(m->data+4); p->index=desk_get32(m->data+8); p->result=(int32_t)desk_get32(m->data+12);
+        if (p->index>=6 || p->result>0 || p->result < -4095) return 0;
+        for (unsigned k=0;k<3;k++) p->benchmark[k]=(uint64_t)desk_get32(m->data+16+k*8)|(uint64_t)desk_get32(m->data+20+k*8)<<32;
+        n=40; break;
     case DESK_SYSTEM_QUERY:
         if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=8) return 0;
         p->serial=desk_get32(m->data+4); n=8; break;
@@ -262,7 +285,8 @@ int desk_parse(const struct ciuki_message *m, int client,
         p->result = (int32_t)desk_get32(m->data + 12);
         if ((p->request != DESK_WINDOWS_QUERY && p->request != DESK_END_TASK &&
              p->request != DESK_SWITCH_TO && p->request != DESK_LAUNCH && p->request != DESK_SETTINGS && p->request != DESK_MIXER_SET &&
-             p->request != DESK_SYSTEM_QUERY && p->request != DESK_TERMINAL_POWER) ||
+             p->request != DESK_SYSTEM_QUERY && p->request != DESK_TERMINAL_POWER &&
+             p->request != DESK_GFX_QUERY && p->request != DESK_GFX_BENCH) ||
             p->result < -4095) return 0;
         n = 16;
         break;

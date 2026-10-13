@@ -72,6 +72,14 @@ static int grant_check(struct process *p, int32_t fd, enum desktop_kind kind, ui
 }
 
 struct accel_operation { struct desktop_description *grant; bool presenting; };
+int grant_accel_info(struct process *p, int32_t fd, const struct ciuki_accel_request *q,
+                     struct ciuki_accel_info *out)
+{
+    int err = grant_check(p,fd,DESKTOP_DISPLAY,PROT_WRITE);
+    if (err) return err;
+    if (q->size != sizeof(*q) || q->operation != CIUKI_ACCEL_QUERY) return -EINVAL;
+    return fbdev_accel_info(q->generation,out);
+}
 static void accel_cleanup(void *arg)
 {
     struct accel_operation *op=arg;

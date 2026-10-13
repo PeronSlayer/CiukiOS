@@ -240,6 +240,7 @@ static const struct program_info programs[] = {
     {"paint", "CiukPaint", "applications-graphics", "programs"},
     {"terminal", "Terminal", "utilities-terminal", "programs"},
     {"calc", "Calculator", "accessories-calculator", "accessories"},
+    {"gfxdemo", "Graphics Demo", "applications-graphics", "accessories"},
     {"charmap", "Character Map", "accessories-character-map", "accessories"},
     {"clock", "Clock", "appointment-new", "accessories"},
     {"help", "CiukiOS Help", "help-browser", "accessories"},

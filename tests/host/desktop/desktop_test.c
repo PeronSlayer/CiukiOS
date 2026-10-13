@@ -518,6 +518,54 @@ static void test_media_shell(void)
     for (int i=0;i<d.sh.menus[0].count;i++) viewer+=!strcmp(d.sh.menus[0].items[i].label,"Image Viewer");
     assert(viewer==1); cleanup(); puts("PASS media shell: Programs entries, Accessories viewer and conditional Pictures");
 }
+static void test_graphics_menu(void)
+{
+    setup(1024,768); strcpy(d.programs[0].name,"gfxdemo"); d.program_count=1; desk_shell_enable(&d);
+    assert(desk_program_graphical("gfxdemo"));
+    assert(!strcmp(desk_program_category("gfxdemo"),"accessories"));
+    assert(!strcmp(desk_program_icon_name("gfxdemo"),"applications-graphics"));
+    desk_menu_open(&d,SH_MENU_ACCESSORIES,4,32); int graphics=0;
+    for (int i=0;i<d.sh.menus[0].count;i++) graphics+=!strcmp(d.sh.menus[0].items[i].label,"Graphics Demo");
+    assert(graphics==1); cleanup(); puts("PASS Graphics Demo in Accessories");
+}
+static unsigned graphics_samples;
+static int graphics_snapshot(int display,uint32_t generation,struct ciuki_accel_info *out)
+{
+    (void)display;assert(generation==77);
+    *out=(struct ciuki_accel_info){.driver=CIUKI_ACCEL_DRIVER_SAVAGE,.capabilities=1,.generation=77,
+        .quarantined=1,.operations=0x123456789ull,.idle_waits=0xabcdef123ull,.fallbacks=5};return 0;
+}
+static int graphics_sample(struct desktop *desktop,unsigned index,uint64_t values[3])
+{ assert(desktop==&d && index==2);graphics_samples++;values[0]=640*480*4;values[1]=1000000;values[2]=1;return 0; }
+static struct desk_packet graphics_reply(int i)
+{
+    struct desk_client *c=&d.clients[i];assert(c->tx_count);
+    struct ciuki_message m=c->tx[(c->tx_head+c->tx_count-1)%DESK_TX_MAX];struct desk_packet p;
+    assert(desk_parse(&m,0,NULL,&p));c->tx_count=0;return p;
+}
+static void test_graphics_service(void)
+{
+    setup(640,480);int i=client(10,11,120,80,0);d.clients[i].version=2;d.clients[i].tx_count=0;
+    d.accel_info=graphics_snapshot;d.accel_generation=77;d.lfb_bytes_per_pixel=4;d.gfx_benchmark=graphics_sample;
+    struct ciuki_message m;request(&m,DESK_GFX_QUERY,8);m.data[0]=2;desk_put32(m.data+4,17);
+    /* A title alone cannot acquire the desktop's launch-bound authority. */
+    strcpy(d.clients[i].title,"Graphics Demo");desk_receive(&d,i,&m);
+    struct desk_packet p=graphics_reply(i);assert(p.opcode==DESK_TASK_RESULT && p.result==-EPERM);
+    d.clients[i].gfxdemo=1;desk_receive(&d,i,&m);p=graphics_reply(i);
+    assert(p.opcode==DESK_GFX_INFO && p.serial==17 && p.width==640 && p.height==480 && p.bpp==32 &&
+        p.accelerator.operations==0x123456789ull && p.accelerator.idle_waits==0xabcdef123ull && p.accelerator.quarantined==1);
+    request(&m,DESK_GFX_BENCH,12);m.data[0]=2;desk_put32(m.data+4,18);desk_put32(m.data+8,2);
+    graphics_samples=0;d.now_ns=1000000000ull;d.focus=i;desk_receive(&d,i,&m);p=graphics_reply(i);
+    assert(p.opcode==DESK_GFX_RESULT && !p.result && p.benchmark[2]==1 && graphics_samples==1);
+    desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EBUSY && graphics_samples==1);
+    d.now_ns+=100000000ull;d.clients[i].minimized=1;desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EBUSY);
+    d.clients[i].minimized=0;d.focus=-1;desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EBUSY);
+    d.focus=i;d.power.state=DESK_POWER_CLOSING;desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EBUSY);
+    d.power.state=0;d.clients[i].gfxdemo=0;desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EPERM);
+    struct desk_packet parsed;desk_put32(m.data+8,6);assert(!desk_parse(&m,1,NULL,&parsed));
+    desk_put32(m.data+8,2);m.data[0]=1;assert(!desk_parse(&m,1,NULL,&parsed));
+    cleanup();puts("PASS graphics service: launch authorization, 64-bit kernel counters, rate limit, focus/minimize/shutdown, protocol bounds");
+}
 static void test_menu(void)
 {
     setup(320,240);
@@ -655,16 +703,23 @@ static void test_volume_steps(void)
     d.sh.volume=100;d.sh.want_mixer=0;assert(desk_shell_key(&d,0x130,1) && !d.sh.want_mixer);
     d.sh.volume=0;assert(desk_shell_key(&d,0x12e,1) && !d.sh.want_mixer);
     d.sh.volume_open=1;d.sh.volume=50;
-    /* Production popup track: x=584, y=310..410 at this geometry. */
-    d.mouse_x=590;d.mouse_y=330;assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));
+    /* The popup follows the volume icon, including the measured clock width. */
+    struct desk_box icon=desk_shell_tray_icon_box(&d,SH_TRAY_VOLUME), tray=desk_shell_tray_box(&d);
+    int track_top=tray.y-SH_TRAY_GAP-168+30;
+    d.mouse_x=icon.x+icon.w-92+46;d.mouse_y=track_top+20;
+    assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));
     assert(d.sh.volume_drag && d.sh.volume==80 && d.sh.want_mixer);
-    d.sh.want_mixer=0;d.mouse_y=340;desk_shell_motion(&d);assert(d.sh.volume==70 && d.sh.want_mixer);
+    d.sh.want_mixer=0;d.mouse_y=track_top+30;desk_shell_motion(&d);assert(d.sh.volume==70 && d.sh.want_mixer);
     d.sh.want_mixer=0;desk_shell_motion(&d);assert(!d.sh.want_mixer);
     desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);assert(!d.sh.volume_drag && !d.sh.want_mixer);
     cleanup();puts("PASS UI volume: tray steps during drag, unchanged/release silence, popup/extended keyboard, repeat and bounds");
 }
 int main(void)
 {
-    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_media_shell(); test_menu(); test_ide_launch(); test_terminal(); test_volume_steps();
+    test_protocol(); test_titles(); test_resize_protocol(); test_damage();
+    test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
+    test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
+    test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
+    test_volume_steps();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

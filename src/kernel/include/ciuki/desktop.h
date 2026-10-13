@@ -51,6 +51,7 @@ int grants_install(struct process *p, int32_t fds[2]);
 int grant_display_info(struct process *p, int32_t fd, struct ciuki_framebuffer_info *out);
 int grant_present(struct process *p, int32_t display, int32_t surface, const struct ciuki_rect *rect);
 int grant_accel(struct process *p, int32_t display, const struct ciuki_accel_request *request);
+int grant_accel_info(struct process *, int32_t, const struct ciuki_accel_request *, struct ciuki_accel_info *);
 int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t capacity);
 int desktop_clip(const struct ciuki_surface_info *s, const struct fb_device *d,
                   const struct ciuki_rect *r, struct ciuki_rect *out);

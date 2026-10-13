@@ -15,6 +15,16 @@ int32_t desktop_syscall(struct trap_frame *tf)
         if (!d || d->kind != DESKTOP_DISPLAY) return -EBADF;
         if (d->owner != p->pid || !(d->maximum & PROT_WRITE)) return -EACCES;
         int err = copy_from_user(&q,tf->ecx,sizeof(q));
+        if (!err && q.operation == CIUKI_ACCEL_QUERY && tf->edx) {
+            struct ua_pin pin;
+            err = ua_pin(p->memory, &pin, tf->edx, sizeof(struct ciuki_accel_info), true);
+            if (err) return err;
+            struct ciuki_accel_info out;
+            err = grant_accel_info(p,(int32_t)tf->ebx,&q,&out);
+            if (!err) err = copy_to_user(tf->edx,&out,sizeof(out));
+            ua_unpin(p->memory,&pin);
+            return err;
+        }
         return err ? err : grant_accel(p,(int32_t)tf->ebx,&q);
     }
     case CIUKI_SYS_SURFACE_CREATE: return surface_create(p, tf->ebx, tf->ecx, tf->edx);

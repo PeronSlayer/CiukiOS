@@ -335,8 +335,39 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     d->received++;
     struct ciuki_message reply;
     switch (p.opcode) {
+    case DESK_GFX_QUERY: case DESK_GFX_BENCH: {
+        if (!c->gfxdemo || !c->window || c->closing) {
+            desk_message(&reply,DESK_TASK_RESULT,16); desk_put32(reply.data+4,p.serial);
+            desk_put32(reply.data+8,p.opcode); desk_put32(reply.data+12,(uint32_t)-EPERM);
+        } else if (p.opcode==DESK_GFX_QUERY) {
+            struct ciuki_accel_info a={0};
+            int e=d->accel_info ? d->accel_info(d->display,d->accel_generation,&a) : -ENOSYS;
+            desk_message(&reply,DESK_GFX_INFO,64); desk_put32(reply.data+4,p.serial);
+            desk_put32(reply.data+8,(uint32_t)e); desk_put32(reply.data+12,d->width);
+            desk_put32(reply.data+16,d->height); desk_put32(reply.data+20,d->lfb_bytes_per_pixel*8);
+            desk_put32(reply.data+24,a.driver); desk_put32(reply.data+28,a.capabilities);
+            desk_put32(reply.data+32,a.quarantined); desk_put32(reply.data+36,a.generation);
+            uint64_t values[3]={a.operations,a.idle_waits,a.fallbacks};
+            for (unsigned k=0;k<3;k++) {
+                desk_put32(reply.data+40+k*8,(uint32_t)values[k]); desk_put32(reply.data+44+k*8,(uint32_t)(values[k]>>32));
+            }
+        } else {
+            uint64_t values[3]={0};
+            int e=-EBUSY;
+            if (d->now_ns>=d->gfx_next_bench_ns && !d->power.state && !c->minimized && d->focus==i) {
+                d->gfx_next_bench_ns=d->now_ns+100000000ull;
+                e=d->gfx_benchmark ? d->gfx_benchmark(d,p.index,values) : -ENOSYS;
+            }
+            desk_message(&reply,DESK_GFX_RESULT,40); desk_put32(reply.data+4,p.serial);
+            desk_put32(reply.data+8,p.index); desk_put32(reply.data+12,(uint32_t)e);
+            for (unsigned k=0;k<3;k++) {
+                desk_put32(reply.data+16+k*8,(uint32_t)values[k]); desk_put32(reply.data+20+k*8,(uint32_t)(values[k]>>32));
+            }
+        }
+        desk_queue(d,i,&reply); break;
+    }
     case DESK_SYSTEM_QUERY: {
-        if (!c->taskman) {
+        if (!c->taskman && !c->gfxdemo) {
             desk_message(&reply,DESK_TASK_RESULT,16); desk_put32(reply.data+4,p.serial);
             desk_put32(reply.data+8,DESK_SYSTEM_QUERY); desk_put32(reply.data+12,(uint32_t)-EPERM);
         } else {

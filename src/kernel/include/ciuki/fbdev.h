@@ -74,6 +74,8 @@ int fbdev_present(const struct fb_surface *src, const struct fb_rect *dst);
 int fbdev_fill(const struct fb_rect *rect, uint32_t colour);
 struct ciuki_accel_request;
 int fbdev_accel_request(const struct ciuki_accel_request *);
+struct ciuki_accel_info;
+int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *);
 void fbdev_cursor_hide(void);
 /* Strictly bounded screen copy, hardware only. No software LFB reads.
  * -EAGAIN requires reconstruction/presentation from the caller's RAM frame;

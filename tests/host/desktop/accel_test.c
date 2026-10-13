@@ -8,7 +8,7 @@
 #include <string.h>
 static struct desktop d;
 static uint32_t *scanout;
-static unsigned caps, copies, fills, uploads, cursor_moves;
+static unsigned caps, copies, window_copies, fills, uploads, cursor_moves;
 static uint64_t uploaded_pixels;
 static int fail_copy, fail_cursor, fail_fill, shown, cursor_x, cursor_y;
 static struct ciuki_accel_request cursor;
@@ -37,6 +37,7 @@ static int service(int display,const struct ciuki_accel_request *q)
     if (q->operation==CIUKI_ACCEL_COPY || q->operation==CIUKI_ACCEL_FILL) completed_ram_frame();
     if (q->operation==CIUKI_ACCEL_COPY) {
         copies++;
+        if (q->rect.height>1) window_copies++;
         for (uint32_t n=0;n<q->rect.height;n++) {
             uint32_t y=q->rect.dst_y>q->rect.src_y ? q->rect.height-1-n : n;
             memmove(scanout+((uint32_t)q->rect.dst_y+y)*d.width+(uint32_t)q->rect.dst_x,
@@ -104,7 +105,7 @@ static void scenario(unsigned available)
     fake_reset();struct desk_ops ops=fake_ops;ops.present=upload;
     desk_init(&d,&ops,640,480);d.display=7;
     d.pixels=calloc((size_t)d.width*d.height,4);scanout=calloc((size_t)d.width*d.height,4);assert(d.pixels && scanout);
-    caps=available;copies=fills=uploads=cursor_moves=0;uploaded_pixels=0;shown=fail_copy=fail_cursor=fail_fill=0;
+    caps=available;copies=window_copies=fills=uploads=cursor_moves=0;uploaded_pixels=0;shown=fail_copy=fail_cursor=fail_fill=0;
     if (available) { d.accel=service;desk_accel_reset(&d,55); }
     int i=window_new(10,20,120,80,50,80);redraw();
     unsigned before_uploads=uploads;uint64_t before_pixels=uploaded_pixels;
@@ -116,31 +117,45 @@ static void scenario(unsigned available)
         assert(cursor_uploads==0 && cursor_moves>=2);
         assert(!d.frame_stats.presents && !d.frame_stats.lfb_bytes && !d.frame_stats.damage_px);
     } else assert(d.frame_stats.damage_px<=374);
-    unsigned before_copies=copies;
+    unsigned before_copies=window_copies;
     desk_move(&d,i,80,95);desk_move(&d,i,90,100);redraw();
-    if (available&2u) assert(copies==before_copies+1);
+    if (available&2u) assert(window_copies==before_copies+1);
     /* Final chrome and new client content arriving during a pending copy. */
     desk_move(&d,i,110,105);
     uint32_t *pixels=(uint32_t *)d.clients[i].pixels;pixels[17]=0xabc012;dirty_client(i);redraw();
     /* Scroll up, then down. Exposed rows have entirely new content. */
     unsigned width=d.clients[i].info.width,height=d.clients[i].info.height;
-    before_copies=copies;
+    before_copies=window_copies;
     memmove(pixels,pixels+7*width,(height-7)*width*4);
     for (unsigned p=(height-7)*width;p<height*width;p++) pixels[p]=(p*7631u)&0xffffff;
     dirty_client(i);redraw();
-    if (available&2u) assert(copies==before_copies+1);
-    before_copies=copies;
+    if (available&2u) assert(window_copies==before_copies+1);
+    before_copies=window_copies;
     memmove(pixels+5*width,pixels,(height-5)*width*4);
     for (unsigned p=0;p<5*width;p++) pixels[p]=(p*1483u)&0xffffff;
     dirty_client(i);redraw();
-    if (available&2u) assert(copies==before_copies+1);
+    if (available&2u) assert(window_copies==before_copies+1);
     int j=window_new(11,21,130,90,130,110);redraw();
-    before_copies=copies;desk_move(&d,i,140,120);redraw();assert(copies==before_copies);
+    before_copies=window_copies;desk_move(&d,i,140,120);redraw();assert(window_copies==before_copies);
     desk_drop_client(&d,j);redraw();
     printf("desktop accel=%u normal frames identical: copies=%u fills=%u uploads=%u uploaded_pixels=%llu cursor_motion_uploads=%u\n",
         available,copies,fills,uploads,(unsigned long long)uploaded_pixels,cursor_uploads);
     assert(d.stats.presents==copies+fills+uploads);
     assert(d.stats.lfb_bytes==uploaded_pixels*4);
+    /* Enlarged software frames repeat non-solid scanlines. Their first row
+     * is CPU-uploaded; duplicates must use actual screen copies when present. */
+    before_copies=copies;
+    for (unsigned y=0;y<height;y++) for (unsigned x=0;x<width;x++)
+        pixels[y*width+x]=0x203040u+(y/2)*4173u+x*89u;
+    dirty_client(i);redraw();
+    if (available) assert(copies>before_copies);
+    if (available) {
+        fail_copy=1;
+        for (unsigned y=0;y<height;y++) for (unsigned x=0;x<width;x++)
+            pixels[y*width+x]=0x507080u+(y/2)*6319u+x*97u;
+        dirty_client(i);redraw();redraw();assert(!caps && !d.accel_caps);
+        caps=available;desk_accel_reset(&d,55);redraw();
+    }
     /* A partially completed engine copy is reconstructed from client RAM. */
     if (available&2u) {
         fail_copy=1;desk_move(&d,i,160,130);redraw();redraw();assert(caps==0 && !d.hw_cursor);
@@ -160,4 +175,20 @@ static void scenario(unsigned available)
     desk_render_release(&d);free(d.pixels);free(scanout);assert(!fake_live());
 }
 int main(void)
-{ scenario(0);scenario(1);scenario(3);puts("desktop acceleration/fallback visible-frame equivalence: PASS");return 0; }
+{
+    scenario(0);scenario(1);scenario(3);
+    /* Actual mode reactivation is deferred. A completed CPU-presented frame
+     * permits later screen blits when rectangle capability becomes ready. */
+    fake_reset();struct desk_ops ops=fake_ops;ops.present=upload;desk_init(&d,&ops,640,480);d.display=7;
+    d.pixels=calloc((size_t)d.width*d.height,4);scanout=calloc((size_t)d.width*d.height,4);assert(d.pixels && scanout);
+    caps=0;copies=window_copies=fills=uploads=cursor_moves=0;uploaded_pixels=0;shown=fail_copy=fail_cursor=fail_fill=0;
+    d.accel=service;desk_accel_reset(&d,55);
+    int i=window_new(10,20,120,80,50,80);redraw();assert(d.scanout_valid && !d.accel_caps && !copies && !fills);
+    caps=1;dirty_client(i);redraw();assert(d.scanout_valid && d.accel_caps==1);
+    uint32_t *pixels=(uint32_t *)d.clients[i].pixels;
+    for(unsigned y=0;y<80;y++)for(unsigned x=0;x<120;x++)pixels[y*120+x]=0x203040+y/2*4173+x*89;
+    dirty_client(i);redraw();assert(copies>0);
+    for(int k=0;k<DESK_CLIENTS;k++)desk_drop_client(&d,k);
+    desk_render_release(&d);free(d.pixels);free(scanout);assert(!fake_live());
+    puts("desktop acceleration/fallback visible-frame equivalence and late-ready rectangles: PASS");return 0;
+}

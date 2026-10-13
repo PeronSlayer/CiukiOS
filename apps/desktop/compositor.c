@@ -807,6 +807,15 @@ static int present_box(struct desktop *d, struct desk_box b)
         const uint32_t *row=d->pixels+(size_t)y*d->width+b.x;
         int solid=b.w>=64;
         for (int x=1;solid && x<b.w;x++) if (row[x]!=row[0]) solid=0;
+        /* Composition is complete, and the preceding span was presented in
+         * this call. Equal non-solid rows can copy that scanout span without
+         * retaining another RAM frame. A failure uses the normal full retry. */
+        if (!solid && b.w>=64 && y>b.y &&
+            !memcmp(row,row-d->width,(size_t)b.w*4)) {
+            struct ciuki_rect r={b.x,y-1,b.x,y,(uint32_t)b.w,1};
+            if (screen_copy(d,&r)) return -1;
+            y++; continue;
+        }
         int bottom=y+1;
         if (solid) {
             for (;bottom<b.y+b.h;bottom++) {
@@ -815,7 +824,14 @@ static int present_box(struct desktop *d, struct desk_box b)
                 for (int x=0;x<b.w;x++) if (next[x]!=row[0]) { same=0; break; }
                 if (!same) break;
             }
-        } else bottom=b.y+b.h;
+        } else {
+            /* Upload distinct rows together, stopping before a duplicate so
+             * its now-presented predecessor can supply a screen copy. */
+            for (;bottom<b.y+b.h;bottom++) {
+                const uint32_t *next=d->pixels+(size_t)bottom*d->width+b.x;
+                if (b.w>=64 && !memcmp(next,next-d->width,(size_t)b.w*4)) break;
+            }
+        }
         struct ciuki_rect r={b.x,y,b.x,y,(uint32_t)b.w,(uint32_t)(bottom-y)};
         int filled=0;
         if (solid) {
