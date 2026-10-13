@@ -4,6 +4,7 @@
  * read to the native caller (or the child it is preparing), never a global delta. */
 void proc_launch_disk_read(uint32_t bytes);
 #pragma weak proc_launch_disk_read
+extern bool file_read_cancelled(void) __attribute__((weak));
 
 /* f4-04 page layouts (docs/design/f4-acceptance.md, "## f4-04"). Data pages
  * hold only media bytes: a page is two 2048-byte halves and a half is four
@@ -227,6 +228,46 @@ int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf)
     if (!buf) return -FS_EINVAL;
     fs_lock_take(&c->lock); struct cache_block *b;
     int e=get(c,d,lba,true,&b); if (!e) memcpy(buf,b->data,d->sector_size);
+    fs_lock_drop(&c->lock); return e;
+}
+int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32_t count, void *buf) {
+    if (!c || !d || !buf || d->sector_size!=512 || !count || count>BLKDEV_READ_SECTORS) return -FS_EINVAL;
+    fs_lock_take(&c->lock);
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
+    int e=blkdev_range(d,lba,count);
+    if (!e && !d->read) e=-FS_EINVAL;
+    if (!e && !device(c,d)) e=-FS_ENOSPC;
+    /* Preserve all hits before miss insertion can evict any later hit in a
+     * small cache. The mutex serializes cache writes and media invalidation.
+     * A bitmap, rather than pinned slots, needs no extra pages or allocation. */
+    uint32_t hits[BLKDEV_READ_SECTORS/32]={0};
+    uint32_t generation=d->media_generation;
+    for (unsigned i=0; !e && i<count; i++) {
+        fs_service();
+        for (struct cache_block *b=c->hash[bucket(d,lba+i)]; b; b=b->hash_next)
+            if (b->dev==d && b->lba==lba+i && b->generation==generation && b->sector_size==512) {
+                memcpy((uint8_t *)buf+i*512,b->data,512);
+                hits[i/32]|=1u<<(i%32); c->hits++; touch(c,b); break;
+            }
+    }
+    for (unsigned i=0; !e && i<count;) {
+        if (hits[i/32] & (1u<<(i%32))) { i++; continue; }
+        unsigned end=i+1;
+        while (end<count && !(hits[end/32] & (1u<<(end%32)))) end++;
+        fs_service();
+        if (file_read_cancelled && file_read_cancelled()) { e=-4; break; }
+        e=d->read(d,lba+i,end-i,(uint8_t *)buf+i*512);
+        if (e) break;                 /* never publish a partial/failed read */
+        if (proc_launch_disk_read) proc_launch_disk_read((end-i)*512);
+        if (c->refresh) c->refresh(c->refresh_ctx,d);
+        if (d->media_generation!=generation || d->quarantined) { e=-FS_EIO; break; }
+        for (; i<end; i++) {
+            struct cache_block *b;
+            e=get(c,d,lba+i,false,&b);
+            if (e) break;
+            memcpy(b->data,(uint8_t *)buf+i*512,512);
+        }
+    }
     fs_lock_drop(&c->lock); return e;
 }
 int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const void *buf) {

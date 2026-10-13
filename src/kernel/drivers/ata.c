@@ -42,10 +42,21 @@ static void native_out16(void *ctx, uint16_t p, uint16_t v)
     __asm__ volatile("outw %0, %1" :: "a"(v), "Nd"(p));
 }
 static uint64_t native_now(void *ctx) { (void)ctx; return deadline_after_ms(0); }
+static void native_insw(void *ctx, uint16_t port, void *buffer, uint32_t words)
+{
+    (void)ctx;
+    __asm__ volatile("cld; rep insw" : "+D"(buffer), "+c"(words) : "d"(port) : "memory");
+}
+static void native_outsw(void *ctx, uint16_t port, const void *buffer, uint32_t words)
+{
+    (void)ctx;
+    __asm__ volatile("cld; rep outsw" : "+S"(buffer), "+c"(words) : "d"(port) : "memory");
+}
 static uint64_t native_deadline(void *ctx, uint64_t d) { (void)ctx; return d; }
 static int native_delay(void *ctx, uint32_t us) { (void)ctx; return udelay(us); }
 static const struct ata_port_ops native_ops = {
     native_in8, native_out8, native_in16, native_out16, native_now, native_deadline, native_delay,
+    native_insw, native_outsw,
 };
 
 static uint8_t reg_read(struct ata_channel *c, unsigned r)
@@ -71,7 +82,7 @@ static int pace(struct ata_channel *c)
 {
     /* 9.5/9.6: >=400 ns after Command, >=one PIO cycle after a data
      * block. udelay has microsecond granularity: round UP to 1 us.
-     * Table 67's slowest t0 is 600 ns; also pace individual data words.
+     * IDENTIFY/ATAPI retain their original individual-word pacing.
      * Chipset DIOR-/DIOW-/IORDY timing remains firmware configured. */
     return c->ops->delay_us(c->port_ctx, 1);
 }
@@ -560,6 +571,30 @@ static int identify(struct ata_device *d)
     d->block.read = ata_read;
     d->block.write = ata_write;
     d->block.flush = supported_valid && ((w83 & (1u << 12)) || d->flush_ext) ? ata_flush : 0;
+    /* 8.15.22/28: word 47 advertises support independently of word 59's
+     * bit 8, which validates only the current (possibly disabled) setting. */
+    unsigned maximum = fs_rd16(data + 47 * 2) & 255;
+    uint16_t current = fs_rd16(data + 59 * 2);
+    if (maximum && maximum <= 128 && !(maximum & (maximum - 1))) {
+        d->multiple_max = (uint8_t)maximum;
+        d->multiple_sectors = (current & 0x100) && (current & 255) <= maximum ?
+                              (uint8_t)current : 0;
+        /* 8.49/9.4: explicitly establish the block size after reset. An
+         * issued SET failure follows the usual quarantine/no-retry rule. */
+        start = now(c); deadline = start + ATA_COMMAND_MS;
+        e = select_device(d, start, deadline, 0);
+        if (!e) {
+            device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
+            reg_write(c, 2, (uint8_t)maximum);
+            if (c->native) pic_unmask(c->irq);
+            e = issue(d, 0xc6, start, &sequence);
+        }
+        if (!e) e = wait_irq(d, &sequence, start, deadline);
+        if (!e) e = poll_status(d, start, deadline, 0, ATA_DRQ);
+        disarm(c);
+        if (e) { d->multiple_sectors = 0; return e; }
+        d->multiple_sectors = (uint8_t)maximum;
+    }
     d->identified = true;
     d->elapsed_ms = now(c) - start;
     return 0;
@@ -645,6 +680,34 @@ int ata_channel_discover(struct ata_channel *c)
     return e ? e : found;
 }
 
+/* 9.5/9.6: one DRQ/IRQ per multiple block, possibly a short final block.
+ * Firmware owns bus cycle/IORDY timing (10.2.2). Software pacing belongs
+ * after the block, not after each word. Small bursts bound cooperative work
+ * even when a device advertises a 64 KiB multiple block. IF stays enabled. */
+static int transfer_block(struct ata_device *d, uint8_t *buf, unsigned sectors,
+                          bool write, uint64_t start, uint64_t deadline)
+{
+    struct ata_channel *c = d->channel;
+    for (unsigned off = 0, bytes = sectors * 512; off < bytes;) {
+        if (c->stopped || c->quiescing || expired(c, deadline))
+            return failure(d, start, alternate(c));
+        unsigned take = bytes - off;
+        if (take > 2048) take = 2048;
+        if (write && c->ops->outsw)
+            c->ops->outsw(c->port_ctx, c->base, buf + off, take / 2);
+        else if (!write && c->ops->insw)
+            c->ops->insw(c->port_ctx, c->base, buf + off, take / 2);
+        else for (unsigned i = 0; i < take; i += 2) {
+            if (write) c->ops->out16(c->port_ctx, c->base, fs_rd16(buf + off + i));
+            else fs_wr16(buf + off + i, c->ops->in16(c->port_ctx, c->base));
+        }
+        off += take;
+        if (off < bytes) task_yield();
+    }
+    if (pace(c) || expired(c, deadline)) return failure(d, start, alternate(c));
+    return 0;
+}
+
 static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t *buf, bool write)
 {
     struct ata_channel *c = d->channel;
@@ -674,8 +737,13 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     reg_write(c, 3, (uint8_t)lba);
     reg_write(c, 4, (uint8_t)(lba >> 8));
     reg_write(c, 5, (uint8_t)(lba >> 16));
-    e = issue(d, write ? (d->lba48 ? 0x34 : 0x30) : (d->lba48 ? 0x24 : 0x20), start, &sequence);
-    for (unsigned i = 0; i < n && !e; i++) {
+    bool multiple = d->multiple_sectors != 0;
+    uint8_t command = write ? (d->lba48 ? 0x34 : 0x30) : (d->lba48 ? 0x24 : 0x20);
+    if (multiple) command = write ? (d->lba48 ? 0x39 : 0xc5) : (d->lba48 ? 0x29 : 0xc4);
+    e = issue(d, command, start, &sequence);
+    for (unsigned i = 0; i < n && !e;) {
+        unsigned sectors = multiple ? d->multiple_sectors : 1;
+        if (sectors > n - i) sectors = n - i;
         /* 9.6: first WRITE DRQ is NOT accompanied by INTRQ. All READ
          * blocks and subsequent WRITE blocks require an IRQ. */
         if (!write || i)
@@ -683,8 +751,9 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
         if (!e)
             e = poll_status(d, start, deadline, ATA_DRQ, 0);
         if (!e)
-            e = data_block(d, buf + i * 512, write, start, deadline);
-        if (!e && i + 1 < n)
+            e = transfer_block(d, buf + i * 512, sectors, write, start, deadline);
+        i += sectors;
+        if (!e && i < n)
             task_yield();
     }
     if (!e && write)

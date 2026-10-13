@@ -491,7 +491,7 @@ static void storage_ata_inject(void *ctx, bool flush)
 static int cache_ata_faults(struct block_cache *c)
 {
     static const struct ata_port_ops ops = { storage_ata_in8, storage_ata_out8, storage_ata_in16,
-        storage_ata_out16, storage_ata_now, storage_ata_deadline, storage_ata_delay };
+        storage_ata_out16, storage_ata_now, storage_ata_deadline, storage_ata_delay, 0, 0 };
     uint64_t real = ata_command_count();
     for (unsigned mode = 0; mode < 2; mode++) {
         struct storage_ata_fixture *f = &ata_fixture; memset(f, 0, sizeof(*f));

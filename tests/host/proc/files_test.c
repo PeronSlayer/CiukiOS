@@ -580,7 +580,7 @@ static void test_launch_reads(void)
     CHECK(io(fd,buffer,4096,false,true,5000)==0);
     CHECK(client->launch.volume_reads==3 && client->launch.volume_bytes==5000);
     struct ciuki_file snapshot; CHECK(!image_open(client->cwd,"/launch-read.bin",&snapshot));
-    CHECK(client->launch.volume_reads==5 && client->launch.volume_bytes==10000 && client->launch.volume_max==4096);
+    CHECK(client->launch.volume_reads==4 && client->launch.volume_bytes==10000 && client->launch.volume_max==5000);
     uint64_t reads=client->launch.volume_reads;
     CHECK(!snapshot.read(snapshot.cookie,0,buffer,sizeof(buffer)));
     CHECK(client->launch.volume_reads==reads); /* immutable RAM snapshot isn't disk payload */
@@ -590,8 +590,56 @@ static void test_launch_reads(void)
     memset(&client->launch,0,sizeof(client->launch)); CHECK(!file_close(client,fd));
     CHECK(!remove_path_native("/launch-read.bin",false));
     files_launch_verbose=false;
-    puts("PASS native launch read accounting: short final page, EOF, immutable snapshot once, stop at first frame");
+    puts("PASS native launch read accounting: short read, EOF, batched immutable snapshot once, stop at first frame");
 }
+static void test_launch_throughput(void)
+{
+    const unsigned bytes=1024*1024;
+    uint8_t *payload=malloc(bytes), *readback=malloc(bytes); CHECK(payload && readback);
+    for (unsigned i=0;i<bytes;i++) payload[i]=(uint8_t)(i*31+(i>>8));
+    int fd=file_open(client,"/launch-throughput.bin",O_CREAT|O_RDWR,0666); CHECK(fd>=0);
+    CHECK(io(fd,payload,bytes,true,false,0)==(int)bytes);
+    cache_invalidate(&cache,&disk[0].dev,false);
+    files_launch_verbose=true; client->launch=(struct proc_launch){.active=true};
+    struct ciuki_file snapshot; CHECK(!image_open(client->cwd,"/launch-throughput.bin",&snapshot));
+    CHECK(client->launch.volume_bytes==bytes && client->launch.volume_reads==16 && client->launch.volume_max==65536);
+    CHECK(client->launch.disk_bytes>=bytes && client->launch.disk_max>=32768 && client->launch.disk_reads<64);
+    printf("PASS 1 MiB native snapshot accounting: read_requests=%llu read_max=%u disk_requests=%llu disk_max=%u\n",
+           (unsigned long long)client->launch.volume_reads,client->launch.volume_max,
+           (unsigned long long)client->launch.disk_reads,client->launch.disk_max);
+    CHECK(!snapshot.read(snapshot.cookie,0,readback,bytes) && !memcmp(readback,payload,bytes));
+    snapshot.close(snapshot.cookie);
+    unsigned pages=pages_used, heap=heap_blocks, live=fs_host_contig_live;
+    fs_host_contig_fail=1;
+    CHECK(image_open(client->cwd,"/launch-throughput.bin",&snapshot)==-ENOMEM);
+    CHECK(pages_used==pages && heap_blocks==heap && fs_host_contig_live==live);
+    static const int failures[]={0,1,2,18,257};
+    for (unsigned i=0;i<ARRAY_SIZE(failures);i++) {
+        alloc_fail=failures[i];
+        CHECK(image_open(client->cwd,"/launch-throughput.bin",&snapshot)==-ENOMEM);
+        alloc_fail=-1;
+        CHECK(pages_used==pages && heap_blocks==heap && fs_host_contig_live==live);
+    }
+    struct ciuki_mmap_args mapping=map_args(2*BLKDEV_READ_BYTES,PROT_READ|PROT_WRITE);
+    unsigned user=(uint32_t)ua_mmap(client->memory,&mapping);
+    CHECK(user>=CIUKI_MMAP_BASE && user<CIUKI_MMAP_LIMIT);
+    cache_invalidate(&cache,&disk[0].dev,false); client->launch=(struct proc_launch){.active=true};
+    CHECK(call(CIUKI_SYS_PREAD,fd,user,BLKDEV_READ_BYTES+1,0,0)==BLKDEV_READ_BYTES);
+    CHECK(!ua_read(client->memory,readback,user,BLKDEV_READ_BYTES) && !memcmp(readback,payload,BLKDEV_READ_BYTES));
+    CHECK(client->launch.volume_max==65536 && client->launch.disk_max>=32768);
+    CHECK(fs_host_contig_live==live);
+    fs_host_contig_fail=1;
+    CHECK(call(CIUKI_SYS_PREAD,fd,user,BLKDEV_READ_BYTES,0,0)==-ENOMEM && fs_host_contig_live==live);
+    /* Read enlargement does not enlarge the syscall write commit boundary. */
+    CHECK(!ua_write(client->memory,user,payload,BLKDEV_READ_BYTES));
+    CHECK(call(CIUKI_SYS_PWRITE,fd,user,BLKDEV_READ_BYTES,0,0)==PAGE_SIZE);
+    CHECK(!ua_munmap(client->memory,user,2*BLKDEV_READ_BYTES));
+    client->launch=(struct proc_launch){0}; files_launch_verbose=false;
+    CHECK(!file_close(client,fd) && !remove_path_native("/launch-throughput.bin",false));
+    free(payload); free(readback);
+    puts("PASS native 64 KiB syscall/snapshot bytes, temporary buffer rollback, original page-sized writes");
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4);
@@ -606,7 +654,7 @@ int main(int argc, char **argv)
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks();
     test_uname(); test_optical_native();
-    test_launch_reads();
+    test_launch_reads(); test_launch_throughput();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
     CHECK(f2_files_post_commit_fault());
     CHECK(pages_used == prior_pages && heap_blocks == prior_heap);

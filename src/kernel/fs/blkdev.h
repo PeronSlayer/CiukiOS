@@ -3,6 +3,8 @@
 #define CIUKI_BLKDEV_H
 #include "fs_port.h"
 #define BLKDEV_SECTOR_SIZE 512u
+#define BLKDEV_READ_BYTES 65536u
+#define BLKDEV_READ_SECTORS (BLKDEV_READ_BYTES / BLKDEV_SECTOR_SIZE)
 enum blkdev_cache_state { BLKDEV_CACHE_UNKNOWN, BLKDEV_CACHE_DISABLED, BLKDEV_CACHE_ENABLED };
 struct blkdev {
     /* Synchronous, complete request or negative FS_EIO / FS_EINVAL /

@@ -33,6 +33,7 @@ struct file_operation {
     struct ua_pin pin;
     char *path[2];
     void *buffer;
+    size_t buffer_bytes; /* nonzero for a page-backed contiguous read buffer */
     bool pinned, reading;
 };
 static void operation_free(void *arg)
@@ -42,7 +43,10 @@ static void operation_free(void *arg)
     if (op->description) op->description->object.release(&op->description->object);
     px_release(op->cwd);
     kfree(op->path[0]); kfree(op->path[1]);
-    if (op->buffer) fs_page_free(op->buffer);
+    if (op->buffer) {
+        if (op->buffer_bytes) fs_contig_free(op->buffer,op->buffer_bytes);
+        else fs_page_free(op->buffer);
+    }
     kfree(op);
 }
 /* F1 readsec calls this only before issuing a new synchronous read. The
@@ -108,10 +112,14 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     if (!tf->edx) return 0;
     int err = output_pin(op, tf->ecx, tf->edx, !write);
     if (err) return err;
-    op->buffer = fs_page_alloc();
-    if (!op->buffer) return -ENOMEM;
-    uint32_t bytes = tf->edx < PAGE_SIZE ? tf->edx : PAGE_SIZE;
+    uint32_t limit = !write && d->node->kind==PX_FILE ? BLKDEV_READ_BYTES : PAGE_SIZE;
+    uint32_t bytes = tf->edx < limit ? tf->edx : limit;
     if (d->node->kind == PX_CONSOLE && bytes > 1024) bytes = 1024;
+    if (!write && d->node->kind==PX_FILE) {
+        op->buffer_bytes=bytes;
+        op->buffer=fs_contig_alloc(bytes);
+    } else op->buffer=fs_page_alloc();
+    if (!op->buffer) return -ENOMEM;
     if (write && (err = copy_from_user(op->buffer, tf->ecx, bytes))) return err;
     struct vfs *v = d->node->space->vfs;
     fs_lock_take(&v->lock);
