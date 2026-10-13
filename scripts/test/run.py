@@ -446,6 +446,10 @@ def git_identity(root):
 def load(path):
     with Path(path).open() as stream: data=json.load(stream)
     if data.get('schema_version')!=1: raise res.Refusal('unsupported JSON schema: '+str(path))
+    input_devices({},data)
+    for case in data.get('cases',[]):
+        input_devices({},case)
+        serial_patterns(case.get('expected',{}))
     return data
 
 
@@ -824,7 +828,7 @@ NORMAL_BOOT_NEGATIVE = (
     ('desktop_unavailable', re.compile(rb'\[supervisor\] desktop unavailable')),
     ('desktop_stopped', re.compile(rb'\[supervisor\] desktop stopped')),
 )
-NORMAL_BOOT_CASE_KEYS = {'id','kind','probe','profile','timeout','expected','attempt','boot_kind','_smoke','_run_id'}
+NORMAL_BOOT_CASE_KEYS = {'id','kind','probe','profile','timeout','expected','attempt','boot_kind','_smoke','_run_id','usb','i8042'}
 NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
 # Colours drawn by apps/desktop in its default theme (desktop.h DESK_BAR/
 # DESK_BACKGROUND/DESK_START_*; theme.c "Platinum" topbar, taskbar,
@@ -851,6 +855,7 @@ def case_kind(case):
     Probe cases are unchanged: they carry no 'kind' and every existing check
     applies to them. A normal-boot case is an allowlist of keys: no selector,
     stimulus, fixture, patch, fault, reboot sequence or device exception.
+    Input topology (usb/i8042) may be declared as on a profile.
     """
     kind = case.get('kind')
     if kind is None and case.get('probe') != NORMAL_BOOT_KIND:return 'probe'
@@ -1272,8 +1277,67 @@ def check_audio_wav(path, expected):
     return result
 
 
+def input_devices(profile,case):
+    """Validate both declarations, then apply case overrides without merging lists."""
+    for declaration in (profile,case):
+        if 'i8042' in declaration and type(declaration['i8042']) is not bool:
+            raise res.Refusal('i8042 must be a boolean')
+        usb=declaration.get('usb',[])
+        if not isinstance(usb,list):raise res.Refusal('usb must be a list of controllers')
+        for entry in usb:
+            if not isinstance(entry,dict) or set(entry)!={'controller','devices'}:
+                raise res.Refusal('USB entries require only controller and devices')
+            if entry['controller'] not in ('uhci','ohci'):
+                raise res.Refusal('unknown USB controller: '+str(entry['controller']))
+            devices=entry['devices']
+            if not isinstance(devices,list) or any(d not in ('kbd','mouse','tablet') for d in devices):
+                raise res.Refusal('USB devices must be a list of kbd, mouse or tablet')
+    return {'i8042':case.get('i8042',profile.get('i8042',True)),
+            'usb':case.get('usb',profile.get('usb',[]))}
+
+
+def require_i8042_off(executable,machine):
+    """Probe the installed executable's properties, without starting a VM."""
+    try:
+        help_result=subprocess.run([executable,'-machine',machine+',help'],
+                                   capture_output=True,text=True,timeout=5,check=False)
+    except (OSError,subprocess.SubprocessError) as error:
+        raise res.Refusal('cannot check QEMU i8042=off support: '+str(error)) from error
+    if help_result.returncode or not re.search(r'^\s*i8042\s*=\s*<bool>(?:\s|$)',
+                                               help_result.stdout+'\n'+help_result.stderr,re.MULTILINE):
+        raise res.Refusal('installed QEMU machine '+machine+' does not advertise i8042=off support')
+
+
+def serial_patterns(expected):
+    patterns=expected.get('serial_patterns',[])
+    if not isinstance(patterns,list) or any(not isinstance(p,str) or not p.startswith('^') for p in patterns):
+        raise res.Refusal('serial_patterns must be a list of line-anchored regular expressions')
+    try:return [re.compile(p.encode('ascii'),re.MULTILINE) for p in patterns]
+    except (UnicodeError,re.error) as error:
+        raise res.Refusal('invalid serial pattern: '+str(error)) from error
+
+
+def check_serial_patterns(path,expected):
+    patterns=serial_patterns(expected)
+    if not patterns:return []
+    data=path.read_bytes()  # The collector already enforces res.LOG_CAP.
+    matches=[]
+    for pattern in patterns:
+        match=pattern.search(data)
+        if not match:raise EvidenceError('missing expected serial pattern: '+pattern.pattern.decode('ascii'))
+        matches.append({'pattern':pattern.pattern.decode('ascii'),
+                        'matched':match.group().decode('ascii',errors='replace')})
+    return matches
+
+
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
+    inputs=input_devices(profile,case)
+    serial_patterns(case.get('expected',{}))
+    machine=profile['machine']
+    if not inputs['i8042']:
+        require_i8042_off(executable,machine)
+        machine+=',i8042=off'
     normal=case_kind(case)==NORMAL_BOOT_KIND
     if normal:
         # No fw_cfg item and no BOOT.CFG probe line: the loader menu times out
@@ -1314,11 +1378,16 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         raise res.Refusal('unknown network device exception')
     if nic and (normal or requested['phase'] != 6 or requested['probe'] != 'net-arp'):
         raise res.Refusal('user network backend requires f6:net-arp')
-    args=[executable,'-machine',profile['machine'],'-cpu',profile['cpu'],'-accel',profile['accelerator'],
+    args=[executable,'-machine',machine,'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
           '-monitor','none','-nic','none','-no-shutdown','-S',
           '-drive',drive.replace(',',',,')+',format='+disk_format+',if=ide,index=0,media=disk,cache='+cache+',rerror=report,werror=report'+drive_id,
           '-vga',devices.get('vga',profile['vga']),'-qmp','unix:q,server=on,wait=off']
+    for index,usb in enumerate(inputs['usb']):
+        controller='piix3-usb-uhci' if usb['controller']=='uhci' else 'pci-ohci'
+        args+=['-device',f'{controller},id=usb{index}']
+        for device in usb['devices']:
+            args+=['-device',f'usb-{device},bus=usb{index}.0']
     if source not in ('cfg','none'):args+=['-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
     if nic:
         args += ['-netdev', 'user,id=ciuknet0,restrict=on',
@@ -1440,7 +1509,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             'qemu':{'version':'unknown','executable':executable,'executable_sha256':sha(executable),
                     'arguments':args,'scope_arguments':scoped,'machine':profile['machine'],'cpu':profile['cpu'],
                     'accelerator':profile['accelerator'],'ram_mib':profile['ram_mib'],'profile':profile,
-                    'firmware_sha256':sha(firmware),'devices':{'ide':'PIIX','i8042':True,'vga':case.get('device_exceptions',{}).get('vga',profile['vga']),
+                    'firmware_sha256':sha(firmware),'devices':{'ide':'PIIX',**input_devices(profile,case),'vga':case.get('device_exceptions',{}).get('vga',profile['vga']),
                         'com1':case.get('device_exceptions',{}).get('serial','file'),'audio':case.get('device_exceptions',{}).get('audio',profile.get('audio','none'))}}}
     result['build_git_revision']=result['build_manifest']['revision'];result['build_dirty']=result['build_manifest']['dirty']
     if case.get('sweep'):result['sweep_boot']=case.get('_sweep_boot',1)
@@ -1701,6 +1770,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if host_resets!=expected_resets:
                 raise EvidenceError(f'host reset count {host_resets} differs from expected {expected_resets}')
         if result['outcome']!='not_run':
+            if case['expected'].get('serial_patterns'):
+                result['serial_matches']=check_serial_patterns(directory/'serial.log',case['expected'])
             result['outcome']='pass';result['reason']='all declared predicates and host observations passed'
     except (OSError,ValueError,RuntimeError,subprocess.SubprocessError,KeyboardInterrupt) as e:
         result['reason']=str(e) or type(e).__name__

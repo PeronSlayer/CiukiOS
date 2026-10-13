@@ -66,7 +66,7 @@ class QMP:
         raise TimeoutError('QMP response deadline')
 
     def input_events(self,events):
-        """QAPI InputEvent, qcode keys and PS/2 relative motion only."""
+        """QAPI InputEvent: qcode keys, relative motion and buttons (PS/2 or USB)."""
         if not isinstance(events,list) or not 1<=len(events)<=64:
             raise ValueError('input batch must contain 1..64 events')
         for event in events:
