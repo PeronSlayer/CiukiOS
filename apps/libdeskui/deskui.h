@@ -184,6 +184,7 @@ struct du_widget {
     char text[DU_TEXT_MAX];
     size_t cursor, anchor, offset;          /* edit (bytes; offset in cells) */
     const uint32_t *icon; int icon_size;    /* buttons, edit prefix icon */
+    int accepts_tab;                        /* DU_CANVAS: deliver Tab as DU_EV_KEY */
     int dropdown;                           /* toolbutton split arrow width */
     const struct du_item *items;            /* list/tree */
     unsigned count, active;

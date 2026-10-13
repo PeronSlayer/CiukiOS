@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and inspect desktop, demo, libdeskui, Files, Tasks, CiukNote, the Control Panel and the accessories using the static Ciuki SDK."""
+"""Build and inspect desktop, demo, libdeskui, Files, Tasks, CiukNote, the Control Panel, Terminal and the accessories using the static Ciuki SDK."""
 # SPDX-License-Identifier: MIT
 import hashlib
 import importlib.util
@@ -29,7 +29,7 @@ ACCESSORIES = {
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
 }
-PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", *ACCESSORIES)
+PROGRAMS = ("desktop", "demo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
 SHELL = ["sounds.c", "sound_runtime.c", "shell.c", "settings.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
@@ -50,7 +50,7 @@ def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
                                  ROOT / "apps/ciukide", ROOT / "apps/accessories", ROOT / "apps/paint",
-                                 ROOT / "apps/music", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
+                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
@@ -66,7 +66,9 @@ def inputs():
         raise ValueError("SDK desktop header is stale; rebuild SDK")
     return {"sdk_manifest_sha256": digest(SDK / "manifest.json"),
             "sources": {str(p.relative_to(ROOT)): digest(p) for p in sorted(files)},
-            "cflags": CFLAGS}
+            "cflags": CFLAGS,
+            "lua_manifest_sha256": digest(ROOT / "build/apps/lua/manifest.json"),
+            "lua_library_sha256": digest(ROOT / "build/apps/lua/liblua.a")}
 
 
 def current_build(expected):
@@ -120,6 +122,7 @@ def icon_record(icons):
 def build():
     lua = module("desktop_sdk_build", ROOT / "apps/lua/build_lua.py")
     lua.validate_sdk()
+    lua.build(ROOT / "build/downloads/newlib/lua-5.4.8.tar.gz", ROOT / "build/downloads/newlib/lua-5.4.8-tests.tar.gz", 1)
     icons = module("desktop_icon_build", ROOT / "apps/desktop/convert_icons.py")
     icons.check()
     icons.check_store_record()
@@ -164,13 +167,15 @@ def build():
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
+    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
     sources["control"] = ["../control/main.c", "../control/app.c", "../control/display.c", "sounds.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "ciukide", "control", *ACCESSORIES) else []),
+                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", *ACCESSORIES) else []),
+                          *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
                           *(["-lm"] if name in ACCESSORIES else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
@@ -196,7 +201,7 @@ def build():
     (OUT / "manifest.json").write_text(json.dumps(m, indent=2, sort_keys=True)+"\n")
     for obj in objects:
         obj.unlink(missing_ok=True)
-    print(f"[desktop] built/inspected desktop, demo, dosbox, libdeskui, Files, Tasks, CiukNote and Control Panel in {m['build_seconds']} seconds; "
+    print(f"[desktop] built/inspected desktop, demo, dosbox, libdeskui, Files, Tasks, CiukNote, Control Panel and Terminal in {m['build_seconds']} seconds; "
           f"Tango store {m['icons']['store_bytes']} bytes, {m['icons']['names']} names; guest not_run")
 
 

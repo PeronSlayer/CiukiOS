@@ -33,6 +33,7 @@
 #define DESK_APP_FILES 1
 #define DESK_APP_NOTE 2
 #define DESK_APP_CONTROL 3          /* /Programs/control: may send DESK_SETTINGS */
+#define DESK_APP_TERMINAL 5         /* launcher-authorized terminal requests */
 #define DESK_APP_IDE 4              /* /Programs/ciukide: project LAUNCH only */
 #define DESK_FILES_CHECKPOINT 0xf2310000u
 #define DESK_FILES_CHECKPOINTS 5

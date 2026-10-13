@@ -158,10 +158,11 @@ _Static_assert(sizeof(lua_Number) == 8 && LUA_FLOAT_TYPE == LUA_FLOAT_DOUBLE, "d
     for name in ("lua", "luac"):
         shutil.copy2(src / "src" / name, OUT / name)
         evidence[name] = inspect(OUT / name)
+    shutil.copy2(src / "src/liblua.a", OUT / "liblua.a")
     # The exact release notice ships on the volume separately from the test notice.
     shutil.copy2(src / "src/lua.h", OUT / "LUA-LICENSE.txt")
     shutil.copy2(ROOT / "apps/lua/ciuki-f2.lua", OUT / "ciuki-f2.lua")
-    files = {name: digest(OUT / name) for name in ("lua", "luac", "LUA-LICENSE.txt", "ciuki-f2.lua")}
+    files = {name: digest(OUT / name) for name in ("lua", "luac", "liblua.a", "LUA-LICENSE.txt", "ciuki-f2.lua")}
     manifest = {"schema_version": 1, "application": "Lua", "version": "5.4.8",
                 "inputs": expected, "command": command, "source_files": original_sources,
                 "test_files": inventory(tests), "test_directories": sorted(

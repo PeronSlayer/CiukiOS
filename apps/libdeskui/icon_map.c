@@ -23,6 +23,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:ciukide", "applications-development"},
     {"program:tcc", "text-x-script"},
     {"program:tasks", "utilities-system-monitor"},
+    {"program:terminal", "utilities-terminal"},
     {"program:dosbox", "utilities-terminal"},          /* MS-DOS Prompt class VM window */
     {"program:demo", "preferences-desktop-peripherals"}, /* keyboard/mouse input demo window */
     {"program:hello", "face-smile"},                   /* prints a greeting */

@@ -567,8 +567,66 @@ static void test_ide_launch(void)
     d.power.state=1; assert(desk_ide_launch(&d,path)==-EBUSY);
     d.power.state=0; cleanup(); puts("PASS CiukIDE: desktop-owned identity, project path checks, ordinary launch callback");
 }
+static unsigned terminal_kill_pid, terminal_mix_count;
+static int terminal_launch_test(struct desktop *desktop, const struct desk_program *p)
+{ (void)desktop; assert(!strcmp(p->name,"ciuknote")); ide_launch_count++; return 123; }
+static int terminal_kill(uint32_t pid, int sig)
+{ assert(sig == SIGKILL); terminal_kill_pid = pid; return 0; }
+static int terminal_mixer(struct desktop *desktop, uint32_t l, uint32_t r, uint32_t mute)
+{ (void)desktop; assert(l == 20 && r == 30 && mute == 1); terminal_mix_count++; return 0; }
+static int terminal_result(int client_index)
+{
+    unsigned start = fake_sent; desk_flush(&d, client_index);
+    for (unsigned k = start; k < fake_sent; k++) if (fake_messages[k].data[1] == DESK_TASK_RESULT)
+        return (int32_t)desk_get32(fake_messages[k].data + 12);
+    assert(0); return -999;
+}
+static void test_terminal(void)
+{
+    setup(640,480); int i=client(5,12,64,48,0x123456);
+    d.clients[i].version=DESK_SHELL_VERSION; desk_flush(&d,i);
+    assert(desk_program_graphical("terminal") && desk_program_kind("terminal")==DESK_APP_TERMINAL);
+    assert(!strcmp(desk_program_label("terminal"),"Terminal"));
+    assert(!strcmp(desk_program_icon_name("terminal"),"utilities-terminal"));
+    assert(!strcmp(desk_program_category("terminal"),"programs"));
+    strcpy(d.programs[0].name,"terminal"); strcpy(d.programs[0].path,"/Programs/terminal");
+    strcpy(d.programs[1].name,"ciuknote"); strcpy(d.programs[1].path,"/Programs/ciuknote");
+    strcpy(d.programs[2].name,"lua"); strcpy(d.programs[2].path,"/Programs/lua"); d.program_count=3;
+    desk_shell_enable(&d); desk_menu_open(&d,SH_MENU_PROGRAMS,4,32);
+    int found=0; for(int k=0;k<d.sh.menus[0].count;k++)if(!strcmp(d.sh.menus[0].items[k].label,"Terminal"))found++;
+    assert(found==1); desk_menu_close(&d);
+    struct ciuki_message m; struct desk_packet packet;
+    request(&m,DESK_TERMINAL_POWER,12); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+4,9); desk_put32(m.data+8,CIUKI_POWER_OFF);
+    assert(desk_parse(&m,1,NULL,&packet) && packet.flags==CIUKI_POWER_OFF);
+    struct ciuki_message bad=m; desk_put32(bad.data+8,CIUKI_POWER_QUERY); assert(!desk_parse(&bad,1,NULL,&packet));
+    bad=m; bad.length=8; assert(!desk_parse(&bad,1,NULL,&packet));
+    desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && !d.power.state);
+    d.clients[i].program=DESK_APP_TERMINAL; d.power.state=DESK_POWER_BUSY;
+    desk_receive(&d,i,&m); assert(terminal_result(i)==-EBUSY); d.power.state=0;
+    /* Launch authority comes from the program identity; a title is insufficient. */
+    d.launch=terminal_launch_test; ide_launch_count=0;
+    request(&m,DESK_LAUNCH,20); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+8,8); memcpy(m.data+12,"ciuknote",8);
+    desk_receive(&d,i,&m); assert(terminal_result(i)==123 && ide_launch_count==1);
+    request(&m,DESK_LAUNCH,15); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+8,3); memcpy(m.data+12,"lua",3);
+    desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && ide_launch_count==1);
+    d.clients[i].program=0; strcpy(d.clients[i].title,"Terminal");
+    request(&m,DESK_LAUNCH,20); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+8,8); memcpy(m.data+12,"ciuknote",8);
+    desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM);
+    d.clients[i].program=DESK_APP_TERMINAL; d.terminate=terminal_kill; d.self_pid=77;
+    request(&m,DESK_END_TASK,16); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+12,1);
+    desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && !terminal_kill_pid);
+    desk_put32(m.data+12,77); desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && !terminal_kill_pid);
+    desk_put32(m.data+12,99); desk_receive(&d,i,&m); assert(terminal_result(i)==0 && terminal_kill_pid==99);
+    d.clients[i].mixer=1; d.mixer_set=terminal_mixer;
+    request(&m,DESK_MIXER_SET,20); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+8,20); desk_put32(m.data+12,30); desk_put32(m.data+16,1);
+    desk_receive(&d,i,&m); assert(terminal_result(i)==0 && terminal_mix_count==1);
+    d.clients[i].mixer=0; desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && terminal_mix_count==1);
+    request(&m,DESK_TERMINAL_POWER,12); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+8,CIUKI_POWER_REBOOT);
+    desk_receive(&d,i,&m); assert(terminal_result(i)==0 && d.power.state==DESK_POWER_CLOSING && d.power.action==CIUKI_POWER_REBOOT);
+    d.power.state=0; cleanup(); puts("PASS Terminal: menu, launch authorization, protected PIDs, mixer, protocol, desktop power path");
+}
 int main(void)
 {
-    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_media_shell(); test_menu(); test_ide_launch();
+    test_protocol(); test_titles(); test_resize_protocol(); test_damage(); test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle(); test_compositor(); test_shell(); test_media_shell(); test_menu(); test_ide_launch(); test_terminal();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }
