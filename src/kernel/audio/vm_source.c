@@ -56,6 +56,7 @@ struct vm_slot {
 };
 static struct vm_slot vm_slots[DOSVM_LIMIT];
 static struct audio_vm_tap ring;
+static uint32_t rate_epoch;
 static volatile bool kick_armed = true;
 static int32_t pcm_buf[AUDIO_QUANTUM * 2], opl_buf[AUDIO_QUANTUM * 2];
 static uint8_t resync_regs[512];
@@ -98,6 +99,7 @@ static void tap_frame(struct audio_vm_tap *t, int64_t left, int64_t right)
 /* ---- control (thread context) ---- */
 int audio_vm_attach(struct dosvm_key key)
 {
+    rate_epoch++;
     if (!audio.ready || !key.id || key.id > DOSVM_LIMIT) return -ENODEV;
     if (!template_ready) { opl3_init(&chip_template); template_ready = true; }
     uint32_t token = 0;
@@ -117,6 +119,7 @@ int audio_vm_attach(struct dosvm_key key)
 }
 void audio_vm_detach(struct dosvm_key key)
 {
+    rate_epoch++;
     if (!key.id || key.id > DOSVM_LIMIT) return;
     struct vm_slot *s = &vm_slots[key.id - 1];
     uint32_t f = irq_save();
@@ -437,15 +440,15 @@ static void skip_to(struct vm_slot *s, uint32_t token, uint64_t t)
     }
     s->stream = false; s->starving = false;
 }
-static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*sums)[2], unsigned frames)
+static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*sums)[2], unsigned frames, uint64_t output, uint64_t played)
 {
     struct dosvm_audio_info info;
     if (!dosvm_audio_info(s->key, &info)) { revoke(s, epoch); return; }
     uint64_t now = info.clock;
-    uint64_t queued = audio.output > audio.played_output ? audio.output - audio.played_output : 0;
+    uint64_t queued = output > played ? output - played : 0;
     if (queued > (AUDIO_LEAD + 1) * AUDIO_QUANTUM) queued = (AUDIO_LEAD + 1) * AUDIO_QUANTUM;
     uint64_t target = now + queued > AUDIO_VM_LATENCY ? now + queued - AUDIO_VM_LATENCY : 0;
-    if (!s->anchored || s->rendered_to != audio.output) {
+    if (!s->anchored || s->rendered_to != output) {
         /* First quantum, or the output was not rendered for this source
          * (transport restarted): re-anchor, never moving back in time. */
         if (s->anchored) s->stats.reanchors++;
@@ -490,7 +493,7 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
         s->next_t += n; i += n;
     }
     if (s->state == AUDIO_VM_FREE) return;
-    s->rendered_to = audio.output + frames;
+    s->rendered_to = output + frames;
     s->stats.rendered += frames;
 
     int64_t gp[2], go[2];
@@ -520,7 +523,7 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
     s->busy = sound || s->stream || s->hold || s->ev_count || s->dac_until > s->next_t ||
               (s->opl_used && !opl3_silent(&s->chip)) || info.active || info.blocks_queued || info.events_queued;
 }
-void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
+static void vm_mix_48(int64_t (*sums)[2], unsigned frames, uint64_t output, uint64_t played)
 {
     if (frames > AUDIO_QUANTUM) frames = AUDIO_QUANTUM;
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
@@ -533,8 +536,45 @@ void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
         irq_restore(f);
         if (state == AUDIO_VM_FREE) { s->live_epoch = 0; s->busy = false; continue; }
         if (s->live_epoch != epoch) slot_reset(s, epoch);
-        render(s, token, epoch, sums, frames);
+        render(s, token, epoch, sums, frames, output, played);
     }
+}
+/* The VM DSP/events and integer OPL chip keep their 48 kHz timebase on a
+ * 44.1 kHz physical backend. Convert the accumulated VM source with a
+ * persistent rational phase and two cached lookahead frames. Native streams
+ * already convert directly to the effective output rate in mixer.c. */
+#define VM_RATE_WINDOW (AUDIO_QUANTUM * 48000u / 44100u + 4u)
+static int64_t vm_rate_samples[VM_RATE_WINDOW][2], vm_rate_cache[2][2];
+static uint64_t vm_rate_next;
+static unsigned vm_rate_cached;
+static uint32_t vm_rate_epoch;
+void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
+{
+    if (frames > AUDIO_QUANTUM) frames=AUDIO_QUANTUM;
+    unsigned rate=audio_output_rate();
+    if (rate==VM_HZ) { vm_rate_cached=0; vm_mix_48(sums,frames,audio.output,audio.played_output); return; }
+    /* Only the directed 44.1 kHz and 48 kHz physical rates are admitted. */
+    if (rate!=44100 || !frames) return;
+    uint64_t first=audio.output*VM_HZ/rate;
+    unsigned phase=(unsigned)(audio.output*VM_HZ%rate);
+    unsigned count=(phase+(frames-1)*VM_HZ)/rate+2;
+    uint64_t played=audio.played_output*VM_HZ/rate;
+    if (vm_rate_next!=audio.output || vm_rate_epoch!=rate_epoch) vm_rate_cached=0;
+    memset(vm_rate_samples,0,sizeof(vm_rate_samples));
+    for (unsigned i=0;i<vm_rate_cached;i++) memcpy(vm_rate_samples[i],vm_rate_cache[i],sizeof(vm_rate_cache[0]));
+    for (unsigned i=vm_rate_cached;i<count;) {
+        unsigned take=count-i; if (take>AUDIO_QUANTUM) take=AUDIO_QUANTUM;
+        vm_mix_48(vm_rate_samples+i,take,first+i,played); i+=take;
+    }
+    unsigned index=0;
+    for (unsigned i=0;i<frames;i++) {
+        for (unsigned c=0;c<2;c++) sums[i][c]+=vm_rate_samples[index][c]+
+            (vm_rate_samples[index+1][c]-vm_rate_samples[index][c])*phase/rate;
+        phase+=VM_HZ; index+=phase/rate; phase%=rate;
+    }
+    vm_rate_cached=count-index;
+    for (unsigned i=0;i<vm_rate_cached;i++) memcpy(vm_rate_cache[i],vm_rate_samples[index+i],sizeof(vm_rate_cache[0]));
+    vm_rate_next=audio.output+frames; vm_rate_epoch=rate_epoch;
 }
 void audio_vm_tap(const struct audio_frame *out, unsigned frames)
 {

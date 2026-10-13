@@ -22,6 +22,7 @@ static void *vq_arg;
 static void vq_begin(void)
 {
     audio.ready = true;
+    audio.caps.output_rate=48000;
     audio.master = (struct ciuki_mixer_master){ .version = 1, .size = 32, .left = 100, .right = 100 };
     audio.output = 2048; audio.played_output = 256;
     vq_n = 0; vq_frames = 0; vq_ticks0 = g_ticks; vq_service = 0; vq_arg = 0;
@@ -38,7 +39,7 @@ static void vq_mix(void)
 static void vq_time(unsigned frames)
 {
     vq_frames += frames;
-    while ((g_ticks - vq_ticks0) * 48 < vq_frames) { ms(1); if (vq_service) vq_service(vq_arg); }
+    while ((g_ticks - vq_ticks0) * audio_output_rate() < vq_frames * 1000) { ms(1); if (vq_service) vq_service(vq_arg); }
 }
 static void vq_run(unsigned quanta) { for (unsigned i = 0; i < quanta; i++) { vq_mix(); vq_time(AUDIO_QUANTUM); } }
 static struct audio_vm_stats vstats(struct dosvm *v) { struct audio_vm_stats s; CHECK(audio_vm_stats(dosvm_key(v), &s)); return s; }
@@ -492,9 +493,51 @@ static void test_vm_opl(void)
     destroy(v, true); vq_end(); empty();
 }
 
+/* F4-11: the OPL chip and DSP keep their 48 kHz clock on 44.1 kHz
+ * transports. Compare every physical sample to an independently resampled
+ * reference chip and keep phase across quanta and the end of a source. */
+static void test_vm_physical_rate(void)
+{
+    vq_begin(); audio.caps.output_rate=44100;
+    struct dosvm *v=audio_vm_create(); unity(v);
+    vq_time(1200); vq_run(2);
+    static struct opl3_chip ref; opl3_init(&ref);
+    unsigned start=vq_n; opl_note(v,&ref); vq_run(60);
+    memset(opl_ref,0,2*sizeof(opl_ref[0]));
+    opl3_generate(&ref,&opl_ref[2][0],8190); /* zero immediately before key-on */
+    unsigned at=first_sound(start); CHECK(at+4000<vq_n);
+    bool found=false; unsigned ref_start=0, ref_phase=0;
+    for (unsigned index=0;!found && index<64;index++) for (unsigned phase=0;!found && phase<44100;phase+=300) {
+        bool same=true;
+        for (unsigned j=0;j<128;j++) {
+            uint64_t num=phase+(uint64_t)j*48000; unsigned p=index+num/44100, frac=num%44100;
+            int64_t value=opl_ref[p][0]+((int64_t)opl_ref[p+1][0]-opl_ref[p][0])*frac/44100;
+            if (vq_cap[at+j][0]!=value) { same=false; break; }
+        }
+        if (same) { found=true; ref_start=index; ref_phase=phase; }
+    }
+    CHECK(found);
+    for (unsigned j=0;j<4000;j++) {
+        uint64_t num=ref_phase+(uint64_t)j*48000; unsigned p=ref_start+num/44100, frac=num%44100;
+        for (unsigned c=0;c<2;c++) {
+            int64_t value=opl_ref[p][c]+((int64_t)opl_ref[p+1][c]-opl_ref[p][c])*frac/44100;
+            CHECK(vq_cap[at+j][c]==value);
+        }
+    }
+    struct audio_vm_stats st=vstats(v);
+    CHECK(st.opl_events==11 && !st.late_events && !st.skips);
+    CHECK(st.rendered>62*AUDIO_QUANTUM && st.rendered<(uint64_t)62*AUDIO_QUANTUM*48000/44100+4);
+    uint32_t hz10=(uint32_t)((uint64_t)st.opl.crossings[0]*480000/st.opl.frames);
+    CHECK(hz10>=4350 && hz10<=4450); /* source clock stays at 48k */
+    destroy(v,true); unsigned silent=vq_n; vq_run(1);
+    for (unsigned j=silent;j<vq_n;j++) CHECK(!vq_cap[j][0] && !vq_cap[j][1]);
+    vq_end(); empty(); audio.caps.output_rate=48000;
+    puts("DOS VM 44.1 kHz transport: exact resampled OPL reference across periods, fixed virtual pitch/clock, source teardown without cached replay PASS");
+}
+
 static void test_vm_audio(void)
 {
-    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_opl();
+    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_opl(); test_vm_physical_rate();
     audio.ready = false;
     puts("DOS VM audio output: PASS (attach/revoke/release, every PCM layout exact at 2:1, DAC, ADPCM refused, 32 fresh blocks and the 16-bit phase through the mixer, pause gap kept, stalled guest beside native and a second VM, hold/skip/re-anchor without replay, CT1745 and source gains, OPL3 exact against a reference chip, routing, late events, GAP)");
 }

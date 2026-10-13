@@ -142,6 +142,21 @@ int main(void)
     nic_context.pci.fn = 1;
     devices_snapshot(&snapshot); assert(!device(0x10018)->driver[0]);
     nic_count = 0;
+    pci[2]=(struct pci_func){.vendor=0x1274,.device=0x5000,.class_code=4,.subclass=1,.dev=5,.irq_line=11,.irq_pin=1,.bar={0xd001}};
+    npci=3; audio.backend_pci=pci[2]; audio.backend_name="es137x"; audio.backend_touched=true; audio.ready=true;
+    audio.reason="ready"; audio.caps.generation=41;
+    res[nres++]=(struct resource){RES_PORT,0xd000,0xd040,"es137x",41,RS_ACTIVE,false};
+    devices_snapshot(&snapshot);
+    assert(device(0x10028)->class_id==CIUKI_DEVICE_SOUND && !strcmp(device(0x10028)->driver,"es137x"));
+    assert(device(0x10028)->generation==41 && device(0x10028)->state==CIUKI_DEVICE_READY && device(0x10028)->resources[0].end==0xd040);
+    assert(snapshot.driver_count==15 && !strcmp(snapshot.drivers[11].name,"es137x") && snapshot.drivers[11].bound_devices==1);
+    for (unsigned i=0;i<snapshot.count;i++) assert(strcmp(snapshot.devices[i].name,"es137x"));
+    audio.ready=false; audio.quarantined=true; audio.reason="stop_unproved";
+    devices_snapshot(&snapshot); assert(device(0x10028)->state==CIUKI_DEVICE_QUARANTINED && snapshot.drivers[11].state==CIUKI_DEVICE_QUARANTINED);
+    audio.backend_pci=(struct pci_func){0}; audio.backend_name="sb16"; audio.ready=true; audio.quarantined=false;
+    devices_snapshot(&snapshot); assert(device(0x50001)->bus_type==CIUKI_BUS_LEGACY && !strcmp(device(0x50001)->name,"Creative Sound Blaster 16"));
+    assert(!strcmp(snapshot.drivers[11].name,"sb16") && snapshot.drivers[11].bound_devices==1);
+    memset(&audio,0,sizeof(audio)); npci=2; nres--;
     extended = 1; devices_snapshot(&snapshot); assert(!strcmp(snapshot.cpu_brand, "Synthetic Pentium III CPU"));
     /* Count cap and zeroed tail: more unique owners/PCI than device slots. */
     static char owners[64][16]; nres = 64; npci = 32;

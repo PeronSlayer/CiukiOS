@@ -4,6 +4,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/audio.h>
 #include <ciuki/ac97.h>
+#include <ciuki/audio_backend.h>
 #include <ciuki/files.h>
 #include <ciuki/signal.h>
 #include <ciuki/timing.h>
@@ -90,7 +91,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
 {
     if (m->left > 100 || m->right > 100 || m->mute > 1 || m->save_state || m->save_error) return -EINVAL;
     kmutex_lock(&control_lock);
-    int err = audio.ready ? ac97_set_master(&ac97, m) : 0;
+    int err = audio.ready ? audio_backend_master(m) : 0;
     if (err) { audio_fail(-EIO); kmutex_unlock(&control_lock); return -EIO; }
     audio.master = *m;
     err = save_master();
@@ -108,13 +109,15 @@ static uint64_t non_silent_end; /* output position after the last nonzero publis
 void audio_diagnostics(struct ciuki_audio_diagnostics *out)
 {
     uint32_t f = irq_save();
+    struct audio_transport b; audio_backend_snapshot(&b);
+    const struct pci_func *pci=audio.backend_pci.vendor ? &audio.backend_pci : &ac97.pci;
     *out = (struct ciuki_audio_diagnostics){ .version=1, .size=sizeof(*out),
-        .codec_id=ac97.codec_id, .controller=(uint32_t)ac97.pci.vendor << 16 | ac97.pci.device,
-        .flags=(audio.ready ? CIUKI_AUDIO_DIAG_READY : 0) | (ac97.running ? CIUKI_AUDIO_DIAG_RUNNING : 0) |
-               (ac97.quarantine ? CIUKI_AUDIO_DIAG_QUARANTINE : 0),
-        .irq_line=ac97.pci.irq_line, .civ=ac97.cursor.civ, .picb=ac97.cursor.remaining,
-        .fetched_frames=ac97.fetched, .irqs=ac97.irqs, .last_error=audio.error ? audio.error : audio.init_error,
-        .power=ac97.power, .master=ac97.master, .pcm=ac97.pcm_volume, .rate=ac97.rate };
+        .codec_id=b.codec_id, .controller=(uint32_t)pci->vendor << 16 | pci->device,
+        .flags=(audio.ready ? CIUKI_AUDIO_DIAG_READY : 0) | (b.running ? CIUKI_AUDIO_DIAG_RUNNING : 0) |
+               (b.quarantine ? CIUKI_AUDIO_DIAG_QUARANTINE : 0),
+        .irq_line=b.irq, .civ=b.slot, .picb=b.remaining,
+        .fetched_frames=b.fetched, .irqs=b.irqs, .last_error=audio.error ? audio.error : audio.init_error,
+        .power=b.power, .master=b.master, .pcm=b.pcm_volume, .rate=b.rate };
     irq_restore(f);
 }
 static void playback_log(bool failed)
@@ -144,6 +147,7 @@ void audio_fail(int error)
 void audio_service(void)
 {
     if (!audio.ready) return;
+    struct audio_transport b; audio_backend_snapshot(&b);
     uint64_t start = ktime_cycles();
     if (audio.running && audio.last_service_cycles && g_tsc_per_ms) {
         uint64_t gap = (start - audio.last_service_cycles) * 1000 / g_tsc_per_ms;
@@ -156,35 +160,38 @@ void audio_service(void)
     /* An inactive VM can still have nonzero PCM queued. Source state alone
      * does not prove that the DMA lead is silence. */
     bool tail = audio.running && (!active || idle_since);
-    ac97.idle_tail = tail && ac97.frame_base + ac97.retired * AUDIO_QUANTUM >= non_silent_end;
+    audio_backend_idle(tail && b.frame_base + b.retired * AUDIO_QUANTUM >= non_silent_end);
     bool control = false; /* a transport stop has its own deadline, not the 1 ms service budget */
-    int err = ac97_progress(&ac97);
+    int err = audio_backend_progress();
+    if (err==-EAGAIN) return; /* transient coherent-cursor retry, no source consumed */
+    audio_backend_snapshot(&b);
     /* Even the current period must be known silence: DCH proves fetch,
      * not that nonzero data in the codec FIFO has reached the output. */
-    bool silent = ac97.frame_base + ac97.retired * AUDIO_QUANTUM >= non_silent_end;
-    if (err && tail && silent && ac97.tail_drained) {
+    bool silent = b.frame_base + b.retired * AUDIO_QUANTUM >= non_silent_end;
+    if (err && tail && silent && b.tail_drained) {
         /* Idle tail: an underrun carries no client data. Stop the transport
          * normally instead of failing the backend; a source restarts it. */
         klog("[audio] idle-tail transport stop err=%d published=%llu retired=%llu halts=%llu tail_ms=%llu",
-             err, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)ac97.dma_halts, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
-        err = ac97_stop(&ac97); audio.running = false; ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
-    } else if (!err && tail && silent && ac97.published - ac97.retired <= 1) {
+             err, (unsigned long long)b.published, (unsigned long long)b.retired, (unsigned long long)b.dma_halts, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
+        err = audio_backend_stop(); audio.running = false; audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false); control = true;
+    } else if (!err && tail && silent && b.published - b.retired <= 1) {
         /* Drained to the period the DMA plays: ac97_publish never rewrites the
          * CIV/PIV slots, so the queue cannot be extended and the refusal
          * failed the backend (QEMU campaign 13, image 22320ccc: the AUDIO_LEAD
          * tail kept while a DOS VM is attached drained between VMPLAY stages
          * 4 and 5). Inside the tail that period is silence: stop as above. */
         klog("[audio] idle-tail transport stop drained published=%llu retired=%llu tail_ms=%llu",
-             (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
-        err = ac97_stop(&ac97); audio.running = false; ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
+             (unsigned long long)b.published, (unsigned long long)b.retired, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
+        err = audio_backend_stop(); audio.running = false; audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false); control = true;
     } else if (err) {
-        struct ac97_cursor c = {0}; int oe = ac97_observe(&ac97, &c);
-        klog("[audio] progress err=%d observe=%d civ=%u piv=%u remaining=%u status=%04x published=%llu retired=%llu running=%u halts=%llu",
-             err, oe, c.civ, c.piv, c.remaining, c.status, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, audio.running, (unsigned long long)ac97.dma_halts);
+        klog("[audio] progress err=%d backend=%s slot=%u remaining=%u published=%llu retired=%llu running=%u halts=%llu",
+             err, audio.backend_name ? audio.backend_name : "ac97", b.slot, b.remaining,
+             (unsigned long long)b.published, (unsigned long long)b.retired, audio.running, (unsigned long long)b.dma_halts);
     }
-    audio.fetched = ac97.fetched; audio.played_output = ac97.frame_base + ac97.generation_fetched;
-    audio.fifo = ac97.fifo_errors;
-    audio.halts = ac97.dma_halts; audio.deadlines = ac97.deadline_misses;
+    audio_backend_snapshot(&b);
+    audio.fetched = b.fetched; audio.played_output = b.frame_base + b.generation_fetched;
+    audio.fifo = b.fifo_errors;
+    audio.halts = b.dma_halts; audio.deadlines = b.deadline_misses;
     /* Publish until the lead is restored: one period per service let any
      * service delay erode the lead permanently (QEMU evidence 2026-10-11:
      * published=770 retired=769 → CELV/DCH halt). */
@@ -198,12 +205,13 @@ void audio_service(void)
     if (tail_start) { idle_since = g_ticks; control = true; }
     unsigned limit, published_now = 0;
     unsigned lead = audio_refill_lead(active, tail_start, audio_vm_attached && audio_vm_attached(), &limit);
-    while (!err && (active || audio.running) && ac97.published - ac97.retired < lead && published_now++ < limit) {
+    while (!err && (active || audio.running) && b.published - b.retired < lead && published_now++ < limit) {
         bool mixed = audio.running && active;
         if (!audio.running) {
             memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
         } else audio_mix(quantum, AUDIO_QUANTUM);
-        err = ac97_publish(&ac97, quantum);
+        err = audio_backend_publish(quantum);
+        audio_backend_snapshot(&b);
         if (!err && mixed && !first_playback) {
             first_playback = true;
             playback_start = g_ticks; playback_next = g_ticks;
@@ -213,8 +221,8 @@ void audio_service(void)
                 non_silent_end = audio.output; break;
             }
         }
-        if (!err && !audio.running && ac97.published == AUDIO_LEAD) {
-            err = ac97_start(&ac97); audio.running = !err;
+        if (!err && !audio.running && b.published == AUDIO_LEAD) {
+            err = audio_backend_start(); audio.running = !err; audio_backend_snapshot(&b);
         }
     }
     playback_log(err != 0);
@@ -225,21 +233,21 @@ void audio_service(void)
          * dropped the last ~0.3 s of fetched audio when the channel was reset
          * at once (evidence 2026-10-11), and codecs settle without clicks. */
         if (g_ticks - idle_since >= AUDIO_IDLE_TAIL_MS && silent) {
-            err = ac97_stop(&ac97); audio.running = false;
-            ac97.frame_base = audio.output; idle_since = 0; ac97.idle_tail = false; control = true;
+            err = audio_backend_stop(); audio.running = false;
+            audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false); control = true;
         }
     } else if (active) {
         idle_since = 0; /* a new source cancels the idle tail */
     }
-    if (!control && ktime_elapsed_us(start, 1000)) { audio.deadlines++; ac97.deadline_misses++; }
+    if (!control && ktime_elapsed_us(start, 1000)) { audio.deadlines++; audio_backend_deadline(); }
     uint64_t elapsed = (g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms : 0);
     /* Transport control (stop, the idle-tail burst) is accounted apart from refill work. */
     uint32_t *peak = control ? &audio.max_control_us : &audio.max_service_us;
     if (elapsed > *peak) *peak = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
     if (err) {
         klog("[audio] backend failure err=%d published=%llu retired=%llu running=%u active=%u",
-             err, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, audio.running, active);
-        audio_fail(-EIO); kmutex_lock(&control_lock); ac97_shutdown(); kmutex_unlock(&control_lock);
+             err, (unsigned long long)b.published, (unsigned long long)b.retired, audio.running, active);
+        audio_fail(-EIO); kmutex_lock(&control_lock); audio_backend_shutdown(); kmutex_unlock(&control_lock);
     }
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
@@ -250,7 +258,8 @@ static void audio_worker(void *arg)
     for (;;) {
         if (audio.error) {
             kmutex_lock(&control_lock);
-            if (ac97.ready) ac97_shutdown();
+            struct audio_transport b; audio_backend_snapshot(&b);
+            if (b.ready) audio_backend_shutdown();
             kmutex_unlock(&control_lock);
             task_sleep_ms(1000); continue;
         }
@@ -261,7 +270,8 @@ static void audio_worker(void *arg)
          * the stream writers wake `changed`; the deadline is only a safety net:
          * short while the first periods are published, under half a period
          * while running, long when idle. */
-        unsigned wait_ms = audio.running ? 4 : ac97.published && ac97.published < AUDIO_LEAD ? 1 : 50;
+        struct audio_transport b; audio_backend_snapshot(&b);
+        unsigned wait_ms = audio.running ? 4 : b.published && b.published < AUDIO_LEAD ? 1 : 50;
         kwait_wait_until(&audio.changed, refill_pending, 0, deadline_after_ms(wait_ms));
     }
 }
@@ -284,7 +294,7 @@ static void audio_boot_tone(void)
     if (!audio_boot_tone_enabled(g_boot.flags) || !audio.ready) return;
     struct ciuki_mixer_master saved_master = audio.master;
     struct ciuki_mixer_master test = { .version=1, .size=32, .left=50, .right=50 };
-    int err = ac97_set_master(&ac97, &test);
+    int err = audio_backend_master(&test);
     struct audio_stream *s = 0;
     if (!err) { audio.master = test; err = audio_stream_open(&s); }
     uint64_t limit = deadline_after_ms(3000);
@@ -313,14 +323,17 @@ static void audio_boot_tone(void)
     playback_log(err != 0);
     /* The diagnostic tone must not rewrite AUDIO.CFG. */
     kmutex_lock(&control_lock);
-    int restore = audio.ready ? ac97_set_master(&ac97, &saved_master) : 0;
+    int restore = audio.ready ? audio_backend_master(&saved_master) : 0;
     audio.master = saved_master;
-    if (restore) { audio_fail(-EIO); ac97_shutdown(); }
+    if (restore) { audio_fail(-EIO); audio_backend_shutdown(); }
     kmutex_unlock(&control_lock);
     klog("[audio] boot_tone=1khz frames=%u result=%d restore=%d", sent, err, restore);
 }
 static void audio_init_log(int err)
 {
+    if (audio.backend_name && strncmp(audio.backend_name,"ac97",sizeof("ac97"))) {
+        klog("[audio] backend=%s error=%d reason=%s",audio.backend_name,err,audio.reason); return;
+    }
     klog("[audio] controller=%04x:%04x codec=%08x ready=%08x power=%04x master=%04x pcm=%04x rate=%u irq=%u error=%d reason=%s",
          ac97.pci.vendor, ac97.pci.device, ac97.codec_id, ac97.global_status,
          ac97.power, ac97.master, ac97.pcm_volume, ac97.rate, ac97.pci.irq_line, err, audio.reason);
@@ -338,14 +351,13 @@ void audio_init(struct vfs *v)
     kwait_init(&audio.changed); kmutex_init(&control_lock);
     audio_settings_load(v);
     if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
-    int err = ac97_init();
+    int err = audio_backend_init();
     audio.init_error = err;
     audio_init_log(err);
     if (err) return;
-    audio.master_in_codec = !ac97.software_master;
     struct task *worker = task_create_kernel("audio-refill", audio_worker, 0, P_DEVICE);
     if (!worker) {
-        audio.reason = "worker_exhausted"; audio.error = -ENOMEM; ac97_shutdown(); return;
+        audio.reason = "worker_exhausted"; audio.error = -ENOMEM; audio_backend_shutdown(); return;
     }
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
@@ -487,14 +499,15 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
         else { s->gain[0] = record[2]; s->gain[1] = record[3]; }
         break;
     case AUDIO_GET_STATUS: {
+        struct audio_transport b; audio_backend_snapshot(&b);
         struct ciuki_audio_status status = { .version=1, .size=112, .queued_frames=s->queued,
-            .state=audio.error ? 2 : s->started ? 1 : 0, .output_rate=AUDIO_RATE,
+            .state=audio.error ? 2 : s->started ? 1 : 0, .output_rate=audio_output_rate(),
             .generation=audio.caps.generation, .accepted_frames=s->accepted, .consumed_frames=s->consumed,
             .output_frames=audio.output, .fetched_frames=audio.fetched, .source_starvation=s->starvation,
             .fifo_errors=audio.fifo, .dma_halts=audio.halts, .deadline_misses=audio.deadlines,
             .last_error=audio.error, .stream_generation=s->generation,
             .max_service_us=audio.max_service_us, .max_irq_us=audio.max_irq_us,
-            .transport_frames=(uint32_t)(ac97.published * AUDIO_QUANTUM - ac97.generation_fetched) };
+            .transport_frames=(uint32_t)(b.published * AUDIO_QUANTUM - b.generation_fetched) };
         memcpy(record, &status, size); break;
     }
     case AUDIO_RESET: audio_stream_reset(s); break;

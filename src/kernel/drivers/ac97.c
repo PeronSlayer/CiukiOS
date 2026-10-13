@@ -5,6 +5,7 @@
 #include <ciuki/mm.h>
 #include <ciuki/task.h>
 #include <ciuki/ac97.h>
+#include <ciuki/audio_backend.h>
 #include <ciuki/timing.h>
 
 struct ac97_device ac97;
@@ -26,10 +27,16 @@ static void write_io(void *cookie, uint16_t port, uint32_t v, unsigned width)
 }
 static uint64_t now_io(void *cookie) { (void)cookie; return g_ticks; }
 static void sleep_io(void *cookie, uint32_t ms) { (void)cookie; task_sleep_ms(ms); }
+static unsigned ac97_offset(struct ac97_device *d, unsigned off)
+{
+    if (d->sis && off < 0x30 && ((off & 15) == 6 || (off & 15) == 8)) off ^= 14;
+    return off;
+}
+static unsigned ac97_units(struct ac97_device *d) { return d->sis ? 1024 : 512; }
 static uint32_t rd(struct ac97_device *d, unsigned off, unsigned width)
-{ return d->io.read(d->io.cookie, d->nabm + off, width); }
+{ return d->io.read(d->io.cookie, d->nabm + ac97_offset(d,off), width); }
 static void wr(struct ac97_device *d, unsigned off, uint32_t v, unsigned width)
-{ d->io.write(d->io.cookie, d->nabm + off, v, width); }
+{ d->io.write(d->io.cookie, d->nabm + ac97_offset(d,off), v, width); }
 static void stage_log(struct ac97_device *d, const char *stage, const char *result)
 {
     /* Cached NAM reads only. Reading CAS for diagnostics would acquire it
@@ -328,7 +335,7 @@ int ac97_observe(struct ac97_device *d, struct ac97_cursor *out)
         struct ac97_cursor c = { .civ = civ, .status = rd(d, 0x16, 2),
             .remaining = rd(d, 0x18, 2), .piv = rd(d, 0x1a, 1) };
         if (civ == rd(d, 0x14, 1) && c.piv == rd(d, 0x1a, 1)) {
-            if (c.civ >= 32 || c.piv >= 32 || c.remaining > 512 || c.status == 0xffff) return -EIO;
+            if (c.civ >= 32 || c.piv >= 32 || c.remaining > ac97_units(d) || c.status == 0xffff) return -EIO;
             d->cursor = c; *out = c; return 0;
         }
     }
@@ -345,7 +352,7 @@ int ac97_progress(struct ac97_device *d)
     uint64_t outstanding = d->published - d->retired;
     if (delta >= outstanding || c.piv != ((c.civ + 1) & 31)) return -EIO;
     if (delta) { d->retired += delta; d->last_progress = d->io.now(d->io.cookie); }
-    uint64_t fetched = d->retired * AUDIO_QUANTUM + (512 - c.remaining) / 2;
+    uint64_t fetched = d->retired * AUDIO_QUANTUM + (ac97_units(d) - c.remaining) / (d->sis ? 4 : 2);
     if (fetched < d->generation_fetched) return -EIO;
     d->fetched += fetched - d->generation_fetched;
     d->generation_fetched = fetched;
@@ -372,7 +379,7 @@ int ac97_publish(struct ac97_device *d, const struct audio_frame *pcm)
         if (slot == c.civ || slot == c.piv) return -EIO;
     }
     memcpy(d->pcm[slot], pcm, AUDIO_QUANTUM * sizeof(*pcm));
-    d->bdl[slot].length = (1u << 31) | 512;
+    d->bdl[slot].length = (1u << 31) | ac97_units(d);
     /* x86 coherent PCI DMA: compiler release barrier orders payload and BDL
      * stores before the strongly ordered I/O publication. */
     __asm__ volatile("" ::: "memory");
@@ -440,7 +447,7 @@ static void transport_publish(struct ac97_device *d)
      * prefetched descriptor valid; IRQ enables remain clear during proof. */
     for (unsigned i = 0; i < 2; i++) {
         memset(d->pcm[i], 0, AUDIO_QUANTUM * sizeof(struct audio_frame));
-        d->bdl[i].length = (1u << 31) | 512;
+        d->bdl[i].length = (1u << 31) | ac97_units(d);
     }
     __asm__ volatile("" ::: "memory");
     wr(d, 0x15, 1, 1);
@@ -494,6 +501,11 @@ static int controller_activate(struct ac97_device *d)
     if (!err) { stage_next(d, "controller_reset"); err = ac97_controller_reset(d); }
     if (!err) { stage_next(d, "dma_reset"); err = channel_reset(d, operation_deadline(d)); }
     if (!err) err = ac97_codec_prepare(d);
+    if (!err && d->sis) {
+        d->saved_sis_gate=rd(d,0x4c,2); d->sis_gate_changed=true;
+        wr(d,0x4c,d->saved_sis_gate | 1,2);
+        if (!(rd(d,0x4c,2)&1)) err=-EIO;
+    }
     if (!err) {
         transport_publish(d);
         stage_next(d, "pci_master");
@@ -507,14 +519,18 @@ static int controller_activate(struct ac97_device *d)
 }
 static bool supported(const struct pci_func *p)
 {
-    return p->vendor == 0x8086 && p->class_code == 4 && p->subclass == 1 &&
-        (p->device == 0x2415 || p->device == 0x2425 || p->device == 0x2445 || p->device == 0x2485 || p->device == 0x24c5);
+    return p->class_code == 4 && p->subclass == 1 &&
+        ((p->vendor == 0x8086 && (p->device == 0x2415 || p->device == 0x2425 || p->device == 0x2445 || p->device == 0x2485 || p->device == 0x24c5)) ||
+         (p->vendor == 0x1039 && p->device == 0x7012) ||
+         (p->vendor == 0x10de && (p->device == 0x01b1 || p->device == 0x006a)));
 }
 static bool controller_layout(struct ac97_device *d, uint32_t boot_flags)
 {
     const struct pci_func *p=&d->pci;
-    bool twin=(boot_flags & CBI_F_SMBIOS_QEMU) && p->device==0x2415;
-    d->nam_bytes=twin?1024:256;d->nabm_bytes=twin?256:64;
+    d->sis=p->vendor==0x1039 && p->device==0x7012;
+    d->nvidia=p->vendor==0x10de;
+    bool twin=(boot_flags & CBI_F_SMBIOS_QEMU) && p->vendor==0x8086 && p->device==0x2415;
+    d->nam_bytes=twin?1024:256;d->nabm_bytes=twin ? 256 : (d->sis || d->nvidia) ? 128 : 64;
     d->pcm_unity=twin?0:0x0808;
     d->software_master=twin;
     uint32_t nam=p->bar[0]&~(uint32_t)(d->nam_bytes-1);
@@ -598,6 +614,10 @@ void ac97_shutdown(void)
         else d->irq_attached = false;
     }
     if (!unsafe && d->codec_changed && ac97_codec_restore(d)) unsafe = true;
+    if (!unsafe && d->sis_gate_changed) {
+        wr(d,0x4c,d->saved_sis_gate,2);
+        if (rd(d,0x4c,2)!=d->saved_sis_gate) unsafe=true;
+    }
     if (!unsafe && d->touched) {
         config_command(&d->pci, d->command);
         if ((config_read(&d->pci, 4) & 0xffff) != d->command) unsafe = true;
@@ -641,7 +661,8 @@ int ac97_init(void)
     if (!controller_layout(d,g_boot.flags)) {
         audio.reason = "invalid_bars"; return -ENODEV;
     }
-    if (!routed(p)) { audio.reason = "routing_unqualified"; return -ENODEV; }
+    if (!(p->command&1) && (p->command&4)) { audio.reason="firmware_state_unreadable"; return -ENODEV; }
+    if (!(p->vendor == 0x8086 ? routed(p) : audio_pci_routed(&d->io,p))) { audio.reason = "routing_unqualified"; return -ENODEV; }
     for (unsigned i = 0; i < pci_count(); i++) {
         const struct pci_func *peer = pci_get(i);
         if (peer->bus == p->bus && peer->dev == p->dev && peer->fn == 6 && peer->class_code == 7 && !modem_idle(d, peer)) {
@@ -662,6 +683,7 @@ int ac97_init(void)
          * firmware ownership fail without reset or takeover. */
         for (unsigned off = 0; off <= 0x20; off += 0x10)
             if ((rd(d, off + 0xb, 1) & 1) || !(rd(d, off + 6, 2) & AC97_DCH)) err = -EBUSY;
+        if (d->nvidia && ((rd(d,0x7b,1)&1) || !(rd(d,0x76,2)&AC97_DCH))) err=-EBUSY;
     }
     if (!err) {
         d->bdl_phys = pmm_alloc_zone(ZONE_DMA);

@@ -1343,11 +1343,12 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     # A FIFO file backend keeps COM1 file output bounded by the host collector.
     args+=['-serial','none' if devices.get('serial')=='none' else 'file:serial.fifo']
     audio_exception = devices.get('audio')
-    if audio_exception not in (None, 'none', 'ac97'): raise res.Refusal('unknown audio device exception')
-    if profile.get('audio') or audio_exception == 'ac97':
+    capture_devices = {'ac97': 'AC97', 'es1370': 'es1370', 'sb16': 'sb16'}
+    if audio_exception not in (None, 'none', *capture_devices): raise res.Refusal('unknown audio device exception')
+    if profile.get('audio') or audio_exception in capture_devices:
         args += ['-audiodev', 'none,id=silent']
-    if audio_exception == 'ac97':
-        args += ['-audiodev', 'wav,id=cap,path=audio.wav', '-device', 'AC97,audiodev=cap']
+    if audio_exception in capture_devices:
+        args += ['-audiodev', 'wav,id=cap,path=audio.wav', '-device', capture_devices[audio_exception]+',audiodev=cap']
     elif profile.get('audio') and audio_exception != 'none':
         args += ['-device', profile['audio']+',audiodev=silent']
     for index,disk in fixture_disks(case):
@@ -1830,7 +1831,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         if case.get('audio_expectations') and result['outcome'] == 'pass':
             try:
                 if not result['cleanup']['clean']: raise EvidenceError('QEMU must stop before WAV analysis')
-                if case.get('device_exceptions',{}).get('audio') != 'ac97': raise EvidenceError('WAV expectations require AC97 capture')
+                if case.get('device_exceptions',{}).get('audio') not in ('ac97', 'es1370', 'sb16'): raise EvidenceError('WAV expectations require a supported audio capture')
                 result['audio'] = check_audio_wav(directory/'audio.wav', case['audio_expectations'])
                 if result['audio']['failures']: raise EvidenceError('audio waveform: '+', '.join(result['audio']['failures']))
             except (OSError, ValueError, RuntimeError, EOFError, wave.Error) as e:

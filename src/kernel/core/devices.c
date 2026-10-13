@@ -159,16 +159,19 @@ static void drivers(struct ciuki_devices_info *out)
         {"i8042", "Native PS/2 only when selected at boot"},
         {"firmware-input", "Sole firmware-first PS/2 controller lease"},
         {"ata-pio", "Legacy ATA/ATAPI; disabled in safe mode"},
-        {"ac97", "Qualified Intel ICH AC97 only"},
+        {"ac97", "Intel ICH, SiS 7012 and nForce AC97; safe mode disables activation"},
         {"e100", "Retained PCI binding; safe mode disables NIC activation"},
         {"rtl8139", "Retained PCI binding; safe mode disables NIC activation"},
         {"ne2000", "Retained PCI binding; safe mode disables NIC activation"},
     };
     for (unsigned i = 0; i < ARRAY_SIZE(builtins); i++) {
         struct ciuki_driver_record *r = &out->drivers[out->driver_count++];
-        string(r->name, sizeof(r->name), builtins[i].name);
+        /* The frozen ABI has sixteen driver slots. Its existing audio slot
+         * reports the selected transport without adding or truncating rows. */
+        bool selected_audio=equal(builtins[i].name,"ac97") && audio.backend_name;
+        string(r->name, sizeof(r->name), selected_audio ? audio.backend_name : builtins[i].name);
         string(r->build, sizeof(r->build), CIUKI_BUILD_ID);
-        string(r->policy, sizeof(r->policy), builtins[i].policy);
+        string(r->policy, sizeof(r->policy), selected_audio ? "Selected PCM transport; safe mode disables activation" : builtins[i].policy);
         r->state = CIUKI_DEVICE_ABSENT;
         for (unsigned k = 0; k < out->count; k++) {
             const struct ciuki_device_record *d = &out->devices[k];
@@ -202,10 +205,13 @@ void devices_snapshot(struct ciuki_devices_info *out)
     for (unsigned k = 0; k < inventory.function_count; k++) {
         const struct pci_func *p = &inventory.functions[k];
         unsigned id = 0x10000u | ((unsigned)p->bus << 8) | ((unsigned)p->dev << 3) | p->fn;
-        bool bound = ac97.pci.vendor && p->bus == ac97.pci.bus && p->dev == ac97.pci.dev && p->fn == ac97.pci.fn &&
-                     p->vendor == ac97.pci.vendor && p->device == ac97.pci.device && (ac97.touched || ac97.ready || ac97.quarantine);
+        const struct pci_func *sound_pci=audio.backend_pci.vendor ? &audio.backend_pci : &ac97.pci;
+        const char *sound_driver=audio.backend_name ? audio.backend_name : "ac97";
+        bool bound = sound_pci->vendor && p->bus == sound_pci->bus && p->dev == sound_pci->dev && p->fn == sound_pci->fn &&
+                     p->vendor == sound_pci->vendor && p->device == sound_pci->device &&
+                     (audio.backend_touched || ac97.touched || audio.ready || audio.quarantined || ac97.quarantine);
         struct ciuki_device_record *d = append(out, id, pci_class(p), CIUKI_BUS_PCI,
-            "PCI function", bound ? "ac97" : "", bound ? (audio.quarantined ? CIUKI_DEVICE_QUARANTINED :
+            "PCI function", bound ? sound_driver : "", bound ? (audio.quarantined ? CIUKI_DEVICE_QUARANTINED :
             audio.ready ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT) : CIUKI_DEVICE_FIRMWARE_FIRST,
             bound ? audio.reason : "No native driver bound; firmware configuration retained.");
         if (!d) continue;
@@ -225,7 +231,7 @@ void devices_snapshot(struct ciuki_devices_info *out)
         }
         if (p->irq_pin && p->irq_line < 16) resource(d, RES_IRQ, p->irq_line, p->irq_line + 1, 0);
         if (p->class_code == 2) network_binding(d, p);
-        if (bound) { owner_resources(d, "ac97"); d->generation = ac97.generation ? ac97.generation : d->generation; }
+        if (bound) { owner_resources(d, sound_driver); d->generation = audio.caps.generation ? audio.caps.generation : ac97.generation; }
     }
     /* Registry owners become legacy logical devices. Special owners below
      * are represented once by their actual backend rather than inferred PCI bindings. */
@@ -233,7 +239,7 @@ void devices_snapshot(struct ciuki_devices_info *out)
         const struct resource *r = &inventory.resources[k];
         if (r->state == RS_RELEASED || equal(r->owner, "input") || equal(r->owner, "i8042") ||
             equal(r->owner, "firmware-input") || equal(r->owner, "boot-framebuffer") || equal(r->owner, "fbdev") ||
-            !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma")) continue;
+            !strncmp(r->owner, "net-", 4) || equal(r->owner, "ata0") || equal(r->owner, "ata1") || equal(r->owner, "ac97") || equal(r->owner, "ac97-dma") || equal(r->owner, "es137x") || equal(r->owner, "via82xx") || equal(r->owner, "sb16")) continue;
         bool seen = false;
         for (unsigned j = 0; j < k; j++) if (inventory.resources[j].state != RS_RELEASED && equal(inventory.resources[j].owner, r->owner)) seen = true;
         if (seen) continue;
@@ -283,9 +289,16 @@ void devices_snapshot(struct ciuki_devices_info *out)
             activation(d, "ata"); owner_resources(d, owner);
         }
     }
+    if (audio.backend_name && equal(audio.backend_name,"sb16") && audio.backend_touched) {
+        struct ciuki_device_record *d=append(out,0x50001,CIUKI_DEVICE_SOUND,CIUKI_BUS_LEGACY,
+            "Creative Sound Blaster 16","sb16",audio.quarantined ? CIUKI_DEVICE_QUARANTINED :
+            audio.ready ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT,audio.reason);
+        if (d) d->generation=audio.caps.generation;
+        owner_resources(d,"sb16");
+    }
     bool sound = false;
     for (unsigned k = 0; k < out->count; k++) if (out->devices[k].class_id == CIUKI_DEVICE_SOUND) sound = true;
-    if (!sound) append(out, 0x50000, CIUKI_DEVICE_SOUND, CIUKI_BUS_LEGACY, "Audio output", "ac97",
+    if (!sound) append(out, 0x50000, CIUKI_DEVICE_SOUND, CIUKI_BUS_LEGACY, "Audio output", audio.backend_name ? audio.backend_name : "ac97",
                        CIUKI_DEVICE_ABSENT, audio.reason ? audio.reason : "No supported audio device.");
     drivers(out);
 }

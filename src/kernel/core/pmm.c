@@ -183,6 +183,23 @@ uint32_t pmm_alloc_contig(uint32_t pages)
     return 0;
 }
 
+uint32_t pmm_alloc_dma_run(uint32_t pages, uint32_t alignment)
+{
+    if (!pages || pages > 3840 || !alignment || alignment > 4096 || (alignment & (alignment - 1))) return 0;
+    uint32_t flags = irq_save();
+    if (zone_free[ZONE_DMA] >= pages) {
+        for (uint32_t start = (256u + alignment - 1) & ~(alignment - 1); start <= 4096u - pages; start += alignment) {
+            uint32_t i;
+            for (i = 0; i < pages && !used(start + i); i++);
+            if (i != pages) continue;
+            for (i = 0; i < pages; i++) set_used(start + i);
+            zone_free[ZONE_DMA] -= pages;
+            irq_restore(flags); return start << 12;
+        }
+    }
+    irq_restore(flags); return 0;
+}
+
 void pmm_free(uint32_t phys)
 {
     uint32_t pfn = phys >> 12;

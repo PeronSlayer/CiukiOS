@@ -112,6 +112,18 @@ class AudioWaveTests(unittest.TestCase):
             with self.assertRaises(runner.res.Refusal):
                 runner.qemu_args('fixture', profile, broken, '12345678', self.path, self.path)
 
+    def test_second_set_capture_arguments(self):
+        case = copy.deepcopy(runner.load(ROOT / 'tests/suites/f4-audio.json')['cases'][0])
+        profile = runner.load(ROOT / 'tests/profiles' / (case['profile'] + '.json'))
+        for backend in ('es1370', 'sb16'):
+            with self.subTest(backend=backend):
+                case['device_exceptions']['audio'] = backend
+                args, _ = runner.qemu_args('fixture', profile, case, '12345678', self.path, self.path)
+                self.assertEqual(args.count(backend + ',audiodev=cap'), 1)
+                self.assertIn('wav,id=cap,path=audio.wav', args)
+                self.assertNotIn('AC97,audiodev=silent', args)
+                self.assertNotIn('AC97,audiodev=cap', args)
+
     def test_vm_audio_selector_and_absent_backend(self):
         selected = selector('f4:vm-audio run=12345678', 'fw_cfg', True)
         self.assertEqual((selected['phase'], selected['probe']), (4, 'vm-audio'))

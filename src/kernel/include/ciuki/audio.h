@@ -4,6 +4,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/boot_info.h>
 #include <ciuki/sync.h>
+#include <ciuki/registry.h>
 #define AUDIO_STREAMS 8u
 #define AUDIO_RING 2048u
 #define AUDIO_QUANTUM 256u
@@ -47,9 +48,12 @@ struct audio_state {
     uint32_t commitment_pages, max_service_us, max_irq_us, max_service_gap_us, max_control_us;
     int error, init_error;
     bool initialized, ready, running, pending, quarantined, master_in_codec;
-    const char *reason, *settings_reason;
+    const char *reason, *settings_reason, *backend_name;
+    struct pci_func backend_pci;
+    bool backend_touched;
 };
 extern struct audio_state audio;
+static inline unsigned audio_output_rate(void) { return audio.caps.output_rate ? audio.caps.output_rate : AUDIO_RATE; }
 struct file_description;
 struct process;
 struct vfs;

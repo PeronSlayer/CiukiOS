@@ -23,3 +23,9 @@ only on its first name lookup. Both files are installed at `/System/hwids/`.
 The names are derived data from third-party Windows INF metadata. The Windows
 driver binaries remain outside CiukiOS and are not executable as kernel
 drivers or included in the image.
+
+F4-11 adds three AudioPCI controller names absent from the INF-derived table
+(`1274:5000`, `1274:1371`, `1274:5880`), using the Linux ens1370 device table
+referenced in [the transport notes](../../docs/design/f4-audio-second-set.md).
+These are supplementary names; they do not alter the INF generation counts
+above or imply physical qualification.

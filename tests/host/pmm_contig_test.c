@@ -41,6 +41,16 @@ int main(void)
     uint32_t normal = zone_normal(), dma = zone_dma();
     CHECK(normal == 12288 && dma > 3000);               /* 16..64 MiB; the kernel image is reserved */
     CHECK(!pmm_alloc_contig(0));
+    CHECK(!pmm_alloc_dma_run(0,8) && !pmm_alloc_dma_run(8,0) && !pmm_alloc_dma_run(8,3) && !pmm_alloc_dma_run(3841,8));
+    uint32_t isa=pmm_alloc_dma_run(8,8);
+    CHECK(isa>=0x300000 && isa+32768<=0x1000000 && !(isa&32767));
+    CHECK((isa&0x1ffff)+32768<=0x20000 && zone_dma()==dma-8 && zone_normal()==normal);
+    for (unsigned i=0;i<8;i++) CHECK(!pmm_page_free(isa/PAGE_SIZE+i));
+    release(isa,8); CHECK(zone_dma()==dma);
+    /* There is no NORMAL fallback, even with all of it free. */
+    for (unsigned pfn=256;pfn<4096;pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_DMA]--; }
+    CHECK(!pmm_alloc_dma_run(8,8) && zone_normal()==normal);
+    fresh();
 
     /* A run comes from the NORMAL zone, aligned, exactly accounted, all pages used. */
     uint32_t run = pmm_alloc_contig(57);

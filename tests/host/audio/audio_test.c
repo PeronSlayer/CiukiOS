@@ -38,34 +38,79 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn condition, void *arg, uint6
     while (!condition(arg) && !deadline_passed(deadline)) task_sleep_ms(1);
     return condition(arg);
 }
-static struct resource audio_resources[12];
+static struct resource audio_resources[64];
 static unsigned resource_releases, resource_quarantines, irq_removals;
-const struct resource *registry_get(unsigned i) { CHECK(i<12);return &audio_resources[i]; }
+const struct resource *registry_get(unsigned i) { CHECK(i<64);return &audio_resources[i]; }
 int registry_activate(int h,gen_t generation)
 {
-    CHECK(h>=0&&h<12&&audio_resources[h].generation==generation&&audio_resources[h].state==RS_CLAIMED);
+    CHECK(h>=0&&h<64&&audio_resources[h].generation==generation&&audio_resources[h].state==RS_CLAIMED);
     audio_resources[h].state=RS_ACTIVE;return 0;
 }
 int registry_quiesce(int h,gen_t generation,registry_idle_proof_fn proof)
 {
-    CHECK(h>=0&&h<12&&audio_resources[h].generation==generation&&audio_resources[h].state==RS_ACTIVE);
+    CHECK(h>=0&&h<64&&audio_resources[h].generation==generation&&audio_resources[h].state==RS_ACTIVE);
     audio_resources[h].state=RS_QUIESCING;CHECK(proof(h,generation));return 0;
 }
 int registry_release(int h,uint32_t generation)
 {
-    CHECK(h>=0&&h<12&&audio_resources[h].generation==generation&&audio_resources[h].state==RS_QUIESCING);
+    CHECK(h>=0&&h<64&&audio_resources[h].generation==generation&&audio_resources[h].state==RS_QUIESCING);
     audio_resources[h].state=RS_RELEASED;resource_releases++;return 0;
 }
 int registry_quarantine(int h,gen_t generation)
 {
-    CHECK(h>=0&&h<12&&audio_resources[h].generation==generation);
+    CHECK(h>=0&&h<64&&audio_resources[h].generation==generation);
     audio_resources[h].state=RS_QUARANTINED;resource_quarantines++;return 0;
 }
 int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
-{ CHECK(irq==11&&handler&&!strcmp(owner,"ac97"));irq_removals++;return 0; }
+{ CHECK(irq<16&&handler&&owner);irq_removals++;return 0; }
+static struct pci_func second_pci[8];
+static unsigned second_pci_count, second_claim_next, second_irq_adds, second_pic_masks;
+static int second_claim_failure=-1;
+unsigned pci_count(void) { return second_pci_count; }
+const struct pci_func *pci_get(unsigned i) { CHECK(i<second_pci_count); return &second_pci[i]; }
+int registry_claim(enum res_type type,uint32_t start,uint32_t end,const char *owner,bool share)
+{
+    if (second_claim_failure>=0 && second_claim_next>=(unsigned)second_claim_failure) return -EBUSY;
+    CHECK(second_claim_next<64 && end>start && owner);
+    unsigned h=second_claim_next++;
+    audio_resources[h]=(struct resource){type,start,end,owner,100+h,RS_CLAIMED,share};
+    return h;
+}
+int irq_chain_add(unsigned irq,irq_chain_handler_t fn,const char *owner)
+{ CHECK(irq<16 && fn && owner); second_irq_adds++; return 0; }
+void irq_set_handler(unsigned irq,irq_handler_t handler) { CHECK(irq==5); (void)handler; }
+void pic_mask(unsigned irq) { CHECK(irq==5); second_pic_masks++; }
+void pic_unmask(unsigned irq) { CHECK(irq==5); }
+uint32_t pmm_alloc_contig(uint32_t pages)
+{
+    if (fail_alloc()) return 0;
+    for (unsigned at=1;at+pages<=HOST_PAGES;at++) {
+        unsigned i; for (i=0;i<pages&&!allocated[at+i];i++);
+        if (i!=pages) continue;
+        for (i=0;i<pages;i++) { allocated[at+i]=true; pages_used++; }
+        return at*PAGE_SIZE;
+    }
+    return 0;
+}
+uint32_t pmm_alloc_dma_run(uint32_t pages,uint32_t alignment)
+{
+    if (fail_alloc()) return 0;
+    for (unsigned at=alignment;at+pages<=4096;at+=alignment) {
+        unsigned i; for (i=0;i<pages&&!allocated[at+i];i++);
+        if (i!=pages) continue;
+        for (i=0;i<pages;i++) { allocated[at+i]=true; pages_used++; }
+        return at*PAGE_SIZE;
+    }
+    return 0;
+}
 #include "../../../src/kernel/audio/stream.c"
 #include "../../../src/kernel/audio/mixer.c"
+#include "../../../src/kernel/drivers/audio_pci.c"
 #include "../../../src/kernel/drivers/ac97.c"
+#include "../../../src/kernel/drivers/es137x.c"
+#include "../../../src/kernel/drivers/sb16.c"
+#include "../../../src/kernel/drivers/via82xx.c"
+#include "../../../src/kernel/audio/backend.c"
 #include "../../../src/kernel/audio/audio_dev.c"
 
 struct mock_hw {
@@ -93,7 +138,7 @@ struct mock_hw {
     unsigned reset_delay, start_delay, resets, starts;
     uint64_t reset_at, start_at;
     uint32_t bdbar, pci_address;
-    uint16_t pci_command, input_sr, mic_sr;
+    uint16_t pci_command, input_sr, mic_sr, sis_gate;
     uint8_t modem_cr[2];
     uint16_t modem_sr[2];
     struct { uint16_t port; unsigned width; uint32_t value; } trace[1024];
@@ -120,7 +165,9 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
         if(reg==0x26) return (h->codec[reg/2]&0xff00) | (!h->power_stuck && h->tick>=h->power_ready_at ? 0xf : 0);
         return h->codec[reg/2];
     }
-    unsigned off=port-0x200;
+    unsigned off=ac97_offset(h->device,port-0x200);
+    if(off==0x4c) return h->sis_gate;
+    if(off==0x76) return AC97_DCH;
     if(off==0x34) {
         CHECK(width==1);
         if(h->busy || h->cas_owned || h->tick < h->busy_until)return 1;
@@ -163,7 +210,7 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
     if(off==0x16) {
         if(h->ich3 && (h->cr&1) && !h->start_stuck && h->tick>=h->start_at &&
            (!(h->codec[0x2a/2]&1) || h->codec[0x2c/2]==48000)) {
-            h->sr&=~AC97_DCH;h->remaining=512;h->piv=1;
+            h->sr&=~AC97_DCH;h->remaining=ac97_units(h->device);h->piv=1;
             if(h->exhausted_start) { h->sr|=AC97_DCH|AC97_CELV|AC97_LVBCI;h->civ=h->lvi;h->remaining=0; }
         }
         if(!h->cr && !h->stop_stuck && h->tick >= h->stop_after)h->sr|=AC97_DCH;
@@ -187,7 +234,7 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
         CHECK((h->pci_address&0xfc)==4 && width==2);
         if(h->ich3 && (value&4)) {
             CHECK(h->bdbar==h->device->bdl_phys && h->bdbar && h->lvi==1);
-            for(unsigned i=0;i<2;i++)CHECK(h->device->bdl[i].address && h->device->bdl[i].length==((1u<<31)|512));
+            for(unsigned i=0;i<2;i++)CHECK(h->device->bdl[i].address && h->device->bdl[i].length==((1u<<31)|ac97_units(h->device)));
         }
         h->pci_command=value;return;
     }
@@ -197,7 +244,8 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
         h->posted=true;h->posted_reg=port-0x100;h->posted_value=h->reject ? value^1u : value;
         h->busy_until=h->tick+h->post_delay;return;
     }
-    unsigned off=port-0x200;
+    unsigned off=ac97_offset(h->device,port-0x200);
+    if(off==0x4c) { CHECK(width==2); h->sis_gate=value; return; }
     if(off==0x2c) {
         if(h->cold_stuck) return;
         if(h->ich3) CHECK(!(h->pci_command&4));
@@ -209,7 +257,7 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
     if(off==0x10 && !h->bdbar_stuck)h->bdbar=value;
     if(off==0x15) {
         unsigned slot=value;
-        CHECK(h->device->bdl[slot].length==((1u<<31)|512));
+        CHECK(h->device->bdl[slot].length==((1u<<31)|ac97_units(h->device)));
         if(!h->any_pcm)CHECK(h->device->pcm[slot][0].left==123);
         h->lvi=value;h->lvi_writes++;
     }
@@ -231,7 +279,7 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
                           (h->device->analog_warning && h->tick>=h->analog_wait_started+5000));
                     for(unsigned i=0;i<2;i++)for(unsigned j=0;j<AUDIO_QUANTUM;j++)
                         CHECK(!h->device->pcm[i][j].left && !h->device->pcm[i][j].right);
-                } else { h->sr&=~AC97_DCH;h->remaining=512;h->piv=(h->civ+1)%32; }
+                } else { h->sr&=~AC97_DCH;h->remaining=ac97_units(h->device);h->piv=(h->civ+1)%32; }
             }
             else if(!h->stop_stuck&&h->tick>=h->stop_after)h->sr|=AC97_DCH;
         }
@@ -264,7 +312,7 @@ static void test_codec(void)
     CHECK(!ac97_codec_restore(&d) && hw.codec[0x18/2]==0x8808 && hw.codec[0x2a/2]==1);
     hardware_setup(&d);d.pcm_unity=0;CHECK(!ac97_codec_prepare(&d) && hw.codec[0x18/2]==0);
     CHECK(!ac97_set_mute(&d,true) && hw.codec[0x18/2]==0x8000);
-    struct ac97_device layout={.pci={.device=0x2415,.bar={0x1001,0x2001}}};
+    struct ac97_device layout={.pci={.vendor=0x8086,.device=0x2415,.bar={0x1001,0x2001}}};
     CHECK(controller_layout(&layout,0) && layout.nam_bytes==256 && layout.nabm_bytes==64 && layout.pcm_unity==0x0808);
     CHECK(controller_layout(&layout,CBI_F_SMBIOS_QEMU) && layout.nam_bytes==1024 && layout.nabm_bytes==256 && !layout.pcm_unity);
     layout.pci.bar[0]=0x1101;CHECK(controller_layout(&layout,0) && !controller_layout(&layout,CBI_F_SMBIOS_QEMU));
@@ -916,6 +964,7 @@ static void test_persistence(void)
     proc_discard(child);CHECK(!file_close(client,delegated));supervisor->cwd=0;
     puts("audio settings: defaults, public refusal/delegation, alternating durable records and applied-unsaved/last saved restoration PASS");
 }
+#include "second_set_test.inc"
 int main(int argc,char **argv)
 {
     CHECK(argc==3);ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);
@@ -925,7 +974,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();test_second_set();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;
