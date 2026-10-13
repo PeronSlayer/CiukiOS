@@ -175,7 +175,7 @@ def build():
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
-                          *([str(library)] if name in ("desktop", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", *ACCESSORIES) else []),
+                          *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
                           *(["-lm"] if name in ACCESSORIES else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name == "regedit" else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)

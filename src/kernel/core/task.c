@@ -31,6 +31,7 @@ uint32_t g_starvation_boosts;
 volatile bool g_need_resched;
 
 static struct task *rq_head[P_COUNT], *rq_tail[P_COUNT];
+extern uint32_t dosvm_task_quantum(const struct task *, uint32_t) __attribute__((weak));
 static struct task *all_tasks;
 static struct task *idle_task;
 static uint32_t next_id = 1;
@@ -253,7 +254,7 @@ void schedule(void)
         next->prio = P_NORMAL;
     }
     g_need_resched = false;
-    slice_left = g_quantum_ticks;
+    slice_left = dosvm_task_quantum ? dosvm_task_quantum(next, g_quantum_ticks) : g_quantum_ticks;
     if (next == prev) {
         prev->state = T_RUNNING;
         irq_restore(f);

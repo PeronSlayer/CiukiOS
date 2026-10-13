@@ -415,6 +415,27 @@ class DesktopTests(unittest.TestCase):
                                     env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
             self.assertIn("PASS dosbox autorun", result.stdout)
 
+    def test_dosbox_loading(self):
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="dosbox-loading-", dir=parent) as temp:
+            folder = Path(temp)
+            inc = folder / "include/ciuki"
+            inc.mkdir(parents=True)
+            for name in ("dosvm.h", "channel.h", "surface.h"):
+                shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
+            shutil.copy2(ROOT / "apps/desktop/protocol.h", inc / "desktop.h")
+            binary = folder / "loading-test"
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+                            "-I", str(folder / "include"), "-I", str(ROOT / "src/kernel/include"),
+                            str(ROOT / "tests/host/desktop/dosbox_loading_test.c"), str(ROOT / "apps/desktop/protocol.c"),
+                            "-o", str(binary)], check=True)
+            for scenario in range(8):
+                result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
+                                        timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
+                self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")
+                self.assertIn("PASS dosbox loading replay", result.stdout)
+
     def test_tango_icon_provenance(self):
         c = load("shell_icon_test", ROOT / "apps/desktop/convert_icons.py")
         record = c.check()

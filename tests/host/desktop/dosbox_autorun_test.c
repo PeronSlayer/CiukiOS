@@ -81,6 +81,13 @@ int main(void)
     assert(n == 8 && keys[0].code == CIUKI_KEY_LEFTSHIFT && keys[1].code == CIUKI_KEY_A && keys[4].code == CIUKI_KEY_B);
     static const unsigned resume[] = {0, 0, 4, 4, 4, 6, 6, 7, 8};
     for (unsigned i = 0; i <= 8; i++) assert(dosbox_resume(keys, 8, i) == resume[i]);
+    char launched[2 * DOSBOX_COMMAND_MAX];
+    n = dosbox_launch_keys("\\DOOM\\DOOM.EXE -config CIUKI.CFG", keys, DOSBOX_KEYS_MAX);
+    assert(n > 0); replay(keys, n, launched, sizeof(launched));
+    assert(!strcmp(launched, "CLS\nCD \\DOOM\nDOOM.EXE -config CIUKI.CFG\n"));
+    longest[DOSBOX_COMMAND_MAX] = 0;
+    assert(dosbox_launch_keys(longest, keys, DOSBOX_KEYS_MAX) > 0);
+    assert(dosbox_launch_keys("DOOM", keys, 8) == -1);
     puts("PASS dosbox autorun: \\DIR\\PROGRAM split into CD and the program, US set-1 events decode back, refusals, focus-loss resume");
     return 0;
 }

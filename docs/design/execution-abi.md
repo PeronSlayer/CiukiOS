@@ -1234,22 +1234,39 @@ any reservation or sleep; results are copied back only on success.
 | 0, 4 | version, size | 1, 136 |
 | 8, 12 | id, generation | VM key from CREATE; input of every other operation |
 | 16 | i32 surface_fd | CREATE: owned writable 640x480 XRGB8888 surface (stride 2560) |
-| 20, 24 | state, reason | STATUS/CREATE output: 0 booting, 1 running, 2 stopped; reason when stopped (0 exit, 1 terminate, 2 fault, 3 reset, 4 timeout) |
+| 20, 24 | state, reason | STATUS/CREATE output: 0 booting, 1 running, 2 stopped; reason when stopped (0 exit, 1 terminate, 2 fault, 3 reset, 4 timeout); STATUS launch failure: DOS EXEC error when known |
 | 28 | focused | FOCUS input 0/1; STATUS output |
-| 32 | changed | PRESENT output: 1 when rows were written |
+| 32 | changed | PRESENT/PRESENT_BANDS output: 1 when rows were written; STATUS: VIDEO_READY=1, LAUNCH_FAILED=2 |
 | 36 | video_mode | output: guest BIOS mode (BDA 0049h) |
-| 40 | name[32] | CREATE: 1-31 printable ASCII bytes, NUL, zero padding |
-| 72 | ciuki_input_event | INPUT: one desktop event with the F2 validation rules |
+| 40 | name[32] | CREATE: 1-31 printable ASCII bytes, NUL, zero padding; STATUS failure: last console context, at most 31 bytes and NUL |
+| 72 | ciuki_input_event / presentation | INPUT: one desktop event with the F2 validation rules; PRESENT_BANDS: low/high u32 destination band mask at 72/76, remaining 32 bytes zero |
 | 112 | ciuki_rect | PRESENT output: damage rows, src=dst, full 640-pixel width |
 
 | Operation | Number | Semantics |
 | --- | --- | --- |
 | CREATE | 1 | Admit, create and boot one DOS VM bound to the caller and the surface; one VM per process. |
-| PRESENT | 2 | Render changed rows into the bound surface, at most once per 33 ms frame; integer scale, centred, black borders. |
+| PRESENT | 2 | Render changed 8-source-line bands into the bound surface; completion writes or programmed refresh for direct chain-4, integer scale, centred, black borders. |
 | INPUT | 3 | Requires focus. KEY events reach the guest keyboard (US layout BIOS words until the f3-01 device path); TEXT, MOTION and BUTTON are accepted and have no consumer yet. A full guest queue returns EAGAIN. |
 | FOCUS | 4 | Set focus; losing it releases held modifiers. |
 | CLOSE | 5 | Destroy the VM and drop the surface reference; a running VM is forcibly terminated. |
 | STATUS | 6 | State, reason, focus and video mode. |
+| LAUNCH | 7 | Once DOS is ready, arm command visibility immediately before typing its final Enter. EAGAIN before ready, EBUSY if already armed. The prompt does not arm it. |
+| PRESENT_BANDS | 8 | PRESENT plus an exact mask of destination 8-line bands written by this call; bits 60-63 are zero. |
+
+F3-13 additions preserve version 1, size 136 and every existing offset. All
+outputs must still be zero on input. An armed launch reports VIDEO_READY only
+after observing DOS EXEC and a supported video-mode set, BIOS drawing or VGA
+store. Its presentation is suppressed until then. An EXEC error or a return to
+keyboard input before any frame sets LAUNCH_FAILED; the native client retains
+an error panel. A direct CPU store is observed through the page dirty bit.
+Presentation retains the chain-4 window; BIOS/model mutations, latch semantics,
+teardown and digest/model consumers still close and harvest it.
+
+Window VM workers keep the normal run queue and starvation guard. Their
+quantum is capped at 4 ms without focus and 8 ms with focus (or the configured
+normal quantum, if shorter). This doubles their share among runnable peers
+when focused while bounding the delay before a native client can poll/present.
+Probe workers and all other tasks retain their ordinary quantum and priority.
 
 Authority is not a descriptor. The kernel marks a process at spawn only when
 its exact path is `/Programs/dosbox` and its parent is the bootstrap supervisor or

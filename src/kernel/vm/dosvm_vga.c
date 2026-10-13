@@ -121,6 +121,10 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
     /* Misc, sequencer and graphics-controller stores decide whether CPU
      * writes are a plain store into one plane (cvga_direct_plane). */
     if (window) dosvm_vga_direct(v);
+    if (write && v->launch_exec) {
+        cvga_geometry geometry;
+        if (cvga_get_geometry(&v->vga, &geometry) && !geometry.text) dosvm_launch_video(v);
+    }
     return 0;
 }
 
@@ -168,14 +172,17 @@ static void video_linear_seed(struct dosvm *v)
 static void video_harvest(struct dosvm *v)
 {
     unsigned want = v->video_direct, plane = want - 1;
+    bool harvested = false;
     for (unsigned i = 0; i < VIDEO_WINDOW_PAGES; i++) {
         uint32_t va = (VIDEO_WINDOW_PAGE + i) * PAGE_SIZE, pte = 0;
         if (!as_lookup(&v->as, va, &pte) || !(pte & DOSVM_PTE_DIRTY)) continue;
+        if (!harvested) { v->perf.harvests++; harvested = true; }
+        dosvm_launch_video(v);
+        v->perf.direct_pages++;
         as_map(&v->as, va, video_frame(v, want, i), PTE_U | PTE_W);
         if (want == VIDEO_LINEAR) {
             const uint8_t *bytes = P2V(v->frames[VIDEO_WINDOW_PAGE + i]);
-            for (unsigned at = 0; at < PAGE_SIZE; at++)
-                cvga_store_plane(&v->vga, at & 3, (i * PAGE_SIZE + at) & ~3u, bytes[at]);
+            cvga_store_chain4_span(&v->vga, i * PAGE_SIZE, bytes, PAGE_SIZE);
             v->video_linear_harvests++;
             continue;
         }
@@ -235,6 +242,8 @@ bool dosvm_vga_retry(struct dosvm *v, uint32_t address, uint32_t instruction, bo
 
 int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
 {
+    unsigned function = (f->tf.eax >> 8) & 255;
+    if (function == 0x0E) dosvm_console_byte(v, (uint8_t)f->tf.eax);
     dosvm_vga_model(v);                          /* before any BIOS mutation, including VBE */
     /* VBE 3.0 status: AL=4Fh function recognised, AH=01h call failed. Guest
      * VBE is unavailable through F4 (dos-dpmi-contract.md). */
@@ -260,7 +269,9 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     cvbios_regs r = {f->tf.eax, f->tf.ebx, f->tf.ecx, f->tf.edx,
                      f->tf.esi, f->tf.edi, f->tf.ebp, (uint16_t)f->es, (uint16_t)f->ds};
     v->video_bus_fault = false;
-    cvbios_int10(&v->video_bios, &r);
+    int handled = cvbios_int10(&v->video_bios, &r);
+    if (handled && (!function || function == 0x0E || function == 9 || function == 0x0A || function == 0x13))
+        dosvm_launch_video(v);
     dosvm_vga_direct(v);                          /* f3-06: the mode set may close the window */
     if (v->video_bus_fault) return -EFAULT;
     f->tf.eax = r.eax; f->tf.ebx = r.ebx; f->tf.ecx = r.ecx; f->tf.edx = r.edx;
@@ -561,15 +572,23 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
                       void *arg, uint64_t tick, struct ciuki_rect *damage)
 {
     memset(damage, 0, sizeof(*damage));
-    if (v->video_presented && tick - v->video_tick < DOSVM_FRAME_TICKS) return 0;
+    v->video_bands = 0;
+    if (v->launch_armed && !v->launch_ready) return 0;
+    /* Page flips are a completion signal even when the start address is
+     * unchanged. Plain mode 13h has no completion register: sample writable
+     * pages at the programmed VGA refresh, only while stores are pending. */
+    bool flip = v->video_starts != v->video_seen_start;
+    if (v->video_presented && v->video_direct == VIDEO_LINEAR && !flip &&
+        v->video_display == v->vga.display_changes &&
+        (tick - v->video_tick) * 1000u < vga_frame_us(&v->vga)) return 0;
+    uint64_t begin = dosvm_perf_clock();
     /* Take and clear the dirty granules atomically with respect to the VM
      * worker: a store after this point stays marked for the next frame. */
     uint32_t flags = irq_save();
     if (v->video_direct) video_harvest(v);        /* f3-06: pages stored through the window */
-    if (v->video_direct == VIDEO_LINEAR) video_map(v, 0); /* f3-07: planes authoritative for scanout */
     memcpy(v->video_taken, v->vga.dirty, sizeof(v->video_taken));
     memset(v->vga.dirty, 0, sizeof(v->vga.dirty));
-    uint32_t display = v->vga.display_changes;
+    uint32_t display = v->vga.display_changes, changes = v->vga.changes;
     irq_restore(flags);
     cvga_geometry g = {0};
     bool supported = cvga_get_geometry(&v->vga, &g) && g.width && g.height &&
@@ -586,13 +605,28 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     bool full = !v->video_presented || v->video_display != display ||
                 memcmp(&g, &v->video_geometry, sizeof(g));
     if (g.text) for (unsigned i = 0; i < CVGA_DIRTY_BYTES && !full; i++) full = v->video_taken[2][i] != 0;
+    if (!full && changes == v->video_changes && (!g.text || phase == v->video_phase)) {
+        v->video_tick = tick; v->video_phase = phase;
+        v->video_seen_start = v->video_starts;
+        v->perf.present_cycles += dosvm_perf_clock() - begin;
+        return 0; /* an idle prompt/game never scans every row at the poll rate */
+    }
+    if (!v->video_lut_valid || v->video_lut_display != display) {
+        for (unsigned i = 0; i < 256; i++) v->video_lut[i] = rgb(&v->vga, (uint8_t)i);
+        v->video_lut_display = display; v->video_lut_valid = true;
+    }
+    uint8_t bands[DOSVM_VIDEO_HEIGHT / DOSVM_VIDEO_BAND] = {0};
+    if (supported) for (unsigned y = 0; y < g.height; y++) {
+        unsigned band = y / DOSVM_VIDEO_BAND;
+        if (!bands[band] && (full || cvga_row_reads_dirty(&v->vga, y, v->video_taken) ||
+            (g.text && (phase ^ v->video_phase) && cvga_row_phase_sensitive(&v->vga, y)))) bands[band] = 1;
+    }
     unsigned first = DOSVM_VIDEO_HEIGHT, last = 0, rendered = UINT32_MAX;
     bool restart = false;
     for (unsigned y = 0; y < DOSVM_VIDEO_HEIGHT; y++) {
         bool inside = supported && y >= top && y < top + height;
         unsigned source = inside ? (y - top) / scale : 0;
-        bool dirty = full || (inside && (cvga_row_reads_dirty(&v->vga, source, v->video_taken) ||
-                       ((phase ^ v->video_phase) && cvga_row_phase_sensitive(&v->vga, source))));
+        bool dirty = full || (inside && bands[source / DOSVM_VIDEO_BAND]);
         if (!dirty) continue;
         if (!inside) memset(v->video_pixels, 0, sizeof(v->video_pixels));
         else if (source != rendered) {
@@ -602,18 +636,29 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
                 restart = true;
                 break;
             }
-            for (unsigned x = 0; x < width; x++)
-                v->video_pixels[left + x] = g.blank ? 0 : rgb(&v->vga, v->video_row[x / scale]);
+            for (unsigned x = 0, dest = left; x < g.width; x++) {
+                uint32_t pixel = g.blank ? 0 : v->video_lut[v->video_row[x]];
+                for (unsigned copy = 0; copy < scale; copy++) v->video_pixels[dest++] = pixel;
+            }
+            v->perf.converted_bytes += g.width;
             rendered = source;
         }
         int e = row(arg, y, v->video_pixels, sizeof(v->video_pixels));
-        if (e) { v->video_presented = false; return e; } /* retry whole after a partial write */
+        if (e) {
+            v->perf.present_cycles += dosvm_perf_clock() - begin;
+            v->video_presented = false; return e;
+        } /* retry whole after a partial write */
+        v->perf.rows++;
+        v->video_bands |= 1ull << (y / DOSVM_VIDEO_BAND);
         if (y < first) first = y;
         last = y + 1;
     }
     v->video_tick = tick; v->video_phase = phase; v->video_display = display;
+    v->video_changes = changes;
+    v->video_seen_start = v->video_starts;
     v->video_geometry = g;
-    v->video_presented = !restart;
+    v->video_presented = !restart && display == v->vga.display_changes;
+    v->perf.present_cycles += dosvm_perf_clock() - begin;
     if (!last) return 0;
     v->video_frames++;
     *damage = (struct ciuki_rect){0, (int32_t)first, 0, (int32_t)first, DOSVM_VIDEO_WIDTH, last - first};
@@ -632,6 +677,7 @@ static int hash_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
 }
 int dosvm_frame_digest(struct dosvm *v, uint64_t tick, struct dosvm_frame *out)
 {
+    dosvm_vga_sync(v, true); /* a reference/model consumer explicitly closes */
     struct frame_sink sink = {.next = 0};
     struct ciuki_rect damage;
     sha256_init(&sink.sha);

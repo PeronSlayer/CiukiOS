@@ -482,7 +482,7 @@ static void test_client_boundary(void)
     fake_current = 0;
     CHECK(create_window(0, "CiukiDOS", 0) == -EPERM);
     fake_current = &fake_proc[0];
-    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(7, &c, sizeof(c)) == -EINVAL);
+    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(9, &c, sizeof(c)) == -EINVAL);
     c = command_for(0, 0); c.surface_fd = 0; c.name[0] = 'X';
     CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c) - 1) == -EINVAL);
     c.version = 2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EOPNOTSUPP);

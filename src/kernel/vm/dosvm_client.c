@@ -122,7 +122,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     struct process *p = proc_current();
     if (!p || !p->dosvm_capability) return -EPERM;
     unsigned op = tf->ebx;
-    if (op < CIUKI_DOSVM_CREATE || op > CIUKI_DOSVM_STATUS) return -EINVAL;
+    if (op < CIUKI_DOSVM_CREATE || op > CIUKI_DOSVM_PRESENT_BANDS) return -EINVAL;
     if (tf->edx != sizeof(struct ciuki_dosvm_command)) return -EINVAL;
     struct ciuki_dosvm_command c, allowed;
     int e = copy_from_user(&c, tf->ecx, sizeof(c));
@@ -215,11 +215,35 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             c.state = public_state(v);
             c.reason = c.state == CIUKI_DOSVM_STOPPED ? v->info.reason : 0;
             c.focused = b->focused;
+            if (v->launch_exec && v->video_direct) for (unsigned i = 0; i < 16; i++) {
+                uint32_t pte = 0;
+                as_lookup(&v->as, 0xA0000 + i * PAGE_SIZE, &pte);
+                if (pte & 0x40) { dosvm_launch_video(v); break; }
+            }
+            c.changed = (!v->launch_armed || v->launch_ready ? CIUKI_DOSVM_VIDEO_READY : 0) |
+                        (v->launch_failed ? CIUKI_DOSVM_LAUNCH_FAILED : 0);
+            if (v->launch_failed && c.state != CIUKI_DOSVM_STOPPED) c.reason = v->launch_error;
+            if (v->launch_failed || c.state == CIUKI_DOSVM_STOPPED)
+                memcpy(c.name, v->console_line, sizeof(c.name) - 1);
             video_mode(v, &c);
+            dosvm_perf_report(v);
         } else if (!dosvm_valid(key)) e = -ESRCH;
-        else if (op == CIUKI_DOSVM_PRESENT) {
+        else if (op == CIUKI_DOSVM_LAUNCH) {
+            if (v->launch_armed) e = -EBUSY;
+            else if (!v->info.dos_ready) e = -EAGAIN;
+            else {
+                v->launch_armed = true;
+                v->video_presented = false;
+            }
+        } else if (op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS) {
             e = dosvm_vga_present(v, put_row, b->surface, g_ticks, &c.damage);
-            if (e >= 0) { c.changed = (uint32_t)e; e = 0; video_mode(v, &c); }
+            if (e >= 0) {
+                c.changed = (uint32_t)e; e = 0; video_mode(v, &c);
+                if (op == CIUKI_DOSVM_PRESENT_BANDS) {
+                    c.presentation.bands[0] = (uint32_t)v->video_bands;
+                    c.presentation.bands[1] = (uint32_t)(v->video_bands >> 32);
+                }
+            }
             else e = -EIO;
         } else if (op == CIUKI_DOSVM_FOCUS) {
             window_focus(b, c.focused);

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include "loading.h"
 
 static void command(struct ciuki_dosvm_command *c, uint32_t id, uint32_t generation)
 {
@@ -48,7 +49,8 @@ static uint64_t now_ms(void)
 static struct dosbox_key autorun[DOSBOX_KEYS_MAX];
 static unsigned autorun_count, autorun_next;
 static uint64_t autorun_at;   /* 0: not yet armed (VM still booting) */
-/* Types the next events of the command; 0, or -1 when the VM is gone. */
+static int autorun_launch_armed, autorun_launch_sent;
+/* Types the next events; 0, or -1 on a fatal VM/input error. */
 static int autorun_step(uint32_t id, uint32_t generation, int focused)
 {
     uint64_t now = now_ms();
@@ -56,6 +58,11 @@ static int autorun_step(uint32_t id, uint32_t generation, int focused)
     for (unsigned sent = 0; sent < AUTORUN_EVENTS_PER_TICK && autorun_next < autorun_count; sent++) {
         const struct dosbox_key *k = &autorun[autorun_next];
         struct ciuki_dosvm_command c;
+        if (k->code == CIUKI_KEY_ENTER && k->down && autorun_next + 2 == autorun_count && !autorun_launch_armed) {
+            command(&c, id, generation);
+            if (ciuki_dosvm(CIUKI_DOSVM_LAUNCH, &c)) return -1;
+            autorun_launch_armed = 1;
+        }
         command(&c, id, generation);
         c.event.type = CIUKI_INPUT_KEY; c.event.code = k->code; c.event.value = k->down;
         if (ciuki_dosvm(CIUKI_DOSVM_INPUT, &c)) {
@@ -65,9 +72,10 @@ static int autorun_step(uint32_t id, uint32_t generation, int focused)
                 return 0;
             }
             if (errno == ESRCH) return -1;
-            autorun_next = autorun_count;                        /* anything else: stop typing */
-            return 0;
+            return -1;
         }
+        if (k->code == CIUKI_KEY_ENTER && k->down && autorun_next + 2 == autorun_count)
+            autorun_launch_sent = 1;
         autorun_next++;
         if (k->line_end) { autorun_at = now + AUTORUN_LINE_MS; return 0; }
     }
@@ -102,7 +110,7 @@ int main(int argc, char **argv)
     }
     if (!name_valid(name)) return 2;
     if (typed_length) {
-        int n = dosbox_command_keys(typed, autorun, DOSBOX_KEYS_MAX);
+        int n = dosbox_launch_keys(typed, autorun, DOSBOX_KEYS_MAX);
         if (n <= 0) { fprintf(stderr, "dosbox: cannot type '%s' at the DOS prompt\n", typed); return 2; }
         autorun_count = (unsigned)n;
     }
@@ -111,9 +119,18 @@ int main(int argc, char **argv)
     int surface = ciuki_surface_create(CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT, CIUKI_SURFACE_XRGB8888);
     if (surface < 0) { perror("dosbox: surface"); return 1; }
     struct ciuki_dosvm_command c;
-    command(&c, 0, 0); c.surface_fd = surface; memcpy(c.name, name, len);
-    if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) { perror("dosbox: create"); close(surface); return 1; }
-    uint32_t id = c.id, generation = c.generation, server = 0;
+    uint32_t id = 0, generation = 0, server = 0;
+    uint32_t *pixels = ciuki_surface_map(surface, PROT_READ | PROT_WRITE);
+    if (pixels == (void *)-1 || !pixels) { close(surface); return 1; }
+    struct du_canvas canvas = {pixels, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT,
+                              {0, 0, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT}};
+    const char *icon = dosbox_launch_icon(typed);
+    uint64_t started = now_ms(), panel_at = 0, launch_at = 0;
+    int loading = !!typed_length, shown = !loading;
+    int failure_painted = 0;
+    const char *failure = NULL;
+    char detail[80] = "Preparing...";
+    if (loading) dosbox_panel(&canvas, name, icon, NULL, detail, 0);
     struct ciuki_message m;
     desk_message(&m, DESK_HELLO, 4);
     if (send_packet(channel, &m)) goto done;
@@ -122,6 +139,12 @@ int main(int argc, char **argv)
     desk_put32(m.data + 12, (uint32_t)len); memcpy(m.data + 16, name, len);
     m.fd_count = 1; m.fds[0] = surface;
     if (send_packet(channel, &m)) goto done;
+    command(&c, 0, 0); c.surface_fd = surface; memcpy(c.name, name, len);
+    if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
+        failure = "Unable to start";
+        snprintf(detail, sizeof(detail), "%s", strerror(errno));
+        loading = 1; result = 1;
+    } else { id = c.id; generation = c.generation; }
     int configured = 0, running = 1, focused = 0;
     while (running) {
         for (unsigned budget = 0; budget < 32; budget++) {
@@ -144,6 +167,7 @@ int main(int argc, char **argv)
             } else if (packet.opcode == DESK_FOCUS || packet.opcode == DESK_KEY ||
                        packet.opcode == DESK_MOTION || packet.opcode == DESK_BUTTON) {
                 if (packet.opcode == DESK_MOTION && packet.event.type == CIUKI_INPUT_WHEEL) continue;
+                if (!id || failure) continue;
                 command(&c, id, generation);
                 unsigned op = packet.opcode == DESK_FOCUS ? CIUKI_DOSVM_FOCUS : CIUKI_DOSVM_INPUT;
                 if (op == CIUKI_DOSVM_FOCUS) c.focused = focused = packet.focused ? 1 : 0;
@@ -156,32 +180,79 @@ int main(int argc, char **argv)
             }
         }
         if (!running) break;
+        if (failure) goto panel;
+        int polled_launch = autorun_launch_armed;
         command(&c, id, generation);
         if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) goto done;
-        if (c.state == CIUKI_DOSVM_STOPPED) break;             /* EXIT, reset or fault */
+        if (c.state == CIUKI_DOSVM_STOPPED) {
+            if (shown) break;
+            failure = c.reason == 4 ? "Startup timed out" : "Unable to start";
+            snprintf(detail, sizeof(detail), "%s", c.name[0] ? c.name : "Close this window and try again.");
+            result = 1;
+            goto panel;
+        }
+        if (polled_launch && (c.changed & CIUKI_DOSVM_LAUNCH_FAILED)) {
+            failure = "Program did not start";
+            snprintf(detail, sizeof(detail), "%s", c.name[0] ? c.name : "Check the program name and its files.");
+            result = 1;
+            goto panel;
+        }
         if (c.state == CIUKI_DOSVM_RUNNING && autorun_next < autorun_count) {
             if (!autorun_at) autorun_at = now_ms() + AUTORUN_SETTLE_MS;
-            if (autorun_step(id, generation, focused)) break;
+            if (autorun_step(id, generation, focused)) {
+                failure = "Unable to start";
+                snprintf(detail, sizeof(detail), "%s", strerror(errno));
+                result = 1;
+                goto panel;
+            }
         }
+        if (autorun_launch_sent && !launch_at) launch_at = now_ms();
+        if (loading && polled_launch && (c.changed & CIUKI_DOSVM_VIDEO_READY)) {
+            loading = 0; shown = 1;
+        }
+        if (loading && launch_at && now_ms() - launch_at > 60000) {
+            failure = "Startup timed out";
+            snprintf(detail, sizeof(detail), "The program has not displayed a frame.");
+            result = 1;
+        }
+        if (loading) goto panel;
         if (configured) {
             command(&c, id, generation);
-            if (ciuki_dosvm(CIUKI_DOSVM_PRESENT, &c)) {
+            if (ciuki_dosvm(CIUKI_DOSVM_PRESENT_BANDS, &c)) {
                 if (errno == ESRCH) break;
                 goto done;
             }
             if (c.changed) {
-                desk_message(&m, DESK_DAMAGE, 20);
-                desk_put32(m.data + 4, (uint32_t)c.damage.dst_x); desk_put32(m.data + 8, (uint32_t)c.damage.dst_y);
-                desk_put32(m.data + 12, c.damage.width); desk_put32(m.data + 16, c.damage.height);
-                if (send_packet(channel, &m)) goto done;
+                uint64_t bands = c.presentation.bands[0] | ((uint64_t)c.presentation.bands[1] << 32);
+                for (unsigned y = 0; y < CIUKI_DOSVM_HEIGHT / 8;) {
+                    if (!(bands & (1ull << y))) { y++; continue; }
+                    unsigned first = y++;
+                    while (y < CIUKI_DOSVM_HEIGHT / 8 && (bands & (1ull << y))) y++;
+                    desk_message(&m, DESK_DAMAGE, 20);
+                    desk_put32(m.data + 4, 0); desk_put32(m.data + 8, first * 8);
+                    desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, (y - first) * 8);
+                    if (send_packet(channel, &m)) goto done;
+                }
             }
         }
-        struct timespec pause = {.tv_nsec = 10000000}; nanosleep(&pause, NULL);
+        { struct timespec pause = {.tv_nsec = focused ? 2000000 : 10000000}; nanosleep(&pause, NULL); }
+        continue;
+panel:
+        if (configured && (failure ? !failure_painted : now_ms() - panel_at >= 80)) {
+            dosbox_panel(&canvas, name, icon, failure, detail, now_ms() - started);
+            desk_message(&m, DESK_DAMAGE, 20);
+            desk_put32(m.data + 4, 0); desk_put32(m.data + 8, 0);
+            desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, CIUKI_DOSVM_HEIGHT);
+            if (send_packet(channel, &m)) goto done;
+            panel_at = now_ms();
+            if (failure) failure_painted = 1;
+        }
+        { struct timespec pause = {.tv_nsec = 10000000}; nanosleep(&pause, NULL); }
     }
-    result = 0;
+    if (!failure) result = 0;
 done:
     command(&c, id, generation);
-    if (ciuki_dosvm(CIUKI_DOSVM_CLOSE, &c)) result = 1;
+    if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE, &c)) result = 1;
     desk_message(&m, DESK_CLOSE, 4); send_packet(channel, &m);
     close(surface); close(channel);
     return result;

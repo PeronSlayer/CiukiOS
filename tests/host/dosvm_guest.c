@@ -49,6 +49,8 @@
 #undef WTERMSIG
 #include <ciuki/abi.h>
 #define CIUKI_CPU_H
+uint64_t g_tsc_per_ms;
+static uint64_t read_tsc_serialized(void) { return 0; } /* instruction-clock host replay */
 #include <ciuki/kernel.h>
 #include <ciuki/task.h>
 #include <ciuki/input.h>
