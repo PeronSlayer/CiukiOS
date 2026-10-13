@@ -79,4 +79,14 @@ void audio_vm_tap(const struct audio_frame *out, unsigned frames);
 bool audio_vm_active(void);
 /* Any VM source attached (refill policy, audio_refill_lead). */
 bool audio_vm_attached(void);
+/* Successful physical publication, and a small coherent diagnostic snapshot.
+ * No printing in the refill worker. */
+struct audio_vm_diagnostic {
+    uint64_t published, pcm, opl, starved, fifo, halts;
+    uint32_t rate;
+    int error;
+    bool ready, attached;
+};
+void audio_vm_published(void);
+void audio_vm_diagnostic(struct dosvm_key, struct audio_vm_diagnostic *);
 #endif

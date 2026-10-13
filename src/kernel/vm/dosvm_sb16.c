@@ -10,7 +10,9 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/abi.h>
+#include <ciuki/audio_vm.h>
 #include "dosvm_internal.h"
+extern void audio_vm_diagnostic(struct dosvm_key, struct audio_vm_diagnostic *) __attribute__((weak));
 
 #define PCM_PER_PAGE (PAGE_SIZE / 4u)
 #define SB_IS16(x) ((x)->format & DOSVM_FORMAT_16BIT)
@@ -129,6 +131,7 @@ static void sb_begin(struct dosvm *v, const struct dosvm_sb_transfer *t)
     s->x.active = true; s->x.left = t->units; s->x.highspeed = highspeed;
     s->half_valid = s->carry_valid = false;
     s->sequence++;
+    dosvm_audio_record(v, DOSVM_AUDIO_PLAY, t->channel, t->rate, t->units);
 }
 static void sb_start(struct dosvm *v, struct dosvm_sb_transfer t, bool highspeed)
 {
@@ -431,7 +434,9 @@ static void sb_execute(struct dosvm *v)
         if (s->x.active && s->x.auto_init && !SB_IS16(&s->x) == (c == 0xDA)) s->x.exit_pending = true;
         break;
     case 0xE0: sb_reply(s, (uint8_t)~a[0]); break;
-    case 0xE1: sb_reply(s, 4); sb_reply(s, 5); break;
+    case 0xE1:
+        sb_reply(s, 4); sb_reply(s, 5);
+        dosvm_audio_record(v, DOSVM_AUDIO_VERSION, 4, 5, 0); break;
     case 0xE3: for (unsigned i = 0; i < sizeof(sb_copyright); i++) sb_reply(s, (uint8_t)sb_copyright[i]); break;
     case 0xE4: s->test = a[0]; break;
     case 0xE8: sb_reply(s, s->test); break;
@@ -469,6 +474,7 @@ static void sb_reset_port(struct dosvm *v, uint8_t value)
     s->in_need = s->in_count = 0; s->out_count = 0;
     if (!restore) { s->rate = 22050; s->rate_from_tc = false; s->speaker = false; }
     s->resets++;
+    dosvm_audio_record(v, DOSVM_AUDIO_RESET, s->resets, 0xAA, 0);
     sb_reply(s, 0xAA);
 }
 static uint8_t sb_io(struct dosvm *v, unsigned offset, bool write, uint8_t value)
@@ -523,6 +529,7 @@ int dosvm_audio_init(struct dosvm *v)
 {
     struct dosvm_audio *a = &v->audio;
     memset(a, 0, sizeof(*a));
+    a->diag.last_summary = g_ticks; a->diag.next_summary = g_ticks + 2000;
     for (unsigned i = 0; i < DOSVM_AUDIO_PAGES; i++) {
         uint32_t phys = pmm_alloc_zone(ZONE_NORMAL);
         if (!phys) return -ENOMEM;
@@ -685,4 +692,103 @@ bool dosvm_audio_opl_registers(struct dosvm_key key, uint8_t regs[512], uint64_t
     if (clock) *clock = dosvm_audio_now(v);
     irq_restore(flags);
     return true;
+}
+
+/* f4-13: recording does no formatting or output and is safe in the device
+ * timer/guest IRQ. Discovery has a lifetime budget; DMA blocks cannot turn
+ * verbose mode into a print on every guest interrupt. */
+void dosvm_audio_record(struct dosvm *v, unsigned kind, uint32_t a, uint32_t b, uint32_t c)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE) || !kind || kind >= ARRAY_SIZE(v->audio.diag.used)) return;
+    uint32_t f = irq_save();
+    if (v->audio.diag.used[kind] < 4) {
+        v->audio.diag.used[kind]++;
+        if (v->audio.diag.count == ARRAY_SIZE(v->audio.diag.event)) v->audio.diag.dropped++;
+        else {
+            unsigned at = (v->audio.diag.head + v->audio.diag.count++) % ARRAY_SIZE(v->audio.diag.event);
+            v->audio.diag.event[at].kind = (uint8_t)kind;
+            v->audio.diag.event[at].a = a; v->audio.diag.event[at].b = b; v->audio.diag.event[at].c = c;
+        }
+    }
+    irq_restore(f);
+}
+/* The CiukiDOS shared environment is an MCB at 1630h (runtime kernel,
+ * DOS_ENV_SEG), also inherited by Wolf3D. A DPMI client may have another
+ * environment: inspect the actual segment recorded at its entry instead.
+ * This reports what is offered to getenv, not an assertion that the game
+ * called getenv. Only BLASTER is printed, never other environment data. */
+static void audio_blaster(struct dosvm *v, char out[40])
+{
+    uint16_t env = v->dpmi.active && v->dpmi.clients ? v->dpmi.client[v->dpmi.clients - 1].env : 0x1630;
+    char bytes[512];
+    memcpy(out, "missing", sizeof("missing"));
+    if (!env || dosvm_read(v, (uint32_t)env << 4, bytes, sizeof(bytes))) return;
+    for (unsigned at = 0; at < sizeof(bytes) && bytes[at];) {
+        unsigned end = at;
+        while (end < sizeof(bytes) && bytes[end]) end++;
+        if (end == sizeof(bytes)) return;
+        if (end - at >= 8 && !memcmp(bytes + at, "BLASTER=", 8)) {
+            unsigned n = end - at - 8;
+            if (n >= 40) { memcpy(out, "too_long", sizeof("too_long")); return; }
+            for (unsigned i = 0; i < n; i++) {
+                unsigned char b = (unsigned char)bytes[at + 8 + i];
+                out[i] = b == ' ' ? '_' : b >= 33 && b <= 126 ? (char)b : '?';
+            }
+            out[n] = 0; return;
+        }
+        at = end + 1;
+    }
+}
+void dosvm_audio_log(struct dosvm *v)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE) || v->info.state >= DOSVM_STOPPING) return;
+    for (unsigned i = 0; i < v->dpmi.depth; i++)
+        if (v->dpmi.rec[i].flags & DPMI_RF_HWINT) return;
+    /* One short line per 100 ms, physical IF enabled, outside the complete
+     * guest IRQ chain (the caller owns that check). Never called by tick or
+     * the refill worker. UART polling must not consume a whole DMA lead. */
+    uint32_t f = irq_save();
+    if (!(f & V86_IF)) { irq_restore(f); return; }
+    uint64_t now = g_ticks;
+    if (now < v->audio.diag.next_log) { irq_restore(f); return; }
+    v->audio.diag.next_log = now + 100;
+    unsigned kind = 0; uint32_t a = 0, b = 0, c = 0;
+    if (v->audio.diag.attachment && v->audio.diag.count) {
+        unsigned at = v->audio.diag.head;
+        kind = v->audio.diag.event[at].kind; a = v->audio.diag.event[at].a;
+        b = v->audio.diag.event[at].b; c = v->audio.diag.event[at].c;
+        v->audio.diag.head = (uint8_t)((at + 1) % ARRAY_SIZE(v->audio.diag.event));
+        v->audio.diag.count--;
+    }
+    irq_restore(f);
+    unsigned id = v->info.key.id;
+    if (!v->audio.diag.attachment) {
+        v->audio.diag.attachment = true;
+        klog("[vm-audio] vm=%u gen=%u attach=%d base=220 irq=7 dma=1,5 dsp=4.05", id, v->info.key.generation, v->audio.diag.attach_error);
+    } else if (kind == DOSVM_AUDIO_RESET) klog("[vm-audio] vm=%u reset=%u reply=%02x", id, a, b);
+    else if (kind == DOSVM_AUDIO_VERSION) klog("[vm-audio] vm=%u version=%u.%02u", id, a, b);
+    else if (kind == DOSVM_AUDIO_PLAY) klog("[vm-audio] vm=%u play_dma=%u hz=%u units=%u", id, a, b, c);
+    else if (kind == DOSVM_AUDIO_DMA) klog("[vm-audio] vm=%u dma=%u address=%06x bytes=%u", id, a, b, c);
+    else if (!v->audio.diag.environment && v->audio.sb.resets) {
+        char blaster[40]; audio_blaster(v, blaster); v->audio.diag.environment = true;
+        klog("[vm-audio] vm=%u blaster=%s source=guest_env", id, blaster);
+    } else if (v->audio.sb.resets || v->audio.q.event_writes) {
+        struct audio_vm_diagnostic d = { .error=-ENODEV };
+        if (audio_vm_diagnostic) audio_vm_diagnostic(v->info.key, &d);
+        if (v->audio.diag.summary_pending) {
+            v->audio.diag.summary_pending = false;
+            klog("[vm-audio] vm=%u pcm=%llu fm=%llu fifo=%llu halt=%llu drop=%u", id,
+                 (unsigned long long)d.pcm, (unsigned long long)d.opl,
+                 (unsigned long long)d.fifo, (unsigned long long)d.halts, v->audio.diag.dropped);
+        } else if (now >= v->audio.diag.next_summary) {
+            uint64_t elapsed = now - v->audio.diag.last_summary;
+            uint64_t buffers = elapsed && d.published >= v->audio.diag.published ?
+                (d.published - v->audio.diag.published) * 1000 / elapsed : 0;
+            v->audio.diag.last_summary = now; v->audio.diag.published = d.published;
+            v->audio.diag.next_summary = now + 2000; v->audio.diag.summary_pending = true;
+            klog("[vm-audio] vm=%u ms=%llu ready=%u err=%d buffers_ps=%llu rate=%u starved=%llu attached=%u", id,
+                 (unsigned long long)now, d.ready, d.error, (unsigned long long)buffers,
+                 d.rate, (unsigned long long)d.starved, d.attached);
+        }
+    }
 }

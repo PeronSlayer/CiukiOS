@@ -21,6 +21,8 @@ static struct audio_frame quantum[AUDIO_QUANTUM];
  * native-only host harness does not link audio/vm_source.c). */
 extern bool audio_vm_active(void) __attribute__((weak));
 extern bool audio_vm_attached(void) __attribute__((weak));
+extern void audio_vm_published(void) __attribute__((weak));
+extern void serial_buffered(bool) __attribute__((weak));
 
 static uint32_t checksum(const struct audio_cfg *record)
 {
@@ -123,6 +125,9 @@ void audio_diagnostics(struct ciuki_audio_diagnostics *out)
 static void playback_log(bool failed)
 {
     if (!first_playback || playback_logged || !(g_boot.flags & CBI_F_VERBOSE)) return;
+    /* A polled UART record can exhaust the DMA lead on physical machines.
+     * Keep the counters, but print only after playback stops or fails. */
+    if (audio.running && !failed) return;
     uint64_t now = g_ticks;
     if (!failed && now < playback_next) return;
     struct ciuki_audio_diagnostics d;
@@ -141,6 +146,7 @@ void audio_wake(void)
 void audio_fail(int error)
 {
     audio.error = error; audio.ready = false;
+    if (serial_buffered) serial_buffered(false);
     audio_wake();
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
@@ -184,8 +190,8 @@ void audio_service(void)
              (unsigned long long)b.published, (unsigned long long)b.retired, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
         err = audio_backend_stop(); audio.running = false; audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false); control = true;
     } else if (err) {
-        klog("[audio] progress err=%d backend=%s slot=%u remaining=%u published=%llu retired=%llu running=%u halts=%llu",
-             err, audio.backend_name ? audio.backend_name : "ac97", b.slot, b.remaining,
+        klog("[audio] progress err=%d backend=%s slot=%u remaining=%u piv=%u sr=%04x published=%llu retired=%llu running=%u halts=%llu",
+             err, audio.backend_name ? audio.backend_name : "ac97", b.slot, b.remaining, b.prefetch, b.status,
              (unsigned long long)b.published, (unsigned long long)b.retired, audio.running, (unsigned long long)b.dma_halts);
     }
     audio_backend_snapshot(&b);
@@ -211,6 +217,7 @@ void audio_service(void)
             memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
         } else audio_mix(quantum, AUDIO_QUANTUM);
         err = audio_backend_publish(quantum);
+        if (!err && mixed && audio_vm_published) audio_vm_published();
         audio_backend_snapshot(&b);
         if (!err && mixed && !first_playback) {
             first_playback = true;
@@ -222,6 +229,7 @@ void audio_service(void)
             }
         }
         if (!err && !audio.running && b.published == AUDIO_LEAD) {
+            if (serial_buffered) serial_buffered(true);
             err = audio_backend_start(); audio.running = !err; audio_backend_snapshot(&b);
         }
     }
@@ -244,6 +252,7 @@ void audio_service(void)
     /* Transport control (stop, the idle-tail burst) is accounted apart from refill work. */
     uint32_t *peak = control ? &audio.max_control_us : &audio.max_service_us;
     if (elapsed > *peak) *peak = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
+    if (!audio.running && serial_buffered) serial_buffered(false);
     if (err) {
         klog("[audio] backend failure err=%d published=%llu retired=%llu running=%u active=%u",
              err, (unsigned long long)b.published, (unsigned long long)b.retired, audio.running, active);

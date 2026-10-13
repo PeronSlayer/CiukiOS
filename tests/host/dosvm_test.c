@@ -78,8 +78,17 @@ uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr,"unexpected panic: %s\n",fmt); abort(); }
 static unsigned dosvm_logs;
 static char last_dosvm_log[256];
+static unsigned vm_audio_logs;
+static char last_vm_audio_log[256];
 void klog(const char *fmt, ...)
 {
+    if (!strncmp(fmt, "[vm-audio]", 10)) {
+        CHECK(cpu_flags & V86_IF);
+        va_list ap; va_start(ap, fmt);
+        int n = vsnprintf(last_vm_audio_log, sizeof(last_vm_audio_log), fmt, ap);
+        va_end(ap);
+        CHECK(n > 0 && n < 128); vm_audio_logs++; return;
+    }
     if (strncmp(fmt, "[dosvm]", 7)) return;
     CHECK(cpu_flags & V86_IF);
     va_list ap; va_start(ap, fmt);
@@ -561,6 +570,7 @@ static void test_memory_services(void)
 #include "dosvm_dpmi_test.inc"
 #include "dosvm_timer_test.inc"
 #include "dosvm_vmaudio_test.inc"  /* f4-05: VM sources in the mixer (separate units) */
+#include "dosvm_game_audio_test.inc" /* f4-13: physical cursor and game protocols */
 #include "dosvm_workloads_test.inc"
 #include "dosvm_menu_test.inc"
 #include "dosvm_irq_stall_test.inc"
@@ -570,6 +580,7 @@ int main(void)
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
     test_vm_audio();
+    test_game_audio();
     test_workloads();
     test_timer();
     test_menu();

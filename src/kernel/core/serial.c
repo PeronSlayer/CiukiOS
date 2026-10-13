@@ -11,11 +11,19 @@
 static uint16_t uart_base;
 static bool uart_ok;
 static unsigned uart_timeouts;
+#define UART_LOG_BYTES 8192u
+static char uart_log[UART_LOG_BYTES];
+static unsigned uart_head, uart_used, uart_dropped;
+static bool uart_buffering, uart_drop_notice;
+static unsigned uart_fifo_bytes = 1;
 
 void serial_init(uint16_t base, uint16_t divisor)
 {
     uart_ok = false;
     uart_base = base;
+    uart_head = uart_used = uart_dropped = 0;
+    uart_buffering = uart_drop_notice = false;
+    uart_fifo_bytes = 1;
     if (!base)
         return;
     /* Presence probe: scratch register round trip. */
@@ -33,6 +41,7 @@ void serial_init(uint16_t base, uint16_t divisor)
     outb(base + 1, divisor >> 8);
     outb(base + 3, 0x03);           /* 8N1 */
     outb(base + 2, 0x07);           /* FIFO on, cleared */
+    if ((inb(base + 2) & 0xC0) == 0xC0) uart_fifo_bytes = 16;
     outb(base + 4, 0x03);           /* DTR, RTS */
     uart_ok = true;
     uart_timeouts = 0;
@@ -56,9 +65,49 @@ static void serial_putc(char c)
 
 void serial_write(const char *s, size_t n)
 {
+    if (!uart_ok) return;
+    uint32_t flags = irq_save();
+    if ((flags & 0x200) && (uart_buffering || uart_used || uart_drop_notice)) {
+        size_t bytes = n;
+        for (size_t i = 0; i < n; i++) if (s[i] == '\n') bytes++;
+        /* Drop a complete record rather than corrupting a prefix/suffix.
+         * BOOT.LOG has already captured the original line. */
+        if (bytes > UART_LOG_BYTES - uart_used) { uart_dropped++; uart_drop_notice = true; }
+        else for (size_t i = 0; i < n; i++) {
+            if (s[i] == '\n') { uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = '\r'; uart_used++; }
+            uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = s[i]; uart_used++;
+        }
+        irq_restore(flags); return;
+    }
+    /* Early boot and panic stay synchronous. A panic with physical IF clear
+     * cannot rely on the timer: drain queued bytes before its own record. */
+    while (uart_used && uart_ok) {
+        serial_putc(uart_log[uart_head]); uart_head = (uart_head + 1) % UART_LOG_BYTES; uart_used--;
+    }
+    irq_restore(flags);
     for (size_t i = 0; i < n && uart_ok; i++) {
         if (s[i] == '\n')
             serial_putc('\r');
         serial_putc(s[i]);
+    }
+}
+void serial_buffered(bool enabled)
+{
+    uint32_t flags = irq_save(); uart_buffering = enabled; irq_restore(flags);
+}
+void serial_tick(void)
+{
+    /* Called from the existing 1 ms timer. No waits, allocation, logging or
+     * formatting; THRE admits a burst only into an empty detected FIFO. */
+    if (!uart_ok || !(inb(uart_base + 5) & 0x20)) return;
+    if (!uart_used && uart_drop_notice) {
+        static const char notice[] = "[serial] result=log_dropped\r\n";
+        memcpy(uart_log, notice, sizeof(notice) - 1);
+        uart_head = 0; uart_used = sizeof(notice) - 1; uart_drop_notice = false;
+    }
+    unsigned count = uart_used < uart_fifo_bytes ? uart_used : uart_fifo_bytes;
+    for (unsigned i = 0; i < count; i++) {
+        outb(uart_base, (uint8_t)uart_log[uart_head]);
+        uart_head = (uart_head + 1) % UART_LOG_BYTES; uart_used--;
     }
 }
