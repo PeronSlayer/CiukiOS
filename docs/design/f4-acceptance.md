@@ -1,5 +1,36 @@
 # F4 implementation and acceptance evidence
 
+## f4-09: ICH3-M / CS4297A transport proof
+
+Directive: [stop-unproved bring-up](../directives/f4-09-ac97-cs4297a-stop-unproved.md).
+This supersedes f4-08's strict rate-register comparison and initial generic stop.
+
+- Intel [82801CAM ICH3-M, 290716-001](https://datasheet.lcsc.com/datasheet/pdf/7d520883a0f21f1845e4892c5243848a.pdf?productCode=C3247608),
+  sections 13.2.1–7: RR requires RPBM clear and resets the channel registers;
+  DCH defaults to one. CELV/LVBCI describe exhaustion, not every pause.
+  Activation resets an engine that has never run under driver ownership with
+  PCI bus mastering disabled, publishes two valid silent descriptors, then
+  enables bus mastering for a bounded start/pause/reset proof. Runtime stop
+  retains its DCH and stable-cursor requirement; failed proof retains DMA pages.
+- Cirrus [CS4297A, DS318PP6](https://statics.cirrus.com/pubs/proDatasheet/CS4297A_PP6.pdf),
+  printed pages 27–28 (body sections 4.13–16): contrary to the directive's
+  VRA premise, CS4297A advertises no VRA; 2Ch is read-only fixed 48 kHz.
+  Power readiness follows codec-ready after calibration. A CS4297A-like VRA
+  test is a synthetic compatibility model, not a claimed silicon feature.
+- Intel [AC'97 2.3](https://hands.com/~lkcl/ac97_r23.pdf), sections 5.8.2–3:
+  negotiate VRA only when advertised, verify 2Ah before writing 2Ch, and
+  disable VRA to select fixed 48 kHz if enabling/rate readback does not match.
+  A successful differing rate read is retained as raw evidence, not rejected;
+  all-ones, CAS/read errors and failure to disable VRA still fail activation.
+- The supplied `-110` cannot be attributed solely to pause: its timeout
+  returns `-EIO`, whereas controller/codec waits return `-ETIMEDOUT`.
+  Shutdown can replace an earlier failure's reason with `stop_unproved`.
+  Capture the first failing stage, raw 2Ah/2Ch, three bus-master status words
+  and PCM-out control/cursor before rollback; `rate` reports effective output.
+  These observations must distinguish power readiness from transport failure
+  on the next physical `L` capture. The silent proof does not change the
+  existing `L`-only boot tone or the diagnostics ABI.
+
 ## f4-08: physical AC'97 bring-up
 
 Directive: [T23 silence](../directives/f4-08-ac97-t23-silent.md). These
