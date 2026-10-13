@@ -18,7 +18,7 @@
 #include <unistd.h>
 
 struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
-    int writer_started, reload_pending; uint32_t portrait[256 * 256]; uint32_t serial, display_serial, audio_serial; uint64_t last_tick; };
+    int writer_started, reload_pending, hwid_loaded; char *hwid_pci; uint32_t portrait[256 * 256]; uint32_t serial, display_serial, audio_serial; uint64_t last_tick; };
 
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
@@ -77,6 +77,28 @@ static int boot_save(void *ctx, const char *text, size_t length)
     return r;
 }
 static int devices(void *ctx, struct ciuki_devices_info *out) { (void)ctx; return ciuki_devices(out); }
+/* The id database is intentionally opened on first Device Manager lookup.
+ * Its generator emits a flat, deterministic JSON object with no escaped
+ * strings, so lookup needs only bounded string scanning. */
+static int hwid_name(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
+{
+    struct cp_main *m = ctx;
+    if (!m->hwid_loaded) {
+        m->hwid_loaded = 1;
+        FILE *f = fopen("/System/hwids/pci-ids.json", "rb");
+        if (f && !fseek(f, 0, SEEK_END)) {
+            long length = ftell(f);
+            if (length > 0 && length <= 400 * 1024 && !fseek(f, 0, SEEK_SET)) {
+                m->hwid_pci = malloc((size_t)length + 1);
+                if (m->hwid_pci && fread(m->hwid_pci, 1, (size_t)length, f) == (size_t)length)
+                    m->hwid_pci[length] = 0;
+                else { free(m->hwid_pci); m->hwid_pci = NULL; }
+            }
+            fclose(f);
+        } else if (f) fclose(f);
+    }
+    return cp_hwid_lookup_json(m->hwid_pci, vendor, device, out, size);
+}
 static int load_sounds(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx; FILE *f = fopen(SOUND_CFG,"rb"); if (!f) return -1;
@@ -232,7 +254,7 @@ int main(int argc, char **argv)
     h->display = display_query;
     h->save_async=1;
     h->audio_diagnostics = audio_query;
-    h->devices = devices; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
+    h->devices = devices; h->hwid_name = hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
     FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
     if (f) { if (fread(m->portrait, 4, 256 * 256, f) == 256 * 256) h->portrait = m->portrait; fclose(f); }
     const char *display = getenv("CIUKI_DISPLAY");
@@ -248,14 +270,14 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
         if (m->writer_started) cfg_writer_stop(&m->writer);
-        free(m); return 1;
+        free(m->hwid_pci); free(m); return 1;
     }
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
     if (cp_attach(&m->app, &m->ui, page)) {
-        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); free(m); return 1;
+        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); free(m->hwid_pci); free(m); return 1;
     }
     int r = du_run(&m->window, idle, m);
     if (m->writer_started) cfg_writer_stop(&m->writer);
-    cp_detach(&m->app); du_window_destroy(&m->window); free(m);
+    cp_detach(&m->app); du_window_destroy(&m->window); free(m->hwid_pci); free(m);
     return r < 0 ? 1 : 0;
 }

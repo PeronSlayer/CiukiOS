@@ -450,7 +450,21 @@ static const char *class_icon(unsigned k)
         "device:harddisk", "device:cdrom", "device:sound-card", "device:network", "utilities-terminal"};
     return k < CIUKI_DEVICE_CLASSES ? names[k] : "settings:system";
 }
-static const char *product(const struct ciuki_device_record *d)
+int cp_hwid_lookup_json(const char *json, unsigned vendor, unsigned device, char *out, size_t size)
+{
+    if (!json || !out || size < 2) return -1;
+    char key[16]; snprintf(key, sizeof(key), "\"%04x:%04x\"", vendor & 0xffffu, device & 0xffffu);
+    const char *entry = strstr(json, key);
+    if (!entry || !(entry = strchr(entry + strlen(key), ':'))) return -1;
+    while (*++entry == ' ' || *entry == '\t' || *entry == '\r' || *entry == '\n') {}
+    if (*entry++ != '"') return -1;
+    size_t n = 0;
+    while (*entry && *entry != '"' && n + 1 < size && n < 64) out[n++] = *entry++;
+    if (*entry != '"' || !n) return -1;
+    out[n] = 0;
+    return 0;
+}
+static const char *product(struct cp_app *a, const struct ciuki_device_record *d, char *resolved, size_t size)
 {
     /* Display names only; never used to select a driver. PCI IDs checked
      * against Linux pci_ids.h and pciutils pci.ids (device-manager.md). */
@@ -466,6 +480,8 @@ static const char *product(const struct ciuki_device_record *d)
         {0x1106, 0x3099, "VIA VT8366 host bridge"}, {0x1106, 0x3074, "VIA VT8233 ISA bridge"},
     };
     if (d->bus_type == CIUKI_BUS_PCI) {
+        if (a->host.hwid_name && !a->host.hwid_name(a->host.ctx, d->vendor, d->device, resolved, size) && resolved[0])
+            return resolved;
         for (unsigned i = 0; i < sizeof(table) / sizeof(table[0]); i++)
             if (table[i].vendor == d->vendor && table[i].device == d->device) return table[i].name;
         if (d->pci_class == 1 && d->subclass == 1) return "PCI IDE controller";
@@ -500,7 +516,8 @@ void cp_tree_build(struct cp_app *a)
             it->children = 1;
             if (!it->expanded) continue;
             unsigned n = a->tree_count++;
-            snprintf(a->device_names[k], sizeof(a->device_names[k]), "%s%s", product(d),
+            char resolved[65];
+            snprintf(a->device_names[k], sizeof(a->device_names[k]), "%s%s", product(a, d, resolved, sizeof(resolved)),
                      d->state == CIUKI_DEVICE_QUARANTINED ? " (quarantined)" : d->state == CIUKI_DEVICE_ABSENT ? " (absent)" : "");
             a->tree_items[n].text[0] = a->device_names[k]; a->tree_items[n].depth = 2;
             a->tree_items[n].icon16 = du_icon_argb(du_icon_name(class_icon(cls)), 16); a->tree_device[n] = (int)k;
@@ -574,10 +591,12 @@ static void properties(struct cp_app *a, int resources)
     if (!a->devices_ok || a->properties_device < 0 || (unsigned)a->properties_device >= a->devices.count) return;
     const struct ciuki_device_record *d = &a->devices.devices[a->properties_device];
     char body[DU_DIALOG_TEXT], title[128]; size_t at = 0;
-    snprintf(title, sizeof(title), "%s Properties", product(d));
+    char resolved_title[65];
+    snprintf(title, sizeof(title), "%s Properties", product(a, d, resolved_title, sizeof(resolved_title)));
     if (!resources) {
+        char resolved[65]; const char *name = product(a, d, resolved, sizeof(resolved));
         at = (size_t)snprintf(body, sizeof(body), "General\n\n%s\nClass: %s\nDriver: %s\nStatus: %s\n",
-            product(d), cp_device_class(d->class_id), d->driver[0] ? d->driver : "None bound", cp_device_state(d->state));
+            name, cp_device_class(d->class_id), d->driver[0] ? d->driver : "None bound", cp_device_state(d->state));
         const char *reason = d->reason;
         while (*reason) {
             size_t n = strlen(reason), cut = n > 52 ? 52 : n;
@@ -592,7 +611,8 @@ static void properties(struct cp_app *a, int resources)
             d->bus_type == CIUKI_BUS_LOADER ? "Loader" : "Legacy", d->slot, d->function);
         snprintf(body + at, sizeof(body) - at, "Activation sequence: %u   Generation: %u", d->activation_seq, d->generation);
     } else {
-        at = (size_t)snprintf(body, sizeof(body), "Resources\n\n%s\n", product(d));
+        char resolved[65]; const char *name = product(a, d, resolved, sizeof(resolved));
+        at = (size_t)snprintf(body, sizeof(body), "Resources\n\n%s\n", name);
         for (unsigned k = 0; k < d->resource_count && at + 80 < sizeof(body); k++) {
             const struct ciuki_device_resource *r = &d->resources[k]; char value[64];
             range(value, sizeof(value), r->type, r->start, r->end, r->flags);
