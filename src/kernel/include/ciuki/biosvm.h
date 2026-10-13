@@ -28,7 +28,9 @@ int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
 /* Only fbdev's quiesced transaction calls this kernel-only entry. 4F02
  * (LFB), 4F01 into private scratch, 4F03 readback; serialized as one request.
  * No allowlist widening for biosvm_call or DOS guests. */
-int biosvm_video_prepare(void); /* acquire dependencies before LFB revocation */
+/* Initialize VM dependencies before LFB revocation; switch claims video
+ * resources after acceleration stops, then releases on completed calls. */
+int biosvm_video_prepare(void);
 int biosvm_video_switch(uint16_t mode, uint8_t info[256]);
 enum biosvm_backend biosvm_backend_state(void);
 void biosvm_stats(struct v86_stats *out);

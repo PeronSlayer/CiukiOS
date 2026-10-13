@@ -20,6 +20,8 @@ static struct task timer;
 static struct resource resources[16];
 static unsigned resource_count, generation, frames, switches, copies;
 static bool prepare_failure;
+static bool accel_ports_owned;
+static unsigned accel_stops;
 static bool owner = true, busy, fail_firmware, fail_restore, bad_info, fail_window;
 static uint8_t *aperture, *window;
 static uint32_t window_size;
@@ -42,6 +44,7 @@ static void mode_info(uint16_t id, uint8_t m[256])
 int biosvm_video_prepare(void) { return prepare_failure ? -EPERM : 0; }
 int biosvm_video_switch(uint16_t id, uint8_t m[256])
 {
+    assert(!accel_ports_owned);
     event(4); assert(!fbdev_get()->present && !fbdev_get()->mapped);
     assert(resources[fbdev_get()->handle].state == RS_QUIESCING || resources[fbdev_get()->handle].state == RS_RELEASED);
     assert(switches < 16); called[switches++] = id;
@@ -99,6 +102,14 @@ int copy_to_user(uint32_t dst, const void *src, uint32_t n) { copies++; if (dst 
 #include "../../src/kernel/drivers/fbdev.c"
 #include "../../src/kernel/core/display.c"
 
+static int stop_accel(void *ctx)
+{
+    assert(ctx==&accel_ports_owned && changing && presenter.owner && accel_ports_owned);
+    event(0); accel_stops++; accel_ports_owned=false;
+    return 0;
+}
+static const struct accel_ops test_acceleration={.ctx=&accel_ports_owned,.stop=stop_accel};
+
 void console_framebuffer_revoke(void) { event(2); }
 void console_framebuffer_changed(const struct fb_device *f) { assert(f->mapped && f->present); event(8); }
 
@@ -107,6 +118,7 @@ static void fixture(void)
 {
     free(aperture); free(window); aperture = window = 0;
     initialized = changing = switching = awaiting_frame = false;
+    acceleration=0; accel_ports_owned=false; accel_stops=0;
     change_window = 0; change_capacity = changes = drawing = 0; watchdog = 0;
     resource_count = generation = 1; sequence_count = switches = copies = frames = 0;
     g_ticks = 100; current = &desktop; owner = true;
@@ -174,6 +186,10 @@ static void switch_tests(void)
     assert(display_set(&desktop, 0x111) == -EIO && !switches && !sequence_count && fbdev_get()->present);
     fixture(); fail_window = true;
     assert(display_set(&desktop, 0x111) == -EIO && !switches && fbdev_get()->present);
+    fixture(); acceleration=&test_acceleration; accel_ports_owned=true;
+    assert(!display_set(&desktop,0x111) && accel_stops==1 && !accel_ports_owned);
+    const unsigned with_accel[]={0,1,2,3,4,5,6,7,8};
+    assert(sequence_count==ARRAY_SIZE(with_accel) && !memcmp(sequence,with_accel,sizeof(with_accel)));
     puts("PASS display switch: desktop-only, ids/busy, revoke-before-firmware, changed base/pitch, RGB565, rollback and failed restore");
 }
 static void watchdog_tests(void)
