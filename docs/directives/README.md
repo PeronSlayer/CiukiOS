@@ -127,8 +127,8 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-48-optical-drive-binding](f1-48-optical-drive-binding.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (unit attention handling, optical task, ISO mount with drive letter, media state); T23 test pending |
 | [f1-49-savage-ports-only](f1-49-savage-ports-only.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (ports-only VGA access, alias probe optional, MM48C18 engine probe, marker thread); T23 result pending |
 | [f2-50-rendering-architecture](f2-50-rendering-architecture.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (rendering contract, backing-store drags, span occlusion, direct composition, 60 Hz pacing, p95 counters); T23 measurement pending |
-| [f2-51-autoplay](f2-51-autoplay.md) | F2+ | gpt-6.1-sol / high | running 2026-10-13 (owner: AutoPlay for sticks and CDs) |
-| [f2-52-graphics-demo](f2-52-graphics-demo.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-13 (owner: a demo to see the accelerator; 2D benchmark, software 3D) |
+| [f2-51-autoplay](f2-51-autoplay.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (AUTORUN.INF, content actions, remembered choices in the registry, Control Panel page, MEDIA_GET_VOLUME) |
+| [f2-52-graphics-demo](f2-52-graphics-demo.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (Graphics Demo: 2D benchmark with accelerator column, software cube, sprites, system strip) |
 | [f2-53-tray-polish](f2-53-tray-polish.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (measured tray width, icons packed next to the clock, anchored popups) |
 | [f3-13-dosbox-loading-and-speed](f3-13-dosbox-loading-and-speed.md) | F3 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (loading panel, boot text to the VM log, band presenter, VM quantum caps); T23 measurement pending |
 | [f4-12-ui-sounds](f4-12-ui-sounds.md) | F4 | gpt-6.1-sol / high | delivered and merged 2026-10-14 (event sounds, scheme.cfg + registry, Sounds page, volume ticks, VM priority) |
