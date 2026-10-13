@@ -546,7 +546,7 @@ static void test_menu(void)
     for (int i=0;i<DESK_CLIENTS;i++) {
         d.clients[i].window=1;
         struct desk_box task=desk_task_button(&d,i);
-        assert(task.x>=DESK_TASK_X && task.x+task.w<=320-SH_TRAY_W-8 && task.w>0);
+        assert(task.x>=DESK_TASK_X && task.x+task.w<=desk_shell_tray_box(&d).x-8 && task.w>0);
     }
     for (int i=0;i<DESK_CLIENTS;i++) d.clients[i].window=0;
     cleanup();

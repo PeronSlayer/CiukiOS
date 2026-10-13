@@ -103,7 +103,7 @@ int main(int argc,char **argv)
             hover(d,(int32_t)W/2+140,(int32_t)H/2+120); press(d,CIUKI_BUTTON_RIGHT);
         } else if (!strcmp(mode,"volume")) {
             fake_window(d,1,"CiukNote",360,220,0xffffffu,DESK_APP_NOTE);
-            struct desk_box t={(int32_t)W-SH_TRAY_W-4,(int32_t)H-DESK_BAR+4,SH_TRAY_W,DESK_BAR-7};
+            struct desk_box t=desk_shell_tray_icon_box(d,SH_TRAY_VOLUME);
             hover(d,t.x+8,t.y+10); press(d,1);
         } else if (!strcmp(mode,"switcher")) {
             fake_window(d,1,"Files",420,260,0xffffffu,DESK_APP_FILES);

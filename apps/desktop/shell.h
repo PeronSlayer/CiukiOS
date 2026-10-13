@@ -11,11 +11,16 @@
 #include "folder.h"
 #include "wallpaper.h"
 #include <stdint.h>
+#include <stddef.h>
 #include <ciuki/abi.h>
 #define SH_LEVELS 3
 #define SH_ITEMS 20
 #define SH_ICONS (FM_ENTRIES + 4)
-#define SH_TRAY_W 152
+#define SH_TRAY_ICON_SIZE 16
+#define SH_TRAY_GAP 4
+#define SH_TRAY_MARGIN 6
+/* From the clock leftwards; append future icons after removable media. */
+enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_MEDIA };
 #define SH_START_ROW 30
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
@@ -98,6 +103,12 @@ void desk_shell_tick(struct desktop *);
 void desk_shell_media_update(struct desktop *, const struct ciuki_media_state *);
 void desk_shell_network_update(struct desktop *, const struct ciuki_net_state *);
 void desk_shell_clock_damage(struct desktop *, uint64_t previous_second);
+struct desk_box desk_shell_tray_box(const struct desktop *);
+struct desk_box desk_shell_tray_icon_box(const struct desktop *, enum sh_tray_icon);
+struct desk_box desk_shell_clock_box(const struct desktop *);
+void desk_shell_clock_text_at(const struct desktop *, uint64_t, char *, size_t);
+int desk_shell_clock_width_at(const struct desktop *, uint64_t);
+void desk_shell_tray_damage(struct desktop *, int previous_width);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);
 int desk_internal_open(struct desktop *, int kind);

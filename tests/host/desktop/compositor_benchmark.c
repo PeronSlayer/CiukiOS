@@ -185,7 +185,7 @@ static void bounded_damage(struct desktop *d)
     desk_shell_clock_damage(d, previous);
     assert(d->damage.count == 1);
     struct desk_box b = d->damage.boxes[0];
-    assert(b.x > W - SH_TRAY_W && b.y >= H - DESK_BAR && b.w * b.h < 4096);
+    assert(b.x > desk_shell_tray_box(d).x && b.y >= H - DESK_BAR && b.w * b.h < 4096);
     d->sh.cfg.clock_seconds = 0; d->damage.count = 0;
     desk_shell_clock_damage(d, previous); assert(!d->damage.count);
     struct ciuki_input_event e = {.type = CIUKI_INPUT_MOTION,

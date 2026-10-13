@@ -701,6 +701,7 @@ static void shell_service(struct desktop *d)
         return;
     }
     if (sh->want_reload & 1) {
+        int old_tray_width = desk_shell_tray_box(d).w;
         char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
         memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); memcpy(old_theme,sh->cfg.theme,sizeof(old_theme));
         int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
@@ -714,8 +715,8 @@ static void shell_service(struct desktop *d)
         if (visual) {
             sh->icon_count=0; desk_shell_apply(d);
             if (image_changed) wallpaper_load(d); else wallpaper_update(d);
-        } else desk_damage_add(&d->damage,(struct desk_box){(int)d->width-SH_TRAY_W-4,
-            (int)d->height-DESK_BAR+4,SH_TRAY_W,DESK_BAR-7},d->width,d->height);
+        }
+        desk_shell_tray_damage(d,old_tray_width);
         sh->want_wallpaper=0;
     }
     if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }

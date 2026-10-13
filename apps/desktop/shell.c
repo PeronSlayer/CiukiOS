@@ -709,18 +709,7 @@ static const char *const months[] = {"January", "February", "March", "April", "M
                                      "August", "September", "October", "November", "December"};
 static uint64_t wall_seconds(const struct desktop *d) { return d->app_test ? 12 * 3600 : d->realtime_second; }
 static void clock_text(const struct desktop *d, char *out, size_t size)
-{
-    uint64_t s = wall_seconds(d);
-    unsigned h = (unsigned)(s / 3600 % 24), m = (unsigned)(s / 60 % 60), sec = (unsigned)(s % 60);
-    if (d->sh.cfg.clock_24h) {
-        if (d->sh.cfg.clock_seconds) snprintf(out, size, "%02u:%02u:%02u", h, m, sec);
-        else snprintf(out, size, "%02u:%02u", h, m);
-    } else {
-        unsigned h12 = h % 12 ? h % 12 : 12;
-        if (d->sh.cfg.clock_seconds) snprintf(out, size, "%u:%02u:%02u %s", h12, m, sec, h < 12 ? "AM" : "PM");
-        else snprintf(out, size, "%u:%02u %s", h12, m, h < 12 ? "AM" : "PM");
-    }
-}
+{ desk_shell_clock_text_at(d, wall_seconds(d), out, size); }
 static void date_text(const struct desktop *d, char *out, size_t size, int long_form)
 {
     int y, mo, day, wd;
@@ -731,28 +720,37 @@ static void date_text(const struct desktop *d, char *out, size_t size, int long_
 
 /* ---- taskbar ----------------------------------------------------------- */
 static struct desk_box tray_box(const struct desktop *d)
-{ return (struct desk_box){(int32_t)d->width - SH_TRAY_W - 4, (int32_t)d->height - DESK_BAR + 4, SH_TRAY_W, DESK_BAR - 7}; }
-static struct desk_box volume_icon_box(const struct desktop *d)
-{ struct desk_box t = tray_box(d); return (struct desk_box){t.x + 24, t.y + (t.h - 16) / 2, 16, 16}; }
-static struct desk_box network_icon_box(const struct desktop *d)
-{ struct desk_box t = tray_box(d); return (struct desk_box){t.x + 4, t.y + (t.h - 16) / 2, 16, 16}; }
+{ return desk_shell_tray_box(d); }
 static struct desk_box clock_box(const struct desktop *d)
-{ struct desk_box t = tray_box(d); return (struct desk_box){t.x + 64, t.y, t.w - 66, t.h}; }
+{ return desk_shell_clock_box(d); }
+static struct desk_box volume_icon_box(const struct desktop *d)
+{ return desk_shell_tray_icon_box(d, SH_TRAY_VOLUME); }
+static struct desk_box network_icon_box(const struct desktop *d)
+{ return desk_shell_tray_icon_box(d, SH_TRAY_NETWORK); }
 static struct desk_box media_icon_box(const struct desktop *d)
-{ struct desk_box t=tray_box(d); return (struct desk_box){t.x+44,t.y+(t.h-16)/2,16,16}; }
+{ return desk_shell_tray_icon_box(d, SH_TRAY_MEDIA); }
+static struct desk_box tray_popup(const struct desktop *d, struct desk_box anchor, int w, int h)
+{
+    if (w > (int)d->width) w = (int)d->width;
+    int x = anchor.x + anchor.w - w;
+    if (x < 0) x = 0;
+    if (x + w > (int)d->width) x = (int)d->width - w;
+    return (struct desk_box){x, tray_box(d).y - SH_TRAY_GAP - h, w, h};
+}
 static unsigned media_count(const struct desktop *d)
 { unsigned n=0; for (unsigned i=4;i<26;i++) if (d->sh.media.removable_mask & (1u<<i)) n++; return n; }
 static unsigned media_rows(const struct desktop *d)
 { unsigned n=media_count(d), max=((unsigned)d->height-2*DESK_BAR-32)/22; return n<max ? n : max; }
 static struct desk_box media_popup(const struct desktop *d)
-{ struct desk_box t=tray_box(d); int h=28+(int)media_rows(d)*22; return (struct desk_box){t.x+t.w-248,t.y-4-h,248,h}; }
+{ return tray_popup(d, media_icon_box(d), 248, 28 + (int)media_rows(d) * 22); }
 void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *state)
 {
     if (!memcmp(&d->sh.media,state,sizeof(*state))) return;
+    int resized = !!d->sh.media.removable_mask != !!state->removable_mask;
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
     d->sh.media=*state; d->sh.media_scroll=0;
     if (!state->removable_mask) d->sh.media_open=0;
-    damage(d,tray_box(d));
+    damage(d, resized ? desk_taskbar(d) : tray_box(d));
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
 }
 static unsigned media_at(const struct desktop *d,unsigned row)
@@ -775,7 +773,7 @@ static void draw_media(struct desktop *d,struct desk_box clip)
     }
 }
 static struct desk_box network_popup(const struct desktop *d)
-{ struct desk_box t = tray_box(d); return (struct desk_box){t.x + t.w - 272, t.y - 4 - 112, 272, 112}; }
+{ return tray_popup(d, network_icon_box(d), 272, 112); }
 static void network_mac(const struct ciuki_net_state *n, char text[18])
 { snprintf(text, 18, "%02x:%02x:%02x:%02x:%02x:%02x", n->mac[0], n->mac[1], n->mac[2], n->mac[3], n->mac[4], n->mac[5]); }
 static void tooltip_text(const struct desktop *d, char *text, size_t size)
@@ -789,7 +787,7 @@ static void tooltip_text(const struct desktop *d, char *text, size_t size)
     } else snprintf(text, size, n->link == CIUKI_NET_LINK_DOWN ? "Network: no cable" : "Network: link unknown");
 }
 static struct desk_box volume_popup(const struct desktop *d)
-{ struct desk_box t = tray_box(d); return (struct desk_box){t.x + t.w - 92, t.y - 4 - 168, 92, 168}; }
+{ return tray_popup(d, volume_icon_box(d), 92, 168); }
 static struct desk_box volume_track(const struct desktop *d)
 { struct desk_box p = volume_popup(d); return (struct desk_box){p.x + 40, p.y + 30, 12, 100}; }
 static struct desk_box volume_mute(const struct desktop *d)
@@ -798,11 +796,27 @@ static struct desk_box tooltip_box(const struct desktop *d)
 {
     char text[96]; tooltip_text(d, text, sizeof(text));
     int32_t w = du_text_width(text) + 10;
+    return tray_popup(d, d->sh.tooltip == 2 ? network_icon_box(d) : clock_box(d), w, 18);
+}
+static void damage_moved_popup(struct desktop *d, struct desk_box anchor, int dx, int w, int h)
+{
+    damage(d, outer(tray_popup(d, anchor, w, h)));
+    anchor.x += dx;
+    damage(d, outer(tray_popup(d, anchor, w, h)));
+}
+void desk_shell_tray_damage(struct desktop *d, int previous_width)
+{
     struct desk_box t = tray_box(d);
-    int32_t x = t.x + t.w - w;
-    if (x < 0) x = 0;
-    if (w > (int32_t)d->width) w = (int32_t)d->width;
-    return (struct desk_box){x, t.y - 4 - 18, w, 18};
+    int dx = t.w - previous_width;
+    if (!dx) { damage(d, t); return; }
+    damage(d, desk_taskbar(d));
+    if (d->sh.volume_open) damage_moved_popup(d, volume_icon_box(d), dx, 92, 168);
+    if (d->sh.network_open) damage_moved_popup(d, network_icon_box(d), dx, 272, 112);
+    if (d->sh.media_open) damage_moved_popup(d, media_icon_box(d), dx, 248, 28 + (int)media_rows(d) * 22);
+    if (d->sh.tooltip == 2) {
+        char text[96]; tooltip_text(d, text, sizeof(text));
+        damage_moved_popup(d, network_icon_box(d), dx, du_text_width(text) + 10, 18);
+    }
 }
 void desk_shell_network_update(struct desktop *d, const struct ciuki_net_state *state)
 {
@@ -873,7 +887,7 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
     char clock[24];
     clock_text(d, clock, sizeof(clock));
     struct desk_box cb = clock_box(d);
-    du_text(&c, cb.x + cb.w - du_text_width(clock) - 6, cb.y + (cb.h - text_h()) / 2, clock, t->taskbar_text);
+    du_text(&c, cb.x, cb.y + (cb.h - text_h()) / 2, clock, t->taskbar_text);
 }
 static void check_mark(struct du_canvas *c, int x, int y, uint32_t ink)
 {
@@ -1931,7 +1945,14 @@ void desk_shell_clock_damage(struct desktop *d, uint64_t previous)
             damage(d,(struct desk_box){(int)d->width-300,0,300,DESK_BAR});
         if (d->sh.tooltip) damage(d,tooltip_box(d));
     }
-    if (d->sh.cfg.clock_seconds || d->realtime_second/60!=previous/60) damage(d,clock_box(d));
+    if (d->sh.cfg.clock_seconds || d->realtime_second/60!=previous/60) {
+        /* Proportional digits and 12-hour rollover can move every tray icon
+         * and resize task buttons. Erase their previous positions as well. */
+        uint64_t old = d->app_test ? 12 * 3600 : previous;
+        int dx = desk_shell_clock_width_at(d, wall_seconds(d)) - desk_shell_clock_width_at(d, old);
+        if (dx) desk_shell_tray_damage(d, tray_box(d).w - dx);
+        else damage(d, clock_box(d));
+    }
 }
 static int menu_step(const struct sh_menu *m, int from, int dir)
 {

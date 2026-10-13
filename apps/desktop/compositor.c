@@ -86,6 +86,50 @@ void desk_collapse(struct desktop *d, int i)
 }
 struct desk_box desk_taskbar(const struct desktop *d)
 { return (struct desk_box){0,(int32_t)d->height-DESK_BAR,(int32_t)d->width,DESK_BAR}; }
+/* Shared tray geometry lives with taskbar geometry: non-shell programs also
+ * link this compositor for frames and glyphs. Text is measured in the UI face. */
+void desk_shell_clock_text_at(const struct desktop *d, uint64_t s, char *out, size_t size)
+{
+    unsigned h = (unsigned)(s / 3600 % 24), m = (unsigned)(s / 60 % 60), sec = (unsigned)(s % 60);
+    if (d->sh.cfg.clock_24h) {
+        if (d->sh.cfg.clock_seconds) snprintf(out, size, "%02u:%02u:%02u", h, m, sec);
+        else snprintf(out, size, "%02u:%02u", h, m);
+    } else {
+        unsigned h12 = h % 12 ? h % 12 : 12;
+        if (d->sh.cfg.clock_seconds) snprintf(out, size, "%u:%02u:%02u %s", h12, m, sec, h < 12 ? "AM" : "PM");
+        else snprintf(out, size, "%u:%02u %s", h12, m, h < 12 ? "AM" : "PM");
+    }
+}
+int desk_shell_clock_width_at(const struct desktop *d, uint64_t second)
+{
+    char text[24]; desk_shell_clock_text_at(d, second, text, sizeof(text));
+    return desk_text_measure(desk_theme->font_ui, text);
+}
+static int tray_width_at(const struct desktop *d, uint64_t second)
+{
+    unsigned icons = 2 + (d->sh.media.removable_mask != 0);
+    return 2 * SH_TRAY_MARGIN + desk_shell_clock_width_at(d, second) +
+           (int)icons * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP);
+}
+struct desk_box desk_shell_tray_box(const struct desktop *d)
+{
+    int w = tray_width_at(d, d->app_test ? 12 * 3600 : d->realtime_second);
+    return (struct desk_box){(int32_t)d->width - w - 4, (int32_t)d->height - DESK_BAR + 4, w, DESK_BAR - 7};
+}
+struct desk_box desk_shell_clock_box(const struct desktop *d)
+{
+    int w = desk_shell_clock_width_at(d, d->app_test ? 12 * 3600 : d->realtime_second);
+    struct desk_box t = desk_shell_tray_box(d);
+    return (struct desk_box){t.x + t.w - SH_TRAY_MARGIN - w, t.y, w, t.h};
+}
+struct desk_box desk_shell_tray_icon_box(const struct desktop *d, enum sh_tray_icon icon)
+{
+    if (icon < SH_TRAY_VOLUME || icon > SH_TRAY_MEDIA ||
+        (icon == SH_TRAY_MEDIA && !d->sh.media.removable_mask)) return (struct desk_box){0, 0, 0, 0};
+    struct desk_box c = desk_shell_clock_box(d);
+    return (struct desk_box){c.x - (icon + 1) * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP),
+                            c.y + (c.h - SH_TRAY_ICON_SIZE) / 2, SH_TRAY_ICON_SIZE, SH_TRAY_ICON_SIZE};
+}
 struct desk_box desk_task_button(const struct desktop *d, int index)
 {
     unsigned count=0, position=0;
@@ -94,7 +138,7 @@ struct desk_box desk_task_button(const struct desktop *d, int index)
         if (i<index) position++;
         count++;
     }
-    int32_t available=(int32_t)d->width-DESK_TASK_X-SH_TRAY_W-12;   /* left margin, tray */
+    int32_t available=desk_shell_tray_box(d).x-DESK_TASK_X-8;
     if (available<=0 || !count) return (struct desk_box){0,0,0,0};
     int32_t w=available/(int32_t)count;
     if (w>160) w=160;

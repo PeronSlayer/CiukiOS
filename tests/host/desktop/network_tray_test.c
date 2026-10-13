@@ -10,6 +10,8 @@
 static struct desktop d;
 static char texts[24][128];
 static unsigned text_count;
+static const uint32_t *store(const char *name, unsigned size)
+{ return du_icon_argb(name, size); }
 void __real_du_text(struct du_canvas *, int, int, const char *, uint32_t);
 void __wrap_du_text(struct du_canvas *c, int x, int y, const char *s, uint32_t colour)
 {
@@ -36,7 +38,8 @@ static void check_icon(const char *name, int disabled)
     struct du_canvas c = {icon_pixels, 16, 16, {0, 0, 16, 16}};
     for (unsigned i = 0; i < 256; i++) icon_pixels[i] = DU_FACE;
     du_icon_blit(&c, 0, 0, desk_shell_icon(name, 16), 16, disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
-    int x = (int)d.width - SH_TRAY_W, y = (int)d.height - 24;
+    struct desk_box b = desk_shell_tray_icon_box(&d, SH_TRAY_NETWORK);
+    int x = b.x, y = b.y;
     for (unsigned row = 0; row < 16; row++)
         assert(!memcmp(&d.pixels[(y + row) * d.width + x], &icon_pixels[row * 16], 16 * 4));
 }
@@ -48,9 +51,10 @@ static void hover(int x, int y)
 }
 int main(void)
 {
-    fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
+    fake_reset(); desk_init(&d, &fake_ops, 640, 480); d.icon = store; desk_shell_enable(&d);
     d.pixels = calloc(d.width * d.height, 4); assert(d.pixels);
-    const int nx = (int)d.width - SH_TRAY_W + 8, ny = (int)d.height - 16;
+    struct desk_box ni = desk_shell_tray_icon_box(&d, SH_TRAY_NETWORK);
+    const int nx = ni.x + 8, ny = ni.y + 8;
     d.now_ns = 1; d.damage.count = 0; desk_shell_tick(&d);
     assert(d.sh.want_reload & 16); d.sh.want_reload = 0;
     d.now_ns = 2000000000ull; desk_shell_tick(&d); assert(!(d.sh.want_reload & 16));
@@ -67,7 +71,8 @@ int main(void)
     d.damage.count = 0; desk_shell_network_update(&d, &n);
     assert(d.damage.count == 1);
     struct desk_box tray = d.damage.boxes[0];
-    assert(tray.x == 640 - SH_TRAY_W - 4 && tray.y == 452 && tray.w == SH_TRAY_W && tray.h == 25);
+    struct desk_box expected = desk_shell_tray_box(&d);
+    assert(!memcmp(&tray, &expected, sizeof(tray)) && tray.y == 452 && tray.h == 25);
     render(); check_icon("network-offline", 0);
     hover(nx, ny); assert(drawn("Network: no cable"));
     click(nx, ny); render();
@@ -88,7 +93,7 @@ int main(void)
     assert(d.damage.count && d.damage.count<=DESK_DAMAGE_MAX);
     /* Preserve the exact union even where the popup shadow overlaps the
      * tray; bounding-box merging used to include clean corner pixels. */
-    struct desk_box popup={360,332,282,122};
+    struct desk_box popup={ni.x+ni.w-272-4,332,282,122};
     for (int y=0;y<480;y++) for (int x=0;x<640;x++) {
         unsigned covered=0;
         for (unsigned i=0;i<d.damage.count;i++) covered+=(unsigned)desk_contains(d.damage.boxes[i],x,y);
@@ -97,7 +102,7 @@ int main(void)
     }
     for (unsigned i = 0; i < d.damage.count; i++) {
         struct desk_box b = d.damage.boxes[i];
-        assert(b.x >= 360 && b.y >= 332 && b.x + b.w <= 640 && b.y + b.h <= 478);
+        assert(b.x >= popup.x && b.y >= 332 && b.x + b.w <= 640 && b.y + b.h <= 478);
     }
     render(); assert(drawn("State: quarantined") && drawn("Reason: link_fault"));
     click(nx + 20, ny); assert(!d.sh.network_open && d.sh.volume_open);
