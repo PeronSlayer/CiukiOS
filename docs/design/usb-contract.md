@@ -278,11 +278,15 @@ policy remains: absent media at admission or changed media require unplug/replug
 retained record and generation. This intentionally excludes live card-reader
 media reinsertion without reconnecting the USB device in this step.
 
-`/dev/media` exposes copied, versioned `MEDIA_GET_STATE` (120 bytes: version,
-size, mounted-removable mask, reserved=0, 26 generation values) and
+`/dev/media` exposes copied, versioned `MEDIA_GET_STATE` (version 1: 120 bytes,
+version/size, mounted-removable mask, reserved=0, 26 generation values;
+version 2: 224 bytes, appending 26 uint32 type values: 0 absent, 1 USB,
+2 optical; see [F1-48 optical binding](optical-drive-binding.md)) and
 `MEDIA_SAFE_REMOVE` (16 bytes: version, size, drive index, media generation)
-through existing devctl call 69. Existing syscall numbers/record sizes stay
-unchanged. The removal generation prevents a stale menu from removing another
+through existing devctl call 69. Existing syscall numbers and version 1 layouts
+stay unchanged; version 1 requests remain supported. Optical letters from D:
+are included and removal dispatches to optical eject with open-handle preflight.
+The removal generation prevents a stale menu from removing another
 medium. Requesting one partition removes the entire physical USB device.
 All partitions are preflighted for native and legacy open descriptions before
 any commit/clean flag. Busy handles return EBUSY. Commit caches, synchronize

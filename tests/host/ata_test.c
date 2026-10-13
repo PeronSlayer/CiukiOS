@@ -176,6 +176,7 @@ void rec_emit(const char *name, const char *event, const char *fmt, ...)
 #include "../../src/kernel/drivers/ata.c"
 #include "../../src/kernel/drivers/blkpart.c"
 #include "../../src/kernel/drivers/ata_probe.c"
+#include "../../src/kernel/drivers/optical.c"
 
 enum fault { GOOD, ERR, DF, BUSY, NO_DRQ, EXTRA_DRQ, NO_IRQ, BAD_IDENTIFY, BAD_FLUSH, SLOW_FLUSH, BAD_MULTIPLE,
              DMA_ERROR, DMA_ACTIVE, DMA_NO_BM_IRQ, DMA_MODE_ERROR, DMA_STUCK_MASTER, DMA_ERROR_NO_IRQ };
@@ -829,7 +830,7 @@ static void test_storage_cache_faults(void)
 int main(void)
 {
     test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
-    test_storage_cache_faults(); test_packets();
+    test_storage_cache_faults(); test_packets(); test_optical_lifecycle();
     test_dma();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);

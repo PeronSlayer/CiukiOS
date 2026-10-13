@@ -571,11 +571,12 @@ static void media_read(struct desktop *d)
 static void media_remove(struct desktop *d)
 {
     struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),(uint32_t)d->sh.want_remove,d->sh.remove_generation};
+    int optical=r.drive<26 && d->sh.media.type[r.drive]==CIUKI_MEDIA_OPTICAL;
     d->sh.want_remove=0;
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC), e=fd<0 ? errno : 0;
     if (fd>=0) { if (ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r))) e=errno; close(fd); }
     snprintf(d->notice,sizeof(d->notice),e==EBUSY ? "Close files on this drive and try again." :
-             e ? "The USB device could not be safely removed (error %d)." : "It is safe to unplug the USB device.",e);
+             e ? "The medium could not be removed (error %d)." : optical ? "The disc has been ejected." : "It is safe to unplug the USB device.",e);
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
     media_read(d);
 }

@@ -17,7 +17,7 @@ enum {
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC,
-    T_JOB = 1
+    T_JOB = 1, T_MEDIA
 };
 #define PANE_TOP 92
 #define STATUS_H 20
@@ -347,7 +347,7 @@ static void tree_items(struct files_app *a)
         if (here) current = (int)i;
         it->text[0] = n->name;
         it->icon16 = !i ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) :
-                     named(n->depth == 1 ? "place:volume" : here ? "type:folder-open" : "type:folder", 16);
+                     named(n->depth == 1 ? (n->name[0]>='D' && n->name[0]<='Z' && a->media.type[n->name[0]-'A']==CIUKI_MEDIA_OPTICAL ? "place:optical" : "place:volume") : here ? "type:folder-open" : "type:folder", 16);
         it->selected = (uint8_t)here; it->depth = (uint8_t)(n->depth > 255 ? 255 : n->depth);
         it->expanded = n->expanded; it->children = n->children;
     }
@@ -371,7 +371,7 @@ static void set_flag(struct du_menu_item *items, unsigned n, int id, unsigned fl
 
 static int media_drive(const char *path)
 {
-    if (!path || strncmp(path,"/mnt/",5) || path[5]<'e' || path[5]>'z' || (path[6] && path[6]!='/')) return -1;
+    if (!path || strncmp(path,"/mnt/",5) || path[5]<'d' || path[5]>'z' || (path[6] && path[6]!='/')) return -1;
     return path[5]-'a';
 }
 static int removal_target(struct files_app *a)
@@ -384,13 +384,12 @@ static int removal_target(struct files_app *a)
         p=path;
     }
     int d=media_drive(p);
-    return d>=4 && a->media_remove && (a->media.removable_mask & (1u<<d)) ? d : -1;
+    return d>=3 && a->media_remove && (a->media.removable_mask & (1u<<d)) ? d : -1;
 }
 void files_update(struct files_app *a)
 {
     struct fm_model *m = &a->model;
     int computer = !m->path[0];
-    if (a->media_read && a->media_read(&a->media)) memset(&a->media,0,sizeof(a->media));
     char display[FM_PATH];
     if (fm_display_path(display, m->path)) strcpy(display, "(path too long)");
     if (m->count > a->capacity) {
@@ -407,11 +406,14 @@ void files_update(struct files_app *a)
         struct fm_entry *e = &m->entries[i];
         struct files_row *t = &a->texts[i];
         if (e->meta.type == FM_DIR) t->size[0] = 0; else { kb_text(t->size, sizeof(t->size), e->meta.size); folder_bytes += e->meta.size; }
-        int removable=computer && e->name[0]>='E' && e->name[0]<='Z' && (a->media.removable_mask & (1u<<(e->name[0]-'A')));
-        char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
+        int drive=computer && e->name[0]>='D' && e->name[0]<='Z' ? e->name[0]-'A' : -1;
+        int removable=drive>=3 && (a->media.removable_mask & (1u<<drive));
+        int optical=removable && a->media.type[drive]==CIUKI_MEDIA_OPTICAL;
+        const char *drive_icon=optical ? "place:optical" : removable ? "place:removable" : "place:volume";
+        char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
         a->rows[i] = (struct du_item){{e->name, t->size, t->type, t->modified},
-                                      computer ? named(removable ? "place:removable" : "place:volume", 16) : icon16(e), computer ? named(removable ? "place:removable" : "place:volume", 32) : icon32(e),
+                                      computer ? named(drive_icon, 16) : icon16(e), computer ? named(drive_icon, 32) : icon32(e),
                                       (uint8_t)e->selected, (uint8_t)in_clipboard(a, e->name), 0, 0, 0};
     }
     struct du_widget *list = W(a, W_LIST);
@@ -440,7 +442,10 @@ void files_update(struct files_app *a)
     W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = W(a, C_DELETE)->disabled = computer || !selected;
     W(a, C_PASTE)->disabled = computer || !m->clipboard_count;
     W(a, C_PROPERTIES)->disabled = (uint8_t)computer;
-    set_flag(a->file_items, 11, C_SAFE_REMOVE, DU_ITEM_DISABLED, removal_target(a)<4);
+    int target=removal_target(a);
+    set_flag(a->file_items, 11, C_SAFE_REMOVE, DU_ITEM_DISABLED, target<3);
+    for (unsigned i=0;i<11;i++) if (a->file_items[i].id==C_SAFE_REMOVE)
+        a->file_items[i].label=target>=3 && a->media.type[target]==CIUKI_MEDIA_OPTICAL ? "&Eject disc" : "Safely &remove";
     set_flag(a->file_items, 11, C_OPEN, DU_ITEM_DISABLED, !selected);
     set_flag(a->file_items, 11, C_OPEN_NOTE, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_DELETE, DU_ITEM_DISABLED, computer || !selected);
@@ -834,7 +839,8 @@ static void context(struct files_app *a, const struct du_event *e)
         unsigned n = fm_selected(m, NULL);
         enum fm_kind kind = fm_kind(it);
         popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
-        if (removal_target(a)>=4) popup_add(a, "Safely &remove", C_SAFE_REMOVE, 0);
+        int target=removal_target(a);
+        if (target>=3) popup_add(a, a->media.type[target]==CIUKI_MEDIA_OPTICAL ? "&Eject disc" : "Safely &remove", C_SAFE_REMOVE, 0);
         if (kind != FM_KIND_FOLDER) popup_add(a, "Open with &CiukNote", C_OPEN_NOTE, 0);
         if (n == 1 && m->path[0] && (kind == FM_KIND_FOLDER || kind == FM_KIND_AUDIO))
             popup_add(a, "Play in &Music Player", C_MUSIC, 0);
@@ -870,7 +876,8 @@ static void context(struct files_app *a, const struct du_event *e)
         const char *path = e->id == W_TREE ? a->tree[e->index].path : a->places[e->index].path;
         if (!fm_same_path(path, a->model.path)) files_navigate(a, path);
         popup_add(a, "&Open", C_TREE_OPEN, DU_ITEM_DEFAULT);
-        if (removal_target(a)>=4) popup_add(a, "Safely &remove", C_SAFE_REMOVE, 0);
+        int target=removal_target(a);
+        if (target>=3) popup_add(a, a->media.type[target]==CIUKI_MEDIA_OPTICAL ? "&Eject disc" : "Safely &remove", C_SAFE_REMOVE, 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "P&roperties", C_PROPERTIES, 0);
         fm_select_none(&a->model); files_update(a);
@@ -913,10 +920,11 @@ static void command(struct files_app *a, int id)
     switch (id) {
     case C_SAFE_REMOVE: {
         int d=removal_target(a);
-        if (d<4) break;
+        if (d<3) break;
+        int optical=a->media.type[d]==CIUKI_MEDIA_OPTICAL;
         int r=a->media_remove((unsigned)d,a->media.generation[d]);
         if (r) error_box(a,"Safely remove",r==-EBUSY ? "Close files on this drive and try again:" : "The drive could not be safely removed:",r);
-        else { files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"It is safe to unplug the USB device."); files_update(a); }
+        else { files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
         break;
     }
     case C_BACK: after_history(a, fm_history(m, -1)); break;
@@ -1061,7 +1069,21 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         if (e->id==W_LIST && a->drop && !a->job_active && !fm_clipboard(&a->model,!(e->modifiers&DU_CTRL)) && !fm_clipboard_save(&a->model))
             a->drop(a,e->x,e->y,(e->modifiers&DU_CTRL)!=0);
         break;
-    case DU_EV_TICK: if (e->id == T_JOB) job_tick(a); break;
+    case DU_EV_TICK:
+        if (e->id == T_JOB) job_tick(a);
+        else if (e->id == T_MEDIA && a->media_read && !a->job_active && a->rename_index<0 && !du_dialog_id(a->ui)) {
+            struct ciuki_media_state state={0};
+            if (!a->media_read(&state) && memcmp(&state,&a->media,sizeof(state))) {
+                int drive=media_drive(a->model.path);
+                int expired=drive>=3 && a->media.generation[drive] &&
+                    a->media.generation[drive]!=state.generation[drive];
+                a->media=state; a->tree_dirty=1;
+                if (expired)
+                    files_navigate(a,FM_COMPUTER);
+                else { fm_refresh(&a->model); files_update(a); }
+            }
+        }
+        break;
     case DU_EV_DIALOG: dialog_result(a, e); break;
     case DU_EV_COMMIT:
         if (e->id == W_RENAME) rename_commit(a);
@@ -1118,6 +1140,7 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->width = u->canvas.width; a->height = u->canvas.height;
     a->rename_index = -1; a->split = a->width >= 700 ? 180 : 150;
     fm_init(&a->model, fs);
+    if (a->media_read && a->media_read(&a->media)) memset(&a->media,0,sizeof(a->media));
     a->tree = calloc(FILES_TREE, sizeof(*a->tree));
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;
@@ -1164,11 +1187,13 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
         du_dialog_close(u);
         if (files_navigate(a, FM_COMPUTER)) return -EIO;
     }
+    if (a->media_read && !a->test) du_timer_start(u,T_MEDIA,500000000u,1);
     return 0;
 }
 
 void files_destroy(struct files_app *a)
 {
+    du_timer_stop(a->ui,T_MEDIA);
     if (a->job_active) { fm_job_cancel(&a->job); fm_job_step(&a->job); }
     fm_job_destroy(&a->job);
     fm_destroy(&a->model);

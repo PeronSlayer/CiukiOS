@@ -1,0 +1,105 @@
+/* ATAPI media lifecycle; shared ATA owner, ISO read-only namespace.
+ * SFF-8020i 10.6 / 10.8.26.1: docs/design/optical-drive-binding.md.
+ * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kernel.h>
+#include <ciuki/ata.h>
+#include <ciuki/storage.h>
+#include <ciuki/vfs_hooks.h>
+
+#define OPTICAL_POLL_MS 1000u
+int optical_bind(struct storage *s, unsigned slot, struct ata_device *d)
+{
+    if (!s || !s->ready || s->stopped || slot >= STORAGE_DISKS || !d) return -FS_EINVAL;
+    int e = !d->identified || !d->atapi || d->packet_type != 5 ||
+        (d->packet_bytes != 12 && d->packet_bytes != 16) ? -FS_EOPNOTSUPP :
+        d->block.quarantined || d->channel->stopped || d->channel->quiescing ? -FS_EQUARANTINED : 0;
+    klog("[optical] bind slot=%u channel=%u unit=%u identified=%u type=%u packet_bytes=%u dma=%u mode=pio sector_size=%u blkpart=skip result=%d",
+         slot, d->channel->irq - 14, d->unit, d->identified, d->packet_type,
+         d->packet_bytes, d->dma_enabled, d->block.sector_size, e);
+    if (e) return e;
+    if (s->optical_bindings[slot].device) return -FS_EBUSY;
+    s->optical_bindings[slot].device = d;
+    return 0;
+}
+void optical_service(struct storage *s, uint64_t now)
+{
+    if (!s || !s->ready || s->stopped) return;
+    for (unsigned slot = 0; slot < STORAGE_DISKS; slot++) {
+        struct optical_binding *b = &s->optical_bindings[slot];
+        struct ata_device *d = b->device;
+        if (!d || now < b->next_poll) continue;
+        b->next_poll = now + OPTICAL_POLL_MS;
+        fs_lock_take(&s->vfs.lock);
+        if (s->stopped) { fs_lock_drop(&s->vfs.lock); return; }
+        int e = atapi_ready(d);
+        for (unsigned drive = 3; drive < 26; drive++)
+            if (s->vfs.ro_volumes[drive] == &s->optical[slot] &&
+                (e || s->optical[slot].mount_generation != d->block.media_generation)) {
+                /* Failed readiness must expire the old mount even when a
+                 * device reports an unclassified medium error. */
+                vfs_ro_expire_locked(&s->vfs, drive);
+                klog("[optical] bind slot=%u stage=detach drive=%c generation=%u result=%d",
+                     slot, 'A' + drive, d->block.media_generation, e);
+            }
+        if (!e && !s->optical[slot].mounted && b->attempted_generation != d->block.media_generation) {
+            b->attempted_generation = d->block.media_generation;
+            e = storage_add_ro_locked(s, slot, &d->block, d->session_lba);
+            klog("[optical] bind slot=%u stage=iso drive=%c mode=ro generation=%u session=%u result=%d reason=%s",
+                 slot, e >= 3 ? 'A' + e : '-', d->block.media_generation, d->session_lba, e,
+                 e >= 3 ? "mounted" : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "mount_refused");
+        } else if (!e && s->optical[slot].mounted) {
+            for (unsigned drive = 3; drive < 26; drive++)
+                if (s->vfs.ro_volumes[drive] == &s->optical[slot]) { e = (int)drive; break; }
+        } else if (!e) e = b->result; /* retain a refusal for this generation */
+        if (b->observed_generation != d->block.media_generation || b->result != e) {
+            klog("[storage] optical slot=%u drive=%c mode=ro generation=%u result=%d reason=%s",
+                 slot, e >= 3 ? 'A' + e : '-', d->block.media_generation, e,
+                 e >= 3 ? "mounted" : d->media == ATAPI_NO_MEDIUM ? "no_medium" :
+                 d->ready_error ? d->ready_stage : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "unavailable");
+            b->observed_generation = d->block.media_generation; b->result = e;
+        }
+        fs_lock_drop(&s->vfs.lock);
+    }
+}
+int optical_eject(struct storage *s, unsigned drive, uint32_t generation)
+{
+    if (!s || !s->ready || s->stopped || drive < 3 || drive >= 26 || !generation) return -FS_EINVAL;
+    fs_lock_take(&s->vfs.lock);
+    int e = -FS_ENOENT;
+    for (unsigned slot = 0; slot < STORAGE_DISKS; slot++) {
+        struct ata_device *d = s->optical_bindings[slot].device;
+        struct fs_ro_volume *ro = &s->optical[slot];
+        if (!d || s->vfs.ro_volumes[drive] != ro) continue;
+        if (generation != d->block.media_generation || fs_ro_check(ro)) { e = -FS_EIO; break; }
+        e = 0;
+        for (unsigned i = 0; i < VFS_NODES; i++)
+            if (s->vfs.nodes[i].refs && s->vfs.nodes[i].drive == drive &&
+                s->vfs.nodes[i].generation == s->vfs.generation[drive]) e = -FS_EBUSY;
+        if (px_ro_busy && px_ro_busy(&s->vfs, ro)) e = -FS_EBUSY;
+        if (!e) {
+            e = atapi_eject(d);
+            if (!e) vfs_ro_expire_locked(&s->vfs, drive);
+        }
+        klog("[optical] media slot=%u stage=eject drive=%c generation=%u result=%d",
+             slot, 'A' + drive, generation, e);
+        break;
+    }
+    fs_lock_drop(&s->vfs.lock); return e;
+}
+#ifndef FS_HOST
+static void optical_task(void *arg)
+{
+    struct storage *s = arg;
+    while (!s->stopped) { optical_service(s, deadline_after_ms(0)); task_sleep_ms(100); }
+    task_exit(0);
+}
+void optical_start_service(struct storage *s)
+{
+    bool bound = false;
+    for (unsigned i = 0; i < STORAGE_DISKS; i++) if (s->optical_bindings[i].device) bound = true;
+    if (!bound) return;
+    struct task *t = task_create_kernel("optical-media", optical_task, s, P_DEVICE);
+    if (t) task_start(t);
+    klog("[optical] bind stage=poller interval_ms=%u result=%d", OPTICAL_POLL_MS, t ? 0 : -FS_ENOMEM);
+}
+#endif

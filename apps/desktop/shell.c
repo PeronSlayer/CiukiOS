@@ -741,7 +741,7 @@ static struct desk_box clock_box(const struct desktop *d)
 static struct desk_box media_icon_box(const struct desktop *d)
 { struct desk_box t=tray_box(d); return (struct desk_box){t.x+44,t.y+(t.h-16)/2,16,16}; }
 static unsigned media_count(const struct desktop *d)
-{ unsigned n=0; for (unsigned i=4;i<26;i++) if (d->sh.media.removable_mask & (1u<<i)) n++; return n; }
+{ unsigned n=0; for (unsigned i=3;i<26;i++) if (d->sh.media.removable_mask & (1u<<i)) n++; return n; }
 static unsigned media_rows(const struct desktop *d)
 { unsigned n=media_count(d), max=((unsigned)d->height-2*DESK_BAR-32)/22; return n<max ? n : max; }
 static struct desk_box media_popup(const struct desktop *d)
@@ -758,7 +758,7 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
 static unsigned media_at(const struct desktop *d,unsigned row)
 {
     unsigned at=0;
-    for (unsigned i=4;i<26;i++) if (d->sh.media.removable_mask & (1u<<i)) {
+    for (unsigned i=3;i<26;i++) if (d->sh.media.removable_mask & (1u<<i)) {
         if (at++==row+d->sh.media_scroll) return i;
     }
     return 26;
@@ -767,10 +767,10 @@ static void draw_media(struct desktop *d,struct desk_box clip)
 {
     struct desk_box p=media_popup(d);
     struct du_canvas c=canvas(d,clip); du_edge(&c,R(p),DU_RAISED);
-    du_text(&c,p.x+8,p.y+6,"USB removable media",SH_INK);
+    du_text(&c,p.x+8,p.y+6,"Removable media",SH_INK);
     for (unsigned row=0;row<media_rows(d);row++) {
         unsigned drive=media_at(d,row); if (drive>=26) break;
-        char label[48]; snprintf(label,sizeof(label),"Safely remove %c:",'A'+drive);
+        char label[48]; snprintf(label,sizeof(label),"%s %c:",d->sh.media.type[drive]==CIUKI_MEDIA_OPTICAL ? "Eject disc" : "Safely remove",'A'+drive);
         du_text(&c,p.x+10,p.y+28+(int)row*22,label,SH_INK);
     }
 }

@@ -51,10 +51,12 @@ void vfs_destroy(struct vfs *);
 int vfs_attach(struct vfs *, unsigned drive, struct fat_volume *);
 int vfs_attach_locked(struct vfs *, unsigned drive, struct fat_volume *);
 int vfs_attach_ro(struct vfs *, unsigned drive, struct fs_ro_volume *);
+int vfs_attach_ro_locked(struct vfs *, unsigned drive, struct fs_ro_volume *);
 bool vfs_drive_present(struct vfs *, unsigned drive);
 /* Namespace lock held. EIO invalidates media cache/names/nodes/cwd and
  * removes the letter, even with live descriptions. No media writes. */
 int vfs_ro_check_locked(struct vfs *, unsigned drive);
+void vfs_ro_expire_locked(struct vfs *, unsigned drive);
 int vfs_detach(struct vfs *, unsigned drive); /* durable unmount, refuses opens */
 int vfs_table_init(struct vfs *, struct vfs_table *, unsigned default_drive);
 void vfs_table_destroy(struct vfs_table *);

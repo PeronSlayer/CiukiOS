@@ -28,16 +28,21 @@ int vfs_attach(struct vfs *v, unsigned d, struct fat_volume *vol) {
     fs_lock_drop(&v->lock); return e;
 }
 bool vfs_drive_present(struct vfs *v, unsigned d) { return d < 26 && (v->volumes[d] || v->ro_volumes[d]); }
-int vfs_attach_ro(struct vfs *v, unsigned d, struct fs_ro_volume *vol)
+int vfs_attach_ro_locked(struct vfs *v, unsigned d, struct fs_ro_volume *vol)
 {
     if (d < 3 || d >= 26 || !vol || !vol->mounted) return -FS_EINVAL;
-    fs_lock_take(&v->lock);
     int e = vfs_drive_present(v, d) ? -FS_EBUSY : 0;
     for (unsigned i = 0; !e && i < 26; i++) {
         if (v->volumes[i] && (v->volumes[i]->cache != vol->cache || v->volumes[i]->dev == vol->dev)) e = -FS_EBUSY;
         if (v->ro_volumes[i] && (v->ro_volumes[i]->cache != vol->cache || v->ro_volumes[i]->dev == vol->dev)) e = -FS_EBUSY;
     }
     if (!e) { v->ro_volumes[d] = vol; v->generation[d]++; }
+    return e;
+}
+int vfs_attach_ro(struct vfs *v, unsigned d, struct fs_ro_volume *vol)
+{
+    fs_lock_take(&v->lock);
+    int e = vfs_attach_ro_locked(v, d, vol);
     fs_lock_drop(&v->lock); return e;
 }
 int vfs_ro_check_locked(struct vfs *v, unsigned d)
@@ -45,12 +50,18 @@ int vfs_ro_check_locked(struct vfs *v, unsigned d)
     if (d >= 26 || !v->ro_volumes[d]) return -FS_EIO;
     struct fs_ro_volume *ro = v->ro_volumes[d];
     if (!fs_ro_check(ro)) return 0;
+    vfs_ro_expire_locked(v, d);
+    return -FS_EIO;
+}
+void vfs_ro_expire_locked(struct vfs *v, unsigned d)
+{
+    if (d >= 26 || !v->ro_volumes[d]) return;
+    struct fs_ro_volume *ro = v->ro_volumes[d];
     if (px_volume_detached) px_volume_detached(v, d);
     fs_ro_unmount(ro); v->ro_volumes[d] = 0; v->generation[d]++;
     for (unsigned i = 0; i < VFS_TABLES; i++) if (v->tables[i]) {
         memcpy(v->tables[i]->cwd[d], "/", 2); v->tables[i]->cwd_cluster[d] = 0;
     }
-    return -FS_EIO;
 }
 static bool ro_target(struct vfs_table *t, const char *path)
 {

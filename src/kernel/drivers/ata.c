@@ -369,7 +369,9 @@ static int packet_raw(struct ata_device *d, const uint8_t *packet, unsigned leng
     while (!e) {
         uint8_t status = alternate(c);
         d->status = status;
-        if (expired(c, deadline) || c->stopped || c->quiescing || !status || status == 0xff || (status & ATA_DF)) {
+        /* SFF-8020i 5.2: DRDY is not required for PACKET. A zero
+         * completion status is valid when CoD/I/O report completion. */
+        if (expired(c, deadline) || c->stopped || c->quiescing || status == 0xff || (status & ATA_DF)) {
             e = failure(d, start, status); break;
         }
         if (status & ATA_BSY) { task_sleep_ms(1); continue; }
@@ -432,12 +434,17 @@ static int packet_checked(struct ata_device *d, const uint8_t *p, unsigned lengt
     e = packet_raw(d, request, sizeof(request), sense, sizeof(sense), &n, (uint32_t)(deadline-elapsed));
     if (e || n < 14 || (sense[0] & 0x7e) != 0x70 || sense[7] < 6)
         return failure(d, now(d->channel), d->status);
+    bool new_sense = d->sense_key != (sense[2] & 15) || d->asc != sense[12] || d->ascq != sense[13];
     d->sense_key = sense[2] & 15; d->asc = sense[12]; d->ascq = sense[13];
     if (d->sense_key == 6) media_changed(d, ATAPI_CHANGED);
     else if (d->sense_key == 2) {
         enum atapi_media m = d->asc == 0x3a ? ATAPI_NO_MEDIUM : ATAPI_NOT_READY;
         if (d->media != m) media_changed(d, m);
     }
+    if (new_sense || d->sense_key == 6)
+        klog("[optical] media channel=%u unit=%u stage=sense opcode=%02x key=%02x asc=%02x ascq=%02x generation=%u result=%d",
+             d->channel->irq - 14, d->unit, p[0], d->sense_key, d->asc, d->ascq,
+             d->block.media_generation, -FS_EIO);
     d->elapsed_ms=now(d->channel)-start;
     if (d->elapsed_ms>d->max_packet_ms) d->max_packet_ms=d->elapsed_ms;
     return -FS_EIO; /* a failed data request is never retried */
@@ -453,12 +460,24 @@ int atapi_packet(struct ata_device *d, const uint8_t *p, unsigned length,
     }
     kmutex_lock(&d->channel->mutex);
     int e = packet_checked(d, p, length, buf, cap, done,
-                          p[0] == 0x1b ? ATAPI_START_MS : ATAPI_COMMAND_MS);
+                          p[0] == 0x1b && (length < 2 || !(p[1] & 1)) ? ATAPI_START_MS : ATAPI_COMMAND_MS);
+    if (!e) d->sense_key = d->asc = d->ascq = d->error = 0;
     kmutex_unlock(&d->channel->mutex);
     return e;
 }
 static uint32_t packet_be32(const uint8_t *p)
 { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+static int ready_result(struct ata_device *d, const char *stage, int e, uint32_t bytes)
+{
+    if (!d) return e;
+    if (d->ready_stage != stage || d->ready_error != e)
+        klog("[optical] media channel=%u unit=%u stage=%s result=%d bytes=%u status=%02x error=%02x key=%02x asc=%02x ascq=%02x generation=%u sectors=%llu session=%u quarantined=%u",
+             d->channel->irq - 14, d->unit, stage, e, bytes, d->status, d->error,
+             d->sense_key, d->asc, d->ascq, d->block.media_generation,
+             d->block.capacity, d->session_lba, d->block.quarantined);
+    d->ready_stage = stage; d->ready_error = e;
+    return e;
+}
 static int atapi_read(struct blkdev *b, uint64_t lba, uint32_t count, void *buf)
 {
     int e = blkdev_range(b, lba, count);
@@ -474,31 +493,61 @@ static int atapi_read(struct blkdev *b, uint64_t lba, uint32_t count, void *buf)
 int atapi_ready(struct ata_device *d)
 {
     uint8_t p[12] = { 0 }; uint32_t n;
-    int e = atapi_packet(d, p, sizeof(p), 0, 0, &n);
-    if (e) return e;
+    if (!d || !d->identified || !d->atapi) return -FS_EINVAL;
+    /* SFF-8020i 10.6: reset/change attention may reject a readiness
+     * command. Consume up to three queued attentions in one bounded TUR
+     * transaction. READ(10) is never retried. */
+    int e = -FS_EIO;
+    kmutex_lock(&d->channel->mutex);
+    uint64_t start = now(d->channel);
+    for (unsigned attempt = 0; attempt < 3; attempt++) {
+        uint64_t elapsed = now(d->channel) - start;
+        if (elapsed >= ATAPI_COMMAND_MS) break;
+        e = packet_checked(d, p, sizeof(p), 0, 0, &n, (uint32_t)(ATAPI_COMMAND_MS - elapsed));
+        if (!e || d->block.quarantined || d->sense_key != 6) break;
+    }
+    if (!e) d->sense_key = d->asc = d->ascq = d->error = 0;
+    kmutex_unlock(&d->channel->mutex);
+    if (e) {
+        ready_result(d, "tur", e, 0);
+        /* SFF-8020i 10.8.26: 02/04/02 requests initialization. Start
+         * without loading/closing the tray (LoEj=0), once per generation.
+         * IMMED keeps spin-up asynchronous; later TUR polls prove ready. */
+        if (!d->block.quarantined && d->sense_key == 2 && d->asc == 4 && d->ascq == 2 &&
+            d->spinup_generation != d->block.media_generation) {
+            d->spinup_generation = d->block.media_generation;
+            uint8_t spin[12] = { 0x1b, 1, 0, 0, 1 };
+            int spin_error = atapi_packet(d, spin, sizeof(spin), 0, 0, &n);
+            klog("[optical] media channel=%u unit=%u stage=spinup generation=%u result=%d",
+                 d->channel->irq - 14, d->unit, d->block.media_generation, spin_error);
+            if (spin_error) return ready_result(d, "spinup", spin_error, n);
+        }
+        return e;
+    }
     if (d->media == ATAPI_READY && d->block.capacity) return 0;
     uint8_t inquiry[36]; memset(p,0,sizeof(p)); p[0]=0x12; p[4]=sizeof(inquiry);
     e=atapi_packet(d,p,sizeof(p),inquiry,sizeof(inquiry),&n);
-    if (e) return e;
-    if (n<36 || (inquiry[0]&31)!=5) return -FS_EOPNOTSUPP;
+    if (!e && (n<36 || (inquiry[0]&31)!=5)) e = -FS_EOPNOTSUPP;
+    ready_result(d, "inquiry", e, n); if (e) return e;
     memset(p,0,sizeof(p)); p[0] = 0x25; uint8_t capacity[8];
     e = atapi_packet(d, p, sizeof(p), capacity, sizeof(capacity), &n);
-    if (e) return e;
-    if (n != 8 || packet_be32(capacity + 4) != 2048 || packet_be32(capacity) == UINT32_MAX) return -FS_EOPNOTSUPP;
+    if (!e && (n != 8 || packet_be32(capacity + 4) != 2048 || packet_be32(capacity) == UINT32_MAX)) e = -FS_EOPNOTSUPP;
+    ready_result(d, "capacity", e, n); if (e) return e;
     d->block.capacity = (uint64_t)packet_be32(capacity) + 1;
     /* First data track, then last-session information. QEMU/SFF encode
      * format 1 in byte 9, unlike later MMC's additional byte-2 field. */
     memset(p, 0, sizeof(p)); p[0] = 0x43; p[8] = 20;
     uint8_t toc[20]; e = atapi_packet(d, p, sizeof(p), toc, sizeof(toc), &n);
-    if (e) return e;
-    if (n < 12 || !(toc[5] & 4)) return -FS_EOPNOTSUPP;
+    if (!e && (n < 12 || !(toc[5] & 4))) e = -FS_EOPNOTSUPP;
+    ready_result(d, "toc", e, n); if (e) return e;
     d->session_lba = packet_be32(toc + 8);
     p[8] = 12; p[9] = 0x40;
     e = atapi_packet(d, p, sizeof(p), toc, 12, &n);
-    if (e) return e;
-    if (n != 12 || packet_be32(toc + 8) >= d->block.capacity) return -FS_EIO;
+    if (!e && (n != 12 || packet_be32(toc + 8) >= d->block.capacity)) e = -FS_EIO;
+    ready_result(d, "session", e, n); if (e) return e;
     d->session_lba = packet_be32(toc + 8);
     d->media = ATAPI_READY;
+    ready_result(d, "ready", 0, n);
     return 0;
 }
 int atapi_eject(struct ata_device *d)

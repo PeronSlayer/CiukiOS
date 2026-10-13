@@ -48,8 +48,11 @@ struct ata_device {
     int8_t firmware_udma;            /* measured before the discovery SRST */
     uint64_t dma_requests, dma_bytes, dma_bounces, dma_errors;
     uint8_t packet_bytes, packet_type, sense_key, asc, ascq;
+    const char *ready_stage;
+    int ready_error;
     enum atapi_media media;
     uint32_t session_lba;
+    uint32_t spinup_generation;
     uint64_t packet_commands, read_blocks, media_writes, max_packet_ms;
 };
 

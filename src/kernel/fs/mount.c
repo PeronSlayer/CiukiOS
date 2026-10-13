@@ -336,18 +336,26 @@ int storage_remove_removable(struct storage *s, struct blkdev *dev, bool surpris
     int e=storage_remove_removable_locked(s,dev,surprise);
     fs_lock_drop(&s->vfs.lock); return e;
 }
-int storage_add_ro(struct storage *s, unsigned slot, struct blkdev *dev, uint64_t session)
+int storage_add_ro_locked(struct storage *s, unsigned slot, struct blkdev *dev, uint64_t session)
 {
     if (!s || !s->ready || s->stopped || slot>=STORAGE_DISKS || !dev) return -FS_EINVAL;
+    if (session >= dev->capacity) return -FS_EINVAL;
     struct fs_ro_volume *ro=&s->optical[slot];
     if (ro->mounted) return -FS_EBUSY;
     unsigned d=s->next_drive;
     while (d<26 && vfs_drive_present(&s->vfs,d)) d++;
     if (d>=26) return -FS_ENOSPC;
     int e=fs_ro_mount(ro,&iso9660_ops,&s->cache,dev,session,dev->capacity-session);
-    if (!e) e=vfs_attach_ro(&s->vfs,d,ro);
+    if (!e) e=vfs_attach_ro_locked(&s->vfs,d,ro);
     if (e && ro->mounted) fs_ro_unmount(ro);
     return e ? e : (int)d;
+}
+int storage_add_ro(struct storage *s, unsigned slot, struct blkdev *dev, uint64_t session)
+{
+    if (!s) return -FS_EINVAL;
+    fs_lock_take(&s->vfs.lock);
+    int e=storage_add_ro_locked(s,slot,dev,session);
+    fs_lock_drop(&s->vfs.lock); return e;
 }
 void storage_refresh_ro(struct storage *s)
 {
@@ -603,17 +611,15 @@ void storage_init(void)
     for (unsigned slot=0; slot<STORAGE_DISKS; slot++) {
         struct ata_device *dev=devices[slot];
         if (!dev || !dev->atapi) continue;
-        e=atapi_ready(dev);
-        if (!e) e=storage_add_ro(s,slot,&dev->block,dev->session_lba);
-        klog("[storage] optical slot=%u drive=%c mode=ro generation=%u result=%d reason=%s",
-             slot,e>=3 ? 'A'+e : '-',dev->block.media_generation,e,
-             dev->media==ATAPI_NO_MEDIUM ? "no_medium" : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "unavailable");
+        optical_bind(s,slot,dev);
     }
+    optical_service(s,fs_now_ms());
     /* The F1 boot-identity amendment accepts disk 0, primary partition 1
      * for CBI1. Loader fingerprints remain a boot-info v2 requirement. */
     drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_STORAGE_IDENTITY,
         .disk = 0, .partition = 1, .readonly = true, .reason = "loader_fingerprints_absent" });
     if (!probe) {
+        optical_start_service(s);
         struct storage_volume *boot = storage_volume(s, 2);
         e = bootlog_activate(&s->vfs, boot && !boot->error && !boot->fat.readonly, s->sequence);
         klog("[storage] disk_log=%s error=%d", e ? "unavailable" : "available", e);

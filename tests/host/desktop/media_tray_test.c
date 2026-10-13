@@ -19,7 +19,7 @@ int main(void)
 {
     fake_reset();desk_init(&d,&fake_ops,640,480);d.icon=store;desk_shell_enable(&d);
     d.pixels=calloc(d.width*d.height,4);assert(d.pixels);
-    struct ciuki_media_state s={.version=1,.size=sizeof(s),.removable_mask=(1u<<4)|(1u<<5)};
+    struct ciuki_media_state s={.version=CIUKI_MEDIA_VERSION,.size=sizeof(s),.removable_mask=(1u<<4)|(1u<<5)};
     s.generation[4]=99;s.generation[5]=100;
     desk_shell_media_update(&d,&s);assert(d.damage.count);
     int x=640-SH_TRAY_W+44,y=464;
@@ -33,6 +33,10 @@ int main(void)
     s.removable_mask=0x03fffff0;desk_shell_media_update(&d,&s);click(x,y);
     assert(desk_shell_key(&d,DU_KEY_DOWN,1)&&d.sh.media_scroll==1);
     assert(desk_shell_key(&d,DU_KEY_UP,1)&&!d.sh.media_scroll);
+    s.removable_mask=1u<<3;s.generation[3]=88;s.type[3]=CIUKI_MEDIA_OPTICAL;
+    desk_shell_media_update(&d,&s);assert(d.sh.media_open);
+    /* One row: popup starts 398 and the eject action starts 426. */
+    click(430,432);assert(!d.sh.media_open && d.sh.want_remove==3 && d.sh.remove_generation==88);
     free(d.pixels);d.pixels=NULL;desk_render_release(&d);assert(!fake_live());
     puts("PASS removable tray: runtime Tango lookup, letters/generations, removal request, disappearance, Escape, long-list scroll, polling and damage");return 0;
 }

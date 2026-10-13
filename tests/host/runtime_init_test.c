@@ -83,6 +83,7 @@ static unsigned sequence, frame_count, max_activation_length;
 static char frames[64][512];
 static char log_lines[64][256];
 volatile uint64_t g_ticks;
+uint32_t ticks_lo(void) { return (uint32_t)g_ticks; }
 char g_cpu_vendor[13] = "GenuineIntel";
 uint32_t g_cpu_signature = 0x000006B1u;
 #define CIUKI_BUILD_HEX8 "12345678"
@@ -190,6 +191,10 @@ void task_start(struct task *task) { CHECK(task != 0); }
 int bootlog_activate(struct vfs *vfs, bool qualified, uint32_t seq)
 { (void)vfs; (void)qualified; (void)seq; return 0; }
 int atapi_ready(struct ata_device *d) { (void)d; return -FS_EIO; }
+int optical_bind(struct storage *s,unsigned slot,struct ata_device *d)
+{ (void)s; (void)slot; (void)d; CHECK(false); return -FS_EIO; }
+void optical_service(struct storage *s,uint64_t now) { (void)s; (void)now; }
+void optical_start_service(struct storage *s) { (void)s; }
 int storage_add_ro(struct storage *s, unsigned slot, struct blkdev *b, uint64_t session)
 { (void)s; (void)slot; (void)b; (void)session; return -FS_EIO; }
 int storage_add_disk(struct storage *s, unsigned slot, struct blkdev *dev)
