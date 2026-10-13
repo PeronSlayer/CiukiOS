@@ -91,7 +91,7 @@ static int fault(struct savage2d *s)
         s->quarantined = true; s->active = false; s->timeouts++;
         /* Cursor is not an engine writer; hide it without touching scanout.
          * Never reset/re-enable or release an engine with unproven idle. */
-        if (s->touched) s->io.write_cr(s->io.ctx, 0x45, s->saved45 & ~1u);
+        if (s->touched) port_cr_write(s, 0x45, s->saved45 & ~1u);
         restore_mmio(s);
         if (s->io.fault) s->io.fault(s->io.ctx);
     }
@@ -168,8 +168,8 @@ static int cursor_show(void *ctx, bool show)
 {
     struct savage2d *s = ctx;
     if (!s->active || s->quarantined || !s->cursor || (show && !s->cursor_loaded)) return -ENODEV;
-    s->io.write_cr(s->io.ctx, 0x45, (s->saved45 & ~0x11u) | (show ? 1u : 0u));
-    if ((s->io.read_cr(s->io.ctx, 0x45) & 1u) != (show ? 1u : 0u)) return fault(s);
+    port_cr_write(s, 0x45, (s->saved45 & ~0x11u) | (show ? 1u : 0u));
+    if ((port_cr_read(s, 0x45) & 1u) != (show ? 1u : 0u)) return fault(s);
     s->operations++;
     return 0;
 }
@@ -191,16 +191,16 @@ static int cursor_set(void *ctx, const struct accel_cursor *c)
         p[2] = (uint8_t)image; p[3] = (uint8_t)(image >> 8);
     }
     s->io.drain(s->io.ctx);
-    s->io.write_cr(s->io.ctx, 0x55, s->saved55 & ~0x10u);
+    port_cr_write(s, 0x55, s->saved55 & ~0x10u);
     unsigned bytes = ((s->descriptor >> 16) & 255u) == 16 ? 2 : 3;
-    (void)s->io.read_cr(s->io.ctx, 0x45);
-    for (unsigned i = 0; i < bytes; i++) s->io.write_cr(s->io.ctx, 0x4a, c->foreground >> (i * 8));
-    (void)s->io.read_cr(s->io.ctx, 0x45);
-    for (unsigned i = 0; i < bytes; i++) s->io.write_cr(s->io.ctx, 0x4b, c->background >> (i * 8));
-    s->io.write_cr(s->io.ctx, 0x4c, (s->cursor_offset >> 18) & 0x7f);
-    s->io.write_cr(s->io.ctx, 0x4d, (s->cursor_offset >> 10) & 0xfc);
-    if (s->io.read_cr(s->io.ctx,0x4c) != ((s->cursor_offset >> 18)&0x7f) ||
-        s->io.read_cr(s->io.ctx,0x4d) != ((s->cursor_offset >> 10)&0xfc)) return fault(s);
+    (void)port_cr_read(s, 0x45);
+    for (unsigned i = 0; i < bytes; i++) port_cr_write(s, 0x4a, c->foreground >> (i * 8));
+    (void)port_cr_read(s, 0x45);
+    for (unsigned i = 0; i < bytes; i++) port_cr_write(s, 0x4b, c->background >> (i * 8));
+    port_cr_write(s, 0x4c, (s->cursor_offset >> 18) & 0x7f);
+    port_cr_write(s, 0x4d, (s->cursor_offset >> 10) & 0xfc);
+    if (port_cr_read(s,0x4c) != ((s->cursor_offset >> 18)&0x7f) ||
+        port_cr_read(s,0x4d) != ((s->cursor_offset >> 10)&0xfc)) return fault(s);
     s->cursor_loaded = true;
     return 0;
 }
@@ -210,10 +210,10 @@ static int cursor_move(void *ctx, int32_t x, int32_t y)
     if (!s->active || s->quarantined || !s->cursor) return -ENODEV;
     if (x < -63 || y < -63 || x > 2047 || y > 2047) return -EINVAL;
     uint32_t px = x < 0 ? 0u : (uint32_t)x, py = y < 0 ? 0u : (uint32_t)y;
-    s->io.write_cr(s->io.ctx, 0x4e, x < 0 ? (uint32_t)-x : 0);
-    s->io.write_cr(s->io.ctx, 0x4f, y < 0 ? (uint32_t)-y : 0);
-    s->io.write_cr(s->io.ctx, 0x46, px >> 8); s->io.write_cr(s->io.ctx, 0x47, px);
-    s->io.write_cr(s->io.ctx, 0x49, py); s->io.write_cr(s->io.ctx, 0x48, py >> 8);
+    port_cr_write(s, 0x4e, x < 0 ? (uint32_t)-x : 0);
+    port_cr_write(s, 0x4f, y < 0 ? (uint32_t)-y : 0);
+    port_cr_write(s, 0x46, px >> 8); port_cr_write(s, 0x47, px);
+    port_cr_write(s, 0x49, py); port_cr_write(s, 0x48, py >> 8);
     s->operations++;
     return 0;
 }
@@ -228,13 +228,13 @@ static int stop_engine(void *ctx)
     if (sync_engine(s)) return -EIO;
     /* Never touch quarantined resources beyond idle observation. */
     if (s->quarantined) return 0;
-    s->io.write_cr(s->io.ctx, 0x45, s->saved45 & ~1u);
+    port_cr_write(s, 0x45, s->saved45 & ~1u);
     if (disable_bci(s, s->saved_bci)) return -EIO;
     s->io.write32(s->io.ctx, 0x8168, s->saved_gbd[0]);
     s->io.write32(s->io.ctx, 0x816c, s->saved_gbd[1]);
-    s->io.write_cr(s->io.ctx, 0x31, s->saved31);
-    s->io.write_cr(s->io.ctx, 0x50, s->saved50);
-    s->io.write_cr(s->io.ctx, 0x55, s->saved55);
+    port_cr_write(s, 0x31, s->saved31);
+    port_cr_write(s, 0x50, s->saved50);
+    port_cr_write(s, 0x55, s->saved55);
     restore_mmio(s);
     s->active = false; s->touched = false; s->cursor_loaded = false;
     return 0;
@@ -265,8 +265,7 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset)
 {
     if (s->quarantined) return -EIO;
-    if (!io || !io->read32 || !io->write32 || !io->read_cr || !io->write_cr ||
-        !io->now_us || !io->delay_us || !io->drain || !io->read8 || !io->write8 ||
+    if (!io || !io->read32 || !io->write32 || !io->now_us || !io->delay_us || !io->drain ||
         !io->read_port || !io->write_port || !mode_supported(d) ||
         (cursor && (cursor_offset & 4095u))) return -EINVAL;
     s->io = *io; s->width = d->width; s->height = d->height; s->offset = 0;
@@ -277,7 +276,7 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     s->reason = 0; s->idle_mask = 0; s->status_logged = false;
     s->status_ready = false;
     s->reset_us = s->poll_us = 0;
-    /* Bootstrap through legacy I/O: the MMIO VGA alias is not yet proven.
+    /* All operational VGA access stays on the exclusively owned ports.
      * RE046-B CR39: A0 unlocks extensions without the extra A5 permissions. */
     uint8_t vga = io->read_port(io->ctx, 0x3c3);
     io->write_port(io->ctx, 0x3c3, vga | 1u);
@@ -292,59 +291,69 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     port_cr_write(s, 0x40, s->saved40 | 1u);
     if (!(port_cr_read(s, 0x40) & 1u))
         return fail(s, "crtc_locked");
-    if (io->read_cr(io->ctx, 0x38) != cr38) return fail(s, "mmio_alias_dead");
-    /* Nothing in the engine domain, especially MM48C60, before CR66 reset. */
-    io->write8(io->ctx, 0x83c4, 0x08); io->write8(io->ctx, 0x83c5, 0x06);
-    if (supersavage) {
-        io->write8(io->ctx, 0x83c4, 0x26); io->write8(io->ctx, 0x83c5, 0x40);
-        if (io->read8(io->ctx, 0x83c5) != 0x40) return fail(s, "pipe_select_failed");
+    if (io->read8 && io->write8) {
+        io->write8(io->ctx, 0x83d4, 0x38);
+        uint8_t alias = io->read8(io->ctx, 0x83d5);
+        klog("[accel] savage vga_alias reg=083d5 port=%02x alias=%02x match=%u",
+            cr38, alias, alias == cr38);
     }
-    uint8_t misc = io->read8(io->ctx, 0x83cc);
+    /* Nothing in the engine domain, especially MM48C60, before CR66 reset. */
+    io->write_port(io->ctx, 0x3c4, 0x08); io->write_port(io->ctx, 0x3c5, 0x06);
+    if (supersavage) {
+        io->write_port(io->ctx, 0x3c4, 0x26); io->write_port(io->ctx, 0x3c5, 0x40);
+        if (io->read_port(io->ctx, 0x3c5) != 0x40) return fail(s, "pipe_select_failed");
+    }
+    uint8_t misc = io->read_port(io->ctx, 0x3cc);
     if (misc == 0xff) return fail(s, "dead_vga");
-    io->write8(io->ctx, 0x83c2, misc | 1u);
-    if (!(io->read8(io->ctx, 0x83cc) & 1u)) return fail(s, "crtc_select_failed");
+    io->write_port(io->ctx, 0x3c2, misc | 1u);
+    if (!(io->read_port(io->ctx, 0x3cc) & 1u)) return fail(s, "crtc_select_failed");
     /* CR66.0 may only change during blank/retrace. Preserve the VBE engine
      * enablement; a firmware mode without it retains software presentation. */
-    uint8_t cr66 = io->read_cr(io->ctx, 0x66) & 0xbbu;
+    uint8_t cr66 = port_cr_read(s, 0x66) & 0xbbu;
     if (!(cr66 & 1u)) {
         s->cpu_safe=true; s->reason="engine_disabled"; restore_mmio(s); return -ENODEV;
     }
     uint64_t reset_start = io->now_us(io->ctx);
-    io->write_cr(io->ctx, 0x66, cr66 | 2u);
+    port_cr_write(s, 0x66, cr66 | 2u);
     int delay = io->delay_us(io->ctx, 10000);
-    uint8_t asserted = io->read_cr(io->ctx, 0x66);
+    uint8_t asserted = port_cr_read(s, 0x66);
     /* Always deassert reset even when pacing failed. Never change CR66.0. */
-    io->write_cr(io->ctx, 0x66, cr66 & ~2u);
+    port_cr_write(s, 0x66, cr66 & ~2u);
     int settled = io->delay_us(io->ctx, 10000);
     s->reset_us = io->now_us(io->ctx) - reset_start;
     if (delay || settled) return fail(s, "delay_failed");
     /* Reserved CR66.2/.6 have undefined reads. All defined controls,
      * especially enable and both reset edges, must still agree. */
     if ((asserted & 0xbbu) != ((cr66 | 2u) & 0xbbu) ||
-        (io->read_cr(io->ctx, 0x66) & 0xbbu) != ((cr66 & ~2u) & 0xbbu))
+        (port_cr_read(s, 0x66) & 0xbbu) != ((cr66 & ~2u) & 0xbbu))
         return fail(s, "reset_readback_failed");
+    /* Independent engine-window probe after reset. RE046-B gives MM48C18
+     * a zero power-on default, but not a guaranteed CR66 reset value. Test
+     * the defined controls, preserving firmware counters/reserved fields;
+     * never guess GBD1's explicitly undefined default. */
+    s->saved_bci = io->read32(io->ctx, BCI_CONTROL);
+    klog("[accel] savage engine_probe reg=48c18 raw=%08x", s->saved_bci);
+    if (s->saved_bci == UINT32_MAX) return fail(s, "dead_bci");
+    if (s->saved_bci & 7u) return fail(s, "firmware_command_buffer");
     s->status_ready = true;
     if (sync_engine(s)) return -EIO;
     /* VBE linear aperture only: do not reinterpret a tiled primary stream. */
     if (io->read32(io->ctx, 0x81c8) & 0xc0000000u) return fail(s, "tiled_scanout");
-    s->saved31 = io->read_cr(io->ctx, 0x31);
-    s->saved50 = io->read_cr(io->ctx, 0x50); s->saved45 = io->read_cr(io->ctx, 0x45);
-    s->saved55 = io->read_cr(io->ctx, 0x55); s->saved_bci = io->read32(io->ctx, BCI_CONTROL);
-    /* Active firmware command buffers cannot be repurposed. */
-    if (s->saved_bci == UINT32_MAX) return fail(s, "dead_bci");
-    if (s->saved_bci & 7u) return fail(s, "firmware_command_buffer");
+    s->saved31 = port_cr_read(s, 0x31);
+    s->saved50 = port_cr_read(s, 0x50); s->saved45 = port_cr_read(s, 0x45);
+    s->saved55 = port_cr_read(s, 0x55);
     if (disable_bci(s, s->saved_bci)) return -EIO;
     s->saved_gbd[0] = io->read32(io->ctx, 0x8168); s->saved_gbd[1] = io->read32(io->ctx, 0x816c);
     s->touched = true;
-    io->write_cr(io->ctx, 0x31, (s->saved31 & ~1u) | 0x0cu);
+    port_cr_write(s, 0x31, (s->saved31 & ~1u) | 0x0cu);
     io->write32(io->ctx, 0x8128, UINT32_MAX); io->write32(io->ctx, 0x812c, UINT32_MAX);
     io->write32(io->ctx, 0x8134, 0x00070027u);
     io->write32(io->ctx, 0x48c0c, 0); io->write32(io->ctx, 0x48c10, 0x00700040u);
     io->write32(io->ctx, 0x8168, 0);
     uint32_t gbd = s->descriptor | (supersavage ? 1u : 9u);
     io->write32(io->ctx, 0x816c, gbd);
-    io->write_cr(io->ctx, 0x50, (s->saved50 & ~0x30u) | (d->bpp==16 ? 0x10u : 0x30u) | 0xc1u);
-    if (io->read32(io->ctx, 0x816c) != gbd || !(io->read_cr(io->ctx, 0x40) & 1u))
+    port_cr_write(s, 0x50, (s->saved50 & ~0x30u) | (d->bpp==16 ? 0x10u : 0x30u) | 0xc1u);
+    if (io->read32(io->ctx, 0x816c) != gbd || !(port_cr_read(s, 0x40) & 1u))
         return fail(s, "descriptor_readback_failed");
     uint32_t enabled = (s->saved_bci & 0x3ff0u) | 8u;
     io->write32(io->ctx, BCI_CONTROL, enabled);
@@ -427,31 +436,6 @@ static void hw_write(void *ctx, uint32_t offset, uint32_t value)
 {
     (void)ctx; trace_write("w32", 0x40000000u | offset, offset, value);
     if (registers) *(volatile uint32_t *)(registers + offset) = value;
-}
-static unsigned cr_port(void) { return registers[0x83cc] & 1u ? 0x83d4 : 0x83b4; }
-static uint8_t cr_read(uint8_t index) { unsigned p=cr_port(); registers[p]=index; return registers[p+1]; }
-static void cr_write(uint8_t index, uint8_t value) { unsigned p=cr_port(); registers[p]=index; registers[p+1]=value; }
-static uint8_t hw_cr_read(void *ctx, uint8_t index)
-{
-    (void)ctx; bool logged = trace_read_begin("crr", 0x80000000u | index, index);
-    uint8_t value;
-    if (index == 0x38 || index == 0x39) value = cr_read(index);
-    else {
-        uint8_t a = cr_read(0x38), b = cr_read(0x39);
-        cr_write(0x38, 0x48); cr_write(0x39, 0xa0);
-        value = cr_read(index);
-        cr_write(0x39,b); cr_write(0x38,a);
-    }
-    if (logged) trace_value("crr", index, value);
-    return value;
-}
-static void hw_cr_write(void *ctx, uint8_t index, uint8_t value)
-{
-    (void)ctx; trace_write("crw", 0xc0000000u | index, index, value);
-    if (index == 0x38 || index == 0x39) { cr_write(index, value); return; }
-    uint8_t a = cr_read(0x38), b = cr_read(0x39);
-    cr_write(0x38, 0x48); cr_write(0x39, 0xa0);
-    cr_write(index,value); cr_write(0x39,b); cr_write(0x38,a);
 }
 static uint8_t hw_port_read(void *ctx, uint16_t port)
 {
@@ -598,6 +582,35 @@ static const struct accel_ops *decline(const char *reason)
     attempt_in_progress = false;
     return 0;
 }
+static const char *eligibility(const struct fb_device *d, const struct pci_func **found)
+{
+    if (engine.quarantined || attempt_blocked)
+        return engine.reason ? engine.reason : "attempt_blocked";
+    const struct pci_func *gpu = 0; unsigned displays = 0;
+    for (unsigned i = 0; i < pci_count(); i++) {
+        const struct pci_func *p = pci_get(i);
+        if (p && p->class_code == 3) { displays++; gpu = p; }
+    }
+    if (displays != 1 || !savage2d_supported(gpu)) return "unsupported_device";
+    if (!d || !d->present) return "framebuffer_absent";
+    if (!(gpu->command & 1u)) return "io_decode_disabled";
+    if (!(gpu->command & 2u)) return "memory_decode_disabled";
+    if ((gpu->bar[0] & 7u) || (gpu->bar[1] & 7u) || !gpu->bar[0] ||
+        ((gpu->bar[0]&~15u)&(SAVAGE_MMIO_BYTES-1u)) ||
+        (gpu->bar[1] & ~15u) != d->phys || !safe_extent(gpu->bar[0] & ~15u, SAVAGE_MMIO_BYTES))
+        return "invalid_aperture";
+    /* No side effects for unsupported geometry. */
+    if (!mode_supported(d)) return "unsupported_mode";
+    *found = gpu;
+    return 0;
+}
+bool savage2d_eligible(const struct fb_device *d)
+{
+    const struct pci_func *gpu;
+    const char *reason = eligibility(d, &gpu);
+    if (reason) decline(reason);
+    return !reason;
+}
 static const struct accel_ops *init_with_io(const struct fb_device *d, struct vfs *vfs,
                                           const struct savage_io *io)
 {
@@ -606,23 +619,9 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         activation_start = activation_now(activation_ctx);
     }
     trace_us = 0;
-    if (engine.quarantined || attempt_blocked)
-        return decline(engine.reason ? engine.reason : "attempt_blocked");
-    const struct pci_func *gpu = 0; unsigned displays = 0;
-    for (unsigned i = 0; i < pci_count(); i++) {
-        const struct pci_func *p = pci_get(i);
-        if (p && p->class_code == 3) { displays++; gpu = p; }
-    }
-    if (displays != 1 || !savage2d_supported(gpu)) return decline("unsupported_device");
-    if (!d || !d->present) return decline("framebuffer_absent");
-    if (!(gpu->command & 1u)) return decline("io_decode_disabled");
-    if (!(gpu->command & 2u)) return decline("memory_decode_disabled");
-    if ((gpu->bar[0] & 7u) || (gpu->bar[1] & 7u) || !gpu->bar[0] ||
-        ((gpu->bar[0]&~15u)&(SAVAGE_MMIO_BYTES-1u)) ||
-        (gpu->bar[1] & ~15u) != d->phys || !safe_extent(gpu->bar[0] & ~15u, SAVAGE_MMIO_BYTES))
-        return decline("invalid_aperture");
-    /* No side effects for unsupported geometry. */
-    if (!mode_supported(d)) return decline("unsupported_mode");
+    const struct pci_func *gpu;
+    const char *reason = eligibility(d, &gpu);
+    if (reason) return decline(reason);
     /* With a VFS the marker is handled here (host harness); the kernel caller
      * passes NULL and persists/clears it outside the presenter mutex
      * (savage2d_attempt_begin/end): file I/O takes the ATA channel mutex and
@@ -741,14 +740,14 @@ int savage2d_attempt_end(struct vfs *vfs)
 void savage2d_quarantine(const char *reason)
 {
     if (!engine.quarantined && engine.touched)
-        engine.io.write_cr(engine.io.ctx, 0x45, engine.saved45 & ~1u);
+        port_cr_write(&engine, 0x45, engine.saved45 & ~1u);
     engine.quarantined = true; engine.active = false; engine.reason = reason;
     hw_fault(0);
     decline(reason);
 }
 const struct accel_ops *savage2d_init(const struct fb_device *d, struct vfs *vfs)
 {
-    const struct savage_io io = {0, hw_read, hw_write, hw_cr_read, hw_cr_write, hw_now, hw_delay,
+    const struct savage_io io = {0, hw_read, hw_write, hw_now, hw_delay,
         hw_drain, hw_fault, hw_read8, hw_write8, hw_port_read, hw_port_write};
     return init_with_io(d, vfs, &io);
 }

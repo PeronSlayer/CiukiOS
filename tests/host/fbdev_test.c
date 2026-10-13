@@ -9,6 +9,7 @@
 #include <ciuki/mm.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/registry.h>
+#include <ciuki/task.h>
 
 /* _DEFAULT_SOURCE exposes host wait macros; the kernel supplies its own. */
 #undef WIFEXITED
@@ -69,6 +70,22 @@ void klog(const char *fmt, ...)
 void kmutex_init(struct kmutex *m) { memset(m, 0, sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { (void)m; CHECK(locks == 0); locks++; }
 void kmutex_unlock(struct kmutex *m) { (void)m; CHECK(locks == 1); locks--; }
+static struct task marker_worker;
+static bool fail_marker_worker;
+unsigned marker_worker_creates, marker_worker_starts;
+void kwait_init(struct kwait *q) { memset(q, 0, sizeof(*q)); }
+bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t deadline)
+{ (void)q; (void)deadline; return cond(arg); }
+void kwait_wake_all(struct kwait *q) { (void)q; }
+uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
+struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
+{
+    CHECK(!strcmp(name, "savage-marker") && fn && !arg && prio == P_NORMAL && !locks);
+    marker_worker_creates++;
+    marker_worker.prio = prio;
+    return fail_marker_worker ? NULL : &marker_worker;
+}
+void task_start(struct task *t) { CHECK(t == &marker_worker && !locks); marker_worker_starts++; }
 unsigned registry_count(void) { return 1; }
 const struct resource *registry_get(unsigned i) { return i == 0 ? &reservation : 0; }
 int registry_claim_reserved(int h, gen_t gen, const char *owner)

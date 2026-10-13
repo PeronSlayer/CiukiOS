@@ -4,6 +4,47 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f1-49: VGA ports, independent engine probe and background persistence
+
+Research rechecked on 2026-10-13 against S3's
+[RE046-B](https://vgamuseum.info/images/doc/s3/savage4_registers.pdf)
+§1.2 and pp. 76, 78, 83, 148, 227: new MMIO is enabled by default;
+CR40.0 enables 2D register I/O, CR53.4 enables **old** MMIO, and CR3A.7
+disables PCI read bursts. These descriptions do not establish a combined
+CR40/CR53/CR3A enable requirement for the new VGA alias. GBD1 has an
+undefined default; MM48C18 has a zero power-on default, with defined BCI,
+overflow and status-update controls. A CR66 engine reset is not proof that
+all firmware-programmed BCI fields became zero.
+
+[X.Org's SavageEnableMMIO and SavageMapMem](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c)
+use VGA offset `+0x8000` and a 512-KiB BAR0 window for Savage4 and
+SuperSavage, with no alternative SuperSavage VGA offset or CR53/CR3A
+enable sequence. No public SuperSavage register manual was located.
+The T23's failed alias therefore does not justify guessing another address
+or changing those firmware controls.
+
+This amendment supersedes the alias prerequisite below. All operational
+VGA accesses, including sequencer/pipe selection, reset, cursor and teardown,
+use the exclusive legacy port lease. An optional byte-index CR38 alias
+probe logs the port/alias values and match result; it never authorizes or
+rejects engine access. After both CR66 reset delays and control readbacks,
+read/log MM48C18 independently. Reject a dead response or active firmware
+overflow/status-update controls before reading MM48C60; then retain the
+f1-27 idle, descriptor and BCI readback checks. Reserved bits and upper
+buffer counters are not assumed to have reset values.
+
+The kernel settings FAT implementation has no journal to reuse (`fat_write`
+replaces file chains). Choose the directive's asynchronous alternative:
+check device/aperture/mode eligibility first, then persist the existing
+attempt file on one reusable P_NORMAL kernel thread. The device-work
+continuation can claim registers only after write, commit and close all
+succeed. Clear on the same persistence thread, outside the presenter mutex.
+The desktop can present while marker I/O waits, and the shared device-work
+queue remains available. Worker/queue/storage failures retain software
+presentation; a committed interrupted attempt still blocks the next boot.
+This moves the latency off device-work; it does not claim fewer FAT writes
+or a measured improvement to T23 activation time.
+
 ## Primary references and repository comparison
 
 - S3, [Savage4 Registers, RE046-B, April 1999](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf),
