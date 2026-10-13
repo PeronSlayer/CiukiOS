@@ -44,7 +44,7 @@ int audio_stream_format(struct audio_stream *s, struct ciuki_audio_format *f)
     if (f->rate < 8000 || f->rate > AUDIO_RATE || f->output_rate) return -EINVAL;
     if (s->configured) return -EBUSY;
     s->rate = f->rate; s->format = f->format; s->channels = f->channels;
-    f->output_rate = AUDIO_RATE;
+    f->output_rate = audio_output_rate();
     return 0;
 }
 void audio_stream_reset(struct audio_stream *s)

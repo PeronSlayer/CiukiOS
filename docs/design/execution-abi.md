@@ -1099,12 +1099,27 @@ start with version,size. U8=1, S16LE=2; caps formats uses bits 0/1.
 
 | Record | Remaining fields, in byte order |
 | --- | --- |
-| caps | formats, min_rate, max_rate, output_rate, max_streams, ring_frames, period_frames, published_periods, backend (1=ICH AC97), generation, vendor, device, subsystem (sub_vendor low 16), revision, codec_id, drain_ms, reserved[2] |
+| caps | formats, min_rate, max_rate, output_rate, max_streams, ring_frames, period_frames, published_periods, backend (see transport IDs below), generation, vendor, device, subsystem (sub_vendor low 16), revision, codec_id, drain_ms, reserved[2] |
 | format | rate, format, channels, output_rate (input zero), reserved[2] |
 | gain | left, right, reserved[2] |
 | command | reserved[2] |
 | status | queued_frames, state (0=idle,1=started,2=failed), output_rate, generation, u64 accepted_frames, consumed_frames, output_frames, fetched_frames, source_starvation, fifo_errors, dma_halts, deadline_misses; i32 last_error; stream_generation, max_service_us, max_irq_us, transport_frames, reserved |
 | master | left, right, mute (0/1), save_state (0=defaults,1=saved,2=applied_unsaved), i32 save_error, reserved |
+
+F4-11 transport IDs (record layout and existing commands unchanged): 1 is the
+Intel-layout AC'97 engine (Intel ICH, SiS 7012, nForce/nForce2), 2 ES1370,
+3 ES1371/ES1373/CT5880, 4 ISA SB16, 5 VIA VT82C686, 6 VIA VT8233/VT8235.
+`output_rate` is the effective physical rate: 44,100 Hz on ES1370/SB16,
+48,000 Hz on the AC'97 transports. The default *input* remains 48,000 Hz;
+SET_FORMAT reports both rates and never substitutes the requested source rate.
+Generated/fetched/transport frame counters use physical output frames. DOS
+DSP/event/OPL time and their source taps remain at their existing 48 kHz clock.
+For write-only AK4531, `codec_id=414b4531h` is a software model tag derived
+from the ES1370 identity; it is not a codec register read. SB16 reports the
+observed DSP major/minor version in that field. The diagnostics cursor fields
+retain native transport units: ICH PICB in words, SiS in bytes, cyclic engine
+remaining counts in stereo frames; no field means audible completion. See
+[transport decisions and sources](f4-audio-second-set.md).
 
 SET_MASTER input save_state/save_error must be zero. Volumes/gains are 0..100.
 A successful SET_MASTER applies immediately and reports an unsuccessful save

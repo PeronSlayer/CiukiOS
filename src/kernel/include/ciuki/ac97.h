@@ -48,6 +48,8 @@ struct ac97_device {
     struct ac97_failure failure;
     struct ac97_cursor cursor;
     bool ready, running, stopping, quarantine, irq_attached, touched;
+    bool sis, nvidia, sis_gate_changed;
+    uint16_t saved_sis_gate;
     bool observed_halt, codec_changed, software_master, beep_present, cirrus_spdif;
     bool idle_tail; /* no started source: silence cushion, halts not counted */
     bool tail_drained; /* progress proved DCH at the fully fetched last period */

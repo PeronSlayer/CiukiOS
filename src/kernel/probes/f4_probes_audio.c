@@ -4,6 +4,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/audio.h>
 #include <ciuki/ac97.h>
+#include <ciuki/audio_backend.h>
 #include <ciuki/process.h>
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
@@ -59,12 +60,13 @@ static int probe_audio_native(void)
         rec_emit(name, "READY", "case=backend status=not_run reason=%s", audio.reason ? audio.reason : "device_absent");
         rec_emit(name, "ERROR", "status=not_run reason=%s", audio.reason ? audio.reason : "device_absent"); return 0;
     }
+    struct audio_transport transport; audio_backend_snapshot(&transport);
     rec_emit(name, "DATA", "case=identity vendor=%04x device=%04x subsystem=%08x revision=%u codec=%08x generation=%u irq=%u",
-        audio.caps.vendor, audio.caps.device, audio.caps.subsystem, audio.caps.revision, audio.caps.codec_id, audio.caps.generation, ac97.pci.irq_line);
+        audio.caps.vendor, audio.caps.device, audio.caps.subsystem, audio.caps.revision, audio.caps.codec_id, audio.caps.generation, transport.irq);
     rec_emit(name,"DATA","case=codec_paths pcm_unity=%04x nam_bytes=%u nabm_bytes=%u",
         ac97.pcm_unity,ac97.nam_bytes,ac97.nabm_bytes);
-    rec_emit(name, "DATA", "case=transport accepted_rate=%u period_frames=%u published_periods=%u lead_us=42667 drain_ms=%u master_left=%u master_right=%u mute=%u",
-        AUDIO_RATE, AUDIO_QUANTUM, AUDIO_LEAD, audio.caps.drain_ms, audio.master.left, audio.master.right, audio.master.mute);
+    rec_emit(name, "DATA", "case=transport accepted_rate=%u period_frames=%u published_periods=%u lead_us=%u drain_ms=%u master_left=%u master_right=%u mute=%u",
+        audio_output_rate(), AUDIO_QUANTUM, AUDIO_LEAD, (unsigned)((AUDIO_QUANTUM*AUDIO_LEAD*1000000ull+audio_output_rate()-1)/audio_output_rate()), audio.caps.drain_ms, audio.master.left, audio.master.right, audio.master.mute);
     struct process *p[2] = {0}; struct tone_result r[2] = {0};
     unsigned baseline = audio.commitment_pages;
     /* Lead diagnostics (QEMU evidence of 2026-10-11): record the spawn results. */
@@ -116,8 +118,9 @@ static int probe_audio_native(void)
     for (unsigned i = 0; i < 2; i++) if (p[i]) {
         if (p[i]->state == PROC_ZOMBIE) proc_reap(proc_supervisor(), p[i]); else err = -EIO;
     }
+    audio_backend_snapshot(&transport);
     rec_emit(name, "DATA", "case=worker running=%u pending=%u ready=%u error=%d published=%llu retired=%llu transport_fetched=%llu",
-        audio.running, audio.pending, audio.ready, audio.error, (unsigned long long)ac97.published, (unsigned long long)ac97.retired, (unsigned long long)ac97.fetched);
+        audio.running, audio.pending, audio.ready, audio.error, (unsigned long long)transport.published, (unsigned long long)transport.retired, (unsigned long long)transport.fetched);
     rec_emit(name, "DATA", "case=clock output=%llu fetched=%llu fifo=%llu halts=%llu deadlines=%llu quarantine=%u",
         audio.output, audio.fetched, audio.fifo, audio.halts, audio.deadlines, audio.quarantined);
     rec_emit(name, "DATA", "case=service max_service_us=%u max_irq_us=%u max_service_gap_us=%u max_control_us=%u",
