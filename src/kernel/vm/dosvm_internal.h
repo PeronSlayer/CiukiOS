@@ -111,6 +111,13 @@ struct dosvm {
         void *arg;
     } ports[DOSVM_PORTS];
     struct dpmi dpmi;        /* f3-04 kernel DPMI host, idle until the first entry */
+    /* f3-12: routine UART diagnostics wait for the outermost guest IRQ to
+     * return. Fixed storage, independent of guest memory and PIC state. */
+    struct {
+        char line[8][240];
+        uint32_t dropped;
+        uint8_t count;
+    } deferred_trace;
     /* f3-09: fixed lifetime budgets, with at most four IRQ0 hook epochs. */
     struct {
         uint8_t used[DOSVM_TRACE_COUNT], irq_epochs;

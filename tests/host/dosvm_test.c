@@ -249,6 +249,7 @@ int vfs_commit(struct vfs_table *table, int handle)
 static char last_record[256];
 static char recent_records[8][256];
 static unsigned records, guest_records, max_record;
+static void (*diag_time_hook)(void);
 static bool evidence_active = true;
 bool rec_active(void) { return evidence_active; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
@@ -268,6 +269,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
     int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
     CHECK(n>=0 && n<(int)sizeof(extra));
     rec_emit(probe,"DATA","%s",extra);
+    if (diag_time_hook) diag_time_hook();
 }
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"

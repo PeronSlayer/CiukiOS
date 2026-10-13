@@ -29,6 +29,25 @@ bool dpmi_handler_live(struct dosvm *v, struct dpmi_vec h)
     return dpmi_linear_owned(v, s.base + h.off, 1);
 }
 
+/* Worker-only diagnostics, outside the delivery transaction. Every master
+ * IRQ vector update survives the generic startup trace's lifetime budget.
+ * Descriptor snapshots distinguish a client stub from a host reflection or
+ * a freed/non-present selector. No guest/PIC state is changed here. */
+void dpmi_trace_irq_target(struct dosvm *v, const struct v86_frame *f, const char *event,
+                           uint8_t vector, struct dpmi_vec h)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    struct dpmi_seg s = {0};
+    bool valid = dpmi_seg(v, h.sel, &s);
+    unsigned i = h.sel >> 3;
+    bool ldt = (h.sel & 4) && i < DPMI_LDT_ENTRIES;
+    klog("[dosvm] event=%s vm=%u gen=%u vec=%02x to=%04x:%08x valid=%u present=%u live=%u base=%08x limit=%08x access=%02x big=%u kind=%u owner=%u cs=%04x eip=%08x",
+         event, v->info.key.id, v->info.key.generation, vector, h.sel, h.off,
+         valid, s.present, dpmi_handler_live(v, h), s.base, s.limit, s.access, s.big,
+         ldt ? v->dpmi.kind[i] : 0, ldt ? v->dpmi.owner[i] : 0,
+         f->tf.cs & 0xFFFF, f->tf.eip);
+}
+
 uint32_t dpmi_fault_linear(struct dosvm *v, const struct v86_frame *f)
 {
     struct dpmi_seg s;
@@ -1041,6 +1060,8 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
         v->trace.injected_eip = f->tf.eip;
     }
     irq_restore(flags);
+    if (e && hooked && !dpmi_handler_live(v, h))
+        dpmi_trace_irq_target(v, f, "pm_irq_invalid", vector, h);
     if (!irq && !e && (g_boot.flags & CBI_F_VERBOSE))
         dosvm_trace(v, DOSVM_TRACE_IRQ0, &from, vector, f->tf.cs & 0xFFFF, f->tf.eip);
     return e;

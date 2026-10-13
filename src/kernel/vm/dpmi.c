@@ -606,6 +606,8 @@ static int service(struct dosvm *v, struct v86_frame *f, unsigned ax)
             } else {
                 if (!vector_ok(v, cx, off, DPMI_PM_INT, 256)) return 1;
                 d->vec[bl] = (struct dpmi_vec){off, cx};
+                if (bl >= 8 && bl <= 15)
+                    dpmi_trace_irq_target(v, f, "pm_irq_vector", bl, d->vec[bl]);
             }
             dosvm_trace(v, DOSVM_TRACE_VECTOR, f, (ax << 8) | bl, cx, off);
             return 0;
