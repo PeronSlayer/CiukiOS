@@ -69,6 +69,22 @@ static void expected(void)
     desk_composite(&d,(struct desk_box){0,0,(int)d.width,(int)d.height}); d.pixels=out;
 }
 static void redraw(void) { fake_presents=0; expected(); assert(!desk_redraw(&d)); }
+static void assert_clock_counters(const char *tick, uint64_t damage)
+{
+    uint64_t uploaded=0;
+    for (unsigned i=0;i<fake_presents;i++)
+        uploaded+=(uint64_t)fake_rects[i].width*fake_rects[i].height;
+    int matches=d.frame_stats.damage_px==damage && d.frame_stats.scene_px==damage &&
+        d.frame_stats.presents==1 && fake_presents==1 && uploaded==damage &&
+        d.frame_stats.lfb_bytes==damage*4;
+    if (!matches)
+        fprintf(stderr,"clock %s counters: expected damage_px=scene_px=uploaded_px=%llu presents=fake_presents=1 lfb_bytes=%llu; actual damage_px=%llu scene_px=%llu presents=%llu fake_presents=%u uploaded_px=%llu lfb_bytes=%llu\n",
+            tick,(unsigned long long)damage,(unsigned long long)(damage*4),
+            (unsigned long long)d.frame_stats.damage_px,(unsigned long long)d.frame_stats.scene_px,
+            (unsigned long long)d.frame_stats.presents,fake_presents,(unsigned long long)uploaded,
+            (unsigned long long)d.frame_stats.lfb_bytes);
+    assert(matches && "clock counters mismatch (actual values above)");
+}
 static int switch_mode(struct desktop *desk, uint16_t id) { desk->display_pending=id; return 0; }
 static void shadow_equivalence(void)
 {
@@ -125,7 +141,13 @@ static void assertions(void)
     d.sh.cfg.clock_seconds=0; d.realtime_second=65; d.damage.count=0;
     desk_shell_clock_damage(&d,64); assert(!d.damage.count);
     d.sh.cfg.clock_seconds=1; desk_shell_clock_damage(&d,64); redraw();
-    assert(d.frame_stats.damage_px==2150 && fake_presents==1);
+    /* F2-53's proportional clock shrinks from 51 to 50 px, so the tray
+     * relayout damages the 1024x32 taskbar. F2-52's repeated-row 2D blits
+     * require d.accel; this software fixture still uploads one rectangle. */
+    assert_clock_counters("64->65 (tray relayout)",32768);
+    d.realtime_second=66; desk_shell_clock_damage(&d,65); redraw();
+    /* Equal-width ticks retain the precise 50x25 clock-only upload. */
+    assert_clock_counters("65->66 (clock only)",1250);
     for (int n=0;n<20;n++) desk_damage_add(&d.damage,(struct desk_box){300+n,300,2,2},d.width,d.height);
     redraw(); assert(fake_presents==1 && d.frame_stats.damage_px==42);
     d.sh.icon_selected=0; desk_damage_add(&d.damage,d.sh.icons[0].box,d.width,d.height); redraw();
