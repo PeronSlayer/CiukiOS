@@ -14,6 +14,8 @@ import threading
 
 if '--version' in sys.argv:
     print('QEMU emulator version 11.0.0 (scripted host fixture)');sys.exit(0)
+if '-machine' in sys.argv and sys.argv[sys.argv.index('-machine')+1].endswith(',help'):
+    print('  i8042=<bool> - Enable/disable Intel 8042 PS/2 controller emulation');sys.exit(0)
 scenario_path=Path(os.environ['CIUKI_FAKE_SCRIPT'])
 scenario=json.loads(scenario_path.read_text())
 boot=0
