@@ -70,6 +70,8 @@ struct usb_device {
     struct usb_storage storage;
     bool hub_blocked[USB_PORT_MAX];
     uint8_t hub_child[USB_PORT_MAX]; /* index+1; zero = not enumerated */
+    uint16_t hub_status[USB_PORT_MAX]; /* last observed class port status */
+    bool hub_scanned;
 };
 struct usb_hc_ops {
     int (*start)(struct usb_host *);

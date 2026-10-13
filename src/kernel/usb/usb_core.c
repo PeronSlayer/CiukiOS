@@ -11,8 +11,9 @@ static struct usb_host hosts[USB_HOST_MAX];
 static unsigned host_count;
 bool usb_input_ready(void)
 {
-    for (unsigned i = 0; i < host_count; i++) if (hosts[i].ready && !hosts[i].quarantined) return true;
-    return false;
+    struct input_devices devices;
+    input_devices_snapshot(&devices);
+    return devices.usb != 0;
 }
 unsigned usb_count(void) { return host_count; }
 const struct usb_host *usb_get(unsigned i) { return i < host_count ? &hosts[i] : 0; }

@@ -86,6 +86,7 @@ bool usb_mouse_wheel_layout(const uint8_t *b, unsigned len)
 }
 int usb_hid_attach(struct usb_device *d, struct usb_hid *hid, unsigned report_len)
 {
+    if (hid->active) return -EINVAL;
     int err = usb_control(d, 0x21, 11, 0, hid->interface, 0, 0); if (err) return err;
     err = usb_control(d, 0x21, 10, 0, hid->interface, 0, 0);
     if (err && !(hid->protocol == 2 && err == -USB_EPIPE)) return err;
@@ -103,6 +104,7 @@ int usb_hid_attach(struct usb_device *d, struct usb_hid *hid, unsigned report_le
         hid->leds = leds;
     }
     hid->active = true;
+    input_devices_changed(INPUT_USB, true);
     klog("[usb] hid %s attached addr=%u interface=%u wheel=%u", hid->protocol == 1 ? "keyboard" : "mouse", d->address, hid->interface, hid->wheel);
     return 0;
 }
@@ -146,6 +148,7 @@ void usb_hid_release(struct usb_device *d, struct usb_hid *h)
         for (unsigned i=2;i<8;i++) if (first(h->previous,i)) key(d,code(h->previous[i]),0);
     } else for (unsigned i=0;i<3;i++) if (h->previous[0] & (1u<<i)) input_usb_event(INPUT_BTN,(uint16_t)i,0,d->generation,d->host->io.now(d->host->io.cookie));
     memset(h->previous,0,8); h->active=false; h->repeat_key=0;
+    input_devices_changed(INPUT_USB, false);
 }
 void usb_hid_poll(struct usb_device *d, struct usb_hid *h)
 {

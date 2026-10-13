@@ -600,6 +600,8 @@ static void test_policy_and_lifecycle(void)
     struct i8042_stats s;
     i8042_snapshot(&s);
     CHECK(s.active && !s.pending_command && !s.quarantined && s.generation);
+    struct input_devices devices;input_devices_snapshot(&devices);
+    CHECK(devices.ps2==2 && !devices.firmware && !devices.usb);
     CHECK(!(hw.config & 0x70) && (hw.config & 7) == 7 && !hw.resets && hw.selftests == 1);
     CHECK(s.last_elapsed_ms <= I8042_SETUP_MS && !host_masked[1] && !host_masked[12] && !host_masked[2]);
     CHECK(host_handlers[1] && host_handlers[12]);
@@ -640,6 +642,7 @@ static void test_policy_and_lifecycle(void)
     CHECK(hw.reads == reads && i8042_stop(s.generation) == -EINVAL && hw.writes == writes);
     res[native.handle[0]].generation--;
     CHECK(i8042_stop(s.generation) == 0);
+    input_devices_snapshot(&devices);CHECK(!devices.ps2 && !devices.firmware && !devices.usb);
     CHECK((hw.config & 0x33) == 0x30 && host_masked[1] && host_masked[12]);
     CHECK(!host_handlers[1] && !host_handlers[12] && !hw.count && !hw.resets);
     for (unsigned i = 0; i < registry_count(); i++)
@@ -1531,8 +1534,14 @@ static void test_firmware_mapping(void)
 static void test_usb_shared_queue(void)
 {
     reset_native();
+    struct input_devices devices;
+    input_devices_snapshot(&devices);CHECK(!devices.ps2 && !devices.firmware && !devices.usb);
+    input_devices_changed(INPUT_USB,true);
+    input_devices_snapshot(&devices);CHECK(!devices.ps2 && devices.usb==1);
+    CHECK(strstr(last_log,"[input] devices=1 source=usb event=attach"));
     /* A failed PS/2 controller must not prevent independent USB input. */
     native.stats.quarantined = true;
+    input_devices_snapshot(&devices);CHECK(devices.usb==1);
     input_usb_event(INPUT_KEY, INPUT_KEY_A, 1, 71, 1);
     struct input_event e;
     CHECK(input_read(&e) && e.type == INPUT_KEY && e.value == 1 && e.source == INPUT_USB && e.generation == 71);
@@ -1565,6 +1574,9 @@ static void test_usb_shared_queue(void)
     input_usb_event(INPUT_KEY, INPUT_KEY_A, 1, 73, 14);
     CHECK(!input_read(&e) && !native.queue.stats.keys_down);
     CHECK(!hw.reads && !hw.writes && !pic_changes);
+    input_devices_changed(INPUT_USB,false);
+    input_devices_snapshot(&devices);CHECK(!devices.ps2 && !devices.firmware && !devices.usb);
+    CHECK(strstr(last_log,"[input] devices=0 source=usb event=detach"));
     printf("USB shared input: PASS (PS/2 absence, merged keys/buttons, two keyboards, repeat, wheel, firmware guard)\n");
 }
 

@@ -12,6 +12,12 @@ enum input_type { INPUT_KEY = 1, INPUT_REL, INPUT_BTN, INPUT_TEXT, INPUT_RESYNC 
 enum input_axis { INPUT_X, INPUT_Y, INPUT_WHEEL };
 enum input_button { INPUT_LEFT, INPUT_RIGHT, INPUT_MIDDLE };
 enum input_source { INPUT_NATIVE = 1, INPUT_FIRMWARE, INPUT_USB };
+/* Live producers, independent of the boot-time i8042 activation result.
+ * PS/2 and firmware activate a keyboard/mouse pair; USB counts HID interfaces.
+ * An input grant remains valid even when every count is zero. */
+struct input_devices { unsigned ps2, firmware, usb; };
+void input_devices_snapshot(struct input_devices *out);
+void input_devices_changed(enum input_source source, bool attached);
 #define INPUT_F_RESYNC 1u
 /* Public set-1 positions: ordinary scan byte, E0 positions = 0x100 |
  * scan byte. Pause = 0x200 (a synthetic down/up, no hardware break code).

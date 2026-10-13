@@ -98,6 +98,7 @@ int main(int argc,char **argv)
     } else {
         assert(created==1 && started==1 && worker.state==T_READY);
         assert(usb_get(0)->ready && !usb_get(0)->device_count);
+        assert(!usb_input_ready()); /* a controller alone is not an input device */
         assert(!service_entries && service_queues==1 && !first_scans);
         if(!strcmp(argv[1],"csc-cleared")) m.regs[0x10/4]&=~0x00020002u;
         if(!setjmp(service_done)) { dispatched=true;worker.state=T_RUNNING;worker_fn(worker_arg);assert(!"service returned"); }
@@ -105,9 +106,11 @@ int main(int argc,char **argv)
         assert(h->ready && !h->quarantined && h->device_count==(empty?0u:2u) && !h->busy);
         assert(first_scans==1 && cadence_records>=2 && service_entries==1);
         if(empty) {
+            assert(!usb_input_ready());
             assert(!connect_records && disconnect_records==2 && !descriptor_starts && !descriptor_results && !retired_packets);
             assert(!m.root_resets[0] && !m.root_resets[1] && !m.root_enables[0] && !m.root_enables[1]);
         } else {
+            assert(usb_input_ready() && usb_devices==2);
             assert(h->devices[0].hid[0].active && h->devices[1].hid[0].active);
             assert(m.root_resets[0]==1 && m.root_resets[1]==1 && m.root_enables[0]==1 && m.root_enables[1]==1);
             assert(connect_records==2 && descriptor_starts==2 && descriptor_results==2 && !descriptor_failures && retired_packets);
