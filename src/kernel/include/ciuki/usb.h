@@ -12,6 +12,7 @@
 #define USB_DMA_BYTES 8192u
 #define USB_PACKET_MAX 64u
 #define USB_TIMEOUT_MS 500u
+#define USB_BULK_TIMEOUT_MS 10000u
 #define USB_EIO 5
 #define USB_EAGAIN 11
 #define USB_EPIPE 32
@@ -49,12 +50,34 @@ struct usb_hid {
     uint64_t next_poll, repeat_at;
     bool active, wheel;
 };
+/* Snapshot after schedule retirement, before another packet reuses DMA.
+ * actual=-1 means no known ACK. Raw TD fields remain useful on errors. */
+struct usb_packet_trace {
+    uint32_t status, token, hc_status;
+    unsigned expected, frames;
+    int actual, result, retired;
+    uint64_t elapsed_ms;
+    uint8_t endpoint, pid, toggle;
+    bool valid;
+};
+struct usb_storage_trace {
+    struct usb_packet_trace packet;
+    const char *stage;
+    uint32_t tag;
+    unsigned expected, actual, data_expected, data_actual;
+    int result;
+    uint32_t csw_signature, csw_tag, residue;
+    uint8_t command, csw_status;
+    bool csw_available;
+};
 /* One transparent SCSI/BOT interface, LUN zero. Records and block views are
  * retained until reboot; an uncertain command never becomes a new medium. */
 struct usb_storage {
     struct blkdev block;
     uint32_t tag;
     uint64_t next_check;
+    uint64_t bulk_deadline; /* only live while usb_bulk calls the packet engine */
+    struct usb_storage_trace trace;
     uint8_t interface, in, out, in_packet, out_packet, in_toggle, out_toggle;
     uint8_t sense_key, asc, ascq;
     bool bound, online, published, ejected, write_protected;
@@ -68,6 +91,7 @@ struct usb_device {
     bool present, configured, quarantined, low_speed;
     struct usb_hid hid[USB_HID_MAX];
     struct usb_storage storage;
+    struct usb_packet_trace packet_trace;
     bool hub_blocked[USB_PORT_MAX];
     uint8_t hub_child[USB_PORT_MAX]; /* index+1; zero = not enumerated */
     uint16_t hub_status[USB_PORT_MAX]; /* last observed class port status */
@@ -106,6 +130,19 @@ struct usb_host {
 };
 extern const struct usb_hc_ops usb_uhci_ops, usb_ohci_ops;
 static inline void usb_barrier(void) { __asm__ volatile("" ::: "memory"); }
+/* Bulk NAK is flow control within the whole stage's budget, not a fresh
+ * per-packet timeout. Poll counts still bound a frozen software clock. */
+static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool periodic,
+                                         uint64_t now)
+{
+    if (periodic) return 2;
+    if (ep && d->storage.bulk_deadline) {
+        int64_t left = (int64_t)(d->storage.bulk_deadline - now);
+        if (left <= 0) return 0;
+        return (uint64_t)left < USB_BULK_TIMEOUT_MS ? (unsigned)left : USB_BULK_TIMEOUT_MS;
+    }
+    return USB_TIMEOUT_MS;
+}
 uint32_t usb_read(struct usb_host *, unsigned, unsigned);
 void usb_write(struct usb_host *, unsigned, uint32_t, unsigned);
 void usb_port_record(struct usb_host *, unsigned port, const char *event, int result);

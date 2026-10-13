@@ -75,7 +75,15 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
                   void *data, unsigned length, bool periodic)
 {
     struct usb_host *h = d->host;
+    d->packet_trace = (struct usb_packet_trace){.actual=-1};
     if (length > 64 || (d->low_speed && length > 8) || ep > 15) return -EINVAL;
+    uint64_t begin = h->io.now(h->io.cookie);
+    unsigned budget = usb_packet_budget(d, ep, periodic, begin);
+    if (!budget) { d->packet_trace.result=-USB_ETIMEDOUT; return -USB_ETIMEDOUT; }
+    unsigned frame = usb_read(h, 0x3c, 4) & 0xffff, frames = 0;
+    struct usb_packet_trace *trace = &d->packet_trace;
+    *trace = (struct usb_packet_trace){.expected=length,.actual=-1,
+        .endpoint=ep,.pid=pid,.toggle=toggle,.valid=true};
     volatile uint32_t *ed = words(h, USB_ED), *td = words(h, USB_TD);
     unsigned direction = pid == USB_PID_SETUP ? 0 : pid == USB_PID_OUT ? 1 : 2;
     bool bulk = ep && !periodic;
@@ -96,11 +104,20 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     usb_barrier(); ed[0] &= ~(1u << 14); usb_barrier();
     usb_write(h, 4, 0x80 | (periodic ? 4 : bulk ? 0x20 : 0x10), 4);
     if (!periodic) usb_write(h, 8, bulk ? 4 : 2, 4); /* Bulk/ControlListFilled */
-    uint64_t end = h->io.now(h->io.cookie) + (periodic ? 2 : USB_TIMEOUT_MS);
-    unsigned tries = periodic ? 3 : USB_TIMEOUT_MS + 1;
+    uint64_t end = begin + budget;
+    unsigned tries = budget + 1;
     int result = -USB_ETIMEDOUT;
     for (unsigned i = 0; i < tries; i++) {
-        if (usb_read(h, 0x0c, 4) & 0x10) { usb_host_quarantine(h, "ohci_host_error"); return -USB_EIO; }
+        unsigned s = usb_read(h, 0x0c, 4);
+        unsigned next = usb_read(h, 0x3c, 4) & 0xffff;
+        frames += (next - frame) & 0xffff; frame = next;
+        trace->hc_status=s;
+        if (s & 0x10) {
+            usb_barrier(); trace->status=td[0]; trace->token=ed[0];
+            trace->frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
+            trace->result=trace->retired=-USB_EIO;
+            usb_host_quarantine(h, "ohci_host_error"); return -USB_EIO;
+        }
         usb_barrier(); unsigned cc = td[0] >> 28;
         /* ED HeadP retirement, not only TD CC: hardware may still write
          * NextTD/DoneHead until the packet has been removed from the ED. */
@@ -112,7 +129,11 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     }
     ed[0] |= 1u << 14; usb_barrier();
     usb_write(h, 4, 0x80, 4);
-    if (usb_retire_frames(h, 0x3c, 4, 0xffff)) return -USB_EIO;
+    int retired = usb_retire_frames(h, 0x3c, 4, 0xffff);
+    frames += (usb_read(h, 0x3c, 4) - frame) & 0xffff;
+    usb_barrier(); trace->status=td[0]; trace->token=ed[0]; trace->frames=frames;
+    trace->elapsed_ms=h->io.now(h->io.cookie)-begin; trace->retired=retired;
+    if (retired) { trace->result=-USB_EIO; return -USB_EIO; }
     usb_write(h, head, 0, 4); usb_write(h, current, 0, 4);
     /* A packet may finish between the last poll and ED skip. Decode the
      * retired TD so a late ACK advances the software toggle exactly once. */
@@ -123,11 +144,14 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
         else {
             unsigned cur = td[1];
             if (cur && (cur < h->dma_phys + USB_BUFFER || cur > h->dma_phys + USB_BUFFER + length)) {
+                trace->result=-USB_EIO;
                 usb_host_quarantine(h, "ohci_dma_pointer"); return -USB_EIO;
             }
             result = cur ? (int)(cur - h->dma_phys - USB_BUFFER) : (int)length;
         }
     }
+    trace->result=result;
+    if (result >= 0) trace->actual=result;
     if (result >= 0 && pid == USB_PID_IN && result) memcpy(data, h->dma + USB_BUFFER, (unsigned)result);
     return result;
 }

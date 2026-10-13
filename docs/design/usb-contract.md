@@ -168,7 +168,7 @@ on ACK, including short/ZLP packets. Caller buffers use the existing DMA
 bounce buffer; no user/stack pointer becomes a bus address. OHCI's endpoint
 max packet field uses descriptor size even on the 13-byte CSW. Retirement
 retains F1-42's two-frame rule. Each bulk stage is bounded at 64 KiB/10 s;
-each packet retains the controller's 500 ms limit and sleepable polling.
+F1-47 makes each packet consume the remaining stage budget with sleepable polling.
 
 Commands: INQUIRY, TEST UNIT READY, REQUEST SENSE, READ CAPACITY(10),
 READ(10), WRITE(10); SYNCHRONIZE CACHE(10) qualifies and implements
@@ -187,6 +187,72 @@ IN then OUT and quarantine storage. This restores framing only: never resend
 a failed CBW, never retry an issued write, never recover a writable mount
 from a transport error. Command-failed status obtains fixed-format sense.
 Published-media unit attention or medium absence revokes the old medium.
+
+### F1-47: real full-speed BOT data phase (2026-10-13)
+
+Research before implementation: [USB 1.1 specification](https://doksi.net/en/get.php?lid=1971),
+sections 5.8.3/5.8.4, 8.5.1/8.6 and 9.4.5, distinguishes temporary NAK flow control
+from STALL and terminates bulk IN on short packets, including zero-length
+packets. The allowed full-speed bulk packet sizes are 8/16/32/64 bytes.
+[Intel UHCI 1.1 design guide](https://netwinder.oregonstate.edu/pub/misc/docs/29765002-usb-uhci%20design%20guide.pdf),
+sections 3.2/3.3/4, defines TD MaxLen/ActLen, error-counter retries, NAK,
+short-packet detection and QH writeback. [BOT 1.0](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf),
+sections 3.1/3.2, 5.1–5.3 and 6.3/6.7, requires byte-aligned 31-byte CBWs
+and 13-byte CSWs starting on packet boundaries, and reset recovery in
+class-reset, clear-IN, clear-OUT order. Class reset preserves toggles;
+successful CLEAR_FEATURE(ENDPOINT_HALT) resets that endpoint to DATA0.
+
+Compared with GPL-2.0 Linux [usb-storage transport.c, v6.12](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/storage/transport.c)
+(`usb_stor_Bulk_transport`, `usb_stor_Bulk_max_lun`, `usb_stor_reset_common`)
+and [UHCI queue implementation](https://raw.githubusercontent.com/torvalds/linux/master/drivers/usb/host/uhci-q.c)
+(`uhci_submit_common`, `uhci_map_status`). No upstream code is imported.
+Linux accepts short IN, clears data-stage stalls before fetching CSW, and
+allows one CSW halt recovery. Its last IN TD is capped at the remaining
+length and need not set SPD when a short packet is allowed. Our single
+terminated TD per packet already has that property: no chain can consume
+the following CSW after short data. OHCI still uses descriptor MPS=64 even
+for 36/13-byte transfers. Both controllers retire for two hardware frames
+before descriptor/buffer reuse, then decode any completion racing unlink.
+
+Repository findings: the T23 log lacks the packet return value and TD
+status, so it cannot distinguish NAK timeout, exhausted CRC retries or
+babble. The reset line is emitted by recovery **after** the data fault;
+there is no class reset before tag 1. INQUIRY requests 36 bytes, so a
+36-byte reply is short relative to MPS=64 but satisfies this CDB exactly.
+The actual Lexar root cause remains unqualified until another hardware
+capture. Two reproducible defects are corrected: the per-packet 500 ms
+limit prematurely terminated legal bulk NAK flow control despite the
+10-second stage budget, and UHCI's STALL-first decoding treated babble
+(which also sets STALL) as a recoverable endpoint halt.
+
+Decision: bulk packets consume the remaining existing 10-second stage
+deadline; control and interrupt budgets stay 500/2 ms. A timeout still
+unlinks and retires the TD, and an ACK during retirement is counted once.
+No fresh TD or CBW is submitted after an uncertain result. INQUIRY keeps
+its conservative 36-byte allocation, accepts a complete five-byte header
+or more only with passed CSW and exactly consistent residue, and reads
+only fields actually received. Fixed-size capacity, block I/O and writes
+still require all requested bytes and zero residue. Short data and ZLP
+advance the IN toggle once; NAK and STALL do not. Babble/buffer/CRC/bitstuff
+errors fail closed and never take the halt-clear/CSW retry path.
+
+Fault diagnostics preserve the CBW/data/CSW stage, stage and data lengths,
+result, last TD/token/controller status, endpoint/PID/toggle, elapsed
+hardware frames (accumulated across frame-number wrap), elapsed time and
+retirement outcome before recovery overwrites the DMA buffer. Complete
+CSWs include status, residue, signature and tag even when invalid.
+Recovered data/CSW stalls also emit this snapshot so a subsequent capture
+does not lose the original event to control transfers or REQUEST SENSE.
+
+Linux tolerates more broken Get Max LUN responses, supports SINGLE_LUN
+quirks, and waits six seconds after class reset. Its
+[v6.12 unusual-device table](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/storage/unusual_devs.h)
+has a different Lexar CF reader (05dc:b002) with FIX_INQUIRY, but no
+05dc:a81d entry. This stick answered Get Max LUN successfully; there is no
+evidence for a matching no-Get-Max-LUN/reset-delay quirk. We retain the
+specified STALL allowance and bounded recovery, without speculative
+vendor exceptions or command resends. Hardware and QEMU qualification
+belong to the lead; host fixtures demonstrate these mechanisms only.
 
 ### Mounts, hot-plug and removal
 
