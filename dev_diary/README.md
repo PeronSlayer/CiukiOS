@@ -116,3 +116,4 @@ Documenti di design, validazione, fonti esterne.
 | [Consegne della notte dal secondo giro sul T23; immagine 8845b848](2026-10-13-02-consegne-notturne-immagine-8845b848.md) | 13 ott | modifiche (desktop, driver, DOS VM, audio); immagine per il T23 |
 | [Contratto Win32 (F5) e decisioni; runner a due slot; diagnosi del blocco SuperSavage](2026-10-13-03-contratto-win32-decisioni.md) | 13 ott | decisioni (design); analisi hardware |
 | [Terza prova sul T23 (immagine 3299a24f): diagnosi di accelerazione, disco, presentazione, DOOM e rete](2026-10-13-04-t23-immagine-3299a24f-diagnosi.md) | 13 ott | analisi hardware, decisioni (sette direttive Codex) |
+| [Sette consegne Codex fuse; immagine 24c98799 per il T23](2026-10-13-05-sette-consegne-immagine-24c98799.md) | 13 ott | modifiche (kernel, desktop, test), immagine |
