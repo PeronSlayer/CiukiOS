@@ -16,7 +16,7 @@ enum {
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS,
-    C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL,
+    C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_MUSIC,
     T_JOB = 1
 };
 #define PANE_TOP 92
@@ -568,7 +568,7 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
         if (program && !a->model.fs.stat_path(a->model.fs.ctx, executable, &meta) && meta.type == FM_FILE) {
             char *argv[] = {(char *)program->name, path, NULL};
             int r = spawn(a, executable, argv);
-            if (r < 0) error_box(a, "Files", "Cannot start the image application:", r);
+            if (r < 0) error_box(a, "Files", "Cannot start the application:", r);
             return;
         }
     }
@@ -813,6 +813,8 @@ static void context(struct files_app *a, const struct du_event *e)
         enum fm_kind kind = fm_kind(it);
         popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
         if (kind != FM_KIND_FOLDER) popup_add(a, "Open with &CiukNote", C_OPEN_NOTE, 0);
+        if (n == 1 && m->path[0] && (kind == FM_KIND_FOLDER || kind == FM_KIND_AUDIO))
+            popup_add(a, "Play in &Music Player", C_MUSIC, 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "Cu&t", C_CUT, 0); popup_add(a, "&Copy", C_COPY, 0);
         if (kind == FM_KIND_FOLDER && n == 1) popup_add(a, "&Paste", C_PASTE_INTO, m->clipboard_count ? 0 : DU_ITEM_DISABLED);
@@ -917,6 +919,15 @@ static void command(struct files_app *a, int id)
         places_build(a); files_layout(a); a->tree_dirty = 1; a->note[0] = 0; files_update(a); break;
     }
     case C_OPEN: if (fm_selected(m, NULL)) open_item(a, m->active < m->count && m->entries[m->active].selected ? m->active : 0, 0); break;
+    case C_MUSIC: {
+        char path[FM_PATH];
+        if (m->active < m->count && !fm_entry_path(m, m->active, path)) {
+            char *argv[] = {"music", path, NULL};
+            int r = spawn(a, "/Programs/music", argv);
+            if (r < 0) error_box(a, "Files", "Cannot start Music Player:", r);
+        }
+        break;
+    }
     case C_OPEN_NOTE: if (fm_selected(m, NULL)) open_item(a, m->active, 1); break;
     case C_NEW_FOLDER: create(a, 1); break;
     case C_NEW_TEXT: create(a, 0); break;

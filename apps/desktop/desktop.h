@@ -53,7 +53,7 @@ struct desk_client {
     int collapsed;                /* windowshade: only the title bar shows (double-click) */
     int32_t shade_height;
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
-    int mixer;                    /* launched /Programs/mixer (Volume Control); may send MIXER_SET */
+    int mixer;                    /* launched Volume Control or Music Player; may send MIXER_SET */
     int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
     int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
@@ -128,6 +128,7 @@ struct desktop {
     char build_identity[65], version[65], notice[64];
     struct desk_program programs[DESK_MENU_MAX];
     unsigned program_count;
+    int pictures_exists;        /* runtime stat of the owner's /Documents/Pictures */
     struct desk_child children[DESK_CLIENTS];
     /* f2-33: task-manager extension and its runtime-selected gate scenario. */
     uint32_t next_window_id, self_pid;

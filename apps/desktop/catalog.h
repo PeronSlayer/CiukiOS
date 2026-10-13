@@ -14,8 +14,9 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"clock", "Clock", "appointment-new", 0, ""},   /* a clock face; Settings > Date & Time keeps office-calendar */
     {"help", "CiukiOS Help", "help-browser", 1, ""},
     {"mixer", "Volume Control", "audio-volume-high", 0, ""},
-    {"paint", "CiukPaint", "applications-graphics", 1, "bmp|png"},
-    {"viewer", "Image Viewer", "image-x-generic", 1, "jpg|jpeg|jpe|gif|xrgb"},
+    {"music", "Music Player", "audio-x-generic", 1, "wav|mp3|ogg|m3u"},
+    {"paint", "CiukPaint", "applications-graphics", 1, ""},
+    {"viewer", "Image Viewer", "image-x-generic", 1, "bmp|png|jpg|jpeg|jpe|gif|xrgb"},
 };
 #define DESK_CATALOG_COUNT (sizeof(desk_catalog) / sizeof(desk_catalog[0]))
 /* Pre-installed DOS games (owner decision 2026-10-12): the shareware

@@ -117,7 +117,7 @@ class AccessoriesTests(unittest.TestCase):
         for _, _, icon, _ in entries:
             self.assertRegex(listing, rf"/32x32/[a-z]+/{re.escape(icon)}\.png")
         # File-taking accessories are exactly the ones the desktop passes LAUNCH arguments to.
-        self.assertEqual({e[0] for e in entries if e[3] == "1"}, {"help", "paint", "viewer"})
+        self.assertEqual({e[0] for e in entries if e[3] == "1"}, {"help", "music", "paint", "viewer"})
 
     def test_stb_provenance(self):
         data = (ROOT / "third_party/stb/stb_image.h").read_bytes()

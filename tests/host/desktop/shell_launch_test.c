@@ -133,6 +133,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         assert(!strcmp(argv[2],expect_dosbox[0]) && !strcmp(argv[3],expect_dosbox[1]) && !argv[4]);
         dosbox_spawns++;
     } else if (!strcmp(path,"/Programs/hello")) assert(!strcmp(argv[0],"hello") && !argv[1] && count==1);
+    else if (!strcmp(path,"/Programs/music")) assert(!strcmp(argv[0],"music") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     else if (!strcmp(path,"/Programs/tasks")) {
         /* f2-33: only the Task Manager receives the authority, at fd 4. */
         assert(!strcmp(argv[0],"tasks") && !strcmp(argv[1],"--channel-fd=3"));
@@ -577,6 +578,29 @@ static void test_menu_icons(void)
     drop_all(&d); fake_reset();
     puts("PASS menu icons: every menu 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
 }
+static unsigned music_mixer_calls;
+static int music_mixer_set(struct desktop *d,uint32_t l,uint32_t r,uint32_t mute)
+{ (void)d; assert(l==30 && r==60 && !mute); music_mixer_calls++; return 0; }
+static void test_music_mixer(void)
+{
+    struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
+    d.mixer_set=music_mixer_set; music_mixer_calls=0;
+    struct desk_program program={"music","/Programs/music"};
+    int pid=launch_program(&d,&program); assert(pid>0 && d.clients[0].mixer);
+    window(&d,0,(uint32_t)pid,60,"Music Player");
+    struct ciuki_message m; desk_message(&m,DESK_MIXER_SET,20);
+    desk_put32(m.data+4,42); desk_put32(m.data+8,30); desk_put32(m.data+12,60); desk_put32(m.data+16,0);
+    struct desk_packet reply[DESK_TX_MAX]; drain(&d,0); v2(&d,0,(uint32_t)pid,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && music_mixer_calls==1);
+    d.power.state=DESK_POWER_CLOSING; drain(&d,0); v2(&d,0,(uint32_t)pid,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EBUSY && music_mixer_calls==1);
+    d.power.state=DESK_POWER_IDLE; program=(struct desk_program){"demo","/Programs/demo"};
+    pid=launch_program(&d,&program); assert(pid>0 && !d.clients[1].mixer);
+    window(&d,1,(uint32_t)pid,61,"Music Player"); /* a forged title grants no mixer rights */
+    drain(&d,1); v2(&d,1,(uint32_t)pid,&m);
+    assert(queued(&d,1,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EPERM && music_mixer_calls==1);
+    drop_all(&d); fake_reset(); pid_source=100; puts("PASS Music Player mixer: launch-owned permission, delegated callback, shutdown EBUSY, ordinary-client EPERM");
+}
 static void test_launch_timing(void)
 {
     static const char *const names[]={"files","ciuknote","control"};
@@ -642,6 +666,7 @@ static void test_launch_timing(void)
 #include "shutdown_sequence_test.h"
 int main(void)
 {
+    test_music_mixer();
     struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     struct desk_program program={"demo","/Programs/demo"};

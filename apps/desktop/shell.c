@@ -232,6 +232,8 @@ static const struct program_info programs[] = {
     {"demo", "Ciuki Demo", "preferences-desktop-peripherals", "programs"},   /* the keyboard/mouse input demo */
     {"lua", "Lua", "text-x-script", "programs"},
     {"control", "Control Panel", "preferences-desktop", "programs"},
+    {"music", "Music Player", "audio-x-generic", "programs"},
+    {"viewer", "Image Viewer", "image-x-generic", "programs"},
     {"paint", "CiukPaint", "applications-graphics", "programs"},
     {"calc", "Calculator", "accessories-calculator", "accessories"},
     {"charmap", "Character Map", "accessories-character-map", "accessories"},
@@ -837,6 +839,7 @@ static void icons_build(struct desktop *d)
     d->sh.icon_count = 0;
     icon_add(d, "Computer", "files", "Computer", "ciuki-computer", SH_ACT_LAUNCH, 1);
     icon_add(d, "Documents", "files", "/Documents", "user-home", SH_ACT_LAUNCH, 0);
+    if (d->pictures_exists) icon_add(d, "Pictures", "files", "/Documents/Pictures", "folder", SH_ACT_LAUNCH, 0);
     icon_add(d, "DOS Box", "dosbox", "", "utilities-terminal", SH_ACT_LAUNCH, 0);
     icon_add(d, "CiukNote", "ciuknote", "", "accessories-text-editor", SH_ACT_LAUNCH, 0);
     icon_add(d, "Control Panel", "control", "", "preferences-desktop", SH_ACT_LAUNCH, 0);

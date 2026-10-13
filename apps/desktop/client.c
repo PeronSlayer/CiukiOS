@@ -445,7 +445,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         desk_sound(d,p.flags);
         break;
     case DESK_MIXER_SET: {
-        /* Only the Volume Control the desktop launched may change the master volume. */
+        /* Only desktop-launched Volume Control and Music Player may change the master volume. */
         int32_t result = !c->mixer ? -EPERM : d->power.state ? -EBUSY : d->mixer_set ? d->mixer_set(d, p.width, p.height, p.flags) : -ENODEV;
         desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
         desk_put32(reply.data + 8, DESK_MIXER_SET); desk_put32(reply.data + 12, (uint32_t)result);

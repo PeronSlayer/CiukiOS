@@ -58,7 +58,7 @@ static int on_spawn(struct files_app *a, const char *program, char *const argv[]
 {
     (void)a; spawned++; snprintf(launched,sizeof(launched),"%s",program);
     snprintf(launch_path,sizeof(launch_path),"%s",argv[1]?argv[1]:"");
-    return !strcmp(program,"/Programs/hello") || !strcmp(program,"/Programs/paint") || !strcmp(program,"/Programs/viewer") ? 77 : -2;
+    return !strcmp(program,"/Programs/hello") || !strcmp(program,"/Programs/paint") || !strcmp(program,"/Programs/viewer") || !strcmp(program,"/Programs/music") ? 77 : -2;
 }
 static int portrait(uint32_t *p)
 {
@@ -339,7 +339,7 @@ int main(int argc, char **argv)
     fake_assert_clean();
     computer_ui_tests();
     /* Default associations run through the actual Files controller. */
-    fake_image_tree(); fake_file("/Programs/paint",100,1); fake_file("/Programs/viewer",100,1);
+    fake_image_tree(); fake_file("/Programs/paint",100,1); fake_file("/Programs/viewer",100,1); fake_file("/Programs/music",100,1);
     fake_file("/Documents/Test.BMP",100,1); fake_file("/Documents/Other.PNG",100,1); fake_file("/Documents/Photo.jpg",100,1);
     du_init(&ui,pixels,WIDTH,HEIGHT); memset(&app,0,sizeof(app));
     assert(!files_setup(&app,&ui,&fake_vfs,"/Documents")); app.spawn=on_spawn;
@@ -347,9 +347,26 @@ int main(int argc, char **argv)
     for (unsigned i=0;i<3;i++) {
         int row=list_find(names[i]); assert(row>=0); app.model.active=(unsigned)row;
         fm_select(&app.model,(unsigned)row,0); files_update(&app); key(DU_KEY_ENTER);
-        assert(!ui.dialog.kind && !strcmp(launched,i==2?"/Programs/viewer":"/Programs/paint"));
+        assert(!ui.dialog.kind && !strcmp(launched,"/Programs/viewer"));
         assert(strstr(launch_path,names[i]));
     }
+    const char *audio[]={"Sound.WAV","Track.MP3","Song.OGG","List.M3U"};
+    for (unsigned i=0;i<4;i++) {
+        char path[FM_PATH]; snprintf(path,sizeof(path),"/Documents/%s",audio[i]); fake_file(path,100,1);
+    }
+    fake_create("/Documents/Music",FM_DIR); assert(!files_navigate(&app,"/Documents"));
+    for (unsigned i=0;i<4;i++) {
+        int row=list_find(audio[i]); assert(row>=0); fm_select(&app.model,(unsigned)row,0); files_update(&app); key(DU_KEY_ENTER);
+        assert(!ui.dialog.kind && !strcmp(launched,"/Programs/music") && strstr(launch_path,audio[i]));
+    }
+    int folder=list_find("Music"); assert(folder>=0);
+    struct du_event context={.type=DU_EV_CONTEXT,.id=107,.index=folder,.x=200,.y=200};
+    files_event(&ui,&context,&app);
+    int music_command=0;
+    for (unsigned i=0;i<app.popup_count;i++) if (app.popup[i].label && strstr(app.popup[i].label,"Music Player")) music_command=app.popup[i].id;
+    assert(music_command); du_popup(&ui,NULL,0,0,0,0);
+    struct du_event play_folder={.type=DU_EV_ACTIVATE,.id=music_command}; files_event(&ui,&play_folder,&app);
+    assert(!strcmp(launched,"/Programs/music") && !strcmp(launch_path,"/Documents/Music"));
     files_destroy(&app); fake_assert_clean();
     free(pixels);
     puts("PASS Files UI: script checkpoints 1-5, views, sorting, selection, context menus, properties, replace, Copy of, rename errors, tree, address, open, help/about");

@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 import sys
 
-PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "control", "paint"]
+PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "control", "music", "viewer", "paint"]
 ACCESSORIES = ["calc", "charmap", "clock", "help", "mixer", "viewer"]
 SCREEN_W, SCREEN_H = 1024, 768
 TOP_BAR = 32

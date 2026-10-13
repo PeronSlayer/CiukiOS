@@ -35,3 +35,14 @@ CiukPaint installs a separate copy as `/system/licenses/stb_image_write.txt`.
 (`STBI_WRITE_NO_STDIO`). `apps/paint/io.c` exports RGB PNG and 24-bit BMP
 with the writer; original 8-bit BMP retains the legacy file layout. Both
 input dimensions and the pixel count are checked before allocation.
+
+## stb_vorbis
+
+`stb_vorbis.c` v1.22 is an exact copy of the existing
+`third_party/audio/stb/stb_vorbis.c`, pinned to upstream commit
+`2c980bb59875b0d32144a71867fbdebb2f77cd20`:
+https://github.com/nothings/stb/blob/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_vorbis.c
+SHA-256: `4c7cb2ff1f7011e9d67950446b7eb9ca044f2e464d76bfbb0b84dd2e23e65636`.
+Music Player uses the streaming stdio interface and the MIT alternative;
+the complete notice is in this directory's `LICENSE`, installed separately
+as `/system/licenses/stb_vorbis.txt`. Upstream source remains unmodified.
