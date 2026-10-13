@@ -257,10 +257,35 @@ static void failures_and_fallback(void)
     binding_gpu.bar[1]=device.phys;binding_pci_count=2;CHECK(!savage2d_init(&device) && binding_claims==1);
     binding_pci_count=0;finish();
 }
+/* T23 stall (2026-10-13): the production register glue with a clock that
+ * never advances. The wait is bounded by WAIT_POLLS, so a silent stop on
+ * hardware is one register access that never completes, not a software
+ * loop. The breadcrumbs show the first engine-domain access: the status
+ * read MM48C60, preceded only by CRTC accesses and no engine reset. */
+static void glue_stalled_clock(uint32_t status)
+{
+    prepare(32);
+    uint8_t *window = calloc(1, SAVAGE_MMIO_BYTES); CHECK(window != NULL);
+    window[0x83d5] = 1;                                  /* CR66.0 reads set */
+    memcpy(window + SAVAGE_STATUS, &status, sizeof(status));
+    registers = window; g_ticks = 0; g_boot.flags = CBI_F_VERBOSE;
+    tracing = true; trace_last = UINT32_MAX; step_count = 0;
+    struct savage_io io = {0, hw_read, hw_write, hw_cr_read, hw_cr_write, hw_now, hw_relax, hw_drain, hw_fault};
+    struct savage2d e = {0};
+    CHECK(savage2d_start(&e, &io, &device, true, NULL, 0) == -EIO);
+    CHECK(e.quarantined && !e.touched && !e.active && e.idle_waits == 1 && e.timeouts == 1);
+    CHECK(step_count == 2);
+    CHECK(!strcmp(step_log[0], "[accel] savage step op=crr reg=00066"));
+    CHECK(!strcmp(step_log[1], "[accel] savage step op=r32 reg=48c60"));
+    tracing = false; registers = NULL; g_boot.flags = 0; free(window);
+    finish();
+}
 int main(void)
 {
     CHECK(!framebuffer_regression_main());
     commands(16); commands(32); failures_and_fallback();
+    glue_stalled_clock(0);            /* never idle, frozen clock */
+    glue_stalled_clock(UINT32_MAX);   /* master-aborted (dead) aperture */
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);
     return failures ? 1 : 0;
 }
