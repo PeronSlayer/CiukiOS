@@ -14,6 +14,9 @@ static unsigned checks;
 static uint32_t host_flags = 0x200;
 static unsigned sleeps, yields, page_count, releases, quarantines, config_writes, irq_adds, irq_removes;
 static int claim_fail, allocation_fail, irq_add_fail, release_fail;
+static unsigned map_calls, unmap_calls;
+static bool map_fail;
+static unsigned mmio_token;
 static uint64_t cycles;
 static void (*sleep_hook)(void);
 static bool sleep_hook_active;
@@ -66,6 +69,13 @@ void pmm_free(uint32_t phys)
     unsigned i = (phys - HOST_PHYS) / PAGE_SIZE; CHECK(i < 128 && allocated[i]);
     allocated[i] = false; page_count--; memset(P2V(phys), 0xcc, PAGE_SIZE);
 }
+void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached)
+{
+    CHECK(phys == 0xf0000000 && bytes == 0x20000 && uncached); map_calls++;
+    return map_fail ? NULL : &mmio_token;
+}
+void vmm_revoke_mmio(void *mapped, uint32_t bytes)
+{ CHECK(mapped == &mmio_token && bytes == 0x20000); unmap_calls++; }
 static struct resource resources[32];
 static unsigned resource_count;
 unsigned registry_count(void) { return resource_count; }
@@ -107,6 +117,11 @@ const struct pci_func *pci_get(unsigned n) { return n < 2 ? &functions[n] : 0; }
 #include "../../../src/kernel/drivers/net_rtl8139.c"
 #include "../../../src/kernel/drivers/net_e100.c"
 #include "../../../src/kernel/drivers/net_ne2000.c"
+#include "../../../src/kernel/drivers/net_e1000.c"
+#include "../../../src/kernel/drivers/net_pcnet.c"
+#include "../../../src/kernel/drivers/net_tulip.c"
+#include "../../../src/kernel/drivers/net_3c90x.c"
+#include "../../../src/kernel/drivers/net_rhine.c"
 #include "../../../src/kernel/drivers/net_arp.c"
 #include "../../../src/kernel/probes/f6_probes_net.c"
 #include "../../../src/kernel/drivers/net_dev.c"
@@ -308,6 +323,7 @@ static void model_setup(struct model *h, struct netif *d, enum model_kind kind)
     memset(allocated, 0, sizeof(allocated)); memset(memory, 0, sizeof(memory));
     resource_count = page_count = releases = quarantines = config_writes = irq_adds = irq_removes = 0;
     claim_fail = allocation_fail = irq_add_fail = release_fail = 0;
+    map_calls = unmap_calls = 0; map_fail = false;
     g_ticks = cycles = sleeps = yields = 0; host_flags = 0x200;
     sleep_hook = 0; sleep_hook_active = false;
     h->kind = kind; h->device = d; h->ee_bits = 6; h->ee_sample = 1; h->mii_status = 0x782d; h->tx_auto = true;
@@ -327,7 +343,7 @@ static void model_setup(struct model *h, struct netif *d, enum model_kind kind)
 }
 static int model_attach(struct model *h, struct netif *d)
 {
-    struct net_io io = {h,model_read,model_write,model_now,model_sleep,model_delay};
+    struct net_io io = {h,model_read,model_write,model_now,model_sleep,model_delay,0,0};
     return netif_attach(d, &functions[1], &io);
 }
 static void model_ring_write(struct model *h, unsigned pos, const void *data, unsigned len)
@@ -619,6 +635,7 @@ static void test_public_state(void)
     device_count = 0;
     puts("PASS /dev/net: absent, safe mode, three adapters, carrier, stopped/quarantined, counters, readonly, ABI and copy failures");
 }
+#include "second_set_test.c"
 int main(void)
 {
     for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) { test_paths(kind); test_faults(kind); test_admission(kind); }
@@ -628,6 +645,7 @@ int main(void)
     for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) test_probe(kind);
     test_arp();
     test_public_state();
-    printf("net: %u checks PASS (production framework, e100/RTL8139/NE2000 register models, ARP)\n", checks);
+    test_second_set();
+    printf("net: %u checks PASS (production framework, eight NIC register/DMA models, ARP)\n", checks);
     return 0;
 }

@@ -1310,7 +1310,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if not normal:selector(request,source,True)
     devices=case.get('device_exceptions',{})
     nic = devices.get('network')
-    if nic not in (None, 'rtl8139', 'ne2k_pci', 'i82559er'):
+    if nic not in (None, 'rtl8139', 'ne2k_pci', 'i82559er', 'e1000', 'pcnet', 'tulip'):
         raise res.Refusal('unknown network device exception')
     if nic and (normal or requested['phase'] != 6 or requested['probe'] != 'net-arp'):
         raise res.Refusal('user network backend requires f6:net-arp')

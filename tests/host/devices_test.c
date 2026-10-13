@@ -47,10 +47,11 @@ struct ciuki_boot_info g_boot;
 volatile uint64_t g_ticks;
 struct ac97_device ac97;
 struct audio_state audio;
-static struct netif nic_context;
+static struct netif nic_contexts[NETIF_MAX];
+#define nic_context nic_contexts[0]
 static unsigned nic_count;
 unsigned net_count(void) { return nic_count; }
-struct netif *net_get(unsigned i) { return i < nic_count ? &nic_context : NULL; }
+struct netif *net_get(unsigned i) { return i < nic_count ? &nic_contexts[i] : NULL; }
 bool gen_matches(gen_t a, gen_t b) { return a && a == b; }
 void klog(const char *s, ...) { (void)s; }
 #include "../../src/kernel/core/registry.c"
@@ -93,6 +94,38 @@ static const struct ciuki_device_record *device(unsigned id)
 {
     for (unsigned i = 0; i < snapshot.count; i++) if (snapshot.devices[i].id == id) return &snapshot.devices[i];
     assert(!"missing device"); return NULL;
+}
+static void second_nic_catalogue(void)
+{
+    static const struct netif_driver new_drivers[] = {
+        {.name="e1000"}, {.name="pcnet"}, {.name="tulip"}, {.name="3c905"}, {.name="rhine"}
+    };
+    struct pci_func saved[2] = {pci[0],pci[1]};
+    for (unsigned n = 0; n < 5; n++) {
+        nic_context.driver = &new_drivers[n]; nic_context.pci = pci[0];
+        nic_context.ready = nic_context.running = true; nic_context.quarantined = false;
+        nic_context.reason = "ready"; nic_count = 1;
+        devices_snapshot(&snapshot);
+        assert(snapshot.driver_count == CIUKI_DRIVERS_MAX);
+        assert(!strcmp(device(0x10018)->driver, new_drivers[n].name));
+        assert(!strcmp(snapshot.drivers[15].name, new_drivers[n].name) && snapshot.drivers[15].bound_devices == 1);
+    }
+    /* Four new bindings must fit the existing sixteen-row public ABI;
+     * replacing unbound catalogue rows must not hide active NICs. */
+    npci = nic_count = 4;
+    for (unsigned i = 0; i < 4; i++) {
+        pci[i] = saved[0]; pci[i].dev = 3 + i;
+        nic_contexts[i] = (struct netif){.pci=pci[i],.driver=&new_drivers[i],.ready=true,.running=true,.reason="ready"};
+    }
+    devices_snapshot(&snapshot); assert(snapshot.driver_count == CIUKI_DRIVERS_MAX && !(snapshot.flags & CIUKI_DEVICES_TRUNCATED));
+    for (unsigned i = 0; i < 4; i++) {
+        bool found = false;
+        for (unsigned j = 0; j < snapshot.driver_count; j++) if (!strcmp(snapshot.drivers[j].name, new_drivers[i].name)) {
+            found = true; assert(snapshot.drivers[j].bound_devices == 1);
+        }
+        assert(found);
+    }
+    pci[0] = saved[0]; pci[1] = saved[1]; npci = 2; nic_count = 0;
 }
 int main(void)
 {
@@ -142,6 +175,7 @@ int main(void)
     nic_context.pci.fn = 1;
     devices_snapshot(&snapshot); assert(!device(0x10018)->driver[0]);
     nic_count = 0;
+    second_nic_catalogue();
     extended = 1; devices_snapshot(&snapshot); assert(!strcmp(snapshot.cpu_brand, "Synthetic Pentium III CPU"));
     /* Count cap and zeroed tail: more unique owners/PCI than device slots. */
     static char owners[64][16]; nres = 64; npci = 32;

@@ -20,11 +20,13 @@ struct net_io {
     uint64_t (*now)(void *);
     void (*sleep)(void *, uint32_t ms);
     int (*delay)(void *, uint32_t us);
+    uint32_t (*read_mmio)(void *, volatile void *mapping, unsigned reg);
+    void (*write_mmio)(void *, volatile void *mapping, unsigned reg, uint32_t value);
 };
 struct netif_driver {
     const char *name;
     bool (*match)(const struct pci_func *);
-    uint16_t aperture;
+    uint32_t aperture;
     unsigned bar, dma_pages;
     bool (*idle)(struct netif *);
     int (*init)(struct netif *);
@@ -52,6 +54,8 @@ struct netif {
     struct pci_func pci;
     char owner[20];
     uint16_t base, saved_command;
+    uint32_t mmio_phys;
+    volatile void *mmio;
     uint8_t address[6], phy, eeprom_bits, next_page;
     enum net_link link;
     gen_t generation;
@@ -64,13 +68,16 @@ struct netif {
     struct net_packet queue[NET_QUEUE_MAX], scratch;
     unsigned queue_head, queue_count, rx_offset, rx_head, rx_tail;
     bool tx_used[4];
-    uint16_t tx_length[4], pending;
+    uint16_t tx_length[4];
+    uint32_t pending, media_control;
+    unsigned tx_head;
     uint64_t tx_deadline[4], link_deadline;
     bool ready, running, stopping, quarantined, touched, irq_attached;
     bool irq_pending, fault_pending, servicing;
     const char *reason;
 };
 extern const struct netif_driver net_e100, net_rtl8139, net_ne2000;
+extern const struct netif_driver net_e1000, net_pcnet, net_tulip, net_3c90x, net_rhine;
 uint32_t net_read(struct netif *, unsigned reg, unsigned width);
 void net_write(struct netif *, unsigned reg, uint32_t value, unsigned width);
 void net_dma_barrier(void);

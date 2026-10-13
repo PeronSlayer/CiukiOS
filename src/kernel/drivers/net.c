@@ -19,11 +19,33 @@ static struct kmutex registration_mutex;
 static net_input_fn input;
 static void *input_cookie;
 static struct netif *proof_device;
+static const struct netif_driver *const net_drivers[] = {
+    &net_e100, &net_rtl8139, &net_ne2000, &net_e1000, &net_pcnet,
+    &net_tulip, &net_3c90x, &net_rhine
+};
+static const struct netif_driver *find_driver(const struct pci_func *p)
+{
+    for (unsigned i = 0; i < ARRAY_SIZE(net_drivers); i++)
+        if (net_drivers[i]->match(p)) return net_drivers[i];
+    return 0;
+}
 
 uint32_t net_read(struct netif *d, unsigned reg, unsigned width)
-{ return d->io.read(d->io.cookie, d->base + reg, width); }
+{
+    if (d->mmio) {
+        if (width != 4 || (reg & 3) || reg > d->driver->aperture - 4) { d->fault_pending = true; return UINT32_MAX; }
+        return d->io.read_mmio(d->io.cookie, d->mmio, reg);
+    }
+    return d->io.read(d->io.cookie, d->base + reg, width);
+}
 void net_write(struct netif *d, unsigned reg, uint32_t value, unsigned width)
-{ d->io.write(d->io.cookie, d->base + reg, value, width); }
+{
+    if (d->mmio) {
+        if (width != 4 || (reg & 3) || reg > d->driver->aperture - 4) { d->fault_pending = true; return; }
+        d->io.write_mmio(d->io.cookie, d->mmio, reg, value);
+    }
+    else d->io.write(d->io.cookie, d->base + reg, value, width);
+}
 void net_dma_barrier(void) { __asm__ volatile("" ::: "memory"); }
 unsigned net_take_pending(struct netif *d)
 {
@@ -142,7 +164,7 @@ static void quarantine_locked(struct netif *d, const char *reason)
      * buffers after fault. Neither write by itself is an idle proof. */
     if (d->touched) {
         d->driver->irq_enable(d, false);
-        (void)pci_command(d, (d->saved_command | 1u) & ~4u);
+        (void)pci_command(d, (d->saved_command | (d->mmio_phys ? 2u : 1u)) & ~4u);
     }
     if (d->irq_attached && !irq_chain_remove(d->pci.irq_line, irq_handler, d->owner)) d->irq_attached = false;
     for (unsigned i = 0; i < 3; i++) if (d->claims[i] >= 0)
@@ -173,6 +195,9 @@ static int stop_locked(struct netif *d)
     }
     if (d->touched && pci_command(d, d->saved_command)) {
         quarantine_locked(d, "command_restore"); return -NET_EIO;
+    }
+    if (d->mmio) {
+        vmm_revoke_mmio((void *)d->mmio, d->driver->aperture); d->mmio = 0;
     }
     proof_device = d;
     for (unsigned i = 0; i < 3; i++) if (d->claims[i] >= 0) {
@@ -209,33 +234,41 @@ int netif_attach(struct netif *d, const struct pci_func *p, const struct net_io 
     memset(d, 0, sizeof(*d));
     for (unsigned i = 0; i < 3; i++) d->claims[i] = -1;
     kmutex_init(&d->mutex); d->pci = *p; d->io = *io; d->reason = "admission";
-    const struct netif_driver *all[] = { &net_e100, &net_rtl8139, &net_ne2000 };
-    for (unsigned i = 0; i < ARRAY_SIZE(all); i++) if (all[i]->match(p)) { d->driver = all[i]; break; }
+    d->driver = find_driver(p);
     if (!d->driver) return -NET_ENODEV;
     if (g_boot.flags & CBI_F_SAFE_MODE) { d->reason = "safe_mode"; return -NET_ENODEV; }
     unsigned bytes = d->driver->aperture;
     /* Intel table 3 specifies 32 bytes. QEMU's eepro100 PCI_IO_SIZE is
      * 64 bytes: retain its complete decoding aperture on validated twins. */
     if (d->driver == &net_e100 && (g_boot.flags & CBI_F_SMBIOS_QEMU)) bytes = 64;
-    uint32_t bar = p->bar[d->driver->bar], base = bar & ~3u;
-    if ((p->header_type & 0x7f) || !(bar & 1) || (base & (bytes - 1)) || !base || base > 0x10000u - bytes) {
+    bool mmio = d->driver == &net_e1000;
+    unsigned decode = mmio ? 2 : 1;
+    uint32_t bar = p->bar[d->driver->bar], base = bar & (mmio ? ~15u : ~3u);
+    bool valid_bar = mmio ? !(bar & 1) && ((bar & 6) == 0 || ((bar & 6) == 4 && !p->bar[1])) &&
+        base >= PMM_MAX_PAGES * PAGE_SIZE && base <= UINT32_MAX - bytes && io->read_mmio && io->write_mmio :
+        (bar & 1) && base <= 0x10000u - bytes;
+    if ((p->header_type & 0x7f) || !valid_bar || (base & (bytes - 1)) || !base) {
         d->reason = "invalid_bar"; return -NET_ENODEV;
     }
-    d->base = base; d->saved_command = p->command;
+    if (mmio) d->mmio_phys = base; else d->base = base;
+    d->saved_command = p->command;
     if ((pci_read_config(d, p, 4) & 0xffff) != p->command || !power_d0(d) ||
-        (!(p->command & 1) && (p->command & 4))) { d->reason = "firmware_state"; return -NET_EBUSY; }
-    if ((p->command & 1) && !d->driver->idle(d)) { d->reason = "firmware_active"; return -NET_EBUSY; }
+        (!(p->command & decode) && (p->command & 4))) { d->reason = "firmware_state"; return -NET_EBUSY; }
     d->generation = gen_alloc(); if (!d->generation) return -ENOMEM;
     ksnprintf(d->owner, sizeof(d->owner), "net-%u", d->generation);
     bool intx = routed(d);
     uint32_t starts[3] = { base, p->irq_line, 0 }, ends[3] = { base + bytes, p->irq_line + 1u, 0 };
-    const enum res_type types[3] = { RES_PORT, RES_IRQ, RES_MMIO };
+    const enum res_type types[3] = { mmio ? RES_MMIO : RES_PORT, RES_IRQ, RES_MMIO };
     int err = 0;
     for (unsigned i = 0; i < 2; i++) {
         if (i == 1 && !intx) continue;
         d->claims[i] = registry_claim(types[i], starts[i], ends[i], d->owner, i == 1);
         if (d->claims[i] < 0) { err = d->claims[i]; d->claims[i] = -1; break; }
         d->claim_generation[i] = registry_get(d->claims[i])->generation;
+    }
+    if (!err && mmio) {
+        d->mmio = vmm_map_mmio(base, bytes, true);
+        if (!d->mmio) err = -ENOMEM;
     }
     if (!err && d->driver->dma_pages) {
         d->dma_phys = pmm_alloc_contig(d->driver->dma_pages);
@@ -248,17 +281,22 @@ int netif_attach(struct netif *d, const struct pci_func *p, const struct net_io 
             else d->claim_generation[2] = registry_get(d->claims[2])->generation;
         }
     }
+    /* Indexed/windowed idle probes write selectors, so claims must succeed
+     * first. They never reset, start DMA or acknowledge firmware IRQs. */
+    if (!err && (p->command & decode) && !d->driver->idle(d)) {
+        d->reason = "firmware_active"; err = -NET_EBUSY;
+    }
     for (unsigned i = 0; !err && i < 3; i++) if (d->claims[i] >= 0)
         err = registry_activate(d->claims[i], d->claim_generation[i]);
     if (!err) {
         d->touched = true;
-        err = pci_command(d, (p->command | 1u) & ~4u);
+        err = pci_command(d, (p->command | decode) & ~4u);
         if (!err) err = d->driver->init(d);
         if (!err) {
             uint8_t address[6]; d->driver->mac(d, address); memcpy(d->address, address, sizeof(address));
             if (!valid_mac(d->address)) err = -NET_EIO;
         }
-        if (!err && d->driver->dma_pages) err = pci_command(d, p->command | 5u);
+        if (!err && d->driver->dma_pages) err = pci_command(d, p->command | decode | 4u);
         if (!err) err = d->driver->start(d);
         if (!err) {
             d->ready = d->running = true;
@@ -267,7 +305,7 @@ int netif_attach(struct netif *d, const struct pci_func *p, const struct net_io 
         }
     }
     if (err) {
-        d->reason = "activation_failed";
+        if (!strncmp(d->reason, "admission", 10)) d->reason = "activation_failed";
         /* An init/start failure may leave unknown device work: retain pins.
          * Admission/allocation failures before touch have a safe rollback. */
         if (d->touched) netif_quarantine(d, "activation_failed");
@@ -410,6 +448,10 @@ static void port_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
 static uint64_t port_now(void *cookie) { (void)cookie; return g_ticks; }
 static void port_sleep(void *cookie, uint32_t ms) { (void)cookie; task_sleep_ms(ms); }
 static int port_delay(void *cookie, uint32_t us) { (void)cookie; return udelay(us); }
+static uint32_t mmio_read(void *cookie, volatile void *mapping, unsigned reg)
+{ (void)cookie; return *(volatile uint32_t *)((volatile uint8_t *)mapping + reg); }
+static void mmio_write(void *cookie, volatile void *mapping, unsigned reg, uint32_t value)
+{ (void)cookie; *(volatile uint32_t *)((volatile uint8_t *)mapping + reg) = value; }
 int net_init(void)
 {
     if (initialized) return shutting_down ? -NET_ENODEV : 0;
@@ -417,9 +459,9 @@ int net_init(void)
     if (g_boot.flags & CBI_F_SAFE_MODE) { klog("[net] disabled reason=safe_mode"); return 0; }
     for (unsigned i = 0; i < pci_count() && device_count < NETIF_MAX; i++) {
         const struct pci_func *p = pci_get(i);
-        if (!net_e100.match(p) && !net_rtl8139.match(p) && !net_ne2000.match(p)) continue;
+        if (!find_driver(p)) continue;
         struct netif *d = &devices[device_count++];
-        struct net_io io = { 0, port_read, port_write, port_now, port_sleep, port_delay };
+        struct net_io io = { 0, port_read, port_write, port_now, port_sleep, port_delay, mmio_read, mmio_write };
         int err = netif_attach(d, p, &io);
         if (err && !d->quarantined) record(d);
     }

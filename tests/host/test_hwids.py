@@ -65,6 +65,14 @@ usb="USB Widget"
         self.assertIn('sources["/System/hwids/usb-ids.json"]', builder)
         self.assertIn('"/System/hwids"', builder)
 
+    def test_native_nic_labels_and_inf_precedence(self):
+        result = hwids.native_names({'1011:0019': 'Owner INF label'})
+        self.assertEqual(result['1011:0019'], 'Owner INF label')
+        self.assertEqual(result['1106:3065'], 'VIA VT6102 Rhine II Fast Ethernet Controller')
+        published = json.loads((ROOT / 'assets/hwids/pci-ids.json').read_text())
+        for key in ('1011:0009', '1011:0019', '1106:3043', '1106:3065', '1106:3106', '8086:1017'):
+            self.assertIn(key, published)
+
 
 if __name__ == '__main__':
     unittest.main()

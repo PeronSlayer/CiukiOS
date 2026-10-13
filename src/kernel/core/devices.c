@@ -163,9 +163,27 @@ static void drivers(struct ciuki_devices_info *out)
         {"e100", "Retained PCI binding; safe mode disables NIC activation"},
         {"rtl8139", "Retained PCI binding; safe mode disables NIC activation"},
         {"ne2000", "Retained PCI binding; safe mode disables NIC activation"},
+        {"e1000", "Retained PCI binding; safe mode disables NIC activation"},
+        {"pcnet", "Retained PCI binding; safe mode disables NIC activation"},
+        {"tulip", "Retained PCI binding; safe mode disables NIC activation"},
+        {"3c905", "Retained PCI binding; safe mode disables NIC activation"},
+        {"rhine", "Retained PCI binding; safe mode disables NIC activation"},
     };
     for (unsigned i = 0; i < ARRAY_SIZE(builtins); i++) {
-        struct ciuki_driver_record *r = &out->drivers[out->driver_count++];
+        bool detected = false;
+        for (unsigned k = 0; k < out->count; k++)
+            if (equal(out->devices[k].driver, builtins[i].name)) detected = true;
+        /* Preserve the existing catalogue order. The fixed ABI has sixteen
+         * rows; new NIC rows are included when detected, replacing an
+         * unbound older NIC row if necessary. At most four NICs are admitted. */
+        if (i >= 15 && !detected) continue;
+        unsigned slot = out->driver_count;
+        if (slot == CIUKI_DRIVERS_MAX) {
+            for (unsigned k = 12; k < out->driver_count; k++)
+                if (!out->drivers[k].bound_devices && out->drivers[k].state == CIUKI_DEVICE_ABSENT) { slot = k; break; }
+            if (slot == CIUKI_DRIVERS_MAX) { out->flags |= CIUKI_DEVICES_TRUNCATED; continue; }
+        } else out->driver_count++;
+        struct ciuki_driver_record *r = &out->drivers[slot]; memset(r, 0, sizeof(*r));
         string(r->name, sizeof(r->name), builtins[i].name);
         string(r->build, sizeof(r->build), CIUKI_BUILD_ID);
         string(r->policy, sizeof(r->policy), builtins[i].policy);
