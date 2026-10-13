@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "sound_runtime.h"
+#include "settings_io.h"
+#ifdef __i386__
+#include <ciuki/devices.h>
+#endif
 #include "catalog.h"
 #include "gate.h"
 #include "../libdeskui/deskui.h"
@@ -266,6 +270,16 @@ static int tasks_verify(const struct desktop *d)
 }
 /* Start menu and taskbar icons: the Tango store through icon_map.c. */
 static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
+static struct cfg_writer settings_writer;
+static int settings_writer_started, verbose_boot;
+struct mixer_job { int fd; struct ciuki_mixer_master master; };
+static int mixer_job_run(void *record, size_t n)
+{
+    if (n!=sizeof(struct mixer_job)) return EINVAL;
+    struct mixer_job job; memcpy(&job,record,n);
+    int error=ciuki_devctl(job.fd,MIXER_SET_MASTER,&job.master,sizeof(job.master)) ? errno : 0;
+    memcpy(record,&job,n); return error;
+}
 /* Volume Control requests (DESK_MIXER_SET): the desktop holds the delegated
  * /dev/mixer control handle (F4 contract, Volume and persistence); the kernel
  * validates the record and saves C:\\SYSTEM\\AUDIO.CFG. */
@@ -284,7 +298,9 @@ static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_
     memset(&m,0,sizeof(m)); m.version=1; m.size=sizeof(m);
     if (ciuki_devctl(d->mixer_fd,MIXER_GET_MASTER,&m,sizeof(m))) return -errno;
     m.left=left; m.right=right; m.mute=mute; m.save_state=0; m.save_error=0; m.reserved=0;
-    return ciuki_devctl(d->mixer_fd,MIXER_SET_MASTER,&m,sizeof(m)) ? -errno : 0;
+    if (!settings_writer_started) return -EIO;
+    struct mixer_job job={d->mixer_fd,m};
+    return cfg_writer_job(&settings_writer,&job,sizeof(job)) ? -errno : 0;
 #endif
 }
 /* ---- desktop shell services: the file and kernel side of shell.c ---- */
@@ -322,25 +338,49 @@ static void settings_load(struct desktop *d)
     free(text);
     if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
 }
+static int (*audio_shutdown_wait)(struct desktop *);
+static int theme_poll_async(uint64_t now)
+{
+    static uint64_t next;
+    static char text[CFG_TEXT_MAX]; size_t n; int error;
+    if (!settings_writer_started) return 0;
+    if (now>=next) { cfg_writer_read(&settings_writer); next=now+2000000000ull; }
+    if (!cfg_writer_read_result(&settings_writer,text,&n,&error)) return 0;
+    char name[32]="";
+    if (!error && desk_settings_theme(text,n,name,sizeof(name))) name[0]=0;
+    const struct desk_theme *before=desk_theme;
+    if (!name[0] || desk_theme_use(name)) desk_theme_use("Platinum");
+    return desk_theme!=before;
+}
 static int settings_save(struct desktop *d)
 {
     static char text[CFG_TEXT_MAX];
     size_t n=cfg_format(&d->sh.cfg,text,sizeof(text));
     if (!n) { errno=ENOSPC; return -1; }
-    if (mkdir(CFG_DIR,0755) && errno!=EEXIST) return -1;
-    static const char temp[]=CFG_DIR "/desktop.new";
-    FILE *f=fopen(temp,"wb");
-    if (!f) return -1;
-    int ok=fwrite(text,1,n,f)==n;
-    if (fflush(f)) ok=0;
-    if (ok && fsync(fileno(f))) ok=0;
-    if (fclose(f)) ok=0;
-    if (ok && rename(temp,CFG_FILE)) {
-        /* A file system without replacing rename: remove the old file first. */
-        ok=!unlink(CFG_FILE) && !rename(temp,CFG_FILE);
+    if (!settings_writer_started) { errno=EIO; return -1; }
+    return cfg_writer_submit(&settings_writer,text,n);
+}
+static int shutdown_wait(struct desktop *d)
+{
+    if (settings_writer_started && cfg_writer_busy(&settings_writer)) return 0;
+    return !audio_shutdown_wait || audio_shutdown_wait(d);
+}
+static void performance_sample(struct desktop *d, uint64_t now)
+{
+    if (!d->sample_begin_ns) { d->sample_begin_ns=now; return; }
+    if (now-d->sample_begin_ns<2000000000ull) return;
+    d->sample=d->stats; d->sample_ns=now-d->sample_begin_ns;
+    memset(&d->stats,0,sizeof(d->stats)); d->sample_begin_ns=now;
+    if (verbose_boot) {
+        const struct desk_frame_stats *s=&d->sample;
+        char line[384];
+        snprintf(line,sizeof(line),"[display] frames=%llu damage_px=%llu presents=%llu lfb_bytes=%llu present_us=%llu composite_us=%llu input_us=%llu input_lag_us=%llu interval_us=%llu\n",
+                (unsigned long long)s->frames,(unsigned long long)s->damage_px,(unsigned long long)s->presents,
+                (unsigned long long)s->lfb_bytes,(unsigned long long)(s->present_ns/1000),
+                (unsigned long long)(s->composite_ns/1000),(unsigned long long)(s->input_ns/1000),
+                (unsigned long long)(s->input_lag_ns/1000),(unsigned long long)(d->sample_ns/1000));
+        if (settings_writer_started) cfg_writer_log(&settings_writer,line);
     }
-    if (!ok) { int error=errno; unlink(temp); errno=error; return -1; }
-    return 0;
 }
 static int display_apply(struct desktop *d, uint16_t id)
 {
@@ -348,14 +388,16 @@ static int display_apply(struct desktop *d, uint16_t id)
     if (!e && id != d->display_mode) d->display_pending = id;
     return e;
 }
-/* Polls the readable counter once per frame. Allocation failure keeps the old
+/* Read the cheap notification counter on service turns; copy the inventory
+ * only when it changes. Allocation failure keeps the old
  * surface private and lets the kernel watchdog restore its previous mode. */
 static void display_poll(struct desktop *d)
 {
-    struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(info)};
-    if (ciuki_display_query(&info)) return;
     uint32_t counter;
     if (read(d->display, &counter, sizeof(counter)) != sizeof(counter)) return;
+    if (counter==d->display_counter) return;
+    struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(info)};
+    if (ciuki_display_query(&info)) return;
     uint16_t mode = 0;
     for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].current) mode = info.modes[i].id;
     if (counter == d->display_counter && mode == d->display_mode) return;
@@ -370,6 +412,7 @@ static void display_poll(struct desktop *d)
     if (d->shell) desk_shell_wallpaper_update(d);
     d->display_counter = counter;
     d->display_mode = mode;
+    d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     /* Includes rollback: save that confirmed frame's mode, never the failed
      * candidate. The existing cfg retains its previous id until then. */
     d->display_pending = mode;
@@ -423,13 +466,11 @@ static void mixer_read(struct desktop *d)
 static void mixer_write(struct desktop *d)
 {
     if (d->mixer_fd<0) { mixer_read(d); return; }
-    struct ciuki_mixer_master m={.version=CIUKI_AUDIO_VERSION,.size=sizeof(m),
-        .left=(uint32_t)d->sh.volume,.right=(uint32_t)d->sh.volume,.mute=(uint32_t)(d->sh.muted!=0)};
-    if (ciuki_devctl(d->mixer_fd,MIXER_SET_MASTER,&m,sizeof(m))<0)
-        snprintf(d->notice,sizeof(d->notice),"Volume change failed (errno %d)",errno);
-    else if (m.save_state==CIUKI_MIXER_UNSAVED)
-        snprintf(d->notice,sizeof(d->notice),"Volume applied but not saved (error %d)",(int)m.save_error);
-    mixer_read(d);
+    int e=mixer_apply(d,(uint32_t)d->sh.volume,(uint32_t)d->sh.volume,(uint32_t)(d->sh.muted!=0));
+    if (e) {
+        snprintf(d->notice,sizeof(d->notice),"Volume change failed (error %d)",-e);
+        desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+    }
 }
 static void system_read(struct desktop *d)
 {
@@ -520,6 +561,21 @@ static void shell_service(struct desktop *d)
 {
     struct desk_shell *sh=&d->sh;
     if (!d->shell) return;
+    struct mixer_job job; size_t job_size; int job_error;
+    if (settings_writer_started && cfg_writer_job_result(&settings_writer,&job,&job_size,&job_error)) {
+        if (job_size!=sizeof(job)) job_error=EIO;
+        if (job_error) snprintf(d->notice,sizeof(d->notice),"Volume change failed (error %d)",job_error);
+        else if (job.master.save_state==CIUKI_MIXER_UNSAVED)
+            snprintf(d->notice,sizeof(d->notice),"Volume applied but not saved (error %d)",(int)job.master.save_error);
+        if (job_error || job.master.save_state==CIUKI_MIXER_UNSAVED)
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+        sh->want_reload|=4;
+    }
+    int save_error;
+    if (settings_writer_started && cfg_writer_result(&settings_writer,&save_error) && save_error) {
+        snprintf(d->notice,sizeof(d->notice),"Settings not saved (error %d)",save_error);
+        desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+    }
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
     if (d->power.state) { desk_power_tick(d); return; }
     if (sh->want_power) {
@@ -529,10 +585,22 @@ static void shell_service(struct desktop *d)
         return;
     }
     if (sh->want_reload & 1) {
+        char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
+        memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); memcpy(old_theme,sh->cfg.theme,sizeof(old_theme));
+        int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
+        uint32_t old_colour=sh->cfg.desktop_color;
         uint16_t confirmed = sh->cfg.display_mode;
         settings_load(d);
         sh->cfg.display_mode = confirmed; scan_programs(d);
-        sh->icon_count=0; desk_shell_apply(d); wallpaper_load(d);
+        int image_changed=strcmp(old_wall,sh->cfg.wallpaper) || sh->want_wallpaper;
+        int visual=image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
+                   old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
+        if (visual) {
+            sh->icon_count=0; desk_shell_apply(d);
+            if (image_changed) wallpaper_load(d); else desk_shell_wallpaper_update(d);
+        } else desk_damage_add(&d->damage,(struct desk_box){(int)d->width-SH_TRAY_W-4,
+            (int)d->height-DESK_BAR+4,SH_TRAY_W,DESK_BAR-7},d->width,d->height);
+        sh->want_wallpaper=0;
     }
     if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
     int volume_feedback = sh->want_reload & 8;
@@ -541,7 +609,10 @@ static void shell_service(struct desktop *d)
     if (!sh->wall_valid) desk_shell_wallpaper_update(d);
     if (sh->want_save) {
         sh->want_save=0;
-        if (settings_save(d)) snprintf(d->notice,sizeof(d->notice),"Settings not saved (errno %d)",errno);
+        if (settings_save(d)) {
+            snprintf(d->notice,sizeof(d->notice),"Settings not saved (errno %d)",errno);
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+        }
     }
     if (sh->want_mixer) { sh->want_mixer=0; mixer_write(d); }
     if (volume_feedback) desk_sound(d,SOUND_VOLUME);
@@ -580,6 +651,16 @@ static void shell_setup(struct desktop *d, int gate)
     if (!gate) settings_load(d);
     desk_shell_enable(d);
     if (!gate) desk_sound_init(d);
+    if (!gate) {
+        settings_writer.run_job=mixer_job_run;
+        settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
+        audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
+#ifdef __i386__
+        static struct ciuki_devices_info devices;
+        devices.version=CIUKI_DEVICES_VERSION; devices.size=sizeof(devices);
+        if (!ciuki_devices(&devices)) verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
+#endif
+    }
     /* The first frame shows the desktop colour, bars and icons at once; the
      * image wallpaper (the default Ciuk2 PNG takes seconds to decode under
      * TCG) is loaded two loop iterations later (lead fix, 2026-10-12). */
@@ -626,6 +707,7 @@ int main(int argc, char **argv)
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    d->time_ns=monotonic; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     if (desk_load_portrait(portrait)) { fprintf(stderr,"desktop: approved Ciuki asset unavailable\n"); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_PORTRAIT,EIO); }
     d->portrait=portrait;
     d->output=ciuki_surface_create(info.width,info.height,CIUKI_SURFACE_XRGB8888);
@@ -666,23 +748,16 @@ int main(int argc, char **argv)
     uint64_t shift_base=0, shift_release=0;
     for (;;) {
         uint64_t now = monotonic();
-        display_poll(d);
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
         if (!gate) desk_sound_results(d);
-        if (d->shell && !d->power.state && d->sh.wallpaper_deferred && !--d->sh.wallpaper_deferred) wallpaper_load(d);
-        /* The shell follows the theme key of DESK_SETTINGS_PATH (gates keep the default). */
-        if (d->shell && !gate && !d->power.state && desk_theme_poll(DESK_SETTINGS_PATH,now)) {
-            desk_theme_changed(d); d->sh.wall_valid=0; desk_shell_wallpaper_update(d);   /* theme colours in the wallpaper */
-        }
         if (d->shell) {
             struct timespec rtc;
             if (!clock_gettime(CLOCK_REALTIME,&rtc) && rtc.tv_sec>=0 && d->realtime_second!=(uint64_t)rtc.tv_sec) {
-                if (d->realtime_second/60!=(uint64_t)rtc.tv_sec/60)   /* the top bar shows the date */
-                    desk_damage_add(&d->damage,(struct desk_box){(int32_t)d->width/2,0,(int32_t)d->width/2,DESK_BAR},d->width,d->height);
+                uint64_t previous=d->realtime_second;
                 d->realtime_second=(uint64_t)rtc.tv_sec;
-                desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
+                desk_shell_clock_damage(d,previous);
             }
             if (!d->power.state) desk_shell_tick(d);
         }
@@ -714,17 +789,16 @@ int main(int argc, char **argv)
             default: return gate_error("command",EINVAL,generation);
             }
         }
-        for (int i=0; i<DESK_CLIENTS; i++) {
-            struct desk_client *c=&d->clients[i];
-            for (unsigned n=0; n<16 && c->channel>=0; n++) {
-                struct ciuki_message m;
-                int r=ciuki_channel_recv(c->channel,&m,DONTWAIT);
-                if (r==1) desk_receive(d,i,&m);
-                else { if (!r || (errno!=EAGAIN && errno!=EINTR)) desk_drop_client(d,i); break; }
+        uint64_t input_begin=monotonic();
+        if (!gate) {
+            int n=desk_drain_input(d,ciuki_input_read);
+            if (n>0) input_reported=0;
+            else if (n<0 && !input_reported) {
+                fprintf(stderr,"desktop: input unavailable (errno=%d)\n",errno); input_reported=1;
+                struct ciuki_input_event resync={.type=CIUKI_INPUT_RESYNC}; desk_input(d,&resync);
             }
-            desk_flush(d,i);
         }
-        if (fifo_count+CIUKI_INPUT_READ_MAX<=GATE_INPUT_FIFO) {
+        while (gate && fifo_count+CIUKI_INPUT_READ_MAX<=GATE_INPUT_FIFO) {
             struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
             int n=ciuki_input_read(input,events,CIUKI_INPUT_READ_MAX);
             for (int i=0; i<n; i++) input_fifo[(fifo_head+fifo_count++)%GATE_INPUT_FIFO]=events[i];
@@ -733,6 +807,7 @@ int main(int argc, char **argv)
                 fprintf(stderr,"desktop: input unavailable (errno=%d)\n",errno); input_reported=1;
                 struct ciuki_input_event resync={.type=CIUKI_INPUT_RESYNC}; desk_input(d,&resync);
             }
+            if (n<=0) break;
         }
         int scenario=gate && (d->shell_test || d->tasks_test || d->app_test);
         int hold=scenario && scenario_hold(d,now);
@@ -775,6 +850,29 @@ int main(int argc, char **argv)
                 input_dirty=1;
             } else desk_input(d,&ev);
         }
+        uint64_t input_time=monotonic()-input_begin;
+        if (gate) { d->stats.input_ns+=input_time; d->pending_input_ns+=input_time; }
+        /* Input has priority over IPC, theme/file reads and rendering. The
+         * gate's FIFO may deliberately retain paced events; ordinary input
+         * drains again before rendering if a full FIFO left anything queued. */
+        for (int i=0; i<DESK_CLIENTS; i++) {
+            struct desk_client *c=&d->clients[i];
+            for (unsigned n=0; n<16 && c->channel>=0; n++) {
+                struct ciuki_message m;
+                int r=ciuki_channel_recv(c->channel,&m,DONTWAIT);
+                if (r==1) desk_receive(d,i,&m);
+                else { if (!r || (errno!=EAGAIN && errno!=EINTR)) desk_drop_client(d,i); break; }
+            }
+            desk_flush(d,i);
+        }
+        if (!gate && fifo_count==0) {
+            (void)desk_drain_input(d,ciuki_input_read);
+        }
+        display_poll(d);
+        if (d->shell && !d->power.state && d->sh.wallpaper_deferred && !--d->sh.wallpaper_deferred) wallpaper_load(d);
+        if (d->shell && !gate && !d->power.state && theme_poll_async(now)) {
+            desk_theme_changed(d); d->sh.wall_valid=0; desk_shell_wallpaper_update(d);
+        }
         if (d->sh.want_power && !d->sh.gate) d->action=-1;
         if (d->action>=0) {
             unsigned selected=(unsigned)d->action; d->action=-1;
@@ -807,15 +905,18 @@ int main(int argc, char **argv)
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
         }
         if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
-        int redraw = desk_redraw(d);
-        if (redraw && errno!=EINTR && !display_reported) {
+        int render_ready=gate || desk_frame_due(d,monotonic());
+        int redraw = render_ready ? desk_redraw(d) : -1;
+        if (render_ready && redraw && errno!=EINTR && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); }
         if (desk_display_frame_commit(d, redraw)) {
+            desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);
             if (d->shell && !d->sh.gate && settings_save(d))
                 snprintf(d->notice, sizeof(d->notice), "Display applied; settings not saved");
         }
+        if (!gate) performance_sample(d,monotonic());
         /* The controller hashes the framebuffer during this report: send it
          * only after the checkpoint frame has been presented completely. */
         if (gate && d->app_test && d->app_checkpoint>d->app_reported && !d->damage.count) {
@@ -879,6 +980,8 @@ int main(int argc, char **argv)
         if (gate && progress!=reported_progress) { reported_progress=progress; input_dirty=1; }
         if (test && victim && victim_pid<0 && completed<cycles && now>=next_victim)
             victim_pid=spawn_demo(d,victim,0);
-        struct timespec pause={.tv_sec=0,.tv_nsec=(long)(gate ? 1000000 : desk_launch_wait(d,monotonic()))}; nanosleep(&pause,NULL);
+        /* Sleep even under continuous damage. The independent frame deadline
+         * caps rendering; 1 ms service keeps input ahead of the next frame. */
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
 }

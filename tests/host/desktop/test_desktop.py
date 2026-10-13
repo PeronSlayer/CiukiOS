@@ -576,7 +576,7 @@ class AppCaseReplayTests(unittest.TestCase):
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
-                                                                                  "shell", "settings", "wallpaper", "keymap", "image")),
+                                                                                  "shell", "settings", "settings_io", "wallpaper", "keymap", "image")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
@@ -595,7 +595,7 @@ class AppCaseReplayTests(unittest.TestCase):
             target = folder / f"{name}.o"
             subprocess.run([*common, *flags, "-c", str(source), "-o", str(target)], check=True, env=cls.env)
             return target
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=int(os.environ.get("CIUKI_HOST_JOBS", "1"))) as pool:
             objects = list(pool.map(compile_unit, units))
         cls.binary = folder / "app_replay"
         subprocess.run(["clang", "-fsanitize=address,undefined", "-pthread", *map(str, objects), "-o", str(cls.binary)],

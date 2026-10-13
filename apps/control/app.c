@@ -62,7 +62,12 @@ static void changed(struct cp_app *a)
     size_t n = cfg_format(&now, out, sizeof(out));
     if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) { text(a, C_STATUS, "The settings could not be saved."); return; }
     int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
-    text(a, C_STATUS, r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
+    text(a, C_STATUS, a->host.save_async ? "Saving settings..." : r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
+}
+void cp_settings_saved(struct cp_app *a, int error)
+{
+    if (a->mode_state==CP_MODE_SAVE) { cp_display_saved(a,error); return; }
+    text(a,C_STATUS,error ? "The settings could not be saved." : "Settings saved and applied.");
 }
 
 /* ---- display preview ---- */
@@ -286,7 +291,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             else text(a, C_STATUS, "Saved. Serial logging changes at the next boot.");
         }
         break;
-    case C_CLOSE: if (e->type == DU_EV_ACTIVATE) { cp_display_cancel(a); a->quit = 1; } break;
+    case C_CLOSE: if (e->type == DU_EV_ACTIVATE) { if (a->mode_state!=CP_MODE_SAVE) cp_display_cancel(a); a->quit = 1; } break;
     case C_THEME:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CFG_THEMES) {
             snprintf(a->cfg.theme, sizeof(a->cfg.theme), "%s", cfg_theme_names[e->index]); save = 1; a->preview_valid = 0;
@@ -808,6 +813,7 @@ static void build(struct cp_app *a)
 }
 void cp_open(struct cp_app *a, int page)
 {
+    if (a->mode_state==CP_MODE_SAVE) { text(a,C_STATUS,"Waiting for display settings to finish saving..."); return; }
     if (page != a->page && a->mode_state) cp_display_cancel(a);
     a->page = page >= 0 && page < CP_PAGES ? page : CP_HOME;
     a->status[0] = 0;

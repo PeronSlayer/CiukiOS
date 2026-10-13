@@ -25,7 +25,7 @@ static int client(int ch, int surf, unsigned w, unsigned h, uint32_t colour)
 static void setup(unsigned w, unsigned h)
 { fake_reset(); assert(!desk_ignore_sigpipe()); desk_init(&d,&fake_ops,w,h); }
 static void cleanup(void)
-{ for (int i=0; i<DESK_CLIENTS; i++) desk_drop_client(&d,i); assert(!fake_live()); }
+{ for (int i=0; i<DESK_CLIENTS; i++) desk_drop_client(&d,i); desk_render_release(&d); assert(!fake_live()); }
 static void test_protocol(void)
 {
     struct ciuki_message m; struct desk_packet p;

@@ -21,10 +21,11 @@ enum { CP_HOME = -1, CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, 
 #define CP_BOOT_MAX 128
 enum { CP_AREA_LABEL = 800, CP_AREA, CP_DEPTH_LABEL, CP_DEPTH, CP_APPLY, CP_MODE_NOTE,
        CP_REFRESH, CP_SUMMARY, CP_CONFIRM, CP_MODE_TIMER };
-enum { CP_MODE_IDLE, CP_MODE_WAIT, CP_MODE_CONFIRM, CP_MODE_REVERT };
+enum { CP_MODE_IDLE, CP_MODE_WAIT, CP_MODE_CONFIRM, CP_MODE_REVERT, CP_MODE_SAVE };
 struct cp_host {
     int (*load)(void *, char *text, size_t size, size_t *length);      /* desktop.cfg; -1 when absent */
     int (*save)(void *, const char *text, size_t length);
+    int save_async; /* save queued; main calls cp_settings_saved after durable completion */
     int (*wallpapers)(void *, char names[][CFG_PATH_MAX], unsigned capacity);   /* absolute paths */
     int (*decode)(void *, const char *path, struct desk_image *out);
     int (*mixer)(void *, int *volume, int *muted);                    /* read-only master; -1 absent */
@@ -82,6 +83,7 @@ struct cp_app {
     int display_ok, mode_state;
     uint16_t previous_mode, pending_mode;
     uint64_t mode_deadline;
+    uint64_t mode_retry_ns; int mode_retry;
     char adapter_lines[10][160];
 };
 int cp_attach(struct cp_app *, struct du_ui *, int page);
@@ -101,6 +103,8 @@ void cp_display_sync(struct cp_app *);
 int cp_display_event(struct cp_app *, const struct du_event *);
 void cp_display_result(struct cp_app *, int result);
 void cp_display_cancel(struct cp_app *);
+void cp_display_saved(struct cp_app *, int error);
+void cp_settings_saved(struct cp_app *, int error);
 void cp_adapter_paint(struct cp_app *, struct du_canvas *);
 const char *cp_adapter_name(uint16_t vendor, uint16_t device, char *out, size_t size);
 void cp_settings_message(struct ciuki_message *, uint32_t serial, unsigned request, int value, int flag);

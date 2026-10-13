@@ -23,7 +23,7 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
     desk_damage_add(&d->damage, (struct desk_box){0, 0, (int32_t)w, (int32_t)h}, w, h);
 }
 void desk_theme_changed(struct desktop *d)
-{ desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height); }
+{ d->sh.background_valid=0; desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height); }
 int desk_add_client(struct desktop *d, int fd)
 {
     for (unsigned i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].channel == fd) return -1;
@@ -177,11 +177,23 @@ int desk_display_frame_commit(struct desktop *d, int redraw)
     d->display_pending = 0;
     return 1;
 }
+void desk_display_reply(struct desktop *d, int result)
+{
+    if (!d->display_reply_mode) return;
+    int i=d->display_reply_client;
+    if (i>=0 && i<DESK_CLIENTS && d->clients[i].channel>=0 && d->clients[i].pid==d->display_reply_pid) {
+        struct ciuki_message m; desk_message(&m,DESK_TASK_RESULT,16);
+        desk_put32(m.data+4,d->display_reply_serial); desk_put32(m.data+8,DESK_SETTINGS);
+        desk_put32(m.data+12,(uint32_t)result); desk_queue(d,i,&m);
+    }
+    d->display_reply_mode=0;
+}
 
 /* Called only after allocating the new screen surface. Client surfaces stay
  * attached until their CONFIGURE/DAMAGE handshake replaces them. */
 void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
 {
+    desk_render_release(d);
     d->width = width; d->height = height;
     d->drag = -1; d->resize_edges = 0;
     d->title_hot = d->title_down = 0;
@@ -289,6 +301,22 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     d->received++;
     struct ciuki_message reply;
     switch (p.opcode) {
+    case DESK_SYSTEM_QUERY: {
+        if (!c->taskman) {
+            desk_message(&reply,DESK_TASK_RESULT,16); desk_put32(reply.data+4,p.serial);
+            desk_put32(reply.data+8,DESK_SYSTEM_QUERY); desk_put32(reply.data+12,(uint32_t)-EPERM);
+        } else {
+            const struct desk_frame_stats *s=&d->sample;
+            uint64_t values[9]={s->frames,s->damage_px,s->presents,s->lfb_bytes,s->composite_ns,
+                               s->present_ns,s->input_ns,s->input_lag_ns,d->sample_ns};
+            desk_message(&reply,DESK_SYSTEM_INFO,80); desk_put32(reply.data+4,p.serial);
+            for (unsigned k=0;k<9;k++) {
+                desk_put32(reply.data+8+k*8,(uint32_t)values[k]);
+                desk_put32(reply.data+12+k*8,(uint32_t)(values[k]>>32));
+            }
+        }
+        desk_queue(d,i,&reply); break;
+    }
     case DESK_HELLO:
         c->hello = 1;
         c->version = m->data[0];
@@ -421,8 +449,15 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
          * the shutdown guard with the other preference requests. */
         int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : d->power.state ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
-        if (!result && p.request == DESK_SETTINGS_DISPLAY)
-            result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
+        if (!result && p.request == DESK_SETTINGS_DISPLAY) {
+            if (d->display_reply_mode) result=-EBUSY;
+            else result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
+            if (!result && d->display_pending) {
+                d->display_reply_client=i; d->display_reply_pid=c->pid;
+                d->display_reply_serial=p.serial; d->display_reply_mode=(uint16_t)p.values[0];
+                break; /* reply only after the kernel accepts the complete new frame */
+            }
+        }
         if (!result && p.request == DESK_SETTINGS_MASTER) {
             if (d->mixer_fd < 0) result = -ENODEV;
             else {
@@ -469,8 +504,8 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
     d->now_ns = now;
     if (now / 1000000000ull != d->clock_second) {
         d->clock_second = now / 1000000000ull;
-        desk_damage_add(&d->damage, (struct desk_box){(int32_t)d->width - 120,
-            d->shell ? (int32_t)d->height-DESK_BAR : 0, 120, DESK_BAR}, d->width, d->height);
+        if (!d->shell) desk_damage_add(&d->damage, (struct desk_box){(int32_t)d->width - 120,
+            0, 120, DESK_BAR}, d->width, d->height);
     }
     for (int i = 0; i < DESK_CLIENTS; i++) {
         struct desk_client *c = &d->clients[i];

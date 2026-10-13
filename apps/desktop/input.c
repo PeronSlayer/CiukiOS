@@ -1,6 +1,24 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include <string.h>
+#include <errno.h>
+int desk_drain_input(struct desktop *d, int (*read_events)(int, struct ciuki_input_event *, uint32_t))
+{
+    uint64_t begin=d->time_ns ? d->time_ns() : d->now_ns;
+    int total=0, n;
+    struct ciuki_input_event events[CIUKI_INPUT_READ_MAX];
+    do {
+        n=read_events(d->input,events,CIUKI_INPUT_READ_MAX);
+        if (d->time_ns) d->now_ns=d->time_ns();
+        for (int i=0;i<n;i++) desk_input(d,&events[i]);
+        if (n>0) total+=n;
+    } while (n>0);
+    int error=errno;
+    uint64_t elapsed=(d->time_ns ? d->time_ns() : d->now_ns)-begin;
+    d->stats.input_ns+=elapsed; d->pending_input_ns+=elapsed;
+    errno=error;
+    return n<0 && error!=EAGAIN && error!=EINTR ? -1 : total;
+}
 static void route(struct desktop *d, int i, unsigned op, const struct ciuki_input_event *e)
 {
     struct ciuki_message m;
@@ -109,15 +127,20 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
      * input batch. Immediate icon/menu actions consume it in launch_program. */
     if (d->action < 0) d->launch_click_ns = in->monotonic_ns ? in->monotonic_ns : d->now_ns;
     d->inputs++;
+    if (in->monotonic_ns && d->now_ns>=in->monotonic_ns &&
+        d->now_ns-in->monotonic_ns>d->stats.input_lag_ns)
+        d->stats.input_lag_ns=d->now_ns-in->monotonic_ns;
+    if (in->monotonic_ns && d->now_ns>=in->monotonic_ns &&
+        d->now_ns-in->monotonic_ns>d->pending_input_lag_ns)
+        d->pending_input_lag_ns=d->now_ns-in->monotonic_ns;
     struct ciuki_input_event e = *in;
     if (d->sh.want_power && !d->sh.gate && !d->power.state) return;
     if (d->power.state) {
         if (e.type==CIUKI_INPUT_MOTION) {
-            desk_damage_add(&d->damage,(struct desk_box){d->mouse_x,d->mouse_y,12,18},d->width,d->height);
+            d->cursor_dirty=1;
             int32_t dx=e.value, dy=e.value2;
             desk_shell_scale_motion(d,&dx,&dy);
             d->mouse_x=axis(d->mouse_x,dx,d->width); d->mouse_y=axis(d->mouse_y,dy,d->height);
-            desk_damage_add(&d->damage,(struct desk_box){d->mouse_x,d->mouse_y,12,18},d->width,d->height);
         }
         desk_power_input(d,&e);
         return;
@@ -137,14 +160,13 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
         break;
     case CIUKI_INPUT_TEXT: route(d, d->focus, DESK_KEY, &e); break;
     case CIUKI_INPUT_MOTION:
-        desk_damage_add(&d->damage, (struct desk_box){d->mouse_x,d->mouse_y,12,18}, d->width,d->height);
+        d->cursor_dirty=1;
         {
             int32_t dx = e.value, dy = e.value2;
             desk_shell_scale_motion(d, &dx, &dy);   /* Control Panel mouse speed; 1:1 by default */
             d->mouse_x = axis(d->mouse_x, dx, d->width);
             d->mouse_y = axis(d->mouse_y, dy, d->height);
         }
-        desk_damage_add(&d->damage, (struct desk_box){d->mouse_x,d->mouse_y,12,18}, d->width,d->height);
         if (d->shell) desk_shell_motion(d);
         if (d->drag >= 0) {
             if (d->resize_edges) {

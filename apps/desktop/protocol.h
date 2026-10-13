@@ -33,7 +33,8 @@ enum desk_opcode {
     /* f2-36, version 2, client to desktop: uint32 length, then 1..63
      * printable ASCII bytes. Updates only the sending client's window. */
     DESK_SET_TITLE,
-    DESK_SOUND /* v2: uint32 event; toolkit menu and dialog events */
+    DESK_SOUND, /* v2: uint32 event; toolkit menu and dialog events */
+    DESK_SYSTEM_QUERY, DESK_SYSTEM_INFO /* f1-25: explicit opt-in, v2 desktop performance sample */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */
@@ -58,6 +59,8 @@ struct desk_packet {
     int32_t result;
     uint32_t values[3];               /* SETTINGS: left/right/mute or mode id/0/0 */
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
+    uint64_t performance[9]; /* frames, damage px, presents, LFB bytes, composite,
+                             * present, input, max input lag (all ns), interval ns */
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);

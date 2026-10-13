@@ -230,7 +230,9 @@ void desk_paint_shadow(struct desk_paint *p, int x, int y, int w, int h, int siz
     if (!clip(p, &vx, &vy, &vw, &vh)) return;
     unsigned peak = 72;
     for (int r = vy; r < vy + vh; r++) for (int c = vx; c < vx + vw; c++) {
-        if (c >= x && c < x + w && r >= y && r < y + h) continue;
+        /* The opaque window covers this entire span. Skip it once instead
+         * of visiting every client pixel on each drag/partial composite. */
+        if (c >= x && c < x + w && r >= y && r < y + h) { c=x+w-1; continue; }
         int dx = c < ox ? ox - c : c >= ox + w ? c - (ox + w - 1) : 0;
         int dy = r < oy ? oy - r : r >= oy + h ? r - (oy + h - 1) : 0;
         if (dx >= size || dy >= size) continue;
@@ -583,7 +585,7 @@ void desk_title_button_box(int x, int y, int w, unsigned button, int box[4])
     for (int k = 0; k < 4; k++) box[k] = b[k];
 }
 
-void desk_paint_frame(struct desk_paint *p, int x, int y, int w, int h, const struct desk_frame_style *s)
+static void paint_frame(struct desk_paint *p, int x, int y, int w, int h, const struct desk_frame_style *s, int covered)
 {
     const struct desk_theme *t = desk_theme;
     if (w <= 2 || h <= 2) return;
@@ -602,7 +604,13 @@ void desk_paint_frame(struct desk_paint *p, int x, int y, int w, int h, const st
     uint32_t a0 = active ? t->title[0] : t->title_inactive[0], a1 = active ? t->title[1] : t->title_inactive[1];
     if (s->alert) { a0 = desk_mix(0x9a3c2cu, a0, platinum ? 60 : 140); a1 = desk_mix(0x9a3c2cu, a1, platinum ? 60 : 140); }
     uint32_t ink = active ? t->title_text : t->title_text_inactive;
-    ffill(&f, x, y, w, h, t->face);
+    if (!covered) ffill(&f, x, y, w, h, t->face);
+    else {
+        ffill(&f,x,y,w,T,t->face);
+        ffill(&f,x,y+T,DESK_FRAME_BORDER,h-T,t->face);
+        ffill(&f,x+w-DESK_FRAME_BORDER,y+T,DESK_FRAME_BORDER,h-T,t->face);
+        ffill(&f,x,y+h-DESK_FRAME_BORDER,w,DESK_FRAME_BORDER,t->face);
+    }
     if (classic) {
         /* Classic 98: raised 3-D frame, inset caption, icon and left-aligned title. */
         desk_paint_fill(&f.p, x, y, w - 1, 1, t->light); desk_paint_fill(&f.p, x, y, 1, h - 1, t->light);
@@ -668,8 +676,13 @@ void desk_paint_frame(struct desk_paint *p, int x, int y, int w, int h, const st
     frame_outline(&f, active ? t->frame : t->frame_inactive);
 }
 
+void desk_paint_frame(struct desk_paint *p, int x, int y, int w, int h, const struct desk_frame_style *s)
+{ paint_frame(p,x,y,w,h,s,0); }
+void desk_paint_frame_border(struct desk_paint *p, int x, int y, int w, int h, const struct desk_frame_style *s)
+{ paint_frame(p,x,y,w,h,s,1); }
+
 /* ---- settings ----
- * desktop.cfg has one writer, settings.c (cfg_format: the shell and the
+ * desktop.cfg has one formatter, settings.c (cfg_format: the shell and the
  * Control Panel). The theme engine only reads its "theme" key, with the line
  * rules of cfg_parse: blank lines and '#' comments are skipped, spaces round
  * key and value are trimmed, the last valid line wins, and a value that is
