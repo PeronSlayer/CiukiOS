@@ -85,6 +85,10 @@ void *vmm_reserve_mmio(uint32_t cap) { if (fail_window) return 0; window_size = 
 void vmm_revoke_mmio(void *p, uint32_t bytes) { assert(p && bytes); event(3); }
 void *vmm_replace_framebuffer(void *p, uint32_t cap, uint32_t phys, uint32_t bytes) { assert(p == window && cap == window_size && (uint64_t)bytes + (phys & 4095) <= cap); event(7); return window + (phys & 4095); }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
+void kwait_init(struct kwait *q) { memset(q, 0, sizeof(*q)); }
+bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t deadline)
+{ (void)q; (void)deadline; return cond(arg); }
+void kwait_wake_all(struct kwait *q) { (void)q; }
 bool deadline_passed(uint64_t d) { return g_ticks - d < (UINT64_C(1) << 63); }
 void task_sleep_ms(uint32_t ms) { (void)ms; assert(0); }
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *a, enum task_prio p) { assert(!strcmp(n, "display-watchdog") && fn && !a && p == P_NORMAL); return &timer; }

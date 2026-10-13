@@ -127,7 +127,7 @@ struct model {
     uint8_t vga_enable, cr_index;
     bool alias_dead, mmio_enable_failed, locked39, decorated, reserved_readbacks, pipe_locked, alias_lock_mismatch;
     unsigned reset_fault, cr66_reads;
-    unsigned port_reads, port_writes, alias_reads, alias_writes, engine_writes;
+    unsigned port_reads, port_writes, alias_reads, alias_writes, engine_writes, reset_engine_writes;
     unsigned port_cr_reads[256];
     unsigned status_reads, delays, reset_phase;
     bool contradictory;
@@ -140,7 +140,7 @@ struct model {
 static struct model m;
 static struct savage2d test_engine;
 uint64_t ktime_cycles(void) { return m.us * 1000; }
-static void marker_delay(void) { m.us+=marker_cost_us; }
+static void marker_delay(void) { CHECK(!locks && !initializing); m.us+=marker_cost_us; }
 static void marker_before_register(void)
 {
     if (initializing)
@@ -205,8 +205,10 @@ static uint32_t model_read(void *ctx,uint32_t offset)
         else value=p->status_value ? p->status_value : 0x00e00000u;
         p->last_status_busy = p->busy || (value & 0x1ffffu);
     } else {
+        CHECK(p->reset_phase==2 && p->reset_set_us>=10000 && p->reset_clear_us>=10000);
         if (offset>=0x8100 && offset<0x8180) CHECK(!(p->reg[BCI_CONTROL/4]&8));
-        value=p->reg[offset/4];
+        value=p->dead ? UINT32_MAX : p->reg[offset/4];
+        if (offset==BCI_CONTROL && !p->status_reads) CHECK(p->engine_writes==p->reset_engine_writes);
         if (offset==BCI_CONTROL && p->control_reserved) value|=0x4000;
         if (offset==0x816c && p->bad_readback) value^=16u;
     }
@@ -269,26 +271,14 @@ static void chip_cr_write(struct model *p,uint8_t index,uint8_t value)
         if (p->reset_fault==1) value&=~2u;
         if (p->reset_fault==2 && p->reset_phase) value|=2u;
         p->reset_phase=value&2u ? 1 : 2;
-        if (value&2u) { p->reset_set_us=0; p->reset_clear_us=0; p->status_reads=0; }
+        if (value&2u) {
+            p->reset_set_us=0; p->reset_clear_us=0; p->status_reads=0;
+            p->reset_engine_writes=p->engine_writes;
+        }
     }
     p->cr[index]=value;
 }
 static bool alias_live(struct model *p) { return (p->cr[0x40]&1u) && !p->alias_dead; }
-static uint8_t model_cr_read(void *ctx,uint8_t index)
-{
-    struct model *p=ctx; marker_before_register(); p->alias_reads++;
-    bool logged=trace_read_begin("crr",0x80000000u|index,index);
-    uint8_t value=alias_live(p) ? chip_cr_read(p,index) : 0xff;
-    if (index==0x38 && p->alias_lock_mismatch) value^=0x20;
-    if (logged) trace_value("crr",index,value);
-    return value;
-}
-static void model_cr_write(void *ctx,uint8_t index,uint8_t value)
-{
-    struct model *p=ctx; marker_before_register(); p->alias_writes++;
-    trace_write("crw",0xc0000000u|index,index,value);
-    if (alias_live(p)) chip_cr_write(p,index,value);
-}
 static uint8_t model_port_read(void *ctx,uint16_t port)
 {
     struct model *p=ctx; marker_before_register(); p->port_reads++;
@@ -297,6 +287,7 @@ static uint8_t model_port_read(void *ctx,uint16_t port)
     uint8_t value=0xff;
     if (port==0x3c3) value=p->vga_enable;
     else if (port==0x3cc) value=p->misc;
+    else if (port==0x3c5) value=p->seq[p->seq_index];
     else if (port==0x3d5 && (p->vga_enable&1u) && (p->misc&1u)) {
         p->port_cr_reads[p->cr_index]++; value=chip_cr_read(p,p->cr_index);
     }
@@ -311,6 +302,8 @@ static void model_port_write(void *ctx,uint16_t port,uint8_t value)
     trace_write("pw8",0x50000000u|port,port,value);
     if (port==0x3c3) p->vga_enable=value;
     else if (port==0x3c2) p->misc=value;
+    else if (port==0x3c4) p->seq_index=value;
+    else if (port==0x3c5) { if (!(p->seq_index==0x26 && p->pipe_locked)) p->seq[p->seq_index]=value; }
     else if (port==0x3d4) { CHECK((p->vga_enable&1u) && (p->misc&1u)); p->cr_index=value; }
     else if (port==0x3d5) chip_cr_write(p,p->cr_index,value);
     else CHECK(false);
@@ -338,8 +331,9 @@ static uint8_t model_read8(void *ctx,uint32_t offset)
     struct model *p=ctx; bool logged=trace_read_begin("r8",0x10000000u|offset,offset);
     marker_before_register();
     p->alias_reads++;
-    CHECK(offset==0x83cc || offset==0x83c5);
-    uint8_t value=!alias_live(p) ? 0xff : offset==0x83cc ? p->misc : p->seq[p->seq_index];
+    CHECK(offset==0x83d5);
+    uint8_t value=!alias_live(p) ? 0xff : chip_cr_read(p,p->cr_index);
+    if (p->cr_index==0x38 && p->alias_lock_mismatch) value^=0x20;
     if (logged) trace_value("r8",offset,value);
     return value;
 }
@@ -348,16 +342,14 @@ static void model_write8(void *ctx,uint32_t offset,uint8_t value)
     struct model *p=ctx; trace_write("w8",0x20000000u|offset,offset,value);
     marker_before_register();
     p->alias_writes++;
-    if (!alias_live(p)) return;
-    if (offset==0x83c4) p->seq_index=value;
-    else if (offset==0x83c5) { if (!(p->seq_index==0x26 && p->pipe_locked)) p->seq[p->seq_index]=value; }
-    else { CHECK(offset==0x83c2); p->misc=value; }
+    CHECK(offset==0x83d4 && value==0x38); /* diagnostic index only */
+    if (alias_live(p)) p->cr_index=value;
 }
 static void model_drain(void *ctx) { (void)ctx; framebuffer_write_drain(); }
 static void model_fault(void *ctx) { ((struct model *)ctx)->fault_count++; }
 static struct savage_io model_io(void)
 {
-    return (struct savage_io){&m,model_read,model_write,model_cr_read,model_cr_write,
+    return (struct savage_io){&m,model_read,model_write,
         model_now,model_delay,model_drain,model_fault,model_read8,model_write8,model_port_read,model_port_write};
 }
 const struct accel_ops *boot_init(const struct fb_device *d, struct vfs *vfs)
@@ -393,6 +385,11 @@ static struct ciuki_accel_request request(unsigned op)
 static void commands(unsigned bpp)
 {
     prepare(bpp);
+    CHECK(!test_engine.ops.stop(&test_engine));
+    memset(&m,0,sizeof(m)); m.cr[0x66]=1; m.alias_dead=true;
+    test_engine=(struct savage2d){0}; struct savage_io io=model_io();
+    CHECK(!savage2d_start(&test_engine,&io,&device,true,m.cursor_page,0x100000));
+    CHECK(m.alias_reads==1 && m.alias_writes==1 && m.seq[0x08]==6 && m.seq[0x26]==0x40);
     CHECK(m.reg[0x48c18/4]==8 && m.reg[0x48c0c/4]==0);
     CHECK(m.reg[0x816c/4]==(test_engine.descriptor|1u));
     CHECK((m.cr[0x50]&0x30u)==(bpp==16 ? 0x10u : 0x30u) && m.cr[0x66]==1);
@@ -439,6 +436,7 @@ static void commands(unsigned bpp)
     q=request(CIUKI_ACCEL_CURSOR_SHOW); q.colour=1;
     CHECK(!fbdev_accel_request(&q) && (m.cr[0x45]&1));
     CHECK(!test_engine.ops.stop(&test_engine) && !test_engine.active && !(m.cr[0x45]&1));
+    CHECK(m.alias_reads==1 && m.alias_writes==1 && test_engine.operations>10);
     free(expected); finish();
 }
 static void failures_and_fallback(void)
@@ -512,8 +510,8 @@ static void glue_stalled_clock(uint32_t status)
     CHECK(e.quarantined && !e.touched && !e.active && e.idle_waits == 1 && e.timeouts == 1);
     CHECK(step_count>=14);
     CHECK(strstr(step_log[0], "[accel] savage step op=pr8 reg=003c3 value=pending us=")==step_log[0]);
-    CHECK(log_matches("op=crr reg=00038 value=00000048")==1);
-    CHECK(log_matches("op=r8 reg=083c5 value=00000040")==1);
+    CHECK(log_matches("vga_alias reg=083d5 port=48 alias=48 match=1")==1);
+    CHECK(log_matches("op=pr8 reg=003c5 value=00000040")==1);
     CHECK(log_matches(status==UINT32_MAX ? "op=r32 reg=48c60 value=ffffffff" : "op=r32 reg=48c60 value=00000000")==1);
     for (unsigned i=0;i<step_count && i<128;i++) CHECK(strstr(step_log[i]," value="));
     CHECK(log_matches("savage status reg=48c60 raw=")==1 && !e.idle_mask);
@@ -539,12 +537,22 @@ static void boot_fixture_accel(bool retain_marker)
     CHECK(!queued_work && !table_open && !marker_open);
     queue_allowed=true; g_boot.flags=CBI_F_VERBOSE; step_count=accel_count=0;
     attempt_in_progress=false;
+    accel_marker_task=NULL; accel_marker_request=ACCEL_MARKER_IDLE;
+    fail_marker_worker=false; marker_worker_creates=marker_worker_starts=0;
 }
 static void run_accel_work(void)
 {
-    CHECK(queued_work);
-    kwork_fn fn=queued_work; void *arg=queued_arg; queued_work=NULL;
-    fn(arg); CHECK(!accel_queued && !table_open && !marker_open && !locks);
+    CHECK(accel_marker_request==ACCEL_MARKER_BEGIN && !queued_work);
+    accel_marker_run();
+    if (queued_work) {
+        kwork_fn fn=queued_work; void *arg=queued_arg; queued_work=NULL;
+        fn(arg);
+        if (accel_marker_pending(NULL)) {
+            CHECK(accel_marker_request==ACCEL_MARKER_CLEAR);
+            accel_marker_run();
+        }
+    }
+    CHECK(!accel_queued && !table_open && !marker_open && !locks && !accel_marker_pending(NULL));
 }
 static void software_desktop(void)
 {
@@ -563,7 +571,7 @@ static void deferred_boots(void)
 {
     /* Every failure reaches the actual software framebuffer presenter, while
      * the queued callback runs the production marker and register decisions. */
-    for (unsigned variant=0;variant<11;variant++) {
+    for (unsigned variant=0;variant<13;variant++) {
         boot_fixture_accel(false);
         if (variant==0) { m.stuck=true; m.frozen=true; }
         if (variant==1) m.dead=true;
@@ -576,16 +584,21 @@ static void deferred_boots(void)
         if (variant==8) m.status_value=0x00a00000; /* Linux-only cannot prove idle */
         if (variant==9) m.contradictory=true;
         if (variant==10) m.control_reserved=true;
+        if (variant==11) m.alias_dead=true;
+        if (variant==12) m.reg[BCI_CONTROL/4]=2; /* reject before status */
         fbdev_accel_schedule(&settings_vfs); fbdev_accel_schedule(&settings_vfs);
-        CHECK(queued_work && !m.cr_writes && !binding_claims);
+        CHECK(accel_marker_request==ACCEL_MARKER_BEGIN && !queued_work && !marker_commits && !m.cr_writes && !binding_claims);
         software_desktop(); /* desktop can draw even before the callback */
         run_accel_work();
-        bool ready=variant==4 || variant==7 || variant==10;
+        bool ready=variant==4 || variant==7 || variant==10 || variant==11;
         CHECK(!!acceleration==ready && marker_commits==(ready ? 2u : 1u));
         CHECK(disk_size==(ready ? 0u : 14u) && m.status_reads<=WAIT_POLLS+1);
         CHECK(log_matches(ready ? "[accel] savage ready" : "[accel] savage quarantined reason=")==1);
-        if (variant==3 || variant==6) CHECK(!m.status_reads);
+        if (variant==1 || variant==3 || variant==6 || variant==12) CHECK(!m.status_reads);
         else CHECK(log_matches("savage status reg=48c60 raw=")==1);
+        if (variant==1) CHECK(log_matches("engine_probe reg=48c18 raw=ffffffff")==1);
+        if (variant==11) CHECK(log_matches("vga_alias reg=083d5 port=48 alias=ff match=0")==1);
+        if (variant==12) CHECK(log_matches("quarantined reason=firmware_command_buffer")==1);
         if (!ready) software_desktop();
         if (variant==9) CHECK(log_matches("quarantined reason=status_contradiction")==1);
         printf("deferred savage boot variant=%u ready=%u status_reads=%u marker_bytes=%u desktop=visible\n",
@@ -601,16 +614,18 @@ static void deferred_boots(void)
     CHECK(!acceleration && !binding_claims && !m.cr_writes && !m.status_reads && !marker_commits);
     CHECK(log_matches("skipped after a failed attempt")==1 && log_matches("quarantined reason=previous_attempt")==1);
     software_desktop(); finish();
-    for (unsigned variant=0;variant<5;variant++) {
+    for (unsigned variant=0;variant<6;variant++) {
         boot_fixture_accel(false);
         if (variant==0) settings_vfs.volumes[2]=NULL;
         if (variant==1) settings_volume.readonly=true;
         if (variant==2) marker_error=true;
         if (variant==3) { g_boot.flags|=CBI_F_SAFE_MODE; }
         if (variant==4) queue_allowed=false;
+        if (variant==5) fail_marker_worker=true;
         fbdev_accel_schedule(&settings_vfs);
-        if (queued_work) run_accel_work();
+        if (accel_marker_pending(NULL)) run_accel_work();
         CHECK(!acceleration && !binding_claims && !m.cr_writes && !m.status_reads);
+        if (variant==5) CHECK(!marker_commits && log_matches("marker_worker_unavailable")==1);
         software_desktop(); finish();
     }
     boot_fixture_accel(false); clear_error=true;
@@ -627,16 +642,81 @@ static void deferred_boots(void)
     }
     binding_allowed=false; binding_pci_count=0; queued_work=NULL; accel_vfs=NULL;
 }
+static void async_marker(void)
+{
+    boot_fixture_accel(false); m.alias_dead=true; marker_cost_us=337704;
+    fbdev_accel_schedule(&settings_vfs); fbdev_accel_schedule(&settings_vfs);
+    CHECK(marker_worker_creates==1 && marker_worker_starts==1 && marker_worker.prio==P_NORMAL);
+    CHECK(accel_queued && accel_marker_request==ACCEL_MARKER_BEGIN && !queued_work);
+    CHECK(!marker_commits && !table_open && !binding_claims && !m.port_reads);
+    software_desktop();
+    accel_marker_run();
+    CHECK(marker_commits==1 && disk_size==14 && queued_work && accel_queued && !locks);
+    CHECK(!m.port_reads && !m.alias_reads && !m.status_reads && !binding_claims);
+    CHECK(!table_open && !marker_open && accel_marker_request==ACCEL_MARKER_IDLE);
+    software_desktop();
+    kwork_fn fn=queued_work; queued_work=NULL; fn(queued_arg);
+    CHECK(acceleration && marker_commits==1 && disk_size==14 && accel_queued);
+    CHECK(accel_marker_request==ACCEL_MARKER_CLEAR && !queued_work && !locks);
+    software_desktop();
+    accel_marker_run();
+    CHECK(!accel_queued && disk_size==0 && marker_commits==2);
+    CHECK(!acceleration->stop(acceleration->ctx)); acceleration=NULL;
+    marker_commits=0;
+    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    CHECK(acceleration && marker_worker_creates==1 && marker_worker_starts==1);
+    finish();
+
+    /* Interrupt the real asynchronous path between persistence and probe.
+     * Reboot retains only committed bytes, never a worker/queued callback. */
+    boot_fixture_accel(false); fbdev_accel_schedule(&settings_vfs); accel_marker_run();
+    CHECK(disk_size==14 && queued_work && !binding_claims && !m.port_reads);
+    queued_work=NULL; finish(); boot_fixture_accel(true);
+    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    CHECK(!acceleration && !m.port_reads && !m.alias_reads && !m.status_reads && !marker_commits);
+    CHECK(log_matches("quarantined reason=previous_attempt")==1);
+    software_desktop(); finish();
+
+    /* Decision comes first: ineligible modes/devices never write a marker
+     * or allocate a persistence thread. */
+    for (unsigned variant=0;variant<4;variant++) {
+        boot_fixture_accel(false);
+        if (variant==0) binding_gpu.device=0x9102;
+        if (variant==1) binding_gpu.command=1;
+        if (variant==2) binding_gpu.bar[0]=0;
+        if (variant==3) device.pitch++;
+        fbdev_accel_schedule(&settings_vfs);
+        CHECK(!accel_queued && !accel_marker_pending(NULL) && !queued_work && !marker_worker_creates);
+        CHECK(!marker_commits && !table_open && !binding_claims && !m.port_reads);
+        if (variant==3) device.pitch--;
+        finish();
+    }
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+}
+static void optional_alias(void)
+{
+    for (unsigned variant=0;variant<3;variant++) {
+        prepare(32); CHECK(!test_engine.ops.stop(&test_engine));
+        memset(&m,0,sizeof(m)); m.cr[0x66]=1; m.alias_dead=true;
+        struct savage2d e={0}; struct savage_io io=model_io();
+        if (variant!=1) io.read8=NULL;
+        if (variant!=0) io.write8=NULL;
+        CHECK(!savage2d_start(&e,&io,&device,true,NULL,0) && e.active);
+        CHECK(!m.alias_reads && !m.alias_writes && m.status_reads==2);
+        CHECK(!e.ops.stop(&e)); finish();
+    }
+}
 static void port_bootstrap(void)
 {
     static const char *reasons[]={NULL,NULL,"crtc_locked","crtc_locked",
-        "crtc_locked","mmio_alias_dead","engine_disabled","delay_failed","descriptor_readback_failed"};
+        "crtc_locked",NULL,"engine_disabled","delay_failed","descriptor_readback_failed"};
     for (unsigned variant=0;variant<ARRAY_SIZE(reasons);variant++) {
         prepare(32);
         memset(&m,0,sizeof(m)); m.cr[0x66]=variant==6 ? 0 : 1;
         m.cr[0x40]=variant==1 ? 0xabu : 0xaau;
         m.vga_enable=0x24; m.misc=0x8e;
-        CHECK(model_cr_read(&m,0x38)==(variant==1 ? 0 : 0xff));
+        m.cr_index=0x38;
+        CHECK(model_read8(&m,0x83d5)==(variant==1 ? 0 : 0xff));
         m.alias_reads=0;
         m.locked=variant==2; m.locked39=variant==3;
         m.mmio_enable_failed=variant==4; m.alias_dead=variant==5;
@@ -646,13 +726,13 @@ static void port_bootstrap(void)
         int err=savage2d_start(&e,&io,&device,true,NULL,0);
         CHECK(m.vga_enable==0x25 && m.misc==0x8f);
         CHECK(m.port_cr_reads[0x38]==1 && m.port_cr_reads[0x39]==1);
-        if (variant<2) {
+        if (variant<2 || variant==5) {
             CHECK(!err && e.active && e.saved40==(variant==1 ? 0xab : 0xaa));
             CHECK(m.cr[0x40]==0xab && m.cr[0x39]==0xa0);
             CHECK(log_matches("op=pw8 reg=003d5 value=000000a0")>=1);
             CHECK(log_matches("op=pr8 reg=003d5 value=00000048")==1);
-            CHECK(log_matches("op=crr reg=00038 value=00000048")==1);
-            CHECK(log_matches("op=r8 reg=083c5 value=00000040")==1);
+            CHECK(log_matches(variant==5 ? "vga_alias reg=083d5 port=48 alias=ff match=0" : "vga_alias reg=083d5 port=48 alias=48 match=1")==1);
+            CHECK(log_matches("op=pr8 reg=003c5 value=00000040")==1);
             m.cr[0x40]=0x55; /* preserve changes to all bits except ours */
             CHECK(!e.ops.stop(&e) && !e.active && !e.mmio_saved);
             CHECK(m.cr[0x40]==(variant==1 ? 0x55 : 0x54));
@@ -663,7 +743,6 @@ static void port_bootstrap(void)
             CHECK(e.reason && !strcmp(e.reason,reasons[variant]));
             CHECK(!e.active && !e.mmio_saved && m.cr[0x40]==0xaa);
             if (variant<=4) CHECK(!m.alias_reads && !m.alias_writes);
-            if (variant==5) CHECK(m.alias_reads==1 && !m.alias_writes && !m.reset_phase);
             if (variant<=7) CHECK(!m.status_reads && !m.engine_writes);
             if (variant!=6) CHECK(e.quarantined && m.fault_count==1);
             if (variant<=7) {
@@ -692,7 +771,8 @@ static void port_ownership(void)
     CHECK(log_matches("quarantined reason=port_claim_failed")==1 && disk_size==14);
     software_desktop(); finish();
     boot_fixture_accel(false); binding_gpu.command=2;
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    fbdev_accel_schedule(&settings_vfs);
+    CHECK(!accel_marker_pending(NULL) && !marker_commits && !marker_worker_creates);
     CHECK(!acceleration && !binding_claims && !m.port_reads && !m.port_writes);
     CHECK(log_matches("quarantined reason=io_decode_disabled")==1);
     finish();
@@ -714,7 +794,7 @@ static void port_ownership(void)
 }
 static void decorated_readbacks(void)
 {
-    static const char *reasons[]={NULL,"crtc_locked","crtc_locked","mmio_alias_dead",
+    static const char *reasons[]={NULL,"crtc_locked","crtc_locked",NULL,
         "reset_readback_failed","reset_readback_failed","reset_readback_failed",
         "pipe_select_failed"};
     for (unsigned variant=0;variant<ARRAY_SIZE(reasons);variant++) {
@@ -726,12 +806,12 @@ static void decorated_readbacks(void)
         if (variant>=4 && variant<=6) m.reset_fault=variant-3;
         if (variant==7) m.pipe_locked=true;
         fbdev_accel_schedule(&settings_vfs); run_accel_work();
-        CHECK(!!acceleration==(variant==0));
+        CHECK(!!acceleration==(variant==0 || variant==3));
         CHECK(log_matches(variant==1 ? "op=pr8 reg=003d5 value=00000020 us=" : "op=pr8 reg=003d5 value=00000068 us=")==1);
         if (variant!=1 && variant!=2) CHECK(log_matches("op=pr8 reg=003d5 value=000000a8 us=")==1);
-        if (!variant) {
+        if (!variant || variant==3) {
             CHECK(m.status_reads==2 && m.delays==2); /* only the reset delays */
-            CHECK(log_matches("op=crr reg=00038 value=00000068 us=")==1);
+            CHECK(log_matches(variant==3 ? "vga_alias reg=083d5 port=68 alias=48 match=0" : "vga_alias reg=083d5 port=68 alias=68 match=1")==1);
             CHECK(disk_size==0 && engine.active && !engine.quarantined);
         } else {
             char reason[96]; snprintf(reason,sizeof(reason),"quarantined reason=%s us=",reasons[variant]);
@@ -805,7 +885,7 @@ int main(void)
     commands(16); commands(32); failures_and_fallback();
     glue_stalled_clock(0);            /* never idle, frozen clock */
     glue_stalled_clock(UINT32_MAX);   /* master-aborted (dead) aperture */
-    deferred_boots();
+    deferred_boots(); async_marker(); optional_alias();
     port_bootstrap(); port_ownership();
     decorated_readbacks(); activation_timing();
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);

@@ -7,7 +7,9 @@
 #include <ciuki/fbdev.h>
 #include <ciuki/accel.h>
 #include <ciuki/work.h>
+#include <ciuki/task.h>
 extern const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *) __attribute__((weak));
+extern bool savage2d_eligible(const struct fb_device *) __attribute__((weak));
 extern bool kwork_queue(kwork_fn, void *) __attribute__((weak));
 extern int savage2d_attempt_begin(struct vfs *) __attribute__((weak));
 extern int savage2d_attempt_end(struct vfs *) __attribute__((weak));
@@ -25,6 +27,11 @@ static const struct accel_ops *acceleration;
 static bool initialized, changing;
 static struct vfs *accel_vfs;
 static bool accel_queued;
+/* One reusable normal-priority thread owns marker I/O. Device-work never
+ * waits on the settings transaction or holds up unrelated driver work. */
+static struct task *accel_marker_task;
+static struct kwait accel_marker_wait;
+static enum { ACCEL_MARKER_IDLE, ACCEL_MARKER_BEGIN, ACCEL_MARKER_CLEAR } accel_marker_request;
 static void *change_window;
 static uint32_t change_capacity;
 static unsigned console_rows;
@@ -185,10 +192,8 @@ int fbdev_init(void)
 static void accel_work(void *arg)
 {
     (void)arg;
-    /* The attempt marker is file I/O (VFS, ATA channel mutex): never under
-     * the presenter mutex. The T23 panicked on lock order (presenter held,
-     * ata channels[0] taken in device-work) on 2026-10-13. */
-    if (!savage2d_attempt_begin || savage2d_attempt_begin(accel_vfs)) { accel_queued = false; return; }
+    /* Queued only after the persistence thread committed and closed the
+     * attempt marker. This worker owns register access, never file I/O. */
     kmutex_lock(&presenter);
     if (!changing && device.present && !acceleration) {
         unsigned idle = 0;
@@ -201,7 +206,30 @@ static void accel_work(void *arg)
         } else klog("[accel] savage quarantined reason=console_busy");
     }
     kmutex_unlock(&presenter);
-    if (acceleration && savage2d_attempt_end && savage2d_attempt_end(accel_vfs)) {
+    if (acceleration) {
+        accel_marker_request = ACCEL_MARKER_CLEAR;
+        kwait_wake_all(&accel_marker_wait);
+    } else accel_queued = false;
+}
+
+static void accel_marker_run(void)
+{
+    if (accel_marker_request == ACCEL_MARKER_IDLE) return;
+    bool clear = accel_marker_request == ACCEL_MARKER_CLEAR;
+    accel_marker_request = ACCEL_MARKER_IDLE;
+    if (!clear) {
+        /* VFS/ATA locks must never nest under the presenter mutex. */
+        if (!savage2d_attempt_begin || savage2d_attempt_begin(accel_vfs)) {
+            accel_queued = false;
+            return;
+        }
+        if (!kwork_queue || !kwork_queue(accel_work, 0)) {
+            klog("[accel] savage quarantined reason=work_unavailable");
+            accel_queued = false; /* retain the durable attempt */
+        }
+        return;
+    }
+    if (!savage2d_attempt_end || savage2d_attempt_end(accel_vfs)) {
         /* The clear did not reach the disk: the next boot would skip the
          * accelerator anyway; keep the software presenter now as well. */
         kmutex_lock(&presenter);
@@ -212,16 +240,36 @@ static void accel_work(void *arg)
     accel_queued = false;
 }
 
+static bool accel_marker_pending(void *arg)
+{ (void)arg; return accel_marker_request != ACCEL_MARKER_IDLE; }
+static void accel_marker_main(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        if (kwait_wait_until(&accel_marker_wait, accel_marker_pending, 0, deadline_after_ms(1000)))
+            accel_marker_run();
+    }
+}
+
 void fbdev_accel_schedule(struct vfs *vfs)
 {
     if (g_boot.flags & CBI_F_SAFE_MODE) return;
+    if (accel_queued) return; /* keep the pending attempt's volume stable */
     accel_vfs = vfs;
-    if (!initialized || !device.present || !savage2d_init || accel_queued || acceleration) return;
-    accel_queued = true;
-    if (!kwork_queue || !kwork_queue(accel_work, 0)) {
-        accel_queued = false;
-        klog("[accel] savage quarantined reason=work_unavailable");
+    if (!initialized || !device.present || !savage2d_init || acceleration) return;
+    if (!savage2d_eligible || !savage2d_eligible(&device)) return;
+    if (!accel_marker_task) {
+        kwait_init(&accel_marker_wait);
+        accel_marker_task = task_create_kernel("savage-marker", accel_marker_main, 0, P_NORMAL);
+        if (!accel_marker_task) {
+            klog("[accel] savage quarantined reason=marker_worker_unavailable");
+            return;
+        }
+        task_start(accel_marker_task);
     }
+    accel_queued = true;
+    accel_marker_request = ACCEL_MARKER_BEGIN;
+    kwait_wake_all(&accel_marker_wait);
 }
 
 const struct fb_device *fbdev_get(void) { return &device; }

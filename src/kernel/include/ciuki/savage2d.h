@@ -11,12 +11,11 @@ struct savage_io {
     void *ctx;
     uint32_t (*read32)(void *, uint32_t);
     void (*write32)(void *, uint32_t, uint32_t);
-    uint8_t (*read_cr)(void *, uint8_t);
-    void (*write_cr)(void *, uint8_t, uint8_t);
     uint64_t (*now_us)(void *);
     int (*delay_us)(void *, uint32_t);
     void (*drain)(void *);
     void (*fault)(void *);
+    /* Optional MMIO VGA alias diagnostic, never the operational transport. */
     uint8_t (*read8)(void *, uint32_t);
     void (*write8)(void *, uint32_t, uint8_t);
     /* Byte VGA I/O only: inclusive 0x3b0, exclusive 0x3e0. */
@@ -38,6 +37,8 @@ struct savage2d {
     bool mmio_saved, status_ready;
 };
 bool savage2d_supported(const struct pci_func *);
+/* No register/file access: decide before scheduling marker persistence. */
+bool savage2d_eligible(const struct fb_device *);
 /* Attempt marker file I/O for kernel callers, outside presenter locks. */
 struct vfs;
 int savage2d_attempt_begin(struct vfs *);
