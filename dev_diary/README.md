@@ -118,3 +118,4 @@ Documenti di design, validazione, fonti esterne.
 | [Terza prova sul T23 (immagine 3299a24f): diagnosi di accelerazione, disco, presentazione, DOOM e rete](2026-10-13-04-t23-immagine-3299a24f-diagnosi.md) | 13 ott | analisi hardware, decisioni (sette direttive Codex) |
 | [Sette consegne Codex fuse; immagine 24c98799 per il T23](2026-10-13-05-sette-consegne-immagine-24c98799.md) | 13 ott | modifiche (kernel, desktop, test), immagine |
 | [Tredici consegne fuse (prerequisiti F5 e parco driver); immagine 98c81726 per il T23](2026-10-13-06-tredici-consegne-immagine-98c81726.md) | 13 ott | modifiche (kernel, driver, desktop, SDK, test), immagine |
+| [Quarta prova sul T23 (immagine e86305de): audio nativo attivo, UDMA, mouse USB; dieci direttive](2026-10-13-07-t23-immagine-e86305de-risultati.md) | 13 ott | analisi hardware, decisioni |
