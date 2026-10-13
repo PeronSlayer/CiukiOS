@@ -7,6 +7,31 @@
 
 struct expectation { const char *key; uint32_t native, expected; };
 static const struct expectation expectations[] = {
+    /* Network tray: independent literal wire contract, including padding. */
+    {"constant.CIUKI_NET_VERSION", CIUKI_NET_VERSION, 1u},
+    {"constant.NET_GET_STATE", NET_GET_STATE, 0x4301u},
+    {"constant.CIUKI_NET_LINK_UNKNOWN", CIUKI_NET_LINK_UNKNOWN, 0u},
+    {"constant.CIUKI_NET_LINK_DOWN", CIUKI_NET_LINK_DOWN, 1u},
+    {"constant.CIUKI_NET_LINK_UP", CIUKI_NET_LINK_UP, 2u},
+    {"constant.CIUKI_NET_STOPPED", CIUKI_NET_STOPPED, 0u},
+    {"constant.CIUKI_NET_RUNNING", CIUKI_NET_RUNNING, 1u},
+    {"constant.CIUKI_NET_QUARANTINED", CIUKI_NET_QUARANTINED, 2u},
+    {"sizeof.ciuki_net_state", sizeof(struct ciuki_net_state), 96u},
+    {"alignof.ciuki_net_state", _Alignof(struct ciuki_net_state), 4u},
+    {"offsetof.ciuki_net_state.version", __builtin_offsetof(struct ciuki_net_state, version), 0u},
+    {"offsetof.ciuki_net_state.size", __builtin_offsetof(struct ciuki_net_state, size), 4u},
+    {"offsetof.ciuki_net_state.present", __builtin_offsetof(struct ciuki_net_state, present), 8u},
+    {"offsetof.ciuki_net_state.driver", __builtin_offsetof(struct ciuki_net_state, driver), 12u},
+    {"offsetof.ciuki_net_state.mac", __builtin_offsetof(struct ciuki_net_state, mac), 28u},
+    {"offsetof.ciuki_net_state.reserved0", __builtin_offsetof(struct ciuki_net_state, reserved0), 34u},
+    {"offsetof.ciuki_net_state.link", __builtin_offsetof(struct ciuki_net_state, link), 36u},
+    {"offsetof.ciuki_net_state.state", __builtin_offsetof(struct ciuki_net_state, state), 40u},
+    {"offsetof.ciuki_net_state.reason", __builtin_offsetof(struct ciuki_net_state, reason), 44u},
+    {"offsetof.ciuki_net_state.reserved1", __builtin_offsetof(struct ciuki_net_state, reserved1), 68u},
+    {"offsetof.ciuki_net_state.rx_frames", __builtin_offsetof(struct ciuki_net_state, rx_frames), 72u},
+    {"offsetof.ciuki_net_state.tx_frames", __builtin_offsetof(struct ciuki_net_state, tx_frames), 80u},
+    {"offsetof.ciuki_net_state.address_configured", __builtin_offsetof(struct ciuki_net_state, address_configured), 88u},
+    {"offsetof.ciuki_net_state.ipv4", __builtin_offsetof(struct ciuki_net_state, ipv4), 92u},
     /* f1-26: optional display-grant accelerator, literal wire contract. */
     {"constant.CIUKI_SYS_DISPLAY_ACCEL", CIUKI_SYS_DISPLAY_ACCEL, 77u},
     {"sizeof.ciuki_accel_request", sizeof(struct ciuki_accel_request), 308u},

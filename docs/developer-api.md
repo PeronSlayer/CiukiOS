@@ -627,6 +627,36 @@ struct ciuki_devices_info {
 };
 ```
 
+Read-only /dev/net carrier snapshot. IP configuration is reserved for lwIP.
+Initialize version/size and zero reserved fields before NET_GET_STATE.
+
+```c
+#define CIUKI_NET_VERSION 1u
+#define NET_GET_STATE 0x4301u
+#define CIUKI_NET_LINK_UNKNOWN 0u
+#define CIUKI_NET_LINK_DOWN 1u
+#define CIUKI_NET_LINK_UP 2u
+#define CIUKI_NET_STOPPED 0u
+#define CIUKI_NET_RUNNING 1u
+#define CIUKI_NET_QUARANTINED 2u
+struct ciuki_net_state {
+    uint32_t version;
+    uint32_t size;
+    uint32_t present;
+    char driver[16];
+    uint8_t mac[6];
+    uint8_t reserved0[2];
+    uint32_t link;
+    uint32_t state;
+    char reason[24];
+    uint32_t reserved1;
+    uint64_t rx_frames;
+    uint64_t tx_frames;
+    uint32_t address_configured;
+    uint8_t ipv4[4];
+};
+```
+
 F4-01: fixed copied device-control extension.
 
 ```c
@@ -2249,6 +2279,26 @@ Returns 0, or -1 with errno set. The record's version and size must be set.
 
 ```c
 int ciuki_dosvm(uint32_t operation, struct ciuki_dosvm_command *command);
+#endif
+```
+
+## `ciuki/net.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/net.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_NET_H
+#define CIUKI_SDK_NET_H
+#include <ciuki/abi.h>
+```
+
+Public read-only /dev/net: open(O_RDONLY), NET_GET_STATE, close.
+Cable carrier is independent of IP configuration or Internet access.
+
+```c
+int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
 #endif
 ```
 

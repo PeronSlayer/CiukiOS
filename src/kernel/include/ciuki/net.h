@@ -4,6 +4,7 @@
 #ifndef CIUKI_NET_H
 #define CIUKI_NET_H
 #include <ciuki/registry.h>
+#include <ciuki/abi.h>
 
 #define NETIF_MAX 4u
 #define NET_FRAME_MAX 1514u
@@ -87,6 +88,10 @@ bool netif_irq(struct netif *);
 void netif_poll(struct netif *);
 bool netif_pop(struct netif *, struct net_packet *);
 void netif_snapshot(struct netif *, struct net_stats *);
+/* First running adapter, otherwise first detected adapter; no hardware I/O. */
+void net_state_snapshot(struct ciuki_net_state *);
+struct process;
+int net_devctl(struct process *, int32_t fd, uint32_t op, uint32_t address, uint32_t bytes);
 void net_mac_text(const uint8_t address[6], char text[18]);
 const char *net_link_text(enum net_link);
 

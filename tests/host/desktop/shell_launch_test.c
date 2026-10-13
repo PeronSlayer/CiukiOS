@@ -27,23 +27,28 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
 #define CIUKI_RUNTIME_H
 #define CIUKI_RAW_H
 #define CU_PTR(p) ((uintptr_t)(p))
 static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }
 uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 int shell_close(int);
+int shell_open(const char *, int, ...);
+int shell_fcntl(int, int, ...);
 static int shell_clock_gettime(clockid_t, struct timespec *);
 #define clock_gettime shell_clock_gettime
 struct stat;
 int shell_fstat(int, struct stat *);
 #define fcntl shell_fcntl
 #define close shell_close
+#define open shell_open
 #define fstat shell_fstat
 #define main desktop_main
 #include "../../../apps/desktop/desktop.c"
 #undef main
 #undef close
+#undef open
 #undef fcntl
 #undef clock_gettime
 #undef fstat
@@ -99,7 +104,25 @@ int shell_fcntl(int fd, int command, ...)
     if (fail_mapping) { errno=EBADF; return -1; }
     return 0;
 }
-int shell_close(int fd) { return fake_ops.close(fd); }
+static int network_available, network_error;
+static unsigned network_opens, network_closes, network_queries;
+static struct ciuki_net_state network_fixture;
+#define NETWORK_FD 1000
+int shell_open(const char *path, int flags, ...)
+{
+    if (!strcmp(path, "/dev/net")) {
+        assert(flags == (O_RDONLY | O_CLOEXEC)); network_opens++;
+        if (network_available) return NETWORK_FD;
+        errno = ENODEV; return -1;
+    }
+    if (flags & O_CREAT) {
+        va_list ap; va_start(ap, flags); int mode = va_arg(ap, int); va_end(ap);
+        return open(path, flags, mode);
+    }
+    return open(path, flags);
+}
+int shell_close(int fd)
+{ if (fd == NETWORK_FD) { network_closes++; return 0; } return fake_ops.close(fd); }
 static int shell_regular_fd=-1, shell_directory_fd=-1;
 int shell_fstat(int fd, struct stat *st)
 {
@@ -163,7 +186,16 @@ static struct ciuki_proc_record fake_records[8];
 static int fake_record_count;
 /* Desktop shell services (desktop.c): no mixer and no power interface on the host. */
 int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
-{ (void)fd; (void)op; (void)record; (void)size; errno=ENODEV; return -1; }
+{
+    if (fd == NETWORK_FD) {
+        assert(op == NET_GET_STATE && size == sizeof(network_fixture));
+        struct ciuki_net_state *n = record;
+        assert(n->version == CIUKI_NET_VERSION && n->size == sizeof(*n));
+        network_queries++;
+        if (!network_error) { *n = network_fixture; return 0; }
+    }
+    errno=ENODEV; return -1;
+}
 static uint32_t last_power_action;
 int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer,uint32_t bytes)
@@ -721,9 +753,33 @@ static void test_wallpaper_startup(void)
     desk_wall_worker_stop(&wallpaper_worker); wallpaper_worker_started=0;
     free(d.pixels); drop_all(&d); fake_reset(); assert(!unlink(path));
     puts("PASS startup: first solid frame before worker, Start input/reaction under 50 ms while loader held, pointer ownership, theme retention, colour/geometry invalidation");
+static void test_network_service(void)
+{
+    struct desktop d; fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
+    network_fixture = (struct ciuki_net_state){ .version = 1, .size = sizeof(network_fixture),
+        .present = 1, .link = CIUKI_NET_LINK_UP, .state = CIUKI_NET_RUNNING, .driver = "e100" };
+    network_available = 1; network_error = 0; network_opens = network_closes = network_queries = 0;
+    d.now_ns = 1000000000ull; d.damage.count = 0;
+    desk_shell_tick(&d); assert(d.sh.want_reload & 16); shell_service(&d);
+    assert(!d.sh.want_reload && d.sh.network.present && d.sh.network.link == CIUKI_NET_LINK_UP);
+    assert(network_opens == 1 && network_queries == 1 && network_closes == 1 && d.damage.count == 1);
+    d.damage.count = 0; d.now_ns += 1999999999ull; desk_shell_tick(&d); shell_service(&d);
+    assert(network_queries == 1 && !d.damage.count);
+    d.now_ns++; desk_shell_tick(&d); shell_service(&d);
+    assert(network_queries == 2 && network_closes == 2 && !d.damage.count);
+    network_error = 1; d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
+    assert(!d.sh.network.present && network_closes == 3 && d.damage.count == 1);
+    network_error = 0; network_available = 0; d.damage.count = 0;
+    d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
+    assert(!d.sh.network.present && network_queries == 3 && network_closes == 3 && !d.damage.count);
+    network_available = 1; d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
+    assert(d.sh.network.present && network_closes == 4 && d.damage.count == 1);
+    network_available = 0; desk_render_release(&d); fake_reset();
+    puts("PASS network service: timer/reload, open/devctl/close, unchanged state, failures and recovery");
 }
 int main(void)
 {
+    test_network_service();
     test_music_mixer();
     struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);

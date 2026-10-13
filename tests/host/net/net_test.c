@@ -20,6 +20,7 @@ static bool sleep_hook_active;
 static uint8_t memory[128 * PAGE_SIZE] __attribute__((aligned(PAGE_SIZE)));
 static bool allocated[128];
 #define HOST_PHYS 0x1000000u
+#define V2P(p) ((uint32_t)((uint8_t *)(p) - memory) + HOST_PHYS)
 #define P2V(p) ((void *)(memory + ((p) - HOST_PHYS)))
 static uint32_t irq_save(void) { uint32_t f = host_flags; host_flags &= ~0x200u; return f; }
 static void irq_restore(uint32_t f) { host_flags = f; }
@@ -108,6 +109,28 @@ const struct pci_func *pci_get(unsigned n) { return n < 2 ? &functions[n] : 0; }
 #include "../../../src/kernel/drivers/net_ne2000.c"
 #include "../../../src/kernel/drivers/net_arp.c"
 #include "../../../src/kernel/probes/f6_probes_net.c"
+#include "../../../src/kernel/drivers/net_dev.c"
+#include "../../../src/kernel/proc/devnodes.c"
+
+static struct px_node net_node = { .kind = PX_NET }, other_node = { .kind = PX_MIXER };
+static struct file_description net_description = { .node = &net_node, .flags = O_RDONLY };
+static struct file_description other_description = { .node = &other_node };
+static struct ciuki_net_state user_state;
+static int copy_read_error, copy_write_error;
+struct proc_object *file_fd_object(const struct process *p, int32_t fd)
+{ (void)p; return fd == 3 ? &net_description.object : fd == 4 ? &other_description.object : 0; }
+struct file_description *file_fd(const struct process *p, int32_t fd)
+{ (void)p; return fd == 3 ? &net_description : fd == 4 ? &other_description : 0; }
+int copy_from_user(void *dst, uint32_t src, uint32_t bytes)
+{
+    if (src != 0x1000 || copy_read_error) return -EFAULT;
+    CHECK(bytes == sizeof(user_state)); memcpy(dst, &user_state, bytes); return 0;
+}
+int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
+{
+    if (dst != 0x1000 || copy_write_error) return -EFAULT;
+    CHECK(bytes == sizeof(user_state)); memcpy(&user_state, src, bytes); return 0;
+}
 
 static unsigned record_count;
 static bool terminal_pass;
@@ -544,6 +567,58 @@ static void test_additional_faults(void)
         CHECK(!netif_stop(&d) && d.stats.tx_errors == 1 && !page_count);
     }
 }
+static int state_query(void)
+{ return net_devctl(0, 3, NET_GET_STATE, 0x1000, sizeof(user_state)); }
+static void test_public_state(void)
+{
+    device_count = 0; g_boot.flags = 0;
+    user_state = (struct ciuki_net_state){ .version = 1, .size = sizeof(user_state) };
+    CHECK(!device_open(PX_NET, O_RDONLY | O_CLOEXEC | O_NONBLOCK));
+    CHECK(device_open(PX_NET, O_WRONLY) == -EACCES && device_open(PX_NET, O_RDWR) == -EACCES);
+    const uint32_t forbidden[] = {O_CREAT, O_EXCL, O_TRUNC, O_DIRECTORY, O_APPEND};
+    for (unsigned i = 0; i < ARRAY_SIZE(forbidden); i++) CHECK(device_open(PX_NET, forbidden[i]) == -EINVAL);
+    CHECK(!state_query() && !user_state.present && user_state.link == CIUKI_NET_LINK_UNKNOWN);
+    CHECK(user_state.state == CIUKI_NET_STOPPED && !strcmp(user_state.reason, "no_adapter"));
+    CHECK(!user_state.driver[0] && !user_state.address_configured && !memcmp(user_state.ipv4, "\0\0\0\0", 4));
+    CHECK(!memcmp(user_state.mac, "\0\0\0\0\0\0", 6));
+    g_boot.flags = CBI_F_SAFE_MODE; CHECK(!state_query() && !strcmp(user_state.reason, "safe_mode"));
+    for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) {
+        struct model h; struct netif *d = &devices[0]; model_setup(&h, d, kind);
+        CHECK(!model_attach(&h, d)); device_count = 1;
+        d->stats.rx_packets = 0x100000001ull; d->stats.tx_completed = 0x200000002ull;
+        unsigned writes = h.writes, pci_writes = config_writes;
+        user_state = (struct ciuki_net_state){ .version = 1, .size = sizeof(user_state) };
+        CHECK(!state_query() && user_state.present && user_state.link == (uint32_t)d->link);
+        CHECK(user_state.link == (kind == M_NE ? CIUKI_NET_LINK_UNKNOWN : CIUKI_NET_LINK_UP));
+        CHECK(!strcmp(user_state.driver, d->driver->name) && !memcmp(user_state.mac, d->address, 6));
+        CHECK(user_state.state == CIUKI_NET_RUNNING && !strcmp(user_state.reason, "admission"));
+        CHECK(user_state.rx_frames == 0x100000001ull && user_state.tx_frames == 0x200000002ull);
+        CHECK(!user_state.address_configured && !memcmp(user_state.ipv4, "\0\0\0\0", 4));
+        CHECK(h.writes == writes && config_writes == pci_writes);
+        d->link = NET_LINK_DOWN; CHECK(!state_query() && user_state.link == CIUKI_NET_LINK_DOWN);
+        CHECK(!netif_stop(d)); CHECK(!state_query() && user_state.state == CIUKI_NET_STOPPED && user_state.present);
+        netif_quarantine(d, "test_fault");
+        CHECK(!state_query() && user_state.state == CIUKI_NET_QUARANTINED && user_state.present);
+        CHECK(!strcmp(user_state.reason, "test_fault"));
+    }
+    user_state.version = 2; CHECK(state_query() == -EOPNOTSUPP); user_state.version = 1;
+    user_state.size--; CHECK(state_query() == -EINVAL); user_state.size++;
+    user_state.reserved0[0] = 1; CHECK(state_query() == -EINVAL); user_state.reserved0[0] = 0;
+    user_state.reserved1 = 1; CHECK(state_query() == -EINVAL); user_state.reserved1 = 0;
+    CHECK(net_devctl(0, 3, NET_GET_STATE, 0x1000, sizeof(user_state) - 1) == -EINVAL);
+    CHECK(net_devctl(0, 3, MIXER_SET_MASTER, 0x1000, sizeof(user_state)) == -ENOTTY);
+    CHECK(net_devctl(0, 4, NET_GET_STATE, 0x1000, sizeof(user_state)) == -ENOTTY);
+    CHECK(net_devctl(0, -1, NET_GET_STATE, 0x1000, sizeof(user_state)) == -EBADF);
+    CHECK(net_devctl(0, 3, NET_GET_STATE, 0, sizeof(user_state)) == -EFAULT);
+    copy_read_error = 1; CHECK(state_query() == -EFAULT); copy_read_error = 0;
+    copy_write_error = 1; CHECK(state_query() == -EFAULT); copy_write_error = 0;
+    /* A failed first adapter must not hide a working second one. */
+    devices[1] = devices[0]; devices[1].quarantined = false; devices[1].running = true;
+    devices[1].link = NET_LINK_UP; device_count = 2;
+    CHECK(!state_query() && user_state.state == CIUKI_NET_RUNNING && user_state.link == CIUKI_NET_LINK_UP);
+    device_count = 0;
+    puts("PASS /dev/net: absent, safe mode, three adapters, carrier, stopped/quarantined, counters, readonly, ABI and copy failures");
+}
 int main(void)
 {
     for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) { test_paths(kind); test_faults(kind); test_admission(kind); }
@@ -552,6 +627,7 @@ int main(void)
     test_additional_faults();
     for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) test_probe(kind);
     test_arp();
+    test_public_state();
     printf("net: %u checks PASS (production framework, e100/RTL8139/NE2000 register models, ARP)\n", checks);
     return 0;
 }
