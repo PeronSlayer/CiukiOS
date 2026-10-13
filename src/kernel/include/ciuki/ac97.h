@@ -18,6 +18,12 @@ struct ac97_io {
     void (*sleep)(void *, uint32_t ms);
 };
 struct ac97_cursor { uint8_t civ, piv; uint16_t status, remaining; };
+struct ac97_failure {
+    const char *stage; /* first failure, captured before rollback */
+    uint16_t ext_control, rate, status[3];
+    struct ac97_cursor cursor;
+    uint8_t control, lvi;
+};
 struct ac97_device {
     struct ac97_io io;
     struct pci_func pci;
@@ -32,7 +38,10 @@ struct ac97_device {
     uint64_t activation_deadline;
     uint64_t fifo_errors, dma_halts, deadline_misses, irqs;
     uint32_t global_status;
-    uint16_t power, master, pcm_volume, rate;
+    uint16_t power, master, pcm_volume, rate; /* rate is effective output Hz */
+    uint16_t raw_ext_control, raw_rate;
+    const char *activation_stage;
+    struct ac97_failure failure;
     struct ac97_cursor cursor;
     bool ready, running, stopping, quarantine, irq_attached, touched;
     bool observed_halt, codec_changed, software_master, beep_present, cirrus_spdif;

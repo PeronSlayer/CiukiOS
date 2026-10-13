@@ -77,6 +77,12 @@ struct mock_hw {
     uint64_t ready_at, power_ready_at;
     unsigned ready_delay, power_delay, volume_writes[128];
     bool ready_stuck, cold_stuck, power_stuck, sticky_mute, rate_stuck;
+    bool codec_model, vra_enable_stuck, vra_disable_stuck;
+    bool ich3, start_stuck, exhausted_start, bdbar_stuck, run_clear_stuck;
+    unsigned reset_delay, start_delay, resets, starts;
+    uint64_t reset_at, start_at;
+    uint32_t bdbar, pci_address;
+    uint16_t pci_command, input_sr, mic_sr;
     uint8_t modem_cr[2];
     uint16_t modem_sr[2];
     struct { uint16_t port; unsigned width; uint32_t value; } trace[1024];
@@ -86,6 +92,7 @@ struct mock_hw {
 static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
 {
     struct mock_hw *h=cookie; (void)width;
+    if(port==0xcfc) { CHECK((h->pci_address&0xfc)==4 && width==4);return h->pci_command; }
     if(port>=0x400 && port<0x480) {
         unsigned off=port-0x400;
         if((off&15)==11)return h->modem_cr[off/16];
@@ -104,6 +111,11 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
             uint16_t reg=h->posted_reg, value=h->posted_value;
             if(reg==0x26) { value&=0xff00;h->power_ready_at=h->tick+h->power_delay; }
             if(h->rate_stuck && reg==0x2c) value=h->codec[reg/2];
+            if(h->codec_model && reg==0x2a) {
+                if(!(h->codec[0x28/2]&1) || h->vra_enable_stuck) value&=~1u;
+                if(h->vra_disable_stuck && !(value&1)) value|=1;
+            }
+            if(h->codec_model && reg==0x2c && !(h->codec[0x2a/2]&1)) value=h->codec[reg/2];
             if(reg==2 || reg==4 || reg==0x18 || reg==0x0a) {
                 if(h->sticky_mute && !h->volume_writes[reg/2] && !(value&0x8000)) value|=0x8000;
                 h->volume_writes[reg/2]++;
@@ -115,13 +127,25 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
     if(off==0x2c)return h->global_control;
     if(off==0x30)return h->global_status | ((h->global_control&2) && !h->ready_stuck && h->tick>=h->ready_at ? 0x100 : 0);
     if(off==0x14) { if(h->bad_civ_reads) { h->bad_civ_reads--; return 32; } return h->civ; }
+    if(off==0x10)return h->bdbar;
+    if(off==0x15)return h->lvi;
+    if(off==6)return h->input_sr;
+    if(off==0x26)return h->mic_sr;
     if(off==0x1a)return h->piv;
     if(off==0x16) {
+        if(h->ich3 && (h->cr&1) && !h->start_stuck && h->tick>=h->start_at &&
+           (!(h->codec[0x2a/2]&1) || h->codec[0x2c/2]==48000)) {
+            h->sr&=~AC97_DCH;h->remaining=512;h->piv=1;
+            if(h->exhausted_start) { h->sr|=AC97_DCH|AC97_CELV|AC97_LVBCI;h->civ=h->lvi;h->remaining=0; }
+        }
         if(!h->cr && !h->stop_stuck && h->tick >= h->stop_after)h->sr|=AC97_DCH;
         return h->sr;
     }
     if(off==0x18)return h->remaining;
-    if(off==0x1b)return h->cr;
+    if(off==0x1b) {
+        if((h->cr&2) && !h->reset_stuck && h->tick>=h->reset_at)h->cr=0;
+        return h->cr;
+    }
     return 0;
 }
 static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned width)
@@ -130,6 +154,15 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
     if(h->trace_count<1024) {
         unsigned n=h->trace_count++;h->trace[n].port=port;h->trace[n].width=width;h->trace[n].value=value;
     }
+    if(port==0xcf8) { CHECK(width==4);h->pci_address=value;return; }
+    if(port==0xcfc) {
+        CHECK((h->pci_address&0xfc)==4 && width==2);
+        if(h->ich3 && (value&4)) {
+            CHECK(h->bdbar==h->device->bdl_phys && h->bdbar && h->lvi==1);
+            for(unsigned i=0;i<2;i++)CHECK(h->device->bdl[i].address && h->device->bdl[i].length==((1u<<31)|512));
+        }
+        h->pci_command=value;return;
+    }
     if(port>=0x100 && port<0x200) {
         h->posted=true;h->posted_reg=port-0x100;h->posted_value=h->reject ? value^1u : value;
         h->busy_until=h->tick+h->post_delay;return;
@@ -137,11 +170,13 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
     unsigned off=port-0x200;
     if(off==0x2c) {
         if(h->cold_stuck) return;
+        if(h->ich3) CHECK(!(h->pci_command&4));
         h->global_control=value;
         if(!(value&2)) { h->global_status&=~0x100u;h->cr=0;h->sr=AC97_DCH; }
         else h->ready_at=h->tick+h->ready_delay;
     }
     if(off==0x30) { CHECK(value==(1u<<15));h->global_status&=~value; }
+    if(off==0x10 && !h->bdbar_stuck)h->bdbar=value;
     if(off==0x15) {
         unsigned slot=value;
         CHECK(h->device->bdl[slot].length==((1u<<31)|512));
@@ -150,10 +185,22 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
     }
     if(off==0x16) { CHECK(!(value&~0x1cu));h->sr&=~value; }
     if(off==0x1b) {
-        if(value&2) { CHECK(!(h->cr&1));h->civ=h->piv=0;h->remaining=0;h->sr=AC97_DCH;h->cr=h->reset_stuck?2:0; }
+        if(value&2) {
+            CHECK(!(h->cr&1));h->resets++;h->reset_at=h->tick+h->reset_delay;
+            h->civ=h->piv=h->lvi=0;h->remaining=0;h->sr=AC97_DCH;h->bdbar=0;h->cr=2;
+        }
         else {
+            if(!value && h->run_clear_stuck)return;
             h->cr=value;
-            if(value&1) { h->sr&=~AC97_DCH;h->remaining=512;h->piv=(h->civ+1)%32; }
+            if(value&1) {
+                h->starts++;h->start_at=h->tick+h->start_delay;
+                if(h->ich3) {
+                    CHECK(h->pci_command&4);CHECK(h->bdbar==h->device->bdl_phys && h->bdbar);
+                    CHECK(h->tick>=h->power_ready_at && !h->power_stuck);
+                    for(unsigned i=0;i<2;i++)for(unsigned j=0;j<AUDIO_QUANTUM;j++)
+                        CHECK(!h->device->pcm[i][j].left && !h->device->pcm[i][j].right);
+                } else { h->sr&=~AC97_DCH;h->remaining=512;h->piv=(h->civ+1)%32; }
+            }
             else if(!h->stop_stuck&&h->tick>=h->stop_after)h->sr|=AC97_DCH;
         }
     }
@@ -166,8 +213,10 @@ static void hardware_setup(struct ac97_device *d)
     memset(d,0,sizeof(*d));memset(&hw,0,sizeof(hw));hw.device=d;
     d->nam=0x100;d->nabm=0x200;d->pcm_unity=0x0808;
     d->software_master=true;hw.global_control=2;
+    d->raw_ext_control=d->raw_rate=0xffff;
     d->io=(struct ac97_io){&hw,mock_read,mock_write,mock_now,mock_sleep};
     hw.sr=AC97_DCH;hw.codec[0x7c/2]=0x8384;hw.codec[0x7e/2]=0x7600;
+    hw.input_sr=hw.mic_sr=AC97_DCH;
     hw.codec[0x26/2]=0xf;hw.codec[0x28/2]=1;hw.codec[0x2a/2]=1;hw.codec[0x2c/2]=48000;
     hw.codec[2/2]=0x8000;hw.codec[0x18/2]=0x8808;
 }
@@ -195,7 +244,9 @@ static void test_codec(void)
     hardware_setup(&d);hw.busy=true;d.activation_deadline=50;
     CHECK(ac97_codec_prepare(&d)==-ETIMEDOUT && hw.tick==50 && !hw.writes);
     hardware_setup(&d);hw.codec[0x2c/2]=44100;hw.rate_stuck=true;
-    CHECK(ac97_codec_prepare(&d)==-EIO && !d.codec_changed && !d.quarantine);
+    CHECK(!ac97_codec_prepare(&d) && d.codec_changed && !d.quarantine);
+    CHECK(d.rate==48000 && d.raw_rate==44100 && !(d.raw_ext_control&1));
+    CHECK(!ac97_codec_restore(&d));
     hardware_setup(&d);hw.reject=true;
     CHECK(ac97_codec_prepare(&d)==-EIO && d.quarantine);
     puts("audio codec: posted CAS/readback, 100ms timeout without writes, rollback/mute PASS");
@@ -284,6 +335,109 @@ static void test_diagnostic_records(void)
     for(unsigned i=96;i<AUDIO_RATE-144;i++) CHECK(boot_sample(i)==boot_sample(i+48));
     g_boot.flags=0;first_playback=playback_logged=false;audio.ready=false;memset(&ac97,0,sizeof(ac97));
     puts("audio diagnostics: init/play record grammar, snapshot counts and L-only exact 1kHz boot waveform PASS");
+}
+static void cs4297a_setup(struct ac97_device *d, bool vra)
+{
+    hardware_setup(d);hw.codec_model=true;d->software_master=false;
+    hw.codec[0x7c/2]=0x4352;hw.codec[0x7e/2]=0x5936;
+    hw.codec[0]=0x10;hw.codec[4/2]=0x8000;hw.codec[0x68/2]=0x8000;
+    hw.codec[0x28/2]=0x0200 | vra;hw.codec[0x2a/2]=0;
+    hw.codec[0x2c/2]=vra?44100:48000;
+    audio.master=(struct ciuki_mixer_master){.left=50,.right=50};
+}
+static void test_cs4297a_codec(void)
+{
+    struct ac97_device d;
+    for(unsigned vra=0;vra<2;vra++) {
+        /* VRA=1 is a synthetic compatibility case, not real CS4297A silicon. */
+        cs4297a_setup(&d,vra);
+        CHECK(!ac97_codec_prepare(&d) && d.codec_id==0x43525936 && d.rate==48000);
+        CHECK(d.raw_rate==48000 && d.raw_ext_control==vra && !d.quarantine);
+        CHECK(hw.codec[4/2]==0x0404 && hw.codec[0x68/2]==0);
+        if(vra) CHECK(trace_at(0x12a,1)<trace_at(0x12c,48000));
+        else for(unsigned i=0;i<hw.trace_count;i++)CHECK(hw.trace[i].port!=0x12c);
+    }
+    cs4297a_setup(&d,false);hw.ready_delay=40;hw.power_delay=70;hw.post_delay=2;
+    CHECK(!ac97_controller_reset(&d) && !ac97_codec_prepare(&d) && hw.tick>=111 && hw.tick<500);
+    CHECK(d.power==0xf && d.rate==48000);
+    /* Optional/RO register returns zero: effective fixed output is still 48k. */
+    cs4297a_setup(&d,false);hw.codec[0x2c/2]=0;
+    CHECK(!ac97_codec_prepare(&d) && d.rate==48000 && !d.raw_rate && !d.raw_ext_control);
+    cs4297a_setup(&d,true);hw.rate_stuck=true;
+    CHECK(!ac97_codec_prepare(&d) && d.rate==48000 && d.raw_rate==44100 && !d.raw_ext_control);
+    CHECK(trace_at(0x12a,1)<trace_at(0x12c,48000) && trace_at(0x12c,48000)<trace_at(0x12a,0));
+    cs4297a_setup(&d,true);hw.vra_enable_stuck=true;
+    CHECK(!ac97_codec_prepare(&d) && d.rate==48000 && !d.raw_ext_control);
+    for(unsigned i=0;i<hw.trace_count;i++)CHECK(hw.trace[i].port!=0x12c);
+    cs4297a_setup(&d,true);hw.rate_stuck=hw.vra_disable_stuck=true;
+    CHECK(ac97_codec_prepare(&d)==-EIO && !strcmp(d.failure.stage,"codec_rate"));
+    CHECK(d.failure.ext_control==1 && d.failure.rate==44100 && !d.rate);
+    cs4297a_setup(&d,false);hw.codec[0x2c/2]=0xffff;
+    CHECK(ac97_codec_prepare(&d)==-EIO && !d.rate && !d.codec_changed);
+    puts("audio CS4297A: fixed48/read-only rate, synthetic VRA enable/readback/fallback, slow ready and invalid reads PASS");
+}
+static void ich3_setup(void)
+{
+    static struct ac97_bd bdl[32];static struct audio_frame buffers[32][256];
+    cs4297a_setup(&ac97,false);hw.ich3=hw.any_pcm=true;
+    memset(bdl,0,sizeof(bdl));memset(buffers,0xa5,sizeof(buffers));
+    ac97.bdl=bdl;ac97.bdl_phys=0x4000;
+    for(unsigned i=0;i<32;i++) { ac97.pcm[i]=buffers[i];bdl[i].address=0x8000+i*1024; }
+    ac97.pci=(struct pci_func){.vendor=0x8086,.device=0x2485,.command=5,.irq_line=11};
+    ac97.command=5;hw.pci_command=5;
+    for(unsigned i=0;i<12;i++)ac97.claims[i]=-1;
+}
+static void test_ich3_bringup(void)
+{
+    /* Reset-state DCH requires neither CIV!=LVI nor a completion IRQ. */
+    ich3_setup();CHECK(!hw.bdbar && !hw.remaining && hw.civ==hw.lvi);
+    CHECK(!ac97_pause(&ac97) && hw.sr==AC97_DCH && !hw.resets && !hw.starts);
+    for(unsigned variant=0;variant<4;variant++) {
+        ich3_setup();
+        if(variant==1) { hw.codec[0x28/2]|=1;hw.codec[0x2c/2]=44100; }
+        if(variant==2) { hw.ready_delay=40;hw.power_delay=50;hw.reset_delay=4;hw.start_delay=6;hw.post_delay=2;hw.stop_after=150; }
+        if(variant==3)hw.exhausted_start=true;
+        CHECK(!controller_activate(&ac97) && !ac97.quarantine && !ac97.running && !ac97.stopping);
+        CHECK(hw.starts==1 && hw.resets==2 && hw.pci_command==5 && hw.bdbar==0x4000 && hw.sr==AC97_DCH);
+        CHECK(!ac97.published && !ac97.retired && !ac97.fetched && ac97.rate==48000 && hw.tick<500);
+        CHECK(trace_at(0x21b,2)<trace_at(0x210,0x4000));
+        CHECK(trace_at(0x12a,variant==1?1:0)<trace_at(0x215,1));
+        CHECK(trace_at(0x215,1)<trace_at(0xcfc,5) && trace_at(0xcfc,5)<trace_at(0x21b,1));
+        for(unsigned i=0;i<hw.trace_count;i++) if(hw.trace[i].port==0x21b)CHECK(!(hw.trace[i].value&0x1c));
+    }
+    /* Sample requests absent (zero-rate VRA) cannot prove a start. */
+    ich3_setup();hw.pci_command=1;ac97.activation_deadline=30;
+    CHECK(!channel_reset(&ac97,30));transport_publish(&ac97);hw.pci_command=5;
+    hw.codec[0x2a/2]=1;hw.codec[0x2c/2]=0;
+    CHECK(transport_prove(&ac97)==-ETIMEDOUT && hw.tick==30 && hw.resets==1);
+    CHECK(!strcmp(ac97.failure.stage,"dma_start") && ac97.failure.status[1]==AC97_DCH);
+    for(unsigned fault=0;fault<4;fault++) {
+        ich3_setup();
+        if(fault==0)hw.start_stuck=true;
+        if(fault==1)hw.stop_stuck=true;
+        if(fault==2)hw.reset_stuck=true;
+        if(fault==3)hw.run_clear_stuck=true;
+        int err=controller_activate(&ac97);
+        CHECK(err==(fault==0?-ETIMEDOUT:-EIO) && hw.tick==500 && ac97.failure.stage);
+        CHECK(!strcmp(ac97.failure.stage,fault==0?"dma_start":fault==2?"dma_reset":"dma_pause"));
+        unsigned resets=hw.resets;uint32_t canary=ac97.bdl[0].address;
+        ac97_shutdown();CHECK(ac97.quarantine && audio.quarantined && hw.resets==resets && ac97.bdl[0].address==canary);
+        audio.quarantined=false;
+    }
+    ich3_setup();hw.bdbar_stuck=true;
+    CHECK(controller_activate(&ac97)==-EIO && !strcmp(ac97.failure.stage,"dma_bdbar") && !hw.starts && !(hw.pci_command&4));
+    /* Reproduce -110 + stop_unproved without assuming a DMA silicon defect:
+     * power calibration consumes the shared deadline, then shutdown cannot
+     * enter its pause-proof loop even though reset-state DCH is already set. */
+    ich3_setup();hw.power_stuck=true;hw.input_sr=AC97_DCH|AC97_BCIS;hw.mic_sr=AC97_DCH|AC97_LVBCI;
+    CHECK(controller_activate(&ac97)==-ETIMEDOUT && hw.tick==500 && !hw.starts);
+    CHECK(!strcmp(ac97.failure.stage,"codec_power") && !ac97.failure.ext_control && ac97.failure.rate==48000);
+    ac97_shutdown();CHECK(audio.quarantined && !strcmp(audio.reason,"stop_unproved"));
+    audio_init_log(-ETIMEDOUT);
+    CHECK(!strcmp(audio_log,"[audio] failure stage=codec_power ext2a=0000 rate2c=bb80 pisr=0009 posr=0001 mcsr=0005 pocr=00 civ=0 lvi=0 piv=0 picb=0"));
+    CHECK(!strcmp(ac97.failure.stage,"codec_power"));
+    audio.quarantined=false;memset(&ac97,0,sizeof(ac97));
+    puts("audio ICH3: reset/default DCH, valid silent BDL before BME, bounded start/stop, failures retained and -110/stop_unproved reproduction PASS");
 }
 static uint64_t boot_host_tick;
 static unsigned boot_mixed_frames;
@@ -676,7 +830,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_boot_transport();test_bdl();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_boot_transport();test_bdl();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

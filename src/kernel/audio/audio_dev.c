@@ -324,6 +324,12 @@ static void audio_init_log(int err)
     klog("[audio] controller=%04x:%04x codec=%08x ready=%08x power=%04x master=%04x pcm=%04x rate=%u irq=%u error=%d reason=%s",
          ac97.pci.vendor, ac97.pci.device, ac97.codec_id, ac97.global_status,
          ac97.power, ac97.master, ac97.pcm_volume, ac97.rate, ac97.pci.irq_line, err, audio.reason);
+    if (err && ac97.failure.stage) {
+        const struct ac97_failure *f = &ac97.failure;
+        klog("[audio] failure stage=%s ext2a=%04x rate2c=%04x pisr=%04x posr=%04x mcsr=%04x pocr=%02x civ=%u lvi=%u piv=%u picb=%u",
+             f->stage, f->ext_control, f->rate, f->status[0], f->status[1], f->status[2],
+             f->control, f->cursor.civ, f->lvi, f->cursor.piv, f->cursor.remaining);
+    }
 }
 void audio_init(struct vfs *v)
 {
