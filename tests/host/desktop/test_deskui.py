@@ -156,7 +156,7 @@ class DeskuiTests(unittest.TestCase):
             path.write_bytes(DeskuiTests.portrait)
             return path
         return self.run_harness("files-ui", ["tests/host/desktop/files_ui_test.c", "tests/host/desktop/fake_vfs.c",
-                                             "apps/files/app.c", "apps/files/model.c", *TOOLKIT], portrait, frames=True)
+                                             "apps/files/app.c", "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT], portrait, frames=True)
 
     def test_files_ui_script_and_frames(self):
         stdout, digests = self.files_ui()

@@ -91,6 +91,11 @@ int desk_parse(const struct ciuki_message *m, int client,
         for (unsigned i=0;i<9;i++) p->performance[i]=(uint64_t)desk_get32(m->data+8+i*8) |
             (uint64_t)desk_get32(m->data+12+i*8)<<32;
         n=80; break;
+    case DESK_FILE_DROP:
+        if (m->data[0]!=DESK_SHELL_VERSION || m->length!=16) return 0;
+        p->flags=desk_get32(m->data+4); p->x=(int32_t)desk_get32(m->data+8); p->y=(int32_t)desk_get32(m->data+12);
+        if (p->flags>1 || p->x < -65535 || p->x > 65535 || p->y < -65535 || p->y > 65535) return 0;
+        n=16; break;
     case DESK_HELLO: case DESK_CLOSE:
         if (!client) return 0;
         break;

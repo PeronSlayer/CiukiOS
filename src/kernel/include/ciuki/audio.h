@@ -2,6 +2,7 @@
 #ifndef CIUKI_AUDIO_H
 #define CIUKI_AUDIO_H
 #include <ciuki/abi.h>
+#include <ciuki/boot_info.h>
 #include <ciuki/sync.h>
 #define AUDIO_STREAMS 8u
 #define AUDIO_RING 2048u
@@ -44,8 +45,8 @@ struct audio_state {
     uint64_t output, fetched, played_output, fifo, halts, deadlines;
     uint64_t last_service_cycles;
     uint32_t commitment_pages, max_service_us, max_irq_us, max_service_gap_us, max_control_us;
-    int error;
-    bool initialized, ready, running, pending, quarantined;
+    int error, init_error;
+    bool initialized, ready, running, pending, quarantined, master_in_codec;
     const char *reason, *settings_reason;
 };
 extern struct audio_state audio;
@@ -72,4 +73,9 @@ int audio_devctl(struct process *, int32_t fd, uint32_t op, uint32_t address, ui
 int audio_mixer_delegate(struct process *supervisor, struct process *trusted);
 int audio_master_set(struct ciuki_mixer_master *);
 void audio_settings_load(struct vfs *);
+void audio_diagnostics(struct ciuki_audio_diagnostics *);
+static inline bool audio_boot_tone_enabled(uint32_t flags)
+{
+    return (flags & CBI_F_VERBOSE) && !(flags & (CBI_F_SAFE_MODE | CBI_F_TEST_REQUEST));
+}
 #endif

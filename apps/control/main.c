@@ -166,6 +166,17 @@ static int apply(void *ctx, unsigned request, int volume, int muted)
 }
 static int display_query(void *ctx, struct ciuki_display_info *info)
 { (void)ctx; return ciuki_display_query(info); }
+static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
+{
+    (void)ctx;
+    int fd = open("/dev/mixer", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -errno;
+    *out = (struct ciuki_audio_diagnostics){ .version=1, .size=sizeof(*out) };
+    int r = ciuki_devctl(fd, MIXER_GET_DIAGNOSTICS, out, sizeof(*out));
+    int error = errno;
+    close(fd);
+    return r ? -error : 0;
+}
 static void on_message(struct du_window *w, const struct desk_packet *p, void *user)
 {
     (void)w;
@@ -220,6 +231,7 @@ int main(int argc, char **argv)
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->save_async=1;
+    h->audio_diagnostics = audio_query;
     h->devices = devices; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
     FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
     if (f) { if (fread(m->portrait, 4, 256 * 256, f) == 256 * 256) h->portrait = m->portrait; fclose(f); }

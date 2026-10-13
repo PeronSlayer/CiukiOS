@@ -219,10 +219,13 @@ class IconStoreTests(unittest.TestCase):
                    "Close    Alt+F4": "action:stop", "About CiukiOS": "menu:about"}
         for label, obj in objects.items():
             self.assertEqual(rows[label], table[obj], label)
-        icons = dict(re.findall(r'icon_add\(d, "([^"]+)", "[^"]*", "[^"]*", "([a-z-]+)"', shell))
-        for label, obj in {"Documents": "place:home", "DOS Box": "program:dosbox", "CiukNote": "program:ciuknote",
-                           "Control Panel": "program:control", "Trash": "place:trash"}.items():
+        icons = dict(re.findall(r'icon_add\(d, "([^"]+)", "[^"]*", (?:"[^"]*"|[A-Z_]+), "([a-z-]+)"', shell))
+        # f2-42: the real Desktop folder follows these three fixed icons;
+        # application icons are selected from the shared catalogue per file.
+        self.assertEqual(set(icons), {"Computer", "Documents", "Trash"})
+        for label, obj in {"Documents": "place:home", "Trash": "place:trash"}.items():
             self.assertEqual(icons[label], table[obj], label)
+        self.assertIn('e->meta.type==FM_DIR ? "folder" : cat ? cat->tango : "text-x-generic"', shell)
         self.assertEqual(icons["Computer"], "ciuki-computer")    # identity: Tango computer with the approved portrait
         # The shell draws only store sizes: menus and the taskbar 16, dialogs and Alt+Tab 32, desktop icons 48.
         self.assertIn("#define SH_DESKTOP_ICON 48", shell)

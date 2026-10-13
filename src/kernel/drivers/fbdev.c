@@ -5,6 +5,9 @@
 #include <ciuki/mm.h>
 #include <ciuki/registry.h>
 #include <ciuki/fbdev.h>
+#include <ciuki/accel.h>
+extern const struct accel_ops *savage2d_init(const struct fb_device *) __attribute__((weak));
+extern void savage2d_record(void) __attribute__((weak));
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
 
@@ -13,6 +16,7 @@ extern void console_framebuffer_changed(const struct fb_device *) __attribute__(
 
 static struct fb_device device;
 static struct kmutex presenter;
+static const struct accel_ops *acceleration;
 static bool initialized, changing;
 static void *change_window;
 static uint32_t change_capacity;
@@ -28,6 +32,7 @@ void fbdev_console_region(unsigned rows)
 
 bool fbdev_console_begin(void)
 {
+    if (acceleration && !acceleration->cpu_ready(acceleration->ctx)) return false;
     unsigned idle = 0;
     return __atomic_compare_exchange_n(&drawing, &idle, CONSOLE_BUSY, false,
                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
@@ -41,7 +46,7 @@ void fbdev_console_end(void)
 
 static bool present_begin(const struct fb_device *d, const struct fb_rect *c)
 {
-    if (d != &device || (unsigned)c->y >= __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE))
+    if (d != &device || (!acceleration && (unsigned)c->y >= __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE)))
         return true;
     unsigned idle = 0;
     return __atomic_compare_exchange_n(&drawing, &idle, PRESENT_BUSY, false,
@@ -52,7 +57,7 @@ static uint64_t present_end(const struct fb_device *d, const struct fb_rect *c, 
 {
     if (d == &device) framebuffer_write_drain();
     uint64_t end = timed ? framebuffer_cycles() : 0;
-    if (d == &device && (unsigned)c->y < __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE))
+    if (d == &device && (acceleration || (unsigned)c->y < __atomic_load_n(&console_rows, __ATOMIC_ACQUIRE)))
         __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
     return end;
 }
@@ -167,6 +172,7 @@ int fbdev_init(void)
     kmutex_init(&presenter);
     device = d;
     initialized = true;
+    if (savage2d_init) acceleration = savage2d_init(&device);
     return 0;
 }
 
@@ -232,6 +238,9 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
         return 0;
     if (!present_begin(d, &c))
         return -EBUSY;
+    if (d == &device && acceleration && acceleration->sync(acceleration->ctx)) {
+        (void)present_end(d, &c, false); return -EIO;
+    }
     bool timed = d == &device && g_cpu_tsc && g_tsc_per_ms &&
                  !c.x && !c.y && c.width == (int32_t)d->width && c.height == (int32_t)d->height;
     uint64_t start = timed ? framebuffer_cycles() : 0;
@@ -278,6 +287,11 @@ int fbdev_fill_to(const struct fb_device *d, const struct fb_rect *r, uint32_t c
         return -EBUSY;
     unsigned bytes = d->bpp / 8;
     colour = pack(d, colour);
+    if (d == &device && acceleration) {
+        int err = acceleration->fill_rect(acceleration->ctx, &c, colour);
+        if (!err) { (void)present_end(d, &c, false); return 0; }
+        if (acceleration->sync(acceleration->ctx)) { (void)present_end(d, &c, false); return -EIO; }
+    }
     for (int32_t y = 0; y < c.height; y++) {
         uint8_t *dp = d->mapped + (c.y + (uint32_t)y) * d->pitch + (uint32_t)c.x * bytes;
         for (int32_t x = 0; x < c.width; x++)
@@ -303,6 +317,7 @@ int fbdev_present(const struct fb_surface *src, const struct fb_rect *dst)
     kmutex_lock(&presenter);
     int rc = live() ? fbdev_present_to(&device, src, dst) : -ENODEV;
     kmutex_unlock(&presenter);
+    if (savage2d_record) savage2d_record();
     return rc;
 }
 
@@ -315,6 +330,107 @@ int fbdev_fill(const struct fb_rect *rect, uint32_t colour)
     int rc = live() ? fbdev_fill_to(&device, rect, colour) : -ENODEV;
     kmutex_unlock(&presenter);
     return rc;
+}
+
+/* Source and destination already clipped together by the grant service. */
+int fbdev_copy_to(const struct fb_device *d, const struct fb_rect *r, int32_t x, int32_t y)
+{
+    if (!d || !d->present) return -ENODEV;
+    struct fb_rect dst = {x,y,r ? r->width : 0,r ? r->height : 0};
+    if (!geometry_valid(d) || !fbdev_rect_valid(r) || !fbdev_rect_valid(&dst) ||
+        r->x < 0 || r->y < 0 || x < 0 || y < 0 ||
+        (uint32_t)(r->x+r->width) > d->width || (uint32_t)(r->y+r->height) > d->height ||
+        (uint32_t)(x+r->width) > d->width || (uint32_t)(y+r->height) > d->height) return -EINVAL;
+    if (!r->width || !r->height) return 0;
+    struct fb_rect busy = dst;
+    if (r->y < busy.y) busy.y = r->y;
+    if (!present_begin(d, &busy)) return -EBUSY;
+    if (d == &device && acceleration && acceleration->capabilities(acceleration->ctx)) {
+        int e = acceleration->copy_rect(acceleration->ctx,r,x,y);
+        (void)present_end(d,&busy,false);
+        /* A partially executed overlapping blit has lost its original source.
+         * Caller must rebuild destination from its authoritative RAM surface. */
+        return e ? -EAGAIN : 0;
+    }
+    if (d == &device && acceleration && acceleration->sync(acceleration->ctx)) {
+        (void)present_end(d,&busy,false); return -EIO;
+    }
+    unsigned bytes = d->bpp / 8;
+    for (int32_t row = 0; row < r->height; row++) {
+        int32_t i = y > r->y ? r->height - 1 - row : row;
+        memmove(d->mapped + (uint32_t)(y+i)*d->pitch + (uint32_t)x*bytes,
+                d->mapped + (uint32_t)(r->y+i)*d->pitch + (uint32_t)r->x*bytes, (uint32_t)r->width*bytes);
+    }
+    (void)present_end(d,&busy,false);
+    return 0;
+}
+
+int fbdev_accel_request(const struct ciuki_accel_request *q)
+{
+    if (!q || q->size != sizeof(*q) || q->operation > CIUKI_ACCEL_CURSOR_SHOW) return -EINVAL;
+    if (changing) return -EBUSY;
+    kmutex_lock(&presenter);
+    int err = -ENODEV;
+    if (!live()) goto done;
+    if (q->generation != device.generation) { err = -EAGAIN; goto done; }
+    if (q->operation == CIUKI_ACCEL_QUERY) {
+        err = acceleration ? (int)acceleration->capabilities(acceleration->ctx) : 0; goto done;
+    }
+    if (q->operation == CIUKI_ACCEL_COPY) {
+        struct ciuki_surface_info s = {.width=device.width,.height=device.height};
+        struct ciuki_rect c;
+        /* Avoid a dependency on process code: strict bounded screen rectangles. */
+        c = q->rect;
+        if (c.width > INT32_MAX || c.height > INT32_MAX || c.src_x < 0 || c.src_y < 0 ||
+            c.dst_x < 0 || c.dst_y < 0 || (uint64_t)(uint32_t)c.src_x+c.width > s.width ||
+            (uint64_t)(uint32_t)c.src_y+c.height > s.height || (uint64_t)(uint32_t)c.dst_x+c.width > s.width ||
+            (uint64_t)(uint32_t)c.dst_y+c.height > s.height) { err=-EINVAL; goto done; }
+        struct fb_rect r = {c.src_x,c.src_y,(int32_t)c.width,(int32_t)c.height};
+        err = fbdev_copy_to(&device,&r,c.dst_x,c.dst_y); goto done;
+    }
+    if (q->operation == CIUKI_ACCEL_FILL || q->operation == CIUKI_ACCEL_PATTERN) {
+        if (q->rect.width > INT32_MAX || q->rect.height > INT32_MAX) { err=-EINVAL; goto done; }
+        struct fb_rect r = {q->rect.dst_x,q->rect.dst_y,(int32_t)q->rect.width,(int32_t)q->rect.height};
+        if (q->operation == CIUKI_ACCEL_FILL) { err=fbdev_fill_to(&device,&r,q->colour); goto done; }
+        struct fb_rect c;
+        if (!fbdev_rect_valid(&r)) { err=-EINVAL; goto done; }
+        if (!clip(&device,&r,&c)) { err=0; goto done; }
+        if (!present_begin(&device,&c)) { err=-EBUSY; goto done; }
+        err=acceleration ? acceleration->pattern_rect(acceleration->ctx,&c,q->pattern,pack(&device,q->colour),pack(&device,q->background)) : -ENODEV;
+        if (err && (!acceleration || !acceleration->sync(acceleration->ctx))) {
+            unsigned bytes=device.bpp/8;
+            uint32_t fg=pack(&device,q->colour), bg=pack(&device,q->background);
+            for (int32_t y=c.y; y<c.y+c.height; y++) for (int32_t x=c.x; x<c.x+c.width; x++)
+                pixel(device.mapped+(uint32_t)y*device.pitch+(uint32_t)x*bytes,bytes,
+                      q->pattern[y&7] & (0x80u >> (x&7)) ? fg : bg);
+            err=0;
+        }
+        (void)present_end(&device,&c,false); goto done;
+    }
+    if (!acceleration || !(acceleration->capabilities(acceleration->ctx)&2u)) { err=-EOPNOTSUPP; goto done; }
+    struct fb_rect busy = {0,0,(int32_t)device.width,(int32_t)device.height};
+    if (!present_begin(&device,&busy)) { err=-EBUSY; goto done; }
+    if (q->operation == CIUKI_ACCEL_CURSOR_SET) {
+        struct accel_cursor cursor;
+        memcpy(cursor.mask,q->cursor_mask,sizeof(cursor.mask)); memcpy(cursor.image,q->cursor_image,sizeof(cursor.image));
+        cursor.foreground=pack(&device,q->colour); cursor.background=pack(&device,q->background);
+        err=acceleration->cursor_set(acceleration->ctx,&cursor);
+    } else if (q->operation == CIUKI_ACCEL_CURSOR_MOVE)
+        err=acceleration->cursor_move(acceleration->ctx,q->rect.dst_x,q->rect.dst_y);
+    else err=acceleration->cursor_show(acceleration->ctx,q->colour!=0);
+    (void)present_end(&device,&busy,false);
+done:
+    kmutex_unlock(&presenter);
+    if (savage2d_record) savage2d_record();
+    return err;
+}
+
+void fbdev_cursor_hide(void)
+{
+    kmutex_lock(&presenter);
+    if (acceleration && !changing && (acceleration->capabilities(acceleration->ctx)&2u))
+        (void)acceleration->cursor_show(acceleration->ctx,false);
+    kmutex_unlock(&presenter);
 }
 
 /* VBE 3.0 functions 01h/02h: a mode can change its LFB address. Reject RAM
@@ -361,6 +477,10 @@ int fbdev_change_begin(void)
     if (!console_framebuffer_revoke || !console_framebuffer_changed) return -ENODEV;
     changing = true; /* stop submissions before waiting for the last presenter */
     kmutex_lock(&presenter);
+    if (acceleration && acceleration->stop(acceleration->ctx)) {
+        changing = false; kmutex_unlock(&presenter); return -EIO;
+    }
+    acceleration=0; /* successful stop may have revoked register mappings */
     if (!change_window) {
         uint32_t capacity = device.size;
         for (unsigned i = 0; i < g_boot.display.mode_count; i++) {
@@ -400,4 +520,10 @@ int fbdev_change_commit(const struct fb_device *next)
     return 0;
 }
 
-void fbdev_change_end(void) { changing = false; }
+void fbdev_change_end(void)
+{
+    kmutex_lock(&presenter);
+    if (savage2d_init && device.present) acceleration = savage2d_init(&device);
+    changing = false;
+    kmutex_unlock(&presenter);
+}

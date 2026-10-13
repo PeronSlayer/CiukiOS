@@ -34,6 +34,7 @@ enum desk_opcode {
      * printable ASCII bytes. Updates only the sending client's window. */
     DESK_SET_TITLE,
     DESK_SOUND, /* v2: uint32 event; toolkit menu and dialog events */
+    DESK_FILE_DROP /* v2: copy flag, client-relative release x/y; Files only */,
     DESK_SYSTEM_QUERY, DESK_SYSTEM_INFO /* f1-25: explicit opt-in, v2 desktop performance sample */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */

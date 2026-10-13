@@ -28,15 +28,17 @@ struct files_app {
     int width, height, split, test, stage, rename_index, rename_new, job_active, close_pending, context_folder, tree_dirty;
     char note[160], rename_original[FM_NAME];
     struct du_menu menus[5];
-    struct du_menu_item file_items[12], edit_items[6], view_items[10], go_items[12], help_items[3];
+    struct du_menu_item file_items[12], edit_items[6], view_items[10], go_items[13], help_items[3];
     struct du_menu_item popup[18]; unsigned popup_count;
     int (*spawn)(struct files_app *, const char *program, char *const argv[]);
     void (*close)(struct files_app *);
     void (*checkpoint)(struct files_app *, int stage);
     int (*portrait)(uint32_t *pixels256);
+    void (*drop)(struct files_app *, int x, int y, int copy);
     void *user;
 };
 
+void files_drop(struct files_app *, int x, int y, int copy);
 int files_setup(struct files_app *, struct du_ui *, const struct fm_vfs *, const char *path);
 void files_destroy(struct files_app *);
 void files_event(struct du_ui *, const struct du_event *, void *);

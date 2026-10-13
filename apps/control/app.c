@@ -75,9 +75,7 @@ void cp_settings_saved(struct cp_app *a, int error)
  * follows the theme's desktop (shell.c desktop_colour). */
 static uint32_t desktop_colour(const struct cp_app *a, const struct desk_theme *t)
 {
-    struct ciuki_settings defaults;
-    cfg_defaults(&defaults);
-    return a->cfg.desktop_color == defaults.desktop_color ? t->desktop : a->cfg.desktop_color;
+    return a->cfg.desktop_color == CFG_DESKTOP_COLOR ? t->desktop : a->cfg.desktop_color;
 }
 static const struct desk_theme *chosen(const struct cp_app *a)
 { const struct desk_theme *t = desk_theme_named(a->cfg.theme); return t ? t : desk_theme; }
@@ -211,7 +209,31 @@ static void sync(struct cp_app *a)
 void cp_audio_result(struct cp_app *a, int result)
 {
     a->audio_testing = 0;
-    text(a,C_STATUS,result ? "Device did not accept the full tone." : "Device accepted the full 1 kHz tone.");
+    struct ciuki_audio_diagnostics d = {0};
+    int read = a->host.audio_diagnostics ? a->host.audio_diagnostics(a->host.ctx, &d) : -1;
+    char message[512];
+    if (read || d.version != 1 || d.size != sizeof(d)) {
+        snprintf(message, sizeof(message), "1 kHz tone result: %d\nKernel audio diagnostics unavailable (error %d).", result, read);
+    } else {
+        int compared = a->audio_before_ok && d.codec_id == a->audio_before.codec_id &&
+                       d.fetched_frames >= a->audio_before.fetched_frames && d.irqs >= a->audio_before.irqs;
+        uint64_t fetched = compared ? d.fetched_frames - a->audio_before.fetched_frames : 0;
+        uint64_t irqs = compared ? d.irqs - a->audio_before.irqs : 0;
+        snprintf(message, sizeof(message),
+                 "1 kHz tone result: %d\nController: %04x:%04x  Codec: %08x\n"
+                 "DMA advanced: %s (%llu frames)\nIRQs received: %s (%llu, line %u)\n"
+                 "CIV: %u  PICB: %u  Kernel error: %d\nPower: %04x  Master: %04x  PCM: %04x\nRate: %u\n"
+                 "Backend: %s%s\nKernel observations; check whether the tone was heard.",
+                 result, d.controller >> 16, d.controller & 0xffff, d.codec_id,
+                 compared ? fetched ? "yes" : "no" : "unknown", (unsigned long long)fetched,
+                 compared ? irqs ? "yes" : "no" : "unknown", (unsigned long long)irqs, d.irq_line,
+                 d.civ, d.picb, d.last_error, d.power, d.master, d.pcm, d.rate,
+                 d.flags & CIUKI_AUDIO_DIAG_READY ? "ready" : "unavailable",
+                 d.flags & CIUKI_AUDIO_DIAG_QUARANTINE ? ", quarantined" : "");
+    }
+    static const char *const buttons[] = {"OK"};
+    du_message(a->ui, 899, "Test audio hardware", message, DU_DLG_ICON_INFO, buttons, 1, 0, 0);
+    text(a,C_STATUS,result ? "Audio test failed; see hardware diagnostics." : "Audio test finished; see hardware diagnostics.");
     sync(a);
 }
 void cp_tick(struct cp_app *a)
@@ -332,9 +354,13 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case C_SOUND_TEST: case C_HARDWARE:
         if (e->type == DU_EV_ACTIVATE) {
+            if (e->id == C_HARDWARE) a->audio_before_ok = a->host.audio_diagnostics &&
+                !a->host.audio_diagnostics(a->host.ctx, &a->audio_before) &&
+                a->audio_before.version == 1 && a->audio_before.size == sizeof(a->audio_before);
             int r = a->host.apply ? a->host.apply(a->host.ctx,e->id == C_HARDWARE ? DESK_SETTINGS_AUDIO_TEST : DESK_SETTINGS_SOUND_TEST,
                                                e->id == C_HARDWARE ? 0 : (int)a->sound_selected,0) : -1;
             if (!r && e->id == C_HARDWARE) a->audio_testing = 1;
+            if (r && e->id == C_HARDWARE) { cp_audio_result(a, r); break; }
             text(a,C_STATUS,r ? "Audio test could not start." : e->id == C_HARDWARE ? "Testing audio hardware..." : "Playing selected sound.");
         }
         break;

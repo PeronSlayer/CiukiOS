@@ -39,13 +39,13 @@ static inline const struct desk_catalog_entry *desk_catalog_find(const char *nam
 }
 /* Default file association, shared by Files and the shell. Case-insensitive
  * extension tokens; the first matching catalogue entry wins. */
-static inline const struct desk_catalog_entry *desk_catalog_file(const char *path)
+static inline int desk_catalog_supports(const struct desk_catalog_entry *entry, const char *path)
 {
     const char *ext = strrchr(path, '.');
     if (!ext || !ext[1] || strchr(ext, '/')) return 0;
     ext++;
-    for (unsigned i = 0; i < DESK_CATALOG_COUNT; i++) {
-        const char *token = desk_catalog[i].extensions;
+    {
+        const char *token = entry->extensions;
         while (*token) {
             const char *end = strchr(token, '|'); size_t n = end ? (size_t)(end - token) : strlen(token);
             if (strlen(ext) == n) {
@@ -54,12 +54,17 @@ static inline const struct desk_catalog_entry *desk_catalog_file(const char *pat
                     unsigned c = (unsigned char)ext[k]; if (c >= 'A' && c <= 'Z') c += 32;
                     if (c != (unsigned char)token[k]) break;
                 }
-                if (k == n) return &desk_catalog[i];
+                if (k == n) return 1;
             }
             if (!end) break;
             token = end + 1;
         }
     }
+    return 0;
+}
+static inline const struct desk_catalog_entry *desk_catalog_file(const char *path)
+{
+    for (unsigned i=0;i<DESK_CATALOG_COUNT;i++) if (desk_catalog_supports(&desk_catalog[i],path)) return &desk_catalog[i];
     return 0;
 }
 #endif

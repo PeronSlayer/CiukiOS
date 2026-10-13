@@ -78,3 +78,25 @@ Logging: bootlog producers already capture bounded RAM chunks; disk draining
 uses the existing storage worker. Batch normal drains at 250 ms rather than
 on every log byte at the 1 ms timer cadence, leaving explicit shutdown drains
 and writeback deadlines intact.
+
+Integration with f1-26/f2-42 (2026-10-13): rechecked the
+[SDL queue-draining guidance](https://wiki.libsdl.org/SDL3/SDL_PollEvent) and
+[X.Org Savage copy/fill implementation](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_xaa.c).
+Retain input draining, frame deadlines and the private cursor-free scene; use
+the incoming synchronous copy/fill presenter against its last completed front
+cache, after completing the RAM output. A failed copy queues full reconstruction
+for the next frame before any further upload. Software cursor motion remains a save-under overlay; a hardware cursor
+moves without scene damage or uploads. Hardware faults retain full recovery
+damage and do not acknowledge a display change before recovery succeeds.
+Count successful rectangle operations as presents, and only CPU uploads as
+LFB bytes. Keep the accelerator front cache separate from the scene because
+failed/partial uploads must compare against the pixels actually presented.
+This adds one more width*height*4 allocation on rectangle-capable displays;
+physical memory qualification remains with the lead.
+
+Keep main's FILE_DROP opcode (25), then assign SYSTEM_QUERY/INFO 26/27; all
+clients build from the merged header. Refresh updates the real desktop folder
+and reloads settings/wallpaper. Icon moves invalidate the background cache;
+inline rename renders live over wallpaper and invalidates the stable cache
+until editing ends. AC'97 diagnostics and asynchronous Control Panel settings
+saving share the merged host callbacks.

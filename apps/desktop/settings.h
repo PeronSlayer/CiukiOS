@@ -12,10 +12,11 @@
 #define CFG_FILE "/system/settings/desktop.cfg"
 #define CFG_WALLPAPER_DIR "/system/wallpapers"
 #define CFG_VERSION 1
-#define CFG_TEXT_MAX 4096
+#define CFG_DESKTOP_COLOR 0x375564u
+#define CFG_TEXT_MAX 32768
 #define CFG_PATH_MAX 128
 #define CFG_RECENT_MAX 8
-#define CFG_EXTRA_MAX 1024
+#define CFG_EXTRA_MAX 16384
 /* Wallpaper placement (wallpaper_mode). The values are the order of
  * cfg_mode_names; new modes are appended so existing files keep parsing.
  * Fill: uniform scale that covers the area, centred crop of the overflow. */
@@ -51,6 +52,10 @@ int cfg_parse(struct ciuki_settings *, const char *text, size_t length);
 /* Writes the complete file; returns its length, or 0 if it does not fit. */
 size_t cfg_format(const struct ciuki_settings *, char *out, size_t size);
 void cfg_recent_add(struct ciuki_settings *, const char *path);
+int cfg_icon_position(const struct ciuki_settings *, const char *, int *, int *);
+int cfg_icon_move(struct ciuki_settings *, const char *, int, int);
+void cfg_icon_forget(struct ciuki_settings *, const char *);
+void cfg_icons_arrange(struct ciuki_settings *);
 int cfg_theme_index(const char *name);   /* -1 when unknown */
 /* Mouse speed as a rational multiplier num/8 applied to relative motion. */
 int cfg_mouse_numerator(int speed);

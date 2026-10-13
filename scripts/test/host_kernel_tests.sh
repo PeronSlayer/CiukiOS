@@ -194,6 +194,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/fbdev_test.c" -o "$out/fbdev_test"
 "$out/fbdev_test"
 
+# f1-26: the same renderer plus a bounded register model of Savage commands.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/savage2d_test.c" -o "$out/savage2d_test"
+ASAN_OPTIONS=detect_leaks=0 "$out/savage2d_test"
+
 # F1 V86 decoder, device models, worker aborts and firmware event adapter.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/v86_test.c" -o "$out/v86_test"

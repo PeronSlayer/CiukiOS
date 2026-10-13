@@ -1123,6 +1123,21 @@ AUDIO open additionally permits ENODEV/ENOMEM; byte writes retain F2 positive
 partial-count precedence over EINTR/EIO. Device seeks/positioned I/O: ESPIPE.
 No ioctl, poll/select, recording or master authority through public opens.
 
+### F4-08 amendment: hardware observations
+
+`MIXER_GET_DIAGNOSTICS` (4203h) is a read-only operation on `/dev/mixer`,
+including when audio activation failed or the device is absent. It follows
+the copied, pinned version/size/reserved rules above and needs no master grant.
+The 64-byte `ciuki_audio_diagnostics` record has version/size at 0/4;
+codec_id/controller at 8/12 (controller = PCI vendor << 16 | device);
+flags/irq_line/civ/picb at 16/20/24/28; u64 fetched_frames/irqs at 32/40;
+i32 last_error at 48; u16 power/master/pcm/rate at 52/54/56/58; reserved u32
+at 60. Flags are ready=1, running=2, quarantined=4. Fields are cached kernel
+observations, not physical addresses or an assertion of audible sound.
+Fetch and owned-IRQ counters are monotonic over transport stops. Getters
+accept a returned record again with its reserved word zero. No existing
+record size or operation number changes.
+
 ## F2-33 amendment: process enumeration and termination requests (2026-10-11)
 
 Directive f2-33 (Task Manager). Implementer draft, lead review pending. No
