@@ -38,6 +38,10 @@ F3 and F4 documents:
 - [F3 acceptance](design/f3-acceptance.md) — DOS virtual machines, DPMI, video, audio state and workloads
 - [F4 audio, media and shared volumes](design/f4-audio-media-contract.md) and [F4 acceptance](design/f4-acceptance.md)
 
+F5 documents (draft for cross-review and owner decisions):
+
+- [Win32 personality](design/win32-personality-contract.md) — Windows games of 1996–2004: PE loader, kernel objects, memory, registry, DirectX 2D/sound/input, installers, acceptance titles and directives f5-02–f5-18
+
 Validation records: [F0 kernel, loader and runner on QEMU](validation/2026-10-09-f0/README.md),
 [F0 runner implementation](validation/f0-runner.md), [F0 loader](validation/2026-10-09-f0-loader.md),
 [integrated images, one section per image SHA-256](validation/2026-10-11-integrated-image-f0-regression.md).
