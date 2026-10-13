@@ -643,14 +643,18 @@ static void draw_banner(struct du_canvas *c, struct desk_box b)
     /* Mask column u runs up the banner from just above the portrait; mask
      * row v (glyph top first) runs left to right, centred on the banner. */
     int32_t x0 = b.x + (b.w - line) / 2 + 1, y0 = py - 6;
-    for (int u = 0; u < w; u++) for (int v = 0; v < line; v++) {
-        uint32_t k = mask[v * MW + u];
-        if (!k) continue;
-        int32_t x = x0 + v, y = y0 - u;
-        if (x < p.cx || y < p.cy || x >= p.cx + p.cw || y >= p.cy + p.ch || y < b.y) continue;
-        uint32_t *dst = p.pixels + (size_t)y * (size_t)p.width + (size_t)x;
-        if (k & 255u) *dst = desk_mix(t->desktop_label, *dst, k & 255u);
-        if ((k >> 8) & 255u) *dst = desk_mix(0xffffffu, *dst, (k >> 8) & 255u);
+    struct du_rect vbox = du_intersection(c->clip, (struct du_rect){x0, y0-w+1, line, w});
+    vbox = du_intersection(vbox, (struct du_rect){0, b.y, c->width, c->height-b.y});
+    for (int y = vbox.y; y < vbox.y + vbox.h; y++) {
+        int u = y0 - y;
+        uint32_t *dst = p.pixels + (size_t)y * (size_t)p.width + (size_t)vbox.x;
+        for (int x = 0; x < vbox.w; x++) {
+            int v = vbox.x + x - x0;
+            uint32_t k = mask[v * MW + u];
+            if (!k) continue;
+            if (k & 255u) dst[x] = desk_mix(t->desktop_label, dst[x], k & 255u);
+            if ((k >> 8) & 255u) dst[x] = desk_mix(0xffffffu, dst[x], (k >> 8) & 255u);
+        }
     }
 }
 static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_box clip)
@@ -1228,11 +1232,19 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
             int32_t y0 = DESK_BAR + ((int32_t)d->height - DESK_BAR - DESK_PORTRAIT_SIZE - 36) / 2;
             if (y0 < DESK_BAR) y0 = DESK_BAR;
             struct desk_box b;
-            if (desk_intersect((struct desk_box){x0, y0, DESK_PORTRAIT_SIZE, DESK_PORTRAIT_SIZE}, clip, &b))
-                for (int32_t y = b.y; y < b.y + b.h; y++) for (int32_t x = b.x; x < b.x + b.w; x++) {
-                    uint32_t v = d->portrait[(y - y0) * DESK_PORTRAIT_SIZE + x - x0];
-                    d->pixels[(uint32_t)y * d->width + (uint32_t)x] = (v & 0xffffffu) == DESK_BACKGROUND ? colour : v;
+            if (desk_intersect((struct desk_box){x0, y0, DESK_PORTRAIT_SIZE, DESK_PORTRAIT_SIZE}, clip, &b)) {
+                uint32_t *first_dst = d->pixels + (size_t)b.y * d->width + b.x;
+                const uint32_t *first_src = d->portrait + (b.y-y0)*DESK_PORTRAIT_SIZE + b.x-x0;
+                int stride = (int)d->width;
+                for (int32_t y = 0; y < b.h; y++) {
+                    uint32_t *dst = first_dst + (size_t)y * stride;
+                    const uint32_t *src = first_src + (size_t)y * DESK_PORTRAIT_SIZE;
+                    for (int32_t x = 0; x < b.w; x++) {
+                        uint32_t v = src[x];
+                        dst[x] = (v & 0xffffffu) == DESK_BACKGROUND ? colour : v;
+                    }
                 }
+            }
         }
     }
     draw_icons(d, clip);

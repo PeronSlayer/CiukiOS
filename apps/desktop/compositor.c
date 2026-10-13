@@ -136,8 +136,13 @@ void desk_damage_add(struct desk_damage *d, struct desk_box b, uint32_t w, uint3
 static void fill(struct desktop *d, struct desk_box b, struct desk_box clip, uint32_t colour)
 {
     if (!desk_intersect(b,clip,&b)) return;
-    for (int32_t y = b.y; y < b.y+b.h; y++)
-        for (int32_t x = b.x; x < b.x+b.w; x++) d->pixels[(uint32_t)y*d->width+(uint32_t)x] = colour;
+    int stride=(int)d->width;
+    uint32_t *first=d->pixels+(size_t)b.y*stride+b.x;
+    for (int32_t y=0; y<b.h; y++) {
+        uint32_t *row=first+(size_t)y*stride;
+        if (y && b.w>=16) memcpy(row,first,(size_t)b.w*sizeof(*row));
+        else for (int32_t x=0; x<b.w; x++) row[x]=colour;
+    }
 }
 /* Original compact 5x7 bitmap glyphs; no third-party font dependency. */
 static const uint8_t font[128][7] = {
@@ -193,6 +198,76 @@ uint8_t desk_glyph_row(unsigned c, unsigned row)
 { return row < 7 ? font[c < 128 ? c : '?'][row] : 0; }
 static struct desk_paint paint_of(struct desktop *d, struct desk_box clip)
 { return (struct desk_paint){d->pixels,(int)d->width,(int)d->height,clip.x,clip.y,clip.w,clip.h}; }
+struct shadow_weight { uint32_t rb, g, inverse; };
+static void shadow_span(uint32_t *dst, int n, const struct shadow_weight *weight)
+{
+    /* Two 16-bit lanes for red/blue. Every lane stays <= 65152, so no
+     * carry crosses lanes. For 0<=v<=65152, (v+1+(v>>8))>>8 == v/255;
+     * this preserves desk_mix's +127 rounding without integer division. */
+    unsigned inv=weight->inverse;
+    uint32_t fg_rb=weight->rb, fg_g=weight->g;
+    for (int x=0; x<n; x++) {
+        uint32_t old=dst[x], rb=(old&0xff00ffu)*inv+fg_rb;
+        uint32_t g=((old>>8)&255u)*inv+fg_g;
+        rb=(rb+0x00010001u+((rb>>8)&0xff00ffu))>>8;
+        g=(g+1+(g>>8))>>8;
+        dst[x]=(rb&0xff00ffu)|(g<<8);
+    }
+}
+/* Shared with du_shadow (draw.c). Keep the theme's exact integer falloff,
+ * but calculate dy once per row and alpha once per distance pair. The
+ * opaque box is removed from the row before any blending or division. */
+void desk_shadow_rows(struct desk_paint *p, int x, int y, int w, int h, int size, uint32_t colour)
+{
+    enum { MAX_SIZE=16 };
+    /* Windows and menus have different radii. Two 3 KiB tables retain both
+     * falloffs; foreground products are constant for each distance pair. */
+    static struct {
+        int size; uint32_t colour;
+        struct shadow_weight weights[MAX_SIZE][MAX_SIZE];
+    } cache[2];
+    static unsigned victim;
+    if (size<=0) return;
+    if (size>MAX_SIZE) { desk_paint_shadow(p,x,y,w,h,size,colour); return; }
+    int ox=x+size/3, oy=y+size/2;
+    struct desk_box b, clip={p->cx,p->cy,p->cw,p->ch};
+    if (!desk_intersect(clip,(struct desk_box){0,0,p->width,p->height},&clip) ||
+        !desk_intersect((struct desk_box){ox-size,oy-size,w+2*size,h+2*size},clip,&b)) return;
+    unsigned slot=0;
+    while (slot<2 && (cache[slot].size!=size || cache[slot].colour!=colour)) slot++;
+    if (slot==2) {
+        slot=victim++%2; cache[slot].size=size; cache[slot].colour=colour;
+        for (int dy=0; dy<size; dy++) for (int dx=0; dx<size; dx++) {
+            unsigned a=72u*(unsigned)(size-dx)*(unsigned)(size-dy)/(unsigned)(size*size);
+            a=a*a/72u;
+            cache[slot].weights[dy][dx]=(struct shadow_weight){
+                (colour&0xff00ffu)*a+0x007f007fu, ((colour>>8)&255u)*a+127u, 255-a};
+        }
+    }
+    uint32_t *first_row=p->pixels+(size_t)b.y*p->width+b.x;
+    int stride=p->width;
+    for (int yy=b.y; yy<b.y+b.h; yy++) {
+        uint32_t *row=first_row+(size_t)(yy-b.y)*stride;
+        int dy=yy<oy ? oy-yy : yy>=oy+h ? yy-(oy+h-1) : 0;
+        if (dy>=size) continue;
+        int ends[4]={b.x,b.x+b.w,b.x+b.w,b.x+b.w};
+        if (yy>=y && yy<y+h) {
+            ends[1]=x<b.x ? b.x : x>b.x+b.w ? b.x+b.w : x;
+            ends[2]=x+w<b.x ? b.x : x+w>b.x+b.w ? b.x+b.w : x+w;
+        }
+        for (int span=0; span<2; span++) {
+            int first=ends[span*2], last=ends[span*2+1];
+            for (int xx=first; xx<last;) {
+                int dx=xx<ox ? ox-xx : xx>=ox+w ? xx-(ox+w-1) : 0;
+                if (dx>=size) { xx++; continue; }
+                int n=!dx ? (last<ox+w ? last : ox+w)-xx : 1;
+                /* Alpha zero still clears X, matching the shared painter. */
+                shadow_span(row+xx-b.x,n,&cache[slot].weights[dy][dx]);
+                xx+=n;
+            }
+        }
+    }
+}
 /* Legacy entry (scale 1: UI face, scale 2: large face); y is the top of the
  * old 7-row cell, kept so every caller's vertical placement holds. */
 void desk_text(struct desktop *d, struct desk_box clip, int32_t x, int32_t y,
@@ -212,11 +287,20 @@ static void portrait(struct desktop *d, struct desk_box clip)
     struct desk_box b;
     /* The approved portrait is shown unchanged; its converted background is
      * the Platinum desktop colour, so other themes blend its edge pixels. */
-    if (desk_intersect((struct desk_box){x0,y0,DESK_PORTRAIT_SIZE,DESK_PORTRAIT_SIZE},clip,&b))
-        for (int32_t y=b.y; y<b.y+b.h; y++) for (int32_t x=b.x; x<b.x+b.w; x++) {
-            uint32_t v=d->portrait[(y-y0)*DESK_PORTRAIT_SIZE+x-x0];
-            d->pixels[(uint32_t)y*d->width+(uint32_t)x] = v==DESK_BACKGROUND ? desk_theme->desktop : v;
+    if (desk_intersect((struct desk_box){x0,y0,DESK_PORTRAIT_SIZE,DESK_PORTRAIT_SIZE},clip,&b)) {
+        uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
+        const uint32_t *first_src=d->portrait+(b.y-y0)*DESK_PORTRAIT_SIZE+b.x-x0;
+        int stride=(int)d->width;
+        uint32_t background=desk_theme->desktop;
+        for (int32_t y=0; y<b.h; y++) {
+            uint32_t *dst=first_dst+(size_t)y*stride;
+            const uint32_t *src=first_src+(size_t)y*DESK_PORTRAIT_SIZE;
+            for (int32_t x=0; x<b.w; x++) {
+                uint32_t v=src[x];
+                dst[x]=v==DESK_BACKGROUND ? background : v;
+            }
         }
+    }
     struct desk_paint p=paint_of(d,clip);
     int font=desk_theme->font_large, w=desk_text_measure(font,"CiukiOS");
     desk_paint_text(&p,font,((int32_t)d->width-w)/2,y0+DESK_PORTRAIT_SIZE+28,"CiukiOS",desk_theme->desktop_label);
@@ -225,9 +309,116 @@ static void portrait_at(struct desktop *d, struct desk_box clip, int32_t x, int3
 {
     struct desk_box b;
     if (!d->portrait || size<=0 || !desk_intersect((struct desk_box){x,y,size,size},clip,&b)) return;
-    for (int32_t yy=b.y; yy<b.y+b.h; yy++) for (int32_t xx=b.x; xx<b.x+b.w; xx++)
-        d->pixels[(uint32_t)yy*d->width+(uint32_t)xx]=
-            d->portrait[((yy-y)*DESK_PORTRAIT_SIZE/size)*DESK_PORTRAIT_SIZE+(xx-x)*DESK_PORTRAIT_SIZE/size];
+    uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
+    int stride=(int)d->width;
+    for (int32_t yy=b.y; yy<b.y+b.h; yy++) {
+        uint32_t *dst=first_dst+(size_t)(yy-b.y)*stride;
+        const uint32_t *src=d->portrait+((yy-y)*DESK_PORTRAIT_SIZE/size)*DESK_PORTRAIT_SIZE;
+        for (int32_t xx=0; xx<b.w; xx++) dst[xx]=src[(b.x+xx-x)*DESK_PORTRAIT_SIZE/size];
+    }
+}
+/* Frames are opaque away from their rounded corners. Keep four bounded
+ * caption/edge rasters from the shared theme painter and copy those spans on
+ * moves/exposure. Corners still blend over the current scene. Nothing in
+ * theme.c is duplicated here; title, icon bytes and every style input key
+ * the cache. Small/unusual frames and allocation failure use the painter. */
+enum { CAPTION_CACHES=4, CAPTION_MAX_WIDTH=2048 };
+static struct caption_cache {
+    uint32_t *pixels;
+    const struct desk_theme *theme;
+    int w, h;
+    struct desk_frame_style style;
+    char title[DESK_TITLE_MAX+1];
+    uint32_t icon[16*16];
+} captions[CAPTION_CACHES];
+
+static void xrgb_row(uint32_t *restrict dst, const uint32_t *restrict src, int w)
+{
+    int x=0;
+    for (; x+4<=w; x+=4) {
+        dst[x]=src[x]&0xffffffu; dst[x+1]=src[x+1]&0xffffffu;
+        dst[x+2]=src[x+2]&0xffffffu; dst[x+3]=src[x+3]&0xffffffu;
+    }
+    for (; x<w; x++) dst[x]=src[x]&0xffffffu;
+}
+
+static void frame_border(struct desk_paint *p, int index, struct desk_box f,
+                         const struct desk_frame_style *s)
+{
+    int pad=desk_theme->radius+1;
+    if (pad<1) pad=1;
+    if (f.w<=2*pad || f.w>CAPTION_MAX_WIDTH || f.h<=DESK_TITLE+3 || f.h>CAPTION_MAX_WIDTH) {
+        desk_paint_frame_border(p,f.x,f.y,f.w,f.h,s); return;
+    }
+    struct caption_cache *c=&captions[index%CAPTION_CACHES];
+    const char *title=s->title ? s->title : "";
+    int same=c->pixels && c->theme==desk_theme && c->w==f.w && c->h==f.h &&
+        c->style.active==s->active && c->style.alert==s->alert && c->style.collapsed==s->collapsed &&
+        c->style.buttons==s->buttons && c->style.hot==s->hot && c->style.pressed==s->pressed &&
+        !strcmp(c->title,title) && !!c->style.icon==!!s->icon &&
+        (!s->icon || !memcmp(c->icon,s->icon,sizeof(c->icon)));
+    if (!same) {
+        if (!c->pixels || c->w!=f.w || c->h!=f.h) {
+            size_t count=(size_t)f.w*(DESK_TITLE+DESK_BORDER)+2u*DESK_BORDER*f.h;
+            uint32_t *next=malloc(count*sizeof(*next));
+            if (!next) { desk_paint_frame_border(p,f.x,f.y,f.w,f.h,s); return; }
+            free(c->pixels); c->pixels=next;
+        }
+        c->w=f.w; c->h=f.h; c->theme=desk_theme; c->style=*s;
+        snprintf(c->title,sizeof(c->title),"%s",title);
+        if (s->icon) memcpy(c->icon,s->icon,sizeof(c->icon));
+        c->style.title=c->title; c->style.icon=s->icon ? c->icon : NULL;
+        /* The face covers every cached pixel before text/button blending.
+         * Exclude all corner pixels, whose result depends on the underlay. */
+        struct desk_paint raster={c->pixels,f.w,DESK_TITLE,0,0,f.w,DESK_TITLE};
+        memset(c->pixels,0,(size_t)f.w*DESK_TITLE*sizeof(*c->pixels));
+        desk_paint_frame_border(&raster,0,0,f.w,f.h,s);
+        /* Compact side/bottom strips, rather than a whole window raster. */
+        uint32_t *left=c->pixels+(size_t)f.w*DESK_TITLE;
+        uint32_t *right=left+(size_t)DESK_BORDER*f.h;
+        uint32_t *bottom=right+(size_t)DESK_BORDER*f.h;
+        raster=(struct desk_paint){left,DESK_BORDER,f.h,0,DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE};
+        desk_paint_frame_border(&raster,0,0,f.w,f.h,s);
+        raster.pixels=right;
+        desk_paint_frame_border(&raster,DESK_BORDER-f.w,0,f.w,f.h,s);
+        raster=(struct desk_paint){bottom,f.w,DESK_BORDER,0,0,f.w,DESK_BORDER};
+        desk_paint_frame_border(&raster,0,DESK_BORDER-f.h,f.w,f.h,s);
+    }
+    /* Only the tiny rounded corners depend on the current underlay. A
+     * short frame gives the identical top corner without walking body rows. */
+    struct desk_box strips[2]={{f.x,f.y,pad,desk_theme->radius},
+        {f.x+f.w-pad,f.y,pad,desk_theme->radius}};
+    struct desk_box clip={p->cx,p->cy,p->cw,p->ch}, b;
+    for (unsigned k=0; k<2; k++) if (desk_intersect(strips[k],clip,&b)) {
+        struct desk_paint edge=*p;
+        edge.cx=b.x; edge.cy=b.y; edge.cw=b.w; edge.ch=b.h;
+        desk_paint_frame_border(&edge,f.x,f.y,f.w,DESK_TITLE+4,s);
+    }
+    for (int y=0; y<DESK_TITLE; y++) {
+        int inset=y<desk_theme->radius ? pad : 0;
+        if (desk_intersect((struct desk_box){f.x+inset,f.y+y,f.w-2*inset,1},clip,&b))
+            memcpy(p->pixels+(size_t)b.y*p->width+b.x,
+                   c->pixels+(size_t)y*f.w+b.x-f.x,(size_t)b.w*sizeof(*c->pixels));
+    }
+    struct desk_box body[3]={{f.x,f.y+DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE},
+        {f.x+f.w-DESK_BORDER,f.y+DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE},
+        {f.x,f.y+f.h-DESK_BORDER,f.w,DESK_BORDER}};
+    const uint32_t *srcs[3]={c->pixels+(size_t)f.w*DESK_TITLE,
+        c->pixels+(size_t)f.w*DESK_TITLE+(size_t)DESK_BORDER*f.h,
+        c->pixels+(size_t)f.w*DESK_TITLE+2u*DESK_BORDER*f.h};
+    for (unsigned k=0; k<3; k++) if (desk_intersect(body[k],clip,&b)) {
+        int stride=k==2 ? f.w : DESK_BORDER;
+        int sy=k==2 ? b.y-body[k].y : b.y-f.y;
+        const uint32_t *first_src=srcs[k]+(size_t)sy*stride+b.x-body[k].x;
+        uint32_t *first_dst=p->pixels+(size_t)b.y*p->width+b.x;
+        int dst_stride=p->width;
+        for (int y=0; y<b.h; y++) {
+            uint32_t *dst=first_dst+(size_t)y*dst_stride;
+            const uint32_t *src=first_src+(size_t)y*stride;
+            if (k==2) memcpy(dst,src,(size_t)b.w*sizeof(*dst));
+            else for (int x=0; x<b.w; x++) dst[x]=src[x];
+        }
+    }
 }
 static void window(struct desktop *d, int i, struct desk_box clip)
 {
@@ -239,7 +430,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
     struct desk_box outer=desk_outer(c), area, f=c->frame;
     if (!desk_intersect(outer,clip,&area)) return;
     struct desk_paint p=paint_of(d,area);
-    if (t->shadow_size) desk_paint_shadow(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow);
+    if (t->shadow_size) desk_shadow_rows(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow);
     if (!desk_intersect(f,clip,&clip)) return;
     p=paint_of(d,clip);
     /* Hover and pressed title buttons follow the pointer (input.c tracks
@@ -253,7 +444,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
         .buttons=d->shell ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|DESK_TB_COLLAPSE : DESK_TB_CLOSE,
         .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
     if (c->internal || c->collapsed) desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s);
-    else desk_paint_frame_border(&p,f.x,f.y,f.w,f.h,&s);
+    else frame_border(&p,i,f,&s);
     struct desk_box content = desk_content(c), b;
     if (c->collapsed) return;
     if (c->internal) {
@@ -265,10 +456,18 @@ static void window(struct desktop *d, int i, struct desk_box clip)
     struct desk_box old = {content.x,content.y,(int32_t)c->info.width,(int32_t)c->info.height};
     fill(d,(struct desk_box){content.x+old.w,content.y,content.w-old.w,content.h},clip,t->face);
     fill(d,(struct desk_box){content.x,content.y+old.h,content.w,content.h-old.h},clip,t->face);
-    if (desk_intersect(content,old,&b) && desk_intersect(b,clip,&b))
-        for (int32_t y=b.y; y<b.y+b.h; y++) for (int32_t x=b.x; x<b.x+b.w; x++)
-            d->pixels[(uint32_t)y*d->width+(uint32_t)x] =
-                c->pixels[(uint32_t)(y-content.y)*c->info.width+(uint32_t)(x-content.x)] & 0xffffffu;
+    if (desk_intersect(content,old,&b) && desk_intersect(b,clip,&b)) {
+        uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
+        const uint32_t *first_src=c->pixels+(size_t)(b.y-content.y)*c->info.width+b.x-content.x;
+        int dst_stride=(int)d->width, src_stride=(int)c->info.width;
+        for (int32_t y=0; y<b.h; y++) {
+            uint32_t *dst=first_dst+(size_t)y*dst_stride;
+            const uint32_t *src=first_src+(size_t)y*src_stride;
+            /* The surface is XRGB: preserve the historical zero X byte,
+             * even when a client stores arbitrary padding there. */
+            xrgb_row(dst,src,b.w);
+        }
+    }
     if (c->resizable && !c->zoomed) {
         /* A visible grip in the 3 px bottom/right frame, outside app pixels. */
         for (int k=0; k<3; k++) {
@@ -314,13 +513,64 @@ static const char *const arrow[17] = {
     "#..........", "##.........", "#o#........", "#oo#.......", "#ooo#......", "#oooo#.....",
     "#ooooo#....", "#oooooo#...", "#ooooooo#..", "#oooooooo#.", "#ooooo#####", "#oo#oo#....",
     "#o#.#oo#...", "##..#oo#...", "#....#oo#..", ".....#oo#..", "......##..."};
+/* Remove only client wells known to be opaque. Frames, corners, shadows,
+ * internal windows and exposed space while resizing are never occluders.
+ * Bound subdivision to the existing damage capacity and fall back to the
+ * original clip if the scene is unusually fragmented. */
+static unsigned visible_boxes(struct desktop *d, struct desk_box clip,
+                              const int *windows, unsigned count, struct desk_box *boxes)
+{
+    struct desk_box next[DESK_DAMAGE_MAX];
+    unsigned n=1; boxes[0]=clip;
+    for (unsigned k=0; k<count && n; k++) {
+        struct desk_client *c=&d->clients[windows[k]];
+        if (c->internal || c->collapsed || !c->pixels) continue;
+        struct desk_box well=desk_content(c), opaque;
+        if (!desk_intersect(well,(struct desk_box){well.x,well.y,(int32_t)c->info.width,(int32_t)c->info.height},&opaque)) continue;
+        unsigned used=0;
+        for (unsigned i=0; i<n; i++) {
+            struct desk_box a=boxes[i], cut;
+            if (!desk_intersect(a,opaque,&cut)) {
+                if (used==DESK_DAMAGE_MAX) { boxes[0]=clip; return 1; }
+                next[used++]=a; continue;
+            }
+            struct desk_box parts[4]={{a.x,a.y,a.w,cut.y-a.y},
+                {a.x,cut.y+cut.h,a.w,a.y+a.h-cut.y-cut.h},
+                {a.x,cut.y,cut.x-a.x,cut.h},
+                {cut.x+cut.w,cut.y,a.x+a.w-cut.x-cut.w,cut.h}};
+            for (unsigned j=0; j<4; j++) if (parts[j].w>0 && parts[j].h>0) {
+                if (used==DESK_DAMAGE_MAX) { boxes[0]=clip; return 1; }
+                next[used++]=parts[j];
+            }
+        }
+        n=used; memcpy(boxes,next,n*sizeof(*boxes));
+    }
+    return n;
+}
 static void scene(struct desktop *d, struct desk_box clip)
 {
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
     const struct desk_theme *t=desk_theme;
     struct desk_paint p=paint_of(d,clip);
-    if (d->shell && desk_shell_background) desk_shell_background(d,clip);   /* wallpaper and desktop icons (shell.c) */
-    else { fill(d,clip,clip,t->desktop); portrait(d,clip); }
+    int windows[DESK_CLIENTS]; unsigned count=0;
+    uint64_t last=0;
+    for (unsigned n=0; n<DESK_CLIENTS; n++) {
+        int next=-1;
+        for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].window && !d->clients[i].minimized && d->clients[i].order>last &&
+            (next<0 || d->clients[i].order<d->clients[next].order)) next=i;
+        if (next<0) break;
+        last=d->clients[next].order; windows[count++]=next;
+    }
+    struct desk_box boxes[DESK_DAMAGE_MAX];
+    unsigned visible=visible_boxes(d,clip,windows,count,boxes);
+    if (d->shell && desk_shell_background) {
+        /* Also retain shell binding/cache maintenance when a clip is fully
+         * covered, without copying any background pixels into the scene. */
+        if (!visible) desk_shell_background(d,(struct desk_box){0,0,0,0});
+        for (unsigned k=0; k<visible; k++) desk_shell_background(d,boxes[k]);
+    } else for (unsigned k=0; k<visible; k++) {
+        fill(d,boxes[k],boxes[k],t->desktop); portrait(d,boxes[k]);
+    }
     /* Top bar: a Platinum-style menu bar with the Ciuki mark. */
     fill(d,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},clip,t->topbar);
     desk_paint_fill(&p,0,DESK_BAR-1,(int)d->width,1,t->topbar_edge);
@@ -334,28 +584,36 @@ static void scene(struct desktop *d, struct desk_box clip)
     uint64_t s = d->now_ns / 1000000000ull;
     snprintf(clock,sizeof(clock),"%02u:%02u:%02u",(unsigned)(s/3600%100),(unsigned)(s/60%60),(unsigned)(s%60));
     if (!d->shell) desk_paint_text(&p,t->font_ui,(int)d->width-12-desk_text_measure(t->font_ui,clock),20,clock,t->topbar_text);
-    uint64_t last = 0;
-    for (unsigned n = 0; n < DESK_CLIENTS; n++) {
-        int next = -1;
-        for (int i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].window && !d->clients[i].minimized && d->clients[i].order > last &&
-            (next < 0 || d->clients[i].order < d->clients[next].order)) next = i;
-        if (next < 0) break;
-        last = d->clients[next].order; window(d,next,clip);
+    for (unsigned n=0; n<count; n++) {
+        visible=visible_boxes(d,clip,windows+n+1,count-n-1,boxes);
+        for (unsigned k=0; k<visible; k++) window(d,windows[n],boxes[k]);
     }
     if (d->shell) desk_shell_draw(d,clip);
 }
 static void cursor(struct desktop *d, struct desk_box clip)
 {
-    for (int y = 0; !d->hw_cursor && y < 17; y++) for (int i = 0; i < 11; i++) {
-        char k=arrow[y][i];
-        if (k!='.') fill(d,(struct desk_box){d->mouse_x+i,d->mouse_y+y,1,1},clip,k=='#' ? 0x101010u : 0xffffffu);
+    struct desk_box b;
+    if (d->hw_cursor || !desk_intersect((struct desk_box){d->mouse_x,d->mouse_y,11,17},clip,&b)) return;
+    uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
+    int stride=(int)d->width;
+    for (int y=0; y<b.h; y++) {
+        uint32_t *dst=first_dst+(size_t)y*stride;
+        const char *src=arrow[b.y+y-d->mouse_y]+b.x-d->mouse_x;
+        for (int x=0; x<b.w; x++) {
+            char k=src[x];
+            if (k!='.') dst[x]=k=='#' ? 0x101010u : 0xffffffu;
+        }
     }
 }
 /* Reference/capture renderer: the runtime keeps this arrow out of the scene. */
 void desk_composite(struct desktop *d, struct desk_box clip)
-{ scene(d,clip); cursor(d,clip); }
+{
+    if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
+    scene(d,clip); cursor(d,clip);
+}
 void desk_render_release(struct desktop *d)
 {
+    for (unsigned i=0; i<CAPTION_CACHES; i++) { free(captions[i].pixels); captions[i]=(struct caption_cache){0}; }
     free(d->accel_front); d->accel_front=NULL; d->accel_front_valid=0;
     d->copy_pending=0;
     free(d->scene); d->scene=NULL; d->scene_bytes=0;
