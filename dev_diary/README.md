@@ -117,3 +117,4 @@ Documenti di design, validazione, fonti esterne.
 | [Contratto Win32 (F5) e decisioni; runner a due slot; diagnosi del blocco SuperSavage](2026-10-13-03-contratto-win32-decisioni.md) | 13 ott | decisioni (design); analisi hardware |
 | [Terza prova sul T23 (immagine 3299a24f): diagnosi di accelerazione, disco, presentazione, DOOM e rete](2026-10-13-04-t23-immagine-3299a24f-diagnosi.md) | 13 ott | analisi hardware, decisioni (sette direttive Codex) |
 | [Sette consegne Codex fuse; immagine 24c98799 per il T23](2026-10-13-05-sette-consegne-immagine-24c98799.md) | 13 ott | modifiche (kernel, desktop, test), immagine |
+| [Tredici consegne fuse (prerequisiti F5 e parco driver); immagine 98c81726 per il T23](2026-10-13-06-tredici-consegne-immagine-98c81726.md) | 13 ott | modifiche (kernel, driver, desktop, SDK, test), immagine |

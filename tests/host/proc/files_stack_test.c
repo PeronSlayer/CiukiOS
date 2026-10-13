@@ -24,8 +24,7 @@ void rec_emit(const char *probe, const char *event, const char *format, ...)
     record_bytes += (unsigned)n;
     records[record_bytes++] = '\n';
 }
-static struct storage host_storage;
-struct storage *storage_get(void) { return &host_storage; }
+/* storage_get() and its storage come from files_test.c (f1-43: media_observation). */
 struct storage_volume *storage_volume(struct storage *s, unsigned drive)
 { return s && drive < 26 ? &s->volumes[drive] : 0; }
 #include "../../../src/kernel/probes/f2_probes_files.c"
@@ -76,7 +75,7 @@ static int interrupted_read(struct blkdev *d, uint64_t lba, uint32_t n, void *b)
 static int interrupted_write(struct blkdev *d, uint64_t lba, uint32_t n, const void *b)
 {
     interrupt_at_io();
-    host_storage.volumes[2].writes += n;
+    media_observation.volumes[2].writes += n;
     return stack_write_fn(d, lba, n, b);
 }
 static int interrupted_flush(struct blkdev *d)
