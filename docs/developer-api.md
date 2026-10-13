@@ -659,6 +659,28 @@ struct ciuki_net_state {
 };
 ```
 
+F1-43: /dev/media devctl. A removal names one mounted partition but
+ejects the entire USB device. The generation rejects stale UI requests.
+
+```c
+#define CIUKI_MEDIA_VERSION 1u
+#define MEDIA_GET_STATE 0x4d01u
+#define MEDIA_SAFE_REMOVE 0x4d02u
+struct ciuki_media_state {
+    uint32_t version;
+    uint32_t size;
+    uint32_t removable_mask;
+    uint32_t reserved;
+    uint32_t generation[26];
+};
+struct ciuki_media_remove {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+};
+```
+
 F4-01: fixed copied device-control extension.
 
 ```c
@@ -2379,6 +2401,20 @@ int ciuki_font_paint(struct ciuki_font_face *, unsigned em_size, const char *, s
                      int x, int baseline, ciuki_font_painter, void *, int32_t *advance);
 int ciuki_font_cache_info(struct ciuki_font_face *, struct ciuki_font_cache_stats *);
 void ciuki_font_cache_clear(struct ciuki_font_face *);
+#endif
+```
+
+## `ciuki/media.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/media.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_MEDIA_H
+#define CIUKI_SDK_MEDIA_H
+#include <ciuki/abi.h>
+int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
 #endif
 ```
 
