@@ -507,6 +507,7 @@ enum ciuki_syscall {
     CIUKI_SYS_DISPLAY = 74,
     CIUKI_SYS_LAUNCH_MARK = 75,
     CIUKI_SYS_DEVICES = 76,
+    CIUKI_SYS_DISPLAY_ACCEL = 77,
 };
 ```
 
@@ -1646,6 +1647,37 @@ uint32_t height;
 
 ```c
 };
+```
+
+Optional display-grant service. Native rectangles have software fallback;
+cursor returns -EOPNOTSUPP when the desktop must draw its overlay.
+Generation prevents stale operations across a firmware mode change.
+
+```c
+enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
+       CIUKI_ACCEL_PATTERN, CIUKI_ACCEL_CURSOR_SET, CIUKI_ACCEL_CURSOR_MOVE,
+       CIUKI_ACCEL_CURSOR_SHOW };
+struct ciuki_accel_request {
+    uint32_t size;
+    uint32_t operation;
+    uint32_t generation;
+    uint32_t colour;
+    uint32_t background;
+    struct ciuki_rect rect;
+    uint8_t pattern[8];
+    uint32_t cursor_mask[32];
+```
+
+MSB first
+
+```c
+uint32_t cursor_image[32];
+};
+
+
+
+
+
 
 struct ciuki_input_event {
     uint32_t sequence;
@@ -2048,10 +2080,23 @@ printable ASCII bytes. Updates only the sending client's window.
 
 ```c
 DESK_SET_TITLE,
-    DESK_SOUND
+    DESK_SOUND,
 ```
 
 v2: uint32 event; toolkit menu and dialog events
+
+```c
+DESK_FILE_DROP
+```
+
+v2: copy flag, client-relative release x/y; Files only
+
+```c
+,
+    DESK_SYSTEM_QUERY, DESK_SYSTEM_INFO
+```
+
+f1-25: explicit opt-in, v2 desktop performance sample
 
 ```c
 };
@@ -2118,6 +2163,13 @@ SETTINGS: left/right/mute or mode id/0/0
 
 ```c
 uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
+    uint64_t performance[9];
+```
+
+frames, damage px, presents, LFB bytes, composite,
+present, input, max input lag (all ns), interval ns
+
+```c
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);
@@ -2333,6 +2385,12 @@ int ciuki_surface_create(uint32_t,uint32_t,uint32_t);
 void *ciuki_surface_map(int,int);
 int ciuki_surface_info(int,struct ciuki_surface_info *);
 int ciuki_present(int,int,const struct ciuki_rect *);
+```
+
+Returns the service result or a negative errno, without errno translation.
+
+```c
+int ciuki_display_accel(int,const struct ciuki_accel_request *);
 int ciuki_display_info(int,struct ciuki_framebuffer_info *);
 int ciuki_input_read(int,struct ciuki_input_event *,uint32_t);
 #endif
@@ -2643,6 +2701,7 @@ DU_CANVAS };
 #define DU_TAB_H 20
 
 struct du_widget {
+    int file_drag, file_drag_x, file_drag_y;
     enum du_kind kind;
     int id;
     struct du_rect box;
@@ -2740,7 +2799,7 @@ struct du_menu { const char *label; struct du_menu_item *items; unsigned count; 
 enum du_event_type {
     DU_EV_ACTIVATE = 1, DU_EV_SELECT, DU_EV_OPEN, DU_EV_SORT, DU_EV_CONTEXT, DU_EV_CHANGE,
     DU_EV_COMMIT, DU_EV_CANCEL, DU_EV_KEY, DU_EV_TICK, DU_EV_DIALOG, DU_EV_FOCUS,
-    DU_EV_POINTER
+    DU_EV_POINTER, DU_EV_DRAG
 };
 ```
 
