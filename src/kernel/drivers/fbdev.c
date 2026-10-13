@@ -6,7 +6,9 @@
 #include <ciuki/registry.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/accel.h>
-extern const struct accel_ops *savage2d_init(const struct fb_device *) __attribute__((weak));
+#include <ciuki/work.h>
+extern const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *) __attribute__((weak));
+extern bool kwork_queue(kwork_fn, void *) __attribute__((weak));
 extern void savage2d_record(void) __attribute__((weak));
 extern void console_framebuffer_revoke(void) __attribute__((weak));
 extern void console_framebuffer_changed(const struct fb_device *) __attribute__((weak));
@@ -18,6 +20,8 @@ static struct fb_device device;
 static struct kmutex presenter;
 static const struct accel_ops *acceleration;
 static bool initialized, changing;
+static struct vfs *accel_vfs;
+static bool accel_queued;
 static void *change_window;
 static uint32_t change_capacity;
 static unsigned console_rows;
@@ -172,18 +176,37 @@ int fbdev_init(void)
     kmutex_init(&presenter);
     device = d;
     initialized = true;
-    /* Savage 2D acceleration is opt-in until it is qualified on the T23: its
-     * engine initialisation stalled the boot there on 2026-10-13 (no
-     * "[init] framebuffer" line after the flags). Software presents
-     * otherwise; a dedicated test image defines CIUKI_ACCEL_SAVAGE. */
-#ifdef CIUKI_ACCEL_SAVAGE
-    if (savage2d_init) {
-        klog("[accel] savage init");
-        acceleration = savage2d_init(&device);
-        klog("[accel] savage ready=%u", acceleration != NULL);
-    }
-#endif
     return 0;
+}
+
+static void accel_work(void *arg)
+{
+    (void)arg;
+    kmutex_lock(&presenter);
+    if (!changing && device.present && !acceleration) {
+        unsigned idle = 0;
+        /* Init yields while resetting/programming. Suppress the nonwaiting
+         * console as well as mutex-owned presenters for that whole interval. */
+        if (__atomic_compare_exchange_n(&drawing, &idle, PRESENT_BUSY, false,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            acceleration = savage2d_init(&device, accel_vfs);
+            __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
+        } else klog("[accel] savage quarantined reason=console_busy");
+    }
+    accel_queued = false;
+    kmutex_unlock(&presenter);
+}
+
+void fbdev_accel_schedule(struct vfs *vfs)
+{
+    if (g_boot.flags & CBI_F_SAFE_MODE) return;
+    accel_vfs = vfs;
+    if (!initialized || !device.present || !savage2d_init || accel_queued || acceleration) return;
+    accel_queued = true;
+    if (!kwork_queue || !kwork_queue(accel_work, 0)) {
+        accel_queued = false;
+        klog("[accel] savage quarantined reason=work_unavailable");
+    }
 }
 
 const struct fb_device *fbdev_get(void) { return &device; }
@@ -533,7 +556,7 @@ int fbdev_change_commit(const struct fb_device *next)
 void fbdev_change_end(void)
 {
     kmutex_lock(&presenter);
-    if (savage2d_init && device.present) acceleration = savage2d_init(&device);
     changing = false;
     kmutex_unlock(&presenter);
+    if (accel_vfs) fbdev_accel_schedule(accel_vfs);
 }

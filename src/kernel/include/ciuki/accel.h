@@ -20,5 +20,6 @@ struct accel_ops {
     unsigned (*capabilities)(void *); /* bit 0 rectangles, bit 1 cursor */
     bool (*cpu_ready)(void *); /* cached, nonwaiting console/panic check */
 };
-const struct accel_ops *savage2d_init(const struct fb_device *);
+struct vfs;
+const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *);
 #endif

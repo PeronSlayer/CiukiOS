@@ -14,9 +14,11 @@ struct savage_io {
     uint8_t (*read_cr)(void *, uint8_t);
     void (*write_cr)(void *, uint8_t, uint8_t);
     uint64_t (*now_us)(void *);
-    void (*relax)(void *);
+    int (*delay_us)(void *, uint32_t);
     void (*drain)(void *);
     void (*fault)(void *);
+    uint8_t (*read8)(void *, uint32_t);
+    void (*write8)(void *, uint32_t, uint8_t);
 };
 struct savage2d {
     struct savage_io io;
@@ -25,8 +27,10 @@ struct savage2d {
     uint8_t *cursor;
     uint8_t saved40, saved31, saved50, saved45, saved55;
     uint32_t saved_bci, saved_gbd[2];
+    uint32_t idle_mask, idle_value;
+    const char *reason;
     uint64_t operations, idle_waits, fallbacks, timeouts;
-    bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded;
+    bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded, status_logged;
 };
 bool savage2d_supported(const struct pci_func *);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,
