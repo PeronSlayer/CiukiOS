@@ -842,8 +842,9 @@ int biosvm_selftest(struct biosvm_selftest_report *r)
            r->disallowed == 1 && r->timeouts == 1 ? 0 : -EFAULT;
 }
 
-/* Runtime video gets its own leases and temporary VM aperture. The native
- * driver has no accelerator/DMA; unexpected BAR/chipset I/O stays denied.
+/* Runtime video gets exclusive leases only after fbdev stops acceleration.
+ * Release after the serialized call and temporary aperture are inactive;
+ * unexpected BAR/chipset I/O stays denied.
  * QEMU std VGA uses Bochs DISPI index/data words at 1CEh/1CFh. */
 static int claim_video(void)
 {
@@ -873,9 +874,32 @@ int biosvm_video_prepare(void)
     int e = biosvm_init_for(g_boot.input_policy == CBI_INPUT_FIRMWARE);
     if (e) return e;
     kmutex_lock(&request_mutex);
-    e = quarantined || firmware.state == V86_DISABLED ? -V86_EIO : claim_video();
+    /* Display preparation precedes fbdev_change_begin: Savage may still own
+     * the VGA ports. Only prepare the VM here; switch claims after stop. */
+    e = quarantined || firmware.state == V86_DISABLED ? -V86_EIO : 0;
     kmutex_unlock(&request_mutex);
     return e;
+}
+static bool video_idle(int handle, gen_t generation)
+{
+    (void)handle; (void)generation;
+    /* request_mutex held, worker returned, callback and VGA mappings revoked. */
+    return !video_active && !request_pending && !firmware.io;
+}
+static int release_video(void)
+{
+    if (quarantined) return -V86_EIO;
+    for (unsigned i = 0; i < video_lease_count; i++) {
+        int h = video_leases[i].handle;
+        gen_t gen = video_leases[i].generation;
+        if (registry_quiesce(h, gen, video_idle) || registry_release(h, gen)) {
+            quarantine();
+            return -V86_EIO;
+        }
+    }
+    video_claimed = false;
+    video_lease_count = 0;
+    return 0;
 }
 
 static int video_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *value)
@@ -931,6 +955,7 @@ revoke:
     firmware.io = 0;
     firmware.max_call_ms = 0;
     for (uint32_t p = 0xA0000; p < 0xC0000; p += PAGE_SIZE) pt[p >> 12] = 0;
+    if (!quarantined && release_video()) e = -V86_EIO;
 done:
     kmutex_unlock(&request_mutex);
     return e;

@@ -19,6 +19,9 @@ struct savage_io {
     void (*fault)(void *);
     uint8_t (*read8)(void *, uint32_t);
     void (*write8)(void *, uint32_t, uint8_t);
+    /* Byte VGA I/O only: inclusive 0x3b0, exclusive 0x3e0. */
+    uint8_t (*read_port)(void *, uint16_t);
+    void (*write_port)(void *, uint16_t, uint8_t);
 };
 struct savage2d {
     struct savage_io io;
@@ -31,6 +34,7 @@ struct savage2d {
     const char *reason;
     uint64_t operations, idle_waits, fallbacks, timeouts;
     bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded, status_logged;
+    bool mmio_saved, status_ready;
 };
 bool savage2d_supported(const struct pci_func *);
 /* Attempt marker file I/O for kernel callers, outside presenter locks. */

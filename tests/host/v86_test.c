@@ -1314,7 +1314,9 @@ static void test_video_calls(void)
         CHECK(!biosvm_video_switch(0x111, m));
         CHECK(video_call_count == 3 && video_calls[0] == 0x4F02 && video_calls[1] == 0x4F01 && video_calls[2] == 0x4F03);
         CHECK(m[0] == 0x91 && getword(m + 18, 2) == 640 && getword(m + 50, 2) == 2560);
-        CHECK(video_lease_count == 3 && !video_active && !firmware.io && !firmware.max_call_ms);
+        CHECK(!video_lease_count && !video_claimed && !video_active && !firmware.io && !firmware.max_call_ms);
+        for (unsigned i=0;i<registry_count();i++)
+            if (!strcmp(registry_get(i)->owner,"firmware-video")) CHECK(registry_get(i)->state==RS_RELEASED);
         CHECK(!vm_memory(0, 0xA0000, 1, false));
         CHECK(input_enabled == !native && lease_count == (native ? 0u : 4u));
         if (native) CHECK(!irq_fake[1] && !irq_fake[12]);
@@ -1324,6 +1326,7 @@ static void test_video_calls(void)
         video_fail_ax = 0x4F01; video_call_count = 0;
         CHECK(biosvm_video_switch(0x112, m) == -V86_EIO && video_call_count == 2);
         CHECK(!quarantined && !video_active && !vm_memory(0, 0xA0000, 1, false));
+        CHECK(!video_claimed && !video_lease_count); /* completed VBE error also releases */
         CHECK(!biosvm_video_switch(0x111, m) && video_current_mode == 0x111 && video_call_count == 5);
         CHECK(video_calls[2] == 0x4F02 && video_calls[3] == 0x4F01 && video_calls[4] == 0x4F03);
         video_active = true;
@@ -1339,7 +1342,22 @@ static void test_video_calls(void)
         CHECK(biosvm_video_switch(0x111, m) == -V86_EIO && enters == before);
         CHECK(!video_active && !vm_memory(0, 0xA0000, 1, false));
         for (unsigned i = 0; i < video_lease_count; i++) CHECK(registry_get(video_leases[i].handle)->state == RS_QUARANTINED);
+        CHECK(video_lease_count==3 && video_claimed);
     }
+    /* Preparation may run while Savage owns the same VGA ports. It performs
+     * no video claim or firmware call; switch is invoked only after stop. */
+    boot_fixture(true); g_boot.input_policy=CBI_INPUT_NATIVE;
+    video_rom=true; ivt(0x10,0xF000,0x700); ram[0xF0700]=0xCF;
+    int h=registry_claim(RES_PORT,0x3b0,0x3e0,"savage-vga",false);
+    CHECK(h>=0); gen_t gen=registry_get(h)->generation;
+    CHECK(!registry_activate(h,gen));
+    unsigned before=enters;
+    CHECK(!biosvm_video_prepare() && enters==before && !video_claimed && !video_lease_count);
+    CHECK(registry_get(h)->state==RS_ACTIVE && registry_get(h)->generation==gen);
+    CHECK(!registry_quiesce(h,gen,video_idle) && !registry_release(h,gen));
+    uint8_t m[256]; CHECK(!biosvm_video_switch(0x111,m) && !video_claimed && !video_lease_count);
+    h=registry_claim(RES_PORT,0x3b0,0x3e0,"savage-vga",false);
+    CHECK(h>=0); /* firmware released the port interval for the next accelerator */
     puts("PASS biosvm video: serialized 4F02(LFB)/4F01/4F03, query failure/restore, temporary aperture/leases, native-input isolation, timeout quarantine");
 }
 

@@ -135,6 +135,59 @@ verifies BCI disabled before restoring descriptors. Verbose breadcrumbs remain;
 each attempted/declined supported activation emits `ready` or
 `quarantined reason=...`, with a separate previous-attempt skip record.
 
+## f1-38: bootstrap register access through exclusive VGA ports
+
+Research rechecked on 2026-10-13 against [RE046-B](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf),
+CR38/CR39 (printed pp. 75–76) and CR40 (p. 78), and the
+[X.Org driver](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c)
+(`SavageEnableMMIO`, `SavageDisableMMIO`, PreInit/Save unlock) and
+[Linux driver](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c)
+(`savage_enable_mmio`). Both drivers program VGA enable at 3c3h, colour
+decode at 3c2h/3cch and CR40.0 for Savage4 and later chips, including
+SuperSavage. However, [Linux's transport helpers](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb.h)
+map those VGA addresses onto MMIO at +8000h; they do not use legacy ports.
+The reviewed X.Org C file uses VGAIN8/VGAOUT8 macros; its transport headers
+could not be fetched, so the directive's claim about their physical port
+transport was not confirmed. RE046-B accepts CR39's 101xxxxx unlock pattern;
+A0h is sufficient, while A5h also permits writes to CR36/37/68/6f. Use
+CR38=48h/CR39=A0h throughout. A5h was therefore valid, but broader than
+needed; it was not itself evidence of the T23 failure.
+
+The manual describes CR40.0 as engine-register I/O access, not explicitly
+as a gate for the MMIO VGA alias. The upstream comparison does not establish
+that gate. The f1-38 port-first sequence implements the written experimental
+directive, and the host model exercises its alias-gating hypothesis; the
+lead must confirm the cause of the T23 readback failure on silicon.
+`SavageDisableMMIO` in the reviewed X.Org source sets bit 0 too; it is not
+evidence for clearing it. CiukiOS restores its saved original bit as required.
+
+Before any MMIO access, read/write 3c3h with bit 0 set; read 3cch and write
+3c2h with bit 0 set; unlock CR38/39 through 3d4h/3d5h and read both back.
+Only these port readbacks can report `crtc_locked`. Save CR40 through the
+ports, set bit 0 preserving all others, and verify (`mmio_enable_failed`).
+Compare MMIO CR38 with the port value (`mmio_alias_dead`). Only then unlock
+SR08, select IGA1, verify MISC, pulse CR66.1 preserving CR66.0, and perform
+the existing bounded idle/BCI/descriptor sequence. No MM48C60 read precedes
+the completed CR66 reset. Stop and every quarantine path restore CR40.0
+through the ports after the last alias access, preserving the current other
+bits. Verbose reads have a `value=pending` breadcrumb before the bus cycle
+and a numeric `value=` completion; writes include the requested value.
+
+The Savage transport admits byte ports only in [3b0h,3e0h). The driver
+requires firmware-enabled PCI I/O and memory decoding and claims that range
+exclusively as `savage-vga` before register access. `registry_init` does not
+reserve VGA ports; `biosvm` previously retained an overlapping `firmware-video`
+claim. Firmware preparation now initializes dependencies without claiming
+video resources. `fbdev_change_begin` still sets `changing`, waits for the
+presenter, and stops acceleration before firmware calls. Successful Savage
+stop restores CR40, revokes MMIO aliases, then quiesces/releases its VGA
+claim. Firmware claims video resources inside the subsequent serialized
+switch and releases them only after requests, callbacks and temporary VGA
+mappings are inactive. Completed VBE errors also release; VM/ownership faults
+retain quarantined leases. `fbdev_change_end` then schedules the next attempt.
+No shared port lease or overlapping access is allowed. Attempt-marker ordering
+and durability remain unchanged.
+
 ## Display grant wire service
 
 Syscall 77, `CIUKI_SYS_DISPLAY_ACCEL`: EBX is the noninheritable display
