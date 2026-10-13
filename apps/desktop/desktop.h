@@ -109,6 +109,7 @@ struct desk_power_sequence {
     struct desk_power_target targets[DESK_CLIENTS * 2];
     char text[320];
 };
+struct desk_render_cache;
 struct desktop {
     struct desk_ops ops;
     int display, input, output, focus, drag;
@@ -126,6 +127,8 @@ struct desktop {
     struct desk_damage damage;
     struct desk_damage present_damage;
     struct desk_dirty_runs *rows; uint32_t row_height;
+    struct desk_render_cache *render_cache;
+    int render_cache_prepared;
     int frame_valid, scanout_valid;
     struct desk_damage move_damage;
     uint32_t cursor_under[11*17]; struct desk_box cursor_box;

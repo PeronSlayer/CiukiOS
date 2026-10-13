@@ -646,6 +646,7 @@ void desk_shell_enable(struct desktop *d)
 {
     if (d->shell) return;
     d->shell = 1;
+    d->sh.autoplay.workspace=ap_workspace_create();
     /* desktop.c loads desktop.cfg first; otherwise the built-in defaults. */
     if (!d->sh.cfg.theme[0]) desk_shell_reset(d);
     d->sh.icon_selected = d->sh.click_icon = -1;

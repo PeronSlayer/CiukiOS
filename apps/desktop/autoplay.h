@@ -15,15 +15,19 @@ struct ap_content {
     int run_kind; /* 1 DOS, 2 Windows, 3 unsupported command */
 };
 struct ap_preference { char id[40], label[64]; int action; };
+struct ap_workspace;
 struct desk_autoplay {
     struct ciuki_media_volume pending[26], active;
     uint32_t seen[26], waiting;
     struct ap_content content;
+    struct ap_workspace *workspace;
     int open, selected, always, want_commit;
 };
 int ap_parse(struct ap_inf *, const char *, size_t);
 int ap_drive_label(const struct fm_vfs *, unsigned drive, char out[33]);
 int ap_probe(const struct fm_vfs *, unsigned drive, struct ap_content *);
+struct ap_workspace *ap_workspace_create(void);
+int ap_probe_workspace(const struct fm_vfs *, unsigned drive, struct ap_content *, struct ap_workspace *);
 const char *ap_action_name(int);
 /* Registry adapter; directory NULL selects the installed registry. */
 int ap_preference_get(const char *directory, const char *id);

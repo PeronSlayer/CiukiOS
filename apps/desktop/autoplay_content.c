@@ -90,6 +90,7 @@ static int entry(const char *name,const struct fm_meta *meta,void *ctx)
     return 0;
 }
 struct ap_workspace { struct scan s, sub; unsigned char data[AP_INF_MAX+1]; };
+struct ap_workspace *ap_workspace_create(void) { return calloc(1,sizeof(struct ap_workspace)); }
 int ap_drive_label(const struct fm_vfs *fs,unsigned drive,char out[33])
 {
     out[0]=0; if (drive<3 || drive>=26) return -EINVAL;
@@ -144,6 +145,11 @@ static int probe(const struct fm_vfs *fs,unsigned drive,struct ap_content *c,str
 }
 int ap_probe(const struct fm_vfs *fs,unsigned drive,struct ap_content *c)
 {
-    struct ap_workspace *w=calloc(1,sizeof(*w)); if (!w) { memset(c,0,sizeof(*c)); return -ENOMEM; }
-    int result=probe(fs,drive,c,w); free(w); return result;
+    struct ap_workspace *w=ap_workspace_create();
+    int result=ap_probe_workspace(fs,drive,c,w); free(w); return result;
+}
+int ap_probe_workspace(const struct fm_vfs *fs,unsigned drive,struct ap_content *c,struct ap_workspace *w)
+{
+    if (!w) { memset(c,0,sizeof(*c)); return -ENOMEM; }
+    memset(w,0,sizeof(*w)); return probe(fs,drive,c,w);
 }

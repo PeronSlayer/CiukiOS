@@ -779,8 +779,16 @@ static void test_network_service(void)
     network_available = 0; desk_render_release(&d); fake_reset();
     puts("PASS network service: timer/reload, open/devctl/close, unchanged state, failures and recovery");
 }
-int main(void)
+#ifdef DESK_FOOTPRINT_TEST
+#include "memory_footprint_test.h"
+#endif
+int main(int argc,char **argv)
 {
+#ifdef DESK_FOOTPRINT_TEST
+    if (argc==2 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(); return 0; }
+#else
+    (void)argc; (void)argv;
+#endif
     test_network_service();
     test_music_mixer();
     struct desktop d;

@@ -25,6 +25,8 @@ static void background(unsigned seed)
 
 static void frames(void)
 {
+    struct desktop d={.width=RW,.height=RH};
+    render_cache_prepare(&d); assert(d.render_cache);
     static const char *const themes[]={"Platinum","Ciuki Blue","Classic 98"};
     for (unsigned t=0; t<3; t++) {
         assert(!desk_theme_use(themes[t]));
@@ -45,7 +47,7 @@ static void frames(void)
                     !desk_intersect(v,(struct desk_box){0,0,RW,RH},&v)) continue;
                 p.cx=v.x; p.cy=v.y; p.cw=v.w; p.ch=v.h;
                 struct desk_paint q=p; q.pixels=b;
-                frame_border(&p,k%4,f,&s);
+                frame_border(&d,&p,k%DESK_CLIENTS,f,&s);
                 desk_paint_frame_border(&q,f.x,f.y,f.w,f.h,&s);
                 if (memcmp(a,b,sizeof(a))) {
                     for (unsigned i=0; i<RW*RH; i++) if (a[i]!=b[i]) {
@@ -58,6 +60,7 @@ static void frames(void)
             }
         }
     }
+    desk_render_release(&d);
 }
 
 static void shadows(void)
@@ -226,13 +229,14 @@ static void pacing_latency(void)
 int main(void)
 {
     frames(); shadows(); text(); visibility(); dirty_rows(); presentation(); pacing_latency();
-    struct desktop d={0}; desk_render_release(&d);
+    struct desktop d={.width=RW,.height=RH};
     background(37);
     struct desk_paint p={a,RW,RH,0,0,RW,RH}, q=p; q.pixels=b;
     struct desk_box f={0,0,150,120};
     struct desk_frame_style style={.title="No memory",.active=1,.buttons=DESK_TB_CLOSE};
     fail_allocation=1;
-    frame_border(&p,0,f,&style); assert(!fail_allocation);
+    render_cache_prepare(&d); assert(!fail_allocation && !d.render_cache && d.render_cache_prepared);
+    frame_border(&d,&p,0,f,&style);
     desk_paint_frame_border(&q,f.x,f.y,f.w,f.h,&style);
     assert(!memcmp(a,b,sizeof(a)));
     puts("PASS compositor rows: frame cache invalidation/moves/clips/allocation fallback, shadow oracle, fonts/UTF-8, every icon alpha, opaque visibility/fragmentation fallback");

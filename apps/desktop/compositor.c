@@ -397,14 +397,32 @@ static void portrait_at(struct desktop *d, struct desk_box clip, int32_t x, int3
  * theme.c is duplicated here; title, icon bytes and every style input key
  * the cache. Small/unusual frames and allocation failure use the painter. */
 enum { CAPTION_CACHES=DESK_CLIENTS, CAPTION_MAX_WIDTH=2048 };
-static struct caption_cache {
+struct caption_cache {
     uint32_t *pixels;
     const struct desk_theme *theme;
     int w, h;
     struct desk_frame_style style;
     char title[DESK_TITLE_MAX+1];
     uint32_t icon[16*16];
-} captions[CAPTION_CACHES];
+};
+struct desk_render_cache {
+    unsigned width, height;
+    struct caption_cache captions[CAPTION_CACHES];
+    uint32_t pixels[];
+};
+static void render_cache_prepare(struct desktop *d)
+{
+    if (d->render_cache_prepared) return;
+    d->render_cache_prepared=1;
+    unsigned w=d->width<CAPTION_MAX_WIDTH ? d->width : CAPTION_MAX_WIDTH;
+    unsigned h=d->height<CAPTION_MAX_WIDTH ? d->height : CAPTION_MAX_WIDTH;
+    size_t stride=(size_t)w*(DESK_TITLE+DESK_BORDER)+2u*DESK_BORDER*h;
+    struct desk_render_cache *cache=malloc(sizeof(*cache)+CAPTION_CACHES*stride*sizeof(*cache->pixels));
+    if (!cache) return; /* Keep the painter fallback; never allocate on a client event. */
+    memset(cache,0,sizeof(*cache)); cache->width=w; cache->height=h;
+    for (unsigned i=0;i<CAPTION_CACHES;i++) cache->captions[i].pixels=cache->pixels+i*stride;
+    d->render_cache=cache;
+}
 
 static void xrgb_row(uint32_t *restrict dst, const uint32_t *restrict src, int w)
 {
@@ -419,15 +437,16 @@ static void xrgb_row(uint32_t *restrict dst, const uint32_t *restrict src, int w
     for (; x<w; x++) dst[x]=src[x]&0xffffffu;
 }
 
-static void frame_border(struct desk_paint *p, int index, struct desk_box f,
+static void frame_border(struct desktop *d, struct desk_paint *p, int index, struct desk_box f,
                          const struct desk_frame_style *s)
 {
     int pad=desk_theme->radius+1;
     if (pad<1) pad=1;
-    if (f.w<=2*pad || f.w>CAPTION_MAX_WIDTH || f.h<=DESK_TITLE+3 || f.h>CAPTION_MAX_WIDTH) {
+    if (!d->render_cache || f.w<=2*pad || (unsigned)f.w>d->render_cache->width ||
+        f.h<=DESK_TITLE+3 || (unsigned)f.h>d->render_cache->height) {
         desk_paint_frame_border(p,f.x,f.y,f.w,f.h,s); return;
     }
-    struct caption_cache *c=&captions[index%CAPTION_CACHES];
+    struct caption_cache *c=&d->render_cache->captions[index%CAPTION_CACHES];
     const char *title=s->title ? s->title : "";
     int same=c->pixels && c->theme==desk_theme && c->w==f.w && c->h==f.h &&
         c->style.active==s->active && c->style.alert==s->alert && c->style.collapsed==s->collapsed &&
@@ -435,12 +454,6 @@ static void frame_border(struct desk_paint *p, int index, struct desk_box f,
         !strcmp(c->title,title) && !!c->style.icon==!!s->icon &&
         (!s->icon || !memcmp(c->icon,s->icon,sizeof(c->icon)));
     if (!same) {
-        if (!c->pixels || c->w!=f.w || c->h!=f.h) {
-            size_t count=(size_t)f.w*(DESK_TITLE+DESK_BORDER)+2u*DESK_BORDER*f.h;
-            uint32_t *next=malloc(count*sizeof(*next));
-            if (!next) { desk_paint_frame_border(p,f.x,f.y,f.w,f.h,s); return; }
-            free(c->pixels); c->pixels=next;
-        }
         c->w=f.w; c->h=f.h; c->theme=desk_theme; c->style=*s;
         snprintf(c->title,sizeof(c->title),"%s",title);
         if (s->icon) memcpy(c->icon,s->icon,sizeof(c->icon));
@@ -522,7 +535,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
         .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
     DESK_PROFILE("captions", {
         if (c->internal || c->collapsed) desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s);
-        else frame_border(&p,i,f,&s);
+        else frame_border(d,&p,i,f,&s);
     });
     struct desk_box content = desk_content(c), b;
     if (c->collapsed) return;
@@ -690,11 +703,12 @@ static void cursor(struct desktop *d, struct desk_box clip)
 void desk_composite(struct desktop *d, struct desk_box clip)
 {
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
+    render_cache_prepare(d);
     scene(d,clip); DESK_PROFILE("cursor", cursor(d,clip));
 }
 void desk_render_release(struct desktop *d)
 {
-    for (unsigned i=0; i<CAPTION_CACHES; i++) { free(captions[i].pixels); captions[i]=(struct caption_cache){0}; }
+    free(d->render_cache); d->render_cache=NULL; d->render_cache_prepared=0;
     d->scanout_valid=d->frame_valid=0;
     d->copy_pending=0; d->move_damage.count=0;
     free(d->rows); d->rows=NULL; d->row_height=0;
@@ -962,6 +976,7 @@ int desk_redraw(struct desktop *d)
 {
     if (!d->damage.count && !d->move_damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
     uint64_t frame_begin=time_now(d);
+    render_cache_prepare(d);
     if (!d->rows || d->row_height!=d->height) {
         struct desk_dirty_runs *next=malloc((size_t)d->height*sizeof(*next));
         if (!next) { d->next_frame_ns=frame_begin+DESK_FRAME_NS; errno=ENOMEM; return -1; }

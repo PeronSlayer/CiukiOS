@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
- * The worker owns all audio/file I/O. The compositor only queues events and
- * reads completion; no AUDIO_DRAIN or audio writes run in its thread. */
+ * Initialisation reserves PCM storage and reads the small scheme before the
+ * first frame. The worker owns WAV/audio I/O; the compositor only queues events
+ * and reads completion, with no AUDIO_DRAIN or audio writes in its thread. */
 #include "desktop.h"
 #include "sounds.h"
 #include "sound_runtime.h"
@@ -95,29 +96,28 @@ static void cancel(struct desktop *d)
 { (void)d; rt.shutting = 0; (void)push(CMD_STOP,0); }
 struct worker {
     struct sound_scheme scheme;
-    uint8_t *files[SOUND_EVENTS]; struct sound_clip clips[SOUND_EVENTS];
+    uint8_t files[SOUND_EVENTS][SOUND_FILE_MAX+1]; struct sound_clip clips[SOUND_EVENTS];
     struct sound_player player;
     int16_t tone[SOUND_RATE];
     int fd, hardware; uint64_t hardware_deadline, drain_until;
     uint32_t drain_ms;
     int mixer; struct sound_throttle played;
 };
-static void reload(struct worker *w)
+static void reload(struct worker *w, int settings)
 {
-    (void)sound_load_at(&w->scheme,SOUND_CFG,SOUND_LEGACY_CFG,REG_DIRECTORY);
+    if (settings) (void)sound_load_at(&w->scheme,SOUND_CFG,SOUND_LEGACY_CFG,REG_DIRECTORY);
     FILE *f;
     sound_reset(&w->player);
     if (w->fd >= 0) { close(w->fd); w->fd = -1; }
     w->drain_until = 0;
     for (unsigned k = 0; k < SOUND_EVENTS; k++) {
-        free(w->files[k]); w->files[k] = NULL; w->clips[k] = (struct sound_clip){0};
+        w->clips[k] = (struct sound_clip){0};
         char path[128]; if (sound_path(&w->scheme,k,path,sizeof(path))) continue;
         f = fopen(path,"rb"); if (!f) continue;
-        uint8_t *data = malloc(SOUND_FILE_MAX+1);
-        size_t n = data ? fread(data,1,SOUND_FILE_MAX+1,f) : 0;
+        uint8_t *data = w->files[k];
+        size_t n = fread(data,1,SOUND_FILE_MAX+1,f);
         int bad = ferror(f); fclose(f);
-        if (bad || sound_wav(data,n,&w->clips[k])) free(data);
-        else w->files[k] = data;
+        if (bad || sound_wav(data,n,&w->clips[k])) w->clips[k] = (struct sound_clip){0};
     }
 }
 static int device(struct worker *w)
@@ -161,12 +161,10 @@ static int permitted(struct worker *w, int preview)
     }
     return sound_allowed(&w->scheme,preview,m.mute != 0,!!(d.flags & CIUKI_AUDIO_DIAG_VM_ACTIVE));
 }
-static void *worker(void *unused)
+static void *worker(void *arg)
 {
-    (void)unused;
-    struct worker *w = calloc(1,sizeof(*w));
-    if (!w) { pthread_mutex_lock(&rt.lock); rt.live = rt.busy = 0; pthread_mutex_unlock(&rt.lock); hardware_result(-ENOMEM); return NULL; }
-    w->fd = w->mixer = -1; sound_tone(w->tone); reload(w);
+    struct worker *w = arg;
+    w->fd = w->mixer = -1; sound_tone(w->tone); reload(w,0);
     for (;;) {
         struct command cmd = {0}; int have;
         pthread_mutex_lock(&rt.lock);
@@ -175,7 +173,7 @@ static void *worker(void *unused)
         pthread_mutex_unlock(&rt.lock);
         if (have) {
             if (cmd.kind == CMD_STOP) stop(w);
-            else if (cmd.kind == CMD_RELOAD) { stop(w); reload(w); }
+            else if (cmd.kind == CMD_RELOAD) { stop(w); reload(w,1); }
             else if (cmd.kind == CMD_HARDWARE) {
                 stop(w); w->hardware = 1; w->hardware_deadline = now_ns()+2000000000ull;
                 sound_play(&w->player,(struct sound_clip){(const uint8_t *)w->tone,SOUND_RATE});
@@ -230,9 +228,12 @@ static void *worker(void *unused)
 }
 void desk_sound_init(struct desktop *d)
 {
+    struct worker *w=calloc(1,sizeof(*w));
+    if (!w) { fprintf(stderr,"desktop: sound storage unavailable\n"); return; }
+    (void)sound_load_at(&w->scheme,SOUND_CFG,SOUND_LEGACY_CFG,REG_DIRECTORY);
     pthread_t thread; rt.live = 1;
-    int r = pthread_create(&thread,NULL,worker,NULL);
-    if (r) { rt.live = 0; fprintf(stderr,"desktop: sound worker unavailable (%d)\n",r); return; }
+    int r = pthread_create(&thread,NULL,worker,w);
+    if (r) { rt.live = 0; free(w); fprintf(stderr,"desktop: sound worker unavailable (%d)\n",r); return; }
     pthread_detach(thread);
     d->sound_event = notify; d->sound_request = request;
     d->sound_shutdown = shutdown_wait; d->sound_cancel = cancel;
