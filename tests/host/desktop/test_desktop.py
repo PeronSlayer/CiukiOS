@@ -483,13 +483,14 @@ class DesktopTests(unittest.TestCase):
                                         "/system/icons/tango.cis",
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
                                         "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png",
+                                        "/System/hwids/pci-ids.json", "/System/hwids/usb-ids.json",
                                         "/system/settings/sounds.cfg",
                                         *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "sounds.cfg")})
         self.assertTrue({"/Programs", "/System", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers", "/Documents/Music", "/Documents/Pictures"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 57)  # F4-07 adds Music Player and its two decoder notices
+        self.assertEqual(len(records), 59)  # F4-07 Music Player and decoder notices; f2-43 hardware id tables
         for r in records:
             if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
@@ -500,6 +501,9 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(r["sha256"], m["inputs"]["sources"][source])
             elif r["path"].startswith("/system/sounds/") or r["path"] == "/system/settings/sounds.cfg":
                 self.assertEqual(r["sha256"], metadata["sounds"]["files"][Path(r["path"]).name])
+            elif r["path"].startswith("/System/hwids/"):
+                # f2-43: hardware id tables generated into assets/hwids, byte-identical.
+                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/hwids" / Path(r["path"]).name).read_bytes()).hexdigest())
             elif r["path"].startswith("/system/wallpapers/"):
                 # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())
