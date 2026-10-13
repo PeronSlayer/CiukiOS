@@ -1928,6 +1928,25 @@ dosvm(B=operation, C=record*, D=size); execution-abi.md, F3-02 amendment.
 #define CIUKI_DOSVM_FOCUS 4u
 #define CIUKI_DOSVM_CLOSE 5u
 #define CIUKI_DOSVM_STATUS 6u
+#define CIUKI_DOSVM_LAUNCH 7u
+```
+
+arm command visibility before its final Enter
+
+```c
+#define CIUKI_DOSVM_PRESENT_BANDS 8u
+```
+
+PRESENT plus destination 8-line damage
+
+```c
+#define CIUKI_DOSVM_VIDEO_READY 1u
+```
+
+STATUS.changed launch flags
+
+```c
+#define CIUKI_DOSVM_LAUNCH_FAILED 2u
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
@@ -1998,13 +2017,21 @@ char name[32];
 40
 
 ```c
-struct ciuki_input_event event;
+union {
+        struct ciuki_input_event event;
 ```
 
-72
+72: INPUT
 
 ```c
-struct ciuki_rect damage;
+struct { uint32_t bands[2], reserved[8]; } presentation;
+```
+
+PRESENT_BANDS output
+
+```c
+};
+    struct ciuki_rect damage;
 ```
 
 112

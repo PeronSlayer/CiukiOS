@@ -320,6 +320,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_AUDIO_DIAG_READY", CIUKI_AUDIO_DIAG_READY, 1u},
     {"constant.CIUKI_AUDIO_DIAG_RUNNING", CIUKI_AUDIO_DIAG_RUNNING, 2u},
     {"constant.CIUKI_AUDIO_DIAG_QUARANTINE", CIUKI_AUDIO_DIAG_QUARANTINE, 4u},
+    {"constant.CIUKI_AUDIO_DIAG_VM_ACTIVE", CIUKI_AUDIO_DIAG_VM_ACTIVE, 8u},
     {"alignof.ciuki_mixer_master", _Alignof(struct ciuki_mixer_master), 4u},
     {"offsetof.ciuki_mixer_master.version", __builtin_offsetof(struct ciuki_mixer_master, version), 0u},
     {"offsetof.ciuki_mixer_master.size", __builtin_offsetof(struct ciuki_mixer_master, size), 4u},
