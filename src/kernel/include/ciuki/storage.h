@@ -7,6 +7,13 @@
 
 #define STORAGE_DISKS 4u
 #define STORAGE_NTFS 8u
+struct ata_device;
+struct optical_binding {
+    struct ata_device *device;
+    uint64_t next_poll;
+    uint32_t attempted_generation, observed_generation;
+    int result;
+};
 struct storage_volume {
     struct blkpart part;
     struct blkdev io;                 /* counted forwarding view, never a snapshot copy */
@@ -38,6 +45,7 @@ struct storage {
     struct vfs vfs;
     struct storage_volume volumes[26];
     struct fs_ro_volume optical[STORAGE_DISKS];
+    struct optical_binding optical_bindings[STORAGE_DISKS];
     struct storage_ntfs ntfs[STORAGE_NTFS];
     int disk_errors[STORAGE_DISKS];
     bool disks[STORAGE_DISKS], ready, stopped;
@@ -55,7 +63,12 @@ int storage_add_removable(struct storage *, struct blkdev *);
 int storage_remove_removable(struct storage *, struct blkdev *, bool surprise);
 int storage_remove_removable_locked(struct storage *, struct blkdev *, bool surprise);
 int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
+int storage_add_ro_locked(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 void storage_refresh_ro(struct storage *);
+int optical_bind(struct storage *, unsigned slot, struct ata_device *);
+void optical_service(struct storage *, uint64_t now_ms);
+void optical_start_service(struct storage *);
+int optical_eject(struct storage *, unsigned drive, uint32_t generation);
 /* NTFS slot lifecycle. Mount returns the drive letter index (>= 3) or a
  * negative FS_E*; the refusal reason is ntfs[slot].ro.diagnostic. Unmount
  * refuses (EBUSY) while files are open and issues no media write. */

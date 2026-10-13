@@ -108,6 +108,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$out/fwqueue_i8042_test.c" -o "$out/i8042_test"
 "$out/i8042_test"
 
+python3 "$root/scripts/test/iso_fixtures.py" --out "$out/optical" --joliet > "$out/optical-manifest.json"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \
     "$root/tests/host/ata_test.c" "$root/src/kernel/fs/partition.c" \
@@ -367,7 +368,6 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "-DCIUKI_DESKTOP_PAYLOAD_BIN=\"$out/desktop-payload.elf\"" -o "$out/desktop_test"
 "$out/desktop_test" "$out/desktop-payload.elf"
 
-python3 "$root/scripts/test/iso_fixtures.py" --out "$out/optical" --joliet > "$out/optical-manifest.json"
 
 # F2 native files use the same mkfs/mtools fixtures and fake block layer as
 # the independent F1 harness. Fail-closed integration gaps are reported by name.

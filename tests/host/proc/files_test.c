@@ -654,6 +654,14 @@ static int media_result;
 struct storage *storage_get(void) { return &media_observation; }
 int usb_storage_eject(struct storage *s,unsigned drive,uint32_t gen)
 { CHECK(s==&media_observation && drive==4 && gen==123); media_removals++; return media_result; }
+static unsigned optical_removals;
+int optical_eject(struct storage *s,unsigned drive,uint32_t gen)
+{
+    CHECK(s==&media_observation);
+    if (drive!=3) return -FS_ENOENT;
+    if (gen!=321) return -FS_EIO;
+    optical_removals++; return media_result;
+}
 #include "../../../src/kernel/drivers/media_dev.c"
 static void test_media_node(void)
 {
@@ -666,9 +674,18 @@ static void test_media_node(void)
     struct blkdev b={.media_generation=123};
     media_observation.volumes[4]=(struct storage_volume){.present=true,.removable=true,.part={.parent=&b}};
     media_observation.vfs.volumes[4]=&media_observation.volumes[4].fat;
-    struct ciuki_media_state s={.version=1,.size=sizeof(s)};CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));
+    struct blkdev cd={.media_generation=321};
+    media_observation.optical[2]=(struct fs_ro_volume){.mounted=true,.dev=&cd,.mount_generation=321};
+    media_observation.vfs.ro_volumes[3]=&media_observation.optical[2];
+    struct ciuki_media_state s={.version=CIUKI_MEDIA_VERSION,.size=sizeof(s)};CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0));CHECK(!ua_read(client->memory,&s,USER,sizeof(s)));
-    CHECK(s.removable_mask==(1u<<4)&&s.generation[4]==123&&!s.generation[2]);
+    CHECK(s.removable_mask==((1u<<4)|(1u<<3))&&s.generation[4]==123&&!s.generation[2]);
+    CHECK(s.type[4]==CIUKI_MEDIA_USB && s.type[3]==CIUKI_MEDIA_OPTICAL && s.generation[3]==321);
+    struct ciuki_media_state_v1 old={.version=1,.size=sizeof(old)};
+    CHECK(!ua_write(client->memory,USER,&old,sizeof(old)));
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(old),0));
+    CHECK(!ua_read(client->memory,&old,USER,sizeof(old)) && old.removable_mask==s.removable_mask && old.generation[3]==321 && old.version==1);
+    CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,UINT32_MAX,sizeof(s),0)==-EFAULT);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s)-1,0)==-EINVAL);
     s.reserved=1;CHECK(!ua_write(client->memory,USER,&s,sizeof(s)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0)==-EINVAL);
@@ -677,8 +694,12 @@ static void test_media_node(void)
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,UINT32_MAX,sizeof(r),0)==-EFAULT&&media_removals==1);
     media_result=0;CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0)&&media_removals==2);
     r.generation=0;CHECK(!ua_write(client->memory,USER,&r,sizeof(r)));CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0)==-EINVAL&&media_removals==2);
+    r=(struct ciuki_media_remove){CIUKI_MEDIA_VERSION,sizeof(r),3,320};CHECK(!ua_write(client->memory,USER,&r,sizeof(r)));
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0)==-EIO && !optical_removals && media_removals==2);
+    r.generation=321;CHECK(!ua_write(client->memory,USER,&r,sizeof(r)));
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_SAFE_REMOVE,USER,sizeof(r),0) && optical_removals==1 && media_removals==2);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,0xffffffff,USER,sizeof(r),0)==-ENOTTY);
-    CHECK(!file_close(client,fd));media_observation.vfs.volumes[4]=0;vfs_destroy(&media_observation.vfs);media_observation.ready=false;
+    CHECK(!file_close(client,fd));media_observation.vfs.volumes[4]=0;media_observation.vfs.ro_volumes[3]=0;vfs_destroy(&media_observation.vfs);media_observation.ready=false;
     puts("PASS /dev/media namespace/devctl: readonly/stream rules, copied state and removal, version/size/reserved/fault checks, busy/success, no invalid-pointer side effects");
 }
 static void test_net_node(void)

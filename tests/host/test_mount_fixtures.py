@@ -75,6 +75,10 @@ int ata_init(void) { ata_calls++; return 0; }
 struct ata_device *ata_device_get(unsigned c, unsigned u)
 { CHECK(c < 2 && u < 2); ata_lookups++; CHECK(!ata_calls); return 0; }
 int atapi_ready(struct ata_device *device) { (void)device; CHECK(false); return -FS_EIO; }
+int optical_bind(struct storage *s,unsigned slot,struct ata_device *d)
+{ (void)s; (void)slot; (void)d; CHECK(false); return -FS_EIO; }
+void optical_service(struct storage *s,uint64_t now) { (void)s; (void)now; }
+void optical_start_service(struct storage *s) { (void)s; CHECK(false); }
 int fbdev_init(void) { CHECK(false); return 0; }
 int i8042_init(void) { return 0; }
 int biosvm_init(void) { CHECK(false); return 0; }

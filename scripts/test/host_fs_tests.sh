@@ -37,6 +37,7 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -o build/host/fs/test_throughput
 build/host/fs/test_throughput
 # F1-44: repeat that exact FAT/cache workload through production ATA DMA.
+python3 scripts/test/iso_fixtures.py --out build/host/optical --joliet > build/host/optical-manifest.json
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -Dmain=ata_fixture_main -std=c17 \
     -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -pthread \
     -Isrc/kernel/include -c tests/host/ata_test.c -o build/host/fs/ata_dma_fixture.o

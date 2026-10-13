@@ -99,16 +99,16 @@ static struct ciuki_media_state media_state;
 static int read_media(struct ciuki_media_state *s) { *s=media_state; return 0; }
 static int remove_media(unsigned d,uint32_t gen)
 {
-    assert(d==4 && gen==77); removal_calls++;
+    assert((d==4 && gen==77) || (d==3 && gen==88)); removal_calls++;
     if (removal_error) return removal_error;
-    fake_nodes[fake_lookup("/mnt/e")].live=0; media_state.removable_mask=0; return 0;
+    fake_nodes[fake_lookup(d==3 ? "/mnt/d" : "/mnt/e")].live=0; media_state.removable_mask=0; memset(media_state.generation,0,sizeof(media_state.generation)); return 0;
 }
 static void removable_ui_tests(void)
 {
     fake_image_tree(); fake_create("/mnt/e",FM_DIR);
     memset(&app,0,sizeof(app));du_init(&ui,pixels,WIDTH,HEIGHT);
     app.media_read=read_media;app.media_remove=remove_media;
-    media_state=(struct ciuki_media_state){.version=1,.size=sizeof(media_state),.removable_mask=1u<<4};media_state.generation[4]=77;
+    media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state),.removable_mask=1u<<4};media_state.generation[4]=77;media_state.type[4]=CIUKI_MEDIA_USB;
     assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
     int row=list_find("E:");assert(row>=0);fm_select(&app.model,(unsigned)row,0);files_update(&app);
     assert(!strcmp(app.rows[row].text[2],"Removable Drive") && app.rows[row].icon16 && app.rows[row].icon32);
@@ -119,7 +119,27 @@ static void removable_ui_tests(void)
     key(DU_KEY_ENTER);removal_error=0;activate(action);
     assert(removal_calls==2 && !app.model.path[0] && list_find("E:")<0 && strstr(app.note,"safe to unplug"));
     files_destroy(&app);fake_assert_clean();
+    fake_image_tree(); memset(&app,0,sizeof(app));du_init(&ui,pixels,WIDTH,HEIGHT);
+    app.media_read=read_media;app.media_remove=remove_media;
+    media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state)};
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    assert(list_find("D:")<0); fake_create("/mnt/d",FM_DIR);
+    media_state.removable_mask=1u<<3;media_state.generation[3]=88;media_state.type[3]=CIUKI_MEDIA_OPTICAL;
+    files_update(&app); /* unrelated UI activity must not consume the change */
+    e=(struct du_event){.type=DU_EV_TICK,.id=2};files_event(&ui,&e,&app);
+    row=list_find("D:");assert(row>=0 && !strcmp(app.rows[row].text[2],"CD-ROM Drive") && app.rows[row].icon16 && app.rows[row].icon32);
+    assert(!files_navigate(&app,"/mnt/d"));
+    fake_nodes[fake_lookup("/mnt/d")].live=0;media_state.removable_mask=0;media_state.generation[3]=0;media_state.type[3]=0;
+    files_event(&ui,&e,&app);assert(!app.model.path[0] && list_find("D:")<0);
+    fake_create("/mnt/d",FM_DIR);media_state.removable_mask=1u<<3;media_state.generation[3]=88;media_state.type[3]=CIUKI_MEDIA_OPTICAL;
+    files_event(&ui,&e,&app);row=list_find("D:");assert(row>=0);fm_select(&app.model,(unsigned)row,0);files_update(&app);
+    struct du_event context={.type=DU_EV_CONTEXT,.id=107,.index=row,.x=300,.y=200};files_event(&ui,&context,&app);
+    int eject=0;for(unsigned i=0;i<app.popup_count;i++)if(app.popup[i].label && strstr(app.popup[i].label,"Eject"))eject=app.popup[i].id;
+    assert(eject==action);du_popup(&ui,NULL,0,0,0,0);
+    removal_error=0;activate(action);assert(list_find("D:")<0 && strstr(app.note,"disc has been ejected"));
+    files_destroy(&app);fake_assert_clean();
     puts("PASS Files removable Computer view: E: Tango icon/type, context action, busy error, generation, safe detach and refresh");
+    puts("PASS Files optical Computer view: runtime insertion/removal, D: CD-ROM icon/type, expired folder returns to Computer, reinsertion and eject text");
 }
 static void computer_ui_tests(void)
 {
