@@ -28,6 +28,7 @@ static int measured_open(void *cwd, const char *path, struct ciuki_file *file)
      * reads 32 sectors. These are distinct from subsequent ELF RAM reads. */
     for (unsigned i=0; i<4; i++) proc_launch_volume_read(PAGE_SIZE,PAGE_SIZE);
     for (unsigned i=0; i<32; i++) proc_launch_disk_read(512);
+    proc_launch_dma_read(8192, 2, false); proc_launch_dma_read(8192, 3, true);
     g_ticks += 75;
     return 0;
 }
@@ -53,6 +54,7 @@ static void measurement(void)
     CHECK(l->click_us==1000000 && l->spawn_us==1005000 && l->elf_us==1080000);
     CHECK(l->volume_bytes==16384 && l->volume_reads==4 && l->volume_max==4096);
     CHECK(l->disk_bytes==16384 && l->disk_reads==32 && l->disk_max==512);
+    CHECK(l->dma_bytes==16384 && l->dma_reads==2 && l->dma_max==8192 && l->dma_bounces==1 && l->dma_ms==5);
     CHECK(l->image_bytes==52+32+3*PAGE_SIZE-7 && l->image_reads==8 && l->image_max==2048);
     uint8_t check[7]; CHECK(!ua_read(child->memory,check,CIUKI_IMAGE_BASE+3*PAGE_SIZE-7,sizeof(check)));
     for (unsigned i=0;i<sizeof(check);i++) CHECK(!check[i]); /* BSS, including tail of batch */
@@ -80,10 +82,11 @@ static void measurement(void)
     CHECK(!proc_launch_mark(desktop,CIUKI_LAUNCH_DAMAGE,(uint32_t)pid,0));
     CHECK(!l->finished && launch_lines==1); /* DAMAGE alone is not visible */
     g_ticks=1102; CHECK(!proc_launch_mark(desktop,CIUKI_LAUNCH_FRAME,(uint32_t)pid,0));
-    CHECK(l->finished && l->frame_us==1102000 && launch_lines==5);
+    CHECK(l->finished && l->frame_us==1102000 && launch_lines==6);
     CHECK(strstr(launch_log,"[launch] name=fixture") && strstr(launch_log,"total_us=102000") &&
-          strstr(launch_log,"read_bytes=16497") && strstr(launch_log,"page_faults=1"));
-    CHECK(!proc_launch_mark(desktop,CIUKI_LAUNCH_FRAME,(uint32_t)pid,0) && launch_lines==5);
+          strstr(launch_log,"read_bytes=16497") && strstr(launch_log,"page_faults=1") &&
+          strstr(launch_log,"dma_bytes=16384 dma_requests=2 dma_max=8192 dma_bounces=1 dma_ms=5"));
+    CHECK(!proc_launch_mark(desktop,CIUKI_LAUNCH_FRAME,(uint32_t)pid,0) && launch_lines==6);
     /* Register marshalling works beyond the low word's ~71-minute wrap. */
     g_ticks=5000001;
     struct trap_frame marker={.eax=CIUKI_SYS_LAUNCH_MARK,.ebx=CIUKI_LAUNCH_BEGIN,
@@ -98,6 +101,7 @@ static void measurement(void)
     CHECK(!proc_launch_mark(desktop,CIUKI_LAUNCH_BEGIN,0,1100000));
     int quiet_pid=proc_spawn(prepare_spawn_args(desktop)); CHECK(quiet_pid>0);
     CHECK(!proc_find((uint32_t)quiet_pid)->launch.active && launch_lines==lines);
+    CHECK(!proc_find((uint32_t)quiet_pid)->launch.dma_reads);
     /* Two threads of one process may block in simultaneous spawns: each
      * preload must keep its own provisional-child attribution. */
     quiet_boot=false;
@@ -108,9 +112,13 @@ static void measurement(void)
     g_current=dt->task; proc_launch_start(desktop,a,proc_launch_now(),proc_launch_now());
     g_current=second->task; proc_launch_start(desktop,b,proc_launch_now(),proc_launch_now());
     proc_launch_volume_read(4096,4096); proc_launch_disk_read(512);
+    proc_launch_dma_read(512, 1, false);
     g_current=dt->task; proc_launch_volume_read(2048,113); proc_launch_disk_read(2048);
+    proc_launch_dma_read(2048, 4, true);
     CHECK(a->launch.volume_bytes==113 && a->launch.disk_bytes==2048);
     CHECK(b->launch.volume_bytes==4096 && b->launch.disk_bytes==512);
+    CHECK(a->launch.dma_bytes==2048 && a->launch.dma_ms==4 && a->launch.dma_bounces==1);
+    CHECK(b->launch.dma_bytes==512 && b->launch.dma_ms==1 && !b->launch.dma_bounces);
     dt->launch_loading=second->launch_loading=0; proc_discard(a); proc_discard(b);
     quiet_boot=false; puts(launch_log); quiet_boot=true;
     stop_collect(proc_find((uint32_t)quiet_pid)); CHECK(!proc_reap(desktop,proc_find((uint32_t)quiet_pid)));

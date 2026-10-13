@@ -1,9 +1,10 @@
-/* F1 legacy ATA PIO and its register/time test boundary.
+/* F1 legacy ATA PIO/DMA and its register/time test boundary.
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_ATA_H
 #define CIUKI_ATA_H
 
 #include "sync.h"
+#include "ata_dma.h"
 #include "../../fs/blkdev.h"
 
 #define ATA_CHANNELS 2u
@@ -42,6 +43,10 @@ struct ata_device {
     uint8_t status, error, command;
     uint8_t multiple_max, multiple_sectors;
     bool issued;
+    bool dma_enabled, dma_quarantined, dma_configuring;
+    uint8_t udma_mode;
+    int8_t firmware_udma;            /* measured before the discovery SRST */
+    uint64_t dma_requests, dma_bytes, dma_bounces, dma_errors;
     uint8_t packet_bytes, packet_type, sense_key, asc, ascq;
     enum atapi_media media;
     uint32_t session_lba;
@@ -60,6 +65,7 @@ struct ata_channel {
     struct kwait wait;
     struct ata_device devices[ATA_DEVICES];
     struct ata_device *active;
+    struct ata_dma dma;
     gen_t request_generation;
     volatile gen_t irq_generation;
     volatile uint32_t irq_sequence;

@@ -46,7 +46,7 @@ the same VFS through the bridge defined in `dos-dpmi-contract.md`.
 
 | Layer | Phase | Responsibility |
 | --- | --- | --- |
-| Block device | F1 (ATA PIO), F4 (ATA DMA, ATAPI) | Sector I/O, geometry, error reporting, media change; one owner per controller (`device-firmware-ownership.md`) |
+| Block device | F1 (ATA PIO/DMA), F4 (ATAPI) | Sector I/O, geometry, error reporting, media change; one owner per controller (`device-firmware-ownership.md`) |
 | Partition | F1 | MBR primary and extended partitions; GPT is out of scope |
 | Block cache | F1 | One cache for all devices; write-back with ordering barriers |
 | Filesystem drivers | F1 FAT12/16/32+LFN; F4 ISO 9660, NTFS read-only | On-disk formats; no driver keeps a private cache of blocks |
@@ -262,13 +262,108 @@ access to a shared mounted volume is refused (`dos-dpmi-contract.md`).
   A corrupted BPB refuses mount. Recovery cuts between FAT copies MUST
   be detected as divergence on the next mount, with logged reasons.
 
+## F1-44: firmware-configured ATA bus-master DMA
+
+Sources checked against `drivers/ata.c` before implementation:
+
+- Intel, [Programming Interface for Bus Master IDE Controller 1.0](https://pdos.csail.mit.edu/6.1810/2004/readings/hardware/IDE-BusMaster.pdf),
+  sections 1–3 and 5: PRD layout, ordering, completion and BAR4.
+- Intel, [PCI IDE Controller Specification 1.0](https://www.isdaman.com/alsos/hardware/hdc/pciide.pdf),
+  section 2: class and compatibility/native programming interface.
+- T13, [ATA/ATAPI-6 d1410r3a](https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf),
+  sections 6.6, 8.15.24/44/49, 8.46.11, 9.9 and annex B: selected
+  UDMA mode, cable validity, SET FEATURES and reset effects.
+- Upstream [QEMU IDE core](https://github.com/qemu/qemu/blob/master/hw/ide/core.c),
+  [QEMU PCI IDE](https://github.com/qemu/qemu/blob/master/hw/ide/pci.c) and
+  [SeaBIOS ATA](https://github.com/coreboot/seabios/blob/master/src/hw/ata.c):
+  QEMU reports selected UDMA5 and an 80-wire cable; BM capability flags start
+  clear and SeaBIOS does not set them. Those flags are software bookkeeping,
+  not hardware admission bits; preserve them without requiring them set.
+
+The existing channel mutex, synchronous block API, storage task, PIO and
+ATAPI paths remain. DMA adds one bounded IRQ-completed ATA transaction.
+This amendment permits future PIO requests after a DMA failure with proven
+idle hardware; it does not relax the existing PIO/IDENTIFY/FLUSH fault policy.
+
+PCI class/subclass `01/01`, programming interface bit 7 and an assigned,
+16-byte-aligned I/O BAR4 qualify the bus master. Bits 0/2 indicate primary/
+secondary native mode; bits 1/3 indicate switchability. This step supports
+channels already in compatibility mode (legacy task file and IRQ14/15).
+It never switches interface mode or invents native PCI IRQ routing. More
+than one candidate for the same channel is ambiguous and leaves DMA off.
+Claim each channel's eight BAR4 ports before accessing them. Require I/O
+decode and verify PCI command bit 2 using a 16-bit write that preserves
+other command bits and does not write PCI status W1C bits. Simplex masters
+use only the primary channel; secondary stays PIO. No vendor timing writes.
+An active firmware bus master is stopped and the channel quarantined before
+discovery; it cannot silently enter PIO while an old DMA transfer is live.
+
+IDENTIFY word 49 must advertise DMA and word 53 must validate word 88.
+Word 88 must contain exactly one selected, supported UDMA mode, with no
+simultaneously selected multiword mode. Reaffirm that exact mode through
+SET FEATURES `EFh`, features `03h`, count `40h | mode`. Never select above
+the firmware's choice, or derive a choice from support bits alone. For modes
+above 2, require valid word 93 (`15:14 = 01b`) and cable bit 13. If the cable
+evidence conflicts, stay PIO rather than retiming a chipset to a lower mode.
+Discovery retains its existing SRST. A bounded, nIEN IDENTIFY before reset
+captures the firmware selection, since devices may lose UDMA under SRST
+(6.6.1); after reset revalidate support and cable before restoring that exact
+selection. Without a measured selection DMA stays off. ATAPI
+always uses PIO. SET FEATURES failure disables DMA; uncertain busy state
+still quarantines the channel.
+
+Each PRD is eight bytes: even physical address, even byte count, reserved
+bits zero, bit 15 of the final flags word is EOT. Count zero represents
+65536 bytes. Neither a region nor the dword-aligned table may cross a
+64 KiB boundary. A request uses at most 128 KiB, thus at most three PRDs
+for a contiguous range. One page holds the table; a pinned contiguous
+128 KiB bounce buffer per channel handles odd or noncontiguous requests.
+Direct mappings must be contiguous cacheable kernel RAM, writable on reads,
+and exclude PMM reservations (including MMIO and permanent kernel pages).
+Buffers and tables stay pinned until reboot, including uncertain failures.
+
+Publish descriptors, direction (bit 3 set for disk reads) and table pointer;
+clear bus-master error/IRQ with W1C while preserving capability bits. Issue
+READ/WRITE DMA (`C8h/CAh`, EXT `25h/35h`), then start. The IRQ handler stops
+the master, snapshots bus-master and ATA status, acknowledges W1C, and
+wakes the existing generation-bound wait queue; it copies no data. Success
+requires that Start was issued, the matching IRQ, BM interrupt without BM error, and drive ready
+without BSY/DRQ/ERR/DF. Read bounce data is copied only after success.
+
+Any DMA error or 30-second timeout stops the master, records a sticky
+per-device DMA quarantine, and returns EIO without replaying the failed
+read/write. Later independent requests use PIO only when the bus master
+and drive are idle. If stop cannot establish idle (or quiescence intervenes),
+retain the existing whole-channel quarantine. Late IRQs cannot start DMA
+or resurrect a generation. Quiescence stops DMA before proving idle and
+retains all claims on uncertainty.
+An IRQ before Start without an ATA abort error cannot prove completion of
+the issued drive command; it returns EIO and quarantines the channel.
+If Stop fails on native hardware, revoke PCI bus mastering for the whole
+function before returning a direct buffer. Failure to verify that revocation
+halts the kernel rather than allowing further DMA into reclaimed memory.
+
+Verbose `[ataN] dma mode=udmaM` records identify unit, BAR, cable and buffer
+size. DMA quarantine records include ATA/BM status and elapsed time.
+`[launch-io]` retains cache request counters and adds successful DMA read
+bytes, requests, maximum size, bounce requests and milliseconds, attributed
+to the existing loading thread/provisional child. Host tests validate PRDs,
+mode/PCI admission, register sequencing, IRQ races, timeout/fallback and
+production FAT/cache throughput through a synthetic master. QEMU and T23
+throughput (target 15 MB/s on the 1.3 MB ELF) remain lead-owned evidence.
+The existing `ata-fault-blkdebug` gate explicitly selects PIO for its injected
+tail-sector fault and records `case=fault_transport transport=pio`; its
+preceding hash reads still use detected DMA. This preserves the established
+PIO whole-channel quarantine test. DMA fault/fallback is tested at the host
+register boundary; native DMA fault injection remains lead qualification.
+
 ## Open questions
 
 - Whether the 5-second flush window is acceptable for the owner's use
   (Windows 9x used delayed writes too); measured against power-loss tests.
 - Whether drive-letter assignment should be configurable in F1 or fixed.
-- Whether the T23 and E500 disks support ATA DMA modes reliably with their
-  chipsets (F4 qualification).
+- Whether the T23 and E500 disks support the firmware-configured ATA DMA
+  path reliably with their chipsets (F1-44 hardware qualification pending).
 
 ## Interfaces required from other contracts
 

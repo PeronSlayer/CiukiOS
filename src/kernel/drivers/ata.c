@@ -1,4 +1,4 @@
-/* Legacy ATA PIO, one sleepable transaction per channel, never BIOS/retry.
+/* Legacy ATA PIO/DMA, one sleepable transaction per channel, never BIOS/retry.
  * Research: T13 ATA/ATAPI-6 d1410r3a, sections 6.20, 7, 8.12-8.15,
  * 8.34-8.35, 8.62-8.63, 9.2, 9.5-9.6, 9.12 and 10.2.2 (table 67):
  * https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf
@@ -26,6 +26,8 @@
 static struct ata_channel channels[ATA_CHANNELS];
 static bool initialized;
 static const char *const owners[ATA_CHANNELS] = { "ata0", "ata1" };
+void proc_launch_dma_read(uint32_t bytes, uint64_t ms, bool bounce);
+#pragma weak proc_launch_dma_read
 
 static uint8_t native_in8(void *ctx, uint16_t p) { (void)ctx; return inb(p); }
 static void native_out8(void *ctx, uint16_t p, uint8_t v) { (void)ctx; outb(p, v); }
@@ -100,6 +102,7 @@ int ata_channel_setup(struct ata_channel *c, unsigned index, const struct ata_po
     c->base = index ? 0x170 : 0x1f0;
     c->control = index ? 0x376 : 0x3f6;
     c->irq = index ? 15 : 14;
+    c->dma.claim = -1;
     c->control_shadow = ATA_NIEN;   /* ATA-6: all other implemented bits zero */
     kmutex_init(&c->mutex);
     kwait_init(&c->wait);
@@ -108,6 +111,7 @@ int ata_channel_setup(struct ata_channel *c, unsigned index, const struct ata_po
     for (unsigned i = 0; i < ATA_DEVICES; i++) {
         c->devices[i].channel = c;
         c->devices[i].unit = i;
+        c->devices[i].firmware_udma = -1;
         c->devices[i].block.ctx = &c->devices[i];
         c->devices[i].block.sector_size = BLKDEV_SECTOR_SIZE;
     }
@@ -118,6 +122,7 @@ void ata_channel_irq(struct ata_channel *c)
 {
     /* Always acknowledge the device, including an unarmed late edge. Never
      * transfer data, log, allocate, sleep or send PIC EOI here. */
+    if (c->dma.armed) ata_dma_irq(c);
     uint8_t status = reg_read(c, 7);
     if (!c->active || c->stopped || c->quiescing || !c->request_generation ||
         (c->native && !registry_valid(c->claims[2], c->generations[2])))
@@ -131,9 +136,34 @@ void ata_channel_irq(struct ata_channel *c)
 static void primary_irq(struct trap_frame *tf) { (void)tf; ata_channel_irq(&channels[0]); }
 static void secondary_irq(struct trap_frame *tf) { (void)tf; ata_channel_irq(&channels[1]); }
 
+static int failure(struct ata_device *d, uint64_t start, uint8_t status);
+static int dma_failure(struct ata_device *d, uint64_t start, uint8_t status)
+{
+    struct ata_channel *c = d->channel;
+    bool unstarted = c->dma.armed && d->issued && !c->dma.started && !(status & ATA_ERR);
+    uint8_t bm = c->dma.irq_status | c->dma.ops->in8(c->dma.ctx, c->dma.base + 2);
+    bool idle = ata_dma_stop(c);
+    if (!idle) ata_dma_revoke(c);
+    c->dma.armed = false;
+    d->dma_enabled = false; d->dma_quarantined = true; d->dma_configuring = false;
+    d->dma_errors++;
+    d->status = status; d->error = reg_read(c, 1); d->elapsed_ms = now(c) - start;
+    uint8_t ending = alternate(c);
+    bool fallback = idle && !unstarted && !c->quiescing && (ending & ATA_DRDY) && ending != 0xff &&
+                    !(ending & (ATA_BSY | ATA_DRQ | ATA_DF));
+    klog("[ata%u] dma quarantine unit=%u mode=udma%u generation=%u command=%02x issued=%u bm=%02x status=%02x error=%02x elapsed_ms=%llu fallback=%s",
+         c->irq - 14, d->unit, d->udma_mode, d->generation, d->command, d->issued, bm,
+         status, d->error, d->elapsed_ms, fallback ? "pio" : "blocked");
+    /* A failed command is never replayed. Only a later independent request
+     * may use PIO, after proving both engines idle. Busy/DRQ/DF or missing
+     * devices retain the old whole-channel quarantine and pinned memory. */
+    if (!fallback) return failure(d, start, ending);
+    return -FS_EIO;
+}
 static int failure(struct ata_device *d, uint64_t start, uint8_t status)
 {
     struct ata_channel *c = d->channel;
+    if (c->dma.armed || d->dma_configuring) return dma_failure(d, start, status);
     d->status = status;
     d->error = reg_read(c, 1);       /* diagnostic only while BSY is set */
     d->elapsed_ms = now(c) - start;
@@ -149,6 +179,7 @@ static int failure(struct ata_device *d, uint64_t start, uint8_t status)
         for (unsigned i = 0; i < 3; i++)
             if (c->claims[i] >= 0)
                 registry_quarantine(c->claims[i], c->generations[i]);
+        if (c->dma.claim >= 0) registry_quarantine(c->dma.claim, c->dma.generation);
         klog("[ata%u] fault unit=%u command=%02x issued=%u status=%02x error=%02x elapsed_ms=%llu",
              c->irq - 14, d->unit, d->command, d->issued, d->status, d->error, d->elapsed_ms);
     }
@@ -222,6 +253,12 @@ static int select_device(struct ata_device *d, uint64_t start, uint64_t deadline
     reg_write(c, 6, (uint8_t)(0xa0 | d->unit << 4 | head));
     if (pace(c))
         return failure(d, start, alternate(c));
+    /* ERR from a completed failed DMA command persists until the next
+     * command. It is not the next PIO command's ending status. */
+    if (d->dma_quarantined) {
+        uint8_t s = alternate(c);
+        if ((s & ATA_DRDY) && !(s & (ATA_BSY | ATA_DRQ | ATA_DF)) && s != 0xff) return 0;
+    }
     return poll_status(d, start, deadline, ATA_DRDY, ATA_DRQ);
 }
 
@@ -254,6 +291,7 @@ static void disarm(struct ata_channel *c)
 {
     uint32_t f = irq_save();
     c->active = 0;
+    c->dma.armed = false;
     c->request_generation = 0;
     irq_restore(f);
     device_control(c, c->control_shadow | ATA_NIEN);
@@ -596,8 +634,76 @@ static int identify(struct ata_device *d)
         d->multiple_sectors = (uint8_t)maximum;
     }
     d->identified = true;
+    int mode = c->dma.ops ? ata_dma_restore_mode(d->firmware_udma, data) : -1;
+    if (mode >= 0) {
+        d->udma_mode = (uint8_t)mode;
+        start = now(c); deadline = start + ATA_COMMAND_MS;
+        e = select_device(d, start, deadline, 0);
+        if (!e) {
+            d->dma_configuring = true;
+            d->issued = false;
+            device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
+            reg_write(c, 1, 3); reg_write(c, 2, (uint8_t)(0x40 | mode));
+            if (c->native) pic_unmask(c->irq);
+            e = issue(d, 0xef, start, &sequence);
+        }
+        if (!e) e = wait_irq(d, &sequence, start, deadline);
+        if (!e) e = poll_status(d, start, deadline, 0, ATA_DRQ);
+        d->dma_configuring = false;
+        disarm(c);
+        if (c->stopped) return e;
+        d->dma_enabled = !e;
+        if (!e) klog("[ata%u] dma mode=udma%u unit=%u bm=%04x cable80=%u buffer_bytes=%u",
+                      c->irq - 14, d->udma_mode, d->unit, c->dma.base,
+                      (fs_rd16(data + 93 * 2) & 0xe000) == 0x6000, ATA_DMA_BYTES);
+    }
     d->elapsed_ms = now(c) - start;
     return 0;
+}
+
+/* ATA-6 6.6.1 permits SRST to revert to MWDMA. Measure the firmware's
+ * selected UDMA BEFORE resetting, so SET FEATURES can restore exactly that
+ * timing without guessing at vendor registers or accelerating the channel.
+ * Firmware leaves each channel idle. Probe with nIEN and bounded polling;
+ * an IDENTIFY ABRT with the ATAPI signature is the expected packet case. */
+static int firmware_mode(struct ata_device *d)
+{
+    struct ata_channel *c = d->channel;
+    uint8_t data[512]; uint32_t sequence;
+    uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
+    d->issued = false;
+    uint8_t status;
+    /* An unselected/absent unit may read FFh. It must not be interpreted
+     * as a real device asserting BSY/DRQ, before or after selection. */
+    while ((status = alternate(c)) != 0xff && (status & (ATA_BSY | ATA_DRQ))) {
+        if (expired(c, deadline)) return failure(d, start, status);
+        task_sleep_ms(1);
+    }
+    reg_write(c, 6, (uint8_t)(0xa0 | d->unit << 4));
+    if (pace(c)) return failure(d, start, alternate(c));
+    for (;;) {
+        status = alternate(c);
+        if (!status || status == 0xff) return 0;
+        if (!(status & ATA_BSY)) break;
+        if (expired(c, deadline)) return failure(d, start, status);
+        task_sleep_ms(1);
+    }
+    if (reg_read(c, 4) == 0x14 && reg_read(c, 5) == 0xeb) return 0;
+    int e = issue(d, ATA_IDENTIFY, start, &sequence);
+    while (!e) {
+        status = alternate(c);
+        if (expired(c, deadline)) { e = failure(d, start, status); break; }
+        if (status & ATA_BSY) { task_sleep_ms(1); continue; }
+        if ((status & ATA_ERR) && !(status & (ATA_DF | ATA_DRQ)) &&
+            reg_read(c, 4) == 0x14 && reg_read(c, 5) == 0xeb) break;
+        e = poll_status(d, start, deadline, ATA_DRQ, 0);
+        if (!e) e = data_block(d, data, false, start, deadline);
+        if (!e) e = poll_status(d, start, deadline, 0, ATA_DRQ);
+        if (!e) d->firmware_udma = (int8_t)ata_dma_mode(data);
+        break;
+    }
+    reg_read(c, 7); disarm(c);
+    return e;
 }
 
 int ata_channel_discover(struct ata_channel *c)
@@ -611,10 +717,16 @@ int ata_channel_discover(struct ata_channel *c)
         return e;
     }
     c->discovered = true;
+    int e = 0;
+    if (c->dma.ops) {
+        device_control(c, c->control_shadow | ATA_NIEN);
+        for (unsigned i = 0; i < ATA_DEVICES && !e; i++) e = firmware_mode(&c->devices[i]);
+        if (e) { kmutex_unlock(&c->mutex); return e; }
+    }
     /* 9.2: SRST >=5 us, then >=2 ms before inspecting reset signature.
      * Discovery is the only reset; failures never rearm native channels. */
     device_control(c, c->control_shadow | ATA_NIEN | ATA_SRST);
-    int e = c->ops->delay_us(c->port_ctx, 5);
+    e = c->ops->delay_us(c->port_ctx, 5);
     device_control(c, (uint8_t)(c->control_shadow & ~ATA_SRST));
     task_sleep_ms(2);
     uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
@@ -720,6 +832,11 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     int e = select_device(d, start, deadline, head);
     if (e)
         return e;
+    bool dma = d->dma_enabled;
+    if (dma) {
+        e = ata_dma_prepare(c, buf, n * 512, write);
+        if (e) return dma_failure(d, start, alternate(c));
+    }
     device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
     if (c->native)
         pic_unmask(c->irq);
@@ -740,7 +857,29 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     bool multiple = d->multiple_sectors != 0;
     uint8_t command = write ? (d->lba48 ? 0x34 : 0x30) : (d->lba48 ? 0x24 : 0x20);
     if (multiple) command = write ? (d->lba48 ? 0x39 : 0xc5) : (d->lba48 ? 0x29 : 0xc4);
+    if (dma) command = write ? (d->lba48 ? 0x35 : 0xca) : (d->lba48 ? 0x25 : 0xc8);
     e = issue(d, command, start, &sequence);
+    if (dma) {
+        /* An immediate device abort can precede Start. Do not restart a
+         * master already stopped by that interrupt or a failure path. */
+        uint32_t f = irq_save();
+        if (!e && c->irq_sequence == sequence) ata_dma_start(c);
+        irq_restore(f);
+        if (!e) e = wait_irq(d, &sequence, start, deadline);
+        uint8_t s = alternate(c), bm = c->dma.irq_status;
+        if (!e && (!c->dma.started || (bm & (ATA_BM_ACTIVE | ATA_BM_ERROR | ATA_BM_IRQ)) != ATA_BM_IRQ || !(s & ATA_DRDY) ||
+                   (s & (ATA_BSY | ATA_DRQ | ATA_ERR | ATA_DF)))) e = dma_failure(d, start, s);
+        if (!ata_dma_stop(c) && !e) e = dma_failure(d, start, s);
+        ata_dma_finish(c, buf, write, !e);
+        disarm(c);
+        d->elapsed_ms = now(c) - start;
+        if (!e) {
+            d->dma_requests++; d->dma_bytes += n * 512;
+            if (c->dma.bounced) d->dma_bounces++;
+            if (!write && proc_launch_dma_read) proc_launch_dma_read(n * 512, d->elapsed_ms, c->dma.bounced);
+        }
+        return e;
+    }
     for (unsigned i = 0; i < n && !e;) {
         unsigned sectors = multiple ? d->multiple_sectors : 1;
         if (sectors > n - i) sectors = n - i;
@@ -841,11 +980,13 @@ bool ata_channel_idle(struct ata_channel *c)
     if (c->native)
         pic_mask(c->irq);
     kwait_wake_all(&c->wait);        /* an issued waiter aborts, never issues another command */
+    bool master_idle = ata_dma_stop(c);
+    if (!master_idle) ata_dma_revoke(c);
     if (c->active || c->mutex.owner)
         return false;
-    /* No queued driver callbacks or DMA exist. An uncertain busy device
+    /* No queued driver callbacks exist. An uncertain busy device/master
      * cannot supply a release proof; quarantine retains its claims. */
-    bool idle = !c->stopped && !(alternate(c) & ATA_BSY);
+    bool idle = master_idle && !c->stopped && !(alternate(c) & (ATA_BSY | ATA_DRQ));
     if (idle && c->native)
         irq_set_handler(c->irq, 0); /* no callback may outlive a released edge claim */
     return idle;
@@ -855,6 +996,8 @@ bool ata_registry_idle(int handle, gen_t generation)
 {
     for (unsigned i = 0; i < ATA_CHANNELS; i++) {
         struct ata_channel *c = &channels[i];
+        if (c->native && c->dma.claim == handle && gen_matches(c->dma.generation, generation))
+            return ata_channel_idle(c);
         for (unsigned j = 0; j < 3; j++)
             if (c->native && c->claims[j] == handle && gen_matches(c->generations[j], generation))
                 return ata_channel_idle(c);
@@ -899,6 +1042,7 @@ int ata_init(void)
             c->stopped = true;
             continue;
         }
+        ata_dma_attach(c, i);
         c->native = true;
         pic_mask(c->irq);
         irq_set_handler(c->irq, i ? secondary_irq : primary_irq);
@@ -909,6 +1053,8 @@ int ata_init(void)
                     failure(&c->devices[0], now(c), alternate(c));
                     break;
                 }
+            if (!c->stopped && c->dma.claim >= 0 && registry_activate(c->dma.claim, c->dma.generation))
+                failure(&c->devices[0], now(c), alternate(c));
         }
         /* IDENTIFY completed before activation. IRQ source is off while
          * idle; each request enables it only after serialized selection. */

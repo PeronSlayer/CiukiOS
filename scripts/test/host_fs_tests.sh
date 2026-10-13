@@ -36,6 +36,19 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     src/kernel/fs/fat.c src/kernel/fs/path.c tests/host/fs/test_throughput.c \
     -o build/host/fs/test_throughput
 build/host/fs/test_throughput
+# F1-44: repeat that exact FAT/cache workload through production ATA DMA.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -Dmain=ata_fixture_main -std=c17 \
+    -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -pthread \
+    -Isrc/kernel/include -c tests/host/ata_test.c -o build/host/fs/ata_dma_fixture.o
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -DATA_DMA_THROUGHPUT -std=c17 \
+    -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs build/host/fs/ata_dma_fixture.o \
+    src/kernel/fs/fs_port.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/fat.c src/kernel/fs/path.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
+    src/kernel/fs/iso9660.c src/kernel/fs/ntfs_fs.c src/kernel/fs/ntfs_ro.c src/kernel/fs/mount.c \
+    src/kernel/core/bootlog.c src/kernel/probes/fat_probes.c src/kernel/lib/sha256.c src/kernel/lib/fmt.c \
+    tests/host/fs/test_throughput.c -o build/host/fs/test_throughput_dma
+build/host/fs/test_throughput_dma
 python3 tests/host/fs/kernel_compile.py
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
 python3 tests/host/fs/fixtures.py

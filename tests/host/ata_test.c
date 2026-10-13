@@ -16,6 +16,7 @@ static unsigned failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
 
 #define CIUKI_CPU_H
+#define KERNEL_VBASE 0xc0000000u
 static uint32_t flags = 0x200;
 static unsigned schedules, yields, masks, unmasks, wakes;
 static void (*on_schedule)(void);
@@ -25,10 +26,20 @@ static irq_handler_t handlers[16];
 static struct task actor = { .id = 1, .state = T_RUNNING };
 static struct task user_actor;
 static _Alignas(4) uint8_t user_pages[3][4096];
+static _Alignas(4096) uint8_t native_dma_table[4096], native_dma_bounce[ATA_DMA_BYTES];
+static bool native_dma_ports, native_dma_config_fail;
+static uint8_t native_dma_status[2], native_dma_command[2];
+static uint16_t native_dma_pci_command;
+static uint32_t native_dma_config_address;
+static unsigned native_dma_allocs, native_dma_frees, native_dma_alloc_fail, native_dma_config_writes;
 static unsigned page_count;
 static bool survivor_started;
 static unsigned probe_ends, probe_passes, probe_errors;
-static void *host_page(uint32_t phys) { CHECK(phys >= 1 && phys <= 3); return user_pages[phys - 1]; }
+static void *host_page(uint32_t phys) {
+    if (phys == 0x400000) return native_dma_table;
+    if (phys == 0x500000) return native_dma_bounce;
+    CHECK(phys >= 1 && phys <= 3); return user_pages[phys - 1];
+}
 #define P2V(p) host_page(p)
 struct task *g_current = &actor;
 volatile uint64_t g_ticks;
@@ -42,9 +53,19 @@ struct ciuki_boot_info g_boot;
 static uint32_t read_eflags(void) { return flags; }
 static uint32_t irq_save(void) { uint32_t f = flags; flags = 0; return f; }
 static void irq_restore(uint32_t f) { flags = f; }
-static uint8_t inb(uint16_t port) { (void)port; return 0xff; }
-static void outb(uint16_t port, uint8_t v) { (void)port; (void)v; }
-static void outl(uint16_t port, uint32_t v) { (void)port; (void)v; }
+static uint8_t inb(uint16_t port) {
+    if (native_dma_ports && (port == 0xc000 || port == 0xc008)) return native_dma_command[(port - 0xc000) / 8];
+    if (native_dma_ports && (port == 0xc002 || port == 0xc00a)) return native_dma_status[(port - 0xc002) / 8];
+    return 0xff;
+}
+static void outb(uint16_t port, uint8_t v) {
+    if (native_dma_ports && (port == 0xc000 || port == 0xc008)) {
+        unsigned channel = (port - 0xc000) / 8;
+        native_dma_command[channel] = v;
+        if (!(v & 1)) native_dma_status[channel] &= ~1u;
+    }
+}
+static void outl(uint16_t port, uint32_t v) { if (port == 0xcf8) native_dma_config_address = v; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
 void klog(const char *fmt, ...) { (void)fmt; }
 __attribute__((noreturn)) void panic(const char *fmt, ...)
@@ -99,7 +120,25 @@ struct task *task_create_user(const char *name, enum task_prio prio, uint32_t ip
     return &user_actor;
 }
 uint32_t pmm_alloc(void) { CHECK(page_count < 3); return ++page_count; }
-void pmm_free(uint32_t p) { CHECK(p >= 1 && p <= 3); }
+uint32_t pmm_alloc_contig(uint32_t pages) {
+    if (!native_dma_ports || ++native_dma_allocs == native_dma_alloc_fail) return 0;
+    CHECK(pages == 1 || pages == ATA_DMA_BYTES / 4096);
+    return pages == 1 ? 0x400000 : 0x500000;
+}
+bool pmm_is_reserved(uint32_t phys) { return phys < 0x100000; }
+static uint32_t dma_mapping_base, dma_mapping_phys;
+static bool dma_mapping_fragmented, dma_mapping_readonly, dma_mapping_uncached;
+uint32_t vmm_kernel_pte(uint32_t va)
+{
+    if (va < dma_mapping_base || va - dma_mapping_base >= ATA_DMA_BYTES + 4096) return 0;
+    unsigned page = (va - dma_mapping_base) / 4096;
+    return (dma_mapping_phys + page * 4096 + (dma_mapping_fragmented && page ? 4096 : 0)) |
+           1u | (dma_mapping_readonly ? 0 : 2u) | (dma_mapping_uncached ? 0x10u : 0);
+}
+void pmm_free(uint32_t p) {
+    if (p == 0x400000 || (p >= 0x500000 && p < 0x500000 + ATA_DMA_BYTES)) { native_dma_frees++; return; }
+    CHECK(p >= 1 && p <= 3);
+}
 int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t perms)
 {
     (void)as; (void)va; (void)perms;
@@ -133,11 +172,13 @@ void rec_emit(const char *name, const char *event, const char *fmt, ...)
 #include "../../src/kernel/core/sync.c"
 #include "../../src/kernel/lib/stackprot.c"
 #include "../../src/kernel/core/registry.c"
+#include "../../src/kernel/drivers/ata_dma.c"
 #include "../../src/kernel/drivers/ata.c"
 #include "../../src/kernel/drivers/blkpart.c"
 #include "../../src/kernel/drivers/ata_probe.c"
 
-enum fault { GOOD, ERR, DF, BUSY, NO_DRQ, EXTRA_DRQ, NO_IRQ, BAD_IDENTIFY, BAD_FLUSH, SLOW_FLUSH, BAD_MULTIPLE };
+enum fault { GOOD, ERR, DF, BUSY, NO_DRQ, EXTRA_DRQ, NO_IRQ, BAD_IDENTIFY, BAD_FLUSH, SLOW_FLUSH, BAD_MULTIPLE,
+             DMA_ERROR, DMA_ACTIVE, DMA_NO_BM_IRQ, DMA_MODE_ERROR, DMA_STUCK_MASTER, DMA_ERROR_NO_IRQ };
 enum kind { ABSENT, DISK, PACKET, NO_SIGNATURE };
 struct fake {
     struct ata_channel channel;
@@ -154,8 +195,16 @@ struct fake {
     bool pending, immediate, writing, stalled_clock, fail_delay;
     uint8_t statuses[8];
     unsigned status_count, status_index;
+    uint8_t bm_command, bm_status;
+    uint32_t bm_table, direct_phys;
+    void *direct_buffer;
+    uint8_t *media_bytes;
+    uint32_t media_sectors;
+    unsigned dma_starts, dma_stops, dma_completions;
+    bool dma_command, noncontiguous, early_dma_irq, early_dma_ready, reset_loses_udma, absent_ff;
 };
 static struct fake *running;
+static void dma_bus_start(struct fake *f);
 
 static uint16_t sector_word(uint64_t lba, unsigned word)
 {
@@ -182,11 +231,13 @@ static void interrupt(struct fake *f)
 static uint8_t fake_in8(void *ctx, uint16_t port)
 {
     struct fake *f = ctx;
+    if (f->channel.dma.ops && port == f->channel.dma.base) return f->bm_command;
+    if (f->channel.dma.ops && port == f->channel.dma.base + 2) return f->bm_status;
     unsigned r = port - f->channel.base;
     if (port == f->channel.control || r == 7) {
         if (r == 7 && f->pending) { f->pending = false; f->irq_acks++; }
         if (f->kind[f->selected] == ABSENT)
-            return 0;
+            return f->absent_ff ? 0xff : 0;
         if (f->status_index < f->status_count)
             return f->statuses[f->status_index++];
         return f->status;
@@ -202,10 +253,25 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
 {
     struct fake *f = ctx;
     f->writes++;
+    if (f->channel.dma.ops && port == f->channel.dma.base) {
+        CHECK(!((value ^ f->bm_command) & 8) || !(f->bm_command & 1));
+        f->bm_command = value;
+        if (value & 1) { f->dma_starts++; dma_bus_start(f); }
+        else { f->dma_stops++; if (f->fault != DMA_STUCK_MASTER) f->bm_status &= ~1u; }
+        return;
+    }
+    if (f->channel.dma.ops && port == f->channel.dma.base + 2) {
+        CHECK((value & 0x60) == (f->bm_status & 0x60));
+        f->bm_status = (f->bm_status & 0x81) | (value & 0x60) | ((f->bm_status & 6) & ~value);
+        return;
+    }
     unsigned r = port - f->channel.base;
     if (port == f->channel.control) {
         f->control = value;
-        if (value & 4) { f->command = 0; f->status = 0x40; f->pending = false; memset(f->multiple,0,sizeof(f->multiple)); }
+        if (value & 4) {
+            f->command = 0; f->status = 0x40; f->pending = false; memset(f->multiple,0,sizeof(f->multiple));
+            if (f->reset_loses_udma) for (unsigned u = 0; u < 2; u++) { f->identify[u][88] &= 255; f->identify[u][63] = 0x407; }
+        }
         return;
     }
     if (r == 6) {
@@ -226,8 +292,9 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     f->issued_tick = g_ticks;
     f->words = 0;
     f->completed_blocks = 0;
-    f->writing = value == 0x30 || value == 0x34 || value == 0xc5 || value == 0x39;
-    bool ext = value == 0x24 || value == 0x34 || value == 0x29 || value == 0x39;
+    f->dma_command = value == 0xc8 || value == 0xca || value == 0x25 || value == 0x35;
+    f->writing = value == 0x30 || value == 0x34 || value == 0xc5 || value == 0x39 || value == 0xca || value == 0x35;
+    bool ext = value == 0x24 || value == 0x34 || value == 0x29 || value == 0x39 || value == 0x25 || value == 0x35;
     bool multiple = value == 0xc4 || value == 0xc5 || value == 0x29 || value == 0x39;
     if (multiple) CHECK(f->multiple[f->selected]!=0);
     f->lba = f->registers[3][0] | (uint64_t)f->registers[4][0] << 8 | (uint64_t)f->registers[5][0] << 16;
@@ -242,7 +309,11 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     f->phase_sectors=multiple ? f->multiple[f->selected] : 1;
     f->phase_left=f->blocks<f->phase_sectors ? f->blocks : f->phase_sectors;
     bool flush = value == 0xe7 || value == 0xea;
-    f->status = flush || value==0xc6 ? 0x40 : 0x48;
+    f->status = flush || value==0xc6 || value==0xef || f->dma_command ? 0x40 : 0x48;
+    if (value == 0xef) {
+        CHECK(f->registers[1][0] == 3 && f->registers[2][0] == (0x40 | f->channel.devices[f->selected].udma_mode));
+        if (f->fault == DMA_MODE_ERROR) f->status = 0x41;
+    }
     if (value==0xc6) {
         CHECK(f->registers[2][0]==(f->identify[f->selected][47]&255));
         f->multiple[f->selected]=f->registers[2][0];
@@ -260,6 +331,14 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     if (f->fault == SLOW_FLUSH && flush) {
         f->status = 0x80;
         f->delayed_irq = g_ticks + 45000;
+        return;
+    }
+    if (f->dma_command) {
+        if (f->early_dma_irq) {
+            f->status = f->early_dma_ready ? 0x40 : 0x41;
+            if (f->early_dma_ready) f->bm_status |= ATA_BM_IRQ;
+            interrupt(f);
+        }
         return;
     }
     if (f->fault != NO_IRQ && (!f->writing || f->fault == ERR || f->fault == DF))
@@ -286,6 +365,7 @@ static void block_end(struct fake *f)
 }
 static uint16_t fake_in16(void *ctx, uint16_t port)
 {
+    if (native_dma_ports && port == 0xcfc) return native_dma_pci_command;
     struct fake *f = ctx;
     CHECK(port == f->channel.base && f->status == 0x48 && !f->writing);
     uint16_t v = (f->command == 0xec || f->command == 0xa1) ? f->identify[f->selected][f->words] : sector_word(f->lba, f->words);
@@ -296,6 +376,11 @@ static uint16_t fake_in16(void *ctx, uint16_t port)
 }
 static void fake_out16(void *ctx, uint16_t port, uint16_t value)
 {
+    if (native_dma_ports && port == 0xcfc) {
+        native_dma_config_writes++;
+        if (!native_dma_config_fail) native_dma_pci_command = value;
+        return;
+    }
     struct fake *f = ctx;
     CHECK(port == f->channel.base && f->status == 0x48 && f->writing);
     CHECK(value == sector_word(f->lba, f->words));
@@ -740,10 +825,12 @@ static void test_storage_cache_faults(void)
     puts("storage cache/ATA: PASS (register-boundary write/flush faults, delayed EIO, sticky unmount, quarantine/no further command)");
 }
 #include "atapi_test.inc"
+#include "ata_dma_test.inc"
 int main(void)
 {
     test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets();
+    test_dma();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
     return failures ? 1 : 0;

@@ -5,6 +5,9 @@
 #include <stdio.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x); exit(1); } } while (0)
 #define FILE_BYTES (1024u*1024u)
+#ifdef ATA_DMA_THROUGHPUT
+int ata_host_dma_io(uint8_t *, uint32_t, uint64_t, uint32_t, void *, bool);
+#endif
 static uint64_t disk_requests, disk_bytes;
 static uint32_t disk_max;
 void proc_launch_disk_read(uint32_t bytes) {
@@ -27,14 +30,24 @@ static int read_blocks(struct blkdev *dev, uint64_t lba, uint32_t n, void *buf) 
     m->trace[m->calls].lba=lba; m->trace[m->calls++].n=n;
     if (lba>=m->data_start) m->data_calls++;
     if (n>m->max_count) m->max_count=n;
+#ifdef ATA_DMA_THROUGHPUT
+    CHECK(!ata_host_dma_io(m->bytes, (uint32_t)dev->capacity, lba, n, buf, false));
+#else
     memcpy(buf,m->bytes+lba*512,n*512);
+#endif
     if (m->change) dev->media_generation++;
     if (m->cancel_after_read) cancel=true;
     return m->fail ? -FS_EIO : 0;
 }
 static int write_blocks(struct blkdev *dev, uint64_t lba, uint32_t n, const void *buf) {
     struct media *m=dev->ctx; int e=blkdev_range(dev,lba,n); if (e) return e;
-    CHECK(n==1); m->writes++; memcpy(m->bytes+lba*512,buf,512); return 0;
+    CHECK(n==1); m->writes++;
+#ifdef ATA_DMA_THROUGHPUT
+    CHECK(!ata_host_dma_io(m->bytes, (uint32_t)dev->capacity, lba, n, (void *)buf, true));
+#else
+    memcpy(m->bytes+lba*512,buf,512);
+#endif
+    return 0;
 }
 static int flush_blocks(struct blkdev *dev) { ((struct media *)dev->ctx)->flushes++; return 0; }
 static void init_media(struct media *m, uint32_t sectors) {

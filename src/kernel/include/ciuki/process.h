@@ -19,6 +19,8 @@ enum proc_state { PROC_PREPARING, PROC_LIVE, PROC_STOPPING, PROC_ZOMBIE };
 struct proc_launch {
     uint64_t click_us, spawn_us, elf_us, surface_us, configure_us, damage_us, frame_us;
     uint64_t volume_bytes, volume_reads, disk_bytes, disk_reads, image_bytes, image_reads;
+    uint64_t dma_bytes, dma_reads, dma_bounces, dma_ms;
+    uint32_t dma_max;
     uint32_t volume_max, disk_max, image_max, page_faults;
     bool active, configured, damaged, finished;
 };
@@ -110,6 +112,7 @@ void proc_launch_start(struct process *parent, struct process *child, uint64_t s
 void proc_launch_elf(struct process *child);
 void proc_launch_volume_read(uint32_t requested, size_t done);
 void proc_launch_disk_read(uint32_t bytes);
+void proc_launch_dma_read(uint32_t bytes, uint64_t ms, bool bounce);
 void proc_launch_image_read(uint32_t bytes);
 void proc_launch_surface(struct process *p);
 int proc_launch_mark(struct process *caller, uint32_t event, uint32_t pid, uint64_t click_us);
