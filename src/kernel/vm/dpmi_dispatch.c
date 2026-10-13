@@ -713,7 +713,10 @@ static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
         /* Pause through nested IRQ/callback/child contexts, including a
          * callback that uses the interrupted client's own CS and SS. */
         if (!return_context(d, f)) return;
-        if (!v->monitor.vif || !return_step_safe(v, f)) { d->return_steps = 0; f->tf.eflags &= ~V86_TF; }
+        if (!v->monitor.vif || !return_step_safe(v, f)) {
+            d->return_steps = 0; f->tf.eflags &= ~V86_TF;
+            dosvm_boundary(v, f, "ret_stop");
+        }
         else f->tf.eflags |= V86_TF;
         return;
     }
@@ -745,6 +748,7 @@ static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
             d->return_depth = (uint8_t)d->depth; d->return_client = (uint8_t)d->clients;
             d->return_cs = (uint16_t)f->tf.cs; d->return_ss = (uint16_t)f->tf.user_ss;
             f->tf.eflags |= V86_TF;
+            dosvm_boundary(v, f, "ret_seed");
             return;
         }
         if (op == 0xCF) {
@@ -767,6 +771,7 @@ static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
             d->return_steps = DPMI_RETURN_STEPS;
             d->return_depth = (uint8_t)d->depth; d->return_client = (uint8_t)d->clients;
             d->return_cs = selector; d->return_ss = (uint16_t)f->tf.user_ss;
+            dosvm_boundary(v, f, "iret_seed");
             return;
         }
         len = flags_instruction(b, n, cs.big, &decoded, &w);
@@ -914,10 +919,12 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
     if (d->return_steps && return_context(d, f)) {
         if (vector == 1 && (dr6 & (1u << 14)) && (f->tf.eflags & V86_TF)) {
             f->tf.eflags &= ~V86_TF; d->return_steps--;
+            dosvm_boundary(v, f, d->return_steps ? "ret_step" : "ret_limit");
             if (!(dr6 & (15u | (1u << 13) | (1u << 15)))) return 0;
             d->return_steps = 0; /* preserve an actual client breakpoint */
         } else if (vector < 0x20 || vector >= 0x30) {
             d->return_steps = 0; f->tf.eflags &= ~V86_TF;
+            dosvm_boundary(v, f, "ret_cancel");
         }
     }
     if (irq) return 0;                                      /* physical IRQ, handled */
@@ -1016,15 +1023,24 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
         irq_restore(flags);
         return -ENOSPC;                 /* nesting exhausted: this VM only */
     }
-    dosvm_pic_ack(&v->monitor);
-    v->monitor.stats.reflected_irqs++;
-    v->monitor.stats.delivered[irq & 15]++;
-    v->monitor.stats.last_vector = vector;
-    irq_restore(flags);
-    v->monitor.state = V86_RUNNING;
+    /* Construct the complete frame before INTA. Keep arbitration and
+     * commit in one bounded IRQ-disabled transaction: a rejected handler
+     * or stack must leave the request pending, with no orphan ISR bit or
+     * claimed delivery. Neither constructor sleeps or prints. */
     int e;
     if (!hooked) e = dpmi_to_real_int(v, f, DPMI_REC_REFLECT, (uint8_t)(h.off - DPMI_PM_INT), DPMI_RF_HWINT);
-    else { d->stats.irqs_pm++; e = dpmi_enter_pm_handler(v, f, vector, DPMI_RF_HWINT); }
+    else e = dpmi_enter_pm_handler(v, f, vector, DPMI_RF_HWINT);
+    if (!e) {
+        dosvm_pic_ack(&v->monitor);
+        v->monitor.stats.reflected_irqs++;
+        v->monitor.stats.delivered[irq & 15]++;
+        v->monitor.stats.last_vector = vector;
+        v->monitor.state = V86_RUNNING;
+        if (hooked) d->stats.irqs_pm++;
+        v->trace.injected_cs = (uint16_t)f->tf.cs;
+        v->trace.injected_eip = f->tf.eip;
+    }
+    irq_restore(flags);
     if (!irq && !e && (g_boot.flags & CBI_F_VERBOSE))
         dosvm_trace(v, DOSVM_TRACE_IRQ0, &from, vector, f->tf.cs & 0xFFFF, f->tf.eip);
     return e;

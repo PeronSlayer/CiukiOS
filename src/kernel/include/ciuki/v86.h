@@ -28,6 +28,10 @@ struct v86_port_rule { uint16_t first, last; enum v86_port_class kind; };
 struct v86_pic {
     uint8_t irr, isr, imr, base, priority, init, icw1, icw3;
     bool read_isr, auto_eoi, rotate_auto, poll, special_mask, sfnm;
+    /* Diagnostic age of each accepted, non-AEOI request. EOI/reinit and
+     * the next acceptance delimit episodes; no timeout changes PIC state. */
+    uint64_t service_tick[8];
+    uint8_t stall_reported;
 };
 enum v86_insn { V86_INT, V86_IRET, V86_PUSHF, V86_POPF, V86_CLI,
                 V86_STI, V86_IN, V86_OUT, V86_INS, V86_OUTS, V86_HLT, V86_INSNS };

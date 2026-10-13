@@ -29,6 +29,8 @@
 #define DOSVM_BLINK_TICKS 500u
 #define DOSVM_HEARTBEAT_TICKS 2000u
 #define DOSVM_HEARTBEAT_LIMIT 60u
+#define DOSVM_PIC_STALL_TICKS 1000u
+#define DOSVM_PIC_STALL_LIMIT 32u
 #include "dosvm_memory.h"
 #include "dpmi_internal.h"
 enum dosvm_trace_kind { DOSVM_TRACE_VECTOR, DOSVM_TRACE_PIT, DOSVM_TRACE_IRQ0,
@@ -117,8 +119,19 @@ struct dosvm {
         bool heartbeat_started;
         uint8_t heartbeats;
         uint64_t heartbeat_tick;
+        uint8_t pic_stalls;
+        const char *boundary;
+        uint16_t boundary_cs, injected_cs;
+        uint32_t boundary_eip, injected_eip;
     } trace;
 };
+static inline void dosvm_boundary(struct dosvm *v, const struct v86_frame *f, const char *event)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    v->trace.boundary = event;
+    v->trace.boundary_cs = (uint16_t)f->tf.cs;
+    v->trace.boundary_eip = f->tf.eip;
+}
 void dosvm_trace(struct dosvm *, enum dosvm_trace_kind, const struct v86_frame *,
                  uint32_t a, uint32_t b, uint32_t c);
 struct dosvm *dosvm_lookup(struct dosvm_key);

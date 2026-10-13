@@ -32,9 +32,11 @@ int dosvm_pic_eligible(const struct v86_pic *p)
 void dosvm_pic_accept(struct v86_pic *p, unsigned irq)
 {
     p->irr &= ~(1u << irq);
-    if (!p->auto_eoi)
+    if (!p->auto_eoi) {
         p->isr |= 1u << irq;
-    else if (p->rotate_auto)
+        p->service_tick[irq] = g_ticks;
+        p->stall_reported &= ~(1u << irq);
+    } else if (p->rotate_auto)
         p->priority = irq;
 }
 
@@ -88,6 +90,7 @@ uint8_t dosvm_pic_register(struct v86_pic *p, bool data, bool write, uint8_t val
             int irq = (op & 2) ? (int)(value & 7) : pic_highest(p, p->isr);
             if (irq >= 0) {
                 p->isr &= ~(1u << irq);
+                p->stall_reported &= ~(1u << irq);
                 if (op & 4)
                     p->priority = (uint8_t)irq;
             }
