@@ -172,7 +172,17 @@ int fbdev_init(void)
     kmutex_init(&presenter);
     device = d;
     initialized = true;
-    if (savage2d_init) acceleration = savage2d_init(&device);
+    /* Savage 2D acceleration is opt-in until it is qualified on the T23: its
+     * engine initialisation stalled the boot there on 2026-10-13 (no
+     * "[init] framebuffer" line after the flags). Software presents
+     * otherwise; a dedicated test image defines CIUKI_ACCEL_SAVAGE. */
+#ifdef CIUKI_ACCEL_SAVAGE
+    if (savage2d_init) {
+        klog("[accel] savage init");
+        acceleration = savage2d_init(&device);
+        klog("[accel] savage ready=%u", acceleration != NULL);
+    }
+#endif
     return 0;
 }
 
