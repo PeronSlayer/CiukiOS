@@ -57,15 +57,20 @@ static int reset(struct usb_host *h, unsigned port)
     for (unsigned pulse = 0; pulse < 5; pulse++) {
         usb_write(h, off, 0x10000, 4);
         usb_write(h, off, 0x10, 4);
+        usb_port_record(h, port, "reset", 0);
         h->io.sleep(h->io.cookie, 10);
         int err = usb_wait_register(h, off, 4, 0x10010, 0x10000, 100);
+        usb_port_record(h, port, "reset", err);
         if (err) return err;
         if (!(status(h, port) & USB_PORT_CONNECTED)) return -USB_EIO;
     }
     usb_write(h, off, 0x1f0000, 4); h->io.sleep(h->io.cookie, 10);
-    return (status(h, port) & 3) == 3 ? 0 : -USB_EIO;
+    int err = (status(h, port) & 3) == 3 ? 0 : -USB_EIO;
+    usb_port_record(h, port, "enable", err);
+    return err;
 }
-static void disable(struct usb_host *h, unsigned port) { usb_write(h, 0x54 + 4 * port, 1, 4); }
+static void disable(struct usb_host *h, unsigned port)
+{ usb_write(h, 0x54 + 4 * port, 1, 4); usb_port_record(h, port, "enable", 0); }
 static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned toggle,
                   void *data, unsigned length, bool periodic)
 {

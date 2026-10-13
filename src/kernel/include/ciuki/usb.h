@@ -94,8 +94,11 @@ struct usb_host {
     unsigned ports, device_count, next_address;
     bool root_blocked[USB_PORT_MAX];
     uint8_t root_child[USB_PORT_MAX];
+    unsigned root_status[USB_PORT_MAX]; /* last observed normalized state */
     bool attempted, ready, quarantined, touched, owned, busy;
-    uint64_t next_scan;
+    bool scanned;
+    unsigned scan_count;
+    uint64_t next_scan, scan_window;
     fs_lock transfer_lock; /* namespace -> cache -> host; service drops before mount */
     struct usb_device devices[USB_DEVICE_MAX];
 };
@@ -103,6 +106,7 @@ extern const struct usb_hc_ops usb_uhci_ops, usb_ohci_ops;
 static inline void usb_barrier(void) { __asm__ volatile("" ::: "memory"); }
 uint32_t usb_read(struct usb_host *, unsigned, unsigned);
 void usb_write(struct usb_host *, unsigned, uint32_t, unsigned);
+void usb_port_record(struct usb_host *, unsigned port, const char *event, int result);
 bool usb_expired(struct usb_host *, uint64_t deadline);
 int usb_wait_register(struct usb_host *, unsigned, unsigned, uint32_t mask, uint32_t value, unsigned ms);
 int usb_retire_frames(struct usb_host *, unsigned offset, unsigned width, unsigned mask);
