@@ -121,4 +121,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f6-08-nic-drivers-second-set](f6-08-nic-drivers-second-set.md) | F6 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (e1000, pcnet, tulip, 3c90x, rhine; twelve new f6-net cases, QEMU check pending) |
 | [f4-11-audio-drivers-second-set](f4-11-audio-drivers-second-set.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (ES1370/ES1371/CT5880, SB16 ISA, VIA 686/8233/8235, SiS 7012, nForce behind one backend; QEMU es1370/sb16 check pending) |
 | [runner-02-usb-devices](runner-02-usb-devices.md) | runner | gpt-6.1-sol / high | delivered and merged 2026-10-13 (usb profile lists, i8042=off, serial_patterns, suite f1-usb); QEMU run pending |
-| [f1-45-uhci-root-port-enumeration](f1-45-uhci-root-port-enumeration.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-13 (f1-usb on QEMU: UHCI ready, no device enumerated) |
+| [f1-45-uhci-root-port-enumeration](f1-45-uhci-root-port-enumeration.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (the usb-host task was never started; root-port and enumeration records); f1-usb re-run pending |
