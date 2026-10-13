@@ -51,3 +51,6 @@ third_party/win_bg/
 /legacy/local/
 third_party/Doom
 third_party/WOLF3D
+
+# Owner-supplied Windows driver pack (1.6 GiB of vendor binaries, never committed; INF hardware ids only are mined by scripts)
+third_party/Ultimate Windows Driver Pack*/
