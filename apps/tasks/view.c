@@ -75,6 +75,9 @@ void tv_init(struct tasks_view *v, struct du_ui *u, const uint32_t *app_icon)
     add(u, DU_LABEL, A_TOTAL_PROCESSES, 20, 248, 110, 12, "");
     add(u, DU_LABEL, A_TOTAL_THREADS, 136, 248, 110, 12, "");
     add(u, DU_LABEL, A_TOTAL_UPTIME, 252, 248, 130, 12, "");
+    add(u, DU_LABEL, A_SYSTEM, 20, 290, 368, 16, "System: collecting display statistics...");
+    add(u, DU_LABEL, A_SYSTEM_TIME, 20, 312, 368, 16, "");
+    add(u, DU_LABEL, A_SYSTEM_IO, 20, 334, 368, 16, "");
     w = add(u, DU_STATUS, A_STATUS, 0, TV_HEIGHT - 22, TV_WIDTH, 22, "");
     w->panels[0] = 100; w->panels[1] = 110;
     /* Lists fill the page; buttons/status keep their height and bottom gap. */
@@ -92,6 +95,7 @@ void tv_page(struct tasks_view *v, int page)
 {
     if (page < 0 || page >= TV_PAGES) page = TV_APPS;
     v->page = page;
+    du_get(v->ui,A_SYSTEM)->hidden=du_get(v->ui,A_SYSTEM_TIME)->hidden=du_get(v->ui,A_SYSTEM_IO)->hidden=page!=TV_PERFORMANCE;
     for (int p = 0; p < TV_PAGES; p++)
         for (unsigned i = 0; page_widgets[p][i]; i++) du_get(v->ui, page_widgets[p][i])->hidden = p != page;
     du_get(v->ui, A_TABS)->active = (unsigned)page;
@@ -180,6 +184,20 @@ void tv_update(struct tasks_view *v, const struct tm_model *m)
     snprintf(text, sizeof(text), "Threads  %u", m->threads); du_set_text(du_get(u, A_TOTAL_THREADS), text);
     tm_format_uptime(a, sizeof(a), s->total_ticks, s->tick_hz);
     snprintf(text, sizeof(text), "Up Time  %s", a); du_set_text(du_get(u, A_TOTAL_UPTIME), text);
+    const uint64_t *p=m->performance;
+    if (p[8]) {
+        snprintf(text,sizeof(text),"System: %llu fps  %llu px/frame  %llu presents",
+                 (unsigned long long)(p[0]*1000000000ull/p[8]),
+                 (unsigned long long)(p[1]/(p[0]?p[0]:1)),(unsigned long long)p[2]);
+        du_set_text(du_get(u,A_SYSTEM),text);
+        snprintf(text,sizeof(text),"Composite %llu us/frame  Present %llu us/frame",
+                 (unsigned long long)(p[4]/(p[0]?p[0]:1)/1000),
+                 (unsigned long long)(p[5]/(p[0]?p[0]:1)/1000));
+        du_set_text(du_get(u,A_SYSTEM_TIME),text);
+        snprintf(text,sizeof(text),"LFB %llu KiB  Input %llu us  Lag %llu us",
+                 (unsigned long long)(p[3]/1024),(unsigned long long)(p[6]/1000),(unsigned long long)(p[7]/1000));
+        du_set_text(du_get(u,A_SYSTEM_IO),text);
+    }
     snprintf(text, sizeof(text), v->speed == TV_PAUSED ? "Processes: %u\tCPU Usage: %u%%\tMem: %uM / %uM (paused)" :
              "Processes: %u\tCPU Usage: %u%%\tMem Usage: %uM / %uM", s->processes, m->cpu,
              (s->usable_pages - s->free_pages) / 256, s->usable_pages / 256);

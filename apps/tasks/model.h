@@ -32,6 +32,7 @@ struct tm_model {
     struct tm_window windows[TM_WINDOWS], pending[TM_WINDOWS];
     unsigned window_count, pending_count;
     uint32_t window_serial, pending_mask;
+    uint64_t performance[9];
 };
 void tm_init(struct tm_model *);
 /* Validates and applies one call-70 result; returns 0, -EINVAL (short buffer) or -EIO (inconsistent records). */

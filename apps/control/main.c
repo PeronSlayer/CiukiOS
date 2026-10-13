@@ -2,6 +2,7 @@
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
  * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter. */
 #include "control.h"
+#include "../desktop/settings_io.h"
 #include <ciuki/audio.h>
 #include <ciuki/proc.h>
 #include <ciuki/devices.h>
@@ -16,7 +17,8 @@
 #include <time.h>
 #include <unistd.h>
 
-struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; uint32_t portrait[256 * 256]; uint32_t serial, display_serial, audio_serial; uint64_t last_tick; };
+struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
+    int writer_started, reload_pending; uint32_t portrait[256 * 256]; uint32_t serial, display_serial, audio_serial; uint64_t last_tick; };
 
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
@@ -30,17 +32,9 @@ static int load(void *ctx, char *text, size_t size, size_t *length)
 }
 static int save(void *ctx, const char *text, size_t length)
 {
-    (void)ctx;
-    if (mkdir(CFG_DIR, 0755) && errno != EEXIST) return -1;
-    static const char temp[] = CFG_DIR "/desktop.cpl";
-    FILE *f = fopen(temp, "wb");
-    if (!f) return -1;
-    int ok = fwrite(text, 1, length, f) == length;
-    if (fflush(f) || fsync(fileno(f))) ok = 0;
-    if (fclose(f)) ok = 0;
-    if (ok && rename(temp, CFG_FILE)) ok = !unlink(CFG_FILE) && !rename(temp, CFG_FILE);
-    if (!ok) unlink(temp);
-    return ok ? 0 : -1;
+    struct cp_main *m=ctx;
+    if (!m->writer_started) { errno=EIO; return -1; }
+    return cfg_writer_submit(&m->writer,text,length);
 }
 /* BOOT.CFG is a pre-existing bounded boot file. In-place replacement fits
  * its existing cluster and works with the native VFS's rename semantics. */
@@ -159,6 +153,9 @@ static int mixer(void *ctx, int *volume, int *muted)
 static int apply(void *ctx, unsigned request, int volume, int muted)
 {
     struct cp_main *m = ctx;
+    if (request==DESK_SETTINGS_RELOAD && m->writer_started && cfg_writer_busy(&m->writer)) {
+        m->reload_pending=1; return 0;
+    }
     struct ciuki_message msg;
     if (!++m->serial) ++m->serial;
     cp_settings_message(&msg, m->serial, request, volume, muted);
@@ -198,10 +195,20 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 static uint64_t monotonic(void *ctx) { (void)ctx; return du_now(); }
 static uint64_t now(void *ctx) { (void)ctx; struct timespec t; return clock_gettime(CLOCK_REALTIME, &t) || t.tv_sec < 0 ? 0 : (uint64_t)t.tv_sec; }
 static int close_request(struct du_window *w, void *user)
-{ (void)w; struct cp_main *m = user; cp_display_cancel(&m->app); return 1; }
+{ (void)w; struct cp_main *m = user;
+  if (m->writer_started && cfg_writer_busy(&m->writer)) {
+      du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); m->ui.dirty=1; return 0;
+  }
+  cp_display_cancel(&m->app); return 1; }
 static void idle(void *arg)
 {
     struct cp_main *m = arg;
+    int error;
+    if (m->writer_started && cfg_writer_result(&m->writer,&error)) {
+        if (m->reload_pending) { m->reload_pending=0; if (!error) apply(m,DESK_SETTINGS_RELOAD,0,0); }
+        cp_settings_saved(&m->app,error);
+    }
+    if (m->writer_started && cfg_writer_busy(&m->writer) && m->app.quit) return;
     if (m->app.quit) { du_window_close(&m->window); m->app.quit = 0; }
     uint64_t t = now(m);
     if (t != m->last_tick) { m->last_tick = t; cp_tick(&m->app); if (m->app.page == CP_DATETIME) m->ui.dirty = 1; }
@@ -219,9 +226,11 @@ int main(int argc, char **argv)
     }
     struct cp_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
+    m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
     struct cp_host *h = &m->app.host;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
+    h->save_async=1;
     h->audio_diagnostics = audio_query;
     h->devices = devices; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
     FILE *f = fopen("/system/assets/ciuki-portrait.xrgb", "rb");
@@ -237,11 +246,16 @@ int main(int argc, char **argv)
         if (sys.version == CIUKI_PROC_VERSION) { h->mem_total_k = (uint64_t)sys.usable_pages * 4u; h->mem_free_k = (uint64_t)sys.free_pages * 4u; h->processes = sys.processes; }
     }
     if (du_window_open_resizable(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
-        fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
+        fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
+        if (m->writer_started) cfg_writer_stop(&m->writer);
+        free(m); return 1;
     }
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
-    if (cp_attach(&m->app, &m->ui, page)) { du_window_destroy(&m->window); free(m); return 1; }
+    if (cp_attach(&m->app, &m->ui, page)) {
+        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); free(m); return 1;
+    }
     int r = du_run(&m->window, idle, m);
+    if (m->writer_started) cfg_writer_stop(&m->writer);
     cp_detach(&m->app); du_window_destroy(&m->window); free(m);
     return r < 0 ? 1 : 0;
 }

@@ -4,6 +4,7 @@
 #include "control.h"
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
 #define SECOND 1000000000ull
 #define CONFIRM_TIME (15 * SECOND)
@@ -167,6 +168,7 @@ static int request(struct cp_app *a, uint16_t id)
 static void finish(struct cp_app *a, const char *status)
 {
     a->mode_state = CP_MODE_IDLE;
+    a->mode_retry=0;
     du_timer_stop(a->ui, CP_MODE_TIMER);
     if (du_dialog_id(a->ui) == CP_CONFIRM) du_dialog_close(a->ui);
     cp_display_refresh(a); label(a, 3, status);
@@ -176,6 +178,7 @@ void cp_display_cancel(struct cp_app *a)
     if (a->mode_state == CP_MODE_IDLE || a->mode_state == CP_MODE_REVERT) return;
     if (du_dialog_id(a->ui) == CP_CONFIRM) du_dialog_close(a->ui);
     a->mode_state = CP_MODE_REVERT; a->mode_deadline = a->ui->now + CONFIRM_TIME;
+    a->mode_retry=0;
     if (request(a, a->previous_mode)) { finish(a, "The previous mode could not be requested."); return; }
     label(a, 3, "Restoring the previous display mode..."); cp_display_sync(a);
 }
@@ -187,6 +190,10 @@ static void countdown(struct cp_app *a)
 }
 void cp_display_result(struct cp_app *a, int result)
 {
+    if (result==-EBUSY && (a->mode_state==CP_MODE_WAIT || a->mode_state==CP_MODE_REVERT) && a->ui->now<a->mode_deadline) {
+        a->mode_retry=1; a->mode_retry_ns=a->ui->now+SECOND;
+        label(a,3,"Display is finishing a frame; waiting to retry..."); return;
+    }
     if (a->mode_state == CP_MODE_REVERT) {
         if (result || cp_display_refresh(a) || active_mode(a) != a->previous_mode)
             finish(a, "The previous display mode could not be restored.");
@@ -200,6 +207,17 @@ void cp_display_result(struct cp_app *a, int result)
     static const char *const buttons[] = {"Keep", "Revert"};
     du_message(a->ui, CP_CONFIRM, "Display Settings", "Keep these settings?\nReverting in 15 seconds.", DU_DLG_ICON_QUESTION, buttons, 2, 1, 1);
     countdown(a); cp_display_sync(a);
+}
+void cp_display_saved(struct cp_app *a, int error)
+{
+    if (a->mode_state!=CP_MODE_SAVE) return;
+    if (error) {
+        cp_display_cancel(a); label(a,3,"Settings could not be saved; restoring the previous mode.");
+    } else {
+        finish(a,"Display settings saved.");
+        if (!a->host.apply || a->host.apply(a->host.ctx,DESK_SETTINGS_RELOAD,0,0))
+            label(a,3,"Saved. Desktop reload could not be requested.");
+    }
 }
 static int persist(struct cp_app *a)
 {
@@ -217,6 +235,13 @@ static int persist(struct cp_app *a)
 int cp_display_event(struct cp_app *a, const struct du_event *e)
 {
     if (e->type == DU_EV_TICK && e->id == CP_MODE_TIMER) {
+        if (a->mode_state==CP_MODE_SAVE) return 1; /* Keep was confirmed; durable completion owns the reply. */
+        if (a->mode_retry && a->ui->now>=a->mode_retry_ns && a->ui->now<a->mode_deadline) {
+            a->mode_retry=0;
+            if (request(a,a->mode_state==CP_MODE_REVERT ? a->previous_mode : a->pending_mode))
+                finish(a,"The display retry could not be requested.");
+            return 1;
+        }
         if (a->mode_state && a->ui->now >= a->mode_deadline) {
             if (a->mode_state == CP_MODE_REVERT) finish(a, "No reply while restoring the display mode.");
             else cp_display_cancel(a);
@@ -228,6 +253,9 @@ int cp_display_event(struct cp_app *a, const struct du_event *e)
         if (e->index || a->ui->now >= a->mode_deadline) cp_display_cancel(a);
         else if (cp_display_refresh(a) || active_mode(a) != a->pending_mode || persist(a)) {
             cp_display_cancel(a); label(a, 3, "Settings could not be saved; restoring the previous mode.");
+        } else if (a->host.save_async) {
+            a->mode_state=CP_MODE_SAVE;
+            label(a,3,"Saving display settings..."); cp_display_sync(a);
         } else {
             finish(a, "Display settings saved.");
             if (!a->host.apply || a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0)) label(a, 3, "Saved. Desktop reload could not be requested.");

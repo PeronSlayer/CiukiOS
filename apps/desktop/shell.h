@@ -65,6 +65,8 @@ struct desk_shell {
     char want_run[192];
     /* Wallpaper cache: full screen, rebuilt when settings or size change. */
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;
+    uint32_t *background; int background_valid, background_selected, background_outline;
+    uint64_t background_rebuilds;
     struct desk_image image;        /* decoded file, owned by desktop.c */
     int image_failed;
     int wallpaper_deferred;       /* main-loop iterations before the image wallpaper is decoded (first frame first) */
@@ -85,6 +87,7 @@ int desk_shell_key(struct desktop *, int code, int value);
 int desk_internal_click(struct desktop *, int index, int32_t x, int32_t y);
 void desk_shell_scale_motion(struct desktop *, int32_t *dx, int32_t *dy);
 void desk_shell_tick(struct desktop *);
+void desk_shell_clock_damage(struct desktop *, uint64_t previous_second);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);
 int desk_internal_open(struct desktop *, int kind);

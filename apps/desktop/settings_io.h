@@ -1,0 +1,33 @@
+/* SPDX-License-Identifier: MIT */
+#ifndef CIUKI_SETTINGS_IO_H
+#define CIUKI_SETTINGS_IO_H
+#include "settings.h"
+#include <pthread.h>
+/* One bounded latest-snapshot mailbox. Disk I/O never holds lock. The caller
+ * owns lifetime; stop only after busy() is false (join then cannot wait on I/O). */
+struct cfg_writer {
+    pthread_mutex_t lock; pthread_cond_t changed; pthread_t thread;
+    int live, stopping, busy, pending, completed, error;
+    char text[CFG_TEXT_MAX]; size_t length;
+    char *scratch;
+    char log[384]; int log_pending;
+    char read_text[CFG_TEXT_MAX]; size_t read_length;
+    int read_pending, read_ready, read_error;
+    unsigned char job[64]; size_t job_length;
+    int job_pending, job_ready, job_error;
+    int (*run_job)(void *, size_t); /* bounded copied device setting; worker may block on its durable save */
+    const char *path, *temporary;
+    int (*write)(struct cfg_writer *, const char *, size_t);
+};
+int cfg_writer_start(struct cfg_writer *, const char *path, const char *temporary);
+int cfg_writer_submit(struct cfg_writer *, const char *, size_t);
+int cfg_writer_busy(struct cfg_writer *);
+int cfg_writer_result(struct cfg_writer *, int *error);
+void cfg_writer_log(struct cfg_writer *, const char *);
+void cfg_writer_read(struct cfg_writer *);
+int cfg_writer_read_result(struct cfg_writer *, char *, size_t *, int *);
+int cfg_writer_job(struct cfg_writer *, const void *, size_t);
+int cfg_writer_job_result(struct cfg_writer *, void *, size_t *, int *);
+void cfg_writer_stop(struct cfg_writer *);
+int cfg_write_file(struct cfg_writer *, const char *, size_t);
+#endif
