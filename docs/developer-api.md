@@ -659,19 +659,31 @@ struct ciuki_net_state {
 };
 ```
 
-F1-43: /dev/media devctl. A removal names one mounted partition but
-ejects the entire USB device. The generation rejects stale UI requests.
+/dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
+A removal names a generation and ejects the physical USB device or CD.
 
 ```c
-#define CIUKI_MEDIA_VERSION 1u
+#define CIUKI_MEDIA_VERSION 2u
+#define CIUKI_MEDIA_VERSION_1 1u
+#define CIUKI_MEDIA_NONE 0u
+#define CIUKI_MEDIA_USB 1u
+#define CIUKI_MEDIA_OPTICAL 2u
 #define MEDIA_GET_STATE 0x4d01u
 #define MEDIA_SAFE_REMOVE 0x4d02u
+struct ciuki_media_state_v1 {
+    uint32_t version;
+    uint32_t size;
+    uint32_t removable_mask;
+    uint32_t reserved;
+    uint32_t generation[26];
+};
 struct ciuki_media_state {
     uint32_t version;
     uint32_t size;
     uint32_t removable_mask;
     uint32_t reserved;
     uint32_t generation[26];
+    uint32_t type[26];
 };
 struct ciuki_media_remove {
     uint32_t version;
