@@ -1,4 +1,4 @@
-"""Shared lock, conservative host preflight and bounded retention."""
+"""Runner slot locks, conservative host preflight and bounded retention."""
 import fcntl
 import os
 from pathlib import Path
@@ -38,10 +38,73 @@ class ExclusiveLock:
         if self.fd is not None: os.close(self.fd);self.fd=None
 
 
-def qemu_count():
-    result=subprocess.run(['pgrep','-c','qemu-system'],capture_output=True,text=True,timeout=5)
-    if result.returncode not in (0,1): raise Refusal('cannot check existing QEMU processes')
-    return int(result.stdout.strip() or '0')
+SLOT_DEFAULT=2
+SLOT_MAX=4
+SCOPE_PREFIX='ciuki-test-'
+
+
+def slot_count():
+    raw=os.environ.get('CIUKI_RUNNER_SLOTS')
+    if raw is None or raw=='': return SLOT_DEFAULT
+    if not re.fullmatch('[0-9]+',raw) or not 1<=int(raw)<=SLOT_MAX:
+        raise Refusal(f'CIUKI_RUNNER_SLOTS must be an integer 1..{SLOT_MAX}')
+    return int(raw)
+
+
+def slot_paths(base):
+    """Slot lock files next to the common lock path (.qemu.lock -> .qemu.slotN)."""
+    base=Path(base);stem=base.name[:-5] if base.name.endswith('.lock') else base.name
+    return [base.with_name(f'{stem}.slot{i}') for i in range(slot_count())]
+
+
+class SlotLock(ExclusiveLock):
+    """Takes the first free runner slot; at most one process owns each slot."""
+    current=None
+    def __init__(self,base): self.base=Path(base);self.index=None;self.fd=None;self.path=None
+    def __enter__(self):
+        paths=slot_paths(self.base);paths[0].parent.mkdir(parents=True,exist_ok=True)
+        for _ in range(3):
+            for index,path in enumerate(paths):
+                fd=os.open(path,os.O_CREAT|os.O_RDWR,0o600)
+                try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError: os.close(fd);continue
+                self.fd=fd;self.path=path;self.index=index;SlotLock.current=self
+                return self
+            time.sleep(.05)
+        raise Refusal(f'all {len(paths)} runner slots are busy')
+    def __exit__(self,*args):
+        if SlotLock.current is self: SlotLock.current=None
+        super().__exit__(*args)
+
+
+def other_slots_held(slot=None):
+    """Number of runner slots, other than ours, currently locked by someone."""
+    slot=slot or SlotLock.current
+    if slot is None: return 0
+    held=0
+    for path in slot_paths(slot.base):
+        if path==slot.path: continue
+        try: fd=os.open(path,os.O_CREAT|os.O_RDWR,0o600)
+        except OSError: continue
+        try:
+            fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);fcntl.flock(fd,fcntl.LOCK_UN)
+        except BlockingIOError: held+=1
+        finally: os.close(fd)
+    return held
+
+
+def qemu_count(unit=None):
+    """QEMU processes outside every runner scope (foreign); with a unit, only
+    those inside that exact scope. Other slots' guests are never counted as foreign."""
+    found=0
+    for p in Path('/proc').glob('[0-9]*'):
+        try:
+            if not (p/'comm').read_text().startswith('qemu-system'): continue
+            groups=(p/'cgroup').read_text()
+        except OSError: continue
+        if unit is not None: found+=unit in groups
+        else: found+=SCOPE_PREFIX not in groups
+    return found
 
 
 def heavy_builds():
@@ -87,8 +150,8 @@ def preflight(root, wait_seconds=1200):
         time.sleep(min(30,max(0,until-time.monotonic())))
     builds=heavy_builds()
     if builds: raise Refusal('heavy build active: '+str(builds))
-    memory=available_memory()
-    if memory < 2*GIB: raise Refusal('MemAvailable is below 2 GiB')
+    memory=available_memory();others=other_slots_held()
+    if memory < 2*GIB*(1+others): raise Refusal(f'MemAvailable is below {2*(1+others)} GiB ({others} other runner slot(s) running)')
     check_budget(root)
     return memory
 

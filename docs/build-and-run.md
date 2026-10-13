@@ -27,7 +27,10 @@ python3 scripts/test/run.py f0-panic   # T3: destructive panic cases
 make qemu-run-full     # interactive boot (scripts/run_f0.sh "f0:boot run=00000001" to pass a request)
 ```
 
-`scripts/test/run.py` takes the common lock, refuses a second QEMU, runs each
+`scripts/test/run.py` takes the first free runner slot (`.qemu.slot0`/`.slot1`;
+`CIUKI_RUNNER_SLOTS`, default 2, max 4, so two suites may run at once), refuses
+when all slots are busy, when a manual QEMU runs outside the runner scopes, or
+when memory is short (2 GiB plus 2 GiB per other running slot), runs each
 case under `systemd-run --user --scope -p MemoryMax=1500M -p MemorySwapMax=0`
 on a qcow2 overlay in `build/test-runs/<suite>/<run-id>/`, and writes
 `result.json` plus the raw serial log. Profiles are in `tests/profiles/`,

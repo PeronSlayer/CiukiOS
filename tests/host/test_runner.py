@@ -90,6 +90,7 @@ class FakeHost(runner.Host):
         if self.bad_limits:raise res.Refusal('effective limits mismatch (fixture)')
         return {'MemoryMax':str(res.MEMORY_MAX),'MemorySwapMax':'0','memory.max':str(res.MEMORY_MAX),'memory.swap.max':'0'},self.cgroup
     def unowned_qemu_count(self):return 0
+    def own_qemu_count(self,unit):return 0
     def scope_pids(self,path):
         if self.process is None:return []
         found=[]
@@ -345,6 +346,54 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(res.Refusal,'another qemu-system'):res.preflight(self.root,0)
         with patch.object(res,'qemu_count',return_value=0),patch.object(res,'heavy_builds',return_value=[123]):
             with self.assertRaisesRegex(res.Refusal,'heavy build'):res.preflight(self.root,0)
+    def test_two_concurrent_runners_take_distinct_slots_and_third_is_refused(self):
+        lock=self.root/'common.lock'
+        with patch.dict(os.environ,{'CIUKI_RUNNER_SLOTS':'2'}):
+            with res.SlotLock(lock) as a:
+                self.assertEqual(a.index,0)
+                with res.SlotLock(lock) as b:
+                    self.assertEqual(b.index,1);self.assertEqual(res.other_slots_held(b),1)
+                    with self.assertRaisesRegex(res.Refusal,'slots are busy'):
+                        with res.SlotLock(lock):pass
+                self.assertIsNone(res.SlotLock.current if res.SlotLock.current is not a else None)
+            with res.SlotLock(lock) as c:self.assertEqual(c.index,0)
+        self.assertEqual([p.name for p in res.slot_paths(self.root/'.qemu.lock')],['.qemu.slot0','.qemu.slot1'])
+    def test_slot_count_environment_bounds(self):
+        for value,expected in (('',2),('1',1),('4',4)):
+            with patch.dict(os.environ,{'CIUKI_RUNNER_SLOTS':value}):self.assertEqual(res.slot_count(),expected)
+        for value in ('0','5','x','-1'):
+            with patch.dict(os.environ,{'CIUKI_RUNNER_SLOTS':value}),self.assertRaises(res.Refusal):res.slot_count()
+    def test_slot_exhaustion_in_another_process(self):
+        lock=self.root/'common.lock'
+        code='import sys;sys.path.insert(0,sys.argv[1]);from resources import SlotLock,Refusal\ntry:\n with SlotLock(sys.argv[2]):sys.exit(1)\nexcept Refusal:sys.exit(0)'
+        with patch.dict(os.environ,{'CIUKI_RUNNER_SLOTS':'1'}),res.SlotLock(lock):
+            result=subprocess.run([sys.executable,'-c',code,str(ROOT/'scripts/test'),str(lock)],capture_output=True,timeout=5,env=os.environ)
+            self.assertEqual(result.returncode,0,result.stderr)
+    def test_memory_requirement_grows_per_running_slot(self):
+        lock=self.root/'common.lock'
+        with patch.dict(os.environ,{'CIUKI_RUNNER_SLOTS':'2'}),patch.object(res,'qemu_count',return_value=0), \
+             patch.object(res,'heavy_builds',return_value=[]),patch.object(res,'available_memory',return_value=3*res.GIB):
+            with res.SlotLock(lock):
+                self.assertEqual(res.preflight(self.root,0),3*res.GIB)
+                with res.SlotLock(lock):
+                    with self.assertRaisesRegex(res.Refusal,'MemAvailable is below 4 GiB'):res.preflight(self.root,0)
+    def test_foreign_manual_qemu_still_refused_but_slot_guests_are_not_foreign(self):
+        def fake_proc(entries):
+            root=self.root/'proc';root.mkdir(exist_ok=True)
+            for pid,(comm,cgroup) in entries.items():
+                (root/str(pid)).mkdir(exist_ok=True);(root/str(pid)/'comm').write_text(comm+'\n');(root/str(pid)/'cgroup').write_text(cgroup+'\n')
+            return root
+        mine='0::/user.slice/ciuki-test-aaaa1111.scope';other='0::/user.slice/ciuki-test-bbbb2222.scope'
+        proc=fake_proc({1:('qemu-system-i38',mine),2:('qemu-system-i38',other),3:('bash','0::/x')})
+        real=Path
+        with patch.object(res,'Path',lambda x:proc if str(x)=='/proc' else real(x)):
+            self.assertEqual(res.qemu_count(),0)
+            self.assertEqual(res.qemu_count('ciuki-test-aaaa1111.scope'),1)
+            self.assertEqual(res.qemu_count('ciuki-test-cccc3333.scope'),0)
+            fake_proc({4:('qemu-system-i38','0::/user.slice/app-vscode.scope')})
+            self.assertEqual(res.qemu_count(),1)
+            with patch.object(res,'heavy_builds',return_value=[]),patch.object(res,'available_memory',return_value=3*res.GIB), \
+                 self.assertRaisesRegex(res.Refusal,'another qemu-system'):res.preflight(self.root,0)
     def test_sparse_disk_budget_refusal(self):
         runs=self.root/'build/test-runs';runs.mkdir(parents=True)
         with (runs/'sparse').open('wb') as stream:stream.truncate(2*res.GIB+1)
@@ -1060,7 +1109,7 @@ const char *records(void) { return evidence; }
         profile={**self.profile,'icount':'shift=1,sleep=on'}
         def locked():
             with self.assertRaises(res.Refusal):
-                with res.ExclusiveLock(lock):pass
+                with res.ExclusiveLock(res.slot_paths(lock)[0]):pass
         def checked(args,**kwargs):
             locked();self.assertIn('unittest',args)
             return subprocess.CompletedProcess(args,0,b'host fixture passed',b'')
@@ -1078,7 +1127,7 @@ const char *records(void) { return evidence; }
         self.assertEqual(code,1)
         summary=json.loads((directory.parent/'summary.json').read_text())
         self.assertEqual(summary['cases'][0]['outcome'],'not_run')
-        with res.ExclusiveLock(lock):pass
+        with res.ExclusiveLock(res.slot_paths(lock)[0]):pass
 
     def test_checker_failure_retains_overlay_and_cannot_pass(self):
         self.case['checks']={'offset':0,'size':len(self.image.read_bytes())}
