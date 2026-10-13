@@ -243,6 +243,7 @@ static const struct program_info programs[] = {
     {"clock", "Clock", "appointment-new", "accessories"},
     {"help", "CiukiOS Help", "help-browser", "accessories"},
     {"mixer", "Volume Control", "audio-volume-high", "accessories"},
+    {"regedit", "Registry Editor", "preferences-system", "accessories"},
     {"viewer", "Image Viewer", "image-x-generic", "accessories"},
     {"hello", "Hello", "face-smile", "developer"},
     {"ciukide", "CiukIDE", "applications-development", "developer"},

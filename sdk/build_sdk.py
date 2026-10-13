@@ -107,12 +107,12 @@ def main():
         run([tool_info['clang']['path'],*cflags,'-Werror','-nostdinc','-isystem',str(Path(run([tool_info['clang']['path'],'-print-resource-dir'],capture_output=True,text=True).stdout.strip())/'include'),'-I',inc,'-I',work,'-c',path,'-o',obj],env=env)
     compile(ROOT/'sdk/crt/crt0.S',lib/'crt0.o')
     objects={}
-    for family in ('crt','libciuki','libpthread'):
+    for family in ('crt','libciuki','libpthread','libreg'):
         objects[family]=[]
         for path in sorted((ROOT/'sdk'/family).glob('*.c')):
             obj=work/(family+'_'+path.stem+'.o'); compile(path,obj); objects[family].append(obj)
     obj=work/'syscalls.o'; compile(work/'syscalls.S',obj); objects['libciuki'].append(obj)
-    for name,objs in [('libciuki',objects['crt']+objects['libciuki']),('libpthread',objects['libpthread'])]:
+    for name,objs in [('libciuki',objects['crt']+objects['libciuki']),('libpthread',objects['libpthread']),('libreg',objects['libreg'])]:
         run([tool_info['llvm-ar']['path'],'rcsD',lib/(name+'.a'),*objs])
     helpers=work/'helpers.o'; compile(ROOT/'sdk/newlib/helpers.c',helpers)
     run([tool_info['llvm-ar']['path'],'rcsD',lib/'libcompiler.a',helpers])
@@ -152,7 +152,7 @@ def main():
     linked={}
     for mapfile in (OUT/'tests').glob('*.elf.map'):
         members=sorted(set(re.findall(r'([^\s/]+\.a)\(([^)]+)\)',mapfile.read_text())))
-        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
+        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
     manifest['linked_file_licenses']=linked
     manifest['test_evidence']=json.loads((OUT/'tests/host-checks.json').read_text())
     manifest['installed_bytes']=sum(p.stat().st_size for p in (OUT/'sysroot').rglob('*') if p.is_file())
