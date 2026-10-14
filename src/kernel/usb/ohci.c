@@ -104,6 +104,7 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     usb_barrier(); ed[0] &= ~(1u << 14); usb_barrier();
     usb_write(h, 4, 0x80 | (periodic ? 4 : bulk ? 0x20 : 0x10), 4);
     if (!periodic) usb_write(h, 8, bulk ? 4 : 2, 4); /* Bulk/ControlListFilled */
+    frame = usb_read(h, 0x3c, 4) & 0xffff;
     uint64_t end = begin + budget;
     unsigned tries = budget + 1;
     int result = -USB_ETIMEDOUT;
@@ -114,7 +115,7 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
         trace->hc_status=s;
         if (s & 0x10) {
             usb_barrier(); trace->status=td[0]; trace->token=ed[0];
-            trace->frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
+            trace->frames=trace->poll_frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
             trace->result=trace->retired=-USB_EIO;
             usb_host_quarantine(h, "ohci_host_error"); return -USB_EIO;
         }
@@ -124,9 +125,11 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
         if (cc < 14 && ((ed[2] & ~15u) == ed[1] || (ed[2] & 1))) {
             break;
         }
-        if (usb_expired(h, end)) { if (periodic) result = -USB_EAGAIN; break; }
+        if (periodic && frames >= 2) { result = -USB_EAGAIN; break; }
+        if (usb_expired(h, end)) break;
         h->io.sleep(h->io.cookie, 1);
     }
+    trace->poll_frames=frames;
     ed[0] |= 1u << 14; usb_barrier();
     usb_write(h, 4, 0x80, 4);
     int retired = usb_retire_frames(h, 0x3c, 4, 0xffff);
