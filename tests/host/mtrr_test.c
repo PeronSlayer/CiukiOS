@@ -63,7 +63,8 @@ static void host_write_cr0(uint32_t value) { CHECK(!(host_flags & 0x200)); event
 static void host_write_cr3(uint32_t value) { event('3', 0, value); host_cr3 = value; }
 static void host_write_cr4(uint32_t value) { event('4', 0, value); host_cr4 = value; }
 static void host_wbinvd(void) { CHECK(!(host_flags & 0x200)); event('B', 0, 0); }
-static void host_invlpg(uint32_t va) { (void)va; }
+static unsigned invalidations;
+static void host_invlpg(uint32_t va) { (void)va; invalidations++; }
 void klog(const char *fmt, ...)
 {
     va_list ap; va_start(ap, fmt); vsnprintf(log_line, sizeof(log_line), fmt, ap); va_end(ap); logs++;
@@ -344,12 +345,44 @@ static void runtime_mapping_tests(void)
     fresh(); window = vmm_reserve_mmio(PAGE_SIZE);
     CHECK(!vmm_replace_framebuffer(window, PAGE_SIZE, 0xE0000000, 3u << 20) && !msr_reads && !msr_writes);
 }
+static void firmware_mapping_tests(void)
+{
+    fresh();
+    const uint32_t addresses[]={0x1ff7c000,0x1ff7cff0,0x40000ff0,0xfffffffau};
+    const uint32_t lengths[]={1717,1717,UINT16_MAX,6};
+    for(unsigned n=0;n<ARRAY_SIZE(addresses);n++) {
+        uint32_t start=mmio_next,phys=addresses[n],bytes=lengths[n];
+        uint32_t off=phys&(PAGE_SIZE-1),span=PAGE_ALIGN_UP(off+bytes);
+        const void *mapped=vmm_map_physical_ro(phys,bytes);
+        CHECK((uintptr_t)mapped==start+off && mmio_next==start+span+PAGE_SIZE);
+        for(uint32_t i=0;i<span;i+=PAGE_SIZE)
+            CHECK(vmm_kernel_pte(start+i)==(PAGE_ALIGN_DOWN(phys)+i+PTE_P));
+        CHECK(!vmm_kernel_pte(start+span)); /* guard */
+        unsigned before=invalidations;
+        vmm_revoke_mmio((void *)mapped,bytes);
+        CHECK(invalidations-before==span/PAGE_SIZE);
+        for(uint32_t i=0;i<span+PAGE_SIZE;i+=PAGE_SIZE)CHECK(!vmm_kernel_pte(start+i));
+    }
+    CHECK(!msr_reads && !msr_writes); /* no framebuffer cache-policy changes */
+    uint32_t next=mmio_next;
+    CHECK(!vmm_map_physical_ro(0x1ff7c000,0) && mmio_next==next);
+    CHECK(!vmm_map_physical_ro(0xfffffffa,7) && mmio_next==next);
+    mmio_next=MMIO_END-2*PAGE_SIZE;
+    CHECK(!vmm_map_physical_ro(0x1ff7cfff,2)); /* two pages plus guard do not fit */
+    CHECK(mmio_next==MMIO_END-2*PAGE_SIZE && !vmm_kernel_pte(mmio_next));
+    const void *last=vmm_map_physical_ro(0x1ff7c000,PAGE_SIZE);
+    CHECK(last && mmio_next==MMIO_END);
+    CHECK(!vmm_map_physical_ro(0x1ff7c000,1));
+    vmm_revoke_mmio((void *)last,PAGE_SIZE);
+    CHECK(!vmm_kernel_pte(MMIO_END-2*PAGE_SIZE) && !vmm_kernel_pte(MMIO_END-PAGE_SIZE));
+    puts("VMM firmware window: bounded read-only supervisor PTEs, offsets, guard, revoke/TLB invalidation, 4 GiB bounds and arena exhaustion PASS");
+}
 int main(void)
 {
     arithmetic_tests();
     for (unsigned g = 0; g < 2; g++) for (unsigned i = 0; i < 2; i++) for (unsigned s = 0; s < 2; s++)
         sequence_tests(g, i, s);
-    gating_tests(); mapping_tests(); runtime_mapping_tests();
+    gating_tests(); mapping_tests(); runtime_mapping_tests(); firmware_mapping_tests();
     printf("MTRR host tests: %s (%u checks, %u failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;
 }
