@@ -136,14 +136,15 @@ class ImagePayloadTests(unittest.TestCase):
                                                                     self.work / "games/CIUKIGAM.IMG")
         licences = {f"/system/licenses/{p}-{n}" for p, n in (("wolf3d-shareware", "VENDOR.DOC"),
                     ("wolf3d-shareware", "FILE_ID.DIZ"), ("wolf3d-shareware", "UPSTREAM.json"),
-                    ("doom-shareware", "README.TXT"), ("doom-shareware", "DOOMS_19.DAT"), ("doom-shareware", "UPSTREAM.json"))}
+                    ("doom-shareware", "README.TXT"), ("doom-shareware", "DOOMS_19.DAT"), ("doom-shareware", "UPSTREAM.json"), ("quake-shareware", "SLICNSE.TXT"),
+                    ("quake-shareware", "LICINFO.TXT"), ("quake-shareware", "UPSTREAM.json"))}
         self.assertEqual(set(sources), {"/Games/CIUKIGAM.IMG"} | licences)
         self.assertTrue({"/Games", "/system/licenses"} <= directories)
         self.assertNotIn("checkers", metadata)
         records = image.payload_records(sources)
         disk = next(r for r in records if r["path"] == "/Games/CIUKIGAM.IMG")
         self.assertEqual((disk["sha256"], disk["size"]), (metadata["image_sha256"], metadata["size"]))
-        self.assertLess(disk["size"], 16 * 1024 * 1024)
+        self.assertLess(disk["size"], 32 * 1024 * 1024)
         self.assertTrue(all(f["redistribution"] in ("free", "ciukios") for f in metadata["files"]))
         names = {f["path"].rsplit("/", 1)[1] for f in metadata["files"]}
         self.assertFalse({n for n in names if dos.REGISTERED_DATA.fullmatch(n)})

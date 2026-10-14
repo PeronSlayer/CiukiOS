@@ -272,8 +272,8 @@ def application_provenance(sources, manifest, sdk):
 
 
 def games_payloads(dos_image, out=None):
-    """Owner decision 2026-10-12: Wolfenstein 3-D and DOOM shareware are
-    pre-installed. The games disk (the DOS system plus \\WOLF3D and \\DOOM,
+    """Owner decisions 2026-10-12/14: Wolfenstein 3-D, DOOM and Quake shareware are
+    pre-installed. The games disk (the DOS system plus \\WOLF3D, \\DOOM and \\QUAKE,
     from the pinned archives in third_party/games) is the base of every
     /Programs/dosbox window VM (dosvm_disk.c, C:\\GAMES\\CIUKIGAM.IMG); the
     packages' licence documents and provenance go to /system/licenses.

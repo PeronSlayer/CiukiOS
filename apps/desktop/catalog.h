@@ -34,6 +34,7 @@ struct desk_game_entry { const char *label, *title, *command, *tango; };
 static const struct desk_game_entry desk_games[] = {
     {"Wolfenstein 3D (shareware)", "Wolfenstein 3D", "\\WOLF3D\\WOLF3D.EXE", "input-gaming"},
     {"DOOM (shareware)", "DOOM", "\\DOOM\\DOOM.EXE -config CIUKI.CFG", "input-gaming"},
+    {"Quake (shareware)", "Quake", "\\QUAKE\\QUAKE.EXE", "input-gaming"},
 };
 #define DESK_GAME_COUNT (sizeof(desk_games) / sizeof(desk_games[0]))
 static inline const struct desk_catalog_entry *desk_catalog_find(const char *name)

@@ -209,6 +209,7 @@ class IconStoreTests(unittest.TestCase):
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         games = re.findall(r'\{"[^"]+", "[^"]+", "[^"]+", "([a-z-]+)"\}', catalog)
+        self.assertEqual(len(games), 3)
         self.assertEqual(set(games), {table["menu:game"]})
         rows = dict(re.findall(r'item\(m, "([^"]+)", "([a-z-]+)"', shell))
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",

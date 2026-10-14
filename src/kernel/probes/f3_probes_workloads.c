@@ -13,10 +13,13 @@
  *                 keyboard to a game, XMS/EMS usage, F10+Y quit; 5 loops.
  *   f3:vm-starve  a CLI-loop VM beside a DOS/4GW VM: timer and keyboard
  *                 delivery and the native heartbeat keep their rates.
+ *   f3:quake      bundled shareware 1.06: native DPMI, changing VGA frames,
+ *                 16-bit stereo DMA5, console quit and resource cleanup.
  * Game payloads are found as \CIUKIGAM.IMG on a further drive (the fixture
  * disk of scripts/test/dos_fixtures.py) and booted as the VM's read-only base
  * image (dosvm_config.base); without it the probe ends NOT_RUN
- * reason=fixtures_absent. Records: docs/design/f3-acceptance.md, f3-06.
+ * reason=fixtures_absent. Quake uses the canonical bundled games disk
+ * directly and never needs a local commercial fixture. Records: docs/design/f3-acceptance.md, f3-06.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -262,7 +265,7 @@ static void hex32(const uint8_t digest[32], char hex[65])
     hex[64] = 0;
 }
 /* group=dos_payload: compared by the runner with the image manifest (f3-04). */
-static int hash_payload(const char *name, struct dosvm *v, const char *path, bool *bound)
+static int hash_file(const char *name, struct dosvm *v, const char *path, bool *bound, const char *group)
 {
     uint8_t *buf = kmalloc(1024);
     if (!buf) return -ENOMEM;
@@ -274,10 +277,14 @@ static int hash_payload(const char *name, struct dosvm *v, const char *path, boo
     if (!e) {
         char hex[65];
         hex32(digest, hex);
-        rec_emit(name, "DATA", "group=dos_payload path=/%s size=%u sha256=%s", path, size, hex);
+        rec_emit(name, "DATA", "group=%s path=/%s size=%u sha256=%s", group, path, size, hex);
     }
     kfree(buf);
     return e;
+}
+static int hash_payload(const char *name, struct dosvm *v, const char *path, bool *bound)
+{
+    return hash_file(name, v, path, bound, "dos_payload");
 }
 /* Every regular file of a workload directory: group=workload_file, compared
  * by the runner with the fixture generator's manifest (dos_fixtures.py). */
@@ -899,3 +906,96 @@ static int probe_f3_vm_starve(void)
     return !!error;
 }
 CIUKI_F3_PROBE("vm-starve", probe_f3_vm_starve);
+
+/* ---- f3:quake (bundled, free shareware; no owner-local fixture) ---- */
+/* Unlike DOOM's timedemo, Quake renders its console into VGA rather than
+ * B8000 text. A console banner alone cannot qualify this game: wait for
+ * changing 320x200 frames, active native DPMI and SB16 PCM, then enter quit
+ * through the real 8042 path and require RUNREC plus DPMI cleanup. */
+static int probe_f3_quake(void)
+{
+    const char *name = "quake";
+    rec_emit(name, "BEGIN", "version=1 public=%u", DOSVM_DPMI_PUBLIC);
+    rec_emit(name, "DATA", "case=identity build=%s loops=1 source=bundled", CIUKI_BUILD_HEX8);
+    struct dosvm_ledger before;
+    dosvm_snapshot(&before);
+    const struct dosvm_config config = {.probe = name, .dpmi = true, .base = "C:\\GAMES\\CIUKIGAM.IMG"};
+    struct dosvm *v = 0;
+    int error = storage_enable_write(storage_get(), 2);
+    if (!error) error = wl_boot(&config, &v);
+    static const char *const members[] = {
+        "QUAKE/CWSDPMI.EXE", "QUAKE/GENVXD.DLL", "QUAKE/HELP.TXT", "QUAKE/ID1/PAK0.PAK",
+        "QUAKE/LICINFO.TXT", "QUAKE/MGENVXD.VXD", "QUAKE/ORDER.TXT", "QUAKE/PDIPX.COM",
+        "QUAKE/Q95.BAT", "QUAKE/QLAUNCH.EXE", "QUAKE/QUAKE.EXE", "QUAKE/QUAKEUDP.DLL",
+        "QUAKE/README.TXT", "QUAKE/READV106.TXT", "QUAKE/SLICNSE.TXT", "QUAKE/TECHINFO.TXT"
+    };
+    for (unsigned i = 0; !error && i < sizeof(members) / sizeof(members[0]); i++) {
+        bool ignored;
+        error = hash_file(name, v, members[i], &ignored, "game_payload");
+    }
+    bool ignored;
+    if (!error) error = hash_payload(name, v, "RUNREC.COM", &ignored);
+    struct run_watch w = {0};
+    struct dosvm_frame frame = {0};
+    struct dosvm_audio_info audio = {0};
+    struct dosvm_key key = v ? dosvm_key(v) : (struct dosvm_key){0};
+    uint8_t previous[32] = {0};
+    unsigned changes = 0;
+    uint64_t first = 0, elapsed = 0;
+    if (!error) {
+        dosvm_expect(v, "RUNREC");
+        w.start = g_ticks;
+        error = wl_type(v, "\\RUNREC.COM \\QUAKE QUAKE.EXE +playdemo demo1");
+    }
+    uint64_t until = deadline_after_ms(DOOM_LOOP_MS);
+    black_digest();
+    while (!error) {
+        dosvm_info(v, &w.info);
+        dosvm_dpmi_info(key, &w.dpmi);
+        dosvm_audio_info(key, &audio);
+        if (w.info.state >= DOSVM_STOPPING || w.info.verdict_done) { error = -V86_EIO; break; }
+        if (!dosvm_frame_digest(v, 0, &frame) && !frame.text && frame.width == 320 && frame.height == 200 &&
+            memcmp(frame.digest, black_frame, 32) && w.dpmi.active && memcmp(frame.digest, previous, 32)) {
+            memcpy(previous, frame.digest, 32);
+            if (!changes) first = g_ticks;
+            changes++;
+            elapsed = g_ticks - first;
+        }
+        /* At least 10 seconds of changing frames and a functioning DMA5
+         * output stream: startup text or a static error screen cannot pass. */
+        if (changes >= 32 && elapsed >= 10000 && audio.frames >= 4096 && audio.boundaries >= 4 &&
+            audio.bits == 16 && audio.stereo && audio.auto_init && audio.dma16 == 5 &&
+            w.info.pool_quota >= 16u * 1024u * 1024u) break;
+        if (deadline_passed(until)) { error = -V86_ETIMEDOUT; break; }
+        task_sleep_ms(500);
+    }
+    char hex[65];
+    hex32(frame.digest, hex);
+    rec_emit(name, "DATA", "case=video width=%u height=%u text=%u changes=%u span_ms=%u digest=%s",
+             frame.width, frame.height, frame.text, changes, (uint32_t)elapsed, hex);
+    rec_emit(name, "DATA", "case=memory pool_quota=%u pool_used=%u dpmi_active=%u entries=%u",
+             w.info.pool_quota, w.info.pool_used, w.dpmi.active, w.dpmi.stats.entries);
+    rec_emit(name, "DATA", "case=audio bits=%u stereo=%u auto_init=%u dma16=%u frames=%u blocks=%u dma_faults=%u",
+             audio.bits, audio.stereo, audio.auto_init, audio.dma16, (uint32_t)audio.frames, audio.boundaries, audio.dma_faults);
+    if (!error && audio.dma_faults) error = -EFAULT;
+    if (!error && !dosvm_input_focus(key, true)) error = -EFAULT;
+    /* Backtick opens the console; q,u,i,t and Enter use the US set-1 codes
+     * read by Quake's INT 9 handler. RUNREC must report a normal exit. */
+    static const unsigned quit_keys[] = {0x29, 0x10, 0x16, 0x17, 0x14, 0x1C};
+    for (unsigned i = 0; !error && i < sizeof(quit_keys) / sizeof(quit_keys[0]); i++)
+        if (!wl_key(key, quit_keys[i])) error = -EFAULT;
+    if (!error) error = run_wait(v, 30000, &w);
+    unsigned rc = 0, type = 0;
+    bool status = v && run_status(&w.info, &rc, &type);
+    bool released = dpmi_released(&w.dpmi);
+    rec_emit(name, "DATA", "case=exit status=%u rc=%u type=%u released=%u terminations=%u faults=%u stale=%u error=%d",
+             status, rc, type, released, w.dpmi.stats.terminations, w.dpmi.stats.faults, w.dpmi.stats.stale, error);
+    if (!error && (!status || rc || type || !released || !w.dpmi.stats.terminations ||
+                   w.dpmi.stats.faults || w.dpmi.stats.stale)) error = -EFAULT;
+    if (error && v) probe_dos_screen(name, v);
+    if (v) { int e = wl_exit(&v); if (!error) error = e; }
+    cleanup_record(name, &before, &error);
+    rec_emit(name, "END", "status=%s error=%d", error ? "FAIL" : "PASS", error);
+    return !!error;
+}
+CIUKI_F3_PROBE("quake", probe_f3_quake);

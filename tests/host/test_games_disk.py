@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGES = ("wolf3d-shareware", "doom-shareware")
+PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware")
 
 
 def load(name, path):
@@ -53,7 +53,7 @@ class PackageTests(unittest.TestCase):
                             self.assertEqual(reference[k], digests[k], reference["reference"])
                 self.assertTrue(any("sha256" in r for r in published))
                 self.assertEqual(record["redistribution"], "free (shareware, unmodified package)")
-                self.assertEqual(len(record["sources"]), 2)
+                self.assertEqual(len(record["sources"]), 3 if package == "quake-shareware" else 2)
                 # A changed archive is refused before anything is unpacked.
                 root = Path(self.tmp) / package
                 folder = root / games.GAMES / package
@@ -134,6 +134,138 @@ class PackageTests(unittest.TestCase):
 
 
 class DecoderTests(unittest.TestCase):
+    @staticmethod
+    def lh5_single_blocks(blocks):
+        # Format-level vectors: zero-length Huffman trees encode a single
+        # symbol without consuming bits per command. Last byte is padded.
+        bits = ""
+        for count, symbol in blocks:
+            for value, width in ((count, 16), (0, 5), (0, 5), (0, 9), (symbol, 9), (0, 4), (0, 4)):
+                bits += format(value, f"0{width}b")
+        bits += "0" * (-len(bits) % 8)
+        return int(bits, 2).to_bytes(len(bits) // 8, "big")
+
+    def lha_vector(self, level, name="ID1/TEST.TXT", output=b"AAA"):
+        body = self.lh5_single_blocks([(len(output), 65)])
+        base = bytearray(24 if level == 2 else 22)
+        base[2:7] = b"-lh5-"
+        struct.pack_into("<II", base, 7, len(body), len(output))
+        base[20] = level
+        if level < 2:
+            raw = name.replace("/", "\\").encode()
+            base[21] = len(raw)
+            base += raw + struct.pack("<H", games.lha_crc16(output))
+            if level == 1:
+                base += b"M\0\0"  # OS and next extended-header size
+            base[0] = len(base) - 2
+            base[1] = sum(base[2:]) & 255
+        else:
+            struct.pack_into("<H", base, 21, games.lha_crc16(output))
+            base[23] = ord("M")
+            parent, _, leaf = name.rpartition("/")
+            extensions = [b"\x01" + leaf.encode()]
+            if parent:
+                extensions += [b"\x02" + parent.encode() + b"\xff"]
+            for ext in extensions:
+                base += struct.pack("<H", len(ext) + 2) + ext
+            base += b"\0\0"
+            struct.pack_into("<H", base, 0, len(base))
+        return bytes(base) + body + b"\0"
+
+    def test_lh5_vectors_overlap_window_wrap_and_initial_spaces(self):
+        self.assertEqual(games.lha_crc16(b"123456789"), 0xBB3D)
+        self.assertEqual(games.lh5_decode(self.lh5_single_blocks([(3, 65)]), 3), b"AAA")
+        self.assertEqual(games.lh5_decode(self.lh5_single_blocks([(1, 256)]), 3), b"   ")
+        # Literal A, followed by forty overlapping maximum-length matches;
+        # the stream crosses the 8 KiB history-window boundary.
+        self.assertEqual(games.lh5_decode(self.lh5_single_blocks([(1, 65), (40, 509)]), 10241), b"A" * 10241)
+        with self.assertRaisesRegex(ValueError, "output too large"):
+            games.lh5_decode(b"", 33 * 1024 * 1024)
+        with self.assertRaisesRegex(ValueError, "exceeds output"):
+            games.lh5_decode(self.lh5_single_blocks([(1, 256)]), 2)
+        with self.assertRaisesRegex(ValueError, "out of input"):
+            games.lh5_decode(self.lh5_single_blocks([(3, 65)])[:-1], 3)
+        with self.assertRaisesRegex(ValueError, "empty block"):
+            games.lh5_decode(bytes(10), 1)
+        with self.assertRaisesRegex(ValueError, "unused block"):
+            games.lh5_decode(self.lh5_single_blocks([(4, 65)]), 3)
+
+    def test_lh5_rejects_bad_huffman_tables(self):
+        def stream(fields):
+            raw = "".join(format(value, f"0{width}b") for value, width in fields)
+            raw += "0" * (-len(raw) % 8)
+            return int(raw, 2).to_bytes(len(raw) // 8, "big")
+        for fields, reason in (([(1, 16), (31, 5)], "too many tree"),
+                               ([(1, 16), (0, 5), (31, 5)], "invalid single"),
+                               ([(1, 16), (1, 5), (1, 3)], "incomplete tree"),
+                               ([(1, 16), (3, 5), (1, 3), (1, 3), (1, 3), (0, 2)], "oversubscribed tree"),
+                               ([(1, 16), (0, 5), (0, 5), (511, 9)], "too many code")):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                games.lh5_decode(stream(fields), 1)
+
+    def test_lha_levels_paths_crc_and_truncation(self):
+        for level in range(3):
+            vector = self.lha_vector(level)
+            self.assertEqual(games.lha_members(vector), {"ID1/TEST.TXT": b"AAA"})
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                games.lha_members(vector[:-1] + vector)
+            with self.assertRaisesRegex(ValueError, "bad.*path"):
+                games.lha_members(self.lha_vector(level, "../BAD.TXT"))
+            for cut in (1, 20, len(vector) - 2):
+                with self.assertRaisesRegex(ValueError, "truncated"):
+                    games.lha_members(vector[:cut])
+        vector = bytearray(self.lha_vector(0))
+        vector[22 + vector[21]] ^= 1
+        with self.assertRaisesRegex(ValueError, "header checksum"):
+            games.lha_members(vector)
+        vector[1] = sum(vector[2:vector[0] + 2]) & 255
+        with self.assertRaisesRegex(ValueError, "member CRC"):
+            games.lha_members(vector)
+
+    def test_lha_level1_extended_names_and_level2_header_crc(self):
+        # Level 1 skip size includes extensions. Filename 01 and path 02
+        # override the base filename; each size includes its two size bytes.
+        vector = self.lha_vector(1, "OLD.TXT")
+        n = vector[0] + 2
+        base = bytearray(vector[:n])
+        name = b"\x01NEW.TXT"
+        directory = b"\x02ID1\xff"
+        struct.pack_into("<H", base, len(base) - 2, len(name) + 2)
+        extension = name + struct.pack("<H", len(directory) + 2) + directory + b"\0\0"
+        struct.pack_into("<I", base, 7, struct.unpack_from("<I", base, 7)[0] + len(extension))
+        base[1] = sum(base[2:]) & 255
+        self.assertEqual(games.lha_members(bytes(base) + extension + vector[n:]), {"ID1/NEW.TXT": b"AAA"})
+        bad = bytearray(base)
+        struct.pack_into("<H", bad, len(bad) - 2, 1)
+        bad[1] = sum(bad[2:]) & 255
+        with self.assertRaisesRegex(ValueError, "extended header size"):
+            games.lha_members(bytes(bad) + extension + vector[n:])
+        # Common header CRC is over the complete level-2 header with the
+        # common CRC field zeroed, not just the base or member bytes.
+        vector = self.lha_vector(2)
+        n = struct.unpack_from("<H", vector)[0]
+        header = bytearray(vector[:n - 2] + b"\x05\0\0\0\0\0\0")
+        struct.pack_into("<H", header, 0, len(header))
+        struct.pack_into("<H", header, n + 1, games.lha_crc16(header))
+        self.assertEqual(games.lha_members(bytes(header) + vector[n:]), {"ID1/TEST.TXT": b"AAA"})
+        header[15] ^= 1  # timestamp is included in the common header CRC
+        with self.assertRaisesRegex(ValueError, "header CRC"):
+            games.lha_members(bytes(header) + vector[n:])
+
+    def test_quake_all_members_match_header_crcs_and_independent_pak_hash(self):
+        record = games.upstream("quake-shareware")
+        outer, inner = games.unpack(record, games.archive("quake-shareware", record))
+        entries = list(games.lha_entries(outer["RESOURCE.1"][1945:]))
+        self.assertEqual(len(entries), 16)
+        self.assertEqual(set(inner), {f["name"] for f in record["install"]["files"]})
+        for name, _, size, crc in entries:
+            self.assertEqual(record["member_references"][name], {"size": size, "crc16": f"{crc:04x}"})
+            self.assertEqual(games.lha_crc16(inner[name]), crc)
+        self.assertEqual(hashlib.md5(inner["ID1/PAK0.PAK"]).hexdigest(), "5906e5998fc3d896ddaf5e6a62e03abb")
+        self.assertEqual(inner["ID1/PAK0.PAK"][:4], b"PACK")
+        self.assertEqual(len(inner["QUAKE.EXE"]), 404480)
+        self.assertEqual(len(inner["CWSDPMI.EXE"]), 25920)
+
     def test_dcl_explode(self):
         # Ben Rudiak-Gould's example as corrected in blast.c's header comment.
         self.assertEqual(games.dcl_explode(bytes.fromhex("00048224258f807f")), (b"AIAIAIAIAIAIA", 8))
@@ -181,7 +313,7 @@ class GuardTests(unittest.TestCase):
 
     def test_registered_names_never_pass(self):
         free = games.free_hashes(self.root)
-        for name in ("/DOOM/DOOM.WAD", "/WOLF3D/VSWAP.WL6", "/GAMES/DOOM2.WAD", "/X/SPEAR.SOD"):
+        for name in ("/DOOM/DOOM.WAD", "/WOLF3D/VSWAP.WL6", "/GAMES/DOOM2.WAD", "/X/SPEAR.SOD", "/QUAKE/ID1/PAK1.PAK"):
             with self.subTest(name=name), self.assertRaisesRegex(SystemExit, "registered game data"):
                 dos.refuse_local_payloads({name: "0" * 64}, self.root, free=free | {"0" * 64})
             with self.assertRaisesRegex(ValueError, "registered game data"):
@@ -205,6 +337,14 @@ class GuardTests(unittest.TestCase):
         dos.refuse_local_payloads({"/DOOM/DOOM.EXE": pinned["DOOM.EXE"]}, self.root, free=free)
         with self.assertRaisesRegex(SystemExit, "reserved name"):
             dos.refuse_local_payloads({"/DOOM/DOOM.EXE": pinned["DOOM.EXE"]}, self.root)
+        quake = {f["name"]: f["sha256"] for f in games.upstream("quake-shareware", self.root)["install"]["files"]}
+        dos.refuse_local_payloads({"/QUAKE/QUAKE.EXE": quake["QUAKE.EXE"],
+                                  "/QUAKE/ID1/PAK0.PAK": quake["ID1/PAK0.PAK"]}, self.root, free=free)
+        # A registered or modified PAK0 and executable need the exact free pin,
+        # even when placed outside the known owner-local source directory.
+        for name in ("QUAKE.EXE", "PAK0.PAK"):
+            with self.assertRaisesRegex(SystemExit, "reserved name"):
+                dos.refuse_local_payloads({"/OTHER/" + name: "0" * 64}, self.root, free=free)
 
     def test_pins_cannot_admit_registered_data(self):
         path = self.root / games.GAMES / "doom-shareware/UPSTREAM.json"
@@ -255,10 +395,10 @@ class DiskTests(unittest.TestCase):
         self.assertEqual(m["redistribution"], "free")
         self.assertEqual([p["name"] for p in m["packages"]], list(PACKAGES))
         game = [f for f in m["files"] if f["role"] != "dos_system"]
-        self.assertEqual({f["path"].rsplit("/", 1)[0] for f in game}, {"/WOLF3D", "/DOOM"})
+        self.assertEqual({f["path"].rsplit("/", 1)[0] for f in game}, {"/WOLF3D", "/DOOM", "/QUAKE", "/QUAKE/ID1"})
         self.assertTrue(all(f["redistribution"] == "free" and len(f["sha256"]) == 64 for f in game))
         self.assertIn("/DOOM/CIUKI.CFG", {f["path"] for f in game})
-        self.assertEqual({f["path"] for f in game if f["role"] == "executable"}, {"/WOLF3D/WOLF3D.EXE", "/DOOM/DOOM.EXE"})
+        self.assertEqual({f["path"] for f in game if f["role"] == "executable"}, {"/WOLF3D/WOLF3D.EXE", "/DOOM/DOOM.EXE", "/QUAKE/QUAKE.EXE"})
         system = {f["path"]: f["sha256"] for f in m["files"] if f["role"] == "dos_system"}
         dos_manifest = json.loads(DOSBOOT.with_suffix(".json").read_text())
         self.assertEqual(system, {p["path"]: p["sha256"] for p in dos_manifest["payloads"]})
@@ -266,12 +406,36 @@ class DiskTests(unittest.TestCase):
         for record in m["licenses"]:
             self.assertEqual(sha((ROOT / record["path"]).read_bytes()), record["sha256"])
 
+    def test_nested_directory_parent_and_approval(self):
+        # Read FAT entries directly, independently of the writer: ID1's
+        # dot-dot must name QUAKE, and QUAKE must point back to root.
+        def cluster(entries, name):
+            for at in range(0, len(entries), 32):
+                if entries[at:at + 11] == dos.shortname(name).encode():
+                    return struct.unpack_from("<H", entries, at + 26)[0]
+            self.fail("directory absent: " + name)
+        with self.out.open("rb") as stream:
+            stream.seek((dos.RESERVED + 2 * dos.FAT_SECTORS) * 512)
+            parent = cluster(stream.read(dos.ROOT_SECTORS * 512), "QUAKE")
+            stream.seek((dos.DATA_LBA + (parent - 2) * dos.SPC) * 512)
+            entries = stream.read(dos.SPC * 512)
+            self.assertEqual(struct.unpack_from("<H", entries, 58)[0], 0)
+            child = cluster(entries, "ID1")
+            stream.seek((dos.DATA_LBA + (child - 2) * dos.SPC) * 512)
+            entries = stream.read(64)
+            self.assertEqual(struct.unpack_from("<H", entries, 26)[0], child)
+            self.assertEqual(struct.unpack_from("<H", entries, 58)[0], parent)
+        boot = bytes(510) + b"\x55\xaa"
+        for directories in (("/QUAKE/ID1",), ("/QUAKE", "/QUAKE/../ID1")):
+            with self.assertRaisesRegex(ValueError, "directory"):
+                dos.write_fat16(self.out.parent / "invalid.img", boot, b"", {}, directories=directories)
+
     def test_cut_image_reads_back_and_extends_to_the_logical_image(self):
         m = self.manifest
         size = self.out.stat().st_size
         self.assertEqual(size, m["size"])
         self.assertEqual(size % 512, 0)
-        self.assertLess(size, 16 * 1024 * 1024)                 # 128 MiB volume, a few MiB used
+        self.assertLess(size, 32 * 1024 * 1024)                 # 128 MiB volume, a few MiB used
         self.assertEqual(m["logical_size"], 128 * 1024 * 1024)
         for f in m["files"]:
             data = subprocess.run(["mcopy", "-n", "-i", str(self.out), "::" + f["path"], "-"], check=True,

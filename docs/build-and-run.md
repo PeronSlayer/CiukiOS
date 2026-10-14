@@ -230,7 +230,7 @@ probes end `NOT_RUN reason=fixtures_absent` without the fixture disk).
 
 ### Pre-installed shareware games
 
-Owner decision 2026-10-12: Wolfenstein 3-D and DOOM are pre-installed in
+Owner decisions 2026-10-12/14: Wolfenstein 3-D, DOOM and Quake are pre-installed in
 their shareware releases, the only ones whose packages may be passed on
 (the registered data above stays local). The original archives are vendored
 under `third_party/games/` with their licence documents and an
@@ -241,17 +241,19 @@ published references) and every installed member:
 | --- | --- | --- | --- |
 | `wolf3d-shareware` | `1wolf14.zip` (Wolfenstein 3-D 1.4, episode 1) | `cb2a2ef7…59451a8` | `\WOLF3D` (all 12 files of `W3DSW14.SHR`) |
 | `doom-shareware` | `doom19s.zip` (DOOM 1.9, episode 1) | `cacf0142…1b486e6` | `\DOOM` (16 files of `DOOMS_19.1`+`.2`, without the DOOM FAQ) plus `CIUKI.CFG` |
+| `quake-shareware` | `quake106.zip` (Quake 1.06, episode 1) | `ec6c9d34…7553239` | `\QUAKE` and `\QUAKE\ID1` (all 16 original members) |
 
 The image build never downloads: `scripts/build_image.py` calls
 `scripts/build_games_disk.py`, which checks each archive against its pins,
 unpacks it (ZIP; Apogee's `.SHR` container with PKWARE DCL "implode"
-members, decoded by a port of zlib's `blast.c`), checks every member,
+members, decoded by a port of zlib's `blast.c`; Quake's LHA self-extractor
+with the pure-Python `-lh5-` decoder and CRC-16 verification), checks every member,
 refuses registered data names (`DOOM.WAD`, `*.WL6`, …) and any other
 match with the owner's local files that is not a pinned shareware file, and
 writes `build/f0/games/CIUKIGAM.IMG` and its manifest `CIUKIGAM.json`. The
 disk has the `DOSBOOT.IMG` geometry (the DOS system read back from
-`DOSBOOT.IMG` and checked against its manifest) with `\WOLF3D` and `\DOOM`;
-its trailing zero sectors are cut (7,262,208 bytes of the 128 MiB volume;
+`DOSBOOT.IMG` and checked against its manifest) with `\WOLF3D`, `\DOOM` and `\QUAKE\ID1`;
+its trailing zero sectors are cut (about 26.96 MB of the 128 MiB volume;
 the kernel reads sectors past the end as zeros). The image holds it at
 `/Games/CIUKIGAM.IMG` (display folder `Games`; the kernel retains the
 case-insensitive `C:\GAMES\CIUKIGAM.IMG` path), and the licence documents and `UPSTREAM.json` files
@@ -266,14 +268,36 @@ mdir -/ -i build/f0/games/CIUKIGAM.IMG ::/
 Every DOS window (`/Programs/dosbox`) boots this disk with the kernel DPMI host,
 unless the owner's local fixture disk above is attached (it takes
 precedence); the f3-06 workload probes use only the local fixture disk.
+The F3-18 Quake probe uses the bundled disk directly.
 The Ciuki menu's Programs > Games lists "Wolfenstein 3D (shareware)" and
-"DOOM (shareware)": each opens a DOS window titled after the game, which
+"DOOM (shareware)" and "Quake (shareware)": each opens a DOS window titled
+after the game, which
 types `CD \WOLF3D` and `WOLF3D.EXE` (or `CD \DOOM` and
-`DOOM.EXE -config CIUKI.CFG`) at the DOS prompt once the window has the
-keyboard focus. The same works from Run…: `dosbox \WOLF3D\WOLF3D.EXE`
+`DOOM.EXE -config CIUKI.CFG`, or `CD \QUAKE` and `QUAKE.EXE`) at the DOS
+prompt once the window has keyboard focus. The same works from Run…: `dosbox \WOLF3D\WOLF3D.EXE`
 (`dosbox [--name=TITLE] [COMMAND...]`; letters, digits and `\ . - _ : / = ,`
 and spaces). Licence status, including the Wolfenstein 3-D bundling clause
 still open with the owner: `docs/design/f3-acceptance.md`, f3-06 amendment.
+
+Quake's original `SLICNSE.TXT` and `LICINFO.TXT` also ship under
+`/system/licenses/quake-shareware-*`. The native DPMI server and existing
+24 MiB shared pool exceed the game's 8 MB minimum/16 MB recommendation.
+Use default VGA 320x200, INT 33h mouse and SB16 `A220 I7 D1 H5 T6`; higher
+VBE modes and CD audio remain unavailable to the guest. Research and
+requirements: [Quake shareware design](design/quake-shareware.md).
+
+The lead builds once and runs the T23 workload profile, including
+`quake-qemu-t23` (or selects that case through the runner's `run_case` API):
+
+```bash
+nice -n 19 python3 scripts/test/run.py f3-workloads --profile qemu-t23
+```
+
+This case needs no local commercial fixture. It pins all 16 members and
+requires changing game frames, native DPMI, 16-bit stereo auto-init DMA5
+PCM, keyboard-driven console quit, RUNREC exit and resource cleanup. The
+owner must still verify visible gameplay, keyboard/mouse, audible output,
+window responsiveness and repeat launch/exit on the T23.
 
 ## Test requests
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Build the bundled shareware DOS games disk CIUKIGAM.IMG (owner decision 2026-10-12).
+"""Build the bundled shareware DOS games disk CIUKIGAM.IMG (owner decisions 2026-10-12/14).
 
-Wolfenstein 3-D and DOOM are pre-installed games of CiukiOS in their
+Wolfenstein 3-D, DOOM and Quake are pre-installed games of CiukiOS in their
 shareware releases, the only ones whose packages may be redistributed:
-Wolfenstein 3-D v1.4 (1wolf14.zip, episode 1) and DOOM v1.9 (doom19s.zip,
-episode 1). The registered game data (the owner's third_party/WOLF3D and
-third_party/Doom) never enters this disk, the image or the repository.
+Wolfenstein 3-D v1.4 (1wolf14.zip, episode 1), DOOM v1.9 (doom19s.zip,
+episode 1), and Quake v1.06 (quake106.zip, episode 1). Registered game data
+never enters this disk, the image or the repository.
 
 Inputs are only the vendored original archives under third_party/games/
 (never the network): each archive's size and SHA-256 and every installed
@@ -23,10 +23,14 @@ installed must be listed as excluded with a reason. Unpacking:
   ZIP archive (the DEICE installer's split; RPM Fusion doom-shareware and
   AUR doom1-wad unpack it the same way).
 
+- quake106.zip holds RESOURCE.1, an MZ LHA self-extractor with 16 -lh5-
+  members. The pinned 1945-byte prefix is skipped; every member CRC-16
+  and installed SHA-256 is checked, including ID1/PAK0.PAK.
+
 The disk is a DOS VM base image of the DOSBOOT.IMG geometry
 (scripts/build_dos_image.write_fat16): the DOS system read back from the
 built DOSBOOT.IMG and checked against its manifest
-(scripts/test/dos_fixtures.dos_system), \\WOLF3D and \\DOOM, and the
+(scripts/test/dos_fixtures.dos_system), \\WOLF3D, \\DOOM and \\QUAKE (with \\QUAKE\\ID1), and the
 generated \\DOOM\\CIUKI.CFG of f3-06. fsck.fat and mtools read it back.
 Its trailing all-zero sectors are then cut (the kernel reads sectors past
 the end of a shorter base as zeros, src/kernel/vm/dosvm_disk.c), so the
@@ -51,7 +55,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GAMES = "third_party/games"
 NAME = "CIUKIGAM.IMG"
 # Install order on the disk; each name is a directory under third_party/games.
-PACKAGES = ("wolf3d-shareware", "doom-shareware")
+PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware")
 REDISTRIBUTION = "free"
 SECTOR = 512
 
@@ -162,6 +166,245 @@ def dcl_explode(data, limit=16 * 1024 * 1024):
     return bytes(out), pos
 
 
+# ---- LHA -lh5- (LHa 2.x static Huffman / 8 KiB LZSS) -----------------------
+# Independent implementation of the format documented by LHa header.doc,
+# src/huf.c and Lhasa lib/lh_new_decoder.c; see docs/design/quake-shareware.md.
+
+def _crc_table():
+    table = []
+    for n in range(256):
+        for _ in range(8):
+            n = (n >> 1) ^ (0xA001 if n & 1 else 0)
+        table.append(n)
+    return tuple(table)
+
+
+_CRC16 = _crc_table()
+
+
+def lha_crc16(data):
+    crc = 0
+    for byte in data:
+        crc = (crc >> 8) ^ _CRC16[(crc ^ byte) & 255]
+    return crc
+
+
+def lh5_decode(data, size, limit=32 * 1024 * 1024):
+    """Decode exactly size bytes; bounded input, trees, blocks and output."""
+    if not 0 <= size <= limit:
+        raise ValueError("LH5: output too large")
+    pos = buf = count = 0
+
+    def bits(n):
+        nonlocal pos, buf, count
+        while count < n:
+            if pos == len(data):
+                raise ValueError("LH5: out of input")
+            buf = (buf << 8) | data[pos]
+            pos += 1
+            count += 8
+        count -= n
+        value = buf >> count
+        buf &= (1 << count) - 1
+        return value
+
+    def tree(lengths):
+        counts = [lengths.count(n) for n in range(17)]
+        if any(n > 16 for n in lengths):
+            raise ValueError("LH5: code length too large")
+        code = 0
+        tables = [{} for _ in range(17)]
+        for n in range(1, 17):
+            code <<= 1
+            if code + counts[n] > 1 << n:
+                raise ValueError("LH5: oversubscribed tree")
+            for symbol, length in enumerate(lengths):
+                if length == n:
+                    tables[n][code] = symbol
+                    code += 1
+        if code != 1 << 16:
+            raise ValueError("LH5: incomplete tree")
+        return tables
+
+    def decode(t):
+        if isinstance(t, int):
+            return t
+        code = 0
+        for n in range(1, 17):
+            code = (code << 1) | bits(1)
+            if code in t[n]:
+                return t[n][code]
+        raise ValueError("LH5: invalid code")
+
+    def read_tree(symbols, width, special=False):
+        n = bits(width)
+        if not n:
+            symbol = bits(width)
+            if symbol >= symbols:
+                raise ValueError("LH5: invalid single symbol")
+            return symbol
+        if n > symbols:
+            raise ValueError("LH5: too many tree lengths")
+        lengths = []
+        while len(lengths) < n:
+            length = bits(3)
+            if length == 7:
+                while bits(1):
+                    length += 1
+                    if length > 16:
+                        raise ValueError("LH5: code length too large")
+            lengths.append(length)
+            if special and len(lengths) == 3:
+                lengths.extend([0] * bits(2))
+            if len(lengths) > n:
+                raise ValueError("LH5: tree zero run overflow")
+        return tree(lengths + [0] * (symbols - n))
+
+    history = bytearray(b" " * 8192)
+    cursor = remaining = 0
+    out = bytearray()
+    while len(out) < size:
+        if not remaining:
+            remaining = bits(16)
+            if not remaining:
+                raise ValueError("LH5: empty block")
+            temp = read_tree(19, 5, True)
+            n = bits(9)
+            if not n:
+                codes = bits(9)
+                if codes >= 510:
+                    raise ValueError("LH5: invalid single symbol")
+            else:
+                if n > 510:
+                    raise ValueError("LH5: too many code lengths")
+                lengths = []
+                while len(lengths) < n:
+                    c = decode(temp)
+                    if c <= 2:
+                        run = 1 if c == 0 else bits(4) + 3 if c == 1 else bits(9) + 20
+                        lengths.extend([0] * run)
+                    else:
+                        lengths.append(c - 2)
+                    if len(lengths) > n:
+                        raise ValueError("LH5: code zero run overflow")
+                codes = tree(lengths + [0] * (510 - n))
+            offsets = read_tree(14, 4)
+        remaining -= 1
+        c = decode(codes)
+        if c < 256:
+            out.append(c)
+            history[cursor] = c
+            cursor = (cursor + 1) & 8191
+        else:
+            length = c - 253
+            if len(out) + length > size:
+                raise ValueError("LH5: match exceeds output size")
+            p = decode(offsets)
+            distance = (1 << (p - 1)) + bits(p - 1) if p else 0
+            start = (cursor - distance - 1) & 8191
+            for i in range(length):
+                byte = history[(start + i) & 8191]
+                out.append(byte)
+                history[cursor] = byte
+                cursor = (cursor + 1) & 8191
+    if remaining:
+        raise ValueError("LH5: unused block commands")
+    return bytes(out)
+
+
+def lha_entries(data):
+    """Yield validated (DOS path, packed bytes, size, CRC16), header levels 0..2."""
+    at = 0
+    seen = set()
+    total = 0
+    while at < len(data):
+        if len(data) - at == 1 and data[at] == 0:
+            return
+        if len(data) - at < 24:
+            raise ValueError("LHA: truncated header")
+        level = data[at + 20]
+        if level not in (0, 1, 2):
+            raise ValueError("LHA: unsupported header level")
+        header_size = struct.unpack_from("<H", data, at)[0] if level == 2 else data[at] + 2
+        end = at + header_size
+        minimum = 26 if level == 2 else 27 if level == 1 else 24
+        if header_size < minimum or end > len(data):
+            raise ValueError("LHA: truncated header")
+        h = bytearray(data[at:end])
+        if level < 2 and sum(h[2:]) & 255 != h[1]:
+            raise ValueError("LHA: header checksum mismatch")
+        if h[2:7] != b"-lh5-":
+            raise ValueError("LHA: unsupported method")
+        packed, size = struct.unpack_from("<II", h, 7)
+        if level < 2:
+            n = h[21]
+            if 24 + n + (3 if level == 1 else 0) > len(h):
+                raise ValueError("LHA: truncated filename/CRC")
+            filename = bytes(h[22:22 + n])
+            crc = struct.unpack_from("<H", h, 22 + n)[0]
+            ext = len(h) - 2 if level == 1 else None
+        else:
+            filename = b""
+            crc = struct.unpack_from("<H", h, 21)[0]
+            ext = 24
+        directory = b""
+        common_crc = None
+        while ext is not None:
+            if ext + 2 > len(h):
+                raise ValueError("LHA: truncated extended header")
+            n = struct.unpack_from("<H", h, ext)[0]
+            if not n:
+                break
+            if n < 3:
+                raise ValueError("LHA: invalid extended header size")
+            if level == 1:
+                if n > packed or end + n > len(data):
+                    raise ValueError("LHA: truncated extended header")
+                h.extend(data[end:end + n])
+                end += n
+                packed -= n  # level 1 skip size includes extended headers
+            if ext + n + 2 > len(h):
+                raise ValueError("LHA: truncated extended header")
+            kind, body = h[ext + 2], bytes(h[ext + 3:ext + n])
+            if kind == 1:
+                filename = body
+            elif kind == 2:
+                directory = body.replace(b"\xff", b"/")
+            elif kind == 0:
+                if len(body) < 2 or common_crc is not None:
+                    raise ValueError("LHA: invalid common header")
+                common_crc = struct.unpack_from("<H", body)[0]
+                h[ext + 3:ext + 5] = b"\0\0"
+            ext += n
+        if common_crc is not None and lha_crc16(h) != common_crc:
+            raise ValueError("LHA: header CRC mismatch")
+        try:
+            name = (directory + filename).decode("ascii").replace("\\", "/").upper()
+        except UnicodeDecodeError as error:
+            raise ValueError("LHA: non-ASCII path") from error
+        if not name or any(not DOS_NAME.fullmatch(p) for p in name.split("/")) or name in seen:
+            raise ValueError("LHA: bad or duplicate member path " + name)
+        seen.add(name)
+        total += size
+        if size > 32 * 1024 * 1024 or total > 64 * 1024 * 1024:
+            raise ValueError("LHA: output too large")
+        if end + packed > len(data):
+            raise ValueError("LHA: truncated member " + name)
+        yield name, data[end:end + packed], size, crc
+        at = end + packed
+    raise ValueError("LHA: missing archive terminator")
+
+
+def lha_members(data):
+    members = {}
+    for name, packed, size, crc in lha_entries(data):
+        output = lh5_decode(packed, size)
+        if lha_crc16(output) != crc:
+            raise ValueError("LHA: member CRC mismatch: " + name)
+        members[name] = output
+    return members
+
+
 # ---- package containers ---------------------------------------------------
 
 DOS_NAME = re.compile(r"[A-Z0-9_\-]{1,8}(\.[A-Z0-9_\-]{1,3})?")
@@ -234,6 +477,8 @@ def unpack(record, data):
         inner = zip_members(b"".join(outer[name] for name in spec["parts"]))
     elif spec.get("format") == "apogee-shr":       # W3DSW14.SHR, DCL imploded members
         inner = shr_members(outer[spec["member"]])
+    elif spec.get("format") == "lha-sfx":
+        inner = lha_members(outer[spec["member"]][spec["offset"]:])
     else:
         raise ValueError("unknown unpack format: " + str(spec.get("format")))
     return outer, inner
@@ -346,6 +591,8 @@ def build(out=None, dos_image=None, root=ROOT):
     for package in PACKAGES:
         record, members, documents = package_files(package, root)
         directories.append("/" + record["install"]["directory"])
+        directories += sorted({path.rsplit("/", 1)[0] for path, _, _ in members
+                               if path.count("/") > 2})
         files += members
         licenses += [(package, name, data) for name, data in documents]
         packages.append({"name": package, "archive": record["archive"], "size": record["size"],

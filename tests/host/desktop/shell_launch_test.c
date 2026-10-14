@@ -566,6 +566,8 @@ static void test_games_menu(void)
         assert(dosbox_spawns==before+1 && !d.sh.levels && !d.launch_argv[0] && !d.launch_argv[1]);
         expect_dosbox[0]=expect_dosbox[1]=NULL;
     }
+    assert(DESK_GAME_COUNT == 3 && !strcmp(desk_games[2].label,"Quake (shareware)") &&
+           !strcmp(desk_games[2].title,"Quake") && !strcmp(desk_games[2].command,"\\QUAKE\\QUAKE.EXE"));
     assert(!strcmp(desk_games[0].command,"\\WOLF3D\\WOLF3D.EXE") && !strcmp(desk_games[1].command,"\\DOOM\\DOOM.EXE -config CIUKI.CFG"));
     drop_all(&d); fake_reset();
     puts("PASS games menu: Programs > Games with /Programs/dosbox, keyboard path to each shareware game, dosbox --name=<title> <command>");

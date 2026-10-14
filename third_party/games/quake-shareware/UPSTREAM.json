@@ -1,0 +1,231 @@
+{
+  "project": "Quake shareware 1.06 (episode 1, Dimension of the Doomed)",
+  "authors": "id Software",
+  "archive": "quake106.zip",
+  "size": 9094045,
+  "sha256": "ec6c9d34b1ae0252ac0066045b6611a7919c2a0d78a3a66d9387a8f597553239",
+  "sha1": "f8a1a509b094ccdbed3c54b96f7d9b351c0898f5",
+  "md5": "8cee4d03ee092909fdb6a4f84f0c1357",
+  "original_location": "ftp://ftp.idsoftware.com/idstuff/quake/quake106.zip",
+  "downloaded": "2026-10-14",
+  "sources": [
+    "https://mirrors.lug.mtu.edu/idgames/idstuff/quake/quake106.zip",
+    "https://www.gamers.org/pub/idgames/idstuff/quake/quake106.zip",
+    "https://ftp.fu-berlin.de/pc/msdos/games/idgames/idstuff/quake/quake106.zip"
+  ],
+  "hash_references": [
+    {
+      "reference": "Debian game-data-packager quake.yaml and original hash addition",
+      "url": "https://alioth-lists-archive.debian.net/pipermail/pkg-games-commits/2015-January/023633.html",
+      "sha256": "ec6c9d34b1ae0252ac0066045b6611a7919c2a0d78a3a66d9387a8f597553239"
+    },
+    {
+      "reference": "Dreamcast Quake shareware archive, SourceForge published SHA-256",
+      "url": "https://sourceforge.net/projects/dcquake/files/quake/shareware/quake106.zip/download",
+      "sha256": "ec6c9d34b1ae0252ac0066045b6611a7919c2a0d78a3a66d9387a8f597553239"
+    }
+  ],
+  "member_references": {
+    "CWSDPMI.EXE": {
+      "size": 25920,
+      "crc16": "981a"
+    },
+    "GENVXD.DLL": {
+      "size": 17408,
+      "crc16": "e582"
+    },
+    "HELP.TXT": {
+      "size": 5404,
+      "crc16": "5037"
+    },
+    "ID1/PAK0.PAK": {
+      "size": 18689235,
+      "crc16": "4eac"
+    },
+    "LICINFO.TXT": {
+      "size": 9311,
+      "crc16": "f6a0"
+    },
+    "MGENVXD.VXD": {
+      "size": 9883,
+      "crc16": "c53c"
+    },
+    "ORDER.TXT": {
+      "size": 3869,
+      "crc16": "6742"
+    },
+    "PDIPX.COM": {
+      "size": 26511,
+      "crc16": "64f3"
+    },
+    "Q95.BAT": {
+      "size": 65,
+      "crc16": "ea6b"
+    },
+    "QLAUNCH.EXE": {
+      "size": 314880,
+      "crc16": "5a06"
+    },
+    "READV106.TXT": {
+      "size": 8774,
+      "crc16": "e646"
+    },
+    "QUAKE.EXE": {
+      "size": 404480,
+      "crc16": "8ec8"
+    },
+    "QUAKEUDP.DLL": {
+      "size": 32256,
+      "crc16": "53fa"
+    },
+    "README.TXT": {
+      "size": 19087,
+      "crc16": "1799"
+    },
+    "SLICNSE.TXT": {
+      "size": 10036,
+      "crc16": "d17f"
+    },
+    "TECHINFO.TXT": {
+      "size": 76067,
+      "crc16": "1104"
+    }
+  },
+  "unpack": {
+    "format": "lha-sfx",
+    "member": "RESOURCE.1",
+    "offset": 1945,
+    "notes": "MZ LHA self-extractor prefix, followed by 16 level-0 -lh5- members"
+  },
+  "install": {
+    "directory": "QUAKE",
+    "files": [
+      {
+        "name": "CWSDPMI.EXE",
+        "size": 25920,
+        "sha256": "0a890815df6cbdc052915a856c16944cedec825267e7b6e453c351a0cdc695f2",
+        "role": "program"
+      },
+      {
+        "name": "GENVXD.DLL",
+        "size": 17408,
+        "sha256": "ef446c02db3adc5687288739b484ad933d9e1ce8c196f8951b969b1bc3c7d776",
+        "role": "program"
+      },
+      {
+        "name": "HELP.TXT",
+        "size": 5404,
+        "sha256": "fb762348875647992b53732d50e41cf966cfecaca7c6ea2f7f682742d84a9f54",
+        "role": "documentation"
+      },
+      {
+        "name": "ID1/PAK0.PAK",
+        "size": 18689235,
+        "sha256": "35a9c55e5e5a284a159ad2a62e0e8def23d829561fe2f54eb402dbc0a9a946af",
+        "role": "data"
+      },
+      {
+        "name": "LICINFO.TXT",
+        "size": 9311,
+        "sha256": "8d654834d085c088d603fb6879a874799e8b4cc6ae9317bbf826afd83bc72e31",
+        "role": "documentation"
+      },
+      {
+        "name": "MGENVXD.VXD",
+        "size": 9883,
+        "sha256": "4568f96cb70a2abf47f156f1fb1b432019155b6b4e5e3bf5fd773e1ecf5ee3e0",
+        "role": "program"
+      },
+      {
+        "name": "ORDER.TXT",
+        "size": 3869,
+        "sha256": "1e04e5899b36c3e47dac6c771cb1fdaee0e1528db0d720b8db06e83ea5c631da",
+        "role": "documentation"
+      },
+      {
+        "name": "PDIPX.COM",
+        "size": 26511,
+        "sha256": "868c16e2a561ebc955ab873013a8b2a5e6d2cdd95d185915da51a9294dea15e9",
+        "role": "program"
+      },
+      {
+        "name": "Q95.BAT",
+        "size": 65,
+        "sha256": "cac38ce5180160a624353c9bc0baede63613e5aa3bca07653145bc9943323deb",
+        "role": "program"
+      },
+      {
+        "name": "QLAUNCH.EXE",
+        "size": 314880,
+        "sha256": "83ce5209f15623fd0a00726e1e6cfee900829971e3294270b8efbca28ea1aac3",
+        "role": "program"
+      },
+      {
+        "name": "QUAKE.EXE",
+        "size": 404480,
+        "sha256": "7cdb244122cc607cc6f162524bfcac60f6d11d8ca2ff07473d6cd962311161fb",
+        "role": "executable"
+      },
+      {
+        "name": "QUAKEUDP.DLL",
+        "size": 32256,
+        "sha256": "de88488c178319d5e4aaf3a9d664406f6df8e8cc049d87dfdc048a254598137a",
+        "role": "program"
+      },
+      {
+        "name": "README.TXT",
+        "size": 19087,
+        "sha256": "9ade267c7e22a1c4c4aa8fa3dd58ad3354c173ae2cfc39344093cea534316d61",
+        "role": "documentation"
+      },
+      {
+        "name": "READV106.TXT",
+        "size": 8774,
+        "sha256": "0a496875fce806ebc175bc6bebedc9d739381dceacc5636cf83ef60cf056ab0d",
+        "role": "documentation"
+      },
+      {
+        "name": "SLICNSE.TXT",
+        "size": 10036,
+        "sha256": "070cdf6a6410adef8fb5f83a4e5ccdb9e2301d2e48d460bb3a67a0f5ba9d70a8",
+        "role": "documentation"
+      },
+      {
+        "name": "TECHINFO.TXT",
+        "size": 76067,
+        "sha256": "b7c080df7487e69b0c3f9c6b3a8eff5ce29741f5c596d3d6a08534649691d314",
+        "role": "documentation"
+      }
+    ],
+    "excluded": {}
+  },
+  "extender": "DJGPP DPMI client; native CiukiOS DPMI server via INT 2Fh AX=1687h; original CWSDPMI.EXE fallback retained",
+  "license": "Original Quake shareware license, SLICNSE.TXT sections 2, 3 and 6",
+  "license_files": [
+    {
+      "name": "SLICNSE.TXT",
+      "from": "installed",
+      "sha256": "070cdf6a6410adef8fb5f83a4e5ccdb9e2301d2e48d460bb3a67a0f5ba9d70a8"
+    },
+    {
+      "name": "LICINFO.TXT",
+      "from": "installed",
+      "sha256": "8d654834d085c088d603fb6879a874799e8b4cc6ae9317bbf826afd83bc72e31"
+    }
+  ],
+  "redistribution": "free (shareware, unmodified package)",
+  "bundling": "Whole and unmodified, free electronic distribution only (SLICNSE.TXT sections 2/3/6); CiukiOS charges nothing.",
+  "source_code": "Later engine release GPL-2.0: https://github.com/id-Software/Quake; original DOS binary is not rebuilt.",
+  "game_data": "Original shareware episode 1 only, ID1/PAK0.PAK; no registered PAK1.PAK.",
+  "modifications": "none: original archive and all 16 installed members byte-identical",
+  "license_clauses": [
+    {
+      "source": "SLICNSE.TXT section 6",
+      "text": "        6.      Permitted Distribution. So long as this Agreement\n        accompanies the Software at all times, ID grants to Providers the\n        limited right to distribute, free of charge, except normal access\n        fees, and by electronic means only, the Software; provided, however,\n        the Software must be so electronically distributed only in a\n        compressed format. The term \"Providers,\" as used in the foregoing\n        sentence, shall mean persons whose business it is to provide\n        services on the Internet, on commercial online networks, or on the\n        BBS. Anyone who receives the Software from a Provider shall be\n        limited to all the terms and conditions of this Agreement. Further,\n        ID grants to you, the end-user, the limited right to distribute,\n        free of charge only, the Software as a whole."
+    },
+    {
+      "source": "SLICNSE.TXT section 2(e)",
+      "text": "        e.      Distribute the Software for money or any other\n                consideration; or "
+    }
+  ]
+}
