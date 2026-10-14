@@ -101,6 +101,7 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
                  * start-address writes remain ordinary trapped port cycles. */
                 uint8_t data = (uint8_t)(*value >> (8 * i));
                 bool crtc = p == 0x3D5 || p == 0x3B5;
+                bool flip = crtc && (v->vga.crtc_index == 0x0C || v->vga.crtc_index == 0x0D);
                 bool mode = crtc && v->vga.crtc_index < ARRAY_SIZE(v->vga.crtc) &&
                     v->vga.crtc_index != 0x0C && v->vga.crtc_index != 0x0D &&
                     data != v->vga.crtc[v->vga.crtc_index];
@@ -109,6 +110,10 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
                     (p == 0x3C5 && v->vga.seq_index < ARRAY_SIZE(v->vga.seq) && data != v->vga.seq[v->vga.seq_index]) ||
                     (p == 0x3CF && v->vga.gc_index < ARRAY_SIZE(v->vga.gc) && data != v->vga.gc[v->vga.gc_index]);
                 if (mode || access) dosvm_vga_model(v);
+                /* Completion must publish the last plane's D pages even
+                 * before the native presenter next polls. Keep the window
+                 * writable, including a redundant start-address write. */
+                if (flip) dosvm_vga_sync(v, false);
                 /* f3-06: a CRTC start-address-high store is a page flip
                  * (DOOM's I_FinishUpdate, Wolf3D's VW_UpdateScreen). */
                 if ((p == 0x3D5 || p == 0x3B5) && v->vga.crtc_index == 0x0C) v->video_starts++;
@@ -176,6 +181,7 @@ static void video_linear_seed(struct dosvm *v)
  * still store directly into the model; linear mappings deinterleave first. */
 static void video_harvest(struct dosvm *v)
 {
+    uint64_t begin = dosvm_perf_clock();
     unsigned want = v->video_direct, plane = want - 1;
     bool harvested = false;
     for (unsigned i = 0; i < VIDEO_WINDOW_PAGES; i++) {
@@ -196,6 +202,8 @@ static void video_harvest(struct dosvm *v)
         v->video_flushes++;
         v->vga.changes++;
     }
+    /* Includes the clean-page scan and D-bit invalidations. No UART here. */
+    v->perf.harvest_cycles += dosvm_perf_clock() - begin;
 }
 static void video_map(struct dosvm *v, unsigned want)
 {
@@ -682,7 +690,10 @@ static int hash_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
 }
 int dosvm_frame_digest(struct dosvm *v, uint64_t tick, struct dosvm_frame *out)
 {
-    dosvm_vga_sync(v, true); /* a reference/model consumer explicitly closes */
+    /* This scanout consumer only reads the model. Publish pending pages but
+     * retain the writable aperture; closing it strands a planar stream until
+     * a changed map mask, since the old fault retry only admits chain-4. */
+    dosvm_vga_sync(v, false);
     struct frame_sink sink = {.next = 0};
     struct ciuki_rect damage;
     sha256_init(&sink.sha);

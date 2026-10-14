@@ -158,6 +158,8 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
         struct dosvm_sb_transfer x;
         uint32_t irq0, irq1, sb_irqs, kq, kr, units, sb_edges, services;
         uint32_t frames, starts, linear, planes, faults;
+        uint32_t harvests, pages, direct, chain;
+        uint64_t harvest_cycles;
         uint8_t kcmd, sb_irq, causes, error;
     } r;
     flags = irq_save();
@@ -172,6 +174,9 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
     r.causes = sb->causes; r.error = sb->last_error;
     r.frames = v->video_frames; r.starts = v->video_starts;
     r.linear = v->video_linear_harvests; r.planes = v->video_flushes; r.faults = v->video_faults;
+    r.harvests = v->perf.harvests; r.pages = v->perf.direct_pages;
+    r.harvest_cycles = v->perf.harvest_cycles;
+    r.direct = v->video_direct; r.chain = !!(v->vga.seq[4] & 8);
     v->trace.heartbeat_tick = r.tick;
     unsigned n = ++v->trace.heartbeats;
     irq_restore(flags);
@@ -189,7 +194,9 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
              id, gen, n, r.x.channel, r.dma.address, r.dma.count, r.units, r.sb_edges, r.sb_irq, r.sb_irqs,
              r.services, r.x.active, r.x.paused, r.x.waiting, r.dma.masked, r.causes, r.error);
     dosvm_diag(v, "group=vm_beat_vga vm=%u gen=%u n=%u frames=%u flips=%u linear=%u planes=%u faults=%u direct=%u chain=%u",
-             id, gen, n, r.frames, r.starts, r.linear, r.planes, r.faults, v->video_direct, !!(v->vga.seq[4] & 8));
+             id, gen, n, r.frames, r.starts, r.linear, r.planes, r.faults, r.direct, r.chain);
+    dosvm_diag(v, "group=vm_beat_vga_mem vm=%u gen=%u n=%u harvests=%u dirty_pages=%u harvest_us=%llu",
+             id, gen, n, r.harvests, r.pages, perf_us(r.harvest_cycles));
 }
 
 /* Runtime diagnostics live here to keep record ownership in the lifecycle

@@ -13,6 +13,19 @@ static uint32_t *window_pte(struct dosvm *v, uint32_t va)
     CHECK(pd[va >> 22] & PTE_P);
     return &table_va(pd[va >> 22] & ~0xFFFu)[(va >> 12) & 1023];
 }
+/* Physical transport seam for native aperture cycles. Model planes live in
+ * static host slots outside fake RAM; resolve their synthetic PTE frames
+ * explicitly instead of assuming that video_direct names the PTE target. */
+static uint8_t *window_memory(struct dosvm *v, unsigned offset)
+{
+    CHECK(offset < CVGA_PLANE_SIZE);
+    uint32_t phys = as_lookup(&v->as, 0xA0000 + offset, 0);
+    for (unsigned plane = 0; plane < 4; plane++)
+        if ((phys & ~0xFFFu) == (plane_frame(v, plane, offset / PAGE_SIZE) & ~0xFFFu))
+            return &v->vga.plane[plane][offset];
+    CHECK(phys && phys < HOST_PAGES * PAGE_SIZE);
+    return P2V(phys);
+}
 static void vga_out(struct dosvm *v, uint16_t port, uint8_t value) { port_out(v, port, 1, value); }
 static void client_desc(struct dosvm *v, unsigned index, uint32_t base, uint32_t limit, uint8_t access, uint8_t ext)
 {
@@ -247,7 +260,7 @@ static void test_workload_linear_golden(void)
         linear_store(v, y * 320 + x, (uint8_t)(x + y));
     struct dosvm_frame frame;
     char hex[65];
-    CHECK(!dosvm_frame_digest(v, 0, &frame) && !v->video_direct);
+    CHECK(!dosvm_frame_digest(v, 0, &frame) && v->video_direct == VIDEO_LINEAR);
     sha256_hex(frame.digest, hex); CHECK(!strcmp(hex, video_golden[2]));
     video_stage(v, 4);
     CHECK(!dosvm_frame_digest(v, 0, &frame));
@@ -304,15 +317,17 @@ static void test_workload_linear_replay(bool pm, bool window)
     }
     /* DAC and byte/word CRTC flips still trap, and do not remap. */
     unsigned maps = v->video_linear_maps;
+    unsigned harvests = v->video_linear_harvests;
     port_out(v, 0x3D4, 2, 0x000C); port_out(v, 0x3D4, 2, 0x000D);
+    if (window) CHECK(v->video_linear_harvests > harvests);
     port_out(v, 0x3C8, 1, 0x40); port_out(v, 0x3C9, 1, 1); port_out(v, 0x3C9, 1, 2); port_out(v, 0x3C9, 1, 3);
     CHECK(v->video_starts == 1 && v->vga.dac[0x40][2] == 3 && v->video_linear_maps == maps);
     struct dosvm_frame frame;
     if (!window) port_out(v, 0x3CE, 2, 0x0506);  /* restore standard scanout for the same frame */
-    unsigned harvests = v->video_linear_harvests;
-    CHECK(!dosvm_frame_digest(v, 0, &frame) && frame.width == 320 && frame.height == 200 && !v->video_direct);
+    harvests = v->video_linear_harvests;
+    CHECK(!dosvm_frame_digest(v, 0, &frame) && frame.width == 320 && frame.height == 200 && v->video_direct == VIDEO_LINEAR);
     CHECK(!memcmp(v->vga.plane, reference.plane, sizeof(reference.plane)));
-    if (window) CHECK(v->video_linear_harvests > harvests);
+    CHECK(v->video_linear_harvests == harvests); /* flip already published D pages */
     dosvm_vga_direct(v);
     uint8_t old_latches[4]; memcpy(old_latches, v->vga.latch, sizeof(old_latches));
     /* Read map select is ignored by chain-4; direct values match every
@@ -559,7 +574,7 @@ static void wolf_call_scaler(struct dosvm *v, struct v86_frame *f, uint16_t di)
         uint32_t *pte = window_pte(v, linear);
         if ((*pte & (PTE_U | PTE_W)) == (PTE_U | PTE_W)) {           /* the CPU stores into the mapped plane */
             CHECK(v->video_direct && linear < 0xB0000);
-            v->vga.plane[v->video_direct - 1][linear - 0xA0000] = (uint8_t)f->tf.eax;
+            *window_memory(v, linear - 0xA0000) = (uint8_t)f->tf.eax;
             *pte |= DOSVM_PTE_DIRTY; f->tf.eip += 5; continue;
         }
         fake_cr2 = linear; CHECK(device_trap(v, f, 14)); wolf_traps++; wolf_pf++;   /* #PF */

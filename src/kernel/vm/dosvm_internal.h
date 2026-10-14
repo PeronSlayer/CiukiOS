@@ -48,7 +48,7 @@ enum dosvm_perf_cause {
 struct dosvm_perf_sample {
     uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows;
     uint32_t exits[6], irqs[16];
-    uint64_t guest_us, monitor_us, present_us, log_us, edges, insn[V86_INSNS];
+    uint64_t guest_us, monitor_us, present_us, harvest_us, log_us, edges, insn[V86_INSNS];
     uint32_t cost_count[DOSVM_COST_COUNT], batched;
     uint64_t cost_us[DOSVM_COST_COUNT];
 };
@@ -114,7 +114,7 @@ struct dosvm {
     struct {
         uint32_t harvests, direct_pages, trapped_bytes, converted_bytes, rows;
         uint32_t exits[6]; /* #GP, #PF, #DB, host timer, other, protected-mode total */
-        uint64_t guest_cycles, monitor_cycles, present_cycles, log_cycles;
+        uint64_t guest_cycles, monitor_cycles, present_cycles, harvest_cycles, log_cycles;
         uint64_t stamp, report_tick;
         unsigned phase; /* 0 suspended, 1 guest, 2 monitor */
         unsigned resume_phase;
@@ -125,7 +125,7 @@ struct dosvm {
         uint32_t batched, last_batched;
         uint32_t last_frames, last_starts, last_harvests, last_pages, last_trapped, last_converted, last_rows;
         uint32_t last_exits[6], last_irqs[16];
-        uint64_t last_guest, last_monitor, last_present, last_log, last_edges;
+        uint64_t last_guest, last_monitor, last_present, last_harvest, last_log, last_edges;
         uint64_t last_insn[V86_INSNS];
         uint32_t sample_count;
         struct dosvm_perf_sample sample[16]; /* last sixteen complete intervals */

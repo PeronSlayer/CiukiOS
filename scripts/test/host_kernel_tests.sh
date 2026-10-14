@@ -254,6 +254,16 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=
     "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" -o "$out/dosvm_test"
 "$out/dosvm_test"
 
+# f3-16: production window/dirty-page replay and presenter costs. Sequential
+# with every other host suite; synthetic frames, no image rebuild or QEMU.
+clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_present_bench.c" \
+    "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
+    "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
+    "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
+    "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" -o "$out/dosvm_present_bench"
+"$out/dosvm_present_bench"
+
 # f3-02 migrated VGA model vectors (legacy test_virtual_vga.c, unchanged).
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/vm" "$root/tests/host/test_virtual_vga.c" \
