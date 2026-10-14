@@ -9,6 +9,7 @@
 #include <ciuki/work.h>
 #include <ciuki/task.h>
 extern const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *) __attribute__((weak));
+extern const struct accel_ops *savage2d_fallback_ops(void) __attribute__((weak));
 extern bool savage2d_eligible(const struct fb_device *) __attribute__((weak));
 extern bool kwork_queue(kwork_fn, void *) __attribute__((weak));
 extern int savage2d_attempt_begin(struct vfs *) __attribute__((weak));
@@ -194,6 +195,7 @@ int fbdev_init(void)
 static void accel_work(void *arg)
 {
     (void)arg;
+    bool ready = false;
     /* Queued only after the persistence thread committed and closed the
      * attempt marker. This worker owns register access, never file I/O. */
     kmutex_lock(&presenter);
@@ -204,11 +206,13 @@ static void accel_work(void *arg)
         if (__atomic_compare_exchange_n(&drawing, &idle, PRESENT_BUSY, false,
                                         __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
             acceleration = savage2d_init(&device, 0);   /* marker handled above */
+            ready = acceleration != 0;
+            if (!ready && savage2d_fallback_ops) acceleration = savage2d_fallback_ops();
             __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
         } else klog("[accel] savage quarantined reason=console_busy");
     }
     kmutex_unlock(&presenter);
-    accel_marker_request = acceleration ? ACCEL_MARKER_CLEAR : ACCEL_MARKER_STATUS;
+    accel_marker_request = ready ? ACCEL_MARKER_CLEAR : ACCEL_MARKER_STATUS;
     kwait_wake_all(&accel_marker_wait);
 }
 
