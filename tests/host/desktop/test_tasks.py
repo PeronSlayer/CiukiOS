@@ -10,6 +10,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture_frame = _review.capture
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
@@ -68,6 +72,8 @@ class TasksTests(unittest.TestCase):
             subprocess.run([*FLAGS, *INCLUDES, *ICONS.defines(), *(str(ROOT / s) for s in sources), "-o", str(binary)],
                            check=True, env=env)
             subprocess.run([str(binary), *([str(folder)] if capture else [])], check=True, env=env)
+            for p in folder.glob("*.xrgb"):
+                capture_frame(p.stem, p.read_bytes(), 400, 420)
             return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.glob("*.xrgb"))}
 
     def test_model(self):

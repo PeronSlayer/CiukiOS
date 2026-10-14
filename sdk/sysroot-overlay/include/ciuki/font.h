@@ -22,6 +22,11 @@ struct ciuki_font_bitmap {
     int32_t advance;                              /* 26.6 pixels */
     uint8_t *coverage;
 };
+/* Scaled design metrics, signed 26.6 pixels, without whole-pixel rounding.
+ * Hinted glyph advances remain in ciuki_font_bitmap.advance. */
+struct ciuki_font_size_metrics {
+    int32_t ascent, descent, line_gap, max_advance;
+};
 struct ciuki_font_cache_stats {
     unsigned glyphs;
     size_t bytes;
@@ -32,6 +37,7 @@ struct ciuki_font_cache_stats {
 int ciuki_font_open(const char *path, struct ciuki_font_face **out);
 void ciuki_font_close(struct ciuki_font_face *);
 int ciuki_font_get_metrics(struct ciuki_font_face *, struct ciuki_font_metrics *);
+int ciuki_font_get_size_metrics(struct ciuki_font_face *, unsigned em_size, struct ciuki_font_size_metrics *);
 int ciuki_font_lookup(struct ciuki_font_face *, uint32_t codepoint, unsigned *glyph);
 int ciuki_font_hmetrics(struct ciuki_font_face *, unsigned glyph, int *advance, int *bearing);
 /* em_size is 26.6 em pixels, 64..8192. The returned bitmap is an owned copy. */

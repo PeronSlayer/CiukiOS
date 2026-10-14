@@ -454,7 +454,7 @@ static void menu_command(struct cn_app *a, int id)
     case M_WRAP: du_ta_set_wrap(&a->ta, !a->ta.wrap); cn_layout(a); break;
     case M_FONT:
         box(a, D_FONT, "Font", DU_DLG_ICON_INFO, font_buttons, 3, a->ta.bold ? 1 : 0, 2,
-            "Font:\tCiukiOS bitmap font, 5x7 glyphs\nStyle:\t%s\n---\nOther faces and sizes are not available.", a->ta.bold ? "Bold" : "Regular");
+            "Font:\tInconsolata 12 px (FreeType)\nStyle:\t%s\n---\nOther faces and sizes are not available.", a->ta.bold ? "Bold" : "Regular");
         break;
     case M_STATUS: a->show_status = !a->show_status; cn_layout(a); break;
     case M_HELP:

@@ -1,4 +1,16 @@
 {
+  "freetype": {
+    "archive": "freetype-2.13.3.tar.xz",
+    "directory": "freetype-2.13.3",
+    "license_choice": "FTL",
+    "sha256": "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289",
+    "source_date_epoch": 1723464000,
+    "url": "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz",
+    "version": "2.13.3",
+    "patches": {
+      "0001-truetype-context-oom.patch": "905ee7336e0e1e85b2bbd51d7f345c184e6a586d69e4fe09d6fe3511f556ac9b"
+    }
+  },
   "lua": {
     "source": {
       "archive": "lua-5.4.8.tar.gz",

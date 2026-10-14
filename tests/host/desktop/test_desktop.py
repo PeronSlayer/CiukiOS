@@ -13,6 +13,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 from unittest.mock import patch
 import zlib
 
@@ -24,19 +28,20 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
                 [ROOT / "apps/libdeskui/draw.c"]
 
 # F2-62: production shell, menus and modal frames; lead reviews the paired PNGs.
+# F2-63: re-recorded for the pinned FreeType UI atlases (build/host/f2-63 before/after).
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "d853d23bc71e73395884bf01a3523bf3bb46dadb15634693455cafda8f0532c0",
-    "ciuki-blue-dialogs.ppm": "3ee36791ba21f23a2589ec241bd081638cbb8cc1791ff22abdb5b5d4dc940e63",
-    "ciuki-blue-tray-disabled.ppm": "43e8f2f96c006f6fa415df9d71eeb2e5f0f4189678bd7de91e5d170b22066366",
-    "ciuki-blue-tray-media.ppm": "7bc12e21911f57f4303b1a6c3b0e1ef00b864ce8797c3b2a3f68af3675c3f6ac",
-    "classic-98-desktop.ppm": "cf235ad64ef5fce522c83cb9c5fb6912718a61d642d6e9b4e20ed585e6687569",
-    "classic-98-dialogs.ppm": "8746bd57fd4c084388128129873c7c1895e048033e7ee7f9e3e3ce3391248bd1",
-    "classic-98-tray-disabled.ppm": "eef3a6118321a8e9cb15faee78fa4b5058ed2d699168b74ac4039aae26875c03",
-    "classic-98-tray-media.ppm": "2851b8eb8dea58932841b4d0276a66c660cad930eba05a096599683d08f2df24",
-    "platinum-desktop.ppm": "c140820b8808812c61ea034699a0b4bbc9b5ef057daaad128fbc01efbb6a1a61",
-    "platinum-dialogs.ppm": "29c514f80f01c95e960b6cc253587431a363e056f63e83214514216faeef4d1e",
-    "platinum-tray-disabled.ppm": "f2910648c1fb7d49e53860c502242c0ea7e685230a9851e342f87398e431c489",
-    "platinum-tray-media.ppm": "ec533f5cea2afbe1a14a46c77f53de1adca2b7394913acf6f268a4e6d21428fe"
+    "ciuki-blue-desktop.ppm": "051208920bbeee92fa5c1d63a0a53bff263199903efa855577877ff37212914c",
+    "ciuki-blue-dialogs.ppm": "c4181dd9783b66140c5f161c530d16f2bef64adf8b15be961ad2cb2553f4e0d1",
+    "ciuki-blue-tray-disabled.ppm": "d18ab5f67988c1b23a7eee76d60f92b67fdba013686f5a567809129dcb1702c5",
+    "ciuki-blue-tray-media.ppm": "d6627793607cdd2370e208cfbb9dcd044189a27ac53e682483e8aa05b2ad1c23",
+    "classic-98-desktop.ppm": "f64f4d3a17d1db6823ffbb35bedbef26dfa2a4f050806912a509fab9b9aebe33",
+    "classic-98-dialogs.ppm": "53fddddf4b3214ac845217e8e96df9a94799b43471cf76e929848e61646b8020",
+    "classic-98-tray-disabled.ppm": "b03c20ccd2061ada5855ca5f31bbd625ec4dfebba5799b2b938894017f4f3630",
+    "classic-98-tray-media.ppm": "74b0062575ff96d6748001b9ff43e1046025e2fffefe2eda2c030e4d90c47d7b",
+    "platinum-desktop.ppm": "62e179ec4af38dc1011bb000404b74c1d7a27159973af0421794861fee29483c",
+    "platinum-dialogs.ppm": "e236624a50f0569e0d875b5c41a8f4bbf7cd9cd12818d89038854c2d8c6a0b80",
+    "platinum-tray-disabled.ppm": "c7fe5bd15325b8b242d9f19dc048f2813a6fcf036349a8700829570926936ce5",
+    "platinum-tray-media.ppm": "0196e226c14beadc791c1c0d74c28021da984773dab0a745def180b91f271e2c"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -136,9 +141,11 @@ class DesktopTests(unittest.TestCase):
                 subprocess.run([str(binary), str(source), str(target), mode], check=True, env=env)
                 pixels = target.read_bytes()
                 self.assertEqual(len(pixels), 640*480*4)
+                capture("desktop-" + mode, pixels, 640, 480)
                 if mode == "plain":
                     # F2-62: the missing-settings desktop now uses Ciuki Blue.
-                    pinned = "594c557311c0a8c6e4ce6dd7f034858875f5a92d034c846c8c819dd5f77b002f"
+                    # F2-63: re-recorded for the pinned FreeType UI atlases.
+                    pinned = "fd200deaf8f042116a6a2ad7ee554bca0ecfac00b8a4b0a31e4bb22e06a8b195"
                     actual = hashlib.sha256(pixels).hexdigest()
                     self.assertEqual(actual, pinned)
                 else:
@@ -148,7 +155,10 @@ class DesktopTests(unittest.TestCase):
                     # ("shell" mode). Every cell the portrait covers fully is the exact average of its
                     # source block.
                     size, shift = 18, 1 if mode == "shell" else 0
-                    x0, y0 = 4 + (96 - size - 6 - 53) // 2 + shift, 4 + (24 - size) // 2 + shift
+                    fonts = load("capture_font_metadata", ROOT / "apps/desktop/convert_fonts.py")
+                    title = json.loads((ROOT / "apps/desktop/ui-fonts.json").read_text())["faces"]["DESK_FONT_TITLE"]
+                    tw = sum(title["advances"][fonts.CODES.index(ord(ch))] for ch in "CiukiOS")
+                    x0, y0 = 4 + (96 - size - 6 - tw) // 2 + shift, 4 + (24 - size) // 2 + shift
                     full = 0
                     for y in range(size):
                         for x in range(size):
@@ -196,6 +206,8 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(names, sorted(f"{t}-{w}.ppm" for t in ("platinum", "ciuki-blue", "classic-98")
                                            for w in ("desktop", "dialogs", "tray-disabled", "tray-media")))
             digests = {n: hashlib.sha256((frames / n).read_bytes()).hexdigest() for n in names}
+            for n in names:
+                capture("look-" + Path(n).stem, (frames / n).read_bytes())
             self.assertEqual(len(set(digests.values())), 12)
             # Desktop icon labels over the default wallpaper, the owner's Ciuk2 scene (owner feedback 2026-10-12:
             # labels must stay readable on any wallpaper): look_capture's wallpaper mode renders the six desktop
@@ -203,6 +215,8 @@ class DesktopTests(unittest.TestCase):
             wall = folder / "wall"; wall.mkdir()
             subprocess.run([str(binary), str(folder / "portrait.xrgb"), str(wall), str(ROOT / "assets/wallpapers/ciuki/Ciuk2.png")],
                            check=True, env=env, capture_output=True)
+            for p in wall.glob("*.ppm"):
+                capture("look-" + p.stem, p.read_bytes())
             for theme in ("platinum", "ciuki-blue", "classic-98"):
                 with self.subTest(theme=theme):
                     self.check_icon_labels(wall / f"{theme}-wallpaper.ppm", wall / f"{theme}-wallpaper-plain.ppm")
@@ -339,11 +353,12 @@ class DesktopTests(unittest.TestCase):
             sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                        *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+            ft = load("control_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                             "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
-                            *(str(ROOT / s) for s in sources), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
+                            *ft.includes(), *(str(ROOT / s) for s in sources), str(library), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
             c = load("control_portrait", ROOT / "apps/desktop/convert_portrait.py")
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
             renders = folder / "renders"
@@ -353,6 +368,9 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("PASS control display", result.stdout)
             names = sorted(p.stem for p in renders.glob("*.xrgb"))
             self.assertEqual(names, ["control-display-classic-fill", "control-display-fill", "control-display-fit"])
+            for name in names:
+                width, height = map(int, (renders / f"{name}.size").read_text().split())
+                capture(name, (renders / f"{name}.xrgb").read_bytes(), width, height)
             frames = os.environ.get("CIUKI_WALL_FRAMES")
             if frames:
                 Path(frames).mkdir(parents=True, exist_ok=True)
@@ -373,11 +391,12 @@ class DesktopTests(unittest.TestCase):
             sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+            ft = load("control_modes_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
                             "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                             "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
-                            *(str(ROOT / s) for s in sources), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
+                            *ft.includes(), *(str(ROOT / s) for s in sources), str(library), "-pthread", "-lm", "-o", str(binary)], check=True, env=env)
             c = load("control_modes_portrait", ROOT / "apps/desktop/convert_portrait.py")
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
             renders = folder / "renders"; renders.mkdir()
@@ -512,7 +531,7 @@ class DesktopTests(unittest.TestCase):
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt",
-                                        "/system/licenses/minimp3.txt", "/system/licenses/stb_truetype.txt", "/system/fonts/LICENSES.TXT",
+                                        "/system/licenses/minimp3.txt", "/system/licenses/FreeType-FTL.txt", "/system/licenses/FreeType-LICENSE.txt", "/system/licenses/FreeType-NOTICE.txt", "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],
                                         *(f"/system/fonts/{p.name}" for p in (ROOT / "assets/fonts/native").glob("*.CFN")),
                                         "/system/icons/tango.cis",
@@ -526,10 +545,12 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 87)  # Desktop payloads; all three DOS games live on the separate games disk.
+        self.assertEqual(len(records), 89)  # Desktop payloads; all three DOS games live on the separate games disk.
         for r in records:
-            if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt", "/system/licenses/stb_truetype.txt"):
+            if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
+            elif r["path"].startswith("/system/licenses/FreeType-"):
+                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "build/tools/ciuki-sdk/licenses" / Path(r["path"]).name).read_bytes()).hexdigest())
             elif r["path"] == "/system/licenses/minimp3.txt":
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/minimp3/LICENSE").read_bytes()).hexdigest())
             elif r["path"].startswith("/System/fonts/"):

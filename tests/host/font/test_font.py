@@ -22,6 +22,8 @@ import zlib
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "tests/host/desktop"))
+from frame_review import capture
 FONTS = ROOT / "assets/fonts/liberation"
 GOLDENS = Path(__file__).with_name("coverage-goldens.json")
 
@@ -35,6 +37,9 @@ class Bitmap(C.Structure):
 
 class Stats(C.Structure):
     _fields_ = [("glyphs", C.c_uint), ("bytes", C.c_size_t)] + [(x, C.c_uint64) for x in ("hits", "misses", "evictions")]
+
+class SizeMetrics(C.Structure):
+    _fields_ = [(x, C.c_int32) for x in ("ascent", "descent", "line_gap", "max_advance")]
 
 class Rect(C.Structure):
     _fields_ = [(x, C.c_int) for x in ("x", "y", "w", "h")]
@@ -115,18 +120,22 @@ class FontTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         parent = ROOT / "build/host"; parent.mkdir(parents=True, exist_ok=True)
+        (parent / "f2-63").mkdir(exist_ok=True)
         (ROOT / "build/codex").mkdir(parents=True, exist_ok=True)
         cls.temp = tempfile.TemporaryDirectory(prefix="font-", dir=parent)
         cls.folder = Path(cls.temp.name)
         cls.env = dict(os.environ, TMPDIR=cls.temp.name, ASAN_OPTIONS="detect_leaks=0")
+        cls.ft = module("font_freetype", ROOT / "sdk/freetype/build.py")
+        cls.ft_library = cls.ft.host()
         binary = cls.folder / "libfont.so"
         subprocess.run(["clang", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", "-pthread",
                         "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"), "-I", str(ROOT / "src/kernel/include"),
-                        str(ROOT / "sdk/libfont/font.c"), str(ROOT / "apps/libdeskui/text_ttf.c"), "-lm", "-o", str(binary)], check=True, env=cls.env)
+                        *cls.ft.includes(), str(ROOT / "sdk/libfont/font.c"), str(ROOT / "apps/libdeskui/text_ttf.c"), str(cls.ft_library), "-lm", "-o", str(binary)], check=True, env=cls.env)
         cls.lib = C.CDLL(str(binary), use_errno=True)
         definitions = {
             "open": [C.c_char_p, C.POINTER(C.c_void_p)], "close": [C.c_void_p],
             "get_metrics": [C.c_void_p, C.POINTER(Metrics)], "lookup": [C.c_void_p, C.c_uint32, C.POINTER(C.c_uint)],
+            "get_size_metrics": [C.c_void_p, C.c_uint, C.POINTER(SizeMetrics)],
             "hmetrics": [C.c_void_p, C.c_uint, C.POINTER(C.c_int), C.POINTER(C.c_int)],
             "raster": [C.c_void_p, C.c_uint, C.c_uint, C.POINTER(Bitmap)], "bitmap_free": [C.POINTER(Bitmap)],
             "measure": [C.c_void_p, C.c_uint, C.c_char_p, C.c_size_t, C.POINTER(C.c_int32)],
@@ -189,7 +198,8 @@ class FontTests(unittest.TestCase):
             text = "AVATAR To Wa café Åé €"; glyphs = [cmap(t["cmap"], ord(c)) for c in text]
             pairs = [kerning(t, a, b) for a, b in zip(glyphs, glyphs[1:])]
             observed_nonzero |= any(pairs)
-            expected = sum(scale(hmetrics(t, g)[0], 853, upem) for g in glyphs) + sum(scale(k, 853, upem) for k in pairs)
+            advances = [self.raster(face, ord(c), 853)[0]["advance"] for c in text]
+            expected = sum(advances) + sum(scale(k, 853, upem) for k in pairs)
             self.assertEqual(self.measure(face, text.encode()), expected)
             painted = []
             @Painter
@@ -200,7 +210,7 @@ class FontTests(unittest.TestCase):
             self.assertEqual(out.value, expected); pen = 0; positions = []
             for i, g in enumerate(glyphs):
                 if i: pen += scale(pairs[i - 1], 853, upem)
-                positions.append(5 + scale(pen, 1, 64)); pen += scale(hmetrics(t, g)[0], 853, upem)
+                positions.append(5 + scale(pen, 1, 64)); pen += advances[i]
             # Space produces advance but no callback.
             self.assertEqual([x - left for x, y, left, top in painted], [x for c, x in zip(text, positions) if c != " "])
             self.assertTrue(all(y - top == 30 for x, y, left, top in painted))
@@ -210,7 +220,7 @@ class FontTests(unittest.TestCase):
             at = 12 + i * 16
             if data[at:at + 4] == b"kern": data[at:at + 4] = b"NONE"
         file = self.folder / "no-kern.ttf"; file.write_bytes(data); face = self.face(file); t = tables(file)
-        self.assertEqual(self.measure(face, b"AV"), sum(scale(hmetrics(t, cmap(t["cmap"], cp))[0], 853, u16(t["head"], 18)) for cp in b"AV"))
+        self.assertEqual(self.measure(face, b"AV"), sum(self.raster(face, cp, 853)[0]["advance"] for cp in b"AV"))
 
     def test_utf8_edges_and_missing_glyph(self):
         face = self.face(FONTS / "LiberationSans-Regular.ttf")
@@ -247,6 +257,54 @@ class FontTests(unittest.TestCase):
             self.assertEqual(len(coverage), len(expected))
             self.assertLessEqual(max((abs(a - b) for a, b in zip(coverage, expected)), default=0), 1, item)
 
+    def test_scaled_metrics_and_hinted_advances_at_8_through_16_pixels(self):
+        for file in sorted(FONTS.glob("*.ttf")):
+            face = self.face(file); t = tables(file); upem = u16(t["head"], 18)
+            for px in range(8, 17):
+                with self.subTest(font=file.name, px=px):
+                    m = SizeMetrics()
+                    self.assertEqual(self.lib.ciuki_font_get_size_metrics(face, px * 64, C.byref(m)), 0)
+                    self.assertEqual((m.ascent, m.descent, m.line_gap), tuple(scale(v, px * 64, upem) for v in struct.unpack_from(">3h", t["hhea"], 4)))
+                    self.assertEqual(m.max_advance, scale(u16(t["hhea"], 10), px * 64, upem))
+                    for cp in range(32, 127):
+                        metrics, _ = self.raster(face, cp, px * 64)
+                        self.assertEqual(metrics["advance"] % 64, 0)
+                        # v35 phantom-point fitting can move narrow/wide glyphs
+                        # by more than 2 px; the measured maximum is 164/64 px.
+                        self.assertLessEqual(abs(metrics["advance"] - scale(hmetrics(t, cmap(t["cmap"], cp))[0], px * 64, upem)), 3 * 64)
+            m = SizeMetrics()
+            self.assertEqual(self.lib.ciuki_font_get_size_metrics(face, 853, C.byref(m)), 0)
+            self.assertEqual(m.ascent, scale(s16(t["hhea"], 4), 853, upem))
+            self.assertEqual(self.lib.ciuki_font_get_size_metrics(face, 63, C.byref(m)), -1)
+
+    def test_hinting_difference_budget_against_stb_baseline(self):
+        record = json.loads(GOLDENS.with_name("coverage-stb-baseline.json").read_text())
+        faces = {}; observed = []
+        for item in record["glyphs"]:
+            file = item["font"]
+            self.assertEqual(hashlib.sha256((FONTS / file).read_bytes()).hexdigest(), record["fonts"][file])
+            if file not in faces: faces[file] = self.face(FONTS / file)
+            new, coverage = self.raster(faces[file], item["codepoint"], item["em_26_6"])
+            old = item["metrics"]; before = zlib.decompress(base64.b64decode(item["coverage_zlib_base64"]))
+            self.assertLessEqual(abs(new["advance"] - old["advance"]), 96, item)
+            for field in ("left", "top", "width", "height"):
+                self.assertLessEqual(abs(new[field] - old[field]), 3, (field, item))
+            x0 = min(old["left"], new["left"]); y0 = min(old["top"], new["top"])
+            x1 = max(old["left"] + old["width"], new["left"] + new["width"])
+            y1 = max(old["top"] + old["height"], new["top"] + new["height"])
+            def pixel(m, data, x, y):
+                x -= m["left"]; y -= m["top"]
+                return data[y * m["width"] + x] if 0 <= x < m["width"] and 0 <= y < m["height"] else 0
+            error = sum(abs(pixel(old, before, x, y) - pixel(new, coverage, x, y)) for y in range(y0, y1) for x in range(x0, x1))
+            mean = error / max(1, (x1 - x0) * (y1 - y0))
+            # 25% of the full coverage range, individually per baseline-aligned
+            # glyph. Hinting intentionally shifts entire stems by a pixel.
+            self.assertLessEqual(mean, 63.75, item)
+            observed.append(dict(font=file, cp=item["codepoint"], size=item["em_26_6"], mean_error=round(mean, 4),
+                                 advance_delta=abs(new["advance"] - old["advance"]),
+                                 box_delta=max(abs(new[k] - old[k]) for k in ("left", "top", "width", "height"))))
+        (ROOT / "build/host/f2-63/parity.json").write_text(json.dumps(observed, indent=2) + "\n")
+
     def test_cache_bounds_owned_snapshots_and_threads(self):
         face = self.face(FONTS / "LiberationSerif-Italic.ttf")
         b = Bitmap(); self.assertEqual(self.lib.ciuki_font_raster(face, self.glyph(face, ord("A")), 853, C.byref(b)), 0)
@@ -276,7 +334,9 @@ class FontTests(unittest.TestCase):
             return self.measure(face, b"Thread safe face")
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             widths = list(pool.map(work, range(4)))
-        self.assertEqual(len(set(widths)), 1); self.assertEqual(self.stats(face).glyphs, 52); self.assertEqual(self.stats(other).glyphs, 0)
+        expected = {(self.glyph(face, cp), size) for cp in range(65, 91) for size in (853, 1195)}
+        expected.update((self.glyph(face, cp), 853) for cp in b"Thread safe face")
+        self.assertEqual(len(set(widths)), 1); self.assertEqual(self.stats(face).glyphs, len(expected)); self.assertEqual(self.stats(other).glyphs, 0)
 
     def test_integer_blend_and_canvas_clip(self):
         file = FONTS / "LiberationSans-Regular.ttf"; face = self.face(file)
@@ -323,23 +383,38 @@ class FontTests(unittest.TestCase):
         subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                         "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-pthread", *icons.defines(),
                         "-I", str(ROOT / "apps/control"), "-I", str(ROOT / "src/kernel/include"),
-                        "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"), *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)], check=True, env=self.env)
+                        "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"), *self.ft.includes(), *(str(ROOT / s) for s in sources), str(self.ft_library), "-lm", "-o", str(binary)], check=True, env=self.env)
         frame = self.folder / "fonts.xrgb"
         result = subprocess.run([binary, FONTS, frame], check=True, capture_output=True, text=True, env=self.env)
         self.assertIn("PASS control fonts", result.stdout)
         self.assertEqual(frame.stat().st_size, 560 * 420 * 4)
+        capture("control-fonts", frame.read_bytes(), 560, 420)
         from PIL import Image
-        Image.frombytes("RGB", (560, 420), frame.read_bytes(), "raw", "BGRX").save(ROOT / "build/codex/f2-49-fonts.png")
+        Image.frombytes("RGB", (560, 420), frame.read_bytes(), "raw", "BGRX").save(ROOT / "build/host/f2-63/control-fonts.png")
 
     def test_host_benchmark(self):
         binary = self.folder / "benchmark"
         subprocess.run(["clang", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread", "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
-                        str(ROOT / "tests/host/font/benchmark.c"), str(ROOT / "sdk/libfont/font.c"), "-lm", "-o", str(binary)], check=True, env=self.env)
+                        *self.ft.includes(), str(ROOT / "tests/host/font/benchmark.c"), str(ROOT / "sdk/libfont/font.c"), str(self.ft_library), "-lm", "-o", str(binary)], check=True, env=self.env)
         result = subprocess.run([binary, FONTS / "LiberationSans-Regular.ttf"], check=True, text=True, capture_output=True, env=self.env)
         data = json.loads(result.stdout); data.update(host=platform.machine(), measurement="host CPU, no display blending, not Pentium III evidence")
         self.assertGreater(data["cold_us_per_glyph"], 0); self.assertGreater(data["warm_us_per_glyph"], 0)
-        (ROOT / "build/codex/f2-49-benchmark.json").write_text(json.dumps(data, indent=2) + "\n")
+        (ROOT / "build/codex/f2-63-benchmark.json").write_text(json.dumps(data, indent=2) + "\n")
         print("FONT_BENCHMARK", json.dumps(data, sort_keys=True))
+
+    def test_heap_budget_allocation_failures_and_warm_paint(self):
+        binary = self.folder / "memory"
+        subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
+                        "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                        "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"), *self.ft.includes(),
+                        str(ROOT / "tests/host/font/memory.c"), str(ROOT / "sdk/libfont/font.c"), str(self.ft_library),
+                        "-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free", "-o", str(binary)], check=True, env=self.env)
+        result = subprocess.run([binary, FONTS / "LiberationSans-Regular.ttf"], text=True, capture_output=True, env=self.env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["leaked_bytes"], 0); self.assertEqual(data["warm_paint_allocations"], 0)
+        self.assertLess(data["peak_live_bytes"], 2 * 1024 * 1024)  # trusted Liberation face + interpreter + coverage + owned snapshot
+        (ROOT / "build/host/f2-63/memory.json").write_text(json.dumps(data, indent=2) + "\n")
 
 def prepare():
     FontTests.setUpClass(); test = FontTests()
@@ -352,7 +427,7 @@ def prepare():
                     metrics, coverage = test.raster(face, cp, size)
                     glyphs.append(dict(font=file.name, codepoint=cp, em_26_6=size, metrics=metrics,
                                        coverage_zlib_base64=base64.b64encode(zlib.compress(coverage)).decode()))
-        GOLDENS.write_text(json.dumps(dict(rasterizer="stb_truetype 1.26 version 1", per_pixel_tolerance=1, fonts=hashes, glyphs=glyphs), indent=2) + "\n")
+        GOLDENS.write_text(json.dumps(dict(rasterizer="FreeType 2.13.3 normal grey v35", per_pixel_tolerance=1, fonts=hashes, glyphs=glyphs), indent=2) + "\n")
     finally:
         test.doCleanups(); FontTests.tearDownClass()
 

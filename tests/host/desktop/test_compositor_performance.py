@@ -14,14 +14,19 @@ import subprocess
 import tempfile
 import tarfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 
 ROOT = Path(__file__).resolve().parents[3]
 THEMES = ("Platinum", "Ciuki Blue", "Classic 98")
 # F2-62: Blue polish; explicitly selected Platinum/Classic 98 are unchanged.
+# F2-63: re-recorded for the pinned FreeType UI atlases (before/after PNGs in build/host/f2-63).
 GOLDENS = {
-    "Platinum": "c105449aba076be0c9f330f4c8dd4b7cc13dbfa259ee83e8787cd7b59b63373a",
-    "Ciuki Blue": "4a16782346cdcd1590e9f1a928083d0413f6e98f29e7587851514f29756a6638",
-    "Classic 98": "17e98daaaefd11df154da275151a503cf426b1030cc68c4d0d11b1cdb04a9004",
+    "Platinum": "5363a73fca2de8261d54e3603335cdd165bf504c75ba62c68ed274d326a7f863",
+    "Ciuki Blue": "bd9be47269f09e18c1a81cb8bc42c05a02dc29d7afab4401837ae5d9c7ebe2ab",
+    "Classic 98": "f4bebf26919094d90b1a759e5f3f5161fe948c9d67d63bd0329d65d68a2d124c",
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",
@@ -88,6 +93,7 @@ def render(binary, folder, theme, frames=0, reference=False):
     assert result.returncode == 0, result.stdout + result.stderr
     pixels = target.read_bytes()
     assert len(pixels) == 1024 * 768 * 4
+    capture("compositor-" + theme, pixels, 1024, 768)
     target.unlink()
     return hashlib.sha256(pixels).hexdigest(), result.stdout
 

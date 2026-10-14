@@ -143,6 +143,13 @@ int main(void)
     assert(fake_create("/mnt",FM_DIR)>=0); assert(fake_create("/mnt/d",FM_DIR)>=0); file("/Documents/one.txt","first\n"); file("/Documents/space name.txt","spaces\n"); file("/Documents/plain","plain"); file("/Documents/sub/child","child");
     struct term_host host={.fs=fake_vfs,.net=net,.mixer=mixer,.volume=volume,.processes=processes,.display=display,.launch=launch,.kill=kill,.power=power,.now=now,.pump=pump,.quit=quit};
     du_init(&ui,pixels,TERM_WIDTH,TERM_HEIGHT); assert(!term_attach(&app,&ui,&host)); assert(app.columns==80 && app.rows==25);
-    builtins(); system_commands(); lua_and_ui(); term_detach(&app); fake_assert_clean(); du_release(&ui);
+    builtins(); system_commands(); lua_and_ui();
+    /* Deterministic review scene: the production fixed-cell painter, accents,
+     * descenders, cursor and selection. Independent of previous command output. */
+    term_execute(&app,"CLS"); term_write(&app,"CiukiOS Terminal\nClassic computing, one woof at a time.\nAVATAR To Wa 0123456789 gjpqy\n");
+    strcpy(app.input,"ECHO hello"); app.cursor=strlen(app.input); du_render(&ui);
+    const char *frame=getenv("CIUKI_TERMINAL_FRAME");
+    if(frame) { FILE *f=fopen(frame,"wb"); assert(f); assert(fwrite(pixels,sizeof(*pixels),TERM_WIDTH*TERM_HEIGHT,f)==TERM_WIDTH*TERM_HEIGHT); assert(!fclose(f)); }
+    term_detach(&app); fake_assert_clean(); du_release(&ui);
     puts("terminal: PASS built-ins, aliases, VFS, nodes, Lua, interruption, history, completion, selection, resize, scrollback"); return 0;
 }

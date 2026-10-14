@@ -1,0 +1,16 @@
+--- a/src/truetype/ttobjs.c
++++ b/src/truetype/ttobjs.c
+@@ -1143,6 +1143,13 @@
+     size->cvt_ready      = -1;
+ 
+     size->context = TT_New_Context( (TT_Driver)face->root.driver );
++    /* CiukiOS: do not run font bytecode after context allocation failed. */
++    if ( !size->context )
++    {
++      error = FT_THROW( Out_Of_Memory );
++      goto Exit;
++    }
++
+ 
+     size->max_function_defs    = maxp->maxFunctionDefs;
+     size->max_instruction_defs = maxp->maxInstructionDefs;

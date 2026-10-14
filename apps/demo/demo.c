@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "gate.h"
+#include "theme.h"
 #include <ciuki/raw.h>
 #include <ciuki/runtime.h>
 #include <ciuki/channel.h>
@@ -39,11 +40,8 @@ static void damage(int channel)
 }
 static void text(uint32_t *pixels, unsigned x, unsigned y, const char *s)
 {
-    for (; *s && x<WIDTH; s++, x+=6)
-        for (unsigned row=0; row<7 && y+row<HEIGHT; row++)
-            for (unsigned col=0; col<5 && x+col<WIDTH; col++)
-                if (desk_glyph_row((unsigned char)*s,row) & (1u<<(4-col)))
-                    pixels[(y+row)*WIDTH+x+col]=0x213c4cu;
+    struct desk_paint p = {pixels, WIDTH, HEIGHT, 0, 0, WIDTH, HEIGHT};
+    desk_paint_text(&p, DESK_FONT_MONO, (int)x, (int)y + desk_font_cap(DESK_FONT_MONO), s, 0x213c4cu);
 }
 static void draw(uint32_t *pixels, const char *typed, unsigned motion, unsigned buttons)
 {

@@ -1072,8 +1072,9 @@ background. Its quiet dark top bar displays `CiukiOS`, the exact English
 tagline `Classic computing, one woof at a time.`, and MONOTONIC uptime as HH:MM:SS (hours modulo 100).
 Window frames use a cream close button, a dark focused title and a muted
 unfocused title. `Not responding` is the five-second heartbeat warning.
-Original 5x7 bitmap glyphs render English UI and printable ASCII titles; the
-demo renders incoming ASCII text, while the protocol retains Unicode scalars.
+Pre-rasterised FreeType UI atlases (`apps/desktop/ui_fonts.h`, F2-63) render English UI
+and titles; the demo renders incoming ASCII text with the monospace atlas, while the
+protocol retains Unicode scalars.
 
 ## Protocol version 1
 

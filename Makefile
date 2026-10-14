@@ -12,8 +12,8 @@ SDK_ARGS ?= --archive $(SDK_ARCHIVE) --jobs 2
 SDK_INPUTS = $(shell find sdk -type f ! -path '*/__pycache__/*') \
              scripts/build_sdk.sh scripts/build_kernel.py config/sdk-pins.json \
              config/toolchain.json src/kernel/include/ciuki/abi.h apps/desktop/protocol.h \
-             third_party/stb/stb_truetype.h third_party/stb/LICENSE \
-             $(wildcard $(SDK_ARCHIVE))
+             $(wildcard $(SDK_ARCHIVE)) \
+             $(wildcard build/downloads/freetype/freetype-2.13.3.tar.xz)
 LUA_SOURCE_ARCHIVE ?= build/downloads/newlib/lua-5.4.8.tar.gz
 LUA_TESTS_ARCHIVE ?= build/downloads/newlib/lua-5.4.8-tests.tar.gz
 LUA_ARGS ?= --source-archive $(LUA_SOURCE_ARCHIVE) --tests-archive $(LUA_TESTS_ARCHIVE) --jobs 2

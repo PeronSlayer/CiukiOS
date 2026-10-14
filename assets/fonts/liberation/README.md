@@ -33,8 +33,10 @@ The Control Panel Fonts page reads family/style from the font's `name` table
 and keeps only the selected face open. F5 alias policy lives in
 [fonts-contract.md](../../../docs/design/fonts-contract.md).
 
-Rasteriser source is the unmodified `third_party/stb/stb_truetype.h` 1.26 from
-stb commit `2c980bb59875b0d32144a71867fbdebb2f77cd20`, SHA-256
-`ecd30b05e0dd4fea3a13c26810dd9e1992dc379049482c393d5a19e6b5090aab`.
-Ciuki chooses its Public Domain alternative and ships both original notices
-in `/system/licenses/stb_truetype.txt` and the SDK's `licenses/stb-truetype.txt`.
+Since F2-63 (2026-10-14) the rasteriser is FreeType 2.13.3, built by the SDK
+from the SHA-256-pinned upstream archive (`config/sdk-pins.json`,
+`sdk/freetype/build.py`) with normal grey hinting and TrueType interpreter v35.
+Ciuki selects the FreeType License (FTL) and ships `FreeType-FTL.txt`,
+`FreeType-LICENSE.txt` and `FreeType-NOTICE.txt` in `/system/licenses/` and the
+SDK's `licenses/`. The former stb_truetype 1.26 backend is retired; see
+[fonts-contract.md](../../../docs/design/fonts-contract.md).

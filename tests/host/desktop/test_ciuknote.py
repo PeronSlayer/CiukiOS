@@ -11,6 +11,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
@@ -114,6 +118,9 @@ class CiuknoteTests(unittest.TestCase):
         return subprocess.run([str(binary), *args], check=True, env=env, capture_output=True, text=True).stdout
 
     def screens(self, folder):
+        for p in folder.glob("*.xrgb"):
+            width, height = (320, 240) if p.name.startswith("ta-") else (640, 440)
+            capture(p.stem, p.read_bytes(), width, height)
         return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.glob("*.xrgb"))}
 
     def scratch(self):
