@@ -52,6 +52,10 @@ static bool missing_thread, missing_task, preentry, release_done, ready_poll;
 struct task *g_current;
 static struct task *all_tasks, *idle_task;
 static uint32_t slice_left;
+/* f3-14: the focused DOS window's tick budget lives in the scheduler block */
+static const struct task *focus_task;
+static uint32_t focus_ticks;
+#define FOCUS_BUDGET 8u
 uint32_t g_starvation_boosts;
 uint64_t g_idle_ticks;   /* f2-33: the extracted sched_tick counts idle ticks */
 volatile bool g_need_resched;
@@ -265,7 +269,8 @@ def controller_source(source):
     scheduler = (ROOT / 'src/kernel/core/task.c').read_text()
     tick = 'void sched_tick(void)' + scheduler.split('void sched_tick(void)', 1)[1].split('void task_yield(void)', 1)[0]
     # f3-00 added optional DOS VM hooks to the production scheduler as weak symbols.
-    tick = 'extern void dosvm_tick(void) __attribute__((weak));\n' + tick
+    tick = ('extern void dosvm_tick(void) __attribute__((weak));\n'
+            'extern void serial_tick(void) __attribute__((weak));\n' + tick)
     return (HARNESS.replace('RESULT_LAYOUT', layout).replace('CONTROLLER', controller)
             .replace('RELEASE_INJECTION', release).replace('SCHED_TICK', tick))
 
