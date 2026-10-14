@@ -1,0 +1,8 @@
+; SPDX-License-Identifier: LGPL-2.1-or-later
+LIBRARY ntdll.dll
+EXPORTS
+ LdrLoadDll@16
+ LdrUnloadDll@4
+ LdrGetDllHandle@16
+ LdrGetProcedureAddress@16
+ NtCurrentTeb@0

@@ -1,0 +1,56 @@
+; SPDX-License-Identifier: LGPL-2.1-or-later
+; Copyright 2026 CiukiOS contributors.
+LIBRARY ntdll.dll
+EXPORTS
+    RtlInitializeCriticalSection
+    RtlInitializeCriticalSectionAndSpinCount
+    RtlDeleteCriticalSection
+    RtlEnterCriticalSection
+    RtlLeaveCriticalSection
+    RtlTryEnterCriticalSection
+    RtlCreateHeap
+    RtlDestroyHeap
+    RtlAllocateHeap
+    RtlReAllocateHeap
+    RtlFreeHeap
+    RtlSizeHeap
+    RtlValidateHeap
+    RtlWalkHeap
+    RtlLockHeap
+    RtlUnlockHeap
+    RtlInitAnsiString
+    RtlInitUnicodeString
+    RtlAnsiStringToUnicodeString
+    RtlUnicodeStringToAnsiString
+    RtlFreeAnsiString
+    RtlFreeUnicodeString
+    RtlCompareUnicodeString
+    RtlEqualUnicodeString
+    RtlAppendUnicodeStringToString
+    RtlUpcaseUnicodeString
+    RtlUpcaseUnicodeChar
+    RtlGetFullPathName_U
+    RtlDosPathNameToNtPathName_U
+    RtlNtStatusToDosError
+    RtlCaptureContext
+    RtlDispatchException
+    RtlRaiseException
+    RtlRaiseStatus
+    RtlUnwind
+    KiUserExceptionDispatcher
+    LdrLoadDll
+    LdrUnloadDll
+    LdrGetDllHandle
+    LdrGetProcedureAddress
+    LdrDisableThreadCalloutsForDll
+    LdrLockLoaderLock
+    LdrUnlockLoaderLock
+    LdrFindResource_U
+    LdrFindResourceDirectory_U
+    LdrAccessResource
+    RtlImageNtHeader
+    RtlImageDirectoryEntryToData
+    NtCurrentTeb=w32_current_teb
+    w32_stub_hit
+    w32_set_services PRIVATE
+    w32_ldr_bind PRIVATE
