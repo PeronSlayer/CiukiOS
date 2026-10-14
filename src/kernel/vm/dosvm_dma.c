@@ -59,6 +59,7 @@ uint8_t dosvm_dma_io(struct dosvm *v, uint16_t port, bool write, uint8_t value)
     else return 0xFF; /* master odd ports are not decoded */
     if (reg >= 8) {
         uint8_t result = dma_control(d, c, reg, write, value);
+        if (write) dosvm_sb_record_state(v, DOSVM_SB_DMA_IO, port);
         if (write && reg == 10 && !(value & 4)) {
             unsigned channel = c * 4 + (value & 3);
             const struct dosvm_dma_channel *ch = &d->ch[channel];

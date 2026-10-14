@@ -29,6 +29,11 @@ enum dosvm_audio_error { DOSVM_AUDIO_OK, DOSVM_AUDIO_DMA_FAULT, DOSVM_AUDIO_DMA_
 enum dosvm_sb_kind { DOSVM_SB_PCM, DOSVM_SB_SILENCE, DOSVM_SB_ADPCM };
 enum dosvm_audio_record_kind { DOSVM_AUDIO_RESET=1, DOSVM_AUDIO_VERSION,
     DOSVM_AUDIO_PLAY, DOSVM_AUDIO_DMA };
+enum dosvm_sb_state { DOSVM_SB_IDLE, DOSVM_SB_RUNNING, DOSVM_SB_PAUSED,
+    DOSVM_SB_IRQ_WAIT, DOSVM_SB_DMA_WAIT, DOSVM_SB_ERROR };
+enum dosvm_sb_reason { DOSVM_SB_START, DOSVM_SB_REPLACE, DOSVM_SB_RESET,
+    DOSVM_SB_DSP, DOSVM_SB_DMA_IO, DOSVM_SB_DMA_TC, DOSVM_SB_COMPLETE,
+    DOSVM_SB_IRQ_ACK, DOSVM_SB_IRQ_LATE, DOSVM_SB_FAULT, DOSVM_SB_QUEUED };
 
 struct dosvm_dma_channel {
     uint16_t base_address, base_count, address, count;
@@ -102,10 +107,12 @@ struct dosvm_audio {
     struct {
         struct { uint32_t a, b, c; uint8_t kind; } event[16];
         uint8_t head, count, used[5];
+        struct { uint32_t a, b, c; } state_event[16];
+        uint8_t state_head, state_count, sb_state, periodic;
         uint32_t dropped;
         bool attachment, environment, summary_pending;
         int attach_error;
-        uint64_t next_log, next_summary, last_summary, published;
+        uint64_t next_log, next_summary, last_summary, published, next_level;
     } diag;
 };
 
@@ -116,6 +123,7 @@ void dosvm_audio_advance(struct dosvm *, uint64_t elapsed_ms);
 int dosvm_audio_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *);
 void dosvm_audio_log(struct dosvm *);
 void dosvm_audio_record(struct dosvm *, unsigned kind, uint32_t, uint32_t, uint32_t);
+void dosvm_sb_record_state(struct dosvm *, unsigned reason, uint16_t port);
 /* 8237A */
 void dosvm_dma_init(struct dosvm *);
 uint8_t dosvm_dma_io(struct dosvm *, uint16_t port, bool write, uint8_t value);

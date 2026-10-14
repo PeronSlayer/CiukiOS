@@ -22,12 +22,13 @@ static void *vq_arg;
 static void vq_begin(void)
 {
     audio.ready = true;
+    audio.running = true; /* the fake transport accepts and plays each mixed period */
     audio.caps.output_rate=48000;
     audio.master = (struct ciuki_mixer_master){ .version = 1, .size = 32, .left = 100, .right = 100 };
     audio.output = 2048; audio.played_output = 256;
     vq_n = 0; vq_frames = 0; vq_ticks0 = g_ticks; vq_service = 0; vq_arg = 0;
 }
-static void vq_end(void) { audio.ready = false; vq_service = 0; }
+static void vq_end(void) { audio.ready = audio.running = false; vq_service = 0; }
 static void vq_mix(void)
 {
     audio.played_output = audio.output - 7 * AUDIO_QUANTUM; /* the fake transport: seven periods queued */
