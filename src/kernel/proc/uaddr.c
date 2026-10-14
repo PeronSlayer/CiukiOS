@@ -6,6 +6,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/cpustat.h>
 
 #define PTE_OWN 0x200u
 #define PTE_NEW 0x400u
@@ -113,6 +114,7 @@ static int reserve_pages(struct uaddr *u, uint32_t base, uint32_t end)
         memset(P2V(phys), 0, PAGE_SIZE);
         *p = phys | PTE_OWN | PTE_NEW;
         u->backing++;
+        if (((va - base) / PAGE_SIZE + 1) % 16 == 0) kpreempt_point();
     }
     return 0;
 fail:
@@ -176,21 +178,26 @@ int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
     struct ua_extent *e = kzalloc(sizeof(*e));
     if (!e)
         return -ENOMEM;
+    *e = (struct ua_extent){ .base = base, .end = end, .prot = PROT_NONE, .maximum = maximum,
+        .kind = kind, .owner = owner, .generation = ++next_generation, .preparing = true };
+    struct ua_extent **at = &u->head;
+    while (*at && (*at)->base < base) at = &(*at)->next;
+    e->next = *at; *at = e;
+    u->extents++;
+    if (in_arena) u->arena_extents++;
+    uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
     if (prot && (err = reserve_pages(u, base, end))) {
+        /* Other disjoint mappings may have changed the list while yielded. */
+        at = &u->head;
+        while (*at != e) at = &(*at)->next;
+        *at = e->next; u->extents--;
+        if (in_arena) u->arena_extents--;
         kfree(e);
         return err;
     }
     protect_pages(u, base, end, prot);
-    *e = (struct ua_extent){ .base = base, .end = end, .prot = prot, .maximum = maximum,
-        .kind = kind, .owner = owner, .generation = ++next_generation };
-    struct ua_extent **at = &u->head;
-    while (*at && (*at)->base < base)
-        at = &(*at)->next;
-    e->next = *at;
-    *at = e;
-    u->extents++;
-    if (in_arena)
-        u->arena_extents++;
+    e->prot = prot; e->preparing = false;
+    if (cpu_path_add && cpu_path_clock) cpu_path_add(CPU_ZERO, cpu_path_clock() - start);
     return 0;
 }
 
@@ -237,6 +244,8 @@ int32_t ua_mmap(struct uaddr *u, const struct ciuki_mmap_args *a)
 
 static bool pinned(const struct uaddr *u, uint32_t base, uint32_t end)
 {
+    for (const struct ua_extent *e = u->head; e; e = e->next)
+        if (e->preparing && base < e->end && end > e->base) return true;
     for (const struct ua_pin *p = u->pins; p; p = p->next)
         if (base < p->end && end > p->base)
             return true;
@@ -352,11 +361,18 @@ int ua_mprotect(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot)
     err = prepare_split(u, base, end, false, &l, &r);
     if (err)
         return err;
-    if (prot && (err = reserve_pages(u, base, end))) {
-        kfree(l);
-        kfree(r);
-        return err;
-    }
+    /* Pin whole boundary extents: a disjoint split of the same extent
+     * would otherwise invalidate prepare_split's allocation assumptions.
+     * Existing readable pages retain their normal copy/pin semantics. */
+    struct ua_extent *first = ua_find(u, base), *last = ua_find(u, end - 1);
+    struct ua_pin transaction = { .base = first->base, .end = last->end, .mutation = true, .next = u->pins };
+    u->pins = &transaction;
+    unsigned debit = (l && arena(first)) + (r && arena(last));
+    u->arena_extents += debit;
+    if (prot) err = reserve_pages(u, base, end);
+    u->arena_extents -= debit;
+    ua_unpin(u, &transaction);
+    if (err) { kfree(l); kfree(r); return err; }
     split(u, base, l);
     split(u, end, r);
     protect_pages(u, base, end, prot);
@@ -376,7 +392,7 @@ bool ua_range(const struct uaddr *u, uint32_t va, uint32_t bytes, uint32_t prot)
     uint32_t end = va + bytes;
     while (va < end) {
         const struct ua_extent *e = ua_find(u, va);
-        if (!e || e->kind == UA_GUARD || (e->prot & prot) != prot)
+        if (!e || e->preparing || e->kind == UA_GUARD || (e->prot & prot) != prot)
             return false;
         va = e->end < end ? e->end : end;
     }
@@ -387,6 +403,8 @@ int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, b
 {
     if (!ua_range(u, base, bytes, PROT_READ | (write ? PROT_WRITE : 0)))
         return -EFAULT;
+    for (struct ua_pin *p = u->pins; p; p = p->next)
+        if (p->mutation && base < p->end && base + bytes > p->base) return -EBUSY;
     *pin = (struct ua_pin){ .base = base, .end = base + bytes, .task = g_current, .next = u->pins };
     u->pins = pin;
     return 0;
@@ -479,7 +497,9 @@ int32_t ua_brk(struct uaddr *u, uint32_t end)
             if (err)
                 return err == -EINVAL ? -ENOMEM : err;
         }
-        zero_range(u, old, end);
+        /* Fresh pages were zeroed before publication. Only a previously
+         * exposed tail can contain old heap bytes; it is < one page. */
+        zero_range(u, old, end < old_page ? end : old_page);
     } else if (new_page < old_page) {
         struct ua_extent *l, *r;
         int err = prepare_split(u, new_page, old_page, true, &l, &r);

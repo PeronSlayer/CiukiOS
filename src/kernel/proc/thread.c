@@ -36,7 +36,7 @@ struct proc_thread *proc_thread_for(const struct task *task)
 struct proc_thread *proc_thread_find(struct process *p, uint32_t tid)
 {
     for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++)
-        if (threads[i] && threads[i]->process == p && threads[i]->tid == tid)
+        if (threads[i] && (threads[i]->task || threads[i]->retained) && threads[i]->process == p && threads[i]->tid == tid)
             return threads[i];
     return 0;
 }
@@ -215,6 +215,12 @@ int proc_thread_create(uint32_t args_va)
                               a.stack_bytes, a.flags, parent->mask, false, &t);
     if (err)
         return err;
+    /* Allocation can now pass a voluntary point. A concurrent process stop
+     * must not publish a new runnable thread after it revoked creation. */
+    if (parent->process->state != PROC_LIVE) {
+        proc_thread_discard(t);
+        return -EINTR;
+    }
     task_start(t->task);
     return (int)t->tid;
 }

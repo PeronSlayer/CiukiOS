@@ -7,6 +7,9 @@
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
 #include <ciuki/fbdev.h>
+#include <ciuki/task.h>
+#include <ciuki/cpustat.h>
+#include <ciuki/sync.h>
 
 extern const uint8_t font_cfn_regular[];   /* 95 widths + 95 * 16 rows (u16 LE) */
 
@@ -46,12 +49,18 @@ static volatile bool display_owned, repaint_pending;
  * serial port and the boot log file; console_wake (panic, double fault,
  * desktop failure, watchdog) switches drawing on and repaints the history. */
 static volatile bool quiet;
+static bool panic_drawing, paint_valid;
+static uint32_t committed, painted_lines;
+static unsigned painted_rows;
+static uint64_t next_paint;
+
 
 static uint32_t line_begin_as(bool overlay)
 {
     uint32_t flags = irq_save();
     draw_enabled = con_kind != CON_LFB ||
                    (__atomic_load_n(&fb, __ATOMIC_ACQUIRE) && (overlay || (!display_owned && !quiet)) && fbdev_console_begin());
+    irq_restore(flags); /* presenter claim, not IF, protects the pixels */
     return flags;
 }
 static uint32_t line_begin(void) { return line_begin_as(false); }
@@ -150,36 +159,9 @@ static void clear_screen(void)
         for (unsigned c = 0; c < cols; c++)
             draw_cell(c, r, ' ');
         line_end(flags);
+        if (!panic_drawing) kpreempt_point();
     }
     cur_col = cur_row = 0;
-}
-
-static void scroll(void)
-{
-    /* Redraw from history: robust for both kinds and avoids reading VRAM. */
-    unsigned shown = rows - 1;
-    unsigned n = hist_count < shown ? hist_count : shown;
-    if (con_kind == CON_LFB && (display_owned || quiet)) {
-        cur_row = n;
-        cur_col = 0;
-        return;
-    }
-    for (unsigned r = 0; r < rows; r++) {
-        uint32_t flags = line_begin();
-        const char *s = "";
-        if (r < n) {
-            unsigned idx = (hist_head + HIST_LINES - n + r) % HIST_LINES;
-            s = hist[idx];
-        }
-        unsigned c = 0;
-        for (; c < cols && s[c]; c++)
-            draw_cell(c, r, s[c]);
-        for (; c < cols; c++)
-            draw_cell(c, r, ' ');
-        line_end(flags);
-    }
-    cur_row = n;
-    cur_col = 0;
 }
 
 static void commit_line(void)
@@ -190,6 +172,7 @@ static void commit_line(void)
     if (hist_count < HIST_LINES)
         hist_count++;
     linelen = 0;
+    committed++;
 }
 
 void console_init_text(void)
@@ -244,7 +227,7 @@ void console_framebuffer_changed(const struct fb_device *d)
     cols = width / CELL_W; if (cols > MAX_COLS) cols = MAX_COLS;
     rows = height / CELL_H; cur_col = cur_row = 0; con_kind = CON_LFB;
     fbdev_console_region(rows * CELL_H);
-    repaint_pending = true;
+    repaint_pending = true; paint_valid = false;
     __atomic_store_n(&fb, d->mapped, __ATOMIC_RELEASE); /* publish after geometry */
 }
 
@@ -266,6 +249,7 @@ void console_set_color(uint32_t f, uint32_t b) { fg = f; bg = b; }
 void console_display_owned(bool owned)
 {
     display_owned = owned;
+    paint_valid = false;
     if (!owned)
         repaint_pending = true;
 }
@@ -275,23 +259,90 @@ void console_display_owned(bool owned)
 void console_reclaim(void)
 {
     quiet = false;
+    panic_drawing = true;
     console_display_owned(false);
 }
 
 /* The released LFB still shows the desktop: redraw history and the line in
  * progress before the next character. */
+static void paint_row(unsigned row, const char *s)
+{
+    uint32_t f = line_begin();
+    unsigned c = 0;
+    for (; c < cols && s[c]; c++) draw_cell(c, row, s[c]);
+    for (; c < cols; c++) draw_cell(c, row, ' ');
+    line_end(f);
+    if (!panic_drawing) kpreempt_point();
+}
+
 static void repaint(void)
 {
+    if (display_owned || quiet || !rows || !cols) return;
+    uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
+    uint32_t f = irq_save();
+    uint32_t target = committed;
+    uint8_t *mapping = fb;
+    unsigned paint_rows = rows, paint_cols = cols;
+    unsigned head = hist_head, n = hist_count < rows - 1 ? hist_count : rows - 1;
+    char tail[MAX_COLS + 1]; memcpy(tail, linebuf, linelen); tail[linelen] = 0;
     repaint_pending = false;
-    scroll();
-    if (!linelen)
-        return;
-    uint32_t flags = line_begin();
-    unsigned c = 0;
-    for (; c < linelen && c < cols; c++)
-        draw_cell(c, cur_row, linebuf[c]);
-    cur_col = c;
-    line_end(flags);
+    irq_restore(f);
+    unsigned delta = target - painted_lines, first = 0;
+    if (paint_valid && painted_rows == rows - 1 && n == painted_rows && delta < n) {
+        /* Move existing pixels, then rasterize only the newly exposed rows.
+         * A claim covers one scanline; no VRAM move holds IF clear. */
+        unsigned dy = delta * CELL_H;
+        if (con_kind == CON_LFB) for (unsigned y = 0; dy && y < (rows * CELL_H - dy); y++) {
+            if (fb != mapping || rows != paint_rows || cols != paint_cols || display_owned || quiet) {
+                paint_valid = false; repaint_pending = true; return;
+            }
+            f = line_begin();
+            if (draw_enabled) memmove(fb + y * pitch, fb + (y + dy) * pitch, cols * CELL_W * (bpp / 8));
+            line_end(f);
+            if ((y & 15) == 15 && !panic_drawing) kpreempt_point();
+        }
+        else if (con_kind == CON_TEXT && delta) {
+            uint16_t *vga = P2V(0xB8000);
+            memmove(vga, vga + delta * cols, (rows - delta) * cols * 2);
+        }
+        first = n - delta;
+    } else if (paint_valid && !delta) first = n;
+    for (unsigned r = first; r < rows; r++) {
+        if (fb != mapping || rows != paint_rows || cols != paint_cols || display_owned || quiet) {
+            paint_valid = false; repaint_pending = true; return;
+        }
+        char row[MAX_COLS + 1];
+        f = irq_save();
+        if (r < n) memcpy(row, hist[(head + HIST_LINES - n + r) % HIST_LINES], sizeof(row));
+        else if (r == n) memcpy(row, tail, sizeof(row));
+        else row[0] = 0;
+        irq_restore(f);
+        paint_row(r, row);
+    }
+    /* The in-progress line can change without a committed line. */
+    if (first > n || first == rows) paint_row(n, tail);
+    painted_lines = target; painted_rows = n;
+    paint_valid = fb == mapping && rows == paint_rows && cols == paint_cols && !display_owned && !quiet;
+    if (cpu_path_add && cpu_path_clock) cpu_path_add(CPU_CONSOLE, cpu_path_clock() - start);
+}
+
+/* Also exposed to the host row-count model. */
+void console_service(void)
+{
+    if (!repaint_pending || display_owned || quiet || g_ticks < next_paint) return;
+    next_paint = g_ticks + 100;
+    repaint();
+}
+static void console_worker(void *arg)
+{
+    (void)arg;
+    for (;;) { console_service(); task_sleep_ms(100); }
+}
+void console_worker_init(void)
+{
+    struct task *t = task_create_kernel("console", console_worker, 0, P_NORMAL);
+    if (!t) panic("console: cannot create worker");
+    task_start(t);
 }
 
 /* The desktop owns and repaints the LFB. Refresh just one prompt row through
@@ -314,32 +365,24 @@ void console_operator_prompt(bool announce)
 
 void console_write(const char *s, size_t n)
 {
-    if (con_kind == CON_NONE)
-        return;
-    if (repaint_pending && !display_owned && !quiet && con_kind == CON_LFB)
-        repaint();
+    if (con_kind == CON_NONE) return;
     size_t i = 0;
     while (i < n) {
+        uint32_t flags = irq_save();
         if (cur_col >= cols || s[i] == '\n') {
-            uint32_t flags = irq_save();
-            commit_line();
-            cur_col = 0;
-            bool redraw = ++cur_row >= rows;
+            commit_line(); cur_col = 0;
+            if (cur_row < rows - 1) cur_row++;
             if (s[i] == '\n') i++;
-            irq_restore(flags);
-            if (redraw) scroll();
-            continue;
-        }
-        uint32_t flags = line_begin();
-        while (i < n && cur_col < cols && s[i] != '\n') {
+        } else while (i < n && cur_col < cols && s[i] != '\n') {
             char ch = s[i++];
             if (ch == '\r') continue;
-            if (linelen < MAX_COLS)
-                linebuf[linelen++] = ch;
-            draw_cell(cur_col++, cur_row, ch);
+            if (linelen < MAX_COLS) linebuf[linelen++] = ch;
+            cur_col++;
         }
-        line_end(flags);
+        repaint_pending = true;
+        irq_restore(flags);
     }
+    if (panic_drawing) { paint_valid = false; repaint(); }
 }
 
 /* Show history page `page` (0 = oldest) with a header line. Used after a
@@ -373,5 +416,6 @@ void console_show_page(unsigned page, const char *header)
         for (; k < cols; k++)
             draw_cell(k, r + 1, ' ');
         line_end(flags);
+        if (!panic_drawing) kpreempt_point();
     }
 }

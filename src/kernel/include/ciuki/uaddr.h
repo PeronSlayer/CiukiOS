@@ -1,4 +1,4 @@
-/* F2 user mappings. All mutations run in the non-preemptible UP kernel.
+/* F2 user mappings. Provisional reservations protect voluntary allocation points.
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_UADDR_H
 #define CIUKI_UADDR_H
@@ -19,12 +19,14 @@ struct ua_shared {
 struct ua_extent {
     uint32_t base, end, prot, maximum, owner;
     uint64_t generation;
+    bool preparing; /* reserved range, backing not yet published */
     enum ua_kind kind;
     struct ua_extent *next;
     struct ua_shared shared;
 };
 struct ua_pin {
     uint32_t base, end;
+    bool mutation; /* blocks new pins while a protection transaction yields */
     struct task *task;
     struct ua_pin *next;
 };

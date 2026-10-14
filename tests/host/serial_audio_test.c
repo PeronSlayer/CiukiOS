@@ -1,16 +1,20 @@
 /* F4-14/F4-16: production serial queue and a clocked 38400 8N1 UART.
  * Deterministic IRQ preemption plus two host producers and a burst sender.
  * The mutex models the kernel's uniprocessor IRQ lock, not an SMP UART. */
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
+#include <setjmp.h>
+#include <time.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#c); exit(1); } } while (0)
 
+volatile uint64_t g_ticks;
 static pthread_mutex_t cpu_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local uint32_t flags = 0x200;
 static _Thread_local bool playback_producer;
@@ -36,7 +40,7 @@ static bool present = true, ready, fifo;
 static bool fifo_enabled, timed, poll_clock;
 static unsigned iir_fault;
 static unsigned lsr_reads, filled;
-static char emitted[200000];
+static char emitted[400000];
 static unsigned emitted_count;
 /* Separate holding FIFO and shift register. LSR reads never empty these.
  * Time is in baud-scaled microseconds: ten 8N1 bits cost 10,000,000 units. */
@@ -119,6 +123,16 @@ static void outb(uint16_t p, uint8_t value)
     regs[off] = value;
     preempt_writer();
 }
+#include <ciuki/task.h>
+static struct task writer_task;
+static void (*writer_fn)(void *);
+static jmp_buf writer_done;
+static bool writer_running;
+struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
+{ CHECK(!strcmp(name, "log-writer") && fn && !arg && prio == P_DEVICE); writer_fn = fn; return &writer_task; }
+void task_start(struct task *t) { CHECK(t == &writer_task); }
+void task_sleep_ms(uint32_t ms) { CHECK(ms == 1 && writer_running); longjmp(writer_done, 1); }
+void kpreempt_point(void) { }
 #include "../../src/kernel/core/serial.c"
 
 static void reset_uart(bool with_fifo)
@@ -187,12 +201,38 @@ static void preemption_tests(bool with_fifo)
     }
 }
 
-static const char drop_notice[] = "[serial] result=log_dropped\r\n";
+static void caller_burst_tests(bool with_fifo)
+{
+    reset_uart(with_fifo); timed = true; poll_clock = true;
+    unsigned before = lsr_reads;
+    uint64_t start = clock_units;
+    struct timespec before_cpu, after_cpu;
+    CHECK(!clock_gettime(CLOCK_THREAD_CPUTIME_ID, &before_cpu));
+    for (unsigned i = 0; i < 100; i++) serial_write(task_record, sizeof(task_record) - 1);
+    CHECK(!clock_gettime(CLOCK_THREAD_CPUTIME_ID, &after_cpu));
+    uint64_t ns = (uint64_t)(after_cpu.tv_sec - before_cpu.tv_sec) * 1000000000 +
+                  (uint64_t)after_cpu.tv_nsec - (uint64_t)before_cpu.tv_nsec;
+    CHECK(ns < 1000000);
+    printf("serial caller 100 records %s: cpu_ns=%llu uart_polls=0 wire_wait_us=0 PASS\n",
+           with_fifo ? "16550A" : "16450", (unsigned long long)ns);
+    CHECK(lsr_reads == before && clock_units == start && !tx_writes && !uart_dropped);
+    CHECK(clock_units - start < 38400u * 1000u); /* <1 ms at 38400 */
+    serial_writer_init(); writer_running = true;
+    if (!setjmp(writer_done)) writer_fn(NULL);
+    writer_running = false;
+    CHECK(tx_writes && lsr_reads <= 3 && !overflows);
+    while (uart_used || uart_drop_notice || shifting) { advance_us(1000); tick(); }
+    CHECK(!uart_dropped && !overflows);
+}
+
+static const char drop_notice[] = "[serial] dropped=2\r\n";
 static void basic_tests(bool with_fifo)
 {
     reset_uart(with_fifo);
     serial_write("boot\n", 5);
     emitted[emitted_count] = 0;
+    CHECK(!emitted_count && !lsr_reads);
+    drain_uart();
     CHECK(!strcmp(emitted, "boot\r\n"));
     serial_buffered(true); ready = false;
     unsigned before = lsr_reads;
@@ -245,7 +285,7 @@ static void basic_tests(bool with_fifo)
     drain_uart();
     CHECK(emitted_count == UART_LOG_BYTES + sizeof(drop_notice) - 1);
     for (unsigned i = 0; i < UART_LOG_BYTES - 2; i++) CHECK(emitted[i] == 'X');
-    CHECK(!strcmp(emitted + UART_LOG_BYTES - 2, "\r\n[serial] result=log_dropped\r\n"));
+    CHECK(!strcmp(emitted + UART_LOG_BYTES - 2, "\r\n[serial] dropped=2\r\n"));
 
     /* CRLF expansion, including many newlines, can make a record too big. */
     reset_uart(with_fifo); serial_buffered(true); ready = false;
@@ -271,7 +311,7 @@ static void panic_tests(bool with_fifo)
     emitted[emitted_count] = 0;
     CHECK(emitted_count == UART_LOG_BYTES + sizeof(drop_notice) - 1 + 7);
     for (unsigned i = 0; i < UART_LOG_BYTES - 2; i++) CHECK(emitted[i] == 'X');
-    CHECK(!strcmp(emitted + UART_LOG_BYTES - 2, "\r\n[serial] result=log_dropped\r\npanic\r\n"));
+    CHECK(!strcmp(emitted + UART_LOG_BYTES - 2, "\r\n[serial] dropped=1\r\npanic\r\n"));
 
     /* A busy UART remains bounded; unsent bytes are never consumed. */
     reset_uart(with_fifo); serial_buffered(true); ready = false;
@@ -342,7 +382,7 @@ static void concurrent_tests(bool with_fifo)
         const char *end = strstr(line, "\r\n");
         CHECK(end);
         size_t n = (size_t)(end + 2 - line);
-        if (n == sizeof(drop_notice) - 1 && !memcmp(line, drop_notice, n)) notices++;
+        if (n > 17 && !memcmp(line, "[serial] dropped=", 17)) notices++;
         else {
             unsigned id, seqno;
             CHECK(sscanf(line, "[producer=%u] seq=%u", &id, &seqno) == 2);
@@ -429,6 +469,7 @@ static void line_rate_tests(void)
     /* Boot/panic use the same hardware gate while polling a running line. */
     reset_uart(true); timed = poll_clock = true;
     serial_write(task_record, sizeof(task_record) - 1);
+    uint32_t f = irq_save(); serial_panic(); irq_restore(f);
     while (shifting) advance_us(1000);
     CHECK(!overflows && emitted_count == sizeof(task_record));
     CHECK(!memcmp(emitted, "[task] complete record A with a long payload\r\n", emitted_count));
@@ -436,6 +477,7 @@ static void line_rate_tests(void)
 
 int main(void)
 {
+    caller_burst_tests(false); caller_burst_tests(true);
     line_rate_tests();
     for (unsigned kind = 0; kind < 2; kind++) {
         preemption_tests(kind);

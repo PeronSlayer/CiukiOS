@@ -20,7 +20,9 @@ static bool allocated[HOST_PAGES];
 static unsigned pages_used, heap_blocks, checks;
 static int alloc_fail = -1;
 static uint32_t host_flags = CIUKI_INITIAL_EFLAGS, host_cr3;
-static unsigned invlpgs;
+static unsigned invlpgs, preempt_points;
+static void (*on_preempt_point)(void);
+void kpreempt_point(void) { preempt_points++; if (on_preempt_point) on_preempt_point(); }
 static uint32_t tls_base;
 static void (*on_schedule)(void);
 static jmp_buf exited;
@@ -817,11 +819,86 @@ static void test_real_payload(const char *path)
     ua_destroy(&u); free(bytes);
     puts("proc actual NASM ELF: production validation/load PASS (execution not run)");
 }
+static int filled_image_read(void *cookie, uint32_t off, void *dst, uint32_t bytes)
+{ (void)cookie; (void)off; memset(dst, 0x5a, bytes); return 0; }
+static struct uaddr *preparing_memory;
+static void concurrent_mapping(void)
+{
+    on_preempt_point = 0;
+    struct uaddr *u = preparing_memory;
+    CHECK(ua_munmap(u, CIUKI_MMAP_BASE, PAGE_SIZE) == -EBUSY);
+    CHECK(ua_mprotect(u, CIUKI_MMAP_BASE, PAGE_SIZE, PROT_READ) == -EBUSY);
+    CHECK(!ua_range(u, CIUKI_MMAP_BASE, PAGE_SIZE, PROT_READ));
+    struct ciuki_mmap_args a = map_args(PAGE_SIZE, PROT_READ);
+    CHECK((uint32_t)ua_mmap(u, &a) == CIUKI_MMAP_BASE + 64 * PAGE_SIZE);
+}
+static void concurrent_protection(void)
+{
+    on_preempt_point = 0;
+    struct uaddr *u = preparing_memory;
+    struct ua_pin pin;
+    CHECK(ua_range(u, CIUKI_MMAP_BASE, PAGE_SIZE, PROT_READ));
+    CHECK(ua_pin(u, &pin, CIUKI_MMAP_BASE, PAGE_SIZE, false) == -EBUSY);
+    CHECK(ua_munmap(u, CIUKI_MMAP_BASE, PAGE_SIZE) == -EBUSY);
+}
+static void test_bounded_mapping(void)
+{
+    struct uaddr u;
+    CHECK(!ua_init(&u, 0));
+    preparing_memory = &u; preempt_points = 0; on_preempt_point = concurrent_mapping;
+    CHECK(!ua_map_at(&u, CIUKI_MMAP_BASE, 64 * PAGE_SIZE, PROT_READ|PROT_WRITE,
+                    PROT_READ|PROT_WRITE, UA_ANON, 0));
+    CHECK(preempt_points == 4 && !on_preempt_point && u.extents == 2 && u.backing == 65);
+    CHECK(ua_range(&u, CIUKI_MMAP_BASE, 64 * PAGE_SIZE, PROT_READ|PROT_WRITE));
+    uint8_t byte=1;CHECK(!ua_read(&u,&byte,CIUKI_MMAP_BASE+64*PAGE_SIZE-1,1) && byte==0);
+    ua_destroy(&u);
+    CHECK(!ua_init(&u, 0));
+    CHECK(!ua_map_at(&u, CIUKI_MMAP_BASE, 16*PAGE_SIZE, PROT_READ, PROT_READ|PROT_WRITE, UA_ANON, 0));
+    CHECK(!ua_map_at(&u, CIUKI_MMAP_BASE+16*PAGE_SIZE, 64*PAGE_SIZE, PROT_NONE, PROT_READ|PROT_WRITE, UA_ANON, 0));
+    preempt_points=0;on_preempt_point=concurrent_protection;
+    CHECK(!ua_mprotect(&u, CIUKI_MMAP_BASE, 80*PAGE_SIZE, PROT_READ|PROT_WRITE));
+    CHECK(preempt_points==4 && !on_preempt_point && !u.pins && u.backing==80);
+    ua_destroy(&u);
+    CHECK(!ua_init(&u, 0)); preempt_points = 0;
+    struct elf_image image = { .count=1, .end=CIUKI_IMAGE_BASE+3*65536,
+        .segments={{.address=CIUKI_IMAGE_BASE,.filesz=2*65536+17,.bytes=3*65536,
+                    .prot=PROT_READ|PROT_WRITE}} };
+    struct ciuki_file file = { .bytes=2*65536+17, .read=filled_image_read };
+    CHECK(!elf_load(&file, &image, &u) && preempt_points==5);
+    byte=0;CHECK(!ua_read(&u,&byte,CIUKI_IMAGE_BASE+2*65536+16,1) && byte==0x5a);
+    CHECK(!ua_read(&u,&byte,CIUKI_IMAGE_BASE+2*65536+17,1) && byte==0);
+    ua_destroy(&u);
+}
+
+static void stop_thread_creation(void)
+{
+    on_preempt_point = 0;
+    struct process *p = proc_current();
+    CHECK(p && !proc_thread_find(p, next_tid - 1)); /* provisional TID stays private */
+    proc_stop(p, 0, SIGKILL);
+}
+static void test_stopped_thread_creation(void)
+{
+    struct process *p;
+    struct proc_thread *parent = make_process(proc_supervisor(), &p);
+    uint32_t pid = p->pid;
+    g_current = parent->task; g_current->state = T_RUNNING; parent->in_syscall = true;
+    struct ciuki_thread_args args = { .size=sizeof(args), .entry=CIUKI_IMAGE_BASE,
+        .return_trampoline=CIUKI_IMAGE_BASE+1, .stack_bytes=32*PAGE_SIZE };
+    uint32_t va=CIUKI_IMAGE_BASE+PAGE_SIZE+128;
+    CHECK(!ua_write(p->memory, va, &args, sizeof(args)));
+    on_preempt_point = stop_thread_creation;
+    CHECK(proc_thread_create(va)==-EINTR && !on_preempt_point);
+    CHECK(p->state==PROC_STOPPING && p->threads==1 && p->live_threads==1);
+    parent->in_syscall=false;g_current=&controller;task_kill(parent->task,0);proc_collect();
+    CHECK(!proc_find(pid));
+}
+
 int main(int argc, char **argv)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     controller.state = T_RUNNING;
-    test_elf(); test_arena(); test_stack(); test_queue(); test_processes(); test_creation_failure(); test_spawn_syscall(); test_limits(); test_enumeration();
+    test_bounded_mapping(); test_elf(); test_arena(); test_stack(); test_queue(); test_processes(); test_stopped_thread_creation(); test_creation_failure(); test_spawn_syscall(); test_limits(); test_enumeration();
     if (argc == 2) test_real_payload(argv[1]);
     struct trap_frame tf = { .vector = 14, .cs = 8,
         .eip = (uint32_t)(uintptr_t)copy_user_fault_start };

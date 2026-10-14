@@ -30,6 +30,8 @@ static uint32_t irq_save(void) { unsigned old = host_if; host_if = 0; return old
 static void irq_restore(uint32_t flags) { host_if = flags; }
 const uint8_t font_cfn_regular[95+95*32] = { [95+('a'-32)*32+1] = 0x80 };
 void serial_write(const char *s, size_t n) { CHECK(s && n); }
+void kpreempt_point(void) { }
+void task_sleep_ms(uint32_t ms) { CHECK(ms == 100); }
 static void *console_map(uint32_t phys, uint32_t size)
 {
     CHECK(phys == g_boot.fb_phys && size == g_boot.fb_pitch * g_boot.fb_height);
@@ -185,10 +187,12 @@ int main(void)
     console_operator_prompt(false);
     CHECK(memcmp(saved, fake_lfb, SIZE) != 0 && !drawing);
     memset(fake_lfb, 0x5A, SIZE);
-    /* Desktop failure: wake repaints the history before the next line. */
+    /* Desktop failure: wake schedules the coalesced history repaint. */
     console_wake();
     CHECK(!console_quiet() && !memcmp(saved, fake_lfb, SIZE));
     console_write("a", 1);
+    CHECK(!memcmp(saved, fake_lfb, SIZE) && !drawing);
+    console_service();
     CHECK(memcmp(saved, fake_lfb, SIZE) != 0 && !drawing);
     /* Panic on a quiet boot: console_reclaim alone switches drawing on. */
     console_set_quiet(true);

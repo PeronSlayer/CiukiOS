@@ -54,19 +54,19 @@ static inline void fs_lock_init(fs_lock *l) { l->held = false; kwait_init(&l->wa
 static inline void fs_lock_destroy(fs_lock *l) { (void)l; }
 static inline bool fs_lock_try_take(fs_lock *l) {
     uint32_t f = irq_save(); bool free = !l->held;
-    if (free) l->held = true;
+    if (free) { l->held = true; kpreempt_hold(); }
     irq_restore(f); return free;
 }
 static inline void fs_lock_take(fs_lock *l) {
     for (;;) {
         uint32_t f = irq_save();
-        if (!l->held) { l->held = true; irq_restore(f); return; }
+        if (!l->held) { l->held = true; kpreempt_hold(); irq_restore(f); return; }
         irq_restore(f);
         kwait_wait_until(&l->wait, fs_lock_free, l, deadline_after_ms(1000));
     }
 }
 static inline void fs_lock_drop(fs_lock *l) {
-    uint32_t f = irq_save(); l->held = false; irq_restore(f);
+    uint32_t f = irq_save(); l->held = false; kpreempt_release(); irq_restore(f);
     kwait_wake_all(&l->wait);
 }
 static inline void *fs_alloc(size_t n) { return n <= 2040 ? kmalloc(n) : 0; }

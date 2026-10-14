@@ -40,12 +40,16 @@ int bootinfo_validate(const struct ciuki_boot_info *bi, const char **why);
 void serial_init(uint16_t base, uint16_t divisor);
 bool serial_present(void);
 void serial_write(const char *s, size_t n); /* one atomic record, whole drop on overflow */
-void serial_buffered(bool enabled);       /* bounded, nonblocking playback logs */
+void serial_buffered(bool enabled);       /* compatibility: all normal logs queue */
+void serial_writer_init(void);            /* scheduler init, once */
+uint32_t serial_dropped(void);
 void serial_panic(void);                  /* IF clear: drain, then synchronous records */
 void serial_tick(void) __attribute__((weak)); /* one ready FIFO burst, no polling; weak so host fixtures without serial.c keep the if (serial_tick) guard of task.c */
 void console_init_text(void);
 bool console_init_lfb(void);
 void console_write(const char *s, size_t n);
+void console_worker_init(void);
+void console_service(void);               /* one coalesced repaint if due */
 void console_set_color(uint32_t fg, uint32_t bg);
 void console_display_owned(bool owned);   /* display grant held: no console pixels */
 void console_reclaim(void);               /* panic: the console draws again */

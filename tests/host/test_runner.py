@@ -864,6 +864,8 @@ static void irq_restore(uint32_t flags) { host_if=flags; }
 const uint8_t font_cfn_regular[95+95*32] = { [95+('a'-32)*32+1] = 0x80 };
 static unsigned prompt_serial;
 void serial_write(const char *s,size_t n) { CHECK(s && n && s[n-1]=='\n'); prompt_serial++; }
+void kpreempt_point(void) { }
+void task_sleep_ms(uint32_t ms) { CHECK(ms == 100); }
 static void *console_map(uint32_t phys,uint32_t size)
 {
     CHECK(phys==g_boot.fb_phys && size==g_boot.fb_pitch*g_boot.fb_height);
@@ -892,7 +894,7 @@ int main(void)
     for (unsigned i=0;i<17*35;i++) source[i]=0x123456;
     struct fb_surface surface={source,17,35,17*4,sizeof(source)};
     uint32_t flags=line_begin();
-    CHECK(host_if==0 && drawing==CONSOLE_BUSY);
+    CHECK(host_if==0x200 && drawing==CONSOLE_BUSY);
     memcpy(saved,fake_lfb,SIZE);
     CHECK(fbdev_fill(&owned,0xFFFFFF)==-EBUSY);
     CHECK(fbdev_present(&surface,&crossing)==-EBUSY);
@@ -934,7 +936,7 @@ int main(void)
     host_if=0x200;
     /* f3-02: a display grant owner composites every pixel. Lines and
      * scrolling keep history only; the prompt and evidence pages are
-     * deliberate overlays; the release repaints on the next line. */
+     * deliberate overlays; release queues a coalesced repaint. */
     console_write("\n",1);
     CHECK(fbdev_fill(&owned,0x010203)==0);
     memcpy(saved,fake_lfb,SIZE);
@@ -947,8 +949,10 @@ int main(void)
     CHECK(memcmp(saved,fake_lfb,PITCH*16)!=0 && !memcmp(saved+PITCH*16,fake_lfb+PITCH*16,SIZE-PITCH*16) && !drawing);
     CHECK(fbdev_fill(&owned,0x010203)==0);
     console_display_owned(false);
-    CHECK(!memcmp(saved,fake_lfb,SIZE));                 /* nothing drawn until the next line */
+    CHECK(!memcmp(saved,fake_lfb,SIZE));                 /* producer only queues repaint */
     console_write("a",1);
+    CHECK(!memcmp(saved,fake_lfb,SIZE));
+    console_service();
     CHECK(memcmp(saved,fake_lfb,32*PITCH)!=0 && cur_col==2 && linelen==2 && !drawing);
     memcpy(saved,fake_lfb,SIZE);
     console_display_owned(true);

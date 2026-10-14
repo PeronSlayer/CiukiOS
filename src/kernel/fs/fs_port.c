@@ -116,7 +116,9 @@ void fs_worker_leave(void) { fs_worker = 0; }
 void fs_service(void)
 {
     if (g_current && fs_now_ms() != service_tick) {
-        if (g_current == fs_worker) kwork_yield(); else task_yield();
+        if (g_current == fs_worker) kwork_yield();
+        else if (g_current->preempt_holds) task_yield();
+        else kpreempt_point();
         service_tick = fs_now_ms();
     }
 }

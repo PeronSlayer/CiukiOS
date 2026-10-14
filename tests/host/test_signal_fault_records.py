@@ -267,7 +267,7 @@ def controller_source(source):
     controller = 'static bool signal_result_read' + source.split('static bool signal_result_read', 1)[1].split('#endif', 1)[0]
     release = 'static struct signal_release' + source.split('static struct signal_release', 1)[1].split('static int signal_image_read', 1)[0]
     scheduler = (ROOT / 'src/kernel/core/task.c').read_text()
-    tick = 'void sched_tick(void)' + scheduler.split('void sched_tick(void)', 1)[1].split('void task_yield(void)', 1)[0]
+    tick = 'void sched_tick(void)' + scheduler.split('void sched_tick(void)', 1)[1].split('struct task *sched_tasks(void)', 1)[0]
     # f3-00 added optional DOS VM hooks to the production scheduler as weak symbols.
     tick = ('extern void dosvm_tick(void) __attribute__((weak));\n'
             'extern void serial_tick(void) __attribute__((weak));\n' + tick)

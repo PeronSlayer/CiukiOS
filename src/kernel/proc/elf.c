@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/process.h>
+#include <ciuki/cpustat.h>
 
 struct elf_header {
     uint8_t ident[16];
@@ -120,6 +121,7 @@ int elf_load(const struct ciuki_file *file, const struct elf_image *image, struc
      * it through proc_discard, so no partially loaded child is published. */
     /* Snapshot reads are RAM copies, not ATA requests. Batch within the 4 KiB
      * kernel frame bound, without allocating cleanup-sensitive scratch. */
+    uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
     uint8_t buffer[2048];
     for (unsigned i = 0; i < image->count; i++) {
         struct process *caller = proc_current();
@@ -142,8 +144,10 @@ int elf_load(const struct ciuki_file *file, const struct elf_image *image, struc
             if (err)
                 return err;
             off += n;
+            if (!(off % 65536)) kpreempt_point();
         }
     }
+    if (cpu_path_add && cpu_path_clock) cpu_path_add(CPU_ELF, cpu_path_clock() - start);
     u->heap_base = u->brk = image->end;
     return 0;
 }

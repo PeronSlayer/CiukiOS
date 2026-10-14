@@ -42,3 +42,24 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-unused-function \
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/ohci.c" "$root/src/kernel/lib/fmt.c" \
     -o "$out/latency_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/latency_test"
+
+# f0-21: exact native task creation and worker loops, independent controllers.
+python3 - "$root" "$out" <<'PYTHON'
+from pathlib import Path
+import re, sys
+root, out = map(Path, sys.argv[1:])
+s = (root / "src/kernel/usb/usb_core.c").read_text()
+body = ""
+for name in ("native_now", "service", "input_service", "start_services"):
+    m = re.search(r"^static [^\n]+\b" + name + r"\([^\n]*\)\s*\{", s, re.M)
+    assert m, name
+    depth, end = 1, m.end()
+    while depth:
+        depth += (s[end] == "{") - (s[end] == "}"); end += 1
+    body += s[m.start():end] + "\n"
+(out / "usb_worker_replay.inc").write_text(body)
+PYTHON
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
+    -fsanitize=address,undefined -I "$root/src/kernel/include" -I "$out" \
+    "$root/tests/host/usb/workers_test.c" -o "$out/workers_test"
+ASAN_OPTIONS=detect_leaks=0 "$out/workers_test"

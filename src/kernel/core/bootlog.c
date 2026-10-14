@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/bootlog.h>
 #include "../fs/vfs.h"
+#ifndef FS_HOST
+#include <ciuki/cpustat.h>
+#endif
 
 static struct bootlog_stats stats;
 static struct vfs_table table;
@@ -130,7 +133,15 @@ static void drop_drain(void)
 int bootlog_drain(void)
 {
     if (!take_drain()) return -FS_EBUSY;
-    int e=drain_owned(); drop_drain(); return e;
+    #ifndef FS_HOST
+    uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
+#endif
+    int e=drain_owned(); drop_drain();
+#ifndef FS_HOST
+    if (cpu_path_add && cpu_path_clock) cpu_path_add(CPU_BOOTLOG, cpu_path_clock() - start);
+    kpreempt_point();
+#endif
+    return e;
 }
 int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *ctx)
 {
@@ -157,6 +168,9 @@ int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *ctx)
         if (e) break;
         fs_lock_drop(&table.vfs->lock);
         e=drain_owned();
+#ifndef FS_HOST
+        kpreempt_point();
+#endif
     }
     if (!e && stats.active && handle>=0) {
         while (!fs_lock_try_take(&table.vfs->lock)) {

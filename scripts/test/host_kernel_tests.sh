@@ -12,7 +12,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections 
     "$root/tests/host/record_runtime_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/record_runtime_test"
 "$out/record_runtime_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
-    -I "$root/src/kernel/include" "$root/tests/host/serial_audio_test.c" -o "$out/serial_audio_test"
+    -I "$root/src/kernel/include" "$root/tests/host/serial_audio_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/serial_audio_test"
+python3 -B -m unittest discover -s "$root/tests/host" -p test_kernel_latency.py
 "$out/serial_audio_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \
