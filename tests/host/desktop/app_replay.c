@@ -38,6 +38,17 @@
  * once batch B is delivered (a firmware worker that does not run meanwhile);
  * queued bytes keep their order, except that keyboard bytes go first.
  *
+ * --usb-poll-ms N selects USB-sourced grant events, with independent keyboard
+ * and mouse report queues polled every N ms. The mouse model follows QEMU's
+ * hw/input/hid.c hid_pointer_sync/poll: adjacent unconsumed moves with equal
+ * button state combine, and each poll drains at most +/-127 on each axis.
+ * This matters for corner clamps: combining the move onto Start with the
+ * clamp loses the intermediate pointer position (f2-58). Keyboard set-1
+ * positions are the output of usb_hid.c's translation, not PS/2 bytes.
+ * Sources checked 2026-10-14: https://github.com/qemu/qemu/blob/v11.1.1/hw/input/hid.c
+ * and https://www.usb.org/sites/default/files/hid1_11.pdf (Appendix B).
+ * This model does not exercise the USB controller, HID parser or typematic.
+ *
  * Not covered: the kernel's real scheduler and timings (turn costs and start
  * delays are parameters), pixel digests (the lead pins them from QEMU), the
  * FAT driver (the Files and CiukNote file systems are the fake image tree of
@@ -51,6 +62,7 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include "desktop.h"
+#include <ciuki/input.h>
 #include "gate.h"
 #include "fake_vfs.h"
 #include "../../../apps/ciuknote/doc.h"
@@ -74,6 +86,7 @@ static const char *case_name, *portrait_path;
 static char bin_list[512];
 static uint64_t overhead_ns, first_ns = 150 * MS, start_delay_ns, desktop_cost_ns = 20 * MS, app_cost_ns = 5 * MS;
 static unsigned pause_scale_pct = 100;
+static uint64_t usb_poll_ns, usb_due;
 static uint64_t byte_ns;   /* --i8042-byte-ms: 0 = every byte read at once (the native IRQ handler) */
 static uint64_t stall_ns;  /* --i8042-stall-ms: the reader reads nothing for this long after ... */
 static int stall_batch = -1;   /* ... --i8042-stall-batch: the batch with this index is delivered */
@@ -324,12 +337,13 @@ int ciuki_present(int display, int surface, const struct ciuki_rect *r)
 
 /* Kernel input queue (i8042 events already converted for the desktop grant). */
 static struct ciuki_input_event kq[CIUKI_INPUT_QUEUE_MAX];
-static unsigned kq_head, kq_count, kq_sequence;
+static unsigned kq_head, kq_count, kq_sequence, usb_read_keys;
 static void kq_push(uint32_t type, int32_t code, int32_t value, int32_t value2)
 {
     if (kq_count == CIUKI_INPUT_QUEUE_MAX) fail("kernel input queue overflow");
     struct ciuki_input_event *e = &kq[(kq_head + kq_count++) % CIUKI_INPUT_QUEUE_MAX];
     *e = (struct ciuki_input_event){.sequence = ++kq_sequence, .type = type, .monotonic_ns = vnow / MS * MS,
+                                    .source = usb_poll_ns ? INPUT_USB : 0u,
                                     .code = code, .value = value, .value2 = value2};
 }
 int ciuki_input_read(int fd, struct ciuki_input_event *events, uint32_t capacity)
@@ -339,6 +353,10 @@ int ciuki_input_read(int fd, struct ciuki_input_event *events, uint32_t capacity
     if (!kq_count) { errno = EAGAIN; return -1; }
     unsigned n = 0;
     while (n < capacity && kq_count) { events[n++] = kq[kq_head]; kq_head = (kq_head + 1) % CIUKI_INPUT_QUEUE_MAX; kq_count--; }
+    if (usb_poll_ns) for (unsigned i = 0; i < n; i++) {
+        assert(events[i].source == INPUT_USB);
+        if (events[i].type == CIUKI_INPUT_KEY) usb_read_keys++;
+    }
     if (trace) {
         const struct desktop *d = replay_desktop;
         for (unsigned i = 0; i < n; i++)
@@ -762,8 +780,76 @@ static void deliver_queued(struct batch *b)
     }
     if (!latched) latch();
 }
+/* Independent QEMU HID queues. Store translated keyboard edges; pointer
+ * entries are reports before hid_pointer_poll splits their relative deltas.
+ * QEMU reserves one of its 16 pointer slots for the incoming sync. */
+struct usb_pointer { int dx, dy, buttons; };
+static struct usb_pointer usb_mouse[16];
+static struct event usb_keys[16];
+static unsigned usb_mouse_n, usb_keys_n, usb_compressed, usb_reports;
+static int usb_buttons;
+static int usb_first_click_x = -1, usb_first_click_y = -1;
+static void deliver_usb(struct batch *b)
+{
+    struct usb_pointer p = {.buttons = usb_buttons};
+    int mouse = 0;
+    for (unsigned i = 0; i < b->count; i++) {
+        const struct event *e = &b->events[i];
+        if (e->type == EV_KEY) {
+            if (usb_keys_n == 16) fail("USB keyboard model queue full");
+            usb_keys[usb_keys_n++] = *e;
+        } else if (e->type == EV_REL) {
+            mouse = 1;
+            if (e->code == 0) p.dx += e->value; else p.dy += e->value;
+        } else {
+            mouse = 1;
+            int bit = 1 << (e->code - 1);
+            if (e->value) p.buttons |= bit; else p.buttons &= ~bit;
+        }
+    }
+    usb_buttons = p.buttons;
+    if (!mouse) return;
+    if (usb_mouse_n && usb_mouse[usb_mouse_n - 1].buttons == p.buttons) {
+        usb_mouse[usb_mouse_n - 1].dx += p.dx;
+        usb_mouse[usb_mouse_n - 1].dy += p.dy;
+        usb_compressed++;
+    } else {
+        if (usb_mouse_n == 15) fail("USB pointer model queue full");
+        usb_mouse[usb_mouse_n++] = p;
+    }
+}
+static void poll_usb(void)
+{
+    if (usb_keys_n) {
+        struct event e = usb_keys[0];
+        memmove(usb_keys, usb_keys + 1, --usb_keys_n * sizeof(*usb_keys));
+        kernel_key(e.code, e.value);
+    }
+    if (usb_mouse_n) {
+        struct usb_pointer *p = &usb_mouse[0];
+        int dx = p->dx > 127 ? 127 : p->dx < -127 ? -127 : p->dx;
+        int dy = p->dy > 127 ? 127 : p->dy < -127 ? -127 : p->dy;
+        p->dx -= dx; p->dy -= dy;
+        usb_reports++;
+        note("USB mouse report dx=%d dy=%d buttons=%d", dx, dy, p->buttons);
+        /* usb_hid_report emits button transitions before its axis events. */
+        int changed = p->buttons ^ kernel_buttons; kernel_buttons = p->buttons;
+        for (int i = 0; i < 3; i++) if (changed & (1 << i)) {
+            if (i == 0 && (p->buttons & 1) && usb_first_click_x < 0 && replay_desktop) {
+                usb_first_click_x = replay_desktop->mouse_x;
+                usb_first_click_y = replay_desktop->mouse_y;
+            }
+            kq_push(CIUKI_INPUT_BUTTON, i + 1, (p->buttons >> i) & 1, 0);
+        }
+        if (dx) kq_push(CIUKI_INPUT_MOTION, 0, dx, 0);
+        if (dy) kq_push(CIUKI_INPUT_MOTION, 0, 0, dy);
+        if (!p->dx && !p->dy) memmove(usb_mouse, usb_mouse + 1, --usb_mouse_n * sizeof(*usb_mouse));
+    }
+    usb_due = vnow + usb_poll_ns;
+}
 static void deliver(struct batch *b)
 {
+    if (usb_poll_ns) { deliver_usb(b); return; }
     if (byte_ns) { deliver_queued(b); return; }
     unsigned bytes = 0; int mouse = 0;
     for (unsigned i = 0; i < b->count; i++) {
@@ -828,8 +914,8 @@ static void describe_desktop(void)
     const struct desktop *d = replay_desktop;
     if (!d) return;
     printf("DESKTOP mouse=%d,%d focus=%d shell=%d menu_open=%d app_test=%d app_pid=%u app_checkpoint=%d app_reported=%d app_done=%d"
-           " tasks_test=%d tasks_stage=%d notice=\"%s\"\n", d->mouse_x, d->mouse_y, d->focus, d->shell, d->menu_open, d->app_test,
-           d->app_pid, d->app_checkpoint, d->app_reported, d->app_done, d->tasks_test, d->tasks_stage, d->notice);
+           " tasks_test=%d tasks_stage=%d shell_test=%d shell_stage=%d notice=\"%s\"\n", d->mouse_x, d->mouse_y, d->focus, d->shell, d->menu_open, d->app_test,
+           d->app_pid, d->app_checkpoint, d->app_reported, d->app_done, d->tasks_test, d->tasks_stage, d->shell_test, d->shell_stage, d->notice);
     for (int i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].window)
         printf("WINDOW slot=%d pid=%u title=\"%s\" frame=%d,%d,%d,%d order=%llu%s\n", i, d->clients[i].pid, d->clients[i].title,
                d->clients[i].frame.x, d->clients[i].frame.y, d->clients[i].frame.w, d->clients[i].frame.h,
@@ -851,6 +937,7 @@ int main(int argc, char **argv)
         else if (OPT("--start-delay-ms")) start_delay_ns = strtoull(v, NULL, 10) * MS;
         else if (OPT("--desktop-cost-ms")) desktop_cost_ns = strtoull(v, NULL, 10) * MS;
         else if (OPT("--app-cost-ms")) app_cost_ns = strtoull(v, NULL, 10) * MS;
+        else if (OPT("--usb-poll-ms")) usb_poll_ns = strtoull(v, NULL, 10) * MS;
         else if (OPT("--i8042-byte-ms")) byte_ns = strtoull(v, NULL, 10) * MS;
         else if (OPT("--i8042-stall-ms")) stall_ns = strtoull(v, NULL, 10) * MS;
         else if (OPT("--i8042-stall-batch")) stall_batch = atoi(v);
@@ -861,6 +948,7 @@ int main(int argc, char **argv)
 #undef OPT
     }
     if (!script || !case_name || !bin_list[0]) fail("usage: --script, --case and --bin are required");
+    if (usb_poll_ns && byte_ns) fail("USB and i8042 models are mutually exclusive");
     load_script(script);
     image_tree();
     pthread_mutex_lock(&big);
@@ -878,6 +966,7 @@ int main(int argc, char **argv)
         if (stage == 0 && probe.reports && probe.survivor_ready) {
             control->generation = 501; control->command = GATE_INTERACT; stage = 1;
         } else if (stage == 1 && probe.generation == 501 && !control->command) {
+            if (usb_poll_ns) usb_due = vnow + usb_poll_ns;
             arm_ns = vnow + 20 * MS; batch_due = arm_ns + first_ns; stage = 2;
             note("ARM at %.3f", (double)arm_ns / 1e9);
         }
@@ -900,6 +989,7 @@ int main(int argc, char **argv)
             batch_due = vnow + overhead_ns + (uint64_t)b->pause_ms * MS * pause_scale_pct / 100;
             if (trace) note("batch %u delivered (%u events, queue %u)", batch_next - 1, b->count, kq_count);
         }
+        if (usb_poll_ns && stage == 2 && vnow >= usb_due) poll_usb();
         if (latched && vnow >= byte_due) read_byte();
         if (trace && probe.checkpoint != (int)last_cp) { last_cp = (unsigned)probe.checkpoint; describe_desktop(); }
         if (success_ns && !end_ns) end_ns = success_ns + 3000 * MS;   /* the probe sleeps 3 s, then ENDs */
@@ -914,6 +1004,7 @@ int main(int argc, char **argv)
         uint64_t wake = UINT64_MAX;
         for (int i = 0; i < MAX_PROCS; i++) if (procs[i].used && procs[i].state == CIUKI_PROC_LIVE && procs[i].wake < wake) wake = procs[i].wake;
         if (stage == 2 && batch_next < batch_count && batch_due < wake) wake = batch_due;
+        if (usb_poll_ns && stage == 2 && usb_due < wake) wake = usb_due;
         if (latched && byte_due < wake) wake = byte_due;
         if (end_ns && end_ns < wake) wake = end_ns;
         if (wake == UINT64_MAX) fail("every process exited");
@@ -926,6 +1017,9 @@ int main(int argc, char **argv)
     printf("GATE keys=%u motion=%u buttons=%u\n", counts[0], counts[1], counts[2]);
     printf("PS2 dropped_bytes=%u leftover_batches=%u max_key_bytes=%u max_packets=%u reordered=%u\n", dropped_bytes,
            leftover_batches, max_kbd_bytes, max_packets, reordered);
+    if (usb_poll_ns) printf("USB poll_ms=%llu compressed=%u reports=%u read_keys=%u pending_mouse=%u pending_keys=%u first_click_x=%d first_click_y=%d\n",
+        (unsigned long long)(usb_poll_ns / MS), usb_compressed, usb_reports, usb_read_keys, usb_mouse_n, usb_keys_n,
+        usb_first_click_x, usb_first_click_y);
     printf("TIMING arm=%.3f batches=%u/%u last_batch=%.3f success=%.3f\n", (double)arm_ns / 1e9, batch_next, batch_count,
            arm_ns && last_batch_ns ? (double)(last_batch_ns - arm_ns) / 1e9 : -1.0,
            success_ns ? (double)(success_ns - arm_ns) / 1e9 : -1.0);
