@@ -473,10 +473,24 @@ def expand_cases(suite):
     return expanded
 
 
+def fixture_usb_disks(case):
+    """F1-63: FAT USB media use a BOT frontend, never an IDE connector."""
+    indices=[]
+    for index,fixture in enumerate(case.get('fixtures',[])):
+        transport=fixture.get('transport','ide')
+        if transport not in ('ide','usb'):raise res.Refusal('unknown fixture transport')
+        if transport=='usb':
+            if fixture.get('generator')!='mkfs.fat':raise res.Refusal('USB fixture requires mkfs.fat')
+            indices.append(index)
+    if len(indices)>1:raise res.Refusal('one USB storage fixture per case')
+    return indices
+
+
 def fixture_disks(case):
     # Manifest ordinals also cover nondisk fixtures; IDE connector numbers
     # start after the boot disk and must agree with the kernel disk ledger.
-    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if fixture.get('generator') in ('mkfs.fat','mkntfs','dos-local')]
+    usb=fixture_usb_disks(case)
+    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if index not in usb and fixture.get('generator') in ('mkfs.fat','mkntfs','dos-local')]
     if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
     if sum(f.get('generator')=='mkntfs' for f in case.get('fixtures',[]))>1:raise res.Refusal('one NTFS fixture disk per case')
     optical=[f for f in case.get('fixtures',[]) if f.get('generator')=='xorriso']
@@ -505,7 +519,8 @@ def prepare_fixtures(host,case,directory,image=None):
         item=dict(fixture)
         if fixture.get('generator')=='mkfs.fat':
             item.update(host.fat_fixture(fixture,directory,index))
-            item['ide_index']=disks[index]
+            if fixture.get('transport')=='usb':item['transport']='usb'
+            else:item['ide_index']=disks[index]
         elif fixture.get('generator')=='mkntfs':
             try:item.update(ntfs_fixtures.qemu_fixture(fixture,directory,index))
             except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('NTFS fixture generation failed: '+str(e)) from e
@@ -1564,6 +1579,12 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         ident=',id=ciuki-ntfs' if case['fixtures'][index].get('generator')=='mkntfs' else ''
         args+=['-drive',f'file=fixture-{index}.img,format=raw,if=ide,index={disk},cache='+cache+ident]
     fixture_disks(case) # collision validation also for direct command construction
+    for index in fixture_usb_disks(case):
+        # QEMU USB documentation: explicitly named UHCI bus and if=none
+        # backend keep this fixture independent of optical/IDE ordinals.
+        args+=['-device','piix3-usb-uhci,id=ciuki-storage-usb',
+               '-drive',f'file=fixture-{index}.img,format=raw,if=none,id=ciuki-usb,cache='+cache,
+               '-device','usb-storage,bus=ciuki-storage-usb.0,drive=ciuki-usb']
     for index,fixture in enumerate(case.get('fixtures',[])):
         if fixture.get('generator')=='xorriso':
             # Secondary slave (IDE index 3) as an explicit ide-cd frontend. A
@@ -1984,8 +2005,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 try:
                     fixture['sha256_after']=sha(fixture['path'])
                     if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('optical fixture changed during read-only case')
-                    if result['outcome']=='pass':iso_fixtures.verify_records(fixture,parser.records)
-                    fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
+                    compared=result['outcome']=='pass' and case.get('probe')=='optical'
+                    if compared:iso_fixtures.verify_records(fixture,parser.records)
+                    fixture['independent_comparison']='pass' if compared else 'not_run'
                 except (OSError,ValueError) as e:
                     result['outcome']='fail';result['reason']=str(e)
             if fixture.get('generator')=='mkntfs' and fixture.get('path'):
@@ -2186,8 +2208,13 @@ def check_overlay(host,overlay,directory,checks,result):
         for item in checks.get('files',[]):
             checked=host.checker(['mtype','-i',str(volume),item['path']],directory)
             result['checkers'].append({'kind':'mtools-hash',**checked})
-            if checked['returncode'] or checked['output_sha256']!=item['sha256']:
+            if checked['returncode'] or ('sha256' in item and checked['output_sha256']!=item['sha256']):
                 raise EvidenceError('mtools file digest mismatch')
+            contains=item.get('contains',[])
+            if not isinstance(contains,list) or any(not isinstance(s,str) or not s for s in contains) or not ('sha256' in item or contains):
+                raise res.Refusal('file check requires sha256 or nonempty contains strings')
+            if any(s not in checked['output'] for s in contains):
+                raise EvidenceError('mtools file content mismatch')
         for path in checks.get('empty_files',[]):
             measured=host.file_digest(volume,directory,path.removeprefix('::'))
             result['checkers'].append({'kind':'mtools-empty','path':path,**measured})

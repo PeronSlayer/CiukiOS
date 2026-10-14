@@ -249,6 +249,7 @@ static void namespace_probe_tests(void)
         }
     }
 }
+#ifndef STORAGE_NAMESPACE_LIBRARY
 int main(int argc, char **argv)
 {
     CHECK(argc == 4);
@@ -259,3 +260,4 @@ int main(int argc, char **argv)
     printf("STORAGE NAMESPACE RESULT checks=%u records=%u failures=0 ASan/UBSan=enabled\n", checks, records);
     return 0;
 }
+#endif

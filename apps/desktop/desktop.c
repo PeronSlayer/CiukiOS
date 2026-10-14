@@ -207,18 +207,36 @@ static void scan_programs(struct desktop *d)
 static int terminate_authority=-1;
 static int terminate_child(uint32_t pid, int sig)
 { return ciuki_proc_terminate((ciuki_pid_t)pid,sig,terminate_authority); }
+static int launch_failed(const struct desk_program *program, int error, const char *operation)
+{
+    if (!error) error=EIO;
+    /* Native debug_write accepts at most 240 bytes. Inventory paths fit in
+     * full; mark a longer Documents executable path's bounded prefix. */
+    char line[241];
+    int n=snprintf(line,sizeof(line),"[launch] name=%.63s error=%d path=%.108s%s operation=%s",
+                   program->name,error,program->path,strlen(program->path)>108 ? "..." : "",operation);
+    if (n>0 && (size_t)n<sizeof(line)) {
+#ifdef __i386__
+        (void)ciuki_raw_debug_write(CU_PTR(line),(uint32_t)n,0,0,0,0);
+#else
+        (void)write(STDERR_FILENO,line,(size_t)n);
+        (void)write(STDERR_FILENO,"\n",1);
+#endif
+    }
+    errno=error; return -1;
+}
 static int launch_program(struct desktop *d, const struct desk_program *program)
 {
-    if (d->power.state) { errno=EBUSY; return -1; }
+    if (d->power.state) return launch_failed(program,EBUSY,"power");
     /* Recheck each launch: the operator can change console verbosity at run time. */
     d->launch_mark = ciuki_launch_mark(CIUKI_LAUNCH_STATUS,0,0) > 0 ? ciuki_launch_mark : NULL;
     uint64_t click_ns = d->launch_click_ns ? d->launch_click_ns : monotonic();
     d->launch_click_ns = 0;
     int child=-1;
     for (int j=0; j<DESK_CLIENTS; j++) if (!d->children[j].pid) { child=j; break; }
-    if (child<0) { errno=EAGAIN; return -1; }
+    if (child<0) return launch_failed(program,EAGAIN,"child-slot");
     int pair[2];
-    if (ciuki_channel_pair(pair)) return -1;
+    if (ciuki_channel_pair(pair)) return launch_failed(program,errno,"channel-pair");
     int index=-1;
     ciuki_pid_t pid=-1;
     int graphical=desk_program_graphical(program->name), kind=desk_program_kind(program->name);
@@ -252,19 +270,21 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     char *env[]={"LC_ALL=C","TZ=UTC0","HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",display,keymap,NULL};
     struct ciuki_spawn_fd mapping[2]={{pair[1],3},{d->authority_fd,4}};
     uint32_t mappings=tasks && d->authority_fd>=0 ? 2 : 1;
+    const char *operation="channel-inherit";
     if (!fcntl(pair[1],F_SETFD,0)) {
         index=desk_add_client(d,pair[0]);
         if (index>=0) {
             if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_BEGIN,0,click_ns/1000);
+            operation="spawn";
             pid=ciuki_spawn(program->path,d->launch_argv[0] ? full : argv,env,mapping,mappings,0);
         }
-        else errno=ENOSPC;
+        else { errno=ENOSPC; operation="client-slot"; }
     }
     int error=errno;
     close(pair[1]);
     if (pid<0) {
         if (index>=0) desk_drop_client(d,index); else close(pair[0]);
-        errno=error; return -1;
+        return launch_failed(program,error,operation);
     }
     /* Bind launch ownership before accepting the first kernel-stamped message.
      * This also permits cleanup if a child exits without ever sending HELLO. */
