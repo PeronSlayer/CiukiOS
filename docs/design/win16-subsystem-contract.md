@@ -657,3 +657,585 @@ Implementation can be staged but 19d cannot be dropped because installer
 substitution or a PE engine launch appeared to work. Before declaring F5
 complete, the lead dispositions this contract, its cross-review, all census
 gaps, owner fixture questions and the QEMU/T23 acceptance rows.
+
+## Independent Codex cross-review — 2026-10-14 (f5-19r)
+
+Reviewer: independent Codex session. **Verdict: approve with listed changes.**
+Approve the proposed architecture conditionally; do not freeze the runtime
+interfaces or start f5-19b/c until the P0 handoffs below are accepted by the
+lead. Host-only f5-19a research, fixtures and parser work can proceed after
+that disposition. This review does not change the owner's full-Win16 scope.
+
+Reviewed repository: `7e376d9d8e36f9c7ad88dc35f135406f5db34ee8`.
+Reviewed [contract](../../docs/design/win16-subsystem-contract.md): its original 659 lines, SHA-256
+`f5a0646356b3ab689b99e47864ea5aa47974b472b7e910b5f19ee3ca29193311`.
+All contract line references below refer to that original text. AGENTS.md was
+read. No implementation, fixture compilation, test suite, full build, QEMU,
+hardware run, payload download, commit or push was performed. The findings
+are source/document review, not new compatibility or memory measurements.
+
+Authority: the [owner's 2026-10-14 decision](../../dev_diary/2026-10-14-08-decisioni-notte-f5.md),
+the [parent cross-review including M06](../../docs/design/win32-personality-contract.md#codex-cross-review-of-f5-00-2026-10-14),
+and the [parent's evening decisions](../../docs/design/win32-personality-contract.md#decisions-of-2026-10-14-owner-evening-after-the-cross-review-and-the-research).
+
+The strongest parts are worth retaining: real protected-mode NE execution;
+original installer gates; separate global/local heaps; typed bidirectional
+bridges; cooperative execution inside an independently preemptible host;
+untrusted service endpoints; and group-wide failure containment. DPMI alone
+does not supply any of KERNEL, USER or GDI.
+
+### Evidence and research limits
+
+The following distinctions apply throughout: **conflict** means incompatible
+requirements or a source mismatch; **departure** means an intentional CiukiOS
+policy; **gap** means an interface or proof still needed. A gap is not proof
+that an uninspected installer uses a particular API. Recommendations are the
+reviewer's proposed dispositions, not decisions silently adopted for the lead.
+
+Primary material inspected on the web:
+
+- Microsoft Windows 3.1 SDK, *Programmer's Reference*, volume 4, indexed
+  excerpts of §§6.2.2, 6.2.8, 6.3 and chapter 7: [segment table and flags](https://www.bitsavers.org/pdf/microsoft/windows_3.1/Windows_3.1_Programmers_Reference_Volume_4_Resources_1992.pdf),
+  [relocations and nonresident names, printed p. 80](https://f6.erista.me/files/bitsavers/pdf/microsoft/windows_3.1/Microsoft_Windows_3.1_SDK_1992/PC30211-0492_Programmers_Reference_Volume_4_199204.pdf).
+  The complete scans were not retrievable (403 or fetch-size limit); these
+  are specifically indexed primary excerpts, not a newly read full manual.
+  [Microsoft's earlier NE appendix](https://www.pcjs.org/documents/books/mspl13/msdos/encyclopedia/appendix-k/)
+  was accessible. No contradiction was found in the draft's offset-origin,
+  absent-sector/64-KiB distinction or separation of relocation chains from
+  additive records.
+- Microsoft Windows 3.1 SDK volume 1, indexed [callback prolog discussion](https://bitsavers.trailing-edge.com/pdf/microsoft/windows_3.1/Microsoft_Windows_3.1_SDK_1992/PC28915-0492_Programmers_Reference_Volume_1_199204.pdf);
+  Microsoft [compiler/prolog article](https://techshelps.github.io/MSDN/TECHART/html/msdn_optim.htm)
+  and [SDK Q61285, protected-mode global locks](https://ftp.zx.net.nz/pub/Patches/ftp.microsoft.com/MISC/KB/en-us/61/285.HTM).
+  These settle narrower ABI questions without treating a modern Win32 heap
+  page as the Win16 specification.
+- Microsoft [DDK Q75008, including Windows 3.1](https://jeffpar.github.io/kbarchive/kb/075/Q75008/),
+  the earlier [3.0 Virtual Device Adaptation Guide, chapter 16](https://www.pcjs.org/documents/books/mspl13/win/w3ddkvxd/),
+  and [Asche's shipping-Windows-95 DDK article](https://techshelps.github.io/MSDN/TECHART/html/msdn_chicvxd.htm).
+  These support the distinction between Windows protected execution and DOS
+  V86/device ownership. A complete 3.1 DDK scan was not independently read.
+- Microsoft [Q125867, Understanding Win16Mutex](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/125867),
+  Pietrek's [Direct Thunking in Windows 95](https://jacobfilipp.com/DrDobbs/articles/DDJ/1996/9614/9614c/9614c.htm)
+  and [authorized *System Programming Secrets* excerpt](https://ftp.st.ryukoku.ac.jp/pub/published/oreilly/windows/win95.update/dirty.html),
+  and Microsoft [Q154093, flat thunk construction](https://ftp.zx.net.nz/pub/archive/ftp.microsoft.com/MISC/KB/en-us/154/093.HTM).
+- DPMI Committee [1.0 specification, March 12, 1991](https://docs.pcjs.org/specs/dpmi/1991_03_12-DPMI_Spec_v10.pdf),
+  especially chapter 2, translation services and appendix C; Microsoft
+  [SDK Q65128, Windows applications' DPMI/DOS restrictions](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/65128).
+- Wine **10.0**, tagged upstream [NE module/task launch](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/ne_module.c),
+  [segment loading](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/ne_segment.c),
+  [global](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/global.c)
+  and [local heaps](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/local.c),
+  [KERNEL exports](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/krnl386.exe16.spec),
+  [USER exports](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/user.exe16/user.exe16.spec),
+  [message bridge](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/user.exe16/message.c)
+  and [winevdm](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/programs/winevdm/winevdm.c).
+  `NE_CreateThread` and `NE_StartTask` were inspected; separate `task.c`,
+  `wowthunk.c` and Makefile fetches failed. The upstream-authored
+  [Developer's Guide](https://fast-mirror.isrc.ac.cn/winehq/wine/docs/en/winedev-guide.html)
+  is historical design context, not a Wine-10 build/dependency audit.
+- InstallShield [vendor documentation of version-specific setup switches](https://community.revenera.com/s/article/what-command-line-parameters-are-available-for-setup-exe)
+  and a period [InstallShield Software Corporation support answer](https://groups.google.com/g/installshield.is5.free-edition/c/xGim-5ZLGxM)
+  distinguishing its 16-bit launcher from the selected engine. No primary
+  IS3 engine manual or original-engine binary was obtained. The absence
+  remains a qualification blocker, not an excuse to infer engine bitness.
+- Open Watcom [1.9 Programmer's Guide](https://open-watcom.github.io/open-watcom-1.9/pguide.html),
+  upstream [16-bit startup source](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/clib/startup/a/cstrtw16.asm)
+  and [compiler reference](https://openwatcom.org/ftp/manuals/current/cguideq.pdf).
+  The startup source is a current upstream example; 19a must pin the actual
+  fixture toolchain and matching CRT rather than treating `master` as a pin.
+
+### 1. Conflicts and required corrections
+
+P0 blocks the affected interface freeze/runtime implementation. P1 must be
+closed before the affected milestone passes. Historical parent-contract
+requirements already superseded by the owner's evening decision are not
+reported again as newly discovered bugs.
+
+#### C01 — P0: the kernel ABI still excludes the proposed execution context
+
+Contract §4, lines 142–177, correctly requests an additive adapter, but the
+binding ABI currently says LDTR is null for every non-DOS worker and Win32
+continue accepts only the ordinary thread selectors. Both rules conflict
+with a Win32 worker resuming a segmented Win16 continuation. The draft names
+the handoff but does not itself amend those rules. See
+[execution-abi.md, F3-04 amendment](../../docs/design/execution-abi.md#f3-04-amendment-dpmi-client-entry-path-2026-10-11),
+[Win32 exception/continue rules](../../docs/design/win32-personality-contract.md#exceptions-and-processor-state),
+and [`dosvm_task_switch`/`dosvm_client`](../../src/kernel/vm/dosvm.c), lines
+441–479. This is an unresolved integration conflict, not evidence that
+process-owned Win16 execution is impossible.
+
+**Required:** f5-03 must publish one architecture-context dispatch rule for
+native, Win32-flat, Win16 and F3 workers, including scheduler, trap entry,
+fault return and teardown. Ordinary native/Win32 continuation checks stay
+strict; the separately authorized Win16 continuation accepts owned LDT
+selectors. Include #NP/#SS/#GP, INT 21h/2Fh/31h, CLI/STI/POPF/IRET virtual
+flags, INT 80h, emergency flat-stack delivery, FS/GS and FPU state. Do not
+solve this by routing a fabricated DOS VM through the native syscall path.
+
+#### C02 — P0: one worker does not automatically provide several USER queues
+
+Contract §9 allows multiple logical tasks on one worker, whereas the parent
+[message service](../../docs/design/win32-personality-contract.md#waits-apcs-and-message-queues)
+binds queue waits, posts, sends and APCs to kernel threads. Calling the
+existing USER32 entry points on one thread does not identify which Win16
+task owns a dialog, queue, sent-message continuation or blocked wait.
+Wine's [historical design](https://fast-mirror.isrc.ac.cn/winehq/wine/docs/en/winedev-guide.html)
+uses a Win32 thread per Win16 task; that choice cannot be assumed to exist
+in the proposed fiber-like design.
+
+**Required:** jointly freeze an explicit USER task/queue context and a
+nonblocking wait/resume interface in f5-04/10/19. Preserve per-task filters,
+wake state, event counts, modal nesting and send ancestry; route replies
+to suspended continuations. Either retain the one-worker design with those
+interfaces or have the lead choose threads serialized by the group token.
+Do not silently merge all tasks into one Win32 message queue. No requirement
+for one kernel thread per task follows from the Windows API itself.
+
+#### C03 — P1: the blanket global-lock rule is too broad for protected Win16
+
+Lines 363–368 say locked memory cannot move and require observable lock
+counts. Microsoft [Q61285](https://ftp.zx.net.nz/pub/Patches/ftp.microsoft.com/MISC/KB/en-us/61/285.HTM)
+distinguishes protected-mode `GlobalLock`: ordinary movable objects retain
+selector identity without the real-mode physical-lock behavior; discardable
+objects and DGROUP have meaningful lock counts. A Win32-style counter on
+every movable block is therefore not established Windows 3.1 behavior.
+
+**Required:** distinguish public Win16 lock/discard semantics from internal
+bridge pins and physical/page locks. Internal pins may conservatively stop
+movement; they must not fabricate `GlobalFlags` results. Specify the chosen
+3.1/9x behavior and any measured departure. Wine 10's
+[`global.c`](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/global.c)
+is a useful implementation comparison, not the answer to a disagreement:
+it increments lock counts and `GlobalCompact16` returns a constant, which
+would also fail this draft's stronger compaction gate. Do not inherit those
+shortcuts as conformance evidence.
+
+#### C04 — P1: current desktop protocol cannot carry the promised host windows
+
+The draft acknowledges v3 is future work, correctly. Make that a hard
+handoff: current [`protocol.h`](../../apps/desktop/protocol.h), lines 11–17,
+negotiates v1/v2.1, and [`client.c`](../../apps/desktop/client.c), lines
+359–364, rejects a second CREATE on a channel. The existing
+[desktop lifecycle](../../docs/desktop.md#protocol-version-1) binds the peer
+to its PID. Several NE task windows must not be implemented by pretending
+their task handles are native PIDs or assuming a v3 record already exists.
+
+**Required:** f5-09 owns the actual v3 schema and peer authority; f5-10/19
+agree window/task/host identity, modal ownership, close versus End Task,
+PING responsiveness and cleanup. End Task must work when the NE worker
+never yields. A separate host I/O thread must not answer PING indefinitely
+on behalf of a frozen guest UI.
+
+#### D01 — accepted departure: group isolation is not Windows 95's shared VM
+
+Windows 95 shares Win16 state broadly and serializes entry with Win16Mutex;
+[Microsoft's mutex article](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/125867)
+and [Pietrek's excerpt](https://ftp.st.ryukoku.ac.jp/pub/published/oreilly/windows/win95.update/dirty.html)
+explain its failure propagation. The proposed private group address space
+and local token deliberately improve containment. Keep them. This is not
+a request to recreate the vulnerable 9x shared arena or use NT NTVDM.
+
+Add a visible compatibility policy for cross-group `GetModuleHandle`,
+task enumeration, shared DLL state, global memory, hooks, clipboard and DDE.
+Documented IPC must translate identities/ownership; raw selector sharing
+between unrelated groups is outside this design. A brokered object is not
+a process pointer. Also freeze whether re-launching a single-instance app
+joins an existing group or communicates through a broker. The directive's
+explicit process-group model authorizes this boundary; do not turn it into
+an unqualified claim of identical Windows 95 global semantics.
+
+#### D02 — accepted distinction: native bridge versus binary flat thunks
+
+The draft correctly separates its generated adapters from THUNK.EXE
+compatibility. [Microsoft Q154093](https://ftp.zx.net.nz/pub/archive/ftp.microsoft.com/MISC/KB/en-us/154/093.HTM)
+requires paired DLL/data/connection machinery, including the 16-bit
+`DllEntryPoint`; [Pietrek](https://jacobfilipp.com/DrDobbs/articles/DDJ/1996/9614/9614c/9614c.htm)
+shows stack/selector switching within a mapped address space.
+
+For every required connector, f5-05/19 must decide where the paired PE DLL
+loads. A DLL callable synchronously by a flat thunk belongs in the host's
+32-bit mapping or needs a separately specified RPC implementation. A PE
+*child process* is appropriate for an installer engine, not a substitute
+for a paired in-process DLL. Generic, universal and flat thunk families
+need distinct signatures and tests; the `W` in old generic-thunk export
+names must not cause automatic Unicode classification.
+
+### 2. Gaps against the requested goal
+
+#### G01 — P0: close the DOS/DPMI address model before implementing the relay
+
+The optional companion is reasonable, but copied RPC buffers alone do not
+define DOS-addressable memory. Add `GlobalDOSAlloc/Free`, segment-to-selector
+aliases, PSP/environment/DTA and vector ownership to §6/8. Microsoft
+[Q65128](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/65128)
+specifically directs Windows applications to the KERNEL DOS allocator and
+lists a narrower direct-DPMI surface than general DOS clients.
+
+Freeze a row-by-row matrix distinguishing (a) Windows application exports,
+(b) direct INT 31h compatibility and (c) internal kernel mechanisms. Do not
+accidentally promise the whole F3 host merely because `0400h` reports 0.90.
+Cover `0002h`, `0100h–0102h`, `0200h/0201h`, `0300h–0306h`, virtual IF,
+discovery and termination; justify every refusal. The
+[DPMI specification](https://docs.pcjs.org/specs/dpmi/1991_03_12-DPMI_Spec_v10.pdf)
+defines real paragraph addresses, register images, callbacks and raw-switch
+interfaces; none accepts an arbitrary host selector as an RM address.
+
+**Required design:** persistent owned DOS backing with stable RM identities
+and protected aliases, or explicit supported-call schemas with declared
+limitations. Unknown real-mode procedures may follow arbitrary pointers;
+their buffer graph cannot be inferred from registers alone. Reconcile file
+handles/current directory/DTA across direct INT 21h, DOS3Call and reflected
+calls, including a callback issuing another DOS call. The private companion
+must not write an independent disk overlay for the same destination.
+
+#### G02 — P0 handoff, P1 implementation: startup and callback ABI is deferred
+
+§5 says to specify startup later. Before assembly/runtime work, freeze
+initial registers, DGROUP's reserved instance bytes, stack/heap placement,
+PSP view, command tail, `InitTask` outputs, `InitApp`, and clean task exit.
+The [Open Watcom startup source](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/clib/startup/a/cstrtw16.asm)
+actually calls `InitTask`, uses its register outputs and exits via INT 21h;
+a fixture calling a custom entry without that CRT would miss the contract.
+
+`MakeProcInstance` is not just “set DS before calling.” Microsoft's
+[prolog article](https://techshelps.github.io/MSDN/TECHART/html/msdn_optim.htm)
+describes the AX instance thunk and the different exported-prolog cases.
+Cover old export prologs, 3.1 SS-based prologs, DLL callbacks with DS != SS,
+register returns and nested stack switching. The
+[3.1 SDK volume-1 excerpt](https://bitsavers.trailing-edge.com/pdf/microsoft/windows_3.1/Microsoft_Windows_3.1_SDK_1992/PC28915-0492_Programmers_Reference_Volume_1_199204.pdf)
+confirms the protected-mode SS-based alternative. Separate normal return
+from `Catch`/`Throw`/task termination unwinding across bridge frames; tokens,
+pins and suspended sends must not leak when the guest skips a return.
+
+#### G03 — P1: finish the NE format and module-lifetime profile
+
+The parser outline is good but needs an executable support matrix before
+its tests can be authoritative. Include constant/equate entry bundles,
+case-sensitive export names versus module-name lookup, duplicate/ordinal-zero
+name records, module/DLL version flags, and code/data alias permissions.
+Specify legal table overlap and bounded work, not just in-bounds reads.
+The [3.1 format excerpt](https://f6.erista.me/files/bitsavers/pdf/microsoft/windows_3.1/Microsoft_Windows_3.1_SDK_1992/PC30211-0492_Programmers_Reference_Volume_4_199204.pdf)
+distinguishes names and relocation target forms; Wine's
+[`NE_GetEntryPointEx`](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/ne_module.c)
+also handles constant entries. Do not infer support for all forms merely
+from constants defined in Wine headers.
+
+Specify demand-load/discard faults as recoverable loader events, distinct
+from stale-selector corruption. Define code prolog patching and legitimate
+writable aliases, DLL reference cycles, initialization failure unwind,
+per-instance versus per-module data, WEP and 9x DLL attach notifications.
+For self-loaders, retain BootApp/LoadAppSeg and add a disposition for ExitProc
+and ownership/prolog helpers. Wine's
+[`SELFLOADHEADER` and loader](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/ne_segment.c)
+are implementation evidence with permissive/partial paths, not a complete
+normative protocol. Any unavailable period extension remains explicitly
+unqualified until primary evidence or a clearly labelled experiment exists.
+
+#### G04 — P0 UI handoff, P1 implementation: explicit message conversion matrix
+
+“By message type” is necessary but not enough to divide f5-10 and 19c.
+Enumerate scalar, synchronous-pointer, retained-buffer, handle-transfer and
+callback messages. Cover WM_COMMAND/scroll/activate/menu packing,
+WM_CTLCOLOR's 16-to-32 message split, owner-draw/measure/create structures,
+dialog results, subclass procedure identity, text encoding and buffer-size
+units. Wine's [message conversion source](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/user.exe16/message.c)
+contains concrete examples and backend registration hooks; it does not
+forward everything by casting the 16-bit arguments.
+
+Unknown private messages between tasks in the *same* host may carry local
+far pointers under the caller's lifetime contract. Cross-group/process
+messages need explicit schemas or named refusal. Define clipboard and DDE
+ownership/ACK/abort and handle mapping across NE↔PE and NE↔NE groups. Test
+that a blocked synchronous sender can receive the callbacks necessary for
+progress without executing arbitrary pending tasks in the wrong context.
+
+#### G05 — P1: games/utilities need a surface and a gate beyond installers
+
+The minimum module list omits `MMSYSTEM` and legacy USER sound entry points.
+Wine's [Win16 multimedia exports](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/mmsystem.dll16/mmsystem.dll16.spec)
+include timers, wave/MIDI and MCI; its
+[winevdm startup](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/programs/winevdm/winevdm.c)
+even loads MMSYSTEM with USER/GDI. This is evidence of a relevant API family,
+not proof that every selected game needs it.
+
+Add a census-driven 16-bit multimedia bridge to f5-12A/B and 19c, including
+far callbacks, persistent WAVE/MIDI headers, timer cancellation and MCI
+notification packing. Also inventory legacy SOUND/USER sound, COMMDLG, LZ,
+VER, TOOLHELP and any required Win16 OLE/DDEML components. Required engine
+or app dependencies cannot be excluded just because the installer-only
+minimum did not name them.
+
+The current acceptance rows can all pass without a period Win16 game or
+utility being usable. Require a project-authored interactive game and tool
+fixture using normal Open Watcom startup, plus lead/owner-selected lawful,
+unmodified period application coverage with pinned versions and observable
+results. Keep selection explicit; this review does not invent a commercial
+title or require universal Windows 3.x compatibility. Exercise windowed
+painting, input, menus/dialogs, file save/reopen, optional audio and concurrent
+desktop/native/DOS operation. Treat O2 as an acceptance decision to close.
+
+#### G06 — P1: actual installer closure remains unproved
+
+Retain both original gates. The
+[repository research](../../docs/design/research/win32-layer-2026-10-14.md)
+and [census record](../../docs/design/win32-census/README.md) do not provide
+full NE closure. A family label or `_INST32I.EX_` filename cannot prove
+bitness. The period [InstallShield vendor answer](https://groups.google.com/g/installshield.is5.free-edition/c/xGim-5ZLGxM)
+distinguishes the launcher and selected engine; Microsoft's
+[installer substitution page](https://learn.microsoft.com/en-us/windows/win32/winprog64/application-installation)
+does not qualify original NE execution.
+
+For every acceptance title, inventory its actual original setup, extracted
+children, dynamic DLLs/custom actions, DirectSetup, uninstall and restart
+path. Worms' original chain and a true 16-bit IS3 engine remain separate
+obligations. An IS3 32-bit engine behind an NE launcher is insufficient.
+Acquire provenance, exact edition/build and rights for the engine and script
+compiler; no accessible IS3 vendor manual found here settles that selection.
+Test UI completion and output/state manifests, cancel/retry, failure and
+uninstall. Vendor [switch documentation](https://community.revenera.com/s/article/what-command-line-parameters-are-available-for-setup-exe)
+is version-specific; preserve arguments and the actual engine handshake.
+Do not replace original execution with silent-mode or extraction success.
+
+#### G07 — P0 authority handoff, P1 qualification: containment needs enforcement
+
+The shared host is the correct crash unit; individual tasks are not isolated.
+Because guest code can reach flat user selectors, helper metadata cannot
+authorize kernel, server or supervisor actions. Define kernel/server-owned
+group membership and which PE helpers may be terminated, reparented or
+handed off. Guest-supplied PIDs/return tokens cannot confer that authority.
+The [native teardown contract](../../docs/design/execution-abi.md#processes-inheritance-and-teardown)
+is the existing foundation, not a complete cross-personality group ledger.
+
+Set bounds on module/segment counts, relocation visits, thunk nesting,
+message payloads, retained pins and outstanding RPC. Check mutation versus
+unmap/realloc, descriptor reuse/hidden segment caches, pending callbacks and
+faults during the flat dispatcher. On helper corruption, kill the host and
+use authoritative ledgers; do not walk corrupted guest ownership lists.
+Do not promise that generations make arbitrary stale public 16-bit handles
+safe forever. The draft already acknowledges that limitation correctly.
+Test malicious service records as well as ordinary #GP crashes and hangs.
+
+#### G08 — P1: memory evidence and dependency audit remain mandatory
+
+Keep 1,024 F3 selectors and the 128-MiB baseline as constraints, not measured
+Win16 capacities. Include the optional companion's entire admission cost,
+descriptor runs/aliases, per-task stacks/queues, source snapshots, bridge
+copies, PE DLLs/engine, surfaces and audio in peak commitment. Measure both
+normal and failure peaks before fixing quotas. The
+[Win32 memory budget](../../docs/design/win32-personality-contract.md#memory-budget-at-128-mib)
+and [F3 admission](../../docs/design/dos-dpmi-contract.md#memory-services-and-admission-at-128-mib)
+must use the same accounting boundary. No memory-limit change is proposed.
+
+Coordinate with the already recorded
+[Wine dependency audit](../../docs/design/win32-wine-dependency-audit.md).
+Selected Win16 code brings Win32/private relay/backend dependencies; the
+module name `user.exe16` does not make it an autonomous library. Upstream
+source reuse also needs the existing license/source/patch workflow. Do not
+claim a working Wine-10 port from this source review.
+
+### 3. Handoffs and the F3 boundary
+
+**Recommendation: retain the process-owned adapter.** It matches the written
+directive's Win16-inside-Win32 model and isolates each group's failures.
+The alternative, putting all NE execution into an existing F3 VM, inherits
+its DOS address space, disk view, ownership and trap path, while still
+requiring a new NE/KERNEL/USER/GDI implementation. DPMI 0.9's shared-client
+LDT/width rule does not forbid a flat 32-bit runtime helper: it is not a
+second DPMI client. See the
+[Committee's chapter 2/appendix C](https://docs.pcjs.org/specs/dpmi/1991_03_12-DPMI_Spec_v10.pdf).
+
+Source checks corroborate the draft's caution. In
+[`dpmi_desc.c`](../../src/kernel/vm/dpmi_desc.c), `dpmi_ptr` ends in
+`dosvm_range`; `dpmi_frame_check` and descriptor mutation are DOS-owned.
+[`dpmi.c`](../../src/kernel/vm/dpmi.c) obtains a PSP via DOS during entry,
+owns nested clients and RM transitions, and returns VM-local relay addresses.
+[`dosvm.c`](../../src/kernel/vm/dosvm.c) maps only low memory/the DOS pool
+and switches a VM's LDT/debug state. None is a generic Win32-memory adapter.
+[`dpmi.h`](../../src/kernel/include/ciuki/dpmi.h) still has
+`DOSVM_DPMI_PUBLIC=0`; do not flip it for F5.
+
+Reuse descriptor encoding/decoding, validated arithmetic, frame-format rules
+and architecture primitives where factoring is demonstrably neutral to F3.
+Do not copy the entire F3 descriptor setter as the new security validator:
+its base/limit changes rely on subsequent VM/paging checks, whereas the new
+contract explicitly promises validation against Win32 mappings at mutation.
+Keep F3 VM backing, DPMI client stack, interrupt/device state and limits
+unchanged. The companion relay is a new endpoint/adaptation layer with its
+own tests, not functionality that already exists in `dpmi_int31`.
+
+| Owner | Required written handoff before consumer code |
+| --- | --- |
+| **f5-03 → 19b** | Win16 context authority/owner and versioned records; LDT lifecycle and scheduler selection; complete descriptor states including allocation placeholders, aliases/runs and mutation/reload; mixed 16/32 stack and fault records; validated resume; virtual flags and trap routing; FS/GS/FPU/FXSR policy per CPU. Publish execution-ABI amendments resolving C01. |
+| **f5-04 → 19b/c** | Charged reserves/commitment and pinned/shared DOS backing; endpoint and group identities; cleanup ordering independent of guest lists; pending-operation cancellation; logical USER queue/wait contexts or the selected thread alternative; sent-message continuation/wakeup and authoritative helper ownership. |
+| **f5-05 → 19a/b** | MZ/NE/PE/DOS classification and explicit malformed-NE failure; host bootstrap/builtin manifest; NE module identity and file search integration; paired PE DLL mapping; dependency/init/unload ordering and no loader lock across guest initialization; launcher/engine startup status. Do not send NE into the PE parser. |
+| **f5-10 → 19c** | Task-aware window/queue/backend API, typed callbacks on the owning worker, synchronous send/modal reentry, HWND/HMENU/HDC/resource identity translation, per-message packing/ownership tables, surface/font/GDI lifetimes and failure handling. Explicitly consume f5-09's v3 schema and C04 liveness rule. |
+| **F3 / f5-06 → 19b** | Enumerated RM services, persistent DOS allocation/aliases, register/stack/callback relay, vector ownership, cancellation and nesting; one coherent drive/file/INI/environment view. Resolve G01 before adding code to either dispatch path. |
+| **07A/07B, 09, 12A/B, 14A/B, 15A, 16, 17A** | Server identities/atoms/clipboard/DDE/restart; v3 window lifecycle; Win16 multimedia backend; upstream dependency/license closure; original launch/uninstall plumbing; diagnostics and exact-input evidence schema. These are real dependencies, including the newly explicit f5-12 link. |
+
+The adapter is the right boundary **conditional on G01's coherent RM memory
+and service contract**. If a required original program cannot fit that
+boundary, present the measured counterexample to the lead/owner. Neither
+silently expanding F3 nor claiming generic pointer-copy RPC preserves all
+DPMI semantics is an acceptable fallback.
+
+### 4. Ordered and parallelisable f5-19a..d plan
+
+#### Step 0 — lead disposition and shared interface design
+
+Accept/reject each C/G finding explicitly. Resolve C01/C02/G01/G02/G04/G07
+with the named directive owners before f5-03/04/05/10 freeze their records.
+Keep the current contract's no-runtime-code restriction until that review.
+Freeze enough abstract interfaces for host work; do not freeze a supposedly
+complete API census before opaque original installers can execute.
+
+#### f5-19a — research, fixture toolchain, NE parser/census
+
+After Step 0's scope disposition, three lanes can run independently:
+
+1. **Primary ABI/census lane:** reconcile exact 3.1 fields, equates,
+   startup/self-loader/thunk formats; build the row/signature matrix; obtain
+   lawful original IS3/Worms inputs or retain explicit absent cells.
+2. **Toolchain/fixtures lane:** pin a Linux-hosted Open Watcom archive or
+   source commit, SHA-256, headers, libraries, linker/resource compiler and
+   licenses. Use `wcc`/`wcl` targeting Windows and `wlink`'s 16-bit Windows
+   EXE/DLL systems, not `wcl386`, Win386 or PE as a surrogate. The upstream
+   [1.9 guide](https://open-watcom.github.io/open-watcom-1.9/pguide.html)
+   documents a Linux include setup and the ordinary Win16 build path.
+3. **Parser lane:** production portable C parser and NE census metadata,
+   independently specified byte fixtures/expected plans; no execution.
+
+Use small/medium/large-model EXEs and single/no-data DLLs, normal CRT
+startup, named/ordinal imports, shared-code/multiple-DGROUP instances,
+resources and callback exports. Add hand-authored assembly/raw NE cases
+for formats the pinned linker cannot emit. Preserve source provenance;
+do not claim every special relocation is compiler-generated. Two builds
+must have identical hashes after deliberate timestamp policy is recorded.
+
+**Host gate:** exact independent metadata/errors for valid and malformed NE;
+overflow/truncation/terminator tests, segment expansion limits and bounded
+resource decoding; compare applicable output with an independent NE-aware
+inspection tool such as pinned `wdump`, after verifying its capability.
+Do not assume a PE-oriented `llvm-readobj` validates NE. Runtime-import
+closure remains provisional and later traces feed it back into 19a/02B.
+
+#### f5-19b — selector/NE core, heaps and bridge execution foundation
+
+Depends on 19a and reviewed 03/04/05/06/RM interfaces. With frozen shared
+types, selector/accounting, NE instantiation/relocation, and heap/thunk-table
+work can be implemented in separate worktrees. One owner integrates loader,
+heap and callback lifetime rules before guest execution.
+
+**Host gate:** run the production relocator against independently assigned
+selector layouts and hand-calculated patched bytes, for every supported
+source/target/additive/chain combination. Include a byte relocation whose
+chain link still needs two readable bytes, final-byte writes, self/two-node
+cycles, huge-run boundaries, constant targets, missing imports and failure
+at every allocation/patch transaction. Rebase/reload against different
+selector assignments; do not compare only the relocator with its own writer.
+
+Exercise production global/local heap state, fixed/movable/discarded handles,
+alias invalidation, 64-KiB edges, realloc rollback, public lock semantics,
+local notification reentry and fault/cleanup ledgers using fake backing.
+Generate typed export/thunk tables and check exact ordinal/name/version,
+argument widths, cleanup, register preservation, return ABI, pointer schema,
+callback convention and equate classification against independent manifests.
+Compile/disassemble authored 16-bit and i386 probes; host tables alone do
+not execute a far call. Model startup/LibMain/WEP/self-loader and RM relay
+with injected errors, including cancellation during a reverse callback.
+
+The lead's first execution milestone is a normal-CRT NE program plus DLL
+and a 16→32→16 callback, then discard/self-load/heap/companion paths. Record
+execution as pending until the lead tests it; no new image variant is needed.
+
+#### f5-19c — cooperative USER/GDI, multimedia and desktop applications
+
+Depends on 19b execution foundations and 07A/08/09/10 handoffs; multimedia
+consumes 12A/B, DDE/restart consumes 07B. Message/control/resource conversion,
+GDI/graphics conversion, and multimedia adapters can proceed in parallel
+against frozen interfaces; task/queue/reentry behavior has one integration
+owner. Do not make all of 19c wait for original IS3 media.
+
+**Host gate:** production conversion code with independently packed Win16
+structures and expected Win32 fields/return copyback; deterministic traces
+for two tasks, nested dialogs, subclass/CallWindowProc, synchronous sends,
+paint/timer priorities, message filtering, yield/LockCurrentTask, worker
+blocking and group death. Include private pointer messages within one host
+and rejected/schema-marshalled cross-process cases. Fake USER/GDI/VFS/audio
+endpoints must exercise production adapters, not only a parallel model.
+Check independent reference frames, resource/dialog metrics, callback-after-
+unload and multimedia completion/cancel races.
+
+The lead then executes the interactive fixtures and selected period apps,
+including a nonyielding task while another group/native/PE/DOS client stays
+responsive. This milestone supplies the missing games/utilities verdict,
+separate from installation.
+
+#### f5-19d — original installers and integrated qualification
+
+Depends on 19b/c plus 15A, 07B, needed audited 14B modules, diagnostics/17A
+and exact media closure. **19d feeds 15B; it must not depend on 15B.**
+Media metadata/expected-state design and host evidence tooling can start
+earlier while runtime lanes proceed. The compiler/source, NE/DLL/helper,
+engine and archive hashes form separate evidence fields.
+
+**Host gate:** validate provenance and evidence schemas, canned pass/fail/
+timeout records and expected install/cancel/uninstall/restart manifests.
+Use self-authored payloads and scripts around a lawfully held original IS3
+engine. Keep restricted engine/media bytes owner-local and out of the
+system image and portable bundle. No original engine means **not run**.
+
+**Lead execution gate:** original Worms and true-Win16 IS3 flows, all NE
+children in the acceptance inventory, selected Win16 app/game fixtures,
+normal/forced lifecycle counts, fault containment, peak memory and earlier
+F0–F4/integrated-F5 regressions. Inspect installed files and committed
+service state, not just a PASS line, splash screen or launch of a PE child.
+
+#### Parallelism, testing tiers and evidence boundary
+
+The dependency spine is `review/interfaces → 19a → 19b → 19c → 19d → 15B`.
+03/04/05 core work and 19a host work can overlap after the interface
+handoff; registry, desktop, audio, upstream audit and evidence/fixture lanes
+can progress independently on reviewed interfaces. 19b's portable components
+need not wait for all USER/GDI code. Runtime census closes iteratively after
+execution, avoiding a 19a-import-freeze↔19d cycle. The lead alone assigns
+implementation scope/models and integrates worktrees; no extra agents were
+launched for this review.
+
+Use Linux native builds with ASan/UBSan where suitable and i386/layout or
+16-bit compiler checks for ABI-specific claims. Run allocation failures,
+bounded malformed-input corpora and deterministic race schedules against
+production portable logic. Authored sources live under the proposed
+`tests/host/win16/fixtures/`, generated files under `build/host/win16/`.
+Those are future deliverables; this review created none of them.
+
+| Evidence tier | What it establishes; what remains unproved |
+| --- | --- |
+| **Linux T0/static** | Parser/relocator results, table/layout consistency, generated NE reproducibility, portable conversion/heap/accounting logic and specified model traces. Disassembly can show intended instructions and calling convention. It cannot establish the CiukiOS trap/IRET/LDT path, runtime scheduling, actual installer execution or physical memory fit. |
+| **Lead QEMU, canonical image** | Real protected 16-bit entry, descriptor faults/demand reload, flat/far stack transitions, FS/FPU state, interrupts/virtual IF, callback/RM nesting, desktop routing, original installer output, cancellation/hangs/End Task and repeated teardown. Run 128-MiB qemu-t23 and relevant earlier regression profiles. Results apply to the recorded image/input hashes and emulated CPU, not to all supported hardware. |
+| **Lead T23, same image** | Hardware verdict for selector/stack/FPU/fault/interrupt behavior, actual desktop input/render/audio responsiveness, installation/output and measured resident/commitment headroom. Include representative fault/reentry/hang/repeated-life cases; QEMU timing and CPU emulation cannot substitute for this. Other hardware profiles retain their existing qualification obligations. |
+
+Keep host suites serial and `nice -n 19`; no host-runner suite during a guest
+suite. The lead checks host memory and runs capped heavy builds/QEMU
+sequentially, with fw_cfg runtime cases and qcow2 overlays. Preserve the
+owner's one-final-image requirement: intermediate *milestones* are code/host
+handoffs, not newly authorized build variants or release images. Do not
+waive canonical regression evidence when the integrated image is built.
+
+### 5. Verdict and closure conditions
+
+**Approve with listed changes**, not “approve as is.” The architecture does
+not need replacement by an F3-hosted Windows clone. It needs concrete shared
+interfaces, corrected heap semantics and a broader execution gate.
+
+Before runtime implementation: lead disposition of C01/C02 and
+G01/G02/G04/G07, frozen 03/04/05/10 handoffs, and explicit decisions on the
+group compatibility departures. Before the relevant milestone passes:
+C03/C04, G03 and G05–G08, the typed API/service matrices and original-input
+closure. Before F5-19 closes: original installers and selected Win16 desktop
+applications complete; containment and lifecycle/memory measurements pass
+on the canonical image under QEMU and the T23. Missing IS3 media, an essential
+unsupported connector or an unmeasured 128-MiB budget remains an open gate.
+
+Documentation validation for this review is limited to append-only
+preservation, local-link targets, whitespace and changed-file scope. It is
+not a host-test or execution result. No approval from the lead/owner is
+asserted by appending this independent review.
