@@ -17,10 +17,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 THEMES = ("Platinum", "Ciuki Blue", "Classic 98")
-# F2-53: re-pinned after reviewing the tray layout with the production renderer.
+# F2-62: Blue polish; explicitly selected Platinum/Classic 98 are unchanged.
 GOLDENS = {
     "Platinum": "c105449aba076be0c9f330f4c8dd4b7cc13dbfa259ee83e8787cd7b59b63373a",
-    "Ciuki Blue": "df7b0b06b8710a75a4a22de425a713c443c781968a9b422d1c8936782f770979",
+    "Ciuki Blue": "4a16782346cdcd1590e9f1a928083d0413f6e98f29e7587851514f29756a6638",
     "Classic 98": "17e98daaaefd11df154da275151a503cf426b1030cc68c4d0d11b1cdb04a9004",
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in

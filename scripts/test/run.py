@@ -949,7 +949,7 @@ NORMAL_BOOT_NEGATIVE = (
 NORMAL_BOOT_CASE_KEYS = {'id','kind','probe','profile','timeout','expected','attempt','boot_kind','_smoke','_run_id','usb','i8042'}
 NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
 # Colours drawn by apps/desktop in its default theme (desktop.h DESK_BAR/
-# DESK_BACKGROUND/DESK_START_*; theme.c "Platinum" topbar, taskbar,
+# DESK_START_*; theme.c "Ciuki Blue" topbar, taskbar,
 # start/start_open, desktop, painted by compositor.c desk_composite and
 # desk_shell_draw and by shell.c draw_start, the Ciuki button at the left end
 # of the top bar: a soft gradient within the tolerance of its base colour)
@@ -958,11 +958,16 @@ NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
 # sources. A persisted non-default theme (/system/settings/desktop.cfg) is
 # outside this heuristic: test images carry no settings file.
 DESK_BAR_ROWS = 32
-DESK_TOP_BAR = 0xdcdcdc
-DESK_TASKBAR = 0xd6d6d6
+DESK_TOP_BAR = 0x203a50
+DESK_TASKBAR = 0xdce4ec
 DESK_START_BOX = (4, 4, 96, 24)  # x, y, w, h: the Ciuki button in the top bar
-DESK_START_BUTTON = (0xf2f2f2, 0xb9b9b9)  # menu closed / open
-DESK_BACKGROUND = 0x375564
+DESK_START_BUTTON = (0xe5c189, 0xd6ae6c)  # menu closed / open
+# Blue's face is visibly shaded; its base colours alone cover too
+# little of draw_start's gradient. Samples span that face without widening
+# the per-channel tolerance or reducing the required occupied fraction.
+DESK_START_GRADIENT = (0xefd9b7, 0xead2ac, 0xe6cba1, 0xe1c496, 0xdcbd8b,
+                       0xc8a663, 0xd1ae6f, 0xdab67a)
+DESK_BACKGROUND = 0x2b4a63
 CONSOLE_COLOURS = (0x10243c, 0xe8e8e8, 0x800000)  # console bg, fg, panic bg
 SCREEN_TOLERANCE = 8  # per channel: also accepts a 16-bpp (565) framebuffer
 
@@ -1067,7 +1072,7 @@ def normal_boot_regions(width, height):
     return (('top_bar',(left,0,top-left,DESK_BAR_ROWS),(DESK_TOP_BAR,),'min',0.5,1),
             ('console_absent',(left,0,top-left,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
             ('taskbar',(0,height-DESK_BAR_ROWS,width,DESK_BAR_ROWS),(DESK_TASKBAR,),'min',0.5,1),
-            ('start_button',DESK_START_BOX,DESK_START_BUTTON,'min',0.4,1),
+            ('start_button',DESK_START_BOX,DESK_START_BUTTON+DESK_START_GRADIENT,'min',0.4,1),
             # Heuristic 3: the default wallpaper is the owner's Ciuk2 scene, so the
             # work area is only required to be free of the kernel console colours.
             ('background',(0,DESK_BAR_ROWS,width,height-2*DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,2))

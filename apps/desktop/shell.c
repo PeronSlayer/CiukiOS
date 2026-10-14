@@ -2276,8 +2276,8 @@ void desk_shell_apply(struct desktop *d)
     if (!d->sh.icon_count) icons_build(d);
     icons_layout(d);
     d->sh.wall_valid = 0;
-    /* The theme named by desktop.cfg (default Platinum), at once. */
-    if (desk_theme_use(d->sh.cfg.theme)) desk_theme_use("Platinum");
+    /* The theme named by desktop.cfg (default Ciuki Blue), at once. */
+    if (desk_theme_use(d->sh.cfg.theme)) desk_theme_use(DESK_THEME_DEFAULT);
     if (d->sh.levels) desk_menu_close(d);
     damage_all(d);
 }

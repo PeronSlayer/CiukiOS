@@ -12,7 +12,7 @@
 #include "../desktop/theme.h"
 
 /* Colours, fonts and styles come from the current theme (desk_theme,
- * apps/desktop/theme.h): Platinum (default), Ciuki Blue or Classic 98.
+ * apps/desktop/theme.h): Ciuki Blue (default), Platinum or Classic 98.
  * The names keep their Windows 98 roles; they are not constants. */
 #define DU_FACE       (desk_theme->face)
 #define DU_LIGHT      (desk_theme->light)
