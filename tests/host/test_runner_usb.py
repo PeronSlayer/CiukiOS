@@ -123,10 +123,11 @@ class USBRunnerTests(unittest.TestCase):
                 '[usb] hid keyboard attached addr=1 interface=0 wheel=0',
                 '[usb] hid mouse attached addr=2 interface=0 wheel=1']
 
-    def test_live_usb_evidence_serial_requirements_and_unchanged_qmp_input(self):
+    def test_live_usb_evidence_serial_requirements_and_paced_qmp_input(self):
         from test_runner import RunnerTests
         fixture=RunnerTests();fixture.setUp()
         try:
+            fixture.case['expected']['predicates'][0]['where']['tick']='10000'
             for controller in ('uhci','ohci'):
                 declaration=next(c for c in runner.load(ROOT/'tests/suites/f1-usb.json')['cases']
                                  if c['id']=='usb-input-'+controller)
@@ -134,12 +135,13 @@ class USBRunnerTests(unittest.TestCase):
                     fixture.case.update(usb=declaration['usb'],i8042=i8042,actions=runner.desktop_stimulus())
                     fixture.case['expected']['serial_patterns']=declaration['expected']['serial_patterns']
                     records=[*self.usb_lines(controller),dict(event='BEGIN'),
+                             dict(event='DATA',case='gate',motion='0',buttons='0'),
                              dict(event='ARM',action='post_fault_input')]
                     with patch.object(runner.QMP,'command',autospec=True,side_effect=runner.QMP.command) as requests:
-                        result,directory=fixture.run_fake(records=records,finish_after_input=5,
+                        result,directory=fixture.run_fake(records=records,finish_after_input=6,consume_input=True,
                             after_input=[dict(event='DATA',tick='10000'),dict(event='END',status='PASS')])
                     sent=[call.args[2] for call in requests.call_args_list if call.args[1]=='input-send-event']
-                    self.assertEqual(sent,[{'events':b['events']} for b in fixture.case['actions'][0]['batches']])
+                    self.assertEqual(sent,[{'events':b['events']} for b in runner.Actions.usb_batches(fixture.case['actions'][0]['batches'])])
                     self.assertEqual(result['outcome'],'pass',result['reason'])
                     self.assertEqual(result['qemu']['devices']['usb'],declaration['usb'])
                     self.assertIs(result['qemu']['devices']['i8042'],i8042)
@@ -147,6 +149,9 @@ class USBRunnerTests(unittest.TestCase):
                     self.assertEqual(result['image']['sha256'],runner.sha(fixture.image))
                     self.assertEqual(result['stimulus']['observed'][0]['events'],fixture.case['actions'][0]['batches'][0]['events'])
                     self.assertFalse((directory/'run.qcow2').exists())
+                    self.assertEqual(result['input_pacing']['batches'],6)
+                    self.assertEqual(len(result['input_pacing']['waits_ms']),4)
+                    self.assertTrue(all(ms>=150 for ms in result['input_pacing']['waits_ms']))
                 for omitted in range(5):
                     missing=[line for i,line in enumerate(self.usb_lines(controller)) if i!=omitted]
                     fixture.case['actions']=[]
@@ -155,6 +160,121 @@ class USBRunnerTests(unittest.TestCase):
                     self.assertEqual(result['outcome'],'fail')
                     self.assertIn('missing expected serial pattern',result['reason'])
         finally:fixture.tearDown()
+
+    def test_usb_profile_splits_signed_axes_and_preserves_totals_across_repeats(self):
+        from test_runner import RunnerTests
+        fixture=RunnerTests();fixture.setUp()
+        try:
+            fixture.case['expected']['predicates'][0]['where']['tick']='10000'
+            fixture.profile['usb']=[{'controller':'ohci','devices':['mouse']}]
+            fixture.case['timeout']=5
+            fixture.case['actions']=[{'type':'input','after':{'event':'ARM'},'repeat':2,'batches':[
+                {'events':[{'type':'rel','data':{'axis':'x','value':-300}},
+                           {'type':'rel','data':{'axis':'y','value':128}}],'pause_ms':10},
+                {'events':[{'type':'btn','data':{'button':'left','down':True}}],'pause_ms':10},
+                {'events':[{'type':'btn','data':{'button':'left','down':False}}],'pause_ms':10}]}]
+            result,directory=fixture.run_fake(records=[dict(event='BEGIN'),
+                dict(event='DATA',case='gate',motion='7',buttons='4'),dict(event='ARM')],
+                consume_input=True,input_motion=7,input_buttons=4,finish_after_input=10,
+                after_input=[dict(event='DATA',tick='10000'),dict(event='END',status='PASS')])
+            self.assertEqual(result['outcome'],'pass',result['reason'])
+            events=[e for b in result['stimulus']['observed'] for e in b['events'] if e['type']=='rel']
+            self.assertTrue(all(abs(e['data']['value'])<=127 for e in events))
+            for axis,total in [('x',-600),('y',256)]:
+                self.assertEqual(sum(e['data']['value'] for e in events if e['data']['axis']==axis),total)
+            self.assertEqual(result['input_pacing']['batches'],10)
+            self.assertEqual(len(result['input_pacing']['waits_ms']),10)
+            self.assertEqual(json.loads((directory/'result.json').read_text())['input_pacing'],result['input_pacing'])
+        finally:fixture.tearDown()
+
+    def test_ps2_and_non_mouse_usb_keep_original_requests_and_timing(self):
+        from test_runner import RunnerTests
+        fixture=RunnerTests();fixture.setUp()
+        try:
+            fixture.case['actions']=runner.desktop_stimulus()
+            for usb in ([],[{'controller':'uhci','devices':['kbd','tablet']}],
+                        [{'controller':'uhci','devices':['mouse']}]):
+                fixture.profile['usb']=usb
+                if usb and usb[0]['devices']==['mouse']:fixture.case['usb']=[]
+                result,_=fixture.run_fake(records=[dict(event='BEGIN'),dict(event='ARM',action='post_fault_input')],
+                    finish_after_input=5,after_input=[dict(event='DATA',tick='10000'),dict(event='END',status='PASS')])
+                self.assertEqual(result['outcome'],'pass',result['reason'])
+                self.assertNotIn('input_pacing',result)
+                self.assertEqual([b['events'] for b in result['stimulus']['observed']],
+                                 [b['events'] for b in fixture.case['actions'][0]['batches']])
+                sent=result['stimulus']['observed']
+                self.assertTrue(all(b['host_monotonic']-a['host_monotonic']>=.05 for a,b in zip(sent,sent[1:])))
+        finally:fixture.tearDown()
+
+    def test_usb_consumption_timeout_names_stalled_batch_and_missing_baseline(self):
+        from test_runner import RunnerTests
+        fixture=RunnerTests();fixture.setUp()
+        try:
+            fixture.profile['usb']=[{'controller':'uhci','devices':['mouse']}]
+            fixture.case['actions']=runner.desktop_stimulus()
+            for baseline in (True,False):
+                records=[dict(event='BEGIN'),dict(event='ARM',action='post_fault_input')]
+                if baseline:records.append(dict(event='DATA',case='gate',motion='0',buttons='0'))
+                with patch.object(runner.Actions,'USB_CONSUMPTION_TIMEOUT',.2):
+                    result,_=fixture.run_fake(records=records,consume_input=True,stall_input=3)
+                self.assertEqual(result['outcome'],'fail')
+                self.assertIn('USB input consumption stalled action=0 batch=2 repeat=0 step=0',result['reason'])
+                self.assertEqual(result['input_pacing']['batches'],3 if baseline else 2)
+                self.assertEqual(result['input_pacing']['waits_ms'],[])
+                self.assertTrue(result['cleanup']['clean'])
+        finally:fixture.tearDown()
+
+    def test_raw_input_counters_pace_the_final_batch(self):
+        from test_runner import RunnerTests
+        fixture=RunnerTests();fixture.setUp()
+        try:
+            fixture.profile['usb']=[{'controller':'uhci','devices':['mouse']}]
+            fixture.case['actions']=[{'type':'input','after':{'event':'ARM'},'batches':[
+                {'events':[{'type':'rel','data':{'axis':'x','value':127}},
+                           {'type':'rel','data':{'axis':'y','value':-127}}],'pause_ms':10}]}]
+            result,_=fixture.run_fake(records=[dict(event='BEGIN'),'[gate] motion=0 buttons=0',dict(event='ARM')],
+                consume_input=True,raw_input_counters=True,finish_after_input=1,
+                after_input=[dict(event='DATA',tick='10000'),dict(event='END',status='PASS')])
+            self.assertEqual(result['outcome'],'pass',result['reason'])
+            self.assertEqual(result['input_pacing']['batches'],1)
+            self.assertEqual(len(result['input_pacing']['waits_ms']),1)
+        finally:fixture.tearDown()
+
+    def test_barrier_needs_both_axes_and_fresh_counters_ignores_application_bytes(self):
+        from types import SimpleNamespace
+        parser=SimpleNamespace(records=[dict(event='ARM',seq='000001')])
+        actions=runner.Actions([{'type':'input','after':{'event':'ARM'},'batches':[
+            {'events':[{'type':'rel','data':{'axis':'x','value':127}},
+                       {'type':'rel','data':{'axis':'y','value':-127}}],'pause_ms':10}]}],
+            {'usb':[{'controller':'uhci','devices':['mouse']}]})
+        actions.observe(b'[gate] motion=9 buttons=2\n',None)
+        actions.step(parser,SimpleNamespace(input_events=lambda events:None),1)
+        self.assertFalse(actions.complete)
+        self.assertFalse(actions.wait_consumption(parser,1.1))
+        actions.observe(b'',dict(event='DATA',group='app',case='gate',motion='11',buttons='2'))
+        self.assertFalse(actions.wait_consumption(parser,1.2))
+        for line in (b'prefix [input] motion=11 buttons=2\n',b'[gate] motion=11 buttons=2 motion=11\n'):
+            actions.observe(line,None)
+            self.assertFalse(actions.wait_consumption(parser,1.3))
+        actions.observe(b'[input] motion=10 buttons=2\n',None)
+        self.assertFalse(actions.wait_consumption(parser,1.4))
+        actions.observe(b'[input] motion=11 buttons=2\n',None)
+        self.assertTrue(actions.wait_consumption(parser,1.5))
+        self.assertTrue(actions.complete)
+        self.assertEqual(actions.input_pacing['waits_ms'],[500])
+
+    def test_final_batch_stall_refuses_after_action_index_advanced(self):
+        from types import SimpleNamespace
+        parser=SimpleNamespace(records=[dict(event='ARM',seq='000001')])
+        actions=runner.Actions([{'type':'input','after':{'event':'ARM'},'batches':[
+            {'events':[{'type':'btn','data':{'button':'left','down':True}}],'pause_ms':10}]}],
+            {'usb':[{'controller':'uhci','devices':['mouse']}]})
+        actions.observe(b'[gate] motion=0 buttons=0\n',None)
+        actions.step(parser,SimpleNamespace(input_events=lambda events:None),1)
+        self.assertEqual(actions.index,1)
+        self.assertFalse(actions.complete)
+        with self.assertRaisesRegex(res.Refusal,'stalled action=0 batch=0 repeat=0 step=0'):
+            actions.step(parser,None,11)
 
     def test_serial_schema_and_anchoring(self):
         for patterns in (None,'x',[None],['unanchored'],['^['],['^\u00e9']):

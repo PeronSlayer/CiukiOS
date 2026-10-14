@@ -163,6 +163,50 @@ research are recorded in [F1 acceptance](f1-acceptance.md#f1-28-hardware-sweeps)
 the current loader's inability to combine safe selection with a hardware probe
 is documented in [build and run](../build-and-run.md#operator-safe-mode-boot-after-a-sweep).
 
+### USB relative-input consumption (runner-03)
+
+Resolve input topology with the existing profile/case override rules. When it
+contains a USB `mouse`, retain declared pauses and additionally wait for guest
+consumption after every nonzero relative step and button edge. Split relative
+axis pairs into requests whose individual deltas are at most 127 units; integer
+remainders preserve each axis total and signs. Keep PS/2 and USB keyboard/tablet
+only cases on their existing schedule. The action remains incomplete until its
+last pointer batch has been consumed, including repeated actions.
+
+Consumption requires a counter baseline and a later observation reaching that
+baseline plus the number of nonzero axes (`motion`) and button edges (`buttons`)
+sent in the request. Accepted sources are controller DATA records with
+`case=gate`, `case=native-desktop`, `case=interaction` or `group=input`, and
+anchored kernel `[input]`/`[gate]` lines containing both cumulative counters.
+Application frames cannot acknowledge a batch. A missing baseline or stalled
+batch refuses after 10 host monotonic seconds, naming action, batch, repeat
+and split step; the case deadline remains an independent outer bound.
+`result.json` records `input_pacing: {batches, waits_ms}`: the number of actual
+QMP input requests and a list of elapsed milliseconds for completed consumption
+waits. Declared stimulus hashes remain unchanged; observed stimulus records
+retain original batch indices and include the split step.
+
+Research checked against the repository on 2026-10-14:
+[QMP input-send-event](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event)
+injects events without a guest-consumption acknowledgement.
+[QEMU 11 HID source](https://github.com/qemu/qemu/blob/v11.0.0/hw/input/hid.c)
+merges adjacent pending pointer movements with matching buttons in
+`hid_pointer_sync`, and `hid_pointer_poll` drains signed 127-unit chunks.
+[USB HID 1.11, Appendix B](https://www.usb.org/sites/default/files/hid1_11.pdf)
+defines boot mouse relative axes in the -127..127 range. Repository
+`grants.c:desktop_input_event` maps each nonzero axis to a separate public motion
+event; `desktop.c:gate_input` counts these consumed events and button edges.
+Therefore both axes of an injected pair must be observed before advancing.
+
+Integration dependency: this checkout's `f2_probes_desktop.c:native_report`
+validates and stores intermediate gate counters but does not emit them to
+serial. `core/syscall.c:sys_probe_report` returns after that hook consumes the
+report. Only the final `case=interaction stage=after` record exposes those
+counters. The lead must expose the validated intermediate counters before the
+live USB suite can progress with this barrier; absent them the runner refuses
+instead of treating QMP acceptance as consumption. Host fake-QEMU tests supply
+the required intermediate records and do not qualify the guest image.
+
 ## Migration
 
 The pre-cleanup test scripts were archived in
