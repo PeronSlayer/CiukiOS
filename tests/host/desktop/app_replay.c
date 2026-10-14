@@ -66,6 +66,11 @@
 #include "gate.h"
 #include "fake_vfs.h"
 #include "../../../apps/ciuknote/doc.h"
+/* f4-18: desktop.c saves the master volume preference through libreg (sound_storage.c);
+ * the replay exercises the application contracts, so the harness supplies the hook. */
+int master_preference_save(const char *directory, unsigned left, unsigned right, unsigned mute)
+{ (void)directory; (void)left; (void)right; (void)mute; return 0; }
+
 
 int desktop_main(int, char **);
 int files_main(int, char **);
