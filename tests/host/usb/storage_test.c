@@ -30,6 +30,7 @@ void klog(const char *fmt,...)
 }
 /* usb_attach is intentionally not used by this packet-level peripheral model;
  * the register/DMA engines have their own production suite. */
+void usb_hid_poll(struct usb_device *d,struct usb_hid *h) { (void)d;(void)h; }
 void usb_hid_release(struct usb_device *d,struct usb_hid *h) { (void)d;(void)h; }
 int registry_quarantine(int h,gen_t g) { (void)h;(void)g;assert(!"unexpected host quarantine");return 0; }
 const struct usb_hc_ops usb_ohci_ops={0};
@@ -234,7 +235,7 @@ static void use_uhci(void)
 static void cleanup(void)
 {storage_destroy(storage_get());fs_lock_destroy(&m.h.transfer_lock);assert(!munmap(m.image,m.bytes));if(m.second_image)assert(!munmap(m.second_image,m.bytes));}
 static void attach(void)
-{fs_lock_take(&m.h.transfer_lock);assert(!usb_storage_attach(device()));fs_lock_drop(&m.h.transfer_lock);}
+{usb_host_take(&m.h);assert(!usb_storage_attach(device()));usb_host_drop(&m.h);}
 static void mount_device(void) {attach();usb_storage_service(&m.h);assert(storage_get()->vfs.volumes[4]);}
 static unsigned clean_flag(void)
 {
@@ -323,7 +324,7 @@ static void readonly(const char *path)
     for(unsigned i=0;i<fats;i++) {uint8_t *flag=m.image+(reserved+i*fsz)*512+2;fs_wr16(flag,fs_rd16(flag)&~0x8000u);}
     mount_device();assert(storage_get()->volumes[4].fat.readonly && !m.writes);
     assert(storage_enable_write(storage_get(),4)==-FS_EROFS && !m.writes);cleanup();
-    setup(path,false);m.sector_size=4096;fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    setup(path,false);m.sector_size=4096;usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(!device()->storage.online && !m.writes);cleanup();
     puts("PASS USB write admission: unsupported flush, protected/dirty FAT without writes/recovery, non-512 sectors rejected");
 }
@@ -346,11 +347,11 @@ static void uhci_transport(const char *path)
         assert(m.commands==5 && device()->storage.online && !m.resets);cleanup();
     }
     setup(path,false);use_uhci();m.inquiry_bytes=4;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(block()->quarantined && m.commands==1 && !m.writes);
     assert(strstr(records,"reason=short_inquiry") && strstr(records,"status=0 residue=32"));cleanup();
     setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     struct usb_storage_trace *t=&device()->storage.trace;
     assert(t->tag==2 && !strcmp(t->stage,"data") && t->expected==36 && !t->actual);
     assert(t->result==-USB_ETIMEDOUT && t->packet.result==-USB_ETIMEDOUT && t->packet.actual==-1);
@@ -367,16 +368,16 @@ static void uhci_transport(const char *path)
     assert(strstr(records,"stall addr=1 reason=data tag=1") && strstr(records,"stage=data expected=36 actual=0 result=-32"));
     assert(strstr(records,"csw_tag=1 status=1 residue=36"));cleanup();
     setup(path,false);use_uhci();m.data_babble=true;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(block()->quarantined && m.commands==1 && m.resets==1 && m.clear_in==1 && m.clear_out==1);
     assert(device()->storage.trace.packet.status&1u<<20);
     assert(device()->storage.trace.result==-USB_EIO && !strstr(records,"stall addr="));cleanup();
     setup(path,false);use_uhci();m.data_stall=true;m.clear_fail=true;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(block()->quarantined && m.commands==1 && m.resets==1);
     assert(strstr(records,"reason=data_clear_halt") && device()->storage.trace.packet.status&1u<<22);cleanup();
     setup(path,false);use_uhci();m.bad_tag=true;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(strstr(records,"stage=csw expected=13 actual=13") && strstr(records,"csw_tag=2 status=0 residue=0"));
     assert(device()->storage.trace.packet.toggle==1 && m.commands==1 && m.resets==1);cleanup();
     setup(path,false);use_uhci();attach();m.csw_stall=true;uint8_t readback[512];
@@ -406,15 +407,15 @@ static void attach_tolerance(const char *path)
     /* A persistent slow first response has one retry, one first-fault
      * snapshot and terminal quarantine naming the failing stage. */
     setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(m.inquiries==2 && block()->quarantined && !m.writes);complete_fault_record();
     assert(strstr(records,"quarantine addr=1 reason=data_transfer stage=data"));cleanup();
     setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;m.reset_fail=true;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(m.inquiries==1 && m.resets==1 && !m.clear_in && !m.clear_out && block()->quarantined);
     complete_fault_record();assert(strstr(records,"quarantine addr=1 reason=reset_recovery stage=data"));cleanup();
     setup(path,false);use_uhci();m.data_crc=true;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(m.inquiries==1 && block()->quarantined && (device()->storage.trace.packet.status&(1u<<18)));
     complete_fault_record();assert(!strstr(records,"stall addr="));cleanup();
     for(unsigned mode=0;mode<3;mode++) {
@@ -433,12 +434,12 @@ static void attach_tolerance(const char *path)
     }
     for(unsigned bytes=0;bytes<8;bytes++) {
         setup(path,false);use_uhci();m.capacity_bytes=bytes;
-        fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+        usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
         assert(block()->quarantined && !device()->storage.online && !block()->capacity && !m.modes && !m.writes);
         complete_fault_record();cleanup();
     }
     setup(path,false);use_uhci();m.no_medium=true;m.mode_stall=true;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    usb_host_take(&m.h);assert(usb_storage_attach(device())<0);usb_host_drop(&m.h);
     assert(block()->quarantined && !device()->storage.online && !m.modes && !m.writes);cleanup();
     puts("PASS USB F1-53 attach: one reset-qualified INQUIRY retry, persistent timeout/reset failure/CRC quarantine, optional MODE SENSE STALL, DATA0 recovery, short capacity rejection and readiness/write/flush admission");
 }

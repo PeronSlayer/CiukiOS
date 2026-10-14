@@ -24,6 +24,11 @@
 #define USB_TD 4128u
 #define USB_TAIL 4160u
 #define USB_BUFFER 4352u
+/* Private interrupt slots fit all device/interface records in the same
+ * pinned two-page allocation. Boot reports need at most eight bytes. */
+#define USB_HID_BASE 4608u
+#define USB_HID_STRIDE 48u
+#define USB_HID_LATENCY_LIMIT 20u
 #define USB_PID_SETUP 0x2du
 #define USB_PID_IN 0x69u
 #define USB_PID_OUT 0xe1u
@@ -45,14 +50,6 @@ struct usb_io {
     uint64_t (*now)(void *);
     void (*sleep)(void *, unsigned ms);
 };
-struct usb_hid {
-    uint8_t interface, protocol, endpoint, packet, interval, toggle;
-    uint8_t previous[8], leds;
-    uint8_t report_records, key_records, poll_records;
-    uint16_t repeat_key, report_length;
-    uint64_t next_poll, repeat_at;
-    bool active, wheel;
-};
 /* Snapshot after schedule retirement, before another packet reuses DMA.
  * actual=-1 means no known ACK. Raw TD fields remain useful on errors. */
 struct usb_packet_trace {
@@ -62,6 +59,18 @@ struct usb_packet_trace {
     uint64_t elapsed_ms;
     uint8_t endpoint, pid, toggle;
     bool valid;
+};
+struct usb_hid {
+    uint8_t interface, protocol, endpoint, packet, interval, toggle;
+    uint8_t previous[8], leds;
+    uint8_t report_records, key_records, poll_records, latency_records;
+    uint8_t pipe_state; /* 0 idle, 1 linked, 2 retiring */
+    uint16_t repeat_key, report_length, pipe_frame, retire_frame;
+    uint64_t next_poll, repeat_at, pipe_begin, retire_begin;
+    uint64_t pending_at, observed_at, latency_window, latency_max;
+    unsigned latency_reports;
+    struct usb_packet_trace trace; /* separate from the general/BOT slot */
+    bool active, wheel;
 };
 struct usb_storage_trace {
     struct usb_packet_trace packet;
@@ -96,6 +105,7 @@ struct usb_device {
     struct usb_host *host;
     gen_t generation;
     const char *reason;
+    const char *hid_fault; /* general owner performs hub control/quarantine */
     uint16_t vendor, product;
     uint8_t address, ep0, class_code, root_port, parent, port, hub_ports, config;
     bool present, configured, quarantined, low_speed;
@@ -116,6 +126,10 @@ struct usb_hc_ops {
     int (*packet)(struct usb_device *, unsigned endpoint, unsigned pid,
                   unsigned toggle, void *, unsigned bytes, bool periodic);
     void (*port_ack_changes)(struct usb_host *, unsigned);
+    /* Nonblocking: EAGAIN can mean pending, or a retired NAK (trace.valid).
+     * The caller holds transfer_lock; these callbacks never sleep. */
+    int (*interrupt)(struct usb_device *, struct usb_hid *, void *, unsigned);
+    void (*interrupt_stop)(struct usb_device *, struct usb_hid *);
 };
 struct usb_host {
     struct pci_func pci;
@@ -138,7 +152,7 @@ struct usb_host {
     bool scanned;
     unsigned scan_count;
     uint64_t next_scan, scan_window;
-    fs_lock transfer_lock; /* namespace -> cache -> host; service drops before mount */
+    fs_lock transfer_lock; /* short DMA/state mutex; always free across sleeps */
     struct usb_device devices[USB_DEVICE_MAX];
 };
 extern const struct usb_hc_ops usb_uhci_ops, usb_ohci_ops;
@@ -176,12 +190,19 @@ int usb_control(struct usb_device *, uint8_t type, uint8_t request, uint16_t val
 int usb_enumerate(struct usb_host *, unsigned root, unsigned parent, unsigned port, bool low);
 int usb_parse_config(struct usb_device *, const uint8_t *, unsigned);
 void usb_step(struct usb_host *);
+void usb_host_take(struct usb_host *); /* reserves serialized general/BOT slot */
+void usb_host_drop(struct usb_host *);
+void usb_sleep(struct usb_host *, unsigned); /* caller's reservation survives */
+void usb_hid_service(struct usb_host *); /* mutex held, no general transfers */
 int usb_hub_attach(struct usb_device *);
 void usb_hub_scan(struct usb_device *);
 int usb_hid_attach(struct usb_device *, struct usb_hid *, unsigned report_length);
 int usb_hid_report(struct usb_device *, struct usb_hid *, const uint8_t *, unsigned);
 void usb_hid_poll(struct usb_device *, struct usb_hid *);
 void usb_hid_release(struct usb_device *, struct usb_hid *);
+void usb_hid_outputs(struct usb_device *); /* general owner only */
+int usb_interrupt(struct usb_device *, struct usb_hid *, void *, unsigned);
+void usb_interrupt_stop(struct usb_device *, struct usb_hid *);
 int usb_bulk(struct usb_device *, bool in, void *, unsigned, unsigned *actual);
 int usb_storage_attach(struct usb_device *); /* host lock held */
 void usb_storage_detach(struct usb_device *); /* host lock held, no namespace I/O */

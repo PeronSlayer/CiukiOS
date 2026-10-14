@@ -16,12 +16,18 @@ static int start(struct usb_host *h)
     if (h->io.config_read(h->io.cookie, 4, 2) & 4) return -USB_EIO;
     if (rev & 0x100) usb_write(h, 0x100, 0, 4); /* optional HceControl */
     usb_write(h, 0x14, UINT32_MAX, 4);
-    usb_write(h, 4, 0, 4); h->io.sleep(h->io.cookie, 50);
+    usb_write(h, 4, 0, 4); usb_sleep(h, 50);
     usb_write(h, 8, 1, 4);
     int err = usb_wait_register(h, 8, 4, 1, 0, 100); if (err) return err;
     memset(h->dma, 0, USB_DMA_BYTES);
     words(h, USB_ED)[0] = 1u << 14; /* skipped until a complete TD exists */
-    for (unsigned i = 0; i < 32; i++) words(h, 0)[i] = h->dma_phys + USB_ED;
+    for (unsigned i = 0; i < USB_DEVICE_MAX * USB_HID_MAX; i++) {
+        volatile uint32_t *pipe = words(h, USB_HID_BASE + i * USB_HID_STRIDE);
+        pipe[0] = 1u << 14;
+        pipe[3] = i + 1 < USB_DEVICE_MAX * USB_HID_MAX ?
+            h->dma_phys + USB_HID_BASE + (i + 1) * USB_HID_STRIDE : 0;
+    }
+    for (unsigned i = 0; i < 32; i++) words(h, 0)[i] = h->dma_phys + USB_HID_BASE;
     usb_barrier(); usb_write(h, 0x18, h->dma_phys, 4);
     usb_write(h, 0x20, 0, 4); usb_write(h, 0x28, 0, 4);
     unsigned fi = 11999;
@@ -38,7 +44,7 @@ static int start(struct usb_host *h)
     h->io.config_write(h->io.cookie, 4, h->pci.command | 6u, 2);
     if ((h->io.config_read(h->io.cookie, 4, 2) & 6) != 6) return -USB_EIO;
     usb_write(h, 4, 0x80, 4); /* UsbOperational, schedules still disabled */
-    h->io.sleep(h->io.cookie, ((rh >> 24) & 255) * 2 + 10);
+    usb_sleep(h, ((rh >> 24) & 255) * 2 + 10);
     return usb_retire_frames(h, 0x3c, 4, 0xffff);
 }
 static unsigned status(struct usb_host *h, unsigned port)
@@ -58,13 +64,13 @@ static int reset(struct usb_host *h, unsigned port)
         usb_write(h, off, 0x10000, 4);
         usb_write(h, off, 0x10, 4);
         usb_port_record(h, port, "reset", 0);
-        h->io.sleep(h->io.cookie, 10);
+        usb_sleep(h, 10);
         int err = usb_wait_register(h, off, 4, 0x10010, 0x10000, 100);
         usb_port_record(h, port, "reset", err);
         if (err) return err;
         if (!(status(h, port) & USB_PORT_CONNECTED)) return -USB_EIO;
     }
-    usb_write(h, off, 0x1f0000, 4); h->io.sleep(h->io.cookie, 10);
+    usb_write(h, off, 0x1f0000, 4); usb_sleep(h, 10);
     int err = (status(h, port) & 3) == 3 ? 0 : -USB_EIO;
     usb_port_record(h, port, "enable", err);
     return err;
@@ -95,25 +101,29 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     unsigned mps = bulk ? (pid == USB_PID_IN ? d->storage.in_packet : d->storage.out_packet) : ep ? length : d->ep0;
     if (!mps) mps = 8;
     unsigned head = bulk ? 0x28u : 0x20u, current = bulk ? 0x2cu : 0x24u;
-    memset(h->dma + USB_TAIL, 0, 16);
-    td[0] = (0xfu << 28) | (7u << 21) | ((2u | toggle) << 24) | direction << 19 | (1u << 18);
+    /* USB_TAIL is the shared immutable dummy, zeroed at start. */
+    td[0] = (0xfu << 28) | ((2u | toggle) << 24) | direction << 19 | (1u << 18);
     td[1] = length ? h->dma_phys + USB_BUFFER : 0;
     td[2] = h->dma_phys + USB_TAIL;
     td[3] = length ? h->dma_phys + USB_BUFFER + length - 1 : 0;
     if (pid != USB_PID_IN && length) memcpy(h->dma + USB_BUFFER, data, length);
     ed[0] = d->address | ep << 7 | (d->low_speed ? 1u << 13 : 0) | mps << 16 | (1u << 14);
     ed[1] = h->dma_phys + USB_TAIL; ed[2] = h->dma_phys + USB_TD; ed[3] = 0;
-    words(h, 0x84)[0] = 0; /* old HCCA DoneHead */
+    /* DoneHead is acknowledged by usb_hid_service, independently of BOT. */
     usb_write(h, 0x0c, 0x7f, 4);
     if (!periodic) { usb_write(h, current, 0, 4); usb_write(h, head, h->dma_phys + USB_ED, 4); }
     usb_barrier(); ed[0] &= ~(1u << 14); usb_barrier();
-    usb_write(h, 4, 0x80 | (periodic ? 4 : bulk ? 0x20 : 0x10), 4);
+    usb_write(h, 4, (usb_read(h, 4, 4) & 4u) | 0x80 | (periodic ? 4 : bulk ? 0x20 : 0x10), 4);
     if (!periodic) usb_write(h, 8, bulk ? 4 : 2, 4); /* Bulk/ControlListFilled */
     frame = usb_read(h, 0x3c, 4) & 0xffff;
     uint64_t end = begin + budget;
     unsigned tries = budget + 1;
     int result = -USB_ETIMEDOUT;
     for (unsigned i = 0; i < tries; i++) {
+        if (!h->ready) {
+            trace->frames=trace->poll_frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
+            trace->result=trace->retired=-USB_EIO; return -USB_EIO;
+        }
         unsigned s = usb_read(h, 0x0c, 4);
         unsigned next = usb_read(h, 0x3c, 4) & 0xffff;
         frames += (next - frame) & 0xffff; frame = next;
@@ -132,11 +142,11 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
         }
         if (periodic && frames >= 2) { result = -USB_EAGAIN; break; }
         if (usb_expired(h, end)) break;
-        h->io.sleep(h->io.cookie, 1);
+        usb_sleep(h, 1);
     }
     trace->poll_frames=frames;
     ed[0] |= 1u << 14; usb_barrier();
-    usb_write(h, 4, 0x80, 4);
+    usb_write(h, 4, (usb_read(h, 4, 4) & 4u) | 0x80, 4);
     int retired = usb_retire_frames(h, 0x3c, 4, 0xffff);
     frames += (usb_read(h, 0x3c, 4) - frame) & 0xffff;
     usb_barrier(); trace->status=td[0]; trace->token=ed[0]; trace->frames=frames;
@@ -163,4 +173,8 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     if (result >= 0 && pid == USB_PID_IN && result) memcpy(data, h->dma + USB_BUFFER, (unsigned)result);
     return result;
 }
-const struct usb_hc_ops usb_ohci_ops = {start, status, reset, disable, packet, ack_changes};
+const struct usb_hc_ops usb_ohci_ops = {
+    .start = start, .port_status = status, .port_reset = reset,
+    .port_disable = disable, .packet = packet, .port_ack_changes = ack_changes,
+    .interrupt = usb_interrupt, .interrupt_stop = usb_interrupt_stop,
+};

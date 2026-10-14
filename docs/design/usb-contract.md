@@ -70,17 +70,45 @@ pages become bus addresses; callers' pointers never do. PCI command writes
 are 16-bit and never echo W1C status. Controllers poll with USB interrupt
 enables off; no unqualified IRQ handler or routing is installed.
 
-One P_DEVICE service thread owns enumeration, including address zero. The
-host transfer mutex also serializes synchronous storage callers against HID
-and enumeration; all controller schedule/bounce-buffer access takes it.
-The service sleeps after each bounded poll and each device, keeping IF enabled and permitting scheduler progress. USB does not block the common
-work queue with enumeration. Every transfer uses at most one live packet TD;
-control data stages split at endpoint-zero max packet size. NAK is normal for
+One P_DEVICE service thread owns enumeration, including address zero; a
+second P_DEVICE thread progresses HID without port or filesystem work.
+The host mutex protects short controller/DMA/state operations. A `busy`
+reservation serializes the general control/BOT slot and complete storage
+commands, while every sleep drops the mutex. The owner also progresses
+HID between 1 ms sleep slices. Interrupt pipes have private DMA slots and
+do not wait for the scan's 250 ms deadline, general-slot ownership or
+storage publication. USB does not block the common work queue with
+enumeration. Each control/BOT transfer uses one live packet TD, independently
+of the bounded interrupt TDs; control data stages split at endpoint-zero
+max packet size. NAK is normal for
 interrupt polling, STALL/timeout/protocol errors quarantine the device. Host
 system errors or failed retirement quarantine the controller and its leases.
 No descriptor/buffer reuse until the schedule is unlinked/skipped and two
 hardware frames have elapsed. A stalled frame clock fails closed. DMA and
 claims remain pinned on uncertain retirement; there is no runtime recovery.
+
+F1-52 retains the existing 8 KiB allocation: 64 private interrupt slots at
+offset 4608, 48 bytes each (16-byte QH/ED, TD and boot report buffer). HID
+requests eight keyboard bytes or three/four mouse bytes; OHCI ED MPS remains
+the advertised endpoint maximum. Each pipe has linked/retiring/idle states,
+with two linked frame opportunities and two unlinked frames before DMA reuse.
+NAK leaves the toggle unchanged; a late ACK is decoded once after retirement.
+The host mutex is free throughout waits, even while a general TD remains
+live. OHCI PLE remains enabled during control/bulk service; DI=0 and WDH
+acknowledgement flush done chains before retired TDs are reused. Slots are
+never reassigned after detach. LED requests and quarantine requiring hub
+control execute only through the general owner; unplug/change is checked
+before permanently blocking a port for a deferred HID failure.
+
+Verbose/test boots emit `[usb] hid latency addr=... ms=...` for the first
+20 valid reports per pipe and a maximum for each nonempty one-second window.
+`bound=upper` identifies the last pending TD observation to queue-delivery
+bound; `observed_ms` measures observed completion to delivery. The exact
+ACK frame is unavailable from these TDs. The fixture independently measures
+availability, ACK and production queue timestamps under concurrent bulk and
+scan/reset work. See [F1-52 validation](../validation/f1-52-usb-hid-poll-latency.md)
+for sources, measurements and the distinction between frame and dispatch
+clocks. QEMU and hardware qualification remain required.
 
 ## Enumeration, hubs and input
 

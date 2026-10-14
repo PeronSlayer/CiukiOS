@@ -22,7 +22,13 @@ static int start(struct usb_host *h)
     err = usb_wait_register(h, 0, 2, 2, 0, 100); if (err) return err;
     memset(h->dma, 0, USB_DMA_BYTES);
     volatile uint32_t *qh = words(h, USB_ED);
-    qh[0] = qh[1] = 1;
+    qh[0] = (h->dma_phys + USB_HID_BASE) | 2; qh[1] = 1;
+    for (unsigned i = 0; i < USB_DEVICE_MAX * USB_HID_MAX; i++) {
+        volatile uint32_t *pipe = words(h, USB_HID_BASE + i * USB_HID_STRIDE);
+        pipe[0] = i + 1 < USB_DEVICE_MAX * USB_HID_MAX ?
+            (h->dma_phys + USB_HID_BASE + (i + 1) * USB_HID_STRIDE) | 2 : 1;
+        pipe[1] = 1;
+    }
     for (unsigned i = 0; i < 1024; i++) words(h, 0)[i] = (h->dma_phys + USB_ED) | 2;
     usb_barrier();
     usb_write(h, 8, h->dma_phys, 4); usb_write(h, 6, 0, 2);
@@ -61,10 +67,10 @@ static int reset(struct usb_host *h, unsigned port)
     if (port >= h->ports) return -EINVAL;
     port_write(h, port, 0x200, 4);
     usb_port_record(h, port, "reset", 0);
-    h->io.sleep(h->io.cookie, 50);
+    usb_sleep(h, 50);
     port_write(h, port, 0, 0x200);
     usb_port_record(h, port, "reset", 0);
-    h->io.sleep(h->io.cookie, 10);
+    usb_sleep(h, 10);
     port_write(h, port, 4, 0);
     int err = usb_wait_register(h, 0x10 + 2 * port, 2, 5, 5, 100);
     usb_port_record(h, port, "enable", err);
@@ -100,6 +106,10 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
     unsigned tries = budget + 1;
     int result = -USB_ETIMEDOUT;
     for (unsigned i = 0; i < tries; i++) {
+        if (!h->ready) {
+            trace->frames=trace->poll_frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
+            trace->result=trace->retired=-USB_EIO; return -USB_EIO;
+        }
         unsigned s = usb_read(h, 2, 2);
         unsigned next = usb_read(h, 6, 2) & 0x7ff;
         frames += (next - frame) & 0x7ff; frame = next;
@@ -116,7 +126,7 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
         }
         if (periodic && frames >= 2) { result = -USB_EAGAIN; break; }
         if (usb_expired(h, end)) break;
-        h->io.sleep(h->io.cookie, 1);
+        usb_sleep(h, 1);
     }
     trace->poll_frames=frames;
     qh[1] = 1; usb_barrier();
@@ -145,4 +155,8 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
     if (result >= 0 && pid == USB_PID_IN && result) memcpy(data, h->dma + USB_BUFFER, (unsigned)result);
     return result;
 }
-const struct usb_hc_ops usb_uhci_ops = {start, status, reset, disable, packet, ack_changes};
+const struct usb_hc_ops usb_uhci_ops = {
+    .start = start, .port_status = status, .port_reset = reset,
+    .port_disable = disable, .packet = packet, .port_ack_changes = ack_changes,
+    .interrupt = usb_interrupt, .interrupt_stop = usb_interrupt_stop,
+};

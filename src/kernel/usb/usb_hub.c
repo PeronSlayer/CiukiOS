@@ -31,7 +31,7 @@ int usb_hub_attach(struct usb_device *d)
     for (unsigned p = 0; p < d->hub_ports; p++) {
         err = feature(d, p, 8, true); if (err) return err;
     }
-    d->host->io.sleep(d->host->io.cookie, (unsigned)b[5] * 2 + 100);
+    usb_sleep(d->host, (unsigned)b[5] * 2 + 100);
     klog("[usb] hub=%u ports=%u power=%u controller=%s event=ready",
          d->address, d->hub_ports, b[3] & 3, d->host->owner);
     return 0;
@@ -84,7 +84,7 @@ void usb_hub_scan(struct usb_device *d)
             continue;
         }
         if (d->hub_child[p]) continue;
-        h->io.sleep(h->io.cookie, 100);
+        usb_sleep(h, 100);
         err = status(d, p, &s, &c); if (err) goto failed;
         if (!(s & 1)) { record(d, p, s, c, "disconnect", 0); d->hub_status[p] = (uint16_t)s; continue; }
         /* Discard a stale completion before issuing this reset. */
@@ -97,7 +97,7 @@ void usb_hub_scan(struct usb_device *d)
             if (!(s & 1)) break;
             if ((c & 0x10) && !(s & 0x10)) break;
             if (usb_expired(h, end)) break;
-            h->io.sleep(h->io.cookie, 1);
+            usb_sleep(h, 1);
         }
         if (!(s & 1)) { record(d, p, s, c, "disconnect", 0); d->hub_status[p] = (uint16_t)s; continue; }
         if ((s & 3) != 3 || !(c & 0x10) || (s & 0x10)) { err = -USB_ETIMEDOUT; goto failed; }
@@ -105,7 +105,7 @@ void usb_hub_scan(struct usb_device *d)
         record(d, p, s, c, "enable", 0);
         err = feature(d, p, 20, false); if (err) goto failed;
         if (c & 2) { err = feature(d, p, 17, false); if (err) goto failed; }
-        h->io.sleep(h->io.cookie, 10);
+        usb_sleep(h, 10);
         err = usb_enumerate(h, d->root_port, (unsigned)(d - h->devices) + 1, p, !!(s & 0x200));
         if (err < 0) goto failed;
         d->hub_child[p] = (uint8_t)err;

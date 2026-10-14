@@ -223,17 +223,17 @@ static int flush_locked(struct usb_device *d)
 { uint8_t cdb[10]={0x35}; return command(d,cdb,10,false,0,0); }
 static int block_media(struct blkdev *b)
 {
-    struct usb_device *d=b->ctx; fs_lock_take(&d->host->transfer_lock);
+    struct usb_device *d=b->ctx; usb_host_take(d->host);
     int e=ready(d);
     if (e && d->storage.published && !b->quarantined) e=fault(d,"readiness_failed",false);
-    fs_lock_drop(&d->host->transfer_lock); return e;
+    usb_host_drop(d->host); return e;
 }
 static int block_flush(struct blkdev *b)
 {
-    struct usb_device *d=b->ctx; fs_lock_take(&d->host->transfer_lock);
+    struct usb_device *d=b->ctx; usb_host_take(d->host);
     int e=flush_locked(d);
     if (e && !b->quarantined) e=fault(d,"flush_failed",false);
-    fs_lock_drop(&d->host->transfer_lock); return e;
+    usb_host_drop(d->host); return e;
 }
 static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, bool write)
 {
@@ -241,7 +241,7 @@ static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, b
     if (e || !buf || count>BLKDEV_READ_SECTORS || lba>UINT32_MAX || count>UINT32_MAX-lba+1ull)
         return e ? e : -FS_EINVAL;
     struct usb_device *d=b->ctx; struct usb_storage *s=&d->storage;
-    fs_lock_take(&d->host->transfer_lock);
+    usb_host_take(d->host);
     e=blkdev_range(b,lba,count);
     if (!e && (!s->online || s->ejected)) e=-FS_EIO;
     if (!e && write && (!blkdev_durable(b) || s->write_protected)) e=-FS_EROFS;
@@ -255,7 +255,7 @@ static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, b
         e=command(d,cdb,10,!write,buf,count*512u);
         if (e && !b->quarantined) e=fault(d,write ? "write_failed" : "read_failed",false);
     }
-    fs_lock_drop(&d->host->transfer_lock); return e;
+    usb_host_drop(d->host); return e;
 }
 static int block_read(struct blkdev *b,uint64_t lba,uint32_t n,void *buf)
 { return block_io(b,lba,n,buf,false); }
@@ -356,10 +356,10 @@ int usb_storage_eject(struct storage *store, unsigned drive, uint32_t generation
             e=storage_remove_removable_locked(store,b,false);
             if (!e) {
                 struct usb_device *d=b->ctx;
-                fs_lock_take(&d->host->transfer_lock);
+                usb_host_take(d->host);
                 d->storage.ejected=true; d->storage.online=false;
                 b->quarantined=true; d->reason="safely_removed";
-                fs_lock_drop(&d->host->transfer_lock);
+                usb_host_drop(d->host);
                 klog("[usb-storage] safely_removed addr=%u drive=%c generation=%u",
                      d->address,'A'+drive,generation);
             }

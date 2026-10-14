@@ -40,6 +40,48 @@ bool usb_port_record(struct usb_host *h, unsigned port, const char *event, int r
 }
 bool usb_expired(struct usb_host *h, uint64_t deadline)
 { return (int64_t)(h->io.now(h->io.cookie) - deadline) >= 0; }
+void usb_hid_service(struct usb_host *h)
+{
+    if (!h->ready || h->quarantined) return;
+    if (h->pci.prog_if == 0x10 && (usb_read(h, 0x0c, 4) & 2)) {
+        /* All TDs stay pinned. DI=0 writes back each frame's done chain;
+         * acknowledge it without walking/reusing another pipe's TD. */
+        *(volatile uint32_t *)(h->dma + 0x84) = 0;
+        usb_barrier(); usb_write(h, 0x0c, 2, 4);
+    }
+    for (unsigned i = 0; i < h->device_count && h->ready; i++) {
+        struct usb_device *d = &h->devices[i];
+        if (!d->present || !d->configured || d->quarantined || d->hid_fault) continue;
+        for (unsigned j = 0; j < USB_HID_MAX && !d->hid_fault && h->ready; j++)
+            usb_hid_poll(d, &d->hid[j]);
+    }
+}
+void usb_host_take(struct usb_host *h)
+{
+    for (;;) {
+        fs_lock_take(&h->transfer_lock);
+        if (!h->busy) { h->busy = true; return; }
+        usb_hid_service(h);
+        fs_lock_drop(&h->transfer_lock);
+        h->io.sleep(h->io.cookie, 1);
+    }
+}
+void usb_host_drop(struct usb_host *h)
+{ h->busy = false; fs_lock_drop(&h->transfer_lock); }
+void usb_sleep(struct usb_host *h, unsigned ms)
+{
+    /* A reservation protects the general TD/BOT sequence, not the mutex.
+     * Interrupt slots can progress during reset, retirement and bulk NAKs. */
+    while (ms--) {
+        bool reserved = h->busy;
+        if (reserved) fs_lock_drop(&h->transfer_lock);
+        h->io.sleep(h->io.cookie, 1);
+        if (reserved) {
+            fs_lock_take(&h->transfer_lock);
+            usb_hid_service(h);
+        }
+    }
+}
 int usb_wait_register(struct usb_host *h, unsigned at, unsigned width, uint32_t mask, uint32_t want, unsigned ms)
 {
     uint64_t end = h->io.now(h->io.cookie) + ms;
@@ -48,7 +90,7 @@ int usb_wait_register(struct usb_host *h, unsigned at, unsigned width, uint32_t 
         if (v == (width == 2 ? 0xffffu : UINT32_MAX)) return -USB_EIO;
         if ((v & mask) == want) return 0;
         if (usb_expired(h, end)) break;
-        h->io.sleep(h->io.cookie, 1);
+        usb_sleep(h, 1);
     }
     return -USB_ETIMEDOUT;
 }
@@ -56,7 +98,7 @@ int usb_retire_frames(struct usb_host *h, unsigned off, unsigned width, unsigned
 {
     unsigned start = usb_read(h, off, width) & mask;
     for (unsigned i = 0; i < 20; i++) {
-        h->io.sleep(h->io.cookie, 1);
+        usb_sleep(h, 1);
         unsigned elapsed = (usb_read(h, off, width) - start) & mask;
         if (elapsed >= 2 && elapsed < mask / 2) return 0;
     }
@@ -327,7 +369,7 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
     d->ep0 = b[7];
     unsigned addr = h->next_address++;
     err = usb_control(d, 0, 5, (uint16_t)addr, 0, 0, 0); if (err) goto failed;
-    d->address = (uint8_t)addr; h->io.sleep(h->io.cookie, 2);
+    d->address = (uint8_t)addr; usb_sleep(h, 2);
     err = usb_control(d, 0x80, 6, 0x100, 0, b, 18);
     if (err != 18 || b[0] != 18 || b[1] != 1 || b[7] != d->ep0 || !b[17]) goto failed;
     d->class_code = b[4]; d->vendor = (uint16_t)le16(b + 8); d->product = (uint16_t)le16(b + 10);
@@ -360,12 +402,14 @@ failed:
 }
 void usb_step(struct usb_host *h)
 {
-    if (!h || h->busy) return;
-    if (!h->ready || h->quarantined) { usb_storage_service(h); return; }
+    if (!h) return;
     fs_lock_take(&h->transfer_lock);
+    usb_hid_service(h);
+    if (h->busy) { fs_lock_drop(&h->transfer_lock); return; }
+    if (!h->ready || h->quarantined) { fs_lock_drop(&h->transfer_lock); usb_storage_service(h); return; }
     h->busy = true;
     for (unsigned i = 0; i < 3; i++) if (h->claims[i] >= 0 && !registry_valid(h->claims[i], h->claim_gen[i])) {
-        usb_host_quarantine(h, "lease_invalid"); h->busy = false; fs_lock_drop(&h->transfer_lock); return;
+        usb_host_quarantine(h, "lease_invalid"); usb_host_drop(h); return;
     }
     if (usb_expired(h, h->next_scan)) {
         uint64_t tick = h->io.now(h->io.cookie);
@@ -429,7 +473,7 @@ void usb_step(struct usb_host *h)
                     h->root_child[p] = 0;
                 }
             } else if (!h->root_child[p]) {
-                h->io.sleep(h->io.cookie, 100);
+                usb_sleep(h, 100);
                 s = h->ops->port_status(h, p);
                 if (!(s & USB_PORT_CONNECTED)) {
                     usb_port_record(h, p, "disconnect", 0); h->ops->port_ack_changes(h, p);
@@ -452,11 +496,13 @@ void usb_step(struct usb_host *h)
     for (unsigned i = 0; i < h->device_count && h->ready; i++) {
         struct usb_device *d = &h->devices[i];
         if (!d->configured || !d->present || d->quarantined) continue;
-        for (unsigned j = 0; j < USB_HID_MAX && !d->quarantined && h->ready; j++) usb_hid_poll(d, &d->hid[j]);
-        h->io.sleep(h->io.cookie, 1);
+        /* A scan first recognizes disconnect/change. A TD failure caused
+         * by unplug must not permanently block that port's next generation. */
+        if (d->hid_fault) { usb_device_quarantine(d,d->hid_fault); continue; }
+        usb_hid_outputs(d);
     }
-    h->busy = false;
-    fs_lock_drop(&h->transfer_lock);
+    usb_hid_service(h);
+    usb_host_drop(h);
     usb_storage_service(h);
 }
 #ifndef CIUKI_USB_HOST
@@ -501,6 +547,18 @@ static void service(void *arg)
     klog("[usb] worker service=started tick=%llu controllers=%u", native_now(0), host_count);
     for (;;) { for (unsigned i = 0; i < host_count; i++) usb_step(&hosts[i]); task_sleep_ms(1); }
 }
+static void input_service(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        for (unsigned i = 0; i < host_count; i++) {
+            fs_lock_take(&hosts[i].transfer_lock);
+            usb_hid_service(&hosts[i]);
+            fs_lock_drop(&hosts[i].transfer_lock);
+        }
+        task_sleep_ms(1);
+    }
+}
 void usb_init(void)
 {
     static bool initialized; if (initialized) return; initialized = true;
@@ -532,12 +590,14 @@ void usb_init(void)
     }
     if (host_count) {
         struct task *worker = task_create_kernel("usb-host", service, 0, P_DEVICE);
-        if (!worker) {
+        struct task *input = task_create_kernel("usb-hid", input_service, 0, P_DEVICE);
+        if (!worker || !input) {
             for (unsigned i = 0; i < host_count; i++) if (hosts[i].ready)
                 usb_host_quarantine(&hosts[i], "service_thread_failed");
         } else {
             /* Creation leaves T_BLOCKED; publish the dedicated service. */
             task_start(worker);
+            task_start(input);
             klog("[usb] worker service=queued tick=%llu controllers=%u", native_now(0), host_count);
         }
     }
