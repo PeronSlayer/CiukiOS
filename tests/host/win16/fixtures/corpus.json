@@ -1,0 +1,5216 @@
+[
+  {
+    "id": "basic",
+    "kind": "synthetic-ne",
+    "rules": [
+      "header",
+      "segment-code",
+      "segment-data",
+      "startup"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "startup": {
+        "cs": 1,
+        "ip": 0,
+        "ss": 2,
+        "sp": 32,
+        "autodata": 2,
+        "heap": 16,
+        "stack": 16
+      }
+    },
+    "evidence": "host-only; NE execution pending"
+  },
+  {
+    "id": "fixed-demand",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-flags",
+      "fixed-demand"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 0,
+          "allocation": 32,
+          "initialized_size": 32
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 0,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "movable",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-flags",
+      "movable"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 16,
+          "allocation": 32,
+          "initialized_size": 32
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 16,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "preload",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-flags",
+      "preload"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "allocation": 32,
+          "initialized_size": 32
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "discardable",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-flags",
+      "discardable"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 4096,
+          "allocation": 32,
+          "initialized_size": 32
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 4096,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "movable-preload-discard",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-flags",
+      "movable-preload-discard"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 4176,
+          "allocation": 32,
+          "initialized_size": 32
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 4176,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "shared-code",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-flags",
+      "shared-code"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 32,
+          "allocation": 32,
+          "initialized_size": 32
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 32,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "execute-only",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-flags",
+      "execute-only"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 128,
+          "allocation": 32,
+          "initialized_size": 32
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 128,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "priority-discard",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-flags",
+      "priority-discard"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 32768,
+          "allocation": 32,
+          "initialized_size": 32
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 32768,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "read-only-data",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-data",
+      "read-only-data"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 64
+        },
+        {
+          "flags": 129,
+          "allocation": 64
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32
+        },
+        {
+          "flags": 129,
+          "size": 16,
+          "allocation": 64
+        }
+      ]
+    }
+  },
+  {
+    "id": "shared-data",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-data",
+      "shared-data"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 64
+        },
+        {
+          "flags": 33,
+          "allocation": 64
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32
+        },
+        {
+          "flags": 33,
+          "size": 16,
+          "allocation": 64
+        }
+      ]
+    }
+  },
+  {
+    "id": "movable-data",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-data",
+      "movable-data"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 64
+        },
+        {
+          "flags": 17,
+          "allocation": 64
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32
+        },
+        {
+          "flags": 17,
+          "size": 16,
+          "allocation": 64
+        }
+      ]
+    }
+  },
+  {
+    "id": "zero-data",
+    "kind": "synthetic-ne",
+    "rules": [
+      "zero-sector",
+      "zero-tail"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {},
+        {
+          "stored_size": 0,
+          "initialized_size": 0,
+          "allocation": 128
+        }
+      ],
+      "loaded": [
+        {
+          "segment": 2,
+          "offset": 0,
+          "hex": "0000000000000000"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32
+        },
+        {
+          "flags": 1,
+          "size": 0,
+          "allocation": 128,
+          "zero": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "minimum-64k",
+    "kind": "synthetic-ne",
+    "rules": [
+      "64k-minimum"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "allocation": 65536,
+          "stored_size": 32
+        }
+      ],
+      "loaded": [
+        {
+          "segment": 1,
+          "offset": 65532,
+          "hex": "00000000"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "stored-64k",
+    "kind": "synthetic-ne",
+    "rules": [
+      "64k-stored",
+      "last-byte"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "allocation": 65536,
+          "stored_size": 65536,
+          "initialized_size": 65536
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 65536,
+          "allocation": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "shift-zero",
+    "kind": "synthetic-ne",
+    "rules": [
+      "alignment-zero-is-nine"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "alignment": 9,
+      "alignment_stored": 0
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "alignment": 0
+      }
+    }
+  },
+  {
+    "id": "shift-16",
+    "kind": "synthetic-ne",
+    "rules": [
+      "alignment-sector"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "alignment": 16
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "alignment": 16
+      }
+    }
+  },
+  {
+    "id": "iterated-code",
+    "kind": "synthetic-ne",
+    "rules": [
+      "iterated",
+      "expansion"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "initialized_size": 6,
+          "allocation": 32
+        }
+      ],
+      "loaded": [
+        {
+          "segment": 1,
+          "offset": 0,
+          "hex": "9090909090900000"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 8,
+          "size": 32,
+          "allocation": 32,
+          "iterated": [
+            [
+              3,
+              "9090"
+            ]
+          ]
+        }
+      ],
+      "header": {
+        "cs": 1
+      }
+    }
+  },
+  {
+    "id": "iterated-data",
+    "kind": "synthetic-ne",
+    "rules": [
+      "iterated",
+      "expansion"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "initialized_size": 5,
+          "allocation": 16
+        }
+      ],
+      "loaded": [
+        {
+          "segment": 1,
+          "offset": 0,
+          "hex": "414241424300"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 9,
+          "size": 32,
+          "allocation": 16,
+          "iterated": [
+            [
+              2,
+              "4142"
+            ],
+            [
+              1,
+              "43"
+            ]
+          ]
+        }
+      ],
+      "header": {
+        "cs": 0
+      }
+    }
+  },
+  {
+    "id": "iterated-64k",
+    "kind": "synthetic-ne",
+    "rules": [
+      "iterated",
+      "expansion"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "initialized_size": 65536,
+          "allocation": 65536
+        }
+      ],
+      "loaded": [
+        {
+          "segment": 1,
+          "offset": 0,
+          "hex": "41424142"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 8,
+          "size": 32,
+          "allocation": 0,
+          "iterated": [
+            [
+              32768,
+              "4142"
+            ]
+          ]
+        }
+      ],
+      "header": {
+        "cs": 1
+      }
+    }
+  },
+  {
+    "id": "constant-entry",
+    "kind": "synthetic-ne",
+    "rules": [
+      "entry-constant",
+      "equate"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "__AHSHIFT"
+          ],
+          "kind": "constant",
+          "segment": 254,
+          "offset": 3,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "entries": [
+        {
+          "kind": "constant",
+          "offset": 3,
+          "flags": 1
+        }
+      ],
+      "resident": [
+        [
+          "FIXTURE",
+          0
+        ],
+        [
+          "__AHSHIFT",
+          1
+        ]
+      ]
+    }
+  },
+  {
+    "id": "movable-entry",
+    "kind": "synthetic-ne",
+    "rules": [
+      "entry-movable"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "movable",
+          "segment": 1,
+          "offset": 4,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 80,
+          "size": 32,
+          "allocation": 32
+        }
+      ],
+      "entries": [
+        {
+          "kind": "movable",
+          "segment": 1,
+          "offset": 4
+        }
+      ]
+    }
+  },
+  {
+    "id": "unused-entry",
+    "kind": "synthetic-ne",
+    "rules": [
+      "entry-unused",
+      "ordinal-gaps"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 2,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "entries": [
+        {
+          "kind": "unused"
+        },
+        {
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0
+        }
+      ],
+      "resident": [
+        [
+          "FIXTURE",
+          0
+        ],
+        [
+          "Main",
+          2
+        ]
+      ]
+    }
+  },
+  {
+    "id": "nonresident-export",
+    "kind": "synthetic-ne",
+    "rules": [
+      "nonresident-file-offset",
+      "export-alias"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main",
+            "Alias"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "nonresident": [
+        [
+          "Description",
+          0
+        ],
+        [
+          "Alias",
+          1
+        ]
+      ]
+    }
+  },
+  {
+    "id": "case-sensitive-exports",
+    "kind": "synthetic-ne",
+    "rules": [
+      "export-case-sensitive"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main",
+            "main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resident": [
+        [
+          "FIXTURE",
+          0
+        ],
+        [
+          "Main",
+          1
+        ],
+        [
+          "main",
+          1
+        ]
+      ]
+    }
+  },
+  {
+    "id": "no-data-dll",
+    "kind": "synthetic-ne",
+    "rules": [
+      "library",
+      "data-none"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "dll": true,
+      "module_flags": 32768
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "flags": 32768
+      },
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "single-data-dll",
+    "kind": "synthetic-ne",
+    "rules": [
+      "library",
+      "data-single"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "dll": true,
+      "module_flags": 32769
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "flags": 32769
+      }
+    }
+  },
+  {
+    "id": "call-wep-dll",
+    "kind": "synthetic-ne",
+    "rules": [
+      "library",
+      "call-wep",
+      "version"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "module_flags": 49153,
+      "expected_version": 1024
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "flags": 49153,
+        "expected_version": 1024
+      }
+    }
+  },
+  {
+    "id": "resource-only",
+    "kind": "synthetic-ne",
+    "rules": [
+      "resources-only",
+      "no-entry"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [],
+      "segments": [],
+      "resources": [
+        {
+          "type": 10,
+          "name": 1,
+          "size": 3,
+          "flags": 48
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "flags": 32768
+      },
+      "segments": [],
+      "entries": [],
+      "resources": [
+        {
+          "type": 10,
+          "name": 1,
+          "hex": "414243"
+        }
+      ]
+    }
+  },
+  {
+    "id": "resource-integer",
+    "kind": "synthetic-ne",
+    "rules": [
+      "resource-table",
+      "resource-id",
+      "resource-integer"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "resources": [
+        {
+          "type": 10,
+          "name": 1,
+          "size": 5,
+          "flags": 48
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resources": [
+        {
+          "type": 10,
+          "name": 1
+        }
+      ],
+      "resource_shift": 0
+    }
+  },
+  {
+    "id": "resource-name",
+    "kind": "synthetic-ne",
+    "rules": [
+      "resource-table",
+      "resource-id",
+      "resource-name"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "resources": [
+        {
+          "type": "CUSTOM",
+          "name": "Ciuki",
+          "size": 5,
+          "flags": 48
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resources": [
+        {
+          "type": "CUSTOM",
+          "name": "Ciuki"
+        }
+      ],
+      "resource_shift": 0
+    }
+  },
+  {
+    "id": "resource-mixed",
+    "kind": "synthetic-ne",
+    "rules": [
+      "resource-table",
+      "resource-id",
+      "resource-mixed"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "resources": [
+        {
+          "type": 6,
+          "name": "Greeting",
+          "size": 5,
+          "flags": 48
+        },
+        {
+          "type": "CUSTOM",
+          "name": 2,
+          "size": 5,
+          "flags": 48
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resources": [
+        {
+          "type": 6,
+          "name": "Greeting"
+        },
+        {
+          "type": "CUSTOM",
+          "name": 2
+        }
+      ],
+      "resource_shift": 0
+    }
+  },
+  {
+    "id": "resource-aligned",
+    "kind": "synthetic-ne",
+    "rules": [
+      "resource-table",
+      "resource-id",
+      "resource-aligned"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "resources": [
+        {
+          "type": 10,
+          "name": 3,
+          "size": 16,
+          "flags": 48
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resources": [
+        {
+          "type": 10,
+          "name": 3
+        }
+      ],
+      "resource_shift": 4
+    }
+  },
+  {
+    "id": "selfload-module",
+    "kind": "synthetic-ne",
+    "rules": [
+      "selfload-module",
+      "recognised"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "self-loading-unsupported",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "selfload": {
+        "header": "read",
+        "version": 12353,
+        "boot_app": 65552,
+        "load_app_seg": 65568,
+        "exit_proc": 65584
+      }
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "flags": 2050
+      },
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 48,
+          "hex": "4130000010000100200001000000000000000000000000003000010000000000"
+        },
+        {
+          "flags": 65,
+          "size": 16,
+          "allocation": 64
+        }
+      ]
+    }
+  },
+  {
+    "id": "segment-dpl-bit11",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-dpl",
+      "bit-0800-is-not-selfload"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 2112
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 2112,
+          "size": 32,
+          "allocation": 32
+        }
+      ]
+    }
+  },
+  {
+    "id": "import-ordinal",
+    "kind": "synthetic-ne",
+    "rules": [
+      "imports-module",
+      "imports-relocation",
+      "import-ordinal"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [
+        {
+          "dll": "KERNEL",
+          "symbols": [
+            "#91"
+          ],
+          "kind": "static",
+          "module_index": 1
+        }
+      ],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 1,
+              "source": 4,
+              "target1": 1,
+              "target2": 91
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "import-name",
+    "kind": "synthetic-ne",
+    "rules": [
+      "imports-module",
+      "imports-relocation",
+      "import-name"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [
+        {
+          "dll": "KERNEL",
+          "symbols": [
+            "LoadLibrary"
+          ],
+          "kind": "static",
+          "module_index": 1
+        }
+      ],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "import_names": [
+        "LoadLibrary",
+        "NotReferenced"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 2,
+              "source": 4,
+              "target1": 1,
+              "target2": 0,
+              "name": "LoadLibrary"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "module-case",
+    "kind": "synthetic-ne",
+    "rules": [
+      "imports-module",
+      "imports-relocation",
+      "module-case"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [
+        {
+          "dll": "kErNeL",
+          "symbols": [
+            "#91"
+          ],
+          "kind": "static",
+          "module_index": 1
+        }
+      ],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "kErNeL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 1,
+              "source": 4,
+              "target1": 1,
+              "target2": 91
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "unused-module",
+    "kind": "synthetic-ne",
+    "rules": [
+      "imports-module",
+      "imports-relocation",
+      "unused-module"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [
+        {
+          "dll": "KERNEL",
+          "symbols": [],
+          "kind": "static",
+          "module_index": 1
+        }
+      ],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ]
+    }
+  },
+  {
+    "id": "mixed-imports",
+    "kind": "synthetic-ne",
+    "rules": [
+      "imports-name",
+      "imports-ordinal",
+      "multiple-modules"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [
+        {
+          "dll": "KERNEL",
+          "symbols": [
+            "#91",
+            "LoadLibrary"
+          ],
+          "kind": "static",
+          "module_index": 1
+        },
+        {
+          "dll": "USER",
+          "symbols": [
+            "#1"
+          ],
+          "kind": "static",
+          "module_index": 2
+        }
+      ],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL",
+        "USER"
+      ],
+      "import_names": [
+        "LoadLibrary"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 1,
+              "source": 0,
+              "target1": 1,
+              "target2": 91
+            },
+            {
+              "type": 5,
+              "flags": 2,
+              "source": 8,
+              "target1": 1,
+              "name": "LoadLibrary"
+            },
+            {
+              "type": 3,
+              "flags": 1,
+              "source": 16,
+              "target1": 2,
+              "target2": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-byte-chain",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "chain"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "18"
+        },
+        {
+          "segment": 1,
+          "offset": 12,
+          "hex": "18"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 0,
+              "flags": 0,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  12
+                ],
+                [
+                  12,
+                  65535
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-byte-additive",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "additive"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "19"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 0,
+              "flags": 4,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  1
+                ]
+              ],
+              "site_width": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-selector-chain",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "chain"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "8700"
+        },
+        {
+          "segment": 1,
+          "offset": 12,
+          "hex": "8700"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 2,
+              "flags": 0,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  12
+                ],
+                [
+                  12,
+                  65535
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-selector-additive",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "additive"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "8700"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 2,
+              "flags": 4,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  0
+                ]
+              ],
+              "site_width": 2
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-pointer16-chain",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "chain"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "18008700"
+        },
+        {
+          "segment": 1,
+          "offset": 12,
+          "hex": "18008700"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 0,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  12
+                ],
+                [
+                  12,
+                  65535
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-pointer16-additive",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "additive"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "19008700"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 4,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  1
+                ]
+              ],
+              "site_width": 2
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-offset16-chain",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "chain"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "1800"
+        },
+        {
+          "segment": 1,
+          "offset": 12,
+          "hex": "1800"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 5,
+              "flags": 0,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  12
+                ],
+                [
+                  12,
+                  65535
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-offset16-additive",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "additive"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "1900"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 5,
+              "flags": 4,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  1
+                ]
+              ],
+              "site_width": 2
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-pointer32-chain",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "chain"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "180000008700"
+        },
+        {
+          "segment": 1,
+          "offset": 12,
+          "hex": "180000008700"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 11,
+              "flags": 0,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  12
+                ],
+                [
+                  12,
+                  65535
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-pointer32-additive",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "additive"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "190000008700"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 11,
+              "flags": 4,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  1
+                ]
+              ],
+              "site_width": 2
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-offset32-chain",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "chain"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "18000000"
+        },
+        {
+          "segment": 1,
+          "offset": 12,
+          "hex": "18000000"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 13,
+              "flags": 0,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  12
+                ],
+                [
+                  12,
+                  65535
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-offset32-additive",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "additive"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 4,
+          "hex": "19000000"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 64,
+          "allocation": 64,
+          "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 13,
+              "flags": 4,
+              "source": 4,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  4,
+                  1
+                ]
+              ],
+              "site_width": 4
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "internal-movable",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-internal-movable"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "movable",
+          "segment": 1,
+          "offset": 24,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 0,
+          "hex": "18008700"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "source": 0,
+              "target1": 255,
+              "target2": 1
+            }
+          ]
+        }
+      ],
+      "entries": [
+        {
+          "kind": "movable",
+          "segment": 1,
+          "offset": 24
+        }
+      ]
+    }
+  },
+  {
+    "id": "constant-fixup",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-equate"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "constant",
+          "segment": 254,
+          "offset": 3,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 0,
+          "hex": "0300"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 5,
+              "source": 0,
+              "target1": 255,
+              "target2": 1
+            }
+          ]
+        }
+      ],
+      "entries": [
+        {
+          "kind": "constant",
+          "offset": 3
+        }
+      ]
+    }
+  },
+  {
+    "id": "osfixup",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-osfixup",
+      "refusal-policy"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "relocate": "osfixup-policy-unsupported"
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 3,
+              "source": 0,
+              "target1": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "chain-cycle",
+    "kind": "synthetic-ne",
+    "rules": [
+      "chain-malformed",
+      "rollback"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "relocate": "relocation-chain-cycle-or-overlap"
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "source": 0,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  0,
+                  8
+                ],
+                [
+                  8,
+                  0
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "chain-outside",
+    "kind": "synthetic-ne",
+    "rules": [
+      "chain-malformed",
+      "rollback"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "relocate": "relocation-patch-bounds"
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "source": 0,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  0,
+                  200
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "chain-self",
+    "kind": "synthetic-ne",
+    "rules": [
+      "chain-malformed",
+      "rollback"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "relocate": "relocation-chain-cycle-or-overlap"
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "source": 0,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  0,
+                  0
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "additive-selector-nonzero",
+    "kind": "synthetic-ne",
+    "rules": [
+      "additive-selector-policy",
+      "rollback"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "relocate": "additive-selector-nonzero"
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 2,
+              "flags": 4,
+              "source": 0,
+              "target1": 1,
+              "target2": 24,
+              "sites": [
+                [
+                  0,
+                  1
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "bad-target",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-target"
+    ],
+    "expect": {
+      "parse": "target-not-windows",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 54,
+        "value": 3,
+        "width": 1,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "bad-ne-magic",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-ne-magic"
+    ],
+    "expect": {
+      "parse": "ne-signature",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 0,
+        "hex": "5045"
+      }
+    ]
+  },
+  {
+    "id": "bad-alignment",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-alignment"
+    ],
+    "expect": {
+      "parse": "alignment-shift",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 50,
+        "value": 32,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "sector-overflow",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "sector-overflow"
+    ],
+    "expect": {
+      "parse": "sector-offset-overflow",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 50,
+        "value": 31,
+        "width": 2,
+        "table": "header"
+      },
+      {
+        "offset": 0,
+        "value": 3,
+        "width": 2,
+        "table": "segments"
+      }
+    ]
+  },
+  {
+    "id": "segment-count-limit",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "segment-count-limit"
+    ],
+    "expect": {
+      "parse": "parser-work-limit",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 28,
+        "value": 255,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "module-count-limit",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "module-count-limit"
+    ],
+    "expect": {
+      "parse": "parser-work-limit",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 30,
+        "value": 257,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "link-error",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "link-error"
+    ],
+    "expect": {
+      "parse": "module-link-errors",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 12,
+        "value": 8192,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "conflicting-data-model",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "conflicting-data-model"
+    ],
+    "expect": {
+      "parse": "module-data-model-invalid",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 12,
+        "value": 3,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "bad-table-origin",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-table-origin"
+    ],
+    "expect": {
+      "parse": "table-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 34,
+        "value": 0,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "bad-table-order",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-table-order"
+    ],
+    "expect": {
+      "parse": "table-order",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 40,
+        "value": 64,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "bad-entry-terminator",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-entry-terminator"
+    ],
+    "expect": {
+      "parse": "entry-table-terminator",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 6,
+        "value": 5,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "bad-entry-segment",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-entry-segment"
+    ],
+    "expect": {
+      "parse": "entry-segment-index",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 1,
+        "value": 3,
+        "width": 1,
+        "table": "entries"
+      }
+    ]
+  },
+  {
+    "id": "bad-entry-offset",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-entry-offset"
+    ],
+    "expect": {
+      "parse": "entry-offset-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 3,
+        "value": 32,
+        "width": 2,
+        "table": "entries"
+      }
+    ]
+  },
+  {
+    "id": "bad-export-ordinal",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-export-ordinal"
+    ],
+    "expect": {
+      "parse": "name-entry-ordinal",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 16,
+        "value": 2,
+        "width": 2,
+        "table": "resident"
+      }
+    ]
+  },
+  {
+    "id": "bad-startup-code",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-startup-code"
+    ],
+    "expect": {
+      "parse": "startup-segment-or-offset",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 22,
+        "value": 2,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "bad-startup-stack",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-startup-stack"
+    ],
+    "expect": {
+      "parse": "startup-segment-or-offset",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 24,
+        "value": 65,
+        "width": 2,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "bad-nonresident-offset",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-nonresident-offset"
+    ],
+    "expect": {
+      "parse": "table-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 44,
+        "value": 4294967295,
+        "width": 4,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "segment-32bit",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "segment-32bit"
+    ],
+    "expect": {
+      "parse": "segment-32bit-unsupported",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 4,
+        "value": 8256,
+        "width": 2,
+        "table": "segments"
+      }
+    ]
+  },
+  {
+    "id": "segment-payload-overlap",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "segment-payload-overlap"
+    ],
+    "expect": {
+      "parse": "table-or-payload-overlap",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 8,
+        "value": 64,
+        "width": 2,
+        "table": "segments"
+      }
+    ]
+  },
+  {
+    "id": "segment-file-outside",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "segment-file-outside"
+    ],
+    "expect": {
+      "parse": "segment-file-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 0,
+        "value": 65535,
+        "width": 2,
+        "table": "segments"
+      }
+    ]
+  },
+  {
+    "id": "bad-resource-terminator",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "bad-resource-terminator"
+    ],
+    "expect": {
+      "parse": "resource-table-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 2,
+        "value": 1,
+        "width": 2,
+        "table": "resources"
+      }
+    ]
+  },
+  {
+    "id": "bad-mz",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "dos-magic"
+    ],
+    "expect": {
+      "parse": "dos-magic",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "table": "header",
+        "offset": -128,
+        "hex": "4e4f"
+      }
+    ]
+  },
+  {
+    "id": "bad-header-offset",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "offset-overflow"
+    ],
+    "expect": {
+      "parse": "ne-header-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": -68,
+        "value": 4294967295,
+        "width": 4,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "truncated-dos",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "truncation"
+    ],
+    "expect": {
+      "parse": "dos-header-truncated",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "truncate": 40
+  },
+  {
+    "id": "truncated-ne",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "truncation"
+    ],
+    "expect": {
+      "parse": "ne-header-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "truncate": 180
+  },
+  {
+    "id": "truncated-segment",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "segment-truncation"
+    ],
+    "expect": {
+      "parse": "segment-file-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "truncate": 1030,
+    "mutations": [
+      {
+        "offset": 32,
+        "value": 0
+      },
+      {
+        "offset": 44,
+        "value": 0,
+        "width": 4
+      }
+    ]
+  },
+  {
+    "id": "duplicate-export",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "duplicate-export"
+    ],
+    "expect": {
+      "parse": "duplicate-export-name",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resident": [
+        [
+          "FIXTURE",
+          0
+        ],
+        [
+          "Main",
+          1
+        ],
+        [
+          "Main",
+          1
+        ]
+      ]
+    }
+  },
+  {
+    "id": "late-ordinal-zero",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "ordinal-zero"
+    ],
+    "expect": {
+      "parse": "ordinal-zero-name-position",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resident": [
+        [
+          "FIXTURE",
+          0
+        ],
+        [
+          "Main",
+          0
+        ]
+      ]
+    }
+  },
+  {
+    "id": "bad-movable-marker",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "entry-marker"
+    ],
+    "expect": {
+      "parse": "movable-entry-int3f",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "entries": [
+        {
+          "kind": "movable",
+          "segment": 1
+        }
+      ]
+    },
+    "mutations": [
+      {
+        "offset": 3,
+        "value": 0,
+        "width": 2,
+        "table": "entries"
+      }
+    ]
+  },
+  {
+    "id": "iterated-overflow",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "iterated-overflow"
+    ],
+    "expect": {
+      "parse": "iterated-expansion-limit",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 8,
+          "size": 32,
+          "allocation": 32,
+          "iterated": [
+            [
+              65535,
+              "4142"
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "iterated-truncated",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "iterated-record"
+    ],
+    "expect": {
+      "parse": "iterated-record-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 8,
+          "size": 32,
+          "allocation": 32,
+          "hex": "030008004142"
+        }
+      ]
+    }
+  },
+  {
+    "id": "iterated-zero-repeat",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "iterated-record"
+    ],
+    "expect": {
+      "parse": "iterated-record-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 8,
+          "size": 32,
+          "allocation": 32,
+          "iterated": [
+            [
+              0,
+              "41"
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "zero-sector-relocs",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "zero-sector"
+    ],
+    "expect": {
+      "parse": "zero-sector-relocations-or-iteration",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 320,
+          "size": 32,
+          "allocation": 32,
+          "zero": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "unknown-source",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "relocation"
+    ],
+    "expect": {
+      "parse": "relocation-source-type",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 1,
+              "flags": 0,
+              "source": 0,
+              "target1": 1,
+              "target2": 24
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "unknown-flags",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "relocation"
+    ],
+    "expect": {
+      "parse": "relocation-flags",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 8,
+              "source": 0,
+              "target1": 1,
+              "target2": 24
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "bad-internal-target",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "relocation"
+    ],
+    "expect": {
+      "parse": "relocation-target",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 0,
+              "source": 0,
+              "target1": 3,
+              "target2": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "bad-module-index",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "relocation"
+    ],
+    "expect": {
+      "parse": "import-module-index",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 1,
+              "source": 0,
+              "target1": 2,
+              "target2": 91
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "bad-import-name",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "relocation"
+    ],
+    "expect": {
+      "parse": "import-name-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 2,
+              "source": 0,
+              "target1": 1,
+              "target2": 65535
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "bad-import-ordinal",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "relocation"
+    ],
+    "expect": {
+      "parse": "relocation-target",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "flags": 1,
+              "source": 0,
+              "target1": 1,
+              "target2": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "bad-patch-width",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "relocation"
+    ],
+    "expect": {
+      "parse": "relocation-patch-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ],
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 11,
+              "flags": 0,
+              "source": 30,
+              "target1": 1,
+              "target2": 24
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "bad-module-name",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "import-name"
+    ],
+    "expect": {
+      "parse": "import-name-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "modules": [
+        "KERNEL"
+      ]
+    },
+    "mutations": [
+      {
+        "offset": 0,
+        "value": 65535,
+        "width": 2,
+        "table": "modules"
+      }
+    ]
+  },
+  {
+    "id": "bad-resource-name",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "resource-name"
+    ],
+    "expect": {
+      "parse": "resource-name-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resources": [
+        {
+          "type": "CUSTOM",
+          "name": "Ciuki"
+        }
+      ]
+    },
+    "mutations": [
+      {
+        "offset": 2,
+        "value": 1,
+        "width": 2,
+        "table": "resources"
+      }
+    ]
+  },
+  {
+    "id": "bad-resource-file",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "resource-file"
+    ],
+    "expect": {
+      "parse": "resource-file-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resources": [
+        {
+          "type": 10,
+          "name": 1
+        }
+      ]
+    },
+    "mutations": [
+      {
+        "offset": 10,
+        "value": 65535,
+        "width": 2,
+        "table": "resources"
+      }
+    ]
+  },
+  {
+    "id": "duplicate-resource",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "resource-duplicate"
+    ],
+    "expect": {
+      "parse": "duplicate-resource-id",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "resources": [
+        {
+          "type": 10,
+          "name": 1
+        },
+        {
+          "type": 10,
+          "name": 1
+        }
+      ]
+    }
+  },
+  {
+    "id": "selfload-bad-version",
+    "kind": "synthetic-ne",
+    "rules": [
+      "selfload-module",
+      "selfload-version"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "self-loader-version",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "flags": 2050
+      },
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 48,
+          "hex": "4231000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "flags": 65,
+          "size": 16,
+          "allocation": 64
+        }
+      ]
+    }
+  },
+  {
+    "id": "selfload-short-header",
+    "kind": "synthetic-ne",
+    "rules": [
+      "selfload-module",
+      "selfload-header-bounds"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "self-loader-header-bounds",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "flags": 2050
+      },
+      "segments": [
+        {
+          "flags": 64,
+          "size": 8,
+          "allocation": 32,
+          "hex": "4130000000000000"
+        },
+        {
+          "flags": 65,
+          "size": 16,
+          "allocation": 64
+        }
+      ]
+    }
+  },
+  {
+    "id": "module-flags-windows",
+    "kind": "synthetic-ne",
+    "rules": [
+      "module-flags",
+      "recorded-only"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "module_flags": 17402
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "flags": 17402
+      }
+    }
+  },
+  {
+    "id": "segment-dpl-debug",
+    "kind": "synthetic-ne",
+    "rules": [
+      "segment-dpl",
+      "segment-debug",
+      "discard-priority"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "segments": [
+        {
+          "flags": 56912
+        },
+        {
+          "flags": 3137
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 56912,
+          "size": 32,
+          "allocation": 32
+        },
+        {
+          "flags": 3137,
+          "size": 16,
+          "allocation": 64
+        }
+      ]
+    }
+  },
+  {
+    "id": "target-win386",
+    "kind": "synthetic-ne",
+    "rules": [
+      "target-win386"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "target": 4
+      }
+    }
+  },
+  {
+    "id": "target-os2",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "target-os2"
+    ],
+    "expect": {
+      "parse": "target-os2",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 54,
+        "value": 1,
+        "width": 1,
+        "table": "header"
+      }
+    ]
+  },
+  {
+    "id": "image-pe",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "classify-pe"
+    ],
+    "expect": {
+      "parse": "image-is-pe",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 0,
+        "hex": "50450000"
+      }
+    ]
+  },
+  {
+    "id": "image-lx",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "classify-lx"
+    ],
+    "expect": {
+      "parse": "image-is-le-lx",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 0,
+        "hex": "4c58"
+      }
+    ]
+  },
+  {
+    "id": "segment-loader-bits",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "segment-runtime-bits"
+    ],
+    "expect": {
+      "parse": "segment-loader-bits",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": 4,
+        "value": 68,
+        "width": 2,
+        "table": "segments"
+      }
+    ]
+  },
+  {
+    "id": "autodata-overflow",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "autodata-64k"
+    ],
+    "expect": {
+      "parse": "autodata-size-overflow",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "header": {
+        "heap": 65520
+      }
+    }
+  },
+  {
+    "id": "osfixup-watcom",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-osfixup",
+      "additive-osfixup",
+      "refusal-policy"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "relocate": "osfixup-policy-unsupported"
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 5,
+              "flags": 7,
+              "source": 4,
+              "target1": 2,
+              "target2": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "internal-movable-reserved-byte",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-internal-movable",
+      "reserved-byte-ignored"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "movable",
+          "segment": 1,
+          "offset": 24,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 0,
+          "hex": "18008700"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 3,
+              "source": 0,
+              "target1": 511,
+              "target2": 1
+            }
+          ]
+        }
+      ],
+      "entries": [
+        {
+          "kind": "movable",
+          "segment": 1,
+          "offset": 24
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-source-high-bit",
+    "kind": "synthetic-ne",
+    "rules": [
+      "relocation-width",
+      "source-high-bit-masked"
+    ],
+    "expect": {
+      "parse": "ok",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ],
+      "patched": [
+        {
+          "segment": 1,
+          "offset": 2,
+          "hex": "1000"
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 133,
+              "source": 2,
+              "target1": 1,
+              "target2": 16
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "reloc-lx-source-type",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "relocation",
+      "lx-source-code"
+    ],
+    "expect": {
+      "parse": "relocation-source-type",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "model": {
+      "segments": [
+        {
+          "flags": 64,
+          "size": 32,
+          "allocation": 32,
+          "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+          "relocs": [
+            {
+              "type": 6,
+              "source": 0,
+              "target1": 1,
+              "target2": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "dos-only",
+    "kind": "synthetic-ne",
+    "rules": [
+      "malformed",
+      "classify-dos"
+    ],
+    "expect": {
+      "parse": "ne-header-bounds",
+      "load": "ok",
+      "imports": [],
+      "exports": [
+        {
+          "ordinal": 1,
+          "names": [
+            "Main"
+          ],
+          "kind": "fixed",
+          "segment": 1,
+          "offset": 0,
+          "flags": 1
+        }
+      ]
+    },
+    "evidence": "host-only; NE execution pending",
+    "mutations": [
+      {
+        "offset": -68,
+        "value": 0,
+        "width": 4,
+        "table": "header"
+      }
+    ]
+  }
+]

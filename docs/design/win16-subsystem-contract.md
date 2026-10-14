@@ -1239,3 +1239,279 @@ Documentation validation for this review is limited to append-only
 preservation, local-link targets, whitespace and changed-file scope. It is
 not a host-test or execution result. No approval from the lead/owner is
 asserted by appending this independent review.
+
+## f5-19a inputs — 2026-10-15
+
+Directive: [f5-19a](../directives/f5-19a-win16-host-foundations.md). This
+appendix records the host-only foundations delivered by f5-19a and the
+design inputs it prepares for the six P0 handoffs of the cross-review. It
+**proposes**; it does not dispose C01, C02, G01, G02, G04 or G07, freeze an
+ABI, change a kernel/DOS/Win32 limit, or claim NE execution. Every result
+below is Linux host evidence on synthetic NE images; no NE code was run.
+
+### A. Research record and resulting format decisions
+
+Sources inspected for this appendix (fetched 2026-10-15):
+
+| Source | Use |
+| --- | --- |
+| Microsoft Press, [MS-DOS Encyclopedia, Appendix K](https://www.pcjs.org/documents/books/mspl13/msdos/encyclopedia/appendix-k/) (Petzold) | Primary format authority: header offsets/origins, "alignment shift count (0 is equivalent to 9)", segment flag word (bits A–B descriptor privilege level, bit 9 debugging information, C–F discard priority), resource table, iterated records, relocation records, additive versus chained fixups terminated by -1. |
+| Microsoft Windows 3.1 SDK *Programmer's Reference* vol. 4 (indexed excerpts cited by the cross-review) | Still **not readable** here (403/size limit), as in the cross-review. Rows that depend on 3.1-only extensions are marked "reconcile with 3.1 text". |
+| Microsoft KB [Q65128, Windows Int 21h and NetBIOS Support for DPMI](https://jeffpar.github.io/kbarchive/kb/065/Q65128/) (Windows 3.0/3.1 SDK Developer's Notes, PCjs mirror) | Windows applications may call only INT 31h 0200h, 0201h and 0300h–0304h; they must use `GlobalDOSAlloc/GlobalDOSFree`, not DPMI DOS memory; lists INT 20h/25h/26h/27h and INT 21h 00h, FCB functions and 67h as unsupported in protected mode; partial rows 25h/35h, 38h, 44h, 65h. Used by G01 below. |
+| Wine 10.0 [`ne_module.c`](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/ne_module.c), [`ne_segment.c`](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/ne_segment.c), [`task.c`](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/task.c), [`kernel16_private.h`](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/kernel16_private.h), [`winbase16.h`](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/include/wine/winbase16.h), [`user.exe16/message.c`](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/user.exe16/message.c) | Secondary implementation evidence: target 2/4 acceptance, flags Wine clears from files, entry-bundle decoding, relocation switch and its permissive paths, `SELFLOADHEADER`, task/DLL entry registers, `INSTANCEDATA`, Win16↔Win32 message conversions. |
+| Open Watcom [`exeos2.h`](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/watcom/h/exeos2.h), linker [`loados2.c`](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/wl/c/loados2.c), [`obj2supp.c`](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/wl/c/obj2supp.c), [`reloc.h`](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/wl/h/reloc.h), [`exeflat.h`](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/watcom/h/exeflat.h) (upstream `master`, a cross-check, not the fixture pin) | A real NE writer: module/segment flag bits it sets, "since microsoft thinks 0 == 9", two zero bytes written **and counted** after the entry table, `OSFIXUP|ADDITIVE` floating-point records, NE source types mapped through the flat-format codes. |
+
+Decisions implemented in `sdk/win16/ne/` (each refusal has a named rule):
+
+| # | Decision | Basis |
+| --- | --- | --- |
+| F1 | A stored alignment shift of 0 means 9; the plan keeps `alignment_stored` and the effective `alignment`. Resource shifts keep 0. | Appendix K; Watcom linker comment and default 9. **Departure from Wine 10.0**, which shifts by the stored value. Supersedes the uncommitted earlier f5-19a draft that preserved 0. |
+| F2 | Segment flags: `0C00` (DPL), `0200` (debug info, OS/2 "conforming"), discard priority and `0800` are recorded only; `0800` is **not** a per-segment self-load marker. `0006` (loader runtime bits) → `segment-loader-bits`; `2000` → `segment-32bit-unsupported`. | Appendix K figure K-2 and Watcom `SEG_PMODE_DPL`. Wine defines `NE_SEGFLAGS_SELFLOAD 0800` but uses only the module flag. `2000` is 32-bit in Wine/Watcom but a priority bit in Appendix K: conflict kept refused until the 3.1 text or a real file decides. |
+| F3 | Module flags: only `2000` (`module-link-errors`) and data model 3 (`module-data-model-invalid`) are refused. `0004–0080` (instance init, protected-mode only, CPU/EMS hints), `0300` (application type), `4000` (private DLL/CALLWEP) and `other_flags` are recorded. `0800` marks a self-loading module. | Watcom sets `0008` on every Windows image and `4000` for private DLLs; Wine clears `0010/0020` read from files because they are its private meanings. The earlier draft's refusal of `0010/0020` would have rejected real Windows images. |
+| F4 | Targets 2 (Windows) and 4 (Windows 386) are accepted; 1 → `target-os2`; others → `target-not-windows`. `PE\0\0` → `image-is-pe`, `LE`/`LX` → `image-is-le-lx`, missing/short `e_lfanew` → `ne-header-bounds`. The DOS stub is never executed. | Wine `build_module`; contract §5 classification row; f5-05 owns the final MZ/NE/PE routing. |
+| F5 | The entry table and nonresident table must contain their 0 terminator within their stated lengths; the resident table before the next table. | Watcom writes and counts the terminator; Wine scans to the terminator. |
+| F6 | Relocation sources 0 (byte), 2 (selector), 3 (16:16), 5 (offset16), 11 (16:32), 13 (offset32); bit 7 of the source byte is masked; 6/7 (flat-format codes) → `relocation-source-type`. | Wine `apply_relocations` (masks bit 7, notes it occurs); Appendix K's older table lists 1/2/3 only. Watcom's NE writer maps 48-bit/32-bit forms through `exeflat.h` codes 6/7: verify on a real `wlink` fixture before supporting them. |
+| F7 | Internal movable references test only the low byte (`FF`); fixed references require segment 1–254 with a zero reserved byte and an in-range offset. | Wine `(target1 & 0xff) == 0xff`; Appendix K reserved byte 0. |
+| F8 | Chains: read the link before writing, terminate at `FFFF`, refuse revisits/overlaps and out-of-segment links (`relocation-chain-cycle-or-overlap`, `relocation-patch-bounds`); a chained byte fixup needs two readable bytes. Additive records patch once; a nonzero additive selector is refused (`additive-selector-nonzero`). Imports never resolve to a dummy address (`import-unresolved` with module index and ordinal or name). A failed segment leaves its store byte-identical. | Appendix K; contract §5.1; Wine's break-on-invalid and `0xdeadbeef` paths are explicitly not adopted. |
+| F9 | OSFIXUP records (flags 3, and Watcom's `3|4` with the floating-point fixup type in the target words) are decoded and listed by the census; relocation refuses them with `osfixup-policy-unsupported`. | Contract §5.1 requires an explicit x87 policy. Input for the lead: the hardware baseline (i686) always has an x87, so the candidate policy is Windows' coprocessor-present behaviour (patch the emulator `INT 34h–3Dh` sequences to native `WAIT`/`ESC` forms using the period FIxRQQ/FJxRQQ constants), not Wine's ignore-and-continue. The constants must come from a primary SDK/WIN87EM source before implementation. |
+| F10 | Self-loading modules: segment 1 must hold a readable `SELFLOADHEADER` (≥ 12 initialized bytes, ≥ 40 allocated) else `self-loader-header-bounds`; version ≠ `0x3041` ("A0") → `self-loader-version`; otherwise the plan records the raw BootApp, LoadAppSeg and ExitProc words and the load policy refuses with `self-loading-unsupported` until 19b. | Wine `SELFLOADHEADER`; contract §5.2. |
+| F11 | DGROUP: allocation + heap (+ stack when SP = 0) must not exceed 64 KiB (`autodata-size-overflow`); the sum is recorded as `autodata_bytes`. A stored segment length of 0 means 64 KiB. | Appendix K header fields 10h/12h/18h and segment length; Wine instead reads `minsize` bytes for a zero length and does not refuse: **departure** recorded. |
+| F12 | Parser work limits (not runtime quotas): 254 segments, 1,024 entry ordinals, 512 names, 256 module references, 256 resources, 8,192 relocations, 64 KiB per segment and iterated expansion; overflow → `parser-work-limit`. All arithmetic is checked before use. | Contract §5 and G07 bounded work. Census on real media must report a limit hit, never truncate silently. |
+
+### B. Delivered host foundations and evidence
+
+| Item | Path | Content |
+| --- | --- | --- |
+| Model/parser/loader/relocator | `sdk/win16/ne/ne.h`, `ne.c` | Freestanding C17, explicit little-endian decoding, caller-owned storage, borrowed immutable input; 54 named refusal rules plus `ok`; `ne_parse` (structural plan), `ne_load_policy`, `ne_load_segment` (zero-fill, iterated expansion), `ne_relocate_segment` (atomic per segment via a 72 KiB workspace, mock selectors only, resolver callback). Builds for `i686-unknown-elf` with the kernel's freestanding flags and no external symbol. |
+| Fixture generator | `scripts/win16/fixtures.py`, `tests/host/win16/fixtures/corpus.json`, `hashes.json` | 118 synthetic NE cases (67 accepted plans, 51 named refusals) from source-authored models and mutations; manifests carry hand-written expected metadata, loaded bytes and patched bytes. Two builds give identical pinned SHA-256s. |
+| Census | `scripts/win16/census.py`, `tests/host/win16/fixtures/census.txt` | Uses the same C parser; text/JSON per image with provenance binding; committed text census of the corpus. |
+| Tests | `tests/host/win16/` | 21 tests: per-fixture accept/refuse with exact rule and metadata, truncation sweep, relocation on a mock segment store (independent selector layouts, chains, additive, byte edge, constants, unresolved imports, atomic rollback), census versus manifests, CLI, i686 freestanding object check, ASan/UBSan mutation run of parser+loader+relocator over the corpus. |
+
+Format support matrix (G03 input; "plan" means parsed, validated and
+loadable on the mock store, never executed):
+
+| Form | Status |
+| --- | --- |
+| MZ/NE classification, Windows/Win386 targets, PE/LE/LX/OS2/DOS refusals | plan / named refusal |
+| NOAUTODATA, SINGLEDATA, MULTIPLEDATA, library/program, CALLWEP/private DLL flag | plan (instance semantics: 19b) |
+| Segment code/data, fixed/movable, shareable, preload, discardable/priority, read-only/execute-only, DPL, zero-sector, zero tail, 64 KiB length/allocation, iterated | plan |
+| 32-bit segments, loader runtime bits | named refusal |
+| Resources: integer/string type and name, shift, flags, shared data spans, duplicates | plan / named refusal; decoding of individual resource formats: 19b/19c |
+| Resident/nonresident names, ordinal-0 module name/description, case-sensitive export names, duplicate names | plan / named refusal |
+| Entry bundles: unused, fixed, movable (`INT 3Fh` marker), constant (`FE`) | plan |
+| Relocations: internal fixed/movable/constant, imported ordinal/name, additive, chained; byte/selector/16:16/offset16/16:32/offset32 | applied on mock store |
+| OSFIXUP | decoded; application refused pending F9 policy |
+| Self-loading modules | header validated; refused pending 19b |
+| Gangload area, checksum, expected-version semantics, prolog patching, discard/reload, module identity search | recorded or not yet modelled (19b) |
+
+### C. Fixture toolchain pin (pending download)
+
+No Open Watcom is installed on this workstation and none was installed by
+f5-19a. The fixture toolchain is pinned **pending-download** as:
+
+| Field | Value |
+| --- | --- |
+| Release | Open Watcom C/C++ 1.9, Linux x86 installer, GitHub release `ow1.9` of `open-watcom/open-watcom-1.9` |
+| URL | <https://github.com/open-watcom/open-watcom-1.9/releases/download/ow1.9/open-watcom-c-linux-1.9> |
+| Size | 83,959,748 bytes |
+| Upstream MD5 | `960fe6b5cf88769a42949f5fedf62827` (release asset `.md5`) |
+| SHA-256 | `f7484be27eb70028010303fc16bb2acc5a785679567a568b940c28190ddbf3f3` — computed 2026-10-15 by streaming the asset once; its MD5 matched upstream; no bytes were retained |
+| Licence | Sybase Open Watcom Public License 1.0 (to be confirmed from the archive's licence file at download) |
+
+Recipe for the later real-fixture lane (lead or a future directive; not run):
+download into `build/downloads/openwatcom/`, verify SHA-256, install under
+`build/external/openwatcom-1.9/` (inspect the installer's own help for a
+non-interactive mode first), set `WATCOM`, `PATH=$WATCOM/binl:$PATH`,
+`INCLUDE=$WATCOM/h:$WATCOM/h/win`. Build Win16 EXEs with
+`wcc -bt=windows -ml -zW` + `wlink system windows`, DLLs with
+`wcc -bt=windows -ml -zWs -bd` + `wlink system windows_dll`, resources with
+`wrc -bt=windows`. Use normal CRT startup (`cstrtw16`), never a custom entry.
+Build twice and compare SHA-256; inspect each image with the pinned `wdump`
+as the independent NE-aware oracle, then with `scripts/win16/census.py`.
+Real fixtures must confirm F2, F5, F6 (`wlink` source codes for 16:32 and
+offset32) and F9 (Watcom OSFIXUP layout) before those decisions are frozen.
+Sources go under `tests/host/win16/fixtures/`, outputs under `build/host/win16/`.
+
+### D. Census record format for the acceptance set's 16-bit images
+
+`scripts/win16/census.py` prints one record per image. For the acceptance
+set, each setup entry, extracted helper, selected engine and uninstaller is
+bound to §6.2 step 1 with `--workload`, `--archive` (name and full SHA-256),
+`--member`, `--provenance` and `--extraction`. Payload bytes stay in
+`build/downloads/` or owner-local storage; only the text record enters Git.
+Imports are the module reference table joined with relocation references:
+`#n` is the original ordinal, a name is the exact imported-names string.
+
+```text
+FILE SETUP.EXE
+SHA256 <64 hex>
+SIZE <bytes>
+WORKLOAD gate-6
+ARCHIVE <archive name> sha256=<64 hex>
+MEMBER SETUP.EXE
+PROVENANCE <redistribution class>
+EXTRACTION <tool and version>
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.60
+FLAGS 0302 LOAD-POLICY ok
+STARTUP {...}
+SELFLOAD {...}            (self-loading modules only)
+OSFIXUP {...}             (one per floating-point fixup)
+STATIC [1] KERNEL -> #3, #91, LoadLibrary
+EXPORT / SEGMENT / RESOURCE / RELOCATION / NAME  (one JSON object each)
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+```
+
+A refusal prints `REFUSED <rule>` after the binding lines and never an
+empty import list. Until media is inspected, the acceptance rows stay
+absent records, never "no NE imports":
+
+```text
+WORKLOAD gate-6 Worms Armageddon demo (IS5 launcher chain)
+MEMBER SETUP.EXE / _SETUP.DLL / _ISDEL.EXE
+STATUS absent; full SHA-256 unknown (prior research has a prefix only)
+FORMAT NE expected from prior research, not re-inspected
+STATIC unknown
+DYNAMIC not-observed
+WORKLOAD is3-fixture
+STATUS absent; no licensed true-Win16 engine identified (O1)
+```
+
+### E. Design inputs for the P0 handoffs
+
+These are proposals for the lead to dispose with the named owners.
+
+#### E1. C01 — kernel 16-bit execution context (f5-03)
+
+Current conflict: [execution-abi F3-04](execution-abi.md#f3-04-amendment-dpmi-client-entry-path-2026-10-11)
+loads LDTR (GDT index 8) only for a DOS VM worker with an active DPMI client
+and keeps it null elsewhere; Win32 "continue" accepts only the thread's flat
+selectors. Proposal: one per-thread **architecture context kind** chosen by
+the scheduler and trap entry: `native`, `win32-flat`, `win16`, `dosvm`.
+
+| Record / rule | Fields or invariant proposed |
+| --- | --- |
+| Context object | `version`, `size`, opaque `context_id` + `generation`, owning PID/group id + generation, LDT capacity and base handle, authorized worker TID(s), state (`idle`, `running16`, `in-bridge`, `dead`). Created/destroyed only by the group's host after supervisor authorization. |
+| LDT installation | The per-process LDT is loaded into GDT index 8 by the same switch hook as `dosvm_task_switch` when an authorized worker of this context is switched in; LDTR stays null for every other task. Teardown marks the context dead, unloads it on every CPU before freeing it. |
+| Descriptor operations | Allocate/free/set/query a run of `n ≥ 1` entries; types limited to DPL3 16-bit code (readable or execute-only), 16-bit data (read-only/read-write, expand-up/down); base + limit must lie in owned committed user mappings below `0x70000000`, re-checked against page permissions at mutation; no gates/system/32-bit descriptors in this phase. |
+| Continuation (enter/resume) | `cs, ip, ss, sp, ds, es, fs, gs` (16-bit selectors), `eax..edi, ebp` (32-bit, since 16-bit code on a 386 may use operand-size prefixes), `eflags`, `virtual_if`, `fpu_area` reference, `kind` (initial entry, callback, thunk return, fault resume), `return_token`, `stack_id`. Accept only owned LDT selectors with TI=1, RPL=3 (or null for `ds..gs`); code selector 16-bit, `ip`/`sp` within limits; EFLAGS changes limited to arithmetic flags, DF, TF, AC; IOPL 0, VM 0, NT 0. Ordinary Win32 continue stays strict. |
+| Trap routing in `win16` kind | #GP from `INT n` through DPL0 gates (21h, 2Fh, 31h, others) → Win16 adapter (DOS3Call/INT 31h rows of E3); `CLI`/`STI`/`IN`/`OUT` #GP → virtual-IF emulation or named fault; **INT 80h from a 16-bit code selector is refused** (fault record), never a native syscall; #NP/#SS/#GP/#PF/#UD/#DE/#MF → bounded mixed fault record delivered to the host's flat dispatcher on a registered emergency flat stack. `POPF` at CPL3/IOPL0 silently keeps IF: virtual IF is tracked only through trapping instructions and the adapter (DPMI 0900h–0902h semantics), as F3 does. |
+| Fault record | `vector`, `error_code`, faulting `cs:ip`, `ss:sp`, all registers, `cr2`/linear address when relevant, `context_generation`, bridge depth, last continuation token. Invalid resume or stale generation terminates the group's host. |
+| FPU/FS | Lazy FXSAVE per thread as Win32 (W6); on 16→32 entry the bridge restores the TEB `FS` before calling 32-bit code; FS/GS in a 16-bit continuation are LDT selectors or null. |
+
+#### E2. C02 — USER queue model per Win16 task (f5-04/f5-10/19c)
+
+Win16 behaviour to preserve per task: own message queue (`InitApp`,
+`SetMessageQueue`), wake bits and wake mask, posted messages with filters,
+synchronous send chains with replies, `WaitEvent`/`PostEvent` event count,
+input delivered to the task owning the focus window, modal nesting.
+
+| Option | Shape | Cost and consequences |
+| --- | --- | --- |
+| B — one kernel thread per Win16 task, serialized by the group execution token (Wine's historical model) | Each task is an ordinary Win32 thread of `w16host` with its own kernel message queue; only the token holder runs 16-bit code; `GetMessage`/`WaitMessage`/`Yield`/`WaitEvent` release the token at their wait. Sends between tasks use the existing per-thread sent-message path. | Uses the frozen per-thread queue semantics unchanged. Per task: 8 KiB TEB + one kernel stack (16 KiB F2 task stack) + a guarded flat stack (≥ 4 KiB commit) ≈ 28–32 KiB, i.e. ≈ 128 KiB for a 4-task installer group. Needs a token handoff primitive (event or futex) and LDT/context sharing by all task threads of the host (E1 "authorized worker(s)"). |
+| A — one worker with logical queue contexts | USER32/w32srv gain a `queue_context` id per logical task, multiple queues per thread, and a nonblocking wait (`would-block` + wake registration) so the host scheduler can switch tasks. | Saves ≈ 24 KiB per task, but adds a new queue identity to the frozen kernel wait/queue ABI, routes replies to suspended continuations by hand and must re-implement send ancestry per logical task. |
+
+Recommendation for the lead: **B**, because it keeps one queue per kernel
+thread as the parent contract requires and needs only a group token. In
+both options the 16-bit `HTASK`/`HQUEUE` are host-local handles mapped to
+(TID, generation); queue length follows `SetMessageQueue` (Win16 default 8)
+within the Win32 10,000-message cap; a nonyielding task holds the token and
+blocks only its own group (End Task path of C04).
+
+#### E3. G01 — DOS/DPMI address model (F3/f5-04/f5-06/19b)
+
+Rows (a) Windows exports, (b) direct INT 31h, (c) internal mechanism:
+
+| Interface | (a) KERNEL export | (b) INT 31h from NE code | (c) Mechanism |
+| --- | --- | --- | --- |
+| DOS-addressable memory | `GlobalDOSAlloc/GlobalDOSFree` (return paragraph + selector) | 0100h–0102h refused (Q65128: Windows apps must not use them), carry set, AX=8 is the candidate error; reconcile code with DPMI 0.9 | Host DOS arena, options below |
+| Real-mode vectors | — | 0200h/0201h allowed (Q65128) on the group's virtual RM vector table | Companion VM vector table or host emulation |
+| Real-mode calls/callbacks | `DOS3Call`, `NetBIOSCall` | 0300h–0304h allowed (Q65128) | Translated rows first; companion RPC only for census-proven RM code |
+| Descriptors, memory, locks, version | `AllocSelector`, `AllocDStoCSAlias`, `PrestoChangoSelector`, `GlobalAlloc`, `GlobalPageLock` | 0000h–000Ch, 0400h, 0500h–0503h, 0600h–0603h: proposal refuse for Windows-flagged NE (Q65128: KERNEL provides these) unless the census shows a DLL using them; 0800h, 0A00h, 0305h/0306h refused | C01 descriptor operations |
+| Virtual IF | — | 0900h–0902h on the context's virtual IF | E1 |
+| Real-memory selector equates | `__0000H`, `__0040H`, `__A000H`, `__B000H`, `__B800H`, `__C000H`–`__F000H` | — | `__0040H`: read-only synthetic BIOS data alias; video/ROM equates: named refusal or read-only zero page until a census row requires more. No physical mapping. |
+| INT 21h | `DOS3Call` and direct INT 21h | — | f5-06 drive/file services per Q65128 tables; INT 20h/25h/26h/27h, AH=00h, FCB rows and 67h refused as in Windows; 25h/35h set/get the **protected-mode** vectors; 38h/65h return RM pointers that need the RM path |
+
+Address options with numbers (F3 constants from `dosvm.h`/`dpmi_internal.h`
+and the [F3 admission rule](dos-dpmi-contract.md#memory-services-and-admission-at-128-mib)):
+
+| Option | Description | Numbers | Consequence |
+| --- | --- | --- | --- |
+| G01-1 Shared arena | The host reserves a DOS arena section (paragraph-addressed) and creates protected aliases; when a companion exists the same pages back the companion's conventional range at the same paragraphs, so RM identities are stable in both. | Arena ≤ 576 KiB (`0x10000–0x9FFFF`) of the 1 MiB + 64 KiB guest space (`DOSVM_LINEAR_END 0x10FFF0`); companion admission still costs the F3 commitment (≤ 32 MiB resident cap, 32 MiB host headroom, `DOSVM_LIMIT` 4) | Correct for arbitrary RM code; needs an additive F3/f5-04 change (externally backed low pages) and lead review. |
+| G01-2 Host-only arena (proposed default) | Same arena and aliases, no companion: only translated services (INT 21h/DOS3Call via f5-06, register-only APIs per Q65128) touch it; 0300h–0302h to an untranslated interrupt/procedure fail by name. | Reserve 576 KiB below `0x70000000`, commit on demand, charged to the group; no VM admission | Smallest footprint at 128 MiB; covers installers that only use DOS file services; RM code is a named gap. |
+| G01-3 Per-call copies | No stable RM addresses; buffers copied per call schema. | No arena | Breaks programs that keep DOS memory across calls; not recommended. |
+
+Recommendation: G01-2 now, upgrade to G01-1 only on a census-proven RM
+need, measured at 128 MiB. File handles, current directory and DTA are one
+per-task DOS state shared by DOS3Call, direct INT 21h and any companion
+reflection.
+
+#### E4. G02 — startup and callback ABI tables (19b, before assembly)
+
+Program entry (Wine `NE_StartTask` comment; Open Watcom `cstrtw16`
+calls `InitTask` and uses its outputs; reconcile with 3.1 text):
+
+| Register | At NE program entry | After `InitTask` returns |
+| --- | --- | --- |
+| AX | 0 | 1 success, 0 failure |
+| BX | stack size (header 12h) | ES:BX = command tail in the PSP (offset 81h + skipped blanks, 80h if empty) |
+| CX | heap size (header 10h) | stack limit (`INSTANCEDATA.stacktop`) |
+| DX | — | `nCmdShow` |
+| SI | previous instance (0 if none) | previous instance |
+| DI | current instance (DGROUP handle) | current instance |
+| BP | 0 | a 0 word is pushed for the frame chain |
+| DS / ES / SS:SP | DGROUP / PSP selector / DGROUP, top of stack | unchanged DS, ES = PSP |
+
+`INSTANCEDATA` occupies DGROUP offsets 0–0Fh: 0 null word, 2 old SP, 4 old
+SS, 6 local heap, 8 atom table, Ah stack top, Ch stack minimum, Eh stack
+bottom; the linker reserves these 16 bytes. DLL `LibEntry`: CX = heap size,
+DI = instance, DS = DGROUP (if any), ES:SI = command line (0); result in AX
+(nonzero = success). `WEP(int)` is called with `WEP_FREE_DLL` (or
+`WEP_SYSTEM_EXIT`) on the last free, never on forced group teardown.
+Self-loader: BootApp(hModule, hFile) and LoadAppSeg(hModule, hFile, segno),
+Pascal, on a dedicated guarded stack; the loader fills MyAlloc,
+EntryAddrProc and SetOwner in the header (F10).
+
+| Callback/thunk | ABI facts to freeze |
+| --- | --- |
+| Exported far procedure, old prolog | `push ds; pop ax; nop` patched or `mov ax, DGROUP`; `MakeProcInstance` thunk loads AX = instance DS and jumps to the export, which moves AX to DS |
+| 3.1 SS-based prolog (DS loaded from SS, no instance thunk needed) | valid only when DS == SS (applications, not DLLs); reconcile with the SDK vol. 1 excerpt cited by the review |
+| WNDPROC/DLGPROC | Pascal, far, `(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)`, LRESULT in DX:AX |
+| Timer/enum procs | Pascal far; argument lists per API in the typed table |
+| Register-convention exports | listed per entry with input/output registers and flags |
+| Nonlocal exits | `Catch`/`Throw` restore SS:SP/BP/IP/CS/DS saved by `Catch`; every bridge frame crossed is unwound through its token (pins, suspended sends released) |
+
+#### E5. G04 — message conversion matrix skeleton (f5-10/19c)
+
+| Class | Messages (Win16 → Win32) | Rule |
+| --- | --- | --- |
+| Scalar, same layout | `WM_SIZE`, `WM_MOVE`, `WM_CHAR`, `WM_KEYDOWN`, `WM_MOUSEMOVE`, button messages, `WM_CLOSE`, `WM_QUIT` | widen/narrow, sign-extend coordinates |
+| Repacked scalars | `WM_COMMAND` (16: wParam id, lParam = hwnd:code; 32: wParam = code:id, lParam hwnd), `WM_HSCROLL/WM_VSCROLL`, `WM_ACTIVATE`, `WM_MENUSELECT`, `WM_MENUCHAR`, `WM_PARENTNOTIFY`, `WM_CHARTOITEM/WM_VKEYTOITEM`, `WM_MDIACTIVATE`, `WM_MDISETMENU` | per-message pack/unpack, handles mapped |
+| Split/merged | `WM_CTLCOLOR` (16, type in HIWORD(lParam)) ↔ `WM_CTLCOLORMSGBOX…STATIC` (32) | message number changes both ways |
+| Renumbered controls | `EM_*`, `LB_*`, `CB_*`, `BM_*`, `STM_*` (16: `WM_USER+n`) ↔ Win32 numbers | only for windows of those classes; `EM_GETHANDLE/EM_SETHANDLE` carry DS-relative local handles: retained-buffer row |
+| Synchronous pointers | `WM_CREATE/WM_NCCREATE` (`CREATESTRUCT16`), `WM_GETTEXT/WM_SETTEXT`, `WM_GETMINMAXINFO`, `WM_NCCALCSIZE`, `WM_WINDOWPOSCHANGING/CHANGED`, `WM_MEASUREITEM`, `WM_DRAWITEM`, `WM_COMPAREITEM`, `WM_DELETEITEM`, `WM_MDICREATE`, `WM_NEXTMENU`, `WM_WININICHANGE`, `WM_DEVMODECHANGE` | copy-in/convert/copy-back for the call only; never retained |
+| Handle transfer | `WM_ERASEBKGND`/`WM_PAINT` HDC, `WM_SETFONT/WM_GETFONT`, clipboard and `WM_DDE_*` | typed handle maps; DDE uses packed lParam and ownership/ACK/free rules (07B) |
+| Callback | `WM_TIMER` with TIMERPROC, `WM_GETDLGCODE`, subclass round trips | far procedure identity preserved; callback ledger |
+| Private / unknown | `WM_USER+n` and registered messages | same host: scalars and local far pointers under the sender's lifetime; cross-process: scalars only or named refusal |
+
+#### E6. G07 — containment enforcement points
+
+| Point | Enforcement proposed |
+| --- | --- |
+| Group membership | Kernel/supervisor-owned ledger (group id + generation) set at launch; the host cannot add, reparent or kill a PE helper by supplying a PID or token; handoff of a PE child is a supervisor operation with an authenticated request. |
+| Descriptor mutation | C01 validator against current mappings at every mutation; unmap/realloc invalidates aliases (selector reload faults, never stale memory); descriptor reuse waits for in-flight continuations of that generation. |
+| Syscall surface | INT 80h from a 16-bit code selector refused; Win32 services reached only through the flat worker's normal path; every host message to w32srv/desktop treated as untrusted. |
+| Bounded work | Parser limits (F12); relocation visits ≤ segment bytes per record; thunk nesting ≤ a fixed depth (proposal 32, like `DPMI_DEPTH`); message payloads ≤ 64 KiB (parent contract); pins/outstanding RPC capped per group and charged. |
+| Faults | Faults in 16-bit code → host dispatcher; faults in the flat dispatcher/bridge or invalid resume → terminate the host and its NE tasks; cleanup from kernel/supervisor ledgers, never from guest lists. |
+| Hangs | Desktop End Task on host windows independent of the guest (C04); no PING answered for a frozen UI by a helper thread. |
+
+### F. Open points carried forward
+
+- The Windows 3.1 SDK vol. 4 text is still unread here: F2's `2000` bit,
+  the 3.1 relocation table and segment-length-zero wording, and F9's
+  FIxRQQ constants need it or a real Open Watcom/period file.
+- Real `wlink` fixtures (C) must confirm the source codes in F6 and the
+  OSFIXUP layout before 16:32/offset32 or x87 patching is frozen.
+- No original acceptance media was inspected; D's records stay absent.
+- E1–E6 are inputs, not dispositions; f5-03/04/05/10 and F3 owners decide.

@@ -1,0 +1,1329 @@
+# f5-19a synthetic NE census; static host evidence only.
+
+FILE additive-selector-nonzero.ne
+SHA256 02cb435e585348f9718439a8d871d0204cb8463b91601c64674f2b612259704b
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 4, "segment": 1, "source": 0, "source_type": 2, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE autodata-overflow.ne
+SHA256 61a570d23cf832abeb2c3de7a3496497463ba3ccc091b381939c31151877feb9
+SIZE 1088
+REFUSED autodata-size-overflow
+
+FILE bad-alignment.ne
+SHA256 aa663ee06ac4869712e0691f7fbef49dc5d3ee75950f8450ebf241921393dfcd
+SIZE 1088
+REFUSED alignment-shift
+
+FILE bad-entry-offset.ne
+SHA256 20fb2ff192d07f6216b477581ccf86b66068562bf6eb7922e1f776247cb67c68
+SIZE 1088
+REFUSED entry-offset-bounds
+
+FILE bad-entry-segment.ne
+SHA256 0bff36dbd695aa346a1f124a206c30bd60cd8d0bfacf5936f102fdb8fc80a95c
+SIZE 1088
+REFUSED entry-segment-index
+
+FILE bad-entry-terminator.ne
+SHA256 d093f81cfb08a0123bedeb458f9a1f56b5bdade5f62db2e9546c90d88a5e08ed
+SIZE 1088
+REFUSED entry-table-terminator
+
+FILE bad-export-ordinal.ne
+SHA256 024e0b76feff52fe449ccfbaa3c31ea46c407fde1858fcbae8ec94635bb55894
+SIZE 1088
+REFUSED name-entry-ordinal
+
+FILE bad-header-offset.ne
+SHA256 c179a632cd018765d3e55d00a7042230023e89c9dedb049a1b45adadc683e402
+SIZE 1088
+REFUSED ne-header-bounds
+
+FILE bad-import-name.ne
+SHA256 fa0799c824a2f46eb563162ecd0a5755896d963fe1ed4627489b86f457d97859
+SIZE 1088
+REFUSED import-name-bounds
+
+FILE bad-import-ordinal.ne
+SHA256 826b77c4d8029e0c81be5b66c782c2c47d2c1c2acff4fe01635a28232d8a7a41
+SIZE 1088
+REFUSED relocation-target
+
+FILE bad-internal-target.ne
+SHA256 c62f99b3abaae4a8f4627aebd5645cca9a35043d90a96959a080be7343461e9c
+SIZE 1088
+REFUSED relocation-target
+
+FILE bad-module-index.ne
+SHA256 c17ef46e7892da7d5a26369afa5a1be979d3ef1906219d55160321f6ff824d18
+SIZE 1088
+REFUSED import-module-index
+
+FILE bad-module-name.ne
+SHA256 e00ee1790d0d1169fb6dbf1e64d01cb5fd3b7485ae36b1bb0c6243e231b0a066
+SIZE 1088
+REFUSED import-name-bounds
+
+FILE bad-movable-marker.ne
+SHA256 7584c34960ef4a0c0adc2660a09a0896f8585aafe195656d346da2672e370947
+SIZE 1088
+REFUSED movable-entry-int3f
+
+FILE bad-mz.ne
+SHA256 a95a26c4c43b0741a7559dafa98d8380dfdc5e792130465d674f23e1aa2fdfd2
+SIZE 1088
+REFUSED dos-magic
+
+FILE bad-ne-magic.ne
+SHA256 eb46c1a29ede34d7b9f6a6e453af145e4a6af932a98881b9cd19dbe5117866b9
+SIZE 1088
+REFUSED ne-signature
+
+FILE bad-nonresident-offset.ne
+SHA256 345ff95e0320ab366cf12649cfcd9c33f6df12c2d890647d233969cb99bd333d
+SIZE 1088
+REFUSED table-bounds
+
+FILE bad-patch-width.ne
+SHA256 90059fdcbcace9a6a6fbfd36b621bcf3ca2389239b557b648e61cbdfd8ab158a
+SIZE 1088
+REFUSED relocation-patch-bounds
+
+FILE bad-resource-file.ne
+SHA256 e90fc08a311814ed3f125471764a3c2384ee91ee2c3e31a5995160a2bfabf6f9
+SIZE 1093
+REFUSED resource-file-bounds
+
+FILE bad-resource-name.ne
+SHA256 85d05f84f2216a338f53715a1d24dca100c1cf32aac831c6e92293d2e6b5a547
+SIZE 1093
+REFUSED resource-name-bounds
+
+FILE bad-resource-terminator.ne
+SHA256 1e5c70e061647622ce4d79f2de430a792f3c867e7feb867d594450287fc4f170
+SIZE 1088
+REFUSED resource-table-bounds
+
+FILE bad-startup-code.ne
+SHA256 ebc2c3270f2d6c24a1b6ebbe8e93c4fbf5aa14117b911e29804c1decb22cdb7e
+SIZE 1088
+REFUSED startup-segment-or-offset
+
+FILE bad-startup-stack.ne
+SHA256 722c0b7fa27e70bffb9022eeb92fc0c61a49bab0de0939c675d42f6dddd4d412
+SIZE 1088
+REFUSED startup-segment-or-offset
+
+FILE bad-table-order.ne
+SHA256 627c38e797e98770458e98f596ddff91507965eebd02430295a7fb907c9ad4b8
+SIZE 1088
+REFUSED table-order
+
+FILE bad-table-origin.ne
+SHA256 3ba32426e4fad2e66e091a826eb1e929c3fc3cb9df0e5728b6fb074c99f075ab
+SIZE 1088
+REFUSED table-bounds
+
+FILE bad-target.ne
+SHA256 76a6ca039b74c70f3280401ea919310346fb86d9183f169492afb387210b8b95
+SIZE 1088
+REFUSED target-not-windows
+
+FILE basic.ne
+SHA256 ae78c91a9b9617cfab3b6372fee9eb56ee81812e0b923807bc7e957ff563edba
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE call-wep-dll.ne
+SHA256 55ad25e25a46563a512eba10392e181242af8778e37f8bd0f2bf579d46634276
+SIZE 1088
+FORMAT NE i386-compatible-16 DLL
+TARGET Windows EXPECTED 0400 LINKER 5.1
+FLAGS c001 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE case-sensitive-exports.ne
+SHA256 c2efdbeb5ce815541d98a3a504f2b054094cba59395b2b5b5cafbc0dbcd6d4af
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main", "main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": false, "ordinal": 1, "text": "main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE chain-cycle.ne
+SHA256 4fa9782fea9998a0713f1f46ebc7366ba2086c0141c6103e7462759243746b5b
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 0, "segment": 1, "source": 0, "source_type": 3, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE chain-outside.ne
+SHA256 2e2606810d98c21d0d6a47409ebfaccf4980f1d794abb9c54c2562c9330ad675
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 0, "segment": 1, "source": 0, "source_type": 3, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE chain-self.ne
+SHA256 6f45d231f8e8ad2b8971d965d556211a9084793ea6f6affcb773a7647f95de93
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 0, "segment": 1, "source": 0, "source_type": 3, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE conflicting-data-model.ne
+SHA256 c132cc174640068642cfadeafdfbe2ba631a3b3fafb5f8e636dca291585368e4
+SIZE 1088
+REFUSED module-data-model-invalid
+
+FILE constant-entry.ne
+SHA256 127f5af0fcaf04d3e3be6afaab5b1b9811c97e56221801fb42791747274c7de4
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "constant", "names": ["__AHSHIFT"], "offset": 3, "ordinal": 1, "segment": 254}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "__AHSHIFT"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE constant-fixup.ne
+SHA256 ad029602bb3b8f269d83b0d1c932a0961ee962a45c2cb30ccf1d1015f2039edf
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "constant", "names": ["Main"], "offset": 3, "ordinal": 1, "segment": 254}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 0, "segment": 1, "source": 0, "source_type": 5, "target1": 255, "target2": 1}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE discardable.ne
+SHA256 1f2bacab8ded999a1ed52738a6d7779bfd168b26c7095e6379cf6efe58b518f9
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 4096, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE dos-only.ne
+SHA256 0edad4a1502ce8a576c59fe0a9c88718adbf628aa3f625a42c4ad2357458a330
+SIZE 1088
+REFUSED ne-header-bounds
+
+FILE duplicate-export.ne
+SHA256 f48fab56064f06cc857a23a4623c430d1d17c08314e35b810e9a859af42a2699
+SIZE 1088
+REFUSED duplicate-export-name
+
+FILE duplicate-resource.ne
+SHA256 22999aeb15662ecec2697c93feb0857e189f25440326a90e4e3cd8244af0b45f
+SIZE 1098
+REFUSED duplicate-resource-id
+
+FILE execute-only.ne
+SHA256 f9be541073388ef9f52c86bc3cad12f1827f8fd458a3b51fd5048dd83d24cd86
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 128, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE fixed-demand.ne
+SHA256 c154f6c138257b140699bfae376601cf9a6c46eb9b5d4e9567aa443adc538502
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 0, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE image-lx.ne
+SHA256 fdd1e192229252208dc18bf51ea0266645363df41b5998510f6d8baa08b7ee49
+SIZE 1088
+REFUSED image-is-le-lx
+
+FILE image-pe.ne
+SHA256 f80ea336daed2f225696ad0c47608e9fbe0c2738a388b78bbcf9dad84f672a05
+SIZE 1088
+REFUSED image-is-pe
+
+FILE import-name.ne
+SHA256 ba45e350391e5833423983ccaa776f8b5e05da1eeb302f9a177341b9ef16fe89
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+STATIC [1] KERNEL -> LoadLibrary
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 2, "segment": 1, "source": 4, "source_type": 3, "target1": 1, "target2": 8}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE import-ordinal.ne
+SHA256 8ffaf807433ff36e173b0a3dd9ab2fe0364560db8c4dd2a69ec1ba8e54989bcc
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+STATIC [1] KERNEL -> #91
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 1, "segment": 1, "source": 4, "source_type": 3, "target1": 1, "target2": 91}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE internal-movable-reserved-byte.ne
+SHA256 7b571157e45de5b5e717d3abf879b5d4bae4c8804a2c0c097aca9ad3af633b74
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "movable", "names": ["Main"], "offset": 24, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 0, "segment": 1, "source": 0, "source_type": 3, "target1": 511, "target2": 1}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE internal-movable.ne
+SHA256 ff03240ebf739928e3b8f68ee4f1d566ecfe7acb5c31291e1f1f9a05fcf9b692
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "movable", "names": ["Main"], "offset": 24, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 0, "segment": 1, "source": 0, "source_type": 3, "target1": 255, "target2": 1}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE iterated-64k.ne
+SHA256 3b32ae4adf81b5c7bd891d3d62f66ba14594b148d02bb5f976465fc520a97887
+SIZE 1056
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 65536, "file_offset": 1024, "flags": 8, "initialized_size": 65536, "reloc_count": 0, "sector": 64, "stored_size": 6}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE iterated-code.ne
+SHA256 187f2132774414742ba50b654040af3ad8aa38bafea0768e8068ed7787bafcae
+SIZE 1056
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 8, "initialized_size": 6, "reloc_count": 0, "sector": 64, "stored_size": 6}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE iterated-data.ne
+SHA256 7e18b70adf6c11c420e8f47016ba7f774706afa5a7336a44381e56251df384fb
+SIZE 1056
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 0, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 16, "file_offset": 1024, "flags": 9, "initialized_size": 5, "reloc_count": 0, "sector": 64, "stored_size": 11}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE iterated-overflow.ne
+SHA256 e8621c60cc6e979e077f594dc51278e9007e497ffc16bd5d109e79684e92e711
+SIZE 1056
+REFUSED iterated-expansion-limit
+
+FILE iterated-truncated.ne
+SHA256 eaf1945118f9335b5464b3fc304b468f225469624d68f0601bfe0608144eff19
+SIZE 1056
+REFUSED iterated-record-bounds
+
+FILE iterated-zero-repeat.ne
+SHA256 fa79523e62a6e76937ef792b3ddb5465b1f69429ca7d855de95d9d06a5176ea5
+SIZE 1056
+REFUSED iterated-record-bounds
+
+FILE late-ordinal-zero.ne
+SHA256 a247f1072a54d43541795cbe0772295a4a5aacf554fdb90983cd03016f90794a
+SIZE 1088
+REFUSED ordinal-zero-name-position
+
+FILE link-error.ne
+SHA256 ef965657ea852a41dff66665a7486df104fbe160a8a2b4ca7029de53bb7e8db4
+SIZE 1088
+REFUSED module-link-errors
+
+FILE minimum-64k.ne
+SHA256 41b04948c86369a9ff2ef095d9e8f4de86d93f926ead3f12d13e215f212f2096
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 65536, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE mixed-imports.ne
+SHA256 2287498ae173c542c36a69d632b4e7404f1b7ba68ac4487014bea313d7c3e7b6
+SIZE 1104
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+STATIC [1] KERNEL -> #91, LoadLibrary
+STATIC [2] USER -> #1
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 3, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 1, "segment": 1, "source": 0, "source_type": 3, "target1": 1, "target2": 91}
+RELOCATION {"flags": 2, "segment": 1, "source": 8, "source_type": 5, "target1": 1, "target2": 13}
+RELOCATION {"flags": 1, "segment": 1, "source": 16, "source_type": 3, "target1": 2, "target2": 1}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE module-case.ne
+SHA256 ec2cd5cc508f6303487b11225c71e66157d39f99dc57a7b5c65ce890201e0bc4
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+STATIC [1] kErNeL -> #91
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 1, "segment": 1, "source": 4, "source_type": 3, "target1": 1, "target2": 91}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE module-count-limit.ne
+SHA256 433221c1a4ff5c10227a1a0591c3c1f36c0297ef981f14b4c5c3d6cadafabaa8
+SIZE 1088
+REFUSED parser-work-limit
+
+FILE module-flags-windows.ne
+SHA256 851a699a4e07770253e162f4197f1216cb3cdfa6154d2d4f5c1ae7bf871dfc76
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 43fa LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE movable-data.ne
+SHA256 0051150683d8955f8ea92ca16eb67836a165e7f04237953b1fb00dba6b72a89e
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 17, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE movable-entry.ne
+SHA256 a983ad0b19cca1eb330479ce089f94b95ba0b1a9f804186e6fbae50aab6776ab
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "movable", "names": ["Main"], "offset": 4, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 80, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE movable-preload-discard.ne
+SHA256 1c6b3e62fb6288e458f00e25415be746baac70824af2e2d6d176f2f016d7bbf9
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 4176, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE movable.ne
+SHA256 716b9341ac915b59ebbef57d441fe27100420b3338fa7968ae37efa40c6057b6
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 16, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE no-data-dll.ne
+SHA256 06e7d892581b81250e7e5048a182e6be6d1a5bfe139335941e2d2760e73a9722
+SIZE 1072
+FORMAT NE i386-compatible-16 DLL
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 8000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE nonresident-export.ne
+SHA256 95f13b16f66ed14f4ea70959e0a4ba2069f0dd48b16f3b3ce6b9066949b1c6fa
+SIZE 1095
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main", "Alias"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Description"}
+NAME {"nonresident": true, "ordinal": 1, "text": "Alias"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE osfixup-watcom.ne
+SHA256 dc7a0746ec3d6add043d164d06fc2efdbe91495eab1cf30059c2b5dd04a20f8e
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+OSFIXUP {"additive": true, "segment": 1, "source": 4, "source_type": 5, "value": 2}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 7, "segment": 1, "source": 4, "source_type": 5, "target1": 2, "target2": 0}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE osfixup.ne
+SHA256 fcae2155a55b37db2d41662f16249cf7a6f66cf409d0666e1f864a53311944f0
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+OSFIXUP {"additive": false, "segment": 1, "source": 0, "source_type": 3, "value": 1}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 3, "segment": 1, "source": 0, "source_type": 3, "target1": 1, "target2": 0}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE preload.ne
+SHA256 52bac5080337f9d4ffb4ce2c2f04399717783fd073234f1b11d58e451606dc28
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE priority-discard.ne
+SHA256 ceb2ed20fd524ae3e5b2911a33328cd6218cc1ca8852b158373ed05e5d0c3ff8
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 32768, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE read-only-data.ne
+SHA256 66fbe7ad21909190e7bb5ad369d9ce6b4e542ac238eb0733c26bd767d059c80b
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 129, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-byte-additive.ne
+SHA256 450d268d402f9f9bf18c43c091a85b71d6246a4a3f8fa261bf89de252de79d4b
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 4, "segment": 1, "source": 4, "source_type": 0, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-byte-chain.ne
+SHA256 7f3a519ae15ebbf23dfa4c6d786ab95cd06bd52c7d7d81d2e43d858adc495494
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 0, "segment": 1, "source": 4, "source_type": 0, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-lx-source-type.ne
+SHA256 05cbb6d45cffc3d60498a689cb7185abdaac81d86e0cdf45fb982c6c938e8061
+SIZE 1088
+REFUSED relocation-source-type
+
+FILE reloc-offset16-additive.ne
+SHA256 7da5d8f8745c05864d047ad8a8937a203e325b0d85607b5bcf0c78af1bb13871
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 4, "segment": 1, "source": 4, "source_type": 5, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-offset16-chain.ne
+SHA256 821d8433ea7ecefb96269fe7b30e2258b40d469f0d9ee8787f9de282e6cdf129
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 0, "segment": 1, "source": 4, "source_type": 5, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-offset32-additive.ne
+SHA256 1e91b9133ddc593d22b670e14d96053abbb0f4a2bffc65e404f8ba5ae763a16d
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 4, "segment": 1, "source": 4, "source_type": 13, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-offset32-chain.ne
+SHA256 cbf9539766168a7ed08743c6635248473439fd38f460cb13ed223e313286593f
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 0, "segment": 1, "source": 4, "source_type": 13, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-pointer16-additive.ne
+SHA256 908db9dc138682f6b801aa7cfdd68eb001209dab516c0fca6d9c8c92497ad26e
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 4, "segment": 1, "source": 4, "source_type": 3, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-pointer16-chain.ne
+SHA256 b10aeeda21902dd312c684447b9a05eaacabc645e131d09325602a30d62b71ae
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 0, "segment": 1, "source": 4, "source_type": 3, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-pointer32-additive.ne
+SHA256 1cc0f085d3df7978ef37ebce4405cb2180d99a1a0eb884c26ae886db7002ab78
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 4, "segment": 1, "source": 4, "source_type": 11, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-pointer32-chain.ne
+SHA256 4960b77e1ed830a69c85a451db6a49acddb1f8d94339c4304eb9dbe0b7f1fd37
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 0, "segment": 1, "source": 4, "source_type": 11, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-selector-additive.ne
+SHA256 41f799babe9d774a36ffbcc5409871773eddacdceb4c659a89c7cb79c06ffe37
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 4, "segment": 1, "source": 4, "source_type": 2, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-selector-chain.ne
+SHA256 43e3e18f9f665afd27ade992d544766ba622164112c725c236bdf5afed5b9548
+SIZE 1120
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 64, "file_offset": 1024, "flags": 320, "initialized_size": 64, "reloc_count": 1, "sector": 64, "stored_size": 64}
+RELOCATION {"flags": 0, "segment": 1, "source": 4, "source_type": 2, "target1": 1, "target2": 24}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE reloc-source-high-bit.ne
+SHA256 9b1b8a9cc6412abdca0ea7d2fb552c4d41ac09058f1b839875a472259d62f9ca
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 320, "initialized_size": 32, "reloc_count": 1, "sector": 64, "stored_size": 32}
+RELOCATION {"flags": 0, "segment": 1, "source": 2, "source_type": 133, "target1": 1, "target2": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE resource-aligned.ne
+SHA256 9733c5d66636973903aa4e3c83cf212ecc22176771c7d3c70498b708813492ff
+SIZE 1104
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+RESOURCE {"file_offset": 1072, "flags": 48, "name": 3, "size": 16, "type": 10}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE resource-integer.ne
+SHA256 dbf7b77c9246eb7ffdb768517fd02a7134cc8e54eda35783fd18bdfce88ed871
+SIZE 1093
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+RESOURCE {"file_offset": 1072, "flags": 48, "name": 1, "size": 5, "type": 10}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE resource-mixed.ne
+SHA256 d4c456a502e77affd1b8e9279bd86436c090ddd2c5baca49f809e6e6cf6a7a0a
+SIZE 1098
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+RESOURCE {"file_offset": 1072, "flags": 48, "name": "Greeting", "size": 5, "type": 6}
+RESOURCE {"file_offset": 1077, "flags": 48, "name": 2, "size": 5, "type": "CUSTOM"}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE resource-name.ne
+SHA256 61023d7b714dd768ff0c6a67be14f0315296497e4c1de8c6c01d187ba57f4976
+SIZE 1093
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+RESOURCE {"file_offset": 1072, "flags": 48, "name": "Ciuki", "size": 5, "type": "CUSTOM"}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE resource-only.ne
+SHA256 1bd5e2371423ce48c3e3bdaaaa243d0c8bca06c38d3b69124f0f18d3bfe47eaa
+SIZE 1043
+FORMAT NE i386-compatible-16 DLL
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 8000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 0, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+RESOURCE {"file_offset": 1024, "flags": 48, "name": 1, "size": 3, "type": 10}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE sector-overflow.ne
+SHA256 7fd20de028de37e722b16de7c89efb6920a1b07ba63de261233dc61f2bb94f0d
+SIZE 1088
+REFUSED sector-offset-overflow
+
+FILE segment-32bit.ne
+SHA256 0f77558d1b440dadb1c9c4dc31f6c86f64e03989249da7a777f60e5b47278e16
+SIZE 1088
+REFUSED segment-32bit-unsupported
+
+FILE segment-count-limit.ne
+SHA256 c3a1f0ea9aede35c2beedc2d2940e239a6d4e559e9c90035cf0368a572248be8
+SIZE 1088
+REFUSED parser-work-limit
+
+FILE segment-dpl-bit11.ne
+SHA256 048943ef3a9da813190603365be4c0894d5071d9cac2171e07f95bc0fae2759f
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 2112, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE segment-dpl-debug.ne
+SHA256 756e8cf75ef8ae6c6f2229b5fa1c210b25528c4c3ef80ee089c168f4781502d3
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 56912, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 3137, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE segment-file-outside.ne
+SHA256 c48262a09e3343aced3d10a3857aca69028e94731313196ec28ade6100ceda17
+SIZE 1088
+REFUSED segment-file-bounds
+
+FILE segment-loader-bits.ne
+SHA256 f7b411fa60068dfd8aae2f620d15a296af5eebc207e92361d5bd2c2200dc5a54
+SIZE 1088
+REFUSED segment-loader-bits
+
+FILE segment-payload-overlap.ne
+SHA256 d3ba9fa80ce528f046f066f21a5787292e238af8dad82cfca53daceda769367b
+SIZE 1088
+REFUSED table-or-payload-overlap
+
+FILE selfload-bad-version.ne
+SHA256 fcad1a496722d09b95d134a9050e8aec4879025c997cb9d91614250cea60831c
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0802 LOAD-POLICY self-loader-version
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+SELFLOAD {"boot_app": 0, "exit_proc": 0, "header": "read", "load_app_seg": 0, "version": 12610}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 48, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE selfload-module.ne
+SHA256 5e53e62662e3637e4052b968b18fd94f9a70be0dd3857dc06779c4e3c04e244c
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0802 LOAD-POLICY self-loading-unsupported
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+SELFLOAD {"boot_app": 65552, "exit_proc": 65584, "header": "read", "load_app_seg": 65568, "version": 12353}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 48, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE selfload-short-header.ne
+SHA256 3525ce6c660f545d5bdbccb710a83d5a582c71826a80d9f4cf52dc57366c26fd
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0802 LOAD-POLICY self-loader-header-bounds
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+SELFLOAD {"boot_app": 0, "exit_proc": 0, "header": "outside-segment-1", "load_app_seg": 0, "version": 0}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 8, "reloc_count": 0, "sector": 64, "stored_size": 8}
+SEGMENT {"allocation": 64, "file_offset": 1040, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 65, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE shared-code.ne
+SHA256 1c01b4b6da24fd907fab10d0de06ed2e583f2f86d55d5109998fd2ffffc33c49
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 32, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE shared-data.ne
+SHA256 2aeda63c3f0ed38ec39f3f4af998871d5ef29d24c1452c16330ad4a66a6858c0
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 33, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE shift-16.ne
+SHA256 585107e8d9d61f4290ededab551380f56695dbe73957c65e35edd159d1812a0e
+SIZE 196624
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 65536, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 1, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 131072, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 2, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE shift-zero.ne
+SHA256 3eab7931ec6c540487fbe28ff5c45f42348cfd74c6b2c3bf26d1f5c305ec8532
+SIZE 2064
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 2, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1536, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 3, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE single-data-dll.ne
+SHA256 38b50b260e0d2d5dd81fb4ed80dcbf627056c55f5e2d96a103989cfd733091ac
+SIZE 1088
+FORMAT NE i386-compatible-16 DLL
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 8001 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE stored-64k.ne
+SHA256 9ec16f8dc47934ce6e4021a276c53432117eff75131467b9c53759c12cae61f7
+SIZE 66576
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0000 LOAD-POLICY ok
+STARTUP {"autodata": 0, "cs": 1, "heap": 16, "ip": 0, "sp": 0, "ss": 0, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 65536, "file_offset": 1024, "flags": 64, "initialized_size": 65536, "reloc_count": 0, "sector": 64, "stored_size": 65536}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE target-os2.ne
+SHA256 139185f6af376c476a2234fa7c57daa3bf64813cb2ab0742096aa9a6ed1e842e
+SIZE 1088
+REFUSED target-os2
+
+FILE target-win386.ne
+SHA256 eb2c08985948f5f7d38bacfb138243222be5c2f7441dd7aa0fa8c9cb503a2d22
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE truncated-dos.ne
+SHA256 6f5712676c43cd97596f49d45a1f75afa7e6870395df63a79f3cae8af47bbb45
+SIZE 40
+REFUSED dos-header-truncated
+
+FILE truncated-ne.ne
+SHA256 e0963cc16842870f48defd806ba1a454c678ec5b91498513c26410207d3285f2
+SIZE 180
+REFUSED ne-header-bounds
+
+FILE truncated-segment.ne
+SHA256 0652d8952ebbdd74f4578ef6187c703e02ddb02c69649e102fd5dbd5a06ce54d
+SIZE 1030
+REFUSED segment-file-bounds
+
+FILE unknown-flags.ne
+SHA256 cde89e464ec322fe5e13ce611b371e1d11e4d3b7c93fbe3d89fa1fefc83c3949
+SIZE 1088
+REFUSED relocation-flags
+
+FILE unknown-source.ne
+SHA256 b0b3f4a0503d62d9fd4642255e4ba0561d314f63104f22404b21d123abcd9699
+SIZE 1088
+REFUSED relocation-source-type
+
+FILE unused-entry.ne
+SHA256 80607f74778ac1e452b54816359ddacc4e3298f3de02af70384edd491c735af2
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 2, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 2, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE unused-module.ne
+SHA256 3cd678dd947932ca294c2202fa5ee7fdbe4fbef98e33e49ed5a6e6a5212116e9
+SIZE 1088
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+STATIC [1] KERNEL -> (no referenced symbols)
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 64, "file_offset": 1056, "flags": 65, "initialized_size": 16, "reloc_count": 0, "sector": 66, "stored_size": 16}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE zero-data.ne
+SHA256 3d95badc8a759c10114bb284b1930b2e886f4776f36f5ce27ea5510721820aa5
+SIZE 1072
+FORMAT NE i386-compatible-16 EXE
+TARGET Windows EXPECTED 030a LINKER 5.1
+FLAGS 0002 LOAD-POLICY ok
+STARTUP {"autodata": 2, "cs": 1, "heap": 16, "ip": 0, "sp": 32, "ss": 2, "stack": 16}
+EXPORT {"flags": 1, "kind": "fixed", "names": ["Main"], "offset": 0, "ordinal": 1, "segment": 1}
+SEGMENT {"allocation": 32, "file_offset": 1024, "flags": 64, "initialized_size": 32, "reloc_count": 0, "sector": 64, "stored_size": 32}
+SEGMENT {"allocation": 128, "file_offset": 0, "flags": 1, "initialized_size": 0, "reloc_count": 0, "sector": 0, "stored_size": 0}
+NAME {"nonresident": false, "ordinal": 0, "text": "FIXTURE"}
+NAME {"nonresident": false, "ordinal": 1, "text": "Main"}
+NAME {"nonresident": true, "ordinal": 0, "text": "Synthetic NE"}
+DYNAMIC not-observed (original engine and child traces still required)
+EVIDENCE static-host-only; no NE execution
+
+FILE zero-sector-relocs.ne
+SHA256 649c7ac312a4a15c863b00a425d05a6fe86801ee8d1d91f20a9030905925f8ec
+SIZE 1040
+REFUSED zero-sector-relocations-or-iteration
