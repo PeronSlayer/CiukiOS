@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * desktop.cfg parser and writer (settings.h). Integer-only, no I/O. */
 #include "settings.h"
+#include "theme.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -12,7 +13,7 @@ const char *const cfg_keyboard_labels[CFG_KEYS_COUNT] = {"English (US)", "Italia
 void cfg_defaults(struct ciuki_settings *s)
 {
     memset(s, 0, sizeof(*s));
-    strcpy(s->theme, "Platinum");
+    strcpy(s->theme, DESK_THEME_DEFAULT);
     strcpy(s->wallpaper, "/system/wallpapers/Ciuk2.png");   /* owner's Ciuk2 scene (assets/wallpapers/ciuki) */
     s->wallpaper_mode = CFG_WALL_FILL;     /* the adaptive scenes are made for a centred, aspect-preserving fill */
     s->desktop_color = CFG_DESKTOP_COLOR;          /* DESK_BACKGROUND */

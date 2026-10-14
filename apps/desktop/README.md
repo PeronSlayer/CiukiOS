@@ -39,9 +39,10 @@ MIT notices on the code do not relicense it or the GPL ABI header.
 The compositor and libdeskui draw through `theme.c`/`theme.h`: one theme
 structure holds colours, bevel and title styles, frame radius, shadow size,
 title-button size, icon slots (16/22/32) and the font faces. Built-in
-themes: **Platinum** (default: platinum greys, blue accent, pinstriped
+themes: **Platinum** (platinum greys, blue accent, pinstriped
 active title bars, gradient bevels, rounded window tops, soft shadow),
-**Ciuki Blue** (slate-blue gradient captions, Ciuki's tan as accent) and
+**Ciuki Blue** (default: horizontal slate-blue captions, cool 3D bevels,
+Ciuki's tan Start accent and dark inactive caption text) and
 **Classic 98** (flat 3-D greys, navy gradient captions, aliased text). Frame
 geometry (`DESK_BORDER` 3, `DESK_TITLE` 24, close/minimise hit boxes) is the
 same in every theme, so scripted coordinates never depend on the theme.

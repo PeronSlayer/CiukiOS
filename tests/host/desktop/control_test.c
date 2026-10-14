@@ -115,6 +115,8 @@ int main(int argc, char **argv)
 
     /* No desktop.cfg yet: the defaults, Ciuk2 filled. */
     attach(CP_DISPLAY);
+    assert(!strcmp(a.cfg.theme, "Ciuki Blue") && !strcmp(desk_theme->name, "Ciuki Blue"));
+    for (int k = 0; k < CFG_THEMES; k++) assert(a.theme_items[k].selected == (k == cfg_theme_index("Ciuki Blue")));
     assert(a.cfg.wallpaper_mode == CFG_WALL_FILL && !strcmp(a.cfg.wallpaper, "/system/wallpapers/Ciuk2.png"));
     struct du_widget *list = NULL;
     for (unsigned i = 0; i < u.count; i++) if (u.widgets[i].kind == DU_LISTVIEW && u.widgets[i].count == 2 + DESK_BUILTIN_WALLPAPERS + 3) list = &u.widgets[i];
@@ -188,6 +190,7 @@ int main(int argc, char **argv)
     memcpy(saved, old, sizeof(old)); saved_n = sizeof(old) - 1;
     attach(CP_DISPLAY);
     assert(a.cfg.wallpaper_mode == CFG_WALL_CENTER && !strcmp(a.cfg.theme, "Classic 98"));
+    for (int k = 0; k < CFG_THEMES; k++) assert(a.theme_items[k].selected == (k == cfg_theme_index("Classic 98")));
     check_marked(CFG_WALL_CENTER);
     for (int k = 0; k < 5; k++) assert(du_text_width(labels[k]) + 8 <= find(DU_BUTTON, labels[k])->box.w);
     render_settled(&u);
@@ -197,6 +200,13 @@ int main(int argc, char **argv)
     render_settled(&u);
     check_preview();
     at_save(renders, "control-display-classic-fill", &u);
+    cp_detach(&a);
+    /* Platinum remains a valid persisted choice, including its selection. */
+    cfg_defaults(&parsed); strcpy(parsed.theme, "Platinum");
+    saved_n = cfg_format(&parsed, saved, sizeof(saved)); assert(saved_n);
+    attach(CP_DISPLAY);
+    assert(!strcmp(a.cfg.theme, "Platinum") && !strcmp(desk_theme->name, "Platinum"));
+    for (int k = 0; k < CFG_THEMES; k++) assert(a.theme_items[k].selected == (k == cfg_theme_index("Platinum")));
     cp_detach(&a);
     attach(CP_HOME);
     a.host.autoplay_list=autoplay_list; a.host.autoplay_forget=autoplay_forget;

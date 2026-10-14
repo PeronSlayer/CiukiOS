@@ -66,8 +66,8 @@ def rgb(colour):
     return bytes(((colour >> 16) & 255, (colour >> 8) & 255, colour & 255))
 
 
-def frame(width=1024, height=768, background=0x375564, top=0xdcdcdc, taskbar=0xd6d6d6,
-          button=0xf2f2f2, quantize=False):
+def frame(width=1024, height=768, background=runner.DESK_BACKGROUND, top=runner.DESK_TOP_BAR,
+          taskbar=runner.DESK_TASKBAR, button=runner.DESK_START_BUTTON[0], quantize=False):
     """Synthetic shell desktop laid out like apps/desktop/compositor.c."""
     def colour(c):
         if quantize:  # 16-bpp 565 framebuffer read back as 8-bit RGB
@@ -218,7 +218,7 @@ class NormalBootUnitTests(unittest.TestCase):
         self.assertEqual(good['regions']['taskbar']['box'], [0, 736, 1024, 32])
         self.assertGreater(good['regions']['taskbar']['fraction'], 0.9)
         self.assertEqual(good['regions']['console_absent']['fraction'], 0)
-        self.assertEqual(observe(frame(button=0xb9b9b9))['failures'], [])   # start menu open
+        self.assertEqual(observe(frame(button=runner.DESK_START_BUTTON[1]))['failures'], [])   # start menu open
         self.assertEqual(observe(frame(quantize=True))['failures'], [])     # 16-bpp framebuffer
         self.assertEqual(observe(frame(800, 600), {})['failures'], [])      # geometry relative
         self.assertEqual(observe(console_frame())['failures'],
@@ -253,7 +253,7 @@ class NormalBootUnitTests(unittest.TestCase):
             portrait = temp / 'portrait.xrgb'
             portrait.write_bytes(convert_portrait.convert(ROOT / 'assets/brand/ciuki-logo.png'))
             observed = {}
-            for mode in ('shell', 'plain'):
+            for mode in ('shell', 'plain', 'desktop'):
                 xrgb = temp / (mode + '.xrgb')
                 subprocess.run([str(binary), str(portrait), str(xrgb), mode], check=True, env=env)
                 data = xrgb.read_bytes()
@@ -261,9 +261,18 @@ class NormalBootUnitTests(unittest.TestCase):
                 pixels[0::3], pixels[1::3], pixels[2::3] = data[2::4], data[1::4], data[0::4]
                 ppm = temp / (mode + '.ppm'); ppm.write_bytes(b'P6\n640 480\n255\n' + bytes(pixels))
                 observed[mode] = runner.observe_normal_boot_screen(ppm, {'geometry': [640, 480]})
+                if mode == 'desktop':
+                    # Quantize the production gradient as fbdev's pack_565
+                    # does, then re-expand for the screenshot reader.
+                    quantized = bytes(round((v >> ((3, 2, 3)[i % 3])) * 255 / (255 >> ((3, 2, 3)[i % 3])))
+                                      for i, v in enumerate(pixels))
+                    ppm.write_bytes(b'P6\n640 480\n255\n' + quantized)
+                    observed['desktop-565'] = runner.observe_normal_boot_screen(ppm, {'geometry': [640, 480]})
         # The shell desktop (taskbar, open start menu) passes; the plain
         # compositor without the shell has a top bar but no taskbar.
         self.assertEqual(observed['shell']['failures'], [])
+        self.assertEqual(observed['desktop']['failures'], [])
+        self.assertEqual(observed['desktop-565']['failures'], [])
         self.assertEqual(observed['plain']['failures'], ['taskbar', 'start_button'])
 
     def test_heuristic_colours_match_desktop_and_console_sources(self):
@@ -272,12 +281,13 @@ class NormalBootUnitTests(unittest.TestCase):
         console = (ROOT / 'src/kernel/core/console.c').read_text()
         output = (ROOT / 'src/kernel/core/output.c').read_text()
         self.assertIn('#define DESK_BAR %d' % runner.DESK_BAR_ROWS, header)
-        self.assertIn('#define DESK_BACKGROUND 0x%06xu' % runner.DESK_BACKGROUND, header)
-        # ui-look: the colours come from the default (first) theme in theme.c.
+        # DESK_BACKGROUND remains the saved-settings sentinel; screen colours
+        # come from the selected default theme, independently of table order.
+        theme_header = (ROOT / 'apps/desktop/theme.h').read_text()
+        self.assertIn('#define DESK_THEME_DEFAULT "Ciuki Blue"', theme_header)
         theme = (ROOT / 'apps/desktop/theme.c').read_text()
-        default = theme[theme.index('.name = "Platinum"'):]
+        default = theme[theme.index('.name = "Ciuki Blue"'):]
         default = default[:default.index('\n    },')]
-        self.assertLess(theme.index('.name = "Platinum"'), theme.index('.name = "Ciuki Blue"'))
         self.assertIn('.desktop = 0x%06xu,' % runner.DESK_BACKGROUND, default)
         self.assertIn('.topbar = 0x%06xu,' % runner.DESK_TOP_BAR, default)
         self.assertIn('.taskbar = 0x%06xu,' % runner.DESK_TASKBAR, default)

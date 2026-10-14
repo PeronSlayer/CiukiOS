@@ -85,7 +85,7 @@ void desk_paint_frame(struct desk_paint *, int x, int y, int w, int h, const str
 void desk_paint_frame_border(struct desk_paint *, int x, int y, int w, int h, const struct desk_frame_style *);
 
 /* ---- themes ---- */
-enum { DESK_TITLE_FLAT, DESK_TITLE_GRADIENT, DESK_TITLE_PINSTRIPE };
+enum { DESK_TITLE_FLAT, DESK_TITLE_GRADIENT, DESK_TITLE_PINSTRIPE, DESK_TITLE_HGRADIENT };
 enum { DESK_CONTROLS_CLASSIC, DESK_CONTROLS_PLATINUM };
 enum { DESK_FOCUS_DOTTED, DESK_FOCUS_RING };
 
@@ -110,6 +110,7 @@ struct desk_theme {
     uint8_t font_ui, font_bold, font_title, font_mono, font_mono_bold, font_large;
 };
 extern const struct desk_theme *desk_theme;                  /* current, never NULL */
+#define DESK_THEME_DEFAULT "Ciuki Blue"
 int desk_theme_count(void);
 const struct desk_theme *desk_theme_at(int index);
 const struct desk_theme *desk_theme_named(const char *name); /* ASCII case-insensitive */

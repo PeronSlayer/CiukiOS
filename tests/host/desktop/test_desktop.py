@@ -23,6 +23,22 @@ ROOT = Path(__file__).resolve().parents[3]
 SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "autoplay_content.c", "settings.c", "settings_io.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")] + \
                 [ROOT / "apps/libdeskui/draw.c"]
 
+# F2-62: production shell, menus and modal frames; lead reviews the paired PNGs.
+LOOK_GOLDENS = {
+    "ciuki-blue-desktop.ppm": "d853d23bc71e73395884bf01a3523bf3bb46dadb15634693455cafda8f0532c0",
+    "ciuki-blue-dialogs.ppm": "030fbf9d155ab24b626449310c7c7e1d4d9b156b1db1c16f74a9b97423270e14",
+    "ciuki-blue-tray-disabled.ppm": "43e8f2f96c006f6fa415df9d71eeb2e5f0f4189678bd7de91e5d170b22066366",
+    "ciuki-blue-tray-media.ppm": "7bc12e21911f57f4303b1a6c3b0e1ef00b864ce8797c3b2a3f68af3675c3f6ac",
+    "classic-98-desktop.ppm": "cf235ad64ef5fce522c83cb9c5fb6912718a61d642d6e9b4e20ed585e6687569",
+    "classic-98-dialogs.ppm": "43ddbd2e0d4b2446492e93f5b47a01f5ad69ea9ec8acdb997bd991ceb8f69044",
+    "classic-98-tray-disabled.ppm": "eef3a6118321a8e9cb15faee78fa4b5058ed2d699168b74ac4039aae26875c03",
+    "classic-98-tray-media.ppm": "2851b8eb8dea58932841b4d0276a66c660cad930eba05a096599683d08f2df24",
+    "platinum-desktop.ppm": "c140820b8808812c61ea034699a0b4bbc9b5ef057daaad128fbc01efbb6a1a61",
+    "platinum-dialogs.ppm": "70c6211684eb7a54b6a35d43bf843812d5214e12b5e049e8bfd6f16a3cd3287a",
+    "platinum-tray-disabled.ppm": "f2910648c1fb7d49e53860c502242c0ea7e685230a9851e342f87398e431c489",
+    "platinum-tray-media.ppm": "ec533f5cea2afbe1a14a46c77f53de1adca2b7394913acf6f268a4e6d21428fe"
+}
+
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
 QCODES = {**{c: s for c, s in zip("qwertyuiop", range(0x10, 0x1a))}, **{c: s for c, s in zip("asdfghjkl", range(0x1e, 0x27))},
           **{c: s for c, s in zip("zxcvbnm", range(0x2c, 0x33))}, **{c: s for c, s in zip("1234567890", range(0x02, 0x0c))},
@@ -121,14 +137,10 @@ class DesktopTests(unittest.TestCase):
                 pixels = target.read_bytes()
                 self.assertEqual(len(pixels), 640*480*4)
                 if mode == "plain":
-                    # ui-look (2026-10-12): the theme engine and fonts changed the
-                    # plain frame; the lead re-pins it after a visual review.
-                    pinned = "PIN-FROM-FIRST-RUN"
+                    # F2-62: the missing-settings desktop now uses Ciuki Blue.
+                    pinned = "594c557311c0a8c6e4ce6dd7f034858875f5a92d034c846c8c819dd5f77b002f"
                     actual = hashlib.sha256(pixels).hexdigest()
-                    if pinned == "PIN-FROM-FIRST-RUN":
-                        print("PLAIN_DESKTOP PIN-FROM-FIRST-RUN", actual)
-                    else:
-                        self.assertEqual(actual, pinned)
+                    self.assertEqual(actual, pinned)
                 else:
                     # The Ciuki button at the left end of the top bar (desktop.h DESK_START_*) shows the
                     # approved portrait area-averaged to 18 px (shell.c desk_shell_icon "ciuki"), centred
@@ -185,6 +197,7 @@ class DesktopTests(unittest.TestCase):
                                            for w in ("desktop", "dialogs", "tray-disabled", "tray-media")))
             digests = {n: hashlib.sha256((frames / n).read_bytes()).hexdigest() for n in names}
             self.assertEqual(len(set(digests.values())), 12)
+            self.assertEqual(digests, LOOK_GOLDENS)
             # Desktop icon labels over the default wallpaper, the owner's Ciuk2 scene (owner feedback 2026-10-12:
             # labels must stay readable on any wallpaper): look_capture's wallpaper mode renders the six desktop
             # icons with Documents selected, and the same desktop with the icons off.

@@ -142,6 +142,7 @@ static void paint(struct du_ui *u, void *user)
             desk_paint_vgradient(&pp, 41, 133, 68, 8, t->title[0], t->title[1]);
             desk_paint_pinstripes(&pp, 43, 134, 64, 6, t->stripe_light, t->stripe_dark);
         } else if (t->control_style == DESK_CONTROLS_CLASSIC) desk_paint_hgradient(&pp, 42, 134, 66, 7, t->title[0], t->title[1]);
+        else if (t->title_style == DESK_TITLE_HGRADIENT) desk_paint_hgradient(&pp, 41, 133, 68, 8, t->title[0], t->title[1]);
         else desk_paint_vgradient(&pp, 41, 133, 68, 8, t->title[0], t->title[1]);
         put(c, 44, 143, 62, 37, t->window);
         for (int k = 0; k < 6; k++) {

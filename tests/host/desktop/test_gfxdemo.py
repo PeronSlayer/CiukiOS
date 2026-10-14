@@ -9,13 +9,13 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
-# f2-59: integer viewport, smooth poses and completion-based FPS/status copy.
+# F2-62: same scenes and viewport, rendered with the new Blue default.
 GOLDENS = {
-    'benchmark': 'ef4e7049cf2acf4ef50e6c6d8f4e9a3c101ff0668fa7083fcb0eb66e66396dd6',
-    'cube-flat': 'f3b375ab64adfe85b8ed3f321fd97e3769a62b8b796538ef0b1193703edb8780',
-    'cube-gouraud': 'dbe0138fa6197fab752286cac49abcfb97d1c2dd0ecbeffff43d50fca2f06212',
-    'software-only': '5769307868c58d539e93066b6e5e8ed8997f5b1a4082b2c98edf35b1e12bff5c',
-    'sprites': '4bf980005cb1921658bf32eecdec42e13a26bf6d4a5dfdaf549b2b0b3e21ecf6',
+    'benchmark': 'aef4229de656100fcb376e001a95896312643842d67ee709b843c634b3af75c0',
+    'cube-flat': '800428880bcd2c6c13981a7cc6004a38b94588f72f58dc716d214e49e90e1ba9',
+    'cube-gouraud': '048dce531e7d19924a5e529017c855189957dd528058adf5ceb35973c27b2664',
+    'software-only': '07b0fb892558270bed03e65862f9e7523ac67036a9a506952cd6551db468f0d5',
+    'sprites': 'c821fa7e3a973a04cc62ef4920f1789a1396f5a14e0b013ffac2ae70fd474c90',
 }
 
 def load(name, path):
