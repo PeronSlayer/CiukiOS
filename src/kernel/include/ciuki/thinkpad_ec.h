@@ -13,9 +13,10 @@ struct thinkpad_ec_io {
 };
 struct thinkpad_ec {
     struct thinkpad_ec_io io;
-    bool active;
-    uint8_t status;
-    uint64_t next_poll;
+    /* active survives the first seven failures; available gates delegation. */
+    bool active, available, pending_read, timeout_logged;
+    uint8_t status, failures;
+    uint64_t next_poll, next_timeout_log;
 };
 /* Firmware strings are copied/sanitized for records; eligibility is decided
  * against the complete original strings, before truncation. */
@@ -35,7 +36,7 @@ bool thinkpad_ec_identity(const uint8_t *table, size_t length);
 bool thinkpad_ec_entry(const uint8_t *entry, size_t length, uint32_t *address, uint16_t *bytes);
 int thinkpad_ec_probe(struct thinkpad_ec *, const struct thinkpad_ec_io *, bool identified, struct ciuki_mixer_master *);
 int thinkpad_ec_volume_set(struct thinkpad_ec *, struct ciuki_mixer_master *);
-/* 0 unchanged/not due, 1 changed, negative disables the driver. */
+/* 0 unchanged/not due, 1 changed/recovered; failures retry before disabling. */
 int thinkpad_ec_volume_poll(struct thinkpad_ec *, struct ciuki_mixer_master *);
 void thinkpad_ec_init(void);
 void thinkpad_ec_start(void);

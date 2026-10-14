@@ -14,8 +14,10 @@
 #define EC_OBF 1
 #define EC_AUDIO 0x30
 #define EC_MASK 0x4f
-#define EC_TIMEOUT_MS 20u
+#define EC_TIMEOUT_MS 500u
 #define EC_POLL_MS 250u
+#define EC_REPROBE_MS 10000u
+#define EC_FAILURE_LIMIT 8u
 
 static bool ec_sum(const uint8_t *p, size_t n)
 { uint8_t sum = 0; for (size_t i = 0; i < n; i++) sum += p[i]; return sum == 0; }
@@ -118,41 +120,76 @@ bool thinkpad_ec_gate(const struct thinkpad_ec_smbios *s, uint32_t flags)
     if (reason) { klog("[ec] thinkpad gate=%s", reason); return false; }
     return true;
 }
-/* Each whole transaction has one deadline and a second, clock-independent
- * bound. Unexpected pending output is not consumed as a volume reply. */
-static int ec_wait(struct thinkpad_ec *e, unsigned mask, unsigned value, uint64_t end)
+/* One task operation shares a wall-clock deadline and sleeping-poll budget
+ * across all its transfers. The latter also bounds a stopped clock. */
+struct ec_budget { uint64_t start, end; unsigned pauses; };
+static struct ec_budget ec_budget_begin(struct thinkpad_ec *e)
 {
-    for (unsigned tries = 0; tries < 4096; tries++) {
-        uint8_t status = e->io.read(e->io.ctx, EC_SC);
-        if (status == 0xff) return -ENODEV;
-        if ((status & mask) == value) return 0;
-        if ((int64_t)(e->io.now(e->io.ctx) - end) >= 0) return -ETIMEDOUT;
-        e->io.pause(e->io.ctx);
+    uint64_t now = e->io.now(e->io.ctx);
+    return (struct ec_budget){now, now + EC_TIMEOUT_MS, 0};
+}
+static int ec_timeout(struct thinkpad_ec *e, struct ec_budget *b, const char *stage)
+{
+    uint64_t now = e->io.now(e->io.ctx);
+    if (!e->timeout_logged || (int64_t)(now - e->next_timeout_log) >= 0) {
+        klog("[ec] thinkpad timeout stage=%s ms=%u", stage, (unsigned)(now - b->start));
+        e->timeout_logged = true; e->next_timeout_log = now + 1000;
     }
     return -ETIMEDOUT;
 }
-static int ec_transfer(struct thinkpad_ec *e, bool write, uint8_t *value)
+static int ec_wait(struct thinkpad_ec *e, unsigned mask, unsigned value,
+                   struct ec_budget *b, const char *stage)
 {
-    uint64_t end = e->io.now(e->io.ctx) + EC_TIMEOUT_MS;
-    int err = ec_wait(e, EC_IBF | EC_OBF, 0, end);
-    if (!err) e->io.write(e->io.ctx, EC_SC, write ? 0x81 : 0x80);
-    if (!err) err = ec_wait(e, EC_IBF, 0, end);
-    if (!err) e->io.write(e->io.ctx, EC_DATA, EC_AUDIO);
-    if (!err) err = ec_wait(e, EC_IBF, 0, end);
+    for (;;) {
+        if ((int64_t)(e->io.now(e->io.ctx) - b->end) >= 0 || b->pauses >= EC_TIMEOUT_MS)
+            return ec_timeout(e, b, stage);
+        uint8_t status = e->io.read(e->io.ctx, EC_SC);
+        if (status == 0xff) return -ENODEV;
+        if ((status & mask) == value) return 0;
+        /* Distinguish unsolicited OBF from IBF at transaction entry. */
+        if (mask == (EC_IBF | EC_OBF)) stage = status & EC_IBF ? "ibf" : "obf";
+        b->pauses++; e->io.pause(e->io.ctx);
+    }
+}
+static int ec_transfer(struct thinkpad_ec *e, bool write, uint8_t *value, struct ec_budget *b)
+{
+    int err = 0;
+    if (e->pending_read) {
+        /* A late reply to our timed-out RD_EC must not be mistaken for a
+         * new reply. Never drain unsolicited output. */
+        err = ec_wait(e, EC_IBF, 0, b, "ibf");
+        if (!err) {
+            uint8_t status = e->io.read(e->io.ctx, EC_SC);
+            if (status == 0xff) err = -ENODEV;
+            else if (status & EC_OBF) (void)e->io.read(e->io.ctx, EC_DATA);
+            /* An EC reset can lose the reply. Restart once IBF clears,
+             * as Linux does, rather than waiting forever for old output. */
+        }
+    }
+    if (!err) err = ec_wait(e, EC_IBF | EC_OBF, 0, b, "ibf");
+    if (!err) {
+        e->io.write(e->io.ctx, EC_SC, write ? 0x81 : 0x80);
+        e->pending_read = false;
+    }
+    if (!err) err = ec_wait(e, EC_IBF, 0, b, write ? "write" : "read");
+    if (!err) {
+        e->io.write(e->io.ctx, EC_DATA, EC_AUDIO);
+        if (!write) e->pending_read = true;
+        err = ec_wait(e, EC_IBF, 0, b, write ? "write" : "read");
+    }
     if (!err && write) {
         e->io.write(e->io.ctx, EC_DATA, *value);
-        err = ec_wait(e, EC_IBF, 0, end);
+        err = ec_wait(e, EC_IBF, 0, b, "write");
     } else if (!err) {
-        err = ec_wait(e, EC_OBF, EC_OBF, end);
-        if (!err) *value = e->io.read(e->io.ctx, EC_DATA);
+        err = ec_wait(e, EC_OBF, EC_OBF, b, "obf");
+        if (!err) { *value = e->io.read(e->io.ctx, EC_DATA); e->pending_read = false; }
     }
-    if (err) e->active = false;
     return err;
 }
-static int ec_read(struct thinkpad_ec *e, uint8_t *status)
+static int ec_read(struct thinkpad_ec *e, uint8_t *status, struct ec_budget *b)
 {
-    int err = ec_transfer(e, false, status);
-    if (!err && (*status & 15) > 14) { e->active = false; err = -EIO; }
+    int err = ec_transfer(e, false, status, b);
+    if (!err && (*status & 15) > 14) err = -EIO;
     return err;
 }
 static void ec_master(uint8_t status, struct ciuki_mixer_master *m)
@@ -162,47 +199,81 @@ static void ec_master(uint8_t status, struct ciuki_mixer_master *m)
 }
 static void ec_log(uint8_t status)
 { klog("[ec] thinkpad volume=%u mute=%u", status & 15u, !!(status & 0x40)); }
-int thinkpad_ec_volume_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
+static int ec_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m, struct ec_budget *b)
 {
-    if (!e->active) return -ENODEV;
-    if (m->left > 100 || m->right > 100 || m->mute > 1) return -EINVAL;
     uint8_t status = 0;
-    int err = ec_read(e, &status);
+    int err = ec_read(e, &status, b);
     unsigned level = (((m->left + m->right) / 2) * 14u + 50u) / 100u;
     uint8_t desired = (status & ~EC_MASK) | level | (m->mute ? 0x40 : 0);
-    if (!err && desired != status) err = ec_transfer(e, true, &desired);
-    if (!err) err = ec_read(e, &status); /* prove the write; never invent state */
-    if (!err && (status & EC_MASK) != (desired & EC_MASK)) { e->active = false; err = -EIO; }
+    if (!err && desired != status) err = ec_transfer(e, true, &desired, b);
+    if (!err) err = ec_read(e, &status, b); /* prove the write; never invent state */
+    if (!err && (status & EC_MASK) != (desired & EC_MASK)) err = -EIO;
     if (!err) {
         if ((e->status & EC_MASK) != (status & EC_MASK)) ec_log(status);
         e->status = status; ec_master(status, m);
     }
     return err;
 }
+static void ec_result(struct thinkpad_ec *e, int err)
+{
+    uint64_t now = e->io.now(e->io.ctx);
+    if (!err) { e->active = e->available = true; e->failures = 0; e->next_poll = now + EC_POLL_MS; return; }
+    e->available = false;
+    if (e->failures < EC_FAILURE_LIMIT) e->failures++;
+    if (e->active && e->failures == EC_FAILURE_LIMIT) {
+        e->active = false;
+        klog("[ec] thinkpad disabled error=%d", err);
+    }
+    e->next_poll = now + (e->active ? EC_POLL_MS : EC_REPROBE_MS);
+}
+int thinkpad_ec_volume_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
+{
+    if (m->left > 100 || m->right > 100 || m->mute > 1) return -EINVAL;
+    if (!e->active || !e->available) return -ENODEV;
+    struct ec_budget b = ec_budget_begin(e);
+    int err = ec_set(e, m, &b);
+    ec_result(e, err);
+    return err;
+}
+static int ec_discover(struct thinkpad_ec *e, struct ciuki_mixer_master *m, struct ec_budget *b)
+{
+    uint8_t status, again;
+    int err = ec_read(e, &status, b);
+    if (!err) err = ec_read(e, &again, b);
+    if (!err && again != status) err = -EIO;
+    if (!err) err = ec_set(e, m, b);
+    return err;
+}
 int thinkpad_ec_probe(struct thinkpad_ec *e, const struct thinkpad_ec_io *io, bool identified, struct ciuki_mixer_master *m)
 {
     memset(e, 0, sizeof(*e));
     if (!identified || !io || !io->read || !io->write || !io->now || !io->pause) return -ENODEV;
-    e->io = *io; e->active = true;
-    int err = ec_read(e, &e->status);
-    uint8_t again = 0;
-    if (!err) err = ec_read(e, &again);
-    /* Establish a stable register before any WR_EC command. A key changing
-     * it during discovery fails closed for this boot. */
-    if (!err && again != e->status) err = -EIO;
-    if (!err) err = thinkpad_ec_volume_set(e, m);
-    if (!err) { ec_log(e->status); e->next_poll = io->now(io->ctx) + EC_POLL_MS; }
-    else { e->active = false; klog("[ec] thinkpad gate=ec_handshake_failed stage=probe error=%d", err); }
+    e->io = *io;
+    struct ec_budget b = ec_budget_begin(e);
+    int err = ec_discover(e, m, &b);
+    if (!err) { ec_result(e, 0); ec_log(e->status); }
+    else {
+        e->next_poll = io->now(io->ctx) + EC_REPROBE_MS;
+        klog("[ec] thinkpad gate=ec_handshake_failed stage=probe error=%d", err);
+        /* Only a successfully qualified/claimed native device is monitored. */
+        memset(&e->io, 0, sizeof(e->io));
+    }
     return err;
 }
 int thinkpad_ec_volume_poll(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
 {
-    if (!e->active) return -ENODEV;
+    if (!e->io.now) return -ENODEV;
     uint64_t now = e->io.now(e->io.ctx);
-    if ((int64_t)(now - e->next_poll) < 0) return 0;
-    e->next_poll = now + EC_POLL_MS;
-    uint8_t status; int err = ec_read(e, &status);
+    if ((int64_t)(now - e->next_poll) < 0) return e->available ? 0 : -ENODEV;
+    bool recovering = !e->available, disabled = !e->active;
+    struct ec_budget b = ec_budget_begin(e);
+    uint8_t status = e->status;
+    /* Restore the saved/current preference before delegating master again. */
+    int err = disabled ? ec_discover(e, m, &b) : recovering ? ec_set(e, m, &b) : ec_read(e, &status, &b);
+    ec_result(e, err);
     if (err) return err;
+    if (disabled) klog("[ec] thinkpad resumed");
+    if (recovering) return 1;
     if ((status & EC_MASK) == (e->status & EC_MASK)) return 0;
     e->status = status; ec_master(status, m); ec_log(status); return 1;
 }
@@ -213,7 +284,7 @@ static struct kmutex ec_lock;
 static uint8_t native_read(void *ctx, uint16_t port) { (void)ctx; return inb(port); }
 static void native_write(void *ctx, uint16_t port, uint8_t v) { (void)ctx; outb(port, v); }
 static uint64_t native_now(void *ctx) { (void)ctx; return g_ticks; }
-static void native_pause(void *ctx) { (void)ctx; task_yield(); }
+static void native_pause(void *ctx) { (void)ctx; task_sleep_ms(1); }
 static bool native_table_reserved(uint32_t address, uint16_t length)
 {
     /* The boot map is validated, sorted and non-overlapping. Require every
@@ -292,7 +363,9 @@ void thinkpad_ec_init(void)
     if (!err) err = registry_activate(data, dg);
     if (!err) err = registry_activate(command, cg);
     if (err) {
-        native_ec.active = false; registry_quarantine(data, dg); registry_quarantine(command, cg);
+        native_ec.active = native_ec.available = false;
+        memset(&native_ec.io, 0, sizeof(native_ec.io));
+        registry_quarantine(data, dg); registry_quarantine(command, cg);
         if (probed) klog("[ec] thinkpad gate=ec_handshake_failed stage=activate error=%d", err);
         return;
     }
@@ -300,14 +373,20 @@ void thinkpad_ec_init(void)
 }
 int thinkpad_ec_master_set(struct ciuki_mixer_master *m)
 {
-    kmutex_lock(&ec_lock); int err = thinkpad_ec_volume_set(&native_ec, m); kmutex_unlock(&ec_lock); return err;
+    if (!native_ec.io.now) return -ENODEV;
+    kmutex_lock(&ec_lock); int err = thinkpad_ec_volume_set(&native_ec, m);
+    audio.master_in_hardware = native_ec.available;
+    kmutex_unlock(&ec_lock); return err;
 }
 int thinkpad_ec_master_poll(struct ciuki_mixer_master *m)
 {
-    kmutex_lock(&ec_lock); int err = thinkpad_ec_volume_poll(&native_ec, m); kmutex_unlock(&ec_lock); return err;
+    if (!native_ec.io.now) return -ENODEV;
+    kmutex_lock(&ec_lock); int err = thinkpad_ec_volume_poll(&native_ec, m);
+    audio.master_in_hardware = native_ec.available;
+    kmutex_unlock(&ec_lock); return err;
 }
 static void ec_worker(void *arg)
-{ (void)arg; while (native_ec.active) { task_sleep_ms(EC_POLL_MS); audio_master_refresh(); } }
+{ (void)arg; while (native_ec.io.now) { task_sleep_ms(EC_POLL_MS); audio_master_refresh(); } }
 void thinkpad_ec_start(void)
 {
     if (!native_ec.active) return;

@@ -69,3 +69,51 @@ logarithmic pins exactly; these new pins still require the lead's QEMU run.
 EC transactions run in task context under a mutex, have time and iteration
 limits, and disable polling on a protocol failure. The driver claims its
 two I/O ports and does not enable ACPI, SCI or any unrelated EC feature.
+
+## F4-27: runtime EC timeout tolerance (2026-10-14)
+
+The supplied T23 image `66843edc` transcript proves that SMBIOS eligibility
+and real EC reads/writes succeeded before a single `-110` stopped polling.
+It does not measure the busy interval or prove that the EC stopped responding.
+Inspection found a 20 ms deadline, immediate deactivation in `ec_transfer`,
+a worker that exits on deactivation, and a stale `master_in_hardware` flag.
+
+Research checked against the implementation before this change:
+
+- [ACPI 6.4 §12.2](https://uefi.org/htmlspecs/ACPI_Spec_6_4_html/12_ACPI_Embedded_Controller_Interface_Specification/embedded-controller-register-descriptions.html)
+  requires IBF clear before host writes and OBF set before host reads data.
+- [Linux upstream EC driver](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/ec.c)
+  defines `ACPI_EC_DELAY` as 500 ms and supports sleeping transaction polling.
+  `ec_poll` restarts incomplete commands; `advance_transaction` sends a new
+  command once IBF clears. Follow that restart behavior after a timeout, so
+  an EC reset that lost a reply cannot prevent recovery.
+  This supports a longer bounded wait; it does not establish a measured T23
+  latency or mandate Ciuki's failure threshold/re-probe interval.
+
+Decision (supersedes the runtime failure policy above): each poll, set or
+probe operation shares a 500 ms deadline across its transfers and at most
+500 sleeping polls, including a stopped-clock guard. Native polling sleeps
+1 ms instead of yielding in a busy loop. A timed-out read's late reply may
+be drained only when this driver owns the outstanding read; unsolicited
+output remains a protocol refusal. If that reply is absent after IBF clears,
+restart the command rather than waiting indefinitely for a reply lost in reset. There is no immediate transaction retry.
+A failed runtime operation leaves the EC unavailable for master delegation,
+retries after 250 ms, and counts once toward eight consecutive failures.
+Success resets that count. At eight failures log `disabled` once and retry
+at 10 s intervals; successful re-probe logs `resumed`. Timeout records include
+the stalled stage and elapsed milliseconds and are limited to one per second.
+The worker survives runtime deactivation. Initial identity, resource-claim and
+stable-handshake gates remain fail-closed; this change recovers an EC already
+qualified at boot, without bypassing quarantined resources.
+
+Master changes during EC unavailability use the existing codec/software path
+and normal durable preference save. EC errors do not become user-facing
+master-set errors; codec and persistence failure semantics stay as before.
+On recovery, apply the current shared preference (including changes made
+while offline), read it back, then restore hardware delegation/codec unity.
+A fallback transition also reapplies the current codec master even if no
+volume value changed. No recovery disk writes run in the EC worker.
+Physical amplifier state during an outage is unknown: software/codec fallback
+cannot override an EC that remains muted or attenuated in hardware.
+Host models qualify timing, failure thresholds, recovery, and persistence;
+only the lead's T23 session can qualify keys, audible output and Control Panel.

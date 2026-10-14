@@ -1,7 +1,7 @@
 /* Production EC transactions and mixer integration with a port model. */
 static uint8_t ec_native_read_port(uint16_t);
 static void ec_native_write_port(uint16_t, uint8_t);
-static void ec_native_pause(void);
+static void ec_native_sleep(uint32_t);
 static uint32_t ec_native_pte(uint32_t);
 static void *ec_native_phys(uint32_t);
 static const void *ec_native_map_ro(uint32_t, uint32_t);
@@ -10,7 +10,7 @@ static void ec_native_unmap(void *, uint32_t);
 #define P2V(p) ec_native_phys(p)
 #define inb ec_native_read_port
 #define outb ec_native_write_port
-#define task_yield ec_native_pause
+#define task_sleep_ms ec_native_sleep
 #define vmm_kernel_pte ec_native_pte
 #define vmm_map_physical_ro ec_native_map_ro
 #define vmm_revoke_mmio ec_native_unmap
@@ -20,7 +20,7 @@ static void ec_native_unmap(void *, uint32_t);
 #undef vmm_revoke_mmio
 #undef vmm_map_physical_ro
 #undef vmm_kernel_pte
-#undef task_yield
+#undef task_sleep_ms
 #undef outb
 #undef inb
 #undef P2V
@@ -28,7 +28,7 @@ static void ec_native_unmap(void *, uint32_t);
 struct ec_model {
     uint64_t tick, ready_at;
     uint8_t reg, reply, stage;
-    unsigned reads, writes, pauses, register_reads, volume_writes;
+    unsigned reads, writes, pauses, register_reads, volume_writes, busy_every, write_delay;
     uint8_t unstable_bits;
     bool absent, stuck_ibf, stuck_obf, reject_write, frozen_clock;
 };
@@ -53,11 +53,16 @@ static uint8_t ec_mock_read(void *ctx, uint16_t port)
 static void ec_mock_write(void *ctx,uint16_t port,uint8_t value)
 {
     struct ec_model *h=ctx;h->writes++;CHECK(h->tick>=h->ready_at);
-    if(port==EC_SC) { CHECK(!h->stage && (value==0x80 || value==0x81));h->stage=value==0x80?1:2; }
+    if(port==EC_SC) {
+        CHECK(value==0x80 || value==0x81);CHECK(!h->stuck_ibf);
+        CHECK(h->stage!=3 || h->stuck_obf); /* command restarts incomplete input */
+        h->stage=value==0x80?1:2;
+    }
     else if(h->stage==1) { CHECK(port==EC_DATA && value==EC_AUDIO);h->reply=h->reg;h->stage=3; }
     else if(h->stage==2) { CHECK(port==EC_DATA && value==EC_AUDIO);h->stage=4; }
     else { CHECK(port==EC_DATA && h->stage==4);h->volume_writes++;if(!h->reject_write)h->reg=value;h->stage=0; }
-    h->ready_at=h->tick+1;
+    h->ready_at=h->tick+(h->write_delay ? h->write_delay :
+        h->busy_every && h->writes%h->busy_every==0 ? 100 : 1);
 }
 static uint64_t ec_mock_now(void *ctx) { return ((struct ec_model *)ctx)->tick; }
 static void ec_mock_pause(void *ctx) { struct ec_model *h=ctx;h->pauses++;if(!h->frozen_clock)h->tick++; }
@@ -65,7 +70,7 @@ static struct thinkpad_ec_io ec_mock_io(void)
 { return (struct thinkpad_ec_io){&ehw,ec_mock_read,ec_mock_write,ec_mock_now,ec_mock_pause}; }
 static uint8_t ec_native_read_port(uint16_t p) { return ec_mock_read(&ehw,p); }
 static void ec_native_write_port(uint16_t p,uint8_t v) { ec_mock_write(&ehw,p,v); }
-static void ec_native_pause(void) { ec_mock_pause(&ehw);g_ticks=ehw.tick; }
+static void ec_native_sleep(uint32_t ms) { CHECK(ms==1 || ms==EC_POLL_MS); while(ms--)ec_mock_pause(&ehw);g_ticks=ehw.tick; }
 static uint32_t ec_native_pte(uint32_t va)
 {
     CHECK(va>=KERNEL_VBASE && va<KERNEL_VBASE+PMM_MAX_PAGES*PAGE_SIZE);
@@ -332,6 +337,113 @@ static void test_thinkpad_ec_reserved_table(void)
     second_claim_next=0;second_claim_failure=-1;g_boot=saved_boot;audio=saved_audio;g_ticks=ticks;
     puts("ThinkPad SMBIOS reserved window: T23 1ff7c000/1717, unaligned/cross-page/above-direct-map tables, copied strings, EC master, E820 refusals, map failure, malformed cleanup and 4 GiB bounds PASS");
 }
+static unsigned ec_records_containing(const char *needle)
+{
+    unsigned n=0;
+    for(unsigned i=0;i<ec_record_count;i++)if(strstr(ec_records[i],needle))n++;
+    return n;
+}
+static void test_thinkpad_ec_tolerance(void)
+{
+    audio_settings_load(&vfs);
+    struct ciuki_mixer_master m={.version=1,.size=32,.left=20,.right=20};
+    memset(&ehw,0,sizeof(ehw));ehw.reg=0xa7;ehw.busy_every=3;
+    struct thinkpad_ec_io io=ec_mock_io();
+    CHECK(!thinkpad_ec_probe(&hec,&io,true,&m) && hec.available && ehw.pauses>=100);
+    ec_capture_begin();
+    for(unsigned i=0;i<20;i++) {
+        ehw.reg=0xa0|(i%15);ehw.tick=hec.next_poll;
+        uint64_t start=ehw.tick;CHECK(thinkpad_ec_volume_poll(&hec,&m)>=0);
+        CHECK(hec.active && hec.available && !hec.failures && ehw.tick-start<=500);
+    }
+    hardware_setup(&ac97);ac97.software_master=false;
+    audio.ready=true;audio.master_in_codec=true;audio.master_in_hardware=true;audio.master=m;
+    uint32_t seq=saved_sequence;
+    m=(struct ciuki_mixer_master){.version=1,.size=32,.left=35,.right=35};
+    CHECK(!audio_master_set(&m) && m.left==36 && m.save_state==CIUKI_MIXER_SAVED);
+    CHECK(saved_sequence==seq+1 && !hw.codec[2/2] && hec.available);
+    CHECK(!ec_records_containing("timeout") && !ec_records_containing("disabled"));
+
+    /* A dead EC fails eight operations, not eight constituent transfers.
+     * User writes during backoff save exact stereo/mute without retrying it. */
+    ehw.busy_every=0;ehw.stuck_ibf=true;
+    for(unsigned i=1;i<=8;i++) {
+        ehw.tick=hec.next_poll;uint64_t start=ehw.tick;
+        seq=saved_sequence;audio_master_refresh();
+        CHECK(ehw.tick-start==500 && hec.failures==i && !hec.available);
+        CHECK(hec.active==(i<8) && !audio.master_in_hardware && saved_sequence==seq);
+        CHECK(ec_records_containing("disabled")== (i==8));
+        unsigned reads=ehw.reads;
+        m=(struct ciuki_mixer_master){.version=1,.size=32,.left=25,.right=75,.mute=i%2};
+        CHECK(!audio_master_set(&m) && m.left==25 && m.right==75 && m.save_state==CIUKI_MIXER_SAVED);
+        CHECK(ehw.reads==reads && saved_sequence==seq+1 && audio.master.mute==i%2);
+        CHECK(hw.codec[2/2]==(uint16_t)(0x0802|(m.mute?0x8000:0)));
+        struct ciuki_mixer_master loaded=audio.master;
+        audio_settings_load(&vfs);
+        CHECK(audio.master.left==loaded.left && audio.master.right==loaded.right && audio.master.mute==loaded.mute);
+    }
+    CHECK(ec_records_containing("timeout stage=ibf ms=500")>=1);
+    CHECK(ec_records_containing("timeout")<8); /* one-second rate limit */
+    CHECK(hec.next_poll==ehw.tick+10000);
+    unsigned reads=ehw.reads;ehw.tick=hec.next_poll-1;audio_master_refresh();CHECK(ehw.reads==reads);
+    ehw.tick=hec.next_poll;audio_master_refresh();
+    CHECK(!hec.active && hec.failures==8 && ec_records_containing("disabled")==1);
+    CHECK(hec.next_poll==ehw.tick+10000);
+    ehw.stuck_ibf=false;ehw.reg=0xe1;ehw.tick=hec.next_poll;seq=saved_sequence;
+    audio_master_refresh();
+    CHECK(hec.active && hec.available && !hec.failures && audio.master_in_hardware);
+    CHECK(audio.master.left==50 && audio.master.right==50 && !audio.master.mute && ehw.reg==0xa7);
+    CHECK(!hw.codec[2/2] && saved_sequence==seq && ec_records_containing("resumed")==1);
+
+    /* A lone timeout must recover at 250 ms with an offline software master. */
+    ac97.software_master=true;audio.master_in_codec=false;
+    ehw.stuck_ibf=true;ehw.tick=hec.next_poll;
+    m=(struct ciuki_mixer_master){.version=1,.size=32,.left=80,.right=80,.mute=1};seq=saved_sequence;
+    uint64_t set_start=ehw.tick;
+    CHECK(!audio_master_set(&m) && saved_sequence==seq+1 && m.save_state==CIUKI_MIXER_SAVED);
+    CHECK(ehw.tick-set_start==500 && m.left==80 && m.mute);
+    CHECK(hec.active && hec.failures==1 && !audio.master_in_hardware);
+    struct audio_stream *stream;CHECK(!audio_stream_open(&stream));
+    struct audio_frame frame={10000,10000},out;stream->rate=48000;
+    CHECK(audio_stream_enqueue(stream,&frame,sizeof(frame))==sizeof(frame));
+    audio_mix(&out,1);CHECK(!out.left && !out.right);
+    m.mute=0;m.save_state=0;m.save_error=0;CHECK(!audio_master_set(&m));
+    CHECK(audio_stream_enqueue(stream,&frame,sizeof(frame))==sizeof(frame));
+    audio_mix(&out,1);CHECK(out.left==8000 && out.right==8000);
+    m.mute=1;m.save_state=0;m.save_error=0;CHECK(!audio_master_set(&m));
+    audio_stream_close(stream);
+    ehw.stuck_ibf=false;ehw.tick=hec.next_poll;audio_master_refresh();
+    CHECK(hec.available && hec.active && !hec.failures && audio.master_in_hardware && (ehw.reg&EC_MASK)==0x4b);
+
+    /* Late output belongs to the old read and is drained before recovery. */
+    ehw.stuck_obf=true;ehw.tick=hec.next_poll;audio_master_refresh();
+    CHECK(hec.pending_read && hec.failures==1 && !audio.master_in_hardware);
+    ehw.stuck_obf=false;ehw.tick=hec.next_poll;audio_master_refresh();
+    CHECK(hec.available && !hec.pending_read && !hec.failures);
+    CHECK(ec_records_containing("timeout stage=obf ms=500"));
+
+    /* Firmware reset loses the pending reply; a fresh command must recover. */
+    ehw.tick+=1000;ehw.stuck_obf=true;ehw.tick=hec.next_poll+1000;audio_master_refresh();
+    CHECK(hec.pending_read && !hec.available);
+    ehw.stage=0;ehw.stuck_obf=false;ehw.tick=hec.next_poll;audio_master_refresh();
+    CHECK(hec.available && !hec.pending_read && !hec.failures);
+
+    /* Even read/write/readback together cannot exceed the task budget. */
+    ehw.tick+=1000;ehw.write_delay=100;m=(struct ciuki_mixer_master){.version=1,.size=32,.left=20,.right=20};
+    uint64_t start=ehw.tick;CHECK(thinkpad_ec_volume_set(&hec,&m)==-ETIMEDOUT);
+    CHECK(ehw.tick-start==500 && hec.active && !hec.available && hec.failures==1);
+    CHECK(ec_records_containing("timeout stage=write ms=500"));
+    /* Frozen clock still exhausts a bounded number of sleeping polls. */
+    ehw.write_delay=0;ehw.stuck_ibf=true;ehw.frozen_clock=true;ehw.tick=hec.next_poll;
+    unsigned pauses=ehw.pauses;CHECK(thinkpad_ec_volume_poll(&hec,&m)==-ETIMEDOUT);
+    CHECK(ehw.pauses-pauses==500 && hec.failures==2);
+    memset(&ehw,0,sizeof(ehw));ehw.reg=7;ehw.write_delay=600;io=ec_mock_io();
+    CHECK(thinkpad_ec_probe(&hec,&io,true,&m)==-ETIMEDOUT && ehw.tick==500);
+    CHECK(ec_records_containing("timeout stage=read ms=500"));
+    capture_ec_records=false;memset(&hec,0,sizeof(hec));
+    audio.ready=audio.master_in_codec=audio.master_in_hardware=false;
+    puts("ThinkPad EC tolerance: 100 ms busy windows, shared 500 ms budget, sleeping polls, offline codec/software master persistence, eight failures, 10 s reprobe, late reply, resync and rate-limited records PASS");
+}
 static void test_thinkpad_ec(void)
 {
     test_thinkpad_ec_init();
@@ -372,10 +484,11 @@ static void test_thinkpad_ec(void)
         memset(&ehw,0,sizeof(ehw));ehw.reg=7;m=(struct ciuki_mixer_master){.left=20,.right=20};
         ehw.absent=fault==0;ehw.stuck_ibf=fault==1;ehw.stuck_obf=fault==2;ehw.reject_write=fault==3;
         if(fault==4){ehw.stuck_ibf=true;ehw.frozen_clock=true;}
-        io=ec_mock_io();CHECK(thinkpad_ec_probe(&hec,&io,true,&m)<0&&!hec.active&&ehw.tick<=80&&ehw.pauses<=4096);
+        io=ec_mock_io();CHECK(thinkpad_ec_probe(&hec,&io,true,&m)<0&&!hec.active&&ehw.tick<=EC_TIMEOUT_MS&&ehw.pauses<=EC_TIMEOUT_MS);
         CHECK(strstr(audio_log,"[ec] thinkpad gate=ec_handshake_failed stage=probe error="));
         reads=ehw.reads;CHECK(thinkpad_ec_volume_poll(&hec,&m)==-ENODEV&&ehw.reads==reads);
     }
     memset(&ehw,0,sizeof(ehw));ehw.reg=15;io=ec_mock_io();CHECK(thinkpad_ec_probe(&hec,&io,true,&m)==-EIO);
+    test_thinkpad_ec_tolerance();
     puts("ThinkPad EC: IBM/DMI gates, timed IBF/OBF read/write/readback, 4 Hz levels/mute, preserved bits, amplifier unity and bounded faults PASS");
 }
