@@ -2252,7 +2252,13 @@ f2-52: desktop-launched Graphics Demo only; query or one fixed sample.
 No client coordinates, display grants or hardware commands.
 
 ```c
-DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT
+DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT,
+    DESK_GFX_FRAME, DESK_GFX_PRESENTED
+```
+
+f2-59: bounded scene region and completion
+
+```c
 };
 #define DESK_SETTINGS_RELOAD 1u
 ```
@@ -2332,6 +2338,15 @@ struct ciuki_accel_info accelerator;
 destination bytes, elapsed ns, completed kernel ops
 
 ```c
+uint32_t source_w, source_h, damage_x, damage_y, damage_w, damage_h;
+    uint32_t ui_x, ui_y, ui_w, ui_h;
+    uint32_t resize_serial;
+```
+
+optional GFX_FRAME replacement attachment
+
+```c
+uint64_t completed_ns, next_frame_ns;
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);
@@ -3380,7 +3395,19 @@ Desktop window glue: handshake, surface, back buffer, damage, events.
 ```c
 struct du_window {
     int channel, surface, configured, closing, closed, error;
-    uint32_t server_pid, ping_serial;
+    int present_pending;
+```
+
+optional completion-paced client freezes surface writes
+
+```c
+int manual_damage;
+```
+
+application combines ordinary damage with its frame request
+
+```c
+uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;
 ```
