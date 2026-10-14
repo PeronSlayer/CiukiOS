@@ -110,6 +110,19 @@ scan/reset work. See [F1-52 validation](../validation/f1-52-usb-hid-poll-latency
 for sources, measurements and the distinction between frame and dispatch
 clocks. QEMU and hardware qualification remain required.
 
+F1-56 makes UHCI's static horizontal order explicit: all frame entries point
+to the independent interrupt QHs, the final interrupt QH points to control,
+control points to bulk, and bulk terminates. The two general QHs occupy
+offsets 4096 and 4112; the reserved general TD remains at 4128 and only one
+general QH can own it at a time. Interrupt and general TDs remain single
+element breadth-first queues (`T=1,Vf=0`), with Active set and IOC clear
+because USBINTR is masked and completion is polled. Retirement, allocation
+size, the 1 ms HID service and port quarantine rules stay as specified above.
+Verbose/test boots dump the first four frame entries and the shared reachable
+QH chain once per UHCI controller after the first root/hub enumeration scan.
+See [F1-56 validation](../validation/f1-56-real-uhci-schedule.md) for the strict
+host traversal model and the unresolved T23 reproduction.
+
 ## Enumeration, hubs and input
 
 Debounce connections 100 ms; root reset is held at least 50 ms with 10 ms

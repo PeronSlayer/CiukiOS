@@ -7,6 +7,7 @@
 #include <ciuki/usb.h>
 #include <ciuki/input.h>
 #include <ciuki/storage.h>
+#include "uhci_model.h"
 struct storage *storage_get(void) { return NULL; }
 int storage_add_removable(struct storage *s,struct blkdev *b) { (void)s;(void)b;assert(0);return -FS_EIO; }
 int storage_remove_removable(struct storage *s,struct blkdev *b,bool surprise) { (void)s;(void)b;(void)surprise;assert(0);return -FS_EIO; }
@@ -27,6 +28,7 @@ static unsigned root_records[USB_PORT_MAX],hub_records[128][USB_PORT_MAX];
 static unsigned root_quarantine_records,hub_quarantine_records;
 static unsigned hid_reports[128],hid_polls[128],hid_pipes[128],usb_key_records,f12_down_records,f12_up_records;
 static int hid_poll_result;
+static unsigned schedule_entries,schedule_qhs,schedule_tds,schedule_invalid;
 #ifndef USB_LATENCY_QUEUE
 void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }
 void input_devices_changed(enum input_source source,bool attached)
@@ -53,6 +55,13 @@ void klog(const char *s,...)
     char record[256];va_list ap;va_start(ap,s);int len=kvsnprintf(record,sizeof(record),s,ap);va_end(ap);
     assert(len>=0 && len<=254);
     if(record_hook)record_hook(record);
+    if(strstr(record,"[usb] schedule frame=")) {
+        assert(strstr(record,"controller="));
+        if(strstr(record,"entry=")) {assert(strstr(record,"flbase=") && strstr(record,"current="));schedule_entries++;}
+        else if(strstr(record,"qh=")) {assert(strstr(record,"link=") && strstr(record,"element="));schedule_qhs++;}
+        else if(strstr(record,"td=")) {assert(strstr(record,"link=") && strstr(record,"status=") && strstr(record,"token=") && strstr(record,"buffer="));schedule_tds++;}
+        else {assert(strstr(record,"invalid_link="));schedule_invalid++;}
+    }
     if(strstr(record,"[usb] port=")) {
         assert(strstr(record,"status=") && strstr(record,"tick=") && strstr(record,"result="));
         unsigned p;unsigned long long tick;
@@ -285,13 +294,14 @@ static uint32_t read_reg(void *arg,unsigned off,unsigned width)
     unsigned frame=(unsigned)(m->now/(m->frame_ms ? m->frame_ms:1));
     if(m->ohci && off==0x3c)return m->freeze ? 0:frame&0xffff;
     if(!m->ohci && off==6)return m->freeze ? 0:frame&0x7ff;
-    if(!m->ohci && off==2)return ((m->regs[0]&1)?0:0x20)|(m->host_error?8:0);
+    if(!m->ohci && off==2)return (m->regs[0]>>16)|((m->regs[0]&1)?0:0x20)|(m->host_error?8:0);
     if(m->ohci && off==0x0c && m->host_error)return 0x10;
     return m->regs[off/4] >> (8*(off&3));
 }
 static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
 {
     struct model *m=arg;writes++;
+    if(!m->ohci && off==2) {m->regs[0]&=~(value<<16);return;}
     if(!m->ohci && off==0 && (value&2) && !m->reset_stuck) {
         /* QEMU uhci_reset(): stopped, empty schedule, attached devices
          * reappear with CCS/CSC, but PE stays clear until software sets it. */
@@ -384,34 +394,119 @@ static void execute_ohci(struct model *m,unsigned ed_addr,bool periodic)
     }
     assert(!ed_addr);
 }
-static void execute_uhci(struct model *m,unsigned qh_addr)
+static volatile uint32_t *uhci_dma(void *arg,uint32_t address,unsigned bytes)
+{ return (volatile uint32_t *)dma_at(arg,address,bytes); }
+static bool uhci_transaction(void *arg,uint32_t td_address,uint32_t qh_address,volatile uint32_t *td)
 {
-    for(unsigned i=0;i<=USB_DEVICE_MAX*USB_HID_MAX;i++) {
-        volatile uint32_t *qh=(volatile uint32_t *)dma_at(m,qh_addr,8);
-        if(!(qh[1]&1)) {
-            volatile uint32_t *td=(volatile uint32_t *)dma_at(m,qh[1]&~15u,16);
-            if(td[1]&(1u<<23)) {
-                unsigned len=(((td[2]>>21)&0x7ff)+1)&0x7ff;
-                uint8_t *buf=len ? dma_at(m,td[3],len):NULL;
-                assert(len<=64);
-                if(m->late_hid && ((td[2]>>15)&15)==1 && target(m,(td[2]>>8)&127)->kind==KBD) {
-                    m->latched_td=qh[1]&~15u;m->latched_ed=qh_addr;
-                    qh_addr=qh[0]&~15u;continue;
-                }
-                int n=transaction(m,(td[2]>>8)&127,(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,buf,len);
-                if(n==-USB_EAGAIN)td[1]|=1u<<19;
-                else {
-                    td[1]&=~((1u<<23)|0x7ffu);
-                    if(n<0)td[1]|=n==-USB_EPIPE ? 1u<<22:1u<<18;
-                    else {if(m->bad_length)n=(int)len+1;td[1]|=((unsigned)n-1)&0x7ff;}
-                    qh[1]=1;
-                }
-            }
-        }
-        if(qh[0]&1)return;
-        assert(qh[0]&2);qh_addr=qh[0]&~15u;
+    struct model *m=arg;
+    unsigned len=(((td[2]>>21)&0x7ff)+1)&0x7ff;
+    uint8_t *buf=len ? dma_at(m,td[3],len):NULL;
+    assert(len<=64);
+    if(m->late_hid && ((td[2]>>15)&15)==1 && target(m,(td[2]>>8)&127)->kind==KBD) {
+        m->latched_td=td_address;m->latched_ed=qh_address;return false;
     }
-    assert(!"cyclic UHCI QH chain");
+    int n=transaction(m,(td[2]>>8)&127,(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,buf,len);
+    if(n==-USB_EAGAIN) {td[1]|=1u<<19;return false;}
+    td[1]&=~((1u<<23)|(1u<<19)|0x7ffu);
+    if(n<0) {td[1]|=n==-USB_EPIPE ? 1u<<22:1u<<18;m->regs[0]|=2u<<16;return false;}
+    if(m->bad_length)n=(int)len+1;
+    td[1]|=((unsigned)n-1)&0x7ff;
+    return true;
+}
+static void execute_uhci(struct model *m,uint32_t link)
+{
+    uint32_t status=m->regs[0]>>16;
+    struct uhci_model_io io={m,uhci_dma,uhci_transaction,&status};
+    assert(!uhci_model_frame(&io,link));
+    m->regs[0]|=status<<16;
+}
+/* Independent small schedules test the decision table, not the production
+ * builder. Physical offsets: QHs 0/16/32, TDs 64/80/96. */
+static struct uhci_rules {
+    _Alignas(16) uint32_t words[32];
+    uint32_t status, nak, error;
+    unsigned count, order[8], fetches;
+} rules;
+static volatile uint32_t *rules_dma(void *arg,uint32_t address,unsigned bytes)
+{
+    struct uhci_rules *r=arg;
+    assert(address>=0x100000 && address-0x100000<=sizeof(r->words)-bytes);
+    assert(!(address&15));r->fetches++;
+    return r->words+(address-0x100000)/4;
+}
+static bool rules_transaction(void *arg,uint32_t address,uint32_t qh,volatile uint32_t *td)
+{
+    struct uhci_rules *r=arg;(void)qh;
+    assert(r->count<ARRAY_SIZE(r->order));r->order[r->count++]=address-0x100000;
+    if(address==r->nak) {td[1]|=1u<<19;return false;}
+    td[1]&=~((1u<<23)|(1u<<19)|0x7ffu);
+    if(address==r->error) {td[1]|=1u<<22;return false;}
+    return true; /* one-byte ACK */
+}
+static void rules_setup(unsigned depth)
+{
+    memset(&rules,0,sizeof(rules));
+    rules.words[0]=0x100012;rules.words[1]=0x100044; /* element bit 2 ignored */
+    rules.words[4]=1;rules.words[5]=0x100060;
+    for(unsigned at=16;at<=24;at+=4) {
+        rules.words[at]=1;rules.words[at+1]=0x188007ff;rules.words[at+2]=USB_PID_IN;
+    }
+    rules.words[16]=0x100050|(depth ? 4:0);
+}
+static void uhci_schedule_rules(void)
+{
+    struct uhci_model_io io={&rules,rules_dma,rules_transaction,&rules.status};
+    for(unsigned depth=0;depth<2;depth++) {
+        rules_setup(depth);assert(!uhci_model_frame(&io,0x100002));
+        assert(rules.order[0]==64 && rules.order[rules.count-1]==96);
+        if(depth) {assert(rules.count==3 && rules.order[1]==80 && rules.words[1]==1);}
+        else {
+            assert(rules.count==2 && rules.words[1]==0x100050 && (rules.words[21]&(1u<<23)));
+            assert(!uhci_model_frame(&io,0x100002));
+            assert(rules.count==3 && rules.order[2]==80 && rules.words[1]==1);
+        }
+    }
+    /* T on a frame or horizontal link never falls through to adjacent RAM. */
+    rules_setup(1);assert(!uhci_model_frame(&io,0x100003) && !rules.count && !rules.fetches);
+    rules.words[1]=1;assert(!uhci_model_frame(&io,0x100002) && rules.count==1 && rules.order[0]==96);
+    rules_setup(0);rules.words[0]=1;
+    assert(!uhci_model_frame(&io,0x100002) && rules.count==1 && rules.order[0]==64);
+    assert(rules.words[25]&(1u<<23)); /* unlinked QH/TD never executes */
+    /* Inactive, NAK and error do not advance, even with a depth-first link. */
+    for(unsigned failure=0;failure<3;failure++) {
+        rules_setup(1);
+        if(!failure) rules.words[17]=(1u<<24)|0x7ff; /* inactive + IOC */
+        if(failure==1) rules.nak=0x100040;
+        if(failure==2) rules.error=0x100040;
+        assert(!uhci_model_frame(&io,0x100002));
+        assert(rules.words[1]==0x100044 && (rules.words[21]&(1u<<23)));
+        assert(rules.order[rules.count-1]==96 && rules.count==(failure ? 2u:1u));
+        if(!failure) assert(rules.status==1);
+        if(failure==1) assert(rules.words[17]==0x188807ff && !rules.status);
+        if(failure==2) assert(!(rules.words[17]&(1u<<23)) && (rules.words[17]&(1u<<22)));
+    }
+    rules_setup(0);rules.words[17]|=1u<<24;
+    assert(!uhci_model_frame(&io,0x100002) && rules.status==1 && rules.count==2);
+    /* A short SPD IN stops this queue without advancing its element. */
+    rules_setup(1);rules.words[17]|=1u<<29;rules.words[18]|=1u<<21;
+    assert(!uhci_model_frame(&io,0x100002) && rules.status==1 && rules.count==2 && rules.words[1]==0x100044);
+    /* The depth flag belongs to the TD link. A QH reached through an element
+     * replaces the old context: the old horizontal branch is not revisited. */
+    for(unsigned depth=0;depth<2;depth++) {
+        rules_setup(0);rules.words[0]=1;rules.words[16]=0x100012|(depth ? 4:0);
+        assert(!uhci_model_frame(&io,0x100002));
+        assert(rules.count==(depth ? 2u:1u) && rules.words[1]==rules.words[16]);
+        if(!depth) assert(!uhci_model_frame(&io,0x100002) && rules.count==2);
+        assert(rules.order[1]==96);
+    }
+    rules_setup(0);rules.words[1]=0x100012;
+    assert(!uhci_model_frame(&io,0x100002) && rules.count==1 && rules.order[0]==96);
+    /* Direct TDs follow their own link outside a Q context; Vf is ignored. */
+    rules_setup(1);assert(!uhci_model_frame(&io,0x100040) && rules.count==2 && rules.order[1]==80);
+    rules_setup(0);assert(uhci_model_frame(&io,0x100006)==-USB_EPROTO && !rules.fetches);
+    rules_setup(0);rules.words[0]|=4;assert(uhci_model_frame(&io,0x100002)==-USB_EPROTO);
+    rules_setup(0);rules.words[16]|=8;assert(uhci_model_frame(&io,0x100002)==-USB_EPROTO && !rules.count);
+    puts("PASS USB strict UHCI traversal: frame/QH/TD T/Q/Vf, breadth/depth, unreachable queues, inactive/IOC, NAK/error/SPD, reserved bits");
 }
 static void complete_late_hid(struct model *m)
 {
@@ -464,7 +559,7 @@ static void sleep_ms(void *arg,unsigned ms)
             if(!m->reset_stuck && (m->regs[0]&2))m->regs[0]&=~2u;
             if(!(m->config[1]&4) || !(m->regs[0]&1))continue;
             unsigned frame=((unsigned)(m->now/(m->frame_ms ? m->frame_ms:1))&1023)*4;
-            execute_uhci(m,*(uint32_t *)dma_at(m,m->regs[2]+frame,4)&~15u);
+            execute_uhci(m,*(uint32_t *)dma_at(m,m->regs[2]+frame,4));
             complete_late_hid(m);
         }
     }
@@ -484,6 +579,7 @@ static void setup(bool ohci,bool hub)
     root_quarantine_records=hub_quarantine_records=0;
     memset(hid_reports,0,sizeof(hid_reports));memset(hid_polls,0,sizeof(hid_polls));memset(hid_pipes,0,sizeof(hid_pipes));
     usb_key_records=f12_down_records=f12_up_records=0;
+    schedule_entries=schedule_qhs=schedule_tds=schedule_invalid=0;
     memset(held,0,sizeof(held));memset(buttons,0,sizeof(buttons));
     m.ohci=ohci;m.pending_addr=0;
     m.dev[0]=(struct peripheral){.kind=hub?HUB:KBD,.present=true};
@@ -547,6 +643,61 @@ static void basic(bool ohci,bool hub)
     assert(m.dma_checks>20 && m.protocol_requests>=3 && events && key_downs && key_ups);
     for(unsigned i=0;i<513;i++)assert(!held[i]);
     printf("PASS USB %s %s enumeration/HID/LED/repeat/rollover/detach/DMA\n",ohci?"OHCI":"UHCI",hub?"hub":"root");
+}
+static void uhci_schedule_regression(void)
+{
+    setup(false,false);assert(!attach());
+    for(unsigned frame=0;frame<1024;frame++) assert(((uint32_t *)m.dma)[frame]==0x101202);
+    uint32_t link=((uint32_t *)m.dma)[0];
+    for(unsigned i=0;i<USB_DEVICE_MAX*USB_HID_MAX;i++) {
+        assert(link==(m.host.dma_phys+USB_HID_BASE+i*USB_HID_STRIDE+2));
+        volatile uint32_t *qh=uhci_dma(&m,link&~15u,8);
+        assert(qh[1]==1);link=qh[0];
+    }
+    assert(link==(m.host.dma_phys+USB_UHCI_CONTROL_QH+2));
+    volatile uint32_t *control=uhci_dma(&m,link&~15u,8);
+    assert(control[1]==1 && control[0]==(m.host.dma_phys+USB_UHCI_BULK_QH+2));
+    volatile uint32_t *bulk=uhci_dma(&m,control[0]&~15u,8);assert(bulk[0]==1 && bulk[1]==1);
+    model_step();assert(m.host.device_count==2 && !schedule_entries && !schedule_qhs);
+    g_boot.flags=CBI_F_VERBOSE;m.host.next_scan=m.now;model_step();
+    assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==2 && !schedule_invalid);
+    assert(m.host.schedule_dumped);model_step();assert(schedule_entries==4 && schedule_qhs==66);
+    /* Inject a missing interrupt-tail -> control edge. This reproduces the
+     * observable EAGAIN/addr0 timeout combination, but is NOT the F1-52
+     * baseline: its original control QH was reachable (see validation). */
+    volatile uint32_t *tail=uhci_dma(&m,m.host.dma_phys+USB_HID_BASE+63*USB_HID_STRIDE,8);
+    uint32_t saved=tail[0];tail[0]=1;m.nak=true;
+    m.dev[0].report[2]=4;m.dev[0].report_len=8;
+    m.dev[1].report[1]=1;m.dev[1].report_len=4;
+    struct usb_device zero={.host=&m.host,.ep0=8};uint8_t descriptor[8];
+    usb_host_take(&m.host);
+    assert(usb_control(&zero,0x80,6,0x100,0,descriptor,8)==-USB_ETIMEDOUT);
+    usb_host_drop(&m.host);
+    assert(zero.packet_trace.actual==-1 && zero.packet_trace.status==0x188007ff);
+    assert(m.host.ready && m.dev[0].report_len==8 && m.dev[1].report_len==4);
+    for(unsigned i=0;i<2;i++) {
+        struct usb_device *d=&m.host.devices[i];struct usb_packet_trace *t=&d->hid[0].trace;
+        for(unsigned j=0;j<20 && !t->valid;j++) {
+            sleep_ms(&m,1);usb_host_take(&m.host);usb_hid_service(&m.host);usb_host_drop(&m.host);
+        }
+        assert(t->valid && t->result==-USB_EAGAIN && t->status==(0x188807ffu|(d->low_speed ? 1u<<26:0)));
+    }
+    tail[0]=saved;m.nak=false;
+    usb_host_take(&m.host);
+    assert(usb_control(&zero,0x80,6,0x100,0,descriptor,8)==8);
+    usb_host_drop(&m.host);model_step();
+    assert(held[INPUT_KEY_A]==1 && last_x==1 && !m.dev[0].report_len && !m.dev[1].report_len);
+    /* Diagnostic reads fail safely for invalid DMA pointers and cycles. */
+    m.host.schedule_dumped=false;((uint32_t *)m.dma)[0]=(m.host.dma_phys+USB_DMA_BYTES)|2;
+    usb_uhci_dump_schedule(&m.host);assert(schedule_invalid==1);
+    ((uint32_t *)m.dma)[0]=m.host.dma_phys+USB_HID_BASE+2;m.host.schedule_dumped=false;
+    bulk[0]=m.host.dma_phys+USB_HID_BASE+2;usb_uhci_dump_schedule(&m.host);assert(schedule_invalid==2);bulk[0]=1;
+    usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
+    setup(true,false);g_boot.flags=CBI_F_VERBOSE;assert(!attach());model_step();assert(!schedule_entries && !schedule_qhs);
+    setup(false,false);g_boot.flags=CBI_F_TEST_REQUEST;assert(!attach());model_step();
+    assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==2);
+    usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
+    puts("PASS USB UHCI periodic/control/bulk reachability, missing-tail fault reproduces NAK EAGAIN/addr0 timeout, restored ACK/input, once-only bounded verbose/test dump");
 }
 static void errors(bool ohci)
 {
@@ -834,6 +985,7 @@ static void port_flood(bool ohci)
 }
 int main(void)
 {
+    uhci_schedule_rules();uhci_schedule_regression();
     bulk_engine(false);bulk_engine(true);
     assert(usb_mouse_wheel_layout(wheel_desc,sizeof(wheel_desc)));
     for(unsigned i=0;i<sizeof(wheel_desc)-1;i++) {

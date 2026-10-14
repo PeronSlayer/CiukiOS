@@ -492,6 +492,7 @@ void usb_step(struct usb_host *h)
             h->root_status[p] = h->ops->port_status(h, p);
         }
         for (unsigned i = 0; i < h->device_count && h->ready; i++) if (h->devices[i].present && h->devices[i].hub_ports) usb_hub_scan(&h->devices[i]);
+        usb_uhci_dump_schedule(h);
     }
     for (unsigned i = 0; i < h->device_count && h->ready; i++) {
         struct usb_device *d = &h->devices[i];

@@ -21,6 +21,8 @@
 #define USB_EPROTO 71
 #define USB_ETIMEDOUT 110
 #define USB_ED 4096u
+#define USB_UHCI_CONTROL_QH USB_ED
+#define USB_UHCI_BULK_QH (USB_ED + 16u)
 #define USB_TD 4128u
 #define USB_TAIL 4160u
 #define USB_BUFFER 4352u
@@ -149,7 +151,7 @@ struct usb_host {
     unsigned root_status[USB_PORT_MAX]; /* last observed normalized state */
     struct usb_port_log root_log[USB_PORT_MAX];
     bool attempted, ready, quarantined, touched, owned, busy;
-    bool scanned;
+    bool scanned, schedule_dumped;
     unsigned scan_count;
     uint64_t next_scan, scan_window;
     fs_lock transfer_lock; /* short DMA/state mutex; always free across sleeps */
@@ -194,6 +196,7 @@ void usb_host_take(struct usb_host *); /* reserves serialized general/BOT slot *
 void usb_host_drop(struct usb_host *);
 void usb_sleep(struct usb_host *, unsigned); /* caller's reservation survives */
 void usb_hid_service(struct usb_host *); /* mutex held, no general transfers */
+void usb_uhci_dump_schedule(struct usb_host *); /* once, after enumeration; mutex held */
 int usb_hub_attach(struct usb_device *);
 void usb_hub_scan(struct usb_device *);
 int usb_hid_attach(struct usb_device *, struct usb_hid *, unsigned report_length);
