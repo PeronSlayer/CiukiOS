@@ -637,6 +637,7 @@ class AppCaseReplayTests(unittest.TestCase):
         subprocess.run(["clang", "-fsanitize=address,undefined", "-pthread", *map(str, objects), "-o", str(cls.binary)],
                        check=True, env=cls.env)
         cls.suite = json.loads((ROOT / "tests/suites/f2-desktop.json").read_text())
+        cls.suite["cases"] += json.loads((ROOT / "tests/suites/f1-usb.json").read_text())["cases"]
         # The image's /Programs, as the desktop scans it (the menu lists it without the desktop itself).
         cls.programs = sorted(set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text())))
 
@@ -668,7 +669,7 @@ class AppCaseReplayTests(unittest.TestCase):
             if head == "CHECKPOINT_AT": out["checkpoints"].append((int(rest.split()[0]), float(rest.split()[1])))
             elif head == "SYSTEM": out["system"].append(rest)
             elif head == "FILE": out["file"] = rest.split()
-            elif head in ("PROBE", "GATE", "PS2", "TIMING", "RESULT", "DESKTOP"):
+            elif head in ("PROBE", "GATE", "PS2", "USB", "TIMING", "RESULT", "DESKTOP"):
                 out[head] = dict(kv.split("=", 1) for kv in re.findall(r'(\w+=(?:"[^"]*"|\S+))', rest))
         print(f"REPLAY {case_id} {model}: " + " | ".join(l for l in result.stdout.splitlines()
                                                          if l.startswith(("PROBE", "GATE", "PS2", "TIMING", "CHECKPOINT_AT"))))
@@ -712,6 +713,46 @@ class AppCaseReplayTests(unittest.TestCase):
         for model, out in self.check("desktop-shell-qemu-t23", "shell", 0, TASKS_WINDOW_S, SHELL_MODELS):
             self.assertEqual(out["DESKTOP"]["notice"], '"shell stage 6 programs %d"' % (len(self.programs) - 1), model)
             self.assertEqual(int(out["PROBE"]["keys"]), 4, model)
+
+    def test_usb_shell_case_replay(self):
+        """The actual UHCI/OHCI scripts, translated set-1 keys and source=USB,
+        through the production desktop's F12 selector, launch, drag, close/reap.
+        No repeats are needed; keyboard edges remain independent of the mouse.
+        """
+        models = {"usb-10ms": ["--usb-poll-ms", "10", "--start-delay-ms", "800"],
+                  "usb-late-start": ["--usb-poll-ms", "10", *REPLAY_MODELS["late-start"]]}
+        for case_id in ("usb-input-uhci", "usb-input-ohci"):
+            for model, out in self.check(case_id, "shell", 0, TASKS_WINDOW_S, models):
+                self.assertEqual(out["DESKTOP"]["shell_stage"], "6", model)
+                self.assertEqual(out["PROBE"]["keys"], "4", model)
+                self.assertEqual(out["USB"]["read_keys"], "4")
+                self.assertEqual(out["USB"]["pending_mouse"], "0")
+                self.assertEqual(out["USB"]["pending_keys"], "0")
+                self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]), ("40", "16"))
+
+    def test_usb_shell_slow_poll_misses_start(self):
+        """The evidence has 1.4--2.5 s between USB reports, versus 20--100 ms
+        runner pauses. QEMU merges same-button motion before it is polled;
+        the move onto Start cancels the tail of the corner clamp, so stage 0
+        never opens the menu even though F12 and A are consumed.
+        """
+        _, out = self.replay("usb-input-uhci", "shell", "usb-slow",
+                             ["--usb-poll-ms", "2000", "--start-delay-ms", "800", "--limit-s", "60", "--trace"])
+        self.assertEqual(out["RESULT"]["success"], "0")
+        self.assertEqual(out["DESKTOP"]["shell_test"], "1")
+        self.assertEqual(out["DESKTOP"]["shell_stage"], "0")
+        self.assertEqual(out["PROBE"]["keys"], "0")
+        self.assertEqual(out["GATE"]["keys"], "2")
+        self.assertEqual(out["USB"]["read_keys"], "4")
+        self.assertEqual(out["GATE"]["motion"], "36")
+        self.assertEqual(out["GATE"]["buttons"], "12")
+        reports = re.findall(r'USB mouse report dx=(-?\d+) dy=(-?\d+) buttons=(\d+)', out["text"])
+        self.assertEqual(reports[:7], [("-127", "-127", "0")] * 5 +
+                         [("-87", "-111", "0"), ("0", "0", "1")])
+        self.assertGreater(int(out["USB"]["compressed"]), 0)
+        self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]), ("0", "0"))
+        self.assertEqual(out["USB"]["pending_mouse"], "0")
+        self.assertEqual(out["USB"]["pending_keys"], "0")
 
     def test_shell_case_firmware_input_order(self):
         """desktop-shell-qemu-e500 on image 639bcca5: stage 6 reached, keys=0, motion=47 buttons=12. On the
