@@ -84,9 +84,12 @@ bool audio_vm_attached(void);
  * No printing in the refill worker. */
 struct audio_vm_diagnostic {
     uint64_t published, pcm, opl, starved, fifo, halts;
+    uint64_t level_at;
+    uint32_t pcm_peak, opl_peak, mix_peak, ring_peak;
     uint32_t rate;
     int error;
-    bool ready, attached;
+    uint8_t gain[2], master[2];
+    bool ready, attached, running, muted, master_muted, master_in_codec;
 };
 void audio_vm_published(void);
 void audio_vm_diagnostic(struct dosvm_key, struct audio_vm_diagnostic *);

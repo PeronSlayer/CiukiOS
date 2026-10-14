@@ -18,6 +18,13 @@
 #define VM_HZ DOSVM_AUDIO_HZ                /* timeline and mixer rate: 48 kHz both */
 _Static_assert(DOSVM_AUDIO_HZ == AUDIO_RATE && OPL3_RATE == AUDIO_RATE, "one 48 kHz clock");
 
+/* Pending peaks belong to a mixed quantum; only successful publication
+ * admits them to the one-second window. Diagnostics only observe it. */
+struct vm_level {
+    uint32_t pending[3], peak[3], last[3]; /* PCM, FM, combined digital output */
+    uint64_t start, at;
+};
+
 struct vm_slot {
     /* Control: written by attach/detach/revoke under irq_save. */
     struct dosvm_key key;
@@ -53,10 +60,12 @@ struct vm_slot {
     uint64_t dac_until;
     bool head_started;
     uint64_t published;
+    struct vm_level level;
     struct audio_vm_stats stats;
 };
 static struct vm_slot vm_slots[DOSVM_LIMIT];
 static struct audio_vm_tap ring;
+static struct vm_level ring_level;
 static uint32_t rate_epoch;
 static volatile bool kick_armed = true;
 static int32_t pcm_buf[AUDIO_QUANTUM * 2], opl_buf[AUDIO_QUANTUM * 2];
@@ -74,6 +83,24 @@ static const uint32_t level_gain[32] = {
 static const uint32_t output_gain[4] = { 65536, 130762, 260904, 520571 };
 
 static int16_t sat16(int64_t v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : (int16_t)v; }
+static void level_peak(uint32_t *peak, int64_t value)
+{
+    int32_t v = sat16(value);
+    uint32_t magnitude = (uint32_t)(v < 0 ? -v : v);
+    if (magnitude > *peak) *peak = magnitude;
+}
+static void level_publish(struct vm_level *l)
+{
+    for (unsigned i = 0; i < 3; i++) {
+        if (l->pending[i] > l->peak[i]) l->peak[i] = l->pending[i];
+        l->pending[i] = 0;
+    }
+    if (g_ticks - l->start >= 1000) {
+        memcpy(l->last, l->peak, sizeof(l->last));
+        memset(l->peak, 0, sizeof(l->peak));
+        l->at = l->start = g_ticks;
+    }
+}
 static void tap_init(struct audio_vm_tap *t) { memset(t, 0, sizeof(*t)); t->digest = 2166136261u; }
 static uint32_t fnv_frame(uint32_t h, int16_t l, int16_t r)
 {
@@ -108,10 +135,13 @@ int audio_vm_attach(struct dosvm_key key)
     if (e) return e;
     struct vm_slot *s = &vm_slots[key.id - 1];
     uint32_t f = irq_save();
+    bool first = !audio_vm_attached();
     s->key = key; s->token = token;
     if (!++s->epoch) s->epoch = 1;
     s->state = AUDIO_VM_PENDING; s->gain[0] = s->gain[1] = 100; s->muted = false;
     s->published = 0;
+    memset(&s->level, 0, sizeof(s->level)); s->level.start = g_ticks;
+    if (first) { memset(&ring_level, 0, sizeof(ring_level)); ring_level.start = g_ticks; }
     memset(&s->stats, 0, sizeof(s->stats));
     tap_init(&s->stats.pcm); tap_init(&s->stats.opl);
     s->stats.opl_head_digest = 2166136261u;
@@ -512,6 +542,11 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
             p[c] = ((int64_t)pcm_buf[k * 2 + c] * gp[c]) >> 16;
             o[c] = ((int64_t)opl_buf[k * 2 + c] * go[c]) >> 16;
             sums[k][c] += p[c] + o[c];
+            level_peak(&s->level.pending[0], p[c]);
+            level_peak(&s->level.pending[1], o[c]);
+            unsigned master = c ? audio.master.right : audio.master.left;
+            if (audio.master_in_codec && master) master = 100;
+            level_peak(&s->level.pending[2], audio.master.mute ? 0 : (p[c] + o[c]) * master / 100);
         }
         if (p[0] || p[1] || o[0] || o[1]) sound = true;
         tap_frame(&s->stats.pcm, p[0], p[1]);
@@ -584,7 +619,11 @@ void audio_vm_tap(const struct audio_frame *out, unsigned frames)
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) if (vm_slots[i].state != AUDIO_VM_FREE) attached = true;
     if (!attached) return;
     uint32_t f = irq_save();
-    for (unsigned k = 0; k < frames; k++) tap_frame(&ring, out[k].left, out[k].right);
+    for (unsigned k = 0; k < frames; k++) {
+        tap_frame(&ring, out[k].left, out[k].right);
+        level_peak(&ring_level.pending[0], out[k].left);
+        level_peak(&ring_level.pending[0], out[k].right);
+    }
     irq_restore(f);
 }
 bool audio_vm_attached(void)
@@ -597,20 +636,29 @@ void audio_vm_published(void)
     uint32_t f = irq_save();
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
         struct vm_slot *s = &vm_slots[i];
-        if (s->state == AUDIO_VM_ACTIVE && s->live_epoch == s->epoch) s->published++;
+        if (s->state == AUDIO_VM_ACTIVE && s->live_epoch == s->epoch) {
+            s->published++; level_publish(&s->level);
+        }
     }
+    level_publish(&ring_level);
     irq_restore(f);
 }
 void audio_vm_diagnostic(struct dosvm_key key, struct audio_vm_diagnostic *out)
 {
     uint32_t f = irq_save();
     *out = (struct audio_vm_diagnostic){ .rate=audio_output_rate(), .ready=audio.ready,
-        .error=audio.error, .fifo=audio.fifo, .halts=audio.halts };
+        .error=audio.error, .fifo=audio.fifo, .halts=audio.halts, .running=audio.running,
+        .master={audio.master.left, audio.master.right}, .master_muted=audio.master.mute,
+        .master_in_codec=audio.master_in_codec };
     if (key.id && key.id <= DOSVM_LIMIT) {
         const struct vm_slot *s = &vm_slots[key.id - 1];
         if (s->key.generation == key.generation && s->state != AUDIO_VM_FREE) {
             out->attached = true; out->published = s->published;
             out->pcm = s->stats.pcm.frames; out->opl = s->stats.opl.frames; out->starved = s->stats.starved;
+            out->muted = s->muted; out->gain[0] = s->gain[0]; out->gain[1] = s->gain[1];
+            out->level_at = s->level.at;
+            out->pcm_peak = s->level.last[0]; out->opl_peak = s->level.last[1]; out->mix_peak = s->level.last[2];
+            out->ring_peak = ring_level.last[0];
         }
     }
     irq_restore(f);
