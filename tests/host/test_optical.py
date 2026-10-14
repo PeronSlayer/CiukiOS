@@ -93,10 +93,72 @@ def multisession_fixture(directory,index):
                 shutil.rmtree(tree)
         tail.unlink(missing_ok=True)
 
-class Optical(unittest.TestCase):
+def root_record_fixture(directory, quirks=(), joliet=False):
+    """Small independently encoded ISO; no mastering/extraction tool needed."""
+    data=bytearray(48*BLOCK)
+    payload=b'Ciuki F1-58 directory record fixture.\n'
+    data[44*BLOCK:44*BLOCK+len(payload)]=payload
+    entries=[]
+
+    def record(extent,size,name,flags=0,extended=0):
+        length=33+len(name)+(not (len(name)&1))
+        r=bytearray(length); r[0]=length; r[1]=extended
+        both(r,2,extent); both(r,10,size); both(r,28,1,2)
+        r[25]=flags; r[32]=len(name); r[33:33+len(name)]=name
+        if 'mismatch' in quirks:
+            r[6:10]=bytes(4); r[14:18]=bytes(4); r[30:32]=bytes(2)
+        return r
+
+    def hierarchy(descriptor,root,nested,unicode_names):
+        size=BLOCK+512 if 'unaligned' in quirks else BLOCK
+        extended=1 if 'extended' in quirks else 0
+        encode=lambda s: s.encode('utf-16-be' if unicode_names else 'ascii')
+        b=bytearray(BLOCK); b[0:7]=bytes([2 if unicode_names else 1])+b'CD001\1'
+        b[40:72]=b'CIUKI_F158'.ljust(32,b' ')
+        both(b,80,len(data)//BLOCK); both(b,120,1,2); both(b,124,1,2); both(b,128,BLOCK,2)
+        if unicode_names: b[88:91]=b'%/E'
+        b[881]=1; b[156:190]=record(root,size,b'\0',2,extended)
+        data[descriptor*BLOCK:(descriptor+1)*BLOCK]=b
+        for extent,parent,is_root in ((root,root,True),(nested,root,False)):
+            start=(extent+extended)*BLOCK
+            # Non-record attribute bytes ensure skipping is actually exercised.
+            if extended: data[extent*BLOCK:(extent+1)*BLOCK]=b'X'*BLOCK
+            records=[record(extent,size,b'\0',2,extended),record(parent,size,b'\1',2,extended)]
+            if is_root: records.append(record(nested,size,encode('SUB'),2,extended))
+            name='FIRST.TXT' if is_root else 'NESTED.TXT'
+            if unicode_names: name='Joliet Ω.txt' if is_root else 'Nested Ω.txt'
+            records.append(record(44,len(payload),encode(name+';1')))
+            offset=0
+            for r in records: data[start+offset:start+offset+len(r)]=r; offset+=len(r)
+            if not joliet or unicode_names:
+                prefix='' if is_root else '/SUB'
+                entries.append({'path':prefix+'/'+name,'kind':'file','size':len(payload),
+                                'sha256':hashlib.sha256(payload).hexdigest()})
+                if is_root: entries.append({'path':'/SUB','kind':'directory'})
+            if 'unaligned' in quirks:
+                r=record(44,len(payload),encode('TAIL.TXT;1'))
+                # Starts inside the declared tail, ends in its rounded block.
+                dot=record(extent,size,b'\0',2,extended)
+                at=start+BLOCK
+                for _ in range(14): data[at:at+len(dot)]=dot; at+=len(dot)
+                data[at:at+len(r)]=r
+                if not joliet or unicode_names:
+                    entries.append({'path':('' if is_root else '/SUB')+'/TAIL.TXT','kind':'file',
+                                    'size':len(payload),'sha256':hashlib.sha256(payload).hexdigest()})
+
+    hierarchy(16,24,28,False)
+    if joliet: hierarchy(17,34,38,True)
+    terminator=18 if joliet else 17
+    data[terminator*BLOCK:terminator*BLOCK+7]=b'\xffCD001\1'
+    image=Path(directory)/('root-record-'+str(joliet)+'-'+'-'.join(quirks)+'.iso')
+    image.write_bytes(data)
+    return {'path':str(image),'entries':entries}
+
+
+class OpticalHarness(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not shutil.which('xorriso') or not shutil.which('clang'): raise unittest.SkipTest('optical host tools absent')
+        if not shutil.which('clang'): raise unittest.SkipTest('optical host compiler absent')
         out=ROOT/'build/host/optical'
         out.mkdir(parents=True,exist_ok=True)
         cls.binary=out/'test_optical'
@@ -133,6 +195,90 @@ class Optical(unittest.TestCase):
             self.assertEqual(expected,actual)
             self.assertTrue(any(s.startswith('COUNTERS\twrites=0\tflushes=0') for s in lines))
         return result.stdout+result.stderr
+
+
+class RootRecords(OpticalHarness):
+    def test_python_root_quirks_and_nested_records(self):
+        for joliet in (False,True):
+            for quirks in ((),('mismatch',),('unaligned',),('extended',),('mismatch','unaligned','extended')):
+                with self.subTest(joliet=joliet,quirks=quirks):
+                    a=root_record_fixture(self.directory,quirks,joliet)
+                    output=self.check_image(a)
+                    if 'mismatch' in quirks:
+                        for field in ('extent','data_length','volume_sequence_number'):
+                            self.assertIn(f'field={field} result=0',output)
+                            # Harness remounts once: exactly one per mount lifetime.
+                            self.assertEqual(sum(f'field={field} result=0' in line and
+                                                 'reason=endian_mismatch' in line for line in output.splitlines()),2)
+                    if 'unaligned' in quirks:
+                        self.assertIn('le=2560 be=',output)
+                        self.assertIn('align=2048',output)
+                        self.assertEqual(output.count('reason=directory_rounding'),2)
+
+    def test_impossible_le_values_and_raw_diagnostics(self):
+        for joliet in (False,True):
+            for offset,width,value,field in ((10,4,0,'data_length'),(10,4,0xffffffff,'data_length'),
+                                             (2,4,49,'extent'),(28,2,0,'volume_sequence_number')):
+                with self.subTest(joliet=joliet,field=field,value=value):
+                    a=root_record_fixture(self.directory,(),joliet)
+                    p=Path(a['path']); data=bytearray(p.read_bytes())
+                    at=(17 if joliet else 16)*BLOCK+156+offset
+                    be=int.from_bytes(data[at+width:at+2*width],'big')
+                    data[at:at+width]=value.to_bytes(width,'little'); p.write_bytes(data)
+                    output=self.check_image(a,True)
+                    line=next(line for line in output.splitlines() if f'field={field} result=-5' in line)
+                    self.assertIn(f'le={value} be={be}',line)
+                    for operand in ('min=','max=','align=','available='): self.assertIn(operand,line)
+                    self.assertEqual(output.count(f'field={field} result=-5'),1)
+
+    def test_sub_block_directory_and_readable_end(self):
+        a=root_record_fixture(self.directory)
+        p=Path(a['path']); data=bytearray(p.read_bytes()); original=bytes(data)
+        for at in (16*BLOCK+156,24*BLOCK,24*BLOCK+34): both(data,at+10,512)
+        p.write_bytes(data); self.check_image(a)
+        # Extended attributes and rounded final blocks must fit the mount end.
+        for extended,size in ((0,2049),(1,1),(255,1)):
+            data=bytearray(original); data[16*BLOCK+157]=extended
+            both(data,16*BLOCK+158,47); both(data,16*BLOCK+166,size)
+            p.write_bytes(data); output=self.check_image(a,True)
+            self.assertIn('result=-5 le=',output)
+        data=bytearray(original)
+        both(data,16*BLOCK+80,0)  # valid BE cannot rescue an impossible LE count
+        data[16*BLOCK+84:16*BLOCK+88]=(48).to_bytes(4,'big')
+        p.write_bytes(data)
+        self.assertIn('field=volume_space_size result=-5 le=0 be=48',self.check_image(a,True))
+
+    def test_later_records_cannot_escape_bounds(self):
+        for joliet in (False,True):
+            for field,offset,value in (('extent',2,49),('data_length',10,0)):
+                with self.subTest(joliet=joliet,field=field):
+                    a=root_record_fixture(self.directory,(),joliet)
+                    p=Path(a['path']); data=bytearray(p.read_bytes())
+                    # SUB is the third entry, after dot and dot-dot.
+                    at=(34 if joliet else 24)*BLOCK+68+offset
+                    data[at:at+4]=value.to_bytes(4,'little'); p.write_bytes(data)
+                    output=self.check_image(a,True)
+                    self.assertIn(f'descriptor=directory_record field={field} result=-5 le={value} be=',output)
+                    self.assertIn('range_rejections=0',output)
+
+    def test_last_readable_block_and_mount_tail(self):
+        a=root_record_fixture(self.directory)
+        p=Path(a['path']); data=bytearray(p.read_bytes())
+        data[47*BLOCK:48*BLOCK]=data[24*BLOCK:25*BLOCK]
+        both(data,16*BLOCK+158,47); p.write_bytes(data)
+        self.check_image(a)  # exactly one complete block fits
+        output=self.check_image(a,True,sectors=47)
+        self.assertIn('field=data_length result=-5 le=2048 be=2048 min=1 max=0 align=1 available=0',output)
+        both(data,16*BLOCK+166,2049); p.write_bytes(data)
+        output=self.check_image(a,True)
+        self.assertIn('field=data_length result=-5 le=2049 be=2049 min=1 max=2048 align=1 available=1',output)
+
+
+class Optical(OpticalHarness):
+    @classmethod
+    def setUpClass(cls):
+        if not shutil.which('xorriso'): raise unittest.SkipTest('optical host mastering tool absent')
+        super().setUpClass()
 
     def test_levels_joliet_determinism(self):
         for level in (1,2,3):
@@ -179,9 +325,9 @@ class Optical(unittest.TestCase):
                         data=bytearray(original)
                         at=lba*BLOCK+offset+(width if broken=='big' else 0)
                         data[at:at+width]=b'\0'*width
-                        p.write_bytes(data); self.check_image(a)
+                        p.write_bytes(data); self.check_image(a,broken=='little')
             # Exercise root AND ordinary records in both hierarchies, including
-            # size/alignment fallback and the empty file's valid zero length.
+            # bounds checks and the empty file's valid zero length.
             for offset,width in ((2,4),(10,4),(28,2)):
                 with self.subTest(broken=broken,record_field=offset):
                     data=bytearray(original)
@@ -189,7 +335,7 @@ class Optical(unittest.TestCase):
                     for record in records:
                         at=record+offset+(width if broken=='big' else 0)
                         data[at:at+width]=(0 if width==2 else (1<<(width*8))-1).to_bytes(width,'little')
-                    p.write_bytes(data); self.check_image(a)
+                    p.write_bytes(data); self.check_image(a,broken=='little')
         # Both values plausible: Linux's little-endian preference is stable.
         data=bytearray(original); data[16*BLOCK+84]^=1; data[17*BLOCK+84]^=1
         p.write_bytes(data); self.check_image(a)

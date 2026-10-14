@@ -116,3 +116,45 @@ descriptor mixtures. Independent xorriso extraction of the selected Joliet
 session provides file names, sizes and SHA-256 expectations. The existing
 canonical Joliet fixture generator is unchanged. Hardware confirmation of
 the owner's disc remains the lead's T23 mount/open acceptance check.
+
+## F1-58 directory lengths and numeric diagnostics
+
+Research checked 2026-10-14 before implementation:
+
+- [ECMA-119, third edition](https://ecma-international.org/wp-content/uploads/ECMA-119_3rd_edition_december_2017.pdf),
+  §§7.2.3, 7.3.3, 8.4.18 and 9.1.2–9.1.4: numeric fields carry
+  both byte orders; an extent starts with any extended attribute blocks,
+  which are excluded from the file section's data length.
+- [Linux v6.12 isofs numeric decoding](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/isofs/isofs.h):
+  `isonum_723` and `isonum_733` use only the little-endian copy.
+- [Linux v6.12 directory iteration](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/isofs/dir.c):
+  `do_isofs_readdir` reads blocks while the position is below the declared
+  size, including a partial final block; zero records advance to the next block.
+- [Linux v6.12 root selection](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/isofs/inode.c):
+  both primary and Joliet roots use `extent + ext_attr_length`.
+
+The supplied T23 clean log reaches the PVD root record and fails specifically
+at `data_length`. It proves neither the raw length nor which comparison failed.
+The repository currently accepts either numeric copy if it passes bounds and
+requires directory lengths to be at least 2048 and block aligned. Its existing
+extended attribute offset already applies to both file and directory reads.
+
+Decision (supersedes F1-54's big-endian fallback): always use the little-endian
+copy in PVD, SVD and directory records. Log disagreeing copies, but reject an
+impossible little-endian value even when the big-endian value is usable. Accept
+every nonzero directory length that fits the readable extent; round its read
+span up to 2048 bytes using 64-bit arithmetic, preserving the declared metadata
+size. The complete final block must fit the same media and selected-volume
+bounds. Continue skipping extended attribute blocks without including them in
+the data length. Each diagnostic field/category is logged once per mount
+lifetime, reset on remount, so repeated lookups cannot flood the boot log.
+Failure records include the raw operands and bounds; successful mismatch and
+rounding records explain the compatibility decision. Root shape, interleave,
+descriptor versions and supported-volume restrictions remain enforced.
+
+Python-built miniature PVD/Joliet fixtures require no xorriso and exercise
+root and nested directories, partial final blocks, extended attributes,
+disagreeing numeric copies and impossible little-endian bounds. Host evidence
+does not establish what bytes are on the owner's disc: the lead must rerun the
+QEMU media/storage gates and collect a T23 log showing a successful optical
+bind and Files access, or the precise raw operands of the remaining failure.
