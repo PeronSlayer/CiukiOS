@@ -1,5 +1,5 @@
-/* Bounded IBM ThinkPad console-volume monitor/control; no AML interpreter.
- * References and analog-path policy: docs/design/f4-18-audio-levels.md.
+/* Bounded ThinkPad console-volume monitor/control; no AML interpreter.
+ * References: docs/design/f4-18-audio-levels.md and hardware-baseline.md F4-21.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/audio.h>
@@ -39,25 +39,84 @@ static const char *ec_string(const uint8_t *p, size_t formatted, size_t end, uns
     }
     return "";
 }
-bool thinkpad_ec_identity(const uint8_t *table, size_t n)
+static void ec_string_copy(char out[48], const char *s)
 {
-    bool found = false;
+    size_t i = 0;
+    for (; i < 47 && s[i]; i++) {
+        unsigned char c = s[i];
+        out[i] = c < 32 || c > 126 || c == '"' || c == '\\' ? '?' : c;
+    }
+    out[i] = 0;
+}
+static bool ec_type_model(const char *s)
+{
+    size_t n = strlen(s);
+    if (n < 4 || n > 11 || s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9') return false;
+    for (size_t i = 2; i < n; i++) {
+        if (i == 4 && s[i] == '-') continue;
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'A' && s[i] <= 'Z'))) return false;
+    }
+    return s[n - 1] != '-';
+}
+bool thinkpad_ec_smbios_decode(const uint8_t *table, size_t n, struct thinkpad_ec_smbios *s)
+{
+    memset(s, 0, sizeof(*s));
+    s->verdict = "malformed_table";
+    if (!table || !n) return false;
     for (size_t at = 0; at < n;) {
         const uint8_t *p = table + at;
         if (n - at < 6 || p[1] < 4 || p[1] > n - at - 2) return false;
         size_t end = p[1]; while (end + 1 < n - at && (p[end] || p[end + 1])) end++;
         if (end + 1 >= n - at) return false;
-        if (p[0] == 1 && p[1] >= 7) {
+        if (p[0] == 0) {
+            if (p[1] < 6 || s->has_bios) return false;
+            s->has_bios = true;
+            ec_string_copy(s->bios_vendor, ec_string(p, p[1], end + 1, p[4]));
+            ec_string_copy(s->bios_version, ec_string(p, p[1], end + 1, p[5]));
+        }
+        if (p[0] == 1) {
+            if (p[1] < 7 || s->has_system) return false;
+            s->has_system = true;
             const char *vendor = ec_string(p, p[1], end + 1, p[4]);
             const char *product = ec_string(p, p[1], end + 1, p[5]);
             const char *version = ec_string(p, p[1], end + 1, p[6]);
-            found = !strncmp(vendor, "IBM", 4) &&
-                (!strncmp(product, "ThinkPad", 8) || !strncmp(version, "ThinkPad", 8));
+            s->hint = !strncmp(product, "ThinkPad", 8) || !strncmp(version, "ThinkPad", 8) || ec_type_model(product);
+            s->eligible = !strncmp(vendor, "IBM", 4) || (!strncmp(vendor, "LENOVO", 7) && s->hint);
+            s->qemu = !strncmp(vendor, "QEMU", 5) || !strncmp(product, "QEMU", 4);
+            ec_string_copy(s->vendor, vendor);
+            ec_string_copy(s->product, product);
+            ec_string_copy(s->version, version);
         }
-        if (p[0] == 127) return found;
+        if (p[0] == 127) break;
         at += end + 2;
     }
-    return found;
+    s->valid = true; s->verdict = "ok";
+    return true;
+}
+bool thinkpad_ec_identity(const uint8_t *table, size_t n)
+{
+    struct thinkpad_ec_smbios s;
+    return thinkpad_ec_smbios_decode(table, n, &s) && s.has_system && s.eligible && !s.qemu;
+}
+void thinkpad_ec_smbios_log(const struct thinkpad_ec_smbios *s)
+{
+    klog("[smbios] entry=%s address=%08x table=%08x bytes=%u", s->verdict,
+         s->entry_phys, s->table_phys, s->table_bytes);
+    klog("[smbios] version=%u.%u vendor=\"%s\" product=\"%s\" version=\"%s\" type1=%u",
+         s->major, s->minor, s->vendor, s->product, s->version, s->has_system);
+    klog("[smbios] bios vendor=\"%s\" version=\"%s\" type0=%u",
+         s->bios_vendor, s->bios_version, s->has_bios);
+}
+bool thinkpad_ec_gate(const struct thinkpad_ec_smbios *s, uint32_t flags)
+{
+    const char *reason = NULL;
+    if (flags & CBI_F_SAFE_MODE) reason = "safe_mode";
+    else if ((flags & CBI_F_SMBIOS_QEMU) || s->qemu) reason = "qemu";
+    else if (!s->valid || !s->has_system) reason = "no_smbios";
+    else if (!s->eligible) reason = "not_ibm";
+    klog("[ec] thinkpad hint=%u", s->hint);
+    if (reason) { klog("[ec] thinkpad gate=%s", reason); return false; }
+    return true;
 }
 /* Each whole transaction has one deadline and a second, clock-independent
  * bound. Unexpected pending output is not consumed as a volume reply. */
@@ -126,8 +185,14 @@ int thinkpad_ec_probe(struct thinkpad_ec *e, const struct thinkpad_ec_io *io, bo
     if (!identified || !io || !io->read || !io->write || !io->now || !io->pause) return -ENODEV;
     e->io = *io; e->active = true;
     int err = ec_read(e, &e->status);
+    uint8_t again = 0;
+    if (!err) err = ec_read(e, &again);
+    /* Establish a stable register before any WR_EC command. A key changing
+     * it during discovery fails closed for this boot. */
+    if (!err && again != e->status) err = -EIO;
     if (!err) err = thinkpad_ec_volume_set(e, m);
     if (!err) { ec_log(e->status); e->next_poll = io->now(io->ctx) + EC_POLL_MS; }
+    else { e->active = false; klog("[ec] thinkpad gate=ec_handshake_failed stage=probe error=%d", err); }
     return err;
 }
 int thinkpad_ec_volume_poll(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
@@ -149,37 +214,56 @@ static uint8_t native_read(void *ctx, uint16_t port) { (void)ctx; return inb(por
 static void native_write(void *ctx, uint16_t port, uint8_t v) { (void)ctx; outb(port, v); }
 static uint64_t native_now(void *ctx) { (void)ctx; return g_ticks; }
 static void native_pause(void *ctx) { (void)ctx; task_yield(); }
-static bool native_identity(void)
+static void native_identity(struct thinkpad_ec_smbios *s)
 {
+    memset(s, 0, sizeof(*s)); s->verdict = "not_found";
     for (uint32_t at = 0xf0000; at <= 0x100000 - 31; at += 16) {
+        const uint8_t *entry = P2V(at);
+        if (memcmp(entry, "_SM_", 4)) continue;
         uint32_t address; uint16_t length;
-        if (!thinkpad_ec_entry(P2V(at), 0x100000 - at, &address, &length)) continue;
+        if (!thinkpad_ec_entry(entry, 0x100000 - at, &address, &length)) {
+            if (!s->entry_phys) { s->entry_phys = at; s->verdict = "bad_entry"; }
+            continue;
+        }
         bool mapped = true;
         for (uint32_t p = PAGE_ALIGN_DOWN(address); p < address + length; p += PAGE_SIZE)
             if (!(vmm_kernel_pte(KERNEL_VBASE + p) & PTE_P)) { mapped = false; break; }
-        if (mapped && thinkpad_ec_identity(P2V(address), length)) return true;
+        if (mapped) thinkpad_ec_smbios_decode(P2V(address), length, s);
+        else { memset(s, 0, sizeof(*s)); s->verdict = "unmapped_table"; }
+        s->entry_phys = at; s->table_phys = address; s->table_bytes = length;
+        s->major = entry[6]; s->minor = entry[7];
+        if (s->valid) return;
     }
-    return false;
 }
 void thinkpad_ec_init(void)
 {
-    if ((g_boot.flags & (CBI_F_SMBIOS_QEMU | CBI_F_SAFE_MODE)) || !native_identity()) return;
+    struct thinkpad_ec_smbios s;
+    native_identity(&s);
+    thinkpad_ec_smbios_log(&s);
+    if (!thinkpad_ec_gate(&s, g_boot.flags)) return;
     kmutex_init(&ec_lock);
     int data = registry_claim(RES_PORT, EC_DATA, EC_DATA + 1, "thinkpad-ec", false);
-    if (data < 0) return;
+    if (data < 0) {
+        klog("[ec] thinkpad gate=ec_handshake_failed stage=claim_data error=%d", data); return;
+    }
     int command = registry_claim(RES_PORT, EC_SC, EC_SC + 1, "thinkpad-ec", false);
     /* Keep claims quarantined on a partial claim/protocol failure: no other
      * driver may issue a different command into an ambiguous transaction. */
     gen_t dg = registry_get(data)->generation;
-    if (command < 0) { registry_quarantine(data, dg); return; }
+    if (command < 0) {
+        registry_quarantine(data, dg);
+        klog("[ec] thinkpad gate=ec_handshake_failed stage=claim_command error=%d", command); return;
+    }
     gen_t cg = registry_get(command)->generation;
     struct thinkpad_ec_io io = {0, native_read, native_write, native_now, native_pause};
     int err = thinkpad_ec_probe(&native_ec, &io, true, &audio.master);
+    bool probed = !err;
     if (!err) err = registry_activate(data, dg);
     if (!err) err = registry_activate(command, cg);
     if (err) {
         native_ec.active = false; registry_quarantine(data, dg); registry_quarantine(command, cg);
-        klog("[ec] thinkpad disabled error=%d", err); return;
+        if (probed) klog("[ec] thinkpad gate=ec_handshake_failed stage=activate error=%d", err);
+        return;
     }
     audio.master_in_hardware = true;
 }
