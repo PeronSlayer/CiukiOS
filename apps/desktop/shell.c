@@ -2244,9 +2244,28 @@ int desk_shell_key(struct desktop *d, int code, int value)
 }
 
 /* ---- settings ---------------------------------------------------------- */
+static void icons_prepare(void)
+{
+    if (!store_icon) return;
+    /* The real Tango reader caches and decodes on first use. Reserve all
+     * bounded shell/menu/window variants now, including the generic icon
+     * used by crash victims whose title differs from the survivor's. */
+    static const unsigned sizes[]={16,22,32,48};
+    static const char *const extra[]={"go-jump","drive-removable-media","media-optical"};
+    for (unsigned s=0;s<sizeof(sizes)/sizeof(*sizes);s++) {
+        for (unsigned i=0;i<sizeof(icon_table)/sizeof(*icon_table);i++)
+            (void)store_icon(icon_table[i].name,sizes[s]);
+        for (unsigned i=0;i<sizeof(programs)/sizeof(*programs);i++)
+            (void)store_icon(programs[i].icon,sizes[s]);
+        for (unsigned i=0;i<DESK_CATALOG_COUNT;i++) (void)store_icon(desk_catalog[i].tango,sizes[s]);
+        for (unsigned i=0;i<DESK_GAME_COUNT;i++) (void)store_icon(desk_games[i].tango,sizes[s]);
+        for (unsigned i=0;i<sizeof(extra)/sizeof(*extra);i++) (void)store_icon(extra[i],sizes[s]);
+    }
+}
 void desk_shell_reset(struct desktop *d)
 {
     bind(d);
+    icons_prepare();
     cfg_defaults(&d->sh.cfg);
     d->sh.icon_selected = d->sh.click_icon = d->sh.icon_drag = -1;
     d->sh.volume = 20;

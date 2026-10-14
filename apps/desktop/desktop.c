@@ -341,10 +341,6 @@ static int mixer_job_run(void *record, size_t n)
 static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_t mute)
 {
     if (d->power.state) return -EBUSY;
-#ifndef __i386__
-    (void)d; (void)left; (void)right; (void)mute;
-    return -ENODEV;   /* host replays: no mixer device */
-#else
     struct ciuki_mixer_master m;
     if (d->mixer_fd<0) return -ENODEV;
     memset(&m,0,sizeof(m)); m.version=1; m.size=sizeof(m);
@@ -353,7 +349,6 @@ static int mixer_apply(struct desktop *d, uint32_t left, uint32_t right, uint32_
     if (!settings_writer_started) return -EIO;
     struct mixer_job job={.serial=++mixer_serial,.fd=d->mixer_fd,.master=m};
     return cfg_writer_job(&settings_writer,&job,sizeof(job)) ? -errno : 0;
-#endif
 }
 /* ---- desktop shell services: the file and kernel side of shell.c ---- */
 static int read_file(const char *path, size_t limit, uint8_t **out, size_t *size)
@@ -711,6 +706,13 @@ static void mixer_write(struct desktop *d)
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
     }
 }
+static void mixer_poll(struct desktop *d,uint64_t now,uint64_t *next)
+{
+    if (d->shell && !d->sh.gate && !d->power.state && now>=*next) {
+        *next=now+250000000ull;
+        d->sh.want_reload|=4;
+    }
+}
 static void system_read(struct desktop *d)
 {
     static uint8_t buffer[CIUKI_PROC_LIST_MIN+CIUKI_PROCESS_MAX*sizeof(struct ciuki_proc_record)];
@@ -1007,10 +1009,7 @@ int main(int argc, char **argv)
     uint64_t shift_base=0, shift_release=0, mixer_poll_next=0;
     for (;;) {
         uint64_t now = monotonic();
-        if (d->shell && !gate && !d->power.state && now >= mixer_poll_next) {
-            mixer_poll_next=now+250000000ull;
-            d->sh.want_reload|=4;
-        }
+        mixer_poll(d,now,&mixer_poll_next);
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);
