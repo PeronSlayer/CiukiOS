@@ -198,14 +198,40 @@ defines boot mouse relative axes in the -127..127 range. Repository
 event; `desktop.c:gate_input` counts these consumed events and button edges.
 Therefore both axes of an injected pair must be observed before advancing.
 
-Integration dependency: this checkout's `f2_probes_desktop.c:native_report`
-validates and stores intermediate gate counters but does not emit them to
-serial. `core/syscall.c:sys_probe_report` returns after that hook consumes the
-report. Only the final `case=interaction stage=after` record exposes those
-counters. The lead must expose the validated intermediate counters before the
-live USB suite can progress with this barrier; absent them the runner refuses
-instead of treating QMP acceptance as consumption. Host fake-QEMU tests supply
-the required intermediate records and do not qualify the guest image.
+### USB counter publication and preflight (runner-04)
+
+`f2_probes_desktop.c:native_report` now forwards the first fully validated
+native desktop summary as a controller DATA `case=gate server=desktop keys=…
+motion=… buttons=…` record, including the initial zero pointer baseline.
+Subsequent summaries emit only when one of those counters changes. This uses
+the desktop's existing dirty-input reporting cadence (100 ms), so a delivered
+pointer batch gets its consumption record without an extra poll, timer or
+input-path log. Unchanged command summaries, demo reports, unrelated processes
+and rejected summaries emit no counters. Optional app/checkpoint fields must
+also pass validation before publication. Keys retain the gate scenario's
+existing success semantics; motion and buttons count consumed public events.
+The runner's existing controller-record parser consumes these records.
+
+Before capability queries, overlay creation or QEMU launch, USB mouse cases
+that script nonzero relative axes or button edges require an explicit
+`f2:crash-isolation … server=desktop` selector, graphics and safe mode off.
+Other probes and automatic/stand-in controller selection have no guaranteed
+counter publisher and refuse with `USB pointer pacing has no counter record
+source`. Profile/case topology overrides still apply; PS/2, keyboard/tablet-only
+USB and cases without pointer stimuli need no source. Runtime missing/stalled
+records retain the 10-second diagnostic, since preflight cannot prove which
+kernel an image contains. Host fixtures model these records and do not qualify
+the guest image.
+
+Research rechecked on 2026-10-14 against the
+[QMP input-send-event documentation](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event)
+and [upstream HID implementation](https://github.com/qemu/qemu/blob/v11.0.0/hw/input/hid.c).
+QMP completion still acknowledges injection only; pending pointer reports can
+merge before polling. Repository `desktop.c:gate_input` counts consumption and
+`gate_report` already coalesces dirty input at 100 ms; `native_report` validates
+identity, monotonic counters and optional checkpoints, while `sys_probe_report`
+consumes its summaries. Forwarding the validated summaries is therefore the
+cheapest available publisher and preserves the existing input schedule.
 
 ## Migration
 
