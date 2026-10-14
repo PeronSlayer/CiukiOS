@@ -144,7 +144,7 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [runner-03-usb-input-pacing](runner-03-usb-input-pacing.md) | runner | gpt-6.1-sol / high | delivered and merged 2026-10-14 (consumption barrier, 127-unit steps, input_pacing evidence) |
 | [f4-14-serial-queue-integrity](f4-14-serial-queue-integrity.md) | F4 | gpt-6.1-sol / xhigh | running 2026-10-14 (T23 serial capture garbled since the f4-13 queue) |
 | [f2-59-graphics-demo-performance](f2-59-graphics-demo-performance.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-14 (cube at 15 fps on the T23: software path and presentation) |
-| [f7-00-3d-acceleration-contract](f7-00-3d-acceleration-contract.md) | F7 | gpt-6.1-sol / xhigh | running 2026-10-14 (owner: the GPU must run 3D applications; Savage4/SuperSavage engine contract) |
+| [f7-00-3d-acceleration-contract](f7-00-3d-acceleration-contract.md) | F7 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (contract written; cross-review and the f7-01..f7-06 plan pending the lead) |
 | [f4-15-ac97-playback-failure-t23](f4-15-ac97-playback-failure-t23.md) | F4 | gpt-6.1-sol / xhigh | running 2026-10-14 (playback fails after 1.4 s: civ=8, backend failure) |
 | [f1-53-usb-storage-quarantine-and-port-flood](f1-53-usb-storage-quarantine-and-port-flood.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-14 (stick quarantined on transfer; port connect flood every 250 ms) |
 | [f1-54-optical-iso-malformed](f1-54-optical-iso-malformed.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-14 (data CD binds, ISO parse says malformed) |
