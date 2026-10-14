@@ -98,9 +98,10 @@ int audio_master_set(struct ciuki_mixer_master *m)
 {
     if (m->left > 100 || m->right > 100 || m->mute > 1 || m->save_state || m->save_error) return -EINVAL;
     kmutex_lock(&control_lock);
-    int err = audio.master_in_hardware ? thinkpad_ec_master_set(m) : 0;
-    if (err) { kmutex_unlock(&control_lock); return err; }
-    err = audio.ready ? audio_backend_master(m) : 0;
+    /* The EC wrapper also clears delegation on failure. Offline changes
+     * still apply and persist; the poller resynchronises from audio.master. */
+    (void)thinkpad_ec_master_set(m);
+    int err = audio.ready ? audio_backend_master(m) : 0;
     if (err) { audio_fail(-EIO); kmutex_unlock(&control_lock); return -EIO; }
     audio.master = *m;
     err = save_master();
@@ -114,15 +115,16 @@ void audio_master_refresh(void)
 {
     kmutex_lock(&control_lock);
     struct ciuki_mixer_master m = audio.master;
+    bool hardware = audio.master_in_hardware;
     int changed = thinkpad_ec_master_poll(&m);
-    if (changed > 0) {
+    if (changed > 0 || hardware != audio.master_in_hardware) {
         int err = audio.ready ? audio_backend_master(&m) : 0;
         if (err) audio_fail(-EIO);
         else {
-            m.save_state = CIUKI_MIXER_UNSAVED; m.save_error = 0;
+            if (changed > 0) { m.save_state = CIUKI_MIXER_UNSAVED; m.save_error = 0; }
             audio.master = m;
         }
-    } else if (changed < 0) klog("[ec] thinkpad disabled error=%d", changed);
+    }
     kmutex_unlock(&control_lock);
 }
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */

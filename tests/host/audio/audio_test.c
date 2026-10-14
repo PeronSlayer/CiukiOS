@@ -16,7 +16,7 @@ static void outl(uint16_t p, uint32_t v) { (void)p; (void)v; }
 uint64_t ktime_cycles(void) { return g_ticks * 1000; }
 static char audio_log[256]; /* match the production klog record capacity */
 static bool capture_ec_records;
-static char ec_records[16][256];
+static char ec_records[64][256];
 static unsigned ec_record_count;
 static unsigned audio_log_count;
 static unsigned backend_failure_logs;
@@ -29,7 +29,7 @@ void klog(const char *fmt, ...)
     va_list a; va_start(a, fmt); vsnprintf(audio_log,sizeof(audio_log),fmt,a); va_end(a);
     puts(audio_log); audio_log_count++;
     if (capture_ec_records && (!strncmp(audio_log,"[smbios]",8) || !strncmp(audio_log,"[ec]",4))) {
-        CHECK(ec_record_count < 16);
+        CHECK(ec_record_count < sizeof(ec_records)/sizeof(ec_records[0]));
         memcpy(ec_records[ec_record_count++],audio_log,sizeof(audio_log));
     }
     if(strstr(audio_log,"backend failure ")) backend_failure_logs++;
