@@ -1543,3 +1543,714 @@ may start after f5-05.
 - **Q13 (owner)** Yes: F6 provides Win32 IPX sockets for the LAN play of StarCraft, Diablo and Age of Empires.
 - **Q14 (lead)** The ten titles and the reserves are approved as listed; Quake III Arena and Tomb Raider move to the F7 gate.
 - **Q15 (owner)** Bilingual: English (United States) is the default locale and UI language, Italian is offered as a selectable locale and keyboard layout; UI copy in the repository stays English.
+
+
+## Codex cross-review of F5-00 (2026-10-14)
+
+Reviewer: Codex. Date: 2026-10-14. Disposition: **changes required before the
+implementation interfaces are frozen**. This is a review and proposed directive
+plan, not a replacement for the owner's decisions or a runtime qualification.
+
+Reviewed repository: `4bc615b50bbc6b9163087607513abc9f55b57da3`.
+Reviewed contract: the original 1,545 lines of
+[`win32-personality-contract.md`](../../docs/design/win32-personality-contract.md),
+SHA-256 `701a95f7967d6ef704331a4bc266a86b294536705e4ed896d2af85f141bf5239`.
+AGENTS.md was read. No code, build, QEMU, Windows experiment, game download,
+commit or push was performed. Source-level comparisons do not establish binary
+compatibility or performance.
+
+### 1. Verdict and evidence rules
+
+The approved architecture is a plausible *bounded compatibility personality*:
+native i386 execution, private process address spaces, PE DLLs, additive kernel
+mechanisms and integration with CiukiOS drivers. Its largest risk is semantic
+completeness, especially USER/GDI, installer bootstrap, COM and multimedia.
+The contract does not yet make G1–G3 demonstrable. It contains incompatible
+requirements, leaves important integration interfaces unspecified, and asserts
+that a largely new core fits the budget before measuring it.
+
+Keep the owner-approved option C provisionally. Before committing to its core
+ABI, complete an upstream dependency/build experiment and one installer-oriented
+vertical slice. A full Wine port is a credible alternative, but neither a small
+POSIX translation layer nor evidence of a fit at 128 MiB exists here.
+
+The final section, “Decisions on the open questions”, supplies the current
+decisions. References below use **original line numbers**, which remain stable
+because this review is appended. Findings distinguish:
+
+- **Contradiction:** two requirements cannot both hold, or a purported API
+  behavior conflicts with an inspected primary reference.
+- **Declared departure:** intentional Ciuki policy that limits compatibility;
+  it must not be presented as Windows behavior.
+- **Gap/risk:** behavior, dependency or evidence is absent; no source proves
+  that a particular uninspected commercial executable uses it.
+
+Modern Microsoft pages provide interface evidence; their minimum-supported-OS
+rows are not a historical census. Wine source is primary evidence of Wine,
+not proof of Windows 98 behavior. Period Microsoft publications take precedence
+for 9x differences. Inferences and pending experiments are identified below.
+
+#### Primary references inspected
+
+The citations in findings link directly to the relevant publication or source.
+The following records establish provenance and the limits of the research:
+
+| Family | Inspected material and relevance |
+| --- | --- |
+| Microsoft PE/COFF | [PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format): image/section/directory structures. In particular, the certificate directory uses a file offset; zero-filled virtual tails differ from absent file bytes. |
+| Windows 98 architecture | Microsoft [Windows 98 Resource Kit, chapter 28 overview](https://library.thedatadungeon.com/msdn-2000-04/rk98book/html/wrkc28_1.content.htm), an archival MSDN reproduction. It describes the protected-mode kernel/filesystem and backward compatibility. |
+| VMM/VxD and DDK lineage | Microsoft Ruediger Asche's [What's New in Windows 95 for VxD Writers](https://techshelps.github.io/MSDN/TECHART/html/msdn_chicvxd.htm), revised for the shipping 95 DDK: System VM threads, DOS VMs, DPMI, VxD interfaces and DDK headers. Microsoft [Virtual Device Adaptation Guide](https://www.pcjs.org/documents/books/mspl13/win/w3ddkvxd/), an earlier DDK text, was consulted for lineage only. Neither is labelled a retrieved Windows 98 `OTHER.CHM`. |
+| Contemporary Microsoft architecture explanation | Matt Pietrek, [Happy 10th Anniversary, Windows](https://learn.microsoft.com/en-us/archive/msdn-magazine/2000/july/under-the-hood-happy-10th-anniversary-windows): the VMM/VxD architecture persists into 98. |
+| DirectX 7 SDK | Microsoft [DirectX 7 Programmer's Reference](https://library.thedatadungeon.com/directx7/), [publication identity](https://library.thedatadungeon.com/directx7/devdoc/live/directx/legal_7tbg.content.htm), [IDirectDraw7 reference](https://library.thedatadungeon.com/directx7/devdoc/live/directx/ddref_0khj.content.htm), [DirectDraw return values](https://library.thedatadungeon.com/directx7/devdoc/live/directx/ddref_6u9j.content.htm), [FPU precision](https://library.thedatadungeon.com/directx7/devdoc/live/directx/imover_7410.content.htm), [DirectSound HAL/HEL](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dsover_1opw.content.htm). Archival Microsoft content, not a third-party API implementation. Some individual pages were available only through indexed text; complete help-file coverage is not claimed. |
+| Wine design and build | Upstream-authored [Wine Developer's Guide, chapters 7–13](https://fast-mirror.isrc.ac.cn/winehq/wine/docs/en/winedev-guide.html), archival mirror; the guide is historical. Check modern implementation separately: [wine-10.0 winebuild manual](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/tools/winebuild/winebuild.man.in), [ntdll build split](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/Makefile.in), [DirectDraw dependencies](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ddraw/Makefile.in), [DirectSound backend](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/dsound/primary.c). |
+| Wine upper DLLs | Inspected [wine-10.0 shell32 implementation](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/shell32/shell32_main.c). Some 10.0 Makefiles were unavailable; accessible upstream [ole32](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/ole32/Makefile.in), [comctl32](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/comctl32/Makefile.in) and [shell32](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/shell32/Makefile.in) Makefiles are **master snapshots, not a pinned 10.0 dependency census**. |
+| Chappell and Chen | Geoff Chappell's [TEB analysis](https://geoffchappell.com/studies/windows/km/ntoskrnl/inc/api/pebteb/teb/index.htm) is NT-focused; his [2000 explanation of VxD Win32 services](https://groups.google.com/g/microsoft.public.win32.programmer.kernel/c/uUjeWuA_fLk) discusses the DDK/undocumented interface boundary. Raymond Chen's articles cited below distinguish installer substitution and input-queue state. |
+| Game and installer authors | id Software's original [Quake II Windows sources](https://github.com/id-Software/Quake-2/tree/master/win32); Valve's [Half-Life SDK repository](https://github.com/ValveSoftware/halflife) does not expose all original engine/platform behavior. [NSIS release history](https://nsis.sourceforge.io/Docs/AppendixF.html) and its [DirectSetup integration example](https://nsis.sourceforge.io/DirectX_Installation_for_Fixed_Media). |
+
+Research limitation: the complete Windows 98/ME DDK help archive and every DX7
+help topic were not retrievable in this environment. Do not claim they were
+read. f5-02 must pin period SDK/DDK editions and extract the specific topics
+needed for the unresolved 9x cases. This report uses accessible Microsoft DDK
+material and period Microsoft publications, and does not substitute NTVDM
+documentation for Win9x architecture.
+
+#### Repository interfaces compared
+
+| Interface | Observed boundary and consequence |
+| --- | --- |
+| [execution ABI](../../docs/design/execution-abi.md), [POSIX subset](../../docs/design/posix-subset.md) | Native ELF, private anonymous mappings, fixed native VA arenas, GS TLS, restricted signals, x87-only user policy. New Win32 services must coexist with these rules and use the existing resource/teardown accounting. |
+| [desktop protocol](../../docs/desktop.md#protocol-version-1), [wire declarations](../../apps/desktop/protocol.h) | Negotiated v1/v2.1, one window per channel, 63-byte titles, 160-byte LAUNCH argument, 16 channels; shared surfaces use native mapping machinery. v3 needs a complete wire/lifecycle contract, not just a feature list. |
+| [audio/media contract](../../docs/design/f4-audio-media-contract.md#native-audio-api-for-processes) | Eight independently opened native streams, source-frame counters plus separate output/fetched/transport positions; 256 *output* frames at 48 kHz are 5.333 ms. Optical scope explicitly excludes audio-CD playback/extraction. |
+| [registry contract](../../docs/design/registry-contract.md) | Native roots under `/System/Registry`, bounded typed UTF-8 dialect, one writer per root, journaled recovery. It is explicitly not a Win32 registry compatibility API. The System audio preference is already authoritative. |
+| [fonts contract](../../docs/design/fonts-contract.md) | Trusted Liberation TTFs under `/System/fonts`; immutable future Win32 view; stb rasterizer, no hinting, no arbitrary game fonts. FreeType replacement/extension needs an explicit backend and validation boundary. |
+| [hardware baseline](../../docs/design/hardware-baseline.md), [test architecture](../../docs/design/test-architecture.md) | 128 MiB gate, 64 MiB scope target; CPU features vary across machines. Evidence belongs to the tested image hash; host tests do not qualify guest faults, timing or physical output. |
+
+Bounded implementation reads corroborated those interfaces: `fpu.c` clears
+OSFXSR/OSXMMEXCPT and switches lazy owners; `desc.c` has GS at slot 7 and LDT at
+slot 8; `abi.h` assigns calls through 77; `surface_map` calls `ua_map_shared`;
+`pic_pit.c` programs divisor 1193; audio `mixer_retire` increments consumed
+source frames when they enter the mixer. None implements Win32 today.
+
+### 2. Contradictions and required corrections
+
+Severity: **P0** blocks an interface/scope freeze; **P1** is required before
+the affected directive closes; **P2** needs an explicit policy/evidence repair.
+The table is the full list of concrete contradictions found in this review;
+additional omissions are listed separately in section 3.
+
+| ID | Severity; contract location | Finding, citation and required disposition |
+| --- | --- | --- |
+| C01 | P0; N3/W24, lines 82–84, 269–271, 1087, 1199; final Q3, 1533 | Earlier MUSTs reject every NE executable while the owner includes Win16 installers and adds f5-19. Add an explicit precedence clause that suspends those refusal rules for the supported installer class; include f5-19 in the graph and gate. An NE stub is not the ordinary DOS stub in a PE header. [Chen on recognized 16-bit installers](https://devblogs.microsoft.com/oldnewthing/20131031-00/?p=2783%2F) also shows why substitution is a separate mechanism, not generic Win16 execution. |
+| C02 | P0; scope, line 28; W2/W11; f5-07–09 | All kernel additions are said to apply only to `win32` processes, but native desktop and native `w32srv` must register endpoints, own/delegate/revoke leases and publish global state. Define an operation-by-operation authority table: Win32 clients versus trusted native server/desktop. Preserve native ABI behavior without making every new operation inaccessible to its owner. [Native desktop grants](../../docs/design/execution-abi.md#desktop-surfaces-input-and-channels). |
+| C03 | P0; PE acceptance, lines 613–625 | Section overlap is both forbidden and required to load. Choose a tested compatibility class; do not use a universal acceptance sentence. The same paragraph silently zero-fills any beyond-EOF raw data, which needs a bounded exception, not blanket acceptance. Section virtual tails are a different case. [PE section data](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format). |
+| C04 | P1; PE acceptance, line 617 | Requiring every directory address to be an RVA inside `SizeOfImage` rejects valid certificate tables: that entry is a **file offset**. Validate/ignore it as file metadata. [PE attribute certificate table](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format). |
+| C05 | P1; VM operations, lines 506–509 | The reserve service permits only already aligned caller addresses. Public `VirtualAlloc` must round reserve addresses down to allocation granularity and commit addresses down to pages, covering the complete requested span. A strict internal service is fine only if the wrapper performs those calculations. [VirtualAlloc](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc). |
+| C06 | P1; stack creation, lines 371–374 | Taking `CreateThread`'s size as the reserve while always using PE commit size is wrong for ordinary calls: the size denotes commit unless the reservation flag is supported/requested. Freeze the intended 98 behavior separately from later flags. [CreateThread parameter semantics](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createthread). |
+| C07 | P1; exceptions, line 569 | The nonzero-divisor #DE path is assigned integer-overflow status. Wine's x86 dispatcher maps #DE to integer-divide-by-zero without decoding the divisor. Treat the draft mapping as unverified, test quotient overflow separately from `INTO`/#OF, and establish period Windows results before making it normative. [Wine 10.0 x86 dispatcher](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/unix/signal_i386.c). This is a conflict with Wine, not a claimed new Win98 experiment. |
+| C08 | P1; cross-process messages, lines 443–447 | Only three system messages receive marshalling. Windows marshals other system messages below `WM_USER`; unsupported pointer messages must fail by a declared allowlist, not send pointers into another address space. PROGMAN DDE also needs its own shared-data/atom protocol. [SendMessage](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagea). |
+| C09 | P1; waits, lines 423–443 | “Handles plus queue” cannot inherit the 1–64-handle ordinary wait rule unchanged. Message waits allow **zero to 63 external handles** and distinguish new input from already observed input through `MWMO_INPUTAVAILABLE`. Add a separate validation/state contract. [MsgWaitForMultipleObjectsEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-msgwaitformultipleobjectsex). |
+| C10 | P1; overlapped file rule, line 754 | “Set the event and queue the completion APC” conflates ordinary overlapped `ReadFile` with `ReadFileEx`. The latter ignores `OVERLAPPED.hEvent`, which can contain application data. Specify offset, status, event and APC behavior per API. Synchronous backing I/O can preserve those completion semantics. [ReadFileEx](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfileex). |
+| C11 | P1; fullscreen loss, lines 903–907 | Losing every surface on deactivation is too broad. Explicit offscreen system-memory surfaces normally survive; primary/virtual-video surfaces may be lost even if backed by system RAM. Retain the logical allocation class. [Wine's tested loss predicate](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ddraw/ddraw_private.h). |
+| C12 | P1; input, lines 1006–1008 | The text groups three APIs into two state models and puts `GetKeyboardState` on a global-state interpretation. `GetKeyState` and `GetKeyboardState` follow queue retrieval; `GetAsyncKeyState` observes current asynchronous state. Define all three explicitly, including toggles and focus resync. [Microsoft GetKeyboardState](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getkeyboardstate), [Chen](https://devblogs.microsoft.com/oldnewthing/20041130-00/?p=37173). |
+| C13 | P1; DirectInput, lines 1012–1017 | Unconditional acquisition loss on focus loss contradicts background nonexclusive access. Also do not accept every foreground/background × exclusive/nonexclusive combination: keyboard/mouse exclusive background is rejected. [Wine 10.0 device validation and acquisition](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/dinput/device.c), [Microsoft's background keyboard example](https://library.thedatadungeon.com/directx81-vb/directx_vb/Input/VB_Tuts/Tut1/Step2SetKeyboardParameters.content.htm). |
+| C14 | P1; DirectSound, lines 959–976 | All cooperative levels are accepted, but the only required mixer sources are secondary buffers. `DSSCL_WRITEPRIMARY` requires primary-buffer write behavior and suppresses secondary mixing, or an explicit compatible failure/fallback. [Microsoft primary-buffer rules](https://learn.microsoft.com/ja-jp/previous-versions/windows/desktop/ee419051%28v%3Dvs.85%29). |
+| C15 | P1; audio timing, lines 962–964, 975 | A 256-frame quantum is not always 5.3 ms: the process default is 44,100 Hz (5.80 ms), or 22,050 Hz (11.61 ms). More seriously, consumed source frames are retired into the F4 mixer **ahead of device playback**. Track output timeline and transport lead before calling this a play cursor. [F4 cursor/latency distinction](../../docs/design/f4-audio-media-contract.md#native-audio-api-for-processes), [`mixer_retire`](../../src/kernel/audio/mixer.c). |
+| C16 | P1; P8 fallback, lines 852–855 | `ChoosePixelFormat` belongs to GDI32, not an OpenGL32 export. Rejecting accelerated formats also leaves generic software OpenGL formats unspecified. Put pixel-format selection in GDI32; until F7, do not offer any format requiring unsupported rendering. Provide the audited imports/failure paths without promising universal automatic fallback. [Microsoft ChoosePixelFormat](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-choosepixelformat). |
+| C17 | P0; option C/P4, lines 845, 1309–1321, 1340–1346 | Reused upper DLLs are asserted to use only P1–P3 and a small helper set. Accessible upstream build files include `combase`, `rpcrt4`, `kernelbase`, `coml2`, delayed shell dependencies and other interfaces outside that set. The arbitrary “40 functions” trigger cannot prove a stable boundary. Audit direct, delayed, forwarded, runtime and build dependencies **before** f5-03/05 freeze. [Wine ole32](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/ole32/Makefile.in), [comctl32](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/comctl32/Makefile.in). Those are master observations; repeat against the pinned release. |
+| C18 | P0; option comparison, lines 1278–1281 | All options are said to require the same kernel personality W5–W10. Wine puts much object/handle/synchronization management in user-space wineserver and uses Unix host services. It does not intrinsically require CiukiOS's Win32 object ledger in the kernel. Compare actual port requirements, not a forced common design. [Wine architecture guide](https://fast-mirror.isrc.ac.cn/winehq/wine/docs/en/winedev-guide.html), [modern ntdll Unix split](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/Makefile.in). |
+| C19 | P0; interfaces list, lines 1510–1527; final Q8, 1538 | CD audio is mandatory in final Q8 while F4 optical explicitly excludes it; “no change to the mixer” does not supply TOC, audio transport or ISO track metadata. Add a reviewed optical/media amendment and a named dependency of f5-12. Ordinary ISO9660 images cannot represent Red Book tracks. [F4 optical boundary](../../docs/design/f4-audio-media-contract.md#atapi-and-iso-9660-read-only-mounts). |
+| C20 | P1; Q8 prompt, line 1488; final Q8, 1538 | “None of the ten titles needs it” becomes “several gate titles use it” without new evidence. Record exact edition/media and music path in the census. Q8 remains binding regardless; do not invent observed CD music from a title name. The original game source demonstrates why a separate fixture is needed: [Quake II MCI CD path](https://raw.githubusercontent.com/id-Software/Quake-2/master/win32/cd_win.c). |
+| C21 | P0; Q7, 1537 versus tiers/play criteria, 1225–1240, 1257 | Ten minutes of playback plus installation/start/focus/exit cannot fit a ten-minute total case timeout. Earlier play evidence is only three minutes, and N11 says performance is not itself a gate while Q7 makes it one. Specify separate install/play/focus runs, with >600 s required for a ten-minute play segment, or obtain a lead revision of the campaign rule. [Test architecture](../../docs/design/test-architecture.md), final Q7. Do not silently reduce the approved duration. |
+| C22 | P1; final Q9/Q15, 1539/1545 versus lines 817–828, 764 | The normative API table remains permanently en-US and UTC although selectable Italian locale and configured timezone are approved. Add process/system/thread locale precedence and a Windows-local-time conversion rule while retaining UTC kernel time. Native F2 libc currently supports only C/POSIX locale and UTC. [POSIX exclusions](../../docs/design/posix-subset.md#supported-library-surface-and-exclusions), [native clocks](../../docs/design/execution-abi.md#memory-and-clocks). This must not silently change the native ABI. |
+| C23 | P1; fonts Q10/f5-10 versus interfaces list | FreeType is approved, but the existing fonts contract is omitted from the amendments list. Define the GDI backend and the `/System/fonts` → `C:\\WINDOWS\\FONTS` view; retain native stb use unless separately changed. Installer `AddFontResource` cannot simply feed arbitrary files to trusted-only stb. [Fonts contract](../../docs/design/fonts-contract.md#rasteriser-decision), [FreeType license alternatives](https://freetype.org/license.html). |
+| C24 | P0; original dependency paragraph, 1457–1461 | f5-05 needs the f5-14 audit, which starts after f5-05; f5-02's “complete” installed census may require later installation; f5-03 requires dispatcher fixtures from f5-05. f5-07 DDE/restart needs USER/shell work it precedes. f5-10's complete NSIS acceptance and f5-11's Diablo menu need later DLL/audio/input work. Split preparation, host acceptance and integrated acceptance as in section 4. These are internal dependency contradictions. |
+| C25 | P1; namespace rules, line 726 | The requirement for exact uppercase 8.3 names and no long entries, if applied to the whole path table, contradicts `Program Files`, `Common Files`, `Start Menu` and the existing canonical `System` long spelling. Apply the uppercase rule only to the intended short components; keep approved native names intact. [Native namespace decision](../../docs/design/posix-subset.md#posix-paths-over-the-drive-vfs). |
+| C26 | P1; spawn atomicity, lines 327–328; loader lines 655–679 | “No visible process on failure before first instruction” is insufficiently defined when the first instruction is the loader and imports/DllMain can fail later. Specify kernel-preparation failure versus loader failure after publication. Do not promise Windows-style initialization failure is synchronous with every `CreateProcess` return; use a ready/error handshake where Ciuki launch UI requires one. [Microsoft CreateThread remarks on process initialization](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createthread), [F2 atomic spawn](../../docs/design/execution-abi.md#processes-inheritance-and-teardown). |
+| C27 | P1; paths, lines 715–718 | The shared sentence requires `GetLongPathName` to return the on-disk alias. It must return the **long** form; only `GetShortPathName` and `cAlternateFileName` return short aliases. Preserve the correct no-long-name fallback and buffer sizing. [Microsoft GetLongPathName](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlongpathnamea). |
+
+#### Declared departures and assertions that need qualification
+
+These are not automatically reasons to reproduce Windows internals. They are
+compatibility costs or unsupported feasibility assertions:
+
+| ID | Location | Recommendation and evidence |
+| --- | --- | --- |
+| D01 | W4, memory layout | Private below-2-GiB layout is a valid policy. Call the TEB/shared-user-page design an NT/Wine-compatible *internal ABI with 98 API identity*, not authentic Win98 layout. A TEB offset source about NT does not establish the corresponding 9x structure. [Chappell](https://geoffchappell.com/studies/windows/km/ntoskrnl/inc/api/pebteb/teb/index.htm). |
+| D02 | File mappings, lines 538–546 | Prohibiting writable views of one file in different processes is an explicit incompatibility, not Windows coherency. Add `FILE_MAP_COPY` and same-process multi-view behavior; prefer coherent file-backed sections if a selected installer needs them. [Microsoft MapViewOfFile](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile). |
+| D03 | W14, loader search, lines 685–700 | Protecting the builtin core is reasonable. Blanket overriding of *all* manifest DLLs, even explicit paths, is stronger than a historical KnownDLL rule and can suppress an installer/game's expected runtime version. Preserve core protection; use explicit non-core native/builtin precedence and conflict fixtures. [Microsoft historical KnownDLL KB](https://ftp.zx.net.nz/pub/archive/ftp.microsoft.com/MISC/KB/en-us/164/501.HTM), [current search factors](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-search-order). The stated EXE/current/system/Windows/PATH ordering itself is not rejected by this review. |
+| D04 | W18 | PIT frequency is Ciuki policy, not a Win98 guarantee. Specify rollover-safe latching and pending-IRQ accounting; frequency 1,193,182 does not establish sub-ms resolution. Current divisor 1193 means scaling ticks by 1000 μs introduces drift. Do not reprogram or read ports from applications. [PIT implementation](../../src/kernel/arch/pic_pit.c), [native clocks](../../docs/design/execution-abi.md#memory-and-clocks). |
+| D05 | DirectDraw caps/colour control, lines 944–953; diagnostics | A virtual display device may advertise operations it truly implements, but do not claim physical acceleration or memory residency. Unsupported capability bits must remain off; successful no-effect colour/3D controls need an explicit approximation policy and diagnostic. Hardware/HEL distinction is observable. [DX7 return values](https://library.thedatadungeon.com/directx7/devdoc/live/directx/ddref_6u9j.content.htm). |
+| D06 | DirectX setup and Q4 | Reporting 7.0a is an approved installation-identity policy, not full DirectX 7 conformance: D3D and DirectMusic are absent. “Every DXSETUP succeeds” exceeds it when a package requests a later runtime. Define supported package/version behavior; do not manufacture requested capabilities. [DirectSetup return values](https://library.thedatadungeon.com/directx81-c/directx_cpp/Setup/Reference/RetVal.content.htm), [NSIS DirectSetup usage](https://nsis.sourceforge.io/DirectX_Installation_for_Fixed_Media). |
+| D07 | Memory targets, option C reason 1 | “It fits” is not measured. A 10,000-record queue × 32 threads alone can exceed 4 MiB at 28 bytes/record, before allocator/APC/send payload costs. A 4-MiB text hive × two is not a ≤3-MiB resident guarantee. Charge sparse queue growth, COW credits, stacks, decoded registry, synth samples and surface conversions explicitly. [Existing admission limits](../../docs/design/execution-abi.md#processes-inheritance-and-teardown); arithmetic here is a review calculation. |
+| D08 | G2, TLS limit, console, mappings, stubs | Sixty-four TLS slots, console handles reduced to a log, absent MSI/DirectMusic, synchronous file completion, mapping restrictions and 3D/network deferrals delimit a subset. API import coverage “implemented or stub” is not G1–G3 success. Required paths need functioning semantics; optional unsupported paths need demonstrated fallback. |
+
+The recursive 9x `RegDeleteKey` choice is **not** flagged as an NT-style bug:
+the [period Microsoft documentation](https://techshelps.github.io/MSDN/WINBASE/devdoc/live/pdwbase/regapi_1po9.htm)
+documents deletion of descendants on Windows 95. Likewise guards, later static
+TLS support and a private address space can be deliberate supersets. The review
+does not require VxDs, a shared System VM or Win16Mutex for ordinary PE32 games.
+
+### 3. What G1–G3 still need
+
+The following extends specified partial behavior; it does not pretend the
+contract omitted DirectDraw, registry, MCI or installers altogether.
+
+#### 3.1 Scope, executable ABI and runtime discovery
+
+**M01 — A compatibility matrix rather than an era-wide promise.** The approved
+ten titles are all dated 1997–1999. They provide no actual 1996 or 2000–2004
+installer/game coverage, no approved Quake II gate and no identified InstallShield
+3 or Win16 fixture. Keep them, but record for each exact version: original setup
+entry point, bootstrap/child engines, PE/NE/DOS architecture, codecs/runtimes,
+disc requirements, renderer, audio/input paths and expected exclusions. Propose
+additional period coverage to the lead/owner rather than replacing approved
+titles. A later PE build that calls DirectInput8 proves one ABI, not a 2004
+original installer. NSIS 2 is period-relevant at the end of the range; pin an
+appropriate release rather than current NSIS 3. [NSIS's release history](https://nsis.sourceforge.io/Docs/AppendixF.html).
+
+**M02 — Calling conventions and public layouts.** Specify i386 `stdcall`,
+`cdecl`/varargs (`wsprintf`), `thiscall`/compiler runtime adapters where imported,
+COM vtables, export names/ordinals and data exports. Fix structure packing,
+BOOL/HRESULT/HANDLE widths, UTF-16 `WCHAR`, 32-bit `long`, 64-bit return handling,
+stack alignment and callback conventions. Preserve nonvolatile registers and
+DF rules. Compile with an i386 toolchain: a Linux x86_64 struct test is not an
+ABI test. [winebuild spec syntax](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/tools/winebuild/winebuild.man.in)
+illustrates why `.def` names alone are insufficient.
+
+**M03 — Loader details and dynamic API census.** Include image-vs-DLL flags,
+headers actually mapped, `VirtualSize == 0`, low alignment, page-shared section
+protections, bound-IAT-without-name-table policy, forwarder cycles, TLS callback
+termination and alignment, DLL reference dependencies, detach during failed
+initialization and thread startup/shutdown ordering. Resources need language,
+named/ordinal lookup and DATAFILE loads. Packers need self-modifying executable
+memory and relocation-correct entry points; *not all packers satisfy G2's
+documented-API condition*. Parse static/delayed imports and scan manifests, then
+augment with `LoadLibrary`/`GetProcAddress`/COM/codec activity during installation
+and play. Missing import names can block before an optional branch is reached.
+The contract's source listing is not an import manifest. Section-specific bounds
+must protect every walker, string and relocation write.
+
+**M04 — Exceptions, TLS and kernel boundary completion.** Define x86 PEB/process
+parameters and loader lists expected by the reused core boundary; specify SEH
+registration, nested exceptions, collided/target unwind, noncontinuable status,
+`setjmp`/`longjmp` and language-runtime handlers, #OF/#BR, breakpoint record vs
+resume EIP, and exception dispatch on stack exhaustion. Keep an emergency
+per-thread delivery strategy if recovery from stack overflow is promised.
+Saving only a fiber's control word must be a deliberate documented scope;
+define full processor-state requirements for later fiber variants. Establish
+the actual 98 SSE enablement and initial x87 state from period sources or a
+lead-owned experiment. CPU feature support must be dynamic (Pentium II/E500
+versus Pentium III); bundled DLLs must not acquire an unconditional SSE2 floor.
+CR4, FPU images, FS reload, DPMI LDT and native signal contexts must coexist.
+[Intel FXSAVE/FXRSTOR requirements](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2a-manual.pdf).
+
+#### 3.2 Installers, shell and file namespace
+
+**M05 — Installer engines are complete flows.** An “InstallShield” string is
+not engine/version evidence. Separate IS3's 16-bit engine, IS5's possible
+16-bit launcher/32-bit engine, Wise variants, NSIS plugins/compressors,
+IExpress INF/CAB and vendor setup. Catalog setup data, unpacking helpers,
+custom DLL entry points, temporary children and uninstaller versions. Define
+WinExec/ShellExecute/CreateProcess dispatch for NE/DOS/PE, command quoting and
+working directory, process waits, named mutex/atom/DDE rendezvous, and cleanup
+after cancellation. COM initialization/apartments, class factories,
+`DllRegisterServer`/`DllUnregisterServer`, type libraries, RPC/in-process
+marshalling dependencies and utility entry points (`rundll32`, `regsvr32`) need
+a measured decision. No requirement for a general SCM follows from one setup
+helper named “service”. A legacy out-of-process installer helper, if measured,
+cannot be covered by the in-process-COM promise alone.
+
+**M06 — Win16 is more than DPMI.** f5-19 needs its own reviewed contract before
+the core ABI freezes. Specify NE segments/relocations/import ordinals, selectors
+and far pointers, local/global heaps, Win16 KERNEL/USER/GDI APIs used by setup,
+cooperative tasks, thunked callbacks, DOS/file bridges, PE-child handoff and
+owner-death cleanup. DPMI supplies processor/memory mechanisms, not a Windows
+API implementation. Keep DOS V86 execution, Win16 protected execution, and NT
+WOW/NTVDM terminology distinct. [Microsoft's DDK architecture discussion](https://techshelps.github.io/MSDN/TECHART/html/msdn_chicvxd.htm),
+[existing DPMI boundary](../../docs/design/dos-dpmi-contract.md).
+Recognized-stub substitution can be investigated as a named compatibility
+mechanism, but cannot be presented as general Win16 support or used to silently
+drop IS3 after Q3.
+
+**M07 — Bundled DirectX redistributables.** Support the actual original path:
+setup loads DSETUP by name **or full path**, checks component/version resources,
+registers callbacks, passes setup/test/driver flags, or spawns DXSETUP with a
+command line. Define exact DWORD registry values, setup version/revision values,
+callbacks, “already present” outcome, refusal of unsupported package demands and
+virtual restart. Keep native drivers and core DLLs protected. Identify whether
+the launcher itself is NE. Exercise at least one actual DX3/5/6/7-era bundle
+from a licensed demo plus a generated facade fixture. [NSIS DirectSetup example](https://nsis.sourceforge.io/DirectX_Installation_for_Fixed_Media)
+demonstrates why a single success-return export is not a flow test.
+
+**M08 — Per-drive paths and process parameters.** Specify `C:relative`,
+`\\rooted`, current-directory-per-drive and `=C:` environment entries, environment
+inheritance, ANSI/UTF-16 conversions, DOS reserved device names (`NUL`, `CON`,
+`COM1`, etc.), path-length counting and invalid/trailing-name errors. Win32
+normalization belongs above the unchanged POSIX parser. `GetTempPath` needs
+environment precedence, existence/access handling and a stable trailing slash;
+temporary filenames need collision-safe creation. Version, file attributes,
+creation dispositions, delete-on-close and existing opens must match the
+sharing/lock matrix. Add errors for full disk, read-only CD and media removal.
+[Microsoft per-drive path semantics](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file).
+
+**M09 — INI and registry are observable services.** INI lookup without a full
+path searches the Windows directory; handle NULL section/key enumeration,
+double-NUL truncation, defaults, delete/flush operations, encodings and
+cross-process visibility. [GetPrivateProfileString](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getprivateprofilestringa).
+Win32 registry needs case-insensitive names, default/empty values, exact
+ANSI/W string byte counts, enum buffer sizing, zero-length/binary values,
+DWORD unsigned round-trip, deleted-key handle lifetime, errors and commit
+failure propagation. Separate the native roots from HKLM/HKCU explicitly;
+if storage/parser code is reused, its current 16-level/4096-byte/native-type
+limits cannot implement the promised Windows view unchanged. No dual writer
+may edit either service's files. Give Control Panel an authorized RPC view of
+Win32 hives and preserve native System audio ownership.
+
+**M10 — Shell integration preserves installation state.** `.lnk` must retain
+target, arguments, working directory, icon/index and show state. Specify the
+MS-SHLLINK subset or a compatible binary writer, and how the native desktop
+reads it; arbitrary launch strings exceed the existing 160-byte protocol
+argument. Start-menu/desktop discovery must refresh and validate stale links.
+PROGMAN DDE needs actual conversations, shared data and acknowledgment, not only
+verb parsing. App Paths differs from `CreateProcess` search. Handle uninstall
+quoting, self-deletion, registry SharedDLLs, INF callbacks and files in use.
+`WININIT.INI` rename processing needs correct source/destination/`NUL` handling,
+an idempotent recovery record, and crash tests across each step. Include
+WM_QUERYENDSESSION/WM_ENDSESSION veto/force behavior and regular boot as well as
+virtual reboot processing of RunOnce. Do not treat persistent Run entries as
+RunOnce. Clarify whether native reboot waits for `w32srv` to flush.
+
+#### 3.3 Display, messages and input
+
+**M11 — Complete USER/GDI behavior and protocol v3.** Freeze byte layouts,
+version negotiation, window IDs/generations, ownership, surface transfers,
+geometry/resize acknowledgments, mode generations, queue pressure and all
+server-disconnect paths. Native v1/v2.1 clients must stay valid. Specify at
+least message ordering/filtering, `GetMessage`/`PeekMessage`/TranslateMessage,
+WM_QUIT, sent-message reentrancy/timeout, modal loops, window-class/subclass
+lifetime, window/owner z-order, focus versus activation, nonclient messages,
+screen/client coordinates, timers, clipboard and DDE. Painting needs regions,
+ROP2/ROP3, palette realization, DIB orientation/stride, SaveDC/RestoreDC and
+selected-object lifetime. Installer dialogs require DIALOG/DIALOGEX resources,
+dialog units, tab/default buttons and metrics for MS Sans Serif/System/Tahoma,
+not just aliases for Arial/Times/Courier. General arbitrary game fonts must use
+the validated GDI backend. [Repository fonts and F5 alias boundary](../../docs/design/fonts-contract.md#fonts-and-f5-aliases).
+
+**M12 — Exclusive mode and primary-surface visibility.** The lease design is
+useful, but add a transaction/state machine: requested/active/revoking/revoked,
+one owner, request tokens/generations, pending-present cancellation, failure
+rollback, mode negotiation and desktop death. Regrant must precede eligible
+restoration and repaint. Keep *logical* game dimensions/depth distinct from
+physical mode/scaled framebuffer; make GDI GetDeviceCaps/GetSystemMetrics,
+mouse coordinate conversion, cursor clipping, hit-testing and DirectDraw
+GetDisplayMode consistent. Preserve offscreen system-memory surfaces across
+focus loss. Define what triggers presenting a primary surface after
+`Unlock`, `ReleaseDC` and palette changes **without Flip or Blt**; a locked
+surface can be updated directly for long periods. A dirty snapshot/refresher
+or another declared mechanism is necessary. Define GetFlipStatus/GetBltStatus,
+non-WAIT failure, busy/locked surfaces, clipping, ROP support, full COM versions
+and size negotiation, video-memory exhaustion and flipping identity. Suspend
+the game on loss only where API semantics require it. Software 60-Hz pacing
+is a reported approximation, not a real scanout position.
+
+A fullscreen game may still use GDI/windows for menus. Stopping composition
+unconditionally does not make those windows visible: specify the same-process
+popup/DC path and system-modal revocation. Wine's own code records this
+interaction and references the DX7 `fswindow` sample. [Wine 10.0 frontbuffer/GDI implementation](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ddraw/surface.c).
+
+**M13 — DirectInput and ordinary mouse APIs.** Keep set-1 motion provenance,
+but add button/wheel delivery (F1 already exports WHEEL), E0/E1/Pause/PrintScreen,
+left/right modifiers, repeat/toggle/dead-key/AltGr behavior, TranslateMessage
+duplication prevention and layout switching. DIK is positional, VK/character
+mapping is layout-dependent. DirectInput needs every required interface/version,
+struct size and A/W variant, custom DIDATAFORMAT object offsets, properties,
+peek/read buffered events, timestamps/sequences, event notifications and
+overflow/reacquisition behavior. Test background nonexclusive access and
+foreground exclusive loss independently. Normal `GetCursorPos`/`SetCursorPos`
+recentring and SystemParametersInfo mouse behavior are required alongside
+DirectInput: [Quake II's ordinary mouse path](https://raw.githubusercontent.com/id-Software/Quake-2/master/win32/in_win.c)
+uses capture, clipping, cursor visibility and absolute recentering.
+
+#### 3.4 Audio, media and disc checks
+
+**M14 — Audio completion and cursor semantics.** Define the consumed/output/
+audible model and source-rate conversion; include the write cursor's safe
+distance, underruns, wrap, looping, stopped-buffer position, frequency changes,
+duplicate shared storage versus independent playback, reset generations and
+buffer-loss/Restore. Specify all waveOut callback modes, prepared-header
+lifetime, WHDR_DONE, completion order, WAVE_FORMAT_QUERY, position formats,
+pause/reset/drain and per-process allocation failures. DirectSound versions,
+caps, format negotiation, priority/primary writes, 3D approximation and effects
+refusal must match the reported interfaces. [Microsoft play/write cursor distinction](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/ee418062%28v%3Dvs.85%29).
+
+MCI needs both command-string and command-ID APIs, device/alias handling,
+WAIT/NOTIFY, success/aborted/superseded/failure notifications, seek/time formats,
+status/stop/pause/resume, cleanup and concurrency. ACM/VfW need codec
+discovery/registration/driver messaging and lifetime, not only decoder routines.
+Game-bundled Smacker/Bink/Miles DLLs must be measured rather than replaced with
+an assumed AVI codec list. Win32 user-mode codec modules must be distinguished
+from forbidden kernel drivers despite `.drv`/`.acm` suffixes. MIDI requires a
+synth implementation, bank provenance, program/percussion mapping, controllers,
+tempo/long messages/volume, CPU cost and sample-cache budget.
+
+**M15 — CD-ROM checks and Red Book transport.** Data-disc checks require
+consistent drive letters/types, volume labels/serials, files on CD, media-change
+generations, error modes and multi-disc replacement. Provide bounded read-only
+volume/TOC/device enquiries only if census requires them; blanket refusal of
+all `DeviceIoControl` requests cannot cover a benign CD information enquiry.
+Keep protection-driver refusal and no hardware passthrough unchanged. Do not
+classify every CD-presence check as DRM.
+
+ISO mount covers a data filesystem, not audio tracks. A CD-audio amendment
+must choose physical PLAY AUDIO plus qualified analog routing, or READ CD
+digital extraction mixed through `/dev/audio`; qualify drive support and
+fallback. The digital path also needs TOC/subchannel position, media errors,
+ownership of the ATA channel and bounded buffering. A mixed-mode image needs a
+track-aware representation (for example cue/bin support), with licensed
+fixtures. MCI `cdaudio` must preserve track numbering/data tracks/TMSF,
+notifications and door/media operations. An ISO-only fixture cannot verify it.
+Generate a data+audio test disc from project-authored PCM; real game audio stays
+private. [Quake II's CD control/status/notification usage](https://raw.githubusercontent.com/id-Software/Quake-2/master/win32/cd_win.c)
+is concrete source evidence of this class.
+
+**M16 — Offline network bootstrap before F6.** f5-18 is correctly deferred,
+but F5 itself still needs loader-complete `wsock32`/`ws2_32`/DirectPlay exports
+that installers/games statically import, plus correct no-network failures on
+optional single-player paths. Define this as f5-06/f5-14 work and measure the
+imports. “DirectPlay enumerates none” requires COM class creation/enum semantics,
+not just an absent DLL. F6 must later preserve Winsock readiness, error,
+blocking and window-message behavior; IPX sockets and DOS virtual NE2000/IPX
+must share wire semantics rather than merely a drive-style namespace.
+
+#### 3.5 The five requested game families
+
+This table is a **workload checklist**, not an invented exact import census.
+Closed-engine claims in the contract must be checked on the exact demo binary;
+open-source engine observations need separate binary confirmation.
+
+| Family | Paths to verify and the contract changes they motivate | Evidence status |
+| --- | --- | --- |
+| Half-Life 1 / Uplink | Wise bootstrap and child DLLs; dynamic renderer/sound modules; default renderer selection without manual launch flags; DirectDraw palette/DC/primary updates in software mode; DirectSound streaming and waveOut fallback; cursor capture/warp and optional DirectInput; Winsock startup that permits single-player; config/save paths and in-game video. | Uplink is an approved original binary but not executed here. [Valve's SDK](https://github.com/ValveSoftware/halflife) is primary game-code evidence, **not** the complete original engine/import source. |
+| Quake II | Software renderer module loading, USER/GDI window/fullscreen paths, `LoadLibrary`/`GetProcAddress`; DirectSound secondary *and writable primary* paths, caps and waveOut prepared buffers; cursor recenter/capture/clip, SystemParametersInfo; MCI CD TMSF/status/notify; optional Winsock. | [id audio source](https://raw.githubusercontent.com/id-Software/Quake-2/master/win32/snd_win.c), [mouse source](https://raw.githubusercontent.com/id-Software/Quake-2/master/win32/in_win.c), [CD source](https://raw.githubusercontent.com/id-Software/Quake-2/master/win32/cd_win.c), [renderer DLL loading](https://raw.githubusercontent.com/id-Software/Quake-2/master/win32/vid_dll.c). Source release is primary; it is not proof for every retail/demo revision. Add a original-demo qualification proposal; do not confuse Quake II with the Quake III F7 reserve. |
+| StarCraft | Exact shareware setup/CD-content provenance; Storm and bundled video DLL imports; 640×480 palette modes, clipping and primary buffer update paths; streamed sound/codec queries; CD-file and registry install-path checks; save/config files, optional network initialization and IPX later. | Approved contract workload hypothesis, pending static/dynamic census and media inspection. No inference from modern remaster or open reimplementation qualifies the original engine. |
+| Age of Empires | IExpress/ADVPACK CAB+INF chain; bundled DXSETUP behavior; shell/DDE shortcuts and registry installation paths; DirectDraw palettes, surface/DC semantics, sound and music-device selection; original media checks and later DirectPlay/IPX. | Approved trial needs a census. The claim “MIDI music” needs edition/file/API evidence; final Q8's CD-audio decision does not resolve which trial assets use it. |
+| Diablo | Original shareware setup and drive/media checks; Storm/game/video runtime imports and dynamic calls; 8-bit primary/flip/palette/clipper behavior; DirectSound buffers and decoder paths; registry/save paths; optional network bootstrap and later IPX. | Approved original shareware workload; no binary execution or verified API counts here. Diablo menu acceptance for f5-11 must wait for the required audio/input/runtime paths. |
+
+The census must follow original installers and installed child executables,
+including uninstallers and codecs. Host extraction is for **review and fixture
+discovery**; a host-extracted game that launches without its original setup is
+not G1 acceptance. Record why an exclusion applies to each exact retail edition.
+
+### 4. Ordered directives f5-02–f5-18 and Linux host tests
+
+#### 4.1 Preparation and acceptance separation
+
+Keep the approved numbers. Letters below denote **handoff milestones inside a
+directive**, not new directive numbers or build variants.
+
+1. Dispose of this review and cross-review the ABI, desktop-v3, optical/CD,
+   Win16 and fonts/registry amendments before their implementation. Assign
+   syscall numbers globally.
+2. f5-02A prepares tools/fixtures and a provisional census. f5-14A performs
+   the Wine dependency/build audit immediately afterward, **before** core ABI
+   freeze. f5-16A diagnostics and f5-17A workload/evidence design can overlap.
+3. Implement f5-03 → f5-04 → f5-05 → f5-06. Kernel mechanism host acceptance
+   precedes integrated PE acceptance. Later guest checks are recorded as
+   pending, not waived or falsely passed.
+4. Develop f5-07A registry/server, f5-08 presentation, f5-09 desktop and
+   f5-12A audio foundation on their frozen interfaces. f5-10 supplies USER/GDI.
+5. f5-11 DirectDraw, f5-13 input, f5-14B upper DLLs and f5-14C codecs can
+   then overlap. f5-12B completes callbacks/MCI/media/CD. f5-19 implements
+   the approved Win16 installer scope before installer closure.
+6. f5-15A assembles shell/installer flows; f5-07B implements DDE/restart
+   orchestration on working USER/shell interfaces; f5-15B closes original
+   installer acceptance. f5-16B closes diagnostics, f5-17B closes game
+   acceptance and f5-02B publishes final static+dynamic coverage.
+7. f5-18 follows F6's qualified socket/IPX interfaces. F5 has an earlier
+   loader-complete no-network facade so offline games do not wait for F6.
+
+#### 4.2 Deliverables and host-test strategy per directive
+
+T0 means production portable logic compiled as Linux ELF with injected service
+adapters. Independent models/reference calculations test that logic; tests of
+a separate reimplementation alone do not qualify it. Use i386 layout checks,
+sanitizers where suitable, deterministic schedules and allocation/I/O failure
+injection. Privileged instructions and original PE execution are lead-owned
+guest/hardware evidence.
+
+| Directive / milestones | Required predecessor handoffs and deliverable | Linux host strategy |
+| --- | --- | --- |
+| **f5-02A/B: tools, PE fixtures, census** | First. A pins i386 clang/lld, llvm-dlltool/resource tools and MinGW-w64 headers/CRT; builds self-authored fixtures and provisional census. B finalizes opaque child/dynamic imports after original installation/play. | Two reproducible fixture builds; independent llvm-readobj/objdump versus production parser. Negative mutations/fuzz corpus for truncation, alignment, image/section bounds, TLS, certificates, imports/ordinals/forwarders. Compile packing/callback convention tests for i386. Preserve independently derived expected outcomes. |
+| **f5-03: personality, VM, faults** | 02A + 14A + reviewed amendments including f5-19 kernel needs. Freeze records, personality/authority dispatch, VA, FS, feature gating, faults/continue and PIT counter. | Production record/authority validation; reserve rounding, region accounting/guard growth/OOM rollback; descriptor encoding; i386 context/MXCSR sanitizer checks. Mock lazy-owner Win32/native/DPMI transitions including stale owners/termination; PIT latch/rollover/pending IRQ. FS/CR4/instruction faults remain unproved by T0. |
+| **f5-04: objects, sections, endpoints** | 03. Generational handles/objects, inheritance, atomic waits/APCs, suspension, sections/COW/coherent views, service endpoints and charges. | Deterministic interleavings of enqueue/reset/timeout/close/death; lowest-index wait-any, all-or-none acquisition, abandonment/recursion and quota failures. APC order and pinned-buffer lifetime. Shared/private page identity, dirty-view flush failure, duplicate/inherit cleanup and ledger return. Charge sparse queue growth and COW backing credits. |
+| **f5-05: loader/NTDLL** | 03 + 04 + 14A. PEB/TEB/process records, imports/exports/resources/TLS/order/unload, heaps/SEH and audited private exports. | Production parser/resolver/relocator against 02A corpus in mock VA/file store; no-reloc collisions, cyclic imports/forwarders, bound IAT, explicit path/builtin policies, all-thread TLS callback traces, DllMain failure rollback and heap failures. i386 calling-convention disassembly; SEH/unwind state-machine tests. Integrated PE fixtures follow later. |
+| **f5-06: kernel32 and offline facade** | 05 + 04. File/drive paths, process/thread/memory/wait/fiber/TLS/time/profile/console APIs; census-sized Winsock offline exports. | Wrappers verify exact return/last-error/unchanged-output conventions and copied records. Production VFS harness checks share/locks/alias/wildcard/delete matrices; per-drive cwd/environment/quoted command dispatch to PE/NE/DOS. INI bytes and Windows-reference cases, time/filetime overflow/zone conversion, thread/TLS/fiber lifecycle and optional offline failure paths. |
+| **f5-07A/B: server, registry, advapi** | A: 04 + 05 + 06 for PE facade (native parser work can start earlier). B: 09 + 10 + 15A for actual DDE/end-session/restart. Separate native registry ownership and Win32 RPC. | Typed/case/default/enum/buffer/delete-handle semantics; fault every slot-write/fsync/commit stage and validate committed recovery state. Server death/reconnect, generational HWND/atoms and concurrent client updates. Restart interruptions at rename/delete/RunOnce steps, quoted commands and idempotent recovery. Host fsync mocks do not qualify FAT power-loss durability. |
+| **f5-08: presenter/display** | 03 + 04 capability interfaces and existing display service. Formats/palettes/scaling, lease tokens/generations/revocation, mode rollback. | Production conversion versus independent patterned-image calculations at all depths/scales/pitches, canaries, clipping/negative rectangles/gamma/palette. Revocation versus pin/copy/exit/stale token schedules; failure rollback and native authority regressions. Real VBE/accelerator cost stays lead-owned. |
+| **f5-09: desktop v3** | 04 + 08 interface handoff. Wire schema, windows/generations, surfaces/resize, logical/physical coordinates, focus/cursor/leases, bounded shell launch records. | Extend existing desktop harness with malformed packets/attachments/UTF-8/backpressure, v1/v2.1 regression, multiple windows/ownership/z-order/resize and client death. Lease/focus/disconnect/modal races, scale/clip/warp hit-tests, `.lnk` decoding and uninstall quoting. Preserve Ciuki portrait/Tango/English UI. |
+| **f5-10: USER/GDI/fonts** | 05 + 06 + 07A + 09 + reviewed GDI fonts boundary. Split reviewed handoffs for message/window core, drawing, dialogs/controls/fonts inside the number. | Production message traces for nested sends, modal loops, filters/new-input/timer/paint, cross-process pointer allowlist. Independent DIB/ROP/region/palette/reference frames and object lifetime tests. Compiled DIALOG/DIALOGEX resources, font metrics/dialog units/tab/default-button behavior, validated font parser bounds. UI-only installer fixture here; complete NSIS flow in 15. |
+| **f5-11: DirectDraw** | 06 + 08 + 09 + 10. Required COM generations/descriptors, primary visibility, flips/blits/DC/palette, caps/logical modes and selective loss. Demo menu additionally needs audio/input/upper runtime/install. | Independent blit/colour-key/stretch/ROP checksums, pitch/lock/overlap/canary tests, old structure sizes/refcounts, window clipping and busy/non-WAIT states, memory exhaustion. Alt+Tab/regrant/Restore state machine retains explicit offscreen system-memory assets. Primary Unlock/ReleaseDC/palette-only changes become visible without Flip. Guest demo evidence is pending. |
+| **f5-12A/B: audio, MIDI, MCI, media** | A: 04 + 06 + F4 adapter; mixer/primary/cursors/wave/MIDI backend contracts. B: 10 + 14C + reviewed CD-media backend; callbacks/codecs/AVI/MCI/cdaudio. | Exact production PCM from authored sources across split batches/rates/volume/pan/frequency/wrap/duplicates/stop/reset. Source/output/transport cursor model at 22.05/44.1/48 kHz; event/header callback order and quotas. MIDI program/controllers/tempo/long-message and bounded sample-cache tests. MCI command/time/notify/cancel traces; malformed codec frames. Mock TOC/media-change/track-aware image/packet errors with project-authored CD audio; no device access. |
+| **f5-13: Win32 input/DirectInput** | 06 + 09 + 10; agree input schema with 09 early. All device/interface versions, custom formats and cooperative states. | Set-1→DIK/VK/lParam tables for both layouts, modifiers/dead keys/repeats/Pause/PrintScreen/wheel. Object offsets/properties/size checks; timestamp/sequence/peek/overflow/event buffering. Foreground-exclusive and background-nonexclusive acquire/loss/resync traces. Raw mouse deltas independent of cursor warps. |
+| **f5-14A/B/C: Wine reuse** | A after 02A **before core freeze**: pin/build/full dependency audit. B after 05 + 06 + 07A + 10: upper UI/shell/COM. C after 12A + audited core: codecs/driver boundary. | A: inspect actual PE direct/delay imports, `.spec` forwards/ordinals, runtime loads/private exports/CRT/build tools/CPU floor; size map, license/source/patch manifest. B/C: convention/link/boundary fixtures and portable codec tests. Selected Wine PE tests under Linux Wine give a reference baseline only. Unmodified Ciuki `int 0x80` DLLs cannot simply execute there. Actual DLL loads/conformance on Ciuki are guest gates. |
+| **f5-15A/B: original installers/shell** | A: 07A + 09 + 10 + 14B assembles child launch/shortcuts/uninstall/DirectSetup/restart requests. B: 07B + 11 + 12B + 13 + 14C + 19 closes actual original flows. | Authored period-NSIS/CAB-INF/link/DDE/restart fixtures with independent expected file/registry/link manifests after install/cancel/restart/uninstall. Short paths/spaces/full disk/RO media/self-delete. Lawful host extraction and reference Wine runs assist discovery; neither proves original installer completion on CiukiOS. |
+| **f5-16A/B: shims/diagnostics** | A after 02A for schema/error taxonomy/identity; B after 05 + 06 + 09 plus implemented paths. | Match/version/precedence/hash-conflict cases, API-specific BOOL/HRESULT/MMRESULT/LSTATUS failure conventions, bounded/redacted/rate-limited logs and safe malformed-stack formatting. Loader/crash/no-server dialogs through desktop harness; refused MSI/driver/unsupported-runtime paths. Required install/play stubs are failures. |
+| **f5-17A/B: workloads/acceptance** | A after 02A for provenance/scripts/evidence design. B after 15B + 16B and relevant APIs; drives final 02B census and lead gate. | Host manifest/digest/license classification; deterministic media metadata, verdict/timeout/input/screen-check logic tested with canned logs/frames. Distinguish guest icount/host time and repeated presents versus real game progress. Segment install/play/focus records tied to one image hash/edition/scene. Small local downloader fixtures; no payload in canonical image. |
+| **f5-18: Winsock/DirectPlay** | 04 + 06 + 10 + F6 qualified IPv4/IPX + 14B COM boundary. Early F5 offline facade is separate. | Production socket adapter with mocked readiness/partial I/O/select deadlines/nonblocking errors, WSAAsyncSelect/WSAEventSelect rearm/close races, network byte order and legacy sockaddr_ipx layouts. Authored TCP/UDP/IPX packets and Linux-local reference endpoints where harness permits. DirectPlay provider/session/lobby/no-network fixtures. Physical LAN is lead-owned. |
+
+**f5-19**, already added by Q3: its reviewed contract precedes 03's interface
+freeze; implementation follows 03/04/05/06 + 10's USER/GDI bridge. T0 tests
+exercise production NE parser/relocator, selector/far-pointer bounds,
+heap/resource/thunk/callback records and PE-child handoff. Use self-authored
+Open Watcom 16-bit fixtures and an identified original licensed IS3/IS5 flow.
+A host NE-parser pass cannot qualify 16-bit execution. This review invents no
+new directive number and does not drop the owner's Win16 requirement.
+
+#### 4.3 Dependency graph and parallel work
+
+Edges are required handoffs; all transitive predecessors count. The explicit
+dependency table is authoritative when a compact graph omits an edge.
+
+```mermaid
+flowchart TD
+    R[Review and amendments] --> A02[f5-02A tools/census]
+    A02 --> A14[f5-14A dependency audit]
+    A02 --> A16[f5-16A diagnostics]
+    A02 --> A17[f5-17A workloads]
+    R --> C19[f5-19 contract]
+    C19 --> K03[f5-03 core]
+    A14 --> K03
+    K03 --> K04[f5-04 objects/sections]
+    K04 --> L05[f5-05 loader]
+    A14 --> L05
+    L05 --> K06[f5-06 kernel32/offline]
+    K04 --> P08[f5-08 presenter]
+    P08 --> D09[f5-09 desktop]
+    K06 --> R07[f5-07A registry/server]
+    K06 --> S12[f5-12A audio]
+    R07 --> U10[f5-10 USER/GDI]
+    D09 --> U10
+    K06 --> U10
+    U10 --> D11[f5-11 DirectDraw]
+    P08 --> D11
+    U10 --> I13[f5-13 input]
+    U10 --> B14[f5-14B upper DLLs]
+    S12 --> C14[f5-14C codecs]
+    C14 --> M12[f5-12B MCI/media/CD]
+    U10 --> M12
+    R --> CD[Reviewed CD backend]
+    CD --> M12
+    C19 --> W19[f5-19 Win16]
+    U10 --> W19
+    B14 --> A15[f5-15A installer integration]
+    A15 --> B07[f5-07B DDE/restart]
+    B07 --> B15[f5-15B original setups]
+    D11 --> B15
+    I13 --> B15
+    M12 --> B15
+    W19 --> B15
+    A16 --> B16[f5-16B diagnostics]
+    K06 --> B16
+    D09 --> B16
+    A17 --> B17[f5-17B game evidence]
+    B15 --> B17
+    B16 --> B17
+    B17 --> B02[f5-02B census closure]
+    B02 --> G[Integrated F5 gate]
+    F6[Qualified F6 sockets/IPX] --> N18[f5-18 network]
+    B14 --> N18
+    U10 --> N18
+```
+
+The 14A audit breaks the original 05↔14 cycle. The 07A/07B and 15A/15B
+handoffs break the registry/window/shell/restart cycle. 12A/14C/12B separates
+the audio service boundary from codec/MCI integration. 02B closes the census
+after opaque installers actually run; it cannot hold the initial toolchain
+host handoff hostage to an unavailable future subsystem.
+
+After core interfaces stabilize, independent lanes are registry/server,
+presenter/desktop, portable audio and fixture/diagnostic work. After USER/GDI,
+upper DLLs, DirectDraw and input can proceed concurrently. Shared `uaddr`,
+task/fault and protocol/input schemas must have one owner and reviewed handoffs.
+If the lead later delegates, isolated worktrees and serial integration follow
+AGENTS.md. **No subagents were launched for this review.** Parallelism here is
+code/model work, not parallel QEMU/heavy builds; the lead retains validation.
+
+#### 4.4 PE binaries and honest host evidence
+
+Use three labelled corpora:
+
+1. **Linux cross builds:** pinned `i686-w64-mingw32-gcc`/windres with an
+   **MSVCRT** configuration for CRT fixtures; clang
+   `i686-pc-windows-msvc` plus lld-link `/nodefaultlib` for minimal
+   ABI/SEH/`.def` fixtures. MinGW headers do not supply Microsoft runtime
+   binaries. Modern defaults can choose UCRT: audit actual imports and CPU
+   instructions. [Upstream default change](https://www.mingw-w64.org/changelog/).
+   Generate EXE/DLL pairs, resources, TLS, static/runtime loads and all COM
+   versions. Mutate files for malformed cases and retain independent oracles.
+   Pin and verify a Linux-host Open Watcom toolchain for self-authored NE tests.
+2. **Upstream conformance binaries:** selected pinned Wine `dlls/*/tests`
+   cross builds. Run on Linux Wine as a reference if available, recording
+   Windows/Wine differences. Keep test-runtime imports separate from the game
+   census; they must not accidentally define F5 scope. Wine reference behavior
+   is not the Microsoft specification or CiukiOS syscall evidence.
+3. **Original era binaries:** approved Diablo/StarCraft shareware, AoE trial,
+   Uplink, UT and the other demos; propose a Quake II demo and identified
+   IS3/IS5/Win16 examples to the lead. Free download is not redistribution
+   permission. Inspect the bundled distribution terms and pin SHA-256 before
+   calling a file freely redistributable. Payloads whose terms permit local
+   use only remain local; publish names/hashes/observations. Keep original
+   helpers/uninstallers intact. Host extraction is discovery, not G1 proof.
+   No large archives in tmpfs and no Microsoft/game payload in the canonical
+   image. A rebuilt open engine does not qualify an original PE game.
+
+Production portable logic runs in Linux ELF harnesses. A host PE runner is
+optional separate engineering; it is not implied by having MinGW. Do not run
+Ciuki `int 0x80` PE DLLs unmodified under Wine and assume that gate means the
+same thing. PE execution, FS-relative SEH, CR4/SSE, physical display changes
+and actual audio latency remain T3/T4 evidence. Each directive reports T0
+results and pending integration evidence separately.
+
+### 5. Recommended answers to Q1–Q15
+
+These questions already have answers in the final section dated 2026-10-13.
+The recommendations below affirm or challenge them for lead disposition;
+they do not reopen settled owner decisions or authorize a scope change.
+
+| Question | Recommendation and justification |
+| --- | --- |
+| **Q1 numbering** | Keep f5-02–f5-18 and the already approved f5-19. Lettered handoffs remove cycles without overwriting f5-01 or inventing numbers. |
+| **Q2 implementation/license** | Retain approved C provisionally and LGPL-2.1-or-later for the core. Require 14A before core freeze and a reviewed vertical slice. LGPL requires proper source/notices/replacement arrangements; a separate PE DLL is not an automatic compliance proof. Do not describe LGPL as the only license allowing proprietary games—permissive libraries do too. Keep kernel, SDK and DLL licensing/provenance distinct. [GNU licensing FAQ](https://www.gnu.org/licenses/gpl-faq.en.html). |
+| **Q3 Win16** | Include it as already mandated. Give 19 a measured installer-facing API set and explicit containment design. NE execution uses protected-mode mechanisms plus Windows APIs; the DOS VM is infrastructure, not a finished Win16 subsystem. Recognized-stub replacement is an optional audited technique, not blanket success or a substitute for IS3. |
+| **Q4 identity/DirectX** | Keep 98 SE 4.10.2222 A default and the lead's 7.0a *installation identity* through F5. Report component capabilities honestly and version-gate unsupported redistributables. Do not report 8.1 simply to pass a check; also do not claim 7.0a is a complete runtime while D3D/DirectMusic are absent. Before F7 closes its component gates, no global version bump. Per-title version shims need measured default-flow evidence. |
+| **Q5 framebuffer** | Keep kernel-copy presentation. First qualify primary-surface refresh correctness, logical modes, revocation and measured bandwidth. Only then consider the lead's allowed amendment for mapped/accelerated presentation, with generation-based revocation and device ownership unchanged. There is no host performance evidence favoring a mapping here. |
+| **Q6 MIDI** | Honor General MIDI wavetable. Select synth and bank separately, pin exact versions/terms and measure image size, decoded samples, active voices, CPU and cache at 128 MiB. A reduced bank is a documented derivative requiring provenance and listening/GM-coverage checks. Do not infer “2–8 MiB” resident size for a full bank. [GeneralUser author documentation](https://schristiancollins.com/generaluser.php) directs users to its actual bundled license; the bank's license is not the synth's license. Never import Microsoft's Roland sample bank. |
+| **Q7 playable** | Preserve the lead's 25-average-fps/no-underrun/ten-minute decision pending explicit reconciliation with the ten-minute campaign ceiling. Add 5th-percentile/frame-time and input-latency evidence; presenter refreshes are not new game frames. For capped-rate 2D games, define title-specific meaningful scene/progress metrics and ask the lead to disposition the universal 25-fps rule. Keep hardware input in ms as well as game frames. Split install/play/focus evidence; do not silently shorten playback or raise timeouts. |
+| **Q8 CD audio** | Required as decided. Add a physical/track-aware-image transport contract and an authored MCI fixture regardless of which demos contain Red Book music. Prefer digital extraction into the existing mixed-audio path **if drive support and resource costs qualify**; otherwise qualify analog routing as an explicit backend. An ISO data mount alone cannot close this requirement. |
+| **Q9 local time** | UTC kernel and configured global timezone, as decided. Win32 `GetLocalTime`, conversion APIs and FAT local-time↔UTC FILETIME behavior must use the same setting. Define offset/DST rules, UTC fallback and persistence owner. Preserve F2 ABI/libc UTC behavior unless a separate amendment changes it. |
+| **Q10 fonts** | Keep Liberation and FreeType for validated Win32 GDI text. Select FreeType modules/configuration and FTL distribution path explicitly; preserve native fonts/backend. Add the missing MS Sans Serif/System/Tahoma-era metric/dialog-font plan and font-install lifecycle. [Fonts contract](../../docs/design/fonts-contract.md), [FreeType licensing](https://freetype.org/license.html). Liberation's Arial/Times/Courier metrics do not cover every installer face. |
+| **Q11 retail/protection** | Keep driver-dependent protection editions outside scope and do not bypass protection. Distinguish ordinary disc presence/file/volume/TOC checks from protection-driver behavior. Report exact edition/version/refused dependency, not a blanket assertion that every edition of a named title or brand needs a kernel driver. |
+| **Q12 RAM** | Keep 128 MiB qualification and report 64 MiB without gating, consistent with the hardware baseline. Measure actual kernel/desktop/reservations before limits; report peak installed-tree/runtime/synth/surface/queue/COW costs and graceful OOM. No image per machine and no unilateral raising of quotas. |
+| **Q13 IPX** | Honor owner approval in F6. Specify Windows `AF_IPX` layouts/endpoints/readiness/broadcast alongside DOS IPX wire semantics and a common Ethernet ownership bridge. Mock packet tests first, cross-personality and real LAN evidence later. This cannot be declared solved by lwIP IPv4 alone. |
+| **Q14 workloads** | Preserve approved ten/reserves and F7 placement of Quake III/Tomb Raider. Propose additional Quake II, 1996, 2000–2004, IS3/IS5/Win16 and CD-audio coverage without replacing existing titles. Label current results as a bounded demo matrix, not universal era compatibility. Keep payload rights/provenance distinct from free download availability. |
+| **Q15 locale** | Honor English default and selectable Italian locale/layout; all project UI copy stays English. Define system/user/thread LCID, layout/HKL, 1252 ACP versus OEM code page, date/number/currency/calendar behavior and MultiByte/WideChar conversion. Keyboard position/DIK is not locale text. Win32 locale support need not change newlib's native C/POSIX locale boundary. |
+
+The unresolved technical questions are now boundary details, not fifteen owner
+choices: period SSE/TEB/fault behavior, which Wine release/subset actually builds,
+the full dependency closure, the CD transport, synth/bank residency, font metrics,
+protocol wire records, timing measurement and gate segmentation. Record their
+answers in written directives before their dependent code.
+
+### 6. Personality architecture risks and recommendation
+
+#### 6.1 Correct architectural comparison
+
+Win9x uses VMM/VxDs and a System VM for Windows tasks, with separate DOS VMs;
+this is not Windows NT's NTVDM architecture. A ring-3 PE compatibility layer on
+CiukiOS does not have to recreate that internal organization. Its correctness
+criterion is the observed installer/game interfaces and containment, not the
+absence or presence of VMs. [Microsoft Windows 98 architecture overview](https://library.thedatadungeon.com/msdn-2000-04/rk98book/html/wrkc28_1.content.htm).
+
+Wine is already largely a user-mode API implementation executing application
+instructions natively. The real comparison is where host adaptation and shared
+state live, how much compatible API code is reused and which kernel/libc services
+are required. Wine's modern PE/Unix NTDLL split and wineserver are not a second
+Windows kernel or CPU emulator. [Wine's ntdll build boundary](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/Makefile.in).
+
+| Dimension | Ciuki core + selected Wine DLLs (C) | Wine-like userland/POSIX host (B) |
+| --- | --- | --- |
+| Kernel surface | Additional VM/FS/fault/context/section/wait/handle/APC/queue/lease mechanisms touch kernel containment paths. Can reuse existing Ciuki object/lifetime machinery. | Broader fixed/file/shared mapping, threading, signals/context/alternate stacks, IPC/fd transfer and dynamic host loading. Existing F2 subset is insufficient. Can keep Wine object policy and compatibility state in userland. |
+| Compatibility work | New loader/kernel32/USER/GDI/DirectDraw/sound/input behavior is the majority of risk. Upper DLLs pressure this boundary with NT/private/modern dependencies. | Retains a much larger established compatibility implementation. A new Ciuki display/audio/input backend and Unix adaptation still require substantial work and validation. |
+| Failure containment | Ordinary process crashes isolate well if all kernel entry/teardown paths are correct. Moving complex queue/object policy into the kernel increases the cost of a bug. | Server crash can affect a session; individual processes retain OS isolation. Containment/latency is an implementation property to test, not something inherently absent from Wine. |
+| Performance | Direct Ciuki presentation/audio adapters avoid some host-layer overhead; copy, software blits, rasterization and mixing may dominate. No measured superiority. | More host/server boundaries in some paths, but mature algorithms and optimized paths may help. No measured fit or performance result on this kernel. |
+| Memory | Potentially bounded tailored core/shared PE pages. Queues, private heaps, Win16, sample bank and installer helper chains can defeat speculative budgets. | Larger dependency/build closure and host backend, but PE sharing/server accounting can be measured. “Too large for 128 MiB” is not established by this review. |
+| Maintenance | Own behavioral implementation plus patches to one upstream subset; a small API boundary is not guaranteed. Upgrade can expose new private dependencies. | More upstream compatibility fixes available, alongside responsibility to maintain the Ciuki host adaptation and selected release's host assumptions. |
+| Testing | Portable production modules host-test well; kernel hardware transitions and full PE workflows require guest gates. Linux Wine can supply references. | Existing Wine tests and Linux comparison are more directly applicable, but a Linux pass still does not qualify Ciuki host adapters or hardware. |
+
+#### 6.2 Specific risks to track
+
+1. **Kernel attack/fault surface and lifetime.** Win32 callers can reach the
+   gate regardless of where DLL code lives; checking instruction address is
+   not an authority boundary because applications can call DLL routines.
+   Validate copied records, pointers, operation rights, personalities and
+   generational ownership in every path. Preserve G5 even during partial loader
+   initialization, suspended owners, nested faults, shutdown and stale IPC.
+   `w32srv` death must not reallocate live HWND/atom identities or strand the
+   desktop. Keep format parsing/registry/DDE/most USER policy in userland.
+2. **Address-space interoperability.** Merely refusing F2 mmap/brk does not
+   fix inherited F2 surface maps: `surface_map` delegates to `ua_map_shared`,
+   whose native arena extends beyond the Win32 ceiling. All surface/section/
+   stack/pin/read/write/teardown operations need a personality-aware common
+   map ledger. Do not let one allocator treat another's mappings as free.
+   [Production surface mapping](../../src/kernel/proc/surface.c),
+   [native VM rules](../../docs/design/execution-abi.md#memory-and-clocks).
+3. **CPU entry/state.** Preserve lazy old-owner XMM/MXCSR before switching
+   OSFXSR; sanitize and align save images; kernel stays integer-only. Define
+   what `SYSENTER` actually does on SEP-capable CPUs: with a zero SYSENTER CS
+   MSR it faults #GP, not intrinsically #UD. If the chosen user exception is
+   illegal-instruction, initialize MSRs and translate the trap explicitly.
+   `int 2Eh` refusal must coexist with the existing IRQ vector range. Test
+   native/DPMI/Win32 transitions without relying on reset MSRs.
+   [Intel SYSENTER instruction](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2b-manual.pdf).
+4. **The new core as a moving Wine host.** A 40-import threshold counts names,
+   not semantics: one `Nt*`, COM apartment or USER internal interface can be
+   harder than dozens of leaf APIs. Build and recursively audit selected
+   release DLLs, including forwards/delays/registration/CRT/private functions.
+   Either implement the needed stable boundary, remove an unused source path
+   with a recorded patch, or return scope to the lead. An unbounded imitation
+   of modern NTDLL/combase/kernelbase defeats the intended small core.
+5. **Media integration.** Modern Wine DirectDraw uses wined3d, and its
+   DirectSound implementation uses modern device/audio-client interfaces;
+   taking those DLLs wholesale does not merely mean wiring Linux PCM.
+   [Pinned ddraw dependencies](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ddraw/Makefile.in),
+   [pinned sound backend](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/dsound/primary.c).
+   C avoids those dependencies by writing the backend, at the cost of proving
+   original DirectDraw/DirectSound behavior itself.
+6. **Acceptance blind spots.** A menu, a window-class log or non-silent PCM
+   does not establish installer success, real game progress, correct music,
+   synchronized video or usable input. Compare installed artifacts, inspect
+   the actual scripted scene and require progress/visual/audio/focus/teardown
+   evidence. Keep synthetic PE tests and actual original workflows separate.
+7. **Quota and budget failure.** Shared image pages help only after image
+   section identity and COW credits work. Decoder/synth/cache/Win16/queue
+   metadata are not accounted by DLL text size. Use admission failure and
+   measured headroom rather than overriding `GlobalMemoryStatus` to hide OOM.
+8. **Licensing and upgrade reproducibility.** Keep exact sources, local
+   patches, tool hashes, component notices and replacement/rebuild procedures.
+   A read-only manifest must not make the LGPL modification path impossible;
+   a supported rebuilt image/library replacement arrangement needs review.
+   Do not copy GPL-only kernel implementation into LGPL core libraries without
+   a compatible provenance decision. Reuse decisions and game payload rights
+   belong in the dependency manifest, not an assumption of a blanket license.
+
+#### 6.3 Recommended decision and early stop conditions
+
+**Recommend C with a mandatory feasibility checkpoint**, respecting owner Q2.
+The shape is defensible for a defined offline demo/retail matrix at 128 MiB.
+It is not yet defensible as a blanket Windows-games-1996–2004 compatibility
+promise. Keep complex formats and compatibility policy out of ring 0 where
+safe; add mechanisms to the existing kernel rather than a second filesystem,
+scheduler or driver stack.
+
+Before freezing f5-03/05, require 14A to produce a buildable selected DLL set,
+full import closure, CPU baseline, size map, required private ABI and a minimal
+installer dependency manifest. The first integrated slice should execute a
+self-authored PE program, a real installer-style dialog, a generated period
+NSIS install/uninstall and one original 32-bit demo installer through its
+normal entry point. It must keep native/DOS behavior and the resource ledgers
+intact. The lead supplies all guest evidence.
+
+Return to the lead if reuse requires an effectively complete modern Wine
+core/COM subsystem, if USER/GDI dependencies prevent that installer slice,
+if memory measurements cannot preserve the mandated headroom, or if f5-19's
+NE architecture cannot satisfy the installer goal within its reviewed scope.
+Report the specific incompatible boundary and measured cost; do not quietly
+replace original installers or accept success stubs. A full Wine-host port
+then becomes a **proposal** with its own POSIX/ABI changes, measured budget
+and cross-review, requiring owner/lead disposition under the existing approved
+architecture. It is not authorized by this review.
+
+Close this review when the lead records a disposition for C01–C27 and D01–D08,
+assigns M01–M16 to written directives, approves the acyclic handoffs and updates
+the affected interface contracts. Until then, implementation can perform
+approved research/fixtures but must not treat this draft as a frozen ABI.
