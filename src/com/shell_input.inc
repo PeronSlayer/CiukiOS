@@ -14,6 +14,24 @@ read_line:
 .read:
 %ifdef COMMAND_COMPAT
     call command_window_poll
+    ; The standalone COMMAND.COM prompt uses the same cooperative idle
+    ; protocol as DOS character input. Keep scan codes for the editor.
+    mov ah, 0x01
+    int 0x16
+    jnz .key_ready
+    push ax
+    int 0x28
+    mov ax, 0x1680
+    int 0x2F
+    mov ah, 0x01
+    int 0x16
+    jnz .idle_done
+    sti
+    hlt
+.idle_done:
+    pop ax
+    jmp .read
+.key_ready:
 %endif
     xor ah, ah
     int 0x16

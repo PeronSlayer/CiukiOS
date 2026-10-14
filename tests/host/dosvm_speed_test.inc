@@ -92,6 +92,7 @@ static void test_speed_accounting(void)
     v->video_frames = 35; v->video_starts = 35; v->pit.edges = 140;
     v->perf.harvests = 140; v->perf.direct_pages = 700; v->perf.harvest_cycles = 123;
     v->monitor.stats.delivered[0] = 140; v->monitor.stats.insn[V86_OUT] = 200;
+    v->idle.blocks = 5; v->idle.count[DOSVM_IDLE_28] = 3; v->idle.count[DOSVM_IDLE_16] = 2;
     g_ticks += 1000; dosvm_perf_report(v);
     CHECK(v->perf.sample_count == 1 && records == records_before);
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
@@ -99,6 +100,8 @@ static void test_speed_accounting(void)
           s->edges == 140 && s->irqs[0] == 140 && s->insn[V86_OUT] == 200);
     CHECK(s->cost_count[DOSVM_COST_VGA_IO] == 1 && s->cost_us[DOSVM_COST_VGA_IO] == 2000);
     CHECK(s->harvests == 140 && s->pages == 700 && s->harvest_us == 123);
+    CHECK(s->idle_blocks == 5 && s->idle_reasons == 6 && s->idle_count[DOSVM_IDLE_28] == 3 &&
+          s->idle_count[DOSVM_IDLE_16] == 2 && s->busy_permille == 4 && v->idle.busy_permille == 4);
     for (unsigned i = 1; i < 81; i++) {
         v->monitor.pic[0].isr = i & 1; /* guest IRQ context cannot suppress memory sampling */
         g_ticks += 1000; fake_tsc += 1000; v->video_frames += i;
@@ -116,6 +119,7 @@ static void test_speed_accounting(void)
         seen |= 1u << (frame - 69);
     }
     CHECK(seen == 0xFFFu); /* latest twelve, independently of the slot helper */
+    for (unsigned i = 1; i < 16; i++) CHECK(!v->perf.sample[i].idle_blocks && !v->perf.sample[i].idle_reasons);
     v->monitor.pic[0].isr = 0;
     dosvm_task_switch(&caller);
     uint64_t guest_cycles = v->perf.guest_cycles, monitor_cycles = v->perf.monitor_cycles;

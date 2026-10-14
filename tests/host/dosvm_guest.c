@@ -284,13 +284,22 @@ void rec_diag(const char *probe, const char *fmt, ...)
 
 /* ---- guest CPU glue ---- */
 static struct dosvm *gv;
-/* The shell blocks in INT 16h/00h inside the monitor (synthetic ROM stub
- * F000:0160). With no typed input left, abandon that trap: the guest frame
- * is still the one at the INT FEh, so the next delivery re-executes it. */
+/* Abandon an empty BIOS keyboard wait or cooperative DOS input idle call.
+ * The fake CPU retains the pre-trap frame and retries that same INT when
+ * typing resumes. f3-17's COMMAND prompt yields via INT 28h before INT 16h;
+ * treating only F000:0160 as idle would spin through its whole test budget.
+ * This is a host transport shortcut, never a change to guest instructions. */
 static void input_hook(void)
 {
-    if (gv && !gv->frame_pm && gv->frame.tf.cs == 0xF000 && gv->frame.tf.eip == 0x16 * 16 + 2 && !gv->key_count) {
+    if (!gv || gv->frame_pm || gv->key_count || dosvm_kbd_irq_ready(gv)) return;
+    uint8_t op[2] = {0};
+    uint32_t ip = gv->frame.tf.eip;
+    bool cooperative = gv->idle.sleeping && ip >= 2 &&
+        !dosvm_read(gv, (gv->frame.tf.cs << 4) + ip - 2, op, sizeof(op)) && op[0] == 0xCD &&
+        (op[1] == 0x28 || (op[1] == 0x2F && (uint16_t)gv->frame.tf.eax == 0x1680));
+    if (cooperative || (gv->frame.tf.cs == 0xF000 && ip == 0x16 * 16 + 2)) {
         gv->info.state = DOSVM_RUNNABLE;
+        gv->idle.sleeping = false; gv->idle.last_tick = g_ticks;
         waiting_input = true;
         longjmp(idle_return, 1);
     }
@@ -635,12 +644,12 @@ static void window_type(const char *command)
 /* VMVIDEO through window keys: stage 1 exactly, then Enter per stage. */
 static int window_vmvideo(const char *command)
 {
-    /* The shell is blocked in INT 16h AH=00h before the first key, as when
-     * the runner starts typing after the ARM record. */
+    /* The actual COMMAND.COM prompt must release its slice before typing. */
     waiting_input = false;
+    uint32_t blocks = gv->idle.blocks;
     int r = run(400000000ull, 0);
-    printf("  -> shell idle: wait=%d (2 = blocked in INT 16h AH=00h)\n", r);
-    if (r != 2) return 1;
+    printf("  -> shell idle: wait=%d idle_blocks=%u idle_reasons=%x\n", r, gv->idle.blocks, gv->idle.reasons);
+    if (r != 2 || gv->idle.blocks <= blocks || !(gv->idle.reasons & (1u << DOSVM_IDLE_28))) return 1;
     window_type(command);
     r = run(2000000000ull, 0);
     struct dosvm_frame frame;

@@ -126,10 +126,18 @@ static void test_focused_budget(void)
     struct task device = {.state=T_READY, .prio=P_DEVICE}; rq_push(&device);
     CHECK(rq_pop() == &device); /* no focused reservation blocks device work */
     test_focus = 0;
+    /* f3-17: the monitor withdraws this token after an idle indication.
+     * Even with eight focused ticks left, normal queue order now wins. */
+    memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
+    focus_task = &vm; focus_ticks = 0; focus_window = g_ticks;
+    vm.state = T_READY; peers[0].state = T_READY;
+    rq_push(&peers[0]); rq_push(&vm);
+    CHECK(rq_pop() == &peers[0] && !focus_task && rq_pop() == &vm);
     memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
     focus_task = 0; all_tasks = idle_task = 0;
     g_current = saved_current; g_ticks = saved_ticks; g_need_resched = false;
     puts("f3-14 scheduler: focused VM 800/1000 ticks, five normal/interactive peers 40 ticks each, device priority preserved PASS");
+    puts("f3-17 scheduler: withdrawn idle focus token restores native run-queue order PASS");
 }
 
 static uint8_t task_fp[CIUKI_THREAD_MAX][512];

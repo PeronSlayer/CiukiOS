@@ -892,6 +892,38 @@ pc_speaker_beep:
     ret
 
 
+; Shared DOS character-input wait. INT 28h remains a guest callout for TSRs;
+; INT 2Fh/1680h tells an enhanced-mode VMM that this DOS VM can yield.
+; Recheck after callouts before STI/HLT so already available keys are taken.
+; PUSHF/POPF retains the DOS dispatcher's incoming IF; HLT itself has IF=1.
+ciukidos_idle_input:
+    pushf
+    push ax
+    sti
+    int 0x28
+    mov ax, 0x1680
+    int 0x2F
+    mov ah, 0x01
+    int 0x16
+    jnz .ready
+    sti
+    hlt
+.ready:
+    pop ax
+    popf
+    ret
+
+ciukidos_read_key:
+    mov ah, 0x01
+    int 0x16
+    jnz .ready
+    call ciukidos_idle_input
+    jmp ciukidos_read_key
+.ready:
+    mov ah, 0x00
+    int 0x16
+    ret
+
 int21_handler:
 %ifdef CIUKIDOS_KERNEL_BUILD
     jmp kernel_int21_enter
@@ -1126,8 +1158,7 @@ int21_dispatch:
 
 .fn_07:
 .fn_08:
-    mov ah, 0x00
-    int 0x16
+    call ciukidos_read_key
     jmp .success
 
 .fn_00:
@@ -1139,8 +1170,7 @@ int21_dispatch:
     jmp .success
 
 .fn_01:
-    mov ah, 0x00
-    int 0x16
+    call ciukidos_read_key
     call bios_putc
     call serial_putc
     jmp .success
@@ -1175,8 +1205,7 @@ int21_dispatch:
     jbe .fn_0a_done
 
 .fn_0a_read_loop:
-    mov ah, 0x00
-    int 0x16
+    call ciukidos_read_key
     cmp al, 0x0D
     je .fn_0a_store_cr
     cmp al, 0x08
@@ -1216,6 +1245,8 @@ int21_dispatch:
     mov bl, al
     call int21_kbd_flush
     mov al, bl
+    cmp al, 0x01
+    je .fn_01
     cmp al, 0x06
     je .fn_06_input
     cmp al, 0x07
@@ -17304,7 +17335,10 @@ read_command_line:
 %endif
     mov ah, 0x01
     int 0x16
-    jz .read_key
+    jnz .key_ready
+    call ciukidos_idle_input
+    jmp .read_key
+.key_ready:
 
     xor ah, ah
     int 0x16
@@ -23451,6 +23485,8 @@ int2f_handler:
     jmp .iret_clear_cf_enter
 
 .fn_16xx_idle:
+    ; INT 2Fh/1680h is observed by the VMM before IVT reflection. Do not
+    ; recurse into it here; retain this personality's successful return.
     xor ax, ax
     jmp .iret_clear_cf_enter
 

@@ -422,6 +422,13 @@ static struct dosvm *owner(const struct task *t)
         if (slots[i].task == t && t) return &slots[i];
     return 0;
 }
+/* Policy and source notes: validation/2026-10-14-f3-17-host.md. An idle
+ * indication removes the focus reservation, including its event handling
+ * tail, but expires promptly if the guest starts doing useful work again. */
+static bool idle_recent(const struct dosvm *v)
+{
+    return v->idle.sleeping || (v->idle.seen && g_ticks - v->idle.last_tick < DOSVM_IDLE_WINDOW);
+}
 /* f3-04 scheduler hook: the incoming worker's LDT and watchpoints, or none. */
 void dosvm_task_switch(const struct task *t)
 {
@@ -446,6 +453,7 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
 {
     struct dosvm *v = owner(t);
     if (!v || !v->owner_pid || !v->window_input) return normal;
+    if (idle_recent(v)) return normal < 1u ? normal : 1u;
     bool focused = input_focus.id == v->info.key.id && input_focus.generation == v->info.key.generation;
     if (focused) return normal < 8u ? normal : 8u;
     return normal < 4u ? normal : 4u;
@@ -453,7 +461,8 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
 const struct task *dosvm_task_focus(void)
 {
     struct dosvm *v = dosvm_lookup(input_focus);
-    return v && v->owner_pid && v->window_input && v->info.state < DOSVM_STOPPING ? v->task : 0;
+    return v && v->owner_pid && v->window_input && v->info.state < DOSVM_STOPPING &&
+           v->info.state != DOSVM_BLOCKED && !idle_recent(v) ? v->task : 0;
 }
 bool dosvm_client(const struct task *t)
 {
@@ -501,6 +510,106 @@ static bool wake_condition(void *arg)
            (v->monitor.vif && !v->monitor.shadow && !v->dpmi.shadow &&
             (v86_irq_pending(&v->monitor) >= 0 || (!v->frame_pm && v->mouse.pending_mask)));
 }
+void dosvm_idle_wake(struct dosvm *v)
+{
+    uint32_t flags = irq_save();
+    v->idle.events++;
+    kwait_wake_all(&v->wake);
+    irq_restore(flags);
+}
+struct idle_wait {
+    struct dosvm *v;
+    uint32_t events;
+    bool halt;
+};
+static bool idle_event(void *arg)
+{
+    struct idle_wait *w = arg;
+    struct dosvm *v = w->v;
+    return v->info.state >= DOSVM_STOPPING || v->idle.events != w->events ||
+           (w->halt ? wake_condition(v) :
+            (v86_irq_pending(&v->monitor) >= 0 || (!v->frame_pm && v->mouse.pending_mask) ||
+             v->key_count || dosvm_kbd_irq_ready(v)));
+}
+static uint64_t idle_deadline(const struct dosvm *v)
+{
+    const struct dosvm_pit_channel *c = &v->pit.channel[0];
+    uint32_t clocks = 65536;
+    if (c->running && c->gate) {
+        if (c->reload && c->phase < c->reload) clocks = c->reload - c->phase;
+        if (c->pending && c->pending < clocks) clocks = c->pending;
+        if (c->load) clocks = c->pending + 1; /* count transfer consumes a CLK */
+    }
+    uint32_t ms = (clocks + 1192u) / 1193u;
+    if (!ms) ms = 1;
+    if (ms > 55) ms = 55;
+    uint64_t until = g_ticks + ms;
+    if (!v->info.dos_ready && v->boot_deadline - g_ticks < ms) until = v->boot_deadline;
+    return until;
+}
+static void idle_wait(struct dosvm *v, enum dosvm_idle_reason reason)
+{
+    /* COMMAND now announces an empty prompt with INT 28h rather than a
+     * BIOS read. Preserve the launch gate's detection of returning to input
+     * without ever producing the requested program's first frame. */
+    if (reason == DOSVM_IDLE_28 && v->launch_enter_consumed && !v->launch_ready)
+        v->launch_failed = true;
+    dosvm_input_poll(v);
+    uint32_t flags = irq_save();
+    struct idle_wait w = {v, v->idle.events, reason == DOSVM_IDLE_HLT};
+    uint64_t until = idle_deadline(v);
+    bool block = !idle_event(&w);
+    if (block) {
+        v->idle.seen = v->idle.sleeping = true;
+        v->idle.last_tick = g_ticks;
+        v->idle.blocks++; v->idle.reasons |= 1u << reason; v->idle.count[reason]++;
+        v->info.state = DOSVM_BLOCKED;
+    }
+    irq_restore(flags);
+    if (!block) return;
+    /* kwait atomically rechecks both pending state and the event sequence
+     * while registering: no input/IRQ is lost between this test and sleep. */
+    kwait_wait_until(&v->wake, idle_event, &w, until);
+    flags = irq_save();
+    v->idle.sleeping = false;
+    v->idle.last_tick = g_ticks;
+    if (v->info.state == DOSVM_BLOCKED)
+        v->info.state = v->info.dos_ready ? DOSVM_RUNNABLE : DOSVM_BOOTING;
+    irq_restore(flags);
+}
+static bool idle_safe(const struct dosvm *v)
+{
+    return v->monitor.vif && !v->monitor.shadow && !v->dpmi.shadow &&
+           !dosvm_in_irq(v) && !v->monitor.pic[0].isr && !v->monitor.pic[1].isr;
+}
+static void idle_track_poll(struct dosvm *v, const struct v86_frame *f, bool pm)
+{
+    unsigned fn = (uint8_t)(f->tf.eax >> 8);
+    if ((fn != 1 && fn != 0x11) || v->idle.depth == ARRAY_SIZE(v->idle.poll)) return;
+    unsigned i = v->idle.depth++;
+    v->idle.poll[i].cs = f->tf.cs; v->idle.poll[i].ip = f->tf.eip;
+    v->idle.poll[i].ss = f->tf.user_ss;
+    v->idle.poll[i].sp = pm ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+    v->idle.poll[i].pm = pm;
+}
+static void idle_poll_return(struct dosvm *v, const struct v86_frame *f)
+{
+    for (unsigned n = v->idle.depth; n; n--) {
+        unsigned i = n - 1;
+        if (v->frame_pm != v->idle.poll[i].pm || f->tf.cs != v->idle.poll[i].cs || f->tf.eip != v->idle.poll[i].ip ||
+            f->tf.user_ss != v->idle.poll[i].ss ||
+            (v->frame_pm ? f->tf.user_esp : (uint16_t)f->tf.user_esp) != v->idle.poll[i].sp) continue;
+        v->idle.depth = i;
+        if (!(f->tf.eflags & V86_ZF)) { v->idle.polls = 0; return; }
+        if (!idle_safe(v)) return;
+        if (v->idle.poll_tick != g_ticks) { v->idle.poll_tick = g_ticks; v->idle.polls = 0; }
+        if (++v->idle.polls >= DOSVM_IDLE_POLLS) {
+            v->idle.polls = 0;
+            idle_wait(v, DOSVM_IDLE_16);
+        }
+        return;
+    }
+}
 void dosvm_input_poll(struct dosvm *v)
 {
     if (v->owner_pid || v->window_input || !dosvm_valid(v->info.key) || input_focus.id != v->info.key.id ||
@@ -516,19 +625,19 @@ void dosvm_input_poll(struct dosvm *v)
 int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
 {
     if (keyboard && v->launch_enter_consumed && !v->launch_ready) v->launch_failed = true;
+    if (keyboard) {
+        if (dosvm_keyboard_refresh(v)) return -EFAULT;
+        idle_wait(v, DOSVM_IDLE_16);
+        return v->info.state == DOSVM_STOPPING ? -V86_EIO : 0;
+    }
     v->info.state = DOSVM_BLOCKED;
     while (v->info.state != DOSVM_STOPPING) {
-        if (keyboard) { dosvm_input_poll(v); if (dosvm_keyboard_refresh(v)) return -EFAULT; }
-        /* A window key reaches the 8042, not the BIOS buffer: return so the
-         * guest's INT 9 can move it there (dosvm_bios INT 16h, f3-02). */
-        if (keyboard && (v->key_count || dosvm_kbd_irq_ready(v))) break;
-        if (!keyboard && deadline_passed(deadline)) break;
+        if (deadline_passed(deadline)) break;
         if (!v->info.dos_ready && deadline_passed(v->boot_deadline)) {
             dosvm_stop(v->info.key, DOSVM_TIMEOUT);
             break;
         }
-        /* A bounded scheduler sleep also permits the existing input consumer
-         * to enqueue text. No physical IRQ/IF ownership is transferred. */
+        /* INT 15h timed wait; keyboard waits use the event queue above. */
         task_sleep_ms(1);
     }
     if (v->info.state == DOSVM_STOPPING) return -V86_EIO;
@@ -567,7 +676,22 @@ bool dosvm_trap(struct trap_frame *tf)
         dosvm_trace(v, pm ? DOSVM_TRACE_DB_PM : DOSVM_TRACE_DB_RM, f, dr6, dpmi_debug_status(v, dr6), 0);
     int e = 0;
     if (v->info.state != DOSVM_STOPPING) {
-        if (pm) e = dpmi_pm_trap(v, f, cr2, dr6);
+        if (pm) {
+            bool eligible = idle_safe(v);
+            unsigned depth = v->dpmi.depth;
+            e = dpmi_pm_trap(v, f, cr2, dr6);
+            /* Default PM INTs reflect straight to the IVT, without passing
+             * interrupt_service. Observe the committed reflection record;
+             * keep the f3-15 decoder/dispatch and its frames unchanged. */
+            if (e >= 0 && eligible && !v->frame_pm && v->dpmi.depth == depth + 1) {
+                const struct dpmi_record *r = &v->dpmi.rec[depth];
+                if (r->kind == DPMI_REC_REFLECT && !(r->flags & DPMI_RF_HWINT)) {
+                    if (r->vector == 0x28 || (r->vector == 0x2F && (uint16_t)r->saved.tf.eax == 0x1680))
+                        idle_wait(v, r->vector == 0x28 ? DOSVM_IDLE_28 : DOSVM_IDLE_2F);
+                    if (r->vector == 0x16) idle_track_poll(v, &r->saved, true);
+                }
+            }
+        }
         else if (tf->vector == 13) {
             uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
             uint64_t flags_insn[4] = {0}, hlts = 0;
@@ -608,6 +732,7 @@ bool dosvm_trap(struct trap_frame *tf)
         else if (tf->vector < 0x20 || tf->vector >= 0x30) e = -EFAULT;
     }
     if (!v->frame_pm) v86_retire_shadow(&v->monitor, f);
+    if (e >= 0 && v->info.state < DOSVM_STOPPING) idle_poll_return(v, f);
     dosvm_trace_flush(v);
     if (!dosvm_in_irq(v)) dosvm_audio_log(v);
     /* Observe the completed DOS IRET, before ordinary instructions can
@@ -659,7 +784,8 @@ bool dosvm_trap(struct trap_frame *tf)
         }
         if (v->monitor.state != V86_HALTED) break;
         v->info.state = DOSVM_BLOCKED;
-        kwait_wait_until(&v->wake, wake_condition, v, deadline_after_ms(10));
+        if (v->monitor.vif) idle_wait(v, DOSVM_IDLE_HLT);
+        else kwait_wait_until(&v->wake, wake_condition, v, deadline_after_ms(10));
         dosvm_pic_stall(v, f);
         dosvm_heartbeat(v, f); /* a guest HLT with IF clear also needs samples */
         if (!dosvm_in_irq(v)) dosvm_audio_log(v);
@@ -698,6 +824,11 @@ bool dosvm_trap(struct trap_frame *tf)
 static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
+    if (idle_safe(v)) {
+        if (vector == 0x28 || (vector == 0x2F && (uint16_t)f->tf.eax == 0x1680))
+            idle_wait(v, vector == 0x28 ? DOSVM_IDLE_28 : DOSVM_IDLE_2F);
+        if (vector == 0x16) idle_track_poll(v, f, false);
+    }
     if (vector == 0x21 && (f->tf.eax & 0xFFFF) == 0x4B00 && v->launch_armed && !v->launch_exec) {
         v->launch_exec = true;
         v->launch_cs = (uint16_t)f->tf.cs; v->launch_ip = f->tf.eip;
@@ -930,7 +1061,7 @@ bool dosvm_irq_raise(struct dosvm_key key, unsigned irq)
     uint32_t flags = irq_save();
     v86_irq_raise(&v->monitor, irq);
     irq_restore(flags);
-    kwait_wake_all(&v->wake);
+    dosvm_idle_wake(v);
     return true;
 }
 int dosvm_keyboard_refresh(struct dosvm *v)
@@ -951,7 +1082,7 @@ bool dosvm_keyboard(struct dosvm_key key, uint16_t bios_key)
     unsigned tail = (v->key_head + v->key_count) % 16;
     uint16_t next = 0x1E + ((tail + 1) % 16) * 2;
     bool ok = !dosvm_write(v, 0x41E + tail * 2, &bios_key, 2) && !dosvm_write(v, 0x41C, &next, 2);
-    if (ok) { v->keyboard[tail] = bios_key; v->key_count++; kwait_wake_all(&v->wake); }
+    if (ok) { v->keyboard[tail] = bios_key; v->key_count++; dosvm_idle_wake(v); }
     irq_restore(flags); return ok;
 }
 void dosvm_tick(void)
@@ -1054,7 +1185,7 @@ bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
         dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0); v->pointer_known = false; break;
     default: ok = false;
     }
-    if (ok) kwait_wake_all(&v->wake);
+    if (ok && e->type != CIUKI_INPUT_TEXT) dosvm_idle_wake(v);
     irq_restore(flags);
     return ok;
 }

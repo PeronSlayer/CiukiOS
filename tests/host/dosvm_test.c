@@ -162,8 +162,16 @@ void kwait_wake_all(struct kwait *q) { (void)q; }
 void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { CHECK((cpu_flags&V86_IF) && !m->owner); m->owner=g_current; }
 void kmutex_unlock(struct kmutex *m) { CHECK(m->owner==g_current); m->owner=0; }
+static unsigned wait_calls;
+static uint64_t wait_deadline;
+static void (*wait_register_hook)(void);
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn fn, void *arg, uint64_t until)
-{ (void)q; while (!fn(arg) && !deadline_passed(until)) task_sleep_ms(1); return fn(arg); }
+{
+    (void)q; wait_calls++; wait_deadline = until;
+    if (wait_register_hook) wait_register_hook();
+    while (!fn(arg) && !deadline_passed(until)) task_sleep_ms(1);
+    return fn(arg);
+}
 static bool input_pending;
 static struct input_event input_next;
 bool input_read(struct input_event *e) { if (!input_pending) return false; *e=input_next; input_pending=false; return true; }
@@ -583,6 +591,7 @@ static void test_memory_services(void)
 #include "dosvm_irq_stall_test.inc"
 #include "dosvm_speed_test.inc"
 #include "dosvm_cost_test.inc"
+#include "dosvm_idle_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -596,6 +605,7 @@ int main(void)
     test_irq_stall();
     test_speed();
     test_cost_bursts();
+    test_idle();
     CHECK(guest_enters==3 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

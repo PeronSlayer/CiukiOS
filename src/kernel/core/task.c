@@ -63,8 +63,9 @@ static struct task *rq_pop(void)
         focus_task = focus; focus_window = g_ticks; focus_ticks = 0;
     }
     /* Device work (including the existing starvation boost) still wins.
-     * Within the rest, a runnable focused DOS window reserves 8/10 ticks,
-     * independent of how many native/background peers are ready. */
+     * Within the rest, dosvm_task_focus grants a busy focused DOS window
+     * 8/10 ticks. Idle VMs withdraw the focus token, including the short
+     * event-handling tail after a wake; other tasks then use normal queues. */
     if (!rq_head[P_DEVICE] && focus && focus_ticks < FOCUS_BUDGET) {
         for (int p = 0; p < P_COUNT; p++) {
             struct task **link = &rq_head[p], *prev = 0;
