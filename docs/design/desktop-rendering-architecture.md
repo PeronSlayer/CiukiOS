@@ -128,6 +128,33 @@ reuses the same WAV slots; explicit preference changes may still parse registry
 data. Volume/window/menu/device events never allocate decode or mix buffers.
 No allocator limit, E820 policy or supported hardware memory floor changes.
 
+### F2-56 shell before the first frame (2026-10-14)
+
+Microsoft's [initial client-area painting example](https://learn.microsoft.com/en-us/windows/win32/gdi/drawing-in-the-client-area)
+requests painting immediately after creating and showing the window. This
+supports treating initial content as startup work independent of later input.
+The [Wayland surface specification](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_surface)
+separately defines committed content and pending damage; damage identifies
+changed pixels, rather than choosing whether a shell exists. These are lifecycle
+references, not changes to Ciuki's rendering or wire protocol.
+
+The host production-main harness reproduced the missing first-frame mark only
+with `--gate`; normal startup already painted the button. In `desktop.c`, gate
+startup skipped `shell_setup`, leaving `d->shell == 0`. The first F12/F9/F11/F10
+press both selected a scenario and enabled the shell. Consequently `scene()`
+correctly selected its no-shell fallback; direct composition and chrome-cache
+damage were not responsible.
+
+Run `shell_setup(d, gate)` before any frame in both modes. Gate setup retains
+built-in settings and skips audio, folder polling, AutoPlay and image-file
+wallpaper loading. Select a runtime scenario using the existing `scenario_key`
+state, independently of shell presence, without repeating setup or reallocating
+shell storage at that input event. Keep the fallback for renderers without a
+shell. Capture the first production-presented frame with input reads returning
+EAGAIN and compare every fully opaque cell of the approved portrait's 18 px
+area average at (13,7) in both startup modes. QEMU qualification remains with
+the lead.
+
 Budget estimates for a 1 GHz Pentium III are hypotheses, not qualification:
 
 | Operation | Expected work / target |

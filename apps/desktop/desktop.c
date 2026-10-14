@@ -942,7 +942,7 @@ int main(int argc, char **argv)
     desk_accel_reset(d,info.generation);
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
-    if (!gate) shell_setup(d,0);
+    shell_setup(d,gate);
     display_start(d);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
@@ -1050,18 +1050,18 @@ int main(int argc, char **argv)
             if (shifted && (int64_t)(now-shift_release)<(int64_t)(ev.monotonic_ns-shift_base)) break;
             fifo_head=(fifo_head+1)%GATE_INPUT_FIFO; fifo_count--;
             /* Runtime scenario selection. Old gates never send these keys: one of them, pressed
-             * once inside the controller's post-fault interaction stage before the shell exists,
+             * once inside the controller's post-fault interaction stage before a scenario is selected,
              * selects the case. F12: shell, F9: Task Manager (stage machines of their own);
              * F11: Files, F10: CiukNote (app scenarios: the launched program gets
              * --test=<its name>, checkpoint PINGs, a fixed clock and the storage write gate). */
-            if (gate && interaction && !d->shell && ev.type==CIUKI_INPUT_KEY && ev.value==1) {
+            if (gate && interaction && !scenario_key && ev.type==CIUKI_INPUT_KEY && ev.value==1) {
                 int code=ev.code;
                 int app=code==0x57 ? DESK_APP_FILES : code==0x44 ? DESK_APP_NOTE : 0;
                 if (code==0x58 || code==0x43 || app) {
                     if (code==0x58) d->shell_test=1;
                     else if (code==0x43) d->tasks_test=1;
                     else d->app_test=app;
-                    scenario_key=code; scenario_released=0; d->shell_keys=1; shell_setup(d,1);
+                    scenario_key=code; scenario_released=0; d->shell_keys=1;
                     /* The controller learns of the write gate request before the app can write. */
                     if (app) gate_report(d,CU_PTR(control),generation,survivor_pid,gate_victim,(unsigned)gate_cycle);
                     continue;

@@ -65,6 +65,8 @@ static struct gate_control page_storage, *control_page=&page_storage;
 static uint32_t output_pixels[320*320];
 static uint32_t client_pixels[(240*160*4+4095)/4096*1024];
 static bool handshake;
+static const char *first_frame_portrait, *first_frame_output;
+static bool normal_first_frame;
 static bool input_error, report_error;
 static bool late_input, no_input, keyboard_attached;
 static unsigned empty_reads, ipc_polls, presents_before_attach;
@@ -111,6 +113,7 @@ static uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,u
 {
     (void)a;(void)b;(void)c;(void)e;
     const char *line=(void *)address;assert(n==strlen(line) && n<=CIUKI_PROBE_REPORT_MAX);
+    if (first_frame_output) return 0; /* no controller stimulus before capture */
     if (!strncmp(line,"case=native-setup ",18)) { puts(line); fflush(stdout); return 0; }
     if (input_error || inherit_error || spawn_error) { puts(line); return 0; }
     if (report_error) return (uint32_t)-EFAULT;
@@ -241,10 +244,22 @@ int ciuki_surface_info(int fd,struct ciuki_surface_info *s) {
     assert((handshake && fd==7) || ((burst || flush_timeout) && fd==127));
     *s=(struct ciuki_surface_info){sizeof(*s),240,160,240*4,CIUKI_SURFACE_XRGB8888,sizeof(client_pixels)};return 0;
 }
-int ciuki_present(int display,int surface,const struct ciuki_rect *r) {assert(display==3 && surface==OUTPUT_FD && r);presents++;return 0;}
+int ciuki_present(int display,int surface,const struct ciuki_rect *r)
+{
+    assert(display==3 && surface==OUTPUT_FD && r);presents++;
+    if (first_frame_output) {
+        assert(presents==1 && !gate_keys && !gate_motion && !gate_buttons && !interaction_sent);
+        FILE *out=fopen(first_frame_output,"wb"); assert(out);
+        assert(fwrite(output_pixels,sizeof(*output_pixels),320*320,out)==320*320);
+        assert(!fclose(out));
+        longjmp(done,1);
+    }
+    return 0;
+}
 int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
 {
     assert(fd==4 && capacity==CIUKI_INPUT_READ_MAX);
+    if (first_frame_output) { errno=EAGAIN; return -1; }
     if (late_input || no_input) {
         if (late_input && !keyboard_attached && host_now>=5000000000ull) {
             assert(presents && !gate_keys && ipc_polls>100);
@@ -278,7 +293,13 @@ int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
     }
     errno=EAGAIN;return -1;
 }
-int desk_load_portrait(uint32_t *out) {memset(out,0,256*256*4);return 0;}
+int desk_load_portrait(uint32_t *out)
+{
+    if (!first_frame_portrait) { memset(out,0,256*256*4); return 0; }
+    FILE *source=fopen(first_frame_portrait,"rb"); assert(source);
+    assert(fread(out,sizeof(*out),256*256,source)==256*256);
+    assert(!fclose(source)); return 0;
+}
 int fcntl(int fd,int cmd,...) {
     uint32_t arg=0;
     if (cmd==F_SETFL || cmd==F_SETFD) { va_list ap; va_start(ap,cmd); arg=(uint32_t)va_arg(ap,int); va_end(ap); }
@@ -317,7 +338,10 @@ int nanosleep(const struct timespec *t,struct timespec *rest)
 }
 int main(int argc,char **argv)
 {
-    if (argc==4 && !strcmp(argv[1],"--handshake")) {
+    if (argc==4 && (!strcmp(argv[1],"--first-frame") || !strcmp(argv[1],"--normal-first-frame"))) {
+        first_frame_portrait=argv[2]; first_frame_output=argv[3];
+        normal_first_frame=!strcmp(argv[1],"--normal-first-frame");
+    } else if (argc==4 && !strcmp(argv[1],"--handshake")) {
         handshake=true;
         client_messages=fopen(argv[2],"rb"); server_messages=fopen(argv[3],"wb");
         assert(client_messages && server_messages);
@@ -332,7 +356,13 @@ int main(int argc,char **argv)
     else if (argc==2 && !strcmp(argv[1],"--bad-command")) bad_command=true;
     else if (argc==2 && (!strcmp(argv[1],"--normal-spawn") || !strcmp(argv[1],"--capacity"))) normal_spawn=true;
     else assert(argc==1);
-    desktop_spawn_host_init(!normal_spawn);
+    desktop_spawn_host_init(!normal_spawn && !normal_first_frame);
+    if (first_frame_output) {
+        char *args[]={"desktop","--test=crash-isolation","--gate",NULL};
+        if (!setjmp(done)) { (void)desktop_main(normal_first_frame ? 1 : 3,args); assert(0); }
+        desktop_spawn_host_finish();
+        puts("desktop first frame: no input, production present captured PASS"); return 0;
+    }
     if (late_input || no_input) desktop_spawn_host_no_input();
     if (normal_spawn) {
         if (!strcmp(argv[1],"--capacity")) {
