@@ -76,7 +76,7 @@ static unsigned burst_at, blocked_sends, configure_attempts, interaction_reports
 static uint64_t host_now=1000000, burst_end, last_interaction_report;
 #define BURST_EVENTS (3000+200+74)
 static FILE *client_messages, *server_messages;
-static int pair_client[64],client_pid[64],hello[64];
+static int pair_client[256],client_pid[256],hello[256];
 void desktop_spawn_host_init(int);
 int desktop_spawn_host_output(void);
 uint32_t desktop_spawn_host_control(void);
@@ -169,7 +169,8 @@ static uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,u
 int ciuki_channel_pair(int pair[2]) {
     int result=desktop_spawn_host_pair(pair);
     if (result<0) { errno=-result; return -1; }
-    assert(pair[0]>=6 && pair[1]<64);
+    if (!(pair[0]>=3 && pair[1]<256)) fprintf(stderr,"channel pair out of range: %d,%d\n",pair[0],pair[1]);
+    assert(pair[0]>=3 && pair[1]<256); /* above stdio and within the harness tables; host fd numbers depend on inherited descriptors and on what the shell opens before its first spawn */
     pair_client[pair[1]]=pair[0]; hello[pair[0]]=0; return 0;
 }
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
