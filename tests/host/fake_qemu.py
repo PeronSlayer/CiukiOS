@@ -82,6 +82,8 @@ def emit(items=None):
               *scenario.get('after_application',[])])
 
 stream=conn.makefile('rb');started=False
+input_pending=None
+input_motion=scenario.get('input_motion',0);input_buttons=scenario.get('input_buttons',0)
 
 def suspend_gate():
     global gate_armed,gate_suspended
@@ -91,6 +93,12 @@ def suspend_gate():
 
 for raw in stream:
     request=json.loads(raw);cmd=request['execute'];reply={}
+    if input_pending and time.monotonic()>=input_pending['due'] and cmd=='query-status':
+        counters={'event':'DATA','case':'gate','motion':str(input_motion),'buttons':str(input_buttons)}
+        emit([f'[input] gate motion={input_motion} buttons={input_buttons}' if scenario.get('raw_input_counters') else counters])
+        input_pending=None
+        if scenario.get('received_input')==scenario.get('finish_after_input'):
+            emit(scenario.get('after_input',[]))
     with Path('fake-qmp.jsonl').open('a') as log:log.write(json.dumps(request)+'\n')
     if cmd=='query-status':reply={'status':'running','running':True}
     elif cmd=='stop' and gates:raise AssertionError('QMP stop drains suspended requests')
@@ -149,8 +157,17 @@ for raw in stream:
         if text=='resume ciuki-write' and gate_index<len(gates):emit(gates[gate_index])
         if gate_index<len(gates) and not gate_suspended:suspend_gate()
     if cmd=='input-send-event':
+        if scenario.get('consume_input'):
+            assert input_pending is None, 'runner sent another batch before guest consumption'
         count=scenario.setdefault('received_input',0)+1;scenario['received_input']=count
-        if count==scenario.get('finish_after_input'):
+        events=request['arguments']['events']
+        motion=sum(e['type']=='rel' and e['data']['value']!=0 for e in events)
+        buttons=sum(e['type']=='btn' for e in events)
+        if scenario.get('consume_input') and (motion or buttons):
+            input_motion+=motion;input_buttons+=buttons
+            due=float('inf') if count==scenario.get('stall_input') else time.monotonic()+scenario.get('input_ack_delay',.15)
+            input_pending={'due':due}
+        elif count==scenario.get('finish_after_input'):
             emit(scenario.get('after_input',[]))
             if scenario.get('delayed_terminal'):
                 def finish():

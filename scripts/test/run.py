@@ -640,8 +640,14 @@ def blkdebug_config(case,directory):
 
 class Actions:
     """Nonblocking paced stimuli; QMP success is recorded, guest evidence is required."""
-    def __init__(self,declared):
+    USB_CONSUMPTION_TIMEOUT = 10.0
+
+    def __init__(self,declared,inputs=None):
         self.declared=declared;self.index=0;self.batch=0;self.repeat=0;self.due=0;self.observed=[]
+        self.usb_mouse=any('mouse' in entry['devices'] for entry in (inputs or {}).get('usb',[]))
+        self.input_pacing={'batches':0,'waits_ms':[]}
+        self.barrier=None;self.baseline_wait=None
+        self.counter_snapshot=None;self.counter_serial=0
         for action in declared:
             if action.get('after',{}).get('event') not in ('READY','ARM'):
                 raise res.Refusal('actions require READY/ARM synchronization')
@@ -658,15 +664,86 @@ class Actions:
                     raise res.Refusal('media change requires a generated optical fixture')
             elif action.get('mode') not in ('guest-termination',):
                 raise res.Refusal('device power loss requires a driver-boundary fixture; guest termination is distinct')
+        self.schedule=[self.usb_batches(a['batches']) if self.usb_mouse and a['type']=='input'
+                       else a.get('batches',[]) for a in declared]
+
+    @staticmethod
+    def usb_batches(batches):
+        """Keep axis pairs together; each QMP request fits one boot mouse report."""
+        result=[]
+        for index,batch in enumerate(batches):
+            groups=[];group=[]
+            for event in batch['events']:
+                rel=event['type']=='rel'
+                if group and (rel != (group[0]['type']=='rel') or
+                              rel and any(e['data']['axis']==event['data']['axis'] for e in group) or
+                              event['type']=='btn' or group[-1]['type']=='btn'):
+                    groups.append(group);group=[]
+                group.append(event)
+            if group:groups.append(group)
+            step=0
+            for group in groups:
+                count=max((abs(e['data']['value'])+126)//127 for e in group) if group[0]['type']=='rel' else 1
+                count=max(1,count)
+                for part in range(count):
+                    events=[]
+                    for event in group:
+                        if event['type']!='rel':events.append(event);continue
+                        value=event['data']['value'];sign=-1 if value<0 else 1
+                        delta=sign*(abs(value)*(part+1)//count-abs(value)*part//count)
+                        if delta or count==1:events.append({'type':'rel','data':{**event['data'],'value':delta}})
+                    result.append({'events':events,'pause_ms':batch['pause_ms'],'batch':index,'step':step})
+                    step+=1
+        return result
+
+    @staticmethod
+    def counters(parser):
+        for record in reversed(parser.records):
+            if record.get('event')!='DATA' or record.get('group')=='app':continue
+            if not (record.get('case') in ('gate','native-desktop','interaction') or record.get('group')=='input'):continue
+            if all(re.fullmatch('[0-9]+',record.get(k,'')) for k in ('motion','buttons')):
+                return {k:int(record[k]) for k in ('motion','buttons')},int(record['seq'])
+        return None
+
+    def observe(self,line,record):
+        """Consume validated controller counters or anchored kernel input logs."""
+        if not self.usb_mouse:return
+        candidate=None
+        if record and record.get('event')=='DATA' and record.get('group')!='app' and (
+                record.get('case') in ('gate','native-desktop','interaction') or record.get('group')=='input'):
+            candidate=record
+        elif line.startswith((b'[input] ',b'[gate] ')):
+            fields=re.findall(rb'(?:^| )(motion|buttons)=([^ \r\n]*)(?= |\r?\n?$)',line)
+            if len({key for key,_ in fields})!=len(fields):return
+            if any(not re.fullmatch(rb'[0-9]+',value) for _,value in fields):return
+            candidate={key.decode('ascii'):value.decode('ascii') for key,value in fields}
+        if candidate and all(re.fullmatch('[0-9]+',candidate.get(k,'')) for k in ('motion','buttons')):
+            self.counter_serial+=1
+            self.counter_snapshot=({k:int(candidate[k]) for k in ('motion','buttons')},self.counter_serial)
+
+    def latest_counters(self,parser):
+        return self.counter_snapshot or self.counters(parser)
+
+    def wait_consumption(self,parser,now):
+        if not self.barrier:return True
+        barrier=self.barrier;latest=self.latest_counters(parser)
+        if latest and latest[1]>barrier['seq'] and all(latest[0][k]>=v for k,v in barrier['target'].items()):
+            self.input_pacing['waits_ms'].append(round((now-barrier['sent'])*1000,3))
+            self.barrier=None;return True
+        if now-barrier['sent']>=self.USB_CONSUMPTION_TIMEOUT:
+            raise res.Refusal('USB input consumption stalled '+barrier['name'])
+        return False
     @property
-    def complete(self):return self.index==len(self.declared)
+    def complete(self):return self.index==len(self.declared) and self.barrier is None
     def pending_stimulus(self,parser):
+        if self.barrier:return {'consumption_barrier':self.barrier}
         if self.complete:return None
         action=self.declared[self.index]
         matched=any(all(r.get(k)==str(v) for k,v in action['after'].items()) for r in parser.records)
         return {'index':self.index,'action':action,'synchronization_observed':matched,
                 'batch':self.batch,'repeat':self.repeat}
     def step(self,parser,qmp,now):
+        if not self.wait_consumption(parser,now):return None
         if self.complete or not qmp or now<self.due:return None
         action=self.declared[self.index]
         matches=[r for r in parser.records if all(r.get(k)==str(v) for k,v in action['after'].items())]
@@ -690,12 +767,29 @@ class Actions:
             if parser.terminal:raise EvidenceError('cut point already passed before termination')
             self.observed.append({'type':'cut','mode':action['mode'],'record':matches[0]})
             self.index+=1;return action
-        batch=action['batches'][self.batch];qmp.input_events(batch['events'])
-        self.observed.append({'type':'input','batch':self.batch,'repeat':self.repeat,'events':batch['events'],
-                              'host_monotonic':now,'sync_seq':matches[0]['seq']})
+        batch=self.schedule[self.index][self.batch]
+        needed={'motion':sum(e['type']=='rel' and e['data']['value']!=0 for e in batch['events']),
+                'buttons':sum(e['type']=='btn' for e in batch['events'])}
+        name=f"action={self.index} batch={batch.get('batch',self.batch)} repeat={self.repeat} step={batch.get('step',0)}"
+        latest=self.latest_counters(parser) if self.usb_mouse and any(needed.values()) else None
+        if self.usb_mouse and any(needed.values()) and latest is None:
+            if self.baseline_wait is None:self.baseline_wait=now
+            if now-self.baseline_wait>=self.USB_CONSUMPTION_TIMEOUT:
+                raise res.Refusal('USB input consumption stalled '+name+' (missing counter baseline)')
+            return None
+        self.baseline_wait=None
+        qmp.input_events(batch['events'])
+        observed={'type':'input','batch':batch.get('batch',self.batch),'repeat':self.repeat,'events':batch['events'],
+                  'host_monotonic':now,'sync_seq':matches[0]['seq']}
+        if self.usb_mouse:
+            observed['step']=batch['step'];self.input_pacing['batches']+=1
+            if latest:
+                self.barrier={'name':name,'seq':latest[1],'sent':now,
+                              'target':{k:latest[0][k]+v for k,v in needed.items() if v}}
+        self.observed.append(observed)
         self.due=now+batch['pause_ms']/1000
         self.batch+=1
-        if self.batch==len(action['batches']):
+        if self.batch==len(self.schedule[self.index]):
             self.batch=0;self.repeat+=1
             if self.repeat==action.get('repeat',1):self.index+=1;self.repeat=0
         return None
@@ -1538,7 +1632,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         'com1':case.get('device_exceptions',{}).get('serial','file'),'audio':case.get('device_exceptions',{}).get('audio',profile.get('audio','none'))}}}
     result['build_git_revision']=result['build_manifest']['revision'];result['build_dirty']=result['build_manifest']['dirty']
     if case.get('sweep'):result['sweep_boot']=case.get('_sweep_boot',1)
-    actions=Actions(case.get('actions',[]))
+    actions=Actions(case.get('actions',[]),input_devices(profile,case))
     write_gate=WriteGate(case['crash_cut']['index']) if case.get('crash_cut') else None
     result.update(stimulus={'sha256':digest_json(case.get('actions',[])),'declared':case.get('actions',[]),'observed':[]},
                   fixtures={'sha256':digest_json(case.get('fixtures',[])),'declared':case.get('fixtures',[])},
@@ -1615,6 +1709,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         # diagnosis too; never silently repair its bytes.
                         serial.write(line[:max(0,res.LOG_CAP-serial.tell())]);serial.flush()
                         raise
+                    actions.observe(line,record)
                     # Application frames are hashed/scanned in full and
                     # retained as bounded head/tail in result.json. The
                     # serial log budget is reserved for controller evidence.
@@ -1858,6 +1953,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             except OSError:result['host']['memory_events']='scope removed'
         if (directory/'qmp.log').exists():result['qmp_transcript_sha256']=sha(directory/'qmp.log')
         result['stimulus']['observed']=actions.observed
+        if actions.usb_mouse:result['input_pacing']=actions.input_pacing
         result['stimulus']['observed_sha256']=digest_json(actions.observed)
         result['durability_observations'].extend(r for r in parser.records if r.get('group') in ('durability','barrier','persisted'))
         result['observed']=parser.records
