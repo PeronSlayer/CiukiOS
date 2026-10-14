@@ -121,3 +121,4 @@ Documenti di design, validazione, fonti esterne.
 | [Quarta prova sul T23 (immagine e86305de): audio nativo attivo, UDMA, mouse USB; dieci direttive](2026-10-13-07-t23-immagine-e86305de-risultati.md) | 13 ott | analisi hardware, decisioni |
 | [Immagine finale dell'ondata del 13 ottobre: 293c05af (ventitré consegne fuse)](2026-10-14-01-immagine-finale-293c05af.md) | 14 ott | modifiche (kernel, driver, desktop, SDK, test, runner), immagine |
 | [Immagine 8c88b1ab: le nove consegne della mattina del 14 ottobre](2026-10-14-02-immagine-8c88b1ab.md) | 14 ott | modifiche (kernel, driver, desktop, runner, documentazione), immagine |
+| [Immagine fb3147dc: giro di metà giornata del 14 ottobre](2026-10-14-03-immagine-fb3147dc.md) | 14 ott | modifiche (kernel, driver, VM DOS, runner), immagine |
