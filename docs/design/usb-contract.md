@@ -225,19 +225,24 @@ bounce buffer; no user/stack pointer becomes a bus address. OHCI's endpoint
 max packet field uses descriptor size even on the 13-byte CSW. Retirement
 retains F1-42's two-frame rule. Each bulk stage is bounded at 64 KiB/10 s;
 F1-47 makes each packet consume the remaining stage budget with sleepable polling.
-F1-60 retains that whole-stage bound for published I/O. During binding,
-full ACK progress with packets remaining renews a one-second wait, capped
-by the unchanged five-second aggregate bind deadline and 100 ms finishing
+F1-60 retains that whole-stage bound for published I/O. F1-62 gives binding
+transfers a three-second wait; full ACK progress with packets remaining renews
+that wait, capped by the twenty-second aggregate bind deadline and 100 ms finishing
 reserve. NAK/failed packets never renew it. This gives the last packet an
 opportunity after earlier progress without extending the complete bind.
-The [F1-60 validation record](../validation/f1-60-usb-bulk-read.md) distinguishes
-the reproduced software deadline failure from the unmeasured T23 timing.
+The [F1-60 validation record](../validation/f1-60-usb-bulk-read.md) covers packet
+renewal; [F1-62](../validation/f1-62-usb-bind-budget-per-stage.md) records the
+T23 aggregate exhaustion, stage completion timings and the revised budgets.
+Mount transfers get their own three-second waits within the same aggregate.
 
 Commands: INQUIRY, TEST UNIT READY, REQUEST SENSE, READ CAPACITY(10),
 READ(10), WRITE(10); SYNCHRONIZE CACHE(10) qualifies and implements
 flush; a four-byte MODE SENSE(6) header observes write protection. Initial
-power-on unit attention may be consumed with at most three readiness probes,
-before publishing a mount or issuing writes. Capacity sentinel FFFFFFFFh and
+power-on unit attention may be consumed with at most three readiness probes.
+Before publication, valid NOT READY/04/01 (becoming ready) responses permit
+sleepable readiness polling until the aggregate bind deadline, with a finite
+poll count for a frozen clock. Other readiness failures are not retried.
+Capacity sentinel FFFFFFFFh and
 any block length other than 512 are rejected. Block requests are at most
 128 sectors; range and READ/WRITE(10) arithmetic are checked before issuance.
 

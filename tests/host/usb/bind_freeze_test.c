@@ -84,9 +84,16 @@ static void check_disk_record(const char *needle)
 {
     struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,2));
     int fd=vfs_open(&table,BOOTLOG_PATH,VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
-    char bytes[16384]={0};size_t n;
-    assert(!vfs_read(&table,fd,bytes,sizeof(bytes)-1,&n));
-    assert(strstr(bytes,needle));assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
+    char bytes[4096];size_t n,keep=0;bool found=false;
+    assert(strlen(needle)<256);
+    do {
+        assert(!vfs_read(&table,fd,bytes+keep,sizeof(bytes)-keep-1,&n));
+        bytes[keep+n]=0;
+        if(strstr(bytes,needle))found=true;
+        keep=keep+n<255 ? keep+n : 255;
+        memmove(bytes,bytes+strlen(bytes)-keep,keep);
+    } while(n);
+    assert(found);assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
 }
 static void scenario(const char *path,unsigned kind)
 {
@@ -109,6 +116,7 @@ static void scenario(const char *path,unsigned kind)
     case 8:case 9: /* Contended reservation: finite and permanent owners. */
         m.h.busy=true;other_reserving=true;reservation_until=kind==8 ? 30 : USB_BIND_TIMEOUT_MS+10;
         m.forever_data=true;break;
+    case 10:m.never_ready=true;break;
     }
     sleep_hook=replay;
     uint64_t begin=m.now;
@@ -128,6 +136,13 @@ static void scenario(const char *path,unsigned kind)
         check_disk_record("[usb-storage] stage=mount addr=1\n");
         assert(!storage_get()->vfs.volumes[4]);
     }
+    if(kind==10) {
+        assert(m.now-begin>=USB_BIND_TIMEOUT_MS-USB_BIND_FINISH_MS);
+        check_disk_record("quarantine addr=1 reason=bind_deadline stage=ready");
+        check_disk_record("stage=ready addr=1 elapsed_ms=");
+        assert(!device()->storage.published && !storage_get()->vfs.volumes[4]);
+        assert(!m.writes && !m.resets);
+    }
     unsigned commands=m.commands;uint8_t b[512];
     assert(block()->read(block(),0,1,b)<0 && m.commands==commands);
     if(other_reserving) {m.h.busy=false;other_reserving=false;}
@@ -135,7 +150,15 @@ static void scenario(const char *path,unsigned kind)
     printf("PASS F1-59 bind fault=%u elapsed_ms=%llu desktop=%u writer=%u other_usb=%u durable_flushes=%u\n",
            kind,(unsigned long long)(m.now-begin),desktop_turns,writer_turns,other_turns,durable_flushes);
 }
-static void successful_bind(const char *path)
+static uint64_t stage_elapsed(const char *name)
+{
+    char needle[96];snprintf(needle,sizeof(needle),"[usb-storage] stage=%s addr=1 elapsed_ms=",name);
+    const char *p=strstr(records,needle);assert(p);p+=strlen(needle);
+    char *end;uint64_t elapsed=strtoull(p,&end,10);assert(end!=p);
+    assert(!strncmp(end," result=0\n",10));
+    check_disk_record(needle);return elapsed;
+}
+static void successful_bind(const char *path,bool slow)
 {
     setup(path,true);activate_log();use_uhci();
     uint8_t *original=m.image;size_t original_bytes=m.bytes;
@@ -145,7 +168,11 @@ static void successful_bind(const char *path)
     fs_wr16(stick+17,16);fs_wr16(stick+19,64);stick[21]=0xf8;fs_wr16(stick+22,1);
     fs_wr16(stick+510,0xaa55);
     for(unsigned i=1;i<=2;i++) {stick[i*512]=0xf8;stick[i*512+1]=stick[i*512+2]=0xff;}
+    for(unsigned i=1;i<=2;i++) {stick[i*512+3]=0xff;stick[i*512+4]=0x0f;}
+    memcpy(stick+3*512,"SHORT   BIN",11);stick[3*512+11]=FAT_ATTR_ARCHIVE;
+    fs_wr16(stick+3*512+26,2);fs_wr32(stick+3*512+28,512);memset(stick+4*512,0x5a,512);
     m.image=stick;m.bytes=sizeof(stick);m.mbr[450]=1;fs_wr32(m.mbr+458,64);
+    if(slow) {m.ready_at=m.now+4000;m.flush_delay=2000;m.first_read_delay=2000;}
     desktop_holding=false;desktop_turns=writer_turns=other_turns=0;sleep_hook=replay;
     assert(!usb_storage_attach(device()));usb_storage_service(&m.h);sleep_hook=NULL;
     assert(device()->storage.online && !block()->quarantined && !device()->storage.binding);
@@ -153,17 +180,37 @@ static void successful_bind(const char *path)
     check_disk_record("[usb-storage] stage=capacity addr=1\n");
     check_disk_record("[usb-storage] stage=flush addr=1\n");
     check_disk_record("[usb-storage] stage=mount addr=1\n");
+    const char *stages[]={"max_lun","inquiry","ready","capacity","flush","mode","mount"};
+    uint64_t total=0,ready_ms=0,flush_ms=0,mount_ms=0;
+    for(unsigned i=0;i<ARRAY_SIZE(stages);i++) {
+        uint64_t elapsed=stage_elapsed(stages[i]);
+        if(i==2)ready_ms=elapsed;if(i==4)flush_ms=elapsed;if(i==6)mount_ms=elapsed;
+        else total+=elapsed;
+    }
+    const char *p=strstr(records,"[usb-storage] ready addr=1 sectors=");assert(p);
+    p=strstr(p," elapsed_ms=");assert(p);
+    assert(strtoull(p+12,NULL,10)==total);
+    if(slow) {
+        assert(ready_ms>=3900 && ready_ms<4200 && flush_ms>=2000 && flush_ms<2100);
+        assert(mount_ms>=2000 && m.ready_commands>3 && device()->storage.published);
+        struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,4));
+        int fd=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
+        uint8_t data[512];size_t got;assert(!vfs_read(&table,fd,data,sizeof(data),&got) && got==sizeof(data));
+        for(unsigned i=0;i<sizeof(data);i++)assert(data[i]==0x5a);
+        assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
+    }
     assert(!usb_storage_eject(storage_get(),4,block()->media_generation));
     assert(!bootlog_shutdown());log_hook=NULL;bootlog_reset();
     m.image=original;m.bytes=original_bytes;cleanup();
-    printf("PASS F1-59 successful real-UHCI FAT12 bind elapsed_ms=%llu volume=E: desktop=%u writer=%u\n",
-           (unsigned long long)m.now,desktop_turns,writer_turns);
+    printf("PASS F1-62 real-UHCI FAT12 bind slow=%u ready_ms=%llu flush_ms=%llu mount_ms=%llu elapsed_ms=%llu volume=E: desktop=%u writer=%u other_usb=%u\n",
+           slow,(unsigned long long)ready_ms,(unsigned long long)flush_ms,(unsigned long long)mount_ms,
+           (unsigned long long)m.now,desktop_turns,writer_turns,other_turns);
 }
 int main(int argc,char **argv)
 {
     assert(argc==4);
-    for(unsigned kind=0;kind<10;kind++)scenario(argv[2],kind);
-    successful_bind(argv[2]);
+    for(unsigned kind=0;kind<11;kind++)scenario(argv[2],kind);
+    successful_bind(argv[2],false);successful_bind(argv[2],true);
     puts("PASS F1-59 hostile bind, VFS client/disk writer, scheduler queues and durable stage records");
     return 0;
 }

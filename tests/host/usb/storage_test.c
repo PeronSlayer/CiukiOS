@@ -17,7 +17,7 @@
 struct ciuki_boot_info g_boot;
 static gen_t generation;
 gen_t gen_alloc(void) { return ++generation; }
-static char records[16384];
+static char records[512*1024]; /* retain the bounded becoming-ready replay */
 static size_t records_at;
 static void (*log_hook)(const char *, size_t);
 static void (*sleep_hook)(void);
@@ -56,6 +56,9 @@ static struct model {
     bool nak_prepare, nak_eighth;
     unsigned read_commands;
     unsigned sector_size, initial_ua;
+    bool never_ready, frozen_clock;
+    unsigned not_ready_ascq, ready_commands, flush_delay, first_read_delay;
+    uint64_t ready_at;
     bool uhci, data_babble, data_crc, clear_fail, reset_fail, late_ack, latched, mode_stall;
     unsigned inquiry_bytes, capacity_bytes, inquiry_delay, inquiry_delays, inquiries, modes, naks, reset_order, frame_offset, late_acks;
     unsigned mode_csw_stalls;
@@ -66,7 +69,7 @@ static struct model {
 static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
 static uint32_t be32(const uint8_t *b) {return (uint32_t)b[0]<<24|(uint32_t)b[1]<<16|(uint32_t)b[2]<<8|b[3];}
 static void put32(uint8_t *b,uint32_t v) {b[0]=v>>24;b[1]=v>>16;b[2]=v>>8;b[3]=v;}
-static uint64_t now(void *c) { (void)c; return m.now; }
+static uint64_t now(void *c) { (void)c; return m.frozen_clock ? 0 : m.now; }
 static volatile uint32_t *uhci_dma(void *c,uint32_t address,unsigned bytes)
 {
     (void)c;assert(address>=m.h.dma_phys && address-m.h.dma_phys<=USB_DMA_BYTES-bytes);
@@ -142,9 +145,10 @@ static void start_command(void)
     case 0x12: assert(m.total==36);m.inquiries++;m.response[1]=0x80;m.response[2]=2;m.response[4]=31;break;
     case 0x03: assert(m.total==18);memcpy(m.response,m.sense,18);break;
     case 0x00:
-        assert(!m.total);
+        assert(!m.total);m.ready_commands++;
         if(m.ua || m.initial_ua) {m.ua=false;if(m.initial_ua)m.initial_ua--;failed(6,0x28);}
         else if(m.no_medium) failed(2,0x3a);
+        else if(m.never_ready || m.now<m.ready_at) {failed(2,4);m.sense[13]=(uint8_t)m.not_ready_ascq;}
         break;
     case 0x25: assert(m.total==8);put32(m.response,(uint32_t)(m.bytes/512+(m.second ? m.second : m.offset)-1));put32(m.response+4,m.sector_size);break;
     case 0x35:
@@ -209,6 +213,8 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
         assert(n<=31-m.cbw_at);memcpy(m.cbw+m.cbw_at,b,n);m.cbw_at+=n;
         if(m.cbw_at==31){m.cbw_at=0;start_command();}
     } else if(m.stage==1) {
+        if(m.cbw[15]==0x28 && m.read_commands==1 &&
+           m.now-m.command_at<m.first_read_delay) return -USB_EAGAIN;
         if(m.forever_data || (m.nak_capacity && m.cbw[15]==0x25) ||
            (m.nak_mount && m.cbw[15]==0x28) ||
            (m.nak_prepare && m.cbw[15]==0x28 && m.read_commands>=3) ||
@@ -230,6 +236,7 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
             (m.cbw[15]==0x25 && m.at==m.capacity_bytes)){m.stage=2;m.at=0;}
     } else {
         assert(pid==USB_PID_IN);
+        if(m.cbw[15]==0x35 && m.now-m.command_at<m.flush_delay) return -USB_EAGAIN;
         if(m.forever_csw) return -USB_EAGAIN;
         if(m.csw_stall){m.csw_stall=false;return -USB_EPIPE;}
         if(m.cbw[15]==0x1a && m.mode_csw_stalls){m.mode_csw_stalls--;return -USB_EPIPE;}
@@ -249,7 +256,7 @@ static struct blkdev *block(void) {return &device()->storage.block;}
 static void setup(const char *path,bool partitioned)
 {
     memset(&m,0,sizeof(m));records_at=0;records[0]=0;m.inquiry_bytes=36;m.capacity_bytes=8;
-    m.connected=true;m.sector_size=512;m.offset=partitioned?8:0;
+    m.connected=true;m.sector_size=512;m.offset=partitioned?8:0;m.not_ready_ascq=1;
     int fd=open(path,O_RDONLY);assert(fd>=0);struct stat st;assert(!fstat(fd,&st));m.bytes=(size_t)st.st_size;
     m.image=mmap(NULL,m.bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE,fd,0);assert(m.image!=MAP_FAILED);close(fd);
     if(partitioned) {fs_wr16(m.mbr+510,0xaa55);m.mbr[450]=fs_rd16(m.image+22) ? (fs_rd16(m.image+19) ? 1 : 6) : 0x0c;
@@ -395,7 +402,8 @@ static void uhci_transport(const char *path)
     assert(t->packet.valid && (t->packet.status&(1u<<23)) && (t->packet.status&(1u<<19)));
     assert(t->packet.endpoint==1 && t->packet.pid==USB_PID_IN && !t->packet.toggle);
     assert(t->packet.frames==USB_BIND_BULK_MS+2 && t->packet.elapsed_ms==USB_BIND_BULK_MS+2 && !t->packet.retired);
-    assert(strstr(records,"stage=data expected=36 actual=0 result=-110") && strstr(records,"frames=1002 elapsed_ms=1002 retired=0"));
+    char timing[96];snprintf(timing,sizeof(timing),"frames=%u elapsed_ms=%u retired=0",USB_BIND_BULK_MS+2,USB_BIND_BULK_MS+2);
+    assert(strstr(records,"stage=data expected=36 actual=0 result=-110") && strstr(records,timing));
     assert(m.commands==2 && m.resets==2 && m.clear_in==2 && m.clear_out==2 && !m.writes && !m.reset_order);
     assert(!device()->storage.bulk_deadline && !device()->storage.in_toggle && !device()->storage.out_toggle);
     cleanup();
@@ -528,13 +536,30 @@ static void failed_mount(const char *path)
     }
     puts("PASS F1-60 failed FAT preparation: volume error, mount quarantine, unpublished USB/VFS/drive flags, E: refused, no rebind, eighth-packet trace survives reset, invalid BPB");
 }
+static void readiness_bounds(const char *path)
+{
+    for(unsigned kind=0;kind<3;kind++) {
+        setup(path,false);
+        if(kind==0) {m.never_ready=true;m.not_ready_ascq=2;} /* initialization required */
+        if(kind==1)m.initial_ua=3;
+        if(kind==2) {m.never_ready=true;m.frozen_clock=true;}
+        assert(usb_storage_attach(device())<0);
+        assert(block()->quarantined && device()->quarantined && !m.writes);
+        assert(m.ready_commands==(kind==1 ? 3u : kind==0 ? 1u : USB_BIND_TIMEOUT_MS/100u+1));
+        assert(!device()->storage.bind_reserved && !m.h.busy);
+        assert(strstr(records,"reason=not_ready stage=ready"));
+        assert(strstr(records,"stage=ready addr=1 elapsed_ms="));
+        cleanup();
+    }
+    puts("PASS F1-62 readiness: initialization-required fails immediately, UNIT ATTENTION limited to three probes, frozen clock has finite polling");
+}
 int main(int argc,char **argv)
 {
     assert(argc==4);
     if(getenv("USB_TEST_F1_60_MOUNT_ONLY")) {failed_mount(argv[2]);return 0;}
     failed_mount(argv[2]);
     if(getenv("USB_TEST_F1_47_ONLY")) {uhci_transport(argv[2]);return 0;}
-    uhci_transport(argv[2]);attach_tolerance(argv[2]);
+    uhci_transport(argv[2]);attach_tolerance(argv[2]);readiness_bounds(argv[2]);
     io_mount(argv[1],false,12);io_mount(argv[2],true,16);io_mount(argv[3],true,32);
     errors(argv[2]);readonly(argv[2]);partitions(argv[2]);
     puts("PASS USB storage production suite (ASan/UBSan)");return 0;

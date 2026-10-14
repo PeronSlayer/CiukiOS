@@ -344,14 +344,29 @@ static void bind_pause(void *ctx)
 { struct usb_device *d=ctx; d->host->io.sleep(d->host->io.cookie,1); }
 static bool bind_log_cancel(void *ctx)
 { struct usb_device *d=ctx; return usb_expired(d->host,d->storage.bind_deadline); }
+static void bind_stage_finish(struct usb_device *d, int result)
+{
+    struct usb_storage *s=&d->storage;
+    if (!s->bind_stage_active) return;
+    klog("[usb-storage] stage=%s addr=%u elapsed_ms=%llu result=%d",s->bind_stage,d->address,
+         d->host->io.now(d->host->io.cookie)-s->bind_stage_started_ms,result);
+    s->bind_stage_active=false;
+}
+static void bind_stage_begin(struct usb_device *d, const char *name)
+{
+    bind_stage_finish(d,0);
+    struct usb_storage *s=&d->storage;
+    s->bind_stage=name; s->bind_stage_started_ms=d->host->io.now(d->host->io.cookie);
+    s->bind_stage_active=true;
+    klog("[usb-storage] stage=%s addr=%u",name,d->address);
+}
 /* Each stage enters without a reservation and leaves owning one. The caller
  * checks the return and owns nothing on failure. No log/VFS -> host cycle. */
 static int bind_stage(struct usb_device *d, const char *name)
 {
     struct usb_host *h=d->host;
     if (d->storage.bind_reserved) { usb_host_drop(h); d->storage.bind_reserved=false; } /* only the current attach owner calls here */
-    d->storage.bind_stage=name;
-    klog("[usb-storage] stage=%s addr=%u",name,d->address);
+    bind_stage_begin(d,name);
     int e=bootlog_sync ? bootlog_sync(bind_cancel,bind_pause,d) : 0;
     if (e || bind_cancel(d) || !usb_host_take_until(h,d->storage.bind_deadline-USB_BIND_FINISH_MS)) {
         d->storage.trace.result=e ? e : -USB_ETIMEDOUT;
@@ -378,6 +393,7 @@ static int probe_storage(struct usb_device *d)
     if (bind_stage(d,"inquiry")) return -FS_EIO;
     e=command_policy(d,cdb,6,true,inquiry,sizeof(inquiry),&got,BOT_FIRST_INQUIRY);
     if (e==BOT_RETRY_INQUIRY) {
+        bind_stage_finish(d,e);
         klog("[usb-storage] retry addr=%u cmd=12 attempt=2",d->address);
         if (bind_stage(d,"inquiry")) return -FS_EIO;
         e=command_result(d,cdb,6,true,inquiry,sizeof(inquiry),&got);
@@ -387,10 +403,23 @@ static int probe_storage(struct usb_device *d)
      * CSW and consistent residue. Never infer missing capability bytes. */
     if (got<5) return fault(d,"short_inquiry",false);
     if ((inquiry[0]&0x1f)!=0 || (inquiry[0]&0xe0)) return fault(d,"unsupported_lun",false);
-    /* Clear initial power-on unit attention, bounded before any mount/write. */
+    /* Clear initial power-on unit attention. A successful sense response
+     * saying 'becoming ready' may outlast one BOT wait, but not the bind.
+     * Transport failures and other NOT READY conditions are not retried. */
     if (bind_stage(d,"ready")) return -FS_EIO;
-    for (unsigned i=0;i<3;i++) {
-        e=ready(d); if (!e || s->sense_key!=6 || s->block.quarantined) break;
+    unsigned attention=0, polls=0;
+    for (;;) {
+        if (bind_cancel(d)) return fault(d,"bind_deadline",false);
+        e=ready(d);
+        if (!e || s->block.quarantined) break;
+        if (s->sense_key==6 && ++attention<3) continue;
+        if (s->sense_key!=2 || s->asc!=4 || s->ascq!=1 ||
+            polls++>=USB_BIND_TIMEOUT_MS/100u) break;
+        if (bind_cancel(d)) return fault(d,"bind_deadline",false);
+        uint64_t now=d->host->io.now(d->host->io.cookie);
+        int64_t left=(int64_t)(s->bind_deadline-USB_BIND_FINISH_MS-now);
+        if (left<=0) return fault(d,"bind_deadline",false);
+        usb_sleep(d->host,left<100u ? (unsigned)left : 100u);
     }
     if (e) return fault(d,"not_ready",false);
     if (bind_stage(d,"capacity")) return -FS_EIO;
@@ -404,6 +433,7 @@ static int probe_storage(struct usb_device *d)
     e=flush_locked(d);
     if (!e) { s->block.write_cache_state=BLKDEV_CACHE_ENABLED; s->block.flush=block_flush; }
     else if (s->block.quarantined) return e;
+    bind_stage_finish(d,e);
     /* MODE SENSE(6) header reports write protection for transparent SCSI.
      * Its absence does not invent a cache policy; failed writes fail closed. */
     if (bind_stage(d,"mode")) return -FS_EIO;
@@ -414,18 +444,22 @@ static int probe_storage(struct usb_device *d)
         klog("[usb-storage] mode_sense addr=%u reason=stalled assume_writable=1",d->address);
     else if (s->block.quarantined) return e;
     if (s->write_protected) { s->block.write=0; s->block.flush=0; s->block.write_cache_state=BLKDEV_CACHE_UNKNOWN; }
+    bind_stage_finish(d,e);
     s->online=true; d->reason="storage_ready";
-    klog("[usb-storage] ready addr=%u sectors=%llu generation=%u mode=%s",
+    klog("[usb-storage] ready addr=%u sectors=%llu generation=%u mode=%s elapsed_ms=%llu",
          d->address,(unsigned long long)s->block.capacity,s->block.media_generation,
-         blkdev_durable(&s->block) ? "rw_capable" : "ro_no_flush");
+         blkdev_durable(&s->block) ? "rw_capable" : "ro_no_flush",
+         d->host->io.now(d->host->io.cookie)-s->bind_started_ms);
     return 0;
 }
 int usb_storage_attach(struct usb_device *d)
 {
     if (!d || !d->host) return -FS_EINVAL;
     struct usb_storage *s=&d->storage;
-    s->binding=true; s->bind_deadline=d->host->io.now(d->host->io.cookie)+USB_BIND_TIMEOUT_MS;
+    s->binding=true; s->bind_started_ms=d->host->io.now(d->host->io.cookie);
+    s->bind_deadline=s->bind_started_ms+USB_BIND_TIMEOUT_MS; s->bind_stage_active=false;
     int e=probe_storage(d);
+    bind_stage_finish(d,e);
     if (s->bind_reserved) { usb_host_drop(d->host); s->bind_reserved=false; }
     /* Keep the same deadline until usb_storage_service publishes the mount. */
     if (e) {
@@ -447,8 +481,9 @@ void usb_storage_service(struct usb_host *h)
         for (unsigned i=0;i<h->device_count;i++) {
             struct usb_device *d=&h->devices[i];struct usb_storage *s=&d->storage;
             if (!s->binding || !s->online) continue;
-            s->bind_stage="mount";klog("[usb-storage] stage=mount addr=%u",d->address);
-            (void)fault(d,"mount_unavailable",false);d->quarantined=true;s->binding=false;
+            bind_stage_begin(d,"mount");
+            int e=fault(d,"mount_unavailable",false);
+            bind_stage_finish(d,e);d->quarantined=true;s->binding=false;
             if (bootlog_sync) (void)bootlog_sync(bind_log_cancel,bind_pause,d);
         }
         return;
@@ -465,8 +500,7 @@ void usb_storage_service(struct usb_host *h)
             s->published=false;
             klog("[usb-storage] detached addr=%u reason=%s",d->address,d->reason);
         } else if (s->online && !s->published && !s->ejected) {
-            s->bind_stage="mount";
-            klog("[usb-storage] stage=mount addr=%u",d->address);
+            bind_stage_begin(d,"mount");
             int e=bootlog_sync ? bootlog_sync(bind_cancel,bind_pause,d) : 0;
             if (!e && !bind_cancel(d))
                 e=storage_add_removable_bounded(store,&s->block,bind_cancel,bind_pause,d);
@@ -475,6 +509,7 @@ void usb_storage_service(struct usb_host *h)
                 (void)fault(d,bind_cancel(d) ? "bind_deadline" : "mount_failed",false);
                 d->quarantined=true;
             } else s->published=true;
+            bind_stage_finish(d,e);
             s->binding=false;
             /* Retain the attempt, including refusal; no recovery loop. */
             klog("[usb-storage] mount addr=%u result=%d",d->address,e);
