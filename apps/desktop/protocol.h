@@ -76,6 +76,8 @@ struct desk_packet {
     uint32_t ui_x, ui_y, ui_w, ui_h;
     uint32_t resize_serial; /* optional GFX_FRAME replacement attachment */
     uint64_t completed_ns, next_frame_ns;
+    uint32_t timing_serial,render_us,submit_us,wait_us; /* optional 84-byte FRAME */
+    uint64_t convert_ns,copy_ns,slot_ns,refresh_ns; /* optional 64-byte PRESENTED */
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);

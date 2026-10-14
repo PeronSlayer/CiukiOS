@@ -332,11 +332,19 @@ void desk_gfx_complete(struct desktop *d, int i, int result, uint64_t completed,
         c->gfx_reply_pending=1;c->gfx_result=result;c->gfx_completed_ns=completed;c->gfx_next_ns=next;
         return;
     }
-    struct ciuki_message reply; desk_message(&reply,DESK_GFX_PRESENTED,32);
+    struct ciuki_message reply; desk_message(&reply,DESK_GFX_PRESENTED,c->gfx_timing ? 64 : 32);
     desk_put32(reply.data+4,c->gfx_serial); desk_put32(reply.data+8,(uint32_t)result);
     desk_put32(reply.data+12,(uint32_t)completed); desk_put32(reply.data+16,(uint32_t)(completed>>32));
     if (next<completed) next=completed;
     desk_put32(reply.data+20,(uint32_t)next); desk_put32(reply.data+24,(uint32_t)(next>>32));
+    if (c->gfx_timing) {
+        uint64_t values[4]={c->gfx_stats.convert_ns,c->gfx_stats.copy_ns,c->gfx_stats.slot_ns,DESK_FRAME_NS};
+        for (unsigned k=0;k<4;k++) {
+            desk_put32(reply.data+32+k*8,(uint32_t)values[k]);
+            desk_put32(reply.data+36+k*8,(uint32_t)(values[k]>>32));
+        }
+        if (!result) d->gfx_sample=c->gfx_stats;
+    }
     desk_queue(d,i,&reply); c->gfx_pending=c->gfx_reply_pending=0;
 }
 void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
@@ -346,7 +354,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     struct ciuki_surface_info s = c->info;
     int create = m->length >= 4 && (m->data[1] == DESK_CREATE_WINDOW || m->data[1] == DESK_DAMAGE || m->data[1]==DESK_GFX_FRAME) && m->fd_count == 1;
     int info_ok = !create || !d->ops.info(m->fds[0], &s);
-    uint32_t swap= m->length==68 && m->data[1]==DESK_GFX_FRAME ? desk_get32(m->data+64) :
+    uint32_t swap= (m->length==68 || m->length==84) && m->data[1]==DESK_GFX_FRAME ? desk_get32(m->data+64) :
         m->length==24 && m->data[1]==DESK_DAMAGE ? desk_get32(m->data+20) : 0;
     if (c->channel < 0 || !info_ok || !desk_parse(m, 1, &s, &p) ||
         !m->sender_pid || (c->pid && c->pid != m->sender_pid) ||
@@ -393,6 +401,13 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int changed=memcmp(&old,&region,sizeof(old)) || c->gfx_width!=p.source_w || c->gfx_height!=p.source_h;
         c->gfx_box=region; c->gfx_width=p.source_w; c->gfx_height=p.source_h;
         c->gfx_serial=p.serial; c->gfx_pending=1;
+        c->gfx_timing=m->length==84;
+        uint64_t received=c->gfx_timing && d->time_ns ? d->time_ns() : d->now_ns;
+        c->gfx_stats=(struct desk_gfx_stats){.serial=p.serial,.app_serial=p.timing_serial,
+            .render_us=p.render_us,.submit_us=p.submit_us,.wait_us=p.wait_us,
+            .width=c->info.width,.height=c->info.height,.source_w=p.source_w,.source_h=p.source_h,
+            .view_w=p.width,.view_h=p.height,
+            .slot_ns=d->next_frame_ns>received ? d->next_frame_ns-received : 0};
         if (c->minimized || c->collapsed) { desk_gfx_complete(d,i,-EAGAIN,d->now_ns,d->now_ns+DESK_FRAME_NS); break; }
         if (p.ui_w && p.ui_h) desk_damage_add(&d->damage,
             (struct desk_box){content.x+(int)p.ui_x,content.y+(int)p.ui_y,(int)p.ui_w,(int)p.ui_h},d->width,d->height);

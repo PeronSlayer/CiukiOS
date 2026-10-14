@@ -56,6 +56,11 @@ struct desk_frame_stats {
 struct desk_dirty_row { int32_t left, right; };
 struct desk_dirty_runs { unsigned count; struct desk_dirty_row spans[DESK_DAMAGE_MAX]; };
 #define DESK_FRAME_NS 16666667ull /* VBE does not expose measured refresh; conservative 60 Hz */
+struct desk_gfx_stats {
+    uint32_t serial,app_serial,render_us,submit_us,wait_us;
+    uint32_t width,height,source_w,source_h,view_w,view_h;
+    uint64_t convert_ns,copy_ns,slot_ns;
+};
 struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
@@ -83,6 +88,8 @@ struct desk_client {
     int gfx_pending;
     int gfx_reply_pending, gfx_result;
     uint64_t gfx_completed_ns, gfx_next_ns;
+    int gfx_timing;
+    struct desk_gfx_stats gfx_stats;
     char title[DESK_TITLE_MAX + 1];
     struct ciuki_message tx[DESK_TX_MAX];
     unsigned tx_head, tx_count;
@@ -140,6 +147,7 @@ struct desktop {
     int cursor_valid, cursor_dirty;
     unsigned lfb_bytes_per_pixel;
     uint64_t next_frame_ns;
+    struct desk_gfx_stats gfx_sample; /* most recently completed demo frame */
     uint64_t pending_input_ns, pending_input_lag_ns, frame_input_ns;
     uint64_t latency_buckets[DESK_LATENCY_BUCKETS];
     uint64_t (*time_ns)(void);

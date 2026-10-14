@@ -40,7 +40,7 @@ int main(void)
     assert(!cfg_writer_submit(&w,"first",5));
     pthread_mutex_lock(&lock); while (!entered) pthread_cond_wait(&changed,&lock); pthread_mutex_unlock(&lock);
     assert(cfg_writer_busy(&w));
-    char telemetry[700];
+    char telemetry[CFG_LOG_MAX]; /* full desktop + demo record survives backlog */
     memset(telemetry,'x',sizeof(telemetry));
     const char prefix[]="[display] frame_p95_us=18446744073709551615 ";
     memcpy(telemetry,prefix,sizeof(prefix)-1);

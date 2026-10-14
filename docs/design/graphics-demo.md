@@ -140,3 +140,45 @@ Validation and the identical-flags before/after cycle breakdown are in
 are directional estimates, not Pentium III retired cycles; model the T23
 upload separately at its previously measured 134 MB/s. Hardware FPS is the
 lead's acceptance check.
+
+### F4-20: one prepared successor and frame timing (2026-10-14)
+
+Research and evidence: [host validation](../validation/f4-20-gfxdemo-frame-budget.md).
+The client prepares one successor in its existing private scene buffer while
+the submitted shared source remains frozen. Preparation compares against that
+source without copying through the UI back buffer; acknowledgement permits
+one changed-source copy and another submission. The animation phase predicts
+one nominal frame ahead during that wait, without advancing the elapsed-time
+accumulator. No extra full-window allocation, thread or second in-flight request
+is needed. UI repaint, resize, pause/tab changes and EAGAIN supersede prepared
+work. Full UI repaints retain toolkit publication and do not copy source rows
+again. The server keeps its existing absolute 60 Hz slot policy.
+
+The optional 84-byte FRAME preserves offsets 0–63 and puts a configure serial
+at 64 (zero without replacement), the last acknowledged frame serial at 68,
+and its render/submit/wait microseconds at 72/76/80. Attach exactly one surface
+only with a nonzero configure serial. Old 64/68-byte requests remain accepted.
+An instrumented request gets a 64-byte PRESENTED: the original 32 bytes plus
+uint64 conversion, copy, ingress slot-delay and nominal refresh-period ns at
+32/40/48/56. Old requests retain their 32-byte reply. Reserved words, lengths,
+directions and attachment rules remain validated.
+
+Render includes raster and source-damage discovery (and source storage during
+UI repaint). Submit measures explicit changed-source publication/encoding/FIFO
+enqueue; toolkit UI painting/publication is additional work on repaint turns.
+Wait measures enqueue through receipt of PRESENTED, including scheduler and
+IPC/polling latency. Conversion times clipped source enlargement in the
+compositor; copy times actual present calls intersecting the demo content.
+Merged upload spans can include other damage. Retries accumulate attempted
+conversion/copy time; completion-queue backpressure retains the original
+measurements. These are components of existing work, not additional work to
+add to desktop totals. Clock resolution is 1 ms; sub-millisecond measurements
+can be zero. There is no claim of hardware vsync or calibrated app TSC timing.
+
+The overlay shows the most recently acknowledged timings. The existing 2 s
+disk sample adds a `[display] gfx_serial=...` line for the latest completed
+frame, with `app_serial` identifying the previous acknowledged frame carried
+by that request. Window/source/viewport geometry and ingress slot delay belong
+to `gfx_serial`; render/submit/wait belong to `app_serial`. Two serials make
+the unavoidable one-frame wait-telemetry delay explicit. This is a sampled
+frame record, not an average and not a complete per-frame disk trace.

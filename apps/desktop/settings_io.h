@@ -4,7 +4,7 @@
 #include "settings.h"
 #include <pthread.h>
 #define CFG_STARTUP_STAGES 10
-#define CFG_LOG_MAX 768 /* display latency record, including maximum u64 fields */
+#define CFG_LOG_MAX 1536 /* display latency plus per-frame demo diagnostics */
 extern const char *const cfg_startup_stage_names[CFG_STARTUP_STAGES];
 /* One bounded latest-snapshot mailbox. Disk I/O never holds lock. The caller
  * owns lifetime; stop only after busy() is false (join then cannot wait on I/O). */
