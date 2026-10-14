@@ -4,6 +4,55 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f4-26: GBD packets, cached idle proof and asynchronous setup
+
+Research rechecked on 2026-10-14 against X.Org's
+[`savage_accel.c`](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c),
+[`savage_xaa.c`](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_xaa.c)
+(`SavageSetupForSolidFill` / `SavageSubsequentSolidFillRect` moved there),
+Linux's [`savagefb_accel.c`](https://kernel.googlesource.com/pub/scm/linux/kernel/git/mripard/linux/+/5a838c3b60e3a36ade764cf7751b8f17d7c9c2da/drivers/video/savage/savagefb_accel.c),
+[`savagefb_driver.c`](https://github.com/torvalds/linux/blob/master/drivers/video/fbdev/savage/savagefb_driver.c)
+and [BCI definitions](https://sources.debian.org/src/linux/6.1.4-1/drivers/gpu/drm/savage/savage_drv.h/).
+The named X.Org `savage_bci.h` endpoints were unavailable; Linux's upstream
+header explicitly attributes its corresponding definitions to that header.
+
+The ce2e6ce9 T23 evidence proves CR50=F1 and GBD2=10200401 read back,
+yet the submitted fill produces 66666666 for 004a8166. It disproves
+CR50 programming alone as the fix. X.Org uses PBD_NEW, then descriptor
+offset/high, colour, XY, WH: CiukiOS's existing word order agrees. Linux
+instead selects DEST_GBD=0 and SRC_SOLID=0, SEND_COLOR=8000, ROP=CC,
+then colour, XY, WH (4BCC8000 for positive X/Y). Select that GBD path
+for fill, copy (SRC_GBD=20) and mono pattern (PAT_MONO=3); all operate
+on the one validated linear framebuffer. This removes dependence on the
+primary descriptor and its inline updates. Preserve CR50 and the masked
+halfword GBD verification. Do not program primary-stream MM81C0/4/8 or
+CR67: no evidence requires changing scanout. X.Org and Linux both support
+SuperSavage without COB/shadow (control 08); retain that supported mode.
+Require the full 32-bit marker readback, including its zero upper byte.
+This is a researched correction to try on silicon, not a claimed T23 pass.
+
+Supersede f4-19's perpetual idle guard: synchronously completed operations
+cache CPU safety. A quarantine permits one final bounded idle proof, whose
+result is then cached for the session. A proven-idle startup failure installs
+no ops in fbdev; software presents/fills/copies/console never poll hardware.
+An unproven submitted writer retains a rejecting guard: it blocks CPU writes
+and firmware takeover without repeatedly polling or pretending idle. The
+durable failure marker and quarantined resource claims remain intact.
+
+Supersede f4-22's whole-init presenter exclusion: pin the mode with an
+initialization flag under the presenter mutex, release the mutex, and run
+register setup/reset/polls on the existing normal worker while CPU frames
+and console lines continue. Firmware change requests return EBUSY while
+that flag pins the mapping. Only the saved-pixel test takes presenter and
+console exclusion; its logs are emitted afterwards. Snapshot/periodic
+logging avoids partially initialized driver counters. Keep marker file I/O
+outside presenter locks. Buffer at most 40 paired register records in static
+storage, emit them only on failure after exclusion ends, and remove the
+verbose per-access pending/completion stream. Reset timing and bounded
+polls remain unchanged. Host tests must interleave real production presents,
+fills, queries and console access during setup and reject mode changes.
+Only T23 measurements can establish the settings_read <1-s target.
+
 ## f4-22: engine depth and initialization thread
 
 Research rechecked on 2026-10-14 against [S3 RE046-B](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf),

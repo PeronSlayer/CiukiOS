@@ -27,7 +27,7 @@ static struct kmutex presenter;
 static const struct accel_ops *acceleration;
 static bool initialized, changing;
 static struct vfs *accel_vfs;
-static bool accel_queued;
+static bool accel_queued, accel_initializing;
 /* One reusable normal-priority thread owns marker I/O and initialization.
  * Synchronous serial trace must stay outside the 1-ms device-work budget. */
 static struct task *accel_marker_task;
@@ -196,21 +196,41 @@ static void accel_initialize(void)
     /* Entered only after this thread committed and closed the
      * attempt marker. This phase owns register access, never file I/O. */
     kmutex_lock(&presenter);
-    if (!changing && device.present && !acceleration) {
-        unsigned idle = 0;
-        /* Init yields while resetting/programming. Suppress the nonwaiting
-         * console as well as mutex-owned presenters for that whole interval. */
-        if (__atomic_compare_exchange_n(&drawing, &idle, PRESENT_BUSY, false,
-                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-            acceleration = savage2d_init(&device, 0);   /* marker handled above */
-            ready = acceleration != 0;
-            if (!ready && savage2d_fallback_ops) acceleration = savage2d_fallback_ops();
-            __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
-        } else klog("[accel] savage quarantined reason=console_busy");
-    }
+    bool run = !changing && device.present && !acceleration;
+    if (run) accel_initializing = true;
     kmutex_unlock(&presenter);
+    if (run) {
+        /* No engine command is submitted during setup. CPU rendering and
+         * console output remain available across reset, polls and logging. */
+        const struct accel_ops *ops = savage2d_init(&device, 0);
+        ready = ops != 0;
+        if (!ready && savage2d_fallback_ops) ops = savage2d_fallback_ops();
+        kmutex_lock(&presenter);
+        acceleration = ops;
+        accel_initializing = false;
+        kmutex_unlock(&presenter);
+    }
     accel_marker_request = ready ? ACCEL_MARKER_CLEAR : ACCEL_MARKER_STATUS;
     kwait_wake_all(&accel_marker_wait);
+}
+
+int fbdev_accel_probe(const struct fb_device *d, int (*probe)(void *), void *ctx)
+{
+    int err = -EBUSY;
+    kmutex_lock(&presenter);
+    if (d == &device && accel_initializing && !changing && device.present && !acceleration) {
+        unsigned idle = 0;
+        if (__atomic_compare_exchange_n(&drawing, &idle, PRESENT_BUSY, false,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            err = probe(ctx);
+            /* Before releasing the console, publish a rejecting guard if
+             * the probe left a writer whose completion cannot be proved. */
+            if (err && savage2d_fallback_ops) acceleration = savage2d_fallback_ops();
+            __atomic_store_n(&drawing, 0, __ATOMIC_RELEASE);
+        }
+    }
+    kmutex_unlock(&presenter);
+    return err;
 }
 
 static void accel_marker_run(void)
@@ -571,7 +591,7 @@ int fbdev_accel_info(uint32_t generation, struct ciuki_accel_info *out)
         memset(out, 0, sizeof(*out));
         out->generation = device.generation;
         out->capabilities = acceleration ? acceleration->capabilities(acceleration->ctx) : 0;
-        if (savage2d_snapshot) savage2d_snapshot(out);
+        if (!accel_initializing && savage2d_snapshot) savage2d_snapshot(out);
     }
     kmutex_unlock(&presenter);
     return err;
@@ -688,10 +708,13 @@ static bool change_idle(int handle, gen_t generation)
 
 int fbdev_change_begin(void)
 {
-    if (!initialized || changing || !live()) return -EBUSY;
+    if (!initialized || changing || accel_initializing || !live()) return -EBUSY;
     if (!console_framebuffer_revoke || !console_framebuffer_changed) return -ENODEV;
     changing = true; /* stop submissions before waiting for the last presenter */
     kmutex_lock(&presenter);
+    if (accel_initializing) {
+        changing = false; kmutex_unlock(&presenter); return -EBUSY;
+    }
     if (acceleration && acceleration->stop(acceleration->ctx)) {
         changing = false; kmutex_unlock(&presenter); return -EIO;
     }

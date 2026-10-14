@@ -73,10 +73,12 @@ void *vmm_replace_mmio(void *w,uint32_t c,uint32_t p,uint32_t n)
 int udelay(uint32_t us) { CHECK(us<=500); return 0; }
 static bool marker_thread_running;
 static unsigned normal_yields, device_work_requests;
+static void (*init_interleave)(void);
 void task_yield(void)
 {
-    CHECK(marker_thread_running && initializing && locks==1 && !fbdev_console_begin());
+    CHECK(marker_thread_running && !probing && !locks);
     normal_yields++;
+    if (accel_initializing && init_interleave) init_interleave();
 }
 void kwork_yield(void) { CHECK(false); }
 static unsigned boot_calls;
@@ -150,7 +152,7 @@ struct model {
     uint32_t status_value;
     uint64_t us;
     bool exact_clock, last_status_busy;
-    bool strict_window, window_locked, postreset_enable, gbd_reserved, ignore_fill, depth_locked;
+    bool strict_window, window_locked, postreset_enable, gbd_reserved, ignore_fill, depth_locked, corrupt_high, recover_on_final;
     unsigned half_reads, half_writes, dead_window_writes, dword_2d_reads;
     struct { uint32_t reg, value; } setup[64];
     unsigned setup_count;
@@ -162,33 +164,27 @@ static void marker_delay(void) { CHECK(!locks && !initializing); m.us+=marker_co
 static void marker_before_register(void)
 {
     if (initializing)
-        CHECK(disk_size==14 && marker_commits==1 && !marker_open && !table_open && locks==1);
+        CHECK(disk_size==14 && marker_commits==1 && !marker_open && !table_open && locks==(probing ? 1u : 0u));
 }
 static void execute_packet(struct model *p)
 {
-    CHECK(p->packet[1]==0);
-    unsigned bpp=(p->packet[2]>>16)&255, stride=p->packet[2]&65535;
-    CHECK(bpp==device.bpp && stride==device.pitch/(bpp/8));
-    uint32_t gbd=p->reg[0x816c/4];
-    unsigned gbd_bpp=(gbd>>16)&255, gbd_stride=gbd&0x1ff0u;
+    uint32_t cmd=p->packet[0], gbd=p->reg[0x816c/4];
+    CHECK((cmd&0x1c00u)==0); /* destination is GBD, no inline descriptor */
+    unsigned bpp=(gbd>>16)&255, stride=gbd&0x1ff0u;
+    CHECK(bpp==8 || bpp==16 || bpp==32);
+    CHECK(stride==device.pitch/(device.bpp/8) && !p->reg[0x8168/4]);
     unsigned cr_depth=p->cr[0x50]&0x30u;
     unsigned engine_bpp=cr_depth==0 ? 8 : cr_depth==0x10 ? 16 : 32;
     CHECK(cr_depth!=0x20 && (p->cr[0x50]&0xc1u)==0xc1u);
-    CHECK(gbd_bpp==8 || gbd_bpp==16 || gbd_bpp==32);
-    CHECK(gbd_stride==stride && !p->reg[0x8168/4]);
-    if (gbd_bpp<engine_bpp) engine_bpp=gbd_bpp;
-    CHECK((p->packet[2]&0x0f000000u)==0);
-    bool copying=(p->packet[0]&0x1e0u)==0x140u, pattern=(p->packet[0]&3u)==3u;
-    unsigned index=copying ? 5 : pattern ? 5 : 4;
+    if (bpp<engine_bpp) engine_bpp=bpp;
+    bool copying=(cmd&0x1e0u)==0x20u, pattern=(cmd&3u)==3u;
+    unsigned index=copying ? 2 : pattern ? 3 : 2;
     uint32_t origin=p->packet[index], dimensions=p->packet[index+1];
     unsigned w=dimensions&4095,h=dimensions>>16;
-    unsigned bytes=bpp/8;
+    unsigned bytes=device.bpp/8;
     int32_t sx=0,sy=0,dx=origin&4095,dy=origin>>16;
     if (copying) {
-        CHECK(p->packet[3]==0 && p->packet[4]==p->packet[2]);
-        sx=origin&4095; sy=origin>>16;
-        dx=p->packet[6]&4095; dy=p->packet[6]>>16;
-        w=p->packet[7]&4095; h=p->packet[7]>>16;
+        sx=p->packet[1]&4095; sy=p->packet[1]>>16;
     }
     CHECK(((p->packet[0]>>16)&255u)==(pattern ? 0xf0u : 0xccu));
     for (unsigned y=0; y<h; y++) for (unsigned x=0; x<w; x++) {
@@ -196,7 +192,7 @@ static void execute_packet(struct model *p)
         int32_t py=dy+((p->packet[0]&YP) ? (int32_t)y : -(int32_t)y);
         CHECK(px>=0 && py>=0 && (unsigned)px<device.width && (unsigned)py<device.height);
         uint8_t *dst=device.mapped+(unsigned)py*device.pitch+(unsigned)px*bytes;
-        uint32_t colour=p->packet[3];
+        uint32_t colour=p->packet[1];
         if (copying) {
             int32_t ax=sx+((p->packet[0]&XP) ? (int32_t)x : -(int32_t)x);
             int32_t ay=sy+((p->packet[0]&YP) ? (int32_t)y : -(int32_t)y);
@@ -205,13 +201,14 @@ static void execute_packet(struct model *p)
         } else {
             if (pattern) {
                 unsigned shift=((unsigned)py&3u)*8;
-                uint8_t row=(uint8_t)(p->packet[7+((unsigned)py&7u)/4]>>shift);
-                colour=(row&(0x80u>>((unsigned)px&7u))) ? p->packet[3] : p->packet[4];
+                uint8_t row=(uint8_t)(p->packet[5+((unsigned)py&7u)/4]>>shift);
+                colour=(row&(0x80u>>((unsigned)px&7u))) ? p->packet[1] : p->packet[2];
             }
             /* Model the T23's observed colour-lane replication when the
              * engine depth is narrower than the declared destination. This
              * is a regression hypothesis, not a full silicon emulator. */
             for (unsigned b=0;b<bytes;b++) dst[b]=(uint8_t)(colour>>((b%(engine_bpp/8))*8));
+            if (p->corrupt_high && bytes==4) dst[3]=0x66;
         }
         if (p->partial && x==w/2) return;
     }
@@ -219,7 +216,6 @@ static void execute_packet(struct model *p)
 static uint32_t model_read(void *ctx,uint32_t offset)
 {
     struct model *p=ctx;
-    bool logged=trace_read_begin("r32",offset,offset);
     CHECK(offset<SAVAGE_MMIO_BYTES && !(offset&3u));
     marker_before_register();
     uint32_t value;
@@ -247,7 +243,6 @@ static uint32_t model_read(void *ctx,uint32_t offset)
             value=(value&0xffffu)|0xbadc0000u; /* unsupported upper half */
         }
     }
-    if (logged) trace_value("r32",offset,value);
     return value;
 }
 static bool window_live(struct model *p)
@@ -266,7 +261,7 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
 {
     struct model *p=ctx;
     marker_before_register();
-    trace_write("w32",0x40000000u|offset,offset,value); p->engine_writes++;
+    p->engine_writes++;
     CHECK(offset<SAVAGE_MMIO_BYTES && !(offset&3u));
     if (offset>=SAVAGE_BCI && offset<SAVAGE_BCI+64) {
         unsigned at=(offset-SAVAGE_BCI)/4;
@@ -274,8 +269,8 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
         CHECK(drains>0); /* CPU WC writes drained before command */
         p->packet[at]=value;
         if (!at) {
-            CHECK((value&0xfc00u)==(DEST_NEW|(value&COLOR)));
-            p->expected=(value&3u)==3u ? 9 : (value&0x1e0u)==0x140u ? 8 : 6;
+            CHECK((value&0xfc00u)==(value&0x8000u));
+            p->expected=(value&3u)==3u ? 7 : 4;
         }
         if (++p->words==p->expected) {
             if (!p->ignore_fill) execute_packet(p);
@@ -292,7 +287,6 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
 static uint16_t model_read16(void *ctx,uint32_t offset)
 {
     struct model *p=ctx; marker_before_register(); p->half_reads++;
-    bool logged=trace_read_begin("r16",0x60000000u|offset,offset);
     CHECK(offset>=0x8100 && offset<0x8180 && !(offset&1));
     CHECK(p->reset_phase==2 && p->reset_set_us>=10000 && p->reset_clear_us>=10000);
     uint32_t value=p->reg[(offset&~3u)/4];
@@ -301,13 +295,12 @@ static uint16_t model_read16(void *ctx,uint32_t offset)
         if (p->bad_readback) value^=16u;
     }
     uint16_t half=p->dead ? UINT16_MAX : !window_live(p) ? 0 : (uint16_t)(value>>((offset&2u)*8));
-    if (logged) trace_value("r16",offset,half);
     return half;
 }
 static void model_write16(void *ctx,uint32_t offset,uint16_t value)
 {
     struct model *p=ctx; marker_before_register(); p->half_writes++; p->engine_writes++;
-    trace_write("w16",0x70000000u|offset,offset,value); setup_write(p,offset,value);
+    setup_write(p,offset,value);
     CHECK(offset==0x8134 || offset==0x8136);
     if (!window_live(p)) { p->dead_window_writes++; return; }
     unsigned shift=(offset&2u)*8;
@@ -361,7 +354,6 @@ static uint8_t model_port_read(void *ctx,uint16_t port)
 {
     struct model *p=ctx; marker_before_register(); p->port_reads++;
     CHECK(port>=0x3b0 && port<0x3e0);
-    bool logged=trace_read_begin("pr8",0x30000000u|port,port);
     uint8_t value=0xff;
     if (port==0x3c3) value=p->vga_enable;
     else if (port==0x3cc) value=p->misc;
@@ -370,14 +362,12 @@ static uint8_t model_port_read(void *ctx,uint16_t port)
         p->port_cr_reads[p->cr_index]++; value=chip_cr_read(p,p->cr_index);
     }
     else CHECK(false);
-    if (logged) trace_value("pr8",port,value);
     return value;
 }
 static void model_port_write(void *ctx,uint16_t port,uint8_t value)
 {
     struct model *p=ctx; marker_before_register(); p->port_writes++;
     CHECK(port>=0x3b0 && port<0x3e0);
-    trace_write("pw8",0x50000000u|port,port,value);
     if (port==0x3c3) p->vga_enable=value;
     else if (port==0x3c2) p->misc=value;
     else if (port==0x3c4) p->seq_index=value;
@@ -400,7 +390,7 @@ static uint64_t model_now(void *ctx)
 static int model_delay(void *ctx,uint32_t us)
 {
     struct model *p=ctx; p->delays++;
-    if (initializing) CHECK(disk_size==14 && marker_commits==1 && !fbdev_console_begin() && locks==1);
+    if (initializing) { marker_before_register(); if (probing) CHECK(!fbdev_console_begin()); }
     if (p->delay_failed) return -EFAULT;
     p->us+=us;
     if (p->reset_phase==1) p->reset_set_us+=us;
@@ -409,25 +399,36 @@ static int model_delay(void *ctx,uint32_t us)
 }
 static uint8_t model_read8(void *ctx,uint32_t offset)
 {
-    struct model *p=ctx; bool logged=trace_read_begin("r8",0x10000000u|offset,offset);
+    struct model *p=ctx;
     marker_before_register();
     p->alias_reads++;
     CHECK(offset==0x83d5);
     uint8_t value=!alias_live(p) ? 0xff : chip_cr_read(p,p->cr_index);
     if (p->cr_index==0x38 && p->alias_lock_mismatch) value^=0x20;
-    if (logged) trace_value("r8",offset,value);
     return value;
 }
 static void model_write8(void *ctx,uint32_t offset,uint8_t value)
 {
-    struct model *p=ctx; trace_write("w8",0x20000000u|offset,offset,value);
+    struct model *p=ctx;
     marker_before_register();
     p->alias_writes++;
     CHECK(offset==0x83d4 && value==0x38); /* diagnostic index only */
     if (alias_live(p)) p->cr_index=value;
 }
-static void model_drain(void *ctx) { (void)ctx; framebuffer_write_drain(); }
-static void model_fault(void *ctx) { ((struct model *)ctx)->fault_count++; }
+static void model_drain(void *ctx)
+{
+    /* A new synchronized transaction may read immediately; pacing applies
+     * only between busy reads within one wait. */
+    struct model *p=ctx;
+    p->last_status_busy=false;
+    if (p->recover_on_final && engine.quarantined) { p->stuck=false; p->busy=0; }
+    framebuffer_write_drain();
+}
+static void model_fault(void *ctx)
+{
+    ((struct model *)ctx)->fault_count++;
+    if (initializing) hw_fault(NULL);
+}
 static struct savage_io model_io(void)
 {
     return (struct savage_io){&m,model_read,model_write,
@@ -442,7 +443,7 @@ static void prepare(unsigned bpp)
     g_cpu_tsc=false; g_tsc_per_ms=0; accel_log_cost=NULL; marker_cost_us=0;
     m.cr[0x66]=1;
     m.cr[0x50]=0; /* firmware VGA depth, independent of the active VBE mode */
-    initialized=true; changing=false; drawing=0; console_rows=8;
+    initialized=true; changing=false; accel_initializing=false; drawing=0; console_rows=8;
     g_boot.flags=0; acceleration=NULL;
     device=(struct fb_device){.width=96,.height=64,.pitch=128*(bpp/8),.size=64*128*(bpp/8),
         .phys=0xe0000000,.bpp=bpp,.red_size=bpp==16 ? 5 : 8,.red_pos=bpp==16 ? 11 : 16,
@@ -482,12 +483,14 @@ static void commands(unsigned bpp)
     memcpy(expected,device.mapped,device.size);
     struct fb_rect r={-5,-3,30,20}; reference_fill(&device,expected,&r,q.colour);
     CHECK(!fbdev_accel_request(&q)); CHECK(!memcmp(device.mapped,expected,device.size));
+    CHECK(m.packet[0]==0x4bcc8000u && m.expected==4 && m.packet[3]==0x00110019u);
     q=request(CIUKI_ACCEL_PATTERN); q.rect=(struct ciuki_rect){0,0,3,4,20,15};
     q.colour=0xabcdef; q.background=0x643210;
     for (unsigned i=0;i<8;i++) q.pattern[i]=(uint8_t)(0x81u^(i*19));
     for (unsigned y=4;y<19;y++) for (unsigned x=3;x<23;x++)
         reference_pixel(&device,expected+y*device.pitch+x*(bpp/8),q.pattern[y&7]&(0x80u>>(x&7)) ? q.colour : q.background);
     CHECK(!fbdev_accel_request(&q)); CHECK(!memcmp(device.mapped,expected,device.size));
+    CHECK(m.packet[0]==0x4bf08003u && m.expected==7);
     for (int direction=0;direction<8;direction++) {
         for (unsigned y=0;y<device.height;y++) for (unsigned x=0;x<device.width;x++)
             reference_pixel(&device,device.mapped+y*device.pitch+x*(bpp/8),(x*37u+y*9983u)&0xffffffu);
@@ -499,6 +502,7 @@ static void commands(unsigned bpp)
         for (unsigned y=0;y<25;y++) for (unsigned x=0;x<48;x++)
             memcpy(expected+(20+dy+y)*device.pitch+(20+dx+x)*(bpp/8),before+(20+y)*device.pitch+(20+x)*(bpp/8),bpp/8);
         CHECK(!fbdev_accel_request(&q)); CHECK(!memcmp(device.mapped,expected,device.size));
+        CHECK((m.packet[0]&~0x03000000u)==0x48cc0020u && m.expected==4);
         CHECK((m.packet[0]&XP)!=0 ? dx<=0 : dx>0);
         CHECK((m.packet[0]&YP)!=0 ? dy<=0 : dy>0);
     }
@@ -531,8 +535,7 @@ static void failures_and_fallback(void)
     CHECK(fbdev_accel_request(&q)==-EAGAIN && test_engine.quarantined && m.fault_count==1);
     CHECK(!fbdev_console_begin()); /* no CPU writer until idle proof */
     struct fb_rect r={0,0,10,10};
-    CHECK(fbdev_fill(&r,0x102030)==-EIO);
-    CHECK(test_engine.ops.stop(&test_engine)==-EIO);
+
     unsigned packets=m.packets;
     m.stuck=false; m.partial=false;
     uint32_t fault_status=test_engine.status;
@@ -544,7 +547,8 @@ static void failures_and_fallback(void)
     CHECK(savage2d_start(&test_engine,&io,&device,true,m.cursor_page,0x100000)==-EIO);
     finish();
     prepare(32); m.stuck=true; m.frozen=true;
-    CHECK(test_engine.ops.sync(&test_engine)==-EIO && m.fault_count==1);
+    struct fb_rect point={0,0,1,1};
+    CHECK(test_engine.ops.fill_rect(&test_engine,&point,0x123456)==-EIO && m.fault_count==1);
     finish();
     prepare(32);
     struct savage2d other={0}; io=model_io(); m.bad_readback=true;
@@ -589,23 +593,20 @@ static void glue_stalled_clock(uint32_t status)
     uint8_t *window = calloc(1, SAVAGE_MMIO_BYTES); CHECK(window != NULL);
     memcpy(window + SAVAGE_STATUS, &status, sizeof(status));
     registers = window; g_ticks = 0; g_boot.flags = CBI_F_VERBOSE;
-    tracing = true; trace_last = UINT32_MAX; step_count = accel_count = 0;
+    step_count = accel_count = 0;
     struct savage_io io = model_io(); io.read32=hw_read; io.write32=hw_write; io.now_us=hw_now;
     struct savage2d e = {0};
     unsigned delays=m.delays;
     CHECK(savage2d_start(&e, &io, &device, true, NULL, 0) == -EIO);
     CHECK(e.quarantined && !e.touched && !e.active && e.idle_waits == 1 && e.timeouts == 1);
-    CHECK(step_count>=14);
-    CHECK(strstr(step_log[0], "[accel] savage step op=pr8 reg=003c3 value=pending us=")==step_log[0]);
+    CHECK(!step_count); /* no synchronous transport trace */
     CHECK(log_matches("vga_alias reg=083d5 port=48 alias=48 match=1")==1);
-    CHECK(log_matches("op=pr8 reg=003c5 value=00000040")==1);
-    CHECK(log_matches(status==UINT32_MAX ? "op=r32 reg=48c60 value=ffffffff" : "op=r32 reg=48c60 value=00000000")==1);
     for (unsigned i=0;i<step_count && i<ACCEL_LOG_CAP;i++) CHECK(strstr(step_log[i]," value="));
     CHECK(log_matches("savage status reg=48c60 raw=")==1 && !e.idle_mask);
     CHECK(e.status==status && e.status_logged);
     CHECK(log_matches("savage status sample=")== (status==UINT32_MAX ? 1u : STATUS_SAMPLES));
     CHECK(m.delays-delays==(status==UINT32_MAX ? 2u : 2u+INITIAL_POLLS-1));
-    tracing = false; registers = NULL; g_boot.flags = 0; free(window);
+    registers = NULL; g_boot.flags = 0; free(window);
     finish();
 }
 
@@ -626,7 +627,7 @@ static void boot_fixture_mode(bool retain_marker, unsigned bpp)
     if (!retain_marker) { disk_size=0; marker_exists=false; memset(disk_marker,0,sizeof(disk_marker)); }
     CHECK(!table_open && !marker_open);
     normal_yields=device_work_requests=0; g_boot.flags=CBI_F_VERBOSE; step_count=accel_count=0;
-    attempt_in_progress=false;
+    attempt_in_progress=false; init_interleave=NULL;
     accel_marker_task=NULL; accel_marker_request=ACCEL_MARKER_IDLE;
     fail_marker_worker=false; marker_worker_creates=marker_worker_starts=0;
 }
@@ -812,17 +813,16 @@ static void port_bootstrap(void)
         m.mmio_enable_failed=variant==4; m.alias_dead=variant==5;
         m.delay_failed=variant==7; m.bad_readback=variant==8;
         struct savage2d e={0}; struct savage_io io=model_io();
-        tracing=true; trace_last=UINT32_MAX; step_count=accel_count=0;
+        step_count=accel_count=0;
         int err=savage2d_start(&e,&io,&device,true,NULL,0);
         CHECK(m.vga_enable==0x25 && m.misc==0x8f);
         CHECK(m.port_cr_reads[0x38]==1 && m.port_cr_reads[0x39]==1);
         if (variant<2 || variant==5) {
             CHECK(!err && e.active && e.saved40==(variant==1 ? 0xab : 0xaa));
             CHECK(m.cr[0x40]==1 && m.cr[0x39]==0xa0);
-            CHECK(log_matches("op=pw8 reg=003d5 value=000000a0")>=1);
-            CHECK(log_matches("op=pr8 reg=003d5 value=00000048")==1);
+            CHECK(!step_count);
             CHECK(log_matches(variant==5 ? "vga_alias reg=083d5 port=48 alias=ff match=0" : "vga_alias reg=083d5 port=48 alias=48 match=1")==1);
-            CHECK(log_matches("op=pr8 reg=003c5 value=00000040")==1);
+            CHECK(m.seq[0x26]==0x40);
             m.cr[0x40]=0x55; /* preserve changes to all bits except ours */
             CHECK(!e.ops.stop(&e) && !e.active && !e.mmio_saved);
             CHECK(m.cr[0x40]==(variant==1 ? 0x55 : 0x54));
@@ -842,7 +842,6 @@ static void port_bootstrap(void)
             }
         }
         for (unsigned i=0;i<step_count && i<ACCEL_LOG_CAP;i++) CHECK(strstr(step_log[i]," value="));
-        tracing=false;
         finish();
     }
     /* Exercise production port bounds without executing privileged host I/O. */
@@ -911,10 +910,11 @@ static void decorated_readbacks(void)
         if (variant==7) m.pipe_locked=true;
         fbdev_accel_schedule(&settings_vfs); run_accel_init();
         CHECK(!!acceleration==(variant==0 || variant==3));
-        CHECK(log_matches(variant==1 ? "op=pr8 reg=003d5 value=00000020 us=" : "op=pr8 reg=003d5 value=00000068 us=")==1);
-        if (variant!=1 && variant!=2) CHECK(log_matches("op=pr8 reg=003d5 value=000000a8 us=")==1);
+        CHECK(!step_count);
+        if (variant==1 || variant==2) CHECK(log_matches("init reg=00038") == 1);
+        else CHECK(m.cr[0x38]==0x48 && m.cr[0x39]==0xa0);
         if (!variant || variant==3) {
-            CHECK(m.status_reads==7 && m.delays==5); /* reset plus BCI completion */
+            CHECK(m.status_reads==6 && m.delays==5); /* reset plus BCI completion */
             CHECK(log_matches(variant==3 ? "vga_alias reg=083d5 port=68 alias=48 match=0" : "vga_alias reg=083d5 port=68 alias=68 match=1")==1);
             CHECK(disk_size==0 && engine.active && !engine.quarantined);
         } else {
@@ -939,6 +939,7 @@ static void serial_log_cost(const char *line)
 {
     /* Default UART: divisor 3, 38400 baud, 8N1, plus CR/LF per line.
      * Inject elapsed cost, never sleep or claim a physical measurement. */
+    CHECK(!probing && !locks);
     uint64_t bytes=strlen(line)+2, us=(bytes*10000000+38399)/38400;
     simulated_bytes+=bytes; simulated_log_us+=us; m.us+=us;
     if (!strncmp(line,"[accel] savage step ",20) || !strncmp(line,"[accel] savage init ",20)) simulated_trace_us+=us;
@@ -970,7 +971,7 @@ static void activation_timing(void)
         uint64_t us=terminal ? log_number(terminal," us=") : 0;
         CHECK(terminal && log_number(terminal," trace_us=")==simulated_trace_us);
         if (!variant) CHECK(!m.status_reads && !m.delays && us>=8000+simulated_trace_us);
-        if (variant==2) CHECK(m.delays==5 && engine.reset_us>=20000 && engine.poll_us==15 && simulated_trace_us>0);
+        if (variant==2) CHECK(m.delays==5 && engine.reset_us>=20000 && engine.poll_us==15 && simulated_trace_us==0);
         /* Clock conversion and tick fallback both execute production code. */
         CHECK(hw_now(NULL)==m.us);
         g_cpu_tsc=false; g_ticks=7; CHECK(hw_now(NULL)==7000);
@@ -1024,7 +1025,7 @@ static void initial_idle_diagnostics(void)
             /* Status transport records are outside every polling deadline.
              * Only the initial wait and marker command's busy reads count. */
             CHECK(engine.poll_us==(variant==2 ? 18015u : 15u));
-            CHECK(m.status_reads==(variant==2 ? 25u : 7u));
+            CHECK(m.status_reads==(variant==2 ? 24u : 6u));
             unsigned initial_samples=log_matches("savage status sample=");
             software_desktop();
             CHECK(engine.operations>0 && log_matches("savage status sample=")==initial_samples);
@@ -1097,19 +1098,22 @@ static void supersavage_window_and_records(void)
         memcpy(before,last,sizeof(before));
         fbdev_accel_schedule(&settings_vfs); run_accel_init();
         CHECK(!m.dword_2d_reads && m.half_reads>=8 && m.half_writes==2);
-        CHECK(log_matches("init reg=00038 wrote=00000048 read=00000048 bank=cr width=8")==1);
-        CHECK(log_matches("init reg=00039 wrote=000000a0 read=000000a0 bank=cr width=8")==1);
-        CHECK(log_matches("init reg=00040 wrote=00000001 read=00000001 bank=cr width=8")==2);
-        CHECK(log_matches("init reg=00031 wrote=0000000c read=0000000c bank=cr width=8")==1);
-        CHECK(log_matches("init reg=00050 wrote=000000f1 read=000000f1 bank=cr width=8")==1);
-        CHECK(log_matches("init reg=00008 wrote=00000006 read=00000006 bank=sr width=8")==1);
-        CHECK(log_matches("init reg=00026 wrote=00000040 read=00000040 bank=sr width=8")==1);
-        CHECK(log_matches("init reg=003c3 ")==1 && log_matches("init reg=003c2 ")==2);
-        CHECK(log_matches("init reg=00066 ")==2);
-        CHECK(log_matches("init reg=48c18 ")==2 && log_matches("init reg=48c10 ")==1 && log_matches("init reg=48c0c ")==1);
-        CHECK(log_matches("init reg=08128 ")==1 && log_matches("init reg=0812c ")==1);
-        CHECK(log_matches("init reg=08134 ")==1 && log_matches("init reg=08136 ")==1);
-        CHECK(log_matches("init reg=08168 ")==1 && log_matches("init reg=0816c ")==2);
+        CHECK(!step_count && log_matches("savage init reg=")<=40);
+        if (variant) {
+            CHECK(log_matches("init reg=00038 wrote=00000048 read=00000048 bank=cr width=8")==1);
+            CHECK(log_matches("init reg=00039 wrote=000000a0 read=000000a0 bank=cr width=8")==1);
+            CHECK(log_matches("init reg=00040 wrote=00000001 read=00000001 bank=cr width=8")==2);
+            CHECK(log_matches("init reg=00031 wrote=0000000c read=0000000c bank=cr width=8")==1);
+            CHECK(log_matches("init reg=00050 wrote=000000f1 read=000000f1 bank=cr width=8")==1);
+            CHECK(log_matches("init reg=00008 wrote=00000006 read=00000006 bank=sr width=8")==1);
+            CHECK(log_matches("init reg=00026 wrote=00000040 read=00000040 bank=sr width=8")==1);
+            CHECK(log_matches("init reg=003c3 ")==1 && log_matches("init reg=003c2 ")==2);
+            CHECK(log_matches("init reg=00066 ")==2);
+            CHECK(log_matches("init reg=48c18 ")==2 && log_matches("init reg=48c10 ")==1 && log_matches("init reg=48c0c ")==1);
+            CHECK(log_matches("init reg=08128 ")==1 && log_matches("init reg=0812c ")==1);
+            CHECK(log_matches("init reg=08134 ")==1 && log_matches("init reg=08136 ")==1);
+            CHECK(log_matches("init reg=08168 ")==1 && log_matches("init reg=0816c ")==2);
+        } else CHECK(!log_matches("savage init reg="));
         /* These engine-only writes must retain upstream values and order.
          * No CRTC timing, DAC, primary stream or tiling write is permitted. */
         unsigned at=setup_at(0x100038,0x48,0);
@@ -1161,7 +1165,7 @@ static void supersavage_window_and_records(void)
                 CHECK(!memcmp(last,before,sizeof(before)));
                 software_desktop();
             } else {
-                CHECK(acceleration==&engine.ops && engine.submitted && m.packets==1);
+                CHECK(acceleration==(variant==3 ? NULL : &engine.ops) && engine.submitted && m.packets==1);
                 CHECK(log_matches("bci_test result=failed error=-5")==1);
                 if (variant==3) {
                     CHECK(engine.cpu_safe && !memcmp(last,before,sizeof(before)));
@@ -1175,8 +1179,10 @@ static void supersavage_window_and_records(void)
                     CHECK(fbdev_fill(&r,0x123456)==-EIO);
                     CHECK(!memcmp(frame,device.mapped,device.size) && m.packets==1);
                     CHECK(engine.ops.stop(&engine)==-EIO); /* no idle proof for firmware takeover */
-                    m.stuck=false; software_desktop();
-                    CHECK(engine.cpu_safe && m.packets==1 && engine.quarantined);
+                    unsigned reads=m.status_reads;
+                    m.stuck=false;
+                    CHECK(fbdev_fill(&r,0x123456)==-EIO && m.status_reads==reads);
+                    CHECK(!engine.cpu_safe && m.packets==1 && engine.quarantined);
                 }
             }
             CHECK(!memcmp(disk_marker,"accel=attempt\nstatus=",21));
@@ -1245,9 +1251,9 @@ static void engine_depth_and_trace_thread(void)
         CHECK(log_matches("bci_test result=passed error=0")==1 && !memcmp(last,&before,bpp/8));
         char record50[100];
         snprintf(record50,sizeof(record50),"init reg=00050 wrote=%08x read=%08x bank=cr width=8",expected50,expected50);
-        CHECK(log_matches(record50)==1);
-        CHECK(normal_yields==step_count+log_matches("savage init reg=") && normal_yields>100);
-        CHECK(!device_work_requests && simulated_trace_us>1000000);
+        CHECK(!log_matches(record50) && !log_matches("savage init reg=") && !step_count);
+        CHECK(normal_yields>=20);
+        CHECK(!device_work_requests && simulated_trace_us==0);
         unsigned records=step_count+log_matches("savage init reg="), yields=normal_yields;
         struct fb_rect r={0,0,1,1};
         CHECK(!fbdev_fill(&r,0x4a8166) && engine.operations==2);
@@ -1255,9 +1261,9 @@ static void engine_depth_and_trace_thread(void)
         /* Exercise the actual reset pacing glue as well as the model delay:
          * 10 ms becomes twenty <=500-us slices on this same normal task. */
         marker_thread_running=initializing=true;
-        kmutex_lock(&presenter); drawing=PRESENT_BUSY;
+        accel_initializing=true;
         CHECK(!hw_delay(NULL,10000) && normal_yields==yields+20 && !device_work_requests);
-        drawing=0; kmutex_unlock(&presenter);
+        accel_initializing=false;
         marker_thread_running=initializing=false;
         CHECK(!acceleration->stop(acceleration->ctx) && m.cr[0x50]==saved50 && m.cr[0x67]==saved67);
         printf("f4-22 depth=%u firmware_cr50=%02x programmed=%02x trace_us=%llu normal_yields=%u device_work_requests=%u\n",
@@ -1279,12 +1285,125 @@ static void engine_depth_and_trace_thread(void)
         if (!blocked) changing=true;
         else CHECK(fbdev_console_begin());
         marker_thread_step();
-        CHECK(accel_marker_request==ACCEL_MARKER_STATUS && !acceleration && !binding_claims && !m.port_reads);
+        CHECK(accel_marker_request==ACCEL_MARKER_STATUS && !acceleration);
+        CHECK(!blocked ? (!binding_claims && !m.port_reads) : (binding_claims==2 && m.port_reads>0 && !m.packets));
         if (!blocked) changing=false;
-        else { CHECK(log_matches("quarantined reason=console_busy")==1); fbdev_console_end(); }
+        else { CHECK(log_matches("quarantined reason=bci_test_busy")==1); fbdev_console_end(); }
         marker_thread_step();
-        CHECK(!accel_queued && disk_size==14 && marker_commits==1 && !device_work_requests);
+        CHECK(!accel_queued && disk_size==(!blocked ? 14u : 30u) && marker_commits==(!blocked ? 1u : 2u) && !device_work_requests);
         software_desktop(); finish();
+    }
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+}
+/* Firmware entry must never happen while setup pins the current mapping. */
+void console_framebuffer_revoke(void) { CHECK(false); }
+void console_framebuffer_changed(const struct fb_device *d) { (void)d; CHECK(false); }
+static unsigned setup_frames, setup_consoles;
+static uint64_t first_setup_frame_us;
+static void render_during_setup(void)
+{
+    CHECK(accel_initializing && !locks && !probing);
+    unsigned reads=m.status_reads, packets=m.packets;
+    uint64_t waits=engine.idle_waits;
+    if (!setup_frames) {
+        uint32_t frame[96*64];
+        for (unsigned i=0;i<ARRAY_SIZE(frame);i++) frame[i]=0x0010243c;
+        struct fb_surface first={frame,96,64,96*4,sizeof(frame)};
+        struct fb_rect full={0,0,96,64};
+        CHECK(!fbdev_present(&first,&full));
+    }
+    struct fb_rect r={16,16,1,1};
+    uint32_t colour=0x00123456;
+    struct fb_surface surface={&colour,1,1,4,4};
+    CHECK(!fbdev_present(&surface,&r));
+    CHECK(!fbdev_fill(&r,0xabcdef));
+    struct ciuki_accel_request q=request(CIUKI_ACCEL_QUERY);
+    CHECK(!fbdev_accel_request(&q));
+    struct ciuki_accel_info info;
+    CHECK(!fbdev_accel_info(device.generation,&info) && !info.driver && !info.capabilities);
+    CHECK(fbdev_console_begin()); fbdev_console_end(); setup_consoles++;
+    CHECK(fbdev_change_begin()==-EBUSY && !changing);
+    CHECK(m.status_reads==reads && m.packets==packets && engine.idle_waits==waits);
+    if (!setup_frames++) first_setup_frame_us=m.us;
+}
+static void gbd_idle_and_async_regressions(void)
+{
+    for (unsigned failure=0;failure<3;failure++) {
+        boot_fixture_accel(false);
+        m.exact_clock=true; m.strict_window=true;
+        if (failure==1) m.ignore_fill=true;
+        if (failure==2) m.corrupt_high=true;
+        uint32_t before=0x0010243c;
+        uint8_t *last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*4;
+        memcpy(last,&before,4);
+        setup_frames=setup_consoles=0; first_setup_frame_us=0;
+        init_interleave=render_during_setup;
+        simulated_trace_us=simulated_bytes=simulated_log_us=0;
+        accel_log_cost=serial_log_cost;
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        init_interleave=NULL;
+        CHECK(setup_frames>=20 && setup_consoles==setup_frames && first_setup_frame_us<1000000);
+        CHECK(m.packets==1 && m.packet[0]==0x4bcc8000 && m.packet[1]==0x004a8166);
+        CHECK(m.packet[2]==((device.height-1)<<16 | (device.width-1)) && m.packet[3]==0x00010001);
+        CHECK(!memcmp(last,&before,4));
+        if (failure) {
+            CHECK(!acceleration && engine.quarantined && engine.cpu_safe && engine.final_idle_checked);
+            CHECK(disk_size==30 && binding_resources[1].state==RS_QUARANTINED && binding_resources[2].state==RS_QUARANTINED);
+            CHECK(log_matches("bci_test_readback_failed")>=1 && log_matches("savage init reg=")<=40);
+            if (failure==2) CHECK(log_matches("read=664a8166 read_valid=1 restored=1")==1);
+        } else {
+            CHECK(acceleration && !engine.quarantined && !log_matches("savage init reg=") && simulated_trace_us==0);
+            CHECK(log_matches("wrote=004a8166 read=004a8166")==1);
+        }
+        unsigned reads=m.status_reads, packets=m.packets;
+        uint64_t waits=engine.idle_waits;
+        for (unsigned i=0;i<100;i++) {
+            uint32_t pixel=0x00112233;
+            struct fb_rect point={16,16,1,1};
+            struct fb_surface surface={&pixel,1,1,4,4};
+            CHECK(!fbdev_present(&surface,&point));
+            if (failure) CHECK(!fbdev_fill(&point,pixel));
+            CHECK(fbdev_console_begin()); fbdev_console_end();
+        }
+        CHECK(engine.idle_waits==waits && m.status_reads==reads && m.packets==packets);
+        if (!failure) {
+            uint64_t ops=engine.operations;
+            struct fb_rect point={16,16,1,1};
+            CHECK(!fbdev_fill(&point,0x123456) && engine.operations==ops+1 && engine.idle_waits==waits+1);
+        }
+        printf("f4-26 failure=%u setup_frames=%u first_frame_model_us=%llu cpu_presents=100 idle_waits_delta=0 trace_records=%u\n",
+            failure,setup_frames,(unsigned long long)first_setup_frame_us,log_matches("savage init reg="));
+        accel_log_cost=NULL; finish();
+    }
+    /* A failed completion gets exactly one final proof. Recovery then
+     * permits plain software; a failed proof remains a cached refusal even
+     * if the hardware later reports idle. */
+    for (unsigned recovered=0;recovered<2;recovered++) {
+        boot_fixture_accel(false); m.exact_clock=true; m.fail_after_submit=true;
+        m.recover_on_final=recovered;
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        CHECK(engine.quarantined && engine.cpu_safe==!!recovered && engine.final_idle_checked);
+        CHECK(acceleration==(recovered ? NULL : &engine.ops));
+        CHECK(engine.idle_waits==4); /* initial, setup, command, final proof */
+        unsigned reads=m.status_reads;
+        uint64_t waits=engine.idle_waits;
+        uint32_t pixel=0x112233;
+        struct fb_surface surface={&pixel,1,1,4,4};
+        struct fb_rect point={16,16,1,1};
+        m.stuck=false;
+        for (unsigned i=0;i<100;i++) {
+            CHECK(fbdev_present(&surface,&point)==(recovered ? 0 : -EIO));
+            CHECK(fbdev_fill(&point,pixel)==(recovered ? 0 : -EIO));
+            if (recovered) {
+                CHECK(fbdev_console_begin()); fbdev_console_end();
+                CHECK(!savage2d_fallback_ops());
+            } else {
+                CHECK(!fbdev_console_begin() && acceleration->stop(acceleration->ctx)==-EIO);
+                CHECK(!savage2d_fallback_ops()->cpu_ready(&engine));
+            }
+        }
+        CHECK(m.status_reads==reads && engine.idle_waits==waits && m.packets==1 && disk_size==30);
+        finish();
     }
     binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
 }
@@ -1301,6 +1420,7 @@ int main(void)
     supersavage_window_and_records();
     halfword_glue_and_16bit_marker();
     engine_depth_and_trace_thread();
+    gbd_idle_and_async_regressions();
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);
     return failures ? 1 : 0;
 }

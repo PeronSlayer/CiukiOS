@@ -41,6 +41,9 @@ struct vfs;
 /* Queue only after storage mount and driver activation; never touches the
  * engine synchronously. Safe mode retains software presentation. */
 void fbdev_accel_schedule(struct vfs *);
+/* Worker-only saved-pixel probe. Register setup runs without this exclusion;
+ * the pending initialization pins the mode until publication completes. */
+int fbdev_accel_probe(const struct fb_device *, int (*probe)(void *), void *);
 const struct fb_device *fbdev_get(void);
 /* f1-23 transaction: submissions stop and both presenter/console mappings
  * are revoked before firmware. commit remaps validated, claimed geometry;

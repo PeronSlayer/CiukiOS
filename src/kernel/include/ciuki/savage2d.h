@@ -37,7 +37,7 @@ struct savage2d {
     uint64_t operations, idle_waits, fallbacks, timeouts;
     uint64_t reset_us, poll_us;
     bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded, status_logged;
-    bool mmio_saved, status_ready, submitted;
+    bool mmio_saved, status_ready, submitted, final_idle_checked;
 };
 bool savage2d_supported(const struct pci_func *);
 /* No register/file access: decide before scheduling marker persistence. */
@@ -48,7 +48,7 @@ int savage2d_attempt_begin(struct vfs *);
 int savage2d_attempt_end(struct vfs *);
 int savage2d_attempt_failed(struct vfs *);
 void savage2d_quarantine(const char *reason);
-/* Failed startup with a submitted writer still needs the fbdev idle guard. */
+/* Final idle proof once; return a rejecting guard only for an unsafe writer. */
 const struct accel_ops *savage2d_fallback_ops(void);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset);
