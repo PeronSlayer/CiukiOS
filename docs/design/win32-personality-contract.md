@@ -2254,3 +2254,43 @@ Close this review when the lead records a disposition for C01–C27 and D01–D0
 assigns M01–M16 to written directives, approves the acyclic handoffs and updates
 the affected interface contracts. Until then, implementation can perform
 approved research/fixtures but must not treat this draft as a frozen ABI.
+
+### f5-14A findings (2026-10-14)
+
+The host-only [Wine dependency audit](win32-wine-dependency-audit.md) pins
+Wine 10.0, tag commit `b073859675060c9211fcbccfd90e4e87520dc2c2`, in
+`config/wine-pin.json`. The release archive remains `pending-download`
+after a sandbox DNS failure; the audit uses individual tagged sources.
+Wine 9.0 is recorded as an alternative stable release; the inspected upstream
+announcement does not designate it LTS.
+
+The source census covers 27 requested/candidate/P4/P5 modules, 73 `.spec`
+catalogs and 74 Makefiles. Its four-core reference union is 1,052 i386 export
+names (NTDLL 242, KERNEL32 374, USER32 301, GDI32 135), before preprocessing or
+linking. Excluding the six full core/candidate modules leaves 784 P4/P5
+source names. These are candidates, not exact linked or reachable requirements.
+The corpus records 461 explicit forwards and 413 imported-export entries;
+implicit UCRTBASE/WINECRT0/KERNEL32/NTDLL dependencies and modern core providers
+are retained separately from explicit imports and delays.
+
+Pinned Wine 10.0 winebuild/winegcc and an i386 PE32 version.dll were built
+with clang/lld 23.1.1 without MinGW GCC, external MinGW headers or an external
+MinGW CRT. Resource compilation used the separately pinned host wrc 11.18
+with only tagged headers. Two consecutive script runs gave identical hashes.
+The PE hash is `f4ccd4292b9b9e40af081f9479c15d759256c70898cbd952666ce1e3bce12d32`:
+40,960 file bytes, 32,768 SizeOfImage bytes, 16 exports, a VERSIONINFO resource,
+35 imports (21 KERNELBASE, 7 KERNEL32, 4 UCRTBASE, 3 NTDLL debug helpers),
+and two KERNEL32 export forwarders. No guest or DLL API execution was performed.
+
+No direct Wine server-request or Unix-call site was observed in the root
+source inputs; transitive backend use remains distinct. The audit records
+exact request names in three NTDLL Unix files, shell Unix-path/private helpers,
+WinMM MMDevice COM activation, COMBASE RPCSS paths and WineD3D candidate
+dependencies. It does not establish per-root reachable protocol closure.
+
+The ten-title f5-02 census and Wine 10.0 sizes/heaps for the other DLLs are
+absent. An explicitly separate installed-Wine-11.18 proxy for the 27 modules
+totals 18.681 MiB of files and 45.031 MiB of SizeOfImage; neither is measured
+Wine 10.0 residency. The audit retains the provisional/core-freeze-blocked
+status. Offline host checks verify source/spec/table consistency and the
+recorded small PE imports; they supply no Ciuki runtime or 128 MiB fit evidence.

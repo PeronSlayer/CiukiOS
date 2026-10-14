@@ -1,0 +1,3393 @@
+{
+  "alternative": {
+    "archive_bytes": 30007216,
+    "archive_sha256": "7cfd090a5395f5b76d95bb5defac8a312c8de4c070c1163b8b58da38330ca6ee",
+    "archive_url": "https://dl.winehq.org/wine/source/9.0/wine-9.0.tar.xz",
+    "commit": "fd1153552d779e1ac14b0b1c48fbd1cde894eb0a",
+    "hash_source": "https://src.opensuse.org/rpm/wine/commit/8bdd3bbc0979a59bd2c8856628b2d6207790c8270bcb3aa51ab626b67a661a69",
+    "release": "9.0",
+    "status": "not-selected; not-downloaded",
+    "support_note": "Directive calls this LTS; upstream announcement calls it stable, without an LTS commitment",
+    "tag": "wine-9.0"
+  },
+  "archive_hash_source": "https://lists.buildroot.org/pipermail/buildroot/2025-January/771333.html",
+  "archive_sha256": "c5e0b3f5f7efafb30e9cd4d9c624b85c583171d33549d933cd3402f341ac3601",
+  "archive_sha512": "effb41c5641993e2e52eaa825cc19b7d9846e084992c5a5b066ead2339b24384d320898a9cee347a9a87106bcb3b0f54c8cd2c8d4de3a887a658052ddd5168d6",
+  "archive_url": "https://dl.winehq.org/wine/source/10.0/wine-10.0.tar.xz",
+  "commit": "b073859675060c9211fcbccfd90e4e87520dc2c2",
+  "cpu_flags": [
+    "-march=pentiumpro",
+    "-mno-sse",
+    "-mno-sse2"
+  ],
+  "download_error": "curl exit 6: Could not resolve host: dl.winehq.org",
+  "mingw_w64_alternative": {
+    "archive_sha256": "cc41898aac4b6e8dd5cffd7331b9d9515b912df4420a3a612b5ea2955bbeed2f",
+    "archive_url": "https://downloads.sourceforge.net/project/mingw-w64/mingw-w64/mingw-w64-release/mingw-w64-v12.0.0.tar.bz2",
+    "crt": "ucrt; headers and CRT must use the same runtime",
+    "hash_source": "https://github.com/mxe/mxe/blob/29894c0c51b378030478e51530f7f558a6e9430f/src/mingw-w64.mk",
+    "release": "12.0.0",
+    "status": "not-required-for-version-experiment; pending-download"
+  },
+  "release": "10.0",
+  "schema_version": 1,
+  "source_acquisition": "tagged files via GitHub connector; archive and tag signature not locally verified",
+  "source_base_url": "https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/",
+  "source_files": {
+    "AUTHORS": {
+      "bytes": 29112,
+      "git_blob_sha1": "7d47debf1cdb5c421898d3eb474ff8bc5888031a",
+      "sha256": "fe43e15c714a48a051759b8f928cd1fc0678b8f611a60f3a63afe714e68749c0"
+    },
+    "COPYING.LIB": {
+      "bytes": 26434,
+      "git_blob_sha1": "732811e4f1faf71870b7350f211b26e00d7bfbe9",
+      "sha256": "e237fa56668030e928551ddd60f05df5fe957f75eab874bbd017e085ed722e7c"
+    },
+    "LICENSE": {
+      "bytes": 824,
+      "git_blob_sha1": "58d15edce070a7febbf6727add316b9d366d3a10",
+      "sha256": "62ee29c6334de7719922090246c7377d20ed941b4a5903486a7652b45c0affc0"
+    },
+    "VERSION": {
+      "bytes": 18,
+      "git_blob_sha1": "db0f3c510b9678cbbe0eccf6e10e314bc76a1456",
+      "sha256": "37636550a11b3206a79cfcb58d9c7dfacd31618f81f076b136c87d0a3074c2bc"
+    },
+    "configure.ac": {
+      "bytes": 149682,
+      "git_blob_sha1": "b999e3506e0edba0ceb42f6a83fa4580accaaaac",
+      "sha256": "33c27ba2387c3d36344fec3d0e5fb22a9815af862ce718b913ff563678086674"
+    },
+    "dlls/advapi32/Makefile.in": {
+      "bytes": 318,
+      "git_blob_sha1": "1b6cce08e6746e46cf30d4cb88565595c7113928",
+      "sha256": "5e923377f5429de101ec9baa63c2c7f460d72df693c90c3a0cccf25810dedffe"
+    },
+    "dlls/advapi32/advapi.c": {
+      "bytes": 12078,
+      "git_blob_sha1": "2284e92b263819bdbbac4093279aedecbfc2bb1e",
+      "sha256": "7a9ef419142d01964539f44bacc74ac9e5aeb981b59b184b8e81a57696823901"
+    },
+    "dlls/advapi32/advapi32.spec": {
+      "bytes": 39707,
+      "git_blob_sha1": "dde83cc704501c6289a7b24df503b0ff111ec081",
+      "sha256": "3465bd7c5a0f78b48fbbf550b841a7929dea30e38f064787bbb0e711a24c76ab"
+    },
+    "dlls/advapi32/advapi32_misc.h": {
+      "bytes": 1680,
+      "git_blob_sha1": "0da4a270928d344993e51a5b1368980adbf9ca60",
+      "sha256": "553e25193e9df862db2aae2b88f170540ca4c2d0f5b7696ef1859418cebe5355"
+    },
+    "dlls/advapi32/cred.c": {
+      "bytes": 63119,
+      "git_blob_sha1": "dd8d7cec7cfa6aa80c552bb8bb5c0b5a4ccf8c40",
+      "sha256": "e321374103209c47dd91b169406c639408ac9971c395d2ab0b94fc651d8aef82"
+    },
+    "dlls/advapi32/crypt.c": {
+      "bytes": 68079,
+      "git_blob_sha1": "0c94999660a2a9160c52619e54df98b71cf3efd0",
+      "sha256": "1e7926b2649e4d66ebd6df4cd306b38b13e2354a1e45345e26a3775cd1448023"
+    },
+    "dlls/advapi32/crypt.h": {
+      "bytes": 5196,
+      "git_blob_sha1": "4484b4799e593c18d6f4829462ba618cb3712c93",
+      "sha256": "57d5d458ac256b17d191ddc1d4a951e48904512a1b288ae329c261d791cea6ff"
+    },
+    "dlls/advapi32/crypt_arc4.c": {
+      "bytes": 2742,
+      "git_blob_sha1": "523cda224e7e36add24cef0cff7d58c3769b0cb0",
+      "sha256": "9601cddd32e1922b99e44bdde5b763c3cea304307d1a6ada2bafdc658970f365"
+    },
+    "dlls/advapi32/crypt_des.c": {
+      "bytes": 9386,
+      "git_blob_sha1": "2da2d77e2d8549ca1d84ea3ce573af7142de6139",
+      "sha256": "ffaa65bce3709d693c5e74abe2cb016cd5fe02e0ef786679d81390b38c359b34"
+    },
+    "dlls/advapi32/crypt_lmhash.c": {
+      "bytes": 11262,
+      "git_blob_sha1": "345c89ddb738c6cc2e8dfe793628144b3a46e994",
+      "sha256": "a7af2d6e20a99c45a05d8ea9017ba7cb162318f66975dbb102d5588329fa3c2f"
+    },
+    "dlls/advapi32/eventlog.c": {
+      "bytes": 21358,
+      "git_blob_sha1": "58db53f5536a6a61aa519594f37b1cf23ff8340b",
+      "sha256": "bb755e5da0641117b5d248fe2c00168bdf6512a7194ab509418a561978415ca7"
+    },
+    "dlls/advapi32/lsa.c": {
+      "bytes": 38009,
+      "git_blob_sha1": "8c349a41f390a63882a8554b29613df76b077320",
+      "sha256": "54749b811bcf6c704f0edae70c24bb64886dab9a20399629feb9206a3b624d31"
+    },
+    "dlls/advapi32/registry.c": {
+      "bytes": 20955,
+      "git_blob_sha1": "e3226c38d0a6f2f5b0afb9c2a98fc389f2e0e685",
+      "sha256": "2a4d7545dc3485cbcba1a6955d6a02a98928b0eb4bd5d33986f2a6b279e56f58"
+    },
+    "dlls/advapi32/security.c": {
+      "bytes": 109409,
+      "git_blob_sha1": "97304d641098b3fb37708705fea5d32472b32845",
+      "sha256": "17614491a60ef893125ce7e0c2753a58ae8df54c74f5c4c4ab27472596146938"
+    },
+    "dlls/advapi32/service.c": {
+      "bytes": 13930,
+      "git_blob_sha1": "e6b243a46f4c7e454ac065b0e8bdd24934ca3763",
+      "sha256": "4f91c868e95687107f260a62c37beb38dabbdab1bb3a3f48f682f668190f20bd"
+    },
+    "dlls/advapi32/wmi.c": {
+      "bytes": 6583,
+      "git_blob_sha1": "d35bcbe8d65f3ad8eb46b6da805f1ec20a93cb9a",
+      "sha256": "6e4cae2befde3207d6538c1db1d46c096723057e540d85921fd752c1b75db309"
+    },
+    "dlls/advpack/Makefile.in": {
+      "bytes": 145,
+      "git_blob_sha1": "217c5f1fedbd010680066bb1da83ee48cc8a12c9",
+      "sha256": "ac3cab176e83d7adb0efc4eea0a864f1658df5315c710e4126db545c6ad5bfca"
+    },
+    "dlls/advpack/advpack.c": {
+      "bytes": 29317,
+      "git_blob_sha1": "bbde2285ff3bf9e0bf1efb36a806eaa1235f32b2",
+      "sha256": "eed761412d3c97892ab2057d28bf0694add13e96902559c4dde8a90dc753544b"
+    },
+    "dlls/advpack/advpack.spec": {
+      "bytes": 4379,
+      "git_blob_sha1": "f30446946fae12716b7bdc5e9405f7bd2e75dd9e",
+      "sha256": "735b8f0a7e503696f363b2e81bbdd9eb2f7e0e1c2649a34b5d7dd75f65504519"
+    },
+    "dlls/advpack/advpack_private.h": {
+      "bytes": 1511,
+      "git_blob_sha1": "8865e58d0aad9d10f36c6592ac49f159196ced38",
+      "sha256": "bddb678aae41ecd0d30d411c47ea64d6a2f5ce93565d25037f339df8ea2a031f"
+    },
+    "dlls/advpack/files.c": {
+      "bytes": 32597,
+      "git_blob_sha1": "2bf2481cca47bac604a0a1a27c8ae7a660823f58",
+      "sha256": "3f91f58af4c0d97a0b61728f52171a95764406fbc785466488eb068c84e46d49"
+    },
+    "dlls/advpack/install.c": {
+      "bytes": 27142,
+      "git_blob_sha1": "b32a6f4c972d56be1812e293f9400fca04f0ecef",
+      "sha256": "6bafb850d1bb37c477c68f52552128894d2866c40d09657072b96758b2f5342a"
+    },
+    "dlls/advpack/reg.c": {
+      "bytes": 12505,
+      "git_blob_sha1": "a8b48c0e72f402abd8f51113b9c385c2feb2f958",
+      "sha256": "5f12919e0635a75eca96405330694c4b285e40371cc3fae6126b61f725b0eb03"
+    },
+    "dlls/bcrypt/Makefile.in": {
+      "bytes": 203,
+      "git_blob_sha1": "542837b2a7ae59d0988c94a759082e4153a8876b",
+      "sha256": "9675a6ab8d56c1e39ea016dea5972d5de213a7151e26ba9d820fab3168030b3c"
+    },
+    "dlls/bcrypt/bcrypt.spec": {
+      "bytes": 2839,
+      "git_blob_sha1": "90ab7b52fef8a4abb680cfea6e2bc1f0fa9c2cb9",
+      "sha256": "7bfe5a05dbd9951b92bb04daf545845dd1ef2a5ef7b56e32a8150af28247a329"
+    },
+    "dlls/cabinet/Makefile.in": {
+      "bytes": 163,
+      "git_blob_sha1": "a72e5a31be66a169ed9bd832748c331a8ef3e2ee",
+      "sha256": "bd7399344408c60418c550d0d4a3d5ac93a7dc6f49658345d6fd4166f2d32c7d"
+    },
+    "dlls/cabinet/cabinet.h": {
+      "bytes": 23217,
+      "git_blob_sha1": "6193622cb11763c4cfda11bc9720ba25dd471057",
+      "sha256": "c3351789fe4a2575debaf33c0b63936c1c49d4871763a4b8f392e53996e6c9fc"
+    },
+    "dlls/cabinet/cabinet.spec": {
+      "bytes": 562,
+      "git_blob_sha1": "96127cfc4290f74da16cff4e9f6f39ca93d74927",
+      "sha256": "fc6dd64be859cb54f0cfa69d3530bae7c1526846aefa28e7afb98f888f3a70e1"
+    },
+    "dlls/cabinet/cabinet_main.c": {
+      "bytes": 11292,
+      "git_blob_sha1": "f95eca93c52afd2aaa4fdf96e1283cef6843b8b2",
+      "sha256": "370a3d694f77dd974a7673caf8428d3ce05e5e39da0cf7352c707e10b5f8dbae"
+    },
+    "dlls/cabinet/fci.c": {
+      "bytes": 58550,
+      "git_blob_sha1": "e62399db1ba2878098eef42ebe3c1a806f3c8d67",
+      "sha256": "6bb783c823756f6e48c0336939271548dd591fa8456da347f42b7afe833b241e"
+    },
+    "dlls/cabinet/fdi.c": {
+      "bytes": 98116,
+      "git_blob_sha1": "aae71d0e2a5f5ed7019116fcf667a479e20507e1",
+      "sha256": "35f012011d6f74e476096e1363c01f1b5b8c7936ccc4e7a3e9b840b29bc0c659"
+    },
+    "dlls/combase/Makefile.in": {
+      "bytes": 336,
+      "git_blob_sha1": "f0acc33751fb082ac3972e3bdbdad6600c4f60a3",
+      "sha256": "3c9e150bed21a30b9e618408dcdffb55ffb95227aeded0d7580364dfca7a6d04"
+    },
+    "dlls/combase/apartment.c": {
+      "bytes": 39931,
+      "git_blob_sha1": "85e06a6fd57f3c6553a38f13d777f2e7c76beb1a",
+      "sha256": "c9e462a5fb1508f2e6862a71bd53ef85a9c1adb839b969ad444b9ebadac7715c"
+    },
+    "dlls/combase/combase.c": {
+      "bytes": 96970,
+      "git_blob_sha1": "b3a1c9bd8fc4d8962b13253fa969cde3d4ae117a",
+      "sha256": "967a2b774aea2af11af3bb955ecda3bd19e5056e13c6af21510eacb0477bb6d0"
+    },
+    "dlls/combase/combase.spec": {
+      "bytes": 13269,
+      "git_blob_sha1": "4bdc14334e2d60dd3666ad55f89cbd7cfc77debc",
+      "sha256": "116edc4e3b1550f2fd0f61297d876474cab96b28b5dfaf1a81d9ba969dd6e877"
+    },
+    "dlls/combase/dcom.idl": {
+      "bytes": 1937,
+      "git_blob_sha1": "56e3152456c40681ee5ca38ba60a90eeeeeef3b0",
+      "sha256": "3cff76e6a77c9fa28dd3a57718b6a24e86d6c12e31f158a0e05e9615b1036d56"
+    },
+    "dlls/combase/errorinfo.c": {
+      "bytes": 10720,
+      "git_blob_sha1": "9383e8d5a7215b09269b627f83f7d5a16681c896",
+      "sha256": "248fbc1ca7b70997728d0765bcbf46d49d8aa16f83c273f93b908f91c62668e6"
+    },
+    "dlls/combase/hglobalstream.c": {
+      "bytes": 10972,
+      "git_blob_sha1": "88491f24e879a527f392829e08c944c4577b50bd",
+      "sha256": "e4468345bdb3b99932d7b52f4d9871c51c876d46f09413b4a2014273b7fbc568"
+    },
+    "dlls/combase/irpcss.idl": {
+      "bytes": 871,
+      "git_blob_sha1": "fab69f7310c79153f4dcea7a64437b251c3569e7",
+      "sha256": "2da413568562958ea74a71189e94dac37e0754fe821e24f33e365c0aa2c776ab"
+    },
+    "dlls/combase/malloc.c": {
+      "bytes": 11068,
+      "git_blob_sha1": "5d5b61ca42ebe12519ce1c3823268d04b4c71f91",
+      "sha256": "5defd6a06688ccde56b52986530cb07551622513062fafe1e76ae83d8fed521c"
+    },
+    "dlls/combase/marshal.c": {
+      "bytes": 74296,
+      "git_blob_sha1": "f638604f5a337188465f43a4b0f9df5330104514",
+      "sha256": "f9f8444b83c212050384a70f126301716c0927830767685deed04b4606363bc0"
+    },
+    "dlls/combase/roapi.c": {
+      "bytes": 15008,
+      "git_blob_sha1": "0f8a94388217b4c0abd30c902e67a76511ba8d1e",
+      "sha256": "7a5e14039f47c0478dda858a71e50c941a6c74fab7b1d3902c9f06e2e9b4f982"
+    },
+    "dlls/combase/rpc.c": {
+      "bytes": 71916,
+      "git_blob_sha1": "c51b59de4bf17eb4197a9a42b815c232e970894d",
+      "sha256": "a2777971b399c7d3b517b7776f257be108202de7211e777934541b674eff2d9d"
+    },
+    "dlls/combase/string.c": {
+      "bytes": 13149,
+      "git_blob_sha1": "1345870cf2f427dfccffea8de1509b3259b2f411",
+      "sha256": "3147b45dfd4d3e10ddfa50524e246d4a209a5298d8288ba7fb3d13e202c93490"
+    },
+    "dlls/combase/stubmanager.c": {
+      "bytes": 25190,
+      "git_blob_sha1": "566f92c8a752a14ea7e43ceec9e7c51d5142d6cf",
+      "sha256": "49431284bf267c5d8671d6b2c1470359e01db6e4aea369fcba9a8393a4535a35"
+    },
+    "dlls/combase/usrmarshal.c": {
+      "bytes": 32194,
+      "git_blob_sha1": "87513d335bf1f72c34aaac961d4922b7c60e815a",
+      "sha256": "a4f465ba7b7b77df003b744527dc60bec43c83a29107e94c82fd6c495b2c2f52"
+    },
+    "dlls/comctl32/Makefile.in": {
+      "bytes": 844,
+      "git_blob_sha1": "8e9a6e44577c0f0ad5881aa4b7b76c59fe97bd24",
+      "sha256": "eaf02af16d03994188787a605354c5e85f8a43bd00e6c601cf9143b0ac49f332"
+    },
+    "dlls/comctl32/animate.c": {
+      "bytes": 28163,
+      "git_blob_sha1": "46e1e37b72d64015344dadaaf8f1f9a133160db1",
+      "sha256": "e5eba44978cc5ca02cead807c8635ea0f41544729e94ed5033161b8f373c0129"
+    },
+    "dlls/comctl32/button.c": {
+      "bytes": 109791,
+      "git_blob_sha1": "a0eb41fec205c3bb5b8fc9d2ab2435ff0e234461",
+      "sha256": "8756d416f23116e5eb0b64e869f3824a31a0c5a76c6d15dd0bc877a444d65400"
+    },
+    "dlls/comctl32/combo.c": {
+      "bytes": 62342,
+      "git_blob_sha1": "09579952f225a574baa41df46b2bc73f85e5e405",
+      "sha256": "a19e9453c5937994a6c001bc1b7a548ee61e207f5f6d00c7f2d42e3b79bcda50"
+    },
+    "dlls/comctl32/comboex.c": {
+      "bytes": 66687,
+      "git_blob_sha1": "5dc6b8d4ca04ad90af91c1a10d4677b4dad50050",
+      "sha256": "8b08fdabd34fa9c5501e80aaf2f06d9c02ae00ef7ff4cd9d9efad8c56fd31136"
+    },
+    "dlls/comctl32/comctl32.h": {
+      "bytes": 9706,
+      "git_blob_sha1": "f44b4ae132f8a1ec1e304723961ccd85542add60",
+      "sha256": "56b2ccd74ace733fe67d41671a9ce587da451f670a6183000d6be16c8cf2cbc7"
+    },
+    "dlls/comctl32/comctl32.spec": {
+      "bytes": 10057,
+      "git_blob_sha1": "73f259062054aabb6dacd21cbd6246cb0714df1e",
+      "sha256": "575cf9d7ececcce0b42875e622ce578b6bb40d577693ee6ee27a79a61f0b08a3"
+    },
+    "dlls/comctl32/commctrl.c": {
+      "bytes": 79246,
+      "git_blob_sha1": "d87e63e813ee16b19dfb46d352879d03a3e49584",
+      "sha256": "3be2dc91d9f33caf4a32f51c61a53ad14fa781075ca0621a3c46269cdbfcfaf8"
+    },
+    "dlls/comctl32/datetime.c": {
+      "bytes": 54193,
+      "git_blob_sha1": "393406e778bd9372dddcf4e0150c69c2bd6d7227",
+      "sha256": "9b5bb1f64d6463bada304fc45ba9748e85c90aeb586dab2d71d9eef047753049"
+    },
+    "dlls/comctl32/dpa.c": {
+      "bytes": 27169,
+      "git_blob_sha1": "aa9a045e516c9fb5dcb38bfb6de71198cabed597",
+      "sha256": "8ab800853d676c106482a64d3952b2aa89687d7ba7a37059b17781df95ec3846"
+    },
+    "dlls/comctl32/draglist.c": {
+      "bytes": 10331,
+      "git_blob_sha1": "183e4e82bebbd38efa73facae592bdb5b43741f6",
+      "sha256": "17007d37cc93c7dfa3e49af491b467cb35fc04702c39b420211dc908b93877be"
+    },
+    "dlls/comctl32/dsa.c": {
+      "bytes": 12245,
+      "git_blob_sha1": "d5e82343fbd26b16be80868570d20832e0d82447",
+      "sha256": "212b5a892661e35fe2b1af2109311118b92d64d18cd67e1f4346c6d09153cba1"
+    },
+    "dlls/comctl32/edit.c": {
+      "bytes": 135069,
+      "git_blob_sha1": "e57f3d328d18137db93ae1b90ca9b500535584de",
+      "sha256": "c199e197c8b9cc8c62f1787e42460ffe03099faf18f32294867a592df994d852"
+    },
+    "dlls/comctl32/flatsb.c": {
+      "bytes": 7601,
+      "git_blob_sha1": "1cedca98a6cf8182991a6a1b0be010f7784716f8",
+      "sha256": "f9d56e3d9192b8071a1d9e5b26037500e5b7a25c6aa65b02f027ca2b913d6085"
+    },
+    "dlls/comctl32/header.c": {
+      "bytes": 66948,
+      "git_blob_sha1": "1e2d957b93e7487dc7c99d1f32a30c10ef04ccf2",
+      "sha256": "4562db96c63775774dab1e7eb096759ea013e83a1c7c3efc1381f585cd884351"
+    },
+    "dlls/comctl32/hotkey.c": {
+      "bytes": 16004,
+      "git_blob_sha1": "1fc9658c1790892c43ba5d1a3a0fa32cb0ba694c",
+      "sha256": "3c7470afae395064dac48048bdd49c3e4f42529be479aaf6e31d852551a15c65"
+    },
+    "dlls/comctl32/imagelist.c": {
+      "bytes": 110892,
+      "git_blob_sha1": "49155e8d2c1dd549190cfbeaaec3dbab2e24c05f",
+      "sha256": "9d325f55447488169ed84e91c6fc7f9e922653cd6d04dc783c4791225d72a6fd"
+    },
+    "dlls/comctl32/ipaddress.c": {
+      "bytes": 18980,
+      "git_blob_sha1": "be7e45def97b4bab05bf7100e49fbbfe303acef2",
+      "sha256": "01acee4d7dc7f19b2bef9e2fdac40c3f60cd02b7fdfce953b891590f744caed0"
+    },
+    "dlls/comctl32/listbox.c": {
+      "bytes": 102222,
+      "git_blob_sha1": "951b85856aaf8c18a7554c54d863adfcff411fe1",
+      "sha256": "2036658a2d9684c08c8af7d97412a3a325f10d441fc7537606101574c1776384"
+    },
+    "dlls/comctl32/listview.c": {
+      "bytes": 354964,
+      "git_blob_sha1": "9191aef1c3f5693a8e7ec3651829189c9c8197c6",
+      "sha256": "9ecc67bb34e0627b7693414d972a13e36bb5740b16cbadad4e35795bf35b188c"
+    },
+    "dlls/comctl32/monthcal.c": {
+      "bytes": 88781,
+      "git_blob_sha1": "ac8a382310e6b44be2e23b07fc1b3ee2d3afb217",
+      "sha256": "38322fb4a6cf16eff8b9a42087ad88bdfc05029b991a7461d85516ea5f895fbd"
+    },
+    "dlls/comctl32/nativefont.c": {
+      "bytes": 3533,
+      "git_blob_sha1": "ede08d155b643210758748e3ea22ca0bdb55d520",
+      "sha256": "7d98d51931583c01cde40a94e2922edd2f06a74770bd3f9f642030511015ed37"
+    },
+    "dlls/comctl32/pager.c": {
+      "bytes": 51458,
+      "git_blob_sha1": "07484c6ebf5887271563fe751c3fb98dce7a533b",
+      "sha256": "b4a7550666bd46cef0019b0433ee169e1a5fbc8c3005558a2637f48c60a91884"
+    },
+    "dlls/comctl32/progress.c": {
+      "bytes": 23762,
+      "git_blob_sha1": "fcecd7bb2936ee306d5baf67aea7e55d1a583279",
+      "sha256": "8bc678a33573d10e39ce52050109509e224135cfae61b5231c22bb3dc45c74b9"
+    },
+    "dlls/comctl32/propsheet.c": {
+      "bytes": 110214,
+      "git_blob_sha1": "44b24a56a07eda782ca558996530077fc5d5cd98",
+      "sha256": "69d52e0251d3aa8b873505322a6699638f5c62c0e2488df5f5f3a6804a652b29"
+    },
+    "dlls/comctl32/rebar.c": {
+      "bytes": 116521,
+      "git_blob_sha1": "7bb8f33ae06a5979d645ac0a80ee1ddad41ae8b5",
+      "sha256": "232c5d503f05bce01f3a917a377151ebd9574a655c954985a65db6d2db9df200"
+    },
+    "dlls/comctl32/smoothscroll.c": {
+      "bytes": 3774,
+      "git_blob_sha1": "75eac1211e27ae3b7d65565aef9850de2e76418d",
+      "sha256": "56a7475f69749764264a587623578e5bcce565a3b418b4579739a64ff1981dd7"
+    },
+    "dlls/comctl32/static.c": {
+      "bytes": 28318,
+      "git_blob_sha1": "29a0498ba09e9c249dea2b9f64c46a258a158942",
+      "sha256": "b0f5787eb9e4d55b630dcacd4fbf0575898c4e0c843cf1bb964848447adbc78b"
+    },
+    "dlls/comctl32/status.c": {
+      "bytes": 33931,
+      "git_blob_sha1": "3e1bc4902ff7e33cce7aed2efff61d7036a3c000",
+      "sha256": "2064bd22d37e5de9fcfff0598ece0820b614575aaa12a712f0065fcb54f9376d"
+    },
+    "dlls/comctl32/string.c": {
+      "bytes": 5812,
+      "git_blob_sha1": "9a6257dafe163a94605f6034201004fa50faf876",
+      "sha256": "118c02f8100910d8a56150c71e79e78a98919b40323c91840160869fd9639433"
+    },
+    "dlls/comctl32/syslink.c": {
+      "bytes": 49804,
+      "git_blob_sha1": "f5a70e982c3f1b8576d6f4adbaf208c9d3c00d8d",
+      "sha256": "e56ab7152bfa3cfa262b4a42d3e6332569869b7070c83fce05c871a7469fb76c"
+    },
+    "dlls/comctl32/tab.c": {
+      "bytes": 99468,
+      "git_blob_sha1": "887682196bce6958df8d3463e33e61b89e3f7b1c",
+      "sha256": "836f2b5bfc766d7307ace6e2a3feea6c1e5e50f9fe516938c973e581d0d347f0"
+    },
+    "dlls/comctl32/taskdialog.c": {
+      "bytes": 54567,
+      "git_blob_sha1": "420f4c6a24807abc57bbc94e147889ca19defd78",
+      "sha256": "b6a484b6f084549f4a69b0e480e2b46fb5aa0a6a44ff3f12030554e9d4117171"
+    },
+    "dlls/comctl32/toolbar.c": {
+      "bytes": 216482,
+      "git_blob_sha1": "690a02db6eec80d43e56d514ef23c7d6c399f3d8",
+      "sha256": "071862f6b09d30a8ca3ab2052f78dacf38ebe9ad53d8747fcd1f70446fdc1e97"
+    },
+    "dlls/comctl32/tooltips.c": {
+      "bytes": 65013,
+      "git_blob_sha1": "1d8ac3463ab68eb0b98d9eedb2fd861d0a9eac30",
+      "sha256": "d15d24afc529a8455cb842a1c1fbf0807256dd033dbc0a6223c6aa9b7d27997f"
+    },
+    "dlls/comctl32/trackbar.c": {
+      "bytes": 58392,
+      "git_blob_sha1": "f2cb2a07a8df6f2eb27fb55e32d5bccea975d28e",
+      "sha256": "54777ff6f7be2024577d5799e570ec1c832effbd6e65556e6697ad50d974e99b"
+    },
+    "dlls/comctl32/treeview.c": {
+      "bytes": 164704,
+      "git_blob_sha1": "073f62c66a2ae0786051c19375f8132b03b4c75d",
+      "sha256": "278df6144337c8692c11b7d3ef832cb6fba4ff4dd64793af501035d262c124a9"
+    },
+    "dlls/comctl32/updown.c": {
+      "bytes": 38994,
+      "git_blob_sha1": "9f46bfaffa7c823b14ba19253da31f3b51df650f",
+      "sha256": "29b42dab8fa3e7df68ecbe220a25d46ba58823ae06188d2f04c45aee656dc126"
+    },
+    "dlls/comdlg32/Makefile.in": {
+      "bytes": 427,
+      "git_blob_sha1": "7cf3b714b2b4eb5aaa5cb827d2463d90bba23cbb",
+      "sha256": "b3faf0801f761f04ba22ca6d12292bfc305bb0876aa0ac519c6bac9c89017b48"
+    },
+    "dlls/comdlg32/cdlg.h": {
+      "bytes": 7009,
+      "git_blob_sha1": "16c3a15ab4526725679235f4a6ef31fbce906323",
+      "sha256": "ac173d22cfd578a8c6bdd7761aac921a149e3679afa789b53df68c593f2e6d18"
+    },
+    "dlls/comdlg32/cdlg32.c": {
+      "bytes": 7130,
+      "git_blob_sha1": "6432b4c74423b7056c7bace8147fcf5e5e800425",
+      "sha256": "b82c4fe6596d9b780daa2aa27e20d84d2db72e716e5ee39b260812464c1418e5"
+    },
+    "dlls/comdlg32/colordlg.c": {
+      "bytes": 39656,
+      "git_blob_sha1": "0093b455b1b2e11ccdf67c90a28b1d5054d86de0",
+      "sha256": "1c3e0081adb395d67f08239baade47b9f71ee8b82d44c40da3e0a727ca64388e"
+    },
+    "dlls/comdlg32/comdlg32.spec": {
+      "bytes": 827,
+      "git_blob_sha1": "01c7cf637778ab1cfbaf4ee3658cac0662dd7a18",
+      "sha256": "7ee7eb6ef510b49164ff2f8c2e7aebea13a18209c5f9a0f50ead38f572b83c3b"
+    },
+    "dlls/comdlg32/comdlg32_classes.idl": {
+      "bytes": 1169,
+      "git_blob_sha1": "1cd2f3d90ff39b53cdab201063a19ae71d120768",
+      "sha256": "1d8a5e3db3336f9c5f07da541db4b7f57a2c65f294d0ce13adca5f27e353d439"
+    },
+    "dlls/comdlg32/filedlg.c": {
+      "bytes": 140152,
+      "git_blob_sha1": "441f203fe7ba9effa973ed8dd9895188721686c3",
+      "sha256": "dc4e1138fcaf33aaf64d99ae5959ece6617c7498e72679f4a0361b53c88a6b0d"
+    },
+    "dlls/comdlg32/filedlg31.c": {
+      "bytes": 38005,
+      "git_blob_sha1": "16a67422b02bae55daccc407ca877e210a80457b",
+      "sha256": "5f1df0e79a036176d34e6530c8bea3bd34f789e09d2e13a237f7368160b4e4d0"
+    },
+    "dlls/comdlg32/filedlgbrowser.c": {
+      "bytes": 32762,
+      "git_blob_sha1": "14a9da91dc7fbbbe9427a116568ec5af1e149461",
+      "sha256": "a04db5e3aec5b85a4c9859ae512a1d35cd0df05a6d963830e5ebef98dc3aa9e4"
+    },
+    "dlls/comdlg32/filedlgbrowser.h": {
+      "bytes": 4597,
+      "git_blob_sha1": "57c8911fbd1f710b27a2de3bd4b4a22e6484ace3",
+      "sha256": "9305cfd326954e471c69997583a8362493d3132e2080c8a2c000144bd773e37a"
+    },
+    "dlls/comdlg32/finddlg.c": {
+      "bytes": 18737,
+      "git_blob_sha1": "e627dbce0c7f812fbefd36a42a64be49592cbc82",
+      "sha256": "0f664f4a1cb973a7ffcb80b1315d0190a9220a54b1a7472a6a4b230ef597cbcc"
+    },
+    "dlls/comdlg32/fontdlg.c": {
+      "bytes": 44677,
+      "git_blob_sha1": "6eb7e65c05bb3f67bb50dfe271ecb17a469fa95a",
+      "sha256": "725c89d799ecb7089583482aa38ae22e9e0d956ac59efabf58645b711fecf7d6"
+    },
+    "dlls/comdlg32/itemdlg.c": {
+      "bytes": 150993,
+      "git_blob_sha1": "99af524a06ff1c43add7114142c67557f91e6849",
+      "sha256": "7999b2a5d94579b21261d562abef30a3a99d46d028e34b131f0620ba7f9c2b58"
+    },
+    "dlls/comdlg32/printdlg.c": {
+      "bytes": 137542,
+      "git_blob_sha1": "b5c67c3abad4fb4fa6c0b6229359e223fe025c78",
+      "sha256": "d4a95c19135f0711c479cecb0fee03a4a35b741d130fedc11a02f1dad8cb7599"
+    },
+    "dlls/coml2/Makefile.in": {
+      "bytes": 142,
+      "git_blob_sha1": "739f791d4c507a98213390256c0415f6bffc939b",
+      "sha256": "36704359dedfd8e092c5ca96033ac1da00c59ceac1d679ce97c28cc3479bede9"
+    },
+    "dlls/coml2/coml2.spec": {
+      "bytes": 824,
+      "git_blob_sha1": "f9747cb449dc784beaa7ff2896b2293bf316f278",
+      "sha256": "71c5221c9f7a4f3406a29980f31149e54293191d117e7a5e5b9b32ce8bf183eb"
+    },
+    "dlls/compstui/Makefile.in": {
+      "bytes": 156,
+      "git_blob_sha1": "9a0585b0ed8c365c1c9dd675a60c72674d6b28de",
+      "sha256": "ce2092db10fd490cc1274c12bb905d66eb8c895a448b5238410a0d636172d06f"
+    },
+    "dlls/compstui/compstui.spec": {
+      "bytes": 175,
+      "git_blob_sha1": "7ba72a529b5d12e1c33b909342dd508415c2cb4c",
+      "sha256": "e5dd45ed4aae8803d57d9bf682adfc3e4bb9efa4c726030fbc26729f1d591b7f"
+    },
+    "dlls/crypt32/Makefile.in": {
+      "bytes": 557,
+      "git_blob_sha1": "59df971e3b71d1f3a013dae72bb9816df7e2c040",
+      "sha256": "b55227278602ebdb0d59ace7360852242f4bf5cbb9bd5bd150f901b885973715"
+    },
+    "dlls/crypt32/crypt32.spec": {
+      "bytes": 12150,
+      "git_blob_sha1": "4399f7c845ef1510f72313aec530a1e4f8151aac",
+      "sha256": "61efb4b72e245eb7ef7987cd9f31670d1bc9c788949b3173adab54da535e25b0"
+    },
+    "dlls/cryptnet/Makefile.in": {
+      "bytes": 142,
+      "git_blob_sha1": "444237ad59813a2cccd33ac94b0f2b354c61cc99",
+      "sha256": "27ab6d5e82fa77a51c1c37751afe5f6cf392a65c1fb7300ebd67a44069b4c55e"
+    },
+    "dlls/cryptnet/cryptnet.spec": {
+      "bytes": 748,
+      "git_blob_sha1": "92d5c40a272c890e6c90b9c64ba523a76459eeab",
+      "sha256": "6eddd4ece84df93f20041423d31d9e3d6f5fa6f511f36f80b1149baee6ec89c3"
+    },
+    "dlls/cryptui/Makefile.in": {
+      "bytes": 218,
+      "git_blob_sha1": "06828e5720c381a28ca76b951fac7932a3b939ba",
+      "sha256": "12d55ed02be95f5b5d4d420ad4641a477855c32007f9ab95568c6269e4714e7b"
+    },
+    "dlls/cryptui/cryptui.spec": {
+      "bytes": 1854,
+      "git_blob_sha1": "173451a45aa2be83e4077a8b5f6ae2e86a1a754f",
+      "sha256": "8a4f74502c004f95c3a5a00c21c77adb9ca801c15538f7d4f63314110c34ee8f"
+    },
+    "dlls/dbghelp/Makefile.in": {
+      "bytes": 436,
+      "git_blob_sha1": "152ef80611a58b9db1a2063bae6d0a09027df5bd",
+      "sha256": "d929eb96c2981764697f41031de2fb8b54a08bc5c749354c95f07d7f42d47141"
+    },
+    "dlls/dbghelp/dbghelp.spec": {
+      "bytes": 8742,
+      "git_blob_sha1": "a89c2c1d86b7ef4784b73ddebbc173f737fbe44a",
+      "sha256": "4242ed43547e7c3293043e930647339ed5601a5e1ac1de8370c8550cce83dc95"
+    },
+    "dlls/ddraw/Makefile.in": {
+      "bytes": 299,
+      "git_blob_sha1": "e6d6dddddef56a7fc010ae3944e880331ce7319b",
+      "sha256": "82ed6e34c5d60ac2f0595fd23733c5865a35f5ee32ac191231680157c9c1cf00"
+    },
+    "dlls/ddraw/clipper.c": {
+      "bytes": 11080,
+      "git_blob_sha1": "3159a34cb5a09ad7675f6a53480b59200e4db147",
+      "sha256": "3c23a43ee46acceda83ce32d5732adc76767c3a8202da0a9a7b00dfb45e505ae"
+    },
+    "dlls/ddraw/ddraw.c": {
+      "bytes": 174030,
+      "git_blob_sha1": "ed342bfd70849e1fd0e2d9cd5c60db073530da35",
+      "sha256": "d6e78e331e6f8a45c74acabaaae88f0fa52abac79a870159d77e4cc958617098"
+    },
+    "dlls/ddraw/ddraw.spec": {
+      "bytes": 877,
+      "git_blob_sha1": "a6cf1411703b5c406fa4d80df121cf912469d6de",
+      "sha256": "e34dd46cb3fd19c40eaa8728c84c7c816fb8b6b2671e42eafb20db408b4844ec"
+    },
+    "dlls/ddraw/ddraw_classes.idl": {
+      "bytes": 1332,
+      "git_blob_sha1": "6e33253ad4e71a3c7c03fcc71a3ee1c9267e2c81",
+      "sha256": "da0a79785871992c4d363181aa39da2ff274177652b19b78b1189efe3621caef"
+    },
+    "dlls/ddraw/ddraw_private.h": {
+      "bytes": 26700,
+      "git_blob_sha1": "bd1df8e1b822598988e7b75d4aebeaca9f7652a5",
+      "sha256": "66ffab9527dc7a4119bcd951602206af187a3184a55b5662fc9a7d8c7cd82580"
+    },
+    "dlls/ddraw/device.c": {
+      "bytes": 234858,
+      "git_blob_sha1": "9882c2613b63690d6c0b4f0aa27e5d109ca4664e",
+      "sha256": "7de275655eee30e0ffc1bb5eb3c4ee8ab2cc4bc388c5a853238f1018f7b96de8"
+    },
+    "dlls/ddraw/executebuffer.c": {
+      "bytes": 29814,
+      "git_blob_sha1": "84bf091db1ba8087e7acdf87a3efd2fe5e2e11d4",
+      "sha256": "38b6636e2e90cc2a5324d6c47d21360a687442314c218bea359b5c45de03204b"
+    },
+    "dlls/ddraw/light.c": {
+      "bytes": 8287,
+      "git_blob_sha1": "a7b6f77a2dc09e04da190930435cca51e24942a7",
+      "sha256": "3a3cb1518acbc3c83f9b6eac2618c86d175f0c75b15b8b518cf3d7d992d6c54d"
+    },
+    "dlls/ddraw/main.c": {
+      "bytes": 29828,
+      "git_blob_sha1": "faf6e13c8f2593a1aa3d3ab4ec8abb5f96ae914b",
+      "sha256": "bed09bc67332990e6c05f7f26b12305f1048b882887675543c6b01f078ba212e"
+    },
+    "dlls/ddraw/material.c": {
+      "bytes": 16029,
+      "git_blob_sha1": "efc739c8dbbf118b9571ba3108a1f99fe4ba486e",
+      "sha256": "1ff847179bb01e2832a4c0e214701fb94521ac793fbd73769db2b1009758a7d4"
+    },
+    "dlls/ddraw/palette.c": {
+      "bytes": 8889,
+      "git_blob_sha1": "e656a7b407dbefb728adaae4b5706c3356c22024",
+      "sha256": "347374d2b1bd42adc573f8b698998d3f88ad47523bffbbaf2ac36320ec36d684"
+    },
+    "dlls/ddraw/surface.c": {
+      "bytes": 247748,
+      "git_blob_sha1": "545c76738cd189f4c5be75d90b33b53cfa196551",
+      "sha256": "fc18cd6518bb4af08e30ceba9bf5cf2b2edcbe6750779b9de2483bc56a5f625c"
+    },
+    "dlls/ddraw/utils.c": {
+      "bytes": 49226,
+      "git_blob_sha1": "4204587dd915c0650e0ad1f845c4734d4efe61dd",
+      "sha256": "9a1f1cc9b1c9e53140626e2d36b4a494e668fe1d68bf3357a217af80bd108008"
+    },
+    "dlls/ddraw/vertexbuffer.c": {
+      "bytes": 19140,
+      "git_blob_sha1": "ccfa0c2e7521794779dcb906919df76802da21f7",
+      "sha256": "35831bae7d79b42b0cb3ae72c08f7aa66ed198bb27fe22e84c933c5a7b280648"
+    },
+    "dlls/ddraw/viewport.c": {
+      "bytes": 40159,
+      "git_blob_sha1": "707b0f5498cfa378c328133ee5585fd93eac9172",
+      "sha256": "678ff3344fe11dc3b3af52caf19f694ebea605dc542870ffcc05df6f1982ab3c"
+    },
+    "dlls/dhcpcsvc/Makefile.in": {
+      "bytes": 129,
+      "git_blob_sha1": "eb9892cfcbc70e424ab14e674ec1638e8d7a0de9",
+      "sha256": "64ffb027a20fc1261d833c39b1a278bad33b8e1cffee77f4616771022dca1990"
+    },
+    "dlls/dhcpcsvc/dhcpcsvc.spec": {
+      "bytes": 1405,
+      "git_blob_sha1": "7ccd699e79eb100470c668897432adf9fb777c30",
+      "sha256": "45bd577058af821eebe0a5a94e02a8cbb04fa2981a0c295babb6a0c66d81465f"
+    },
+    "dlls/dinput/Makefile.in": {
+      "bytes": 342,
+      "git_blob_sha1": "d4bb1bca2daabb46a0ec96e08bff8d4be3d3b7fa",
+      "sha256": "ea31b468975f054421ee2271c1519190ae9c9c8eb521431642b20db3178cef2b"
+    },
+    "dlls/dinput/ansi.c": {
+      "bytes": 42885,
+      "git_blob_sha1": "a9e948c97a44332412a702ff93f3907fd69bf977",
+      "sha256": "37aceaee17f2c086569060bcb888283bb05e9983a5910d454a942771ad738d72"
+    },
+    "dlls/dinput/config.c": {
+      "bytes": 14320,
+      "git_blob_sha1": "d7a416501f0cdb688c37dc3ddbc3a5b39c6866c8",
+      "sha256": "66f99230ce8e88bd484a9f1fab5c1ce9c9b9274325df2e4ef42703b5a2e7c5aa"
+    },
+    "dlls/dinput/data_formats.c": {
+      "bytes": 39525,
+      "git_blob_sha1": "296e80ada46d2cb0e0e3e9174b6d6ee736733beb",
+      "sha256": "d6917f88c41efa0a1e1bd26b455f9147a273044a2235a3261251a9449f2e34ee"
+    },
+    "dlls/dinput/device.c": {
+      "bytes": 81093,
+      "git_blob_sha1": "4166d18dd8c7c160b478c4e041d7857a35087e72",
+      "sha256": "16f2819ed9d03f833592eb678c11614ee38b9a909365230b6cd9efd310a6a3ca"
+    },
+    "dlls/dinput/device_private.h": {
+      "bytes": 5851,
+      "git_blob_sha1": "fa791f08a9dfc2fe689cba0d309dd0ae00e06470",
+      "sha256": "8feac70605e36b199ffb6d9c2536d283d66b8238f9d0cfa250cc236e0e9b373a"
+    },
+    "dlls/dinput/dinput.c": {
+      "bytes": 32957,
+      "git_blob_sha1": "e53eea4e29216cf87792b87c71b3413cc8e785f9",
+      "sha256": "f4a77797c2bed1bb872f978d4e759067c6eff1a7704c8e4a8637127d7a1ee46c"
+    },
+    "dlls/dinput/dinput.spec": {
+      "bytes": 316,
+      "git_blob_sha1": "619079526c6c90575c242924cde69ee5f1944b3e",
+      "sha256": "e52824af55951935f149fa171f8a186dd4b3b540ddb50b13e649f1a7b0241e2a"
+    },
+    "dlls/dinput/dinput_classes.idl": {
+      "bytes": 1174,
+      "git_blob_sha1": "1471f554dfb4286209ab20d57023358600c20781",
+      "sha256": "a5c5e119d5ee14d497d9327b02fc80cb80ff5d2e9e65926270de9ee08867127a"
+    },
+    "dlls/dinput/dinput_main.c": {
+      "bytes": 19010,
+      "git_blob_sha1": "eb38bbe4ee93b4b2369f8126bee51df79045de18",
+      "sha256": "700c51c22dd8ac1b5a43345f7eecfc5613378d7e3596918d8ea74402119a92a8"
+    },
+    "dlls/dinput/dinput_private.h": {
+      "bytes": 3824,
+      "git_blob_sha1": "0609b816b3b556f367e904a8cb1f23a8d70c332c",
+      "sha256": "06ee5cb4c8460e5a3f19651b32b4f2e9307d3792830102754624690db6649d92"
+    },
+    "dlls/dinput/joystick_hid.c": {
+      "bytes": 135435,
+      "git_blob_sha1": "367d6356195f445e409f904c0b95a1fb656343a0",
+      "sha256": "f70a328eb0d3b7e5d675f05c87dfdcf617c82e2e2ca03df54e8ffef4f4e97891"
+    },
+    "dlls/dinput/keyboard.c": {
+      "bytes": 11506,
+      "git_blob_sha1": "8ec9dd47150c463fc0bfcf9dd823dd2e6dfb510b",
+      "sha256": "8c178099d20e734166f460587e668131a03863ac1a0f76dfae60f2b2d14c3bcd"
+    },
+    "dlls/dinput/mouse.c": {
+      "bytes": 19072,
+      "git_blob_sha1": "eec022974b51d292e3243491f52ef8ef946e2165",
+      "sha256": "80402e43827405d5a9a873028fef4a29487501cc97c2ac6c85cae36173b0a822"
+    },
+    "dlls/dinput/resource.h": {
+      "bytes": 1525,
+      "git_blob_sha1": "e4c645b524ccc6cac9a077841eb0456368e6caf7",
+      "sha256": "5cfa166311e388e1befce1a4428c0404720ce86a541244be93536416823de110"
+    },
+    "dlls/dinput8/Makefile.in": {
+      "bytes": 360,
+      "git_blob_sha1": "f3f5fdc4fd84807163eca37e6f33324cf22e8cdd",
+      "sha256": "a9cfc222ba50d047f90bd31633cda50ca391a0c39e524d2047142b15f39e44d4"
+    },
+    "dlls/dinput8/dinput8.spec": {
+      "bytes": 219,
+      "git_blob_sha1": "e8b15fdec7c01f7822ab0727fcec4ba8b8b32746",
+      "sha256": "07caff66e5b5c33730b56e92d1d023cc8169333b6f53baa1553f8ed73fcaa56b"
+    },
+    "dlls/dnsapi/Makefile.in": {
+      "bytes": 201,
+      "git_blob_sha1": "6cf1a92205accdf27380829b420b291bac43523d",
+      "sha256": "3fccbd385a194f806d4e99b69caf6ef7d4c2a770d4ce0c301d70f409af564940"
+    },
+    "dlls/dnsapi/dnsapi.spec": {
+      "bytes": 4687,
+      "git_blob_sha1": "a8ffa40a0ae59355f4078eea10caeeb4215b4f85",
+      "sha256": "9911f15f0431cfebda0c95b2902c3671424f713456911b1d969fec8dad33b354"
+    },
+    "dlls/dsound/Makefile.in": {
+      "bytes": 277,
+      "git_blob_sha1": "13cb6e8b6156117b3ef1225a467440eddd8f79e0",
+      "sha256": "58e56260ae53ef077f38bbfbc3935697845397f4f42918b469e2df3803592f95"
+    },
+    "dlls/dsound/buffer.c": {
+      "bytes": 40114,
+      "git_blob_sha1": "8e261fde32cdd5dbbb4431f986fd4335d1ad07bc",
+      "sha256": "ce8695bede1fbe56beffe4caf09f5587729a6d51fbb0f282c50878396d5181f1"
+    },
+    "dlls/dsound/capture.c": {
+      "bytes": 44621,
+      "git_blob_sha1": "e9012600cfa8dc705b6b1afb56ecddc8ac302255",
+      "sha256": "30b02a28d4c7e798fb5ada387ac29d739d9721b221677d73424ae2b394ff5f92"
+    },
+    "dlls/dsound/dsound.c": {
+      "bytes": 40148,
+      "git_blob_sha1": "7629810db505b7bddb493be50ea0432cdf2f6ae8",
+      "sha256": "90355a19c506f5dc59ac43481541a8cca6cbb40205ae28f6e88e6cedba45e20c"
+    },
+    "dlls/dsound/dsound.spec": {
+      "bytes": 640,
+      "git_blob_sha1": "e4878a8169239d3d05f4b4b92a774cd64de93a86",
+      "sha256": "c349055e8cce1d8f285a249e521582b8dea551324ea2c66d542493dec40d24bb"
+    },
+    "dlls/dsound/dsound_classes.idl": {
+      "bytes": 1912,
+      "git_blob_sha1": "9395c3a34391805169b62d14fe7ed56ed5b5d6d9",
+      "sha256": "e4d99f02765af8cc99e187c6d74136720c18d124008aae897b674213ae53e2e9"
+    },
+    "dlls/dsound/dsound_convert.c": {
+      "bytes": 10568,
+      "git_blob_sha1": "bdd62c8e51fb3a36fa4bad85a35cfb4a4f6879f6",
+      "sha256": "5f44ef667ff71f24f16a48b152db568016dabfc225ea23ead56b0ca948d50440"
+    },
+    "dlls/dsound/dsound_main.c": {
+      "bytes": 22425,
+      "git_blob_sha1": "bb373a4304d343cf5b32488f48610fd066985ad6",
+      "sha256": "9e74ff42adeb75e778de941bb12d844817dff8a6ac3af3366fd3e6852a16c177"
+    },
+    "dlls/dsound/dsound_private.h": {
+      "bytes": 10639,
+      "git_blob_sha1": "28bba6cd64ecc6f37f75bd377b404244cd296c60",
+      "sha256": "caf89680b97bf1e746d930c590ffbc5407e7edf1ff11f2325f582d11edf2ac43"
+    },
+    "dlls/dsound/duplex.c": {
+      "bytes": 11681,
+      "git_blob_sha1": "a9fef428b283064b74d68210f29ae5d2621adace",
+      "sha256": "2dab510f0548496c72b43d1ff9addfa0e1c6c34979e5c9f1eced3882684639cd"
+    },
+    "dlls/dsound/fir.h": {
+      "bytes": 114797,
+      "git_blob_sha1": "0b54c1692daa369d70da9b709f89701331dfafb7",
+      "sha256": "d01ac9f575b0dcddbed5931e4b4a84cf11310c3bdd6b5a2a327a2ff9dad97478"
+    },
+    "dlls/dsound/mixer.c": {
+      "bytes": 25212,
+      "git_blob_sha1": "bf88e94eafdaa47aefe652c6946a02f2b0c80f5d",
+      "sha256": "1ef15b4f39dc73111b5c7b90a3148bde174668a057f2b5f5b04a5ce9a298e52f"
+    },
+    "dlls/dsound/primary.c": {
+      "bytes": 36724,
+      "git_blob_sha1": "2073a32240cd5f9cce3a5be43c60584f26e12b59",
+      "sha256": "edf923b8a549c6979027c2acb177a58cea98827381694268bb2b4758f6e51a7c"
+    },
+    "dlls/dsound/propset.c": {
+      "bytes": 19120,
+      "git_blob_sha1": "be284a6dda5a7d5c17d67ba5825feb9e629da191",
+      "sha256": "c3b566c18193e55aed380ec0cd8e24cc4c77afc1f2e4033060401898f634b326"
+    },
+    "dlls/dsound/sound3d.c": {
+      "bytes": 36354,
+      "git_blob_sha1": "554d1de3b8f321aac88d5f240fa8ac5148b9dc95",
+      "sha256": "ed9e8fb5ecb6e20efee1935676152de8e8f16609ae785b62d314f76242f827b6"
+    },
+    "dlls/gdi32/Makefile.in": {
+      "bytes": 528,
+      "git_blob_sha1": "80a5ad0858b7f6bf0560aec7a6860975e59e4025",
+      "sha256": "721f32e5a5b2aaf4353e26ee43e7517e3ced3801c2cbe5154c475b4686d58e5a"
+    },
+    "dlls/gdi32/gdi32.spec": {
+      "bytes": 27067,
+      "git_blob_sha1": "20c495897aa46ecec48803bcfac50b79fa2b39f5",
+      "sha256": "05e185aadfc199bdf9ba09db763c60155684bbb042cb0bab41146a1cfbeed6cb"
+    },
+    "dlls/gdiplus/Makefile.in": {
+      "bytes": 357,
+      "git_blob_sha1": "76474f2e086590732a9f5114df7916eaad780045",
+      "sha256": "27a61e84f4f790df9751481182edb03783b24d7a7156ace44d5d2dff3561e061"
+    },
+    "dlls/gdiplus/gdiplus.spec": {
+      "bytes": 31667,
+      "git_blob_sha1": "0f17bb02d4d4a42f096b50117da4b4c4f4778c9d",
+      "sha256": "36ebe04076f7cc5a4ef7c26ed37e45231fd7ac471235898f55624103a052b009"
+    },
+    "dlls/glu32/Makefile.in": {
+      "bytes": 221,
+      "git_blob_sha1": "bcec566c6eb0a24e5dbd3f3ead9416eb310b259e",
+      "sha256": "aac6cf7cedc108c46f1ba6ccbdac73daf93c973211fbd45f74813f1356ffc4cb"
+    },
+    "dlls/glu32/glu32.spec": {
+      "bytes": 2690,
+      "git_blob_sha1": "0ba72a3f47404663dbcb158cbaf578cff5cb4b90",
+      "sha256": "e4af091e08b4ef7da04188ead45f726297d18fc69c944037a09da2d3104d1165"
+    },
+    "dlls/hid/Makefile.in": {
+      "bytes": 118,
+      "git_blob_sha1": "00720eb8c733e3b04dffc8481766e18d8b90bc02",
+      "sha256": "cd2132ebeb5b410e925c5bc68cb6a930d2b7671d0aab9dbcb0f39b6b4c7e82c1"
+    },
+    "dlls/hid/hid.spec": {
+      "bytes": 2166,
+      "git_blob_sha1": "67c4473129d198460145ac031292ed23cfbf012b",
+      "sha256": "085f3425b0170b11fd6fd407d6882a8e579ba529375910ac394b9aa124178c37"
+    },
+    "dlls/ieframe/Makefile.in": {
+      "bytes": 440,
+      "git_blob_sha1": "5515e3ed8830498ae998ae43080e2bb419286595",
+      "sha256": "8542a9264499819992567bd31376cb22f48147c2c6274d55849ac6f51d7e95a5"
+    },
+    "dlls/ieframe/ieframe.spec": {
+      "bytes": 376,
+      "git_blob_sha1": "8205ea5198ef62eb4f2a6ba054553adda9d64323",
+      "sha256": "5049c321b5efae3b5a086414982de4afd0a7761d580fb348401420a6b608f0f0"
+    },
+    "dlls/imaadp32.acm/Makefile.in": {
+      "bytes": 75,
+      "git_blob_sha1": "1df786ab61d6a980c65254d7fc776ca346250346",
+      "sha256": "acd472f9c40f9cd55d12d84b85e9e4410177c5ec4bfc30b7294fc7e1946a43d0"
+    },
+    "dlls/imaadp32.acm/imaadp32.acm.spec": {
+      "bytes": 74,
+      "git_blob_sha1": "09473e9d6a6b05bd129ef05870e6ed1972ad67aa",
+      "sha256": "8959fc514fc0a97b57e203d74edbdcf15ff1b86919bfe8b0ebf50e09cb706a5e"
+    },
+    "dlls/imaadp32.acm/imaadp32.c": {
+      "bytes": 32356,
+      "git_blob_sha1": "0b5e6a83ae601d1b16d7abd8f30bc0b59f9b012a",
+      "sha256": "aff05e6b43a30036c101fc63913582eb5f7d6d4d04a718285d300a7b66611227"
+    },
+    "dlls/imagehlp/Makefile.in": {
+      "bytes": 167,
+      "git_blob_sha1": "0d1de9e4fb22d638e9d818b522bca350408fb7ab",
+      "sha256": "b8e52e354ad6ad008dcabea2ddea5de8d9bc94c585f52597f6dbd23e14f195c7"
+    },
+    "dlls/imagehlp/imagehlp.spec": {
+      "bytes": 5300,
+      "git_blob_sha1": "7d934dcc96e5564787e14f88a7f52926ec7b6dc6",
+      "sha256": "7679b7b33996e851d4429a3c6bb8a604e18ee7c984309c36c0cb4ce5f7f5db9c"
+    },
+    "dlls/imm32/Makefile.in": {
+      "bytes": 156,
+      "git_blob_sha1": "5f758686c586edbbfed30114111b113b00ad6446",
+      "sha256": "a15b4d5edba43bf2f35001add6100ad194da270a9e4b324a6146517db208c298"
+    },
+    "dlls/imm32/imm32.spec": {
+      "bytes": 5448,
+      "git_blob_sha1": "719905125543b5737580e1830f39cd1720b492ad",
+      "sha256": "b42562d5b3b19614e1b57f4c58647bc21dee1438d2eafb9405d43d7e71ac5d49"
+    },
+    "dlls/iphlpapi/Makefile.in": {
+      "bytes": 134,
+      "git_blob_sha1": "90c370d27b3cd50aa0f00579ae0ce327bfbc67d1",
+      "sha256": "f8d0e8baa79ae3998dfad8ffc02b34984f320305def2c8d5495b65038eb87851"
+    },
+    "dlls/iphlpapi/iphlpapi.spec": {
+      "bytes": 11330,
+      "git_blob_sha1": "facb52e0448733c1a862301c38c2005963a40a53",
+      "sha256": "443407372ffcb5c603c1406e52223aafe72084cb5d2c4efa8beafc4db3abf029"
+    },
+    "dlls/kernel32/Makefile.in": {
+      "bytes": 590,
+      "git_blob_sha1": "ca5bb437e24565d657ea50448caea01b8436c5d7",
+      "sha256": "04be7c4aad243dcce677a7c0eb4367d96e47e9a60f5d1808b236e4c2633049b5"
+    },
+    "dlls/kernel32/kernel32.spec": {
+      "bytes": 87530,
+      "git_blob_sha1": "6fb4ae8c2bed9a1b7e4c93deecc684c024ebe5f8",
+      "sha256": "ff1804fb97457a32d42c07b9da285847cbd2abfcd23f0c3729fda967645eceff"
+    },
+    "dlls/kernelbase/Makefile.in": {
+      "bytes": 529,
+      "git_blob_sha1": "081e9bfbb6400b0351b87903bfbb45ed3f524319",
+      "sha256": "067aebf07bae76001a26035ffb6ce2136138258e7f447bc7c22c535edcbbd5e5"
+    },
+    "dlls/kernelbase/console.c": {
+      "bytes": 78592,
+      "git_blob_sha1": "97c5462c42fba1a23f4ba0c836c6b1b1c26e715a",
+      "sha256": "e84018b3e30c42aa5832e374e830ac4d126c4a23e0cf0368c364e4a83825b591"
+    },
+    "dlls/kernelbase/debug.c": {
+      "bytes": 60985,
+      "git_blob_sha1": "cbefc0c873340d47cfc545f272b2a7f6330426a2",
+      "sha256": "9d27abd5f6823c8fcfd89b714578b8d1f3b9104f15ebeda074eb7f87893f7249"
+    },
+    "dlls/kernelbase/file.c": {
+      "bytes": 152948,
+      "git_blob_sha1": "f0dedfe3b14f5c25a6a14f735bd22aaefdf48b15",
+      "sha256": "a98d40ce91a3e394eb0e8db22da6223d1eb8d176f97c9d20fb2e5749bd34fe93"
+    },
+    "dlls/kernelbase/kernelbase.spec": {
+      "bytes": 77637,
+      "git_blob_sha1": "27f45edcedf0489864e481bd35971d5b6fd3baa2",
+      "sha256": "b6583422b6028f313d4b9dfbcadffc6398dbc2f9626011dcdc2c27fc44dc47a8"
+    },
+    "dlls/kernelbase/loader.c": {
+      "bytes": 41937,
+      "git_blob_sha1": "7afbe0460ebbe15c785e3c7fa63aa6df4c893003",
+      "sha256": "41dbdd439d4cf53f0166af17b5ad48646c8ed7830bef630af389ace736b42a71"
+    },
+    "dlls/kernelbase/locale.c": {
+      "bytes": 281271,
+      "git_blob_sha1": "651f45be8c201f6d91c78196192d157804234741",
+      "sha256": "3c6b3d18709b240845d8c49d7cfdf72591aea7e68b267db5db0508d9d80e4328"
+    },
+    "dlls/kernelbase/main.c": {
+      "bytes": 17280,
+      "git_blob_sha1": "60173ba6513007a58de5c7e36108f21bd4fc8ef3",
+      "sha256": "82d71a62161acdc390102bdec16653a08a73a4167d0329e573228f07fbbf874c"
+    },
+    "dlls/kernelbase/memory.c": {
+      "bytes": 59911,
+      "git_blob_sha1": "0be178f6ab764025054e2cbdc0ccae5e45ab4e93",
+      "sha256": "43613e7583c6e5296428ac7ad96a85431be7edd5aa5e5e1ebc856fe8f38b597b"
+    },
+    "dlls/kernelbase/path.c": {
+      "bytes": 144620,
+      "git_blob_sha1": "a737294e65539f17ed620f6ac4e1130561ee0300",
+      "sha256": "ade370249da8004d4aad3a4a4b3533dc2afd70c0f80912f72c68a8af94c963a2"
+    },
+    "dlls/kernelbase/process.c": {
+      "bytes": 67399,
+      "git_blob_sha1": "df3447a90149fe2f0dd0125c18d869ed4d510f8d",
+      "sha256": "703568c2809695b1942b36c621e6df3923c0943f7c3d79456c9d661edf71f450"
+    },
+    "dlls/kernelbase/registry.c": {
+      "bytes": 137388,
+      "git_blob_sha1": "6b9041e17b93d5032b7eaf753b9f756a02e78e0e",
+      "sha256": "70b7a1142e8ecb98c474e8c903fe68a7528103983e3444631aed7d386401d0eb"
+    },
+    "dlls/kernelbase/security.c": {
+      "bytes": 60649,
+      "git_blob_sha1": "fd0eb4e561d1b1618560d85e5df71c002c1a867e",
+      "sha256": "5015ef482e20af8dd09930ea34a98210ab9b7447caade50b3cd7061f9b252651"
+    },
+    "dlls/kernelbase/string.c": {
+      "bytes": 32894,
+      "git_blob_sha1": "f83ae35f19a74f70fd95328b2113de9e50a0ca62",
+      "sha256": "001975e863d5c48ae1fb37cd415cdef6338a25cf77ce4e1d3865d6356b78da09"
+    },
+    "dlls/kernelbase/sync.c": {
+      "bytes": 60067,
+      "git_blob_sha1": "f03a6c3150a6951eb0c81656ef24ad7cf23fadf7",
+      "sha256": "2279b5da771feebe0abf73fbd1f64e0484f4f108d4915f8f00dd75db5e586aa5"
+    },
+    "dlls/kernelbase/thread.c": {
+      "bytes": 48277,
+      "git_blob_sha1": "12e1777262acb70b65b9e2842bbe8362d591c297",
+      "sha256": "358515f74fc69c4769a19718819253eb957bcb723ac64a3b09ea084c747c1f3a"
+    },
+    "dlls/kernelbase/version.c": {
+      "bytes": 58234,
+      "git_blob_sha1": "d9529ee085cf65ebe55de76eff127cebee0362f5",
+      "sha256": "9ff47976ec9799660af04dc7b868fafe6d49487cc3a11db80bdd1184e8720ec9"
+    },
+    "dlls/kernelbase/volume.c": {
+      "bytes": 41014,
+      "git_blob_sha1": "d4895228525665cf5badefcc60022a70164b27cb",
+      "sha256": "2e0b784800255c0052e74702291a53fae4bb22f87d67b148147b7e85269ebe07"
+    },
+    "dlls/lz32/Makefile.in": {
+      "bytes": 109,
+      "git_blob_sha1": "69e1a94daf929ce9722f496e726862eec6853338",
+      "sha256": "74e232b7fffe2db3aed9070815e481c6bfea794380332e49af15d29bdec1146d"
+    },
+    "dlls/lz32/lz32.spec": {
+      "bytes": 585,
+      "git_blob_sha1": "9a89a9da4b72c042734144fcc7819dc4f74c5fb0",
+      "sha256": "6a471b0421ee75a4dd8e4513e4c3c39dc0d24f2e66e330f6089aec6eb6d953b2"
+    },
+    "dlls/mlang/Makefile.in": {
+      "bytes": 157,
+      "git_blob_sha1": "6fe383da010460473fa90020ca628e86810e01b4",
+      "sha256": "8ebc7b6ca9262e23383f933e6dbd3406d6b319af4b284d0768dc1148d078ef75"
+    },
+    "dlls/mlang/mlang.spec": {
+      "bytes": 639,
+      "git_blob_sha1": "fd683a9310338d243cdfd5922abea38bbfb9c2e0",
+      "sha256": "d0e7403510908ad89fb53ab2b572d6d96d48f38e39e4727b5113e6be63d33b7d"
+    },
+    "dlls/mpr/Makefile.in": {
+      "bytes": 155,
+      "git_blob_sha1": "ed84349f4f6d5f006df91e3127fe0c36a90d0b49",
+      "sha256": "bbe05708e4a0c4c86417bb4731da83f8f71dcf94fbe1c2b6aa71bcfd31917560"
+    },
+    "dlls/mpr/mpr.spec": {
+      "bytes": 4057,
+      "git_blob_sha1": "155e4485c382cb6dd35ccff2cbad9c23ffc4c66c",
+      "sha256": "825a52b81a8245e3b80a2d5ca0283ab3e8b1bce33683f88afced3627c195fd70"
+    },
+    "dlls/msacm32/Makefile.in": {
+      "bytes": 201,
+      "git_blob_sha1": "8174256c2379bc4ba4cc8f81c993111b95f3fc8b",
+      "sha256": "936b652333b37b58e8d65472d598cbac6f75cf12eecd46160e6e39fa345f4331"
+    },
+    "dlls/msacm32/driver.c": {
+      "bytes": 25679,
+      "git_blob_sha1": "c01872d636afa8ca3cb329fb177697b7f014f40c",
+      "sha256": "46d202af7d04e6682903a3dda8a68525b7fcf13da9d4fa2a00e72842cfc4cfe9"
+    },
+    "dlls/msacm32/filter.c": {
+      "bytes": 14886,
+      "git_blob_sha1": "bacb9c0abcf2b135583e15fd1000c9f5e86dff5a",
+      "sha256": "1252b023a947376540b0cd55f9388f72cde5ecd2c94eb08747c5ef8f92e25781"
+    },
+    "dlls/msacm32/format.c": {
+      "bytes": 37898,
+      "git_blob_sha1": "6aab538fffb1404f83f5f0c479fe9c6cb4f5d69f",
+      "sha256": "abf5cd57a4a69d324fe38b42c851a1303e4993340dec487dce5104edd2a1d37d"
+    },
+    "dlls/msacm32/internal.c": {
+      "bytes": 36451,
+      "git_blob_sha1": "7c2d3b5bf9e9a509ecd70f7a56bfb11ea0f72988",
+      "sha256": "cc923b126fdb80f70477458fb71c1a04e409b7a6b5d779b0758438dbc967811c"
+    },
+    "dlls/msacm32/msacm32.spec": {
+      "bytes": 2013,
+      "git_blob_sha1": "28b1c7ca6bbd057aa56d174b1b2baa15baeb99fd",
+      "sha256": "e5a41b55fac09dd0d60594d5c4f4df65339cc68006dfd3e9e1220b17a9acf483"
+    },
+    "dlls/msacm32/msacm32_main.c": {
+      "bytes": 8263,
+      "git_blob_sha1": "ad33c88d85a44cfb96884d7d7ec1f5644db6b151",
+      "sha256": "d01f54d972ec920b36bafc978821836828f85b855766efc0297967e43d2be1ae"
+    },
+    "dlls/msacm32/pcmconverter.c": {
+      "bytes": 39890,
+      "git_blob_sha1": "0b9724ba5e12a2e3b91f815b340466d82454c750",
+      "sha256": "528ddb461121f11e8dd94b0e3aa74b722b275c0b6670dd1db57902297d815104"
+    },
+    "dlls/msacm32/stream.c": {
+      "bytes": 15937,
+      "git_blob_sha1": "1fcd2e3906628673fe0cf8b012501df7bea8c754",
+      "sha256": "ca71b3c8bd9758597af1c7533dfa6111455f1607833b758afec2397bb5ea51e5"
+    },
+    "dlls/msacm32/wineacm.h": {
+      "bytes": 5456,
+      "git_blob_sha1": "d6a8112b8eeca247b5cc76783286379ef0a4fc51",
+      "sha256": "b9c14c499ca538613220a8453e4e6d8d0efbe547c03dafe5981fefdeb9bc8c14"
+    },
+    "dlls/msadp32.acm/Makefile.in": {
+      "bytes": 73,
+      "git_blob_sha1": "ee271b6c37728c7b8420720f4eaadf1944a9e035",
+      "sha256": "7a9d11ef3d5213caaf6bfaa9ed92ed15407e883fc2513f3cf6b8904f2beef34b"
+    },
+    "dlls/msadp32.acm/msadp32.acm.spec": {
+      "bytes": 74,
+      "git_blob_sha1": "09473e9d6a6b05bd129ef05870e6ed1972ad67aa",
+      "sha256": "8959fc514fc0a97b57e203d74edbdcf15ff1b86919bfe8b0ebf50e09cb706a5e"
+    },
+    "dlls/msadp32.acm/msadp32.c": {
+      "bytes": 28552,
+      "git_blob_sha1": "b31f6371a7a20b807bb71491a747ee1857c9e2ca",
+      "sha256": "376d4974676bbb0219bb2d9ee1d430f97b14b1597540454d0af84e446b19e637"
+    },
+    "dlls/msg711.acm/Makefile.in": {
+      "bytes": 71,
+      "git_blob_sha1": "02fcdd8f737a918566c52d244737364cf2ae2557",
+      "sha256": "deb754e749d52169b9fefaa5e5167afde287974864270c8961beff485c2b6d7a"
+    },
+    "dlls/msg711.acm/msg711.acm.spec": {
+      "bytes": 72,
+      "git_blob_sha1": "e351c5879a5815331e14c77f558a567c719a2342",
+      "sha256": "fc307bd1088051ef6d23ab18408c7a869765d387577fa4f86ba3b2843bb20ff3"
+    },
+    "dlls/msg711.acm/msg711.c": {
+      "bytes": 37534,
+      "git_blob_sha1": "69461e928038d6739bdd97ee57cda67949039b29",
+      "sha256": "9608df5715dc92e67fa3be9eacaf3a351e1513f9f9af37a32f8637e705d5c512"
+    },
+    "dlls/msimg32/Makefile.in": {
+      "bytes": 91,
+      "git_blob_sha1": "a327345ad4fdb10cb8ce5b8f7997278531aa337f",
+      "sha256": "a41dea59b6eda88ccc79d80eafdcd62b023204d7c29ef66f46f6dea912d4d12e"
+    },
+    "dlls/msimg32/msimg32.spec": {
+      "bytes": 358,
+      "git_blob_sha1": "a4a67ac0da11dc8d78544365a30c4cc99d9fcc39",
+      "sha256": "9221357b1274f22d3357a18b468f6b4da7cbff8d5d75daff0a30fc4531cf8354"
+    },
+    "dlls/msrle32/Makefile.in": {
+      "bytes": 87,
+      "git_blob_sha1": "620293277a2b7e69dab5689a2c45a45fee5162b1",
+      "sha256": "6235361a7934d54ea87b666379db41899740ec4318485a81f7d9421912539465"
+    },
+    "dlls/msrle32/msrle32.c": {
+      "bytes": 51845,
+      "git_blob_sha1": "d4d7b229282dd4b7a2583a102c2f325a618c37d5",
+      "sha256": "8c6da3d1cbb0108a145fa49389cb69b50f810de2f5f8df49d7663b5e771a3c76"
+    },
+    "dlls/msrle32/msrle32.spec": {
+      "bytes": 75,
+      "git_blob_sha1": "623cfea82bd1d9314d1b6642133a82597e7d3e30",
+      "sha256": "723f04dd0019ff6207006445b0e9f721a3a52f6bc43a0ed5f5bf15277801e768"
+    },
+    "dlls/msrle32/msrle_private.h": {
+      "bytes": 1769,
+      "git_blob_sha1": "d182fef1f0664f1cc40a6244c79cf995f72c93f5",
+      "sha256": "33a7c65f3ba4ddc742ca55401a518d1fa11c2cf042b1d3f698fe3bcde92acbd9"
+    },
+    "dlls/msvcrt/Makefile.in": {
+      "bytes": 677,
+      "git_blob_sha1": "aa068b62e5154acaa73e6580b1c90b1fdfc4dcc1",
+      "sha256": "7c2e820d4392df96c71a43dfc0d283ca27abbf616a4fa856cc892b489349c14d"
+    },
+    "dlls/msvcrt/bnum.h": {
+      "bytes": 3935,
+      "git_blob_sha1": "3e42f61e3e1c851f7e818e1037d79afadc2e9091",
+      "sha256": "1b353bd784922683b1206b852e307818a7a7db19b6f5213e07be40ecc71a3e03"
+    },
+    "dlls/msvcrt/concurrency.c": {
+      "bytes": 124638,
+      "git_blob_sha1": "561b4d232891531254797acd86800fe08b4883f5",
+      "sha256": "9519316082ce818ea9b4da08d65f3e4ba658c0b96e5d83aaeb67ba7037c28742"
+    },
+    "dlls/msvcrt/console.c": {
+      "bytes": 16917,
+      "git_blob_sha1": "2c6b59d36c6346914a3861f4c8240e4d0f31da76",
+      "sha256": "283fc3e09844f7df16e5cb169500ad68df7024f1b22221d75e8097deef96c40a"
+    },
+    "dlls/msvcrt/cpp.c": {
+      "bytes": 33824,
+      "git_blob_sha1": "84959f1a05c262ee9b60503d8c04b208c97c4893",
+      "sha256": "126723a763528fe027148e70d4dc5553ac1413ccada63f3df35f1d02f422d4a7"
+    },
+    "dlls/msvcrt/cppexcept.h": {
+      "bytes": 12309,
+      "git_blob_sha1": "e6afd1e871efb635701859ad7dccf6d433ee4f76",
+      "sha256": "334fe7289ff56edecc45346beb5ab50d59fd8c4c7e3241d2db3496b21ed751bb"
+    },
+    "dlls/msvcrt/crt_gccmain.c": {
+      "bytes": 1074,
+      "git_blob_sha1": "88ca287473271578037ac5ca2c6595685e230c16",
+      "sha256": "f2f9855fbbe2a92e11862031400eb719ddba9fd12d2692698fdbf23e473f9a3e"
+    },
+    "dlls/msvcrt/crt_main.c": {
+      "bytes": 1835,
+      "git_blob_sha1": "eb785e30bb096d91894aa89a4aca28a51a7de725",
+      "sha256": "0b2c67b7e364e0c04645c9ca396fc718f694abf494e5c2602e03ac13128dc757"
+    },
+    "dlls/msvcrt/crt_winmain.c": {
+      "bytes": 1680,
+      "git_blob_sha1": "fda3d12f688ad7b7ca71e4f4530c3f41655be4e3",
+      "sha256": "511d92ec4ebb900b121e65402c4ba767067c128138ae4f8baaef3b84628c4367"
+    },
+    "dlls/msvcrt/crt_wmain.c": {
+      "bytes": 1838,
+      "git_blob_sha1": "79755d1a6e90b873ba3c15141c9dbda04e680b76",
+      "sha256": "1aab6d767926063003e7872870ba366e6e5759e5406b94461797517245903ded"
+    },
+    "dlls/msvcrt/crt_wwinmain.c": {
+      "bytes": 1746,
+      "git_blob_sha1": "b50f728025b59a908babce4d5357278f75b5fd53",
+      "sha256": "e5256464b42fc5f479006195681309c5f73abe62fa39ca9859169e60b9ef6c1c"
+    },
+    "dlls/msvcrt/ctype.c": {
+      "bytes": 16278,
+      "git_blob_sha1": "1297bc56046a52619b03d25fd66c0c84351fd34f",
+      "sha256": "8289f06866e54055508076423b7604061ddbc47dde520946de026b07442074b4"
+    },
+    "dlls/msvcrt/cxx.h": {
+      "bytes": 14432,
+      "git_blob_sha1": "8037d7def568183d2153caa0503325a7ed0fcee3",
+      "sha256": "48ce885f88448e8a8e6c58a595de9035a5e7249880ca0ac4ac124feee175fe45"
+    },
+    "dlls/msvcrt/data.c": {
+      "bytes": 20587,
+      "git_blob_sha1": "6e764e52eae5080ced2a57eefe65e6fd577594fc",
+      "sha256": "3ceea1589690993e60b9ba00cdc23bc52d5bcb688f37e9d426e7b1c70449ba46"
+    },
+    "dlls/msvcrt/dir.c": {
+      "bytes": 44171,
+      "git_blob_sha1": "a047ca47aab1a030e0af642c9aa3cc2c71172ebd",
+      "sha256": "c248db85f46be80df7355e9facbb75bfd19817344509a3249aed286aac096c7b"
+    },
+    "dlls/msvcrt/environ.c": {
+      "bytes": 14529,
+      "git_blob_sha1": "a0d2e08c7d0fcf44f61f1e5bc2079979104f9834",
+      "sha256": "f5e1ac754f493e15d7aebe196966e28142ec9087b9f3fabbba65c4988a2626fa"
+    },
+    "dlls/msvcrt/errno.c": {
+      "bytes": 15958,
+      "git_blob_sha1": "85752e52df7cd65071743a3530e2c86d69e87c01",
+      "sha256": "9700f18db33ceeef95330b406c070ff3694b593851c8aa22ee3d49dd7be71815"
+    },
+    "dlls/msvcrt/except.c": {
+      "bytes": 33735,
+      "git_blob_sha1": "50f131efdc7f7f7dbbe696de6257d68a26753211",
+      "sha256": "af0fda614c6589602ef2e3c2f340977c42b2c15410866e7cac1e280a0228f0d3"
+    },
+    "dlls/msvcrt/except_arm.c": {
+      "bytes": 2973,
+      "git_blob_sha1": "b2bf94d533817e8d4a8d88163fff4bf2755984e6",
+      "sha256": "5962be354ae3df140a473d74fb7f45b4fb6e81142be4611b9ead2c95ea6ef2b5"
+    },
+    "dlls/msvcrt/except_arm64.c": {
+      "bytes": 4316,
+      "git_blob_sha1": "6d515f8b15063206407d87a0e1c5a20e28550df9",
+      "sha256": "4742d171bf4cf38f8e491feabf3db079c16473fc8ef3ee871cee147a30b57ec4"
+    },
+    "dlls/msvcrt/except_arm64ec.c": {
+      "bytes": 5576,
+      "git_blob_sha1": "b2e723f79b3192af00da0286314899417303a504",
+      "sha256": "d154ca84a8d278cc5d5e5e61ae0b186947d5599e526df774d8405f11ed35de62"
+    },
+    "dlls/msvcrt/except_i386.c": {
+      "bytes": 34934,
+      "git_blob_sha1": "7d1faa952721332e0cc76512eef74570ca75dec2",
+      "sha256": "e96075b5390d20c377f5d8dbac32c426001720ff9ecd0973a95038fd88711385"
+    },
+    "dlls/msvcrt/except_x86_64.c": {
+      "bytes": 4813,
+      "git_blob_sha1": "e0fda975be46ea276570042955864b8ebb75c76c",
+      "sha256": "8eebeda14949d197ac5418ef4ad0a860dea8d8211eb71d9d2be55599a9e13870"
+    },
+    "dlls/msvcrt/exception_ptr.c": {
+      "bytes": 8363,
+      "git_blob_sha1": "d4f86d713ca09620f74f0a3c4b3549066e46312f",
+      "sha256": "8e52aedea9f9f4b8809acca5da65cf508c45389ad1ff37719f51420dc0516f5a"
+    },
+    "dlls/msvcrt/exit.c": {
+      "bytes": 13283,
+      "git_blob_sha1": "c8db6c405da51f11d5dd91cd66f2b679026973e3",
+      "sha256": "a9e630dbfc732d0c2b908e1d53c57c7a790c299fa7df59247cad356884e67eb7"
+    },
+    "dlls/msvcrt/file.c": {
+      "bytes": 149265,
+      "git_blob_sha1": "dda12a70194e93507425a0fc3d093daea73fed55",
+      "sha256": "196978554a788c889abb67d93643d3bd7e631c60ad15cb45bf53f6d2e7030fd5"
+    },
+    "dlls/msvcrt/handler4.c": {
+      "bytes": 24760,
+      "git_blob_sha1": "d6024e710c37515f2b355278c7b390b94249f5e3",
+      "sha256": "ef356a40da06eb14ba6084f619f15f7d385060e3a98933f1325a94b996ef6be8"
+    },
+    "dlls/msvcrt/heap.c": {
+      "bytes": 21985,
+      "git_blob_sha1": "70e4ecb815c64872ce8f6df075abb15ba1cf2c49",
+      "sha256": "254fbf88c11b4850b8c0205f3edb0dcc25bb59473ee43eac6f373f7bff18c548"
+    },
+    "dlls/msvcrt/iob.c": {
+      "bytes": 1284,
+      "git_blob_sha1": "4d8456867a8b179ceb5a5277282f3617f57662d0",
+      "sha256": "af96927386951893118c7b4d0a84a3930f426711b3b7affbcd0104bd06108aeb"
+    },
+    "dlls/msvcrt/locale.c": {
+      "bytes": 73428,
+      "git_blob_sha1": "85714a724abe186d151e79371daa2c69e2376a06",
+      "sha256": "26f0f096c5169f6f2f7f35838bb0a60e4fb43ee6df01b9cc2505edbf0d9a9dc0"
+    },
+    "dlls/msvcrt/lock.c": {
+      "bytes": 4247,
+      "git_blob_sha1": "886bb625b109a813d340bf8d676dea2b0763c75f",
+      "sha256": "44b5190d4cd635a2c15ee138ea50696a4cf82c0646f182ec7de2592942653e06"
+    },
+    "dlls/msvcrt/main.c": {
+      "bytes": 4600,
+      "git_blob_sha1": "e4bcfe35681fcf4a2aa3cb426801822fb1a08492",
+      "sha256": "c103f3534784fec70c09e924c9af4a05bfdacfe1d7df4f81370b66bc974b2dca"
+    },
+    "dlls/msvcrt/math.c": {
+      "bytes": 79138,
+      "git_blob_sha1": "be345fb7a4a480d781149b699541a55b224c96e2",
+      "sha256": "a76e73328a22a731aceba7648b61c7b4b791db392fbc3ed1739eba0a4ae94ac3"
+    },
+    "dlls/msvcrt/mathf.c": {
+      "bytes": 2270,
+      "git_blob_sha1": "3c87c7d0e007a0c475993138ad3662ddb31c7e2a",
+      "sha256": "40746e3e9da10ea9784b6d2bf686c0346c0fff856d8b1eb2c0bd3a6c2d9e6cbf"
+    },
+    "dlls/msvcrt/mbcs.c": {
+      "bytes": 90945,
+      "git_blob_sha1": "bd4245c2c5315b3c2e820ee7ec6e9fbfa40da701",
+      "sha256": "428aafd36ab787fc28d491a68621656b7859a68bde5238e0f81811b30ae94f20"
+    },
+    "dlls/msvcrt/misc.c": {
+      "bytes": 16076,
+      "git_blob_sha1": "559bb7288b362d5e3ef7890f9ca77671580555fb",
+      "sha256": "b1ae79b2236c4a4a79ac990c8aabade962d7c8e105d23e9d07c14507792c20ee"
+    },
+    "dlls/msvcrt/msvcrt.h": {
+      "bytes": 14587,
+      "git_blob_sha1": "480d0e238fcf3e715360f94e1352387e09aeaae6",
+      "sha256": "e3ad0f7fbcfacdcc1714670c9865541a48855ae8211f8d5fa3f7bf29f738d6cf"
+    },
+    "dlls/msvcrt/msvcrt.spec": {
+      "bytes": 53422,
+      "git_blob_sha1": "27cd61376e41bb7b28fba58842cf0a191158faba",
+      "sha256": "d332ca4927d9e0ec5173aa71375c844ce0d921acb1aea27cc5397542ef528851"
+    },
+    "dlls/msvcrt/mtdll.h": {
+      "bytes": 2068,
+      "git_blob_sha1": "87eebd97dd4de1e658d02088c99bf715821176c8",
+      "sha256": "a52b23101fc00b8db155efb0488beb13e63b3c5eaba1ebd70e74df860375fb81"
+    },
+    "dlls/msvcrt/onexit.c": {
+      "bytes": 3201,
+      "git_blob_sha1": "d0c61700542aa7814c83363924291052f62a4170",
+      "sha256": "9ae72c754b6fff569b7795a4c1cde275e0da16d4b4dd55d154589f3c02b7fbd9"
+    },
+    "dlls/msvcrt/printf.h": {
+      "bytes": 39883,
+      "git_blob_sha1": "be30d6ae7192c3e0930df9976fbbc03a987c5a4f",
+      "sha256": "00ff543b2f0ee62a1096bbe1c4266cdd12b3de9d609d80e40542a8d86efb4762"
+    },
+    "dlls/msvcrt/process.c": {
+      "bytes": 32465,
+      "git_blob_sha1": "f50fd7a213f7c083b83124e45ab34991630e4b4c",
+      "sha256": "4ce34c64e7431b94169f4f031a6d6fbe35233fbdf4d96635d8d45c66b4164ac9"
+    },
+    "dlls/msvcrt/scanf.c": {
+      "bytes": 20565,
+      "git_blob_sha1": "c77649797ed6e391fd9e11218e3df0b9255314ae",
+      "sha256": "73c8abe8a9f2a448118e8ec7d3cb0424371d22e4ae697064796a29a61ff65e0e"
+    },
+    "dlls/msvcrt/scanf.h": {
+      "bytes": 25472,
+      "git_blob_sha1": "1d7a92a9c1c1afc4caea37ef9110799dfda7fbe7",
+      "sha256": "bf5cae6671ee0d6e8ee3879c1477f7c088d795a75b33929139ca4d167aa88536"
+    },
+    "dlls/msvcrt/sincos.c": {
+      "bytes": 1170,
+      "git_blob_sha1": "1a34c50f0349c05fe0e754afe607a59c3fd2da79",
+      "sha256": "9379808714d8955b3a47fc07ce8cdcca622b79e721471de9e622a421c71f2890"
+    },
+    "dlls/msvcrt/string.c": {
+      "bytes": 87403,
+      "git_blob_sha1": "90538533d95b3824331f0e4293b7ec114430a8f4",
+      "sha256": "78f4a1486e33459150312c35c58436cb3b84dc88077818de305e41bcfc2d2a53"
+    },
+    "dlls/msvcrt/thread.c": {
+      "bytes": 7849,
+      "git_blob_sha1": "2a8a99b847bdffcc1f1f17b615daa2975da5d2b8",
+      "sha256": "08dc58f5d97978568346a1dc27a2c31dd4e9c3d976cc4bdd9fb9971c150087ec"
+    },
+    "dlls/msvcrt/time.c": {
+      "bytes": 53653,
+      "git_blob_sha1": "8199fe01649485afd62757f9eca2468b10d171ae",
+      "sha256": "ff3b7bbbbb9defbbc02b4574feca3cfaa2cd39b33cef5d36364b5615700b47a0"
+    },
+    "dlls/msvcrt/undname.c": {
+      "bytes": 59951,
+      "git_blob_sha1": "923ec67d363228cca00f0ee10061383967e5253e",
+      "sha256": "038ff10021016e25cb931b10dbb0a3a1e3fc4f9acce131785e244276533ff86c"
+    },
+    "dlls/msvcrt/wcs.c": {
+      "bytes": 79641,
+      "git_blob_sha1": "1b7bc3e54e06a0a392f9ab028cc9b46943eabccb",
+      "sha256": "c9177c4956be6bc3b2d1e15520e6cbedca16cb031aa8a0dc27ad57efd0961fe7"
+    },
+    "dlls/msvfw32/Makefile.in": {
+      "bytes": 169,
+      "git_blob_sha1": "50feb8ff5543a5b21be0b580562d05efb14ee7e7",
+      "sha256": "8114d19a3ad0a70ff7fc23c98e8c02984dee53fd4547de55266fc4c0533492d5"
+    },
+    "dlls/msvfw32/drawdib.c": {
+      "bytes": 14447,
+      "git_blob_sha1": "0acb1c3f64674ec88ae16a05e498623fa9c6ab4c",
+      "sha256": "48f04f29849dae3d41a842b876259ca68ed70fecee704698b6224f26d2c76840"
+    },
+    "dlls/msvfw32/mciwnd.c": {
+      "bytes": 45207,
+      "git_blob_sha1": "c71e4fe55672962d6d3846433658548afdf42761",
+      "sha256": "44dfda48e15ff83a5be8d3622714307c00cf9b6615c82580198ec47711581953"
+    },
+    "dlls/msvfw32/msvfw32.spec": {
+      "bytes": 2185,
+      "git_blob_sha1": "f0c9e157fd0822cbf93220ee0c8889a9733a56b1",
+      "sha256": "7580ae2d7c04f4974f5021e782c06de39367df291057e2be52854b1bf6a9c958"
+    },
+    "dlls/msvfw32/msvideo_main.c": {
+      "bytes": 49664,
+      "git_blob_sha1": "d332300c711093086bf92a4ff9b80fb1233d0a22",
+      "sha256": "7a20ae78f02dd1c02a42a1cc05429845f30a4b260f428adf93dbe977cff77e07"
+    },
+    "dlls/msvfw32/msvideo_private.h": {
+      "bytes": 1897,
+      "git_blob_sha1": "8bce5cd77a583cc8b91a5c016bd3a42cf5733c6c",
+      "sha256": "65fdcf85b27d1f2938ccd83c1ef191f55a548eb2d149d4001b2e3627bfbd1381"
+    },
+    "dlls/msvidc32/Makefile.in": {
+      "bytes": 84,
+      "git_blob_sha1": "0139f6910d8b575c15c2ecb5e26c3fa5ec8fa03c",
+      "sha256": "e63eb8fe049f97be2450808166fd00a04b73df151e9a2e19bb4378480de1a289"
+    },
+    "dlls/msvidc32/msvidc32.spec": {
+      "bytes": 72,
+      "git_blob_sha1": "e93470adea968ad017bffdc228a76327996618dd",
+      "sha256": "93b730dee626abf204e8c2f00369feb8f3f8ba7bcf82a36d3dae86c00289e7aa"
+    },
+    "dlls/msvidc32/msvidc32_private.h": {
+      "bytes": 953,
+      "git_blob_sha1": "590600e232ba13884c8ad8f14e0164516af6a19b",
+      "sha256": "c1acd7211b40a0e72a310e86e737a6e48f46e6f4febd34495ebaf0b7800ccf2e"
+    },
+    "dlls/msvidc32/msvideo1.c": {
+      "bytes": 21165,
+      "git_blob_sha1": "327882f68f2005443627987653f715305f617c2a",
+      "sha256": "069fb8e39135af6509affa2799cc61d5a5dceee8669af4c3ab823318dd6c8cd4"
+    },
+    "dlls/netapi32/Makefile.in": {
+      "bytes": 236,
+      "git_blob_sha1": "1ee1f8bfd8f367643741187cf1014e30a020133c",
+      "sha256": "8835b3a4cafc4582e34515b48647cd6753c20f575a4612c2e7adfd9640dab7be"
+    },
+    "dlls/netapi32/netapi32.spec": {
+      "bytes": 9665,
+      "git_blob_sha1": "f5fd4444de856a33ae26a275829baed011fa7879",
+      "sha256": "5048fca778d8c34a96bd3a342c81fd4508f2eecc1a2ea693d3eb5867bfd3f313"
+    },
+    "dlls/netutils/Makefile.in": {
+      "bytes": 104,
+      "git_blob_sha1": "08a3fd46f5d54460aaa9223174794ce721bd0876",
+      "sha256": "6b1060338bc5e982fc13f57fcd6d8190f175012c7f962db31112d23379e0fda9"
+    },
+    "dlls/netutils/netutils.spec": {
+      "bytes": 684,
+      "git_blob_sha1": "a6a4319800719d8595510bbcffd91fdc70f8afc7",
+      "sha256": "ce9dba7ffcd5b43ea5c52024a5c4da92029f31218a69f0434ef48dc230dea05b"
+    },
+    "dlls/nsi/Makefile.in": {
+      "bytes": 56,
+      "git_blob_sha1": "71b23fd19e0b7ac5e4458e30ed1ed825f152d617",
+      "sha256": "b4df0fba13ff2ec16b24c8d8d1139893f545da71fa485615876f6ca9b5127650"
+    },
+    "dlls/nsi/nsi.spec": {
+      "bytes": 1212,
+      "git_blob_sha1": "9f1a247236202b7aee20dd33d9733c8735c2bf84",
+      "sha256": "66b614d3c2638255bb3803e7ba2a572f253d172238b634085bf6a04ad9ff1ba4"
+    },
+    "dlls/ntdll/Makefile.in": {
+      "bytes": 1510,
+      "git_blob_sha1": "37bd6c86e31fb389f3bc53bc56c3bc8aad250d45",
+      "sha256": "7f4adf17016b0012307fb95815619e5fd3538a6a2c697a7b69c24e9f8d4a1c74"
+    },
+    "dlls/ntdll/ntdll.spec": {
+      "bytes": 85633,
+      "git_blob_sha1": "620d96a599263a710c91c79c307fb2380ef4f7ab",
+      "sha256": "e66cbe56fe5a44875853b1619ae85787380f4c2275598031d564dc0b043da57f"
+    },
+    "dlls/ntdll/unix/file.c": {
+      "bytes": 247376,
+      "git_blob_sha1": "8bc69557057ebad408e3ddbd126702c2eb182ecd",
+      "sha256": "e89f082258b11ae0a9eec65ac970e718b67996e6cc124df1c102275411f0e3f9"
+    },
+    "dlls/ntdll/unix/server.c": {
+      "bytes": 66322,
+      "git_blob_sha1": "b40e7c2a1d794c83a425e5d16d4e4587681b23c3",
+      "sha256": "5fb41cb7a6055ca79773e4dab0477eda270a382920755a0f0df4629cc84c9670"
+    },
+    "dlls/ntdll/unix/sync.c": {
+      "bytes": 89692,
+      "git_blob_sha1": "d486b50001dcdfb0903c61fff51d3cb2f5b95094",
+      "sha256": "34981fdaae7d57a102300d295d6ebc5fe73d48d21a29be9616c51f375a118521"
+    },
+    "dlls/ntdll/unix/unix_private.h": {
+      "bytes": 24840,
+      "git_blob_sha1": "f840045f841992e885d7c4db292569e238fb7e3b",
+      "sha256": "807bbe9c58efb89be36bbc8210acfa25946534b6a9cc7b449afc5ff25d927260"
+    },
+    "dlls/ole32/Makefile.in": {
+      "bytes": 843,
+      "git_blob_sha1": "ee0fcc41f7d14e60b740d203494fd02dab018f40",
+      "sha256": "e77174c14a2764e460270319cc59806dbaa751f380b694a362c085014ff1f428"
+    },
+    "dlls/ole32/antimoniker.c": {
+      "bytes": 19993,
+      "git_blob_sha1": "401162c300b9fec4bfa4185d5ad84d576e0ab444",
+      "sha256": "978baa2872686a9cd43fe8c664fba723c91fbcc1f731e6b88f379db8f25efae5"
+    },
+    "dlls/ole32/bindctx.c": {
+      "bytes": 16252,
+      "git_blob_sha1": "360464d13c5b32477a9757fbe3f85c93fb92ce07",
+      "sha256": "0a6040053838bc75e1c2a922b50d173baa449c38408e52aa690b4105d9ad2c3c"
+    },
+    "dlls/ole32/classmoniker.c": {
+      "bytes": 21206,
+      "git_blob_sha1": "4b95f577b84682f281aa3beb3ab5bcf3cf428896",
+      "sha256": "211c8b06907a09d9890f3a06ce5b7c80e76d6aab168ae0639283ac00880a09b5"
+    },
+    "dlls/ole32/clipboard.c": {
+      "bytes": 64629,
+      "git_blob_sha1": "c54608985fbd811f746ae08e8568dac5172d1a5e",
+      "sha256": "71b77f812b485c7cd2e9a67d07c24fd757ef04b1386ff46cbb4527520b8a99fd"
+    },
+    "dlls/ole32/comcat.c": {
+      "bytes": 34471,
+      "git_blob_sha1": "ad7e8a4b07614e6b27d87ef43d15c5c727c1a01a",
+      "sha256": "ee6446fa30b2f4b3df06b6fe20c4b24956770b33b5cdaeb6ad5740731a3a3b23"
+    },
+    "dlls/ole32/compobj.c": {
+      "bytes": 25865,
+      "git_blob_sha1": "f6ada46459a33689750d9aa9c4ae8bd29c22a7f0",
+      "sha256": "c40772044afe00118b5ae75831b1d6248ec3572b4ba6cb59348b284fb0b40ea8"
+    },
+    "dlls/ole32/compobj_private.h": {
+      "bytes": 6172,
+      "git_blob_sha1": "2daadb617c5faeb1895a5809a394782d82bbe7ef",
+      "sha256": "cbeabfe2af82e9202c1469a14775ad7047d9204876f007c59b281bb252ee1d9b"
+    },
+    "dlls/ole32/compositemoniker.c": {
+      "bytes": 51484,
+      "git_blob_sha1": "d322604adcefebc3a9d518540da1dab47c0f0a7e",
+      "sha256": "4f39a48b2ac92177de8a2b7766481f73b6cec4397abed42d23986d5df60d4369"
+    },
+    "dlls/ole32/datacache.c": {
+      "bytes": 90040,
+      "git_blob_sha1": "937fd10e7e313aa5d66fb3af8d4ebb62d50b33d0",
+      "sha256": "579bc0841d49c64c0810a98bf441145d5b3427cb655c3d0f60bc50789dc5241e"
+    },
+    "dlls/ole32/dcom.idl": {
+      "bytes": 4677,
+      "git_blob_sha1": "05c0513362f58fc052b280f05f1890ee0ecc4b90",
+      "sha256": "a4610a1926cc12bbea9ee0e196f6b967326255e306e4281a0fd72463db97cbf4"
+    },
+    "dlls/ole32/defaulthandler.c": {
+      "bytes": 66089,
+      "git_blob_sha1": "b69a054b572f2faea9af6661f4bd1ebf710ee886",
+      "sha256": "55e3001a02edfac75ecf07cd6e39736cc7d48eeb9856a56715b5e27675d13029"
+    },
+    "dlls/ole32/dictionary.c": {
+      "bytes": 4986,
+      "git_blob_sha1": "593a4ff1588593f939b9e901c30ac443b8ec0395",
+      "sha256": "b198e0ca506e5d82e2b7b965774ed99f00e1a2a775d7cae9ea487de395758439"
+    },
+    "dlls/ole32/dictionary.h": {
+      "bytes": 3632,
+      "git_blob_sha1": "231a64747232df64c4075808c82ddb6fa4029884",
+      "sha256": "d7d83cd957796d9a20f5f2550a70476ad6e915841a5ce6f257c0994c86247100"
+    },
+    "dlls/ole32/filelockbytes.c": {
+      "bytes": 10747,
+      "git_blob_sha1": "d806916f1d5879a6321a14097d004c9d5762cc7f",
+      "sha256": "d11806c1100764f41478efe369d1736462032076185a4be790853fb9fb09e6ea"
+    },
+    "dlls/ole32/filemoniker.c": {
+      "bytes": 41629,
+      "git_blob_sha1": "9368212124dff3f5fb763bb8ff16249b72f29d73",
+      "sha256": "e1dd58528d77cebd18c28733eeb55bb5364e5dd4b7e2a0a88cbdb7c9afe4cdf4"
+    },
+    "dlls/ole32/ftmarshal.c": {
+      "bytes": 2653,
+      "git_blob_sha1": "8777b553618ffc6d2d281db489971643c60d9594",
+      "sha256": "8520e478f2be868bf07920ae6f2ffc10ffe94711d788ed788f71e67a1d55f314"
+    },
+    "dlls/ole32/git.c": {
+      "bytes": 9265,
+      "git_blob_sha1": "4e432723914974bafd63439984c8fc3c244b45b2",
+      "sha256": "bcd2709936e5c3c314061b9113a5d8a0e0a27d773dda2ce52778db2c2261baab"
+    },
+    "dlls/ole32/irot.idl": {
+      "bytes": 846,
+      "git_blob_sha1": "e5ef1df900968ac31509216a946772751e3d0b89",
+      "sha256": "53e1d598dd076955dd2c2961d95167050d507f0f307a3202d53d1db16a165e45"
+    },
+    "dlls/ole32/itemmoniker.c": {
+      "bytes": 30769,
+      "git_blob_sha1": "3e4edc0bb91318e7e6c5f106cc5e76cc5b9fefe0",
+      "sha256": "242e5aba32cf897b1d148071a1eb1a96fbd8fe760f7aea6f2226522ee179808a"
+    },
+    "dlls/ole32/marshal.c": {
+      "bytes": 2712,
+      "git_blob_sha1": "823aea6f72161179d23a1ab0be21ff7c7eb5f656",
+      "sha256": "946bb89a2d30f2efe64c07ac2de587773e1db7e5c43ae7bb1cc1a601faa383e5"
+    },
+    "dlls/ole32/moniker.c": {
+      "bytes": 41812,
+      "git_blob_sha1": "b81033c6c4e7803267b1b4e7aa3edd5a81bd2c14",
+      "sha256": "7749e3aa198eeaa83490aa47868e2be052fb2bbe0f613eee8d8f53f1196edfd2"
+    },
+    "dlls/ole32/moniker.h": {
+      "bytes": 2699,
+      "git_blob_sha1": "94282b3fffc39c481b35972541613ced517ee605",
+      "sha256": "62f8bbbc22c92cecff292b523026659411812d12dd3d79179ff274e61c1ef78a"
+    },
+    "dlls/ole32/ole2.c": {
+      "bytes": 88421,
+      "git_blob_sha1": "f4672b704ee24448ad74b5fa6fabe9d20135a099",
+      "sha256": "c8b9188ce98c1940d43c39d84f75ac6d273cc9434d3476957ba323c8bf63caa6"
+    },
+    "dlls/ole32/ole2stubs.c": {
+      "bytes": 2874,
+      "git_blob_sha1": "0d8198480b16055cd2b49ef231376dcb7736904f",
+      "sha256": "3f54e68ba9c7304c3b234684d1d21532c2880ff1a3ae26cf9356e884e0638588"
+    },
+    "dlls/ole32/ole32.spec": {
+      "bytes": 15858,
+      "git_blob_sha1": "7ec85fc963f767ae54c3975c392c0d01657fac40",
+      "sha256": "124fc1cf35aa234b5496fe5e1ebe85a3dd81da32da9920ffae28ccbd83a21f14"
+    },
+    "dlls/ole32/ole32_main.c": {
+      "bytes": 4888,
+      "git_blob_sha1": "daff46864ba3a7f8b263121156f96df0a51082c9",
+      "sha256": "f647e9abb694f8d22c8841451d608109e2c74595ec502523534cea2bbfd31a46"
+    },
+    "dlls/ole32/ole32_objidl.idl": {
+      "bytes": 3124,
+      "git_blob_sha1": "16bd7e2ce317f3dbff87bd5781327fdb218c1df7",
+      "sha256": "8bce1e06c17909e284004454972700ca886ae8d0e6815dd3bf466c129bfc922d"
+    },
+    "dlls/ole32/ole32_oleidl.idl": {
+      "bytes": 987,
+      "git_blob_sha1": "1d7c0ebca65a9eeeedb78df96551baa58d078b65",
+      "sha256": "2e923a3421cf7e7f341d88beb6836aea68d6529178868e71acb49db7e1b1d706"
+    },
+    "dlls/ole32/ole32_unknwn.idl": {
+      "bytes": 1310,
+      "git_blob_sha1": "90d83cacdf64c336330f02cb5181da385e68659a",
+      "sha256": "cb6dc8a3f3b8300848bb5f29f9349830c8ff4e5f5713eeefa012cff59b94b54a"
+    },
+    "dlls/ole32/oleobj.c": {
+      "bytes": 25798,
+      "git_blob_sha1": "028da1446fdc9871986be6b0462b305bf554ebfa",
+      "sha256": "d6130f8350d9e55ccbb26621c7566d9097334e7aec386622e7b4d46a55e661f5"
+    },
+    "dlls/ole32/oleproxy.c": {
+      "bytes": 7027,
+      "git_blob_sha1": "c429ce02b3bd3b0734f5635b10f2cce1e3ec34ce",
+      "sha256": "a52ffbcb88cf063f00add8b4bb184e96f5b5d48cd959324928f3db03dd0f3f12"
+    },
+    "dlls/ole32/olestd.h": {
+      "bytes": 2155,
+      "git_blob_sha1": "33063c7cd822d379b7028aaae3d2ebea91bf75ee",
+      "sha256": "57b992facb4db86e6d86c09904174a6732b2d4243f119327e3d7143c475397e5"
+    },
+    "dlls/ole32/pointermoniker.c": {
+      "bytes": 31364,
+      "git_blob_sha1": "01efe3061f0704961f65cfa5c7553eb99f51fd36",
+      "sha256": "e601f990ee4ab413698fdeed15c5978c6310bbe7800970d58748b379e5bbb9bc"
+    },
+    "dlls/ole32/stg_prop.c": {
+      "bytes": 93732,
+      "git_blob_sha1": "a19ce8ad3d637fd9840e6e8204c7489b04ce3207",
+      "sha256": "4b628af0a5683c8daf41b5e38fa3a56f085c36a41ebb4cb9e4f8ddf98c2ddf5a"
+    },
+    "dlls/ole32/stg_stream.c": {
+      "bytes": 17534,
+      "git_blob_sha1": "25ead2c7c491a3bf7fc65fdbc72c97a3d3d85055",
+      "sha256": "c2f020f0126b09301d3e6823c7f09c37e8f10ba7c3ec1486a196d3a60b830d47"
+    },
+    "dlls/ole32/storage32.c": {
+      "bytes": 288618,
+      "git_blob_sha1": "72dfbe85bd8f05d88d012bfabe8f604a527d3462",
+      "sha256": "9e0e0dac5e485c2be9485d5a9a4a9e7b64fad9e7088d827f32d5680f2ef5cb74"
+    },
+    "dlls/ole32/storage32.h": {
+      "bytes": 18864,
+      "git_blob_sha1": "dd4b89aceec69d98772039f04c281db0cc33ce11",
+      "sha256": "559d693fd94805c066df9b0dbc50bbd768bcf0fb583add0998b5b61c076eb393"
+    },
+    "dlls/ole32/usrmarshal.c": {
+      "bytes": 61549,
+      "git_blob_sha1": "574427092a15f0888615d56d89a8078fdf7950d3",
+      "sha256": "6c2e23d54cf325ce733569841814124449f4360a5bc7cfe8ddd01eecb7fda0d5"
+    },
+    "dlls/oleaut32/Makefile.in": {
+      "bytes": 564,
+      "git_blob_sha1": "1e85c4bd299a039dbd4f169e0f4c047b8709fdd1",
+      "sha256": "cab1982c8caf8f2ee5bf1493bb936428b2f661d56bff9167d39920932d8fb1ad"
+    },
+    "dlls/oleaut32/connpt.c": {
+      "bytes": 12755,
+      "git_blob_sha1": "9275b7306d6d8a1b7628998f179c97a204e49dd9",
+      "sha256": "58baed8ab5a066cbc208a1e0a2d87fc2267c9845bea5b0741512d20563e0f2b6"
+    },
+    "dlls/oleaut32/connpt.h": {
+      "bytes": 941,
+      "git_blob_sha1": "cac3ae62fa88aa69930d9795cfe11776758e5b77",
+      "sha256": "e48db85c3aec978efe3ac56d82df9bd3151e984739fc5d11e6965d7443eddf55"
+    },
+    "dlls/oleaut32/dispatch.c": {
+      "bytes": 15224,
+      "git_blob_sha1": "7fa96e5af836a7acf12d17e2662c8780343d0902",
+      "sha256": "80c6d7d33c33d7090b0a0e5dd6696451996705531488f02242e709b89ed87e74"
+    },
+    "dlls/oleaut32/hash.c": {
+      "bytes": 33132,
+      "git_blob_sha1": "e3aababb2419c8b986f2908e052e2d123b7c8bb6",
+      "sha256": "5e13911b6c4e1ab11131210db90d083f4975dfe11c053ace62939c282f53e867"
+    },
+    "dlls/oleaut32/oleaut.c": {
+      "bytes": 38004,
+      "git_blob_sha1": "1ba638597f87a6baed65ee6d7c5ee7246097f22e",
+      "sha256": "95da1a94db507f062ef153fe9227605a1e9c4f43aa49d496c6e68c746c4c7152"
+    },
+    "dlls/oleaut32/oleaut32.spec": {
+      "bytes": 16118,
+      "git_blob_sha1": "21b52f1f06e171ce410ab8ec01ab98c0fe409f7c",
+      "sha256": "d8682694db5c65e1ac04b6a1c2f682bf34255a587d2198d1dac222e2af4abac2"
+    },
+    "dlls/oleaut32/oleaut32_oaidl.idl": {
+      "bytes": 1306,
+      "git_blob_sha1": "306137c9a9dd8284c55dd71989e8f5917f908548",
+      "sha256": "41f57d9fc71bcddc232bf86840088563ee084d9966d7ca4b538f1792b4c24878"
+    },
+    "dlls/oleaut32/oleaut32_ocidl.idl": {
+      "bytes": 2288,
+      "git_blob_sha1": "94792630dfe63f4c91f4e73a10735b4605bb537e",
+      "sha256": "0d981f1c7250be214a7640db228d5f10290acaa522ec16e4aac40dd7f7e55989"
+    },
+    "dlls/oleaut32/olefont.c": {
+      "bytes": 59616,
+      "git_blob_sha1": "f1af3f4cb703c9d111e8ed77d9bc89d2989f8774",
+      "sha256": "701bcdd96ef8724c7eca95aa74262b72ad06938c477d3dfd1147318f52ac3428"
+    },
+    "dlls/oleaut32/olepicture.c": {
+      "bytes": 77433,
+      "git_blob_sha1": "a461d28f6eb8522b15996e08295318d9635bc754",
+      "sha256": "2d366908c1039e061488e3fc1dc644f80e8817976d55aa4e38488b06e296f712"
+    },
+    "dlls/oleaut32/olepropframe.c": {
+      "bytes": 11262,
+      "git_blob_sha1": "cad1a2ad5c2e7bf778df3e114aa7a275a9c6363a",
+      "sha256": "a4f2df49c1dde404077ed1385a8418609e7b5adf4c58356a87a148b900f74a40"
+    },
+    "dlls/oleaut32/recinfo.c": {
+      "bytes": 19788,
+      "git_blob_sha1": "dfe7625a98688ab06ceda5ee688756a1417d2a41",
+      "sha256": "96361830e99cf402f0131acdc28245c120b9e9a758ea88c288ad3cdc211b0ea2"
+    },
+    "dlls/oleaut32/resource.h": {
+      "bytes": 1481,
+      "git_blob_sha1": "550170afc61dbf073617b8f033e5379d0f586425",
+      "sha256": "9dfbcfc8de57a2d96f80ab11fd43ddc2c428516884ee3e538f09671afea83c4b"
+    },
+    "dlls/oleaut32/safearray.c": {
+      "bytes": 44527,
+      "git_blob_sha1": "92a73c768daa6315ef4a107ec0bdef54b346bf96",
+      "sha256": "c164e43bce1fc70b5e72822bb503337989f6a093c7b1b19dcddfae8646cd3a16"
+    },
+    "dlls/oleaut32/thunks.c": {
+      "bytes": 7999,
+      "git_blob_sha1": "c6676041f71d7ecfdd8bccebcea6fdab9f928c77",
+      "sha256": "2bbe419a3970fe1b27e3eb19ec7ec0d84dcb34dd9745d948b900fbd432d00369"
+    },
+    "dlls/oleaut32/typelib.c": {
+      "bytes": 356772,
+      "git_blob_sha1": "f421a76fe95b89db85775be429c0312874384ecd",
+      "sha256": "601b98fdac51700adf7e73d697789785230abcc6cf820d9da0b35a8332b23a12"
+    },
+    "dlls/oleaut32/typelib.h": {
+      "bytes": 23852,
+      "git_blob_sha1": "515d4b557e68f9876b846fee18db9f5f90464f64",
+      "sha256": "50484e73330509f31c16ab3fb6e9184ae7fea04cc46892ab5f692e581c5eab60"
+    },
+    "dlls/oleaut32/usrmarshal.c": {
+      "bytes": 68648,
+      "git_blob_sha1": "25bce3155bf2b660a56809eb7a63d1cfaae413a9",
+      "sha256": "bc23bd1a09e854c5c6b6e1ab819b85481ddce3a586f50721d2254f46385bfc16"
+    },
+    "dlls/oleaut32/varformat.c": {
+      "bytes": 81750,
+      "git_blob_sha1": "3f69a45a89799102610482ea1f0bb2a8b79c9e51",
+      "sha256": "299a46ac256c8cfc417d43fa283b1215dc339a4c03ee6cdf9f225e4663263e4b"
+    },
+    "dlls/oleaut32/variant.c": {
+      "bytes": 190257,
+      "git_blob_sha1": "bb1e83e9b7e46d475a970280a0ac2f5e84bd4767",
+      "sha256": "f208833ee60c56c92dc10a117b31936228e0f2757cffba5467e70c9abda46815"
+    },
+    "dlls/oleaut32/variant.h": {
+      "bytes": 3033,
+      "git_blob_sha1": "562903c19f46acb4fdf9f7a69d76567145f6c47d",
+      "sha256": "9106aa86836f42d5d4dd1eaf89075f3deb096b2231760e0ea82d86532da58d30"
+    },
+    "dlls/oleaut32/vartype.c": {
+      "bytes": 219610,
+      "git_blob_sha1": "747705f94e23c64278892fc645dc9cf7275f6a3a",
+      "sha256": "73beeb9cb62e84952b1787d239166aba82277014fd2aac668b5c7085742d6731"
+    },
+    "dlls/opengl32/Makefile.in": {
+      "bytes": 303,
+      "git_blob_sha1": "847491eb78f04f3d38a4e0b1e15767ba56479f30",
+      "sha256": "092c2119d12714ff55d5e7fef0a74819b89f978dd29731b4b8de0d31a1ce5909"
+    },
+    "dlls/opengl32/opengl32.spec": {
+      "bytes": 13110,
+      "git_blob_sha1": "94a3dfd0757789e68fd346401003a3b36b80d4ab",
+      "sha256": "137f58c8e84385c11b8e7c390707e5f651fc8a84393db62e2d59e7778e5e3872"
+    },
+    "dlls/propsys/Makefile.in": {
+      "bytes": 217,
+      "git_blob_sha1": "a8661ca17e96bd5159c906a769069a4596d91e18",
+      "sha256": "7c345a5b0e247afea1b9e71e3ffe2c32e08b0700ddea67c7b5faa8b56e988f33"
+    },
+    "dlls/propsys/propsys.spec": {
+      "bytes": 6873,
+      "git_blob_sha1": "6a608ca88c1b3fe5c1c4752356550e652619b5ee",
+      "sha256": "a64ad1f67219b63fbd2877e8cb9ce56884d36c6deed26073b61650e500bb2f4b"
+    },
+    "dlls/riched20/Makefile.in": {
+      "bytes": 420,
+      "git_blob_sha1": "cd9d5ff63b161a5c4e5b1b33969b671f5988e4a2",
+      "sha256": "1fcda8e48c73667ce88174afebd0cd1dfd138c2d6f5a8c1c1157d7041fcd4818"
+    },
+    "dlls/riched20/caret.c": {
+      "bytes": 42715,
+      "git_blob_sha1": "9b94bcb22498286b435aeb1db63c5fd5495e3d39",
+      "sha256": "270dc4fd6ffd5d374095765e00c05a1db0f5f2fbf693c35cb4d21e12243bf598"
+    },
+    "dlls/riched20/clipboard.c": {
+      "bytes": 13045,
+      "git_blob_sha1": "65d317b6bc70e2fdd5aa6468a1ee1bba2de7cdbc",
+      "sha256": "d3f8cf9d20a4eb7c83c64608c8e9653b1b78023835ffdd7480c9c21d02174a59"
+    },
+    "dlls/riched20/context.c": {
+      "bytes": 1463,
+      "git_blob_sha1": "24592cff10c1857a5c172425f3858b5ffcc38ad7",
+      "sha256": "2457f0d2903692076c76e704e4c0d0660e82aed633ca6810ce688db120e2046a"
+    },
+    "dlls/riched20/editor.c": {
+      "bytes": 138420,
+      "git_blob_sha1": "1a0c444579beb9645959eb1b63ab812e22eb859d",
+      "sha256": "ba855b8c6dc79e09fb556cdd4e02d1be22358c4625c36e14e573113a8a9b326e"
+    },
+    "dlls/riched20/editor.h": {
+      "bytes": 23875,
+      "git_blob_sha1": "1ad8f4adef418fe778d2181fc82b8c7543c703e0",
+      "sha256": "2c30e6f5076bb9279cc2561f3c0c929986545bb987a57ee2f0a5abd98cd33af8"
+    },
+    "dlls/riched20/editstr.h": {
+      "bytes": 12019,
+      "git_blob_sha1": "1f766a3664658db783a23093ef9f6f575f0e4bf4",
+      "sha256": "b58dc069c271adb280c38bf7b57145ac35761029059f63a5e15b795e753be879"
+    },
+    "dlls/riched20/list.c": {
+      "bytes": 4893,
+      "git_blob_sha1": "8348b245bc536dabe14f37f99884a5bd415021f9",
+      "sha256": "25c4695582ab7679ae21293d3bb5731f4b1784f62f197ae69f0b6811744edb7c"
+    },
+    "dlls/riched20/paint.c": {
+      "bytes": 43923,
+      "git_blob_sha1": "0182e54bfc62f08e10b68369f54fdd7f0c2c2231",
+      "sha256": "91a66c0127e67005f7f9ec0d67ee1b19904b64fb94c5d9e255bbf4d7150d3d76"
+    },
+    "dlls/riched20/para.c": {
+      "bytes": 31041,
+      "git_blob_sha1": "2c9e28921897a359660f8d039304342d5ee777ca",
+      "sha256": "7d024a2d952daa7985e9a13488d4b8ff056afccf1055d528170aa12b32c88b37"
+    },
+    "dlls/riched20/reader.c": {
+      "bytes": 78501,
+      "git_blob_sha1": "95360d8b9d48f297f9cd0627d4cf4142d49f4c4e",
+      "sha256": "525d06dcde05bed06ab9873782e5e2afb34a37607f0719e05fe9ab87768063dd"
+    },
+    "dlls/riched20/res.h": {
+      "bytes": 875,
+      "git_blob_sha1": "2f677a47790efa4d9f7c16507f8bdceb9dde1f3b",
+      "sha256": "b6a743a9d17602ac14747353e1a8eae0c536f53d23e25c7b720499615475bb1b"
+    },
+    "dlls/riched20/riched20.spec": {
+      "bytes": 315,
+      "git_blob_sha1": "aa71eec8f771304a745fa559ffc2be70d7288006",
+      "sha256": "09f4c185e6d3d97c3d67a659a08e28c439987563dfd6939a2fb9e91757e6c742"
+    },
+    "dlls/riched20/riched_tom.idl": {
+      "bytes": 19105,
+      "git_blob_sha1": "03ca032e933991e21e009bcd7a946d29d74ef990",
+      "sha256": "993d69883f77c26319d882fd8cd2fca50f0c0be842c305bafd59ca5faba3215c"
+    },
+    "dlls/riched20/richole.c": {
+      "bytes": 166210,
+      "git_blob_sha1": "51ae41d2fe71b32575b8a7f0ac17c898a51744c0",
+      "sha256": "80def68879f62ae3fe01e51bc23bdb381ebaf287e9917c36ef8ad2a47b115aab"
+    },
+    "dlls/riched20/row.c": {
+      "bytes": 4188,
+      "git_blob_sha1": "715d2adbf62d658609bedd6ff64457a4bd2c235e",
+      "sha256": "7f35145e262c5efd6a06d34fa0214025537e41ec8d63778f626c2c03a5580e6c"
+    },
+    "dlls/riched20/rtf.h": {
+      "bytes": 37526,
+      "git_blob_sha1": "f2d446ac5d35c3f92e2de9e87fd29663af0d8373",
+      "sha256": "9839fea759765ebfe3913f74b264b91a683b98a12b9c99cf820fcccc4bde2b12"
+    },
+    "dlls/riched20/run.c": {
+      "bytes": 26673,
+      "git_blob_sha1": "8de2ba345cfda945595ae2cf251db17d7dbfa9f8",
+      "sha256": "3198aa3fc2c6b5beef2d7afa0e56a8f4c323b87f4d1a33d48f231c3420471ab6"
+    },
+    "dlls/riched20/string.c": {
+      "bytes": 6069,
+      "git_blob_sha1": "1a416595a08f04b28ce52e24679384f43cefdf25",
+      "sha256": "7d0425c9f99cc6777038fbf7721afbd55ce402f264051db0da5372e42ae3b7f8"
+    },
+    "dlls/riched20/style.c": {
+      "bytes": 16661,
+      "git_blob_sha1": "8102ec6e4484ed519367bfec73f7c700e3c88c20",
+      "sha256": "d37a4aa7e779b8568cbd71fcc997028f813e9e44ce64e87c2ac2cfe984b3ad8e"
+    },
+    "dlls/riched20/table.c": {
+      "bytes": 18402,
+      "git_blob_sha1": "56614b53e643b007e9b67f848a777dea3e7d4ab8",
+      "sha256": "8fa42452ede10bfd626e7da62d3431adf129f4cdde087ebd216c2fe897ab63e4"
+    },
+    "dlls/riched20/txthost.c": {
+      "bytes": 58749,
+      "git_blob_sha1": "8ae8043777335e1f75f3170f3f7fa7a4a16d2f12",
+      "sha256": "125225eeca157ccd6614b6fa28f1652e0fff981dff3a351e421b10023c4d2b13"
+    },
+    "dlls/riched20/txtsrv.c": {
+      "bytes": 22358,
+      "git_blob_sha1": "5c63b3daf9af525b34d30dc0953e69b6b741d249",
+      "sha256": "4b70a786b4f96624162787a0e58652daeb715fca7856f36bc2d40307361f34bd"
+    },
+    "dlls/riched20/undo.c": {
+      "bytes": 14714,
+      "git_blob_sha1": "27637909ebf1659d1e5f2f47f77fc0ad9281d893",
+      "sha256": "25f9fc45f5b04bce904435554ca28af7b806bbde91d08deafc7deaa1ac9a1fb5"
+    },
+    "dlls/riched20/wrap.c": {
+      "bytes": 36859,
+      "git_blob_sha1": "a4d638aec3d0929065525b9699198b2ef1fedb92",
+      "sha256": "5ff2138855e451b56c3008557d689a3e58ef76505c81a9cb5c99e9abdd06ce1b"
+    },
+    "dlls/riched20/writer.c": {
+      "bytes": 37471,
+      "git_blob_sha1": "70d5290b01e5bcd71ddfe58c7adab4bccd27c8e4",
+      "sha256": "636ec0cb706d9b978f459380caba853f3e266e01e096a6f8823f1a8ecf81bfa6"
+    },
+    "dlls/riched32/Makefile.in": {
+      "bytes": 92,
+      "git_blob_sha1": "9dc74713b16124d2bead5c0f1a88e2f712a9fc2d",
+      "sha256": "70da11a1a8e2aa341dd64436aba9daeb6e5dc8dfd27b24dc5bd648453b66a20c"
+    },
+    "dlls/riched32/riched32.spec": {
+      "bytes": 39,
+      "git_blob_sha1": "2446ff7825b66bb45f86c85ae29b916052f5c23f",
+      "sha256": "3594f0f265314bd9b96b698940b3668b86bceee62ae451d22b7a9da552180492"
+    },
+    "dlls/riched32/richedit.c": {
+      "bytes": 2747,
+      "git_blob_sha1": "44ce8434e38536bede4b289dea270ab7f7719a3c",
+      "sha256": "679fb3fc025ec752008a82225b5ec451cb590a8cc2c5c740d6928850ca18fddf"
+    },
+    "dlls/rpcrt4/Makefile.in": {
+      "bytes": 542,
+      "git_blob_sha1": "69f6961eff3126eaf37b3dec0fe119463aecb193",
+      "sha256": "77bb144623007f0b07d73454b092600f2057c89bd1c7ad1d356bf1d939adcd3c"
+    },
+    "dlls/rpcrt4/cproxy.c": {
+      "bytes": 11839,
+      "git_blob_sha1": "c912041d962384033a25a7069c453d263e783afc",
+      "sha256": "3dbbaf8efec448f31d01f41ff21e34e324838fad12ca5a0a69d1be605ac6fcc3"
+    },
+    "dlls/rpcrt4/cpsf.c": {
+      "bytes": 11649,
+      "git_blob_sha1": "006e6bce62ffc83d09e9a58a44c994a1ba5c56c2",
+      "sha256": "3d0682f240ac98b07a4bc62d467246039728ab1954bac5623317f2f2307ea98c"
+    },
+    "dlls/rpcrt4/cpsf.h": {
+      "bytes": 3242,
+      "git_blob_sha1": "caa4d30298b644b4d86305201185adc4cac7ffc6",
+      "sha256": "0ee3e998efa85e490cd2df1bf2ee56c1dfb036373187e28bb0b03ec72bbe6f3e"
+    },
+    "dlls/rpcrt4/cstub.c": {
+      "bytes": 14343,
+      "git_blob_sha1": "719ee8591634546e905727424056d811f0355ff4",
+      "sha256": "7ceb59a3e91fe1c00d9e16c491d84e5dff4028ef26cef6275dcd1e250152b614"
+    },
+    "dlls/rpcrt4/epm.idl": {
+      "bytes": 829,
+      "git_blob_sha1": "52951869c1f575cc2c1ee444499e30c9ad91fbd8",
+      "sha256": "54146f2768773b055094b2a648da8c88e33360c1f26a57be6bd5e1f166dccc33"
+    },
+    "dlls/rpcrt4/epm_towers.h": {
+      "bytes": 2598,
+      "git_blob_sha1": "3eec37aa2284ca147a890ebc649f7c7931f293b3",
+      "sha256": "8bea5826bf31f191dafb25a563b9343505dff9a2dad4323abe082b85daeae349"
+    },
+    "dlls/rpcrt4/ncastatus.h": {
+      "bytes": 3151,
+      "git_blob_sha1": "0a9700268e253b7657ca7d77b486a968a601f97c",
+      "sha256": "4b4c4cd82378768bd2fefd59f9af4fe590b15a844a8e7206e159e8367042fbd6"
+    },
+    "dlls/rpcrt4/ndr_clientserver.c": {
+      "bytes": 8367,
+      "git_blob_sha1": "e67046e4c08052876131516b7d7787c15c55ce63",
+      "sha256": "5bef5c253f8aec93a897b37c95ca96b05065e0a5f94a8d9007ad855893d35dd0"
+    },
+    "dlls/rpcrt4/ndr_contexthandle.c": {
+      "bytes": 11895,
+      "git_blob_sha1": "1bff1e8293672d39da304cd08011331bf1ddec5a",
+      "sha256": "138d65e4f32168f353cf12d095f771cf0dc82390426e888d490ed48aee43a20f"
+    },
+    "dlls/rpcrt4/ndr_es.c": {
+      "bytes": 17855,
+      "git_blob_sha1": "3c870f41d78fc5cf277873f479e1b2a41fee0558",
+      "sha256": "5fc0926d585252213abe1a43ff5a8bc6464be62db6496f3095a4b62aa152ab3b"
+    },
+    "dlls/rpcrt4/ndr_fullpointer.c": {
+      "bytes": 8774,
+      "git_blob_sha1": "39e1b18c8282fb79c2b21934395dc0347fe4b92f",
+      "sha256": "908b602b03f157987f0f8080da54273494d0d4c548c9cf1b39f8742292a51a0e"
+    },
+    "dlls/rpcrt4/ndr_marshall.c": {
+      "bytes": 233996,
+      "git_blob_sha1": "c68eb0ee57e1e7b24533e7be0d68b6e5bfb1f413",
+      "sha256": "360ca2dd2c7578173838abcbc44f1cc21c76ccc92dab4616eed5e08edd643eef"
+    },
+    "dlls/rpcrt4/ndr_misc.h": {
+      "bytes": 2653,
+      "git_blob_sha1": "b0150c3a2eb6642ff462ab4e23b6e2fd838c9a77",
+      "sha256": "ff03e9691931aad0ea0d3d0817a4b5d6b560a1cba12f44864f7fa77a1b922937"
+    },
+    "dlls/rpcrt4/ndr_ole.c": {
+      "bytes": 12905,
+      "git_blob_sha1": "aa7ca1ab765192520f548a25137797df9a3ca015",
+      "sha256": "ecddcb55881b3054913b87d4920fac70bac85954a28271fb1ca875d4994ad30b"
+    },
+    "dlls/rpcrt4/ndr_stubless.c": {
+      "bytes": 84282,
+      "git_blob_sha1": "8cb051443aed2d2c69ec96eff8216dbac24d82d1",
+      "sha256": "0d3d3393b7718303812faa4706cd57917602e12264a37cf1d232780680d8c0c2"
+    },
+    "dlls/rpcrt4/ndr_stubless.h": {
+      "bytes": 9208,
+      "git_blob_sha1": "fa8f9fcd9b758f854d42d169f65988e5ccb5f182",
+      "sha256": "c005d8a928fac4bcc2f32d67e97155cad2862ff660be633ad83ebab9f7cde4d0"
+    },
+    "dlls/rpcrt4/ndr_typelib.c": {
+      "bytes": 53476,
+      "git_blob_sha1": "1006bf1d3a0a5929dc7b4a0c1c0f8f04d5d68c6e",
+      "sha256": "00c964c37b8dc542738b11a67e5bca4eda7dbcdfe33bcade309ff138d8251e4b"
+    },
+    "dlls/rpcrt4/ndr_types.idl": {
+      "bytes": 1013,
+      "git_blob_sha1": "ff34ae47fbe3aa18e232b6854090b6051cf77c24",
+      "sha256": "b4891a9cc06834e84ddedb12ec724a838b243cd968949810c0aea9197123d027"
+    },
+    "dlls/rpcrt4/rpc_assoc.c": {
+      "bytes": 20350,
+      "git_blob_sha1": "c3eec9558dde45d3137bb053f762723b6306c619",
+      "sha256": "faa700658fc1771f3d25e07f00754b972ae21bb27c4a2900e5ba78eb479aaf29"
+    },
+    "dlls/rpcrt4/rpc_assoc.h": {
+      "bytes": 2777,
+      "git_blob_sha1": "f3275f0f70ffb5babe84b758e00dab3154c68e99",
+      "sha256": "4e9ae2b493624437aa1d1bf5f3d5c3d1458961c5e110c49749a40cd69ca73400"
+    },
+    "dlls/rpcrt4/rpc_async.c": {
+      "bytes": 5019,
+      "git_blob_sha1": "d194496812b807c565b093231d15aa1e5a97664d",
+      "sha256": "202afda1518547cff3901caa06dbf49e90bd2d502275cc53cec77628f119688e"
+    },
+    "dlls/rpcrt4/rpc_binding.c": {
+      "bytes": 66911,
+      "git_blob_sha1": "d4e35bdf11628348d55070f8d4d941312328e8d9",
+      "sha256": "81161ddc4da5cc74889bab1782397041a875a129eb7ee843f1f826b5f4245510"
+    },
+    "dlls/rpcrt4/rpc_binding.h": {
+      "bytes": 9935,
+      "git_blob_sha1": "a80433d01dbd0e7afd56052edaa668901c195fda",
+      "sha256": "783c437e7efb14ea6daed1394c80b9419ea92a9e6003969525da124b89b88ee4"
+    },
+    "dlls/rpcrt4/rpc_defs.h": {
+      "bytes": 7555,
+      "git_blob_sha1": "434d39699ee97921502683297998027b2870ce47",
+      "sha256": "d10542b84ed29cc0ca6ffa19d4a22637fa1a9b7d61b97b18e2a0b7d46f101c2f"
+    },
+    "dlls/rpcrt4/rpc_epmap.c": {
+      "bytes": 21270,
+      "git_blob_sha1": "1c1fa84eb7533d8f08d69cd9709485b88f8bd146",
+      "sha256": "a10f313af4d19c9e0e50894298df93edcecc3564968d49ffdca319f971c7f521"
+    },
+    "dlls/rpcrt4/rpc_message.c": {
+      "bytes": 62298,
+      "git_blob_sha1": "5ef2ee8edc5a89d17c83a59729339b3909dd91b1",
+      "sha256": "20b9baf9e7c32ebf0c2d3ebbf177df2473acbfdcad0851d6705fa961bd3c6f27"
+    },
+    "dlls/rpcrt4/rpc_message.h": {
+      "bytes": 4535,
+      "git_blob_sha1": "c156554c1d0ada547b945f0c82ad490759aaa8c6",
+      "sha256": "cb11dea9598342e8f086185592b32af517ab7f228e9fb583d4b34ea62d5f40fc"
+    },
+    "dlls/rpcrt4/rpc_server.c": {
+      "bytes": 54781,
+      "git_blob_sha1": "eb733f6998088fc0630af35106b5d26905469b0a",
+      "sha256": "ab6050d1f078d66dd26277b2c286bb9f4d32681e45b1f693bb74fcd3cb503a08"
+    },
+    "dlls/rpcrt4/rpc_server.h": {
+      "bytes": 3033,
+      "git_blob_sha1": "3360d411741ae09f6a5b36297317f6797c069f5f",
+      "sha256": "995f22f8f537a2a460eb0a3dfc227e3c22c801560a8edada85faf7a63c2a101a"
+    },
+    "dlls/rpcrt4/rpc_transport.c": {
+      "bytes": 113328,
+      "git_blob_sha1": "8d53e7cee3582f7838f700fb9069d0f154d46fa4",
+      "sha256": "923ff5dff94c3ee06c40e72c2eab556e1d47b7df2e0993afa7c27d995d4f7ed9"
+    },
+    "dlls/rpcrt4/rpcrt4.spec": {
+      "bytes": 21033,
+      "git_blob_sha1": "428bf0a81ed18b3c33af6afebdd4a2f0528f80a6",
+      "sha256": "02415cf480c583fa9f44fc4d1225da8bf5826273f36bc68bba3b89c10af076f4"
+    },
+    "dlls/rpcrt4/rpcrt4_main.c": {
+      "bytes": 35319,
+      "git_blob_sha1": "37d82f330dc3255ed6aad4dd9f4d9694f8c2f888",
+      "sha256": "3b283bd553cfa3503f367c0888300a2961dd3ceaef57b02413c0c774d3f20925"
+    },
+    "dlls/rpcrt4/thunks.c": {
+      "bytes": 24606,
+      "git_blob_sha1": "6e830fc1ed985ead2588d6a237a5de87301fb5d0",
+      "sha256": "23981987da662773cba0ede1c09c578022ebaa2fc427e19af91c0bdc6b7711da"
+    },
+    "dlls/sechost/Makefile.in": {
+      "bytes": 168,
+      "git_blob_sha1": "ec1eb100683cab5539288613ad4e02b0049c925f",
+      "sha256": "d4072f6ea69184fe388dacb7b595154df67fea7ca42ff2ac643a112ebf194c36"
+    },
+    "dlls/sechost/sechost.spec": {
+      "bytes": 8925,
+      "git_blob_sha1": "12f4ff6441232c4fa9b9c0664b9be99bb15016c0",
+      "sha256": "bd4f44b1dbf6d900a794961d0c16066e1aa83e4cc58e4ae43df2363df2d87632"
+    },
+    "dlls/secur32/Makefile.in": {
+      "bytes": 251,
+      "git_blob_sha1": "2120a9c0e021f6d99718c3c960e152bab91c6838",
+      "sha256": "8611cc42250ac4c86f1a3488d723092dfe2754e9e5d308fab4607d9483f173e8"
+    },
+    "dlls/secur32/secur32.spec": {
+      "bytes": 3787,
+      "git_blob_sha1": "c4824d36f91d83cc5bc2ab2f600062bc0ddbea0b",
+      "sha256": "399cb00128a00238b237ea4769f59dfd6122b1e8ffc33e5cfe96f2ffa0c91ce7"
+    },
+    "dlls/setupapi/Makefile.in": {
+      "bytes": 366,
+      "git_blob_sha1": "4a2d1109707b5a15f29b92179990e9c68bbb16d3",
+      "sha256": "9266466fd9f2ec67c10e69914b71fa8f4ee7f047a122c4a3488c28e40324c362"
+    },
+    "dlls/setupapi/devinst.c": {
+      "bytes": 202834,
+      "git_blob_sha1": "4e406fe700e7e2b625d88447a96a5f79a189e599",
+      "sha256": "8e1fec2a246b4182bc7c91c644d12b85ef7215694f35d41c05c4dfb91b53843b"
+    },
+    "dlls/setupapi/dialog.c": {
+      "bytes": 9882,
+      "git_blob_sha1": "5c253db0a19720c6a5a376da5a4939e67533f21f",
+      "sha256": "3c89832844c6a3f03152a629849860f589ee3ea706ddaaaade21b44d6d47abc2"
+    },
+    "dlls/setupapi/dirid.c": {
+      "bytes": 9506,
+      "git_blob_sha1": "1de0c5f6c42d63accec993e06991b0c714463c9d",
+      "sha256": "7409a51e12814df2e35b08fce392b4319e4464d26512c599cce68dd4f2966fb2"
+    },
+    "dlls/setupapi/diskspace.c": {
+      "bytes": 7961,
+      "git_blob_sha1": "5b89fd5ca99f774846e8e2417a0269eee5307ab4",
+      "sha256": "92bf8fa592d951bf717832326dbaad683c583bcf1a8e0ed45d687817070e5a7b"
+    },
+    "dlls/setupapi/fakedll.c": {
+      "bytes": 37775,
+      "git_blob_sha1": "25305d8a4f68816a6ffb613a51cbdf13cb11a116",
+      "sha256": "d9d616beccca60e992957b3009b7787e0b06b0aea331b4fc724e42e261902317"
+    },
+    "dlls/setupapi/install.c": {
+      "bytes": 56936,
+      "git_blob_sha1": "17150a405968aef5537655de3fb6e252f811fa2a",
+      "sha256": "4b37f2a23423e4b480b6c6ef01d924af8a76de23a8912a4889808d6d3ec0adb0"
+    },
+    "dlls/setupapi/misc.c": {
+      "bytes": 38931,
+      "git_blob_sha1": "3a44f3f4c6049e0d8aec06a706da72329e8494b5",
+      "sha256": "d26ed270465548f21fbe178acc414ada23107568a3b0bf8abf24b0e62a3e5080"
+    },
+    "dlls/setupapi/parser.c": {
+      "bytes": 61071,
+      "git_blob_sha1": "22dc23c54fdcbc66d078334226b5eeaad4ffe64a",
+      "sha256": "4904305fc95b802231ad17741abdd4754ad7b99373313a013c02f83d484f2b30"
+    },
+    "dlls/setupapi/query.c": {
+      "bytes": 23765,
+      "git_blob_sha1": "707492ac984d055dd8df1d1ae442888e2f2dd5b9",
+      "sha256": "c5140c8e37045662837b50d3a9ee94def3c1ce3f62b3b261b943812683a713ff"
+    },
+    "dlls/setupapi/queue.c": {
+      "bytes": 68154,
+      "git_blob_sha1": "1c43808bc5fa36a56eebd05c5ea9ab6ca240a389",
+      "sha256": "e8a6ecff8c63de56eda36d82fbc4291547db7b0682c1333a2ae0c79b77562dad"
+    },
+    "dlls/setupapi/setupapi.spec": {
+      "bytes": 27545,
+      "git_blob_sha1": "958e26235eaf23f50aff6c818ea88d023e63c7a6",
+      "sha256": "e0aba5267779addf9411da9d17d561ee26bcdaacc56f46aec8071166cdcb0bc3"
+    },
+    "dlls/setupapi/setupapi_private.h": {
+      "bytes": 3304,
+      "git_blob_sha1": "9d3d19c84c0e90ad9379c9a7c8cc9d37f2298dac",
+      "sha256": "5e38086579ba64039d7c058205501141a493f96bf6d9b63d20f5cdeb08dcad96"
+    },
+    "dlls/setupapi/setupcab.c": {
+      "bytes": 13251,
+      "git_blob_sha1": "cba244d97f2dc93c1144e283c3af5591950cfcab",
+      "sha256": "7218b9d757a6d139030a2969fe51b9ad98e68f37c18952402083d5d54a5ec976"
+    },
+    "dlls/setupapi/stringtable.c": {
+      "bytes": 16145,
+      "git_blob_sha1": "fbf6c5b3433ff04aa09275ece33013ccd7529936",
+      "sha256": "f677070f0844b14e22fa169b9e6d358064c6d6681b368c7cbacda938a45b6e9c"
+    },
+    "dlls/setupapi/stubs.c": {
+      "bytes": 23806,
+      "git_blob_sha1": "75185de047c8a06af87a1eaf9499f6589488ee1d",
+      "sha256": "352bed207b037834b3575ccf4ee89a81a840df2ff024a1ae251ae5d960eb2cab"
+    },
+    "dlls/shcore/Makefile.in": {
+      "bytes": 149,
+      "git_blob_sha1": "fd07a9e1b5145d65ed4cc62853f01289652abf0c",
+      "sha256": "f86f83de71027456f0c7c821935bdd9721d011a23cd4b620cada0a62a5cbab1f"
+    },
+    "dlls/shcore/shcore.spec": {
+      "bytes": 8085,
+      "git_blob_sha1": "102e3014bceaf03a373d48d21f278ee47ed23579",
+      "sha256": "5fded25abdfe46949d51dc49cb5b4af835b8982c667c42c7028211c74c293fa9"
+    },
+    "dlls/shdocvw/Makefile.in": {
+      "bytes": 201,
+      "git_blob_sha1": "d38782eaf222e3849fcd332b414fa75dd64a2292",
+      "sha256": "62921cb477d0d520937de63d9cf428a88bc5f0e0444eacf4d883b7a76f7b203b"
+    },
+    "dlls/shdocvw/shdocvw.spec": {
+      "bytes": 4810,
+      "git_blob_sha1": "aa1b5e0c9691f48c422ed939fc6f4ba037ba37e3",
+      "sha256": "3919c00953baa994cfa295d1f804265ccaaf28c835e5305a9698252a7603b262"
+    },
+    "dlls/shell32/Makefile.in": {
+      "bytes": 2002,
+      "git_blob_sha1": "4a906ac59db680f7ade7232d064154b3c09dc27d",
+      "sha256": "79d8f46b85f0041f667e0b8a5a7f43fc17119a9aa90494b4ad9bf9ed80336056"
+    },
+    "dlls/shell32/appbar.c": {
+      "bytes": 4333,
+      "git_blob_sha1": "68373dc2c1595727e85037330b4a41821f9f28d2",
+      "sha256": "6332716d494030c587feba896a965dea64d7eb36e55476667766c0e8b207a59b"
+    },
+    "dlls/shell32/assoc.c": {
+      "bytes": 35746,
+      "git_blob_sha1": "45e9781d0787d85809c419dc4faba35f1ca42757",
+      "sha256": "37531b914e27ad09f22c88a271170b7975fcb2b2e8abf1ee99534eb572804ea8"
+    },
+    "dlls/shell32/autocomplete.c": {
+      "bytes": 41362,
+      "git_blob_sha1": "e8b064c6dafb1e89a444b8a3479f30a9d8877c26",
+      "sha256": "795ccb707604694d3400a3dee4ef5c5847d8b92dece9308710dbda9a5770e2b7"
+    },
+    "dlls/shell32/brsfolder.c": {
+      "bytes": 38494,
+      "git_blob_sha1": "63f0a3420dd90811236044bcb613ebe9610fa85b",
+      "sha256": "bcc0b3230fa3c4e23f12bf4c4785ae6312b8ab67a3ead5e1e118c09173dc476b"
+    },
+    "dlls/shell32/changenotify.c": {
+      "bytes": 14323,
+      "git_blob_sha1": "93feedfabc743889d51f390d4dc5699fb6ffeb79",
+      "sha256": "5b2df0752e542ceef49d1a6d3481e1890c25fbc1995c06f87eb02d2dac107bb4"
+    },
+    "dlls/shell32/classes.c": {
+      "bytes": 12564,
+      "git_blob_sha1": "a8e70c021c20969219c9de888a2c73b60eac3bd0",
+      "sha256": "528047d5e2e28e949509fab51f956f401057ab8e2d4a2951f1ff102f49d2d7da"
+    },
+    "dlls/shell32/clipboard.c": {
+      "bytes": 5363,
+      "git_blob_sha1": "6ab2ad16c9dabc8cc9e7ec43ddb4bee090e7c1c7",
+      "sha256": "6548779fb048c40527937eac2dbe4eb28a49a96d5b44bdf4f0d93570d9b44f98"
+    },
+    "dlls/shell32/control.c": {
+      "bytes": 28798,
+      "git_blob_sha1": "8a77ec698ed1ce8f848311eef0fba4dc9a475f97",
+      "sha256": "8259beb24df30340553c35a687891c02b411cfb969ab072a134f6a8f969986e1"
+    },
+    "dlls/shell32/cpanel.h": {
+      "bytes": 2207,
+      "git_blob_sha1": "a5470cceb2fcce127c3a422003188c422ceb08a9",
+      "sha256": "0fe1c6e1564bb4fbd1a1579756b02dfb0102c514d4fa79d11d861d6d1ac93454"
+    },
+    "dlls/shell32/cpanelfolder.c": {
+      "bytes": 33171,
+      "git_blob_sha1": "69af6734f57b498ae82a045d734e2f1b82d5c476",
+      "sha256": "6f133b88cbb3e148a6a990f6224f3884dc1de2da9dfb9242b11ce35ddc09829e"
+    },
+    "dlls/shell32/dataobject.c": {
+      "bytes": 13236,
+      "git_blob_sha1": "d0ed644c4370ccbf8d537c604b043b73c15095f3",
+      "sha256": "0c634d879e6c0f9bf94dcefbc2a11d51893060dcb90973565dc6c21ae3e8dcda"
+    },
+    "dlls/shell32/dde.c": {
+      "bytes": 16237,
+      "git_blob_sha1": "eea8b8ec4ce35c315faaa49893a5c1c7ef3b84af",
+      "sha256": "46e042ccc7719cb24d02bfbeafafcf0dae6c5c801347c52a87364713f3606fa8"
+    },
+    "dlls/shell32/debughlp.c": {
+      "bytes": 10981,
+      "git_blob_sha1": "fca8070439a95ec838c7a615fe4cf1b19e1abf8a",
+      "sha256": "53ff8dd564ca27704386e19ebda200bb414bde9f24a02490286e0e3af01f5b25"
+    },
+    "dlls/shell32/debughlp.h": {
+      "bytes": 1176,
+      "git_blob_sha1": "62fb5bf1a55d464a06d2c82a5f4981c9b750a2a2",
+      "sha256": "9a411bc85a4432cc9816050f1c60d5450f80f4cb944fd5c1f1c9b929e5aad195"
+    },
+    "dlls/shell32/dialogs.c": {
+      "bytes": 18724,
+      "git_blob_sha1": "665c7093953569dddda20e88e69b844b79a711db",
+      "sha256": "d72255ddb782d5b4ccd40d9b37e608c617de705ef6894b9f9f05de82644b1f74"
+    },
+    "dlls/shell32/dragdrophelper.c": {
+      "bytes": 7654,
+      "git_blob_sha1": "8a41eee7b433ea585fc3fdaaa5f434c36a4241c2",
+      "sha256": "6e641dfc9dce91236a0a9d124da7e2787e31450f6bcb6ae9e92561991674631e"
+    },
+    "dlls/shell32/ebrowser.c": {
+      "bytes": 67491,
+      "git_blob_sha1": "8ae09d441bbc75b94f19b171799d481641a36c51",
+      "sha256": "f39e6595808f028dfe1747d11d684536ef95691e315d680931d21abb45314a47"
+    },
+    "dlls/shell32/enumidlist.c": {
+      "bytes": 8212,
+      "git_blob_sha1": "b07bce09bac2417061c80cdf101f92d8e21c056e",
+      "sha256": "fa9012167a2382a0ef8d70e6b315e23fe3c7ddeda1889a30bdcf1c743da71d28"
+    },
+    "dlls/shell32/folders.c": {
+      "bytes": 16156,
+      "git_blob_sha1": "896286c0b6416fe34fd615cc1340f9e5b8aabd14",
+      "sha256": "b6ee43348a95f6a3d20a895e7ca163ca8aabccabcc4732eefbbeaad8232e7073"
+    },
+    "dlls/shell32/iconcache.c": {
+      "bytes": 32069,
+      "git_blob_sha1": "8f9519d2ca8e4c9f18e23f03170d9b43b2e55de7",
+      "sha256": "42c53154414cd2888506bee1aecfce613a2c06aecc310a6f87f9e87863899d75"
+    },
+    "dlls/shell32/new_menu.c": {
+      "bytes": 12479,
+      "git_blob_sha1": "95d0bd906794987dd4593af9bd957295704640f7",
+      "sha256": "6b3a910c78392aee71fb0855967ae154061be5c38aa91b8adafdb6a25d3d83c5"
+    },
+    "dlls/shell32/pidl.c": {
+      "bytes": 66441,
+      "git_blob_sha1": "668a5bc583aa250ef0989760396f7525500d127a",
+      "sha256": "711f541415dd5e2fb14b86bfe6727b8f6746aa829907c2ec023b992608121a11"
+    },
+    "dlls/shell32/pidl.h": {
+      "bytes": 8820,
+      "git_blob_sha1": "39f824e8c2dc6eb076c2559a4cbd78a387404e8c",
+      "sha256": "6d783248ac1b05c542c970dff64d05ad056034ba40ebad3f7f6ce957b1b9a3f7"
+    },
+    "dlls/shell32/recyclebin.c": {
+      "bytes": 40713,
+      "git_blob_sha1": "b6d9879fa39a4d35ebab93a7dcd0c46c880b9136",
+      "sha256": "5a8cba2e83c66aa49f05d4d14b4a8bde4e50c6d05aeb2f638ee2a0d215637d4e"
+    },
+    "dlls/shell32/shell32.spec": {
+      "bytes": 23833,
+      "git_blob_sha1": "bdf3378a235c1ef17a8c13152a9294de52a68789",
+      "sha256": "3c654161b9c4adf9ba05af42a6c3d60ec270700eabaa06ab5fdd0582482bff90"
+    },
+    "dlls/shell32/shell32_classes.idl": {
+      "bytes": 5556,
+      "git_blob_sha1": "932b6f395b2873fd624013735c23aa5c3baaff97",
+      "sha256": "a2112bcdd610e66663e213b537d614aa2b448cdc9da61c0b1aac4eb75b30dffb"
+    },
+    "dlls/shell32/shell32_main.c": {
+      "bytes": 39541,
+      "git_blob_sha1": "c739e1723f7f89f2fa9eb5893d3b11221188221f",
+      "sha256": "fea59d823b9f9820fe55292642bb18c69db79d538dec51f7338b680734c0c4ac"
+    },
+    "dlls/shell32/shell32_main.h": {
+      "bytes": 10640,
+      "git_blob_sha1": "6b5575c68794dc769aaf4dc710bdd38d5041884c",
+      "sha256": "7e7ca4d6ccc8ed95245fb3d23b48210ccb3fb28d5bdddee51818aa59bba6af84"
+    },
+    "dlls/shell32/shell32_tlb.idl": {
+      "bytes": 847,
+      "git_blob_sha1": "4c34d427d9fafe8a6f0f608940caf982ac67f958",
+      "sha256": "5b1e5676fc5f42a467ea27228f99f32d74b15c825b7bd8563d2a721d26f4bf18"
+    },
+    "dlls/shell32/shelldispatch.c": {
+      "bytes": 68459,
+      "git_blob_sha1": "dd58c755c616a0bbbbc07221526ee6eac8937978",
+      "sha256": "ed319aa70e98c7e4c81c7ae0bc60e82ef86c9c320af7365408f49ff02ef169fc"
+    },
+    "dlls/shell32/shellfolder.h": {
+      "bytes": 2497,
+      "git_blob_sha1": "da3e7b568e6262c8447cf4e675e987ed1b799061",
+      "sha256": "27f3f41effe82fe60e500ddcf95d282285f272727b69f3a739c2933cefd7fbc4"
+    },
+    "dlls/shell32/shellitem.c": {
+      "bytes": 47087,
+      "git_blob_sha1": "93a60d63bd1c4b0a91559a49864a0f261612b994",
+      "sha256": "452cf5b32ba2ad65e34e7582861b490e200d5acf24f2b2ad7cb1df39fb433960"
+    },
+    "dlls/shell32/shelllink.c": {
+      "bytes": 73422,
+      "git_blob_sha1": "30cd038728f424b33d5ce99edb99f58c280a7e82",
+      "sha256": "e8ccdabae977917ec558431f3c46ef5a551f6073c08553e0706f013343731919"
+    },
+    "dlls/shell32/shellole.c": {
+      "bytes": 36916,
+      "git_blob_sha1": "aa9bd3e0f3e7c24b11a5e3500cfa63284e2b79ef",
+      "sha256": "1c6a9149fe878cc1360a178e00f58c1af7aceaa5810cf39c7c43df048ef8ce5d"
+    },
+    "dlls/shell32/shellord.c": {
+      "bytes": 56819,
+      "git_blob_sha1": "a007c0e5c603c31660518d4d212897c8c7e1b022",
+      "sha256": "3361080e56925b0dd6905645db8131a35d6bc9a806e4b514b003228ad35b04cd"
+    },
+    "dlls/shell32/shellpath.c": {
+      "bytes": 149794,
+      "git_blob_sha1": "0350453a466bba6f9d1f4f89415758c7f4c79009",
+      "sha256": "b5ba03f0d48017ab93491feca9ddbdf969cc2f924a060219756bc0ea978b09bb"
+    },
+    "dlls/shell32/shellreg.c": {
+      "bytes": 4808,
+      "git_blob_sha1": "dedf67babc176aac0b92a0f551667ba11989ba39",
+      "sha256": "0169a7c762a86b6e5e25e35a6720753ed4720968b435975bc979c08c4f1ca103"
+    },
+    "dlls/shell32/shellstring.c": {
+      "bytes": 7905,
+      "git_blob_sha1": "13108dbc8b7e5cc893ce1fbbec10a0f5e1792c30",
+      "sha256": "5d58c97d1859fbc20b1dd047223f427b8645852e455f8037aa9aac7ff75fcb09"
+    },
+    "dlls/shell32/shfldr.h": {
+      "bytes": 3831,
+      "git_blob_sha1": "f5363b31da4d70715a2f4731e07b21aca13e5bad",
+      "sha256": "59aa365dd6a6177deff54ea341bb42d5529ecc1d466f12a8b81a5297bc29cade"
+    },
+    "dlls/shell32/shfldr_desktop.c": {
+      "bytes": 37002,
+      "git_blob_sha1": "49de36aa741a2398dad50a7deb76a04e97dad509",
+      "sha256": "06977cb126dfe7c3fd62d3ec6e3d094471ca47c4bf9d95eadad083083489dc7e"
+    },
+    "dlls/shell32/shfldr_fs.c": {
+      "bytes": 60718,
+      "git_blob_sha1": "bc3cb000f0e027f29c3a1eb0a607219a4ead56ad",
+      "sha256": "d982d414a3bf755e250957cf7d477a5aa373304b3a03d633e35e9065027c8af6"
+    },
+    "dlls/shell32/shfldr_mycomp.c": {
+      "bytes": 31456,
+      "git_blob_sha1": "6d24a8e5c9ebec9ec5929072cf67430bc223452e",
+      "sha256": "f8cbbe971d46db6fab960be73b53b9b7971f7f44b82c69118af108a94c0cea3a"
+    },
+    "dlls/shell32/shfldr_netplaces.c": {
+      "bytes": 20684,
+      "git_blob_sha1": "e478da77c329d0614a69d5cc6ad78c55ae92e6ce",
+      "sha256": "cc96124e9c86a56a83adae5669d6a27d8201edbcb471f8dc0e12bb7ffa6ed669"
+    },
+    "dlls/shell32/shfldr_printers.c": {
+      "bytes": 14458,
+      "git_blob_sha1": "5b3b9b1f900ee971de42d400405db94c90535374",
+      "sha256": "c53ee6d6fa8f3757e993d0ed6b8e066145a2f1d814806a793a6a1868dcd90d08"
+    },
+    "dlls/shell32/shlexec.c": {
+      "bytes": 70581,
+      "git_blob_sha1": "631601ad21a675a624c2c19158357077119b8067",
+      "sha256": "016748bf213b4fce846e60f1f7f2f2554d2491d8b83495ead36631e5c273e736"
+    },
+    "dlls/shell32/shlfileop.c": {
+      "bytes": 75571,
+      "git_blob_sha1": "4fb0642fc5d58e6c79a2290c0a9b38a4043ff69d",
+      "sha256": "ac8a868867c5d39666ac474246e4616ff126e485eeb0634815efedec227f132d"
+    },
+    "dlls/shell32/shlfolder.c": {
+      "bytes": 26269,
+      "git_blob_sha1": "1ff45e7139cb84586ce3caa5bf844bc436637a7d",
+      "sha256": "d31cc416a8e648dea9818dd498617946e7cf74c59e9c03acae30f55670d74627"
+    },
+    "dlls/shell32/shlfsbind.c": {
+      "bytes": 4683,
+      "git_blob_sha1": "75441d01bcee836883c04f781218af291085fe6f",
+      "sha256": "c7bb6f6f8d4bf8905aca15f9033e11b8523d4a40f9200746bdceb7fadea375f9"
+    },
+    "dlls/shell32/shlmenu.c": {
+      "bytes": 35396,
+      "git_blob_sha1": "85ca417a6235d77afb87f8ee958e3076bc5a2ecb",
+      "sha256": "f79221a183c14c85c8af4ff09f3c42a1e62d6848e2ebbfc37fbd6520e28ae94c"
+    },
+    "dlls/shell32/shlview.c": {
+      "bytes": 115267,
+      "git_blob_sha1": "9c699ecda08eee50a6099c54b42cc55efa9402d5",
+      "sha256": "6dc8e0296f25e69b95a2897cb1b5daba8c5ca0d7746b344b9e7f6daa93a439a7"
+    },
+    "dlls/shell32/shlview_cmenu.c": {
+      "bytes": 48131,
+      "git_blob_sha1": "cac33c39af7ddd4913d3003efccf1e03b17fd33c",
+      "sha256": "e7128d7458ed4819719478529249bcf04b70cb8753fb504538d790f1f18b235e"
+    },
+    "dlls/shell32/shpolicy.c": {
+      "bytes": 19195,
+      "git_blob_sha1": "21bb49c80cf94feb09191cdf6bec2b639ebb8b53",
+      "sha256": "81415fbc51541e72243966fd966ce97f0846c3784cea29d1cde8653c0729ddb5"
+    },
+    "dlls/shell32/shresdef.h": {
+      "bytes": 15707,
+      "git_blob_sha1": "cee1069142ce199d5d0f3c84f28a4d9712128b32",
+      "sha256": "3849c3f4cafa200c93e3655c6fbe9abab0fb356c4e964475790ee730c1c4a001"
+    },
+    "dlls/shell32/systray.c": {
+      "bytes": 10390,
+      "git_blob_sha1": "c74d0178b10caabd045117722d774924cb5f2791",
+      "sha256": "c1c5aa92aa8399f0c32de943df7f2f86c577cbddb145fe0a8c67b476e02acc58"
+    },
+    "dlls/shell32/version.h": {
+      "bytes": 1054,
+      "git_blob_sha1": "06f4871483dc7a8cff1fa9158f69d07e657d0f71",
+      "sha256": "27a07aeb4baa3a840008cd28200f2059386eb0d7697a5f867c08fa3809209c9e"
+    },
+    "dlls/shlwapi/Makefile.in": {
+      "bytes": 397,
+      "git_blob_sha1": "6bf580f42d52e64041a4e35b1093f1e2396dfe6d",
+      "sha256": "7d0a990ec71197c9fd9badb03b46218f63fd869a63b11127bd307c2408043f0a"
+    },
+    "dlls/shlwapi/assoc.c": {
+      "bytes": 12624,
+      "git_blob_sha1": "b2afe52ec0e7050fe12af892d81101fdc9f82f0d",
+      "sha256": "9dfd2ec918714845e57d554c703cdcc0c45394159a5dcd7016daa289532a2786"
+    },
+    "dlls/shlwapi/clist.c": {
+      "bytes": 11465,
+      "git_blob_sha1": "beb47001c5ae94347c701fcd81cc80647fef4dff",
+      "sha256": "33b4f34806bcbc3f22b753dbd4ad656ef1832310feaf4699c646ca7485a55edf"
+    },
+    "dlls/shlwapi/istream.c": {
+      "bytes": 1983,
+      "git_blob_sha1": "b0087209e75bd56292ff240e5dc6a7fb5fcc2007",
+      "sha256": "07edbaa814cc206c4cfbf277412b79a2566f778fe4ce1353bc96ec3441d87816"
+    },
+    "dlls/shlwapi/msgbox.c": {
+      "bytes": 9280,
+      "git_blob_sha1": "0098e499b59a97feca8be0768923a035dbcbcde5",
+      "sha256": "e66f132eb7ba8625201a63414050d9564118a8c5e1c92d010807f2332840d7c3"
+    },
+    "dlls/shlwapi/ordinal.c": {
+      "bytes": 132487,
+      "git_blob_sha1": "f99dbf795ff5910771c491bb8163211c41956abe",
+      "sha256": "7e7a6ef5c7077ab8222daaf5de76e3097a1122ebd871a02ffd26813d61cc10f0"
+    },
+    "dlls/shlwapi/path.c": {
+      "bytes": 41101,
+      "git_blob_sha1": "7967ef4932c987aa07c91e74195257089cecd630",
+      "sha256": "bd79f97192216f73717e85359d822d4dac17ac9b1f13f9d4875550f5fb5f2714"
+    },
+    "dlls/shlwapi/reg.c": {
+      "bytes": 16131,
+      "git_blob_sha1": "b8070f44c78e236594f43118eeba2ca04f85549e",
+      "sha256": "054e1d3782c03dfd6f6f94654ef5bc76914a8b805fe3c0856cd2bfe5f6c39833"
+    },
+    "dlls/shlwapi/regstream.c": {
+      "bytes": 10428,
+      "git_blob_sha1": "583b35facafd742286a75bf96804ceba96dc4b0b",
+      "sha256": "df9dd38cafcbcf85343f73936676ad98d29e7be3d6e34ea9efe408b0ac0e9629"
+    },
+    "dlls/shlwapi/resource.h": {
+      "bytes": 1302,
+      "git_blob_sha1": "a9af2bad62198001f3e87883fa4df845a81095b1",
+      "sha256": "039c790b045d6f879046c618148cde89b7ca87fc0e448c609d5eb657883cb7cc"
+    },
+    "dlls/shlwapi/shlwapi.spec": {
+      "bytes": 46872,
+      "git_blob_sha1": "7f3062a28194f77f8e1972a41dece9bb9dfdb387",
+      "sha256": "93acc83072b0df0b43d1e6d6c104397f7bc6de221f23b4f57b3905b2112c979c"
+    },
+    "dlls/shlwapi/shlwapi_main.c": {
+      "bytes": 8472,
+      "git_blob_sha1": "ea45bdf32d5825acfe706e1ee4c8ed14d2ac6892",
+      "sha256": "28a601815ac9bbdf21566d475de7491e10c54d03f98d0a01ec116a84d1a7acf6"
+    },
+    "dlls/shlwapi/stopwatch.c": {
+      "bytes": 5633,
+      "git_blob_sha1": "8a5d07b14e4305f15b9281c364d3686306be8366",
+      "sha256": "1b6c6efb29eeea2386a27d4f3dda7e07b2a067843672782d9fceeb9cace9fc2b"
+    },
+    "dlls/shlwapi/string.c": {
+      "bytes": 33289,
+      "git_blob_sha1": "37d4d526fb6f3911b1fc0e328d36bb31c23133ee",
+      "sha256": "762b8ffe3822c6d18639625babc76b2777b33d2da3662773d604443cb1bb7094"
+    },
+    "dlls/shlwapi/thread.c": {
+      "bytes": 6837,
+      "git_blob_sha1": "ee79f73c0403c2d4d9e366a647c8c39d4ba28bd5",
+      "sha256": "b965a3c308f1518b1b7a9481d1e1bcb58bb1e786e2d5322ad09573bc1713c63b"
+    },
+    "dlls/shlwapi/url.c": {
+      "bytes": 4970,
+      "git_blob_sha1": "f657d6c007c91d25a92903ea5358ac72d1e15dcb",
+      "sha256": "0e544a5d603a73cf8d43483941ea228ca9a385739d04a64c5dc21236871e2968"
+    },
+    "dlls/ucrtbase/Makefile.in": {
+      "bytes": 680,
+      "git_blob_sha1": "a3bb54750af61fe49430d796a43ce211fdf9854f",
+      "sha256": "78726392f1e08f789e9636e998271e0442628790f51d77ca0aef4e3c9d7172d8"
+    },
+    "dlls/ucrtbase/ucrtbase.spec": {
+      "bytes": 91665,
+      "git_blob_sha1": "cd8f9f23898058745eb912957a1b66114c2b78aa",
+      "sha256": "e75e701768a8af75f06d3f9250f3fd27cd39ec25cebcd76b0ad57363ef488dda"
+    },
+    "dlls/urlmon/Makefile.in": {
+      "bytes": 633,
+      "git_blob_sha1": "ba6f1db87add81171e0e256f04967c52e696f353",
+      "sha256": "c33f70505e260a1542bd91081dbe7a88b94e24f4272be65460e0b2ee1ac5fb14"
+    },
+    "dlls/urlmon/urlmon.spec": {
+      "bytes": 5151,
+      "git_blob_sha1": "deb302e5179c2b9f5dc8f0f05a07f24109e87c78",
+      "sha256": "371222b8ecac1f4b69b88f7f4f94dbdc4c99f269a48a4c3f6b496f81bcb01523"
+    },
+    "dlls/user32/Makefile.in": {
+      "bytes": 1327,
+      "git_blob_sha1": "69e1fa24e15081b3f0317bc1e0386d7e84e9590c",
+      "sha256": "e2af3501455c1007b0638e741bde4966138e5a5105d67df1fb1424b2d805c299"
+    },
+    "dlls/user32/user32.spec": {
+      "bytes": 47105,
+      "git_blob_sha1": "9d3a8f7bef8cd3b0dbd96cc74981a8bd7f453800",
+      "sha256": "0aa00fa0a8f7c648d919be22afe823fb52488366e5d9ec0ca2dd8c292e364930"
+    },
+    "dlls/userenv/Makefile.in": {
+      "bytes": 155,
+      "git_blob_sha1": "193232e9428946da4331530462e04ac1f0e28662",
+      "sha256": "2c3aef6c3cd00218d01de4c8fb7fbb99a56cea542e28b7b8ad3634593f22230c"
+    },
+    "dlls/userenv/userenv.spec": {
+      "bytes": 1092,
+      "git_blob_sha1": "6395bba19493560045da091d8fc4c206fbf76164",
+      "sha256": "cb70d68598349b7d4e22741e9aa4d33cc384db71a2649419b30e453b693e0fb5"
+    },
+    "dlls/uxtheme/Makefile.in": {
+      "bytes": 298,
+      "git_blob_sha1": "900803f437522c4ed758339d491d3d2c4f9627af",
+      "sha256": "0aa7a681973132adb6a65c0e9f99a5b330b23dd0c90147ea57e8d281fbf4197c"
+    },
+    "dlls/uxtheme/uxtheme.spec": {
+      "bytes": 5281,
+      "git_blob_sha1": "a4eb7bc30268b4d1839c84a89fea95a169289513",
+      "sha256": "38893365c0b1ee194e188708317a4bfde2d490fbebec8d52c9a8f34177ff3360"
+    },
+    "dlls/version/Makefile.in": {
+      "bytes": 105,
+      "git_blob_sha1": "3b056243a98e859216b3a25ea49526b36d75f991",
+      "sha256": "f6af74b93e8a5620210682b6080fda34437fb0db79631200e1d343b2df4accdb"
+    },
+    "dlls/version/version.c": {
+      "bytes": 10079,
+      "git_blob_sha1": "bed2d0c7bac06ab74e0dfe75cd1dbd305f01d59e",
+      "sha256": "ddb235ffa3477007f6d642de7b377befd80a6deaea7f8dcb61bc654fd3847b22"
+    },
+    "dlls/version/version.rc": {
+      "bytes": 1090,
+      "git_blob_sha1": "0f4b505038f8917533a6dcc408e51f112c34e880",
+      "sha256": "978eeda17d00f53111520fe9a80c1734e9e06b798e60b2c55bc21a81b326fe42"
+    },
+    "dlls/version/version.spec": {
+      "bytes": 960,
+      "git_blob_sha1": "a3a9955e02c566a6c30ba9fb2700668fbc806d45",
+      "sha256": "6fdd66356383c2126dc51e7bc19d60c0997ef007f810b0c6d396bd49b286e8c8"
+    },
+    "dlls/win32u/Makefile.in": {
+      "bytes": 887,
+      "git_blob_sha1": "6326a3cd302a9179ed86c5f80d732fedcfc0a94d",
+      "sha256": "bf8f6d1c968c04a23b75bf2f4416004eaf052692878577be3e19b89386afd4c4"
+    },
+    "dlls/win32u/win32u.spec": {
+      "bytes": 64404,
+      "git_blob_sha1": "08f27ad6671bc7341abb62300a49f53657c052e9",
+      "sha256": "5fa990090bd3b633af0566e9f29e102cbdca8e666bc61263dd5771bf65249747"
+    },
+    "dlls/windowscodecs/Makefile.in": {
+      "bytes": 869,
+      "git_blob_sha1": "511d45170d339892aa22d8d89de887017ebea863",
+      "sha256": "87005009c27578d51a665dde847b5fac553bdc9e9829a2a01e63f9014a4ce3a0"
+    },
+    "dlls/windowscodecs/windowscodecs.spec": {
+      "bytes": 11586,
+      "git_blob_sha1": "ae3660c6f3b3824645f068e849bcb26fb147fb57",
+      "sha256": "c87a76c28764bb8e383544288e8b9f3860bd7abeb7ccc26b4f05c14f175eafca"
+    },
+    "dlls/winecrt0/Makefile.in": {
+      "bytes": 335,
+      "git_blob_sha1": "863e5ed41900bf40079bad8e5172886139ef48a6",
+      "sha256": "4055ae657f8f37010384be70e1db2048d8d7efb70c421d1976b0535b9a6f6912"
+    },
+    "dlls/winecrt0/crt_dllmain.c": {
+      "bytes": 1078,
+      "git_blob_sha1": "181760c884a093e6341789f1c39b16c4945e93e5",
+      "sha256": "25736a05b3ff540c8c40b18cd4bd9408f9028373c56a8c05662807dcbc61de94"
+    },
+    "dlls/winecrt0/debug.c": {
+      "bytes": 8209,
+      "git_blob_sha1": "2ac4505fb8586babe22ed93cf029b8b4b8c8c2e0",
+      "sha256": "ab919b2f1638e7a9b129804219cd27abe72842196224bb4019ae13db2c54e3c0"
+    },
+    "dlls/winecrt0/delay_load.c": {
+      "bytes": 1844,
+      "git_blob_sha1": "3044fa4431f69bd925feb5f83a34c9d5740bc775",
+      "sha256": "10acc49028da3e1d08133361cfb6a2a8e54840385cae5b4b1877e9071eaf063d"
+    },
+    "dlls/winecrt0/dll_entry.c": {
+      "bytes": 1273,
+      "git_blob_sha1": "b5b6e2e61599e8b144d21b327759afdcbfe1a7a3",
+      "sha256": "03dc03f4084b346871ac8bf873eb3ad8f2e8538aaddfc11527dfe6611f9e1b59"
+    },
+    "dlls/winecrt0/dll_main.c": {
+      "bytes": 1043,
+      "git_blob_sha1": "a177438584c4337dfe0b1a5064a7c7875c07d25e",
+      "sha256": "37091207aa47126a040e442c1f811837cd97402ea6d9e738687c6384e9e610cb"
+    },
+    "dlls/winecrt0/exception.c": {
+      "bytes": 7619,
+      "git_blob_sha1": "58cf91172aca6ab0f3b2cbdc31d1818e6b655b67",
+      "sha256": "efe3233581b1eb3496e140dc451ee4998dd6ebaed7d25ca402c7dd2f5dae7bef"
+    },
+    "dlls/winecrt0/register.c": {
+      "bytes": 4269,
+      "git_blob_sha1": "757e424fed50c1153f0ccfa4a9b0c3d4f385e9d3",
+      "sha256": "5a2517c11b871dd0c64696b39eb98cfc08ce48255195f5dc8524178cc2b77be4"
+    },
+    "dlls/winecrt0/stub.c": {
+      "bytes": 1185,
+      "git_blob_sha1": "c1198561886ac8da7043551ea676f205ba02a68d",
+      "sha256": "76db5b78e8a6fc3eb2c1ad27d5f31154cc842cc4bb0a4f1955acc2f1e0a33a3f"
+    },
+    "dlls/winecrt0/unix_lib.c": {
+      "bytes": 3517,
+      "git_blob_sha1": "ebf6594e770735e636e65ab648ed234cd0344616",
+      "sha256": "04ee9a989fbca50a00764145d8d5a60f51817a41691376d5968882dcde38bdf9"
+    },
+    "dlls/wined3d/Makefile.in": {
+      "bytes": 594,
+      "git_blob_sha1": "128956c66bee2fa415805222b1a174c56b1279ed",
+      "sha256": "4d578effc31875ce7669650db4969823692cf4da2f2900004abd307f966260c2"
+    },
+    "dlls/wined3d/wined3d.spec": {
+      "bytes": 18844,
+      "git_blob_sha1": "151bcaf9751bc3a88fc4532440c914ee7735f72b",
+      "sha256": "34175de0c34eb1b14d0dd74fc4b0ccc880dd2ed3796eab4384d9b308e3b85030"
+    },
+    "dlls/wininet/Makefile.in": {
+      "bytes": 395,
+      "git_blob_sha1": "57db3794e36990a1917e767e86ef6ba3ab9cf1bc",
+      "sha256": "397b5cf00bfc243094aa3ca756c59a0c571f936f2f6928049cde0dd8f997cf46"
+    },
+    "dlls/wininet/wininet.spec": {
+      "bytes": 12146,
+      "git_blob_sha1": "7ef28d67778446dbf020f1b9d0b204c63f471fa8",
+      "sha256": "a7ca36a207ad4f2edd3808b01a08e1232770f1c8c29e1e3e52ae24af46e6a4a3"
+    },
+    "dlls/winmm/Makefile.in": {
+      "bytes": 280,
+      "git_blob_sha1": "32d7f5d5c0b19fab0cbb757b65ce7f3f25d7532f",
+      "sha256": "628f2919d0cfca516f443180cdd5c43ec6cfba58a5cf81efcd40b0ea0343933b"
+    },
+    "dlls/winmm/driver.c": {
+      "bytes": 18475,
+      "git_blob_sha1": "3a20aabda93596ec30225fbe91c2b22aa85ec8f6",
+      "sha256": "7e394e8750c62fb1bcff1a7b22fe36adda4af0fce052d2bb4d7e345b976241df"
+    },
+    "dlls/winmm/joystick.c": {
+      "bytes": 22790,
+      "git_blob_sha1": "0028b5c168eaadf115a8554fcb5da022a82cfdd4",
+      "sha256": "60c09a70f374169498479e715a35073d31353f1db6b4897fe31076e02b361223"
+    },
+    "dlls/winmm/lolvldrv.c": {
+      "bytes": 18676,
+      "git_blob_sha1": "e664021dc6449579bbfc8d4480cda7c4e34e21a4",
+      "sha256": "33fd4ce5beb02b54dd285586c8ae4f0206f4700c486c4687933b077731c7dbfb"
+    },
+    "dlls/winmm/mci.c": {
+      "bytes": 75072,
+      "git_blob_sha1": "959801aa835c8e084c00fd8b9ab8c83d5dd1a5d0",
+      "sha256": "b97359e16da1826fa6affac94a44586eb1ff0e3fdb87791616683dd8e1011bf0"
+    },
+    "dlls/winmm/mmio.c": {
+      "bytes": 42471,
+      "git_blob_sha1": "78ad7da3cd7885b2db1117c4e8cfe9e570266394",
+      "sha256": "6fade900948a65e95936accde1cba4cc2fbf4df902565bc4b0f4f2b57e23feb7"
+    },
+    "dlls/winmm/playsound.c": {
+      "bytes": 17652,
+      "git_blob_sha1": "bd26bf481f3288a0834bb04bcafe60abbd0caee6",
+      "sha256": "a1d54c579e25897e6635dbd21ade33e3c96c76c2941dac12461e7d40996275ba"
+    },
+    "dlls/winmm/resource.h": {
+      "bytes": 905,
+      "git_blob_sha1": "8a7552a107ebbfa8cae4a9fe822dbc999f393c09",
+      "sha256": "edaf196b351f1b1d3834091c2bd7fd577bb596bdde4b936c7069faf8a427afe8"
+    },
+    "dlls/winmm/time.c": {
+      "bytes": 11958,
+      "git_blob_sha1": "e00b5ca7b54b52d7d43ff6e5d23385f46d0a0d3e",
+      "sha256": "e08a0b5bd7e39a80308044b3ddc109cc7622ac125ca30f2a2a91f28410a2e881"
+    },
+    "dlls/winmm/waveform.c": {
+      "bytes": 131835,
+      "git_blob_sha1": "f7fe81710e0d28afa57dfdef3e22919990c9eeb9",
+      "sha256": "cd67af35b7df014ea508eb28f08b84b30d8303f6c84a3fe6fea9e809059b7e46"
+    },
+    "dlls/winmm/winemm.h": {
+      "bytes": 5822,
+      "git_blob_sha1": "0bae816c793169587fbd7bf49f3ebf4697f21f20",
+      "sha256": "663adee6dabfa82a557b22f52f4b362d31c4276b6236d69ae1f26153ffaea8e5"
+    },
+    "dlls/winmm/winmm.c": {
+      "bytes": 55406,
+      "git_blob_sha1": "73050e0affb76b98c2175c70ea6c51fef2410472",
+      "sha256": "bfe29b30a5d38555d8ae99d709e119da875e9fc69682d4cb992b543f5439404c"
+    },
+    "dlls/winmm/winmm.spec": {
+      "bytes": 7785,
+      "git_blob_sha1": "d7c7379d77c4b6530461c9f62240d822fa27322e",
+      "sha256": "8139149e997e90aad0a0bdab62eb7b38da46c029f840d395e253128c996def4f"
+    },
+    "dlls/winspool.drv/Makefile.in": {
+      "bytes": 244,
+      "git_blob_sha1": "1c48f0073f355465bd6d77824feb3ff881efd7ae",
+      "sha256": "59730a471d0a9d928dd446f6bd35b549bea5cdf00fb9076be3f02cc33ded0d3a"
+    },
+    "dlls/winspool.drv/winspool.drv.spec": {
+      "bytes": 8127,
+      "git_blob_sha1": "1ca94e18c4070de20a3245995a5ae08363541fa7",
+      "sha256": "07d2b877c9c196ef4922a933f5f24554ff513920251ea8db26d50aaa2e3e76d3"
+    },
+    "dlls/wintrust/Makefile.in": {
+      "bytes": 205,
+      "git_blob_sha1": "e3d311c92843ea713ef7dffa4b1bebaf2558191f",
+      "sha256": "54f1c63613faed33257e4be4a86da704687a539157f5244a0b693f11242b66a8"
+    },
+    "dlls/wintrust/wintrust.spec": {
+      "bytes": 6628,
+      "git_blob_sha1": "79e9bd32a75de8cd8c560417631359024a58f719",
+      "sha256": "46c763a0d11c2bd0c39f0322fcac4de0cd45269c24c759afe0658379cfdbdba9"
+    },
+    "dlls/ws2_32/Makefile.in": {
+      "bytes": 252,
+      "git_blob_sha1": "e80def6488171b049975174106b5a46dcfb8fd5e",
+      "sha256": "624e94bcbf5559fd4bade3f82d3c4c97cffe90609cad4b355f3f85a713c50cb0"
+    },
+    "dlls/ws2_32/ws2_32.spec": {
+      "bytes": 5805,
+      "git_blob_sha1": "0fded68ff7662c72e1e298b537e9965d2722a17e",
+      "sha256": "981f933a563963ed5bb674de34b6c0004a5138a18f7dc387ee4864c7d88a760a"
+    },
+    "include/basetsd.h": {
+      "bytes": 8498,
+      "git_blob_sha1": "3f1f8557aa47aa07db6f2832e9dad102a9bb6482",
+      "sha256": "5fd0ff670270a9858d24924c5baed9df41861bfd0efe9340fb9b61c7e684fbb4"
+    },
+    "include/commctrl.h": {
+      "bytes": 191967,
+      "git_blob_sha1": "c84dce3702c274c5f655759f989cf918ba10b245",
+      "sha256": "98731e283a3db0ce3e96bdc7d9ffd7ae5fcd92fc9b4a7f94e1757e9f39ebfc2b"
+    },
+    "include/commctrl.rh": {
+      "bytes": 7281,
+      "git_blob_sha1": "7cd3deb097dc5147b7f6b2b08b50a55340b83b1f",
+      "sha256": "de29e1d8da4b4c63d312b0fdc90db677598d61a1426fb8232d0b05b8dfc781f3"
+    },
+    "include/concurrencysal.h": {
+      "bytes": 1591,
+      "git_blob_sha1": "fc86045e9fc914ff08f945512266465f2c0fb360",
+      "sha256": "8da72f7dfd616b1c521049f681d8ad14ca795dfbed62a6ec8c42b867f078e7c2"
+    },
+    "include/config.h.in": {
+      "bytes": 24880,
+      "git_blob_sha1": "6033d8674f3c292ed55be563801d9fe5c9a7f565",
+      "sha256": "fc491be8aaddd1516b757062ec9b63498630b916e8063027132e0c80ebf5538b"
+    },
+    "include/dde.rh": {
+      "bytes": 1249,
+      "git_blob_sha1": "23076a872073087e74d1a3e8f809e49f21223241",
+      "sha256": "bbbb11bfbf47c3d5751dd8ba000fdfe58e707bd4e719697ba20541da45803abe"
+    },
+    "include/dlgs.h": {
+      "bytes": 6126,
+      "git_blob_sha1": "abcb48842e8d10ec33cd03079fd096f57e9b1dbd",
+      "sha256": "e61466362669eb835b199a1104cc1f306d9c81451b367657252af9f5fe91e66c"
+    },
+    "include/driverspecs.h": {
+      "bytes": 1375,
+      "git_blob_sha1": "509a2bd44bf11130cf7ba876b1ecbb117110e667",
+      "sha256": "64cb9d930f9c88d245e1ff9b0e8a70b7908b866e2bea59ef6fec3310f94cd5da"
+    },
+    "include/excpt.h": {
+      "bytes": 1731,
+      "git_blob_sha1": "3369f3b15471e222dfc697fb964dc913740bc3c0",
+      "sha256": "697b60397a441a9ea026e65afe726d8fa9ead5e5f3f30027119be67ff56810a6"
+    },
+    "include/guiddef.h": {
+      "bytes": 5651,
+      "git_blob_sha1": "0837ed34ad72a2eb0c6c8527589b0e5b86f24f06",
+      "sha256": "959e241e23019334474cde4bab1cc0d7963361486d4424f59fd61d7358890ebf"
+    },
+    "include/libloaderapi.h": {
+      "bytes": 1291,
+      "git_blob_sha1": "abb848f6e975f4d5714e2c02d5120604e55bbfbc",
+      "sha256": "6c00dd2e67166b327cef0fe2b222233eb725f7e739a09c31bea027351017e692"
+    },
+    "include/lzexpand.h": {
+      "bytes": 2162,
+      "git_blob_sha1": "1b26127330618e819a24f240bf4f27891e1020eb",
+      "sha256": "df577ee8fe64234f73732909600d0bf28d1c25abd7d37c87b284413e02f59f8e"
+    },
+    "include/memoryapi.h": {
+      "bytes": 1622,
+      "git_blob_sha1": "6728b832fa7dd17e093e5a20bda1e976d63d47d1",
+      "sha256": "ce18e8e2bb3457593622a25374383f3c500290421d79f2d927da4698f1f5c506"
+    },
+    "include/msvcrt/corecrt.h": {
+      "bytes": 7793,
+      "git_blob_sha1": "8f6ed6ae6c67c0978909e0fed834343e4b5cc70b",
+      "sha256": "a035c6a16e8f4b5bb9a140b257278f56ba385a31eea882e32ca88e7926c68a27"
+    },
+    "include/msvcrt/corecrt_malloc.h": {
+      "bytes": 1901,
+      "git_blob_sha1": "ab3f03fcb04e40887ce5c04c795363254675af56",
+      "sha256": "818f5fe1796e2d423914a9f50f29aa9acee0baca7d77eb7df0cdda2a9e11abc6"
+    },
+    "include/msvcrt/corecrt_stdio_config.h": {
+      "bytes": 1239,
+      "git_blob_sha1": "6f48d49fdb4f74131f450e5fab56053fca5cd009",
+      "sha256": "9571faf5d95666031f1da114f486da393cb4bbe63fa858a9e390f638884c119b"
+    },
+    "include/msvcrt/corecrt_wctype.h": {
+      "bytes": 2579,
+      "git_blob_sha1": "e1dcaa8e38ae613aa28bc7b9f3de33890f0d468a",
+      "sha256": "89c5e3924e76354eb504fbcf54018176e2db9ee8a5a851f4576ff34a945d0f1c"
+    },
+    "include/msvcrt/corecrt_wstdio.h": {
+      "bytes": 13907,
+      "git_blob_sha1": "27e29700d0198b758a296b4122e5236bf4a7c546",
+      "sha256": "6291b1a66a5470609290eb4dd6a1165e883b38c96cd4bf6bdb5932d8e794bb36"
+    },
+    "include/msvcrt/corecrt_wstdlib.h": {
+      "bytes": 4445,
+      "git_blob_sha1": "f6c68bb937a8428570baf3a0e125932df7ead37e",
+      "sha256": "975fcabd75f0d3ce6867f98732f5a09c35570490e452328de1c0320563747ca4"
+    },
+    "include/msvcrt/corecrt_wstring.h": {
+      "bytes": 4671,
+      "git_blob_sha1": "c72d88d2f436108ba3e223d907902899c61f9c5e",
+      "sha256": "283a7c5996b4923a0377b2d417456483b677d7ebee6c2bad4cbe3b0c56db002f"
+    },
+    "include/msvcrt/ctype.h": {
+      "bytes": 1898,
+      "git_blob_sha1": "88e79411f6460cbf0e43b9ab72a9abd2534e8c6a",
+      "sha256": "28553b9ea3729ec947544dc67ec8b613ef72a1f1c42211cc3dc1b0c9d8c5673a"
+    },
+    "include/msvcrt/intrin.h": {
+      "bytes": 2299,
+      "git_blob_sha1": "ba825b7b09eb4c5d919d424b4d37dee19401de75",
+      "sha256": "b0b5f2a913e2e862bb4eb0943dec9947b57892049437ee5ccf54bf7003b6b0ce"
+    },
+    "include/msvcrt/stdio.h": {
+      "bytes": 21797,
+      "git_blob_sha1": "1e1d28f3f70c643c2078ee12305083561d563fa4",
+      "sha256": "f219358f4e8c97380e62863520cb9c73942ed29c6705a13ed07df3d8dc332fc6"
+    },
+    "include/msvcrt/stdlib.h": {
+      "bytes": 12953,
+      "git_blob_sha1": "9cb8ccb110ac4ae475ba56f91f512c17a1d7f5a6",
+      "sha256": "bdafc78b433f8514856739d167adfad847da659a1a5e096037307a2333a416e9"
+    },
+    "include/msvcrt/string.h": {
+      "bytes": 5081,
+      "git_blob_sha1": "10fbf12e99e9d35aa343e9e17d0fefab6e5830d0",
+      "sha256": "05ed609c2a007419ed241533964cb0487613e84c6160f9133752c6bf9edaa47f"
+    },
+    "include/msvcrt/sys/types.h": {
+      "bytes": 1783,
+      "git_blob_sha1": "b44aa386d44981ddf56f6ef94aa940fa9e56e00d",
+      "sha256": "44826d78caf959f6cf8cc398f25b028e8980809d5ad8908ad0113f1a9daaa376"
+    },
+    "include/namespaceapi.h": {
+      "bytes": 1399,
+      "git_blob_sha1": "9446806f82e267b93c8a4ab6dddc9cea6689efe1",
+      "sha256": "39a58febccb32db24f063408603f3cfcc2ad2378346565b00013fe90b7ac772d"
+    },
+    "include/ntstatus.h": {
+      "bytes": 233302,
+      "git_blob_sha1": "19de99b7ff0a36b62e4536afceecfd0948ecc2c3",
+      "sha256": "8ddfee6d855a7f570b465a377edf8b47a781932a0243705dd7ddc34178a78ca4"
+    },
+    "include/poppack.h": {
+      "bytes": 5579,
+      "git_blob_sha1": "e7a273f031c759a4c3a13d9a9d3164e8c2ce9ea2",
+      "sha256": "b0d603f339b8fc57384ca9238bddc8d78da3438686026ea8fef0824540f05a99"
+    },
+    "include/processthreadsapi.h": {
+      "bytes": 1671,
+      "git_blob_sha1": "f2554950952d6c1bd236967f59d45834cf594868",
+      "sha256": "4a16dcd60be7e84543b06c2f580b9d5abcb68640c41bbf90bc5ce8b7d60dcdd4"
+    },
+    "include/pshpack1.h": {
+      "bytes": 3214,
+      "git_blob_sha1": "f9d4caa149a8e3ed00317fd3772317e3f7f58cde",
+      "sha256": "f5639c704beadd1e6a2f15e288ee390df57a3dc4b06931af37e47c5197760aa3"
+    },
+    "include/pshpack2.h": {
+      "bytes": 3214,
+      "git_blob_sha1": "8bb9527525337ba738ff930ad44c394bc9e700a5",
+      "sha256": "84bf6cd5073b81504f6caaf28542590068859a5db4ee6741f4bc2d738b948315"
+    },
+    "include/pshpack4.h": {
+      "bytes": 3214,
+      "git_blob_sha1": "ae7e63ca94d2ecf3f784698c10a6c7dc2b08136b",
+      "sha256": "7343c68d2f8f57a06e33532cf7025d9a4594fe8c77735f8b3b0a00329d2fa99e"
+    },
+    "include/pshpack8.h": {
+      "bytes": 3214,
+      "git_blob_sha1": "fe8fda591e074fb97c50238d9dc25ae9b0d37819",
+      "sha256": "d76fe688de747e98a7b28567c79535cef33494809c7af25d572fcf1563088d92"
+    },
+    "include/realtimeapiset.h": {
+      "bytes": 1765,
+      "git_blob_sha1": "200244916e59be75123ce89a9041811e090ab035",
+      "sha256": "05caaf4f29236f207647463f044a411193f465eba061e77a28a0ad248bcd6b4d"
+    },
+    "include/sal.h": {
+      "bytes": 13591,
+      "git_blob_sha1": "d49f630832785faf05223acdd871d908c8850a20",
+      "sha256": "85ca873d96eab4297cac63098c6a397e4df2555c4b89407784f1f9969bf7c949"
+    },
+    "include/specstrings.h": {
+      "bytes": 10648,
+      "git_blob_sha1": "4d404759c2e55ac68be4a5c677c966367591ce27",
+      "sha256": "b25b566cdfa752238f2984482056f69333e79c010bdca518415b5ed462ce4e98"
+    },
+    "include/specstrings_strict.h": {
+      "bytes": 1154,
+      "git_blob_sha1": "07a30db765ce127595a6b135ca01dbdda7787b2e",
+      "sha256": "56aa58588c445aec9a5b8eda89042393219eae3f55809b991ea6fbca656a33c7"
+    },
+    "include/synchapi.h": {
+      "bytes": 1058,
+      "git_blob_sha1": "0b3dcb8ff74a080dc9a2713d66aa7170eef2796e",
+      "sha256": "571ec50ab68400939883c6b4391b0f03e03aa5ee718ed01daf2255cc42e9a298"
+    },
+    "include/threadpoolapiset.h": {
+      "bytes": 4190,
+      "git_blob_sha1": "73203f413eec1574d1d7b811532a6566c6380555",
+      "sha256": "9a3f3aa53cb6551894cc844582cafe661b12d9e1d926824751b1c1908825f4a0"
+    },
+    "include/timezoneapi.h": {
+      "bytes": 2964,
+      "git_blob_sha1": "2cee93a55d5ff2c016ad2cbda3ff983429c0f521",
+      "sha256": "07b65bc491cdc86f553ac9f0b100156b3bdaba2278b726ceba782108aaf66e6b"
+    },
+    "include/verrsrc.h": {
+      "bytes": 6556,
+      "git_blob_sha1": "e13165a7d2e1400e92734408b2bdffb56ff9b673",
+      "sha256": "18aff5cd6a3f5ae04109bca1e45e3e7491b32c237e34dfddaf8a640923f46947"
+    },
+    "include/winapifamily.h": {
+      "bytes": 2210,
+      "git_blob_sha1": "c1df2e162779821bfd06fea1179fb12e09755872",
+      "sha256": "c870849e002bb620db892289639fcaee34a49b31bbb6bddb9f81f80f57a637d3"
+    },
+    "include/winbase.h": {
+      "bytes": 146400,
+      "git_blob_sha1": "40142b73b02af84eccdef116326b9a62a6b6336d",
+      "sha256": "bbad56c2c47ae408b1c07e454040682bcb2475cd50f3134f9b0682539ce4b603"
+    },
+    "include/windef.h": {
+      "bytes": 10493,
+      "git_blob_sha1": "0a6d308b837b34d745b878ebeaf1be5d8fefb07a",
+      "sha256": "aa162c97d456f9621788a122e60997eaf32d423bb308bb78ecbd4cb211deb718"
+    },
+    "include/wine/debug.h": {
+      "bytes": 19980,
+      "git_blob_sha1": "3e0912de80185a6c8ab98c9077f52664903abe59",
+      "sha256": "5f3e9a141f0b4a0e21bb9f84083183997785861c1cabdaa23d88e3da4aa78034"
+    },
+    "include/wine/exception.h": {
+      "bytes": 10918,
+      "git_blob_sha1": "25c6f2af16da063b06d83d4a906ef854ef4b9ad9",
+      "sha256": "0a2ed062f66b14252f28b48ea79285116422482a5efb38d42d261db09370c22a"
+    },
+    "include/wine/heap.h": {
+      "bytes": 1816,
+      "git_blob_sha1": "f88942bbb00929ea4601bba6bfa8841958348789",
+      "sha256": "e51df7c87744e3cbea4cd03d1e08573205252eb275166c0d01f87340991550e7"
+    },
+    "include/wine/list.h": {
+      "bytes": 8183,
+      "git_blob_sha1": "2e1d95f3fd449a6dcf73dc0ca87b0ebe34b11905",
+      "sha256": "0a26ad30970b147c06f2068e6e419f88b638db03414aed653fc4df594ef73ae7"
+    },
+    "include/wine/server.h": {
+      "bytes": 5064,
+      "git_blob_sha1": "458c33c27b56e9920d7cfc6ea259c61feed91a7d",
+      "sha256": "b48a78cd13f5c60198b0c5289c60585fac4eeff8c097924adbf970d361350e6c"
+    },
+    "include/wine/server_protocol.h": {
+      "bytes": 153048,
+      "git_blob_sha1": "a39ab12397076549e2340acfcb6a4e8ac27752a8",
+      "sha256": "b32beaa2c180540ad2567bb1e72df9e3bddae4e0fcf9386b9df8abed559c43ba"
+    },
+    "include/wine/unixlib.h": {
+      "bytes": 8118,
+      "git_blob_sha1": "7d8b6c59ab538660e124be3f5c9c0a30fc445def",
+      "sha256": "0657abf24f5d0d3ec59cca012787f7a4f1f56a8e2032341513c58ab759220a64"
+    },
+    "include/wine/wine_common_ver.rc": {
+      "bytes": 4051,
+      "git_blob_sha1": "e605191b2eb70f1253ffd44e462b52e24ad235ce",
+      "sha256": "eb91a4f343c17b3a41a1d3cc115a11c4b4f37e5b8dc1b4631214743efe4ec6b2"
+    },
+    "include/winerror.h": {
+      "bytes": 555465,
+      "git_blob_sha1": "8ef582d2c697fb0fe37b3e46e60c0e4f5d917b2b",
+      "sha256": "a47c0e84bddeeb5f610517d5ad4d44ff0deec3eca6510bf8986c202efd5c1027"
+    },
+    "include/wingdi.h": {
+      "bytes": 134803,
+      "git_blob_sha1": "039436fbbf1e4454e627a657d3f517cd43c4d0be",
+      "sha256": "fe4ce29a91d670528ca658caf46866366a4ed2e3289d83ee327122cf2cab8129"
+    },
+    "include/winnls.h": {
+      "bytes": 41211,
+      "git_blob_sha1": "185a02a6bc4412e5fd09218f3fa6c77b003ab78c",
+      "sha256": "93113ae3c58d813481fc3ed15e5900a15a3074965b08c61777354b875e65b3d8"
+    },
+    "include/winnt.h": {
+      "bytes": 266039,
+      "git_blob_sha1": "2547f841b7c4b6c7432e2b8a21834c3941beb91d",
+      "sha256": "1bac4c8d1ed427681af8d77785cb27a824885657224ee32585cdd55dfac8e125"
+    },
+    "include/winnt.rh": {
+      "bytes": 18872,
+      "git_blob_sha1": "38cefd61c5300db427d6350b4998b1af5509dbf5",
+      "sha256": "4f503f29b7ea9654d4cf84dcb417321a1f0b1b4afcc61c511b9d1cc6d23bc8d4"
+    },
+    "include/winresrc.h": {
+      "bytes": 1187,
+      "git_blob_sha1": "2f99661f39efd58827c33ebcadfc8e4f73bc3069",
+      "sha256": "3a321588d4f9529e3017671fd83fa62ce86b571857eea889fff9bb6dc8063333"
+    },
+    "include/winsvc.h": {
+      "bytes": 19271,
+      "git_blob_sha1": "1580e3b86a478f196dbf6f2c5974d9f58b8f07f5",
+      "sha256": "2a1dac190b0d8f88fa3d5fe4c4d7335feee354cbdd92fa745c4a52a67f15c72e"
+    },
+    "include/winuser.h": {
+      "bytes": 183866,
+      "git_blob_sha1": "3514de75def19c3ce4f4ee0588f9f0f7779172ab",
+      "sha256": "297da83ffc47ee1fd522300c41fde4bd9dbf1a1e4f138282bf8f5c0ce205d4f3"
+    },
+    "include/winuser.rh": {
+      "bytes": 52483,
+      "git_blob_sha1": "fd984a91742e8f599ab7e0e2cda457461abd12c3",
+      "sha256": "c082cf05a11af6d059235ec36d53679b3596085c9266fde990632269607e34e6"
+    },
+    "include/winver.h": {
+      "bytes": 3001,
+      "git_blob_sha1": "007877e8e4d0de397075d017524bc50798d9f28f",
+      "sha256": "7797527f7d93cf4e36d2f7e4e91b3d7711ab1f26bea1955103215a13d68998cf"
+    },
+    "libs/musl/COPYRIGHT": {
+      "bytes": 6204,
+      "git_blob_sha1": "c1628e9ac84f927fe791124ec172fb61c760bb9b",
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af"
+    },
+    "libs/zlib/zlib.h": {
+      "bytes": 96829,
+      "git_blob_sha1": "8d4b932eaf6a0fbb8133b3ab49ba5ef587059fa0",
+      "sha256": "8a5579af72ea4f427ff00a4150f0ccb3fc5c1e4379f726e101133b1ab9fc600c"
+    },
+    "tools/Makefile.in": {
+      "bytes": 157,
+      "git_blob_sha1": "453d41e06e15e6c56fb298900578e18aa40b0bde",
+      "sha256": "5f4bdac2eca7e5efc7a16ceb8ea90ae257140fd2efb54a1b34083029d4d0ab61"
+    },
+    "tools/makedep.c": {
+      "bytes": 165467,
+      "git_blob_sha1": "c1937363c394118654fe62eb9510a6e51d442da3",
+      "sha256": "36e5f0fd20efc8d6b134f534eac92a2dc64ca46b3bbcb385e742829b400141c7"
+    },
+    "tools/tools.h": {
+      "bytes": 24738,
+      "git_blob_sha1": "b840a85b2e53eb841a65074966d7f2a5d7233927",
+      "sha256": "8776a3a5a1ee06af2765a8e4feaa66f024d627f82f8a3cab975cc7a1976e8b04"
+    },
+    "tools/winebuild/Makefile.in": {
+      "bytes": 181,
+      "git_blob_sha1": "d2bdc53d422c2018f6c3f9671a92d478e4a65b80",
+      "sha256": "176393c830f1140d8321204ace5eae484a22087b8712e14ea385da4263564b3b"
+    },
+    "tools/winebuild/build.h": {
+      "bytes": 15432,
+      "git_blob_sha1": "e5ede93425baafef6813bf692955d20e4c932b6f",
+      "sha256": "ee8614d94b363f511c887069658f89218dd2aeb550faea161959d7f62bf0ba37"
+    },
+    "tools/winebuild/import.c": {
+      "bytes": 57884,
+      "git_blob_sha1": "6aee0fa98f83c4e4d38ae47afc805df0588bd98e",
+      "sha256": "536614dfa6326bcf33607829ae35ee00c8057e388822177b09034d50b58a2d0f"
+    },
+    "tools/winebuild/main.c": {
+      "bytes": 22051,
+      "git_blob_sha1": "63d65e7bcd055606894397e493c1a2b1c732386b",
+      "sha256": "9512b2da2d2f27967a17441eda144763f9916e81791c2d6d4c339a9097f57ac2"
+    },
+    "tools/winebuild/parser.c": {
+      "bytes": 37360,
+      "git_blob_sha1": "ec42c240a0a7039bc292751304fe7ca149faa979",
+      "sha256": "9682c86562b0993d575d970947a13e4ec7cf0029de8f30be315a71350c9ceee0"
+    },
+    "tools/winebuild/relay.c": {
+      "bytes": 22305,
+      "git_blob_sha1": "35a34d70fbf5424d4c6d6f5093a12edd1e5048ff",
+      "sha256": "d327c646e371e9ad10f07004c769e04e73d953bf09bf8d0c6198b5ff9301cfc6"
+    },
+    "tools/winebuild/res16.c": {
+      "bytes": 9490,
+      "git_blob_sha1": "732af0151990ea339003c819f97b24823e77e7ee",
+      "sha256": "4ad9670edc78621f05bd0cd5ba18c1422517f028573eefc1cb7f89948df868bc"
+    },
+    "tools/winebuild/res32.c": {
+      "bytes": 22035,
+      "git_blob_sha1": "64be9377e51249e6ed8caaaf9f53d7a97efccb43",
+      "sha256": "02383e61669734d7e3fc14fe7e600250c54757bd530a6871b04713137903dd0d"
+    },
+    "tools/winebuild/spec16.c": {
+      "bytes": 34266,
+      "git_blob_sha1": "630dc16b69d0e3b57996cd8d8a0b86ab0285bd9a",
+      "sha256": "1d2a1a545223ebef689c4b0a545b4fb765adf0d2a1b923a9461c908f9928256d"
+    },
+    "tools/winebuild/spec32.c": {
+      "bytes": 60825,
+      "git_blob_sha1": "ef6bd16267cef79052bfeb0eb0ff8fa1acc8dc3a",
+      "sha256": "a64cb77f906ffc2ea4903c12c5658aad8f4c00aae227e14de21894f04dc43c68"
+    },
+    "tools/winebuild/utils.c": {
+      "bytes": 27959,
+      "git_blob_sha1": "05595f86d37aa139ea5cae1a62b63a2dfc89f84e",
+      "sha256": "90de536137f46939a12110d78b1db1d7b60ee5fbee87aebb9039f9e97ff1759a"
+    },
+    "tools/winegcc/Makefile.in": {
+      "bytes": 355,
+      "git_blob_sha1": "9adf978b7aa2eed7f10de1a7b33f1d6d588637e1",
+      "sha256": "b2af67e328de75c6add1abd373413427af20166142b6f916288077875e70848a"
+    },
+    "tools/winegcc/utils.c": {
+      "bytes": 6862,
+      "git_blob_sha1": "d8037738cae40a0e0c8c2e39f8827f8788289a02",
+      "sha256": "b5515dcde1c50f5ca99a902b8aeb46ec68fe0cd74e3aa53faff1b1f955f772fa"
+    },
+    "tools/winegcc/utils.h": {
+      "bytes": 1803,
+      "git_blob_sha1": "05b29b426cfe4b09bd4553f094109e73182ae637",
+      "sha256": "f703ccd70028fc309592c7f69943d6adbb5b0c7753b03fb8595e140712d3ac17"
+    },
+    "tools/winegcc/winegcc.c": {
+      "bytes": 68392,
+      "git_blob_sha1": "5b60c57daf7830a5a90547741e1b3593cf4d9a2f",
+      "sha256": "66487ba025e356084e14b30e0ee409af8d8593ebfc644fea877506c6fb5a4551"
+    }
+  },
+  "status": "pending-download",
+  "tag": "wine-10.0",
+  "tag_object": "2e9cb99369e5ead9d7fe9836dcd43c05e42890bc",
+  "target": "i686-windows",
+  "tools": {
+    "clang": {
+      "sha256": "28a1f30bfbb1c29f079f975043af5b627d4e625ec82d419a64f75e36d799d923",
+      "version": "clang version 23.1.1"
+    },
+    "lld-link": {
+      "sha256": "c6f5310961879d0fca51441ea0ea9aab3c1bbf59110bbe260d857ca732863f3a",
+      "version": "LLD 23.1.1"
+    },
+    "llvm-ar": {
+      "sha256": "7b341e84181e02ac0a88a1708622cd2c22ba729239704c2c57e741913b459973",
+      "version": "LLVM (http://llvm.org/):"
+    },
+    "llvm-dlltool": {
+      "sha256": "7b341e84181e02ac0a88a1708622cd2c22ba729239704c2c57e741913b459973",
+      "version": "LLVM (http://llvm.org/):"
+    },
+    "llvm-readobj": {
+      "sha256": "57b37dba10700c60a95e3da8cd0b7e6a7984306b85a3245c4d8fbfcc85eac674",
+      "version": "LLVM (http://llvm.org/):"
+    },
+    "wrc": {
+      "sha256": "de035851fd2eae7b00d3c4d2e8403ffdd4a8713323eb047246d0cebd93a9b965",
+      "version": "Wine Resource Compiler version 11.18"
+    }
+  }
+}
