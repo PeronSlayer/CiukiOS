@@ -37,6 +37,13 @@ static bool first(const uint8_t *b, unsigned i)
 }
 static bool trace_enabled(void)
 { return g_boot.flags & (CBI_F_VERBOSE | CBI_F_TEST_REQUEST); }
+static void drop_record(struct usb_device *d, struct usb_hid *h, const char *reason,
+                        unsigned len, unsigned usage)
+{
+    if (trace_enabled())
+        klog("[input] usb drop reason=%s addr=%u interface=%u protocol=%u len=%u usage=%02x",
+             reason, d->address, h->interface, h->protocol, len, usage);
+}
 static void key(struct usb_device *d, struct usb_hid *h, unsigned usage,
                 uint16_t c, unsigned value)
 {
@@ -150,27 +157,39 @@ int usb_hid_attach(struct usb_device *d, struct usb_hid *hid, unsigned report_le
 }
 int usb_hid_report(struct usb_device *d, struct usb_hid *h, const uint8_t *b, unsigned len)
 {
-    if (!h->active || !b) return -EINVAL;
+    if (!h->active || !b) {
+        drop_record(d,h,!h->active ? "inactive" : "missing_report",len,0);
+        return -EINVAL;
+    }
     if (h->protocol == 1) {
-        if (len != 8 || b[1]) return -USB_EPROTO;
-        for (unsigned i=2;i<8;i++) if (b[i] && b[i]<=3) return 0; /* rollover: retain last valid state */
-        for (unsigned i=0;i<8;i++) if ((b[0]^h->previous[0]) & (1u<<i)) key(d,h,0xe0+i,modifiers[i],!!(b[0] & (1u<<i)));
+        if (len != 8) { drop_record(d,h,"keyboard_length",len,0); return -USB_EPROTO; }
+        /* HID F.4 requires ignoring the reserved second byte. */
+        for (unsigned i=2;i<8;i++) if (b[i] && b[i]<=3) {
+            drop_record(d,h,"keyboard_rollover",len,b[i]);
+            return 0; /* retain last valid state, including modifiers */
+        }
+        unsigned translated=0; bool unsupported=false;
+        for (unsigned i=0;i<8;i++) if ((b[0]^h->previous[0]) & (1u<<i)) {
+            key(d,h,0xe0+i,modifiers[i],!!(b[0] & (1u<<i))); translated++;
+        }
         for (unsigned i=2;i<8;i++) {
             uint16_t c=code(h->previous[i]);
-            if (c && first(h->previous,i) && !has(b,c)) key(d,h,h->previous[i],c,0);
+            if (c && first(h->previous,i) && !has(b,c)) { key(d,h,h->previous[i],c,0); translated++; }
         }
         if (h->repeat_key && !has(b,h->repeat_key)) h->repeat_key=0;
         for (unsigned i=2;i<8;i++) {
             uint16_t c=code(b[i]);
+            if (b[i] && !c) { drop_record(d,h,"unsupported_usage",len,b[i]); unsupported=true; }
             if (c && first(b,i) && !has(h->previous,c)) {
-                key(d,h,b[i],c,1);
+                key(d,h,b[i],c,1); translated++;
                 if (c==0x3a) leds^=2; else if (c==0x45) leds^=1; else if (c==0x46) leds^=4;
                 else if (c!=INPUT_KEY_PAUSE) { h->repeat_key=c; h->repeat_at=d->host->io.now(d->host->io.cookie)+INPUT_REPEAT_DELAY_MS; }
             }
         }
+        if (!translated && !unsupported) drop_record(d,h,"unchanged",len,0);
         memcpy(h->previous,b,8);
     } else {
-        if (len < (h->wheel ? 4u : 3u)) return -USB_EPROTO;
+        if (len < (h->wheel ? 4u : 3u)) { drop_record(d,h,"mouse_length",len,0); return -USB_EPROTO; }
         unsigned changed=(b[0]^h->previous[0]) & 7;
         for (unsigned i=0;i<3;i++) if (changed & (1u<<i)) input_usb_event(INPUT_BTN,(uint16_t)i,!!(b[0] & (1u<<i)),d->generation,d->host->io.now(d->host->io.cookie));
         input_usb_event(INPUT_REL,INPUT_X,(int8_t)b[1],d->generation,d->host->io.now(d->host->io.cookie));

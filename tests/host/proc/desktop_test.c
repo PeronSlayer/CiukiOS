@@ -42,7 +42,9 @@ static unsigned input_count, input_at, pipe_calls, frame_count;
 static uint8_t frame_bytes[8192];
 static unsigned frame_length;
 static char frame_probe[24];
+#ifndef CIUKI_DESKTOP_REAL_INPUT
 void klog(const char *fmt, ...) { (void)fmt; }
+#endif
 bool g_cpu_tsc;
 uint64_t g_tsc_per_ms;
 void framebuffer_write_drain(void) {}
@@ -117,6 +119,7 @@ int registry_claim_reserved(int handle, gen_t gen, const char *owner) { (void)ha
 int registry_activate(int handle, gen_t gen) { (void)handle; (void)gen; return 0; }
 int registry_quarantine(int handle, gen_t gen) { (void)handle; (void)gen; return 0; }
 void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes) { (void)phys; (void)bytes; return 0; }
+#ifndef CIUKI_DESKTOP_REAL_INPUT
 void i8042_snapshot(struct i8042_stats *out) { *out = input_state; }
 void input_snapshot(struct input_stats *out) { *out = input_status; out->pending = input_count - input_at; }
 bool input_read(struct input_event *out)
@@ -125,6 +128,7 @@ bool input_read(struct input_event *out)
     *out = input_events[input_at++];
     return true;
 }
+#endif
 int supervisor_spawn_standin(struct process *parent, struct process **out) { (void)parent; (void)out; return -ENOENT; }
 
 #include "../../../src/kernel/drivers/fbdev.c"
@@ -1246,6 +1250,9 @@ void desktop_spawn_host_finish(void)
     puts("native desktop -> production channel_pair/fcntl/proc_spawn: CLOEXEC rejection, explicit fd 3, argv/env, new group, grants excluded, zero resources PASS");
 }
 #define main desktop_kernel_fixture_main
+#endif
+#ifdef CIUKI_DESKTOP_REAL_INPUT
+#define main desktop_input_fixture_main
 #endif
 int main(int argc, char **argv)
 {
