@@ -24,7 +24,11 @@ static char saved[CFG_TEXT_MAX]; static size_t saved_n; static unsigned saves, a
 static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) return -1; memcpy(t, saved, saved_n); *n = saved_n; return 0; }
 static int save(void *c, const char *t, size_t n) { (void)c; if (n >= sizeof(saved)) return -1; memcpy(saved, t, n); saved[n] = 0; saved_n = n; saves++; return 0; }
 static int apply(void *c, unsigned r, int v, int m) { (void)c; (void)v; (void)m; assert(r == DESK_SETTINGS_RELOAD); applies++; return 0; }
-static int mixer(void *c, int *v, int *m) { (void)c; *v = 70; *m = 0; return 0; }
+static int mixer_volume=70;
+static int mixer(void *c, int *v, int *m) { (void)c; *v = mixer_volume; *m = 0; return 0; }
+static unsigned master_applies;
+static int master_apply(void *c,unsigned request,int volume,int muted)
+{ (void)c;assert(request==DESK_SETTINGS_MASTER && volume==20 && muted==1);master_applies++;return 0; }
 static uint64_t now(void *c) { (void)c; return 1791763200ull + 20 * 3600 + 46 * 60 + 12; }
 static int display(void *c, struct ciuki_display_info *d) { (void)c; display_fixture(d); return 0; }
 static int wallpapers(void *c, char names[][CFG_PATH_MAX], unsigned capacity)
@@ -219,6 +223,15 @@ int main(int argc, char **argv)
     autoplay_count=0; at_click_widget(&u,952); assert(!a.autoplay_count && du_get(&u,951)->disabled);
     autoplay_error=1; at_click_widget(&u,952); assert(strstr(du_get(&u,950)->text,"could not be read"));
     cp_detach(&a);
+    /* F1-63's QMP case opens --panel=sounds, presses Tab twice and
+     * Space. Verify the actual toolkit targets master Mute, not UI sounds. */
+    mixer_volume=20;attach(CP_SOUNDS);a.host.apply=master_apply;
+    assert(u.focus>=0 && !strcmp(u.widgets[u.focus].text,"Control Panel") && a.volume==20 && !a.muted);
+    for (unsigned i=0;i<2;i++) at_tap(&u,DU_KEY_TAB);
+    assert(u.focus>=0 && u.widgets[u.focus].kind==DU_BUTTON && !strcmp(u.widgets[u.focus].text,"Mute: Off"));
+    at_tap(&u,DU_KEY_SPACE);assert(master_applies==1 && a.muted);
+    cp_detach(&a);mixer_volume=70;
+    puts("PASS F1-63 Control Panel: two Tab presses and Space apply master preference 20/20/muted");
     printf("PASS control display: five positions, layout, desktop.cfg modes, preview\n");
     return 0;
 }

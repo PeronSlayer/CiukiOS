@@ -40,10 +40,20 @@ static int shell_clock_gettime(clockid_t, struct timespec *);
 #define clock_gettime shell_clock_gettime
 struct stat;
 int shell_fstat(int, struct stat *);
+static char launch_record[512];
+static ssize_t shell_launch_write(int fd,const void *bytes,size_t size)
+{
+    if (fd==STDERR_FILENO && size>9 && !memcmp(bytes,"[launch] ",9)) {
+        assert(size<sizeof(launch_record));memcpy(launch_record,bytes,size);launch_record[size]=0;
+        errno=EPIPE;return -1; /* diagnostics must preserve the launch errno */
+    }
+    return write(fd,bytes,size);
+}
 #define fcntl shell_fcntl
 #define close shell_close
 #define open shell_open
 #define fstat shell_fstat
+#define write shell_launch_write
 #ifdef DESK_FOOTPRINT_TEST
 #include "../../../apps/desktop/sound_storage.h"
 static const char *footprint_registry_directory;
@@ -65,6 +75,7 @@ static FILE *sequence_fopen(const char *path,const char *mode)
 #define fopen sequence_fopen
 #endif
 #include "../../../apps/desktop/desktop.c"
+#undef write
 #ifdef DESK_FOOTPRINT_TEST
 #undef fopen
 #undef master_preference_save
@@ -206,7 +217,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         assert(!argv[at]);
     } else if (!strcmp(path,"/Programs/control")) assert(!strcmp(argv[0],"control") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     else assert(!strcmp(path,"/Programs/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
-    if (fail_spawn) { errno=ENOEXEC; return -1; }
+    if (fail_spawn) { errno=fail_spawn==1 ? ENOEXEC : fail_spawn; return -1; }
     if (timing_model) {
         launch_timing.spawn_us=model_us; launch_timing.bytes=model_elf_bytes;
         launch_timing.image_requests=(model_elf_bytes+model_batch-1)/model_batch;
@@ -615,6 +626,17 @@ static void test_games_menu(void)
            !strcmp(desk_games[2].title,"Quake") && !strcmp(desk_games[2].command,"\\QUAKE\\QUAKE.EXE"));
     assert(!strcmp(desk_games[0].command,"\\WOLF3D\\WOLF3D.EXE") && !strcmp(desk_games[1].command,"\\DOOM\\DOOM.EXE -config CIUKI.CFG"));
     drop_all(&d); fake_reset();
+    /* The same Games-menu route on EIO emits the executable and failing
+     * operation before opening its error dialog, and releases both channels. */
+    memset(d.children,0,sizeof(d.children));
+    expect_dosbox[0]="--name=DOOM";expect_dosbox[1]=desk_games[1].command;fail_spawn=EIO;
+    desk_menu_open(&d,SH_MENU_GAMES,0,0);d.sh.menus[0].hot=1;
+    launch_record[0]=0;key(&d,DU_KEY_ENTER);
+    assert(!strcmp(launch_record,"[launch] name=dosbox error=5 path=/Programs/dosbox operation=spawn"));
+    assert(strstr(d.sh.message_text,"error 5") && !d.launch_argv[0] && !d.launch_argv[1]);
+    for (unsigned i=0;i<DESK_CLIENTS;i++) assert(!d.children[i].pid && d.clients[i].channel<0);
+    fail_spawn=0;expect_dosbox[0]=expect_dosbox[1]=NULL;drop_all(&d);fake_reset();
+    puts("PASS F1-63 DOS launch failure: first operation/path/errno recorded before Games dialog, diagnostic failure preserves EIO, channels cleaned");
     puts("PASS games menu: Programs > Games with /Programs/dosbox, keyboard path to each shareware game, dosbox --name=<title> <command>");
 }
 /* Owner feedback 2026-10-12: one fixed, coherent icon set. Every menu uses
@@ -843,9 +865,16 @@ int main(int argc,char **argv)
     struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     struct desk_program program={"demo","/Programs/demo"};
+    struct desk_program long_program;
+    memset(&long_program,'a',sizeof(long_program));
+    long_program.name[sizeof(long_program.name)-1]=0;long_program.path[sizeof(long_program.path)-1]=0;
+    assert(launch_failed(&long_program,EIO,"channel-inherit")==-1 && errno==EIO);
+    assert(strlen(launch_record)<=240 && strstr(launch_record,"... operation=channel-inherit"));
     fail_mapping=1; assert(launch_program(&d,&program)==-1 && errno==EBADF && !fake_live());
+    assert(!strcmp(launch_record,"[launch] name=demo error=9 path=/Programs/demo operation=channel-inherit"));
     fail_mapping=0; fail_spawn=1;
     assert(launch_program(&d,&program)==-1 && errno==ENOEXEC && !fake_live());
+    assert(!strcmp(launch_record,"[launch] name=demo error=8 path=/Programs/demo operation=spawn"));
     fail_spawn=0;
     d.shell_test=1; d.mouse_x=40; d.mouse_y=16;   /* the Ciuki button in the top bar */
     assert(desk_shell_click(&d) && d.menu_open && d.shell_stage==1);
