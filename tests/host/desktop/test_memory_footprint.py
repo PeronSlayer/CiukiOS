@@ -52,7 +52,7 @@ class MemoryFootprintTests(unittest.TestCase):
             folder = Path(temp)
             inc = folder / "include/ciuki"
             inc.mkdir(parents=True)
-            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h"):
+            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h"):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
             for name in ("runtime.h", "raw.h"):
                 (inc / name).write_text("/* supplied by host harness */\n")
