@@ -16,6 +16,16 @@ import argparse
 DATE = '2020010100000000'
 EPOCH = 1577836800
 
+def generate_directory(source, output, joliet=True):
+    """Python-only extension of the f1-58 directory-record fixtures."""
+    from iso_directory import build
+    return build(source, output, joliet)
+
+def generate_mixed_mode(source, directory, audio_seconds=4):
+    """Authored data + CD-DA media; needs a track-aware guest transport."""
+    from iso_directory import mixed_mode
+    return mixed_mode(source, directory, audio_seconds)
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -119,5 +129,15 @@ if __name__ == '__main__':
     parser.add_argument('--level', type=int, choices=(1, 2, 3), default=3)
     parser.add_argument('--joliet', action='store_true')
     parser.add_argument('--malformed', action='store_true')
+    parser.add_argument('--source', type=Path, help='directory for Python-only mastering')
+    parser.add_argument('--audio-seconds', type=int, help='authored mixed-mode CUE/PCM fixture')
     args = parser.parse_args()
-    print(json.dumps(generate(vars(args), args.out), indent=2))
+    if args.audio_seconds is not None:
+        if args.source is None: parser.error('--audio-seconds requires --source')
+        result = generate_mixed_mode(args.source, args.out, args.audio_seconds)
+    elif args.source is not None:
+        if args.malformed: parser.error('--source does not support --malformed')
+        result = generate_directory(args.source, args.out/'fixture.iso', args.joliet)
+    else:
+        result = generate(vars(args), args.out)
+    print(json.dumps(result, indent=2))

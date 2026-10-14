@@ -198,6 +198,23 @@ class OpticalHarness(unittest.TestCase):
 
 
 class RootRecords(OpticalHarness):
+    def test_python_directory_mastering_mounts_both_hierarchies(self):
+        source=self.directory/'python-source'
+        source.mkdir()
+        (source/'README.TXT').write_bytes(b'Ciuki F5-17 authored fixture.\n')
+        (source/'Caf\u00e9').mkdir()
+        (source/'Caf\u00e9'/'Long optical title.txt').write_bytes(bytes(range(256))*33)
+        (source/'EMPTY.BIN').write_bytes(b'')
+        (source/'PAYLOAD.BIN').write_bytes(bytes(range(256))*2400)
+        (source/'ZEMPTY.BIN').write_bytes(b'')
+        for n in range(90): (source/f'F{n:03}.TXT').write_bytes(str(n).encode())
+        for joliet in (False,True):
+            with self.subTest(joliet=joliet):
+                a=iso_fixtures.generate_directory(source,self.directory/f'python-{joliet}.iso',joliet)
+                b=iso_fixtures.generate_directory(source,self.directory/f'python-{joliet}-repeat.iso',joliet)
+                self.assertEqual(a['sha256'],b['sha256'])
+                self.check_image(a)
+
     def test_python_root_quirks_and_nested_records(self):
         for joliet in (False,True):
             for quirks in ((),('mismatch',),('unaligned',),('extended',),('mismatch','unaligned','extended')):

@@ -2254,3 +2254,80 @@ Close this review when the lead records a disposition for C01–C27 and D01–D0
 assigns M01–M16 to written directives, approves the acyclic handoffs and updates
 the affected interface contracts. Until then, implementation can perform
 approved research/fixtures but must not treat this draft as a frozen ABI.
+
+#### 7. F5-17A acceptance tooling research and decisions — 2026-10-14
+
+This appended review subsection records the host-only milestone A. It does
+not freeze a guest ABI or claim that any original game ran. The input remains
+the approved ten titles and four reserves; no reserve replaces an F5 title.
+
+Research compared the existing `scripts/test/run.py` QMP pacing, bounded
+`CIUKI_TEST` parser and screen checks, `scripts/test/iso_fixtures.py`, and
+f1-58's independently encoded `root_record_fixture` in `test_optical.py` with:
+
+- [QEMU input-send-event and screendump](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event):
+  ordered key/qcode, relative-axis and button unions, command acknowledgements
+  and PPM capture. An acknowledged input is not a measured guest response.
+- [QEMU fw_cfg](https://www.qemu.org/docs/master/specs/fw_cfg.html): the existing
+  `opt/it.alcybercloud.ciukios/test` item remains the runtime selection channel.
+- [ECMA-119, fourth edition, clauses 8/9 and Annex C](https://www.ecma-international.org/wp-content/uploads/ECMA-119_4th_edition_june_2019.pdf):
+  volume descriptors begin at logical block 16, both-endian numbers, directory
+  records cannot cross logical blocks, separate little/big-endian path tables,
+  and Joliet UCS-2 big-endian identifiers in a supplementary descriptor.
+- [GNU libcdio image formats and sector units](https://libcdio.github.io/libcdio.html#CD-Image-Formats)
+  and [GNU CUE track modes](https://www.gnu.org/software/ccd2cue/manual/html_node/MODE-_0028Compact-Disc-fields_0029.html):
+  cooked MODE1/2048 and AUDIO are distinct; CD-DA is stereo 44,100 Hz signed
+  16-bit PCM, 588 sample frames/2352 bytes per sector and 75 sectors/second.
+  Use a multi-file CUE with a data ISO and a separate authored PCM binary,
+  explicit track numbers, two-second audio pregap and lead-out metadata.
+  A plain ISO is never reported as CD-audio evidence. QEMU/ATAPI track-aware
+  attachment and physical burning remain lead qualification work.
+- Original media listings [Diablo shareware](https://archive.org/details/DiabloSharewareWindowsBlizzardEntertainment1997),
+  [Half-Life: Uplink](https://archive.org/details/Half-lifeUplink) and
+  [Quake III demo](https://archive.org/details/QuakeIiiArenaDemo) corroborate
+  edition names. Archive JSON metadata endpoints were inaccessible through
+  the research browser. The 2026-10-13 contract size/SHA-1 table is therefore
+  retained with its provenance, without claiming new digest measurements.
+  No original payload was downloaded in this design milestone. Free download
+  availability does not establish redistribution rights.
+
+Decisions for implementation:
+
+1. `tests/win32/workloads.json` records all ten titles and four reserves.
+   Null fields, explicit unknown lists and provisional scenes/inventories are
+   intentional. There are no invented silent switches, installed sizes,
+   licence grants, SHA-256 pins or measured screenshots. GTA2's exact freeware
+   edition/terms are pending, so its row is conservatively owner-local and
+   cannot be fetched. The manifest supports additional owner-local retail
+   path-pattern rows without turning them into approved gate titles.
+2. The directive's `build/downloads/win32/` supersedes the older download
+   directory for this tooling. A bounded streaming downloader verifies size,
+   supplied SHA-1 and SHA-256; SHA-1-only initial import records a candidate
+   SHA-256 separately, never silently promotes it to a trusted pin. Unknown
+   provenance is refused. Local fixtures test downloading without game bytes.
+3. Extend the optical fixture module with a Python-only directory masterer,
+   sharing f1-58's encoding rules and using fixed dates/order/primary aliases,
+   full path tables and separate primary/Joliet directory trees. Reject
+   symlinks, special files, alias/name ambiguity, non-UCS-2 names and excess
+   depth. Stream payload files; no whole game archive in RAM. Existing xorriso
+   generator and existing suite behaviour remain intact.
+4. Separate `win32_session.py`/`win32_evidence.py` implement a future runner
+   model, not a new live suite. `f5:win32-<title-id> run=<8-hex>` requires
+   validated fw_cfg. Timed host input uses monotonic time anchored to a guest
+   ARM for a segment; guest elapsed milliseconds and guest icount are distinct
+   fields. Polling never collapses delayed key-down/key-up into a burst.
+   Screens use pinned region SHA-256 or bounded per-channel/pixel tolerance
+   against a pinned reference. Menu/progress goldens require original runs.
+5. Versioned, bounded `CIUKI_TEST` win32 records bind an image hash, payload
+   hash and scene at BEGIN, segment install/start/play/focus/exit/uninstall,
+   and carry process, loader, display, timing, audio, input, progress and
+   ledger evidence. Repeated presents are separate from new game frames.
+   PASS requires independent host checks plus complete guest records; missing
+   evidence is `not_run`, timeouts/faults are failures. Host canned data proves
+   validation logic only, never game compatibility.
+6. Propose Diablo and StarCraft (full-screen 8 bpp) plus RollerCoaster Tycoon
+   for ten focus round trips; exact modes still need original confirmation.
+   Keep three-minute minimum play and 600-second case ceiling. Q7's ten-minute
+   hardware play requirement conflicts with the case ceiling once install/
+   start/focus/exit are included. The lead must disposition timing and capped
+   2D progress/fps thresholds before F5-17B can issue a hardware playable PASS.

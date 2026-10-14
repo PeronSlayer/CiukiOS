@@ -1,0 +1,1189 @@
+{
+  "schema_version": 1,
+  "download_directory": "build/downloads/win32",
+  "payload_policy": "Never include title payloads in the canonical image, repository or release artifacts.",
+  "corpora": [
+    "self-authored",
+    "period-demo",
+    "owner-local-retail"
+  ],
+  "workloads": [
+    {
+      "id": "diablo-shareware",
+      "title": "Diablo shareware",
+      "version": null,
+      "year": "1997",
+      "publisher": "Blizzard",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/DiabloSharewareWindowsBlizzardEntertainment1997",
+        "metadata_url": "https://archive.org/metadata/DiabloSharewareWindowsBlizzardEntertainment1997",
+        "url": "https://archive.org/download/DiabloSharewareWindowsBlizzardEntertainment1997/DIABLOSW.iso",
+        "file": "DIABLOSW.iso",
+        "size": 137576448,
+        "sha1": "bf1a62b24ce01ce39993955bff4b3c4d4ab9d647",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "shareware",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "Vendor setup",
+        "entry_point": null,
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/diablo-shareware.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "ISO",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start a new single-player game and move/attack in the first dungeon.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 10,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence"
+      ]
+    },
+    {
+      "id": "starcraft-shareware",
+      "title": "StarCraft shareware",
+      "version": null,
+      "year": "1998",
+      "publisher": "Blizzard",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/StarCraftUSAShareware",
+        "metadata_url": "https://archive.org/metadata/StarCraftUSAShareware",
+        "url": "https://archive.org/download/StarCraftUSAShareware/StarCraft%20Shareware%20%28USA%29.zip",
+        "file": "StarCraft Shareware (USA).zip",
+        "size": 248478379,
+        "sha1": "a29ccfb4b34d55034bbae6bde23199fc4766f288",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "shareware",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "Vendor setup",
+        "entry_point": null,
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/starcraft-shareware.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "ISO",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the shareware mission; select units, move and issue an attack.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 10,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence"
+      ]
+    },
+    {
+      "id": "aoe-trial",
+      "title": "Age of Empires trial",
+      "version": null,
+      "year": "1997",
+      "publisher": "Microsoft",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/aoe-trial-1997",
+        "metadata_url": "https://archive.org/metadata/aoe-trial-1997",
+        "url": "https://archive.org/download/aoe-trial-1997/MSAoE.exe",
+        "file": "MSAoE.exe",
+        "size": 24786864,
+        "sha1": "ccd19bd57e7070ffe7c0b20ed9265d680fbe36c7",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "IExpress + DirectX setup",
+        "entry_point": "MSAoE.exe",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/aoe-trial.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the trial scenario; select villagers, move and build.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence"
+      ]
+    },
+    {
+      "id": "half-life-uplink",
+      "title": "Half-Life: Uplink",
+      "version": null,
+      "year": "1999",
+      "publisher": "Valve",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/Half-lifeUplink",
+        "metadata_url": "https://archive.org/metadata/Half-lifeUplink",
+        "url": "https://archive.org/download/Half-lifeUplink/hluplink.exe",
+        "file": "hluplink.exe",
+        "size": 50872079,
+        "sha1": "605e110670ca3d55b2093b7750d1d0138cbf1f4c",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "Wise",
+        "entry_point": "hluplink.exe",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/half-life-uplink.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start Uplink using the software renderer; move, turn and fire.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence"
+      ]
+    },
+    {
+      "id": "ut-demo-348",
+      "title": "Unreal Tournament demo 348",
+      "version": "348",
+      "year": "1999",
+      "publisher": "Epic",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/unreal-tournament-demo-version-348",
+        "metadata_url": "https://archive.org/metadata/unreal-tournament-demo-version-348",
+        "url": "https://archive.org/download/unreal-tournament-demo-version-348/UTDEMO348.EXE",
+        "file": "UTDEMO348.EXE",
+        "size": 55647232,
+        "sha1": "faf2c18852a1a53c59db490e044e0d3e100e8fed",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "WinZip self-extractor + vendor setup",
+        "entry_point": "UTDEMO348.EXE",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/ut-demo-348.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start a bot match using the software renderer; move, turn and fire.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence"
+      ]
+    },
+    {
+      "id": "worms-armageddon-demo",
+      "title": "Worms Armageddon demo",
+      "version": null,
+      "year": "1999",
+      "publisher": "Team17",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/WormsArmageddonDemo",
+        "metadata_url": "https://archive.org/metadata/WormsArmageddonDemo",
+        "url": "https://archive.org/download/WormsArmageddonDemo/WormsArmageddonDemo.zip",
+        "file": "WormsArmageddonDemo.zip",
+        "size": 13903680,
+        "sha1": "5a53c889037b91566c211b16d527c69afd037be8",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": null,
+        "entry_point": null,
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/worms-armageddon-demo.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the demo battle; move a worm, aim and fire a weapon.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence",
+        "installer.engine"
+      ]
+    },
+    {
+      "id": "heroes3-demo",
+      "title": "Heroes of Might and Magic III demo",
+      "version": null,
+      "year": "1999",
+      "publisher": "New World Computing",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/HeroesOfMightAndMagicIiiTheRestorationOfErathia",
+        "metadata_url": "https://archive.org/metadata/HeroesOfMightAndMagicIiiTheRestorationOfErathia",
+        "url": "https://archive.org/download/HeroesOfMightAndMagicIiiTheRestorationOfErathia/h3demo.exe",
+        "file": "h3demo.exe",
+        "size": 98265058,
+        "sha1": "8d44f794a3fe80bea524f90b38fed3325ca3d1cb",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "InstallShield (version pending)",
+        "entry_point": "h3demo.exe",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/heroes3-demo.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the demo scenario; move the hero and enter a battle.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence"
+      ]
+    },
+    {
+      "id": "rct-demo",
+      "title": "RollerCoaster Tycoon demo",
+      "version": null,
+      "year": "1999",
+      "publisher": "Chris Sawyer Productions",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/RollercoasterTycoonDemo",
+        "metadata_url": "https://archive.org/metadata/RollercoasterTycoonDemo",
+        "url": "https://archive.org/download/RollercoasterTycoonDemo/RCTYCOON.EXE",
+        "file": "RCTYCOON.EXE",
+        "size": 19596288,
+        "sha1": "f985bb782e974572805ee2990cfa2d1fd4e93eee",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "WinZip self-extractor + Setup.exe",
+        "entry_point": "RCTYCOON.EXE",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/rct-demo.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the demo park; inspect rides, build a path and observe guests.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 10,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence"
+      ]
+    },
+    {
+      "id": "jazz2-shareware",
+      "title": "Jazz Jackrabbit 2 shareware",
+      "version": null,
+      "year": "1998",
+      "publisher": "Epic MegaGames",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/jazz2shareware",
+        "metadata_url": "https://archive.org/metadata/jazz2shareware",
+        "url": "https://archive.org/download/jazz2shareware/jazz2swf.exe",
+        "file": "jazz2swf.exe",
+        "size": 11019236,
+        "sha1": "d2ab0a3107360563c5c3bb897a4adfb9d319c04f",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "shareware",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "Vendor installer + DirectXSetupA",
+        "entry_point": "jazz2swf.exe",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/jazz2-shareware.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the shareware level; move, jump and fire.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence"
+      ]
+    },
+    {
+      "id": "ta-demo",
+      "title": "Total Annihilation demo",
+      "version": null,
+      "year": "1997",
+      "publisher": "Cavedog",
+      "corpus": "period-demo",
+      "gate": "F5",
+      "source": {
+        "item_url": "https://archive.org/details/TotalAnnihilation_201405",
+        "metadata_url": "https://archive.org/metadata/TotalAnnihilation_201405",
+        "url": "https://archive.org/download/TotalAnnihilation_201405/Total%20Annihilation.exe",
+        "file": "Total Annihilation.exe",
+        "size": 21540864,
+        "sha1": "ce8a2c21488fbe807cd855b8effcc127053c3e85",
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": null,
+        "entry_point": "Total Annihilation.exe",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/ta-demo.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the demo mission; move the commander, build and attack.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence",
+        "installer.engine"
+      ]
+    },
+    {
+      "id": "quake3-demo",
+      "title": "Quake III Arena demo",
+      "version": null,
+      "year": null,
+      "publisher": "id Software",
+      "corpus": "period-demo",
+      "gate": "F7",
+      "source": {
+        "item_url": "https://archive.org/details/QuakeIiiArenaDemo",
+        "metadata_url": "https://archive.org/metadata/QuakeIiiArenaDemo",
+        "url": "https://archive.org/download/QuakeIiiArenaDemo/Q3ADemo.exe",
+        "file": "Q3ADemo.exe",
+        "size": null,
+        "sha1": null,
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": null,
+        "entry_point": "Q3ADemo.exe",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/quake3-demo.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start a bot match (OpenGL; F7).",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence",
+        "source.size",
+        "source.sha1",
+        "installer.engine"
+      ]
+    },
+    {
+      "id": "nfs2se-demo",
+      "title": "Need for Speed II SE demo",
+      "version": null,
+      "year": null,
+      "publisher": "Electronic Arts",
+      "corpus": "period-demo",
+      "gate": "reserve",
+      "source": {
+        "item_url": "https://archive.org/details/NFS2SEA",
+        "metadata_url": "https://archive.org/metadata/NFS2SEA",
+        "url": "https://archive.org/download/NFS2SEA/NFS2SEA.EXE",
+        "file": "NFS2SEA.EXE",
+        "size": null,
+        "sha1": null,
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": "Win16 self-extractor",
+        "entry_point": "NFS2SEA.EXE",
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/nfs2se-demo.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the demo race; steer, accelerate and brake (Win16 prerequisite).",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence",
+        "source.size",
+        "source.sha1"
+      ]
+    },
+    {
+      "id": "gta2-freeware",
+      "title": "Grand Theft Auto 2 freeware release",
+      "version": null,
+      "year": null,
+      "publisher": "Rockstar Games",
+      "corpus": "owner-local-retail",
+      "gate": "reserve",
+      "source": {
+        "item_url": "https://archive.org/details/pc_gta2",
+        "metadata_url": "https://archive.org/metadata/pc_gta2",
+        "url": null,
+        "file": null,
+        "size": null,
+        "sha1": null,
+        "sha256": null,
+        "path_pattern": "legacy/local/win32/gta2-freeware/*",
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "owner-local",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Freeware designation is not a redistribution grant; exact edition/terms pending; local-only for now."
+      },
+      "installer": {
+        "engine": null,
+        "entry_point": null,
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/gta2-freeware.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start a game; walk, drive and use the map.",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence",
+        "source.file",
+        "source.size",
+        "source.sha1",
+        "installer.engine"
+      ]
+    },
+    {
+      "id": "tomb-raider4-demo",
+      "title": "Tomb Raider: The Last Revelation demo",
+      "version": null,
+      "year": null,
+      "publisher": "Eidos",
+      "corpus": "period-demo",
+      "gate": "F7",
+      "source": {
+        "item_url": "https://archive.org/details/TombRaiderTheLastRevelationDemo",
+        "metadata_url": "https://archive.org/metadata/TombRaiderTheLastRevelationDemo",
+        "url": null,
+        "file": null,
+        "size": null,
+        "sha1": null,
+        "sha256": null,
+        "path_pattern": null,
+        "digest_basis": "Contract acceptance table, 2026-10-13; not re-downloaded by f5-17A."
+      },
+      "licence": {
+        "class": "free-demo",
+        "distribution_verified": false,
+        "text_path": null,
+        "text_sha256": null,
+        "note": "Publisher demo/shareware designation from contract; bundled terms not yet inspected."
+      },
+      "installer": {
+        "engine": null,
+        "entry_point": null,
+        "arguments": null,
+        "parameters_source": null,
+        "method": "interactive-defaults",
+        "operator_script": "tests/win32/operators/tomb-raider4-demo.json"
+      },
+      "installed_files": {
+        "status": "unknown",
+        "entries": [],
+        "reason": "Requires original installation on a qualified reference system (f5-02B/15B)."
+      },
+      "disc": {
+        "requirement": "none",
+        "status": "provisional",
+        "note": "Install medium known; play-time drive/music checks and exact track layout pending import."
+      },
+      "scene": {
+        "id": "default-play",
+        "description": "Start the demo level; move, climb and jump (Direct3D; F7).",
+        "launch": "Start menu entry created by the original installer",
+        "executable": null,
+        "arguments": null,
+        "play_seconds": 180,
+        "start_deadline_seconds": 120,
+        "case_timeout_seconds": 600,
+        "focus_round_trips": 0,
+        "screen_checks": [],
+        "measure": [
+          "game_fps_average",
+          "game_fps_median",
+          "game_fps_p05",
+          "frame_time_p95_ms",
+          "audio_underruns",
+          "non_silent_pcm_frames",
+          "input_latency_ms",
+          "input_latency_game_frames",
+          "peak_commit_bytes",
+          "shims",
+          "game_progress",
+          "resource_ledgers"
+        ],
+        "qualification": "proposed; exact map/save/menu/input and screen goldens pending reference run"
+      },
+      "unknowns": [
+        "source.sha256",
+        "licence.text_path",
+        "licence.text_sha256",
+        "installer.arguments",
+        "installed_files.entries",
+        "scene.executable",
+        "scene.arguments",
+        "scene.screen_checks",
+        "scene.reference_input_sequence",
+        "source.file",
+        "source.size",
+        "source.sha1",
+        "installer.engine"
+      ]
+    }
+  ]
+}
