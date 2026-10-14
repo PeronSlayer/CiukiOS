@@ -139,4 +139,6 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-57-gate-harness-after-shell-first](f2-57-gate-harness-after-shell-first.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (grants found by object kind, no fixed fds) |
 | [f1-50-usb-keyboard-reports](f1-50-usb-keyboard-reports.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (periodic TD kept until a controller frame services it; report diagnostics); f1-usb re-run pending |
 | [f1-51-usb-keyboard-report-to-key](f1-51-usb-keyboard-report-to-key.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (keys were delivered: the probe counts keys only after shell stage 6; decoder hardening and regression added) |
-| [f2-58-usb-shell-test-stages](f2-58-usb-shell-test-stages.md) | F2+ | gpt-6.1-sol / high | running 2026-10-14 (shell test stages with USB keys; keys delivered but keys= stays 0) |
+| [f2-58-usb-shell-test-stages](f2-58-usb-shell-test-stages.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (cause: relative mouse moves merged by QEMU before the slow guest HID poll consumes them; replay model added) → f1-52 and runner-03 |
+| [f1-52-usb-hid-poll-latency](f1-52-usb-hid-poll-latency.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-14 (HID reports 1.4–2.5 s apart on QEMU) |
+| [runner-03-usb-input-pacing](runner-03-usb-input-pacing.md) | runner | gpt-6.1-sol / high | running 2026-10-14 (consumption barrier and 127-unit steps for USB input) |
