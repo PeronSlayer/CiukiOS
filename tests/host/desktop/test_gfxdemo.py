@@ -7,15 +7,20 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 
 ROOT = Path(__file__).resolve().parents[3]
 # F2-62: same scenes and viewport, rendered with the new Blue default.
+# F2-63: re-recorded for the pinned FreeType UI atlases.
 GOLDENS = {
-    'benchmark': 'aef4229de656100fcb376e001a95896312643842d67ee709b843c634b3af75c0',
-    'cube-flat': '800428880bcd2c6c13981a7cc6004a38b94588f72f58dc716d214e49e90e1ba9',
-    'cube-gouraud': '048dce531e7d19924a5e529017c855189957dd528058adf5ceb35973c27b2664',
-    'software-only': '07b0fb892558270bed03e65862f9e7523ac67036a9a506952cd6551db468f0d5',
-    'sprites': 'c821fa7e3a973a04cc62ef4920f1789a1396f5a14e0b013ffac2ae70fd474c90',
+    'benchmark': 'b41b2b7a57d87ff154e4158ed3cd2d46ab13d2b81a0d57c4a7a396b0c53ad16d',
+    'cube-flat': '1e62ebfcffbd1567758fbe8ba7b657bd2dfaa0efbca11ad7cdcb3a4bcef931e3',
+    'cube-gouraud': 'acef681474ca9339af2e4605d6383edaf0a48c228a225e2ea2ad420d5503e422',
+    'software-only': '2be5b10c18c1222eeaf6f69f8c59cacac8c88f664a7e0a8682c99541ff1761dd',
+    'sprites': '672d88d278a9ad681896040af5973fcdcde9ed17c9dbadcb9acb2c6f945327d6',
 }
 
 def load(name, path):
@@ -48,6 +53,9 @@ class GraphicsDemoTests(unittest.TestCase):
             self.assertEqual(set(digests), {"benchmark", "cube-flat", "cube-gouraud", "sprites", "software-only"})
             self.assertEqual(len(set(digests.values())), 5)
             print("GFX_GOLDENS", digests)
+            for p in folder.glob("*.xrgb"):
+                if p.stem != "portrait":
+                    capture("gfxdemo-" + p.stem, p.read_bytes(), 760, 640)
             target = os.environ.get("CIUKI_GFX_FRAMES")
             if target:
                 Path(target).mkdir(parents=True, exist_ok=True)

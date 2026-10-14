@@ -5,6 +5,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -25,11 +29,15 @@ class SystemSoundsTests(unittest.TestCase):
             inc = Path(temp) / "include/ciuki"; inc.mkdir(parents=True)
             for header in ("audio.h", "display.h", "font.h", "registry.h", "devices.h"):
                 (inc / header).write_bytes((ROOT / "sdk/sysroot-overlay/include/ciuki" / header).read_bytes())
+            ft_flags = []; libraries = []
+            if "sdk/libfont/font.c" in sources:
+                ft = module("sounds_freetype", ROOT / "sdk/freetype/build.py")
+                libraries = [str(ft.host())]; ft_flags = ft.includes()
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-D_POSIX_C_SOURCE=200809L", "-Wno-macro-redefined", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/control"),
                             "-I", str(Path(temp) / "include"), "-I", str(ROOT / "src/kernel/include"), "-pthread",
-                            *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)], check=True)
+                            *ft_flags, *(str(ROOT / s) for s in sources), *libraries, "-lm", "-o", str(binary)], check=True)
             subprocess.run([str(binary), *map(str, args)], check=True, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
 
     def test_image_sound_mapping(self):
@@ -74,6 +82,7 @@ class SystemSoundsTests(unittest.TestCase):
                     "apps/desktop/settings.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c", "apps/control/fonts.c",
                     "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", *desktop.TOOLKIT], frame)
         self.assertEqual(frame.stat().st_size, 560*420*4)
+        capture("control-sounds", frame.read_bytes(), 560, 420)
         from PIL import Image
         Image.frombytes("RGB", (560,420), frame.read_bytes(), "raw", "BGRX").save(folder / "f4-12-sounds.png")
         frame.unlink()

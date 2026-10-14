@@ -293,7 +293,6 @@ void desk_accel_reset(struct desktop *, uint32_t generation);
 void desk_cursor_motion(struct desktop *);
 void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,
                const char *, int, uint32_t);
-uint8_t desk_glyph_row(unsigned, unsigned);
 int desk_redraw(struct desktop *);
 void desk_render_release(struct desktop *);
 int desk_frame_due(const struct desktop *, uint64_t now);

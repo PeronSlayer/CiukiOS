@@ -16,6 +16,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
@@ -127,6 +131,9 @@ class DeskuiTests(unittest.TestCase):
                     raw = (output / f"files-{stem}.xrgb").read_bytes()
                     Image.frombytes("RGB", (760, 520), raw, "raw", "BGRX").save(review / f"files-{stem}.png")
             digests = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output.glob("*.xrgb"))}
+            for p in output.glob("*.xrgb"):
+                width, height = (760, 520) if name == "files-ui" else (400, 300)
+                capture(p.stem, p.read_bytes(), width, height)
             return result.stdout, digests
 
     def check_frames(self, actual, pinned, label):

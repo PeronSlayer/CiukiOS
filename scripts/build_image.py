@@ -121,7 +121,8 @@ def desktop_payloads():
     sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
     font_sources, fonts = font_payloads()
     sources.update(font_sources)
-    sources["/system/licenses/stb_truetype.txt"] = ROOT / "third_party/stb/LICENSE"
+    for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt"):
+        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
     sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
     sources["/system/licenses/stb_vorbis.txt"] = ROOT / "third_party/stb/LICENSE"
     sources["/system/licenses/stb_image_write.txt"] = ROOT / "third_party/stb/LICENSE"

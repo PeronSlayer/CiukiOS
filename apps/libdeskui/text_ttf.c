@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Optional TrueType painting; bitmap text remains the default. */
+ * Scalable FreeType painting; UI text uses pinned pre-rasterised coverage. */
 #include "deskui.h"
 #include <ciuki/font.h>
 #include <errno.h>

@@ -7,6 +7,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 ROOT = Path(__file__).resolve().parents[3]
 
 def load(name, path):
@@ -46,6 +50,7 @@ class MusicTests(unittest.TestCase):
         from PIL import Image
         for raw in out.glob('music-*.xrgb'):
             width, height = map(int, raw.with_suffix('.size').read_text().split())
+            capture(raw.stem, raw.read_bytes(), width, height)
             Image.frombytes('RGB', (width,height), raw.read_bytes(), 'raw', 'BGRX').save(raw.with_suffix('.png'))
             raw.unlink(); raw.with_suffix('.size').unlink()
 
@@ -58,6 +63,7 @@ class MusicTests(unittest.TestCase):
         from PIL import Image
         for raw in out.glob('viewer-*.xrgb'):
             width, height = map(int, raw.with_suffix('.size').read_text().split())
+            capture(raw.stem, raw.read_bytes(), width, height)
             Image.frombytes('RGB', (width,height), raw.read_bytes(), 'raw', 'BGRX').save(raw.with_suffix('.png'))
             raw.unlink(); raw.with_suffix('.size').unlink()
 

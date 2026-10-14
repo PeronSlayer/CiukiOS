@@ -8,6 +8,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 ROOT = Path(__file__).resolve().parents[3]
 
 class TerminalTests(unittest.TestCase):
@@ -35,9 +39,12 @@ class TerminalTests(unittest.TestCase):
                      '-fno-sanitize-recover=undefined', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                      '-I', str(source), '-I', str(ROOT / 'src/kernel/include')]
             subprocess.run([*flags, *(str(s) for s in sources), '-lm', '-o', str(binary)], check=True, env=env)
+            frame = temp / "terminal.xrgb"
+            env["CIUKI_TERMINAL_FRAME"] = str(frame)
             result = subprocess.run([str(binary)], env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('terminal: PASS', result.stdout)
+            capture("terminal", frame.read_bytes(), 80 * 7 + 24, 25 * 16 + 8)
 
     def test_registration(self):
         for path in ('apps/build_apps.py', 'scripts/build_image.py'):

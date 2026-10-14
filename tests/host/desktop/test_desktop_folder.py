@@ -6,6 +6,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 from .test_window_resize import png
 from . import icon_assets
 
@@ -42,5 +46,6 @@ class DesktopFolderTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
             print(result.stdout.strip())
             for raw in frames.glob('*.xrgb'):
+                capture(raw.stem, raw.read_bytes(), 1024, 768)
                 (review / (raw.stem+'.png')).write_bytes(png(raw.read_bytes(),1024,768))
             self.assertEqual(len(list(frames.glob('*.xrgb'))),7)

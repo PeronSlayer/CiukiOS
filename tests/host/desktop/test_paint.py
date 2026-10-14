@@ -8,6 +8,10 @@ import re
 import subprocess
 import tempfile
 import unittest
+import importlib.util as _review_util  # optional PNG review copies (frame_review.py, any import mode)
+_review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsplit("/", 1)[0] + "/frame_review.py")
+_review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
+capture = _review.capture
 
 ROOT = Path(__file__).resolve().parents[3]
 TOOLKIT = ["draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"]
@@ -34,6 +38,8 @@ class PaintTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("paint: PASS", result.stdout)
             first = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in renders.glob("paint-*.png")}
+            for p in renders.glob("paint-*.png"):
+                capture(p.stem, p.read_bytes())
             self.assertEqual(len(first), 7)
             result = subprocess.run([str(binary), str(two), str(renders)], capture_output=True, text=True, env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
