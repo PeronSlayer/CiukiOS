@@ -8,7 +8,7 @@
 #include <ciuki/mtrr.h>
 #include <ciuki/registry.h>
 #include <ciuki/savage2d.h>
-#include <ciuki/work.h>
+#include <ciuki/task.h>
 #include <ciuki/timing.h>
 #include "../fs/vfs.h"
 #define RECT 0x48000000u
@@ -444,7 +444,11 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     if (control == UINT32_MAX || (control & 0x0fu) != 8u) return fail(s, "bci_enable_failed");
     /* PM/Twister GBD preamble, retaining firmware primary stream registers. */
     if (supersavage) init_write(s, 0x816c, 0x10000001u, true);
-    init_cr_write(s, 0x50, s->saved50 | 0xc1u);
+    /* RE046-B CR50.5:4 selects engine pixel length independently of the
+     * descriptor. Firmware may leave its VGA (8-bpp) value after VBE. */
+    uint8_t cr50 = (s->saved50 & ~0x30u) | (d->bpp == 16 ? 0x10u : 0x30u) | 0xc1u;
+    if ((init_cr_write(s, 0x50, cr50) & 0xf1u) != (cr50 & 0xf1u))
+        return fail(s, "depth_readback_failed");
     init_write(s, 0x8168, 0, true);
     uint32_t gbd = s->descriptor | (supersavage ? 1u : 9u);
     uint32_t check = init_write(s, 0x816c, gbd, true);
@@ -491,6 +495,7 @@ static bool trace_read_begin(const char *op, uint32_t key, uint32_t reg)
     uint64_t start = activation_now(activation_ctx);
     klog("[accel] savage step op=%s reg=%05x value=pending us=%llu", op, reg, start - activation_start);
     trace_us += activation_now(activation_ctx) - start;
+    if (initializing) task_yield();
     return true;
 }
 static void trace_value(const char *op, uint32_t reg, uint32_t value)
@@ -498,6 +503,7 @@ static void trace_value(const char *op, uint32_t reg, uint32_t value)
     uint64_t start = activation_now(activation_ctx);
     klog("[accel] savage step op=%s reg=%05x value=%08x us=%llu", op, reg, value, start - activation_start);
     trace_us += activation_now(activation_ctx) - start;
+    if (initializing) task_yield();
 }
 static void trace_write(const char *op, uint32_t key, uint32_t reg, uint32_t value)
 {
@@ -510,6 +516,7 @@ static void init_record(const char *bank, uint32_t reg, unsigned width, uint32_t
     uint64_t start = activation_now(activation_ctx);
     klog("[accel] savage init reg=%05x wrote=%08x read=%08x bank=%s width=%u", reg, wrote, read, bank, width);
     trace_us += activation_now(activation_ctx) - start;
+    if (initializing) task_yield();
 }
 static uint32_t hw_read(void *ctx, uint32_t offset)
 {
@@ -567,7 +574,7 @@ static int hw_delay(void *ctx, uint32_t us)
         int err = udelay(part);
         if (err) return err;
         us -= part;
-        if (initializing) kwork_yield();
+        if (initializing) task_yield();
     }
     return 0;
 }

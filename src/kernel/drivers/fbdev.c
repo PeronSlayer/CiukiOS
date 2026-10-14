@@ -6,12 +6,10 @@
 #include <ciuki/registry.h>
 #include <ciuki/fbdev.h>
 #include <ciuki/accel.h>
-#include <ciuki/work.h>
 #include <ciuki/task.h>
 extern const struct accel_ops *savage2d_init(const struct fb_device *, struct vfs *) __attribute__((weak));
 extern const struct accel_ops *savage2d_fallback_ops(void) __attribute__((weak));
 extern bool savage2d_eligible(const struct fb_device *) __attribute__((weak));
-extern bool kwork_queue(kwork_fn, void *) __attribute__((weak));
 extern int savage2d_attempt_begin(struct vfs *) __attribute__((weak));
 extern int savage2d_attempt_end(struct vfs *) __attribute__((weak));
 extern int savage2d_attempt_failed(struct vfs *) __attribute__((weak));
@@ -30,11 +28,11 @@ static const struct accel_ops *acceleration;
 static bool initialized, changing;
 static struct vfs *accel_vfs;
 static bool accel_queued;
-/* One reusable normal-priority thread owns marker I/O. Device-work never
- * waits on the settings transaction or holds up unrelated driver work. */
+/* One reusable normal-priority thread owns marker I/O and initialization.
+ * Synchronous serial trace must stay outside the 1-ms device-work budget. */
 static struct task *accel_marker_task;
 static struct kwait accel_marker_wait;
-static enum { ACCEL_MARKER_IDLE, ACCEL_MARKER_BEGIN, ACCEL_MARKER_CLEAR, ACCEL_MARKER_STATUS } accel_marker_request;
+static enum { ACCEL_MARKER_IDLE, ACCEL_MARKER_BEGIN, ACCEL_MARKER_INIT, ACCEL_MARKER_CLEAR, ACCEL_MARKER_STATUS } accel_marker_request;
 static void *change_window;
 static uint32_t change_capacity;
 static unsigned console_rows;
@@ -192,12 +190,11 @@ int fbdev_init(void)
     return 0;
 }
 
-static void accel_work(void *arg)
+static void accel_initialize(void)
 {
-    (void)arg;
     bool ready = false;
-    /* Queued only after the persistence thread committed and closed the
-     * attempt marker. This worker owns register access, never file I/O. */
+    /* Entered only after this thread committed and closed the
+     * attempt marker. This phase owns register access, never file I/O. */
     kmutex_lock(&presenter);
     if (!changing && device.present && !acceleration) {
         unsigned idle = 0;
@@ -219,6 +216,11 @@ static void accel_work(void *arg)
 static void accel_marker_run(void)
 {
     if (accel_marker_request == ACCEL_MARKER_IDLE) return;
+    if (accel_marker_request == ACCEL_MARKER_INIT) {
+        accel_marker_request = ACCEL_MARKER_IDLE;
+        accel_initialize();
+        return;
+    }
     if (accel_marker_request == ACCEL_MARKER_STATUS) {
         accel_marker_request = ACCEL_MARKER_IDLE;
         if (savage2d_attempt_failed) savage2d_attempt_failed(accel_vfs);
@@ -233,10 +235,7 @@ static void accel_marker_run(void)
             accel_queued = false;
             return;
         }
-        if (!kwork_queue || !kwork_queue(accel_work, 0)) {
-            klog("[accel] savage quarantined reason=work_unavailable");
-            accel_queued = false; /* retain the durable attempt */
-        }
+        accel_marker_request = ACCEL_MARKER_INIT;
         return;
     }
     if (!savage2d_attempt_end || savage2d_attempt_end(accel_vfs)) {
