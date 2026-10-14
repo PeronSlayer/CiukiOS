@@ -29,6 +29,7 @@ static unsigned root_quarantine_records,hub_quarantine_records;
 static unsigned hid_reports[128],hid_polls[128],hid_pipes[128],usb_key_records,f12_down_records,f12_up_records;
 static int hid_poll_result;
 static unsigned schedule_entries,schedule_qhs,schedule_tds,schedule_invalid;
+static unsigned port_actions,recovery_records;
 #ifndef USB_LATENCY_QUEUE
 void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }
 void input_devices_changed(enum input_source source,bool attached)
@@ -56,6 +57,11 @@ void klog(const char *s,...)
     char record[256];va_list ap;va_start(ap,s);int len=kvsnprintf(record,sizeof(record),s,ap);va_end(ap);
     assert(len>=0 && len<=254);
     if(record_hook)record_hook(record);
+    if(strstr(record,"[usb] port_action")) {
+        assert(strstr(record,"before=") && strstr(record,"write=") && strstr(record,"status=") && strstr(record,"count="));
+        port_actions++;
+    }
+    if(strstr(record,"[usb] hid recovery")) recovery_records++;
     if(strstr(record,"[usb] schedule frame=")) {
         assert(strstr(record,"controller="));
         if(strstr(record,"entry=")) {assert(strstr(record,"flbase=") && strstr(record,"current="));schedule_entries++;}
@@ -106,9 +112,9 @@ void klog(const char *s,...)
             assert(sscanf(strstr(record,"valid="),"valid=%u",&valid)==1 && valid);
             assert(sscanf(strstr(record,"poll_frames="),"poll_frames=%u frames=%u",&poll_frames,&frames)==2);
             assert(sscanf(strstr(record,"retire_result="),"retire_result=%d",&retired)==1);
-            /* Preserve the old synchronous NAK retirement assertion on the
-             * completed private-pipe snapshot, before the next poll arms. */
-            assert(!retired && poll_frames>=2 && frames>=poll_frames+2);
+            assert(poll_frames>=2);
+            if(retired==-USB_EAGAIN) assert(frames==poll_frames); /* still linked */
+            else assert(!retired && frames>=poll_frames+2);
         }
     }
     if(strstr(record,"[input] usb key")) {
@@ -149,8 +155,15 @@ static const uint8_t wheel_desc[]={
     0x05,9,0x19,1,0x29,5,0x15,0,0x25,1,0x95,5,0x75,1,0x81,2,
     0x95,1,0x75,3,0x81,1,0x05,1,0x09,0x30,0x09,0x31,0x09,0x38,
     0x15,0x81,0x25,0x7f,0x75,8,0x95,3,0x81,6,0xc0,0xc0};
-enum kind {KBD=1,MOUSE,HUB};
-struct peripheral {enum kind kind;unsigned addr;uint8_t report[8];unsigned report_len,leds,protocol,in_toggle,idle_requests,boot_requests;bool present;};
+enum kind {KBD=1,MOUSE,HUB,RECEIVER};
+struct peripheral {
+    enum kind kind;unsigned addr;uint8_t report[8];
+    unsigned report_len,leds,protocol,in_toggle,idle_requests,boot_requests;
+    unsigned descriptor_failures,descriptor_attempts,reset_series,hid_errors,clear_halts;
+    uint8_t mouse_report[8];unsigned mouse_length,mouse_toggle,error_endpoint,last_clear;
+    uint64_t descriptor_at[6],address_at;
+    bool present,second_reset,babble,clear_fail,crc;
+};
 struct model {
     struct usb_host host;
     struct peripheral dev[2+USB_PORT_MAX];
@@ -176,6 +189,8 @@ struct model {
     unsigned hub_power_requests,hub_reset_requests;
     unsigned bulk_in_toggle, bulk_out_toggle, bulk_packets;
     unsigned packets, setups, dma_checks, protocol_requests, led_requests;
+    bool disable_on_babble,debounce_bounce;
+    unsigned debounce_changes;
 };
 static struct model m;
 static void (*frame_hook)(struct model *);
@@ -195,7 +210,7 @@ static struct peripheral *target(struct model *m,unsigned address)
             (m->regs[0x10/4]>>(16*root))&0xffff;
         if(!(status&(m->ohci ? 2u:4u))) continue;
         if(i>=2 && !(m->hub_status[i-2]&2)) continue;
-        if(m->dev[i].present && (address ? m->dev[i].addr==address : i==m->selected)) return &m->dev[i];
+        if(m->dev[i].present && (address ? m->dev[i].addr==address : i==m->selected && !m->dev[i].addr)) return &m->dev[i];
     }
     return NULL;
 }
@@ -206,10 +221,16 @@ static unsigned descriptor(struct model *m,struct peripheral *d,uint8_t *b)
         uint8_t dd[18]={18,1,0x10,1,0,0,0,8,0x34,0x12,0,0,0,1,0,0,0,1};
         dd[4]=d->kind==HUB ? 9:0; dd[10]=(uint8_t)d->kind;
         if(d->kind==HUB) {dd[8]=9;dd[9]=4;dd[10]=0xaa;dd[11]=0x55;}
+        if(d->kind==RECEIVER) {dd[8]=0x6d;dd[9]=4;dd[10]=0x2b;dd[11]=0xc5;}
         memcpy(b,dd,18);return 18;
     }
     if(type==2) {
         uint8_t cfg[]={9,2,34,0,1,1,0,0x80,50,9,4,0,0,1,3,1,1,0,9,0x21,0x11,1,0,1,0x22,0,0,7,5,0x81,3,8,0,10};
+        if(d->kind==RECEIVER) {
+            cfg[2]=59;cfg[4]=2;cfg[33]=8;memcpy(b,cfg,34);
+            memcpy(b+34,cfg+9,25);b[36]=1;b[41]=2;b[54]=0x82;b[56]=8;b[58]=2;
+            return 59;
+        }
         if(d->kind==HUB) {cfg[14]=9;cfg[15]=0;cfg[16]=0;cfg[2]=25;memcpy(b,cfg,18);memcpy(b+18,cfg+27,7);return 25;}
         cfg[16]=d->kind==KBD ? 1:2;
         cfg[31]=d->kind==KBD ? 8:4;
@@ -240,23 +261,55 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
         return (int)len;
     }
     if(ep) {
-        assert(ep==1 && pid==USB_PID_IN);
-        if(m->nak || !d->report_len) return -USB_EAGAIN;
-        assert(toggle==d->in_toggle);d->in_toggle^=1;
+        assert((ep==1 || (ep==2 && d->kind==RECEIVER)) && pid==USB_PID_IN);
+        if(d->hid_errors && (!d->error_endpoint || ep==d->error_endpoint)) {
+            d->hid_errors--;
+            if(d->babble && m->disable_on_babble) {
+                unsigned p=(unsigned)(d-m->dev);assert(p<2);
+                if(m->ohci)m->regs[(0x54+4*p)/4]=(m->regs[(0x54+4*p)/4]&~2u)|0x20000;
+                else m->regs[0x10/4]=(m->regs[0x10/4]&~(4u<<(16*p)))|(8u<<(16*p));
+            }
+            return d->babble ? -75:d->crc ? -USB_ETIMEDOUT:-USB_EPIPE;
+        }
+        unsigned *report_len=ep==2 ? &d->mouse_length:&d->report_len;
+        unsigned *in_toggle=ep==2 ? &d->mouse_toggle:&d->in_toggle;
+        uint8_t *report=ep==2 ? d->mouse_report:d->report;
+        if(m->nak || !*report_len) return -USB_EAGAIN;
+        if(*report_len>len) return -75; /* legal suffix exceeds the HC's requested buffer */
+        assert(toggle==*in_toggle);*in_toggle^=1;
         if(report_ack_hook)report_ack_hook(m,d);
-        unsigned n=d->report_len;assert(n<=len);memcpy(buf,d->report,n);d->report_len=0;return (int)n;
+        unsigned n=*report_len;assert(n<=len);memcpy(buf,report,n);*report_len=0;return (int)n;
     }
     if(pid==USB_PID_SETUP) {
+        unsigned root=(unsigned)(d-m->dev);
+        if(!address && root<2 && d->reset_series) {
+            assert(m->now-(m->ohci ? m->reset_at[root]:m->recovery_at[root])>=10);
+        }
+        if(buf[1]==6 && buf[3]==1 && buf[6]==8 && !address) {
+            assert(d->descriptor_attempts<6);
+            d->descriptor_at[d->descriptor_attempts++]=m->now;
+            if(d->descriptor_failures || (d->second_reset && d->reset_series<2)) {
+                if(d->descriptor_failures)d->descriptor_failures--;
+                return -USB_ETIMEDOUT;
+            }
+        }
+        if(address && d->address_at) assert(m->now-d->address_at>=2);
+        if(buf[0]==2 && buf[1]==1 && d->clear_fail)return -USB_EPIPE;
         assert(len==8 && !toggle);m->setups++;
         for(unsigned i=0;i<8;i++)m->setup[i]=buf[i];m->data_at=0;return 8;
     }
     assert(toggle==1 || m->data_at);
     unsigned req=m->setup[1],type=m->setup[0],value=m->setup[2]|m->setup[3]<<8,index=m->setup[4];
     if(!len) {
-        if(req==5 && !type) d->addr=value;
+        if(req==5 && !type) { d->addr=value;d->address_at=m->now; }
+        if(req==1 && type==2) {
+            assert(!value && (index==0x81 || (index==0x82 && d->kind==RECEIVER)));
+            d->clear_halts++;d->last_clear=index;
+            if(index==0x82)d->mouse_toggle=0;else d->in_toggle=0;
+        }
         if(req==11 && type==0x21){d->protocol=value;m->protocol_requests++;if(!value)d->boot_requests++;}
-        if(req==10 && type==0x21){assert(!value && !index);d->idle_requests++;}
-        if(req==9 && !type)d->in_toggle=0; /* SET_CONFIGURATION */
+        if(req==10 && type==0x21){assert(!value && (!index || (index==1 && d->kind==RECEIVER)));d->idle_requests++;}
+        if(req==9 && !type)d->in_toggle=d->mouse_toggle=0; /* SET_CONFIGURATION */
         if(type==0x23) {
             assert(d->kind==HUB && index>=1 && index<=USB_PORT_MAX);
             if(req==3 && value==8) m->hub_power_requests++; /* no switching */
@@ -266,12 +319,13 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
                 if(!m->hub_stuck) {
                     m->hub_status[index-1]&=~0x10u;m->hub_change[index-1]|=0x10;
                     if(m->dev[m->selected].present) {
-                        m->dev[m->selected].addr=0;m->dev[m->selected].in_toggle=0;
+                        m->dev[m->selected].addr=0;m->dev[m->selected].in_toggle=0;m->dev[m->selected].reset_series++;
                         if(!(m->hub_status[index-1]&2)) m->hub_change[index-1]|=2;
                         m->hub_status[index-1]|=2;
                     }
                 }
-            } else if(req==1 && value>=16 && value<=20) {
+            } else if(req==3 && value==1) m->hub_status[index-1]|=2;
+            else if(req==1 && value>=16 && value<=20) {
                 m->hub_acks[index-1]++;m->hub_change[index-1]&=~(1u<<(value-16));
             }
             else {assert(req==1 && value==1);m->hub_status[index-1]&=~2u;}
@@ -310,7 +364,7 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
         m->regs[0x10/4]=0;
         for(unsigned p=0;p<2;p++) {
             unsigned status=0x80|(m->dev[p].present ? 3u:0u)|(p==1 && m->dev[p].present && m->dev[p].kind!=HUB ? 0x100u:0u);
-            m->regs[0x10/4]|=status<<(16*p);m->dev[p].addr=0;
+            m->regs[0x10/4]|=status<<(16*p); /* HCRESET does not reset the peripheral */
         }
         return;
     }
@@ -318,7 +372,10 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
         if(off==0x0c){m->regs[off/4]&=~value;return;}
         if(off>=0x54 && off<0x5c) {
             unsigned p=(off-0x54)/4;
-            if(value==0x10){m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->regs[off/4]|=0x10002;return;}
+            if(value==0x10){m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->root_resets[p]++;m->reset_at[p]=m->now;
+                if(m->root_resets[p]%5==1)m->dev[p].reset_series++;
+                m->regs[off/4]|=0x100002;return;}
+            if(value==2){m->root_enables[p]++;m->regs[off/4]|=2;return;}
             if(value==1){m->regs[off/4]&=~2u;return;}
             if(value & 0x1f0000){m->root_acks[p]++;m->regs[off/4]&=~(value & 0x1f0000);return;}
             return;
@@ -327,13 +384,13 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
         unsigned p=(off-0x10)/2;
         unsigned old=(m->regs[off/4]>>(8*(off&3)))&0xffff;
         if((value&0x200) && !(old&0x200)) {
-            m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->reset_at[p]=m->now;m->root_resets[p]++;
+            m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->reset_at[p]=m->now;m->root_resets[p]++;m->dev[p].reset_series++;
         }
         if(!(value&0x200) && (old&0x200)) {
             assert(m->now-m->reset_at[p]>=50);m->recovery_at[p]=m->now;
         }
         if((value&4) && !(old&4) && (old&1)) {
-            assert(!(value&0x200) && m->now-m->recovery_at[p]>=10);m->root_enables[p]++;
+            assert(!(value&0x200) && m->now-m->recovery_at[p]>=1);m->root_enables[p]++;
         }
         /* QEMU preserves RO bits, accepts PE only for CCS, and clears
          * CSC/PEC only on an explicit write of one (uhci_port_write). */
@@ -384,7 +441,7 @@ static void execute_ohci(struct model *m,unsigned ed_addr,bool periodic)
             }
             int n=transaction(m,ed[0]&127,(ed[0]>>7)&15,dir==0?USB_PID_SETUP:dir==1?USB_PID_OUT:USB_PID_IN,((td[0]>>24)&3)&1,buf,len);
             if(n!=-USB_EAGAIN) {
-                unsigned cc=n>=0?0:n==-USB_EPIPE?4:5;
+                unsigned cc=n>=0?0:n==-USB_EPIPE?4:n==-75?8:5;
                 if(n>=0)td[1]=(unsigned)n==len?0:td[1]+(unsigned)n;
                 if(m->bad_dma)td[1]=m->host.dma_phys-1;
                 td[0]=(td[0]&0x0fffffff)|(cc<<28);ed[2]=td[2]|(cc ? 1:0);
@@ -409,7 +466,10 @@ static bool uhci_transaction(void *arg,uint32_t td_address,uint32_t qh_address,v
     int n=transaction(m,(td[2]>>8)&127,(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,buf,len);
     if(n==-USB_EAGAIN) {td[1]|=1u<<19;return false;}
     td[1]&=~((1u<<23)|(1u<<19)|0x7ffu);
-    if(n<0) {td[1]|=n==-USB_EPIPE ? 1u<<22:1u<<18;m->regs[0]|=2u<<16;return false;}
+    if(n<0) {td[1]|=n==-USB_EPIPE ? 1u<<22:n==-75 ? (1u<<20)|(1u<<22):(1u<<18)|(1u<<22);
+        if(n==-75)td[1]=(td[1]&~0x7ffu)|2; /* T23 mouse babble: three bytes */
+        if(n==-USB_ETIMEDOUT || n==-USB_EIO)td[1]&=~(3u<<27);
+        m->regs[0]|=2u<<16;return false;}
     if(m->bad_length)n=(int)len+1;
     td[1]|=((unsigned)n-1)&0x7ff;
     return true;
@@ -513,7 +573,8 @@ static void complete_late_hid(struct model *m)
 {
     if(!m->latched_td)return;
     volatile uint32_t *ed=(volatile uint32_t *)dma_at(m,m->latched_ed,16);
-    if(m->ohci ? !(ed[0]&(1u<<14)):!(ed[1]&1))return;
+    /* Complete a previously fetched TD just before software observes it.
+     * NAKs no longer authorize unlinking a pending interrupt TD. */
     volatile uint32_t *td=(volatile uint32_t *)dma_at(m,m->latched_td,16);
     unsigned address,ep,toggle,len,buffer;
     if(m->ohci) {
@@ -542,6 +603,11 @@ static void sleep_ms(void *arg,unsigned ms)
     if(m->sleep_gap)ms+=m->sleep_gap;
     while(ms--) {
         uint64_t before=m->now++;
+        if(m->debounce_bounce && m->now<=50 && m->now%25==0) {
+            if(m->ohci)m->regs[0x54/4]|=0x10000;
+            else m->regs[0x10/4]|=2;
+            m->debounce_changes++;
+        }
         if(m->ehci) {if(!m->ownership_stuck)m->config[0x40/4]&=~(1u<<16);continue;}
         if(m->frame_ms && before/m->frame_ms==m->now/m->frame_ms)continue;
         if(frame_hook)frame_hook(m);
@@ -581,6 +647,7 @@ static void setup(bool ohci,bool hub)
     memset(hid_reports,0,sizeof(hid_reports));memset(hid_polls,0,sizeof(hid_polls));memset(hid_pipes,0,sizeof(hid_pipes));
     usb_key_records=f12_down_records=f12_up_records=0;
     schedule_entries=schedule_qhs=schedule_tds=schedule_invalid=0;
+    port_actions=recovery_records=0;
     memset(held,0,sizeof(held));memset(buttons,0,sizeof(buttons));
     m.ohci=ohci;m.pending_addr=0;
     m.dev[0]=(struct peripheral){.kind=hub?HUB:KBD,.present=true};
@@ -684,6 +751,7 @@ static void uhci_schedule_regression(void)
         assert(t->valid && t->result==-USB_EAGAIN && t->status==(0x188807ffu|(d->low_speed ? 1u<<26:0)));
     }
     tail[0]=saved;m.nak=false;
+    zero.address=m.host.devices[0].address; /* a configured device no longer answers addr0 */
     usb_host_take(&m.host);
     assert(usb_control(&zero,0x80,6,0x100,0,descriptor,8)==8);
     usb_host_drop(&m.host);model_step();
@@ -709,8 +777,8 @@ static void errors(bool ohci)
     setup(ohci,false);m.reset_stuck=true;uint64_t begin=m.now;assert(attach()<0 && m.host.quarantined && m.now-begin<=600);
     for(unsigned i=0;i<lease_count;i++)assert(leases[i].state==RS_QUARANTINED);
     setup(ohci,false);assert(!attach());m.silent=true;begin=m.now;
-    model_step();assert(m.host.devices[0].quarantined && m.host.root_blocked[0] && m.now-begin<1500);
-    assert(descriptor_failures==2 && descriptor_results==descriptor_starts);
+    model_step();assert(m.host.devices[0].quarantined && m.host.root_blocked[0] && m.now-begin<7500);
+    assert(descriptor_failures==12 && descriptor_results==descriptor_starts);
     setup(ohci,false);assert(!attach());m.malformed=true;model_step();assert(m.host.devices[0].quarantined);
     setup(ohci,false);assert(!attach());model_step();m.freeze=true;
     model_step();model_step();assert(m.host.quarantined);
@@ -984,8 +1052,182 @@ static void port_flood(bool ohci)
     assert(m.hub_acks[0]==acks+7 && !m.hub_change[0] && m.hub_reset_requests==resets);
     printf("PASS USB %s F1-53 port flood: one quarantined connect, W1C once, silence until disconnect, retained block, no enumeration/reset; every root/hub record >=1 s apart\n",ohci?"OHCI":"UHCI");
 }
+static void enumeration_retries(bool ohci)
+{
+    for(unsigned failures=1;failures<=6;failures++) {
+        setup(ohci,false);m.dev[1].present=false;
+        if(ohci)m.regs[0x58/4]=0;
+        m.dev[0].addr=17; /* BIOS address survives HCRESET, not port reset. */
+        m.dev[0].descriptor_failures=failures;
+        assert(!attach() && m.dev[0].addr==17);
+        if(failures==1) {
+            m.now++;
+            assert(!m.host.ops->port_enable(&m.host,0));
+            struct usb_device probe={.host=&m.host,.ep0=8};uint8_t bytes[8];
+            assert(usb_control(&probe,0x80,6,0x100,0,bytes,sizeof(bytes))==-USB_EIO);
+            assert(!m.root_resets[0] && m.dev[0].addr==17); /* ignores addr0 until a physical reset */
+        }
+        model_step();
+        struct usb_device *d=&m.host.devices[0];
+        unsigned attempts=failures==6 ? 6:failures+1;
+        assert(m.host.device_count==1 && m.dev[0].descriptor_attempts==attempts);
+        assert(m.dev[0].reset_series==(failures>=3 ? 2u:1u));
+        assert(descriptor_starts==attempts && descriptor_failures==failures);
+        for(unsigned i=1;i<attempts;i++) {
+            unsigned delay=i==3 ? 60:100;
+            assert(m.dev[0].descriptor_at[i]-m.dev[0].descriptor_at[i-1]>=delay);
+        }
+        assert(port_actions && d->quarantined==(failures==6));
+        if(failures<6) assert(d->configured && d->hid[0].active && d->address==1);
+        else {
+            unsigned resets=m.root_resets[0];
+            for(unsigned scan=0;scan<10;scan++){m.now+=250;model_step();}
+            assert(m.host.root_blocked[0] && m.root_resets[0]==resets && m.host.device_count==1);
+        }
+    }
+    setup(ohci,false);m.dev[0].second_reset=true;assert(!attach());model_step();
+    assert(m.host.devices[0].configured && m.dev[0].descriptor_attempts==4 && m.dev[0].reset_series==2);
+    if(!ohci) {
+        setup(false,false);assert(!attach());m.debounce_bounce=true;
+        model_step();assert(m.debounce_changes==2 && m.reset_at[0]>=150);
+    }
+    printf("PASS USB %s BIOS address, first SETUP timeout, 2x3 descriptor attempts, spacing/reset/recovery, bounded quarantine and debounce\n",ohci?"OHCI":"UHCI");
+}
+static void live_port(bool ohci)
+{
+    setup(ohci,false);assert(!attach());model_step();
+    struct usb_device *d=&m.host.devices[0];
+    unsigned count=m.host.device_count,resets=m.root_resets[0],addr=d->address;
+    m.dev[0].report[2]=4;m.dev[0].report_len=8;model_step();assert(held[INPUT_KEY_A]);
+    if(ohci)m.regs[0x54/4]|=0x30000;
+    else m.regs[0x10/4]|=0x0a;
+    m.now+=1100;model_step();
+    assert(m.host.device_count==count && m.root_resets[0]==resets && d->address==addr && d->hid[0].active);
+    assert(m.host.ops->port_reset(&m.host,0)==-USB_EAGAIN);
+    m.host.ops->port_disable(&m.host,0);
+    assert(m.host.ops->port_status(&m.host,0)&USB_PORT_ENABLED);
+    unsigned enables=m.root_enables[0];
+    /* Controller PEDC with CCS still set. Re-enable without PR/address loss. */
+    if(ohci)m.regs[0x54/4]=(m.regs[0x54/4]&~2u)|0x20000;
+    else m.regs[0x10/4]=(m.regs[0x10/4]&~4u)|8;
+    m.now+=300;model_step();
+    assert(m.root_enables[0]==enables+1 && m.root_resets[0]==resets && d->address==addr);
+    assert(held[INPUT_KEY_A] && usb_devices==2 && !usb_detaches);
+    memset(m.dev[0].report,0,8);m.dev[0].report_len=8;model_step();assert(!held[INPUT_KEY_A]);
+    printf("PASS USB %s live CCS+CSC/PEDC: retained input/address, no reset/disable, explicit PE recovery\n",ohci?"OHCI":"UHCI");
+}
+static void hid_recovery(bool ohci)
+{
+    for(unsigned babble=0;babble<2;babble++) for(unsigned persistent=0;persistent<2;persistent++) {
+        setup(ohci,false);assert(!attach());model_step();
+        struct usb_device *d=&m.host.devices[0];struct usb_hid *p=&d->hid[0];
+        m.dev[0].report[2]=4;m.dev[0].report_len=8;model_step();assert(p->toggle==1 && held[INPUT_KEY_A]);
+        m.dev[0].babble=babble;m.dev[0].hid_errors=persistent ? 2:1;m.disable_on_babble=true;
+        unsigned resets=m.root_resets[0];
+        model_step(); /* retired error; general owner clears halt */
+        for(unsigned i=0;i<3;i++)model_step();
+        assert(m.dev[0].clear_halts==1 && recovery_records==1 && m.root_resets[0]==resets);
+        if(persistent) assert(d->quarantined && !p->active && !held[INPUT_KEY_A]);
+        else {
+            assert(!d->quarantined && p->active && p->toggle==0 && held[INPUT_KEY_A]);
+            memset(m.dev[0].report,0,8);m.dev[0].report_len=8;model_step();
+            assert(!held[INPUT_KEY_A] && p->toggle==1 && !p->recovery_tried);
+        }
+    }
+    setup(ohci,false);assert(!attach());model_step();
+    m.dev[0].hid_errors=1;m.dev[0].clear_fail=true;
+    for(unsigned i=0;i<3;i++)model_step();
+    assert(m.host.devices[0].quarantined && !m.dev[0].clear_halts);
+    setup(ohci,false);assert(!attach());model_step();
+    m.dev[0].hid_errors=1;m.dev[0].crc=true;
+    for(unsigned i=0;i<3;i++)model_step();
+    assert(m.host.devices[0].quarantined && !m.dev[0].clear_halts && !recovery_records);
+    printf("PASS USB %s interrupt STALL/babble: one clear-halt, DATA0 retry, PE recovery, persistent/clear-failure quarantine\n",ohci?"OHCI":"UHCI");
+}
+static void persistent_nak(bool ohci)
+{
+    setup(ohci,false);g_boot.flags=CBI_F_VERBOSE;assert(!attach());model_step();
+    struct usb_device *d=&m.host.devices[0];struct usb_hid *p=&d->hid[0];
+    assert(p->pipe_state==1);
+    uint32_t original[4];memcpy(original,m.dma+USB_HID_BASE+16,sizeof(original));
+    unsigned records=hid_polls[d->address];
+    for(unsigned i=0;i<60;i++) {m.now+=20;model_step();assert(p->pipe_state==1 && !p->toggle && !d->quarantined);}
+    volatile uint32_t *td=(volatile uint32_t *)(m.dma+USB_HID_BASE+16);
+    assert(ohci ? td[0]==original[0] && td[1]==original[1] && td[2]==original[2] :
+                  td[0]==original[0] && td[2]==original[2] && td[3]==original[3] && (td[1]&(1u<<23)));
+    assert(hid_polls[d->address]<=USB_HID_TRACE_LIMIT && hid_polls[d->address]>=records);
+    m.dev[0].report[2]=4;m.dev[0].report_len=8;model_step();
+    assert(held[INPUT_KEY_A] && p->toggle==1 && !m.dev[0].report_len);
+    memset(m.dev[0].report,0,8);m.dev[0].report_len=8;model_step();assert(!held[INPUT_KEY_A]);
+    printf("PASS USB %s >1 s idle NAK: same linked TD, bounded -11 records, later ACK/toggle/re-arm\n",ohci?"OHCI":"UHCI");
+}
+static void ohci_batches(void)
+{
+    for(unsigned slow=0;slow<2;slow++) {
+        setup(true,false);g_boot.flags=CBI_F_TEST_REQUEST;assert(!attach());model_step();
+        assert(!m.host.quarantined && m.dev[0].reset_series==1 && m.dev[1].reset_series==1);
+        assert(!(m.regs[0x54/4]&0x1f0000)); /* independent CSC/PRSC acknowledged */
+        if(slow) {m.frame_ms=4;m.sleep_gap=9;}
+        for(unsigned round=0;round<3;round++) {
+            m.dev[0].report[2]=0x45;m.dev[0].report_len=8;model_step();assert(held[0x58]);
+            memset(m.dev[0].report,0,8);m.dev[0].report_len=8;model_step();assert(!held[0x58]);
+            /* The runner's first pointer batch (batch 2) follows key down/up.
+             * Leave NAK TDs linked across a long idle interval, then re-arm. */
+            for(unsigned idle=0;idle<10;idle++)model_step();
+            unsigned reports=hid_reports[m.host.devices[1].address];
+            for(unsigned batch=0;batch<4;batch++) {
+                m.dev[1].report[0]=batch==2;m.dev[1].report[1]=batch<2 ? 0x81:0;
+                m.dev[1].report[2]=batch<2 ? 0x81:0;m.dev[1].report_len=4;
+                model_step();
+                assert(!m.dev[1].report_len && m.host.ready && usb_devices==2);
+                if(batch<2)assert(last_x==-127 && last_y==-127);
+                else assert(buttons[0]==(batch==2));
+            }
+            assert(hid_reports[m.host.devices[1].address]==reports+4);
+            volatile uint32_t *ed=(volatile uint32_t *)(m.dma+USB_HID_BASE+USB_HID_MAX*USB_HID_STRIDE);
+            assert(ed[3]==m.host.dma_phys+USB_HID_BASE+(USB_HID_MAX+1)*USB_HID_STRIDE);
+        }
+    }
+    puts("PASS USB OHCI PRSC reset, runner batch 2 after F12, repeated ED/TD re-arm and button release, independent/delayed clocks");
+}
+static void t23_receiver(bool disabled)
+{
+    setup(false,false);g_boot.flags=CBI_F_TEST_REQUEST;
+    m.dev[0].kind=RECEIVER;m.dev[1].present=false;
+    assert(!attach());model_step();
+    struct usb_device *d=&m.host.devices[0];
+    assert(d->vendor==0x046d && d->product==0xc52b && usb_devices==2);
+    assert(d->hid[0].endpoint==1 && d->hid[1].endpoint==2 && d->hid[1].interface==1);
+    m.dev[0].report[2]=4;m.dev[0].report_len=8;
+    unsigned wheels=wheel_events;
+    m.dev[0].mouse_report[0]=1;m.dev[0].mouse_report[1]=3;m.dev[0].mouse_report[3]=0x7f;
+    m.dev[0].mouse_length=8;
+    model_step();assert(held[INPUT_KEY_A] && buttons[0] && last_x==3 && wheel_events==wheels);
+    unsigned resets=m.root_resets[0],address=d->address;
+    m.regs[0x10/4]=0x9b; /* CCS/CSC/PEDC/D+, PE dropped on the live receiver */
+    m.now+=300;model_step();
+    assert(m.root_resets[0]==resets && m.host.device_count==1 && d->address==address);
+    assert((m.regs[0x10/4]&0xffff)==0x95 && usb_devices==2);
+    /* The supplied T23 babble snapshot still has PE=1 (PORTSC 0x95).
+     * The separate recovery fixture covers HC-driven PE loss on babble. */
+    m.dev[0].hid_errors=1;m.dev[0].error_endpoint=2;m.dev[0].babble=true;m.disable_on_babble=disabled;
+    model_step();model_step();
+    assert(m.dev[0].last_clear==0x82 && m.dev[0].clear_halts==1);
+    assert(d->hid[0].toggle==1 && d->hid[1].toggle==0 && m.dev[0].in_toggle==1 && !m.dev[0].mouse_toggle);
+    assert(!d->quarantined && held[INPUT_KEY_A] && buttons[0] && usb_devices==2 && !usb_detaches);
+    memset(m.dev[0].report,0,8);m.dev[0].report_len=8;
+    memset(m.dev[0].mouse_report,0,4);m.dev[0].mouse_report[2]=2;m.dev[0].mouse_length=3;
+    model_step();
+    assert(!held[INPUT_KEY_A] && !buttons[0] && last_y==2 && usb_devices==2 && m.root_resets[0]==resets);
+    printf("PASS USB T23 composite 046d:c52b: legal 8-byte boot mouse suffix, CCS/CSC/PEDC recovery, endpoint 2 three-byte babble, clear 0x82 only, keyboard/mouse survive, shared_PE_loss=%u\n",disabled);
+}
 int main(void)
 {
+    enumeration_retries(false);enumeration_retries(true);
+    live_port(false);live_port(true);hid_recovery(false);hid_recovery(true);
+    persistent_nak(false);persistent_nak(true);
+    ohci_batches();
+    t23_receiver(false);t23_receiver(true);
     uhci_schedule_rules();uhci_schedule_regression();
     bulk_engine(false);bulk_engine(true);
     assert(usb_mouse_wheel_layout(wheel_desc,sizeof(wheel_desc)));

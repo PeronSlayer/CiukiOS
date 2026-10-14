@@ -69,6 +69,7 @@ int usb_interrupt(struct usb_device *d, struct usb_hid *p, void *data, unsigned 
         usb_barrier();
         p->pipe_state = 1; p->pipe_frame = (uint16_t)frame;
         p->pipe_begin = p->pending_at = tick; p->observed_at = 0;
+        p->progress_at = tick;
         p->next_poll = tick + p->interval;
         return -USB_EAGAIN;
     }
@@ -77,13 +78,26 @@ int usb_interrupt(struct usb_device *d, struct usb_hid *p, void *data, unsigned 
         (td[0] >> 28) < 14 && ((ed[2] & ~15u) == ed[1] || (ed[2] & 1));
     t->hc_status = status;
     if (p->pipe_state == 1) {
-        t->poll_frames += (frame - p->pipe_frame) & mask;
+        unsigned elapsed = (frame - p->pipe_frame) & mask;
+        t->poll_frames += elapsed;
+        if (elapsed) p->progress_at = tick; /* watchdog follows HC progress, not idle duration */
         p->pipe_frame = (uint16_t)frame;
         if (done) p->observed_at = tick;
         else p->pending_at = tick;
-        if (!done && t->poll_frames < 2 && tick - p->pipe_begin < USB_PERIODIC_WATCHDOG_MS)
+        if (!done) {
+            if (tick - p->progress_at >= USB_PERIODIC_WATCHDOG_MS) {
+                usb_host_quarantine(h, "frame_clock_stalled"); return -USB_EIO;
+            }
+            /* A NAK is flow control. Do not unlink or rewrite this TD: the
+             * controller keeps polling it until a report or a retired error.
+             * Publish bounded diagnostic snapshots without claiming retirement. */
+            if (t->poll_frames >= 2) {
+                t->status = uhci ? td[1] : td[0]; t->token = uhci ? td[2] : ed[0];
+                t->frames = t->poll_frames; t->elapsed_ms = tick - p->pipe_begin;
+                t->result = t->retired = -USB_EAGAIN; t->valid = true;
+            }
             return -USB_EAGAIN;
-        if (t->poll_frames >= 2) t->result = -USB_EAGAIN;
+        }
         if (uhci) ed[1] = 1;
         else ed[0] |= 1u << 14;
         usb_barrier();

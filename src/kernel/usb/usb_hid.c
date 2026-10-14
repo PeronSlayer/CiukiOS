@@ -253,9 +253,24 @@ static void hid_fail(struct usb_device *d, const char *reason)
     d->host->next_scan=d->host->io.now(d->host->io.cookie);
     for (unsigned i=0;i<USB_HID_MAX;i++) usb_hid_release(d,&d->hid[i]);
 }
+void usb_hid_recover(struct usb_device *d)
+{
+    for (unsigned i=0;i<USB_HID_MAX && d->host->ready;i++) {
+        struct usb_hid *h=&d->hid[i];
+        if (!h->active || !h->recovery_pending) continue;
+        int err=h->port_retry ? 0:usb_control(d,0x02,1,0,(uint16_t)(0x80u|h->endpoint),0,0);
+        klog("[usb] hid recovery addr=%u interface=%u endpoint=%u fault=%d method=%s result=%d controller=%s",
+             d->address,h->interface,h->endpoint,h->recovery_result,
+             h->port_retry ? "port_enable":"clear_halt",err,d->host->owner);
+        if (err) { hid_fail(d,"hid_clear_halt"); return; }
+        if (!h->port_retry) h->toggle=0;
+        h->port_retry=h->recovery_pending=false;
+        h->next_poll=d->host->io.now(d->host->io.cookie);
+    }
+}
 void usb_hid_poll(struct usb_device *d, struct usb_hid *h)
 {
-    if (!h->active) return;
+    if (!h->active || h->recovery_pending) return;
     struct usb_host *host=d->host;
     latency_window(d,h,host->io.now(host->io.cookie));
     bool async=host->ops->interrupt!=0;
@@ -263,7 +278,9 @@ void usb_hid_poll(struct usb_device *d, struct usb_hid *h)
     if (!h->active) return;
     if (async || usb_expired(host,h->next_poll)) {
         uint8_t b[64]; int n;
-        if (async) n=host->ops->interrupt(d,h,b,h->protocol==1 ? 8 : h->wheel ? 4 : 3);
+        /* HID 1.11 Appendix B allows boot mouse suffixes up to eight
+         * bytes. Request room for them; usb_hid_report uses the boot prefix. */
+        if (async) n=host->ops->interrupt(d,h,b,h->packet<8 ? h->packet:8);
         else {
             h->pending_at=host->io.now(host->io.cookie);
             h->next_poll=h->pending_at+h->interval;
@@ -272,13 +289,32 @@ void usb_hid_poll(struct usb_device *d, struct usb_hid *h)
             h->observed_at=host->io.now(host->io.cookie);
         }
         if (n>=0) {
+            h->recovery_tried=false;
             h->toggle^=1;
             if (usb_hid_report(d,h,b,(unsigned)n)) { hid_fail(d,"hid_report_length"); return; }
             latency_record(d,h);
             report_record(d,h,b,(unsigned)n);
         } else if (h->trace.valid || n!=-USB_EAGAIN) {
             poll_record(d,h,n);
-            if (n!=-USB_EAGAIN) { hid_fail(d,n==-USB_EPIPE ? "hid_stall" : "hid_transfer"); return; }
+            if (n!=-USB_EAGAIN) {
+                bool babble=n==-USB_EIO && h->trace.valid &&
+                    (host->pci.prog_if==0 ? (h->trace.status & 0x00360000u)==(1u<<20) :
+                                           (h->trace.status>>28)==8);
+                bool port_retry=false;
+                if (n==-USB_EIO && h->trace.valid && host->ready && host->ops->port_status &&
+                    (host->pci.prog_if==0 ? (h->trace.status & 0x00360000u)==(1u<<18) :
+                                           (h->trace.status>>28)==5)) {
+                    unsigned s=host->ops->port_status(host,d->root_port);
+                    port_retry=(s & (USB_PORT_CONNECTED|USB_PORT_ENABLED|USB_PORT_OVERCURRENT))==USB_PORT_CONNECTED;
+                }
+                if ((n==-USB_EPIPE || babble || port_retry) && !h->recovery_tried && host->ready) {
+                    h->recovery_pending=h->recovery_tried=true;h->recovery_result=n;
+                    h->port_retry=port_retry;
+                    host->next_scan=host->io.now(host->io.cookie);
+                    return;
+                }
+                hid_fail(d,n==-USB_EPIPE ? "hid_stall" : "hid_transfer"); return;
+            }
         }
     }
     if (h->repeat_key && usb_expired(host,h->repeat_at)) {

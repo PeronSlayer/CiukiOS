@@ -57,26 +57,48 @@ static unsigned status(struct usb_host *h, unsigned port)
 static int reset(struct usb_host *h, unsigned port)
 {
     if (port >= h->ports) return -EINVAL;
+    if ((status(h, port) & USB_PORT_CONNECTED) && usb_port_has_live_child(h, port)) return -USB_EAGAIN;
     unsigned off = 0x54 + 4 * port;
     /* OHCI emits 10 ms pulses. USB 7.1.7.5 requires root hubs to
      * provide 50 ms total reset; repeat five pulses, with IF=1. */
     for (unsigned pulse = 0; pulse < 5; pulse++) {
-        usb_write(h, off, 0x10000, 4);
+        usb_write(h, off, 0x100000, 4); /* PRSC, not CSC */
+        unsigned before = usb_read(h, off, 4);
         usb_write(h, off, 0x10, 4);
+        usb_port_action(h, port, "reset_assert", before, 0x10, 0);
         usb_port_record(h, port, "reset", 0);
         usb_sleep(h, 10);
-        int err = usb_wait_register(h, off, 4, 0x10010, 0x10000, 100);
+        int err = usb_wait_register(h, off, 4, 0x100010, 0x100000, 100);
+        usb_port_action(h, port, "reset_release", before, 0, err);
         usb_port_record(h, port, "reset", err);
         if (err) return err;
         if (!(status(h, port) & USB_PORT_CONNECTED)) return -USB_EIO;
     }
     usb_write(h, off, 0x1f0000, 4); usb_sleep(h, 10);
     int err = (status(h, port) & 3) == 3 ? 0 : -USB_EIO;
+    usb_port_action(h, port, "enable_reset", usb_read(h, off, 4), 0, err);
     usb_port_record(h, port, "enable", err);
     return err;
 }
 static void disable(struct usb_host *h, unsigned port)
-{ usb_write(h, 0x54 + 4 * port, 1, 4); usb_port_record(h, port, "enable", 0); }
+{
+    if (port >= h->ports || ((status(h, port) & USB_PORT_CONNECTED) && usb_port_has_live_child(h, port))) return;
+    unsigned off = 0x54 + 4 * port, before = usb_read(h, off, 4);
+    usb_write(h, off, 1, 4); usb_port_action(h, port, "disable", before, 1, 0);
+    usb_port_record(h, port, "disable", 0);
+}
+static int enable(struct usb_host *h, unsigned port)
+{
+    if (port >= h->ports) return -EINVAL;
+    unsigned s = status(h, port);
+    if (!(s & USB_PORT_CONNECTED) || (s & USB_PORT_OVERCURRENT)) return -USB_EIO;
+    unsigned off = 0x54 + 4 * port, before = usb_read(h, off, 4);
+    usb_write(h, off, 2, 4);
+    int err = usb_wait_register(h, off, 4, 3, 3, 100);
+    usb_port_action(h, port, "enable", before, 2, err);
+    usb_port_record(h, port, "enable", err);
+    return err;
+}
 static void ack_changes(struct usb_host *h, unsigned port)
 {
     unsigned off = 0x54 + 4 * port, v = usb_read(h, off, 4);
@@ -175,6 +197,6 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
 }
 const struct usb_hc_ops usb_ohci_ops = {
     .start = start, .port_status = status, .port_reset = reset,
-    .port_disable = disable, .packet = packet, .port_ack_changes = ack_changes,
+    .port_enable = enable, .port_disable = disable, .packet = packet, .port_ack_changes = ack_changes,
     .interrupt = usb_interrupt, .interrupt_stop = usb_interrupt_stop,
 };

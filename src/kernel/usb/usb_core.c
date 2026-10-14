@@ -21,6 +21,24 @@ uint32_t usb_read(struct usb_host *h, unsigned at, unsigned width)
 { return h->io.read(h->io.cookie, at, width); }
 void usb_write(struct usb_host *h, unsigned at, uint32_t v, unsigned width)
 { h->io.write(h->io.cookie, at, v, width); }
+bool usb_port_has_live_child(struct usb_host *h, unsigned port)
+{
+    if (!h->root_child[port]) return false;
+    struct usb_device *d = &h->devices[h->root_child[port] - 1];
+    return d->present && !d->quarantined && !d->storage.block.quarantined;
+}
+void usb_port_action(struct usb_host *h, unsigned port, const char *event,
+                     unsigned before, unsigned written, int result)
+{
+    struct usb_port_log *log = &h->root_log[port];
+    unsigned count = ++log->operations;
+    if (count > USB_PORT_ACTION_TRACE_LIMIT && !usb_expired(h, log->next_operation)) return;
+    bool uhci = h->pci.prog_if == 0;
+    unsigned raw = usb_read(h, uhci ? 0x10 + 2 * port : 0x54 + 4 * port, uhci ? 2 : 4);
+    klog("[usb] port_action port=%u event=%s before=%08x write=%08x status=%08x count=%u controller=%s tick=%llu result=%d",
+         port + 1, event, before, written, raw, count, h->owner, h->io.now(h->io.cookie), result);
+    log->next_operation = h->io.now(h->io.cookie) + 1000;
+}
 bool usb_port_record(struct usb_host *h, unsigned port, const char *event, int result)
 {
     struct usb_port_log *log = &h->root_log[port];
@@ -358,14 +376,32 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
     d->parent = (uint8_t)parent; d->port = (uint8_t)port; d->present = true;
     d->generation = gen_alloc(); d->reason = "enumerating";
     uint8_t b[USB_CONFIG_MAX];
-    uint64_t descriptor_tick = h->io.now(h->io.cookie);
-    klog("[usb] addr0 get_descriptor controller=%s port=%u parent=%u tick=%llu phase=start length=8",
-         h->owner, port + 1, parent, descriptor_tick);
-    int err = usb_control(d, 0x80, 6, 0x100, 0, b, 8);
-    klog("[usb] addr0 get_descriptor controller=%s port=%u parent=%u tick=%llu result=%d elapsed_ms=%llu",
-         h->owner, port + 1, parent, h->io.now(h->io.cookie), err,
-         h->io.now(h->io.cookie) - descriptor_tick);
-    if (err != 8 || b[0] != 18 || b[1] != 1 || (b[7] != 8 && b[7] != 16 && b[7] != 32 && b[7] != 64) || (low && b[7] != 8)) goto failed;
+    int err = -USB_EIO;
+    for (unsigned series = 0; series < 2; series++) {
+        if (series) {
+            if (!h->ready || h->quarantined) goto failed;
+            err = parent ? usb_hub_reset(&h->devices[parent - 1], port) : h->ops->port_reset(h, port);
+            if (err) goto failed;
+        }
+        for (unsigned operation = 0; operation < 3; operation++) {
+            if (operation) usb_sleep(h, 100);
+            if (!h->ready || h->quarantined ||
+                !(h->ops->port_status(h, root) & USB_PORT_CONNECTED)) { err = -USB_EIO; goto failed; }
+            memset(b, 0, 8);
+            uint64_t descriptor_tick = h->io.now(h->io.cookie);
+            unsigned attempt = series * 3 + operation + 1;
+            klog("[usb] addr0 get_descriptor controller=%s port=%u parent=%u attempt=%u series=%u operation=%u tick=%llu phase=start length=8",
+                 h->owner, port + 1, parent, attempt, series + 1, operation + 1, descriptor_tick);
+            err = usb_control(d, 0x80, 6, 0x100, 0, b, 8);
+            klog("[usb] addr0 get_descriptor controller=%s port=%u parent=%u attempt=%u tick=%llu result=%d elapsed_ms=%llu",
+                 h->owner, port + 1, parent, attempt, h->io.now(h->io.cookie), err,
+                 h->io.now(h->io.cookie) - descriptor_tick);
+            if (err == 8 && b[0] == 18 && b[1] == 1 &&
+                (b[7] == 8 || b[7] == 16 || b[7] == 32 || b[7] == 64) && (!low || b[7] == 8)) goto descriptor_ready;
+        }
+    }
+    goto failed;
+descriptor_ready:
     d->ep0 = b[7];
     unsigned addr = h->next_address++;
     err = usb_control(d, 0, 5, (uint16_t)addr, 0, 0, 0); if (err) goto failed;
@@ -398,7 +434,21 @@ int usb_enumerate(struct usb_host *h, unsigned root, unsigned parent, unsigned p
     return (int)slot + 1;
 failed:
     usb_device_quarantine(d, err < 0 ? "enumeration_transfer" : "descriptor_or_topology");
-    return (int)slot + 1; /* retain failed record at the port; never retry */
+    return (int)slot + 1; /* retain after the bounded enumeration budget */
+}
+static bool root_debounce(struct usb_host *h, unsigned port)
+{
+    unsigned stable = 0;
+    h->ops->port_ack_changes(h, port);
+    for (unsigned elapsed = 0; elapsed < 2000 && h->ready; elapsed += 25) {
+        usb_sleep(h, 25);
+        unsigned s = h->ops->port_status(h, port);
+        if (!(s & USB_PORT_CONNECTED) || (s & USB_PORT_OVERCURRENT)) return false;
+        if (s & USB_PORT_CHANGED) { stable = 0; h->ops->port_ack_changes(h, port); }
+        else stable += 25;
+        if (stable >= 100) return true;
+    }
+    return false;
 }
 void usb_step(struct usb_host *h)
 {
@@ -455,7 +505,8 @@ void usb_step(struct usb_host *h)
                 usb_port_record(h, p, s & USB_PORT_CONNECTED ? "connect" : "disconnect", 0);
             else if ((s & USB_PORT_CHANGED) && h->root_child[p])
                 usb_port_record(h, p, s & USB_PORT_CONNECTED ? "connect" : "disconnect", 0);
-            if ((s ^ previous) & USB_PORT_ENABLED) usb_port_record(h, p, "enable", 0);
+            if ((s ^ previous) & USB_PORT_ENABLED)
+                usb_port_record(h, p, s & USB_PORT_ENABLED ? "enable" : "disable", 0);
             h->root_status[p] = s;
             if (s & USB_PORT_OVERCURRENT) {
                 if (h->root_child[p]) usb_device_quarantine(&h->devices[h->root_child[p]-1], "overcurrent");
@@ -463,20 +514,17 @@ void usb_step(struct usb_host *h)
                 h->ops->port_disable(h, p);
                 usb_port_record(h, p, "overcurrent", -USB_EIO); continue;
             }
-            if ((s & USB_PORT_CHANGED) && h->root_child[p]) {
-                usb_detach(&h->devices[h->root_child[p]-1], "root_port_changed");
-                h->root_child[p] = 0;
-            }
             if (!(s & USB_PORT_CONNECTED)) {
                 if (h->root_child[p]) {
                     usb_detach(&h->devices[h->root_child[p]-1], "disconnected");
                     h->root_child[p] = 0;
                 }
             } else if (!h->root_child[p]) {
-                usb_sleep(h, 100);
+                bool stable = root_debounce(h, p);
                 s = h->ops->port_status(h, p);
-                if (!(s & USB_PORT_CONNECTED)) {
-                    usb_port_record(h, p, "disconnect", 0); h->ops->port_ack_changes(h, p);
+                if (!stable) {
+                    usb_port_record(h, p, s & USB_PORT_CONNECTED ? "debounce" : "disconnect", -USB_EAGAIN);
+                    h->ops->port_ack_changes(h, p);
                     h->root_status[p] = s; continue;
                 }
                 int err = h->ops->port_reset(h, p);
@@ -485,6 +533,11 @@ void usb_step(struct usb_host *h)
                 err = usb_enumerate(h, p, 0, p, !!(s & USB_PORT_LOW));
                 if (err > 0) h->root_child[p] = (uint8_t)err;
                 else { h->ops->port_disable(h, p); usb_host_quarantine(h, "device_capacity"); break; }
+            } else if (!(s & USB_PORT_ENABLED) && usb_port_has_live_child(h, p)) {
+                /* PEDC/CSC do not revoke a live address while CCS stays set.
+                 * Recover PE without resetting the device or its toggles. */
+                int err = h->ops->port_enable(h, p);
+                if (err) { usb_device_quarantine(child, "root_port_enable"); continue; }
             }
             if (!h->ready) break; /* A transfer may have stopped/quarantined the HC. */
             h->ops->port_ack_changes(h, p);
@@ -500,6 +553,9 @@ void usb_step(struct usb_host *h)
         /* A scan first recognizes disconnect/change. A TD failure caused
          * by unplug must not permanently block that port's next generation. */
         if (d->hid_fault) { usb_device_quarantine(d,d->hid_fault); continue; }
+        usb_hid_recover(d);
+        if (d->hid_fault) { usb_device_quarantine(d,d->hid_fault); continue; }
+        if (!d->present || d->quarantined) continue;
         usb_hid_outputs(d);
     }
     usb_hid_service(h);
