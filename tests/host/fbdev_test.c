@@ -41,9 +41,10 @@ uint64_t framebuffer_cycles(void)
     fake_cycles += copy_cycles;
     return result;
 }
-static char step_log[128][96];   /* savage2d_test: verbose register breadcrumbs */
+#define ACCEL_LOG_CAP 512u
+static char step_log[ACCEL_LOG_CAP][96];   /* savage2d_test: verbose register breadcrumbs */
 static unsigned step_count;
-static char accel_log[128][192];
+static char accel_log[ACCEL_LOG_CAP][192];
 static unsigned accel_count;
 static void (*accel_log_cost)(const char *);
 void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
@@ -51,13 +52,13 @@ void klog(const char *fmt, ...)
 {
     if (!strncmp(fmt, "[accel] ", 8)) {
         va_list ap; va_start(ap, fmt);
-        vsnprintf(accel_log[accel_count++ % 128], sizeof(accel_log[0]), fmt, ap);
+        vsnprintf(accel_log[accel_count++ % ACCEL_LOG_CAP], sizeof(accel_log[0]), fmt, ap);
         va_end(ap);
-        if (accel_log_cost) accel_log_cost(accel_log[(accel_count-1) % 128]);
+        if (accel_log_cost) accel_log_cost(accel_log[(accel_count-1) % ACCEL_LOG_CAP]);
     }
     if (!strncmp(fmt, "[accel] savage step ", 20)) {
         va_list ap; va_start(ap, fmt);
-        vsnprintf(step_log[step_count++ % 128], sizeof(step_log[0]), fmt, ap);
+        vsnprintf(step_log[step_count++ % ACCEL_LOG_CAP], sizeof(step_log[0]), fmt, ap);
         va_end(ap); return;
     }
     if (strncmp(fmt, "[display] present full ", 23)) return;

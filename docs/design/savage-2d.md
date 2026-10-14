@@ -4,6 +4,50 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f4-19: descriptor readback and acceleration proof
+
+Research rechecked on 2026-10-14 against [S3 RE046-B](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf)
+§7 (printed pp. 129, 148–149), [X.Org engine/GBD setup](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c)
+and [MMIO enable](https://raw.githubusercontent.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-savage/master/src/savage_driver.c),
+plus [Linux engine/mode setup](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c)
+and [definitions](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb.h).
+The X.Org `savage_regs.h`/`savage_bci.h` URLs could not be fetched; a public
+SuperSavage register manual remains unavailable.
+
+The T23 fb3147dc log shows GBD2 written `10200401` and read as `00000000`;
+CR40 still reads `01` during fault cleanup. The strict idle check passes.
+This proves a GBD readback mismatch, not a CR40 failure or that every
+0x8xxx register is dead. Even the low word differs, so changing read width
+alone is not a demonstrated hardware fix. The manual requires two **16-bit reads** for 32-bit 2D
+registers; a dword read has an invalid upper half. Reserved fields have
+undefined readback. Replace the dword GBD comparison with halfword reads
+and mask `13ff1ffd` (descriptor size, endian, BCI, stride, depth, tile and
+block-write controls). Keep packet descriptors separate from GBD controls.
+
+Both enable paths set VGA 3C3.0, MISC.0 and CR40.0. CR53.4 enables old
+MMIO, not BAR0's new MMIO; CR58 concerns framebuffer addressing and CR68
+memory timing. Do not guess additional enables. Repeat CR40=01 and set
+CR31=0c after reset, then plane masks and separate 16-bit mixes. Use the
+shared no-COB/no-shadow BCI branch: disable, thresholds `00700040`, shadow
+address zero, enable `08`. X.Org selects `SavageSetGBD_PM` for SuperSavage;
+retain its linear 64-bit GBD and block-write-disable layout. Linux instead
+loads GBD via BCI twice and sets bit 3 too. These drivers are not identical.
+Retain direct GBD writes with documented-width readback, the existing
+SuperSavage bit-0 descriptor control and Savage4 bit-3 control. Preserve
+CR50 pixel length and set only its GBD selection bits, as upstream does.
+
+The directive's panel constraint excludes upstream SR01 blanking, CR65/67/69,
+primary-stream addresses/stride and tiled-surface programming. Retain
+firmware CR66 enablement, reset pacing, strict idle proof and quarantine.
+Emit unconditional paired register records during initialization (indexed
+VGA records identify the bank; index-latch writes are transport). After
+setup, fill one saved visible pixel with a different packed value, wait
+idle, read it back and restore it only after idle proof. Publish acceleration
+only on success. A submitted-command timeout retains a private quarantined
+ops guard in fbdev so CPU presentation/console cannot race a pending writer.
+Failures retain the durable attempt and cached raw status. Host register
+models are regression evidence; T23 qualification remains required.
+
 ## f1-55: first idle budget and retained raw status
 
 Research rechecked on 2026-10-14 against
