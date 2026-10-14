@@ -22,6 +22,7 @@ static unsigned descriptor_starts,descriptor_results,descriptor_failures;
 static unsigned first_scans,cadence_records,retired_packets,service_entries,service_queues;
 static unsigned hub_connects,hub_disconnects,hub_resets,hub_enumerations,hub_failures;
 static unsigned usb_devices,usb_attaches,usb_detaches;
+static unsigned hid_reports[128],hid_polls[128],hid_pipes[128],usb_key_records,f12_down_records,f12_up_records;
 void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }
 void input_devices_changed(enum input_source source,bool attached)
 {
@@ -64,6 +65,21 @@ void klog(const char *s,...)
     }
     if(strstr(record,"service=started")) service_entries++;
     if(strstr(record,"service=queued")) service_queues++;
+    unsigned addr=0;
+    if(sscanf(record,"[usb] hid report addr=%u",&addr)==1) {
+        assert(addr<128 && strstr(record,"len=") && strstr(record,"bytes=") && strstr(record,"interface="));hid_reports[addr]++;
+    }
+    if(sscanf(record,"[usb] hid poll addr=%u",&addr)==1) {
+        assert(addr<128 && strstr(record,"toggle=") && strstr(record,"maxlen=") && strstr(record,"result="));hid_polls[addr]++;
+    }
+    if(sscanf(record,"[usb] hid pipe addr=%u",&addr)==1) {
+        assert(addr<128 && strstr(record,"td=") && strstr(record,"token=") && strstr(record,"poll_frames=") && strstr(record,"retire_result="));hid_pipes[addr]++;
+    }
+    if(strstr(record,"[input] usb key")) {
+        assert(strstr(record,"usage=") && strstr(record,"set1=") && strstr(record,"down="));usb_key_records++;
+        if(strstr(record,"usage=45 set1=058 down=1")) f12_down_records++;
+        if(strstr(record,"usage=45 set1=058 down=0")) f12_up_records++;
+    }
     if(strstr(record,"[usb] hub=") && strstr(record," port=")) {
         assert(strstr(record,"status=") && strstr(record,"change=") && strstr(record,"tick=") && strstr(record,"result="));
         if(strstr(record,"event=connect")) hub_connects++;
@@ -90,7 +106,7 @@ static const uint8_t wheel_desc[]={
     0x95,1,0x75,3,0x81,1,0x05,1,0x09,0x30,0x09,0x31,0x09,0x38,
     0x15,0x81,0x25,0x7f,0x75,8,0x95,3,0x81,6,0xc0,0xc0};
 enum kind {KBD=1,MOUSE,HUB};
-struct peripheral {enum kind kind;unsigned addr;uint8_t report[8];unsigned report_len,leds,protocol;bool present;};
+struct peripheral {enum kind kind;unsigned addr;uint8_t report[8];unsigned report_len,leds,protocol,in_toggle,idle_requests,boot_requests;bool present;};
 struct model {
     struct usb_host host;
     struct peripheral dev[2+USB_PORT_MAX];
@@ -98,6 +114,7 @@ struct model {
     unsigned regs[128],config[64],selected,setup[8],data_at,pending_addr;
     unsigned hub_change[USB_PORT_MAX],hub_status[USB_PORT_MAX];
     uint64_t now;
+    unsigned frame_ms; /* Independent HC clock; zero keeps the 1 ms model. */
     uint64_t reset_at[2], recovery_at[2];
     unsigned root_resets[2], root_enables[2];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
@@ -173,6 +190,7 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
     if(ep) {
         assert(ep==1 && pid==USB_PID_IN);
         if(m->nak || !d->report_len) return -USB_EAGAIN;
+        assert(toggle==d->in_toggle);d->in_toggle^=1;
         unsigned n=d->report_len;assert(n<=len);memcpy(buf,d->report,n);d->report_len=0;return (int)n;
     }
     if(pid==USB_PID_SETUP) {
@@ -183,7 +201,9 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
     unsigned req=m->setup[1],type=m->setup[0],value=m->setup[2]|m->setup[3]<<8,index=m->setup[4];
     if(!len) {
         if(req==5 && !type) d->addr=value;
-        if(req==11 && type==0x21){d->protocol=value;m->protocol_requests++;}
+        if(req==11 && type==0x21){d->protocol=value;m->protocol_requests++;if(!value)d->boot_requests++;}
+        if(req==10 && type==0x21){assert(!value && !index);d->idle_requests++;}
+        if(req==9 && !type)d->in_toggle=0; /* SET_CONFIGURATION */
         if(type==0x23) {
             assert(d->kind==HUB && index>=1 && index<=USB_PORT_MAX);
             if(req==3 && value==8) m->hub_power_requests++; /* no switching */
@@ -193,7 +213,7 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
                 if(!m->hub_stuck) {
                     m->hub_status[index-1]&=~0x10u;m->hub_change[index-1]|=0x10;
                     if(m->dev[m->selected].present) {
-                        m->dev[m->selected].addr=0;
+                        m->dev[m->selected].addr=0;m->dev[m->selected].in_toggle=0;
                         if(!(m->hub_status[index-1]&2)) m->hub_change[index-1]|=2;
                         m->hub_status[index-1]|=2;
                     }
@@ -217,8 +237,9 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
 static uint32_t read_reg(void *arg,unsigned off,unsigned width)
 {
     struct model *m=arg;(void)width;
-    if(m->ohci && off==0x3c)return m->freeze ? 0:(unsigned)m->now;
-    if(!m->ohci && off==6)return m->freeze ? 0:(unsigned)m->now&0x7ff;
+    unsigned frame=(unsigned)(m->now/(m->frame_ms ? m->frame_ms:1));
+    if(m->ohci && off==0x3c)return m->freeze ? 0:frame&0xffff;
+    if(!m->ohci && off==6)return m->freeze ? 0:frame&0x7ff;
     if(!m->ohci && off==2)return ((m->regs[0]&1)?0:0x20)|(m->host_error?8:0);
     if(m->ohci && off==0x0c && m->host_error)return 0x10;
     return m->regs[off/4] >> (8*(off&3));
@@ -241,7 +262,7 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
         if(off==0x0c){m->regs[off/4]&=~value;return;}
         if(off>=0x54 && off<0x5c) {
             unsigned p=(off-0x54)/4;
-            if(value==0x10){m->selected=p;m->dev[p].addr=0;m->regs[off/4]|=0x10002;return;}
+            if(value==0x10){m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->regs[off/4]|=0x10002;return;}
             if(value==1){m->regs[off/4]&=~2u;return;}
             if(value & 0x1f0000){m->regs[off/4]&=~(value & 0x1f0000);return;}
             return;
@@ -250,7 +271,7 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
         unsigned p=(off-0x10)/2;
         unsigned old=(m->regs[off/4]>>(8*(off&3)))&0xffff;
         if((value&0x200) && !(old&0x200)) {
-            m->selected=p;m->dev[p].addr=0;m->reset_at[p]=m->now;m->root_resets[p]++;
+            m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->reset_at[p]=m->now;m->root_resets[p]++;
         }
         if(!(value&0x200) && (old&0x200)) {
             assert(m->now-m->reset_at[p]>=50);m->recovery_at[p]=m->now;
@@ -287,8 +308,10 @@ static void config_write(void *arg,unsigned off,uint32_t value,unsigned width)
 static uint64_t now(void *arg){return ((struct model *)arg)->now;}
 static void sleep_ms(void *arg,unsigned ms)
 {
-    struct model *m=arg;m->now+=ms;
+    struct model *m=arg;uint64_t before=m->now;m->now+=ms;
     if(m->ehci) {if(!m->ownership_stuck)m->config[0x40/4]&=~(1u<<16);return;}
+    /* DMA happens on HC frame boundaries, independently of service sleeps. */
+    if(m->frame_ms && before/m->frame_ms==m->now/m->frame_ms) return;
     if(m->ohci) {
         if(!m->ownership_stuck && (m->regs[2]&8)) {m->regs[1]&=~0x100u;m->regs[2]&=~8u;}
         if(!m->reset_stuck)m->regs[2]&=~1u;
@@ -316,7 +339,7 @@ static void sleep_ms(void *arg,unsigned ms)
     } else {
         if(!m->reset_stuck && (m->regs[0]&2))m->regs[0]&=~2u;
         if(!(m->config[1]&4) || !(m->regs[0]&1))return;
-        unsigned frame=((unsigned)m->now&1023)*4;
+        unsigned frame=((unsigned)(m->now/(m->frame_ms ? m->frame_ms:1))&1023)*4;
         unsigned qh_addr=*(uint32_t *)dma_at(m,m->regs[2]+frame,4)&~15u;
         volatile uint32_t *qh=(volatile uint32_t *)dma_at(m,qh_addr,8);
         if(qh[1]&1)return;
@@ -343,6 +366,8 @@ static void setup(bool ohci,bool hub)
     first_scans=cadence_records=retired_packets=service_entries=service_queues=0;
     hub_connects=hub_disconnects=hub_resets=hub_enumerations=hub_failures=0;
     usb_devices=usb_attaches=usb_detaches=0;
+    memset(hid_reports,0,sizeof(hid_reports));memset(hid_polls,0,sizeof(hid_polls));memset(hid_pipes,0,sizeof(hid_pipes));
+    usb_key_records=f12_down_records=f12_up_records=0;
     memset(held,0,sizeof(held));memset(buttons,0,sizeof(buttons));
     m.ohci=ohci;m.pending_addr=0;
     m.dev[0]=(struct peripheral){.kind=hub?HUB:KBD,.present=true};
@@ -487,6 +512,66 @@ static void qemu_hub(bool ohci)
     }
     printf("PASS USB %s hub reset timeout/status STALL/overcurrent: bounded quarantine, no retry\n",ohci?"OHCI":"UHCI");
 }
+static void delayed_frame_hid(bool ohci)
+{
+    /* Root-port keyboard plus QEMU-style hub/mouse. The HC gets its next
+     * service opportunity after the old two-software-ms packet deadline. */
+    setup(ohci,false);m.dev[1].kind=HUB;
+    m.dev[2]=(struct peripheral){.kind=MOUSE,.present=true};
+    m.hub_status[0]|=1;m.hub_change[0]=1;
+    if(ohci)m.regs[0x58/4]=1;
+    g_boot.flags=CBI_F_VERBOSE;
+    assert(!attach());usb_step(&m.host);
+    struct usb_device *kbd=&m.host.devices[0],*mouse=&m.host.devices[2];
+    assert(kbd->hid[0].active && mouse->parent==2 && mouse->hid[0].active);
+    assert(m.dev[0].boot_requests==1 && m.dev[0].idle_requests==1 && !m.dev[0].protocol);
+    assert(m.dev[2].boot_requests==1 && m.dev[2].idle_requests==1 && m.dev[2].protocol==1);
+    m.frame_ms=4;m.now=(m.now+3)&~UINT64_C(3);
+    m.host.next_scan=m.now+1000;kbd->hid[0].next_poll=mouse->hid[0].next_poll=0;
+    m.dev[0].report[2]=0x45;m.dev[0].report_len=8;
+    m.dev[2].report[0]=1;m.dev[2].report[1]=3;m.dev[2].report[2]=5;m.dev[2].report_len=4;
+    usb_step(&m.host);
+    assert(buttons[0] && last_x==3 && last_y==5);
+    assert(held[0x58]==1 && !m.dev[0].report_len && !m.dev[2].report_len);
+    assert(hid_reports[kbd->address]==1 && hid_reports[mouse->address]==1 && f12_down_records==1);
+    assert(kbd->hid[0].toggle==1 && mouse->hid[0].toggle==1 && m.host.ready);
+    memset(m.dev[0].report,0,8);m.dev[0].report_len=8;
+    memset(m.dev[2].report,0,8);m.dev[2].report_len=4;
+    g_boot.flags=CBI_F_TEST_REQUEST; /* Test boots enable the same diagnostics. */
+    m.now+=20;usb_step(&m.host);
+    assert(!held[0x58] && !buttons[0] && !kbd->hid[0].toggle && !mouse->hid[0].toggle);
+    assert(f12_up_records==1);
+    /* An idle keyboard must not steal the mouse's packet or change its
+     * toggle; repeat NAK diagnostics stop after a bounded prefix. */
+    for(unsigned i=0;i<USB_HID_TRACE_LIMIT+2;i++) {
+        m.dev[2].report[1]=2;m.dev[2].report_len=4;
+        m.now+=20;usb_step(&m.host);
+        assert(!kbd->hid[0].toggle && !m.dev[2].report_len && last_x==2);
+        assert(kbd->packet_trace.result==-USB_EAGAIN && kbd->packet_trace.poll_frames>=2 &&
+            kbd->packet_trace.frames>=kbd->packet_trace.poll_frames+2);
+    }
+    assert(hid_reports[mouse->address]==USB_HID_TRACE_LIMIT &&
+        hid_polls[kbd->address]==USB_HID_TRACE_LIMIT && hid_pipes[kbd->address]==USB_HID_TRACE_LIMIT);
+    /* More reports and translations remain bounded too. */
+    for(unsigned i=0;i<USB_HID_TRACE_LIMIT+2;i++) {
+        m.dev[0].report[2]=i&1 ? 0:0x45;m.dev[0].report_len=8;
+        m.now+=20;usb_step(&m.host);
+    }
+    assert(hid_reports[kbd->address]==USB_HID_TRACE_LIMIT && usb_key_records==USB_HID_TRACE_LIMIT);
+    unsigned records=usb_key_records;
+    unsigned reports=hid_reports[kbd->address],polls=hid_polls[mouse->address];
+    kbd->hid[0].key_records=kbd->hid[0].report_records=mouse->hid[0].poll_records=0;
+    g_boot.flags=0;m.dev[0].report[2]=0x45;m.dev[0].report_len=8;
+    m.now+=20;usb_step(&m.host);
+    assert(held[0x58]==1 && usb_key_records==records && hid_reports[kbd->address]==reports && hid_polls[mouse->address]==polls);
+    /* Frame counters wrap without losing a pending release. */
+    m.now=(uint64_t)(ohci ? 0xffffu:0x7ffu)*m.frame_ms;
+    m.host.next_scan=m.now+1000;
+    memset(m.dev[0].report,0,8);m.dev[0].report_len=8;
+    kbd->hid[0].next_poll=0;usb_step(&m.host);assert(!held[0x58]);
+    usb_detach(kbd,"test");usb_detach(mouse,"test");
+    printf("PASS USB %s root F12 and hub mouse with independent frame clock\n",ohci?"OHCI":"UHCI");
+}
 static void ehci(void)
 {
     for(unsigned timeout=0;timeout<2;timeout++) {
@@ -572,5 +657,6 @@ int main(void)
     uint8_t bad[sizeof(wheel_desc)];memcpy(bad,wheel_desc,sizeof(bad));bad[35]=0x32;
     assert(!usb_mouse_wheel_layout(bad,sizeof(bad)));
     policy();ehci();basic(false,false);basic(true,false);basic(false,true);basic(true,true);errors(false);errors(true);hotplug(false);hotplug(true);qemu_hub(false);qemu_hub(true);
+    delayed_frame_hid(false);delayed_frame_hid(true);
     puts("PASS usb host suite (production UHCI/OHCI/core/hub/HID, ASan+UBSan)");return 0;
 }

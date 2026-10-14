@@ -89,6 +89,8 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
     td[3] = h->dma_phys + USB_BUFFER;
     if (pid != USB_PID_IN && length) memcpy(h->dma + USB_BUFFER, data, length);
     usb_barrier(); qh[1] = h->dma_phys + USB_TD; usb_barrier();
+    /* Count opportunities only after the complete TD is published. */
+    frame = usb_read(h, 6, 2) & 0x7ff;
     uint64_t end = begin + budget;
     unsigned tries = budget + 1;
     int result = -USB_ETIMEDOUT;
@@ -99,7 +101,7 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
         trace->hc_status = s;
         if (s & 0x38) {
             usb_barrier(); trace->status=td[1]; trace->token=td[2];
-            trace->frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
+            trace->frames=trace->poll_frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
             trace->result=trace->retired=-USB_EIO;
             usb_host_quarantine(h, "uhci_host_error"); return -USB_EIO;
         }
@@ -107,9 +109,11 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
         if (!(v & (1u << 23))) {
             break;
         }
-        if (usb_expired(h, end)) { if (periodic) result = -USB_EAGAIN; break; }
+        if (periodic && frames >= 2) { result = -USB_EAGAIN; break; }
+        if (usb_expired(h, end)) break;
         h->io.sleep(h->io.cookie, 1);
     }
+    trace->poll_frames=frames;
     qh[1] = 1; usb_barrier();
     int retired = usb_retire_frames(h, 6, 2, 0x7ff);
     frames += (usb_read(h, 6, 2) - frame) & 0x7ff;

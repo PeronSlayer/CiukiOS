@@ -12,6 +12,8 @@
 #define USB_DMA_BYTES 8192u
 #define USB_PACKET_MAX 64u
 #define USB_TIMEOUT_MS 500u
+#define USB_PERIODIC_WATCHDOG_MS 20u
+#define USB_HID_TRACE_LIMIT 16u
 #define USB_BULK_TIMEOUT_MS 10000u
 #define USB_EIO 5
 #define USB_EAGAIN 11
@@ -46,6 +48,7 @@ struct usb_io {
 struct usb_hid {
     uint8_t interface, protocol, endpoint, packet, interval, toggle;
     uint8_t previous[8], leds;
+    uint8_t report_records, key_records, poll_records;
     uint16_t repeat_key, report_length;
     uint64_t next_poll, repeat_at;
     bool active, wheel;
@@ -54,7 +57,7 @@ struct usb_hid {
  * actual=-1 means no known ACK. Raw TD fields remain useful on errors. */
 struct usb_packet_trace {
     uint32_t status, token, hc_status;
-    unsigned expected, frames;
+    unsigned expected, frames, poll_frames;
     int actual, result, retired;
     uint64_t elapsed_ms;
     uint8_t endpoint, pid, toggle;
@@ -135,7 +138,10 @@ static inline void usb_barrier(void) { __asm__ volatile("" ::: "memory"); }
 static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool periodic,
                                          uint64_t now)
 {
-    if (periodic) return 2;
+    /* Interrupt opportunities follow the HC clock, not the scheduler's
+     * software clock. Packet engines stop after two linked HC frames;
+     * this is only the fail-closed watchdog, including a frozen clock. */
+    if (periodic) return USB_PERIODIC_WATCHDOG_MS;
     if (ep && d->storage.bulk_deadline) {
         int64_t left = (int64_t)(d->storage.bulk_deadline - now);
         if (left <= 0) return 0;
