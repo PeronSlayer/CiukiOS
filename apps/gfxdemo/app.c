@@ -6,6 +6,8 @@
 #include <string.h>
 static int compact_scene(const struct du_canvas *c)
 { return c->width>640 && c->height<404; }
+static uint64_t scene_now(struct gfx_app *a)
+{ return a->time_ns ? a->time_ns() : 0; }
 static void layout(struct du_ui *u,void *ctx)
 {
     struct gfx_app *a=ctx;
@@ -143,11 +145,49 @@ static void scene_layout(struct gfx_app *a)
 }
 void gfx_update_scene(struct gfx_app *a)
 {
+    uint64_t begin=a->deferred ? scene_now(a) : 0;
     if (!a->page) { a->viewport=(struct du_rect){0};a->scene_damage=(struct du_rect){0};return; }
     scene_layout(a);
     if (a->page==1) gfx_cube(&a->scene,a->elapsed_ns,a->portrait,a->gouraud);
     else gfx_sprites(&a->scene,a->elapsed_ns,a->portrait);
     gfx_store_scene(a);
+    if (a->deferred) a->scene_render_ns=scene_now(a)-begin;
+}
+/* One private successor; the compositor's front is read-only until completion.
+ * Diff against the submitted source, not the toolkit's stale UI back buffer. */
+void gfx_prepare_scene(struct gfx_app *a,const uint32_t *front,unsigned stride)
+{
+    uint64_t begin=scene_now(a);
+    scene_layout(a);
+    if (a->page==1) gfx_cube(&a->scene,a->elapsed_ns,a->portrait,a->gouraud);
+    else gfx_sprites(&a->scene,a->elapsed_ns,a->portrait);
+    gfx_diff_scene(a,front,stride);
+    a->scene_render_ns=scene_now(a)-begin;
+}
+void gfx_diff_scene(struct gfx_app *a,const uint32_t *front,unsigned stride)
+{
+    unsigned w=a->scene.width,h=a->scene.height;
+    int left=(int)w,right=-1,top=(int)h,bottom=-1;
+    for (unsigned y=0;y<h;y++) {
+        const uint32_t *src=a->scene.pixels+(size_t)y*w;
+        const uint32_t *dst=front+(size_t)(a->viewport.y+(int)y)*stride+a->viewport.x;
+        if (!memcmp(src,dst,w*4)) continue;
+        unsigned first=0,last=w-1;
+        while (src[first]==dst[first]) first++;
+        while (src[last]==dst[last]) last--;
+        if ((int)first<left) left=(int)first;
+        if ((int)last>right) right=(int)last;
+        if ((int)y<top) top=(int)y;
+        bottom=(int)y;
+    }
+    a->scene_damage=right>=left ? (struct du_rect){left,top,right-left+1,bottom-top+1} : (struct du_rect){0};
+    a->animation_due=0; a->scene_ready=1;
+}
+void gfx_submit_scene(struct gfx_app *a,uint32_t *front,unsigned stride)
+{
+    struct du_rect b=a->viewport,r=a->scene_damage;
+    for (int y=0;y<r.h;y++) desk_row_copy(front+(size_t)(b.y+r.y+y)*stride+b.x+r.x,
+        a->scene.pixels+(size_t)(r.y+y)*a->scene.width+r.x,(size_t)r.w);
 }
 void gfx_store_scene(struct gfx_app *a)
 {
@@ -184,8 +224,14 @@ void gfx_paint(struct du_ui *u,void *ctx)
             (unsigned)a->viewport.w,(unsigned)a->viewport.h,0,0,(unsigned)a->viewport.w,(unsigned)a->viewport.h);
         /* A full UI repaint changes the mapping/exposure even at a fixed phase. */
         a->scene_damage=(struct du_rect){0,0,(int)a->scene.width,(int)a->scene.height};
-        if (!compact_scene(c)) label(c,16,c->height-90,a->page==1 ? "CPU rasterizer, z-buffer, Ciuki texture. 3D hardware: F7." :
-            "16 Ciuki sprites; elapsed-time motion, 60 Hz display pacing.",DU_GRAY);
+        if (!compact_scene(c)) {
+            if (a->have_timing) snprintf(text,sizeof(text),"%dx%d / %ux%u: render %llu submit %llu wait %llu us",
+                c->width,c->height,a->scene.width,a->scene.height,
+                (unsigned long long)(a->render_ns/1000),(unsigned long long)(a->submit_ns/1000),(unsigned long long)(a->wait_ns/1000));
+            else snprintf(text,sizeof(text),"%s",a->page==1 ? "CPU rasterizer, z-buffer, Ciuki texture. 3D hardware: F7." :
+                "16 Ciuki sprites; elapsed-time motion, 60 Hz display pacing.");
+            label(c,16,c->height-90,text,DU_GRAY);
+        }
     }
     int compact=a->page && compact_scene(c);
     du_hline(c,8,c->height-(compact ? 46 : 77),c->width-16,DU_SHADOW);
@@ -200,6 +246,10 @@ void gfx_paint(struct du_ui *u,void *ctx)
         (unsigned long long)(a->desktop_present_ns/1000000),(unsigned long long)(a->desktop_present_ns/1000%1000),
         (unsigned long long)(a->desktop_composite_ns/1000000),(unsigned long long)(a->desktop_composite_ns/1000%1000));
     else snprintf(text,sizeof(text),"Desktop average: collecting present / composite times");
+    if (a->have_timing && a->page) snprintf(text,sizeof(text),
+        "%dx%d R/S/W %llu/%llu/%llu us  convert/copy %llu/%llu us  slot %llu us (60 Hz assumed)",c->width,c->height,
+        (unsigned long long)(a->render_ns/1000),(unsigned long long)(a->submit_ns/1000),(unsigned long long)(a->wait_ns/1000),
+        (unsigned long long)(a->convert_ns/1000),(unsigned long long)(a->copy_ns/1000),(unsigned long long)(a->slot_ns/1000));
     label(c,12,c->height-(compact ? 18 : 45),text,DU_INK);
     if (!compact) label(c,12,c->height-24,!a->portrait ? "Ciuki texture unavailable: install the approved portrait payload." :
         (a->accelerator.capabilities&1) && !a->info_error ? "Presentation: CPU upload + available 2D row copies; FPS counts completed presents." :

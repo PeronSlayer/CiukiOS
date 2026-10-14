@@ -471,8 +471,19 @@ static void performance_sample(struct desktop *d, uint64_t now)
                 (unsigned long long)(s->input_lag_ns/1000),(unsigned long long)(d->sample_ns/1000),
                 (unsigned long long)(s->frame_p95_ns/1000),(unsigned long long)(s->frame_max_ns/1000),
                 (unsigned long long)s->completed,(unsigned long long)s->overruns,(unsigned long long)s->dropped);
+        if (d->gfx_sample.serial) {
+            const struct desk_gfx_stats *g=&d->gfx_sample;
+            size_t used=strlen(line);
+            snprintf(line+used,sizeof(line)-used,
+                "[display] gfx_serial=%u app_serial=%u render_us=%u submit_us=%u wait_us=%u window=%ux%u source=%ux%u viewport=%ux%u convert_us=%llu copy_us=%llu slot_us=%llu refresh_ns=%llu refresh_hz=60 assumed=1 clock_res_us=1000\n",
+                g->serial,g->app_serial,g->render_us,g->submit_us,g->wait_us,g->width,g->height,
+                g->source_w,g->source_h,g->view_w,g->view_h,(unsigned long long)(g->convert_ns/1000),
+                (unsigned long long)(g->copy_ns/1000),(unsigned long long)(g->slot_ns/1000),
+                (unsigned long long)DESK_FRAME_NS);
+        }
         if (settings_writer_started) cfg_writer_log(&settings_writer,line);
     }
+    d->gfx_sample.serial=0; /* no stale demo record after pause/close */
 }
 static int display_apply(struct desktop *d, uint16_t id)
 {

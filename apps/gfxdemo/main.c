@@ -20,6 +20,8 @@ struct runtime {
     int bench_pending,scene_active;
     uint32_t frame_serial;
     uint64_t next_slot;
+    uint64_t submitted_ns,submitted_render_ns,submitted_copy_ns;
+    uint32_t timing_serial;
 };
 static int request(void *ctx,unsigned op,unsigned index)
 {
@@ -38,10 +40,17 @@ static void message(struct du_window *w,const struct desk_packet *p,void *ctx)
     (void)w;struct runtime *r=ctx;
     if (p->opcode==DESK_GFX_PRESENTED && r->window.present_pending && p->serial==r->frame_serial) {
         r->window.present_pending=0; r->next_slot=p->next_frame_ns;
+        uint64_t now=du_now();
+        r->app.render_ns=r->submitted_render_ns;r->app.submit_ns=r->submitted_copy_ns;
+        r->app.wait_ns=now>=r->submitted_ns ? now-r->submitted_ns : 0;
+        r->app.convert_ns=p->convert_ns;r->app.copy_ns=p->copy_ns;
+        r->app.slot_ns=p->slot_ns;r->app.refresh_ns=p->refresh_ns;r->app.have_timing=1;
+        r->timing_serial=p->serial;
         if (!p->result && r->scene_active) gfx_presented(&r->app,p->completed_ns);
         if (p->result && p->result!=-EAGAIN) { r->window.error=-p->result; r->window.closed=1; }
-        /* Produce the next frame before the next display slot, one at a time. */
-        r->app.next_ns=p->result ? p->next_frame_ns : p->completed_ns;
+        if (p->result) {
+            r->app.scene_ready=0;r->app.animation_due=0;r->app.next_ns=p->next_frame_ns;
+        }
     } else if ((p->opcode==DESK_GFX_RESULT || (p->opcode==DESK_TASK_RESULT && p->request==DESK_GFX_BENCH)) &&
         r->bench_pending && p->serial==r->bench_serial) {
         r->bench_pending=0;
@@ -57,17 +66,26 @@ static void idle(void *ctx)
     struct runtime *r=ctx;uint64_t now=du_now();
     if (!r->window.configured || r->window.closing) return;
     gfx_advance(&r->app,now);
-    if (!r->window.present_pending && !r->window.swap_sent && !r->ui.dirty) {
-        if (r->app.animation_due && !r->app.scene_ready) gfx_update_scene(&r->app);
+    /* Rendering touches only the private scene. Toolkit repaint/replacement
+     * stays completion-gated; it supersedes any prepared successor. */
+    if (r->app.page && !r->app.paused && !r->ui.dirty && !r->window.swap_sent &&
+        !r->window.request_serial && r->app.animation_due && !r->app.scene_ready) {
+        uint64_t phase=r->app.elapsed_ns;
+        /* Predict the successor's slot, including on a coarse monotonic clock.
+         * Keep the elapsed-time accumulator tied to actual time. */
+        if (r->window.present_pending) r->app.elapsed_ns+=GFX_FRAME_NS;
+        gfx_prepare_scene(&r->app,r->window.pixels,r->window.info.width);
+        r->app.elapsed_ns=phase;
+    }
+    if (!r->window.present_pending && !r->window.swap_sent && !r->ui.dirty && r->window.count<16) {
         if (r->app.scene_ready) {
             struct gfx_app *a=&r->app; struct du_rect box=a->viewport,dirty=a->scene_damage;
+            uint64_t begin=du_now();
             if (a->page || r->scene_active || r->window.damaged) {
                 /* Explicit changed source bounds; no whole-window diff on animation. */
-                if (a->page) for (int y=0;y<dirty.h;y++) {
-                    size_t at=(size_t)(box.y+dirty.y+y)*r->ui.canvas.width+box.x+dirty.x;
-                    desk_row_copy(r->window.pixels+at,r->window.back+at,(size_t)dirty.w);
-                }
-                struct ciuki_message m; desk_message(&m,DESK_GFX_FRAME,64);
+                /* A toolkit repaint already published its source rows. */
+                if (a->page && !r->window.damaged) gfx_submit_scene(a,r->window.pixels,r->window.info.width);
+                struct ciuki_message m; desk_message(&m,DESK_GFX_FRAME,84);
                 uint32_t serial=r->serial+1; if (!serial) serial++;
                 desk_put32(m.data+4,serial);
                 if (a->page) {
@@ -83,12 +101,23 @@ static void idle(void *ctx)
                     desk_put32(m.data+56,(uint32_t)ui.w);desk_put32(m.data+60,(uint32_t)ui.h);
                 }
                 if (r->window.replacement) {
-                    m.length=68;desk_put32(m.data+64,r->window.configure_serial);
+                    desk_put32(m.data+64,r->window.configure_serial);
                     m.fd_count=1;m.fds[0]=r->window.surface;
                 }
+                /* Previous acknowledged frame: wait is known only on reply.
+                 * Serial makes the one-frame telemetry lag explicit. */
+                desk_put32(m.data+68,r->timing_serial);
+                desk_put32(m.data+72,(uint32_t)(a->render_ns/1000));
+                desk_put32(m.data+76,(uint32_t)(a->submit_ns/1000));
+                desk_put32(m.data+80,(uint32_t)(a->wait_ns/1000));
                 if (!du_window_queue(&r->window,&m)) {
+                    r->submitted_ns=du_now();r->submitted_copy_ns=r->submitted_ns-begin;
+                    r->submitted_render_ns=a->scene_render_ns;
                     r->serial=r->frame_serial=serial; r->window.present_pending=1; r->scene_active=a->page!=0;
                     a->scene_ready=0;
+                    /* Prepare immediately on the next turn, after FIFO flush.
+                     * There is at most one successor and one outstanding frame. */
+                    if (a->page && !a->paused) a->animation_due=1;
                     r->window.damaged=0;
                     if (r->window.replacement) r->window.swap_sent=1;
                 }
@@ -120,6 +149,7 @@ int main(int argc,char **argv)
         fprintf(stderr,"gfxdemo: desktop connection failed: %s\n",strerror(errno)); free(r->portrait);free(r);return 1;
     }
     gfx_attach(&r->app,&r->ui,r->portrait);
+    r->app.time_ns=du_now;
     r->app.request=request;r->app.request_ctx=r;
     r->window.message=message;r->window.user=r;
     r->app.deferred=1;

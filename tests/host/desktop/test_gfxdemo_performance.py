@@ -23,7 +23,7 @@ def load(name, path):
 bench = load("gfx_compositor_bench", ROOT / "tests/host/desktop/test_compositor_performance.py")
 acc = load("gfx_acc", ROOT / "tests/host/desktop/test_accessories.py")
 
-def run(sanitize=False, reference=None, runtime=False):
+def run(sanitize=False, reference=None, runtime=False, pipeline_reference=False):
     parent = ROOT / "build/host"
     parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="gfx-budget-", dir=parent) as temp:
@@ -61,7 +61,7 @@ def run(sanitize=False, reference=None, runtime=False):
             obj = folder / f"{i}.o"
             subprocess.run(["clang", "-std=c17", *flags, "-Wall", "-Wextra", "-Werror",
                             "-Wno-unused-function", *(["-D_POSIX_C_SOURCE=200809L"] if source.endswith(("resize_client.c", "gfxdemo_frame_test.c")) else []),
-                            *(["-DGFX_REFERENCE"] if reference else []),
+                            *(["-DGFX_PIPELINE_REFERENCE" if pipeline_reference else "-DGFX_REFERENCE"] if reference else []),
                             "-I", str(source_root / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
                             "-I", str(source_root / "apps/libdeskui"), "-I", str(include.parent),
                             "-c", str(source_root / source), "-o", str(obj)], check=True)
@@ -89,8 +89,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", action="store_true")
     parser.add_argument("--reference")
+    parser.add_argument("--pipeline-reference", action="store_true", help="reference the f2-59 source-copy pipeline, rather than the older full-window scaler")
     args, remaining = parser.parse_known_args()
     if args.benchmark:
-        print(run(reference=args.reference), end="")
+        if args.pipeline_reference and not args.reference:
+            parser.error("--pipeline-reference requires --reference")
+        print(run(reference=args.reference, pipeline_reference=args.pipeline_reference), end="")
     else:
         unittest.main(argv=[__file__, *remaining])

@@ -21,6 +21,10 @@ struct gfx_app {
     struct du_rect viewport, scene_damage;
     uint64_t elapsed_ns,last_ns,next_ns,frames,sample_begin,fps10,ms1000;
     uint64_t desktop_composite_ns,desktop_present_ns;
+    uint64_t render_ns,submit_ns,wait_ns,convert_ns,copy_ns,slot_ns,refresh_ns;
+    uint64_t scene_render_ns;
+    uint64_t (*time_ns)(void); /* runtime clock; deterministic previews need none */
+    int have_timing;
     struct ciuki_accel_info accelerator;
     uint32_t display_w,display_h,bpp;
     int info_error,have_info,have_desktop,bench_running;
@@ -42,6 +46,9 @@ static inline uint64_t gfx_wait_ns(uint64_t now,uint64_t slot)
     return 1000000ull;
 }
 void gfx_update_scene(struct gfx_app *);
+void gfx_prepare_scene(struct gfx_app *,const uint32_t *front,unsigned stride);
+void gfx_diff_scene(struct gfx_app *,const uint32_t *front,unsigned stride);
+void gfx_submit_scene(struct gfx_app *,uint32_t *front,unsigned stride);
 void gfx_store_scene(struct gfx_app *);
 void gfx_receive(struct gfx_app *,const struct desk_packet *);
 void gfx_paint(struct du_ui *,void *);

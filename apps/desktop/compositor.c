@@ -516,7 +516,8 @@ static void frame_border(struct desktop *d, struct desk_paint *p, int index, str
         }
     }
 }
-static void client_rows(struct desktop *d, const struct desk_client *c, struct desk_box clip)
+static uint64_t time_now(struct desktop *d);
+static void client_rows(struct desktop *d, struct desk_client *c, struct desk_box clip)
 {
     struct desk_box content=desk_content(c), old={content.x,content.y,(int)c->info.width,(int)c->info.height},b;
     if (!c->pixels || !desk_intersect(content,old,&b) || !desk_intersect(b,clip,&b)) return;
@@ -532,10 +533,13 @@ static void client_rows(struct desktop *d, const struct desk_client *c, struct d
             if (right<b.w) xrgb_row(dst+right,src+right,b.w-right);
         } else xrgb_row(dst,src,b.w);
     }
+    int timed=has_scene && c->gfx_timing && c->gfx_pending && !c->gfx_reply_pending;
+    uint64_t begin=timed ? time_now(d) : 0;
     if (has_scene) desk_scale_rows(d->pixels+(size_t)scaled.y*d->width+scaled.x,d->width,
         c->pixels+(size_t)c->gfx_box.y*c->info.width+c->gfx_box.x,c->info.width,
         c->gfx_width,c->gfx_height,(unsigned)region.w,(unsigned)region.h,
         (unsigned)(scaled.x-region.x),(unsigned)(scaled.y-region.y),(unsigned)scaled.w,(unsigned)scaled.h);
+    if (timed) c->gfx_stats.convert_ns+=time_now(d)-begin;
 }
 static void window(struct desktop *d, int i, struct desk_box clip)
 {
@@ -674,7 +678,7 @@ static void scene(struct desktop *d, struct desk_box clip)
     if (!d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !d->sh.switcher &&
         clip.y>=DESK_BAR && (!d->shell || clip.y+clip.h<=(int)d->height-DESK_BAR)) {
         for (int i=0;i<DESK_CLIENTS;i++) {
-            const struct desk_client *c=&d->clients[i];
+            struct desk_client *c=&d->clients[i];
             if (!c->window || c->minimized || c->collapsed || c->internal || !c->pixels) continue;
             struct desk_box content=desk_content(c), b;
             if (c->info.width<(unsigned)content.w || c->info.height<(unsigned)content.h ||
@@ -841,7 +845,7 @@ static int scroll_plan(struct desktop *d, struct ciuki_rect *out)
 /* Present the composite surface directly. There is no second frame to copy
  * or compare. COPY's exact destination is excluded from upload rows by the
  * caller; FILL is used only after checking every pixel in its span. */
-static int present_box(struct desktop *d, struct desk_box b)
+static int present_box_raw(struct desktop *d, struct desk_box b)
 {
     if (!(d->accel_caps&1u) || !d->accel || !d->scanout_valid) {
         struct ciuki_rect r={b.x,b.y,b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
@@ -898,6 +902,25 @@ static int present_box(struct desktop *d, struct desk_box b)
         d->presents++; d->frame_stats.presents++; y=bottom;
     }
     return 0;
+}
+/* Attribute actual present calls intersecting each outstanding demo window.
+ * A merged upload can include other damaged pixels; never estimate PCI time
+ * from bytes or count that duration as additional compositor work. */
+static int present_box(struct desktop *d, struct desk_box b)
+{
+    unsigned mask=0;
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        struct desk_client *c=&d->clients[i];struct desk_box cut;
+        if (c->gfx_timing && c->gfx_pending && !c->gfx_reply_pending &&
+            !c->minimized && !c->collapsed && desk_intersect(b,desk_content(c),&cut)) mask|=1u<<i;
+    }
+    uint64_t begin=mask ? time_now(d) : 0;
+    int result=present_box_raw(d,b);
+    if (mask) {
+        uint64_t elapsed=time_now(d)-begin;
+        for (int i=0;i<DESK_CLIENTS;i++) if (mask&(1u<<i)) d->clients[i].gfx_stats.copy_ns+=elapsed;
+    }
+    return result;
 }
 static void rows_clear(struct desktop *d)
 {

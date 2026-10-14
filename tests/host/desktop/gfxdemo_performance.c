@@ -34,7 +34,7 @@ static void run_demo(const char *portrait,const char *store,const char *theme,un
      * 1024x768 replay clips scanout exactly like a larger/off-screen window. */
     struct desktop *d=calloc(1,sizeof(*d));assert(d);setup(d,portrait,store,theme);desk_menu_close(d);
     for (int i=0;i<4;i++) { free((void *)d->clients[i].pixels);d->clients[i].pixels=NULL;d->clients[i].window=0; }
-    unsigned cw=ratio*320+40,ch=ratio*240+180;
+    unsigned cw=ratio==2 ? 760 : ratio*320+40,ch=ratio*240+180;
     fake_channel(90); fake_surface(91,cw,ch,0);
     int client=desk_add_client(d,90);assert(client>=0);
     struct ciuki_message m;desk_message(&m,DESK_HELLO,4);m.data[0]=2;m.data[2]=1;m.sender_pid=42;desk_receive(d,client,&m);
@@ -46,7 +46,7 @@ static void run_demo(const char *portrait,const char *store,const char *theme,un
     uint32_t *back=calloc(cw*ch,4),*scaled=calloc(320*ratio*240*ratio,4);assert(app&&ui&&back&&scaled);
     du_init(ui,back,(int)cw,(int)ch);gfx_attach(app,ui,d->portrait);app->page=page==3 ? 1 : page;
     struct du_window window={.ui=ui,.back=back,.pixels=(uint32_t *)c->pixels,.info=c->info};
-    unsigned dw=320*ratio,dh=240*ratio;int x0=20,y0=66;
+    unsigned dw=320*ratio,dh=240*ratio;int x0=(int)(cw-dw)/2,y0=66;
 #ifndef GFX_REFERENCE
     app->deferred=1;app->viewport=(struct du_rect){x0,y0,(int)dw,(int)dh};app->scene.width=320;app->scene.height=240;
     c->gfx_box=(struct desk_box){x0,y0,(int)dw,(int)dh};c->gfx_width=320;c->gfx_height=240;
@@ -80,12 +80,20 @@ static void run_demo(const char *portrait,const char *store,const char *theme,un
             desk_message(&m,DESK_DAMAGE,24);desk_put32(m.data+4,(uint32_t)dirty.x);desk_put32(m.data+8,(uint32_t)dirty.y);
             desk_put32(m.data+12,(uint32_t)dirty.w);desk_put32(m.data+16,(uint32_t)dirty.h);
 #else
+#ifdef GFX_PIPELINE_REFERENCE
             gfx_store_scene(app);struct du_rect dirty=app->scene_damage;
             for (int y=0;y<dirty.h;y++) {
                 size_t at=(size_t)(y0+dirty.y+y)*cw+x0+dirty.x;
                 desk_row_copy(window.pixels+at,back+at,(size_t)dirty.w);
             }
+#else
+            gfx_diff_scene(app,window.pixels,cw);struct du_rect dirty=app->scene_damage;
+            gfx_submit_scene(app,window.pixels,cw);
+#endif
             desk_message(&m,DESK_GFX_FRAME,64);desk_put32(m.data+4,frame+1);
+#ifndef GFX_PIPELINE_REFERENCE
+            m.length=84; /* include the production frame instrumentation */
+#endif
             desk_put32(m.data+8,(uint32_t)x0);desk_put32(m.data+12,(uint32_t)y0);
             desk_put32(m.data+16,dw);desk_put32(m.data+20,dh);desk_put32(m.data+24,320);desk_put32(m.data+28,240);
             desk_put32(m.data+32,(uint32_t)dirty.x);desk_put32(m.data+36,(uint32_t)dirty.y);
@@ -123,7 +131,7 @@ static void run_demo(const char *portrait,const char *store,const char *theme,un
         if (stage==1) total+=cycles;
 #endif
         printf("GFX_STAGE revision=%s page=%s ratio=%u name=%s cycles=%llu nominal_1ghz_us=%llu\n",
-#ifdef GFX_REFERENCE
+#if defined(GFX_REFERENCE) || defined(GFX_PIPELINE_REFERENCE)
             "before",
 #else
             "after",
@@ -132,8 +140,10 @@ static void run_demo(const char *portrait,const char *store,const char *theme,un
     }
     qsort(uploaded,SAMPLES,8,compare);
     uint64_t bytes=uploaded[SAMPLES/2],nominal=total/1000+(bytes+133)/134;
-    printf("GFX_BUDGET page=%s ratio=%u upload_bytes=%llu nominal_upload_us=%llu nominal_frame_us=%llu budget_us=16666\n",
-        page==1 ? "cube" : page==3 ? "cube-gouraud" : "sprites",ratio,(unsigned long long)bytes,(unsigned long long)((bytes+133)/134),(unsigned long long)nominal);
+    printf("GFX_BUDGET page=%s ratio=%u window=%ux%u source=320x240 viewport=%ux%u upload_bytes=%llu nominal_upload_us=%llu nominal_frame_us=%llu p3_1130mhz_work_us=%llu budget_us=16666\n",
+        page==1 ? "cube" : page==3 ? "cube-gouraud" : "sprites",ratio,cw,ch,dw,dh,
+        (unsigned long long)bytes,(unsigned long long)((bytes+133)/134),(unsigned long long)nominal,
+        (unsigned long long)(total/1130+(bytes+133)/134));
     desk_drop_client(d,client);assert(!fake_live());desk_render_release(d);du_release(ui);
     free(app);free(ui);free(back);free(scaled);free(demo_scanout);free((void *)d->portrait);free(d->pixels-1);
     free(d->sh.wall);free(d->sh.background);free(d->sh.icons);free(d);
