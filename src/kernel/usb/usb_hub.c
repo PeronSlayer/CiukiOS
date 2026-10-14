@@ -36,6 +36,36 @@ int usb_hub_attach(struct usb_device *d)
          d->address, d->hub_ports, b[3] & 3, d->host->owner);
     return 0;
 }
+int usb_hub_reset(struct usb_device *d, unsigned p)
+{
+    if (p >= d->hub_ports) return -EINVAL;
+    struct usb_host *h = d->host;
+    unsigned s = 0, c = 0;
+    int err = status(d, p, &s, &c); if (err) return err;
+    if (!(s & 1) || (s & 8)) return -USB_EIO;
+    if (d->hub_child[p]) {
+        struct usb_device *child = &h->devices[d->hub_child[p] - 1];
+        if (child->present && !child->quarantined) return -USB_EAGAIN;
+    }
+    if (c & 0x10) { err = feature(d, p, 20, false); if (err) return err; }
+    err = feature(d, p, 4, true); if (err) return err;
+    record(d, p, s, c, "reset_start", 0);
+    uint64_t end = h->io.now(h->io.cookie) + 200;
+    for (unsigned n = 0; n < 200; n++) {
+        err = status(d, p, &s, &c); if (err) return err;
+        if (!(s & 1)) return -USB_EIO;
+        if ((c & 0x10) && !(s & 0x10)) break;
+        if (usb_expired(h, end)) break;
+        usb_sleep(h, 1);
+    }
+    if ((s & 3) != 3 || !(c & 0x10) || (s & 0x10)) return -USB_ETIMEDOUT;
+    record(d, p, s, c, "reset_complete", 0);
+    record(d, p, s, c, "enable", 0);
+    err = feature(d, p, 20, false); if (err) return err;
+    if (c & 2) { err = feature(d, p, 17, false); if (err) return err; }
+    usb_sleep(h, 10);
+    return 0;
+}
 void usb_hub_scan(struct usb_device *d)
 {
     struct usb_host *h = d->host;
@@ -74,38 +104,21 @@ void usb_hub_scan(struct usb_device *d)
         d->hub_status[p] = (uint16_t)s;
         if (s & 8) { record(d, p, s, c, "overcurrent", -USB_EIO); usb_device_quarantine(d, "hub_overcurrent"); return; }
         if (c & 1) {
-            if (d->hub_child[p]) {
-                usb_detach(&h->devices[d->hub_child[p]-1], "hub_port_changed"); d->hub_child[p] = 0;
-            }
             err = feature(d, p, 16, false); if (err) goto failed;
         }
         if (!(s & 1)) {
             if (d->hub_child[p]) { usb_detach(&h->devices[d->hub_child[p]-1], "disconnected"); d->hub_child[p] = 0; }
             continue;
         }
-        if (d->hub_child[p]) continue;
+        if (d->hub_child[p]) {
+            if (!(s & 2)) { err = feature(d, p, 1, true); if (err) goto failed; }
+            if (c & 2) { err = feature(d, p, 17, false); if (err) goto failed; }
+            continue;
+        }
         usb_sleep(h, 100);
         err = status(d, p, &s, &c); if (err) goto failed;
         if (!(s & 1)) { record(d, p, s, c, "disconnect", 0); d->hub_status[p] = (uint16_t)s; continue; }
-        /* Discard a stale completion before issuing this reset. */
-        if (c & 0x10) { err = feature(d, p, 20, false); if (err) goto failed; }
-        err = feature(d, p, 4, true); if (err) goto failed;
-        record(d, p, s, c, "reset_start", 0);
-        uint64_t end = h->io.now(h->io.cookie) + 200;
-        for (unsigned n = 0; n < 200; n++) {
-            err = status(d, p, &s, &c); if (err) goto failed;
-            if (!(s & 1)) break;
-            if ((c & 0x10) && !(s & 0x10)) break;
-            if (usb_expired(h, end)) break;
-            usb_sleep(h, 1);
-        }
-        if (!(s & 1)) { record(d, p, s, c, "disconnect", 0); d->hub_status[p] = (uint16_t)s; continue; }
-        if ((s & 3) != 3 || !(c & 0x10) || (s & 0x10)) { err = -USB_ETIMEDOUT; goto failed; }
-        record(d, p, s, c, "reset_complete", 0);
-        record(d, p, s, c, "enable", 0);
-        err = feature(d, p, 20, false); if (err) goto failed;
-        if (c & 2) { err = feature(d, p, 17, false); if (err) goto failed; }
-        usb_sleep(h, 10);
+        err = usb_hub_reset(d, p); if (err) goto failed;
         err = usb_enumerate(h, d->root_port, (unsigned)(d - h->devices) + 1, p, !!(s & 0x200));
         if (err < 0) goto failed;
         d->hub_child[p] = (uint8_t)err;

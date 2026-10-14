@@ -81,18 +81,24 @@ storage publication. USB does not block the common work queue with
 enumeration. Each control/BOT transfer uses one live packet TD, independently
 of the bounded interrupt TDs; control data stages split at endpoint-zero
 max packet size. NAK is normal for
-interrupt polling, STALL/timeout/protocol errors quarantine the device. Host
+interrupt polling. F1-57 permits one endpoint halt-clear/DATA0 retry for
+HID STALL or babble. A timeout retired while the connected root port has
+PE clear gets one re-enable retry with its existing toggle; enabled-port
+timeouts and other transfer/protocol errors quarantine the device. Host
 system errors or failed retirement quarantine the controller and its leases.
 No descriptor/buffer reuse until the schedule is unlinked/skipped and two
 hardware frames have elapsed. A stalled frame clock fails closed. DMA and
-claims remain pinned on uncertain retirement; there is no runtime recovery.
+claims remain pinned on uncertain retirement; uncertain DMA is never recovered.
 
 F1-52 retains the existing 8 KiB allocation: 64 private interrupt slots at
 offset 4608, 48 bytes each (16-byte QH/ED, TD and boot report buffer). HID
-requests eight keyboard bytes or three/four mouse bytes; OHCI ED MPS remains
+requests up to eight bytes bounded by endpoint MPS; boot mouse suffixes are
+allowed by HID 1.11 Appendix B and ignored beyond the recognized prefix.
+OHCI ED MPS remains
 the advertised endpoint maximum. Each pipe has linked/retiring/idle states,
-with two linked frame opportunities and two unlinked frames before DMA reuse.
-NAK leaves the toggle unchanged; a late ACK is decoded once after retirement.
+with two unlinked frames before DMA reuse. F1-57 leaves an idle NAK TD
+linked until data or a retired error; the watchdog measures HC frame-clock
+progress. NAK leaves the toggle unchanged; an ACK is decoded once after retirement.
 The host mutex is free throughout waits, even while a general TD remains
 live. OHCI PLE remains enabled during control/bulk service; DI=0 and WDH
 acknowledgement flush done chains before retired TDs are reused. Slots are
@@ -126,11 +132,20 @@ host traversal model and the unresolved T23 reproduction.
 ## Enumeration, hubs and input
 
 Debounce connections 100 ms; root reset is held at least 50 ms with 10 ms
-recovery. Set_Address is followed by 2 ms recovery. Validate every descriptor
+recovery. F1-57 samples root stability every 25 ms, bounded to 2 s, and
+retries GET_DESCRIPTOR(8) in two series of three operations, 100 ms between
+operations, with a new physical reset before series two. Only then retain
+an initial descriptor failure in quarantine. OHCI reset completion is PRSC
+(bit 20), independently of CSC (bit 16). Set_Address is followed by 2 ms recovery. Validate every descriptor
 boundary and endpoint before Set_Configuration. Ignore nonzero alternate
 settings. Hub power and reset use class requests with bounded status polling;
 reject nested hubs, excess ports and overcurrent. Disconnects recursively
 release input state for that device and children, keeping inventory records.
+While CCS remains set, CSC/PEDC acknowledgement preserves a present child;
+PE loss is recovered without reset or address/toggle loss. Reset and disable
+callbacks reject a connected live child. Endpoint recovery is requested by
+the input worker and executed by the serialized general owner. A successful
+report renews its one-retry budget. See [F1-57 validation](../validation/f1-57-usb-enumeration-robustness.md).
 
 HID boot interfaces receive Set_Protocol(0) and Set_Idle(0). Keyboard array
 diffing ignores duplicates, holds the last valid state on rollover, tracks

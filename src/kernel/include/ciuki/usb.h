@@ -14,6 +14,7 @@
 #define USB_TIMEOUT_MS 500u
 #define USB_PERIODIC_WATCHDOG_MS 20u
 #define USB_HID_TRACE_LIMIT 16u
+#define USB_PORT_ACTION_TRACE_LIMIT 32u
 #define USB_BULK_TIMEOUT_MS 10000u
 #define USB_EIO 5
 #define USB_EAGAIN 11
@@ -68,11 +69,12 @@ struct usb_hid {
     uint8_t report_records, key_records, poll_records, latency_records;
     uint8_t pipe_state; /* 0 idle, 1 linked, 2 retiring */
     uint16_t repeat_key, report_length, pipe_frame, retire_frame;
-    uint64_t next_poll, repeat_at, pipe_begin, retire_begin;
+    uint64_t next_poll, repeat_at, pipe_begin, retire_begin, progress_at;
     uint64_t pending_at, observed_at, latency_window, latency_max;
     unsigned latency_reports;
     struct usb_packet_trace trace; /* separate from the general/BOT slot */
-    bool active, wheel;
+    bool active, wheel, recovery_pending, recovery_tried, port_retry;
+    int recovery_result;
 };
 struct usb_storage_trace {
     struct usb_packet_trace packet;
@@ -102,6 +104,8 @@ struct usb_port_log {
     const char *pending;
     int result;
     bool quarantine_reported;
+    unsigned operations;
+    uint64_t next_operation;
 };
 struct usb_device {
     struct usb_host *host;
@@ -124,6 +128,7 @@ struct usb_hc_ops {
     int (*start)(struct usb_host *);
     unsigned (*port_status)(struct usb_host *, unsigned);
     int (*port_reset)(struct usb_host *, unsigned);
+    int (*port_enable)(struct usb_host *, unsigned); /* no device reset */
     void (*port_disable)(struct usb_host *, unsigned);
     int (*packet)(struct usb_device *, unsigned endpoint, unsigned pid,
                   unsigned toggle, void *, unsigned bytes, bool periodic);
@@ -178,6 +183,8 @@ static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool
 uint32_t usb_read(struct usb_host *, unsigned, unsigned);
 void usb_write(struct usb_host *, unsigned, uint32_t, unsigned);
 bool usb_port_record(struct usb_host *, unsigned port, const char *event, int result);
+void usb_port_action(struct usb_host *, unsigned, const char *, unsigned before, unsigned written, int);
+bool usb_port_has_live_child(struct usb_host *, unsigned);
 bool usb_expired(struct usb_host *, uint64_t deadline);
 int usb_wait_register(struct usb_host *, unsigned, unsigned, uint32_t mask, uint32_t value, unsigned ms);
 int usb_retire_frames(struct usb_host *, unsigned offset, unsigned width, unsigned mask);
@@ -204,7 +211,9 @@ int usb_hid_report(struct usb_device *, struct usb_hid *, const uint8_t *, unsig
 void usb_hid_poll(struct usb_device *, struct usb_hid *);
 void usb_hid_release(struct usb_device *, struct usb_hid *);
 void usb_hid_outputs(struct usb_device *); /* general owner only */
+void usb_hid_recover(struct usb_device *); /* general owner only */
 int usb_interrupt(struct usb_device *, struct usb_hid *, void *, unsigned);
+int usb_hub_reset(struct usb_device *, unsigned port);
 void usb_interrupt_stop(struct usb_device *, struct usb_hid *);
 int usb_bulk(struct usb_device *, bool in, void *, unsigned, unsigned *actual);
 int usb_storage_attach(struct usb_device *); /* host lock held */

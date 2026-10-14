@@ -97,37 +97,55 @@ static unsigned status(struct usb_host *h, unsigned port)
     unsigned v = usb_read(h, 0x10 + 2 * port, 2);
     if (v == 0xffff) return USB_PORT_OVERCURRENT;
     return (v & 1 ? USB_PORT_CONNECTED : 0) | (v & 4 ? USB_PORT_ENABLED : 0) |
-           (v & 0x100 ? USB_PORT_LOW : 0) | (v & 2 ? USB_PORT_CHANGED : 0);
+           (v & 0x100 ? USB_PORT_LOW : 0) | (v & 0x400 ? USB_PORT_OVERCURRENT : 0) |
+           (v & 2 ? USB_PORT_CHANGED : 0);
 }
 static void port_write(struct usb_host *h, unsigned port, unsigned set, unsigned clear)
 {
     unsigned off = 0x10 + 2 * port;
     unsigned v = usb_read(h, off, 2);
-    /* CSC/PEC are W1C, never echoed during reset/enable writes. */
-    usb_write(h, off, ((v & ~0x0au) & ~clear) | set, 2);
+    /* CSC/PEC/OCC are W1C; reserved 13-15 must be zero. */
+    unsigned written = ((v & ~0xe80au) & ~clear) | set;
+    usb_write(h, off, written, 2);
+    usb_port_action(h, port, set & 0x200 ? "reset_assert" : clear & 0x200 ? "reset_release" :
+                    set & 4 ? "enable" : "disable", v, written, 0);
 }
 static void ack_changes(struct usb_host *h, unsigned port)
 {
     unsigned off = 0x10 + 2 * port, v = usb_read(h, off, 2);
-    if (v != 0xffff && (v & 0x0a)) usb_write(h, off, v, 2);
+    if (v != 0xffff && (v & 0x80a)) usb_write(h, off, v & ~0xe000u, 2);
+}
+static int enable(struct usb_host *h, unsigned port)
+{
+    if (port >= h->ports) return -EINVAL;
+    unsigned s = status(h, port);
+    if (!(s & USB_PORT_CONNECTED) || (s & USB_PORT_OVERCURRENT)) return -USB_EIO;
+    port_write(h, port, 4, 0);
+    int err = usb_wait_register(h, 0x10 + 2 * port, 2, 5, 5, 100);
+    usb_port_record(h, port, "enable", err);
+    return err;
 }
 static int reset(struct usb_host *h, unsigned port)
 {
     if (port >= h->ports) return -EINVAL;
+    if ((status(h, port) & USB_PORT_CONNECTED) && usb_port_has_live_child(h, port)) return -USB_EAGAIN;
     port_write(h, port, 0x200, 4);
     usb_port_record(h, port, "reset", 0);
     usb_sleep(h, 50);
     port_write(h, port, 0, 0x200);
     usb_port_record(h, port, "reset", 0);
-    usb_sleep(h, 10);
-    port_write(h, port, 4, 0);
-    int err = usb_wait_register(h, 0x10 + 2 * port, 2, 5, 5, 100);
-    usb_port_record(h, port, "enable", err);
-    usb_write(h, 0x10 + 2 * port, (usb_read(h, 0x10 + 2 * port, 2) & ~0x0au) | 0x0a, 2);
+    usb_sleep(h, 1); /* >= Linux's 10 us release-to-PE delay */
+    ack_changes(h, port);
+    int err = enable(h, port);
+    usb_sleep(h, 10); /* TRSTRCY, with the port explicitly enabled */
+    ack_changes(h, port);
     return err;
 }
 static void disable(struct usb_host *h, unsigned port)
-{ port_write(h, port, 0, 4); usb_port_record(h, port, "enable", 0); }
+{
+    if (port >= h->ports || ((status(h, port) & USB_PORT_CONNECTED) && usb_port_has_live_child(h, port))) return;
+    port_write(h, port, 0, 4); usb_port_record(h, port, "disable", 0);
+}
 static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigned toggle,
                   void *data, unsigned length, bool periodic)
 {
@@ -209,6 +227,6 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
 }
 const struct usb_hc_ops usb_uhci_ops = {
     .start = start, .port_status = status, .port_reset = reset,
-    .port_disable = disable, .packet = packet, .port_ack_changes = ack_changes,
+    .port_enable = enable, .port_disable = disable, .packet = packet, .port_ack_changes = ack_changes,
     .interrupt = usb_interrupt, .interrupt_stop = usb_interrupt_stop,
 };
