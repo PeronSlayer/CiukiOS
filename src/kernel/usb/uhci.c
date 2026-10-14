@@ -1,6 +1,7 @@
 /* UHCI 1.1 schedule and root hub. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
+_Static_assert(USB_UHCI_BULK_QH + 16 <= USB_TD, "UHCI queues overlap the general TD");
 static volatile uint32_t *words(struct usb_host *h, unsigned at)
 { return (volatile uint32_t *)(h->dma + at); }
 static int start(struct usb_host *h)
@@ -21,15 +22,21 @@ static int start(struct usb_host *h)
     usb_write(h, 0, 2, 2);
     err = usb_wait_register(h, 0, 2, 2, 0, 100); if (err) return err;
     memset(h->dma, 0, USB_DMA_BYTES);
-    volatile uint32_t *qh = words(h, USB_ED);
-    qh[0] = (h->dma_phys + USB_HID_BASE) | 2; qh[1] = 1;
+    /* UHCI 1.1 sections 1.2.3/3.4: interrupt queues precede control and
+     * bulk. Both general QHs are always reachable through horizontal links;
+     * only one owns the reserved TD/buffer at a time. No reclamation loop. */
+    volatile uint32_t *control = words(h, USB_UHCI_CONTROL_QH);
+    volatile uint32_t *bulk = words(h, USB_UHCI_BULK_QH);
+    control[0] = (h->dma_phys + USB_UHCI_BULK_QH) | 2; control[1] = 1;
+    bulk[0] = bulk[1] = 1;
     for (unsigned i = 0; i < USB_DEVICE_MAX * USB_HID_MAX; i++) {
         volatile uint32_t *pipe = words(h, USB_HID_BASE + i * USB_HID_STRIDE);
         pipe[0] = i + 1 < USB_DEVICE_MAX * USB_HID_MAX ?
-            (h->dma_phys + USB_HID_BASE + (i + 1) * USB_HID_STRIDE) | 2 : 1;
+            (h->dma_phys + USB_HID_BASE + (i + 1) * USB_HID_STRIDE) | 2 :
+            (h->dma_phys + USB_UHCI_CONTROL_QH) | 2;
         pipe[1] = 1;
     }
-    for (unsigned i = 0; i < 1024; i++) words(h, 0)[i] = (h->dma_phys + USB_ED) | 2;
+    for (unsigned i = 0; i < 1024; i++) words(h, 0)[i] = (h->dma_phys + USB_HID_BASE) | 2;
     usb_barrier();
     usb_write(h, 8, h->dma_phys, 4); usb_write(h, 6, 0, 2);
     usb_write(h, 0x0c, 64, 1); usb_write(h, 2, 0x1f, 2);
@@ -42,6 +49,48 @@ static int start(struct usb_host *h)
     klog("[usb] uhci schedule controller=%s command=%04x status=%04x frame=%u flbase=%08x result=%d",
          h->owner, usb_read(h, 0, 2), usb_read(h, 2, 2), usb_read(h, 6, 2), usb_read(h, 8, 4), err);
     return err;
+}
+void usb_uhci_dump_schedule(struct usb_host *h)
+{
+    if (h->pci.prog_if || !h->ready || h->schedule_dumped ||
+        !(g_boot.flags & (CBI_F_VERBOSE | CBI_F_TEST_REQUEST))) return;
+    h->schedule_dumped = true;
+    usb_barrier();
+    for (unsigned frame = 0; frame < 4; frame++)
+        klog("[usb] schedule frame=%u entry=%08x controller=%s flbase=%08x current=%u",
+             frame, words(h, 0)[frame], h->owner, usb_read(h, 8, 4), usb_read(h, 6, 2));
+    /* The four entries share a chain. Dump its actual horizontal links once,
+     * including empty QHs; printing only active pipes could hide a broken link.
+     * Validate DMA bounds before dereferencing even a diagnostic pointer. */
+    uint32_t link = words(h, 0)[0];
+    for (unsigned n = 0; n < USB_DEVICE_MAX * USB_HID_MAX + 2; n++) {
+        if (link & 1) return;
+        uint32_t address = link & ~15u;
+        if ((link & 15) != 2 || address < h->dma_phys + USB_ED ||
+            address > h->dma_phys + USB_DMA_BYTES - 16) {
+            klog("[usb] schedule frame=0 invalid_link=%08x controller=%s", link, h->owner);
+            return;
+        }
+        unsigned at = address - h->dma_phys;
+        volatile uint32_t *qh = words(h, at);
+        uint32_t horizontal = qh[0], element = qh[1];
+        klog("[usb] schedule frame=0 qh=%08x link=%08x element=%08x controller=%s",
+             address, horizontal, element, h->owner);
+        if (at >= USB_HID_BASE && at < USB_HID_BASE + USB_DEVICE_MAX * USB_HID_MAX * USB_HID_STRIDE &&
+            (at - USB_HID_BASE) % USB_HID_STRIDE == 0) {
+            unsigned slot = (at - USB_HID_BASE) / USB_HID_STRIDE;
+            struct usb_device *d = &h->devices[slot / USB_HID_MAX];
+            struct usb_hid *p = &d->hid[slot % USB_HID_MAX];
+            if (p->endpoint) {
+                volatile uint32_t *td = words(h, at + 16);
+                klog("[usb] schedule frame=0 td=%08x link=%08x status=%08x token=%08x buffer=%08x addr=%u interface=%u state=%u controller=%s",
+                     address + 16, td[0], td[1], td[2], td[3], d->address, p->interface, p->pipe_state, h->owner);
+            }
+        }
+        link = horizontal;
+    }
+    if (!(link & 1))
+        klog("[usb] schedule frame=0 invalid_link=%08x reason=chain_limit controller=%s", link, h->owner);
 }
 static unsigned status(struct usb_host *h, unsigned port)
 {
@@ -92,7 +141,10 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
     struct usb_packet_trace *trace = &d->packet_trace;
     *trace = (struct usb_packet_trace){.expected=length,.actual=-1,
         .endpoint=endpoint,.pid=pid,.toggle=toggle,.valid=true};
-    volatile uint32_t *td = words(h, USB_TD), *qh = words(h, USB_ED);
+    unsigned queue = endpoint && !periodic ? USB_UHCI_BULK_QH : USB_UHCI_CONTROL_QH;
+    volatile uint32_t *td = words(h, USB_TD), *qh = words(h, queue);
+    /* One-element breadth-first queue: T=1,Vf=0 returns to the QH's
+     * horizontal link after an ACK. IOC=0 because completion is polled. */
     td[0] = 1;
     td[1] = (1u << 23) | (3u << 27) | (d->low_speed ? 1u << 26 : 0) | 0x7ff;
     td[2] = pid | (uint32_t)d->address << 8 | endpoint << 15 | toggle << 19 |

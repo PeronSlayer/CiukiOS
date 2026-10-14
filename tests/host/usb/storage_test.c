@@ -13,6 +13,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
 #include <ciuki/storage.h>
+#include "uhci_model.h"
 struct ciuki_boot_info g_boot;
 static gen_t generation;
 gen_t gen_alloc(void) { return ++generation; }
@@ -53,44 +54,62 @@ static struct model {
     unsigned mode_csw_stalls;
     uint64_t command_at;
     uint32_t injected_status;
+    uint32_t latched_qh, hc_status;
 } m;
 static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
 static uint32_t be32(const uint8_t *b) {return (uint32_t)b[0]<<24|(uint32_t)b[1]<<16|(uint32_t)b[2]<<8|b[3];}
 static void put32(uint8_t *b,uint32_t v) {b[0]=v>>24;b[1]=v>>16;b[2]=v>>8;b[3]=v;}
 static uint64_t now(void *c) { (void)c; return m.now; }
+static volatile uint32_t *uhci_dma(void *c,uint32_t address,unsigned bytes)
+{
+    (void)c;assert(address>=m.h.dma_phys && address-m.h.dma_phys<=USB_DMA_BYTES-bytes);
+    return (volatile uint32_t *)(m.dma+(address-m.h.dma_phys));
+}
+static bool uhci_transaction(void *c,uint32_t address,uint32_t qh,volatile uint32_t *td)
+{
+    (void)c;assert(address==m.h.dma_phys+USB_TD);
+    assert(qh==m.h.dma_phys+(((td[2]>>15)&15) ? USB_UHCI_BULK_QH:USB_UHCI_CONTROL_QH));
+    unsigned other=((td[2]>>15)&15) ? USB_UHCI_CONTROL_QH:USB_UHCI_BULK_QH;
+    assert(uhci_dma(NULL,m.h.dma_phys+other,8)[1]&1); /* shared TD has one owner */
+    assert(td[0]==1 && td[3]==m.h.dma_phys+USB_BUFFER);
+    unsigned n=(((td[2]>>21)&0x7ff)+1)&0x7ff;
+    assert(n<=64 && ((td[2]>>8)&127)==1);
+    int got=packet(&m.h.devices[0],(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,m.dma+USB_BUFFER,n,false);
+    if(got==-USB_EAGAIN) {
+        td[1]|=1u<<19;m.naks++;
+        if(m.late_ack) {m.latched=true;m.latched_qh=qh;}
+        return false;
+    }
+    td[1]&=~(0xffu<<16|0x7ffu);
+    if(got<0) td[1]|=m.injected_status ? m.injected_status : got==-USB_EPIPE ? 1u<<22 : 1u<<18;
+    else td[1]|=((unsigned)got-1)&0x7ff;
+    m.injected_status=0;
+    return got>=0;
+}
 static void sleep_ms(void *c,unsigned ms)
 {
     (void)c;
     while(ms--) {
         m.now++;
         if(!m.uhci) continue;
-        volatile uint32_t *qh=(volatile uint32_t *)(m.dma+USB_ED);
-        volatile uint32_t *td=(volatile uint32_t *)(m.dma+USB_TD);
-        if(qh[1]&1) {
-            if(!m.latched) continue;
+        unsigned frame=(unsigned)(m.now+m.frame_offset)&1023;
+        struct uhci_model_io io={NULL,uhci_dma,uhci_transaction,&m.hc_status};
+        assert(!uhci_model_frame(&io,((uint32_t *)m.dma)[frame]));
+        if(m.latched && (uhci_dma(NULL,m.latched_qh,8)[1]&1)) {
             /* The HC fetched this TD before unlink and completes it while
              * the driver is waiting for retirement. No new TD is queued. */
+            volatile uint32_t *td=(volatile uint32_t *)(m.dma+USB_TD);
             assert(td[1]&(1u<<23));m.latched=false;m.late_ack=false;
             m.inquiry_delay=0;m.late_acks++;
-        } else assert(qh[1]==m.h.dma_phys+USB_TD);
-        if(!(td[1]&(1u<<23))) continue;
-        assert(td[0]==1 && td[3]==m.h.dma_phys+USB_BUFFER);
-        unsigned n=(((td[2]>>21)&0x7ff)+1)&0x7ff;
-        assert(n<=64 && ((td[2]>>8)&127)==1);
-        int got=packet(&m.h.devices[0],(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,m.dma+USB_BUFFER,n,false);
-        if(got==-USB_EAGAIN) {td[1]|=1u<<19;m.naks++;if(m.late_ack)m.latched=true;continue;}
-        td[1]&=~(0xffu<<16|0x7ffu);
-        if(got<0) td[1]|=m.injected_status ? m.injected_status : got==-USB_EPIPE ? 1u<<22 : 1u<<18;
-        else td[1]|=((unsigned)got-1)&0x7ff;
-        m.injected_status=0;
-        qh[1]=td[0];
+            assert(uhci_transaction(NULL,m.h.dma_phys+USB_TD,m.latched_qh,td));
+        }
     }
 }
 static uint32_t read_reg(void *c,unsigned off,unsigned width)
 {
     (void)c;assert(width==2);
     if(off==0) return 0xc1;
-    if(off==2) return 0;
+    if(off==2) return m.hc_status;
     if(off==6) return (unsigned)(m.now+m.frame_offset)&0x7ff;
     if(off==0x10) return m.connected ? 0x85 : 0x80;
     assert(!"unexpected UHCI register");return 0;
@@ -229,7 +248,9 @@ static void use_uhci(void)
 {
     m.uhci=true;m.h.ops=&usb_uhci_ops;m.h.dma=m.dma;m.h.dma_phys=0x100000;m.frame_offset=1990;
     m.h.io.read=read_reg;m.h.io.write=write_reg;
-    volatile uint32_t *qh=(volatile uint32_t *)(m.dma+USB_ED);qh[0]=qh[1]=1;
+    volatile uint32_t *qh=(volatile uint32_t *)(m.dma+USB_UHCI_CONTROL_QH);
+    qh[0]=(m.h.dma_phys+USB_UHCI_BULK_QH)|2;qh[1]=1;
+    qh=(volatile uint32_t *)(m.dma+USB_UHCI_BULK_QH);qh[0]=qh[1]=1;
     for(unsigned i=0;i<1024;i++) ((uint32_t *)m.dma)[i]=(m.h.dma_phys+USB_ED)|2;
 }
 static void cleanup(void)
