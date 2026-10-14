@@ -78,6 +78,11 @@ struct desk_client {
     const uint32_t *pixels;
     struct desk_box frame;
     struct desk_box restore;
+    struct desk_box gfx_box; /* scene source shares this origin in the client surface */
+    uint32_t gfx_width, gfx_height, gfx_serial;
+    int gfx_pending;
+    int gfx_reply_pending, gfx_result;
+    uint64_t gfx_completed_ns, gfx_next_ns;
     char title[DESK_TITLE_MAX + 1];
     struct ciuki_message tx[DESK_TX_MAX];
     unsigned tx_head, tx_count;
@@ -283,6 +288,7 @@ uint8_t desk_glyph_row(unsigned, unsigned);
 int desk_redraw(struct desktop *);
 void desk_render_release(struct desktop *);
 int desk_frame_due(const struct desktop *, uint64_t now);
+void desk_gfx_complete(struct desktop *, int index, int result, uint64_t completed, uint64_t next);
 void desk_stats_sample(struct desktop *);
 void desk_display_reply(struct desktop *, int result);
 uint64_t desk_launch_wait(const struct desktop *, uint64_t now); /* ns; short startup polling only */

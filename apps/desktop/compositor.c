@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "rows.h"
+/* libdeskui also links this unit for glyphs/frames without the desktop server. */
+extern void desk_gfx_complete(struct desktop *,int,int,uint64_t,uint64_t) __attribute__((weak));
 /* The host benchmark supplies this macro; native builds contain no timers. */
 #ifndef DESK_PROFILE
 #define DESK_PROFILE(name, ...) do { __VA_ARGS__; } while (0)
@@ -426,6 +429,9 @@ static void render_cache_prepare(struct desktop *d)
 
 static void xrgb_row(uint32_t *restrict dst, const uint32_t *restrict src, int w)
 {
+    uint32_t used=w ? src[0]|src[w-1] : 0;
+    if (!(used&0xff000000u)) for (int k=1;k+1<w;k++) used|=src[k];
+    if (!(used&0xff000000u)) { desk_row_copy(dst,src,(size_t)w); return; }
     typedef uint64_t unaligned_pair __attribute__((aligned(1),may_alias));
     int x=0;
     for (; x+8<=w; x+=8) {
@@ -510,6 +516,27 @@ static void frame_border(struct desktop *d, struct desk_paint *p, int index, str
         }
     }
 }
+static void client_rows(struct desktop *d, const struct desk_client *c, struct desk_box clip)
+{
+    struct desk_box content=desk_content(c), old={content.x,content.y,(int)c->info.width,(int)c->info.height},b;
+    if (!c->pixels || !desk_intersect(content,old,&b) || !desk_intersect(b,clip,&b)) return;
+    struct desk_box region=c->gfx_box, scaled;
+    region.x+=content.x; region.y+=content.y;
+    int has_scene=c->gfx_width && c->gfx_height && desk_intersect(b,region,&scaled);
+    for (int y=b.y;y<b.y+b.h;y++) {
+        uint32_t *dst=d->pixels+(size_t)y*d->width+b.x;
+        const uint32_t *src=c->pixels+(size_t)(y-content.y)*c->info.width+b.x-content.x;
+        if (has_scene && y>=scaled.y && y<scaled.y+scaled.h) {
+            int left=scaled.x-b.x, right=left+scaled.w;
+            if (left) xrgb_row(dst,src,left);
+            if (right<b.w) xrgb_row(dst+right,src+right,b.w-right);
+        } else xrgb_row(dst,src,b.w);
+    }
+    if (has_scene) desk_scale_rows(d->pixels+(size_t)scaled.y*d->width+scaled.x,d->width,
+        c->pixels+(size_t)c->gfx_box.y*c->info.width+c->gfx_box.x,c->info.width,
+        c->gfx_width,c->gfx_height,(unsigned)region.w,(unsigned)region.h,
+        (unsigned)(scaled.x-region.x),(unsigned)(scaled.y-region.y),(unsigned)scaled.w,(unsigned)scaled.h);
+}
 static void window(struct desktop *d, int i, struct desk_box clip)
 {
     /* Every window (programs, the DOS window, the built-in About/Run/Shut
@@ -548,18 +575,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
     struct desk_box old = {content.x,content.y,(int32_t)c->info.width,(int32_t)c->info.height};
     fill(d,(struct desk_box){content.x+old.w,content.y,content.w-old.w,content.h},clip,t->face);
     fill(d,(struct desk_box){content.x,content.y+old.h,content.w,content.h-old.h},clip,t->face);
-    if (desk_intersect(content,old,&b) && desk_intersect(b,clip,&b)) {
-        uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
-        const uint32_t *first_src=c->pixels+(size_t)(b.y-content.y)*c->info.width+b.x-content.x;
-        int dst_stride=(int)d->width, src_stride=(int)c->info.width;
-        for (int32_t y=0; y<b.h; y++) {
-            uint32_t *dst=first_dst+(size_t)y*dst_stride;
-            const uint32_t *src=first_src+(size_t)y*src_stride;
-            /* The surface is XRGB: preserve the historical zero X byte,
-             * even when a client stores arbitrary padding there. */
-            xrgb_row(dst,src,b.w);
-        }
-    }
+    client_rows(d,c,clip);
     if (c->resizable && !c->zoomed) {
         /* A visible grip in the 3 px bottom/right frame, outside app pixels. */
         for (int k=0; k<3; k++) {
@@ -653,6 +669,22 @@ static void visible_window(struct desktop *d, int index, struct desk_box clip)
 static void scene(struct desktop *d, struct desk_box clip)
 {
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
+    /* A client-only update writes its opaque backing store directly. Higher
+     * windows' shadows and shell overlays still need the ordinary painter. */
+    if (!d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !d->sh.switcher &&
+        clip.y>=DESK_BAR && (!d->shell || clip.y+clip.h<=(int)d->height-DESK_BAR)) {
+        for (int i=0;i<DESK_CLIENTS;i++) {
+            const struct desk_client *c=&d->clients[i];
+            if (!c->window || c->minimized || c->collapsed || c->internal || !c->pixels) continue;
+            struct desk_box content=desk_content(c), b;
+            if (c->info.width<(unsigned)content.w || c->info.height<(unsigned)content.h ||
+                !desk_intersect(content,clip,&b) || memcmp(&b,&clip,sizeof(b))) continue;
+            int clear=1;
+            for (int j=0;j<DESK_CLIENTS;j++) if (d->clients[j].window && !d->clients[j].minimized &&
+                d->clients[j].order>c->order && desk_intersect(desk_outer(&d->clients[j]),clip,&b)) { clear=0; break; }
+            if (clear) { DESK_PROFILE("windows",client_rows(d,c,clip)); return; }
+        }
+    }
     const struct desk_theme *t=desk_theme;
     struct desk_paint p=paint_of(d,clip);
     int windows[DESK_CLIENTS]; unsigned count=0;
@@ -1097,14 +1129,23 @@ int desk_redraw(struct desktop *d)
     d->stats.frames++; d->stats.damage_px+=s->damage_px; d->stats.scene_px+=s->scene_px;
     d->stats.presents+=s->presents; d->stats.lfb_bytes+=s->lfb_bytes;
     d->stats.composite_ns+=s->composite_ns; d->stats.present_ns+=s->present_ns;
-    uint64_t deadline=frame_begin+DESK_FRAME_NS;
-    if (end>deadline) {
-        s->overruns=1; s->dropped=(end-deadline)/DESK_FRAME_NS+1;
-        deadline+=s->dropped*DESK_FRAME_NS;
-    }
+    uint64_t slot=frame_begin;
+    if (d->next_frame_ns && d->next_frame_ns<=frame_begin)
+        slot=d->next_frame_ns+(frame_begin-d->next_frame_ns)/DESK_FRAME_NS*DESK_FRAME_NS;
+    uint64_t deadline=slot+DESK_FRAME_NS;
+    /* Processing overruns measure work against a full frame budget. A new
+     * update arriving just before a phase boundary is not an overrun. Idle
+     * slots and wake-up lateness still preserve the absolute next-slot phase. */
+    uint64_t budget=frame_begin+DESK_FRAME_NS;
+    if (end>budget) { s->overruns=1;s->dropped=(end-budget)/DESK_FRAME_NS+1; }
+    if (end>=deadline) deadline+=((end-deadline)/DESK_FRAME_NS+1)*DESK_FRAME_NS;
     d->stats.overruns+=s->overruns; d->stats.dropped+=s->dropped;
     s->frame_p95_ns=d->stats.frame_p95_ns; s->frame_max_ns=d->stats.frame_max_ns;
     d->next_frame_ns=deadline;
+    if (complete && desk_gfx_complete) for (int i=0;i<DESK_CLIENTS;i++) {
+        struct desk_client *c=&d->clients[i];
+        if (c->gfx_pending) desk_gfx_complete(d,i,c->minimized || c->collapsed ? -EAGAIN : 0,end,deadline);
+    }
     return complete ? 0 : -1;
 }
 uint64_t desk_launch_wait(const struct desktop *d, uint64_t now)

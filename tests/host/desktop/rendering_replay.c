@@ -189,6 +189,8 @@ static void replay_trace(const char *portrait, const char *store, const char *th
             (unsigned long long)(latencies[p95]/1000),(unsigned long long)(latencies[frames-1]/1000),
             (unsigned long long)nominal[p50],(unsigned long long)nominal[p95],(unsigned long long)nominal[frames-1],
             (unsigned long long)(d->stats.frame_p95_ns/1000),(unsigned long long)(d->stats.frame_max_ns/1000));
+        printf("DISPLAY_RECORD theme=%s accel=%u completed=%llu overruns=%llu dropped=%llu\n",theme,engine_caps,
+            (unsigned long long)d->stats.completed,(unsigned long long)d->stats.overruns,(unsigned long long)d->stats.dropped);
         const char *names[3]={"drag","start_open","full"};
         for (unsigned k=0;k<3;k++) {
             assert(action_counts[k]); qsort(nominal_by_action[k],action_counts[k],sizeof(uint64_t),compare);

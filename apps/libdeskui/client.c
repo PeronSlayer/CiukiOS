@@ -140,7 +140,7 @@ static void add_damage(struct du_window *w, struct du_rect r)
  * the compositor never sees a half-rendered frame and repaints little. */
 void du_window_present(struct du_window *w)
 {
-    if (w->closed || w->swap_sent) return;
+    if (w->closed || w->swap_sent || w->present_pending) return;
     int width = (int)w->info.width, height = (int)w->info.height;
     int x0 = width, x1 = -1, y0 = height, y1 = -1;
     for (int y = 0; y < height; y++) {
@@ -233,7 +233,7 @@ int du_window_turn(struct du_window *w, uint64_t now)
         default: if (w->message) w->message(w, &p, w->user); break;
         }
     }
-    if (!w->closing && replacement(w)) { w->error = errno; w->closed = 1; return -1; }
+    if (!w->closing && !w->present_pending && replacement(w)) { w->error = errno; w->closed = 1; return -1; }
     if (w->closing) {
         if (w->closing == 1 && w->count < 16) {
             struct ciuki_message m; desk_message(&m, DESK_CLOSE, 4);
@@ -246,8 +246,8 @@ int du_window_turn(struct du_window *w, uint64_t now)
     du_tick(w->ui, now);
     /* ui-look: follow the shell's theme setting (read at once, then a stat every 2 s). */
     if (desk_theme_poll(DESK_SETTINGS_PATH, now)) w->ui->dirty = 1;
-    if (w->configured && !w->swap_sent && w->ui->dirty) { du_render(w->ui); du_window_present(w); }
-    if (w->configured && w->damaged && w->count < 16) {
+    if (w->configured && !w->swap_sent && !w->present_pending && w->ui->dirty) { du_render(w->ui); du_window_present(w); }
+    if (w->configured && w->damaged && w->count < 16 && !w->manual_damage) {
         struct ciuki_message m; desk_message(&m, DESK_DAMAGE, 24);
         desk_put32(m.data + 4, (uint32_t)w->damage.x); desk_put32(m.data + 8, (uint32_t)w->damage.y);
         desk_put32(m.data + 12, (uint32_t)w->damage.w); desk_put32(m.data + 16, (uint32_t)w->damage.h);

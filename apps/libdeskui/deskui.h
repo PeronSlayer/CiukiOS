@@ -356,6 +356,8 @@ const char *du_clipboard_get(void);
 /* Desktop window glue: handshake, surface, back buffer, damage, events. */
 struct du_window {
     int channel, surface, configured, closing, closed, error;
+    int present_pending; /* optional completion-paced client freezes surface writes */
+    int manual_damage; /* application combines ordinary damage with its frame request */
     uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;

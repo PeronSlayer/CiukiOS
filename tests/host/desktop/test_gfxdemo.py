@@ -9,12 +9,13 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
+# f2-59: integer viewport, smooth poses and completion-based FPS/status copy.
 GOLDENS = {
-    "benchmark": "72c7ebc66384de94621c6ea64e1c0cae476c532e8e3a872265b56b10f19f304c",
-    "cube-flat": "cc8274ee2da43bcefb2836cf158a91428de81bef27db7650ca58156363896fd3",
-    "cube-gouraud": "a5d44f172923fefd86294a76bdac7e6c63580f52d4fb6b0db1e5681cbe922123",
-    "sprites": "d7448591b33975d85d86bbd26389abfc1ab44194355ae9d44bc406216cb580ff",
-    "software-only": "647bcc1fbb81cfea8768990ea1e6e66922b5a3e5b68863e3e876e10ca211eae4",
+    'benchmark': 'ef4e7049cf2acf4ef50e6c6d8f4e9a3c101ff0668fa7083fcb0eb66e66396dd6',
+    'cube-flat': 'f3b375ab64adfe85b8ed3f321fd97e3769a62b8b796538ef0b1193703edb8780',
+    'cube-gouraud': 'dbe0138fa6197fab752286cac49abcfb97d1c2dd0ecbeffff43d50fca2f06212',
+    'software-only': '5769307868c58d539e93066b6e5e8ed8997f5b1a4082b2c98edf35b1e12bff5c',
+    'sprites': '4bf980005cb1921658bf32eecdec42e13a26bf6d4a5dfdaf549b2b0b3e21ecf6',
 }
 
 def load(name, path):
