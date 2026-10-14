@@ -259,6 +259,22 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=
     "${guest_cpu[@]}" -o "$out/dosvm_test"
 "$out/dosvm_test"
 
+# F4-28: optimized VM-source callback cost (the sanitized full suite above
+# also runs it). Host-only, sequential, with the production audio units.
+for unit in vm_source opl3 mixer; do
+    clang -std=c17 -O2 -g -Wall -Wextra -Werror \
+        -include "$root/tests/host/vm_audio_shim.h" -I "$root/src/kernel/include" \
+        -c "$root/src/kernel/audio/$unit.c" -o "$out/dosvm_cost_$unit.o"
+done
+clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
+    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
+    "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
+    "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
+    "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
+    "$out/dosvm_cost_vm_source.o" "$out/dosvm_cost_opl3.o" "$out/dosvm_cost_mixer.o" \
+    "${guest_cpu[@]}" -o "$out/dosvm_audio_cost_test"
+CIUKI_VM_AUDIO_COST=1 "$out/dosvm_audio_cost_test"
+
 # f3-16: production window/dirty-page replay and presenter costs. Sequential
 # with every other host suite; synthetic frames, no image rebuild or QEMU.
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
