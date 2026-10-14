@@ -2,12 +2,13 @@
  * GDT: null, kcode 0x08, kdata 0x10, ucode 0x1B, udata 0x23, TSS 0x28,
  * double-fault TSS 0x30, native GS TLS 0x3B, DOS VM LDT 0x40 (f3-04; null
  * unless a DPMI VM worker runs). Ordinary segments remain flat.
- * The TSS has no I/O bitmap, so every port is denied to ring 3 (IOPL 0).
+ * The TSS bitmap denies every port except the full-screen owner's VGA range.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/arch.h>
 #include <ciuki/cpu.h>
 #include <ciuki/abi.h>
+#include "vga_io.h"
 
 struct gdt_entry { uint16_t lim0, base0; uint8_t base1, access, gran, base2; } __attribute__((packed));
 struct idt_entry { uint16_t off0, sel; uint8_t zero, type; uint16_t off1; } __attribute__((packed));
@@ -43,7 +44,8 @@ void gdt_init(void)
     set_gdt(4, 0, 0xFFFFF, 0xF2, 0xC0);   /* user data, DPL 3 */
     memset(&g_tss, 0, sizeof(g_tss));
     g_tss.ss0 = SEL_KDATA;
-    g_tss.iomap_base = sizeof(struct tss);  /* beyond the limit: no bitmap */
+    g_tss.iomap_base = __builtin_offsetof(struct tss, io_bitmap);
+    memset(g_tss.io_bitmap, 0xFF, sizeof(g_tss.io_bitmap));
     /* F1 V86 also checks this absent bitmap for EVERY IN/OUT, even at
      * IOPL=3 (which we never grant). Intel SDM Vol. 3B 23.2.8.1:
      * https://cdrdv2-public.intel.com/874250/253669-090-sdm-vol-3b.pdf */
@@ -63,6 +65,13 @@ void gdt_init(void)
 }
 
 void tss_set_kernel_stack(uint32_t esp0) { g_tss.esp0 = esp0; }
+
+void arch_vga_io(bool enabled)
+{
+    /* Byte-aligned allowlist. Every other bit and the sentinel stay set.
+     * Called with interrupts disabled on each task switch/ownership change. */
+    arch_vga_bitmap(g_tss.io_bitmap,enabled);
+}
 
 /* f3-04 per-VM LDT. Intel SDM Vol. 3A 3.5.1 and LLDT: the descriptor is a
  * system segment of type 2 in the GDT; LLDT with a null selector marks the

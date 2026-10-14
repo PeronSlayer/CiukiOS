@@ -80,6 +80,11 @@ struct dosvm {
     bool window_input;
     int32_t input_x, input_y;
     bool pointer_known;
+    bool fullscreen, fullscreen_hold, fullscreen_parked, fullscreen_pause, fullscreen_model;
+    bool fullscreen_suspended;
+    uint32_t fullscreen_ip, fullscreen_cs;
+    uint64_t fullscreen_progress;
+    int fullscreen_error;
     uint32_t continuation;
     struct kwait wake;
     struct {

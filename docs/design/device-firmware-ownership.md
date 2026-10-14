@@ -403,3 +403,73 @@ confirmed remapping and a 10 s desktop-frame watchdog. Unknown I/O dependencies
 remain forbidden; timeouts retain quarantine and require reboot rather than
 an assumed restore. This does not authorize acceleration, option-ROM startup,
 PCI BIOS/configuration writes or ordinary DOS VM calls to host INT10.
+
+## F3-20 amendment — DOS full-screen VGA ownership (2026-10-14)
+
+The owner's 2026-10-14 decision permits a focused DOS session to own the real
+VGA while the desktop's display grant is suspended. This is a narrow exception
+to the ordinary-DOS firmware prohibition above: only the kernel's serialized
+BIOS VM may invoke standard VGA mode sets (01h/03h/13h and the supported VGA
+parameter-table modes). The guest never acquires a generic firmware entry.
+Mode X/Y use direct VGA register programming after the standard mode set.
+Guest VBE mode setting remains unavailable pending a separate amendment.
+
+Before entry, stop/fence the accelerator and revoke console/presenter LFB
+mappings through `fbdev_change_begin`. Save VBE hardware, BIOS, DAC and extended
+state with 4F04h, checking its reported buffer size before saving. Refuse entry
+if that state cannot be saved. Retain exclusive VGA resource leases throughout
+the session. The only direct guest grants are ports 3B0h–3DFh and the uncached
+A0000h–BFFFFh aperture; EFLAGS.IOPL remains zero. The TSS bitmap denies every
+other port and is closed whenever another task runs. Revoke both grants before
+capturing VGA registers, DAC and four planes into the window model. Restore
+the saved VBE state, validate the original mode, remap the framebuffer, and
+request a complete desktop repaint. VRAM containing the desktop is reconstructed
+from its RAM surfaces, rather than retained across VGA mode changes.
+
+Research and implementation decisions:
+
+- [Microsoft DDK KB Q75008](https://jeffpar.github.io/kbarchive/kb/075/Q75008/)
+  describes direct I/O for the display-owning VM and emulation for background
+  VMs. This is the Windows 9x VDD ownership model, unrelated to NTVDM.
+- [VBE 3.0, function 04h](https://www.cs.utexas.edu/~dahlin/Classes/UGOS/reading/vbe3.pdf)
+  specifies 64-byte size units and state-mask bits 0–3. Use all four bits;
+  standard VGA register restoration alone cannot restore Savage panel state.
+- [Linux v6.12 VGA state handling](https://github.com/torvalds/linux/blob/v6.12/drivers/video/vgastate.c)
+  saves indexed registers/DAC and transfers planes with temporary sequencer
+  and graphics-controller settings. Restore indexes and the attribute
+  controller flip-flop after the transfer; release CRTC write protection
+  before programming timing registers.
+- [Intel SDM, V86 protection](https://cdrdv2-public.intel.com/874250/253669-090-sdm-vol-3b.pdf)
+  requires an I/O bitmap for direct V86 access with IOPL zero. A trailing FFh
+  byte prevents a multi-byte access from escaping the bitmap.
+
+Kernel input filters Alt+Enter and full-screen Alt+Tab before guest delivery.
+The filter only queues a transition; firmware and memory transfers run in a
+kernel worker with interrupts enabled. Ctrl+Alt+Del retains the existing
+system path. PS/2, firmware and USB events share this filter. Exit/fault,
+owner death and a bounded inactivity watchdog return ownership to the desktop.
+The default background policy is to continue windowed; an explicit pause policy
+keeps the worker parked until the session is focused again.
+
+Hardware qualification must check VBE 4F04h completeness on Savage/Cirrus,
+DAC/index restoration, native speed, and panel recovery. VGA latches have no
+standard readback register: capture of arbitrary live latch contents without a
+reserved guest scratch byte cannot be promised. The capture operation preserves
+all plane bytes and leaves latches loaded from the final captured address;
+loading a model into hardware restores its saved latches without sacrificing a
+plane byte. Software depending on stale latches across a switch needs further
+qualification. No QEMU or physical evidence is implied by host tests.
+
+The additional runtime selector exhausted the fixed 24,576-byte loader image.
+Its 65-byte selector input buffer now follows the existing out-of-file mode
+ranking scratch. Both fw_cfg input and menu input write all bytes covered by
+their explicit length before validation/copy; neither needs initial zero fill.
+`loader_bss_end` still reserves this memory, within the same physical page as
+before. The on-disk loader remains 48 sectors. This is scratch relocation,
+not a build variant or an increased loader/image size.
+
+Standard mode entry is checked with INT10h/AH=0Fh before direct guest grants;
+AL (excluding the preserve-memory bit) must match the requested VGA mode.
+This follows the [upstream VGA BIOS dispatcher and get-mode implementation](https://github.com/qemu/vgabios/blob/master/vgabios.c).
+A completed standard mode-set call has no VBE-style AX status, so completion
+alone is not sufficient evidence that the intended mode was selected.

@@ -166,6 +166,11 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
     switch (e.type) {
     case CIUKI_INPUT_RESYNC:
         release(d, &e); d->drag = -1;
+        if (d->shell) {
+            const int modifiers[]={0x38,0x138,0x1D,0x11D,0x2A,0x36};
+            for (unsigned k=0;k<sizeof(modifiers)/sizeof(modifiers[0]);k++) desk_shell_key(d,modifiers[k],0);
+            d->sh.logo_down=0;
+        }
         d->buttons = (uint32_t)e.value & 7u;
         route(d, d->focus, DESK_KEY, &e);
         break;

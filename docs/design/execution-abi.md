@@ -1557,3 +1557,24 @@ lease changes or quarantine recovery. A private static buffer follows call
 CPUID and formatting run after restoring interrupts. Static snapshot storage
 is approximately 38 KiB including its private registry copy. See
 [device-manager.md](device-manager.md) for sources and Control Panel behavior.
+
+### F3-20 amendment — DOS window full-screen command (2026-10-14)
+
+Call 72 keeps its 136-byte version-1 command and existing owner delegation.
+Operation 9 (`CIUKI_DOSVM_FULLSCREEN`) takes `focused=1` to enter, or zero to
+return; entry requires the focused DOS window and a restorable desktop grant.
+Operation 10 (`CIUKI_DOSVM_BACKGROUND`) takes `focused=1` for pause on Alt+Tab,
+or zero (default) for continued windowed execution. All other input/output
+fields must be zero. STATUS.changed gains bits 4 (full screen), 8 (suspended)
+and 16 (entry refused, positive errno in reason). STOPPED and launch-failure
+reasons retain precedence. There is no physical-address, arbitrary-port or
+firmware entry in the native ABI. The kernel retains the window's surface and
+binding across ownership changes. Physical access ends before VM destruction.
+
+The kernel input filter consumes Alt+Enter and full-screen Alt+Tab make,
+repeat and break edges. It routes full-screen keys and relative PS/2/USB mouse
+reports directly to the existing virtual 8042/INT33h devices. A returned session
+resynchronizes desktop input; Alt+Tab additionally supplies a balanced desktop
+switch chord. Re-focusing or requesting full screen resumes a paused session.
+The dated F3-20 amendment in `device-firmware-ownership.md` defines the precise
+VGA/firmware authority and the hardware state readback limits.

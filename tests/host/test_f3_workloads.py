@@ -142,7 +142,7 @@ class Workloads(unittest.TestCase):
         c = case('quake-qemu-t23')
         self.assertNotIn('fixtures', c)
         self.assertEqual(runner.selector(c['selector'].format(run_id='12345678'))['probe'], 'quake')
-        self.assertEqual(F3_PROBES[-1], 'quake')
+        self.assertIn('quake', F3_PROBES)
         for path, token in (('src/kernel/probes/selector.c', '"quake"'),
                             ('src/boot/ciukldr/menu.inc', "'quake',0"),
                             ('src/kernel/probes/f3_probes_workloads.c', 'CIUKI_F3_PROBE("quake"')):
@@ -174,7 +174,9 @@ class Workloads(unittest.TestCase):
 
     def test_probe_names_in_every_selector_table(self):
         names = ('dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake')
-        self.assertEqual(F3_PROBES[-6:], names)
+        # f3-20 appended vm-fullscreen after the workloads; they stay contiguous and ordered.
+        start = F3_PROBES.index(names[0])
+        self.assertEqual(F3_PROBES[start:start + len(names)], names)
         for name in names:
             self.assertEqual(runner.selector(f'f3:{name} run=12345678')['probe'], name)
         selector_c = (ROOT / 'src/kernel/probes/selector.c').read_text()

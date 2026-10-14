@@ -424,7 +424,8 @@ static int probe_protection(void)
     struct { uint16_t limit; uint32_t base; } __attribute__((packed)) gdtr, idtr;
     uint16_t tr;
     __asm__ volatile("sgdt %0; sidt %1; str %2" : "=m"(gdtr), "=m"(idtr), "=m"(tr));
-    bool tss_valid = tr == SEL_TSS && g_tss.ss0 == SEL_KDATA && g_tss.iomap_base >= sizeof(struct tss);
+    bool tss_valid = tr == SEL_TSS && g_tss.ss0 == SEL_KDATA &&
+        g_tss.iomap_base == __builtin_offsetof(struct tss, io_bitmap) && g_tss.io_bitmap[8192] == 0xFF;
     const uint8_t *tls = (const uint8_t *)(uintptr_t)(gdtr.base + CIUKI_TLS_GDT_INDEX * 8);
     uint32_t tls_base = (uint32_t)tls[2] | ((uint32_t)tls[3] << 8) |
                         ((uint32_t)tls[4] << 16) | ((uint32_t)tls[7] << 24);

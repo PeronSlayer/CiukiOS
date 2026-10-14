@@ -915,6 +915,28 @@ def observe_desktop_screen(before, after, root=ROOT):
             'portrait_pixels_checked':len(cells),'cursor_changed_pixels':changed}
 
 
+def observe_fullscreen_screen(before, after):
+    """Exact whole-screen equality after a paused hardware round trip."""
+    width, height, pixels = read_ppm(before)
+    width2, height2, pixels2 = read_ppm(after)
+    if (width, height) != (width2, height2) or pixels != pixels2:
+        raise EvidenceError('full-screen VGA return changed the desktop screendump')
+    if not any(pixels):
+        raise EvidenceError('full-screen VGA return is an empty/black desktop')
+    return {'equal': True, 'width': width, 'height': height,
+            'pixels_sha256': hashlib.sha256(pixels).hexdigest()}
+
+
+def observe_fullscreen_demo(before, after):
+    width, height, pixels = read_ppm(before)
+    width2, height2, pixels2 = read_ppm(after)
+    if (width, height) != (width2, height2) or pixels == pixels2 or not any(pixels) or not any(pixels2):
+        raise EvidenceError('full-screen DOOM demo did not produce changing VGA frames')
+    return {'changed': True, 'width': width, 'height': height,
+            'before_sha256': hashlib.sha256(pixels).hexdigest(),
+            'after_sha256': hashlib.sha256(pixels2).hexdigest()}
+
+
 def observe_window_screen(path, spec, arm):
     """f3-02 DOS window: the composited 640x480 client region of a QMP
     screendump, as little-endian XRGB rows, must hash to the suite's golden
@@ -1700,6 +1722,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     screen_armed_at = screen_interaction_at = None
     screen_last_try = 0.0
     window_shot = directory/'window.ppm';window_armed_at = None
+    fullscreen_shots = [directory/'fullscreen-before.ppm', directory/'fullscreen-after.ppm']
+    fullscreen_demo_shots = [directory/'fullscreen-demo-start.ppm', directory/'fullscreen-demo-end.ppm']
+    fullscreen_arms = {}
     normal_shot = directory/'screen.ppm';desktop_at = failure_at = None
     restart_performed=False;expected_resets=0
     try:
@@ -1870,6 +1895,20 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     qmp.command('screendump',{'filename':str(window_shot)})
                     try:result['window_screen']=observe_window_screen(window_shot,spec,arms[0])
                     finally:window_shot.unlink(missing_ok=True)
+            if case.get('fullscreen_screen') and qmp:
+                for group, actions2, shots, observe in (
+                    ('fullscreen_screen', ('fullscreen_before', 'fullscreen_after'), fullscreen_shots, observe_fullscreen_screen),
+                    ('fullscreen_demo', ('fullscreen_demo_start', 'fullscreen_demo_end'), fullscreen_demo_shots, observe_fullscreen_demo)):
+                    for index, action in enumerate(actions2):
+                        arms = [r for r in parser.records if r.get('event') == 'ARM' and r.get('action') == action]
+                        if len(arms) > 1:raise EvidenceError('duplicate full-screen observation ARM')
+                        if arms and action not in fullscreen_arms:fullscreen_arms[action] = now
+                        if arms and not shots[index].exists() and group not in result and now-fullscreen_arms[action] >= 1.0:
+                            if index and not shots[0].exists():raise EvidenceError('missing full-screen baseline screendump')
+                            qmp.command('screendump', {'filename': str(shots[index])})
+                            if index:
+                                result[group] = observe(*shots)
+                                for shot in shots:shot.unlink()
             # A trace is serialized before the subsequent request can reach
             # blkdebug. Drain the FIFO before resuming that suspended request;
             # never select a prefix from a partially collected serial batch.
@@ -1894,6 +1933,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     raise EvidenceError('desktop lacks live post-input screendump')
                 if case.get('window_screen') and 'window_screen' not in result:
                     raise EvidenceError('DOS window lacks live screendump')
+                if case.get('fullscreen_screen') and ('fullscreen_screen' not in result or 'fullscreen_demo' not in result):
+                    raise EvidenceError('DOS full-screen lacks changing demo/equal return live screendumps')
                 if terminal_time is None:terminal_time=now
                 if parser.terminal['event']=='PANIC':
                     arms=[r for r in parser.records if r['event']=='ARM']

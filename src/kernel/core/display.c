@@ -8,6 +8,8 @@
 #include <ciuki/supervisor.h>
 
 static bool switching, awaiting_frame;
+static bool fullscreen_display;
+extern void dosvm_fullscreen_poll(void) __attribute__((weak));
 static uint32_t changes;
 static uint64_t frame_deadline;
 static struct fb_device previous;
@@ -93,6 +95,8 @@ void display_frame_complete(uint32_t generation)
 
 void display_watchdog_poll(void)
 {
+    if (dosvm_fullscreen_poll) dosvm_fullscreen_poll();
+    if (fullscreen_display) return;
     if (!awaiting_frame || switching || !deadline_passed(frame_deadline) || grants_display_busy()) return;
     switching = true;
     awaiting_frame = false;
@@ -112,7 +116,7 @@ int display_set(struct process *p, uint16_t id)
     if (!m) return refuse(id, -EINVAL);
     /* Window DOS VMs currently have private surfaces, never physical grants.
      * A competing/foreign display owner or an in-flight frame prevents entry. */
-    if (switching || awaiting_frame || grants_display_busy()) return refuse(id, -EBUSY);
+    if (switching || fullscreen_display || awaiting_frame || grants_display_busy()) return refuse(id, -EBUSY);
     if (!fbdev_get()->present) return refuse(id, -ENODEV);
     if (!listed(fbdev_get()->mode_id)) return refuse(id, -EOPNOTSUPP); /* cannot promise restore */
     if (id == fbdev_get()->mode_id) return refuse(id, 0);
@@ -158,4 +162,60 @@ int32_t display_syscall(struct trap_frame *tf)
     if (e) return e;
     e = display_query(&out);
     return e ? e : copy_to_user(tf->ecx, &out, sizeof(out));
+}
+
+bool display_fullscreen_active(void) { return fullscreen_display; }
+int display_fullscreen_begin(uint8_t mode)
+{
+    struct process *desktop=proc_find(grants_display_pid());
+    if (!desktop || desktop->state>=PROC_STOPPING || !grants_display_owner(desktop)) return -EPERM;
+    if (switching || fullscreen_display || awaiting_frame || grants_display_busy()) return -EBUSY;
+    if (!fbdev_get()->present || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
+    if (!watchdog) {
+        watchdog=task_create_kernel("display-watchdog",watchdog_main,0,P_NORMAL);
+        if (!watchdog) return -ENOMEM;
+        task_start(watchdog);
+    }
+    switching=true;
+    previous=*fbdev_get();
+    int e=biosvm_video_prepare();
+    if (e) { switching=false; return -EIO; }
+    e=grants_display_suspend(true);
+    if (e) { switching=false; return e; }
+    e=fbdev_change_begin();
+    if (e) { grants_display_suspend(false); switching=false; return e; }
+    e=biosvm_video_fullscreen_begin(mode);
+    fullscreen_display=true; /* also brackets rollback of a partially set mode */
+    switching=false;
+    if (e) { display_fullscreen_end(); return -EIO; }
+    klog("[display] fullscreen=1 mode=%u desktop_mode=%u",mode,previous.mode_id);
+    return 0;
+}
+int display_fullscreen_end(void)
+{
+    if (!fullscreen_display) return 0;
+    if (switching) return -EBUSY;
+    switching=true;
+    uint8_t info[256]; struct fb_device next;
+    int e=biosvm_video_fullscreen_end(previous.mode_id,info);
+    if (!e) e=fbdev_mode_decode(previous.mode_id,info,&next);
+    if (!e && (next.width!=previous.width || next.height!=previous.height ||
+               next.pitch!=previous.pitch || next.bpp!=previous.bpp || next.phys!=previous.phys)) e=-EIO;
+    if (!e) e=fbdev_change_commit(&next);
+    /* If exact firmware restoration fails, try the existing confirmed-mode
+     * recovery. A failed recovery leaves mappings unavailable, never guessed. */
+    if (e) {
+        int recovery=restore();
+        klog("[display] fullscreen_restore error=%d recovery=%d",e,recovery);
+        e=recovery;
+    }
+    fbdev_change_end();
+    fullscreen_display=false;
+    grants_display_suspend(false);
+    if (!e) {
+        changed(); awaiting_frame=true; frame_deadline=deadline_after_ms(10000);
+    }
+    switching=false;
+    log_mode(previous.mode_id,e);
+    return e;
 }

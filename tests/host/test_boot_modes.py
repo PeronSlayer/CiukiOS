@@ -68,6 +68,7 @@ class LoaderTests(unittest.TestCase):
                 # The relocated ranking table lies after the image, inside loader_end.
                 text = listing.read_text()
                 self.assertRegex(text, r'00006000 <res 400h>\s+mode_scores resw 512')
+                self.assertRegex(text, r'00006400 <res 41h>\s+selector_buffer resb 65')
                 self.assertIn('mov dword [B(loader_end)], LOAD_BASE+loader_bss_end', text)
 
     def test_menu_stages_keep_serial_and_quiet_only_the_screen(self):

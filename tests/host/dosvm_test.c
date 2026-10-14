@@ -66,6 +66,7 @@ void arch_debug_load(const uint32_t a[4], uint32_t dr7) { debug_dr7=dr7; for (un
 uint32_t arch_debug_take(void) { uint32_t d=debug_dr6; debug_dr6=0; return d; }
 uint8_t arch_cpu_family(void) { return 6; }
 #include "../../src/kernel/vm/dosvm_internal.h"
+#include "dosvm_fullscreen_seams.inc"
 static bool allocation_fails(void) { return ++allocation_calls == fail_at; }
 uint32_t pmm_alloc(void)
 {
@@ -300,7 +301,7 @@ bool rec_active(void) { return evidence_active; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[240]; va_list ap; va_start(ap,fmt); int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
-    CHECK(n>=0 && n<(int)sizeof(extra) && (!strcmp(probe,"vm-boot") || !strcmp(probe,"vm-video") || !strcmp(probe,"vm-window")));
+    CHECK(n>=0 && n<(int)sizeof(extra) && (!strcmp(probe,"vm-boot") || !strcmp(probe,"vm-video") || !strcmp(probe,"vm-window") || !strcmp(probe,"vm-fullscreen")));
     n=snprintf(last_record,sizeof(last_record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s %s",++records,probe,event,extra);
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
     memcpy(recent_records[(records - 1) % 8], last_record, sizeof(last_record));
@@ -333,6 +334,8 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "dosvm_font.inc"
 #include "../../src/kernel/vm/dosvm_vga.c"
 #include "../../src/kernel/vm/dosvm_client.c"
+#include "../../src/kernel/vm/vga_hardware.c"
+#include "../../src/kernel/vm/dosvm_fullscreen.c"
 #include "../../src/kernel/vm/dosvm_dma.c"
 #include "../../src/kernel/vm/dosvm_opl.c"
 #include "../../src/kernel/vm/dosvm_sb16.c"
@@ -613,6 +616,7 @@ static void test_memory_services(void)
 #include "dosvm_speed_test.inc"
 #include "dosvm_cost_test.inc"
 #include "dosvm_idle_test.inc"
+#include "dosvm_fullscreen_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -628,6 +632,8 @@ int main(void)
     test_speed();
     test_cost_bursts();
     test_idle();
+    test_fullscreen_transport();
+    test_fullscreen_service();
     CHECK(guest_enters==3 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

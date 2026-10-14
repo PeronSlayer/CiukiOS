@@ -10,6 +10,14 @@ extern uint32_t file_description_count(void) __attribute__((weak));
 #include <ciuki/signal.h>
 
 static uint32_t grant_owner, grant_descriptions, presenting;
+static bool display_suspended;
+uint32_t grants_display_pid(void) { return grant_owner; }
+int grants_display_suspend(bool suspended)
+{
+    if (suspended && (display_suspended || presenting || !grant_owner)) return -EBUSY;
+    display_suspended = suspended;
+    return 0;
+}
 extern void display_frame_complete(uint32_t generation) __attribute__((weak));
 bool grants_display_owner(const struct process *p)
 {
@@ -68,6 +76,7 @@ static int grant_check(struct process *p, int32_t fd, enum desktop_kind kind, ui
 {
     struct desktop_description *d = desktop_fd(p, fd);
     if (!d || d->kind != kind) return -EBADF;
+    if (kind == DESKTOP_DISPLAY && display_suspended) return -EBUSY;
     return d->owner == p->pid && grant_owner == p->pid && (d->maximum & right) ? 0 : -EACCES;
 }
 
@@ -259,6 +268,13 @@ int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t ca
     unsigned count = 0;
     for (;;) {
         if (p->state == PROC_STOPPING) { err = -EINTR; break; }
+        extern bool dosvm_fullscreen_desktop_event(struct ciuki_input_event *) __attribute__((weak));
+        struct ciuki_input_event pending;
+        if (dosvm_fullscreen_desktop_event && dosvm_fullscreen_desktop_event(&pending)) {
+            err=copy_to_user(events+count*sizeof(pending),&pending,sizeof(pending));
+            if (err || ++count==capacity) break;
+            continue;
+        }
         struct input_event in;
         bool have = input_read(&in);
         if (have) {

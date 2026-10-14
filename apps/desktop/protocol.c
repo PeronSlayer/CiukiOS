@@ -82,6 +82,8 @@ int desk_parse(const struct ciuki_message *m, int client,
     if (client && resize && p->opcode==DESK_GFX_FRAME && (m->length==68 || m->length==84) && desk_get32(m->data+64)) fds=1;
     if (m->fd_count != fds) return 0;
     unsigned n = 4;
+    if (p->opcode==DESK_DOS_FULLSCREEN)
+        return !client && m->data[0]==DESK_SHELL_VERSION && m->length==4 && !m->fd_count && !resize;
     switch (p->opcode) {
     case DESK_GFX_FRAME:
         if (!client || !resize || (m->length!=64 && m->length!=68 && m->length!=84) || !desk_surface_valid(s)) return 0;

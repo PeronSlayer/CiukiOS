@@ -53,6 +53,8 @@ static ssize_t shell_launch_write(int fd,const void *bytes,size_t size)
 #define close shell_close
 #define open shell_open
 #define fstat shell_fstat
+/* Parse the writer's field names before redirecting the POSIX write call. */
+#include "../../../apps/desktop/settings_io.h"
 #define write shell_launch_write
 #ifdef DESK_FOOTPRINT_TEST
 #include "../../../apps/desktop/sound_storage.h"

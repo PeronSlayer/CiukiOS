@@ -498,7 +498,7 @@ static uint16_t press(struct dosvm *v, struct ciuki_dosvm_command *c, int code)
     CHECK(!key_event(c, code, 1) && !key_event(c, code, 0));
     return take_key(v);
 }
-static void test_client_boundary(void)
+static void window_fixtures(void)
 {
     static uint8_t pixels[3][DOSVM_VIDEO_WIDTH * DOSVM_VIDEO_HEIGHT * 4];
     memset(fake_proc, 0, sizeof(fake_proc));
@@ -514,6 +514,11 @@ static void test_client_boundary(void)
     fake_desc[2] = (struct desktop_description){.kind = DESKTOP_SURFACE, .maximum = PROT_READ | PROT_WRITE, .u.surface = &fake_surface[1]};
     fake_desc[3] = (struct desktop_description){.kind = DESKTOP_SURFACE, .maximum = PROT_READ | PROT_WRITE, .u.surface = &fake_surface[2]};
     desc_owner[0] = desc_owner[1] = desc_owner[2] = &fake_proc[0]; desc_owner[3] = &fake_proc[1];
+    fake_current=&fake_proc[0];
+}
+static void test_client_boundary(void)
+{
+    window_fixtures();
     struct ciuki_dosvm_command c, w;
     /* Authority and record validation, each before any reservation. */
     fake_current = &fake_proc[2];
@@ -521,7 +526,7 @@ static void test_client_boundary(void)
     fake_current = 0;
     CHECK(create_window(0, "CiukiDOS", 0) == -EPERM);
     fake_current = &fake_proc[0];
-    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(9, &c, sizeof(c)) == -EINVAL);
+    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(11, &c, sizeof(c)) == -EINVAL);
     c = command_for(0, 0); c.surface_fd = 0; c.name[0] = 'X';
     CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c) - 1) == -EINVAL);
     c.version = 2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EOPNOTSUPP);

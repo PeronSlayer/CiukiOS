@@ -97,7 +97,6 @@ elf_header times 52 db 0
 ph_table times MAX_PH*32 db 0
 cfg_buffer times 512 db 0
 fw_file times 64 db 0
-selector_buffer times 65 db 0
 mode_buffer times 256 db 0
 mode_list times 512 dw 0
 align 8, db 0
@@ -139,4 +138,8 @@ image_padded_end:
 ; them, as the ranking loop always does before reading an entry.
 absolute image_padded_end
 mode_scores resw 512
+; Both input paths initialize every byte covered by their explicit length
+; before selector_validate/accept read it. Keep this scratch out of the fixed
+; 48-sector image so another runtime selector needs no larger boot extent.
+selector_buffer resb 65
 loader_bss_end:

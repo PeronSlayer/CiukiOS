@@ -19,12 +19,14 @@ struct tss {
     uint32_t eax, ecx, edx, ebx, esp, ebp, esi, edi;
     uint32_t es, cs, ss, ds, fs, gs, ldt;
     uint16_t trap, iomap_base;
+    uint8_t io_bitmap[8193]; /* all ports plus mandatory FFh sentinel */
 } __attribute__((packed));
 
 extern struct tss g_tss;
 void gdt_init(void);
 void idt_init(void);
 void tss_set_kernel_stack(uint32_t esp0);
+void arch_vga_io(bool enabled); /* current task only; IOPL remains zero */
 void df_tss_init(uint32_t cr3);
 
 /* f3-04: one GDT slot after the native TLS descriptor (index 7) holds the

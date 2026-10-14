@@ -105,6 +105,7 @@ struct controller {
 };
 struct poll_deadline { uint64_t end; unsigned polls; };
 static struct controller native;
+extern bool dosvm_fullscreen_input(uint16_t,uint16_t,int32_t) __attribute__((weak));
 static unsigned usb_devices;
 void input_devices_snapshot(struct input_devices *out)
 {
@@ -199,10 +200,12 @@ static void queue_resync(struct controller *c, uint64_t tick)
     q->stats.resync++;
     q->stats.state_lost = true;
     q->head = q->tail = q->stats.pending = 0;
+    if (c==&native && dosvm_fullscreen_input) dosvm_fullscreen_input(INPUT_RESYNC,0,0);
     queue_event(c, INPUT_RESYNC, 0, (int32_t)q->stats.buttons, tick, q->stats.overflow);
 }
 static void enqueue(struct controller *c, uint16_t type, uint16_t code, int32_t value, uint64_t tick)
 {
+    if (c==&native && dosvm_fullscreen_input && dosvm_fullscreen_input(type,code,value)) return;
     if (c->queue.stats.pending == INPUT_CAPACITY) queue_resync(c, tick);
     queue_event(c, type, code, value, tick, 0);
 }

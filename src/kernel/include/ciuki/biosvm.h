@@ -32,6 +32,10 @@ int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
  * resources after acceleration stops, then releases on completed calls. */
 int biosvm_video_prepare(void);
 int biosvm_video_switch(uint16_t mode, uint8_t info[256]);
+/* Full-screen transaction, only after LFB revocation. Retains VGA leases;
+ * save/restore VBE state mask 000Fh, bounded private scratch, no guest API. */
+int biosvm_video_fullscreen_begin(uint8_t mode);
+int biosvm_video_fullscreen_end(uint16_t desktop_mode, uint8_t info[256]);
 enum biosvm_backend biosvm_backend_state(void);
 void biosvm_stats(struct v86_stats *out);
 /* RTC service is outside f1-07: supply its validated cache before first use.

@@ -318,3 +318,110 @@ cleanup:
     return !!error;
 }
 CIUKI_F3_PROBE("vm-window", probe_f3_vm_window);
+
+/* f3-20: exercise the real mode/lease transaction, then a paused second
+ * round trip for byte-identical complete screendumps (no masked regions).
+ * Internal state is used only to park the guest for that observation. */
+#include "../vm/dosvm_internal.h"
+#include <ciuki/display.h>
+#define FS_PROBE "vm-fullscreen"
+static int fullscreen_type(struct dosvm *v,const char *text)
+{
+    for (unsigned i=0;text[i];i++) {
+        uint64_t until=deadline_after_ms(10000);
+        while (!dosvm_keyboard(dosvm_key(v),(uint8_t)text[i])) {
+            if (!dosvm_valid(dosvm_key(v)) || deadline_passed(until)) return -EIO;
+            task_sleep_ms(10);
+        }
+        task_sleep_ms(10);
+    }
+    return dosvm_keyboard(dosvm_key(v),0x1C0D) ? 0 : -EIO;
+}
+static int fullscreen_wait(struct dosvm *v,bool active)
+{
+    uint64_t until=deadline_after_ms(10000);
+    while (dosvm_fullscreen_active(dosvm_key(v))!=active) {
+        if (!dosvm_valid(dosvm_key(v)) || deadline_passed(until)) return -EIO;
+        task_sleep_ms(10);
+    }
+    return 0;
+}
+static int probe_f3_vm_fullscreen(void)
+{
+    rec_emit(FS_PROBE,"BEGIN","version=1");
+    int error=0; struct process *desktop=0;
+    struct dosvm *v=0; uint32_t client=0,desktop_pid=0;
+    struct dosvm_ledger before,after; dosvm_snapshot(&before);
+    if ((error=storage_enable_write(storage_get(),2))) goto cleanup_fs;
+    const char *argv[]={"desktop","--test=vm-fullscreen","--launch=dosbox",0};
+    int made=supervisor_spawn("/Programs/desktop",argv,0,true,&desktop);
+    if (made<0) { error=made; goto cleanup_fs; }
+    desktop_pid=desktop->pid;
+    uint64_t until=deadline_after_ms(30000);
+    while (!(v=dosvm_client_first(&client))) {
+        if (!process_live(desktop_pid) || deadline_passed(until)) { error=-EIO; goto cleanup_fs; }
+        task_sleep_ms(10);
+    }
+    v->probe=FS_PROBE;
+    if ((error=video_wait(v,30000,ready_prompt,0))) goto cleanup_fs;
+    if ((error=fullscreen_type(v,"CD \\DOOM"))) goto cleanup_fs;
+    task_sleep_ms(1000);
+    if ((error=fullscreen_type(v,"DOOM.EXE -config CIUKI.CFG -nosound -demo demo1"))) goto cleanup_fs;
+    until=deadline_after_ms(180000);
+    struct dosvm_video_info video;
+    do {
+        if (!dosvm_valid(dosvm_key(v)) || deadline_passed(until)) { error=-EIO; goto cleanup_fs; }
+        dosvm_video_info(dosvm_key(v),&video); task_sleep_ms(10);
+    } while (video.mode!=0x13 || !video.unchained);
+    rec_emit(FS_PROBE,"ARM","action=fullscreen_enter");
+    if ((error=fullscreen_wait(v,true))) goto cleanup_fs;
+    uint64_t started=g_ticks;
+    task_sleep_ms(1000);
+    rec_emit(FS_PROBE,"ARM","action=fullscreen_demo_start");
+    task_sleep_ms(4000);
+    rec_emit(FS_PROBE,"ARM","action=fullscreen_demo_end");
+    while (g_ticks-started<10000) {
+        if (!dosvm_fullscreen_active(dosvm_key(v))) { error=-EIO; goto cleanup_fs; }
+        task_sleep_ms(10);
+    }
+    rec_emit(FS_PROBE,"DATA","case=demo active=1 ms=%u mode=%u",(uint32_t)(g_ticks-started),video.mode);
+    rec_emit(FS_PROBE,"ARM","action=fullscreen_leave");
+    if ((error=fullscreen_wait(v,false))) goto cleanup_fs;
+    /* Pause at the existing worker checkpoint. The first switch ran DOOM;
+     * only this equality observation is frozen, with a fixed desktop clock. */
+    v->fullscreen_suspended=true; dosvm_idle_wake(v);
+    until=deadline_after_ms(3000);
+    while (!v->fullscreen_parked) {
+        if (deadline_passed(until)) { error=-EBUSY; goto cleanup_fs; }
+        task_sleep_ms(1);
+    }
+    task_sleep_ms(2000);
+    rec_emit(FS_PROBE,"ARM","action=fullscreen_before");
+    task_sleep_ms(4000);
+    v->fullscreen_pause=true;
+    if ((error=dosvm_fullscreen_enter(dosvm_key(v)))) goto cleanup_fs;
+    task_sleep_ms(500);
+    if ((error=dosvm_fullscreen_leave(dosvm_key(v),true))) goto cleanup_fs;
+    task_sleep_ms(2000);
+    rec_emit(FS_PROBE,"ARM","action=fullscreen_after");
+    task_sleep_ms(4000);
+    rec_emit(FS_PROBE,"DATA","case=restore active=%u display=%u width=%u height=%u",
+        dosvm_fullscreen_active(dosvm_key(v)),fbdev_get()->present,fbdev_get()->width,fbdev_get()->height);
+cleanup_fs:
+    if (v && dosvm_fullscreen_active(dosvm_key(v))) dosvm_fullscreen_leave(dosvm_key(v),false);
+    if (client) process_remove(0,client);
+    if (desktop_pid) process_remove(proc_supervisor(),desktop_pid);
+    until=deadline_after_ms(10000);
+    do {
+        dosvm_client_poll(); dosvm_snapshot(&after);
+        if (ledger_same(&before,&after)) break;
+        task_sleep_ms(10);
+    } while (!deadline_passed(until));
+    bool restored=ledger_same(&before,&after);
+    if (!restored && !error) error=-ENOMEM;
+    rec_emit(FS_PROBE,"DATA","case=cleanup restored=%u vms=%u tasks=%u pages=%u handles=%u",
+        restored,after.vms,after.tasks,after.pages,after.handles);
+    rec_emit(FS_PROBE,"END","status=%s error=%d",error ? "FAIL" : "PASS",error);
+    return !!error;
+}
+CIUKI_F3_PROBE(FS_PROBE,probe_f3_vm_fullscreen);
