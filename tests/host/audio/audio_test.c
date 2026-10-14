@@ -14,8 +14,9 @@ static uint32_t inl(uint16_t p) { (void)p; return 0; }
 static void outb(uint16_t p, uint8_t v) { (void)p; (void)v; }
 static void outl(uint16_t p, uint32_t v) { (void)p; (void)v; }
 uint64_t ktime_cycles(void) { return g_ticks * 1000; }
-static char audio_log[2048];
+static char audio_log[256]; /* match the production klog record capacity */
 static unsigned audio_log_count;
+static unsigned backend_failure_logs;
 static unsigned analog_warning_logs, response_warning_logs;
 static bool slow_playback_log;
 static bool serial_is_buffered;
@@ -23,6 +24,7 @@ void klog(const char *fmt, ...)
 {
     va_list a; va_start(a, fmt); vsnprintf(audio_log,sizeof(audio_log),fmt,a); va_end(a);
     puts(audio_log); audio_log_count++;
+    if(strstr(audio_log,"backend failure ")) backend_failure_logs++;
     /* A physical polled UART record can take 84 ms (T23 transcript).
      * Let the fake DMA clock observe that delay on the next worker call. */
     if (slow_playback_log && !serial_is_buffered) g_ticks += 84;
@@ -127,6 +129,9 @@ struct mock_hw {
     uint16_t codec[128], posted_reg, posted_value;
     uint8_t civ, piv, cr, lvi;
     uint16_t sr, remaining;
+    uint64_t silence_words;
+    int16_t completed[128];
+    unsigned completed_count;
     bool busy, posted, stuck, reject, stop_stuck;
     bool reset_stuck;
     bool any_pcm; /* the service publishes mixed or silent periods, not test_bdl's marker */
@@ -295,6 +300,30 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
 static uint64_t mock_now(void *cookie) { return ((struct mock_hw *)cookie)->tick; }
 static void mock_sleep(void *cookie,uint32_t ms) { ((struct mock_hw *)cookie)->tick+=ms; }
 static struct mock_hw hw;
+/* ICH/QEMU word-count boundary: CIV stays on LVI at exhaustion, and BUP=0
+ * outputs silence while RUN remains set. IRQ acknowledgement never clears
+ * DCH/CELV. Unlike the old boot fake, this engine cannot run past LVI. */
+static void mock_advance(unsigned words)
+{
+    while ((hw.cr & 1) && words) {
+        if (hw.sr & AC97_DCH) { hw.silence_words += words; return; }
+        CHECK(hw.remaining && hw.remaining <= ac97_units(hw.device));
+        unsigned used = words < hw.remaining ? words : hw.remaining;
+        hw.remaining -= used; words -= used;
+        if (hw.remaining) continue;
+        struct ac97_bd *bd = &hw.device->bdl[hw.civ];
+        CHECK(!(bd->length & (1u << 30))); /* BUP=0, never repeat the last sample */
+        if (hw.completed_count < 128) hw.completed[hw.completed_count] = hw.device->pcm[hw.civ][0].left;
+        hw.completed_count++;
+        if (bd->length & (1u << 31)) hw.sr |= AC97_BCIS;
+        if (hw.civ == hw.lvi) hw.sr |= AC97_DCH | AC97_CELV | AC97_LVBCI;
+        else {
+            hw.civ = (hw.civ + 1) & 31; hw.piv = (hw.civ + 1) & 31;
+            hw.remaining = hw.device->bdl[hw.civ].length & 0xffff;
+            hw.sr &= ~AC97_CELV;
+        }
+    }
+}
 static void hardware_setup(struct ac97_device *d)
 {
     memset(d,0,sizeof(*d));memset(&hw,0,sizeof(hw));hw.device=d;
@@ -598,12 +627,8 @@ static void boot_host_worker(void)
 {
     unsigned elapsed=(unsigned)(g_ticks-boot_host_tick);boot_host_tick=g_ticks;hw.tick=g_ticks;
     if(ac97.running) {
-        unsigned samples=elapsed*96;
-        while(samples>=hw.remaining) {
-            samples-=hw.remaining;hw.civ=(hw.civ+1)%32;hw.piv=(hw.civ+1)%32;hw.remaining=512;
-            hw.sr|=AC97_BCIS;CHECK(ac97_irq(11,"ac97"));
-        }
-        hw.remaining-=samples;
+        mock_advance(elapsed*96);
+        if (hw.sr & (AC97_BCIS | AC97_LVBCI)) CHECK(ac97_irq(11,"ac97"));
     }
     audio_service();
     if (slow_playback_log && audio.running && !boot_traffic_logged) {
@@ -684,7 +709,7 @@ static void test_cursor_handoff(void)
     struct ac97_device d; hardware_setup(&d);
     d.running=true; d.published=160; d.retired=152; d.last_progress=hw.tick;
     d.generation_fetched=152*AUDIO_QUANTUM+200; d.fetched=d.generation_fetched;
-    hw.cr=1; hw.sr=0; hw.civ=24; hw.piv=25; hw.remaining=0;
+    hw.cr=1; hw.sr=0; hw.civ=24; hw.piv=25; hw.lvi=31; hw.remaining=0;
     uint64_t fetched=d.fetched;
     CHECK(ac97_progress(&d)==-EAGAIN && d.fetched==fetched && d.retired==152);
     /* PICB reloads before CIV changes, another documented handoff sample. */
@@ -695,7 +720,7 @@ static void test_cursor_handoff(void)
     /* Ring wrap: zero PICB with a new CIV must not commit a full buffer. */
     d.retired=159; d.published=167; d.generation_fetched=159*AUDIO_QUANTUM+200;
     d.fetched=d.generation_fetched; d.last_progress=hw.tick;
-    hw.civ=0; hw.piv=1; hw.remaining=0; fetched=d.fetched;
+    hw.civ=0; hw.piv=1; hw.lvi=6; hw.remaining=0; fetched=d.fetched;
     CHECK(ac97_progress(&d)==-EAGAIN && d.retired==159 && d.fetched==fetched);
     hw.remaining=448; hw.tick++;
     CHECK(!ac97_progress(&d) && d.retired==160 && d.generation_fetched==160*AUDIO_QUANTUM+32);
@@ -860,7 +885,7 @@ static void test_idle_tail_drain(void)
     CHECK(!audio.error && audio.ready && !audio.running && !ac97.running && !ac97.published && ac97.frame_base==audio.output);
     transport_restart();
     /* Halted at the last period (underrun) when a VM sound arrives in the same service. */
-    hw.civ=7;hw.piv=8;hw.remaining=0;hw.sr=AC97_DCH;hw.tick+=50;g_ticks+=50;
+    hw.civ=7;hw.piv=8;hw.remaining=0;hw.sr=AC97_DCH|AC97_CELV;hw.tick+=50;g_ticks+=50;
     vm_active_hook=true;audio_service();
     printf("idle tail halted, source arriving: error=%d ready=%u running=%u published=%llu halts=%llu\n",audio.error,audio.ready,
            audio.running,(unsigned long long)ac97.published,(unsigned long long)audio.halts);
@@ -890,7 +915,7 @@ static void test_idle_tail_cursor_error(void)
      * still queued. Invalid CIV cannot establish that it was fetched. */
     ac97.touched=true;
     if(fault==0 || fault==4) hw.bad_civ_reads=2;
-    if(fault==1) hw.piv=3;
+    if(fault==1) hw.piv=32;
     if(fault==2) ac97.generation_fetched=AUDIO_QUANTUM+200;
     if(fault==3) hw.tick=ac97.last_progress+101;
     g_ticks++; audio_service();
@@ -1019,6 +1044,7 @@ static void test_persistence(void)
     puts("audio settings: defaults, public refusal/delegation, alternating durable records and applied-unsaved/last saved restoration PASS");
 }
 #include "second_set_test.inc"
+#include "late_refill_test.inc"
 int main(int argc,char **argv)
 {
     CHECK(argc==3);ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);
@@ -1028,7 +1054,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_stream_syscalls();test_persistence();test_second_set();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_stream_syscalls();test_persistence();test_second_set();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

@@ -10,7 +10,7 @@ struct audio_transport {
     uint64_t fifo_errors, dma_halts, deadline_misses, irqs;
     uint32_t codec_id, rate;
     uint16_t power, master, pcm_volume, remaining, status;
-    uint8_t slot, irq, prefetch;
+    uint8_t slot, irq, prefetch, lvi;
     bool ready, running, quarantine, idle_tail, tail_drained;
 };
 struct audio_dma_device;

@@ -13,7 +13,7 @@
 struct audio_frame { int16_t left, right; };
 /* Refill lead policy of audio_service (audio_dev.c): returns the periods kept
  * published and sets *limit to the most one service publishes. Active
- * sources keep AUDIO_LEAD, one period per service; the idle tail (silence
+ * sources restore AUDIO_LEAD in a bounded burst after a late service; the idle tail (silence
  * only) is cushioned to AUDIO_TAIL_LEAD in one burst at its start (QEMU
  * evidence 2026-10-11: the worker is not scheduled for ~130 ms while native
  * clients exit), except while a DOS VM source is attached: a VM plays on its
@@ -27,7 +27,7 @@ struct audio_frame { int16_t left, right; };
 static inline unsigned audio_refill_lead(bool active, bool tail_start, bool vm_attached, unsigned *limit)
 {
     unsigned tail = vm_attached ? AUDIO_LEAD : AUDIO_TAIL_LEAD;
-    *limit = tail_start ? tail : 1u;
+    *limit = active ? AUDIO_LEAD : tail_start ? tail : 1u;
     return active ? AUDIO_LEAD : tail;
 }
 struct audio_stream {
