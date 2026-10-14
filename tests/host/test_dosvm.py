@@ -8,6 +8,8 @@ import json
 import re
 from pathlib import Path
 import struct
+import shutil
+import tempfile
 import sys
 import unittest
 
@@ -18,6 +20,36 @@ from evidence import EvidenceError
 
 
 class DosVMTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('nasm'), 'requires nasm')
+    def test_generated_dos_idle_calls(self):
+        """Assemble the canonical DOS personality, never the floppy profile.
+
+        Check actual bytes and relative CALL destinations, so a source-only
+        idle routine excluded from the payload cannot satisfy this test.
+        """
+        spec = importlib.util.spec_from_file_location('idle_dos_builder', ROOT / 'scripts/build_dos_image.py')
+        builder = importlib.util.module_from_spec(spec); spec.loader.exec_module(builder)
+        scratch = ROOT / 'build/host'; scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='dos-idle-', dir=scratch) as folder:
+            kernel = builder.assemble('src/runtime/ciukidos.asm', Path(folder) / 'CIUKIDOS.SYS',
+                                      {**builder.GEOMETRY, **builder.PERSONALITY})
+            command = builder.assemble('src/com/shell.asm', Path(folder) / 'COMMAND.COM', {'COMMAND_COMPAT': 1})
+        idle_prefix = bytes.fromhex('9c 50 fb cd28 b88016 cd2f b401 cd16')
+        idle = kernel.index(idle_prefix)
+        self.assertEqual(kernel.count(idle_prefix), 1)
+        # Conditional key recheck skips STI/HLT; AX/FLAGS are restored.
+        self.assertEqual(kernel[idle + len(idle_prefix):idle + len(idle_prefix) + 7],
+                         bytes.fromhex('7502 fb f4 58 9d c3'))
+        reader = kernel.index(bytes.fromhex('b401 cd16 7505 e8'))
+        call = reader + 6
+        self.assertEqual(call + 3 + struct.unpack_from('<h', kernel, call + 1)[0], idle)
+        # 01h, 07h/08h and 0Ah all call the emitted reader.
+        calls = [i for i, b in enumerate(kernel[:-2]) if b == 0xe8 and
+                 (i + 3 + struct.unpack_from('<h', kernel, i + 1)[0]) & 0xffff == reader]
+        self.assertGreaterEqual(len(calls), 3)
+        prompt = command.index(bytes.fromhex('cd28 b88016 cd2f b401 cd16'))
+        self.assertEqual(command[prompt + 11:prompt + 15], bytes.fromhex('7502 fb f4'))
+
     def test_selector_and_prerequisites(self):
         self.assertEqual(runner.selector('f3:vm-boot run=Ab12cD34')['phase'], 3)
         # The platform override is the e500 twin's selector, as for F1/F2 (lead,

@@ -31,6 +31,9 @@
 #define DOSVM_HEARTBEAT_LIMIT 60u
 #define DOSVM_PIC_STALL_TICKS 1000u
 #define DOSVM_PIC_STALL_LIMIT 32u
+#define DOSVM_IDLE_POLLS 8u
+#define DOSVM_IDLE_WINDOW 10u
+enum dosvm_idle_reason { DOSVM_IDLE_2F, DOSVM_IDLE_28, DOSVM_IDLE_16, DOSVM_IDLE_HLT, DOSVM_IDLE_REASONS };
 #include "dosvm_memory.h"
 #include "dpmi_internal.h"
 enum dosvm_trace_kind { DOSVM_TRACE_VECTOR, DOSVM_TRACE_PIT, DOSVM_TRACE_IRQ0,
@@ -51,6 +54,7 @@ struct dosvm_perf_sample {
     uint64_t guest_us, monitor_us, present_us, log_us, edges, insn[V86_INSNS];
     uint32_t cost_count[DOSVM_COST_COUNT], batched;
     uint64_t cost_us[DOSVM_COST_COUNT];
+    uint32_t idle_blocks, idle_reasons, idle_count[DOSVM_IDLE_REASONS], busy_permille;
 };
 struct dosvm {
     struct dosvm_info info;
@@ -71,6 +75,15 @@ struct dosvm {
     bool pointer_known;
     uint32_t continuation;
     struct kwait wake;
+    struct {
+        bool sleeping, seen;
+        uint64_t last_tick, poll_tick;
+        uint32_t events, blocks, reasons, count[DOSVM_IDLE_REASONS], polls, busy_permille;
+        /* Observe the real INT 16h return, including guest IVT hooks. Fixed
+         * depth; excess nesting simply does not participate in detection. */
+        struct { uint32_t cs, ip, ss, sp; bool pm; } poll[4];
+        unsigned depth;
+    } idle;
     /* Private-disk gate for the sector index and each VFS seek/transfer
      * pair. A kwait gate, not a kmutex: the VFS and ATA mutexes it nests
      * have lower addresses than this slot, which the address-ordered mutex
@@ -128,6 +141,7 @@ struct dosvm {
         uint64_t last_guest, last_monitor, last_present, last_log, last_edges;
         uint64_t last_insn[V86_INSNS];
         uint32_t sample_count;
+        uint32_t last_idle_blocks, last_idle_count[DOSVM_IDLE_REASONS];
         struct dosvm_perf_sample sample[16]; /* last sixteen complete intervals */
     } perf;
     /* Owner-armed command launch. The prompt never arms this gate. */
@@ -226,6 +240,7 @@ int dosvm_io(void *, uint16_t, unsigned, bool, uint32_t *);
 void dosvm_putchar(struct dosvm *, uint8_t, uint8_t);
 int dosvm_wait(struct dosvm *, bool keyboard, uint64_t deadline);
 void dosvm_input_poll(struct dosvm *);
+void dosvm_idle_wake(struct dosvm *);
 int dosvm_keyboard_refresh(struct dosvm *);
 static inline const char *dosvm_probe(const struct dosvm *v)
 { return v->probe ? v->probe : "vm-boot"; }

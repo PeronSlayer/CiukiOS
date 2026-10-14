@@ -243,9 +243,10 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
                  * re-executes its own INT FEh at F000:0160 with the guest's
                  * IF set: the IRQ is delivered first, the guest INT 9 (ROM or
                  * DOS/TSR hook) fills the buffer, and the retried read takes
-                 * the key. Kernel typing (dosvm_keyboard) fills the buffer
-                 * directly and never needs this. */
-                if (!v->key_count && dosvm_kbd_irq_ready(v)) {
+                 * the key. Timer/device/presentation wakes also retry with
+                 * IF set so a guest timer handler runs even without input.
+                 * Kernel typing fills the BIOS buffer directly. */
+                if (!v->key_count) {
                     v->monitor.vif = true;
                     f->tf.eip -= 2;
                     return 0;
@@ -289,8 +290,10 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
             low(&f->tf.edx, ((uint16_t)bcd(month) << 8) | bcd(day)); carry(f, false); return 0;
         }
         ah(f, 0x86); carry(f, true); return 0;
+    case 0x28: return 0; /* DOS idle callout: the default handler preserves all registers */
     case 0x2F:
-        if (ax == 0x1687) low(&f->tf.eax, 0xFFFF); /* DPMI not implemented/advertised */
+        if (ax == 0x1680) f->tf.eax &= ~255u; /* supported; slice released at INT reflection */
+        else if (ax == 0x1687) low(&f->tf.eax, 0xFFFF); /* DPMI not implemented/advertised */
         else if (ax == 0x1686) low(&f->tf.eax, 1);
         else if (ax == 0x4300) f->tf.eax = (f->tf.eax & ~255u) | 0x80;
         else if (ax == 0x4310) { f->es=VM_XMS_SEG; low(&f->tf.ebx,0); }

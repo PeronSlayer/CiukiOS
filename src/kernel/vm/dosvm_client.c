@@ -236,6 +236,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 v->video_presented = false;
             }
         } else if (op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS) {
+            if (v->idle.sleeping) dosvm_idle_wake(v);
             e = dosvm_vga_present(v, put_row, b->surface, g_ticks, &c.damage);
             if (e >= 0) {
                 c.changed = (uint32_t)e; e = 0; video_mode(v, &c);

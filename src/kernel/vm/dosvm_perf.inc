@@ -62,6 +62,17 @@ void dosvm_perf_report(struct dosvm *v)
         .present_us = perf_us(DELTA(present_cycles, last_present)), .edges = edges - v->perf.last_edges
     };
     s->batched = DELTA(batched, last_batched);
+    s->idle_blocks = v->idle.blocks - v->perf.last_idle_blocks;
+    v->perf.last_idle_blocks = v->idle.blocks;
+    s->idle_reasons = 0;
+    for (unsigned i = 0; i < DOSVM_IDLE_REASONS; i++) {
+        s->idle_count[i] = v->idle.count[i] - v->perf.last_idle_count[i];
+        v->perf.last_idle_count[i] = v->idle.count[i];
+        if (s->idle_count[i]) s->idle_reasons |= 1u << i;
+    }
+    uint64_t wall_us = (uint64_t)s->ms * 1000u;
+    uint64_t busy = wall_us ? (s->guest_us + s->monitor_us) * 1000u / wall_us : 0;
+    s->busy_permille = v->idle.busy_permille = busy < 1000 ? (uint32_t)busy : 1000;
     v->perf.last_batched = v->perf.batched;
     for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) {
         s->cost_count[i] = v->perf.cost_count[i] - v->perf.last_cost_count[i];
@@ -127,9 +138,12 @@ void dosvm_perf_dump(struct dosvm *v)
         rec_diag(dosvm_probe(v), "group=vm_perf_cpu vm=%u n=%u guest_us=%llu monitor_us=%llu log_us=%llu trapped=%u",
             id, n+1, s->guest_us, s->monitor_us, s->log_us, s->trapped);
         uint64_t wall_us = (uint64_t)s->ms * 1000u;
-        rec_diag(dosvm_probe(v), "group=vm_perf_share vm=%u n=%u wall_us=%llu vm_permille=%llu guest_permille=%llu",
+        rec_diag(dosvm_probe(v), "group=vm_perf_share vm=%u n=%u wall_us=%llu vm_permille=%llu guest_permille=%llu idle_blocks=%u idle_reasons=%x busy_permille=%u",
             id, n+1, wall_us, wall_us ? (s->guest_us + s->monitor_us) * 1000u / wall_us : 0,
-            wall_us ? s->guest_us * 1000u / wall_us : 0);
+            wall_us ? s->guest_us * 1000u / wall_us : 0, s->idle_blocks, s->idle_reasons, s->busy_permille);
+        rec_diag(dosvm_probe(v), "group=vm_idle_counts vm=%u n=%u int2f1680=%u int28=%u int16=%u hlt=%u",
+            id, n+1, s->idle_count[DOSVM_IDLE_2F], s->idle_count[DOSVM_IDLE_28],
+            s->idle_count[DOSVM_IDLE_16], s->idle_count[DOSVM_IDLE_HLT]);
         rec_diag(dosvm_probe(v), "group=vm_perf_rate vm=%u n=%u frames_mfps=%llu flips_mfps=%llu harvests_ps=%llu batched=%u",
             id, n+1, s->ms ? (uint64_t)s->frames * 1000000u / s->ms : 0,
             s->ms ? (uint64_t)s->flips * 1000000u / s->ms : 0,
