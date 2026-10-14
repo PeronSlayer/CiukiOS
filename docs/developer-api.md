@@ -2372,6 +2372,18 @@ optional GFX_FRAME replacement attachment
 
 ```c
 uint64_t completed_ns, next_frame_ns;
+    uint32_t timing_serial,render_us,submit_us,wait_us;
+```
+
+optional 84-byte FRAME
+
+```c
+uint64_t convert_ns,copy_ns,slot_ns,refresh_ns;
+```
+
+optional 64-byte PRESENTED
+
+```c
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);
