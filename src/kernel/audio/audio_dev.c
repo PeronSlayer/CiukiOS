@@ -8,6 +8,8 @@
 #include <ciuki/files.h>
 #include <ciuki/signal.h>
 #include <ciuki/timing.h>
+#include <ciuki/thinkpad_ec.h>
+#include "../../../sdk/sysroot-overlay/include/ciuki/audio_preference.h"
 static struct vfs *settings_vfs;
 static struct kmutex control_lock;
 static struct vfs_table settings_table; /* bounded, never on a kernel stack */
@@ -43,7 +45,8 @@ void audio_settings_load(struct vfs *v)
 {
     settings_vfs = v;
     saved_sequence = 0; saved_slot = 0;
-    audio.master = (struct ciuki_mixer_master){ .version=1, .size=32, .left=50, .right=50 };
+    audio.master = (struct ciuki_mixer_master){ .version=1, .size=32,
+        .left=CIUKI_MASTER_DEFAULT, .right=CIUKI_MASTER_DEFAULT };
     audio.settings_reason = "missing";
     if (!v || !v->volumes[2]) { audio.settings_reason = "storage_absent"; return; }
     int err = vfs_table_init(v, &settings_table, 2);
@@ -63,6 +66,7 @@ void audio_settings_load(struct vfs *v)
         }
     } else if (fd != -FS_ENOENT) audio.settings_reason = "read_failed";
     vfs_table_destroy(&settings_table);
+    if (audio_registry_load(v, &audio.master)) audio.settings_reason = "registry";
 }
 static int save_master(void)
 {
@@ -94,7 +98,9 @@ int audio_master_set(struct ciuki_mixer_master *m)
 {
     if (m->left > 100 || m->right > 100 || m->mute > 1 || m->save_state || m->save_error) return -EINVAL;
     kmutex_lock(&control_lock);
-    int err = audio.ready ? audio_backend_master(m) : 0;
+    int err = audio.master_in_hardware ? thinkpad_ec_master_set(m) : 0;
+    if (err) { kmutex_unlock(&control_lock); return err; }
+    err = audio.ready ? audio_backend_master(m) : 0;
     if (err) { audio_fail(-EIO); kmutex_unlock(&control_lock); return -EIO; }
     audio.master = *m;
     err = save_master();
@@ -103,6 +109,21 @@ int audio_master_set(struct ciuki_mixer_master *m)
     *m = audio.master;
     kmutex_unlock(&control_lock);
     return 0;
+}
+void audio_master_refresh(void)
+{
+    kmutex_lock(&control_lock);
+    struct ciuki_mixer_master m = audio.master;
+    int changed = thinkpad_ec_master_poll(&m);
+    if (changed > 0) {
+        int err = audio.ready ? audio_backend_master(&m) : 0;
+        if (err) audio_fail(-EIO);
+        else {
+            m.save_state = CIUKI_MIXER_UNSAVED; m.save_error = 0;
+            audio.master = m;
+        }
+    } else if (changed < 0) klog("[ec] thinkpad disabled error=%d", changed);
+    kmutex_unlock(&control_lock);
 }
 static uint64_t idle_since; /* tick of the first idle service, 0 while a source is active */
 static bool first_playback;
@@ -364,11 +385,10 @@ static struct audio_frame boot_pcm[AUDIO_QUANTUM];
 static void audio_boot_tone(void)
 {
     if (!audio_boot_tone_enabled(g_boot.flags) || !audio.ready) return;
-    struct ciuki_mixer_master saved_master = audio.master;
-    struct ciuki_mixer_master test = { .version=1, .size=32, .left=50, .right=50 };
-    int err = audio_backend_master(&test);
+    /* The boot tone uses the same configured master as every UI sound. */
+    int err = 0;
     struct audio_stream *s = 0;
-    if (!err) { audio.master = test; err = audio_stream_open(&s); }
+    err = audio_stream_open(&s);
     uint64_t limit = deadline_after_ms(3000);
     unsigned sent = 0;
     if (s) { s->draining = true; s->drain_goal = AUDIO_RATE; }
@@ -393,13 +413,7 @@ static void audio_boot_tone(void)
     if (!err) task_sleep_ms(audio.caps.drain_ms);
     if (s) audio_stream_close(s);
     playback_log(err != 0);
-    /* The diagnostic tone must not rewrite AUDIO.CFG. */
-    kmutex_lock(&control_lock);
-    int restore = audio.ready ? audio_backend_master(&saved_master) : 0;
-    audio.master = saved_master;
-    if (restore) { audio_fail(-EIO); audio_backend_shutdown(); }
-    kmutex_unlock(&control_lock);
-    klog("[audio] boot_tone=1khz frames=%u result=%d restore=%d", sent, err, restore);
+    klog("[audio] boot_tone=1khz frames=%u result=%d restore=0", sent, err);
 }
 static void audio_init_log(int err)
 {
@@ -423,6 +437,7 @@ void audio_init(struct vfs *v)
     kwait_init(&audio.changed); kmutex_init(&control_lock);
     audio_settings_load(v);
     if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
+    thinkpad_ec_init();
     int err = audio_backend_init();
     audio.init_error = err;
     audio_init_log(err);
@@ -434,6 +449,7 @@ void audio_init(struct vfs *v)
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
+    thinkpad_ec_start();
     audio_boot_tone();
 }
 int audio_device_open(struct file_description *d, uint32_t flags)

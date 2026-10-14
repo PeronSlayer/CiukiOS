@@ -111,6 +111,7 @@ struct desk_box desk_shell_clock_box(const struct desktop *);
 void desk_shell_clock_text_at(const struct desktop *, uint64_t, char *, size_t);
 int desk_shell_clock_width_at(const struct desktop *, uint64_t);
 void desk_shell_tray_damage(struct desktop *, int previous_width);
+void desk_shell_volume_damage(struct desktop *);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);
 int desk_internal_open(struct desktop *, int kind);

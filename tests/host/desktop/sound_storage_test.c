@@ -32,5 +32,19 @@ int main(int argc,char **argv)
     strcpy(s.file[SOUND_ERROR],"../escape.wav");generation=reg_generation(r);
     assert(sound_save_at(&s,argv[1])==-1 && errno==EINVAL && reg_generation(r)==generation);
     reg_close_root(r);
+    r=reg_open_root_at("System",argv[1]);assert(r);
+    assert(!reg_set_string(r,"System\\Identity","Name","CiukiOS"));generation=reg_generation(r);
+    assert(!master_preference_save(argv[1],20,20,0)&&reg_generation(r)==generation+1);
+    int32_t packed;unsigned left,right,mute;
+    assert(!reg_get_int32(r,CIUKI_MASTER_KEY,CIUKI_MASTER_VALUE,&packed));
+    assert(ciuki_master_unpack(packed,&left,&right,&mute)&&left==20&&right==20&&!mute);
+    assert(!master_preference_save(argv[1],25,75,1));
+    assert(!reg_get_int32(r,CIUKI_MASTER_KEY,CIUKI_MASTER_VALUE,&packed));
+    assert(ciuki_master_unpack(packed,&left,&right,&mute)&&left==25&&right==75&&mute);
+    size=sizeof(value);assert(!reg_get_string(r,"System\\Identity","Name",value,&size)&&!strcmp(value,"CiukiOS"));
+    generation=reg_generation(r);assert(master_preference_save(argv[1],101,20,0)==-1&&errno==EINVAL&&reg_generation(r)==generation);
+    assert(master_preference_save(argv[1],20,20,2)==-1&&errno==EINVAL);
+    assert(!ciuki_master_unpack(-1,&left,&right,&mute)&&!ciuki_master_unpack(131072,&left,&right,&mute));
+    reg_close_root(r);
     puts("PASS sound storage: shipped/legacy/registry precedence, no writes on load, one durable merge, unrelated keys, invalid paths/volume");
 }

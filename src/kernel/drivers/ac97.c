@@ -195,7 +195,8 @@ static int master_until(struct ac97_device *d, const struct ciuki_mixer_master *
 {
     uint16_t mute = (m->mute || (!m->left && !m->right)) ? 0x8000 : 0;
     uint16_t volume = mute;
-    if (!d->software_master) volume |= attenuation(m->left) << 8 | attenuation(m->right);
+    if (!d->software_master && !audio.master_in_hardware)
+        volume |= attenuation(m->left) << 8 | attenuation(m->right);
     int err = codec_update(d, 0x18, d->pcm_unity | mute, 0x9f1f, true, limit);
     if (!err) err = codec_update(d, 0x02, volume, 0x9f1f, true, limit);
     if (!err && (d->codec_caps & 0x10)) err = codec_update(d, 0x04, volume, 0x9f1f, true, limit);

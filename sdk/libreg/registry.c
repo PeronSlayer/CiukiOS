@@ -1,12 +1,14 @@
 /* SPDX-License-Identifier: MIT */
 #define _POSIX_C_SOURCE 200809L
 #include "internal.h"
+#ifndef CIUKI_REG_PARSE_ONLY
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#endif
 #include "casefold.h"
 
 int reg_fail(int error) { errno = error; return -1; }
@@ -152,6 +154,7 @@ static void append(struct buffer *b, const char *s, size_t n)
     memcpy(b->s + b->n, s, n); b->n += n; b->s[b->n] = 0;
 }
 static void add(struct buffer *b, const char *s) { append(b, s, strlen(s)); }
+#ifndef CIUKI_REG_PARSE_ONLY
 static void quote(struct buffer *b, const char *s)
 {
     add(b, "\"");
@@ -198,6 +201,7 @@ char *reg_serialise(struct rt *t, const char *branch, size_t *size)
     if (b.error) { free(b.s); reg_fail(b.error); return NULL; }
     *size = b.n; return b.s;
 }
+#endif
 static char *trim(char *s)
 {
     while (*s == ' ' || *s == '\t' || *s == '\r') s++;
@@ -312,6 +316,7 @@ struct rt *reg_parse(const char *root, const char *text, size_t size)
 invalid: reg_fail(EINVAL);
 failed: { int e = errno; free(comments.s); reg_tree_free(t); free(copy); errno = e; return NULL; }
 }
+#ifndef CIUKI_REG_PARSE_ONLY
 static char *root_file(struct reg_root *r)
 {
     size_t n = strlen(r->directory) + strlen(r->name) + 7; char *p = malloc(n);
@@ -535,3 +540,4 @@ int reg_import(struct reg_root *r, const char *path)
     }
     reg_tree_free(imported); return result ? -1 : reg_commit(r, r->tree, g);
 }
+#endif /* CIUKI_REG_PARSE_ONLY */

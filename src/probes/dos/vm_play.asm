@@ -5,7 +5,7 @@
 ; Stages: 1 detection and CT1745 levels at 0 dB; 2 the f4-05 regression, a
 ; 64-unit 8-bit auto-init double buffer at 8000 Hz over 2048 units (32 blocks,
 ; ISR refill, DAh from the ISR); 3 16-bit signed stereo auto-init at 12000 Hz
-; with voice at level 25 (-12 dB); 4 OPL2 440 Hz note; 5 OPL3 (NEW) 880 Hz
+; with voice at level 25 (Ciuki linear 25/31); 4 OPL2 440 Hz note; 5 OPL3 (NEW) 880 Hz
 ; note routed to the left output only; 6 restore IVT/IMR and return to DOS.
 ; DSP/DMA/ISR routines are those of vm_audio.asm (f3-05), unchanged.
 ; Wait loops test their condition with IF clear and sleep with STI;HLT.
@@ -689,7 +689,7 @@ stage2:                         ; the f4-05 regression: 64-unit auto-init double
     call wait_irqs
     ret
 
-stage3:                         ; 16-bit signed stereo at 12000 Hz, voice at level 25 (-12 dB)
+stage3:                         ; 16-bit signed stereo at 12000 Hz, voice at level 25 (Ciuki linear 25/31)
     mov ax, 32C8h               ; kept after the stage: the mixer renders ~56 ms behind
     call mixer_write            ; the VM and reads the CT1745 levels when it renders
     mov ax, 33C8h

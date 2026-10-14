@@ -9,6 +9,8 @@
 #include <ciuki/probe.h>
 #include <ciuki/audio.h>
 #include <ciuki/audio_vm.h>
+#include <ciuki/audio_backend.h>
+#include <ciuki/thinkpad_ec.h>
 #include <ciuki/ac97.h>
 #include <ciuki/dosvm.h>
 #include <ciuki/dosvm_audio.h>
@@ -113,6 +115,11 @@ static void block_check(const struct audio_vm_stats *st, bool wide, uint32_t cou
     }
 }
 
+static int probe_vm_master(struct ciuki_mixer_master *m)
+{
+    int err = audio.master_in_hardware ? thinkpad_ec_master_set(m) : 0;
+    return err ? err : audio_backend_master(m);
+}
 static int probe_vm_audio(void)
 {
     rec_emit(VP, "BEGIN", "probe_version=1 build_id=%s", CIUKI_BUILD_ID);
@@ -129,6 +136,15 @@ static int probe_vm_audio(void)
         rec_emit(VP, "READY", "case=backend status=not_run reason=%s", reason);
         rec_emit(VP, "ERROR", "status=not_run reason=%s", reason); return 0;
     }
+    /* Runtime fixture level, like the native audio probe. Never persist a
+     * test setting; normal boot retains its 20%/saved preference. */
+    struct ciuki_mixer_master saved_master = audio.master;
+    struct ciuki_mixer_master fixture_master = {.version=1,.size=32,.left=50,.right=50};
+    if (probe_vm_master(&fixture_master)) {
+        (void)probe_vm_master(&saved_master);
+        rec_emit(VP, "END", "status=FAIL error=%d", -EIO); return 1;
+    }
+    audio.master = fixture_master;
     rec_emit(VP, "DATA", "case=identity vendor=%04x device=%04x codec=%08x generation=%u",
              audio.caps.vendor, audio.caps.device, audio.caps.codec_id, audio.caps.generation);
     rec_emit(VP, "DATA", "case=transport accepted_rate=%u period_frames=%u published_periods=%u latency_frames=%u master_left=%u master_right=%u mute=%u",
@@ -173,14 +189,14 @@ static int probe_vm_audio(void)
              stats.starved - before.starved, stats.pcm_frames - before.pcm_frames);
     if (!ok) { error = -EFAULT; goto cleanup; }
 
-    /* 3. 16-bit signed stereo at 12000 Hz, voice at -12 dB: 8 blocks of 64 frames. */
+    /* 3. 16-bit signed stereo at 12000 Hz, voice 25/31: 8 blocks of 64 frames. */
     audio_vm_tap_reset(key); audio_vm_stats(key, &before);
     if ((error = play_command(v, 3)) || (error = play_stage(v, 3, &m, 10000))) goto cleanup;
     play_rendered(key, 8, &stats); audio_vm_ring(&ring_tap);
     block_check(&stats, true, 8, 64, &fresh, &repeats, &gaps);
-    /* -12 dB = Q16 16462: 0711h -> 454, NOT 0711h (-1810) -> -455 (arithmetic shift). */
+    /* Q16 52851: 0711h -> 1458, NOT 0711h (-1810) -> -1460 (arithmetic shift). */
     ok = m.irqs == 8 && !m.isrbad && stats.log_count == 8 && fresh == 8 && !repeats && !gaps &&
-         stats.pcm.frames == 2048 && stats.pcm.peak[0] == 454 && stats.pcm.peak[1] == 455 &&
+         stats.pcm.frames == 2048 && stats.pcm.peak[0] == 1458 && stats.pcm.peak[1] == 1460 &&
          stats.late_frames == before.late_frames;
     rec_emit(VP, "DATA", "case=pcm16 ok=%u irqs=%u blocks=%u fresh=%u repeats=%u seq_gaps=%u frames=%llu peak_l=%u peak_r=%u digest=%08x ring_digest=%08x",
              ok, m.irqs, stats.log_count, fresh, repeats, gaps, stats.pcm.frames, stats.pcm.peak[0], stats.pcm.peak[1],
@@ -239,6 +255,8 @@ cleanup:
                  restored, detached, final.vms, final.pages, final.devices, pages, audio.commitment_pages);
         if ((!restored || !detached || pages != audio.commitment_pages) && !error) error = -ENOMEM;
     }
+    if (probe_vm_master(&saved_master) && !error) error = -EIO;
+    audio.master = saved_master;
     rec_emit(VP, "END", "status=%s error=%d", error ? "FAIL" : "PASS", error);
     return error ? 1 : 0;
 }

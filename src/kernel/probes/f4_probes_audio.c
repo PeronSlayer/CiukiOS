@@ -5,6 +5,7 @@
 #include <ciuki/audio.h>
 #include <ciuki/ac97.h>
 #include <ciuki/audio_backend.h>
+#include <ciuki/thinkpad_ec.h>
 #include <ciuki/process.h>
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
@@ -34,6 +35,11 @@ static int tone_spawn(unsigned channel, struct process **out)
     if (!err) err = ua_write((*out)->memory, RESULT, &channel, sizeof(channel));
     return err;
 }
+static int probe_audio_master(struct ciuki_mixer_master *m)
+{
+    int err=audio.master_in_hardware ? thinkpad_ec_master_set(m) : 0;
+    return err ? err : audio_backend_master(m);
+}
 static int probe_audio_native(void)
 {
     const char *name = "audio-native";
@@ -60,6 +66,15 @@ static int probe_audio_native(void)
         rec_emit(name, "READY", "case=backend status=not_run reason=%s", audio.reason ? audio.reason : "device_absent");
         rec_emit(name, "ERROR", "status=not_run reason=%s", audio.reason ? audio.reason : "device_absent"); return 0;
     }
+    /* Keep the established WAV fixture at 50%, independently of the user's
+     * boot preference; this runtime test setting is never persisted. */
+    struct ciuki_mixer_master saved_master=audio.master;
+    struct ciuki_mixer_master fixture_master={.version=1,.size=32,.left=50,.right=50};
+    if (probe_audio_master(&fixture_master)) {
+        (void)probe_audio_master(&saved_master);
+        rec_emit(name,"END","status=FAIL error=%d",-EIO);return 1;
+    }
+    audio.master=fixture_master;
     struct audio_transport transport; audio_backend_snapshot(&transport);
     rec_emit(name, "DATA", "case=identity vendor=%04x device=%04x subsystem=%08x revision=%u codec=%08x generation=%u irq=%u",
         audio.caps.vendor, audio.caps.device, audio.caps.subsystem, audio.caps.revision, audio.caps.codec_id, audio.caps.generation, transport.irq);
@@ -127,6 +142,8 @@ static int probe_audio_native(void)
         audio.max_service_us, audio.max_irq_us, audio.max_service_gap_us, audio.max_control_us);
     rec_emit(name, "DATA", "case=cleanup before_pages=%u after_pages=%u", baseline, audio.commitment_pages);
     if (audio.fifo || audio.halts || audio.deadlines || audio.quarantined || baseline != audio.commitment_pages) err = -EIO;
+    if (probe_audio_master(&saved_master) && !err) err=-EIO;
+    audio.master=saved_master;
     rec_emit(name, "END", "status=%s", err ? "FAIL" : "PASS");
     return err ? 1 : 0;
 }

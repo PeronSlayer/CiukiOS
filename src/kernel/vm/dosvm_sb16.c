@@ -335,7 +335,8 @@ static void sb_advance(struct dosvm *v)
 static void sb_mixer_reset(struct dosvm_sb16 *s)
 {
     memset(s->mixer, 0, sizeof(s->mixer));
-    for (unsigned i = 0x30; i <= 0x35; i++) s->mixer[i] = 24u << 3; /* -14 dB */
+    /* Emulator reset policy: unity master/PCM/FM/CD (F4-18 research). */
+    for (unsigned i = 0x30; i <= 0x37; i++) s->mixer[i] = 31u << 3;
     s->mixer[0x3C] = 0x1F; s->mixer[0x3D] = 0x15; s->mixer[0x3E] = 0x0B;
     for (unsigned i = 0x44; i <= 0x47; i++) s->mixer[i] = 0x80;     /* 0 dB tone */
 }
@@ -358,9 +359,9 @@ static uint8_t sb_mixer_read(struct dosvm_sb16 *s)
 }
 static void sb_compat(uint8_t *m, unsigned left, uint8_t value)
 {
-    /* CT1345 4-bit level n maps onto the CT1745 5-bit level 2n+1. */
-    m[left] = (uint8_t)((((value >> 4) << 1) | 1) << 3);
-    m[left + 1] = (uint8_t)((((value & 15) << 1) | 1) << 3);
+    /* Expand each linear nibble to five bits: 0 is silence, 15 is unity. */
+    m[left] = (uint8_t)((((value >> 4) << 1) | (value >> 7)) << 3);
+    m[left + 1] = (uint8_t)((((value & 15) << 1) | ((value & 15) >> 3)) << 3);
 }
 static void sb_mixer_write(struct dosvm_sb16 *s, uint8_t value)
 {

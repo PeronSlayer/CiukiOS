@@ -79,16 +79,19 @@ static void test_audio_detect(void)
     CHECK(a_in(v, SB + 0xA) == 0); /* empty: last byte again */
     /* BLASTER=A220 I7 D1 H5 T6 (CIUKIDOS environment) agrees with 80h/81h. */
     CHECK(mixer_r(v, 0x80) == 0x04 && mixer_r(v, 0x81) == 0x22 && mixer_r(v, 0x82) == 0x20);
-    CHECK(mixer_r(v, 0x30) == 0xC0 && mixer_r(v, 0x31) == 0xC0 && mixer_r(v, 0x22) == 0xCC && mixer_r(v, 0x04) == 0xCC);
+    CHECK(mixer_r(v, 0x30) == 0xF8 && mixer_r(v, 0x31) == 0xF8 && mixer_r(v, 0x22) == 0xFF && mixer_r(v, 0x04) == 0xFF);
     CHECK(mixer_r(v, 0x3C) == 0x1F && mixer_r(v, 0x3D) == 0x15 && mixer_r(v, 0x3E) == 0x0B && mixer_r(v, 0x44) == 0x80);
-    CHECK(mixer_r(v, 0x36) == 0 && mixer_r(v, 0x28) == 0 && mixer_r(v, 0x0A) == 0);
-    mixer_w(v, 0x22, 0xA5); CHECK(mixer_r(v, 0x30) == 0xA8 && mixer_r(v, 0x31) == 0x58 && mixer_r(v, 0x22) == 0xA5);
+    CHECK(mixer_r(v, 0x36) == 0xF8 && mixer_r(v, 0x28) == 0xFF && mixer_r(v, 0x0A) == 0);
+    mixer_w(v, 0x22, 0xA5); CHECK(mixer_r(v, 0x30) == 0xA8 && mixer_r(v, 0x31) == 0x50 && mixer_r(v, 0x22) == 0xA5);
     mixer_w(v, 0x32, 0xFF); CHECK(mixer_r(v, 0x32) == 0xF8 && (mixer_r(v, 0x04) >> 4) == 0xF);
     mixer_w(v, 0x3B, 0xFF); CHECK(mixer_r(v, 0x3B) == 0xC0);
     mixer_w(v, 0x0A, 5); CHECK(mixer_r(v, 0x0A) == 5);
     uint32_t word = 0xE834; CHECK(!v86_io(&v->monitor, SB + 4, 2, true, &word) && mixer_r(v, 0x34) == 0xE8); /* index/data word idiom */
-    struct dosvm_audio_info i = ainfo(v); CHECK(i.master[0] == 0x15 && i.master[1] == 0x0B && i.voice[0] == 31 && i.fm[0] == 29);
-    mixer_w(v, 0x00, 0); CHECK(mixer_r(v, 0x30) == 0xC0 && mixer_r(v, 0x34) == 0xC0 && mixer_r(v, 0x80) == 0x04);
+    struct dosvm_audio_info i = ainfo(v); CHECK(i.master[0] == 0x15 && i.master[1] == 0x0A && i.voice[0] == 31 && i.fm[0] == 29);
+    mixer_w(v, 0x00, 0); CHECK(mixer_r(v, 0x30) == 0xF8 && mixer_r(v, 0x34) == 0xF8 && mixer_r(v, 0x80) == 0x04);
+    mixer_w(v, 0x22, 0); mixer_w(v, 0x04, 0); mixer_w(v, 0x26, 0); mixer_w(v, 0x28, 0);
+    CHECK(!mixer_r(v,0x30) && !mixer_r(v,0x32) && !mixer_r(v,0x34) && !mixer_r(v,0x36));
+    mixer_w(v,0x00,0);
     unsigned bad = ainfo(v).unsupported;
     mixer_w(v, 0x80, 0x02); CHECK(v->audio.sb.irq == 5 && mixer_r(v, 0x80) == 0x02);
     mixer_w(v, 0x80, 0x06); CHECK(v->audio.sb.irq == 5 && ainfo(v).unsupported == bad + 1);
@@ -102,7 +105,7 @@ static void test_audio_detect(void)
     CHECK(a_in(v, SB + 7) == 0xFF && a_in(v, SB + 0xB) == 0xFF);
     uint32_t wide = 0; CHECK(!v86_io(&v->monitor, SB + 0xC, 2, false, &wide) && (wide & 0xFF) == 0x7F);
     /* The second VM's device is untouched by all of the above. */
-    CHECK(w->audio.sb.irq == 7 && w->audio.sb.mixer[0x30] == 0xC0 && !w->audio.sb.out_count && w->audio.sb.mixer[0x34] == 0xC0);
+    CHECK(w->audio.sb.irq == 7 && w->audio.sb.mixer[0x30] == 0xF8 && !w->audio.sb.out_count && w->audio.sb.mixer[0x34] == 0xF8);
     destroy(v, true); destroy(w, true); empty();
 }
 

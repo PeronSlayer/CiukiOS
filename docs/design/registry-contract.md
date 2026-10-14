@@ -169,3 +169,19 @@ were checked against the named production code before Phase 2. Acceptance is
 host parse/roundtrip/limits/generation/recovery tests, production editor tests
 through the desktop toolkit harness, `nice -n 19 make CAP= apps`, and regenerated
 developer API documentation. No QEMU, commits or diary for this directive.
+
+## F4-18 master-volume preference
+
+F4-18 supersedes the master-volume part of the migration deferral above.
+`System\\Audio` / `Master` is one int32: left percent in bits 0..7, right
+percent in bits 8..15, mute in bit 16; other bits must be zero. Both channels
+must be 0..100. This single libreg mutation saves a complete stereo/mute
+preference without intermediate channel states. Default is 20/20, unmuted;
+missing, malformed or invalid registry data falls back to validated AUDIO.CFG,
+then the default. A pending System root journal also selects AUDIO.CFG for
+that boot; user-space libreg retains its normal recovery protocol. The kernel
+uses the same full parser, case folding and bounds as libreg, never a second
+text dialect. The desktop's delegated mixer worker saves the preference for
+Control Panel, tray and Volume Control, and observes EC changes for saving.
+AUDIO.CFG remains the compatibility fallback; other migrations are unchanged.
+See [F4-18 research/decision](f4-18-audio-levels.md).

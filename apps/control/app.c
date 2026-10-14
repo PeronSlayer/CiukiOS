@@ -247,6 +247,13 @@ void cp_audio_result(struct cp_app *a, int result)
 }
 void cp_tick(struct cp_app *a)
 {
+    if (a->page == CP_SOUNDS && a->host.mixer && a->ui->capture < 0) {
+        int volume, mute;
+        if (!a->host.mixer(a->host.ctx, &volume, &mute) &&
+            (a->volume != volume || a->muted != mute)) {
+            a->volume = volume; a->muted = mute; sync(a); a->ui->dirty = 1;
+        }
+    }
     uint64_t t = a->host.now ? a->host.now(a->host.ctx) : 0;
     static const char *const wd[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
     static const char *const mo[] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};

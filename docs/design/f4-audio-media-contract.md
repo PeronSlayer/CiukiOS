@@ -162,6 +162,12 @@ Stream gain and guest mixer registers MUST NOT change the global setting.
 
 **[F4]** Persist master volume/mute in `C:\SYSTEM\AUDIO.CFG`, using a small
 versioned record and checked ranges. Default: volume 50/50, mute clear.
+**F4-18 amendment:** [master-volume settings and IBM EC policy](f4-18-audio-levels.md)
+supersedes this paragraph's default and persistence ownership: default 20/20,
+`System\\Audio` / `Master` authoritative, AUDIO.CFG retained as the validated
+fallback. Boot/UI sounds use this level. On IBM ThinkPads with the qualified
+EC amplifier, that amplifier is the effective master, the codec stays at
+unity, and digital mixing bypasses the same gain once.
 Missing/invalid settings select defaults and report the reason; explicit
 mute stays muted across reboot and VM exit. The settings service applies
 changes immediately and commits them through the VFS durability interface;
@@ -652,4 +658,3 @@ as the F4 contract. Decisions on its open questions:
    ATAPI/ISO 9660 mount and the NTFS read-only mount do not depend on F3
    and may be implemented in parallel with it; the DOS VM audio path and the
    DOS-to-VFS bridge follow f3-05 and f3-00.
-

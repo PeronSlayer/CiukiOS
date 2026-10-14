@@ -4,6 +4,7 @@ import copy
 import math
 from pathlib import Path
 import sys
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -170,6 +171,47 @@ class AudioWaveTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 parsed([dict(event='BEGIN'),dict(event='READY',case='backend',status='not_run',reason=reason),
                         dict(event='ERROR',status='not_run',reason=reason)])
+
+
+class VmLevelFixtureTests(unittest.TestCase):
+    def test_pcm16_linear_fixture(self):
+        # Independent sample-pattern oracle: eight constant 64-frame stereo
+        # blocks at 12kHz, interpolated to 48kHz, voice 25/31, master 50%.
+        # This also reproduces the previous logarithmic pins exactly.
+        def trunc(value, divisor):
+            return (abs(value) // divisor) * (-1 if value < 0 else 1)
+
+        def waveform(gain):
+            pcm = bytearray()
+            ring = bytearray()
+            peaks = [0, 0]
+            for frame in range(2048):
+                index, phase = divmod(frame, 4)
+                left = ((index // 64) << 8) | 0x11
+                following = ((min(index + 1, 511) // 64) << 8) | 0x11
+                samples = (left + trunc((following - left) * phase, 4),
+                           ~left + trunc((~following - ~left) * phase, 4))
+                levels = [sample * gain >> 16 for sample in samples]
+                peaks = [max(peak, abs(level)) for peak, level in zip(peaks, levels)]
+                pcm.extend(struct.pack('<hh', *levels))
+                ring.extend(struct.pack('<hh', *(trunc(level * 50, 100) for level in levels)))
+
+            def digest(data):
+                value = 2166136261
+                for byte in data:
+                    value = ((value ^ byte) * 16777619) & 0xffffffff
+                return f'{value:08x}'
+            return peaks, digest(pcm), digest(ring)
+
+        self.assertEqual(waveform(16462), ([454, 455], '0a2f6943', '5a0f7acb'))
+        peaks, pcm, ring = waveform(25 * 65536 // 31)
+        self.assertEqual((peaks, pcm, ring), ([1458, 1460], '465bca2c', '57120d15'))
+        for case in runner.load(ROOT / 'tests/suites/f4-audio.json')['cases']:
+            if case['probe'] != 'vm-audio':
+                continue
+            row = next(p['fields'] for p in case['expected']['predicates'] if p['where'].get('case') == 'pcm16')
+            self.assertEqual((row['peak_l']['eq'], row['peak_r']['eq'], row['digest'], row['ring_digest']),
+                             (*peaks, pcm, ring))
 
 
 class AudioRunnerTests(unittest.TestCase):
