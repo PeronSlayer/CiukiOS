@@ -169,7 +169,6 @@ static uint32_t ciuki_raw_probe_report(uintptr_t address,uint32_t n,uint32_t a,u
 int ciuki_channel_pair(int pair[2]) {
     int result=desktop_spawn_host_pair(pair);
     if (result<0) { errno=-result; return -1; }
-    if (!(pair[0]>=3 && pair[1]<256)) fprintf(stderr,"channel pair out of range: %d,%d\n",pair[0],pair[1]);
     assert(pair[0]>=3 && pair[1]<256); /* above stdio and within the harness tables; host fd numbers depend on inherited descriptors and on what the shell opens before its first spawn */
     pair_client[pair[1]]=pair[0]; hello[pair[0]]=0; return 0;
 }
@@ -191,7 +190,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],co
 }
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 {
-    assert(flags==DONTWAIT && fd>=6 && fd<64);
+    assert(flags==DONTWAIT && fd>=3 && fd<256);
     if (burst && m->data[1]==DESK_CONFIGURE && configure_attempts++<4) {
         errno=EAGAIN; blocked_sends++; return -1;
     }
@@ -215,7 +214,7 @@ int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
 {
     ipc_polls++;
-    assert(flags==DONTWAIT && fd>=6 && fd<64);
+    assert(flags==DONTWAIT && fd>=3 && fd<256);
     if (normal_spawn) { assert(client_pid[fd]==42); longjmp(done,1); }
     if (handshake) {
         if (fread(m,sizeof(*m),1,client_messages)==1) return 1;

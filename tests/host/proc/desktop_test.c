@@ -1156,8 +1156,16 @@ int desktop_spawn_host_spawn(const char *path,char *const argv[],char *const env
     }
     for (unsigned i=0;i<3;i++) CHECK(child->fds[i].object==spawn_host_server->fds[i].object);
     for (unsigned i=4;i<CIUKI_OPEN_MAX;i++) CHECK(!child->fds[i].object);
-    CHECK(spawn_host_server->fds[3].flags==FD_CLOEXEC && spawn_host_server->fds[4].flags==FD_CLOEXEC);
-    CHECK(!desktop_fd(spawn_host_server,3)->object.inheritable && !desktop_fd(spawn_host_server,4)->object.inheritable);
+    /* The channel pair no longer lands on fds 3 and 4 (the shell opens its nodes before the first
+     * spawn since f2-56). The mapped client end is deliberately inheritable with FD_CLOEXEC cleared
+     * (desktop.c clears it on pair[1] and closes it afterwards); every peer of its channel stays
+     * FD_CLOEXEC. Other objects are never inherited: the child table check above proves it. */
+    CHECK(!spawn_host_server->fds[mapping->source].flags && source->object.inheritable);
+    for (unsigned i=0;i<CIUKI_OPEN_MAX;i++) {
+        struct desktop_description *d=desktop_fd(spawn_host_server,(int32_t)i);
+        if (d && d!=source && d->kind==DESKTOP_CHANNEL && d->u.endpoint.channel==source->u.endpoint.channel)
+            CHECK(spawn_host_server->fds[i].flags==FD_CLOEXEC);
+    }
     struct proc_thread *t=spawn_host_find_thread(child); uint32_t at=t->task->saved_esp;
     CHECK(get_word(child->memory,at)==argc); at+=4;
     for (unsigned group=0;group<2;group++) {

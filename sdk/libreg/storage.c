@@ -41,7 +41,7 @@ static int sync_directory(const char *path)
 #ifndef __CIUKIOS__
     char *directory = strdup(path); if (!directory) return -1;
     char *slash = strrchr(directory, '/'); if (slash == directory) slash[1] = 0; else if (slash) *slash = 0;
-    int fd = open(directory, O_RDONLY); free(directory); if (fd < 0) return -1;
+    int fd = open(directory, O_RDONLY | O_CLOEXEC); free(directory); if (fd < 0) return -1;
     int result = fsync(fd), error = errno; if (close(fd) && !result) { result = -1; error = errno; }
     if (result) return reg_fail(error);
 #else
@@ -51,7 +51,7 @@ static int sync_directory(const char *path)
 }
 static int sync_installed(const char *path)
 {
-    int fd = open(path, O_RDONLY); if (fd < 0) return -1;
+    int fd = open(path, O_RDONLY | O_CLOEXEC); if (fd < 0) return -1;
     int result = fsync(fd), error = errno; if (close(fd) && !result) { result = -1; error = errno; }
     return result ? reg_fail(error) : sync_directory(path);
 }

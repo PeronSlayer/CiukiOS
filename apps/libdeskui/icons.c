@@ -114,7 +114,7 @@ static int open_store(void)
 {
     if (S.state) return S.state > 0 ? 0 : -1;
     S.state = -1;
-    int f = open(S.store[0] ? S.store : DU_ICON_STORE_PATH, O_RDONLY);
+    int f = open(S.store[0] ? S.store : DU_ICON_STORE_PATH, O_RDONLY | O_CLOEXEC);
     uint8_t h[HEADER];
     if (f < 0) return -1;
     if (read_range(f, 0, h, HEADER, 0) || memcmp(h, "CIUKICS1", 8) || le16(h + 8) != 1 || le16(h + 10) != HEADER ||
@@ -277,7 +277,7 @@ static const struct du_icon *ciuki(int slot)
     /* Read the approved conversion once. Four small derived caches use
      * 16,272 pixel bytes, versus retaining a 256 KiB source per process. */
     uint32_t *portrait = allocate(PORTRAIT * PORTRAIT * 4, 0);
-    int f = open(S.portrait[0] ? S.portrait : DU_ICON_PORTRAIT_PATH, O_RDONLY);
+    int f = open(S.portrait[0] ? S.portrait : DU_ICON_PORTRAIT_PATH, O_RDONLY | O_CLOEXEC);
     struct stat st;
     int ok = portrait && f >= 0 && !fstat(f, &st) && st.st_size == PORTRAIT * PORTRAIT * 4 &&
              !read_range(f, 0, portrait, PORTRAIT * PORTRAIT * 4, 1);

@@ -79,7 +79,7 @@ static int make_directory(const char *path)
 static int write_atomic(const char *path, const void *data, size_t bytes)
 {
     char temporary[544]; snprintf(temporary,sizeof(temporary),"%s.new",path);
-    int fd=open(temporary,O_WRONLY|O_CREAT|O_TRUNC,0644); if (fd<0) return errno;
+    int fd=open(temporary,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0644); if (fd<0) return errno;
     size_t done=0; int error=0;
     while (done<bytes) {
         size_t request=bytes-done<WALL_IO_CHUNK ? bytes-done : WALL_IO_CHUNK;
@@ -128,7 +128,7 @@ static void cache_promote(const char *dir, const char *name)
 }
 static int read_frame(const char *path, uint32_t *pixels, size_t bytes)
 {
-    int fd=open(path,O_RDONLY); if (fd<0) return -1;
+    int fd=open(path,O_RDONLY|O_CLOEXEC); if (fd<0) return -1;
     struct stat s;
     int valid=!fstat(fd,&s) && S_ISREG(s.st_mode) && s.st_size==(int64_t)bytes;
     size_t done=0;
@@ -156,7 +156,7 @@ int desk_wall_prepare(const struct desk_wall_request *r, const char *dir, uint32
         if (stage) stage("wallpaper_cache_read");
         cache_promote(dir,name); return 0;
     }
-    int fd=open(r->path,O_RDONLY); int error=fd<0 ? errno : 0;
+    int fd=open(r->path,O_RDONLY|O_CLOEXEC); int error=fd<0 ? errno : 0;
     size_t n=(size_t)s.st_size, done=0; uint8_t *data=error ? NULL : malloc(n);
     if (!error && !data) error=ENOMEM;
     while (!error && done<n) {
