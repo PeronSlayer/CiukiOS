@@ -128,7 +128,7 @@ struct dosvm {
         uint64_t last_guest, last_monitor, last_present, last_log, last_edges;
         uint64_t last_insn[V86_INSNS];
         uint32_t sample_count;
-        struct dosvm_perf_sample sample[16]; /* last sixteen complete intervals */
+        struct dosvm_perf_sample sample[16]; /* first four + latest twelve intervals */
     } perf;
     /* Owner-armed command launch. The prompt never arms this gate. */
     bool launch_armed, launch_enter_consumed, launch_exec, launch_ready, launch_failed;
@@ -188,6 +188,7 @@ static inline void dosvm_boundary(struct dosvm *v, const struct v86_frame *f, co
 }
 void dosvm_trace(struct dosvm *, enum dosvm_trace_kind, const struct v86_frame *,
                  uint32_t a, uint32_t b, uint32_t c);
+void dosvm_diag(struct dosvm *, const char *fmt, ...);
 void dosvm_console_byte(struct dosvm *, uint8_t);
 void dosvm_launch_video(struct dosvm *);
 uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);

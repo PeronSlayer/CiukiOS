@@ -154,6 +154,7 @@ static void test_menu_halted_heartbeat(void)
     struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
     int10(v, 0x0013, 0, 0, 0); cur.tf.eip = 0x300;
     v->monitor.vif = false; v->monitor.state = V86_HALTED;
+    v->monitor.pic[0].imr = v->monitor.pic[1].imr = 0xFF; /* no recoverable pending IRQ */
     g_boot.flags = CBI_F_VERBOSE;
     unsigned before = records;
     device_hook_arm(v, 2100, device_hang_stop); step(v, 0x20, 0);
@@ -364,10 +365,63 @@ static void test_menu_near_return(void)
     }
     puts("f3-10 near returns: 16/32-bit RET cleanup, DMX register-value epilogue after flags restore, stop before next save; SP assignment/memory store/bad target/IF-clear/debugger refused PASS");
 }
+#ifdef CIUKI_DOSVM_GUEST_CPU
+static void test_menu_doom_cli_seeds(void)
+{
+    /* Byte-identical slices from the pinned DOOM.EXE, before LE relocation.
+     * These are plain handler/callback CLIs, not PUSHFD/CLI critical sections.
+     * Branch-heavy handler bodies are outside this bounded replay; append an
+     * IRETD frame, and execute the complete callback arithmetic/RET epilogue. */
+    static const uint8_t entry[] = {0xFA,0x89,0xEA,0x1E,0x07,0x8D,0x04,0xD5,0,0,0,0,0x01,0xD0};
+    static const uint8_t callback[] = {0xFA,0x31,0xDB,0x31,0xD2,0x66,0x8B,0x1D,0x30,0x88,0x02,0,
+        0xA1,0x20,0x88,0x02,0,0xF7,0xF3,0x85,0xD2,0x0F,0x94,0xC0,0x25,0xFF,0,0,0,
+        0x5D,0x5F,0x5E,0x5A,0x59,0x5B,0xC3};
+    static const uint8_t exit_slice[] = {0xFA,0xA1,0xF0,0x83,0x02,0,0x05,0,0x10,0,0,
+        0x8B,0x1D,0xE8,0x83,0x02,0,0xA3,0xF0,0x83,0x02,0};
+    static const uint32_t seeds[] = {0x248205,0x24821D,0x2482DA};
+    const struct gcpu_ops ops = {if_cpu_read, if_cpu_write, if_cpu_descriptor, if_cpu_unexpected, 0};
+    gcpu_init(&ops);
+    for (unsigned variant=0; variant<3; variant++) {
+        struct dosvm *v=dpmi_vm(true); v86_start(); enter(v,true);
+        uint16_t code=(uint16_t)cur.tf.cs; uint32_t base=seg_base(v,code);
+        v->dpmi.ldt[code >> 3][1] |= 0x400000u;
+        client_desc(v,900,0,UINT32_MAX,0xF2,0x40);
+        cur.tf.ds=cur.tf.es=cur.tf.fs=cur.tf.gs=DPMI_SEL(900);
+        const uint8_t *bytes=variant==0?entry:variant==1?callback:exit_slice;
+        unsigned size=variant==0?sizeof(entry):variant==1?sizeof(callback):sizeof(exit_slice);
+        uint8_t iret=0xCF, nop=0x90;
+        CHECK(!dosvm_write(v,base+0x300,bytes,size) && !dosvm_write(v,base+0x380,&iret,1) &&
+              !dosvm_write(v,base+0x400,&nop,1));
+        uint32_t divisor=1, tics=140;
+        CHECK(!dosvm_write(v,0x28830,&divisor,2) && !dosvm_write(v,0x28820,&tics,4));
+        pm_push(v,V86_IF|2); pm_push(v,code); pm_push(v,0x400);
+        if (variant==1) { pm_push(v,0x380); for(unsigned i=0;i<6;i++) pm_push(v,0); }
+        else CHECK(!dosvm_write(v,base+0x300+size,&iret,1));
+        v->dpmi.decode_valid=true; v->dpmi.decode_cs=code; v->dpmi.decode_eip=seeds[variant];
+        cur.tf.eip=0x300; cur.tf.eflags=V86_IF|2;
+        step(v,13,0); CHECK(!v->dpmi.if_armed && !v->monitor.vif);
+        v->dpmi.vec[8]=(struct dpmi_vec){.sel=code,.off=0x700};
+        CHECK(dosvm_irq_raise(v->info.key,0)); step(v,0x20,0);
+        for(unsigned i=0;i<64 && !v->dpmi.depth;i++) {
+            struct gcpu_event ev;
+            CHECK(if_cpu_run(v,&ev)==GCPU_TRAP && ev.vector==1 && ev.dr6==(1u<<14));
+            debug_dr6=ev.dr6; step(v,ev.vector,ev.err);
+        }
+        CHECK(v->dpmi.depth==1 && cur.tf.eip==0x700 && v->monitor.stats.delivered[0]==1 &&
+              v->dpmi.stats.if_restored==1 && !(cur.tf.eflags&V86_TF));
+        destroy(v,true); empty();
+    }
+    gcpu_done(); if_cpu_vm=0;
+    puts("f3-15 DOOM seeds: three extracted plain CLI slices, callback DIV/SETcc/pops/RET, IRETD retirement and IRQ0 delivery with unknown seed PASS");
+}
+#endif
 static void test_menu(void)
 {
     test_menu_quiet_records(); test_menu_heartbeat(); test_menu_vga_dirty_repeat(); test_menu_pm_devices();
     test_menu_halted_heartbeat();
     test_menu_return_seed(); test_menu_return_steps(); test_menu_return_nested();
     test_menu_near_return();
+#ifdef CIUKI_DOSVM_GUEST_CPU
+    test_menu_doom_cli_seeds();
+#endif
 }

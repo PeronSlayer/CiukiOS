@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+#ifdef CIUKI_DOSVM_GUEST_CPU
+#include "dosvm_guest.h"
+#endif
 #include <unistd.h>
 #undef _SC_PAGESIZE
 #undef _SC_OPEN_MAX

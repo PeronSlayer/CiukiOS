@@ -105,6 +105,13 @@ struct dpmi {
     /* f3-06 POPF compatibility: a flags image saved before a CLI carries
      * TF, so its POPF/IRET traps once (dpmi_dispatch.c). */
     bool if_armed;
+    /* f3-15: pending-IRQ recovery, separate from saved-image/return TF.
+     * An owned step is consumed only in its original client/depth/stack. */
+    bool if_waiting, if_step, if_restore_step, if_restore_vif;
+    uint16_t if_steps, if_step_cs, if_step_ss, if_target_cs;
+    uint8_t if_step_depth, if_step_client, if_records;
+    uint32_t if_target_eip, if_target_sp;
+    uint64_t if_wait_tick;
     /* f3-10: bounded, flags-clean boundaries after an extender IRET. */
     uint16_t return_steps;
     uint8_t return_depth, return_client;

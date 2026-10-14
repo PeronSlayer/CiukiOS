@@ -68,10 +68,18 @@ static void test_speed_window(void)
     puts("f3-13 launch and speed: shell hidden until EXEC/video, persistent writable chain-4, sparse band transport, completion cadence and focused share PASS");
 }
 
+static unsigned speed_sample_rows, speed_sample_n[16];
+static void speed_dump_rows(void)
+{
+    if (!strstr(last_record, "group=vm_perf_video ")) return;
+    const char *n = strstr(last_record, " n=");
+    CHECK(n && speed_sample_rows < ARRAY_SIZE(speed_sample_n));
+    speed_sample_n[speed_sample_rows++] = (unsigned)strtoul(n + 3, 0, 10);
+}
 static void test_speed_accounting(void)
 {
     struct dosvm *v = create();
-    v->info.dos_ready = true;
+    v->info.dos_ready = false; /* first interval includes DOS startup */
     g_boot.flags = CBI_F_VERBOSE; g_tsc_per_ms = 1000; fake_tsc = 1000;
     dosvm_task_switch(v->task);
     fake_tsc = 2000; perf_phase(v, 2);
@@ -89,16 +97,30 @@ static void test_speed_accounting(void)
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&
           s->edges == 140 && s->irqs[0] == 140 && s->insn[V86_OUT] == 200);
     CHECK(s->cost_count[DOSVM_COST_VGA_IO] == 1 && s->cost_us[DOSVM_COST_VGA_IO] == 2000);
-    for (unsigned i = 1; i < 18; i++) {
-        g_ticks += 1000; fake_tsc += 1000; v->video_frames += 70;
+    for (unsigned i = 1; i < 81; i++) {
+        v->monitor.pic[0].isr = i & 1; /* guest IRQ context cannot suppress memory sampling */
+        g_ticks += 1000; fake_tsc += 1000; v->video_frames += i;
         dosvm_perf_report(v);
     }
-    CHECK(v->perf.sample_count == 18 && v->perf.sample[1].frames == 70 && records == records_before);
+    CHECK(v->perf.sample_count == 81 && v->perf.sample[0].frames == 35 &&
+          v->perf.sample[1].frames == 1 && v->perf.sample[2].frames == 2 &&
+          v->perf.sample[3].frames == 3 && records == records_before);
+    unsigned seen = 0;
+    for (unsigned i = 4; i < 16; i++) {
+        uint32_t frame = v->perf.sample[i].frames;
+        CHECK(frame >= 69 && frame <= 80);
+        seen |= 1u << (frame - 69);
+    }
+    CHECK(seen == 0xFFFu); /* latest twelve, independently of the slot helper */
+    v->monitor.pic[0].isr = 0;
     dosvm_task_switch(&caller);
     uint64_t guest_cycles = v->perf.guest_cycles, monitor_cycles = v->perf.monitor_cycles;
     fake_tsc += 900000; g_ticks += 1000; dosvm_perf_report(v); /* native STATUS */
     CHECK(v->perf.phase == 0 && v->perf.guest_cycles == guest_cycles && v->perf.monitor_cycles == monitor_cycles);
-    dosvm_perf_dump(v);
+    speed_sample_rows = 0; diag_time_hook = speed_dump_rows;
+    dosvm_perf_dump(v); diag_time_hook = 0;
+    CHECK(speed_sample_rows == 16);
+    for (unsigned i = 0; i < 16; i++) CHECK(speed_sample_n[i] == (i < 4 ? i + 1 : i + 67));
     CHECK(!v->perf.sample_count && records > records_before);
     memset(v->perf.sample, 0xFF, sizeof(v->perf.sample));
     v->perf.sample_count = UINT32_MAX;
