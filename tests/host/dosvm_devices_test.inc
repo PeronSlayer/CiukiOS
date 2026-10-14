@@ -144,7 +144,9 @@ static void test_device_mouse_shadow(void)
     f.tf.edx=0x300; f.tf.ecx=2; f.tf.esi=0; CHECK(!dosvm_write(v,0x3000,"AB",2)); f.ds=0x300;
     CHECK(!v86_emulate(&v->monitor,&f) && v->monitor.shadow && f.tf.eip==2);
     CHECK(!v86_emulate(&v->monitor,&f) && !v->monitor.shadow && f.tf.eip==4);
-    v86_prepare_return(&v->monitor,&f); CHECK(v->monitor.shadow && (f.tf.eflags&V86_TF) && v->monitor.shadow_next==6); /* MOV SS */
+    v86_prepare_return(&v->monitor,&f); CHECK(v->monitor.shadow && !(f.tf.eflags&V86_TF) && v->monitor.shadow_next==6); /* MOV SS, no pending IRQ */
+    v86_irq_raise(&v->monitor,1);
+    v86_prepare_return(&v->monitor,&f); CHECK(v->monitor.shadow && (f.tf.eflags&V86_TF));
     /* TCG raises #DB right after MOV SS: the successor keeps the shadow once. */
     f.tf.eip=6; CHECK(!v86_debug_step(&v->monitor,&f) && v->monitor.shadow && v->monitor.shadow_next==4);
     f.tf.eip=6; CHECK(!v86_debug_step(&v->monitor,&f) && !v->monitor.shadow);

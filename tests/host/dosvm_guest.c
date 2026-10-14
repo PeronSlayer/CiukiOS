@@ -297,6 +297,41 @@ static void input_hook(void)
 }
 static struct v86_frame cpu;
 static uint64_t instructions, traps;
+/* Optional startup cost replay, usable with both pre-f3-14 and current VM
+ * sources. Classify the trapped bytes, never execute or patch guest code. */
+static uint64_t replay_cost[14];
+static unsigned replay_cause(const struct v86_frame *f)
+{
+    unsigned vector = f->tf.vector;
+    bool pm = !(f->tf.eflags & V86_VM);
+    if (vector == 1) return 11;
+    if (vector == 0x20) return 12;
+    if (vector == 14 && fake_cr2 >= 0xA0000 && fake_cr2 < 0xC0000) return 7;
+    if (vector != 13) return 13;
+    if (pm && (f->tf.err & 3) == 2) return 3;
+    uint8_t bytes[15] = {0};
+    uint32_t linear = pm ? dpmi_fault_linear(gv, f) : (f->tf.cs << 4) + f->tf.eip;
+    if (dosvm_read(gv, linear, bytes, sizeof(bytes))) return 13;
+    unsigned at = 0;
+    while (at < sizeof(bytes) && (bytes[at] == 0x66 || bytes[at] == 0x67 || bytes[at] == 0xF2 || bytes[at] == 0xF3 ||
+        bytes[at] == 0x26 || bytes[at] == 0x2E || bytes[at] == 0x36 || bytes[at] == 0x3E || bytes[at] == 0x64 || bytes[at] == 0x65)) at++;
+    if (at == sizeof(bytes)) return 13;
+    unsigned op = bytes[at];
+    if (!pm && op == 0xCD) return 0;
+    if (!pm && op == 0xCF) return 1;
+    if ((op >= 0xE4 && op <= 0xE7) || (op >= 0xEC && op <= 0xEF) || (op >= 0x6C && op <= 0x6F)) {
+        unsigned port = (uint16_t)f->tf.edx;
+        if (op >= 0xE4 && op <= 0xE7) {
+            if (at + 1 == sizeof(bytes)) return 13;
+            port = bytes[at + 1];
+        }
+        if (port >= 0x3B0 && port <= 0x3DF) return 6;
+        if ((port >= 0x40 && port <= 0x43) || port == 0x61 || port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1) return 8;
+        if (port == 0x60 || port == 0x64) return 9;
+        return 10;
+    }
+    return pm ? (op == 0xFA || op == 0xFB ? 4 : 13) : 2;
+}
 static uint64_t db_rm, db_flags, db_return, db_other;
 static uint32_t rstack_low = 0xFFFF;   /* lowest SP seen on the DPMI host real-mode stack */
 static int trace = -1, ring_on = -1;
@@ -384,6 +419,7 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
 {
     struct v86_frame hw = cpu;
     hw.tf.vector = vector; hw.tf.err = err; fake_cr2 = cr2;
+    unsigned cost = getenv("GUEST_COSTS") ? replay_cause(&hw) : 13;
     g_current = gv->task; gv->continuation = 0x12345678; cpu_flags = 0;
     traps++;
     if (vector == 1) {
@@ -396,6 +432,10 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     if (setjmp(idle_return)) { g_current = &caller; sti(); return; }
     if (!setjmp(guest_return)) { CHECK(dosvm_trap(&hw.tf)); cpu = hw; }
     else cpu = gv->frame;
+    if (getenv("GUEST_COSTS")) {
+        if ((hw.tf.eflags & V86_VM) != (cpu.tf.eflags & V86_VM)) cost = 5;
+        replay_cost[cost]++;
+    }
     g_current = &caller; sti();
 }
 static bool stopped(void) { return gv->info.state >= DOSVM_STOPPING; }
@@ -702,6 +742,14 @@ static bool menu_replay(void)
 }
 static void stats(const char *name)
 {
+    if (getenv("GUEST_COSTS")) {
+        static const char *const causes[14] = {"rm_int", "rm_iret", "rm_flags", "pm_int", "pm_flags", "switch",
+            "vga_io", "vga_pf", "pit_pic", "kbd", "io", "db", "timer", "other"};
+        for (unsigned i = 0; i < 14; i++) printf("  replay_cost phase=%s cause=%s exits=%llu\n", name, causes[i],
+            (unsigned long long)replay_cost[i]);
+        printf("  replay_vectors phase=%s gp=%u pf=%u db=%u timer=%u other=%u pm=%u\n", name,
+            gv->perf.exits[0], gv->perf.exits[1], gv->perf.exits[2], gv->perf.exits[3], gv->perf.exits[4], gv->perf.exits[5]);
+    }
     struct dpmi_info info;
     CHECK(dosvm_dpmi_info(dosvm_key(gv), &info));
     printf("  dpmi %s: active=%u clients=%u selectors=%u blocks=%u callbacks=%u watch=%u depth=%u pool=%u entries=%u fails=%u term=%u faults=%u irq_pm=%u irq_rm=%u soft=%u exc=%u cb=%u raw=%u realcalls=%u max_depth=%u stale=%u\n",
@@ -751,6 +799,7 @@ int main(int argc, char **argv)
     printf("boot: %s after %llu instructions, %llu traps, %llu ms\n", r > 0 ? "prompt" : "FAILED",
            (unsigned long long)instructions, (unsigned long long)traps, (unsigned long long)g_ticks);
     if (r <= 0) { screen(); return 1; }
+    if (getenv("GUEST_COSTS")) stats("boot");
     for (int i = 2; i + 1 < argc; i += 2) {
         bool fault = !strncmp(argv[i], "fault:", 6), gate = !strncmp(argv[i], "gate:", 5);
         /* f3-06 rc: the payload reports a child's exit code (RUNREC): any

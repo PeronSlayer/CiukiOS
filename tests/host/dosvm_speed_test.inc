@@ -57,7 +57,7 @@ static void test_speed_window(void)
     CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS, &c, sizeof(c)) && !c.changed && v->perf.harvests == harvests);
     CHECK(dosvm_task_quantum(&caller, 10) == 10);
     c = command_for(w.id, w.generation); c.focused = 1;
-    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) && dosvm_task_quantum(v->task, 10) == 8);
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) && dosvm_task_quantum(v->task, 10) == 8 && dosvm_task_focus() == v->task);
     c = command_for(w.id, w.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) && dosvm_task_quantum(v->task, 10) == 4);
     c = command_for(w.id, w.generation); c.presentation.bands[0] = 1;
@@ -75,9 +75,10 @@ static void test_speed_accounting(void)
     g_boot.flags = CBI_F_VERBOSE; g_tsc_per_ms = 1000; fake_tsc = 1000;
     dosvm_task_switch(v->task);
     fake_tsc = 2000; perf_phase(v, 2);
+    v->perf.trap_active = true; v->perf.trap_cycles = 0; v->perf.cause = DOSVM_COST_VGA_IO;
     fake_tsc = 3000; dosvm_task_switch(&caller);
     fake_tsc = 9000; dosvm_task_switch(v->task); /* six milliseconds off CPU */
-    fake_tsc = 10000; perf_phase(v, 1);
+    fake_tsc = 10000; perf_exit_end(v); perf_phase(v, 1);
     fake_tsc = 11000;
     unsigned records_before = records;
     v->video_frames = 35; v->video_starts = 35; v->pit.edges = 140;
@@ -87,12 +88,16 @@ static void test_speed_accounting(void)
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&
           s->edges == 140 && s->irqs[0] == 140 && s->insn[V86_OUT] == 200);
+    CHECK(s->cost_count[DOSVM_COST_VGA_IO] == 1 && s->cost_us[DOSVM_COST_VGA_IO] == 2000);
     for (unsigned i = 1; i < 18; i++) {
         g_ticks += 1000; fake_tsc += 1000; v->video_frames += 70;
         dosvm_perf_report(v);
     }
     CHECK(v->perf.sample_count == 18 && v->perf.sample[1].frames == 70 && records == records_before);
     dosvm_task_switch(&caller);
+    uint64_t guest_cycles = v->perf.guest_cycles, monitor_cycles = v->perf.monitor_cycles;
+    fake_tsc += 900000; g_ticks += 1000; dosvm_perf_report(v); /* native STATUS */
+    CHECK(v->perf.phase == 0 && v->perf.guest_cycles == guest_cycles && v->perf.monitor_cycles == monitor_cycles);
     dosvm_perf_dump(v);
     CHECK(!v->perf.sample_count && records > records_before);
     memset(v->perf.sample, 0xFF, sizeof(v->perf.sample));

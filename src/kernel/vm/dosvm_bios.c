@@ -452,9 +452,28 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
 {
     struct dosvm *v = arg;
     if (v->info.state >= DOSVM_STOPPING) return -V86_EIO;
-    for (unsigned i = 0; i < DOSVM_PORTS; i++)
+    if (port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1) {
+        v->perf.cause = DOSVM_COST_PIT_PIC;
+        if (width != 1) return -V86_EPERM;
+        uint32_t flags = irq_save();
+        uint8_t b = dosvm_pic_register(&v->monitor.pic[port >= 0xA0], port & 1, write, (uint8_t)*value);
+        dosvm_pic_cascade(&v->monitor);
+        v->monitor.stats.io[V86_PIC]++;
+        irq_restore(flags);
+        if (!write) *value = b;
+        return 0;
+    }
+    unsigned kind = (port >= 0x40 && port <= 0x43) || port == 0x61 ? 0 :
+        port == 0x60 || port == 0x64 ? 1 : port >= 0x3B0 && port <= 0x3DF ? 2 : 3;
+    v->perf.cause = kind == 0 ? DOSVM_COST_PIT_PIC : kind == 1 ? DOSVM_COST_KBD :
+        kind == 2 ? DOSVM_COST_VGA_IO : DOSVM_COST_IO;
+    unsigned hint = v->port_hint[kind];
+    if (!v->ports[hint].handler || port < v->ports[hint].first || port > v->ports[hint].last) hint = DOSVM_PORTS;
+    for (unsigned n = 0; n < DOSVM_PORTS; n++) {
+        unsigned i = hint < DOSVM_PORTS ? hint : n;
         if (v->ports[i].handler && port >= v->ports[i].first && port <= v->ports[i].last)
         {
+            v->port_hint[kind] = (uint8_t)i;
             /* Device state shared with the dosvm_tick timer hook. */
             bool shared = v->ports[i].handler == dosvm_pit_port || v->ports[i].handler == dosvm_kbd_port ||
                           v->ports[i].handler == dosvm_audio_port;
@@ -466,6 +485,7 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
                 dosvm_trace(v, DOSVM_TRACE_PIT, &v->frame, port, (uint8_t)*value, 0);
             return result;
         }
+    }
     if (port == DOSVM_FAULT_PORT) return -V86_EPERM;
     if (port == DOSVM_RECORD_PORT || port == DOSVM_CONTROL_PORT) {
         if (width != 1 || !write) return -V86_EPERM;
@@ -474,8 +494,6 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
         if ((uint8_t)*value != 0) return -V86_EPERM;
         return dosvm_stop(v->info.key, DOSVM_EXIT);
     }
-    if (port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1)
-        return -ENOSYS;
     if (port == 0x92) {
         if (width != 1) return -V86_EPERM;
         if (!write) { *value = v->a20 ? 2 : 0; return 0; }

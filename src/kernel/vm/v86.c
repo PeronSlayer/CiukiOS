@@ -333,8 +333,9 @@ static void shadow_arm(struct v86 *v, uint16_t cs, uint32_t ip)
     v->shadow_next = (uint16_t)(len ? ip + len : ip);
 }
 /* f3-06: single-step only while an instruction boundary matters: a software
- * STI/MOV-SS shadow is open, or an IRQ is pending for an enabled guest (it
- * is delivered at the next boundary). Otherwise V86 code runs natively:
+ * IRQ is pending for an enabled guest, including an outstanding software
+ * STI/MOV-SS shadow. An idle shadow is retained without TF and retired at
+ * the next observed boundary. Otherwise V86 code runs natively:
  * every V86 instruction that can set IF (STI, POPF, IRET, INT) traps at
  * IOPL 0, a host IRQ is itself a delivery point (dosvm_tick runs first), and
  * a trapped instruction after MOV SS is emulated before any delivery. The
@@ -345,8 +346,15 @@ void v86_prepare_return(struct v86 *v, struct v86_frame *f)
 {
     if (!v->track_boundaries) return;
     if (!v->shadow && stack_switch_len(v, f->tf.cs, f->tf.eip)) shadow_arm(v, f->tf.cs, f->tf.eip);
-    if (v->shadow || (v->vif && v86_irq_pending(v) >= 0)) f->tf.eflags |= V86_TF;
+    if (v->vif && v86_irq_pending(v) >= 0) f->tf.eflags |= V86_TF;
     else f->tf.eflags &= ~V86_TF;
+}
+void v86_retire_shadow(struct v86 *v, const struct v86_frame *f)
+{
+    if (!v->track_boundaries || !v->shadow) return;
+    if (f->tf.cs == v->shadow_cs && (f->tf.eip == v->shadow_ip ||
+        (v->shadow_next != v->shadow_ip && f->tf.eip == v->shadow_next))) return;
+    v->shadow = false;
 }
 int v86_debug_step(struct v86 *v, struct v86_frame *f)
 {
@@ -477,7 +485,7 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
     case 0xFB:
         v->shadow = !v->vif;
         v->vif = true;
-        if (v->shadow)
+        if (v->shadow && (!v->track_boundaries || v86_irq_pending(v) >= 0))
             f->tf.eflags |= V86_TF; /* retire the next instruction before injecting */
         else
             f->tf.eflags &= ~V86_TF;

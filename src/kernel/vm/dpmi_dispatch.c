@@ -841,6 +841,7 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
     unsigned w = op32 ? 4 : 2;
     switch (op) {
     case 0xFA: {
+        v->perf.cause = DOSVM_COST_PM_FLAGS;
         bool armed = v->monitor.vif && arm_flags_image(v, f, &cs);
         if (armed) {
             d->if_armed = true;
@@ -851,6 +852,7 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
         break;
     }
     case 0xFB:
+        v->perf.cause = DOSVM_COST_PM_FLAGS;
         if (!v->monitor.vif) {
             /* STI shadow: no IRQ before the next instruction retires. Not
              * single-stepped: TF would leak into a PUSHF image (PUSHF does
@@ -864,7 +866,7 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
             return 0;
         }
         break;
-    case 0xF4: v->monitor.state = V86_HALTED; break;
+    case 0xF4: v->perf.cause = DOSVM_COST_PM_HLT; v->monitor.state = V86_HALTED; break;
     case 0xE4: case 0xE5: case 0xE6: case 0xE7: case 0xEC: case 0xED: case 0xEE: case 0xEF: {
         uint16_t port = (uint16_t)f->tf.edx;
         if (op < 0xE8) {
@@ -924,6 +926,8 @@ static int debug_trap(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
     }
     return dpmi_exception(v, f, 1, 0);
 }
+int dpmi_io_repeat(struct dosvm *v, struct v86_frame *f)
+{ return emulate(v, f); }
 
 static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
 {
@@ -952,7 +956,10 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
     if (flags_restored(v, f, dr6) && vector == 1 && !(dr6 & (15u | (1u << 13) | (1u << 15)))) return 0;
     switch (vector) {
     case 13:
-        if ((f->tf.err & 3) == 2) return software_int(v, f, (uint8_t)(f->tf.err >> 3));
+        if ((f->tf.err & 3) == 2) {
+            v->perf.cause = DOSVM_COST_PM_INT;
+            return software_int(v, f, (uint8_t)(f->tf.err >> 3));
+        }
         if (f->tf.err) return dpmi_exception(v, f, 13, f->tf.err);
         if ((uint16_t)f->tf.cs == DPMI_HOST_CS) return dpmi_stub_trap(v, f, f->tf.eip);
         return emulate(v, f);
@@ -994,6 +1001,8 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
         v->dpmi.rec[v->dpmi.depth - 1].kind == DPMI_REC_PMINT;
     dr6 = dpmi_debug_status(v, dr6);
     int e = pm_trap(v, f, cr2, dr6);
+    if (!e && v->frame_pm && f->tf.vector == 13 && !f->tf.err && v->perf.cause == DOSVM_COST_VGA_IO)
+        e = dosvm_io_burst(v, f);
     /* The returned PC (including handler entry and emulated fall-through) is
      * a known instruction boundary. Never seed from a backwards guess. */
     if ((!keep && !irq_return) || e || !v->frame_pm) {

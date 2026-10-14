@@ -33,6 +33,7 @@ static bool dosvm_in_irq(const struct dosvm *v)
 }
 
 #include "dosvm_perf.inc"
+#include "dosvm_io_burst.inc"
 
 void dosvm_launch_video(struct dosvm *v)
 {
@@ -438,8 +439,13 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
     struct dosvm *v = owner(t);
     if (!v || !v->owner_pid || !v->window_input) return normal;
     bool focused = input_focus.id == v->info.key.id && input_focus.generation == v->info.key.generation;
-    uint32_t cap = focused ? 8u : 4u;
-    return normal < cap ? normal : cap;
+    if (focused) return normal < 8u ? normal : 8u;
+    return normal < 4u ? normal : 4u;
+}
+const struct task *dosvm_task_focus(void)
+{
+    struct dosvm *v = dosvm_lookup(input_focus);
+    return v && v->owner_pid && v->window_input && v->info.state < DOSVM_STOPPING ? v->task : 0;
 }
 bool dosvm_client(const struct task *t)
 {
@@ -533,12 +539,15 @@ bool dosvm_trap(struct trap_frame *tf)
     if (!v || !v->continuation) return false;
     bool pm = !(tf->eflags & V86_VM);
     perf_phase(v, 2);
+    v->perf.trap_active = true; v->perf.trap_cycles = 0;
+    v->perf.cause = tf->vector == 1 ? DOSVM_COST_DB : tf->vector == 0x20 ? DOSVM_COST_TIMER : DOSVM_COST_OTHER;
     unsigned cause = tf->vector == 13 ? 0 : tf->vector == 14 ? 1 : tf->vector == 1 ? 2 : tf->vector == 0x20 ? 3 : 4;
     v->perf.exits[cause]++;
     if (pm) v->perf.exits[5]++;
     /* CR2/DR6 belong to this trap only while interrupts stay off. */
     uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
     uint32_t dr6 = tf->vector == 1 ? arch_debug_take() : 0;
+    if (tf->vector == 14 && cr2 >= 0xA0000 && cr2 < 0xC0000) v->perf.cause = DOSVM_COST_VGA_PF;
     unsigned size = pm ? sizeof(struct trap_frame) : sizeof(struct v86_frame);
     struct v86_frame *f = &v->frame;
     memcpy(f, tf, size);
@@ -551,7 +560,25 @@ bool dosvm_trap(struct trap_frame *tf)
     int e = 0;
     if (v->info.state != DOSVM_STOPPING) {
         if (pm) e = dpmi_pm_trap(v, f, cr2, dr6);
-        else if (tf->vector == 13) e = v86_emulate(&v->monitor, f);
+        else if (tf->vector == 13) {
+            uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
+            uint64_t flags_insn[4] = {0}, hlts = 0;
+            if (g_boot.flags & CBI_F_VERBOSE) {
+                for (unsigned i = 0; i < 4; i++) flags_insn[i] = v->monitor.stats.insn[V86_PUSHF + i];
+                hlts = v->monitor.stats.insn[V86_HLT];
+            }
+            v->perf.cause = DOSVM_COST_RM_FLAGS;
+            v86_retire_shadow(&v->monitor, f);
+            e = v86_emulate(&v->monitor, f);
+            if (v->monitor.stats.insn[V86_INT] != ints) v->perf.cause = DOSVM_COST_RM_INT;
+            if (v->monitor.stats.insn[V86_IRET] != irets) v->perf.cause = DOSVM_COST_RM_IRET;
+            if (g_boot.flags & CBI_F_VERBOSE) {
+                for (unsigned i = 0; i < 4; i++) if (v->monitor.stats.insn[V86_PUSHF + i] != flags_insn[i])
+                    v->perf.cause = DOSVM_COST_RM_PUSHF + i;
+                if (v->monitor.stats.insn[V86_HLT] != hlts) v->perf.cause = DOSVM_COST_RM_HLT;
+            }
+            if (!e && !v->frame_pm && v->perf.cause == DOSVM_COST_VGA_IO) e = dosvm_io_burst(v, f);
+        }
         else if (tf->vector == 1 && (v->monitor.shadow || v->monitor.track_boundaries)) {
             dr6 = dpmi_debug_status(v, dr6);
             if (dr6 & 15) {
@@ -572,9 +599,9 @@ bool dosvm_trap(struct trap_frame *tf)
         else if (tf->vector == 3 || tf->vector == 4) e = v86_reflect(&v->monitor, f, tf->vector);
         else if (tf->vector < 0x20 || tf->vector >= 0x30) e = -EFAULT;
     }
+    if (!v->frame_pm) v86_retire_shadow(&v->monitor, f);
     dosvm_trace_flush(v);
     if (!dosvm_in_irq(v)) dosvm_audio_log(v);
-    dosvm_perf_report(v);
     /* Observe the completed DOS IRET, before ordinary instructions can
      * move past the EXEC return address. No stepping or guest patching. */
     if (!v->frame_pm && v->launch_exec && f->tf.cs == v->launch_cs && f->tf.eip == v->launch_ip &&
@@ -639,6 +666,8 @@ bool dosvm_trap(struct trap_frame *tf)
     }
     if (v->info.state == DOSVM_STOPPING) {
         dosvm_trace_flush(v);
+        if (v->frame_pm != pm) v->perf.cause = DOSVM_COST_SWITCH;
+        perf_exit_end(v);
         cli();
         v86_leave(v->continuation);
     }
@@ -648,6 +677,9 @@ bool dosvm_trap(struct trap_frame *tf)
         dosvm_trace(v, DOSVM_TRACE_TIMER, f, 0, 0, 0);
     if (g_need_resched) schedule();
     if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
+    if (v->frame_pm != pm) v->perf.cause = DOSVM_COST_SWITCH;
+    perf_exit_end(v);
+    dosvm_perf_report(v);
     perf_phase(v, 1);
     cli();
     if (v->frame_pm != pm) v86_leave(v->continuation);

@@ -79,6 +79,58 @@ extern void serial_tick(void) __attribute__((weak));
 #undef task_sleep_ms
 #undef sched_tick
 #undef schedule
+static const struct task *test_focus;
+const struct task *dosvm_task_focus(void) { return test_focus; }
+uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
+{ return t == test_focus ? 8 : normal; }
+
+static void test_focused_budget(void)
+{
+    struct task vm = {.state=T_READY, .prio=P_NORMAL}, peers[5] = {0}, idle = {.state=T_RUNNING};
+    struct task *saved_current = g_current;
+    uint64_t saved_ticks = g_ticks;
+    g_ticks = 0; g_current = idle_task = &idle; all_tasks = &vm;
+    memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
+    focus_task = 0; test_focus = &vm;
+    rq_push(&vm);
+    for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) {
+        peers[i].state = T_READY; peers[i].prio = P_NORMAL;
+        peers[i].all_next = all_tasks; all_tasks = &peers[i]; rq_push(&peers[i]);
+    }
+    g_need_resched = true; timing_schedule();
+    unsigned vm_ticks = 0, native_ticks[5] = {0};
+    for (unsigned tick = 0; tick < 1000; tick++) {
+        vm_ticks += g_current == &vm;
+        for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) native_ticks[i] += g_current == &peers[i];
+        g_ticks++; timing_tick();
+        if (g_need_resched) timing_schedule();
+    }
+    CHECK(vm_ticks == 800);
+    for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) CHECK(native_ticks[i] == 40);
+    /* The renderer/input owners sit above P_NORMAL. They still get service
+     * at the two-tick opportunity, while focus gets the same reservation. */
+    memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
+    vm.state = T_READY; g_current = &idle; idle.state = T_RUNNING; rq_push(&vm);
+    for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) {
+        peers[i].prio = P_INTERACTIVE; peers[i].state = T_READY; rq_push(&peers[i]); native_ticks[i] = 0;
+    }
+    vm_ticks = 0; timing_schedule();
+    for (unsigned tick = 0; tick < 1000; tick++) {
+        vm_ticks += g_current == &vm;
+        for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) native_ticks[i] += g_current == &peers[i];
+        g_ticks++; timing_tick();
+        if (g_need_resched) timing_schedule();
+    }
+    CHECK(vm_ticks == 800);
+    for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) CHECK(native_ticks[i] == 40);
+    struct task device = {.state=T_READY, .prio=P_DEVICE}; rq_push(&device);
+    CHECK(rq_pop() == &device); /* no focused reservation blocks device work */
+    test_focus = 0;
+    memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
+    focus_task = 0; all_tasks = idle_task = 0;
+    g_current = saved_current; g_ticks = saved_ticks; g_need_resched = false;
+    puts("f3-14 scheduler: focused VM 800/1000 ticks, five normal/interactive peers 40 ticks each, device priority preserved PASS");
+}
 
 static uint8_t task_fp[CIUKI_THREAD_MAX][512];
 static struct proc_thread *signal_process(struct process *parent, struct process **p)
@@ -687,6 +739,7 @@ int main(int argc, char **argv)
     test_pending(); test_frames(); test_fp(); test_fault_mapping(); test_decisions();
     test_delivery(); test_syscalls(); test_fatal();
     if (argc == 2) test_signal_payload(argv[1]);
+    test_focused_budget();
     g_current = &controller;
     struct proc_ledger l; proc_snapshot(&l);
     CHECK(l.processes == 1 && !l.threads && !l.zombies && !pages_used && heap_blocks == 1);

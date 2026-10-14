@@ -15,10 +15,15 @@ static int pic_highest(const struct v86_pic *p, uint8_t bits)
     return -1;
 }
 
-int dosvm_pic_eligible(const struct v86_pic *p)
+static int pic_eligible(const struct v86_pic *p, uint8_t irr, uint8_t isr)
 {
-    uint8_t pending = p->irr & ~p->imr;
-    uint8_t service = p->isr & (p->special_mask ? (uint8_t)~p->imr : 0xFF);
+    uint8_t pending = irr & ~p->imr;
+    uint8_t service = isr & (p->special_mask ? (uint8_t)~p->imr : 0xFF);
+    if (!pending) return -1;
+    if (p->priority == 7) {
+        unsigned irq = (unsigned)__builtin_ctz((unsigned)pending);
+        return service && (unsigned)__builtin_ctz((unsigned)service) <= irq ? -1 : (int)irq;
+    }
     for (unsigned n = 1; n <= 8; n++) {
         unsigned i = (p->priority + n) & 7;
         if (service & (1u << i))
@@ -28,6 +33,8 @@ int dosvm_pic_eligible(const struct v86_pic *p)
     }
     return -1;
 }
+int dosvm_pic_eligible(const struct v86_pic *p)
+{ return pic_eligible(p, p->irr, p->isr); }
 
 void dosvm_pic_accept(struct v86_pic *p, unsigned irq)
 {
@@ -108,12 +115,13 @@ void dosvm_pic_cascade(struct v86 *v)
 }
 int dosvm_pic_pending(const struct v86 *v)
 {
-    struct v86_pic master = v->pic[0];
+    const struct v86_pic *master = &v->pic[0];
+    uint8_t irr = master->irr, isr = master->isr;
     int slave = dosvm_pic_eligible(&v->pic[1]);
-    if (slave >= 0) master.irr |= 4;
-    else if (!v->track_boundaries) master.irr &= ~4u;
-    if (master.sfnm && slave >= 0) master.isr &= ~4u;
-    int irq = dosvm_pic_eligible(&master);
+    if (slave >= 0) irr |= 4;
+    else if (!v->track_boundaries) irr &= ~4u;
+    if (master->sfnm && slave >= 0) isr &= ~4u;
+    int irq = pic_eligible(master, irr, isr);
     return irq == 2 ? (slave < 0 ? 15 : slave + 8) : irq;
 }
 uint8_t dosvm_pic_ack(struct v86 *v)
