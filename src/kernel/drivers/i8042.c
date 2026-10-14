@@ -236,10 +236,20 @@ static void key_transition(struct controller *c, uint16_t code, bool down, uint6
     key_emit(c, code, down, tick);
 }
 
+static void usb_event_drop(const char *reason, uint16_t type, uint16_t code,
+                           int32_t value, gen_t generation)
+{
+    if (g_boot.flags & (CBI_F_VERBOSE | CBI_F_TEST_REQUEST))
+        klog("[input] usb drop reason=%s type=%u set1=%03x value=%d generation=%u",
+             reason, type, code, value, generation);
+}
+
 void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick)
 {
-    if (!generation || g_boot.input_policy == CBI_INPUT_FIRMWARE ||
-        (g_boot.flags & CBI_F_INPUT_FORCED)) return;
+    const char *drop = !generation ? "generation" :
+        g_boot.input_policy == CBI_INPUT_FIRMWARE ? "firmware_policy" :
+        (g_boot.flags & CBI_F_INPUT_FORCED) ? "forced_policy" : 0;
+    if (drop) { usb_event_drop(drop,type,code,value,generation); return; }
     uint32_t f = irq_save();
     struct input_queue *q = &native.queue;
     native.event_source = INPUT_USB; native.event_generation = generation;
@@ -252,6 +262,10 @@ void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generati
             (*refs)--;
             if (!*refs && !q->native_down[code]) key_emit(&native, code, false, tick);
         } else if (value == 2 && *refs) key_emit(&native, code, true, tick);
+        else drop = value == 1 ? "key_refcount" : value == 0 ? "unbalanced_release" :
+                    value == 2 ? "repeat_without_press" : "key_value";
+    } else if (type == INPUT_KEY) {
+        drop = "key_code";
     } else if (type == INPUT_BTN && code < 3 && (value == 0 || value == 1)) {
         uint8_t *refs = &q->usb_buttons[code];
         unsigned before = q->stats.buttons;
@@ -264,6 +278,8 @@ void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generati
         enqueue(&native, INPUT_REL, code, value, tick);
     native.event_source = 0; native.event_generation = 0;
     irq_restore(f);
+    /* Diagnostics must not hold the queue's IRQ exclusion across serial I/O. */
+    if (drop) usb_event_drop(drop,type,code,value,generation);
 }
 
 static void keyboard_byte(struct controller *c, uint8_t b, uint64_t tick)

@@ -20,3 +20,12 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_
 for mode in ready csc-cleared empty create-failed safe forced firmware none; do
     ASAN_OPTIONS=detect_leaks=0 "$out/service_test" "$mode"
 done
+# f1-51: production HID, i8042 merged queue and desktop grants on fake RAM.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/usb/input_grant_test.c" \
+    "$root/tests/host/usb/input_queue.c" "$root/src/kernel/usb/usb_hid.c" \
+    "$root/tests/host/proc/signal_legacy.c" "$root/src/kernel/lib/fmt.c" \
+    "$root/src/kernel/lib/sha256.c" "$root/src/kernel/probes/selector.c" \
+    -o "$out/input_grant_test"
+ASAN_OPTIONS=detect_leaks=0 "$out/input_grant_test"
