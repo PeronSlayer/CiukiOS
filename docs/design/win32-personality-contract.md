@@ -2341,3 +2341,35 @@ Decisions for implementation:
 - **Wine reuse (Q2, conditional):** if f5-14A shows the dependency closure costs more than it yields, CiukiOS writes more DLLs itself (LGPL-2.1-or-later) and Wine reuse is limited to autonomous modules (codecs, comctl32, shell parts).
 - **Acceptance titles:** freely distributable demos and shareware live on a separate optional games disk image for the tests, never in the system image.
 - **DOS full screen (F3, new):** the Windows 98 two-mode model is approved (f3-20): full-screen DOS sessions on the real VGA hardware under a released display lease, exact windowed emulation for desktop use.
+
+## Win16 subsystem contract proposal — 2026-10-14 (f5-19 contract)
+
+[win16-subsystem-contract.md](win16-subsystem-contract.md) specifies the full
+Win16 subsystem required by Q3 and the owner's evening reaffirmation. It
+addresses cross-review M06: protected NE loading/relocation/resources and
+self-loaders, selector/global/local heaps, typed KERNEL/USER/GDI thunks and
+callbacks, cooperative tasks, common file/INI/registry services, PE-child
+handoff, containment and diagnostics. It compares these requirements with
+the actual F3 DPMI 0.9 implementation and documents the additive Win32
+selector/context adapter required before f5-03's interface freeze.
+
+The new document is **proposed, awaiting the lead and independent Codex
+cross-review before runtime code**. Once reviewed, it supersedes the earlier
+N3/W24 blanket NE refusal and N10 exclusion of the required thunks, and the
+research note's suggestion to defer full Win16 after installer substitution.
+Earlier text is preserved as history. Ordinary PE and F3 DOS behavior retain
+their existing boundaries; NT WOW/NTVDM is not the CiukiOS execution model.
+
+The proposal orders f5-19a parser/toolchain/census, f5-19b protected core and
+heaps, f5-19c USER/GDI/cooperative integration, and f5-19d original installer
+qualification, with explicit f5-03–10 handoffs. f5-19d consumes f5-15A and
+feeds f5-15B, avoiding a circular installer dependency. The `f5-19c` contract
+worktree suffix does not denote implementation of the future f5-19c step.
+
+Worms Armageddon's original NE setup/helper chain and a licensed IS3 fixture
+with a true 16-bit engine must complete, alongside source-owned Open Watcom
+fixtures. Installer substitution cannot satisfy those gates. Actual NE
+imports/engine closure, an exact licensed IS3 fixture, unreadable period ABI
+sources and measured 128 MiB budgets remain explicit follow-up requirements;
+there is no invented API census or execution evidence. This milestone makes
+no code, build, QEMU, hardware or installer-completion claim.
