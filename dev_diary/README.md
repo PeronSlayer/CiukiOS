@@ -122,3 +122,4 @@ Documenti di design, validazione, fonti esterne.
 | [Immagine finale dell'ondata del 13 ottobre: 293c05af (ventitré consegne fuse)](2026-10-14-01-immagine-finale-293c05af.md) | 14 ott | modifiche (kernel, driver, desktop, SDK, test, runner), immagine |
 | [Immagine 8c88b1ab: le nove consegne della mattina del 14 ottobre](2026-10-14-02-immagine-8c88b1ab.md) | 14 ott | modifiche (kernel, driver, desktop, runner, documentazione), immagine |
 | [Immagine fb3147dc: giro di metà giornata del 14 ottobre](2026-10-14-03-immagine-fb3147dc.md) | 14 ott | modifiche (kernel, driver, VM DOS, runner), immagine |
+| [Immagine 445e91c7: giro del pomeriggio del 14 ottobre (nove direttive)](2026-10-14-04-immagine-445e91c7.md) | 14 ott | modifiche (kernel, driver, VM DOS, desktop, giochi), immagine |
