@@ -1,11 +1,17 @@
-/* ECMA-119 Level 1-3 and Joliet, read only. See f4-acceptance.md sources.
+/* ECMA-119 Level 1-3 and Joliet, read only. See optical-drive-binding.md sources.
  * No persistent block buffer: all media bytes use the shared cache.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/fs_ro.h>
+#ifdef FS_HOST
+#include <stdio.h>
+#define iso_log(...) do { fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } while (0)
+#else
+#define iso_log klog
+#endif
 #define ISO_BLOCK 2048u
 #define ISO_DESCRIPTORS 128u
 #define ISO_SECTIONS 128u
-struct iso_state { uint32_t blocks; uint64_t root; uint8_t joliet; };
+struct iso_state { uint64_t blocks, root; uint8_t joliet; };
 struct iso_record {
     struct fs_ro_node node;
     uint32_t extent, bytes;
@@ -14,36 +20,67 @@ struct iso_record {
 };
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((uint16_t)p[0] << 8 | p[1]); }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)be16(p) << 16 | be16(p + 2); }
-static int both16(const uint8_t *p, uint16_t *out)
-{ *out = fs_rd16(p); return *out == be16(p + 2) ? 0 : -FS_EIO; }
-static int both32(const uint8_t *p, uint32_t *out)
-{ *out = fs_rd32(p); return *out == be32(p + 4) ? 0 : -FS_EIO; }
+/* Linux isofs prefers the little-endian half even if mastering broke the
+ * other copy. Also accept a usable big-endian half if the little one fails
+ * this field's bounds/alignment. Never enlarge bounds to accommodate it. */
+static bool both16(const uint8_t *p, uint16_t expected)
+{ return fs_rd16(p) == expected || be16(p + 2) == expected; }
+static bool both32(const uint8_t *p, uint32_t *out, uint64_t min, uint64_t max, unsigned align)
+{
+    uint32_t little = fs_rd32(p), big = be32(p + 4);
+    if (little >= min && little <= max && !(little % align)) { *out = little; return true; }
+    if (big >= min && big <= max && !(big % align)) { *out = big; return true; }
+    return false;
+}
+static const char *descriptor_name(uint8_t type)
+{
+    switch (type) {
+    case 0: return "boot"; case 1: return "pvd"; case 2: return "svd";
+    case 3: return "partition"; case 255: return "terminator"; default: return "unknown";
+    }
+}
+static int failure(struct fs_ro_volume *v, uint64_t lba, const char *descriptor, const char *field, int e)
+{
+    iso_log("[optical] iso session=%llu lba=%llu descriptor=%s field=%s result=%d",
+            (unsigned long long)v->start, (unsigned long long)lba, descriptor, field, e);
+    return e;
+}
 static int block(struct fs_ro_volume *v, uint64_t lba, uint8_t *buf)
 {
     struct iso_state *s = v->state;
-    if (lba >= v->dev->capacity || (s->blocks && lba >= s->blocks)) return -FS_EIO;
+    if (lba >= v->start + v->sectors || (s->blocks && lba >= s->blocks)) return -FS_EIO;
     return cache_read(v->cache, v->dev, lba, buf);
 }
-static int record(struct fs_ro_volume *v, uint64_t id, struct iso_record *r)
+static __attribute__((noinline)) int record_named(struct fs_ro_volume *v, uint64_t id, struct iso_record *r, const char *source)
 {
-    uint8_t buf[ISO_BLOCK]; int e = block(v, id / ISO_BLOCK, buf); if (e) return e;
+    uint64_t lba = id / ISO_BLOCK;
+    uint8_t buf[ISO_BLOCK]; int e = block(v, lba, buf);
+    if (e) return failure(v, lba, source, "read", e);
     unsigned off = (unsigned)(id % ISO_BLOCK); const uint8_t *p = buf + off;
     memset(r, 0, sizeof(*r));
     if (!p[0]) return -FS_ENOENT;
     unsigned length = p[0];
     if (length < 34 || length > ISO_BLOCK - off || !p[32] || p[32] > length - 33 ||
-        33u + p[32] + !(p[32] & 1) > length) return -FS_EIO;
-    uint16_t seq;
-    if (both32(p + 2, &r->extent) || both32(p + 10, &r->bytes) || both16(p + 28, &seq) || seq != 1) return -FS_EIO;
+        33u + p[32] + !(p[32] & 1) > length)
+        return failure(v, lba, source, "length", -FS_EIO);
     r->length = (uint8_t)length; r->extended = p[1]; r->flags = p[25];
     r->unit = p[26]; r->gap = p[27]; r->name_length = p[32];
     memcpy(r->identifier, p + 33, r->name_length);
-    if ((r->flags & 0x60) || (!r->unit && r->gap) || ((r->flags & 2) && (r->unit || r->gap || (r->flags & 0x80)))) return -FS_EIO;
-    uint64_t blocks = ((uint64_t)r->bytes + ISO_BLOCK - 1) / ISO_BLOCK;
-    uint64_t extra = r->unit && blocks ? ((blocks - 1) / r->unit) * r->gap : 0;
-    uint64_t start = (uint64_t)r->extent + r->extended;
+    if ((r->flags & 0x60) || (!r->unit && r->gap) || ((r->flags & 2) && (r->unit || r->gap || (r->flags & 0x80))))
+        return failure(v, lba, source, "flags_interleave", -FS_EIO);
+    if (!both16(p + 28, 1)) return failure(v, lba, source, "volume_sequence_number", -FS_EIO);
     struct iso_state *s = v->state;
-    if (start > s->blocks || blocks + extra > s->blocks - start) return -FS_EIO;
+    if (r->extended > s->blocks || !both32(p + 2, &r->extent, 0, s->blocks - r->extended, 1))
+        return failure(v, lba, source, "extent", -FS_EIO);
+    uint64_t available = s->blocks - r->extent - r->extended;
+    if (r->unit) {
+        unsigned cycle = r->unit + r->gap;
+        uint64_t tail = available % cycle;
+        available = available / cycle * r->unit + (tail < r->unit ? tail : r->unit);
+    }
+    if (!both32(p + 10, &r->bytes, r->flags & 2 ? ISO_BLOCK : 0,
+                available * ISO_BLOCK, r->flags & 2 ? ISO_BLOCK : 1))
+        return failure(v, lba, source, "data_length", -FS_EIO);
     r->node.id = id; r->node.size = r->bytes;
     r->node.attr = FS_RO_READONLY | (r->flags & 2 ? FS_RO_DIRECTORY : 0) | (r->flags & 1 ? 2 : 0);
     if (r->name_length == 1 && r->identifier[0] <= 1) {
@@ -68,6 +105,8 @@ static int record(struct fs_ro_volume *v, uint64_t id, struct iso_record *r)
     e = path_from_ucs2(units, n, r->node.name, sizeof(r->node.name)); if (e) return e;
     return path_validate_name(r->node.name, units, &n);
 }
+static int record(struct fs_ro_volume *v, uint64_t id, struct iso_record *r)
+{ return record_named(v, id, r, "directory_record"); }
 static int following(struct fs_ro_volume *v, uint64_t *id, struct iso_record *r)
 {
     *id += r->length;
@@ -178,24 +217,39 @@ static uint32_t generation(struct fs_ro_volume *v)
 }
 static int probe(struct block_cache *cache, struct blkdev *dev, uint64_t start)
 {
-    if (dev->sector_size != ISO_BLOCK || start > dev->capacity || dev->capacity - start <= 16) return -FS_EINVAL;
-    uint8_t data[ISO_BLOCK]; int e = cache_read(cache, dev, start + 16, data);
-    if (e) return e;
-    return !memcmp(data + 1, "CD001", 5) && data[6] == 1 ? 0 : -FS_EINVAL;
+    (void)cache;
+    if (dev->sector_size != ISO_BLOCK || start >= dev->capacity || dev->capacity - start <= 16) {
+        iso_log("[optical] iso session=%llu descriptor=set field=%s result=%d",
+                (unsigned long long)start, dev->sector_size != ISO_BLOCK ? "device_sector_size" : "session_bounds", -FS_EINVAL);
+        return -FS_EINVAL;
+    }
+    /* Identification belongs to the bounded descriptor walk: sector 16
+     * may hold a boot record or a descriptor of another bridge format. */
+    return 0;
 }
 static int descriptor(struct fs_ro_volume *v, uint64_t lba, const uint8_t *b, uint8_t joliet, uint64_t *root)
 {
-    uint32_t count; uint16_t size, set, sequence;
-    if (both32(b + 80, &count) || both16(b + 128, &size) || both16(b + 120, &set) ||
-        both16(b + 124, &sequence) || !count || size != ISO_BLOCK || set != 1 || sequence != 1 || count > v->dev->capacity || b[881]!=1) return -FS_EIO;
-    uint32_t table_bytes;
-    if (both32(b+132,&table_bytes) || !table_bytes) return -FS_EIO;
-    uint64_t table_blocks=((uint64_t)table_bytes+ISO_BLOCK-1)/ISO_BLOCK;
-    uint32_t little=fs_rd32(b+140), big=be32(b+148);
-    if (!little || !big || little>=count || big>=count || table_blocks>count-little || table_blocks>count-big) return -FS_EIO;
-    struct iso_state *s = v->state; s->blocks = count; s->joliet = joliet;
-    struct iso_record r; int e = record(v, lba * ISO_BLOCK + 156, &r);
-    if (e || r.length != 34 || r.name_length != 1 || r.identifier[0] || !(r.flags & 2) || !r.bytes || r.bytes % ISO_BLOCK) return -FS_EIO;
+    const char *name = descriptor_name(b[0]); uint32_t count;
+    if (!both32(b + 80, &count, lba - v->start + 1, UINT32_MAX, 1))
+        return failure(v, lba, name, "volume_space_size", -FS_EIO);
+    if (!both16(b + 128, ISO_BLOCK)) return failure(v, lba, name, "logical_block_size", -FS_EIO);
+    if (!both16(b + 120, 1)) return failure(v, lba, name, "volume_set_size", -FS_EIO);
+    if (!both16(b + 124, 1)) return failure(v, lba, name, "volume_sequence_number", -FS_EIO);
+    if (b[881] != 1) return failure(v, lba, name, "file_structure_version", -FS_EIO);
+    /* We traverse directory records, never path tables. Like isofs, don't
+     * refuse readable files because an unused table copy is broken. */
+    struct iso_state *s = v->state;
+    /* xorriso add-on sessions store their LENGTH here, although directory
+     * extents are absolute. Count is not an absolute last-disc-block value.
+     * Clamp before addition: supports absolute-end mastering too, without
+     * ever admitting a read outside the actual media/mount end. */
+    s->blocks = v->start + (count < v->sectors ? count : v->sectors); s->joliet = joliet;
+    iso_log("[optical] iso session=%llu lba=%llu descriptor=%s field=volume_space_size declared=%u readable=%llu result=0",
+            (unsigned long long)v->start, (unsigned long long)lba, name, count, (unsigned long long)s->blocks);
+    struct iso_record r; int e = record_named(v, lba * ISO_BLOCK + 156, &r, name);
+    if (e) return failure(v, lba, name, "root_directory_record", -FS_EIO);
+    if (r.length != 34 || r.name_length != 1 || r.identifier[0] || !(r.flags & 2))
+        return failure(v, lba, name, "root_directory_record", -FS_EIO);
     *root = r.node.id; return 0;
 }
 static int mount_iso(struct fs_ro_volume *v)
@@ -203,15 +257,26 @@ static int mount_iso(struct fs_ro_volume *v)
     v->diagnostic="malformed_iso9660";
     struct iso_state *s = fs_alloc(sizeof(*s)); if (!s) return -FS_ENOMEM;
     memset(s, 0, sizeof(*s)); v->state = s;
-    uint64_t primary = 0, supplementary = 0; uint32_t blocks = 0; uint8_t preferred = 0;
+    uint64_t primary = 0, supplementary = 0, blocks = 0, supplementary_blocks = 0; uint8_t preferred = 0;
     bool terminated = false;
     for (unsigned i = 0; i < ISO_DESCRIPTORS; i++) {
         uint64_t lba = v->start + 16 + i; uint8_t b[ISO_BLOCK];
-        int e = block(v, lba, b); if (e) return e;
-        if (memcmp(b + 1, "CD001", 5) || b[6] != 1) return -FS_EIO;
-        if (b[0] == 255) { terminated = true; break; }
-        if (b[0] == 1) {
-            if (primary) return -FS_EIO;
+        /* Descriptor bounds use the media/session tail, independently of
+         * either hierarchy's volume size. Extents remain absolute disc LBAs,
+         * including files inherited from an earlier session. */
+        if (16u + i >= v->sectors) break;
+        int e = cache_read(v->cache, v->dev, lba, b);
+        if (e) return failure(v, lba, "set", "read", e);
+        if (memcmp(b + 1, "CD001", 5)) continue;
+        const char *name = descriptor_name(b[0]);
+        iso_log("[optical] iso session=%llu lba=%llu descriptor=%s type=%u field=header result=0",
+                (unsigned long long)v->start, (unsigned long long)lba, name, b[0]);
+        if (b[0] == 255) {
+            if (b[6] != 1) return failure(v, lba, name, "descriptor_version", -FS_EIO);
+            terminated = true; break;
+        }
+        if (b[0] == 1 && !primary) {
+            if (b[6] != 1) return failure(v, lba, name, "descriptor_version", -FS_EIO);
             e = descriptor(v, lba, b, 0, &primary); if (e) return e;
             blocks = s->blocks;
             memcpy(v->volume_label,b+40,32); v->volume_label[32]=0;
@@ -224,16 +289,19 @@ static int mount_iso(struct fs_ro_volume *v)
             for (unsigned j=190;j<318;j++) identity=(identity^b[j])*1099511628211ull;
             for (unsigned j=813;j<847;j++) identity=(identity^b[j])*1099511628211ull;
             v->volume_identity=identity;
-        } else if (b[0] == 2 && b[88] == '%' && b[89] == '/') {
+        } else if (b[0] == 2 && b[6] == 1 && b[88] == '%' && b[89] == '/') {
             uint8_t level = b[90] == '@' ? 1 : b[90] == 'C' ? 2 : b[90] == 'E' ? 3 : 0;
-            if (!level || b[7]) { v->diagnostic = "malformed_joliet"; return -FS_EIO; }
+            if (!level) continue; /* an unimplemented character set */
+            if (b[7]) { v->diagnostic = "malformed_joliet"; return failure(v, lba, name, "volume_flags", -FS_EIO); }
             uint64_t root; e = descriptor(v, lba, b, level, &root);
-            if (e || (blocks && s->blocks != blocks)) { v->diagnostic = "malformed_joliet"; return -FS_EIO; }
-            if (level > preferred) { preferred = level; supplementary = root; }
-        } else if (b[0] > 3) return -FS_EIO;
+            if (e) { v->diagnostic = "malformed_joliet"; return e; }
+            if (level > preferred) { preferred = level; supplementary = root; supplementary_blocks = s->blocks; }
+        } /* Boot, partition, repeated PVD and unknown descriptors are ignored. */
     }
-    if (!primary || !terminated) return -FS_EIO;
-    s->blocks = blocks; s->joliet = preferred; s->root = supplementary ? supplementary : primary;
+    if (!primary) return failure(v, v->start + 16, "set", "primary_descriptor", -FS_EIO);
+    if (!terminated) return failure(v, v->start + 16, "set", "terminator", -FS_EIO);
+    s->blocks = supplementary ? supplementary_blocks : blocks;
+    s->joliet = preferred; s->root = supplementary ? supplementary : primary;
     v->diagnostic = preferred ? "joliet" : "iso9660";
     return 0;
 }
