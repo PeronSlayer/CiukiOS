@@ -19,6 +19,7 @@
 #define USB_BIND_TIMEOUT_MS 5000u
 #define USB_BIND_BULK_MS 1000u
 #define USB_BIND_FINISH_MS 100u /* retirement and terminal disk record */
+#define USB_BULK_TRACE_LIMIT 8u
 #define USB_EIO 5
 #define USB_EAGAIN 11
 #define USB_EPIPE 32
@@ -81,6 +82,10 @@ struct usb_hid {
 };
 struct usb_storage_trace {
     struct usb_packet_trace packet;
+    struct usb_packet_trace packets[USB_BULK_TRACE_LIMIT];
+    unsigned packet_count, packet_index, packet_offset;
+    uint64_t bulk_started_ms, bulk_deadline, bulk_elapsed_ms, bind_remaining_ms;
+    const char *bulk_stop;
     const char *stage;
     uint32_t tag, port_status;
     unsigned expected, actual, data_expected, data_actual;
@@ -170,8 +175,9 @@ struct usb_host {
 };
 extern const struct usb_hc_ops usb_uhci_ops, usb_ohci_ops;
 static inline void usb_barrier(void) { __asm__ volatile("" ::: "memory"); }
-/* Bulk NAK is flow control within the whole stage's budget, not a fresh
- * per-packet timeout. Poll counts still bound a frozen software clock. */
+/* Bulk NAK never renews a deadline. Binding ACK progress may renew the bulk
+ * wait, always capped by the aggregate bind limit. Published I/O retains its
+ * whole-stage bound. Poll counts still bound a frozen software clock. */
 static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool periodic,
                                          uint64_t now)
 {

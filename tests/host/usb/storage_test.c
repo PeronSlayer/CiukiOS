@@ -53,6 +53,8 @@ static struct model {
     bool connected, max_lun_stall, no_flush, wp, phase_error, bad_tag, bad_signature, bad_residue, short_csw;
     bool data_stall, csw_stall, cbw_stall, timeout, remove_data, ua, no_medium, fail_flush;
     bool forever_data, forever_csw, forever_stall, nak_capacity, nak_mount, slow_all;
+    bool nak_prepare, nak_eighth;
+    unsigned read_commands;
     unsigned sector_size, initial_ua;
     bool uhci, data_babble, data_crc, clear_fail, reset_fail, late_ack, latched, mode_stall;
     unsigned inquiry_bytes, capacity_bytes, inquiry_delay, inquiry_delays, inquiries, modes, naks, reset_order, frame_offset, late_acks;
@@ -153,6 +155,7 @@ static void start_command(void)
     case 0x28: case 0x2a:
         assert(m.total==((unsigned)c[7]*256+c[8])*512);
         if(c[0]==0x2a) m.writes++;
+        else m.read_commands++;
         break;
     default: assert(!"unexpected SCSI command");
     }
@@ -207,7 +210,9 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
         if(m.cbw_at==31){m.cbw_at=0;start_command();}
     } else if(m.stage==1) {
         if(m.forever_data || (m.nak_capacity && m.cbw[15]==0x25) ||
-           (m.nak_mount && m.cbw[15]==0x28)) return -USB_EAGAIN;
+           (m.nak_mount && m.cbw[15]==0x28) ||
+           (m.nak_prepare && m.cbw[15]==0x28 && m.read_commands>=3) ||
+           (m.nak_eighth && m.cbw[15]==0x28 && m.read_commands>=3 && m.at==448)) return -USB_EAGAIN;
         if(m.forever_stall && m.cbw[15]==0x12) {failed(3,0x11);m.stage=2;return -USB_EPIPE;}
         if(m.cbw[15]==0x12 && (!m.inquiry_delays || m.inquiries<=m.inquiry_delays) &&
            m.now-m.command_at<m.inquiry_delay) return -USB_EAGAIN;
@@ -475,9 +480,59 @@ static void attach_tolerance(const char *path)
     assert(block()->quarantined && !device()->storage.online && !m.modes && !m.writes);cleanup();
     puts("PASS USB F1-53 attach: one reset-qualified INQUIRY retry, persistent timeout/reset failure/CRC quarantine, optional MODE SENSE STALL, DATA0 recovery, short capacity rejection and readiness/write/flush admission");
 }
+static void failed_mount(const char *path)
+{
+    for(unsigned mode=0;mode<4;mode++) {
+        setup(path,true);use_uhci();
+        if(mode==3) {m.inquiry_delay=USB_BIND_BULK_MS+500;m.inquiry_delays=1;}
+        attach();
+        if(mode==0)m.nak_prepare=true;
+        if(mode==1 || mode==3)m.nak_eighth=true;
+        if(mode==2)memset(m.image,0,512); /* Recognized FAT partition, invalid BPB. */
+        usb_storage_service(&m.h);
+        struct storage *s=storage_get();struct usb_storage *u=&device()->storage;
+        assert(strstr(records,"[usb-storage] volume drive=E part=1 "));
+        assert(s->volumes[4].error && !s->volumes[4].fat.mounted);
+        if(u->published)fprintf(stderr,"F1-60 failed mount: published=%u volume_error=%d VFS_E=%u\n",
+            u->published,s->volumes[4].error,vfs_drive_present(&s->vfs,4));
+        assert(!u->published && !u->online && !u->binding && device()->quarantined);
+        if(mode!=2)assert(strstr(records,"quarantine addr=1 reason=data_transfer stage=mount transfer=data"));
+        else assert(strstr(records,"quarantine addr=1 reason=mount_failed stage=mount"));
+        if(mode==1 || mode==3) {
+            struct usb_storage_trace *t=&u->trace;
+            assert(t->expected==512 && t->actual==448 && t->packet_count==8 && t->packet_index==7);
+            assert(t->packet_offset==448 && t->packet.result==-USB_ETIMEDOUT);
+            unsigned initial=t->packets[0].toggle;
+            for(unsigned i=0;i<8;i++) {
+                const struct usb_packet_trace *p=&t->packets[i];
+                assert(p->valid && p->toggle==(initial^(i&1)) && !p->retired);
+                assert(p->actual==(i<7 ? 64:-1) && p->result==(i<7 ? 64:-USB_ETIMEDOUT));
+                char needle[96];snprintf(needle,sizeof(needle),"[usb-storage] packet addr=1 tag=%u index=%u toggle=%u",t->tag,i,p->toggle);
+                assert(strstr(records,needle));
+            }
+            assert(strstr(records,"packets=8 index=7 offset=448 stop=packet"));
+            assert(strstr(records,"expected=64 actual=-1 result=-110 td=188807ff"));
+            /* Recovery control packets reuse DMA, but not the data-stage history. */
+            assert(device()->packet_trace.pid!=USB_PID_IN || device()->packet_trace.expected!=64);
+            if(mode==3)assert(strstr(records,"[usb-storage] terminal_fault addr=1 reason=data_transfer"));
+        }
+        for(unsigned d=4;d<26;d++)
+            assert(!vfs_drive_present(&s->vfs,d) && !s->volumes[d].present && !s->vfs.drive_flags[d]);
+        struct vfs_table table;assert(!vfs_table_init(&s->vfs,&table,2));
+        assert(vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0)<0);
+        vfs_table_destroy(&table);
+        unsigned commands=m.commands;size_t logged=records_at;
+        for(unsigned i=0;i<3;i++)usb_storage_service(&m.h);
+        assert(m.commands==commands && records_at==logged && !m.writes);
+        cleanup();
+    }
+    puts("PASS F1-60 failed FAT preparation: volume error, mount quarantine, unpublished USB/VFS/drive flags, E: refused, no rebind, eighth-packet trace survives reset, invalid BPB");
+}
 int main(int argc,char **argv)
 {
     assert(argc==4);
+    if(getenv("USB_TEST_F1_60_MOUNT_ONLY")) {failed_mount(argv[2]);return 0;}
+    failed_mount(argv[2]);
     if(getenv("USB_TEST_F1_47_ONLY")) {uhci_transport(argv[2]);return 0;}
     uhci_transport(argv[2]);attach_tolerance(argv[2]);
     io_mount(argv[1],false,12);io_mount(argv[2],true,16);io_mount(argv[3],true,32);
