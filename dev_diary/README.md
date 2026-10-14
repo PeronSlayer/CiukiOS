@@ -124,3 +124,4 @@ Documenti di design, validazione, fonti esterne.
 | [Immagine fb3147dc: giro di metà giornata del 14 ottobre](2026-10-14-03-immagine-fb3147dc.md) | 14 ott | modifiche (kernel, driver, VM DOS, runner), immagine |
 | [Immagine 445e91c7: giro del pomeriggio del 14 ottobre (nove direttive)](2026-10-14-04-immagine-445e91c7.md) | 14 ott | modifiche (kernel, driver, VM DOS, desktop, giochi), immagine |
 | [Immagine ce2e6ce9: giro della sera del 14 ottobre (sei direttive)](2026-10-14-05-immagine-ce2e6ce9.md) | 14 ott | modifiche (kernel, driver, desktop), immagine |
+| [Immagine 66843edc: giro della notte del 14 ottobre (sei direttive)](2026-10-14-06-immagine-66843edc.md) | 14 ott | modifiche (kernel, driver, desktop, tema), immagine |
