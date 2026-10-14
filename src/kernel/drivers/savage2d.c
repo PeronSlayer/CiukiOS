@@ -14,8 +14,8 @@
 #define RECT 0x48000000u
 #define XP 0x01000000u
 #define YP 0x02000000u
-#define DEST_NEW 0x00000c00u
-#define SRC_NEW 0x00000140u
+#define DEST_GBD 0x00000000u
+#define SRC_GBD 0x00000020u
 #define COLOR 0x00008000u
 #define WAIT_US 20000u
 #define WAIT_POLLS 256u
@@ -25,10 +25,7 @@
 #define STATUS_SAMPLES 8u
 #define BCI_CONTROL 0x48c18u
 #define GBD_READ_MASK 0x13ff1ffdu
-static bool status_polling;
-static bool initializing;
-static bool trace_read_begin(const char *, uint32_t, uint32_t);
-static void trace_value(const char *, uint32_t, uint32_t);
+static bool initializing, probing;
 static void init_record(const char *, uint32_t, unsigned, uint32_t, uint32_t);
 static uint8_t port_cr_read(struct savage2d *s, uint8_t index)
 {
@@ -118,15 +115,10 @@ static int wait_idle(struct savage2d *s)
     uint32_t old_mask = s->idle_mask;
     unsigned polls = first ? INITIAL_POLLS : WAIT_POLLS;
     uint32_t interval = first ? INITIAL_POLL_US : POLL_US;
-    /* Keep the pre-read breadcrumb outside the budget, then buffer status
-     * diagnostics. At 38400 baud a single log can exceed the entire wait. */
-    bool traced = trace_read_begin("r32", SAVAGE_STATUS, SAVAGE_STATUS);
-    uint32_t first_value = 0;
+    /* Buffer status diagnostics until after the polling budget. At 38400
+     * baud a single log can exceed the entire wait. */
     uint64_t start = s->io.now_us(s->io.ctx);
     int result = -EIO;
-    /* BCI self-test completion has the same serial deadline hazard as the
-     * first wait. Defer transport logs for every bounded status poll. */
-    status_polling = true;
     for (unsigned i = 0; i < polls; i++) {
         /* No pacing before the first read of a new idle check. Reset has
          * already settled; only consecutive busy reads need the interval. */
@@ -138,7 +130,6 @@ static int wait_idle(struct savage2d *s)
             if (s->io.delay_us(s->io.ctx, delay)) { s->reason = "delay_failed"; break; }
         }
         uint32_t status = s->io.read32(s->io.ctx, SAVAGE_STATUS);
-        if (!i) first_value = status;
         uint64_t elapsed = s->io.now_us(s->io.ctx) - start;
         if (first && count < STATUS_SAMPLES) {
             samples[count].us = elapsed; samples[count].value = status; count++;
@@ -153,9 +144,7 @@ static int wait_idle(struct savage2d *s)
         if (status == UINT32_MAX || (s->reason && !strncmp(s->reason, "status_contradiction", sizeof("status_contradiction"))) ||
             elapsed >= WAIT_US) break;
     }
-    status_polling = false;
     s->poll_us += s->io.now_us(s->io.ctx) - start;
-    if (traced) trace_value("r32", SAVAGE_STATUS, first_value);
     if (first && count) {
         klog("[accel] savage status reg=48c60 raw=%08x", samples[0].value);
         for (unsigned i = 0; i < count; i++)
@@ -196,6 +185,19 @@ static int disable_bci(struct savage2d *s, uint32_t control)
 static int sync_engine(void *ctx)
 {
     struct savage2d *s = ctx;
+    if (s->quarantined) {
+        /* One final observation, then cache either result. Never poll the
+         * quarantined engine at frame rate, even if it remains unsafe. */
+        if (!s->final_idle_checked) {
+            s->final_idle_checked = true;
+            if (s->submitted && s->status_ready) {
+                s->io.drain(s->io.ctx);
+                (void)wait_idle(s);
+            }
+        }
+        return s->cpu_safe ? 0 : -EIO;
+    }
+    if (s->cpu_safe) return 0;
     if (!s->status_ready) return s->cpu_safe ? 0 : -EIO;
     s->io.drain(s->io.ctx);
     if (wait_idle(s)) return fault(s);
@@ -204,8 +206,8 @@ static int sync_engine(void *ctx)
 static int submit(struct savage2d *s, const uint32_t *words, unsigned n)
 {
     if (!s->active || s->quarantined) { s->fallbacks++; return -ENODEV; }
+    if (sync_engine(s)) return -EIO;
     s->io.drain(s->io.ctx);
-    if (wait_idle(s)) return fault(s);
     s->cpu_safe = false;
     s->submitted = true;
     for (unsigned i = 0; i < n; i++) s->io.write32(s->io.ctx, SAVAGE_BCI + i * 4, words[i]);
@@ -224,20 +226,22 @@ static int copy_rect(void *ctx, const struct fb_rect *r, int32_t dx, int32_t dy)
     struct savage2d *s = ctx;
     struct fb_rect dst = {dx, dy, r ? r->width : 0, r ? r->height : 0};
     if (!valid_rect(s, r) || !valid_rect(s, &dst)) return -EINVAL;
-    uint32_t sx = r->x, sy = r->y, x = dx, y = dy, cmd = RECT | DEST_NEW | SRC_NEW | (0xccu << 16);
+    uint32_t sx = r->x, sy = r->y, x = dx, y = dy, cmd = RECT | DEST_GBD | SRC_GBD | (0xccu << 16);
     if (dx <= r->x) cmd |= XP;
     else { sx += r->width - 1; x += r->width - 1; }
     if (dy <= r->y) cmd |= YP;
     else { sy += r->height - 1; y += r->height - 1; }
-    uint32_t packet[] = {cmd, s->offset, s->descriptor, s->offset, s->descriptor, xy(sx,sy), xy(x,y), xy(r->width,r->height)};
+    uint32_t packet[] = {cmd, xy(sx,sy), xy(x,y), xy(r->width,r->height)};
     return submit(s, packet, ARRAY_SIZE(packet));
 }
 static int fill_rect(void *ctx, const struct fb_rect *r, uint32_t colour)
 {
     struct savage2d *s = ctx;
     if (!valid_rect(s, r)) return -EINVAL;
-    uint32_t packet[] = {RECT | XP | YP | DEST_NEW | COLOR | (0xccu << 16),
-        s->offset, s->descriptor, colour, xy(r->x,r->y), xy(r->width,r->height)};
+    /* Linux savagefb's solid GBD fill: command, full colour, XY, WH.
+     * No inline primary descriptor, pattern or mono-expansion flags. */
+    uint32_t packet[] = {RECT | XP | YP | DEST_GBD | COLOR | (0xccu << 16),
+        colour, xy(r->x,r->y), xy(r->width,r->height)};
     return submit(s, packet, ARRAY_SIZE(packet));
 }
 static int pattern_rect(void *ctx, const struct fb_rect *r, const uint8_t pattern[8], uint32_t fg, uint32_t bg)
@@ -246,8 +250,8 @@ static int pattern_rect(void *ctx, const struct fb_rect *r, const uint8_t patter
     if (!valid_rect(s, r) || !pattern) return -EINVAL;
     uint32_t lo = 0, hi = 0;
     for (unsigned i = 0; i < 4; i++) { lo |= (uint32_t)pattern[i] << (i * 8); hi |= (uint32_t)pattern[i+4] << (i * 8); }
-    uint32_t packet[] = {RECT | XP | YP | DEST_NEW | COLOR | 3u | (0xf0u << 16),
-        s->offset, s->descriptor, fg, bg, xy(r->x,r->y), xy(r->width,r->height), lo, hi};
+    uint32_t packet[] = {RECT | XP | YP | DEST_GBD | COLOR | 3u | (0xf0u << 16),
+        fg, bg, xy(r->x,r->y), xy(r->width,r->height), lo, hi};
     return submit(s, packet, ARRAY_SIZE(packet));
 }
 static int cursor_show(void *ctx, bool show)
@@ -361,7 +365,8 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     s->ops = (struct accel_ops){s, sync_engine, copy_rect, fill_rect, pattern_rect,
         cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready};
     s->reason = 0; s->idle_mask = s->idle_value = s->status = 0; s->status_logged = false;
-    s->status_ready = false; s->submitted = false;
+    s->status_ready = false; s->submitted = false; s->final_idle_checked = false;
+    s->cpu_safe = false;
     s->reset_us = s->poll_us = 0;
     /* All operational VGA access stays on the exclusively owned ports.
      * RE046-B CR39: A0 unlocks extensions without the extra A5 permissions. */
@@ -456,7 +461,7 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     klog("[accel] savage descriptor wrote=%08x read=%08x mask=%08x cr40=%02x", gbd, check, GBD_READ_MASK, cr40);
     if (check == UINT32_MAX || (check & GBD_READ_MASK) != gbd || !(cr40 & 1u))
         return fail(s, "descriptor_readback_failed");
-    if (sync_engine(s)) return -EIO;
+    if (wait_idle(s)) return fault(s);
     s->active = true;
     return 0;
 }
@@ -469,11 +474,14 @@ static uint32_t cursor_phys;
 static uint8_t *cursor_mapping;
 static void *register_window, *cursor_window;
 static uint64_t last_log;
-/* Verbose-boot breadcrumbs: COM1 output is synchronous, so the last step
- * line before a silent stop names the register access that stalled the
- * bus (T23, 2026-10-13). Repeated accesses (polling) print only once. */
-static bool tracing;
-static uint32_t trace_last = UINT32_MAX;
+/* Bounded paired diagnostics. Success emits no per-register serial traffic. */
+#define INIT_RECORDS 40u
+static struct {
+    const char *bank;
+    uint32_t reg, wrote, read;
+    unsigned width;
+} init_records[INIT_RECORDS];
+static unsigned init_count;
 static uint64_t hw_now(void *ctx)
 {
     (void)ctx;
@@ -487,83 +495,70 @@ static uint64_t activation_start, trace_us;
 static bool attempt_in_progress;
 static uint64_t activation_elapsed(void)
 { return activation_now(activation_ctx) - activation_start; }
-static bool trace_read_begin(const char *op, uint32_t key, uint32_t reg)
-{
-    if (status_polling && key == SAVAGE_STATUS) return false;
-    if (!tracing || key == trace_last) return false;
-    trace_last = key;
-    uint64_t start = activation_now(activation_ctx);
-    klog("[accel] savage step op=%s reg=%05x value=pending us=%llu", op, reg, start - activation_start);
-    trace_us += activation_now(activation_ctx) - start;
-    if (initializing) task_yield();
-    return true;
-}
-static void trace_value(const char *op, uint32_t reg, uint32_t value)
-{
-    uint64_t start = activation_now(activation_ctx);
-    klog("[accel] savage step op=%s reg=%05x value=%08x us=%llu", op, reg, value, start - activation_start);
-    trace_us += activation_now(activation_ctx) - start;
-    if (initializing) task_yield();
-}
-static void trace_write(const char *op, uint32_t key, uint32_t reg, uint32_t value)
-{
-    if (!tracing) return;
-    trace_last = key;
-    trace_value(op, reg, value);
-}
 static void init_record(const char *bank, uint32_t reg, unsigned width, uint32_t wrote, uint32_t read)
 {
+    if (init_count < INIT_RECORDS) {
+        init_records[init_count].bank = bank;
+        init_records[init_count].reg = reg;
+        init_records[init_count].width = width;
+        init_records[init_count].wrote = wrote;
+        init_records[init_count++].read = read;
+    }
+    if (initializing && !probing) task_yield();
+}
+static void init_report(void)
+{
     uint64_t start = activation_now(activation_ctx);
-    klog("[accel] savage init reg=%05x wrote=%08x read=%08x bank=%s width=%u", reg, wrote, read, bank, width);
+    for (unsigned i = 0; i < init_count; i++) {
+        klog("[accel] savage init reg=%05x wrote=%08x read=%08x bank=%s width=%u",
+            init_records[i].reg, init_records[i].wrote, init_records[i].read,
+            init_records[i].bank, init_records[i].width);
+        task_yield();
+    }
     trace_us += activation_now(activation_ctx) - start;
-    if (initializing) task_yield();
 }
 static uint32_t hw_read(void *ctx, uint32_t offset)
 {
-    (void)ctx; bool logged = trace_read_begin("r32", offset, offset);
+    (void)ctx;
     uint32_t value = registers ? *(volatile uint32_t *)(registers + offset) : UINT32_MAX;
-    if (logged) trace_value("r32", offset, value);
     return value;
 }
 static uint8_t hw_read8(void *ctx, uint32_t offset)
 {
-    (void)ctx; bool logged = trace_read_begin("r8", 0x10000000u | offset, offset);
+    (void)ctx;
     uint8_t value = registers ? registers[offset] : 0xff;
-    if (logged) trace_value("r8", offset, value);
     return value;
 }
 static void hw_write8(void *ctx, uint32_t offset, uint8_t value)
 {
-    (void)ctx; trace_write("w8", 0x20000000u | offset, offset, value);
+    (void)ctx;
     if (registers) registers[offset] = value;
 }
 static void hw_write(void *ctx, uint32_t offset, uint32_t value)
 {
-    (void)ctx; trace_write("w32", 0x40000000u | offset, offset, value);
+    (void)ctx;
     if (registers) *(volatile uint32_t *)(registers + offset) = value;
 }
 static uint16_t hw_read16(void *ctx, uint32_t offset)
 {
-    (void)ctx; bool logged = trace_read_begin("r16", 0x60000000u | offset, offset);
+    (void)ctx;
     uint16_t value = registers ? *(volatile uint16_t *)(registers + offset) : UINT16_MAX;
-    if (logged) trace_value("r16", offset, value);
     return value;
 }
 static void hw_write16(void *ctx, uint32_t offset, uint16_t value)
 {
-    (void)ctx; trace_write("w16", 0x70000000u | offset, offset, value);
+    (void)ctx;
     if (registers) *(volatile uint16_t *)(registers + offset) = value;
 }
 static uint8_t hw_port_read(void *ctx, uint16_t port)
 {
-    (void)ctx; bool logged = trace_read_begin("pr8", 0x30000000u | port, port);
+    (void)ctx;
     uint8_t value = port >= 0x3b0 && port < 0x3e0 ? inb(port) : 0xff;
-    if (logged) trace_value("pr8", port, value);
     return value;
 }
 static void hw_port_write(void *ctx, uint16_t port, uint8_t value)
 {
-    (void)ctx; trace_write("pw8", 0x50000000u | port, port, value);
+    (void)ctx;
     if (port >= 0x3b0 && port < 0x3e0) outb(port, value);
 }
 static int hw_delay(void *ctx, uint32_t us)
@@ -574,50 +569,68 @@ static int hw_delay(void *ctx, uint32_t us)
         int err = udelay(part);
         if (err) return err;
         us -= part;
-        if (initializing) task_yield();
+        if (initializing && !probing) task_yield();
     }
     return 0;
 }
 static void hw_drain(void *ctx) { (void)ctx; framebuffer_write_drain(); }
 static void record(void)
 {
-    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    if (probing || !(g_boot.flags & CBI_F_VERBOSE)) return;
     klog("[accel] driver=savage ops=%llu idle_waits=%llu fallbacks=%llu quarantined=%u status=%08x status_valid=%u",
         engine.operations, engine.idle_waits, engine.fallbacks, engine.quarantined, engine.status, engine.status_logged);
 }
 const struct accel_ops *savage2d_fallback_ops(void)
 {
-    return engine.quarantined && engine.submitted ? &engine.ops : 0;
+    if (!engine.quarantined || !engine.submitted) return 0;
+    (void)sync_engine(&engine);
+    return engine.cpu_safe ? 0 : &engine.ops;
+}
+struct bci_probe {
+    struct savage2d *s;
+    const struct fb_device *d;
+    uint32_t before, marker, read;
+    bool valid;
+};
+static int bci_probe_pixel(void *ctx)
+{
+    struct bci_probe *p = ctx;
+    struct savage2d *s = p->s;
+    const struct fb_device *d = p->d;
+    if (!d->mapped) return fail(s, "bci_test_unmapped");
+    /* Only this saved-pixel transaction needs presenter/console exclusion.
+     * No serial output or voluntary yield may extend that interval. */
+    unsigned bytes = d->bpp / 8;
+    volatile uint8_t *pixel = d->mapped + (d->height - 1) * d->pitch + (d->width - 1) * bytes;
+    s->io.drain(s->io.ctx);
+    for (unsigned i = 0; i < bytes; i++) p->before |= (uint32_t)pixel[i] << (8 * i);
+    p->marker = (p->before ^ 0x005aa55au) & (bytes == 2 ? 0xffffu : 0xffffffu);
+    struct fb_rect r = {(int32_t)d->width - 1, (int32_t)d->height - 1, 1, 1};
+    int err = fill_rect(s, &r, p->marker);
+    p->valid = !err && s->cpu_safe;
+    if (p->valid) {
+        for (unsigned i = 0; i < bytes; i++) p->read |= (uint32_t)pixel[i] << (8 * i);
+        for (unsigned i = 0; i < bytes; i++) pixel[i] = (uint8_t)(p->before >> (8 * i));
+        s->io.drain(s->io.ctx);
+        if (p->read != p->marker) err = fail(s, "bci_test_readback_failed");
+    }
+    return err;
 }
 static int bci_test(struct savage2d *s, const struct fb_device *d)
 {
-    if (!d->mapped) return fail(s, "bci_test_unmapped");
-    /* The caller owns fbdev's presenter and nonwaiting-console exclusion.
-     * Save one pixel, use a distinct packed marker, restore only after idle. */
-    unsigned bytes = d->bpp / 8;
-    volatile uint8_t *p = d->mapped + (d->height - 1) * d->pitch + (d->width - 1) * bytes;
-    s->io.drain(s->io.ctx);
-    uint32_t before = 0;
-    for (unsigned i = 0; i < bytes; i++) before |= (uint32_t)p[i] << (8 * i);
-    uint32_t mask = bytes == 2 ? 0xffffu : 0xffffffu;
-    uint32_t marker = (before ^ 0x005aa55au) & mask;
-    struct fb_rect r = {(int32_t)d->width - 1, (int32_t)d->height - 1, 1, 1};
-    klog("[accel] savage bci_test phase=fill x=%u y=%u wrote=%08x before=%08x", r.x, r.y, marker, before);
-    int err = fill_rect(s, &r, marker);
-    uint32_t read = 0;
-    bool valid = !err && s->cpu_safe;
-    if (valid) {
-        for (unsigned i = 0; i < bytes; i++) read |= (uint32_t)p[i] << (8 * i);
-        for (unsigned i = 0; i < bytes; i++) p[i] = (uint8_t)(before >> (8 * i));
-        s->io.drain(s->io.ctx);
-        if ((read & mask) != marker) err = fail(s, "bci_test_readback_failed");
-    }
+    struct bci_probe p = {.s = s, .d = d};
+    probing = true;
+    int err = initializing ? fbdev_accel_probe(d, bci_probe_pixel, &p) : bci_probe_pixel(&p);
+    probing = false;
+    if (err == -EBUSY) err = fail(s, "bci_test_busy");
+    klog("[accel] savage bci_test phase=fill x=%u y=%u wrote=%08x before=%08x cmd=4bcc8000",
+        d->width - 1, d->height - 1, p.marker, p.before);
     klog("[accel] savage bci_test result=%s error=%d wrote=%08x read=%08x read_valid=%u restored=%u status=%08x status_valid=%u",
-        err ? "failed" : "passed", err, marker, read, valid, valid, s->status, s->status_logged);
+        err ? "failed" : "passed", err, p.marker, p.read, p.valid, p.valid, s->status, s->status_logged);
     return err;
 }
 void savage2d_record(void)
-{ if (reg_claim >= 0 && g_ticks - last_log >= 2000) { last_log = g_ticks; record(); } }
+{ if (!initializing && reg_claim >= 0 && g_ticks - last_log >= 2000) { last_log = g_ticks; record(); } }
 /* Caller holds the fbdev presenter mutex; this never reads hardware. */
 void savage2d_snapshot(struct ciuki_accel_info *out)
 {
@@ -776,7 +789,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         activation_now = io->now_us; activation_ctx = io->ctx;
         activation_start = activation_now(activation_ctx);
     }
-    trace_us = 0;
+    trace_us = 0; init_count = 0;
     const struct pci_func *gpu;
     const char *reason = eligibility(d, &gpu);
     if (reason) return decline(reason);
@@ -839,22 +852,22 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
     uint8_t *cursor = cursor_mapping && cursor_phys >= d->phys + d->size ? cursor_mapping : 0;
     if (g_boot.flags & CBI_F_VERBOSE)
         klog("[accel] savage mapped mmio=%p cursor=%p", (void *)registers, (void *)cursor);
-    tracing = !!(g_boot.flags & CBI_F_VERBOSE); trace_last = UINT32_MAX;
     initializing = true;
     int err = savage2d_start(&engine, io, d, gpu->device != 0x8a22, cursor, cursor_phys - d->phys);
     if (!err) err = bci_test(&engine, d);
     else klog("[accel] savage bci_test result=skipped reason=%s", engine.reason ? engine.reason : "init_failed");
     initializing = false;
-    tracing = false;
     engine.ops.stop = runtime_stop;
     if (g_boot.flags & CBI_F_VERBOSE)
         klog("[accel] savage pci=%04x:%04x mmio=%08x lfb=%08x mode=%u bpp=%u pitch=%u caps=%u init_result=%d",
             gpu->vendor,gpu->device,gpu->bar[0]&~15u,d->phys,d->mode_id,d->bpp,d->pitch,capabilities(&engine),err);
     record();
     if (err) {
-        /* fbdev retains an idle guard only if the marker test submitted a
-         * command. Earlier failures keep the existing software path. */
+        /* A submitted writer gets one final proof before plain software
+         * fallback; an unsafe writer retains only a cached rejecting guard. */
         if (!engine.quarantined) { engine.quarantined = true; hw_fault(0); }
+        (void)savage2d_fallback_ops();
+        init_report();
         if (vfs) savage2d_attempt_failed(vfs);
         return decline(engine.reason ? engine.reason : "init_failed");
     }
