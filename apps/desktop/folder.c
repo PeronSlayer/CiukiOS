@@ -96,6 +96,32 @@ void desk_folder_drop(struct desktop *d, int source, int copy)
     }
     if (r) error(d,r);
 }
+_Static_assert(FM_ENTRIES<UINT16_MAX,"folder poll index fits its reserved slots");
+static unsigned entry_bucket(const char *name)
+{
+    uint32_t hash=2166136261u;
+    for (const unsigned char *p=(const unsigned char *)name;*p;p++) hash=(hash^*p)*16777619u;
+    return hash%DESK_FOLDER_POLL_SLOTS;
+}
+struct folder_check { const struct fm_model *model; const uint16_t *index; unsigned count; int changed; };
+static int check_entry(const char *name, const struct fm_meta *meta, void *arg)
+{
+    struct folder_check *check=arg;
+    if (!strcmp(name,".") || !strcmp(name,"..") || fm_hidden(DESK_FOLDER,name)) return 0;
+    if (!*name || strlen(name)>=FM_NAME || strchr(name,'/')) return -EIO;
+    if (++check->count>FM_ENTRIES) return -E2BIG;
+    unsigned slot=entry_bucket(name);
+    while (check->index[slot]) {
+        const struct fm_entry *entry=&check->model->entries[check->index[slot]-1];
+        if (!strcmp(entry->name,name)) {
+            if (entry->meta.size!=meta->size || entry->meta.modified!=meta->modified) check->changed=1;
+            return 0;
+        }
+        slot=(slot+1)%DESK_FOLDER_POLL_SLOTS;
+    }
+    check->changed=1;
+    return 0;
+}
 void desk_folder_service(struct desktop *d)
 {
     struct desk_folder *f=d->sh.folder; if (!f || d->power.state) return;
@@ -115,16 +141,17 @@ void desk_folder_service(struct desktop *d)
         /* Files and applications may change this directory independently. */
         if (!f->busy && f->editing<0 && d->now_ns-f->poll_ns >= 1000000000ull) {
             f->poll_ns=d->now_ns;
-            struct fm_model *check=calloc(1,sizeof(*check));
-            if (check) {
-                fm_init(check,&m->fs);
-                if (!fm_navigate(check,DESK_FOLDER)) {
-                    int changed=check->count!=m->count;
-                    for (unsigned i=0;!changed && i<m->count;i++) changed=strcmp(check->entries[i].name,m->entries[i].name) || check->entries[i].meta.size!=m->entries[i].meta.size || check->entries[i].meta.modified!=m->entries[i].meta.modified;
-                    if (changed) { fm_refresh(m); desk_folder_changed(d); }
-                }
-                fm_destroy(check); free(check);
+            /* Compare the streamed directory with the owned model. An idle
+             * one-second poll needs no temporary model/list/sort buffers. */
+            memset(f->poll_index,0,sizeof(f->poll_index));
+            for (unsigned i=0;i<m->count;i++) {
+                unsigned slot=entry_bucket(m->entries[i].name);
+                while (f->poll_index[slot]) slot=(slot+1)%DESK_FOLDER_POLL_SLOTS;
+                f->poll_index[slot]=(uint16_t)(i+1);
             }
+            struct folder_check check={.model=m,.index=f->poll_index};
+            if (!m->fs.list(m->fs.ctx,DESK_FOLDER,check_entry,&check) &&
+                (check.changed || check.count!=m->count)) { fm_refresh(m); desk_folder_changed(d); }
         }
         return;
     }

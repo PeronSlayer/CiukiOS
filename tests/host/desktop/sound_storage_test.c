@@ -6,10 +6,12 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 int ciuki_devices(struct ciuki_devices_info *s) { (void)s;errno=ENODEV;return -1; }
 int main(int argc,char **argv)
 {
     assert(argc==2);
+    int32_t packed;unsigned left,right,mute;
     char cfg[512],legacy[512];snprintf(cfg,sizeof(cfg),"%s/scheme.cfg",argv[1]);
     snprintf(legacy,sizeof(legacy),"%s/legacy.cfg",argv[1]);
     FILE *f=fopen(cfg,"wb");assert(f);fputs("enabled=1\nui_volume=80\nerror=custom.wav\n",f);fclose(f);
@@ -32,10 +34,25 @@ int main(int argc,char **argv)
     strcpy(s.file[SOUND_ERROR],"../escape.wav");generation=reg_generation(r);
     assert(sound_save_at(&s,argv[1])==-1 && errno==EINVAL && reg_generation(r)==generation);
     reg_close_root(r);
+    /* Almost the full value-count and text budgets, preserving unrelated
+     * values across repeated transactions in the bounded master workspace. */
+    char dense[512]; snprintf(dense,sizeof(dense),"%s/dense",argv[1]); assert(!mkdir(dense,0755));
+    char dense_file[600]; snprintf(dense_file,sizeof(dense_file),"%s/System.reg",dense);
+    f=fopen(dense_file,"wb"); assert(f); fputs("; ciuki-registry generation=7\n[System\\Dense]\n",f);
+    for (unsigned i=0;i<REG_VALUES_MAX-1;i++) fprintf(f,"\"V%04u_%040u\" = %u\n",i,0u,i);
+    assert(!fclose(f));
+    for (unsigned i=0;i<3;i++) {
+        int result=master_preference_save(dense,20+i,70-i,i%2);
+        if (result) perror("dense master save");
+        assert(!result);
+    }
+    r=reg_open_root_at("System",dense); assert(r && reg_generation(r)==10);
+    assert(!reg_get_int32(r,CIUKI_MASTER_KEY,CIUKI_MASTER_VALUE,&packed) && packed==ciuki_master_pack(22,68,0));
+    assert(!reg_get_int32(r,"System\\Dense","V4094_0000000000000000000000000000000000000000",&packed) && packed==4094);
+    reg_close_root(r);
     r=reg_open_root_at("System",argv[1]);assert(r);
     assert(!reg_set_string(r,"System\\Identity","Name","CiukiOS"));generation=reg_generation(r);
     assert(!master_preference_save(argv[1],20,20,0)&&reg_generation(r)==generation+1);
-    int32_t packed;unsigned left,right,mute;
     assert(!reg_get_int32(r,CIUKI_MASTER_KEY,CIUKI_MASTER_VALUE,&packed));
     assert(ciuki_master_unpack(packed,&left,&right,&mute)&&left==20&&right==20&&!mute);
     assert(!master_preference_save(argv[1],25,75,1));

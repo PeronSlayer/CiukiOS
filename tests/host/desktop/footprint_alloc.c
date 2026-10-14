@@ -27,6 +27,13 @@ void *footprint_calloc(size_t n,size_t s,const char *file,unsigned line,const ch
 { return record(n*s,file,line,function,"calloc") ? NULL : calloc(n,s); }
 void *footprint_realloc(void *p,size_t n,const char *file,unsigned line,const char *function)
 { return record(n,file,line,function,"realloc") ? NULL : realloc(p,n); }
+char *footprint_strdup(const char *s,const char *file,unsigned line,const char *function)
+{
+    size_t n=strlen(s)+1;
+    char *p=record(n,file,line,function,"strdup") ? NULL : malloc(n);
+    if (p) memcpy(p,s,n);
+    return p;
+}
 void footprint_fail_once(const char *file)
 { pthread_mutex_lock(&lock); assert(!fail_file); fail_file=file; pthread_mutex_unlock(&lock); }
 void footprint_begin(const char *name)

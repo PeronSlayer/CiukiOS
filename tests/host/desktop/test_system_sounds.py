@@ -41,7 +41,7 @@ class SystemSoundsTests(unittest.TestCase):
         self.assertEqual(sum(p.stat().st_size for p in sources.values()),manifest["bytes"])
 
     def test_worker(self):
-        self.harness("sound-worker", ["tests/host/desktop/sound_runtime_test.c", "apps/desktop/sounds.c", "apps/desktop/protocol.c", "apps/desktop/sound_storage.c",
+        self.harness("sound-worker", ["tests/host/desktop/sound_runtime_test.c", "apps/desktop/sounds.c", "apps/desktop/protocol.c", "apps/desktop/sound_storage.c", "apps/desktop/master_storage.c",
                    "sdk/libreg/registry.c", "sdk/libreg/storage.c", "sdk/libreg/hardware.c"])
 
     def test_model_and_protocol(self):
@@ -52,7 +52,7 @@ class SystemSoundsTests(unittest.TestCase):
         scratch = ROOT / "build/host"; scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="sound-registry", dir=scratch) as temp:
             self.harness("sound-storage", ["tests/host/desktop/sound_storage_test.c", "apps/desktop/sounds.c",
-                         "apps/desktop/sound_storage.c", "sdk/libreg/registry.c", "sdk/libreg/storage.c", "sdk/libreg/hardware.c"],
+                         "apps/desktop/sound_storage.c", "apps/desktop/master_storage.c", "sdk/libreg/registry.c", "sdk/libreg/storage.c", "sdk/libreg/hardware.c"],
                          Path(temp).resolve())
 
     def test_pack_reproducibility_and_pins(self):

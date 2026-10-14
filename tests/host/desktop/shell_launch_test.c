@@ -44,8 +44,26 @@ int shell_fstat(int, struct stat *);
 #define close shell_close
 #define open shell_open
 #define fstat shell_fstat
+#ifdef DESK_FOOTPRINT_TEST
+#include "../../../apps/desktop/sound_storage.h"
+static const char *footprint_registry_directory;
+static int footprint_master_save(const char *,unsigned,unsigned,unsigned);
+#define master_preference_save footprint_master_save
+#endif
 #define main desktop_main
 #include "../../../apps/desktop/desktop.c"
+#ifdef DESK_FOOTPRINT_TEST
+#undef master_preference_save
+static unsigned footprint_master_saves;
+int ciuki_devices(struct ciuki_devices_info *info)
+{ (void)info; errno=ENODEV; return -1; }
+static int footprint_master_save(const char *directory,unsigned left,unsigned right,unsigned mute)
+{
+    assert(!strcmp(directory,REG_DIRECTORY));
+    assert(pthread_equal(pthread_self(),settings_writer.thread)); footprint_master_saves++;
+    return master_preference_save(footprint_registry_directory,left,right,mute);
+}
+#endif
 #undef main
 #undef close
 #undef open
@@ -107,6 +125,11 @@ int shell_fcntl(int fd, int command, ...)
 static int network_available, network_error;
 static unsigned network_opens, network_closes, network_queries;
 static struct ciuki_net_state network_fixture;
+#ifdef DESK_FOOTPRINT_TEST
+#define MIXER_FD 1001
+static struct ciuki_mixer_master mixer_fixture;
+static unsigned mixer_queries,mixer_sets;
+#endif
 #define NETWORK_FD 1000
 int shell_open(const char *path, int flags, ...)
 {
@@ -184,9 +207,17 @@ static void drop_all(struct desktop *d)
 { for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0) desk_drop_client(d,i); }
 static struct ciuki_proc_record fake_records[8];
 static int fake_record_count;
-/* Desktop shell services (desktop.c): no mixer and no power interface on the host. */
+/* Desktop shell services with explicit device boundaries. */
 int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
 {
+#ifdef DESK_FOOTPRINT_TEST
+    if (fd==MIXER_FD) {
+        assert(size==sizeof(mixer_fixture));
+        if (op==MIXER_GET_MASTER) { mixer_queries++; memcpy(record,&mixer_fixture,size); }
+        else { assert(op==MIXER_SET_MASTER); mixer_sets++; memcpy(&mixer_fixture,record,size); }
+        return 0;
+    }
+#endif
     if (fd == NETWORK_FD) {
         assert(op == NET_GET_STATE && size == sizeof(network_fixture));
         struct ciuki_net_state *n = record;
@@ -787,7 +818,7 @@ static void test_network_service(void)
 int main(int argc,char **argv)
 {
 #ifdef DESK_FOOTPRINT_TEST
-    if (argc==2 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(); return 0; }
+    if (argc==3 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(argv[2]); return 0; }
 #else
     (void)argc; (void)argv;
 #endif

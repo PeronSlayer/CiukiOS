@@ -12,12 +12,13 @@ void __real_du_text(struct du_canvas *,int,int,const char *,uint32_t);
 void __wrap_du_text(struct du_canvas *c,int x,int y,const char *s,uint32_t col)
 {if(!strncmp(s,"Safely remove ",14))rows++;__real_du_text(c,x,y,s,col);}
 static const uint32_t *store(const char *name,unsigned size)
-{if(!strcmp(name,"drive-removable-media")){assert(size==16);icon_calls++;}return du_icon_argb(name,size);}
+{if(!strcmp(name,"drive-removable-media")){assert(size==16 || size==22 || size==32 || size==48);if(size==16)icon_calls++;}return du_icon_argb(name,size);}
 static void click(int x,int y)
 {d.mouse_x=x;d.mouse_y=y;assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);}
 int main(void)
 {
     fake_reset();desk_init(&d,&fake_ops,640,480);d.icon=store;d.sound_event=sound;desk_shell_enable(&d);
+    icon_calls=0; /* Ignore init preparation; still require the runtime tray lookup. */
     d.pixels=calloc(d.width*d.height,4);assert(d.pixels);
     struct ciuki_media_state s={.version=CIUKI_MEDIA_VERSION,.size=sizeof(s),.removable_mask=(1u<<4)|(1u<<5)};
     s.generation[4]=99;s.generation[5]=100;

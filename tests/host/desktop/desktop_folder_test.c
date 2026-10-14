@@ -188,6 +188,18 @@ int main(int argc,char **argv)
     d.mouse_x=650; d.mouse_y=600; desk_shell_motion(&d); desk_shell_button(&d,1,0);
     assert(d.sh.icons[n].box.x==602); cache_equivalent();
     puts("PASS desktop folder wallpaper cache: live rename, cancel and icon drag match fresh render");
+    /* Periodic scans preserve an unchanged model and notice external edits. */
+    struct fm_entry *original=d.sh.folder->model.entries;
+    d.now_ns+=1000000000ull; desk_folder_service(&d);
+    assert(d.sh.folder->model.entries==original);
+    fake_file(DESK_FOLDER "/External.txt",7,1);
+    d.now_ns+=1000000000ull; desk_folder_service(&d); assert(named("External.txt")>=3);
+    int external=fake_lookup(DESK_FOLDER "/External.txt"); assert(external>=0);
+    fake_nodes[external].meta.size=8; fake_nodes[external].meta.modified++;
+    d.now_ns+=1000000000ull; desk_folder_service(&d);
+    assert(d.sh.folder->model.entries[named("External.txt")-3].meta.size==8);
+    fake_nodes[external].live=0;
+    d.now_ns+=1000000000ull; desk_folder_service(&d); assert(named("External.txt")==-1);
     desk_render_release(&d);
     fake_assert_clean(); desk_folder_destroy(&d); free(d.sh.icons); free(d.sh.wall); free((void *)d.portrait); free(d.pixels);
     puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange, conditional Pictures isolation");
