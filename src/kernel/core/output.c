@@ -23,10 +23,9 @@ void kputs_raw(const char *s)
     console_write(s, n);
 }
 
-/* Ordinary output runs with interrupts enabled: the kernel is not
- * preemptible, interrupt handlers never print, and the panic path is the
- * only other writer (with interrupts off). Holding IF clear while polling
- * the UART would lose timer ticks on real hardware. */
+/* Format each record before handing it to the serial queue. Playback logs
+ * never poll the UART, including callers in IRQ/critical sections; ordinary
+ * synchronous drains release IF between readiness checks. */
 void klog(const char *fmt, ...)
 {
     char buf[256];
@@ -129,6 +128,7 @@ void panic(const char *fmt, ...)
     cli();
     if (in_panic++)
         halt_forever();
+    serial_panic();
     char msg[160];
     va_list ap;
     va_start(ap, fmt);
@@ -151,6 +151,7 @@ void panic_frame(struct trap_frame *tf, const char *why)
     cli();
     if (in_panic++)
         halt_forever();
+    serial_panic();
     uint32_t cr2 = read_cr2();
     char extra[220];
     ksnprintf(extra, sizeof(extra),
@@ -174,6 +175,7 @@ void df_handler(void)
 {
     if (in_panic++)
         halt_forever();
+    serial_panic();
     char extra[200];
     ksnprintf(extra, sizeof(extra), "vector=8 error=00000000 eip=%08x esp=%08x cr2=%08x why=double_fault",
               g_tss.eip, g_tss.esp, read_cr2());

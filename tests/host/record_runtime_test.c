@@ -20,6 +20,7 @@ void serial_write(const char *s, size_t n)
     size_t at = strlen(output); memcpy(output + at, s, n); output[at + n] = 0;
 }
 void console_write(const char *s, size_t n) { (void)s; (void)n; }
+void serial_panic(void) { if (cpu_flags & 0x200) abort(); }
 void console_reclaim(void) {}
 void console_set_color(uint32_t fg, uint32_t bg) { (void)fg; (void)bg; }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }

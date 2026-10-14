@@ -5,7 +5,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 
-#define UART_POLL_LIMIT 20000u   /* per byte; ~2.6 ms at 38400 baud worst case */
+#define UART_POLL_LIMIT 20000u   /* per readiness wait, only boot/panic */
 #define UART_DEAD_LIMIT 8u       /* consecutive timeouts before disabling */
 
 static uint16_t uart_base;
@@ -49,65 +49,107 @@ void serial_init(uint16_t base, uint16_t divisor)
 
 bool serial_present(void) { return uart_ok; }
 
-static void serial_putc(char c)
+/* All callers hold the UP IRQ lock. Publish notices only between records. */
+static void serial_notice(void)
 {
-    unsigned n = 0;
-    while (!(inb(uart_base + 5) & 0x20)) {
-        if (++n >= UART_POLL_LIMIT) {
-            if (++uart_timeouts >= UART_DEAD_LIMIT)
-                uart_ok = false;
-            return;
-        }
+    if (!uart_used && uart_drop_notice) {
+        static const char notice[] = "[serial] result=log_dropped\r\n";
+        memcpy(uart_log, notice, sizeof(notice) - 1);
+        uart_head = 0;
+        uart_used = sizeof(notice) - 1;
+        uart_drop_notice = false;
+    }
+}
+
+static void serial_burst(void)
+{
+    unsigned count = uart_used < uart_fifo_bytes ? uart_used : uart_fifo_bytes;
+    for (unsigned i = 0; i < count; i++) {
+        outb(uart_base, (uint8_t)uart_log[uart_head]);
+        uart_head = (uart_head + 1) % UART_LOG_BYTES;
+        uart_used--;
     }
     uart_timeouts = 0;
-    outb(uart_base, (uint8_t)c);
+}
+
+static void serial_drain(void)
+{
+    unsigned polls = 0;
+    for (;;) {
+        uint32_t flags = irq_save();
+        /* An interrupt may have started playback since this drain began. */
+        if (!uart_ok || uart_buffering) {
+            irq_restore(flags);
+            return;
+        }
+        serial_notice();
+        if (!uart_used) {
+            irq_restore(flags);
+            return;
+        }
+        /* Release IF between polls, but keep THRE, FIFO writes and head
+         * advancement together. A nested sender also uses this same head;
+         * no sender retains a producer-buffer byte across an interrupt. */
+        if (inb(uart_base + 5) & 0x20) {
+            serial_burst();
+            polls = 0;
+        } else if (++polls == UART_POLL_LIMIT) {
+            polls = 0;
+            if (++uart_timeouts >= UART_DEAD_LIMIT) uart_ok = false;
+        }
+        irq_restore(flags);
+    }
 }
 
 void serial_write(const char *s, size_t n)
 {
-    if (!uart_ok) return;
     uint32_t flags = irq_save();
-    if ((flags & 0x200) && (uart_buffering || uart_used || uart_drop_notice)) {
-        size_t bytes = n;
-        for (size_t i = 0; i < n; i++) if (s[i] == '\n') bytes++;
-        /* Drop a complete record rather than corrupting a prefix/suffix.
-         * BOOT.LOG has already captured the original line. */
-        if (bytes > UART_LOG_BYTES - uart_used) { uart_dropped++; uart_drop_notice = true; }
-        else for (size_t i = 0; i < n; i++) {
-            if (s[i] == '\n') { uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = '\r'; uart_used++; }
-            uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = s[i]; uart_used++;
-        }
-        irq_restore(flags); return;
+    if (!uart_ok || !n) {
+        irq_restore(flags);
+        return;
     }
-    /* Early boot and panic stay synchronous. A panic with physical IF clear
-     * cannot rely on the timer: drain queued bytes before its own record. */
-    while (uart_used && uart_ok) {
-        serial_putc(uart_log[uart_head]); uart_head = (uart_head + 1) % UART_LOG_BYTES; uart_used--;
+    bool synchronous = !uart_buffering && !uart_used && !uart_drop_notice;
+    size_t bytes = n;
+    if (n <= UART_LOG_BYTES)
+        for (size_t i = 0; i < n; i++) if (s[i] == '\n') bytes++;
+    /* Append a whole record under one lock, including CRLF expansion.
+     * Physical IF clear also describes ordinary IRQ/critical-section logs:
+     * playback must queue those without waiting for the UART. */
+    if (bytes > UART_LOG_BYTES - uart_used) {
+        uart_dropped++;
+        uart_drop_notice = true;
+    } else for (size_t i = 0; i < n; i++) {
+        if (s[i] == '\n') {
+            uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = '\r';
+            uart_used++;
+        }
+        uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = s[i];
+        uart_used++;
     }
     irq_restore(flags);
-    for (size_t i = 0; i < n && uart_ok; i++) {
-        if (s[i] == '\n')
-            serial_putc('\r');
-        serial_putc(s[i]);
-    }
+    if (synchronous) serial_drain();
 }
 void serial_buffered(bool enabled)
 {
     uint32_t flags = irq_save(); uart_buffering = enabled; irq_restore(flags);
 }
+
+void serial_panic(void)
+{
+    /* Explicit panic entry, called with physical IF clear. Make room for
+     * panic records by draining all older records and the drop notice. */
+    serial_buffered(false);
+    serial_drain();
+}
+
 void serial_tick(void)
 {
     /* Called from the existing 1 ms timer. No waits, allocation, logging or
      * formatting; THRE admits a burst only into an empty detected FIFO. */
-    if (!uart_ok || !(inb(uart_base + 5) & 0x20)) return;
-    if (!uart_used && uart_drop_notice) {
-        static const char notice[] = "[serial] result=log_dropped\r\n";
-        memcpy(uart_log, notice, sizeof(notice) - 1);
-        uart_head = 0; uart_used = sizeof(notice) - 1; uart_drop_notice = false;
+    uint32_t flags = irq_save();
+    if (uart_ok && (inb(uart_base + 5) & 0x20)) {
+        serial_notice();
+        serial_burst();
     }
-    unsigned count = uart_used < uart_fifo_bytes ? uart_used : uart_fifo_bytes;
-    for (unsigned i = 0; i < count; i++) {
-        outb(uart_base, (uint8_t)uart_log[uart_head]);
-        uart_head = (uart_head + 1) % UART_LOG_BYTES; uart_used--;
-    }
+    irq_restore(flags);
 }

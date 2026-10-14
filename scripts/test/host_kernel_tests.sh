@@ -11,7 +11,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections 
     -Wl,--gc-sections -fsanitize=address,undefined -I "$root/src/kernel/include" \
     "$root/tests/host/record_runtime_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/record_runtime_test"
 "$out/record_runtime_test"
-clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
     -I "$root/src/kernel/include" "$root/tests/host/serial_audio_test.c" -o "$out/serial_audio_test"
 "$out/serial_audio_test"
 python3 "$root/tests/host/fbdev_fixture_size_test.py"
