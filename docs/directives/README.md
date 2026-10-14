@@ -148,4 +148,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f4-15-ac97-playback-failure-t23](f4-15-ac97-playback-failure-t23.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (ICH3 CIV/LVI/PICB semantics, silence on underrun, resync after halt); T23 test pending |
 | [f1-53-usb-storage-quarantine-and-port-flood](f1-53-usb-storage-quarantine-and-port-flood.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (port records rate-limited, attach tolerance, first-fault snapshot); T23 retest pending |
 | [f1-54-optical-iso-malformed](f1-54-optical-iso-malformed.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (isofs-like leniency, last-session scan, multi-session fixture); T23 test pending |
-| [f1-55-savage-engine-idle-quarantine](f1-55-savage-engine-idle-quarantine.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-14 (engine MMIO alive, quarantine on the idle check) |
+| [f1-55-savage-engine-idle-quarantine](f1-55-savage-engine-idle-quarantine.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (bounded idle wait with raw status diagnostics; mask kept per X.Org); T23 test pending |
