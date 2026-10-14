@@ -2,7 +2,7 @@
   "schema_version": 1,
   "image": "full",
   "host_tests": true,
-  "description": "f3-06 DOS workloads: pinned DOS/4GW client loops, original DOOM timedemo with and without sound, Wolf3D, CLI-loop starvation gate. Owner-local payloads (third_party/Doom, third_party/WOLF3D) reach QEMU only on per-run fixture disks; absent -> not_run reason=fixtures_absent. Fields named in pin_from_first_run are pinned by the lead from the first QEMU run.",
+  "description": "f3-06 DOS workloads: pinned DOS/4GW client loops, original DOOM timedemo with and without sound, Wolf3D, CLI-loop starvation gate. Owner-local payloads (third_party/Doom, third_party/WOLF3D) reach QEMU only on per-run fixture disks; absent -> not_run reason=fixtures_absent. Fields named in pin_from_first_run are pinned by the lead from the first QEMU run. F3-18 adds the bundled Quake shareware launch/video/SB16/quit gate without local fixtures.",
   "prerequisites": [
     "f0-smoke",
     "f0-core",
@@ -1698,6 +1698,459 @@
           }
         ]
       }
+    },
+    {
+      "id": "quake-qemu-t23",
+      "probe": "quake",
+      "profile": "qemu-t23",
+      "selector": "f3:quake run={run_id}",
+      "timeout": 1500,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "loops": {
+                "eq": 1
+              },
+              "source": "bundled"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/CWSDPMI.EXE"
+            },
+            "fields": {
+              "size": {
+                "eq": 25920
+              },
+              "sha256": "0a890815df6cbdc052915a856c16944cedec825267e7b6e453c351a0cdc695f2"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/GENVXD.DLL"
+            },
+            "fields": {
+              "size": {
+                "eq": 17408
+              },
+              "sha256": "ef446c02db3adc5687288739b484ad933d9e1ce8c196f8951b969b1bc3c7d776"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/HELP.TXT"
+            },
+            "fields": {
+              "size": {
+                "eq": 5404
+              },
+              "sha256": "fb762348875647992b53732d50e41cf966cfecaca7c6ea2f7f682742d84a9f54"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/ID1/PAK0.PAK"
+            },
+            "fields": {
+              "size": {
+                "eq": 18689235
+              },
+              "sha256": "35a9c55e5e5a284a159ad2a62e0e8def23d829561fe2f54eb402dbc0a9a946af"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/LICINFO.TXT"
+            },
+            "fields": {
+              "size": {
+                "eq": 9311
+              },
+              "sha256": "8d654834d085c088d603fb6879a874799e8b4cc6ae9317bbf826afd83bc72e31"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/MGENVXD.VXD"
+            },
+            "fields": {
+              "size": {
+                "eq": 9883
+              },
+              "sha256": "4568f96cb70a2abf47f156f1fb1b432019155b6b4e5e3bf5fd773e1ecf5ee3e0"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/ORDER.TXT"
+            },
+            "fields": {
+              "size": {
+                "eq": 3869
+              },
+              "sha256": "1e04e5899b36c3e47dac6c771cb1fdaee0e1528db0d720b8db06e83ea5c631da"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/PDIPX.COM"
+            },
+            "fields": {
+              "size": {
+                "eq": 26511
+              },
+              "sha256": "868c16e2a561ebc955ab873013a8b2a5e6d2cdd95d185915da51a9294dea15e9"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/Q95.BAT"
+            },
+            "fields": {
+              "size": {
+                "eq": 65
+              },
+              "sha256": "cac38ce5180160a624353c9bc0baede63613e5aa3bca07653145bc9943323deb"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/QLAUNCH.EXE"
+            },
+            "fields": {
+              "size": {
+                "eq": 314880
+              },
+              "sha256": "83ce5209f15623fd0a00726e1e6cfee900829971e3294270b8efbca28ea1aac3"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/QUAKE.EXE"
+            },
+            "fields": {
+              "size": {
+                "eq": 404480
+              },
+              "sha256": "7cdb244122cc607cc6f162524bfcac60f6d11d8ca2ff07473d6cd962311161fb"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/QUAKEUDP.DLL"
+            },
+            "fields": {
+              "size": {
+                "eq": 32256
+              },
+              "sha256": "de88488c178319d5e4aaf3a9d664406f6df8e8cc049d87dfdc048a254598137a"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/README.TXT"
+            },
+            "fields": {
+              "size": {
+                "eq": 19087
+              },
+              "sha256": "9ade267c7e22a1c4c4aa8fa3dd58ad3354c173ae2cfc39344093cea534316d61"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/READV106.TXT"
+            },
+            "fields": {
+              "size": {
+                "eq": 8774
+              },
+              "sha256": "0a496875fce806ebc175bc6bebedc9d739381dceacc5636cf83ef60cf056ab0d"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/SLICNSE.TXT"
+            },
+            "fields": {
+              "size": {
+                "eq": 10036
+              },
+              "sha256": "070cdf6a6410adef8fb5f83a4e5ccdb9e2301d2e48d460bb3a67a0f5ba9d70a8"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload",
+              "path": "/QUAKE/TECHINFO.TXT"
+            },
+            "fields": {
+              "size": {
+                "eq": 76067
+              },
+              "sha256": "b7c080df7487e69b0c3f9c6b3a8eff5ce29741f5c596d3d6a08534649691d314"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "game_payload"
+            },
+            "fields": {
+              "size": {
+                "ge": 1
+              }
+            },
+            "exact_count": 16
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "dos_payload"
+            },
+            "fields": {
+              "path": "/RUNREC.COM",
+              "size": {
+                "ge": 1
+              },
+              "sha256": {
+                "encoding": "hex",
+                "width": 64,
+                "ge": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "video"
+            },
+            "fields": {
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 200
+              },
+              "text": {
+                "eq": 0
+              },
+              "changes": {
+                "ge": 32
+              },
+              "span_ms": {
+                "ge": 10000
+              },
+              "digest": {
+                "encoding": "hex",
+                "width": 64,
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory"
+            },
+            "fields": {
+              "pool_quota": {
+                "ge": 16777216
+              },
+              "pool_used": {
+                "ge": 8388608
+              },
+              "dpmi_active": {
+                "eq": 1
+              },
+              "entries": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio"
+            },
+            "fields": {
+              "bits": {
+                "eq": 16
+              },
+              "stereo": {
+                "eq": 1
+              },
+              "auto_init": {
+                "eq": 1
+              },
+              "dma16": {
+                "eq": 5
+              },
+              "frames": {
+                "ge": 4096
+              },
+              "blocks": {
+                "ge": 4
+              },
+              "dma_faults": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exit"
+            },
+            "fields": {
+              "status": {
+                "eq": 1
+              },
+              "rc": {
+                "eq": 0
+              },
+              "type": {
+                "eq": 0
+              },
+              "released": {
+                "eq": 1
+              },
+              "terminations": {
+                "ge": 1
+              },
+              "faults": {
+                "eq": 0
+              },
+              "stale": {
+                "eq": 0
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              },
+              "devices": {
+                "eq": 0
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission"
+            },
+            "fields": {
+              "request": {
+                "eq": 33554432
+              },
+              "headroom": {
+                "eq": 33554432
+              },
+              "admitted": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "vm_cleanup"
+            },
+            "fields": {
+              "data_loss": {
+                "eq": 0
+              },
+              "error": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "notes": "Bundled Quake 1.06, no local fixtures: pins all 16 files, observes changing 320x200 frames and signed stereo 16-bit DMA5 auto-init PCM, quits through the 8042 and checks DPMI/VM cleanup. Frame digest informational; gameplay and audible output require lead/owner review."
     }
   ]
 }

@@ -57,13 +57,13 @@ DOS4GW_STATUS = ("DOS/4GW 1.97 runtime from Open Watcom 2.0 binw/dos4gw.exe, dis
 # f3-06: owner-local commercial DOS games (ignored by git). They reach a DOS
 # VM only through the runner's separate fixture disk (scripts/test/
 # dos_fixtures.py), never this payload, the canonical image or a release.
-LOCAL_PAYLOAD_DIRS = ("third_party/Doom", "third_party/WOLF3D")
+LOCAL_PAYLOAD_DIRS = ("third_party/Doom", "third_party/WOLF3D", "third_party/Quake")
 LOCAL_PAYLOAD_NAMES = ("DOOM.EXE", "DOOM.WAD", "DOOM1.WAD", "DOOM2.WAD", "WOLF3D.EXE",
-                       "VSWAP.WL6", "VGAGRAPH.WL6", "GAMEMAPS.WL6", "AUDIOT.WL6")
+                       "QUAKE.EXE", "PAK0.PAK", "PAK1.PAK", "VSWAP.WL6", "VGAGRAPH.WL6", "GAMEMAPS.WL6", "AUDIOT.WL6")
 # Registered (commercial) game data: never published under any condition,
 # not even as a pinned shareware member (owner decision 2026-10-12: only the
 # shareware releases are bundled, scripts/build_games_disk.py).
-REGISTERED_DATA = re.compile(r"(DOOM|DOOM2|DOOMU|TNT|PLUTONIA)\.WAD|[^/]*\.(WL6|SOD|SD[1-3]|N3D)")
+REGISTERED_DATA = re.compile(r"PAK[1-9]\.PAK|(DOOM|DOOM2|DOOMU|TNT|PLUTONIA)\.WAD|[^/]*\.(WL6|SOD|SD[1-3]|N3D)")
 
 
 def local_payload_hashes(root=ROOT):
@@ -135,9 +135,8 @@ def shortname(name):
 
 
 def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=()):
-    """Deterministic private FAT16 volume: root, /SYSTEM and (f3-06) further
-    one-level directories, each one cluster (126 entries). Paths are
-    "/NAME.EXT" or "/DIR/NAME.EXT" with 8.3 names."""
+    """Deterministic FAT16 volume with explicitly approved nested 8.3 directories.
+    Each subdirectory holds one cluster (126 entries, including children)."""
     if len(boot) != 512 or boot[510:] != b"\x55\xaa" or len(loader) > 4096:
         raise ValueError("DOS boot/loader bounds")
     clusters = (SECTORS - DATA_LBA) // SPC
@@ -150,6 +149,12 @@ def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=()):
     root = bytearray(ROOT_SECTORS * 512)
     next_cluster = 2
     names = ["SYSTEM"] + sorted({d.strip("/").upper() for d in directories} - {"SYSTEM"})
+    for name in names:
+        for part in name.split("/"):
+            if not re.fullmatch(r"[A-Z0-9_\-]{1,8}(\.[A-Z0-9_\-]{1,3})?", part):
+                raise ValueError("bad DOS payload directory")
+        if "/" in name and name.rsplit("/", 1)[0] not in names:
+            raise ValueError("unapproved DOS payload parent directory")
     folders = {name: bytearray(SPC * 512) for name in names}
 
     def allocate(data):
@@ -175,13 +180,23 @@ def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=()):
         first_cluster = {name: allocate(folders[name]) for name in names}
         root[:32] = entry(label.ljust(11), 8, 0, 0)
         root_index = 1
-        index = {}
+        index = {name: 2 for name in names}
         for name in names:
-            root[root_index * 32:(root_index + 1) * 32] = entry(shortname(name), 0x10, first_cluster[name], 0)
-            root_index += 1
+            parent, _, leaf = name.rpartition("/")
+            record = entry(shortname(leaf), 0x10, first_cluster[name], 0)
+            if parent:
+                if index[parent] >= SPC * 512 // 32:
+                    raise ValueError("DOS payload directory full: " + parent)
+                at = index[parent] * 32
+                folders[parent][at:at + 32] = record
+                index[parent] += 1
+            else:
+                if root_index >= len(root) // 32:
+                    raise ValueError("DOS root directory full")
+                root[root_index * 32:(root_index + 1) * 32] = record
+                root_index += 1
             folders[name][:32] = entry(".", 0x10, first_cluster[name], 0)
-            folders[name][32:64] = entry("..", 0x10, 0, 0)
-            index[name] = 2
+            folders[name][32:64] = entry("..", 0x10, first_cluster[parent] if parent else 0, 0)
         for path, data in sorted(files.items()):
             cluster = allocate(data)
             parent, name = path.rsplit("/", 1)
@@ -192,7 +207,7 @@ def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=()):
                     raise ValueError("DOS root directory full")
                 root[root_index * 32:(root_index + 1) * 32] = record
                 root_index += 1
-            elif folder in folders and "/" not in folder:
+            elif folder in folders:
                 if index[folder] >= SPC * 512 // 32:
                     raise ValueError("DOS payload directory full: " + folder)
                 folders[folder][index[folder] * 32:(index[folder] + 1) * 32] = record

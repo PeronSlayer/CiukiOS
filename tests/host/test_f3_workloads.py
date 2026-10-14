@@ -138,9 +138,43 @@ def mutate(rows, where, field, value):
 
 
 class Workloads(unittest.TestCase):
+    def test_quake_bundled_case_and_rejects_false_success(self):
+        c = case('quake-qemu-t23')
+        self.assertNotIn('fixtures', c)
+        self.assertEqual(runner.selector(c['selector'].format(run_id='12345678'))['probe'], 'quake')
+        self.assertEqual(F3_PROBES[-1], 'quake')
+        for path, token in (('src/kernel/probes/selector.c', '"quake"'),
+                            ('src/boot/ciukldr/menu.inc', "'quake',0"),
+                            ('src/kernel/probes/f3_probes_workloads.c', 'CIUKI_F3_PROBE("quake"')):
+            self.assertIn(token, (ROOT / path).read_text())
+        pins = json.loads((ROOT / 'third_party/games/quake-shareware/UPSTREAM.json').read_text())['install']['files']
+        rows = [('DATA', dict(case='identity', build='0123abcd', loops=1, source='bundled'))]
+        rows += [('DATA', dict(group='game_payload', path='/QUAKE/' + f['name'], size=f['size'], sha256=f['sha256']))
+                 for f in pins]
+        rows += [('DATA', dict(group='dos_payload', path='/RUNREC.COM', size=1328, sha256=HEX)),
+                 ('DATA', dict(case='video', width=320, height=200, text=0, changes=40, span_ms=20000, digest=HEX)),
+                 ('DATA', dict(case='memory', pool_quota=25165824, pool_used=16000000, dpmi_active=1, entries=1)),
+                 ('DATA', dict(case='audio', bits=16, stereo=1, auto_init=1, dma16=5, frames=9000, blocks=20, dma_faults=0)),
+                 ('DATA', dict(case='exit', status=1, rc=0, type=0, released=1, terminations=1, faults=0, stale=0, error=0))]
+        rows += tail(1)
+        self.assertTrue(parse('quake', rows).check(c['expected']))
+        failures = (({'case': 'video'}, 'changes', 1), ({'case': 'video'}, 'text', 1),
+                    ({'case': 'video'}, 'width', 640), ({'case': 'video'}, 'span_ms', 100),
+                    ({'case': 'memory'}, 'pool_quota', 8388608), ({'case': 'memory'}, 'dpmi_active', 0),
+                    ({'case': 'audio'}, 'bits', 8), ({'case': 'audio'}, 'dma16', 1),
+                    ({'case': 'audio'}, 'dma_faults', 1), ({'case': 'audio'}, 'frames', 0),
+                    ({'case': 'exit'}, 'status', 0), ({'case': 'exit'}, 'released', 0),
+                    ({'case': 'exit'}, 'faults', 1), ({'case': 'cleanup'}, 'restored', 0),
+                    ({'group': 'game_payload', 'path': '/QUAKE/ID1/PAK0.PAK'}, 'sha256', HEX))
+        for where, field, value in failures:
+            with self.subTest(where=where, field=field), self.assertRaises(EvidenceError):
+                parse('quake', mutate(rows, where, field, value)).check(c['expected'])
+        with self.assertRaises(EvidenceError):
+            parse('quake', [r for r in rows if r[1].get('path') != '/QUAKE/CWSDPMI.EXE']).check(c['expected'])
+
     def test_probe_names_in_every_selector_table(self):
-        names = ('dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve')
-        self.assertEqual(F3_PROBES[-5:], names)
+        names = ('dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake')
+        self.assertEqual(F3_PROBES[-6:], names)
         for name in names:
             self.assertEqual(runner.selector(f'f3:{name} run=12345678')['probe'], name)
         selector_c = (ROOT / 'src/kernel/probes/selector.c').read_text()
@@ -159,7 +193,7 @@ class Workloads(unittest.TestCase):
             runner.selector('f3:doom run=12345678 safe=1', 'fw_cfg', True)
 
     def test_suite_cases_and_records(self):
-        self.assertEqual({c['probe'] for c in SUITE['cases']}, {'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve'})
+        self.assertEqual({c['probe'] for c in SUITE['cases']}, {'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake'})
         self.assertIn('f3-vm', SUITE['prerequisites'])
         for c in SUITE['cases']:
             runner.selector(c['selector'].format(run_id='12345678'))

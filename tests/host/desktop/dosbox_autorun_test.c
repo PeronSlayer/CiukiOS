@@ -60,6 +60,7 @@ int main(void)
     /* The Programs > Games commands (apps/desktop/catalog.h desk_games). */
     typed("\\WOLF3D\\WOLF3D.EXE", "CD \\WOLF3D\nWOLF3D.EXE\n");
     typed("\\DOOM\\DOOM.EXE -config CIUKI.CFG", "CD \\DOOM\nDOOM.EXE -config CIUKI.CFG\n");
+    typed("\\QUAKE\\QUAKE.EXE", "CD \\QUAKE\nQUAKE.EXE\n");
     /* One line: no directory before the program, or not a path. */
     typed("\\RUNREC.COM \\DOOM DOOM.EXE", "\\RUNREC.COM \\DOOM DOOM.EXE\n");
     typed("DIR /W", "DIR /W\n");

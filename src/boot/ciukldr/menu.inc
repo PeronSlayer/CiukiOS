@@ -306,7 +306,7 @@ f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'si
 f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
 f3_sweep_name db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
-              db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,0
+              db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,0
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
 desktop_suffix db ' server=desktop'
