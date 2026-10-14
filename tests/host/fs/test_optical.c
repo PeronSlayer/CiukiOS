@@ -4,11 +4,11 @@
 #include <ciuki/sha256.h>
 #include "vfs.h"
 #include <stdio.h>
-static unsigned failures, writes, flushes, reads;
+static unsigned failures, writes, flushes, reads, range_rejections;
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL line %u: %s\n",__LINE__,#x); failures++; } } while (0)
 static int disk_read(struct blkdev *d,uint64_t lba,uint32_t n,void *b)
 {
-    int e=blkdev_range(d,lba,n); if (e) return e;
+    int e=blkdev_range(d,lba,n); if (e) { range_rejections++; return e; }
     FILE *f=d->ctx; reads++;
     return fseek(f,(long)(lba*d->sector_size),SEEK_SET) || fread(b,d->sector_size,n,f)!=n ? -FS_EIO : 0;
 }
@@ -42,13 +42,17 @@ static int walk(uint64_t dir,const char *prefix,unsigned depth)
 }
 int main(int argc,char **argv)
 {
-    CHECK(argc==2); if (argc!=2) return 2;
+    CHECK(argc>=2 && argc<=5); if (argc<2 || argc>5) return 2;
     FILE *f=fopen(argv[1],"rb"); CHECK(f); if (!f) return 2;
     fseek(f,0,SEEK_END); long size=ftell(f);
-    struct blkdev dev={.read=disk_read,.write=disk_write,.flush=disk_flush,.sector_size=2048,.capacity=(uint64_t)size/2048,.media_generation=1,.ctx=f};
+    uint64_t session=argc>2 ? strtoull(argv[2],0,10) : 0;
+    unsigned sector_size=argc>3 ? (unsigned)strtoul(argv[3],0,10) : 2048;
+    CHECK(sector_size); if (!sector_size) { fclose(f); return 2; }
+    struct blkdev dev={.read=disk_read,.write=disk_write,.flush=disk_flush,.sector_size=sector_size,.capacity=(uint64_t)size/sector_size,.media_generation=1,.ctx=f};
+    uint64_t sectors=argc>4 ? strtoull(argv[4],0,10) : dev.capacity-session;
     CHECK(!cache_init(&cache,128*1024)); vfs_init(&vfs);
-    int e=fs_ro_mount(&volume,&iso9660_ops,&cache,&dev,0,dev.capacity);
-    if (e) { printf("REFUSED\t%d\n",e); CHECK(!writes && !flushes); cache_destroy(&cache); vfs_destroy(&vfs); fclose(f); return failures ? 1 : 0; }
+    int e=fs_ro_mount(&volume,&iso9660_ops,&cache,&dev,session,sectors);
+    if (e) { printf("REFUSED\t%d\n",e); CHECK(!writes && !flushes && !range_rejections); cache_destroy(&cache); vfs_destroy(&vfs); fclose(f); return failures ? 1 : 0; }
     uint64_t identity=volume.volume_identity; char label[33]; memcpy(label,volume.volume_label,sizeof(label));
     CHECK(identity);
     CHECK(!vfs_attach_ro(&vfs,3,&volume)); CHECK(!vfs_table_init(&vfs,&table,2));
@@ -74,12 +78,12 @@ int main(int argc,char **argv)
         CHECK(vfs_seek(&table,h,0,VFS_SEEK_SET,&pos)==-FS_EIO);
         CHECK(vfs_commit(&table,h)==-FS_EIO); CHECK(vfs_find_next(&table,&find,&ent)==-FS_EIO);
         CHECK(!strcmp(table.cwd[3],"/"));
-        CHECK(!fs_ro_mount(&volume,&iso9660_ops,&cache,&dev,0,dev.capacity));
+        CHECK(!fs_ro_mount(&volume,&iso9660_ops,&cache,&dev,session,sectors));
         CHECK(volume.volume_identity==identity && !strcmp(volume.volume_label,label));
         CHECK(!vfs_attach_ro(&vfs,3,&volume));
         CHECK(vfs_read(&table,h,b,1,&n)==-FS_EIO); CHECK(!vfs_close(&table,h));
     }
     vfs_table_destroy(&table); CHECK(!vfs_detach(&vfs,3)); vfs_destroy(&vfs); cache_destroy(&cache);
-    CHECK(!writes && !flushes); printf("COUNTERS\twrites=%u\tflushes=%u\treads=%u\n",writes,flushes,reads); fclose(f);
+    CHECK(!writes && !flushes && !range_rejections); printf("COUNTERS\twrites=%u\tflushes=%u\treads=%u\trange_rejections=%u\n",writes,flushes,reads,range_rejections); fclose(f);
     return failures ? 1 : 0;
 }
