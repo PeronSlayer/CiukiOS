@@ -19,6 +19,8 @@
 #include <string.h>
 #include <setjmp.h>
 #include <stdarg.h>
+#include <stdatomic.h>
+#include <sys/syscall.h>
 #undef ILL_ILLOPC
 #undef FPE_INTDIV
 #undef SEGV_MAPERR
@@ -76,7 +78,9 @@ static unsigned empty_reads, ipc_polls, presents_before_attach;
 static bool inherit_error, spawn_error, normal_spawn;
 static bool burst, burst_started, flush_timeout, bad_command;
 static unsigned burst_at, blocked_sends, configure_attempts, interaction_reports;
-static uint64_t host_now=1000000, burst_end, last_interaction_report;
+static _Atomic uint64_t host_now=1000000;
+static uint64_t burst_end, last_interaction_report;
+static pthread_t gate_main_thread;
 #define BURST_EVENTS (3000+200+74)
 static FILE *client_messages, *server_messages;
 static int pair_client[256],client_pid[256],hello[256];
@@ -338,10 +342,14 @@ int clock_gettime(clockid_t clock,struct timespec *out)
 {
     assert(clock==CLOCK_MONOTONIC || clock==CLOCK_REALTIME);
     if (clock==CLOCK_REALTIME) { out->tv_sec=43210; out->tv_nsec=1000000; return 0; }
-    out->tv_sec=host_now/1000000000ull; out->tv_nsec=host_now%1000000000ull; return 0;
+    uint64_t stamp=host_now;
+    out->tv_sec=stamp/1000000000ull; out->tv_nsec=stamp%1000000000ull; return 0;
 }
 int nanosleep(const struct timespec *t,struct timespec *rest)
 {
+    /* Background observers must not advance the deterministic desktop clock
+     * or longjmp through a checkpoint owned by the main thread. */
+    if (!pthread_equal(pthread_self(),gate_main_thread)) return (int)syscall(SYS_nanosleep,t,rest);
     (void)rest;assert(t->tv_nsec==1000000);host_now+=1000000;assert(host_now<10000000000ull);
     if (no_input && host_now>=6000000000ull) {
         assert(presents && empty_reads>100 && ipc_polls>100 && summary_count>=2 && !gate_keys);
@@ -362,6 +370,7 @@ static int run_desktop(int argc,char **argv)
 }
 int main(int argc,char **argv)
 {
+    gate_main_thread=pthread_self();
     if (argc==4 && (!strcmp(argv[1],"--first-frame") || !strcmp(argv[1],"--normal-first-frame"))) {
         first_frame_portrait=argv[2]; first_frame_output=argv[3];
         normal_first_frame=!strcmp(argv[1],"--normal-first-frame");

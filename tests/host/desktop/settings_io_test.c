@@ -10,6 +10,20 @@ static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed=PTHREAD_COND_INITIALIZER;
 static int entered, released, count, error;
 static char stored[CFG_TEXT_MAX];
+static void contention(struct cfg_writer *w)
+{
+    pthread_mutex_lock(&w->lock);
+    size_t n=0; int error=0, job=0;
+    assert(cfg_writer_try_submit(w,"retry",5)==-1 && errno==EAGAIN);
+    assert(cfg_writer_job(w,&job,sizeof(job))==-1 && errno==EAGAIN);
+    assert(cfg_writer_read(w)==-1 && errno==EAGAIN);
+    assert(cfg_writer_log(w,"retry")==-1 && errno==EAGAIN);
+    assert(cfg_writer_stage(w,0,0,0)==-1 && errno==EAGAIN);
+    assert(!cfg_writer_read_result(w,stored,&n,&error));
+    assert(!cfg_writer_job_result(w,&job,&n,&error));
+    assert(!cfg_writer_result(w,&error) && cfg_writer_busy(w));
+    pthread_mutex_unlock(&w->lock);
+}
 static int setting_job(void *record, size_t n)
 {
     assert(n==sizeof(int)); int value; memcpy(&value,record,n);
@@ -37,6 +51,7 @@ int main(void)
 {
     struct cfg_writer w={.write=write_snapshot,.run_job=setting_job};
     assert(!cfg_writer_start(&w,"unused","unused"));
+    contention(&w); /* even a suspended mailbox owner cannot block the UI */
     assert(!cfg_writer_submit(&w,"first",5));
     pthread_mutex_lock(&lock); while (!entered) pthread_cond_wait(&changed,&lock); pthread_mutex_unlock(&lock);
     assert(cfg_writer_busy(&w));

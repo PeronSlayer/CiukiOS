@@ -212,8 +212,9 @@ int desk_wall_worker_start(struct desk_wall_worker *w, const char *dir, void (*s
 }
 unsigned desk_wall_worker_submit(struct desk_wall_worker *w, const struct desk_wall_request *r)
 {
-    pthread_mutex_lock(&w->lock);
-    w->request=*r; unsigned serial=++w->serial; w->pending=1; w->ready=0;
+    if (pthread_mutex_trylock(&w->lock)) return 0;
+    w->request=*r; if (!++w->serial) ++w->serial;
+    unsigned serial=w->serial; w->pending=1; w->ready=0;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock); return serial;
 }
 int desk_wall_worker_take(struct desk_wall_worker *w, unsigned serial, uint32_t **pixels, int *error, int *hit)

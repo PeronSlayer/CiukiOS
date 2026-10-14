@@ -136,6 +136,7 @@ struct desktop {
     uint8_t keys[513];
     uint32_t buttons, routed_buttons;
     uint64_t order, now_ns, clock_second, presents, inputs, received, replied;
+    void (*input_pending)(void); /* independent desktop stall observer */
     struct desk_damage damage;
     struct desk_damage present_damage;
     struct desk_dirty_runs *rows; uint32_t row_height;

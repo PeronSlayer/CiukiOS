@@ -302,18 +302,101 @@ static int tasks_verify(const struct desktop *d)
 static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
 static struct cfg_writer settings_writer;
 static int settings_writer_started, verbose_boot;
+static int settings_reload_pending, settings_reload_request, settings_reload_wallpaper;
+static int theme_read_pending;
 static struct desk_wall_worker wallpaper_worker;
 static int wallpaper_worker_started, wallpaper_worker_failed;
 static struct desk_wall_request wallpaper_request;
 static unsigned wallpaper_serial;
+enum desktop_stage { STALL_IDLE, STALL_INPUT, STALL_IPC, STALL_DISPLAY,
+    STALL_THEME, STALL_LAUNCH, STALL_SHELL, STALL_RENDER, STALL_REPORT };
+static struct {
+    pthread_t thread;
+    unsigned live, stop, stage, pending, frame_ms, loop_ms;
+} desktop_watchdog;
+static const char *const desktop_stages[]={"idle","input","ipc","display",
+    "theme","launch","shell","render","report"};
+static void desktop_stage(unsigned stage)
+{ __atomic_store_n(&desktop_watchdog.stage,stage,__ATOMIC_RELEASE); }
+static void desktop_input_pending(void)
+{ __atomic_store_n(&desktop_watchdog.pending,1,__ATOMIC_RELEASE); }
+static int desktop_stall_record(uint32_t now,char *line,size_t size)
+{
+    uint32_t frame=__atomic_load_n(&desktop_watchdog.frame_ms,__ATOMIC_ACQUIRE);
+    unsigned pending=__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE);
+    uint32_t loop=__atomic_load_n(&desktop_watchdog.loop_ms,__ATOMIC_ACQUIRE);
+    /* A blocked loop cannot discover input arriving later in its kernel grant.
+     * Also report a lost loop heartbeat, without claiming that input was read. */
+    if ((int32_t)(now-frame)<2000 || (!pending && (int32_t)(now-loop)<2000)) return 0;
+    unsigned stage=__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE);
+    const char *wall="idle", *settings="idle";
+    if (wallpaper_worker_started) {
+        if (pthread_mutex_trylock(&wallpaper_worker.lock)) wall="wallpaper-lock";
+        else {
+            if (wallpaper_worker.busy || wallpaper_worker.pending) wall="wallpaper";
+            pthread_mutex_unlock(&wallpaper_worker.lock);
+        }
+    }
+    if (settings_writer_started) {
+        if (pthread_mutex_trylock(&settings_writer.lock)) settings="settings-lock";
+        else {
+            if (settings_writer.activity==3 || settings_writer.job_pending) settings="mixer";
+            else if (settings_writer.busy || settings_writer.pending || settings_writer.read_pending) settings="settings";
+            pthread_mutex_unlock(&settings_writer.lock);
+        }
+    }
+    if (pending!=__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE) ||
+        frame!=__atomic_load_n(&desktop_watchdog.frame_ms,__ATOMIC_ACQUIRE) ||
+        loop!=__atomic_load_n(&desktop_watchdog.loop_ms,__ATOMIC_ACQUIRE)) return 0;
+    return snprintf(line,size,"[desktop] stall stage=%s worker=%s/%s no_frame_ms=%u input_pending=%u\n",
+        stage<sizeof(desktop_stages)/sizeof(*desktop_stages) ? desktop_stages[stage] : "unknown",
+        wall,settings,now-frame,pending);
+}
+static void *desktop_watchdog_run(void *unused)
+{
+    (void)unused; uint32_t reported=0;
+    while (!__atomic_load_n(&desktop_watchdog.stop,__ATOMIC_ACQUIRE)) {
+        uint32_t now=(uint32_t)(monotonic()/1000000ull);
+        char line[192]; int n;
+        if (now-reported>=2000 && (n=desktop_stall_record(now,line,sizeof(line)))>0) {
+            /* Native diagnostic call 2 bypasses both FILE and VFS locks and
+             * feeds the kernel console/serial/disk bootlog directly. */
+#ifdef __i386__
+            if (line[n-1]=='\n') --n;
+            (void)ciuki_raw_debug_write(CU_PTR(line),(uint32_t)n,0,0,0,0);
+#else
+            (void)write(STDERR_FILENO,line,(size_t)n);
+#endif
+            reported=now;
+        }
+        struct timespec pause={.tv_sec=0,.tv_nsec=100000000}; nanosleep(&pause,NULL);
+    }
+    return NULL;
+}
+static void desktop_watchdog_start(struct desktop *d)
+{
+    __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
+    __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
+    int error=pthread_create(&desktop_watchdog.thread,NULL,desktop_watchdog_run,NULL);
+    if (error) { snprintf(d->notice,sizeof(d->notice),"Desktop watchdog unavailable (error %d)",error); return; }
+    desktop_watchdog.live=1; d->input_pending=desktop_input_pending;
+}
+static void desktop_watchdog_frame(struct desktop *d,uint64_t before,int result)
+{
+    if (!result && d->presents!=before) {
+        __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
+        __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
+    } else if (!d->damage.count && !d->cursor_dirty && !settings_reload_pending)
+        __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
+}
 static void startup_flush(void)
 {
     if (!verbose_boot || !settings_writer_started) return;
     for (unsigned i=0;i<CFG_STARTUP_STAGES;i++) {
         uint32_t value=__atomic_load_n(&startup_us[i],__ATOMIC_ACQUIRE);
         if (value && !(startup_sent&(1u<<i))) {
-            cfg_writer_stage(&settings_writer,i,(uint64_t)value-1,!!(__atomic_load_n(&startup_cached,__ATOMIC_RELAXED)&(1u<<i)));
-            startup_sent|=1u<<i;
+            if (!cfg_writer_stage(&settings_writer,i,(uint64_t)value-1,!!(__atomic_load_n(&startup_cached,__ATOMIC_RELAXED)&(1u<<i))))
+                startup_sent|=1u<<i;
         }
     }
 }
@@ -392,9 +475,13 @@ static int theme_poll_async(uint64_t now)
 {
     static uint64_t next;
     static char text[CFG_TEXT_MAX]; size_t n; int error;
-    if (!settings_writer_started) return 0;
-    if (now>=next) { cfg_writer_read(&settings_writer); next=now+2000000000ull; }
+    if (!settings_writer_started || settings_reload_pending) return 0;
+    if (!theme_read_pending && now>=next && !cfg_writer_read(&settings_writer)) {
+        theme_read_pending=1; next=now+2000000000ull;
+    }
     if (!cfg_writer_read_result(&settings_writer,text,&n,&error)) return 0;
+    theme_read_pending=0;
+    if (error && error!=ENOENT) return 0;
     char name[32]="";
     if (!error && desk_settings_theme(text,n,name,sizeof(name))) name[0]=0;
     const struct desk_theme *before=desk_theme;
@@ -403,11 +490,16 @@ static int theme_poll_async(uint64_t now)
 }
 static int settings_save(struct desktop *d)
 {
+    /* A queued Control Panel reload owns the newest disk snapshot. Do not
+     * overwrite it with the pre-reload theme/wallpaper while its read waits. */
+    if (settings_reload_pending || (d->sh.want_reload&1)) { d->sh.want_save=1; return 0; }
     static char text[CFG_TEXT_MAX];
     size_t n=cfg_format(&d->sh.cfg,text,sizeof(text));
     if (!n) { errno=ENOSPC; return -1; }
     if (!settings_writer_started) { errno=EIO; return -1; }
-    return cfg_writer_submit(&settings_writer,text,n);
+    int result=cfg_writer_try_submit(&settings_writer,text,n);
+    if (result && errno==EAGAIN) { d->sh.want_save=1; return 0; }
+    return result;
 }
 static int shutdown_wait(struct desktop *d)
 {
@@ -549,7 +641,6 @@ static void display_start(struct desktop *d)
 static void wallpaper_load(struct desktop *d)
 {
     desk_image_free(&d->sh.image);
-    d->sh.wall_valid=0;
     memset(&wallpaper_request,0,sizeof(wallpaper_request));
     snprintf(wallpaper_request.path,sizeof(wallpaper_request.path),"%s",d->sh.cfg.wallpaper);
     wallpaper_request.width=d->width; wallpaper_request.height=d->height;
@@ -557,10 +648,16 @@ static void wallpaper_load(struct desktop *d)
     wallpaper_request.mode=d->sh.cfg.wallpaper_mode;
     wallpaper_request.colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
     d->sh.wallpaper_pending=wallpaper_request.path[0]=='/' && !wallpaper_worker_failed;
-    /* An empty image draws only the colour; no decoding/scaling on this turn. */
-    desk_shell_wallpaper_update(d);
+    /* Keep the last complete image visible while its replacement is prepared.
+     * In particular a theme colour change must not erase the photograph. */
+    if (d->sh.wallpaper_pending && d->sh.wall && d->sh.wall_w==d->width && d->sh.wall_h==d->height) {
+        d->sh.wall_valid=1; d->sh.background_valid=0;
+    } else {
+        d->sh.wall_valid=0; desk_shell_wallpaper_update(d);
+    }
     d->sh.image_failed=0;
     /* The thread may exist before the first frame; decoding never starts before it. */
+    wallpaper_serial=0;
     if (wallpaper_worker_started && __atomic_load_n(&startup_us[3],__ATOMIC_ACQUIRE))
         wallpaper_serial=desk_wall_worker_submit(&wallpaper_worker,&wallpaper_request);
 }
@@ -703,6 +800,7 @@ static void mixer_write(struct desktop *d)
 {
     if (d->mixer_fd<0) { mixer_read(d); return; }
     int e=mixer_apply(d,(uint32_t)d->sh.volume,(uint32_t)d->sh.volume,(uint32_t)(d->sh.muted!=0));
+    if (e==-EAGAIN) { d->sh.want_mixer=1; return; }
     if (e) {
         snprintf(d->notice,sizeof(d->notice),"Volume change failed (error %d)",-e);
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
@@ -832,23 +930,50 @@ static void shell_service(struct desktop *d)
         return;
     }
     if (sh->want_reload & 1) {
-        int old_tray_width = desk_shell_tray_box(d).w;
-        char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
-        memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); memcpy(old_theme,sh->cfg.theme,sizeof(old_theme));
-        int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
-        uint32_t old_colour=sh->cfg.desktop_color;
-        uint16_t confirmed = sh->cfg.display_mode;
-        settings_load(d);
-        sh->cfg.display_mode = confirmed; scan_programs(d);
-        int image_changed=strcmp(old_wall,sh->cfg.wallpaper) || sh->want_wallpaper;
-        int visual=image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
-                   old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
-        if (visual) {
-            sh->icon_count=0; desk_shell_apply(d);
-            if (image_changed) wallpaper_load(d); else wallpaper_update(d);
-        }
-        desk_shell_tray_damage(d,old_tray_width);
+        settings_reload_pending=settings_reload_request=1;
+        theme_read_pending=0;
+        settings_reload_wallpaper|=sh->want_wallpaper;
         sh->want_wallpaper=0;
+    }
+    if (settings_reload_pending && !settings_writer_started) {
+        settings_reload_pending=settings_reload_request=settings_reload_wallpaper=0;
+        snprintf(d->notice,sizeof(d->notice),"Settings worker unavailable");
+        desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+    }
+    if (settings_reload_request && settings_writer_started && !cfg_writer_read(&settings_writer))
+        settings_reload_request=0;
+    static char reload_text[CFG_TEXT_MAX]; size_t reload_size; int reload_error;
+    if (settings_reload_pending && !settings_reload_request && settings_writer_started &&
+        cfg_writer_read_result(&settings_writer,reload_text,&reload_size,&reload_error)) {
+        settings_reload_pending=0;
+        if (reload_error && reload_error!=ENOENT) {
+            snprintf(d->notice,sizeof(d->notice),"Settings not loaded (error %d)",reload_error);
+            settings_reload_wallpaper=0;
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+        } else {
+            int old_tray_width = desk_shell_tray_box(d).w;
+            char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
+            memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); memcpy(old_theme,sh->cfg.theme,sizeof(old_theme));
+            int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
+            uint32_t old_colour=sh->cfg.desktop_color;
+            uint16_t confirmed = sh->cfg.display_mode;
+            cfg_defaults(&sh->cfg);
+            int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
+            if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
+            sh->cfg.display_mode = confirmed;
+            /* Explicit desktop Refresh also updates the launch inventory;
+             * Control Panel display settings must not rescan its ELF files. */
+            if (settings_reload_wallpaper) scan_programs(d);
+            int image_changed=strcmp(old_wall,sh->cfg.wallpaper) || settings_reload_wallpaper;
+            int visual=image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
+                       old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
+            if (visual) {
+                sh->icon_count=0; desk_shell_apply(d);
+                if (image_changed) wallpaper_load(d); else wallpaper_update(d);
+            }
+            desk_shell_tray_damage(d,old_tray_width);
+            settings_reload_wallpaper=0;
+        }
     }
     if (sh->want_reload & 2) { system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
     if (sh->want_reload & 4) mixer_read(d);
@@ -919,6 +1044,7 @@ static void shell_setup(struct desktop *d, int gate)
     }
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
+    if (!gate) desktop_watchdog_start(d);
 }
 int main(int argc, char **argv)
 {
@@ -1011,6 +1137,7 @@ int main(int argc, char **argv)
     uint64_t shift_base=0, shift_release=0, mixer_poll_next=0;
     for (;;) {
         uint64_t now = monotonic();
+        desktop_stage(STALL_SHELL);
         mixer_poll(d,now,&mixer_poll_next);
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
@@ -1054,6 +1181,7 @@ int main(int argc, char **argv)
             }
         }
         uint64_t input_begin=monotonic();
+        desktop_stage(STALL_INPUT);
         if (!gate) {
             int n=desk_drain_input(d,ciuki_input_read);
             if (n>0) input_reported=0;
@@ -1119,6 +1247,7 @@ int main(int argc, char **argv)
         /* Input has priority over IPC, theme/file reads and rendering. The
          * gate's FIFO may deliberately retain paced events; ordinary input
          * drains again before rendering if a full FIFO left anything queued. */
+        desktop_stage(STALL_IPC);
         for (int i=0; i<DESK_CLIENTS; i++) {
             struct desk_client *c=&d->clients[i];
             for (unsigned n=0; n<16 && c->channel>=0; n++) {
@@ -1132,12 +1261,15 @@ int main(int argc, char **argv)
         if (!gate && fifo_count==0) {
             (void)desk_drain_input(d,ciuki_input_read);
         }
-        display_poll(d);
+        desktop_stage(STALL_DISPLAY); display_poll(d);
         if (!gate && d->inputs) startup_stage("first_input_handled");
-        if (d->shell && !gate && !d->power.state && theme_poll_async(now)) {
+        desktop_stage(STALL_THEME);
+        if (d->shell && !gate && !d->power.state && !(d->sh.want_reload&1) && theme_poll_async(now)) {
+            snprintf(d->sh.cfg.theme,sizeof(d->sh.cfg.theme),"%s",desk_theme->name);
             desk_theme_changed(d); d->sh.wall_valid=0; wallpaper_update(d);
         }
         if (d->sh.want_power && !d->sh.gate) d->action=-1;
+        desktop_stage(STALL_LAUNCH);
         if (d->action>=0) {
             unsigned selected=(unsigned)d->action; d->action=-1;
             int pid=selected<d->program_count && d->launch ? d->launch(d,&d->programs[selected]) : -1;
@@ -1152,6 +1284,8 @@ int main(int argc, char **argv)
                 d->app_pid=(uint32_t)pid;
             }
         }
+        desktop_stage(STALL_SHELL);
+        if (d->sh.want_reload&1) desktop_input_pending();
         shell_service(d);
         if (d->tasks_test && d->tasks_stage==6 && d->tasks_checkpoint && tasks_verify(d)) {
             d->tasks_stage=DESK_TASKS_DONE; input_dirty=1;
@@ -1170,12 +1304,14 @@ int main(int argc, char **argv)
         }
         if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         int render_ready=gate || desk_frame_due(d,monotonic());
+        uint64_t presents_before=d->presents; desktop_stage(STALL_RENDER);
         int redraw = render_ready ? desk_redraw(d) : -1;
+        if (!gate) desktop_watchdog_frame(d,presents_before,redraw);
         if (render_ready && redraw && errno!=EINTR && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
-        startup_flush();
+        desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
         if (desk_display_frame_commit(d, redraw)) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);
@@ -1248,6 +1384,8 @@ int main(int argc, char **argv)
             victim_pid=spawn_demo(d,victim,0);
         /* Sleep even under continuous damage. The independent frame deadline
          * caps rendering; 1 ms service keeps input ahead of the next frame. */
+        desktop_stage(STALL_IDLE);
+        __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
         struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
 }
