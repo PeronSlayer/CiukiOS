@@ -135,3 +135,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f4-13-dos-vm-audio-on-hardware](f4-13-dos-vm-audio-on-hardware.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-13 (native backend failed after boot: AC97 hand-off race and serial output stall fixed; VMs then attach); T23 listening test pending |
 | [f2-54-performance-counters-after-f2-52](f2-54-performance-counters-after-f2-52.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (expectation follows the f2-53 tray layout; presenter unchanged) |
 | [f2-55-desktop-memory-footprint-probe](f2-55-desktop-memory-footprint-probe.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (chrome caches and first-use buffers preallocated; allocation-audit harness) |
+| [f2-56-gate-desktop-fallback-top-bar](f2-56-gate-desktop-fallback-top-bar.md) | F2+ | gpt-6.1-sol / xhigh | running 2026-10-14 (gate desktop composites the fallback top bar until the first input) |
