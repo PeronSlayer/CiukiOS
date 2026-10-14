@@ -137,3 +137,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-55-desktop-memory-footprint-probe](f2-55-desktop-memory-footprint-probe.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (chrome caches and first-use buffers preallocated; allocation-audit harness) |
 | [f2-56-gate-desktop-fallback-top-bar](f2-56-gate-desktop-fallback-top-bar.md) | F2+ | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (shell_setup before the render loop in gate mode; first-frame mark check in the gate harness) |
 | [f2-57-gate-harness-after-shell-first](f2-57-gate-harness-after-shell-first.md) | F2+ | gpt-6.1-sol / high | delivered and merged 2026-10-14 (grants found by object kind, no fixed fds) |
+| [f1-50-usb-keyboard-reports](f1-50-usb-keyboard-reports.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-14 (f1-usb: USB keyboard attached, mouse works, no key reaches the desktop) |
