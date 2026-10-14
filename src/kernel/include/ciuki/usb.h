@@ -16,8 +16,8 @@
 #define USB_HID_TRACE_LIMIT 16u
 #define USB_PORT_ACTION_TRACE_LIMIT 32u
 #define USB_BULK_TIMEOUT_MS 10000u
-#define USB_BIND_TIMEOUT_MS 5000u
-#define USB_BIND_BULK_MS 1000u
+#define USB_BIND_TIMEOUT_MS 20000u
+#define USB_BIND_BULK_MS 3000u
 #define USB_BIND_FINISH_MS 100u /* retirement and terminal disk record */
 #define USB_BULK_TRACE_LIMIT 8u
 #define USB_EIO 5
@@ -102,12 +102,13 @@ struct usb_storage {
     uint64_t next_check;
     uint64_t bulk_deadline; /* only live while usb_bulk calls the packet engine */
     uint64_t bind_deadline; /* MAX LUN through namespace publication, including recovery */
+    uint64_t bind_started_ms, bind_stage_started_ms;
     const char *bind_stage;
     struct usb_storage_trace trace;
     uint8_t interface, in, out, in_packet, out_packet, in_toggle, out_toggle;
     uint8_t sense_key, asc, ascq;
     bool bound, online, published, ejected, write_protected, fault_logged, quarantine_logged;
-    bool binding, bind_reserved;
+    bool binding, bind_reserved, bind_stage_active;
 };
 /* Coalesce suppressed events; root and external-hub ports use the same budget. */
 struct usb_port_log {
