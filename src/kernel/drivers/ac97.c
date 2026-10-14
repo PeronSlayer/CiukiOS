@@ -80,6 +80,11 @@ static uint64_t codec_deadline(struct ac97_device *d, uint64_t limit)
     uint64_t deadline = d->io.now(d->io.cookie) + 100;
     return (int64_t)(deadline - limit) > 0 ? limit : deadline;
 }
+static bool qemu_twin(struct ac97_device *d, uint32_t boot_flags)
+{
+    return (boot_flags & CBI_F_SMBIOS_QEMU) &&
+           d->pci.vendor == 0x8086 && d->pci.device == 0x2415;
+}
 int ac97_controller_reset(struct ac97_device *d)
 {
     uint64_t limit = bounded_deadline(d, 1000);
@@ -90,12 +95,19 @@ int ac97_controller_reset(struct ac97_device *d)
     d->io.sleep(d->io.cookie, 1);
     if (expired(d, limit)) return -ETIMEDOUT;
     wr(d, 0x2c, 2, 4); /* stereo, link on; no resume/GPI IRQs */
-    if (rd(d, 0x2c, 4) != 2) return -EIO;
+    uint32_t control = rd(d, 0x2c, 4);
+    /* QEMU v9.2.0 ignores GC_CR/GC_WR writes but reports PCR and exposes
+     * the mixer at GLOB_CNT=0. No such exception for a physical ICH.
+     * See the F4-23 research in the validation record above. */
+    bool model_reset = qemu_twin(d, g_boot.flags) && control == 0;
+    if (control != 2 && !model_reset) return -EIO;
     do {
         d->global_status = rd(d, 0x30, 4);
         if (d->global_status == UINT32_MAX) return -EIO;
         if (d->global_status & 0x100) {
             wr(d, 0x30, 1u << 15, 4); /* stale read timeout, isolated W1C */
+            klog("[audio] reset=%s cnt=%08x sta=%08x",
+                 model_reset ? "qemu_model" : "cold", control, d->global_status);
             return 0;
         }
         d->io.sleep(d->io.cookie, 1);
@@ -116,7 +128,8 @@ static int cas(struct ac97_device *d, uint16_t reg, uint64_t deadline)
         d->global_status = rd(d, 0x30, 4);
         if (control == UINT32_MAX || d->global_status == UINT32_MAX)
             return codec_error(d, "controller_absent", -EIO);
-        if ((control & 0x0e) != 2) return codec_error(d, "link_off_or_reset", -EIO);
+        if ((control & 0x0e) != 2 && !(qemu_twin(d, g_boot.flags) && control == 0))
+            return codec_error(d, "link_off_or_reset", -EIO);
         if (!(d->global_status & 0x100)) return codec_error(d, "primary_not_ready", -EIO);
         uint8_t v = d->last_cas = (uint8_t)rd(d, 0x34, 1);
         if (v == 0xff) return codec_error(d, "cas_invalid", -EIO);
@@ -560,7 +573,7 @@ static bool controller_layout(struct ac97_device *d, uint32_t boot_flags)
     const struct pci_func *p=&d->pci;
     d->sis=p->vendor==0x1039 && p->device==0x7012;
     d->nvidia=p->vendor==0x10de;
-    bool twin=(boot_flags & CBI_F_SMBIOS_QEMU) && p->vendor==0x8086 && p->device==0x2415;
+    bool twin=qemu_twin(d,boot_flags);
     d->nam_bytes=twin?1024:256;d->nabm_bytes=twin ? 256 : (d->sis || d->nvidia) ? 128 : 64;
     d->pcm_unity=twin?0:0x0808;
     d->software_master=twin;
