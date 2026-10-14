@@ -48,12 +48,12 @@ static void key(struct usb_device *d, struct usb_hid *h, unsigned usage,
                 uint16_t c, unsigned value)
 {
     if (!c) return;
+    input_usb_event(INPUT_KEY, c, (int32_t)value, d->generation, d->host->io.now(d->host->io.cookie));
     if (trace_enabled() && h->key_records < USB_HID_TRACE_LIMIT) {
         h->key_records++;
         klog("[input] usb key usage=%02x set1=%03x down=%u addr=%u interface=%u",
              usage, c, value, d->address, h->interface);
     }
-    input_usb_event(INPUT_KEY, c, (int32_t)value, d->generation, d->host->io.now(d->host->io.cookie));
 }
 static void report_record(struct usb_device *d, struct usb_hid *h,
                           const uint8_t *b, unsigned len)
@@ -74,7 +74,7 @@ static void poll_record(struct usb_device *d, struct usb_hid *h, int result)
 {
     if (!trace_enabled() || (result == -USB_EAGAIN && h->poll_records >= USB_HID_TRACE_LIMIT)) return;
     if (h->poll_records < USB_HID_TRACE_LIMIT) h->poll_records++;
-    const struct usb_packet_trace *t=&d->packet_trace;
+    const struct usb_packet_trace *t=&h->trace;
     /* This snapshot precedes LED/hub control or quarantine reusing DMA.
      * poll_frames excludes the two unlinked retirement frames. */
     klog("[usb] hid poll addr=%u interface=%u ep=%u interval=%u toggle=%u maxlen=%u result=%d controller=%s root=%u parent=%u",
@@ -147,8 +147,9 @@ int usb_hid_attach(struct usb_device *d, struct usb_hid *hid, unsigned report_le
     }
     hid->leds = 0xff;
     if (hid->protocol == 1) {
-        err = usb_control(d, 0x21, 9, 0x200, hid->interface, &leds, 1); if (err != 1) return err < 0 ? err : -USB_EPROTO;
-        hid->leds = leds;
+        uint8_t value=leds;
+        err = usb_control(d, 0x21, 9, 0x200, hid->interface, &value, 1); if (err != 1) return err < 0 ? err : -USB_EPROTO;
+        hid->leds = value;
     }
     hid->active = true;
     input_devices_changed(INPUT_USB, true);
@@ -202,6 +203,7 @@ int usb_hid_report(struct usb_device *d, struct usb_hid *h, const uint8_t *b, un
 void usb_hid_release(struct usb_device *d, struct usb_hid *h)
 {
     if (!h->active) return;
+    if (d->host->ops->interrupt_stop) d->host->ops->interrupt_stop(d,h);
     if (h->protocol==1) {
         for (unsigned i=0;i<8;i++) if (h->previous[0] & (1u<<i)) key(d,h,0xe0+i,modifiers[i],0);
         for (unsigned i=2;i<8;i++) if (first(h->previous,i)) key(d,h,h->previous[i],code(h->previous[i]),0);
@@ -209,25 +211,74 @@ void usb_hid_release(struct usb_device *d, struct usb_hid *h)
     memset(h->previous,0,8); h->active=false; h->repeat_key=0;
     input_devices_changed(INPUT_USB, false);
 }
+void usb_hid_outputs(struct usb_device *d)
+{
+    for (unsigned i=0;i<USB_HID_MAX;i++) {
+        struct usb_hid *h=&d->hid[i];
+        if (h->active && h->protocol==1 && h->leds!=leds) {
+            uint8_t value=leds;
+            int err=usb_control(d,0x21,9,0x200,h->interface,&value,1);
+            if (err!=1) { usb_device_quarantine(d,"hid_led_output"); return; }
+            h->leds=value;
+        }
+    }
+}
+static void latency_window(struct usb_device *d, struct usb_hid *h, uint64_t tick)
+{
+    if (!h->latency_reports || tick-h->latency_window<1000) return;
+    if (trace_enabled())
+        klog("[usb] hid latency max addr=%u ms=%llu interface=%u reports=%u window_ms=%llu bound=upper",
+             d->address,h->latency_max,h->interface,h->latency_reports,tick-h->latency_window);
+    h->latency_reports=0; h->latency_max=0; h->latency_window=tick;
+}
+static void latency_record(struct usb_device *d, struct usb_hid *h)
+{
+    uint64_t tick=d->host->io.now(d->host->io.cookie), ms=tick-h->pending_at;
+    latency_window(d,h,tick);
+    if (!h->latency_reports) h->latency_window=tick;
+    h->latency_reports++;
+    if (ms>h->latency_max) h->latency_max=ms;
+    if (trace_enabled() && h->latency_records<USB_HID_LATENCY_LIMIT) {
+        h->latency_records++;
+        klog("[usb] hid latency addr=%u ms=%llu interface=%u observed_ms=%llu bound=upper",
+             d->address,ms,h->interface,tick-h->observed_at);
+    }
+}
+static void hid_fail(struct usb_device *d, const char *reason)
+{
+    if (!d->host->ops->interrupt) { usb_device_quarantine(d,reason); return; }
+    /* The input worker must never issue hub control on the live general TD.
+     * Stop input immediately; the scan owner disables/quarantines the port. */
+    d->hid_fault=reason;
+    d->host->next_scan=d->host->io.now(d->host->io.cookie);
+    for (unsigned i=0;i<USB_HID_MAX;i++) usb_hid_release(d,&d->hid[i]);
+}
 void usb_hid_poll(struct usb_device *d, struct usb_hid *h)
 {
     if (!h->active) return;
     struct usb_host *host=d->host;
-    if (h->protocol==1 && h->leds!=leds) {
-        int err=usb_control(d,0x21,9,0x200,h->interface,&leds,1);
-        if (err!=1) { usb_device_quarantine(d,"hid_led_output"); return; }
-        h->leds=leds;
-    }
-    if (usb_expired(host,h->next_poll)) {
-        h->next_poll=host->io.now(host->io.cookie)+h->interval;
-        uint8_t b[64]; int n=host->ops->packet(d,h->endpoint,USB_PID_IN,h->toggle,b,h->packet,true);
+    latency_window(d,h,host->io.now(host->io.cookie));
+    bool async=host->ops->interrupt!=0;
+    if (!async) usb_hid_outputs(d);
+    if (!h->active) return;
+    if (async || usb_expired(host,h->next_poll)) {
+        uint8_t b[64]; int n;
+        if (async) n=host->ops->interrupt(d,h,b,h->protocol==1 ? 8 : h->wheel ? 4 : 3);
+        else {
+            h->pending_at=host->io.now(host->io.cookie);
+            h->next_poll=h->pending_at+h->interval;
+            n=host->ops->packet(d,h->endpoint,USB_PID_IN,h->toggle,b,h->packet,true);
+            h->trace=d->packet_trace; h->trace.valid=true;
+            h->observed_at=host->io.now(host->io.cookie);
+        }
         if (n>=0) {
-            report_record(d,h,b,(unsigned)n);
             h->toggle^=1;
-            if (usb_hid_report(d,h,b,(unsigned)n)) { usb_device_quarantine(d,"hid_report_length"); return; }
-        } else {
+            if (usb_hid_report(d,h,b,(unsigned)n)) { hid_fail(d,"hid_report_length"); return; }
+            latency_record(d,h);
+            report_record(d,h,b,(unsigned)n);
+        } else if (h->trace.valid || n!=-USB_EAGAIN) {
             poll_record(d,h,n);
-            if (n!=-USB_EAGAIN) { usb_device_quarantine(d,n==-USB_EPIPE ? "hid_stall" : "hid_transfer"); return; }
+            if (n!=-USB_EAGAIN) { hid_fail(d,n==-USB_EPIPE ? "hid_stall" : "hid_transfer"); return; }
         }
     }
     if (h->repeat_key && usb_expired(host,h->repeat_at)) {

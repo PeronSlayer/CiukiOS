@@ -9,11 +9,14 @@
 #define CIUKI_CPU_H
 #define P2V(p) model_page(p)
 
-static struct task worker;
+static struct task worker, input_worker;
 static void (*worker_fn)(void *);
 static void *worker_arg;
+static void (*input_fn)(void *);
+static void *input_arg;
 static unsigned created, started, allocations;
-static bool create_failed, dispatched, no_pci;
+static bool create_failed, input_create_failed, dispatched, input_dispatched, no_pci;
+static uint64_t input_stop_at;
 static uint32_t config_address, flags=0x200;
 static jmp_buf service_done;
 volatile uint64_t g_ticks;
@@ -22,7 +25,7 @@ static void sync_model(void)
 {
     if(usb_count()) {
         const struct usb_host *h=usb_get(0);
-        m.host.dma=h->dma;m.host.dma_phys=h->dma_phys;m.host.claims[2]=h->claims[2];
+        m.sleep_host=(struct usb_host *)h;m.host.dma=h->dma;m.host.dma_phys=h->dma_phys;m.host.claims[2]=h->claims[2];
     }
 }
 static void *model_page(uint32_t phys) { assert(phys==0x100000);return m.dma; }
@@ -60,15 +63,21 @@ static void cpu_outw(uint16_t port,uint16_t value) { port_write(port,value,2); }
 static void outl(uint16_t port,uint32_t value) { port_write(port,value,4); }
 struct task *task_create_kernel(const char *name,void (*fn)(void *),void *arg,enum task_prio prio)
 {
-    assert(!strcmp(name,"usb-host") && prio==P_DEVICE && fn);created++;
+    assert(prio==P_DEVICE && fn);created++;
+    if(!strcmp(name,"usb-hid")) {
+        input_worker.state=T_BLOCKED;input_worker.prio=prio;input_fn=fn;input_arg=arg;
+        return input_create_failed ? NULL:&input_worker;
+    }
+    assert(!strcmp(name,"usb-host"));
     if(create_failed) return NULL;
     worker.state=T_BLOCKED;worker.prio=prio;worker_fn=fn;worker_arg=arg;return &worker;
 }
-void task_start(struct task *t) { assert(t==&worker && t->state==T_BLOCKED);t->state=T_READY;started++; }
+void task_start(struct task *t) { assert((t==&worker || t==&input_worker) && t->state==T_BLOCKED);t->state=T_READY;started++; }
 void task_sleep_ms(uint32_t ms)
 {
     assert(flags&0x200);
     sync_model();
+    if(input_dispatched && m.now>=input_stop_at) longjmp(service_done,1);
     /* Leave only at the service's outer sleep, with the transfer lock free. */
     if(dispatched && !usb_get(0)->busy && m.now>=2100) longjmp(service_done,1);
     sleep_ms(&m,ms);g_ticks=m.now;
@@ -83,6 +92,7 @@ int main(int argc,char **argv)
     bool empty=!strcmp(argv[1],"empty");
     if(empty) m.dev[0].present=m.dev[1].present=false;
     create_failed=!strcmp(argv[1],"create-failed");
+    input_create_failed=!strcmp(argv[1],"input-create-failed");
     no_pci=!strcmp(argv[1],"none");
     bool policy=false;
     if(!strcmp(argv[1],"safe")) {g_boot.flags=CBI_F_SAFE_MODE;policy=true;}
@@ -92,11 +102,11 @@ int main(int argc,char **argv)
     usb_init();
     if(policy || no_pci) {
         assert(!usb_count() && !created && !started && !allocations && writes==before && claims==c);
-    } else if(create_failed) {
-        assert(created==1 && !started && usb_count()==1 && usb_get(0)->quarantined);
+    } else if(create_failed || input_create_failed) {
+        assert(created==2 && !started && usb_count()==1 && usb_get(0)->quarantined);
         assert(!usb_get(0)->ready && !(m.config[1]&4) && !strcmp(usb_get(0)->reason,"service_thread_failed"));
     } else {
-        assert(created==1 && started==1 && worker.state==T_READY);
+        assert(created==2 && started==2 && worker.state==T_READY);
         assert(usb_get(0)->ready && !usb_get(0)->device_count);
         assert(!usb_input_ready()); /* a controller alone is not an input device */
         assert(!service_entries && service_queues==1 && !first_scans);
@@ -114,6 +124,25 @@ int main(int argc,char **argv)
             assert(h->devices[0].hid[0].active && h->devices[1].hid[0].active);
             assert(m.root_resets[0]==1 && m.root_resets[1]==1 && m.root_enables[0]==1 && m.root_enables[1]==1);
             assert(connect_records==2 && descriptor_starts==2 && descriptor_results==2 && !descriptor_failures && retired_packets);
+        }
+        if(!strcmp(argv[1],"hid-worker")) {
+            /* The general owner is asleep/reserved; dispatch only the real
+             * input thread. It must neither scan nor borrow the general TD. */
+            struct usb_host *host=(struct usb_host *)h;
+            uint8_t general[64];memcpy(general,host->dma+USB_TD,sizeof(general));
+            unsigned scans=host->scan_count;
+            m.dev[0].report[2]=0x45;m.dev[0].report_len=8;
+            m.dev[1].report[1]=3;m.dev[1].report[2]=5;m.dev[1].report_len=4;
+            usb_host_take(host);fs_lock_drop(&host->transfer_lock);
+            m.check_sleep_lock=true;input_stop_at=m.now+40;
+            if(!setjmp(service_done)) {
+                input_dispatched=true;input_worker.state=T_RUNNING;input_fn(input_arg);
+                assert(!"input service returned");
+            }
+            input_dispatched=false;
+            assert(h->busy && h->scan_count==scans && held[0x58] && last_x==3 && last_y==5);
+            assert(!memcmp(general,host->dma+USB_TD,sizeof(general)));
+            fs_lock_take(&host->transfer_lock);usb_host_drop(host);
         }
         unsigned scanned=h->device_count,old_started=started,old_created=created;
         usb_init();assert(h->device_count==scanned && started==old_started && created==old_created);
