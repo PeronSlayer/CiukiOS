@@ -28,6 +28,8 @@
 #include <string.h>
 #include <time.h>
 #include <fcntl.h>
+/* Keep the cfg_writer.write member out of the write() syscall macro below. */
+#include "../../../apps/desktop/settings_io.h"
 #define CIUKI_RUNTIME_H
 #define CIUKI_RAW_H
 #define CU_PTR(p) ((uintptr_t)(p))
@@ -839,12 +841,14 @@ static void test_network_service(void)
     d.now_ns++; desk_shell_tick(&d); shell_service(&d);
     assert(network_queries == 2 && network_closes == 2 && !d.damage.count);
     network_error = 1; d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
-    assert(!d.sh.network.present && network_closes == 3 && d.damage.count == 1);
+    assert(!d.sh.network.present && network_closes == 3 && d.damage.count && d.sh.notification.active);
+    assert(d.sh.notification.action==SH_NOTIFY_NETWORK);
+    desk_shell_key(&d,DU_KEY_ESC,1); d.damage.count=0;
     network_error = 0; network_available = 0; d.damage.count = 0;
     d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
     assert(!d.sh.network.present && network_queries == 3 && network_closes == 3 && !d.damage.count);
     network_available = 1; d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
-    assert(d.sh.network.present && network_closes == 4 && d.damage.count == 1);
+    assert(d.sh.network.present && network_closes == 4 && d.damage.count && d.sh.notification.active);
     network_available = 0; desk_render_release(&d); fake_reset();
     puts("PASS network service: timer/reload, open/devctl/close, unchanged state, failures and recovery");
 }

@@ -25,6 +25,7 @@
 #define SH_HOT_INK   DU_SELECT_INK
 #define SH_WINDOW    DU_WINDOW
 #define SH_TIP       0xffffe1u      /* tooltip paper */
+static void tooltip_hide(struct desktop *d);
 
 static struct du_canvas canvas(struct desktop *d, struct desk_box clip)
 {
@@ -272,7 +273,7 @@ static const char *client_icon(const struct desktop *d, int i)
     if (c->internal == DESK_INTERNAL_ABOUT) return "ciuki";
     if (c->internal == DESK_INTERNAL_RUN) return "go-jump";
     if (c->internal == DESK_INTERNAL_SHUTDOWN || c->internal == DESK_INTERNAL_POWER) return "system-shutdown";
-    if (c->internal) return d->sh.message_kind ? "dialog-error" : "dialog-information";
+    if (c->internal) return du_message_icon_name(d->sh.message_kind) ? du_message_icon_name(d->sh.message_kind) : "dialog-information";
     if (c->program == DESK_APP_TERMINAL) return "utilities-terminal";
     if (c->program == DESK_APP_FILES) return "system-file-manager";
     if (c->program == DESK_APP_NOTE) return "accessories-text-editor";
@@ -467,6 +468,7 @@ static void menus_damage(struct desktop *d)
 }
 void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
 {
+    tooltip_hide(d);
     if (d->sh.icon_selected>=0) damage(d,d->sh.icons[d->sh.icon_selected].box);
     desk_sound(d,SOUND_MENU_OPEN);
     menus_damage(d);
@@ -730,6 +732,7 @@ static struct desk_box network_icon_box(const struct desktop *d)
 { return desk_shell_tray_icon_box(d, SH_TRAY_NETWORK); }
 static struct desk_box media_icon_box(const struct desktop *d)
 { return desk_shell_tray_icon_box(d, SH_TRAY_MEDIA); }
+static struct desk_box tooltip_box(const struct desktop *d);
 static struct desk_box tray_popup(const struct desktop *d, struct desk_box anchor, int w, int h)
 {
     if (w > (int)d->width) w = (int)d->width;
@@ -747,20 +750,43 @@ static struct desk_box media_popup(const struct desktop *d)
 void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *state)
 {
     if (!memcmp(&d->sh.media,state,sizeof(*state))) return;
+    tooltip_hide(d);
     int resized = !!d->sh.media.removable_mask != !!state->removable_mask;
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
     if (d->sh.media.version == CIUKI_MEDIA_VERSION) {
         unsigned added = state->removable_mask & ~d->sh.media.removable_mask;
         unsigned removed = d->sh.media.removable_mask & ~state->removable_mask;
-        for (unsigned i = 4; i < 26; i++) if ((state->removable_mask & d->sh.media.removable_mask & (1u<<i)) &&
+        for (unsigned i = 3; i < 26; i++) if ((state->removable_mask & d->sh.media.removable_mask & (1u<<i)) &&
             state->generation[i] != d->sh.media.generation[i]) { added |= 1u<<i; removed |= 1u<<i; }
         if (removed) desk_sound(d,SOUND_DEVICE_DISCONNECT);
         if (added) desk_sound(d,SOUND_DEVICE_CONNECT);
+        if (added || removed) {
+            char text[160]=""; size_t n=0;
+            for (unsigned i=3;i<26;i++) if ((added|removed)&(1u<<i)) {
+                int wrote=snprintf(text+n,sizeof(text)-n,"%s%c: %s",n ? "\n" : "",'A'+i,
+                                   added&(1u<<i) ? "Media connected" : "Media removed");
+                if (wrote<0 || (size_t)wrote>=sizeof(text)-n) break;
+                n+=(size_t)wrote;
+            }
+            desk_shell_notify(d,"Removable media",text,DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
+        }
     }
+    for (unsigned i=3;i<26;i++) if (!(state->removable_mask&(1u<<i)) ||
+        state->generation[i]!=d->sh.media.generation[i]) d->sh.media_labels[i][0]=0;
     d->sh.media=*state; d->sh.media_scroll=0;
     if (!state->removable_mask) d->sh.media_open=0;
     damage(d, resized ? desk_taskbar(d) : tray_box(d));
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
+}
+void desk_shell_media_labels(struct desktop *d,const struct ciuki_media_volume volumes[26])
+{
+    struct desk_box previous=d->sh.tooltip==4 ? tooltip_box(d) : (struct desk_box){0};
+    int changed=0;
+    for (unsigned i=3;i<26;i++) {
+        char label[33]; snprintf(label,sizeof(label),"%.32s",volumes[i].label);
+        if (strcmp(label,d->sh.media_labels[i])) { strcpy(d->sh.media_labels[i],label); changed=1; }
+    }
+    if (changed && d->sh.tooltip==4) { damage(d,previous); damage(d,tooltip_box(d)); }
 }
 static unsigned media_at(const struct desktop *d,unsigned row)
 {
@@ -787,10 +813,32 @@ static void network_mac(const struct ciuki_net_state *n, char text[18])
 { snprintf(text, 18, "%02x:%02x:%02x:%02x:%02x:%02x", n->mac[0], n->mac[1], n->mac[2], n->mac[3], n->mac[4], n->mac[5]); }
 static void tooltip_text(const struct desktop *d, char *text, size_t size)
 {
+    if (d->sh.tooltip>=16 && d->sh.tooltip<16+DESK_CLIENTS) {
+        snprintf(text,size,"%s",d->clients[d->sh.tooltip-16].title); return;
+    }
+    if (d->sh.tooltip==3) {
+        if (d->sh.mixer_state<0) snprintf(text,size,"No audio device");
+        else if (!d->sh.mixer_state) snprintf(text,size,"Checking audio device...");
+        else snprintf(text,size,"Volume: %d%%%s",d->sh.volume,d->sh.muted ? " (muted)" : "");
+        return;
+    }
+    if (d->sh.tooltip==4) {
+        size_t n=0; text[0]=0;
+        for (unsigned i=3;i<26;i++) if (d->sh.media.removable_mask&(1u<<i)) {
+            int wrote=snprintf(text+n,size-n,"%s%c: %s",n ? "\n" : "",'A'+i,
+                d->sh.media_labels[i][0] ? d->sh.media_labels[i] : "Removable media");
+            if (wrote<0 || (size_t)wrote>=size-n) break;
+            n+=(size_t)wrote;
+        }
+        return;
+    }
     if (d->sh.tooltip != 2) { date_text(d, text, size, 1); return; }
     const struct ciuki_net_state *n = &d->sh.network;
     if (!n->present) snprintf(text, size, "No network adapter");
     else if (n->link == CIUKI_NET_LINK_UP) {
+        if (n->address_configured) {
+            snprintf(text,size,"Network: connected (%u.%u.%u.%u)",n->ipv4[0],n->ipv4[1],n->ipv4[2],n->ipv4[3]); return;
+        }
         char mac[18]; network_mac(n, mac);
         snprintf(text, size, "Network: cable connected (%s %s)", n->driver, mac);
     } else snprintf(text, size, n->link == CIUKI_NET_LINK_DOWN ? "Network: no cable" : "Network: link unknown");
@@ -801,6 +849,10 @@ void desk_shell_volume_damage(struct desktop *d)
 {
     damage(d, tray_box(d));
     if (d->sh.volume_open) damage(d, outer(volume_popup(d)));
+    if (d->sh.tooltip==3) {
+        if (d->sh.tooltip_painted) damage(d,d->sh.tooltip_last);
+        damage(d,tooltip_box(d));
+    }
 }
 static struct desk_box volume_track(const struct desktop *d)
 { struct desk_box p = volume_popup(d); return (struct desk_box){p.x + 40, p.y + 30, 12, 100}; }
@@ -808,9 +860,16 @@ static struct desk_box volume_mute(const struct desktop *d)
 { struct desk_box p = volume_popup(d); return (struct desk_box){p.x + 10, p.y + p.h - 24, p.w - 20, 14}; }
 static struct desk_box tooltip_box(const struct desktop *d)
 {
-    char text[96]; tooltip_text(d, text, sizeof(text));
-    int32_t w = du_text_width(text) + 10;
-    return tray_popup(d, d->sh.tooltip == 2 ? network_icon_box(d) : clock_box(d), w, 18);
+    char text[1024]; tooltip_text(d, text, sizeof(text));
+    int32_t w = du_text_width(text) + 16;
+    if (w>360) w=360;
+    if (w>(int)d->width-8) w=(int)d->width-8;
+    int h=du_text_wrap(NULL,(struct du_rect){0,0,w-16,0},text,0)*line_h()+10;
+    if (h>(int)d->height-2*DESK_BAR-12) h=(int)d->height-2*DESK_BAR-12;
+    struct desk_box anchor=d->sh.tooltip>=16 ? desk_task_button(d,d->sh.tooltip-16) :
+        d->sh.tooltip==2 ? network_icon_box(d) : d->sh.tooltip==3 ? volume_icon_box(d) :
+        d->sh.tooltip==4 ? media_icon_box(d) : clock_box(d);
+    return tray_popup(d,anchor,w,h);
 }
 static void damage_moved_popup(struct desktop *d, struct desk_box anchor, int dx, int w, int h)
 {
@@ -827,21 +886,26 @@ void desk_shell_tray_damage(struct desktop *d, int previous_width)
     if (d->sh.volume_open) damage_moved_popup(d, volume_icon_box(d), dx, 92, 168);
     if (d->sh.network_open) damage_moved_popup(d, network_icon_box(d), dx, 272, 112);
     if (d->sh.media_open) damage_moved_popup(d, media_icon_box(d), dx, 248, 28 + (int)media_rows(d) * 22);
-    if (d->sh.tooltip == 2) {
-        char text[96]; tooltip_text(d, text, sizeof(text));
-        damage_moved_popup(d, network_icon_box(d), dx, du_text_width(text) + 10, 18);
+    if (d->sh.tooltip) {
+        struct desk_box b=tooltip_box(d);
+        damage(d,b); b.x+=dx; damage(d,b);
     }
 }
 void desk_shell_network_update(struct desktop *d, const struct ciuki_net_state *state)
 {
     struct ciuki_net_state *old = &d->sh.network;
     int changed = old->present != state->present || old->link != state->link || old->state != state->state ||
+                  old->address_configured != state->address_configured || memcmp(old->ipv4,state->ipv4,4) ||
                   memcmp(old->driver, state->driver, sizeof(old->driver)) ||
                   memcmp(old->mac, state->mac, sizeof(old->mac)) ||
                   memcmp(old->reason, state->reason, sizeof(old->reason));
     if (changed && d->sh.tooltip == 2) damage(d, tooltip_box(d));
+    int notify=old->version && (old->present!=state->present || old->link!=state->link);
     *old = *state;
     if (!changed) return;
+    if (notify) desk_shell_notify(d,"Network",!state->present ? "Network adapter removed." :
+        state->link==CIUKI_NET_LINK_UP ? "The network cable is connected." : "The network cable is disconnected.",
+        DU_DLG_ICON_INFO,SH_NOTIFY_NETWORK);
     damage(d, tray_box(d));
     if (d->sh.network_open) damage(d, outer(network_popup(d)));
     if (d->sh.tooltip == 2) damage(d, tooltip_box(d));
@@ -966,10 +1030,78 @@ static void draw_tooltip(struct desktop *d, struct desk_box clip)
     struct desk_box t = tooltip_box(d), b;
     if (!desk_intersect(t, clip, &b)) return;
     struct du_canvas c = canvas(d, b);
-    char text[96]; tooltip_text(d, text, sizeof(text));
+    char text[1024]; tooltip_text(d, text, sizeof(text));
     du_fill(&c, R(t), SH_TIP);
     du_outline(&c, R(t), SH_INK);
-    du_text(&c, t.x + 5, t.y + (t.h - text_h()) / 2, text, SH_INK);
+    du_text_wrap(&c,(struct du_rect){t.x+8,t.y+5,t.w-16,t.h-10},text,SH_INK);
+}
+
+/* One bounded slot, no allocation or focus changes. Updating a volume event
+ * coalesces key repeats without restarting the entry animation. */
+static struct desk_box notification_box(const struct desktop *d)
+{
+    int w=(int)d->width-16; if (w>336) w=336;
+    int lines=du_text_wrap(NULL,(struct du_rect){0,0,w-64,0},d->sh.notification.text,0);
+    int h=lines*line_h()+58; if (h<102) h=102;
+    if (h>(int)d->height-2*DESK_BAR-20) h=(int)d->height-2*DESK_BAR-20;
+    struct desk_box b=tray_popup(d,clock_box(d),w,h+10);
+    b.h=h; b.y+=d->sh.notification.slide;
+    return b;
+}
+static struct desk_box notification_outer(const struct desktop *d)
+{
+    struct desk_box b=notification_box(d); b.h+=10; return outer(b);
+}
+static struct du_rect notification_area(const struct desktop *d)
+{ return (struct du_rect){0,DESK_BAR,(int)d->width,tray_box(d).y-SH_TRAY_GAP-DESK_BAR}; }
+void desk_shell_notify(struct desktop *d,const char *title,const char *text,int icon,int action)
+{
+    if (!d->shell) return;
+    struct sh_notification *n=&d->sh.notification;
+    int attention=icon==DU_DLG_ICON_WARNING || icon==DU_DLG_ICON_ERROR;
+    if (n->active && n->balloon && !attention && d->now_ns<n->expires) return;
+    int repeat=n->active && n->action==SH_NOTIFY_VOLUME && action==SH_NOTIFY_VOLUME;
+    if (n->active) damage(d,notification_outer(d));
+    n->slide=repeat ? n->slide : 20;
+    if (!repeat) n->started=d->now_ns;
+    n->expires=d->now_ns+8000000000ull;
+    n->active=1; n->icon=icon; n->action=action;
+    n->balloon=attention;
+    snprintf(n->title,sizeof(n->title),"%s",title);
+    snprintf(n->text,sizeof(n->text),"%s",text);
+    tooltip_hide(d);
+    damage(d,notification_outer(d));
+    if (n->balloon) desk_sound(d,du_message_sound(icon));
+}
+void desk_shell_notify_error(struct desktop *d,const char *title,int error)
+{
+    if (error<0) error=-error;
+    char text[320]; snprintf(text,sizeof(text),"%s (%d)",strerror(error),error);
+    desk_shell_notify(d,title,text,DU_DLG_ICON_ERROR,SH_NOTIFY_DETAILS);
+}
+static void draw_notification(struct desktop *d,struct desk_box clip)
+{
+    struct sh_notification *n=&d->sh.notification;
+    struct desk_box b=notification_box(d);
+    struct du_canvas c=canvas(d,clip);
+    c.clip=du_intersection(c.clip,notification_area(d));
+    popup_face(&c,b);
+    struct desk_paint p=painter(&c);
+    desk_paint_hgradient(&p,b.x+2,b.y+2,b.w-4,3,desk_theme->title[0],desk_theme->title[1]);
+    du_icon_blit(&c,b.x+12,b.y+16,desk_shell_icon(du_message_icon_name(n->icon),32),32,DU_ICON_NORMAL);
+    struct du_rect old=c.clip;
+    c.clip=du_intersection(old,(struct du_rect){b.x+54,b.y+14,b.w-68,20});
+    bold(&c,b.x+54,b.y+16,n->title,DU_INK); c.clip=old;
+    du_text_wrap(&c,(struct du_rect){b.x+54,b.y+36,b.w-68,b.h-60},n->text,DU_INK);
+    du_text(&c,b.x+54,b.y+b.h-20,"Click to open",DU_GRAY);
+    if (n->balloon) {
+        int x=b.x+b.w-28;
+        for (int row=0;row<10;row++) {
+            du_hline(&c,x+row,b.y+b.h+row,11-row,DU_FACE);
+            du_fill(&c,(struct du_rect){x+row,b.y+b.h+row,1,1},desk_theme->outline);
+            du_fill(&c,(struct du_rect){x+10,b.y+b.h+row,1,1},desk_theme->outline);
+        }
+    }
 }
 
 /* ---- desktop icons ----------------------------------------------------- */
@@ -1384,11 +1516,12 @@ void desk_shell_overlay(struct desktop *d, struct desk_box clip)
 {
     bind(d);
     draw_taskbar(d, clip);
+    if (d->sh.notification.active) draw_notification(d,clip);
     for (int l = 0; l < d->sh.levels; l++) draw_menu(d, &d->sh.menus[l], clip);
     if (d->sh.volume_open) draw_volume(d, clip);
     if (d->sh.network_open) draw_network(d, clip);
     if (d->sh.media_open) draw_media(d,clip);
-    if (d->sh.tooltip && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.levels) draw_tooltip(d, clip);
+    if (d->sh.tooltip && !d->sh.notification.active && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.levels) draw_tooltip(d, clip);
     if (d->sh.switcher) draw_switcher(d, clip);
 }
 /* The window icon in a gradient title bar (compositor.c, weak hook). */
@@ -1416,20 +1549,9 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
         break;
     }
     default: {
-        unsigned lines = 1;
-        for (const char *s = d->sh.message_text; *s; s++) lines += *s == '\n';
-        int32_t widest = 0;
-        char line[128]; size_t n = 0;
-        for (const char *s = d->sh.message_text;; s++) {
-            if (!*s || *s == '\n' || n + 1 >= sizeof(line)) {
-                line[n] = 0; n = 0;
-                if (du_text_width(line) > widest) widest = du_text_width(line);
-                if (!*s) break;
-                if (*s != '\n') line[n++] = *s;
-            } else line[n++] = *s;
-        }
-        *w = (uint32_t)(widest + 88 > 300 ? widest + 88 : 300);
-        *h = lines * (unsigned)line_h() + 70 > 120 ? lines * (unsigned)line_h() + 70 : 120;
+        int width,height;
+        du_message_size(d->sh.message_text,d->sh.message_kind,1,(int)d->width-20,&width,&height);
+        *w=(uint32_t)width; *h=(uint32_t)height;
     }
     }
     if (*w + 20 > d->width) *w = d->width > 40 ? d->width - 20 : 1;
@@ -1482,10 +1604,14 @@ void desk_internal_closed(struct desktop *d, int index)
 }
 void desk_shell_message(struct desktop *d, const char *title, const char *text, int error)
 {
+    desk_shell_message_class(d,title,text,error ? DU_DLG_ICON_ERROR : DU_DLG_ICON_INFO);
+}
+void desk_shell_message_class(struct desktop *d, const char *title, const char *text, int error)
+{
     snprintf(d->sh.message_title, sizeof(d->sh.message_title), "%s", title);
     snprintf(d->sh.message_text, sizeof(d->sh.message_text), "%s", text);
     d->sh.message_kind = error;
-    desk_sound(d,error ? SOUND_ERROR : SOUND_INFORMATION);
+    desk_sound(d,du_message_sound(error));
     if (!d->shell) return;
     desk_internal_open(d, DESK_INTERNAL_MESSAGE);
 }
@@ -1707,8 +1833,8 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         if (d->power.state==DESK_POWER_BUSY) push_button(&c, button_box(content, 1, 2), "&Force", 0);
         break;
     default:
-        du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(d->sh.message_kind ? "dialog-error" : "dialog-information", 32), 32, DU_ICON_NORMAL);
-        multiline(&c, content.x + 60, content.y + 18, d->sh.message_text, SH_INK);
+        du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(du_message_icon_name(d->sh.message_kind), 32), 32, DU_ICON_NORMAL);
+        du_text_wrap(&c,(struct du_rect){content.x+60,content.y+16,content.w-76,content.h-67},d->sh.message_text,SH_INK);
         push_button(&c, button_box(content, 0, 1), "OK", 1);
         break;
     }
@@ -1786,7 +1912,11 @@ static void volume_set_from(struct desktop *d, int32_t y)
 }
 static void tooltip_hide(struct desktop *d)
 {
-    if (d->sh.tooltip) { damage(d, tooltip_box(d)); d->sh.tooltip = 0; }
+    if (d->sh.tooltip) {
+        damage(d,tooltip_box(d));
+        if (d->sh.tooltip_painted) damage(d,d->sh.tooltip_last);
+        d->sh.tooltip=0; d->sh.tooltip_painted=0;
+    }
 }
 int desk_shell_button(struct desktop *d, int button, int down)
 {
@@ -1874,6 +2004,20 @@ int desk_shell_button(struct desktop *d, int button, int down)
         damage(d, outer(p));
         if (desk_contains(volume_icon_box(d), x, y)) return 1;
     }
+    if (d->sh.notification.active && du_contains(notification_area(d),x,y) && desk_contains(notification_box(d),x,y)) {
+        if (button==CIUKI_BUTTON_LEFT) {
+            struct sh_notification *n=&d->sh.notification;
+            damage(d,notification_outer(d)); n->active=0;
+            if (n->action==SH_NOTIFY_NETWORK) { d->sh.network_open=1; damage(d,outer(network_popup(d))); }
+            else if (n->action==SH_NOTIFY_VOLUME) { d->sh.volume_open=1; damage(d,outer(volume_popup(d))); }
+            else if (n->action==SH_NOTIFY_MEDIA && d->sh.media.removable_mask) { d->sh.media_open=1; damage(d,outer(media_popup(d))); }
+            else desk_shell_message_class(d,n->title,n->text,n->icon);
+        }
+        return 1;
+    }
+    if (d->sh.notification.active) {
+        damage(d,notification_outer(d)); d->sh.notification.active=0;
+    }
     struct desk_box bar = desk_taskbar(d);
     if (desk_contains(start_button(d), x, y)) {
         if (button == CIUKI_BUTTON_LEFT) desk_menu_open(d, SH_MENU_START, 0, 0);
@@ -1934,6 +2078,16 @@ int desk_shell_button(struct desktop *d, int button, int down)
     }
     return 0;
 }
+static int hover_target(const struct desktop *d)
+{
+    int x=d->mouse_x,y=d->mouse_y;
+    if (desk_contains(clock_box(d),x,y)) return 1;
+    if (desk_contains(network_icon_box(d),x,y)) return 2;
+    if (desk_contains(volume_icon_box(d),x,y)) return 3;
+    if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y)) return 4;
+    for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && desk_contains(desk_task_button(d,i),x,y)) return 16+i;
+    return 0;
+}
 void desk_shell_motion(struct desktop *d)
 {
     if (!d->shell) return;
@@ -1955,13 +2109,11 @@ void desk_shell_motion(struct desktop *d)
     }
     int over_start = desk_contains(start_button(d), x, y);
     if (over_start != d->sh.start_hot) { d->sh.start_hot = over_start; damage(d, start_button(d)); }
-    int over_clock = desk_contains(clock_box(d), x, y);
-    int over_network = desk_contains(network_icon_box(d), x, y);
-    if (d->sh.tooltip && d->sh.tooltip != (over_network ? 2 : over_clock ? 1 : 0)) {
-        tooltip_hide(d); d->sh.hover_since = 0;
-    }
-    if (!over_clock && !over_network) { tooltip_hide(d); d->sh.hover_since = 0; }
-    else if (!d->sh.hover_since) d->sh.hover_since = d->now_ns ? d->now_ns : 1;
+    int target=hover_target(d);
+    if (target!=d->sh.hover_target) {
+        tooltip_hide(d); d->sh.hover_target=target;
+        d->sh.hover_since=target ? (d->now_ns ? d->now_ns : 1) : 0;
+    } else if (target && !d->sh.hover_since) d->sh.hover_since=d->now_ns ? d->now_ns : 1;
 }
 void desk_shell_tick(struct desktop *d)
 {
@@ -1971,11 +2123,35 @@ void desk_shell_tick(struct desktop *d)
         d->sh.network_poll_ns = d->now_ns ? d->now_ns : 1;
         d->sh.want_reload |= 16|32;
     }
-    int over_network = desk_contains(network_icon_box(d), d->mouse_x, d->mouse_y);
-    if (!d->sh.tooltip && d->sh.hover_since && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open &&
-        (over_network || desk_contains(clock_box(d), d->mouse_x, d->mouse_y)) && d->now_ns - d->sh.hover_since >= 600000000ull) {
-        d->sh.tooltip = over_network ? 2 : 1;
-        damage(d, tooltip_box(d));
+    struct sh_notification *n=&d->sh.notification;
+    if (n->active) {
+        uint64_t age=d->now_ns>=n->started ? d->now_ns-n->started : 0;
+        int slide=age>=160000000ull ? 0 : 20-(int)(age/8000000ull);
+        if (d->now_ns>=n->expires) { damage(d,notification_outer(d)); n->active=0; }
+        else if (slide!=n->slide) {
+            damage(d,notification_outer(d)); n->slide=slide; damage(d,notification_outer(d));
+        }
+    }
+    int target=hover_target(d);
+    if (target!=d->sh.hover_target) {
+        tooltip_hide(d); d->sh.hover_target=target;
+        d->sh.hover_since=target ? (d->now_ns ? d->now_ns : 1) : 0;
+    }
+    if (d->sh.tooltip && d->sh.tooltip!=target) tooltip_hide(d);
+    if (!d->sh.tooltip && d->sh.hover_since && target && !n->active &&
+        !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open &&
+        d->now_ns>=d->sh.hover_since && d->now_ns-d->sh.hover_since>=600000000ull) {
+        d->sh.tooltip=target; damage(d,tooltip_box(d));
+    }
+    if (d->sh.tooltip) {
+        char text[1024]; tooltip_text(d,text,sizeof(text));
+        uint32_t hash=2166136261u;
+        for (const unsigned char *s=(const unsigned char *)text;*s;s++) hash=(hash^*s)*16777619u;
+        struct desk_box b=tooltip_box(d);
+        if (d->sh.tooltip_painted && (hash!=d->sh.tooltip_hash || memcmp(&b,&d->sh.tooltip_last,sizeof(b)))) {
+            damage(d,d->sh.tooltip_last); damage(d,b);
+        }
+        d->sh.tooltip_hash=hash; d->sh.tooltip_last=b; d->sh.tooltip_painted=1;
     }
 }
 void desk_shell_scale_motion(struct desktop *d, int32_t *dx, int32_t *dy)
@@ -2106,6 +2282,7 @@ static void icon_select(struct desktop *d, int icon)
 int desk_shell_key(struct desktop *d, int code, int value)
 {
     if (!d->shell) return 0;
+    if (value && d->sh.tooltip) { tooltip_hide(d); d->sh.hover_since=0; }
     int alt = code == 0x38 || code == 0x138, ctrl = code == 0x1d || code == 0x11d, shift = code == 0x2a || code == 0x36;
     int logo = code == 0x15b || code == 0x15c;
     if (ctrl || shift) {
@@ -2205,11 +2382,19 @@ int desk_shell_key(struct desktop *d, int code, int value)
                 d->sh.volume = v;
             }
             d->sh.want_mixer = 1;
+            if (code==0x130 || code==0x12e || code==0x120) {
+                char text[64]; snprintf(text,sizeof(text),"Volume: %d%%%s",d->sh.volume,d->sh.muted ? " (muted)" : "");
+                desk_shell_notify(d,"Volume",text,DU_DLG_ICON_INFO,SH_NOTIFY_VOLUME);
+            }
             damage(d,outer(volume_popup(d))); damage(d,tray_box(d));
         }
         return 1;
     }
     if (d->sh.volume_open && code == DU_KEY_ESC) { if (value) { d->sh.volume_open = 0; damage(d, outer(volume_popup(d))); } return 1; }
+    if (d->sh.notification.active && code==DU_KEY_ESC) {
+        if (value) { damage(d,notification_outer(d)); d->sh.notification.active=0; }
+        return 1;
+    }
     if (d->focus >= 0 && d->clients[d->focus].internal) {
         /* AltGr characters reach the Run field; other Alt chords are ignored here. */
         if ((d->sh.modifiers & DU_ALT) && d->sh.alt_code != 0x138) return 1;

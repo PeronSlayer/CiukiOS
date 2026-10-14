@@ -25,10 +25,10 @@ INCLUDES = ["-I", str(ROOT / "apps/tasks"), "-I", str(ROOT / "apps/libdeskui"), 
 # model data (tasks_view_test.c), reviewed 2026-10-11. Any toolkit or Task
 # Manager visual change must update these deliberately.
 # wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
-# every frame is PIN-FROM-FIRST-RUN until the lead's visual review.
+# F2-64 recorded affected transient frames; remaining frames await lead review.
 RENDERS = {
     "tasks-applications.xrgb": "PIN-FROM-FIRST-RUN",
-    "tasks-newtask.xrgb": "PIN-FROM-FIRST-RUN",
+    "tasks-newtask.xrgb": "26bf1a23e58ea18a3662646db3d1624a6f1c82c2e96698e194f4379863243c03",
     "tasks-performance.xrgb": "PIN-FROM-FIRST-RUN",
     "tasks-processes.xrgb": "PIN-FROM-FIRST-RUN",
 }

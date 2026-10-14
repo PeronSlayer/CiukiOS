@@ -67,7 +67,12 @@ static void changed(struct cp_app *a)
 void cp_settings_saved(struct cp_app *a, int error)
 {
     if (a->mode_state==CP_MODE_SAVE) { cp_display_saved(a,error); return; }
-    text(a,C_STATUS,error ? "The settings could not be saved." : "Settings saved and applied.");
+    if (error) {
+        if (error<0) error=-error;
+        char body[256]; snprintf(body,sizeof(body),"%s (%d)",strerror(error),error);
+        text(a,C_STATUS,body);
+        du_message(a->ui,D_INFO,"Settings not saved",body,DU_DLG_ICON_ERROR,NULL,0,0,0);
+    } else text(a,C_STATUS,"Settings saved and applied.");
 }
 
 /* ---- display preview ---- */

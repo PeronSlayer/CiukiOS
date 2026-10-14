@@ -102,8 +102,15 @@ static void place(struct du_ui *u, int w, int h)
 
 static void button_row(struct du_dialog *d, unsigned count, int y)
 {
-    int total = (int)count * BTN_W + ((int)count - 1) * 6, x = d->box.x + (d->box.w - total) / 2;
-    for (unsigned i = 0; i < count; i++) d->items[i].box = (struct du_rect){x + (int)i * (BTN_W + 6), y, BTN_W, BTN_H};
+    int width=BTN_W;
+    for (unsigned i=0;i<count;i++) {
+        int label=du_label_width(d->items[i].text)+20;
+        if (width<label) width=label;
+    }
+    int available=(d->box.w-32-((int)count-1)*6)/(int)count;
+    if (width>available) width=available;
+    int total=(int)count*width+((int)count-1)*6, x=d->box.x+d->box.w-16-total;
+    for (unsigned i=0;i<count;i++) d->items[i].box=(struct du_rect){x+(int)i*(width+6),y,width,BTN_H};
 }
 
 static int body_y(const struct du_dialog *d) { return d->box.y + 3 + TITLE_H; }
@@ -111,21 +118,24 @@ static int body_y(const struct du_dialog *d) { return d->box.y + 3 + TITLE_H; }
 void du_message(struct du_ui *u, int id, const char *title, const char *text, int icon,
                 const char *const *buttons, unsigned count, int def, int cancel)
 {
-    static const char *const ok[] = {"OK"};
+    static const char *const ok[] = {"&OK"};
     if (!buttons || !count) { buttons = ok; count = 1; }
     if (count > 4) count = 4;
     begin(u, DU_DLG_MESSAGE, id, title, text);
     struct du_dialog *d = &u->dialog;
     d->icon = icon; d->buttons = count;
-    if (u->sound) u->sound(u->sound_ctx,icon == DU_DLG_ICON_ERROR ? SOUND_ERROR : icon == DU_DLG_ICON_QUESTION || count > 1 ? SOUND_QUESTION : SOUND_INFORMATION);
+    if (u->sound) u->sound(u->sound_ctx,du_message_sound(icon));
     d->cancel = cancel >= 0 && (unsigned)cancel < count ? cancel : (int)count - 1;
     d->focus = def >= 0 && (unsigned)def < count ? def : 0;
-    for (unsigned i = 0; i < count; i++) item(d, i, DU_BUTTON, ID_BUTTON - (int)i, buttons[i]);
-    int tw, lines; measure(d->text, &tw, &lines);
-    int content = lines * LINE_H; if (icon && content < 32) content = 32;
-    int bw = (int)count * BTN_W + ((int)count - 1) * 6, iw = icon ? 46 : 0;
-    int w = (iw + tw > bw ? iw + tw : bw) + 30; if (w < 240) w = 240;
-    place(u, w, 3 + TITLE_H + 14 + content + 16 + BTN_H + 10 + 3);
+    for (unsigned i = 0; i < count; i++) {
+        /* Existing callers with plain English labels get mnemonics too. */
+        char label[DU_TEXT_MAX];
+        if (!strchr(buttons[i],'&')) snprintf(label,sizeof(label),"&%s",buttons[i]);
+        else snprintf(label,sizeof(label),"%s",buttons[i]);
+        item(d, i, DU_BUTTON, ID_BUTTON - (int)i, label);
+    }
+    int w,h; du_message_size(d->text,icon,count,u->canvas.width-8,&w,&h);
+    place(u, w, DESK_FRAME_TITLE + h + 3);
     button_row(d, count, d->box.y + d->box.h - 3 - 10 - BTN_H);
 }
 
@@ -476,13 +486,15 @@ void du_draw_dialog(struct du_ui *u)
     desk_paint_frame(&p, b.x, b.y, b.w, b.h, &style);
     int top = body_y(d);
     if (d->kind == DU_DLG_MESSAGE) {
-        static const char *const icons[] = {NULL, "dialog:info", "dialog:warning", "dialog:error", "dialog:question"};
-        int ix = b.x + 14, tx = ix + (d->icon ? 46 : 0);
-        int tw, lines; measure(d->text, &tw, &lines);
-        int ty = top + 14 + (d->icon && lines * LINE_H < 32 ? (32 - lines * LINE_H) / 2 + 2 : 0);
-        if (d->icon_pixels) du_icon_blit(c, ix, top + 14, d->icon_pixels, 32, DU_ICON_NORMAL);
-        else if (d->icon > 0 && d->icon < 5) du_icon_draw(c, ix, top + 14, du_icon_for(icons[d->icon], 32), DU_ICON_NORMAL);
-        draw_text(c, tx, ty, b.x + b.w - 14 - tx, d->text);
+        int ix = b.x + 16, tx = ix + (d->icon ? 46 : 0);
+        int bottom = d->items[0].box.y - 18;
+        struct du_rect body = {tx, top + 16, b.x + b.w - 16 - tx, bottom - top - 16};
+        int lines = du_text_wrap(NULL,body,d->text,0);
+        int th = lines * (desk_font_line(t->font_ui)+1);
+        if (d->icon && th<32) { body.y+=(32-th)/2; body.h-=(32-th)/2; }
+        if (d->icon_pixels) du_icon_blit(c, ix, top + 16, d->icon_pixels, 32, DU_ICON_NORMAL);
+        else if (du_message_icon_name(d->icon)) du_icon_draw(c, ix, top + 16, du_icon_for(du_message_icon_name(d->icon), 32), DU_ICON_NORMAL);
+        du_text_wrap(c,body,d->text,DU_INK);
     } else if (d->kind == DU_DLG_INPUT || d->kind == DU_DLG_PROGRESS) {
         draw_text(c, b.x + 14, top + 12, b.w - 28, d->text);
     }
@@ -490,7 +502,7 @@ void du_draw_dialog(struct du_ui *u)
     for (unsigned i = 0; i < d->count; i++) {
         struct du_widget *w = &d->items[i];
         if (w->hidden) continue;
-        if (w->kind == DU_BUTTON && i < d->buttons) w->def = !focus_button && i == 0;
+        if (w->kind == DU_BUTTON && i < d->buttons) w->def = focus_button ? (int)i == d->focus : i == 0;
         struct du_rect old = c->clip;
         c->clip = du_intersection(old, w->box);
         du_draw_widget(u, w, d->focus == (int)i && u->focused_window);

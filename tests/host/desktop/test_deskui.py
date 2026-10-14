@@ -27,37 +27,37 @@ TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/
 # the harness frames (XRGB8888, 400x300 toolkit, 760x520 Files) to PNG and
 # re-pin only after a visual review.
 # wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
-# every frame is PIN-FROM-FIRST-RUN until the lead's visual review.
+# F2-64 recorded affected transient frames; remaining frames await lead review.
 TOOLKIT_FRAMES = {
-    "deskui-input.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-input.xrgb": "09ed7a619de136347bf0b154bca71a08e48ff79639821715e5164f4009cb4676",
     "deskui-menu.xrgb": "PIN-FROM-FIRST-RUN",
-    "deskui-message.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-message.xrgb": "482d3e729aba224b751cab6017f4d2b9087f267f4a005c9739598f87017acd0a",
     "deskui-open.xrgb": "PIN-FROM-FIRST-RUN",
     "deskui-popup.xrgb": "PIN-FROM-FIRST-RUN",
-    "deskui-progress.xrgb": "PIN-FROM-FIRST-RUN",
+    "deskui-progress.xrgb": "f9a3908cfa6f1611710d2d2c06d2d0973d4eed8f76fadf2c316798c4dcf41875",
     "deskui-view0.xrgb": "PIN-FROM-FIRST-RUN",
     "deskui-view1.xrgb": "PIN-FROM-FIRST-RUN",
     "deskui-view2.xrgb": "PIN-FROM-FIRST-RUN",
 }
 FILES_FRAMES = {
-    "files-about.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-about.xrgb": "cd6039f092df27ad4491c83886e0799b2291c41a71d641328dbdf4ed29242f4f",
     "files-programs-icons.xrgb": "PIN-FROM-FIRST-RUN",
-    "files-confirm-delete.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-confirm-delete.xrgb": "f03cd306204fc6aecdfa9ce422293e3e45997062a4b9595c67b3880f7f870a0d",
     "files-context-background.xrgb": "PIN-FROM-FIRST-RUN",
     "files-context-item.xrgb": "PIN-FROM-FIRST-RUN",
-    "files-copy-progress.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-copy-progress.xrgb": "28aa62a90b5efa83820e0ae472055fb22f2c4791a4ebef2a812053b9483b3e61",
     "files-cp1-system.xrgb": "PIN-FROM-FIRST-RUN",
     "files-cp2-new-folder.xrgb": "PIN-FROM-FIRST-RUN",
     "files-cp3-renamed.xrgb": "PIN-FROM-FIRST-RUN",
     "files-cp4-copied.xrgb": "PIN-FROM-FIRST-RUN",
     "files-cp5-deleted.xrgb": "PIN-FROM-FIRST-RUN",
-    "files-help.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-help.xrgb": "8b2aaa79ea47ed026ed2bdcf4acc55e78bad68109dd5ab3c75864cdf6c7e67c7",
     "files-menu-file.xrgb": "PIN-FROM-FIRST-RUN",
     "files-menu-view.xrgb": "PIN-FROM-FIRST-RUN",
     "files-multi-select.xrgb": "PIN-FROM-FIRST-RUN",
-    "files-properties.xrgb": "PIN-FROM-FIRST-RUN",
-    "files-rename-error.xrgb": "PIN-FROM-FIRST-RUN",
-    "files-replace-prompt.xrgb": "PIN-FROM-FIRST-RUN",
+    "files-properties.xrgb": "2155dd2ad92efd0ad1834a0dcb6e5519f3798738f741eba0dfdbbcd5b778aca6",
+    "files-rename-error.xrgb": "113bfc710d30cb2e9bf1a762536621065c80b83ddd04b30d8cdde2668f89a4c7",
+    "files-replace-prompt.xrgb": "0c51b9fadaef78448a1d5a55203f00ba1941858c65168a11bee7f99e1a602d4e",
     "files-computer.xrgb": "PIN-FROM-FIRST-RUN",
     "files-c-drive.xrgb": "PIN-FROM-FIRST-RUN",
     "files-root-details.xrgb": "PIN-FROM-FIRST-RUN",

@@ -146,7 +146,8 @@ static void test_memory_footprint(const char *directory)
     char missing_registry[512]; snprintf(missing_registry,sizeof(missing_registry),"%s/missing/registry",directory);
     footprint_registry_directory=missing_registry;
     assert(!mixer_apply(&d,40,40,0)); footprint_wait_writer(); shell_service(&d);
-    assert(strstr(d.notice,"Volume applied but not saved"));
+    assert(d.sh.notification.active && strstr(d.sh.notification.title,"Volume applied but not saved"));
+    assert(strstr(d.sh.notification.text,"No such file or directory (2)"));
     footprint_registry_directory=directory;
     assert(!mixer_apply(&d,25,75,0)); footprint_wait_writer(); shell_service(&d);
     assert(footprint_master_saves==4 && mixer_sets==3);

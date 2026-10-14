@@ -398,7 +398,7 @@ static void desktop_watchdog_start(struct desktop *d)
     __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
     __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
     int error=pthread_create(&desktop_watchdog.thread,NULL,desktop_watchdog_run,NULL);
-    if (error) { snprintf(d->notice,sizeof(d->notice),"Desktop watchdog unavailable (error %d)",error); return; }
+    if (error) { desk_shell_notify_error(d,"Desktop watchdog unavailable",error); return; }
     desktop_watchdog.live=1; d->input_pending=desktop_input_pending;
 }
 static void desktop_watchdog_frame(struct desktop *d,uint64_t before,int result)
@@ -653,7 +653,7 @@ static void display_start(struct desktop *d)
     if (d->sh.gate || !wanted || wanted == d->display_mode) return;
     for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].id == wanted) {
         int e = display_apply(d, wanted);
-        if (e) snprintf(d->notice, sizeof(d->notice), "Display mode unavailable (error %d)", -e);
+        if (e) desk_shell_notify_error(d,"Display mode unavailable",e);
         break;
     }
 }
@@ -705,7 +705,7 @@ static void wallpaper_worker_prepare(struct desktop *d)
 {
     if (!d->shell || d->sh.gate || wallpaper_worker_started || wallpaper_worker_failed) return;
     int e=desk_wall_worker_start(&wallpaper_worker,DESK_WALL_CACHE,startup_stage);
-    if (e) { wallpaper_worker_failed=1; snprintf(d->notice,sizeof(d->notice),"Wallpaper worker unavailable (error %d)",e); return; }
+    if (e) { wallpaper_worker_failed=1; desk_shell_notify_error(d,"Wallpaper worker unavailable",e); return; }
     wallpaper_worker_started=1;
 }
 static void wallpaper_poll(struct desktop *d)
@@ -717,7 +717,7 @@ static void wallpaper_poll(struct desktop *d)
         int e=desk_wall_worker_start(&wallpaper_worker,DESK_WALL_CACHE,startup_stage);
         if (e) {
             wallpaper_worker_failed=1; d->sh.wallpaper_pending=0;
-            snprintf(d->notice,sizeof(d->notice),"Wallpaper worker unavailable (error %d)",e); return;
+            desk_shell_notify_error(d,"Wallpaper worker unavailable",e); return;
         }
         wallpaper_worker_started=1;
     }
@@ -730,7 +730,7 @@ static void wallpaper_poll(struct desktop *d)
     if (!error) {
         free(d->sh.wall); d->sh.wall=pixels; d->sh.wall_w=d->width; d->sh.wall_h=d->height;
         d->sh.wall_valid=1; d->sh.background_valid=0; startup_stage("wallpaper_applied");
-    } else snprintf(d->notice,sizeof(d->notice),"Wallpaper %.40s cannot be shown",strrchr(wallpaper_request.path,'/')+1);
+    } else desk_shell_notify_error(d,"Wallpaper cannot be shown",error);
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
 }
 static void network_read(struct desktop *d)
@@ -774,7 +774,7 @@ static int media_read(struct desktop *d)
             volumes[i]=v;
         }
         close(observe);
-        if (ok) desk_autoplay_update(d,volumes);
+        if (ok) { desk_shell_media_labels(d,volumes); desk_autoplay_update(d,volumes); }
         return ok;
     }
     return 0;
@@ -786,9 +786,8 @@ static void media_remove(struct desktop *d)
     d->sh.want_remove=0;
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC), e=fd<0 ? errno : 0;
     if (fd>=0) { if (ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r))) e=errno; close(fd); }
-    snprintf(d->notice,sizeof(d->notice),e==EBUSY ? "Close files on this drive and try again." :
-             e ? "The medium could not be removed (error %d)." : optical ? "The disc has been ejected." : "It is safe to unplug the USB device.",e);
-    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
+    if (e) desk_shell_notify_error(d,e==EBUSY ? "Close files on this drive and try again" : "Media removal failed",e);
+    else desk_shell_notify(d,"Removable media",optical ? "The disc has been ejected." : "It is safe to unplug the USB device.",DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
     media_read(d);
 }
 static void mixer_read(struct desktop *d)
@@ -813,6 +812,10 @@ static void mixer_read(struct desktop *d)
     }
     if (own && fd>=0) close(fd);
     if (old_volume!=d->sh.volume || old_muted!=d->sh.muted || old_state!=d->sh.mixer_state) {
+        if (old_state>0 && d->sh.mixer_state>0 && (old_volume!=d->sh.volume || old_muted!=d->sh.muted)) {
+            char text[64]; snprintf(text,sizeof(text),"Volume: %d%%%s",d->sh.volume,d->sh.muted ? " (muted)" : "");
+            desk_shell_notify(d,"Volume",text,DU_DLG_ICON_INFO,SH_NOTIFY_VOLUME);
+        }
         desk_shell_volume_damage(d);
     }
 }
@@ -822,7 +825,7 @@ static void mixer_write(struct desktop *d)
     int e=mixer_apply(d,(uint32_t)d->sh.volume,(uint32_t)d->sh.volume,(uint32_t)(d->sh.muted!=0));
     if (e==-EAGAIN) { d->sh.want_mixer=1; return; }
     if (e) {
-        snprintf(d->notice,sizeof(d->notice),"Volume change failed (error %d)",-e);
+        desk_shell_notify_error(d,"Volume change failed",e);
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
     }
 }
@@ -869,7 +872,7 @@ static int run_command(struct desktop *d, char *line)
         int error=errno;
         for (unsigned a=0; a<6; a++) d->launch_argv[a]=NULL;
         if (pid<0) {
-            char text[160]; snprintf(text,sizeof(text),"'%s' could not be started (error %d).",name,error);
+            char text[160]; snprintf(text,sizeof(text),"'%s' could not be started.\n%s (%d)",name,strerror(error),error);
             desk_shell_message(d,"Run",text,1);
         } else snprintf(d->notice,sizeof(d->notice),"Started %.32s (PID %d)",name,pid);
         return pid;
@@ -927,9 +930,9 @@ static void shell_service(struct desktop *d)
         if (job_size!=sizeof(job)) job_error=EIO;
         if (!job_error && job.master.save_state==CIUKI_MIXER_SAVED)
             last_ec_preference=ciuki_master_pack(job.master.left,job.master.right,job.master.mute);
-        if (job_error) snprintf(d->notice,sizeof(d->notice),"Volume change failed (error %d)",job_error);
+        if (job_error) desk_shell_notify_error(d,"Volume change failed",job_error);
         else if (job.master.save_state==CIUKI_MIXER_UNSAVED)
-            snprintf(d->notice,sizeof(d->notice),"Volume applied but not saved (error %d)",(int)job.master.save_error);
+            desk_shell_notify_error(d,"Volume applied but not saved",(int)job.master.save_error);
         if (job_error || job.master.save_state==CIUKI_MIXER_UNSAVED)
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
         if (!job_error && !job.save_only) desk_sound(d,SOUND_VOLUME);
@@ -937,7 +940,7 @@ static void shell_service(struct desktop *d)
     }
     int save_error;
     if (settings_writer_started && cfg_writer_result(&settings_writer,&save_error) && save_error) {
-        snprintf(d->notice,sizeof(d->notice),"Settings not saved (error %d)",save_error);
+        desk_shell_notify_error(d,"Settings not saved",save_error);
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
     }
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
@@ -967,7 +970,7 @@ static void shell_service(struct desktop *d)
         cfg_writer_read_result(&settings_writer,reload_text,&reload_size,&reload_error)) {
         settings_reload_pending=0;
         if (reload_error && reload_error!=ENOENT) {
-            snprintf(d->notice,sizeof(d->notice),"Settings not loaded (error %d)",reload_error);
+            desk_shell_notify_error(d,"Settings not loaded",reload_error);
             settings_reload_wallpaper=0;
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,DESK_BAR},d->width,d->height);
         } else {
@@ -1057,7 +1060,7 @@ static void shell_setup(struct desktop *d, int gate)
     if (!gate) desk_sound_init(d);
     if (!gate) {
         int result=desk_folder_init(d,fm_native_vfs());
-        if (result) snprintf(d->notice,sizeof(d->notice),"Desktop folder unavailable (error %d)",-result);
+        if (result) desk_shell_notify_error(d,"Desktop folder unavailable",result);
         settings_writer.run_job=mixer_job_run;
         settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
@@ -1112,6 +1115,7 @@ int main(int argc, char **argv)
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
     d->time_ns=monotonic; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     d->accel=ciuki_display_accel;
     d->accel_info=ciuki_display_accel_info;
@@ -1294,7 +1298,7 @@ int main(int argc, char **argv)
             unsigned selected=(unsigned)d->action; d->action=-1;
             int pid=selected<d->program_count && d->launch ? d->launch(d,&d->programs[selected]) : -1;
             if (pid<0) {
-                snprintf(d->notice,sizeof(d->notice),"Program could not start (error %d)",errno);
+                desk_shell_notify_error(d,"Program did not start",errno);
                 desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
             } else if (d->shell_test && d->shell_stage==1 && !strcmp(d->programs[selected].name,"demo")) {
                 d->shell_pid=(uint32_t)pid; d->shell_stage=2;

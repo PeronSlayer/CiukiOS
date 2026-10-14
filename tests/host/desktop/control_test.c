@@ -231,6 +231,11 @@ int main(int argc, char **argv)
     assert(u.focus>=0 && u.widgets[u.focus].kind==DU_BUTTON && !strcmp(u.widgets[u.focus].text,"Mute: Off"));
     at_tap(&u,DU_KEY_SPACE);assert(master_applies==1 && a.muted);
     cp_detach(&a);mixer_volume=70;
+    attach(CP_HOME); cp_settings_saved(&a,EROFS);
+    assert(u.dialog.kind==DU_DLG_MESSAGE && u.dialog.icon==DU_DLG_ICON_ERROR);
+    assert(!strcmp(u.dialog.text,"Read-only file system (30)"));
+    assert(!strcmp(du_get(&u,3)->text,"Read-only file system (30)"));
+    du_dialog_close(&u); cp_detach(&a);
     puts("PASS F1-63 Control Panel: two Tab presses and Space apply master preference 20/20/muted");
     printf("PASS control display: five positions, layout, desktop.cfg modes, preview\n");
     return 0;

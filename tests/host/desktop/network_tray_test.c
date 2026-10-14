@@ -19,6 +19,12 @@ void __wrap_du_text(struct du_canvas *c, int x, int y, const char *s, uint32_t c
     snprintf(texts[text_count++], sizeof(texts[0]), "%s", s);
     __real_du_text(c, x, y, s, colour);
 }
+int __real_du_text_wrap(struct du_canvas *,struct du_rect,const char *,uint32_t);
+int __wrap_du_text_wrap(struct du_canvas *c,struct du_rect box,const char *s,uint32_t colour)
+{
+    if (c) { assert(text_count<24); snprintf(texts[text_count++],sizeof(texts[0]),"%s",s); }
+    return __real_du_text_wrap(c,box,s,colour);
+}
 static int drawn(const char *s)
 { for (unsigned i = 0; i < text_count; i++) if (!strcmp(texts[i], s)) return 1; return 0; }
 static void render(void)
@@ -45,6 +51,7 @@ static void check_icon(const char *name, int disabled)
 }
 static void hover(int x, int y)
 {
+    if (d.sh.notification.active) { d.now_ns+=9000000000ull; desk_shell_tick(&d); }
     d.mouse_x = x; d.mouse_y = y; desk_shell_motion(&d);
     d.now_ns += 700000000ull; desk_shell_tick(&d);
     assert(d.sh.tooltip == 2); render();
@@ -69,8 +76,8 @@ int main(void)
     strcpy(n.driver, "e100"); strcpy(n.reason, "admission");
     const uint8_t mac[] = {0x00, 0xd0, 0x59, 0xb6, 0x43, 0x8f}; memcpy(n.mac, mac, 6);
     d.damage.count = 0; desk_shell_network_update(&d, &n);
-    assert(d.damage.count == 1);
-    struct desk_box tray = d.damage.boxes[0];
+    assert(d.damage.count && d.sh.notification.active && d.sh.notification.action==SH_NOTIFY_NETWORK);
+    struct desk_box tray = desk_shell_tray_box(&d);
     struct desk_box expected = desk_shell_tray_box(&d);
     assert(!memcmp(&tray, &expected, sizeof(tray)) && tray.y == 452 && tray.h == 25);
     render(); check_icon("network-offline", 0);
@@ -83,7 +90,7 @@ int main(void)
     click(nx, ny); assert(!d.sh.network_open);
     hover(nx, ny); assert(drawn("Network: cable connected (e100 00:d0:59:b6:43:8f)"));
     /* State changes erase the old tooltip as well as drawing the new width. */
-    n.link = CIUKI_NET_LINK_DOWN; desk_shell_network_update(&d, &n); render();
+    n.link = CIUKI_NET_LINK_DOWN; desk_shell_network_update(&d, &n); hover(nx,ny);
     assert(drawn("Network: no cable"));
     d.sh.tooltip = 0; d.damage.count = 0;
     n.rx_frames++; n.tx_frames++; desk_shell_network_update(&d, &n); assert(!d.damage.count);

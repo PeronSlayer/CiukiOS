@@ -328,13 +328,14 @@ void du_draw_button(struct du_canvas *c, const struct du_widget *w, int focused)
     int tw = du_label_width(w->text);
     int iw = w->icon ? w->icon_size + 4 : 0;
     int x = b.x + (b.w - tw - iw) / 2 + down, y = b.y + (b.h - DU_GLYPH_H) / 2 + down;
+    /* f2-64: the ring goes under the label, so a focused default button
+     * (inset by its default ring) keeps its mnemonic underline visible. */
+    if (focused && desk_theme->focus_style == DESK_FOCUS_RING)
+        du_focus_ring(c, (struct du_rect){face.x + 2, face.y + 2, face.w - 4, face.h - 4});
     if (w->icon) du_icon_blit(c, x, b.y + (b.h - w->icon_size) / 2 + down, w->icon, w->icon_size, w->disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
     if (w->disabled) { du_label(c, x + iw + 1, y + 1, w->text, DU_HILITE, 1); du_label(c, x + iw, y, w->text, DU_GRAY, 1); }
     else du_label(c, x + iw, y, w->text, DU_INK, 1);
-    if (focused) {
-        if (desk_theme->focus_style == DESK_FOCUS_RING) du_focus_ring(c, (struct du_rect){face.x + 2, face.y + 2, face.w - 4, face.h - 4});
-        else du_dotted(c, (struct du_rect){b.x + 4, b.y + 4, b.w - 8, b.h - 8});
-    }
+    if (focused && desk_theme->focus_style != DESK_FOCUS_RING) du_dotted(c, (struct du_rect){b.x + 4, b.y + 4, b.w - 8, b.h - 8});
 }
 
 static void draw_toolbutton(struct du_canvas *c, const struct du_widget *w)
@@ -397,27 +398,7 @@ static void draw_status(struct du_canvas *c, const struct du_widget *w)
 }
 
 static void draw_progress(struct du_canvas *c, const struct du_widget *w)
-{
-    struct du_rect b = w->box;
-    int inner = b.w - 4, filled = w->total > 0 ? (int)((int64_t)inner * (w->value > w->total ? w->total : w->value) / w->total) : 0;
-    if (desk_theme->control_style == DESK_CONTROLS_PLATINUM) {
-        /* Platinum: rounded groove, accent bar with a light top half. */
-        du_well(c, b, desk_mix(DU_SHADOW, DU_FACE, 70));
-        struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
-        if (filled > 0) {
-            int h = b.h - 4;
-            desk_paint_vgradient(&p, b.x + 2, b.y + 2, filled, h / 2, desk_mix(0xffffffu, DU_ACCENT, 120), desk_mix(0xffffffu, DU_ACCENT, 40));
-            desk_paint_vgradient(&p, b.x + 2, b.y + 2 + h / 2, filled, h - h / 2, DU_ACCENT, desk_mix(0x000000u, DU_ACCENT, 50));
-            for (int x = 10; x < filled; x += 12) du_vline(c, b.x + 2 + x, b.y + 2, h, desk_mix(0xffffffu, DU_ACCENT, 50));
-        }
-        return;
-    }
-    du_fill(c, b, DU_FACE); du_edge(c, b, DU_SUNKEN_THIN);
-    for (int x = 0; x < filled; x += 10) {
-        int bw = filled - x < 8 ? filled - x : 8;
-        du_fill(c, (struct du_rect){b.x + 2 + x, b.y + 2, bw, b.h - 4}, DU_SELECT);
-    }
-}
+{ du_progress_paint(c,w->box,w->value,w->total,0); }
 
 int du_sb_clamp(int value, int total, int page)
 {

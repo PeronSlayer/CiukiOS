@@ -19,26 +19,26 @@ ROOT = Path(__file__).resolve().parents[3]
 # produced by the production renderer and reviewed as screenshots on the f2-31 toolkit
 # (2026-10-11); a change here is a visible change of CiukNote or of libdeskui.
 # wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
-# every frame is PIN-FROM-FIRST-RUN until the lead's visual review.
+# F2-64 recorded affected transient frames; remaining frames await lead review.
 TEXTAREA_SCREENS = {
     "ta-bold.xrgb": "PIN-FROM-FIRST-RUN",
     "ta-plain.xrgb": "PIN-FROM-FIRST-RUN",
     "ta-scrolled.xrgb": "PIN-FROM-FIRST-RUN",
 }
 APP_SCREENS = {
-    "cn-about.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-about.xrgb": "fb49caf640e1b58dd6a952f2d4056bf05a568da404b32d8488a508753c44844e",
     "cn-bold.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-context.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-empty.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-find-bar.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-format-menu.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-help.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-limit.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-help.xrgb": "e21c3a78ff058b76e58f623c14ec1ed212cf312f34f591765227c2b365d561d2",
+    "cn-limit.xrgb": "3098137480972e794c6e5eb3eb80f0e8f8b2afe945c84524219872e95244a609",
     "cn-menu-edit.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-menu-file.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-open-root.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-open-tests.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-prompt-changes.xrgb": "PIN-FROM-FIRST-RUN",
+    "cn-prompt-changes.xrgb": "8a68ffe7fe667e9987bf0e1657bf347142e10c4b52b6a02eb8ce2a51b31ea72c",
     "cn-replace-bar.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-save-page.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-saved.xrgb": "PIN-FROM-FIRST-RUN",
