@@ -69,7 +69,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
     };
     static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices", "vm-video", "vm-window", "vm-audio-state", "dpmi",
-                                            "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake" };
+                                            "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen" };
     static const char *const f4_names[] = { "optical", "audio-native", "ntfs-ro", "vm-audio" };
     static const char *const f6_names[] = { "net-arp" };
     const char *const *names = parsed.phase == 6 ? f6_names : parsed.phase == 4 ? f4_names : parsed.phase == 3 ? f3_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;

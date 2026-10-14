@@ -38,6 +38,8 @@ static uint64_t clock_ms, enter_ms;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
 static int input_refused;
 static int focus_loss;
+static int fs_command,fs_active,fs_panel_seen;
+static uint64_t fs_until;
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
 const struct desk_theme *desk_theme = &replay_theme;
@@ -57,7 +59,8 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
     struct desk_packet p; assert(desk_parse(m, 1, &info, &p));
     if (p.opcode == DESK_DAMAGE) {
         damage_count++;
-        if (presents) {
+        if (fs_panel_seen && desk_get32(m->data+16)==480) assert(!desk_get32(m->data+8));
+        else if (presents) {
             unsigned y = desk_get32(m->data + 8), h = desk_get32(m->data + 16);
             assert(h == 8 && (y == 0 || y == 16 || y == 264));
         } else assert(screen[0] == replay_theme.face);
@@ -77,6 +80,8 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
         clock_ms += 120001; focus_loss++;
     } else if (focus_loss == 2) {
         desk_message(m, DESK_FOCUS, 8); desk_put32(m->data + 4, 1); focus_loss++;
+    } else if (scenario==8 && presents && !fs_command) {
+        fs_command=1; desk_message(m,DESK_DOS_FULLSCREEN,4);
     } else if ((presents && clock_ms > enter_ms + 650) || (error_seen && clock_ms > 5000)) {
         desk_message(m, DESK_CLOSE_REQUEST, 4); phase++;
     } else { errno = EAGAIN; return -1; }
@@ -94,6 +99,8 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     assert(c->id == 1 && c->generation == 9);
     switch (op) {
     case CIUKI_DOSVM_FOCUS: return 0;
+    case CIUKI_DOSVM_FULLSCREEN:
+        assert(scenario==8 && c->focused); fs_active=1; fs_until=clock_ms+100; return 0;
     case CIUKI_DOSVM_STATUS:
         c->state = clock_ms < 300 ? CIUKI_DOSVM_BOOTING : CIUKI_DOSVM_RUNNING;
         c->changed = armed ? 0 : CIUKI_DOSVM_VIDEO_READY;
@@ -103,6 +110,8 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
             if (scenario == 3) { c->changed = CIUKI_DOSVM_LAUNCH_FAILED; strcpy(c->name, "Bad command or file name"); }
             else if (scenario != 5) { c->changed = CIUKI_DOSVM_VIDEO_READY; c->video_mode = scenario == 4 ? 3 : 19; }
         }
+        if (fs_active && clock_ms>=fs_until) fs_active=0;
+        if (fs_active) c->changed|=CIUKI_DOSVM_FULL_SCREEN;
         return 0;
     case CIUKI_DOSVM_LAUNCH: assert(!armed); armed = 1; return 0;
     case CIUKI_DOSVM_INPUT:
@@ -130,6 +139,7 @@ void du_edge(struct du_canvas *c, struct du_rect r, enum du_edge e) { (void)c; (
 void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32_t colour)
 {
     (void)c; (void)x; (void)y; (void)w; (void)colour;
+    if (!strcmp(s,"Running full screen — Alt+Enter to return")) fs_panel_seen++;
     if (!strcmp(s, "Unable to start") || !strcmp(s, "Program did not start") || !strcmp(s, "Startup timed out")) error_seen++;
 }
 const char *du_icon_name(const char *name) { assert(!strcmp(name, "program:dosbox")); return "utilities-terminal"; }
@@ -157,6 +167,7 @@ int main(int argc, char **argv)
     else assert(!result && presents && !error_seen && closed == 1);
     if (scenario == 0 || scenario == 4 || scenario == 7) assert(armed && entered && console_at == 2);
     if (scenario == 6) assert(!armed && !entered);
+    if (scenario==8) assert(fs_command && fs_panel_seen && !fs_active);
     assert(damage_count);
     puts("PASS dosbox loading replay");
     return 0;

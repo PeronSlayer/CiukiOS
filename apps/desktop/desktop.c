@@ -292,6 +292,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].program=kind;
     d->clients[index].taskman=tasks;
     d->clients[index].gfxdemo=!strcmp(program->name,"gfxdemo");
+    d->clients[index].dosbox=!strcmp(program->name,"dosbox");
     d->clients[index].mixer=!strcmp(program->name,"mixer") || !strcmp(program->name,"music") || !strcmp(program->name,"terminal");
     d->clients[index].awaiting_frame=graphical;
     d->clients[index].launched_ns=monotonic();
@@ -403,6 +404,11 @@ static void desktop_watchdog_start(struct desktop *d)
 }
 static void desktop_watchdog_frame(struct desktop *d,uint64_t before,int result)
 {
+    if (result && errno==EBUSY) {
+        __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
+        __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
+        return;
+    }
     if (!result && d->presents!=before) {
         __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
         __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
@@ -1077,12 +1083,13 @@ int main(int argc, char **argv)
     devices.version=CIUKI_DEVICES_VERSION; devices.size=sizeof(devices);
     if (!ciuki_devices(&devices)) verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
 #endif
-    int display = 3, input = 4, test = 0, gate = 0, cycles = 1, demo_count = 0;
+    int display = 3, input = 4, test = 0, gate = 0, cycles = 1, demo_count = 0, fullscreen_test = 0;
     int channels[DESK_CLIENTS], channel_count = 0;
     const char *demos[DESK_CLIENTS], *victim = NULL, *launch = NULL;
     for (int a = 1; a < argc; a++) if (!strcmp(argv[a],"--test=crash-isolation")) test = 1;
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a],"--test=crash-isolation")) continue;
+        if (!strcmp(argv[a],"--test=vm-fullscreen")) { fullscreen_test=1; continue; }
         if (test && !strcmp(argv[a],"--gate")) gate=1;
         else if (!strncmp(argv[a],"--display-fd=",13)) display = number(argv[a]+13,63);
         else if (!strncmp(argv[a],"--input-fd=",11)) input = number(argv[a]+11,63);
@@ -1129,6 +1136,7 @@ int main(int argc, char **argv)
     int flags = fcntl(input,F_GETFL);
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     shell_setup(d,gate);
+    if (fullscreen_test) d->realtime_second=12*3600;
     display_start(d);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
@@ -1169,7 +1177,7 @@ int main(int argc, char **argv)
         if (!gate) desk_sound_results(d);
         if (d->shell) {
             struct timespec rtc;
-            if (!clock_gettime(CLOCK_REALTIME,&rtc) && rtc.tv_sec>=0 && d->realtime_second!=(uint64_t)rtc.tv_sec) {
+            if (!fullscreen_test && !clock_gettime(CLOCK_REALTIME,&rtc) && rtc.tv_sec>=0 && d->realtime_second!=(uint64_t)rtc.tv_sec) {
                 uint64_t previous=d->realtime_second;
                 d->realtime_second=(uint64_t)rtc.tv_sec;
                 desk_shell_clock_damage(d,previous);
@@ -1331,7 +1339,7 @@ int main(int argc, char **argv)
         uint64_t presents_before=d->presents; desktop_stage(STALL_RENDER);
         int redraw = render_ready ? desk_redraw(d) : -1;
         if (!gate) desktop_watchdog_frame(d,presents_before,redraw);
-        if (render_ready && redraw && errno!=EINTR && !display_reported) {
+        if (render_ready && redraw && errno!=EINTR && errno!=EBUSY && !display_reported) {
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");

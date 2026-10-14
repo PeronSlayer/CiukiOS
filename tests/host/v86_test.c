@@ -37,6 +37,8 @@ static bool video_rom;
 static uint16_t video_fail_ax, video_current_mode;
 static uint16_t video_calls[16];
 static unsigned video_call_count;
+static unsigned video_state_blocks=16;
+static uint16_t video_saved_mode;
 static bool worker_until_idle;
 static jmp_buf worker_idle_env;
 static unsigned worker_waits, worker_sleeps, reflection_ticks;
@@ -258,6 +260,19 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
         video_calls[video_call_count++] = (uint16_t)ax;
         live.tf.eax = ax == video_fail_ax ? 0x014F : 0x004F;
         if (ax == video_fail_ax) video_fail_ax = 0;
+        else if (ax==0x4F04) {
+            CHECK(initial->tf.ecx==15);
+            unsigned sub=initial->tf.edx&255;
+            if (!sub) live.tf.ebx=video_state_blocks;
+            else {
+                CHECK(initial->es==BIOSVM_SCRATCH>>4 && initial->tf.ebx==0x800);
+                uint8_t *state=vm_memory(0,BIOSVM_SCRATCH+0x800,1024,true);
+                CHECK(state!=0);
+                if (sub==1) { memset(state,0x5A,1024); video_saved_mode=video_current_mode; }
+                else { CHECK(sub==2 && state[0]==0x5A && state[1023]==0x5A); video_current_mode=video_saved_mode; }
+            }
+        } else if (ax==0x0F00) { live.tf.eax=0x5000|video_current_mode; }
+        else if (ax<=0x13) { video_current_mode=ax; }
         else if (ax == 0x4F02) {
             CHECK((initial->tf.ebx & 0xFE00) == 0x4000);
             video_current_mode = initial->tf.ebx & 0x1FF;
@@ -972,7 +987,7 @@ static void boot_fixture(bool irq_reservations)
     safe_input = safe_backend = safe_pass = false;
     initialized = quarantined = synthetic = started = false;
     input_enabled = video_active = video_claimed = video_dispi = false;
-    video_lease_count = 0;
+    video_lease_count = 0; fullscreen_video=false; fullscreen_bytes=0; video_state_blocks=16;
     video_rom = false; video_fail_ax = video_current_mode = 0; video_call_count = 0;
     request_pending = request_done = controller_status_valid = false;
     vm_thread = adapter = 0;
@@ -1361,6 +1376,29 @@ static void test_video_calls(void)
     puts("PASS biosvm video: serialized 4F02(LFB)/4F01/4F03, query failure/restore, temporary aperture/leases, native-input isolation, timeout quarantine");
 }
 
+static void test_fullscreen_calls(void)
+{
+    boot_fixture(true);
+    pci[0]=(struct pci_func){.vendor=0x1234,.device=0x1111,.class_code=3}; npci=1;
+    video_rom=true; ivt(0x10,0xF000,0x700); ram[0xF0700]=0xCF;
+    CHECK(!biosvm_video_prepare()); video_current_mode=0x118;
+    CHECK(!biosvm_video_fullscreen_begin(0x13));
+    CHECK(fullscreen_video && fullscreen_bytes==1024 && video_claimed && video_lease_count==3);
+    CHECK(!video_active && !firmware.io && !vm_memory(0,0xA0000,1,false));
+    CHECK(video_current_mode==0x13 && video_call_count==4);
+    uint8_t info[256];
+    CHECK(biosvm_video_switch(0x111,info)==-EBUSY);
+    CHECK(!biosvm_video_fullscreen_end(0x118,info));
+    CHECK(video_current_mode==0x118 && !fullscreen_video && !video_claimed && !video_lease_count);
+    CHECK(video_call_count==7 && video_calls[3]==0x0F00 && video_calls[4]==0x4F04 && video_calls[5]==0x4F03 && video_calls[6]==0x4F01);
+    video_state_blocks=33; video_call_count=0;
+    CHECK(biosvm_video_fullscreen_begin(3)==-EOPNOTSUPP && !video_claimed && video_call_count==1);
+    CHECK(biosvm_video_fullscreen_begin(0xFF)==-EINVAL);
+    video_state_blocks=16; video_call_count=0;
+    CHECK(!biosvm_video_fullscreen_begin(1)); video_fail_ax=0x4F04;
+    CHECK(biosvm_video_fullscreen_end(0x118,info)==-V86_EIO && !video_claimed && !fullscreen_video);
+    puts("PASS biosvm full-screen: bounded 4F04(000F) save/restore, standard VGA-only, persistent leases, serialized VBE refusal, restore errors");
+}
 int main(void)
 {
     test_flags_interrupts();
@@ -1376,6 +1414,7 @@ int main(void)
     test_lease_failures();
     test_pm_timer();
     test_video_calls();
+    test_fullscreen_calls();
     printf("firmware diagnostics: max=%u bytes (strictly below 240)\n", diagnostic_max);
     printf("v86/firmware host tests: %s (%u checks, %u failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;

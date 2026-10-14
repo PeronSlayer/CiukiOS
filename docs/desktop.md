@@ -1498,3 +1498,30 @@ notifications. The Control Panel desktop harness also checks listing, resetting,
 empty state and registry-read errors. Kernel file tests verify the new copied
 query, metadata, version/size/reserved/pointer validation and stale CD handling.
 No QEMU or hardware evidence is claimed here.
+
+## DOS full screen (2026-10-14, F3-20)
+
+A DOS window's taskbar context menu offers **Full screen — Alt+Enter**. The
+kernel also recognizes Alt+Enter before guest input, in a window and in full
+screen. Alt+Tab returns to the desktop. The default keeps DOS running in its
+window; `/Programs/dosbox --pause-background` instead pauses it until focus or
+full-screen entry resumes it. The window and taskbar entry survive throughout.
+Its retained surface says “Running full screen — Alt+Enter to return”. A refused
+entry reports its reason temporarily, while the DOS session remains available.
+
+Presentation/acceleration return EBUSY while the display grant is suspended;
+the desktop keeps servicing its channels and input. This intentional pause does
+not trigger the desktop frame watchdog. Return increments the existing display
+change counter, remaps the confirmed framebuffer generation and forces a full
+repaint through the existing display notification path. Guest VBE mode setting
+remains unavailable. The kernel's independent watchdog handles VM death,
+owner death and a stationary guest instruction pointer for 15 seconds; the last
+condition excludes cooperative idle/suspension and is a recovery heuristic, not a general proof that a game has hung.
+
+The `vm-fullscreen-qemu-t23` and `vm-fullscreen-cirrus-qemu-t23` rows run the bundled DOOM demo, uses physical
+Alt+Enter input for entry and return, then freezes the returned VM at its normal
+worker checkpoint for a second state-transfer round trip. The desktop's runtime
+`--test=vm-fullscreen` option fixes its clock for this observation. The runner
+requires changing full-screen demo frames and exact equality of both entire return screendumps, with no masks or ignored
+pixels, as well as mode and cleanup records. This row has not been run by the
+implementation agent; standard VGA, Cirrus and the T23 remain lead validation.

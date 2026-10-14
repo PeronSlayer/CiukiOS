@@ -443,7 +443,7 @@ class DesktopTests(unittest.TestCase):
                             "-I", str(folder / "include"), "-I", str(ROOT / "src/kernel/include"),
                             str(ROOT / "tests/host/desktop/dosbox_loading_test.c"), str(ROOT / "apps/desktop/protocol.c"),
                             "-o", str(binary)], check=True)
-            for scenario in range(8):
+            for scenario in range(9):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
                                         timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")

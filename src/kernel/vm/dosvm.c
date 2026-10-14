@@ -381,6 +381,13 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
         if (linear >= 0xA0000 && linear < 0xC0000) {
+            if (v->fullscreen && !v->fullscreen_model) {
+                volatile uint8_t *aperture = P2V(linear);
+                for (unsigned i=0;i<n;i++) {
+                    if (write) aperture[i]=b[i]; else b[i]=aperture[i];
+                }
+                b+=n; linear+=n; bytes-=n; continue;
+            }
             if (write) { v->perf.trapped_bytes += n; dosvm_launch_video(v); }
             dosvm_vga_model(v); /* f3-07: harvest before model peeks/stores */
             /* Kernel reads peek (no latch load); guest cycles use the VGA bus. */
@@ -440,6 +447,7 @@ static bool idle_recent(const struct dosvm *v)
 /* f3-04 scheduler hook: the incoming worker's LDT and watchpoints, or none. */
 void dosvm_task_switch(const struct task *t)
 {
+    dosvm_fullscreen_switch(t);
     struct dosvm *v = owner(t);
     perf_switch(v);
     if (v && v->dpmi.active) {
@@ -501,6 +509,7 @@ int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
     if (v->info.state >= DOSVM_STOPPING) return 0;
     v->info.reason = reason;
     v->info.state = DOSVM_STOPPING;
+    dosvm_fullscreen_stopping(v);
     dosvm_vga_sync(v, true);
     v->mouse.mask = v->mouse.pending_mask = 0;
     v->mouse.active = false;
@@ -636,6 +645,7 @@ int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
     if (keyboard) {
         if (dosvm_keyboard_refresh(v)) return -EFAULT;
         idle_wait(v, DOSVM_IDLE_16);
+        dosvm_fullscreen_checkpoint(v);
         return v->info.state == DOSVM_STOPPING ? -V86_EIO : 0;
     }
     v->info.state = DOSVM_BLOCKED;
@@ -646,6 +656,7 @@ int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
             break;
         }
         /* INT 15h timed wait; keyboard waits use the event queue above. */
+        dosvm_fullscreen_checkpoint(v);
         task_sleep_ms(1);
     }
     if (v->info.state == DOSVM_STOPPING) return -V86_EIO;
@@ -678,6 +689,8 @@ bool dosvm_trap(struct trap_frame *tf)
     memcpy(f, tf, size);
     v->frame_pm = pm;
     sti();
+    dosvm_fullscreen_checkpoint(v);
+    dosvm_fullscreen_progress(v,f->tf.cs,f->tf.eip);
     dosvm_pic_stall(v, f);
     dosvm_heartbeat(v, f);
     if (tf->vector == 1)
@@ -798,6 +811,7 @@ bool dosvm_trap(struct trap_frame *tf)
         dosvm_heartbeat(v, f); /* a guest HLT with IF clear also needs samples */
         if (!dosvm_in_irq(v)) dosvm_audio_log(v);
     }
+    dosvm_fullscreen_checkpoint(v);
     /* A protected-mode frame must let the kernel IRET succeed. */
     if (v->info.state != DOSVM_STOPPING && v->frame_pm && !dpmi_frame_check(v, f)) {
         v->info.fault_vector = 13;
@@ -920,6 +934,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     struct dosvm *v = dosvm_lookup(key);
     if (!v) return -EINVAL;
     if (v->info.state == DOSVM_DEAD) return v->info.cleanup_error;
+    if (v->fullscreen_hold) return -EBUSY; /* switch pins the VM/address space */
     if (v->task == g_current) return -V86_EPERM;
     dosvm_stop(key, forced ? DOSVM_TERMINATE : DOSVM_EXIT);
     uint64_t until = deadline_after_ms(6000);
@@ -928,6 +943,8 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         task_sleep_ms(1);
     }
     if (v->task) { task_reap(v->task); v->task = 0; }
+    int video_error=dosvm_fullscreen_leave(key,false);
+    if (video_error) return video_error;
     dosvm_perf_dump(v);
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
@@ -1161,7 +1178,7 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
         previous->pointer_known = false;
     }
     v->window_input = true;
-    if (focused) { input_focus = key; v->pointer_known = false; }
+    if (focused) { input_focus = key; v->pointer_known = false; v->fullscreen_suspended=false; }
     else if (input_focus.id == key.id && input_focus.generation == key.generation) {
         dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0);
         v->pointer_known = false; input_focus = (struct dosvm_key){0};
@@ -1169,6 +1186,7 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
     irq_restore(flags);
     return true;
 }
+struct dosvm_key dosvm_focused_key(void) { return input_focus; }
 bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
 {
     struct dosvm *v = dosvm_lookup(key);

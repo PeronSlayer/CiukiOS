@@ -19,7 +19,7 @@ static struct process *current = &desktop;
 static struct task timer;
 static struct resource resources[16];
 static unsigned resource_count, generation, frames, switches, copies;
-static bool prepare_failure;
+static bool prepare_failure, suspended, fs_begin_failure, fs_end_failure;
 static bool accel_ports_owned;
 static unsigned accel_stops;
 static bool owner = true, busy, fail_firmware, fail_restore, bad_info, fail_window;
@@ -95,9 +95,21 @@ void task_sleep_ms(uint32_t ms) { (void)ms; assert(0); }
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *a, enum task_prio p) { assert(!strcmp(n, "display-watchdog") && fn && !a && p == P_NORMAL); return &timer; }
 void task_start(struct task *t) { assert(t == &timer); }
 struct process *proc_current(void) { return current; }
+struct process *proc_find(uint32_t pid) { return pid==desktop.pid ? &desktop : 0; }
+int grants_display_suspend(bool on) { if (on && (busy || suspended)) return -EBUSY; suspended=on; return 0; }
+int biosvm_video_fullscreen_begin(uint8_t mode) {
+    assert(suspended && !fbdev_get()->present && !accel_ports_owned && (mode==3 || mode==0x13));
+    event(9); return fs_begin_failure ? -EIO : 0;
+}
+int biosvm_video_fullscreen_end(uint16_t mode,uint8_t info[256]) {
+    assert(suspended && !fbdev_get()->present && mode==0x118); event(10);
+    if (fs_end_failure) return -EIO;
+    mode_info(mode,info); return 0;
+}
 uint32_t supervisor_desktop_pid(void) { return 2; }
 bool grants_display_owner(const struct process *p) { return owner && p == &desktop; }
 bool grants_display_busy(void) { return busy; }
+uint32_t grants_display_pid(void) { return desktop.pid; }
 static const struct pci_func gpu = {.vendor = 0x5333, .device = 0x8C2E, .class_code = 3};
 unsigned pci_count(void) { return 1; }
 const struct pci_func *pci_get(unsigned i) { return i ? 0 : &gpu; }
@@ -122,6 +134,7 @@ void console_framebuffer_changed(const struct fb_device *f) { assert(f->mapped &
 static void fixture(void)
 {
     free(aperture); free(window); aperture = window = 0;
+    fullscreen_display=suspended=fs_begin_failure=fs_end_failure=false;
     initialized = changing = switching = awaiting_frame = false;
     acceleration=0; accel_ports_owned=false; accel_stops=0;
     change_window = 0; change_capacity = changes = drawing = 0; watchdog = 0;
@@ -208,8 +221,28 @@ static void watchdog_tests(void)
     g_ticks += 10000; display_watchdog_poll(); assert(switches == 2 && fbdev_get()->present);
     puts("PASS display watchdog: independent 10 s rollback, stale/late frame refusal, successful frame cancellation, tick wrap");
 }
+static void fullscreen_tests(void)
+{
+    fixture(); acceleration=&test_acceleration; accel_ports_owned=true;
+    assert(!display_fullscreen_begin(0x13) && suspended && display_fullscreen_active());
+    assert(!fbdev_get()->present && !fbdev_get()->mapped && accel_stops==1);
+    assert(display_set(&desktop,0x111)==-EBUSY && display_fullscreen_begin(3)==-EBUSY);
+    assert(!display_fullscreen_end() && !suspended && fbdev_get()->present && awaiting_frame);
+    const unsigned expected[]={0,1,2,3,9,10,5,6,7,8};
+    assert(sequence_count==ARRAY_SIZE(expected) && !memcmp(sequence,expected,sizeof(expected)));
+    assert(!display_fullscreen_end());
+    display_frame_complete(fbdev_get()->generation); assert(!awaiting_frame);
+    fixture(); fs_begin_failure=true;
+    assert(display_fullscreen_begin(3)==-EIO && !suspended && fbdev_get()->present);
+    fixture(); assert(!display_fullscreen_begin(3)); fs_end_failure=true;
+    assert(!display_fullscreen_end() && !suspended && fbdev_get()->present && switches==1);
+    fixture(); assert(!display_fullscreen_begin(3)); fs_end_failure=fail_restore=true;
+    assert(display_fullscreen_end()==-EIO && !fbdev_get()->present && !fbdev_get()->mapped);
+    fixture(); busy=true; assert(display_fullscreen_begin(3)==-EBUSY && !suspended);
+    puts("PASS full-screen lease: accelerator stop, grant suspend, LFB revoke, firmware save, restore/remap/repaint, rollback and failed restore");
+}
 int main(void)
 {
-    query_tests(); switch_tests(); watchdog_tests(); free(aperture); free(window);
+    fullscreen_tests(); query_tests(); switch_tests(); watchdog_tests(); free(aperture); free(window);
     puts("display host tests: PASS"); return 0;
 }

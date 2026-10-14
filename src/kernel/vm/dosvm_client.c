@@ -7,6 +7,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/desktop.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/probe.h>
 #include "dosvm_internal.h"
 
 struct binding {
@@ -17,6 +18,15 @@ struct binding {
 };
 static struct binding bindings[DOSVM_LIMIT];
 static uint32_t creating[DOSVM_LIMIT]; /* owners inside a sleeping create */
+static const char *window_probe(void)
+{
+    /* The selected controller owns admission records too, before it can
+     * discover the newly created window VM. No native input chooses this. */
+    static const char prefix[]="f3:vm-fullscreen ";
+    return rec_active() && (g_boot.flags&CBI_F_TEST_REQUEST) &&
+        g_boot.test_request_len>=sizeof(prefix)-1 &&
+        !memcmp(g_boot.test_request,prefix,sizeof(prefix)-1) ? "vm-fullscreen" : "vm-window";
+}
 static bool owns_vm(uint32_t pid)
 {
     for (unsigned i = 0; i < DOSVM_LIMIT; i++)
@@ -63,6 +73,7 @@ static int release_binding(struct binding *b)
  * that syscall's exit check or by a later collection pass. */
 void dosvm_client_poll(void)
 {
+    dosvm_fullscreen_poll();
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
         struct binding *b = &bindings[i];
         if (!b->pid || b->busy) continue;
@@ -122,7 +133,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     struct process *p = proc_current();
     if (!p || !p->dosvm_capability) return -EPERM;
     unsigned op = tf->ebx;
-    if (op < CIUKI_DOSVM_CREATE || op > CIUKI_DOSVM_PRESENT_BANDS) return -EINVAL;
+    if (op < CIUKI_DOSVM_CREATE || op > CIUKI_DOSVM_BACKGROUND) return -EINVAL;
     if (tf->edx != sizeof(struct ciuki_dosvm_command)) return -EINVAL;
     struct ciuki_dosvm_command c, allowed;
     int e = copy_from_user(&c, tf->ecx, sizeof(c));
@@ -141,7 +152,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         }
         if (!n || n > CIUKI_DOSVM_NAME_MAX) return -EINVAL;
     } else { allowed.id = c.id; allowed.generation = c.generation; }
-    if (op == CIUKI_DOSVM_FOCUS) {
+    if (op == CIUKI_DOSVM_FOCUS || op == CIUKI_DOSVM_FULLSCREEN || op == CIUKI_DOSVM_BACKGROUND) {
         if (c.focused > 1) return -EINVAL;
         allowed.focused = c.focused;
     }
@@ -184,7 +195,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
          * descriptor meanwhile, so the VM holds its own surface reference. */
         struct surface *surface = d->u.surface;
         surface_retain(surface);
-        const struct dosvm_config config = {.probe = "vm-window", .base = workload, .dpmi = true};
+        const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true};
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = closed_error(e); goto out; }
@@ -224,13 +235,26 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 if (pte & 0x40) { dosvm_launch_video(v); break; }
             }
             c.changed = (!v->launch_armed || v->launch_ready ? CIUKI_DOSVM_VIDEO_READY : 0) |
-                        (v->launch_failed ? CIUKI_DOSVM_LAUNCH_FAILED : 0);
+                        (v->launch_failed ? CIUKI_DOSVM_LAUNCH_FAILED : 0) |
+                        (v->fullscreen ? CIUKI_DOSVM_FULL_SCREEN : 0) |
+                        (v->fullscreen_suspended ? CIUKI_DOSVM_SUSPENDED : 0) |
+                        (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0);
+            if (v->fullscreen_error && c.state!=CIUKI_DOSVM_STOPPED) c.reason=(uint32_t)-v->fullscreen_error;
             if (v->launch_failed && c.state != CIUKI_DOSVM_STOPPED) c.reason = v->launch_error;
             if (v->launch_failed || c.state == CIUKI_DOSVM_STOPPED)
                 memcpy(c.name, v->console_line, sizeof(c.name) - 1);
             video_mode(v, &c);
             dosvm_perf_report(v);
         } else if (!dosvm_valid(key)) e = -ESRCH;
+        else if (op == CIUKI_DOSVM_FULLSCREEN) {
+            if (c.focused && !b->focused) e=-EACCES;
+            else {
+                if (c.focused) v->fullscreen_suspended=false;
+                e=c.focused ? dosvm_fullscreen_enter(key) : dosvm_fullscreen_leave(key,false);
+            }
+        } else if (op == CIUKI_DOSVM_BACKGROUND) {
+            v->fullscreen_pause=c.focused!=0;
+        }
         else if (op == CIUKI_DOSVM_LAUNCH) {
             if (v->launch_armed) e = -EBUSY;
             else if (!v->info.dos_ready) e = -EAGAIN;

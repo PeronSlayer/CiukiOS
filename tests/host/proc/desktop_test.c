@@ -550,6 +550,12 @@ static void test_desktop_present(void)
         invalid = (struct ciuki_rect){ INT32_MIN, INT32_MIN, 0, 0, UINT32_MAX, UINT32_MAX };
         CHECK(grant_present(p, grants[0], fd, &invalid) == -EINVAL);
         struct ciuki_framebuffer_info info; CHECK(!grant_display_info(p, grants[0], &info) && info.generation == 1);
+        CHECK(!grants_display_suspend(true));
+        CHECK(grants_display_suspend(true)==-EBUSY);
+        CHECK(grant_display_info(p,grants[0],&info)==-EBUSY);
+        CHECK(grant_present(p,grants[0],fd,&invalid)==-EBUSY);
+        CHECK(!grants_display_suspend(false));
+        CHECK(!grant_display_info(p,grants[0],&info));
         desktop_resource.state = RS_QUARANTINED;
         CHECK(grant_present(p, grants[0], fd, &invalid) == -EIO);
         desktop_resource.state = RS_ACTIVE;

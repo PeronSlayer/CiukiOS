@@ -121,6 +121,7 @@ static unsigned debug_watch(uint32_t lin, unsigned n, bool write)
 }
 uint8_t arch_cpu_family(void) { return 6; }
 #include "../../src/kernel/vm/dosvm_internal.h"
+#include "dosvm_fullscreen_stubs.inc"
 uint32_t pmm_alloc(void)
 {
     for (unsigned n = 0; n < HOST_PAGES; n++) {

@@ -6107,6 +6107,441 @@
           }
         ]
       }
+    },
+    {
+      "id": "vm-fullscreen-qemu-t23",
+      "probe": "vm-fullscreen",
+      "profile": "qemu-t23",
+      "selector": "f3:vm-fullscreen run={run_id}",
+      "timeout": 360,
+      "fullscreen_screen": true,
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "fullscreen_enter"
+          },
+          "batches": [
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "alt"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "alt"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "fullscreen_leave"
+          },
+          "batches": [
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "alt"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "alt"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "demo"
+            },
+            "fields": {
+              "active": {
+                "eq": 1
+              },
+              "ms": {
+                "ge": 10000
+              },
+              "mode": {
+                "eq": 19
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restore"
+            },
+            "fields": {
+              "active": {
+                "eq": 0
+              },
+              "display": {
+                "eq": 1
+              },
+              "width": {
+                "eq": 1024
+              },
+              "height": {
+                "eq": 768
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "vm-fullscreen-cirrus-qemu-t23",
+      "probe": "vm-fullscreen",
+      "profile": "qemu-t23",
+      "selector": "f3:vm-fullscreen run={run_id}",
+      "timeout": 360,
+      "fullscreen_screen": true,
+      "actions": [
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "fullscreen_enter"
+          },
+          "batches": [
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "alt"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "alt"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "input",
+          "after": {
+            "event": "ARM",
+            "action": "fullscreen_leave"
+          },
+          "batches": [
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "alt"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": true,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "ret"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "pause_ms": 60,
+              "events": [
+                {
+                  "type": "key",
+                  "data": {
+                    "down": false,
+                    "key": {
+                      "type": "qcode",
+                      "data": "alt"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "demo"
+            },
+            "fields": {
+              "active": {
+                "eq": 1
+              },
+              "ms": {
+                "ge": 10000
+              },
+              "mode": {
+                "eq": 19
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restore"
+            },
+            "fields": {
+              "active": {
+                "eq": 0
+              },
+              "display": {
+                "eq": 1
+              },
+              "width": {
+                "eq": 1024
+              },
+              "height": {
+                "eq": 768
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cleanup"
+            },
+            "fields": {
+              "restored": {
+                "eq": 1
+              },
+              "vms": {
+                "eq": 0
+              },
+              "tasks": {
+                "eq": 0
+              },
+              "pages": {
+                "eq": 0
+              },
+              "handles": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "device_exceptions": {
+        "vga": "cirrus"
+      }
     }
   ]
 }

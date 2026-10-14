@@ -1,5 +1,6 @@
 /* Per-VM VGA bus, synthetic INT 10h, guarded A0000-BFFFF faults and the
- * window presenter. No physical VGA port, mode, font or firmware is used.
+ * window presenter. Windowed operation never uses physical VGA or firmware;
+ * the full-screen adapter synchronizes hardware around synthetic INT 10h.
  * Sources/decisions: docs/design/f3-acceptance.md#f3-02.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -102,6 +103,7 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
 {
     (void)arg;
     uint32_t result = 0;
+    if (v->fullscreen) return dosvm_fullscreen_port(port,width,write,value);
     /* Indexed OUTW/OUTD address consecutive ports, low byte first. Bytes past
      * the registered 3B0h-3DFh range belong to no device: all ones/ignored. */
     bool window = false;
@@ -269,6 +271,7 @@ static void video_harvest(struct dosvm *v)
 }
 void dosvm_vga_sync(struct dosvm *v, bool unmap)
 {
+    if (v->fullscreen) return;
     if (!v->as.pd_phys) return;
     uint32_t flags = irq_save();
     video_harvest(v);
@@ -277,6 +280,7 @@ void dosvm_vga_sync(struct dosvm *v, bool unmap)
 }
 void dosvm_vga_direct(struct dosvm *v)
 {
+    if (v->fullscreen) return;
     if (!v->as.pd_phys || v->info.state >= DOSVM_STOPPING) return;
     int write_plane = cvga_direct_plane(&v->vga);
     int plane = v->video_read_window ? cvga_direct_read_plane(&v->vga) : write_plane;
@@ -314,6 +318,9 @@ bool dosvm_vga_retry(struct dosvm *v, uint32_t address, uint32_t instruction, bo
 
 int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
 {
+    /* Only full-screen BIOS operations synchronize the physical device;
+     * the f3-19 windowed register/direct-window paths are unchanged. */
+    bool hardware_mode=v->fullscreen;
     unsigned function = (f->tf.eax >> 8) & 255;
     if (!function) v->video_read_window = false;
     if (function == 0x0E) dosvm_console_byte(v, (uint8_t)f->tf.eax);
@@ -339,6 +346,7 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     /* The complete guest buffer is checked before any register or VRAM change. */
     if (bytes && (bytes > 65536 || offset > 65536 - bytes || f->es > 0xFFFF ||
         !dosvm_range(v, (f->es << 4) + offset, bytes, output))) return -EFAULT;
+    if (hardware_mode) dosvm_fullscreen_model_begin(v);
     cvbios_regs r = {f->tf.eax, f->tf.ebx, f->tf.ecx, f->tf.edx,
                      f->tf.esi, f->tf.edi, f->tf.ebp, (uint16_t)f->es, (uint16_t)f->ds};
     v->video_bus_fault = false;
@@ -346,7 +354,10 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     if (handled && (!function || function == 0x0E || function == 9 || function == 0x0A || function == 0x13))
         dosvm_launch_video(v);
     dosvm_vga_direct(v);                          /* f3-06: the mode set may close the window */
-    if (v->video_bus_fault) return -EFAULT;
+    if (v->video_bus_fault) {
+        if (hardware_mode) dosvm_fullscreen_model_end(v);
+        return -EFAULT;
+    }
     f->tf.eax = r.eax; f->tf.ebx = r.ebx; f->tf.ecx = r.ecx; f->tf.edx = r.edx;
     f->tf.esi = r.esi; f->tf.edi = r.edi; f->tf.ebp = r.ebp; f->es = r.es; f->ds = r.ds;
     if ((ax >> 8) == 0 && (ax & 0x7F) <= 3) {
@@ -357,6 +368,7 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     }
     uint16_t pos;
     if (!dosvm_read(v, 0x450, &pos, 2)) v->cursor = (pos >> 8) * 80 + (pos & 255);
+    if (hardware_mode) dosvm_fullscreen_model_end(v);
     return 0;
 }
 
@@ -742,6 +754,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
 {
     memset(damage, 0, sizeof(*damage));
     v->video_bands = 0;
+    if (v->fullscreen || v->fullscreen_hold) return 0;
     if (v->launch_armed && !v->launch_ready) return 0;
     /* Page flips are a completion signal even when the start address is
      * unchanged. Plain mode 13h has no completion register: sample writable

@@ -11,6 +11,7 @@
 #include <ciuki/task.h>
 #include <ciuki/registry.h>
 #include <ciuki/biosvm.h>
+#include <ciuki/abi.h>
 
 extern void v86_enter(const struct v86_frame *f, uint32_t *continuation);
 extern void v86_leave(uint32_t continuation) __attribute__((noreturn));
@@ -25,6 +26,7 @@ static struct kmutex request_mutex;
 static struct kwait wake, completion;
 static volatile uint16_t pending_irqs;
 static bool initialized, quarantined, synthetic, input_enabled, video_active, video_claimed;
+static bool fullscreen_video;
 static struct { int handle; gen_t generation; } video_leases[3];
 static unsigned video_lease_count;
 static bool video_dispi;
@@ -927,6 +929,7 @@ int biosvm_video_switch(uint16_t mode, uint8_t info[256])
     int e = biosvm_init_for(g_boot.input_policy == CBI_INPUT_FIRMWARE);
     if (e) return e;
     kmutex_lock(&request_mutex);
+    if (fullscreen_video) { e=-EBUSY; goto done; }
     if (quarantined || firmware.state == V86_DISABLED) { e = -V86_EIO; goto done; }
     if ((e = claim_video())) goto done;
     uint32_t *pt = P2V(low_pt);
@@ -957,6 +960,94 @@ revoke:
     for (uint32_t p = 0xA0000; p < 0xC0000; p += PAGE_SIZE) pt[p >> 12] = 0;
     if (!quarantined && release_video()) e = -V86_EIO;
 done:
+    kmutex_unlock(&request_mutex);
+    return e;
+}
+
+/* f3-20: persistent display ownership, not generic guest firmware forwarding.
+ * The existing 2 KiB private scratch tail bounds the firmware state buffer. */
+static uint8_t fullscreen_saved[2048];
+static unsigned fullscreen_bytes;
+static void fullscreen_aperture(bool active)
+{
+    uint32_t *pt = P2V(low_pt);
+    for (uint32_t p=0xA0000;p<0xC0000;p+=PAGE_SIZE)
+        pt[p>>12]=active ? p|PTE_P|PTE_U|PTE_W|PTE_PCD|PTE_PWT : 0;
+    video_active=active;
+    firmware.io=active ? video_io : 0;
+    firmware.max_call_ms=active ? 2000 : 0;
+}
+static int fullscreen_call(struct biosvm_regs *r, uint64_t deadline, bool vbe)
+{
+    uint64_t now=deadline_after_ms(0);
+    if (now>=deadline) return -V86_ETIMEDOUT;
+    int e=submit(r,(uint32_t)(deadline-now),0);
+    return e ? e : vbe && (uint16_t)r->eax!=0x004F ? -V86_EIO : 0;
+}
+int biosvm_video_fullscreen_begin(uint8_t mode)
+{
+    bool standard=mode<=3 || mode==0x0D || mode==0x0E || mode==0x10 || mode==0x11 || mode==0x12 || mode==0x13;
+    if (!standard || !g_current || g_current==vm_thread || !(read_eflags()&V86_IF)) return -EINVAL;
+    int e=biosvm_video_prepare();
+    if (e) return e;
+    kmutex_lock(&request_mutex);
+    if (fullscreen_video || video_claimed || quarantined) { e=-EBUSY; goto done_fs; }
+    if ((e=claim_video())) goto done_fs;
+    fullscreen_aperture(true);
+    uint64_t deadline=deadline_after_ms(2000);
+    struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15};
+    fullscreen_bytes=0;
+    if ((e=fullscreen_call(&r,deadline,true))) goto revoke_fs;
+    unsigned bytes=(uint16_t)r.ebx*64u;
+    if (!bytes || bytes>sizeof(fullscreen_saved)) { e=-EOPNOTSUPP; goto revoke_fs; }
+    memset(P2V(BIOSVM_SCRATCH+0x800),0,bytes);
+    r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=1,
+        .es=BIOSVM_SCRATCH>>4,.ebx=0x800};
+    if ((e=fullscreen_call(&r,deadline,true))) goto revoke_fs;
+    memcpy(fullscreen_saved,P2V(BIOSVM_SCRATCH+0x800),bytes);
+    fullscreen_bytes=bytes;
+    /* No VBE/extension mode from a DOS VM is accepted. */
+    r=(struct biosvm_regs){.interrupt=0x10,.eax=mode};
+    e=fullscreen_call(&r,deadline,false);
+    if (!e) {
+        r=(struct biosvm_regs){.interrupt=0x10,.eax=0x0F00};
+        e=fullscreen_call(&r,deadline,false);
+        if (!e && (r.eax&0x7F)!=mode) e=-V86_EIO;
+    }
+    /* Even a failed mode set may have touched hardware: retain the saved
+     * state and leases so the caller can execute the rollback transaction. */
+    fullscreen_video=true;
+revoke_fs:
+    fullscreen_aperture(false);
+    if (!fullscreen_video && !quarantined && release_video()) e=-V86_EIO;
+done_fs:
+    kmutex_unlock(&request_mutex);
+    return e;
+}
+int biosvm_video_fullscreen_end(uint16_t mode, uint8_t info[256])
+{
+    if (!info || !g_current || g_current==vm_thread || !(read_eflags()&V86_IF)) return -EINVAL;
+    kmutex_lock(&request_mutex);
+    int e=-V86_EIO;
+    if (!fullscreen_video || !fullscreen_bytes || quarantined) goto done_restore;
+    fullscreen_aperture(true);
+    uint64_t deadline=deadline_after_ms(2000);
+    memcpy(P2V(BIOSVM_SCRATCH+0x800),fullscreen_saved,fullscreen_bytes);
+    struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=2,
+        .es=BIOSVM_SCRATCH>>4,.ebx=0x800};
+    if ((e=fullscreen_call(&r,deadline,true))) goto revoke_restore;
+    r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F03};
+    if ((e=fullscreen_call(&r,deadline,true))) goto revoke_restore;
+    if ((r.ebx&0x7FFF)!=(mode|0x4000)) { e=-V86_EIO; goto revoke_restore; }
+    memset(P2V(BIOSVM_SCRATCH+0x800),0,256);
+    r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F01,.ecx=mode,
+        .es=BIOSVM_SCRATCH>>4,.edi=0x800};
+    if (!(e=fullscreen_call(&r,deadline,true))) memcpy(info,P2V(BIOSVM_SCRATCH+0x800),256);
+revoke_restore:
+    fullscreen_aperture(false);
+    fullscreen_video=false; fullscreen_bytes=0;
+    if (!quarantined && release_video()) e=-V86_EIO;
+done_restore:
     kmutex_unlock(&request_mutex);
     return e;
 }

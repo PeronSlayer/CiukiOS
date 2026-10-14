@@ -9,7 +9,7 @@ F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-faul
 F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
              'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
 F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-audio-state', 'dpmi',
-             'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake')
+             'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio')  # F4 probes run by selector only; not in the sweep yet
 F6_PROBES = ('net-arp',)  # explicit selector; no F6 hardware sweep yet
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)

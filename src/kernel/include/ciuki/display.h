@@ -8,6 +8,11 @@ int display_set(struct process *, uint16_t mode);
 uint32_t display_change_counter(void);
 void display_frame_complete(uint32_t generation);
 void display_watchdog_poll(void);
+int display_fullscreen_begin(uint8_t mode);
+int display_fullscreen_end(void);
+bool display_fullscreen_active(void);
+int grants_display_suspend(bool suspended);
+uint32_t grants_display_pid(void);
 bool grants_display_owner(const struct process *);
 bool grants_display_busy(void);
 #endif

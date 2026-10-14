@@ -427,6 +427,8 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         int owner = d->sh.menu_owner, minimized = owner >= 0 && owner < DESK_CLIENTS && d->clients[owner].minimized;
         item(m, "Restore", NULL, SH_ACT_TASK_RESTORE, owner, minimized ? SH_ITEM_DEFAULT : SH_ITEM_DISABLED);
         item(m, "Minimize", NULL, SH_ACT_TASK_MINIMIZE, owner, minimized ? SH_ITEM_DISABLED : 0);
+        if (owner>=0 && owner<DESK_CLIENTS && d->clients[owner].dosbox)
+            item(m,"Full screen    Alt+Enter",NULL,SH_ACT_DOS_FULLSCREEN,owner,0);
         separator(m);
         item(m, "Close    Alt+F4", "process-stop", SH_ACT_TASK_CLOSE, owner, minimized ? 0 : SH_ITEM_DEFAULT);
         break;
@@ -613,6 +615,15 @@ static void act(struct desktop *d, const struct sh_item *it)
     case SH_ACT_TASK_RESTORE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
     case SH_ACT_TASK_MINIMIZE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && !d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
     case SH_ACT_TASK_CLOSE: desk_request_close(d, it->arg); break;
+    case SH_ACT_DOS_FULLSCREEN:
+        if (it->arg>=0 && it->arg<DESK_CLIENTS && d->clients[it->arg].dosbox) {
+            if (d->clients[it->arg].minimized) desk_minimize(d,it->arg);
+            desk_focus(d,it->arg);
+            struct ciuki_message message;
+            desk_message(&message,DESK_DOS_FULLSCREEN,4); message.data[0]=DESK_SHELL_VERSION;
+            desk_queue(d,it->arg,&message);
+        }
+        break;
     case SH_ACT_CLEAR_RECENT: d->sh.cfg.recent_count = 0; d->sh.want_save = 1; break;
     default: break;
     }

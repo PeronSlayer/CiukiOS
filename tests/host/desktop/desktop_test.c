@@ -714,12 +714,36 @@ static void test_volume_steps(void)
     desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);assert(!d.sh.volume_drag && !d.sh.want_mixer);
     cleanup();puts("PASS UI volume: tray steps during drag, unchanged/release silence, popup/extended keyboard, repeat and bounds");
 }
+static void test_dos_fullscreen_menu(void)
+{
+    setup(1024,768); desk_shell_enable(&d);
+    int a=client(10,11,640,480,0x123456); d.clients[a].dosbox=1;
+    fake_block=1; d.sh.menu_owner=a; desk_menu_open(&d,SH_MENU_TASK,20,700);
+    int full=-1;
+    for (int i=0;i<d.sh.menus[0].count;i++) if (d.sh.menus[0].items[i].action==SH_ACT_DOS_FULLSCREEN) full=i;
+    assert(full>=0); d.sh.menus[0].hot=full;
+    assert(desk_shell_key(&d,DU_KEY_ENTER,1));
+    assert(d.clients[a].window && !d.clients[a].minimized);
+    int sent=0;
+    for (unsigned i=0;i<d.clients[a].tx_count;i++) {
+        struct ciuki_message *m=&d.clients[a].tx[(d.clients[a].tx_head+i)%DESK_TX_MAX];
+        if (m->data[1]==DESK_DOS_FULLSCREEN) {
+            struct desk_packet packet; assert(desk_parse(m,0,NULL,&packet));
+            assert(!desk_parse(m,1,NULL,&packet)); sent++;
+        }
+    }
+    assert(sent==1);
+    event(CIUKI_INPUT_KEY,0x38,1,0); event(CIUKI_INPUT_KEY,0x1D,1,0);
+    event(CIUKI_INPUT_RESYNC,0,0,0); assert(!d.sh.modifiers);
+    fake_block=0; cleanup();
+    puts("PASS DOS full-screen menu: launch-bound command, preserved window/taskbar, direction validation, modifier resync");
+}
 int main(void)
 {
     test_protocol(); test_titles(); test_resize_protocol(); test_damage();
     test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
     test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
-    test_volume_steps();
+    test_volume_steps(); test_dos_fullscreen_menu();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }

@@ -1169,8 +1169,13 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_STATUS 6u
 #define CIUKI_DOSVM_LAUNCH 7u /* arm command visibility before its final Enter */
 #define CIUKI_DOSVM_PRESENT_BANDS 8u /* PRESENT plus destination 8-line damage */
+#define CIUKI_DOSVM_FULLSCREEN 9u /* focused=1 enter, 0 return to window */
+#define CIUKI_DOSVM_BACKGROUND 10u /* focused=1 pause on Alt+Tab, 0 continue */
 #define CIUKI_DOSVM_VIDEO_READY 1u /* STATUS.changed launch flags */
 #define CIUKI_DOSVM_LAUNCH_FAILED 2u
+#define CIUKI_DOSVM_FULL_SCREEN 4u /* STATUS.changed */
+#define CIUKI_DOSVM_SUSPENDED 8u
+#define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u /* STATUS.reason is positive errno */
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u

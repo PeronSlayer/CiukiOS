@@ -42,7 +42,8 @@ enum desk_opcode {
     /* f2-52: desktop-launched Graphics Demo only; query or one fixed sample.
      * No client coordinates, display grants or hardware commands. */
     DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT,
-    DESK_GFX_FRAME, DESK_GFX_PRESENTED /* f2-59: bounded scene region and completion */
+    DESK_GFX_FRAME, DESK_GFX_PRESENTED, /* f2-59: bounded scene region and completion */
+    DESK_DOS_FULLSCREEN /* desktop to DOS client, no payload */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */

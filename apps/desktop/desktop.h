@@ -70,6 +70,7 @@ struct desk_client {
     int32_t shade_height;
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
     int gfxdemo;                  /* launch-bound graphics diagnostics authority */
+    int dosbox;                   /* launch-bound DOS full-screen menu */
     int mixer;                    /* launched Volume Control or Music Player; may send MIXER_SET */
     int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
     int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */

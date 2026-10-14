@@ -1,0 +1,10 @@
+/* The guest instruction runner has no physical VGA or desktop. */
+void dosvm_fullscreen_switch(const struct task *t) { (void)t; }
+void dosvm_fullscreen_stopping(struct dosvm *v) { (void)v; }
+void dosvm_fullscreen_checkpoint(struct dosvm *v) { (void)v; }
+void dosvm_fullscreen_progress(struct dosvm *v,uint32_t c,uint32_t i) { (void)v;(void)c;(void)i; }
+int dosvm_fullscreen_leave(struct dosvm_key k,bool b) { (void)k;(void)b;return 0; }
+void dosvm_fullscreen_model_begin(struct dosvm *v) { (void)v; }
+void dosvm_fullscreen_model_end(struct dosvm *v) { (void)v; }
+int dosvm_fullscreen_port(uint16_t p,unsigned n,bool w,uint32_t *v)
+{ (void)p;(void)n;(void)w;(void)v; abort(); }

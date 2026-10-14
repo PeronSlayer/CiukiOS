@@ -90,7 +90,7 @@ static int name_valid(const char *name)
 }
 int main(int argc, char **argv)
 {
-    int channel = 3, result = 1;
+    int channel = 3, result = 1, pause_background = 0;
     const char *name = "CiukiDOS";
     char typed[DOSBOX_COMMAND_MAX + 1] = "";
     size_t typed_length = 0;
@@ -100,6 +100,7 @@ int main(int argc, char **argv)
             if (!argv[i][13] || *end || n < 3 || n >= CIUKI_OPEN_MAX) return 2;
             channel = (int)n;
         } else if (!strncmp(argv[i], "--name=", 7)) name = argv[i] + 7;
+        else if (!strcmp(argv[i], "--pause-background")) pause_background = 1;
         else if (!strncmp(argv[i], "--", 2)) return 2;
         else {                                                    /* COMMAND words */
             size_t n = strlen(argv[i]);
@@ -130,6 +131,9 @@ int main(int argc, char **argv)
     int failure_painted = 0;
     const char *failure = NULL;
     char detail[80] = "Preparing...";
+    char fullscreen_notice[80]="";
+    uint64_t fullscreen_notice_until=0;
+    uint32_t fullscreen_error_seen=0;
     if (loading) dosbox_panel(&canvas, name, icon, NULL, detail, 0);
     struct ciuki_message m;
     desk_message(&m, DESK_HELLO, 4);
@@ -145,7 +149,11 @@ int main(int argc, char **argv)
         snprintf(detail, sizeof(detail), "%s", strerror(errno));
         loading = 1; result = 1;
     } else { id = c.id; generation = c.generation; }
-    int configured = 0, running = 1, focused = 0;
+    if (id && pause_background) {
+        command(&c,id,generation); c.focused=1;
+        if (ciuki_dosvm(CIUKI_DOSVM_BACKGROUND,&c)) goto done;
+    }
+    int configured = 0, running = 1, focused = 0, fullscreen = 0, fullscreen_painted = 0;
     while (running) {
         for (unsigned budget = 0; budget < 32; budget++) {
             int n = ciuki_channel_recv(channel, &m, DONTWAIT);
@@ -158,7 +166,13 @@ int main(int argc, char **argv)
             if (!valid) goto done;
             server = m.sender_pid;
             if (packet.opcode == DESK_CLOSE_REQUEST || packet.opcode == DESK_CLOSED) { running = 0; break; }
-            if (packet.opcode == DESK_CONFIGURE) {
+            if (packet.opcode == DESK_DOS_FULLSCREEN && id) {
+                command(&c,id,generation); c.focused=!fullscreen;
+                if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) {
+                    snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror(errno));
+                    fullscreen_notice_until=now_ms()+3000;
+                }
+            } else if (packet.opcode == DESK_CONFIGURE) {
                 if (packet.width != CIUKI_DOSVM_WIDTH || packet.height != CIUKI_DOSVM_HEIGHT) goto done;
                 configured = 1;
             } else if (packet.opcode == DESK_PING) {
@@ -184,12 +198,39 @@ int main(int argc, char **argv)
         int polled_launch = autorun_launch_armed;
         command(&c, id, generation);
         if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) goto done;
+        fullscreen=!!(c.changed&CIUKI_DOSVM_FULL_SCREEN);
+        if (!(c.changed&CIUKI_DOSVM_FULLSCREEN_REFUSED)) fullscreen_error_seen=0;
+        else if (c.reason!=fullscreen_error_seen) {
+            fullscreen_error_seen=c.reason;
+            snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror((int)c.reason));
+            fullscreen_notice_until=now_ms()+3000;
+        }
+        if (fullscreen) {
+            if (!fullscreen_painted && configured) {
+                dosbox_panel(&canvas,name,icon,NULL,"Running full screen — Alt+Enter to return",0);
+                desk_message(&m,DESK_DAMAGE,20);
+                desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
+                if (send_packet(channel,&m)) goto done;
+                fullscreen_painted=1;
+            }
+            struct timespec pause={.tv_nsec=10000000}; nanosleep(&pause,NULL);
+            continue;
+        }
+        fullscreen_painted=0;
         if (c.state == CIUKI_DOSVM_STOPPED) {
             if (shown) break;
             failure = c.reason == 4 ? "Startup timed out" : "Unable to start";
             snprintf(detail, sizeof(detail), "%s", c.name[0] ? c.name : "Close this window and try again.");
             result = 1;
             goto panel;
+        }
+        if (configured && now_ms()<fullscreen_notice_until) {
+            dosbox_panel(&canvas,name,icon,"Full screen unavailable",fullscreen_notice,0);
+            desk_message(&m,DESK_DAMAGE,20);
+            desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
+            if (send_packet(channel,&m)) goto done;
+            struct timespec pause={.tv_nsec=10000000}; nanosleep(&pause,NULL);
+            continue;
         }
         if (polled_launch && (c.changed & CIUKI_DOSVM_LAUNCH_FAILED)) {
             failure = "Program did not start";

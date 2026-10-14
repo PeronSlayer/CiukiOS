@@ -1,4 +1,5 @@
-/* Kernel-internal DOS VM services. No native ABI or physical device grants.
+/* Kernel-internal DOS VM services. Physical VGA belongs only to the single
+ * full-screen owner; native clients never receive physical addresses/ports.
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_DOSVM_H
 #define CIUKI_DOSVM_H
@@ -35,6 +36,21 @@ struct dosvm_config {
 struct ciuki_input_event;
 bool dosvm_input_focus(struct dosvm_key, bool focused);
 bool dosvm_input_event(struct dosvm_key, const struct ciuki_input_event *);
+struct dosvm_key dosvm_focused_key(void);
+int dosvm_fullscreen_enter(struct dosvm_key);
+int dosvm_fullscreen_leave(struct dosvm_key, bool background);
+bool dosvm_fullscreen_active(struct dosvm_key);
+void dosvm_fullscreen_poll(void);
+void dosvm_fullscreen_checkpoint(struct dosvm *);
+void dosvm_fullscreen_stopping(struct dosvm *);
+void dosvm_fullscreen_switch(const struct task *);
+void dosvm_fullscreen_progress(struct dosvm *, uint32_t cs, uint32_t ip);
+void dosvm_fullscreen_model_begin(struct dosvm *);
+void dosvm_fullscreen_model_end(struct dosvm *);
+int dosvm_fullscreen_port(uint16_t, unsigned, bool, uint32_t *);
+/* IRQ-safe merged-input filter: no firmware, waits or allocation. */
+bool dosvm_fullscreen_input(uint16_t type, uint16_t code, int32_t value);
+bool dosvm_fullscreen_desktop_event(struct ciuki_input_event *);
 struct dosvm_device_info {
     uint64_t host_ticks, pit_clocks, pit_edges, pit_dropped_ticks, key_overflows;
     uint32_t queued_bytes, held_keys, buttons;
