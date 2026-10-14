@@ -79,9 +79,39 @@ int desk_parse(const struct ciuki_message *m, int client,
     int resize = m->data[2] == DESK_RESIZE_MINOR;
     unsigned fds = client && p->opcode == DESK_CREATE_WINDOW ? 1u : 0u;
     if (client && resize && p->opcode == DESK_DAMAGE && m->length == 24 && desk_get32(m->data + 20)) fds = 1;
+    if (client && resize && p->opcode==DESK_GFX_FRAME && m->length==68 && desk_get32(m->data+64)) fds=1;
     if (m->fd_count != fds) return 0;
     unsigned n = 4;
     switch (p->opcode) {
+    case DESK_GFX_FRAME:
+        if (!client || !resize || (m->length!=64 && m->length!=68) || !desk_surface_valid(s)) return 0;
+        if (m->length==68) { p->resize_serial=desk_get32(m->data+64);if (!p->resize_serial) return 0; }
+        p->serial=desk_get32(m->data+4);
+        if (!p->serial) return 0;
+        p->x=(int32_t)desk_get32(m->data+8); p->y=(int32_t)desk_get32(m->data+12);
+        p->width=desk_get32(m->data+16); p->height=desk_get32(m->data+20);
+        p->source_w=desk_get32(m->data+24); p->source_h=desk_get32(m->data+28);
+        p->damage_x=desk_get32(m->data+32); p->damage_y=desk_get32(m->data+36);
+        p->damage_w=desk_get32(m->data+40); p->damage_h=desk_get32(m->data+44);
+        p->ui_x=desk_get32(m->data+48); p->ui_y=desk_get32(m->data+52);
+        p->ui_w=desk_get32(m->data+56); p->ui_h=desk_get32(m->data+60);
+        if (p->ui_x>s->width || p->ui_y>s->height || p->ui_w>s->width-p->ui_x || p->ui_h>s->height-p->ui_y) return 0;
+        if (!p->width && !p->height) {
+            for (unsigned k=8;k<48;k++) if (m->data[k]) return 0;
+        } else if (p->x<0 || p->y<0 || !p->source_w || !p->source_h ||
+            (uint32_t)p->x>s->width || (uint32_t)p->y>s->height ||
+            p->width>s->width-(uint32_t)p->x || p->height>s->height-(uint32_t)p->y ||
+            p->source_w>p->width || p->source_h>p->height ||
+            p->damage_x>p->source_w || p->damage_y>p->source_h ||
+            p->damage_w>p->source_w-p->damage_x || p->damage_h>p->source_h-p->damage_y) return 0;
+        n=m->length; break;
+    case DESK_GFX_PRESENTED:
+        if (client || !resize || m->length!=32 || desk_get32(m->data+28)) return 0;
+        p->serial=desk_get32(m->data+4); p->result=(int32_t)desk_get32(m->data+8);
+        p->completed_ns=(uint64_t)desk_get32(m->data+12)|(uint64_t)desk_get32(m->data+16)<<32;
+        p->next_frame_ns=(uint64_t)desk_get32(m->data+20)|(uint64_t)desk_get32(m->data+24)<<32;
+        if (!p->serial || p->result>0 || p->result < -4095 || p->next_frame_ns<p->completed_ns) return 0;
+        n=32; break;
     case DESK_GFX_QUERY: case DESK_GFX_BENCH:
         if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=(p->opcode==DESK_GFX_QUERY ? 8u : 12u)) return 0;
         p->serial=desk_get32(m->data+4); n=m->length;

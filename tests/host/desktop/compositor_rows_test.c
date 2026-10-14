@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: MIT
  * Compare optimized rows with the unmodified shared theme painter. Include
  * the production unit to exercise its private frame cache directly. */
+#include <string.h>
+static unsigned caption_visits,shadow_visits;
+#define DESK_PROFILE(name, ...) do { if (!strcmp(name,"captions")) caption_visits++; if (!strcmp(name,"shadows")) shadow_visits++; __VA_ARGS__; } while (0)
 #include "../../../apps/desktop/compositor.c"
 #include "../../../apps/libdeskui/deskui.h"
 #include <assert.h>
@@ -223,11 +226,43 @@ static void pacing_latency(void)
     clock_ns=d.next_frame_ns; d.frame_input_ns=clock_ns-300000000ull; present_cost=0;
     desk_damage_add(&d.damage,(struct desk_box){0,0,1,1},64,48); assert(!desk_redraw(&d));
     assert(d.stats.frame_max_ns==300000000 && d.stats.frame_p95_ns==300000000);
+    /* Idle slots are not dropped frames, and rendering does not re-anchor
+     * the absolute phase when a late wake still fits the remaining budget. */
+    uint64_t phase=d.next_frame_ns;
+    clock_ns=phase+1000*DESK_FRAME_NS+1000000ull;present_cost=1000000;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,1,1},64,48);assert(!desk_redraw(&d));
+    assert(!d.frame_stats.overruns && !d.frame_stats.dropped);
+    assert(d.next_frame_ns==phase+1001*DESK_FRAME_NS);
+    phase=d.next_frame_ns;clock_ns=phase+1000*DESK_FRAME_NS-1000;present_cost=5000000;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,1,1},64,48);assert(!desk_redraw(&d));
+    assert(!d.frame_stats.overruns && !d.frame_stats.dropped);
+    assert(d.next_frame_ns==phase+1001*DESK_FRAME_NS);
     desk_render_release(&d); free(d.pixels);
 }
 
+static void opaque_client_updates(void)
+{
+    struct desktop *d=calloc(1,sizeof(*d));assert(d);struct desk_ops ops={0};desk_init(d,&ops,RW,RH);
+    d->pixels=a;d->hw_cursor=1;d->mouse_x=d->mouse_y=0;
+    uint32_t pixels[100*64];for (unsigned i=0;i<100*64;i++) pixels[i]=i*7919&0xffffff;
+    struct desk_client *c=&d->clients[0];c->window=1;c->order=1;c->frame=desk_frame(100,64,40,35);
+    c->info.width=100;c->info.height=64;c->pixels=pixels;
+    struct desk_box all={0,0,RW,RH},content=desk_content(c),dirty={content.x+10,content.y+2,70,40};
+    desk_composite(d,all);
+    for (unsigned y=2;y<42;y++) for (unsigned x=10;x<80;x++) pixels[y*100+x]^=0xa5abcdefu;
+    caption_visits=shadow_visits=0;desk_composite(d,dirty);assert(!caption_visits && !shadow_visits);
+    d->pixels=b;desk_composite(d,all);assert(!memcmp(a,b,sizeof(a)));
+    /* A higher opaque window, including its shadow, blocks the shortcut. */
+    struct desk_client *upper=&d->clients[1];upper->window=1;upper->order=2;upper->frame=desk_frame(20,16,65,50);
+    uint32_t overlay[20*16];memset(overlay,0x62,sizeof(overlay));upper->pixels=overlay;upper->info.width=20;upper->info.height=16;
+    d->pixels=a;desk_composite(d,all);pixels[5*100+25]^=0xabcdef;
+    caption_visits=shadow_visits=0;desk_composite(d,dirty);assert(caption_visits);
+    d->pixels=b;desk_composite(d,all);assert(!memcmp(a,b,sizeof(a)));
+    desk_render_release(d);free(d);
+}
 int main(void)
 {
+    opaque_client_updates();
     frames(); shadows(); text(); visibility(); dirty_rows(); presentation(); pacing_latency();
     struct desktop d={.width=RW,.height=RH};
     background(37);

@@ -1,12 +1,16 @@
 /* SPDX-License-Identifier: MIT */
 #include "gfxdemo.h"
+#include "../desktop/rows.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+static int compact_scene(const struct du_canvas *c)
+{ return c->width>640 && c->height<404; }
 static void layout(struct du_ui *u,void *ctx)
 {
-    (void)ctx;
-    du_get(u,GFX_TABS)->box=(struct du_rect){8,8,u->canvas.width-16,u->canvas.height-88};
+    struct gfx_app *a=ctx;
+    int compact=a->page && compact_scene(&u->canvas);
+    du_get(u,GFX_TABS)->box=(struct du_rect){8,8,u->canvas.width-16,u->canvas.height-(compact ? 56 : 88)};
     du_get(u,GFX_RUN)->box=(struct du_rect){16,36,124,22};
     du_get(u,GFX_SHADE)->box=(struct du_rect){16,36,124,22};
     du_get(u,GFX_PAUSE)->box=(struct du_rect){148,36,80,22};
@@ -16,6 +20,7 @@ static void event(struct du_ui *u,const struct du_event *e,void *ctx)
     struct gfx_app *a=ctx;
     if (e->type==DU_EV_SELECT && e->id==GFX_TABS) {
         a->page=du_get(u,GFX_TABS)->active;
+        layout(u,a);
         du_get(u,GFX_RUN)->hidden=a->page!=0;
         du_get(u,GFX_SHADE)->hidden=a->page!=1;
         u->dirty=1;
@@ -52,14 +57,19 @@ void gfx_advance(struct gfx_app *a,uint64_t now)
     a->last_ns=now;
     if (now<a->next_ns) return;
     a->next_ns+=((now-a->next_ns)/GFX_FRAME_NS+1)*GFX_FRAME_NS;
-    if (now>a->sample_begin) a->frames++;
-    if (now-a->sample_begin>=1000000000ull) {
+    if (a->page && !a->paused) a->animation_due=1;
+    if (!a->deferred && a->animation_due) a->ui->dirty=1;
+}
+void gfx_presented(struct gfx_app *a,uint64_t now)
+{
+    if (!a->sample_begin) a->sample_begin=now;
+    a->frames++;
+    if (now>a->sample_begin && now-a->sample_begin>=1000000000ull) {
         uint64_t elapsed=now-a->sample_begin;
         a->fps10=(a->frames*10000000000ull+elapsed/2)/elapsed;
         a->ms1000=elapsed/a->frames/1000;
-        a->frames=0; a->sample_begin=now;
+        a->frames=0; a->sample_begin=now; a->ui->dirty=1;
     }
-    a->ui->dirty=1;
 }
 void gfx_receive(struct gfx_app *a,const struct desk_packet *p)
 {
@@ -116,38 +126,82 @@ static void benchmark(struct gfx_app *a,struct du_canvas *c)
         "Run briefly fills the display; the desktop is restored after each sample.",DU_GRAY);
     label(c,20,c->height-103,"Destination MB/s; hardware requires completed kernel ops.",DU_GRAY);
 }
+static void scene_layout(struct gfx_app *a)
+{
+    struct du_canvas *c=&a->ui->canvas;
+    int h=c->height-(compact_scene(c) ? 120 : 164),w=h*4/3;
+    if (w>c->width-32) { w=c->width-32;h=w*3/4; }
+    /* Wide, short windows reserve 320x240 and compact the status strip. */
+    int native=c->width<=640 && c->height<=480;
+    if (!native) {
+        int ratio=w/GFX_W<h/GFX_H ? w/GFX_W : h/GFX_H;
+        if (ratio>=2) { w=GFX_W*ratio; h=GFX_H*ratio; }
+    }
+    a->viewport=(struct du_rect){(c->width-w)/2,66,w,h};
+    a->scene.width=native ? (unsigned)w : GFX_W;
+    a->scene.height=native ? (unsigned)h : GFX_H;
+}
+void gfx_update_scene(struct gfx_app *a)
+{
+    if (!a->page) { a->viewport=(struct du_rect){0};a->scene_damage=(struct du_rect){0};return; }
+    scene_layout(a);
+    if (a->page==1) gfx_cube(&a->scene,a->elapsed_ns,a->portrait,a->gouraud);
+    else gfx_sprites(&a->scene,a->elapsed_ns,a->portrait);
+    gfx_store_scene(a);
+}
+void gfx_store_scene(struct gfx_app *a)
+{
+    struct du_canvas *c=&a->ui->canvas;
+    unsigned w=a->scene.width,h=a->scene.height;
+    int left=(int)w,right=-1,top=(int)h,bottom=-1;
+    for (unsigned y=0;y<h;y++) {
+        const uint32_t *src=a->scene.pixels+(size_t)y*w;
+        uint32_t *dst=c->pixels+(size_t)(a->viewport.y+(int)y)*c->width+a->viewport.x;
+        if (!memcmp(src,dst,w*4)) continue;
+        unsigned first=0,last=w-1;
+        while (src[first]==dst[first]) first++;
+        while (src[last]==dst[last]) last--;
+        desk_row_copy(dst+first,src+first,last-first+1);
+        if ((int)first<left) left=(int)first;
+        if ((int)last>right) right=(int)last;
+        if ((int)y<top) top=(int)y;
+        bottom=(int)y;
+    }
+    a->scene_damage=right>=left ? (struct du_rect){left,top,right-left+1,bottom-top+1} : (struct du_rect){0};
+    a->animation_due=0; a->scene_ready=1;
+}
 void gfx_paint(struct du_ui *u,void *ctx)
 {
     struct gfx_app *a=ctx; struct du_canvas *c=&u->canvas; char text[160];
     snprintf(text,sizeof(text),"%llu.%llu FPS  %llu.%03llu ms/frame",(unsigned long long)(a->fps10/10),
         (unsigned long long)(a->fps10%10),(unsigned long long)(a->ms1000/1000),(unsigned long long)(a->ms1000%1000));
     du_text_fit(c,240,42,c->width-256,text,DU_INK);
-    if (!a->page) benchmark(a,c);
+    if (!a->page) { benchmark(a,c); a->viewport=(struct du_rect){0}; a->scene_ready=1; }
     else {
-        if (a->page==1) gfx_cube(&a->scene,a->elapsed_ns,a->portrait,a->gouraud);
-        else gfx_sprites(&a->scene,a->elapsed_ns,a->portrait);
-        int h=c->height-164,w=h*4/3;
-        if (w>c->width-32) { w=c->width-32;h=w*3/4; }
-        int x0=(c->width-w)/2,y0=66;
-        for (int y=0;y<h;y++) for (int x=0;x<w;x++)
-            c->pixels[(size_t)(y0+y)*c->width+x0+x]=a->scene.pixels[(y*GFX_H/h)*GFX_W+x*GFX_W/w];
-        label(c,16,c->height-90,a->page==1 ? "320 x 240 CPU rasterizer, z-buffer, Ciuki texture. 3D hardware: F7." :
-            "16 Ciuki sprites; elapsed-time motion, 60 Hz target, no vsync.",DU_GRAY);
+        gfx_update_scene(a);
+        if (!a->deferred) desk_scale_rows(c->pixels+(size_t)a->viewport.y*c->width+a->viewport.x,(unsigned)c->width,
+            a->scene.pixels,a->scene.width,a->scene.width,a->scene.height,
+            (unsigned)a->viewport.w,(unsigned)a->viewport.h,0,0,(unsigned)a->viewport.w,(unsigned)a->viewport.h);
+        /* A full UI repaint changes the mapping/exposure even at a fixed phase. */
+        a->scene_damage=(struct du_rect){0,0,(int)a->scene.width,(int)a->scene.height};
+        if (!compact_scene(c)) label(c,16,c->height-90,a->page==1 ? "CPU rasterizer, z-buffer, Ciuki texture. 3D hardware: F7." :
+            "16 Ciuki sprites; elapsed-time motion, 60 Hz display pacing.",DU_GRAY);
     }
-    du_hline(c,8,c->height-77,c->width-16,DU_SHADOW);
+    int compact=a->page && compact_scene(c);
+    du_hline(c,8,c->height-(compact ? 46 : 77),c->width-16,DU_SHADOW);
     if (!a->have_info) snprintf(text,sizeof(text),"System info: waiting for desktop");
     else if (a->info_error) snprintf(text,sizeof(text),"System info: %u x %u, %u bpp; accelerator query unavailable (%d)",
         a->display_w,a->display_h,a->bpp,-a->info_error);
     else snprintf(text,sizeof(text),"System info: %u x %u, %u bpp; driver=%s ops=%llu quarantined=%u",
         a->display_w,a->display_h,a->bpp,a->accelerator.driver==CIUKI_ACCEL_DRIVER_SAVAGE ? "savage" : "none",
         (unsigned long long)a->accelerator.operations,a->accelerator.quarantined);
-    label(c,12,c->height-64,text,DU_INK);
+    label(c,12,c->height-(compact ? 35 : 64),text,DU_INK);
     if (a->have_desktop) snprintf(text,sizeof(text),"Desktop average: present %llu.%03llu ms  composite %llu.%03llu ms",
         (unsigned long long)(a->desktop_present_ns/1000000),(unsigned long long)(a->desktop_present_ns/1000%1000),
         (unsigned long long)(a->desktop_composite_ns/1000000),(unsigned long long)(a->desktop_composite_ns/1000%1000));
     else snprintf(text,sizeof(text),"Desktop average: collecting present / composite times");
-    label(c,12,c->height-45,text,DU_INK);
-    label(c,12,c->height-24,!a->portrait ? "Ciuki texture unavailable: install the approved portrait payload." :
-        (a->accelerator.capabilities&1) && !a->info_error ? "Presentation: CPU upload + available 2D row copies; FPS counts client frames." :
-        "Presentation: CPU upload; FPS counts client frames.",DU_GRAY);
+    label(c,12,c->height-(compact ? 18 : 45),text,DU_INK);
+    if (!compact) label(c,12,c->height-24,!a->portrait ? "Ciuki texture unavailable: install the approved portrait payload." :
+        (a->accelerator.capabilities&1) && !a->info_error ? "Presentation: CPU upload + available 2D row copies; FPS counts completed presents." :
+        "Presentation: CPU upload; FPS counts completed presents.",DU_GRAY);
 }

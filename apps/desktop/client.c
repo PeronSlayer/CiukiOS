@@ -119,6 +119,8 @@ void desk_flush(struct desktop *d, int i)
         d->replied++;
         c->tx_head = (c->tx_head + 1) % DESK_TX_MAX; c->tx_count--;
     }
+    if (c->channel>=0 && c->gfx_reply_pending && c->tx_count<DESK_TX_MAX)
+        desk_gfx_complete(d,i,c->gfx_result,c->gfx_completed_ns,c->gfx_next_ns);
     if (c->channel >= 0 && !c->tx_count) {
         struct ciuki_message m;
         if (c->commit_pending) { c->commit_pending = 0; configure(d, i, 1); }
@@ -301,13 +303,51 @@ static void close_attachments(struct desktop *d, const struct ciuki_message *m, 
     for (unsigned k = 0; k < m->fd_count && k < 4; k++)
         if (m->fds[k] >= 0 && m->fds[k] != keep) d->ops.close(m->fds[k]);
 }
+static int replace_client_surface(struct desktop *d,int i,const struct ciuki_message *m,
+    const struct ciuki_surface_info *info,uint32_t serial)
+{
+    struct desk_client *c=&d->clients[i];
+    void *pixels=d->ops.map(m->fds[0],PROT_READ);
+    if (!pixels || pixels==MAP_FAILED) { close_attachments(d,m,-1);desk_drop_client(d,i);return -1; }
+    desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+    d->ops.unmap((void *)c->pixels,c->info.allocation_bytes);d->ops.close(c->surface);
+    c->pixels=pixels;c->surface=m->fds[0];c->info=*info;c->applied_serial=serial;
+    c->gfx_box=(struct desk_box){0};c->gfx_width=c->gfx_height=0;
+    configure(d,i,1);return 0;
+}
+static void client_frame_ready(struct desktop *d,struct desk_client *c)
+{
+    if (c->awaiting_frame) {
+        c->launch_frame_pending=1;
+        if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_DAMAGE,c->pid,0);
+    }
+    c->awaiting_frame=0;
+}
+void desk_gfx_complete(struct desktop *d, int i, int result, uint64_t completed, uint64_t next)
+{
+    struct desk_client *c=&d->clients[i];
+    if (!c->gfx_pending) return;
+    if (c->gfx_reply_pending) { result=c->gfx_result;completed=c->gfx_completed_ns;next=c->gfx_next_ns; }
+    if (c->tx_count==DESK_TX_MAX) {
+        c->gfx_reply_pending=1;c->gfx_result=result;c->gfx_completed_ns=completed;c->gfx_next_ns=next;
+        return;
+    }
+    struct ciuki_message reply; desk_message(&reply,DESK_GFX_PRESENTED,32);
+    desk_put32(reply.data+4,c->gfx_serial); desk_put32(reply.data+8,(uint32_t)result);
+    desk_put32(reply.data+12,(uint32_t)completed); desk_put32(reply.data+16,(uint32_t)(completed>>32));
+    if (next<completed) next=completed;
+    desk_put32(reply.data+20,(uint32_t)next); desk_put32(reply.data+24,(uint32_t)(next>>32));
+    desk_queue(d,i,&reply); c->gfx_pending=c->gfx_reply_pending=0;
+}
 void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
 {
     struct desk_client *c = &d->clients[i];
     struct desk_packet p;
     struct ciuki_surface_info s = c->info;
-    int create = m->length >= 4 && (m->data[1] == DESK_CREATE_WINDOW || m->data[1] == DESK_DAMAGE) && m->fd_count == 1;
+    int create = m->length >= 4 && (m->data[1] == DESK_CREATE_WINDOW || m->data[1] == DESK_DAMAGE || m->data[1]==DESK_GFX_FRAME) && m->fd_count == 1;
     int info_ok = !create || !d->ops.info(m->fds[0], &s);
+    uint32_t swap= m->length==68 && m->data[1]==DESK_GFX_FRAME ? desk_get32(m->data+64) :
+        m->length==24 && m->data[1]==DESK_DAMAGE ? desk_get32(m->data+20) : 0;
     if (c->channel < 0 || !info_ok || !desk_parse(m, 1, &s, &p) ||
         !m->sender_pid || (c->pid && c->pid != m->sender_pid) ||
         (c->hello && (c->version != m->data[0] || c->minor != m->data[2])) ||
@@ -315,10 +355,10 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         (c->hello && p.opcode == DESK_HELLO) ||
         (p.opcode == DESK_CREATE_WINDOW && c->window) ||
         ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE || p.opcode == DESK_SET_TITLE) && !c->window) ||
-        (p.opcode == DESK_DAMAGE && p.serial && (!c->resizable || p.serial > c->resize_serial ||
-            p.serial <= c->applied_serial || s.width < c->min_width || s.height < c->min_height ||
+        ((p.opcode == DESK_DAMAGE || p.opcode==DESK_GFX_FRAME) && swap && (!c->resizable || swap > c->resize_serial ||
+            swap <= c->applied_serial || s.width < c->min_width || s.height < c->min_height ||
             s.width > c->max_width || s.height > c->max_height ||
-            (p.serial == c->resize_serial &&
+            (swap == c->resize_serial &&
                 (s.width != (uint32_t)(c->frame.w - 2 * DESK_BORDER) ||
                  s.height != (uint32_t)((c->collapsed ? c->shade_height : c->frame.h) - DESK_TITLE - DESK_BORDER))) ||
             (s.width - c->min_width) % c->step_width || (s.height - c->min_height) % c->step_height))) {
@@ -335,6 +375,46 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     d->received++;
     struct ciuki_message reply;
     switch (p.opcode) {
+    case DESK_GFX_FRAME: {
+        if (!c->gfxdemo || !c->window || c->closing || c->gfx_pending) {
+            /* A rejected request never changes the persistent scene mapping. */
+            desk_message(&reply,DESK_GFX_PRESENTED,32);
+            desk_put32(reply.data+4,p.serial);
+            desk_put32(reply.data+8,(uint32_t)(c->gfx_pending ? -EBUSY : -EPERM));
+            desk_put32(reply.data+12,(uint32_t)d->now_ns); desk_put32(reply.data+16,(uint32_t)(d->now_ns>>32));
+            uint64_t next=d->next_frame_ns>d->now_ns ? d->next_frame_ns : d->now_ns;
+            desk_put32(reply.data+20,(uint32_t)next); desk_put32(reply.data+24,(uint32_t)(next>>32));
+            close_attachments(d,m,-1);desk_queue(d,i,&reply);break;
+        }
+        if (p.resize_serial && replace_client_surface(d,i,m,&s,p.resize_serial)) return;
+        client_frame_ready(d,c);
+        struct desk_box content=desk_content(c), old=c->gfx_box;
+        struct desk_box region={p.x,p.y,(int32_t)p.width,(int32_t)p.height};
+        int changed=memcmp(&old,&region,sizeof(old)) || c->gfx_width!=p.source_w || c->gfx_height!=p.source_h;
+        c->gfx_box=region; c->gfx_width=p.source_w; c->gfx_height=p.source_h;
+        c->gfx_serial=p.serial; c->gfx_pending=1;
+        if (c->minimized || c->collapsed) { desk_gfx_complete(d,i,-EAGAIN,d->now_ns,d->now_ns+DESK_FRAME_NS); break; }
+        if (p.ui_w && p.ui_h) desk_damage_add(&d->damage,
+            (struct desk_box){content.x+(int)p.ui_x,content.y+(int)p.ui_y,(int)p.ui_w,(int)p.ui_h},d->width,d->height);
+        if (changed && old.w && old.h) {
+            old.x+=content.x; old.y+=content.y;
+            desk_damage_add(&d->damage,old,d->width,d->height);
+        }
+        struct desk_box dirty=region;
+        if (!changed && p.source_w && p.damage_w && p.damage_h) {
+            unsigned left=p.damage_x*p.width/p.source_w, top=p.damage_y*p.height/p.source_h;
+            unsigned right=((p.damage_x+p.damage_w)*p.width+p.source_w-1)/p.source_w;
+            unsigned bottom=((p.damage_y+p.damage_h)*p.height+p.source_h-1)/p.source_h;
+            dirty=(struct desk_box){p.x+(int)left,p.y+(int)top,(int)(right-left),(int)(bottom-top)};
+        }
+        /* No changed texels still needs a completion, but no upload. */
+        if (changed || (p.damage_w && p.damage_h)) {
+            dirty.x+=content.x; dirty.y+=content.y;
+            desk_damage_add(&d->damage,dirty,d->width,d->height);
+        }
+        if (!d->damage.count) desk_gfx_complete(d,i,-EAGAIN,d->now_ns,d->now_ns+DESK_FRAME_NS);
+        break;
+    }
     case DESK_GFX_QUERY: case DESK_GFX_BENCH: {
         if (!c->gfxdemo || !c->window || c->closing) {
             desk_message(&reply,DESK_TASK_RESULT,16); desk_put32(reply.data+4,p.serial);
@@ -425,12 +505,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     }
     case DESK_DAMAGE: {
         if (p.serial) {
-            void *pixels = d->ops.map(m->fds[0], PROT_READ);
-            if (!pixels || pixels == MAP_FAILED) { close_attachments(d, m, -1); desk_drop_client(d, i); return; }
-            desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
-            d->ops.unmap((void *)c->pixels, c->info.allocation_bytes); d->ops.close(c->surface);
-            c->pixels = pixels; c->surface = m->fds[0]; c->info = s; c->applied_serial = p.serial;
-            configure(d, i, 1);
+            if (replace_client_surface(d,i,m,&s,p.serial)) return;
             /* A superseded request already in flight may commit; keep the
              * newest frame geometry and clip this surface until its swap. */
         } else {
@@ -439,11 +514,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             if (!c->minimized && !c->collapsed) desk_damage_add(&d->damage, b, d->width, d->height);
         }
         /* A valid replacement surface can also carry the first rendered frame. */
-        if (c->awaiting_frame) {
-            c->launch_frame_pending = 1;
-            if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_DAMAGE,c->pid,0);
-        }
-        c->awaiting_frame = 0;
+        client_frame_ready(d,c);
         break;
     }
     case DESK_FILE_DROP:

@@ -63,6 +63,50 @@ static void benchmarks(void)
     assert(hardware>24 && uploads>40);
     puts("PASS fake surfaces: fill/copy/pattern, 16/24/32-bpp accounting, fallback, quarantine, mode change, upload error, stopped clock");
 }
+/* Independent pre-f2-59 barycentric oracle: exact coverage, division and
+ * texture/depth results must survive incremental span interpolation. */
+static int64_t reference_edge(struct gfx_vertex a,struct gfx_vertex b,int x,int y)
+{ return (int64_t)(b.x-a.x)*(y-a.y)-(int64_t)(b.y-a.y)*(x-a.x); }
+static int reference_top(struct gfx_vertex a,struct gfx_vertex b)
+{ return b.y<a.y || (b.y==a.y && b.x>a.x); }
+static void reference_triangle(struct gfx_scene *s,struct gfx_vertex a,struct gfx_vertex b,struct gfx_vertex c,int gouraud)
+{
+    int64_t area=reference_edge(a,b,c.x,c.y);if (!area) return;
+    if (area<0) { struct gfx_vertex t=b;b=c;c=t;area=-area; }
+    for (unsigned y=0;y<240;y++) for (unsigned x=0;x<320;x++) {
+        int64_t wa=reference_edge(b,c,x*16+8,y*16+8),wb=reference_edge(c,a,x*16+8,y*16+8),wc=reference_edge(a,b,x*16+8,y*16+8);
+        if (wa<0 || wb<0 || wc<0 || (!wa&&!reference_top(b,c)) || (!wb&&!reference_top(c,a)) || (!wc&&!reference_top(a,b))) continue;
+        unsigned inv=(unsigned)((wa*a.inv+wb*b.inv+wc*c.inv)/area),at=y*320+x;
+        if (!inv || inv<=s->depth[at]) continue;
+        unsigned u=(unsigned)((wa*a.u+wb*b.u+wc*c.u)/area)/inv,v=(unsigned)((wa*a.v+wb*b.v+wc*c.v)/area)/inv;
+        unsigned light=gouraud ? (unsigned)((wa*a.light+wb*b.light+wc*c.light)/area) : 173;
+        uint32_t colour=portrait[(v>255 ? 255 : v)*256+(u>255 ? 255 : u)];
+        s->pixels[at]=((((colour>>16)&255)*light/255)<<16)|((((colour>>8)&255)*light/255)<<8)|((colour&255)*light/255);
+        s->depth[at]=inv;
+    }
+}
+static void exact_interpolation(void)
+{
+    struct gfx_scene *expected=calloc(1,sizeof(*expected)),*actual=calloc(1,sizeof(*actual));assert(expected&&actual);
+    uint32_t seed=91;
+    for (unsigned sample=0;sample<30;sample++) {
+        struct gfx_vertex v[3];
+        for (unsigned j=0;j<3;j++) {
+            seed=seed*1664525+1013904223;v[j].x=(int)(seed%6000)-480;
+            seed=seed*1664525+1013904223;v[j].y=(int)(seed%4800)-480;
+            seed=seed*1664525+1013904223;v[j].inv=1+(int)(seed%65536);
+            seed=seed*1664525+1013904223;v[j].u=(int)(seed%256)*v[j].inv;
+            seed=seed*1664525+1013904223;v[j].v=(int)(seed%256)*v[j].inv;
+            seed=seed*1664525+1013904223;v[j].light=(int)(seed%256);
+        }
+        if (sample==0) { v[0].x=v[0].y=-16384;v[1].x=16384;v[1].y=-16384;v[2].x=-16384;v[2].y=16384; }
+        if (sample==1) { v[0].x=1;v[0].y=1;v[1].x=4000;v[1].y=4000;v[2].x=4001;v[2].y=4000; }
+        memset(actual,0,sizeof(*actual));memset(expected,0,sizeof(*expected));
+        gfx_triangle(actual,v[0],v[1],v[2],portrait,sample&1,173);reference_triangle(expected,v[0],v[1],v[2],sample&1);
+        assert(!memcmp(actual->pixels,expected->pixels,320*240*4));assert(!memcmp(actual->depth,expected->depth,320*240*4));
+    }
+    free(actual);free(expected);puts("PASS exact span interpolation against barycentric oracle: both windings, clipping, slivers and bounded extremes");
+}
 static void raster(void)
 {
     struct gfx_scene *s=&app.scene;memset(s,0,sizeof(*s));
@@ -87,9 +131,11 @@ static int request(void *ctx,unsigned op,unsigned index) { (void)ctx;assert(op==
 int main(int argc,char **argv)
 {
     assert(argc==3);FILE *f=fopen(argv[1],"rb");assert(f && fread(portrait,4,256*256,f)==256*256 && !fclose(f));
-    benchmarks();raster();du_init(&ui,pixels,760,640);gfx_attach(&app,&ui,portrait);
+    benchmarks();raster();exact_interpolation();du_init(&ui,pixels,760,640);gfx_attach(&app,&ui,portrait);
     gfx_advance(&app,1000000000ull);
-    for (unsigned i=1;i<=75;i++) gfx_advance(&app,1000000000ull+i*GFX_FRAME_NS);
+    assert(!app.frames); /* timer ticks cannot claim presented frames */
+    for (unsigned i=1;i<=75;i++) { gfx_advance(&app,1000000000ull+i*GFX_FRAME_NS);gfx_presented(&app,1000000000ull+i*GFX_FRAME_NS); }
+    assert(app.fps10==600);
     struct desk_packet p={.opcode=DESK_GFX_INFO,.width=1024,.height=768,.bpp=32,
         .accelerator={.driver=CIUKI_ACCEL_DRIVER_SAVAGE,.capabilities=3,.operations=123,.generation=9}};
     gfx_receive(&app,&p);p.opcode=DESK_SYSTEM_INFO;p.performance[0]=120;p.performance[4]=60000000;p.performance[5]=120000000;gfx_receive(&app,&p);
@@ -109,6 +155,9 @@ int main(int argc,char **argv)
     app.bench_running=0;app.accelerator=(struct ciuki_accel_info){0};app.results[0].error=-ENODEV;
     du_render(&ui);at_save(argv[2],"software-only",&ui);
     du_resize(&ui,pixels,560,360);du_render(&ui);at_click(&ui,180,18);du_render(&ui);
+    assert(app.scene.width==261 && app.scene.height==196);
+    du_resize(&ui,pixels,760,360);du_render(&ui);
+    assert(app.scene.width==320 && app.scene.height==240 && app.viewport.h>=240);
     p=(struct desk_packet){.opcode=DESK_GFX_INFO,.width=800,.height=600,.bpp=16,.accelerator={.generation=10}};
     app.bench_running=1;gfx_receive(&app,&p);assert(!app.bench_running && !app.results[0].samples && !app.results[0].error);
     du_release(&ui);puts("PASS deterministic pages, flat/Gouraud, exact Ciuki texture, pause/resume, fixed-step pacing, asynchronous benchmark progression, minimum size");return 0;

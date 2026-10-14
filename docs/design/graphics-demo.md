@@ -66,3 +66,77 @@ Decisions:
 Host evidence and remaining guest/hardware checks are in
 `build/codex/f2-52-report.md`; the f2-50 merge resolution and host checks are
 recorded in `build/codex/f2-52b-report.md`. QEMU is reserved for the lead.
+
+## f2-59 software frame budget (2026-10-14)
+
+Research: [Intel's Pentium II/III optimization manual, 245127-001](https://download.intel.com/design/PentiumII/manuals/24512701.pdf)
+(integer scheduling, division, memory access), the
+[X.Org MIT-SHM completion contract](https://xorg.freedesktop.org/archive/X11R7.5/doc/Xext/mit-shm.html)
+(the client must wait for completion before modifying shared pixels), and
+the OpenGL 2.1 coverage/interpolation reference above. Repository comparison:
+the old rasterizer divides 64-bit barycentric numerators per fragment;
+`gfx_paint` scales with two divisions per destination pixel and repaints all
+widgets; `du_window_present` compares every client row; the desktop visits
+chrome even for damage wholly inside opaque client content. Repeating toolkit
+timers and the desktop redraw both re-anchor deadlines to the current time.
+There is no refresh/vblank observation in this VBE software path.
+
+Decision: retain exact pixel-centre coverage, depth and perspective texturing,
+but walk covered scanline spans with quotient/remainder interpolants.
+Interpolate the cube's former 10 Hz rotation steps for distinct 60 Hz poses. Render
+at the viewport's native size only when the client fits 640x480; otherwise retain
+320x240 and compose a nearest-neighbour scene region inside the full-resolution
+UI surface. The preferred client size is 760x660, fitting a 640x480 scene (2x) at
+1024x768. Smaller non-integral viewports keep the available 4:3 area.
+Wide windows below 404 pixels high compact the status strip to reserve at
+least 320x240 without overlapping the packed source and controls.
+Integer enlargement expands one row and duplicates it with
+`rep movsd`; arbitrary ratios use exact quotient/remainder stepping, without
+per-pixel division or a large index table on the 4 KiB audited stack. Animation
+updates compare only that source region, sending its changed bounds. Static
+widgets and status text repaint only on UI changes or the FPS/status sample.
+
+The optional v2.1 `GFX_FRAME` request is launch-authorized like GFX_QUERY,
+without display access. Its ordinary form reuses the attached client surface.
+The 64-byte encoding is:
+serial, destination x/y/w/h, source w/h (source origin equals destination
+origin), source damage x/y/w/h, then ordinary UI damage x/y/w/h, all uint32.
+UI damage and the scene descriptor are applied atomically; this avoids an
+intermediate unscaled scene on the first frame. Source and destination must fit
+the client's existing surface, source dimensions cannot exceed destination
+dimensions, and damage must fit the source. A nonzero serial with the scene/damage
+words zero disables the region (ordinary UI damage may still be present).
+The descriptor persists for exposure/full
+reconstruction and is cleared on a surface swap. `GFX_PRESENTED` is 32 bytes:
+serial, signed result, completion ns (uint64), next nominal slot ns (uint64),
+and reserved zero. The client keeps at most one request outstanding and freezes
+surface writes until its reply; failed uploads retry without acknowledging
+success. A saturated reply queue retains one completion and its timestamp
+until the FIFO drains, keeping the producer frozen. Minimized/collapsed
+windows return EAGAIN and do not increase
+FPS. Successful replies count completed desktop presents, not timer ticks or
+measured vsync. The next slot follows an absolute 60 Hz phase, skipping missed
+slots without a catch-up burst. Overruns compare actual processing time with
+the full 16.67 ms budget; idle slots or a quick update crossing a phase boundary
+do not count as processing overruns. Slow renders retain the overrun/drop
+record. Sleeps are floored to the SDK's 1 ms clock;
+the final fraction yields instead of requesting a sleep beyond the slot.
+
+A replacement uses the 68-byte GFX_FRAME form: append the existing configure
+serial and attach one replacement surface. It obeys the existing v2.1 resize
+bounds/serial rules and commits the surface and scene descriptor together,
+before painting; CONFIGURE(COMMITTED) still releases the old client mapping.
+Both forms participate in the launch's first-damage/first-present markers.
+Ordinary toolkit clients retain their existing DAMAGE and resize messages.
+
+For an opaque client-only clip with no intersecting higher window/shadow or
+shell overlay, copy content straight to the mapped output without visiting
+chrome/background. Preserve XRGB's ignored high byte by normalization; never
+infer opacity from it. Mixed damage and occlusion retain the existing painter.
+The software LFB upload remains the kernel's existing presenter.
+
+Validation and the identical-flags before/after cycle breakdown are in
+`build/codex/f2-59-report.md`. Modern serialized TSC ticks divided by 1 GHz
+are directional estimates, not Pentium III retired cycles; model the T23
+upload separately at its previously measured 134 MB/s. Hardware FPS is the
+lead's acceptance check.

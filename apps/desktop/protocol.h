@@ -41,7 +41,8 @@ enum desk_opcode {
     DESK_TERMINAL_POWER,
     /* f2-52: desktop-launched Graphics Demo only; query or one fixed sample.
      * No client coordinates, display grants or hardware commands. */
-    DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT
+    DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT,
+    DESK_GFX_FRAME, DESK_GFX_PRESENTED /* f2-59: bounded scene region and completion */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */
@@ -71,6 +72,10 @@ struct desk_packet {
     struct ciuki_accel_info accelerator;
     uint32_t bpp;
     uint64_t benchmark[3]; /* destination bytes, elapsed ns, completed kernel ops */
+    uint32_t source_w, source_h, damage_x, damage_y, damage_w, damage_h;
+    uint32_t ui_x, ui_y, ui_w, ui_h;
+    uint32_t resize_serial; /* optional GFX_FRAME replacement attachment */
+    uint64_t completed_ns, next_frame_ns;
 };
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);
