@@ -7,6 +7,7 @@
 #include <ciuki/audio.h>
 #include <ciuki/audio_vm.h>
 #include <ciuki/opl3.h>
+#include <time.h>
 
 static unsigned audio_wakes;
 void audio_wake(void) { audio_wakes++; }
@@ -482,6 +483,80 @@ static void opl_note(struct dosvm *v, struct opl3_chip *ref)
     }
 }
 static int32_t opl_ref[8192][2];
+/* F4-28: F4-24's 10 ms / 480-frame callback replay with real DSP/DMA,
+ * queued PCM, event-driven FM, mixer and publication taps. CPU time excludes
+ * nice-19 preemption; this is a regression ceiling, not TCG qualification. */
+static uint64_t vm_cpu_ns(void)
+{
+    struct timespec t; CHECK(!clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t));
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
+static void test_vm_source_budget(void)
+{
+    for (unsigned variant = 0; variant < 2; variant++) {
+        vq_begin();
+        struct dosvm *v = audio_vm_create(); unity(v); dsp_reset(v);
+        vq_time(1200); vq_run(2);
+        uint8_t bytes[4096];
+        for (unsigned i = 0; i < sizeof(bytes); i++) bytes[i] = (uint8_t)(i * 37 + 11);
+        CHECK(!dosvm_write(v, 0x30000, bytes, sizeof(bytes)));
+        unsigned rate = variant ? 22050 : 11025;
+        dsp(v, 0x41); dsp(v, rate >> 8); dsp(v, rate);
+        if (variant) {
+            dma16(v, 5, 0x30000, 2047, true);
+            dsp(v, 0xB6); dsp(v, 0x30); dsp(v, 0xFF); dsp(v, 3); /* 1024 words / 512 stereo frames */
+            opl_note(v, 0);
+        } else {
+            dma8(v, 1, 0x30000, 4095, true);
+            dsp(v, 0xC6); dsp(v, 0); dsp(v, 0xFF); dsp(v, 3);
+        }
+        /* Non-unity CT1745, output, source and software master gains. */
+        for (unsigned c = 0; c < 2; c++) {
+            mixer_w(v, 0x30 + c, 28 << 3); mixer_w(v, 0x32 + c, 25 << 3);
+            mixer_w(v, 0x34 + c, 20 << 3); mixer_w(v, 0x41 + c, 0x40);
+        }
+        CHECK(!audio_vm_set_gain(dosvm_key(v), 75, 63, false));
+        audio.master.left = 50; audio.master.right = 37;
+        uint64_t base = audio.output - AUDIO_LEAD * AUDIO_QUANTUM, published = AUDIO_LEAD;
+        uint64_t cost[3] = {0}, peak = 0;
+        unsigned calls[3] = {0}; uint32_t digest = 2166136261u;
+        for (unsigned callback = 0; callback < 400; callback++) {
+            for (unsigned tick = 0; tick < 10; tick++) {
+                ms(1); a_in(v, SB + (variant ? 0xF : 0xE));
+                v->monitor.pic[0].irr = 0;
+            }
+            audio.played_output = base + (callback + 1) * 480u;
+            uint64_t retired = (callback + 1) * 480u / AUDIO_QUANTUM;
+            unsigned periods = (unsigned)(retired + AUDIO_LEAD - published);
+            CHECK(periods == 1 || periods == 2);
+            uint64_t begin = vm_cpu_ns();
+            for (unsigned period = 0; period < periods; period++) {
+                audio_mix(vq_out, AUDIO_QUANTUM); audio_vm_published(); published++;
+                for (unsigned k = 0; k < AUDIO_QUANTUM; k++) {
+                    uint16_t values[2] = {(uint16_t)vq_out[k].left, (uint16_t)vq_out[k].right};
+                    for (unsigned c = 0; c < 2; c++) {
+                        digest = (digest ^ (uint8_t)values[c]) * 16777619u;
+                        digest = (digest ^ (uint8_t)(values[c] >> 8)) * 16777619u;
+                    }
+                }
+            }
+            uint64_t ns = vm_cpu_ns() - begin;
+            calls[periods]++; cost[periods] += ns; if (ns > peak) peak = ns;
+            CHECK(published - retired == AUDIO_LEAD);
+        }
+        struct audio_vm_stats st = vstats(v);
+        CHECK(calls[1] == 50 && calls[2] == 350 && st.pcm.frames > 180000);
+        CHECK(!st.starved && !st.skips && !st.late_frames && !st.seq_gaps);
+        CHECK(!variant || st.opl.frames > 180000);
+        CHECK(digest == (variant ? 0x078b7b84u : 0xb2851cb2u)); /* pre-change output pins */
+        CHECK(cost[1] / calls[1] < 100000 && cost[2] / calls[2] < 200000 && peak < 1000000);
+        printf("VM cost replay: rate=%u bits=%u channels=%u fm=%u single_ns=%llu double_ns=%llu max_ns=%llu digest=%08x PASS\n",
+               rate, variant ? 16 : 8, variant ? 2 : 1, variant,
+               (unsigned long long)(cost[1] / calls[1]), (unsigned long long)(cost[2] / calls[2]),
+               (unsigned long long)peak, digest);
+        dsp_reset(v); destroy(v, true); vq_end(); empty();
+    }
+}
 static void test_vm_opl(void)
 {
     vq_begin();
@@ -572,7 +647,7 @@ static void test_vm_physical_rate(void)
 
 static void test_vm_audio(void)
 {
-    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_default_level(); test_vm_opl(); test_vm_physical_rate();
+    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_default_level(); test_vm_opl(); test_vm_physical_rate(); test_vm_source_budget();
     audio.ready = false;
     puts("DOS VM audio output: PASS (attach/revoke/release, every PCM layout exact at 2:1, DAC, ADPCM refused, 32 fresh blocks and the 16-bit phase through the mixer, pause gap kept, stalled guest beside native and a second VM, hold/skip/re-anchor without replay, CT1745 and source gains, OPL3 exact against a reference chip, routing, late events, GAP)");
 }

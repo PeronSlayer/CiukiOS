@@ -17,6 +17,13 @@
 #define VM_DAC_HOLD (DOSVM_AUDIO_HZ / 10u)  /* a direct-DAC level is held 100 ms */
 #define VM_HZ DOSVM_AUDIO_HZ                /* timeline and mixer rate: 48 kHz both */
 _Static_assert(DOSVM_AUDIO_HZ == AUDIO_RATE && OPL3_RATE == AUDIO_RATE, "one 48 kHz clock");
+/* WAVE_TABLEMUL has S16 waves and U16 attenuation. At most 36 operators,
+ * conservatively all doubled as drums, plus S16 PCM and a held DAC level.
+ * CT1745's largest gain is < 8; these bounds also cover cancellation. */
+#define VM_RAW_BOUND (36u * 32768u * 2u + 65536u)
+#define VM_MIX_BOUND (VM_RAW_BOUND * 8u)
+_Static_assert(VM_MIX_BOUND <= INT32_MAX / 100u, "VM diagnostic percentage fits int32");
+_Static_assert(VM_MIX_BOUND * DOSVM_LIMIT <= INT32_MAX / 2u, "VM resampler delta fits int32");
 
 /* Pending peaks belong to a mixed quantum; only successful publication
  * admits them to the one-second window. Diagnostics only observe it. */
@@ -40,6 +47,7 @@ struct vm_slot {
     /* PCM stream: frame k at origin + k * 48000 / rate. */
     bool stream, starving, gap_ahead; /* gap_ahead: the next queued segment does not continue it */
     uint32_t rate, frac;  /* frac: position between idx and idx + 1, in 1/48000 */
+    uint32_t advance[2], remainder; /* precomputed step with/without a phase carry */
     uint64_t origin, idx, win_first;
     unsigned win_count;
     bool seg_known;       /* the queue head segment feeds the stream */
@@ -80,8 +88,62 @@ static volatile bool template_ready;
 static uint32_t level_gain(unsigned n) { return (n & 31u) * 65536u / 31u; }
 static const uint32_t output_gain[4] = { 65536, 130762, 260904, 520571 };
 
-static int16_t sat16(int64_t v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : (int16_t)v; }
-static void level_peak(uint32_t *peak, int64_t value)
+/* One i686 widening multiply of two 32-bit operands, then a fixed shift.
+ * Q16 must retain its low bits: reducing the gain precision changes pins. */
+static uint32_t gain_product(uint32_t a, uint32_t b)
+{
+    return (uint32_t)(((uint64_t)a * b) >> 16);
+}
+static uint32_t combined_gain(unsigned master, unsigned level, unsigned out, unsigned source)
+{
+    uint32_t gain = gain_product(level_gain(master), level_gain(level));
+    gain = gain_product(gain, output_gain[out & 3]);
+    return gain * source / 100; /* at most 520571 * 100 */
+}
+static int32_t gained_sample(int32_t sample, uint32_t gain)
+{
+    return (int32_t)(((int64_t)sample * (int32_t)gain) >> 16);
+}
+static int32_t pcm_interpolate(int16_t a, int16_t b, unsigned phase)
+{
+    int32_t delta = (int32_t)b - a;
+    uint32_t magnitude = (uint32_t)(delta < 0 ? -delta : delta);
+    int32_t step = (int32_t)(magnitude * phase / VM_HZ); /* 65535 * 47999 < 2^32 */
+    return a + (delta < 0 ? -step : step);
+}
+/* Full-width timeline / small divisor, only at stream/quantum boundaries.
+ * Base-65536 digits keep each dividend in uint32 for divisors <= 65536
+ * (DSP rates are clamped to 45000, timeline/output rates are <= 48000).
+ * Unlike casting uptime to uint32, this also works after a clock wrap. */
+static uint64_t timeline_div(uint64_t value, uint32_t divisor, uint32_t *remainder)
+{
+    uint32_t high = (uint32_t)(value >> 32), low = (uint32_t)value;
+    uint64_t quotient = (uint64_t)(high / divisor) << 32;
+    uint32_t part = ((high % divisor) << 16) | (low >> 16);
+    quotient |= (uint64_t)(part / divisor) << 16;
+    part = ((part % divisor) << 16) | (low & 65535u);
+    quotient |= part / divisor;
+    if (remainder) *remainder = part % divisor;
+    return quotient;
+}
+static void pcm_step(struct vm_slot *s, uint32_t rate)
+{
+    s->rate = rate;
+    s->advance[0] = rate / VM_HZ; s->advance[1] = s->advance[0] + 1;
+    s->remainder = rate % VM_HZ;
+}
+/* Delta between four amplified VM sums fits int32, but delta * phase need
+ * not. Divide the magnitude first and preserve the exact remainder. */
+static int32_t mix_interpolate(int32_t a, int32_t b, unsigned phase, unsigned rate)
+{
+    int32_t delta = b - a;
+    uint32_t magnitude = (uint32_t)(delta < 0 ? -delta : delta);
+    int32_t step = (int32_t)((magnitude / rate) * phase + (magnitude % rate) * phase / rate);
+    return a + (delta < 0 ? -step : step);
+}
+
+static int16_t sat16(int32_t v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : (int16_t)v; }
+static void level_peak(uint32_t *peak, int32_t value)
 {
     int32_t v = sat16(value);
     uint32_t magnitude = (uint32_t)(v < 0 ? -v : v);
@@ -106,7 +168,7 @@ static uint32_t fnv_frame(uint32_t h, int16_t l, int16_t r)
     for (unsigned i = 0; i < 4; i++) h = (h ^ b[i]) * 16777619u;
     return h;
 }
-static void tap_frame(struct audio_vm_tap *t, int64_t left, int64_t right)
+static void tap_frame(struct audio_vm_tap *t, int32_t left, int32_t right)
 {
     int16_t s[2] = { sat16(left), sat16(right) };
     if (!s[0] && !s[1]) return;
@@ -115,7 +177,7 @@ static void tap_frame(struct audio_vm_tap *t, int64_t left, int64_t right)
     for (unsigned c = 0; c < 2; c++) {
         int32_t v = s[c];
         uint32_t magnitude = (uint32_t)(v < 0 ? -v : v);
-        t->sumsq[c] += (uint64_t)((int64_t)v * v);
+        t->sumsq[c] += (uint32_t)(v * v); /* clipped S16 square fits int32 */
         if (magnitude > t->peak[c]) t->peak[c] = magnitude;
         if (t->last[c] < 0 && v >= 0) t->crossings[c]++;
         t->last[c] = v;
@@ -335,16 +397,17 @@ static int stream_start(struct vm_slot *s, uint32_t token, uint64_t t, uint64_t 
             }
             continue;
         }
-        uint64_t rate = b.rate ? b.rate : 1;
+        uint32_t rate = b.rate ? b.rate : 1;
         if (b.start * rate + (uint64_t)b.offset * VM_HZ > t * rate) {
-            *future = b.start + ((uint64_t)b.offset * VM_HZ) / rate;
+            *future = b.start + timeline_div((uint64_t)b.offset * VM_HZ, rate, 0);
             return START_FUTURE; /* the head's next frame is still ahead: a gap */
         }
-        uint64_t num = (t - b.start) * rate, p = num / VM_HZ;
-        uint32_t frac = (uint32_t)(num % VM_HZ);
+        uint64_t num = (t - b.start) * rate;
+        uint32_t frac;
+        uint64_t p = timeline_div(num, VM_HZ, &frac);
         if (p < b.offset) { p = b.offset; frac = 0; }
         if (!same_segment(s, &b)) adopt(s, &b);
-        s->origin = b.start; s->rate = (uint32_t)rate;
+        s->origin = b.start; pcm_step(s, rate);
         s->win_first = b.offset; s->win_count = 0;
         /* Drop the late frames b.offset .. p-1. */
         bool closed = false;
@@ -376,7 +439,7 @@ static void pcm_render(struct vm_slot *s, uint32_t token, const struct dosvm_aud
     bool dsp = info->active && !info->paused;
     for (unsigned k = 0; k < n; k++) {
         uint64_t t = s->next_t + k;
-        int64_t left = 0, right = 0;
+        int32_t left = 0, right = 0;
         if (!s->stream && t >= wait) {
             uint64_t future = t + n;
             int r = stream_start(s, token, t, &future);
@@ -394,10 +457,12 @@ static void pcm_render(struct vm_slot *s, uint32_t token, const struct dosvm_aud
             } else {
                 const int16_t *a = s->win[s->idx - s->win_first];
                 const int16_t *b = s->idx + 1 < s->win_first + s->win_count ? s->win[s->idx + 1 - s->win_first] : a;
-                left = a[0] + ((int64_t)b[0] - a[0]) * s->frac / VM_HZ;
-                right = a[1] + ((int64_t)b[1] - a[1]) * s->frac / VM_HZ;
-                s->frac += s->rate;
-                while (s->frac >= VM_HZ) { s->frac -= VM_HZ; s->idx++; }
+                left = pcm_interpolate(a[0], b[0], s->frac);
+                right = pcm_interpolate(a[1], b[1], s->frac);
+                s->frac += s->remainder;
+                bool carry = s->frac >= VM_HZ;
+                if (carry) s->frac -= VM_HZ;
+                s->idx += s->advance[carry];
             }
         }
         if (!s->stream && s->starving) s->stats.starved++;
@@ -470,6 +535,44 @@ static void skip_to(struct vm_slot *s, uint32_t token, uint64_t t)
     }
     s->stream = false; s->starving = false;
 }
+static bool mix_samples(struct vm_slot *s, const struct dosvm_audio_info *info, int64_t (*sums)[2], unsigned frames)
+{
+    uint32_t gp[2], go[2];
+    unsigned master[2];
+    for (unsigned c = 0; c < 2; c++) {
+        unsigned source = s->muted ? 0 : s->gain[c];
+        gp[c] = combined_gain(info->master[c], info->voice[c], info->output_gain[c], source);
+        go[c] = combined_gain(info->master[c], info->fm[c], info->output_gain[c], source);
+        master[c] = c ? audio.master.right : audio.master.left;
+        if ((audio.master_in_codec || audio.master_in_hardware) && master[c]) master[c] = 100;
+        if (audio.master.mute) master[c] = 0;
+    }
+    bool sound = false;
+    for (unsigned k = 0; k < frames; k++) {
+        int32_t p[2], o[2];
+        for (unsigned c = 0; c < 2; c++) {
+            p[c] = gained_sample(pcm_buf[k * 2 + c], gp[c]);
+            o[c] = gained_sample(opl_buf[k * 2 + c], go[c]);
+            int32_t combined = p[c] + o[c];
+            sums[k][c] += combined;
+            level_peak(&s->level.pending[0], p[c]);
+            level_peak(&s->level.pending[1], o[c]);
+            /* Conservative DBOPL bound: 36 operators * 32768 * 2 (drums),
+             * plus S16 PCM and DAC, amplified < 8: combined * 100 < 2^31.
+             * Percentage truncation is toward zero, as before. */
+            level_peak(&s->level.pending[2], combined * (int32_t)master[c] / 100);
+        }
+        if (p[0] || p[1] || o[0] || o[1]) sound = true;
+        tap_frame(&s->stats.pcm, p[0], p[1]);
+        tap_frame(&s->stats.opl, o[0], o[1]);
+        if (!s->head_started && (o[0] || o[1])) s->head_started = true;
+        if (s->head_started && s->stats.opl_head_frames < AUDIO_VM_HEAD) {
+            s->stats.opl_head_digest = fnv_frame(s->stats.opl_head_digest, sat16(o[0]), sat16(o[1]));
+            s->stats.opl_head_frames++;
+        }
+    }
+    return sound;
+}
 static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*sums)[2], unsigned frames, uint64_t output, uint64_t played)
 {
     struct dosvm_audio_info info;
@@ -526,35 +629,7 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
     s->rendered_to = output + frames;
     s->stats.rendered += frames;
 
-    int64_t gp[2], go[2];
-    for (unsigned c = 0; c < 2; c++) {
-        int64_t master = level_gain(info.master[c]), out = output_gain[info.output_gain[c] & 3];
-        int64_t source = s->muted ? 0 : s->gain[c];
-        gp[c] = (((master * level_gain(info.voice[c])) >> 16) * out >> 16) * source / 100;
-        go[c] = (((master * level_gain(info.fm[c])) >> 16) * out >> 16) * source / 100;
-    }
-    bool sound = false;
-    for (unsigned k = 0; k < frames; k++) {
-        int64_t p[2], o[2];
-        for (unsigned c = 0; c < 2; c++) {
-            p[c] = ((int64_t)pcm_buf[k * 2 + c] * gp[c]) >> 16;
-            o[c] = ((int64_t)opl_buf[k * 2 + c] * go[c]) >> 16;
-            sums[k][c] += p[c] + o[c];
-            level_peak(&s->level.pending[0], p[c]);
-            level_peak(&s->level.pending[1], o[c]);
-            unsigned master = c ? audio.master.right : audio.master.left;
-            if ((audio.master_in_codec || audio.master_in_hardware) && master) master = 100;
-            level_peak(&s->level.pending[2], audio.master.mute ? 0 : (p[c] + o[c]) * master / 100);
-        }
-        if (p[0] || p[1] || o[0] || o[1]) sound = true;
-        tap_frame(&s->stats.pcm, p[0], p[1]);
-        tap_frame(&s->stats.opl, o[0], o[1]);
-        if (!s->head_started && (o[0] || o[1])) s->head_started = true;
-        if (s->head_started && s->stats.opl_head_frames < AUDIO_VM_HEAD) {
-            s->stats.opl_head_digest = fnv_frame(s->stats.opl_head_digest, sat16(o[0]), sat16(o[1]));
-            s->stats.opl_head_frames++;
-        }
-    }
+    bool sound = mix_samples(s, &info, sums, frames);
     s->busy = sound || s->stream || s->hold || s->ev_count || s->dac_until > s->next_t ||
               (s->opl_used && !opl3_silent(&s->chip)) || info.active || info.blocks_queued || info.events_queued;
 }
@@ -579,7 +654,8 @@ static void vm_mix_48(int64_t (*sums)[2], unsigned frames, uint64_t output, uint
  * persistent rational phase and two cached lookahead frames. Native streams
  * already convert directly to the effective output rate in mixer.c. */
 #define VM_RATE_WINDOW (AUDIO_QUANTUM * 48000u / 44100u + 4u)
-static int64_t vm_rate_samples[VM_RATE_WINDOW][2], vm_rate_cache[2][2];
+static int64_t vm_rate_samples[VM_RATE_WINDOW][2];
+static int32_t vm_rate_cache[2][2];
 static uint64_t vm_rate_next;
 static unsigned vm_rate_cached;
 static uint32_t vm_rate_epoch;
@@ -590,25 +666,27 @@ void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
     if (rate==VM_HZ) { vm_rate_cached=0; vm_mix_48(sums,frames,audio.output,audio.played_output); return; }
     /* Only the directed 44.1 kHz and 48 kHz physical rates are admitted. */
     if (rate!=44100 || !frames) return;
-    uint64_t first=audio.output*VM_HZ/rate;
-    unsigned phase=(unsigned)(audio.output*VM_HZ%rate);
+    uint32_t phase;
+    uint64_t first=timeline_div(audio.output*VM_HZ,rate,&phase);
     unsigned count=(phase+(frames-1)*VM_HZ)/rate+2;
-    uint64_t played=audio.played_output*VM_HZ/rate;
+    uint64_t played=timeline_div(audio.played_output*VM_HZ,rate,0);
     if (vm_rate_next!=audio.output || vm_rate_epoch!=rate_epoch) vm_rate_cached=0;
     memset(vm_rate_samples,0,sizeof(vm_rate_samples));
-    for (unsigned i=0;i<vm_rate_cached;i++) memcpy(vm_rate_samples[i],vm_rate_cache[i],sizeof(vm_rate_cache[0]));
+    for (unsigned i=0;i<vm_rate_cached;i++) for (unsigned c=0;c<2;c++) vm_rate_samples[i][c]=vm_rate_cache[i][c];
     for (unsigned i=vm_rate_cached;i<count;) {
         unsigned take=count-i; if (take>AUDIO_QUANTUM) take=AUDIO_QUANTUM;
         vm_mix_48(vm_rate_samples+i,take,first+i,played); i+=take;
     }
     unsigned index=0;
     for (unsigned i=0;i<frames;i++) {
-        for (unsigned c=0;c<2;c++) sums[i][c]+=vm_rate_samples[index][c]+
-            (vm_rate_samples[index+1][c]-vm_rate_samples[index][c])*phase/rate;
+        for (unsigned c=0;c<2;c++) {
+            int32_t a=(int32_t)vm_rate_samples[index][c], b=(int32_t)vm_rate_samples[index+1][c];
+            sums[i][c]+=mix_interpolate(a,b,phase,rate);
+        }
         phase+=VM_HZ; index+=phase/rate; phase%=rate;
     }
     vm_rate_cached=count-index;
-    for (unsigned i=0;i<vm_rate_cached;i++) memcpy(vm_rate_cache[i],vm_rate_samples[index+i],sizeof(vm_rate_cache[0]));
+    for (unsigned i=0;i<vm_rate_cached;i++) for (unsigned c=0;c<2;c++) vm_rate_cache[i][c]=(int32_t)vm_rate_samples[index+i][c];
     vm_rate_next=audio.output+frames; vm_rate_epoch=rate_epoch;
 }
 void audio_vm_tap(const struct audio_frame *out, unsigned frames)
