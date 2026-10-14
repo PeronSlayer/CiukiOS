@@ -226,7 +226,7 @@ void klog(const char *f,...) {(void)f;}
             '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/desktop/desktop_gate_test.c'),
             *(str(ROOT/'apps/desktop'/n) for n in ('client.c','protocol.c','input.c','compositor.c','theme.c')),
             *(str(ROOT/'apps/libdeskui'/n) for n in ('icons.c','icon_map.c','draw.c')),  # desktop.c's shell icons
-            *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','autoplay.c','autoplay_content.c','sounds.c','settings.c','settings_io.c','wallpaper.c','wallpaper_io.c','image.c','keymap.c','folder.c','../files/model.c','../files/transfer.c','../files/vfs.c')),  # desktop shell
+            *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','autoplay.c','autoplay_content.c','sounds.c','settings.c','settings_io.c','wallpaper.c','wallpaper_io.c','image.c','keymap.c','folder.c','../files/model.c','../files/transfer.c','../files/vfs.c','sound_storage.c','../../sdk/libreg/registry.c','../../sdk/libreg/storage.c','../../sdk/libreg/hardware.c')),  # desktop shell (f4-18: master preference through libreg)
             *bridge,
             '-o',str(binary)],check=True,env=env)
         spec=importlib.util.spec_from_file_location('first_frame_portrait',ROOT/'apps/desktop/convert_portrait.py')
