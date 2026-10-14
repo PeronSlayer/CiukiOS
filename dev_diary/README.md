@@ -125,3 +125,4 @@ Documenti di design, validazione, fonti esterne.
 | [Immagine 445e91c7: giro del pomeriggio del 14 ottobre (nove direttive)](2026-10-14-04-immagine-445e91c7.md) | 14 ott | modifiche (kernel, driver, VM DOS, desktop, giochi), immagine |
 | [Immagine ce2e6ce9: giro della sera del 14 ottobre (sei direttive)](2026-10-14-05-immagine-ce2e6ce9.md) | 14 ott | modifiche (kernel, driver, desktop), immagine |
 | [Immagine 66843edc: giro della notte del 14 ottobre (sei direttive)](2026-10-14-06-immagine-66843edc.md) | 14 ott | modifiche (kernel, driver, desktop, tema), immagine |
+| [Revisione incrociata del contratto Win32 F5](2026-10-14-07-revisione-contratto-win32-f5.md) | 14 ott | analisi (fonti, contratti, dipendenze, verifiche host) |
