@@ -4,6 +4,45 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f1-55: first idle budget and retained raw status
+
+Research rechecked on 2026-10-14 against
+[RE046-B, printed p. 231](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf),
+[X.Org `WaitIdleEmpty4` and `SavageInitStatus`](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c)
+and [Linux `savage4_waitidle` and chip selection](https://codebrowser.dev/linux/linux/drivers/video/fbdev/savage/savagefb_driver.c.html).
+The manual assigns MM48C60 bits 16:0 to occupied command entries, 17 to
+BCI idle, 18/19 to 3D/2D idle, 20 to motion-compensation idle, 22 to master
+idle and 23 to page-flip pending; bit 21 and bits 31:24 are reserved.
+X.Org selects the same `e1ffff/e00000` empty-and-idle predicate for Savage4,
+ProSavage and SuperSavage. Linux selects its `a00000/a00000` idle-only
+predicate for both Savage4 and SuperSavage. Neither source establishes a
+special SuperSavage FIFO decoration to discard. The directive's proposed
+chip-specific mask difference is therefore unconfirmed. Retain the strict
+X.Org predicate for 5333:8c2e and the existing complete Rev-B alternative
+`cfffff/4e0000`; never accept Linux's idle-only value or infer a mask from
+an incomplete signature. Decorations outside the selected mask are allowed.
+
+This amendment supersedes f1-27's pacing for the first wait after CR66 reset.
+That wait reads immediately, then every 1 ms, through the existing 20 ms
+budget (at most 21 reads even if the clock stops). Capture the first eight
+raw samples and their measured elapsed times. Emit them after polling, along
+with the original first-raw record and any selected mask. Defer verbose
+MM48C60 transport completion logging too: synchronous COM1 logging would
+otherwise consume the deadline before a second read. Later waits retain the
+5 us interval, 256-read cap and 20 ms deadline. A dead window, contradictory
+layout or failed delay still stops immediately. This changes neither reset
+controls nor the idle proof needed before CPU access.
+
+Cache the last raw MM48C60 and include `status`/`status_valid` in activation
+and quarantine records, including periodic records. Preserve the fault value
+when a quarantined engine is subsequently observed for CPU safety. After a
+failed initialization with an observed status, the existing persistence thread
+writes and commits `accel=attempt\nstatus=XXXXXXXX\n` outside presenter/device-work
+locks. It never clears the attempt on failure. A failed diagnostic update
+retains the original nonempty attempt and reports its error; failures before
+the first status read retain the original marker without inventing a value.
+An interrupted or annotated nonempty attempt still blocks the next boot.
+
 ## f1-49: VGA ports, independent engine probe and background persistence
 
 Research rechecked on 2026-10-13 against S3's

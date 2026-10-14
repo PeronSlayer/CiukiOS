@@ -82,7 +82,7 @@ bool kwork_queue(kwork_fn fn, void *arg)
  * An interrupted attempt is tested by retaining only disk_marker. */
 static struct vfs settings_vfs;
 static struct fat_volume settings_volume;
-static char disk_marker[16], cache_marker[16];
+static char disk_marker[64], cache_marker[64];
 static unsigned disk_size, cache_size, marker_commits;
 static bool marker_exists, table_open, marker_open, marker_error, clear_error;
 static unsigned marker_fault;
@@ -102,7 +102,9 @@ int vfs_open(struct vfs_table *t,const char *path,unsigned flags,enum vfs_share 
 }
 int vfs_write(struct vfs_table *t,int fd,const void *buf,size_t n,size_t *done)
 {
-    CHECK(t==&attempt_table && fd==0 && marker_open && n==14 && !memcmp(buf,"accel=attempt\n",n));
+    CHECK(t==&attempt_table && fd==0 && marker_open && !locks && !initializing);
+    CHECK((n==14 || n==30) && !memcmp(buf,"accel=attempt\n",14));
+    if (n==30) CHECK(!memcmp((const char *)buf+14,"status=",7) && ((const char *)buf)[29]=='\n');
     memcpy(cache_marker,buf,n); cache_size=n; *done=marker_fault==3 ? n-1 : n; return marker_fault==4 ? -FS_EIO : 0;
 }
 int vfs_truncate(struct vfs_table *t,int fd,uint64_t n)
@@ -132,7 +134,7 @@ struct model {
     unsigned status_reads, delays, reset_phase;
     bool contradictory;
     bool control_reserved;
-    uint64_t reset_set_us, reset_clear_us, last_status_us;
+    uint64_t reset_set_us, reset_clear_us, last_status_us, first_status_us, idle_after_us;
     uint32_t status_value;
     uint64_t us;
     bool exact_clock, last_status_busy;
@@ -198,8 +200,11 @@ static uint32_t model_read(void *ctx,uint32_t offset)
         CHECK(p->reset_phase==2 && p->reset_set_us>=10000 && p->reset_clear_us>=10000);
         if (p->last_status_busy) CHECK(p->us-p->last_status_us>=POLL_US);
         p->last_status_us=p->us; p->status_reads++;
+        if (p->status_reads==1) p->first_status_us=p->us;
         if (p->dead) value=UINT32_MAX;
         else if (p->wrong_offset || p->stuck) value=0;
+        else if (p->idle_after_us && p->us-p->first_status_us<p->idle_after_us)
+            value=(p->status_value ? p->status_value : 0x00e00000u) | 1u;
         else if (p->busy) { p->busy--; value=0x00e00001u; }
         else if (p->contradictory && p->status_reads>1) value=0x004e0000;
         else value=p->status_value ? p->status_value : 0x00e00000u;
@@ -451,8 +456,10 @@ static void failures_and_fallback(void)
     CHECK(test_engine.ops.stop(&test_engine)==-EIO);
     unsigned packets=m.packets;
     m.stuck=false; m.partial=false;
+    uint32_t fault_status=test_engine.status;
     CHECK(!fbdev_fill(&r,0x102030)); /* idle now proven, quarantined software fill */
     CHECK(m.packets==packets && m.fault_count==1 && test_engine.quarantined);
+    CHECK(test_engine.status==fault_status); /* original quarantine observation */
     CHECK(fbdev_console_begin()); fbdev_console_end();
     struct savage_io io=model_io();
     CHECK(savage2d_start(&test_engine,&io,&device,true,m.cursor_page,0x100000)==-EIO);
@@ -506,6 +513,7 @@ static void glue_stalled_clock(uint32_t status)
     tracing = true; trace_last = UINT32_MAX; step_count = accel_count = 0;
     struct savage_io io = model_io(); io.read32=hw_read; io.write32=hw_write; io.now_us=hw_now;
     struct savage2d e = {0};
+    unsigned delays=m.delays;
     CHECK(savage2d_start(&e, &io, &device, true, NULL, 0) == -EIO);
     CHECK(e.quarantined && !e.touched && !e.active && e.idle_waits == 1 && e.timeouts == 1);
     CHECK(step_count>=14);
@@ -515,6 +523,9 @@ static void glue_stalled_clock(uint32_t status)
     CHECK(log_matches(status==UINT32_MAX ? "op=r32 reg=48c60 value=ffffffff" : "op=r32 reg=48c60 value=00000000")==1);
     for (unsigned i=0;i<step_count && i<128;i++) CHECK(strstr(step_log[i]," value="));
     CHECK(log_matches("savage status reg=48c60 raw=")==1 && !e.idle_mask);
+    CHECK(e.status==status && e.status_logged);
+    CHECK(log_matches("savage status sample=")== (status==UINT32_MAX ? 1u : STATUS_SAMPLES));
+    CHECK(m.delays-delays==(status==UINT32_MAX ? 2u : 2u+INITIAL_POLLS-1));
     tracing = false; registers = NULL; g_boot.flags = 0; free(window);
     finish();
 }
@@ -548,7 +559,7 @@ static void run_accel_work(void)
         kwork_fn fn=queued_work; void *arg=queued_arg; queued_work=NULL;
         fn(arg);
         if (accel_marker_pending(NULL)) {
-            CHECK(accel_marker_request==ACCEL_MARKER_CLEAR);
+            CHECK(accel_marker_request==(acceleration ? ACCEL_MARKER_CLEAR : ACCEL_MARKER_STATUS));
             accel_marker_run();
         }
     }
@@ -577,7 +588,7 @@ static void deferred_boots(void)
         if (variant==1) m.dead=true;
         if (variant==2) m.wrong_offset=true;
         if (variant==3) m.locked=true;
-        if (variant==4) m.busy=24;
+        if (variant==4) m.busy=12;
         if (variant==5) { m.reg[BCI_CONTROL/4]=8; m.bci_locked=true; }
         if (variant==6) m.delay_failed=true;
         if (variant==7) { m.busy=8; m.status_value=0x004e0000; }
@@ -591,8 +602,9 @@ static void deferred_boots(void)
         software_desktop(); /* desktop can draw even before the callback */
         run_accel_work();
         bool ready=variant==4 || variant==7 || variant==10 || variant==11;
-        CHECK(!!acceleration==ready && marker_commits==(ready ? 2u : 1u));
-        CHECK(disk_size==(ready ? 0u : 14u) && m.status_reads<=WAIT_POLLS+1);
+        bool annotated=!ready && engine.status_logged;
+        CHECK(!!acceleration==ready && marker_commits==((ready || annotated) ? 2u : 1u));
+        CHECK(disk_size==(ready ? 0u : annotated ? 30u : 14u) && m.status_reads<=INITIAL_POLLS+1);
         CHECK(log_matches(ready ? "[accel] savage ready" : "[accel] savage quarantined reason=")==1);
         if (variant==1 || variant==3 || variant==6 || variant==12) CHECK(!m.status_reads);
         else CHECK(log_matches("savage status reg=48c60 raw=")==1);
@@ -892,6 +904,96 @@ static void activation_timing(void)
         finish();
     }
 }
+static void initial_idle_diagnostics(void)
+{
+    for (unsigned variant=0;variant<9;variant++) {
+        boot_fixture_accel(false); m.exact_clock=true;
+        if (!variant) binding_gpu.device=0x8a22; /* unchanged Savage4 fake */
+        else m.status_value=0xfffe0000; /* idle plus ignored SuperSavage bits */
+        if (variant==2) {
+            m.idle_after_us=18000;
+            simulated_trace_us=simulated_bytes=simulated_log_us=0;
+            accel_log_cost=serial_log_cost;
+        }
+        if (variant==3) m.status_value=0xff7e0000; /* complete Rev-B layout */
+        if (variant==4) m.status_value=0xfffe0001; /* occupied FIFO is still busy */
+        if (variant==5) m.status_value=0xffbe0000; /* Linux idle without X.Org bit 22 */
+        if (variant==6) m.status_value=UINT32_MAX;
+        if (variant==7) { m.stuck=true; m.frozen=true; }
+        if (variant==8) m.idle_after_us=21000;
+        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        bool ready=variant<4;
+        CHECK(!!acceleration==ready && engine.quarantined==!ready);
+        CHECK(!table_open && !marker_open && !locks && !initializing);
+        CHECK(marker_commits==2 && disk_size==(ready ? 0u : 30u));
+        uint32_t raw=variant==7 ? 0 : variant==8 ? 0xfffe0001 : m.status_value ? m.status_value : 0x00e00000;
+        CHECK(engine.status==raw && engine.status_logged);
+        unsigned samples=0;
+        for (unsigned i=0;i<accel_count && i<128;i++) {
+            const char *line=accel_log[i];
+            if (!strstr(line,"savage status sample=")) continue;
+            CHECK(log_number(line,"sample=")==samples);
+            CHECK(log_number(line," us=")== (variant==7 ? 0u : samples*1000u));
+            const char *at=strstr(line,"raw="); CHECK(at!=NULL);
+            uint32_t expected=variant==2 ? 0xfffe0001 : raw;
+            CHECK(at && strtoul(at+4,NULL,16)==expected);
+            samples++;
+        }
+        CHECK(samples==((variant==2 || variant==4 || variant==5 || variant==7 || variant==8) ? 8u : 1u));
+        if (ready) {
+            CHECK(engine.idle_mask==(variant==3 ? 0x00cfffffu : 0x00e1ffffu));
+            CHECK(engine.idle_value==(variant==3 ? 0x004e0000u : 0x00e00000u));
+            /* poll_us also includes the second, ordinary wait's transport
+             * trace cost; the samples prove the initial 1 ms cadence. */
+            CHECK(variant==2 ? engine.poll_us>=18000u : engine.poll_us==0);
+            CHECK(m.status_reads==(variant==2 ? 20u : 2u));
+            unsigned initial_samples=log_matches("savage status sample=");
+            software_desktop();
+            CHECK(engine.operations>0 && log_matches("savage status sample=")==initial_samples);
+        } else {
+            CHECK(!engine.touched && !m.engine_writes && !m.packets);
+            CHECK(m.status_reads==(variant==6 ? 1u : INITIAL_POLLS));
+            CHECK(m.us-m.first_status_us>= (variant==6 ? 0u : WAIT_US));
+            char status[64]; snprintf(status,sizeof(status),"status=%08x status_valid=1",raw);
+            CHECK(log_matches(status)>=2); /* terminal and periodic quarantine */
+            snprintf(status,sizeof(status),"accel=attempt\nstatus=%08x\n",raw);
+            CHECK(!memcmp(disk_marker,status,30));
+            software_desktop();
+        }
+        printf("savage initial idle variant=%u ready=%u reads=%u samples=%u status=%08x poll_us=%llu\n",
+            variant,ready,m.status_reads,samples,engine.status,(unsigned long long)engine.poll_us);
+        accel_log_cost=NULL; finish();
+    }
+    /* An annotated attempt blocks a read-only reboot without any bus access. */
+    boot_fixture_accel(true); settings_volume.readonly=true;
+    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    CHECK(!acceleration && !binding_claims && !m.status_reads && disk_size==30 && !marker_commits);
+    CHECK(log_matches("quarantined reason=previous_attempt")==1);
+    software_desktop(); finish();
+
+    /* Every diagnostic-storage error retains the original durable marker;
+     * it never polls/reset/reclaims the quarantined engine to retry. */
+    for (unsigned failure=1;failure<=6;failure++) {
+        boot_fixture_accel(false); m.stuck=true; m.exact_clock=true;
+        fbdev_accel_schedule(&settings_vfs); accel_marker_run();
+        CHECK(disk_size==14 && marker_commits==1 && queued_work);
+        kwork_fn fn=queued_work; queued_work=NULL; fn(queued_arg);
+        CHECK(accel_marker_request==ACCEL_MARKER_STATUS && accel_queued && !locks);
+        software_desktop();
+        marker_fault=failure;
+        /* Diagnostic updates do not stat: an open failure exercises that
+         * boundary instead of the begin-only stat failure. */
+        if (failure==2) marker_error=true;
+        unsigned reads=m.status_reads;
+        accel_marker_run();
+        CHECK(!accel_queued && !table_open && !marker_open && !locks && engine.quarantined);
+        CHECK(m.status_reads==reads && !m.engine_writes && !m.packets);
+        CHECK(disk_size==(failure==6 ? 30u : 14u) && marker_commits==(failure==6 ? 2u : 1u));
+        CHECK(log_matches("phase=marker_status")==1 && log_matches("error=-")==1);
+        finish();
+    }
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+}
 int main(void)
 {
     CHECK(!framebuffer_regression_main());
@@ -901,7 +1003,7 @@ int main(void)
     glue_stalled_clock(UINT32_MAX);   /* master-aborted (dead) aperture */
     deferred_boots(); async_marker(); optional_alias();
     port_bootstrap(); port_ownership();
-    decorated_readbacks(); activation_timing();
+    decorated_readbacks(); activation_timing(); initial_idle_diagnostics();
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);
     return failures ? 1 : 0;
 }

@@ -29,7 +29,7 @@ struct savage2d {
     uint8_t *cursor;
     uint8_t saved40, saved31, saved50, saved45, saved55;
     uint32_t saved_bci, saved_gbd[2];
-    uint32_t idle_mask, idle_value;
+    uint32_t idle_mask, idle_value, status;
     const char *reason;
     uint64_t operations, idle_waits, fallbacks, timeouts;
     uint64_t reset_us, poll_us;
@@ -43,6 +43,7 @@ bool savage2d_eligible(const struct fb_device *);
 struct vfs;
 int savage2d_attempt_begin(struct vfs *);
 int savage2d_attempt_end(struct vfs *);
+int savage2d_attempt_failed(struct vfs *);
 void savage2d_quarantine(const char *reason);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset);
