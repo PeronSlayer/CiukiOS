@@ -1,0 +1,180 @@
+# Provisional original-binary census, f5-02A, 2026-10-14
+# No original game/installer bytes were supplied in this worktree.
+# Names below are media provenance from the approved contract, not measured imports.
+
+WORKLOAD gate-1 Diablo shareware (1997, Blizzard)
+STATUS absent; approved-F5
+MEDIA DiabloSharewareWindowsBlizzardEntertainment1997 / DIABLOSW.iso
+MEDIA-SIZE 137576448 MEDIA-SHA1 bf1a62b24ce01ce39993955bff4b3c4d4ab9d647
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-2 StarCraft shareware (1998, Blizzard)
+STATUS absent; approved-F5
+MEDIA StarCraftUSAShareware / StarCraft Shareware (USA).zip
+MEDIA-SIZE 248478379 MEDIA-SHA1 a29ccfb4b34d55034bbae6bde23199fc4766f288
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-3 Age of Empires trial (1997, Microsoft)
+STATUS absent; approved-F5
+MEDIA aoe-trial-1997 / MSAoE.exe
+MEDIA-SIZE 24786864 MEDIA-SHA1 ccd19bd57e7070ffe7c0b20ed9265d680fbe36c7
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-4 Half-Life: Uplink (1999, Valve)
+STATUS absent; approved-F5
+MEDIA Half-lifeUplink / hluplink.exe
+MEDIA-SIZE 50872079 MEDIA-SHA1 605e110670ca3d55b2093b7750d1d0138cbf1f4c
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-5 Unreal Tournament demo 348 (1999, Epic)
+STATUS absent; approved-F5
+MEDIA unreal-tournament-demo-version-348 / UTDEMO348.EXE
+MEDIA-SIZE 55647232 MEDIA-SHA1 faf2c18852a1a53c59db490e044e0d3e100e8fed
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-6 Worms Armageddon demo (1999, Team17)
+STATUS absent; approved-F5
+MEDIA WormsArmageddonDemo / WormsArmageddonDemo.zip
+MEDIA-SIZE 13903680 MEDIA-SHA1 5a53c889037b91566c211b16d527c69afd037be8
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-7 Heroes of Might and Magic III demo (1999, New World Computing)
+STATUS absent; approved-F5
+MEDIA HeroesOfMightAndMagicIiiTheRestorationOfErathia / h3demo.exe
+MEDIA-SIZE 98265058 MEDIA-SHA1 8d44f794a3fe80bea524f90b38fed3325ca3d1cb
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-8 RollerCoaster Tycoon demo (1999, Chris Sawyer Productions)
+STATUS absent; approved-F5
+MEDIA RollercoasterTycoonDemo / RCTYCOON.EXE
+MEDIA-SIZE 19596288 MEDIA-SHA1 f985bb782e974572805ee2990cfa2d1fd4e93eee
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-9 Jazz Jackrabbit 2 shareware (1998, Epic MegaGames)
+STATUS absent; approved-F5
+MEDIA jazz2shareware / jazz2swf.exe
+MEDIA-SIZE 11019236 MEDIA-SHA1 d2ab0a3107360563c5c3bb897a4adfb9d319c04f
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD gate-10 Total Annihilation demo (1997, Cavedog)
+STATUS absent; approved-F5
+MEDIA TotalAnnihilation_201405 / Total Annihilation.exe
+MEDIA-SIZE 21540864 MEDIA-SHA1 ce8a2c21488fbe807cd855b8effcc127053c3e85
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD quake-ii-demo Quake II original demo (version unknown)
+STATUS absent; proposed-not-approved
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD nsis-2-sample NSIS 2.0 self-authored sample
+STATUS absent; supplemental-period-fixture
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+
+WORKLOAD installshield-sample InstallShield original sample (IS3/IS5/Win16 edition unknown)
+STATUS absent; proposed-not-approved
+SHA256 unknown
+SETUP-ENTRYPOINT unknown (outer media names are not installed setup paths)
+FORMAT unknown (PE32/NE/DOS chain needs media inspection)
+STATIC unknown
+DELAY unknown
+BOUND unknown
+EXPORTS unknown
+MANIFEST unknown
+DYNAMIC not-observed
+

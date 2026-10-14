@@ -6,5 +6,66 @@
   "qemu_major": 11,
   "qemu_machine": "pc-i440fx-9.2",
   "target": "i686-unknown-elf",
-  "march": "pentiumpro"
+  "march": "pentiumpro",
+  "win32": {
+    "schema": 1,
+    "targets": [
+      "i686-pc-windows-msvc",
+      "i686-w64-mingw32"
+    ],
+    "march": "pentiumpro",
+    "crt": "none (freestanding fixtures); MSVCRT required for future CRT builds",
+    "tools": {
+      "clang": {
+        "version": "23.1.1",
+        "sha256": "28a1f30bfbb1c29f079f975043af5b627d4e625ec82d419a64f75e36d799d923",
+        "status": "installed",
+        "version_probe": "clang"
+      },
+      "lld-link": {
+        "version": "23.1.1",
+        "sha256": "c6f5310961879d0fca51441ea0ea9aab3c1bbf59110bbe260d857ca732863f3a",
+        "status": "installed",
+        "version_probe": "lld-link"
+      },
+      "llvm-dlltool": {
+        "version": "23.1.1",
+        "sha256": "7b341e84181e02ac0a88a1708622cd2c22ba729239704c2c57e741913b459973",
+        "status": "installed",
+        "version_probe": "llvm-ar"
+      },
+      "llvm-rc": {
+        "version": "23.1.1",
+        "sha256": "497df6cedd45376852ac6147bae6b1acea49b77cb93c402b64c3bf2d1fec5979",
+        "status": "installed",
+        "version_probe": "llvm-config"
+      },
+      "llvm-readobj": {
+        "version": "23.1.1",
+        "sha256": "57b37dba10700c60a95e3da8cd0b7e6a7984306b85a3245c4d8fbfcc85eac674",
+        "status": "installed",
+        "version_probe": "llvm-readobj"
+      },
+      "llvm-objdump": {
+        "version": "23.1.1",
+        "sha256": "03aca855da1a31c0d33642292b25b769101a77d5d8639c548fde2afa41a2daee",
+        "status": "installed",
+        "version_probe": "llvm-objdump"
+      }
+    },
+    "archives": {
+      "mingw-w64": {
+        "version": "10.0.0",
+        "url": "https://downloads.sourceforge.net/project/mingw-w64/mingw-w64/mingw-w64-release/mingw-w64-v10.0.0.tar.bz2",
+        "size": 9620291,
+        "sha256": "ba6b430aed72c63a3768531f6a3ffc2b0fde2c57a3b251450dcf489a894f0894",
+        "path": "build/downloads/mingw-w64-v10.0.0.tar.bz2",
+        "status": "pending-download",
+        "hash_source": "https://sourceforge.net/projects/mingw-w64/files/mingw-w64/mingw-w64-release/mingw-w64-v10.0.0.tar.bz2/download",
+        "size_source": "https://ftp.lysator.liu.se/pub/void-ppc-sources/cross-x86_64-w64-mingw32-10.0.0/",
+        "configure": "--host=i686-w64-mingw32 --with-default-msvcrt=msvcrt",
+        "note": "Headers/CRT source only. MinGW GCC and a period NSIS 2.0 sample are unavailable. Wine is on PATH but was not used or qualified as a reference."
+      }
+    }
+  }
 }

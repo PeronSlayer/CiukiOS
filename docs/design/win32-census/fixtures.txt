@@ -1,0 +1,888 @@
+# f5-02A self-authored corpus; static host evidence only.
+
+FILE abi-callback.exe
+SHA256 1f599480f164c857605f083137f5257780153f2a290c972e452bc96919308f8a
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-cdecl.exe
+SHA256 e50c68965c63572539d716a4a051c971911780a9762a01bd1c77259411122c49
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-com.exe
+SHA256 c18cc6d30c8d0d112bad0bb2cf509c47145c986c1eefcc419313123fe1469ff9
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-df.exe
+SHA256 a5168e2cb4e5f5162599e9dc1d0111019e6e0294f9358dfcb8a5c9f95e96f1fa
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-layout.exe
+SHA256 5ee173608fb8cf240d2ed8366567496496891851af10183c5a9f2bd3a6d7571e
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-mingw.exe
+SHA256 a06ea3e0a246677fc6a4f44d9cc4385e73bd92824065197def5d9f60ea1bff8d
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-nonvolatile.exe
+SHA256 c250a023b0ea741c548647308789ea26fa81a62faee761fe0248440b664def17
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-return64.exe
+SHA256 052697eb335befc8d2746640d49c237543e549816327a7208fbf40d5fd198b6e
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-stdcall.exe
+SHA256 087b841bf71e94c22878a6db668ea2d46b5e34543de27c72064c27b6d1213fa0
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-thiscall.exe
+SHA256 0d0def5871f825d9ba7bfedad97a225b8a0da6e26c23cbc92da221c4c58c15fc
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE abi-varargs.exe
+SHA256 ce68fc936e0e93255a15d0ef008094da08ca7e946198aa71ee6a581b07140e91
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE bad-bound-name.exe
+SHA256 80f7aab7d1ab2f96dc843b3656600ff272ed08e0716b71f5b20903172533f4fb
+REFUSED bound-name-bounds
+
+FILE bad-certificate.exe
+SHA256 13084175b827b4aaa6e88e05f6a5bf4828b9558aa2be7e65d481c6173238137d
+REFUSED certificate-file-bounds
+
+FILE bad-delay-attributes.exe
+SHA256 191bb370b9196da06320d771c470147b7bb3926db224cce4f36d69fe654a6f87
+REFUSED delay-attributes
+
+FILE bad-directory-count.exe
+SHA256 9196e282164a7adc52fdc64099703af1f87e674d2d17a6f16d97cd796fa6b6f9
+REFUSED directory-count
+
+FILE bad-directory-image-bounds.exe
+SHA256 f75ae67b55b327d35511780dff6581172ef5542689fc7e81252009baa671c5cc
+REFUSED directory-image-bounds
+
+FILE bad-dos-magic.exe
+SHA256 1103a770fbfb80ab506a7abd6e7a77c01d6f3467707d0813293d87d43fb9dfcd
+REFUSED dos-magic
+
+FILE bad-entrypoint.exe
+SHA256 9822d35bf330f7692a05ca9b623f7175e7616dd4bc767f5267c6de81079c9209
+REFUSED entrypoint-bounds
+
+FILE bad-export-count.exe
+SHA256 a380a195966d2bbd48ccf0f9a9255fae2f63fdc613003a42dd43f987a5e09839
+REFUSED export-count
+
+FILE bad-export-ordinal.exe
+SHA256 0d374822c3d6d2d90e59bc57ac40659581fa78c5b1626bb28e5ebf69dfdc380a
+REFUSED export-ordinal-index
+
+FILE bad-file-alignment.exe
+SHA256 5aea67fe151eb06f8f12994cdd4b7ddf9553b3e5372519a58558f7e88dbc68fe
+REFUSED file-alignment
+
+FILE bad-header-overlap.exe
+SHA256 7c740187012e488843b31b397426bf11a6afbad67db93cf039b8744dee626769
+REFUSED section-header-overlap
+
+FILE bad-header-size.exe
+SHA256 6522ca81229d88d0d65157d8752f1baaaa2ec0e5ce98d34f84a797cfcaf542cb
+REFUSED headers-size
+
+FILE bad-image-limit.exe
+SHA256 49e7e8137a5a0d88a79e4753cd6160b916653c7f8243271c6d853ec86d41638a
+REFUSED image-size
+
+FILE bad-image-wrap.exe
+SHA256 1ed36a13c0bf47d73333548e6ddc20a897841b8dfea72499baafc0be4348cbc6
+REFUSED image-address-wrap
+
+FILE bad-image-zero.exe
+SHA256 a62ac6afafaa7e361ea1fb4f36c328158b03396a9bc27e4e7d1039261c0a9fea
+REFUSED image-size
+
+FILE bad-import-iat.exe
+SHA256 2b61e61e74428f308de1ac0532d1b13a395d4498df9c1cc413fb7a1e952159b7
+REFUSED import-iat-missing
+
+FILE bad-import-ordinal.exe
+SHA256 173296b52bac5959c3fa51bcfe49856ac9861f0f2a277344c9027eddda6a95a0
+REFUSED import-ordinal-reserved-bits
+
+FILE bad-import-terminator.exe
+SHA256 b9f3ba1a8594863c13ae04e700bf414ddc4a6ac8142a36a2e8c9d42907d0586d
+REFUSED import-descriptors-unterminated
+
+FILE bad-import-thunk.exe
+SHA256 4b16f6b2998fca092913564f97adc8c48c6db528e2510294a5880ba612bb6c6d
+REFUSED import-thunk-alignment
+
+FILE bad-machine.exe
+SHA256 ce27391b30a04bb7d1859caba83fe9b81150bdc86cc86fb20e7301c5b0ef3c66
+REFUSED machine-not-i386
+
+FILE bad-not-executable.exe
+SHA256 cabf7808e9f3f15bef12dfdd52ce211e6891f201dcb785d38116dc3a6ecff316
+REFUSED not-executable-image
+
+FILE bad-optional-size.exe
+SHA256 8faba11a6f97a8551154322c8f7814fa6ed6080424e11c04b357e536d8c19281
+REFUSED optional-header-bounds
+
+FILE bad-pe-offset-alignment.exe
+SHA256 d1e55acb9f310df28ac43e58a32a29c05e9dd1cc7a54d379df711e13bed0144a
+REFUSED pe-offset-alignment
+
+FILE bad-pe-offset-bounds.exe
+SHA256 22f9911dffc14e88b3ec0a9d58b32567a9c6dca68d641e47dced7fc44156c7e0
+REFUSED pe-header-bounds
+
+FILE bad-pe-signature.exe
+SHA256 61a9475764b85b91d67b107fe45e4cc58420c2749cb1c8c62977730813036c38
+REFUSED pe-signature
+
+FILE bad-pe32-plus.exe
+SHA256 d4124050d72750eb3deaba94238e0883f491d6dbc390f57443aa82c2fdff2bdb
+REFUSED optional-magic-not-pe32
+
+FILE bad-reloc-size.exe
+SHA256 f0189d4e48d8228314d2e2e060cc036b010ef4f7d21ad6030b7595fc9e963da0
+REFUSED relocation-block-size
+
+FILE bad-reloc-target.exe
+SHA256 5bcd10ad5f79521c36f4ed135463d39c25c2064336949ed89d48aaa0bec856d3
+REFUSED relocation-target-bounds
+
+FILE bad-reloc-type.exe
+SHA256 658abf2f7b22ba5f828a537c49fcb4a041a108c3d2e834e790deece0eb68379c
+REFUSED relocation-type
+
+FILE bad-resource-cycle.exe
+SHA256 be370990c625005aefa8771f09d6ae609358e5a1919065112d933fbc23d75593
+REFUSED resource-cycle
+
+FILE bad-resource-leaf.exe
+SHA256 a9fffdbb3abfdd33da609c904c3646fbce4c1246c646ee28aa9edbae87d7ec16
+REFUSED resource-directory-bounds
+
+FILE bad-section-alignment.exe
+SHA256 3ded7a4638168233c05380c20415394bde3b6f87432059b4e0711d864f2800dc
+REFUSED section-alignment
+
+FILE bad-section-image-bounds.exe
+SHA256 44ff4a109a929e704f340ac4ba8d2ec1303b7b284bb7cc2af188a9c9e2e44f8a
+REFUSED section-image-bounds
+
+FILE bad-section-raw-wrap.exe
+SHA256 b517a30ee508a3218f5c4c689932f9063b160ac2a5b979119901f8bcf9fab3aa
+REFUSED section-raw-wrap
+
+FILE bad-section-raw.exe
+SHA256 8829669d48e53e8f6ff7d7e0a92e5bb23aab791663f5bfb72d8bf43f4e6f3185
+REFUSED section-raw-alignment
+
+FILE bad-section-rva.exe
+SHA256 4c0ee45983c85ccfc576df843a0c93ee6f99eecc01f627ce829869739e8f6461
+REFUSED section-rva-alignment
+
+FILE bad-subsystem-ce.exe
+SHA256 c1e49232528e92c6ee834c16f8997640c4e31ea2ed432f7681c35ab7940911bd
+REFUSED unsupported-subsystem
+
+FILE bad-subsystem-native.exe
+SHA256 6a848b3281ecf7795f33221c120210c04aacbd62f7347c59b00da8fd0433199f
+REFUSED unsupported-subsystem
+
+FILE bad-subsystem-posix.exe
+SHA256 e018f3d4875b99ab3878ba9199420820f81472e4596fd36b3c6a6cb3cc10fa56
+REFUSED unsupported-subsystem
+
+FILE bad-tls-callback-address.exe
+SHA256 61aeb28f9259e76c3cb2d170db03b80a353e3ff25e71b4cab91dcd48d45f7def
+REFUSED tls-callback-bounds
+
+FILE bad-tls-callback-alignment.exe
+SHA256 944dd7df4e31590504c30e15d5f6e720d2b60718d3889df2a7205992e9bada4e
+REFUSED tls-callback-alignment
+
+FILE bad-tls-index.exe
+SHA256 0dd467fa3bb15f25a0b5232c211f573e0cce2cc38b20bd26f906ccfa025daf97
+REFUSED tls-index-bounds
+
+FILE bad-tls-template.exe
+SHA256 ce8bdba0789477136e702851814c469681cf2d43d72c873b1488186459525413
+REFUSED tls-template-bounds
+
+FILE bad-too-many-sections.exe
+SHA256 961ac09e80377780aae31231faa38adf4e64a09dd239f0cfdce9ea846223236c
+REFUSED section-count
+
+FILE bad-virtual-overlap.exe
+SHA256 bec9a4fccdb51d336a96fbd0551499ab0bca9f89d8e292c8198bc07adf2a429f
+REFUSED section-virtual-overlap
+
+FILE bad-zero-sections.exe
+SHA256 26bf1f1808ba3e5aa068153935c335c1c0869660295f6c27a7ce92eb43909e83
+REFUSED section-count
+
+FILE bound-rebind.exe
+SHA256 7326568bc685f14e90c0dbfb93d08b0e27f4c6ba6e882b61bd763a06a49985d3
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC provider.dll -> FixtureValue
+BOUND provider.dll timestamp=123 (re-resolve)
+BOUND-FORWARDER forward.dll timestamp=456
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE bound-without-names.exe
+SHA256 0fd2a14c8fb71e63f31b6bd450c951f2ef5aef555275a815888e2df86d3c8ec9
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC provider.dll -> <bound-addresses-unresolved>
+BOUND provider.dll timestamp=123 (re-resolve)
+BOUND-FORWARDER forward.dll timestamp=456
+RELOCATION-TYPES none
+WARNING bound-iat-without-names
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE bss-zero-fill.exe
+SHA256 8db1aca302673a6ed65f48103d728d0bf3a9107ee1279dc5a9092aa3461a637d
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE builtin-import.exe
+SHA256 19415313a31a63ecfa830d4439d45ba8f346bbe63e6e4c0e120f60434a861b93
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+STATIC KERNEL32.dll -> FreeLibrary, GetModuleFileNameA, GetModuleHandleA, GetProcAddress, LoadLibraryA, LoadLibraryExA
+RELOCATION-TYPES 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE certificate-file-offset.exe
+SHA256 850656f3a4a707d2ffa24d28c028dc22ea939037f4935c82fcd6693199aa4b65
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE compiled-resources.exe
+SHA256 d1e9d10c0fe93c67672211456d613171bda750f335dd95788bb606af40adb0e9
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RESOURCE {"language": 1033, "name": "NAMED", "size": 6, "type": 10}
+RESOURCE {"language": 1033, "name": 1, "size": 6, "type": 10}
+RESOURCE {"language": 1040, "name": 1, "size": 6, "type": 10}
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE compiled-tls.exe
+SHA256 44a8d6840096455666082a798fdaa302de92a2724bf3cadbda5cba12da97b865
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+TLS {"callbacks": 2, "template_size": 4, "zero_fill": 8}
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE console.exe
+SHA256 1de9ff7b997957f061da77bdc76051ef725e40a092e8873baa9a44799a21c532
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE consumer-dll.dll
+SHA256 922d5ae50c1abd1ae3bb2723c6ce7908298563c594b67f1964d9d8b186bd2635
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 14.0
+STATIC provider.dll -> FixtureValue, #11
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE consumer.exe
+SHA256 bc622ecee2b8a62acd6b41a2ecdf1f05e99092fb2252555676b1a944bfae3b2a
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+STATIC provider.dll -> FixtureValue, #11
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE cycle-a.dll
+SHA256 e189d9c3de80677c770ec48182b063c29a409605439d6d5d8dcccd689e29785b
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+STATIC cycle-b.dll -> FixtureValue
+EXPORT #7 FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE cycle-b.dll
+SHA256 04541545828ac33477b753936ac57ab3fa282dc1e13e6b35e8e906b82e862274
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+STATIC cycle-a.dll -> FixtureValue
+EXPORT #7 FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE data-export.dll
+SHA256 f423b7adaa97f04605fbe5e1b822e4d4d939146f1cbfff181fa0d9ab70829a57
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE delay-no-name-table.exe
+SHA256 7cc831ea902efc971b1c70cad78cdac63892c3d05a2d70975a853221f640e48f
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+DELAY provider.dll -> <delay-addresses-unresolved>
+RELOCATION-TYPES none
+WARNING delay-iat-without-names
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE delay-va.exe
+SHA256 667f469945eb7d7c59ec76b15c16a74149860f3c2477608b4db34d633c332c47
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+DELAY provider.dll -> FixtureValue, #11
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE delay.exe
+SHA256 2e6cfc4731d64b68b03870784a4157c8734e1fc896113e33bcc6d28f40e348aa
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+DELAY provider.dll -> FixtureValue, #11
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE dll-image.dll
+SHA256 c8ede3653c91e02900889baf0bd69e5fcfe29ee2884755eb40997a1e2701bfb4
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE entrypoint-header.exe
+SHA256 5c2fbfda224370c41830f71645e9368d64b46dd5361e007f3d77d184dc2faee6
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE exports.dll
+SHA256 2dfbd46e750c224fa5d9e53fc58e18fc18a3bcb3c2a59e37772d7c9f38462332
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE forward-cycle.dll
+SHA256 b00949bf0721ed15fb42781a0af60d0dd891d1d973152dff13df87a719ba07d3
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fixture.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE forward-depth-16.dll
+SHA256 567caa23d8a1a7d6e540cb2ac0d34904f64b697b4b75991eb326c646b053e54e
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd02.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE forward-depth-17.dll
+SHA256 a4b237b893feca3a3aba820a32896d8097e01f0c725cef7eac01a237f753fbc3
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd01.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE forward-name.dll
+SHA256 8c8277d79d04e1c53a0946ea370e5a0271509a85c679f4adf65acbb4f76b1826
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> provider.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE forward-ordinal.dll
+SHA256 1ae3f076478e05779924c565f962f0652e4cd1053b5d886203a43361c5d85bb4
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> provider.#11
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd01.dll
+SHA256 c1ccc1dc2df8ca1c1262e4c827f8aa31d094ba1755a963d2acb70c6b98058feb
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd02.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd02.dll
+SHA256 ed471000cf3e9364d46c0e46ec9551a0bc8215bfae4dc4aed5bf98f836aadf7f
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd03.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd03.dll
+SHA256 8009ada3f73003d7e2e225a55dc1d16f5dd4b9f0ddc7b393611e7b1abe832189
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd04.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd04.dll
+SHA256 85595fec1a90eb9fe5c751009c206ade58730005ec06893c48d7bd5dfaf6739b
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd05.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd05.dll
+SHA256 119d5888d66c22bd4181d5055c54589eba15b75cebef5e134c105159763c4692
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd06.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd06.dll
+SHA256 4d53ea5e0b4ee206dd353c1a5d16341f07821fc03a9daaad5a7b9c35d595a707
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd07.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd07.dll
+SHA256 ab1405be88f8eef68a9ecd9f0c09010e9458056f8d6c6822ce4d6fa90f77cc6f
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd08.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd08.dll
+SHA256 bd0640b1f7abb74a4166f76e856ee2e6fee9db76a4fb89822ad500eb7bdb148e
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd09.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd09.dll
+SHA256 a0e0ead9a00317a208ea55466c0d1afb88bea04313b5717e256f571cebb28314
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd10.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd10.dll
+SHA256 9b220742f61b15c0097167da63b506915bc939d872c73e1c57c0743d8e5e933c
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd11.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd11.dll
+SHA256 3dfb7f06a415d242ff1eeae644d2212f2493ae348ad9c95533cfb3b2f2e4bafd
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd12.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd12.dll
+SHA256 b2f17c78187c5d5d72efef4afbb43b344395994e6dc766806e9571fcbc634efe
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd13.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd13.dll
+SHA256 61acc58a985b7d7121f3b89d6df3d3d1c6b6631f1956f8ce6a033573f3c79681
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd14.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd14.dll
+SHA256 bb33017f8c1cbf801670e6af4820bcb93d6ffe7d6f42437179c82b18eb43e29b
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd15.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd15.dll
+SHA256 123e93d0547173a3672766d2bba5dab0ed451902944509f4bd9b4a0cb2a7ee1a
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> fwd16.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE fwd16.dll
+SHA256 55be44c1e0919c3b51c1259ad89d69b2490e4a66f121831894d142b380978474
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+EXPORT #7 FixtureValue -> provider.FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE gui.exe
+SHA256 9fcaaf2ba1c750ce803ffaebe3bae50fe1417eb8bc389216fbe10265509f9bc1
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE iat-fallback.exe
+SHA256 c311bd2c00808a604b2c4fa523fbd87e005bd3b3c86ffc41e0dfa376750bd039
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC provider.dll -> FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE ignored-checksum.exe
+SHA256 e0dc2d4203f1c42d0ef6e4dd6d6d806e5dcd3d84633bb945c995bc87fcab7d5a
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE ignored-dll-characteristics.exe
+SHA256 3810809ad888926fa32f666744028b102b33639e975ea55edb94f24913baede7
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE import-mixed.exe
+SHA256 a9535f933b65ce06a8e5935c04bef2fc92d9fe1c6fda2c33f07f4f920800afc3
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC provider.dll -> FixtureValue, #11
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE import-name.exe
+SHA256 5b1afd5edfab30006d63d715d212fc36f2ecc3bd8f964b9c444a898b372de309
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC provider.dll -> FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE import-ordinal.exe
+SHA256 f29e6974b9c32db887702bde973ad2c336c1747bf82777cf40674d54ab19f905
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC provider.dll -> #11
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE low-alignment.exe
+SHA256 7f2d3df3fe613108e4265c0f073498088ee9467fe98f9e5b49a9c3aa82273afd
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE manifest.exe
+SHA256 c87a0660c1065c76caa348fc801ceccbdb58f0578388957d38c012a0c9dd5fa1
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+MANIFEST {"kind": "assemblyIdentity", "name": "Ciuki.Fixture", "processorArchitecture": "x86", "version": "1.0.0.0"}
+RESOURCE {"language": 1033, "name": 1, "size": 148, "type": 24}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE missing-dll.exe
+SHA256 d3e5006362b7adba44f4a6d2fc4c20a036b82297c06c5a978fc67745cd2ff65b
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC absent.dll -> FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE missing-export.exe
+SHA256 0f372334b87f308adc79516a79c61e49a3bc9057dd6e2e4b42ae30e1f248fa39
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC provider.dll -> MissingValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE new-subsystem-version.exe
+SHA256 9338ce5092f147fdd4f78b87b8204dde518cd33c9ef10e3e73a4fa09b73f3216
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+WARNING newer-subsystem-version
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE no-directories.exe
+SHA256 ae089fa8906aaad64f03368f4f6f7c8c26ca6fc43759831b0d1d4029ba5a3091
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE no-reloc-dll.dll
+SHA256 e32cd10a5184ce8f7eb0280de669d2d82fec2eb029a8fc7b7646f624471311a7
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE no-reloc.exe
+SHA256 c40cea6a0d45213e426c561f4a62d9b204f3e1d6421eb582f8f9097dda3c3de0
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE oft-empty.exe
+SHA256 fcdfbdb9212f0bdb4f58f4b4e7452549914bf7634d932a20ce54e8297f7d22de
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+STATIC provider.dll -> FixtureValue
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE packed-code.exe
+SHA256 00b4ffd5a0d13f712993eadcacbb735fccc72773159bd34e584a58d84c72d4c5
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+HEURISTICS writable-executable-section (not identification)
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE packer-name.exe
+SHA256 72dbf4c211170a5d30b364d1d298aa5fc641424bf8f222478aa4b5ebf2a2a100
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+HEURISTICS packer-section-name (not identification)
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE provider-fail.dll
+SHA256 d867dd488daf43b6ad792b5978742136b91d361964752e1cd0017f5548b3231b
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 14.0
+EXPORT #7 FixtureValue
+EXPORT #11
+RELOCATION-TYPES 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE provider.dll
+SHA256 8ab7b813fdb998f0da0340d59ab952d6013809b46f16df3b6ac0a37e13cd164b
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 14.0
+EXPORT #7 FixtureValue
+EXPORT #11
+RELOCATION-TYPES 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE raw-beyond-file.exe
+SHA256 546d0eda74c64503f44543bcb3c568a9b78b5490de854e959d1d10d045e40b93
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+WARNING raw-data-zero-filled
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE raw-shared.exe
+SHA256 2515310ef655d3461f3ddc1d97ffc8fc14a85ea33fc7b7a997bce40317c17ac5
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE reloc-high.exe
+SHA256 6dbcb10d7e9a218c33d3d8b16382c11dbd4ce65ec5519994e57ed15a89d587d5
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES 0, 1
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE reloc-highadj.exe
+SHA256 562fc44d176e8ff7fe4949aeb776736b5edb2ff36d34d2a7ef9f4267c848913a
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES 4
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE reloc-highlow.exe
+SHA256 795a0e3612e04338c1177b437a6c3a7849c830497267761699da75bc67878dc6
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE reloc-low.exe
+SHA256 180e929a5e2e48d88b8bed8514c2f184faae814794f3f63692d8cdd69e9550dd
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES 0, 2
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE resource-italian.exe
+SHA256 5a316610647c2df498369fbcd6244706695577536ef8ff68c2fa9a5fc104059f
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RESOURCE {"language": 1040, "name": 1, "size": 12, "type": 10}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE resource-large-virtual.exe
+SHA256 31847806a1020a372022a598c2a06f793b36f1fa740c4c5e2c113ecaad12c9da
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RESOURCE {"language": 1033, "name": 1, "size": 1048577, "type": 10}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE resource-named.exe
+SHA256 a0549d2499c8fb7b2561963353b2c559aa6bd4de9638dacfdd67947a30b733b8
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RESOURCE {"language": 1033, "name": "HELLO", "size": 12, "type": 10}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE resource-ordinal.exe
+SHA256 949dd0da4c54e8fb8adf544c518a84ef1dbbdf44ad826a28b7a396a07573ab71
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RESOURCE {"language": 1033, "name": 1, "size": 12, "type": 10}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE rwx-section.exe
+SHA256 5199bcc5ae68e0a6484eceed80146baaf1637e48cd4fd8423b729f5b550e3cf3
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+HEURISTICS writable-executable-section (not identification)
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE seh-chain.exe
+SHA256 3349f29ba60b89b068f6626776e2a4f1783de943779564f3d50c194dcc901897
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE seh-nested.exe
+SHA256 1ef3515ea0b6289e78a94ab376256492799bce824a14e7caf049e3321a9a4c30
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 14.0
+RELOCATION-TYPES 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE tls-dll.dll
+SHA256 f6f6d44e7ddb2826eb5f20f259f30b159bd997558fe43b2847a2442f110af682
+FORMAT PE32 i386 DLL
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+TLS {"callbacks": 1, "template_size": 4, "zero_fill": 8}
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE tls-empty.exe
+SHA256 3df438288434c780d9c7f110db4bb872ebdc221b8ed58102e13fbbf6c76b3186
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+TLS {"callbacks": 0, "template_size": 4, "zero_fill": 8}
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE tls-two.exe
+SHA256 a050c1d8264ff76910305b84eb132d6b0bf7d3d5335474c525bb13182e3fb343
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+TLS {"callbacks": 2, "template_size": 4, "zero_fill": 8}
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE tls.exe
+SHA256 d9d661f890c5caf45148810a9ff7392029a22db5390054cbaafe66b7a2ac6c46
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+TLS {"callbacks": 1, "template_size": 4, "zero_fill": 8}
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE truncated-dos.exe
+SHA256 9811614585220c17aa80d9cbcd2fc7dfc0ce5b7ed4dbcb85c8d0be4e0121214a
+REFUSED dos-header-truncated
+
+FILE truncated-optional.exe
+SHA256 69010ae84a890e7c0fd86ce35f6555e45557a98f1d302b49e8cc439e76ca9143
+REFUSED optional-header-bounds
+
+FILE virtual-size-zero.exe
+SHA256 86bccca280b21b4aab3870bcba9370aedc1a3fdf0aa43be17fee5391358fad8e
+FORMAT PE32 i386 EXE
+SUBSYSTEM console LINKER 23.1
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+

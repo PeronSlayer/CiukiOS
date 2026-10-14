@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: MIT
+LANGUAGE 9, 1
+1 RCDATA { 1, 2, 3 }
+NAMED RCDATA { 4, 5, 6 }
+LANGUAGE 16, 1
+1 RCDATA { 7, 8, 9 }
