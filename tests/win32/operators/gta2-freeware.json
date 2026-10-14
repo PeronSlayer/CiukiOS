@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "kind": "hardware-operator",
+  "workload": "gta2-freeware",
+  "scene": "default-play",
+  "status": "proposed-reference-qualification-pending",
+  "image_sha256": null,
+  "payload_sha256": null,
+  "serial": "38400 8N1",
+  "case_timeout_seconds": 600,
+  "reference_required": [
+    "edition/version",
+    "installed_files",
+    "exact scene/map/save",
+    "menu labels and input sequence",
+    "screen-region pins",
+    "bundled licence text",
+    "disc/music path"
+  ],
+  "threshold_policy": null,
+  "threshold_note": "Lead must reconcile Q7 ten-minute hardware play with 600-second whole-case ceiling; no hardware playable PASS while unresolved.",
+  "steps": [
+    {
+      "segment": "install",
+      "action": "Run the original installer with default choices. Record its dialogs, installed names/sizes, Start-menu entry and Uninstall registration; check C:\\System for writes.",
+      "deadline_seconds": null,
+      "evidence": [
+        "installed_files",
+        "menu_entry",
+        "registry",
+        "serial"
+      ]
+    },
+    {
+      "segment": "start",
+      "action": "Start menu entry created by the original installer. Reach the main menu. Confirm exact edition and renderer before proceeding.",
+      "deadline_seconds": 120,
+      "evidence": [
+        "menu_screenshot",
+        "process_start",
+        "loader_stages"
+      ]
+    },
+    {
+      "segment": "play",
+      "action": "Start a game; walk, drive and use the map. Use sound. Record at least two named progress checkpoints and visible response to a timed input.",
+      "minimum_seconds": 180,
+      "evidence": [
+        "game_fps_average",
+        "game_fps_median",
+        "game_fps_p05",
+        "frame_time_p95_ms",
+        "audio_underruns",
+        "non_silent_pcm_frames",
+        "input_latency_ms",
+        "input_latency_game_frames",
+        "peak_commit_bytes",
+        "shims",
+        "game_progress",
+        "resource_ledgers",
+        "play_screenshots",
+        "audio_reference"
+      ]
+    },
+    {
+      "segment": "exit",
+      "action": "Use the title's own Quit command. Verify desktop mode and compare resource ledgers with the pre-start baseline within two seconds.",
+      "ledger_deadline_seconds": 2,
+      "evidence": [
+        "exit_code",
+        "desktop_screenshot",
+        "resource_ledgers"
+      ]
+    },
+    {
+      "segment": "uninstall",
+      "condition": "only if installer registers an uninstaller",
+      "action": "Run the original uninstaller from Control Panel. Verify removal of its Uninstall key and Start-menu entries.",
+      "evidence": [
+        "uninstalled_files",
+        "registry",
+        "menu_entries"
+      ]
+    }
+  ]
+}
