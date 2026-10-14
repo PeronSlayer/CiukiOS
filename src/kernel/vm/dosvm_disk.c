@@ -28,10 +28,17 @@ static bool base_size_valid(uint32_t size)
  * the storage lock). */
 static struct vfs_table workload_table;
 static bool workload_busy;
+static int base_error(const char *path, int error, const char *reason)
+{
+    klog("[dosvm] disk base=%s error=%d reason=%s", path, error, reason);
+    return error;
+}
 static int base_lookup(char path[24], bool bundled)
 {
+    path[0] = 0;
+    const char *fallback = bundled ? DOSVM_BUNDLED_BASE : "D:\\CIUKIGAM.IMG";
     struct storage *s = storage_get();
-    if (!s || !s->ready || s->stopped) return -V86_EIO;
+    if (!s || !s->ready || s->stopped) return base_error(fallback, -V86_EIO, "probe");
     for (;;) {
         uint32_t flags = irq_save();
         if (!workload_busy) { workload_busy = true; irq_restore(flags); break; }
@@ -39,25 +46,30 @@ static int base_lookup(char path[24], bool bundled)
         task_sleep_ms(1);
     }
     struct vfs_table *t = &workload_table;
+    const char *reason = "probe";
     int e = vfs_table_init(&s->vfs, t, 2);
     if (!e) {
         e = -ENOENT;
         struct fat_entry entry;
-        /* The owner's local fixture disk first: exactly the full geometry
-         * (dos_fixtures.py never cuts it) on the first drive after C:. */
+        /* Optional fixtures: every failed stat, including EIO/EBUSY from a
+         * foreign or quarantined volume, is absent. Never carry its error
+         * into the next letter or the required bundled base. */
         for (unsigned d = 3; d < 26 && e == -ENOENT; d++) {
             ksnprintf(path, 24, "%c:\\CIUKIGAM.IMG", 'A' + d);
             if (!vfs_stat(t, path, &entry) && entry.size == DOSVM_SECTORS * 512u && !(entry.attr & 0x10)) e = 0;
         }
-        /* Then the bundled games disk; like a drive without the fixture, a
-         * missing or unusable C:\GAMES\CIUKIGAM.IMG is simply absent. */
+        /* The bundled base is required for windows without a fixture. Keep
+         * its real error, so a damaged boot volume cannot look like absence. */
         if (e == -ENOENT && bundled) {
+            reason = "bundled";
             ksnprintf(path, 24, "%s", DOSVM_BUNDLED_BASE);
-            if (!vfs_stat(t, path, &entry) && base_size_valid(entry.size) && !(entry.attr & 0x10)) e = 0;
+            e = vfs_stat(t, path, &entry);
+            if (!e && (!base_size_valid(entry.size) || (entry.attr & 0x10))) e = -EINVAL;
         }
         vfs_table_destroy(t);
-    }
+    } else ksnprintf(path, 24, "%s", fallback);
     workload_busy = false;
+    if (e && (bundled || e != -ENOENT)) base_error(path, e, reason);
     if (e) path[0] = 0;
     return e;
 }
@@ -65,22 +77,23 @@ int dosvm_workload_base(char path[24]) { return base_lookup(path, false); }
 int dosvm_window_base(char path[24]) { return base_lookup(path, true); }
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
-    struct storage *s = storage_get();
-    if (!s || !s->ready || s->stopped) return -V86_EIO;
     if (!base) base = DOSVM_DEFAULT_BASE;
     unsigned length = 0;
     while (length < 64 && base[length]) length++;
     if (!length || length == 64) return -EINVAL;
+    const char *reason = !strncmp(base, DOSVM_BUNDLED_BASE, sizeof(DOSVM_BUNDLED_BASE)) ? "bundled" : "probe";
+    struct storage *s = storage_get();
+    if (!s || !s->ready || s->stopped) return base_error(base, -V86_EIO, reason);
     int e = vfs_table_init(&s->vfs, &v->disk_table, 2);
-    if (e) return e;
+    if (e) return base_error(base, e, reason);
     v->table_ready = true;
     struct fat_entry entry;
     e = vfs_stat(&v->disk_table, base, &entry);
-    if (e) return e;
-    if (!base_size_valid(entry.size)) return -EINVAL;
+    if (e) return base_error(base, e, reason);
+    if (!base_size_valid(entry.size) || (entry.attr & 0x10)) return base_error(base, -EINVAL, reason);
     v->base_sectors = entry.size / 512u;
     v->base = vfs_open(&v->disk_table, base, VFS_READ, VFS_DENY_WRITE, 0);
-    if (v->base < 0) return v->base;
+    if (v->base < 0) return base_error(base, v->base, reason);
     v->base_open = true;
     ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",
               v->info.key.generation);
