@@ -254,6 +254,54 @@ specified STALL allowance and bounded recovery, without speculative
 vendor exceptions or command resends. Hardware and QEMU qualification
 belong to the lead; host fixtures demonstrate these mechanisms only.
 
+### F1-53: quarantine scans and attach tolerance (2026-10-14)
+
+Research checked before implementation:
+[Intel UHCI 1.1](https://mirrors.telepoint.bg/pub/NetBSD/misc/blymn/uhci11d.pdf),
+PORTSC bits 1/3 and TD status bits 18–23, requires explicit W1C change
+acknowledgement and distinguishes active NAK from exhausted CRC, babble and
+endpoint STALL. The existing packet engine already implements that distinction;
+it remains unchanged. Root acknowledgement preserves port controls and writes
+only observed CSC/PEC bits; OHCI clears only observed high-word change bits.
+Hub changes use the existing class CLEAR_FEATURE requests.
+
+[BOT 1.0](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf), sections
+5.3/6.3, specifies class-reset, clear-IN, clear-OUT recovery and validated
+CSW framing. [Linux v6.12 transport.c](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/storage/transport.c)
+provides the same recovery ordering and short-data handling.
+[Linux v6.12 sd_read_write_protect_flag](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/scsi/sd.c)
+treats unavailable MODE SENSE protection information as write enabled.
+No upstream code is imported.
+
+Repository comparison: root scans logged CSC before testing root_blocked,
+then skipped acknowledgement forever. Hub blocked ports skipped status entirely.
+Recovery diagnostics occupied four records; klog has a 256-byte buffer.
+INQUIRY already requests 36 bytes and accepts a consistent short response;
+READ CAPACITY(10) requires all eight bytes. Preserve both rules: capacity
+responses shorter than eight bytes cannot safely describe the medium.
+
+Decision: every root/hub per-port record shares a one-second budget. A deferred
+event is coalesced and emitted on a later scan. Quarantined ports acknowledge
+changes, emit one connect record with reason=quarantined, and stay silent until
+disconnect. Storage-block quarantine also blocks its port. Quarantine remains
+permanent for this boot; disconnect logging does not authorize enumeration.
+
+Only the first unpublished attach INQUIRY may be retried once after successful
+BOT recovery for timeout, endpoint STALL or SCSI command failure. Failed
+retirement, host errors, babble/CRC/buffer errors and malformed wrappers remain
+terminal. No published command or write gains a retry. MODE SENSE data STALL
+with a valid CSW skips the optional probe; persistent endpoint STALL requires
+successful reset recovery before skipping. Other transport faults stay terminal.
+Write admission still requires successful TEST UNIT READY, complete capacity
+and qualified cache flush; reported write protection and dirty FAT remain read-only.
+
+The first fault captures stage, tag, lengths, raw TD, toggle, CSW availability,
+status/residue and raw root-port status in one bounded record before recovery.
+Quarantine names the stage separately. Host models exercise the directive's
+slow-first-INQUIRY/64-byte-packet/unsupported-MODE-SENSE/short-capacity scenarios;
+they do not establish the actual controller inside Lexar 05dc:a81d or its
+hardware root cause. The lead supplies T23 and QEMU qualification.
+
 ### Mounts, hot-plug and removal
 
 Each admitted disk is a `blkdev` beside ATA. Scan the existing MBR/EBR parser

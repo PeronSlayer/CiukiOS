@@ -51,6 +51,11 @@ static void port_write(struct usb_host *h, unsigned port, unsigned set, unsigned
     /* CSC/PEC are W1C, never echoed during reset/enable writes. */
     usb_write(h, off, ((v & ~0x0au) & ~clear) | set, 2);
 }
+static void ack_changes(struct usb_host *h, unsigned port)
+{
+    unsigned off = 0x10 + 2 * port, v = usb_read(h, off, 2);
+    if (v != 0xffff && (v & 0x0a)) usb_write(h, off, v, 2);
+}
 static int reset(struct usb_host *h, unsigned port)
 {
     if (port >= h->ports) return -EINVAL;
@@ -140,4 +145,4 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
     if (result >= 0 && pid == USB_PID_IN && result) memcpy(data, h->dma + USB_BUFFER, (unsigned)result);
     return result;
 }
-const struct usb_hc_ops usb_uhci_ops = {start, status, reset, disable, packet};
+const struct usb_hc_ops usb_uhci_ops = {start, status, reset, disable, packet, ack_changes};
