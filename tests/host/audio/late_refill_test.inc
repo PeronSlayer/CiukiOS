@@ -38,6 +38,7 @@ static void late_setup(void)
     for(unsigned i=0;i<12;i++) ac97.claims[i]=-1;
     audio.ready=true; audio.master=(struct ciuki_mixer_master){.left=100,.right=100};
     idle_since=non_silent_end=0; first_playback=playback_logged=quantum_pending=quantum_mixed=false;
+    idle_notice.pending=false;
     vm_active_hook=vm_attached_hook=vm_nonzero_hook=false;
     g_boot.flags=CBI_F_VERBOSE; g_ticks=hw.tick=1000;
 }

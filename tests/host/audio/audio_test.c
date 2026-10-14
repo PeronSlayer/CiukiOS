@@ -1174,6 +1174,7 @@ static void test_persistence(void)
 #include "second_set_test.inc"
 #include "late_refill_test.inc"
 #include "thinkpad_ec_test.inc"
+#include "deadline_test.inc"
 static void registry_fixture(const char *text)
 {
     static struct vfs_table table;CHECK(!vfs_table_init(&vfs,&table,2));
@@ -1207,12 +1208,13 @@ int main(int argc,char **argv)
 {
     CHECK(argc==3);ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);
     controller.state=T_RUNNING;g_current=&controller;proc_init();
+    if(getenv("CIUKI_AUDIO_COST")) { test_service_budget();test_cost_breakdown();free(ram);return 0; }
     CHECK(!fake_open(&disk[0],argv[1])&&!fake_open(&disk[1],argv[2]));
     disk[0].undo_enabled=disk[1].undo_enabled=true;CHECK(!cache_init(&cache,0));vfs_init(&vfs);
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

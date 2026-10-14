@@ -131,6 +131,20 @@ static bool playback_logged;
 static uint64_t playback_start, playback_next;
 static uint64_t non_silent_end; /* output position after the last nonzero published quantum */
 static bool quantum_pending, quantum_mixed; /* retry a refused publication without mixing twice */
+/* Coalesce idle-stop notices; formatting/sinks run only after service and
+ * while stopped. A restart can defer a notice to the next idle interval. */
+static struct {
+    bool pending;
+    int error;
+    uint64_t published, retired, halts, tail_ms;
+} idle_notice;
+static void idle_stop_notice(const struct audio_transport *b, int error)
+{
+    idle_notice.pending = true; idle_notice.error = error;
+    idle_notice.published = b->published; idle_notice.retired = b->retired;
+    idle_notice.halts = b->dma_halts;
+    idle_notice.tail_ms = idle_since ? g_ticks - idle_since : 0;
+}
 void audio_diagnostics(struct ciuki_audio_diagnostics *out)
 {
     uint32_t f = irq_save();
@@ -162,6 +176,18 @@ static void playback_log(bool failed)
          (unsigned long long)d.irqs, (unsigned long long)d.fetched_frames,
          (unsigned long long)(now - playback_start));
     playback_next = now + 250; playback_logged = done;
+}
+static void audio_flush_logs(void)
+{
+    if (audio.running) return;
+    if (idle_notice.pending) {
+        idle_notice.pending = false;
+        klog("[audio] idle-tail transport stop err=%d published=%llu retired=%llu halts=%llu tail_ms=%llu",
+             idle_notice.error, (unsigned long long)idle_notice.published,
+             (unsigned long long)idle_notice.retired, (unsigned long long)idle_notice.halts,
+             (unsigned long long)idle_notice.tail_ms);
+    }
+    playback_log(false);
 }
 void audio_wake(void)
 {
@@ -206,8 +232,7 @@ void audio_service(void)
     if (err && tail && silent && b.tail_drained) {
         /* Idle tail: an underrun carries no client data. Stop the transport
          * normally instead of failing the backend; a source restarts it. */
-        klog("[audio] idle-tail transport stop err=%d published=%llu retired=%llu halts=%llu tail_ms=%llu",
-             err, (unsigned long long)b.published, (unsigned long long)b.retired, (unsigned long long)b.dma_halts, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
+        idle_stop_notice(&b, err);
         error_op = "stop";
         stop_snapshot = b;
         err = audio_backend_stop(); stop_failed = err != 0;
@@ -223,8 +248,7 @@ void audio_service(void)
          * failed the backend (QEMU campaign 13, image 22320ccc: the AUDIO_LEAD
          * tail kept while a DOS VM is attached drained between VMPLAY stages
          * 4 and 5). Inside the tail that period is silence: stop as above. */
-        klog("[audio] idle-tail transport stop drained published=%llu retired=%llu tail_ms=%llu",
-             (unsigned long long)b.published, (unsigned long long)b.retired, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
+        idle_stop_notice(&b, 0);
         error_op = "stop";
         stop_snapshot = b;
         err = audio_backend_stop(); stop_failed = err != 0;
@@ -274,7 +298,7 @@ void audio_service(void)
            b.published - b.retired < lead && published_now++ < limit) {
         if (!quantum_pending) {
             quantum_mixed = audio.running && active;
-            if (!audio.running) {
+            if (!audio.running || (!active && !(audio_vm_attached && audio_vm_attached()))) {
                 memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
             } else audio_mix(quantum, AUDIO_QUANTUM);
             quantum_pending = true;
@@ -301,7 +325,6 @@ void audio_service(void)
             err = audio_backend_start(); audio.running = !err; audio_backend_snapshot(&b);
         }
     }
-    if (!err) playback_log(false); /* failure has one complete record below */
     if (!err && !active && audio.running && !quantum_pending) {
         /* Client drains have already waited their fetched/tail allowance.
          * Silence still in the queue is not client data. Keep publishing
@@ -358,6 +381,7 @@ static void audio_worker(void *arg)
         }
         audio.pending = false;
         audio_service();
+        audio_flush_logs();
         /* A P_DEVICE thread must block between services (f1-18 rule): a 1 ms
          * poll starved ring-3 tasks (F0 preempt, image 7ab10f64). The IRQ and
          * the stream writers wake `changed`; the deadline is only a safety net:
