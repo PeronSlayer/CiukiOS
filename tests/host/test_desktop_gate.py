@@ -178,7 +178,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_demo_arguments_summaries_pacing_and_faults(self):
         include=self.folder/'include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h','display.h','media.h','registry.h','audio_preference.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h','display.h','media.h','net.h','registry.h','audio_preference.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* host transport declaration supplied by harness */\n')
         binary=self.folder/'demo-test'
@@ -214,7 +214,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_desktop_gate_loop(self):
         include=self.folder/'desktop-include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h','display.h','media.h','registry.h','audio_preference.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h','display.h','media.h','net.h','registry.h','audio_preference.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):(include/name).write_text('/* declarations supplied by harness */\n')
         binary=self.folder/'desktop-gate-test'
@@ -290,7 +290,7 @@ void klog(const char *f,...) {(void)f;}
 
     def test_native_handshake_reports_through_kernel_hook(self):
         include=self.folder/'handshake-include/ciuki';include.mkdir(parents=True)
-        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h','display.h','media.h','registry.h','audio_preference.h'):
+        for name in ('channel.h','surface.h','spawn.h','proc.h','audio.h','power.h','display.h','media.h','net.h','registry.h','audio_preference.h'):
             (include/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
         for name in ('raw.h','runtime.h'):
             (include/name).write_text('/* declarations supplied by host harness */\n')
