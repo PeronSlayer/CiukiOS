@@ -12,6 +12,9 @@
 #include <ciuki/process.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/dosvm.h>
+#include <ciuki/display.h>
+#include <ciuki/cpustat.h>
+#pragma weak grants_display_owner
 extern int32_t display_syscall(struct trap_frame *) __attribute__((weak));
 extern int32_t power_syscall(uint32_t action) __attribute__((weak));
 extern int32_t dosvm_client_syscall(struct trap_frame *) __attribute__((weak));
@@ -34,6 +37,10 @@ static int32_t sys_debug_write(uint32_t buf, uint32_t len)
             kbuf[i] = '.';
     g_current->debug_bytes += len;
     klog("[user %u] %s", g_current->id, kbuf);
+    if (cpu_stall_record && len >= sizeof("[desktop] stall ")-1 &&
+        !strncmp(kbuf, "[desktop] stall ", sizeof("[desktop] stall ")-1) &&
+        grants_display_owner && grants_display_owner(proc_current()))
+        cpu_stall_record(kbuf, len);
     return (int32_t)len;
 }
 

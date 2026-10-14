@@ -10,6 +10,7 @@
 #define BOOTLOG_RING (BOOTLOG_LIMIT - BOOTLOG_PROTECTED)
 #define BOOTLOG_RAM 8192u
 #define BOOTLOG_PATH "C:/SYSTEM/LOGS/BOOT.LOG"
+#define BOOTLOG_SYNC_TIMEOUT_MS 2000u
 struct vfs;
 struct bootlog_stats {
     uint32_t size, queued, dropped, rotations, qualification_sequence, first_write_sequence;
@@ -24,9 +25,10 @@ void bootlog_capture(const char *, size_t);
 /* Periodic summaries bypass the protected prefix, including before mount. */
 void bootlog_capture_ring(const char *, size_t);
 int bootlog_activate(struct vfs *, bool qualified, uint32_t sequence);
-int bootlog_drain(void);
-/* Thread context, with no storage or USB reservation held. Drain the captured
- * prefix/ring and commit it; contention sleeps and observes caller cancellation. */
+int bootlog_drain(void); /* storage task: one 4 KiB batch, then a requested commit */
+/* Thread context, with no storage or USB reservation held. Request a captured
+ * byte watermark from the storage task and wait with cancellation/deadline;
+ * the caller never performs disk I/O. queued includes a pending commit token. */
 int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *);
 int bootlog_shutdown(void);
 void bootlog_snapshot(struct bootlog_stats *);

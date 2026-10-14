@@ -14,6 +14,21 @@ static unsigned boot_used, boot_sent, head, used;
 static uint32_t ring_position = BOOTLOG_PROTECTED;
 static int handle = -1;
 static bool draining, attached, disabled;
+static uint64_t ring_retired, sync_target, sync_done, sync_commit_target;
+#define SYNC_WAITERS 16u /* room for every controller worker and overlapping callers */
+static uint64_t sync_waiters[SYNC_WAITERS];
+/* Called under the RAM lock. A newer binder cannot move an older binder's
+ * completion point. Timed-out requests still receive an eventual commit. */
+static void sync_next_commit(void)
+{
+    sync_commit_target=0;
+    for (unsigned i=0;i<SYNC_WAITERS;i++) {
+        uint64_t target=sync_waiters[i];
+        if (target>sync_done && (!sync_commit_target || target<sync_commit_target))
+            sync_commit_target=target;
+    }
+    if (!sync_commit_target && sync_target>sync_done) sync_commit_target=sync_target;
+}
 #ifdef FS_HOST
 static pthread_mutex_t ram_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t lock_ram(void) { pthread_mutex_lock(&ram_lock); return 0; }
@@ -36,7 +51,7 @@ static void capture(const char *s, size_t n, bool periodic)
             if (!periodic && boot_used < BOOTLOG_PROTECTED)
                 boot[boot_used++] = s[i];
             else {
-                if (used == BOOTLOG_RAM) { head = (head + 1) % BOOTLOG_RAM; used--; stats.dropped++; }
+                if (used == BOOTLOG_RAM) { head = (head + 1) % BOOTLOG_RAM; used--; stats.dropped++; ring_retired++; }
                 ram[(head + used) % BOOTLOG_RAM] = s[i]; used++;
             }
         }
@@ -92,7 +107,7 @@ static int drain_owned(void)
         for (unsigned i = 0; i < take; i++)
             batch[n++] = prefix ? boot[boot_sent + i] : ram[(head + i) % BOOTLOG_RAM];
         if (prefix) boot_sent += take;
-        else { head = (head + take) % BOOTLOG_RAM; used -= take; }
+        else { head = (head + take) % BOOTLOG_RAM; used -= take; ring_retired += take; }
         unlock_ram(flags);
         if (!take) break;
     }
@@ -133,10 +148,31 @@ static void drop_drain(void)
 int bootlog_drain(void)
 {
     if (!take_drain()) return -FS_EBUSY;
-    #ifndef FS_HOST
+    /* The storage task alone does runtime VFS work. Skip a contended client
+     * without monopolizing that task; its next turn retries. */
+    if (stats.active && !fs_lock_try_take(&table.vfs->lock)) {
+        drop_drain(); return -FS_EBUSY;
+    }
+    if (stats.active) fs_lock_drop(&table.vfs->lock);
+#ifndef FS_HOST
     uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
 #endif
-    int e=drain_owned(); drop_drain();
+    int e=drain_owned();
+    uint32_t f=lock_ram();
+    uint64_t retired=boot_sent+ring_retired;
+    bool commit=!e && stats.active && sync_commit_target && retired>=sync_commit_target;
+    unlock_ram(f);
+    if (commit) {
+        stats.storage_calls++; e=vfs_commit(&table,handle);
+        f=lock_ram();
+        if (!e) {
+            sync_done=retired;
+            sync_next_commit();
+        }
+        unlock_ram(f);
+        if (e) failed(e);
+    }
+    drop_drain();
 #ifndef FS_HOST
     if (cpu_path_add && cpu_path_clock) cpu_path_add(CPU_BOOTLOG, cpu_path_clock() - start);
     kpreempt_point();
@@ -146,45 +182,34 @@ int bootlog_drain(void)
 int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *ctx)
 {
     if (!cancel || !pause) return -FS_EINVAL;
-    while (!take_drain()) {
-        if (cancel(ctx)) return -FS_EAGAIN;
+    uint32_t f=lock_ram();
+    if (stats.error || !stats.active || sync_done>=stats.captured) {
+        int error=stats.error;unlock_ram(f);return error;
+    }
+    unsigned slot=0;
+    while (slot<SYNC_WAITERS && sync_waiters[slot]) slot++;
+    if (slot==SYNC_WAITERS) { unlock_ram(f);return -FS_EBUSY; }
+    uint64_t target=stats.captured;
+    sync_waiters[slot]=target;
+    if (target>sync_target) sync_target=target;
+    sync_next_commit();
+    unlock_ram(f);
+    uint32_t start=fs_now_ms();
+    int result=-FS_EAGAIN;
+    /* No VFS calls, drain ownership or reservations on a binder's stack.
+     * An independent deadline also bounds a broken/non-cancelling caller. */
+    for (unsigned turn=0;turn<BOOTLOG_SYNC_TIMEOUT_MS;turn++) {
+        f=lock_ram();
+        int error=stats.error;
+        bool done=!stats.active || sync_done>=target;
+        unlock_ram(f);
+        if (error || done) { result=error;break; }
+        if (cancel(ctx) || (uint32_t)(fs_now_ms()-start)>=BOOTLOG_SYNC_TIMEOUT_MS)
+            break;
         pause(ctx);
     }
-    int e=0;
-    /* Snapshot the producer watermark. New periodic output cannot extend the
-     * synchronous operation forever. The protected prefix is drained first. */
-    struct bootlog_stats before; bootlog_snapshot(&before);
-    unsigned batches=(before.queued+4095)/4096+1;
-    for (unsigned i=0;i<batches && stats.active && !e;i++) {
-        if (cancel(ctx)) { e=-FS_EAGAIN; break; }
-        struct bootlog_stats pending; bootlog_snapshot(&pending);
-        if (!pending.queued) break;
-        /* Avoid waiting indefinitely for a desktop/storage client. Once free,
-         * the non-preemptible kernel enters the next VFS call without yielding. */
-        while (!fs_lock_try_take(&table.vfs->lock)) {
-            if (cancel(ctx)) { e=-FS_EAGAIN; break; }
-            pause(ctx);
-        }
-        if (e) break;
-        fs_lock_drop(&table.vfs->lock);
-        e=drain_owned();
-#ifndef FS_HOST
-        kpreempt_point();
-#endif
-    }
-    if (!e && stats.active && handle>=0) {
-        while (!fs_lock_try_take(&table.vfs->lock)) {
-            if (cancel(ctx)) { e=-FS_EAGAIN; break; }
-            pause(ctx);
-        }
-        if (!e) {
-            fs_lock_drop(&table.vfs->lock);
-            stats.storage_calls++; e=vfs_commit(&table,handle);
-            if (e) failed(e);
-        }
-    }
-    if (!e && stats.error) e=stats.error;
-    drop_drain(); return e;
+    f=lock_ram();sync_waiters[slot]=0;sync_next_commit();unlock_ram(f);
+    return result;
 }
 int bootlog_shutdown(void)
 {
@@ -216,11 +241,17 @@ void bootlog_snapshot(struct bootlog_stats *out)
     if (!out) return;
     uint32_t f = lock_ram(); *out = stats;
     out->boot_queued = boot_used - boot_sent; out->ring_queued = used;
-    out->queued = out->boot_queued + used; unlock_ram(f);
+    out->queued = out->boot_queued + used;
+    /* mount.c's existing storage task polls active && queued. A request to
+     * commit bytes already drained must still cause one storage turn. */
+    if (stats.active && !out->queued && sync_target>sync_done) out->queued=1;
+    unlock_ram(f);
 }
 void bootlog_reset(void)
 {
     if (attached || draining) return;
     memset(&stats, 0, sizeof(stats)); head = used = boot_used = boot_sent = 0;
     ring_position = BOOTLOG_PROTECTED; handle = -1; disabled = false;
+    ring_retired=sync_target=sync_done=sync_commit_target=0;
+    memset(sync_waiters,0,sizeof(sync_waiters));
 }

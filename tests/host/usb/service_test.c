@@ -68,8 +68,9 @@ struct task *task_create_kernel(const char *name,void (*fn)(void *),void *arg,en
         input_worker.state=T_BLOCKED;input_worker.prio=prio;input_fn=fn;input_arg=arg;
         return input_create_failed ? NULL:&input_worker;
     }
-    assert(!strcmp(name,"usb-host"));
+    assert(!strcmp(name,"usb-host") && arg);
     if(create_failed) return NULL;
+    snprintf(worker.name,sizeof(worker.name),"%s",name);
     worker.state=T_BLOCKED;worker.prio=prio;worker_fn=fn;worker_arg=arg;return &worker;
 }
 void task_start(struct task *t) { assert((t==&worker || t==&input_worker) && t->state==T_BLOCKED);t->state=T_READY;started++; }
@@ -107,6 +108,7 @@ int main(int argc,char **argv)
         assert(!usb_get(0)->ready && !(m.config[1]&4) && !strcmp(usb_get(0)->reason,"service_thread_failed"));
     } else {
         assert(created==2 && started==2 && worker.state==T_READY);
+        assert(worker_arg==usb_get(0) && !strcmp(worker.name,"usb-host"));
         assert(usb_get(0)->ready && !usb_get(0)->device_count);
         assert(!usb_input_ready()); /* a controller alone is not an input device */
         assert(!service_entries && service_queues==1 && !first_scans);

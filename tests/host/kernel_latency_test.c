@@ -151,4 +151,5 @@ int main(void)
 {
     wake_test();device_test();measured_wake_test();accounting_test();
     puts("kernel latency: wake preemption, bounded device hog, lock/IF deferral, UI priority, CPU/exited shares, guest and stretch EIP, forced record PASS");
+    return 0;
 }

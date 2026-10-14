@@ -894,11 +894,50 @@ static void test_stopped_thread_creation(void)
     CHECK(!proc_find(pid));
 }
 
+static struct uaddr *zero_observed;
+static unsigned zero_turns,copy_turns,last_backing;
+static bool fail_after_zero;
+static void zero_peer_turn(void)
+{
+    CHECK(g_current->state==T_RUNNING && (host_flags&0x200));
+    if (zero_observed->head && zero_observed->head->preparing) {
+        CHECK(zero_observed->backing-last_backing==16); /* exactly 64 KiB */
+        last_backing=zero_observed->backing;zero_turns++;
+        if (fail_after_zero) alloc_fail=0;
+    } else copy_turns++;
+}
+static void test_elf_cooperative(void)
+{
+    struct task *saved=g_current;g_current=&controller;
+    unsigned base_pages=pages_used,base_heap=heap_blocks;
+    struct ciuki_file file=fixture_file();
+    eh()->phnum=1;ph(0)->filesz=131077;ph(0)->memsz=4*1024*1024;
+    file.bytes=PAGE_SIZE+ph(0)->filesz;
+    struct elf_image image;CHECK(!elf_validate(&file,&image));
+    struct uaddr u;CHECK(!ua_init(&u,&u));zero_observed=&u;
+    zero_turns=copy_turns=last_backing=0;fail_after_zero=false;on_preempt_point=zero_peer_turn;
+    CHECK(!elf_load(&file,&image,&u));on_preempt_point=NULL;
+    CHECK(zero_turns==64 && copy_turns==2 && u.backing==1024);
+    uint8_t bytes[PAGE_SIZE];
+    for(uint32_t at=CIUKI_IMAGE_BASE+131077;at<CIUKI_IMAGE_BASE+4*1024*1024;) {
+        uint32_t n=CIUKI_IMAGE_BASE+4*1024*1024-at;
+        if(n>sizeof(bytes))n=sizeof(bytes);
+        CHECK(!ua_read(&u,bytes,at,n));for(unsigned i=0;i<n;i++)CHECK(!bytes[i]);at+=n;
+    }
+    ua_destroy(&u);CHECK(pages_used==base_pages && heap_blocks==base_heap);
+    CHECK(!ua_init(&u,&u));zero_observed=&u;zero_turns=last_backing=0;
+    fail_after_zero=true;on_preempt_point=zero_peer_turn;
+    CHECK(elf_load(&file,&image,&u)==-ENOMEM);on_preempt_point=NULL;alloc_fail=-1;
+    CHECK(zero_turns==1 && !u.backing && !u.head && !u.as.tables);
+    ua_destroy(&u);CHECK(pages_used==base_pages && heap_blocks==base_heap);
+    g_current=saved;
+    puts("proc ELF F0-20: 4MiB BSS 64 preemption points/64KiB, copy 2 points/64KiB, every BSS byte zero, allocation-failure rollback PASS");
+}
 int main(int argc, char **argv)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     controller.state = T_RUNNING;
-    test_bounded_mapping(); test_elf(); test_arena(); test_stack(); test_queue(); test_processes(); test_stopped_thread_creation(); test_creation_failure(); test_spawn_syscall(); test_limits(); test_enumeration();
+    test_bounded_mapping(); test_elf(); test_elf_cooperative(); test_arena(); test_stack(); test_queue(); test_processes(); test_stopped_thread_creation(); test_creation_failure(); test_spawn_syscall(); test_limits(); test_enumeration();
     if (argc == 2) test_real_payload(argv[1]);
     struct trap_frame tf = { .vector = 14, .cs = 8,
         .eip = (uint32_t)(uintptr_t)copy_user_fault_start };
