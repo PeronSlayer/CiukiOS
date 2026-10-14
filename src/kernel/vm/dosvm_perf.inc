@@ -66,7 +66,8 @@ void dosvm_perf_report(struct dosvm *v)
         .converted = DELTA(converted_bytes, last_converted), .rows = DELTA(rows, last_rows),
         .trapped = DELTA(trapped_bytes, last_trapped), .guest_us = perf_us(DELTA(guest_cycles, last_guest)),
         .monitor_us = perf_us(DELTA(monitor_cycles, last_monitor)), .log_us = perf_us(DELTA(log_cycles, last_log)),
-        .present_us = perf_us(DELTA(present_cycles, last_present)), .edges = edges - v->perf.last_edges
+        .present_us = perf_us(DELTA(present_cycles, last_present)),
+        .harvest_us = perf_us(DELTA(harvest_cycles, last_harvest)), .edges = edges - v->perf.last_edges
     };
     s->batched = DELTA(batched, last_batched);
     v->perf.last_batched = v->perf.batched;
@@ -92,6 +93,7 @@ void dosvm_perf_report(struct dosvm *v)
     memcpy(v->perf.last_irqs, irqs, sizeof(irqs)); v->perf.last_edges = edges;
     v->perf.last_guest = v->perf.guest_cycles; v->perf.last_monitor = v->perf.monitor_cycles;
     v->perf.last_present = v->perf.present_cycles; v->perf.last_log = v->perf.log_cycles;
+    v->perf.last_harvest = v->perf.harvest_cycles;
 #undef DELTA
 }
 
@@ -131,6 +133,9 @@ void dosvm_perf_dump(struct dosvm *v)
         unsigned id = v->info.key.id;
         rec_diag(dosvm_probe(v), "group=vm_perf_video vm=%u n=%u ms=%u frames=%u flips=%u harvests=%u pages=%u",
             id, n+1, s->ms, s->frames, s->flips, s->harvests, s->pages);
+        /* Companion row keeps maximum-width counters within 240 bytes. */
+        rec_diag(dosvm_probe(v), "group=vm_perf_harvest vm=%u n=%u dirty_pages=%u harvest_us=%llu",
+            id, n+1, s->pages, s->harvest_us);
         rec_diag(dosvm_probe(v), "group=vm_perf_present vm=%u n=%u converted=%u rows=%u present_us=%llu",
             id, n+1, s->converted, s->rows, s->present_us);
         rec_diag(dosvm_probe(v), "group=vm_perf_cpu vm=%u n=%u guest_us=%llu monitor_us=%llu log_us=%llu trapped=%u",

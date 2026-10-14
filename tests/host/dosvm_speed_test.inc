@@ -90,6 +90,7 @@ static void test_speed_accounting(void)
     fake_tsc = 11000;
     unsigned records_before = records;
     v->video_frames = 35; v->video_starts = 35; v->pit.edges = 140;
+    v->perf.harvests = 140; v->perf.direct_pages = 700; v->perf.harvest_cycles = 123;
     v->monitor.stats.delivered[0] = 140; v->monitor.stats.insn[V86_OUT] = 200;
     g_ticks += 1000; dosvm_perf_report(v);
     CHECK(v->perf.sample_count == 1 && records == records_before);
@@ -97,11 +98,14 @@ static void test_speed_accounting(void)
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&
           s->edges == 140 && s->irqs[0] == 140 && s->insn[V86_OUT] == 200);
     CHECK(s->cost_count[DOSVM_COST_VGA_IO] == 1 && s->cost_us[DOSVM_COST_VGA_IO] == 2000);
+    CHECK(s->harvests == 140 && s->pages == 700 && s->harvest_us == 123);
     for (unsigned i = 1; i < 81; i++) {
         v->monitor.pic[0].isr = i & 1; /* guest IRQ context cannot suppress memory sampling */
         g_ticks += 1000; fake_tsc += 1000; v->video_frames += i;
         dosvm_perf_report(v);
     }
+    /* harvest counters are per-interval deltas: only the first interval carries them */
+    for (unsigned i = 1; i < 16; i++) CHECK(v->perf.sample[i].harvest_us == 0 && v->perf.sample[i].pages == 0);
     CHECK(v->perf.sample_count == 81 && v->perf.sample[0].frames == 35 &&
           v->perf.sample[1].frames == 1 && v->perf.sample[2].frames == 2 &&
           v->perf.sample[3].frames == 3 && records == records_before);
@@ -170,5 +174,49 @@ static void test_speed_launch_errors(void)
     destroy(v, true); empty();
     puts("f3-13 launch errors: completed DOS EXEC IRET/CF, final Enter consumed before shell-error detection, first text frame and refused/read-only mode calls PASS");
 }
+static void test_planar_completions(void)
+{
+    struct dosvm *v = create();
+    int10(v, 0x13, 0, 0, 0);
+    port_out(v, 0x3C4, 2, 0x0604);
+    port_out(v, 0x3D4, 2, 0x0014);
+    port_out(v, 0x3D4, 2, 0xE317);
+    port_out(v, 0x3C4, 2, 0x0102);
+    cpu_cr3 = v->as.pd_phys;
+    unsigned faults = v->video_faults;
+    for (unsigned frame = 0; frame < 3; frame++) {
+        unsigned base = frame * 0x4000, pages = v->perf.direct_pages,
+                 harvests = v->perf.harvests, invalidated = invalidations;
+        for (unsigned plane = 0; plane < 4; plane++) {
+            port_out(v, 0x3C4, 2, ((1u << plane) << 8) | 2);
+            for (unsigned at = 0; at < 16000; at++) {
+                *window_memory(v, base + at) = (uint8_t)(at + plane + frame);
+                *window_pte(v, 0xA0000 + base + at) |= DOSVM_PTE_DIRTY;
+            }
+        }
+        /* A low-address write is a completion boundary too. */
+        port_out(v, 0x3D4, 2, 0x000D);
+        CHECK(v->perf.direct_pages == pages + 16 && v->perf.harvests == harvests + 4 &&
+              v->video_direct == 4 && v->video_faults == faults);
+        CHECK(invalidations >= invalidated + 16);
+        for (unsigned page = 0; page < VIDEO_WINDOW_PAGES; page++)
+            CHECK(!(*window_pte(v, 0xA0000 + page * PAGE_SIZE) & DOSVM_PTE_DIRTY));
+        port_out(v, 0x3D4, 2, (base & 0xFF00u) | 0x0C);
+        port_out(v, 0x3D4, 2, (base & 0xFF00u) | 0x0C);
+        CHECK(v->perf.direct_pages == pages + 16 && v->perf.harvests == harvests + 4);
+        struct dosvm_frame out;
+        CHECK(!dosvm_frame_digest(v, frame, &out) && v->video_direct == 4);
+        /* A snapshot cannot strand the current plane, even with the same
+         * map mask: subsequent native stores remain writable. */
+        *window_memory(v, base + 16000) = 0xA5;
+        *window_pte(v, 0xA0000 + base + 16000) |= DOSVM_PTE_DIRTY;
+        port_out(v, 0x3D4, 2, (base & 0xFF00u) | 0x0C);
+        CHECK(v->perf.harvests == harvests + 5 && v->perf.direct_pages == pages + 17 &&
+              v->vga.plane[3][base + 16000] == 0xA5 && v->video_faults == faults);
+    }
+    cpu_cr3 = 0;
+    destroy(v, true); empty();
+    puts("f3-16 planar completions: four 16000-byte passes, 16 dirty pages, CRTC low/high/redundant flips, invalidation and snapshot persistence PASS");
+}
 static void test_speed(void)
-{ test_speed_window(); test_speed_accounting(); test_speed_launch_errors(); }
+{ test_speed_window(); test_speed_accounting(); test_speed_launch_errors(); test_planar_completions(); }

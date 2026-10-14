@@ -45,7 +45,8 @@ struct ciuki_boot_info g_boot;
 static uint32_t read_cr3(void) { return cpu_cr3; }
 uint64_t g_tsc_per_ms;
 static uint64_t fake_tsc;
-static uint64_t read_tsc_serialized(void) { return fake_tsc; }
+static uint64_t (*tsc_clock_hook)(void);
+static uint64_t read_tsc_serialized(void) { return tsc_clock_hook ? tsc_clock_hook() : fake_tsc; }
 static void write_cr3(uint32_t x) { cpu_cr3 = x; }
 static uint32_t fake_cr2 = 0xDEAD000;
 static uint32_t read_cr2(void) { return fake_cr2; }

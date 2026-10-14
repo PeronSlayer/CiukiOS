@@ -165,6 +165,45 @@ static void test_video_bios_ports(void)
 }
 
 /* ---- #PF on the guarded aperture, emulated through the VGA bus ---- */
+static void test_planar_latch_fallback(void)
+{
+    struct dosvm *v = create();
+    int10(v, 0x13, 0, 0, 0);
+    port_out(v, 0x3C4, 2, 0x0604);
+    port_out(v, 0x3C4, 2, 0x0102);
+    CHECK(v->video_direct == 1);
+    for (unsigned p = 0; p < 4; p++) for (unsigned at = 0; at < 32; at++)
+        cvga_store_plane(&v->vga, p, 0x100 + at, (uint8_t)(p * 41 + at));
+    /* VL_LatchToScreen: video-to-video REP MOVSB with write mode 1 and
+     * all four planes enabled. CPU read-map data cannot represent this copy. */
+    port_out(v, 0x3CE, 2, 0x4105);
+    port_out(v, 0x3C4, 2, 0x0F02);
+    CHECK(!v->video_direct);
+    const uint8_t rep[] = {0xF3, 0xA4};
+    CHECK(!dosvm_write(v, 0x30000, rep, sizeof(rep)));
+    struct v86_frame f = vf(0, 0, 32, 0);
+    f.tf.cs = 0x3000; f.ds = f.es = 0xA000; f.tf.esi = 0x100; f.tf.edi = 0x200;
+    CHECK(!dosvm_vga_fault(v, &f) && !f.tf.ecx && f.tf.eip == 2);
+    for (unsigned p = 0; p < 4; p++) {
+        CHECK(!memcmp(&v->vga.plane[p][0x100], &v->vga.plane[p][0x200], 32));
+        CHECK(v->vga.latch[p] == (uint8_t)(p * 41 + 31));
+    }
+    /* Same-value stores still broadcast to a different plane; untouched
+     * bytes in that dirty 4 KiB page must retain their per-plane contents. */
+    port_out(v, 0x3CE, 2, 0x4005);
+    port_out(v, 0x3C4, 2, 0x0302);
+    CHECK(!v->video_direct);
+    cvga_store_plane(&v->vga, 0, 0x400, 0x19);
+    cvga_store_plane(&v->vga, 1, 0x400, 0xA3);
+    cvga_store_plane(&v->vga, 0, 0x401, 0x72);
+    cvga_store_plane(&v->vga, 1, 0x401, 0xE4);
+    uint8_t byte = 0x19;
+    CHECK(!dosvm_write(v, 0xA0400, &byte, 1));
+    CHECK(v->vga.plane[0][0x400] == 0x19 && v->vga.plane[1][0x400] == 0x19 &&
+          v->vga.plane[0][0x401] == 0x72 && v->vga.plane[1][0x401] == 0xE4);
+    destroy(v, true); empty();
+    puts("f3-16 VGA fallback: Wolf3D latch REP copies all four distinct planes, last latches exact, sparse/same-value multi-plane writes preserve untouched bytes PASS");
+}
 static void test_video_faults(void)
 {
     struct dosvm *v = create();
@@ -815,6 +854,7 @@ static void test_video(void)
     test_video_bios_ports();
     test_video_retrace();
     test_video_faults();
+    test_planar_latch_fallback();
     test_video_presenter();
     test_video_goldens();
     test_client_boundary();

@@ -52,7 +52,7 @@ static void test_menu_heartbeat(void)
     exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
     /* No duplicate at the same tick and no catch-up burst after a delay. */
     before = records; dosvm_heartbeat(v, &cur); CHECK(records == before);
-    g_ticks += 10000; dosvm_heartbeat(v, &cur); CHECK(records == before + 5);
+    g_ticks += 10000; dosvm_heartbeat(v, &cur); CHECK(records == before + 6);
     before = records; dosvm_heartbeat(v, &cur); CHECK(records == before);
     v->monitor.vif = false; v->dpmi.if_armed = true;
     v->dpmi.shadow = true; v->monitor.pic[1].irr = 0x80;
@@ -64,18 +64,21 @@ static void test_menu_heartbeat(void)
     v->audio.sb.units = v->audio.sb.irq_edges = v->audio.sb.services = UINT32_MAX;
     v->monitor.stats.delivered[7] = UINT32_MAX;
     v->video_frames = v->video_starts = v->video_linear_harvests = v->video_flushes = v->video_faults = UINT32_MAX;
+    v->perf.harvests = v->perf.direct_pages = UINT32_MAX;
     g_ticks = UINT64_MAX - DOSVM_HEARTBEAT_TICKS;
     cur.tf.eip = UINT32_MAX;
     dosvm_heartbeat(v, &cur);
-    CHECK(records == before + 5 && strstr(recent_records[before % 8], "vif=0 arm=1 sh=1"));
+    CHECK(records == before + 6 && strstr(recent_records[before % 8], "vif=0 arm=1 sh=1"));
     CHECK(strstr(recent_records[(before + 1) % 8], "irq1=4294967295") &&
           strstr(recent_records[(before + 3) % 8], "units=4294967295"));
-    CHECK(strstr(last_record, "linear=4294967295 planes=4294967295"));
+    CHECK(strstr(recent_records[(before + 4) % 8], "linear=4294967295 planes=4294967295"));
+    CHECK(strstr(last_record, "group=vm_beat_vga_mem") &&
+          strstr(last_record, "harvests=4294967295 dirty_pages=4294967295 harvest_us=0"));
     v->info.key.generation = gen;
     v->kbd.count = 0;
     for (unsigned i = v->trace.heartbeats; i < DOSVM_HEARTBEAT_LIMIT; i++) {
         before = records; g_ticks += DOSVM_HEARTBEAT_TICKS;
-        dosvm_heartbeat(v, &cur); CHECK(records == before + 5);
+        dosvm_heartbeat(v, &cur); CHECK(records == before + 6);
     }
     before = records; g_ticks += DOSVM_HEARTBEAT_TICKS;
     dosvm_heartbeat(v, &cur); CHECK(records == before && v->trace.heartbeats == DOSVM_HEARTBEAT_LIMIT);
@@ -158,7 +161,7 @@ static void test_menu_halted_heartbeat(void)
     g_boot.flags = CBI_F_VERBOSE;
     unsigned before = records;
     device_hook_arm(v, 2100, device_hang_stop); step(v, 0x20, 0);
-    CHECK(left && !sleep_hook && v->trace.heartbeats == 1 && records == before + 5);
+    CHECK(left && !sleep_hook && v->trace.heartbeats == 1 && records == before + 6);
     CHECK(strstr(recent_records[before % 8], "eip=00000300") &&
           strstr(recent_records[before % 8], "vif=0"));
     g_boot.flags = 0; destroy(v, true); empty();
