@@ -21,12 +21,22 @@ uint32_t usb_read(struct usb_host *h, unsigned at, unsigned width)
 { return h->io.read(h->io.cookie, at, width); }
 void usb_write(struct usb_host *h, unsigned at, uint32_t v, unsigned width)
 { h->io.write(h->io.cookie, at, v, width); }
-void usb_port_record(struct usb_host *h, unsigned port, const char *event, int result)
+bool usb_port_record(struct usb_host *h, unsigned port, const char *event, int result)
 {
+    struct usb_port_log *log = &h->root_log[port];
+    if (h->root_blocked[port] && strncmp(event, "disconnect", 11) &&
+        (strncmp(event, "connect", 8) || log->quarantine_reported)) return false;
+    log->pending = event; log->result = result;
+    if (!usb_expired(h, log->next_record)) return false;
     bool uhci = h->pci.prog_if == 0;
     unsigned raw = usb_read(h, uhci ? 0x10 + 2 * port : 0x54 + 4 * port, uhci ? 2 : 4);
-    klog("[usb] port=%u status=%08x event=%s controller=%s tick=%llu result=%d",
-         port + 1, raw, event, h->owner, h->io.now(h->io.cookie), result);
+    bool quarantined = h->root_blocked[port] && !strncmp(event, "connect", 8);
+    klog("[usb] port=%u status=%08x event=%s reason=%s controller=%s tick=%llu result=%d",
+         port + 1, raw, event, quarantined ? "quarantined" : "state",
+         h->owner, h->io.now(h->io.cookie), result);
+    log->next_record = h->io.now(h->io.cookie) + 1000; log->pending = 0;
+    if (quarantined) log->quarantine_reported = true;
+    return true;
 }
 bool usb_expired(struct usb_host *h, uint64_t deadline)
 { return (int64_t)(h->io.now(h->io.cookie) - deadline) >= 0; }
@@ -76,7 +86,8 @@ void usb_device_quarantine(struct usb_device *d, const char *reason)
             usb_host_quarantine(h, "hub_disable_failed");
     }
     /* A device fault cannot authorize re-enumerating that port until reboot. */
-    klog("[usb] quarantine device addr=%u reason=%s", d->address, reason);
+    klog("[usb] quarantine device addr=%u reason=%s stage=%s", d->address, reason,
+         d->storage.trace.stage ? d->storage.trace.stage : "enumeration");
 }
 void usb_host_quarantine(struct usb_host *h, const char *reason)
 {
@@ -374,18 +385,39 @@ void usb_step(struct usb_host *h)
         for (unsigned p = 0; p < h->ports && h->ready; p++) {
             unsigned s = h->ops->port_status(h, p);
             unsigned previous = h->root_status[p];
+            struct usb_port_log *log = &h->root_log[p];
+            struct usb_device *child = h->root_child[p] ? &h->devices[h->root_child[p]-1] : 0;
+            if (!h->root_blocked[p] && child && child->storage.bound &&
+                child->storage.block.quarantined && !child->storage.ejected) {
+                h->root_blocked[p] = true;
+                h->ops->port_disable(h, p);
+            }
+            if (h->root_blocked[p]) {
+                /* Do not interpret a quarantined device's sticky CSC as a
+                 * new connection. Acknowledge observed changes without reset. */
+                h->ops->port_ack_changes(h, p);
+                if (s & USB_PORT_CONNECTED) {
+                    if (!log->quarantine_reported) usb_port_record(h, p, "connect", 0);
+                } else {
+                    if (previous & USB_PORT_CONNECTED) usb_port_record(h, p, "disconnect", 0);
+                    log->quarantine_reported = false;
+                    if (child) { usb_detach(child, "disconnected"); h->root_child[p] = 0; }
+                }
+                if (log->pending) usb_port_record(h, p, log->pending, log->result);
+                h->root_status[p] = s;
+                continue;
+            }
             if (first_scan || ((s ^ previous) & USB_PORT_CONNECTED))
                 usb_port_record(h, p, s & USB_PORT_CONNECTED ? "connect" : "disconnect", 0);
             else if ((s & USB_PORT_CHANGED) && h->root_child[p])
                 usb_port_record(h, p, s & USB_PORT_CONNECTED ? "connect" : "disconnect", 0);
             if ((s ^ previous) & USB_PORT_ENABLED) usb_port_record(h, p, "enable", 0);
             h->root_status[p] = s;
-            if (h->root_blocked[p]) continue;
             if (s & USB_PORT_OVERCURRENT) {
                 if (h->root_child[p]) usb_device_quarantine(&h->devices[h->root_child[p]-1], "overcurrent");
                 h->root_blocked[p] = true;
                 h->ops->port_disable(h, p);
-                klog("[usb] quarantine port=%u reason=overcurrent", p); continue;
+                usb_port_record(h, p, "overcurrent", -USB_EIO); continue;
             }
             if ((s & USB_PORT_CHANGED) && h->root_child[p]) {
                 usb_detach(&h->devices[h->root_child[p]-1], "root_port_changed");
@@ -400,7 +432,8 @@ void usb_step(struct usb_host *h)
                 h->io.sleep(h->io.cookie, 100);
                 s = h->ops->port_status(h, p);
                 if (!(s & USB_PORT_CONNECTED)) {
-                    usb_port_record(h, p, "disconnect", 0); h->root_status[p] = s; continue;
+                    usb_port_record(h, p, "disconnect", 0); h->ops->port_ack_changes(h, p);
+                    h->root_status[p] = s; continue;
                 }
                 int err = h->ops->port_reset(h, p);
                 if (err) { usb_host_quarantine(h, "root_port_reset"); break; }
@@ -409,6 +442,9 @@ void usb_step(struct usb_host *h)
                 if (err > 0) h->root_child[p] = (uint8_t)err;
                 else { h->ops->port_disable(h, p); usb_host_quarantine(h, "device_capacity"); break; }
             }
+            if (!h->ready) break; /* A transfer may have stopped/quarantined the HC. */
+            h->ops->port_ack_changes(h, p);
+            if (log->pending) usb_port_record(h, p, log->pending, log->result);
             h->root_status[p] = h->ops->port_status(h, p);
         }
         for (unsigned i = 0; i < h->device_count && h->ready; i++) if (h->devices[i].present && h->devices[i].hub_ports) usb_hub_scan(&h->devices[i]);

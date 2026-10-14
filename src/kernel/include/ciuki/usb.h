@@ -66,12 +66,12 @@ struct usb_packet_trace {
 struct usb_storage_trace {
     struct usb_packet_trace packet;
     const char *stage;
-    uint32_t tag;
+    uint32_t tag, port_status;
     unsigned expected, actual, data_expected, data_actual;
     int result;
     uint32_t csw_signature, csw_tag, residue;
     uint8_t command, csw_status;
-    bool csw_available;
+    bool csw_available, data_stalled;
 };
 /* One transparent SCSI/BOT interface, LUN zero. Records and block views are
  * retained until reboot; an uncertain command never becomes a new medium. */
@@ -83,7 +83,14 @@ struct usb_storage {
     struct usb_storage_trace trace;
     uint8_t interface, in, out, in_packet, out_packet, in_toggle, out_toggle;
     uint8_t sense_key, asc, ascq;
-    bool bound, online, published, ejected, write_protected;
+    bool bound, online, published, ejected, write_protected, fault_logged, quarantine_logged;
+};
+/* Coalesce suppressed events; root and external-hub ports use the same budget. */
+struct usb_port_log {
+    uint64_t next_record;
+    const char *pending;
+    int result;
+    bool quarantine_reported;
 };
 struct usb_device {
     struct usb_host *host;
@@ -98,6 +105,7 @@ struct usb_device {
     bool hub_blocked[USB_PORT_MAX];
     uint8_t hub_child[USB_PORT_MAX]; /* index+1; zero = not enumerated */
     uint16_t hub_status[USB_PORT_MAX]; /* last observed class port status */
+    struct usb_port_log hub_log[USB_PORT_MAX];
     bool hub_scanned;
 };
 struct usb_hc_ops {
@@ -107,6 +115,7 @@ struct usb_hc_ops {
     void (*port_disable)(struct usb_host *, unsigned);
     int (*packet)(struct usb_device *, unsigned endpoint, unsigned pid,
                   unsigned toggle, void *, unsigned bytes, bool periodic);
+    void (*port_ack_changes)(struct usb_host *, unsigned);
 };
 struct usb_host {
     struct pci_func pci;
@@ -124,6 +133,7 @@ struct usb_host {
     bool root_blocked[USB_PORT_MAX];
     uint8_t root_child[USB_PORT_MAX];
     unsigned root_status[USB_PORT_MAX]; /* last observed normalized state */
+    struct usb_port_log root_log[USB_PORT_MAX];
     bool attempted, ready, quarantined, touched, owned, busy;
     bool scanned;
     unsigned scan_count;
@@ -151,7 +161,7 @@ static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool
 }
 uint32_t usb_read(struct usb_host *, unsigned, unsigned);
 void usb_write(struct usb_host *, unsigned, uint32_t, unsigned);
-void usb_port_record(struct usb_host *, unsigned port, const char *event, int result);
+bool usb_port_record(struct usb_host *, unsigned port, const char *event, int result);
 bool usb_expired(struct usb_host *, uint64_t deadline);
 int usb_wait_register(struct usb_host *, unsigned, unsigned, uint32_t mask, uint32_t value, unsigned ms);
 int usb_retire_frames(struct usb_host *, unsigned offset, unsigned width, unsigned mask);

@@ -13,9 +13,15 @@ static void record(struct usb_device *d, unsigned port, unsigned s, unsigned c,
                    const char *event, int result)
 {
     struct usb_host *h = d->host;
-    klog("[usb] hub=%u port=%u status=%04x change=%04x event=%s controller=%s root=%u tick=%llu result=%d",
-         d->address, port + 1, s, c, event, h->owner, d->root_port + 1,
+    struct usb_port_log *log = &d->hub_log[port];
+    log->pending = event; log->result = result;
+    if (!usb_expired(h, log->next_record)) return;
+    bool quarantined = d->hub_blocked[port] && !strncmp(event, "connect", 8);
+    klog("[usb] hub=%u port=%u status=%04x change=%04x event=%s reason=%s controller=%s root=%u tick=%llu result=%d",
+         d->address, port + 1, s, c, event, quarantined ? "quarantined" : "state", h->owner, d->root_port + 1,
          h->io.now(h->io.cookie), result);
+    log->next_record = h->io.now(h->io.cookie) + 1000; log->pending = 0;
+    if (quarantined) log->quarantine_reported = true;
 }
 int usb_hub_attach(struct usb_device *d)
 {
@@ -36,10 +42,32 @@ void usb_hub_scan(struct usb_device *d)
     bool first = !d->hub_scanned;
     d->hub_scanned = true;
     for (unsigned p = 0; p < d->hub_ports && h->ready; p++) {
-        if (d->hub_blocked[p]) continue;
         unsigned s = 0, c = 0; int err = status(d, p, &s, &c);
         if (err) { record(d, p, s, c, "status", err); usb_device_quarantine(d, "hub_status"); return; }
         unsigned previous = d->hub_status[p];
+        struct usb_port_log *log = &d->hub_log[p];
+        struct usb_device *child = d->hub_child[p] ? &h->devices[d->hub_child[p]-1] : 0;
+        if (!d->hub_blocked[p] && child && child->storage.bound &&
+            child->storage.block.quarantined && !child->storage.ejected) {
+            d->hub_blocked[p] = true;
+            err = feature(d, p, 1, false); if (err) goto failed;
+        }
+        if (d->hub_blocked[p]) {
+            for (unsigned bit = 0; bit < 5; bit++) if (c & (1u << bit)) {
+                err = feature(d, p, 16 + bit, false); if (err) goto failed;
+            }
+            if (s & 1) {
+                if (!log->quarantine_reported) record(d, p, s, c, "connect", 0);
+            } else {
+                if (previous & 1) record(d, p, s, c, "disconnect", 0);
+                log->quarantine_reported = false;
+                if (child) { usb_detach(child, "disconnected"); d->hub_child[p] = 0; }
+            }
+            if (log->pending) record(d, p, s, c, log->pending, log->result);
+            d->hub_status[p] = (uint16_t)s;
+            continue;
+        }
+        if (log->pending) record(d, p, s, c, log->pending, log->result);
         if (first || ((s ^ previous) & 1) || (c & 1))
             record(d, p, s, c, s & 1 ? "connect" : "disconnect", 0);
         if ((s ^ previous) & 2) record(d, p, s, c, "enable", 0);
@@ -82,7 +110,7 @@ void usb_hub_scan(struct usb_device *d)
         if (err < 0) goto failed;
         d->hub_child[p] = (uint8_t)err;
         d->hub_status[p] = (uint16_t)s;
-        struct usb_device *child = &h->devices[err - 1];
+        child = &h->devices[err - 1];
         record(d, p, s, c, "enumerate", child->quarantined ? -USB_EIO : 0);
         continue;
 failed:

@@ -47,8 +47,9 @@ static struct model {
     bool connected, max_lun_stall, no_flush, wp, phase_error, bad_tag, bad_signature, bad_residue, short_csw;
     bool data_stall, csw_stall, cbw_stall, timeout, remove_data, ua, no_medium, fail_flush;
     unsigned sector_size, initial_ua;
-    bool uhci, data_babble, clear_fail, late_ack, latched;
-    unsigned inquiry_bytes, inquiry_delay, naks, reset_order, frame_offset, late_acks;
+    bool uhci, data_babble, data_crc, clear_fail, reset_fail, late_ack, latched, mode_stall;
+    unsigned inquiry_bytes, capacity_bytes, inquiry_delay, inquiry_delays, inquiries, modes, naks, reset_order, frame_offset, late_acks;
+    unsigned mode_csw_stalls;
     uint64_t command_at;
     uint32_t injected_status;
 } m;
@@ -110,7 +111,7 @@ static void start_command(void)
     m.stage=m.remaining ? 1 : 2;
     const uint8_t *c=m.cbw+15; memset(m.response,0,sizeof(m.response));
     switch(c[0]) {
-    case 0x12: assert(m.total==36);m.response[1]=0x80;m.response[2]=2;m.response[4]=31;break;
+    case 0x12: assert(m.total==36);m.inquiries++;m.response[1]=0x80;m.response[2]=2;m.response[4]=31;break;
     case 0x03: assert(m.total==18);memcpy(m.response,m.sense,18);break;
     case 0x00:
         assert(!m.total);
@@ -122,7 +123,7 @@ static void start_command(void)
         assert(!m.total);m.flushes++;
         if(m.no_flush) failed(5,0x20); else if(m.fail_flush) failed(4,0x44);
         break;
-    case 0x1a: assert(m.total==4); m.response[0]=3;m.response[2]=m.wp ? 0x80:0;break;
+    case 0x1a: assert(m.total==4);m.modes++;m.response[0]=3;m.response[2]=m.wp ? 0x80:0;break;
     case 0x28: case 0x2a:
         assert(m.total==((unsigned)c[7]*256+c[8])*512);
         if(c[0]==0x2a) m.writes++;
@@ -158,7 +159,7 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
         unsigned req=m.setup[1];
         if(req==0xfe && pid==USB_PID_IN && n) {if(m.max_lun_stall)return -USB_EPIPE;b[0]=0;return 1;}
         if(!n) {
-            if(req==0xff) {m.resets++;m.stage=0;m.cbw_at=0;m.reset_order=1;}
+            if(req==0xff) {m.resets++;if(m.reset_fail)return -USB_EPIPE;m.stage=0;m.cbw_at=0;m.reset_order=1;}
             if(req==1) {
                 if(m.clear_fail) {m.clear_fail=false;return -USB_EPIPE;}
                 if(m.setup[4]&0x80){m.clear_in++;m.in_toggle=0;if(m.reset_order){assert(m.reset_order==1);m.reset_order=2;}}
@@ -178,18 +179,24 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
         assert(n<=31-m.cbw_at);memcpy(m.cbw+m.cbw_at,b,n);m.cbw_at+=n;
         if(m.cbw_at==31){m.cbw_at=0;start_command();}
     } else if(m.stage==1) {
-        if(m.cbw[15]==0x12 && m.now-m.command_at<m.inquiry_delay) return -USB_EAGAIN;
+        if(m.cbw[15]==0x12 && (!m.inquiry_delays || m.inquiries<=m.inquiry_delays) &&
+           m.now-m.command_at<m.inquiry_delay) return -USB_EAGAIN;
         if(m.data_babble) {m.injected_status=(1u<<22)|(1u<<20);m.data_babble=false;return -USB_EIO;}
+        if(m.data_crc) {m.injected_status=(1u<<22)|(1u<<18);m.data_crc=false;return -USB_EIO;}
         if(m.remove_data) {m.remove_data=false;m.connected=false;return -USB_EIO;}
         if(m.data_stall) {m.data_stall=false;failed(3,0x11);m.stage=2;return -USB_EPIPE;}
+        if(m.cbw[15]==0x1a && m.mode_stall) {failed(5,0x20);m.stage=2;return -USB_EPIPE;}
         assert(n<=m.remaining && (pid==USB_PID_IN)==!!(m.cbw[12]&0x80));
         if(m.cbw[15]==0x12 && n>m.inquiry_bytes-m.at) n=m.inquiry_bytes-m.at;
+        if(m.cbw[15]==0x25 && n>m.capacity_bytes-m.at) n=m.capacity_bytes-m.at;
         if(m.cbw[15]==0x28 || m.cbw[15]==0x2a) medium_bytes(b,n,pid==USB_PID_OUT);
         else {assert(pid==USB_PID_IN && m.at+n<=sizeof(m.response));memcpy(b,m.response+m.at,n);}
-        m.at+=n;m.remaining-=n;if(!m.remaining || (m.cbw[15]==0x12 && m.at==m.inquiry_bytes)){m.stage=2;m.at=0;}
+        m.at+=n;m.remaining-=n;if(!m.remaining || (m.cbw[15]==0x12 && m.at==m.inquiry_bytes) ||
+            (m.cbw[15]==0x25 && m.at==m.capacity_bytes)){m.stage=2;m.at=0;}
     } else {
         assert(pid==USB_PID_IN);
         if(m.csw_stall){m.csw_stall=false;return -USB_EPIPE;}
+        if(m.cbw[15]==0x1a && m.mode_csw_stalls){m.mode_csw_stalls--;return -USB_EPIPE;}
         uint8_t csw[13]={0};fs_wr32(csw,m.bad_signature ? 0 : 0x53425355);
         fs_wr32(csw+4,fs_rd32(m.cbw+4)+(m.bad_tag?1:0));fs_wr32(csw+8,m.bad_residue ? m.total+1 : m.remaining);
         csw[12]=m.phase_error ? 2 : (uint8_t)m.status;
@@ -205,13 +212,14 @@ static struct usb_device *device(void) {return &m.h.devices[0];}
 static struct blkdev *block(void) {return &device()->storage.block;}
 static void setup(const char *path,bool partitioned)
 {
-    memset(&m,0,sizeof(m));records_at=0;records[0]=0;m.inquiry_bytes=36;
+    memset(&m,0,sizeof(m));records_at=0;records[0]=0;m.inquiry_bytes=36;m.capacity_bytes=8;
     m.connected=true;m.sector_size=512;m.offset=partitioned?8:0;
     int fd=open(path,O_RDONLY);assert(fd>=0);struct stat st;assert(!fstat(fd,&st));m.bytes=(size_t)st.st_size;
     m.image=mmap(NULL,m.bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE,fd,0);assert(m.image!=MAP_FAILED);close(fd);
     if(partitioned) {fs_wr16(m.mbr+510,0xaa55);m.mbr[450]=fs_rd16(m.image+22) ? (fs_rd16(m.image+19) ? 1 : 6) : 0x0c;
         fs_wr32(m.mbr+454,m.offset);fs_wr32(m.mbr+458,(uint32_t)(m.bytes/512));}
-    m.h.ready=true;m.h.device_count=1;m.h.ops=&ops;m.h.io.now=now;m.h.io.sleep=sleep_ms;fs_lock_init(&m.h.transfer_lock);
+    m.h.ready=true;m.h.device_count=1;m.h.ops=&ops;m.h.io.now=now;m.h.io.sleep=sleep_ms;m.h.io.read=read_reg;
+    fs_lock_init(&m.h.transfer_lock);
     struct usb_device *d=device();d->host=&m.h;d->present=d->configured=true;d->ep0=64;d->address=1;
     d->storage=(struct usb_storage){.bound=true,.in=1,.out=2,.in_packet=64,.out_packet=64};
     assert(!storage_setup(storage_get(),CACHE_DEFAULT_BYTES));
@@ -344,19 +352,18 @@ static void uhci_transport(const char *path)
     setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;
     fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
     struct usb_storage_trace *t=&device()->storage.trace;
-    assert(t->tag==1 && !strcmp(t->stage,"data") && t->expected==36 && !t->actual);
+    assert(t->tag==2 && !strcmp(t->stage,"data") && t->expected==36 && !t->actual);
     assert(t->result==-USB_ETIMEDOUT && t->packet.result==-USB_ETIMEDOUT && t->packet.actual==-1);
     assert(t->packet.valid && (t->packet.status&(1u<<23)) && (t->packet.status&(1u<<19)));
     assert(t->packet.endpoint==1 && t->packet.pid==USB_PID_IN && !t->packet.toggle);
     assert(t->packet.frames==USB_BULK_TIMEOUT_MS+2 && t->packet.elapsed_ms==USB_BULK_TIMEOUT_MS+2 && !t->packet.retired);
     assert(strstr(records,"stage=data expected=36 actual=0 result=-110") && strstr(records,"frames=10002 elapsed_ms=10002 retired=0"));
-    assert(m.commands==1 && m.resets==1 && m.clear_in==1 && m.clear_out==1 && !m.writes && !m.reset_order);
+    assert(m.commands==2 && m.resets==2 && m.clear_in==2 && m.clear_out==2 && !m.writes && !m.reset_order);
     assert(!device()->storage.bulk_deadline && !device()->storage.in_toggle && !device()->storage.out_toggle);
     cleanup();
     setup(path,false);use_uhci();m.data_stall=true;
-    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
-    assert(!device()->storage.online && m.commands==2 && m.clear_in==1 && !m.clear_out && !m.resets && !m.writes);
-    assert(device()->storage.trace.tag==1 && device()->storage.trace.csw_available && device()->storage.trace.csw_status==1);
+    attach();
+    assert(device()->storage.online && m.commands==7 && m.clear_in==2 && m.clear_out==1 && m.resets==1 && !m.writes);
     assert(strstr(records,"stall addr=1 reason=data tag=1") && strstr(records,"stage=data expected=36 actual=0 result=-32"));
     assert(strstr(records,"csw_tag=1 status=1 residue=36"));cleanup();
     setup(path,false);use_uhci();m.data_babble=true;
@@ -381,11 +388,65 @@ static void uhci_transport(const char *path)
     assert(block()->write(block(),1,1,buffer)<0 && m.commands==commands && m.writes==1);cleanup();
     puts("PASS USB UHCI/BOT: 1 ms frames, 64-byte MPS, delayed/short INQUIRY, late ACK retirement, first data STALL, CSW stall/tag diagnostics, babble, preserved fault snapshots, wrapped frame count, reset ordering, no write resend");
 }
+static void complete_fault_record(void)
+{
+    const char *line=strstr(records,"[usb-storage] fault ");assert(line);
+    const char *end=strchr(line,'\n');assert(end && end-line<=254);
+    const char *fields[]={"stage=","tag=","expected=","actual=","td=","toggle=","csw=","status=","residue=","port="};
+    for(unsigned i=0;i<ARRAY_SIZE(fields);i++) {const char *field=strstr(line,fields[i]);assert(field && field<end);}
+    assert(!strstr(end,"[usb-storage] fault "));
+}
+static void attach_tolerance(const char *path)
+{
+    setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;m.inquiry_delays=1;attach();
+    assert(m.inquiries==2 && m.resets==1 && m.clear_in==1 && m.clear_out==1 && !m.writes);
+    assert(device()->storage.online && !block()->quarantined && !device()->storage.bulk_deadline);
+    complete_fault_record();assert(strstr(records,"reason=data_transfer tag=1 cmd=12 stage=data expected=36 actual=0 result=-110"));
+    assert(!strstr(records,"quarantine addr="));cleanup();
+    /* A persistent slow first response has one retry, one first-fault
+     * snapshot and terminal quarantine naming the failing stage. */
+    setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(m.inquiries==2 && block()->quarantined && !m.writes);complete_fault_record();
+    assert(strstr(records,"quarantine addr=1 reason=data_transfer stage=data"));cleanup();
+    setup(path,false);use_uhci();m.inquiry_delay=USB_BULK_TIMEOUT_MS+500;m.reset_fail=true;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(m.inquiries==1 && m.resets==1 && !m.clear_in && !m.clear_out && block()->quarantined);
+    complete_fault_record();assert(strstr(records,"quarantine addr=1 reason=reset_recovery stage=data"));cleanup();
+    setup(path,false);use_uhci();m.data_crc=true;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(m.inquiries==1 && block()->quarantined && (device()->storage.trace.packet.status&(1u<<18)));
+    complete_fault_record();assert(!strstr(records,"stall addr="));cleanup();
+    for(unsigned mode=0;mode<3;mode++) {
+        setup(path,false);use_uhci();m.mode_stall=true;
+        if(mode==1)m.mode_csw_stalls=2;
+        if(mode==2)m.no_flush=true;
+        attach();assert(m.inquiries==1 && m.modes==1 && !block()->quarantined && !m.writes);
+        assert(device()->storage.online && !device()->storage.write_protected);
+        assert(blkdev_durable(block())==(mode!=2));
+        assert(strstr(records,"mode_sense addr=1 reason=stalled assume_writable=1"));
+        assert(m.resets==(mode==1 ? 1u:0u));
+        uint8_t b[512];assert(!block()->read(block(),0,1,b));
+        if(mode!=2)assert(!block()->write(block(),1,1,b) && m.writes==1);
+        else assert(block()->write(block(),1,1,b)==-FS_EROFS && !m.writes);
+        cleanup();
+    }
+    for(unsigned bytes=0;bytes<8;bytes++) {
+        setup(path,false);use_uhci();m.capacity_bytes=bytes;
+        fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+        assert(block()->quarantined && !device()->storage.online && !block()->capacity && !m.modes && !m.writes);
+        complete_fault_record();cleanup();
+    }
+    setup(path,false);use_uhci();m.no_medium=true;m.mode_stall=true;
+    fs_lock_take(&m.h.transfer_lock);assert(usb_storage_attach(device())<0);fs_lock_drop(&m.h.transfer_lock);
+    assert(block()->quarantined && !device()->storage.online && !m.modes && !m.writes);cleanup();
+    puts("PASS USB F1-53 attach: one reset-qualified INQUIRY retry, persistent timeout/reset failure/CRC quarantine, optional MODE SENSE STALL, DATA0 recovery, short capacity rejection and readiness/write/flush admission");
+}
 int main(int argc,char **argv)
 {
     assert(argc==4);
     if(getenv("USB_TEST_F1_47_ONLY")) {uhci_transport(argv[2]);return 0;}
-    uhci_transport(argv[2]);
+    uhci_transport(argv[2]);attach_tolerance(argv[2]);
     io_mount(argv[1],false,12);io_mount(argv[2],true,16);io_mount(argv[3],true,32);
     errors(argv[2]);readonly(argv[2]);partitions(argv[2]);
     puts("PASS USB storage production suite (ASan/UBSan)");return 0;

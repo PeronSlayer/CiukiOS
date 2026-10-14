@@ -71,6 +71,11 @@ static int reset(struct usb_host *h, unsigned port)
 }
 static void disable(struct usb_host *h, unsigned port)
 { usb_write(h, 0x54 + 4 * port, 1, 4); usb_port_record(h, port, "enable", 0); }
+static void ack_changes(struct usb_host *h, unsigned port)
+{
+    unsigned off = 0x54 + 4 * port, v = usb_read(h, off, 4);
+    if (v != UINT32_MAX && (v & 0x1f0000)) usb_write(h, off, v & 0x1f0000, 4);
+}
 static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned toggle,
                   void *data, unsigned length, bool periodic)
 {
@@ -158,4 +163,4 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     if (result >= 0 && pid == USB_PID_IN && result) memcpy(data, h->dma + USB_BUFFER, (unsigned)result);
     return result;
 }
-const struct usb_hc_ops usb_ohci_ops = {start, status, reset, disable, packet};
+const struct usb_hc_ops usb_ohci_ops = {start, status, reset, disable, packet, ack_changes};
