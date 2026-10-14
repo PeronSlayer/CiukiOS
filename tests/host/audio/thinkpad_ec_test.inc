@@ -4,15 +4,21 @@ static void ec_native_write_port(uint16_t, uint8_t);
 static void ec_native_pause(void);
 static uint32_t ec_native_pte(uint32_t);
 static void *ec_native_phys(uint32_t);
+static const void *ec_native_map_ro(uint32_t, uint32_t);
+static void ec_native_unmap(void *, uint32_t);
 #undef P2V
 #define P2V(p) ec_native_phys(p)
 #define inb ec_native_read_port
 #define outb ec_native_write_port
 #define task_yield ec_native_pause
 #define vmm_kernel_pte ec_native_pte
+#define vmm_map_physical_ro ec_native_map_ro
+#define vmm_revoke_mmio ec_native_unmap
 #define native_ec hec
 #include "../../../src/kernel/drivers/thinkpad_ec.c"
 #undef native_ec
+#undef vmm_revoke_mmio
+#undef vmm_map_physical_ro
 #undef vmm_kernel_pte
 #undef task_yield
 #undef outb
@@ -27,8 +33,12 @@ struct ec_model {
     bool absent, stuck_ibf, stuck_obf, reject_write, frozen_clock;
 };
 static struct ec_model ehw;
-static uint8_t ec_bios_memory[0x10000], ec_table_memory[512];
+static uint8_t ec_bios_memory[0x10000], ec_table_memory[65536];
 static bool ec_table_mapped=true;
+static uint32_t ec_table_phys=0xe0000, ec_table_bytes;
+static uint32_t ec_missing_page=UINT32_MAX, ec_wrong_page=UINT32_MAX;
+static unsigned ec_map_calls, ec_unmap_calls, ec_pte_calls;
+static bool ec_map_failed, ec_window_active;
 static uint8_t ec_mock_read(void *ctx, uint16_t port)
 {
     struct ec_model *h=ctx;h->reads++;
@@ -57,11 +67,31 @@ static uint8_t ec_native_read_port(uint16_t p) { return ec_mock_read(&ehw,p); }
 static void ec_native_write_port(uint16_t p,uint8_t v) { ec_mock_write(&ehw,p,v); }
 static void ec_native_pause(void) { ec_mock_pause(&ehw);g_ticks=ehw.tick; }
 static uint32_t ec_native_pte(uint32_t va)
-{ CHECK(va==KERNEL_VBASE+0xe0000);return ec_table_mapped?PTE_P:0; }
+{
+    CHECK(va>=KERNEL_VBASE && va<KERNEL_VBASE+PMM_MAX_PAGES*PAGE_SIZE);
+    uint32_t p=va-KERNEL_VBASE;ec_pte_calls++;
+    CHECK(p>=PAGE_ALIGN_DOWN(ec_table_phys) && (uint64_t)p<(uint64_t)ec_table_phys+ec_table_bytes);
+    if(!ec_table_mapped || p==ec_missing_page)return 0;
+    return (p==ec_wrong_page?p+PAGE_SIZE:p)|PTE_P;
+}
 static void *ec_native_phys(uint32_t p)
 {
-    if(p==0xe0000) { CHECK(ec_table_mapped);return ec_table_memory; }
+    if(p==ec_table_phys) { CHECK(ec_table_mapped);return ec_table_memory; }
     CHECK(p>=0xf0000 && p<0x100000);return ec_bios_memory+p-0xf0000;
+}
+static const void *ec_native_map_ro(uint32_t p, uint32_t bytes)
+{
+    CHECK(p==ec_table_phys && bytes==ec_table_bytes && !ec_window_active);
+    ec_map_calls++;
+    if(ec_map_failed)return NULL;
+    ec_window_active=true;return ec_table_memory;
+}
+static void ec_native_unmap(void *p, uint32_t bytes)
+{
+    CHECK(p==ec_table_memory && bytes==ec_table_bytes && ec_window_active);
+    ec_unmap_calls++;ec_window_active=false;
+    /* All logged strings must survive revocation as owned copies. */
+    memset(ec_table_memory,0xa5,sizeof(ec_table_memory));
 }
 static size_t ec_test_table(uint8_t *table, const char *vendor, const char *product, const char *version)
 {
@@ -82,14 +112,18 @@ static void ec_capture_begin(void)
 { ec_record_count=0;capture_ec_records=true; }
 static void ec_expect_record(unsigned index, const char *record)
 { CHECK(index<ec_record_count && !strcmp(ec_records[index],record)); }
-static void ec_test_entry(size_t bytes)
+static void ec_test_entry_at(size_t bytes, uint32_t address, unsigned offset, uint8_t minor)
 {
-    uint8_t *entry=ec_bios_memory;memset(ec_bios_memory,0,sizeof(ec_bios_memory));
-    memcpy(entry,"_SM_",4);entry[5]=31;entry[6]=2;entry[7]=3;memcpy(entry+16,"_DMI_",5);
-    entry[22]=bytes;entry[23]=bytes>>8;entry[26]=0x0e;
+    CHECK(offset<=sizeof(ec_bios_memory)-31 && !(offset&15));
+    ec_table_phys=address;ec_table_bytes=bytes;
+    memset(ec_bios_memory,0,sizeof(ec_bios_memory));uint8_t *entry=ec_bios_memory+offset;
+    memcpy(entry,"_SM_",4);entry[5]=31;entry[6]=2;entry[7]=minor;memcpy(entry+16,"_DMI_",5);
+    entry[22]=bytes;entry[23]=bytes>>8;
+    for(unsigned i=0;i<4;i++)entry[24+i]=address>>(8*i);
     uint8_t sum=0;for(unsigned i=16;i<31;i++)sum+=entry[i];entry[21]-=sum;
     sum=0;for(unsigned i=0;i<31;i++)sum+=entry[i];entry[4]-=sum;
 }
+static void ec_test_entry(size_t bytes) { ec_test_entry_at(bytes,0xe0000,0,3); }
 static void test_thinkpad_ec_init(void)
 {
     struct audio_state saved_audio=audio;uint32_t flags=g_boot.flags;uint64_t ticks=g_ticks;
@@ -213,10 +247,96 @@ static void test_thinkpad_ec_records(void)
     capture_ec_records=false;
     puts("ThinkPad EC records: T23 type-model, BIOS/system strings, printable bounds, QEMU/vendor/safe gates and stable read before write PASS");
 }
+static void test_thinkpad_ec_reserved_table(void)
+{
+    struct ciuki_boot_info saved_boot=g_boot;struct audio_state saved_audio=audio;uint64_t ticks=g_ticks;
+    for(unsigned scenario=0;scenario<21;scenario++) {
+        memset(ec_table_memory,0,sizeof(ec_table_memory));
+        size_t n=ec_test_table(ec_table_memory,"IBM","26475FU","Not Available");
+        uint32_t address=0x1ff7c000,bytes=1717;
+        if(scenario==1 || scenario==4 || scenario==7 || scenario==11) { address+=0xff0;bytes=n; }
+        if(scenario==2) { address=0x40000ff0;bytes=n; }
+        if(scenario==3) { address=PMM_MAX_PAGES*PAGE_SIZE-16;bytes=n; }
+        if(scenario==17)bytes=n-1; /* physically present terminator outside the declared extent */
+        if(scenario==18)bytes=UINT16_MAX;
+        if(scenario==20)bytes=PAGE_SIZE;
+        ec_test_entry_at(bytes,address,0x7350,31);
+        memset(&g_boot,0,sizeof(g_boot));g_boot.e820_count=1;
+        uint32_t start=PAGE_ALIGN_DOWN(address),end=PAGE_ALIGN_UP(address+bytes);
+        g_boot.e820[0]=(struct ciuki_e820){.base=start,.length=end-start,.type=2,.ext=1};
+        if(!scenario) {
+            /* A realistic normalized map has allocator RAM before the table. */
+            g_boot.e820_count=3;g_boot.e820[2]=g_boot.e820[0];
+            g_boot.e820[0]=(struct ciuki_e820){.base=0,.length=0xa0000,.type=CBI_E820_RAM,.ext=1};
+            g_boot.e820[1]=(struct ciuki_e820){.base=0x100000,.length=start-0x100000,.type=CBI_E820_RAM,.ext=1};
+        }
+        ec_table_mapped=scenario==5 || scenario==7 || scenario==19;
+        ec_missing_page=scenario==7?start+PAGE_SIZE:UINT32_MAX;
+        ec_wrong_page=scenario==19?start:UINT32_MAX;
+        ec_map_failed=scenario==16;ec_window_active=false;
+        ec_map_calls=ec_unmap_calls=ec_pte_calls=0;
+        if(scenario==4) {
+            /* Coverage may span two adjacent reserved descriptors. */
+            g_boot.e820_count=2;g_boot.e820[0].length=PAGE_SIZE;
+            g_boot.e820[1]=(struct ciuki_e820){.base=start+PAGE_SIZE,.length=PAGE_SIZE,.type=2,.ext=1};
+        }
+        if(scenario==5 || scenario==6 || scenario==7 || scenario==19)g_boot.e820[0].type=CBI_E820_RAM;
+        if(scenario==8) { g_boot.e820[0].base=address;g_boot.e820[0].length=bytes; }
+        if(scenario==9) { g_boot.e820[0].base++;g_boot.e820[0].length--; }
+        if(scenario==10)g_boot.e820[0].length--;
+        if(scenario==11) {
+            g_boot.e820_count=2;g_boot.e820[0].length=PAGE_SIZE-1;
+            g_boot.e820[1]=(struct ciuki_e820){.base=start+PAGE_SIZE,.length=PAGE_SIZE,.type=2,.ext=1};
+        }
+        if(scenario==12)g_boot.e820_count=0;
+        if(scenario>=13 && scenario<=15)g_boot.e820[0].type=scenario-10;
+        memset(&ehw,0,sizeof(ehw));ehw.reg=7;
+        memset(&hec,0,sizeof(hec));memset(audio_resources,0,sizeof(audio_resources));
+        second_claim_next=0;second_claim_failure=-1;
+        audio.master=(struct ciuki_mixer_master){.left=20,.right=20};audio.master_in_hardware=false;
+        g_ticks=0;ec_capture_begin();thinkpad_ec_init();
+        bool success=scenario<=5 || scenario==18 || scenario==20;
+        bool attempted=success?scenario!=5:scenario==16 || scenario==17;
+        CHECK(ec_map_calls==attempted && ec_unmap_calls==(attempted && !ec_map_failed) && !ec_window_active);
+        CHECK(hec.active==success && audio.master_in_hardware==success);
+        char record[128];snprintf(record,sizeof(record),"[smbios] entry=%s address=000f7350 table=%08x bytes=%u",
+            success?"ok":scenario==17?"malformed_table":"unmapped_table",address,bytes);
+        ec_expect_record(0,record);
+        if(success) {
+            ec_expect_record(1,"[smbios] version=2.31 vendor=\"IBM\" product=\"26475FU\" version=\"Not Available\" type1=1");
+            ec_expect_record(2,"[smbios] bios vendor=\"IBM\" version=\"1AET64WW (1.20 )\" type0=1");
+            CHECK(audio.master.left==21 && ehw.volume_writes==1 && second_claim_next==2);
+            ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=3 mute=0");
+            ehw.reg=0xe8;ehw.tick=hec.next_poll;g_ticks=ehw.tick;
+            CHECK(thinkpad_ec_master_poll(&audio.master)==1 && audio.master.left==57 && audio.master.mute);
+        } else {
+            ec_expect_record(ec_record_count-1,"[ec] thinkpad gate=no_smbios");
+            CHECK(!ehw.reads && !ehw.writes && !second_claim_next);
+        }
+        if(scenario==2 || scenario==3)CHECK(!ec_pte_calls); /* no probing unrelated/wrapped virtual addresses */
+        if(scenario==7)CHECK(ec_pte_calls==2); /* all pages, not just the first */
+    }
+    /* A table ending exactly at 4 GiB can be borrowed; an overflowing entry
+     * cannot reach the mapper. No type-1 record means no EC port access. */
+    for(unsigned overflow=0;overflow<2;overflow++) {
+        memcpy(ec_table_memory,(const uint8_t[]){127,4,0,0,0,0},6);
+        ec_test_entry_at(6,0xfffffffa+overflow,0x7350,31);
+        g_boot.e820_count=1;g_boot.e820[0]=(struct ciuki_e820){.base=0xfffff000,.length=PAGE_SIZE,.type=2,.ext=1};
+        ec_map_calls=ec_unmap_calls=ec_pte_calls=0;ec_map_failed=false;ec_capture_begin();
+        struct thinkpad_ec_smbios s;native_identity(&s);thinkpad_ec_smbios_log(&s);
+        CHECK(!strcmp(s.verdict,overflow?"bad_entry":"ok") && !s.has_system && !ec_window_active);
+        CHECK(ec_map_calls==!overflow && ec_unmap_calls==!overflow && !ec_pte_calls);
+    }
+    ec_table_mapped=true;ec_table_phys=0xe0000;ec_missing_page=ec_wrong_page=UINT32_MAX;
+    ec_map_failed=false;capture_ec_records=false;memset(&hec,0,sizeof(hec));
+    second_claim_next=0;second_claim_failure=-1;g_boot=saved_boot;audio=saved_audio;g_ticks=ticks;
+    puts("ThinkPad SMBIOS reserved window: T23 1ff7c000/1717, unaligned/cross-page/above-direct-map tables, copied strings, EC master, E820 refusals, map failure, malformed cleanup and 4 GiB bounds PASS");
+}
 static void test_thinkpad_ec(void)
 {
     test_thinkpad_ec_init();
     test_thinkpad_ec_records();
+    test_thinkpad_ec_reserved_table();
     const uint8_t table[]={1,8,0,0,1,2,3,0,'I','B','M',0,'2','6','4','7',0,'T','h','i','n','k','P','a','d',' ','T','2','3',0,0,127,4,0,0,0,0};
     CHECK(thinkpad_ec_identity(table,sizeof(table)));
     uint8_t bad[sizeof(table)];memcpy(bad,table,sizeof(table));bad[8]='L';CHECK(!thinkpad_ec_identity(bad,sizeof(bad)));

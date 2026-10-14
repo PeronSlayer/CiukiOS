@@ -25,7 +25,7 @@ bool thinkpad_ec_entry(const uint8_t *p, size_t n, uint32_t *address, uint16_t *
         !ec_sum(p, p[5]) || memcmp(p + 16, "_DMI_", 5) || !ec_sum(p + 16, 15)) return false;
     *bytes = p[22] | (uint16_t)p[23] << 8;
     *address = p[24] | (uint32_t)p[25] << 8 | (uint32_t)p[26] << 16 | (uint32_t)p[27] << 24;
-    return *bytes >= 6 && *address >= 0x500 && (uint64_t)*address + *bytes <= PMM_MAX_PAGES * PAGE_SIZE;
+    return *bytes >= 6 && *address >= 0x500 && (uint64_t)*address + *bytes <= 0x100000000ull;
 }
 static const char *ec_string(const uint8_t *p, size_t formatted, size_t end, unsigned index)
 {
@@ -214,6 +214,41 @@ static uint8_t native_read(void *ctx, uint16_t port) { (void)ctx; return inb(por
 static void native_write(void *ctx, uint16_t port, uint8_t v) { (void)ctx; outb(port, v); }
 static uint64_t native_now(void *ctx) { (void)ctx; return g_ticks; }
 static void native_pause(void *ctx) { (void)ctx; task_yield(); }
+static bool native_table_reserved(uint32_t address, uint16_t length)
+{
+    /* The boot map is validated, sorted and non-overlapping. Require every
+     * byte of the rounded pages, not just the structure bytes, to be type 2.
+     * In particular a PMM-used bit alone cannot prove firmware ownership. */
+    uint64_t at = PAGE_ALIGN_DOWN(address);
+    uint64_t end = ((uint64_t)address + length + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    for (unsigned i = 0; i < g_boot.e820_count; i++) {
+        const struct ciuki_e820 *e = &g_boot.e820[i];
+        uint64_t limit = e->base + e->length;
+        if (limit <= at) continue;
+        if (e->base > at || e->type != 2) return false;
+        if (limit >= end) return true;
+        at = limit;
+    }
+    return false;
+}
+static void native_table_decode(uint32_t address, uint16_t length, struct thinkpad_ec_smbios *s)
+{
+    bool mapped = (uint64_t)address + length <= (uint64_t)PMM_MAX_PAGES * PAGE_SIZE;
+    if (mapped) {
+        for (uint32_t p = PAGE_ALIGN_DOWN(address); p < address + length; p += PAGE_SIZE) {
+            uint32_t pte = vmm_kernel_pte(KERNEL_VBASE + p);
+            if (!(pte & PTE_P) || (pte & ~(PAGE_SIZE - 1)) != p) { mapped = false; break; }
+        }
+    }
+    if (mapped) { thinkpad_ec_smbios_decode(P2V(address), length, s); return; }
+    const uint8_t *table = native_table_reserved(address, length) ? vmm_map_physical_ro(address, length) : NULL;
+    if (table) {
+        thinkpad_ec_smbios_decode(table, length, s);
+        vmm_revoke_mmio((void *)table, length);
+    } else {
+        memset(s, 0, sizeof(*s)); s->verdict = "unmapped_table";
+    }
+}
 static void native_identity(struct thinkpad_ec_smbios *s)
 {
     memset(s, 0, sizeof(*s)); s->verdict = "not_found";
@@ -225,11 +260,7 @@ static void native_identity(struct thinkpad_ec_smbios *s)
             if (!s->entry_phys) { s->entry_phys = at; s->verdict = "bad_entry"; }
             continue;
         }
-        bool mapped = true;
-        for (uint32_t p = PAGE_ALIGN_DOWN(address); p < address + length; p += PAGE_SIZE)
-            if (!(vmm_kernel_pte(KERNEL_VBASE + p) & PTE_P)) { mapped = false; break; }
-        if (mapped) thinkpad_ec_smbios_decode(P2V(address), length, s);
-        else { memset(s, 0, sizeof(*s)); s->verdict = "unmapped_table"; }
+        native_table_decode(address, length, s);
         s->entry_phys = at; s->table_phys = address; s->table_bytes = length;
         s->major = entry[6]; s->minor = entry[7];
         if (s->valid) return;

@@ -308,3 +308,45 @@ The supplied image `445e91c7` log proves absence of EC records and successful
 audio/boot tone, not the actual DMI fields or functioning EC transport.
 The lead must collect those records and physical volume-key/master evidence
 on the newly built image.
+
+## F4-25 reserved SMBIOS structure-table mapping (2026-10-14)
+
+The supplied T23 image `ce2e6ce9` records a checksummed SMBIOS entry at
+`0x000F7350`, version `2.31`, pointing to 1717 bytes at `0x1FF7C000`.
+`unmapped_table` followed by `no_smbios` proves that the kernel refused the
+table before decoding identity or attempting the EC handshake. It does not
+prove the table contents, E820 type or EC behavior on that image.
+
+[DMTF SMBIOS 2.6.1 section 2.1.1](https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_2.6.1.pdf)
+defines a read-only structure table at a 32-bit physical address, with its
+byte extent supplied by the entry point. The table need not occupy the BIOS
+scan region. [ACPI 6.4 section 15.1](https://uefi.org/htmlspecs/ACPI_Spec_6_4_html/15_System_Address_Map_Interfaces/int-15h-e820h---query-system-address-map.html)
+defines E820 type 2 as system-reserved memory outside the OS allocator pool.
+The repository's `vmm_init` maps type-1 RAM and the first MiB directly;
+`pmm_init` excludes non-RAM descriptors. Thus firmware-reserved RAM can be
+within the 768 MiB physical limit and still have no direct-map PTE.
+
+Decision: retain existing direct-map reads when every page has the expected
+physical PTE. Otherwise require the entire page-rounded table span to be
+covered by normalized E820 type-2 descriptors, including adjacent reserved
+descriptors without gaps. Reject usable RAM, reclaimable/NVS/unknown types,
+unreported ranges and partial coverage. This conservative policy avoids
+aliasing allocator-owned RAM or interpreting unspecified physical ranges.
+Validate the entry extent in 64 bits against the 4 GiB physical boundary;
+only probe direct-map PTEs below the 768 MiB direct-map limit.
+
+Use a read-only variant of the existing VMM MMIO-region mapper (supervisor,
+no writable PTE, ordinary cache attributes), preserving its page rounding,
+physical-overflow checks, region bound and unmapped guard page. Decode only
+the entry's declared byte count and revoke the temporary mapping on both
+successful and malformed-table paths. Revocation frees no firmware pages;
+the boot-time window consumes virtual slots in the existing monotonic arena.
+Keep the existing identity records and `unmapped_table` verdict for refused
+ranges or unavailable mapping slots. No direct-map, allocator, EC transport,
+safe-mode or QEMU gate policy changes are needed.
+
+Host evidence must cover the production BIOS scan with a synthetic reserved
+table at the T23 address, boundary/coverage refusals, malformed-table cleanup
+and the actual VMM writer's read-only PTEs and revocation. The lead must
+verify E820 reserved coverage, actual IBM/type-model strings and volume keys
+moving the master on a newly built, SHA-256-recorded T23 image.

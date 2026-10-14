@@ -43,6 +43,9 @@ unsigned pmm_reservations(const struct pmm_reservation **out);
 void vmm_init(void);
 uint32_t vmm_kernel_pd(void);              /* physical address */
 void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached);
+/* Borrow firmware bytes through a supervisor read-only window. The caller
+ * validates physical ownership and revokes with vmm_revoke_mmio afterward. */
+const void *vmm_map_physical_ro(uint32_t phys, uint32_t bytes);
 /* A reusable, private MMIO window; reserve once, revoke before firmware,
  * then replace only after validating device ownership and metadata. */
 void *vmm_reserve_mmio(uint32_t capacity);

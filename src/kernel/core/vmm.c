@@ -110,7 +110,7 @@ void vmm_init(void)
     write_cr3(kpd_phys);
 }
 
-void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached)
+static void *map_physical(uint32_t phys, uint32_t bytes, uint32_t flags)
 {
     uint32_t off = phys & 0xFFFu;
     uint64_t span64 = ((uint64_t)bytes + off + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
@@ -121,10 +121,16 @@ void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached)
     uint32_t span = (uint32_t)span64;
     uint32_t va = mmio_next;
     for (uint32_t i = 0; i < span; i += PAGE_SIZE)
-        kmap(va + i, (phys & ~0xFFFu) + i, PTE_W | (uncached ? (PTE_PCD | PTE_PWT) : 0));
+        kmap(va + i, (phys & ~0xFFFu) + i, flags);
     mmio_next += span + PAGE_SIZE;            /* unmapped gap between mappings */
     return (void *)(uintptr_t)(va + off);
 }
+
+void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached)
+{ return map_physical(phys, bytes, PTE_W | (uncached ? (PTE_PCD | PTE_PWT) : 0)); }
+
+const void *vmm_map_physical_ro(uint32_t phys, uint32_t bytes)
+{ return map_physical(phys, bytes, 0); }
 
 void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes)
 {
