@@ -300,15 +300,13 @@ static void repaint(void)
  * once; retries only redraw the screen after an overlapping presentation. */
 void console_operator_prompt(bool announce)
 {
-    static const char message[] = "[operator] press A, move the pointer, click (60 s)";
-    if (announce) {
+    static const char message[] = "[operator] press A, move the pointer, click (60 s)\n";
+    if (announce)
         serial_write(message, sizeof(message) - 1);
-        serial_write("\n", 1);
-    }
     if (con_kind == CON_NONE || !rows || !cols) return;
     uint32_t flags = line_begin_as(true);
     unsigned c = 0;
-    for (; c < cols && c < sizeof(message) - 1; c++)
+    for (; c < cols && c < sizeof(message) - 2; c++)
         draw_cell(c, 0, message[c]);
     for (; c < cols; c++) draw_cell(c, 0, ' ');
     line_end(flags);

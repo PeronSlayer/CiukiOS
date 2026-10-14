@@ -863,7 +863,7 @@ static uint32_t irq_save(void) { unsigned old=host_if; host_if=0; irq_sections++
 static void irq_restore(uint32_t flags) { host_if=flags; }
 const uint8_t font_cfn_regular[95+95*32] = { [95+('a'-32)*32+1] = 0x80 };
 static unsigned prompt_serial;
-void serial_write(const char *s,size_t n) { CHECK(s && n); prompt_serial++; }
+void serial_write(const char *s,size_t n) { CHECK(s && n && s[n-1]=='\n'); prompt_serial++; }
 static void *console_map(uint32_t phys,uint32_t size)
 {
     CHECK(phys==g_boot.fb_phys && size==g_boot.fb_pitch*g_boot.fb_height);
@@ -919,10 +919,10 @@ int main(void)
      * announces serial once even when screen drawing must be retried. */
     CHECK(present_begin(&device,&owned));
     console_operator_prompt(true);
-    CHECK(prompt_serial==2 && drawing==PRESENT_BUSY && !memcmp(saved,fake_lfb,SIZE));
+    CHECK(prompt_serial==1 && drawing==PRESENT_BUSY && !memcmp(saved,fake_lfb,SIZE));
     (void)present_end(&device,&owned,false);
     console_operator_prompt(false);
-    CHECK(prompt_serial==2 && !drawing);
+    CHECK(prompt_serial==1 && !drawing);
     console_show_page(0,"a");
     CHECK(memcmp(saved,fake_lfb,32*PITCH)!=0 && !drawing);
     CHECK(!memcmp(saved+32*PITCH,fake_lfb+32*PITCH,3*PITCH));
