@@ -150,3 +150,5 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-54-optical-iso-malformed](f1-54-optical-iso-malformed.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (isofs-like leniency, last-session scan, multi-session fixture); T23 test pending |
 | [f1-55-savage-engine-idle-quarantine](f1-55-savage-engine-idle-quarantine.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (bounded idle wait with raw status diagnostics; mask kept per X.Org); T23 test pending |
 | [runner-04-usb-pacing-baseline](runner-04-usb-pacing-baseline.md) | runner | gpt-6.1-sol / high | running 2026-10-14 (pacing barrier lacks a counter baseline on the first batches) |
+| [f4-16-serial-fifo-and-disk-log](f4-16-serial-fifo-and-disk-log.md) | F4 | gpt-6.1-sol / xhigh | running 2026-10-14 (serial still garbled on the T23: FIFO depth and THRE; 1 MiB disk log with a protected boot section) |
+| [f1-56-usb-regression-real-uhci](f1-56-usb-regression-real-uhci.md) | F1 | gpt-6.1-sol / xhigh | running 2026-10-14 (after f1-52 on the T23: control transfers time out, HID polls EAGAIN forever) |
