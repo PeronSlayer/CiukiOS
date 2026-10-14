@@ -739,6 +739,30 @@ def read_ppm(path):
     return width,height,pixels
 
 
+def desktop_mark_visible(ppm, root=ROOT):
+    """True when the approved 18 px Ciuki mark of the top-bar button is present in
+    the screendump (same cells and placement as observe_desktop_screen). The
+    desktop may still be repainting after a fault when the probe arms the
+    interaction; the runner waits, bounded, for the mark before the pre-input
+    screendump instead of trusting a fixed delay."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('screen_portrait',root/'apps/desktop/convert_portrait.py')
+    converter = importlib.util.module_from_spec(spec);spec.loader.exec_module(converter)
+    portrait = converter.convert(root/'assets/brand/ciuki-logo.png')
+    width,height,pixels = read_ppm(ppm)
+    size = 18
+    cells = []
+    for y in range(size):
+        for x in range(size):
+            block = [portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
+                     for yy in range(y*256//size,(y+1)*256//size) for xx in range(x*256//size,(x+1)*256//size)]
+            if any(b == bytes((0x64,0x55,0x37)) for b in block):continue
+            cells.append((x,y,bytes(sum(b[k] for b in block)//len(block) for k in range(3))[::-1]))
+    def mark_matches(shift):
+        x0 = 4+(96-size-6-53)//2+shift; y0 = 4+(24-size)//2+shift
+        return all(pixels[((y0+y)*width+x0+x)*3:((y0+y)*width+x0+x)*3+3] == rgb for x,y,rgb in cells)
+    return any(mark_matches(s) for s in (0,1))
+
 def observe_desktop_screen(before, after, root=ROOT):
     """Independent pixels from the pinned portrait converter used by T0.
 
@@ -1538,6 +1562,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     screen_before = directory/'desktop-before.ppm'
     screen_after = directory/'desktop-after.ppm'
     screen_armed_at = screen_interaction_at = None
+    screen_last_try = 0.0
     window_shot = directory/'window.ppm';window_armed_at = None
     normal_shot = directory/'screen.ppm';desktop_at = failure_at = None
     restart_performed=False;expected_resets=0
@@ -1667,8 +1692,12 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 arms = [r for r in parser.records if r.get('event')=='ARM' and r.get('action')=='post_fault_input']
                 if len(arms)>1:raise EvidenceError('duplicate desktop interaction ARM')
                 if arms and screen_armed_at is None:screen_armed_at=now
-                if arms and 'desktop_screen' not in result and not screen_before.exists() and now-screen_armed_at>=.1:
+                if arms and 'desktop_screen' not in result and not screen_before.exists() and now-screen_armed_at>=.1 and now-screen_last_try>=.1:
+                    screen_last_try=now
                     qmp.command('screendump',{'filename':str(screen_before)})
+                    # The desktop may still be repainting after the fault (2026-10-14, f2-50 pacing):
+                    # wait, bounded to 3 s after ARM, for the Ciuki mark before accepting the pre-input screen.
+                    if now-screen_armed_at<3.0 and not desktop_mark_visible(screen_before):screen_before.unlink()
                 interactions=[r for r in parser.records if r.get('case')=='interaction' and r.get('stage')=='after']
                 if interactions and screen_interaction_at is None:screen_interaction_at=now
                 if interactions and actions.complete and 'desktop_screen' not in result and now-screen_interaction_at>=.1:

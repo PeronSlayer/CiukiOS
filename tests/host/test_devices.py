@@ -55,7 +55,7 @@ class DeviceTests(unittest.TestCase):
             image = load('devices_png', ROOT / 'tests/host/desktop/test_desktop.py')
             target = ROOT / 'build/f2-41'; target.mkdir(parents=True, exist_ok=True)
             captures = sorted(frames.glob('*.xrgb'))
-            self.assertEqual(len(captures), 20)
+            self.assertEqual(len(captures), 21)  # f2-51 AutoPlay page
             for path in captures:
                 width, height = map(int, path.with_suffix('.size').read_text().split())
                 image.write_png(target / (path.stem + '.png'), width, height, image.xrgb_to_rgb(path.read_bytes()))

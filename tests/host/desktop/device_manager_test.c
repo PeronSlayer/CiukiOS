@@ -75,7 +75,7 @@ int main(int argc, char **argv)
     assert(app.page == CP_HOME && kind(DU_LISTVIEW)->view == DU_ICONS && kind(DU_LISTVIEW)->count == CP_PAGES);
     for (unsigned k = 0; k < CP_PAGES; k++) assert(app.applet_items[k].icon16 && app.applet_items[k].icon32);
     render(renders, "control-folder");
-    static const char *const page_files[] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts"};
+    static const char *const page_files[] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay"};
     _Static_assert(sizeof(page_files) / sizeof(page_files[0]) == CP_PAGES, "every Control Panel page needs a capture");
     for (int k = 0; k < CP_PAGES; k++) {
         du_focus(&ui, kind(DU_LISTVIEW)->id); at_tap(&ui, DU_KEY_HOME);
