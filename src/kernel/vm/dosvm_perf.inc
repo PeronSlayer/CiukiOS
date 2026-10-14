@@ -10,7 +10,11 @@ static void perf_phase(struct dosvm *v, unsigned phase)
 {
     uint64_t now = dosvm_perf_clock();
     if (v->perf.phase == 1) v->perf.guest_cycles += now - v->perf.stamp;
-    if (v->perf.phase == 2) v->perf.monitor_cycles += now - v->perf.stamp;
+    if (v->perf.phase == 2) {
+        uint64_t cycles = now - v->perf.stamp;
+        v->perf.monitor_cycles += cycles;
+        if (v->perf.trap_active) v->perf.trap_cycles += cycles;
+    }
     v->perf.stamp = now; v->perf.phase = phase;
 }
 static struct dosvm *perf_current;
@@ -25,13 +29,23 @@ static void perf_switch(struct dosvm *next)
 }
 static uint64_t perf_us(uint64_t cycles)
 { return g_tsc_per_ms ? cycles * 1000u / g_tsc_per_ms : 0; }
+static void perf_exit_end(struct dosvm *v)
+{
+    perf_phase(v, 2);
+    if (g_boot.flags & CBI_F_VERBOSE) {
+        v->perf.cost_count[v->perf.cause]++;
+        v->perf.cost_cycles[v->perf.cause] += v->perf.trap_cycles;
+    }
+    v->perf.trap_active = false;
+}
 
 void dosvm_perf_report(struct dosvm *v)
 {
     if (!(g_boot.flags & CBI_F_VERBOSE) || !g_tsc_per_ms || dosvm_in_irq(v) ||
         !v->info.dos_ready || g_ticks - v->perf.report_tick < 1000) return;
     unsigned old_phase = v->perf.phase;
-    perf_phase(v, old_phase);
+    /* STATUS runs on the native owner: never restart a suspended VM clock. */
+    if (perf_current == v) perf_phase(v, old_phase);
     uint32_t flags = irq_save();
     uint64_t tick = g_ticks, edges = v->pit.edges;
     uint32_t irqs[16]; memcpy(irqs, v->monitor.stats.delivered, sizeof(irqs));
@@ -47,6 +61,14 @@ void dosvm_perf_report(struct dosvm *v)
         .monitor_us = perf_us(DELTA(monitor_cycles, last_monitor)), .log_us = perf_us(DELTA(log_cycles, last_log)),
         .present_us = perf_us(DELTA(present_cycles, last_present)), .edges = edges - v->perf.last_edges
     };
+    s->batched = DELTA(batched, last_batched);
+    v->perf.last_batched = v->perf.batched;
+    for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) {
+        s->cost_count[i] = v->perf.cost_count[i] - v->perf.last_cost_count[i];
+        s->cost_us[i] = perf_us(v->perf.cost_cycles[i] - v->perf.last_cost_cycles[i]);
+        v->perf.last_cost_count[i] = v->perf.cost_count[i];
+        v->perf.last_cost_cycles[i] = v->perf.cost_cycles[i];
+    }
     for (unsigned i = 0; i < 6; i++) s->exits[i] = v->perf.exits[i] - v->perf.last_exits[i];
     for (unsigned i = 0; i < 16; i++) s->irqs[i] = irqs[i] - v->perf.last_irqs[i];
     for (unsigned i = 0; i < V86_INSNS; i++) {
@@ -68,6 +90,11 @@ void dosvm_perf_report(struct dosvm *v)
 
 void dosvm_perf_dump(struct dosvm *v)
 {
+    static const char *const names[DOSVM_COST_COUNT] = {
+        "rm_int", "rm_iret", "rm_flags", "pm_int", "pm_flags", "switch",
+        "vga_io", "vga_pf", "pit_pic", "kbd", "io", "db", "timer", "other",
+        "rm_pushf", "rm_popf", "rm_cli", "rm_sti", "rm_hlt", "pm_hlt"
+    };
     if (g_boot.flags & CBI_F_VERBOSE) {
         static const char hex[] = "0123456789abcdef";
         for (unsigned offset = 0; offset < v->boot_log_count; offset += 48) {
@@ -99,6 +126,18 @@ void dosvm_perf_dump(struct dosvm *v)
             id, n+1, s->converted, s->rows, s->present_us);
         rec_diag(dosvm_probe(v), "group=vm_perf_cpu vm=%u n=%u guest_us=%llu monitor_us=%llu log_us=%llu trapped=%u",
             id, n+1, s->guest_us, s->monitor_us, s->log_us, s->trapped);
+        uint64_t wall_us = (uint64_t)s->ms * 1000u;
+        rec_diag(dosvm_probe(v), "group=vm_perf_share vm=%u n=%u wall_us=%llu vm_permille=%llu guest_permille=%llu",
+            id, n+1, wall_us, wall_us ? (s->guest_us + s->monitor_us) * 1000u / wall_us : 0,
+            wall_us ? s->guest_us * 1000u / wall_us : 0);
+        rec_diag(dosvm_probe(v), "group=vm_perf_rate vm=%u n=%u frames_mfps=%llu flips_mfps=%llu harvests_ps=%llu batched=%u",
+            id, n+1, s->ms ? (uint64_t)s->frames * 1000000u / s->ms : 0,
+            s->ms ? (uint64_t)s->flips * 1000000u / s->ms : 0,
+            s->ms ? (uint64_t)s->harvests * 1000u / s->ms : 0, s->batched);
+        for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) if (s->cost_count[i])
+            rec_diag(dosvm_probe(v), "group=vm_perf_cost vm=%u n=%u cause=%s exits=%u us=%llu avg_ns=%llu",
+                id, n+1, names[i], s->cost_count[i], s->cost_us[i],
+                s->cost_us[i] * 1000u / s->cost_count[i]);
         rec_diag(dosvm_probe(v), "group=vm_perf_exits vm=%u n=%u gp=%u pf=%u db=%u timer=%u other=%u pm=%u",
             id, n+1, s->exits[0], s->exits[1], s->exits[2], s->exits[3], s->exits[4], s->exits[5]);
         rec_diag(dosvm_probe(v), "group=vm_perf_pit vm=%u n=%u edges=%llu", id, n+1, s->edges);

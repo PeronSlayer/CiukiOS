@@ -33,6 +33,12 @@ volatile bool g_need_resched;
 
 static struct task *rq_head[P_COUNT], *rq_tail[P_COUNT];
 extern uint32_t dosvm_task_quantum(const struct task *, uint32_t) __attribute__((weak));
+extern const struct task *dosvm_task_focus(void) __attribute__((weak));
+static const struct task *focus_task;
+static uint64_t focus_window;
+static uint32_t focus_ticks;
+#define FOCUS_PERIOD 10u
+#define FOCUS_BUDGET 8u
 static struct task *all_tasks;
 static struct task *idle_task;
 static uint32_t next_id = 1;
@@ -52,6 +58,26 @@ static void rq_push(struct task *t)
 
 static struct task *rq_pop(void)
 {
+    const struct task *focus = dosvm_task_focus ? dosvm_task_focus() : 0;
+    if (focus != focus_task || g_ticks - focus_window >= FOCUS_PERIOD) {
+        focus_task = focus; focus_window = g_ticks; focus_ticks = 0;
+    }
+    /* Device work (including the existing starvation boost) still wins.
+     * Within the rest, a runnable focused DOS window reserves 8/10 ticks,
+     * independent of how many native/background peers are ready. */
+    if (!rq_head[P_DEVICE] && focus && focus_ticks < FOCUS_BUDGET) {
+        for (int p = 0; p < P_COUNT; p++) {
+            struct task **link = &rq_head[p], *prev = 0;
+            while (*link && *link != focus) { prev = *link; link = &(*link)->next; }
+            if (*link) {
+                struct task *t = *link;
+                *link = t->next;
+                if (rq_tail[p] == t) rq_tail[p] = prev;
+                t->next = 0;
+                return t;
+            }
+        }
+    }
     for (int p = 0; p < P_COUNT; p++) {
         struct task *t = rq_head[p];
         if (t) {
@@ -256,6 +282,12 @@ void schedule(void)
     }
     g_need_resched = false;
     slice_left = dosvm_task_quantum ? dosvm_task_quantum(next, g_quantum_ticks) : g_quantum_ticks;
+    if (next == focus_task && focus_ticks < FOCUS_BUDGET && slice_left > FOCUS_BUDGET - focus_ticks)
+        slice_left = FOCUS_BUDGET - focus_ticks;
+    if (focus_task && focus_task->state == T_READY && next != focus_task && next->prio != P_DEVICE) {
+        uint32_t remaining = FOCUS_PERIOD - (uint32_t)(g_ticks - focus_window);
+        if (slice_left > remaining) slice_left = remaining;
+    }
     if (next == prev) {
         prev->state = T_RUNNING;
         irq_restore(f);
@@ -302,6 +334,7 @@ void schedule(void)
 
 void sched_tick(void)
 {
+    if (g_current == focus_task && focus_ticks < FOCUS_BUDGET) focus_ticks++;
     if (serial_tick) serial_tick();
     file_clock_tick();
     if (dosvm_tick) dosvm_tick();

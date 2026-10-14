@@ -151,8 +151,8 @@ static void test_irq_real_tf(void)
     const uint8_t code[] = {0x17, 0x90, 0x90, 0x90}; /* POP SS; successor */
     CHECK(!dosvm_write(v, base + 0x100, code, sizeof(code)));
     step(v, 0x20, 0);
-    CHECK(!v->dpmi.if_armed && v->monitor.shadow && (cur.tf.eflags & V86_TF));
-    cur.tf.eip = 0x102; debug_dr6 = 1u << 14; step(v, 1, 0);
+    CHECK(!v->dpmi.if_armed && v->monitor.shadow && !(cur.tf.eflags & V86_TF));
+    cur.tf.eip = 0x102; step(v, 0x20, 0); /* later timer observes the retired successor */
     CHECK(!v->monitor.shadow && !(cur.tf.eflags & V86_TF));
     /* Live monitor TF is never saved as guest FLAGS. A POPF loading an
      * arbitrary saved register cannot turn on permanent single stepping. */

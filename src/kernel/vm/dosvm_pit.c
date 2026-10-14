@@ -143,8 +143,11 @@ static uint32_t pit_advance_channel(struct dosvm_pit_channel *c, uint32_t clocks
             }
         }
         uint32_t total = c->phase + clocks;
-        edges += total / c->reload;
-        c->phase = total % c->reload;
+        if (total < c->reload) c->phase = total;
+        else {
+            edges += total / c->reload;
+            c->phase = total % c->reload;
+        }
         c->out = c->mode == 2 ? c->phase != c->reload - 1 : c->phase < (c->reload + 1) / 2;
     } else {
         uint32_t old = c->phase;

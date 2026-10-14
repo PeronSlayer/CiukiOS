@@ -99,15 +99,20 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
             if (write) {
                 /* f3-07: harvest using the OLD memory state. DAC and CRTC
                  * start-address writes remain ordinary trapped port cycles. */
+                uint8_t data = (uint8_t)(*value >> (8 * i));
                 bool crtc = p == 0x3D5 || p == 0x3B5;
-                bool mode = crtc && v->vga.crtc_index != 0x0C && v->vga.crtc_index != 0x0D;
-                bool access = p == 0x3C2 || p == 0x3C3 || p == 0x3C5 || p == 0x3CF;
+                bool mode = crtc && v->vga.crtc_index < ARRAY_SIZE(v->vga.crtc) &&
+                    v->vga.crtc_index != 0x0C && v->vga.crtc_index != 0x0D &&
+                    data != v->vga.crtc[v->vga.crtc_index];
+                bool access = (p == 0x3C2 && data != v->vga.misc) ||
+                    (p == 0x3C3 && (data & 1) != v->vga.enable) ||
+                    (p == 0x3C5 && v->vga.seq_index < ARRAY_SIZE(v->vga.seq) && data != v->vga.seq[v->vga.seq_index]) ||
+                    (p == 0x3CF && v->vga.gc_index < ARRAY_SIZE(v->vga.gc) && data != v->vga.gc[v->vga.gc_index]);
                 if (mode || access) dosvm_vga_model(v);
                 /* f3-06: a CRTC start-address-high store is a page flip
                  * (DOOM's I_FinishUpdate, Wolf3D's VW_UpdateScreen). */
                 if ((p == 0x3D5 || p == 0x3B5) && v->vga.crtc_index == 0x0C) v->video_starts++;
-                window |= p >= 0x3C2 && p <= 0x3CF;
-                window |= mode;
+                window |= access || mode;
                 cvga_write_port(&v->vga, (uint16_t)p, (uint8_t)(*value >> (8 * i)));
             }
             /* Only input status 1 reads advance the status sequence (not
@@ -121,7 +126,7 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
     /* Misc, sequencer and graphics-controller stores decide whether CPU
      * writes are a plain store into one plane (cvga_direct_plane). */
     if (window) dosvm_vga_direct(v);
-    if (write && v->launch_exec) {
+    if (write && v->launch_exec && !v->launch_ready) {
         cvga_geometry geometry;
         if (cvga_get_geometry(&v->vga, &geometry) && !geometry.text) dosvm_launch_video(v);
     }

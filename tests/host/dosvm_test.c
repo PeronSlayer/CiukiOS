@@ -578,6 +578,7 @@ static void test_memory_services(void)
 #include "dosvm_menu_test.inc"
 #include "dosvm_irq_stall_test.inc"
 #include "dosvm_speed_test.inc"
+#include "dosvm_cost_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -590,6 +591,7 @@ int main(void)
     test_menu();
     test_irq_stall();
     test_speed();
+    test_cost_bursts();
     CHECK(guest_enters==3 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

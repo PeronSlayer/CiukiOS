@@ -97,5 +97,6 @@ int v86_reflect(struct v86 *v, struct v86_frame *f, uint8_t vector);
 int v86_emulate(struct v86 *v, struct v86_frame *f);
 int v86_debug_step(struct v86 *v, struct v86_frame *f);
 void v86_prepare_return(struct v86 *, struct v86_frame *);
+void v86_retire_shadow(struct v86 *, const struct v86_frame *);
 
 #endif

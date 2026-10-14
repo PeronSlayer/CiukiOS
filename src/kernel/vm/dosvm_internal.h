@@ -36,10 +36,21 @@
 enum dosvm_trace_kind { DOSVM_TRACE_VECTOR, DOSVM_TRACE_PIT, DOSVM_TRACE_IRQ0,
     DOSVM_TRACE_DB_PM, DOSVM_TRACE_DB_RM, DOSVM_TRACE_FLAGS, DOSVM_TRACE_TIMER,
     DOSVM_TRACE_FAULT, DOSVM_TRACE_COUNT };
+enum dosvm_perf_cause {
+    DOSVM_COST_RM_INT, DOSVM_COST_RM_IRET, DOSVM_COST_RM_FLAGS,
+    DOSVM_COST_PM_INT, DOSVM_COST_PM_FLAGS, DOSVM_COST_SWITCH,
+    DOSVM_COST_VGA_IO, DOSVM_COST_VGA_PF, DOSVM_COST_PIT_PIC,
+    DOSVM_COST_KBD, DOSVM_COST_IO, DOSVM_COST_DB, DOSVM_COST_TIMER,
+    DOSVM_COST_OTHER, DOSVM_COST_RM_PUSHF, DOSVM_COST_RM_POPF,
+    DOSVM_COST_RM_CLI, DOSVM_COST_RM_STI, DOSVM_COST_RM_HLT,
+    DOSVM_COST_PM_HLT, DOSVM_COST_COUNT
+};
 struct dosvm_perf_sample {
     uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows;
     uint32_t exits[6], irqs[16];
     uint64_t guest_us, monitor_us, present_us, log_us, edges, insn[V86_INSNS];
+    uint32_t cost_count[DOSVM_COST_COUNT], batched;
+    uint64_t cost_us[DOSVM_COST_COUNT];
 };
 struct dosvm {
     struct dosvm_info info;
@@ -107,6 +118,11 @@ struct dosvm {
         uint64_t stamp, report_tick;
         unsigned phase; /* 0 suspended, 1 guest, 2 monitor */
         unsigned resume_phase;
+        bool trap_active;
+        unsigned cause;
+        uint64_t trap_cycles, cost_cycles[DOSVM_COST_COUNT], last_cost_cycles[DOSVM_COST_COUNT];
+        uint32_t cost_count[DOSVM_COST_COUNT], last_cost_count[DOSVM_COST_COUNT];
+        uint32_t batched, last_batched;
         uint32_t last_frames, last_starts, last_harvests, last_pages, last_trapped, last_converted, last_rows;
         uint32_t last_exits[6], last_irqs[16];
         uint64_t last_guest, last_monitor, last_present, last_log, last_edges;
@@ -140,6 +156,7 @@ struct dosvm {
         dosvm_port_handler handler;
         void *arg;
     } ports[DOSVM_PORTS];
+    uint8_t port_hint[4]; /* checked slot hints: PIT, keyboard, VGA, other */
     struct dpmi dpmi;        /* f3-04 kernel DPMI host, idle until the first entry */
     /* f3-12: routine UART diagnostics wait for the outermost guest IRQ to
      * return. Fixed storage, independent of guest memory and PIC state. */
@@ -174,6 +191,8 @@ void dosvm_trace(struct dosvm *, enum dosvm_trace_kind, const struct v86_frame *
 void dosvm_console_byte(struct dosvm *, uint8_t);
 void dosvm_launch_video(struct dosvm *);
 uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);
+const struct task *dosvm_task_focus(void);
+int dosvm_io_burst(struct dosvm *, struct v86_frame *);
 uint64_t dosvm_perf_clock(void);
 void dosvm_perf_report(struct dosvm *);
 void dosvm_perf_dump(struct dosvm *);
@@ -234,6 +253,7 @@ static inline void dpmi_gprs(struct v86_frame *dst, const struct v86_frame *src)
 int dpmi_v86_int(struct dosvm *, struct v86_frame *, uint8_t vector);
 int dpmi_v86_stub(struct dosvm *, struct v86_frame *);
 int dpmi_pm_trap(struct dosvm *, struct v86_frame *, uint32_t cr2, uint32_t dr6);
+int dpmi_io_repeat(struct dosvm *, struct v86_frame *);
 int dpmi_deliver(struct dosvm *, struct v86_frame *);
 void dpmi_close(struct dosvm *);
 void dpmi_watch_hits(struct dosvm *, uint32_t dr6);
