@@ -54,6 +54,7 @@ int biosvm_video_switch(uint16_t id, uint8_t m[256])
     return 0;
 }
 void klog(const char *fmt, ...) { (void)fmt; }
+void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
 void kmutex_init(struct kmutex *m) { m->owner = 0; }
 void kmutex_lock(struct kmutex *m) { assert(!m->owner); m->owner = &timer; }
 void kmutex_unlock(struct kmutex *m) { assert(m->owner == &timer); m->owner = 0; }

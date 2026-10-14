@@ -40,6 +40,7 @@ void usb_device_quarantine(struct usb_device *d, const char *reason)
 }
 bool usb_expired(struct usb_host *host, uint64_t deadline)
 { return host->io.now(host->io.cookie) >= deadline; }
+void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
 void klog(const char *fmt, ...)
 {
     char record[256]; va_list ap; va_start(ap, fmt);

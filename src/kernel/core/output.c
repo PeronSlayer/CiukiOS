@@ -26,19 +26,29 @@ void kputs_raw(const char *s)
 /* Format each record before handing it to the serial queue. Playback logs
  * never poll the UART, including callers in IRQ/critical sections; ordinary
  * synchronous drains release IF between readiness checks. */
-void klog(const char *fmt, ...)
+static void log_line(const char *fmt, va_list ap, bool periodic)
 {
     char buf[256];
-    va_list ap;
-    va_start(ap, fmt);
     int n = kvsnprintf(buf, sizeof(buf) - 1, fmt, ap);
-    va_end(ap);
     if (n > (int)sizeof(buf) - 2)
         n = sizeof(buf) - 2;
     buf[n] = '\n';
     buf[n + 1] = 0;
-    bootlog_capture(buf, (size_t)n + 1);
+    if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
+    else bootlog_capture(buf, (size_t)n + 1);
     kputs_raw(buf);
+}
+
+void klog(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt); log_line(fmt, ap, false); va_end(ap);
+}
+
+void klog_periodic(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt); log_line(fmt, ap, true); va_end(ap);
 }
 
 void rec_set_run(const char *run8)
@@ -60,7 +70,7 @@ static uint32_t next_seq(void)
 
 /* A record above 240 bytes is never truncated silently: an ERROR record
  * replaces it so the evidence fails loudly. */
-static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary)
+static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic)
 {
     char buf[256];
     uint32_t s = next_seq();
@@ -71,7 +81,10 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
                       run_id, s, probe, n);
     buf[n] = '\n';
     buf[n + 1] = 0;
-    if (ordinary) bootlog_capture(buf, (size_t)n + 1);
+    if (ordinary) {
+        if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
+        else bootlog_capture(buf, (size_t)n + 1);
+    }
     kputs_raw(buf);
 }
 
@@ -94,12 +107,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         kvsnprintf(extra, sizeof(extra), fmt, ap);
         va_end(ap);
     }
-    emit_line(probe, event, extra, true);
+    emit_line(probe, event, extra, true, false);
 }
 
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
 {
-    emit_line(probe, event, extra, false);
+    emit_line(probe, event, extra, false, false);
 }
 
 void rec_diag(const char *probe, const char *fmt, ...)
@@ -110,7 +123,10 @@ void rec_diag(const char *probe, const char *fmt, ...)
     va_start(ap, fmt);
     kvsnprintf(extra, sizeof(extra), fmt, ap);
     va_end(ap);
-    emit_line(probe, "DATA", extra, true);
+    /* The VM heartbeat is a recurring runtime snapshot, even when queued
+     * and later emitted with fmt="%s". Evidence rec_emit stays protected. */
+    bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1);
+    emit_line(probe, "DATA", extra, true, periodic);
 }
 
 static volatile int in_panic;

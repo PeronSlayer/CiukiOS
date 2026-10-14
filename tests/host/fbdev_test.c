@@ -46,6 +46,7 @@ static unsigned step_count;
 static char accel_log[128][192];
 static unsigned accel_count;
 static void (*accel_log_cost)(const char *);
+void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
 void klog(const char *fmt, ...)
 {
     if (!strncmp(fmt, "[accel] ", 8)) {

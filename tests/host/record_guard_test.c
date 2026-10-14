@@ -9,7 +9,7 @@
 #include <ciuki/arch.h>
 #include <ciuki/init.h>
 
-static unsigned failures, lines, captures, warnings;
+static unsigned failures, lines, captures, warnings, periodic_captures;
 static char serial_lines[16][256];
 static char console_lines[16][256];
 static unsigned console_count;
@@ -47,6 +47,7 @@ void console_set_color(uint32_t fg, uint32_t bg) { (void)fg; (void)bg; }
 void serial_panic(void) { }
 void console_reclaim(void) { }
 void bootlog_capture(const char *s, size_t n) { CHECK(s && n); captures++; }
+void bootlog_capture_ring(const char *s, size_t n) { CHECK(s && n); periodic_captures++; }
 #include "../../src/kernel/lib/fmt.c"
 #include "../../src/kernel/core/output.c"
 
@@ -93,11 +94,18 @@ int main(void)
     rec_diag("vm-boot", "group=vm_db dr6=%08x", 0xFFFF4FF0u);
     CHECK(lines == before + 1 && captures == captured + 1 && !run_selected && !run_begun);
     CHECK(strstr(serial_lines[before], "run=00000000") && strstr(serial_lines[before], "event=DATA group=vm_db dr6=ffff4ff0"));
+    rec_diag("vm-boot", "%s", "group=vm_heartbeat vm=1 tick=1000");
+    CHECK(lines == before + 2 && captures == captured + 1 && periodic_captures == 1);
     rec_set_run("abcdef01");
     rec_diag("vm-boot", "group=vm_db");
-    CHECK(lines == before + 1 && rec_premature_records() == drops);
+    CHECK(lines == before + 2 && rec_premature_records() == drops);
     g_boot.flags = 0;
     CHECK(lines == console_count && !strcmp(serial_lines[before], console_lines[before]));
+    before = captures;
+    klog_periodic("[usb] worker controller=test tick=%u", 1000u);
+    CHECK(captures == before && periodic_captures == 2);
+    CHECK(!strcmp(serial_lines[lines - 1], "[usb] worker controller=test tick=1000\n"));
+    CHECK(lines == console_count && !strcmp(serial_lines[lines - 1], console_lines[lines - 1]));
     printf("record runtime guard: %s (%u failures; drops before run/BEGIN, one warning, identical sinks, panic bypass)\n",
            failures ? "FAIL" : "PASS", failures);
     printf("verbose runtime diagnostics: %s (quiet off, no run/BEGIN needed, evidence scope preserved)\n", failures ? "FAIL" : "PASS");

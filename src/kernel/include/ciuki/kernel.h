@@ -53,6 +53,7 @@ void console_set_quiet(bool on);          /* quiet boot: history and serial only
 bool console_quiet(void);
 void console_wake(void);                  /* quiet boot failure: draw from history */
 void klog(const char *fmt, ...);          /* serial + screen, plain log line */
+void klog_periodic(const char *fmt, ...); /* same sinks, disk runtime ring only */
 void kputs_raw(const char *s);            /* panic-safe output */
 
 /* panic */

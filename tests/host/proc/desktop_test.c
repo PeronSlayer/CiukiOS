@@ -44,6 +44,7 @@ static unsigned frame_length;
 static char frame_probe[24];
 #ifndef CIUKI_DESKTOP_REAL_INPUT
 void klog(const char *fmt, ...) { (void)fmt; }
+void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
 #endif
 bool g_cpu_tsc;
 uint64_t g_tsc_per_ms;

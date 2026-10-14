@@ -18,6 +18,7 @@ static gen_t generation;
 gen_t gen_alloc(void) { return ++generation; }
 static char records[16384];
 static size_t records_at;
+void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
 void klog(const char *fmt,...)
 {
     char record[256];va_list ap;va_start(ap,fmt);int n=kvsnprintf(record,sizeof(record),fmt,ap);va_end(ap);

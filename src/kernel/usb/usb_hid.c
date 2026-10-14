@@ -227,7 +227,7 @@ static void latency_window(struct usb_device *d, struct usb_hid *h, uint64_t tic
 {
     if (!h->latency_reports || tick-h->latency_window<1000) return;
     if (trace_enabled())
-        klog("[usb] hid latency max addr=%u ms=%llu interface=%u reports=%u window_ms=%llu bound=upper",
+        klog_periodic("[usb] hid latency max addr=%u ms=%llu interface=%u reports=%u window_ms=%llu bound=upper",
              d->address,h->latency_max,h->interface,h->latency_reports,tick-h->latency_window);
     h->latency_reports=0; h->latency_max=0; h->latency_window=tick;
 }

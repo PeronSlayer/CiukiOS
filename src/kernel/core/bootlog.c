@@ -1,4 +1,4 @@
-/* F1: 128 KiB log at SYSTEM/LOGS/BOOT.LOG, ring by durable truncation.
+/* F4-16: 1 MiB log, protected 128 KiB prefix plus a truncation ring.
  * Deliberately no output calls: a disk failure must never recurse into logs.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/bootlog.h>
@@ -6,8 +6,9 @@
 
 static struct bootlog_stats stats;
 static struct vfs_table table;
-static char ram[BOOTLOG_RAM], batch[4096];
-static unsigned head, used;
+static char boot[BOOTLOG_PROTECTED], ram[BOOTLOG_RAM], batch[4096];
+static unsigned boot_used, boot_sent, head, used;
+static uint32_t ring_position = BOOTLOG_PROTECTED;
 static int handle = -1;
 static bool draining, attached, disabled;
 #ifdef FS_HOST
@@ -19,21 +20,29 @@ static uint32_t lock_ram(void) { return irq_save(); }
 static void unlock_ram(uint32_t f) { irq_restore(f); }
 #endif
 
-void bootlog_capture(const char *s, size_t n)
+static void capture(const char *s, size_t n, bool periodic)
 {
-    if (!s || disabled) return;
-    /* Each <=128-byte IF-off copy is bounded; producers do not do disk I/O. */
+    if (!s) return;
+    /* A formatted kernel record is <=255 bytes: copy it under one lock.
+     * Bulk callers use bounded 256-byte slices; producers do no disk I/O. */
     while (n) {
-        size_t take = n > 128 ? 128 : n;
+        size_t take = n > 256 ? 256 : n;
         uint32_t flags = lock_ram();
+        if (disabled) { unlock_ram(flags); return; }
         for (size_t i = 0; i < take; i++) {
-            if (used == BOOTLOG_RAM) { head = (head + 1) % BOOTLOG_RAM; used--; stats.dropped++; }
-            ram[(head + used) % BOOTLOG_RAM] = s[i]; used++;
+            if (!periodic && boot_used < BOOTLOG_PROTECTED)
+                boot[boot_used++] = s[i];
+            else {
+                if (used == BOOTLOG_RAM) { head = (head + 1) % BOOTLOG_RAM; used--; stats.dropped++; }
+                ram[(head + used) % BOOTLOG_RAM] = s[i]; used++;
+            }
         }
         stats.captured += take;
         unlock_ram(flags); s += take; n -= take;
     }
 }
+void bootlog_capture(const char *s, size_t n) { capture(s, n, false); }
+void bootlog_capture_ring(const char *s, size_t n) { capture(s, n, true); }
 static int failed(int e)
 {
     if (e && !stats.error) stats.error = e;
@@ -52,20 +61,12 @@ int bootlog_activate(struct vfs *vfs, bool qualified, uint32_t sequence)
     stats.storage_calls++;
     handle = vfs_open(&table, BOOTLOG_PATH, VFS_READ | VFS_WRITE | VFS_CREATE, VFS_DENY_WRITE, 0);
     if (handle < 0) { e = handle; handle = -1; return failed(e); }
-    uint64_t position;
+    /* A qualified boot owns a fresh file. Read-only/probe reopens never
+     * activate this sink, so they can still recover the previous boot. */
     stats.storage_calls++;
-    e = vfs_seek(&table, handle, 0, VFS_SEEK_END, &position);
+    e = vfs_truncate(&table, handle, 0);
     if (e) return failed(e);
-    if (position > BOOTLOG_LIMIT) {
-        stats.storage_calls++;
-        e = vfs_truncate(&table, handle, 0);
-        if (e) return failed(e);
-        stats.storage_calls++;
-        e = vfs_seek(&table, handle, 0, VFS_SEEK_SET, &position);
-        if (e) return failed(e);
-        stats.rotations++;
-    }
-    stats.size = (uint32_t)position; stats.active = true;
+    stats.size = 0; stats.active = true;
     return 0;
 }
 int bootlog_drain(void)
@@ -74,32 +75,49 @@ int bootlog_drain(void)
     if (!stats.active) return 0;
     if (draining) return -FS_EBUSY;
     draining = true;
-    /* One bounded batch per worker turn, including logs emitted during I/O. */
+    /* Boot bytes cannot be displaced even before mount. Flush that prefix
+     * first, then one runtime batch per turn. Copies keep IF-off work at
+     * <=128 bytes. Periodic producers never consume boot capacity. */
+    uint32_t flags = lock_ram();
+    bool prefix = boot_sent < boot_used;
+    uint32_t position = prefix ? boot_sent : ring_position;
+    unlock_ram(flags);
     unsigned n = 0;
     while (n < sizeof(batch)) {
-        uint32_t flags = lock_ram();
-        unsigned take = used < 128 ? used : 128;
+        flags = lock_ram();
+        unsigned pending = prefix ? boot_used - boot_sent : used;
+        unsigned take = pending < 128 ? pending : 128;
         if (take > sizeof(batch) - n) take = sizeof(batch) - n;
-        for (unsigned i = 0; i < take; i++) batch[n++] = ram[(head + i) % BOOTLOG_RAM];
-        head = (head + take) % BOOTLOG_RAM; used -= take;
+        for (unsigned i = 0; i < take; i++)
+            batch[n++] = prefix ? boot[boot_sent + i] : ram[(head + i) % BOOTLOG_RAM];
+        if (prefix) boot_sent += take;
+        else { head = (head + take) % BOOTLOG_RAM; used -= take; }
         unlock_ram(flags);
         if (!take) break;
     }
     int e = 0;
-    if (n && stats.size + n > BOOTLOG_LIMIT) {
+    if (n && !prefix && position + n > BOOTLOG_LIMIT) {
         stats.storage_calls++;
-        e = vfs_truncate(&table, handle, 0);
-        uint64_t position;
-        if (!e) { stats.storage_calls++; e = vfs_seek(&table, handle, 0, VFS_SEEK_SET, &position); }
-        if (!e) { stats.size = 0; stats.rotations++; }
+        e = vfs_truncate(&table, handle, BOOTLOG_PROTECTED);
+        if (!e) { stats.size = BOOTLOG_PROTECTED; position = BOOTLOG_PROTECTED; stats.rotations++; }
     }
     if (n && !e) {
-        size_t done;
-        stats.storage_calls++; stats.writes++;
-        if (!stats.first_write_sequence) stats.first_write_sequence = stats.qualification_sequence + 1;
-        e = vfs_write(&table, handle, batch, n, &done);
-        if (!e && done != n) e = -FS_EIO;
-        if (!e) stats.size += (uint32_t)done;
+        uint64_t at;
+        stats.storage_calls++;
+        e = vfs_seek(&table, handle, position, VFS_SEEK_SET, &at);
+        if (!e) {
+            size_t done;
+            stats.storage_calls++; stats.writes++;
+            if (!stats.first_write_sequence) stats.first_write_sequence = stats.qualification_sequence + 1;
+            e = vfs_write(&table, handle, batch, n, &done);
+            if (!e && done != n) e = -FS_EIO;
+            if (!e) {
+                position += (uint32_t)done;
+                if (position > stats.size) stats.size = position;
+                if (prefix) stats.boot_size = position;
+                else ring_position = position;
+            }
+        }
     }
     draining = false;
     return failed(e);
@@ -108,8 +126,14 @@ int bootlog_shutdown(void)
 {
     if (draining) return -FS_EBUSY;
     int result = stats.error;
-    while (stats.active && used) { int e = bootlog_drain(); if (e) { result = e; break; } }
-    disabled = true;
+    for (;;) {
+        uint32_t f = lock_ram();
+        bool pending = stats.active && (used || boot_sent < boot_used);
+        if (!pending) disabled = true;
+        unlock_ram(f);
+        if (!pending) break;
+        int e = bootlog_drain(); if (e) { result = e; break; }
+    }
     if (handle >= 0) {
         stats.storage_calls++;
         int e = vfs_commit(&table, handle);
@@ -126,10 +150,13 @@ int bootlog_shutdown(void)
 void bootlog_snapshot(struct bootlog_stats *out)
 {
     if (!out) return;
-    uint32_t f = lock_ram(); *out = stats; out->queued = used; unlock_ram(f);
+    uint32_t f = lock_ram(); *out = stats;
+    out->boot_queued = boot_used - boot_sent; out->ring_queued = used;
+    out->queued = out->boot_queued + used; unlock_ram(f);
 }
 void bootlog_reset(void)
 {
     if (attached || draining) return;
-    memset(&stats, 0, sizeof(stats)); head = used = 0; handle = -1; disabled = false;
+    memset(&stats, 0, sizeof(stats)); head = used = boot_used = boot_sent = 0;
+    ring_position = BOOTLOG_PROTECTED; handle = -1; disabled = false;
 }

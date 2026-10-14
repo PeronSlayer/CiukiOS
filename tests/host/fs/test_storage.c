@@ -286,27 +286,36 @@ static void log_tests(void) {
     bootlog_capture("activation before mount\n",24); bootlog_snapshot(&st); CHECK(!st.writes && !st.storage_calls && st.queued==24);
     CHECK(bootlog_activate(&s->vfs,false,0)==-FS_EROFS); CHECK(!media[0].writes);
     OK(storage_enable_write(s,2)); OK(bootlog_activate(&s->vfs,true,s->sequence));
-    CHECK(BOOTLOG_LIMIT==131072 && !strcmp(BOOTLOG_PATH,"C:/SYSTEM/LOGS/BOOT.LOG"));
+    CHECK(BOOTLOG_LIMIT==1048576 && BOOTLOG_PROTECTED==131072 && !strcmp(BOOTLOG_PATH,"C:/SYSTEM/LOGS/BOOT.LOG"));
     char text[4096]; memset(text,'a',sizeof(text));
+    bootlog_capture_ring(text,sizeof(text));
     OK(bootlog_drain());
-    for(unsigned i=0;i<BOOTLOG_LIMIT/sizeof(text)-1;i++) { bootlog_capture(text,sizeof(text)); OK(bootlog_drain()); }
-    bootlog_capture(text,sizeof(text)-24); OK(bootlog_drain());
-    bootlog_snapshot(&st); CHECK(st.active && st.size==BOOTLOG_LIMIT && !st.rotations && st.first_write_sequence>st.qualification_sequence);
-    bootlog_capture("z",1); OK(bootlog_drain());
-    bootlog_snapshot(&st); CHECK(st.size==1 && st.rotations==1);
+    OK(bootlog_drain());
+    bootlog_capture("later boot\n",11); OK(bootlog_drain());
+    bootlog_snapshot(&st); CHECK(st.active && st.size==BOOTLOG_PROTECTED+sizeof(text) && st.boot_size==35 && !st.rotations && st.first_write_sequence>st.qualification_sequence);
+    int h=vfs_open(&table,BOOTLOG_PATH,VFS_READ,VFS_DENY_NONE,0); CHECK(h>=0);
+    char prefix[64]; size_t got; uint64_t at;
+    OK(vfs_read(&table,h,prefix,sizeof(prefix),&got)); CHECK(got==sizeof(prefix));
+    CHECK(!memcmp(prefix,"activation before mount\nlater boot\n",35));
+    for(unsigned i=35;i<sizeof(prefix);i++) CHECK(!prefix[i]);
+    OK(vfs_seek(&table,h,BOOTLOG_PROTECTED,VFS_SEEK_SET,&at));
+    OK(vfs_read(&table,h,prefix,sizeof(prefix),&got)); CHECK(got==sizeof(prefix));
+    for(unsigned i=0;i<got;i++) CHECK(prefix[i]=='a');
+    OK(vfs_close(&table,h));
     OK(bootlog_shutdown()); uint8_t digest[32],again[32]; uint32_t size,size2;
     OK(storage_file_digest(&table,BOOTLOG_PATH,digest,&size)); CHECK(size<=BOOTLOG_LIMIT && size);
     stop(s,true); bootlog_reset();
     unsigned writes=media[0].writes; s=start(); OK(storage_file_digest(&table,BOOTLOG_PATH,again,&size2));
     CHECK(size==size2 && !memcmp(digest,again,32) && writes==media[0].writes);
     bootlog_capture("next boot\n",10); OK(storage_enable_write(s,2)); OK(bootlog_activate(&s->vfs,true,s->sequence));
-    OK(bootlog_shutdown()); struct fat_entry stat; OK(vfs_stat(&table,BOOTLOG_PATH,&stat)); CHECK(stat.size==size+10);
+    OK(bootlog_shutdown()); struct fat_entry stat; OK(vfs_stat(&table,BOOTLOG_PATH,&stat)); CHECK(stat.size==10);
     stop(s,true); reset();
     /* Bounded RAM capture and unavailable path never call a filesystem. */
-    for(unsigned i=0;i<5;i++) bootlog_capture(text,sizeof(text));
-    bootlog_snapshot(&st); CHECK(st.queued==BOOTLOG_RAM && st.dropped==3*sizeof(text) && !st.storage_calls);
+    for(unsigned i=0;i<BOOTLOG_PROTECTED/sizeof(text);i++) bootlog_capture(text,sizeof(text));
+    for(unsigned i=0;i<5;i++) bootlog_capture_ring(text,sizeof(text));
+    bootlog_snapshot(&st); CHECK(st.boot_queued==BOOTLOG_PROTECTED && st.ring_queued==BOOTLOG_RAM && st.queued==BOOTLOG_PROTECTED+BOOTLOG_RAM && st.dropped==3*sizeof(text) && !st.storage_calls);
     OK(bootlog_shutdown()); bootlog_reset();
-    printf("PASS boot log: SYSTEM/LOGS after gate, 128KiB exact boundary/truncation, bounded RAM, durable reopen/append\n");
+    printf("PASS boot log: SYSTEM/LOGS after gate, protected prefix/backfill/zero padding, runtime ring, bounded RAM, durable reopen/fresh qualified boot\n");
 }
 static void failure_tests(void) {
     for(unsigned fault=0;fault<2;fault++) {

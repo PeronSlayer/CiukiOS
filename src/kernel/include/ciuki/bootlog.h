@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#define BOOTLOG_LIMIT (128u * 1024u)
+#define BOOTLOG_LIMIT (1024u * 1024u)
+#define BOOTLOG_PROTECTED (128u * 1024u)
+#define BOOTLOG_RING (BOOTLOG_LIMIT - BOOTLOG_PROTECTED)
 #define BOOTLOG_RAM 8192u
 #define BOOTLOG_PATH "C:/SYSTEM/LOGS/BOOT.LOG"
 struct vfs;
@@ -14,10 +16,13 @@ struct bootlog_stats {
     uint64_t storage_calls, writes, captured;
     int error;
     bool active;
+    uint32_t boot_size, boot_queued, ring_queued;
 };
 /* No allocation, no VFS, no logging. Ordinary output only; never call from
  * kputs_raw/rec_emit_panicsafe/panic. May collect before storage_init. */
 void bootlog_capture(const char *, size_t);
+/* Periodic summaries bypass the protected prefix, including before mount. */
+void bootlog_capture_ring(const char *, size_t);
 int bootlog_activate(struct vfs *, bool qualified, uint32_t sequence);
 int bootlog_drain(void);
 int bootlog_shutdown(void);
