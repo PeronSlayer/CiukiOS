@@ -229,6 +229,31 @@ void klog(const char *f,...) {(void)f;}
             *(str(ROOT/'apps/desktop'/n) for n in ('shell.c','autoplay.c','autoplay_content.c','sounds.c','settings.c','settings_io.c','wallpaper.c','wallpaper_io.c','image.c','keymap.c','folder.c','../files/model.c','../files/transfer.c','../files/vfs.c')),  # desktop shell
             *bridge,
             '-o',str(binary)],check=True,env=env)
+        spec=importlib.util.spec_from_file_location('first_frame_portrait',ROOT/'apps/desktop/convert_portrait.py')
+        converter=importlib.util.module_from_spec(spec);spec.loader.exec_module(converter)
+        portrait=converter.convert(ROOT/'assets/brand/ciuki-logo.png')
+        source=self.folder/'portrait.xrgb';source.write_bytes(portrait)
+        for mode in ('--first-frame','--normal-first-frame'):
+            with self.subTest(first_frame=mode):
+                target=self.folder/'first-frame.xrgb'
+                result=subprocess.run([str(binary),mode,str(source),str(target)],
+                                      capture_output=True,text=True,env=env,timeout=10)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertIn('no input, production present captured PASS',result.stdout)
+                pixels=target.read_bytes();self.assertEqual(len(pixels),320*320*4)
+                checked=0
+                # The released shell button: exact 18 px mark at (13,7), before any input.
+                for y in range(18):
+                    for x in range(18):
+                        block=[portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
+                               for yy in range(y*256//18,(y+1)*256//18)
+                               for xx in range(x*256//18,(x+1)*256//18)]
+                        if any(b==bytes((0x64,0x55,0x37)) for b in block):continue
+                        expected=bytes(sum(b[k] for b in block)//len(block) for k in range(3))
+                        off=((7+y)*320+13+x)*4
+                        self.assertEqual(pixels[off:off+3],expected,(mode,x,y))
+                        checked+=1
+                self.assertGreater(checked,100)
         result=subprocess.run([str(binary)],capture_output=True,text=True,env=env,timeout=10)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('five fault kinds',result.stdout)
