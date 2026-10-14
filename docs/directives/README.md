@@ -153,4 +153,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f4-16-serial-fifo-and-disk-log](f4-16-serial-fifo-and-disk-log.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (verified FIFO sender, 1 MiB disk log with protected boot prefix); T23 capture pending |
 | [f1-56-usb-regression-real-uhci](f1-56-usb-regression-real-uhci.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (explicit schedule, strict host walker, schedule dump; T23 cause not reproduced on the host, next capture decides) |
 | [f4-17-dos-vm-audio-halted](f4-17-dos-vm-audio-halted.md) | F4 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (auto-init restart behind a paused transfer, state records, peak diagnostics); T23 listening test pending |
-| [f3-14-dos-speed-t23](f3-14-dos-speed-t23.md) | F3 | gpt-6.1-sol / xhigh | running 2026-10-14 (DOS games very slow: VM exit causes from the f3-13 records) |
+| [f3-14-dos-speed-t23](f3-14-dos-speed-t23.md) | F3 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (exit cost table, PIT/PIC/VGA fast paths, VM time share); T23 measurement pending |
