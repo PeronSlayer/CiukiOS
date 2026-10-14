@@ -149,3 +149,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f1-53-usb-storage-quarantine-and-port-flood](f1-53-usb-storage-quarantine-and-port-flood.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (port records rate-limited, attach tolerance, first-fault snapshot); T23 retest pending |
 | [f1-54-optical-iso-malformed](f1-54-optical-iso-malformed.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (isofs-like leniency, last-session scan, multi-session fixture); T23 test pending |
 | [f1-55-savage-engine-idle-quarantine](f1-55-savage-engine-idle-quarantine.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-14 (bounded idle wait with raw status diagnostics; mask kept per X.Org); T23 test pending |
+| [runner-04-usb-pacing-baseline](runner-04-usb-pacing-baseline.md) | runner | gpt-6.1-sol / high | running 2026-10-14 (pacing barrier lacks a counter baseline on the first batches) |

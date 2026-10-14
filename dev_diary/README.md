@@ -120,3 +120,4 @@ Documenti di design, validazione, fonti esterne.
 | [Tredici consegne fuse (prerequisiti F5 e parco driver); immagine 98c81726 per il T23](2026-10-13-06-tredici-consegne-immagine-98c81726.md) | 13 ott | modifiche (kernel, driver, desktop, SDK, test), immagine |
 | [Quarta prova sul T23 (immagine e86305de): audio nativo attivo, UDMA, mouse USB; dieci direttive](2026-10-13-07-t23-immagine-e86305de-risultati.md) | 13 ott | analisi hardware, decisioni |
 | [Immagine finale dell'ondata del 13 ottobre: 293c05af (ventitré consegne fuse)](2026-10-14-01-immagine-finale-293c05af.md) | 14 ott | modifiche (kernel, driver, desktop, SDK, test, runner), immagine |
+| [Immagine 8c88b1ab: le nove consegne della mattina del 14 ottobre](2026-10-14-02-immagine-8c88b1ab.md) | 14 ott | modifiche (kernel, driver, desktop, runner, documentazione), immagine |
