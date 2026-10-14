@@ -264,3 +264,47 @@ show changes from 4 Hz polling. Software volume writes control this same EC.
 No verified T23 DSDT was obtained online; 0x62/0x66 responses, physical analog
 level, headphones/speakers and firmware/SMI interaction require the lead's
 T23 test. See [the research and settings decision](f4-18-audio-levels.md).
+
+## F4-21 SMBIOS records and ThinkPad EC gate (2026-10-14)
+
+The [submitted dmidecode observations in ThinkWiki's DMI database](https://www.thinkwiki.org/wiki/List_of_DMI_IDs#T_series)
+include T23 system identities `IBM / 26474MG / Not Available` and
+`IBM / 26474NU / Not Available`, with BIOS vendor IBM and versions
+`1AET64WW (1.20 )` and `1AET62WW (1.18 )`. The directive's
+`IBM / 26475FU / Not Available` is a representative test fixture, not a
+new measurement of the owner's T23. These observations explain why a
+mandatory ThinkPad product/version prefix can reject this generation.
+
+[Linux v6.12 thinkpad_acpi.c](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/platform/x86/thinkpad_acpi.c)
+(`get_thinkpad_model_data`, `probe_for_thinkpad`) recognizes IBM/Lenovo,
+parses BIOS/EC firmware identifiers, stores the numerical product name,
+and permits known firmware to identify older models without a ThinkPad
+version string. Linux also requires an ACPI EC object; Ciuki's bounded
+port handshake is its own policy, not an implementation of Linux's probe.
+
+[DMTF SMBIOS 2.6.1](https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_2.6.1.pdf),
+sections 2.1.1, 3.1.3, 3.3.1 and 3.3.2, defines the 16-byte BIOS scan,
+both entry-point checksums, the table extent, double-NUL structure endings
+and type-0/type-1 string indices. Keep validation bounded to that extent,
+require mapped pages before dereferencing the table, and reject malformed
+tables. Copy at most 47 characters per logged string; replace nonprintable
+bytes, quotes and backslashes with `?` so records remain single-line and
+unambiguous. Missing fields are empty strings with presence flags.
+
+Decision: supersede F4-18's IBM product/version requirement. IBM's exact
+type-1 vendor is sufficient to attempt the handshake; ThinkPad or numerical
+type-model strings are logged hints. LENOVO additionally needs a ThinkPad
+product/version prefix or a product type-model (four-character machine type,
+optional hyphen, alphanumeric model suffix). QEMU and safe mode always
+exclude port access. Before any volume write, two complete reads of EC
+register 0x30 must agree, including unrelated bits, and the level must be
+0..14. Existing bounded write/readback and polling policy remains in force.
+
+Every audio initialization, including safe mode, records the SMBIOS entry
+verdict, SMBIOS version, type-1 identity and type-0 BIOS identity. Off gates
+record `not_ibm`, `no_smbios`, `qemu`, `safe_mode` or
+`ec_handshake_failed`; transport/resource failures also include stage/error.
+The supplied image `445e91c7` log proves absence of EC records and successful
+audio/boot tone, not the actual DMI fields or functioning EC transport.
+The lead must collect those records and physical volume-key/master evidence
+on the newly built image.

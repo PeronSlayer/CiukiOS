@@ -17,6 +17,20 @@ struct thinkpad_ec {
     uint8_t status;
     uint64_t next_poll;
 };
+/* Firmware strings are copied/sanitized for records; eligibility is decided
+ * against the complete original strings, before truncation. */
+struct thinkpad_ec_smbios {
+    const char *verdict;
+    uint32_t entry_phys, table_phys;
+    uint16_t table_bytes;
+    uint8_t major, minor;
+    bool valid, has_system, has_bios, eligible, hint, qemu;
+    char vendor[48], product[48], version[48];
+    char bios_vendor[48], bios_version[48];
+};
+bool thinkpad_ec_smbios_decode(const uint8_t *table, size_t length, struct thinkpad_ec_smbios *);
+void thinkpad_ec_smbios_log(const struct thinkpad_ec_smbios *);
+bool thinkpad_ec_gate(const struct thinkpad_ec_smbios *, uint32_t boot_flags);
 bool thinkpad_ec_identity(const uint8_t *table, size_t length);
 bool thinkpad_ec_entry(const uint8_t *entry, size_t length, uint32_t *address, uint16_t *bytes);
 int thinkpad_ec_probe(struct thinkpad_ec *, const struct thinkpad_ec_io *, bool identified, struct ciuki_mixer_master *);

@@ -436,8 +436,8 @@ void audio_init(struct vfs *v)
     audio.initialized = true;
     kwait_init(&audio.changed); kmutex_init(&control_lock);
     audio_settings_load(v);
-    if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
     thinkpad_ec_init();
+    if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
     int err = audio_backend_init();
     audio.init_error = err;
     audio_init_log(err);
