@@ -40,6 +40,7 @@ int bootinfo_validate(const struct ciuki_boot_info *bi, const char **why);
 void serial_init(uint16_t base, uint16_t divisor);
 bool serial_present(void);
 void serial_write(const char *s, size_t n); /* one atomic record, whole drop on overflow */
+void serial_write_async(const char *s, size_t n); /* queue only; serial_tick drains */
 void serial_buffered(bool enabled);       /* bounded, nonblocking playback logs */
 void serial_panic(void);                  /* IF clear: drain, then synchronous records */
 void serial_tick(void) __attribute__((weak)); /* one ready FIFO burst, no polling; weak so host fixtures without serial.c keep the if (serial_tick) guard of task.c */
@@ -54,6 +55,7 @@ bool console_quiet(void);
 void console_wake(void);                  /* quiet boot failure: draw from history */
 void klog(const char *fmt, ...);          /* serial + screen, plain log line */
 void klog_periodic(const char *fmt, ...); /* same sinks, disk runtime ring only */
+void klog_deferred(const char *fmt, ...); /* diagnostics: RAM ring + UART queue, no painting/polling */
 void kputs_raw(const char *s);            /* panic-safe output */
 
 /* panic */

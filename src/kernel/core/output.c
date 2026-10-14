@@ -51,6 +51,17 @@ void klog_periodic(const char *fmt, ...)
     va_start(ap, fmt); log_line(fmt, ap, true); va_end(ap);
 }
 
+void klog_deferred(const char *fmt, ...)
+{
+    char buf[256];
+    va_list ap; va_start(ap,fmt);
+    int n=kvsnprintf(buf,sizeof(buf)-1,fmt,ap); va_end(ap);
+    if (n>(int)sizeof(buf)-2) n=sizeof(buf)-2;
+    buf[n]='\n'; buf[n+1]=0;
+    bootlog_capture_ring(buf,(size_t)n+1);
+    serial_write_async(buf,(size_t)n+1);
+}
+
 void rec_set_run(const char *run8)
 {
     for (int i = 0; i < 8; i++)

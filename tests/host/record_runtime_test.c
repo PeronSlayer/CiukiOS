@@ -14,17 +14,20 @@ static void hlt(void) { abort(); }
 static uint32_t read_cr2(void) { return 0; }
 struct ciuki_boot_info g_boot;
 static char output[8192];
-void serial_write(const char *s, size_t n)
+static unsigned ordinary_writes,async_writes,console_writes,ring_captures;
+static void append_output(const char *s,size_t n)
 {
     if (!(cpu_flags & 0x200) || strlen(output) + n >= sizeof(output)) abort();
     size_t at = strlen(output); memcpy(output + at, s, n); output[at + n] = 0;
 }
-void console_write(const char *s, size_t n) { (void)s; (void)n; }
+void serial_write(const char *s,size_t n) { ordinary_writes++;append_output(s,n); }
+void serial_write_async(const char *s,size_t n) { async_writes++;append_output(s,n); }
+void console_write(const char *s, size_t n) { (void)s; (void)n;console_writes++; }
 void serial_panic(void) { if (cpu_flags & 0x200) abort(); }
 void console_reclaim(void) {}
 void console_set_color(uint32_t fg, uint32_t bg) { (void)fg; (void)bg; }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
-void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n; }
+void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n;ring_captures++; }
 #include "../../src/kernel/core/output.c"
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); return 1; } } while (0)
 int main(void)
@@ -46,6 +49,11 @@ int main(void)
     if (rec_active()) rec_emit("vm-window", "DATA", "group=admission");
     CHECK(strstr(output, "run=12345678") && strstr(output, "group=admission"));
     rec_set_run("87654321"); CHECK(!rec_active());
+    unsigned ordinary=ordinary_writes,screen=console_writes,ring=ring_captures;
+    output[0]=0;klog_deferred("[cpu] window_ms=%u idle=%u top=%s",2000u,900u,"desktop#4:100");
+    CHECK(!strcmp(output,"[cpu] window_ms=2000 idle=900 top=desktop#4:100\n"));
+    CHECK(async_writes==1 && ordinary_writes==ordinary && console_writes==screen && ring_captures==ring+1);
     puts("record runtime: normal launch silent, L diagnostics framed, evidence remains gated until BEGIN PASS");
+    puts("record F0-20: deferred attribution uses runtime RAM ring and UART queue only PASS");
     return 0;
 }

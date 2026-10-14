@@ -114,7 +114,7 @@ int elf_validate(const struct ciuki_file *f, struct elf_image *image)
     return 0;
 }
 
-int elf_load(const struct ciuki_file *file, const struct elf_image *image, struct uaddr *u)
+static int load_image(const struct ciuki_file *file, const struct elf_image *image, struct uaddr *u)
 {
     /* The caller owns a provisional address space; every failure destroys
      * it through proc_discard, so no partially loaded child is published. */
@@ -142,8 +142,17 @@ int elf_load(const struct ciuki_file *file, const struct elf_image *image, struc
             if (err)
                 return err;
             off += n;
+            if (!(off%65536) && g_current && g_current->state==T_RUNNING)
+                task_sleep_ms(1);
         }
     }
     u->heap_base = u->brk = image->end;
     return 0;
+}
+
+int elf_load(const struct ciuki_file *file, const struct elf_image *image, struct uaddr *u)
+{
+    struct long_path_scope path=long_path_enter(LONG_ELF,"elf_load");
+    int error=load_image(file,image,u);
+    long_path_leave(path); return error;
 }

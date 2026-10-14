@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
+#include <ciuki/attribution.h>
 
 #define UART_POLL_LIMIT 20000u   /* per readiness wait, only boot/panic */
 #define UART_DEAD_LIMIT 8u       /* consecutive timeouts before disabling */
@@ -100,7 +101,7 @@ static bool serial_burst(void)
     return true;
 }
 
-static void serial_drain(void)
+static void serial_drain_queue(void)
 {
     unsigned polls = 0;
     for (;;) {
@@ -128,7 +129,13 @@ static void serial_drain(void)
     }
 }
 
-void serial_write(const char *s, size_t n)
+static void serial_drain(void)
+{
+    struct long_path_scope path=long_path_enter(LONG_SERIAL,__func__);
+    serial_drain_queue();long_path_leave(path);
+}
+
+static void serial_enqueue(const char *s, size_t n, bool wait)
 {
     uint32_t flags = irq_save();
     if (!uart_ok || !n) {
@@ -154,8 +161,10 @@ void serial_write(const char *s, size_t n)
         uart_used++;
     }
     irq_restore(flags);
-    if (synchronous) serial_drain();
+    if (wait && synchronous) serial_drain();
 }
+void serial_write(const char *s, size_t n) { serial_enqueue(s,n,true); }
+void serial_write_async(const char *s, size_t n) { serial_enqueue(s,n,false); }
 void serial_buffered(bool enabled)
 {
     uint32_t flags = irq_save(); uart_buffering = enabled; irq_restore(flags);

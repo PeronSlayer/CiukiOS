@@ -18,6 +18,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \
     "$root/tests/host/bootlog_test.c" -o "$out/bootlog_test"
 "$out/bootlog_test"
+python3 "$root/tests/host/test_system_stalls.py"
 python3 "$root/tests/host/fbdev_fixture_size_test.py"
 
 # F2 ABI: always extract the actual i686 layout using the kernel's flags.

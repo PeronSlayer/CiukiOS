@@ -238,7 +238,7 @@ void task_start(struct task *t)
 
 struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp)
 {
-    struct task *t = task_alloc("native", P_NORMAL, true);
+    struct task *t = task_alloc(p->name[0] ? p->name : "native", P_NORMAL, true);
     if (!t)
         return 0;
     t->as = p->memory->as;           /* borrowed directory, never destroyed by task */
@@ -317,6 +317,7 @@ void schedule(void)
         }
     }
     next->state = T_RUNNING;
+    if (attribution_switch) attribution_switch(next);
     g_current = next;
     /* F1 V86 worker: preserve its private directory and live C continuation.
      * Both hooks return the unmodified F0 values for all other tasks. */
@@ -368,12 +369,14 @@ void sched_tick(void)
 
 void task_yield(void)
 {
+    if (attribution_poll) attribution_poll(false);
     g_need_resched = false;
     schedule();
 }
 
 void task_sleep_ms(uint32_t ms)
 {
+    if (attribution_poll) attribution_poll(false);
     uint32_t f = irq_save();
     g_current->wake_tick = g_ticks + (ms ? ms : 1);
     g_current->state = T_BLOCKED;

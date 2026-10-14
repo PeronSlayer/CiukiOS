@@ -13,13 +13,15 @@ static struct fat_volume volume;
 static unsigned char disk[BOOTLOG_LIMIT];
 static uint32_t disk_size, disk_position;
 static unsigned calls, turns, commits, truncations;
-static int fail_seek, fail_write, fail_truncate;
+static int fail_seek, fail_write, fail_truncate,fail_commit;
 static bool short_write;
+static bool sync_waiting, storage_turn, service_sync,produce_during_sync;
 static void storage_call(void)
 {
     /* VFS work must never happen while the producer's IRQ-equivalent lock
      * is held. Every write is one bounded worker batch. */
     CHECK(!pthread_mutex_trylock(&ram_lock)); CHECK(!pthread_mutex_unlock(&ram_lock));
+    CHECK(!sync_waiting || storage_turn); /* a binder never performs VFS I/O */
     calls++;
 }
 int vfs_table_init(struct vfs *v, struct vfs_table *t, unsigned drive)
@@ -41,7 +43,7 @@ int vfs_write(struct vfs_table *t, int h, const void *data, size_t size, size_t 
     if (disk_position > disk_size) disk_size = disk_position;
     *done = size; return 0;
 }
-int vfs_commit(struct vfs_table *t, int h) { (void)t; storage_call(); CHECK(h == 1); commits++; return 0; }
+int vfs_commit(struct vfs_table *t, int h) { (void)t; storage_call(); CHECK(h == 1); commits++; return fail_commit ? -FS_EIO : 0; }
 int vfs_close(struct vfs_table *t, int h) { (void)t; storage_call(); CHECK(h == 1); return 0; }
 static struct bootlog_stats snapshot(void) { struct bootlog_stats s; bootlog_snapshot(&s); return s; }
 static void drain(void)
@@ -57,7 +59,8 @@ static void reset_model(void)
     bootlog_reset(); memset(&fs, 0, sizeof(fs)); memset(&volume, 0, sizeof(volume));
     fs.volumes[2] = &volume;
     calls = turns = commits = truncations = disk_position = 0;
-    fail_seek = fail_write = fail_truncate = 0; short_write = false;
+    fail_seek = fail_write = fail_truncate = fail_commit = 0; short_write = false;
+    sync_waiting=storage_turn=service_sync=produce_during_sync=false;
 }
 static void retention(void)
 {
@@ -126,20 +129,90 @@ static void errors(void)
 }
 static unsigned sync_pauses;
 static bool cancel_sync(void *ctx) { (void)ctx;return sync_pauses>=3; }
-static void pause_sync(void *ctx) { (void)ctx;sync_pauses++; }
+static void pause_sync(void *ctx) {
+    (void)ctx;sync_pauses++;
+    if (produce_during_sync) {
+        static char periodic[4096];memset(periodic,'P',sizeof(periodic));
+        bootlog_capture_ring(periodic,sizeof(periodic));
+    }
+    if (service_sync) {
+        storage_turn=true;
+        int e=bootlog_drain(); CHECK(!e || e==-FS_EBUSY || e==-FS_EIO);
+        storage_turn=false;
+    }
+}
+static int sync_records(void) {
+    sync_waiting=true;
+    int e=bootlog_sync(cancel_sync,pause_sync,0);
+    sync_waiting=false; return e;
+}
 static void synchronous_records(void)
 {
     reset_model();CHECK(!bootlog_activate(&fs,true,1));
     bootlog_capture("[usb-storage] stage=inquiry addr=1\n",33);
-    sync_pauses=0;CHECK(!bootlog_sync(cancel_sync,pause_sync,0));
+    service_sync=true;sync_pauses=0;CHECK(!sync_records() && sync_pauses==1);
     CHECK(!snapshot().queued && commits==1 && !memcmp(disk,"[usb-storage] stage=inquiry addr=1\n",33));
     /* A running writer or a VFS client cannot make sync spin or steal locks. */
+    bootlog_capture("next stage\n",11);
     draining=true;sync_pauses=0;
-    CHECK(bootlog_sync(cancel_sync,pause_sync,0)==-FS_EAGAIN && sync_pauses==3 && draining);
+    CHECK(sync_records()==-FS_EAGAIN && sync_pauses==3 && draining);
     draining=false;fs_lock_take(&fs.lock);sync_pauses=0;
-    CHECK(bootlog_sync(cancel_sync,pause_sync,0)==-FS_EAGAIN && sync_pauses==3);
+    CHECK(sync_records()==-FS_EAGAIN && sync_pauses==3);
     fs_lock_drop(&fs.lock);CHECK(!snapshot().error);
     CHECK(!bootlog_shutdown());
-    puts("bootlog: synchronous USB stage drain/commit, cancellable writer/VFS contention without lock theft PASS");
+    puts("bootlog: USB watermark wait, storage-only drain/commit, cancellable writer/VFS contention without lock theft PASS");
 }
-int main(void) { retention(); errors(); synchronous_records(); return 0; }
+static bool never_cancel(void *ctx) { (void)ctx;return false; }
+static void sync_bounds(void)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    static char bytes[8192];memset(bytes,'Z',sizeof(bytes));bootlog_capture(bytes,sizeof(bytes));
+    service_sync=true;sync_pauses=0;CHECK(!sync_records() && sync_pauses==2 && commits==1);
+    /* Already-written bytes still need a commit and a visible storage turn. */
+    bootlog_capture("written",7);CHECK(!bootlog_drain());
+    CHECK(!snapshot().queued);sync_pauses=0;CHECK(!sync_records() && sync_pauses==1 && commits==2);
+    bootlog_capture("next",4);service_sync=false;sync_pauses=0;
+    unsigned before=calls;
+    CHECK(bootlog_sync(never_cancel,pause_sync,NULL)==-FS_EAGAIN);
+    CHECK(sync_pauses==BOOTLOG_SYNC_TIMEOUT_MS && calls==before && snapshot().active && !snapshot().error);
+    service_sync=true;sync_pauses=0;CHECK(!sync_records());
+    bootlog_capture("bad commit",10);fail_commit=1;sync_pauses=0;
+    CHECK(sync_records()==-FS_EIO && sync_pauses==1 && snapshot().error==-FS_EIO);
+    CHECK(bootlog_shutdown()==-FS_EIO);
+    puts("bootlog: bounded 4KiB turns, commit-only watermark, independent deadline, recoverable wait timeout and sticky commit error PASS");
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));bootlog_capture("stage",5);
+    service_sync=produce_during_sync=true;sync_pauses=0;
+    CHECK(!sync_records() && sync_pauses==1 && commits==1 && snapshot().ring_queued==4096);
+    produce_during_sync=false;CHECK(!bootlog_shutdown());
+    puts("bootlog: concurrent periodic output cannot extend a bind's captured watermark PASS");
+}
+static unsigned overlap_turns;
+static void overlap_storage(void *ctx)
+{
+    (void)ctx;overlap_turns++;storage_turn=true;
+    CHECK(!bootlog_drain());storage_turn=false;
+    if (overlap_turns<=2) CHECK(commits==overlap_turns && snapshot().queued);
+}
+static void second_waiter(void *ctx)
+{
+    (void)ctx;static char newest[20000];memset(newest,'C',sizeof(newest));
+    bootlog_capture(newest,sizeof(newest));
+    CHECK(!bootlog_sync(never_cancel,overlap_storage,NULL));
+}
+static void first_waiter(void *ctx)
+{
+    (void)ctx;static char newer[4096];memset(newer,'B',sizeof(newer));
+    bootlog_capture(newer,sizeof(newer));
+    CHECK(!bootlog_sync(never_cancel,second_waiter,NULL));
+}
+static void overlapping_watermarks(void)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));bootlog_capture("first",5);
+    overlap_turns=0;sync_waiting=true;
+    CHECK(!bootlog_sync(never_cancel,first_waiter,NULL));sync_waiting=false;
+    CHECK(commits==3 && overlap_turns==6 && !snapshot().queued);
+    for(unsigned i=0;i<SYNC_WAITERS;i++)CHECK(!sync_waiters[i]);
+    CHECK(!bootlog_shutdown());
+    puts("bootlog: three overlapping bind watermarks commit at 4KiB/8KiB/final; later binders cannot extend earlier waits PASS");
+}
+int main(void) { retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks(); return 0; }

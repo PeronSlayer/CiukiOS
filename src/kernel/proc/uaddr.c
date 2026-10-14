@@ -99,8 +99,10 @@ static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_n
     }
 }
 
-static int reserve_pages(struct uaddr *u, uint32_t base, uint32_t end)
+static int reserve_pages(struct uaddr *u, uint32_t base, uint32_t end, bool cooperative)
 {
+    unsigned zeroed=0;
+    int error=-ENOMEM;
     for (uint32_t va = base; va < end; va += PAGE_SIZE) {
         uint32_t *p = pte(u, va, true);
         if (!p)
@@ -113,11 +115,21 @@ static int reserve_pages(struct uaddr *u, uint32_t base, uint32_t end)
         memset(P2V(phys), 0, PAGE_SIZE);
         *p = phys | PTE_OWN | PTE_NEW;
         u->backing++;
+        zeroed+=PAGE_SIZE;
+        if (cooperative && zeroed>=65536 && g_current && g_current->state==T_RUNNING) {
+            /* Only an unpublished ELF image may suspend this transaction.
+             * One sleep lets both P_DEVICE and P_NORMAL peers run. */
+            uint32_t flags=irq_save(); irq_restore(flags);
+            if (flags&0x200) task_sleep_ms(1);
+            zeroed=0;
+            struct process *caller=proc_current();
+            if (caller && caller->state==PROC_STOPPING) { error=-EINTR; goto fail; }
+        }
     }
     return 0;
 fail:
     free_pages(u, base, end, true);
-    return -ENOMEM;
+    return error;
 }
 
 static void protect_pages(struct uaddr *u, uint32_t base, uint32_t end, uint32_t prot)
@@ -176,11 +188,15 @@ int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
     struct ua_extent *e = kzalloc(sizeof(*e));
     if (!e)
         return -ENOMEM;
-    if (prot && (err = reserve_pages(u, base, end))) {
+    struct long_path_scope path={0};
+    if (kind==UA_IMAGE) path=long_path_enter(LONG_ELF,__func__);
+    if (prot && (err = reserve_pages(u, base, end, kind==UA_IMAGE))) {
+        if (kind==UA_IMAGE) long_path_leave(path);
         kfree(e);
         return err;
     }
     protect_pages(u, base, end, prot);
+    if (kind==UA_IMAGE) long_path_leave(path);
     *e = (struct ua_extent){ .base = base, .end = end, .prot = prot, .maximum = maximum,
         .kind = kind, .owner = owner, .generation = ++next_generation };
     struct ua_extent **at = &u->head;
@@ -352,7 +368,7 @@ int ua_mprotect(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot)
     err = prepare_split(u, base, end, false, &l, &r);
     if (err)
         return err;
-    if (prot && (err = reserve_pages(u, base, end))) {
+    if (prot && (err = reserve_pages(u, base, end, false))) {
         kfree(l);
         kfree(r);
         return err;

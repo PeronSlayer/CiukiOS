@@ -442,6 +442,13 @@ int main(void)
         basic_tests(kind);
         panic_tests(kind);
         concurrent_tests(kind);
+        reset_uart(kind);ready=false;
+        unsigned reads=lsr_reads;
+        char source[]="[cpu] queued diagnostic\n";
+        serial_write_async(source,sizeof(source)-1);
+        CHECK(lsr_reads==reads && !tx_writes && !uart_buffering && uart_used==sizeof(source));
+        memset(source,'X',sizeof(source)-1);drain_uart();
+        CHECK(!strcmp(emitted,"[cpu] queued diagnostic\r\n"));
     }
     reset_uart(true); present = false; serial_init(0x3F8, 3);
     CHECK(!serial_present());
@@ -451,5 +458,6 @@ int main(void)
     CHECK(lsr_reads == before && !uart_used);
     puts("serial audio: IRQ preemption/mode transition, no producer polls, FIFO bursts, "
          "source ownership/wrap/whole drops, ordered panic/timeout/absence PASS");
+    puts("serial F0-20: queue-only diagnostic does no UART polling with buffering off; owned bytes drain on PIT PASS");
     return 0;
 }

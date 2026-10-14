@@ -12,6 +12,8 @@
 #include <ciuki/process.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/dosvm.h>
+#include <ciuki/display.h>
+#pragma weak grants_display_owner
 extern int32_t display_syscall(struct trap_frame *) __attribute__((weak));
 extern int32_t power_syscall(uint32_t action) __attribute__((weak));
 extern int32_t dosvm_client_syscall(struct trap_frame *) __attribute__((weak));
@@ -34,6 +36,10 @@ static int32_t sys_debug_write(uint32_t buf, uint32_t len)
             kbuf[i] = '.';
     g_current->debug_bytes += len;
     klog("[user %u] %s", g_current->id, kbuf);
+    if (attribution_poll && len >= sizeof("[desktop] stall ")-1 &&
+        !strncmp(kbuf, "[desktop] stall ", sizeof("[desktop] stall ")-1) &&
+        grants_display_owner && grants_display_owner(proc_current()))
+        attribution_poll(true);
     return (int32_t)len;
 }
 
@@ -98,6 +104,7 @@ static void sys_log(uint32_t nr, int32_t r, uint32_t side)
 
 void syscall_dispatch(struct trap_frame *tf)
 {
+    struct long_path_scope path = long_path_enter(LONG_SYSCALL, "syscall_dispatch");
     int32_t r;
     uint32_t nr = tf->eax;
     switch (tf->eax) {
@@ -157,4 +164,6 @@ void syscall_dispatch(struct trap_frame *tf)
         sys_log(nr, r, side);
     }
     tf->eax = (uint32_t)r;
+    long_path_leave(path);
+    if (attribution_poll) attribution_poll(false);
 }

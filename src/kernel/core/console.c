@@ -7,6 +7,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
 #include <ciuki/fbdev.h>
+#include <ciuki/attribution.h>
 
 extern const uint8_t font_cfn_regular[];   /* 95 widths + 95 * 16 rows (u16 LE) */
 
@@ -164,6 +165,7 @@ static void scroll(void)
         cur_col = 0;
         return;
     }
+    struct long_path_scope path = long_path_enter(LONG_CONSOLE, __func__);
     for (unsigned r = 0; r < rows; r++) {
         uint32_t flags = line_begin();
         const char *s = "";
@@ -180,6 +182,7 @@ static void scroll(void)
     }
     cur_row = n;
     cur_col = 0;
+    long_path_leave(path);
 }
 
 static void commit_line(void)
@@ -318,6 +321,7 @@ void console_write(const char *s, size_t n)
         return;
     if (repaint_pending && !display_owned && !quiet && con_kind == CON_LFB)
         repaint();
+    struct long_path_scope path = long_path_enter(LONG_CONSOLE, __func__);
     size_t i = 0;
     while (i < n) {
         if (cur_col >= cols || s[i] == '\n') {
@@ -340,6 +344,7 @@ void console_write(const char *s, size_t n)
         }
         line_end(flags);
     }
+    long_path_leave(path);
 }
 
 /* Show history page `page` (0 = oldest) with a header line. Used after a

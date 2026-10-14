@@ -99,50 +99,65 @@ static uint32_t over(uint32_t argb, uint32_t back)
  * only the w*h window whose top-left corner is cx,cy in that scaled image
  * is written to dst (the whole image for stretch and fit, the centred crop
  * for fill), so every mode samples a pixel the same way. */
+struct sample_axis { uint32_t first, second, weight; };
+static struct sample_axis sample_axis(uint64_t position, uint32_t source, uint32_t target, int up)
+{
+    struct sample_axis a={0};
+    if (up) {
+        int64_t fixed=((int64_t)(2*position+1)*source*128)/target-128;
+        if (fixed<0) fixed=0;
+        a.first=(uint32_t)(fixed>>8); a.weight=(uint32_t)(fixed&255);
+        a.second=a.first+1<source ? a.first+1 : a.first;
+        if (a.first>=source) a.first=a.second=source-1;
+    } else {
+        a.first=(uint32_t)(position*source/target);
+        a.second=(uint32_t)((position+1)*source/target);
+        if (a.second<=a.first) a.second=a.first+1;
+        if (a.second>source) a.second=source;
+    }
+    return a;
+}
 static void resample(const struct desk_image *s, uint32_t *dst, uint32_t tw, uint32_t th, uint32_t cx, uint32_t cy,
                      uint32_t w, uint32_t h, uint32_t stride, uint32_t colour)
 {
     if (!tw || !th || !s->width || !s->height) return;
-    int up = tw >= s->width && th >= s->height;
-    for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
-        uint64_t vx = (uint64_t)x + cx, vy = (uint64_t)y + cy;   /* position in the scaled image */
-        uint32_t px;
-        if (up) {
-            /* Centre-aligned bilinear in 8.8 fixed point. */
-            int64_t fx = ((int64_t)(2 * vx + 1) * s->width * 128) / tw - 128;
-            int64_t fy = ((int64_t)(2 * vy + 1) * s->height * 128) / th - 128;
-            if (fx < 0) fx = 0;
-            if (fy < 0) fy = 0;
-            uint32_t x0 = (uint32_t)(fx >> 8), y0 = (uint32_t)(fy >> 8);
-            uint32_t ax = (uint32_t)(fx & 255), ay = (uint32_t)(fy & 255);
-            uint32_t x1 = x0 + 1 < s->width ? x0 + 1 : x0, y1 = y0 + 1 < s->height ? y0 + 1 : y0;
-            if (x0 >= s->width) x0 = x1 = s->width - 1;
-            if (y0 >= s->height) y0 = y1 = s->height - 1;
-            uint32_t p00 = s->pixels[(size_t)y0 * s->width + x0], p10 = s->pixels[(size_t)y0 * s->width + x1];
-            uint32_t p01 = s->pixels[(size_t)y1 * s->width + x0], p11 = s->pixels[(size_t)y1 * s->width + x1];
-            px = 0;
-            for (unsigned shift = 0; shift < 32; shift += 8) {
-                uint32_t a = (p00 >> shift) & 255, b = (p10 >> shift) & 255, c = (p01 >> shift) & 255, e = (p11 >> shift) & 255;
-                uint32_t top = a * (256 - ax) + b * ax, bot = c * (256 - ax) + e * ax;
-                px |= ((top * (256 - ay) + bot * ay + 32768) >> 16) << shift;
-            }
-        } else {
-            uint32_t sx0 = (uint32_t)(vx * s->width / tw), sx1 = (uint32_t)((vx + 1) * s->width / tw);
-            uint32_t sy0 = (uint32_t)(vy * s->height / th), sy1 = (uint32_t)((vy + 1) * s->height / th);
-            if (sx1 <= sx0) sx1 = sx0 + 1;
-            if (sy1 <= sy0) sy1 = sy0 + 1;
-            uint64_t sum[4] = {0, 0, 0, 0}, n = 0;
-            for (uint32_t yy = sy0; yy < sy1 && yy < s->height; yy++)
-                for (uint32_t xx = sx0; xx < sx1 && xx < s->width; xx++) {
-                    uint32_t p = s->pixels[(size_t)yy * s->width + xx];
-                    for (unsigned k = 0; k < 4; k++) sum[k] += (p >> (k * 8)) & 255;
-                    n++;
+    int up=tw>=s->width && th>=s->height;
+    /* Compute wide divisions once per axis, in this preemptible user-space
+     * worker. Allocation failure retains the same pixel calculation. */
+    struct sample_axis *columns=malloc((size_t)w*sizeof(*columns));
+    if (columns) for (uint32_t x=0;x<w;x++) columns[x]=sample_axis((uint64_t)x+cx,s->width,tw,up);
+    for (uint32_t y=0;y<h;y++) {
+        struct sample_axis ay=sample_axis((uint64_t)y+cy,s->height,th,up);
+        for (uint32_t x=0;x<w;x++) {
+            struct sample_axis ax=columns ? columns[x] : sample_axis((uint64_t)x+cx,s->width,tw,up);
+            uint32_t px=0;
+            if (up) {
+                uint32_t p00=s->pixels[(size_t)ay.first*s->width+ax.first];
+                uint32_t p10=s->pixels[(size_t)ay.first*s->width+ax.second];
+                uint32_t p01=s->pixels[(size_t)ay.second*s->width+ax.first];
+                uint32_t p11=s->pixels[(size_t)ay.second*s->width+ax.second];
+                for (unsigned shift=0;shift<32;shift+=8) {
+                    uint32_t a=(p00>>shift)&255,b=(p10>>shift)&255,c=(p01>>shift)&255,e=(p11>>shift)&255;
+                    uint32_t top=a*(256-ax.weight)+b*ax.weight,bot=c*(256-ax.weight)+e*ax.weight;
+                    px|=((top*(256-ay.weight)+bot*ay.weight+32768)>>16)<<shift;
                 }
-            px = 0;
-            if (n) for (unsigned k = 0; k < 4; k++) px |= (uint32_t)((sum[k] + n / 2) / n) << (k * 8);
+            } else {
+                /* Decoder bounds: <=4096*4096 samples, so even 255*n+n/2
+                 * fits uint32_t. Avoid four software 64-bit divides/pixel
+                 * on the Pentium III while preserving rounded area averages. */
+                uint32_t sum[4]={0},n=0;
+                for (uint32_t yy=ay.first;yy<ay.second;yy++)
+                    for (uint32_t xx=ax.first;xx<ax.second;xx++) {
+                        uint32_t p=s->pixels[(size_t)yy*s->width+xx];
+                        for (unsigned k=0;k<4;k++) sum[k]+=(p>>(k*8))&255;
+                        n++;
+                    }
+                if (n) for (unsigned k=0;k<4;k++) px|=((sum[k]+n/2)/n)<<(k*8);
+            }
+            dst[(size_t)y*stride+x]=over(px,colour)|(px&0xff000000u);
         }
-        dst[(size_t)y * stride + x] = over(px, colour) | (px & 0xff000000u);
     }
+    free(columns);
 }
 
 void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, uint32_t h, int mode, uint32_t colour)

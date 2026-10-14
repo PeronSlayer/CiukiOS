@@ -36,6 +36,7 @@ void serial_write(const char *s, size_t n)
     }
     if (strstr(s, "[records]")) warnings++;
 }
+void serial_write_async(const char *s,size_t n) { serial_write(s,n); }
 void console_write(const char *s, size_t n)
 {
     CHECK(console_count < ARRAY_SIZE(console_lines) && n < sizeof(console_lines[0]));

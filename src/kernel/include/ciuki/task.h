@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include "mm.h"
 #include "arch.h"
+#include "attribution.h"
 
 enum task_state { T_READY, T_RUNNING, T_BLOCKED, T_ZOMBIE, T_DEAD };
 enum task_prio { P_DEVICE, P_INTERACTIVE, P_NORMAL, P_IDLE, P_COUNT };
@@ -50,6 +51,8 @@ struct task {
     struct { uint32_t nr; int32_t result; uint32_t side_effects; } sys_log[16];
     uint32_t sys_log_n;
     uint64_t ready_since, max_wait_ticks;
+    uint32_t attribution_epoch, attribution_slot, attribution_path;
+    const char *attribution_site;   /* static symbol name; never user memory */
     struct task *next;             /* run queue / list link */
     struct task *all_next;
 };

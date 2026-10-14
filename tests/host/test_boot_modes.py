@@ -214,6 +214,28 @@ int main(void)
 ''')
             self.assertIn('0 failures', out)
 
+    def test_verbose_console_scroll_respects_desktop_ownership(self):
+        with scratch() as folder:
+            out = self.compile_and_run(folder, 'console_desktop_owned', CONSOLE_HARNESS + r'''
+int main(void)
+{
+    enum { PITCH=80, HEIGHT=35, SIZE=PITCH*HEIGHT };
+    fake_lfb=malloc(SIZE);uint8_t *saved=malloc(SIZE);CHECK(fake_lfb && saved);
+    boot_fixture(true);g_boot.flags|=CBI_F_VERBOSE;
+    g_boot.fb_height=HEIGHT;g_boot.fb_pitch=PITCH;
+    g_boot.vbe_mode_info[20]=HEIGHT;g_boot.vbe_mode_info[50]=PITCH;
+    reservation.end=g_boot.fb_phys+SIZE;
+    CHECK(!fbdev_init());console_set_quiet(false);CHECK(console_init_lfb());
+    console_display_owned(true);memset(fake_lfb,0x5a,SIZE);memcpy(saved,fake_lfb,SIZE);
+    for(unsigned i=0;i<5000;i++)console_write("a verbose USB/CPU record wraps and scrolls history\n",49);
+    CHECK(!memcmp(saved,fake_lfb,SIZE) && hist_count==HIST_LINES && !drawing);
+    /* Panic takes ownership explicitly and paints again. */
+    console_reclaim();console_write("a",1);CHECK(memcmp(saved,fake_lfb,SIZE));
+    free(fake_lfb);free(saved);return failures ? 1 : 0;
+}
+''')
+            self.assertEqual(out, '')
+
     def test_quiet_boot_draws_the_splash_photograph(self):
         with scratch() as folder:
             splash = Path(folder) / 'splash.rgb565'
