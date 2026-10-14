@@ -25,6 +25,30 @@ static unsigned raw_port(struct usb_device *d)
     bool uhci=h->pci.prog_if==0;
     return usb_read(h,uhci ? 0x10+2*d->root_port : 0x54+4*d->root_port,uhci ? 2 : 4);
 }
+static uint64_t bulk_end(struct usb_device *d)
+{
+    struct usb_storage *s=&d->storage;
+    uint64_t end=d->host->io.now(d->host->io.cookie)+
+        (s->binding ? USB_BIND_BULK_MS : USB_BULK_TIMEOUT_MS);
+    if (s->binding && (int64_t)(end-(s->bind_deadline-USB_BIND_FINISH_MS))>0)
+        end=s->bind_deadline-USB_BIND_FINISH_MS;
+    return end;
+}
+static void bulk_packet_record(struct usb_device *d)
+{
+    struct usb_storage_trace *t=&d->storage.trace;
+    if (t->packet_count<USB_BULK_TRACE_LIMIT) t->packets[t->packet_count]=d->packet_trace;
+    t->packet_count++;
+}
+static int bulk_result(struct usb_device *d, int result, const char *stop)
+{
+    struct usb_storage_trace *t=&d->storage.trace;
+    uint64_t now=d->host->io.now(d->host->io.cookie);
+    t->bulk_stop=stop; t->bulk_elapsed_ms=now-t->bulk_started_ms;
+    int64_t left=d->storage.binding ? (int64_t)(d->storage.bind_deadline-now) : 0;
+    t->bind_remaining_ms=left>0 ? (uint64_t)left : 0;
+    return result;
+}
 /* Caller owns the host lock. ACK alone advances toggle, including a ZLP.
  * One retired TD per packet uses the existing controller bounce buffer. */
 int usb_bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned *actual)
@@ -37,25 +61,46 @@ int usb_bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned
     if (!s->bound || (packet!=8 && packet!=16 && packet!=32 && packet!=64) ||
         !ep || ep>15 || d->low_speed) return -USB_EPROTO;
     uint8_t *toggle=in ? &s->in_toggle : &s->out_toggle;
-    uint64_t end=d->host->io.now(d->host->io.cookie)+
-        (s->binding ? USB_BIND_BULK_MS : USB_BULK_TIMEOUT_MS);
-    if (s->binding && (int64_t)(end-(s->bind_deadline-USB_BIND_FINISH_MS))>0)
-        end=s->bind_deadline-USB_BIND_FINISH_MS;
+    struct usb_storage_trace *t=&s->trace;
+    uint64_t end=bulk_end(d);
+    t->packet_count=0; t->packet_index=0; t->packet_offset=0;
+    t->bulk_started_ms=d->host->io.now(d->host->io.cookie); t->bulk_deadline=end;
     while (*actual<bytes) {
-        if (!live(d)) return -USB_EIO;
-        if (usb_expired(d->host,end)) return -USB_ETIMEDOUT;
         unsigned n=bytes-*actual; if (n>packet) n=packet;
+        t->packet_index=t->packet_count; t->packet_offset=*actual;
+        /* A refusal before submission must name the next packet, not retain
+         * the previous packet's successful TD/toggle (the T23 448-byte trace). */
+        d->packet_trace=(struct usb_packet_trace){.expected=n,.actual=-1,
+            .endpoint=ep,.pid=in ? USB_PID_IN : USB_PID_OUT,.toggle=*toggle};
+        bool connected=live(d);
+        if (!connected || usb_expired(d->host,end)) {
+            int e=connected ? -USB_ETIMEDOUT : -USB_EIO;
+            d->packet_trace.result=e; bulk_packet_record(d);
+            const char *stop=!connected ? "disconnected" :
+                s->binding && usb_expired(d->host,s->bind_deadline-USB_BIND_FINISH_MS) ?
+                "bind_deadline" : "bulk_deadline";
+            return bulk_result(d,e,stop);
+        }
         s->bulk_deadline=end;
         int e=d->host->ops->packet(d,ep,in ? USB_PID_IN : USB_PID_OUT,*toggle,
                                   (uint8_t *)data+*actual,n,false);
         s->bulk_deadline=0;
-        if (e<0) return e;
-        if ((unsigned)e>n || (!in && (unsigned)e!=n)) return -USB_EPROTO;
+        if (!d->packet_trace.valid) {
+            d->packet_trace.expected=n; d->packet_trace.endpoint=ep;
+            d->packet_trace.pid=in ? USB_PID_IN : USB_PID_OUT; d->packet_trace.toggle=*toggle;
+        }
+        bulk_packet_record(d);
+        if (e<0) return bulk_result(d,e,"packet");
+        if ((unsigned)e>n || (!in && (unsigned)e!=n)) return bulk_result(d,-USB_EPROTO,"length");
         *toggle^=1; *actual+=(unsigned)e;
-        if (!live(d)) return -USB_EIO;
-        if ((unsigned)e<n) break;
+        if (!live(d)) return bulk_result(d,-USB_EIO,"disconnected");
+        if ((unsigned)e<n) return bulk_result(d,0,"short");
+        /* Full ACK progress earns another bounded wait, not another bind.
+         * Retirement/scheduler time cannot consume packet 8's entire chance
+         * after seven successful packets. NAK never reaches this renewal. */
+        if (s->binding && *actual<bytes) { end=bulk_end(d); t->bulk_deadline=end; }
     }
-    return 0;
+    return bulk_result(d,0,"complete");
 }
 /* Keep transport context separate from packet_trace: halt clear/reset and
  * REQUEST SENSE reuse the same TD and must not erase the failing stage. */
@@ -82,6 +127,17 @@ static void trace_record(struct usb_device *d, const char *event, const char *re
          p->status,p->token,p->hc_status,p->result);
     klog("[usb-storage] timing addr=%u tag=%u frames=%u elapsed_ms=%llu retired=%d",
          d->address,t->tag,p->frames,p->elapsed_ms,p->retired);
+    if (t->bulk_stop) {
+        klog("[usb-storage] bulk addr=%u tag=%u packets=%u index=%u offset=%u stop=%s elapsed_ms=%llu deadline_ms=%llu bind_left_ms=%llu",
+             d->address,t->tag,t->packet_count,t->packet_index,t->packet_offset,t->bulk_stop,
+             t->bulk_elapsed_ms,t->bulk_deadline,t->bind_remaining_ms);
+        for (unsigned i=0;i<t->packet_count && i<USB_BULK_TRACE_LIMIT;i++) {
+            p=&t->packets[i];
+            klog("[usb-storage] packet addr=%u tag=%u index=%u toggle=%u expected=%u actual=%d result=%d td=%08x token=%08x frames=%u elapsed_ms=%llu retired=%d valid=%u",
+                 d->address,t->tag,i,p->toggle,p->expected,p->actual,p->result,p->status,p->token,
+                 p->frames,p->elapsed_ms,p->retired,p->valid);
+        }
+    }
     klog("[usb-storage] csw addr=%u tag=%u available=%u signature=%08x csw_tag=%u status=%u residue=%u",
          d->address,t->tag,t->csw_available,t->csw_signature,t->csw_tag,t->csw_status,t->residue);
 }
@@ -110,7 +166,10 @@ static int reset_recovery(struct usb_device *d)
 static int fault(struct usb_device *d, const char *reason, bool reset)
 {
     struct usb_storage *s=&d->storage;
-    first_fault(d,reason);
+    /* A tolerated INQUIRY/MODE fault must not hide the packet that later
+     * quarantines the mount. Retain one initial and one terminal snapshot. */
+    if (s->fault_logged && !s->quarantine_logged) trace_record(d,"terminal_fault",reason);
+    else first_fault(d,reason);
     if (!s->quarantine_logged) {
         klog("[usb-storage] quarantine addr=%u reason=%s stage=%s transfer=%s",d->address,reason,
              s->binding && s->bind_stage ? s->bind_stage : s->trace.stage ? s->trace.stage : "none",
@@ -406,17 +465,16 @@ void usb_storage_service(struct usb_host *h)
             s->published=false;
             klog("[usb-storage] detached addr=%u reason=%s",d->address,d->reason);
         } else if (s->online && !s->published && !s->ejected) {
-            s->published=true;
             s->bind_stage="mount";
             klog("[usb-storage] stage=mount addr=%u",d->address);
             int e=bootlog_sync ? bootlog_sync(bind_cancel,bind_pause,d) : 0;
             if (!e && !bind_cancel(d))
                 e=storage_add_removable_bounded(store,&s->block,bind_cancel,bind_pause,d);
             else e=-FS_EIO;
-            if (e && (bind_cancel(d) || s->block.quarantined || e!=-FS_ENOENT)) {
+            if (e) {
                 (void)fault(d,bind_cancel(d) ? "bind_deadline" : "mount_failed",false);
                 d->quarantined=true;
-            }
+            } else s->published=true;
             s->binding=false;
             /* Retain the attempt, including refusal; no recovery loop. */
             klog("[usb-storage] mount addr=%u result=%d",d->address,e);

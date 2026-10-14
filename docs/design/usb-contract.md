@@ -225,6 +225,13 @@ bounce buffer; no user/stack pointer becomes a bus address. OHCI's endpoint
 max packet field uses descriptor size even on the 13-byte CSW. Retirement
 retains F1-42's two-frame rule. Each bulk stage is bounded at 64 KiB/10 s;
 F1-47 makes each packet consume the remaining stage budget with sleepable polling.
+F1-60 retains that whole-stage bound for published I/O. During binding,
+full ACK progress with packets remaining renews a one-second wait, capped
+by the unchanged five-second aggregate bind deadline and 100 ms finishing
+reserve. NAK/failed packets never renew it. This gives the last packet an
+opportunity after earlier progress without extending the complete bind.
+The [F1-60 validation record](../validation/f1-60-usb-bulk-read.md) distinguishes
+the reproduced software deadline failure from the unmeasured T23 timing.
 
 Commands: INQUIRY, TEST UNIT READY, REQUEST SENSE, READ CAPACITY(10),
 READ(10), WRITE(10); SYNCHRONIZE CACHE(10) qualifies and implements
@@ -365,6 +372,13 @@ and make `blkpart` views; validated whole-disk FAT is also admitted. FAT12,
 FAT16 and FAT32 use the existing read-first validation/cache/native mount path.
 USB volumes have `VFS_DRIVE_REMOVABLE` and receive E: onward, skipping existing
 letters; exhausted letters/record slots fail explicitly and are never recycled.
+USB marks storage published only after successful namespace admission. Any
+failed mount quarantines at stage `mount` without a second attempt; retained
+`volume ... error=` records describe candidate slots, not visible drives.
+Fault records preserve the first eight packets' indices, toggles and retired
+TD snapshots, along with the current packet index/offset and deadline reason.
+An expired deadline before submission records `valid=0`, rather than the
+previous packet's successful TD.
 
 Clean validated FAT may enable writes only after a successful synchronous
 cache probe. Unsupported flush or write-protected media remain read-only.

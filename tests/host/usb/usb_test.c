@@ -191,6 +191,10 @@ struct model {
     bool hub_stuck,hub_status_error;
     unsigned hub_power_requests,hub_reset_requests;
     unsigned bulk_in_toggle, bulk_out_toggle, bulk_packets;
+    unsigned bulk_block_after;
+    bool bulk_record;
+    unsigned bulk_recorded;
+    uint32_t bulk_tokens[8];
     unsigned packets, setups, dma_checks, protocol_requests, led_requests;
     bool disable_on_babble,debounce_bounce;
     unsigned debounce_changes;
@@ -253,7 +257,8 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
     if(m->stall) return -USB_EPIPE;
     if(ep && m->bulk_test && (!m->host.devices[0].hid[0].active || ep!=1)) {
         assert(ep==(pid==USB_PID_IN ? (m->host.devices[0].hid[0].active ? 2u:1u):(m->host.devices[0].hid[0].active ? 3u:2u)));
-        if(m->now<m->bulk_ready_at) return -USB_EAGAIN;
+        if(m->now<m->bulk_ready_at || (m->bulk_block_after && m->bulk_packets>=m->bulk_block_after))
+            return -USB_EAGAIN;
         unsigned *expected=pid==USB_PID_IN ? &m->bulk_in_toggle:&m->bulk_out_toggle;
         assert(toggle==*expected); *expected^=1; m->bulk_packets++;
         if(pid==USB_PID_IN && m->bulk_short) {
@@ -475,6 +480,10 @@ static bool uhci_transaction(void *arg,uint32_t td_address,uint32_t qh_address,v
         m->regs[0]|=2u<<16;return false;}
     if(m->bad_length)n=(int)len+1;
     td[1]|=((unsigned)n-1)&0x7ff;
+    if(m->bulk_record && (td[2]&255)==USB_PID_IN && ((td[2]>>15)&15)) {
+        assert(m->bulk_recorded<ARRAY_SIZE(m->bulk_tokens));
+        m->bulk_tokens[m->bulk_recorded++]=td[2];
+    }
     return true;
 }
 static void execute_uhci(struct model *m,uint32_t link)
@@ -483,6 +492,11 @@ static void execute_uhci(struct model *m,uint32_t link)
     struct uhci_model_io io={m,uhci_dma,uhci_transaction,&status};
     assert(!uhci_model_frame(&io,link));
     m->regs[0]|=status<<16;
+    if(m->bulk_record && m->bulk_recorded) {
+        volatile uint32_t *td=uhci_dma(m,m->host.dma_phys+USB_TD,16);
+        if(!(td[1]&(1u<<23)))
+            assert(uhci_dma(m,m->host.dma_phys+USB_UHCI_BULK_QH,8)[1]==1);
+    }
 }
 /* Independent small schedules test the decision table, not the production
  * builder. Physical offsets: QHs 0/16/32, TDs 64/80/96. */
@@ -973,6 +987,13 @@ static void bulk_engine(bool ohci)
     usb_host_drop(&m.host);assert(m.bulk_packets==18 && m.dma_checks);
     usb_host_take(&m.host);
     unsigned toggle=d->storage.in_toggle;
+    uint8_t large[1024];
+    assert(!usb_bulk(d,true,large,sizeof(large),&n) && n==sizeof(large));
+    struct usb_storage_trace *t=&d->storage.trace;
+    assert(t->packet_count==16 && t->packet_index==15 && t->packet_offset==960);
+    for(unsigned i=0;i<USB_BULK_TRACE_LIMIT;i++)
+        assert(t->packets[i].valid && t->packets[i].actual==64 && t->packets[i].toggle==(toggle^(i&1)));
+    for(unsigned i=0;i<sizeof(large);i++)assert(large[i]==0x5a);
     memset(data,0xcc,sizeof(data));m.bulk_short=true;m.bulk_short_bytes=36;
     assert(!usb_bulk(d,true,data,sizeof(data),&n) && n==36 && d->storage.in_toggle==(toggle^1));
     for(unsigned i=0;i<sizeof(data);i++) assert(data[i]==(i<36 ? 0x5a : 0xcc));
@@ -1001,7 +1022,62 @@ static void bulk_engine(bool ohci)
     cfg[28]=3;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);cfg[28]=2;
     cfg[27]=0x81;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);cfg[27]=2;
     d->low_speed=true;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);
-    printf("PASS USB %s bulk: CBW/CSW-sized packets, 512-byte IN/OUT, 36-byte short IN, ZLP, NAK budget, STALL/timeout toggles, descriptor MPS, retired DMA, invalid endpoints/speed\n",ohci?"OHCI":"UHCI");
+    printf("PASS USB %s bulk: CBW/CSW-sized packets, 512-byte IN/OUT, bounded eight-packet prefix of 1024-byte IN, short IN/ZLP, NAK budget, STALL/timeout toggles, descriptor MPS, retired DMA, invalid endpoints/speed\n",ohci?"OHCI":"UHCI");
+}
+static void binding_eighth_packet(void)
+{
+    for(unsigned initial=0;initial<2;initial++) for(unsigned mode=0;mode<4;mode++) {
+        setup(false,false);assert(!attach());assert(!m.host.ops->port_reset(&m.host,0));
+        m.bulk_test=m.bulk_record=true;m.bulk_in_toggle=initial;
+        struct usb_device *d=&m.host.devices[0];
+        *d=(struct usb_device){.host=&m.host,.present=true,.configured=true,.ep0=64};
+        d->storage=(struct usb_storage){.bound=true,.in=1,.out=2,.in_packet=64,.out_packet=64,
+            .in_toggle=initial,.binding=true,.bind_deadline=m.now+USB_BIND_TIMEOUT_MS};
+        /* The first packet becomes ready inside its 1 s budget. Seven ACKs
+         * plus per-packet retirement reach the old whole-stage deadline.
+         * The device has all remaining packets ready, including number 8. */
+        uint64_t begin=m.now;
+        m.bulk_ready_at=begin+(mode==1 ? USB_BIND_BULK_MS-20:0);
+        if(mode==2)m.bulk_block_after=7; /* genuinely pending eighth TD */
+        if(mode==3)d->storage.bind_deadline=begin+USB_BIND_FINISH_MS+21;
+        uint8_t data[512];memset(data,0xcc,sizeof(data));unsigned actual;
+        usb_host_take(&m.host);
+        int e=usb_bulk(d,true,data,sizeof(data),&actual);
+        usb_host_drop(&m.host);
+        if(e && mode<2) fprintf(stderr,"F1-60 first_toggle=%u delayed=%u result=%d actual=%u ACKs=%u last_td=%08x last_result=%d elapsed_ms=%llu\n",
+            initial,mode,e,actual,m.bulk_recorded,d->packet_trace.status,d->packet_trace.result,
+            (unsigned long long)(m.now-begin));
+        struct usb_storage_trace *t=&d->storage.trace;
+        assert(t->packet_count==8 && t->packet_index==7 && t->packet_offset==448);
+        unsigned acks=mode<2 ? 8:7;
+        if(mode<2)assert(!e && actual==sizeof(data) && !strcmp(t->bulk_stop,"complete"));
+        else {
+            assert(e==-USB_ETIMEDOUT && actual==448 && t->packets[7].actual==-1);
+            assert(t->packets[7].result==-USB_ETIMEDOUT && t->packets[7].toggle==(initial^1));
+            assert(t->packets[7].valid==(mode==2));
+            if(mode==2) {
+                assert((t->packets[7].status&0x00880000)==0x00880000);
+                assert(t->packets[7].elapsed_ms==USB_BIND_BULK_MS+2);
+                assert(!strcmp(t->bulk_stop,"packet"));
+            } else {
+                assert(!t->packets[7].status && !t->packets[7].token);
+                assert(t->bind_remaining_ms==USB_BIND_FINISH_MS);
+                assert(!strcmp(t->bulk_stop,"bind_deadline"));
+            }
+        }
+        assert(m.bulk_recorded==acks && d->storage.in_toggle==(initial^(acks&1)));
+        assert(m.bulk_in_toggle==d->storage.in_toggle);
+        for(unsigned i=0;i<acks;i++) {
+            assert(((m.bulk_tokens[i]>>19)&1)==(initial^(i&1)));
+            assert(((m.bulk_tokens[i]>>21)&0x7ff)==63);
+            assert(t->packets[i].valid && t->packets[i].actual==64 && t->packets[i].result==64);
+            assert(t->packets[i].toggle==(initial^(i&1)) && !t->packets[i].retired);
+            assert(t->packets[i].token==m.bulk_tokens[i]);
+        }
+        for(unsigned i=0;i<sizeof(data);i++)assert(data[i]==(i<actual ? 0x5a:0xcc));
+        assert(!d->storage.bulk_deadline && m.now<d->storage.bind_deadline);
+    }
+    puts("PASS F1-60 UHCI eight 64-byte IN TDs: DATA0/DATA1 starts, QH advance, delayed ACK progress, eighth retirement/NAK, aggregate deadline and eight packet snapshots");
 }
 static void port_flood(bool ohci)
 {
@@ -1226,6 +1302,8 @@ static void t23_receiver(bool disabled)
 }
 int main(void)
 {
+    if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
+    binding_eighth_packet();
     enumeration_retries(false);enumeration_retries(true);
     live_port(false);live_port(true);hid_recovery(false);hid_recovery(true);
     persistent_nak(false);persistent_nak(true);
