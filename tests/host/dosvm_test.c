@@ -85,10 +85,25 @@ uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr,"unexpected panic: %s\n",fmt); abort(); }
 static unsigned dosvm_logs;
 static char last_dosvm_log[256];
+static char last_disk_log[256], last_launch_log[256];
+static unsigned log_sequence, launch_stages, launch_errors, launch_stage_sequence, launch_error_sequence;
+static unsigned launch_stage_pages;
 static unsigned vm_audio_logs;
 static char last_vm_audio_log[256];
 void klog(const char *fmt, ...)
 {
+    log_sequence++;
+    if (!strncmp(fmt, "[launch", 7)) {
+        CHECK(cpu_flags & V86_IF);
+        va_list ap; va_start(ap, fmt);
+        int n = vsnprintf(last_launch_log, sizeof(last_launch_log), fmt, ap);
+        va_end(ap);
+        CHECK(n > 0 && n < (int)sizeof(last_launch_log));
+        if (!strncmp(fmt, "[launch-stage]", 14)) {
+            launch_stages++; launch_stage_sequence = log_sequence; launch_stage_pages = used_pages;
+        } else { launch_errors++; launch_error_sequence = log_sequence; }
+        return;
+    }
     if (!strncmp(fmt, "[vm-audio]", 10)) {
         CHECK(cpu_flags & V86_IF);
         va_list ap; va_start(ap, fmt);
@@ -102,6 +117,7 @@ void klog(const char *fmt, ...)
     int n = vsnprintf(last_dosvm_log, sizeof(last_dosvm_log), fmt, ap);
     va_end(ap);
     CHECK(n > 0 && n < (int)sizeof(last_dosvm_log));
+    if (!strncmp(fmt, "[dosvm] disk", 12)) strcpy(last_disk_log, last_dosvm_log);
     dosvm_logs++;
 }
 /* The production heap (core/kheap.c) has power-of-two classes up to 2048
@@ -223,20 +239,24 @@ void vfs_table_destroy(struct vfs_table *table)
  * bundled games disk (owner decision 2026-10-12) is C:\\GAMES\\CIUKIGAM.IMG,
  * present while bundled_disk is set, bundled_bytes long (cut images). */
 static char last_base[32];
-static bool workload_disk, bundled_disk, bundled_directory;
+static bool workload_disk, bundled_disk = true, bundled_directory;
+static char workload_drive = 'D';
 static uint32_t bundled_bytes = DOSVM_SECTORS * 512u;
 static unsigned workload_scans, bundled_scans;
-static bool base_path(const char *path) { return !strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG") || !strcmp(path,"D:\\CIUKIGAM.IMG") || !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG"); }
+static int fixture_errors[26], bundled_error, bundled_open_error;
+static bool fixture_path(const char *path) { return strlen(path) == 15 && path[0] >= 'D' && path[0] <= 'Z' && path[1] == ':' && !strcmp(path + 2, "\\CIUKIGAM.IMG"); }
+static bool base_path(const char *path) { return !strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG") || fixture_path(path) || !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG"); }
 static uint64_t base_bytes(const char *path) { return !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") ? bundled_bytes : DOSVM_SECTORS * 512u; }
 int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 {
     (void)file_slot(table);
-    if (strlen(path) == 15 && path[1] == ':' && !strcmp(path + 2, "\\CIUKIGAM.IMG")) {
+    if (fixture_path(path)) {
         CHECK(path[0] >= 'D' && path[0] <= 'Z');
         if (path[0] == 'D') workload_scans++;
-        if (!workload_disk || path[0] != 'D') return -ENOENT;
+        if (fixture_errors[path[0] - 'A']) return fixture_errors[path[0] - 'A'];
+        if (!workload_disk || path[0] != workload_drive) return -ENOENT;
     }
-    if (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG")) { bundled_scans++; if (!bundled_disk) return -ENOENT; }
+    if (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG")) { bundled_scans++; if (bundled_error) return bundled_error; if (!bundled_disk) return -ENOENT; }
     CHECK(base_path(path)); snprintf(last_base,sizeof(last_base),"%s",path); if (io_fails()) return -V86_EIO;
     memset(entry,0,sizeof(*entry)); entry->size=(uint32_t)base_bytes(path);
     if (bundled_directory && !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG")) entry->attr=0x10;
@@ -245,6 +265,7 @@ int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     unsigned i=file_slot(table); CHECK(attr==0); if (io_fails()) return -V86_EIO;
+    if (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") && bundled_open_error) return bundled_open_error;
     if (base_path(path)) { CHECK(access==VFS_READ && share==VFS_DENY_WRITE); files[i].base_open=true; files[i].base_bytes=base_bytes(path); handles++; return 0; }
     CHECK(access==(VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE) && share==VFS_DENY_ALL && strstr(path,".COW"));
     snprintf(files[i].path,sizeof(files[i].path),"build/host/dosvm-cow-XXXXXX");

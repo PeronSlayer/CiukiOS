@@ -79,7 +79,8 @@ int dosvm_create(const struct dosvm_config *, struct dosvm **out);
 int dosvm_workload_base(char path[24]);
 /* Window VMs (/Programs/dosbox): that local disk when attached, else the bundled
  * shareware games disk C:\GAMES\CIUKIGAM.IMG (owner decision 2026-10-12;
- * scripts/build_games_disk.py). Same results as dosvm_workload_base. */
+ * scripts/build_games_disk.py). Without a fixture, bundled lookup errors
+ * (including ENOENT) are returned; an invalid bundled entry is EINVAL. */
 int dosvm_window_base(char path[24]);
 int dosvm_boot(struct dosvm *);
 struct dosvm_key dosvm_key(const struct dosvm *);

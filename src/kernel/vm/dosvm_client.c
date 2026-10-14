@@ -157,6 +157,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     struct binding *b = 0;
     struct dosvm *v = 0;
     if (op == CIUKI_DOSVM_CREATE) {
+        /* Game launch diagnostics must survive quiet boot and failed create;
+         * the ELF/first-frame latency records are verbose-mode only. */
+        klog("[launch-stage] name=dosbox pid=%u stage=vm-create window=%s", p->pid, c.name);
         struct desktop_description *d = desktop_fd(p, c.surface_fd);
         if (!d || d->kind != DESKTOP_SURFACE) { e = -EBADF; goto out; }
         if (!(d->maximum & PROT_WRITE)) { e = -EACCES; goto out; }
@@ -172,16 +175,16 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
          * DOS system plus \DOOM or \WOLF3D) becomes the window VM's base,
          * with the staged DPMI host (DOSVM_DPMI_PUBLIC is still 0): the
          * owner-visible DOOM window. Without it, the bundled shareware games
-         * disk (C:\GAMES\CIUKIGAM.IMG, owner decision 2026-10-12) does;
-         * with neither, DOSBOOT.IMG and no DPMI host, as before. */
+         * disk (C:\GAMES\CIUKIGAM.IMG, owner decision 2026-10-12) does.
+         * Errors of that required bundled base fail this window launch. */
         char workload[24];
         int found = dosvm_window_base(workload);
-        if (found && found != -ENOENT) { creating[reservation] = 0; e = closed_error(found); goto out; }
+        if (found) { creating[reservation] = 0; e = closed_error(found); goto out; }
         /* Creation may sleep opening storage; another thread may close the
          * descriptor meanwhile, so the VM holds its own surface reference. */
         struct surface *surface = d->u.surface;
         surface_retain(surface);
-        const struct dosvm_config config = {.probe = "vm-window", .base = found ? 0 : workload, .dpmi = !found};
+        const struct dosvm_config config = {.probe = "vm-window", .base = workload, .dpmi = true};
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = closed_error(e); goto out; }
@@ -255,6 +258,8 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     }
     if (!e) e = copy_to_user(tf->ecx, &c, sizeof(c));
 out:
+    if (op == CIUKI_DOSVM_CREATE && e)
+        klog("[launch] name=dosbox pid=%u error=%d stage=vm-create window=%s", p->pid, e, c.name);
     if (b) {
         b->busy = false;
         /* The owner began stopping during this call: collect now, since the

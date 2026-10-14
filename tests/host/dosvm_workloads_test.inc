@@ -376,7 +376,7 @@ static void test_workload_base_image(void)
     CHECK(dosvm_create(&c, &v) == -EINVAL);
     empty();
     /* A window VM boots the attached workload disk with the staged DPMI host;
-     * without the disk it keeps the canonical payload and no DPMI host. The
+     * without the disk it boots the bundled games disk with that host. The
      * production create path (syscall 72, the f3-06 lookup under the 2040-byte
      * kernel heap limit, f4-05 mixer attach with a ready backend), as
      * /Programs/dosbox runs it on QEMU (vm-window, 2026-10-12: ENOMEM before). */
@@ -399,7 +399,7 @@ static void test_workload_base_image(void)
     workload_disk = false;
     CHECK(!create_window(0, "Plain", &w) && !workload_busy);
     v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
-    CHECK(v && !v->dpmi_enabled && !strcmp(last_base, "C:\\SYSTEM\\DOS\\DOSBOOT.IMG"));
+    CHECK(v && v->dpmi_enabled && !strcmp(last_base, "C:\\GAMES\\CIUKIGAM.IMG"));
     wkey = (struct dosvm_key){w.id, w.generation};
     CHECK(audio_vm_stats(wkey, &st) && st.state == AUDIO_VM_PENDING && ainfo(v).consumer);
     shut = command_for(w.id, w.generation);
@@ -442,20 +442,20 @@ static void test_bundled_games_base(void)
     CHECK(!dosvm_disk_write(v, 200000, bytes) && !dosvm_disk_read(v, 200000, got) && !memcmp(bytes, got, 512));
     CHECK(dosvm_disk_read(v, DOSVM_SECTORS, got) == -EINVAL);
     destroy(v, true); empty();
-    /* Sizes outside the geometry: refused by the VM, absent for the lookup. */
+    /* Invalid bundled entries are errors, rather than optional absence. */
     static const uint32_t bad[] = {DOSVM_SECTORS * 512u + 512u, (DOSVM_BASE_MIN_SECTORS - 1u) * 512u, 4096u * 512u + 1u, 0};
     for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         bundled_bytes = bad[i];
         v = (void *)1;
         CHECK(dosvm_create(&c, &v) == -EINVAL && !v); empty();
-        CHECK(dosvm_window_base(path) == -ENOENT && !path[0]);
+        CHECK(dosvm_window_base(path) == -EINVAL && !path[0]);
     }
     bundled_bytes = DOSVM_BASE_MIN_SECTORS * 512u;
     CHECK(!dosvm_window_base(path));
     bundled_bytes = DOSVM_SECTORS * 512u;                   /* an uncut image is valid too */
     CHECK(!dosvm_window_base(path));
     bundled_directory = true;
-    CHECK(dosvm_window_base(path) == -ENOENT && !path[0]);
+    CHECK(dosvm_window_base(path) == -EINVAL && !path[0]);
     bundled_directory = false;
     /* Window VM (syscall 72): the bundled disk with the staged DPMI host. */
     bundled_bytes = 4096u * 512u;
@@ -471,8 +471,76 @@ static void test_bundled_games_base(void)
     vq_end();
     empty();
     fake_current = saved_current;
-    bundled_disk = false; bundled_bytes = DOSVM_SECTORS * 512u;
+    bundled_disk = true; bundled_bytes = DOSVM_SECTORS * 512u;
     printf("bundled games disk: window VMs use C:\\GAMES\\CIUKIGAM.IMG after the local fixture disk (probes: fixture only), a cut base reads zeros past its end, invalid sizes refused\n");
+}
+
+static void test_foreign_drive_errors(void)
+{
+    char path[24];
+    workload_disk = false;
+    bundled_disk = true;
+    fixture_errors[3] = -EIO;       /* foreign D: fails before bundled C: */
+    fixture_errors[4] = -EBUSY;
+    fixture_errors[5] = -EIO;       /* quarantined volume */
+    fixture_errors[25] = -ENODEV;
+    CHECK(!dosvm_window_base(path) && !strcmp(path, DOSVM_BUNDLED_BASE));
+    CHECK(dosvm_workload_base(path) == -ENOENT && !path[0]);
+    CHECK(!tables && !handles && !workload_busy);
+    workload_disk = true; workload_drive = 'G';
+    CHECK(!dosvm_window_base(path) && !strcmp(path, "G:\\CIUKIGAM.IMG"));
+    workload_disk = false; workload_drive = 'D';
+
+    struct process *saved = fake_current;
+    fake_current = &fake_proc[0];
+    struct ciuki_dosvm_command w, shut;
+    unsigned stages = launch_stages, errors = launch_errors;
+    CHECK(!create_window(0, "DOOM", &w));
+    CHECK(launch_stages == stages + 1 && launch_errors == errors && !launch_stage_pages);
+    CHECK(strstr(last_launch_log, "[launch-stage] name=dosbox pid=10 stage=vm-create window=DOOM"));
+    struct dosvm *v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+    CHECK(v && v->dpmi_enabled && !strcmp(last_base, DOSVM_BUNDLED_BASE));
+    shut = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut))); empty();
+
+    /* Only the required base fails the launch; optional errors stay absent. */
+    bundled_disk = false;
+    CHECK(dosvm_window_base(path) == -ENOENT && !path[0]);
+    CHECK(strstr(last_disk_log, "disk base=C:\\GAMES\\CIUKIGAM.IMG error=-2 reason=bundled"));
+    CHECK(create_window(0, "Quake", 0) == -EIO);
+    CHECK(launch_errors == errors + 1 && launch_stage_sequence < launch_error_sequence);
+    CHECK(strstr(last_launch_log, "[launch] name=dosbox pid=10 error=-5 stage=vm-create window=Quake"));
+    CHECK(fake_surface[0].references == 1 && !creating[0]); empty();
+
+    bundled_disk = true;
+    static const int failures[] = {-EIO, -EBUSY};
+    for (unsigned i = 0; i < ARRAY_SIZE(failures); i++) {
+        bundled_error = failures[i];
+        CHECK(dosvm_window_base(path) == failures[i] && !path[0]);
+        CHECK(create_window(0, "DOOM", 0) == failures[i]);
+        CHECK(strstr(last_disk_log, "base=C:\\GAMES\\CIUKIGAM.IMG") && strstr(last_disk_log, "reason=bundled"));
+        CHECK(launch_stage_sequence < launch_error_sequence && fake_surface[0].references == 1 && !creating[0]); empty();
+    }
+    bundled_error = 0; bundled_open_error = -EIO;
+    CHECK(create_window(0, "Quake", 0) == -EIO);
+    CHECK(strstr(last_disk_log, "error=-5 reason=bundled") && launch_stage_sequence < launch_error_sequence);
+    CHECK(fake_surface[0].references == 1); empty();
+    bundled_open_error = 0;
+    io_fail_at = io_calls + 1;
+    CHECK(create_window(0, "DOOM", 0) == -EIO);
+    CHECK(strstr(last_disk_log, "error=-5 reason=probe"));
+    io_fail_at = 0; empty();
+    store.stopped = true;
+    strcpy(path, "stale");
+    CHECK(dosvm_window_base(path) == -EIO && !path[0]);
+    CHECK(strstr(last_disk_log, "base=C:\\GAMES\\CIUKIGAM.IMG error=-5 reason=probe"));
+    store.stopped = false;
+    CHECK(!create_window(0, "Quake", &w)); /* failed reservations do not poison retry */
+    shut = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &shut, sizeof(shut))); empty();
+    memset(fixture_errors, 0, sizeof(fixture_errors));
+    fake_current = saved;
+    puts("f1-61 disk/launch: foreign EIO/EBUSY/quarantine absent, later fixture and bundled fallback, required missing/error/open failures logged, stage before allocation, cleanup/retry PASS");
 }
 
 /* The verdict line latches the text screen: a child's output that the shell
@@ -727,4 +795,5 @@ static void test_workloads(void)
     test_workload_direct_window();
     test_workload_base_image();
     test_bundled_games_base();
+    test_foreign_drive_errors();
 }
