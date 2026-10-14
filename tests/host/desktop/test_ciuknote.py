@@ -24,25 +24,26 @@ ROOT = Path(__file__).resolve().parents[3]
 # (2026-10-11); a change here is a visible change of CiukNote or of libdeskui.
 # wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
 # F2-64 recorded affected transient frames; remaining frames await lead review.
+# 2026-10-15 (main after f2-63 + f2-64): pinned frames re-recorded on the combined tree (FreeType text in the f2-64 dialogs), reviewed against the 9a05ab9f renders.
 TEXTAREA_SCREENS = {
     "ta-bold.xrgb": "PIN-FROM-FIRST-RUN",
     "ta-plain.xrgb": "PIN-FROM-FIRST-RUN",
     "ta-scrolled.xrgb": "PIN-FROM-FIRST-RUN",
 }
 APP_SCREENS = {
-    "cn-about.xrgb": "fb49caf640e1b58dd6a952f2d4056bf05a568da404b32d8488a508753c44844e",
+    "cn-about.xrgb": "de423649ddeedb3807983783ba540cb28d6cc872194e40013dccc0fed252e061",
     "cn-bold.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-context.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-empty.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-find-bar.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-format-menu.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-help.xrgb": "e21c3a78ff058b76e58f623c14ec1ed212cf312f34f591765227c2b365d561d2",
-    "cn-limit.xrgb": "3098137480972e794c6e5eb3eb80f0e8f8b2afe945c84524219872e95244a609",
+    "cn-help.xrgb": "e89781b5f31fd40b0c90dde5bca927fcb4b4874995b10194b5ce31d57a2b5630",
+    "cn-limit.xrgb": "200981da8810de5f08368d9ec8990eb5c544fbb571cd4f8bbd0b001e70bff88d",
     "cn-menu-edit.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-menu-file.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-open-root.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-open-tests.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-prompt-changes.xrgb": "8a68ffe7fe667e9987bf0e1657bf347142e10c4b52b6a02eb8ce2a51b31ea72c",
+    "cn-prompt-changes.xrgb": "1dac23bc0dcb2c31e1361d83e7b411362324f26dae3a7e4f076b07e4a65168a2",
     "cn-replace-bar.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-save-page.xrgb": "PIN-FROM-FIRST-RUN",
     "cn-saved.xrgb": "PIN-FROM-FIRST-RUN",

@@ -30,9 +30,10 @@ INCLUDES = ["-I", str(ROOT / "apps/tasks"), "-I", str(ROOT / "apps/libdeskui"), 
 # Manager visual change must update these deliberately.
 # wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
 # F2-64 recorded affected transient frames; remaining frames await lead review.
+# 2026-10-15 (main after f2-63 + f2-64): pinned frames re-recorded on the combined tree (FreeType text in the f2-64 dialogs), reviewed against the 9a05ab9f renders.
 RENDERS = {
     "tasks-applications.xrgb": "PIN-FROM-FIRST-RUN",
-    "tasks-newtask.xrgb": "26bf1a23e58ea18a3662646db3d1624a6f1c82c2e96698e194f4379863243c03",
+    "tasks-newtask.xrgb": "282ebae6bdb76811ac3ba8d0e2986bf1b41344a31a740738b05bc893adffa1a8",
     "tasks-performance.xrgb": "PIN-FROM-FIRST-RUN",
     "tasks-processes.xrgb": "PIN-FROM-FIRST-RUN",
 }

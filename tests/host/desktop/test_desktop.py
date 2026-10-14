@@ -29,17 +29,18 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 
 # F2-62: production shell, menus and modal frames; lead reviews the paired PNGs.
 # F2-63: re-recorded for the pinned FreeType UI atlases (build/host/f2-63 before/after).
+# 2026-10-15 (main after f2-63 + f2-64): the three dialogs frames re-recorded on the combined tree (f2-64 message boxes in FreeType), reviewed against the 9a05ab9f renders.
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "051208920bbeee92fa5c1d63a0a53bff263199903efa855577877ff37212914c",
-    "ciuki-blue-dialogs.ppm": "c4181dd9783b66140c5f161c530d16f2bef64adf8b15be961ad2cb2553f4e0d1",
+    "ciuki-blue-dialogs.ppm": "787b500fad66a0ed3b67877677ed941bcbea42cbd9acaa495359db32f6a67600",
     "ciuki-blue-tray-disabled.ppm": "d18ab5f67988c1b23a7eee76d60f92b67fdba013686f5a567809129dcb1702c5",
     "ciuki-blue-tray-media.ppm": "d6627793607cdd2370e208cfbb9dcd044189a27ac53e682483e8aa05b2ad1c23",
     "classic-98-desktop.ppm": "f64f4d3a17d1db6823ffbb35bedbef26dfa2a4f050806912a509fab9b9aebe33",
-    "classic-98-dialogs.ppm": "53fddddf4b3214ac845217e8e96df9a94799b43471cf76e929848e61646b8020",
+    "classic-98-dialogs.ppm": "628552715b1f0641933fd3589bd2bafcbd73ec4a7b0c858d2a0f8579d51a52d6",
     "classic-98-tray-disabled.ppm": "b03c20ccd2061ada5855ca5f31bbd625ec4dfebba5799b2b938894017f4f3630",
     "classic-98-tray-media.ppm": "74b0062575ff96d6748001b9ff43e1046025e2fffefe2eda2c030e4d90c47d7b",
     "platinum-desktop.ppm": "62e179ec4af38dc1011bb000404b74c1d7a27159973af0421794861fee29483c",
-    "platinum-dialogs.ppm": "e236624a50f0569e0d875b5c41a8f4bbf7cd9cd12818d89038854c2d8c6a0b80",
+    "platinum-dialogs.ppm": "703f200570cdf20347498ae22c9e74a48353716833252116d80943b17242468a",
     "platinum-tray-disabled.ppm": "c7fe5bd15325b8b242d9f19dc048f2813a6fcf036349a8700829570926936ce5",
     "platinum-tray-media.ppm": "0196e226c14beadc791c1c0d74c28021da984773dab0a745def180b91f271e2c"
 }

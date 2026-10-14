@@ -1983,6 +1983,18 @@ arm command visibility before its final Enter
 PRESENT plus destination 8-line damage
 
 ```c
+#define CIUKI_DOSVM_FULLSCREEN 9u
+```
+
+focused=1 enter, 0 return to window
+
+```c
+#define CIUKI_DOSVM_BACKGROUND 10u
+```
+
+focused=1 pause on Alt+Tab, 0 continue
+
+```c
 #define CIUKI_DOSVM_VIDEO_READY 1u
 ```
 
@@ -1990,6 +2002,19 @@ STATUS.changed launch flags
 
 ```c
 #define CIUKI_DOSVM_LAUNCH_FAILED 2u
+#define CIUKI_DOSVM_FULL_SCREEN 4u
+```
+
+STATUS.changed
+
+```c
+#define CIUKI_DOSVM_SUSPENDED 8u
+#define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u
+```
+
+STATUS.reason is positive errno
+
+```c
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
@@ -2278,10 +2303,16 @@ No client coordinates, display grants or hardware commands.
 
 ```c
 DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT,
-    DESK_GFX_FRAME, DESK_GFX_PRESENTED
+    DESK_GFX_FRAME, DESK_GFX_PRESENTED,
 ```
 
 f2-59: bounded scene region and completion
+
+```c
+DESK_DOS_FULLSCREEN
+```
+
+desktop to DOS client, no payload
 
 ```c
 };
@@ -2970,6 +3001,16 @@ int du_text_width(const char *);
 void du_text(struct du_canvas *, int x, int y, const char *, uint32_t);
 void du_text_n(struct du_canvas *, int x, int y, const char *, size_t cells, uint32_t);
 void du_text_fit(struct du_canvas *, int x, int y, int width, const char *, uint32_t);
+```
+
+NULL canvas measures only; explicit lines and UTF-8 boundaries survive.
+
+```c
+int du_text_wrap(struct du_canvas *, struct du_rect, const char *, uint32_t);
+void du_progress_paint(struct du_canvas *, struct du_rect, int value, int total, uint64_t phase_ms);
+void du_message_size(const char *, int icon, unsigned buttons, int max_width, int *width, int *height);
+const char *du_message_icon_name(int icon);
+unsigned du_message_sound(int icon);
 void du_text_disabled(struct du_canvas *, int x, int y, const char *);
 void du_label(struct du_canvas *, int x, int y, const char *mnemonic, uint32_t, int underline);
 ```

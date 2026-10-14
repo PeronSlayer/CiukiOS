@@ -9,18 +9,19 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
-GOLDENS = {'balloon': 'a1e54c03ff7cdbb485196d19db2b316aff0b8d945fcce2fbdcd9be3e73fd1f72',
- 'error': 'cd0c8d56c896d3c4617527222ff2d99befd1a6d9bebed9fbf24d94b733ab1f56',
- 'info': 'a29acea859c8e09b89309d1c7411c8d4b6d5b0f855110a113dc2d3db8498b2cc',
- 'loading': '58e99c7c2f72ee8aa0f919b7fcfbe42f546ba2bc91c131abffb1c46e69d432f5',
- 'notification': '9a943bc249eace6c3b08ba3a052b2eef35af2cbbdd9481340914d63514d59384',
- 'question': '48ef625174e36f163cf0581664f357f8c3e4a64a61a1d28fd0c47b8b6973e2c2',
- 'tooltip': 'c98c8f001d7bcb260d1082c0150add3bcfd8479a5d49f10a709688e0c223894f',
- 'tooltip-media': '8b2768644838f744c4c79401e70aaa4fda621875f2022bdd2e1a36d5b840891f',
- 'tooltip-network': '29983ef059e19c4edc8ccd42e70d8c405d664c89f05eabfa32576f594d83869d',
- 'tooltip-task': 'cff08cd83fffebffc373cf97c2ff02ef7f2f1a407d120ae6f8b0dfdc2bee3bed',
- 'tooltip-volume': '595659c41a7b3c771fa9e982fef19d53a7f319ac55bf206ca94d423b98aeff8b',
- 'warning': '215580166dad778ec2c666060502f4dba311e2b7a6e72bdf62ddbbb35aef2ef8'}
+# 2026-10-15 (main after f2-63 + f2-64): re-recorded on the combined tree (FreeType text), reviewed against the 9a05ab9f renders.
+GOLDENS = {'balloon': '4db4166909a0b1042ebbd860892a6fc5e39f22f8dc8ada77ce17171a929b2998',
+ 'error': '310f334a2b31f450caf39691beba785a2fc3b989d24731bcca509449bcdc6d5a',
+ 'info': '50e827a231ec558500bc59905d529a42ecaca3851d9a7a2c7ec06c0b9a203c53',
+ 'loading': 'c675bfec0dd20df260c2137464b819e2faaa8624138f6d4ca823bad8eb937af1',
+ 'notification': '56778009ed9a4259eab689163ddde2679880ba7d6ac4812e18af3c83a6e0a702',
+ 'question': 'a1ed1a8b878ff15b9f6a251573a41d6f268d33e137d42ceeaea7e4df665c3c06',
+ 'tooltip': 'df824cb2998e9c2fb263a620afb2aca9c8b7ee8dd79b3df24a97c5a65b2a8d61',
+ 'tooltip-media': 'd23c96aacda7662b3b7b0730eaf08c4a76b7f507688841fed1cc102003c9a7cf',
+ 'tooltip-network': 'd8952ce42edcdcda9dea4e651fa0959896883bb0f7785c757670be900294878f',
+ 'tooltip-task': '0e5dbe0d7229ed371bb504f95416e579a2ea8470b24d65d7167d589e586e140a',
+ 'tooltip-volume': '7e86b53274a00d2ed44a871fc397508f5aefdb04ba645857093901c23a52df44',
+ 'warning': '43a94b327cd5807be7f35b7c2aad42f07341c63d8208f757cf6b3000c4951177'}
 
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
