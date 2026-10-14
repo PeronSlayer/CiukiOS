@@ -485,7 +485,7 @@ static int theme_poll_async(uint64_t now)
     char name[32]="";
     if (!error && desk_settings_theme(text,n,name,sizeof(name))) name[0]=0;
     const struct desk_theme *before=desk_theme;
-    if (!name[0] || desk_theme_use(name)) desk_theme_use("Platinum");
+    if (!name[0] || desk_theme_use(name)) desk_theme_use(DESK_THEME_DEFAULT);
     return desk_theme!=before;
 }
 static int settings_save(struct desktop *d)
