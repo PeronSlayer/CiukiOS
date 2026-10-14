@@ -21,6 +21,7 @@ static unsigned ec_record_count;
 static unsigned audio_log_count;
 static unsigned backend_failure_logs;
 static unsigned analog_warning_logs, response_warning_logs;
+static unsigned cold_reset_logs, qemu_reset_logs;
 static bool slow_playback_log;
 static bool serial_is_buffered;
 void klog(const char *fmt, ...)
@@ -37,6 +38,8 @@ void klog(const char *fmt, ...)
     if (slow_playback_log && !serial_is_buffered) g_ticks += 84;
     if(strstr(audio_log,"result=analog_not_ready"))analog_warning_logs++;
     if(strstr(audio_log,"result=analog_warning_accepted"))response_warning_logs++;
+    if(strstr(audio_log,"reset=cold "))cold_reset_logs++;
+    if(strstr(audio_log,"reset=qemu_model "))qemu_reset_logs++;
 }
 bool ktime_elapsed_us(uint64_t start, uint32_t us) { return ktime_cycles() - start >= us; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
@@ -147,7 +150,9 @@ struct mock_hw {
     uint32_t global_control, global_status;
     uint64_t ready_at, power_ready_at;
     unsigned ready_delay, power_delay, volume_writes[128];
-    bool ready_stuck, cold_stuck, power_stuck, sticky_mute, rate_stuck;
+    bool ready_stuck, cold_stuck, release_stuck, power_stuck, sticky_mute, rate_stuck;
+    bool qemu_model; /* v9.2.0: GC_CR/GC_WR writes ignored, PCR always set */
+    unsigned unready_codec_reads;
     bool codec_model, vra_enable_stuck, vra_disable_stuck;
     bool cas_owned, zero_reads, mixer_zero, master_stuck, reset_defaults;
     uint16_t read_timeout_reg;
@@ -164,6 +169,11 @@ struct mock_hw {
     unsigned trace_count;
     struct ac97_device *device;
 };
+static bool mock_primary_ready(struct mock_hw *h)
+{
+    return (h->qemu_model || (h->global_control & 2)) &&
+           !h->ready_stuck && h->tick >= h->ready_at;
+}
 static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
 {
     struct mock_hw *h=cookie; (void)width;
@@ -177,6 +187,11 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
     if (port >= 0x100 && port < 0x200) {
         CHECK(width==2 && h->cas_owned && !h->posted);
         h->cas_owned=false;h->codec_reads++;
+        /* Physical defensive model; upstream QEMU does NOT gate NAM on
+         * GC_CR/PCR. Keep that independent model divergence explicit. */
+        if(!h->qemu_model && ((h->global_control&0x0e)!=2 || !mock_primary_ready(h))) {
+            h->unready_codec_reads++;return 0xffff;
+        }
         unsigned reg=port-0x100;
         if(reg==h->read_timeout_reg)h->global_status|=1u<<15;
         if(h->zero_reads || (h->mixer_zero && (reg==2 || reg==0x18 || reg==0x26)))return 0;
@@ -219,7 +234,7 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
         return 0;
     }
     if(off==0x2c)return h->global_control;
-    if(off==0x30)return h->global_status | ((h->global_control&2) && !h->ready_stuck && h->tick>=h->ready_at ? 0x100 : 0);
+    if(off==0x30)return h->global_status | (mock_primary_ready(h) ? 0x100 : 0);
     if(off==0x14) { if(h->bad_civ_reads) { h->bad_civ_reads--; return 32; } return h->civ; }
     if(off==0x10)return h->bdbar;
     if(off==0x15)return h->lvi;
@@ -259,6 +274,7 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
     }
     if(port>=0x100 && port<0x200) {
         CHECK(width==2 && h->cas_owned && !h->posted);
+        CHECK(h->qemu_model || ((h->global_control&0x0e)==2 && mock_primary_ready(h)));
         h->cas_owned=false;
         h->posted=true;h->posted_reg=port-0x100;h->posted_value=h->reject ? value^1u : value;
         h->busy_until=h->tick+h->post_delay;return;
@@ -268,6 +284,11 @@ static void mock_write(void *cookie, uint16_t port, uint32_t value, unsigned wid
     if(off==0x2c) {
         if(h->cold_stuck) return;
         if(h->ich3) CHECK(!(h->pci_command&4));
+        if(h->qemu_model) {
+            if(!(value&6))h->global_control=value&0x3f;
+            return;
+        }
+        if(h->release_stuck && (value&2))return;
         h->global_control=value;
         if(!(value&2)) { h->global_status&=~0x100u;h->cr=0;h->sr=AC97_DCH; }
         else h->ready_at=h->tick+h->ready_delay;
@@ -626,6 +647,88 @@ static void test_codec_power_policy(void)
     CHECK(!ac97.master && !ac97.pcm_volume && ac97.rate==48000 && hw.tick<500);
     memset(&ac97,0,sizeof(ac97));
     puts("audio codec power: register reset, 5s warning with response+DMA proof, zero/stale reads, CAS ownership, RCS/link errors, QEMU model PASS");
+}
+static void qemu_setup(void)
+{
+    ich3_setup();hw.qemu_model=true;hw.global_control=0;
+    ac97.pci.device=0x2415;ac97.software_master=true;ac97.pcm_unity=0;
+    hw.codec[0x7c/2]=0x8384;hw.codec[0x7e/2]=0x7600;
+    hw.codec[0x28/2]=0x0809;hw.codec[0x2a/2]=0x0009;
+    hw.codec[0]=0;hw.reset_defaults=true;
+}
+static void test_controller_reset_models(void)
+{
+    uint32_t flags=g_boot.flags;
+    uint16_t value;
+    /* Prove the physical fake returns FFFF while reset or readiness blocks
+     * the link, and that normal activation never performs those reads. */
+    ich3_setup();hw.global_control=0;hw.cas_owned=true;
+    CHECK(mock_read(&hw,0x12a,2)==0xffff);
+    hw.global_control=2;hw.ready_at=750;hw.cas_owned=true;
+    CHECK(mock_read(&hw,0x12c,2)==0xffff && hw.unready_codec_reads==2);
+    ich3_setup();hw.ready_delay=750;
+    unsigned cold=cold_reset_logs, qemu=qemu_reset_logs;
+    CHECK(!controller_activate(&ac97) && hw.tick>=751 && hw.tick<1000);
+    CHECK(!hw.unready_codec_reads && cold_reset_logs==cold+1 && qemu_reset_logs==qemu);
+    CHECK(hw.global_control==2 && hw.starts==1 && hw.resets==2);
+
+    /* Exact upstream divergence: zero persists after BOTH reset requests,
+     * PCR is already set, and word mixer reads still return real data. */
+    g_boot.flags=flags|CBI_F_SMBIOS_QEMU;qemu_setup();
+    hw.pci_command=1; /* raw reset-model check also requires BME clear */
+    mock_write(&hw,0x22c,2,4);mock_write(&hw,0x22c,4,4);
+    CHECK(!hw.global_control && mock_read(&hw,0x230,4)==0x100);
+    hw.cas_owned=true;CHECK(mock_read(&hw,0x17c,2)==0x8384);
+    qemu_setup();cold=cold_reset_logs;qemu=qemu_reset_logs;
+    CHECK(!controller_activate(&ac97) && !hw.global_control && !ac97.analog_warning);
+    CHECK(qemu_reset_logs==qemu+1 && cold_reset_logs==cold && !hw.unready_codec_reads);
+    CHECK(hw.codec_resets==1 && hw.starts==1 && hw.resets==2 && !hw.cas_owned && !hw.posted);
+    CHECK(ac97.codec_id==0x83847600 && ac97.codec_valid==7 && ac97.rate==48000);
+    CHECK(!ac97.master && !ac97.pcm_volume && hw.tick<500 && !ac97.failure.stage);
+    CHECK(trace_at(0x22c,0)<trace_at(0x22c,2));
+
+    /* A future compliant QEMU controller takes the ordinary cold path. */
+    qemu_setup();hw.qemu_model=false;hw.global_control=2;hw.ready_delay=12;
+    cold=cold_reset_logs;qemu=qemu_reset_logs;
+    CHECK(!controller_activate(&ac97) && cold_reset_logs==cold+1 && qemu_reset_logs==qemu);
+    CHECK(hw.global_control==2 && !hw.unready_codec_reads && hw.starts==1);
+
+    /* The exception requires the boot flag AND both PCI identity fields.
+     * Software attenuation by itself must never relax a physical reset. */
+    for(unsigned fault=0;fault<3;fault++) {
+        g_boot.flags=flags|CBI_F_SMBIOS_QEMU;qemu_setup();
+        if(fault==0)g_boot.flags&=~CBI_F_SMBIOS_QEMU;
+        if(fault==1)ac97.pci.device=0x2485;
+        if(fault==2)ac97.pci.vendor=0x1039;
+        CHECK(controller_activate(&ac97)==-EIO && !hw.codec_reads && !hw.starts);
+        CHECK(!strcmp(ac97.failure.stage,"controller_reset"));
+        CHECK(ac97_codec_read(&ac97,2,&value,500)==-EIO && !hw.codec_reads);
+        CHECK(!strcmp(ac97.codec_error,"link_off_or_reset"));
+    }
+    g_boot.flags=flags|CBI_F_SMBIOS_QEMU;
+    /* Even on the twin, missing readiness, bad reads, RCS and CAS cannot
+     * be accepted; synthetic fault injection extends the upstream model. */
+    qemu_setup();hw.ready_stuck=true;
+    CHECK(controller_activate(&ac97)==-ETIMEDOUT && hw.tick==1000 && !hw.codec_reads && !hw.starts);
+    qemu_setup();hw.codec[0x7c/2]=hw.codec[0x7e/2]=0xffff;
+    CHECK(controller_activate(&ac97)==-EIO && !hw.starts && !strcmp(ac97.failure.stage,"codec_identity"));
+    qemu_setup();hw.read_timeout_reg=0x26;
+    CHECK(controller_activate(&ac97)==-EIO && !hw.starts && !strcmp(ac97.codec_error,"read_timeout"));
+    qemu_setup();hw.busy=true;
+    CHECK(controller_activate(&ac97)==-ETIMEDOUT && !hw.codec_reads && !hw.starts && hw.tick==101);
+    qemu_setup();hw.cold_stuck=true;hw.global_control=8;
+    CHECK(controller_activate(&ac97)==-EIO && !hw.codec_reads && !hw.starts);
+    qemu_setup();hw.global_control=4;
+    CHECK(ac97_codec_read(&ac97,2,&value,500)==-EIO && !hw.codec_reads);
+
+    /* With the QEMU flag set, real ICH3 still rejects failed release and
+     * retains its bounded primary-ready wait without accessing NAM. */
+    ich3_setup();hw.release_stuck=true;
+    CHECK(controller_activate(&ac97)==-EIO && !hw.codec_reads && !hw.starts);
+    ich3_setup();hw.ready_stuck=true;
+    CHECK(controller_activate(&ac97)==-ETIMEDOUT && hw.tick==1000 && !hw.codec_reads && !hw.starts);
+    g_boot.flags=flags;memset(&ac97,0,sizeof(ac97));
+    puts("audio reset models: physical gated NAM, QEMU ignored GC_CR/GC_WR, strict identity/readiness/access gates and both DMA proofs PASS");
 }
 static uint64_t boot_host_tick;
 static unsigned boot_mixed_frames;
@@ -1109,7 +1212,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;
