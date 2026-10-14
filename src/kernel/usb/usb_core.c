@@ -86,6 +86,19 @@ void usb_host_take(struct usb_host *h)
 }
 void usb_host_drop(struct usb_host *h)
 { h->busy = false; fs_lock_drop(&h->transfer_lock); }
+bool usb_host_take_until(struct usb_host *h, uint64_t deadline)
+{
+    for (unsigned waits = 0; waits < USB_BIND_TIMEOUT_MS; waits++) {
+        if (usb_expired(h, deadline)) return false;
+        if (fs_lock_try_take(&h->transfer_lock)) {
+            if (!h->busy) { h->busy = true; return true; }
+            usb_hid_service(h);
+            fs_lock_drop(&h->transfer_lock);
+        }
+        h->io.sleep(h->io.cookie, 1);
+    }
+    return false;
+}
 void usb_sleep(struct usb_host *h, unsigned ms)
 {
     /* A reservation protects the general TD/BOT sequence, not the mutex.
@@ -428,7 +441,10 @@ descriptor_ready:
         d->reason = "hid_ready";
     }
     if (d->storage.bound) {
+        usb_host_drop(h);
         err = usb_storage_attach(d);
+        usb_storage_service(h); /* publication uses the same bind deadline now */
+        usb_host_take(h); /* restore the enumeration caller's reservation */
         klog("[usb-storage] attach addr=%u result=%d", d->address, err);
     }
     return (int)slot + 1;

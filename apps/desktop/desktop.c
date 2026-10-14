@@ -137,6 +137,8 @@ static void gate_report(struct desktop *d, uint32_t control, unsigned generation
     if (d->app_test) keys=d->app_done && gate_keys>=2 ? gate_keys+d->shell_keys : 0;
     int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=%u survivor=%d victim=%d cycle=%u replies=%llu keys=%u motion=%u buttons=%u",
         control,generation,survivor,victim,cycle,(unsigned long long)d->replied,keys,gate_motion,gate_buttons);
+    if (d->shell_test && n>0 && n<(int)sizeof(line))
+        n+=snprintf(line+n,sizeof(line)-(size_t)n," shell=1 shell_stage=%u",(unsigned)d->shell_stage);
     /* f2-31/f2-32: the Files and CiukNote cases ask the controller for the
      * storage write gate and a framebuffer digest at each presented checkpoint. */
     if (d->app_test && n>0 && n<(int)sizeof(line))

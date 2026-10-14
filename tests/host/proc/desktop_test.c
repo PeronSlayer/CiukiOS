@@ -934,6 +934,16 @@ static void test_native_input_records(void)
     pacing_report(server,child,control,0,2,1,""); CHECK(input_records==++before);
     pacing_report(server,child,control,0,2,2,""); CHECK(input_records==++before);
     pacing_report(server,child,control,2,2,2,""); CHECK(input_records==++before);
+    /* F1-59: faster f1-57 delivery can expose stage 6/A while the runner
+     * still owes its final pointer move and button down/up. */
+    pacing_report(server,child,control,4,46,10," shell=1 shell_stage=6");
+    CHECK(input_records==++before && native_reports.shell && !native_reports.invalid);
+    CHECK(shell_probe_pending(native_reports.shell_stage,native_reports.keys,native_reports.buttons));
+    pacing_report(server,child,control,4,50,11," shell=1 shell_stage=6");
+    CHECK(input_records==++before && shell_probe_pending(6,4,native_reports.buttons));
+    pacing_report(server,child,control,4,50,12," shell=1 shell_stage=6");
+    CHECK(input_records==++before && !shell_probe_pending(6,4,native_reports.buttons));
+    CHECK(shell_probe_pending(5,4,12) && shell_probe_pending(6,2,12));
     pacing_report(server,child,control,2,1,2,""); CHECK(native_reports.invalid && input_records==before);
     pacing_report(server,child,control,2,3,2,""); CHECK(input_records==before);
     /* Full validation includes app fields, even when counters are valid. */

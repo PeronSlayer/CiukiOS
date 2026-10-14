@@ -45,6 +45,7 @@ struct block_cache {
     void *refresh_ctx;
     uint32_t next_writeback;
     bool writeback_pending;
+    bool workspace_in_use; /* reservation only; no mutex held across scan I/O */
 };
 /* Allocate only at init. bytes includes metadata and scan workspace. One
  * instance is shared by ALL mounted devices. Destroy requires quiescence and

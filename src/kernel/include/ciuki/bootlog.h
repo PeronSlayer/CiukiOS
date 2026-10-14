@@ -25,6 +25,9 @@ void bootlog_capture(const char *, size_t);
 void bootlog_capture_ring(const char *, size_t);
 int bootlog_activate(struct vfs *, bool qualified, uint32_t sequence);
 int bootlog_drain(void);
+/* Thread context, with no storage or USB reservation held. Drain the captured
+ * prefix/ring and commit it; contention sleeps and observes caller cancellation. */
+int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *);
 int bootlog_shutdown(void);
 void bootlog_snapshot(struct bootlog_stats *);
 void bootlog_reset(void); /* quiescent, detached only; host reboot fixture */

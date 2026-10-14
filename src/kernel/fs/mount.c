@@ -231,65 +231,103 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
     }
     return 0;
 }
-/* All namespace changes below happen with the shared native/legacy lock.
- * USB views/letters stay allocated, including failed/removed mounts. */
-int storage_add_removable(struct storage *s, struct blkdev *dev)
+/* Preparation does not expose a FAT volume or hold shared storage locks
+ * across device I/O. Only reservation/publication take the namespace lock. */
+static int removable_lock(struct storage *s, bool (*cancel)(void *), void (*pause)(void *), void *ctx)
 {
-    if (!s || !s->ready || s->stopped || !dev || dev->sector_size!=512) return -FS_EINVAL;
-    fs_lock_take(&s->vfs.lock);
-    if (s->stopped) { fs_lock_drop(&s->vfs.lock); return -FS_EINVAL; }
-    for (unsigned d=4;d<26;d++) if (s->volumes[d].present && s->volumes[d].removable && s->volumes[d].part.parent==dev) {
+    if (!cancel) { fs_lock_take(&s->vfs.lock); return 0; }
+    while (!cancel(ctx)) {
+        if (fs_lock_try_take(&s->vfs.lock)) return 0;
+        pause(ctx);
+    }
+    return -FS_EAGAIN;
+}
+int storage_add_removable(struct storage *s, struct blkdev *dev)
+{ return storage_add_removable_bounded(s,dev,0,0,0); }
+int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
+                                  bool (*cancel)(void *), void (*pause)(void *), void *ctx)
+{
+    if (!s || !s->ready || s->stopped || !dev || dev->sector_size!=512 || (cancel && !pause)) return -FS_EINVAL;
+    int e=removable_lock(s,cancel,pause,ctx); if (e) return e;
+    for (unsigned d=4;d<26;d++) if ((s->volumes[d].present || s->volumes[d].fat.preparing) &&
+        s->volumes[d].removable && s->volumes[d].part.parent==dev) {
         fs_lock_drop(&s->vfs.lock); return -FS_EBUSY;
     }
+    fs_lock_drop(&s->vfs.lock);
     struct partition_table table;
-    int e=partition_scan(dev,&table);
+    e=partition_scan(dev,&table);
     uint8_t b[512];
-    if (e && e!=-FS_EINVAL) goto out;
-    int r=dev->read(dev,0,1,b); if (r) { e=r; goto out; }
+    if (e && e!=-FS_EINVAL) return e;
+    int r=dev->read(dev,0,1,b); if (r) return r;
     bool whole=!table.count && !table.ebr_reads && fs_rd16(b+510)==0xaa55 &&
         fs_rd16(b+11)==512 && (b[0]==0xe9 || (b[0]==0xeb && b[2]==0x90));
     if (whole) { table.count=1; table.entries[0]=(struct partition){.count=dev->capacity}; e=0; }
-    if (e) goto out;
-    unsigned mounted=0;
+    if (e) return e;
+    unsigned prepared[26], count=0;
     for (unsigned i=0;i<table.count;i++) {
         struct partition *p=&table.entries[i];
         if (!whole && !fat_partition(p->type)) continue;
+        r=removable_lock(s,cancel,pause,ctx); if (r) return r;
+        if (s->stopped || dev->quarantined) { fs_lock_drop(&s->vfs.lock); return -FS_EIO; }
         if (s->next_drive<4) s->next_drive=4;
         while (s->next_drive<26 && vfs_drive_present(&s->vfs,s->next_drive)) s->next_drive++;
         unsigned d=s->next_drive++;
-        if (d>=26) { e=-FS_ENOSPC; break; }
+        if (d>=26) { fs_lock_drop(&s->vfs.lock); return -FS_ENOSPC; }
         struct storage_volume *v=&s->volumes[d];
-        v->present=true; v->removable=true; v->drive=d; v->disk=UINT32_MAX; v->partition=whole ? 0 : i+1;
+        v->removable=true; v->drive=d; v->disk=UINT32_MAX; v->partition=whole ? 0 : i+1;
         r=blkpart_init(&v->part,dev,p);
+        fs_lock_drop(&s->vfs.lock);
         if (!r) {
             v->io=(struct blkdev){.read=volume_read,.write=volume_write,.capacity=p->count,.sector_size=512,.ctx=v};
             refresh_volume(v);
-            r=fat_mount(&v->fat,&s->cache,&v->io,0,p->count,false);
+            r=fat_prepare(&v->fat,&s->cache,&v->io,0,p->count);
         }
         v->writes_before_gate=v->writes;
+        if (!r && (s->stopped || dev->quarantined || (cancel && cancel(ctx)))) r=-FS_EIO;
         if (!r) {
             v->read_gate=!(v->fat.ro_reasons & ~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY));
             if (v->read_gate) v->read_sequence=++s->sequence;
-            r=vfs_attach_locked(&s->vfs,d,&v->fat);
-            if (!r) {
-                s->vfs.drive_flags[d]|=VFS_DRIVE_REMOVABLE; mounted++;
-                if (!s->writer_error && v->read_gate && !(v->fat.ro_reasons & FAT_RO_DIRTY)) {
-                    int w=fat_enable_write(&v->fat);
-                    if (!w) v->write_sequence=++s->sequence;
-                    /* Unsupported durability is an admitted read-only mount. */
-                    if (w && w!=-FS_EROFS) r=w;
-                }
+            if (!s->writer_error && v->read_gate && !(v->fat.ro_reasons & FAT_RO_DIRTY)) {
+                int w=fat_enable_write(&v->fat);
+                if (!w) v->write_sequence=++s->sequence;
+                if (w && w!=-FS_EROFS) r=w;
             }
         }
+        /* No parser I/O remains: publish using the one shared cache. Failure
+         * leaves an unpublished retained record, never an uncertain mount. */
+        v->fat.preparing=false;
         v->error=r;
+        if (!r) prepared[count++]=d;
+        if (r) v->fat.mounted=false;
         klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d",
              'A'+d,v->partition,v->fat.type,v->fat.readonly ? "ro" : "rw",
              !!(v->fat.ro_reasons & FAT_RO_DIRTY),r);
         if (r && !e) e=r;
+        if (cancel && cancel(ctx)) { e=-FS_EAGAIN; break; }
+        if (dev->quarantined) { e=-FS_EIO; break; }
     }
-    if (!mounted && !e) e=-FS_ENOENT;
-out:
-    fs_lock_drop(&s->vfs.lock); return e;
+    if (!count && !e) e=-FS_ENOENT;
+    if (!e) e=removable_lock(s,cancel,pause,ctx);
+    if (!e) {
+        if (s->stopped || dev->quarantined) e=-FS_EIO;
+        for (unsigned i=0;!e && i<count;i++) {
+            unsigned d=prepared[i];struct storage_volume *v=&s->volumes[d];
+            e=vfs_attach_locked(&s->vfs,d,&v->fat);
+            if (!e) { v->present=true;s->vfs.drive_flags[d]|=VFS_DRIVE_REMOVABLE; }
+        }
+        /* All letters appear together. An attach refusal rolls back namespace
+         * pointers without issuing a flush or presenting an uncertain medium. */
+        if (e) for (unsigned i=0;i<count;i++) {
+            unsigned d=prepared[i];struct storage_volume *v=&s->volumes[d];
+            if (s->vfs.volumes[d]==&v->fat) {s->vfs.volumes[d]=0;s->vfs.generation[d]++;s->vfs.drive_flags[d]=0;}
+            v->present=false;
+        }
+        fs_lock_drop(&s->vfs.lock);
+    }
+    if (e) for (unsigned i=0;i<count;i++) {
+        struct storage_volume *v=&s->volumes[prepared[i]];v->error=e;v->fat.mounted=false;
+    }
+    return e;
 }
 int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool surprise)
 {

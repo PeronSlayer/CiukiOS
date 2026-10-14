@@ -63,6 +63,7 @@
 #include <stdbool.h>
 #include "desktop.h"
 #include <ciuki/input.h>
+#include <ciuki/shell_probe.h>
 #include "gate.h"
 #include "fake_vfs.h"
 #include "../../../apps/ciuknote/doc.h"
@@ -494,7 +495,10 @@ uint32_t ciuki_raw_probe_report(uintptr_t address, uint32_t n, uint32_t b, uint3
             printf("CHECKPOINT %d t=%.3f\n", checkpoint, (double)vnow / 1e9);
         }
     }
-    if (!success_ns && keys >= 2 && motion >= 1 && buttons >= 2) success_ns = vnow;
+    int shell;
+    field(line,"shell",&shell);
+    if (!success_ns && keys >= 2 && motion >= 1 && buttons >= 2 &&
+        (!shell || !shell_probe_pending(field(line,"shell_stage",NULL),keys,buttons))) success_ns = vnow;
     note("report %s", line);
     return 0;
 }

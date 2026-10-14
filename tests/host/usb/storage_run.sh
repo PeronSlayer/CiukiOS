@@ -5,16 +5,38 @@ out="$root/build/host/usb"
 mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1 ASAN_OPTIONS=detect_leaks=0
 python3 "$root/tests/host/fs/fixtures.py"
+build_test() {
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/usb/storage_test.c" \
+    -I "$root/src/kernel/include" "$root/tests/host/usb/$1.c" \
     "$root/src/kernel/usb/usb_core.c" "$root/src/kernel/usb/usb_storage.c" \
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/usb_interrupt.c" "$root/src/kernel/lib/fmt.c" \
-    "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c" \
+    "$root/src/kernel/core/bootlog.c" "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c" \
     "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c" \
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c" \
     "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" \
     "$root/src/kernel/drivers/blkpart.c" "$root/src/kernel/fs/mount.c" \
-    -o "$out/storage_test"
+    -I "$out" -o "$out/$1"
+}
+build_test storage_test
 "$out/storage_test" "$root/build/host/fs/fat12.img" "$root/build/host/fs/fat16.img" "$root/build/host/fs/fat32.img"
+
+# Replay the real run queue policy while the USB bind worker sleeps.
+python3 - "$root" "$out" <<'PYTHON'
+from pathlib import Path
+import re, sys
+root, out = map(Path, sys.argv[1:])
+s = (root / "src/kernel/core/task.c").read_text()
+body = s[s.index("static struct task *rq_head"):s.index("static struct task *all_tasks")]
+for name in ("rq_push", "rq_pop"):
+    match = re.search(r"^static [^\n]+\b"+name+r"\([^\n]*\)\n\{",s,re.M)
+    assert match, name
+    depth, end = 1, match.end()
+    while depth:
+        depth += (s[end]=="{")-(s[end]=="}"); end += 1
+    body += s[match.start():end]+"\n"
+(out / "usb_bind_queues.inc").write_text(body)
+PYTHON
+build_test bind_freeze_test
+"$out/bind_freeze_test" "$root/build/host/fs/fat12.img" "$root/build/host/fs/fat16.img" "$root/build/host/fs/fat32.img"

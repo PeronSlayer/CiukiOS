@@ -345,6 +345,9 @@ void cache_invalidate(struct block_cache *c, struct blkdev *d, bool forget) {
 int cache_workspace_begin(struct block_cache *c, uint32_t bytes) {
     if (bytes>c->workspace_pages*4096u) return -FS_ENOMEM;
     fs_lock_take(&c->workspace_lock);
+    if (c->workspace_in_use) { fs_lock_drop(&c->workspace_lock); return -FS_EBUSY; }
+    c->workspace_in_use=true;
+    fs_lock_drop(&c->workspace_lock);
     for (unsigned i=0;i<(bytes+4095)/4096;i++) memset(c->workspace[i],0,4096);
     return 0;
 }
@@ -352,4 +355,6 @@ uint8_t *cache_workspace_byte(struct block_cache *c, uint32_t off) {
     if (off>=c->workspace_pages*4096u) fs_panic("workspace bounds");
     return (uint8_t *)c->workspace[off/4096]+off%4096;
 }
-void cache_workspace_end(struct block_cache *c) { fs_lock_drop(&c->workspace_lock); }
+void cache_workspace_end(struct block_cache *c) {
+    fs_lock_take(&c->workspace_lock); c->workspace_in_use=false; fs_lock_drop(&c->workspace_lock);
+}

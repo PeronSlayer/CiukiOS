@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+import ctypes
+import tempfile
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -207,6 +209,47 @@ class USBRunnerTests(unittest.TestCase):
                     self.assertEqual(result['outcome'],'fail')
                     self.assertIn('missing expected serial pattern',result['reason'])
         finally:fixture.tearDown()
+
+    def test_shell_end_waits_for_final_consumed_release(self):
+        """Run the probe predicate and reproduce the old END in the runner model."""
+        from test_runner import RunnerTests
+        with tempfile.TemporaryDirectory() as scratch:
+            source=Path(scratch)/'shell.c';library=Path(scratch)/'shell.so'
+            source.write_text('#include <ciuki/shell_probe.h>\n'
+                              'int pending(unsigned s,unsigned k,unsigned b) {return shell_probe_pending(s,k,b);}\n')
+            subprocess.run(['clang','-shared','-fPIC','-Wall','-Wextra','-Werror',
+                            '-I',str(ROOT/'src/kernel/include'),str(source),'-o',str(library)],check=True)
+            pending=ctypes.CDLL(str(library)).pending
+            pending.argtypes=[ctypes.c_uint]*3;pending.restype=ctypes.c_int
+            for controller in ('uhci','ohci'):
+                declaration=next(c for c in runner.load(ROOT/'tests/suites/f1-usb.json')['cases']
+                                 if c['id']=='usb-input-'+controller)
+                schedule=runner.Actions.usb_batches(declaration['actions'][0]['batches'])
+                buttons=keys=0;early=None
+                for index,batch in enumerate(schedule,1):
+                    buttons+=sum(e['type']=='btn' for e in batch['events'])
+                    keys+=sum(e['type']=='key' for e in batch['events'])
+                    if keys==4 and early is None:
+                        early=index
+                        self.assertEqual(buttons,10)
+                    if index<len(schedule):self.assertTrue(pending(6,keys,buttons))
+                self.assertEqual(buttons,12);self.assertFalse(pending(6,keys,buttons))
+                for terminal_at,expected in ((early,'fail'),(len(schedule),'pass')):
+                    fixture=RunnerTests();fixture.setUp()
+                    try:
+                        fixture.case.update(probe='crash-isolation',
+                            selector='f2:crash-isolation run={run_id} server=desktop',
+                            usb=declaration['usb'],actions=declaration['actions'],timeout=declaration['timeout'])
+                        fixture.case['expected']['predicates'][0]['where']['tick']='10000'
+                        records=[dict(event='BEGIN'),dict(event='DATA',case='gate',motion='0',buttons='0'),
+                                 dict(event='ARM',action='post_fault_input')]
+                        result,_=fixture.run_fake(records=records,consume_input=True,input_ack_delay=.01,
+                            finish_after_input=terminal_at,
+                            after_input=[dict(event='DATA',tick='10000'),dict(event='END',status='PASS')])
+                        self.assertEqual(result['outcome'],expected,result['reason'])
+                        if expected=='fail':self.assertIn('terminal evidence before declared stimuli completed',result['reason'])
+                        else:self.assertEqual(result['input_pacing']['batches'],len(schedule))
+                    finally:fixture.tearDown()
 
     def test_usb_profile_splits_signed_axes_and_preserves_totals_across_repeats(self):
         from test_runner import RunnerTests
