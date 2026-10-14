@@ -43,6 +43,11 @@ static void *gate_mmap(void *,size_t,int,int,int,off_t);
 #define mmap gate_mmap
 #define main desktop_main
 #include "../../../apps/desktop/desktop.c"
+/* f4-18: desktop.c saves the master volume preference through libreg (sound_storage.c);
+ * the gate exercises the display contract, so the harness supplies the persistence hook. */
+int master_preference_save(const char *directory, unsigned left, unsigned right, unsigned mute)
+{ (void)directory; (void)left; (void)right; (void)mute; return 0; }
+
 #undef main
 #undef mmap
 /* f2-33: only the Task Manager scenario lists processes; not exercised here. */
