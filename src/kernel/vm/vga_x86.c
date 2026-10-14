@@ -45,6 +45,8 @@ static int fetch8(dec *d, uint32_t *value)
     uint32_t offset = d->cpu->code32 ? d->ip : (d->ip & 0xffffUL);
     if ((d->cpu->eflags & 0x20000u) && d->ip > 0xffffu) { d->fault = CVX_BUS_FAULT; return 0; }
     if (d->len >= 15) { d->fault = CVX_TOO_LONG; return 0; }
+    if (d->bus->validate && d->bus->validate(d->bus->context,
+        d->cpu->sreg[CVX_CS], offset, 1, 0)) { d->fault = CVX_BUS_FAULT; return 0; }
     if (d->bus->fetch(d->bus->context, d->cpu->seg_base[CVX_CS] + offset, &b)) {
         d->fault = CVX_BUS_FAULT;
         return 0;
@@ -103,6 +105,8 @@ static uint32_t linear(const dec *d, unsigned seg, uint32_t offset)
 
 static int mem_read(dec *d, unsigned seg, uint32_t offset, unsigned size, uint32_t *value)
 {
+    if (d->bus->validate && d->bus->validate(d->bus->context, d->cpu->sreg[seg],
+        d->asize == 2 ? offset & 0xffffu : offset, size, 0)) { d->fault = CVX_BUS_FAULT; return 0; }
     if ((d->cpu->eflags & 0x20000u) &&
         ((d->asize == 2 ? offset & 0xffffu : offset) > 0x10000u - size)) {
         d->fault = CVX_BUS_FAULT; return 0;
@@ -123,6 +127,8 @@ static int mem_read(dec *d, unsigned seg, uint32_t offset, unsigned size, uint32
 
 static int mem_write(dec *d, unsigned seg, uint32_t offset, unsigned size, uint32_t value)
 {
+    if (d->bus->validate && d->bus->validate(d->bus->context, d->cpu->sreg[seg],
+        d->asize == 2 ? offset & 0xffffu : offset, size, 1)) { d->fault = CVX_BUS_FAULT; return 0; }
     if ((d->cpu->eflags & 0x20000u) &&
         ((d->asize == 2 ? offset & 0xffffu : offset) > 0x10000u - size)) {
         d->fault = CVX_BUS_FAULT; return 0;
@@ -452,6 +458,29 @@ static int string_op(dec *d, unsigned opcode, uint32_t budget)
         count = index_reg(d, CVX_ECX);
         if (!count) return CVX_DONE;
     }
+    if (d->bus->string && d->rep && (kind == 0xa4 || kind == 0xaa) && count <= 65536u / size) {
+        uint32_t src = index_reg(d, CVX_ESI), dst = index_reg(d, CVX_EDI), bytes = count * size;
+        unsigned back = !!(c->eflags & F_DF);
+        uint32_t tail = (count - 1) * size;
+        uint32_t low_dst = back ? dst - tail : dst, low_src = back ? src - tail : src;
+        uint32_t limit = d->asize == 2 || (c->eflags & 0x20000u) ? 0xffffu : 0xffffffffu;
+        if ((!back || (dst >= tail && (kind != 0xa4 || src >= tail))) &&
+            low_dst <= limit - (bytes - 1) && (kind != 0xa4 || low_src <= limit - (bytes - 1)) &&
+            (!d->bus->validate ||
+             (!d->bus->validate(d->bus->context, c->sreg[CVX_ES], low_dst, bytes, 1) &&
+              (kind != 0xa4 || !d->bus->validate(d->bus->context, c->sreg[source], low_src, bytes, 0))))) {
+            int done = d->bus->string(d->bus->context, kind == 0xa4 ? linear(d, source, src) : 0,
+                                      linear(d, CVX_ES, dst), size, count, back, kind == 0xa4, c->gpr[CVX_EAX]);
+            if (done) {
+                advance_index(d, CVX_EDI, bytes);
+                if (kind == 0xa4) advance_index(d, CVX_ESI, bytes);
+                if (d->asize == 2) c->gpr[CVX_ECX] &= 0xffff0000UL;
+                else c->gpr[CVX_ECX] = 0;
+                d->res->elements = count;
+                return CVX_DONE;
+            }
+        }
+    }
     for (;;) {
         if (kind == 0xa4) {
             if (!mem_read(d, source, index_reg(d, CVX_ESI), size, &a) ||
@@ -603,7 +632,45 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     }
     /* Decode and execute. Every UNSUPPORTED exit precedes the first memory
      * or register side effect, so the caller may reflect a fault safely. */
-    if (op < 0x40 && (op & 7) < 4) {                            /* ALU forms */
+    if (op >= 0x70 && op <= 0x7f) { /* Short Jcc; no memory side effects. */
+        if (!fetch(&d, 1, &imm)) return d.fault;
+        if (condition(cpu, (unsigned)(op & 15))) d.ip += sext(imm, 1);
+        status = CVX_DONE;
+    } else if (op >= 0xe0 && op <= 0xe3) { /* LOOPcc / JCXZ use address size. */
+        if (!fetch(&d, 1, &imm)) return d.fault;
+        a = index_reg(&d, CVX_ECX);
+        if (op != 0xe3) { a = (a - 1) & size_mask(d.asize); set_reg(cpu, CVX_ECX, d.asize, a); }
+        if (op == 0xe3 ? !a : a && (op == 0xe2 || (!!(cpu->eflags & F_ZF) == (op == 0xe1))))
+            d.ip += sext(imm, 1);
+        status = CVX_DONE;
+    } else if (op == 0xeb) {
+        if (!fetch(&d, 1, &imm)) return d.fault;
+        d.ip += sext(imm, 1); status = CVX_DONE;
+    } else if ((op >= 0xe4 && op <= 0xe7) || (op >= 0xec && op <= 0xef)) {
+        if (!bus->port || d.rep) return CVX_UNSUPPORTED;
+        a = cpu->gpr[CVX_EDX] & 0xffffu;
+        if (op < 0xec && !fetch(&d, 1, &a)) return d.fault;
+        size = (op & 1) ? d.osize : 1;
+        value = get_reg(cpu, CVX_EAX, size);
+        if (bus->port(bus->context, (uint16_t)a, size, !!(op & 2), &value)) return CVX_UNSUPPORTED;
+        if (!(op & 2)) set_reg(cpu, CVX_EAX, size, value);
+        status = CVX_DONE;
+    } else if (op >= 0xb0 && op <= 0xbf) {
+        size = op < 0xb8 ? 1 : d.osize;
+        if (!fetch(&d, size, &imm)) return d.fault;
+        set_reg(cpu, (unsigned)(op & 7), size, imm); status = CVX_DONE;
+    } else if (op >= 0x40 && op <= 0x4f) {
+        a = get_reg(cpu, (unsigned)(op & 7), d.osize); b = cpu->eflags & F_CF;
+        value = alu(cpu, op & 8 ? 5 : 0, a, 1, d.osize);
+        cpu->eflags = (cpu->eflags & ~F_CF) | b;
+        set_reg(cpu, (unsigned)(op & 7), d.osize, value); status = CVX_DONE;
+    } else if (op < 0x40 && ((op & 7) == 4 || (op & 7) == 5)) {
+        size = op & 1 ? d.osize : 1;
+        if (!fetch(&d, size, &imm)) return d.fault;
+        value = alu(cpu, (unsigned)(op >> 3), get_reg(cpu, CVX_EAX, size), imm, size);
+        if ((op >> 3) != 7) set_reg(cpu, CVX_EAX, size, value);
+        status = CVX_DONE;
+    } else if (op < 0x40 && (op & 7) < 4) {                            /* ALU forms */
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
         if (!rm_read(&d, size, &a)) goto fault;
@@ -748,6 +815,11 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     if (status == CVX_DIVIDE_ERROR || status == CVX_UNSUPPORTED) {
         *cpu = saved;
         return status;
+    }
+    if (status == CVX_DONE && ((op >= 0x70 && op <= 0x7f) ||
+        (op >= 0xe0 && op <= 0xe3) || op == 0xeb) && bus->validate &&
+        bus->validate(bus->context, cpu->sreg[CVX_CS], cpu->code32 ? d.ip : d.ip & 0xffffu, 1, 0)) {
+        *cpu = saved; return CVX_BUS_FAULT;
     }
     result->length = d.len;
     if (!result->elements) result->elements = 1;

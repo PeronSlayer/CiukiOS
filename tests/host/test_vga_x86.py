@@ -90,6 +90,19 @@ class VgaX86ShimTests(unittest.TestCase):
         self.assertEqual((status, cpu.eip, cpu.gpr[ECX], cpu.gpr[EDI]), (PARTIAL, 0, 6, 0x204))
         self.assertEqual(bytes(mem[0x200:0x205]), b'\x11' * 4 + b'\x00')
 
+    def test_register_setup_and_short_control_flow(self):
+        status, cpu, _, cycles = self.run_code(bytes([0xB9, 4, 0]), {ECX: 0xABCD0000})
+        self.assertEqual((status, cpu.eip, cpu.gpr[ECX], cycles), (DONE, 3, 0xABCD0004, []))
+        status, cpu, _, _ = self.run_code(bytes([0xE2, 0xFE]), {ECX: 0xCAFE0002})
+        self.assertEqual((status, cpu.eip, cpu.gpr[ECX]), (DONE, 0, 0xCAFE0001))
+        status, cpu, _, _ = self.run_code(bytes([0xE3, 0xFE]), {ECX: 0xCAFE0000})
+        self.assertEqual((status, cpu.eip, cpu.gpr[ECX]), (DONE, 0, 0xCAFE0000))
+        status, cpu, _, _ = self.run_code(bytes([0x74, 0xFE]), eflags=2 | ZF)
+        self.assertEqual((status, cpu.eip), (DONE, 0))
+        status, cpu, _, _ = self.run_code(bytes([0x48]), {EAX: 0}, eflags=2 | CF)
+        self.assertEqual((status, cpu.gpr[EAX]), (DONE, 0xFFFF))
+        self.assertTrue(cpu.eflags & CF)
+
     def test_unsupported_divide_and_v86_limits(self):
         # BT m16, r16 is outside the supported memory forms: nothing changes.
         status, cpu, mem, cycles = self.run_code(bytes([0x0F, 0xA3, 0x07]), {EBX: 0x100, EAX: 3})

@@ -73,6 +73,12 @@ typedef struct cvga_geometry {
 /* Bulk harvest of a writable chained aperture span. Physical plane offsets
  * and holes match byte stores; caller bounds the span to the 64 KiB window. */
 void cvga_store_chain4_span(cvga_state *, unsigned at, const uint8_t *, unsigned bytes);
+/* Checked by the monitor: unchained A000 64 KiB, identity mode 0 or
+ * mode-1 MOVSB from VRAM. RAM source points at the first element (also DF).
+ * Zero declines with no effects. Marks only the destination granules. */
+int cvga_planar_run(cvga_state *, unsigned dest, const uint8_t *ram_source,
+                    unsigned vga_source, unsigned size, unsigned count,
+                    int backwards, int move, uint32_t value);
 
 /* Standard IBM VGA BIOS parameter-table values for one mode. seq holds SR1-SR4
  * (SR0 is always 03h after a mode set); attr holds AR00-AR13 (AR14 = 0). The
@@ -152,6 +158,11 @@ unsigned CVGA_CALL cvga_render_row8(const cvga_state *v, unsigned y, uint8_t *de
  * Returns 1 (conservatively) for unsupported/unrenderable geometry. */
 int CVGA_CALL cvga_row_reads_dirty(const cvga_state *v, unsigned y,
                                    const uint8_t dirty[4][CVGA_DIRTY_BYTES]);
+/* Byte-addressed, unchained indexed scanout only. Uses the generic row
+ * setup for split/preset/pan; caller caches the resulting row addresses. */
+int cvga_modex_row(const cvga_state *, unsigned y, unsigned *base, unsigned *pan);
+int cvga_modex_dirty(unsigned base, unsigned pan, unsigned width,
+                     const uint8_t dirty[4][CVGA_DIRTY_BYTES]);
 
 /* 1 when text row y (geometry row) shows a blinking character with blink
  * enabled, or a scanline of the visible text cursor: the only pixels that

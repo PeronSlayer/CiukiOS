@@ -35,6 +35,11 @@ static void perf_exit_end(struct dosvm *v)
     if (g_boot.flags & CBI_F_VERBOSE) {
         v->perf.cost_count[v->perf.cause]++;
         v->perf.cost_cycles[v->perf.cause] += v->perf.trap_cycles;
+        if (v->perf.cause == DOSVM_COST_VGA_IO) {
+            unsigned r = v->perf.vga_reg;
+            v->perf.port_exits[r]++;
+            v->perf.port_exit_cycles[r] += v->perf.trap_cycles;
+        }
     }
     v->perf.trap_active = false;
 }
@@ -69,6 +74,22 @@ void dosvm_perf_report(struct dosvm *v)
         .present_us = perf_us(DELTA(present_cycles, last_present)),
         .harvest_us = perf_us(DELTA(harvest_cycles, last_harvest)), .edges = edges - v->perf.last_edges
     };
+    s->port_remaps = DELTA(port_remaps, last_port_remaps);
+    s->remap_us = perf_us(DELTA(remap_cycles, last_remap));
+    s->burst_insn = DELTA(burst_insn, last_burst_insn);
+    s->latch_read_windows = DELTA(latch_read_windows, last_latch_read_windows);
+    for (unsigned i = 0; i < DOSVM_VGA_REGS; i++) {
+        s->port_count[i] = v->perf.port_count[i] - v->perf.last_port_count[i];
+        s->port_exits[i] = v->perf.port_exits[i] - v->perf.last_port_exits[i];
+        s->port_us[i] = perf_us(v->perf.port_cycles[i] - v->perf.last_port_cycles[i]);
+        s->port_exit_us[i] = perf_us(v->perf.port_exit_cycles[i] - v->perf.last_port_exit_cycles[i]);
+        v->perf.last_port_count[i] = v->perf.port_count[i];
+        v->perf.last_port_exits[i] = v->perf.port_exits[i];
+        v->perf.last_port_cycles[i] = v->perf.port_cycles[i];
+        v->perf.last_port_exit_cycles[i] = v->perf.port_exit_cycles[i];
+    }
+    v->perf.last_port_remaps = v->perf.port_remaps; v->perf.last_remap = v->perf.remap_cycles;
+    v->perf.last_burst_insn = v->perf.burst_insn; v->perf.last_latch_read_windows = v->perf.latch_read_windows;
     s->batched = DELTA(batched, last_batched);
     s->idle_blocks = v->idle.blocks - v->perf.last_idle_blocks;
     v->perf.last_idle_blocks = v->idle.blocks;
@@ -149,9 +170,20 @@ void dosvm_perf_dump(struct dosvm *v)
             id, n+1, s->pages, s->harvest_us);
         rec_diag(dosvm_probe(v), "group=vm_perf_present vm=%u n=%u converted=%u rows=%u present_us=%llu",
             id, n+1, s->converted, s->rows, s->present_us);
+        rec_diag(dosvm_probe(v), "group=vm_perf_remap vm=%u n=%u port_remaps=%u remap_us=%llu burst_insn=%u latch_read_windows=%u",
+            id, n+1, s->port_remaps, s->remap_us, s->burst_insn, s->latch_read_windows);
+        static const char *const regs[DOSVM_VGA_REGS] = {
+            "sr_index", "sr02", "sr_other", "gc_index", "gc04", "gc05", "gc_other", "crtc", "dac", "other"
+        };
+        for (unsigned i = 0; i < DOSVM_VGA_REGS; i++) if (s->port_count[i] || s->port_exits[i])
+            rec_diag(dosvm_probe(v), "group=vm_perf_vga_port vm=%u n=%u reg=%s writes=%u handler_us=%llu exits=%u exit_us=%llu",
+                id, n+1, regs[i], s->port_count[i], s->port_us[i], s->port_exits[i], s->port_exit_us[i]);
         rec_diag(dosvm_probe(v), "group=vm_perf_cpu vm=%u n=%u guest_us=%llu monitor_us=%llu log_us=%llu trapped=%u",
             id, n+1, s->guest_us, s->monitor_us, s->log_us, s->trapped);
         uint64_t wall_us = (uint64_t)s->ms * 1000u;
+        uint64_t cpu_us = s->guest_us + s->monitor_us;
+        rec_diag(dosvm_probe(v), "group=vm_perf_wall vm=%u n=%u monitor_permille=%llu off_cpu_us=%llu",
+            id, n+1, wall_us ? s->monitor_us * 1000u / wall_us : 0, wall_us > cpu_us ? wall_us - cpu_us : 0);
         rec_diag(dosvm_probe(v), "group=vm_perf_share vm=%u n=%u wall_us=%llu vm_permille=%llu guest_permille=%llu idle_blocks=%u idle_reasons=%x busy_permille=%u",
             id, n+1, wall_us, wall_us ? (s->guest_us + s->monitor_us) * 1000u / wall_us : 0,
             wall_us ? s->guest_us * 1000u / wall_us : 0, s->idle_blocks, s->idle_reasons, s->busy_permille);

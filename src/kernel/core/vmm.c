@@ -271,6 +271,34 @@ int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
     return 0;
 }
 
+int as_replace_pages(struct aspace *as, uint32_t va, const uint32_t *frames,
+                     unsigned count, uint32_t flags, uint32_t *dirty, uint32_t *accessed)
+{
+    if (!as->pd_phys || !count || count > 32 || (va & (PAGE_SIZE - 1)) ||
+        va >= KERNEL_VBASE || count > 1024u - ((va >> 12) & 1023u)) return -EINVAL;
+    uint32_t pde = table_va(as->pd_phys)[va >> 22];
+    if (!(pde & PTE_P)) return -EFAULT;
+    volatile uint32_t *pt = &table_va(pde & ~0xFFFu)[(va >> 12) & 1023];
+    /* Validate the whole span before changing any entry. */
+    for (unsigned i = 0; i < count; i++)
+        if (!(pt[i] & PTE_P) || (frames && (frames[i] & (PAGE_SIZE - 1)))) return -EFAULT;
+    uint32_t d = 0, a = 0;
+    bool changed = false;
+    for (unsigned i = 0; i < count; i++) {
+        uint32_t old = pt[i];
+        if (old & 0x40u) d |= 1u << i;
+        if (old & 0x20u) a |= 1u << i;
+        uint32_t next = frames ? frames[i] | (flags & (PTE_U | PTE_W)) | PTE_P : old & ~0x40u;
+        if (old != next) { pt[i] = next; changed = true; }
+    }
+    /* No global user PTEs. CR3 reload also invalidates cleared D bits, so
+     * subsequent native stores are visible to the next collection. */
+    if (changed && read_cr3() == as->pd_phys) write_cr3(as->pd_phys);
+    if (dirty) *dirty = d;
+    if (accessed) *accessed = a;
+    return 0;
+}
+
 uint32_t as_lookup(const struct aspace *as, uint32_t va, uint32_t *pte_out)
 {
     if (va >= KERNEL_VBASE)

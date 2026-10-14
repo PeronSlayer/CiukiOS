@@ -55,7 +55,7 @@ static void test_workload_pm_vga(void)
         0xC6, 0x05, 0x00, 0x00, 0x0A, 0x00, 0x5A,   /* 0: mov byte [0A0000h], 5Ah */
     };
     static const uint8_t stos32[] = {0xF3, 0xAB};   /* rep stosd */
-    static const uint8_t code16[] = {0xC6, 0x06, 0x10, 0x00, 0x77};   /* mov byte [0010h], 77h */
+    static const uint8_t code16[] = {0xC6, 0x06, 0x10, 0x00, 0x77, 0x90};   /* mov byte [0010h], 77h */
     static const uint8_t load32[] = {0x8A, 0x05, 0x00, 0x00, 0x0A, 0x00}; /* mov al, [0A0000h] */
     CHECK(!dosvm_write(v, 0x30000, code32, sizeof(code32)) && !dosvm_write(v, 0x30010, stos32, sizeof(stos32)) &&
           !dosvm_write(v, 0x30020, code16, sizeof(code16)) && !dosvm_write(v, 0x30030, load32, sizeof(load32)));
@@ -119,8 +119,10 @@ static void test_workload_direct_window(void)
     /* Another plane: only the PTEs move; the old plane's stored pages are marked. */
     *window_pte(v, 0xA5000) |= DOSVM_PTE_DIRTY;
     vga_out(v, 0x3C5, 0x04);
-    CHECK(v->video_direct == 3 && v->video_maps == 2 && v->video_flushes == 2 &&
-          (*window_pte(v, 0xA5000) & ~0xFFFu) == (plane_frame(v, 2, 5) & ~0xFFFu) && v->vga.dirty[1][0x5000 >> 6] == 0xFF);
+    CHECK(v->video_direct == 3 && v->video_maps == 2 && v->video_flushes == 1 &&
+          (*window_pte(v, 0xA5000) & ~0xFFFu) == (plane_frame(v, 2, 5) & ~0xFFFu) && v->video_pending[1] == (1u << 5));
+    dosvm_vga_sync(v, false);
+    CHECK(v->video_flushes == 2 && v->vga.dirty[1][0x5000 >> 6] == 0xFF);
     /* Two planes, a latch copy (write mode 1) or a bit mask: the window closes. */
     vga_out(v, 0x3C5, 0x03);
     CHECK(!v->video_direct && !(*window_pte(v, 0xA0000) & PTE_U) && (*window_pte(v, 0xA0000) & ~0xFFFu) == v->frames[0xA0]);

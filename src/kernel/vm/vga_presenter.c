@@ -39,6 +39,23 @@ void cvp_init(cvp_state *s)
     zero(s, sizeof(*s));
 }
 
+void cvp_modex_row32(const cvga_state *v, unsigned base, unsigned pan,
+                     unsigned width, unsigned scale, const uint32_t lut[256], uint32_t *dest)
+{
+    unsigned x = 0;
+    while (x < width) {
+        unsigned dot = x + pan, at = (base + dot / 4) & 0xffffu;
+        unsigned plane = dot & 3, count = 4 - plane;
+        if (count > width - x) count = width - x;
+        for (unsigned p = plane; p < plane + count; p++) {
+            uint32_t c = lut[v->plane[p][at] & v->dac_mask];
+            if (scale == 2) { *dest++ = c; *dest++ = c; }
+            else for (unsigned n = 0; n < scale; n++) *dest++ = c;
+        }
+        x += count;
+    }
+}
+
 static void set_pending(cvp_state *s, unsigned row)
 {
     s->pending[row >> 3] |= (uint8_t)(1u << (row & 7));

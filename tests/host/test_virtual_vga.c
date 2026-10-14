@@ -480,7 +480,7 @@ static int ram_write(void *c, uint32_t a, uint8_t value)
     ram[a] = value;
     return 0;
 }
-static const cvx_bus ram_bus = {ram_read, ram_write, ram_read, 0, 0};
+static const cvx_bus ram_bus = {.read=ram_read, .write=ram_write, .fetch=ram_read};
 
 static cvbios bios;
 static cvbios_regs regs;

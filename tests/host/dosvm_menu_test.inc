@@ -52,7 +52,7 @@ static void test_menu_heartbeat(void)
     exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
     /* No duplicate at the same tick and no catch-up burst after a delay. */
     before = records; dosvm_heartbeat(v, &cur); CHECK(records == before);
-    g_ticks += 10000; dosvm_heartbeat(v, &cur); CHECK(records == before + 6);
+    g_ticks += 10000; dosvm_heartbeat(v, &cur); CHECK(records == before + 8);
     before = records; dosvm_heartbeat(v, &cur); CHECK(records == before);
     v->monitor.vif = false; v->dpmi.if_armed = true;
     v->dpmi.shadow = true; v->monitor.pic[1].irr = 0x80;
@@ -68,7 +68,7 @@ static void test_menu_heartbeat(void)
     g_ticks = UINT64_MAX - DOSVM_HEARTBEAT_TICKS;
     cur.tf.eip = UINT32_MAX;
     dosvm_heartbeat(v, &cur);
-    CHECK(records == before + 6 && strstr(recent_records[before % 8], "vif=0 arm=1 sh=1"));
+    CHECK(records == before + 8 && strstr(recent_records[before % 8], "vif=0 arm=1 sh=1"));
     CHECK(strstr(recent_records[(before + 1) % 8], "irq1=4294967295") &&
           strstr(recent_records[(before + 3) % 8], "units=4294967295"));
     CHECK(strstr(recent_records[(before + 4) % 8], "linear=4294967295 planes=4294967295"));
@@ -78,7 +78,7 @@ static void test_menu_heartbeat(void)
     v->kbd.count = 0;
     for (unsigned i = v->trace.heartbeats; i < DOSVM_HEARTBEAT_LIMIT; i++) {
         before = records; g_ticks += DOSVM_HEARTBEAT_TICKS;
-        dosvm_heartbeat(v, &cur); CHECK(records == before + 6);
+        dosvm_heartbeat(v, &cur); CHECK(records == before + 8);
     }
     before = records; g_ticks += DOSVM_HEARTBEAT_TICKS;
     dosvm_heartbeat(v, &cur); CHECK(records == before && v->trace.heartbeats == DOSVM_HEARTBEAT_LIMIT);
@@ -94,18 +94,18 @@ static void test_menu_vga_dirty_repeat(void)
     for (unsigned active = 0; active < 2; active++) {
         write_cr3(active ? v->as.pd_phys : kpd_phys);
         for (unsigned frame = 0; frame < 3; frame++) {
-            unsigned before = invalidations, harvests = v->video_linear_harvests;
+            unsigned before = cr3_reloads, harvests = v->video_linear_harvests;
             uint8_t value = (uint8_t)(active * 3 + frame + 1);
             linear_store(v, 0x1011, value);
             dosvm_vga_sync(v, false);
             CHECK(v->vga.plane[1][0x1010] == value && v->video_linear_harvests == harvests + 1);
             CHECK(!(*window_pte(v, 0xA1000) & DOSVM_PTE_DIRTY));
-            CHECK(invalidations == before + active && (!active || invalidated_va == 0xA1000));
+            CHECK(cr3_reloads == before + active);
             dosvm_vga_sync(v, false); CHECK(v->video_linear_harvests == harvests + 1);
         }
     }
     write_cr3(kpd_phys); destroy(v, true); empty();
-    puts("f3-10 VGA: repeated stores harvested, active CR3 INVLPG on each D-bit clear, inactive mapping ready for CR3 reload PASS");
+    puts("f3-10 VGA: repeated stores harvested, one active CR3 reload on each dirty collection, inactive mapping ready for CR3 reload PASS");
 }
 static void test_menu_pm_devices(void)
 {
@@ -161,7 +161,7 @@ static void test_menu_halted_heartbeat(void)
     g_boot.flags = CBI_F_VERBOSE;
     unsigned before = records;
     device_hook_arm(v, 2100, device_hang_stop); step(v, 0x20, 0);
-    CHECK(left && !sleep_hook && v->trace.heartbeats == 1 && records == before + 6);
+    CHECK(left && !sleep_hook && v->trace.heartbeats == 1 && records == before + 8);
     CHECK(strstr(recent_records[before % 8], "eip=00000300") &&
           strstr(recent_records[before % 8], "vif=0"));
     g_boot.flags = 0; destroy(v, true); empty();
