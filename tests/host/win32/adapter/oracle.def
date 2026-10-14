@@ -1,0 +1,19 @@
+; SPDX-License-Identifier: LGPL-2.1-or-later
+LIBRARY ntdll.dll
+EXPORTS
+ RtlCreateHeap@24
+ RtlDestroyHeap@4
+ RtlAllocateHeap@12
+ RtlReAllocateHeap@16
+ RtlFreeHeap@12
+ RtlSizeHeap@12
+ RtlInitAnsiString@8
+ RtlAnsiStringToUnicodeString@12
+ RtlFreeUnicodeString@4
+ RtlValidateHeap@12
+ RtlInitUnicodeString@8
+ RtlAppendUnicodeStringToString@8
+ RtlCompareUnicodeString@12
+ RtlUpcaseUnicodeString@12
+ RtlGetFullPathName_U@16
+ RtlDosPathNameToNtPathName_U@16

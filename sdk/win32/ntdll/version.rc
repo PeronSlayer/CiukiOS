@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright 2026 CiukiOS contributors. Project version, not a Windows impersonation.
+LANGUAGE 9, 1
+1 VERSIONINFO
+FILEVERSION 0,0,0,0
+PRODUCTVERSION 0,0,0,0
+FILEFLAGSMASK 0x3f
+FILEFLAGS 0
+FILEOS 0x40004
+FILETYPE 2
+FILESUBTYPE 0
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "040904E4"
+  BEGIN
+   VALUE "FileDescription", "CiukiOS ntdll core\0"
+   VALUE "FileVersion", "0.0.0.0\0"
+   VALUE "ProductName", "CiukiOS\0"
+   VALUE "ProductVersion", "0.0.0.0\0"
+   VALUE "LegalCopyright", "Copyright 2026 CiukiOS contributors; LGPL-2.1-or-later\0"
+  END
+ END
+ BLOCK "VarFileInfo"
+ BEGIN
+  VALUE "Translation", 0x409, 1252
+ END
+END

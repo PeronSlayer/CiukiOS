@@ -1,0 +1,10 @@
+; SPDX-License-Identifier: LGPL-2.1-or-later
+; H1 test shim only; not the f5-06 kernel32.
+LIBRARY kernel32.dll
+EXPORTS
+    FreeLibrary
+    GetModuleFileNameA
+    GetModuleHandleA
+    GetProcAddress
+    LoadLibraryA
+    LoadLibraryExA
