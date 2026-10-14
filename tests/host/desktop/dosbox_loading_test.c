@@ -134,9 +134,19 @@ void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32
 }
 const char *du_icon_name(const char *name) { assert(!strcmp(name, "program:dosbox")); return "utilities-terminal"; }
 const struct du_icon *du_icon(const char *name, unsigned size)
-{ assert(name && size == 32); return NULL; }
+{ assert(name && (size == 32 || size == 16)); return NULL; }
 void du_icon_draw(struct du_canvas *c, int x, int y, const struct du_icon *icon, enum du_icon_mode mode)
 { (void)c; (void)x; (void)y; (void)icon; (void)mode; }
+void desk_paint_frame(struct desk_paint *p,int x,int y,int w,int h,const struct desk_frame_style *s)
+{ (void)p; (void)x; (void)y; (void)w; (void)h; (void)s; }
+struct du_rect du_intersection(struct du_rect a,struct du_rect b) { (void)b; return a; }
+void du_text_font(struct du_canvas *c,int font,int x,int y,const char *s,uint32_t ink)
+{ (void)font; du_text_fit(c,x,y,350,s,ink); }
+int du_text_wrap(struct du_canvas *c,struct du_rect b,const char *s,uint32_t ink)
+{ du_text_fit(c,b.x,b.y,b.w,s,ink); return 1; }
+void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,uint64_t phase)
+{ (void)c; (void)b; (void)value; (void)total; (void)phase; }
+void du_well(struct du_canvas *c,struct du_rect b,uint32_t ink) { du_fill(c,b,ink); }
 int main(int argc, char **argv)
 {
     assert(argc == 2); scenario = atoi(argv[1]);

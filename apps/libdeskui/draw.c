@@ -2,6 +2,7 @@
  * Clipped integer drawing primitives. Text, bevels and faces follow the
  * current theme (apps/desktop/theme.c). */
 #include "deskui.h"
+#include "../desktop/sounds.h"
 #include <stdio.h>
 #include <string.h>
 #ifndef DESK_PROFILE
@@ -10,6 +11,84 @@
 
 /* Integer row painter in compositor.c, also linked into libdeskui. */
 extern void desk_shadow_rows(struct desk_paint *, int, int, int, int, int, uint32_t);
+
+int du_text_wrap(struct du_canvas *c, struct du_rect box, const char *text, uint32_t ink)
+{
+    int lines = 0, pitch = desk_font_line(desk_theme->font_ui) + 1;
+    const char *s = text ? text : "";
+    struct du_rect old = c ? c->clip : box;
+    if (c) c->clip = du_intersection(old, box);
+    do {
+        char line[512]; size_t n = 0, word = 0, used = 0;
+        const char *start = s;
+        while (*s && *s != '\n' && n + 5 < sizeof(line)) {
+            desk_utf8_decode(s, &used); if (!used) used = 1;
+            memcpy(line + n, s, used); line[n + used] = 0;
+            if (du_text_width(line) > box.w && n) break;
+            if (*s == ' ' || *s == '\t') word = n;
+            n += used; s += used;
+        }
+        if (*s && *s != '\n' && word) { n = word; s = start + word; }
+        line[n] = 0;
+        if (c) {
+            int y=box.y+lines*pitch;
+            if (!strncmp(line,"---",3)) {
+                du_hline(c,box.x,y+3,box.w,DU_SHADOW);
+                du_hline(c,box.x,y+4,box.w,DU_HILITE);
+            } else {
+                char *tab=strchr(line,'\t');
+                if (tab) {
+                    *tab=0; du_text(c,box.x,y,line,ink);
+                    int col=du_text_width(line)+8; if (col<84) col=84;
+                    du_text_fit(c,box.x+col,y,box.w-col,tab+1,ink);
+                } else du_text(c,box.x,y,line,ink);
+            }
+        }
+        lines++;
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '\n') { s++; if (!*s) { lines++; break; } }
+    } while (*s);
+    if (c) c->clip = old;
+    return lines;
+}
+
+void du_message_size(const char *text, int icon, unsigned buttons, int max_width, int *w, int *h)
+{
+    int room = max_width < 480 ? max_width : 480;
+    int iw = icon ? 46 : 0, widest = 0;
+    const char *s = text;
+    do {
+        char line[512]; const char *end = strchr(s, '\n');
+        size_t n = end ? (size_t)(end-s) : strlen(s);
+        if (n >= sizeof(line)) n = sizeof(line)-1;
+        memcpy(line,s,n); line[n]=0;
+        int width = du_text_width(line); if (width>widest) widest=width;
+        if (!end) break;
+        s=end+1;
+    } while (*s);
+    *w = widest + iw + 32;
+    int row = (int)buttons * 81 - 6 + 32;
+    if (*w < row) *w = row;
+    if (*w < 300) *w = 300;
+    if (*w > room) *w = room;
+    int content = du_text_wrap(NULL,(struct du_rect){0,0,*w-iw-32,0},text,0) *
+                  (desk_font_line(desk_theme->font_ui)+1);
+    if (icon && content < 32) content=32;
+    *h = 16 + content + 18 + 23 + 12;
+}
+
+const char *du_message_icon_name(int icon)
+{
+    /* Tango 0.8.90's question symbol is help-browser (the existing
+     * dialog:question mapping); there is no dialog-question asset. */
+    static const char *const names[] = {NULL,"dialog-information","dialog-warning","dialog-error","help-browser"};
+    return icon>0 && icon<5 ? names[icon] : NULL;
+}
+unsigned du_message_sound(int icon)
+{
+    return icon == DU_DLG_ICON_ERROR || icon == DU_DLG_ICON_WARNING ? SOUND_ERROR :
+           icon == DU_DLG_ICON_QUESTION ? SOUND_QUESTION : SOUND_INFORMATION;
+}
 
 int du_contains(struct du_rect r, int x, int y)
 {
@@ -339,4 +418,34 @@ void du_format_key(char *out, size_t size, unsigned key, unsigned modifiers)
     snprintf(out, size, "%s%s%s%s", modifiers & DU_CTRL ? "Ctrl+" : "", modifiers & DU_ALT ? "Alt+" : "",
              modifiers & DU_SHIFT ? "Shift+" : "", name);
     if (!name[0]) out[0] = 0;
+}
+
+void du_progress_paint(struct du_canvas *c, struct du_rect b, int value, int total, uint64_t phase)
+{
+    int inner = b.w - 4, filled = total > 0 ? (int)((int64_t)inner * (value > total ? total : value) / total) : 0;
+    if (total<=0) {
+        du_well(c,b,DU_FACE);
+        int room=b.w-8, pulse=room<48 ? room : 48;
+        if (pulse<=0) return;
+        int offset=(int)((phase/80u)%(unsigned)(room-pulse+1));
+        du_fill(c,(struct du_rect){b.x+4+offset,b.y+4,pulse,b.h-8},DU_ACCENT);
+        return;
+    }
+    if (desk_theme->control_style == DESK_CONTROLS_PLATINUM) {
+        /* Platinum: rounded groove, accent bar with a light top half. */
+        du_well(c, b, desk_mix(DU_SHADOW, DU_FACE, 70));
+        struct desk_paint p = {c->pixels, c->width, c->height, c->clip.x, c->clip.y, c->clip.w, c->clip.h};
+        if (filled > 0) {
+            int h = b.h - 4;
+            desk_paint_vgradient(&p, b.x + 2, b.y + 2, filled, h / 2, desk_mix(0xffffffu, DU_ACCENT, 120), desk_mix(0xffffffu, DU_ACCENT, 40));
+            desk_paint_vgradient(&p, b.x + 2, b.y + 2 + h / 2, filled, h - h / 2, DU_ACCENT, desk_mix(0x000000u, DU_ACCENT, 50));
+            for (int x = 10; x < filled; x += 12) du_vline(c, b.x + 2 + x, b.y + 2, h, desk_mix(0xffffffu, DU_ACCENT, 50));
+        }
+        return;
+    }
+    du_fill(c, b, DU_FACE); du_edge(c, b, DU_SUNKEN_THIN);
+    for (int x = 0; x < filled; x += 10) {
+        int bw = filled - x < 8 ? filled - x : 8;
+        du_fill(c, (struct du_rect){b.x + 2 + x, b.y + 2, bw, b.h - 4}, DU_SELECT);
+    }
 }

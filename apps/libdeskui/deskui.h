@@ -89,6 +89,12 @@ int du_text_width(const char *);
 void du_text(struct du_canvas *, int x, int y, const char *, uint32_t);
 void du_text_n(struct du_canvas *, int x, int y, const char *, size_t cells, uint32_t);
 void du_text_fit(struct du_canvas *, int x, int y, int width, const char *, uint32_t);
+/* NULL canvas measures only; explicit lines and UTF-8 boundaries survive. */
+int du_text_wrap(struct du_canvas *, struct du_rect, const char *, uint32_t);
+void du_progress_paint(struct du_canvas *, struct du_rect, int value, int total, uint64_t phase_ms);
+void du_message_size(const char *, int icon, unsigned buttons, int max_width, int *width, int *height);
+const char *du_message_icon_name(int icon);
+unsigned du_message_sound(int icon);
 void du_text_disabled(struct du_canvas *, int x, int y, const char *);
 void du_label(struct du_canvas *, int x, int y, const char *mnemonic, uint32_t, int underline);
 /* Straight-alpha AARRGGBB sprite, size x size (at most 64), alpha-blended. */

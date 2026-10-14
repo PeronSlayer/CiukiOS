@@ -148,7 +148,7 @@ int main(int argc,char **argv)
     assert(snapshot->clipboard_count==1 && !strcmp(snapshot->clipboard[0],"/Documents/Latest copy.txt"));
     fake_nodes[fake_lookup("/Documents/Latest copy.txt")].live=0;
     command(DF_PASTE,-1); settle();
-    assert(strstr(d.sh.message_text,"error 2") && !strstr(d.sh.message_text,"error -2")); close_message();
+    assert(strstr(d.sh.message_text,"No such file or directory (2)") && !strstr(d.sh.message_text,"(-2)")); close_message();
     /* Shutdown cancels the job before the shell stops serving filesystem work. */
     fake_file("/Documents/Cancel.txt",30000,10); assert(!fm_refresh(other));
     assert(fm_select_name(other,"Cancel.txt",0)>=0 && !fm_clipboard(other,0) && !fm_clipboard_save(other));

@@ -4,6 +4,8 @@
 #define CIUKI_DOSBOX_LOADING_H
 #include "../libdeskui/deskui.h"
 #include "../desktop/catalog.h"
+#include <stdio.h>
+#include <string.h>
 
 static inline const char *dosbox_launch_icon(const char *command)
 {
@@ -17,18 +19,20 @@ static inline void dosbox_panel(struct du_canvas *canvas, const char *name,
 {
     du_fill(canvas, canvas->clip, DU_FACE);
     struct du_rect box = {100, 160, 440, 160};
-    du_fill(canvas, box, DU_FACE); du_edge(canvas, box, DU_RAISED);
-    du_icon_draw(canvas, 120, 186, du_icon(icon, 32), DU_ICON_NORMAL);
+    struct desk_paint p={canvas->pixels,canvas->width,canvas->height,
+        canvas->clip.x,canvas->clip.y,canvas->clip.w,canvas->clip.h};
+    struct desk_frame_style style={.title=error ? "Program did not start" : "Starting program",.active=1};
+    desk_paint_frame(&p,box.x,box.y,box.w,box.h,&style);
+    du_icon_draw(canvas,120,202,du_icon(DU_ICON_CIUKI,32),DU_ICON_NORMAL);
+    du_icon_draw(canvas,box.x+box.w-40,box.y+7,du_icon(icon,16),DU_ICON_NORMAL);
     char title[80];
-    snprintf(title, sizeof(title), error ? "%s" : "Loading %s...", error ? error : name);
-    du_text_fit(canvas, 166, 186, 350, title, DU_INK);
-    du_text_fit(canvas, 166, 214, 350, detail, DU_INK);
-    struct du_rect bar = {120, 264, 400, 18};
-    du_edge(canvas, bar, DU_SUNKEN);
-    if (!error) {
-        /* An indeterminate pulse, not an invented completion percentage. */
-        int offset = (int)((elapsed / 80u) % 344u);
-        du_fill(canvas, (struct du_rect){124 + offset, 268, 48, 10}, DU_SELECT);
-    }
+    snprintf(title,sizeof(title),error ? "%s" : "Loading %s...",error ? error : name);
+    struct du_rect old=canvas->clip;
+    canvas->clip=du_intersection(old,(struct du_rect){166,200,350,24});
+    du_text_font(canvas,desk_theme->font_bold,166,202,title,DU_INK); canvas->clip=old;
+    du_text_wrap(canvas,(struct du_rect){166,226,350,30},detail,DU_INK);
+    struct du_rect bar={120,272,400,18};
+    if (!error) du_progress_paint(canvas,bar,0,0,elapsed);
+    else du_well(canvas,bar,DU_FACE);
 }
 #endif

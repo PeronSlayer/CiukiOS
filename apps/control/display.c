@@ -212,7 +212,9 @@ void cp_display_saved(struct cp_app *a, int error)
 {
     if (a->mode_state!=CP_MODE_SAVE) return;
     if (error) {
-        cp_display_cancel(a); label(a,3,"Settings could not be saved; restoring the previous mode.");
+        char text[256]; if (error<0) error=-error;
+        snprintf(text,sizeof(text),"Restoring the previous mode: %s (%d)",strerror(error),error);
+        cp_display_cancel(a); label(a,3,text);
     } else {
         finish(a,"Display settings saved.");
         if (!a->host.apply || a->host.apply(a->host.ctx,DESK_SETTINGS_RELOAD,0,0))

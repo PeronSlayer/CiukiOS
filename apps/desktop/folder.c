@@ -10,7 +10,7 @@
 static void error(struct desktop *d, int r)
 {
     char text[180];
-    snprintf(text, sizeof(text), "Cannot complete the file operation (error %d).\n%s", -r,
+    snprintf(text, sizeof(text), "Cannot complete the file operation.\n%s (%d)\n%s", strerror(-r), -r,
         r == -EINVAL ? "A name cannot contain \\ / : * ? \" < > | or end in a space or dot." :
         r == -EEXIST ? "A file or folder with that name already exists." : "The original item is kept when the operation fails.");
     desk_shell_message(d, "Desktop", text, 1);

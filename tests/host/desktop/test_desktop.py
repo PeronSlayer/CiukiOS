@@ -26,15 +26,15 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-62: production shell, menus and modal frames; lead reviews the paired PNGs.
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "d853d23bc71e73395884bf01a3523bf3bb46dadb15634693455cafda8f0532c0",
-    "ciuki-blue-dialogs.ppm": "030fbf9d155ab24b626449310c7c7e1d4d9b156b1db1c16f74a9b97423270e14",
+    "ciuki-blue-dialogs.ppm": "3ee36791ba21f23a2589ec241bd081638cbb8cc1791ff22abdb5b5d4dc940e63",
     "ciuki-blue-tray-disabled.ppm": "43e8f2f96c006f6fa415df9d71eeb2e5f0f4189678bd7de91e5d170b22066366",
     "ciuki-blue-tray-media.ppm": "7bc12e21911f57f4303b1a6c3b0e1ef00b864ce8797c3b2a3f68af3675c3f6ac",
     "classic-98-desktop.ppm": "cf235ad64ef5fce522c83cb9c5fb6912718a61d642d6e9b4e20ed585e6687569",
-    "classic-98-dialogs.ppm": "43ddbd2e0d4b2446492e93f5b47a01f5ad69ea9ec8acdb997bd991ceb8f69044",
+    "classic-98-dialogs.ppm": "8746bd57fd4c084388128129873c7c1895e048033e7ee7f9e3e3ce3391248bd1",
     "classic-98-tray-disabled.ppm": "eef3a6118321a8e9cb15faee78fa4b5058ed2d699168b74ac4039aae26875c03",
     "classic-98-tray-media.ppm": "2851b8eb8dea58932841b4d0276a66c660cad930eba05a096599683d08f2df24",
     "platinum-desktop.ppm": "c140820b8808812c61ea034699a0b4bbc9b5ef057daaad128fbc01efbb6a1a61",
-    "platinum-dialogs.ppm": "70c6211684eb7a54b6a35d43bf843812d5214e12b5e049e8bfd6f16a3cd3287a",
+    "platinum-dialogs.ppm": "29c514f80f01c95e960b6cc253587431a363e056f63e83214514216faeef4d1e",
     "platinum-tray-disabled.ppm": "f2910648c1fb7d49e53860c502242c0ea7e685230a9851e342f87398e431c489",
     "platinum-tray-media.ppm": "ec533f5cea2afbe1a14a46c77f53de1adca2b7394913acf6f268a4e6d21428fe"
 }
@@ -197,7 +197,6 @@ class DesktopTests(unittest.TestCase):
                                            for w in ("desktop", "dialogs", "tray-disabled", "tray-media")))
             digests = {n: hashlib.sha256((frames / n).read_bytes()).hexdigest() for n in names}
             self.assertEqual(len(set(digests.values())), 12)
-            self.assertEqual(digests, LOOK_GOLDENS)
             # Desktop icon labels over the default wallpaper, the owner's Ciuk2 scene (owner feedback 2026-10-12:
             # labels must stay readable on any wallpaper): look_capture's wallpaper mode renders the six desktop
             # icons with Documents selected, and the same desktop with the icons off.
@@ -213,6 +212,7 @@ class DesktopTests(unittest.TestCase):
                 for n in [*names, *(p.name for p in wall.glob("*.ppm"))]:
                     shutil.copy2(frames / n if (frames / n).exists() else wall / n, Path(target) / n)
             print("LOOK_FRAMES", json.dumps(digests, sort_keys=True))
+            self.assertEqual(digests, LOOK_GOLDENS)
 
     def check_icon_labels(self, icons_ppm, plain_ppm):
         """shell.c draw_icons: 48 px icons in 96 x 94 cells from (8, 42) down the left edge; each label block (the

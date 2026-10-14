@@ -22,6 +22,12 @@
 #define SH_TRAY_MARGIN 6
 /* From the clock leftwards; append future icons after removable media. */
 enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_MEDIA };
+enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
+struct sh_notification {
+    char title[64], text[320];
+    uint64_t started, expires;
+    int active, icon, action, balloon, slide;
+};
 #define SH_START_ROW 30
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
@@ -61,13 +67,18 @@ struct desk_shell {
     struct ciuki_net_state network;
     int network_open;
     struct ciuki_media_state media;
+    char media_labels[26][33];
     struct desk_autoplay autoplay;
     int media_open, want_remove;
     unsigned media_scroll;
     uint32_t remove_generation;
     uint64_t network_poll_ns;
     int start_hot;                  /* the pointer is over the Ciuki button */
-    int tooltip; uint64_t hover_since; int32_t hover_x, hover_y;
+    int tooltip, hover_target; uint64_t hover_since; int32_t hover_x, hover_y;
+    struct desk_box tooltip_last;
+    uint32_t tooltip_hash;
+    int tooltip_painted;
+    struct sh_notification notification;
     int switcher, switch_pick, switch_count, switch_list[16];
     int about_tab, shutdown_choice, message_kind;
     char run_text[160]; unsigned run_length;
@@ -116,6 +127,10 @@ void desk_internal_paint(struct desktop *, int index, struct desk_box content, s
 void desk_internal_closed(struct desktop *, int index);
 int desk_internal_open(struct desktop *, int kind);
 void desk_shell_message(struct desktop *, const char *title, const char *text, int error);
+void desk_shell_message_class(struct desktop *, const char *title, const char *text, int icon);
+void desk_shell_notify(struct desktop *, const char *title, const char *text, int icon, int action);
+void desk_shell_notify_error(struct desktop *, const char *title, int error);
+void desk_shell_media_labels(struct desktop *, const struct ciuki_media_volume volumes[26]);
 void desk_menu_open(struct desktop *, int kind, int32_t x, int32_t y);
 void desk_menu_close(struct desktop *);
 int desk_task_count(const struct desktop *);
