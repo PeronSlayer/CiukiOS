@@ -2331,3 +2331,13 @@ Decisions for implementation:
    hardware play requirement conflicts with the case ceiling once install/
    start/focus/exit are included. The lead must disposition timing and capped
    2D progress/fps thresholds before F5-17B can issue a hardware playable PASS.
+
+## Decisions of 2026-10-14 (owner, evening) after the cross-review and the research
+
+- **Win16 (Q3, reaffirmed):** a complete Win16 subsystem inside F5 (real NE execution on the DPMI/V86 infrastructure), not only installer substitution. f5-19 gets its own reviewed contract before code.
+- **MIDI (Q6, refined):** both banks ship; the system detects installed RAM and selects the reduced bank (≤ 32 MiB) at 128 MiB and the full FluidR3 bank where RAM allows it safely; the selection is automatic and recorded.
+- **Fonts (Q10, changed):** FreeType everywhere, native path included; `fonts-contract.md` is amended by f2-63; FTL licence recorded.
+- **Playable gate (Q7, changed):** ten minutes on QEMU as well, once per image, at night; the T23 run remains the hardware verdict.
+- **Wine reuse (Q2, conditional):** if f5-14A shows the dependency closure costs more than it yields, CiukiOS writes more DLLs itself (LGPL-2.1-or-later) and Wine reuse is limited to autonomous modules (codecs, comctl32, shell parts).
+- **Acceptance titles:** freely distributable demos and shareware live on a separate optional games disk image for the tests, never in the system image.
+- **DOS full screen (F3, new):** the Windows 98 two-mode model is approved (f3-20): full-screen DOS sessions on the real VGA hardware under a released display lease, exact windowed emulation for desktop use.
