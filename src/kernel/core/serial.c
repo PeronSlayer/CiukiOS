@@ -7,6 +7,8 @@
 
 #define UART_POLL_LIMIT 20000u   /* per readiness wait, only boot/panic */
 #define UART_DEAD_LIMIT 8u       /* consecutive timeouts before disabling */
+#define UART_LSR_THRE 0x20u
+#define UART_IIR_FIFO 0xC0u
 
 static uint16_t uart_base;
 static bool uart_ok;
@@ -24,24 +26,44 @@ void serial_init(uint16_t base, uint16_t divisor)
     uart_head = uart_used = uart_dropped = 0;
     uart_buffering = uart_drop_notice = false;
     uart_fifo_bytes = 1;
+    uart_timeouts = 0;
     if (!base)
         return;
-    /* Presence probe: scratch register round trip. */
+    /* Presence/type probe: retain the firmware's scratch value. */
+    uint8_t scratch = inb(base + 7);
     outb(base + 7, 0x5A);
-    if (inb(base + 7) != 0x5A)
+    if (inb(base + 7) != 0x5A) {
+        outb(base + 7, scratch);
         return;
+    }
     outb(base + 7, 0xA5);
-    if (inb(base + 7) != 0xA5)
+    if (inb(base + 7) != 0xA5) {
+        outb(base + 7, scratch);
         return;
+    }
+    outb(base + 7, scratch);
     if (!divisor)
         divisor = 3;                /* 38400 baud with 1.8432 MHz clock */
+    outb(base + 3, 0x03);           /* clear inherited DLAB before IER */
     outb(base + 1, 0x00);           /* no UART interrupts */
     outb(base + 3, 0x80);           /* DLAB */
     outb(base + 0, divisor & 0xFF);
     outb(base + 1, divisor >> 8);
     outb(base + 3, 0x03);           /* 8N1 */
-    outb(base + 2, 0x07);           /* FIFO on, cleared */
-    if ((inb(base + 2) & 0xC0) == 0xC0) uart_fifo_bytes = 16;
+    /* FCR is write-only: verify an off/on transition through IIR, then
+     * verify that FIFO enable survives clearing the self-clearing reset
+     * bits. A 16450, broken original 16550 (IIR=10), or unverified FIFO
+     * stays in character mode. Never assume a 16-byte holding register. */
+    outb(base + 2, 0x00);
+    uint8_t fifo_off = inb(base + 2) & UART_IIR_FIFO;
+    outb(base + 2, 0x07);           /* enable, clear RX/TX FIFOs */
+    uint8_t fifo_on = inb(base + 2) & UART_IIR_FIFO;
+    outb(base + 2, 0x01);           /* leave enable explicitly asserted */
+    if (!fifo_off && fifo_on == UART_IIR_FIFO &&
+        (inb(base + 2) & UART_IIR_FIFO) == UART_IIR_FIFO)
+        uart_fifo_bytes = 16;
+    else
+        outb(base + 2, 0x00);
     outb(base + 4, 0x03);           /* DTR, RTS */
     uart_ok = true;
     uart_timeouts = 0;
@@ -61,8 +83,13 @@ static void serial_notice(void)
     }
 }
 
-static void serial_burst(void)
+static bool serial_burst(void)
 {
+    /* All senders hold the IRQ lock. Test the hardware here, immediately
+     * before filling the verified empty FIFO, rather than trusting a tick
+     * interval or a readiness observation made by a different caller. */
+    uint8_t lsr = inb(uart_base + 5);
+    if (lsr == 0xFF || !(lsr & UART_LSR_THRE)) return false;
     unsigned count = uart_used < uart_fifo_bytes ? uart_used : uart_fifo_bytes;
     for (unsigned i = 0; i < count; i++) {
         outb(uart_base, (uint8_t)uart_log[uart_head]);
@@ -70,6 +97,7 @@ static void serial_burst(void)
         uart_used--;
     }
     uart_timeouts = 0;
+    return true;
 }
 
 static void serial_drain(void)
@@ -90,8 +118,7 @@ static void serial_drain(void)
         /* Release IF between polls, but keep THRE, FIFO writes and head
          * advancement together. A nested sender also uses this same head;
          * no sender retains a producer-buffer byte across an interrupt. */
-        if (inb(uart_base + 5) & 0x20) {
-            serial_burst();
+        if (serial_burst()) {
             polls = 0;
         } else if (++polls == UART_POLL_LIMIT) {
             polls = 0;
@@ -147,7 +174,7 @@ void serial_tick(void)
     /* Called from the existing 1 ms timer. No waits, allocation, logging or
      * formatting; THRE admits a burst only into an empty detected FIFO. */
     uint32_t flags = irq_save();
-    if (uart_ok && (inb(uart_base + 5) & 0x20)) {
+    if (uart_ok) {
         serial_notice();
         serial_burst();
     }

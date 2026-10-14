@@ -1,4 +1,4 @@
-/* F4-14: production serial queue on a busy 16550/16450 register model.
+/* F4-14/F4-16: production serial queue and a clocked 38400 8N1 UART.
  * Deterministic IRQ preemption plus two host producers and a burst sender.
  * The mutex models the kernel's uniprocessor IRQ lock, not an SMP UART. */
 #include <stdio.h>
@@ -33,9 +33,31 @@ static void irq_restore(uint32_t f)
 
 static uint8_t regs[8];
 static bool present = true, ready, fifo;
+static bool fifo_enabled, timed, poll_clock;
+static unsigned iir_fault;
 static unsigned lsr_reads, filled;
 static char emitted[200000];
 static unsigned emitted_count;
+/* Separate holding FIFO and shift register. LSR reads never empty these.
+ * Time is in baud-scaled microseconds: ten 8N1 bits cost 10,000,000 units. */
+static uint8_t holding[16], shift;
+static unsigned holding_used, overflows, tx_writes;
+static bool shifting;
+static uint64_t clock_units, shift_end;
+static void advance_us(unsigned us)
+{
+    uint64_t target = clock_units + (uint64_t)us * 38400;
+    while (shifting && shift_end <= target) {
+        CHECK(emitted_count < sizeof(emitted) - 1);
+        emitted[emitted_count++] = (char)shift;
+        if (holding_used) {
+            shift = holding[0]; holding_used--;
+            memmove(holding, holding + 1, holding_used);
+            shift_end += 10000000;
+        } else shifting = false;
+    }
+    clock_units = target;
+}
 static void (*preemption)(void);
 static unsigned preempt_at, preemptions;
 static void preempt_writer(void)
@@ -52,10 +74,18 @@ static uint8_t inb(uint16_t p)
     CHECK(p >= 0x3F8 && p < 0x400);
     if (!present) return 0xFF;
     unsigned off = p - 0x3F8;
-    if (off == 2) return fifo ? 0xC0 : 0;
+    if (off == 2) {
+        if (iir_fault == 2) return 0xC0; /* stuck FIFO indication */
+        if (iir_fault == 3 && regs[2] == 1) return 0; /* enable did not stick */
+        return fifo && fifo_enabled ? (iir_fault == 1 ? 0x80 : 0xC0) : 0;
+    }
     if (off == 5) {
         CHECK(!playback_producer && !(flags & 0x200));
         lsr_reads++;
+        if (timed) {
+            if (poll_clock) advance_us(1);
+            return ready ? ((!holding_used ? 0x20 : 0) | (!shifting ? 0x40 : 0)) : 0;
+        }
         if (ready) filled = 0;
         return ready ? 0x20 : 0;
     }
@@ -65,10 +95,26 @@ static void outb(uint16_t p, uint8_t value)
 {
     CHECK(p >= 0x3F8 && p < 0x400);
     unsigned off = p - 0x3F8;
+    if (off == 2) {
+        fifo_enabled = fifo && (value & 1) && iir_fault != 1;
+        /* Original 16550 advertises a broken FIFO, but cannot buffer it. */
+        if (iir_fault == 1) fifo_enabled = (value & 1) != 0;
+        if (value & 4) holding_used = 0; /* TX reset does not clear TSR */
+    }
     if (off == 0 && !(regs[3] & 0x80)) {
-        CHECK(!(flags & 0x200) && ready && emitted_count < sizeof(emitted) - 1);
-        CHECK(++filled <= (fifo ? 16u : 1u));
-        emitted[emitted_count++] = (char)value;
+        CHECK(!(flags & 0x200) && ready);
+        tx_writes++;
+        if (timed) {
+            if (!shifting) {
+                shifting = true; shift = value; shift_end = clock_units + 10000000;
+            } else if (holding_used < (fifo_enabled && iir_fault != 1 ? 16u : 1u))
+                holding[holding_used++] = value;
+            else overflows++; /* deliberately observable loss, no assertion */
+        } else {
+            CHECK(emitted_count < sizeof(emitted) - 1);
+            CHECK(++filled <= (fifo_enabled ? 16u : 1u));
+            emitted[emitted_count++] = (char)value;
+        }
     }
     regs[off] = value;
     preempt_writer();
@@ -79,18 +125,21 @@ static void reset_uart(bool with_fifo)
 {
     CHECK(flags == 0x200 && !preemption);
     memset(regs, 0, sizeof(regs));
-    fifo = with_fifo; present = ready = true;
+    fifo = with_fifo; present = ready = true; fifo_enabled = timed = poll_clock = false;
+    iir_fault = 0; holding_used = overflows = tx_writes = 0; shifting = false;
+    clock_units = shift_end = 0;
     emitted_count = filled = lsr_reads = preemptions = 0;
     serial_init(0x3F8, 3);
     CHECK(serial_present() && uart_fifo_bytes == (fifo ? 16u : 1u));
+    CHECK(fifo_enabled == fifo && regs[2] == (fifo ? 1 : 0));
 }
 static void tick(void)
 {
     uint32_t f = irq_save();
-    unsigned before = lsr_reads, at = emitted_count;
+    unsigned before = lsr_reads, at = tx_writes;
     serial_tick();
     CHECK(lsr_reads == before + (uart_ok ? 1u : 0u));
-    CHECK(emitted_count - at <= (fifo ? 16u : 1u));
+    CHECK(tx_writes - at <= uart_fifo_bytes);
     irq_restore(f);
 }
 static void drain_uart(void)
@@ -314,8 +363,80 @@ static void concurrent_tests(bool with_fifo)
            fifo ? "16550" : "16450", kept, uart_dropped, notices);
 }
 
+static void line_rate_case(bool with_fifo, unsigned fault)
+{
+    reset_uart(with_fifo);
+    iir_fault = fault;
+    regs[7] = 0x39;
+    serial_init(0x3F8, 3);
+    CHECK(regs[7] == 0x39);
+    timed = true; serial_buffered(true);
+    char expected[8192]; unsigned length = 0;
+    for (unsigned i = 0; i < 64; i++) {
+        char record[96];
+        int n = snprintf(record, sizeof(record), "[usb] controller=%02u payload=abcdefghijklmnopqrstuvwxyz0123456789\n", i);
+        serial_write(record, (size_t)n);
+        memcpy(expected + length, record, (size_t)n - 1); length += (unsigned)n - 1;
+        expected[length++] = '\r'; expected[length++] = '\n';
+    }
+    CHECK(!uart_dropped && !lsr_reads);
+    unsigned milliseconds = 0, busy_ticks = 0;
+    for (; milliseconds < 10000 && (uart_used || shifting);) {
+        unsigned before = tx_writes;
+        bool busy = holding_used != 0;
+        tick();
+        if (busy) { CHECK(tx_writes == before); busy_ticks++; }
+        /* Repeated readiness reads within one tick must not free space. */
+        before = holding_used;
+        uint32_t f = irq_save(); (void)inb(0x3FD); (void)inb(0x3FD); irq_restore(f);
+        CHECK(holding_used == before);
+        advance_us(1000); milliseconds++;
+        CHECK((uint64_t)emitted_count * 100 <= (uint64_t)milliseconds * 384);
+        CHECK(tx_writes - emitted_count <= (with_fifo && !fault ? 17u : 2u));
+    }
+    printf("serial 38400 %s IIR-fault=%u: %u wire bytes/%u ms, %u busy ticks, %u overflows\n",
+           with_fifo ? "16550A" : "16450", fault, emitted_count, milliseconds, busy_ticks, overflows);
+    CHECK(!uart_used && !shifting && !overflows && emitted_count == length);
+    CHECK(!memcmp(emitted, expected, length));
+    CHECK(uart_fifo_bytes == (with_fifo && !fault ? 16u : 1u));
+    if (with_fifo && !fault) CHECK(busy_ticks); /* 16 bytes cannot drain in 1 ms */
+}
+
+static void line_rate_tests(void)
+{
+    /* Fault injection reproduces the chunk-loss hypothesis on a real FIFO:
+     * force unchecked 16-bytes/ms bursts, including overfull writes. */
+    reset_uart(true); timed = true;
+    char original[4096]; unsigned n = 0;
+    for (unsigned i = 0; i < 32; i++)
+        n += (unsigned)snprintf(original + n, sizeof(original) - n,
+                              "[usb] controller=%02u payload=abcdefghijklmnopqrstuvwxyz0123456789\r\n", i);
+    for (unsigned at = 0; at < n;) {
+        uint32_t f = irq_save();
+        for (unsigned burst = 0; burst < 16 && at < n; burst++) outb(0x3F8, (uint8_t)original[at++]);
+        irq_restore(f); advance_us(1000);
+    }
+    while (shifting) advance_us(1000);
+    emitted[emitted_count] = 0;
+    CHECK(overflows && emitted_count < n && strstr(emitted, "[usb]") && memcmp(emitted, original, emitted_count));
+    printf("serial unchecked 16 bytes/ms: %u bytes lost, chunk-spliced records reproduced PASS\n", overflows);
+    line_rate_case(true, 0);
+    line_rate_case(false, 0);
+    line_rate_case(true, 1);   /* broken original 16550, FIFO bits = 10 */
+    line_rate_case(false, 2);  /* stuck IIR=11 without a working FIFO */
+    line_rate_case(true, 3);   /* reset readback passed, persistent enable failed */
+
+    /* Boot/panic use the same hardware gate while polling a running line. */
+    reset_uart(true); timed = poll_clock = true;
+    serial_write(task_record, sizeof(task_record) - 1);
+    while (shifting) advance_us(1000);
+    CHECK(!overflows && emitted_count == sizeof(task_record));
+    CHECK(!memcmp(emitted, "[task] complete record A with a long payload\r\n", emitted_count));
+}
+
 int main(void)
 {
+    line_rate_tests();
     for (unsigned kind = 0; kind < 2; kind++) {
         preemption_tests(kind);
         basic_tests(kind);

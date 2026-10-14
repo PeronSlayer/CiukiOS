@@ -24,6 +24,7 @@ void serial_panic(void) { if (cpu_flags & 0x200) abort(); }
 void console_reclaim(void) {}
 void console_set_color(uint32_t fg, uint32_t bg) { (void)fg; (void)bg; }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
+void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n; }
 #include "../../src/kernel/core/output.c"
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); return 1; } } while (0)
 int main(void)

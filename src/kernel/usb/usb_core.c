@@ -421,7 +421,7 @@ void usb_step(struct usb_host *h)
         } else if (tick - h->scan_window >= 1000) {
             uint64_t elapsed = tick - h->scan_window;
             unsigned rate = (unsigned)((uint64_t)h->scan_count * 1000000 / elapsed);
-            klog("[usb] worker controller=%s tick=%llu scans=%u elapsed_ms=%llu scans_per_second=%u.%03u",
+            klog_periodic("[usb] worker controller=%s tick=%llu scans=%u elapsed_ms=%llu scans_per_second=%u.%03u",
                  h->owner, tick, h->scan_count, elapsed, rate / 1000, rate % 1000);
             h->scan_window = tick; h->scan_count = 0;
         }

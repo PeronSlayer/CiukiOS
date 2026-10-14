@@ -454,7 +454,7 @@ int fbdev_present_to(const struct fb_device *d, const struct fb_surface *s, cons
             full_log_tick = now;
             /* bytes/us is decimal MB/s; count pixels, excluding pitch padding.
              * Accumulate bytes so mode changes cannot distort the average. */
-            klog("[display] present full count=%llu total_us=%llu last_us=%llu max_us=%llu tsc_khz=%llu lfb_mb_s=%llu",
+            (full_count == 1 ? klog : klog_periodic)("[display] present full count=%llu total_us=%llu last_us=%llu max_us=%llu tsc_khz=%llu lfb_mb_s=%llu",
                  full_count, full_total_us, full_last_us, full_max_us, g_tsc_per_ms,
                  full_total_us ? full_bytes / full_total_us : 0);
         }

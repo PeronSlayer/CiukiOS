@@ -50,6 +50,7 @@ int registry_activate(int h,gen_t g) { assert(leases[h].generation==g); leases[h
 bool registry_valid(int h,gen_t g) { return leases[h].generation==g && leases[h].state==RS_ACTIVE; }
 int registry_quarantine(int h,gen_t g) { assert(leases[h].generation==g); leases[h].state=RS_QUARANTINED; return 0; }
 static void (*record_hook)(const char *);
+void klog_periodic(const char *s, ...) __attribute__((alias("klog")));
 void klog(const char *s,...)
 {
     char record[256];va_list ap;va_start(ap,s);int len=kvsnprintf(record,sizeof(record),s,ap);va_end(ap);
