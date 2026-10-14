@@ -20,7 +20,13 @@
 #define WAIT_US 20000u
 #define WAIT_POLLS 256u
 #define POLL_US 5u
+#define INITIAL_POLL_US 1000u
+#define INITIAL_POLLS (WAIT_US / INITIAL_POLL_US + 1u)
+#define STATUS_SAMPLES 8u
 #define BCI_CONTROL 0x48c18u
+static bool initial_status_poll;
+static bool trace_read_begin(const char *, uint32_t, uint32_t);
+static void trace_value(const char *, uint32_t, uint32_t);
 static uint8_t port_cr_read(struct savage2d *s, uint8_t index)
 {
     s->io.write_port(s->io.ctx, 0x3d4, index);
@@ -43,16 +49,15 @@ static void restore_mmio(struct savage2d *s)
 static uint32_t xy(uint32_t x, uint32_t y) { return (y << 16) | x; }
 static bool idle_status(struct savage2d *s, uint32_t value)
 {
-    /* Infer only a complete, empty signature; never weaken X.Org's mask to
-     * Linux's a00000. RE046-B assigns PF/idle differently (p. 231). */
+    /* X.Org uses this same empty/idle mask for SuperSavage and Savage4.
+     * RE046-B assigns PF/idle differently (p. 231); accept only a complete
+     * signature. No reference supports discarding SuperSavage FIFO bits. */
     bool xorg = (value & 0x00e1ffffu) == 0x00e00000u;
     bool manual = (value & 0x00cfffffu) == 0x004e0000u;
     if (value == UINT32_MAX) { s->reason = "dead_mmio"; return false; }
     if (!s->idle_mask) {
         if (xorg) { s->idle_mask = 0x00e1ffffu; s->idle_value = 0x00e00000u; }
         else if (manual) { s->idle_mask = 0x00cfffffu; s->idle_value = 0x004e0000u; }
-        if (s->idle_mask)
-            klog("[accel] savage idle mask=%08x value=%08x", s->idle_mask, s->idle_value);
     } else if ((s->idle_value == 0x00e00000u && manual) ||
                (s->idle_value == 0x004e0000u && xorg)) {
         s->reason = "status_contradiction";
@@ -63,27 +68,56 @@ static bool idle_status(struct savage2d *s, uint32_t value)
 static int wait_idle(struct savage2d *s)
 {
     s->idle_waits++;
+    bool first = !s->status_logged;
+    struct { uint64_t us; uint32_t value; } samples[STATUS_SAMPLES];
+    unsigned count = 0;
+    uint32_t old_mask = s->idle_mask;
+    unsigned polls = first ? INITIAL_POLLS : WAIT_POLLS;
+    uint32_t interval = first ? INITIAL_POLL_US : POLL_US;
+    /* Keep the pre-read breadcrumb outside the budget, then buffer status
+     * diagnostics. At 38400 baud a single log can exceed the entire wait. */
+    bool traced = first && trace_read_begin("r32", SAVAGE_STATUS, SAVAGE_STATUS);
     uint64_t start = s->io.now_us(s->io.ctx);
-    for (unsigned i = 0; i < WAIT_POLLS; i++) {
+    int result = -EIO;
+    initial_status_poll = first;
+    for (unsigned i = 0; i < polls; i++) {
         /* No pacing before the first read of a new idle check. Reset has
          * already settled; only consecutive busy reads need the interval. */
-        if (i && s->io.delay_us(s->io.ctx, POLL_US)) { s->reason = "delay_failed"; break; }
-        uint32_t status = s->io.read32(s->io.ctx, SAVAGE_STATUS);
-        if (!s->status_logged) {
-            klog("[accel] savage status reg=48c60 raw=%08x", status);
-            s->status_logged = true;
+        if (i) {
+            uint64_t elapsed = s->io.now_us(s->io.ctx) - start;
+            if (elapsed >= WAIT_US) break;
+            uint32_t delay = interval;
+            if (delay > WAIT_US - elapsed) delay = (uint32_t)(WAIT_US - elapsed);
+            if (s->io.delay_us(s->io.ctx, delay)) { s->reason = "delay_failed"; break; }
         }
+        uint32_t status = s->io.read32(s->io.ctx, SAVAGE_STATUS);
+        uint64_t elapsed = s->io.now_us(s->io.ctx) - start;
+        if (first && count < STATUS_SAMPLES) {
+            samples[count].us = elapsed; samples[count].value = status; count++;
+        }
+        /* Retain the original fault value if later idle proof permits CPU
+         * fallback on an already quarantined engine. */
+        if (!s->quarantined) s->status = status;
+        s->status_logged = true;
         if (idle_status(s, status)) {
-            s->poll_us += s->io.now_us(s->io.ctx) - start;
-            s->cpu_safe = true; return 0;
+            result = 0; break;
         }
         if (status == UINT32_MAX || (s->reason && !strncmp(s->reason, "status_contradiction", sizeof("status_contradiction"))) ||
-            s->io.now_us(s->io.ctx) - start >= WAIT_US) break;
+            elapsed >= WAIT_US) break;
     }
-    if (!s->reason) s->reason = "idle_timeout";
+    initial_status_poll = false;
     s->poll_us += s->io.now_us(s->io.ctx) - start;
-    s->cpu_safe = false;
-    return -EIO;
+    if (first && count) {
+        if (traced) trace_value("r32", SAVAGE_STATUS, samples[0].value);
+        klog("[accel] savage status reg=48c60 raw=%08x", samples[0].value);
+        for (unsigned i = 0; i < count; i++)
+            klog("[accel] savage status sample=%u us=%llu raw=%08x", i, samples[i].us, samples[i].value);
+    }
+    if (!old_mask && s->idle_mask)
+        klog("[accel] savage idle mask=%08x value=%08x", s->idle_mask, s->idle_value);
+    if (result && !s->reason) s->reason = "idle_timeout";
+    s->cpu_safe = !result;
+    return result;
 }
 static int fault(struct savage2d *s)
 {
@@ -273,7 +307,7 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     s->descriptor = 0x10000000u | ((uint32_t)d->bpp << 16) | (d->pitch / (d->bpp / 8));
     s->ops = (struct accel_ops){s, sync_engine, copy_rect, fill_rect, pattern_rect,
         cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready};
-    s->reason = 0; s->idle_mask = 0; s->status_logged = false;
+    s->reason = 0; s->idle_mask = s->idle_value = s->status = 0; s->status_logged = false;
     s->status_ready = false;
     s->reset_us = s->poll_us = 0;
     /* All operational VGA access stays on the exclusively owned ports.
@@ -394,6 +428,7 @@ static uint64_t activation_elapsed(void)
 { return activation_now(activation_ctx) - activation_start; }
 static bool trace_read_begin(const char *op, uint32_t key, uint32_t reg)
 {
+    if (initial_status_poll && key == SAVAGE_STATUS) return false;
     if (!tracing || key == trace_last) return false;
     trace_last = key;
     uint64_t start = activation_now(activation_ctx);
@@ -466,8 +501,8 @@ static void hw_drain(void *ctx) { (void)ctx; framebuffer_write_drain(); }
 static void record(void)
 {
     if (!(g_boot.flags & CBI_F_VERBOSE)) return;
-    klog("[accel] driver=savage ops=%llu idle_waits=%llu fallbacks=%llu quarantined=%u",
-        engine.operations, engine.idle_waits, engine.fallbacks, engine.quarantined);
+    klog("[accel] driver=savage ops=%llu idle_waits=%llu fallbacks=%llu quarantined=%u status=%08x status_valid=%u",
+        engine.operations, engine.idle_waits, engine.fallbacks, engine.quarantined, engine.status, engine.status_logged);
 }
 void savage2d_record(void)
 { if (reg_claim >= 0 && g_ticks - last_log >= 2000) { last_log = g_ticks; record(); } }
@@ -550,12 +585,12 @@ static int runtime_stop(void *ctx)
 #define ATTEMPT_PATH "C:/system/settings/accel.cfg"
 static struct vfs_table attempt_table;
 static bool attempt_blocked;
-static int attempt_marker_io(struct vfs *vfs, bool clear, bool *previous)
+static int attempt_marker_io(struct vfs *vfs, bool clear, bool *previous, const char *diagnostic)
 {
     if (!vfs || !vfs->volumes[2] || !vfs->volumes[2]->mounted) return -FS_ENOENT;
     int err = vfs_table_init(vfs, &attempt_table, 2);
     if (err) return err;
-    if (!clear) {
+    if (!clear && !diagnostic) {
         struct fat_entry entry;
         err = vfs_stat(&attempt_table, ATTEMPT_PATH, &entry);
         if (!err && entry.size) { *previous = true; goto out; }
@@ -566,10 +601,11 @@ static int attempt_marker_io(struct vfs *vfs, bool clear, bool *previous)
     if (fd < 0) { err = fd; goto out; }
     if (clear) err = vfs_truncate(&attempt_table, fd, 0);
     else {
-        static const char marker[] = "accel=attempt\n";
+        const char *marker = diagnostic ? diagnostic : "accel=attempt\n";
+        size_t bytes = strlen(marker);
         size_t done = 0;
-        err = vfs_write(&attempt_table, fd, marker, sizeof(marker)-1, &done);
-        if (!err && done != sizeof(marker)-1) err = -FS_EIO;
+        err = vfs_write(&attempt_table, fd, marker, bytes, &done);
+        if (!err && done != bytes) err = -FS_EIO;
     }
     if (!err) err = vfs_commit(&attempt_table, fd);
     int closed = vfs_close(&attempt_table, fd);
@@ -581,14 +617,14 @@ out:
 static int attempt_marker(struct vfs *vfs, bool clear, bool *previous)
 {
     uint64_t start = hw_now(0);
-    int err = attempt_marker_io(vfs, clear, previous);
+    int err = attempt_marker_io(vfs, clear, previous, 0);
     klog("[accel] savage phase=marker_%s us=%llu error=%d", clear ? "clear" : "write", hw_now(0) - start, err);
     return err;
 }
 static const struct accel_ops *decline(const char *reason)
 {
-    klog("[accel] savage quarantined reason=%s us=%llu reset_us=%llu poll_us=%llu trace_us=%llu",
-        reason, activation_elapsed(), engine.reset_us, engine.poll_us, trace_us);
+    klog("[accel] savage quarantined reason=%s us=%llu reset_us=%llu poll_us=%llu trace_us=%llu status=%08x status_valid=%u",
+        reason, activation_elapsed(), engine.reset_us, engine.poll_us, trace_us, engine.status, engine.status_logged);
     attempt_in_progress = false;
     return 0;
 }
@@ -705,6 +741,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         /* No command was submitted by init. Keep the failed engine private;
          * software fbdev must not poll it again just to draw the desktop. */
         if (!engine.quarantined) { engine.quarantined = true; hw_fault(0); }
+        if (vfs) savage2d_attempt_failed(vfs);
         return decline(engine.reason ? engine.reason : "init_failed");
     }
     if (vfs) {
@@ -716,8 +753,8 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
             return decline("marker_clear_failed");
         }
     }
-    klog("[accel] savage ready us=%llu reset_us=%llu poll_us=%llu trace_us=%llu",
-        activation_elapsed(), engine.reset_us, engine.poll_us, trace_us);
+    klog("[accel] savage ready us=%llu reset_us=%llu poll_us=%llu trace_us=%llu status=%08x status_valid=%u",
+        activation_elapsed(), engine.reset_us, engine.poll_us, trace_us, engine.status, engine.status_logged);
     attempt_in_progress = false;
     return &engine.ops;
 }
@@ -745,6 +782,22 @@ int savage2d_attempt_end(struct vfs *vfs)
 {
     bool previous = false;
     return attempt_marker(vfs, true, &previous);
+}
+
+int savage2d_attempt_failed(struct vfs *vfs)
+{
+    if (!engine.quarantined || !engine.status_logged) return 0;
+    /* Best effort, outside presenter/device-work locks. Never truncate the
+     * durable attempt: even a failed annotation must continue to block boot. */
+    char marker[] = "accel=attempt\nstatus=00000000\n";
+    static const char hex[] = "0123456789abcdef";
+    for (unsigned i = 0; i < 8; i++)
+        marker[sizeof("accel=attempt\nstatus=")-1+i] = hex[(engine.status >> (28-i*4)) & 15u];
+    uint64_t start = hw_now(0);
+    int err = attempt_marker_io(vfs, false, 0, marker);
+    klog("[accel] savage phase=marker_status us=%llu error=%d status=%08x",
+        hw_now(0) - start, err, engine.status);
+    return err;
 }
 
 void savage2d_quarantine(const char *reason)

@@ -13,6 +13,7 @@ extern bool savage2d_eligible(const struct fb_device *) __attribute__((weak));
 extern bool kwork_queue(kwork_fn, void *) __attribute__((weak));
 extern int savage2d_attempt_begin(struct vfs *) __attribute__((weak));
 extern int savage2d_attempt_end(struct vfs *) __attribute__((weak));
+extern int savage2d_attempt_failed(struct vfs *) __attribute__((weak));
 extern void savage2d_quarantine(const char *) __attribute__((weak));
 extern void savage2d_record(void) __attribute__((weak));
 extern void savage2d_snapshot(struct ciuki_accel_info *) __attribute__((weak));
@@ -32,7 +33,7 @@ static bool accel_queued;
  * waits on the settings transaction or holds up unrelated driver work. */
 static struct task *accel_marker_task;
 static struct kwait accel_marker_wait;
-static enum { ACCEL_MARKER_IDLE, ACCEL_MARKER_BEGIN, ACCEL_MARKER_CLEAR } accel_marker_request;
+static enum { ACCEL_MARKER_IDLE, ACCEL_MARKER_BEGIN, ACCEL_MARKER_CLEAR, ACCEL_MARKER_STATUS } accel_marker_request;
 static void *change_window;
 static uint32_t change_capacity;
 static unsigned console_rows;
@@ -207,15 +208,19 @@ static void accel_work(void *arg)
         } else klog("[accel] savage quarantined reason=console_busy");
     }
     kmutex_unlock(&presenter);
-    if (acceleration) {
-        accel_marker_request = ACCEL_MARKER_CLEAR;
-        kwait_wake_all(&accel_marker_wait);
-    } else accel_queued = false;
+    accel_marker_request = acceleration ? ACCEL_MARKER_CLEAR : ACCEL_MARKER_STATUS;
+    kwait_wake_all(&accel_marker_wait);
 }
 
 static void accel_marker_run(void)
 {
     if (accel_marker_request == ACCEL_MARKER_IDLE) return;
+    if (accel_marker_request == ACCEL_MARKER_STATUS) {
+        accel_marker_request = ACCEL_MARKER_IDLE;
+        if (savage2d_attempt_failed) savage2d_attempt_failed(accel_vfs);
+        accel_queued = false;
+        return;
+    }
     bool clear = accel_marker_request == ACCEL_MARKER_CLEAR;
     accel_marker_request = ACCEL_MARKER_IDLE;
     if (!clear) {
