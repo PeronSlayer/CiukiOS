@@ -69,12 +69,10 @@ int bootlog_activate(struct vfs *vfs, bool qualified, uint32_t sequence)
     stats.size = 0; stats.active = true;
     return 0;
 }
-int bootlog_drain(void)
+static int drain_owned(void)
 {
     if (stats.error) return stats.error;
     if (!stats.active) return 0;
-    if (draining) return -FS_EBUSY;
-    draining = true;
     /* Boot bytes cannot be displaced even before mount. Flush that prefix
      * first, then one runtime batch per turn. Copies keep IF-off work at
      * <=128 bytes. Periodic producers never consume boot capacity. */
@@ -119,8 +117,60 @@ int bootlog_drain(void)
             }
         }
     }
-    draining = false;
     return failed(e);
+}
+static bool take_drain(void)
+{
+    uint32_t f=lock_ram(); bool free=!draining;
+    if (free) draining=true;
+    unlock_ram(f); return free;
+}
+static void drop_drain(void)
+{ uint32_t f=lock_ram(); draining=false; unlock_ram(f); }
+int bootlog_drain(void)
+{
+    if (!take_drain()) return -FS_EBUSY;
+    int e=drain_owned(); drop_drain(); return e;
+}
+int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *ctx)
+{
+    if (!cancel || !pause) return -FS_EINVAL;
+    while (!take_drain()) {
+        if (cancel(ctx)) return -FS_EAGAIN;
+        pause(ctx);
+    }
+    int e=0;
+    /* Snapshot the producer watermark. New periodic output cannot extend the
+     * synchronous operation forever. The protected prefix is drained first. */
+    struct bootlog_stats before; bootlog_snapshot(&before);
+    unsigned batches=(before.queued+4095)/4096+1;
+    for (unsigned i=0;i<batches && stats.active && !e;i++) {
+        if (cancel(ctx)) { e=-FS_EAGAIN; break; }
+        struct bootlog_stats pending; bootlog_snapshot(&pending);
+        if (!pending.queued) break;
+        /* Avoid waiting indefinitely for a desktop/storage client. Once free,
+         * the non-preemptible kernel enters the next VFS call without yielding. */
+        while (!fs_lock_try_take(&table.vfs->lock)) {
+            if (cancel(ctx)) { e=-FS_EAGAIN; break; }
+            pause(ctx);
+        }
+        if (e) break;
+        fs_lock_drop(&table.vfs->lock);
+        e=drain_owned();
+    }
+    if (!e && stats.active && handle>=0) {
+        while (!fs_lock_try_take(&table.vfs->lock)) {
+            if (cancel(ctx)) { e=-FS_EAGAIN; break; }
+            pause(ctx);
+        }
+        if (!e) {
+            fs_lock_drop(&table.vfs->lock);
+            stats.storage_calls++; e=vfs_commit(&table,handle);
+            if (e) failed(e);
+        }
+    }
+    if (!e && stats.error) e=stats.error;
+    drop_drain(); return e;
 }
 int bootlog_shutdown(void)
 {

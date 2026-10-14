@@ -10,6 +10,9 @@
 #include "uhci_model.h"
 struct storage *storage_get(void) { return NULL; }
 int storage_add_removable(struct storage *s,struct blkdev *b) { (void)s;(void)b;assert(0);return -FS_EIO; }
+int storage_add_removable_bounded(struct storage *s,struct blkdev *b,
+                                 bool (*cancel)(void *),void (*pause)(void *),void *ctx)
+{ (void)cancel;(void)pause;(void)ctx;return storage_add_removable(s,b); }
 int storage_remove_removable(struct storage *s,struct blkdev *b,bool surprise) { (void)s;(void)b;(void)surprise;assert(0);return -FS_EIO; }
 int storage_remove_removable_locked(struct storage *s,struct blkdev *b,bool surprise) { return storage_remove_removable(s,b,surprise); }
 struct ciuki_boot_info g_boot;

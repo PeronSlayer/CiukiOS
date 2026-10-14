@@ -108,6 +108,7 @@ static bool desktop_ledgers_equal(const struct desktop_ledger *a, const struct d
  * controller-selected desktop and its registered children can update state.
  * The desktop explicitly publishes a dedicated anonymous control page. */
 #include "../../../apps/desktop/gate.h"
+#include <ciuki/shell_probe.h>
 extern int supervisor_spawn_desktop_probe(struct process **out);
 extern int probes_crash_server(const char *, unsigned, uint32_t, bool, bool);
 static bool report_unsigned(const char *, const char *, uint32_t *);
@@ -121,6 +122,8 @@ static struct {
     /* f2-31/f2-32 app cases (files-qemu-t23, ciuknote-qemu-t23): write gate request and
      * per-checkpoint digests. app is 0 for every other desktop case, 1 for Files, 2 for CiukNote. */
     uint32_t app, checkpoint, checkpoint_digest[6];
+    uint32_t shell_stage;
+    bool shell;
 } native_reports;
 static uint32_t native_digest(void);
 /* Case-name prefix and checkpoint count of the reporting app scenario (Files: 5, CiukNote: 3). */
@@ -175,6 +178,12 @@ static bool native_report(struct process *p, const char *line, unsigned length)
         native_reports.survivor=child; native_reports.victim=fault;
         native_reports.cycles=cycle; native_reports.replies=replies;
         native_reports.keys=keys; native_reports.motion=motion; native_reports.buttons=buttons;
+        uint32_t shell, shell_stage;
+        if (report_unsigned(line,"shell",&shell)) {
+            NATIVE_REQUIRE(shell==1 && report_unsigned(line,"shell_stage",&shell_stage),"shell");
+            NATIVE_REQUIRE(shell_stage<=6 && shell_stage>=native_reports.shell_stage,"shell_stage");
+            native_reports.shell=true; native_reports.shell_stage=shell_stage;
+        }
         /* Optional app-case fields (files=1 or note=1); absent in every other desktop case.
          * The desktop reports a checkpoint only after presenting its frame,
          * and stays inside this call while the framebuffer is hashed. */
@@ -435,7 +444,8 @@ static int native_crash_isolation(void)
                          native_app_case(),app_emitted,native_reports.checkpoint_digest[app_emitted]);
             }
         }
-        while (native_live(server) && g_ticks<deadline && (native_reports.keys<2 || native_reports.motion<1 || native_reports.buttons<2 || b.presents<=a.presents || g_ticks-start<500));
+        while (native_live(server) && g_ticks<deadline && (native_reports.keys<2 || native_reports.motion<1 || native_reports.buttons<2 || b.presents<=a.presents || g_ticks-start<500 ||
+               (native_reports.shell && shell_probe_pending(native_reports.shell_stage,native_reports.keys,native_reports.buttons))));
         while (app_emitted<native_reports.checkpoint) {
             app_emitted++;
             rec_emit(name,"DATA","case=%s-checkpoint server=desktop checkpoint=%u pixel_digest=%08x",
@@ -444,7 +454,9 @@ static int native_crash_isolation(void)
         if (native_reports.app) pass=pass && !app_gate && native_reports.checkpoint==native_app_checkpoints();
         uint32_t next_digest=native_digest();
         pass=pass && native_live(server) && native_live(survivor) && b.input_events>a.input_events && b.presents>a.presents &&
-            next_digest!=digest && native_reports.keys>=2 && native_reports.motion>=1 && native_reports.buttons>=2 && server->pid==server_pid && survivor->pid==survivor_pid && supervisor_desktop_deaths()==deaths;
+            next_digest!=digest && native_reports.keys>=2 && native_reports.motion>=1 && native_reports.buttons>=2 &&
+            (!native_reports.shell || !shell_probe_pending(native_reports.shell_stage,native_reports.keys,native_reports.buttons)) &&
+            server->pid==server_pid && survivor->pid==survivor_pid && supervisor_desktop_deaths()==deaths;
         rec_emit(name,"DATA","case=interaction server=desktop criteria=%s stage=before presents=%llu input_events=%llu pixel_digest=%08x",criteria,a.presents,a.input_events,digest);
         rec_emit(name,"DATA","case=interaction server=desktop criteria=%s stage=after presents=%llu input_events=%llu pixel_digest=%08x changed=%u keys=%u motion=%u buttons=%u",criteria,b.presents,b.input_events,next_digest,pass,native_reports.keys,native_reports.motion,native_reports.buttons);
         if (!pass) native_step_record(GATE_INTERACT,generation,"interaction_contract");

@@ -12,7 +12,7 @@ static int corrupt(struct fat_volume *v) { v->readonly=true; v->ro_reasons|=FAT_
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     if (file_read_cancelled && file_read_cancelled()) return -4; /* EINTR, before issuance */
     if (s>=v->sectors) return corrupt(v);
-    int e=cache_read(v->cache,v->dev,v->start+s,b);
+    int e=v->preparing ? v->dev->read(v->dev,v->start+s,1,b) : cache_read(v->cache,v->dev,v->start+s,b);
     return e ? (e==-FS_EQUARANTINED ? -FS_EIO : e) : 0;
 }
 static int write_error(struct fat_volume *v, int e) {
@@ -27,9 +27,13 @@ static int writable(struct fat_volume *v) {
 }
 static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     if (s>=v->sectors) return corrupt(v);
-    return write_error(v,cache_write(v->cache,v->dev,v->start+s,b));
+    return write_error(v,v->preparing ? v->dev->write(v->dev,v->start+s,1,b) : cache_write(v->cache,v->dev,v->start+s,b));
 }
-static int barrier(struct fat_volume *v) { return write_error(v,cache_barrier(v->cache,v->dev)); }
+static int barrier(struct fat_volume *v) {
+    if (!v->preparing) return write_error(v,cache_barrier(v->cache,v->dev));
+    if (!blkdev_durable(v->dev)) return write_error(v,-FS_EROFS);
+    return write_error(v,v->dev->write_cache_state==BLKDEV_CACHE_DISABLED ? 0 : v->dev->flush(v->dev));
+}
 static uint32_t offset(struct fat_volume *v, uint32_t c) { return v->type==12 ? c+c/2 : c*(v->type/8); }
 static int fat_bytes(struct fat_volume *v, unsigned copy, uint32_t off, uint8_t *p, unsigned n, bool wr) {
     uint8_t b[512];
@@ -626,8 +630,9 @@ out:
     cache_workspace_end(v->cache); return e;
 }
 static int reject(struct fat_volume *v, const char *why) { v->diagnostic=why; v->mounted=false; return -FS_EINVAL; }
-int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr) {
+static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr, bool preparing) {
     memset(v,0,sizeof(*v)); v->cache=cache; v->dev=dev; v->start=start; v->sectors=sectors;
+    v->preparing=preparing;
     if (!dev || dev->sector_size!=512 || !sectors || start>=dev->capacity || sectors>dev->capacity-start) return reject(v,"device/partition bounds");
     uint8_t b[512], other[512]; int e=readsec(v,0,b); if (e) return e;
     if (fs_rd16(b+510)!=0xaa55 || fs_rd16(b+11)!=512 || (b[0]!=0xe9 && !(b[0]==0xeb && b[2]==0x90))) return reject(v,"BPB signature/sector size/jump");
@@ -685,9 +690,15 @@ int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *de
     if (!v->readonly || (wr && v->ro_reasons==FAT_RO_DIRTY)) return fat_enable_write(v);
     return 0;
 }
+int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr) {
+    return mount_volume(v,cache,dev,start,sectors,wr,false);
+}
+int fat_prepare(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors) {
+    return mount_volume(v,cache,dev,start,sectors,false,true);
+}
 int fat_enable_write(struct fat_volume *v) {
     if (!v || !v->mounted) return -FS_EINVAL;
-    int e=cache_error(v->cache,v->dev); if (e) return write_error(v,e);
+    int e=v->preparing ? (v->dev->quarantined ? -FS_EIO : 0) : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
     if (!v->readonly && v->writable_session) return 0;
     if (!blkdev_durable(v->dev)) { v->ro_reasons|=FAT_RO_DURABILITY; return -FS_EROFS; }
     if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY)) return -FS_EROFS;

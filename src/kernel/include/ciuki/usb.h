@@ -16,6 +16,9 @@
 #define USB_HID_TRACE_LIMIT 16u
 #define USB_PORT_ACTION_TRACE_LIMIT 32u
 #define USB_BULK_TIMEOUT_MS 10000u
+#define USB_BIND_TIMEOUT_MS 5000u
+#define USB_BIND_BULK_MS 1000u
+#define USB_BIND_FINISH_MS 100u /* retirement and terminal disk record */
 #define USB_EIO 5
 #define USB_EAGAIN 11
 #define USB_EPIPE 32
@@ -93,10 +96,13 @@ struct usb_storage {
     uint32_t tag;
     uint64_t next_check;
     uint64_t bulk_deadline; /* only live while usb_bulk calls the packet engine */
+    uint64_t bind_deadline; /* MAX LUN through namespace publication, including recovery */
+    const char *bind_stage;
     struct usb_storage_trace trace;
     uint8_t interface, in, out, in_packet, out_packet, in_toggle, out_toggle;
     uint8_t sense_key, asc, ascq;
     bool bound, online, published, ejected, write_protected, fault_logged, quarantine_logged;
+    bool binding, bind_reserved;
 };
 /* Coalesce suppressed events; root and external-hub ports use the same budget. */
 struct usb_port_log {
@@ -173,12 +179,20 @@ static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool
      * software clock. Packet engines stop after two linked HC frames;
      * this is only the fail-closed watchdog, including a frozen clock. */
     if (periodic) return USB_PERIODIC_WATCHDOG_MS;
+    unsigned budget = USB_TIMEOUT_MS;
     if (ep && d->storage.bulk_deadline) {
         int64_t left = (int64_t)(d->storage.bulk_deadline - now);
         if (left <= 0) return 0;
-        return (uint64_t)left < USB_BULK_TIMEOUT_MS ? (unsigned)left : USB_BULK_TIMEOUT_MS;
+        budget = (uint64_t)left < USB_BULK_TIMEOUT_MS ? (unsigned)left : USB_BULK_TIMEOUT_MS;
     }
-    return USB_TIMEOUT_MS;
+    if (d->storage.binding) {
+        int64_t left = (int64_t)(d->storage.bind_deadline - now);
+        /* Leave time for the unlinked TD's two-frame retirement. */
+        if (left <= USB_BIND_FINISH_MS) return 0;
+        left -= USB_BIND_FINISH_MS;
+        if ((uint64_t)left < budget) budget = (unsigned)left;
+    }
+    return budget;
 }
 uint32_t usb_read(struct usb_host *, unsigned, unsigned);
 void usb_write(struct usb_host *, unsigned, uint32_t, unsigned);
@@ -200,6 +214,7 @@ int usb_enumerate(struct usb_host *, unsigned root, unsigned parent, unsigned po
 int usb_parse_config(struct usb_device *, const uint8_t *, unsigned);
 void usb_step(struct usb_host *);
 void usb_host_take(struct usb_host *); /* reserves serialized general/BOT slot */
+bool usb_host_take_until(struct usb_host *, uint64_t deadline);
 void usb_host_drop(struct usb_host *);
 void usb_sleep(struct usb_host *, unsigned); /* caller's reservation survives */
 void usb_hid_service(struct usb_host *); /* mutex held, no general transfers */
@@ -216,7 +231,7 @@ int usb_interrupt(struct usb_device *, struct usb_hid *, void *, unsigned);
 int usb_hub_reset(struct usb_device *, unsigned port);
 void usb_interrupt_stop(struct usb_device *, struct usb_hid *);
 int usb_bulk(struct usb_device *, bool in, void *, unsigned, unsigned *actual);
-int usb_storage_attach(struct usb_device *); /* host lock held */
+int usb_storage_attach(struct usb_device *); /* no host lock/reservation held */
 void usb_storage_detach(struct usb_device *); /* host lock held, no namespace I/O */
 struct storage;
 int usb_storage_eject(struct storage *, unsigned drive, uint32_t generation);

@@ -60,6 +60,8 @@ int storage_add_disk(struct storage *, unsigned disk, struct blkdev *);
 /* USB records/views are retained for the boot. Letters are E: onward and
  * never reused. Dirty removable media stay read-only; no recovery writes. */
 int storage_add_removable(struct storage *, struct blkdev *);
+int storage_add_removable_bounded(struct storage *, struct blkdev *,
+                                  bool (*cancel)(void *), void (*pause)(void *), void *);
 int storage_remove_removable(struct storage *, struct blkdev *, bool surprise);
 int storage_remove_removable_locked(struct storage *, struct blkdev *, bool surprise);
 int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);

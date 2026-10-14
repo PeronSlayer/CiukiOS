@@ -124,4 +124,22 @@ static void errors(void)
     CHECK(bootlog_shutdown() == -FS_EIO);
     puts("bootlog: sticky seek/write/short-write/truncation errors, no recursion or retry I/O PASS");
 }
-int main(void) { retention(); errors(); return 0; }
+static unsigned sync_pauses;
+static bool cancel_sync(void *ctx) { (void)ctx;return sync_pauses>=3; }
+static void pause_sync(void *ctx) { (void)ctx;sync_pauses++; }
+static void synchronous_records(void)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    bootlog_capture("[usb-storage] stage=inquiry addr=1\n",33);
+    sync_pauses=0;CHECK(!bootlog_sync(cancel_sync,pause_sync,0));
+    CHECK(!snapshot().queued && commits==1 && !memcmp(disk,"[usb-storage] stage=inquiry addr=1\n",33));
+    /* A running writer or a VFS client cannot make sync spin or steal locks. */
+    draining=true;sync_pauses=0;
+    CHECK(bootlog_sync(cancel_sync,pause_sync,0)==-FS_EAGAIN && sync_pauses==3 && draining);
+    draining=false;fs_lock_take(&fs.lock);sync_pauses=0;
+    CHECK(bootlog_sync(cancel_sync,pause_sync,0)==-FS_EAGAIN && sync_pauses==3);
+    fs_lock_drop(&fs.lock);CHECK(!snapshot().error);
+    CHECK(!bootlog_shutdown());
+    puts("bootlog: synchronous USB stage drain/commit, cancellable writer/VFS contention without lock theft PASS");
+}
+int main(void) { retention(); errors(); synchronous_records(); return 0; }

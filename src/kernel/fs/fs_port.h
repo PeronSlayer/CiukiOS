@@ -13,6 +13,7 @@ typedef pthread_mutex_t fs_lock;
 static inline void fs_lock_init(fs_lock *l) { if (pthread_mutex_init(l, 0)) abort(); }
 static inline void fs_lock_destroy(fs_lock *l) { pthread_mutex_destroy(l); }
 static inline void fs_lock_take(fs_lock *l) { if (pthread_mutex_lock(l)) abort(); }
+static inline bool fs_lock_try_take(fs_lock *l) { return !pthread_mutex_trylock(l); }
 static inline void fs_lock_drop(fs_lock *l) { if (pthread_mutex_unlock(l)) abort(); }
 static inline void *fs_alloc(size_t n) { return n <= 2040 ? malloc(n) : NULL; }
 static inline void fs_free(void *p) { free(p); }
@@ -51,6 +52,11 @@ typedef struct { bool held; struct kwait wait; } fs_lock;
 static inline bool fs_lock_free(void *arg) { return !((fs_lock *)arg)->held; }
 static inline void fs_lock_init(fs_lock *l) { l->held = false; kwait_init(&l->wait); }
 static inline void fs_lock_destroy(fs_lock *l) { (void)l; }
+static inline bool fs_lock_try_take(fs_lock *l) {
+    uint32_t f = irq_save(); bool free = !l->held;
+    if (free) l->held = true;
+    irq_restore(f); return free;
+}
 static inline void fs_lock_take(fs_lock *l) {
     for (;;) {
         uint32_t f = irq_save();
