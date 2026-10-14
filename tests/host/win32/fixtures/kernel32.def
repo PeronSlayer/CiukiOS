@@ -1,0 +1,8 @@
+LIBRARY KERNEL32.dll
+EXPORTS
+ FreeLibrary@4
+ GetModuleFileNameA@12
+ GetModuleHandleA@4
+ GetProcAddress@8
+ LoadLibraryA@4
+ LoadLibraryExA@12

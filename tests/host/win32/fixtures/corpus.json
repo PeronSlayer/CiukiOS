@@ -1,0 +1,4286 @@
+[
+  {
+    "id": "console",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "accepted-images"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "gui",
+    "kind": "synthetic",
+    "features": [
+      "gui"
+    ],
+    "rules": [
+      "accepted-images"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "gui",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "dll-image",
+    "kind": "synthetic",
+    "features": [
+      "dll"
+    ],
+    "rules": [
+      "image-versus-dll"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "import-name",
+    "kind": "synthetic",
+    "features": [
+      "import-name"
+    ],
+    "rules": [
+      "imports-name-hint"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "import-ordinal",
+    "kind": "synthetic",
+    "features": [
+      "import-ordinal"
+    ],
+    "rules": [
+      "imports-ordinal"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "#11"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "import-mixed",
+    "kind": "synthetic",
+    "features": [
+      "import-mixed"
+    ],
+    "rules": [
+      "imports-name-hint",
+      "imports-ordinal"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue",
+            "#11"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "iat-fallback",
+    "kind": "synthetic",
+    "features": [
+      "iat-fallback"
+    ],
+    "rules": [
+      "original-first-thunk-absent"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "bound-rebind",
+    "kind": "synthetic",
+    "features": [
+      "bound"
+    ],
+    "rules": [
+      "bound-imports"
+    ],
+    "runtime": "Ignore binding timestamps; resolve FixtureValue again.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue"
+          ],
+          "kind": "static",
+          "timestamp": 123
+        }
+      ],
+      "bound_imports": [
+        {
+          "dll": "provider.dll",
+          "timestamp": 123,
+          "forwarders": [
+            {
+              "dll": "forward.dll",
+              "timestamp": 456
+            }
+          ]
+        }
+      ],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "bound-without-names",
+    "kind": "synthetic",
+    "features": [
+      "bound-no-names"
+    ],
+    "rules": [
+      "bound-iat-without-name-table"
+    ],
+    "runtime": "Lead must decide guest policy; static census cannot recover symbols from bound addresses.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "<bound-addresses-unresolved>"
+          ],
+          "kind": "static",
+          "timestamp": 123
+        }
+      ],
+      "bound_imports": [
+        {
+          "dll": "provider.dll",
+          "timestamp": 123,
+          "forwarders": [
+            {
+              "dll": "forward.dll",
+              "timestamp": 456
+            }
+          ]
+        }
+      ],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": [
+        "bound-iat-without-names"
+      ]
+    }
+  },
+  {
+    "id": "delay",
+    "kind": "synthetic",
+    "features": [
+      "delay"
+    ],
+    "rules": [
+      "delay-load"
+    ],
+    "runtime": "Leave delayed IAT to the image helper; parser lists symbols without loading.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue",
+            "#11"
+          ],
+          "kind": "delay",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "delay-va",
+    "kind": "synthetic",
+    "features": [
+      "delay-va"
+    ],
+    "rules": [
+      "delay-load"
+    ],
+    "runtime": "Leave delayed IAT to the image helper; parser lists symbols without loading.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue",
+            "#11"
+          ],
+          "kind": "delay",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "exports",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "exports"
+    ],
+    "rules": [
+      "exports",
+      "forwarder-depth"
+    ],
+    "runtime": "Export ordinal 7; hole at ordinal 8 is absent.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": null
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "forward-name",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "exports",
+      "forwarder-depth"
+    ],
+    "runtime": "Resolve forwarded exports with depth <=16; self cycle must fail resolution.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "provider.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "forward-ordinal",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-ordinal"
+    ],
+    "rules": [
+      "exports",
+      "forwarder-depth"
+    ],
+    "runtime": "Resolve forwarded exports with depth <=16; self cycle must fail resolution.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "provider.#11"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "forward-cycle",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-cycle"
+    ],
+    "rules": [
+      "exports",
+      "forwarder-cycles"
+    ],
+    "runtime": "Resolve forwarded exports with depth <=16; self cycle must fail resolution.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fixture.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "scenario": {
+      "module_files": {
+        "fixture.dll": "forward-cycle.dll"
+      },
+      "expected": "reject self forwarder cycle"
+    }
+  },
+  {
+    "id": "data-export",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "export-data"
+    ],
+    "rules": [
+      "exports",
+      "forwarder-depth"
+    ],
+    "runtime": "Export ordinal 7; hole at ordinal 8 is absent.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": null
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "tls",
+    "kind": "synthetic",
+    "features": [
+      "tls"
+    ],
+    "rules": [
+      "tls-template",
+      "tls-callbacks",
+      "thread-startup-shutdown"
+    ],
+    "runtime": "Initialize template plus zero fill, write index, invoke callbacks before entry for each thread.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": {
+        "callbacks": 1,
+        "template_size": 4,
+        "zero_fill": 8
+      },
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "tls-two",
+    "kind": "synthetic",
+    "features": [
+      "tls-two"
+    ],
+    "rules": [
+      "tls-template",
+      "tls-callbacks",
+      "thread-startup-shutdown"
+    ],
+    "runtime": "Initialize template plus zero fill, write index, invoke callbacks before entry for each thread.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": {
+        "callbacks": 2,
+        "template_size": 4,
+        "zero_fill": 8
+      },
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "tls-empty",
+    "kind": "synthetic",
+    "features": [
+      "tls-empty"
+    ],
+    "rules": [
+      "tls-template",
+      "tls-callbacks",
+      "thread-startup-shutdown"
+    ],
+    "runtime": "Initialize template plus zero fill, write index, invoke callbacks before entry for each thread.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": {
+        "callbacks": 0,
+        "template_size": 4,
+        "zero_fill": 8
+      },
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "reloc-highlow",
+    "kind": "synthetic",
+    "features": [
+      "reloc"
+    ],
+    "rules": [
+      "relocation-highlow",
+      "relocation-private-pages"
+    ],
+    "runtime": "At nonpreferred base apply HIGHLOW to text immediate and ignore ABSOLUTE padding.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "reloc-highadj",
+    "kind": "synthetic",
+    "features": [
+      "reloc-highadj"
+    ],
+    "rules": [
+      "relocation-highadj"
+    ],
+    "runtime": "HIGHADJ consumes its following addend; support is SHOULD.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        4
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "no-reloc",
+    "kind": "synthetic",
+    "features": [
+      "no-reloc"
+    ],
+    "rules": [
+      "relocation-base-collision"
+    ],
+    "runtime": "Preferred base works; base collision must fail ERROR_BAD_EXE_FORMAT (193).",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "rwx-section",
+    "kind": "synthetic",
+    "features": [
+      "rwx"
+    ],
+    "rules": [
+      "section-protections"
+    ],
+    "runtime": "Map text read/write/execute; runtime self-modification is tested by packed-code.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [
+        "writable-executable-section"
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "id": "packer-name",
+    "kind": "synthetic",
+    "features": [
+      "packer-name"
+    ],
+    "rules": [
+      "packer-heuristics"
+    ],
+    "runtime": "UPX section name is a heuristic only; fixture is not an actual UPX payload.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [
+        "packer-section-name"
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "id": "resource-ordinal",
+    "kind": "synthetic",
+    "features": [
+      "resource-ordinal"
+    ],
+    "rules": [
+      "resources",
+      "datafile"
+    ],
+    "runtime": "Find resource by type/name/language; DATAFILE loads must not run entry.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [
+        {
+          "type": 10,
+          "name": 1,
+          "language": 1033,
+          "size": 12
+        }
+      ],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "resource-named",
+    "kind": "synthetic",
+    "features": [
+      "resource-named"
+    ],
+    "rules": [
+      "resources",
+      "datafile"
+    ],
+    "runtime": "Find resource by type/name/language; DATAFILE loads must not run entry.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [
+        {
+          "type": 10,
+          "name": "HELLO",
+          "language": 1033,
+          "size": 12
+        }
+      ],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "resource-italian",
+    "kind": "synthetic",
+    "features": [
+      "resource-italian"
+    ],
+    "rules": [
+      "resources",
+      "datafile"
+    ],
+    "runtime": "Find resource by type/name/language; DATAFILE loads must not run entry.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [
+        {
+          "type": 10,
+          "name": 1,
+          "language": 1040,
+          "size": 12
+        }
+      ],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "manifest",
+    "kind": "synthetic",
+    "features": [
+      "manifest"
+    ],
+    "rules": [
+      "activation-manifests"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [
+        {
+          "type": 24,
+          "name": 1,
+          "language": 1033,
+          "size": 148
+        }
+      ],
+      "manifests": [
+        {
+          "kind": "assemblyIdentity",
+          "name": "Ciuki.Fixture",
+          "version": "1.0.0.0",
+          "processorArchitecture": "x86"
+        }
+      ],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "low-alignment",
+    "kind": "synthetic",
+    "features": [
+      "low-alignment"
+    ],
+    "rules": [
+      "low-alignment",
+      "page-shared-protections"
+    ],
+    "runtime": "Header and two sections occupy shared pages; preserve combined page permissions.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "virtual-size-zero",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "virtual-size-zero"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 384,
+        "value": 0
+      }
+    ]
+  },
+  {
+    "id": "bss-zero-fill",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "raw-size-zero"
+    ],
+    "runtime": "Data virtual range is zero filled with no file bytes.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 432,
+        "value": 0
+      }
+    ]
+  },
+  {
+    "id": "raw-shared",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "shared-raw-sections"
+    ],
+    "runtime": "Both sections share a raw file range without virtual overlap.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 436,
+        "value": 512
+      }
+    ]
+  },
+  {
+    "id": "raw-beyond-file",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "raw-data-zero-filled"
+    ],
+    "runtime": "Zero fill missing section raw data according to current contract.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": [
+        "raw-data-zero-filled"
+      ]
+    },
+    "patches": [
+      {
+        "offset": 436,
+        "value": 9216
+      }
+    ]
+  },
+  {
+    "id": "new-subsystem-version",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "subsystem-version"
+    ],
+    "runtime": "Accept with a warning rather than rejecting newer subsystem major.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": [
+        "newer-subsystem-version"
+      ]
+    },
+    "patches": [
+      {
+        "offset": 200,
+        "value": 6,
+        "width": 2
+      }
+    ]
+  },
+  {
+    "id": "ignored-checksum",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "checksum-ignored"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 216,
+        "value": 3735928559
+      }
+    ]
+  },
+  {
+    "id": "ignored-dll-characteristics",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "dll-characteristics-ignored"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 222,
+        "value": 65535,
+        "width": 2
+      }
+    ]
+  },
+  {
+    "id": "certificate-file-offset",
+    "kind": "synthetic",
+    "features": [
+      "certificate"
+    ],
+    "rules": [
+      "certificate-file-offset"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "missing-dll",
+    "kind": "synthetic",
+    "features": [
+      "import-name"
+    ],
+    "rules": [
+      "missing-dll"
+    ],
+    "runtime": "Start: missing-DLL dialog; LoadLibrary: ERROR_MOD_NOT_FOUND (126).",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "absent.dll",
+          "symbols": [
+            "FixtureValue"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "dll": "absent.dll",
+    "scenario": {
+      "module_files": {},
+      "loadlibrary_error": 126
+    }
+  },
+  {
+    "id": "missing-export",
+    "kind": "synthetic",
+    "features": [
+      "import-name"
+    ],
+    "rules": [
+      "missing-export"
+    ],
+    "runtime": "Provider lacks MissingValue: missing-export dialog on start; GetProcAddress error 127.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "MissingValue"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "symbol": "MissingValue",
+    "scenario": {
+      "module_files": {
+        "provider.dll": "provider.dll"
+      },
+      "getprocaddress_error": 127
+    }
+  },
+  {
+    "id": "no-directories",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "optional-directory-count"
+    ],
+    "runtime": "Loads at preferred base; entry returns an absolute pointer.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 244,
+        "value": 0
+      }
+    ]
+  },
+  {
+    "id": "entrypoint-header",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "headers-mapped"
+    ],
+    "runtime": "Map headers; entry in mapped header is structurally visible (no execution evidence).",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 168,
+        "value": 64
+      }
+    ]
+  },
+  {
+    "id": "bad-dos-magic",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "dos-magic"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check dos-magic.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "dos-magic"
+    },
+    "patches": [
+      {
+        "offset": 0,
+        "value": 0,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-pe-offset-alignment",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "pe-offset-alignment"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check pe-offset-alignment.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "pe-offset-alignment"
+    },
+    "patches": [
+      {
+        "offset": 60,
+        "value": 129,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-pe-offset-bounds",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "pe-header-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check pe-header-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "pe-header-bounds"
+    },
+    "patches": [
+      {
+        "offset": 60,
+        "value": 4294967292,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-pe-signature",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "pe-signature"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check pe-signature.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "pe-signature"
+    },
+    "patches": [
+      {
+        "offset": 128,
+        "value": 0,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-machine",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "machine-not-i386"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check machine-not-i386.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "machine-not-i386"
+    },
+    "patches": [
+      {
+        "offset": 132,
+        "value": 34404,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-zero-sections",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-count"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-count.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-count"
+    },
+    "patches": [
+      {
+        "offset": 134,
+        "value": 0,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-too-many-sections",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-count"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-count.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-count"
+    },
+    "patches": [
+      {
+        "offset": 134,
+        "value": 97,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-not-executable",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "not-executable-image"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check not-executable-image.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "not-executable-image"
+    },
+    "patches": [
+      {
+        "offset": 150,
+        "value": 256,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-optional-size",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "optional-header-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check optional-header-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "optional-header-bounds"
+    },
+    "patches": [
+      {
+        "offset": 148,
+        "value": 95,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-pe32-plus",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "optional-magic-not-pe32"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check optional-magic-not-pe32.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "optional-magic-not-pe32"
+    },
+    "patches": [
+      {
+        "offset": 152,
+        "value": 523,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-directory-count",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "directory-count"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check directory-count.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "directory-count"
+    },
+    "patches": [
+      {
+        "offset": 244,
+        "value": 17,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-file-alignment",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "file-alignment"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check file-alignment.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "file-alignment"
+    },
+    "patches": [
+      {
+        "offset": 188,
+        "value": 513,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-section-alignment",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-alignment"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-alignment.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-alignment"
+    },
+    "patches": [
+      {
+        "offset": 184,
+        "value": 8193,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-image-limit",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "image-size"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check image-size.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "image-size"
+    },
+    "patches": [
+      {
+        "offset": 208,
+        "value": 536875008,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-image-zero",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "image-size"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check image-size.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "image-size"
+    },
+    "patches": [
+      {
+        "offset": 208,
+        "value": 0,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-image-wrap",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "image-address-wrap"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check image-address-wrap.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "image-address-wrap"
+    },
+    "patches": [
+      {
+        "offset": 180,
+        "value": 4294963200,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-header-size",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "headers-size"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check headers-size.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "headers-size"
+    },
+    "patches": [
+      {
+        "offset": 212,
+        "value": 128,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-subsystem-native",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "unsupported-subsystem"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check unsupported-subsystem.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "unsupported-subsystem"
+    },
+    "patches": [
+      {
+        "offset": 220,
+        "value": 1,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-subsystem-posix",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "unsupported-subsystem"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check unsupported-subsystem.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "unsupported-subsystem"
+    },
+    "patches": [
+      {
+        "offset": 220,
+        "value": 7,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-subsystem-ce",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "unsupported-subsystem"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check unsupported-subsystem.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "unsupported-subsystem"
+    },
+    "patches": [
+      {
+        "offset": 220,
+        "value": 9,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-entrypoint",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "entrypoint-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check entrypoint-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "entrypoint-bounds"
+    },
+    "patches": [
+      {
+        "offset": 168,
+        "value": 16384,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-section-image-bounds",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-image-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-image-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-image-bounds"
+    },
+    "patches": [
+      {
+        "offset": 384,
+        "value": 4294967295,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-section-rva",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-rva-alignment"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-rva-alignment.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-rva-alignment"
+    },
+    "patches": [
+      {
+        "offset": 388,
+        "value": 4097,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-section-raw",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-raw-alignment"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-raw-alignment.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-raw-alignment"
+    },
+    "patches": [
+      {
+        "offset": 396,
+        "value": 513,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-section-raw-wrap",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-raw-wrap"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-raw-wrap.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-raw-wrap"
+    },
+    "patches": [
+      {
+        "offset": 396,
+        "value": 4294966784,
+        "width": 4
+      },
+      {
+        "offset": 392,
+        "value": 1024,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-header-overlap",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-header-overlap"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-header-overlap.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-header-overlap"
+    },
+    "patches": [
+      {
+        "offset": 388,
+        "value": 0,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-virtual-overlap",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "section-virtual-overlap"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check section-virtual-overlap.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "section-virtual-overlap"
+    },
+    "patches": [
+      {
+        "offset": 428,
+        "value": 4096,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-directory-image-bounds",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "directory-image-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check directory-image-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "directory-image-bounds"
+    },
+    "patches": [
+      {
+        "offset": 256,
+        "value": 4294967292,
+        "width": 4
+      },
+      {
+        "offset": 260,
+        "value": 40,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-certificate",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "certificate-file-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check certificate-file-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "certificate-file-bounds"
+    },
+    "patches": [
+      {
+        "offset": 280,
+        "value": 9216,
+        "width": 4
+      },
+      {
+        "offset": 284,
+        "value": 8,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-import-terminator",
+    "kind": "synthetic",
+    "features": [
+      "import-name"
+    ],
+    "rules": [
+      "import-descriptors-unterminated"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check import-descriptors-unterminated.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "import-descriptors-unterminated"
+    },
+    "patches": [
+      {
+        "offset": 260,
+        "value": 20,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-import-iat",
+    "kind": "synthetic",
+    "features": [
+      "import-name"
+    ],
+    "rules": [
+      "import-iat-missing"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check import-iat-missing.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "import-iat-missing"
+    },
+    "patches": [
+      {
+        "offset": 1040,
+        "value": 0,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-import-thunk",
+    "kind": "synthetic",
+    "features": [
+      "import-name"
+    ],
+    "rules": [
+      "import-thunk-alignment"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check import-thunk-alignment.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "import-thunk-alignment"
+    },
+    "patches": [
+      {
+        "offset": 1024,
+        "value": 8449,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-import-ordinal",
+    "kind": "synthetic",
+    "features": [
+      "import-ordinal"
+    ],
+    "rules": [
+      "import-ordinal-reserved-bits"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check import-ordinal-reserved-bits.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "import-ordinal-reserved-bits"
+    },
+    "patches": [
+      {
+        "offset": 1280,
+        "value": 2147549195,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-export-count",
+    "kind": "synthetic",
+    "features": [
+      "exports"
+    ],
+    "rules": [
+      "export-count"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check export-count.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "export-count"
+    },
+    "patches": [
+      {
+        "offset": 1560,
+        "value": 3,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-export-ordinal",
+    "kind": "synthetic",
+    "features": [
+      "exports"
+    ],
+    "rules": [
+      "export-ordinal-index"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check export-ordinal-index.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "export-ordinal-index"
+    },
+    "patches": [
+      {
+        "offset": 1632,
+        "value": 2,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-delay-attributes",
+    "kind": "synthetic",
+    "features": [
+      "delay"
+    ],
+    "rules": [
+      "delay-attributes"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check delay-attributes.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "delay-attributes"
+    },
+    "patches": [
+      {
+        "offset": 2304,
+        "value": 2,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-bound-name",
+    "kind": "synthetic",
+    "features": [
+      "bound"
+    ],
+    "rules": [
+      "bound-name-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check bound-name-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "bound-name-bounds"
+    },
+    "patches": [
+      {
+        "offset": 2052,
+        "value": 128,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-reloc-type",
+    "kind": "synthetic",
+    "features": [
+      "reloc"
+    ],
+    "rules": [
+      "relocation-type"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check relocation-type.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "relocation-type"
+    },
+    "patches": [
+      {
+        "offset": 2824,
+        "value": 61441,
+        "width": 2
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-reloc-size",
+    "kind": "synthetic",
+    "features": [
+      "reloc"
+    ],
+    "rules": [
+      "relocation-block-size"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check relocation-block-size.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "relocation-block-size"
+    },
+    "patches": [
+      {
+        "offset": 2820,
+        "value": 7,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-reloc-target",
+    "kind": "synthetic",
+    "features": [
+      "reloc"
+    ],
+    "rules": [
+      "relocation-target-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check relocation-target-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "relocation-target-bounds"
+    },
+    "patches": [
+      {
+        "offset": 2816,
+        "value": 16384,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-tls-index",
+    "kind": "synthetic",
+    "features": [
+      "tls"
+    ],
+    "rules": [
+      "tls-index-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check tls-index-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "tls-index-bounds"
+    },
+    "patches": [
+      {
+        "offset": 2568,
+        "value": 0,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-tls-callback-alignment",
+    "kind": "synthetic",
+    "features": [
+      "tls"
+    ],
+    "rules": [
+      "tls-callback-alignment"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check tls-callback-alignment.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "tls-callback-alignment"
+    },
+    "patches": [
+      {
+        "offset": 2572,
+        "value": 4204097,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-tls-callback-address",
+    "kind": "synthetic",
+    "features": [
+      "tls"
+    ],
+    "rules": [
+      "tls-callback-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check tls-callback-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "tls-callback-bounds"
+    },
+    "patches": [
+      {
+        "offset": 2624,
+        "value": 5242880,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-tls-template",
+    "kind": "synthetic",
+    "features": [
+      "tls"
+    ],
+    "rules": [
+      "tls-template-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check tls-template-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "tls-template-bounds"
+    },
+    "patches": [
+      {
+        "offset": 2564,
+        "value": 4202496,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-resource-cycle",
+    "kind": "synthetic",
+    "features": [
+      "resource-ordinal"
+    ],
+    "rules": [
+      "resource-cycle"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check resource-cycle.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "resource-cycle"
+    },
+    "patches": [
+      {
+        "offset": 3092,
+        "value": 2147483648,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "bad-resource-leaf",
+    "kind": "synthetic",
+    "features": [
+      "resource-ordinal"
+    ],
+    "rules": [
+      "resource-directory-bounds"
+    ],
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check resource-directory-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "resource-directory-bounds"
+    },
+    "patches": [
+      {
+        "offset": 3140,
+        "value": 1020,
+        "width": 4
+      }
+    ],
+    "guest_error": 193
+  },
+  {
+    "id": "truncated-dos",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "truncation"
+    ],
+    "runtime": "Refuse: dos-header-truncated.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "dos-header-truncated"
+    },
+    "truncate": 32,
+    "guest_error": 193
+  },
+  {
+    "id": "truncated-optional",
+    "kind": "synthetic",
+    "features": [],
+    "rules": [
+      "truncation"
+    ],
+    "runtime": "Refuse: optional-header-bounds.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "error": "optional-header-bounds"
+    },
+    "truncate": 200,
+    "guest_error": 193
+  },
+  {
+    "id": "abi-stdcall",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-stdcall"
+    ],
+    "runtime": "Callee returns 9 in EAX and pops 8 argument bytes.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=1"
+    ]
+  },
+  {
+    "id": "abi-cdecl",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-cdecl"
+    ],
+    "runtime": "Caller cleans two arguments; result 9.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=2"
+    ]
+  },
+  {
+    "id": "abi-varargs",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-varargs"
+    ],
+    "runtime": "Caller cleans all variadic arguments; result 6.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=3"
+    ]
+  },
+  {
+    "id": "abi-thiscall",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-thiscall"
+    ],
+    "runtime": "ECX points at object; callee pops explicit int; result 12.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=4"
+    ]
+  },
+  {
+    "id": "abi-return64",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-return64"
+    ],
+    "runtime": "EDX:EAX = 11223344:55667788; observed xor = 0x444444cc.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=5"
+    ]
+  },
+  {
+    "id": "abi-com",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-com"
+    ],
+    "runtime": "COM vtable entry is stdcall, explicit this stack argument; result 12.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=6"
+    ]
+  },
+  {
+    "id": "abi-callback",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-callback"
+    ],
+    "runtime": "stdcall callback returns 10 and cleans its argument.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=7"
+    ]
+  },
+  {
+    "id": "abi-nonvolatile",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-nonvolatile"
+    ],
+    "runtime": "EBX/ESI/EDI/EBP retain caller values.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=8"
+    ]
+  },
+  {
+    "id": "abi-df",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-df"
+    ],
+    "runtime": "Entry clears DF after setting it; exit with DF clear.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=9"
+    ]
+  },
+  {
+    "id": "abi-layout",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-layout"
+    ],
+    "runtime": "Win32 public widths and pack(1) compile assertions; observed=11.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=10"
+    ]
+  },
+  {
+    "id": "abi-mingw",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "abi-stdcall"
+    ],
+    "runtime": "Same stdcall probe on i686-w64-mingw32 target.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=1"
+    ],
+    "target": "i686-w64-mingw32"
+  },
+  {
+    "id": "seh-chain",
+    "kind": "compiled",
+    "source": "seh.s",
+    "rules": [
+      "seh-chain",
+      "nested-handlers"
+    ],
+    "runtime": "Install FS:[0] chain; UD2 raises illegal instruction; inner continues search, outer advances CONTEXT.Eip and resumes, then restore chain.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "NESTED=0"
+    ]
+  },
+  {
+    "id": "seh-nested",
+    "kind": "compiled",
+    "source": "seh.s",
+    "rules": [
+      "seh-chain",
+      "nested-handlers"
+    ],
+    "runtime": "Install FS:[0] chain; UD2 raises illegal instruction; inner continues search, outer advances CONTEXT.Eip and resumes, then restore chain.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "NESTED=1"
+    ]
+  },
+  {
+    "id": "packed-code",
+    "kind": "compiled",
+    "source": "packed.s",
+    "rules": [
+      "self-modifying-code"
+    ],
+    "runtime": "Patch mov immediate to 42 in RWX text; jump to patched code; EAX=42.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [
+        "writable-executable-section"
+      ],
+      "warnings": []
+    }
+  },
+  {
+    "id": "provider",
+    "kind": "compiled",
+    "source": "provider.c",
+    "rules": [
+      "dllmain-dependency-order",
+      "dllmain-thread-reasons"
+    ],
+    "runtime": "DllMain attaches dependency first; reasons recorded in trace; returns success.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": null
+        },
+        {
+          "ordinal": 11,
+          "names": [],
+          "forwarder": null
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "dll": true,
+    "exports": true
+  },
+  {
+    "id": "provider-fail",
+    "kind": "compiled",
+    "source": "provider.c",
+    "rules": [
+      "dllmain-failure-rollback"
+    ],
+    "runtime": "Failed attach aborts start error 1114 or LoadLibrary rollback; prior dependencies detach reverse order.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": null
+        },
+        {
+          "ordinal": 11,
+          "names": [],
+          "forwarder": null
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "dll": true,
+    "exports": true,
+    "defines": [
+      "FAIL_ATTACH=1"
+    ],
+    "scenario": {
+      "module_files": {
+        "provider.dll": "provider-fail.dll",
+        "consumer-dll.dll": "consumer-dll.dll"
+      },
+      "guest_error": 1114
+    }
+  },
+  {
+    "id": "consumer",
+    "kind": "compiled",
+    "source": "consumer.c",
+    "rules": [
+      "imports-name-hint",
+      "imports-ordinal",
+      "dllmain-dependency-order"
+    ],
+    "runtime": "Resolve name/ordinal from provider; dependency DllMain before consumer; entry returns 18.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue",
+            "#11"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "imports": true
+  },
+  {
+    "id": "consumer-dll",
+    "kind": "compiled",
+    "source": "consumer.c",
+    "rules": [
+      "dllmain-dependency-order",
+      "dll-reference-dependencies",
+      "dllmain-detach-order"
+    ],
+    "runtime": "provider attach precedes consumer attach; detach reverse; inside DllMain imports work.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue",
+            "#11"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "imports": true,
+    "dll": true
+  },
+  {
+    "id": "compiled-tls",
+    "kind": "compiled",
+    "source": "tls.c",
+    "rules": [
+      "tls-template",
+      "tls-callbacks",
+      "thread-startup-shutdown"
+    ],
+    "runtime": "TLS cb1 then cb2 before entry; trace=15; template 1,2,3,4 plus 8 zero bytes; per-thread reasons.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": {
+        "callbacks": 2,
+        "template_size": 4,
+        "zero_fill": 8
+      },
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "compiled-resources",
+    "kind": "compiled",
+    "source": "abi.c",
+    "rules": [
+      "resources",
+      "datafile"
+    ],
+    "runtime": "Resource lookup ordinal/name and en-US/it-IT; DATAFILE never calls entry.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [
+        {
+          "type": 10,
+          "name": "NAMED",
+          "language": 1033,
+          "size": 6
+        },
+        {
+          "type": 10,
+          "name": 1,
+          "language": 1033,
+          "size": 6
+        },
+        {
+          "type": 10,
+          "name": 1,
+          "language": 1040,
+          "size": 6
+        }
+      ],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "defines": [
+      "CASE=10"
+    ],
+    "resources": true
+  },
+  {
+    "id": "reloc-high",
+    "kind": "synthetic",
+    "features": [
+      "reloc"
+    ],
+    "rules": [
+      "relocation-high-low"
+    ],
+    "runtime": "Apply optional HIGH/LOW relocation at nonpreferred base.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        1
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 2824,
+        "value": 4097,
+        "width": 2
+      }
+    ]
+  },
+  {
+    "id": "reloc-low",
+    "kind": "synthetic",
+    "features": [
+      "reloc"
+    ],
+    "rules": [
+      "relocation-high-low"
+    ],
+    "runtime": "Apply optional HIGH/LOW relocation at nonpreferred base.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        0,
+        2
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 2824,
+        "value": 8193,
+        "width": 2
+      }
+    ]
+  },
+  {
+    "id": "cycle-a",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "import-name",
+      "exports"
+    ],
+    "rules": [
+      "dll-reference-dependencies",
+      "dllmain-dependency-order"
+    ],
+    "runtime": "Import dependency cycle broken in import order; attach once per module.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "cycle-b.dll",
+          "kind": "static",
+          "symbols": [
+            "FixtureValue"
+          ],
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": null
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "dll": "cycle-b.dll",
+    "scenario": {
+      "module_files": {
+        "cycle-a.dll": "cycle-a.dll",
+        "cycle-b.dll": "cycle-b.dll"
+      }
+    }
+  },
+  {
+    "id": "cycle-b",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "import-name",
+      "exports"
+    ],
+    "rules": [
+      "dll-reference-dependencies",
+      "dllmain-dependency-order"
+    ],
+    "runtime": "Import dependency cycle broken in import order; attach once per module.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "cycle-a.dll",
+          "kind": "static",
+          "symbols": [
+            "FixtureValue"
+          ],
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": null
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "dll": "cycle-a.dll",
+    "scenario": {
+      "module_files": {
+        "cycle-a.dll": "cycle-a.dll",
+        "cycle-b.dll": "cycle-b.dll"
+      }
+    }
+  },
+  {
+    "id": "fwd01",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd02.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd02.FixtureValue"
+  },
+  {
+    "id": "fwd02",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd03.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd03.FixtureValue"
+  },
+  {
+    "id": "fwd03",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd04.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd04.FixtureValue"
+  },
+  {
+    "id": "fwd04",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd05.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd05.FixtureValue"
+  },
+  {
+    "id": "fwd05",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd06.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd06.FixtureValue"
+  },
+  {
+    "id": "fwd06",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd07.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd07.FixtureValue"
+  },
+  {
+    "id": "fwd07",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd08.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd08.FixtureValue"
+  },
+  {
+    "id": "fwd08",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd09.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd09.FixtureValue"
+  },
+  {
+    "id": "fwd09",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd10.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd10.FixtureValue"
+  },
+  {
+    "id": "fwd10",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd11.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd11.FixtureValue"
+  },
+  {
+    "id": "fwd11",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd12.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd12.FixtureValue"
+  },
+  {
+    "id": "fwd12",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd13.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd13.FixtureValue"
+  },
+  {
+    "id": "fwd13",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd14.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd14.FixtureValue"
+  },
+  {
+    "id": "fwd14",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd15.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd15.FixtureValue"
+  },
+  {
+    "id": "fwd15",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd16.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd16.FixtureValue"
+  },
+  {
+    "id": "fwd16",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Forward through fixture chain; provider exports terminal FixtureValue.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "provider.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "provider.FixtureValue"
+  },
+  {
+    "id": "forward-depth-16",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Resolve 16 forward edges successfully.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd02.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd02.FixtureValue",
+    "scenario": {
+      "module_files": {
+        "fwd01.dll": "fwd01.dll",
+        "fwd02.dll": "fwd02.dll",
+        "fwd03.dll": "fwd03.dll",
+        "fwd04.dll": "fwd04.dll",
+        "fwd05.dll": "fwd05.dll",
+        "fwd06.dll": "fwd06.dll",
+        "fwd07.dll": "fwd07.dll",
+        "fwd08.dll": "fwd08.dll",
+        "fwd09.dll": "fwd09.dll",
+        "fwd10.dll": "fwd10.dll",
+        "fwd11.dll": "fwd11.dll",
+        "fwd12.dll": "fwd12.dll",
+        "fwd13.dll": "fwd13.dll",
+        "fwd14.dll": "fwd14.dll",
+        "fwd15.dll": "fwd15.dll",
+        "fwd16.dll": "fwd16.dll",
+        "provider.dll": "provider.dll"
+      },
+      "forward_edges": 16
+    }
+  },
+  {
+    "id": "forward-depth-17",
+    "kind": "synthetic",
+    "features": [
+      "dll",
+      "forward-name"
+    ],
+    "rules": [
+      "forwarder-depth"
+    ],
+    "runtime": "Reject resolution beyond 16 forward edges; not a structural PE refusal.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [
+        {
+          "ordinal": 7,
+          "names": [
+            "FixtureValue"
+          ],
+          "forwarder": "fwd01.FixtureValue"
+        }
+      ],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "forwarder": "fwd01.FixtureValue",
+    "scenario": {
+      "module_files": {
+        "fwd01.dll": "fwd01.dll",
+        "fwd02.dll": "fwd02.dll",
+        "fwd03.dll": "fwd03.dll",
+        "fwd04.dll": "fwd04.dll",
+        "fwd05.dll": "fwd05.dll",
+        "fwd06.dll": "fwd06.dll",
+        "fwd07.dll": "fwd07.dll",
+        "fwd08.dll": "fwd08.dll",
+        "fwd09.dll": "fwd09.dll",
+        "fwd10.dll": "fwd10.dll",
+        "fwd11.dll": "fwd11.dll",
+        "fwd12.dll": "fwd12.dll",
+        "fwd13.dll": "fwd13.dll",
+        "fwd14.dll": "fwd14.dll",
+        "fwd15.dll": "fwd15.dll",
+        "fwd16.dll": "fwd16.dll",
+        "provider.dll": "provider.dll"
+      },
+      "forward_edges": 17
+    }
+  },
+  {
+    "id": "oft-empty",
+    "kind": "synthetic",
+    "features": [
+      "import-name"
+    ],
+    "rules": [
+      "original-first-thunk-empty"
+    ],
+    "runtime": "Empty nonzero original-first-thunk must fall back to unbound IAT.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "FixtureValue"
+          ],
+          "kind": "static",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 1280,
+        "value": 0
+      }
+    ]
+  },
+  {
+    "id": "no-reloc-dll",
+    "kind": "synthetic",
+    "features": [
+      "no-reloc",
+      "dll"
+    ],
+    "rules": [
+      "relocation-base-collision"
+    ],
+    "runtime": "DLL at preferred base succeeds; preferred-base collision fails with error 193.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "tls-dll",
+    "kind": "synthetic",
+    "features": [
+      "tls",
+      "dll"
+    ],
+    "rules": [
+      "tls-template",
+      "tls-callbacks",
+      "thread-startup-shutdown"
+    ],
+    "runtime": "DLL static TLS initialized at process start and later LoadLibrary; callbacks for each thread.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": true,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": {
+        "callbacks": 1,
+        "template_size": 4,
+        "zero_fill": 8
+      },
+      "packer_heuristics": [],
+      "warnings": []
+    }
+  },
+  {
+    "id": "delay-no-name-table",
+    "kind": "synthetic",
+    "features": [
+      "delay"
+    ],
+    "rules": [
+      "delay-load"
+    ],
+    "runtime": "Delay IAT addresses cannot recover API names without INT; census remains unresolved.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "provider.dll",
+          "symbols": [
+            "<delay-addresses-unresolved>"
+          ],
+          "kind": "delay",
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": [
+        "delay-iat-without-names"
+      ]
+    },
+    "patches": [
+      {
+        "offset": 2320,
+        "value": 0
+      }
+    ]
+  },
+  {
+    "id": "resource-large-virtual",
+    "kind": "synthetic",
+    "features": [
+      "resource-ordinal"
+    ],
+    "rules": [
+      "resources",
+      "bounded-resource-census"
+    ],
+    "runtime": "Census validates resource span and reports metadata without allocating resource payload.",
+    "evidence": "structural-only; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [
+        {
+          "type": 10,
+          "name": 1,
+          "language": 1033,
+          "size": 1048577
+        }
+      ],
+      "manifests": [],
+      "relocation_types": [],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "patches": [
+      {
+        "offset": 208,
+        "value": 2105344
+      },
+      {
+        "offset": 424,
+        "value": 2097152
+      },
+      {
+        "offset": 3148,
+        "value": 1048577
+      }
+    ]
+  },
+  {
+    "id": "builtin-import",
+    "kind": "compiled",
+    "source": "builtin-import.c",
+    "rules": [
+      "builtin-def-imports",
+      "dll-reference-dependencies",
+      "datafile",
+      "dynamic-api-census"
+    ],
+    "runtime": "Two LoadLibrary calls share a module/refcount; freeing one retains it, freeing both unloads. Name lookup returns 7; DATAFILE does not execute resource image entry.",
+    "evidence": "i386 compiled code; guest execution pending",
+    "census": {
+      "format": "PE32",
+      "machine": "i386",
+      "dll": false,
+      "subsystem": "console",
+      "imports": [
+        {
+          "dll": "KERNEL32.dll",
+          "kind": "static",
+          "symbols": [
+            "FreeLibrary",
+            "GetModuleFileNameA",
+            "GetModuleHandleA",
+            "GetProcAddress",
+            "LoadLibraryA",
+            "LoadLibraryExA"
+          ],
+          "timestamp": 0
+        }
+      ],
+      "bound_imports": [],
+      "exports": [],
+      "resources": [],
+      "manifests": [],
+      "relocation_types": [
+        3
+      ],
+      "tls": null,
+      "packer_heuristics": [],
+      "warnings": []
+    },
+    "builtin_imports": true,
+    "scenario": {
+      "module_files": {
+        "provider.dll": "provider.dll",
+        "compiled-resources.exe": "compiled-resources.exe"
+      }
+    }
+  }
+]

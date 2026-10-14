@@ -1,0 +1,4 @@
+LIBRARY provider.dll
+EXPORTS
+ FixtureValue @7
+ OrdinalValue @11 NONAME
