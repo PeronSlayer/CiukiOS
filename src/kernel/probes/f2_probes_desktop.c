@@ -112,7 +112,7 @@ extern int supervisor_spawn_desktop_probe(struct process **out);
 extern int probes_crash_server(const char *, unsigned, uint32_t, bool, bool);
 static bool report_unsigned(const char *, const char *, uint32_t *);
 static struct {
-    bool active, invalid;
+    bool active, invalid, input_recorded;
     const char *invalid_check;
     uint32_t reported_control, reported_survivor, reported_stage;
     uint32_t setup_step, setup_error;
@@ -169,6 +169,8 @@ static bool native_report(struct process *p, const char *line, unsigned length)
         NATIVE_REQUIRE(cycle>=native_reports.cycles && cycle<=100,"cycle_order");
         NATIVE_REQUIRE(replies>=native_reports.replies,"replies_order");
         NATIVE_REQUIRE(keys>=native_reports.keys && motion>=native_reports.motion && buttons>=native_reports.buttons,"input_order");
+        bool publish_input=!native_reports.input_recorded || keys!=native_reports.keys ||
+            motion!=native_reports.motion || buttons!=native_reports.buttons;
         native_reports.control=control; native_reports.generation=generation;
         native_reports.survivor=child; native_reports.victim=fault;
         native_reports.cycles=cycle; native_reports.replies=replies;
@@ -190,6 +192,14 @@ static bool native_report(struct process *p, const char *line, unsigned length)
                 native_reports.checkpoint_digest[checkpoint]=native_digest();
                 native_reports.checkpoint=checkpoint;
             }
+        }
+        /* Forward only fully validated summaries. The desktop already
+         * coalesces input reports at 100 ms; unchanged command reports need
+         * no serial traffic. The first summary supplies the zero baseline. */
+        if (publish_input) {
+            rec_emit("crash-isolation","DATA","case=gate server=desktop keys=%u motion=%u buttons=%u",
+                keys,motion,buttons);
+            native_reports.input_recorded=true;
         }
     } else if (!server && !strncmp(line,"case=native-demo ",17)) {
         uint32_t stage, turns, unauthorized, generation;

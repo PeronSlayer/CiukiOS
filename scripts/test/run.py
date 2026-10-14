@@ -1448,14 +1448,25 @@ def check_serial_patterns(path,expected):
     return matches
 
 
+def require_input_counter_source(inputs,profile,case,requested):
+    """Only the explicitly selected native controller publishes paced counters."""
+    if not any('mouse' in entry['devices'] for entry in inputs['usb']):return
+    pointer=any(event['type']=='btn' or event['type']=='rel' and event['data']['value']!=0
+                for action in case.get('actions',[]) if action.get('type')=='input'
+                for batch in action['batches'] for event in batch['events'])
+    if not pointer:return
+    if not (requested and requested['phase']==2 and requested['probe']=='crash-isolation' and
+            requested.get('server')=='desktop' and not requested['safe'] and
+            case.get('device_exceptions',{}).get('vga',profile['vga'])!='none'):
+        raise res.Refusal('USB pointer pacing has no counter record source: '
+                          'requires f2:crash-isolation server=desktop, graphics and safe mode off')
+
+
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
     inputs=input_devices(profile,case)
     serial_patterns(case.get('expected',{}))
-    machine=profile['machine']
-    if not inputs['i8042']:
-        require_i8042_off(executable,machine)
-        machine+=',i8042=off'
+    requested=None
     normal=case_kind(case)==NORMAL_BOOT_KIND
     if normal:
         # No fw_cfg item and no BOOT.CFG probe line: the loader menu times out
@@ -1473,6 +1484,11 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         if platform:request+=' platform='+platform
         if requested['safe']:request+=' safe=1'
         if requested.get('server'):request+=' server='+requested['server']
+    require_input_counter_source(inputs,profile,case,requested)
+    machine=profile['machine']
+    if not inputs['i8042']:
+        require_i8042_off(executable,machine)
+        machine+=',i8042=off'
     cache=case.get('disk_cache','writeback')
     if cache not in ('writeback','writethrough','none','directsync'):raise res.Refusal('unsafe/unknown disk cache mode forbidden')
     disk={'driver':'qcow2','file':{'driver':'file','filename':str(overlay)}}

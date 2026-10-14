@@ -57,6 +57,8 @@ static unsigned display_frames;
 void console_display_owned(bool owned) { console_owned = owned; console_owned_changes++; }
 void console_wake(void) {}
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
+static unsigned input_records;
+static char last_input_record[241];
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
     char extra[241] = { 0 };
@@ -66,6 +68,10 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     CHECK(n >= 0 && n < (int)sizeof(extra));
     char record[256];
     CHECK(ksnprintf(record,sizeof(record),"CIUKI_TEST v=1 run=00000000 seq=4294967295 probe=%s event=%s%s%s",probe,event,n ? " " : "",extra)<=240);
+    if (strstr(extra,"case=gate server=desktop ")) {
+        input_records++;
+        strcpy(last_input_record,extra);
+    }
     if (routing_records) {
         CHECK(ksnprintf(record,sizeof(record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s%s%s",++record_seq,probe,event,n ? " " : "",extra)<=240);
         puts(record);
@@ -896,6 +902,51 @@ static void app_report(struct process *server, struct process *child, uint32_t c
         control,child->pid,suffix);
     native_report(server,line,(unsigned)n);
 }
+static void pacing_report(struct process *server, struct process *child, uint32_t control,
+                          uint32_t keys, uint32_t motion, uint32_t buttons, const char *suffix)
+{
+    char line[241];
+    int n=snprintf(line,sizeof(line),"case=native-desktop control=%u generation=1 survivor=%u victim=0 cycle=0 replies=0 keys=%u motion=%u buttons=%u%s",
+        control,child->pid,keys,motion,buttons,suffix);
+    native_report(server,line,(unsigned)n);
+}
+static void test_native_input_records(void)
+{
+    struct process *server,*child;
+    make_process(proc_supervisor(),&server); server->pgid=server->pid;
+    make_process(server,&child); child->pgid=child->pid;
+    struct ciuki_mmap_args a={.size=sizeof(a),.length=PAGE_SIZE,.prot=PROT_READ|PROT_WRITE,.flags=MAP_PRIVATE|MAP_ANONYMOUS,.fd=-1};
+    uint32_t control=(uint32_t)ua_mmap(server->memory,&a); CHECK(control>=CIUKI_MMAP_BASE);
+    memset(&native_reports,0,sizeof(native_reports)); native_reports.server=server->pid;
+    unsigned before=input_records;
+    pacing_report(server,child,control,0,0,0,""); CHECK(input_records==before);
+    native_reports.active=true;
+    /* Unregistered processes cannot supply a baseline. */
+    pacing_report(proc_supervisor(),child,control,0,0,0,""); CHECK(input_records==before);
+    pacing_report(server,child,control,0,0,0,"");
+    CHECK(input_records==++before && native_reports.input_recorded && !native_reports.invalid);
+    CHECK(!strcmp(last_input_record,"case=gate server=desktop keys=0 motion=0 buttons=0"));
+    pacing_report(server,child,control,0,0,0,""); CHECK(input_records==before);
+    /* Both axes and separate button edges become fresh controller records. */
+    pacing_report(server,child,control,0,1,0,""); CHECK(input_records==++before);
+    pacing_report(server,child,control,0,2,0,""); CHECK(input_records==++before);
+    pacing_report(server,child,control,0,2,1,""); CHECK(input_records==++before);
+    pacing_report(server,child,control,0,2,2,""); CHECK(input_records==++before);
+    pacing_report(server,child,control,2,2,2,""); CHECK(input_records==++before);
+    pacing_report(server,child,control,2,1,2,""); CHECK(native_reports.invalid && input_records==before);
+    pacing_report(server,child,control,2,3,2,""); CHECK(input_records==before);
+    /* Full validation includes app fields, even when counters are valid. */
+    memset(&native_reports,0,sizeof(native_reports)); native_reports.active=true; native_reports.server=server->pid;
+    pacing_report(server,child,control,0,0,0," files=1 checkpoint=2");
+    CHECK(native_reports.invalid && !native_reports.input_recorded && input_records==before);
+    memset(&native_reports,0,sizeof(native_reports)); native_reports.active=true; native_reports.server=server->pid;
+    pacing_report(server,child,control,UINT32_MAX,UINT32_MAX,UINT32_MAX,"");
+    CHECK(input_records==++before && !native_reports.invalid);
+    CHECK(strstr(last_input_record,"keys=4294967295 motion=4294967295 buttons=4294967295"));
+    native_reports.active=false; desktop_remove(server,child); desktop_remove(proc_supervisor(),server);
+    puts("native input records: zero baseline, changed axes/buttons/keys, deduplication, authority, full validation and maximum-width envelope PASS");
+}
+
 static void test_native_app_reports(void)
 {
     struct process *server,*child;
@@ -1264,7 +1315,7 @@ int main(int argc, char **argv)
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
     test_desktop_surfaces(); test_desktop_channels(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
-    test_native_reports(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
+    test_native_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();
 #endif

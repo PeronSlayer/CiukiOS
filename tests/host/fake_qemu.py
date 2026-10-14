@@ -160,6 +160,8 @@ for raw in stream:
         if scenario.get('consume_input'):
             assert input_pending is None, 'runner sent another batch before guest consumption'
         count=scenario.setdefault('received_input',0)+1;scenario['received_input']=count
+        if count==scenario.get('input_baseline_after'):
+            emit([dict(event='DATA',case='gate',server='desktop',keys='0',motion=str(input_motion),buttons=str(input_buttons))])
         events=request['arguments']['events']
         motion=sum(e['type']=='rel' and e['data']['value']!=0 for e in events)
         buttons=sum(e['type']=='btn' for e in events)

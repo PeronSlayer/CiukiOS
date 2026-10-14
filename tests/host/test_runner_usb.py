@@ -60,6 +60,52 @@ class USBRunnerTests(unittest.TestCase):
                     with self.subTest(i8042=value),self.assertRaisesRegex(res.Refusal,'boolean'):self.args(profile,case)
             query.assert_not_called()
 
+    def test_missing_counter_source_refuses_before_capability_query_and_launch(self):
+        from test_runner import RunnerTests, FakeHost
+        fixture=RunnerTests();fixture.setUp()
+        try:
+            fixture.profile['usb']=[{'controller':'uhci','devices':['mouse']}]
+            base={**fixture.case,'i8042':False,'probe':'crash-isolation',
+                  'selector':'f2:crash-isolation run={run_id} server=desktop',
+                  'actions':runner.desktop_stimulus()}
+            bad=[{**base,'probe':'boot','selector':'f0:boot run={run_id}'},
+                 {**base,'selector':'f2:crash-isolation run={run_id} server=standin'},
+                 {**base,'selector':'f2:crash-isolation run={run_id}'},
+                 {**base,'selector':'f2:crash-isolation run={run_id} safe=1 server=desktop'},
+                 {**base,'device_exceptions':{'vga':'none'}}]
+            with patch.object(runner.subprocess,'run') as query, patch.object(FakeHost,'launch') as launch:
+                for fixture.case in bad:
+                    with self.subTest(case=fixture.case),self.assertRaisesRegex(res.Refusal,'no counter record source'):
+                        fixture.run_fake()
+                query.assert_not_called();launch.assert_not_called()
+            self.assertFalse(any((fixture.root/'build/test-runs').rglob('run.qcow2')))
+            # Case overrides and non-pointer stimuli do not need counters.
+            with patch.object(runner,'require_i8042_off'):
+                for case in ({**bad[0],'usb':[]},
+                             {**bad[0],'usb':[{'controller':'ohci','devices':['kbd','tablet']}]},
+                             {**bad[0],'actions':[]},
+                             {**bad[0],'actions':[{'type':'input','after':{'event':'ARM'},'batches':[
+                                 {'events':[{'type':'key','data':{'down':True,'key':{'type':'qcode','data':'a'}}}],
+                                  'pause_ms':10}]}]}):
+                    self.args(profile=fixture.profile,case=case)
+        finally:fixture.tearDown()
+
+    def test_baseline_after_first_key_batches_allows_first_pointer_batch(self):
+        from test_runner import RunnerTests
+        fixture=RunnerTests();fixture.setUp()
+        try:
+            fixture.case.update(probe='crash-isolation',selector='f2:crash-isolation run={run_id} server=desktop',
+                                actions=runner.desktop_stimulus())
+            fixture.profile['usb']=[{'controller':'ohci','devices':['mouse']}]
+            fixture.case['expected']['predicates'][0]['where']['tick']='10000'
+            result,_=fixture.run_fake(records=[dict(event='BEGIN'),dict(event='ARM',action='post_fault_input')],
+                input_baseline_after=2,consume_input=True,finish_after_input=6,
+                after_input=[dict(event='DATA',tick='10000'),dict(event='END',status='PASS')])
+            self.assertEqual(result['outcome'],'pass',result['reason'])
+            self.assertEqual(result['input_pacing']['batches'],6)
+            self.assertEqual(len(result['input_pacing']['waits_ms']),4)
+        finally:fixture.tearDown()
+
     def test_i8042_off_requires_installed_machine_boolean_property(self):
         help_result=subprocess.CompletedProcess([],0,'  i8042=<bool> - PS/2 controller\n','')
         with patch.object(runner.subprocess,'run',return_value=help_result) as query:
@@ -126,6 +172,7 @@ class USBRunnerTests(unittest.TestCase):
     def test_live_usb_evidence_serial_requirements_and_paced_qmp_input(self):
         from test_runner import RunnerTests
         fixture=RunnerTests();fixture.setUp()
+        fixture.case.update(probe='crash-isolation',selector='f2:crash-isolation run={run_id} server=desktop')
         try:
             fixture.case['expected']['predicates'][0]['where']['tick']='10000'
             for controller in ('uhci','ohci'):
@@ -164,6 +211,7 @@ class USBRunnerTests(unittest.TestCase):
     def test_usb_profile_splits_signed_axes_and_preserves_totals_across_repeats(self):
         from test_runner import RunnerTests
         fixture=RunnerTests();fixture.setUp()
+        fixture.case.update(probe='crash-isolation',selector='f2:crash-isolation run={run_id} server=desktop')
         try:
             fixture.case['expected']['predicates'][0]['where']['tick']='10000'
             fixture.profile['usb']=[{'controller':'ohci','devices':['mouse']}]
@@ -209,6 +257,7 @@ class USBRunnerTests(unittest.TestCase):
     def test_usb_consumption_timeout_names_stalled_batch_and_missing_baseline(self):
         from test_runner import RunnerTests
         fixture=RunnerTests();fixture.setUp()
+        fixture.case.update(probe='crash-isolation',selector='f2:crash-isolation run={run_id} server=desktop')
         try:
             fixture.profile['usb']=[{'controller':'uhci','devices':['mouse']}]
             fixture.case['actions']=runner.desktop_stimulus()
@@ -227,6 +276,7 @@ class USBRunnerTests(unittest.TestCase):
     def test_raw_input_counters_pace_the_final_batch(self):
         from test_runner import RunnerTests
         fixture=RunnerTests();fixture.setUp()
+        fixture.case.update(probe='crash-isolation',selector='f2:crash-isolation run={run_id} server=desktop')
         try:
             fixture.profile['usb']=[{'controller':'uhci','devices':['mouse']}]
             fixture.case['actions']=[{'type':'input','after':{'event':'ARM'},'batches':[
