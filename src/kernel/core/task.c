@@ -16,6 +16,7 @@ extern uint32_t dosvm_task_esp0(const struct task *, uint32_t) __attribute__((we
 extern void dosvm_task_switch(const struct task *) __attribute__((weak)); /* f3-04 LDT/watchpoints */
 extern void dosvm_tick(void) __attribute__((weak));
 extern void serial_tick(void) __attribute__((weak));
+extern void cpu_init(void);
 
 extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
 extern void task_first_entry(void);
@@ -43,6 +44,10 @@ static struct task *all_tasks;
 static struct task *idle_task;
 static uint32_t next_id = 1;
 static uint32_t slice_left;
+/* Timer-preempted user transitions can pass through deferred device work.
+ * Count the user-to-user cause, without counting the intermediate kernel. */
+static struct task *last_measured;
+static bool last_preempted;
 uint64_t g_idle_ticks;              /* in the extracted scheduler block for host replays */
 
 static void rq_push(struct task *t)
@@ -233,12 +238,13 @@ void task_start(struct task *t)
     uint32_t f = irq_save();
     t->state = T_READY;
     rq_push(t);
+    if (g_current && t->prio < g_current->prio) g_need_resched = true;
     irq_restore(f);
 }
 
 struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp)
 {
-    struct task *t = task_alloc("native", P_NORMAL, true);
+    struct task *t = task_alloc(p->name[0] ? p->name : "native", P_NORMAL, true);
     if (!t)
         return 0;
     t->as = p->memory->as;           /* borrowed directory, never destroyed by task */
@@ -266,6 +272,10 @@ void schedule(void)
     uint32_t f = irq_save();
     struct task *prev = g_current;
     bool preempted = prev->state == T_RUNNING && g_need_resched;
+    if (prev->state == T_BLOCKED) {
+        if (prev->device_demoted) { prev->prio = P_DEVICE; prev->device_demoted = false; }
+        prev->device_ticks = 0;
+    }
     if (prev->state == T_RUNNING && prev != idle_task) {
         if (prev->measured && g_measure_stop) {
             prev->state = T_BLOCKED;      /* measurement finished: park it */
@@ -289,6 +299,7 @@ void schedule(void)
         uint32_t remaining = FOCUS_PERIOD - (uint32_t)(g_ticks - focus_window);
         if (slice_left > remaining) slice_left = remaining;
     }
+    if (cpu_switch) cpu_switch(prev, next);
     if (next == prev) {
         prev->state = T_RUNNING;
         irq_restore(f);
@@ -300,19 +311,27 @@ void schedule(void)
             next->max_wait_ticks = waited;
     }
     next->dispatches++;
-    if (prev->user && next->user && prev->measured && next->measured && !g_measure_stop) {
-        if (!preempted) {
+    if (prev->user) {
+        last_measured = prev->measured ? prev : 0;
+        last_preempted = preempted;
+    }
+    struct task *measured = last_measured;
+    if (next->user) last_measured = 0;
+    if (measured && measured != next && next->user && next->measured && !g_measure_stop) {
+        if (!last_preempted) {
             g_task_switches_other++;
         } else {
             g_task_switches++;
             next->preempt_dispatches++;
             if (g_switch_target && g_task_switches == g_switch_target) {
                 /* Exactly the target: this dispatch is the last counted
-                 * switch. Park prev now; next is parked at its own
-                 * preemption without being counted. */
+                 * switch. Park the preceding measured user now; next is
+                 * parked at its own preemption without being counted. */
                 g_measure_stop = true;
-                rq_remove(prev);
-                prev->state = T_BLOCKED;
+                if (measured->state == T_READY) {
+                    rq_remove(measured);
+                    measured->state = T_BLOCKED;
+                }
             }
         }
     }
@@ -344,6 +363,7 @@ void sched_tick(void)
             t->wake_tick = 0;
             t->state = T_READY;
             rq_push(t);
+            if (g_current && t->prio < g_current->prio) g_need_resched = true;
         }
         /* Starvation guard: a normal task ready for one second is boosted
          * once to the interactive queue (execution-abi.md). */
@@ -357,6 +377,13 @@ void sched_tick(void)
             g_need_resched = true;
         }
     }
+    if (g_current && g_current->prio == P_DEVICE && !g_current->boosted &&
+        ++g_current->device_ticks >= 10) {
+        g_current->prio = P_NORMAL;
+        g_current->device_demoted = true;
+        g_need_resched = true;
+        if (cpu_overrun) cpu_overrun(g_current);
+    }
     if (g_current == idle_task) {
         g_idle_ticks++;
         if (rq_any())
@@ -364,6 +391,16 @@ void sched_tick(void)
     } else if (slice_left && --slice_left == 0) {
         g_need_resched = true;
     }
+}
+
+struct task *sched_tasks(void) { return all_tasks; }
+
+void kpreempt_point(void)
+{
+    if (!(read_eflags() & 0x200) || !g_current || g_current->preempt_holds)
+        return;
+    if (cpu_point) cpu_point();
+    if (g_need_resched) schedule();
 }
 
 void task_yield(void)
@@ -453,6 +490,8 @@ void task_reap(struct task *t)
     if (*pp)
         *pp = t->all_next;
     g_task_count--;
+    if (last_measured == t) last_measured = 0;
+    if (cpu_reap) cpu_reap(t);
     irq_restore(f);
     t->state = T_DEAD;
     if (t->user)
@@ -479,6 +518,9 @@ void sched_init(void)
     if (!idle_task)
         panic("sched: cannot create the idle task");
     proc_init();
+    serial_writer_init();
+    console_worker_init();
+    cpu_init();
 }
 
 /* Leave the boot stack for the first task; never returns. */
@@ -491,6 +533,7 @@ __attribute__((noreturn)) void sched_start(void)
     first->state = T_RUNNING;
     first->dispatches++;
     g_current = first;
+    if (cpu_switch) cpu_switch(0, first);
     slice_left = g_quantum_ticks;
     tss_set_kernel_stack((uint32_t)first->kstack + KSTACK_SIZE);
     proc_task_switch(first);

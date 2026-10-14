@@ -9,6 +9,7 @@
 #include <ciuki/timing.h>
 #include <ciuki/signal.h>
 #include <ciuki/biosvm.h>
+#include <ciuki/cpustat.h>
 extern bool dosvm_trap(struct trap_frame *) __attribute__((weak));
 extern bool dosvm_client(const struct task *) __attribute__((weak));
 
@@ -81,16 +82,20 @@ static bool try_expected(struct trap_frame *tf)
 
 void trap_dispatch(struct trap_frame *tf)
 {
+    cpu_trap_enter(tf);
     /* F1: VM has CPL3 regardless of the low bits in real-mode CS.
      * Dispatch/EOI physical IRQs exactly once before firmware reflection.
      * Non-V86 frames retain the original F0 path below. */
     if (tf->eflags & V86_VM) {
         if (tf->vector >= 0x20 && tf->vector < 0x30) {
             crit_begin();
+            uint64_t irq_start = cpu_irq_enter(tf);
             handle_irq(tf);
+            cpu_irq_leave(irq_start);
             crit_end();
         }
         if (!dosvm_trap || !dosvm_trap(tf)) biosvm_trap(tf);
+        cpu_user_return();
         return;
     }
     bool from_user = (tf->cs & 3) == 3;
@@ -101,19 +106,25 @@ void trap_dispatch(struct trap_frame *tf)
     if (from_user && dosvm_client && dosvm_client(g_current)) {
         if (tf->vector >= 0x20 && tf->vector < 0x30) {
             crit_begin();
+            uint64_t irq_start = cpu_irq_enter(tf);
             handle_irq(tf);
+            cpu_irq_leave(irq_start);
             crit_end();
         }
         dosvm_trap(tf);
+        cpu_user_return();
         return;
     }
 
     if (tf->vector >= 0x20 && tf->vector < 0x30) {
         crit_begin();
+        uint64_t irq_start = cpu_irq_enter(tf);
         handle_irq(tf);
+        cpu_irq_leave(irq_start);
         if (from_user && g_need_resched)
             schedule();               /* still inside the IF-disabled interval */
         crit_end();
+        if (from_user) cpu_user_return();
         return;
     } else if (tf->vector == 0x80) {
         sti();                          /* frame saved: interrupts may resume */
@@ -133,6 +144,7 @@ void trap_dispatch(struct trap_frame *tf)
             sti();
             proc_signal_fault(tf, cr2);
             cli();
+            cpu_user_return();
             return;
         }
         /* Ring-3 fault: terminate only the offending task. */
@@ -149,4 +161,5 @@ void trap_dispatch(struct trap_frame *tf)
 
     if (from_user && g_need_resched)
         schedule();
+    if (from_user) cpu_user_return();
 }

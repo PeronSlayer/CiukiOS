@@ -616,9 +616,17 @@ static uint64_t native_now(void *arg) { (void)arg; uint32_t f = irq_save(); uint
 static void native_sleep(void *arg, unsigned ms) { (void)arg; task_sleep_ms(ms); }
 static void service(void *arg)
 {
-    (void)arg;
-    klog("[usb] worker service=started tick=%llu controllers=%u", native_now(0), host_count);
-    for (;;) { for (unsigned i = 0; i < host_count; i++) usb_step(&hosts[i]); task_sleep_ms(1); }
+    struct usb_host *h = arg;
+    klog("[usb] worker service=started tick=%llu controllers=%u controller=%s", native_now(0), host_count, h->owner);
+    for (;;) {
+        if (!h->ready || h->quarantined) { task_sleep_ms(1000); continue; }
+        usb_step(h);
+        uint64_t now = native_now(0);
+        uint64_t due = h->next_scan;
+        /* Control/BOT sleeps retain their per-host reservation. The separate
+         * HID task services completed reports at 1 ms, independently. */
+        task_sleep_ms(due > now && due - now <= 250 ? (uint32_t)(due - now) : 1);
+    }
 }
 static void input_service(void *arg)
 {
@@ -630,6 +638,27 @@ static void input_service(void *arg)
             fs_lock_drop(&hosts[i].transfer_lock);
         }
         task_sleep_ms(1);
+    }
+}
+static void start_services(void)
+{
+    if (host_count) {
+        struct task *workers[USB_HOST_MAX] = {0};
+        bool failed = false;
+        for (unsigned i = 0; i < host_count; i++) {
+            workers[i] = task_create_kernel("usb-host", service, &hosts[i], P_DEVICE);
+            if (!workers[i]) failed = true;
+        }
+        struct task *input = task_create_kernel("usb-hid", input_service, 0, P_DEVICE);
+        if (!input) failed = true;
+        if (failed) {
+            for (unsigned i = 0; i < host_count; i++) if (hosts[i].ready)
+                usb_host_quarantine(&hosts[i], "service_thread_failed");
+        } else {
+            for (unsigned i = 0; i < host_count; i++) task_start(workers[i]);
+            task_start(input);
+            klog("[usb] worker service=queued tick=%llu controllers=%u", native_now(0), host_count);
+        }
     }
 }
 void usb_init(void)
@@ -661,18 +690,6 @@ void usb_init(void)
         int err = usb_attach(h, p, &io, phys ? P2V(phys) : 0, phys);
         if (err && !h->touched && !h->quarantined && phys) { pmm_free(phys); pmm_free(phys + PAGE_SIZE); h->dma = 0; }
     }
-    if (host_count) {
-        struct task *worker = task_create_kernel("usb-host", service, 0, P_DEVICE);
-        struct task *input = task_create_kernel("usb-hid", input_service, 0, P_DEVICE);
-        if (!worker || !input) {
-            for (unsigned i = 0; i < host_count; i++) if (hosts[i].ready)
-                usb_host_quarantine(&hosts[i], "service_thread_failed");
-        } else {
-            /* Creation leaves T_BLOCKED; publish the dedicated service. */
-            task_start(worker);
-            task_start(input);
-            klog("[usb] worker service=queued tick=%llu controllers=%u", native_now(0), host_count);
-        }
-    }
+    start_services();
 }
 #endif

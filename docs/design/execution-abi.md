@@ -223,9 +223,22 @@ is implemented, in an update to this contract.
 - Fixed priorities, highest first: `device` (deferred interrupt work and
   audio refill), `interactive` (desktop, focused DOS VM), `normal`, `idle`.
   Round-robin within a priority; time slice 10 ms (10 PIT ticks).
-- Preemption of ring-3 code at any timer tick. The kernel is non-preemptible
-  in F0–F1: a kernel path runs until it returns to user mode or blocks. F2
-  MAY add kernel preemption only together with the locking rules below.
+- Ring-3 timer preemption also honours a newly ready higher-priority task.
+  Measurement counters preserve timer-caused transitions between measured
+  users when an intervening device dispatch services the wake; intermediate
+  kernel dispatches are not counted, and exact-target parking is retained.
+  Ring 0 remains voluntarily scheduled: `kpreempt_point()` honours a pending
+  reschedule only with IF set and no automatic-preemption hold. It closes the
+  measured kernel stretch even when no switch is needed. Kernel loops target
+  one point per 1 ms (5 ms limit), including each 64 KiB of ELF copying and
+  each sixteen newly zeroed pages. A point is never inserted in an IRQ.
+- A device task consumes at most ten running PIT ticks without blocking before
+  continuing at normal priority. Voluntary yields do not renew this allowance;
+  a blocking dispatch restores its device priority and resets its allowance.
+  Overruns request a switch at the next safe point and are reported by cpustat
+  (sixteen distinct task names per window; further event loss is counted).
+- The supervisor gives only the desktop's initial UI thread interactive
+  priority, before publication. Further native threads retain normal priority.
 - Interrupt handlers do the minimum (acknowledge, capture state) and defer
   the rest to a `device` thread. Handlers never call the scheduler directly
   except to mark a thread runnable.
@@ -233,6 +246,81 @@ is implemented, in an update to this contract.
   `device-firmware-ownership.md` and measured by an F0 probe.
 - Starvation guard: a runnable `normal` thread that has not run for 1 s is
   boosted once (logged).
+
+### Bounded output and CPU evidence (f0-21)
+
+The [latency research](research/kernel-latency-2026-10-14.md) is the design
+input. The implementation was compared with Linux's official
+[console callback contract](https://docs.kernel.org/driver-api/tty/console.html)
+(thread output versus emergency atomic output),
+[RT throttling policy](https://docs.kernel.org/scheduler/sched-rt-group.html),
+[bounded softirq processing](https://github.com/torvalds/linux/blob/v6.12/kernel/softirq.c),
+and [mutex rules](https://docs.kernel.org/locking/mutex-design.html).
+Ciuki uses these mechanisms as references; no upstream code is copied.
+
+`serial_write` always copies a whole record into a bounded 64 KiB RAM queue,
+including before scheduler start and during audio playback. It performs no UART
+read, drain, sleep or yield. Overflow drops the whole incoming record and
+increments a cumulative counter; the consumer inserts one `[serial] dropped=N`
+notice when the backlog empties. This directive's nonblocking/drop requirement
+supersedes the research proposal for lossless task-context back-pressure.
+The device-priority `log-writer` sends at most 64 verified FIFO bursts per wake,
+stops at the first busy THRE, and sleeps 1 ms. The timer retains its bounded
+single-burst sender. Only explicit `serial_panic` enables synchronous draining,
+including subsequent panic records. Disk capture remains independent.
+
+Ordinary console writes append history and mark it dirty. The normal-priority
+console task paints at most once per 100 ms. Pixel rendering holds presenter
+claims with IF restored, releases the claim before each preemption point, and
+checks display ownership/mapping again after yielding. A scroll moves existing
+scanlines in bounded chunks and rasterizes only new rows and the partial line.
+Panic output remains immediate; explicit operator/evidence overlays remain
+synchronous. No normal console drawing occurs while the desktop owns the grant.
+
+The device-priority cpustat task emits the research section 5 records every
+2000 ms in verbose/test boots, and on a threshold in normal boots. A complete
+`[desktop] stall` diagnostic submitted to the console stream wakes it for an
+immediate report. Dispatch/IRQ boundaries charge calibrated TSC cycles (PIT ticks
+before calibration); IRQ time is separated from task shares. Timer samples
+separate kernel and user/VM86 execution. The class shares total 1000 permille
+(rounding belongs to normal); reaping preserves class totals and reports
+`exited_pm`. Native task names derive from the process basename. Top five entries use
+eight-character names plus the full task ID (record delimiters in names become underscores);
+`kpm` is a timer-sampled kernel share, not cycle-exact mode accounting. Records
+retain the maximum stretch, its sampled EIP, reschedule latency, timing evidence
+and active-CPU path totals. IRQ-off/timer-gap counters and work maximum retain
+the existing timing/work subsystem's cumulative scope. Queue drops are
+cumulative. All formatting/output happens on the cpustat task, never the IRQ.
+
+Sleeping mutexes and filesystem mutexes count automatic-preemption holds per
+task. Generic points defer under those holds; the existing audited `fs_service`
+blocking/yield path remains responsible for progress under filesystem locks.
+The UHCI schedule dump releases only its transfer mutex between records,
+retaining the per-controller general-transfer reservation. Address-map zeroing
+publishes a non-readable provisional extent before yielding: overlapping
+mutations are busy and first-fit skips it. Protection changes reserve their
+whole boundary extents with an internal pin across backing allocation; existing
+readable pages remain readable. Failure removes provisional state/backing. Provisional thread IDs are hidden from
+join/detach lookup, and thread creation rechecks process state before publication
+when stack allocation has yielded.
+New heap pages are already zero, so brk only clears the previously exposed tail.
+
+Each USB controller gets its own host worker and keeps its own reservation.
+Workers sleep to the next 250 ms root-scan deadline. The independent HID worker
+retains 1 ms completion service: the endpoint's 8 ms hardware interval does not
+justify adding up to 8 ms of software delivery delay, and the directive requires
+1 ms service during another controller's bind. This intentionally resolves the
+research C10 suggestion in favour of its existing measured HID cadence.
+Storage-writer deadline changes and bind-log flush changes belong to f1-63 and
+f1-62 respectively (`mount.c` and `usb_storage.c` are outside f0-21). Audio refill
+and the firmware idle worker already use condition/deadline waits; diagnostic
+self-test/backlog waits keep their existing bounds. Lazy CR3 (research C11)
+remains conditional on measurements and is outside this directive.
+
+Host evidence lives in the serial UART model, scheduler/console latency replays,
+process allocation/ELF and desktop tests, and USB worker/register replays. These
+do not establish the T23's 1/5/10 ms timing gates; QEMU and hardware qualification
+remain with the lead.
 
 ## Locking (uniprocessor)
 

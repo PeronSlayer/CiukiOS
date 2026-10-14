@@ -50,20 +50,33 @@ static int start(struct usb_host *h)
          h->owner, usb_read(h, 0, 2), usb_read(h, 2, 2), usb_read(h, 6, 2), usb_read(h, 8, 4), err);
     return err;
 }
+static void dump_preempt(struct usb_host *h)
+{
+#ifndef CIUKI_USB_HOST
+    fs_lock_drop(&h->transfer_lock);
+    kpreempt_point();
+    fs_lock_take(&h->transfer_lock);
+#else
+    (void)h;
+#endif
+}
 void usb_uhci_dump_schedule(struct usb_host *h)
 {
     if (h->pci.prog_if || !h->ready || h->schedule_dumped ||
         !(g_boot.flags & (CBI_F_VERBOSE | CBI_F_TEST_REQUEST))) return;
     h->schedule_dumped = true;
     usb_barrier();
-    for (unsigned frame = 0; frame < 4; frame++)
+    for (unsigned frame = 0; frame < 4; frame++) {
+        dump_preempt(h);
         klog("[usb] schedule frame=%u entry=%08x controller=%s flbase=%08x current=%u",
              frame, words(h, 0)[frame], h->owner, usb_read(h, 8, 4), usb_read(h, 6, 2));
+    }
     /* The four entries share a chain. Dump its actual horizontal links once,
      * including empty QHs; printing only active pipes could hide a broken link.
      * Validate DMA bounds before dereferencing even a diagnostic pointer. */
     uint32_t link = words(h, 0)[0];
     for (unsigned n = 0; n < USB_DEVICE_MAX * USB_HID_MAX + 2; n++) {
+        dump_preempt(h);
         if (link & 1) return;
         uint32_t address = link & ~15u;
         if ((link & 15) != 2 || address < h->dma_phys + USB_ED ||

@@ -536,7 +536,10 @@ static void interrupt_sleep(void)
         }
     }
     CHECK(sleep_injections == 1);
-    CHECK(g_ticks - sleep_started == (sleep_paced_peers ? 10u : 40u));
+    /* Higher-priority timer wakes now preempt each busy peer. The normal
+     * sleeper gets a turn after at most the three queued peers. */
+    CHECK(g_ticks - sleep_started >= 10 && g_ticks - sleep_started <= 13);
+    if (sleep_paced_peers) CHECK(g_ticks - sleep_started == 10);
     for (unsigned i = 0; i < P_COUNT; i++) rq_head[i] = rq_tail[i] = 0;
     all_tasks = idle_task = 0;
     sleeper->all_next = old_next;
@@ -559,10 +562,10 @@ static void test_nanosleep_reporting(bool payload_paces_peers)
         on_schedule = interrupt_sleep;
         int result = file_nanosleep(request_va, remaining_va);
         on_schedule = 0;
-        CHECK(result == (paced ? -EINTR : 0));
+        CHECK(result == -EINTR);
         CHECK(!ua_read(p->memory, &remaining, remaining_va, sizeof(remaining)));
         CHECK(!remaining.tv_sec && !remaining.reserved);
-        CHECK(remaining.tv_nsec == (paced ? 10000000 : 0));
+        CHECK(remaining.tv_nsec == (int32_t)((20 - (g_ticks - sleep_started)) * 1000000));
         /* Mirror the dispatcher's completed-result assignment, then use
          * production handler delivery and sigreturn, with no context edit. */
         struct trap_frame tf = user_frame(t);
@@ -574,7 +577,7 @@ static void test_nanosleep_reporting(bool payload_paces_peers)
         CHECK(!ua_read(p->memory, &frame, address, sizeof(frame)));
         CHECK(frame.context.gregs[CIUKI_REG_EAX] == (uint32_t)result);
         CHECK(!ua_read(p->memory, &remaining, remaining_va, sizeof(remaining)));
-        CHECK(remaining.tv_nsec == (paced ? 10000000 : 0));
+        CHECK(remaining.tv_nsec == (int32_t)((20 - (g_ticks - sleep_started)) * 1000000));
         proc_signal_sigreturn(&tf, address);
         CHECK(!t->in_handler && tf.eax == (uint32_t)result);
         printf("signal nanosleep timing: peers=%s inject_ms=10 resume_ms=%u serial_bytes=0 result=%d saved_eax=%08x resumed_eax=%08x remainder_ns=%d PASS\n",

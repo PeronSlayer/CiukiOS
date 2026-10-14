@@ -1169,7 +1169,9 @@ void desktop_spawn_host_init(int gate)
     }
     if (gate) spawn_host_server->ppid=spawn_host_owner->pid;
     CHECK(desktop_spawn_host_display_fd()!=desktop_spawn_host_input_fd());
-    spawn_host_thread=spawn_host_find_thread(spawn_host_server); desktop_select(spawn_host_thread);
+    spawn_host_thread=spawn_host_find_thread(spawn_host_server);
+    CHECK(spawn_host_thread->task->prio==P_INTERACTIVE);
+    desktop_select(spawn_host_thread);
 }
 int desktop_spawn_host_output(void)
 {

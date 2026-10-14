@@ -166,6 +166,7 @@ void kmutex_lock(struct kmutex *m)
     while (m->owner)
         kwait_wait_until(&m->wait, mutex_free, m, deadline_after_ms(1000));
     m->owner = g_current;
+    kpreempt_hold();
     m->held_next = held;
     held = m;
 }
@@ -184,6 +185,7 @@ void kmutex_unlock(struct kmutex *m)
     *p = m->held_next;
     m->held_next = 0;
     m->owner = 0;
+    kpreempt_release();
     kwait_wake_all(&m->wait);
 }
 

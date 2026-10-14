@@ -115,7 +115,10 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     }
     if (!err) supervisor_dosvm_delegate(proc_supervisor(), p, path);
     if (!err) err = proc_stack_build(p->memory, strings, image.entry, thread->tls, &esp);
-    if (!err) task_native_frame(thread->task, esp);
+    if (!err) {
+        task_native_frame(thread->task, esp);
+        if (desktop) thread->task->prio = P_INTERACTIVE;
+    }
     if (file.close) file.close(file.cookie);
     proc_strings_free(strings);
     if (err) { if (p) proc_discard(p); return err; }

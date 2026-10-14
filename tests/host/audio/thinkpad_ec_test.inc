@@ -82,7 +82,7 @@ static uint32_t ec_native_pte(uint32_t va)
 static void *ec_native_phys(uint32_t p)
 {
     if(p==ec_table_phys) { CHECK(ec_table_mapped);return ec_table_memory; }
-    CHECK(p>=0xf0000 && p<0x100000);return ec_bios_memory+p-0xf0000;
+    CHECK(p>=0xf0000 && p<0x100000);return ec_bios_memory+(p-0xf0000);
 }
 static const void *ec_native_map_ro(uint32_t p, uint32_t bytes)
 {

@@ -6,6 +6,7 @@
 #include <ciuki/files.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/cpustat.h>
 
 int device_open(enum px_kind kind, uint32_t flags)
 {
@@ -25,9 +26,10 @@ static void stream_bytes(const char *text, size_t bytes)
 int device_write(const void *buffer, uint32_t bytes)
 {
     const char *text = buffer;
-    /* The sink never schedules and interrupt handlers never print. Bound
-     * each call so UART polling cannot monopolize the UP kernel. */
+    /* The producer only queues/captures bytes. Bound its copy and envelope
+     * work; a UART readiness wait belongs only to the writer/panic path. */
     if (bytes > 1024) bytes = 1024;
+    if (cpu_stall_record) cpu_stall_record(text, bytes);
     static const char prefix[] = "[console] ";
     unsigned start = 0;
     stream_bytes(prefix, sizeof(prefix) - 1);

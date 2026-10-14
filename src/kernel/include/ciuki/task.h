@@ -44,6 +44,15 @@ struct task {
     int exit_code;
     uint32_t fault_vector, fault_err, fault_eip, fault_cr2;
     uint64_t wake_tick;
+    /* Voluntary scheduling and per-window CPU evidence (f0-21). */
+    uint32_t preempt_holds;
+    bool device_demoted;
+    uint64_t device_ticks;
+    uint64_t run_cycles, window_base, kernel_ticks, user_ticks;
+    uint64_t kernel_base, user_base, account_start, stretch_start, max_stretch;
+    enum task_prio account_prio;
+    uint32_t stretch_eip, active_stretch_eip;
+    bool stretch_sampled;
     /* scheduler statistics */
     uint32_t dispatches, preempt_dispatches;
     uint32_t debug_bytes;              /* bytes accepted by debug_write */
@@ -71,6 +80,16 @@ void task_start(struct task *t);
 void schedule(void);
 void sched_tick(void);
 void task_yield(void);
+void kpreempt_point(void); /* IF=1, outside IRQ/unsafe publication sections */
+static inline void kpreempt_hold(void) { if (g_current) g_current->preempt_holds++; }
+static inline void kpreempt_release(void) { if (g_current) g_current->preempt_holds--; }
+/* Only traverse with interrupts disabled; no pointer survives that section. */
+struct task *sched_tasks(void);
+/* Optional only for standalone scheduler fixtures. Linked in the kernel. */
+void cpu_switch(struct task *prev, struct task *next) __attribute__((weak));
+void cpu_reap(struct task *t) __attribute__((weak));
+void cpu_point(void) __attribute__((weak));
+void cpu_overrun(struct task *t) __attribute__((weak));
 void task_sleep_ms(uint32_t ms);
 __attribute__((noreturn)) void task_exit(int code);
 void task_kill(struct task *t, int code);
