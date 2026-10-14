@@ -73,6 +73,12 @@ struct aspace {
 };
 int as_create(struct aspace *as);
 int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags);
+/* Replace 1..32 already-present pages within one table; no allocation or
+ * ownership change. Caller excludes guest execution/interrupts. Return old
+ * D/A bits as page masks, clear D, and flush the active AS once if changed.
+ * frames == NULL keeps frames/permissions (dirty collection only). */
+int as_replace_pages(struct aspace *, uint32_t va, const uint32_t *frames,
+                     unsigned count, uint32_t flags, uint32_t *dirty, uint32_t *accessed);
 uint32_t as_lookup(const struct aspace *as, uint32_t va, uint32_t *pte_out);
 void as_destroy(struct aspace *as);        /* frees user pages and tables */
 bool as_range_ok(const struct aspace *as, uint32_t va, uint32_t len, bool write);

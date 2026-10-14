@@ -34,6 +34,7 @@
 static unsigned checks, used_pages, heap_blocks, allocation_calls, fail_at;
 static bool allocated[HOST_PAGES];
 static uint8_t *ram;
+static unsigned cr3_reloads;
 static uint32_t cpu_cr3, cpu_flags = V86_IF, next_pfn = 4096;
 static uint32_t kpd[1024], kpd_phys;
 static struct task caller;
@@ -47,14 +48,13 @@ uint64_t g_tsc_per_ms;
 static uint64_t fake_tsc;
 static uint64_t (*tsc_clock_hook)(void);
 static uint64_t read_tsc_serialized(void) { return tsc_clock_hook ? tsc_clock_hook() : fake_tsc; }
-static void write_cr3(uint32_t x) { cpu_cr3 = x; }
+static void write_cr3(uint32_t x) { cpu_cr3 = x; cr3_reloads++; }
 static uint32_t fake_cr2 = 0xDEAD000;
 static uint32_t read_cr2(void) { return fake_cr2; }
 static void cli(void) { cpu_flags = 0; }
 static void sti(void) { cpu_flags = V86_IF; }
 static unsigned invalidations;
-static uint32_t invalidated_va;
-static void invlpg(uint32_t va) { invalidations++; invalidated_va = va; }
+static void invlpg(uint32_t va) { (void)va; invalidations++; }
 static uint32_t *table_va(uint32_t p) { return P2V(p); }
 static uint32_t irq_save(void) { uint32_t f=cpu_flags; cli(); return f; }
 static void irq_restore(uint32_t f) { cpu_flags=f; }

@@ -119,6 +119,58 @@ void cvga_store_chain4_span(cvga_state *v, unsigned at, const uint8_t *bytes, un
     ++v->changes;
 }
 
+int cvga_planar_run(cvga_state *v, unsigned dest, const uint8_t *ram_source,
+                    unsigned source, unsigned size, unsigned count,
+                    int backwards, int move, uint32_t value)
+{
+    unsigned mode = v->gc[5] & 3, bytes = count * size, tail = (count - 1) * size;
+    if (!count || (size != 1 && size != 2 && size != 4) || count > 65536u / size ||
+        (v->seq[4] & 0x0e) != 6 || !v->enable || !(v->misc & 2) ||
+        (v->gc[6] & 0x0e) != 4 || (v->gc[5] & 0x18) || mode > 1 ||
+        (!mode && (v->gc[1] || v->gc[3] || v->gc[8] != 255)) ||
+        (mode && (!move || ram_source || size != 1)) ||
+        dest > 65536u - size || (backwards ? dest < tail : dest > 65536u - bytes) ||
+        (move && !ram_source && (source > 65536u - size ||
+            (backwards ? source < tail : source > 65536u - bytes)))) return 0;
+    unsigned mask = v->seq[2] & 15, low = backwards ? dest - tail : dest;
+    /* Plane-major fill removes all per-byte bus/model callbacks. */
+    if (!move) {
+        for (unsigned p = 0; p < 4; p++) if (mask & (1u << p)) {
+            uint8_t *d = &v->plane[p][low];
+            if (size == 1) for (unsigned n = 0; n < bytes; n++) d[n] = (uint8_t)value;
+            else for (unsigned n = 0; n < count; n++, d += size) {
+                d[0] = (uint8_t)value; d[1] = (uint8_t)(value >> 8);
+                if (size == 4) { d[2] = (uint8_t)(value >> 16); d[3] = (uint8_t)(value >> 24); }
+            }
+        }
+    } else {
+        for (unsigned n = 0; n < count; n++) {
+            uint8_t data[4];
+            if (ram_source) for (unsigned b = 0; b < size; b++) data[b] = ram_source[b];
+            else {
+                for (unsigned b = 0; b < size; b++) {
+                    for (unsigned p = 0; p < 4; p++) v->latch[p] = v->plane[p][source + b];
+                    data[b] = v->latch[v->gc[4] & 3];
+                }
+            }
+            /* Capture the complete source element before any store. This
+             * preserves propagation for overlapping MOVS in either DF. */
+            for (unsigned p = 0; p < 4; p++) if (mask & (1u << p))
+                for (unsigned b = 0; b < size; b++) v->plane[p][dest + b] = mode ? v->latch[p] : data[b];
+            if (n + 1 < count) {
+                dest = backwards ? dest - size : dest + size;
+                if (ram_source) ram_source += backwards ? -(int)size : (int)size;
+                else source = backwards ? source - size : source + size;
+            }
+        }
+    }
+    for (unsigned p = 0; p < 4; p++) if (mask & (1u << p))
+        for (unsigned g = low / CVGA_DIRTY_GRANULE; g <= (low + bytes - 1) / CVGA_DIRTY_GRANULE; g++)
+            v->dirty[p][g >> 3] |= (uint8_t)(1u << (g & 7));
+    if (mask) v->changes++;
+    return 1;
+}
+
 const cvga_mode_params *cvga_find_mode(unsigned mode)
 {
     unsigned i;
@@ -576,6 +628,34 @@ unsigned cvga_render_row8(const cvga_state *v, unsigned y, uint8_t *dest,
         }
     }
     return r.g.width;
+}
+
+int cvga_modex_row(const cvga_state *v, unsigned y, unsigned *base, unsigned *pan)
+{
+    row_setup r;
+    if ((v->seq[4] & 0x0e) != 0x06 || (v->crtc[20] & 0x40) ||
+        !(v->crtc[23] & 0x40) || !setup_row(v, y, &r) || r.g.text || r.shift < 2) return 0;
+    *base = r.base & 0xffffu; *pan = r.pan;
+    return 1;
+}
+
+int cvga_modex_dirty(unsigned base, unsigned pan, unsigned width,
+                     const uint8_t dirty[4][CVGA_DIRTY_BYTES])
+{
+    if (!width) return 0;
+    unsigned first = (base + pan / 4) & 0xffffu;
+    unsigned count = (width - 1 + pan) / 4 - pan / 4 + 1;
+    /* One test per eight-byte granule, including plane wrap at FFFFh. */
+    while (count) {
+        unsigned g = first / CVGA_DIRTY_GRANULE;
+        uint8_t bits = dirty[0][g >> 3] | dirty[1][g >> 3] |
+                       dirty[2][g >> 3] | dirty[3][g >> 3];
+        if (bits & (1u << (g & 7))) return 1;
+        unsigned n = CVGA_DIRTY_GRANULE - first % CVGA_DIRTY_GRANULE;
+        if (n > count) n = count;
+        count -= n; first = (first + n) & 0xffffu;
+    }
+    return 0;
 }
 
 int cvga_row_reads_dirty(const cvga_state *v, unsigned y,

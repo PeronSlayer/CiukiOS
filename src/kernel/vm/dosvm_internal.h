@@ -48,6 +48,9 @@ enum dosvm_perf_cause {
     DOSVM_COST_RM_CLI, DOSVM_COST_RM_STI, DOSVM_COST_RM_HLT,
     DOSVM_COST_PM_HLT, DOSVM_COST_COUNT
 };
+enum dosvm_vga_reg { DOSVM_VGA_SR_INDEX, DOSVM_VGA_SR_MASK, DOSVM_VGA_SR_OTHER,
+    DOSVM_VGA_GC_INDEX, DOSVM_VGA_GC_READ, DOSVM_VGA_GC_MODE, DOSVM_VGA_GC_OTHER,
+    DOSVM_VGA_CRTC, DOSVM_VGA_DAC, DOSVM_VGA_OTHER, DOSVM_VGA_REGS };
 struct dosvm_perf_sample {
     uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows;
     uint32_t exits[6], irqs[16];
@@ -55,6 +58,10 @@ struct dosvm_perf_sample {
     uint32_t cost_count[DOSVM_COST_COUNT], batched;
     uint64_t cost_us[DOSVM_COST_COUNT];
     uint32_t idle_blocks, idle_reasons, idle_count[DOSVM_IDLE_REASONS], busy_permille;
+    uint32_t port_remaps, burst_insn, latch_read_windows;
+    uint64_t remap_us;
+    uint32_t port_count[DOSVM_VGA_REGS], port_exits[DOSVM_VGA_REGS];
+    uint64_t port_us[DOSVM_VGA_REGS], port_exit_us[DOSVM_VGA_REGS];
 };
 struct dosvm {
     struct dosvm_info info;
@@ -118,6 +125,8 @@ struct dosvm {
      * AFFFFh maps a model plane or the VM's own linear backing user-writable;
      * sync closes it before the VM's low-page restoration (dosvm_vga.c). */
     unsigned video_direct;
+    bool video_read_window, video_writable;
+    uint16_t video_pending[4]; /* dirty plane pages deferred by PTE swaps */
     uint32_t video_pm_faults, video_starts, video_maps, video_flushes, video_burst;
     uint32_t video_linear_maps, video_linear_harvests;
     uint32_t video_seen_start, video_lut_display;
@@ -126,6 +135,15 @@ struct dosvm {
     uint64_t video_bands; /* destination 8-line bands written by the last present */
     struct {
         uint32_t harvests, direct_pages, trapped_bytes, converted_bytes, rows;
+        uint32_t port_remaps, burst_insn, latch_read_windows;
+        uint64_t remap_cycles;
+        unsigned vga_reg;
+        uint32_t port_count[DOSVM_VGA_REGS], port_exits[DOSVM_VGA_REGS];
+        uint64_t port_cycles[DOSVM_VGA_REGS], port_exit_cycles[DOSVM_VGA_REGS];
+        uint32_t last_port_count[DOSVM_VGA_REGS], last_port_exits[DOSVM_VGA_REGS];
+        uint64_t last_port_cycles[DOSVM_VGA_REGS], last_port_exit_cycles[DOSVM_VGA_REGS];
+        uint32_t last_port_remaps, last_burst_insn, last_latch_read_windows;
+        uint64_t last_remap;
         uint32_t exits[6]; /* #GP, #PF, #DB, host timer, other, protected-mode total */
         uint64_t guest_cycles, monitor_cycles, present_cycles, harvest_cycles, log_cycles;
         uint64_t stamp, report_tick;
@@ -152,6 +170,9 @@ struct dosvm {
     char boot_log[2048], console_line[81];
     unsigned console_length;
     cvga_geometry video_geometry;
+    bool video_modex;
+    uint16_t video_row_base[DOSVM_VIDEO_HEIGHT];
+    uint8_t video_row_pan[DOSVM_VIDEO_HEIGHT];
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
     uint8_t video_row[DOSVM_VIDEO_WIDTH];
     uint32_t video_pixels[DOSVM_VIDEO_WIDTH];

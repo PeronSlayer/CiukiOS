@@ -159,7 +159,8 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
         uint32_t irq0, irq1, sb_irqs, kq, kr, units, sb_edges, services;
         uint32_t frames, starts, linear, planes, faults;
         uint32_t harvests, pages, direct, chain;
-        uint64_t harvest_cycles;
+        uint64_t harvest_cycles, remap_cycles, present_cycles;
+        uint32_t port_remaps, burst_insn;
         uint8_t kcmd, sb_irq, causes, error;
     } r;
     flags = irq_save();
@@ -176,6 +177,8 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
     r.linear = v->video_linear_harvests; r.planes = v->video_flushes; r.faults = v->video_faults;
     r.harvests = v->perf.harvests; r.pages = v->perf.direct_pages;
     r.harvest_cycles = v->perf.harvest_cycles;
+    r.port_remaps = v->perf.port_remaps; r.remap_cycles = v->perf.remap_cycles;
+    r.present_cycles = v->perf.present_cycles; r.burst_insn = v->perf.burst_insn;
     r.direct = v->video_direct; r.chain = !!(v->vga.seq[4] & 8);
     v->trace.heartbeat_tick = r.tick;
     unsigned n = ++v->trace.heartbeats;
@@ -195,6 +198,11 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
              r.services, r.x.active, r.x.paused, r.x.waiting, r.dma.masked, r.causes, r.error);
     dosvm_diag(v, "group=vm_beat_vga vm=%u gen=%u n=%u frames=%u flips=%u linear=%u planes=%u faults=%u direct=%u chain=%u",
              id, gen, n, r.frames, r.starts, r.linear, r.planes, r.faults, r.direct, r.chain);
+    /* Split wide counters to respect the 240-byte record envelope. */
+    dosvm_diag(v, "group=vm_beat_vga vm=%u gen=%u n=%u part=fast faults=%u port_remaps=%u burst_insn=%u",
+             id, gen, n, r.faults, r.port_remaps, r.burst_insn);
+    dosvm_diag(v, "group=vm_beat_vga vm=%u gen=%u n=%u part=time remap_us=%llu present_us=%llu",
+             id, gen, n, perf_us(r.remap_cycles), perf_us(r.present_cycles));
     dosvm_diag(v, "group=vm_beat_vga_mem vm=%u gen=%u n=%u harvests=%u dirty_pages=%u harvest_us=%llu",
              id, gen, n, r.harvests, r.pages, perf_us(r.harvest_cycles));
 }

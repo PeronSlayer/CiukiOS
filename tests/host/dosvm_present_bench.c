@@ -97,6 +97,8 @@ static void bench_replay(const char *name, unsigned wolf_width)
     static uint8_t ref[4][16384];
     const unsigned frames = 120;
     uint64_t present = 0, replay = 0, harvest = v->perf.harvest_cycles;
+    uint64_t remap = v->perf.remap_cycles, ports = v->perf.port_cycles[DOSVM_VGA_SR_MASK];
+    unsigned port_writes = v->perf.port_count[DOSVM_VGA_SR_MASK], swaps = v->perf.port_remaps;
     unsigned maps = v->video_maps, faults = v->video_faults, harvests = v->perf.harvests,
              pages = v->perf.direct_pages;
     bench_rows = 0;
@@ -111,10 +113,23 @@ static void bench_replay(const char *name, unsigned wolf_width)
             wolf_frame(v, &f, wolf_width == 4 ? 300 : wolf_width == 2 ? 100 : 50,
                        wolf_width, 0, ref);
         } else {
-            for (unsigned plane = 0; plane < 4; plane++) {
-                port_out(v, 0x3C4, 2, (1u << plane) * 256u + 2);
-                for (unsigned at = 0; at < sizeof(bytes); at++) bytes[at] = (uint8_t)(at + frame + plane);
-                bench_store(v, base, bytes, sizeof(bytes));
+            /* planar.asm: one map-mask OUT per column, then one per plane
+             * per floor span. Replay the measured 1279 OUTs/frame rather
+             * than the old four plane-copy passes. */
+            for (unsigned x = 0; x < 320; x++) {
+                unsigned plane = x & 3;
+                port_out(v, 0x3C5, 1, 1u << plane);
+                for (unsigned y = 0; y < 200; y++) {
+                    unsigned at = y * 80 + x / 4;
+                    uint8_t byte = (uint8_t)(at + frame + plane);
+                    bench_store(v, base + at, &byte, 1);
+                }
+            }
+            for (unsigned span = 0; span < 959; span++) {
+                unsigned plane = span & 3, at = (span / 4 % 200) * 80;
+                port_out(v, 0x3C5, 1, 1u << plane);
+                for (unsigned x = 0; x < 80; x++) bytes[x] = (uint8_t)(at + x + frame + plane);
+                bench_store(v, base + at, bytes, 80);
             }
             port_out(v, 0x3D4, 2, ((base & 255u) << 8) | 0x0D);
             port_out(v, 0x3D4, 2, ((base >> 8) << 8) | 0x0C);
@@ -140,6 +155,12 @@ static void bench_replay(const char *name, unsigned wolf_width)
            (double)(v->perf.harvests - harvests) / frames, (double)(v->perf.direct_pages - pages) / frames,
            (double)(v->perf.harvest_cycles - harvest) / frames / 1000,
            (double)present / frames / 1000, (double)replay / frames / 1000);
+    unsigned writes = v->perf.port_count[DOSVM_VGA_SR_MASK] - port_writes;
+    unsigned remaps = v->perf.port_remaps - swaps;
+    printf("ports=%s map_mask_writes_per_frame=%.2f handler_ns_per_write=%.3f remap_ns_per_swap=%.3f projected_ports_percent_at_35fps=%.3f\n",
+           name, (double)writes / frames, writes ? (double)(v->perf.port_cycles[DOSVM_VGA_SR_MASK] - ports) / writes : 0,
+           remaps ? (double)(v->perf.remap_cycles - remap) / remaps : 0,
+           (double)(v->perf.port_cycles[DOSVM_VGA_SR_MASK] - ports) / frames * 35 / 10000000);
     destroy(v, true); empty();
 }
 static void bench_latches(void)

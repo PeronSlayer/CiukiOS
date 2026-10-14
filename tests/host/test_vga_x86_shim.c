@@ -48,7 +48,7 @@ int cvx_shim_execute(cvx_cpu *cpu, uint8_t *memory, uint32_t size, uint32_t budg
                      uint32_t *log, uint32_t capacity, uint32_t *count, cvx_result *result)
 {
     shim_bus b;
-    cvx_bus bus;
+    cvx_bus bus = {0};
     int status;
     b.memory = memory;
     b.size = size;

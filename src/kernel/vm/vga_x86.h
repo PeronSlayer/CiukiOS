@@ -11,10 +11,12 @@
  *
  * Freestanding: no allocator, clock, BIOS, DOS or host port access.
  * Supported: 16-bit (V86/real) and 32-bit default sizes, segment overrides,
- * 66h/67h size overrides, LOCK (ignored), REP/REPE/REPNE strings, and memory
+ * 66h/67h size overrides, LOCK (refused), REP/REPE/REPNE strings, and memory
  * forms of MOV, MOVZX/MOVSX, MOV moffs, MOV Sreg store, ALU (ADD/OR/ADC/SBB/
  * AND/SUB/XOR/CMP), TEST, XCHG, INC/DEC, NOT/NEG, MUL/IMUL/DIV/IDIV (without
  * raising #DE), rotates/shifts, SETcc, XLAT, and MOVS/STOS/LODS/CMPS/SCAS.
+ * Also supports register setup/ALU, short Jcc/JMP/LOOP and optional bus
+ * callbacks for VGA port cycles and checked planar string runs.
  * Anything else, including FPU/MMX/SSE, BT*, stack forms, far-pointer loads,
  * control transfers through video memory and instruction fetch from the
  * aperture, returns CVX_UNSUPPORTED without changing registers or memory.
@@ -54,6 +56,12 @@ typedef struct cvx_cpu {
 typedef int (CVGA_CALL *cvx_read_fn)(void *context, uint32_t linear, uint8_t *value);
 typedef uint32_t (CVGA_CALL *cvx_base_fn)(void *context, uint16_t selector);
 typedef int (CVGA_CALL *cvx_write_fn)(void *context, uint32_t linear, uint8_t value);
+typedef int (*cvx_validate_fn)(void *, uint16_t selector, uint32_t offset, unsigned size, int write);
+/* Optional planar run. Zero declines without effects; positive consumes
+ * the entire run. The bus validates both complete spans before mutation. */
+typedef int (*cvx_string_fn)(void *, uint32_t source, uint32_t dest, unsigned size,
+                            uint32_t count, int backwards, int move, uint32_t value);
+typedef int (*cvx_port_fn)(void *, uint16_t port, unsigned size, int write, uint32_t *value);
 typedef struct cvx_bus {
     cvx_read_fn read;
     cvx_write_fn write;
@@ -63,6 +71,9 @@ typedef struct cvx_bus {
      * up on first use (a protected-mode fault uses CS and one data segment;
      * descriptor lookups for all six cost more than the emulation). */
     cvx_base_fn segment_base;
+    cvx_validate_fn validate;
+    cvx_string_fn string;
+    cvx_port_fn port;
 } cvx_bus;
 
 typedef struct cvx_result {

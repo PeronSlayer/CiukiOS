@@ -95,6 +95,10 @@ typedef struct cvp_retained_state {
 } cvp_retained_state;
 
 void CVGA_CALL cvp_init(cvp_state *s);
+/* Mode X/Y fused four-plane -> LUT -> integer-scaled XRGB row. Address and
+ * pan come from cvga_modex_row; no latches, ports or damage mutation. */
+void cvp_modex_row32(const cvga_state *, unsigned base, unsigned pan,
+                     unsigned width, unsigned scale, const uint32_t lut[256], uint32_t *dest);
 /* target addresses pixel (0,0) of a surface at least format->pitch *
  * format->height bytes long; the caller validates that extent. */
 int CVGA_CALL cvp_present(cvp_state *s, cvga_state *v, const cvp_format *format,

@@ -1756,3 +1756,90 @@ Commands/results are in `build/codex/f3-13-report.md`. Integration still
 requires the lead's `f3-workloads` QEMU suite, earlier gates, and T23 evidence
 for the requested DOOM 35 FPS and Wolf3D 70 FPS. Host throughput and completion
 counters alone do not qualify those hardware targets.
+
+## f3-19 — windowed VGA port swaps, Mode X/Y rows and PM bursts
+
+Directive: `docs/directives/f3-19-dos-window-video-fast-paths.md`; research:
+[`research/dos-vm-video-2026-10-14.md`](research/dos-vm-video-2026-10-14.md).
+This amendment supersedes the four-plane-copy cost premise and the planar
+CRTC-harvest rule in f3-06/f3-16. DOOM draws columns and floor spans directly
+in VRAM; the replay uses 1,279 map-mask OUTs per frame and three page bases.
+Full-screen hardware ownership remains outside this implementation.
+
+Sources checked against the implementation:
+
+- [Intel 80386 paging reference, sections 5.2.4–5.2.5](https://www.scs.stanford.edu/05au-cs240c/lab/i386/s05_02.htm):
+  the CPU sets A/D; clearing D or changing a translation needs invalidation.
+  `as_replace_pages` replaces up to 32 existing entries in one page table,
+  returns their old A/D masks, and reloads the active CR3 once. It allocates
+  nothing, changes no ownership counters, validates the whole span before
+  mutation, and skips a flush for clean unchanged/inactive mappings. Callers
+  exclude guest execution and interrupts. The selected operation is one
+  CR3 reload; comparing its real cost with 16 INVLPGs remains a T23 task.
+- [FreeVGA sequencer](https://www.scs.stanford.edu/22wi-cs212/pintos/specs/freevga/vga/seqreg.htm)
+  and [graphics controller](https://www.scs.stanford.edu/22wi-cs212/pintos/specs/freevga/vga/graphreg.htm):
+  SR02 selects write planes; GC04 selects the read plane independently.
+  Shared port callbacks fast-path SR02/GC04/GC05 in both V86 and PM, including
+  low-byte-first indexed OUTW. A swap records the old plane's D-page mask in
+  `video_pending`; it does not harvest granules or use `as_map`/`as_lookup`.
+  The presenter merges those masks once, including when no window remains
+  open. Planar CRTC 0C/0D writes select the source without a harvest. Chain-4
+  still publishes its separate linear backing at completion boundaries.
+- [Intel MOVS reference](https://www.scs.stanford.edu/05au-cs240c/lab/i386/MOVS.htm)
+  and [Wolf3D drawing source](https://raw.githubusercontent.com/id-Software/wolf3d/master/WOLFSRC/WL_DRAW.C):
+  bounded planar REP MOVS/STOS runs preserve element order, source-before-
+  destination reads, DF, address/operand sizes and 16-bit register high
+  halves. RAM source pages may be fragmented. Identity mode-0 fills/copies
+  and VGA-to-VGA mode-1 MOVSB have bulk paths; other modes remain bytewise.
+  Mode-1 MOVSW/MOVSD intentionally fall back: their last source-byte latch
+  would be written to every destination byte, unlike a plane memmove.
+
+Mode X/Y scanout caches row addresses and panning through the existing
+`setup_row` rules (split, preset, repeat and 64 KiB wrap). A guarded byte-
+addressed, unchained indexed converter fuses four-plane reads, DAC-mask/LUT
+lookup and scaling into the XRGB row, avoiding an intermediate index row.
+Other scanout formats keep the generic converter. Only dirty source rows
+are converted; unchanged black borders survive page flips. Existing
+8-line destination damage transport and the five VMVIDEO digests remain.
+Windowed graphics sample on a flip or the programmed refresh, including
+multi-plane trapped drawing with no writable mapping.
+
+PM aperture faults can continue through the same preflight/commit burst as
+V86: up to 1,024 instructions, stopping after eight consecutive instructions
+without VGA memory/ports (enough for INC/INC/LOOP and the following RAM load).
+Register ALU/setup, short Jcc/JMP/LOOP and VGA scalar IN/OUT connect planar
+runs. All PM fetches/operands validate descriptor rights and limits. Stores
+outside VGA, unsupported instructions, TF/watchpoints, virtual-IF recovery,
+return tracking, STI/MOV-SS shadows, deliverable IRQs and rescheduling stop
+the burst before the continuation. A partial generic REP retains its
+restart point; a fully validated planar run of at most 64 KiB completes in
+one exit. No DPMI dispatcher, V86 decoder or scheduling policy is changed.
+
+The f3-16 direct-read limitation remains accepted for these write-only draw
+runs: a native read of a writable plane mapping returns that mapped plane
+and does not load the VGA latches. An explicit GC04 write now selects its
+read shadow, read-only when it differs from the write plane; a subsequent
+SR02 write resumes the write window, even with the same mask. This fixes
+explicit read-map sequences such as DOOM fuzz columns, but does not create
+independent native read/write translations: arbitrary reads after an SR02
+write with a different GC04 still have the pre-existing mapped-read
+limitation. Latch-dependent modes close the window and use the full model;
+mode-1 blits load all four source latches before writing. A native read
+followed by a latch-dependent store without another trapped read still
+cannot recover the earlier latches. `latch_read_windows` conservatively
+counts A-without-D pages when a window closes; it is not proof of a bad blit.
+
+Verbose counters add per-register write counts/handler time and whole-exit
+costs (the final VGA register of a coalesced exit), port remaps/remap time
+and burst instructions. `vm_beat_vga` keeps the original `faults` record and
+adds `part=fast` (`port_remaps`, `burst_insn`) and `part=time` (`remap_us`,
+`present_us`) companion records to stay within 240 bytes. Per-second
+samples are retained in memory and dumped after stopping, as before.
+`vm_perf_wall` exposes monitor permille and wall time off the VM CPU;
+remap/harvest are subsets of monitor/presenter work, not additive shares.
+Off-CPU time includes native presentation/composition, other tasks and idle;
+this scope does not distinguish those by changing scheduling/compositor
+accounting. Host replay timings are not P3/T23 TSC or achieved game fps.
+
+Host evidence and the remaining QEMU/T23 gates are recorded in
+[`../validation/2026-10-14-f3-19-host.md`](../validation/2026-10-14-f3-19-host.md).
