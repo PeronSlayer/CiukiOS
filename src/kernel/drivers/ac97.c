@@ -1,4 +1,5 @@
-/* Intel ICH PCM-out. Sources/decisions: docs/design/f4-acceptance.md.
+/* Intel ICH PCM-out. Sources/decisions: docs/design/f4-acceptance.md and
+ * docs/validation/2026-10-14-f4-15-ac97-playback.md.
  * No upstream code imported. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -63,7 +64,7 @@ static void failure_snapshot(struct ac97_device *d, const char *stage)
     for (unsigned i = 0; i < 3; i++) f->status[i] = rd(d, i * 0x10 + 6, 2);
     f->control = rd(d, 0x1b, 1); f->lvi = rd(d, 0x15, 1);
     f->cursor = (struct ac97_cursor){ .status=f->status[1], .civ=rd(d, 0x14, 1),
-        .piv=rd(d, 0x1a, 1), .remaining=rd(d, 0x18, 2) };
+        .piv=rd(d, 0x1a, 1), .lvi=f->lvi, .remaining=rd(d, 0x18, 2) };
 }
 static bool expired(struct ac97_device *d, uint64_t deadline)
 { return (int64_t)(d->io.now(d->io.cookie) - deadline) >= 0; }
@@ -333,10 +334,13 @@ int ac97_observe(struct ac97_device *d, struct ac97_cursor *out)
     for (unsigned attempt = 0; attempt < 8; attempt++) {
         uint8_t civ = rd(d, 0x14, 1);
         struct ac97_cursor c = { .civ = civ, .status = rd(d, 0x16, 2),
-            .remaining = rd(d, 0x18, 2), .piv = rd(d, 0x1a, 1) };
-        if (civ == rd(d, 0x14, 1) && c.piv == rd(d, 0x1a, 1)) {
-            if (c.civ >= 32 || c.piv >= 32 || c.remaining > ac97_units(d) || c.status == 0xffff) return -EIO;
-            d->cursor = c; *out = c; return 0;
+            .lvi = rd(d, 0x15, 1), .remaining = rd(d, 0x18, 2), .piv = rd(d, 0x1a, 1) };
+        /* Retain even an invalid/torn observation for the failure record. */
+        d->cursor = c;
+        if (civ == rd(d, 0x14, 1) && c.piv == rd(d, 0x1a, 1) &&
+            !((c.status ^ rd(d, 0x16, 2)) & (AC97_DCH | AC97_CELV))) {
+            if (c.civ >= 32 || c.piv >= 32 || c.lvi >= 32 || c.remaining > ac97_units(d) || c.status == 0xffff) return -EIO;
+            *out = c; return 0;
         }
     }
     return -EIO;
@@ -355,8 +359,12 @@ int ac97_progress(struct ac97_device *d)
         int err = ac97_observe(d, &c);
         if (err) return err;
         delta = (c.civ - (unsigned)(d->retired % 32)) & 31;
+        if (d->retired > d->published) return -EIO;
         uint64_t outstanding = d->published - d->retired;
-        if (delta >= outstanding || c.piv != ((c.civ + 1) & 31)) return -EIO;
+        /* PIV is a prefetch observation, not a second progress counter.
+         * ICH3 13.2.6 does not require it to equal CIV+1. */
+        if (!outstanding || outstanding > 31 || delta >= outstanding ||
+            c.lvi != ((d->published - 1) & 31)) return -EIO;
         fetched = (d->retired + delta) * AUDIO_QUANTUM + (ac97_units(d) - c.remaining) / (d->sis ? 4 : 2);
         if (!(c.status & AC97_DCH) && (!c.remaining || fetched < d->generation_fetched)) continue;
         if (fetched < d->generation_fetched) return -EIO;
@@ -371,15 +379,17 @@ int ac97_progress(struct ac97_device *d)
         return -EAGAIN;
     }
     d->cursor_retrying = false;
-    if (delta) { d->retired += delta; d->last_progress = now; }
+    if (delta || fetched > d->generation_fetched) d->last_progress = now;
+    d->retired += delta;
     d->fetched += fetched - d->generation_fetched;
     d->generation_fetched = fetched;
     if (c.status & AC97_FIFOE) { d->fifo_errors++; wr(d, 0x16, AC97_FIFOE, 2); }
     if (c.status & AC97_DCH) {
-        d->tail_drained = !(c.status & AC97_FIFOE) && !c.remaining && d->retired + 1 == d->published;
+        d->tail_drained = (c.status & AC97_CELV) && !c.remaining &&
+            c.civ == c.lvi && d->retired + 1 == d->published && (rd(d, 0x1b, 1) & 1);
         if (!d->observed_halt && !d->idle_tail) d->dma_halts++; /* an idle-tail underrun carries no client data */
         d->observed_halt = true;
-        return -EIO; /* no replay/restart of potentially committed PCM */
+        return -EIO; /* service may recover only the proven exhausted ring */
     }
     d->observed_halt = false;
     if (d->io.now(d->io.cookie) - d->last_progress > 100) {
@@ -389,12 +399,13 @@ int ac97_progress(struct ac97_device *d)
 }
 int ac97_publish(struct ac97_device *d, const struct audio_frame *pcm)
 {
+    if (d->retired > d->published) return -EIO;
     if (d->quarantine || d->stopping || d->published - d->retired >= 31) return -EAGAIN; /* ring full; the service owns the lead policy */
     unsigned slot = d->published % 32;
     if (d->running) {
         struct ac97_cursor c;
         if (ac97_observe(d, &c)) return -EIO;
-        if (slot == c.civ || slot == c.piv) return -EIO;
+        if (slot == c.civ || slot == c.piv) return -EAGAIN;
     }
     memcpy(d->pcm[slot], pcm, AUDIO_QUANTUM * sizeof(*pcm));
     d->bdl[slot].length = (1u << 31) | ac97_units(d);
@@ -451,6 +462,7 @@ static int channel_reset(struct ac97_device *d, uint64_t limit)
         failure_snapshot(d, "dma_bdbar"); d->quarantine = true; return -EIO;
     }
     d->published = d->retired = d->generation_fetched = 0; d->stopping = false;
+    d->tail_drained = d->cursor_retrying = d->observed_halt = false;
     return 0;
 }
 int ac97_stop(struct ac97_device *d)
@@ -607,7 +619,7 @@ static bool ac97_irq(unsigned irq, const char *owner)
     if (!causes) return false;
     ac97.irqs++;
     ac97.irq_cursor = (struct ac97_cursor){ .status=status, .civ=rd(&ac97, 0x14, 1),
-        .piv=rd(&ac97, 0x1a, 1), .remaining=rd(&ac97, 0x18, 2) };
+        .piv=rd(&ac97, 0x1a, 1), .lvi=rd(&ac97, 0x15, 1), .remaining=rd(&ac97, 0x18, 2) };
     if (causes & AC97_FIFOE) ac97.fifo_errors++;
     if ((status & AC97_DCH) && !ac97.observed_halt) { if (!ac97.idle_tail) ac97.dma_halts++; ac97.observed_halt = true; }
     wr(&ac97, 0x16, causes, 2);

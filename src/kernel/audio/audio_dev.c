@@ -109,6 +109,7 @@ static bool first_playback;
 static bool playback_logged;
 static uint64_t playback_start, playback_next;
 static uint64_t non_silent_end; /* output position after the last nonzero published quantum */
+static bool quantum_pending, quantum_mixed; /* retry a refused publication without mixing twice */
 void audio_diagnostics(struct ciuki_audio_diagnostics *out)
 {
     uint32_t f = irq_save();
@@ -148,6 +149,7 @@ void audio_wake(void)
 void audio_fail(int error)
 {
     audio.error = error; audio.ready = false;
+    quantum_pending = false;
     if (serial_buffered) serial_buffered(false);
     audio_wake();
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
@@ -170,6 +172,10 @@ void audio_service(void)
     bool tail = audio.running && (!active || idle_since);
     audio_backend_idle(tail && b.frame_base + b.retired * AUDIO_QUANTUM >= non_silent_end);
     bool control = false; /* a transport stop has its own deadline, not the 1 ms service budget */
+    bool recovering = false;
+    struct audio_transport stop_snapshot;
+    bool stop_failed = false;
+    const char *error_op = "progress";
     int err = audio_backend_progress();
     if (err==-EAGAIN) return; /* transient coherent-cursor retry, no source consumed */
     audio_backend_snapshot(&b);
@@ -181,7 +187,15 @@ void audio_service(void)
          * normally instead of failing the backend; a source restarts it. */
         klog("[audio] idle-tail transport stop err=%d published=%llu retired=%llu halts=%llu tail_ms=%llu",
              err, (unsigned long long)b.published, (unsigned long long)b.retired, (unsigned long long)b.dma_halts, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
-        err = audio_backend_stop(); audio.running = false; audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false); control = true;
+        error_op = "stop";
+        stop_snapshot = b;
+        err = audio_backend_stop(); stop_failed = err != 0;
+        if (!err) {
+            audio.running = false;
+            audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
+            idle_since = 0; audio_backend_idle(false);
+        }
+        control = true;
     } else if (!err && tail && silent && b.published - b.retired <= 1) {
         /* Drained to the period the DMA plays: ac97_publish never rewrites the
          * CIV/PIV slots, so the queue cannot be extended and the refusal
@@ -190,11 +204,29 @@ void audio_service(void)
          * 4 and 5). Inside the tail that period is silence: stop as above. */
         klog("[audio] idle-tail transport stop drained published=%llu retired=%llu tail_ms=%llu",
              (unsigned long long)b.published, (unsigned long long)b.retired, (unsigned long long)(idle_since ? g_ticks - idle_since : 0));
-        err = audio_backend_stop(); audio.running = false; audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false); control = true;
-    } else if (err) {
-        klog("[audio] progress err=%d backend=%s slot=%u remaining=%u piv=%u sr=%04x published=%llu retired=%llu running=%u halts=%llu",
-             err, audio.backend_name ? audio.backend_name : "ac97", b.slot, b.remaining, b.prefetch, b.status,
-             (unsigned long long)b.published, (unsigned long long)b.retired, audio.running, (unsigned long long)b.dma_halts);
+        error_op = "stop";
+        stop_snapshot = b;
+        err = audio_backend_stop(); stop_failed = err != 0;
+        if (!err) {
+            audio.running = false;
+            audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
+            idle_since = 0; audio_backend_idle(false);
+        }
+        control = true;
+    } else if (err && b.tail_drained) {
+        /* CIV/LVI/PICB proved that every published period was fetched.
+         * Pause must still prove RUN clear and a stable halted cursor before
+         * reset or any payload reuse. Prime a new silence lead, preserving
+         * an unpublished quantum if publication raced the final fetch. */
+        error_op = "recover_stop";
+        stop_snapshot = b;
+        err = audio_backend_stop(); stop_failed = err != 0;
+        if (!err) {
+            audio.running = false;
+            audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
+            idle_since = 0; audio_backend_idle(false); recovering = true;
+        }
+        control = true;
     }
     audio_backend_snapshot(&b);
     audio.fetched = b.fetched; audio.played_output = b.frame_base + b.generation_fetched;
@@ -203,7 +235,7 @@ void audio_service(void)
     /* Publish until the lead is restored: one period per service let any
      * service delay erode the lead permanently (QEMU evidence 2026-10-11:
      * published=770 retired=769 → CELV/DCH halt). */
-    /* Active sources keep the latency lead, one period per service. The
+    /* Active sources restore the latency lead in a bounded burst. The
      * idle tail (silence only) is cushioned deeper in one burst at its
      * start, before the clients' exits delay this worker (QEMU evidence
      * 2026-10-11); the burst is a control operation outside the 1 ms budget.
@@ -213,12 +245,24 @@ void audio_service(void)
     if (tail_start) { idle_since = g_ticks; control = true; }
     unsigned limit, published_now = 0;
     unsigned lead = audio_refill_lead(active, tail_start, audio_vm_attached && audio_vm_attached(), &limit);
-    while (!err && (active || audio.running) && b.published - b.retired < lead && published_now++ < limit) {
-        bool mixed = audio.running && active;
-        if (!audio.running) {
-            memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
-        } else audio_mix(quantum, AUDIO_QUANTUM);
+    /* A recovered inactive source still needs a complete silence lead in
+     * this service; otherwise the worker leaves a stopped one-period ring. */
+    if (recovering) lead = limit = AUDIO_LEAD;
+    if (!audio.running && !recovering) limit = 1; /* normal startup pacing */
+    while (!err && (active || audio.running || recovering || quantum_pending || b.published) &&
+           b.published - b.retired < lead && published_now++ < limit) {
+        if (!quantum_pending) {
+            quantum_mixed = audio.running && active;
+            if (!audio.running) {
+                memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
+            } else audio_mix(quantum, AUDIO_QUANTUM);
+            quantum_pending = true;
+        }
+        bool mixed = quantum_mixed;
+        error_op = "publish";
         err = audio_backend_publish(quantum);
+        if (err == -EAGAIN) { err = 0; break; } /* CIV/PIV still own the slot; retain quantum */
+        if (!err) quantum_pending = false;
         if (!err && mixed && audio_vm_published) audio_vm_published();
         audio_backend_snapshot(&b);
         if (!err && mixed && !first_playback) {
@@ -232,19 +276,26 @@ void audio_service(void)
         }
         if (!err && !audio.running && b.published == AUDIO_LEAD) {
             if (serial_buffered) serial_buffered(true);
+            error_op = "start";
             err = audio_backend_start(); audio.running = !err; audio_backend_snapshot(&b);
         }
     }
-    playback_log(err != 0);
-    if (!err && !active && audio.running) {
+    if (!err) playback_log(false); /* failure has one complete record below */
+    if (!err && !active && audio.running && !quantum_pending) {
         /* Client drains have already waited their fetched/tail allowance.
          * Silence still in the queue is not client data. Keep publishing
          * silence for an idle tail before stopping: the QEMU AC97 backend
          * dropped the last ~0.3 s of fetched audio when the channel was reset
          * at once (evidence 2026-10-11), and codecs settle without clicks. */
-        if (g_ticks - idle_since >= AUDIO_IDLE_TAIL_MS && silent) {
-            err = audio_backend_stop(); audio.running = false;
-            audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false); control = true;
+        if (idle_since && g_ticks - idle_since >= AUDIO_IDLE_TAIL_MS && silent) {
+            error_op = "stop";
+            stop_snapshot = b;
+            err = audio_backend_stop(); stop_failed = err != 0;
+            if (!err) {
+                audio.running = false;
+                audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false);
+            }
+            control = true;
         }
     } else if (active) {
         idle_since = 0; /* a new source cancels the idle tail */
@@ -256,8 +307,18 @@ void audio_service(void)
     if (elapsed > *peak) *peak = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
     if (!audio.running && serial_buffered) serial_buffered(false);
     if (err) {
-        klog("[audio] backend failure err=%d published=%llu retired=%llu running=%u active=%u",
-             err, (unsigned long long)b.published, (unsigned long long)b.retired, audio.running, active);
+        /* Pause/reset can change both hardware indices and generation
+         * counters. Keep the triggering ring snapshot if recovery failed. */
+        if (stop_failed) b = stop_snapshot;
+        else audio_backend_snapshot(&b);
+        /* At most 227 bytes even with maximum-width counters: klog's
+         * 256-byte buffer must retain the complete snapshot in one line. */
+        klog("[audio] backend failure err=%d op=%s civ=%u lvi=%u piv=%u picb=%u sr=%04x published=%llu retired=%llu running=%u active=%u gap_us=%u elapsed_ms=%llu",
+             err, error_op, b.slot, b.lvi, b.prefetch, b.remaining, b.status,
+             (unsigned long long)b.published, (unsigned long long)b.retired, b.running, active,
+             audio.max_service_gap_us,
+             (unsigned long long)(first_playback ? g_ticks - playback_start : 0));
+        playback_logged = first_playback;
         audio_fail(-EIO); kmutex_lock(&control_lock); audio_backend_shutdown(); kmutex_unlock(&control_lock);
     }
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);

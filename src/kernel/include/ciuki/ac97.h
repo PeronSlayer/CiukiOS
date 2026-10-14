@@ -17,7 +17,7 @@ struct ac97_io {
     uint64_t (*now)(void *);
     void (*sleep)(void *, uint32_t ms);
 };
-struct ac97_cursor { uint8_t civ, piv; uint16_t status, remaining; };
+struct ac97_cursor { uint8_t civ, piv, lvi; uint16_t status, remaining; };
 struct ac97_failure {
     const char *stage; /* first failure, captured before rollback */
     uint16_t ext_control, rate, status[3];
@@ -54,7 +54,7 @@ struct ac97_device {
     uint16_t saved_sis_gate;
     bool observed_halt, codec_changed, software_master, beep_present, cirrus_spdif;
     bool idle_tail; /* no started source: silence cushion, halts not counted */
-    bool tail_drained; /* progress proved DCH at the fully fetched last period */
+    bool tail_drained; /* coherent DCH/CELV, CIV=LVI, fully fetched last period */
     uint16_t saved_master, saved_pcm, saved_headphone, saved_ext, saved_rate, saved_power, saved_beep, saved_spdif;
 };
 extern struct ac97_device ac97;

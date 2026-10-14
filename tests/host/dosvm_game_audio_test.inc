@@ -9,6 +9,7 @@ static uint32_t game_read(void *cookie, uint16_t p, unsigned width)
     (void)cookie; (void)width;
     switch (p) {
     case 0x14: return game_cursor.civ;
+    case 0x15: return game_cursor.lvi;
     case 0x16: return game_cursor.status;
     case 0x18: return game_cursor.remaining;
     case 0x1A: return game_cursor.piv;
@@ -93,7 +94,7 @@ static void game_audio_replay(bool wolf, unsigned rate, bool sb16)
     struct ac97_device backend={.io={.read=game_read,.write=game_write,.now=game_now},
         .running=true,.published=160,.retired=152,.last_progress=g_ticks,
         .generation_fetched=152*AUDIO_QUANTUM+200,.fetched=152*AUDIO_QUANTUM+200};
-    game_cursor=(struct ac97_cursor){.civ=24,.piv=25,.remaining=0};
+    game_cursor=(struct ac97_cursor){.civ=24,.piv=25,.lvi=31,.remaining=0};
     CHECK(ac97_progress(&backend)==-EAGAIN && backend.retired==152);
     game_cursor.remaining=512;
     CHECK(ac97_progress(&backend)==-EAGAIN);

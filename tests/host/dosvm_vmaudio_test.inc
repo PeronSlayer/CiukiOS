@@ -348,6 +348,7 @@ static void vt_service(void)
     bool tail_start = !active && vt.running && !vt.idle_since;
     if (tail_start) vt.idle_since = g_ticks;
     unsigned limit, n = 0, lead = audio_refill_lead(active, tail_start, audio_vm_attached(), &limit);
+    if (!vt.running) limit = 1; /* production startup pacing */
     while ((active || vt.running) && vt.published - vt.retired < lead && n++ < limit) {
         if (!vt.running) audio.output += AUDIO_QUANTUM;
         else audio_mix(vq_out, AUDIO_QUANTUM);
@@ -370,7 +371,7 @@ static unsigned vt_fresh(const struct audio_vm_stats *st, const struct vg *g, un
 static void test_vm_idle_tail(void)
 {
     unsigned limit;
-    CHECK(audio_refill_lead(true, false, true, &limit) == AUDIO_LEAD && limit == 1);
+    CHECK(audio_refill_lead(true, false, true, &limit) == AUDIO_LEAD && limit == AUDIO_LEAD);
     CHECK(audio_refill_lead(false, true, false, &limit) == AUDIO_TAIL_LEAD && limit == AUDIO_TAIL_LEAD); /* native-only tail unchanged */
     audio.ready = true;
     audio.master = (struct ciuki_mixer_master){ .version = 1, .size = 32, .left = 100, .right = 100 };
