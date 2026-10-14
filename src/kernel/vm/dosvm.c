@@ -65,7 +65,7 @@ static void dosvm_trace_flush(struct dosvm *v)
     if (begin) v->perf.log_cycles += dosvm_perf_clock() - begin;
 }
 
-static void dosvm_diag(struct dosvm *v, const char *fmt, ...)
+void dosvm_diag(struct dosvm *v, const char *fmt, ...)
 {
     if (!(g_boot.flags & CBI_F_VERBOSE)) return;
     bool defer = dosvm_in_irq(v) && v->info.state != DOSVM_STOPPING;
@@ -203,6 +203,7 @@ static const char *dosvm_step_owner(const struct dosvm *v, const struct v86_fram
         return v->monitor.vif && v86_irq_pending(&v->monitor) >= 0 ? "rm_irq" : "rm_tf";
     }
     const struct dpmi *d = &v->dpmi;
+    if (d->if_step) return "pm_if";
     if (d->if_armed) return "pm_flags";
     if (d->return_steps && (uint16_t)f->tf.cs == d->return_cs && (uint16_t)f->tf.user_ss == d->return_ss &&
         d->depth == d->return_depth && d->clients == d->return_client) return "pm_return";

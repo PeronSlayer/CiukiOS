@@ -258,8 +258,81 @@ static void test_irq_target_diagnostics(void)
     puts("f3-12 target diagnostics: every 0205h 08-0F past startup budget, repeat/default, unallocated/freed/non-present/data/limit rejection, quiet boot and unchanged PIC PASS");
 }
 
+static void test_if_stall_watchdog(void)
+{
+    struct dosvm *v=dpmi_vm(true); v86_start(); enter(v,true);
+    uint16_t code=(uint16_t)cur.tf.cs; uint32_t base=seg_base(v,code);
+    uint8_t spin[16]={0xEB,0xFE}; uint32_t image[3]={0x202,0x12345678,0xA5A5A5A5};
+    CHECK(!dosvm_write(v,base+0x300,spin,sizeof(spin)));
+    uint32_t stack=seg_base(v,(uint16_t)cur.tf.user_ss)+cur.tf.user_esp;
+    CHECK(!dosvm_write(v,stack,image,sizeof(image)));
+    v->dpmi.vec[8]=(struct dpmi_vec){.sel=code,.off=0x700};
+    cur.tf.eip=0x300; cur.tf.eflags=V86_IF|2; v->monitor.vif=false;
+    v->dpmi.decode_valid=true; v->dpmi.decode_cs=code; v->dpmi.decode_eip=0x248205;
+    g_boot.flags=CBI_F_VERBOSE;
+    CHECK(dosvm_irq_raise(v->info.key,0)); step(v,0x20,0);
+    CHECK(v->dpmi.if_waiting && v->dpmi.if_step && !v->monitor.stats.delivered[0]);
+    unsigned before=records; uint64_t began=v->dpmi.if_wait_tick;
+    v->trace.used[DOSVM_TRACE_TIMER]=255;
+    v->trace.used[DOSVM_TRACE_IRQ0]=255;
+    g_ticks=began+99; step(v,0x20,0);
+    CHECK(records==before && !v->monitor.vif && !v->dpmi.depth);
+    g_ticks=began+100; step(v,0x20,0);
+    CHECK(records==before+2 && v->dpmi.if_records==1 && !v->dpmi.if_waiting && !v->dpmi.if_step &&
+          cur.tf.eip==0x700 && v->monitor.stats.delivered[0]==1 && v->monitor.pic[0].isr==1);
+    CHECK(strstr(recent_records[before%8],"group=vm_if_stall") &&
+          strstr(recent_records[before%8],"vif=0 arm=0") && strstr(recent_records[before%8],"ms=100") &&
+          strstr(recent_records[before%8],"reason=time"));
+    CHECK(strstr(recent_records[(before+1)%8],"code=ebfe0000000000000000000000000000") &&
+          strstr(recent_records[(before+1)%8],"stack=00000202,12345678,a5a5a5a5"));
+    g_ticks++; step(v,0x20,0); CHECK(v->dpmi.if_records==1); /* same IRQ episode */
+    /* Full-width generation/sequence/age must fit the 240-byte envelope. */
+    uint32_t generation=v->info.key.generation; unsigned saved_records=records;
+    unsigned saved_state=v->info.state; v->info.state=DOSVM_STOPPING; /* dump outside resumable IRQ work */
+    v->info.key.generation=UINT32_MAX; records=UINT32_MAX-2;
+    if_recovery_record(v,&cur,UINT64_MAX,"budget");
+    CHECK(strstr(last_record,"gen=4294967295") && strstr(last_record,"path=trap"));
+    records=saved_records; v->info.key.generation=generation; v->info.state=saved_state;
+    g_boot.flags=0; destroy(v,true); empty();
+    /* Instruction bound even when host time is fixed; masked requests do
+     * not start a wait. Recovery BS must not masquerade as saved-image BS. */
+    v=dpmi_vm(true); v86_start(); enter(v,true); base=seg_base(v,(uint16_t)cur.tf.cs);
+    CHECK(!dosvm_write(v,base+0x300,spin,sizeof(spin)));
+    v->dpmi.vec[8]=(struct dpmi_vec){.sel=cur.tf.cs,.off=0x700};
+    cur.tf.eip=0x300; cur.tf.eflags=V86_IF|2; v->monitor.vif=false; v->dpmi.if_armed=true;
+    v->monitor.pic[0].imr=0xFF; CHECK(dosvm_irq_raise(v->info.key,0)); step(v,0x20,0);
+    CHECK(!v->dpmi.if_waiting && !v->dpmi.if_step);
+    v->monitor.pic[0].imr=0xFE; step(v,0x20,0);
+    for(unsigned i=0;i<DPMI_IF_STEPS;i++) {
+        CHECK(v->dpmi.if_step && !v->monitor.vif && !v->monitor.stats.delivered[0]);
+        debug_dr6=1u<<14; step(v,1,0);
+    }
+    CHECK(cur.tf.eip==0x700 && v->monitor.stats.delivered[0]==1 && !v->dpmi.if_step &&
+          !v->dpmi.stats.if_restored && v->dpmi.if_armed); /* patched image owner survives */
+    destroy(v,true); empty();
+    puts("f3-15 watchdog: 99/100ms snapshot once, code/stack/PIC/seed, original gate then handler commit; masked IRQ waits; 4096 BS budget with fixed time and saved-image ownership PASS");
+}
+static void test_if_trace_barriers(void)
+{
+    static const uint8_t unsafe[][4]={{0x9C},{0xF3,0x9C},{0x8E,0xD0},{0x17},{0xCD,0x31},{0xEA}};
+    for(unsigned i=0;i<ARRAY_SIZE(unsafe)+2;i++) {
+        struct dosvm *v=dpmi_vm(true); v86_start(); enter(v,true);
+        uint32_t base=seg_base(v,(uint16_t)cur.tf.cs);
+        uint8_t nop=0x90;
+        CHECK(!dosvm_write(v,base+0x300,i<ARRAY_SIZE(unsafe)?unsafe[i]:&nop,i<ARRAY_SIZE(unsafe)?4:1));
+        cur.tf.eip=0x300; cur.tf.eflags=V86_IF|2; v->monitor.vif=false;
+        if(i==ARRAY_SIZE(unsafe)) cur.tf.eflags|=V86_TF;
+        if(i==ARRAY_SIZE(unsafe)+1) v->dpmi.dr7=1;
+        CHECK(dosvm_irq_raise(v->info.key,0)); step(v,0x20,0);
+        CHECK(!v->dpmi.if_step && !v->monitor.vif &&
+              !!(cur.tf.eflags&V86_TF)==(i==ARRAY_SIZE(unsafe)));
+        destroy(v,true); empty();
+    }
+    puts("f3-15 trace barriers: PUSHFD/prefixed save, SS load/shadow, INT/far transfer, client TF/watchpoint preserved PASS");
+}
 static void test_irq_stall(void)
 {
     test_irq_restore_delivery(); test_irq_frame_commit(); test_irq_stall_diagnostics(); test_irq_real_tf();
     test_irq_trace_latency(); test_irq_target_diagnostics();
+    test_if_stall_watchdog(); test_if_trace_barriers();
 }

@@ -1046,6 +1046,98 @@ static void test_dpmi_rm_soft(void)
     printf("DPMI real-mode INT 1Ch/23h/24h reflection to protected-mode hooks: locked stack, results copied back\n");
 }
 
+static void test_dpmi_if_high_flags(void)
+{
+    /* The Watcom PUSHFD/POP EAX/CLI form with legal AC/ID flags. */
+    for (unsigned bits = 0; bits < 2; bits++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, bits != 0);
+        if (bits) v->dpmi.ldt[(uint16_t)cur.tf.cs >> 3][1] |= 0x400000u;
+        uint32_t base = seg_base(v, (uint16_t)cur.tf.cs);
+        const uint8_t save[] = {0x9C, 0x58, 0xFA};
+        CHECK(!dosvm_write(v, base + 0x300, save, sizeof(save)));
+        cur.tf.eip = 0x300; cur.tf.eflags = 0x00240202u; step(v, 0x20, 0);
+        cur.tf.eip = 0x302; cur.tf.eax = bits ? 0x00240202u : 0xABCD0202u;
+        step(v, 13, 0);
+        CHECK(!left && v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
+        destroy(v, true); empty();
+    }
+    puts("f3-15 flags match: Watcom save/CLI with AC/ID, 16-bit register high half preserved PASS");
+}
+
+#ifdef CIUKI_DOSVM_GUEST_CPU
+static void client_desc(struct dosvm *, unsigned, uint32_t, uint32_t, uint8_t, uint8_t);
+static struct dosvm *if_cpu_vm;
+static bool if_cpu_read(uint32_t at, void *buffer, unsigned bytes)
+{ return !dosvm_read(if_cpu_vm, at, buffer, bytes); }
+static bool if_cpu_write(uint32_t at, const void *buffer, unsigned bytes)
+{ return !dosvm_write(if_cpu_vm, at, buffer, bytes); }
+static void if_cpu_descriptor(uint16_t sel, bool write, uint32_t desc[2])
+{
+    (void)write; CHECK((sel & 4) && (sel >> 3) < DPMI_LDT_ENTRIES);
+    memcpy(desc, if_cpu_vm->dpmi.ldt[sel >> 3], 8);
+}
+static void if_cpu_unexpected(const char *why)
+{ fprintf(stderr, "f3-15 CPU: %s\n", why); CHECK(false); }
+static int if_cpu_run(struct dosvm *v, struct gcpu_event *ev)
+{
+    struct gcpu_state s = {.eax=cur.tf.eax, .ebx=cur.tf.ebx, .ecx=cur.tf.ecx, .edx=cur.tf.edx,
+        .esi=cur.tf.esi, .edi=cur.tf.edi, .ebp=cur.tf.ebp, .esp=cur.tf.user_esp,
+        .eip=cur.tf.eip, .eflags=cur.tf.eflags, .cs=cur.tf.cs, .ss=cur.tf.user_ss,
+        .ds=cur.tf.ds, .es=cur.tf.es, .fs=cur.tf.fs, .gs=cur.tf.gs,
+        .ldt_limit=DPMI_LDT_ENTRIES * 8 - 1, .pm=true};
+    if_cpu_vm = v;
+    int rc = gcpu_run(&s, 32, ev);
+    cur.tf.eax=s.eax; cur.tf.ebx=s.ebx; cur.tf.ecx=s.ecx; cur.tf.edx=s.edx;
+    cur.tf.esi=s.esi; cur.tf.edi=s.edi; cur.tf.ebp=s.ebp; cur.tf.user_esp=s.esp;
+    cur.tf.eip=s.eip; cur.tf.eflags=s.eflags; cur.tf.cs=s.cs; cur.tf.user_ss=s.ss;
+    cur.tf.ds=s.ds; cur.tf.es=s.es; cur.tf.fs=s.fs; cur.tf.gs=s.gs;
+    return rc;
+}
+static void test_dpmi_if_cpu(void)
+{
+    const struct gcpu_ops ops = {if_cpu_read, if_cpu_write, if_cpu_descriptor, if_cpu_unexpected, 0};
+    gcpu_init(&ops);
+    for (unsigned bits = 0; bits < 2; bits++) for (unsigned form = 0; form < 4; form++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, bits != 0);
+        uint16_t code = (uint16_t)cur.tf.cs;
+        if (bits) v->dpmi.ldt[code >> 3][1] |= 0x400000u;
+        uint32_t base = seg_base(v, code);
+        /* PUSHF; POP AX/EAX; CLI; PUSH AX/EAX; POPF. Unknown boundary
+         * deliberately prevents saved-image arming: recovery must work. */
+        const uint8_t save[] = {0x9C, 0x58, 0xFA, 0x50, 0x9D, 0x90};
+        CHECK(!dosvm_write(v, base + 0x300, save, sizeof(save)));
+        cur.tf.eip = 0x300; cur.tf.eflags = V86_IF | 2;
+        v->dpmi.decode_valid = false;
+        struct gcpu_event ev;
+        CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x302);
+        step(v, ev.vector, ev.err);
+        CHECK(!v->monitor.vif && !v->dpmi.if_armed);
+        if (form == 1 || form == 2) {
+            /* Ordinary same-ring IRET, including a different code selector
+             * and ignored high selector bits in a 32-bit IRET image. */
+            uint16_t target = code;
+            if (form == 2) { client_desc(v, 900, base, 0xFFFF, 0xFA, bits ? 0x40 : 0); target=DPMI_SEL(900); }
+            uint8_t iret = 0xCF; CHECK(!dosvm_write(v, base + 0x303, &iret, 1));
+            pm_push(v, V86_IF | 2); pm_push(v, bits ? 0xA5A50000u | target : target); pm_push(v, 0x305);
+        }
+        if (form == 3) cur.tf.eax = 2; /* IF-clear POPF must not restore */
+        v->dpmi.vec[8] = (struct dpmi_vec){.sel=code, .off=0x700};
+        CHECK(dosvm_irq_raise(v->info.key, 0)); step(v, 0x20, 0);
+        CHECK(v->dpmi.if_step && !v->monitor.vif && (cur.tf.eflags & V86_TF));
+        for (unsigned i = 0; i < 2 && !v->dpmi.depth; i++) {
+            CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 1 && (ev.dr6 & (1u << 14)));
+            debug_dr6=ev.dr6; step(v, ev.vector, ev.err);
+        }
+        if (form == 3) CHECK(!v->monitor.vif && !v->dpmi.depth && !v->monitor.stats.delivered[0]);
+        else CHECK(v->dpmi.depth == 1 && cur.tf.eip == 0x700 && v->monitor.stats.delivered[0] == 1 &&
+                   v->dpmi.stats.if_restored == 1 && !(cur.tf.eflags & V86_TF));
+        destroy(v, true); empty();
+    }
+    gcpu_done(); if_cpu_vm=0;
+    puts("f3-15 CPU + production monitor: unarmed 16/32-bit Watcom POPF and same/cross-selector IRET retire with BS and deliver; IF-clear image waits PASS");
+}
+#endif
+
 static void test_dpmi(void)
 {
     test_dpmi_discovery_entry();
@@ -1061,6 +1153,12 @@ static void test_dpmi(void)
     test_dpmi_stale_frames();
     test_dpmi_32bit_nested();
     test_dpmi_rm_soft();
+    test_dpmi_if_high_flags();
+#ifdef CIUKI_DOSVM_GUEST_CPU
+    test_dpmi_if_cpu();
+#else
+    puts("f3-15 CPU + production monitor: SKIP (no libx86emu headers)");
+#endif
     (void)debug_dr7; (void)debug_addr; (void)op1; (void)rm_iret_roundtrip; (void)pm_iret; (void)pm_retf;
     (void)at_stub; (void)pm_push; (void)rm_pop16;
 }

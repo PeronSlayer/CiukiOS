@@ -632,7 +632,9 @@ static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct d
     /* PUSHF's image of the real flags: IF set (the host never runs a client
      * disabled), IOPL 0, NT and TF clear, status flags as now (POP and the
      * trapped CLI change none). */
-    uint16_t want = (uint16_t)((f->tf.eflags & 0x0CD5u) | V86_IF | 2u);
+    /* PUSHFD also preserves AC/ID. RF/VM are cleared by PUSHFD. Comparing
+     * against a truncated uint16_t rejected legitimate high flags. */
+    uint32_t want = (f->tf.eflags & (width == 4 ? 0x00240CD5u : 0x0CD5u)) | V86_IF | 2u;
     if (!pop) {                             /* decoded PUSHF; CLI */
         struct dpmi_seg ss;
         uint16_t sel = (uint16_t)f->tf.user_ss;
@@ -655,7 +657,7 @@ static bool flags_restored(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
 {
     struct dpmi *d = &v->dpmi;
     bool step = f->tf.vector == 1 ? (dr6 & (1u << 14)) != 0 : (f->tf.eflags & V86_TF) != 0;
-    if (!d->if_armed || !step) return false;
+    if (!d->if_armed || d->if_step || !step) return false;
     d->if_armed = false;
     f->tf.eflags &= ~V86_TF;
     v->monitor.vif = true;
@@ -708,6 +710,144 @@ static bool return_step_safe(struct dosvm *v, const struct v86_frame *f)
         if (ext == 0xB2 || ext == 0x34 || ext == 0x35 || ext == 0x05 || ext == 0x07 || ext == 0xAA) return false;
     }
     return true;
+}
+
+/* Recovery uses actual CPU boundaries, never a backwards opcode guess.
+ * See docs/validation/2026-10-14-f3-15-virtual-if.md. The time bound also
+ * covers a restore that retired before tracing began, or an unsafe barrier. */
+#define DPMI_IF_STEPS 4096u
+#define DPMI_IF_WAIT_MS 100u
+#define DPMI_IF_RECORDS 16u
+static bool if_step_context(const struct dpmi *d, const struct v86_frame *f, bool retired)
+{
+    return (uint16_t)f->tf.cs == (retired && d->if_restore_step ? d->if_target_cs : d->if_step_cs) &&
+           (uint16_t)f->tf.user_ss == d->if_step_ss && d->depth == d->if_step_depth &&
+           d->clients == d->if_step_client;
+}
+static void if_recovery_record(struct dosvm *v, const struct v86_frame *f, uint64_t age,
+                               const char *reason)
+{
+    struct dpmi *d = &v->dpmi;
+    if (!(g_boot.flags & CBI_F_VERBOSE) || d->if_records >= DPMI_IF_RECORDS) return;
+    d->if_records++;
+    uint8_t code[16] = {0}; uint32_t stack[3] = {0}, lin;
+    struct dpmi_seg cs, ss;
+    bool code_ok = dpmi_seg(v, (uint16_t)f->tf.cs, &cs) && f->tf.eip <= cs.limit &&
+        cs.limit - f->tf.eip >= sizeof(code) - 1 && !dosvm_read(v, cs.base + f->tf.eip, code, sizeof(code));
+    bool stack_ok = dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss) &&
+        dpmi_ptr(v, (uint16_t)f->tf.user_ss, ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp,
+                 sizeof(stack), false, &lin) && !dosvm_read(v, lin, stack, sizeof(stack));
+    static const char hex[] = "0123456789abcdef";
+    char bytes[33];
+    for (unsigned i = 0; i < sizeof(code); i++) { bytes[i * 2] = hex[code[i] >> 4]; bytes[i * 2 + 1] = hex[code[i] & 15]; }
+    bytes[32] = 0;
+    uint32_t flags = irq_save();
+    unsigned irr = v->monitor.pic[0].irr | (unsigned)v->monitor.pic[1].irr << 8;
+    unsigned isr = v->monitor.pic[0].isr | (unsigned)v->monitor.pic[1].isr << 8;
+    unsigned imr = v->monitor.pic[0].imr | (unsigned)v->monitor.pic[1].imr << 8;
+    irq_restore(flags);
+    /* Two bounded rows form one watchdog snapshot; dosvm_diag defers both
+     * during a guest IRQ, so the UART cannot hold up the handler. */
+    dosvm_diag(v, "group=vm_if_stall vm=%u gen=%u pc=%04x:%08x vif=%u arm=%u seed=%u:%04x:%08x irr=%04x isr=%04x imr=%04x ms=%llu steps=%u reason=%s",
+        v->info.key.id, v->info.key.generation, f->tf.cs & 0xFFFF, f->tf.eip, v->monitor.vif,
+        d->if_armed, d->decode_valid, d->decode_cs, d->decode_eip, irr, isr, imr, age, d->if_steps, reason);
+    dosvm_diag(v, "group=vm_if_stall_image vm=%u gen=%u pc=%04x:%08x code=%s ss=%04x esp=%08x ok=%u,%u stack=%08x,%08x,%08x path=trap",
+        v->info.key.id, v->info.key.generation, f->tf.cs & 0xFFFF, f->tf.eip, bytes,
+        f->tf.user_ss & 0xFFFF, f->tf.user_esp, code_ok, stack_ok, stack[0], stack[1], stack[2]);
+}
+static void if_recovery_end(struct dosvm *v, struct v86_frame *f)
+{
+    struct dpmi *d = &v->dpmi;
+    if (d->if_step && if_step_context(d, f, false)) f->tf.eflags &= ~V86_TF;
+    d->if_waiting = d->if_step = d->if_restore_step = false;
+    d->if_steps = 0;
+}
+static bool if_recovery_trap(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
+{
+    struct dpmi *d = &v->dpmi;
+    if (!d->if_step) return false;
+    bool bs = f->tf.vector == 1 && (dr6 & (1u << 14));
+    if (bs && if_step_context(d, f, true)) {
+        f->tf.eflags &= ~V86_TF;
+        d->if_steps++;
+        if (d->if_restore_step && d->if_restore_vif &&
+            f->tf.eip == d->if_target_eip && f->tf.user_esp == d->if_target_sp) {
+            v->monitor.vif = true;
+            d->if_armed = false;
+            d->stats.if_restored++;
+            dosvm_boundary(v, f, "if_step_restore");
+        }
+        d->if_step = d->if_restore_step = false;
+        /* B0-B3/BD/BT remain client events even when BS is monitor-owned. */
+        return !(dr6 & (15u | (1u << 13) | (1u << 15)));
+    }
+    if (f->tf.vector >= 0x20 && f->tf.vector < 0x30) return false; /* not retirement */
+    if (if_step_context(d, f, false)) f->tf.eflags &= ~V86_TF;
+    d->if_step = d->if_restore_step = false; /* fault/debugger: do not claim a restore */
+    return false;
+}
+static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
+{
+    struct dpmi *d = &v->dpmi;
+    uint32_t flags = irq_save();
+    dosvm_pic_cascade(&v->monitor);
+    bool pending = dosvm_pic_pending(&v->monitor) >= 0;
+    uint64_t tick = g_ticks;
+    irq_restore(flags);
+    if (!v->frame_pm || v->monitor.vif || !pending) { if_recovery_end(v, f); return; }
+    if (!d->if_waiting) { d->if_waiting = true; d->if_wait_tick = tick; d->if_steps = 0; }
+    uint64_t age = tick - d->if_wait_tick;
+    if (age >= DPMI_IF_WAIT_MS || d->if_steps >= DPMI_IF_STEPS) {
+        if_recovery_record(v, f, age, age >= DPMI_IF_WAIT_MS ? "time" : "budget");
+        if_recovery_end(v, f);
+        /* A previously patched saved image can still load TF later. Keep
+         * its owner until flags_restored consumes it; never orphan that TF. */
+        v->monitor.vif = true;
+        dosvm_boundary(v, f, "if_forced");
+        return;
+    }
+    if (d->if_step) return;
+    /* Return tracing owns TF only within its recorded context. Retire that
+     * owner before acquiring recovery TF; never steal a client's TF. */
+    if (d->return_steps && return_context(d, f)) { d->return_steps = 0; f->tf.eflags &= ~V86_TF; }
+    if (f->tf.eflags & (V86_TF | (1u << 14)) || d->dr7) return;
+    struct dpmi_seg cs;
+    uint8_t b[15]; unsigned w;
+    if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs) || f->tf.eip > cs.limit) return;
+    unsigned n = cs.limit - f->tf.eip >= 14 ? 15 : cs.limit - f->tf.eip + 1;
+    if (dosvm_read(v, cs.base + f->tf.eip, b, n)) return;
+    unsigned pos = flags_opcode(b, n, cs.big, &w);
+    if (pos == n) return;
+    bool restore = b[pos] == 0x9D || b[pos] == 0xCF;
+    if (restore) {
+        /* Exact boundary, checked image. TF was already set at instruction
+         * entry, so BS occurs even when POPF/IRET clears it (Intel SDM).
+         * Restrict IRET to ordinary same-ring frames, leaving CPU validation
+         * and execution to the CPU. No speculative stack writes. */
+        for (unsigned i = 0; i < pos; i++) if (b[i] != 0x66) return;
+        struct v86_frame next = *f;
+        uint32_t image;
+        if (b[pos] == 0xCF) {
+            uint32_t ip, sel;
+            if (!dpmi_pop(v, &next, &ip, w) || !dpmi_pop(v, &next, &sel, w) ||
+                !dpmi_pop(v, &next, &image, w) || (sel & 3) != 3 ||
+                !dpmi_handler_live(v, (struct dpmi_vec){.off=ip, .sel=(uint16_t)sel})) return;
+            next.tf.cs = (uint16_t)sel; next.tf.eip = ip;
+        } else {
+            if (!dpmi_pop(v, &next, &image, w)) return;
+            next.tf.eip = cs.big ? f->tf.eip + pos + 1 : (uint16_t)(f->tf.eip + pos + 1);
+        }
+        if (image & (V86_VM | (1u << 14))) return;
+        if ((image & V86_TF) && !d->if_armed) return; /* a client's debugger TF */
+        d->if_restore_step = true;
+        d->if_restore_vif = (image & V86_IF) != 0;
+        d->if_target_cs = (uint16_t)next.tf.cs;
+        d->if_target_eip = next.tf.eip; d->if_target_sp = next.tf.user_esp;
+    } else if (!return_step_safe(v, f)) return;
+    d->if_step_cs = (uint16_t)f->tf.cs; d->if_step_ss = (uint16_t)f->tf.user_ss;
+    d->if_step_depth = (uint8_t)d->depth; d->if_step_client = (uint8_t)d->clients;
+    d->if_step = true;
+    f->tf.eflags |= V86_TF;
 }
 /* A return value may be computed before the pops/RET. These complete
  * encodings write only registers other than SP; no future return slot can
@@ -939,6 +1079,8 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
      * early step return below must not extend it through the epilogue. */
     if (d->shadow && !(irq && (uint16_t)f->tf.cs == d->shadow_cs && f->tf.eip == d->shadow_eip))
         d->shadow = false;
+    bool recovery_step = d->if_step;
+    if (if_recovery_trap(v, f, dr6)) return 0;
     if (d->return_steps && return_context(d, f)) {
         if (vector == 1 && (dr6 & (1u << 14)) && (f->tf.eflags & V86_TF)) {
             f->tf.eflags &= ~V86_TF; d->return_steps--;
@@ -953,7 +1095,7 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
     if (irq) return 0;                                      /* physical IRQ, handled */
     /* Before anything else: an instruction trapping right after the POPF
      * (a CLI, an INT, a host stub) sees the restored IF first. */
-    if (flags_restored(v, f, dr6) && vector == 1 && !(dr6 & (15u | (1u << 13) | (1u << 15)))) return 0;
+    if (!recovery_step && flags_restored(v, f, dr6) && vector == 1 && !(dr6 & (15u | (1u << 13) | (1u << 15)))) return 0;
     switch (vector) {
     case 13:
         if ((f->tf.err & 3) == 2) {
@@ -1030,6 +1172,7 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
 int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
+    if_recovery_prepare(v, f);
     if (!v->monitor.vif || v->monitor.shadow || d->shadow) return 0;
     uint32_t flags = irq_save();
     dosvm_pic_cascade(&v->monitor);

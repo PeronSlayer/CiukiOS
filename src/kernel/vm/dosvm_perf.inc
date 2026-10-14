@@ -1,4 +1,4 @@
-/* f3-13 counters: one memory snapshot per second; records are dumped after
+/* f3-13/15 counters: one memory snapshot per second; records are dumped after
  * the worker stops, so a polled UART cannot consume the game's frame budget.
  * TSC accounting pauses across task switches; it never includes a sleeping
  * monitor's wall time as VM CPU time. SPDX-License-Identifier: GPL-2.0-only */
@@ -39,10 +39,17 @@ static void perf_exit_end(struct dosvm *v)
     v->perf.trap_active = false;
 }
 
+#define DOSVM_PERF_FIRST 4u
+static unsigned perf_sample_slot(unsigned n)
+{
+    return n < DOSVM_PERF_FIRST ? n : DOSVM_PERF_FIRST +
+        (n - DOSVM_PERF_FIRST) % (16u - DOSVM_PERF_FIRST);
+}
+
 void dosvm_perf_report(struct dosvm *v)
 {
-    if (!(g_boot.flags & CBI_F_VERBOSE) || !g_tsc_per_ms || dosvm_in_irq(v) ||
-        !v->info.dos_ready || g_ticks - v->perf.report_tick < 1000) return;
+    if (!(g_boot.flags & CBI_F_VERBOSE) || !g_tsc_per_ms ||
+        g_ticks - v->perf.report_tick < 1000) return;
     unsigned old_phase = v->perf.phase;
     /* STATUS runs on the native owner: never restart a suspended VM clock. */
     if (perf_current == v) perf_phase(v, old_phase);
@@ -51,7 +58,7 @@ void dosvm_perf_report(struct dosvm *v)
     uint32_t irqs[16]; memcpy(irqs, v->monitor.stats.delivered, sizeof(irqs));
     irq_restore(flags);
 #define DELTA(field, last) (v->perf.field - v->perf.last)
-    struct dosvm_perf_sample *s = &v->perf.sample[v->perf.sample_count++ % ARRAY_SIZE(v->perf.sample)];
+    struct dosvm_perf_sample *s = &v->perf.sample[perf_sample_slot(v->perf.sample_count++)];
     *s = (struct dosvm_perf_sample){
         .ms = (uint32_t)(tick - v->perf.report_tick),
         .frames = v->video_frames - v->perf.last_frames, .flips = v->video_starts - v->perf.last_starts,
@@ -117,8 +124,10 @@ void dosvm_perf_dump(struct dosvm *v)
     if (!count) return;
     rec_diag(dosvm_probe(v), "group=vm_perf_samples vm=%u gen=%u total=%u retained=%u", v->info.key.id,
              v->info.key.generation, count, count < retained ? count : retained);
-    for (uint32_t n = count > retained ? count - retained : 0; n < count; n++) {
-        const struct dosvm_perf_sample *s = &v->perf.sample[n % retained];
+    for (uint32_t row = 0, rows = count < retained ? count : retained; row < rows; row++) {
+        uint32_t n = count > retained && row >= DOSVM_PERF_FIRST ?
+            count - (retained - DOSVM_PERF_FIRST) + row - DOSVM_PERF_FIRST : row;
+        const struct dosvm_perf_sample *s = &v->perf.sample[perf_sample_slot(n)];
         unsigned id = v->info.key.id;
         rec_diag(dosvm_probe(v), "group=vm_perf_video vm=%u n=%u ms=%u frames=%u flips=%u harvests=%u pages=%u",
             id, n+1, s->ms, s->frames, s->flips, s->harvests, s->pages);
