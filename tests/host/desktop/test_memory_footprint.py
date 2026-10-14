@@ -66,7 +66,7 @@ class MemoryFootprintTests(unittest.TestCase):
                       "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
                       *icon_assets.defines()]
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")]
-            sources += SHELL_SOURCES + [ROOT / "apps/desktop" / n for n in ("image.c", "wallpaper_io.c", "sounds.c", "sound_storage.c", "master_storage.c")]
+            sources += SHELL_SOURCES + [ROOT / "apps/desktop" / n for n in ("image.c", "wallpaper_io.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c")]
             sources += [ROOT / name for name in icon_assets.SOURCES]
             sources += [ROOT / "sdk/libreg" / name for name in ("registry.c", "storage.c", "hardware.c")]
             host = ROOT / "tests/host/desktop"
@@ -82,6 +82,9 @@ class MemoryFootprintTests(unittest.TestCase):
                 objects.append(str(target))
             binary = folder / "footprint"
             subprocess.run(["clang", "-fsanitize=address,undefined", "-Wl,--gc-sections", *objects, "-pthread", "-o", str(binary)], check=True, env=env)
+            sequence = subprocess.run([str(binary), "--theme-wallpaper", str(folder)], capture_output=True, text=True, env=env, timeout=25)
+            self.assertEqual(sequence.returncode, 0, sequence.stdout + sequence.stderr)
+            print(sequence.stdout, end="")
             result = subprocess.run([str(binary), "--memory-footprint", str(folder)], capture_output=True, text=True, env=env)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             print(result.stdout, end="")

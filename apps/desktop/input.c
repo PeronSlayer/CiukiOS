@@ -144,6 +144,7 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
     if (stamp && stamp<=d->now_ns && (!d->frame_input_ns || stamp<d->frame_input_ns))
         d->frame_input_ns=stamp;
     d->inputs++;
+    if (d->input_pending) d->input_pending();
     if (in->monotonic_ns && d->now_ns>=in->monotonic_ns &&
         d->now_ns-in->monotonic_ns>d->stats.input_lag_ns)
         d->stats.input_lag_ns=d->now_ns-in->monotonic_ns;

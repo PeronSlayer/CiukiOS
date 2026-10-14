@@ -28,6 +28,7 @@ int desk_wall_prepare(const struct desk_wall_request *, const char *cache_dir,
                       uint32_t **pixels, int *hit, void (*stage)(const char *));
 int desk_wall_worker_start(struct desk_wall_worker *, const char *, void (*stage)(const char *));
 unsigned desk_wall_worker_submit(struct desk_wall_worker *, const struct desk_wall_request *);
+/* submit returns 0 on contention: retain the latest request and retry next turn. */
 /* 0: pending, 1: ownership transferred (pixels NULL on failure). */
 int desk_wall_worker_take(struct desk_wall_worker *, unsigned, uint32_t **pixels, int *error, int *hit);
 int desk_wall_worker_busy(struct desk_wall_worker *);

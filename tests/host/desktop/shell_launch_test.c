@@ -51,8 +51,22 @@ static int footprint_master_save(const char *,unsigned,unsigned,unsigned);
 #define master_preference_save footprint_master_save
 #endif
 #define main desktop_main
+#ifdef DESK_FOOTPRINT_TEST
+static const char *sequence_settings_path;
+static unsigned sequence_main_reads;
+static FILE *sequence_fopen(const char *path,const char *mode)
+{
+    if (sequence_settings_path && !strcmp(path,CFG_FILE)) {
+        sequence_main_reads++;
+        return fopen(sequence_settings_path,mode);
+    }
+    return fopen(path,mode);
+}
+#define fopen sequence_fopen
+#endif
 #include "../../../apps/desktop/desktop.c"
 #ifdef DESK_FOOTPRINT_TEST
+#undef fopen
 #undef master_preference_save
 static unsigned footprint_master_saves;
 int ciuki_devices(struct ciuki_devices_info *info)
@@ -814,10 +828,12 @@ static void test_network_service(void)
 }
 #ifdef DESK_FOOTPRINT_TEST
 #include "memory_footprint_test.h"
+#include "theme_wallpaper_sequence_test.h"
 #endif
 int main(int argc,char **argv)
 {
 #ifdef DESK_FOOTPRINT_TEST
+    if (argc==3 && !strcmp(argv[1],"--theme-wallpaper")) { test_theme_wallpaper(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(argv[2]); return 0; }
 #else
     (void)argc; (void)argv;
