@@ -797,6 +797,11 @@ static void tooltip_text(const struct desktop *d, char *text, size_t size)
 }
 static struct desk_box volume_popup(const struct desktop *d)
 { return tray_popup(d, volume_icon_box(d), 92, 168); }
+void desk_shell_volume_damage(struct desktop *d)
+{
+    damage(d, tray_box(d));
+    if (d->sh.volume_open) damage(d, outer(volume_popup(d)));
+}
 static struct desk_box volume_track(const struct desktop *d)
 { struct desk_box p = volume_popup(d); return (struct desk_box){p.x + 40, p.y + 30, 12, 100}; }
 static struct desk_box volume_mute(const struct desktop *d)
@@ -2244,7 +2249,7 @@ void desk_shell_reset(struct desktop *d)
     bind(d);
     cfg_defaults(&d->sh.cfg);
     d->sh.icon_selected = d->sh.click_icon = d->sh.icon_drag = -1;
-    d->sh.volume = 50;
+    d->sh.volume = 20;
 }
 void desk_shell_apply(struct desktop *d)
 {

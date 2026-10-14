@@ -7,6 +7,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+int master_preference_save(const char *directory, unsigned left, unsigned right, unsigned mute)
+{
+    if (left > 100 || right > 100 || mute > 1) { errno = EINVAL; return -1; }
+    struct reg_root *r = reg_open_root_at("System", directory);
+    if (!r) return -1;
+    int result = reg_set_int32(r, CIUKI_MASTER_KEY, CIUKI_MASTER_VALUE, ciuki_master_pack(left, right, mute));
+    int error = errno; reg_close_root(r); errno = error; return result;
+}
+
 static void load_file(struct sound_scheme *s, const char *path)
 {
     if (!path) return;

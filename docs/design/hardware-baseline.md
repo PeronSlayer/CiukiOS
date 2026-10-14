@@ -244,3 +244,23 @@ These are host evidence, not execution of BIOS interrupts or CPU refusal in
 an emulator. Assembly and full host-test results accompany the handoff;
 QEMU `f0-smoke`, desktop `f0-core`, native `f1-input` and `f1-safe` remain the
 lead's required validation on one newly built image.
+
+## F4-18 IBM ThinkPad console volume (2026-10-14)
+
+The [Linux ThinkPad ACPI documentation](https://raw.githubusercontent.com/torvalds/linux/v6.12/Documentation/admin-guide/laptops/thinkpad-acpi.rst)
+describes IBM's variable-gain speaker/headphone amplifier **after** AC'97.
+The [volume subdriver](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/platform/x86/thinkpad_acpi.c)
+whitelists level control for every IBM ThinkPad, thus including T23; its
+firmware table calls `1A` the T23 BIOS model (EC version 1.23), not a proven
+EC model ID. EC register 0x30 holds level 0..14 and mute in bit 6.
+
+Ciuki gates the ACPI EC 0x62/0x66 transport on checksummed SMBIOS identity
+(IBM manufacturer and ThinkPad product/version), skips QEMU and safe mode,
+and requires a bounded read/write/readback handshake. The configured boot
+master is rounded to the EC's 14 steps (20% becomes 3/14, reported as 21%).
+The EC amplifier is the effective master, so codec master remains 0 dB and
+the mixer does not apply the same gain again. The existing tray/Control Panel
+show changes from 4 Hz polling. Software volume writes control this same EC.
+No verified T23 DSDT was obtained online; 0x62/0x66 responses, physical analog
+level, headphones/speakers and firmware/SMI interaction require the lead's
+T23 test. See [the research and settings decision](f4-18-audio-levels.md).

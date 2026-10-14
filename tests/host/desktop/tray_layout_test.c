@@ -70,6 +70,13 @@ static void click(enum sh_tray_icon which)
 }
 static void transitions(void)
 {
+    /* An EC observation updates the existing volume UI, including an open
+     * slider and the mute icon, with exact incremental/full redraw parity. */
+    d.sh.mixer_state=2;d.sh.volume_open=1;
+    desk_composite(&d,(struct desk_box){0,0,d.width,d.height});d.damage.count=0;
+    d.sh.volume=21;d.sh.muted=1;desk_shell_volume_damage(&d);assert(d.damage.count);redraw();
+    d.sh.volume=57;d.sh.muted=0;desk_shell_volume_damage(&d);assert(d.damage.count);redraw();
+    d.sh.volume_open=0;desk_composite(&d,(struct desk_box){0,0,d.width,d.height});d.damage.count=0;
     struct ciuki_media_state s = {.version = 1, .size = sizeof(s), .removable_mask = 1u << 4};
     desk_shell_media_update(&d, &s); redraw();
     s.removable_mask = 0; desk_shell_media_update(&d, &s); redraw();

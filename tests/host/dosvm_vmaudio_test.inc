@@ -24,6 +24,7 @@ static void vq_begin(void)
     audio.ready = true;
     audio.running = true; /* the fake transport accepts and plays each mixed period */
     audio.caps.output_rate=48000;
+    audio.master_in_codec = audio.master_in_hardware = false;
     audio.master = (struct ciuki_mixer_master){ .version = 1, .size = 32, .left = 100, .right = 100 };
     audio.output = 2048; audio.played_output = 256;
     vq_n = 0; vq_frames = 0; vq_ticks0 = g_ticks; vq_service = 0; vq_arg = 0;
@@ -419,10 +420,14 @@ static void test_vm_gains(void)
     uint8_t words[128]; for (unsigned i = 0; i < 64; i++) { words[i * 2] = 0x10; words[i * 2 + 1] = 0x27; } /* 10000 */
     static const struct { uint8_t reg, value; unsigned gain; bool mute; uint32_t peak; } cases[] = {
         { 0x32, 0xF8, 100, false, 10000 }, /* 0 dB */
-        { 0x32, 0xC8, 100, false, 2511 },  /* voice 25: -12 dB, Q16 16462 */
+        { 0x32, 0xC8, 100, false, 8064 },  /* linear voice 25/31 */
         { 0x41, 0x40, 100, false, 19952 }, /* output gain +6 dB, Q16 130762 */
         { 0x41, 0x00, 50, false, 5000 },   /* source gain 50 */
         { 0x41, 0x00, 100, true, 0 },      /* muted: consumed, silent */
+        { 0x32, 0x00, 100, false, 0 },     /* guest voice zero is exact silence */
+        { 0x32, 0xF8, 100, false, 10000 },
+        { 0x41, 0x80, 100, false, 32767 }, /* +12 dB saturates */
+        { 0x41, 0xC0, 100, false, 32767 }, /* +18 dB saturates */
     };
     for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
         mixer_w(v, cases[i].reg, cases[i].value); mixer_w(v, (uint8_t)(cases[i].reg + 1), cases[i].value);
@@ -436,9 +441,33 @@ static void test_vm_gains(void)
         vq_run(8); a_in(v, SB + 0xF); v->monitor.pic[0].irr = 0;
         struct audio_vm_stats st = vstats(v);
         CHECK(st.pcm.peak[0] == cases[i].peak && st.pcm.peak[1] == cases[i].peak && st.pcm_frames - consumed == 64);
-        CHECK(st.pcm.frames == (cases[i].mute ? 0u : 128u) && st.gain[0] == cases[i].gain && st.muted == cases[i].mute);
+        CHECK(st.pcm.frames == (cases[i].peak ? 128u : 0u) && st.gain[0] == cases[i].gain && st.muted == cases[i].mute);
     }
     dsp_reset(v); destroy(v, true); vq_end(); empty();
+}
+
+static void test_vm_default_level(void)
+{
+    static const unsigned masters[]={20,50,80,100};
+    for(unsigned delegated=0;delegated<3;delegated++) for(unsigned m=0;m<ARRAY_SIZE(masters);m++) {
+        vq_begin();audio.master.left=audio.master.right=masters[m];
+        audio.master_in_codec=delegated==1;audio.master_in_hardware=delegated==2;
+        for(unsigned i=0;i<1024;i++) native_ring[0][i]=native_ring[1][i]=(struct audio_frame){32512,32512};
+        struct audio_stream native={.ring={native_ring[0],native_ring[1]},.rate=48000,
+            .channels=2,.gain={100,100},.queued=AUDIO_RING,.started=true,.configured=true};
+        audio.streams[0]=&native;vq_mix();unsigned reference=(unsigned)vq_out[100].left;audio.streams[0]=0;
+        struct dosvm *v=audio_vm_create();dsp_reset(v);vq_time(1200);vq_run(2);
+        uint8_t bytes[128];memset(bytes,255,sizeof(bytes));
+        CHECK(!dosvm_write(v,0x20000,bytes,sizeof(bytes)));dma8(v,1,0x20000,127,false);
+        unsigned start=vq_n;dsp(v,0x41);dsp(v,0x5d);dsp(v,0xc0);
+        dsp(v,0xc0);dsp(v,0);dsp(v,127);dsp(v,0);vq_run(8);
+        unsigned peak=0;for(unsigned i=start;i<vq_n;i++)if(vq_cap[i][0]>0 && (unsigned)vq_cap[i][0]>peak)peak=(unsigned)vq_cap[i][0];
+        CHECK(reference && peak==reference && peak*1000u>=reference*708u);
+        struct audio_vm_diagnostic d;audio_vm_diagnostic(dosvm_key(v),&d);
+        CHECK(d.master[0]==masters[m]&&d.master[1]==masters[m]&&d.master_in_codec==(delegated==1));
+        dsp_reset(v);destroy(v,true);vq_end();empty();
+    }
+    audio.master_in_codec=audio.master_in_hardware=false;
 }
 
 /* OPL3 events at their timeline frame, exactly as a reference chip given the
@@ -543,7 +572,7 @@ static void test_vm_physical_rate(void)
 
 static void test_vm_audio(void)
 {
-    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_opl(); test_vm_physical_rate();
+    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_default_level(); test_vm_opl(); test_vm_physical_rate();
     audio.ready = false;
     puts("DOS VM audio output: PASS (attach/revoke/release, every PCM layout exact at 2:1, DAC, ADPCM refused, 32 fresh blocks and the 16-bit phase through the mixer, pause gap kept, stalled guest beside native and a second VM, hold/skip/re-anchor without replay, CT1745 and source gains, OPL3 exact against a reference chip, routing, late events, GAP)");
 }

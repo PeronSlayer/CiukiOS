@@ -623,30 +623,40 @@ static void test_codec_power_policy(void)
 static uint64_t boot_host_tick;
 static unsigned boot_mixed_frames;
 static bool boot_traffic_logged;
+static struct ciuki_mixer_master boot_expected_master;
+static uint16_t boot_expected_codec;
+static unsigned boot_peak;
 static void boot_host_worker(void)
 {
+    CHECK(!memcmp(&audio.master,&boot_expected_master,sizeof(audio.master))&&ac97.master==boot_expected_codec);
     unsigned elapsed=(unsigned)(g_ticks-boot_host_tick);boot_host_tick=g_ticks;hw.tick=g_ticks;
     if(ac97.running) {
         mock_advance(elapsed*96);
         if (hw.sr & (AC97_BCIS | AC97_LVBCI)) CHECK(ac97_irq(11,"ac97"));
     }
     audio_service();
+    for(unsigned slot=0;slot<32;slot++)for(unsigned i=0;i<AUDIO_QUANTUM;i++) {
+        int sample=ac97.pcm[slot][i].left;unsigned peak=(unsigned)(sample<0?-sample:sample);
+        if(peak>boot_peak)boot_peak=peak;
+    }
     if (slow_playback_log && audio.running && !boot_traffic_logged) {
         boot_traffic_logged=true; klog("[usb] verbose traffic during native playback");
         CHECK(serial_is_buffered);
     }
     if(audio.streams[0]) boot_mixed_frames=(unsigned)audio.streams[0]->consumed;
 }
-static void test_boot_transport(void)
+static void test_boot_transport_case(unsigned left,unsigned right,unsigned mute,bool software)
 {
     static struct ac97_bd bdl[32];static struct audio_frame buffers[32][256];
-    hardware_setup(&ac97);hw.any_pcm=true;ac97.software_master=false;ac97.ready=true;
+    memset(buffers,0,sizeof(buffers));
+    hardware_setup(&ac97);hw.any_pcm=true;ac97.software_master=software;ac97.ready=true;
     ac97.bdl=bdl;for(unsigned i=0;i<32;i++)ac97.pcm[i]=buffers[i];
     audio.ready=true;audio.error=0;audio.running=false;audio.output=0;audio.played_output=0;
-    audio.master=(struct ciuki_mixer_master){.version=1,.size=32,.left=0,.right=25,.mute=1,.save_state=CIUKI_MIXER_SAVED};
-    audio.master_in_codec=true;
+    audio.master=(struct ciuki_mixer_master){.version=1,.size=32,.left=left,.right=right,.mute=mute,.save_state=CIUKI_MIXER_SAVED};
+    audio.master_in_codec=!software;
     CHECK(!ac97_set_master(&ac97,&audio.master));
     uint16_t volume=ac97.master;unsigned pages=pages_used, heap=heap_blocks;
+    boot_expected_master=audio.master;boot_expected_codec=volume;boot_peak=0;
     first_playback=playback_logged=false;idle_since=non_silent_end=0;
     g_ticks=boot_host_tick=5000;hw.tick=g_ticks;g_boot.flags=CBI_F_VERBOSE;audio.caps.drain_ms=20;
     slow_playback_log=true; boot_traffic_logged=false;
@@ -655,17 +665,25 @@ static void test_boot_transport(void)
     CHECK(!audio.error && boot_mixed_frames==AUDIO_RATE && ac97.fetched>=AUDIO_RATE && ac97.irqs>0);
     CHECK(boot_traffic_logged && serial_is_buffered);
     CHECK(strstr(audio_log,"boot_tone=1khz frames=48000 result=0 restore=0"));
-    CHECK(audio.master.left==0 && audio.master.right==25 && audio.master.mute && audio.master.save_state==CIUKI_MIXER_SAVED && ac97.master==volume);
+    CHECK(!memcmp(&audio.master,&boot_expected_master,sizeof(audio.master))&&ac97.master==volume);
+    CHECK(boot_peak==(mute ? 0u : software ? 8192u*left/100u : 8192u));
     CHECK(!audio.streams[0] && pages_used==pages && heap_blocks==heap && !audio.commitment_pages);
     CHECK(!ac97_stop(&ac97));audio.running=false;
     /* No worker progress: startup remains bounded and restores the master. */
     uint64_t before=g_ticks;audio_boot_tone();
     CHECK(g_ticks-before==3000 && strstr(audio_log,"result=-110 restore=0"));
-    CHECK(ac97.master==volume && audio.master.mute && !audio.streams[0] && pages_used==pages && heap_blocks==heap && !audio.commitment_pages);
+    CHECK(ac97.master==volume && audio.master.mute==mute && !audio.streams[0] && pages_used==pages && heap_blocks==heap && !audio.commitment_pages);
     audio.ready=audio.master_in_codec=false;
     first_playback=playback_logged=false;idle_since=non_silent_end=0;g_boot.flags=0;memset(&ac97,0,sizeof(ac97));
     audio.master=(struct ciuki_mixer_master){.left=100,.right=100};
     puts("audio boot transport: 48000 copied frames consumed/fetched, IRQs, restored mute/volume and stream cleanup PASS");
+}
+static void test_boot_transport(void)
+{
+    test_boot_transport_case(0,25,1,false);
+    test_boot_transport_case(20,20,0,true);
+    test_boot_transport_case(73,73,0,true);
+    test_boot_transport_case(20,20,0,false);
 }
 static void test_bdl(void)
 {
@@ -1009,7 +1027,7 @@ static void test_persistence(void)
 {
     CHECK(!make_dir("/system"));
     kmutex_init(&control_lock);saved_sequence=0;audio_settings_load(&vfs);
-    CHECK(audio.master.left==50&&audio.master.right==50&&!audio.master.mute);
+    CHECK(audio.master.left==20&&audio.master.right==20&&!audio.master.mute);
     int mixer=file_open(client,"/dev/mixer",O_RDONLY,0);CHECK(mixer>=0);
     struct ciuki_audio_diagnostics info={.version=1,.size=64};
     ac97.codec_id=0x43525931;ac97.irqs=123;ac97.fetched=4567;
@@ -1045,6 +1063,36 @@ static void test_persistence(void)
 }
 #include "second_set_test.inc"
 #include "late_refill_test.inc"
+#include "thinkpad_ec_test.inc"
+static void registry_fixture(const char *text)
+{
+    static struct vfs_table table;CHECK(!vfs_table_init(&vfs,&table,2));
+    int fd=vfs_open(&table,"C:\\System\\Registry\\System.reg",VFS_WRITE|VFS_CREATE|VFS_TRUNCATE,VFS_DENY_NONE,0);
+    CHECK(fd>=0);size_t n;CHECK(!vfs_write(&table,fd,text,strlen(text),&n)&&n==strlen(text));CHECK(!vfs_close(&table,fd));
+    vfs_table_destroy(&table);
+}
+static void test_registry_master(void)
+{
+    CHECK(!make_dir("/System/Registry"));
+    unsigned before=heap_blocks;
+    registry_fixture("; ciuki-registry generation=2\n[System\\Identity]\nName=\"CiukiOS\"\n[system\\audio]\n\"mASTer\"=65561\n");
+    audio_settings_load(&vfs);CHECK(audio.master.left==25&&audio.master.right==0&&audio.master.mute==1);
+    CHECK(!strcmp(audio.settings_reason,"registry")&&heap_blocks==before);
+    registry_fixture("[System\\Audio]\nMaster=19481\n");
+    audio_settings_load(&vfs);CHECK(audio.master.left==25&&audio.master.right==76&&!audio.master.mute);
+    const char *bad[]={"[System\\Audio]\nMaster=101\n", "[System\\Audio]\nMaster=-1\n",
+        "[System\\Audio]\nMaster=131072\n", "[System\\Audio]\nMaster=\"20\"\n",
+        "[System\\Audio]\nMaster=5140\n[System\\Other]\nBad=not_valid\n"};
+    for(unsigned i=0;i<ARRAY_SIZE(bad);i++) { registry_fixture(bad[i]);audio_settings_load(&vfs);CHECK(audio.master.left==25&&audio.master.right==75&&!audio.master.mute&&heap_blocks==before); }
+    registry_fixture("[System\\Audio]\nMaster=5140\n");
+    int fd=file_open(client,"/System/Registry/System.reg.txn",O_WRONLY|O_CREAT,0644);
+    CHECK(fd>=0);CHECK(!file_close(client,fd));audio_settings_load(&vfs);CHECK(audio.master.left==25&&audio.master.right==75);
+    CHECK(!remove_path_native("/System/Registry/System.reg.txn",false));
+    audio_settings_load(&vfs);CHECK(audio.master.left==20&&audio.master.right==20);
+    CHECK(!remove_path_native("/System/Registry/System.reg",false));
+    audio_settings_load(0);CHECK(audio.master.left==20&&audio.master.right==20&&!audio.master.mute);
+    puts("audio registry: whole production grammar, case-folded packed master, precedence, malformed root/value and pending journal fallback PASS");
+}
 int main(int argc,char **argv)
 {
     CHECK(argc==3);ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);
@@ -1054,7 +1102,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_stream_syscalls();test_persistence();test_second_set();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

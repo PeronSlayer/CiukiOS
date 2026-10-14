@@ -760,13 +760,13 @@
                 "eq": 2048
               },
               "peak_l": {
-                "eq": 454
+                "eq": 1458
               },
               "peak_r": {
-                "eq": 455
+                "eq": 1460
               },
-              "digest": "0a2f6943",
-              "ring_digest": "5a0f7acb"
+              "digest": "465bca2c",
+              "ring_digest": "57120d15"
             },
             "exact_count": 1
           },
@@ -1212,13 +1212,13 @@
                 "eq": 2048
               },
               "peak_l": {
-                "eq": 454
+                "eq": 1458
               },
               "peak_r": {
-                "eq": 455
+                "eq": 1460
               },
-              "digest": "0a2f6943",
-              "ring_digest": "5a0f7acb"
+              "digest": "465bca2c",
+              "ring_digest": "57120d15"
             },
             "exact_count": 1
           },
@@ -1664,13 +1664,13 @@
                 "eq": 2048
               },
               "peak_l": {
-                "eq": 454
+                "eq": 1458
               },
               "peak_r": {
-                "eq": 455
+                "eq": 1460
               },
-              "digest": "0a2f6943",
-              "ring_digest": "5a0f7acb"
+              "digest": "465bca2c",
+              "ring_digest": "57120d15"
             },
             "exact_count": 1
           },

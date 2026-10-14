@@ -47,7 +47,7 @@ struct audio_state {
     uint64_t last_service_cycles;
     uint32_t commitment_pages, max_service_us, max_irq_us, max_service_gap_us, max_control_us;
     int error, init_error;
-    bool initialized, ready, running, pending, quarantined, master_in_codec;
+    bool initialized, ready, running, pending, quarantined, master_in_codec, master_in_hardware;
     const char *reason, *settings_reason, *backend_name;
     struct pci_func backend_pci;
     bool backend_touched;
@@ -76,7 +76,9 @@ int audio_write_user(struct file_description *, uint32_t address, uint32_t bytes
 int audio_devctl(struct process *, int32_t fd, uint32_t op, uint32_t address, uint32_t bytes);
 int audio_mixer_delegate(struct process *supervisor, struct process *trusted);
 int audio_master_set(struct ciuki_mixer_master *);
+void audio_master_refresh(void); /* EC worker: apply without storage I/O */
 void audio_settings_load(struct vfs *);
+bool audio_registry_load(struct vfs *, struct ciuki_mixer_master *);
 void audio_diagnostics(struct ciuki_audio_diagnostics *);
 static inline bool audio_boot_tone_enabled(uint32_t flags)
 {

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef CIUKI_REG_INTERNAL_H
 #define CIUKI_REG_INTERNAL_H
-#include <ciuki/registry.h>
+#include "../sysroot-overlay/include/ciuki/registry.h"
 struct rv { char *name; enum reg_type type; void *data; size_t size; struct rv *next; };
 struct rk { char *path; struct rv *values; struct rk *next; };
 struct rt { struct rk *keys; char *comments; uint64_t generation; unsigned nk, nv; };

@@ -75,11 +75,9 @@ static uint8_t resync_regs[512];
 static struct opl3_chip chip_template;
 static volatile bool template_ready;
 
-/* CT1745 5-bit level n: 2 dB steps, 31 = 0 dB (Creative guide, chapter 4),
- * as Q16 linear gains; output gain 41h/42h: 0, 6, 12, 18 dB. */
-static const uint32_t level_gain[32] = {
-    52, 66, 83, 104, 131, 165, 207, 261, 328, 414, 521, 655, 825, 1039, 1308, 1646,
-    2072, 2609, 3285, 4135, 5206, 6554, 8250, 10387, 13076, 16462, 20724, 26090, 32846, 41350, 52057, 65536 };
+/* Ciuki guest level policy: linear n/31, including exact silence at zero.
+ * Output gain 41h/42h: 0, 6, 12, 18 dB. Saturation is after the full sum. */
+static uint32_t level_gain(unsigned n) { return (n & 31u) * 65536u / 31u; }
 static const uint32_t output_gain[4] = { 65536, 130762, 260904, 520571 };
 
 static int16_t sat16(int64_t v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : (int16_t)v; }
@@ -530,10 +528,10 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
 
     int64_t gp[2], go[2];
     for (unsigned c = 0; c < 2; c++) {
-        int64_t master = level_gain[info.master[c] & 31], out = output_gain[info.output_gain[c] & 3];
+        int64_t master = level_gain(info.master[c]), out = output_gain[info.output_gain[c] & 3];
         int64_t source = s->muted ? 0 : s->gain[c];
-        gp[c] = (((master * level_gain[info.voice[c] & 31]) >> 16) * out >> 16) * source / 100;
-        go[c] = (((master * level_gain[info.fm[c] & 31]) >> 16) * out >> 16) * source / 100;
+        gp[c] = (((master * level_gain(info.voice[c])) >> 16) * out >> 16) * source / 100;
+        go[c] = (((master * level_gain(info.fm[c])) >> 16) * out >> 16) * source / 100;
     }
     bool sound = false;
     for (unsigned k = 0; k < frames; k++) {
@@ -545,7 +543,7 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
             level_peak(&s->level.pending[0], p[c]);
             level_peak(&s->level.pending[1], o[c]);
             unsigned master = c ? audio.master.right : audio.master.left;
-            if (audio.master_in_codec && master) master = 100;
+            if ((audio.master_in_codec || audio.master_in_hardware) && master) master = 100;
             level_peak(&s->level.pending[2], audio.master.mute ? 0 : (p[c] + o[c]) * master / 100);
         }
         if (p[0] || p[1] || o[0] || o[1]) sound = true;
