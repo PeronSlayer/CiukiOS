@@ -8,6 +8,7 @@
 #include <ciuki/savage2d.h>
 #include <ciuki/cpu.h>
 #include <time.h>
+#include <ciuki/work.h>
 static unsigned binding_claims, binding_pci_count;
 static struct pci_func binding_gpu;
 static bool binding_allowed;
@@ -70,13 +71,24 @@ static uint8_t binding_window[SAVAGE_MMIO_BYTES];
 void *vmm_replace_mmio(void *w,uint32_t c,uint32_t p,uint32_t n)
 { (void)w; CHECK(c==SAVAGE_MMIO_BYTES && n==c && p==(binding_gpu.bar[0]&~15u)); return binding_window; }
 int udelay(uint32_t us) { CHECK(us<=500); return 0; }
-void kwork_yield(void) { }
-static kwork_fn queued_work;
-static void *queued_arg;
-static bool queue_allowed=true;
+static bool marker_thread_running;
+static unsigned normal_yields, device_work_requests;
+void task_yield(void)
+{
+    CHECK(marker_thread_running && initializing && locks==1 && !fbdev_console_begin());
+    normal_yields++;
+}
+void kwork_yield(void) { CHECK(false); }
 static unsigned boot_calls;
 bool kwork_queue(kwork_fn fn, void *arg)
-{ CHECK(!queued_work); if (!queue_allowed) return false; queued_work=fn; queued_arg=arg; return true; }
+{ (void)fn; (void)arg; device_work_requests++; CHECK(false); return false; }
+static void marker_thread_step(void)
+{
+    CHECK(!marker_thread_running && marker_worker.prio==P_NORMAL);
+    marker_thread_running=true;
+    accel_marker_run();
+    marker_thread_running=false;
+}
 
 /* Durable settings boundary: distinguish cache bytes from committed bytes.
  * An interrupted attempt is tested by retaining only disk_marker. */
@@ -138,7 +150,7 @@ struct model {
     uint32_t status_value;
     uint64_t us;
     bool exact_clock, last_status_busy;
-    bool strict_window, window_locked, postreset_enable, gbd_reserved, ignore_fill;
+    bool strict_window, window_locked, postreset_enable, gbd_reserved, ignore_fill, depth_locked;
     unsigned half_reads, half_writes, dead_window_writes, dword_2d_reads;
     struct { uint32_t reg, value; } setup[64];
     unsigned setup_count;
@@ -157,6 +169,14 @@ static void execute_packet(struct model *p)
     CHECK(p->packet[1]==0);
     unsigned bpp=(p->packet[2]>>16)&255, stride=p->packet[2]&65535;
     CHECK(bpp==device.bpp && stride==device.pitch/(bpp/8));
+    uint32_t gbd=p->reg[0x816c/4];
+    unsigned gbd_bpp=(gbd>>16)&255, gbd_stride=gbd&0x1ff0u;
+    unsigned cr_depth=p->cr[0x50]&0x30u;
+    unsigned engine_bpp=cr_depth==0 ? 8 : cr_depth==0x10 ? 16 : 32;
+    CHECK(cr_depth!=0x20 && (p->cr[0x50]&0xc1u)==0xc1u);
+    CHECK(gbd_bpp==8 || gbd_bpp==16 || gbd_bpp==32);
+    CHECK(gbd_stride==stride && !p->reg[0x8168/4]);
+    if (gbd_bpp<engine_bpp) engine_bpp=gbd_bpp;
     CHECK((p->packet[2]&0x0f000000u)==0);
     bool copying=(p->packet[0]&0x1e0u)==0x140u, pattern=(p->packet[0]&3u)==3u;
     unsigned index=copying ? 5 : pattern ? 5 : 4;
@@ -188,7 +208,10 @@ static void execute_packet(struct model *p)
                 uint8_t row=(uint8_t)(p->packet[7+((unsigned)py&7u)/4]>>shift);
                 colour=(row&(0x80u>>((unsigned)px&7u))) ? p->packet[3] : p->packet[4];
             }
-            for (unsigned b=0;b<bytes;b++) dst[b]=(uint8_t)(colour>>(b*8));
+            /* Model the T23's observed colour-lane replication when the
+             * engine depth is narrower than the declared destination. This
+             * is a regression hypothesis, not a full silicon emulator. */
+            for (unsigned b=0;b<bytes;b++) dst[b]=(uint8_t)(colour>>((b%(engine_bpp/8))*8));
         }
         if (p->partial && x==w/2) return;
     }
@@ -318,6 +341,7 @@ static void chip_cr_write(struct model *p,uint8_t index,uint8_t value)
     if (p->locked || (index==0x39 && p->locked39)) return;
     if (index>=0x40 && ((p->cr[0x38]&0xcc)!=0x48 || (p->cr[0x39]&0xe0)!=0xa0)) return;
     if (index==0x40 && p->mmio_enable_failed) value=(value&~1u)|(p->cr[0x40]&1u);
+    if (index==0x50 && p->depth_locked) value=(value&~0x30u)|(p->cr[0x50]&0x30u);
     if (index==0x40 && p->reset_phase==2 && value==1) p->postreset_enable=true;
     if (index==0x66) {
         CHECK((p->cr[index]&1u)==(value&1u));
@@ -410,14 +434,14 @@ static struct savage_io model_io(void)
         model_now,model_delay,model_drain,model_fault,model_read8,model_write8,model_port_read,model_port_write,model_read16,model_write16};
 }
 const struct accel_ops *boot_init(const struct fb_device *d, struct vfs *vfs)
-{ boot_calls++; struct savage_io io=model_io(); return init_with_io(d,vfs,&io); }
+{ CHECK(marker_thread_running); boot_calls++; struct savage_io io=model_io(); return init_with_io(d,vfs,&io); }
 static uint8_t *storage;
 static void prepare(unsigned bpp)
 {
     memset(&m,0,sizeof(m)); memset(&test_engine,0,sizeof(test_engine));
     g_cpu_tsc=false; g_tsc_per_ms=0; accel_log_cost=NULL; marker_cost_us=0;
     m.cr[0x66]=1;
-    m.cr[0x50]=bpp==16 ? 0x10 : 0x30;
+    m.cr[0x50]=0; /* firmware VGA depth, independent of the active VBE mode */
     initialized=true; changing=false; drawing=0; console_rows=8;
     g_boot.flags=0; acceleration=NULL;
     device=(struct fb_device){.width=96,.height=64,.pitch=128*(bpp/8),.size=64*128*(bpp/8),
@@ -445,7 +469,7 @@ static void commands(unsigned bpp)
     prepare(bpp);
     CHECK(!test_engine.ops.stop(&test_engine));
     memset(&m,0,sizeof(m)); m.cr[0x66]=1; m.alias_dead=true;
-    m.cr[0x50]=bpp==16 ? 0x10 : 0x30;
+    m.cr[0x50]=bpp==16 ? 0x30 : 0x10; /* stale opposite depth must be replaced */
     test_engine=(struct savage2d){0}; struct savage_io io=model_io();
     CHECK(!savage2d_start(&test_engine,&io,&device,true,m.cursor_page,0x100000));
     CHECK(m.alias_reads==1 && m.alias_writes==1 && m.seq[0x08]==6 && m.seq[0x26]==0x40);
@@ -495,6 +519,7 @@ static void commands(unsigned bpp)
     q=request(CIUKI_ACCEL_CURSOR_SHOW); q.colour=1;
     CHECK(!fbdev_accel_request(&q) && (m.cr[0x45]&1));
     CHECK(!test_engine.ops.stop(&test_engine) && !test_engine.active && !(m.cr[0x45]&1));
+    CHECK(m.cr[0x50]==(bpp==16 ? 0x30u : 0x10u)); /* firmware value restored */
     CHECK(m.alias_reads==1 && m.alias_writes==1 && test_engine.operations>10);
     free(expected); finish();
 }
@@ -584,10 +609,10 @@ static void glue_stalled_clock(uint32_t status)
     finish();
 }
 
-static void boot_fixture_accel(bool retain_marker)
+static void boot_fixture_mode(bool retain_marker, unsigned bpp)
 {
     /* Allocate the actual framebuffer, but make initialization entirely late. */
-    prepare(32); acceleration=NULL;
+    prepare(bpp); acceleration=NULL;
     memset(&m,0,sizeof(m)); m.cr[0x66]=1;
     engine=(struct savage2d){0}; attempt_blocked=false; reg_claim=cursor_claim=port_claim=-1;
     registers=NULL; register_window=cursor_window=NULL; accel_vfs=NULL; accel_queued=false;
@@ -599,25 +624,25 @@ static void boot_fixture_accel(bool retain_marker)
     memset(&settings_vfs,0,sizeof(settings_vfs)); settings_vfs.volumes[2]=&settings_volume;
     marker_commits=marker_fault=0; marker_error=clear_error=false;
     if (!retain_marker) { disk_size=0; marker_exists=false; memset(disk_marker,0,sizeof(disk_marker)); }
-    CHECK(!queued_work && !table_open && !marker_open);
-    queue_allowed=true; g_boot.flags=CBI_F_VERBOSE; step_count=accel_count=0;
+    CHECK(!table_open && !marker_open);
+    normal_yields=device_work_requests=0; g_boot.flags=CBI_F_VERBOSE; step_count=accel_count=0;
     attempt_in_progress=false;
     accel_marker_task=NULL; accel_marker_request=ACCEL_MARKER_IDLE;
     fail_marker_worker=false; marker_worker_creates=marker_worker_starts=0;
 }
-static void run_accel_work(void)
+static void boot_fixture_accel(bool retain_marker) { boot_fixture_mode(retain_marker,32); }
+static void run_accel_init(void)
 {
-    CHECK(accel_marker_request==ACCEL_MARKER_BEGIN && !queued_work);
-    accel_marker_run();
-    if (queued_work) {
-        kwork_fn fn=queued_work; void *arg=queued_arg; queued_work=NULL;
-        fn(arg);
-        if (accel_marker_pending(NULL)) {
-            CHECK(accel_marker_request==((acceleration && !engine.quarantined) ? ACCEL_MARKER_CLEAR : ACCEL_MARKER_STATUS));
-            accel_marker_run();
-        }
+    CHECK(accel_marker_request==ACCEL_MARKER_BEGIN);
+    marker_thread_step();
+    if (accel_marker_request==ACCEL_MARKER_INIT) {
+        CHECK(disk_size==14 && marker_commits==1 && !table_open && !marker_open);
+        marker_thread_step();
+        CHECK(accel_marker_request==((acceleration && !engine.quarantined) ? ACCEL_MARKER_CLEAR : ACCEL_MARKER_STATUS));
+        marker_thread_step();
     }
     CHECK(!accel_queued && !table_open && !marker_open && !locks && !accel_marker_pending(NULL));
+    CHECK(!device_work_requests);
 }
 static void software_desktop(void)
 {
@@ -635,7 +660,7 @@ static void software_desktop(void)
 static void deferred_boots(void)
 {
     /* Every failure reaches the actual software framebuffer presenter, while
-     * the queued callback runs the production marker and register decisions. */
+     * the normal thread runs the production marker and register decisions. */
     for (unsigned variant=0;variant<13;variant++) {
         boot_fixture_accel(false);
         if (variant==0) { m.stuck=true; m.frozen=true; }
@@ -652,9 +677,9 @@ static void deferred_boots(void)
         if (variant==11) m.alias_dead=true;
         if (variant==12) m.reg[BCI_CONTROL/4]=2; /* reject before status */
         fbdev_accel_schedule(&settings_vfs); fbdev_accel_schedule(&settings_vfs);
-        CHECK(accel_marker_request==ACCEL_MARKER_BEGIN && !queued_work && !marker_commits && !m.cr_writes && !binding_claims);
-        software_desktop(); /* desktop can draw even before the callback */
-        run_accel_work();
+        CHECK(accel_marker_request==ACCEL_MARKER_BEGIN && !marker_commits && !m.cr_writes && !binding_claims);
+        software_desktop(); /* desktop can draw before initialization */
+        run_accel_init();
         bool ready=variant==4 || variant==7 || variant==10 || variant==11;
         bool annotated=!ready && engine.status_logged;
         CHECK(!!acceleration==ready && marker_commits==((ready || annotated) ? 2u : 1u));
@@ -676,69 +701,68 @@ static void deferred_boots(void)
     boot_fixture_accel(false);
     bool previous=false; CHECK(!attempt_marker(&settings_vfs,false,&previous) && !previous && disk_size==14);
     finish(); boot_fixture_accel(true); settings_volume.readonly=true;
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
     CHECK(!acceleration && !binding_claims && !m.cr_writes && !m.status_reads && !marker_commits);
     CHECK(log_matches("skipped after a failed attempt")==1 && log_matches("quarantined reason=previous_attempt")==1);
     software_desktop(); finish();
-    for (unsigned variant=0;variant<6;variant++) {
+    for (unsigned variant=0;variant<5;variant++) {
         boot_fixture_accel(false);
         if (variant==0) settings_vfs.volumes[2]=NULL;
         if (variant==1) settings_volume.readonly=true;
         if (variant==2) marker_error=true;
         if (variant==3) { g_boot.flags|=CBI_F_SAFE_MODE; }
-        if (variant==4) queue_allowed=false;
-        if (variant==5) fail_marker_worker=true;
+        if (variant==4) fail_marker_worker=true;
         fbdev_accel_schedule(&settings_vfs);
-        if (accel_marker_pending(NULL)) run_accel_work();
+        if (accel_marker_pending(NULL)) run_accel_init();
         CHECK(!acceleration && !binding_claims && !m.cr_writes && !m.status_reads);
-        if (variant==5) CHECK(!marker_commits && log_matches("marker_worker_unavailable")==1);
+        if (variant==4) CHECK(!marker_commits && log_matches("marker_worker_unavailable")==1);
         software_desktop(); finish();
     }
     boot_fixture_accel(false); clear_error=true;
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
     CHECK(!acceleration && engine.quarantined && disk_size==14);
     CHECK(log_matches("quarantined reason=marker_clear_failed")==1);
     software_desktop(); finish();
     for (unsigned failure=1;failure<=6;failure++) {
         boot_fixture_accel(false); marker_fault=failure;
-        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
         CHECK(!acceleration && !binding_claims && !m.cr_writes && !m.status_reads);
         CHECK(log_matches("quarantined reason=marker_unavailable")==1);
         software_desktop(); finish();
     }
-    binding_allowed=false; binding_pci_count=0; queued_work=NULL; accel_vfs=NULL;
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
 }
 static void async_marker(void)
 {
     boot_fixture_accel(false); m.alias_dead=true; marker_cost_us=337704;
     fbdev_accel_schedule(&settings_vfs); fbdev_accel_schedule(&settings_vfs);
     CHECK(marker_worker_creates==1 && marker_worker_starts==1 && marker_worker.prio==P_NORMAL);
-    CHECK(accel_queued && accel_marker_request==ACCEL_MARKER_BEGIN && !queued_work);
+    CHECK(accel_queued && accel_marker_request==ACCEL_MARKER_BEGIN);
     CHECK(!marker_commits && !table_open && !binding_claims && !m.port_reads);
     software_desktop();
-    accel_marker_run();
-    CHECK(marker_commits==1 && disk_size==14 && queued_work && accel_queued && !locks);
+    marker_thread_step();
+    CHECK(marker_commits==1 && disk_size==14 && accel_marker_request==ACCEL_MARKER_INIT && accel_queued && !locks);
     CHECK(!m.port_reads && !m.alias_reads && !m.status_reads && !binding_claims);
-    CHECK(!table_open && !marker_open && accel_marker_request==ACCEL_MARKER_IDLE);
+    CHECK(!table_open && !marker_open && accel_marker_request==ACCEL_MARKER_INIT);
     software_desktop();
-    kwork_fn fn=queued_work; queued_work=NULL; fn(queued_arg);
+    marker_thread_step();
     CHECK(acceleration && marker_commits==1 && disk_size==14 && accel_queued);
-    CHECK(accel_marker_request==ACCEL_MARKER_CLEAR && !queued_work && !locks);
+    CHECK(accel_marker_request==ACCEL_MARKER_CLEAR && !locks);
     software_desktop();
-    accel_marker_run();
+    marker_thread_step();
     CHECK(!accel_queued && disk_size==0 && marker_commits==2);
     CHECK(!acceleration->stop(acceleration->ctx)); acceleration=NULL;
     marker_commits=0;
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
     CHECK(acceleration && marker_worker_creates==1 && marker_worker_starts==1);
     finish();
 
     /* Interrupt the real asynchronous path between persistence and probe.
-     * Reboot retains only committed bytes, never a worker/queued callback. */
-    boot_fixture_accel(false); fbdev_accel_schedule(&settings_vfs); accel_marker_run();
-    CHECK(disk_size==14 && queued_work && !binding_claims && !m.port_reads);
-    queued_work=NULL; finish(); boot_fixture_accel(true);
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+     * Reboot retains only committed bytes, never a pending INIT phase. */
+    boot_fixture_accel(false); fbdev_accel_schedule(&settings_vfs); marker_thread_step();
+    CHECK(disk_size==14 && accel_marker_request==ACCEL_MARKER_INIT && !binding_claims && !m.port_reads);
+    finish(); boot_fixture_accel(true);
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
     CHECK(!acceleration && !m.port_reads && !m.alias_reads && !m.status_reads && !marker_commits);
     CHECK(log_matches("quarantined reason=previous_attempt")==1);
     software_desktop(); finish();
@@ -752,7 +776,7 @@ static void async_marker(void)
         if (variant==2) binding_gpu.bar[0]=0;
         if (variant==3) device.pitch++;
         fbdev_accel_schedule(&settings_vfs);
-        CHECK(!accel_queued && !accel_marker_pending(NULL) && !queued_work && !marker_worker_creates);
+        CHECK(!accel_queued && !accel_marker_pending(NULL) && !marker_worker_creates);
         CHECK(!marker_commits && !table_open && !binding_claims && !m.port_reads);
         if (variant==3) device.pitch--;
         finish();
@@ -832,7 +856,7 @@ static void port_bootstrap(void)
 static void port_ownership(void)
 {
     boot_fixture_accel(false); binding_port_conflict=true;
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
     CHECK(!acceleration && binding_claims==1 && !m.port_reads && !m.port_writes && !m.alias_reads);
     CHECK(log_matches("quarantined reason=port_claim_failed")==1 && disk_size==14);
     software_desktop(); finish();
@@ -843,7 +867,7 @@ static void port_ownership(void)
     CHECK(log_matches("quarantined reason=io_decode_disabled")==1);
     finish();
     boot_fixture_accel(false);
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
     CHECK(acceleration && binding_claims==2 && binding_resources[1].state==RS_ACTIVE);
     struct ciuki_accel_info snapshot;
     unsigned status_reads=m.status_reads,port_reads=m.port_reads;
@@ -862,7 +886,7 @@ static void port_ownership(void)
     CHECK(binding_resources[1].state==RS_RELEASED && binding_resources[2].state==RS_RELEASED);
     /* A new work item can acquire the same exclusive ports after firmware. */
     marker_commits=0;
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
     CHECK(acceleration && binding_claims==4 && (m.cr[0x40]&1u));
     savage2d_quarantine("ownership_test"); acceleration=NULL;
     CHECK(!fbdev_accel_info(device.generation,&snapshot) && snapshot.quarantined && !snapshot.capabilities &&
@@ -885,7 +909,7 @@ static void decorated_readbacks(void)
         if (variant==3) m.alias_lock_mismatch=true;
         if (variant>=4 && variant<=6) m.reset_fault=variant-3;
         if (variant==7) m.pipe_locked=true;
-        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
         CHECK(!!acceleration==(variant==0 || variant==3));
         CHECK(log_matches(variant==1 ? "op=pr8 reg=003d5 value=00000020 us=" : "op=pr8 reg=003d5 value=00000068 us=")==1);
         if (variant!=1 && variant!=2) CHECK(log_matches("op=pr8 reg=003d5 value=000000a8 us=")==1);
@@ -935,7 +959,7 @@ static void activation_timing(void)
         accel_log_cost=serial_log_cost;
         if (variant==2) g_boot.flags=0;
         uint64_t host_start=host_time_us();
-        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
         uint64_t host_us=host_time_us()-host_start;
         CHECK(log_matches("phase=marker_write us=8000 error=0")==1);
         if (variant) CHECK(log_matches("phase=marker_clear us=8000 error=0")==1);
@@ -975,7 +999,7 @@ static void initial_idle_diagnostics(void)
         if (variant==6) m.status_value=UINT32_MAX;
         if (variant==7) { m.stuck=true; m.frozen=true; }
         if (variant==8) m.idle_after_us=21000;
-        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
         bool ready=variant<4;
         CHECK(!!acceleration==ready && engine.quarantined==!ready);
         CHECK(!table_open && !marker_open && !locks && !initializing);
@@ -1020,7 +1044,7 @@ static void initial_idle_diagnostics(void)
     }
     /* An annotated attempt blocks a read-only reboot without any bus access. */
     boot_fixture_accel(true); settings_volume.readonly=true;
-    fbdev_accel_schedule(&settings_vfs); run_accel_work();
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
     CHECK(!acceleration && !binding_claims && !m.status_reads && disk_size==30 && !marker_commits);
     CHECK(log_matches("quarantined reason=previous_attempt")==1);
     software_desktop(); finish();
@@ -1029,9 +1053,9 @@ static void initial_idle_diagnostics(void)
      * it never polls/reset/reclaims the quarantined engine to retry. */
     for (unsigned failure=1;failure<=6;failure++) {
         boot_fixture_accel(false); m.stuck=true; m.exact_clock=true;
-        fbdev_accel_schedule(&settings_vfs); accel_marker_run();
-        CHECK(disk_size==14 && marker_commits==1 && queued_work);
-        kwork_fn fn=queued_work; queued_work=NULL; fn(queued_arg);
+        fbdev_accel_schedule(&settings_vfs); marker_thread_step();
+        CHECK(disk_size==14 && marker_commits==1 && accel_marker_request==ACCEL_MARKER_INIT);
+        marker_thread_step();
         CHECK(accel_marker_request==ACCEL_MARKER_STATUS && accel_queued && !locks);
         software_desktop();
         marker_fault=failure;
@@ -1039,7 +1063,7 @@ static void initial_idle_diagnostics(void)
          * boundary instead of the begin-only stat failure. */
         if (failure==2) marker_error=true;
         unsigned reads=m.status_reads;
-        accel_marker_run();
+        marker_thread_step();
         CHECK(!accel_queued && !table_open && !marker_open && !locks && engine.quarantined);
         CHECK(m.status_reads==reads && !m.engine_writes && !m.packets);
         CHECK(disk_size==(failure==6 ? 30u : 14u) && marker_commits==(failure==6 ? 2u : 1u));
@@ -1071,7 +1095,7 @@ static void supersavage_window_and_records(void)
         uint8_t before[4];
         uint8_t *last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*4;
         memcpy(before,last,sizeof(before));
-        fbdev_accel_schedule(&settings_vfs); run_accel_work();
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
         CHECK(!m.dword_2d_reads && m.half_reads>=8 && m.half_writes==2);
         CHECK(log_matches("init reg=00038 wrote=00000048 read=00000048 bank=cr width=8")==1);
         CHECK(log_matches("init reg=00039 wrote=000000a0 read=000000a0 bank=cr width=8")==1);
@@ -1181,6 +1205,89 @@ static void halfword_glue_and_16bit_marker(void)
     registers=NULL;
     CHECK(hw_read16(NULL,0x816c)==UINT16_MAX);
 }
+static void engine_depth_and_trace_thread(void)
+{
+    /* Reproduce the exact observed T23 marker failure with the old CR50
+     * value despite a correct 32-bpp command and global descriptor. */
+    for (unsigned field=0;field<2;field++) {
+        prepare(32);
+        uint8_t *last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*4;
+        uint32_t before=0x0010243c;
+        memcpy(last,&before,4);
+        if (!field) m.cr[0x50]&=~0x30u;
+        else m.reg[0x816c/4]=(m.reg[0x816c/4]&~0xff0000u)|0x80000u;
+        accel_count=0;
+        CHECK(bci_test(&test_engine,&device)==-EIO);
+        CHECK(log_matches("wrote=004a8166 read=66666666 read_valid=1 restored=1")==1);
+        CHECK(test_engine.quarantined && test_engine.cpu_safe && m.packets==1);
+        CHECK(!memcmp(last,&before,4));
+        finish();
+    }
+    for (unsigned bpp=16;bpp<=32;bpp+=16) for (unsigned firmware=0;firmware<3;firmware++) {
+        boot_fixture_mode(false,bpp);
+        m.strict_window=true; m.gbd_reserved=true; m.exact_clock=true;
+        uint8_t saved50=(firmware==0 ? 0 : firmware==1 ? 0x10 : 0x30)|0x0e;
+        m.cr[0x50]=saved50;
+        uint8_t saved67=bpp==16 ? 0x59 : 0xd9;
+        m.cr[0x67]=saved67;
+        m.reg[0x8168/4]=0x1000; m.reg[0x816c/4]=0x10080401; /* stale GBD too */
+        uint8_t *last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*(bpp/8);
+        uint32_t before=bpp==32 ? 0x0010243c : 0x1234;
+        memcpy(last,&before,bpp/8);
+        simulated_trace_us=simulated_bytes=simulated_log_us=0;
+        accel_log_cost=serial_log_cost;
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        uint8_t expected50=(saved50&~0x30u)|(bpp==16 ? 0x10 : 0x30)|0xc1;
+        CHECK(acceleration && engine.active && !engine.quarantined && disk_size==0);
+        CHECK(m.cr[0x50]==expected50 && m.cr[0x67]==saved67 && !m.port_cr_reads[0x67]);
+        CHECK(m.reg[0x8168/4]==0 && (m.reg[0x816c/4]&GBD_READ_MASK)==(engine.descriptor|1));
+        CHECK(log_matches(bpp==32 ? "wrote=004a8166 read=004a8166" : "wrote=0000b76e read=0000b76e")==1);
+        CHECK(log_matches("bci_test result=passed error=0")==1 && !memcmp(last,&before,bpp/8));
+        char record50[100];
+        snprintf(record50,sizeof(record50),"init reg=00050 wrote=%08x read=%08x bank=cr width=8",expected50,expected50);
+        CHECK(log_matches(record50)==1);
+        CHECK(normal_yields==step_count+log_matches("savage init reg=") && normal_yields>100);
+        CHECK(!device_work_requests && simulated_trace_us>1000000);
+        unsigned records=step_count+log_matches("savage init reg="), yields=normal_yields;
+        struct fb_rect r={0,0,1,1};
+        CHECK(!fbdev_fill(&r,0x4a8166) && engine.operations==2);
+        CHECK(step_count+log_matches("savage init reg=")==records && normal_yields==yields);
+        /* Exercise the actual reset pacing glue as well as the model delay:
+         * 10 ms becomes twenty <=500-us slices on this same normal task. */
+        marker_thread_running=initializing=true;
+        kmutex_lock(&presenter); drawing=PRESENT_BUSY;
+        CHECK(!hw_delay(NULL,10000) && normal_yields==yields+20 && !device_work_requests);
+        drawing=0; kmutex_unlock(&presenter);
+        marker_thread_running=initializing=false;
+        CHECK(!acceleration->stop(acceleration->ctx) && m.cr[0x50]==saved50 && m.cr[0x67]==saved67);
+        printf("f4-22 depth=%u firmware_cr50=%02x programmed=%02x trace_us=%llu normal_yields=%u device_work_requests=%u\n",
+            bpp,saved50,expected50,(unsigned long long)simulated_trace_us,normal_yields,device_work_requests);
+        accel_log_cost=NULL;
+        finish();
+    }
+    boot_fixture_accel(false); m.depth_locked=true;
+    fbdev_accel_schedule(&settings_vfs); run_accel_init();
+    CHECK(!acceleration && engine.quarantined && !m.packets && disk_size==30);
+    CHECK(log_matches("quarantined reason=depth_readback_failed")==1);
+    CHECK(log_matches("init reg=00050 wrote=000000f1 read=000000c1 bank=cr width=8")==1);
+    software_desktop(); finish();
+    /* A firmware switch or nonwaiting console between BEGIN and INIT must
+     * retain the marker without touching hardware or claiming registers. */
+    for (unsigned blocked=0;blocked<2;blocked++) {
+        boot_fixture_accel(false);
+        fbdev_accel_schedule(&settings_vfs); marker_thread_step();
+        if (!blocked) changing=true;
+        else CHECK(fbdev_console_begin());
+        marker_thread_step();
+        CHECK(accel_marker_request==ACCEL_MARKER_STATUS && !acceleration && !binding_claims && !m.port_reads);
+        if (!blocked) changing=false;
+        else { CHECK(log_matches("quarantined reason=console_busy")==1); fbdev_console_end(); }
+        marker_thread_step();
+        CHECK(!accel_queued && disk_size==14 && marker_commits==1 && !device_work_requests);
+        software_desktop(); finish();
+    }
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+}
 int main(void)
 {
     CHECK(!framebuffer_regression_main());
@@ -1193,6 +1300,7 @@ int main(void)
     decorated_readbacks(); activation_timing(); initial_idle_diagnostics();
     supersavage_window_and_records();
     halfword_glue_and_16bit_marker();
+    engine_depth_and_trace_thread();
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);
     return failures ? 1 : 0;
 }

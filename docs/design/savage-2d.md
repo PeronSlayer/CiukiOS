@@ -4,6 +4,59 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f4-22: engine depth and initialization thread
+
+Research rechecked on 2026-10-14 against [S3 RE046-B](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf),
+printed pp. 82, 90, 148–149, [X.Org `SavageSetGBD_PM`](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c)
+and [Linux `SavageSetup2DEngine` / `savagefb_decode_var`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c).
+CR50 bits 5:4 select engine pixel length: 00=8, 01=16, 11=32 bpp;
+10 is reserved. Linux sets the depth before its engine initializer ORs in
+the GBD stride selection. X.Org's PM path also assumes mode setup has
+already selected that depth. CiukiOS cannot make that assumption: the T23
+445e91c7 capture changes `0010243c` to `66666666` for marker `004a8166`,
+consistent with execution using the low colour byte at 8 bpp. This proves
+a writer executed; it does not by itself identify every depth dependency.
+
+Supersede f4-19's preservation of CR50 pixel length: replace bits 5:4 from
+the active framebuffer bpp, retain the other bits and OR in C1 for GBD
+stride selection. Verify depth/selection readback before submitting a command;
+normal stop restores the saved firmware CR50. Retain the linear descriptor,
+explicit bpp and pixel stride, direct writes and masked halfword readback.
+The directive's “GBD1 bpp” is the X.Org `GlobalBD.bd1.HighPart.Bpp` field:
+the hardware register is **GBD2/MM816C bits 23:16**; GBD1/MM8168 is only
+the byte offset. There is no second bpp field to program at MM8168.
+
+RE046-B calls CR67 bits 7:4 the RAMDAC colour mode, valid only with streams
+disabled. Linux sets that field during full mode setup, not its 2D engine
+initializer. X.Org PM changes CR67.3 to select stream addresses/stride while
+also replacing primary-stream registers. Preserve the firmware CR67 and
+primary stream: neither sequence supports changing CR67 for engine depth
+alone, and doing so would risk the stable panel. Host tests assert this.
+
+Supersede the device-work continuation for activation: the existing reusable
+P_NORMAL `savage-marker` thread performs BEGIN (durable marker), INIT
+(registers and pixel test under presenter/console exclusion), then CLEAR or
+STATUS (file I/O after releasing the presenter). Eligibility still precedes
+thread creation and persistence. Keep live per-register records, including
+nonverbose paired records, and yield the normal task between trace records
+and reset-delay slices. No Savage initialization is queued to device-work;
+its synchronous 38400-baud diagnostics cannot trigger that callback's 1-ms
+budget or delay unrelated device-work. No trace buffer or extra thread is
+allocated. Marker lifetime, firmware ownership, quarantine and submitted
+writer guards are unchanged. This does not shorten serial transmission;
+activation time and trace time remain measured, and yields can add scheduling
+time. The host serial-cost model verifies thread placement and the retained
+records; the lead must measure boot responsiveness and absence of Savage
+work-budget records on the T23.
+
+The SuperSavage host model now checks the global descriptor's pixel stride
+and offset and uses CR50/GBD depth for colour lanes. It reproduces the
+observed low-byte repetition across a command-declared 32-bit destination
+when either depth is left at 8 bpp. This is an explicit regression model of
+the captured symptom, not proof of silicon precedence between conflicting
+descriptors or a complete emulation of wrong-depth addressing. Positive
+cases require consistent mode, CR50, GBD and packet descriptors at 16/32 bpp.
+
 ## f4-19: descriptor readback and acceleration proof
 
 Research rechecked on 2026-10-14 against [S3 RE046-B](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf)
