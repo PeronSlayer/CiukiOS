@@ -34,9 +34,7 @@
 #undef _SC_THREAD_STACK_MIN
 #include <unistd.h>
 #define CU_PTR(p) ((uintptr_t)(p))
-/* The kernel bridge's desktop holds display 3, input 4 and the f2-33
- * termination authority 5 before its output surface. */
-#define OUTPUT_FD 6
+static int output_fd=-1;
 static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }
 static uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 static void *gate_mmap(void *,size_t,int,int,int,off_t);
@@ -78,6 +76,11 @@ static uint64_t host_now=1000000, burst_end, last_interaction_report;
 static FILE *client_messages, *server_messages;
 static int pair_client[256],client_pid[256],hello[256];
 void desktop_spawn_host_init(int);
+int desktop_spawn_host_display_fd(void);
+int desktop_spawn_host_input_fd(void);
+void desktop_spawn_host_shift_grants(void);
+int desktop_spawn_host_open_node(const char *);
+unsigned desktop_spawn_host_node_opens(void);
 int desktop_spawn_host_output(void);
 uint32_t desktop_spawn_host_control(void);
 void desktop_spawn_host_input(const struct input_event *,struct ciuki_input_event *);
@@ -233,12 +236,12 @@ int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
     m->sender_pid=client_pid[fd];return 1;
 }
 int ciuki_display_info(int fd,struct ciuki_framebuffer_info *s)
-{ assert(fd==3);s->width=s->height=320;return 0; }
+{ assert(fd==desktop_spawn_host_display_fd());s->width=s->height=320;return 0; }
 int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f)
-{assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return desktop_spawn_host_output();}
+{assert(w==320 && h==320 && f==CIUKI_SURFACE_XRGB8888);return output_fd=desktop_spawn_host_output();}
 void *ciuki_surface_map(int fd,int prot) {
     if ((handshake && fd==7) || ((burst || flush_timeout) && fd==127)) { assert(prot==PROT_READ); return client_pixels; }
-    assert(fd==OUTPUT_FD && prot==(PROT_READ|PROT_WRITE));return output_pixels;
+    assert(fd==output_fd && prot==(PROT_READ|PROT_WRITE));return output_pixels;
 }
 int ciuki_surface_info(int fd,struct ciuki_surface_info *s) {
     assert((handshake && fd==7) || ((burst || flush_timeout) && fd==127));
@@ -246,7 +249,7 @@ int ciuki_surface_info(int fd,struct ciuki_surface_info *s) {
 }
 int ciuki_present(int display,int surface,const struct ciuki_rect *r)
 {
-    assert(display==3 && surface==OUTPUT_FD && r);presents++;
+    assert(display==desktop_spawn_host_display_fd() && surface==output_fd && r);presents++;
     if (first_frame_output) {
         assert(presents==1 && !gate_keys && !gate_motion && !gate_buttons && !interaction_sent);
         FILE *out=fopen(first_frame_output,"wb"); assert(out);
@@ -258,7 +261,7 @@ int ciuki_present(int display,int surface,const struct ciuki_rect *r)
 }
 int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
 {
-    assert(fd==4 && capacity==CIUKI_INPUT_READ_MAX);
+    assert(fd==desktop_spawn_host_input_fd() && capacity==CIUKI_INPUT_READ_MAX);
     if (first_frame_output) { errno=EAGAIN; return -1; }
     if (late_input || no_input) {
         if (late_input && !keyboard_attached && host_now>=5000000000ull) {
@@ -300,6 +303,12 @@ int desk_load_portrait(uint32_t *out)
     assert(fread(out,sizeof(*out),256*256,source)==256*256);
     assert(!fclose(source)); return 0;
 }
+int open(const char *path,int flags,...) {
+    (void)flags;
+    int result=desktop_spawn_host_open_node(path);
+    if (result<0) { errno=-result; return -1; }
+    return result;
+}
 int fcntl(int fd,int cmd,...) {
     uint32_t arg=0;
     if (cmd==F_SETFL || cmd==F_SETFD) { va_list ap; va_start(ap,cmd); arg=(uint32_t)va_arg(ap,int); va_end(ap); }
@@ -336,6 +345,16 @@ int nanosleep(const struct timespec *t,struct timespec *rest)
     if (running && !remaining && pongs==running*100 && !page.command && !interact_ready) command(GATE_SNAPSHOT);
     return 0;
 }
+static int run_desktop(int argc,char **argv)
+{
+    char display[32],input[32];
+    snprintf(display,sizeof(display),"--display-fd=%d",desktop_spawn_host_display_fd());
+    snprintf(input,sizeof(input),"--input-fd=%d",desktop_spawn_host_input_fd());
+    char *args[8]; assert(argc+2<(int)(sizeof(args)/sizeof(*args)));
+    for (int i=0;i<argc;i++) args[i]=argv[i];
+    args[argc]=display; args[argc+1]=input; args[argc+2]=NULL;
+    return desktop_main(argc+2,args);
+}
 int main(int argc,char **argv)
 {
     if (argc==4 && (!strcmp(argv[1],"--first-frame") || !strcmp(argv[1],"--normal-first-frame"))) {
@@ -357,9 +376,10 @@ int main(int argc,char **argv)
     else if (argc==2 && (!strcmp(argv[1],"--normal-spawn") || !strcmp(argv[1],"--capacity"))) normal_spawn=true;
     else assert(argc==1);
     desktop_spawn_host_init(!normal_spawn && !normal_first_frame);
+    if (getenv("CIUKI_DESKTOP_HOST_SHIFTED")) desktop_spawn_host_shift_grants();
     if (first_frame_output) {
         char *args[]={"desktop","--test=crash-isolation","--gate",NULL};
-        if (!setjmp(done)) { (void)desktop_main(normal_first_frame ? 1 : 3,args); assert(0); }
+        if (!setjmp(done)) { (void)run_desktop(normal_first_frame ? 1 : 3,args); assert(0); }
         desktop_spawn_host_finish();
         puts("desktop first frame: no input, production present captured PASS"); return 0;
     }
@@ -368,20 +388,20 @@ int main(int argc,char **argv)
         if (!strcmp(argv[1],"--capacity")) {
             struct desktop *d=calloc(1,sizeof(*d)); assert(d);
             const struct desk_ops ops={.close=close}; desk_init(d,&ops,320,320);
-            assert(ciuki_surface_create(320,320,CIUKI_SURFACE_XRGB8888)==OUTPUT_FD);
+            assert(ciuki_surface_create(320,320,CIUKI_SURFACE_XRGB8888)>=3);
             for (int i=0;i<DESK_CLIENTS;i++) d->clients[i].channel=64+i;
             errno=EBADF; assert(spawn_demo(d,"none",0)==-1 && errno==ENOSPC);
             free(d);
         } else {
             char *args[]={"desktop","--test=crash-isolation","--demo=none",NULL};
-            if (!setjmp(done)) { (void)desktop_main(3,args); assert(0); }
+            if (!setjmp(done)) { (void)run_desktop(3,args); assert(0); }
         }
         desktop_spawn_host_finish(); return 0;
     }
     char *invalid[]={"desktop","--gate",NULL};assert(desktop_main(2,invalid)==2);
     char *args[]={"desktop","--test=crash-isolation","--gate",NULL};
     if (!setjmp(done)) {
-        int result=desktop_main(3,args);
+        int result=run_desktop(3,args);
         if (input_error || inherit_error || spawn_error || flush_timeout || bad_command) { assert(result==1); desktop_spawn_host_finish(); return result; }
         fprintf(stderr,"desktop_main returned %d errno=%d\n",result,errno);
         assert(0);
@@ -392,6 +412,7 @@ int main(int argc,char **argv)
         puts("desktop production HELLO/CREATE_WINDOW -> CONFIGURE/FOCUS/snapshot PASS");return 0;
     }
     if (late_input || no_input) {
+        assert(desktop_spawn_host_node_opens()>0);
         desktop_spawn_host_finish();
         printf("desktop production main/supervisor/grant: %s draws and services IPC PASS\n",
                late_input ? "no input at start, USB keyboard attaches at 5 s, keys arrive" : "no input for 6 s");

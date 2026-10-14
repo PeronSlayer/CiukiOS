@@ -1045,6 +1045,49 @@ static struct proc_thread *spawn_host_find_thread(struct process *p)
     }
     CHECK(false); return 0;
 }
+/* Grant numbers belong to this process table, not to the host fd table. */
+static int spawn_host_kind_fd(enum desktop_kind kind)
+{
+    int found=-1;
+    for (unsigned i=0;i<CIUKI_OPEN_MAX;i++) {
+        struct desktop_description *d=desktop_fd(spawn_host_server,(int32_t)i);
+        if (d && d->kind==kind) { CHECK(found<0); found=(int)i; }
+    }
+    CHECK(found>=3); return found;
+}
+int desktop_spawn_host_display_fd(void) { return spawn_host_kind_fd(DESKTOP_DISPLAY); }
+int desktop_spawn_host_input_fd(void) { return spawn_host_kind_fd(DESKTOP_INPUT); }
+void desktop_spawn_host_shift_grants(void)
+{
+    /* Exercise explicit desktop arguments with holes below the grants. */
+    const enum desktop_kind kinds[]={DESKTOP_DISPLAY,DESKTOP_INPUT};
+    for (unsigned i=0;i<ARRAY_SIZE(kinds);i++) {
+        int source=spawn_host_kind_fd(kinds[i]), target=11+(int)i*2;
+        CHECK(!spawn_host_server->fds[target].object);
+        CHECK(desktop_dup(spawn_host_server,source,target,true,FD_CLOEXEC)==target);
+        CHECK(!desktop_close(spawn_host_server,source));
+        CHECK(spawn_host_kind_fd(kinds[i])==target);
+    }
+}
+/* Model the shell's optional device queries in the guest table. Linux opens
+ * must never hand host fd numbers to the guest close/fcntl seams. devctl is
+ * deliberately ENOSYS in the gate fixture; other files remain unavailable. */
+static unsigned spawn_host_node_refs, spawn_host_node_opens;
+static void spawn_host_node_retain(struct proc_object *object)
+{ (void)object; CHECK(spawn_host_node_refs); spawn_host_node_refs++; }
+static void spawn_host_node_release(struct proc_object *object)
+{ (void)object; CHECK(spawn_host_node_refs); spawn_host_node_refs--; }
+static struct proc_object spawn_host_node={spawn_host_node_retain,spawn_host_node_release,false};
+int desktop_spawn_host_open_node(const char *path)
+{
+    if (strcmp(path,"/dev/net") && strcmp(path,"/dev/media") && strcmp(path,"/dev/mixer")) return -ENOENT;
+    int fd=desktop_fd_slot(spawn_host_server,0);
+    if (fd<0) return fd;
+    spawn_host_node_refs++; spawn_host_node_opens++;
+    spawn_host_server->fds[fd]=(struct proc_fd){&spawn_host_node,FD_CLOEXEC};
+    return fd;
+}
+unsigned desktop_spawn_host_node_opens(void) { return spawn_host_node_opens; }
 void desktop_spawn_host_init(int gate)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -1059,15 +1102,17 @@ void desktop_spawn_host_init(int gate)
         CHECK(supervisor_spawn("/Programs/desktop",argv,0,true,&spawn_host_server)==41);
     }
     if (gate) spawn_host_server->ppid=spawn_host_owner->pid;
-    CHECK(desktop_fd(spawn_host_server,3)->kind==DESKTOP_DISPLAY && desktop_fd(spawn_host_server,4)->kind==DESKTOP_INPUT);
+    CHECK(desktop_spawn_host_display_fd()!=desktop_spawn_host_input_fd());
     spawn_host_thread=spawn_host_find_thread(spawn_host_server); desktop_select(spawn_host_thread);
 }
 int desktop_spawn_host_output(void)
 {
-    /* Display 3, input 4, the f2-33 termination authority 5, then the output. */
-    CHECK(proc_authority_object(spawn_host_server->fds[5].object));
+    bool authority=false;
+    for (unsigned i=0;i<CIUKI_OPEN_MAX;i++)
+        authority |= proc_authority_object(spawn_host_server->fds[i].object);
+    CHECK(authority);
     int fd=surface_create(spawn_host_server,320,320,CIUKI_SURFACE_XRGB8888);
-    CHECK(fd==6);
+    CHECK(fd>=3 && desktop_fd(spawn_host_server,fd)->kind==DESKTOP_SURFACE);
     CHECK(surface_map(spawn_host_server,fd,PROT_READ|PROT_WRITE)==CIUKI_MMAP_BASE+CIUKI_TLS_SIZE);
     return fd;
 }
@@ -1097,6 +1142,7 @@ void desktop_spawn_host_attach_keyboard(void)
 }
 int desktop_spawn_host_read_input(int fd, struct ciuki_input_event *events, uint32_t capacity)
 {
+    CHECK(fd==desktop_spawn_host_input_fd());
     desktop_select(spawn_host_thread);
     int n=grant_input_read(spawn_host_server,fd,BUFFER,capacity);
     if (n>0) CHECK(!ua_read(spawn_host_server->memory,events,BUFFER,(uint32_t)n*sizeof(*events)));
@@ -1194,6 +1240,7 @@ void desktop_spawn_host_finish(void)
     desktop_remove(proc_supervisor(),spawn_host_owner);
     CHECK(!pages_used && !g_user_mappings && heap_blocks==1);
     CHECK(!desktop_objects.descriptions && !desktop_objects.channels && !desktop_objects.grants);
+    CHECK(!spawn_host_node_refs);
     for (unsigned i=0;i<3;i++) CHECK(!object_refs[i]);
     free(ram);
     puts("native desktop -> production channel_pair/fcntl/proc_spawn: CLOEXEC rejection, explicit fd 3, argv/env, new group, grants excluded, zero resources PASS");
