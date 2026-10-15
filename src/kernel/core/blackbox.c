@@ -127,6 +127,9 @@ static int flush_records(unsigned budget) {
     f=lock();flushing=false;unlock(f);return e;
 }
 int blackbox_flush(void) { return flush_records(8); }
+bool blackbox_available(void) {
+    uint32_t f=lock();bool ready=device && blkdev_durable(device);unlock(f);return ready;
+}
 int blackbox_checkpoint(void) {
 #ifndef FS_HOST
     if (!(read_eflags()&0x200)) return -FS_EBUSY;

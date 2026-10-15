@@ -1,5 +1,11 @@
 # F0-24 serial records and hardware latency
 
+F0-28 supersedes this revision's THRE-only physical FIFO refill rule with
+TEMT empty proof, exclusive refill epochs and a logical-byte resend audit.
+See [the research and decision](f0-28-sweep-serial.md). The earlier hardware
+evidence below is unchanged; it does not establish the cause of later
+capture duplication.
+
 Research checked on 2026-10-15 before implementation:
 
 - [TI TL16C550D, sections on FIFO operation and LSR bits 5–6](https://www.ti.com/lit/ds/symlink/tl16c550d.pdf)

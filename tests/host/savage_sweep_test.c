@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <ciuki/kernel.h>
 #include <ciuki/savage2d.h>
 unsigned fs_host_contig_fail,fs_host_contig_live;
@@ -23,8 +24,11 @@ struct chip {
     uint8_t cr[256],sr[256],ci,si,misc,vga;
     uint8_t scratch[SAVAGE_SWEEP_BYTES];
     uint64_t us;
-    unsigned words, fills, lines;
-    bool hang, busy;
+    unsigned words, fills, lines, checkpoints, reset_edges, reset_delay;
+    unsigned active_id, durable_id, result_lines, fail_checkpoint;
+    bool hang, busy, stuck, descriptor_hang, freeze, delay_fail, result_pending;
+    bool config3, checkpoint_failed;
+    uint64_t line_cost;
     uint32_t offset;
     unsigned pitch,bpp;
 };
@@ -43,12 +47,20 @@ static void wr(void *ctx,uint32_t r,uint32_t v)
 {
     struct chip *c=ctx; c->us++;
     if (r<SAVAGE_BCI || r>=SAVAGE_BCI+64) { c->reg[r/4]=v; return; }
+    assert(!c->result_pending || c->checkpoint_failed); /* cleanup allowed after sink failure */
     c->packet[c->words++]=v;
     if ((c->packet[0]&0xff000000u)==0x96000000u) {
-        if (c->words==2) { c->reg[(0x8168+(c->packet[0]&1)*4)/4]=v; c->words=0; }
+        if (c->words==2) {
+            c->reg[(0x8168+(c->packet[0]&1)*4)/4]=v; c->words=0;
+            if (c->descriptor_hang && c->active_id==1) { c->descriptor_hang=false; c->busy=true; }
+        }
     } else if (c->words==4) {
         c->words=0; c->fills++;
-        if (c->hang) { c->busy=true; return; }
+        assert(!c->checkpoint_failed);
+        assert(c->active_id==c->durable_id);
+        uint32_t desc=c->reg[0x816c/4];
+        assert((desc&0x10000000) && !(desc&0x03000000)); /* excluded BEFORE submission */
+        if (c->hang && c->active_id==1) { c->hang=false; c->busy=true; return; }
         uint32_t gbd=c->reg[0x816c/4];
         unsigned bytes=c->bpp/8, stride=(gbd&0x1ff0)*bytes;
         unsigned x=c->packet[2]&4095,y=c->packet[2]>>16;
@@ -71,48 +83,98 @@ static uint8_t port_read(void *ctx,uint16_t p)
 static void port_write(void *ctx,uint16_t p,uint8_t v)
 {
     struct chip *c=ctx;
-    switch(p) {case 0x3d4:c->ci=v;break;case 0x3d5:c->cr[c->ci]=v;break;
+    switch(p) {case 0x3d4:c->ci=v;break;case 0x3d5:
+        if (c->ci==0x66 && ((v^c->cr[c->ci])&2)) {
+            if (v&2) { c->reset_edges++;c->reset_delay=0; }
+            else {
+                assert(c->reset_delay>=10000 || c->delay_fail);
+                if (!c->stuck) { c->busy=false;c->words=0; }
+            }
+        }
+        c->cr[c->ci]=v;break;
     case 0x3c4:c->si=v;break;case 0x3c5:c->sr[c->si]=v;break;case 0x3c2:c->misc=v;break;case 0x3c3:c->vga=v;break;}
 }
-static uint64_t now(void *ctx) { return ((struct chip *)ctx)->us; }
-static int delay(void *ctx,uint32_t us) { ((struct chip *)ctx)->us+=us; return 0; }
+static uint64_t now(void *ctx) { return ((struct chip *)ctx)->freeze ? 0 : ((struct chip *)ctx)->us; }
+static int delay(void *ctx,uint32_t us) {
+    struct chip *c=ctx;c->us+=us;
+    if (c->cr[0x66]&2) c->reset_delay+=us;
+    return c->delay_fail && c->reset_edges>1 ? -EIO : 0;
+}
 static void drain(void *ctx) { (void)ctx; }
 static void line(void *ctx,const char *s) {
     struct chip *c=ctx;
-    if (strstr(s,"config=")) c->lines++;
+    c->us+=c->line_cost;
+    if (strstr(s,"config=")) {
+        unsigned id;assert(sscanf(s,"Savage bpp=%*u config=%u",&id)==1);
+        assert(strstr(s,"bit3=") && strstr(s,"BW_DISABLE=") && strstr(s,"stride=") &&
+            strstr(s,"CR50=") && strstr(s,"tile=") && strstr(s,"depth=") && strstr(s,"descriptor="));
+        c->lines++;c->active_id=id;
+        if (strstr(s,"result=begin")) c->durable_id=UINT32_MAX;
+        else { c->result_pending=true;c->result_lines++; }
+        if (id==3) {
+            assert(strstr(s,"bit3=0 BW_DISABLE=0 stride=pixels") && strstr(s,"tile=0") &&
+                strstr(s,"result=skip reason=block_write_unqualified"));
+            c->config3=true;
+        }
+    }
     else assert(strstr(s,"MM8136 wrote=0007"));
+}
+static int checkpoint(void *ctx)
+{
+    struct chip *c=ctx;c->checkpoints++;
+    if (c->checkpoints==c->fail_checkpoint) { c->checkpoint_failed=true;return -EIO; }
+    c->durable_id=c->active_id;c->result_pending=false;return 0;
 }
 int main(void)
 {
-    for (unsigned depth=16;depth<=32;depth+=16) for (unsigned variant=0;variant<3;variant++) {
+    for (unsigned depth=16;depth<=32;depth+=16) for (unsigned variant=0;variant<12;variant++) {
         memset(&chip,0,sizeof(chip)); chip.cr[0x66]=1; chip.cr[0x45]=0xc0;
         chip.bpp=depth;chip.pitch=1024*(depth/8);chip.offset=0x400000;
+        if (variant==11) { chip.pitch=depth==16 ? 8160 : 8192;chip.offset=0x800000; }
         chip.reg[0x8134/4]=0x00070027; chip.reg[0x816c/4]=0x10200409;
         chip.reg[0x8128/4]=0x87654321; chip.sr[0x26]=0x4f;
         memset(chip.scratch,0xa7,sizeof(chip.scratch));
-        chip.hang=variant==1;
+        chip.hang=variant==1 || variant==3 || variant==6 || variant==7;
+        chip.stuck=variant==3;chip.descriptor_hang=variant==4;
+        chip.fail_checkpoint=variant==5 ? 2 : variant==9 ? 3 : 0;
+        chip.freeze=variant==6;chip.delay_fail=variant==7;
+        chip.line_cost=variant==8 ? 1000 : 0;
         struct fb_device d={.present=true,.width=1024,.height=768,.pitch=chip.pitch,
             .bpp=depth,.size=chip.pitch*768};
         struct savage_io io={.ctx=&chip,.read32=rd,.write32=wr,.read16=rd16,.write16=wr16,
             .read_port=port_read,.write_port=port_write,.now_us=now,.delay_us=delay,.drain=drain};
         struct savage2d s={0}; struct savage_sweep_result result;
-        int e=savage2d_sweep_model(&s,&io,&d,true,chip.scratch,chip.offset,
-            variant==2 ? 1 : 5000000,line,&chip,&result);
-        if (variant==1) {
-            assert(e && result.tried==1 && !result.restored && s.quarantined && chip.fills==1);
-            printf("PASS Savage %ubpp timeout: one fill, no retry, unsafe state retained\n",depth);
+        int e=savage2d_sweep_model(&s,&io,&d,variant!=10,chip.scratch,chip.offset,
+            variant==2 ? 1 : variant==8 ? 25000 : 5000000,line,checkpoint,&chip,&result);
+        if (variant==3 || variant==7) {
+            assert(e && result.tried==2 && !result.restored && s.quarantined && chip.fills==2);
+            assert(chip.reset_edges==2 && !(chip.cr[0x66]&2));
+            printf("PASS Savage %ubpp failed recovery variant=%u: no further fill, reset deasserted, unsafe state retained\n",depth,variant);
         } else {
             assert(result.restored && chip.cr[0x45]==0xc0 && chip.cr[0x66]==1 && chip.sr[0x26]==0x4f);
             assert(chip.reg[0x8128/4]==0x87654321 && chip.reg[0x8134/4]==0x00070027);
             assert(chip.reg[0x816c/4]==0x10200409 && chip.reg[0x8168/4]==0);
             for (unsigned i=0;i<sizeof(chip.scratch);i++) assert(chip.scratch[i]==0xa7);
-            if (!variant) {
-                assert(!e && result.tried==SAVAGE_CONFIGS && chip.lines==SAVAGE_CONFIGS && result.first==0 && result.passed>0);
-                printf("PASS Savage %ubpp matrix: tried=%u passed=%u first=%d VGA/engine/VRAM restored\n",depth,result.tried,result.passed,result.first);
-            } else assert(e && !result.tried);
+            if (variant==11) {
+                unsigned tried=depth==16 ? 0 : 12;
+                assert(!e && result.tried==tried && result.completed==SAVAGE_CONFIGS && result.skipped==SAVAGE_CONFIGS-tried);
+                printf("PASS Savage %ubpp padded pitch=%u: bounded destination/control overlap exclusions, tried=%u skip=%u\n",
+                    depth,chip.pitch,result.tried,result.skipped);
+            } else if (variant==0 || variant==1 || variant==4 || variant==6 || variant==10) {
+                unsigned tried=variant==10 ? 6 : 12;
+                bool timeout=variant==1 || variant==4 || variant==6;
+                assert(result.tried==tried && result.completed==SAVAGE_CONFIGS && result.skipped==SAVAGE_CONFIGS-tried && chip.config3);
+                assert(chip.lines==chip.checkpoints && result.passed>0);
+                assert(result.timeouts==timeout && chip.reset_edges==1u+timeout);
+                assert((e==-ETIMEDOUT)==timeout && result.first==0);
+                printf("PASS Savage %ubpp matrix variant=%u: tried=%u passed=%u skip=%u timeout=%u done=%u checkpoint-before-submit, state restored\n",
+                    depth,variant,result.tried,result.passed,result.skipped,result.timeouts,result.completed);
+            } else if (variant==5 || variant==2) assert(e && !result.tried && !chip.fills);
+            else if (variant==9) assert(e && result.tried==1 && chip.fills==1 && result.first==0 && result.passed==1);
+            else assert(e && result.tried && result.completed<SAVAGE_CONFIGS && result.passed);
         }
         assert(!fs_host_contig_live);
     }
-    puts("PASS Savage deadline: expired sweep stops before first fill and restores state");
+    puts("PASS Savage deadlines/checkpoints: expired or failed pre-command checkpoint issues no fill; slow evidence truncates and retains earlier results");
     return 0;
 }

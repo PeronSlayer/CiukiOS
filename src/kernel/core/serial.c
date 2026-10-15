@@ -10,6 +10,7 @@
 #define UART_POLL_LIMIT 20000u   /* per readiness wait, panic only */
 #define UART_DEAD_LIMIT 8u       /* consecutive timeouts before disabling */
 #define UART_LSR_THRE 0x20u
+#define UART_LSR_TEMT 0x40u
 #define UART_IIR_FIFO 0xC0u
 
 static uint16_t uart_base;
@@ -30,6 +31,9 @@ static bool uart_notice_sent, uart_writer_started;
 static bool uart_drop_notice, uart_panic_mode;
 static bool uart_chardev, uart_evidence;
 static unsigned uart_fifo_bytes = 1;
+static bool uart_refilling;
+static uint64_t uart_tx_epoch, uart_published_bytes, uart_next_byte;
+static uint32_t uart_resent;
 
 static bool serial_is_chardev(void)
 {
@@ -58,6 +62,9 @@ void serial_init(uint16_t base, uint16_t divisor)
     uart_chardev = serial_is_chardev();
     uart_evidence = false;
     uart_fifo_bytes = 1;
+    uart_refilling = false;
+    uart_tx_epoch = uart_published_bytes = uart_next_byte = 0;
+    uart_resent = 0;
     uart_timeouts = 0;
     if (!base)
         return;
@@ -136,6 +143,7 @@ static void serial_notice(void)
         uart_record_head = 0;
         uart_record_count = 1;
         uart_records[0] = (uint16_t)n;
+        uart_published_bytes += n;
         uart_accepted++; /* notices also occupy one FIFO-ordered ticket */
         uart_drop_notice = false;
         uart_notice_sent = true;
@@ -149,30 +157,56 @@ static bool serial_burst(void)
      * Select one record's remaining bytes; no FIFO gate crosses records. */
     uint32_t flags = irq_save();
     bool panic_owner = uart_panic_mode;
-    if (!uart_ok || !uart_used || (!uart_panic_mode && uart_burst_tick == g_ticks)) {
+    if (!uart_ok || !uart_used || uart_refilling ||
+        (!uart_panic_mode && uart_burst_tick == g_ticks)) {
         irq_restore(flags);
         return false;
     }
+    uart_refilling = true;
+    uint64_t epoch = ++uart_tx_epoch;
+    uint64_t position = uart_published_bytes - uart_used;
     unsigned count = uart_records[uart_record_head];
     uint64_t tick = g_ticks;
     if (count > uart_fifo_bytes) count = uart_fifo_bytes;
     if (!uart_panic_mode && count > uart_burst_bytes) count = uart_burst_bytes;
     irq_restore(flags);
-    /* Port reads can be slow on hardware. No other normal consumer can
-     * invalidate this observation, so readiness needs no IRQ lock. */
+    /* No standard 16550 register reports a numeric TX FIFO level. On a
+     * physical FIFO require TEMT: a conservative observation of level zero,
+     * including the shifter. Spend this observation once, in <=16 credits.
+     * THRE alone must not replenish credits while old bytes remain. */
     uint8_t lsr = inb(uart_base + 5);
-    if (lsr == 0xFF || !(lsr & UART_LSR_THRE)) return false;
-    uart_burst_tick = tick;
+    flags = irq_save();
+    if (epoch != uart_tx_epoch || uart_panic_mode != panic_owner) {
+        irq_restore(flags);
+        return false;
+    }
+    uint8_t empty = UART_LSR_THRE;
+    if (!uart_chardev && uart_fifo_bytes > 1) empty |= UART_LSR_TEMT;
+    bool ready = lsr != 0xff && (lsr & empty) == empty;
+    if (!ready) uart_refilling = false;
+    else uart_burst_tick = tick;
+    irq_restore(flags);
+    if (!ready) return false;
     for (unsigned i = 0; i < count; i++) {
         flags = irq_save();
-        if (uart_panic_mode != panic_owner) {
+        if (epoch != uart_tx_epoch || uart_panic_mode != panic_owner) {
             irq_restore(flags);
             return false; /* panic takeover never returns on the kernel */
         }
         if ((flags & 0x200) && crit_label) crit_label("serial_tx_byte");
+        /* Audit logical byte identity, not its value (repeated characters
+         * are legal). Never rewind/retry an output on a readiness race.
+         * A repeated position is counted and refused before port I/O. */
+        if (position + i != uart_next_byte || !uart_used || !uart_record_count) {
+            if (position+i<uart_next_byte) uart_resent++;
+            uart_ok = uart_refilling = false;
+            irq_restore(flags);
+            return false;
+        }
         /* Only one port write per IRQ lock, including its cursor update.
          * A panic at the next IF boundary sees exactly the unsent suffix. */
         outb(uart_base, (uint8_t)uart_log[uart_head]);
+        uart_next_byte++;
         uart_head = (uart_head + 1) % UART_LOG_BYTES;
         uart_used--;
         if (!--uart_records[uart_record_head]) {
@@ -184,7 +218,9 @@ static bool serial_burst(void)
         }
         irq_restore(flags);
     }
-    uart_timeouts = 0;
+    flags = irq_save();
+    if (epoch == uart_tx_epoch) { uart_refilling = false; uart_timeouts = 0; }
+    irq_restore(flags);
     return true;
 }
 
@@ -267,6 +303,7 @@ uint64_t serial_write_ticket(const char *s, size_t n)
         ticket = ++uart_accepted;
         uart_records[(uart_record_head + uart_record_count) % UART_RECORD_SLOTS] = (uint16_t)bytes;
         uart_record_count++;
+        uart_published_bytes += bytes;
         if (!uart_panic_mode && !uart_chardev)
             uart_admitted = bytes > UINT32_MAX - uart_admitted ? UINT32_MAX : uart_admitted + (unsigned)bytes;
         for (size_t i = 0; i < n; i++) {
@@ -293,6 +330,10 @@ void serial_panic(void)
     /* Explicit panic entry, called with physical IF clear. Make room for
      * panic records by draining all older records and the drop notice. */
     uart_panic_mode = true;
+    /* Cancel an interrupted readiness observation/refill. Its next byte
+     * checks the epoch even in host models where panic can return. */
+    uart_tx_epoch++;
+    uart_refilling = false;
     serial_buffered(false);
     serial_drain();
 }
@@ -311,7 +352,8 @@ uint32_t serial_dropped(void)
 void serial_snapshot(struct serial_stats *out)
 {
     uint32_t f = irq_save();
-    *out = (struct serial_stats){uart_accepted, uart_sent, uart_used, uart_dropped, uart_ok};
+    *out = (struct serial_stats){.accepted=uart_accepted, .sent=uart_sent,
+        .queued=uart_used, .dropped=uart_dropped, .present=uart_ok, .resent=uart_resent};
     irq_restore(f);
 }
 

@@ -55,7 +55,9 @@ void serial_buffered(bool enabled);       /* compatibility: all normal logs queu
 void serial_writer_init(void);            /* scheduler init, once */
 uint32_t serial_dropped(void);
 /* Counters include drop notices; queued counts expanded wire bytes. */
-struct serial_stats { uint64_t accepted, sent; uint32_t queued, dropped; bool present; };
+/* resent counts repeated logical-byte submission attempts, refused before
+ * I/O. Zero audits the local writer; it cannot measure remote duplication. */
+struct serial_stats { uint64_t accepted, sent; uint32_t queued, dropped; bool present; uint32_t resent; };
 void serial_snapshot(struct serial_stats *);
 void serial_panic(void);                  /* IF clear: drain, then synchronous records */
 void serial_tick(void);                   /* compatibility: IRQs never drain */

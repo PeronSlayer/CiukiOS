@@ -71,6 +71,39 @@ static void sweep_free(void *p,size_t n) { (void)n; free(p); }
 #undef outb
 #undef vmm_reserve_mmio
 
+static struct bootlog_stats sweep_log;
+static bool sweep_raw;
+static int sweep_raw_error,sweep_sync_error;
+static unsigned sweep_raw_calls,sweep_sync_calls;
+void bootlog_snapshot(struct bootlog_stats *s) { *s=sweep_log; }
+bool blackbox_available(void) { return sweep_raw; }
+int blackbox_checkpoint(void) { sweep_raw_calls++;return sweep_raw_error; }
+int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *ctx)
+{
+    CHECK(cancel && pause);sweep_sync_calls++;
+    return cancel(ctx) ? -EAGAIN : sweep_sync_error;
+}
+void task_sleep_ms(uint32_t ms) { CHECK(ms==1);g_ticks++; }
+static void sweep_persistence(void)
+{
+    uint64_t until=UINT64_MAX;
+    CHECK(sweep_checkpoint(&until)==-ENODEV && !sweep_raw_calls && !sweep_sync_calls);
+    sweep_raw=true;
+    CHECK(sweep_checkpoint(&until)==-EIO && sweep_raw_calls==1 && !sweep_sync_calls);
+    sweep_log.active=true;sweep_log.dropped=1;
+    CHECK(sweep_checkpoint(&until)==-EIO && !sweep_sync_calls);
+    sweep_log.dropped=0;sweep_log.error=-EROFS;
+    CHECK(sweep_checkpoint(&until)==-EROFS && !sweep_sync_calls);
+    sweep_log.error=0;sweep_raw_error=-EIO;
+    CHECK(sweep_checkpoint(&until)==-EIO && !sweep_sync_calls);
+    sweep_raw_error=0;sweep_sync_error=-EAGAIN;
+    CHECK(sweep_checkpoint(&until)==-EAGAIN && sweep_sync_calls==1);
+    sweep_sync_error=0;
+    CHECK(!sweep_checkpoint(&until) && sweep_sync_calls==2);
+    until=0;
+    CHECK(sweep_checkpoint(&until)==-EAGAIN && sweep_sync_calls==3);
+    puts("Savage evidence boundary: absent/raw/disk/drop/sync failure refuses commands; both durable sinks and independent deadline checked PASS");
+}
 unsigned pci_count(void) { return binding_pci_count; }
 const struct pci_func *pci_get(unsigned i) { return i<binding_pci_count ? &binding_gpu : NULL; }
 void *vmm_map_mmio(uint32_t p, uint32_t n, bool uc) { (void)p; (void)n; (void)uc; return NULL; }
@@ -1652,6 +1685,7 @@ static void shared_enable_and_failure_readbacks(void)
 }
 int main(void)
 {
+    sweep_persistence();
     CHECK(!framebuffer_regression_main());
     CHECK(boot_calls==0); /* framebuffer activation never enters the engine */
     commands(16); commands(32); failures_and_fallback();

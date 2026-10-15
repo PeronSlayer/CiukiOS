@@ -16,7 +16,8 @@ void blackbox_serial_replay(const char *, size_t); /* output sink, no recapture 
 int blackbox_bind(struct blkdev *, uint64_t start, uint64_t count,
                   void (*serial)(const char *, size_t));
 void blackbox_capture(const char *, size_t); /* RAM only, any producer */
-int blackbox_checkpoint(void); /* rare write-revocation/shutdown: drain full bounded RAM */
+bool blackbox_available(void); /* validated descriptor and durable device */
+int blackbox_checkpoint(void); /* rare checkpoint/shutdown: drain full bounded RAM */
 int blackbox_flush(void); /* direct writes + device flush, task context */
 void blackbox_panic(const char *, size_t); /* bounded emergency callback */
 const char *blackbox_replay(size_t *);

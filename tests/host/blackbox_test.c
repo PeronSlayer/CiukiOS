@@ -53,9 +53,9 @@ static void overlapping_checkpoint(void) {
 }
 int main(void) {
     overlapping_checkpoint();
-    setup();bind();CHECK(!writes && !flushes);
+    setup();CHECK(!blackbox_available());bind();CHECK(blackbox_available() && !writes && !flushes);
     blackbox_capture("last before lock\n",17);CHECK(!blackbox_flush());CHECK(writes==1 && flushes==1);
-    dev.quarantined=true;blackbox_capture("device stopped\n",15);CHECK(blackbox_flush()==-FS_EAGAIN);
+    dev.quarantined=true;CHECK(!blackbox_available());blackbox_capture("device stopped\n",15);CHECK(blackbox_flush()==-FS_EAGAIN);
     dev.quarantined=false;blackbox_reset();bind();size_t n;const char *s=blackbox_replay(&n);
     CHECK(n && strstr(s,"last before lock"));CHECK(serial_lines==1);
     /* Every prefix of a torn sector preserves its predecessor. */

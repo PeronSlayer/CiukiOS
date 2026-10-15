@@ -186,7 +186,10 @@ static void timer_check(struct hw_check_result *out)
 static void serial_check(uint64_t until,struct hw_check_result *out)
 {
     struct serial_stats a,b; serial_snapshot(&a);
-    if (!a.present) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"UART absent"); return; }
+    if (!a.present) {
+        out->status=a.resent ? HW_FAIL : HW_SKIP;
+        ksnprintf(out->detail,sizeof(out->detail),"UART absent/disabled resent=%u",a.resent); return;
+    }
     /* Wait for older records first; no forced UART mode or busy drain. */
     while (a.queued && check_now(0)<until-12000) { task_sleep_ms(1); serial_snapshot(&a); }
     uint64_t tickets[100]; unsigned accepted=0; uint64_t target=0;
@@ -205,9 +208,9 @@ static void serial_check(uint64_t until,struct hw_check_result *out)
     while (b.sent<target && check_now(0)<until-500) { task_sleep_ms(1); serial_snapshot(&b); }
     unsigned sent=0;
     for (unsigned i=0;i<100;i++) if (tickets[i] && tickets[i]<=b.sent) sent++;
-    out->status=sent==100 && b.dropped==a.dropped && accepted==100 ? HW_PASS : HW_FAIL;
-    ksnprintf(out->detail,sizeof(out->detail),"requested=100 accepted=%u whole_sent=%u dropped=%u queued=%u",
-        accepted,sent,b.dropped-a.dropped,b.queued);
+    out->status=sent==100 && b.dropped==a.dropped && !b.resent && accepted==100 ? HW_PASS : HW_FAIL;
+    ksnprintf(out->detail,sizeof(out->detail),"requested=100 accepted=%u whole_sent=%u dropped=%u queued=%u resent=%u",
+        accepted,sent,b.dropped-a.dropped,b.queued,b.resent);
 }
 static void savage_check(uint64_t until,struct hw_check_result *out)
 {
@@ -222,9 +225,9 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
     }
     page_line(0,"CR45 c0: reserved bits; cursor enable is bit 0. MM8136 07->00: unresolved; test pixels.");
     struct savage_sweep_result a,b={.first=-1};
-    int e=savage2d_hardware_sweep(deadline_after_ms(3000),page_line,0,&a);
+    int e=savage2d_hardware_sweep(deadline_after_ms(5000),page_line,0,&a);
     bool restored=a.restored, changed=false; int mode_error=0;
-    if (!e && a.restored && check_now(0)<until-8000) {
+    if (a.restored && (!e || e==-ETIMEDOUT) && check_now(0)<until-6500) {
         uint16_t mode=0;
         for (unsigned i=0;i<g_boot.display.mode_count && i<CBI_DISPLAY_MAX;i++) {
             const struct ciuki_boot_display_mode *m=&g_boot.display.modes[i];
@@ -232,7 +235,10 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
         }
         if (mode && mode!=original.mode_id) {
             mode_error=display_check_begin(mode); changed=!mode_error;
-            if (changed) e=savage2d_hardware_sweep(deadline_after_ms(3000),page_line,0,&b);
+            if (changed) {
+                int second=savage2d_hardware_sweep(deadline_after_ms(5000),page_line,0,&b);
+                if (!e) e=second;
+            }
             int restore=0;
             if (changed) restore=b.restored ? display_check_end() : -EIO;
             else {
@@ -246,7 +252,7 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
             restored=restored && (!changed || b.restored) && !restore;
         } else if (original.bpp==16) b=a;
         else mode_error=-EOPNOTSUPP;
-    } else mode_error=-ETIMEDOUT;
+    } else mode_error=e ? e : -ETIMEDOUT;
     if (restored && !retained_marker) { int clear=savage2d_attempt_end(&storage->vfs); if (clear && !e) e=clear; }
     out->status=!e && !mode_error && a.passed && b.passed && restored ? HW_PASS : HW_FAIL;
     char first_a[12],first_b[12];
@@ -254,8 +260,9 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
     else ksnprintf(first_a,sizeof(first_a),"%d",a.first);
     if (b.first<0) ksnprintf(first_b,sizeof(first_b),"none");
     else ksnprintf(first_b,sizeof(first_b),"%d",b.first);
-    ksnprintf(out->detail,sizeof(out->detail),"%ubpp first=%s %u/%u; 16bpp first=%s %u/%u restore=%u error=%d mode=%d",
-        original.bpp,first_a,a.passed,a.tried,first_b,b.passed,b.tried,restored,e,mode_error);
+    ksnprintf(out->detail,sizeof(out->detail),"%ubpp first=%s %u/%u done=%u; 16bpp first=%s %u/%u done=%u skip=%u timeout=%u restore=%u e=%d mode=%d",
+        original.bpp,first_a,a.passed,a.tried,a.completed,first_b,b.passed,b.tried,b.completed,
+        a.skipped+(changed ? b.skipped : 0),a.timeouts+(changed ? b.timeouts : 0),restored,e,mode_error);
     if (a.first<0) page_line(0,"Savage first exact configuration: none (original depth)");
     if (b.first<0) page_line(0,"Savage first exact configuration: none (16 bpp)");
 }

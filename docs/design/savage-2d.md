@@ -668,6 +668,13 @@ Existing syscall numbers and wire records are unchanged.
 
 ## f0-26: bounded configuration sweep
 
+F0-28 supersedes the diagnostic timeout/continuation rule with durable
+pre-command records, unsupported-candidate exclusions and one bounded
+CR66 recovery before continuing; failed recovery still quarantines. See
+[the safety amendment](hardware-check.md#f0-28-safety-amendment-2026-10-15)
+and [research](../validation/f0-28-sweep-serial.md). Production activation
+and quarantine policy remain unchanged.
+
 [The hardware-check contract](hardware-check.md) records the reference
 comparison, interpretation of MM8136/CR45, complete 96-case matrix per depth,
 off-screen save/restore, runtime `EngineConfig` registry selection and the
