@@ -106,7 +106,10 @@ static void sb_cause(struct dosvm *v, uint8_t cause)
     bool high = s->causes & 3;
     s->causes |= cause;
     /* The 8259A latches the rising edge; a line already high adds none. */
-    if (!high) { s->irq_edges++; dosvm_irq_raise(v->info.key, s->irq); }
+    if (!high) {
+        s->irq_tick = g_ticks; s->irq_reported = false;
+        s->irq_edges++; dosvm_irq_raise(v->info.key, s->irq);
+    }
 }
 static void sb_ack(struct dosvm *v, uint8_t bit)
 {
@@ -612,6 +615,22 @@ void dosvm_audio_advance(struct dosvm *v, uint64_t elapsed)
     v->audio.clock += elapsed * DOSVM_AUDIO_PER_MS;
     v->audio.opl.io_us = 0;
     sb_advance(v);
+    /* The line can stay asserted across many auto-init block boundaries.
+     * Keep its original age and a coherent PIC snapshot, even when the
+     * ordinary state queue is full. No formatting or output in the tick. */
+    struct dosvm_sb16 *s = &v->audio.sb;
+    if ((g_boot.flags & CBI_F_VERBOSE) && (s->causes & 3) && !s->irq_reported &&
+        g_ticks - s->irq_tick > 500 && !v->audio.diag.irq_wait.pending &&
+        v->audio.diag.irq_wait_records < 16) {
+        s->irq_reported = true;
+        v->audio.diag.irq_wait.age = g_ticks - s->irq_tick;
+        v->audio.diag.irq_wait.irq = s->irq;
+        v->audio.diag.irq_wait.isr = v->monitor.pic[0].isr | (uint16_t)v->monitor.pic[1].isr << 8;
+        v->audio.diag.irq_wait.irr = v->monitor.pic[0].irr | (uint16_t)v->monitor.pic[1].irr << 8;
+        v->audio.diag.irq_wait.imr = v->monitor.pic[0].imr | (uint16_t)v->monitor.pic[1].imr << 8;
+        v->audio.diag.irq_wait.pending = true;
+        v->audio.diag.irq_wait_records++;
+    }
 }
 
 /* ---- F4 consumer interface (ciuki/dosvm_audio.h) ---- */
@@ -808,6 +827,19 @@ void dosvm_audio_log(struct dosvm *v)
     uint64_t now = g_ticks;
     if (now < v->audio.diag.next_log) { irq_restore(f); return; }
     v->audio.diag.next_log = now + 100;
+    /* One record per unserviced line episode, ahead of queued discovery and
+     * periodic rows. Drain only outside the guest's complete IRQ chain. */
+    if (v->audio.diag.irq_wait.pending) {
+        uint64_t age = v->audio.diag.irq_wait.age;
+        unsigned irq = v->audio.diag.irq_wait.irq;
+        unsigned isr = v->audio.diag.irq_wait.isr, irr = v->audio.diag.irq_wait.irr;
+        unsigned imr = v->audio.diag.irq_wait.imr;
+        v->audio.diag.irq_wait.pending = false;
+        irq_restore(f);
+        klog("[vm-audio] vm=%u gen=%u irq_wait ms=%llu irq=%u isr=%04x irr=%04x imr=%04x",
+             v->info.key.id, v->info.key.generation, (unsigned long long)age, irq, isr, irr, imr);
+        return;
+    }
     unsigned kind = 0; uint32_t a = 0, b = 0, c = 0;
     bool state_record = false;
     if (v->audio.diag.attachment && v->audio.diag.count) {
