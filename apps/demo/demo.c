@@ -148,11 +148,17 @@ int main(int argc, char **argv)
     if (send_wait(channel,&m)) return 1;
     unsigned turns=0, target=0; int announced=0, released=0;
     int configured=0, pending=0; uint32_t serial=0, server_pid=0;
-    for (;;) {
-        int r=ciuki_channel_recv(channel,&m,DONTWAIT);
-        if (!r) break;
-        if (r<0) { if (errno!=EAGAIN && errno!=EINTR) return 1; }
-        else {
+    for (int open=1; open;) {
+        /* A turn handles the queued input events and the protocol message after them, then redraws once
+         * (f2-65). With one message per turn and a redraw per input event, a close request queued behind
+         * pointer motion waited many turns; on a loaded system (image eb774bb9) the desktop's DESK_CLOSE_NS
+         * timeout terminated the demo first. A protocol message still ends the turn, as before, and one
+         * channel queue at most is read per turn. */
+        int dirty=0;
+        for (unsigned n=0; n<CIUKI_CHANNEL_QUEUE_MAX; n++) {
+            int r=ciuki_channel_recv(channel,&m,DONTWAIT);
+            if (!r) { open=0; break; }
+            if (r<0) { if (errno!=EAGAIN && errno!=EINTR) return 1; break; }
             if (gate && m.length==12 && !m.fd_count && desk_get32(m.data)==GATE_MAGIC && m.sender_pid==server_pid) {
                 unsigned command=desk_get32(m.data+4);
                 if (command==GATE_RUN && !strcmp(kind,"none") && !pending) { target=turns+100; announced=0; }
@@ -166,11 +172,11 @@ int main(int argc, char **argv)
             if (!m.sender_pid || m.data[0]!=protocol_version ||
                 (server_pid && m.sender_pid!=server_pid) || !desk_parse(&m,0,NULL,&p)) return 1;
             server_pid=m.sender_pid;
-            if (p.opcode==DESK_CLOSED) break;
+            if (p.opcode==DESK_CLOSED) { open=0; break; }
             if (p.opcode==DESK_CLOSE_REQUEST) {
                 desk_message(&m,DESK_CLOSE,4);
                 if (send_wait(channel,&m)) return 1;
-                break;
+                open=0; break;
             }
             if (p.opcode==DESK_CONFIGURE) {
                 if (p.width!=WIDTH || p.height!=HEIGHT) return 1;
@@ -187,9 +193,13 @@ int main(int argc, char **argv)
                     typed[--chars]=0;
                 else if (p.opcode==DESK_MOTION) motion++;
                 else if (p.opcode==DESK_BUTTON) buttons++;
-                draw(pixels,typed,motion,buttons); damage(channel);
+                dirty=1;
+                continue;
             }
+            break;
         }
+        if (!open) break;
+        if (dirty) { draw(pixels,typed,motion,buttons); damage(channel); }
         if (gate && configured && !pending && !announced && turns==target) {
             demo_report(!strcmp(kind,"none") ? 2 : 1,turns,0,0); announced=1;
         }

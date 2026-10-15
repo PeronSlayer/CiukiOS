@@ -126,6 +126,11 @@ static uint64_t vnow = 1000 * MS;
 static int next_pid = 3;
 static int desktop_pid, survivor_pid;
 static unsigned presents;
+/* f2-65: presented pixels once the case has settled (1 s after both the
+ * probe's success and the last batch). The QEMU failure of desktop-shell-qemu-t23 on image eb774bb9 had a
+ * desktop that presented a complete frame on every loop at interactive
+ * priority and so starved its own clients; an idle desktop presents nothing. */
+static uint64_t present_px, idle_px, idle_from = UINT64_MAX;
 
 static void fail(const char *fmt, ...)
 {
@@ -338,6 +343,8 @@ int ciuki_present(int display, int surface, const struct ciuki_rect *r)
     struct obj *d = fd_obj(cur, display), *s = fd_obj(cur, surface);
     if (!d || d->kind != K_DISPLAY || !s || s->kind != K_SURFACE || !r) { errno = EBADF; return -1; }
     presents++;
+    present_px += (uint64_t)r->width * r->height;
+    if (vnow >= idle_from) idle_px += (uint64_t)r->width * r->height;
     return 0;
 }
 
@@ -1002,6 +1009,8 @@ int main(int argc, char **argv)
         if (latched && vnow >= byte_due) read_byte();
         if (trace && probe.checkpoint != (int)last_cp) { last_cp = (unsigned)probe.checkpoint; describe_desktop(); }
         if (success_ns && !end_ns) end_ns = success_ns + 3000 * MS;   /* the probe sleeps 3 s, then ENDs */
+        if (success_ns && batch_next == batch_count && idle_from == UINT64_MAX)
+            idle_from = (success_ns > last_batch_ns ? success_ns : last_batch_ns) + 1000 * MS;
         if (end_ns && vnow >= end_ns) break;
         struct proc *next = NULL;
         for (int i = 0; i < MAX_PROCS; i++) {
@@ -1024,6 +1033,8 @@ int main(int argc, char **argv)
     printf("PROBE generation=%u keys=%u motion=%u buttons=%u checkpoint=%d app=%d reports=%u presents=%u\n", probe.generation,
            probe.keys, probe.motion, probe.buttons, probe.checkpoint, probe.app, probe.reports, presents);
     printf("GATE keys=%u motion=%u buttons=%u\n", counts[0], counts[1], counts[2]);
+    printf("PRESENTS count=%u px=%llu idle_px=%llu idle_ms=%llu frame_px=%u\n", presents, (unsigned long long)present_px,
+           (unsigned long long)idle_px, (unsigned long long)(vnow > idle_from ? (vnow - idle_from) / MS : 0), WIDTH * HEIGHT);
     printf("PS2 dropped_bytes=%u leftover_batches=%u max_key_bytes=%u max_packets=%u reordered=%u\n", dropped_bytes,
            leftover_batches, max_kbd_bytes, max_packets, reordered);
     if (usb_poll_ns) printf("USB poll_ms=%llu compressed=%u reports=%u read_keys=%u pending_mouse=%u pending_keys=%u first_click_x=%d first_click_y=%d\n",

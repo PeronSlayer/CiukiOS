@@ -69,7 +69,15 @@ REPLAY_MODELS["late-start"] = ["--overhead-ms", "10", "--start-delay-ms", "8000"
                                "--app-cost-ms", "20"]
 # The F12 shell case also runs with a slow desktop turn (300 ms per loop): its final stage (the
 # demo's reap) then lands after the last input event, as on QEMU image d964369f (keys=0 there).
-SHELL_MODELS = {**REPLAY_MODELS, "slow-desktop": ["--start-delay-ms", "800", "--desktop-cost-ms", "300"]}
+SHELL_MODELS = {**REPLAY_MODELS, "slow-desktop": ["--start-delay-ms", "800", "--desktop-cost-ms", "300"],
+                # f2-65, image eb774bb9: the desktop repainted the idle screen on every loop at interactive
+                # priority and its normal-priority clients got under 1 % of the CPU. The Start-menu demo then
+                # answered its close request only after DESK_CLOSE_NS, the desktop terminated it (status 15),
+                # the case stayed at stage 5 and reported keys=0 motion=47 buttons=12. One second per program
+                # turn reproduces that failure without the demo's per-turn queue drain.
+                "slow-client": ["--start-delay-ms", "800", "--app-cost-ms", "1000"],
+                # A desktop loop of 1 ms: a settled interaction stage must not present frames on every loop.
+                "fast-desktop": ["--start-delay-ms", "800", "--desktop-cost-ms", "1"]}
 # The probe's interaction window (src/kernel/probes/f2_probes_desktop.c, interaction stage): 60 s, 180 s
 # once an app case (files=1/note=1) reports. The Task Manager scenario sends no app flag, so it keeps 60 s.
 TASKS_WINDOW_S = 60
@@ -704,7 +712,7 @@ class AppCaseReplayTests(unittest.TestCase):
             if head == "CHECKPOINT_AT": out["checkpoints"].append((int(rest.split()[0]), float(rest.split()[1])))
             elif head == "SYSTEM": out["system"].append(rest)
             elif head == "FILE": out["file"] = rest.split()
-            elif head in ("PROBE", "GATE", "PS2", "USB", "TIMING", "RESULT", "DESKTOP"):
+            elif head in ("PROBE", "GATE", "PS2", "USB", "TIMING", "RESULT", "DESKTOP", "PRESENTS"):
                 out[head] = dict(kv.split("=", 1) for kv in re.findall(r'(\w+=(?:"[^"]*"|\S+))', rest))
         print(f"REPLAY {case_id} {model}: " + " | ".join(l for l in result.stdout.splitlines()
                                                          if l.startswith(("PROBE", "GATE", "PS2", "TIMING", "CHECKPOINT_AT"))))
@@ -748,6 +756,15 @@ class AppCaseReplayTests(unittest.TestCase):
         for model, out in self.check("desktop-shell-qemu-t23", "shell", 0, TASKS_WINDOW_S, SHELL_MODELS):
             self.assertEqual(out["DESKTOP"]["notice"], '"shell stage 6 programs %d"' % (len(self.programs) - 1), model)
             self.assertEqual(int(out["PROBE"]["keys"]), 4, model)
+            # The demo was reaped with status 0 (not terminated by the close timeout).
+            self.assertRegex(out["text"], r"(?m)^PROC pid=105 ppid=3 name=demo state=0 status=0$", model)
+            # f2-65: once the case has settled the desktop presents only what changed (the clock at most).
+            # Before, the interaction stage presented a complete frame on every loop: 47 per second with
+            # the declared desktop, about 500 per second with the 1 ms one.
+            presents = {k: int(v) for k, v in out["PRESENTS"].items()}
+            self.assertGreaterEqual(presents["idle_ms"], 1000, model)
+            idle_frames_per_s = presents["idle_px"] * 1000 / presents["frame_px"] / presents["idle_ms"]
+            self.assertLessEqual(idle_frames_per_s, 2.0, (model, presents))
 
     def test_usb_shell_case_replay(self):
         """The actual UHCI/OHCI scripts, translated set-1 keys and source=USB,

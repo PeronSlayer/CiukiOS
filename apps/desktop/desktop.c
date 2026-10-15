@@ -1334,7 +1334,13 @@ int main(int argc, char **argv)
             snprintf(d->notice,sizeof(d->notice),"%s test checkpoint %d",d->app_test==DESK_APP_NOTE ? "CiukNote" : "Files",d->app_checkpoint);
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
         }
-        if (interaction) desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+        /* Interaction frames stay complete frames (the probe and the lead's pins hash them), but only when
+         * something changed. Repainting the idle screen on every 1 ms loop made the desktop CPU-bound in
+         * the interaction stage; at interactive priority (f0-21) it then starved its normal-priority
+         * clients: on image eb774bb9 the Start-menu demo could not answer its close request within
+         * DESK_CLOSE_NS, was terminated, and the F12 shell case stayed at stage 5 (keys=0, f2-65). */
+        if (interaction && (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty))
+            desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         int render_ready=gate || desk_frame_due(d,monotonic());
         uint64_t presents_before=d->presents; desktop_stage(STALL_RENDER);
         int redraw = render_ready ? desk_redraw(d) : -1;
