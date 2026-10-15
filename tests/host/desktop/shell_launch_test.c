@@ -716,6 +716,37 @@ static void test_menu_icons(void)
         }
         desk_menu_close(&d);
     }
+    /* Every settings shortcut is drawn from the same category catalog. */
+    unsigned seen[CP_PAGES]={0};
+    for (int cat=0;cat<CP_CATEGORIES;cat++) {
+        desk_menu_open(&d,SH_MENU_SETTINGS_CATEGORY+cat,0,0);
+        const struct sh_menu *menu=&d.sh.menus[0];
+        for (int k=0;k<menu->count;k++) {
+            const struct sh_item *it=&menu->items[k];
+            assert(it->action==SH_ACT_CONTROL && it->arg>0 && it->arg<=CP_PAGES);
+            assert(!seen[it->arg-1]++);
+            unsigned match=0;
+            for (unsigned a=0;a<CP_APPLETS;a++) if (cp_applets[a].page==it->arg-1)
+                match=cp_applets[a].category==cat && !strcmp(it->label,cp_applets[a].label) && !strcmp(it->icon,cp_applets[a].icon);
+            assert(match);
+        }
+    }
+    for (unsigned a=0;a<CP_APPLETS;a++) {
+        assert(seen[cp_applets[a].page]==1);
+        d.sh.menu_owner=cp_applets[a].page; desk_menu_open(&d,SH_MENU_TRAY_SETTINGS,0,0);
+        assert(d.sh.menus[0].count==3 && !strcmp(d.sh.menus[0].items[0].label,cp_categories[cp_applets[a].category].label) &&
+            !strcmp(d.sh.menus[0].items[2].label,cp_applets[a].label));
+    }
+    desk_menu_open(&d,SH_MENU_DESKTOP,0,0);
+    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","","Properties"};
+    assert(d.sh.menus[0].count==7);
+    for (unsigned k=0;k<7;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
+    assert(d.sh.menus[0].items[6].action==SH_ACT_CONTROL && d.sh.menus[0].items[6].arg==CP_DISPLAY+1);
+    desk_menu_open(&d,SH_MENU_NEW,0,0);assert(d.sh.menus[0].count==2);
+    /* Start > Settings > Input > Keyboard keeps keyboard submenu traversal. */
+    desk_menu_open(&d,SH_MENU_START,0,0);d.sh.menus[0].hot=item_at(&d.sh.menus[0],"Settings");key(&d,DU_KEY_RIGHT);
+    assert(d.sh.levels==2);d.sh.menus[1].hot=item_at(&d.sh.menus[1],"Input");key(&d,DU_KEY_RIGHT);
+    assert(d.sh.levels==3); key(&d,DU_KEY_LEFT); assert(d.sh.levels==2);
     desk_menu_open(&d,SH_MENU_START,0,0);
     const char *run=d.sh.menus[0].items[item_at(&d.sh.menus[0],"Run...")].icon;
     const char *settings=d.sh.menus[0].items[item_at(&d.sh.menus[0],"Settings")].icon;

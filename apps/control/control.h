@@ -6,10 +6,12 @@
 #ifndef CIUKI_CONTROL_H
 #define CIUKI_CONTROL_H
 #include "../libdeskui/deskui.h"
+#include "../libdeskui/textarea.h"
 #include "../desktop/settings.h"
 #include "../desktop/sounds.h"
 #include "../desktop/autoplay.h"
 #include "../desktop/wallpaper.h"
+#include "../desktop/settings_catalog.h"
 #include <ciuki/display.h>
 #include <ciuki/abi.h>
 #include <ciuki/font.h>
@@ -17,8 +19,10 @@
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
-enum { CP_HOME = -1, CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM,
-       CP_DEVICES, CP_DRIVERS, CP_NETWORK, CP_POWER, CP_ADAPTER, CP_FONTS, CP_AUTOPLAY, CP_PAGES };
+enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_DISPLAY_TABS };
+enum { CP_DISPLAY_TABS_ID = 960, CP_OK, CP_CANCEL, CP_CATEGORY, CP_POWER_ACTION, CP_OPEN_LOG, CP_LOG_PREV, CP_LOG_NEXT, CP_LOG_VIEW, CP_LOG_STATUS };
+#define CP_LOG_BYTES 8192u
+#define CP_LOG_FILE "/system/logs/BOOT.LOG"
 #define CP_FONTS_MAX 32
 #define CP_FONT_LIST 900
 struct cp_font_entry {
@@ -47,6 +51,10 @@ struct cp_host {
     int (*load_sounds)(void *, char *, size_t, size_t *);
     int (*save_sounds)(void *, const char *, size_t);
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
+    int (*engine)(void *, struct ciuki_accel_info *);
+    int (*network)(void *, struct ciuki_net_state *);
+    int (*log_read)(void *, uint32_t offset, char *, size_t cap, size_t *length, uint32_t *total);
+    int (*power)(void *); /* opens the shell's safe shutdown dialog */
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
     int (*autoplay_list)(void *, struct ap_preference *, unsigned);
     int (*autoplay_forget)(void *, const char *);
@@ -61,6 +69,15 @@ struct cp_app {
     struct du_ui *ui;
     struct cp_host host;
     struct ciuki_settings cfg;
+    struct ciuki_settings display_original;
+    int display_tab, display_session, display_dirty, display_preview, display_write;
+    int display_accept, display_leaving, close_pending;
+    int navigation_pending, next_page;
+    uint16_t display_original_mode;
+    int category, applet_pages[CP_PAGES];
+    struct du_item category_items[CP_CATEGORIES], display_tabs[CP_DISPLAY_TABS];
+    char engine_line[160];
+    struct du_textarea log; uint32_t log_offset, log_total; char log_status[96];
     struct ap_preference autoplay[AP_PREFS];
     struct du_item autoplay_items[AP_PREFS];
     unsigned autoplay_count, autoplay_selected;
@@ -86,7 +103,7 @@ struct cp_app {
     uint64_t snapshot_time;
     unsigned collapsed;
     uint32_t selected_device_id;
-    struct du_item applet_items[CP_PAGES], system_tabs[3];
+    struct du_item applet_items[CP_PAGES], system_tabs[4];
     struct du_item tree_items[CP_TREE_MAX], driver_items[CIUKI_DRIVERS_MAX], lease_items[CIUKI_LEASES_MAX];
     int tree_device[CP_TREE_MAX]; unsigned tree_count;
     char device_names[CIUKI_DEVICES_MAX][96];
@@ -124,6 +141,7 @@ const char *cp_device_state(unsigned);
 /* Preserve every other BOOT.CFG token, including test selectors. */
 int cp_boot_serial(const char *text, size_t length, int serial, char *out, size_t capacity);
 void cp_audio_result(struct cp_app *, int result);
+void cp_engine_refresh(struct cp_app *);
 int cp_display_refresh(struct cp_app *);
 void cp_display_sync(struct cp_app *);
 int cp_display_event(struct cp_app *, const struct du_event *);
@@ -131,6 +149,10 @@ void cp_display_result(struct cp_app *, int result);
 void cp_display_cancel(struct cp_app *);
 void cp_display_saved(struct cp_app *, int error);
 void cp_settings_saved(struct cp_app *, int error);
+int cp_display_store(struct cp_app *);
+void cp_display_accept(struct cp_app *);
+int cp_display_leave(struct cp_app *);
+int cp_close(struct cp_app *);
 void cp_adapter_paint(struct cp_app *, struct du_canvas *);
 const char *cp_adapter_name(uint16_t vendor, uint16_t device, char *out, size_t size);
 void cp_settings_message(struct ciuki_message *, uint32_t serial, unsigned request, int value, int flag);

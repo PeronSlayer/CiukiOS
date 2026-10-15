@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #define CP_T_PREVIEW 700   /* timer id of the deferred wallpaper preview (outside the widget ids) */
 enum {
@@ -21,9 +22,7 @@ enum {
     C_DETAILS = 130, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay"};
-static const char *const page_labels[CP_PAGES] = {"Display", "Mouse", "Keyboard", "Sounds", "Date & Time", "System", "Device Manager", "Drivers", "Network", "Power", "Adapter", "Fonts", "AutoPlay"};
-static const char *const page_icons[CP_PAGES] = {"device:display", "device:mouse", "device:keyboard", "device:sound-card",
-    "settings:date-time", "device:computer", "settings:peripherals", "system-software-update", "device:network", "system-shutdown", "device:display", "preferences-desktop-font", "drive-removable-media"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
@@ -34,6 +33,7 @@ static const uint32_t swatches[6] = {0x375564u, 0x2f6f6bu, 0x3a3f6bu, 0x6b4f3au,
 static const int mode_order[CP_POSITIONS] = {CFG_WALL_CENTER, CFG_WALL_TILE, CFG_WALL_STRETCH, CFG_WALL_FIT, CFG_WALL_FILL};
 int cp_page_index(const char *name)
 {
+    if (name && !strcmp(name, "storage")) return CP_AUTOPLAY;
     for (int i = 0; i < CP_PAGES; i++) if (name && !strcmp(name, page_names[i])) return i;
     return CP_HOME;
 }
@@ -53,26 +53,99 @@ static void changed(struct cp_app *a)
 {
     static struct ciuki_settings now;
     load(a, &now);            /* keep what the desktop wrote meanwhile: recent documents, unknown keys */
-    memcpy(now.theme, a->cfg.theme, sizeof(now.theme));
-    memcpy(now.wallpaper, a->cfg.wallpaper, sizeof(now.wallpaper));
-    now.wallpaper_mode = a->cfg.wallpaper_mode; now.desktop_color = a->cfg.desktop_color;
-    now.clock_24h = a->cfg.clock_24h; now.clock_seconds = a->cfg.clock_seconds; now.desktop_icons = a->cfg.desktop_icons;
-    now.mouse_speed = a->cfg.mouse_speed; now.double_click_ms = a->cfg.double_click_ms; now.keyboard = a->cfg.keyboard;
+    if (a->page==CP_MOUSE) { now.mouse_speed=a->cfg.mouse_speed; now.double_click_ms=a->cfg.double_click_ms; }
+    else if (a->page==CP_KEYBOARD) now.keyboard=a->cfg.keyboard;
+    else if (a->page==CP_DATETIME) { now.clock_24h=a->cfg.clock_24h; now.clock_seconds=a->cfg.clock_seconds; }
     static char out[CFG_TEXT_MAX];
     size_t n = cfg_format(&now, out, sizeof(out));
     if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) { text(a, C_STATUS, "The settings could not be saved."); return; }
     int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
     text(a, C_STATUS, a->host.save_async ? "Saving settings..." : r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
 }
+/* Display previews use the existing durable settings/reload path. Keep the
+ * entry snapshot until OK; rollback merges only this applet's owned keys. */
+static void display_copy(struct ciuki_settings *to, const struct ciuki_settings *from)
+{
+    memcpy(to->theme, from->theme, sizeof(to->theme));
+    memcpy(to->wallpaper, from->wallpaper, sizeof(to->wallpaper));
+    to->wallpaper_mode = from->wallpaper_mode; to->desktop_color = from->desktop_color;
+    to->desktop_icons = from->desktop_icons; to->display_mode = from->display_mode;
+}
+int cp_display_store(struct cp_app *a)
+{
+    static struct ciuki_settings current; static char out[CFG_TEXT_MAX];
+    load(a, &current); display_copy(&current, &a->cfg);
+    size_t n = cfg_format(&current, out, sizeof(out));
+    if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) {
+        text(a, C_STATUS, "Display settings could not be saved."); return -1;
+    }
+    a->display_preview = 1; a->display_dirty = 0;
+    a->display_write = a->host.save_async;
+    if (a->host.apply) a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0);
+    text(a, C_STATUS, a->display_write ? "Saving display preview..." : "Preview applied. Cancel restores your previous settings.");
+    return 0;
+}
+void cp_display_accept(struct cp_app *a)
+{
+    if (a->display_write || a->mode_state) return;
+    a->display_session = a->display_preview = a->display_accept = 0;
+    a->quit = 1;
+}
+int cp_display_leave(struct cp_app *a)
+{
+    if (!a->display_session) return 1;
+    if (a->display_write || a->mode_state == CP_MODE_SAVE) {
+        text(a, C_STATUS, "Waiting for display settings to finish saving..."); return 0;
+    }
+    if (a->mode_state) { cp_display_cancel(a); return 0; }
+    if (a->display_preview) {
+        display_copy(&a->cfg, &a->display_original);
+        a->display_dirty=1;
+        if (cp_display_store(a)) return 0;
+        a->display_preview = 0;
+        a->display_leaving = 1;
+        if (a->display_write) return 0;
+    }
+    if (a->display_leaving && a->display_original_mode && a->display_ok) {
+        uint16_t current = 0;
+        for (unsigned i=0;i<a->display.mode_count;i++) if (a->display.modes[i].current) current=a->display.modes[i].id;
+        if (current != a->display_original_mode) {
+            a->previous_mode = a->display_original_mode;
+            a->mode_state = CP_MODE_WAIT; cp_display_cancel(a);
+            if (!a->display_leaving) return 0;
+            du_timer_start(a->ui, CP_MODE_TIMER, 1000000000ull, 1);
+        }
+    }
+    if (a->mode_state) return 0;
+    display_copy(&a->cfg, &a->display_original);
+    du_theme_use(a->ui, a->cfg.theme);
+    a->display_session = a->display_leaving = a->display_dirty = 0;
+    return 1;
+}
+int cp_close(struct cp_app *a)
+{
+    a->close_pending = 1; a->display_accept = a->navigation_pending = 0;
+    if (!cp_display_leave(a)) return 0;
+    a->close_pending = 0; a->quit = 1; return 1;
+}
 void cp_settings_saved(struct cp_app *a, int error)
 {
+    if (a->display_write) {
+        a->display_write = 0;
+        if (error) {
+            a->display_accept = 0; a->display_dirty = 1; a->close_pending = a->navigation_pending = 0;
+            if (a->display_leaving) { a->display_preview=1; a->display_leaving=0; }
+        }
+    }
     if (a->mode_state==CP_MODE_SAVE) { cp_display_saved(a,error); return; }
+    if (!error && a->display_accept) cp_display_accept(a);
     if (error) {
         if (error<0) error=-error;
         char body[256]; snprintf(body,sizeof(body),"%s (%d)",strerror(error),error);
         text(a,C_STATUS,body);
         du_message(a->ui,D_INFO,"Settings not saved",body,DU_DLG_ICON_ERROR,NULL,0,0,0);
     } else text(a,C_STATUS,"Settings saved and applied.");
+    cp_display_sync(a);
 }
 
 /* ---- display preview ---- */
@@ -119,7 +192,7 @@ static void paint(struct du_ui *u, void *user)
 {
     struct cp_app *a = user;
     struct du_canvas *c = &u->canvas;
-    if (a->page == CP_DISPLAY) {
+    if (a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND) {
         if (!a->preview_valid) {
             /* An image wallpaper not decoded yet: paint the desktop colour now and
              * decode after this frame (timer), so the window never opens black
@@ -161,8 +234,14 @@ static void paint(struct du_ui *u, void *user)
         du_well(c, (struct du_rect){24, 44, 452, 54}, DU_WINDOW);
         int font = desk_theme->font_large;
         du_text_font(c, font, 24 + (452 - du_text_width_font(font, a->clock_line)) / 2, 71 - desk_font_cap(font) / 2, a->clock_line, DU_SELECT);
-    } else if (a->page == CP_ADAPTER) cp_adapter_paint(a, c);
-    else if (a->page == CP_FONTS) cp_fonts_paint(a, c);
+    } else if (a->page == CP_DISPLAY && a->display_tab == CP_APPEARANCE) {
+        const struct desk_theme *t=chosen(a);
+        uint32_t colours[]={t->face,t->window,t->title[0],t->select,t->accent};
+        for (unsigned k=0;k<5;k++) { put(c,240+(int)k*42,112,34,18,colours[k]); du_outline(c,(struct du_rect){240+(int)k*42,112,34,18},t->outline); }
+        char roles[128]; snprintf(roles,sizeof(roles),"UI: %s; captions: %s",desk_font(t->font_ui)->name,desk_font(t->font_title)->name);
+        du_text_fit(c,240,138,CP_WIDTH-264,roles,t->ink);
+        cp_fonts_paint(a,c);
+    }
     else if (a->page == CP_SYSTEM && a->system_tab == 0 && a->host.portrait) {
         du_edge(c, (struct du_rect){22, 46, 100, 100}, DU_SUNKEN);
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) put(c, 24 + x, 48 + y, 1, 1, a->host.portrait[(y * 256 / 96) * 256 + x * 256 / 96]);
@@ -253,6 +332,10 @@ void cp_audio_result(struct cp_app *a, int result)
 }
 void cp_tick(struct cp_app *a)
 {
+    if (a->close_pending && !a->display_write && !a->mode_state) cp_close(a);
+    if (a->navigation_pending && !a->display_write && !a->mode_state) {
+        int page=a->next_page; a->navigation_pending=0; cp_open(a,page);
+    }
     if (a->page == CP_SOUNDS && a->host.mixer && a->ui->capture < 0) {
         int volume, mute;
         if (!a->host.mixer(a->host.ctx, &volume, &mute) &&
@@ -281,10 +364,44 @@ void cp_tick(struct cp_app *a)
         text(a, C_UPTIME, uptime);
     }
 }
+static void log_refresh(struct cp_app *a)
+{
+    static char bytes[CP_LOG_BYTES]; size_t length=0; uint32_t total=0;
+    if (!a->log.text && du_ta_init(&a->log,CP_LOG_BYTES)) {
+        snprintf(a->log_status,sizeof(a->log_status),"The log view could not be allocated."); return;
+    }
+    a->log.readonly=1;
+    int error=a->host.log_read ? a->host.log_read(a->host.ctx,a->log_offset,bytes,sizeof(bytes),&length,&total) : -ENOSYS;
+    if (!error && a->log_offset>=total && a->log_offset) {
+        a->log_offset=total ? (total-1)/CP_LOG_BYTES*CP_LOG_BYTES : 0;
+        error=a->host.log_read(a->host.ctx,a->log_offset,bytes,sizeof(bytes),&length,&total);
+    }
+    if (error || length>sizeof(bytes) || a->log_offset>total || length>total-a->log_offset) {
+        if (!error) error=-EIO;
+        snprintf(a->log_status,sizeof(a->log_status),"Boot log unavailable: %s (%d)",strerror(error<0 ? -error : error),error<0 ? -error : error);
+        a->log_total=0; du_ta_set_text(&a->log,"",0);
+    } else {
+        a->log_total=total;
+        for (size_t k=0;k<length;k++) if (!bytes[k]) bytes[k]=' ';
+        du_ta_set_text(&a->log,bytes,length);
+        snprintf(a->log_status,sizeof(a->log_status),"Boot log (read-only): bytes %u-%u of %u",length ? a->log_offset+1 : 0,a->log_offset+(unsigned)length,total);
+    }
+    text(a,CP_LOG_STATUS,a->log_status);
+    struct du_widget *w=du_get(a->ui,CP_LOG_PREV); if (w) w->disabled=!a->log_total || !a->log_offset;
+    w=du_get(a->ui,CP_LOG_NEXT); if (w) w->disabled=!a->log_total || a->log_offset+a->log.len>=a->log_total;
+    a->ui->dirty=1;
+}
 static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct cp_app *a = user;
     int save = 0;
+    if (e->type == DU_EV_KEY && e->key == DU_KEY_ESC) { cp_close(a); return; }
+    if (e->type == DU_EV_KEY && e->key == DU_KEY_ENTER && a->page == CP_DISPLAY) {
+        struct du_event ok = {.type=DU_EV_ACTIVATE,.id=CP_OK}; event(u,&ok,user); return;
+    }
+    if ((e->id==CP_CANCEL || e->id==C_CLOSE) && e->type==DU_EV_ACTIVATE) { cp_close(a); return; }
+    if (a->display_write && e->id==C_BACK && e->type==DU_EV_ACTIVATE) { a->navigation_pending=1; a->next_page=CP_HOME; return; }
+    if (a->display_write && e->type != DU_EV_TICK) return;
     if (cp_display_event(a, e)) return;
     if (cp_fonts_event(a, e)) return;
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
@@ -303,7 +420,40 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case 952: if (e->type==DU_EV_ACTIVATE) build(a); break;
     case C_BACK: if (e->type == DU_EV_ACTIVATE) cp_open(a, CP_HOME); break;
-    case C_APPLETS: if (e->type == DU_EV_OPEN && e->index >= 0 && e->index < CP_PAGES) cp_open(a, e->index); break;
+    case CP_CATEGORY:
+        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CP_CATEGORIES) {
+            a->category=e->index; build(a); du_focus(u,CP_CATEGORY);
+        }
+        break;
+    case C_APPLETS:
+        if (e->type == DU_EV_OPEN && e->index >= 0 && (unsigned)e->index < du_get(u,C_APPLETS)->count)
+            cp_open(a, a->applet_pages[e->index]);
+        break;
+    case CP_DISPLAY_TABS_ID:
+        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CP_DISPLAY_TABS && !a->mode_state) {
+            a->display_tab=e->index; build(a); du_focus(u,CP_DISPLAY_TABS_ID);
+        }
+        break;
+    case CP_OK:
+        if (e->type == DU_EV_ACTIVATE) {
+            a->display_accept=1;
+            struct du_event apply={.type=DU_EV_ACTIVATE,.id=CP_APPLY};
+            cp_display_event(a,&apply);
+            if (a->display_accept && !a->display_dirty && !a->display_write && !a->mode_state) cp_display_accept(a);
+        }
+        break;
+    case CP_CANCEL: if (e->type == DU_EV_ACTIVATE) cp_close(a); break;
+    case CP_LOG_PREV: case CP_LOG_NEXT: case CP_OPEN_LOG:
+        if (e->type==DU_EV_ACTIVATE) {
+            if (e->id==CP_LOG_PREV && a->log_offset>=CP_LOG_BYTES) a->log_offset-=CP_LOG_BYTES;
+            if (e->id==CP_LOG_NEXT && a->log_offset+a->log.len<a->log_total) a->log_offset+=CP_LOG_BYTES;
+            log_refresh(a);
+        }
+        break;
+    case CP_POWER_ACTION:
+        if (e->type == DU_EV_ACTIVATE && a->host.power && a->host.power(a->host.ctx))
+            text(a,C_STATUS,"The shutdown dialog could not be opened.");
+        break;
     case C_DRIVERS: case C_LEASES:
         if (e->type == DU_EV_SELECT || e->type == DU_EV_OPEN) {
             a->detail_list = e->id; a->detail_index = e->index < 0 ? 0 : (unsigned)e->index;
@@ -312,7 +462,10 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case C_DETAILS: if (e->type == DU_EV_ACTIVATE) details(a); break;
     case C_SYSTEM_TABS:
-        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < 3) { a->system_tab = e->index; build(a); }
+        if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < 4) {
+            a->system_tab = e->index;
+            cp_open(a,e->index==1 ? CP_DEVICES : e->index==3 ? CP_DRIVERS : CP_SYSTEM);
+        }
         break;
     case C_REFRESH: if (e->type == DU_EV_ACTIVATE) { refresh(a); build(a); } break;
     case C_TREE:
@@ -346,11 +499,10 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             else text(a, C_STATUS, "Saved. Serial logging changes at the next boot.");
         }
         break;
-    case C_CLOSE: if (e->type == DU_EV_ACTIVATE) { if (a->mode_state!=CP_MODE_SAVE) cp_display_cancel(a); a->quit = 1; } break;
+    case C_CLOSE: if (e->type == DU_EV_ACTIVATE) cp_close(a); break;
     case C_THEME:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CFG_THEMES) {
             snprintf(a->cfg.theme, sizeof(a->cfg.theme), "%s", cfg_theme_names[e->index]); save = 1; a->preview_valid = 0;
-            du_theme_use(a->ui, a->cfg.theme);   /* this window at once; the desktop on DESK_SETTINGS reload, others by poll */
         }
         break;
     case C_WALL:
@@ -420,7 +572,10 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     case C_SECONDS: if (e->type == DU_EV_ACTIVATE) { a->cfg.clock_seconds = !a->cfg.clock_seconds; save = 1; cp_tick(a); } break;
     default: break;
     }
-    if (save) changed(a);
+    if (save && a->page == CP_DISPLAY) {
+        a->display_dirty = 1;
+        text(a,C_STATUS,"Choose Apply to preview, OK to keep, or Cancel to restore.");
+    } else if (save) changed(a);
     sync(a);
 }
 static void items(struct du_item *out, char labels[][48], unsigned count, const char *(*name)(struct cp_app *, unsigned), struct cp_app *a)
@@ -690,6 +845,12 @@ static void details(struct cp_app *a)
 static void system_pages(struct cp_app *a)
 {
     struct du_widget *w; struct du_ui *u = a->ui; char line[512];
+    if (a->page == CP_SYSTEM || a->page == CP_DEVICES || a->page == CP_DRIVERS) {
+        static const char *const tabs[] = {"General", "Hardware check", "Logs", "Drivers"};
+        for (int k=0;k<4;k++) a->system_tabs[k].text[0]=tabs[k];
+        w=du_get(u,C_TABS); w->id=C_SYSTEM_TABS; w->items=a->system_tabs; w->count=4;
+        w->active=(unsigned)a->system_tab;
+    }
     if (a->page == CP_DEVICES) {
         w = add(a, DU_TREE, C_TREE, 24, 40, 452, 270, ""); w->inactive_selection = 1;
         w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
@@ -724,10 +885,6 @@ static void system_pages(struct cp_app *a)
         add(a, DU_BUTTON, C_DETAILS, 24, 320, 110, 24, "Details...")->anchors = DU_ANCHOR_BOTTOM;
         add(a, DU_BUTTON, C_REFRESH, 366, 320, 110, 24, "Refresh")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
     } else if (a->page == CP_SYSTEM) {
-        static const char *const tabs[] = {"General", "Hardware", "Advanced"};
-        for (int k = 0; k < 3; k++) a->system_tabs[k].text[0] = tabs[k];
-        /* System uses its own tabs instead of the applet's single title tab. */
-        w = du_get(u, C_TABS); w->id = C_SYSTEM_TABS; w->items = a->system_tabs; w->count = 3; w->active = (unsigned)a->system_tab;
         if (a->system_tab == 0) {
             snprintf(line, sizeof(line), "Version %s", a->host.version[0] ? a->host.version : "unknown"); add(a, DU_LABEL, C_SYS0, 140, 74, 336, 14, line);
             snprintf(line, sizeof(line), "Build %s", a->host.build[0] ? a->host.build : "unknown"); add(a, DU_LABEL, C_SYS1, 140, 92, 336, 14, line);
@@ -741,21 +898,11 @@ static void system_pages(struct cp_app *a)
             add(a, DU_LABEL, C_SYS3, 24, 240, 452, 14, line);
             add(a, DU_LABEL, C_UPTIME, 24, 266, 452, 14, "Uptime unavailable.");
             add(a, DU_LABEL, CP_SUMMARY, 24, 296, CP_WIDTH - 48, 14, "");
-        } else if (a->system_tab == 1) {
-            add(a, DU_LABEL, C_SYS0, 24, 44, 452, 14, "Hardware summary");
-            for (unsigned cls = 0; cls < CIUKI_DEVICE_CLASSES; cls++) {
-                unsigned count = 0, ready = 0;
-                if (a->devices_ok) for (unsigned k = 0; k < a->devices.count; k++) if (a->devices.devices[k].class_id == cls) {
-                    count++; if (a->devices.devices[k].state == CIUKI_DEVICE_READY) ready++;
-                }
-                snprintf(line, sizeof(line), "%s: %u listed, %u ready", cp_device_class(cls), count, ready);
-                add(a, DU_LABEL, 300 + (int)cls, 24, 76 + (int)cls * 24, 452, 14, a->devices_ok ? line : "Inventory unavailable.");
-            }
         } else {
-            snprintf(line, sizeof(line), "Current boot flags: 0x%08X", a->devices.boot_flags); add(a, DU_LABEL, C_FLAGS, 24, 44, 452, 14, a->devices_ok ? line : "Boot flags unavailable.");
-            snprintf(line, sizeof(line), "Input policy: %s", a->devices.input_policy ? "firmware-first" : "native"); add(a, DU_LABEL, C_SYS0, 24, 66, 452, 14, a->devices_ok ? line : "Input policy unavailable.");
-            add(a, DU_LABEL, C_SYS1, 24, 94, 452, 14, "Boot options (read-only):");
-            add(a, DU_LABEL, C_BOOT_OPTIONS, 24, 116, 452, 14, a->devices_ok ? a->devices.boot_options : "Unavailable");
+            snprintf(line, sizeof(line), "Current boot flags: 0x%08X", a->devices.boot_flags); add(a, DU_LABEL, C_FLAGS, 24, 80, 280, 14, a->devices_ok ? line : "Boot flags unavailable.");
+            snprintf(line, sizeof(line), "Input policy: %s", a->devices.input_policy ? "firmware-first" : "native"); add(a, DU_LABEL, C_SYS0, 320, 80, 212, 14, a->devices_ok ? line : "Input policy unavailable.");
+            add(a, DU_LABEL, C_SYS1, 24, 104, 128, 14, "Boot options:");
+            add(a, DU_LABEL, C_BOOT_OPTIONS, 152, 104, 380, 14, a->devices_ok ? a->devices.boot_options : "Unavailable");
             a->boot_length = 0;
             a->boot_ok = a->host.boot_load && !a->host.boot_load(a->host.ctx, a->boot_text, sizeof(a->boot_text), &a->boot_length);
             char check[CP_BOOT_MAX];
@@ -770,21 +917,35 @@ static void system_pages(struct cp_app *a)
                 for (size_t k = 0; k + 8 <= a->boot_length; k++) if ((!k || a->boot_text[k - 1] == ' ' || a->boot_text[k - 1] == '\n' || a->boot_text[k - 1] == '\r' || a->boot_text[k - 1] == '\t') &&
                     !memcmp(a->boot_text + k, "serial=", 7) && (k + 8 == a->boot_length || a->boot_text[k + 8] == ' ' || a->boot_text[k + 8] == '\n' || a->boot_text[k + 8] == '\r' || a->boot_text[k + 8] == '\t')) if (a->boot_text[k + 7] == '0') a->serial_next = 0;
             }
-            w = add(a, DU_CHECKBOX, C_SERIAL, 24, 174, 452, 24, "Serial log at next boot"); w->value = a->serial_next; w->disabled = !a->boot_ok;
-            w = add(a, DU_BUTTON, C_BOOT_APPLY, 24, 212, 140, 24, "Apply to BOOT.CFG"); w->disabled = !a->boot_ok || !a->host.boot_save;
-            add(a, DU_LABEL, C_SYS2, 24, 254, 452, 14, "This choice takes effect after restarting CiukiOS.");
-            if (!a->boot_ok) add(a, DU_LABEL, C_SYS3, 24, 280, 452, 14, "BOOT.CFG is unavailable or exceeds the loader limit.");
+            w = add(a, DU_CHECKBOX, C_SERIAL, 24, 44, 300, 24, "Serial log at next boot"); w->value = a->serial_next; w->disabled = !a->boot_ok;
+            w = add(a, DU_BUTTON, C_BOOT_APPLY, 352, 44, 180, 24, "Apply to BOOT.CFG"); w->disabled = !a->boot_ok || !a->host.boot_save;
+            add(a,DU_LABEL,C_SYS2,24,126,508,14,a->boot_ok ? "Serial logging changes take effect after restarting CiukiOS." : "BOOT.CFG is unavailable; the log view remains read-only.");
+            log_refresh(a);
+            add(a,DU_LABEL,CP_LOG_STATUS,24,154,508,16,a->log_status)->anchors=DU_ANCHOR_GROW_X;
+            w=add(a,a->log.text ? DU_TEXTAREA : DU_LABEL,CP_LOG_VIEW,24,176,CP_WIDTH-48,140,"");
+            w->data=a->log.text ? &a->log : NULL; w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
+            add(a,DU_BUTTON,CP_LOG_PREV,24,328,88,24,"Previous")->anchors=DU_ANCHOR_BOTTOM;
+            add(a,DU_BUTTON,CP_OPEN_LOG,120,328,88,24,"Refresh log")->anchors=DU_ANCHOR_BOTTOM;
+            add(a,DU_BUTTON,CP_LOG_NEXT,216,328,88,24,"Next")->anchors=DU_ANCHOR_BOTTOM;
+            du_get(u,CP_LOG_PREV)->disabled=!a->log_total || !a->log_offset;
+            du_get(u,CP_LOG_NEXT)->disabled=!a->log_total || a->log_offset+a->log.len>=a->log_total;
+
         }
     } else if (a->page == CP_ADAPTER) {
         add(a, DU_BUTTON, CP_REFRESH, 24, 324, 84, 24, "Refresh");
     } else if (a->page == CP_NETWORK) {
-        add(a, DU_LABEL, C_SYS0, 24, 48, 452, 14, "Network settings will be available in F6.");
-        add(a, DU_LABEL, C_SYS1, 24, 76, 452, 14, "Detected adapters are listed in Device Manager.");
+        struct ciuki_net_state net = {0};
+        int valid=a->host.network && !a->host.network(a->host.ctx,&net);
+        snprintf(line,sizeof(line),"%s", !valid ? "Network status unavailable." : !net.present ? "No network adapter detected." :
+            net.link == CIUKI_NET_LINK_UP ? "Network cable connected." : "Network cable disconnected.");
+        add(a, DU_LABEL, C_SYS0, 24, 48, 480, 16, line);
+        add(a, DU_LABEL, C_SYS1, 24, 80, 480, 16, "Address configuration is not available yet.");
     } else if (a->page == CP_POWER) {
         add(a, DU_LABEL, C_SYS0, 24, 48, 452, 14, "Power and restart");
-        add(a, DU_LABEL, C_SYS1, 24, 82, 452, 14, "Use Start > Shut Down to restart or turn off this computer.");
+        add(a, DU_LABEL, C_SYS1, 24, 82, 452, 14, "Restart or turn off this computer safely.");
         add(a, DU_LABEL, C_SYS2, 24, 110, 452, 14, "CiukiOS closes programs and flushes disks before stopping.");
-        add(a, DU_LABEL, C_SYS3, 24, 148, 452, 14, "Standby and automatic power saving are not available yet.");
+        add(a, DU_LABEL, C_SYS3, 24, 148, 500, 14, "Standby and automatic power saving are not available yet.");
+        add(a, DU_BUTTON, CP_POWER_ACTION, 24, 190, 160, 24, "Shut Down...")->disabled=!a->host.power;
     }
 }
 
@@ -796,14 +957,23 @@ static void build(struct cp_app *a)
     struct du_widget *w;
     if (a->page == CP_HOME) {
         add(a, DU_LABEL, C_TABS, 12, 12, 476, 16, "Control Panel");
-        for (int k = 0; k < CP_PAGES; k++) {
-            struct du_item *it = &a->applet_items[k]; memset(it, 0, sizeof(*it));
-            it->text[0] = page_labels[k]; it->icon16 = du_icon_argb(du_icon_name(page_icons[k]), 16);
-            it->icon32 = du_icon_argb(du_icon_name(page_icons[k]), 32);
+        for (int k=0;k<CP_CATEGORIES;k++) {
+            a->category_items[k]=(struct du_item){.text={cp_categories[k].label},
+                .icon16=du_icon_argb(du_icon_name(cp_categories[k].icon),16),.selected=k==a->category};
         }
-        w = add(a, DU_LISTVIEW, C_APPLETS, 8, 36, CP_WIDTH - 16, CP_HEIGHT - 84, "");
-        w->items = a->applet_items; w->count = CP_PAGES; w->view = DU_ICONS;
-        w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
+        w=add(a,DU_TREE,CP_CATEGORY,8,36,182,CP_HEIGHT-96,"");
+        w->items=a->category_items; w->count=CP_CATEGORIES; w->active=(unsigned)a->category;
+        w->inactive_selection=1; w->anchors=DU_ANCHOR_GROW_Y;
+        unsigned count=0;
+        for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].category==a->category) {
+            a->applet_pages[count]=cp_applets[k].page;
+            a->applet_items[count++]=(struct du_item){.text={cp_applets[k].label},
+                .icon16=du_icon_argb(du_icon_name(cp_applets[k].icon),16)};
+        }
+        w=add(a,DU_LISTVIEW,C_APPLETS,198,36,CP_WIDTH-206,CP_HEIGHT-96,"");
+        w->items=a->applet_items; w->count=count; w->view=DU_DETAILS;
+        w->column_count=1; w->columns[0]=(struct du_column){cp_categories[a->category].label,CP_WIDTH-230,0};
+        w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
     } else {
         a->tab_items[0].text[0] = page_labels[a->page];
         w = add(a, DU_TABS, C_TABS, 8, 8, CP_WIDTH - 16, CP_HEIGHT - 64, "");
@@ -811,32 +981,52 @@ static void build(struct cp_app *a)
         w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
         add(a, DU_BUTTON, C_BACK, 12, CP_HEIGHT - 34, 110, 24, "Control Panel")->anchors = DU_ANCHOR_BOTTOM;
     }
-    add(a, DU_BUTTON, C_CLOSE, CP_WIDTH - 88, CP_HEIGHT - 34, 80, 24, "Close")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+    if (a->page == CP_DISPLAY) {
+        add(a,DU_BUTTON,CP_OK,CP_WIDTH-272,CP_HEIGHT-34,80,24,"OK")->anchors=DU_ANCHOR_RIGHT|DU_ANCHOR_BOTTOM;
+        du_get(u,CP_OK)->def=1;
+        add(a,DU_BUTTON,CP_CANCEL,CP_WIDTH-184,CP_HEIGHT-34,80,24,"Cancel")->anchors=DU_ANCHOR_RIGHT|DU_ANCHOR_BOTTOM;
+        add(a,DU_BUTTON,CP_APPLY,CP_WIDTH-96,CP_HEIGHT-34,88,24,"Apply")->anchors=DU_ANCHOR_RIGHT|DU_ANCHOR_BOTTOM;
+    } else add(a, DU_BUTTON, C_CLOSE, CP_WIDTH - 88, CP_HEIGHT - 34, 80, 24, "Close")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
     add(a, DU_LABEL, C_STATUS, 12, CP_HEIGHT - 52, 476, 16, a->status)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
     if (a->page == CP_HOME) text(a, C_STATUS, "Open an applet to change its settings.");
     if (a->page == CP_DISPLAY) {
-    /* Display */
-    add(a, DU_LABEL, C_THEME_L, 248, 40, 200, 14, "&Theme:");
-    for (int k = 0; k < CFG_THEMES; k++) { memset(&a->theme_items[k], 0, sizeof(a->theme_items[k])); a->theme_items[k].text[0] = cfg_theme_names[k]; }
-    w = add(a, DU_LISTVIEW, C_THEME, 248, 56, 228, 72, ""); w->items = a->theme_items; w->count = CFG_THEMES; list_style(w, "Theme");
-    add(a, DU_LABEL, C_WALL_L, 248, 136, 200, 14, "&Wallpaper:");
-    unsigned walls = 2 + DESK_BUILTIN_WALLPAPERS + a->wall_count;
-    items(a->wall_items, a->wall_labels, walls, wall_label, a);
-    for (unsigned k = 0; k < walls; k++) a->wall_items[k].icon16 = NULL;
-    w = add(a, DU_LISTVIEW, C_WALL, 248, 152, CP_WIDTH - 272, 22 + 2 * DU_ROW, ""); w->items = a->wall_items; w->count = walls; list_style(w, "Wallpaper");
-    add(a, DU_LABEL, C_POS_L, 24, 224, 100, 14, "Position:");
-    /* Under the 208 px monitor: three 68 px buttons per row, 2 px apart. */
-    static const char *const pos[CP_POSITIONS] = {"Center", "Tile", "Stretch", "Fit", "Fill"};
-    for (int k = 0; k < CP_POSITIONS; k++) add(a, DU_BUTTON, C_POS0 + k, 24 + k % 3 * 70, 240 + k / 3 * 24, 68, 22, pos[k]);
-    add(a, DU_LABEL, C_COL_L, 24, 296, 100, 14, "Desktop colour:");
-    for (int k = 0; k < 6; k++) add(a, DU_BUTTON, C_COL0 + k, 24 + k * 34, 312, 30, 24, "");
-    add(a, DU_BUTTON, C_ICONS, 248, 212, CP_WIDTH - 272, 24, "");
-    add(a, DU_LABEL, CP_AREA_LABEL, 248, 240, CP_WIDTH - 272, 14, "Screen area:");
-    w = add(a, DU_LISTVIEW, CP_AREA, 248, 256, CP_WIDTH - 272, 22 + DU_ROW, ""); w->items = a->area_items; list_style(w, "Resolution");
-    add(a, DU_LABEL, CP_DEPTH_LABEL, 248, 306, CP_WIDTH - 272, 14, "Colours:");
-    w = add(a, DU_LISTVIEW, CP_DEPTH, 248, 322, CP_WIDTH - 272, 22 + DU_ROW, ""); w->items = a->depth_items; list_style(w, "Colour depth");
-    add(a, DU_BUTTON, CP_APPLY, 24, 338, 84, 24, "Apply");
-    add(a, DU_LABEL, CP_MODE_NOTE, 116, 342, 116, 14, "");
+        static const char *const tabs[]={"Background","Appearance","Settings"};
+        for (int k=0;k<CP_DISPLAY_TABS;k++) a->display_tabs[k].text[0]=tabs[k];
+        w=du_get(u,C_TABS); w->id=CP_DISPLAY_TABS_ID; w->items=a->display_tabs;
+        w->count=CP_DISPLAY_TABS; w->active=(unsigned)a->display_tab; w->disabled=a->mode_state!=0;
+        if (a->display_tab==CP_BACKGROUND) {
+            add(a,DU_LABEL,C_WALL_L,248,44,240,16,"&Picture:");
+            unsigned walls=2+DESK_BUILTIN_WALLPAPERS+a->wall_count;
+            items(a->wall_items,a->wall_labels,walls,wall_label,a);
+            for (unsigned k=0;k<walls;k++) a->wall_items[k].icon16=NULL;
+            w=add(a,DU_LISTVIEW,C_WALL,248,64,CP_WIDTH-272,138,"");
+            w->items=a->wall_items; w->count=walls; list_style(w,"Wallpaper"); w->anchors=DU_ANCHOR_GROW_X;
+            add(a,DU_LABEL,C_POS_L,24,224,100,14,"Position:");
+            static const char *const pos[CP_POSITIONS]={"Center","Tile","Stretch","Fit","Fill"};
+            for (int k=0;k<CP_POSITIONS;k++) add(a,DU_BUTTON,C_POS0+k,24+k%3*70,240+k/3*24,68,22,pos[k]);
+            add(a,DU_LABEL,C_COL_L,24,296,180,14,"Desktop colour:");
+            for (int k=0;k<6;k++) add(a,DU_BUTTON,C_COL0+k,24+k*34,312,30,24,"");
+            add(a,DU_BUTTON,C_ICONS,248,224,CP_WIDTH-272,24,"")->anchors=DU_ANCHOR_GROW_X;
+        } else if (a->display_tab==CP_APPEARANCE) {
+            add(a,DU_LABEL,C_THEME_L,24,44,200,16,"&Theme:");
+            for (int k=0;k<CFG_THEMES;k++) a->theme_items[k]=(struct du_item){.text={cfg_theme_names[k]}};
+            w=add(a,DU_LISTVIEW,C_THEME,24,64,200,84,""); w->items=a->theme_items; w->count=CFG_THEMES;
+            list_style(w,"Theme");
+            add(a,DU_LABEL,970,240,64,292,16,"Colours and UI fonts follow the theme.");
+            add(a,DU_LABEL,971,240,88,292,16,"Installed fonts can be previewed below.");
+            cp_fonts_build(a);
+        } else {
+            add(a,DU_LABEL,CP_AREA_LABEL,24,44,232,16,"Resolution:");
+            w=add(a,DU_LISTVIEW,CP_AREA,24,64,232,100,""); w->items=a->area_items; list_style(w,"Screen area");
+            add(a,DU_LABEL,CP_DEPTH_LABEL,272,44,248,16,"Colour depth:");
+            w=add(a,DU_LISTVIEW,CP_DEPTH,272,64,CP_WIDTH-296,100,""); w->items=a->depth_items; list_style(w,"Colours"); w->anchors=DU_ANCHOR_GROW_X;
+            add(a,DU_LABEL,CP_MODE_NOTE,24,174,400,16,"");
+            add(a,DU_LABEL,972,24,202,CP_WIDTH-48,16,a->adapter_lines[4]);
+            add(a,DU_LABEL,973,24,228,CP_WIDTH-48,16,a->adapter_lines[2]);
+            add(a,DU_LABEL,974,24,254,CP_WIDTH-48,16,a->engine_line);
+            add(a,DU_LABEL,975,24,280,CP_WIDTH-48,16,"Engine information is read-only.");
+            add(a,DU_BUTTON,CP_REFRESH,24,316,88,24,"Refresh");
+        }
     } else if (a->page == CP_MOUSE) {
     /* Mouse */
     add(a, DU_LABEL, C_SPEED_L, 24, 44, 200, 14, "Pointer &speed:");
@@ -889,7 +1079,13 @@ static void build(struct cp_app *a)
         int count=a->host.autoplay_list ? a->host.autoplay_list(a->host.ctx,a->autoplay,AP_PREFS) : -1;
         a->autoplay_count=count>=0 && count<=AP_PREFS ? (unsigned)count : 0;
         a->autoplay_selected=0;
-        add(a,DU_LABEL,949,24,48,508,16,"Remembered choices for removable media and CDs");
+        unsigned disks=0,optical=0;
+        if (a->devices_ok) for (unsigned k=0;k<a->devices.count;k++) {
+            disks+=a->devices.devices[k].class_id==CIUKI_DEVICE_DISK;
+            optical+=a->devices.devices[k].class_id==CIUKI_DEVICE_CDROM;
+        }
+        char storage[128]; snprintf(storage,sizeof(storage),"Storage: %u disks, %u optical drives. Remembered media choices:",disks,optical);
+        add(a,DU_LABEL,949,24,48,508,16,a->devices_ok ? storage : "Storage inventory unavailable. Remembered media choices:");
         for (unsigned i=0;i<a->autoplay_count;i++) {
             struct ap_preference *p=&a->autoplay[i];
             memset(&a->autoplay_items[i],0,sizeof(a->autoplay_items[i]));
@@ -907,14 +1103,8 @@ static void build(struct cp_app *a)
     } else {
         system_pages(a);
     }
-    if (a->page == CP_FONTS) cp_fonts_build(a);
-    if (a->page == CP_DISPLAY || a->page == CP_ADAPTER || a->page == CP_SYSTEM) cp_display_refresh(a);
+    if (a->page == CP_SYSTEM) cp_display_refresh(a);
     cp_tick(a); sync(a);
-    if (a->page == CP_DISPLAY) {
-        du_get(u, C_THEME)->anchors = du_get(u, C_WALL)->anchors = DU_ANCHOR_GROW_X;
-        du_get(u, C_ICONS)->anchors = DU_ANCHOR_GROW_X;
-        du_get(u, CP_AREA)->anchors = du_get(u, CP_DEPTH)->anchors = DU_ANCHOR_GROW_X;
-    }
     /* Honor the current surface when returning from an applet after a resize. */
     int dx = u->canvas.width - CP_WIDTH, dy = u->canvas.height - CP_HEIGHT;
     for (unsigned k = 0; k < u->count; k++) {
@@ -929,17 +1119,30 @@ static void build(struct cp_app *a)
 void cp_open(struct cp_app *a, int page)
 {
     if (a->mode_state==CP_MODE_SAVE) { text(a,C_STATUS,"Waiting for display settings to finish saving..."); return; }
-    if (page != a->page && a->mode_state) cp_display_cancel(a);
-    if (a->page == CP_FONTS && page != CP_FONTS) cp_fonts_close(a);
+    if (a->display_session && page != CP_DISPLAY && page != CP_ADAPTER && page != CP_FONTS && !cp_display_leave(a)) {
+        a->next_page=page; a->navigation_pending=1; return;
+    }
+    if (page == CP_ADAPTER) { page=CP_DISPLAY; a->display_tab=CP_SCREEN_SETTINGS; }
+    if (page == CP_FONTS) { page=CP_DISPLAY; a->display_tab=CP_APPEARANCE; }
+    if (a->page == CP_DISPLAY && page != CP_DISPLAY) cp_fonts_close(a);
+    if (page==CP_DEVICES) a->system_tab=1;
+    if (page==CP_DRIVERS) a->system_tab=3;
+    if (page==CP_SYSTEM && a->system_tab!=2) a->system_tab=0;
+    if (page==CP_DISPLAY && !a->display_session) {
+        load(a,&a->cfg); a->display_original=a->cfg; a->display_session=1; a->display_original_mode=0;
+        cp_display_refresh(a);
+        for (unsigned i=0;i<a->display.mode_count;i++) if (a->display.modes[i].current) a->display_original_mode=a->display.modes[i].id;
+    }
     a->page = page >= 0 && page < CP_PAGES ? page : CP_HOME;
     a->status[0] = 0;
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
-    if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM) refresh(a);
+    if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY) refresh(a);
     build(a);
 }
 int cp_attach(struct cp_app *a, struct du_ui *u, int page)
 {
     a->ui = u;
+    a->page=CP_HOME;
     load(a, &a->cfg); du_theme_use(u, a->cfg.theme);
     sound_defaults(&a->sounds);
     if (a->host.load_sounds) { size_t n = 0;
@@ -953,4 +1156,4 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
     cp_open(a, page);
     return 0;
 }
-void cp_detach(struct cp_app *a) { cp_fonts_close(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }
+void cp_detach(struct cp_app *a) { du_ta_free(&a->log); cp_fonts_close(a); if (a->display_session) cp_display_leave(a); cp_display_cancel(a); du_timer_stop(a->ui, CP_MODE_TIMER); desk_image_free(&a->image); }

@@ -7,6 +7,7 @@
 #include <ciuki/audio.h>
 #include <ciuki/proc.h>
 #include <ciuki/devices.h>
+#include <ciuki/net.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -19,7 +20,32 @@
 #include <unistd.h>
 
 struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
-    int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t serial, display_serial, audio_serial; uint64_t last_tick; };
+    int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
+    struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
+    int saved_w, saved_h; };
+
+/* Panel geometry is independent of desktop preferences and display rollback. */
+static void panel_size(int *width, int *height)
+{
+    *width=CP_WIDTH; *height=CP_HEIGHT;
+    FILE *f=fopen(CFG_DIR "/control.size","r");
+    int w,h; char extra;
+    if (f) {
+        if (fscanf(f,"%d %d %c",&w,&h,&extra)==2 && w>=CP_WIDTH && h>=CP_HEIGHT && w<=1600 && h<=1200) { *width=w; *height=h; }
+        fclose(f);
+    }
+}
+static void remember_size(struct cp_main *m)
+{
+    int w=m->ui.canvas.width,h=m->ui.canvas.height;
+    if (w==m->saved_w && h==m->saved_h) return;
+    FILE *f=fopen(CFG_DIR "/control.tmp","w");
+    if (!f) return;
+    int ok=fprintf(f,"%d %d\n",w,h)>0 && !fflush(f) && !fsync(fileno(f));
+    if (fclose(f)) ok=0;
+    if (ok && !rename(CFG_DIR "/control.tmp",CFG_DIR "/control.size")) { m->saved_w=w; m->saved_h=h; }
+    else unlink(CFG_DIR "/control.tmp");
+}
 
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
@@ -198,7 +224,7 @@ static int apply(void *ctx, unsigned request, int volume, int muted)
     if (!++m->serial) ++m->serial;
     cp_settings_message(&msg, m->serial, request, volume, muted);
     int r = du_window_queue(&m->window, &msg);
-    if (!r && request == DESK_SETTINGS_DISPLAY) m->display_serial = m->serial;
+    if (!r && (request == DESK_SETTINGS_DISPLAY || request == DESK_SETTINGS_DISPLAY_PREVIEW)) m->display_serial = m->serial;
     if (!r && request == DESK_SETTINGS_AUDIO_TEST) m->audio_serial = m->serial;
     return r;
 }
@@ -208,6 +234,40 @@ static int autoplay_forget(void *ctx,const char *id)
 { (void)ctx; return ap_preference_forget(NULL,id); }
 static int display_query(void *ctx, struct ciuki_display_info *info)
 { (void)ctx; return ciuki_display_query(info); }
+static int engine_query(void *ctx, struct ciuki_accel_info *info)
+{
+    struct cp_main *m=ctx;
+    if (!m->engine_ok) return -EAGAIN;
+    *info=m->engine; return 0;
+}
+static int network_query(void *ctx, struct ciuki_net_state *state)
+{
+    (void)ctx; int fd=open("/dev/net",O_RDONLY|O_CLOEXEC);
+    if (fd<0) return -errno;
+    *state=(struct ciuki_net_state){.version=CIUKI_NET_VERSION,.size=sizeof(*state)};
+    int r=ciuki_devctl(fd,NET_GET_STATE,state,sizeof(*state));
+    close(fd); return r;
+}
+static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *length,uint32_t *total)
+{
+    (void)ctx; int fd=open(CP_LOG_FILE,O_RDONLY|O_CLOEXEC);
+    if (fd<0) return -errno;
+    struct stat st;
+    if (fstat(fd,&st)) { int error=errno; close(fd); return -error; }
+    if (st.st_size<0 || (uint64_t)st.st_size>UINT32_MAX) { close(fd); return -EFBIG; }
+    *total=(uint32_t)st.st_size; *length=0;
+    size_t wanted=offset<*total ? *total-offset : 0;
+    if (wanted>cap) wanted=cap;
+    while (*length<wanted) {
+        ssize_t got=pread(fd,text+*length,wanted-*length,(off_t)offset+(off_t)*length);
+        if (got<0 && errno==EINTR) continue;
+        if (got<0) { int error=errno; close(fd); return -error; }
+        if (!got) break;
+        *length+=(size_t)got;
+    }
+    return close(fd) ? -errno : 0;
+}
+static int open_power(void *ctx) { return apply(ctx,DESK_SETTINGS_OPEN_POWER,0,0); }
 static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
 {
     (void)ctx;
@@ -223,6 +283,17 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
 {
     (void)w;
     struct cp_main *m = user;
+    if (p->opcode==DESK_GFX_INFO && p->serial==m->engine_serial) {
+        m->engine_serial=0; m->engine_ok=!p->result; m->engine=p->accelerator;
+        cp_engine_refresh(&m->app);
+        struct du_widget *line=du_get(&m->ui,974);
+        if (line) du_set_text(line,m->app.engine_line);
+        return;
+    }
+    if (p->opcode==DESK_TASK_RESULT && p->request==DESK_GFX_QUERY && p->serial==m->engine_serial) {
+        m->engine_serial=0; m->engine_ok=0; m->engine_next=du_now()+2000000000ull;
+        cp_engine_refresh(&m->app); return;
+    }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && m->audio_serial && p->serial == m->audio_serial) {
         m->audio_serial = 0; cp_audio_result(&m->app, p->result); return;
     }
@@ -239,19 +310,35 @@ static uint64_t now(void *ctx) { (void)ctx; struct timespec t; return clock_gett
 static int close_request(struct du_window *w, void *user)
 { (void)w; struct cp_main *m = user;
   if (m->writer_started && cfg_writer_busy(&m->writer)) {
+      m->app.close_pending=1; m->app.display_accept=0;
       du_set_text(du_get(&m->ui,3),"Waiting for settings to finish saving..."); m->ui.dirty=1; return 0;
   }
-  cp_display_cancel(&m->app); return 1; }
+  remember_size(m); return cp_close(&m->app); }
 static void idle(void *arg)
 {
     struct cp_main *m = arg;
+    if (m->title_page!=m->app.page) {
+        m->title_page=m->app.page;
+        const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
+            m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS ? "System" : "Control Panel";
+        for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].page==m->app.page && m->app.page!=CP_DISPLAY) title=cp_applets[k].label;
+        du_window_set_title(&m->window,title);
+    }
+    uint64_t mono=du_now();
+    if (m->window.configured && m->app.page==CP_DISPLAY && mono>=m->engine_next && !m->engine_serial && !m->app.mode_state) {
+        struct ciuki_message query; desk_message(&query,DESK_GFX_QUERY,8);
+        if (!++m->serial) ++m->serial;
+        desk_put32(query.data+4,m->serial);
+        if (!du_window_queue(&m->window,&query)) m->engine_serial=m->serial;
+        m->engine_next=mono+2000000000ull;
+    }
     int error;
     if (m->writer_started && cfg_writer_result(&m->writer,&error)) {
         if (m->reload_pending) { m->reload_pending=0; if (!error) apply(m,DESK_SETTINGS_RELOAD,0,0); }
         cp_settings_saved(&m->app,error);
     }
     if (m->writer_started && cfg_writer_busy(&m->writer) && m->app.quit) return;
-    if (m->app.quit) { du_window_close(&m->window); m->app.quit = 0; }
+    if (m->app.quit) { remember_size(m); du_window_close(&m->window); m->app.quit = 0; }
     uint64_t t = now(m);
     if (t != m->last_tick) { m->last_tick = t; cp_tick(&m->app); if (m->app.page == CP_DATETIME) m->ui.dirty = 1; }
 }
@@ -272,6 +359,7 @@ int main(int argc, char **argv)
     struct cp_host *h = &m->app.host;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
+    h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1;
     h->audio_diagnostics = audio_query;
@@ -288,7 +376,11 @@ int main(int argc, char **argv)
         struct ciuki_proc_system sys; memcpy(&sys, buffer, sizeof(sys));
         if (sys.version == CIUKI_PROC_VERSION) { h->mem_total_k = (uint64_t)sys.usable_pages * 4u; h->mem_free_k = (uint64_t)sys.free_pages * 4u; h->processes = sys.processes; }
     }
-    if (du_window_open_resizable(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
+    int width,height; panel_size(&width,&height);
+    if (width>(int)h->screen_w-16) width=CP_WIDTH;
+    if (height>(int)h->screen_h-100) height=CP_HEIGHT;
+    m->saved_w=width; m->saved_h=height; m->title_page=-99;
+    if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, "Control Panel", CP_WIDTH, CP_HEIGHT)) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
         if (m->writer_started) cfg_writer_stop(&m->writer);
         free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;

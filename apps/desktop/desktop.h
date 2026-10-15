@@ -223,7 +223,7 @@ struct desktop {
     uint16_t display_mode, display_pending;
     int (*display_set)(struct desktop *, uint16_t);
     int display_reply_client; uint32_t display_reply_pid, display_reply_serial;
-    uint16_t display_reply_mode;
+    uint16_t display_reply_mode; int display_reply_preview;
     /* Optional privileged presenter; NULL retains ordinary surface presents. */
     int (*accel)(int, const struct ciuki_accel_request *);
     int (*accel_info)(int, uint32_t, struct ciuki_accel_info *);
@@ -306,6 +306,7 @@ void desk_animate(struct desktop *, struct desk_box from, struct desk_box to);
 void desk_animation_tick(struct desktop *);
 void desk_move(struct desktop *, int index, int32_t x, int32_t y);
 void desk_resize(struct desktop *, int index, struct desk_box frame);
+enum { DESK_DISPLAY_NO_FRAME, DESK_DISPLAY_PERSIST_FRAME, DESK_DISPLAY_PREVIEW_FRAME };
 int desk_display_frame_commit(struct desktop *, int redraw_result);
 void desk_display_relayout(struct desktop *, uint32_t width, uint32_t height);
 void desk_zoom(struct desktop *, int index);

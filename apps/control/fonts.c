@@ -67,7 +67,7 @@ static void enumerate(struct cp_app *a)
 void cp_fonts_build(struct cp_app *a)
 {
     if (!a->fonts_loaded) enumerate(a);
-    struct du_widget *w = du_add(a->ui, DU_LISTVIEW, CP_FONT_LIST, (struct du_rect){24, 44, CP_WIDTH - 48, 170}, "");
+    struct du_widget *w = du_add(a->ui, DU_LISTVIEW, CP_FONT_LIST, (struct du_rect){24, 164, CP_WIDTH - 48, 66}, "");
     w->items = a->font_items; w->count = a->font_count; w->view = DU_DETAILS; w->active = (int)a->font_selected;
     w->inactive_selection = 1; w->column_count = 3; w->anchors = DU_ANCHOR_GROW_X;
     w->columns[0] = (struct du_column){"Family", 132, 0}; w->columns[1] = (struct du_column){"Style", 90, 0};
@@ -75,7 +75,7 @@ void cp_fonts_build(struct cp_app *a)
 }
 int cp_fonts_event(struct cp_app *a, const struct du_event *e)
 {
-    if (a->page != CP_FONTS || e->id != CP_FONT_LIST) return 0;
+    if ((a->page != CP_DISPLAY || a->display_tab != CP_APPEARANCE) || e->id != CP_FONT_LIST) return 0;
     if ((e->type == DU_EV_SELECT || e->type == DU_EV_OPEN) && e->index >= 0 && (unsigned)e->index < a->font_count) {
         select_face(a, (unsigned)e->index); a->ui->dirty = 1;
     }
@@ -84,14 +84,14 @@ int cp_fonts_event(struct cp_app *a, const struct du_event *e)
 void cp_fonts_paint(struct cp_app *a, struct du_canvas *c)
 {
     static const char sample[] = "Classic computing, one woof at a time.";
-    du_text_fit(c, 24, 220, c->width - 48, a->font_status, DU_INK);
-    struct du_rect box = {24, 242, c->width - 48, 104};
+    du_text_fit(c, 24, 236, c->width - 48, a->font_status, DU_INK);
+    struct du_rect box = {24, 258, c->width - 48, 92};
     du_well(c, box, DU_WINDOW);
     struct du_canvas preview = *c;
     preview.clip = du_intersection(c->clip, (struct du_rect){box.x + 4, box.y + 4, box.w - 8, box.h - 8});
-    du_text(&preview, 32, 249, "10 pt", DU_INK); du_text(&preview, 32, 295, "14 pt", DU_INK);
-    if (a->font_face && (du_text_face(&preview, a->font_face, 853, 32, 280, sample, DU_INK) ||
-                         du_text_face(&preview, a->font_face, 1195, 32, 330, sample, DU_INK))) {
+    du_text(&preview, 32, 262, "10 pt", DU_INK); du_text(&preview, 32, 305, "14 pt", DU_INK);
+    if (a->font_face && (du_text_face(&preview, a->font_face, 853, 32, 286, sample, DU_INK) ||
+                         du_text_face(&preview, a->font_face, 1195, 32, 335, sample, DU_INK))) {
         du_text_fit(&preview, 32, 270, box.w - 16, "Font rendering failed.", DU_INK);
     }
 }

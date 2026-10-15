@@ -35,7 +35,7 @@ static int apply(void *ctx, unsigned request, int value, int flag)
     cp_settings_message(&wire, (unsigned)++requests, request, value, flag);
     struct desk_packet p;
     assert(desk_parse(&wire, 1, NULL, &p) && p.request == request && p.serial == (unsigned)requests);
-    if (request == DESK_SETTINGS_DISPLAY) { assert(!flag && !p.values[1] && !p.values[2]); requested = (uint16_t)p.values[0]; }
+    if (request == DESK_SETTINGS_DISPLAY || request == DESK_SETTINGS_DISPLAY_PREVIEW) { assert(!flag && !p.values[1] && !p.values[2]); requested = (uint16_t)p.values[0]; }
     return 0;
 }
 static void changed_mode(uint16_t id)
@@ -61,7 +61,7 @@ static void init(void)
 {
     display_fixture(&info); query_error = save_error = queue_error = requests = saves = 0; requested = 0;
     strcpy(saved, "wallpaper=none\ndisplay_mode=280\nfuture_key=kept\nrecent=/Documents/note.txt\n"); saved_n = strlen(saved);
-    attach(CP_DISPLAY);
+    attach(CP_ADAPTER);
 }
 static void start(void)
 {
@@ -150,9 +150,11 @@ int main(int argc, char **argv)
     init(); start(); ack(); save_error = 1; choose(0); assert(a.mode_state == CP_MODE_REVERT && !saves && requested == 0x118); changed_mode(requested); cp_display_result(&a, 0); cp_detach(&a);
     init(); start(); du_tick(&u, u.now + 15000000000ull); assert(a.mode_state == CP_MODE_REVERT && requested == 0x118); du_tick(&u, u.now + 15000000000ull); assert(a.mode_state == CP_MODE_IDLE && !saves); cp_detach(&a);
     init(); queue_error = 1; select(CP_AREA, 0); at_click_widget(&u, CP_APPLY); assert(a.mode_state == CP_MODE_IDLE && !requests && !saves); cp_detach(&a);
+    init(); queue_error=1; select(CP_AREA,0); at_click_widget(&u,CP_OK);
+    assert(!a.quit && !a.display_accept && a.mode_state==CP_MODE_IDLE); cp_detach(&a);
     init(); start(); ack(); cp_open(&a, CP_SOUNDS);
-    assert(a.page == CP_SOUNDS && a.mode_state == CP_MODE_REVERT && requested == 0x118 && !saves);
-    changed_mode(requested); cp_display_result(&a, 0);
+    assert(a.page == CP_DISPLAY && a.navigation_pending && a.mode_state == CP_MODE_REVERT && requested == 0x118 && !saves);
+    changed_mode(requested); cp_display_result(&a, 0); cp_tick(&a); assert(a.page==CP_SOUNDS);
     cp_open(&a, CP_DISPLAY); assert(a.mode_state == CP_MODE_IDLE && !u.dialog.kind); cp_detach(&a);
     init(); start(); ack(); cp_detach(&a); assert(a.mode_state == CP_MODE_REVERT && requested == 0x118 && !saves);
     init(); start(); ack(); du_tick(&u, u.now + 16000000000ull); assert(a.mode_state == CP_MODE_REVERT && !saves); changed_mode(requested); cp_display_result(&a, 0); cp_detach(&a);
@@ -166,10 +168,10 @@ int main(int argc, char **argv)
     init(); query_error = 1; cp_display_refresh(&a); assert(!a.display_ok && du_get(&u, CP_APPLY)->disabled); cp_detach(&a);
     init(); info.mode_count = 32; /* maximum table: remaining entries have zero IDs */
     cp_display_refresh(&a); assert(a.area_count == 4); cp_detach(&a);
-    init(); cp_open(&a, CP_ADAPTER); check_layout(); assert(!du_get(&u, CP_REFRESH)->hidden && !du_get(&u, CP_AREA));
+    init(); cp_open(&a, CP_ADAPTER); check_layout(); assert(!du_get(&u, CP_REFRESH)->hidden && du_get(&u, CP_AREA));
     assert(strstr(a.adapter_lines[0], "1024 x 768") && strstr(a.adapter_lines[1], "4096") && strstr(a.adapter_lines[2], "2.00") && strstr(a.adapter_lines[2], "16384"));
     assert(strstr(a.adapter_lines[4], "SuperSavage") && strstr(a.adapter_lines[9], "no EDID yet"));
-    du_render(&u); at_save(argv[1], "control-adapter", &u);
+    du_render(&u); at_save(argv[1], "control-settings-adapter", &u);
     info.pci_vendor = 0x1002; info.pci_device = 0x4c52; at_click_widget(&u, CP_REFRESH); assert(strstr(a.adapter_lines[4], "ATI Rage Mobility"));
     cp_open(&a, CP_SYSTEM); assert(strstr(du_get(&u, CP_SUMMARY)->text, "32-bit")); du_render(&u); at_save(argv[1], "control-system-display", &u);
     int system_tabs = -1;
@@ -188,6 +190,22 @@ int main(int argc, char **argv)
     assert(!strcmp(cp_adapter_name(0xdead, 0xbeef, name, sizeof(name)), "Unknown adapter (dead:beef)"));
     info.pci_vendor = 0xdead; info.pci_device = 0xbeef; cp_open(&a, CP_ADAPTER); du_render(&u); at_save(argv[1], "control-adapter-unknown", &u);
     query_error = 1; at_click_widget(&u, CP_REFRESH); du_render(&u); at_save(argv[1], "control-adapter-unavailable", &u); cp_detach(&a);
+    /* Multiple mode previews still roll back to the entry mode on Cancel. */
+    init(); start(); ack(); choose(0); assert(info.width==640 && a.display_preview);
+    select(CP_AREA,1); at_click_widget(&u,CP_APPLY); ack(); choose(0); assert(info.width==800);
+    assert(!cp_close(&a) && a.mode_state==CP_MODE_REVERT && requested==0x118 && !a.quit);
+    changed_mode(requested); cp_display_result(&a,0); cp_tick(&a);
+    assert(a.quit && !a.display_session && info.width==1024); cp_detach(&a);
+    init(); start(); ack(); choose(0); queue_error=1;
+    assert(!cp_close(&a) && !a.quit && a.display_session && a.display_preview && !a.close_pending);
+    queue_error=0; assert(!cp_close(&a)); changed_mode(requested); cp_display_result(&a,0); cp_tick(&a);
+    assert(a.quit && !a.display_session); cp_detach(&a);
+    init(); a.host.save_async=1; start(); ack(); choose(0); cp_settings_saved(&a,0);
+    uint16_t preview_mode=requested;
+    assert(!cp_close(&a) && a.display_write && a.mode_state==CP_MODE_IDLE && requested==preview_mode);
+    cp_settings_saved(&a,0); cp_tick(&a);
+    assert(a.mode_state==CP_MODE_REVERT && requested==0x118);
+    changed_mode(requested); cp_display_result(&a,0); cp_tick(&a); assert(a.quit); cp_detach(&a);
     struct desk_packet p;
     cp_settings_message(&wire, 42, DESK_SETTINGS_DISPLAY, 0x118, 0); assert(desk_parse(&wire, 1, NULL, &p));
     assert(!desk_parse(&wire, 0, NULL, &p)); desk_put32(wire.data + 16, 1); assert(!desk_parse(&wire, 1, NULL, &p));
@@ -205,6 +223,9 @@ int main(int argc, char **argv)
     cp_settings_message(&wire, 45, DESK_SETTINGS_AUDIO_TEST, 0, 0);
     assert(desk_parse(&wire, 1, NULL, &p) && p.request == DESK_SETTINGS_AUDIO_TEST && !p.values[0]);
     desk_put32(wire.data + 20, 1); assert(!desk_parse(&wire, 1, NULL, &p));
+    cp_settings_message(&wire,46,DESK_SETTINGS_OPEN_POWER,0,0);
+    assert(desk_parse(&wire,1,NULL,&p) && p.request==DESK_SETTINGS_OPEN_POWER);
+    desk_put32(wire.data+12,1);assert(!desk_parse(&wire,1,NULL,&p));
     puts("PASS Control Panel wire coexistence: display, sound reload/preview, hardware test, reserved fields");
     puts("PASS control display modes: ABI, synthetic mode lists, filtering, layout, Apply/ack/Keep/Revert/Esc, monotonic timeout, save/queue/query failures, close rollback, settings merge, wire validation, adapter lookup/render/refresh, System summary");
     return 0;

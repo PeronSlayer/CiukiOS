@@ -71,7 +71,7 @@ int main(int argc,char **argv)
     assert(named("Projects")>=3 && named("readme.txt")>=3); capture("listing");
     /* Scripted New > Folder replay through real shell menu keyboard input. */
     d.mouse_x=300; d.mouse_y=220; assert(desk_shell_button(&d,CIUKI_BUTTON_RIGHT,1)); capture("new-menu");
-    key(DU_KEY_DOWN); key(DU_KEY_ENTER); assert(d.sh.levels==2 && d.sh.menus[1].kind==SH_MENU_NEW);
+    for (unsigned k=0;k<4;k++) key(DU_KEY_DOWN); key(DU_KEY_ENTER); assert(d.sh.levels==2 && d.sh.menus[1].kind==SH_MENU_NEW);
     key(DU_KEY_ENTER); desk_folder_service(&d);
     assert(fake_lookup(DESK_FOLDER "/New Folder")>=0 && d.sh.folder->editing>=0); capture("new-folder"); key(DU_KEY_ESC);
     command(DF_FOLDER,-1); assert(fake_lookup(DESK_FOLDER "/New Folder (2)")>=0); key(DU_KEY_ESC);
@@ -157,8 +157,15 @@ int main(int argc,char **argv)
     assert(!d.sh.folder->busy && d.sh.folder->job.state==FM_CANCELLED && fake_lookup("/Documents/Cancel.txt")>=0);
     fm_destroy(snapshot); free(snapshot);
     fm_destroy(other); free(other);
+    /* Line up snaps without placing two icons in the same grid cell. */
+    desk_menu_open(&d,SH_MENU_DESKTOP,500,300); key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_ENTER);
+    for (int a=0;a<d.sh.icon_count;a++) {
+        struct desk_box b=d.sh.icons[a].box;
+        assert((b.x-8)%b.w==0 && (b.y-DESK_BAR-10)%b.h==0);
+        for (int c=0;c<a;c++) assert(b.x!=d.sh.icons[c].box.x || b.y!=d.sh.icons[c].box.y);
+    }
     /* Arrange resets saved positions through the context action. */
-    desk_menu_open(&d,SH_MENU_DESKTOP,500,300); key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_ENTER);
+    desk_menu_open(&d,SH_MENU_DESKTOP,500,300); key(DU_KEY_DOWN); key(DU_KEY_ENTER);
     assert(!cfg_icon_position(&d.sh.cfg,"Moved name",&x,&y)); capture("arranged");
     /* A Desktop entry called Pictures has an independent position and actions. */
     fake_file(DESK_FOLDER "/Pictures",1,0); command(DF_REFRESH,-1);

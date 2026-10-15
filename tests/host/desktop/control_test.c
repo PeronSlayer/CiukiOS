@@ -155,7 +155,7 @@ int main(int argc, char **argv)
             if (!q->hidden && q->kind != DU_TABS) assert(!overlap(p->box, q->box));
         }
     }
-    assert(visible >= 5 + 6 + 8);
+    assert(visible >= 5 + 6 + 7);
 
     render_settled(&u);
     check_preview();
@@ -167,10 +167,12 @@ int main(int argc, char **argv)
     for (int k = 0; k < 5; k++) {
         unsigned s0 = saves, a0 = applies, d0 = decodes;
         at_click_widget(&u, find(DU_BUTTON, labels[k])->id);
-        assert(a.cfg.wallpaper_mode == modes[k] && saves == s0 + 1 && applies == a0 + 1);
+        assert(a.cfg.wallpaper_mode == modes[k] && saves == s0 && applies == a0);
+        at_click_widget(&u,CP_APPLY);
+        assert(saves==s0+1 && applies==a0+1);
         char line[64]; snprintf(line, sizeof(line), "\nwallpaper_mode=%s\n", cfg_mode_names[modes[k]]);
         assert(strstr(saved, line) && strstr(saved, "\nwallpaper=/system/wallpapers/Ciuk2.png\n"));
-        assert(find(DU_LABEL, "Saved and applied."));
+        assert(find(DU_LABEL,"Preview applied. Cancel restores your previous settings."));
         check_marked(modes[k]);
         assert(!a.preview_valid);
         render_settled(&u);
@@ -200,6 +202,7 @@ int main(int argc, char **argv)
     render_settled(&u);
     check_preview();
     at_click_widget(&u, find(DU_BUTTON, "Fill")->id);
+    at_click_widget(&u,CP_APPLY);
     assert(a.cfg.wallpaper_mode == CFG_WALL_FILL && strstr(saved, "\nwallpaper=/system/wallpapers/Ciuk1.png\nwallpaper_mode=fill\n"));
     render_settled(&u);
     check_preview();
@@ -236,6 +239,40 @@ int main(int argc, char **argv)
     assert(!strcmp(u.dialog.text,"Read-only file system (30)"));
     assert(!strcmp(du_get(&u,3)->text,"Read-only file system (30)"));
     du_dialog_close(&u); cp_detach(&a);
+    /* Apply is a preview across all tabs. Cancel restores only owned keys. */
+    cfg_defaults(&parsed); strcpy(parsed.wallpaper,"none"); parsed.wallpaper_mode=CFG_WALL_CENTER;
+    saved_n=cfg_format(&parsed,saved,sizeof(saved)); attach(CP_DISPLAY);
+    unsigned before=saves;
+    at_click_widget(&u,find(DU_BUTTON,"Fill")->id); assert(saves==before && a.display_dirty);
+    at_click_widget(&u,CP_APPLY); assert(saves==before+1 && a.display_preview);
+    static struct ciuki_settings concurrent;
+    cfg_defaults(&concurrent); assert(!cfg_parse(&concurrent,saved,saved_n));
+    concurrent.mouse_speed=9; concurrent.clock_seconds=1; strcpy(concurrent.extra,"future_setting=preserved\n");
+    saved_n=cfg_format(&concurrent,saved,sizeof(saved));
+    assert(cp_close(&a) && a.quit && !a.display_session);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n));
+    assert(parsed.wallpaper_mode==CFG_WALL_CENTER && parsed.mouse_speed==9 && parsed.clock_seconds==1 && strstr(parsed.extra,"future_setting=preserved"));
+    cp_detach(&a);
+    /* OK waits for durable completion; detach must keep the accepted values. */
+    attach(CP_DISPLAY); a.host.save_async=1; before=saves;
+    at_click_widget(&u,find(DU_BUTTON,"Fill")->id); at_click_widget(&u,CP_OK);
+    assert(a.display_write && !a.quit && saves==before+1);
+    cp_settings_saved(&a,0); assert(a.quit && !a.display_session);
+    cp_detach(&a); assert(saves==before+1);
+    /* Caption close while a preview is saving waits, then durably rolls back. */
+    attach(CP_DISPLAY); a.host.save_async=1;
+    at_click_widget(&u,find(DU_BUTTON,"Fit")->id); at_click_widget(&u,CP_APPLY);
+    at_click_widget(&u,CP_CANCEL); assert(a.close_pending && !a.quit);
+    cp_settings_saved(&a,0); cp_tick(&a);
+    assert(a.display_write && !a.quit);
+    cp_settings_saved(&a,0); cp_tick(&a); assert(a.quit && !a.display_session);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n) && parsed.wallpaper_mode==CFG_WALL_FILL); cp_detach(&a);
+    /* An asynchronous failure keeps the window open with a retryable draft. */
+    attach(CP_DISPLAY); a.host.save_async=1;
+    at_click_widget(&u,find(DU_BUTTON,"Fit")->id); at_click_widget(&u,CP_OK);
+    cp_settings_saved(&a,EROFS); assert(!a.quit && !a.display_accept && a.display_dirty && a.display_session);
+    du_dialog_close(&u); a.host.save_async=0; cp_close(&a); cp_detach(&a);
+    puts("PASS Display Properties: staged edits, preview/Cancel merge, durable OK, pending-close rollback and failed save");
     puts("PASS F1-63 Control Panel: two Tab presses and Space apply master preference 20/20/muted");
     printf("PASS control display: five positions, layout, desktop.cfg modes, preview\n");
     return 0;

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -34,6 +35,28 @@ class DeviceTests(unittest.TestCase):
             self.assertIn('PASS devices:', r.stdout)
             print(r.stdout.strip())
 
+    def test_native_readonly_log_io(self):
+        with self.scratch() as temp:
+            folder=Path(temp)
+            fixture=folder / 'boot.log'
+            data=(b'Ciuki boot log: device ready\n' * 13000)[:320*1024]
+            fixture.write_bytes(data)
+            fixture.chmod(0o444)
+            binary=folder / 'log-reader'
+            shutil.copytree(ROOT / 'sdk/sysroot-overlay/include/ciuki',folder / 'include/ciuki')
+            subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                            '-D_POSIX_C_SOURCE=200809L','-ffunction-sections','-fdata-sections',
+                            '-fsanitize=address,undefined','-fno-sanitize-recover=undefined',
+                            '-I',str(folder / 'include'),'-I',str(ROOT / 'src/kernel/include'),
+                            '-idirafter',str(ROOT / 'sdk/sysroot-overlay/include'),
+                            str(ROOT / 'tests/host/desktop/control_log_io_test.c'),
+                            '-Wl,--gc-sections','-o',str(binary)],check=True)
+            result=subprocess.run([binary,fixture],capture_output=True,text=True,
+                                  env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(fixture.read_bytes(),data)
+            print(result.stdout.strip())
+
     def test_applets_and_renders(self):
         with self.scratch() as temp:
             folder = Path(temp)
@@ -54,11 +77,12 @@ class DeviceTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn('PASS device manager:', r.stdout)
             image = load('devices_png', ROOT / 'tests/host/desktop/test_desktop.py')
-            target = ROOT / 'build/f2-41'; target.mkdir(parents=True, exist_ok=True)
+            target = ROOT / 'build/host/f2-75'; target.mkdir(parents=True, exist_ok=True)
             captures = sorted(frames.glob('*.xrgb'))
-            self.assertEqual(len(captures), 21)  # f2-51 AutoPlay page
+            self.assertEqual(len(captures), 28)  # f2-51 AutoPlay page
             for path in captures:
                 width, height = map(int, path.with_suffix('.size').read_text().split())
+                image.control_frame(self,path.stem,path.read_bytes(),width,height)
                 image.write_png(target / (path.stem + '.png'), width, height, image.xrgb_to_rgb(path.read_bytes()))
             print(r.stdout.strip())
 

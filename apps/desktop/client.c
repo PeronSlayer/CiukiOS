@@ -232,13 +232,16 @@ void desk_animation_tick(struct desktop *d)
     animation_damage(d,d->animation.box);
 }
 /* Only a successfully presented frame in the requested/confirmed mode may
- * replace the saved preference. Failed reallocations still have the old id. */
+ * replace the saved preference. Control Panel previews retain that preference
+ * until its confirmation save. Failed reallocations still have the old id. */
 int desk_display_frame_commit(struct desktop *d, int redraw)
 {
     if (redraw || !d->display_pending || d->display_pending != d->display_mode || d->damage.count) return 0;
-    d->sh.cfg.display_mode = d->display_pending;
+    uint16_t mode=d->display_pending;
     d->display_pending = 0;
-    return 1;
+    if (d->display_reply_mode && d->display_reply_preview) return DESK_DISPLAY_PREVIEW_FRAME;
+    d->sh.cfg.display_mode=mode;
+    return DESK_DISPLAY_PERSIST_FRAME;
 }
 void desk_display_reply(struct desktop *d, int result)
 {
@@ -249,7 +252,7 @@ void desk_display_reply(struct desktop *d, int result)
         desk_put32(m.data+4,d->display_reply_serial); desk_put32(m.data+8,DESK_SETTINGS);
         desk_put32(m.data+12,(uint32_t)result); desk_queue(d,i,&m);
     }
-    d->display_reply_mode=0;
+    d->display_reply_mode=0; d->display_reply_preview=0;
 }
 
 /* Called only after allocating the new screen surface. Client surfaces stay
@@ -503,7 +506,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         break;
     }
     case DESK_GFX_QUERY: case DESK_GFX_BENCH: {
-        if (!c->gfxdemo || !c->window || c->closing) {
+        if ((!c->gfxdemo && !(c->program==DESK_APP_CONTROL && p.opcode==DESK_GFX_QUERY)) || !c->window || c->closing) {
             desk_message(&reply,DESK_TASK_RESULT,16); desk_put32(reply.data+4,p.serial);
             desk_put32(reply.data+8,p.opcode); desk_put32(reply.data+12,(uint32_t)-EPERM);
         } else if (p.opcode==DESK_GFX_QUERY) {
@@ -699,13 +702,15 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         /* Control Panel settings use the real display callback and share
          * the shutdown guard with the other preference requests. */
         int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : d->power.state ? -EBUSY : 0;
+        if (!result && p.request == DESK_SETTINGS_OPEN_POWER && desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)<0) result=-ENOMEM;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
-        if (!result && p.request == DESK_SETTINGS_DISPLAY) {
+        if (!result && (p.request == DESK_SETTINGS_DISPLAY || p.request == DESK_SETTINGS_DISPLAY_PREVIEW)) {
             if (d->display_reply_mode) result=-EBUSY;
             else result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;
             if (!result && d->display_pending) {
                 d->display_reply_client=i; d->display_reply_pid=c->pid;
                 d->display_reply_serial=p.serial; d->display_reply_mode=(uint16_t)p.values[0];
+                d->display_reply_preview=p.request==DESK_SETTINGS_DISPLAY_PREVIEW;
                 break; /* reply only after the kernel accepts the complete new frame */
             }
         }
