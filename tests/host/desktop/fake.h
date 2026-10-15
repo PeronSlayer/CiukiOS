@@ -9,6 +9,7 @@ extern int fake_closed_peer;
 extern struct ciuki_message fake_messages[2048];
 extern int fake_destinations[2048];
 extern struct ciuki_rect fake_rects[64];
+extern int fake_present_surfaces[64];   /* the surface of each fake_rects entry */
 void fake_reset(void);
 void fake_channel(int);
 void fake_surface(int, uint32_t, uint32_t, uint32_t);
