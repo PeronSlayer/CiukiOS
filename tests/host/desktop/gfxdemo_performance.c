@@ -5,6 +5,7 @@
 #include "compositor_benchmark.c"
 #undef main
 #include "../../../apps/gfxdemo/gfxdemo.h"
+#include <ciuki/gl.h>
 #ifndef GFX_REFERENCE
 #include "../../../apps/desktop/rows.h"
 #endif
@@ -145,7 +146,7 @@ static void run_demo(const char *portrait,const char *store,const char *theme,un
         (unsigned long long)bytes,(unsigned long long)((bytes+133)/134),(unsigned long long)nominal,
         (unsigned long long)(total/1130+(bytes+133)/134));
     desk_drop_client(d,client);assert(!fake_live());desk_render_release(d);du_release(ui);
-    free(app);free(ui);free(back);free(scaled);free(demo_scanout);free((void *)d->portrait);free(d->pixels-1);
+    ciuki_gl_close();free(app);free(ui);free(back);free(scaled);free(demo_scanout);free((void *)d->portrait);free(d->pixels-1);
     free(d->sh.wall);free(d->sh.background);free(d->sh.icons);free(d);
 }
 int main(int argc,char **argv)

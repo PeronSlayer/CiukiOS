@@ -15,12 +15,13 @@ capture = _review.capture
 ROOT = Path(__file__).resolve().parents[3]
 # F2-62: same scenes and viewport, rendered with the new Blue default.
 # F2-63: re-recorded for the pinned FreeType UI atlases.
+# F7-01: TinyGL scenes at native viewport size; GL tabs and product acknowledgment.
 GOLDENS = {
-    'benchmark': 'b41b2b7a57d87ff154e4158ed3cd2d46ab13d2b81a0d57c4a7a396b0c53ad16d',
-    'cube-flat': '1e62ebfcffbd1567758fbe8ba7b657bd2dfaa0efbca11ad7cdcb3a4bcef931e3',
-    'cube-gouraud': 'acef681474ca9339af2e4605d6383edaf0a48c228a225e2ea2ad420d5503e422',
-    'software-only': '2be5b10c18c1222eeaf6f69f8c59cacac8c88f664a7e0a8682c99541ff1761dd',
-    'sprites': '672d88d278a9ad681896040af5973fcdcde9ed17c9dbadcb9acb2c6f945327d6',
+    'benchmark': 'e75a6247ee04331eca5f7a4493484b3257f86033192852af226a4847286a51cd',
+    'cube-flat': '7437fff6f62953feccc31270f932f28e95200308c002ebe964cb942d0cf0adf8',
+    'cube-gouraud': '89f284494dd8f8325ea77f210e40a18ba4cc283209d86e5192b0422a3a91c3ed',
+    'sprites': '4d6413c6c2b6d4411dbc7aa30b6decc0633cd04967ff27edee466ae851f52944',
+    'software-only': '9ffdd290e6d29e1f3b7fbc610409f55e84d2db88f7c190e1687a7345cc9e593b',
 }
 
 def load(name, path):
@@ -41,10 +42,12 @@ class GraphicsDemoTests(unittest.TestCase):
             (folder / "portrait.xrgb").write_bytes(portrait.convert(ROOT / "assets/brand/ciuki-logo.png"))
             sources = ["apps/gfxdemo/app.c", "apps/gfxdemo/scene.c", "apps/accessories/acc.c",
                        "apps/desktop/protocol.c", *acc.TOOLKIT, "tests/host/desktop/gfxdemo_test.c"]
+            gl = load("gfx_libgl", ROOT / "sdk/libgl/build.py")
+            library = gl.host(sanitize=True)
             binary = folder / "gfxdemo"
             env = {**os.environ, "TMPDIR": temp, "ASAN_OPTIONS": "detect_leaks=0"}
-            subprocess.run([*acc.FLAGS, *assets.defines(), *acc.INCLUDES, *(str(ROOT / p) for p in sources),
-                            "-o", str(binary)], check=True, env=env)
+            subprocess.run([*acc.FLAGS, *assets.defines(), *acc.INCLUDES, *gl.includes(), *(str(ROOT / p) for p in sources),
+                            str(library), "-lm", "-o", str(binary)], check=True, env=env)
             result = subprocess.run([str(binary), str(folder / "portrait.xrgb"), temp],
                                     capture_output=True, text=True, env=env)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

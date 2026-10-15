@@ -72,6 +72,9 @@ def main():
         print('[sdk-test] libfont compile/link/inspect (guest not run)')
         print(run([SDK/'bin/ciuki-cc',ROOT/'sdk/tests/font_smoke.c','-lfont','-o',out/'font_smoke.elf']).strip())
         evidence['font_smoke']=inspect(out/'font_smoke.elf')
+        print('[sdk-test] libgl compile/link/inspect (guest not run)')
+        print(run([SDK/'bin/ciuki-cc',ROOT/'sdk/tests/gl_smoke.c','-lgl','-o',out/'gl_smoke.elf']).strip())
+        evidence['gl_smoke']=inspect(out/'gl_smoke.elf')
         for archive in (SDK/'sysroot/lib').glob('*.a'):audit_code(archive,m)
         print('[sdk-test] all runtime/compiler archives x87/SSE/MMX audit PASS')
         for rel,sha in m['files'].items():assert hashlib.sha256((SDK/rel).read_bytes()).hexdigest()==sha,rel

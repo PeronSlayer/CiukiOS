@@ -64,6 +64,9 @@ def main():
     ft_spec=importlib.util.spec_from_file_location('sdk_freetype',ROOT/'sdk/freetype/build.py')
     ft=importlib.util.module_from_spec(ft_spec); ft_spec.loader.exec_module(ft)
     ft_src=ft.source()  # Fail before removing an installed SDK if the pin is unavailable.
+    gl_spec=importlib.util.spec_from_file_location('sdk_libgl',ROOT/'sdk/libgl/build.py')
+    gl=importlib.util.module_from_spec(gl_spec); gl_spec.loader.exec_module(gl)
+    gl_recipe=gl.recipe()
     pins=json.loads((ROOT/'config/sdk-pins.json').read_text()); source=pins['newlib']
     if not args.archive.is_file() or digest(args.archive)!=source['sha256']:
         ap.error('missing newlib archive or SHA-256 mismatch; no download/fallback is permitted')
@@ -111,6 +114,9 @@ def main():
     ft_library=ft.build(work/'freetype',cc=tool_info['clang']['path'],ar=tool_info['llvm-ar']['path'],flags=ft_flags,env=env)
     ft.install_headers(inc,ft_src)
     shutil.copy2(ft_library,lib/'libfreetype.a')
+    gl_library=gl.build(work/'libgl',cc=tool_info['clang']['path'],ar=tool_info['llvm-ar']['path'],flags=ft_flags,env=env)
+    gl.install_headers(inc)
+    shutil.copy2(gl_library,lib/'libgl.a')
     def compile(path,obj,extra=()):
         run([tool_info['clang']['path'],*cflags,'-Werror','-nostdinc','-isystem',str(resource),'-I',inc,'-I',work,*extra,'-c',path,'-o',obj],env=env)
     compile(ROOT/'sdk/crt/crt0.S',lib/'crt0.o')
@@ -135,6 +141,8 @@ def main():
     shutil.copy2(src/'COPYING.NEWLIB',notice_dir/'COPYING.NEWLIB')
     shutil.copy2(ROOT/'sdk/LICENSE',notice_dir/'SDK-MIT.txt')
     ft.notices(notice_dir)
+    gl.notices(notice_dir)
+    manifest['opengl_backend']={'name':'TinyGL',**gl_recipe,'notice':'licenses/TinyGL-LICENSE.txt'}
     manifest['font_backend']={'name':'FreeType',**ft.recipe(),'notice':'licenses/FreeType-FTL.txt',
                              'source_files':{str(p.relative_to(ft_src)):digest(p) for p in sorted(ft_src.rglob('*')) if p.is_file() and p.name!='ciuki-source-hashes.json'}}
     inventory=[]
@@ -152,9 +160,9 @@ def main():
         dst.write_text(notice or 'No inline notice; consult COPYING.NEWLIB and retained upstream source.\n')
         inventory.append({'source':rel,'sha256':digest(path),'notice':str(dst.relative_to(OUT)),'notice_sha256':digest(dst)})
     manifest['compiled_file_licenses']=inventory
-    manifest['sdk_compiled_file_licenses']=[{'source':str(p.relative_to(ROOT)),'sha256':digest(p),'notice':'licenses/SDK-MIT.txt'} for p in sorted((ROOT/'sdk').rglob('*')) if p.suffix in ('.c','.S') and 'tests' not in p.parts]
+    manifest['sdk_compiled_file_licenses']=[{'source':str(p.relative_to(ROOT)),'sha256':digest(p),'notice':'licenses/TinyGL-LICENSE.txt' if 'libgl/vendor' in str(p) else 'licenses/SDK-MIT.txt'} for p in sorted((ROOT/'sdk').rglob('*')) if p.suffix in ('.c','.S') and 'tests' not in p.parts]
     manifest['generated_stub_license']={'source':'work/syscalls.S','abi_sha256':digest(ABI),'notice':'licenses/SDK-MIT.txt'}
-    manifest['license_scope']={'runtime':'newlib per-file notices; SDK MIT; FreeType FTL; exact ABI header GPL-2.0-only (contract issue documented)',
+    manifest['license_scope']={'runtime':'newlib per-file notices; SDK MIT; FreeType FTL; TinyGL acknowledgment licence; exact ABI header GPL-2.0-only (contract issue documented)',
          'tools_build_only':'LLVM Apache-2.0 WITH LLVM-exception; NASM BSD; upstream configure/build licenses retained in source',
          'excluded':'libgloss, libnosys, libc/sys board ports, POSIX/unix/signal sample wrappers'}
     manifest['files']={str(p.relative_to(OUT)):digest(p) for p in sorted((OUT/'sysroot').rglob('*')) if p.is_file()}
@@ -167,7 +175,7 @@ def main():
     linked={}
     for mapfile in (OUT/'tests').glob('*.elf.map'):
         members=sorted(set(re.findall(r'([^\s/]+\.a)\(([^)]+)\)',mapfile.read_text())))
-        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','licenses/FreeType-FTL.txt'] if a in ('libfont.a','libfreetype.a') else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
+        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','licenses/TinyGL-LICENSE.txt'] if a=='libgl.a' else ['licenses/SDK-MIT.txt','licenses/FreeType-FTL.txt'] if a in ('libfont.a','libfreetype.a') else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
     manifest['linked_file_licenses']=linked
     manifest['test_evidence']=json.loads((OUT/'tests/host-checks.json').read_text())
     manifest['installed_bytes']=sum(p.stat().st_size for p in (OUT/'sysroot').rglob('*') if p.is_file())

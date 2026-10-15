@@ -123,6 +123,8 @@ def desktop_payloads():
     sources.update(font_sources)
     for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt"):
         sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
+    for name in ("TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
+        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
     sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
     sources["/system/licenses/stb_vorbis.txt"] = ROOT / "third_party/stb/LICENSE"
     sources["/system/licenses/stb_image_write.txt"] = ROOT / "third_party/stb/LICENSE"

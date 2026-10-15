@@ -542,7 +542,7 @@ class DesktopTests(unittest.TestCase):
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt",
-                                        "/system/licenses/minimp3.txt", "/system/licenses/FreeType-FTL.txt", "/system/licenses/FreeType-LICENSE.txt", "/system/licenses/FreeType-NOTICE.txt", "/system/fonts/LICENSES.TXT",
+                                        "/system/licenses/minimp3.txt", "/system/licenses/FreeType-FTL.txt", "/system/licenses/FreeType-LICENSE.txt", "/system/licenses/FreeType-NOTICE.txt", "/system/licenses/TinyGL-LICENSE.txt", "/system/licenses/TinyGL-NOTICE.txt", "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],
                                         *(f"/system/fonts/{p.name}" for p in (ROOT / "assets/fonts/native").glob("*.CFN")),
                                         "/system/icons/tango.cis",
@@ -556,11 +556,11 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 89)  # Desktop payloads; all three DOS games live on the separate games disk.
+        self.assertEqual(len(records), 91)  # Includes TinyGL licence and product acknowledgment.
         for r in records:
             if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
-            elif r["path"].startswith("/system/licenses/FreeType-"):
+            elif r["path"].startswith(("/system/licenses/FreeType-", "/system/licenses/TinyGL-")):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "build/tools/ciuki-sdk/licenses" / Path(r["path"]).name).read_bytes()).hexdigest())
             elif r["path"] == "/system/licenses/minimp3.txt":
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/minimp3/LICENSE").read_bytes()).hexdigest())

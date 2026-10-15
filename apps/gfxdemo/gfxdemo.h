@@ -8,8 +8,7 @@
 #define GFX_MAX_H 480
 #define GFX_FRAME_NS 16666667ull
 enum { GFX_TABS=1, GFX_RUN, GFX_SHADE, GFX_PAUSE };
-struct gfx_vertex { int32_t x,y,inv,u,v,light; }; /* screen Q4; 1/z Q16; uv/z */
-struct gfx_scene { uint32_t pixels[GFX_MAX_W*GFX_MAX_H], depth[GFX_MAX_W*GFX_MAX_H]; unsigned width,height; };
+struct gfx_scene { uint32_t pixels[GFX_MAX_W*GFX_MAX_H]; unsigned width,height; int error; };
 struct gfx_result { uint64_t bytes,ns,operations; unsigned samples; int error; };
 struct gfx_app {
     struct du_ui *ui;
@@ -23,6 +22,9 @@ struct gfx_app {
     uint64_t desktop_composite_ns,desktop_present_ns;
     uint64_t render_ns,submit_ns,wait_ns,convert_ns,copy_ns,slot_ns,refresh_ns;
     uint64_t scene_render_ns;
+    uint64_t total_frames;
+    unsigned stats_page,stats_paused;
+    int native_resolution;
     uint64_t (*time_ns)(void); /* runtime clock; deterministic previews need none */
     int have_timing;
     struct ciuki_accel_info accelerator;
@@ -33,8 +35,6 @@ struct gfx_app {
     int (*request)(void *, unsigned opcode, unsigned index);
     void *request_ctx;
 };
-void gfx_triangle(struct gfx_scene *, struct gfx_vertex, struct gfx_vertex, struct gfx_vertex,
-                  const uint32_t *portrait, int gouraud, unsigned flat_light);
 void gfx_cube(struct gfx_scene *, uint64_t elapsed_ns, const uint32_t *portrait, int gouraud);
 void gfx_sprites(struct gfx_scene *, uint64_t elapsed_ns, const uint32_t *portrait);
 void gfx_attach(struct gfx_app *,struct du_ui *,const uint32_t *portrait);
