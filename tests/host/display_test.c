@@ -10,6 +10,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/bootlog.h>
 
 struct ciuki_boot_info g_boot;
 struct task *g_current;
@@ -22,6 +23,12 @@ static unsigned resource_count, generation, frames, switches, copies;
 static bool prepare_failure, suspended, fs_begin_failure, fs_end_failure;
 static bool accel_ports_owned;
 static unsigned accel_stops;
+static bool is_supersavage,log_active=true;
+static int log_sync_error;
+static unsigned log_syncs;
+void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
+int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
+{ assert(cancel && pause && !cancel(arg)); log_syncs++; return log_sync_error; }
 static bool owner = true, busy, fail_firmware, fail_restore, bad_info, fail_window;
 static uint8_t *aperture, *window;
 static uint32_t window_size;
@@ -112,8 +119,9 @@ bool grants_display_owner(const struct process *p) { return owner && p == &deskt
 bool grants_display_busy(void) { return busy; }
 uint32_t grants_display_pid(void) { return desktop.pid; }
 static const struct pci_func gpu = {.vendor = 0x5333, .device = 0x8C2E, .class_code = 3};
+static const struct pci_func standard_gpu = {.vendor=0x1234,.device=0x1111,.class_code=3};
 unsigned pci_count(void) { return 1; }
-const struct pci_func *pci_get(unsigned i) { return i ? 0 : &gpu; }
+const struct pci_func *pci_get(unsigned i) { return i ? 0 : is_supersavage ? &gpu : &standard_gpu; }
 int copy_from_user(void *dst, uint32_t src, uint32_t n) { copies++; if (src > sizeof(user) || n > sizeof(user) - src) return -EFAULT; memcpy(dst, user + src, n); return 0; }
 int copy_to_user(uint32_t dst, const void *src, uint32_t n) { copies++; if (dst > sizeof(user) || n > sizeof(user) - dst) return -EFAULT; memcpy(user + dst, src, n); return 0; }
 
@@ -136,6 +144,7 @@ static void fixture(void)
 {
     free(aperture); free(window); aperture = window = 0;
     fullscreen_display=suspended=fs_begin_failure=fs_end_failure=false;
+    is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
     initialized = changing = switching = awaiting_frame = false;
     acceleration=0; accel_ports_owned=false; accel_stops=0;
     change_window = 0; change_capacity = changes = drawing = 0; watchdog = 0;
@@ -157,6 +166,7 @@ static void fixture(void)
 static void query_tests(void)
 {
     fixture();
+    is_supersavage=true;
     struct ciuki_display_info q = {.version = 1, .size = sizeof(q)};
     assert(!display_query(&q) && q.mode_count == 2 && q.width == 1024 && q.bpp == 32 && q.pitch == 4112);
     assert(q.modes[0].current && !q.modes[1].current && q.pci_vendor == 0x5333 && q.pci_device == 0x8C2E);
@@ -224,6 +234,18 @@ static void watchdog_tests(void)
 }
 static void fullscreen_tests(void)
 {
+    fixture();is_supersavage=true;
+    acceleration=&test_acceleration;accel_ports_owned=true;
+    assert(display_fullscreen_begin(0x13)==-EOPNOTSUPP && !suspended && !fullscreen_display);
+    assert(!sequence_count && !switches && !accel_stops && accel_ports_owned && fbdev_get()->present && log_syncs==2);
+    fixture();log_active=false;
+    assert(display_fullscreen_begin(3)==-EIO && !sequence_count && fbdev_get()->present);
+    fixture();log_sync_error=-EIO;
+    assert(display_fullscreen_begin(3)==-EIO && !sequence_count && fbdev_get()->present);
+    fixture();g_boot.flags|=CBI_F_SMBIOS_QEMU;log_active=false;
+    assert(!display_fullscreen_begin(3) && !log_syncs);
+    assert(!display_fullscreen_end());
+    puts("PASS f3-26 display: SuperSavage refusal before hardware mutation, durable hardware checkpoints, missing/failed log refusal, QEMU serial-only timing");
     fixture(); acceleration=&test_acceleration; accel_ports_owned=true;
     assert(!display_fullscreen_begin(0x13) && suspended && display_fullscreen_active());
     assert(!fbdev_get()->present && !fbdev_get()->mapped && accel_stops==1);

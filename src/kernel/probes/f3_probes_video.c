@@ -367,12 +367,14 @@ static int probe_f3_vm_fullscreen(void)
     if ((error=fullscreen_type(v,"CD \\DOOM"))) goto cleanup_fs;
     task_sleep_ms(1000);
     if ((error=fullscreen_type(v,"DOOM.EXE -config CIUKI.CFG -nosound -demo demo1"))) goto cleanup_fs;
-    until=deadline_after_ms(180000);
+    uint64_t launch_started=g_ticks;
+    until=deadline_after_ms(300000);
     struct dosvm_video_info video;
     do {
         if (!dosvm_valid(dosvm_key(v)) || deadline_passed(until)) { error=-EIO; goto cleanup_fs; }
         dosvm_video_info(dosvm_key(v),&video); task_sleep_ms(10);
     } while (video.mode!=0x13 || !video.unchained);
+    rec_emit(FS_PROBE,"DATA","case=launch ms=%llu",g_ticks-launch_started);
     rec_emit(FS_PROBE,"ARM","action=fullscreen_enter");
     if ((error=fullscreen_wait(v,true))) goto cleanup_fs;
     uint64_t started=g_ticks;

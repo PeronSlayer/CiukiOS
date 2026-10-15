@@ -19,6 +19,13 @@ static void test_fullscreen_transport(void)
         fs_saved.attr_index=0x32; fs_saved.attr_data_phase=1;
         cvga_init(&fs_card);
         vga_hardware_load(&fs_saved,&card_bus);
+        CHECK(!vga_hardware_verify(&fs_saved,&card_bus));
+        fs_card.seq[1]^=0x20;
+        CHECK(vga_hardware_verify(&fs_saved,&card_bus)==2);
+        fs_card.seq[1]^=0x20;
+        fs_card.gc[6]^=1;
+        CHECK(vga_hardware_verify(&fs_saved,&card_bus)==4);
+        fs_card.gc[6]^=1;
         CHECK(!memcmp(fs_saved.plane,fs_card.plane,sizeof(fs_card.plane)));
         CHECK(!memcmp(fs_saved.seq,fs_card.seq,sizeof(fs_card.seq)));
         CHECK(!memcmp(fs_saved.gc,fs_card.gc,sizeof(fs_card.gc)));
@@ -62,6 +69,17 @@ static void test_fullscreen_service(void)
     uint32_t saved[32]; for (unsigned i=0;i<32;i++) as_lookup(&v->as,0xA0000+i*4096,&saved[i]);
     fs_refuse=true; CHECK(dosvm_fullscreen_enter(key)==-EBUSY && !v->fullscreen && !v->fullscreen_hold);
     fs_refuse=false;
+    fs_test_checkpoint_pin=true;
+    fs_fail_checkpoint="vm-park";
+    unsigned before=fs_begins;
+    CHECK(dosvm_fullscreen_enter(key)==-EIO && !v->fullscreen && !v->fullscreen_hold && fs_begins==before);
+    fs_fail_checkpoint="guest-grant";
+    CHECK(dosvm_fullscreen_enter(key)==-EIO && !fs_display && !v->fullscreen && !v->fullscreen_hold);
+    for (unsigned i=0;i<32;i++) { uint32_t pte;as_lookup(&v->as,0xA0000+i*4096,&pte);CHECK((pte&~0x60u)==(saved[i]&~0x60u)); }
+    fs_fail_checkpoint=0;
+    fs_stuck_blank=true;
+    CHECK(dosvm_fullscreen_enter(key)==-EIO && !fs_display && !v->fullscreen && !v->fullscreen_hold);
+    fs_stuck_blank=false;
     CHECK(!dosvm_fullscreen_enter(key) && v->fullscreen && fs_display);
     hardware=card_bus; vga_hardware_load(&v->vga,&hardware);
     for (unsigned i=0;i<32;i++) {
@@ -107,14 +125,26 @@ static void test_fullscreen_service(void)
     CHECK(dosvm_input_focus(key,true) && !v->fullscreen_suspended);
     dosvm_fullscreen_input(INPUT_KEY,0x0F,0); dosvm_fullscreen_input(INPUT_KEY,0x38,0);
     v->fullscreen_parked=true; CHECK(!dosvm_fullscreen_enter(key)); hardware=card_bus;
+    uint32_t *pd=P2V(v->as.pd_phys),*pt=P2V(pd[0]&~0xFFFu);
+    pt[0xA0]|=0x40;
+    dosvm_fullscreen_poll(); CHECK(fullscreen_frame_seen && strstr(last_dosvm_log,"fullscreen_first_frame"));
     v->idle.sleeping=true;
     g_ticks+=15000; dosvm_fullscreen_poll(); CHECK(v->fullscreen && fs_display);
     v->idle.sleeping=false; v->fullscreen_progress=g_ticks;
     g_ticks+=15000; dosvm_fullscreen_poll(); CHECK(!v->fullscreen && !fs_display);
+    /* Changing instructions and audio/idle hints cannot hide no guest frame. */
+    v->fullscreen_parked=true; CHECK(!dosvm_fullscreen_enter(key)); hardware=card_bus;
+    v->idle.sleeping=true;
+    g_ticks+=4999; dosvm_fullscreen_progress(v,8,0x1234);dosvm_fullscreen_poll();CHECK(v->fullscreen);
+    g_ticks++;dosvm_fullscreen_progress(v,8,0x1235);dosvm_fullscreen_poll();
+    CHECK(!v->fullscreen && !fs_display && v->fullscreen_error==-ETIMEDOUT);
+    v->idle.sleeping=false;
     v->fullscreen_parked=true; CHECK(!dosvm_fullscreen_enter(key)); hardware=card_bus;
     CHECK(!dosvm_stop(key,DOSVM_FAULT) && !fs_ports);
     dosvm_fullscreen_poll(); CHECK(!v->fullscreen && !fs_display);
     CHECK(!dosvm_destroy(key,false)); empty();
+    fs_test_checkpoint_pin=false;
     g_boot.flags=old_flags; g_boot.test_request_len=old_length; memcpy(g_boot.test_request,old_request,sizeof(old_request));
     puts("PASS full-screen service: refusal/rollback, UC aperture grant/revoke, task-local ports, Alt+Enter/Tab consumed, PS/2/USB mouse path, pause/resume, watchdog and fault cleanup");
+    puts("PASS f3-26 full-screen: pre-mutation checkpoint failure, rollback before guest grant, VGA register readback, first-write evidence and independent 5 s first-frame timeout");
 }

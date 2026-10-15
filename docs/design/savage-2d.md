@@ -4,6 +4,59 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f3-26: refuse an unrecoverable full-screen handover
+
+Research checked on 2026-10-15 against the local `savage_driver.h` and
+`savage_accel.c`, and upstream
+[`SavageSave`, `SavageWriteMode`, `SavageResetStreams`](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c).
+SuperSavage selects stream addressing with CR67.3; stream enable bits are
+CR67.2:1. CR69.7 is used by other Savage branches, so blindly clearing it
+is not the mobile sequence. Mobile restoration also saves panel expansion
+SR54–SR5B, clocks and extended CRTC state. Zeroing stream MMIO registers
+without preserving the desktop is insufficient. The standard VGA aperture
+alone does not supply those resources.
+
+The a4f67ac1 disk and serial captures contain no full-screen transaction,
+video cost, remap cost or CPU cost intervals. They cannot locate the failed
+instruction or establish the remaining windowed bottleneck. The current
+code does establish a recovery defect: a BIOS access fault disables and
+quarantines the backend, while both full-screen restore and fallback mode
+set need that same backend. Instruction progress cannot prove visible video.
+
+Decision: 5333:8c2e full-screen requests return EOPNOTSUPP with
+`reason=supersavage-recovery-unavailable` before suspending grants, stopping
+acceleration or invoking firmware. This implements the safe refusal outcome;
+it does not implement a native SuperSavage mode provider. That provider needs
+a separately reviewed, complete panel/clock/stream save and restore contract
+that remains usable after a firmware fault. Do not broaden BIOS permissions,
+reset quarantine or infer a panel sequence from the desktop 2D initializer.
+
+Full-screen stages on admitted adapters log before each operation. Hardware
+checkpoints wait for the existing storage worker's durable watermark; missing
+or failed persistence refuses entry. Recovery continues if persistence fails.
+Emulated adapters retain serial evidence without storage waits. BIOS register
+records bracket each call; logging waits are outside the cumulative 2 s
+firmware budget. Port and memory faults include the denied address. VGA
+register readback detects failed loads before guest grants. A native 5 s
+watchdog requires an aperture write even if guest instructions keep changing;
+this establishes a guest store, not proof that a panel displayed a frame.
+
+L in the boot menu now enables diagnostic sampling for that boot. Four
+`vm_perf_live*` records per interval enter only the runtime RAM log queue;
+they perform no VFS, console or UART operation. The existing detailed dump
+remains available after VM destruction. Probe-selected boots retain their
+existing serial evidence stream. On T23, compare live guest/monitor/presenter
+time, VGA exits/remap/harvest time and delivered timer/sound IRQs against the
+existing CPU sampler's audio refill share. A new hardware run is required
+before selecting a dominant-cost correction; this patch claims no lag fix.
+
+The readback check uses the standard writable masks documented by
+[FreeVGA sequencer registers](https://www.scs.stanford.edu/22wi-cs212/pintos/specs/freevga/vga/seqreg.htm)
+and [graphics registers](https://www.scs.stanford.edu/22wi-cs212/pintos/specs/freevga/vga/graphreg.htm).
+It preserves register indices and DAC transaction state. Host tests inject
+blanking and aperture-selection mismatches, logging failures and a guest
+that changes instruction addresses without producing a first frame.
+
 ## f1-65: send the global descriptor through BCI
 
 Research rechecked on 2026-10-15. The local reference files are under

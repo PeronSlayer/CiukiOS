@@ -6,6 +6,7 @@
 #include <ciuki/biosvm.h>
 #include <ciuki/registry.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/bootlog.h>
 
 static bool switching, awaiting_frame;
 static bool fullscreen_display;
@@ -14,6 +15,21 @@ static uint32_t changes;
 static uint64_t frame_deadline;
 static struct fb_device previous;
 static struct task *watchdog;
+
+static bool checkpoint_cancel(void *arg) { (void)arg; return false; }
+static void checkpoint_pause(void *arg) { (void)arg; task_sleep_ms(1); }
+int display_fullscreen_checkpoint(const char *step, int result)
+{
+    /* The emulated adapters have serial evidence and tight switch timings.
+     * Hardware must commit the watermark before the next transaction step. */
+    if (g_boot.flags & CBI_F_SMBIOS_QEMU) return 0;
+    klog("[display] fullscreen_step=%s result=%d tick=%llu",step,result,g_ticks);
+    struct bootlog_stats stats;
+    bootlog_snapshot(&stats);
+    int e=stats.active ? bootlog_sync(checkpoint_cancel,checkpoint_pause,0) : -EIO;
+    if (e) klog("[display] fullscreen_log error=%d step=%s",e,step);
+    return e;
+}
 
 uint32_t display_change_counter(void) { return changes; }
 static void changed(void) { if (!++changes) ++changes; }
@@ -174,6 +190,8 @@ int32_t display_syscall(struct trap_frame *tf)
 bool display_fullscreen_active(void) { return fullscreen_display; }
 int display_fullscreen_begin(uint8_t mode)
 {
+    int logged=display_fullscreen_checkpoint("request",0);
+    if (logged) return logged;
     struct process *desktop=proc_find(grants_display_pid());
     const char *why=0;
     if (!desktop) why="no-display-owner";
@@ -193,13 +211,29 @@ int display_fullscreen_begin(uint8_t mode)
             (unsigned)fbdev_get()->present,(unsigned)fbdev_get()->mode_id);
         return -EOPNOTSUPP;
     }
+    /* The standard VGA transport cannot save the mobile panel/PLL/streams.
+     * A denied BIOS dependency disables the backend, including rollback.
+     * Refuse before grants, acceleration or the firmware can alter scanout.
+     * See docs/design/savage-2d.md, f3-26. Never guess CR67/CR69 settings. */
+    for (unsigned i=0;i<pci_count();i++) {
+        const struct pci_func *p=pci_get(i);
+        if (p && p->class_code==3 && p->vendor==0x5333 && p->device==0x8C2E) {
+            klog("[display] fullscreen_refused reason=supersavage-recovery-unavailable pci=5333:8c2e mode=%u",mode);
+            display_fullscreen_checkpoint("refused",-EOPNOTSUPP);
+            return -EOPNOTSUPP;
+        }
+    }
     if (display_worker_start()) return -ENOMEM;
     switching=true;
     previous=*fbdev_get();
     int e=biosvm_video_prepare();
     if (e) { switching=false; return -EIO; }
+    e=display_fullscreen_checkpoint("grant-suspend",0);
+    if (e) { switching=false; return e; }
     e=grants_display_suspend(true);
     if (e) { switching=false; return e; }
+    e=display_fullscreen_checkpoint("desktop-revoke",0);
+    if (e) { grants_display_suspend(false); switching=false; return e; }
     e=fbdev_change_begin();
     if (e) { grants_display_suspend(false); switching=false; return e; }
     e=biosvm_video_fullscreen_begin(mode);
@@ -214,6 +248,8 @@ int display_fullscreen_end(void)
     if (!fullscreen_display) return 0;
     if (switching) return -EBUSY;
     switching=true;
+    /* Logging failure must never prevent an already needed recovery. */
+    display_fullscreen_checkpoint("desktop-restore",0);
     uint8_t info[256]; struct fb_device next;
     int e=biosvm_video_fullscreen_end(previous.mode_id,info);
     if (!e) e=fbdev_mode_decode(previous.mode_id,info,&next);
@@ -235,5 +271,6 @@ int display_fullscreen_end(void)
     }
     switching=false;
     log_mode(previous.mode_id,e);
+    display_fullscreen_checkpoint("desktop-restored",e);
     return e;
 }

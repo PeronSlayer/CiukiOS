@@ -28,14 +28,14 @@ class KernelLatencyTests(unittest.TestCase):
                             '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 
-    def test_diagnostics_are_separate_from_screen_logging(self):
+    def test_diagnostics_require_explicit_boot_selection(self):
         menu = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
         platform = (ROOT / 'src/boot/ciukldr/platform.inc').read_text()
         accept = platform.split('mov byte [selector_fw], 1', 1)[1]
         self.assertIn('call selector_accept\n    or byte [B(flags)+1], CBI_F_DIAG_VERBOSE >> 8', accept)
-        self.assertNotIn('CBI_F_DIAG_VERBOSE', menu)
         screen = menu.split('.log:', 1)[1].split('.probe:', 1)[0]
-        self.assertNotIn('CBI_F_DIAG_VERBOSE', screen)
+        self.assertIn('or byte [B(flags)+1], CBI_F_DIAG_VERBOSE >> 8', screen)
+        self.assertEqual(menu.count('CBI_F_DIAG_VERBOSE'), 1)
         for path in ('usb/uhci.c', 'usb/usb_hid.c', 'vm/dosvm_perf.inc', 'drivers/savage2d.c'):
             self.assertIn('CBI_F_DIAG_VERBOSE', (ROOT / 'src/kernel' / path).read_text(), path)
         for suite in ('f0-smoke', 'f1-usb', 'f4-audio', 'f3-vm'):

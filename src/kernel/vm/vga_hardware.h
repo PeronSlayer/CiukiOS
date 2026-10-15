@@ -12,4 +12,6 @@ struct vga_hardware_bus {
 };
 void vga_hardware_capture(cvga_state *, const struct vga_hardware_bus *);
 void vga_hardware_load(const cvga_state *, const struct vga_hardware_bus *);
+/* Bit 0: misc/enable, 1: sequencer, 2: GC, 3: CRTC, 4: attribute. */
+unsigned vga_hardware_verify(const cvga_state *, const struct vga_hardware_bus *);
 #endif

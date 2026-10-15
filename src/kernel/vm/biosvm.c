@@ -12,6 +12,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/abi.h>
+#include <ciuki/display.h>
 
 extern void v86_enter(const struct v86_frame *f, uint32_t *continuation);
 extern void v86_leave(uint32_t continuation) __attribute__((noreturn));
@@ -198,6 +199,11 @@ void biosvm_trap(struct trap_frame *tf)
             /* INT3/INTO are traps: saved IP already names the next insn. */
             rc = v86_reflect(&firmware, f, (uint8_t)tf->vector);
         } else if (tf->vector < 0x20 || tf->vector >= 0x30) {
+            if (video_active) {
+                klog("[biosvm] fullscreen_fault vector=%u cs=%04x ip=%04x address=%08x",
+                    tf->vector,tf->cs,tf->eip,tf->vector==14 ? read_cr2() : 0);
+                display_fullscreen_checkpoint("bios-fault",-EFAULT);
+            }
             rc = v86_abort(&firmware, f, -EFAULT);
             if (tf->vector == 14)
                 firmware.fault.address = read_cr2();
@@ -918,7 +924,21 @@ static int video_io(void *arg, uint16_t port, unsigned width, bool write, uint32
         return 0;
     }
     /* Native input remains its sole consumer, even during INT10. */
-    if (!input_enabled && (port == 0x60 || port == 0x64)) return -V86_EPERM;
+    bool allowed=width==1;
+    if (!input_enabled && (port==0x60 || port==0x64)) allowed=false;
+    else {
+        bool rule=false;
+        for (unsigned i=0;i<firmware.nports;i++)
+            if (port>=firmware.ports[i].first && port<=firmware.ports[i].last) rule=true;
+        allowed&=rule;
+    }
+    if (firmware.qemu_pmtimer && port==0x608 && width==4 && !write) allowed=true;
+    if (!allowed) {
+        klog("[biosvm] fullscreen_port_fault port=%04x width=%u write=%u value=%08x",
+            port,width,(unsigned)write,*value);
+        display_fullscreen_checkpoint("bios-port-fault",-V86_EPERM);
+        if (!input_enabled && (port==0x60 || port==0x64)) return -V86_EPERM;
+    }
     return -ENOSYS; /* PIC/PIT remain virtual; unknown dependencies fault */
 }
 
@@ -977,12 +997,22 @@ static void fullscreen_aperture(bool active)
     firmware.io=active ? video_io : 0;
     firmware.max_call_ms=active ? 2000 : 0;
 }
-static int fullscreen_call(struct biosvm_regs *r, uint64_t deadline, bool vbe)
+static int fullscreen_call(struct biosvm_regs *r, uint32_t *budget, bool vbe, bool recovery)
 {
-    uint64_t now=deadline_after_ms(0);
-    if (now>=deadline) return -V86_ETIMEDOUT;
-    int e=submit(r,(uint32_t)(deadline-now),0);
-    return e ? e : vbe && (uint16_t)r->eax!=0x004F ? -V86_EIO : 0;
+    if (!(g_boot.flags&CBI_F_SMBIOS_QEMU)) log_regs("fullscreen","in",r);
+    int e=display_fullscreen_checkpoint("bios-call",0);
+    if (e && !recovery) return e;
+    if (!*budget) return -V86_ETIMEDOUT;
+    /* Durable logging is outside the firmware's cumulative 2 s budget. */
+    uint64_t begin=deadline_after_ms(0);
+    e=submit(r,*budget,0);
+    uint64_t elapsed=deadline_after_ms(0)-begin;
+    *budget=elapsed>=*budget ? 0 : *budget-(uint32_t)elapsed;
+    if (!e && vbe && (uint16_t)r->eax!=0x004F) e=-V86_EIO;
+    if (!(g_boot.flags&CBI_F_SMBIOS_QEMU)) log_regs("fullscreen","out",r);
+    int logged=display_fullscreen_checkpoint("bios-return",e);
+    if (!e && !recovery) e=logged;
+    return e;
 }
 int biosvm_video_fullscreen_begin(uint8_t mode)
 {
@@ -992,26 +1022,27 @@ int biosvm_video_fullscreen_begin(uint8_t mode)
     if (e) return e;
     kmutex_lock(&request_mutex);
     if (fullscreen_video || video_claimed || quarantined) { e=-EBUSY; goto done_fs; }
+    if ((e=display_fullscreen_checkpoint("video-claim",0))) goto done_fs;
     if ((e=claim_video())) goto done_fs;
     fullscreen_aperture(true);
-    uint64_t deadline=deadline_after_ms(2000);
+    uint32_t budget=2000;
     struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15};
     fullscreen_bytes=0;
-    if ((e=fullscreen_call(&r,deadline,true))) goto revoke_fs;
+    if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
     unsigned bytes=(uint16_t)r.ebx*64u;
     if (!bytes || bytes>sizeof(fullscreen_saved)) { e=-EOPNOTSUPP; goto revoke_fs; }
     memset(P2V(BIOSVM_SCRATCH+0x800),0,bytes);
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=1,
         .es=BIOSVM_SCRATCH>>4,.ebx=0x800};
-    if ((e=fullscreen_call(&r,deadline,true))) goto revoke_fs;
+    if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
     memcpy(fullscreen_saved,P2V(BIOSVM_SCRATCH+0x800),bytes);
     fullscreen_bytes=bytes;
     /* No VBE/extension mode from a DOS VM is accepted. */
     r=(struct biosvm_regs){.interrupt=0x10,.eax=mode};
-    e=fullscreen_call(&r,deadline,false);
+    e=fullscreen_call(&r,&budget,false,false);
     if (!e) {
         r=(struct biosvm_regs){.interrupt=0x10,.eax=0x0F00};
-        e=fullscreen_call(&r,deadline,false);
+        e=fullscreen_call(&r,&budget,false,false);
         if (!e && (r.eax&0x7F)!=mode) e=-V86_EIO;
     }
     /* Even a failed mode set may have touched hardware: retain the saved
@@ -1031,18 +1062,18 @@ int biosvm_video_fullscreen_end(uint16_t mode, uint8_t info[256])
     int e=-V86_EIO;
     if (!fullscreen_video || !fullscreen_bytes || quarantined) goto done_restore;
     fullscreen_aperture(true);
-    uint64_t deadline=deadline_after_ms(2000);
+    uint32_t budget=2000;
     memcpy(P2V(BIOSVM_SCRATCH+0x800),fullscreen_saved,fullscreen_bytes);
     struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=2,
         .es=BIOSVM_SCRATCH>>4,.ebx=0x800};
-    if ((e=fullscreen_call(&r,deadline,true))) goto revoke_restore;
+    if ((e=fullscreen_call(&r,&budget,true,true))) goto revoke_restore;
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F03};
-    if ((e=fullscreen_call(&r,deadline,true))) goto revoke_restore;
+    if ((e=fullscreen_call(&r,&budget,true,true))) goto revoke_restore;
     if ((r.ebx&0x7FFF)!=(mode|0x4000)) { e=-V86_EIO; goto revoke_restore; }
     memset(P2V(BIOSVM_SCRATCH+0x800),0,256);
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F01,.ecx=mode,
         .es=BIOSVM_SCRATCH>>4,.edi=0x800};
-    if (!(e=fullscreen_call(&r,deadline,true))) memcpy(info,P2V(BIOSVM_SCRATCH+0x800),256);
+    if (!(e=fullscreen_call(&r,&budget,true,true))) memcpy(info,P2V(BIOSVM_SCRATCH+0x800),256);
 revoke_restore:
     fullscreen_aperture(false);
     fullscreen_video=false; fullscreen_bytes=0;

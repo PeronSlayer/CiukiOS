@@ -246,6 +246,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     printf("  record %s %s %s\n", probe, event, extra);
 }
 bool rec_active(void) { return true; } /* host replay owns its record scope */
+void rec_diag_disk(const char *probe,const char *fmt,...) { (void)probe;(void)fmt; }
 void rec_diag(const char *probe, const char *fmt, ...)
 {
     if (!(g_boot.flags & CBI_F_VERBOSE)) return;

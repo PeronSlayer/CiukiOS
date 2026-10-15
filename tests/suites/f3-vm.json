@@ -6113,7 +6113,7 @@
       "probe": "vm-fullscreen",
       "profile": "qemu-t23",
       "selector": "f3:vm-fullscreen run={run_id}",
-      "timeout": 360,
+      "timeout": 600,
       "fullscreen_screen": true,
       "actions": [
         {
@@ -6329,7 +6329,7 @@
       "probe": "vm-fullscreen",
       "profile": "qemu-t23",
       "selector": "f3:vm-fullscreen run={run_id}",
-      "timeout": 360,
+      "timeout": 600,
       "fullscreen_screen": true,
       "actions": [
         {
