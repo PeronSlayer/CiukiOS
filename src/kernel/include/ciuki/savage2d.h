@@ -59,13 +59,14 @@ int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_
 struct savage_config { uint32_t descriptor; uint8_t depth; };
 bool savage2d_config(unsigned, const struct fb_device *, struct savage_config *);
 struct savage_sweep_result {
-    unsigned tried, passed;
+    unsigned tried, passed, skipped, timeouts, completed;
     int first, error;
     bool restored;
 };
 typedef void (*savage_sweep_line)(void *, const char *);
+typedef int (*savage_sweep_checkpoint)(void *);
 int savage2d_sweep_model(struct savage2d *, const struct savage_io *, const struct fb_device *,
     bool supersavage, uint8_t *scratch, uint32_t offset, uint64_t deadline_us,
-    savage_sweep_line, void *, struct savage_sweep_result *);
+    savage_sweep_line, savage_sweep_checkpoint, void *, struct savage_sweep_result *);
 int savage2d_hardware_sweep(uint64_t deadline_ms, savage_sweep_line, void *, struct savage_sweep_result *);
 #endif

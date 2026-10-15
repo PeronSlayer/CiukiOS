@@ -1,5 +1,44 @@
 # Boot hardware check (f0-26)
 
+## F0-28 safety amendment (2026-10-15)
+
+This amendment supersedes the f0-26 timeout policy and the THRE-only
+physical FIFO refill policy described below. Research, configuration 3's
+decode and the evidence boundary are in
+[f0-28 sweep/serial validation](../validation/f0-28-sweep-serial.md).
+
+H records the full candidate before commands and commits both BOOT.LOG's
+captured watermark and the raw black box. Each result, exclusion and
+recovered timeout is checkpointed before proceeding. A missing/failed sink
+prevents further candidates. Matrix IDs stay stable; block-write-enabled
+candidates and non-linear layouts without qualified surface setup are
+recorded as skips. Savage4 additionally skips descriptors with BCI disabled.
+Padded-pitch candidates must keep stride out of control bits and bound the
+destination inside the reservation even if the engine uses the other depth.
+These restrictions apply to the diagnostic sweep; `EngineConfig` production
+selection is unchanged.
+
+Each candidate has a 20-ms command-completion deadline and a finite poll
+count. H can recover a timeout using one CR66.1 pulse (10 ms set/10 ms clear,
+preserving CR66.0), then require idle and known safe engine setup before
+moving to the next candidate. A failed recovery keeps quarantine, leases
+and the attempt marker. No software watchdog can interrupt a bus transaction
+which never returns; unqualified configurations are excluded before issuance.
+Production quarantine is unchanged. Each depth receives up to five seconds
+for commands and evidence, within the page's 15-second item budget. A cutoff
+retains completed/passed/skipped/timeout counts and the first exact match;
+exceeding the item deadline no longer overwrites those measurements.
+
+The serial result includes `resent`, a local repeated-byte submission audit;
+PASS requires zero. A detected repeated logical position disables the sink
+before another port write. Physical FIFOs use TEMT to observe level zero
+and grant at most their verified capacity once per refill. Standard 16550
+registers cannot report a numeric TX FIFO level. An exclusive refill epoch
+invalidates stale observations on panic takeover; each output byte and cursor
+advance stay under the same short IRQ lock. TCG/test chardevs retain THRE,
+their verified FIFO limit and the existing admission exemption. The audit
+does not measure remote receipt or duplication at the receiver.
+
 Select **H Hardware check** during the loader's three-second menu. This sets
 CBI flag bit 13, enables the text console on the existing framebuffer, and
 runs the diagnostic task after ordinary drivers initialise. It does not start

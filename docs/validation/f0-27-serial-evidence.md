@@ -1,5 +1,10 @@
 # F0-27 serial evidence admission
 
+F0-28 retains this admission/chardev policy and strengthens physical FIFO
+readiness and refill/cursor ownership. See
+[sweep/serial validation](f0-28-sweep-serial.md) for the new audit and its
+local-submission evidence boundary.
+
 Research checked on 2026-10-15 before implementation:
 
 - [QEMU x86 CPUID implementation](https://github.com/qemu/qemu/blob/master/target/i386/cpu.c)

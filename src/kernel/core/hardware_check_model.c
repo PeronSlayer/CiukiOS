@@ -18,7 +18,10 @@ void hardware_check_model(const struct hw_check_ops *ops, struct hw_check_result
         uint64_t elapsed = ops->now(ops->ctx) - start;
         if (elapsed > HW_CHECK_LIMIT_MS) {
             results[i].status = HW_FAIL;
-            ksnprintf(results[i].detail, sizeof(results[i].detail), "deadline exceeded: %llu ms", elapsed);
+            /* Preserve measurements from a truncated sweep/check. The
+             * result line already reports elapsed time and failure. */
+            if (!results[i].detail[0])
+                ksnprintf(results[i].detail, sizeof(results[i].detail), "deadline exceeded: %llu ms", elapsed);
         }
         ksnprintf(line, sizeof(line), "%s %s: %s (%llu ms)",
             results[i].status == HW_PASS ? "PASS" : results[i].status == HW_SKIP ? "SKIP" : "FAIL",

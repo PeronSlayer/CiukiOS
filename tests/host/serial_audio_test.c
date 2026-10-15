@@ -66,7 +66,7 @@ static void irq_restore(uint32_t f)
 
 static uint8_t regs[8];
 static bool present = true, ready, fifo;
-static bool fifo_enabled, timed, poll_clock;
+static bool fifo_enabled, timed, poll_clock, stale_thre;
 static unsigned iir_fault;
 static unsigned lsr_reads, filled, lsr_if_off;
 static char emitted[400000];
@@ -93,6 +93,7 @@ static void advance_us(unsigned us)
 }
 static void (*preemption)(void);
 static unsigned preempt_at, preemptions;
+static void (*lsr_preemption)(void);
 static void preempt_writer(void)
 {
     if ((flags & 0x200) && preemption && emitted_count >= preempt_at) {
@@ -117,12 +118,15 @@ static uint8_t inb(uint16_t p)
         lsr_reads++;
         if (!(flags & 0x200)) lsr_if_off++;
         if (slow_ports) latency_advance(130);
+        if (lsr_preemption && (flags&0x200)) {
+            void (*hook)(void)=lsr_preemption;lsr_preemption=NULL;hook();
+        }
         if (timed) {
             if (poll_clock) advance_us(1);
-            return ready ? ((!holding_used ? 0x20 : 0) | (!shifting ? 0x40 : 0)) : 0;
+            return ready ? ((!holding_used || stale_thre ? 0x20 : 0) | (!shifting ? 0x40 : 0)) : 0;
         }
         if (ready) filled = 0;
-        return ready ? 0x20 : 0;
+        return ready ? 0x60 : 0;
     }
     return regs[off];
 }
@@ -183,11 +187,12 @@ static void reset_uart(bool with_fifo)
 {
     CHECK(flags == 0x200 && !preemption);
     memset(regs,0,sizeof(regs));
-    fifo=with_fifo;present=ready=true;fifo_enabled=timed=poll_clock=slow_ports=false;
+    fifo=with_fifo;present=ready=true;fifo_enabled=timed=poll_clock=slow_ports=stale_thre=false;
     iir_fault=holding_used=overflows=tx_writes=pending_ticks=lost_ticks=0;
     shifting=false;clock_units=shift_end=latency_us=critical_start=critical_max=0;
     emitted_count=filled=lsr_reads=lsr_if_off=preemptions=writer_creations=0;g_ticks=0;
     g_current=NULL;evidence_sleeps=0;evidence_wait_hook=NULL;
+    lsr_preemption=NULL;
     g_boot.flags=0;cpuid_max=1;cpuid_features=0;memset(hypervisor_id,0,sizeof(hypervisor_id));
     serial_init(0x3F8,3);
     CHECK(serial_present() && uart_fifo_bytes==(fifo ? 16u:1u));
@@ -532,13 +537,48 @@ static void ticket_tests(bool with_fifo)
     unsigned sent=0;
     for (unsigned i=0;i<100;i++) if (tickets[i] && tickets[i]<=snapshot.sent) sent++;
     CHECK(sent==accepted && snapshot.accepted==100 && snapshot.sent==100 && !snapshot.queued);
-    CHECK(!snapshot.dropped && !overflows && !lsr_if_off);
+    CHECK(!snapshot.dropped && !snapshot.resent && !overflows && !lsr_if_off);
     CHECK(emitted_count==length && !memcmp(emitted,expected,length));
-    printf("serial hardware-check %s: requested=100 accepted=%u whole_sent=%u dropped=%u queued=%u, quota respected PASS\n",
-           with_fifo ? "16550":"16450",accepted,sent,snapshot.dropped,snapshot.queued);
+    printf("serial hardware-check %s: requested=100 accepted=%u whole_sent=%u dropped=%u queued=%u resent=%u, quota respected PASS\n",
+           with_fifo ? "16550":"16450",accepted,sent,snapshot.dropped,snapshot.queued,snapshot.resent);
+}
+static void nested_refill(void) { (void)serial_burst(); }
+static void readiness_panic(void)
+{
+    uint32_t f=irq_save();serial_panic();serial_write("panic\n",6);irq_restore(f);
+}
+static void fifo_race_tests(void)
+{
+    reset_uart(true);timed=poll_clock=stale_thre=true;
+    serial_write(task_record,sizeof(task_record)-1);
+    uint32_t f=irq_save();serial_panic();irq_restore(f);
+    while (shifting) advance_us(1000);
+    CHECK(!overflows && emitted_count==sizeof(task_record));
+    CHECK(!memcmp(emitted,"[task] complete record A with a long payload\r\n",sizeof(task_record)));
+    puts("serial FIFO race: THRE held high while FIFO occupied; panic drain has zero overflows and exact bytes PASS");
+
+    /* Re-entry during readiness used to consume the same refill
+     * twice, then advance a completed record's cursor again. */
+    reset_uart(true);serial_write("A",1);
+    lsr_preemption=nested_refill;
+    tick();
+    CHECK(!lsr_preemption && !uart_used && !uart_record_count && emitted_count==1 && emitted[0]=='A');
+    puts("serial cursor race: nested refill at readiness boundary submits one byte exactly once PASS");
+    for (unsigned kind=0;kind<2;kind++) {
+        reset_uart(kind);serial_write("prefix\n",7);lsr_preemption=readiness_panic;
+        tick();emitted[emitted_count]=0;struct serial_stats stats;serial_snapshot(&stats);
+        CHECK(!strcmp(emitted,"prefix\r\npanic\r\n") && !stats.queued && stats.sent==2 && !stats.resent);
+    }
+    /* Exercise the audit independently: a rewound logical position must
+     * disable the sink without issuing another UART byte. */
+    reset_uart(true);serial_write("audit",5);uart_next_byte=1;tick();
+    struct serial_stats stats;serial_snapshot(&stats);
+    CHECK(stats.resent==1 && !stats.present && !tx_writes && stats.queued==5);
+    puts("serial audit: panic during readiness preserves suffix/tickets; replay attempt counted and refused before I/O PASS");
 }
 int main(void)
 {
+    fifo_race_tests();
     line_rate_case(true,0);line_rate_case(false,0);
     line_rate_case(true,1);line_rate_case(false,2);line_rate_case(true,3);
     for (unsigned kind=0;kind<2;kind++) {

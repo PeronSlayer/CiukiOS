@@ -11,6 +11,8 @@
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
 #include <ciuki/registry_value.h>
+#include <ciuki/bootlog.h>
+#include <ciuki/blackbox.h>
 #include "../fs/vfs.h"
 #define RECT 0x48000000u
 #define XP 0x01000000u
@@ -185,6 +187,30 @@ static int fault(struct savage2d *s)
 }
 static int fail(struct savage2d *s, const char *reason)
 { s->reason = reason; return fault(s); }
+
+/* VGA port reset remains usable when the command engine is busy. It does
+ * not depend on any engine MMIO read or on the experimental descriptor. */
+static int reset_engine(struct savage2d *s)
+{
+    uint8_t cr66 = port_cr_read(s, 0x66) & 0xbbu;
+    if (!(cr66 & 1u)) { s->reason="engine_disabled"; return -ENODEV; }
+    uint64_t start=s->io.now_us(s->io.ctx);
+    port_cr_write(s,0x66,cr66|2u);
+    int delay=s->io.delay_us(s->io.ctx,10000);
+    uint8_t asserted=port_cr_read(s,0x66);
+    init_record("cr",0x66,8,cr66|2u,asserted);
+    /* Deassert even after a failed delay; never change CR66.0. */
+    port_cr_write(s,0x66,cr66&~2u);
+    int settled=s->io.delay_us(s->io.ctx,10000);
+    uint8_t cleared=port_cr_read(s,0x66);
+    init_record("cr",0x66,8,cr66&~2u,cleared);
+    s->reset_us+=s->io.now_us(s->io.ctx)-start;
+    if (delay || settled) { s->reason="delay_failed"; return -EIO; }
+    if ((asserted&0xbbu)!=((cr66|2u)&0xbbu) || (cleared&0xbbu)!=((cr66&~2u)&0xbbu)) {
+        s->reason="reset_readback_failed"; return -EIO;
+    }
+    return 0;
+}
 
 static int disable_bci(struct savage2d *s, uint32_t control)
 {
@@ -430,23 +456,7 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     if (!(cr66 & 1u)) {
         s->cpu_safe=true; s->reason="engine_disabled"; restore_mmio(s); return -ENODEV;
     }
-    uint64_t reset_start = io->now_us(io->ctx);
-    port_cr_write(s, 0x66, cr66 | 2u);
-    int delay = io->delay_us(io->ctx, 10000);
-    uint8_t asserted = port_cr_read(s, 0x66);
-    init_record("cr", 0x66, 8, cr66 | 2u, asserted);
-    /* Always deassert reset even when pacing failed. Never change CR66.0. */
-    port_cr_write(s, 0x66, cr66 & ~2u);
-    int settled = io->delay_us(io->ctx, 10000);
-    s->reset_us = io->now_us(io->ctx) - reset_start;
-    uint8_t cleared = port_cr_read(s, 0x66);
-    init_record("cr", 0x66, 8, cr66 & ~2u, cleared);
-    if (delay || settled) return fail(s, "delay_failed");
-    /* Reserved CR66.2/.6 have undefined reads. All defined controls,
-     * especially enable and both reset edges, must still agree. */
-    if ((asserted & 0xbbu) != ((cr66 | 2u) & 0xbbu) ||
-        (cleared & 0xbbu) != ((cr66 & ~2u) & 0xbbu))
-        return fail(s, "reset_readback_failed");
+    if (reset_engine(s)) return fault(s);
     /* Independent engine-window probe after reset. RE046-B gives MM48C18
      * a zero power-on default, but not a guaranteed CR66 reset value. Test
      * the defined controls, preserving firmware counters/reserved fields;
@@ -1053,16 +1063,101 @@ const struct accel_ops *savage2d_init(const struct fb_device *d, struct vfs *vfs
     return init_with_io(d, vfs, &io);
 }
 
-/* The sweep owns a disjoint VRAM reservation. A wrong stride/depth/tile may
- * damage only that reservation; never run experimental packets on scanout. */
+/* A diagnostic timeout must not enter the production quarantine teardown:
+ * keep VGA access until the one bounded reset has either proved idle or
+ * failed. Both a clock deadline and a read cap bound a responsive bus. */
+static int sweep_wait(struct savage2d *s, uint64_t until)
+{
+    s->cpu_safe=false; s->idle_waits++;
+    for (unsigned poll=0;poll<=WAIT_US/100u;poll++) {
+        if (s->io.now_us(s->io.ctx)>=until) return -ETIMEDOUT;
+        uint32_t status=s->io.read32(s->io.ctx,SAVAGE_STATUS);
+        s->status=status; s->status_logged=true;
+        if (idle_status(s,status)) { s->cpu_safe=true; return 0; }
+        if (status==UINT32_MAX || (s->reason && !strncmp(s->reason,"status_contradiction",sizeof("status_contradiction")))) return -EIO;
+        uint64_t now=s->io.now_us(s->io.ctx);
+        if (now>=until) break;
+        uint32_t delay=until-now<100 ? (uint32_t)(until-now) : 100;
+        if (s->io.delay_us(s->io.ctx,delay)) return -EIO;
+    }
+    return -ETIMEDOUT;
+}
+static int sweep_send(struct savage2d *s,const uint32_t *words,unsigned n,uint64_t until)
+{
+    int e=sweep_wait(s,until);
+    if (e) return e;
+    if (s->io.now_us(s->io.ctx)>=until) return -ETIMEDOUT;
+    s->io.drain(s->io.ctx); s->cpu_safe=false; s->submitted=true;
+    /* An empty command FIFO has room for each of our <=8-word packets.
+     * Never stream further words into an engine with unproven completion. */
+    for (unsigned i=0;i<n;i++) s->io.write32(s->io.ctx,SAVAGE_BCI+4*i,words[i]);
+    return sweep_wait(s,until);
+}
+static int sweep_recover(struct savage2d *s,const struct fb_device *d)
+{
+    s->cpu_safe=false; s->reason=0;
+    int e=reset_engine(s);
+    if (e) return e;
+    uint64_t until=s->io.now_us(s->io.ctx)+WAIT_US;
+    if ((e=sweep_wait(s,until))) return e;
+    /* Rebuild only engine state used by this diagnostic; no stream, memory,
+     * PCI or scanout controls. Seed a known safe descriptor, never retry the
+     * timed-out candidate. A reset alone is not evidence of completion. */
+    s->io.write32(s->io.ctx,BCI_CONTROL,s->saved_bci&0x3ff0u);
+    uint32_t control=s->io.read32(s->io.ctx,BCI_CONTROL);
+    if (control==UINT32_MAX || (control&15u)) return -EIO;
+    s->io.write32(s->io.ctx,0x8128,UINT32_MAX); s->io.write32(s->io.ctx,0x812c,UINT32_MAX);
+    s->io.write16(s->io.ctx,0x8134,0x27); s->io.write16(s->io.ctx,0x8136,7);
+    s->io.write32(s->io.ctx,0x48c10,0x00700040u); s->io.write32(s->io.ctx,0x48c0c,0);
+    s->io.write32(s->io.ctx,BCI_CONTROL,(s->saved_bci&0x3ff0u)|8u);
+    control=s->io.read32(s->io.ctx,BCI_CONTROL);
+    if (control==UINT32_MAX || (control&15u)!=8) return -EIO;
+    struct savage_config cfg; savage2d_config(0,d,&cfg);
+    port_cr_write(s,0x50,(s->saved50&~0x30u)|(cfg.depth<<4)|0xc1u);
+    s->io.write32(s->io.ctx,0x8168,s->offset); s->io.write32(s->io.ctx,0x816c,cfg.descriptor);
+    uint32_t packet[]={BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_LOW,s->offset,
+        BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_HIGH,cfg.descriptor};
+    return sweep_send(s,packet,ARRAY_SIZE(packet),until);
+}
+static const char *sweep_exclusion(unsigned id,bool supersavage,const struct fb_device *d,
+    const struct savage_config *cfg)
+{
+    /* Upstream disables block writes; H has no qualified memory setup for
+     * them. Tiled PM destinations additionally need unsaved surface state.
+     * On Savage4, unlike PM, descriptor bit 3 is explicitly BCI enable. */
+    if (id&2) return "block_write_unqualified";
+    if (id/24) return "tiled_surface_unconfigured";
+    if (!supersavage && (id&1)) return "bci_disabled";
+    /* Qword hypotheses must not leak stride bits into endian/BCI controls.
+     * Even if CR50's depth wins over the descriptor, the farthest 32-bpp
+     * destination must stay entirely inside our reservation. */
+    if ((id&4) && ((d->pitch/8)&15u)) return "stride_control_overlap";
+    if (17u*(cfg->descriptor&0x1ff0u)*4u+31u*4u+4u>SAVAGE_SWEEP_BYTES)
+        return "scratch_range_unproven";
+    return 0;
+}
+static int sweep_record(savage_sweep_line line,savage_sweep_checkpoint checkpoint,void *ctx,
+    const struct fb_device *d,unsigned id,const struct savage_config *cfg,const char *result)
+{
+    char msg[240];
+    ksnprintf(msg,sizeof(msg),"Savage bpp=%u config=%u bit3=%u BW_DISABLE=%u stride=%s CR50=%u tile=%u depth=%u descriptor=%08x %s",
+        d->bpp,id,!(id&1),!(id&2),id&4 ? "qwords" : "pixels",cfg->depth,id/24,d->bpp,cfg->descriptor,result);
+    line(ctx,msg);
+    return checkpoint(ctx);
+}
+
+/* The sweep owns a disjoint VRAM reservation. Exclude unsupported memory
+ * commands before submission: a CPU deadline cannot break a stuck bus cycle. */
 int savage2d_sweep_model(struct savage2d *s, const struct savage_io *io,
     const struct fb_device *d, bool supersavage, uint8_t *scratch, uint32_t offset,
-    uint64_t deadline_us, savage_sweep_line line, void *ctx, struct savage_sweep_result *out)
+    uint64_t deadline_us, savage_sweep_line line, savage_sweep_checkpoint checkpoint, void *ctx,
+    struct savage_sweep_result *out)
 {
     *out = (struct savage_sweep_result){.first = -1, .restored = true};
     if (!io || !io->read_port || !io->write_port || !io->read16 || !io->write16 ||
         !io->read32 || !io->write32 || !io->now_us || !io->delay_us || !io->drain ||
-        !mode_supported(d) || !scratch || (offset & 2047u) || offset > UINT32_MAX-SAVAGE_SWEEP_BYTES)
+        !line || !checkpoint || !mode_supported(d) || d->pitch>8192 ||
+        !scratch || (offset & 2047u) || offset > UINT32_MAX-SAVAGE_SWEEP_BYTES)
         return out->error = -EINVAL;
     uint8_t *saved = fs_contig_alloc(SAVAGE_SWEEP_BYTES);
     if (!saved) return out->error = -ENOMEM;
@@ -1094,21 +1189,40 @@ int savage2d_sweep_model(struct savage2d *s, const struct savage_io *io,
     uint16_t mix_bg=io->read16(io->ctx,0x8134), mix_fg=io->read16(io->ctx,0x8136);
     io->drain(io->ctx); memcpy(saved,scratch,SAVAGE_SWEEP_BYTES); captured=true;
     memset(s,0,sizeof(*s));
-    out->error=savage2d_start(s,io,d,supersavage,0,0);
+    struct savage_config setup; savage2d_config(0,d,&setup);
+    out->error=sweep_record(line,checkpoint,ctx,d,0,&setup,"result=begin phase=setup");
+    if (!out->error && io->now_us(io->ctx)>=deadline_us) out->error=-ETIMEDOUT;
+    if (!out->error) out->error=savage2d_start(s,io,d,supersavage,0,0);
     if (out->error) goto engine_restore;
     uint16_t immediate_mix=io->read16(io->ctx,0x8136);
     s->offset=offset;
     for (unsigned id=0;id<SAVAGE_CONFIGS;id++) {
-        if (io->now_us(io->ctx)>=deadline_us) { out->error=-110; break; }
+        if (io->now_us(io->ctx)>=deadline_us) { out->error=-ETIMEDOUT; break; }
         struct savage_config cfg;
         savage2d_config(id,d,&cfg);
+        const char *excluded=sweep_exclusion(id,supersavage,d,&cfg);
+        char result[112];
+        if (excluded) ksnprintf(result,sizeof(result),"result=skip reason=%s",excluded);
+        else ksnprintf(result,sizeof(result),"result=begin");
+        int e=sweep_record(line,checkpoint,ctx,d,id,&cfg,result);
+        if (e) { out->error=e; break; }
+        if (excluded) { out->skipped++; out->completed++; continue; }
+        uint64_t now=io->now_us(io->ctx), until=now+WAIT_US;
+        if (until>deadline_us) until=deadline_us;
+        if (now>=until) { out->error=-ETIMEDOUT; break; }
+        out->tried++;
+        /* The pre-command record is durable. The previous candidate has
+         * completed or recovered; still require idle before changing state. */
+        e=sweep_wait(s,until);
+        if (e) goto candidate_done;
         port_cr_write(s,0x50,(s->saved50&~0x30u)|(cfg.depth<<4)|0xc1u);
         io->write32(io->ctx,0x8168,offset); io->write32(io->ctx,0x816c,cfg.descriptor);
         uint32_t packet[]={BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_LOW,offset,
             BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_HIGH,cfg.descriptor,
             BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_LOW,offset,
             BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_HIGH,cfg.descriptor};
-        int e=send_bci(s,packet,ARRAY_SIZE(packet));
+        e=sweep_send(s,packet,ARRAY_SIZE(packet),until);
+        if (e) goto candidate_done; /* no CPU VRAM access with a pending writer */
         uint32_t got=0, want=d->bpp==16 ? 0x41b6u : 0x008641b6u;
         /* Nonzero X/Y discriminate stride/tiling as well as colour depth.
          * For every matrix member the greatest possible destination touched
@@ -1117,35 +1231,64 @@ int savage2d_sweep_model(struct savage2d *s, const struct savage_io *io,
         for (unsigned j=0;j<4;j++) scratch[pos+j]=0x5a;
         io->drain(io->ctx);
         struct fb_rect r={31,17,1,1};
-        if (!e) e=fill_rect(s,&r,want);
+        uint32_t fill[]={RECT|XP|YP|DEST_GBD|COLOR|(0xccu<<16),want,xy(r.x,r.y),xy(r.width,r.height)};
+        if (!e) e=sweep_send(s,fill,ARRAY_SIZE(fill),until);
         if (!e) for (unsigned j=0;j<d->bpp/8;j++) got|=(uint32_t)scratch[pos+j]<<(8*j);
-        out->tried++;
         bool exact=!e && got==want;
         if (exact) { out->passed++; if (out->first<0) out->first=(int)id; }
-        char msg[208];
-        ksnprintf(msg,sizeof(msg),"Savage bpp=%u config=%u bit3=%u BW_DISABLE=%u stride=%s CR50=%u tile=%u wrote=%08x read=%08x idle=%u %s",
-            d->bpp,id,!(id&1),!(id&2),id&4 ? "qwords" : "pixels",cfg.depth,id/24,want,got,s->cpu_safe,
-            e ? "ERROR" : exact ? "PASS" : "FAIL");
-        if (line) line(ctx,msg);
+        ksnprintf(result,sizeof(result),"result=%s wrote=%08x read=%08x idle=%u",
+            e ? e==-ETIMEDOUT ? "timeout" : "error" : exact ? "pass" : "fail",want,got,s->cpu_safe);
+        if (!e) {
+            out->completed++;
+            int saved_result=sweep_record(line,checkpoint,ctx,d,id,&cfg,result);
+            if (saved_result) { out->error=saved_result; break; }
+        }
         if (!id && !e && line) {
+            char msg[160];
             ksnprintf(msg,sizeof(msg),"Savage registers: MM8136 wrote=0007 immediate=%04x post_command=%04x CR45=%02x defined_mask=15",
                 immediate_mix,io->read16(io->ctx,0x8136),port_cr_read(s,0x45));
             line(ctx,msg);
         }
-        if (e) { out->error=e; break; } /* no reset/retry of an uncertain writer */
+candidate_done:
+        if (e) {
+            if (e==-ETIMEDOUT) out->timeouts++;
+            out->error=e;
+            /* Checkpoint before reset too, so a failed recovery is named.
+             * No engine reads, writes or retries precede the port reset. */
+            int saved_result=sweep_record(line,checkpoint,ctx,d,id,&cfg,
+                e==-ETIMEDOUT ? "result=timeout recovery=begin" : "result=error recovery=begin");
+            int recovered=sweep_recover(s,d);
+            out->completed++;
+            ksnprintf(result,sizeof(result),"result=%s recovery=%s",
+                e==-ETIMEDOUT ? "timeout" : "error",recovered ? "failed" : "ok");
+            int saved_recovery=sweep_record(line,checkpoint,ctx,d,id,&cfg,result);
+            if (recovered) { s->cpu_safe=false; fault(s); break; }
+            if (saved_result || saved_recovery) { out->error=saved_result ? saved_result : saved_recovery; break; }
+        }
     }
 engine_restore:
     if ((s->cpu_safe || (!s->submitted && access.cpu_safe)) && captured) {
         /* Restore the BCI's descriptor latch as well as its MMIO mirror. */
         uint32_t packet[]={BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_LOW,values[4],
             BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_HIGH,values[5]};
-        int e=s->submitted && !s->quarantined ? send_bci(s,packet,ARRAY_SIZE(packet)) : 0;
+        int e=s->submitted && !s->quarantined ?
+            sweep_send(s,packet,ARRAY_SIZE(packet),io->now_us(io->ctx)+WAIT_US) : 0;
         if (!e) {
             for (unsigned i=0;i<ARRAY_SIZE(regs);i++) io->write32(io->ctx,regs[i],values[i]);
             io->write16(io->ctx,0x8134,mix_bg); io->write16(io->ctx,0x8136,mix_fg);
             memcpy(scratch,saved,SAVAGE_SWEEP_BYTES); io->drain(io->ctx);
             out->restored=true;
-        } else out->error=e;
+        } else {
+            out->error=e;
+            /* No more experimental work follows, but try the documented
+             * reset once so restoration can still finish after latch timeout. */
+            if (!sweep_recover(s,d) && !sweep_send(s,packet,ARRAY_SIZE(packet),io->now_us(io->ctx)+WAIT_US)) {
+                for (unsigned i=0;i<ARRAY_SIZE(regs);i++) io->write32(io->ctx,regs[i],values[i]);
+                io->write16(io->ctx,0x8134,mix_bg); io->write16(io->ctx,0x8136,mix_fg);
+                memcpy(scratch,saved,SAVAGE_SWEEP_BYTES); io->drain(io->ctx);
+                out->restored=true;
+            } else { s->cpu_safe=false; fault(s); }
+        }
     }
 vga_restore:
     /* An uncertain writer retains its leases and the durable attempt marker.
@@ -1164,6 +1307,29 @@ vga_restore:
 
 static bool sweep_idle_proof(int handle,gen_t generation)
 { (void)handle; (void)generation; return true; } /* called only after model restored */
+static bool sweep_sync_cancel(void *ctx)
+{ return hw_now(0)>=*(uint64_t *)ctx; }
+static void sweep_sync_pause(void *ctx)
+{ (void)ctx; task_sleep_ms(1); }
+static int sweep_checkpoint(void *ctx)
+{
+    /* Both sinks received the page line through klog. Do not issue commands
+     * when either durability path is unavailable or has lost evidence. */
+    struct bootlog_stats log; bootlog_snapshot(&log);
+    if (!blackbox_available()) return -ENODEV;
+    int raw=blackbox_checkpoint();
+    if (raw) return raw;
+    if (!log.active || log.error || log.dropped) return log.error ? log.error : -EIO;
+    return bootlog_sync(sweep_sync_cancel,sweep_sync_pause,ctx);
+}
+struct sweep_sink { savage_sweep_line line; void *ctx; uint64_t until; };
+static void sweep_sink_line(void *ctx,const char *line)
+{
+    struct sweep_sink *sink=ctx;
+    sink->line(sink->ctx,line);
+}
+static int sweep_sink_checkpoint(void *ctx)
+{ return sweep_checkpoint(&((struct sweep_sink *)ctx)->until); }
 int savage2d_hardware_sweep(uint64_t deadline_ms, savage_sweep_line line, void *ctx,
     struct savage_sweep_result *out)
 {
@@ -1202,7 +1368,11 @@ int savage2d_hardware_sweep(uint64_t deadline_ms, savage_sweep_line line, void *
         struct savage2d test={0};
         uint64_t now=deadline_after_ms(0);
         uint64_t limit=hw_now(0)+(deadline_ms>now ? deadline_ms-now : 0)*1000u;
-        e=savage2d_sweep_model(&test,&io,d,gpu->device!=0x8a22,scratch,offset,limit,line,ctx,out);
+        /* The model's line context belongs to the caller, while persistence
+         * needs the absolute independent-clock deadline. */
+        struct sweep_sink sink={line,ctx,limit};
+        e=savage2d_sweep_model(&test,&io,d,gpu->device!=0x8a22,scratch,offset,limit,
+            sweep_sink_line,sweep_sink_checkpoint,&sink,out);
         safe=out->restored;
     }
     if (safe) {
