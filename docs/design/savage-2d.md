@@ -4,6 +4,77 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f1-65: send the global descriptor through BCI
+
+Research rechecked on 2026-10-15. The local reference files are under
+`build/downloads/savage/`. In `savage_accel.c`, `SavageSetGBD` selects
+`SavageSetGBD_PM` for `S3_SUPERSAVAGE`. That function and the definitions in
+[`savage_bci.h`](https://gitlab.freedesktop.org/xorg/driver/xf86-video-savage/-/blob/master/src/savage_bci.h),
+[`savage_regs.h`](https://gitlab.freedesktop.org/xorg/driver/xf86-video-savage/-/blob/master/src/savage_regs.h)
+and [`savage_driver.h`](https://gitlab.freedesktop.org/xorg/driver/xf86-video-savage/-/blob/master/src/savage_driver.h)
+establish the following layout. The `BMPDESC` union overlays the byte offset
+and the `HIGH` structure with the two descriptor dwords.
+
+| Field | SuperSavage linear framebuffer | Existing kernel value |
+| --- | --- | --- |
+| MM8168, GBD low | Starting byte offset | `00000000` |
+| MM816C.0 | `S3_BD64`, include the offset dword | 1 |
+| MM816C.2 | Endian selector, zero for little endian | 0 |
+| MM816C.3 | `BCI_ENABLE_TWISTER` is zero for SuperSavage; Savage4 uses 8 | 0 |
+| MM816C low stride field | Pitch divided by bytes per pixel, with aligned low bits available for controls | `0400`, 1024 pixels for pitch 4096 at 32 bpp |
+| MM816C.23:16 | Binary bits per pixel | `20` |
+| MM816C.25:24 | Zero for linear; PM uses destination tiling value 1 at either tiled depth | 0 |
+| MM816C.28 | Disable block write | 1 |
+
+Thus `10200401` agrees with the PM reference. Bit 0 is a descriptor-size
+flag, not an extra pixel of stride. The mask `13ff1ffd` keeps bits 28,
+25:24, 23:16, 12:2 and 0; it excludes reserved bits. This readback cannot
+prove the BCI's colour interpretation. The failure captured for image
+`a738204a` also reads CR50 as `f1`, so leaving CR50 at its firmware depth
+does not explain this capture.
+
+In [`savage_accel.c`](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c),
+`SavageInitialize2DEngine` sets CR40=01, CR31=0c, plane masks and halfword
+mixes. Its SuperSavage branch supports MM48C18=08 without overflow or
+shadow buffers. `SavageSetGBD_PM` writes the `10000001` descriptor preamble,
+selects GBD stride with CR50.C1 and writes the complete descriptor. Those
+engine settings already match the kernel. The PM function also initializes
+the primary and secondary bitmap descriptors; the current drawing commands
+select only GBD. Its stream and panel setup belongs to mode programming.
+It provides no additional engine depth selector to add here. CR50.5:4
+remains explicitly set to 01 for 16 bpp or 11 for 32 bpp. Firmware stream
+addresses, stride, timing and CR67 remain owned by the mode provider.
+
+The upstream fbdev
+[`SavageSetup2DEngine`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c)
+sends GBD low and high through
+BCI register indices E0/E1, twice, rather than relying on direct descriptor
+writes. It uses a shared bit-3 control value; retain the chip-specific PM
+control instead. The reference header defines SET_REGISTER=96000000 with
+the register count at bit 16. Decision: after the existing MMIO descriptor
+verification, submit two E0/E1 pairs (`960100e0`, offset, `960100e1`, high)
+for SuperSavage, then require bounded idle before the saved-pixel test.
+This changes the command path that receives the depth, retaining the
+descriptor layout and drawing packets. Setup commands enter the same
+submitted/unsafe/idle/quarantine protocol as draws and do not increment
+the drawing-operation counter. Savage4 retains its existing setup.
+
+The working cause is stale BCI descriptor state despite correct MMIO
+readback. The logs do not identify a silicon latch or prove that cause.
+The host model therefore treats separate BCI colour depth as a regression
+scenario: direct writes can read back correctly while an old 8-bpp state
+replicates `008641b6` as `b6b6b6b6`. Queued register writes repair that
+scenario, including a discarded first pair. Lost updates and completion
+timeouts must still refuse acceleration. The full marker comparison,
+restoration after proven idle, durable attempt and quarantine stay required.
+The success diagnostic is `bci_test result=ok`.
+
+The lead must run the canonical QEMU regression gates and then qualify the
+same image on T23. QEMU does not model this engine. T23 acceptance requires
+`result=ok`, exact marker readback, nonzero caps, no quarantine, correct
+fill/copy/pattern output and lower measured desktop `present_us` for the
+same workload. A host pass establishes the regression scenario only.
+
 ## f4-26: GBD packets, cached idle proof and asynchronous setup
 
 Research rechecked on 2026-10-14 against X.Org's

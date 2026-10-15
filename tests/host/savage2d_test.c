@@ -135,6 +135,9 @@ int vfs_close(struct vfs_table *t,int fd)
 
 struct model {
     uint32_t reg[SAVAGE_MMIO_BYTES/4], packet[16];
+    uint32_t bci_gbd[2], gbd_history[4][2];
+    unsigned register_packets, fail_after_gbd;
+    bool ignore_gbd, ignore_first_gbd, gbd_busy;
     uint8_t cr[256], cursor_page[4096], colour[2][3];
     unsigned words, expected, packets, fault_count, busy, cr_writes, colour_at;
     uint8_t cr_sequence[128];
@@ -177,6 +180,15 @@ static void execute_packet(struct model *p)
     unsigned engine_bpp=cr_depth==0 ? 8 : cr_depth==0x10 ? 16 : 32;
     CHECK(cr_depth!=0x20 && (p->cr[0x50]&0xc1u)==0xc1u);
     if (bpp<engine_bpp) engine_bpp=bpp;
+    /* MMIO and the command processor need not observe a depth change
+     * together. Keep the captured stale-8-bpp scenario independent of the
+     * readable register bank; SET_REGISTER updates the command state. */
+    if (p->seq[0x26]==0x40) {
+        unsigned queued_bpp=(p->bci_gbd[1]>>16)&255u;
+        if (!queued_bpp) queued_bpp=8;
+        CHECK(queued_bpp==8 || queued_bpp==16 || queued_bpp==32);
+        if (queued_bpp<engine_bpp) engine_bpp=queued_bpp;
+    }
     bool copying=(cmd&0x1e0u)==0x20u, pattern=(cmd&3u)==3u;
     unsigned index=copying ? 2 : pattern ? 3 : 2;
     uint32_t origin=p->packet[index], dimensions=p->packet[index+1];
@@ -264,18 +276,42 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
     p->engine_writes++;
     CHECK(offset<SAVAGE_MMIO_BYTES && !(offset&3u));
     if (offset>=SAVAGE_BCI && offset<SAVAGE_BCI+64) {
-        unsigned at=(offset-SAVAGE_BCI)/4;
-        CHECK(at==p->words && at<16);
+        /* FIFO addresses do not select registers. A burst may contain
+         * several commands, each with its own header and word count. */
+        unsigned at=p->words;
+        CHECK(at<16);
         CHECK(drains>0); /* CPU WC writes drained before command */
         p->packet[at]=value;
         if (!at) {
-            CHECK((value&0xfc00u)==(value&0x8000u));
-            p->expected=(value&3u)==3u ? 7 : 4;
+            if ((value&0xff000000u)==0x96000000u) {
+                CHECK((value&0xffff0000u)==0x96010000u);
+                CHECK((value&0xffffu)==0xe0 || (value&0xffffu)==0xe1);
+                p->expected=2;
+            } else {
+                CHECK((value&0xfc00u)==(value&0x8000u));
+                p->expected=(value&3u)==3u ? 7 : 4;
+            }
         }
         if (++p->words==p->expected) {
-            if (!p->ignore_fill) execute_packet(p);
-            p->packets++; p->words=0; p->busy=3;
-            if (p->fail_after_submit) p->stuck=true;
+            if ((p->packet[0]&0xff000000u)==0x96000000u) {
+                unsigned index=p->packet[0]&1u;
+                if (p->register_packets<ARRAY_SIZE(p->gbd_history)) {
+                    p->gbd_history[p->register_packets][0]=p->packet[0];
+                    p->gbd_history[p->register_packets][1]=p->packet[1];
+                }
+                if (!p->ignore_gbd && !(p->ignore_first_gbd && p->register_packets<2)) {
+                    p->bci_gbd[index]=p->packet[1];
+                    p->reg[(0x8168+index*4)/4]=p->packet[1];
+                }
+                p->register_packets++;
+                p->busy=p->gbd_busy ? 3 : 0;
+                if (p->fail_after_gbd && p->register_packets>=p->fail_after_gbd) p->stuck=true;
+            } else {
+                if (!p->ignore_fill) execute_packet(p);
+                p->packets++; p->busy=3;
+                if (p->fail_after_submit) p->stuck=true;
+            }
+            p->words=0;
         }
     } else {
         setup_write(p,offset,value);
@@ -682,8 +718,9 @@ static void deferred_boots(void)
         software_desktop(); /* desktop can draw before initialization */
         run_accel_init();
         bool ready=variant==4 || variant==7 || variant==10 || variant==11;
+        bool guarded=variant==9; /* queued setup lost its completion proof */
         bool annotated=!ready && engine.status_logged;
-        CHECK(!!acceleration==ready && marker_commits==((ready || annotated) ? 2u : 1u));
+        CHECK(acceleration==((ready || guarded) ? &engine.ops : NULL) && marker_commits==((ready || annotated) ? 2u : 1u));
         CHECK(disk_size==(ready ? 0u : annotated ? 30u : 14u) && m.status_reads<=INITIAL_POLLS+1);
         CHECK(log_matches(ready ? "[accel] savage ready" : "[accel] savage quarantined reason=")==1);
         if (variant==1 || variant==3 || variant==6 || variant==12) CHECK(!m.status_reads);
@@ -691,8 +728,15 @@ static void deferred_boots(void)
         if (variant==1) CHECK(log_matches("engine_probe reg=48c18 raw=ffffffff")==1);
         if (variant==11) CHECK(log_matches("vga_alias reg=083d5 port=48 alias=ff match=0")==1);
         if (variant==12) CHECK(log_matches("quarantined reason=firmware_command_buffer")==1);
-        if (!ready) software_desktop();
-        if (variant==9) CHECK(log_matches("quarantined reason=status_contradiction")==1);
+        if (!ready && !guarded) software_desktop();
+        if (guarded) {
+            CHECK(log_matches("quarantined reason=status_contradiction")==1);
+            CHECK(engine.submitted && engine.final_idle_checked && !engine.cpu_safe && !m.packets);
+            unsigned reads=m.status_reads;
+            struct fb_rect point={16,16,1,1};
+            CHECK(fbdev_fill(&point,0x123456)==-EIO && !fbdev_console_begin());
+            CHECK(m.status_reads==reads);
+        }
         printf("deferred savage boot variant=%u ready=%u status_reads=%u marker_bytes=%u desktop=visible\n",
             variant,ready,m.status_reads,disk_size);
         finish();
@@ -1148,7 +1192,7 @@ static void supersavage_window_and_records(void)
             CHECK(acceleration && engine.active && !engine.quarantined && engine.operations==1);
             CHECK(m.packets==1 && !m.dead_window_writes && m.postreset_enable);
             CHECK((m.reg[0x816c/4]&GBD_READ_MASK)==(engine.descriptor|1));
-            CHECK(log_matches("bci_test result=passed error=0")==1 && log_matches("read_valid=1 restored=1")==1);
+            CHECK(log_matches("bci_test result=ok error=0")==1 && log_matches("read_valid=1 restored=1")==1);
             char raw[32]; snprintf(raw,sizeof(raw),"read=%08x",(engine.descriptor|1)|~GBD_READ_MASK);
             CHECK(log_matches(raw)>=1); /* raw reserved decorations remain visible */
             CHECK(!memcmp(last,before,sizeof(before)) && disk_size==0);
@@ -1248,7 +1292,7 @@ static void engine_depth_and_trace_thread(void)
         CHECK(m.cr[0x50]==expected50 && m.cr[0x67]==saved67 && !m.port_cr_reads[0x67]);
         CHECK(m.reg[0x8168/4]==0 && (m.reg[0x816c/4]&GBD_READ_MASK)==(engine.descriptor|1));
         CHECK(log_matches(bpp==32 ? "wrote=004a8166 read=004a8166" : "wrote=0000b76e read=0000b76e")==1);
-        CHECK(log_matches("bci_test result=passed error=0")==1 && !memcmp(last,&before,bpp/8));
+        CHECK(log_matches("bci_test result=ok error=0")==1 && !memcmp(last,&before,bpp/8));
         char record50[100];
         snprintf(record50,sizeof(record50),"init reg=00050 wrote=%08x read=%08x bank=cr width=8",expected50,expected50);
         CHECK(!log_matches(record50) && !log_matches("savage init reg=") && !step_count);
@@ -1407,6 +1451,83 @@ static void gbd_idle_and_async_regressions(void)
     }
     binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
 }
+static void queued_gbd_depth(void)
+{
+    /* Reapply the old MMIO-only setup with a stale BCI depth. Readback
+     * still agrees, while the exact captured colour fails the pixel test. */
+    prepare(32);
+    uint8_t *last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*4;
+    uint32_t before=0x00dce4ec;
+    memcpy(last,&before,4);
+    m.bci_gbd[1]=(test_engine.descriptor&~0xff0000u)|0x00080001u;
+    unsigned registers_sent=m.register_packets;
+    model_write(&m,0x8168,0);
+    model_write(&m,0x816c,test_engine.descriptor|1u);
+    CHECK((read_2d(&test_engine,0x816c)&GBD_READ_MASK)==(test_engine.descriptor|1u));
+    accel_count=0;
+    CHECK(bci_test(&test_engine,&device)==-EIO && test_engine.quarantined);
+    CHECK(log_matches("wrote=008641b6 read=b6b6b6b6 read_valid=1 restored=1")==1);
+    CHECK(!memcmp(last,&before,4) && m.register_packets==registers_sent);
+    CHECK(test_engine.cpu_safe && !test_engine.ops.capabilities(&test_engine));
+    printf("f1-65 MMIO-only depth=32 wrote=008641b6 read=b6b6b6b6 restored=1 quarantined=1\n");
+    finish();
+
+    for (unsigned bpp=16;bpp<=32;bpp+=16) for (unsigned variant=0;variant<5;variant++) {
+        boot_fixture_mode(false,bpp);
+        m.strict_window=true; m.gbd_reserved=true; m.exact_clock=true;
+        /* A different stale offset/depth must be replaced by the queued
+         * descriptor, not inherited from readable MMIO or firmware. */
+        m.bci_gbd[0]=0x1000;
+        m.bci_gbd[1]=0x10080401;
+        m.ignore_first_gbd=variant==1;
+        m.ignore_gbd=variant==2;
+        m.fail_after_gbd=variant>=3 ? 4 : 0;
+        m.recover_on_final=variant==4;
+        m.gbd_busy=true;
+        last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*(bpp/8);
+        before=bpp==32 ? 0x00dce4ec : 0xe4ec;
+        memcpy(last,&before,bpp/8);
+        uint8_t *frame=malloc(device.size); CHECK(frame!=NULL);
+        memcpy(frame,device.mapped,device.size);
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        CHECK(m.register_packets==4 && !m.words);
+        for (unsigned i=0;i<4;i++) {
+            CHECK(m.gbd_history[i][0]==((i&1) ? 0x960100e1u : 0x960100e0u));
+            CHECK(m.gbd_history[i][1]==((i&1) ? (engine.descriptor|1u) : 0));
+        }
+        CHECK(!memcmp(frame,device.mapped,device.size));
+        free(frame);
+        CHECK(engine.submitted && m.packets==(variant>=3 ? 0u : 1u));
+        CHECK(engine.operations==(variant>=3 ? 0u : 1u));
+        bool ready=variant<2;
+        CHECK(engine.quarantined==!ready && engine.active==ready);
+        CHECK(!!engine.ops.capabilities(&engine)==ready);
+        if (ready) {
+            CHECK(acceleration==&engine.ops && !disk_size && !log_matches("savage init reg="));
+            CHECK(m.bci_gbd[0]==0 && m.bci_gbd[1]==(engine.descriptor|1u));
+            CHECK(log_matches(bpp==32 ? "wrote=008641b6 read=008641b6" : "wrote=000041b6 read=000041b6")==1);
+            CHECK(log_matches("bci_test result=ok error=0")==1);
+        } else {
+            CHECK(disk_size==30 && binding_resources[1].state==RS_QUARANTINED &&
+                binding_resources[2].state==RS_QUARANTINED);
+            CHECK(log_matches(variant==2 ? "bci_test_readback_failed" : "idle_timeout")>=1);
+            CHECK(log_matches(variant>=3 ? "bci_test result=skipped" : "bci_test result=failed")==1);
+            CHECK(engine.cpu_safe==(variant!=3));
+            CHECK(acceleration==(variant==3 ? &engine.ops : NULL));
+            if (variant==2)
+                CHECK(log_matches(bpp==32 ? "read=b6b6b6b6 read_valid=1 restored=1" : "read=0000b6b6 read_valid=1 restored=1")==1);
+            unsigned reads=m.status_reads, packets=m.packets, sent=m.register_packets;
+            struct fb_rect point={16,16,1,1};
+            CHECK(fill_rect(&engine,&point,0x123456)==-ENODEV);
+            CHECK(fbdev_fill(&point,0x123456)==(variant==3 ? -EIO : 0));
+            CHECK(m.status_reads==reads && m.packets==packets && m.register_packets==sent);
+        }
+        printf("f1-65 queued depth=%u variant=%u register_commands=%u draws=%u caps=%u cpu_safe=%u quarantined=%u\n",
+            bpp,variant,m.register_packets,m.packets,engine.ops.capabilities(&engine),engine.cpu_safe,engine.quarantined);
+        finish();
+    }
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+}
 int main(void)
 {
     CHECK(!framebuffer_regression_main());
@@ -1421,6 +1542,7 @@ int main(void)
     halfword_glue_and_16bit_marker();
     engine_depth_and_trace_thread();
     gbd_idle_and_async_regressions();
+    queued_gbd_depth();
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);
     return failures ? 1 : 0;
 }

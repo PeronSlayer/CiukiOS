@@ -24,6 +24,10 @@
 #define INITIAL_POLLS (WAIT_US / INITIAL_POLL_US + 1u)
 #define STATUS_SAMPLES 8u
 #define BCI_CONTROL 0x48c18u
+#define BCI_SET_REGISTER 0x96000000u
+#define BCI_REGISTER_COUNT_ONE 0x00010000u
+#define BCI_GBD_LOW 0xe0u
+#define BCI_GBD_HIGH 0xe1u
 #define GBD_READ_MASK 0x13ff1ffdu
 static bool initializing, probing;
 static void init_record(const char *, uint32_t, unsigned, uint32_t, uint32_t);
@@ -203,9 +207,8 @@ static int sync_engine(void *ctx)
     if (wait_idle(s)) return fault(s);
     return 0;
 }
-static int submit(struct savage2d *s, const uint32_t *words, unsigned n)
+static int send_bci(struct savage2d *s, const uint32_t *words, unsigned n)
 {
-    if (!s->active || s->quarantined) { s->fallbacks++; return -ENODEV; }
     if (sync_engine(s)) return -EIO;
     s->io.drain(s->io.ctx);
     s->cpu_safe = false;
@@ -213,6 +216,13 @@ static int submit(struct savage2d *s, const uint32_t *words, unsigned n)
     for (unsigned i = 0; i < n; i++) s->io.write32(s->io.ctx, SAVAGE_BCI + i * 4, words[i]);
     /* UC read flushes posted command writes before observing completion. */
     if (wait_idle(s)) return fault(s);
+    return 0;
+}
+static int submit(struct savage2d *s, const uint32_t *words, unsigned n)
+{
+    if (!s->active || s->quarantined) { s->fallbacks++; return -ENODEV; }
+    int err = send_bci(s, words, n);
+    if (err) return err;
     s->operations++;
     return 0;
 }
@@ -461,7 +471,19 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     klog("[accel] savage descriptor wrote=%08x read=%08x mask=%08x cr40=%02x", gbd, check, GBD_READ_MASK, cr40);
     if (check == UINT32_MAX || (check & GBD_READ_MASK) != gbd || !(cr40 & 1u))
         return fail(s, "descriptor_readback_failed");
-    if (wait_idle(s)) return fault(s);
+    if (supersavage) {
+        /* MMIO readback does not establish the BCI's active colour depth.
+         * Send the descriptor through its own register commands, twice as
+         * in the upstream fbdev setup. Eight words fit the empty FIFO;
+         * retain the PM bit-0 control and require completion before drawing. */
+        uint32_t packet[] = {
+            BCI_SET_REGISTER | BCI_REGISTER_COUNT_ONE | BCI_GBD_LOW, s->offset,
+            BCI_SET_REGISTER | BCI_REGISTER_COUNT_ONE | BCI_GBD_HIGH, gbd,
+            BCI_SET_REGISTER | BCI_REGISTER_COUNT_ONE | BCI_GBD_LOW, s->offset,
+            BCI_SET_REGISTER | BCI_REGISTER_COUNT_ONE | BCI_GBD_HIGH, gbd
+        };
+        if (send_bci(s, packet, ARRAY_SIZE(packet))) return -EIO;
+    } else if (wait_idle(s)) return fault(s);
     s->active = true;
     return 0;
 }
@@ -626,7 +648,7 @@ static int bci_test(struct savage2d *s, const struct fb_device *d)
     klog("[accel] savage bci_test phase=fill x=%u y=%u wrote=%08x before=%08x cmd=4bcc8000",
         d->width - 1, d->height - 1, p.marker, p.before);
     klog("[accel] savage bci_test result=%s error=%d wrote=%08x read=%08x read_valid=%u restored=%u status=%08x status_valid=%u",
-        err ? "failed" : "passed", err, p.marker, p.read, p.valid, p.valid, s->status, s->status_logged);
+        err ? "failed" : "ok", err, p.marker, p.read, p.valid, p.valid, s->status, s->status_logged);
     return err;
 }
 void savage2d_record(void)
