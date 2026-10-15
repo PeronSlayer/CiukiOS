@@ -37,6 +37,7 @@ struct savage2d {
     uint64_t operations, idle_waits, fallbacks, timeouts;
     uint64_t reset_us, poll_us;
     bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded, status_logged;
+    /* submitted includes BCI register setup, before drawing is enabled. */
     bool mmio_saved, status_ready, submitted, final_idle_checked;
 };
 bool savage2d_supported(const struct pci_func *);
