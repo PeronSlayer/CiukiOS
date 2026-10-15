@@ -39,8 +39,8 @@ static void test_speed_window(void)
     linear_store(v, 17 * 320 + 5, 200);
     g_ticks += 15;
     c = command_for(w.id, w.generation);
-    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS, &c, sizeof(c)) && c.changed == 1 && c.damage.dst_y == 72 && c.damage.height == 16);
-    CHECK(c.presentation.bands[0] == ((1u << 9) | (1u << 10)) && !c.presentation.bands[1]);
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS, &c, sizeof(c)) && c.changed == 1 && c.damage.dst_y == 74 && c.damage.height == 2);
+    CHECK(c.presentation.bands[0] == (1u << 9) && !c.presentation.bands[1]);
     CHECK(v->video_direct == VIDEO_LINEAR && v->video_linear_maps == maps && v->perf.harvests == harvests + 1);
     CHECK((*window_pte(v, 0xA1000) & (DOSVM_PTE_DIRTY | PTE_U | PTE_W)) == (PTE_U | PTE_W));
     /* A flip bypasses the refresh fallback; no fixed 33 ms ceiling. */
@@ -49,8 +49,8 @@ static void test_speed_window(void)
     g_ticks++;
     c = command_for(w.id, w.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS, &c, sizeof(c)) && c.changed);
-    CHECK(c.presentation.bands[0] == ((1u << 5) | (1u << 6)) &&
-          c.presentation.bands[1] == ((1u << 9) | (1u << 10)));
+    CHECK(c.presentation.bands[0] == (1u << 6) &&
+          c.presentation.bands[1] == (1u << 10));
     harvests = v->perf.harvests;
     g_ticks += 15;
     c = command_for(w.id, w.generation);
@@ -80,17 +80,22 @@ static void test_speed_accounting(void)
 {
     struct dosvm *v = create();
     v->info.dos_ready = false; /* first interval includes DOS startup */
-    g_boot.flags = CBI_F_VERBOSE; g_tsc_per_ms = 1000; fake_tsc = 1000;
+    g_boot.flags = 0; g_tsc_per_ms = 1000; fake_tsc = 1000;
     unsigned quiet_records = records;
     unsigned disk_before=disk_records;
     g_ticks += 1000; dosvm_perf_report(v);
     CHECK(disk_records==disk_before);
     dosvm_perf_dump(v);
     CHECK(dosvm_perf_clock() == fake_tsc && !v->perf.sample_count && records == quiet_records);
-    /* L enables startup vector timing, but not detailed performance records. */
-    g_ticks -= 1000; g_boot.flags |= CBI_F_DIAG_VERBOSE;
+    /* Quiet boots collect exactly the same CPU accounting. */
+    g_ticks -= 1000;
     dosvm_task_switch(v->task);
-    fake_tsc = 2000; perf_phase(v, 2);
+    g_current = v->task;
+    dosvm_perf_enter(); CHECK(v->perf.phase == 1); /* no guest continuation */
+    v->continuation = 1;
+    fake_tsc = 2000; dosvm_perf_enter();
+    CHECK(v->perf.phase == 2 && v->perf.guest_cycles == 1000);
+    v->continuation = 0; g_current = &caller;
     v->perf.trap_active = true; v->perf.trap_cycles = 0; v->perf.cause = DOSVM_COST_VGA_IO;
     fake_tsc = 3000; dosvm_task_switch(&caller);
     fake_tsc = 9000; dosvm_task_switch(v->task); /* six milliseconds off CPU */
@@ -103,8 +108,8 @@ static void test_speed_accounting(void)
     v->perf.port_count[DOSVM_VGA_SR_MASK] = 1279; v->perf.port_cycles[DOSVM_VGA_SR_MASK] = 789;
     v->monitor.stats.delivered[0] = 140; v->monitor.stats.insn[V86_OUT] = 200;
     v->idle.blocks = 5; v->idle.count[DOSVM_IDLE_28] = 3; v->idle.count[DOSVM_IDLE_16] = 2;
-    g_ticks += 1000; dosvm_perf_report(v);
-    CHECK(disk_records==disk_before+4);
+    g_ticks += DOSVM_PERF_INTERVAL; dosvm_perf_report(v);
+    CHECK(disk_records==disk_before+8);
     CHECK(v->perf.sample_count == 1 && records == records_before);
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&
@@ -115,10 +120,10 @@ static void test_speed_accounting(void)
           s->port_count[DOSVM_VGA_SR_MASK] == 1279 && s->port_us[DOSVM_VGA_SR_MASK] == 789);
     CHECK(s->port_exits[DOSVM_VGA_SR_INDEX] == 1 && s->port_exit_us[DOSVM_VGA_SR_INDEX] == 2000);
     CHECK(s->idle_blocks == 5 && s->idle_reasons == 6 && s->idle_count[DOSVM_IDLE_28] == 3 &&
-          s->idle_count[DOSVM_IDLE_16] == 2 && s->busy_permille == 4 && v->idle.busy_permille == 4);
+          s->idle_count[DOSVM_IDLE_16] == 2 && s->busy_permille == 0 && v->idle.busy_permille == 0);
     for (unsigned i = 1; i < 81; i++) {
         v->monitor.pic[0].isr = i & 1; /* guest IRQ context cannot suppress memory sampling */
-        g_ticks += 1000; fake_tsc += 1000; v->video_frames += i;
+        g_ticks += DOSVM_PERF_INTERVAL; fake_tsc += 1000; v->video_frames += i;
         dosvm_perf_report(v);
     }
     /* harvest counters are per-interval deltas: only the first interval carries them */
@@ -139,8 +144,9 @@ static void test_speed_accounting(void)
     v->monitor.pic[0].isr = 0;
     dosvm_task_switch(&caller);
     uint64_t guest_cycles = v->perf.guest_cycles, monitor_cycles = v->perf.monitor_cycles;
-    fake_tsc += 900000; g_ticks += 1000; dosvm_perf_report(v); /* native STATUS */
+    fake_tsc += 900000; g_ticks += DOSVM_PERF_INTERVAL; dosvm_perf_report(v); /* native STATUS */
     CHECK(v->perf.phase == 0 && v->perf.guest_cycles == guest_cycles && v->perf.monitor_cycles == monitor_cycles);
+    g_boot.flags = CBI_F_DIAG_VERBOSE;
     speed_sample_rows = 0; diag_time_hook = speed_dump_rows;
     dosvm_perf_dump(v); diag_time_hook = 0;
     CHECK(speed_sample_rows == 16);
@@ -152,7 +158,7 @@ static void test_speed_accounting(void)
     CHECK(!v->perf.sample_count && max_record <= 240);
     g_tsc_per_ms = 0; g_boot.flags = 0; fake_tsc = 0;
     destroy(v, true); empty();
-    puts("f3-13 accounting: scheduled CPU time excludes suspension, per-second deltas and bounded history, no UART during sampling PASS");
+    puts("f3-13 accounting: scheduled CPU time excludes suspension, five-second quiet-boot deltas and bounded history, no UART during sampling PASS");
 }
 static struct dosvm *speed_wait_vm;
 static void speed_key_wake(void)
@@ -462,6 +468,98 @@ static void test_planar_strings_differential(void)
     destroy(v, true); empty();
     puts("f3-19 planar strings: scalar-model equivalence, overlapping DF copies, all latch bytes, word-latch fallback, fragmented RAM MOVSW and high halves PASS");
 }
+/* F3-31: scalar VGA cycles remain the oracle for the block harvester. */
+static void test_chain4_conversion(void)
+{
+    struct dosvm *v = create(); int10(v, 0x13, 0, 0, 0);
+    static cvga_state reference;
+    uint8_t bytes[128];
+    for (unsigned i = 0; i < sizeof(bytes); i++) bytes[i] = (uint8_t)(i * 37);
+    for (unsigned start = 0; start < 16; start++) for (unsigned n = 0; n <= 64; n++) {
+        memset(v->vga.dirty, 0, sizeof(v->vga.dirty));
+        reference = v->vga;
+        unsigned at = (start & 8 ? 65456 : 0) + (start & 7);
+        cvga_store_chain4_span(&v->vga, at, bytes, n);
+        for (unsigned k = 0; k < n; k++)
+            cvga_store_plane(&reference, (at+k)&3, (at+k)&~3u, bytes[k]);
+        CHECK(!memcmp(v->vga.plane, reference.plane, sizeof(reference.plane)) &&
+              !memcmp(v->vga.dirty, reference.dirty, sizeof(reference.dirty)) &&
+              !memcmp(v->vga.latch, reference.latch, sizeof(reference.latch)));
+    }
+    uint8_t indexes[640]; uint32_t pixels[1280], lut[256];
+    for (unsigned p = 0; p < 4; p++) for (unsigned at = 0; at < 65536; at++)
+        v->vga.plane[p][at] = (uint8_t)(at * 7 + p * 53);
+    for (unsigned i = 0; i < 256; i++) lut[i] = i * 0x010101u;
+    for (unsigned pan = 0; pan < 8; pan++) for (unsigned split = 0; split < 2; split++) {
+        v->vga.attr[19] = pan; v->vga.attr[16] |= 0x20; v->vga.dac_mask = 0x5f;
+        v->vga.crtc[12] = 0xff; v->vga.crtc[13] = 0xe0;
+        v->vga.crtc[24] = split ? 79 : 255;
+        v->vga.crtc[7] = split ? v->vga.crtc[7] & ~0x10u : v->vga.crtc[7] | 0x10;
+        v->vga.crtc[9] = split ? v->vga.crtc[9] & ~0x40u : v->vga.crtc[9] | 0x40;
+        cvga_geometry g; CHECK(cvga_get_geometry(&v->vga, &g));
+        for (unsigned y = 0; y < g.height; y++) {
+            unsigned base, shift; CHECK(cvga_chain4_row(&v->vga, y, &base, &shift));
+            CHECK(cvga_render_row8(&v->vga, y, indexes, sizeof(indexes), 0) == g.width);
+            cvp_chain4_row32(&v->vga, base, shift, g.width, 2, lut, pixels);
+            for (unsigned x = 0; x < g.width; x++)
+                CHECK(pixels[2*x] == lut[indexes[x]] && pixels[2*x+1] == lut[indexes[x]]);
+            for (unsigned edge = 0; edge < 3; edge++) {
+                memset(v->video_taken, 0, sizeof(v->video_taken));
+                unsigned at = (base + ((g.width - 1 + shift) / 4) * 4 + edge * 8) & 0xffff;
+                v->video_taken[3][at >> 6] |= 1u << ((at >> 3) & 7);
+                CHECK(cvga_chain4_dirty(base, shift, g.width, v->video_taken) ==
+                      cvga_row_reads_dirty(&v->vga, y, v->video_taken));
+            }
+        }
+    }
+    v->vga.crtc[20] &= ~0x40u;
+    unsigned base, pan; CHECK(!cvga_chain4_row(&v->vga, 0, &base, &pan));
+    destroy(v, true); empty();
+    puts("f3-31 chain-4: exact planes/latches/damage for unaligned spans; fused rows match scalar pan, split, wrap and DAC mask PASS");
+}
+static void test_perf_ranking(void)
+{
+    struct dosvm *v = create();
+    g_boot.flags = 0; g_tsc_per_ms = 1000; fake_tsc = 100;
+    dosvm_task_switch(v->task); perf_phase(v, 2);
+    /* Collision in the fixed port table, with cost order unlike count order. */
+    for (unsigned i = 0; i < 7; i++) {
+        v->perf.io_port = 0x20 + i * 256; v->perf.io_valid = true;
+        v->perf.trap_active = true; v->perf.trap_cycles = 0;
+        v->perf.cause = DOSVM_COST_IO; fake_tsc += (i + 1) * 100;
+        perf_exit_end(v);
+        uint64_t begin = perf_monitor_stamp(v); fake_tsc += (i + 1) * 50;
+        perf_vector_end(v, i % 3, 0x10 + i, 0, begin);
+    }
+    g_ticks += DOSVM_PERF_INTERVAL - 1; dosvm_perf_report(v);
+    CHECK(!v->perf.sample_count);
+    g_ticks++; dosvm_perf_report(v);
+    CHECK(v->perf.sample_count == 1);
+    const struct dosvm_perf_sample *s = &v->perf.sample[0];
+    for (unsigned i = 0; i < 5; i++) {
+        CHECK(s->top_port[i].id == 0x20 + (6-i)*256 && s->top_port[i].count == 1 &&
+              s->top_port[i].cycles == (7-i)*100);
+        CHECK(s->top_vector[i].id == ((6-i)%3)*256 + 0x16-i &&
+              s->top_vector[i].cycles == (7-i)*50);
+    }
+    CHECK(!s->port_overflow && s->cost_count[DOSVM_COST_IO] == 7);
+    dosvm_task_switch(&caller);
+    g_ticks += DOSVM_PERF_INTERVAL; dosvm_perf_report(v);
+    CHECK(!v->perf.sample[1].top_port[0].count && !v->perf.sample[1].top_vector[0].count);
+    /* Saturation is explicit; existing ports keep accumulating after it. */
+    for (unsigned i = 0; i <= DOSVM_PERF_PORTS; i++) {
+        v->perf.io_port = i; v->perf.io_valid = true; v->perf.trap_cycles = 0;
+        perf_exit_end(v);
+    }
+    CHECK(v->perf.port_overflow == 1);
+    struct dosvm_perf_sample widest; memset(&widest, 0xff, sizeof(widest));
+    uint32_t gen = v->info.key.generation; v->info.key.generation = UINT32_MAX;
+    perf_live(v, &widest, UINT32_MAX); CHECK(max_record <= 240);
+    v->info.key.generation = gen;
+    g_tsc_per_ms = 0; fake_tsc = 0;
+    destroy(v, true); empty();
+    puts("f3-31 perf: quiet 5s cadence, ranked port collisions/vector paths, interval reset, explicit saturation and widest record bounds PASS");
+}
 static void test_speed(void)
-{ test_speed_window(); test_speed_accounting(); test_speed_launch_errors(); test_planar_completions(); test_video_pte_batch();
+{ test_speed_window(); test_speed_accounting(); test_perf_ranking(); test_chain4_conversion(); test_speed_launch_errors(); test_planar_completions(); test_video_pte_batch();
   test_doom_column_replay(); test_modex_conversion(); test_planar_rep_and_pm_burst(); test_planar_strings_differential(); }

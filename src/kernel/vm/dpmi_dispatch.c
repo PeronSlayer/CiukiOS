@@ -1162,12 +1162,23 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
         f->tf.eip == DPMI_PM_IRQRET && v->dpmi.depth &&
         v->dpmi.rec[v->dpmi.depth - 1].kind == DPMI_REC_PMINT;
     dr6 = dpmi_debug_status(v, dr6);
+    bool stepped = f->tf.vector == 1 && (dr6 & (1u << 14)) &&
+        v->dpmi.return_steps && return_context(&v->dpmi, f);
     int e = pm_trap(v, f, cr2, dr6);
     if (!e && v->frame_pm && f->tf.vector == 13 && !f->tf.err && v->perf.cause == DOSVM_COST_VGA_IO)
         e = dosvm_io_burst(v, f);
     /* The returned PC (including handler entry and emulated fall-through) is
      * a known instruction boundary. Never seed from a backwards guess. */
-    if ((!keep && !irq_return) || e || !v->frame_pm) {
+    if (!e && v->frame_pm) return_boundary_seed(v, f);
+    /* A monitor-owned step will acquire the next exact boundary before
+     * any flags save. Do not copy/validate a 32-byte stack proof at every
+     * intermediate arithmetic instruction. Capture it when tracing stops
+     * (including before PUSHF), or when entering a nested context. */
+    bool tracing = stepped && !e && v->frame_pm && v->dpmi.return_steps &&
+        return_context(&v->dpmi, f) && (f->tf.eflags & V86_TF);
+    if (tracing) {
+        v->dpmi.decode_valid = v->dpmi.decode_stack_valid = v->dpmi.decode_ds_valid = false;
+    } else if ((!keep && !irq_return) || e || !v->frame_pm) {
         v->dpmi.decode_valid = !e && v->frame_pm;
         v->dpmi.decode_cs = (uint16_t)f->tf.cs;
         v->dpmi.decode_eip = f->tf.eip;
@@ -1182,7 +1193,6 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
         v->dpmi.decode_ds_valid = !e && v->frame_pm && dpmi_seg(v, (uint16_t)f->tf.ds, &ds) && ds.present;
         if (v->dpmi.decode_ds_valid) v->dpmi.decode_ds_base = ds.base;
     }
-    if (!e && v->frame_pm) return_boundary_seed(v, f);
     return e;
 }
 

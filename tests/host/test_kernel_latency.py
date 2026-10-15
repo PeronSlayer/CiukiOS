@@ -11,6 +11,19 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class KernelLatencyTests(unittest.TestCase):
+    def test_dosvm_perf_irq_work(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='perf-irq-', dir=out) as directory:
+            binary = Path(directory) / 'perf-irq'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-Wno-unused-function', '-ffunction-sections', '-fdata-sections',
+                            '-Wl,--gc-sections', '-fsanitize=address,undefined',
+                            '-fsanitize-coverage=trace-pc-guard,trace-loads,trace-stores,trace-div',
+                            '-I', str(ROOT / 'src/kernel/include'),
+                            str(ROOT / 'tests/host/dosvm_perf_irq_test.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
     def test_critical_section_attribution(self):
         out = ROOT / 'build/host'
         out.mkdir(parents=True, exist_ok=True)
