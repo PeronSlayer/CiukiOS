@@ -57,11 +57,12 @@ The ordered checks are:
 
 Every page line uses the ordinary console/UART/BOOT.LOG path. The optional
 `blackbox_capture(const char *, size_t)` RAM-producer hook receives the same
-line, including its prefix and newline. **This branch predates f0-25** and has
-neither its raw-ring implementation nor its image allocation. The page reports
-that sink as unavailable when the hook is absent. f0-26 must not invent an
-unallocated raw extent; the lead must connect/verify that hook when integrating
-f0-25. There is no claim of black-box durability from this worktree alone.
+line, including its prefix and newline. Integration with f0-25 links this hook
+to its recorder: page lines are captured once through `klog`, while the UART
+test's direct records retain explicit capture. The page reports the hook as
+linked, or unavailable in configurations that omit it. Raw writes still require
+f0-25's validated descriptor and reserved extent; hook linkage alone does not
+establish disk durability. See the [integration validation](../validation/f0-25-volume-recovery-and-blackbox.md#integration-with-f0-24-and-f0-26-2026-10-15).
 
 ## Serial merge decision (f0-24/f0-26, 2026-10-15)
 

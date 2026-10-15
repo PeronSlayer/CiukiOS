@@ -168,12 +168,32 @@ static void minimum_cache_rule(void) {
     CHECK(cache_barrier(&c, &a.dev) == -FS_EIO);
     CHECK(cache_attach(&c, &cd.dev) == -FS_EIO); cache_stats(&c, &s);
     CHECK(s.slots_512 == 8 && s.slots_2048 == 0);
-    uint8_t buf[2048]; CHECK(cache_read(&c, &cd.dev, 0, buf) == -FS_EIO);
+    uint8_t buf[2048]; CHECK(!cache_read(&c, &cd.dev, 0, buf)); /* raw read needs no available cache slot */
     cache_destroy(&c);
     mem_free(&a); mem_free(&b); mem_free(&cd);
     printf("PASS minimum cache: failed dirty FAT block never monopolizes it, both attach orders\n");
 }
 
+static void failed_victim_read(void) {
+    struct block_cache c;struct mem bad,good_disk;
+    mem_init(&bad,13,512,32);mem_init(&good_disk,14,512,32);
+    CHECK(!cache_init(&c,8192));uint8_t sector[512]={0};
+    for (unsigned i=0;i<4;i++) CHECK(!cache_write(&c,&bad.dev,i,sector));
+    for (unsigned i=0;i<4;i++) CHECK(good(&good_disk,&c,i));
+    bad.fail_all=true;
+    /* The oldest victim fails its writeback; this same read still succeeds. */
+    CHECK(good(&good_disk,&c,10));CHECK(cache_error(&c,&bad.dev)==-FS_EIO);
+    for (unsigned i=11;i<20;i++) CHECK(good(&good_disk,&c,i));
+    cache_destroy(&c);bad.fail_all=false;
+    CHECK(!cache_init(&c,8192));
+    for (unsigned i=0;i<8;i++) CHECK(!cache_write(&c,&bad.dev,i,sector));
+    bad.fail_all=true;CHECK(cache_barrier(&c,&bad.dev)==-FS_EIO);
+    CHECK(good(&good_disk,&c,21));
+    uint8_t bytes[1024];CHECK(!cache_read_run(&c,&good_disk.dev,22,2,bytes));
+    CHECK(bytes[0]==pattern(&good_disk,22,0) && bytes[512]==pattern(&good_disk,23,0));
+    cache_destroy(&c);mem_free(&bad);mem_free(&good_disk);
+    puts("PASS read isolation: first failed dirty eviction pins its device, current and later reads use healthy slots");
+}
 static void explicit_errors(void) {
     struct block_cache c; struct mem cd; mem_init(&cd, 11, 2048, 8);
     CHECK(!cache_init(&c, 8192));
@@ -185,7 +205,7 @@ static void explicit_errors(void) {
 }
 
 int main(void) {
-    budget(); attach_on_demand(); mixed_pressure(); dirty_writeback_on_conversion(); minimum_cache_rule(); explicit_errors();
+    budget(); attach_on_demand(); mixed_pressure(); dirty_writeback_on_conversion(); minimum_cache_rule(); failed_victim_read(); explicit_errors();
     printf("RESULT cache layout checks=%u failures=%u ASan/UBSan=enabled\n", checks, failures);
     return failures ? 1 : 0;
 }

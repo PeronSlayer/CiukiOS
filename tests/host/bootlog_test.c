@@ -11,6 +11,9 @@ static uint32_t model_now_ms(void) { return model_now; }
 #define fs_now_ms model_now_ms
 #include "../../src/kernel/core/bootlog.c"
 
+static char old_records[65536];
+static size_t old_length;
+const char *blackbox_replay(size_t *n) { *n=old_length;return old_records; }
 static struct vfs fs;
 static struct fat_volume volume;
 static unsigned char disk[BOOTLOG_LIMIT];
@@ -84,7 +87,7 @@ static void drain(void)
 }
 static void reset_model(void)
 {
-    bootlog_reset(); memset(&fs, 0, sizeof(fs)); memset(&volume, 0, sizeof(volume));
+    bootlog_reset(); old_length=0; memset(&fs, 0, sizeof(fs)); memset(&volume, 0, sizeof(volume));
     fs.volumes[2] = &volume;
     calls = turns = commits = truncations = disk_position = publications = model_now = 0;
     fail_seek = fail_write = fail_truncate = fail_commit = 0; short_write = false;
@@ -317,4 +320,16 @@ static void runtime_summaries(void)
     CHECK(!memcmp(disk+BOOTLOG_PROTECTED,health,sizeof(health)-1));
     puts("bootlog: kernel attribution/stretch/long_paths persist at 128KiB past the NUL-padded prefix; full directory length required PASS");
 }
-int main(void) { retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }
+static void recovered_prefix(void)
+{
+    reset_model();
+    char block[4096];memset(block,'N',sizeof(block));
+    for (unsigned i=0;i<BOOTLOG_PROTECTED/sizeof(block);i++) bootlog_capture(block,sizeof(block));
+    memset(old_records,'O',sizeof(old_records));memcpy(old_records,"[blackbox] previous boot\n",25);old_length=sizeof(old_records);
+    CHECK(!bootlog_activate(&fs,true,1));CHECK(snapshot().dropped==BOOTLOG_PROTECTED/2);
+    service_sync=true;CHECK(!bootlog_sync(never_cancel,pause_sync,NULL));
+    CHECK(published_size==BOOTLOG_PROTECTED && !memcmp(disk,old_records,sizeof(old_records)));
+    CHECK(disk[sizeof(old_records)]=='N');CHECK(!bootlog_shutdown());
+    puts("PASS replay prefix: immutable blackbox head, bounded current-boot prefix, dropped-byte watermark retires, sync completes");
+}
+int main(void) { recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }

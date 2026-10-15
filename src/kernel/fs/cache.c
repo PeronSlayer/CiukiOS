@@ -136,7 +136,8 @@ static int layout_for(struct block_cache *c, struct blkdev *d) {
     unsigned pages=c->data_pages/8; if (!pages) pages=1;
     return convert(c,pages*2);
 }
-static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read, struct cache_block **out) {
+static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read, struct cache_block **out, bool *issued) {
+    if (issued) *issued=false;
     fs_service();
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     int e=blkdev_range(d,lba,1); if (e) return e;
@@ -147,6 +148,8 @@ static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read,
         if (b->dev==d && b->lba==lba && b->generation==d->media_generation && b->sector_size==d->sector_size) { c->hits++; touch(c,b); *out=b; return 0; }
     }
     c->misses++;
+retry_victim:
+    ;
     struct cache_block *b=0;
     int blocked=-FS_ENOMEM;
     /* A 512-byte request may use a 2048-byte slot when every 512-byte slot is
@@ -160,9 +163,16 @@ static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read,
         }
     }
     if (!b) return blocked;
-    if ((e=write_block(c,b))) return e;
+    if ((e=write_block(c,b))) {
+        /* A failed dirty victim pins itself, not every reader sharing this
+         * cache. Find a different clean/healthy slot on the next pass. */
+        goto retry_victim;
+    }
     unhash(c,b);
-    if (read && (e=d->read(d,lba,1,b->data))) return e;
+    if (read) {
+        if (issued) *issued=true;
+        if ((e=d->read(d,lba,1,b->data))) return e;
+    }
     if (read && proc_launch_disk_read) proc_launch_disk_read(d->sector_size);
     b->dev=d; b->lba=lba; b->generation=d->media_generation; b->sector_size=(uint16_t)d->sector_size;
     unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
@@ -227,7 +237,18 @@ void cache_stats(struct block_cache *c, struct cache_stats *out) {
 int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf) {
     if (!buf) return -FS_EINVAL;
     fs_lock_take(&c->lock); struct cache_block *b;
-    int e=get(c,d,lba,true,&b); if (!e) memcpy(buf,b->data,d->sector_size);
+    bool issued=false;
+    uint32_t generation=d ? d->media_generation : 0;
+    int e=get(c,d,lba,true,&b,&issued);
+    if (!e) memcpy(buf,b->data,d->sector_size);
+    else if (!issued && !blkdev_range(d,lba,1) && d->read) {
+        /* All slots may contain dirty data pinned by failed writeback.
+         * A miss still has a read transport; never retry an issued read. */
+        e=d->read(d,lba,1,buf);
+        if (!e && proc_launch_disk_read) proc_launch_disk_read(d->sector_size);
+        if (c->refresh) c->refresh(c->refresh_ctx,d);
+        if (!e && (generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
+    }
     fs_lock_drop(&c->lock); return e;
 }
 int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32_t count, void *buf) {
@@ -263,8 +284,8 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
         if (d->media_generation!=generation || d->quarantined) { e=-FS_EIO; break; }
         for (; i<end; i++) {
             struct cache_block *b;
-            e=get(c,d,lba+i,false,&b);
-            if (e) break;
+            e=get(c,d,lba+i,false,&b,0);
+            if (e) { e=0; continue; } /* successful direct read needs no cache slot */
             memcpy(b->data,(uint8_t *)buf+i*512,512);
         }
     }
@@ -275,7 +296,7 @@ int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const voi
     if (!buf || !blkdev_durable(d)) return d && d->quarantined ? -FS_EQUARANTINED : -FS_EROFS;
     fs_lock_take(&c->lock); struct cache_device *s=device(c,d); struct cache_block *b;
     int e=!s ? -FS_ENOSPC : s->error;
-    if (!e) e=get(c,d,lba,false,&b);
+    if (!e) e=get(c,d,lba,false,&b,0);
     if (!e) {
         memcpy(b->data,buf,d->sector_size);
         if (!b->dirty) {

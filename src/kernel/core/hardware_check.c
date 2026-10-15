@@ -13,10 +13,11 @@
 #include <ciuki/savage2d.h>
 #include <ciuki/audio.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/blackbox.h>
 #include <ciuki/abi.h>
-/* f0-25 owns the raw ring and its on-disk allocation. This worktree predates
- * that implementation: do not invent a raw disk extent or overwrite a BPB. */
-extern void blackbox_capture(const char *, size_t) __attribute__((weak));
+/* Host/older configurations may omit the recorder; the kernel links f0-25's
+ * RAM producer. Only its validated descriptor admits raw disk writes. */
+#pragma weak blackbox_capture
 int hardware_check_ata(struct storage *, struct hw_check_result *);
 int hardware_check_repair(struct storage *, struct hw_check_result *);
 static struct task *check_task;
@@ -46,11 +47,7 @@ static void page_line(void *ctx,const char *line)
         int n=ksnprintf(summary_page+summary_bytes,sizeof(summary_page)-summary_bytes,"%s\n",line);
         if (n>0 && (unsigned)n<sizeof(summary_page)-summary_bytes) summary_bytes+=(unsigned)n;
     }
-    if (blackbox_capture) {
-        char record[256];
-        int n=ksnprintf(record,sizeof(record),"[hwcheck] %s\n",line);
-        if (n>0 && n<(int)sizeof(record)) blackbox_capture(record,(size_t)n);
-    }
+    /* klog captures this exact prefixed line once through output.c. */
 }
 static void usb_storage_check(uint64_t until,struct hw_check_result *out)
 {

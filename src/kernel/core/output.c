@@ -1,6 +1,6 @@
 /* Log lines, evidence records and the panic path.
  * Records use the f0-acceptance grammar; the panic path allocates nothing,
- * takes no lock except a re-entry guard and never touches storage.
+ * uses an optional bounded raw-sector sink on an idle channel.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -9,6 +9,9 @@
 #include <ciuki/probe.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/timing.h>
+#include <ciuki/blackbox.h>
+#pragma weak blackbox_capture
+#pragma weak blackbox_panic
 
 static char run_id[9] = "00000000";
 static uint32_t seq, premature_records;
@@ -16,6 +19,8 @@ static bool run_selected, run_begun, premature_noted;
 
 uint32_t rec_premature_records(void) { return premature_records; }
 bool rec_active(void) { return run_selected && run_begun; }
+
+void blackbox_serial_replay(const char *s,size_t n) { serial_write(s,n); }
 
 void kputs_raw(const char *s)
 {
@@ -34,6 +39,7 @@ static void log_line(const char *fmt, va_list ap, bool periodic)
         n = sizeof(buf) - 2;
     buf[n] = '\n';
     buf[n + 1] = 0;
+    if (blackbox_capture) blackbox_capture(buf,(size_t)n+1);
     if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
     else bootlog_capture(buf, (size_t)n + 1);
     serial_write(buf, (size_t)n + 1);
@@ -79,12 +85,17 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
                       run_id, s, probe, n);
     buf[n] = '\n';
     buf[n + 1] = 0;
+    if (!ordinary && blackbox_panic) blackbox_panic(buf,(size_t)n+1);
     if (ordinary) {
         if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
         else bootlog_capture(buf, (size_t)n + 1);
     }
     if (!disk_only) serial_write(buf, (size_t)n + 1);
     irq_restore(flags);
+    /* The RAM recorder owns a separate <=256-byte publication. Do not
+     * extend the serial/sequence critical section or tie capture to UART
+     * admission: whole-record serial drops still reach the black box. */
+    if (blackbox_capture) blackbox_capture(buf,(size_t)n+1);
     if (!disk_only) console_write(buf, (size_t)n + 1);
 }
 

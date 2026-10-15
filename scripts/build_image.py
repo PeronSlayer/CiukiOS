@@ -18,6 +18,10 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 SECTOR = 512
 PART_LBA = 2048
+FAT_RESERVED = 160
+BLACKBOX_DESCRIPTOR = 8
+BLACKBOX_FIRST = 32
+BLACKBOX_SECTORS = 128
 IMAGE_BYTES = 512 * 1024 * 1024
 HEADER = struct.Struct("<4sHHIHH")
 DEFAULT_CONFIG = b"safe=0 serial=1\n"
@@ -350,6 +354,21 @@ def prepare_loader(raw):
     return loader
 
 
+def initialize_blackbox(volume):
+    """Reserve raw crash sectors outside allocation and BPB metadata."""
+    descriptor = bytearray(SECTOR)
+    struct.pack_into("<4sIII", descriptor, 0, b"CBB1", 1, BLACKBOX_FIRST, BLACKBOX_SECTORS)
+    struct.pack_into("<I", descriptor, 508, zlib.crc32(descriptor[:508]))
+    with volume.open("r+b") as stream:
+        bpb = stream.read(SECTOR)
+        require(struct.unpack_from("<H", bpb, 14)[0] == FAT_RESERVED, "blackbox reserved geometry")
+        require(struct.unpack_from("<HH", bpb, 48) == (1, 6), "blackbox BPB overlap")
+        stream.seek(BLACKBOX_DESCRIPTOR * SECTOR)
+        stream.write(descriptor)
+        stream.seek(BLACKBOX_FIRST * SECTOR)
+        stream.write(bytes(BLACKBOX_SECTORS * SECTOR))
+
+
 def check_image(image, volume):
     with image.open("rb") as stream:
         mbr = stream.read(SECTOR)
@@ -369,7 +388,7 @@ def check_image(image, volume):
         require(gap == bytes(len(gap)), "reserved disk gap")
         bpb = stream.read(SECTOR)
     bps, spc, reserved, fats = struct.unpack_from("<HBHB", bpb, 11)
-    require((bps, spc, reserved, fats) == (512, 8, 32, 2), "FAT32 geometry")
+    require((bps, spc, reserved, fats) == (512, 8, FAT_RESERVED, 2), "FAT32 geometry")
     require(struct.unpack_from("<H", bpb, 17)[0] == 0, "FAT32 BPB")
     require(struct.unpack_from("<H", bpb, 22)[0] == 0, "FAT32 BPB")
     total = struct.unpack_from("<I", bpb, 32)[0]
@@ -385,6 +404,12 @@ def check_image(image, volume):
         require(struct.unpack_from("<I", fsinfo)[0] == 0x41615252, "FAT32 BPB")
         require(struct.unpack_from("<I", fsinfo, 484)[0] == 0x61417272, "FAT32 BPB")
         require(fsinfo[508:] == b"\0\0\x55\xaa", "FAT32 BPB")
+        stream.seek(BLACKBOX_DESCRIPTOR * SECTOR)
+        descriptor = stream.read(SECTOR)
+        require(struct.unpack_from("<4sIII", descriptor) == (b"CBB1", 1, BLACKBOX_FIRST, BLACKBOX_SECTORS), "blackbox descriptor")
+        require(struct.unpack_from("<I", descriptor, 508)[0] == zlib.crc32(descriptor[:508]), "blackbox descriptor checksum")
+        stream.seek(BLACKBOX_FIRST * SECTOR)
+        require(stream.read(BLACKBOX_SECTORS * SECTOR) == bytes(BLACKBOX_SECTORS * SECTOR), "blackbox empty ring")
         stream.seek(6 * SECTOR)
         require(stream.read(SECTOR) == bpb, "backup BPB")
         require(stream.read(SECTOR) == fsinfo, "backup FSInfo")
@@ -468,8 +493,9 @@ def build(kernel, out, boot_cfg):
         with volume.open("wb") as stream:
             stream.truncate(partition_bytes)
         run("mkfs.fat", "--invariant", "-a", "-F", "32", "-S", "512", "-s", "8",
-            "-f", "2", "-R", "32", "-b", "6", "-h", str(PART_LBA),
+            "-f", "2", "-R", str(FAT_RESERVED), "-b", "6", "-h", str(PART_LBA),
             "-n", "CIUKIOS", volume)
+        initialize_blackbox(volume)
         sources.update({"/system/VMM.ELF": kernel, "/system/BOOT.CFG": cfg})
         payloads = payload_records(sources)
         # f3-06: owner-local game files never enter the canonical image; only
@@ -541,6 +567,7 @@ def write_manifest(image, kernel, image_sha, payloads, metadata):
         "git_dirty": dirty,
         "image": image.name,
         "image_sha256": image_sha,
+        "blackbox": {"descriptor_sector": BLACKBOX_DESCRIPTOR, "first_sector": BLACKBOX_FIRST, "sectors": BLACKBOX_SECTORS, "reserved_sectors": FAT_RESERVED},
         "kernel": str(kernel),
         "kernel_sha256": sha256(kernel),
         "build_epoch": clock_record["utc_epoch"],

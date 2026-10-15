@@ -12,6 +12,16 @@ void console_write(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n; }
 #include "../../src/kernel/core/output.c"
+static bool verify_blackbox;
+static uint32_t capture_flags;
+static unsigned captured_records;
+static char captured_record[256];
+void blackbox_capture(const char *s, size_t n)
+{
+    if (!verify_blackbox) return;
+    CHECK(flags==capture_flags && n && n<sizeof(captured_record) && s[n-1]=='\n');
+    memcpy(captured_record,s,n);captured_record[n]=0;captured_records++;
+}
 #undef CLOCKS_PER_SEC
 #undef WIFEXITED
 #undef WEXITSTATUS
@@ -118,8 +128,31 @@ static void evidence_sequence(void)
     CHECK(a && b && a<b);
     puts("serial evidence: quota wait dispatches another producer before sequence allocation; wire sequence stays increasing with zero drops PASS");
 }
+static void blackbox_publication(void)
+{
+    reset_uart(true);verify_blackbox=true;capture_flags=0x200;captured_records=0;
+    klog("[hwcheck] page record");
+    CHECK(captured_records==1 && !strcmp(captured_record,"[hwcheck] page record\n"));
+    klog_periodic("[kernel] periodic");
+    rec_set_run("abcdef12");rec_emit("runner","BEGIN",NULL);
+    g_boot.flags=CBI_F_VERBOSE;rec_diag("runner","case=ordinary");
+    run_selected=false;g_boot.flags=CBI_F_DIAG_VERBOSE;
+    rec_diag_disk("runner","case=disk_only");
+    CHECK(captured_records==5 && strstr(captured_record,"case=disk_only\n"));
+    /* Exhaust admission: UART drops the whole evidence record while the
+     * independent black-box path still receives the complete line. */
+    uart_admitted=uart_budget;uint32_t f=irq_save();capture_flags=0;
+    unsigned dropped=uart_dropped;
+    rec_set_run("abcdef12");rec_emit("runner","BEGIN","case=irq_drop");
+    CHECK(uart_dropped==dropped+1 && captured_records==6 && strstr(captured_record,"case=irq_drop\n"));
+    rec_emit_panicsafe("panic","PANIC","case=panic");
+    CHECK(captured_records==7 && strstr(captured_record,"case=panic\n"));
+    irq_restore(f);verify_blackbox=false;g_boot.flags=0;
+    puts("output blackbox: page/periodic/evidence/diagnostic/disk-only/IRQ/panic records captured; task capture after IF restore, whole UART drop independent PASS");
+}
 int main(void)
 {
+    blackbox_publication();
     evidence_sequence();
     maximum_records();
     for (unsigned kind=0;kind<2;kind++) for (unsigned envelopes=0;envelopes<2;envelopes++) {

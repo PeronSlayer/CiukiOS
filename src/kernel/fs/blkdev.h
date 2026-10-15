@@ -7,6 +7,9 @@
 #define BLKDEV_READ_SECTORS (BLKDEV_READ_BYTES / BLKDEV_SECTOR_SIZE)
 enum blkdev_cache_state { BLKDEV_CACHE_UNKNOWN, BLKDEV_CACHE_DISABLED, BLKDEV_CACHE_ENABLED };
 struct blkdev {
+    /* One sector, bounded polling, no locks/allocation/scheduler. Optional
+     * emergency crash recorder only; failure is never retried. */
+    int (*emergency_write)(struct blkdev *, uint64_t, const void *);
     /* Synchronous, complete request or negative FS_EIO / FS_EINVAL /
      * FS_EQUARANTINED. No retry after an issued error. count is in sectors.
      * flush != NULL certifies a qualified durability implementation; returning
