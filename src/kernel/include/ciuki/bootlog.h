@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#define BOOTLOG_LIMIT (1024u * 1024u)
+#define BOOTLOG_BUDGET (1024u * 1024u)
+/* Three boots share the original budget, including cluster rounding. */
+#define BOOTLOG_LIMIT (320u * 1024u)
 #define BOOTLOG_PROTECTED (128u * 1024u)
 #define BOOTLOG_RING (BOOTLOG_LIMIT - BOOTLOG_PROTECTED)
 #define BOOTLOG_RAM 65536u
@@ -14,6 +16,8 @@
 #define BOOTLOG_DRAIN_MS 1000u
 #define BOOTLOG_METADATA_MS 5000u
 #define BOOTLOG_PATH "C:/SYSTEM/LOGS/BOOT.LOG"
+#define BOOTLOG_PREVIOUS "C:/SYSTEM/LOGS/BOOT1.LOG"
+#define BOOTLOG_OLDEST "C:/SYSTEM/LOGS/BOOT2.LOG"
 #define BOOTLOG_SYNC_TIMEOUT_MS 2000u
 struct vfs;
 struct bootlog_stats {

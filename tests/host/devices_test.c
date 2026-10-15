@@ -87,6 +87,14 @@ int copy_from_user(void *out, uint32_t a, uint32_t n)
 { assert(a == 0x1000 && n == 8); memcpy(out, &user, n); return 0; }
 int copy_to_user(uint32_t a, const void *in, uint32_t n)
 { assert(a == 0x1000 && n == sizeof(user)); copies++; if (copy_error) return copy_error; memcpy(&user, in, n); return 0; }
+extern bool storage_readonly_info(unsigned,char *,unsigned) __attribute__((weak));
+static bool volume_locked;
+bool storage_readonly_info(unsigned drive,char *text,unsigned bytes)
+{
+    assert(bytes>=80);
+    if (!volume_locked || drive!=2) return false;
+    strcpy(text,"chain_bounds; cluster=8192; file=BOOT.LOG");return true;
+}
 #include "../../src/kernel/core/devices.c"
 
 static unsigned changes;
@@ -214,6 +222,11 @@ int main(void)
     memset(&audio,0,sizeof(audio)); npci=2; nres--;
     second_nic_catalogue();
     extended = 1; devices_snapshot(&snapshot); assert(!strcmp(snapshot.cpu_brand, "Synthetic Pentium III CPU"));
+    volume_locked=true;devices_snapshot(&snapshot);
+    assert(device(0x41002)->state==CIUKI_DEVICE_QUARANTINED && !strcmp(device(0x41002)->driver,"fat"));
+    assert(!strcmp(device(0x41002)->reason,"chain_bounds; cluster=8192; file=BOOT.LOG"));
+    volume_locked=false;
+    puts("PASS devices: live read-only volume reason/file/cluster reaches the unchanged inventory ABI");
     /* Count cap and zeroed tail: more unique owners/PCI than device slots. */
     static char owners[64][16]; nres = 64; npci = 32;
     for (unsigned i = 0; i < 64; i++) { snprintf(owners[i], sizeof(owners[i]), "owner-%u", i); res[i] = (struct resource){RES_PORT, i * 2, i * 2 + 1, owners[i], i + 1, RS_CLAIMED, false}; }

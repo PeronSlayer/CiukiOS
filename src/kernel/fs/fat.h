@@ -32,6 +32,10 @@ struct fat_volume {
     bool preparing; /* unpublished mount: complete direct I/O, no cache mutex */
     struct fat_prepare_cache *prepare_cache; /* private, freed before publication */
     const char *diagnostic;
+    /* First write-revocation cause, retained through later failed calls. */
+    const char *readonly_reason;
+    char operation_file[96], readonly_file[96];
+    uint32_t readonly_cluster;
     /* Read observations, possibly repeated by lookups; never on-disk counts. */
     uint32_t lfn_orphans, lfn_bad_checksum, lfn_invalid;
     struct fat_entry alias_scratch; /* serialized alias collision walk; saves kernel stack */
@@ -63,4 +67,6 @@ int fat_rename(struct fat_volume *, struct fat_entry *, uint32_t new_parent, con
 int fat_set_metadata(struct fat_volume *, struct fat_entry *, uint8_t attr, const struct fat_times *);
 /* Useful to host/probe diagnostics; bounded, does not expose a private cache. */
 int fat_get_cluster(struct fat_volume *, uint32_t cluster, uint32_t *value);
+void fat_revoke_write(struct fat_volume *, const char *reason, uint32_t cluster);
+const char *fat_readonly_reason(const struct fat_volume *);
 #endif

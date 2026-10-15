@@ -37,6 +37,9 @@ sources += [root/'src/kernel/drivers/ata.c', root/'src/kernel/drivers/ata_dma.c'
 sources += sorted((root/'src/kernel/usb').glob('*.c'))
 sources += [root/'src/kernel/drivers/blkpart.c', root/'src/kernel/drivers/media_dev.c', root/'src/kernel/proc/posixpath.c', root/'src/kernel/proc/devnodes.c']
 sources += [root/'src/kernel/drivers/optical.c']
+# F0-23: boot-only calibration, UART bounds, port pacing and live RO inventory.
+sources += [root/'src/kernel/core'/name for name in ('serial.c', 'output.c', 'timing.c', 'main.c', 'devices.c')]
+sources += [root/'src/kernel/drivers/i8042.c']
 for source in sources:
     subprocess.run(['clang',*flags,'-I'+str(root/'src/kernel/include'),'-fstack-usage','-c',str(source),
                     '-o',str(out/(source.stem+'.o'))],check=True)

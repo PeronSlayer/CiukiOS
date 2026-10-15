@@ -698,7 +698,7 @@ int probe_bootlog(void)
     struct bootlog_stats before, after;
     bootlog_snapshot(&before);
     rec_emit(probe, "DATA", "group=bootlog case=before prequalification_writes=%llu storage_calls=%llu queued=%u limit=%u",
-             before.writes, before.storage_calls, before.queued, BOOTLOG_LIMIT);
+             before.writes, before.storage_calls, before.queued, BOOTLOG_BUDGET);
     if (before.writes || before.storage_calls || !s->ready) return finish(probe, -FS_EIO);
     struct storage_volume *v = storage_volume(s, 2);
     if (!v || v->error || !v->read_gate || !blkdev_durable(blkpart_device(&v->part))) {

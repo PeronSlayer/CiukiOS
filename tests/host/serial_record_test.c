@@ -37,8 +37,58 @@ static void *record_emitter(void *arg)
     atomic_fetch_add(&producers_done,1);
     return NULL;
 }
+static unsigned exact_size;
+static void *large_producer(void *arg)
+{
+    unsigned id=*(unsigned *)arg;
+    playback_producer=true;
+    for (unsigned i=0;i<12;i++) {
+        char record[SERIAL_RECORD_MAX];
+        memset(record,'A'+id,exact_size);record[exact_size-1]='\n';
+        memcpy(record,id ? "[console] " : "[kernel]  ",10);
+        uint32_t f=0;
+        if (id) f=irq_save();
+        serial_write(record,exact_size);
+        if (id) irq_restore(f);
+        memset(record,'?',sizeof(record)); /* queue must own all source bytes */
+        sched_yield();
+    }
+    playback_producer=false;atomic_fetch_add(&producers_done,1);return NULL;
+}
+static void maximum_records(void)
+{
+    for (unsigned kind=0;kind<2;kind++) for (unsigned size=0;size<2;size++) {
+        reset_uart(kind);exact_size=size ? SERIAL_RECORD_MAX : 240;
+        atomic_store(&producers_done,0);
+        pthread_t a,b,c;unsigned ids[2]={0,1};
+        CHECK(!pthread_create(&c,NULL,sender,NULL));
+        CHECK(!pthread_create(&a,NULL,large_producer,&ids[0]));
+        CHECK(!pthread_create(&b,NULL,large_producer,&ids[1]));
+        CHECK(!pthread_join(a,NULL) && !pthread_join(b,NULL) && !pthread_join(c,NULL));
+        CHECK(!uart_dropped && emitted_count==24*(exact_size+1));
+        for (unsigned row=0;row<24;row++) {
+            const char *p=emitted+row*(exact_size+1);
+            unsigned id=!memcmp(p,"[console] ",10);
+            CHECK(!memcmp(p,id ? "[console] " : "[kernel]  ",10));
+            for (unsigned i=10;i<exact_size-1;i++) CHECK(p[i]==(char)('A'+id));
+            CHECK(p[exact_size-1]=='\r' && p[exact_size]=='\n');
+        }
+        /* Panic with a partially transmitted maximum-size task record and
+         * an IF-clear producer behind it preserves exact byte order. */
+        reset_uart(kind);char record[SERIAL_RECORD_MAX];memset(record,'P',sizeof(record));
+        serial_write(record,sizeof(record));tick();
+        uint32_t f=irq_save();serial_panic();serial_write("panic\n",6);irq_restore(f);
+        CHECK(emitted_count==sizeof(record)+7);
+        for (unsigned i=0;i<sizeof(record);i++) CHECK(emitted[i]=='P');
+        CHECK(!memcmp(emitted+sizeof(record),"panic\r\n",7));
+        reset_uart(kind);serial_write(record,SERIAL_RECORD_MAX+1u);
+        CHECK(uart_dropped==1 && !uart_used); /* reject before inspecting input */
+    }
+    puts("serial bounds: two task/IRQ producers, 240/2048-byte records, source ownership, 16450/16550, panic order and oversize whole drop PASS");
+}
 int main(void)
 {
+    maximum_records();
     for (unsigned kind=0;kind<2;kind++) for (unsigned envelopes=0;envelopes<2;envelopes++) {
         reset_uart(kind); console_emitter=envelopes;
         rec_set_run("12345678"); rec_emit("runner","BEGIN",NULL); drain_uart();

@@ -159,8 +159,28 @@ static void fat_runs(unsigned spc, unsigned type, bool fragmented) {
     printf("PASS FAT%u run spc=%u fragmented=%u: 1 MiB identical, EOF/partial/boundary/hit/corruption checks\n",type,spc,fragmented);
     cache_destroy(&c); free(chain); free(expected); free(actual); free(m.bytes);
 }
+static void full_directory(void) {
+    struct media m;struct block_cache cache;init_media(&m,64);
+    memset(m.bytes,0,64*512);CHECK(!cache_init(&cache,8192));
+    struct fat_volume v={.cache=&cache,.dev=&m.dev,.sectors=64,.reserved=1,.fat_sectors=1,
+        .data_sector=32,.clusters=1,.type=16,.spc=1,.fats=1,.mounted=true};
+    fs_wr16(m.bytes+512+4,0xffff);
+    for (unsigned i=0;i<16;i++) {
+        uint8_t *entry=m.bytes+32*512+i*32;
+        char name[12];CHECK(snprintf(name,sizeof(name),"EMPTY%03uTXT",i)==11);
+        memcpy(entry,name,11);entry[11]=FAT_ATTR_ARCHIVE;
+    }
+    uint32_t cursor=0;struct fat_entry entry;
+    for (unsigned i=0;i<16;i++) CHECK(!fat_next(&v,2,&cursor,&entry));
+    CHECK(fat_next(&v,2,&cursor,&entry)==-FS_ENOENT && !v.readonly && !v.ro_reasons);
+    /* The same full directory with a looping final link still revokes writes. */
+    fs_wr16(m.bytes+512+4,2);cache_invalidate(&cache,&m.dev,false);
+    CHECK(fat_next(&v,2,&cursor,&entry)==-FS_EUCLEAN && v.readonly && v.ro_reasons&FAT_RO_CORRUPT);
+    cache_destroy(&cache);free(m.bytes);
+    puts("PASS FAT full directory: valid final EOC returns ENOENT without revocation; looping final link returns EUCLEAN");
+}
 int main(void) {
-    cache_runs();
+    cache_runs();full_directory();
     for (unsigned type=16;type<=32;type*=2)
         for (unsigned spc=1;spc<=128;spc*=spc==1 ? 4 : 32)
             for (unsigned fragmented=0;fragmented<2;fragmented++) fat_runs(spc,type,fragmented!=0);

@@ -28,7 +28,7 @@ int device_write(const void *buffer, uint32_t bytes)
     static const char prefix[] = "[console] ";
     /* Include every prefix and the terminator in ONE queue publication.
      * A timer or another task may run between calls to serial_write. */
-    char record[2048];
+    char record[SERIAL_RECORD_MAX];
     size_t at = sizeof(prefix) - 1;
     memcpy(record, prefix, at);
     unsigned consumed = 0;

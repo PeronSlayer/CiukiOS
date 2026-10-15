@@ -888,6 +888,38 @@ static void system_read(struct desktop *d)
     struct utsname u;
     if (!uname(&u)) snprintf(d->sh.cpu_name,sizeof(d->sh.cpu_name),"%.40s",u.machine);
 }
+static void storage_poll(struct desktop *d, uint64_t now)
+{
+#ifdef __i386__
+    static uint64_t next;
+    static char reported[26][80];
+    static struct ciuki_devices_info info;
+    if (d->sh.gate || now<next) return;
+    next=now+2000000000ull;
+    info.version=CIUKI_DEVICES_VERSION; info.size=sizeof(info);
+    if (ciuki_devices(&info)) return;
+    uint32_t present=0;
+    for (unsigned i=0;i<info.count && i<CIUKI_DEVICES_MAX;i++) {
+        const struct ciuki_device_record *v=&info.devices[i];
+        if (v->id>=0x41002 && v->id<0x4101a && !strcmp(v->driver,"fat"))
+            present|=1u<<(v->id-0x41000);
+    }
+    for (unsigned drive=2;drive<26;drive++) if (!(present&(1u<<drive))) reported[drive][0]=0;
+    for (unsigned i=0;i<info.count && i<CIUKI_DEVICES_MAX;i++) {
+        const struct ciuki_device_record *v=&info.devices[i];
+        if (v->id<0x41002 || v->id>=0x4101a || strcmp(v->driver,"fat")) continue;
+        unsigned drive=v->id-0x41000;
+        if (!strcmp(reported[drive],v->reason)) continue;
+        snprintf(reported[drive],sizeof(reported[drive]),"%s",v->reason);
+        char text[200];
+        snprintf(text,sizeof(text),"%s\n%s\nChanges cannot be saved to this volume.",v->name,v->reason);
+        desk_shell_notify(d,"Storage is read-only",text,DU_DLG_ICON_ERROR,SH_NOTIFY_DETAILS);
+        break;
+    }
+#else
+    (void)d; (void)now;
+#endif
+}
 static int run_command(struct desktop *d, char *line)
 {
     /* "name arg..." or "/Programs/name arg...": spaces separate, double quotes group. */
@@ -1200,6 +1232,7 @@ int main(int argc, char **argv)
         uint64_t now = monotonic();
         desktop_stage(STALL_SHELL);
         mixer_poll(d,now,&mixer_poll_next);
+        if (!gate) storage_poll(d,now);
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desk_heartbeat(d,now);

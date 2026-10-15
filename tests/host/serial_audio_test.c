@@ -225,6 +225,14 @@ static void caller_burst_tests(bool with_fifo)
     CHECK(!uart_dropped && !overflows);
 }
 
+/* Fill the byte ring using individually bounded publications. */
+static void queue_bulk(const char *s, size_t n)
+{
+    while (n) {
+        size_t take=n>SERIAL_RECORD_MAX ? SERIAL_RECORD_MAX : n;
+        serial_write(s,take);s+=take;n-=take;
+    }
+}
 static const char drop_notice[] = "[serial] dropped=2\r\n";
 static void basic_tests(bool with_fifo)
 {
@@ -267,7 +275,7 @@ static void basic_tests(bool with_fifo)
     reset_uart(with_fifo); serial_buffered(true);
     static char padding[UART_LOG_BYTES - 32];
     memset(padding, 'P', sizeof(padding)); padding[sizeof(padding) - 1] = '\n';
-    serial_write(padding, sizeof(padding)); drain_uart();
+    queue_bulk(padding, sizeof(padding)); drain_uart();
     CHECK(uart_head + sizeof(task_record) > UART_LOG_BYTES);
     unsigned start = emitted_count;
     serial_write(task_record, sizeof(task_record) - 1); drain_uart();
@@ -277,7 +285,7 @@ static void basic_tests(bool with_fifo)
     reset_uart(with_fifo); serial_buffered(true); ready = false;
     static char full[UART_LOG_BYTES];
     memset(full, 'X', sizeof(full)); full[sizeof(full) - 2] = '\n';
-    serial_write(full, sizeof(full) - 1);
+    queue_bulk(full, sizeof(full) - 1);
     CHECK(uart_used == UART_LOG_BYTES);
     serial_write("DROP\n", 5);
     serial_write("DROP-AGAIN\n", 11);
@@ -300,7 +308,7 @@ static void panic_tests(bool with_fifo)
     reset_uart(with_fifo); serial_buffered(true); ready = false;
     static char full[UART_LOG_BYTES];
     memset(full, 'X', sizeof(full)); full[sizeof(full) - 2] = '\n';
-    serial_write(full, sizeof(full) - 1); serial_write("DROP\n", 5);
+    queue_bulk(full, sizeof(full) - 1); serial_write("DROP\n", 5);
     ready = true; tick(); /* Panic after a partial queued FIFO burst. */
     uint32_t f = irq_save();
     serial_panic();

@@ -9,6 +9,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/registry.h>
 #include <ciuki/version.h>
+#include <ciuki/timing.h>
 
 struct ciuki_boot_info g_boot;
 
@@ -71,6 +72,10 @@ void kmain(uint32_t magic, uint32_t bi_phys)
     fpu_init();
     sched_init();
     pit_init();
+    /* No task is running during the full-accuracy PIT measurement. */
+    sti();
+    timing_calibrate();
+    cli();
     struct task *t = task_create_kernel("probes", probes_main, 0, P_INTERACTIVE);
     if (!t)
         panic("cannot create the probe task");

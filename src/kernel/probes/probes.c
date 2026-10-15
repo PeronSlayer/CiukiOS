@@ -1062,7 +1062,6 @@ static void quiet_watchdog(void *arg)
 void probes_main(void *arg)
 {
     (void)arg;
-    timing_calibrate();
     kwork_init();                        /* device worker, before any driver IRQ producer */
     if (!(g_boot.flags & CBI_F_TEST_REQUEST)) {
         if (console_quiet()) {

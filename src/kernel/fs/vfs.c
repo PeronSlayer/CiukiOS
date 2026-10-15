@@ -505,6 +505,49 @@ static int remove_path(struct vfs_table *t, const char *path, bool dir) {
     }
     fs_lock_drop(&t->vfs->lock); return e;
 }
+int vfs_log_rotate(struct vfs_table *t, const char *current, const char *previous,
+                   const char *oldest, uint32_t capacity) {
+    const char *paths[3]={current,previous,oldest};
+    struct fat_entry entries[3];
+    struct resolved r;
+    bool present[3]={false};
+    unsigned drive=26; uint32_t parent=0;
+    struct vfs *v=t->vfs;
+    fs_lock_take(&v->lock);
+    int e=capacity ? 0 : -FS_EINVAL;
+    /* Preflight every entry before changing any name or reservation. */
+    for (unsigned i=0;!e && i<3;i++) {
+        e=lookup(t,paths[i],&r,&entries[i]);
+        if (e==-FS_ENOENT) e=resolve(t,paths[i],&r);
+        else if (!e) present[i]=true;
+        if (e) break;
+        if (!i) { drive=r.drive; parent=r.parent; }
+        if (r.drive!=drive || r.parent!=parent || !r.name[0]) { e=-FS_EINVAL; break; }
+        if (present[i]) {
+            if (entries[i].attr&(FAT_ATTR_RO|FAT_ATTR_DIR)) { e=-FS_EACCES; break; }
+            e=busy(v,v->volumes[drive],&entries[i]);
+        }
+    }
+    if (!e && v->volumes[drive]->readonly) e=-FS_EROFS;
+    if (!e && present[2]) {
+        e=fat_remove(v->volumes[drive],&entries[2],false);
+        if (!e && px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],0);
+    }
+    for (unsigned i=2;!e && i;i--) if (present[i-1]) {
+        struct fat_entry *entry=&entries[i-1];
+        entries[2]=*entry; /* oldest is gone; reuse its scratch storage */
+        /* Release the entire unpublished tail, even when size is zero.
+         * Finishing in place does not allocate a second full-file chain. */
+        if (entry->size>capacity) entry->size=capacity;
+        e=fat_publish_reserved(v->volumes[drive],entry,true);
+        if (px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],entry);
+        entries[2]=*entry;
+        if (!e) e=resolve(t,paths[i],&r);
+        if (!e) e=fat_rename(v->volumes[drive],entry,parent,r.name);
+        if (!e && px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],entry);
+    }
+    fs_lock_drop(&v->lock); return e;
+}
 int vfs_delete(struct vfs_table *t, const char *p) { return remove_path(t,p,false); }
 int vfs_rmdir(struct vfs_table *t, const char *p) { return remove_path(t,p,true); }
 int vfs_mkdir(struct vfs_table *t, const char *p, uint8_t attr) {
