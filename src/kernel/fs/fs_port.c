@@ -6,6 +6,7 @@
 #endif
 #ifdef FS_HOST
 unsigned fs_host_contig_fail, fs_host_contig_live;
+unsigned fs_host_page_fail;
 #endif
 static fs_calendar_clock calendar;
 void fs_set_calendar_clock(fs_calendar_clock clock) { calendar=clock; }

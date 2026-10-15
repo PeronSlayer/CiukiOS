@@ -217,6 +217,26 @@ only the expected removal of the dirty diagnostic between boots.
 - Removable media (F4): a media change invalidates cached blocks and nodes
   for that device; open handles then fail with `EIO`.
 
+### F1-70 mount memory and scan budget (2026-10-15)
+
+The directive's clean-mount path supersedes the unconditional ownership scan
+above: after BPB/reserved-entry validation and an actual FAT census, agreeing
+clean/error-free copies may skip ownership traversal. Dirty, differing and
+explicit-check paths retain the full ownership proof. FSInfo hints cannot
+establish the used extent. Both FATs are read in runs of at most 64 KiB;
+shared-cache dirty hits remain authoritative for fixed/live mounts.
+
+Ownership uses one bit per cluster, with at most 1 MiB of individually
+allocated NORMAL pages per checker. Allocation failure uses the existing
+cache workspace in passes; all passes must validate before reclamation.
+Directory traversal uses an explicit stack covering every path representable
+by the existing 259-character path contract. Deeper trees retain readable
+read-only access with `directory_depth_limit`. Dirty validation/recovery
+passes stop at the allocated high-water mark measured in both FATs. Log
+tails detach durably before sector-coalesced orphan reclamation. Allocation
+refusals record required/available workspace bytes, and recovery records
+include elapsed time. See [research and qualification](../validation/f1-70-fat-mount-budget.md).
+
 ## Filesystem driver rules
 
 - FAT12/16/32 share one driver. FAT12/16 keep a fixed root directory; FAT32

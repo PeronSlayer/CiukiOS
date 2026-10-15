@@ -90,7 +90,7 @@ int hardware_check_repair(struct storage *s, struct hw_check_result *out)
 {
     struct check_file file;
     int e=scratch_begin(s,&file,REPAIR_BACKING);
-    bool recovered=false, writable=false; uint32_t reasons=0;
+    bool recovered=false, writable=false; uint32_t reasons=0, mount_ms=0, repair_ms=0;
     if (e) { out->status=e==-FS_ENOENT ? HW_SKIP : HW_FAIL; goto result; }
     uint8_t *image=fs_contig_alloc(REPAIR_BACKING);
     if (!image) { e=-FS_ENOMEM; goto close_file; }
@@ -132,6 +132,7 @@ int hardware_check_repair(struct storage *s, struct hw_check_result *out)
     if (e) goto close_file;
     e=fat_mount(&repair_volume,&repair_cache,&disk,0,disk.capacity,true);
     recovered=repair_volume.dirty_recovered; writable=repair_volume.mounted&&!repair_volume.readonly;
+    mount_ms=repair_volume.mount_ms; repair_ms=repair_volume.repair_ms;
     reasons=repair_volume.ro_reasons;
     if (!e) e=fat_lookup(&repair_volume,repair_volume.root,"CRASH.DAT",&repair_entry);
     if (!e) e=fat_read(&repair_volume,&repair_entry,0,check_sector,512,&done);
@@ -143,7 +144,7 @@ close_file:
     { int clean=scratch_end(&file); if (!e) e=clean; }
     out->status=e ? HW_FAIL : HW_PASS;
 result:
-    ksnprintf(out->detail,sizeof(out->detail),"FAT32 no_publish repaired=%u writable=%u reasons=%x error=%d",
-        recovered,writable,reasons,e);
+    ksnprintf(out->detail,sizeof(out->detail),"FAT32 no_publish repaired=%u writable=%u reasons=%x mount_ms=%u repair_ms=%u error=%d",
+        recovered,writable,reasons,mount_ms,repair_ms,e);
     return e;
 }

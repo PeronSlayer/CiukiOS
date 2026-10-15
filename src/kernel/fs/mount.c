@@ -339,9 +339,9 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
      * Failed candidates stay visible as diagnostics without a namespace. */
     for (unsigned i=0;e && i<attempts;i++) {
         struct storage_volume *v=&s->volumes[attempted[i]];
-        klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d",
+        klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d mount_ms=%u repair_ms=%u clusters=%u spc=%u",
              'A'+v->drive,v->partition,v->fat.type,v->fat.readonly ? "ro" : "rw",
-             !!(v->fat.ro_reasons & FAT_RO_DIRTY),v->error);
+             !!(v->fat.ro_reasons & FAT_RO_DIRTY),v->error,v->fat.mount_ms,v->fat.repair_ms,v->fat.clusters,v->fat.spc);
     }
     return e;
 }

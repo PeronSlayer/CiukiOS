@@ -526,9 +526,9 @@ void usb_storage_service(struct usb_host *h)
                 for (unsigned drive=4;drive<26;drive++) {
                     struct storage_volume *v=&store->volumes[drive];
                     if (!v->present || !v->removable || v->part.parent!=&s->block) continue;
-                    klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d",
+                    klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d mount_ms=%u repair_ms=%u clusters=%u spc=%u",
                          'A'+drive,v->partition,v->fat.type,v->fat.readonly ? "ro" : "rw",
-                         !!(v->fat.ro_reasons & FAT_RO_DIRTY),v->error);
+                         !!(v->fat.ro_reasons & FAT_RO_DIRTY),v->error,v->fat.mount_ms,v->fat.repair_ms,v->fat.clusters,v->fat.spc);
                 }
             }
             bind_stage_finish(d,e);

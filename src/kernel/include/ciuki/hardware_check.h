@@ -15,6 +15,7 @@ struct hw_check_ops {
 };
 void hardware_check_model(const struct hw_check_ops *, struct hw_check_result [HW_CHECK_ITEMS]);
 void hardware_check_run(void);
+void hardware_check_usb_storage(uint64_t until, struct hw_check_result *, uint64_t (*now)(void *));
 /* Current diagnostic task only; zero for every other task. Device commands
  * cap their existing deadline before issuance; a timed-out writer quarantines
  * through its existing completion/rollback protocol. */

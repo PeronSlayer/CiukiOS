@@ -17,7 +17,12 @@ static inline bool fs_lock_try_take(fs_lock *l) { return !pthread_mutex_trylock(
 static inline void fs_lock_drop(fs_lock *l) { if (pthread_mutex_unlock(l)) abort(); }
 static inline void *fs_alloc(size_t n) { return n <= 2040 ? malloc(n) : NULL; }
 static inline void fs_free(void *p) { free(p); }
-static inline void *fs_page_alloc(void) { return calloc(1, 4096); }
+extern unsigned fs_host_page_fail;
+static inline void *fs_page_alloc(void) {
+    if (fs_host_page_fail && !--fs_host_page_fail) return NULL;
+    return calloc(1, 4096);
+}
+static inline void *fs_normal_page_alloc(void) { return fs_page_alloc(); }
 static inline void fs_page_free(void *p) { free(p); }
 static inline void fs_panic(const char *s) { (void)s; abort(); }
 /* Mount-time parser workspaces (f4-04): zeroed, page-aligned, page-rounded.
@@ -77,6 +82,11 @@ static inline void *fs_page_alloc(void) {
     void *v = P2V(p); memset(v, 0, PAGE_SIZE); return v;
 }
 static inline void fs_page_free(void *p) { if (p) pmm_free(V2P(p)); }
+static inline void *fs_normal_page_alloc(void) {
+    uint32_t p=pmm_alloc_zone(ZONE_NORMAL);
+    if (!p) return 0;
+    void *v=P2V(p); memset(v,0,PAGE_SIZE); return v;
+}
 static inline void fs_panic(const char *s) { panic("fs: %s", s); }
 /* Mount-time parser workspaces (f4-04): zeroed contiguous pages from the
  * physical allocator, reached through the direct map. */
