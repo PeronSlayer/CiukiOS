@@ -4,6 +4,73 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f1-67: shared descriptor enable and failure readback
+
+Research rechecked on 2026-10-15 against the seven local reference files in
+`build/downloads/savage/` and their primary sources below. This amendment
+supersedes f1-65's decision to clear descriptor bit 3 on SuperSavage.
+
+The saved `a4f67ac1/disk-BOOT.LOG` contains acceleration records at lines
+127–129: `previous_attempt` skipped this boot before register access. It
+does not contain a new marker test. The directive reports a failed marker
+from an earlier interleaved serial capture; that capture is not among the
+two supplied evidence files. `core/output.c:klog` is unconditional;
+the driver's activation summary was verbose-only, and successful attempts
+suppressed the buffered register block. Emit both for every attempted
+activation, with yields between records outside the pixel transaction.
+
+The sequence comparison is:
+
+| Stage | References and kernel decision |
+| --- | --- |
+| Mode | The fbdev reference finishes firmware-equivalent mode programming before `SavageSetup2DEngine`; X.Org also warns that early GBD writes can lose stride. CiukiOS starts after the firmware mode commits and never alters primary stream addresses/stride, clocks or CR67. |
+| Reset/access | Retain the verified port unlock, IGA1 selection, CR66 reset and bounded idle check before packed registers. CR31=`0c`, CR40=`01`; CR50 selects GBD plus 16/32-bpp depth. |
+| BCI | Both initializer branches for SuperSavage permit no overflow or shadow buffer: MM48C18 is masked with `3ff0`, MM48C10=`00700040`, MM48C0C=0, then MM48C18 gains `08`. Keep the existing firmware-buffer rejection and readback checks. |
+| GBD | X.Org's PM path uses bit 0 and omits bit 3. The fbdev path uses both bits for SuperSavage too. Test the latter with MM8168=0 and MM816C=`10200409` after BCI setup; send that same value through E0/E1 twice and wait for completion before drawing. The engine-only preamble also uses both bits. |
+| Masks/mixes | Keep MM8128/MM812C=`ffffffff`, and halfword MM8134=`27`, MM8136=`07`. Setup is idle; no command is submitted until descriptors are programmed. |
+| Layout | GBD stride is pitch divided by bytes per pixel: 1024 for pitch 4096 at 32 bpp, rather than 512 qwords. Linear tile bits stay zero. Block-write disable stays set. |
+
+The fbdev [setup and mode decoder](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c)
+provide the shared descriptor controls and BCI order. Contrary to the
+directive's description, this source sends GBD through BCI, not direct MMIO.
+CiukiOS retains both transports. Its
+[header](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb.h)
+defines E0/E1 and the pixel-depth fields. The local `savagefb_accel.c`
+confirms the existing GBD solid-fill packet.
+
+X.Org's [initialization and PM descriptor path](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c)
+divide byte pitch by bytes per pixel, disable block writes for uncertain
+memory types, and differ on bit 3. Its local `savage_bci.h`, `savage_regs.h`
+and `savage_driver.h` confirm the selector values and descriptor layout.
+This discrepancy is a hardware experiment, not a proven cause or repair.
+
+[RE046-B](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf),
+pp. 82, 89 and 148–149, describes CR50 depth, CR66 reset/loading controls,
+GBD enable and block-write disable. Preserve firmware CR66 loading controls;
+they govern scanout shadow registers, separately from BCI shadow status.
+The manual covers Savage4, so the SuperSavage bit-3 decision rests on the
+reference comparison and requires silicon evidence.
+
+On failure, retain every write-time readback and the fault status. If the
+engine has proven idle, capture current values of all initialized registers
+before cursor/MMIO teardown, without logging or yielding inside the pixel
+transaction. Report these separately from the initial write-time values.
+For an unproven writer, report cached values explicitly and add no diagnostic
+bus reads. BCI E0/E1 readback uses the corresponding MMIO registers; it cannot
+observe undocumented internal command state. Periodic counters remain
+diagnostic-only; initialization, marker results, capabilities and failure
+readbacks have no verbosity gate.
+
+The existing RGB565 engine and Display settings already support 16 bpp.
+Exercise 1024×768 with pitches 2048/4096 and descriptors `10100409`/`10200409`
+in the host model; the Control Panel test also applies, confirms and persists
+the 1024×768×16 selection. No automatic depth downgrade or claim of a working
+T23 engine follows from the model. Quarantine still forbids another engine
+attempt in the same session, including after a depth change. The next T23
+attempt needs a recovery boot with the retained failed-attempt marker cleared
+through the established procedure, then either a passing marker with nonzero
+caps or the new failure block.
+
 ## f1-65: send the global descriptor through BCI
 
 Research rechecked on 2026-10-15. The local reference files are under

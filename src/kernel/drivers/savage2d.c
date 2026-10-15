@@ -28,9 +28,11 @@
 #define BCI_REGISTER_COUNT_ONE 0x00010000u
 #define BCI_GBD_LOW 0xe0u
 #define BCI_GBD_HIGH 0xe1u
+#define GBD_CONTROLS 9u
 #define GBD_READ_MASK 0x13ff1ffdu
 static bool initializing, probing;
 static void init_record(const char *, uint32_t, unsigned, uint32_t, uint32_t);
+static void init_failure_readback(struct savage2d *);
 static uint8_t port_cr_read(struct savage2d *s, uint8_t index)
 {
     s->io.write_port(s->io.ctx, 0x3d4, index);
@@ -163,6 +165,9 @@ static int wait_idle(struct savage2d *s)
 static int fault(struct savage2d *s)
 {
     if (!s->quarantined) {
+        /* Snapshot before cursor/MMIO teardown, only with proven idle.
+         * This buffers reads: no serial output or yield inside a probe. */
+        if (initializing) init_failure_readback(s);
         s->quarantined = true; s->active = false; s->timeouts++;
         /* Cursor is not an engine writer; hide it without touching scanout.
          * Never reset/re-enable or release an engine with unproven idle. */
@@ -457,15 +462,16 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     uint32_t enabled = (s->saved_bci & 0x3ff0u) | 8u;
     uint32_t control = init_write(s, BCI_CONTROL, enabled, false);
     if (control == UINT32_MAX || (control & 0x0fu) != 8u) return fail(s, "bci_enable_failed");
-    /* PM/Twister GBD preamble, retaining firmware primary stream registers. */
-    if (supersavage) init_write(s, 0x816c, 0x10000001u, true);
+    /* Retain the engine-only preamble, using the fbdev reference's shared
+     * bit-3 enable for this SuperSavage experiment (f1-67). */
+    if (supersavage) init_write(s, 0x816c, 0x10000000u | GBD_CONTROLS, true);
     /* RE046-B CR50.5:4 selects engine pixel length independently of the
      * descriptor. Firmware may leave its VGA (8-bpp) value after VBE. */
     uint8_t cr50 = (s->saved50 & ~0x30u) | (d->bpp == 16 ? 0x10u : 0x30u) | 0xc1u;
     if ((init_cr_write(s, 0x50, cr50) & 0xf1u) != (cr50 & 0xf1u))
         return fail(s, "depth_readback_failed");
     init_write(s, 0x8168, 0, true);
-    uint32_t gbd = s->descriptor | (supersavage ? 1u : 9u);
+    uint32_t gbd = s->descriptor | GBD_CONTROLS;
     uint32_t check = init_write(s, 0x816c, gbd, true);
     uint8_t cr40 = port_cr_read(s, 0x40);
     klog("[accel] savage descriptor wrote=%08x read=%08x mask=%08x cr40=%02x", gbd, check, GBD_READ_MASK, cr40);
@@ -475,7 +481,8 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
         /* MMIO readback does not establish the BCI's active colour depth.
          * Send the descriptor through its own register commands, twice as
          * in the upstream fbdev setup. Eight words fit the empty FIFO;
-         * retain the PM bit-0 control and require completion before drawing. */
+         * use the same controls in both transports and require completion
+         * before drawing. See the conflicting references in the design. */
         uint32_t packet[] = {
             BCI_SET_REGISTER | BCI_REGISTER_COUNT_ONE | BCI_GBD_LOW, s->offset,
             BCI_SET_REGISTER | BCI_REGISTER_COUNT_ONE | BCI_GBD_HIGH, gbd,
@@ -483,6 +490,10 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
             BCI_SET_REGISTER | BCI_REGISTER_COUNT_ONE | BCI_GBD_HIGH, gbd
         };
         if (send_bci(s, packet, ARRAY_SIZE(packet))) return -EIO;
+        /* These are the MMIO equivalents, not an independent read of any
+         * private BCI latch. Preserve the post-command raw values too. */
+        init_record("bci", BCI_GBD_LOW, 32, s->offset, read_2d(s, 0x8168));
+        init_record("bci", BCI_GBD_HIGH, 32, gbd, read_2d(s, 0x816c));
     } else if (wait_idle(s)) return fault(s);
     s->active = true;
     return 0;
@@ -496,14 +507,16 @@ static uint32_t cursor_phys;
 static uint8_t *cursor_mapping;
 static void *register_window, *cursor_window;
 static uint64_t last_log;
-/* Bounded paired diagnostics. Success emits no per-register serial traffic. */
+/* Bounded diagnostics, emitted once per activation without a verbosity gate. */
 #define INIT_RECORDS 40u
 static struct {
     const char *bank;
-    uint32_t reg, wrote, read;
+    uint32_t reg, wrote, read, failed_read;
     unsigned width;
+    bool failed_valid;
 } init_records[INIT_RECORDS];
 static unsigned init_count;
+static bool init_failure_fresh;
 static uint64_t hw_now(void *ctx)
 {
     (void)ctx;
@@ -524,11 +537,41 @@ static void init_record(const char *bank, uint32_t reg, unsigned width, uint32_t
         init_records[init_count].reg = reg;
         init_records[init_count].width = width;
         init_records[init_count].wrote = wrote;
+        init_records[init_count].failed_valid = false;
         init_records[init_count++].read = read;
     }
     if (initializing && !probing) task_yield();
 }
-static void init_report(void)
+static void init_failure_readback(struct savage2d *s)
+{
+    if (!s->touched || !s->cpu_safe || !s->mmio_saved) return;
+    init_failure_fresh = true;
+    for (unsigned i = 0; i < init_count; i++) {
+        /* Only the latest write to an indexed register is the expected
+         * value at failure. Keep earlier writes in the initial trace. */
+        bool latest = true;
+        for (unsigned j = i + 1; j < init_count; j++)
+            if (init_records[i].reg == init_records[j].reg &&
+                !strcmp(init_records[i].bank, init_records[j].bank)) latest = false;
+        if (!latest) continue;
+        uint32_t reg = init_records[i].reg, value;
+        switch (init_records[i].bank[0]) {
+        case 'c': value = port_cr_read(s, (uint8_t)reg); break;
+        case 's':
+            s->io.write_port(s->io.ctx, 0x3c4, (uint8_t)reg);
+            value = s->io.read_port(s->io.ctx, 0x3c5); break;
+        case 'p': value = s->io.read_port(s->io.ctx, reg == 0x3c2 ? 0x3cc : (uint16_t)reg); break;
+        case 'b': value = read_2d(s, reg == BCI_GBD_LOW ? 0x8168 : 0x816c); break;
+        default:
+            value = init_records[i].width == 16 ? s->io.read16(s->io.ctx, reg) :
+                reg >= 0x8100 && reg < 0x8180 ? read_2d(s, reg) : s->io.read32(s->io.ctx, reg);
+            break;
+        }
+        init_records[i].failed_read = value;
+        init_records[i].failed_valid = true;
+    }
+}
+static void init_report(struct savage2d *s)
 {
     uint64_t start = activation_now(activation_ctx);
     for (unsigned i = 0; i < init_count; i++) {
@@ -536,6 +579,18 @@ static void init_report(void)
             init_records[i].reg, init_records[i].wrote, init_records[i].read,
             init_records[i].bank, init_records[i].width);
         task_yield();
+    }
+    if (s->quarantined) {
+        klog("[accel] savage readback source=%s status=%08x status_valid=%u",
+            init_failure_fresh ? "idle_snapshot" : "cached_init", s->status, s->status_logged);
+        task_yield();
+        for (unsigned i = 0; i < init_count; i++) {
+            if (!init_records[i].failed_valid) continue;
+            klog("[accel] savage readback reg=%05x wrote=%08x read=%08x bank=%s width=%u",
+                init_records[i].reg, init_records[i].wrote, init_records[i].failed_read,
+                init_records[i].bank, init_records[i].width);
+            task_yield();
+        }
     }
     trace_us += activation_now(activation_ctx) - start;
 }
@@ -811,7 +866,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         activation_now = io->now_us; activation_ctx = io->ctx;
         activation_start = activation_now(activation_ctx);
     }
-    trace_us = 0; init_count = 0;
+    trace_us = 0; init_count = 0; init_failure_fresh = false;
     const struct pci_func *gpu;
     const char *reason = eligibility(d, &gpu);
     if (reason) return decline(reason);
@@ -830,10 +885,9 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         if (marker) { attempt_blocked = true; return decline("marker_unavailable"); }
         klog("[accel] savage attempt persisted");
     }
-    if (g_boot.flags & CBI_F_VERBOSE)
-        klog("[accel] savage probe pci=%04x:%04x cmd=%04x bar0=%08x bar1=%08x lfb=%08x vram=%u",
-            gpu->vendor, gpu->device, gpu->command, gpu->bar[0], gpu->bar[1], d->phys,
-            g_boot.display.tag == CBI_DISPLAY_TAG ? g_boot.display.vram_bytes : 0);
+    klog("[accel] savage probe pci=%04x:%04x cmd=%04x bar0=%08x bar1=%08x lfb=%08x vram=%u",
+        gpu->vendor, gpu->device, gpu->command, gpu->bar[0], gpu->bar[1], d->phys,
+        g_boot.display.tag == CBI_DISPLAY_TAG ? g_boot.display.vram_bytes : 0);
     if (port_claim < 0) {
         port_claim = registry_claim(RES_PORT, 0x3b0, 0x3e0, "savage-vga", false);
         if (port_claim < 0) { attempt_blocked = true; return decline("port_claim_failed"); }
@@ -872,27 +926,26 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         }
     }
     uint8_t *cursor = cursor_mapping && cursor_phys >= d->phys + d->size ? cursor_mapping : 0;
-    if (g_boot.flags & CBI_F_VERBOSE)
-        klog("[accel] savage mapped mmio=%p cursor=%p", (void *)registers, (void *)cursor);
+    klog("[accel] savage mapped mmio=%p cursor=%p", (void *)registers, (void *)cursor);
     initializing = true;
     int err = savage2d_start(&engine, io, d, gpu->device != 0x8a22, cursor, cursor_phys - d->phys);
     if (!err) err = bci_test(&engine, d);
     else klog("[accel] savage bci_test result=skipped reason=%s", engine.reason ? engine.reason : "init_failed");
     initializing = false;
     engine.ops.stop = runtime_stop;
-    if (g_boot.flags & CBI_F_VERBOSE)
-        klog("[accel] savage pci=%04x:%04x mmio=%08x lfb=%08x mode=%u bpp=%u pitch=%u caps=%u init_result=%d",
-            gpu->vendor,gpu->device,gpu->bar[0]&~15u,d->phys,d->mode_id,d->bpp,d->pitch,capabilities(&engine),err);
+    klog("[accel] savage pci=%04x:%04x mmio=%08x lfb=%08x mode=%u bpp=%u pitch=%u caps=%u init_result=%d",
+        gpu->vendor,gpu->device,gpu->bar[0]&~15u,d->phys,d->mode_id,d->bpp,d->pitch,capabilities(&engine),err);
     record();
     if (err) {
         /* A submitted writer gets one final proof before plain software
          * fallback; an unsafe writer retains only a cached rejecting guard. */
         if (!engine.quarantined) { engine.quarantined = true; hw_fault(0); }
         (void)savage2d_fallback_ops();
-        init_report();
+        init_report(&engine);
         if (vfs) savage2d_attempt_failed(vfs);
         return decline(engine.reason ? engine.reason : "init_failed");
     }
+    init_report(&engine);
     if (vfs) {
         int marker = attempt_marker(vfs, true, &previous);
         if (marker) {
