@@ -8,6 +8,7 @@
 #include <ciuki/input.h>
 #include <ciuki/storage.h>
 #include "uhci_model.h"
+#include "mouse_descriptor.h"
 struct storage *storage_get(void) { return NULL; }
 int storage_add_removable(struct storage *s,struct blkdev *b) { (void)s;(void)b;assert(0);return -FS_EIO; }
 int storage_add_removable_bounded(struct storage *s,struct blkdev *b,
@@ -32,7 +33,7 @@ static unsigned root_quarantine_records,hub_quarantine_records;
 static unsigned hid_reports[128],hid_polls[128],hid_pipes[128],usb_key_records,f12_down_records,f12_up_records;
 static int hid_poll_result;
 static unsigned schedule_entries,schedule_qhs,schedule_tds,schedule_invalid;
-static unsigned port_actions,recovery_records;
+static unsigned port_actions,recovery_records,descriptor_records;
 #ifndef USB_LATENCY_QUEUE
 void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }
 void input_devices_changed(enum input_source source,bool attached)
@@ -65,6 +66,10 @@ void klog(const char *s,...)
         port_actions++;
     }
     if(strstr(record,"[usb] hid recovery")) recovery_records++;
+    if(strstr(record,"[usb] hid descriptor")) {
+        const char *bytes=strstr(record,"bytes=");assert(bytes && strlen(bytes+6)<=64);
+        assert(strstr(record,"offset=") && strstr(record,"len="));descriptor_records++;
+    }
     if(strstr(record,"[usb] schedule frame=")) {
         assert(strstr(record,"controller="));
         if(strstr(record,"entry=")) {assert(strstr(record,"flbase=") && strstr(record,"current="));schedule_entries++;}
@@ -182,7 +187,7 @@ struct model {
     uint64_t reset_at[2], recovery_at[2];
     unsigned root_resets[2], root_enables[2], root_acks[2], hub_acks[USB_PORT_MAX];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
-    bool bulk_test;
+    bool bulk_test, receiver_reports, report_stall;
     bool late_hid;
     unsigned latched_td,latched_ed,late_hid_acks;
     bool bulk_short;
@@ -236,6 +241,7 @@ static unsigned descriptor(struct model *m,struct peripheral *d,uint8_t *b)
         if(d->kind==RECEIVER) {
             cfg[2]=59;cfg[4]=2;cfg[33]=8;memcpy(b,cfg,34);
             memcpy(b+34,cfg+9,25);b[36]=1;b[41]=2;b[54]=0x82;b[56]=8;b[58]=2;
+            if(m->receiver_reports)b[50]=sizeof(receiver_mouse_descriptor);
             return 59;
         }
         if(d->kind==HUB) {cfg[14]=9;cfg[15]=0;cfg[16]=0;cfg[2]=25;memcpy(b,cfg,18);memcpy(b+18,cfg+27,7);return 25;}
@@ -246,7 +252,10 @@ static unsigned descriptor(struct model *m,struct peripheral *d,uint8_t *b)
         memcpy(b,cfg,sizeof(cfg));return sizeof(cfg);
     }
     if(type==0x29) {uint8_t hub[]={10,0x29,8,0x0a,0,1,0,0,0,0xff};memcpy(b,hub,sizeof(hub));return sizeof(hub);}
-    if(type==0x22) {memcpy(b,wheel_desc,sizeof(wheel_desc));return sizeof(wheel_desc);}
+    if(type==0x22) {
+        if(m->receiver_reports) {memcpy(b,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor));return sizeof(receiver_mouse_descriptor);}
+        memcpy(b,wheel_desc,sizeof(wheel_desc));return sizeof(wheel_desc);
+    }
     assert(!"unexpected descriptor");return 0;
 }
 static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid,unsigned toggle,uint8_t *buf,unsigned len)
@@ -315,7 +324,7 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
             d->clear_halts++;d->last_clear=index;
             if(index==0x82)d->mouse_toggle=0;else d->in_toggle=0;
         }
-        if(req==11 && type==0x21){d->protocol=value;m->protocol_requests++;if(!value)d->boot_requests++;}
+        if(req==11 && type==0x21){if(value && m->report_stall)return -USB_EPIPE;d->protocol=value;m->protocol_requests++;if(!value)d->boot_requests++;}
         if(req==10 && type==0x21){assert(!value && (!index || (index==1 && d->kind==RECEIVER)));d->idle_requests++;}
         if(req==9 && !type)d->in_toggle=d->mouse_toggle=0; /* SET_CONFIGURATION */
         if(type==0x23) {
@@ -1306,10 +1315,89 @@ static void t23_receiver(bool disabled)
     assert(!held[INPUT_KEY_A] && !buttons[0] && last_y==2 && usb_devices==2 && m.root_resets[0]==resets);
     printf("PASS USB T23 composite 046d:c52b: legal 8-byte boot mouse suffix, CCS/CSC/PEDC recovery, endpoint 2 three-byte babble, clear 0x82 only, keyboard/mouse survive, shared_PE_loss=%u\n",disabled);
 }
+static void receiver_wheel(void)
+{
+    for(unsigned stall=0;stall<2;stall++) {
+        unsigned before_dump=descriptor_records;
+        setup(false,false);g_boot.flags=CBI_F_TEST_REQUEST;
+        m.dev[0].kind=RECEIVER;m.dev[1].present=false;m.receiver_reports=true;m.report_stall=stall;
+        assert(!attach());model_step();
+        struct usb_device *d=&m.host.devices[0];struct usb_hid *p=&d->hid[1];
+        assert(p->active && p->wheel==!stall && p->report_protocol==!stall);
+        assert(descriptor_records-before_dump==(sizeof(receiver_mouse_descriptor)+31)/32);
+        if(!stall) {
+            uint8_t report[]={2,1,0,0xff,0x3f,0,0xff,0}; /* X=-1,Y=3,wheel=-1 */
+            memcpy(m.dev[0].mouse_report,report,8);m.dev[0].mouse_length=8;
+            model_step();assert(last_x==-1 && last_y==3 && last_wheel==-1 && buttons[0]);
+            report[1]=0;report[6]=1;memcpy(m.dev[0].mouse_report,report,8);m.dev[0].mouse_length=8;
+            model_step();assert(last_wheel==1 && !buttons[0]);
+            unsigned before=events;
+            report[0]=17;memcpy(m.dev[0].mouse_report,report,8);m.dev[0].mouse_length=8;
+            model_step();assert(events==before && !d->quarantined);
+        } else {
+            m.dev[0].mouse_report[1]=4;m.dev[0].mouse_length=3;model_step();assert(last_x==4);
+        }
+    }
+    struct usb_hid h={0};
+    assert(usb_mouse_parse(&h,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor)));
+    assert(h.mouse_reports==1 && h.mouse[0].id==2 && h.mouse[0].x.size==12 && h.mouse[0].wheel.bit==40);
+    for(unsigned n=0;n<sizeof(receiver_mouse_descriptor);n++)assert(!usb_mouse_parse(&h,receiver_mouse_descriptor,n));
+    uint8_t bad[sizeof(receiver_mouse_descriptor)];memcpy(bad,receiver_mouse_descriptor,sizeof(bad));
+    bad[7]=0;assert(!usb_mouse_parse(&h,bad,sizeof(bad))); /* ID zero */
+    memcpy(bad,receiver_mouse_descriptor,sizeof(bad));bad[35]=32;assert(!usb_mouse_parse(&h,bad,sizeof(bad))); /* too many bits */
+    uint8_t extended[USB_HID_DESCRIPTOR_MAX];
+    memcpy(extended,receiver_mouse_descriptor,26);
+    uint8_t pushed[]={0xa4,0x05,0x0c,0xb4};memcpy(extended+26,pushed,sizeof(pushed));
+    memcpy(extended+30,receiver_mouse_descriptor+26,sizeof(receiver_mouse_descriptor)-26);
+    assert(usb_mouse_parse(&h,extended,sizeof(receiver_mouse_descriptor)+4));
+    memcpy(extended,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor));
+    unsigned at=sizeof(receiver_mouse_descriptor);
+    uint8_t other[]={0x05,0x0c,0x09,1,0xa1,1,0x85,3,0x75,8,0x95,1,0x81,2,0xc0};
+    memcpy(extended+at,other,sizeof(other));
+    assert(usb_mouse_parse(&h,extended,at+sizeof(other)) && h.mouse_reports==2 && h.mouse[1].bits==8);
+    memcpy(extended,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor));
+    for(unsigned i=0;i+1<sizeof(receiver_mouse_descriptor);i++)
+        if(extended[i]==9 && extended[i+1]==0x38) {extended[i+1]=0x39;break;}
+    assert(usb_mouse_parse(&h,extended,sizeof(receiver_mouse_descriptor)) && !h.wheel && h.mouse[0].button_count==16);
+    uint8_t underflow[]={0xb4};assert(!usb_mouse_parse(&h,underflow,sizeof(underflow)));
+    puts("PASS F1-66 receiver report ID, 16 buttons, packed signed 12-bit axes, wheel signs, unrelated IDs, descriptor truncation/limits, protocol STALL boot fallback");
+}
+static void chained_bulk(void)
+{
+    static uint8_t bytes[65536];
+    for(unsigned mode=0;mode<9;mode++) {
+        setup(false,false);assert(!attach());assert(!m.host.ops->port_reset(&m.host,0));m.bulk_test=true;
+        struct usb_device *d=&m.host.devices[0];
+        *d=(struct usb_device){.host=&m.host,.present=true,.configured=true,.ep0=64,.address=1};
+        m.dev[0].addr=1;
+        d->storage=(struct usb_storage){.bound=true,.in=1,.out=2,.in_packet=64,.out_packet=64};
+        memset(bytes,mode==6 ? 0xa7 : 0xcc,sizeof(bytes));unsigned n=0;
+        if(mode==1) {m.bulk_short=true;m.bulk_short_bytes=17;}
+        if(mode==2) {m.bulk_short=true;m.bulk_short_bytes=0;}
+        if(mode==3)m.bulk_block_after=7;
+        if(mode==4)m.stall=true;
+        if(mode==5) {d->storage.binding=true;d->storage.bind_deadline=m.now+USB_BIND_FINISH_MS+10;m.bulk_block_after=7;}
+        if(mode==8)m.bad_length=true;
+        if(mode==7) {d->storage.binding=true;d->storage.bind_deadline=m.now+USB_BIND_FINISH_MS;}
+        uint64_t begin=m.now;usb_host_take(&m.host);
+        int e=usb_bulk(d,mode!=6,bytes,sizeof(bytes),&n);usb_host_drop(&m.host);
+        if(!mode || mode==6) {assert(!e && n==sizeof(bytes) && m.now-begin<250);}
+        else if(mode<3)assert(!e && n==(mode==1 ? 17u:0u) && m.bulk_packets==1);
+        else if(mode==4)assert(e==-USB_EPIPE && !n && !m.bulk_packets);
+        else if(mode==7)assert(e==-USB_ETIMEDOUT && !n && !m.bulk_packets && !d->packet_trace.valid && d->packet_trace.actual==-1);
+        else if(mode==8)assert(e==-USB_EIO && !n && m.host.quarantined && !m.host.ready);
+        else assert(e==-USB_ETIMEDOUT && n==448 && m.bulk_packets==7);
+        for(unsigned i=0;i<sizeof(bytes);i++)assert(bytes[i]==(mode==6 ? 0xa7 : i<n ? 0x5a:0xcc));
+        if(mode!=8)assert((mode==6 ? d->storage.out_toggle : d->storage.in_toggle)==(m.bulk_packets&1));
+        assert(!d->storage.bulk_deadline);
+        assert(((uint32_t *)(m.dma+USB_UHCI_BULK_QH))[1]==1);
+    }
+    puts("PASS F1-66 UHCI 64 KiB chained IN, bounded retirement, short IN/ZLP stops before CSW, pending eighth packet and aggregate deadline, STALL and ACK-only toggles");
+}
 int main(void)
 {
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
-    binding_eighth_packet();
+    receiver_wheel();chained_bulk();binding_eighth_packet();
     enumeration_retries(false);enumeration_retries(true);
     live_port(false);live_port(true);hid_recovery(false);hid_recovery(true);
     persistent_nak(false);persistent_nak(true);

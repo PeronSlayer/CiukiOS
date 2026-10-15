@@ -678,17 +678,20 @@ void usb_init(void)
             (p->prog_if ? (bar & 7) || base > UINT32_MAX - bytes : !(bar & 1) || base > 65536 - bytes)) {
             h->pci = *p; h->reason = "invalid_bar"; continue;
         }
-        uint32_t phys = p->prog_if == 0x20 ? 0 : pmm_alloc_contig(2);
+        uint32_t phys = p->prog_if == 0x20 ? 0 : pmm_alloc_contig(USB_DMA_BYTES / PAGE_SIZE);
         /* The window remains pinned with the controller, including failure. */
         void *mapping = p->prog_if ? vmm_map_mmio(p->bar[0] & ~15u, 4096, true) : 0;
         if ((p->prog_if && !mapping) || (p->prog_if != 0x20 && !phys)) {
-            if (phys) { pmm_free(phys); pmm_free(phys + PAGE_SIZE); }
+            if (phys) for (unsigned at=0;at<USB_DMA_BYTES;at+=PAGE_SIZE) pmm_free(phys+at);
             h->pci = *p; h->reason = "allocation_failed"; continue;
         }
         /* usb_attach preserves this window while initializing the host. */
         h->mmio = mapping;
         int err = usb_attach(h, p, &io, phys ? P2V(phys) : 0, phys);
-        if (err && !h->touched && !h->quarantined && phys) { pmm_free(phys); pmm_free(phys + PAGE_SIZE); h->dma = 0; }
+        if (err && !h->touched && !h->quarantined && phys) {
+            for (unsigned at=0;at<USB_DMA_BYTES;at+=PAGE_SIZE) pmm_free(phys+at);
+            h->dma = 0;
+        }
     }
     start_services();
 }

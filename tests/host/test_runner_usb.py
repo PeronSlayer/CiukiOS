@@ -1,4 +1,5 @@
 """Runner USB topology, installed-machine refusal, and unchanged QMP transport."""
+import re
 import copy
 import json
 from pathlib import Path
@@ -135,7 +136,7 @@ class USBRunnerTests(unittest.TestCase):
     def test_suite_reuses_desktop_shell_contract_and_prerequisites(self):
         suite=runner.load(ROOT/'tests/suites/f1-usb.json')
         self.assertEqual(suite['prerequisites'],['f0-smoke'])
-        self.assertEqual([c['id'] for c in suite['cases']],['usb-input-uhci','usb-input-ohci'])
+        self.assertEqual([c['id'] for c in suite['cases']],['usb-input-uhci','usb-input-ohci','usb-wheel-uhci'])
         baseline=next(c for c in runner.load(ROOT/'tests/suites/f2-desktop.json')['cases']
                       if c['id']=='desktop-shell-qemu-t23')
         with patch.object(runner,'require_i8042_off'):
@@ -154,6 +155,30 @@ class USBRunnerTests(unittest.TestCase):
         smoke=runner.load(ROOT/'tests/suites/f0-smoke.json')['cases']
         expanded=runner.load_suite('f1-usb')['cases']
         self.assertEqual([c['id'] for c in expanded],[c['id'] for c in smoke+suite['cases']])
+
+    def test_wheel_case_requires_both_signed_driver_and_desktop_records(self):
+        case=next(c for c in runner.load(ROOT/'tests/suites/f1-usb.json')['cases'] if c['id']=='usb-wheel-uhci')
+        wheel=case['actions'][0]['batches'][:4]
+        self.assertEqual([b['events'][0]['data']['button'] for b in wheel],
+                         ['wheel-up','wheel-up','wheel-down','wheel-down'])
+        self.assertEqual([b['events'][0]['data']['down'] for b in wheel],[True,False,True,False])
+        qmp=object.__new__(runner.QMP)
+        with patch.object(qmp,'command',return_value={}):
+            for batch in wheel:qmp.input_events(batch['events'])
+        patterns=case['expected']['serial_patterns']
+        self.assertEqual(len(patterns),9)
+        for value in (-1,1):
+            self.assertTrue(any(re.fullmatch(p,f'[input] usb wheel addr=2 interface=0 value={value}') for p in patterns))
+            self.assertTrue(any(re.fullmatch(p,f'[console] [desktop] usb wheel value={value}') for p in patterns))
+        # Wheel pulses have no public button edge; the normal button counter
+        # cannot acknowledge them. Their delivery is required by serial evidence.
+        actions=runner.Actions([{**case['actions'][0],'batches':wheel}],inputs={'usb':case['usb']})
+        parser=type('Parser',(),{'records':[{**case['actions'][0]['after'],'seq':'1'}]})()
+        with patch.object(qmp,'command',return_value={}) as sent:
+            for tick in range(4):actions.step(parser,qmp,tick)
+        self.assertEqual(sent.call_count,4)
+        self.assertTrue(actions.complete)
+        self.assertEqual(actions.input_pacing,{'batches':4,'waits_ms':[]})
 
     def test_normal_boot_accepts_input_configuration_without_test_request(self):
         from test_normal_boot import normal_case

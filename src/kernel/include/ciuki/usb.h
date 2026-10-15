@@ -9,7 +9,7 @@
 #define USB_PORT_MAX 8u
 #define USB_HID_MAX 4u
 #define USB_CONFIG_MAX 512u
-#define USB_DMA_BYTES 8192u
+#define USB_DMA_BYTES 12288u
 #define USB_PACKET_MAX 64u
 #define USB_TIMEOUT_MS 500u
 #define USB_PERIODIC_WATCHDOG_MS 20u
@@ -18,7 +18,7 @@
 #define USB_BULK_TIMEOUT_MS 10000u
 #define USB_BIND_TIMEOUT_MS 20000u
 #define USB_BIND_BULK_MS 3000u
-#define USB_BIND_FINISH_MS 100u /* retirement and terminal disk record */
+#define USB_BIND_FINISH_MS 100u /* retirement and namespace publication */
 #define USB_BULK_TRACE_LIMIT 8u
 #define USB_EIO 5
 #define USB_EAGAIN 11
@@ -32,10 +32,21 @@
 #define USB_TAIL 4160u
 #define USB_BUFFER 4352u
 /* Private interrupt slots fit all device/interface records in the same
- * pinned two-page allocation. Boot reports need at most eight bytes. */
+ * pinned controller allocation. Boot reports need at most eight bytes. */
 #define USB_HID_BASE 4608u
 #define USB_HID_STRIDE 48u
 #define USB_HID_LATENCY_LIMIT 20u
+#define USB_BULK_TD 7680u
+#define USB_BULK_BUFFER 8192u
+#define USB_BULK_BATCH 32u
+#define USB_HID_DESCRIPTOR_MAX 512u
+#define USB_MOUSE_REPORTS 8u
+struct usb_mouse_field { uint16_t bit; uint8_t size; };
+struct usb_mouse_report {
+    struct usb_mouse_field x, y, wheel, buttons[3];
+    uint16_t bits;
+    uint8_t id, button_count;
+};
 #define USB_PID_SETUP 0x2du
 #define USB_PID_IN 0x69u
 #define USB_PID_OUT 0xe1u
@@ -79,6 +90,9 @@ struct usb_hid {
     struct usb_packet_trace trace; /* separate from the general/BOT slot */
     bool active, wheel, recovery_pending, recovery_tried, port_retry;
     int recovery_result;
+    struct usb_mouse_report mouse[USB_MOUSE_REPORTS];
+    uint8_t mouse_reports;
+    bool report_protocol, report_ids;
 };
 struct usb_storage_trace {
     struct usb_packet_trace packet;
@@ -109,6 +123,8 @@ struct usb_storage {
     uint8_t sense_key, asc, ascq;
     bool bound, online, published, ejected, write_protected, fault_logged, quarantine_logged;
     bool binding, bind_reserved, bind_stage_active;
+    uint32_t bind_read_requests, bind_read_sectors, bind_read_max;
+    uint32_t bind_packets, bind_poll_frames, bind_retire_frames;
 };
 /* Coalesce suppressed events; root and external-hub ports use the same budget. */
 struct usb_port_log {
@@ -149,6 +165,7 @@ struct usb_hc_ops {
      * The caller holds transfer_lock; these callbacks never sleep. */
     int (*interrupt)(struct usb_device *, struct usb_hid *, void *, unsigned);
     void (*interrupt_stop)(struct usb_device *, struct usb_hid *);
+    int (*bulk)(struct usb_device *, bool, void *, unsigned, unsigned *);
 };
 struct usb_host {
     struct pci_func pci;
@@ -244,6 +261,7 @@ struct storage;
 int usb_storage_eject(struct storage *, unsigned drive, uint32_t generation);
 void usb_storage_service(struct usb_host *); /* host lock NOT held */
 bool usb_mouse_wheel_layout(const uint8_t *, unsigned);
+bool usb_mouse_parse(struct usb_hid *, const uint8_t *, unsigned);
 void usb_init(void);
 bool usb_input_ready(void);
 unsigned usb_count(void);

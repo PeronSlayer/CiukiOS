@@ -14,6 +14,7 @@ static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
     volatile uint32_t *qh = NULL;
     uint32_t qh_address = 0, horizontal = 1;
     unsigned reserved = 12;
+    unsigned transactions = 16; /* conservative full-speed frame bandwidth */
     /* This fixture has no bandwidth-reclamation loop. Bound malformed cycles. */
     for (unsigned steps = 0; steps < 1024; steps++) {
         if (link & 1) {
@@ -33,6 +34,7 @@ static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
         volatile uint32_t *td = io->dma(io->cookie, address, 16);
         if (td[0] & 8) return -USB_EPROTO;
         bool active = td[1] & (1u << 23);
+        if (active && !transactions--) return 0;
         bool ack = active && io->transaction(io->cookie, address, qh ? qh_address : 0, td);
         /* IOC is status, not permission to execute an inactive TD. No fixture
          * IRQ is routed: production leaves USBINTR masked. */

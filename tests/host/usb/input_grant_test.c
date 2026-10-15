@@ -5,6 +5,7 @@
 #include "../proc/desktop_test.c"
 #undef main
 #include <ciuki/usb.h>
+#include "mouse_descriptor.h"
 
 static uint64_t input_tick = 100;
 static const uint8_t *pending_report;
@@ -176,6 +177,16 @@ int main(int argc, char **argv)
         before = drops;
         CHECK(usb_hid_report(&mouse, &mouse.hid[0], mouse_report, 2) == -USB_EPROTO);
         drop_reason("mouse_length", before);
+        CHECK(usb_mouse_parse(&mouse.hid[0],receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor)));
+        mouse.hid[0].report_protocol=true;mouse.hid[0].packet=8;
+        uint8_t numbered[8]={2,0,0,0,0,0,0xff,0};
+        poll_report(&mouse,numbered,8);
+        CHECK(read_events(p,grants[1],events,8)==1);
+        CHECK(events[0].type==CIUKI_INPUT_WHEEL && events[0].value==-1 && !events[0].value2 && !events[0].code);
+        CHECK(events[0].source==INPUT_USB && events[0].generation==72);
+        numbered[6]=1;poll_report(&mouse,numbered,8);
+        CHECK(read_events(p,grants[1],events,8)==1 && events[0].type==CIUKI_INPUT_WHEEL && events[0].value==1);
+        puts("PASS F1-66 numbered packed mouse report delivers signed CIUKI_INPUT_WHEEL through the production desktop grant");
         usb_hid_release(&mouse, &mouse.hid[0]);
         puts("PASS exact mouse report through the production grant without keyboard changes");
         /* Active-key detach releases remain readable after the final producer disappears. */

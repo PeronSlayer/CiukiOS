@@ -29,7 +29,7 @@ static void sync_model(void)
     }
 }
 static void *model_page(uint32_t phys) { assert(phys==0x100000);return m.dma; }
-uint32_t pmm_alloc_contig(uint32_t pages) { assert(pages==2);allocations++;return 0x100000; }
+uint32_t pmm_alloc_contig(uint32_t pages) { assert(pages==USB_DMA_BYTES/4096);allocations++;return 0x100000; }
 void pmm_free(uint32_t phys) { (void)phys;assert(!"unexpected DMA release"); }
 void *vmm_map_mmio(uint32_t phys,uint32_t bytes,bool uncached)
 { (void)phys;(void)bytes;(void)uncached;assert(!"UHCI needs no MMIO mapping");return NULL; }

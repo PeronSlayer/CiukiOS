@@ -263,7 +263,7 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
         fs_rd16(b+11)==512 && (b[0]==0xe9 || (b[0]==0xeb && b[2]==0x90));
     if (whole) { table.count=1; table.entries[0]=(struct partition){.count=dev->capacity}; e=0; }
     if (e) return e;
-    unsigned prepared[26], count=0;
+    unsigned prepared[26], count=0, attempted[26], attempts=0;
     for (unsigned i=0;i<table.count;i++) {
         struct partition *p=&table.entries[i];
         if (!whole && !fat_partition(p->type)) continue;
@@ -274,6 +274,7 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
         unsigned d=s->next_drive++;
         if (d>=26) { fs_lock_drop(&s->vfs.lock); return -FS_ENOSPC; }
         struct storage_volume *v=&s->volumes[d];
+        attempted[attempts++]=d;
         v->removable=true; v->drive=d; v->disk=UINT32_MAX; v->partition=whole ? 0 : i+1;
         r=blkpart_init(&v->part,dev,p);
         fs_lock_drop(&s->vfs.lock);
@@ -299,9 +300,6 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
         v->error=r;
         if (!r) prepared[count++]=d;
         if (r) v->fat.mounted=false;
-        klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d",
-             'A'+d,v->partition,v->fat.type,v->fat.readonly ? "ro" : "rw",
-             !!(v->fat.ro_reasons & FAT_RO_DIRTY),r);
         if (r && !e) e=r;
         if (cancel && cancel(ctx)) { e=-FS_EAGAIN; break; }
         if (dev->quarantined) { e=-FS_EIO; break; }
@@ -326,6 +324,14 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
     }
     if (e) for (unsigned i=0;i<count;i++) {
         struct storage_volume *v=&s->volumes[prepared[i]];v->error=e;v->fat.mounted=false;
+    }
+    /* Successful volume records belong to the caller, after it ends binding.
+     * Failed candidates stay visible as diagnostics without a namespace. */
+    for (unsigned i=0;e && i<attempts;i++) {
+        struct storage_volume *v=&s->volumes[attempted[i]];
+        klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d",
+             'A'+v->drive,v->partition,v->fat.type,v->fat.readonly ? "ro" : "rw",
+             !!(v->fat.ro_reasons & FAT_RO_DIRTY),v->error);
     }
     return e;
 }

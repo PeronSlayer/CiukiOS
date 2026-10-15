@@ -55,14 +55,14 @@ the firmware semaphore. No i8042 ports or PIC masks are touched by USB.
 
 Fixed bounds: four controllers, sixteen device records per controller, eight
 root/hub ports, four boot HID interfaces per device, one external hub level,
-512-byte configuration and 256-byte report descriptors, 64-byte packets
+512-byte configuration and report descriptors, 64-byte packets
 (eight at low speed), seven-bit addresses. Unsupported devices stay visible.
 Addresses and record slots are retained for the boot, including disconnects
 and quarantine; exhaustion is explicit, never aliases a live address.
 
 ## DMA and execution
 
-Each host owns two contiguous physical pages below the direct-map limit,
+Each host owns three contiguous physical pages below the direct-map limit,
 claimed along with its port/MMIO aperture and valid PCI IRQ (shareable,
 masked at the controller). DMA stays disabled until all schedule pointers,
 sentinels and bounce buffers are initialized. Only offsets within these
@@ -152,11 +152,12 @@ diffing ignores duplicates, holds the last valid state on rollover, tracks
 modifiers and releases all held keys on detach/quarantine. Independent USB
 and PS/2 key/button ownership is merged, so one device's release cannot
 release another device's held key. LED output is a one-byte class Set_Report.
-Wheel support is restricted to a validated fixed three-to-five-button/X/Y/wheel
-report layout with signed eight-bit relative axes, no report IDs or push/pop;
-this narrow four-byte layout uses Set_Protocol(1). Other mice stay in boot
-protocol and their device-specific trailing bytes are ignored. General
-report-protocol support remains deferred.
+Mouse interfaces parse bounded report descriptors, including report IDs, global
+push/pop, padding and signed relative fields up to 16 bits. Recognized layouts
+with wheel or extra buttons use Set_Protocol(1); unsupported layouts and a
+stalled protocol switch keep boot protocol. Input reports remain bounded to
+eight bytes, including their ID. Extra buttons contribute to bit offsets;
+the public input ABI still exposes three buttons. See the F1-66 amendment.
 
 Input source/generation and sequence remain in the shared kernel queue.
 Wheel has a distinct relative axis/public event type; desktop delivery must
@@ -424,3 +425,41 @@ Keyboard Up/Down scroll long tray lists; Escape dismisses them. Both report
 busy/errors and only successful removal displays the safe-to-unplug message.
 Verbose lifecycle, SCSI sense, transport faults and mount/eject records begin
 `[usb-storage]`. No QEMU or physical qualification is claimed by host fixtures.
+
+
+### F1-66: bounded bulk chains and mouse report layouts (2026-10-15)
+
+Research, evidence limits and qualification requirements are recorded in
+[F1-66 validation](../validation/f1-66-usb-stick-budget-and-mouse-wheel.md).
+This supersedes the earlier single-packet bulk schedule and bind-log durability
+requirements. The aggregate 20-second budget and 100 ms retirement/publication
+reserve remain. Stage records use asynchronous logging; binding requests no
+logger drain or sync. Successful namespace publication ends binding before
+volume/stage diagnostic output. Later overrun records preserve that volume;
+transport, media-change and disconnect faults retain their quarantine rules.
+
+UHCI bulk phases larger than 512 bytes use up to 32 depth-first TDs per
+batch, with separate 64-byte bounce slots, within the 128-sector block request
+limit. IN TDs enable SPD. NAK retains the current TD; ACK alone advances its
+toggle. All TDs are unlinked and retired for two HC frames before examination
+and reuse, including short transfers and errors. Only the completed prefix is
+copied. The 12 KiB pinned window places bulk TDs at 7680 and data at 8192;
+interrupt offsets stay fixed. Other controller paths retain their packet
+engine. No packet or issued command is resubmitted after uncertainty.
+
+Unpublished FAT preparation allocates three temporary 64 KiB windows (page
+rounded allocation 196,608 bytes plus one page for descriptors). Two retain
+FAT copies and one retains individual other metadata sectors. FAT windows read
+at most 128 sectors, clipped to cluster entries and the validated FAT extent.
+Padding sectors after the last cluster entry are excluded. Ownership, loops,
+cross-links, copy equality, lost clusters and durability checks still run
+before write admission. All temporary pages are freed on success or failure;
+no shared cache/workspace mutex is held across the reads.
+
+Mouse report parsing bounds collections at eight, global push/pop at four,
+report IDs at eight records and total report size at eight bytes. Other IDs
+are ignored without treating their payload as a boot mouse. Descriptor dumps
+are limited to sixteen 32-byte chunks at attachment. The public wheel route
+and three-button ABI remain unchanged. The QEMU wheel case requires both signed
+kernel wheel records and corresponding desktop consumption records, in addition
+to the existing desktop shell checks.

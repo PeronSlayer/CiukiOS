@@ -784,7 +784,7 @@ class Actions:
             self.index+=1;return action
         batch=self.schedule[self.index][self.batch]
         needed={'motion':sum(e['type']=='rel' and e['data']['value']!=0 for e in batch['events']),
-                'buttons':sum(e['type']=='btn' for e in batch['events'])}
+                'buttons':sum(e['type']=='btn' and e['data']['button'] in ('left','middle','right') for e in batch['events'])}
         name=f"action={self.index} batch={batch.get('batch',self.batch)} repeat={self.repeat} step={batch.get('step',0)}"
         latest=self.latest_counters(parser) if self.usb_mouse and any(needed.values()) else None
         if self.usb_mouse and any(needed.values()) and latest is None:
