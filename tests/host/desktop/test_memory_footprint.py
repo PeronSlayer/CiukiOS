@@ -8,6 +8,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from .test_desktop import ROOT, SHELL_SOURCES
+import hashlib
+
+BOOT_GOLDENS = {
+    **dict.fromkeys(("absent-rw", "present-rw", "absent-ro", "present-ro", "present-rw-seeded", "present-ro-seeded"),
+                    "c75b366359526301e56b7738e090e5bb9c56d8b4cc8c0b1d809a64ffee1f40bb"),
+    "theme": "3868795aaa5706f292de47822b6979f191fd9686dc3868436637fdb21ad36f3c",
+    "wallpaper-change": "8bcf3f0d03f1d325a28f9a9e1f2f1caf2a26043255d712eebb9526cd303bed7b",
+    "identical-unpresented": "8bcf3f0d03f1d325a28f9a9e1f2f1caf2a26043255d712eebb9526cd303bed7b",
+}
 
 
 class MemoryFootprintTests(unittest.TestCase):
@@ -83,7 +92,21 @@ class MemoryFootprintTests(unittest.TestCase):
                 objects.append(str(target))
             binary = folder / "footprint"
             subprocess.run(["clang", "-fsanitize=address,undefined", "-Wl,--gc-sections",
-                            "-Wl,--wrap=desk_wallpaper_render", *objects, "-pthread", "-o", str(binary)], check=True, env=env)
+                            "-Wl,--wrap=desk_wallpaper_render,--wrap=open,--wrap=mkdir,--wrap=write,--wrap=fsync",
+                            *objects, "-pthread", "-o", str(binary)], check=True, env=env)
+            boot_review = ROOT / "build/host/f2-73"
+            boot_review.mkdir(parents=True, exist_ok=True)
+            boot = subprocess.run([str(binary), "--wallpaper-boot", str(folder)], capture_output=True, text=True,
+                                  env={**env, "CIUKI_F273_FRAMES": str(boot_review)}, timeout=40)
+            print(boot.stdout, end="", flush=True)
+            self.assertEqual(boot.returncode, 0, boot.stdout + boot.stderr)
+            from .test_desktop import capture
+            with patch.dict(os.environ, CIUKI_FONT_REVIEW=str(boot_review)):
+                self.assertEqual({f.stem for f in boot_review.glob("*.xrgb")}, set(BOOT_GOLDENS))
+                for frame in boot_review.glob("*.xrgb"):
+                    self.assertEqual(hashlib.sha256(frame.read_bytes()).hexdigest(), BOOT_GOLDENS[frame.stem], frame.stem)
+                    capture(frame.stem, frame.read_bytes(), 1024, 768)
+                    frame.unlink()
             review = ROOT / "build/host/f2-70"
             review.mkdir(parents=True, exist_ok=True)
             performance = subprocess.run([str(binary), "--theme-wallpaper-performance", str(folder)],

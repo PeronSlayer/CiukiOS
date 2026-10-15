@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include "../../../assets/cursors/cursors.h"
 #ifdef F125_WRAP_ALLOC
 static int fail_malloc;
 void *__real_malloc(size_t);
@@ -122,8 +123,12 @@ static void assertions(void)
     uint64_t rebuilds=d.sh.background_rebuilds;
     for (int n=0;n<16;n++) motion(4);
     assert(!d.damage.count); redraw();
-    assert(d.frame_stats.scene_px==0 && d.frame_stats.damage_px==374 && d.frame_stats.presents==2);
-    assert(d.frame_stats.lfb_bytes==1496 && d.sh.background_rebuilds==rebuilds);
+    /* The pinned arrow has a hotspot and a 24x29 footprint. The former
+     * 11x17 constants predate that asset; retain exact two-footprint uploads. */
+    const struct desk_cursor_raster *arrow=&desk_cursors[DESK_CURSOR_ARROW];
+    uint64_t cursor_damage=2ull*arrow->width*arrow->height;
+    assert(d.frame_stats.scene_px==0 && d.frame_stats.damage_px==cursor_damage && d.frame_stats.presents==2);
+    assert(d.frame_stats.lfb_bytes==cursor_damage*4 && d.sh.background_rebuilds==rebuilds);
     assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
     pending_inputs=600; uint64_t inputs=d.inputs;
     assert(desk_drain_input(&d,read_inputs)==600 && d.inputs==inputs+600 && !pending_inputs);
@@ -135,19 +140,24 @@ static void assertions(void)
     assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
     struct ciuki_input_event edge={.type=CIUKI_INPUT_MOTION,.value=1023-d.mouse_x,.value2=767-d.mouse_y};
     desk_input(&d,&edge); redraw();
-    assert(d.cursor_box.w==1 && d.cursor_box.h==1 && d.frame_stats.damage_px<=374);
+    assert(d.cursor_box.w==(int)arrow->hot_x+1 && d.cursor_box.h==(int)arrow->hot_y+1 &&
+           d.frame_stats.damage_px<=cursor_damage);
     assert(!memcmp(lfb,reference,(size_t)d.width*d.height*4));
     edge.value=600-d.mouse_x; edge.value2=500-d.mouse_y; desk_input(&d,&edge); redraw();
     d.sh.cfg.clock_seconds=0; d.realtime_second=65; d.damage.count=0;
     desk_shell_clock_damage(&d,64); assert(!d.damage.count);
     d.sh.cfg.clock_seconds=1; desk_shell_clock_damage(&d,64); redraw();
-    /* F2-53's proportional clock shrinks from 51 to 50 px, so the tray
-     * relayout damages the 1024x32 taskbar. F2-52's repeated-row 2D blits
-     * require d.accel; this software fixture still uploads one rectangle. */
-    assert_clock_counters("64->65 (tray relayout)",32768);
+    /* Compare with the active font's layout. Its glyph advances changed
+     * with the pinned FreeType atlases; clock damage remains exact. */
+    struct desk_box clock=desk_shell_clock_box(&d);
+    uint64_t clock_damage=desk_shell_clock_width_at(&d,64)!=desk_shell_clock_width_at(&d,65) ?
+        (uint64_t)d.width*DESK_BAR : (uint64_t)clock.w*clock.h;
+    assert_clock_counters("64->65",clock_damage);
     d.realtime_second=66; desk_shell_clock_damage(&d,65); redraw();
-    /* Equal-width ticks retain the precise 50x25 clock-only upload. */
-    assert_clock_counters("65->66 (clock only)",1250);
+    clock=desk_shell_clock_box(&d);
+    clock_damage=desk_shell_clock_width_at(&d,65)!=desk_shell_clock_width_at(&d,66) ?
+        (uint64_t)d.width*DESK_BAR : (uint64_t)clock.w*clock.h;
+    assert_clock_counters("65->66",clock_damage);
     for (int n=0;n<20;n++) desk_damage_add(&d.damage,(struct desk_box){300+n,300,2,2},d.width,d.height);
     redraw(); assert(fake_presents==1 && d.frame_stats.damage_px==42);
     d.sh.icon_selected=0; desk_damage_add(&d.damage,d.sh.icons[0].box,d.width,d.height); redraw();

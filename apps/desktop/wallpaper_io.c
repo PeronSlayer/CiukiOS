@@ -28,6 +28,8 @@ struct desk_wall_memory {
     uint32_t *layer;
     struct desk_wall_request layout;
 };
+static void wall_activity(struct desk_wall_worker *w,const char *name)
+{ if (w) __atomic_store_n(&w->activity,name,__ATOMIC_RELEASE); }
 static struct wall_frame *oldest_frame(struct desk_wall_memory *m)
 {
     struct wall_frame *old=NULL;
@@ -187,34 +189,39 @@ static void cache_promote(const char *dir, const char *name)
     }
     closedir(d);
 }
-static int read_frame(const char *path, uint32_t *pixels, size_t bytes)
+static int read_frame(const char *path, uint32_t *pixels, size_t bytes,struct desk_wall_worker *w)
 {
+    wall_activity(w,"cache-open");
     int fd=open(path,O_RDONLY|O_CLOEXEC); if (fd<0) return -1;
+    wall_activity(w,"cache-stat");
     struct stat s;
     int valid=!fstat(fd,&s) && S_ISREG(s.st_mode) && s.st_size==(int64_t)bytes;
     size_t done=0;
     while (valid && done<bytes) {
         size_t request=bytes-done<WALL_IO_CHUNK ? bytes-done : WALL_IO_CHUNK;
+        wall_activity(w,"cache-read");
         ssize_t n=read(fd,(char *)pixels+done,request);
         if (n<0 && errno==EINTR) continue;
         if (n<=0) break; done+=(size_t)n;
     }
-    close(fd); return done==bytes ? 0 : -1;
+    wall_activity(w,"cache-close"); close(fd); return done==bytes ? 0 : -1;
 }
 static int wall_prepare(const struct desk_wall_request *r, const char *dir, uint32_t **out, int *hit,
-                        void (*stage)(const char *),struct desk_wall_memory *memory)
+                        void (*stage)(const char *),struct desk_wall_memory *memory,struct desk_wall_worker *w)
 {
     *out=NULL; *hit=0;
     if (!r->width || !r->height || r->width>2048 || r->height>2048 || r->mode<0 || r->mode>=CFG_WALL_MODES) return EINVAL;
     int file=r->path[0]=='/';
     if (!file && strcmp(r->path,"none") && strcmp(r->path,"ciuki") && strncmp(r->path,"builtin:",8)) return EINVAL;
     struct stat s={0};
+    wall_activity(w,"source-stat");
     if (file && stat(r->path,&s)) return errno;
     if (file && (!S_ISREG(s.st_mode) || s.st_size<=0 || s.st_size>DESK_IMAGE_FILE_MAX)) return EFBIG;
     char name[DESK_WALL_NAME_MAX], path[512];
     desk_wall_cache_name(name,r,(uint64_t)s.st_size,(int64_t)s.st_mtime);
     size_t bytes=(size_t)r->width*r->height*4;
     uint32_t *pixels=malloc(bytes); if (!pixels) return ENOMEM;
+    wall_activity(w,"memory-frame");
     if (memory) for (unsigned i=0;i<3;i++) {
         struct wall_frame *f=&memory->frames[i];
         if (f->pixels && f->bytes==bytes && !strcmp(f->key,name)) {
@@ -222,15 +229,17 @@ static int wall_prepare(const struct desk_wall_request *r, const char *dir, uint
             *out=pixels; *hit=1; if (stage) stage("wallpaper_memory_read"); return 0;
         }
     }
-    if (dir && !join_path(path,sizeof(path),dir,name) && !read_frame(path,pixels,bytes)) {
+    if (dir && !join_path(path,sizeof(path),dir,name) && !read_frame(path,pixels,bytes,w)) {
         *out=pixels; *hit=1;
         if (stage) stage("wallpaper_cache_read");
-        memory_store(memory,name,pixels,bytes);
-        cache_promote(dir,name); return 0;
+        wall_activity(w,"memory-store"); memory_store(memory,name,pixels,bytes);
+        if (!w) cache_promote(dir,name);
+        return 0;
     }
     int reuse=file && memory && memory->source.pixels && !strcmp(memory->path,r->path) &&
         memory->size==s.st_size && memory->mtime==s.st_mtime;
     if (memory && file && !reuse) { desk_image_free(&memory->source); memory->path[0]=0; }
+    wall_activity(w,"source-open");
     int fd=file && !reuse ? open(r->path,O_RDONLY|O_CLOEXEC) : -1;
     int error=file && !reuse && fd<0 ? errno : 0;
     size_t n=file && !reuse ? (size_t)s.st_size : 0, done=0;
@@ -238,55 +247,66 @@ static int wall_prepare(const struct desk_wall_request *r, const char *dir, uint
     if (!error && n && !data) error=ENOMEM;
     while (!error && done<n) {
         size_t request=n-done<WALL_IO_CHUNK ? n-done : WALL_IO_CHUNK;
+        wall_activity(w,"source-read");
         ssize_t got=read(fd,data+done,request);
         if (got<0 && errno==EINTR) continue;
         if (got<=0) error=got<0 ? errno : EIO; else done+=(size_t)got;
     }
-    if (fd>=0) close(fd);
+    wall_activity(w,"source-close"); if (fd>=0) close(fd);
     if (!error && stage && file && !reuse) stage("wallpaper_file_read");
     struct desk_image image=reuse ? memory->source : (struct desk_image){0};
+    wall_activity(w,"decode");
     if (!error && file && !reuse && desk_image_decode(data,n,&image)) error=EINVAL;
     free(data);
     if (!error && stage && file) stage(reuse ? "wallpaper_source_reused" : "wallpaper_decoded");
+    wall_activity(w,"scale-blend");
     int layered=!error && file && render_file(memory,r,&image,pixels,reuse,stage);
     if (!error && !layered && desk_wallpaper_render_styled(pixels,r->width,r->height,r->top,r->bottom,r->path,r->mode,
             r->colour,&image,r->portrait,r->caption_font,r->caption_colour,r->caption_aa)) error=ENOMEM;
     if (!error && !layered && stage) stage("wallpaper_scaled");
     /* Do not commit a frame under a key whose source changed during I/O. */
     struct stat after;
+    wall_activity(w,"source-verify");
     if (!error && file && (stat(r->path,&after) || after.st_size!=s.st_size || after.st_mtime!=s.st_mtime)) error=EAGAIN;
     if (!reuse && !error && memory && image.pixels && (size_t)image.width*image.height*4<=WALL_SOURCE_BYTES) {
         memory->source=image; strcpy(memory->path,r->path); memory->size=s.st_size; memory->mtime=s.st_mtime;
     } else if (!reuse) desk_image_free(&image);
     if (error) { free(pixels); return error; }
     *out=pixels;
+    wall_activity(w,"memory-store");
     memory_store(memory,name,pixels,bytes);
-    if (dir && !make_directory(dir) && !join_path(path,sizeof(path),dir,name) && !write_atomic(path,pixels,bytes)) cache_promote(dir,name);
+    /* Optional persistence must never delay runtime publication or block the
+     * shell behind the volume lock. Keep seed generation on the explicit
+     * synchronous API; runtime reuse is bounded worker-owned memory. */
+    if (!w && dir && !make_directory(dir) && !join_path(path,sizeof(path),dir,name) && !write_atomic(path,pixels,bytes)) cache_promote(dir,name);
     return 0;
 }
 int desk_wall_prepare(const struct desk_wall_request *r, const char *dir, uint32_t **out, int *hit, void (*stage)(const char *))
-{ return wall_prepare(r,dir,out,hit,stage,NULL); }
+{ return wall_prepare(r,dir,out,hit,stage,NULL,NULL); }
 static void *wall_worker(void *arg)
 {
     struct desk_wall_worker *w=arg;
-    pthread_mutex_lock(&w->lock);
+    wall_activity(w,"mailbox-lock"); pthread_mutex_lock(&w->lock);
     for (;;) {
-        while (!w->pending && !w->stopping) pthread_cond_wait(&w->changed,&w->lock);
+        while (!w->pending && !w->stopping) {
+            wall_activity(w,"mailbox-wait"); pthread_cond_wait(&w->changed,&w->lock);
+        }
         if (w->stopping) break;
         struct desk_wall_request r=w->request; unsigned serial=w->serial;
         w->pending=0; w->busy=1; pthread_mutex_unlock(&w->lock);
         uint32_t *pixels; int hit;
         struct timespec begin,end; clock_gettime(CLOCK_MONOTONIC,&begin);
-        int error=wall_prepare(&r,w->cache_dir,&pixels,&hit,w->stage,w->memory);
+        int error=wall_prepare(&r,w->cache_dir,&pixels,&hit,w->stage,w->memory,w);
         clock_gettime(CLOCK_MONOTONIC,&end);
-        pthread_mutex_lock(&w->lock); w->busy=0;
+        wall_activity(w,"publish-lock"); pthread_mutex_lock(&w->lock); w->busy=0;
         uint32_t *old=w->pixels;
         w->pixels=NULL;
         if (!w->stopping && serial==w->serial) {
             w->pixels=pixels; pixels=NULL; w->ready=1; w->completed_serial=serial; w->error=error; w->cache_hit=hit;
             w->prepare_ns=(uint64_t)(end.tv_sec-begin.tv_sec)*1000000000ull+end.tv_nsec-begin.tv_nsec;
         }
-        pthread_mutex_unlock(&w->lock); free(old); free(pixels); pthread_mutex_lock(&w->lock);
+        pthread_mutex_unlock(&w->lock); wall_activity(w,"release-frame"); free(old); free(pixels);
+        wall_activity(w,"mailbox-lock"); pthread_mutex_lock(&w->lock);
     }
     pthread_mutex_unlock(&w->lock); return NULL;
 }

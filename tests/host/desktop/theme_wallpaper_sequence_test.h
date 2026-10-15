@@ -62,15 +62,26 @@ static void sequence_wait_theme(struct desktop *d,const char *name)
 }
 static void sequence_watchdog_test(struct desktop *d)
 {
-    char line[192];
+    char line[320];
     __atomic_store_n(&desktop_watchdog.frame_ms,1000,__ATOMIC_RELEASE);
     __atomic_store_n(&desktop_watchdog.loop_ms,3000,__ATOMIC_RELEASE);
     __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
+    __atomic_store_n(&desktop_watchdog.work,0,__ATOMIC_RELEASE);
     assert(!desktop_stall_record(3000,line,sizeof(line))); /* healthy idle loop */
+    __atomic_store_n(&desktop_watchdog.work,1,__ATOMIC_RELEASE);
+    assert(desktop_stall_record(1501,line,sizeof(line))>0 && strstr(line,"input_pending=0 work_pending=1"));
+    __atomic_store_n(&desktop_watchdog.work,0,__ATOMIC_RELEASE);
     desktop_input_pending(); desktop_stage(STALL_RENDER);
-    assert(!desktop_stall_record(2999,line,sizeof(line)));
-    assert(desktop_stall_record(3000,line,sizeof(line))>0);
+    assert(!desktop_stall_record(1500,line,sizeof(line)));
+    assert(desktop_stall_record(1501,line,sizeof(line))>0);
     assert(strstr(line,"[desktop] stall stage=render worker=") && strstr(line,"input_pending=1"));
+    assert(strstr(line,"wait=render") && strstr(line,"wallpaper_wait="));
+    desktop_stage(STALL_SHELL); desktop_wait("folder-service");
+    assert(desktop_stall_record(1501,line,sizeof(line))>0 && strstr(line,"wait=folder-service"));
+    pthread_mutex_lock(&wallpaper_worker.lock);
+    assert(desktop_stall_record(1501,line,sizeof(line))>0 && strstr(line,"worker=wallpaper-lock/"));
+    pthread_mutex_unlock(&wallpaper_worker.lock);
+    assert(!desktop_stall_record(1501,line,8)); /* never return an oversized raw write length */
     __atomic_store_n(&desktop_watchdog.frame_ms,UINT32_MAX-999,__ATOMIC_RELEASE);
     assert(desktop_stall_record(1000,line,sizeof(line))>0); /* millisecond wrap */
     __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
@@ -84,7 +95,7 @@ static void sequence_watchdog_test(struct desktop *d)
     assert(dup2(capture[1],STDERR_FILENO)>=0); close(capture[1]);
     desktop_watchdog_start(d); assert(desktop_watchdog.live);
     desktop_input_pending(); desktop_stage(STALL_RENDER);
-    struct timespec pause={2,300000000}; nanosleep(&pause,NULL);
+    struct timespec pause={0,750000000}; nanosleep(&pause,NULL);
     __atomic_store_n(&desktop_watchdog.stop,1,__ATOMIC_RELEASE);
     assert(!pthread_join(desktop_watchdog.thread,NULL)); desktop_watchdog.live=0;
     assert(dup2(saved,STDERR_FILENO)>=0); close(saved);
