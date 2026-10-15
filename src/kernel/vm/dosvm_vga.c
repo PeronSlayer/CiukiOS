@@ -273,10 +273,12 @@ void dosvm_vga_sync(struct dosvm *v, bool unmap)
 {
     if (v->fullscreen) return;
     if (!v->as.pd_phys) return;
-    uint32_t flags = irq_save();
+    /* VGA state/PTEs are thread-owned on this UP kernel. No scheduling
+     * point in harvest/seed/exchange: the guest cannot run, while timer
+     * and device IRQs can. In particular the 64 KiB chain-4 conversion
+     * must never be enclosed in an IRQ lock. */
     video_harvest(v);
     if (unmap && v->video_direct) video_exchange(v, 0);
-    irq_restore(flags);
 }
 void dosvm_vga_direct(struct dosvm *v)
 {
@@ -288,7 +290,6 @@ void dosvm_vga_direct(struct dosvm *v)
     bool writable = want && (!v->video_read_window || plane == write_plane || want == VIDEO_LINEAR);
     if (want == v->video_direct && writable == v->video_writable) return;
     uint64_t begin = dosvm_perf_clock();
-    uint32_t flags = irq_save();
     /* Chained backing needs deinterleaving before memory state changes.
      * Single planes need only their D bitmap carried across the swap. */
     if (v->video_direct == VIDEO_LINEAR) video_harvest(v);
@@ -298,7 +299,6 @@ void dosvm_vga_direct(struct dosvm *v)
     v->perf.port_remaps++;
     if (want == VIDEO_LINEAR) v->video_linear_maps++;
     else if (want) v->video_maps++;
-    irq_restore(flags);
     v->perf.remap_cycles += dosvm_perf_clock() - begin;
 }
 void dosvm_vga_model(struct dosvm *v)
@@ -766,12 +766,10 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     uint64_t begin = dosvm_perf_clock();
     /* Take and clear the dirty granules atomically with respect to the VM
      * worker: a store after this point stays marked for the next frame. */
-    uint32_t flags = irq_save();
     video_harvest(v); /* Includes dirt carried by earlier plane switches. */
     memcpy(v->video_taken, v->vga.dirty, sizeof(v->video_taken));
     memset(v->vga.dirty, 0, sizeof(v->vga.dirty));
     uint32_t display = v->vga.display_changes, changes = v->vga.changes;
-    irq_restore(flags);
     cvga_geometry g = {0};
     bool supported = cvga_get_geometry(&v->vga, &g) && g.width && g.height &&
                      g.width <= DOSVM_VIDEO_WIDTH && g.height <= DOSVM_VIDEO_HEIGHT;

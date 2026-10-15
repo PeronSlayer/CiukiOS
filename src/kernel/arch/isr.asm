@@ -8,6 +8,7 @@ section .text
 extern proc_trap_dispatch
 extern proc_signal_return_to_user
 extern df_handler
+extern crit_end
 
 %macro ISR_NOERR 1
 isr_%1:
@@ -80,6 +81,10 @@ trap_return:
     push esp
     call proc_signal_return_to_user
     add esp, 4
+    test byte [esp + 60], 3
+    jz .restore
+    call crit_end
+.restore:
     pop gs
     pop fs
     pop es
@@ -88,6 +93,7 @@ trap_return:
     add esp, 8
     iret
 .v86:
+    call crit_end
     add esp, 16
     popa
     add esp, 8

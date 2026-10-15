@@ -82,7 +82,8 @@ void task_start(struct task *t)
 }
 void schedule(void)
 {
-    CHECK(!flags && g_current->state == T_BLOCKED);
+    CHECK((flags & 0x200) && g_current->state == T_BLOCKED);
+    uint32_t saved = irq_save();
     schedules++;
     if (on_schedule)
         on_schedule();
@@ -92,6 +93,7 @@ void schedule(void)
     }
     CHECK(g_current->state == T_READY);
     g_current->state = T_RUNNING;
+    irq_restore(saved);
 }
 void task_yield(void) { CHECK(flags & 0x200); yields++; if (on_yield) on_yield(); }
 void task_sleep_ms(uint32_t ms)

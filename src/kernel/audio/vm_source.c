@@ -694,13 +694,16 @@ void audio_vm_tap(const struct audio_frame *out, unsigned frames)
     bool attached = false;
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) if (vm_slots[i].state != AUDIO_VM_FREE) attached = true;
     if (!attached) return;
-    uint32_t f = irq_save();
-    for (unsigned k = 0; k < frames; k++) {
-        tap_frame(&ring, out[k].left, out[k].right);
-        level_peak(&ring_level.pending[0], out[k].left);
-        level_peak(&ring_level.pending[0], out[k].right);
+    for (unsigned k = 0; k < frames;) {
+        unsigned end = frames - k > 16 ? k + 16 : frames;
+        uint32_t f = irq_save();
+        for (; k < end; k++) {
+            tap_frame(&ring, out[k].left, out[k].right);
+            level_peak(&ring_level.pending[0], out[k].left);
+            level_peak(&ring_level.pending[0], out[k].right);
+        }
+        irq_restore(f);
     }
-    irq_restore(f);
 }
 bool audio_vm_attached(void)
 {

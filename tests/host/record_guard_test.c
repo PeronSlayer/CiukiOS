@@ -22,6 +22,7 @@ static void test_irq_restore(uint32_t flags) { (void)flags; }
 static void test_cli(void) { }
 static void test_hlt(void) { abort(); }
 static uint32_t test_read_cr2(void) { return 0; }
+#undef irq_save
 #define irq_save test_irq_save
 #define irq_restore test_irq_restore
 #define cli test_cli

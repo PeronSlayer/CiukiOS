@@ -151,19 +151,24 @@ void proc_set_name(struct process *p, const char *path)
 }
 
 /* Consistent copy of published processes in ascending PID order (PID
- * allocation is monotonic, so slot order is not). Interrupts are held off
- * so tick counters belong to one instant; no allocation or wait here. */
+ * allocation is monotonic, so slot order is not). Only timer-owned counters
+ * need an IRQ snapshot. Sorting and record construction have no scheduling
+ * points, so process lifetimes remain stable with IF enabled on this UP. */
 unsigned proc_list_snapshot(struct ciuki_proc_record *out, unsigned capacity, unsigned *total)
 {
+    uint64_t ticks[CIUKI_PROCESS_MAX];
     uint32_t flags = irq_save();
+    for (unsigned i = 0; i < CIUKI_PROCESS_MAX; i++) ticks[i] = processes[i] ? processes[i]->cpu_ticks : 0;
+    irq_restore(flags);
     unsigned written = 0, present = 0;
     uint32_t last = 0;
     for (;;) {
         struct process *next = 0;
+        unsigned slot = 0;
         for (unsigned i = 0; i < CIUKI_PROCESS_MAX; i++) {
             struct process *p = processes[i];
             if (p && p->published && p->pid > last && (!next || p->pid < next->pid))
-                next = p;
+                { next = p; slot = i; }
         }
         if (!next)
             break;
@@ -183,12 +188,11 @@ unsigned proc_list_snapshot(struct ciuki_proc_record *out, unsigned capacity, un
         /* PID 1 is the kernel reaper task; native processes count live threads. */
         r->threads = next == &supervisor ? 1 : next->live_threads;
         r->resident_pages = next->memory ? next->memory->backing : 0;
-        r->cpu_ticks = next->cpu_ticks;
+        r->cpu_ticks = ticks[slot];
         r->start_tick = next->start_tick;
         memcpy(r->name, next->name, sizeof(r->name));
         r->name[sizeof(r->name) - 1] = 0;
     }
-    irq_restore(flags);
     if (total)
         *total = present;
     return written;
@@ -489,7 +493,9 @@ static void supervisor_main(void *arg)
             collect_pending = false;
         } else {
             g_current->state = T_BLOCKED;
+            irq_restore(flags);
             schedule();
+            continue;
         }
         irq_restore(flags);
     }

@@ -84,12 +84,14 @@ void task_reap(struct task *t) { CHECK(t != g_current && t->state == T_ZOMBIE &&
 void task_exit(int code) { CHECK(expect_exit); task_kill(g_current, code); longjmp(exited, 1); }
 void schedule(void)
 {
-    CHECK(!(host_flags & 0x200));
+    CHECK(host_flags & 0x200);
+    uint32_t saved = irq_save();
     g_ticks++;
+    irq_restore(saved); /* callbacks execute other tasks, with physical IF */
     if (on_schedule) on_schedule();
     g_current->state = T_RUNNING;
 }
-void task_sleep_ms(uint32_t ms) { uint32_t f = irq_save(); g_ticks += ms ? ms - 1 : 0; g_current->state = T_BLOCKED; schedule(); irq_restore(f); }
+void task_sleep_ms(uint32_t ms) { g_ticks += ms ? ms - 1 : 0; g_current->state = T_BLOCKED; schedule(); }
 int copy_user(void *dst, const void *src, uint32_t bytes)
 {
     struct process *p = proc_current();

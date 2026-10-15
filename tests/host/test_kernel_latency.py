@@ -11,6 +11,60 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class KernelLatencyTests(unittest.TestCase):
+    def test_pmm_scan_reserve_and_rollback_chunks(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='pmm-audit-', dir=out) as directory:
+            temp = Path(directory)
+            # Instrument only the bitmap memory boundary, retaining every
+            # production loop and mutation. Charge a conservative model
+            # microsecond per access; no host wall-time assertion.
+            source = (ROOT / 'src/kernel/core/pmm.c').read_text()
+            source = source.replace('{ return bitmap[', '{ audit_mem(); return bitmap[')
+            source = source.replace('{ bitmap[', '{ audit_mem(); bitmap[')
+            (temp / 'pmm_audit.inc').write_text(source)
+            harness = (ROOT / 'tests/host/pmm_contig_test.c').read_text()
+            harness = harness.replace('static uint32_t test_irq_save(void) { return 0; }', '''
+static unsigned irq_depth, accesses, maximum;
+static void audit_mem(void) { if (irq_depth) accesses++; }
+static uint32_t test_irq_save(void) { if (!irq_depth++) accesses=0; return irq_depth==1 ? 0x200 : 0; }''')
+            harness = harness.replace('static void test_irq_restore(uint32_t f) { (void)f; }', '''
+static void test_irq_restore(uint32_t f) {
+    if (f & 0x200) { CHECK(irq_depth==1 && accesses<=64); if(accesses>maximum) maximum=accesses; }
+    irq_depth--;
+}''')
+            harness = harness.replace('#include "../../src/kernel/core/pmm.c"', '#include "pmm_audit.inc"')
+            harness = harness.replace('return failures ? 1 : 0;', '''
+    CHECK(maximum==64 && !irq_depth);
+    printf("PMM IRQ audit: max=%uus model (64 bitmap accesses), fragmentation/reserve/rollback PASS\\n",maximum);
+    return failures ? 1 : 0;''')
+            (temp / 'audit.c').write_text(harness)
+            binary = temp / 'audit'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
+                            '-I', str(temp), str(temp / 'audit.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
+    def test_pic_mask_transactions_and_ten_second_timer(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='irq-audit-', dir=out) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'src/kernel/core/timing.c').read_text()
+            begin = source.index('static inline uint64_t rdtsc(void)')
+            end = source.index('\nvoid crit_begin(void)', begin)
+            (temp / 'latency_timing.inc').write_text(source[:begin] + source[end:])
+            source = (ROOT / 'src/kernel/arch/pic_pit.c').read_text()
+            begin = source.index('void pic_unmask(')
+            end = source.index('static void timer_irq(', begin)
+            (temp / 'latency_pic.inc').write_text('static uint8_t mask_master=0xff, mask_slave=0xff;\n' + source[begin:end])
+            binary = temp / 'audit'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
+                            '-I', str(temp), str(ROOT / 'tests/host/pic_mask_latency_test.c'),
+                            '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
     def test_critical_section_attribution(self):
         out = ROOT / 'build/host'
         out.mkdir(parents=True, exist_ok=True)

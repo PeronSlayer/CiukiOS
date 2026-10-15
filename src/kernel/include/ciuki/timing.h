@@ -16,6 +16,7 @@ struct timing_stats {
     uint64_t pit_irqs;
     uint32_t critical_site;
     const char *critical_section; /* static label, otherwise "irq_save" */
+    uint32_t pic_mask_writes, pic_mask_out_max_us;
 };
 
 extern uint64_t g_tsc_per_ms;
@@ -26,5 +27,6 @@ void timing_timer_irq(void);
 void timing_calibrate(void);
 void timing_reset(void);
 void timing_snapshot(struct timing_stats *s);
+void timing_pic_mask_write(uint64_t cycles) __attribute__((weak));
 
 #endif

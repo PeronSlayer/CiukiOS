@@ -95,6 +95,7 @@ void trap_dispatch(struct trap_frame *tf)
     if (tf->eflags & V86_VM) {
         if (tf->vector >= 0x20 && tf->vector < 0x30) {
             crit_begin();
+            if (crit_label) crit_label(tf->vector == 0x20 ? "irq_timer" : "irq_dispatch");
             uint64_t irq_start = cpu_irq_enter(tf);
             handle_irq(tf);
             cpu_irq_leave(irq_start);
@@ -112,6 +113,7 @@ void trap_dispatch(struct trap_frame *tf)
     if (from_user && dosvm_client && dosvm_client(g_current)) {
         if (tf->vector >= 0x20 && tf->vector < 0x30) {
             crit_begin();
+            if (crit_label) crit_label(tf->vector == 0x20 ? "irq_timer" : "irq_dispatch");
             uint64_t irq_start = cpu_irq_enter(tf);
             handle_irq(tf);
             cpu_irq_leave(irq_start);
@@ -124,6 +126,7 @@ void trap_dispatch(struct trap_frame *tf)
 
     if (tf->vector >= 0x20 && tf->vector < 0x30) {
         crit_begin();
+        if (crit_label) crit_label(tf->vector == 0x20 ? "irq_timer" : "irq_dispatch");
         uint64_t irq_start = cpu_irq_enter(tf);
         handle_irq(tf);
         cpu_irq_leave(irq_start);

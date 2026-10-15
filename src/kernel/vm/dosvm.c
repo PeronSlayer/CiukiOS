@@ -676,6 +676,8 @@ bool dosvm_trap(struct trap_frame *tf)
 {
     struct dosvm *v = owner(g_current);
     if (!v || !v->continuation) return false;
+    crit_begin();
+    if (crit_label) crit_label("dosvm_entry");
     bool pm = !(tf->eflags & V86_VM);
     perf_phase(v, 2);
     v->perf.trap_active = true; v->perf.trap_cycles = 0;
@@ -691,6 +693,7 @@ bool dosvm_trap(struct trap_frame *tf)
     struct v86_frame *f = &v->frame;
     memcpy(f, tf, size);
     v->frame_pm = pm;
+    crit_end();
     sti();
     dosvm_fullscreen_checkpoint(v);
     dosvm_fullscreen_progress(v,f->tf.cs,f->tf.eip);
@@ -757,6 +760,7 @@ bool dosvm_trap(struct trap_frame *tf)
     }
     if (!v->frame_pm) v86_retire_shadow(&v->monitor, f);
     if (e >= 0 && v->info.state < DOSVM_STOPPING) idle_poll_return(v, f);
+    kpreempt_point(); /* complete emulation transaction, before diagnostics */
     dosvm_trace_flush(v);
     if (!dosvm_in_irq(v)) dosvm_audio_log(v);
     /* Observe the completed DOS IRET, before ordinary instructions can
@@ -829,6 +833,8 @@ bool dosvm_trap(struct trap_frame *tf)
         if (v->frame_pm != pm) v->perf.cause = DOSVM_COST_SWITCH;
         perf_exit_end(v);
         cli();
+        crit_begin();
+        if (crit_label) crit_label("dosvm_leave");
         v86_leave(v->continuation);
     }
     if (v->info.state == DOSVM_BLOCKED)
@@ -843,6 +849,8 @@ bool dosvm_trap(struct trap_frame *tf)
     dosvm_perf_report(v);
     perf_phase(v, 1);
     cli();
+    crit_begin();
+    if (crit_label) crit_label("dosvm_return");
     if (v->frame_pm != pm) v86_leave(v->continuation);
     memcpy(tf, f, size);
     return true;

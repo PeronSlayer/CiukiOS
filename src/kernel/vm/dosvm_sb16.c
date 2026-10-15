@@ -682,6 +682,13 @@ int dosvm_audio_fetch(struct dosvm_key key, uint32_t consumer, struct dosvm_audi
     if (n > max) n = max;
     *block = *b;
     for (unsigned i = 0; i < n; i++) {
+        if (i && !(i & 63u)) {
+            /* The single consumer does not schedule here. Keep head and
+             * offset pinned until the copy completes; the IRQ producer
+             * can append but cannot reuse these occupied PCM slots. */
+            irq_restore(flags);
+            flags = irq_save();
+        }
         const int16_t *p = sb_pcm_slot(q, q->pcm_head + i);
         stereo[i * 2] = p[0]; stereo[i * 2 + 1] = p[1];
     }
@@ -703,7 +710,12 @@ int dosvm_audio_events(struct dosvm_key key, uint32_t consumer, struct dosvm_aud
     struct dosvm_audio_queue *q = &v->audio.q;
     uint32_t flags = irq_save();
     unsigned n = q->event_count < max ? q->event_count : max;
-    for (unsigned i = 0; i < n; i++) out[i] = *dosvm_event_slot(q, q->event_head + i);
+    for (unsigned i = 0; i < n; i++) {
+        if (i && !(i & 15u)) { irq_restore(flags); flags = irq_save(); }
+        /* Like PCM, occupied entries stay pinned until the final retire.
+         * The producer drops new events on overflow; it never overwrites. */
+        out[i] = *dosvm_event_slot(q, q->event_head + i);
+    }
     q->event_head = (q->event_head + n) % DOSVM_EVENTS; q->event_count -= n;
     irq_restore(flags);
     return (int)n;

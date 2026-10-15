@@ -212,8 +212,8 @@ int proc_list(uint32_t buffer, uint32_t bytes)
     struct kheap_ledger heap;
     kheap_snapshot(&heap);
     unsigned total = 0;
-    uint32_t flags = irq_save();
     unsigned records = proc_list_snapshot(proc_list_buffer.records, capacity, &total);
+    uint32_t flags = irq_save();
     *sys = (struct ciuki_proc_system){ .version = CIUKI_PROC_VERSION, .size = sizeof(*sys),
         .tick_hz = 1000, .records = records, .total_ticks = g_ticks, .idle_ticks = g_idle_ticks,
         .usable_pages = pmm_total_usable(), .free_pages = pmm_free_count(),

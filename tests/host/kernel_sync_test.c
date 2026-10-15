@@ -20,6 +20,7 @@ static unsigned failures;
  * rather than a second implementation of any service being tested. */
 #define CIUKI_CPU_H
 static uint32_t flags = 0x200;
+static void (*on_restore)(void);
 static unsigned writes, masks, unmasks, eois, starts, schedules, yields, creates;
 static bool masked[16];
 static irq_handler_t handlers[16];
@@ -41,7 +42,7 @@ struct ciuki_boot_info g_boot;
 
 static uint32_t read_eflags(void) { return flags; }
 static uint32_t irq_save(void) { uint32_t f = flags; flags = 0; return f; }
-static void irq_restore(uint32_t f) { flags = f; }
+static void irq_restore(uint32_t f) { flags = f; if ((f & 0x200) && on_restore) on_restore(); }
 static void outb(uint16_t port, uint8_t v) { (void)port; (void)v; writes++; }
 static void outl(uint16_t port, uint32_t v) { (void)port; (void)v; writes++; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
@@ -78,9 +79,11 @@ void task_start(struct task *t)
 
 void schedule(void)
 {
-    CHECK(!flags && g_current->state == T_BLOCKED);
+    CHECK((flags & 0x200) && (g_current->state == T_BLOCKED || g_current->state == T_READY));
+    uint32_t saved = irq_save(); /* model schedule's own short run-queue lock */
     schedules++;
-    if (on_schedule)
+    if (g_current->state == T_READY) { /* wake between IF restore and schedule */ }
+    else if (on_schedule)
         on_schedule();
     else {
         g_ticks = g_current->wake_tick;
@@ -88,6 +91,7 @@ void schedule(void)
     }
     CHECK(g_current->state == T_READY);
     g_current->state = T_RUNNING;
+    irq_restore(saved);
 }
 
 void task_yield(void) { CHECK(flags & 0x200); yields++; }
@@ -343,6 +347,15 @@ static void timer_then_irq(void)
     condition = true;                   /* condition wins at the deadline */
 }
 
+static void wake_in_unlocked_gap(void)
+{
+    if (g_current->state != T_BLOCKED) return;
+    on_restore = 0;
+    uint32_t f = irq_save();
+    wake_irq();
+    irq_restore(f);
+}
+
 static void unlock_owner(void)
 {
     struct task *sleeping = g_current;
@@ -379,6 +392,12 @@ static void test_sync(void)
     condition = false;
     CHECK(!kwait_wait_until(&test_wait, ready, &condition, deadline_after_ms(5)));
     CHECK(!test_wait.head && !waiters && !g_current->wake_tick);
+    condition = false;
+    on_restore = wake_in_unlocked_gap;
+    unsigned before_gap = starts;
+    CHECK(kwait_wait_until(&test_wait, ready, &condition, deadline_after_ms(5)));
+    CHECK(!on_restore && starts == before_gap + 1 && !test_wait.head && !waiters && flags == 0x200);
+    puts("kernel wait: IRQ wake between unlock and schedule, exactly one enqueue, IF enabled across sleep PASS");
     kmutex_init(&mutexes[0]);
     kmutex_init(&mutexes[1]);
     kmutex_lock(&mutexes[0]);

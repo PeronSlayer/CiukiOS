@@ -166,6 +166,9 @@ void task_kill(struct task *t, int reason) { t->state = T_ZOMBIE; t->exit_code =
 void task_reap(struct task *t) { g_task_count--; free(t->kstack); free(t->fpu_alloc); free(t); }
 void task_exit(int reason) { (void)reason; abort(); }
 void schedule(void) { g_need_resched = false; }
+void kpreempt_point(void) { if ((cpu_flags & V86_IF) && g_need_resched) schedule(); }
+void crit_begin(void) { }
+void crit_end(void) { }
 void task_sleep_ms(uint32_t ms)
 {
     g_ticks += ms;

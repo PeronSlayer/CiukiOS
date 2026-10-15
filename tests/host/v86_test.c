@@ -67,6 +67,7 @@ static uint32_t irq_save(void) { uint32_t f = flags; flags = 0; return f; }
 static void irq_restore(uint32_t f) { flags = f; }
 static void cli(void) { flags = 0; }
 static void sti(void) { flags = V86_IF; }
+void crit_end(void) { }
 static uint32_t read_cr3(void) { return cr3; }
 static void write_cr3(uint32_t x) { cr3 = x; }
 static uint32_t read_cr4(void) { return cr4_fake; }

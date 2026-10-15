@@ -13,6 +13,7 @@ static unsigned checks, failures;
 #define CHECK(x) do { checks++; if (!(x)) { printf("FAIL pmm contig line %d: %s\n", __LINE__, #x); failures++; } } while (0)
 static uint32_t test_irq_save(void) { return 0; }
 static void test_irq_restore(uint32_t f) { (void)f; }
+#undef irq_save
 #define irq_save test_irq_save
 #define irq_restore test_irq_restore
 #undef V2P

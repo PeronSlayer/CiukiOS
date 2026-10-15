@@ -186,6 +186,7 @@ void biosvm_trap(struct trap_frame *tf)
     struct v86_frame *f = (struct v86_frame *)tf;
     /* isr.asm has already saved every register. All monitor work is
      * preemptible by physical IRQs; only the ring-3 return is scheduled. */
+    crit_end();
     sti();
     int rc = v86_check_deadline(&firmware, deadline_after_ms(0));
     if (rc < 0)

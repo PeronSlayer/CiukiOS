@@ -18,6 +18,8 @@ static uint32_t gaps_software, gaps_unclassified;
 static uint64_t pit_irqs;
 static uint32_t crit_site, crit_max_site;
 static const char *crit_section = "irq_save", *crit_max_section = "none";
+static uint64_t pic_mask_out_max;
+static uint32_t pic_mask_writes;
 
 static inline uint64_t rdtsc(void)
 {
@@ -35,6 +37,13 @@ void crit_begin(void)
     }
 }
 void crit_label(const char *section) { if (crit_start) crit_section=section; }
+
+void timing_pic_mask_write(uint64_t cycles)
+{
+    /* Caller owns the short PIC IRQ section. No division or logging here. */
+    pic_mask_writes++;
+    if (cycles > pic_mask_out_max) pic_mask_out_max = cycles;
+}
 
 void crit_end(void)
 {
@@ -98,6 +107,7 @@ void timing_reset(void)
     budget_violations = 0;
     gaps_software = gaps_unclassified = 0;
     pit_irqs = 0;
+    pic_mask_out_max = 0; pic_mask_writes = 0;
     irq_restore(f);
 }
 
@@ -105,6 +115,8 @@ void timing_snapshot(struct timing_stats *s)
 {
     uint32_t f=irq_save();
     uint64_t per_ms=g_tsc_per_ms, maximum=crit_max_cycles;
+    uint64_t pic_max=pic_mask_out_max;
+    s->pic_mask_writes = pic_mask_writes;
     s->budget_violations = budget_violations;
     s->gaps_software = gaps_software;
     s->gaps_unclassified = gaps_unclassified;
@@ -114,4 +126,5 @@ void timing_snapshot(struct timing_stats *s)
     s->tsc_khz = (uint32_t)per_ms;
     s->critical_us = per_ms ? (uint32_t)(maximum * 1000 / per_ms) : 0;
     s->critical_ns = per_ms ? (uint32_t)(maximum * 1000000 / per_ms) : 0;
+    s->pic_mask_out_max_us = per_ms ? (uint32_t)(pic_max * 1000 / per_ms) : 0;
 }

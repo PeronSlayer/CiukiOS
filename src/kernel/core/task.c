@@ -414,8 +414,8 @@ void task_sleep_ms(uint32_t ms)
     uint32_t f = irq_save();
     g_current->wake_tick = g_ticks + (ms ? ms : 1);
     g_current->state = T_BLOCKED;
-    schedule();
     irq_restore(f);
+    schedule();
 }
 
 void task_exit(int code)

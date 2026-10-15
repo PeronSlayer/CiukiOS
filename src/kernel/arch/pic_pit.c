@@ -31,27 +31,35 @@ void pic_init(void)
 
 void pic_unmask(unsigned irq)
 {
+    if (irq >= 16) return;
+    /* Open the cascade once, separately. Each mask transaction is one OUT;
+     * ordinary updates follow Linux i8259.c, not the ICW init delays. */
+    if (irq >= 8) pic_unmask(2);
     uint32_t f = irq_save();
-    if (irq < 8) {
-        mask_master &= (uint8_t)~(1u << irq);
-    } else {
-        mask_slave &= (uint8_t)~(1u << (irq - 8));
-        mask_master &= (uint8_t)~(1u << 2);
-        outb(0xA1, mask_slave);
+    uint8_t *mask = irq < 8 ? &mask_master : &mask_slave;
+    uint8_t next = *mask & (uint8_t)~(1u << (irq & 7));
+    if (next != *mask) {
+        *mask = next;
+        uint64_t start = g_cpu_tsc ? read_tsc_serialized() : 0;
+        outb(irq < 8 ? 0x21 : 0xA1, next);
+        uint64_t elapsed = g_cpu_tsc ? read_tsc_serialized() - start : 0;
+        if (timing_pic_mask_write) timing_pic_mask_write(elapsed);
     }
-    outb(0x21, mask_master);
     irq_restore(f);
 }
 
 void pic_mask(unsigned irq)
 {
+    if (irq >= 16) return;
     uint32_t f = irq_save();
-    if (irq < 8) {
-        mask_master |= (uint8_t)(1u << irq);
-        outb(0x21, mask_master);
-    } else {
-        mask_slave |= (uint8_t)(1u << (irq - 8));
-        outb(0xA1, mask_slave);
+    uint8_t *mask = irq < 8 ? &mask_master : &mask_slave;
+    uint8_t next = *mask | (uint8_t)(1u << (irq & 7));
+    if (next != *mask) {
+        *mask = next;
+        uint64_t start = g_cpu_tsc ? read_tsc_serialized() : 0;
+        outb(irq < 8 ? 0x21 : 0xA1, next);
+        uint64_t elapsed = g_cpu_tsc ? read_tsc_serialized() - start : 0;
+        if (timing_pic_mask_write) timing_pic_mask_write(elapsed);
     }
     irq_restore(f);
 }
