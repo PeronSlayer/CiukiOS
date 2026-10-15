@@ -139,3 +139,111 @@ static void test_startup_disk(void)
     puts("f3-24 disk: overlay precedence, two-window retention, failed/short read-ahead, retry and cut-base EOF PASS");
 }
 static void test_startup(void) { test_startup_screen(); test_startup_disk(); }
+
+/* F3-27: run the actual worker, including its diagnostic before first
+ * entry. CPU memory access walks the active directory, not v->as. */
+#ifdef CIUKI_DOSVM_GUEST_CPU
+#include "dosvm_boot.inc"
+static struct dosvm *startup_boot_vm;
+static unsigned startup_boot_switches;
+static void startup_boot_disk(uint32_t lba, void *buffer)
+{
+    memset(buffer, 0, 512);
+    if (!lba) memcpy(buffer, startup_boot_sector, 512);
+}
+static bool startup_cpu_read(uint32_t linear, void *buffer, unsigned bytes)
+{
+    struct aspace active = {.pd_phys = read_cr3()};
+    uint8_t *out = buffer;
+    while (bytes) {
+        uint32_t pte = 0, phys = as_lookup(&active, linear, &pte);
+        uint32_t pde = table_va(active.pd_phys)[linear >> 22];
+        if (!phys || !(pte & PTE_U) || !(pde & PTE_U)) return false;
+        unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
+        if (n > bytes) n = bytes;
+        memcpy(out, P2V(phys), n);
+        out += n; linear += n; bytes -= n;
+    }
+    return true;
+}
+static bool startup_cpu_write(uint32_t linear, const void *buffer, unsigned bytes)
+{
+    (void)linear; (void)buffer; (void)bytes;
+    CHECK(false); return false; /* Both entry jumps precede any guest store. */
+}
+static void startup_boot_schedule(void)
+{
+    struct dosvm *v = startup_boot_vm;
+    CHECK(g_current == v->task && !v->continuation);
+    struct task *resume = g_current;
+    g_current = &caller;
+    write_cr3(dosvm_task_cr3(g_current, kpd_phys));
+    dosvm_task_switch(g_current);
+    CHECK(read_cr3() == kpd_phys);
+    g_current = resume;
+    write_cr3(dosvm_task_cr3(resume, kpd_phys));
+    dosvm_task_switch(resume);
+    CHECK(dosvm_task_esp0(resume, 0xABC000) == 0xABC000);
+    startup_boot_switches++;
+    schedule_hook = 0;
+}
+static void startup_boot_record(void)
+{
+    if (strstr(last_record, "src=screen n=1 ") && !startup_boot_vm->continuation)
+        g_need_resched = true;
+}
+static void startup_boot_enter(const struct v86_frame *initial)
+{
+    struct dosvm *v = startup_boot_vm;
+    CHECK(initial->tf.cs == 0 && initial->tf.eip == 0x7C00);
+    CHECK(initial->tf.edx == 0x80 && (initial->tf.eflags & V86_VM));
+    const struct gcpu_ops ops = {startup_cpu_read, startup_cpu_write,
+                                if_cpu_descriptor, if_cpu_unexpected, 0};
+    struct gcpu_state s = {.eip = initial->tf.eip, .edx = initial->tf.edx,
+        .esp = initial->tf.user_esp, .eflags = initial->tf.eflags};
+    gcpu_init(&ops);
+    struct gcpu_event ev;
+    int result = gcpu_run(&s, 8, &ev);
+    gcpu_done();
+    printf("f3-27 boot flags=%08x: reschedules=%u active_guest=%u executed=%u vector=%u eip=%08x address=%08x error=%x\n",
+           g_boot.flags, startup_boot_switches, read_cr3() == v->as.pd_phys,
+           ev.executed, ev.vector, s.eip, ev.cr2, ev.err);
+    fflush(stdout);
+    /* EB 3C and the far jump must retire; CLI is the first V86 #GP. */
+    CHECK(result == GCPU_TRAP && ev.vector == 13 && ev.fault && ev.executed == 2 &&
+          s.cs == 0 && s.eip == 0x7C43);
+    CHECK(dosvm_task_cr3(g_current, kpd_phys) == v->as.pd_phys);
+    CHECK(dosvm_task_esp0(g_current, 0xABC000) == v->continuation);
+    CHECK(!dosvm_stop(v->info.key, DOSVM_EXIT));
+}
+#endif
+static void test_startup_boot(void)
+{
+#ifdef CIUKI_DOSVM_GUEST_CPU
+    const uint32_t flags[] = {CBI_F_TEST_REQUEST | CBI_F_DIAG_VERBOSE, CBI_F_VERBOSE, 0};
+    for (unsigned i = 0; i < ARRAY_SIZE(flags); i++) {
+        disk_base_sector = startup_boot_disk;
+        struct dosvm *v = create();
+        disk_base_sector = 0;
+        startup_boot_vm = v; startup_boot_switches = 0;
+        CHECK(!dosvm_boot(v));
+        uint8_t boot[512];
+        CHECK(!dosvm_read(v, 0x7C00, boot, sizeof(boot)) && !memcmp(boot, startup_boot_sector, sizeof(boot)));
+        CHECK(as_lookup(&v->as, 0x7000, 0) == v->frames[7]);
+        CHECK(dosvm_task_cr3(&caller, 0xABC000) == 0xABC000);
+        g_boot.flags = flags[i];
+        diag_time_hook = startup_boot_record; schedule_hook = startup_boot_schedule;
+        guest_enter_hook = startup_boot_enter;
+        unsigned before = guest_enters;
+        run_worker(v);
+        CHECK(guest_enters == before + 1 && startup_boot_switches == (flags[i] ? 1u : 0u));
+        CHECK(!v->continuation && dosvm_task_esp0(v->task, 0xABC000) == 0xABC000);
+        diag_time_hook = schedule_hook = 0; guest_enter_hook = 0;
+        g_boot.flags = 0; g_need_resched = false;
+        destroy(v, true); empty(); startup_boot_vm = 0;
+    }
+    puts("f3-27 boot: production sector executes after startup reschedule; diagnostic, verbose and quiet boots, ESP0 and cleanup PASS");
+#else
+    puts("f3-27 boot: SKIP (no libx86emu headers)");
+#endif
+}

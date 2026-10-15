@@ -134,6 +134,8 @@ void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 static struct { struct task *t; void (*fn)(void *); void *arg; } tasks[DOSVM_LIMIT];
 static jmp_buf guest_return, worker_return;
 static void (*sleep_hook)(void);
+static void (*schedule_hook)(void);
+static void (*guest_enter_hook)(const struct v86_frame *);
 static unsigned native_progress, guest_enters;
 static bool guest_halt;
 struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
@@ -158,7 +160,7 @@ void task_reap(struct task *t)
     g_task_count--; kfree(t->kstack); kfree(t->fpu_alloc); kfree(t);
 }
 void task_exit(int reason) { task_kill(g_current,reason); longjmp(worker_return,1); }
-void schedule(void) { native_progress++; g_need_resched = false; }
+void schedule(void) { native_progress++; g_need_resched = false; if (schedule_hook) schedule_hook(); }
 void task_sleep_ms(uint32_t ms)
 {
     CHECK(cpu_flags & V86_IF); g_ticks += ms; dosvm_tick(); native_progress++;
@@ -195,13 +197,14 @@ bool input_read(struct input_event *e) { if (!input_pending) return false; *e=in
 void v86_leave(uint32_t continuation) { CHECK(continuation == 0x12345678); longjmp(guest_return,1); }
 void v86_enter(const struct v86_frame *initial, uint32_t *continuation)
 {
+    *continuation=0x12345678; guest_enters++;
+    if (guest_enter_hook) { guest_enter_hook(initial); return; }
     struct v86_frame f = *initial; f.tf.vector=13; f.tf.edx=DOSVM_FAULT_PORT;
     if (guest_halt) {
         uint8_t opcode=0xF4;
         for (unsigned i=0;i<DOSVM_LIMIT;i++) if (tasks[i].t==g_current)
             CHECK(!dosvm_write(tasks[i].arg,f.tf.eip,&opcode,1));
     }
-    *continuation=0x12345678; guest_enters++;
     CHECK(dosvm_task_cr3(g_current,0) == cpu_cr3 && dosvm_task_esp0(g_current,0) == *continuation);
     if (!setjmp(guest_return)) { dosvm_trap(&f.tf); CHECK(false); }
 }
@@ -650,6 +653,7 @@ int main(void)
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     if (getenv("CIUKI_VM_AUDIO_COST")) { test_vm_source_budget(); free(ram); return 0; }
     if (getenv("CIUKI_VM_QUAKE_START")) { test_quake_start(); free(ram); return 0; }
+    if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
     test_vm_audio();
@@ -665,6 +669,8 @@ int main(void)
     test_fullscreen_service();
     test_startup();
     test_quake_start();
-    CHECK(guest_enters==3 && deletes>1); free(ram);
+    CHECK(guest_enters==3 && deletes>1);
+    test_startup_boot();
+    free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }
