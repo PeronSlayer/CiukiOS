@@ -4,7 +4,8 @@
  * monitor's wall time as VM CPU time. SPDX-License-Identifier: GPL-2.0-only */
 uint64_t dosvm_perf_clock(void)
 {
-    return (g_boot.flags & CBI_F_DIAG_VERBOSE) && g_tsc_per_ms ? read_tsc_serialized() : 0;
+    /* Startup vector costs also need CPU time on verbose hardware boots. */
+    return (g_boot.flags & (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE)) && g_tsc_per_ms ? read_tsc_serialized() : 0;
 }
 static void perf_phase(struct dosvm *v, unsigned phase)
 {
