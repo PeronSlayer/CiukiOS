@@ -119,6 +119,17 @@ int main(int argc, char **argv)
     struct ciuki_settings cfg; cfg_defaults(&cfg); assert(!cfg_parse(&cfg, saved, saved_n) && cfg.display_mode == 0x111);
     assert(cfg_parse(&cfg, "display_mode=65536\n", 19) == 1 && cfg.display_mode == 0x111);
     cp_detach(&a);
+    /* f1-67: the existing 1024x768 RGB565 alternative must be selectable,
+     * previewed and persisted without changing resolution. */
+    init(); select(CP_DEPTH, 0);
+    assert(a.area_w[a.area] == 1024 && a.area_h[a.area] == 768 && a.depths[a.depth] == 16);
+    at_click_widget(&u, CP_APPLY);
+    assert(a.mode_state == CP_MODE_WAIT && requested == 0x117 && a.previous_mode == 0x118 && !saves);
+    ack(); assert(info.width == 1024 && info.height == 768 && info.bpp == 16 && info.pitch == 2048);
+    choose(0); assert(a.mode_state == CP_MODE_IDLE && saves == 1);
+    cfg_defaults(&cfg); assert(!cfg_parse(&cfg, saved, saved_n) && cfg.display_mode == 0x117);
+    assert(strstr(saved, "future_key=kept\n") && strstr(saved, "recent=/Documents/note.txt\n"));
+    cp_detach(&a);
     init(); start(); ack(); choose(1); assert(a.mode_state == CP_MODE_REVERT && requested == 0x118 && !saves);
     changed_mode(requested); cp_display_result(&a, 0); cp_detach(&a);
     init(); start(); ack(); at_tap(&u, DU_KEY_ESC); assert(a.mode_state == CP_MODE_REVERT && !saves); cp_display_result(&a, -EIO); cp_detach(&a);
