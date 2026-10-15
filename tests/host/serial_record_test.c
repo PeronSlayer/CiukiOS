@@ -8,7 +8,6 @@ static void cli(void) { flags=0; }
 static void hlt(void) { abort(); }
 static uint32_t read_cr2(void) { return 0; }
 struct ciuki_boot_info g_boot;
-struct task *g_current;
 void console_write(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n; }
@@ -26,6 +25,10 @@ static void *record_emitter(void *arg)
     unsigned id=*(unsigned *)arg;
     playback_producer=true;
     for (unsigned i=0;i<100;i++) {
+        /* Isolate byte integrity from admission: each bounded producer
+         * starts a fresh virtual quota window; the clocked burst fixture
+         * separately checks the unmodified production rate policy. */
+        uint32_t f=irq_save();g_ticks+=1000;irq_restore(f);
         if (id) rec_emit("runner","DATA","case=concurrent n=%u payload=BBBBBBBBBBBBBBBB",i);
         else if (console_emitter) {
             char s[80]; int n=snprintf(s,sizeof(s),"emitter n=%u payload=AAAAAAAAAAAAAAAA",i);
@@ -46,10 +49,9 @@ static void *large_producer(void *arg)
         char record[SERIAL_RECORD_MAX];
         memset(record,'A'+id,exact_size);record[exact_size-1]='\n';
         memcpy(record,id ? "[console] " : "[kernel]  ",10);
-        uint32_t f=0;
-        if (id) f=irq_save();
+        uint32_t f=irq_save();g_ticks+=1000;
         serial_write(record,exact_size);
-        if (id) irq_restore(f);
+        irq_restore(f);
         memset(record,'?',sizeof(record)); /* queue must own all source bytes */
         sched_yield();
     }
@@ -65,14 +67,20 @@ static void maximum_records(void)
         CHECK(!pthread_create(&a,NULL,large_producer,&ids[0]));
         CHECK(!pthread_create(&b,NULL,large_producer,&ids[1]));
         CHECK(!pthread_join(a,NULL) && !pthread_join(b,NULL) && !pthread_join(c,NULL));
-        CHECK(!uart_dropped && emitted_count==24*(exact_size+1));
-        for (unsigned row=0;row<24;row++) {
-            const char *p=emitted+row*(exact_size+1);
-            unsigned id=!memcmp(p,"[console] ",10);
-            CHECK(!memcmp(p,id ? "[console] " : "[kernel]  ",10));
-            for (unsigned i=10;i<exact_size-1;i++) CHECK(p[i]==(char)('A'+id));
-            CHECK(p[exact_size-1]=='\r' && p[exact_size]=='\n');
+        emitted[emitted_count]=0;
+        unsigned kept=0;
+        for (const char *p=emitted;*p;) {
+            const char *end=strstr(p,"\r\n");CHECK(end);
+            if (strncmp(p,"[serial] dropped=",17)) {
+                unsigned id=!memcmp(p,"[console] ",10);
+                CHECK(!memcmp(p,id ? "[console] " : "[kernel]  ",10));
+                CHECK((size_t)(end+2-p)==exact_size+1);
+                for (unsigned i=10;i<exact_size-1;i++) CHECK(p[i]==(char)('A'+id));
+                kept++;
+            }
+            p=end+2;
         }
+        CHECK(kept==24 && !uart_dropped);
         /* Panic with a partially transmitted maximum-size task record and
          * an IF-clear producer behind it preserves exact byte order. */
         reset_uart(kind);char record[SERIAL_RECORD_MAX];memset(record,'P',sizeof(record));
@@ -84,10 +92,35 @@ static void maximum_records(void)
         reset_uart(kind);serial_write(record,SERIAL_RECORD_MAX+1u);
         CHECK(uart_dropped==1 && !uart_used); /* reject before inspecting input */
     }
-    puts("serial bounds: two task/IRQ producers, 240/2048-byte records, source ownership, 16450/16550, panic order and oversize whole drop PASS");
+    puts("serial bounds: two task/IRQ producers, 240/2048-byte records, source ownership, 16450/16550, panic order and oversize/rate whole drops PASS");
+}
+static void other_evidence_task(void)
+{
+    rec_emit("runner","DATA","case=quota task=other");
+}
+static void evidence_sequence(void)
+{
+    reset_uart(true);rec_set_run("abcdef12");rec_emit("runner","BEGIN",NULL);drain_uart();
+    emitted_count=0;g_ticks+=1000;
+    char fill[1407];memset(fill,'Q',sizeof(fill));fill[sizeof(fill)-1]='\n';
+    serial_write(fill,sizeof(fill));serial_write(fill,sizeof(fill));
+    CHECK(uart_admitted==uart_budget-UART_NOTICE_BYTES);
+    uint32_t before=seq;
+    struct task task={0};g_current=&task;
+    evidence_wait_hook=other_evidence_task;
+    rec_emit("runner","DATA","case=quota task=first");
+    CHECK(evidence_sleeps==1000 && !uart_dropped && seq==before+2);
+    g_current=NULL;drain_uart();
+    char other[160],first_record[160];
+    snprintf(other,sizeof(other),"CIUKI_TEST v=1 run=abcdef12 seq=%06u probe=runner event=DATA case=quota task=other\r\n",before+1);
+    snprintf(first_record,sizeof(first_record),"CIUKI_TEST v=1 run=abcdef12 seq=%06u probe=runner event=DATA case=quota task=first\r\n",before+2);
+    const char *a=strstr(emitted,other),*b=strstr(emitted,first_record);
+    CHECK(a && b && a<b);
+    puts("serial evidence: quota wait dispatches another producer before sequence allocation; wire sequence stays increasing with zero drops PASS");
 }
 int main(void)
 {
+    evidence_sequence();
     maximum_records();
     for (unsigned kind=0;kind<2;kind++) for (unsigned envelopes=0;envelopes<2;envelopes++) {
         reset_uart(kind); console_emitter=envelopes;
@@ -104,6 +137,7 @@ int main(void)
         bool seen[2][100]={{false}}; unsigned rows=0;
         for (const char *line=emitted;*line;) {
             const char *end=strstr(line,"\r\n"); CHECK(end);
+            if (!strncmp(line,"[serial] dropped=",17)) { line=end+2;continue; }
             unsigned id,n,sequence;
             char expected[256];
             if (!strncmp(line,"CIUKI_TEST ",11)) {
@@ -130,9 +164,11 @@ int main(void)
         int n=device_write(endings+consumed,sizeof(endings)-consumed);
         CHECK(n>0 && (unsigned)n<=sizeof(endings)-consumed);
         consumed+=(unsigned)n;
+        drain_uart();
+        g_ticks+=1000;
     }
     drain_uart(); CHECK(!uart_dropped);
-    puts("serial records: concurrent klog/rec_emit and console/rec_emit, 16450/16550, 200 whole records per case, zero drops/interleaved bytes PASS");
+    puts("serial records: concurrent klog/rec_emit and console/rec_emit, 16450/16550, 200 whole records per case, zero drops/interleaved bytes with paced admission PASS");
     puts("serial envelopes: 1024 line endings use bounded short writes with complete prefixes/terminators PASS");
     return 0;
 }

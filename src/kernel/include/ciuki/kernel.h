@@ -42,12 +42,16 @@ bool serial_present(void);
 /* One queue publication; includes console prefixes and final newline.
  * CRLF expansion needs at most twice this many bytes in the byte ring. */
 #define SERIAL_RECORD_MAX 2048u
-void serial_write(const char *s, size_t n); /* whole drop on overflow/oversize */
+void serial_write(const char *s, size_t n); /* whole drop on overflow/oversize/rate */
+/* Wait for this many wire bytes only in preemptible task context. Returns
+ * saved EFLAGS with IF clear: caller restores after formatting/publication,
+ * so evidence sequence allocation happens AFTER any wait. Weak for fixtures. */
+uint32_t serial_evidence_begin(size_t wire_bytes) __attribute__((weak));
 void serial_buffered(bool enabled);       /* compatibility: all normal logs queue */
 void serial_writer_init(void);            /* scheduler init, once */
 uint32_t serial_dropped(void);
 void serial_panic(void);                  /* IF clear: drain, then synchronous records */
-void serial_tick(void) __attribute__((weak)); /* one ready FIFO burst, no polling; weak so host fixtures without serial.c keep the if (serial_tick) guard of task.c */
+void serial_tick(void);                   /* compatibility: IRQs never drain */
 void console_init_text(void);
 bool console_init_lfb(void);
 void console_write(const char *s, size_t n);

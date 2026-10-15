@@ -50,7 +50,8 @@ void klog_periodic(const char *fmt,...)
     CHECK(n>0 && n<=240); record_bytes+=(unsigned)n;
     CHECK(record_bytes+2<sizeof(records)); records[record_bytes++]='\n';records[record_bytes]=0;
 }
-void timing_snapshot(struct timing_stats *s) { memset(s,0,sizeof(*s)); }
+static struct timing_stats timing_fixture;
+void timing_snapshot(struct timing_stats *s) { *s=timing_fixture; }
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s)); }
 void kwork_snapshot(struct kwork_stats *s) { memset(s,0,sizeof(*s)); }
 uint32_t serial_dropped(void) { return 0; }
@@ -76,6 +77,7 @@ static void reset(void)
     irq_cycles=exited_cycles=stretch_max=resched_max=0;switches=overruns=0;
     overrun_used=overrun_lost=0;
     forced=threshold=resched_pending=false;record_bytes=0;records[0]=0;g_boot.flags=0;
+    memset(&timing_fixture,0,sizeof(timing_fixture));
     cpu_switch(0,&idle);
 }
 static void run_tick(uint32_t eip)
@@ -132,11 +134,16 @@ static void accounting_test(void)
     CHECK(threshold && stretch_eip==0xdeadbeef);
     cycles=2000001;cpu_switch(&hog,&normal);g_current=&normal;
     cpu_reap(&hog);normal.all_next=&ui; /* exited CPU stays in its class */
+    timing_fixture=(struct timing_stats){.critical_us=2120,.critical_site=0xc011e445,
+        .critical_section="serial_tx_byte",.budget_violations=1};
     cpu_emit();
     unsigned win,id,ir,de,in,no;
     CHECK(sscanf(records,"[cpu] window_ms=%u idle_pm=%u irq_pm=%u device_pm=%u interactive_pm=%u normal_pm=%u",&win,&id,&ir,&de,&in,&no)==6);
     CHECK(win==2000 && id+ir+de+in+no==1000 && id==50 && de==650 && no==300);
     CHECK(strstr(records,"eip=deadbeef") && strstr(records,"task=hog#3"));
+    CHECK(!(g_boot.flags & CBI_F_DIAG_VERBOSE));
+    CHECK(strstr(records,"[kernel] irqoff_section=serial_tx_byte site=c011e445 irqoff_max_us=2120 violations=1\n"));
+    CHECK(strstr(records,"[kernel] long_paths") && strstr(records,"timer_gaps=0/0"));
     record_bytes=0;records[0]=0;g_boot.flags=0;cycles+=2000000;cpu_emit();CHECK(!record_bytes);
     /* A desktop stall wakes the reporter immediately, even in a quiet boot. */
     reporter=(struct task){.prio=P_DEVICE,.state=T_BLOCKED,.wake_tick=9999};stat_task=&reporter;

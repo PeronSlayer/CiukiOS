@@ -300,4 +300,21 @@ static void batching_and_cadence(void)
     CHECK(!bootlog_shutdown());
     puts("bootlog: 32KiB physical blocks, one-second rate/high water, five-second metadata, shutdown EOF and clock wrap PASS");
 }
-int main(void) { retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence(); return 0; }
+static void runtime_summaries(void)
+{
+    reset_model();
+    static const char prefix[]="boot prefix\n";
+    static const char health[]="[kernel] irqoff_section=serial_tx_byte site=c011e445 irqoff_max_us=130 violations=0\n"
+        "[kernel] stretch_max_ms=1 irqoff_max_us=130 timer_gaps=0/0\n"
+        "[kernel] long_paths serial_drop=4 bootlog_drain_ms=3\n";
+    bootlog_capture(prefix,sizeof(prefix)-1);
+    bootlog_capture_ring(health,sizeof(health)-1);
+    CHECK(!bootlog_activate(&fs,true,1));drain();
+    CHECK(!bootlog_shutdown());
+    CHECK(published_size==BOOTLOG_PROTECTED+sizeof(health)-1);
+    CHECK(!memcmp(disk,prefix,sizeof(prefix)-1) && disk[sizeof(prefix)-1]==0);
+    CHECK(!strstr((const char *)disk,"[kernel]")); /* a C string sees only the prefix */
+    CHECK(!memcmp(disk+BOOTLOG_PROTECTED,health,sizeof(health)-1));
+    puts("bootlog: kernel attribution/stretch/long_paths persist at 128KiB past the NUL-padded prefix; full directory length required PASS");
+}
+int main(void) { retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }
