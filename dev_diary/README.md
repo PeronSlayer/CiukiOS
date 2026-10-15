@@ -129,3 +129,4 @@ Documenti di design, validazione, fonti esterne.
 | [Decisioni del proprietario della sera del 14 ottobre (DOS a schermo intero, Win16, MIDI, font, gate F5)](2026-10-14-08-decisioni-notte-f5.md) | 14 ott | decisioni |
 | [Immagine 2e39fe38: giro della notte tra il 14 e il 15 ottobre (ricerche, latenza, video DOS, UI, avvio di F5)](2026-10-15-01-immagine-2e39fe38.md) | 15 ott | modifiche (kernel, driver, VM DOS, desktop, tema, font, F5), ricerche, immagine |
 | [Correzioni della mattina del 15 ottobre: tasti del desktop, #XM assente su TCG, worker dello schermo intero; immagine a738204a](2026-10-15-02-correzioni-mattina-15-ottobre.md) | 15 ott | modifica (desktop, sonda Win32, display), analisi (deviazione QEMU), immagine |
+| [Analisi del T23 sull'immagine a738204a: log dello schermo, DOOM, Quake, chiavetta, prestazioni](2026-10-15-03-analisi-t23-a738204a.md) | 15 ott | analisi (hardware reale), decisione (direttive) |
