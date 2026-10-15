@@ -39,7 +39,10 @@ int bootinfo_validate(const struct ciuki_boot_info *bi, const char **why);
 /* output sinks */
 void serial_init(uint16_t base, uint16_t divisor);
 bool serial_present(void);
-void serial_write(const char *s, size_t n); /* one atomic record, whole drop on overflow */
+/* One queue publication; includes console prefixes and final newline.
+ * CRLF expansion needs at most twice this many bytes in the byte ring. */
+#define SERIAL_RECORD_MAX 2048u
+void serial_write(const char *s, size_t n); /* whole drop on overflow/oversize */
 void serial_buffered(bool enabled);       /* compatibility: all normal logs queue */
 void serial_writer_init(void);            /* scheduler init, once */
 uint32_t serial_dropped(void);

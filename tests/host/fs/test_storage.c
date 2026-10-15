@@ -25,8 +25,11 @@ static struct vfs_table table;
 static struct fake media[3];
 struct disk { struct blkdev dev; struct fake *media; };
 static struct disk disks[3];
+static unsigned readonly_reports;
+static char readonly_record[256];
 void klog(const char *fmt, ...) {
     char line[256]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
+    if (!strncmp(line,"[storage] readonly ",19)) { readonly_reports++; memcpy(readonly_record,line,sizeof(line)); }
     bootlog_capture(line,strlen(line)); bootlog_capture("\n",1);
 }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...) {
@@ -315,7 +318,7 @@ static void log_tests(void) {
     bootlog_capture("activation before mount\n",24); bootlog_snapshot(&st); CHECK(!st.writes && !st.storage_calls && st.queued==24);
     CHECK(bootlog_activate(&s->vfs,false,0)==-FS_EROFS); CHECK(!media[0].writes);
     OK(storage_enable_write(s,2)); OK(bootlog_activate(&s->vfs,true,s->sequence));
-    CHECK(BOOTLOG_LIMIT==1048576 && BOOTLOG_PROTECTED==131072 && !strcmp(BOOTLOG_PATH,"C:/SYSTEM/LOGS/BOOT.LOG"));
+    CHECK(BOOTLOG_LIMIT*3<=BOOTLOG_BUDGET && BOOTLOG_PROTECTED==131072 && !strcmp(BOOTLOG_PATH,"C:/SYSTEM/LOGS/BOOT.LOG"));
     char text[4096]; memset(text,'a',sizeof(text));
     bootlog_capture_ring(text,sizeof(text));
     OK(bootlog_sync(log_no_cancel,log_storage_turn,NULL));
@@ -362,6 +365,7 @@ static void failure_tests(void) {
     struct bootlog_stats st; bootlog_snapshot(&st); CHECK(!st.active && st.error==-FS_EIO);
     uint64_t calls=st.storage_calls; CHECK(bootlog_drain()==-FS_EIO); bootlog_snapshot(&st); CHECK(st.storage_calls==calls);
     CHECK(bootlog_shutdown()==-FS_EIO); stop(s,false); reset();
+    CHECK(readonly_reports>0);
     printf("PASS delayed write/flush errors: sticky caller result, RO revocation, no clean unmount; logger no recursion\n");
 }
 int probe_fat_read(void);

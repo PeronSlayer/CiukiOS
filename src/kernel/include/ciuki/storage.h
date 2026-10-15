@@ -82,6 +82,8 @@ int storage_writeback(struct storage *, uint32_t now_ms);
 int storage_shutdown(struct storage *); /* no clean mark following any error */
 void storage_destroy(struct storage *); /* quiescent host tests / failed init only */
 struct storage *storage_get(void);
+/* Retained state only, no device access, allocation or storage lock. */
+bool storage_readonly_info(unsigned drive, char *text, unsigned bytes);
 void storage_init(void);
 int storage_sync(void);
 

@@ -33,6 +33,12 @@ int vfs_table_init(struct vfs *v, struct vfs_table *t, unsigned drive)
 void vfs_table_destroy(struct vfs_table *t) { storage_call(); CHECK(t->vfs == &fs); }
 int vfs_open(struct vfs_table *t, const char *path, unsigned mode, enum vfs_share share, uint8_t attr)
 { storage_call(); CHECK(t->vfs == &fs && !strcmp(path, BOOTLOG_PATH)); CHECK(mode == (VFS_READ|VFS_WRITE|VFS_CREATE) && share == VFS_DENY_WRITE && !attr); return 1; }
+int vfs_log_rotate(struct vfs_table *t, const char *a, const char *b, const char *c, uint32_t capacity)
+{
+    storage_call(); CHECK(t->vfs==&fs && !strcmp(a,BOOTLOG_PATH) &&
+        !strcmp(b,BOOTLOG_PREVIOUS) && !strcmp(c,BOOTLOG_OLDEST) && capacity==BOOTLOG_LIMIT);
+    return 0; /* Names/chain recovery are tested against real FAT fixtures. */
+}
 int vfs_seek(struct vfs_table *t, int h, int64_t offset, enum vfs_whence whence, uint64_t *at)
 { (void)t; storage_call(); CHECK(h == 1 && whence == VFS_SEEK_SET && offset >= 0 && offset <= BOOTLOG_LIMIT); if (fail_seek) return -FS_EIO; *at = disk_position = (uint32_t)offset; return 0; }
 int vfs_truncate(struct vfs_table *t, int h, uint64_t size)
@@ -131,7 +137,7 @@ static void retention(void)
     reset_model(); CHECK(!memcmp(disk, "FIRST BOOT\n", 11));
     bootlog_capture("NEXT BOOT\n", 10); CHECK(!bootlog_activate(&fs, true, 20));
     CHECK(!bootlog_shutdown() && disk_size == 10 && !memcmp(disk, "NEXT BOOT\n", 10));
-    puts("bootlog: protected pre-mount bytes, periodic routing, 1MiB boundary/two wraps, zero padding, fresh qualified boot/shutdown PASS");
+    puts("bootlog: protected pre-mount bytes, periodic routing, 320KiB boundary/two wraps, zero padding, fresh qualified boot/shutdown PASS");
 }
 static void errors(void)
 {

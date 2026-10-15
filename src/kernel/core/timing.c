@@ -6,6 +6,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/timing.h>
+#include <ciuki/task.h>
 
 uint64_t g_tsc_per_ms;               /* 0 until calibrated */
 static uint64_t crit_start;
@@ -73,7 +74,9 @@ void timing_timer_irq(void)
 
 void timing_calibrate(void)
 {
-    if (!g_cpu_tsc)
+    /* Only boot, before the first dispatch, may perform the PIT measurement.
+     * Runtime calls must never wait or overwrite the calibrated frequency. */
+    if (!g_cpu_tsc || g_tsc_per_ms || g_current || !(read_eflags() & 0x200))
         return;
     uint64_t t0 = g_ticks;
     while (g_ticks == t0)

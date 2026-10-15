@@ -1,4 +1,4 @@
-/* F4-16: 1 MiB log, protected 128 KiB prefix plus a truncation ring.
+/* Three boots within 1 MiB, each with a protected prefix and truncation ring.
  * Deliberately no output calls: a disk failure must never recurse into logs.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/bootlog.h>
@@ -82,10 +82,12 @@ int bootlog_activate(struct vfs *vfs, bool qualified, uint32_t sequence)
     if (e) return failed(e);
     attached = true;
     stats.storage_calls++;
+    e = vfs_log_rotate(&table, BOOTLOG_PATH, BOOTLOG_PREVIOUS, BOOTLOG_OLDEST, BOOTLOG_LIMIT);
+    if (e) return failed(e);
+    stats.storage_calls++;
     handle = vfs_open(&table, BOOTLOG_PATH, VFS_READ | VFS_WRITE | VFS_CREATE, VFS_DENY_WRITE, 0);
     if (handle < 0) { e = handle; handle = -1; return failed(e); }
-    /* A qualified boot owns a fresh file. Read-only/probe reopens never
-     * activate this sink, so they can still recover the previous boot. */
+    /* Previous boots now have separate names and finalized reservations. */
     stats.storage_calls++;
     e = vfs_log_reserve(&table, handle, BOOTLOG_LIMIT);
     if (e) return failed(e);

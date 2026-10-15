@@ -63,6 +63,7 @@
 #include <ciuki/fwinput.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/init.h>
+#include <ciuki/timing.h>
 
 #define DATA_PORT 0x60u
 #define STATUS_PORT 0x64u
@@ -403,8 +404,28 @@ void input_digest_add(struct input_digest *d, const struct input_event *e)
 static uint8_t physical_read(void *arg, uint16_t port)
 {
     (void)arg;
-    if (port == DATA_PORT)
-        (void)udelay(7);                /* IBM Type 1 OBF-to-data delay */
+    if (port == DATA_PORT) {
+        /* IBM OBF-to-data pacing, never a status wait. The generic udelay
+         * escape permits a million clock reads. Do not inherit it into an
+         * IRQ: cap this sampling loop and report an unverified delay once.
+         * The calibrated path finishes after 7 us. A sample above 100 us
+         * or exhaustion of the clock-sampling bound gets a record. */
+        uint64_t target=(g_tsc_per_ms*7+999)/1000;
+        uint64_t bound=(g_tsc_per_ms+9)/10;
+        uint64_t start=ktime_cycles(), elapsed=0;
+        unsigned polls=0;
+        if (target) for (;polls<256;polls++) {
+            elapsed=ktime_cycles()-start;
+            if (elapsed>=target) break;
+        }
+        if (!target || polls==256 || elapsed>bound) {
+            static bool reported;
+            if (!reported) {
+                reported=true;
+                klog("[i8042] pacing reason=clock_bound port=60 bound_us=100 poll_limit=256");
+            }
+        }
+    }
     return inb(port);
 }
 static void physical_write(void *arg, uint16_t port, uint8_t b) { (void)arg; outb(port, b); }

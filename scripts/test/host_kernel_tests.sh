@@ -447,7 +447,7 @@ storage_sources=(
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c"
     "$root/tests/host/fs/fake.c" "$root/tests/host/fs/scan.c"
 )
-for storage_test in test_storage_namespace test_storage; do
+for storage_test in test_storage_namespace test_storage test_log_recovery; do
     clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \
         -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \

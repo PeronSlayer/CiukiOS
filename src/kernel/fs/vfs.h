@@ -76,6 +76,8 @@ int vfs_commit(struct vfs_table *, int);
 int vfs_log_reserve(struct vfs_table *, int, uint32_t capacity);
 int vfs_log_write(struct vfs_table *, int, const void *, size_t, uint32_t logical_size, size_t *done);
 int vfs_log_publish(struct vfs_table *, int, bool finish);
+int vfs_log_rotate(struct vfs_table *, const char *current, const char *previous,
+                   const char *oldest, uint32_t capacity);
 int vfs_stat(struct vfs_table *, const char *, struct fat_entry *);
 int vfs_attrib(struct vfs_table *, const char *, uint8_t attr);
 int vfs_times(struct vfs_table *, const char *, const struct fat_times *);

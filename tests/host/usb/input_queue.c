@@ -10,4 +10,5 @@ static void irq_restore(uint32_t f) { flags = f; }
 static uint8_t inb(uint16_t port) { (void)port; return 0xff; }
 static void outb(uint16_t port, uint8_t value) { (void)port; (void)value; }
 int udelay(uint32_t us) { (void)us; assert(!"unexpected physical i8042 access"); return -EINVAL; }
+uint64_t ktime_cycles(void) { assert(!"unexpected physical i8042 clock access"); return 0; }
 #include "../../../src/kernel/drivers/i8042.c"

@@ -16,6 +16,7 @@ static uint16_t uart_base;
 static bool uart_ok;
 static unsigned uart_timeouts;
 #define UART_LOG_BYTES 65536u
+#define UART_RECORD_BYTES (2u * SERIAL_RECORD_MAX)
 static char uart_log[UART_LOG_BYTES];
 static unsigned uart_head, uart_used, uart_dropped;
 static bool uart_buffering, uart_drop_notice, uart_panic_mode;
@@ -136,7 +137,7 @@ void serial_write(const char *s, size_t n)
     /* Count/expand outside the IRQ lock. Current record producers are
      * bounded; an oversized caller is dropped before inspecting its bytes. */
     size_t bytes = n;
-    if (n <= UART_LOG_BYTES)
+    if (n <= SERIAL_RECORD_MAX)
         for (size_t i = 0; i < n; i++) if (s[i] == '\n') bytes++;
     uint32_t flags = irq_save();
     if ((flags & 0x200) && crit_label) crit_label("serial_queue");
@@ -147,7 +148,7 @@ void serial_write(const char *s, size_t n)
     /* Append a whole record under one lock, including CRLF expansion.
      * Physical IF clear also describes ordinary IRQ/critical-section logs:
      * playback must queue those without waiting for the UART. */
-    if (bytes > UART_LOG_BYTES - uart_used) {
+    if (n > SERIAL_RECORD_MAX || bytes > UART_RECORD_BYTES || bytes > UART_LOG_BYTES - uart_used) {
         uart_dropped++;
         uart_drop_notice = true;
     } else for (size_t i = 0; i < n; i++) {

@@ -452,7 +452,11 @@ int storage_writeback(struct storage *s, uint32_t now)
         struct storage_volume *v = &s->volumes[d];
         if (!v->present || !v->fat.mounted) continue;
         int error = cache_error(&s->cache, &v->io);
-        if (error) { v->fat.readonly = true; v->fat.ro_reasons |= FAT_RO_WRITE_ERROR; }
+        if (error) {
+            v->fat.ro_reasons |= FAT_RO_WRITE_ERROR;
+            v->fat.operation_file[0]=0; /* delayed cache error has no file owner */
+            fat_revoke_write(&v->fat,"writeback_error",0);
+        }
     }
     fs_lock_drop(&s->vfs.lock);
     return e;
@@ -496,6 +500,17 @@ void storage_destroy(struct storage *s)
     vfs_destroy(&s->vfs); cache_destroy(&s->cache); s->ready = false;
 }
 struct storage *storage_get(void) { return &system_storage; }
+bool storage_readonly_info(unsigned drive, char *text, unsigned bytes)
+{
+    if (!text || !bytes || drive>=26 || !system_storage.ready) return false;
+    const struct storage_volume *v=&system_storage.volumes[drive];
+    if (!v->present || !v->fat.readonly) return false;
+    /* An intentional read-only probe/reopen is not a failed write gate. */
+    if (v->fat.ro_reasons==FAT_RO_REQUEST && !v->fat.readonly_reason) return false;
+    ksnprintf(text,bytes,"%s; cluster=%u; file=%s",fat_readonly_reason(&v->fat),
+        v->fat.readonly_cluster,v->fat.readonly_file[0] ? v->fat.readonly_file : "volume");
+    return true;
+}
 
 int storage_boot_cfg(struct storage *s, const char *request)
 {

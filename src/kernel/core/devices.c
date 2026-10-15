@@ -21,6 +21,7 @@
  * Keeping these out of the 16 KiB task stack also avoids heap size limits. */
 static struct registry_inventory_copy inventory;
 static struct ciuki_devices_info query_buffer;
+extern bool storage_readonly_info(unsigned, char *, unsigned) __attribute__((weak));
 
 static void string(char *out, unsigned size, const char *in)
 {
@@ -248,6 +249,16 @@ void devices_snapshot(struct ciuki_devices_info *out)
     string(out->boot_options, sizeof(out->boot_options), g_boot.options);
     uint32_t f = irq_save(); out->uptime_ms = g_ticks; irq_restore(f);
     cpu_info(out);
+    /* Preserve the fixed ABI: read-only volumes use ordinary inventory rows.
+     * Reasons come from the live retained cause, not the boot ledger. */
+    if (storage_readonly_info) for (unsigned drive=2;drive<26;drive++) {
+        char reason[80], name[]="C: read-only volume";
+        if (!storage_readonly_info(drive,reason,sizeof(reason))) continue;
+        name[0]=(char)('A'+drive);
+        append(out,0x41000+drive,CIUKI_DEVICE_DISK,CIUKI_BUS_LOADER,name,"fat",
+            CIUKI_DEVICE_QUARANTINED,reason);
+    }
+
     struct drivers_state state; drivers_snapshot(&state);
     struct i8042_stats input; i8042_snapshot(&input);
     for (unsigned k = 0; k < inventory.resource_count; k++) {

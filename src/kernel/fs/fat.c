@@ -8,15 +8,48 @@ static uint32_t cleanbit(struct fat_volume *v) { return v->type==16 ? 0x8000 : v
 static uint32_t errorbit(struct fat_volume *v) { return cleanbit(v)>>1; }
 static bool valid(struct fat_volume *v, uint32_t c) { return c>=2 && c<v->clusters+2; }
 static bool eoc(struct fat_volume *v, uint32_t c) { return c>=(mask(v)-7); }
-static int corrupt(struct fat_volume *v) { v->readonly=true; v->ro_reasons|=FAT_RO_CORRUPT; v->diagnostic="chain/directory corruption"; return -FS_EUCLEAN; }
+extern void klog(const char *, ...) __attribute__((weak));
+static void context(struct fat_volume *v, const char *file) {
+    unsigned i=0;
+    if (file) for (;i+1<sizeof(v->operation_file) && file[i];i++)
+        v->operation_file[i]=(uint8_t)file[i]<=32 ? '_' : file[i];
+    v->operation_file[i]=0;
+}
+const char *fat_readonly_reason(const struct fat_volume *v) {
+    if (v->readonly_reason) return v->readonly_reason;
+    uint32_t r=v->ro_reasons;
+    return r&FAT_RO_CORRUPT ? "backup_bpb" : r&FAT_RO_COPIES ? "fat_copies" :
+        r&FAT_RO_IO_FLAG ? "io_flag" : r&FAT_RO_LOST ? "lost_clusters" :
+        r&FAT_RO_WRITE_ERROR ? "write_error" : r&FAT_RO_ACTIVE_ONLY ? "active_fat_only" :
+        r&FAT_RO_DURABILITY ? "durability" : r&FAT_RO_DIRTY ? "dirty" : "requested";
+}
+void fat_revoke_write(struct fat_volume *v, const char *reason, uint32_t cluster) {
+    v->readonly=true;
+    if (v->readonly_reason) return;
+    v->readonly_reason=reason;
+    memcpy(v->readonly_file,v->operation_file,sizeof(v->readonly_file));
+    v->readonly_cluster=cluster;
+    v->diagnostic=reason;
+    if (klog) klog("[storage] readonly reason=%s file=%s cluster=%u",
+        reason,v->readonly_file[0] ? v->readonly_file : "volume",cluster);
+}
+static int corrupt(struct fat_volume *v, const char *reason, uint32_t cluster) {
+    v->ro_reasons|=FAT_RO_CORRUPT;
+    fat_revoke_write(v,reason,cluster);
+    return -FS_EUCLEAN;
+}
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     if (file_read_cancelled && file_read_cancelled()) return -4; /* EINTR, before issuance */
-    if (s>=v->sectors) return corrupt(v);
+    if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
     int e=v->preparing ? v->dev->read(v->dev,v->start+s,1,b) : cache_read(v->cache,v->dev,v->start+s,b);
+    if (e && (e==-FS_EQUARANTINED || v->dev->quarantined)) {
+        v->ro_reasons|=FAT_RO_WRITE_ERROR;
+        fat_revoke_write(v,"device_quarantined",0);
+    }
     return e ? (e==-FS_EQUARANTINED ? -FS_EIO : e) : 0;
 }
 static int write_error(struct fat_volume *v, int e) {
-    if (e) { v->readonly=true; v->ro_reasons|=FAT_RO_WRITE_ERROR; v->diagnostic="metadata/data durability failure"; }
+    if (e) { v->ro_reasons|=FAT_RO_WRITE_ERROR; fat_revoke_write(v,"write_error",0); }
     return e;
 }
 static int writable(struct fat_volume *v) {
@@ -26,7 +59,7 @@ static int writable(struct fat_volume *v) {
     return 0;
 }
 static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
-    if (s>=v->sectors) return corrupt(v);
+    if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
     return write_error(v,v->preparing ? v->dev->write(v->dev,v->start+s,1,b) : cache_write(v->cache,v->dev,v->start+s,b));
 }
 static int barrier(struct fat_volume *v) {
@@ -48,7 +81,7 @@ static int fat_bytes(struct fat_volume *v, unsigned copy, uint32_t off, uint8_t 
     return 0;
 }
 int fat_get_cluster(struct fat_volume *v, uint32_t c, uint32_t *out) {
-    if (c>=v->clusters+2) return corrupt(v);
+    if (c>=v->clusters+2) return corrupt(v,"fat_bounds",c);
     uint8_t b[4]; int e=fat_bytes(v,v->active_fat,offset(v,c),b,v->type==32 ? 4 : 2,false); if (e) return e;
     uint32_t x=v->type==32 ? fs_rd32(b) : fs_rd16(b);
     if (v->type==12 && (c&1)) x>>=4;
@@ -85,12 +118,12 @@ static int set_clean(struct fat_volume *v, bool clean) {
 }
 static uint32_t cluster_sector(struct fat_volume *v, uint32_t c) { return v->data_sector+(c-2)*v->spc; }
 static int chain_at(struct fat_volume *v, uint32_t first, uint32_t index, uint32_t *out) {
-    if (index>=v->clusters || !valid(v,first)) return corrupt(v);
+    if (index>=v->clusters || !valid(v,first)) return corrupt(v,"chain_bounds",first);
     uint32_t c=first;
     for (uint32_t i=0;i<index;i++) {
         uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
         if (eoc(v,n)) return -FS_ENOENT;
-        if (!valid(v,n)) return corrupt(v);
+        if (!valid(v,n)) return corrupt(v,"chain_link",n);
         c=n;
     }
     *out=c; return 0;
@@ -157,7 +190,7 @@ int fat_next(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_en
         }
         if (b[11]&FAT_ATTR_VOLUME) { if (total) v->lfn_orphans++; expected=total=0; continue; }
         memset(entry,0,sizeof(*entry)); entry->parent=dir; entry->index=i; entry->lfn_index=i;
-        if ((e=alias_decode(b,entry->alias))) return corrupt(v);
+        if ((e=alias_decode(b,entry->alias))) return corrupt(v,"directory_alias",dir);
         memcpy(entry->name,entry->alias,strlen(entry->alias)+1);
         if (total && !expected && sum==checksum(b)) {
             unsigned n=0; while (n<total*13 && name[n] && name[n]!=0xffff) n++;
@@ -170,9 +203,20 @@ int fat_next(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_en
         }
         decode_entry(v,b,entry); return 0;
     }
-    return (!dir && v->type!=32) ? -FS_ENOENT : corrupt(v);
+    if (!dir && v->type!=32) return -FS_ENOENT;
+    /* A directory may fill the entire available chain without a 00 slot.
+     * Reaching the walk bound is not proof of a cycle: verify its last link.
+     * The cursor cannot represent larger directories; that is a capability
+     * limit, not evidence of damaged allocation. */
+    if (limit==UINT32_MAX) return -FS_EOPNOTSUPP;
+    uint32_t c,n;
+    int e=chain_at(v,dir ? dir : v->root,(uint32_t)(limit-1)/(16u*v->spc),&c);
+    if (e) return e;
+    if ((e=fat_get_cluster(v,c,&n))) return e;
+    return eoc(v,n) ? -FS_ENOENT : corrupt(v,"directory_limit",c);
 }
 int fat_lookup(struct fat_volume *v, uint32_t dir, const char *name, struct fat_entry *e) {
+    context(v,name);
     uint32_t i=0; int err;
     while (!(err=fat_next(v,dir,&i,e))) if (path_equal(name,e->name) || path_equal(name,e->alias)) return 0;
     return err;
@@ -192,15 +236,15 @@ static int hints(struct fat_volume *v) {
 }
 static int release_chain(struct fat_volume *v, uint32_t c) {
     for (uint32_t i=0;c && i<v->clusters;i++) {
-        if (!valid(v,c)) return corrupt(v);
+        if (!valid(v,c)) return corrupt(v,"chain_bounds",c);
         uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return write_error(v,e);
-        if (!eoc(v,n) && !valid(v,n)) return corrupt(v);
+        if (!eoc(v,n) && !valid(v,n)) return corrupt(v,"chain_link",n);
         if ((e=set_cluster(v,c,0))) return e;
         v->free_clusters++; if (c<v->next_free) v->next_free=c;
         if (eoc(v,n)) return barrier(v);
         c=n;
     }
-    return c ? corrupt(v) : 0;
+    return c ? corrupt(v,"chain_cycle",c) : 0;
 }
 static bool split12(struct fat_volume *v, uint32_t c) { return v->type==12 && offset(v,c)%512==511; }
 static int allocate(struct fat_volume *v, uint32_t n, bool directory, uint32_t *first) {
@@ -226,9 +270,9 @@ static int zero_chain(struct fat_volume *v, uint32_t c) {
     for (uint32_t i=0;i<v->clusters;i++) {
         for (unsigned s=0;s<v->spc;s++) { int e=writesec(v,cluster_sector(v,c)+s,b); if (e) return e; }
         uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return write_error(v,e);
-        if (eoc(v,n)) return barrier(v); if (!valid(v,n)) return corrupt(v); c=n;
+        if (eoc(v,n)) return barrier(v); if (!valid(v,n)) return corrupt(v,"chain_link",n); c=n;
     }
-    return corrupt(v);
+    return corrupt(v,"chain_cycle",c);
 }
 static int grow_directory(struct fat_volume *v, uint32_t dir) {
     if (!dir && v->type!=32) return -FS_ENOSPC;
@@ -245,9 +289,9 @@ static int grow_directory(struct fat_volume *v, uint32_t dir) {
             if ((e=set_cluster(v,c,newc))) return e;
             return barrier(v);
         }
-        if (!valid(v,n)) return corrupt(v); c=n;
+        if (!valid(v,n)) return corrupt(v,"chain_link",n); c=n;
     }
-    return corrupt(v);
+    return corrupt(v,"chain_cycle",c);
 }
 static int slots(struct fat_volume *v, uint32_t dir, unsigned need, uint32_t *start) {
     uint32_t run=0, first_zero=0; bool end=false;
@@ -349,6 +393,7 @@ static int unlink_entry(struct fat_volume *v, const struct fat_entry *e) {
     return barrier(v);
 }
 int fat_create(struct fat_volume *v, uint32_t dir, const char *name, uint8_t attr, struct fat_entry *out) {
+    context(v,name);
     int e=writable(v); if (e) return e;
     if (attr&~0x37u) return -FS_EINVAL;
     uint16_t u[256]; unsigned n; if ((e=path_validate_name(name,u,&n))) return e;
@@ -374,6 +419,7 @@ int fat_create(struct fat_volume *v, uint32_t dir, const char *name, uint8_t att
     return hints(v);
 }
 int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, void *buf, size_t size, size_t *done) {
+    context(v,file->name);
     *done=0; if (!buf && size) return -FS_EINVAL;
     if (file->attr&FAT_ATTR_DIR) return -FS_EISDIR;
     if (pos>=file->size || !size) return 0;
@@ -400,19 +446,25 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
                 if (n==limit) break;
                 uint32_t next;
                 if ((e=fat_get_cluster(v,c,&next))) return e;
-                if (!valid(v,next) || walked+1>=v->clusters) return corrupt(v);
+                if (!valid(v,next) || walked+1>=v->clusters) return corrupt(v,"read_chain",next);
                 if (next!=c+1) break;
                 walked++; c=next; off=0;
             }
             if (file_read_cancelled && file_read_cancelled()) return -4;
-            if (sector>=v->sectors || n>v->sectors-sector) return corrupt(v);
+            if (sector>=v->sectors || n>v->sectors-sector) return corrupt(v,"read_bounds",c);
             e=cache_read_run(v->cache,v->dev,v->start+sector,n,(uint8_t *)buf+*done);
-            if (e) return e==-FS_EQUARANTINED ? -FS_EIO : e;
+            if (e) {
+                if (e==-FS_EQUARANTINED || v->dev->quarantined) {
+                    v->ro_reasons|=FAT_RO_WRITE_ERROR;
+                    fat_revoke_write(v,"device_quarantined",c);
+                }
+                return e==-FS_EQUARANTINED ? -FS_EIO : e;
+            }
             *done+=n*512; size-=n*512;
         }
         if (off==cluster_bytes && size) {
             uint32_t next; if ((e=fat_get_cluster(v,c,&next))) return e;
-            if (!valid(v,next) || ++walked>=v->clusters) return corrupt(v); c=next; off=0;
+            if (!valid(v,next) || ++walked>=v->clusters) return corrupt(v,"read_chain",next); c=next; off=0;
         }
     }
     return 0;
@@ -427,7 +479,7 @@ static int replace(struct fat_volume *v, struct fat_entry *file, uint32_t size, 
         for (unsigned s=0;s<v->spc;s++,at+=512) {
             uint8_t b[512]; memset(b,0,sizeof(b));
             if (at<size && at<file->size) {
-                if (!valid(v,oldc)) { e=corrupt(v); goto abandon; }
+                if (!valid(v,oldc)) { e=corrupt(v,"replace_chain",oldc); goto abandon; }
                 if ((e=readsec(v,cluster_sector(v,oldc)+s,b))) goto abandon;
                 uint64_t keep=file->size<size ? file->size : size;
                 if (at+512>keep) memset(b+(size_t)(keep-at),0,(size_t)(at+512-keep));
@@ -439,10 +491,10 @@ static int replace(struct fat_volume *v, struct fat_entry *file, uint32_t size, 
         if (i+1<count) {
             uint32_t next;
             if ((e=fat_get_cluster(v,c,&next))) goto abandon;
-            if (!valid(v,next)) { e=corrupt(v); goto abandon; } c=next;
+            if (!valid(v,next)) { e=corrupt(v,"replace_destination",next); goto abandon; } c=next;
             if (at<file->size) {
                 if ((e=fat_get_cluster(v,oldc,&next))) goto abandon;
-                if (!valid(v,next)) { e=corrupt(v); goto abandon; } oldc=next;
+                if (!valid(v,next)) { e=corrupt(v,"replace_source",next); goto abandon; } oldc=next;
             }
         }
     }
@@ -458,6 +510,7 @@ abandon:
     return write_error(v,e);
 }
 int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const void *data, size_t size, size_t *done) {
+    context(v,file->name);
     *done=0; int e=writable(v); if (e) return e;
     if (file->attr&FAT_ATTR_DIR) return -FS_EISDIR;
     if (file->attr&FAT_ATTR_RO) return -FS_EACCES;
@@ -468,14 +521,17 @@ int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const 
     e=replace(v,file,end,pos,data,size); if (!e) *done=size; return e;
 }
 int fat_truncate(struct fat_volume *v, struct fat_entry *file, uint64_t size) {
+    context(v,file->name);
     int e=writable(v); if (e) return e;
     if (file->attr&FAT_ATTR_DIR) return -FS_EISDIR; if (file->attr&FAT_ATTR_RO) return -FS_EACCES;
     if (size>UINT32_MAX) return -FS_EFBIG;
-    if (size==file->size) return 0;
+    /* A zero-length reserved file may still own its entire crash tail. */
+    if (size==file->size && (size || !file->first)) return 0;
     return replace(v,file,(uint32_t)size,0,0,0);
 }
 int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint32_t capacity,
                        uint64_t pos, const void *data, size_t size, size_t *done) {
+    context(v,file->name);
     *done=0; int e=writable(v); if (e) return e;
     if (file->attr&(FAT_ATTR_RO|FAT_ATTR_DIR)) return -FS_EACCES;
     if ((!data && size) || pos>capacity || size>capacity-pos || (pos&511) || (size&511)) return -FS_EINVAL;
@@ -488,7 +544,7 @@ int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint3
         *done+=512; off+=512;
         if (off==cb && *done<size) {
             uint32_t next; if ((e=fat_get_cluster(v,c,&next))) return e;
-            if (!valid(v,next)) return corrupt(v);
+            if (!valid(v,next)) return corrupt(v,"reserved_chain",next);
             c=next; off=0;
         }
     }
@@ -497,6 +553,7 @@ int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint3
     return barrier(v);
 }
 int fat_publish_reserved(struct fat_volume *v, struct fat_entry *file, bool finish) {
+    context(v,file->name);
     int e=writable(v); if (e) return e;
     if ((e=barrier(v))) return e;
     uint8_t tenths;
@@ -509,7 +566,7 @@ int fat_publish_reserved(struct fat_volume *v, struct fat_entry *file, bool fini
         if ((e=chain_at(v,file->first,(file->size-1)/cb,&last))) return e;
         if ((e=fat_get_cluster(v,last,&tail))) return e;
         if (eoc(v,tail)) tail=0;
-        else if (!valid(v,tail)) return corrupt(v);
+        else if (!valid(v,tail)) return corrupt(v,"reserved_tail",tail);
     } else file->first=0;
     /* Publish the smaller length before unlinking the reserved tail. A
      * crash between these barriers leaves owned excess, never a short chain. */
@@ -521,6 +578,7 @@ int fat_publish_reserved(struct fat_volume *v, struct fat_entry *file, bool fini
     return tail ? hints(v) : 0;
 }
 int fat_remove(struct fat_volume *v, struct fat_entry *file, bool directory) {
+    context(v,file->name);
     int e=writable(v); if (e) return e;
     if (!!(file->attr&FAT_ATTR_DIR)!=directory) return directory ? -FS_ENOTDIR : -FS_EISDIR;
     if (file->attr&FAT_ATTR_RO) return -FS_EACCES;
@@ -533,6 +591,7 @@ int fat_remove(struct fat_volume *v, struct fat_entry *file, bool directory) {
     return hints(v);
 }
 int fat_rename(struct fat_volume *v, struct fat_entry *file, uint32_t parent, const char *name) {
+    context(v,file->name);
     int e=writable(v); if (e) return e;
     if (file->attr&FAT_ATTR_RO) return -FS_EACCES;
     uint16_t u[256]; unsigned n; if ((e=path_validate_name(name,u,&n))) return e;
@@ -619,6 +678,7 @@ int fat_rename_replace(struct fat_volume *v, struct fat_entry *file,
     return hints(v);
 }
 int fat_set_metadata(struct fat_volume *v, struct fat_entry *file, uint8_t attr, const struct fat_times *times) {
+    context(v,file->name);
     int e=writable(v); if (e) return e;
     if ((attr&~0x37u) || ((attr^file->attr)&FAT_ATTR_DIR)) return -FS_EINVAL;
     struct fat_entry changed=*file; changed.attr=attr; if (times) changed.times=*times;
@@ -626,27 +686,28 @@ int fat_set_metadata(struct fat_volume *v, struct fat_entry *file, uint8_t attr,
 }
 static uint8_t *scan_byte(struct fat_volume *v, uint32_t c) { return cache_workspace_byte(v->cache,c); }
 static int scan_chain(struct fat_volume *v, uint32_t first, uint32_t size, bool dir) {
-    if (!first) return size || dir ? corrupt(v) : 0;
+    if (!first) return size || dir ? corrupt(v,"missing_chain",first) : 0;
     uint32_t c=first, length=0;
     for (;length<v->clusters;length++) {
-        if (!valid(v,c) || (*scan_byte(v,c)&1)) return corrupt(v);
+        if (!valid(v,c) || (*scan_byte(v,c)&1)) return corrupt(v,"chain_owner",c);
         *scan_byte(v,c)|=1;
         uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
         if (eoc(v,n)) {
-            if ((uint64_t)(length+1)*v->spc*512<size) return corrupt(v);
+            if ((uint64_t)(length+1)*v->spc*512<size) return corrupt(v,"short_chain",c);
             if (dir) *scan_byte(v,first)|=2;
             return 0;
         }
-        if (!valid(v,n)) return corrupt(v);
+        if (!valid(v,n)) return corrupt(v,"chain_link",n);
         c=n;
     }
-    return corrupt(v);
+    return corrupt(v,"chain_cycle",c);
 }
 static int scan_dir(struct fat_volume *v, uint32_t dir) {
     uint32_t i=0; struct fat_entry file; int e;
     while (!(e=fat_next(v,dir,&i,&file))) {
         if (path_equal(file.alias,".") || path_equal(file.alias,"..")) continue;
-        if (file.attr&0xc0) return corrupt(v);
+        context(v,file.name);
+        if (file.attr&0xc0) return corrupt(v,"directory_attributes",file.first);
         if ((e=scan_chain(v,file.first,file.size,(file.attr&FAT_ATTR_DIR)!=0))) return e;
     }
     return e==-FS_ENOENT ? 0 : e;
@@ -654,6 +715,7 @@ static int scan_dir(struct fat_volume *v, uint32_t dir) {
 int fat_scan(struct fat_volume *v) {
     int e=cache_workspace_begin(v->cache,v->clusters+2); if (e) { v->diagnostic="cache scan workspace too small"; return e; }
     v->lost_clusters=0; v->free_clusters=0; v->next_free=2;
+    context(v,0);uint32_t first_lost=0;
     if (v->type==32) e=scan_chain(v,v->root,0,true); else e=scan_dir(v,0);
     if (e) goto out;
     bool more=true;
@@ -669,9 +731,9 @@ int fat_scan(struct fat_volume *v) {
     for (uint32_t c=2;c<v->clusters+2;c++) {
         uint32_t val; if ((e=fat_get_cluster(v,c,&val))) goto out;
         if (!val) { if (!v->free_clusters) v->next_free=c; v->free_clusters++; }
-        else if (val!=mask(v)-8 && !(*scan_byte(v,c)&1)) v->lost_clusters++;
+        else if (val!=mask(v)-8 && !(*scan_byte(v,c)&1)) { if (!first_lost) first_lost=c; v->lost_clusters++; }
     }
-    if (v->lost_clusters) { v->readonly=true; v->ro_reasons|=FAT_RO_LOST; v->diagnostic="lost allocated clusters"; }
+    if (v->lost_clusters) { context(v,0); v->ro_reasons|=FAT_RO_LOST; fat_revoke_write(v,"lost_clusters",first_lost); }
 out:
     cache_workspace_end(v->cache); return e;
 }
@@ -732,7 +794,10 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
     e=fat_scan(v);
     if (e && e!=-FS_EUCLEAN) { v->mounted=false; return e; }
     if (v->ro_reasons) v->readonly=true;
-    v->diagnostic=v->readonly ? "read-only; inspect ro_reasons" : "validated writable mount";
+    if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DIRTY)) {
+        context(v,0);fat_revoke_write(v,fat_readonly_reason(v),0);
+    }
+    if (!v->readonly_reason) v->diagnostic=v->readonly ? "read-only; inspect ro_reasons" : "validated writable mount";
     if (!v->readonly || (wr && v->ro_reasons==FAT_RO_DIRTY)) return fat_enable_write(v);
     return 0;
 }
@@ -744,14 +809,20 @@ int fat_prepare(struct fat_volume *v, struct block_cache *cache, struct blkdev *
 }
 int fat_enable_write(struct fat_volume *v) {
     if (!v || !v->mounted) return -FS_EINVAL;
+    context(v,0);
     int e=v->preparing ? (v->dev->quarantined ? -FS_EIO : 0) : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
     if (!v->readonly && v->writable_session) return 0;
-    if (!blkdev_durable(v->dev)) { v->ro_reasons|=FAT_RO_DURABILITY; return -FS_EROFS; }
+    if (!blkdev_durable(v->dev)) {
+        v->ro_reasons|=FAT_RO_DURABILITY;fat_revoke_write(v,"durability",0);return -FS_EROFS;
+    }
     if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY)) return -FS_EROFS;
     if (v->ro_reasons&FAT_RO_DIRTY) {
         if ((e=set_clean(v,true))) return e;
         v->ro_reasons&=~FAT_RO_DIRTY; v->dirty_recovered=true;
     }
+    /* A permitted durability/dirty upgrade starts a new writable session;
+     * its later first failure must not inherit the former closed gate. */
+    v->readonly_reason=0;v->readonly_file[0]=0;v->readonly_cluster=0;
     v->ro_reasons=0; v->readonly=false; v->writable_session=true;
     if ((e=set_clean(v,false))) return e;
     v->diagnostic=v->dirty_recovered ? "dirty_recovered" : "read gate passed; writable";

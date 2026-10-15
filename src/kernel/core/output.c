@@ -36,7 +36,8 @@ static void log_line(const char *fmt, va_list ap, bool periodic)
     buf[n + 1] = 0;
     if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
     else bootlog_capture(buf, (size_t)n + 1);
-    kputs_raw(buf);
+    serial_write(buf, (size_t)n + 1);
+    console_write(buf, (size_t)n + 1);
 }
 
 void klog(const char *fmt, ...)
@@ -85,7 +86,8 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
         if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
         else bootlog_capture(buf, (size_t)n + 1);
     }
-    kputs_raw(buf);
+    serial_write(buf, (size_t)n + 1);
+    console_write(buf, (size_t)n + 1);
 }
 
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
