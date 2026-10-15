@@ -47,7 +47,7 @@ typedef struct cvga_state {
     uint8_t plane[4][CVGA_PLANE_SIZE];
     uint8_t latch[4];
     uint8_t seq[5], gc[9], crtc[25], attr[21];
-    uint8_t dac[256][3];              /* six bits per component */
+    uint8_t dac[256][3];              /* guest: six bits; native snapshot: six/eight */
     uint8_t seq_index, gc_index, crtc_index, attr_index, attr_data_phase;
     uint8_t misc, feature, enable;
     uint8_t dac_mask, dac_index, dac_component, dac_read_mode;

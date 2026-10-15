@@ -7,9 +7,15 @@
 #include <ciuki/registry.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/blackbox.h>
+#include <ciuki/supersavage_display.h>
 
 static bool switching, awaiting_frame;
 static bool fullscreen_display;
+static bool fullscreen_native;
+static bool awaiting_native_frame;
+static bool fullscreen_return_timed;
+static uint64_t fullscreen_return_tick;
 extern void dosvm_fullscreen_poll(void) __attribute__((weak));
 static uint32_t changes;
 static uint64_t frame_deadline;
@@ -29,6 +35,9 @@ int display_fullscreen_checkpoint(const char *step, int result)
     struct bootlog_stats stats;
     bootlog_snapshot(&stats);
     int e=stats.active ? bootlog_sync(checkpoint_cancel,checkpoint_pause,0) : -EIO;
+    /* The reserved-sector trail must survive a failed FAT/firmware path too. */
+    int raw=blackbox_checkpoint();
+    if (!e) e=raw;
     if (e) klog("[display] fullscreen_log error=%d step=%s",e,step);
     return e;
 }
@@ -138,8 +147,19 @@ int display_check_end(void)
 
 void display_frame_complete(uint32_t generation)
 {
-    if (!switching && awaiting_frame && generation == fbdev_get()->generation && !deadline_passed(frame_deadline))
+    if (!switching && awaiting_frame && generation == fbdev_get()->generation && !deadline_passed(frame_deadline)) {
+        if (awaiting_native_frame && fullscreen_return_timed)
+            klog("[display] native_supersavage desktop_frame_ms=%llu budget_ms=200",g_ticks-fullscreen_return_tick);
         awaiting_frame = false;
+        awaiting_native_frame = false;
+    }
+}
+void display_fullscreen_return_request(void)
+{
+    /* Input/stop paths can call from IRQ context: only publish the clock. */
+    if (fullscreen_display && !fullscreen_return_timed) {
+        fullscreen_return_tick=g_ticks; fullscreen_return_timed=true;
+    }
 }
 
 void display_watchdog_poll(void)
@@ -149,13 +169,21 @@ void display_watchdog_poll(void)
     if (!awaiting_frame || switching || !deadline_passed(frame_deadline) || grants_display_busy()) return;
     switching = true;
     awaiting_frame = false;
-    if (!fbdev_change_begin()) { restore(); fbdev_change_end(); }
+    if (awaiting_native_frame) {
+        /* The native provider already restored and verified scanout. A
+         * missing desktop repaint cannot authorize a quarantined BIOS call. */
+        klog("[display] native_supersavage desktop_frame_timeout");
+        awaiting_native_frame=false;
+    } else if (!fbdev_change_begin()) { restore(); fbdev_change_end(); }
     switching = false;
 }
 static void watchdog_main(void *arg)
 {
     (void)arg;
-    for (;;) { task_sleep_ms(100); display_watchdog_poll(); }
+    for (;;) {
+        task_sleep_ms(fullscreen_display || awaiting_native_frame ? 10 : 100);
+        display_watchdog_poll();
+    }
 }
 /* f3-21: the worker also services queued DOS full-screen requests
  * (dosvm_fullscreen_poll); the input filter cannot create it from IRQ
@@ -194,6 +222,7 @@ int display_set(struct process *p, uint16_t id)
         else {
             changed();
             awaiting_frame = true;
+            awaiting_native_frame = false;
             frame_deadline = deadline_after_ms(10000);
         }
         fbdev_change_end();
@@ -221,7 +250,7 @@ int32_t display_syscall(struct trap_frame *tf)
 }
 
 bool display_fullscreen_active(void) { return fullscreen_display; }
-int display_fullscreen_begin(uint8_t mode)
+int display_fullscreen_begin(uint16_t mode)
 {
     int logged=display_fullscreen_checkpoint("request",0);
     if (logged) return logged;
@@ -244,22 +273,24 @@ int display_fullscreen_begin(uint8_t mode)
             (unsigned)fbdev_get()->present,(unsigned)fbdev_get()->mode_id);
         return -EOPNOTSUPP;
     }
-    /* The standard VGA transport cannot save the mobile panel/PLL/streams.
-     * A denied BIOS dependency disables the backend, including rollback.
-     * Refuse before grants, acceleration or the firmware can alter scanout.
-     * See docs/design/savage-2d.md, f3-26. Never guess CR67/CR69 settings. */
+    bool native=false;
     for (unsigned i=0;i<pci_count();i++) {
         const struct pci_func *p=pci_get(i);
         if (p && p->class_code==3 && p->vendor==0x5333 && p->device==0x8C2E) {
-            klog("[display] fullscreen_refused reason=supersavage-recovery-unavailable pci=5333:8c2e mode=%u",mode);
-            display_fullscreen_checkpoint("refused",-EOPNOTSUPP);
-            return -EOPNOTSUPP;
+            int e=supersavage_display_prepare(fbdev_get(),mode);
+            if (e) {
+                klog("[display] fullscreen_refused reason=supersavage-recovery-unavailable pci=5333:8c2e mode=%u error=%d",mode,e);
+                display_fullscreen_checkpoint("refused",e);
+                return e;
+            }
+            native=true;
         }
     }
     if (display_worker_start()) return -ENOMEM;
+    if (!native && mode>0x7F) return -EOPNOTSUPP;
     switching=true;
     previous=*fbdev_get();
-    int e=biosvm_video_prepare();
+    int e=native ? 0 : biosvm_video_prepare();
     if (e) { switching=false; return -EIO; }
     e=display_fullscreen_checkpoint("grant-suspend",0);
     if (e) { switching=false; return e; }
@@ -269,11 +300,18 @@ int display_fullscreen_begin(uint8_t mode)
     if (e) { grants_display_suspend(false); switching=false; return e; }
     e=fbdev_change_begin();
     if (e) { grants_display_suspend(false); switching=false; return e; }
-    e=biosvm_video_fullscreen_begin(mode);
+    fullscreen_native=native;
+    fullscreen_return_timed=false;
+    e=native ? supersavage_display_begin(mode) : biosvm_video_fullscreen_begin((uint8_t)mode);
     fullscreen_display=true; /* also brackets rollback of a partially set mode */
     switching=false;
-    if (e) { display_fullscreen_end(); return -EIO; }
-    klog("[display] fullscreen=1 mode=%u desktop_mode=%u",mode,previous.mode_id);
+    if (e) {
+        if (native && e==-EOPNOTSUPP)
+            klog("[display] fullscreen_refused reason=supersavage-recovery-unavailable mode=%u",mode);
+        int restored=display_fullscreen_end();
+        return restored ? restored : e;
+    }
+    klog("[display] fullscreen=1 mode=%u desktop_mode=%u provider=%s",mode,previous.mode_id,native ? "supersavage-native" : "firmware-vga");
     return 0;
 }
 int display_fullscreen_end(void)
@@ -281,26 +319,38 @@ int display_fullscreen_end(void)
     if (!fullscreen_display) return 0;
     if (switching) return -EBUSY;
     switching=true;
+    display_fullscreen_return_request();
     /* Logging failure must never prevent an already needed recovery. */
     display_fullscreen_checkpoint("desktop-restore",0);
     uint8_t info[256]; struct fb_device next;
-    int e=biosvm_video_fullscreen_end(previous.mode_id,info);
-    if (!e) e=fbdev_mode_decode(previous.mode_id,info,&next);
+    int e;
+    if (fullscreen_native) {
+        e=supersavage_display_end();
+        next=previous; /* exact saved layout; no firmware query or fallback */
+    } else {
+        e=biosvm_video_fullscreen_end(previous.mode_id,info);
+        if (!e) e=fbdev_mode_decode(previous.mode_id,info,&next);
+    }
     if (!e && (next.width!=previous.width || next.height!=previous.height ||
                next.pitch!=previous.pitch || next.bpp!=previous.bpp || next.phys!=previous.phys)) e=-EIO;
     if (!e) e=fbdev_change_commit(&next);
     /* If exact firmware restoration fails, try the existing confirmed-mode
      * recovery. A failed recovery leaves mappings unavailable, never guessed. */
-    if (e) {
+    if (e && !fullscreen_native) {
         int recovery=restore();
         klog("[display] fullscreen_restore error=%d recovery=%d",e,recovery);
         e=recovery;
     }
     fbdev_change_end();
+    bool native=fullscreen_native;
     fullscreen_display=false;
+    fullscreen_native=false;
     grants_display_suspend(false);
+    if (native) klog("[display] native_supersavage lease_return_ms=%llu budget_ms=200 result=%d",
+        g_ticks-fullscreen_return_tick,e);
     if (!e) {
-        changed(); awaiting_frame=true; frame_deadline=deadline_after_ms(10000);
+        changed(); awaiting_frame=true; awaiting_native_frame=native;
+        frame_deadline=deadline_after_ms(10000);
     }
     switching=false;
     log_mode(previous.mode_id,e);

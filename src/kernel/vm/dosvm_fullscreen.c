@@ -172,6 +172,7 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     if (fullscreen_busy) return -EBUSY;
     fullscreen_busy=true;
     struct dosvm *v=fullscreen_owner;
+    display_fullscreen_return_request();
     display_fullscreen_checkpoint("guest-revoke",0);
     int e=park(v);
     if (e) { fullscreen_busy=false; return e; }
@@ -197,6 +198,7 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
 void dosvm_fullscreen_stopping(struct dosvm *v)
 {
     if (fullscreen_owner==v) {
+        display_fullscreen_return_request();
         uint32_t flags=irq_save();
         arch_vga_io(false); map_aperture(v,false);
         fullscreen_return=true;
@@ -244,6 +246,7 @@ void dosvm_fullscreen_poll(void)
             !v->task || !task_alive(v->task) || frame_timeout || progress_timeout) {
             const char *reason=fullscreen_return ? "return-or-fault" : frame_timeout ? "first-frame-timeout" :
                 progress_timeout ? "guest-progress-timeout" : "owner-lost";
+            display_fullscreen_return_request();
             klog("[dosvm] fullscreen_watchdog vm=%u generation=%u reason=%s",v->info.key.id,v->info.key.generation,reason);
             display_fullscreen_checkpoint("watchdog-return",0);
             if (frame_timeout || progress_timeout) v->fullscreen_error=-ETIMEDOUT;
@@ -285,7 +288,10 @@ bool dosvm_fullscreen_input(uint16_t type, uint16_t code, int32_t value)
         if (value==1 && alt && !ctrl && (code==0x1C || code==0x11C || (code==0x0F && fullscreen_owner))) {
             if (fullscreen_busy) { swallowed=code; return true; }
             struct dosvm_key key=dosvm_focused_key();
-            if (fullscreen_owner) { fullscreen_return=true; fullscreen_background=code==0x0F; }
+            if (fullscreen_owner) {
+                display_fullscreen_return_request();
+                fullscreen_return=true; fullscreen_background=code==0x0F;
+            }
             else {
                 struct dosvm *v=dosvm_lookup(key);
                 if (!v || !v->owner_pid || !v->window_input) return false;
