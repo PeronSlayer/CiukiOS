@@ -121,7 +121,12 @@ void audio_master_refresh(void)
         int err = audio.ready ? audio_backend_master(&m) : 0;
         if (err) audio_fail(-EIO);
         else {
-            if (changed > 0) { m.save_state = CIUKI_MIXER_UNSAVED; m.save_error = 0; }
+            if (changed > 0) {
+                audio.master = m;
+                int saved_err = save_master();
+                m.save_state = saved_err ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
+                m.save_error = saved_err;
+            }
             audio.master = m;
         }
     }
