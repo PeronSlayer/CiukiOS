@@ -15,6 +15,18 @@
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#c); exit(1); } } while (0)
 
 volatile uint64_t g_ticks;
+struct ciuki_boot_info g_boot;
+static uint32_t cpuid_max = 1, cpuid_features;
+static uint32_t hypervisor_id[3];
+static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
+{
+    *a=*b=*c=*d=0;
+    if (!leaf) *a=cpuid_max;
+    else if (leaf==1) *c=cpuid_features;
+    else if (leaf==0x40000000) {
+        *a=0x40000001;*b=hypervisor_id[0];*c=hypervisor_id[1];*d=hypervisor_id[2];
+    }
+}
 static pthread_mutex_t cpu_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local uint32_t flags = 0x200;
 static _Thread_local bool playback_producer;
@@ -176,6 +188,7 @@ static void reset_uart(bool with_fifo)
     shifting=false;clock_units=shift_end=latency_us=critical_start=critical_max=0;
     emitted_count=filled=lsr_reads=lsr_if_off=preemptions=writer_creations=0;g_ticks=0;
     g_current=NULL;evidence_sleeps=0;evidence_wait_hook=NULL;
+    g_boot.flags=0;cpuid_max=1;cpuid_features=0;memset(hypervisor_id,0,sizeof(hypervisor_id));
     serial_init(0x3F8,3);
     CHECK(serial_present() && uart_fifo_bytes==(fifo ? 16u:1u));
     CHECK(uart_budget==2880 && uart_burst_bytes==3);
@@ -415,16 +428,52 @@ static void evidence_test(void)
     uint32_t f=serial_evidence_begin(256);
     CHECK(!(flags & 0x200));serial_write("evidence\n",9);irq_restore(f);
     CHECK(evidence_sleeps==1000 && !uart_dropped && !lsr_reads && !tx_writes);
-    /* IRQ/held-lock evidence is bounded and drops the entire publication. */
+    /* Early/IRQ/held-lock evidence must not sleep or lose quota admission. */
     uart_admitted=uart_budget-UART_NOTICE_BYTES;
     f=irq_save();uint32_t saved=serial_evidence_begin(256);
     serial_write("irq\n",4);irq_restore(saved);irq_restore(f);
     task.preempt_holds=1;saved=serial_evidence_begin(256);
     serial_write("held\n",5);irq_restore(saved);
-    CHECK(uart_dropped==2 && evidence_sleeps==1000);
+    CHECK(!uart_dropped && evidence_sleeps==1000);
     g_current=NULL;drain_uart();
-    CHECK(strstr(emitted,"evidence\r\n") && !strstr(emitted,"irq\r\n") && !strstr(emitted,"held\r\n"));
-    puts("serial evidence: task waits for quota without UART polling/drops; IRQ and held-lock evidence drops whole without sleeping PASS");
+    CHECK(strstr(emitted,"evidence\r\n") && strstr(emitted,"irq\r\n") && strstr(emitted,"held\r\n"));
+    puts("serial evidence: task waits for quota without UART polling/drops; IRQ and held-lock evidence admitted without sleeping PASS");
+}
+static void chardev_tests(void)
+{
+    for (unsigned kind=0;kind<2;kind++) for (unsigned mode=0;mode<7;mode++) {
+        reset_uart(kind);
+        cpuid_features=1u<<31;
+        hypervisor_id[0]=0x54474354;hypervisor_id[1]=0x43544743;hypervisor_id[2]=0x47435447;
+        if (mode>=1 && mode<=3) hypervisor_id[mode-1]^=1;
+        if (mode==4) cpuid_features=0;
+        if (mode==5) cpuid_max=0;
+        if (mode==6) { cpuid_features=0;g_boot.flags=CBI_F_TEST_REQUEST; }
+        serial_init(0x3F8,3);
+        bool chardev=mode==0 || mode==6;
+        CHECK(uart_chardev==chardev);
+        char record[1000];memset(record,'C',sizeof(record));record[sizeof(record)-1]='\n';
+        for (unsigned i=0;i<20;i++) serial_write(record,sizeof(record));
+        CHECK(uart_record_count==(chardev ? 20u:2u));
+        CHECK(uart_dropped==(chardev ? 0u:18u));
+        /* Even an unlimited chardev must honour busy THRE and FIFO width. */
+        ready=false;tick();CHECK(!tx_writes);
+        ready=true;tick();CHECK(tx_writes==(kind ? (chardev ? 16u:3u):1u));
+        drain_uart();
+        if (chardev) {
+            CHECK(emitted_count==20*(sizeof(record)+1));
+            for (unsigned row=0;row<20;row++) {
+                const char *p=emitted+row*(sizeof(record)+1);
+                for (unsigned i=0;i<sizeof(record)-1;i++) CHECK(p[i]=='C');
+                CHECK(!memcmp(p+sizeof(record)-1,"\r\n",2));
+            }
+            /* A backend that really paces bytes still cannot overflow FIFO. */
+            emitted_count=0;timed=true;
+            for (unsigned i=0;i<20;i++) serial_write(record,sizeof(record));
+            drain_uart();CHECK(!overflows && emitted_count==20*(sizeof(record)+1));
+        }
+    }
+    puts("serial chardev: exact TCG signature or fw_cfg selector lifts quota/pacing; other vendors/bare metal retain 75%; busy THRE and 16450/16550 FIFO gating preserved PASS");
 }
 static void ticket_tests(bool with_fifo)
 {
@@ -460,14 +509,15 @@ static void ticket_tests(bool with_fifo)
     printf("serial tickets %s: partial/busy records, interleaved producer, whole refusal and notice watermark PASS\n",
            with_fifo ? "16550":"16450");
 
-    /* The actual page format exceeds the empty 38400-baud quota window.
-     * Refused records have no ticket and never appear as sent page records. */
+    /* Hardware-check probe records use protected admission, like production. */
     reset_uart(with_fifo);timed=true;ready=false;
+    struct task task={0};g_current=&task;
     uint64_t tickets[100];unsigned accepted=0,length=0;
     char expected[4096];
     for (unsigned i=0;i<100;i++) {
         char record[64];int n=ksnprintf(record,sizeof(record),"[hwcheck] serial record=%03u/100\n",i+1);
-        tickets[i]=serial_write_ticket(record,(size_t)n);
+        uint32_t saved=serial_evidence_begin((size_t)n+1);
+        tickets[i]=serial_write_ticket(record,(size_t)n);irq_restore(saved);
         if (tickets[i]) {
             accepted++;
             memcpy(expected+length,record,(size_t)n-1);length+=(unsigned)n-1;
@@ -475,14 +525,14 @@ static void ticket_tests(bool with_fifo)
         }
     }
     serial_snapshot(&snapshot);
-    CHECK(accepted==85 && snapshot.accepted==85 && snapshot.dropped==15 && !snapshot.sent);
-    CHECK(snapshot.queued==2805 && uart_admitted==2805 && !lsr_reads && !tx_writes);
-    length+=(unsigned)snprintf(expected+length,sizeof(expected)-length,"[serial] dropped=15\r\n");
+    CHECK(accepted==100 && snapshot.accepted==100 && !snapshot.dropped && !snapshot.sent);
+    CHECK(snapshot.queued==3300 && evidence_sleeps==1000 && !lsr_reads && !tx_writes);
+    g_current=NULL;
     drain_uart();serial_snapshot(&snapshot);
     unsigned sent=0;
     for (unsigned i=0;i<100;i++) if (tickets[i] && tickets[i]<=snapshot.sent) sent++;
-    CHECK(sent==accepted && snapshot.accepted==86 && snapshot.sent==86 && !snapshot.queued);
-    CHECK(snapshot.dropped==15 && !overflows && !lsr_if_off);
+    CHECK(sent==accepted && snapshot.accepted==100 && snapshot.sent==100 && !snapshot.queued);
+    CHECK(!snapshot.dropped && !overflows && !lsr_if_off);
     CHECK(emitted_count==length && !memcmp(emitted,expected,length));
     printf("serial hardware-check %s: requested=100 accepted=%u whole_sent=%u dropped=%u queued=%u, quota respected PASS\n",
            with_fifo ? "16550":"16450",accepted,sent,snapshot.dropped,snapshot.queued);
@@ -502,7 +552,7 @@ int main(void)
         memset(source,'X',sizeof(source)-1);drain_uart();
         CHECK(!strcmp(emitted,"[cpu] queued diagnostic\r\n"));
     }
-    slow_port_test();evidence_test();
+    slow_port_test();evidence_test();chardev_tests();
     reset_uart(true);present=false;serial_init(0x3F8,3);
     CHECK(!serial_present());unsigned before=lsr_reads;
     serial_write("absent\n",7);tick();uint32_t f=irq_save();serial_panic();irq_restore(f);

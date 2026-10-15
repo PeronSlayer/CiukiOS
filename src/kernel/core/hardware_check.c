@@ -196,7 +196,9 @@ static void serial_check(uint64_t until,struct hw_check_result *out)
          * to this record even if IRQ/device producers interleave. */
         bootlog_capture(record,(size_t)n); console_write(record,(size_t)n);
         if (blackbox_capture) blackbox_capture(record,(size_t)n);
+        uint32_t flags=serial_evidence_begin((size_t)n+1); /* final CRLF */
         tickets[i]=serial_write_ticket(record,(size_t)n);
+        irq_restore(flags);
         if (tickets[i]) { accepted++; target=tickets[i]; }
     }
     serial_snapshot(&b);

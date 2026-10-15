@@ -28,7 +28,20 @@ static unsigned uart_budget, uart_admitted, uart_burst_bytes;
 static uint64_t uart_window, uart_burst_tick;
 static bool uart_notice_sent, uart_writer_started;
 static bool uart_drop_notice, uart_panic_mode;
+static bool uart_chardev, uart_evidence;
 static unsigned uart_fifo_bytes = 1;
+
+static bool serial_is_chardev(void)
+{
+    if (g_boot.flags & CBI_F_TEST_REQUEST) return true;
+    uint32_t a, b, c, d;
+    cpuid(0, &a, &b, &c, &d);
+    if (a < 1) return false;
+    cpuid(1, &a, &b, &c, &d);
+    if (!(c & (1u << 31))) return false;
+    cpuid(0x40000000, &a, &b, &c, &d);
+    return b == 0x54474354 && c == 0x43544743 && d == 0x47435447;
+}
 
 void serial_init(uint16_t base, uint16_t divisor)
 {
@@ -42,6 +55,8 @@ void serial_init(uint16_t base, uint16_t divisor)
     uart_notice_sent = false;
     uart_writer_started = false;
     uart_drop_notice = uart_panic_mode = false;
+    uart_chardev = serial_is_chardev();
+    uart_evidence = false;
     uart_fifo_bytes = 1;
     uart_timeouts = 0;
     if (!base)
@@ -68,6 +83,10 @@ void serial_init(uint16_t base, uint16_t divisor)
     uart_budget = line_bytes * 3u / 4u;
     uart_burst_bytes = (uart_budget + 999u) / 1000u;
     if (!uart_burst_bytes) uart_burst_bytes = 1;
+    /* QEMU forwards TX straight to the chardev, without a physical baud
+     * delay. Keep THRE/FIFO gating and the bounded writer activation, but
+     * do not impose a real line's admission/pacing on test evidence. */
+    if (uart_chardev) uart_budget = uart_burst_bytes = UINT32_MAX;
     outb(base + 3, 0x03);           /* clear inherited DLAB before IER */
     outb(base + 1, 0x00);           /* no UART interrupts */
     outb(base + 3, 0x80);           /* DLAB */
@@ -201,10 +220,15 @@ uint32_t serial_evidence_begin(size_t bytes)
         serial_window();
         unsigned budget = uart_budget > UART_NOTICE_BYTES ? uart_budget - UART_NOTICE_BYTES : 0;
         bool full = bytes > UART_LOG_BYTES - uart_used || uart_record_count == UART_RECORD_SLOTS;
-        bool limited = bytes > budget || uart_admitted > budget - bytes;
+        bool limited = !uart_chardev && (bytes > budget || uart_admitted > budget - bytes);
         if (!uart_ok || uart_panic_mode || bytes > budget || !(flags & 0x200) ||
-            !g_current || g_current->preempt_holds || (!full && !limited))
+            !g_current || g_current->preempt_holds || (!full && !limited)) {
+            /* One protected publication, consumed before the caller restores
+             * IF. Early/atomic producers cannot sleep for quota; admit their
+             * bounded record on credit, still checking queue capacity. */
+            uart_evidence = true;
             return flags; /* caller restores IF after bounded publication */
+        }
         irq_restore(flags);
         task_sleep_ms(1); /* sole consumer remains the log-writer */
     }
@@ -218,6 +242,8 @@ uint64_t serial_write_ticket(const char *s, size_t n)
     if (n <= SERIAL_RECORD_MAX)
         for (size_t i = 0; i < n; i++) if (s[i] == '\n') bytes++;
     uint32_t flags = irq_save();
+    bool evidence = uart_evidence;
+    uart_evidence = false;
     if ((flags & 0x200) && crit_label) crit_label("serial_queue");
     if (!uart_ok || !n) {
         irq_restore(flags);
@@ -229,10 +255,11 @@ uint64_t serial_write_ticket(const char *s, size_t n)
      * playback must queue those without waiting for the UART. */
     uint64_t ticket = 0;
     unsigned data_budget = uart_budget > UART_NOTICE_BYTES ? uart_budget - UART_NOTICE_BYTES : 0;
+    bool rate_limited = !uart_panic_mode && !uart_chardev && !evidence;
     bool oversize = n > SERIAL_RECORD_MAX || bytes > UART_RECORD_BYTES ||
-                    (!uart_panic_mode && bytes > data_budget);
+                    (rate_limited && bytes > data_budget);
     bool full = bytes > UART_LOG_BYTES - uart_used || uart_record_count == UART_RECORD_SLOTS;
-    bool limited = !uart_panic_mode && (bytes > data_budget || uart_admitted > data_budget - bytes);
+    bool limited = rate_limited && (bytes > data_budget || uart_admitted > data_budget - bytes);
     if (oversize || full || limited) {
         uart_dropped++;
         uart_drop_notice = true;
@@ -240,7 +267,8 @@ uint64_t serial_write_ticket(const char *s, size_t n)
         ticket = ++uart_accepted;
         uart_records[(uart_record_head + uart_record_count) % UART_RECORD_SLOTS] = (uint16_t)bytes;
         uart_record_count++;
-        if (!uart_panic_mode) uart_admitted += (unsigned)bytes;
+        if (!uart_panic_mode && !uart_chardev)
+            uart_admitted = bytes > UINT32_MAX - uart_admitted ? UINT32_MAX : uart_admitted + (unsigned)bytes;
         for (size_t i = 0; i < n; i++) {
             if (s[i] == '\n') {
                 uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = '\r';

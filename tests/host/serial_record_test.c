@@ -7,7 +7,6 @@
 static void cli(void) { flags=0; }
 static void hlt(void) { abort(); }
 static uint32_t read_cr2(void) { return 0; }
-struct ciuki_boot_info g_boot;
 void console_write(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n; }
@@ -108,6 +107,38 @@ static void other_evidence_task(void)
 {
     rec_emit("runner","DATA","case=quota task=other");
 }
+static void saturated_producers(void)
+{
+    for (unsigned producer=0;producer<4;producer++) {
+        reset_uart(true);g_boot.flags=CBI_F_VERBOSE;
+        rec_set_run("abcdef12");rec_emit("runner","BEGIN",NULL);drain_uart();
+        emitted_count=0;g_ticks+=1000;
+        char fill[1408];memset(fill,'Q',sizeof(fill));
+        serial_write(fill,sizeof(fill));serial_write(fill,sizeof(fill));
+        struct task task={0};g_current=&task;
+        klog_periodic("[cpu] periodic must drop");
+        rec_diag("runner","group=vm_heartbeat periodic=drop");
+        CHECK(uart_dropped==2 && !evidence_sleeps);
+        if (producer==0) klog("[supervisor] bootstrap: spawning /Programs/desktop");
+        if (producer==1) klog("[supervisor] desktop pid=12 pgid=12");
+        if (producer==2) rec_emit("runner","DATA","case=protected_evidence");
+        if (producer==3) rec_diag("runner","case=protected_probe");
+        CHECK(evidence_sleeps==1000 && uart_dropped==2 && flags==0x200);
+        g_current=NULL;drain_uart();
+        CHECK(!strstr(emitted,"periodic") && strstr(emitted,"[serial] dropped=2\r\n"));
+        const char *expected[]={"[supervisor] bootstrap: spawning /Programs/desktop\r\n",
+            "[supervisor] desktop pid=12 pgid=12\r\n","case=protected_evidence\r\n","case=protected_probe\r\n"};
+        CHECK(strstr(emitted,expected[producer]));
+    }
+    /* Before scheduling starts, boot logs cannot wait for a quota window. */
+    reset_uart(true);uart_admitted=uart_budget;
+    klog("Ciuki VMM F0 build early - CiukiOS");
+    CHECK(!uart_dropped && !evidence_sleeps);
+    klog_periodic("[cpu] early periodic must drop");
+    CHECK(uart_dropped==1);drain_uart();
+    CHECK(strstr(emitted,"Ciuki VMM F0 build early - CiukiOS\r\n") && !strstr(emitted,"periodic"));
+    puts("serial saturated producers: both desktop boot milestones, CIUKI_TEST evidence and probe DATA delivered after quota wait; only periodic records dropped/count=2; early boot protected PASS");
+}
 static void evidence_sequence(void)
 {
     reset_uart(true);rec_set_run("abcdef12");rec_emit("runner","BEGIN",NULL);drain_uart();
@@ -139,20 +170,23 @@ static void blackbox_publication(void)
     run_selected=false;g_boot.flags=CBI_F_DIAG_VERBOSE;
     rec_diag_disk("runner","case=disk_only");
     CHECK(captured_records==5 && strstr(captured_record,"case=disk_only\n"));
-    /* Exhaust admission: UART drops the whole evidence record while the
-     * independent black-box path still receives the complete line. */
+    /* Protected IRQ evidence survives saturated admission; the independent
+     * black-box path still receives both it and a dropped periodic record. */
     uart_admitted=uart_budget;uint32_t f=irq_save();capture_flags=0;
     unsigned dropped=uart_dropped;
-    rec_set_run("abcdef12");rec_emit("runner","BEGIN","case=irq_drop");
-    CHECK(uart_dropped==dropped+1 && captured_records==6 && strstr(captured_record,"case=irq_drop\n"));
+    rec_set_run("abcdef12");rec_emit("runner","BEGIN","case=irq_protected");
+    CHECK(uart_dropped==dropped && captured_records==6 && strstr(captured_record,"case=irq_protected\n"));
+    klog_periodic("[cpu] case=periodic_drop");
+    CHECK(uart_dropped==dropped+1 && captured_records==7 && strstr(captured_record,"case=periodic_drop\n"));
     rec_emit_panicsafe("panic","PANIC","case=panic");
-    CHECK(captured_records==7 && strstr(captured_record,"case=panic\n"));
+    CHECK(captured_records==8 && strstr(captured_record,"case=panic\n"));
     irq_restore(f);verify_blackbox=false;g_boot.flags=0;
     puts("output blackbox: page/periodic/evidence/diagnostic/disk-only/IRQ/panic records captured; task capture after IF restore, whole UART drop independent PASS");
 }
 int main(void)
 {
     blackbox_publication();
+    saturated_producers();
     evidence_sequence();
     maximum_records();
     for (unsigned kind=0;kind<2;kind++) for (unsigned envelopes=0;envelopes<2;envelopes++) {
