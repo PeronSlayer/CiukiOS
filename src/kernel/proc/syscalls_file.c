@@ -37,7 +37,7 @@ struct file_operation {
     struct ua_pin pin;
     char *path[2];
     void *buffer;
-    size_t buffer_bytes; /* nonzero for a page-backed contiguous read buffer */
+    size_t buffer_bytes; /* nonzero for a page-backed contiguous I/O buffer */
     bool pinned, reading;
 };
 static void operation_free(void *arg)
@@ -116,10 +116,13 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     if (!tf->edx) return 0;
     int err = output_pin(op, tf->ecx, tf->edx, !write);
     if (err) return err;
-    uint32_t limit = !write && d->node->kind==PX_FILE ? BLKDEV_READ_BYTES : PAGE_SIZE;
+    /* One bounded run per syscall. A larger request returns short, releasing
+     * the namespace lock before userspace retries the next run. This keeps
+     * a multi-MiB cache write from holding the lock for its entire payload. */
+    uint32_t limit = d->node->kind==PX_FILE ? BLKDEV_READ_BYTES : PAGE_SIZE;
     uint32_t bytes = tf->edx < limit ? tf->edx : limit;
     if (d->node->kind == PX_CONSOLE && bytes > 1024) bytes = 1024;
-    if (!write && d->node->kind==PX_FILE) {
+    if (d->node->kind==PX_FILE) {
         op->buffer_bytes=bytes;
         op->buffer=fs_contig_alloc(bytes);
     } else op->buffer=fs_page_alloc();

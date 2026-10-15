@@ -130,6 +130,24 @@ successful clean shutdown.
   defect. Torn sectors or diverging FAT copies are detected on mount and
   lead to read-only handling.
 
+**[F0, f0-32 amendment, 2026-10-16]** Ordinary writes supersede the allocation
+order above: update existing sectors in place, initialize new data and zero
+seek gaps, barrier, publish a detached allocation chain to every FAT copy,
+barrier, extend the previous EOF link, barrier, publish directory size and
+timestamps once, barrier, then update FSInfo hints. Select new clusters under
+the namespace lock without publishing allocation before their data is durable.
+Only explicit truncation retains the existing full-file COW ownership switch;
+ordinary overwrites and appends MUST NOT copy the existing prefix. Overwrite
+contents may be partially updated after a cut; published length remains old or
+new. After a complete sole-ownership scan, an EOC/link disagreement at the
+published EOF may be repaired and excess regular-file tails detached before
+reclaim. Disagreement inside the visible extent, crosslinks and invalid chains
+retain the write gate. FAT12 split live links retain safe refusal; new ordinary
+write allocations avoid them. Native regular-file syscalls transfer at most
+64 KiB per call, returning short and releasing the namespace lock before the
+caller's next run. Research and host evidence:
+[f0-32 validation](../validation/f0-32-fat-write-in-place.md).
+
 **[F1, f1-24 amendment]** In addition to the interrupted states above, an
 atomic-sector crash during directory publication may leave nonowning orphan
 long-name entries: the [Microsoft FAT specification, version 1.03, pp.

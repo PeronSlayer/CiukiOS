@@ -266,7 +266,7 @@ int vfs_open(struct vfs_table *t, const char *path, unsigned flags, enum vfs_sha
     if (flags&VFS_TRUNCATE) {
         struct fat_entry before=node->entry;
         e=fat_truncate(vol,&node->entry,0);
-        if (px_legacy_changed) px_legacy_changed(v,vol,&before,&node->entry);
+        if (px_legacy_changed) px_legacy_changed(v,vol,&before,&node->entry,false);
         if (e) goto out;
     }
     node->refs++; d->refs=1; d->node=node; d->position=0; d->access=flags&3; d->deny=(unsigned)deny; t->handles[h]=d; e=h;
@@ -303,7 +303,7 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
     else {
         struct fat_entry before=d->node->entry;
         e=fat_write(d->node->volume,&d->node->entry,d->position,buf,n,done); d->position+=*done;
-        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,*done != 0);
     }
     fs_lock_drop(&t->vfs->lock); return e;
 }
@@ -329,7 +329,7 @@ int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
     if (!e) {
         struct fat_entry before=d->node->entry;
         e=fat_truncate(d->node->volume,&d->node->entry,size);
-        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,false);
     }
     fs_lock_drop(&t->vfs->lock); return e;
 }
@@ -356,7 +356,7 @@ int vfs_log_reserve(struct vfs_table *t, int h, uint32_t capacity) {
             d->node->log_capacity=capacity; d->node->entry.size=0; d->position=0;
             e=fat_publish_reserved(d->node->volume,&d->node->entry,false);
         }
-        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,false);
     }
     fs_lock_drop(&t->vfs->lock); return e;
 }
@@ -370,7 +370,7 @@ int vfs_log_write(struct vfs_table *t, int h, const void *buf, size_t n, uint32_
         e=fat_write_reserved(d->node->volume,&d->node->entry,d->node->log_capacity,d->position,buf,n,done);
         d->position+=*done;
         if (!e) d->node->entry.size=size;
-        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,*done != 0);
     }
     fs_lock_drop(&t->vfs->lock); return e;
 }
@@ -382,7 +382,7 @@ int vfs_log_publish(struct vfs_table *t, int h, bool finish) {
         struct fat_entry before=d->node->entry;
         e=fat_publish_reserved(d->node->volume,&d->node->entry,finish);
         if (!e && finish) d->node->log_capacity=0;
-        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,false);
     }
     fs_lock_drop(&t->vfs->lock); return e;
 }
@@ -405,7 +405,7 @@ static int metadata(struct vfs_table *t, const char *path, int attr, const struc
         if (n) ent=n->entry;
         struct fat_entry before=ent;
         e=fat_set_metadata(vol,&ent,attr<0 ? ent.attr : (uint8_t)attr,times);
-        if (!e && px_legacy_changed) px_legacy_changed(t->vfs,vol,&before,&ent);
+        if (!e && px_legacy_changed) px_legacy_changed(t->vfs,vol,&before,&ent,false);
         if (!e && n) n->entry=ent;
     }
     fs_lock_drop(&t->vfs->lock); return e;
@@ -501,7 +501,7 @@ static int remove_path(struct vfs_table *t, const char *path, bool dir) {
     if (!e) {
         struct fat_volume *v=t->vfs->volumes[r.drive];
         if (!(e=busy(t->vfs,v,&ent))) e=fat_remove(v,&ent,dir);
-        if (!e && px_legacy_changed) px_legacy_changed(t->vfs,v,&ent,0);
+        if (!e && px_legacy_changed) px_legacy_changed(t->vfs,v,&ent,0,false);
     }
     fs_lock_drop(&t->vfs->lock); return e;
 }
@@ -531,7 +531,7 @@ int vfs_log_rotate(struct vfs_table *t, const char *current, const char *previou
     if (!e && v->volumes[drive]->readonly) e=-FS_EROFS;
     if (!e && present[2]) {
         e=fat_remove(v->volumes[drive],&entries[2],false);
-        if (!e && px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],0);
+        if (!e && px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],0,false);
     }
     for (unsigned i=2;!e && i;i--) if (present[i-1]) {
         struct fat_entry *entry=&entries[i-1];
@@ -540,11 +540,11 @@ int vfs_log_rotate(struct vfs_table *t, const char *current, const char *previou
          * Finishing in place does not allocate a second full-file chain. */
         if (entry->size>capacity) entry->size=capacity;
         e=fat_publish_reserved(v->volumes[drive],entry,true);
-        if (px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],entry);
+        if (px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],entry,false);
         entries[2]=*entry;
         if (!e) e=resolve(t,paths[i],&r);
         if (!e) e=fat_rename(v->volumes[drive],entry,parent,r.name);
-        if (!e && px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],entry);
+        if (!e && px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],entry,false);
     }
     fs_lock_drop(&v->lock); return e;
 }
@@ -569,7 +569,7 @@ int vfs_rename(struct vfs_table *t, const char *from, const char *to) {
         if (!e) {
             struct fat_entry before=ent;
             e=fat_rename(v,&ent,b.parent,b.name);
-            if (!e && px_legacy_changed) px_legacy_changed(t->vfs,v,&before,&ent);
+            if (!e && px_legacy_changed) px_legacy_changed(t->vfs,v,&before,&ent,false);
         }
     }
     fs_lock_drop(&t->vfs->lock); return e;

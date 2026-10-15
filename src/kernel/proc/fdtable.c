@@ -195,11 +195,11 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
     int err = n->ro ? fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done) : write ? fat_write(n->volume, &n->entry, position, buffer, bytes, done) :
                       fat_read(n->volume, &n->entry, position, buffer, bytes, done);
     if (!write) proc_launch_volume_read((uint32_t)bytes, *done);
-    /* F1 COW publishes the owning entry before freeing the old chain and
-     * FSInfo. A failure in that suffix cannot erase completed user bytes. */
-    if (write && err && (n->entry.first != before.first || n->entry.size != before.size)) *done = bytes;
+    /* fat_write reports the committed count even if the later FSInfo hint
+     * fails. An in-place overwrite can leave the whole entry unchanged;
+     * its confirmed bytes still require a ctime notification. */
     if (!positioned && (!err || *done)) d->position = position + *done;
-    if (write && memcmp(&before, &n->entry, sizeof(before))) px_changed_locked(n);
+    if (write && (*done || memcmp(&before, &n->entry, sizeof(before)))) px_changed_locked(n);
     if (n->ro && err) px_ro_check_locked(n);
     err = px_error(err);
     /* FAT RO attributes were checked at open. A later legacy attribute
