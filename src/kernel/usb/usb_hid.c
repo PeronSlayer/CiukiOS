@@ -139,10 +139,10 @@ bool usb_mouse_parse(struct usb_hid *hid, const uint8_t *b, unsigned len)
                         unsigned button=u&0xffff;
                         if (button>p->button_count) p->button_count=button;
                         if (button<=3) field=&p->buttons[button-1];
-                    } else if (u==0x10030 || u==0x10031 || u==0x10038) {
+                    } else if (u==0x10030 || u==0x10031 || u==0x10038 || u==0xc0238) {
                         if ((v&7)!=6 || g.size>16 || g.min>=0 || g.max<=0 ||
                             g.min<-(1<<(g.size-1)) || g.max>=(1<<(g.size-1))) return false;
-                        field=u==0x10030 ? &p->x : u==0x10031 ? &p->y : &p->wheel;
+                        field=u==0x10030 ? &p->x : u==0x10031 ? &p->y : u==0x10038 ? &p->wheel : &p->pan;
                     }
                     if (field) {
                         if (field->size) return false;
@@ -158,7 +158,7 @@ bool usb_mouse_parse(struct usb_hid *hid, const uint8_t *b, unsigned len)
     bool extended=false;
     for (unsigned i=0;i<reports;i++) {
         struct usb_mouse_report *p=&layouts[i];
-        if ((p->x.size || p->y.size || p->wheel.size || p->button_count) &&
+        if ((p->x.size || p->y.size || p->wheel.size || p->pan.size || p->button_count) &&
             (!p->x.size || !p->y.size || !p->buttons[0].size)) return false;
         if (p->x.size && (p->wheel.size || p->button_count>3)) extended=true;
     }
@@ -189,6 +189,30 @@ static int32_t mouse_value(const uint8_t *b, struct usb_mouse_field f, bool sign
     for (unsigned i=0;i<f.size;i++) if (b[(f.bit+i)/8]&(1u<<((f.bit+i)%8))) v|=1u<<i;
     if (sign && f.size && (v&(1u<<(f.size-1)))) return (int32_t)v-(1<<f.size);
     return (int32_t)v;
+}
+int usb_mouse_decode(const struct usb_hid *h, const uint8_t *b, unsigned len,
+                     struct usb_mouse_input *out)
+{
+    if (!h || !b || !out) return -EINVAL;
+    *out=(struct usb_mouse_input){0};
+    if (h->report_protocol) {
+        if (!len) return -USB_EPROTO;
+        unsigned id=h->report_ids ? b[0] : 0, r=0;
+        while (r<h->mouse_reports && h->mouse[r].id!=id) r++;
+        if (r==h->mouse_reports) return 0;
+        const struct usb_mouse_report *p=&h->mouse[r];
+        if (len<(p->bits+7)/8+(h->report_ids ? 1u : 0)) return -USB_EPROTO;
+        if (!p->x.size) return 0;
+        const uint8_t *payload=b+(h->report_ids ? 1:0);
+        for (unsigned i=0;i<3;i++) if (mouse_value(payload,p->buttons[i],false)) out->buttons|=1u<<i;
+        out->x=mouse_value(payload,p->x,true); out->y=mouse_value(payload,p->y,true);
+        out->wheel=mouse_value(payload,p->wheel,true); out->pan=mouse_value(payload,p->pan,true);
+    } else {
+        if (len<(h->wheel ? 4u : 3u)) return -USB_EPROTO;
+        out->buttons=b[0]&7; out->x=(int8_t)b[1]; out->y=(int8_t)b[2];
+        if (h->wheel) out->wheel=(int8_t)b[3];
+    }
+    return 1;
 }
 int usb_hid_attach(struct usb_device *d, struct usb_hid *hid, unsigned report_len)
 {
@@ -260,24 +284,16 @@ int usb_hid_report(struct usb_device *d, struct usb_hid *h, const uint8_t *b, un
         if (!translated && !unsupported) drop_record(d,h,"unchanged",len,0);
         memcpy(h->previous,b,8);
     } else {
-        unsigned buttons=0; int32_t x=0,y=0,wheel=0;
-        if (h->report_protocol) {
-            if (!len) return -USB_EPROTO;
-            unsigned id=h->report_ids ? b[0] : 0, r=0;
-            while (r<h->mouse_reports && h->mouse[r].id!=id) r++;
-            if (r==h->mouse_reports) return 0; /* unrelated report ID */
-            const struct usb_mouse_report *p=&h->mouse[r];
-            if (len<(p->bits+7)/8+(h->report_ids ? 1u : 0)) return -USB_EPROTO;
-            if (!p->x.size) return 0;
-            const uint8_t *payload=b+(h->report_ids ? 1:0);
-            for (unsigned i=0;i<3;i++) if (mouse_value(payload,p->buttons[i],false)) buttons|=1u<<i;
-            x=mouse_value(payload,p->x,true); y=mouse_value(payload,p->y,true);
-            wheel=mouse_value(payload,p->wheel,true);
-        } else {
-            if (len < (h->wheel ? 4u : 3u)) { drop_record(d,h,"mouse_length",len,0); return -USB_EPROTO; }
-            buttons=b[0]&7; x=(int8_t)b[1]; y=(int8_t)b[2];
-            if (h->wheel) wheel=(int8_t)b[3];
+        struct usb_mouse_input mouse;
+        int parsed=usb_mouse_decode(h,b,len,&mouse);
+        if (parsed<=0) {
+            if (parsed<0) drop_record(d,h,"mouse_length",len,0);
+            return parsed;
         }
+        unsigned buttons=mouse.buttons;
+        int32_t x=mouse.x,y=mouse.y,wheel=mouse.wheel;
+        /* AC Pan is decoded independently. The public ABI has vertical
+         * wheel only; horizontal pan must never become Y or wheel. */
         unsigned changed=(buttons^h->previous[0])&7;
         uint64_t tick=d->host->io.now(d->host->io.cookie);
         for (unsigned i=0;i<3;i++) if (changed&(1u<<i)) input_usb_event(INPUT_BTN,(uint16_t)i,!!(buttons&(1u<<i)),d->generation,tick);

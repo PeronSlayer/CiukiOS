@@ -141,6 +141,7 @@ struct desktop {
     int geometry_zoomed;
     struct desk_box geometry_restore;
     unsigned cascade;
+    unsigned usb_wheel_records;
     struct {
         struct desk_box from, to, box;
         uint64_t started;

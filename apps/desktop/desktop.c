@@ -119,10 +119,6 @@ static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
         (event->value==0 || event->value==1) && (!d->tasks_test || d->tasks_stage>=5) &&
         (!d->app_test || d->app_checkpoint>=DESK_APP_CHECKPOINTS(d->app_test))) gate_keys++;
     if (event->type==CIUKI_INPUT_MOTION) gate_motion++;
-    if (event->type==CIUKI_INPUT_WHEEL && event->source==3 && event->value) {
-        static unsigned wheel_records;
-        if (wheel_records++<16) printf("[desktop] usb wheel value=%d\n",event->value);
-    }
     /* The input grant delivers separate button edges, not a motion mask.
      * Count consumption even when the click focuses the background/title. */
     if (event->type==CIUKI_INPUT_BUTTON && event->code>=1 && event->code<=3 &&

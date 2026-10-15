@@ -71,6 +71,16 @@ static struct layout compute(const struct du_widget *w)
 
 struct du_rect du_list_body(const struct du_widget *w) { return compute(w).area; }
 
+int du_list_wheel(struct du_widget *w, int detents)
+{
+    struct layout l=compute(w);
+    int *offset=l.has_h ? &w->hscroll : &w->scroll;
+    int next=du_wheel_value(*offset,detents,l.has_h ? l.cols : l.rows,l.visible);
+    int changed=next!=*offset;
+    *offset=next;
+    return changed;
+}
+
 int du_list_page(const struct du_widget *w)
 {
     struct layout l = compute(w);

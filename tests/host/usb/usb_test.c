@@ -158,11 +158,7 @@ void input_usb_event(uint16_t type,uint16_t code,int32_t value,gen_t gen,uint64_
     else {assert(type==INPUT_REL);if(code==INPUT_X) last_x=value;else if(code==INPUT_Y) last_y=value;else {assert(code==INPUT_WHEEL);last_wheel=value;wheel_events++;}}
 }
 #endif
-static const uint8_t wheel_desc[]={
-    0x05,1,0x09,2,0xa1,1,0x09,1,0xa1,0,
-    0x05,9,0x19,1,0x29,5,0x15,0,0x25,1,0x95,5,0x75,1,0x81,2,
-    0x95,1,0x75,3,0x81,1,0x05,1,0x09,0x30,0x09,0x31,0x09,0x38,
-    0x15,0x81,0x25,0x7f,0x75,8,0x95,3,0x81,6,0xc0,0xc0};
+#define wheel_desc qemu_mouse_descriptor
 enum kind {KBD=1,MOUSE,HUB,RECEIVER};
 struct peripheral {
     enum kind kind;unsigned addr;uint8_t report[8];
@@ -1340,8 +1336,15 @@ static void receiver_wheel(void)
     }
     struct usb_hid h={0};
     assert(usb_mouse_parse(&h,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor)));
-    assert(h.mouse_reports==1 && h.mouse[0].id==2 && h.mouse[0].x.size==12 && h.mouse[0].wheel.bit==40);
-    for(unsigned n=0;n<sizeof(receiver_mouse_descriptor);n++)assert(!usb_mouse_parse(&h,receiver_mouse_descriptor,n));
+    assert(h.mouse_reports==4 && h.mouse[0].id==2 && h.mouse[0].x.size==12 && h.mouse[0].wheel.bit==40);
+    assert(h.mouse[0].pan.bit==48 && h.mouse[0].pan.size==8 && h.mouse[0].bits==56);
+    assert(h.mouse[1].id==3 && h.mouse[1].bits==32 && !h.mouse[1].x.size);
+    assert(h.mouse[2].id==4 && h.mouse[2].bits==8 && !h.mouse[2].x.size);
+    assert(h.mouse[3].id==8 && h.mouse[3].bits==8 && !h.mouse[3].x.size);
+    for(unsigned n=0;n<69;n++)assert(!usb_mouse_parse(&h,receiver_mouse_descriptor,n));
+    /* The first complete collection is a valid descriptor by itself. */
+    assert(usb_mouse_parse(&h,receiver_mouse_descriptor,69));
+    assert(!usb_mouse_parse(&h,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor)-1));
     uint8_t bad[sizeof(receiver_mouse_descriptor)];memcpy(bad,receiver_mouse_descriptor,sizeof(bad));
     bad[7]=0;assert(!usb_mouse_parse(&h,bad,sizeof(bad))); /* ID zero */
     memcpy(bad,receiver_mouse_descriptor,sizeof(bad));bad[35]=32;assert(!usb_mouse_parse(&h,bad,sizeof(bad))); /* too many bits */
@@ -1352,9 +1355,9 @@ static void receiver_wheel(void)
     assert(usb_mouse_parse(&h,extended,sizeof(receiver_mouse_descriptor)+4));
     memcpy(extended,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor));
     unsigned at=sizeof(receiver_mouse_descriptor);
-    uint8_t other[]={0x05,0x0c,0x09,1,0xa1,1,0x85,3,0x75,8,0x95,1,0x81,2,0xc0};
+    uint8_t other[]={0x05,0x0c,0x09,1,0xa1,1,0x85,17,0x75,8,0x95,1,0x81,2,0xc0};
     memcpy(extended+at,other,sizeof(other));
-    assert(usb_mouse_parse(&h,extended,at+sizeof(other)) && h.mouse_reports==2 && h.mouse[1].bits==8);
+    assert(usb_mouse_parse(&h,extended,at+sizeof(other)) && h.mouse_reports==5 && h.mouse[4].bits==8);
     memcpy(extended,receiver_mouse_descriptor,sizeof(receiver_mouse_descriptor));
     for(unsigned i=0;i+1<sizeof(receiver_mouse_descriptor);i++)
         if(extended[i]==9 && extended[i+1]==0x38) {extended[i+1]=0x39;break;}

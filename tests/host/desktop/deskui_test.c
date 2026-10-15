@@ -2,11 +2,13 @@
  * libdeskui widgets: geometry and hit-testing, keyboard/mouse behaviour,
  * menus, dialogs, timers, clipboard, focus releases and rendering frames. */
 #include "deskui.h"
+#include "textarea.h"
 #include <assert.h>
 #include "resize_transport.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #define W 400
 #define H 300
@@ -48,6 +50,64 @@ static int lister(void *ctx, const char *path, struct du_file_entry *e, unsigned
     strcpy(e[1].name, "docs"); e[1].directory = 1;
     strcpy(e[2].name, "Alpha.cfg"); e[2].directory = 0;
     *n = 3; return 0;
+}
+
+static void wheel_event(struct du_ui *ui, unsigned type, int value, int value2)
+{
+    struct ciuki_input_event e={.type=type,.value=value,.value2=value2}; du_input(ui,&e);
+}
+static int wheel_lister(void *ctx, const char *path, struct du_file_entry *e, unsigned cap, unsigned *n)
+{
+    (void)ctx; (void)path; assert(cap>=40); *n=40;
+    for (unsigned i=0;i<40;i++) { memset(&e[i],0,sizeof(e[i])); snprintf(e[i].name,sizeof(e[i].name),"row%02u.txt",i); }
+    return 0;
+}
+static void test_wheel(void)
+{
+    struct du_ui *ui=calloc(1,sizeof(*ui)); assert(ui); du_init(ui,pixels,W,H);
+    struct du_item rows[40]={0}; for (unsigned i=0;i<40;i++) rows[i].text[0]="row";
+    struct du_widget *w=du_add(ui,DU_LISTVIEW,100,(struct du_rect){0,0,180,100},"");
+    w->items=rows; w->count=40; w->active=7; rows[7].selected=1;
+    wheel_event(ui,CIUKI_INPUT_MOTION,10,30); int focus=ui->focus;
+    wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(w->scroll==3 && ui->dirty);
+    assert(ui->mouse_x==10 && ui->mouse_y==30 && w->active==7 && rows[7].selected && ui->focus==focus);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,1,0); assert(!w->scroll);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,INT_MIN,0); assert(w->scroll==40-du_list_page(w));
+    wheel_event(ui,CIUKI_INPUT_WHEEL,INT_MAX,0); assert(!w->scroll);
+    w->disabled=1; wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(!w->scroll); w->disabled=0;
+    ui->capture=0; wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(!w->scroll); ui->capture=-1;
+    ui->menu=0; wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(!w->scroll); ui->menu=-1;
+    w->kind=DU_TREE; wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(w->scroll==3);
+    w->kind=DU_LISTVIEW; w->view=DU_ICONS; w->scroll=0;
+    wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(w->scroll==3);
+    w->view=DU_LIST; w->scroll=0;
+    wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(w->hscroll==3 && !w->scroll);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,1,0); assert(!w->hscroll);
+    struct du_textarea ta; assert(!du_ta_init(&ta,512));
+    char text[160]; for (unsigned i=0;i<40;i++) { text[2*i]='a'; text[2*i+1]='\n'; } text[80]=0;
+    assert(!du_ta_set_text(&ta,text,80));
+    struct du_widget *area=du_add(ui,DU_TEXTAREA,101,(struct du_rect){200,0,180,110},""); area->data=&ta;
+    du_ta_select(&ta,2,6); ta.top=0;
+    wheel_event(ui,CIUKI_INPUT_MOTION,210,30);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(ta.top==3 && ta.cursor==6 && ta.anchor==2 && !ta.modified);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,INT_MIN,0); assert(ta.top==ta.vl_count-ta.rows);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,INT_MAX,0); assert(!ta.top);
+    struct du_widget *bar=du_add(ui,DU_SCROLLBAR,102,(struct du_rect){380,0,16,100},"");
+    bar->total=50; bar->page=10;
+    wheel_event(ui,CIUKI_INPUT_MOTION,385,30); wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(bar->value==3);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,1,0); assert(!bar->value);
+    assert(!du_file_dialog(ui,103,0,"Open","/","",wheel_lister,NULL));
+    struct du_widget *files=&ui->dialog.items[4]; assert(files->count==40);
+    int dialog_focus=ui->dialog.focus;
+    wheel_event(ui,CIUKI_INPUT_MOTION,files->box.x+8,files->box.y+25);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(files->hscroll>0 && !files->scroll && ui->dialog.focus==dialog_focus);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,1,0); assert(!files->hscroll);
+    files->view=DU_DETAILS;
+    wheel_event(ui,CIUKI_INPUT_WHEEL,-1,0); assert(files->scroll==3 && ui->dialog.focus==dialog_focus);
+    wheel_event(ui,CIUKI_INPUT_WHEEL,1,0); assert(!files->scroll);
+    assert(!w->scroll && !w->hscroll && w->active==7 && rows[7].selected);
+    du_dialog_close(ui); du_ta_free(&ta); free(ui);
+    puts("PASS F1-68 toolkit wheel: details/icons/list/tree/textarea/scrollbar/modal list, both signs, saturation, selection/focus/pointer retention, disabled/menu/capture guards");
 }
 
 int main(int argc, char **argv)
@@ -274,6 +334,7 @@ int main(int argc, char **argv)
     du_resize(&u, pixels, W, H);
     assert(!memcmp(&list->box, &old_list, sizeof(old_list)) && !memcmp(&status->box, &old_status, sizeof(old_status)));
     du_dialog_close(&u); free(large);
+    test_wheel();
     free(pixels);
     rt_client_tests();
     puts("PASS deskui: geometry, hit-testing, edit/clipboard/UTF-8, list/tree/scroll/columns, focus/release, menus/accelerators/mnemonics, dialogs, timers, frames");

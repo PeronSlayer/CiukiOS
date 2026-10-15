@@ -103,4 +103,5 @@ int du_ta_text(struct du_textarea *, unsigned ch);                     /* a char
 int du_ta_mouse_down(struct du_textarea *, struct du_rect box, int x, int y, unsigned modifiers, uint64_t ns);
 int du_ta_mouse_move(struct du_textarea *, struct du_rect box, int x, int y);
 void du_ta_mouse_up(struct du_textarea *);
+int du_ta_wheel(struct du_textarea *, struct du_rect box, int detents);
 #endif
