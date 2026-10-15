@@ -10,7 +10,7 @@ static struct desktop d;
 static uint32_t *scanout;
 static unsigned caps, copies, window_copies, fills, uploads, cursor_moves;
 static uint64_t uploaded_pixels;
-static int fail_copy, fail_cursor, fail_fill, shown, cursor_x, cursor_y;
+static int fail_copy, fail_cursor, fail_cursor_set, fail_fill, shown, cursor_x, cursor_y;
 static struct ciuki_accel_request cursor;
 static int upload(int display,int surface,const struct ciuki_rect *r)
 {
@@ -49,7 +49,10 @@ static int service(int display,const struct ciuki_accel_request *q)
         for (uint32_t y=0;y<q->rect.height;y++) for (uint32_t x=0;x<q->rect.width;x++)
             scanout[((uint32_t)q->rect.dst_y+y)*d.width+(uint32_t)q->rect.dst_x+x]=q->colour;
         if (fail_fill) { fail_fill=0; caps=0; shown=0; return -EIO; }
-    } else if (q->operation==CIUKI_ACCEL_CURSOR_SET) cursor=*q;
+    } else if (q->operation==CIUKI_ACCEL_CURSOR_SET) {
+        if (fail_cursor_set) { caps=0; shown=0; fail_cursor_set=0; return -EIO; }
+        cursor=*q;
+    }
     else if (q->operation==CIUKI_ACCEL_CURSOR_MOVE) {
         if (fail_cursor) { caps=0; shown=0; fail_cursor=0; return -EIO; }
         cursor_moves++; cursor_x=q->rect.dst_x; cursor_y=q->rect.dst_y;
@@ -117,6 +120,20 @@ static void scenario(unsigned available)
         assert(cursor_uploads==0 && cursor_moves>=2);
         assert(!d.frame_stats.presents && !d.frame_stats.lfb_bytes && !d.frame_stats.damage_px);
     } else assert(d.frame_stats.damage_px<=374);
+    /* Every shape and hot spot must match software, including clipping at
+     * all four screen corners and restoring the previous larger footprint. */
+    for (unsigned shape=0;shape<DESK_CURSOR_COUNT;shape++) for (unsigned corner=0;corner<4;corner++) {
+        d.cursor_shape=shape; d.cursor_dirty=1;
+        d.mouse_x=(corner&1) ? 639 : 0; d.mouse_y=(corner&2) ? 479 : 0;
+        redraw();
+        if (available&2u) assert(d.cursor_loaded==shape);
+    }
+    if (available&2u) {
+        fail_cursor_set=1; d.cursor_shape=DESK_CURSOR_TEXT; d.cursor_dirty=1; redraw();
+        assert(!d.hw_cursor && !caps);
+        caps=available; desk_accel_reset(&d,55); redraw();
+    }
+    d.cursor_shape=DESK_CURSOR_ARROW; d.cursor_dirty=1; d.mouse_x=333; d.mouse_y=245; redraw();
     unsigned before_copies=window_copies;
     desk_move(&d,i,80,95);desk_move(&d,i,90,100);redraw();
     if (available&2u) assert(window_copies==before_copies+1);

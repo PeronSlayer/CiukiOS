@@ -289,6 +289,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     /* Bind launch ownership before accepting the first kernel-stamped message.
      * This also permits cleanup if a child exits without ever sending HELLO. */
     d->clients[index].pid=(uint32_t)pid;
+    snprintf(d->clients[index].application,sizeof(d->clients[index].application),"%s",program->name);
     d->clients[index].program=kind;
     d->clients[index].taskman=tasks;
     d->clients[index].gfxdemo=!strcmp(program->name,"gfxdemo");

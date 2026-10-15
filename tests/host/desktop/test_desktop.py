@@ -30,19 +30,20 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-62: production shell, menus and modal frames; lead reviews the paired PNGs.
 # F2-63: re-recorded for the pinned FreeType UI atlases (build/host/f2-63 before/after).
 # 2026-10-15 (main after f2-63 + f2-64): the three dialogs frames re-recorded on the combined tree (f2-64 message boxes in FreeType), reviewed against the 9a05ab9f renders.
+# F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "051208920bbeee92fa5c1d63a0a53bff263199903efa855577877ff37212914c",
-    "ciuki-blue-dialogs.ppm": "787b500fad66a0ed3b67877677ed941bcbea42cbd9acaa495359db32f6a67600",
-    "ciuki-blue-tray-disabled.ppm": "d18ab5f67988c1b23a7eee76d60f92b67fdba013686f5a567809129dcb1702c5",
-    "ciuki-blue-tray-media.ppm": "d6627793607cdd2370e208cfbb9dcd044189a27ac53e682483e8aa05b2ad1c23",
-    "classic-98-desktop.ppm": "f64f4d3a17d1db6823ffbb35bedbef26dfa2a4f050806912a509fab9b9aebe33",
-    "classic-98-dialogs.ppm": "628552715b1f0641933fd3589bd2bafcbd73ec4a7b0c858d2a0f8579d51a52d6",
-    "classic-98-tray-disabled.ppm": "b03c20ccd2061ada5855ca5f31bbd625ec4dfebba5799b2b938894017f4f3630",
-    "classic-98-tray-media.ppm": "74b0062575ff96d6748001b9ff43e1046025e2fffefe2eda2c030e4d90c47d7b",
-    "platinum-desktop.ppm": "62e179ec4af38dc1011bb000404b74c1d7a27159973af0421794861fee29483c",
-    "platinum-dialogs.ppm": "703f200570cdf20347498ae22c9e74a48353716833252116d80943b17242468a",
-    "platinum-tray-disabled.ppm": "c7fe5bd15325b8b242d9f19dc048f2813a6fcf036349a8700829570926936ce5",
-    "platinum-tray-media.ppm": "0196e226c14beadc791c1c0d74c28021da984773dab0a745def180b91f271e2c"
+    "ciuki-blue-desktop.ppm": "cf4cb307519c8cae4f7c784d16bf7dddfffe91c9b569334f304fd4432b9f4331",
+    "ciuki-blue-dialogs.ppm": "314c6548da64ae315968503202f26731541f5a53b21b872deb0d85f86e259df7",
+    "ciuki-blue-tray-disabled.ppm": "eeb8e2638cb34329098a9201f1d20fa9c17e72414d2a4e9aa433ad2c56721ba2",
+    "ciuki-blue-tray-media.ppm": "aad2dc667688e49ddc38c43a092a467cb5e8b9b3b0d0f5cc5d1854d15910fd62",
+    "classic-98-desktop.ppm": "c06eb3295a93ca49a3e01f5de4c4309cb975cea431122b63b379c9853e94f441",
+    "classic-98-dialogs.ppm": "90d922061c851e4bcaa60ec5b6ff5d688ed3ff5829bd701b8cd11a7c946d6a57",
+    "classic-98-tray-disabled.ppm": "78bd186f6975cc96cbd1e3cee7dc03dc03ecb3e9b8d10f32ee361ccf87e54818",
+    "classic-98-tray-media.ppm": "0921d14e8ce31989031c097c2a5338757b7c17f81507620f4a10aeaee0154bb4",
+    "platinum-desktop.ppm": "4c5a0582df22b4bd56b7c0eb29b030dda947ddb4e872ec7c5a491f69869ee48d",
+    "platinum-dialogs.ppm": "52cf5c113f53429e69b558c83f6f9126f28dd616c50c9416890dee7327b9a072",
+    "platinum-tray-disabled.ppm": "0a7083aa850c0ca9ffa55230d89af17c1a9d17d53a0b81b6dd98937c6f8e85a6",
+    "platinum-tray-media.ppm": "a6b0bf80b9a544ce2fbed55d1aac67d5c43a9a75bff1170192da7b05dfa04dd6"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).

@@ -65,8 +65,10 @@ struct desk_client {
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
     int commit_pending, resizable, zoomed;
+    unsigned cursor;
+    uint32_t owner_id;           /* shell modal owner, stable across slot reuse */
     int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
-    int collapsed;                /* windowshade: only the title bar shows (double-click) */
+    int collapsed;                /* retained shade state, independent of maximize */
     int32_t shade_height;
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
     int gfxdemo;                  /* launch-bound graphics diagnostics authority */
@@ -92,6 +94,7 @@ struct desk_client {
     int gfx_timing;
     struct desk_gfx_stats gfx_stats;
     char title[DESK_TITLE_MAX + 1];
+    char application[64];        /* launch-bound program identity, never supplied by a client */
     struct ciuki_message tx[DESK_TX_MAX];
     unsigned tx_head, tx_count;
 };
@@ -134,6 +137,16 @@ struct desktop {
     int32_t mouse_x, mouse_y, drag_x, drag_y;
     unsigned resize_edges;
     struct desk_box resize_start;
+    int keyboard_geometry;       /* 1 move, 2 size; drag identifies the window */
+    int geometry_zoomed;
+    struct desk_box geometry_restore;
+    unsigned cascade;
+    struct {
+        struct desk_box from, to, box;
+        uint64_t started;
+        unsigned step;
+        int active;
+    } animation;
     uint8_t keys[513];
     uint32_t buttons, routed_buttons;
     uint64_t order, now_ns, clock_second, presents, inputs, received, replied;
@@ -145,8 +158,9 @@ struct desktop {
     int render_cache_prepared;
     int frame_valid, scanout_valid;
     struct desk_damage move_damage;
-    uint32_t cursor_under[11*17]; struct desk_box cursor_box;
+    uint32_t cursor_under[32*32]; struct desk_box cursor_box;
     int cursor_valid, cursor_dirty;
+    unsigned cursor_shape, cursor_loaded;
     unsigned lfb_bytes_per_pixel;
     uint64_t next_frame_ns;
     struct desk_gfx_stats gfx_sample; /* most recently completed demo frame */
@@ -199,7 +213,7 @@ struct desktop {
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
      * control handle; NULL on hosts without one. 0 or -errno. */
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
-    /* Title-bar double-click (windowshade). */
+    /* Title-bar double-click (maximize and restore). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
     /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
     int title_hot, title_down;
@@ -281,6 +295,13 @@ void desk_queue(struct desktop *, int index, const struct ciuki_message *);
 void desk_flush(struct desktop *, int index);
 void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
+int desk_modal_target(const struct desktop *, int index);
+int desk_next_window(const struct desktop *, int excluded, uint32_t pid, const char *application);
+void desk_cursor_update(struct desktop *);
+void desk_geometry_begin(struct desktop *, int index, int size);
+void desk_geometry_end(struct desktop *, int cancel);
+void desk_animate(struct desktop *, struct desk_box from, struct desk_box to);
+void desk_animation_tick(struct desktop *);
 void desk_move(struct desktop *, int index, int32_t x, int32_t y);
 void desk_resize(struct desktop *, int index, struct desk_box frame);
 int desk_display_frame_commit(struct desktop *, int redraw_result);

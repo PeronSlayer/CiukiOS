@@ -51,13 +51,10 @@ void du_resize(struct du_ui *u, uint32_t *pixels, int width, int height)
     }
     u->canvas = (struct du_canvas){pixels, width, height, {0, 0, width, height}};
     if (u->layout) u->layout(u, u->user);
-    /* Keep an open dialog's entries, selection and typed text. Move it back
-     * into reach when a shrink would put its buttons outside the canvas. */
+    /* Centre the modal panel on its resized owner, retaining its controls. */
     struct du_dialog *d = &u->dialog;
     if (d->kind) {
-        int x = d->box.x, y = d->box.y;
-        if (x + d->box.w > width) x = width - d->box.w;
-        if (y + d->box.h > height) y = height - d->box.h;
+        int x = (width-d->box.w)/2, y = (height-d->box.h)/2;
         if (x < 0) x = 0;
         if (y < 0) y = 0;
         for (unsigned i = 0; i < d->count; i++) {
@@ -106,6 +103,39 @@ int du_hit(const struct du_ui *u, int x, int y)
         if (!w->hidden && du_contains(w->box, x, y)) return (int)i - 1;
     }
     return -1;
+}
+void du_cursor(struct du_ui *u, unsigned shape)
+{ if (shape<DESK_CURSOR_COUNT) u->cursor=shape; }
+static unsigned widget_cursor(const struct du_widget *w, const struct du_ui *u)
+{
+    if (w->disabled) return DESK_CURSOR_FORBIDDEN;
+    if (w->pointer_cursor && w->pointer_cursor<DESK_CURSOR_COUNT) return w->pointer_cursor;
+    if (w->kind==DU_EDIT) return DESK_CURSOR_TEXT;
+    if (w->kind==DU_TEXTAREA && w->data) {
+        const struct du_textarea *ta=w->data;
+        if (ta->drag==DU_TA_DRAG_SELECT) return DESK_CURSOR_TEXT;
+        if (ta->drag==DU_TA_DRAG_VTHUMB || ta->drag==DU_TA_DRAG_HTHUMB) return DESK_CURSOR_ARROW;
+        struct du_rect text=w->box; text.w-=DU_TA_BAR;
+        if (!ta->wrap) text.h-=DU_TA_BAR;
+        return du_contains(text,u->mouse_x,u->mouse_y) ? DESK_CURSOR_TEXT : DESK_CURSOR_ARROW;
+    }
+    if (w->kind==DU_SPLITTER) return w->vertical ? DESK_CURSOR_RESIZE_EW : DESK_CURSOR_RESIZE_NS;
+    return u->cursor;
+}
+unsigned du_cursor_at(const struct du_ui *u)
+{
+    if (!du_contains((struct du_rect){0,0,u->canvas.width,u->canvas.height},u->mouse_x,u->mouse_y) && u->capture<0)
+        return DESK_CURSOR_ARROW;
+    if (u->dialog.kind) {
+        const struct du_dialog *d=&u->dialog;
+        if (d->dragging) return DESK_CURSOR_MOVE;
+        for (unsigned n=d->count;n>0;n--) if (!d->items[n-1].hidden && du_contains(d->items[n-1].box,u->mouse_x,u->mouse_y))
+            return widget_cursor(&d->items[n-1],u);
+        return du_contains(d->box,u->mouse_x,u->mouse_y) ? DESK_CURSOR_ARROW : DESK_CURSOR_FORBIDDEN;
+    }
+    if (u->menu>=0 || u->popup) return DESK_CURSOR_ARROW;
+    int i=u->capture>=0 ? u->capture : du_hit(u,u->mouse_x,u->mouse_y);
+    return i>=0 && (unsigned)i<u->count ? widget_cursor(&u->widgets[i],u) : u->cursor;
 }
 
 void du_focus(struct du_ui *u, int id)

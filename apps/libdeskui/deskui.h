@@ -13,7 +13,7 @@
 
 /* Colours, fonts and styles come from the current theme (desk_theme,
  * apps/desktop/theme.h): Ciuki Blue (default), Platinum or Classic 98.
- * The names keep their Windows 98 roles; they are not constants. */
+ * These names describe control roles; they are not constants. */
 #define DU_FACE       (desk_theme->face)
 #define DU_LIGHT      (desk_theme->light)
 #define DU_HILITE     (desk_theme->hilite)
@@ -69,7 +69,7 @@ struct du_ui;
 struct du_rect { int x, y, w, h; };
 struct du_canvas { uint32_t *pixels; int width, height; struct du_rect clip; };
 
-/* Bevel styles (Windows 98 classic edges). */
+/* Bevel styles for raised and recessed controls. */
 enum du_edge { DU_RAISED, DU_SUNKEN, DU_PRESSED, DU_RAISED_THIN, DU_SUNKEN_THIN, DU_ETCHED, DU_BUTTON_EDGE };
 /* Icon blending modes. */
 enum du_icon_mode { DU_ICON_NORMAL, DU_ICON_SELECTED, DU_ICON_GHOST, DU_ICON_DISABLED };
@@ -212,6 +212,7 @@ struct du_widget {
     const uint8_t *samples;                 /* graph: 0..100, oldest first; total = capacity */
     unsigned sample_count;
     void *data;                             /* f2-32: DU_TEXTAREA state */
+    unsigned pointer_cursor;               /* application cursor for this widget; arrow is automatic */
 };
 
 #define DU_ANCHOR_LEFT   1u
@@ -294,6 +295,7 @@ struct du_ui {
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
     int dirty;
+    unsigned cursor;                       /* application default, used outside text/splitter controls */
     void (*event)(struct du_ui *, const struct du_event *, void *);
     void *user;
     /* Optional application drawing after the widgets, before menus and
@@ -315,6 +317,8 @@ void du_set_text(struct du_widget *, const char *);
 void du_render(struct du_ui *);
 void du_input(struct du_ui *, const struct ciuki_input_event *);
 void du_window_focus(struct du_ui *, int focused);
+unsigned du_cursor_at(const struct du_ui *);
+void du_cursor(struct du_ui *, unsigned shape);
 void du_release(struct du_ui *);
 unsigned du_key_char(const struct du_ui *, unsigned code);
 void du_post(struct du_ui *, enum du_event_type, int id, int index);
@@ -370,6 +374,7 @@ struct du_window {
     /* At most one replacement. After sending its attachment, retain the
      * previous surface until CONFIGURE(COMMITTED) confirms the swap. */
     int old_surface, replacement, swap_sent, resizable;
+    unsigned cursor_sent;
     struct ciuki_surface_info old_info;
     uint32_t *old_pixels, *old_back;
     uint32_t configure_serial, request_serial, request_width, request_height, last_serial;
