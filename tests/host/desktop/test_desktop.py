@@ -33,18 +33,18 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
 # F2-67 + F2-68: caption changes and selection rendering combined; shared frames re-recorded.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "3a5aabcc97e43791efb91ebd7b73b0211dd7fcc1c7311ade16f0ba1e569d7bb3",
-    "ciuki-blue-dialogs.ppm": "cc8833fb853e16b7317f361a57e3a3033ae81838242981947bcbdad2601ebe7c",
-    "ciuki-blue-tray-disabled.ppm": "c0f0c792f567ad6e18f58f793fac348ecfa4146f2bc79e7d3a349283251a3b92",
-    "ciuki-blue-tray-media.ppm": "fa2946ccec5931a733ba786238865a16e15c7901ca5ac18b4062237c6a05cc4d",
-    "classic-98-desktop.ppm": "ba55e764dd814fb8c0c13857d07c275ccfba1138f43a3b18d4094c79c5839bec",
-    "classic-98-dialogs.ppm": "3cc7e57e2282d7dd0647d944507c1f0c3b0444c50b841aaaafd6485ccba7cc33",
-    "classic-98-tray-disabled.ppm": "f6eeb9c579fff43c8630926bb29a22a78c0707af2beb9a41b266a39a564bcf7a",
-    "classic-98-tray-media.ppm": "459dc2f0b2ec7dbb6c501ab843d0bcba1b7c4fa46ecb21b92337eb51e6ba5572",
-    "platinum-desktop.ppm": "68b285a9193d9c502b3c415d066bb7098f4166fddfe5b090c3ae7b4fa59a09bc",
-    "platinum-dialogs.ppm": "965500e713b474ab8f1a75050130a7f4e93c970a2f4102da2b40588659ff2741",
-    "platinum-tray-disabled.ppm": "6f0d53ad285a1d71dd515bc2e75721ec49761b26a4d8237be2f94ac5e5589b94",
-    "platinum-tray-media.ppm": "43d2f94481304dd805bbcce86fcb5db9dd5120093d1de7844a2e98126764680c"
+    "ciuki-blue-desktop.ppm": "af53527c00b4ffebb4909c880cf571a3a77586fc21fadcc2d879d1511c674fd1",
+    "ciuki-blue-dialogs.ppm": "924fa1c72c6ff205845dd84a2ac27d8e545f438f1b92916099cc1e5050737377",
+    "ciuki-blue-tray-disabled.ppm": "5bf8a5c6dffc04e3550ac7993ec875bd41dbcbb0c8cb012c793d864c9ed0cf8d",
+    "ciuki-blue-tray-media.ppm": "b9024012e844d5c3df06d5cc14ac178a002d095c124be161d1d566926175005e",
+    "classic-98-desktop.ppm": "a469d45db5cd51560ede504dc6514c8ad1817888a3c97bdea4a250e1d01fd5a2",
+    "classic-98-dialogs.ppm": "43320f8495431339069a822ecdee7d5bcc6460b2b01c1872e2c33682df119c80",
+    "classic-98-tray-disabled.ppm": "38363a9f344a2abe17e5e04fef55f8eb8deed44e2c5f593d3f8062fd4f763937",
+    "classic-98-tray-media.ppm": "4103806b91770a66daedb3dbebdd99fcfbef29d70946c18eb0f617d959c28174",
+    "platinum-desktop.ppm": "2dcb28b6aebb38944f8e4c90d2ed6745fd45876e545a32ff6687d0b66b788e47",
+    "platinum-dialogs.ppm": "6adccd756e38abce08059364a40022e86bc6a36e0beef2520e428dc40876cb22",
+    "platinum-tray-disabled.ppm": "1586c8a2457d6265247d3c61451a5a3983714706a1f4f3ce377b0fee8d51ecd2",
+    "platinum-tray-media.ppm": "54c00f1c4acb4038fb9ac6769a0d879892014e897da2c4f271e35dbf3c07528a"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -156,7 +156,7 @@ class DesktopTests(unittest.TestCase):
                 if mode == "plain":
                     # F2-62: the missing-settings desktop now uses Ciuki Blue.
                     # F2-63: re-recorded for the pinned FreeType UI atlases.
-                    pinned = "fd200deaf8f042116a6a2ad7ee554bca0ecfac00b8a4b0a31e4bb22e06a8b195"
+                    pinned = "b11b0c5d3ffe69d20cd5798127037aebb0afc1dfac171b18ac4e63b3d9422b64"
                     actual = hashlib.sha256(pixels).hexdigest()
                     self.assertEqual(actual, pinned)
                 else:
