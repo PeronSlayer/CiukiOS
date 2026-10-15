@@ -255,6 +255,15 @@ subprocess.run(["nasm", "-f", "bin", str(validator), "-o", str(binary)], check=T
 data = binary.read_bytes()
 (out / "dosvm_mz_reloc.inc").write_text("static const uint8_t mz_reloc_code[] = {" +
     ",".join(str(b) for b in data) + "};\n")
+# F3-27: execute the production boot sector through the active directory,
+# after the real worker's startup diagnostic has yielded. No image needed.
+boot = out / "dosvm_boot.bin"
+subprocess.run(["nasm", "-f", "bin", str(root / "src/boot/full_boot.asm"),
+                "-DFAT_TOTAL_SECTORS=262144", "-o", str(boot)], check=True)
+data = boot.read_bytes()
+assert len(data) == 512 and data[510:] == b"\x55\xaa"
+(out / "dosvm_boot.inc").write_text("static const uint8_t startup_boot_sector[] = {" +
+    ",".join(str(b) for b in data) + "};\n")
 PY
 # The VGA models and the retained presenter (reference oracle) are separate
 # translation units, exactly as the kernel links them.

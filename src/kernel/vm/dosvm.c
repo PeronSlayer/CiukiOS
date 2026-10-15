@@ -495,7 +495,10 @@ bool dosvm_dpmi_info(struct dosvm_key key, struct dpmi_info *out)
 uint32_t dosvm_task_cr3(const struct task *t, uint32_t normal)
 {
     struct dosvm *v = owner(t);
-    return v && v->continuation ? v->as.pd_phys : normal;
+    /* Startup diagnostics can yield before the first v86_enter sets the
+     * continuation. The worker owns this directory until it is reaped,
+     * before as_destroy; only ESP0 depends on a live entry continuation. */
+    return v ? v->as.pd_phys : normal;
 }
 uint32_t dosvm_task_esp0(const struct task *t, uint32_t normal)
 {
