@@ -208,7 +208,7 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f3-25-quake-qemu-regression-after-disk-cache](f3-25-quake-qemu-regression-after-disk-cache.md) | F3 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-15 (DOS EXEC rejected MZ files with zero relocations and a garbage e_lfarlc: Quake 1.06; same cause on the T23; screen records also under DIAG_VERBOSE) |
 | [f0-23-volume-integrity-log-rotation-latency](f0-23-volume-integrity-log-rotation-latency.md) | F0 | gpt-6.1-sol / xhigh | launched 2026-10-15 (second T23 report, image a4f67ac1) |
 | [f1-66-usb-stick-budget-and-mouse-wheel](f1-66-usb-stick-budget-and-mouse-wheel.md) | F1 | gpt-6.1-sol / xhigh | launched 2026-10-15 (second T23 report, image a4f67ac1) |
-| [f1-67-savage-fill-still-8bpp-on-hardware](f1-67-savage-fill-still-8bpp-on-hardware.md) | F1 | gpt-6.1-sol / xhigh | launched 2026-10-15 (second T23 report, image a4f67ac1) |
+| [f1-67-savage-fill-still-8bpp-on-hardware](f1-67-savage-fill-still-8bpp-on-hardware.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-15 (descriptor controls and MM48C18 sequence per the framebuffer reference, full readback on failure, 16 bpp alternative); T23 pending |
 | [f3-26-doom-fullscreen-black-screen-and-lag-on-hardware](f3-26-doom-fullscreen-black-screen-and-lag-on-hardware.md) | F3 | gpt-6.1-sol / xhigh | launched 2026-10-15 (second T23 report, image a4f67ac1) |
 | [f2-70-theme-and-wallpaper-change-performance](f2-70-theme-and-wallpaper-change-performance.md) | F2+ | gpt-6.1-sol / xhigh | launched 2026-10-15 (second T23 report, image a4f67ac1) |
 | [f2-71-paint-stroke-continuity](f2-71-paint-stroke-continuity.md) | F2+ | gpt-6-luna / medium | launched 2026-10-15 (second T23 report, image a4f67ac1) |
