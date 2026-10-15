@@ -746,3 +746,13 @@ host evidence boundary. H may use a retained earlier-boot attempt marker as
 its durable guard, preserving that marker even on a passing diagnostic. It
 never lifts a current-boot quarantine. Production activation continues to
 require its ordinary attempt-marker gate and exact marker readback.
+
+## f3-32: native full-screen mode provider (2026-10-15)
+
+[The native provider contract](supersavage-fullscreen.md) supersedes f3-26's
+unconditional 5333:8c2e refusal for supported single-panel states. It owns
+the VGA ports, MMIO and aperture for the complete DOS transaction and uses
+native save/program/restore rather than the firmware VM. Unsupported panel,
+PCI or resource states still refuse; quarantine is never reset. The 2D
+initializer remains separate and does not program scanout. Hardware panel
+visibility and the complete 200 ms return budget still require T23 evidence.

@@ -11,6 +11,16 @@ python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_boot_modes.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_loader_menu.py
 python3 -B "$root/tests/host/test_display_modes.py" DisplayTests.test_kernel_switch
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/supersavage_mode_test.c" \
+    "$root/src/kernel/drivers/supersavage_mode.c" "$root/src/kernel/vm/vga_hardware.c" \
+    "$root/src/kernel/vm/virtual_vga.c" -o "$out/supersavage_mode_test"
+ASAN_OPTIONS=detect_leaks=0 "$out/supersavage_mode_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/supersavage_display_test.c" \
+    "$root/src/kernel/drivers/supersavage_mode.c" "$root/src/kernel/vm/vga_hardware.c" \
+    "$root/src/kernel/vm/virtual_vga.c" -o "$out/supersavage_display_test"
+ASAN_OPTIONS=detect_leaks=0 "$out/supersavage_display_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
     -Wl,--gc-sections -fsanitize=address,undefined -I "$root/src/kernel/include" \
     "$root/tests/host/record_runtime_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/record_runtime_test"

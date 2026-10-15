@@ -46,7 +46,7 @@ static void planar(const struct vga_hardware_bus *b)
     indexed(b,0x3CE,0,0); indexed(b,0x3CE,1,0); indexed(b,0x3CE,3,0);
     indexed(b,0x3CE,5,0); indexed(b,0x3CE,6,5); indexed(b,0x3CE,8,0xFF);
 }
-void vga_hardware_capture(cvga_state *v, const struct vga_hardware_bus *b)
+void vga_hardware_read_registers(cvga_state *v, const struct vga_hardware_bus *b, bool dac8)
 {
     v->misc=hw_rd(b,0x3CC); v->feature=hw_rd(b,0x3CA); v->enable=hw_rd(b,0x3C3);
     v->seq_index=hw_rd(b,0x3C4); v->gc_index=hw_rd(b,0x3CE); v->crtc_index=hw_rd(b,crport(v));
@@ -59,7 +59,12 @@ void vga_hardware_capture(cvga_state *v, const struct vga_hardware_bus *b)
         hw_rd(b,crport(v)+6); hw_wr(b,0x3C0,i); v->attr[i]=hw_rd(b,0x3C1);
     }
     hw_wr(b,0x3C7,0);
-    for (unsigned i=0;i<256;i++) for (unsigned k=0;k<3;k++) v->dac[i][k]=hw_rd(b,0x3C9)&63;
+    for (unsigned i=0;i<256;i++) for (unsigned k=0;k<3;k++)
+        v->dac[i][k]=hw_rd(b,0x3C9)&(dac8 ? 255 : 63);
+    indexes(v,b);
+}
+void vga_hardware_capture_planes(cvga_state *v, const struct vga_hardware_bus *b)
+{
     planar(b);
     for (unsigned p=0;p<4;p++) {
         indexed(b,0x3CE,4,p);
@@ -68,11 +73,16 @@ void vga_hardware_capture(cvga_state *v, const struct vga_hardware_bus *b)
     /* No standard latch readback exists. Preserve every VRAM byte, and make
      * the model agree with the latches loaded by the final capture read. */
     for (unsigned p=0;p<4;p++) v->latch[p]=v->plane[p][CVGA_PLANE_SIZE-1];
-    registers(v,b,0); indexes(v,b);
     for (unsigned p=0;p<4;p++) for (unsigned i=0;i<CVGA_DIRTY_BYTES;i++) v->dirty[p][i]=0xFF;
     v->changes++; v->display_changes++;
 }
-void vga_hardware_load(const cvga_state *v, const struct vga_hardware_bus *b)
+void vga_hardware_capture(cvga_state *v, const struct vga_hardware_bus *b)
+{
+    vga_hardware_read_registers(v,b,false);
+    vga_hardware_capture_planes(v,b);
+    registers(v,b,0); indexes(v,b);
+}
+static void load(const cvga_state *v, const struct vga_hardware_bus *b, int blank)
 {
     registers(v,b,1); planar(b);
     for (unsigned p=0;p<4;p++) {
@@ -88,8 +98,12 @@ void vga_hardware_load(const cvga_state *v, const struct vga_hardware_bus *b)
     for (unsigned p=0;p<4;p++) {
         indexed(b,0x3C4,2,1u<<p); b->write(b->arg,0xFFFF,v->plane[p][0xFFFF]);
     }
-    registers(v,b,0); indexes(v,b);
+    registers(v,b,blank); indexes(v,b);
 }
+void vga_hardware_load(const cvga_state *v, const struct vga_hardware_bus *b) { load(v,b,0); }
+void vga_hardware_load_blanked(const cvga_state *v, const struct vga_hardware_bus *b) { load(v,b,1); }
+void vga_hardware_unblank(const cvga_state *v, const struct vga_hardware_bus *b)
+{ indexed(b,0x3C4,1,v->seq[1]); indexes(v,b); }
 
 unsigned vga_hardware_verify(const cvga_state *v, const struct vga_hardware_bus *b)
 {

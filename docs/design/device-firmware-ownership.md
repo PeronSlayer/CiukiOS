@@ -473,3 +473,16 @@ AL (excluding the preserve-memory bit) must match the requested VGA mode.
 This follows the [upstream VGA BIOS dispatcher and get-mode implementation](https://github.com/qemu/vgabios/blob/master/vgabios.c).
 A completed standard mode-set call has no VBE-style AX status, so completion
 alone is not sufficient evidence that the intended mode was selected.
+
+## Native SuperSavage full-screen provider (amendment, 2026-10-15, f3-32)
+
+For 5333:8c2e, a supported single-panel DOS full-screen transaction uses the
+[native provider](supersavage-fullscreen.md). After display grants are
+suspended and the accelerator is stopped, it exclusively owns VGA ports,
+the BAR0 register extent and A0000–BFFFF, including while the DOS VM runs.
+The f3-20 task-local VGA port grant and UC aperture mappings borrow this
+ownership. Guest grants are revoked before capture and native restoration.
+No BIOS preparation, video call or firmware fallback participates on this
+adapter. Unsupported states keep the f3-26 refusal; failed native recovery
+quarantines its resources and keeps the LFB inaccessible. Other adapters
+retain the existing mediated standard-VGA firmware provider.

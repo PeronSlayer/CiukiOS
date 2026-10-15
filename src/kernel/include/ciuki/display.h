@@ -9,9 +9,11 @@ uint32_t display_change_counter(void);
 void display_frame_complete(uint32_t generation);
 void display_watchdog_poll(void);
 int display_worker_start(void);
-int display_fullscreen_begin(uint8_t mode);
+int display_fullscreen_begin(uint16_t mode);
 int display_fullscreen_end(void);
 bool display_fullscreen_active(void);
+/* IRQ safe, records the hotkey/fault time without doing any I/O. */
+void display_fullscreen_return_request(void);
 /* Boot check only, no grants/desktop; end verifies the original VBE mode. */
 int display_check_begin(uint16_t mode);
 int display_check_end(void);

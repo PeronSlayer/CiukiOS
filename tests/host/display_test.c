@@ -12,6 +12,9 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/cpu.h>
+#include <ciuki/supersavage_display.h>
+#undef irq_save
+#undef irq_restore
 #define irq_save() 0x200u
 #define irq_restore(flags) ((void)(flags))
 
@@ -29,6 +32,12 @@ static unsigned accel_stops;
 static bool is_supersavage,log_active=true;
 static int log_sync_error;
 static unsigned log_syncs;
+static unsigned blackbox_syncs;
+static int blackbox_error;
+int blackbox_checkpoint(void) { blackbox_syncs++; return blackbox_error; }
+static bool native_supported;
+static int native_begin_error,native_end_error;
+static unsigned native_prepares,native_begins,native_ends;
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
 int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
 { assert(cancel && pause && !cancel(arg)); log_syncs++; return log_sync_error; }
@@ -39,6 +48,12 @@ static uint16_t called[16];
 static unsigned sequence[64], sequence_count;
 static unsigned char user[1024];
 static void event(unsigned n) { assert(sequence_count < 64); sequence[sequence_count++] = n; }
+int supersavage_display_prepare(const struct fb_device *f,uint16_t mode)
+{ assert(f->present && (mode==3 || mode==0x13 || mode==0x101)); native_prepares++; return native_supported ? 0 : -EOPNOTSUPP; }
+int supersavage_display_begin(uint16_t mode)
+{ (void)mode; assert(suspended && !fbdev_get()->present && !accel_ports_owned); native_begins++; event(11); return native_begin_error; }
+int supersavage_display_end(void)
+{ assert(suspended && !fbdev_get()->present); native_ends++; event(12); return native_end_error; }
 static void wr16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 static void wr32(uint8_t *p, uint32_t v) { for (unsigned i = 0; i < 4; i++) p[i] = v >> (8 * i); }
 static void mode_info(uint16_t id, uint8_t m[256])
@@ -146,7 +161,10 @@ void console_framebuffer_changed(const struct fb_device *f) { assert(f->mapped &
 static void fixture(void)
 {
     free(aperture); free(window); aperture = window = 0;
-    fullscreen_display=suspended=fs_begin_failure=fs_end_failure=false;
+    fullscreen_display=fullscreen_native=awaiting_native_frame=suspended=fs_begin_failure=fs_end_failure=false;
+    native_supported=false;native_begin_error=native_end_error=0;
+    fullscreen_return_timed=false;fullscreen_return_tick=0;
+    native_prepares=native_begins=native_ends=blackbox_syncs=0;blackbox_error=0;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
     initialized = changing = switching = awaiting_frame = check_display = check_boot = check_sweeping = false;
     check_result=0; check_deadline=0;
@@ -246,10 +264,31 @@ static void fullscreen_tests(void)
     assert(display_fullscreen_begin(3)==-EIO && !sequence_count && fbdev_get()->present);
     fixture();log_sync_error=-EIO;
     assert(display_fullscreen_begin(3)==-EIO && !sequence_count && fbdev_get()->present);
+    fixture();blackbox_error=-EIO;
+    assert(display_fullscreen_begin(3)==-EIO && !sequence_count && blackbox_syncs==1 && fbdev_get()->present);
     fixture();g_boot.flags|=CBI_F_SMBIOS_QEMU;log_active=false;
     assert(!display_fullscreen_begin(3) && !log_syncs);
     assert(!display_fullscreen_end());
     puts("PASS f3-26 display: SuperSavage refusal before hardware mutation, durable hardware checkpoints, missing/failed log refusal, QEMU serial-only timing");
+    fixture();is_supersavage=native_supported=prepare_failure=true;
+    acceleration=&test_acceleration;accel_ports_owned=true;
+    assert(!display_fullscreen_begin(0x13) && suspended && fullscreen_native && native_prepares==1 && native_begins==1);
+    assert(!switches && accel_stops==1 && !fbdev_get()->present);
+    display_fullscreen_return_request();
+    g_ticks+=10;display_fullscreen_return_request();assert(fullscreen_return_tick==100);
+    /* A quarantined/unavailable BIOS and a failed persistence operation do
+     * not prevent native recovery, nor authorize the firmware fallback. */
+    log_sync_error=-EIO;
+    assert(!display_fullscreen_end() && !suspended && fbdev_get()->present && native_ends==1 && !switches);
+    const unsigned native_sequence[]={0,1,2,3,11,12,5,6,7,8};
+    assert(sequence_count==ARRAY_SIZE(native_sequence) && !memcmp(sequence,native_sequence,sizeof(native_sequence)));
+    g_ticks+=10000; display_watchdog_poll(); assert(!switches && fbdev_get()->present);
+    fixture();is_supersavage=native_supported=true;native_begin_error=-EOPNOTSUPP;
+    assert(display_fullscreen_begin(3)==-EOPNOTSUPP && !suspended && fbdev_get()->present && native_ends==1 && !switches);
+    fixture();is_supersavage=native_supported=true;
+    assert(!display_fullscreen_begin(0x101)); native_end_error=-EIO;
+    assert(display_fullscreen_end()==-EIO && !fbdev_get()->present && !fbdev_get()->mapped && !switches);
+    puts("PASS f3-32 display: native provider after accelerator stop, no BIOS preparation/calls/recovery, exact saved layout remap, unsupported rollback, failed restore leaves LFB revoked, black box checkpoint refusal");
     fixture(); acceleration=&test_acceleration; accel_ports_owned=true;
     assert(!display_fullscreen_begin(0x13) && suspended && display_fullscreen_active());
     assert(!fbdev_get()->present && !fbdev_get()->mapped && accel_stops==1);

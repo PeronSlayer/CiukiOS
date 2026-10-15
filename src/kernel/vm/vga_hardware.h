@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_VGA_HARDWARE_H
 #define CIUKI_VGA_HARDWARE_H
+#include <stdbool.h>
 #include "virtual_vga.h"
 struct vga_hardware_bus {
     void *arg;
@@ -12,6 +13,12 @@ struct vga_hardware_bus {
 };
 void vga_hardware_capture(cvga_state *, const struct vga_hardware_bus *);
 void vga_hardware_load(const cvga_state *, const struct vga_hardware_bus *);
+/* Native providers bracket the planar transfer with their chipset aperture
+ * controls and keep scanout blank until panel/streams have been restored. */
+void vga_hardware_read_registers(cvga_state *, const struct vga_hardware_bus *, bool dac8);
+void vga_hardware_capture_planes(cvga_state *, const struct vga_hardware_bus *);
+void vga_hardware_load_blanked(const cvga_state *, const struct vga_hardware_bus *);
+void vga_hardware_unblank(const cvga_state *, const struct vga_hardware_bus *);
 /* Bit 0: misc/enable, 1: sequencer, 2: GC, 3: CRTC, 4: attribute. */
 unsigned vga_hardware_verify(const cvga_state *, const struct vga_hardware_bus *);
 #endif

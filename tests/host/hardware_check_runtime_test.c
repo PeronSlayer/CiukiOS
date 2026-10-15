@@ -12,6 +12,8 @@
 #undef WIFSIGNALED
 #undef WTERMSIG
 #include <ciuki/cpu.h>
+#undef irq_save
+#undef irq_restore
 #define irq_save() 0u
 #define irq_restore(flags) ((void)(flags))
 #include "../../src/kernel/core/hardware_check.c"
