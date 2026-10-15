@@ -217,12 +217,13 @@ static void run_worker(struct dosvm *v)
 
 /* File-backed fake VFS transport. Production overlay indexing remains real. */
 static struct storage store = {.ready=true};
-static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open; uint64_t pos[2], base_bytes; char path[80]; } files[DOSVM_LIMIT];
+static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open; uint64_t pos[2], base_bytes; char path[80]; void (*base_sector)(uint32_t, void *); } files[DOSVM_LIMIT];
 static unsigned handles, tables, scratch, disk_reads, disk_writes, commits, deletes;
 static unsigned io_calls, io_fail_at;
 static bool short_read, short_write, fail_delete, fail_commit, fail_close, bad_signature;
 static bool fail_read_ahead;
 static void (*disk_read_hook)(void);
+static void (*disk_base_sector)(uint32_t, void *);
 static bool io_fails(void) { return ++io_calls == io_fail_at; }
 static unsigned file_slot(struct vfs_table *table) { for (unsigned i=0;i<DOSVM_LIMIT;i++) if (files[i].table==table) return i; CHECK(false); return 0; }
 static void disk_owned(struct vfs_table *table)
@@ -269,7 +270,7 @@ int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vf
 {
     unsigned i=file_slot(table); CHECK(attr==0); if (io_fails()) return -V86_EIO;
     if (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") && bundled_open_error) return bundled_open_error;
-    if (base_path(path)) { CHECK(access==VFS_READ && share==VFS_DENY_WRITE); files[i].base_open=true; files[i].base_bytes=base_bytes(path); handles++; return 0; }
+    if (base_path(path)) { CHECK(access==VFS_READ && share==VFS_DENY_WRITE); files[i].base_open=true; files[i].base_bytes=base_bytes(path); files[i].base_sector=disk_base_sector; handles++; return 0; }
     CHECK(access==(VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE) && share==VFS_DENY_ALL && strstr(path,".COW"));
     snprintf(files[i].path,sizeof(files[i].path),"build/host/dosvm-cow-XXXXXX");
     int fd=mkstemp(files[i].path); CHECK(fd>=0); files[i].cow=fdopen(fd,"w+b"); CHECK(files[i].cow);
@@ -289,7 +290,15 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
     if (disk_read_hook) disk_read_hook();
     if (io_fails() || (fail_read_ahead && bytes > 512)) return -V86_EIO;
     *done=short_read ? 511 : bytes;
-    if (!handle) { CHECK(files[i].pos[0]+bytes<=files[i].base_bytes); for (size_t at=0;at<bytes;at+=512) memset((uint8_t *)data+at,(files[i].pos[0]/512+at/512)%251,512); if (!files[i].pos[0]) { ((uint8_t *)data)[0]=0xEE; ((uint8_t *)data)[510]=bad_signature ? 0 : 0x55; ((uint8_t *)data)[511]=0xAA; } }
+    if (!handle) {
+        CHECK(files[i].pos[0]+bytes<=files[i].base_bytes);
+        for (size_t at=0;at<bytes;at+=512) {
+            uint32_t lba=(uint32_t)(files[i].pos[0]/512+at/512);
+            if (files[i].base_sector) files[i].base_sector(lba,(uint8_t *)data+at);
+            else memset((uint8_t *)data+at,lba%251,512);
+        }
+        if (!files[i].base_sector && !files[i].pos[0]) { ((uint8_t *)data)[0]=0xEE; ((uint8_t *)data)[510]=bad_signature ? 0 : 0x55; ((uint8_t *)data)[511]=0xAA; }
+    }
     else { CHECK(fseek(files[i].cow,(long)files[i].pos[1],SEEK_SET)==0); CHECK(fread(data,1,*done,files[i].cow)==*done); }
     return 0;
 }
@@ -315,7 +324,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 }
 void rec_diag(const char *probe, const char *fmt, ...)
 {
-    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    if (!(g_boot.flags & (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE))) return;
     CHECK(cpu_flags & V86_IF);
     char extra[240]; va_list ap; va_start(ap,fmt);
     int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
@@ -624,11 +633,13 @@ static void test_memory_services(void)
 #include "dosvm_cost_test.inc"
 #include "dosvm_idle_test.inc"
 #include "dosvm_fullscreen_test.inc"
+#include "dosvm_quake_start_test.inc"
 #include "dosvm_startup_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     if (getenv("CIUKI_VM_AUDIO_COST")) { test_vm_source_budget(); free(ram); return 0; }
+    if (getenv("CIUKI_VM_QUAKE_START")) { test_quake_start(); free(ram); return 0; }
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
     test_vm_audio();
@@ -643,6 +654,7 @@ int main(void)
     test_fullscreen_transport();
     test_fullscreen_service();
     test_startup();
+    test_quake_start();
     CHECK(guest_enters==3 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

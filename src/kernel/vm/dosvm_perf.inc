@@ -50,7 +50,7 @@ static void perf_vector_end(struct dosvm *v, unsigned path, uint8_t vector, uint
  * 40 raw characters per record leave space for full-width IDs/counters. */
 void dosvm_startup_report(struct dosvm *v, bool force)
 {
-    if (!(g_boot.flags & CBI_F_VERBOSE) || v->startup.busy ||
+    if (!(g_boot.flags & (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE)) || v->startup.busy ||
         (dosvm_in_irq(v) && v->info.state < DOSVM_STOPPING) ||
         (!force && (!v->startup.started || v->video_frames || g_ticks - v->startup.tick < 5000))) return;
     v->startup.busy = v->startup.started = true;
