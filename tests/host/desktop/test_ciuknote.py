@@ -26,35 +26,35 @@ ROOT = Path(__file__).resolve().parents[3]
 # F2-64 recorded affected transient frames; remaining frames await lead review.
 # 2026-10-15 (main after f2-63 + f2-64): pinned frames re-recorded on the combined tree (FreeType text in the f2-64 dialogs), reviewed against the 9a05ab9f renders.
 TEXTAREA_SCREENS = {
-    "ta-bold.xrgb": "PIN-FROM-FIRST-RUN",
-    "ta-plain.xrgb": "PIN-FROM-FIRST-RUN",
-    "ta-scrolled.xrgb": "PIN-FROM-FIRST-RUN",
+    'ta-bold.xrgb': 'c184662e3d21f87b91eaf034a932b750fc4a1baa4a9668d7396b6bc847e25d0e',
+    'ta-plain.xrgb': 'fb9a313f1a54d109e21735aa28049a1cd71d3f632c5255bceef2a07351b99cce',
+    'ta-scrolled.xrgb': '33d61b4ba794401e2fbc8ae712df3e6466c836e0a5ef57b569b690de48059021',
 }
 APP_SCREENS = {
-    "cn-about.xrgb": "de423649ddeedb3807983783ba540cb28d6cc872194e40013dccc0fed252e061",
-    "cn-bold.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-context.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-empty.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-find-bar.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-format-menu.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-help.xrgb": "e89781b5f31fd40b0c90dde5bca927fcb4b4874995b10194b5ce31d57a2b5630",
-    "cn-limit.xrgb": "200981da8810de5f08368d9ec8990eb5c544fbb571cd4f8bbd0b001e70bff88d",
-    "cn-menu-edit.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-menu-file.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-open-root.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-open-tests.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-prompt-changes.xrgb": "1dac23bc0dcb2c31e1361d83e7b411362324f26dae3a7e4f076b07e4a65168a2",
-    "cn-replace-bar.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-save-page.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-saved.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-scrolled-bars.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-status-hidden.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-typed.xrgb": "PIN-FROM-FIRST-RUN",
-    "cn-wrapped.xrgb": "PIN-FROM-FIRST-RUN",
+    'cn-about.xrgb': 'de423649ddeedb3807983783ba540cb28d6cc872194e40013dccc0fed252e061',
+    'cn-bold.xrgb': 'dbb6e00d030ec73460eb09788b033173f87782a6c1075aeeead4aec5d559f976',
+    'cn-context.xrgb': 'f94b8ed1d6e07a689eebf6b8e0570fd19558d99c463c63053b5f7a0044359e3c',
+    'cn-empty.xrgb': 'b52ffcdab84e440cf0fbfa9bafcd0cdfa9c62d057bd4f843f234ddfe09e00c2b',
+    'cn-find-bar.xrgb': 'b1c769eb8d2c9ca2b777dc18afb33ecc42431fe91341e32b2b56680bbce2fdac',
+    'cn-format-menu.xrgb': 'd19a5699eda567fe5560bc60dd68caf4c636a78756b2971ffc8c44990c2b6d4c',
+    'cn-help.xrgb': 'e89781b5f31fd40b0c90dde5bca927fcb4b4874995b10194b5ce31d57a2b5630',
+    'cn-limit.xrgb': '200981da8810de5f08368d9ec8990eb5c544fbb571cd4f8bbd0b001e70bff88d',
+    'cn-menu-edit.xrgb': '1e116d6bf0b76ed52d7f28cfd1bfcb01bb61e6685605e46c80f7b1ece428f962',
+    'cn-menu-file.xrgb': '8373e57ec17b178ef87538570d77303d42a7265e4afb9aa994e3bd9c3ed58f13',
+    'cn-open-root.xrgb': '2d7b41ab10aa32fe1a2649c4f2850ad372a6bf999a07c7faf4848030632462c0',
+    'cn-open-tests.xrgb': '82358668fee80e56394a30a6be45d2140046b9bd9f6e807dbc8bb8738b9c99c9',
+    'cn-prompt-changes.xrgb': '1dac23bc0dcb2c31e1361d83e7b411362324f26dae3a7e4f076b07e4a65168a2',
+    'cn-replace-bar.xrgb': '95039478d4218b647d6e842cf3c7553e130d8eb2bbcc22a8e8ed7afb2c1da801',
+    'cn-save-page.xrgb': 'fdeccd1dede0221d93450ebf8e6ecd1288e09937db413f096dd6d1df835a06ab',
+    'cn-saved.xrgb': 'c31ebaddb8dc2b5f791cee0cfc693a942fafa3e1e12902490bb1ceb7198da3a5',
+    'cn-scrolled-bars.xrgb': '06804b6ef253b27c12cf0f48b6ab0ff63faa3d073d9b13cde8a9e938be7ab366',
+    'cn-status-hidden.xrgb': '7b12865ddbc38c28518557e9b58151831dc6a27b5dd376c1443217dd7b2380ff',
+    'cn-typed.xrgb': '0c9bfefa5c1cf6a2e6fd6c0f2016b8d8431f2fbf87d5f2ec0cb5cfb11ea03992',
+    'cn-wrapped.xrgb': '945e6aed942540b9910e104d1a0888b9bc2effe444d7f18c0812e017ae3142cf',
 }
 # Digests the guest prints for the QEMU case (FNV-1a 32 of the 640x440 surface), derived on the
 # host from the same script: compare them with the serial log lines "CiukNote checkpoint=...".
-CHECKPOINTS = {"ready": "PIN-FROM-FIRST-RUN", "saved": "PIN-FROM-FIRST-RUN", "opened": "PIN-FROM-FIRST-RUN"}
+CHECKPOINTS = {'opened': 'dcc51b2a', 'ready': 'b861e58b', 'saved': '6d21f27c'}
 
 # QMP qcodes used by the scripts and the public set-1 codes the kernel reports (E0 keys | 0x100).
 QCODES = {**{c: s for c, s in zip("qwertyuiop", range(0x10, 0x1a))}, **{c: s for c, s in zip("asdfghjkl", range(0x1e, 0x27))},
@@ -116,7 +116,9 @@ class CiuknoteTests(unittest.TestCase):
 
     def run_binary(self, folder, binary, *args):
         env = dict(os.environ, TMPDIR=str(folder), ASAN_OPTIONS="detect_leaks=0")
-        return subprocess.run([str(binary), *args], check=True, env=env, capture_output=True, text=True).stdout
+        result = subprocess.run([str(binary), *args], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result.stdout
 
     def screens(self, folder):
         for p in folder.glob("*.xrgb"):

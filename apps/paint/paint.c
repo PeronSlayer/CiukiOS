@@ -618,6 +618,48 @@ static void text_finish(void)
 /* The selection; a floating one is lifted into flt and drawn over the */
 /* picture at each move (the preview of the operation that lifted it). */
 static int sel_on, selx, sely, selw, selh, floating, hole, holex, holey, holew, holeh;
+static struct paint_image selection_mask;
+static int free_select;
+#define LASSO_POINTS 256
+static int lassox[LASSO_POINTS],lassoy[LASSO_POINTS],lasso_count;
+#define MASKED_PIXEL 255u
+static void lasso_point(int x,int y)
+{
+    x=imax(0,imin(cv.w-1,x)); y=imax(0,imin(cv.h-1,y));
+    if (lasso_count && lassox[lasso_count-1]==x && lassoy[lasso_count-1]==y)return;
+    if (lasso_count==LASSO_POINTS) {
+        for (int i=0;i<LASSO_POINTS/2;i++) { lassox[i]=lassox[2*i]; lassoy[i]=lassoy[2*i]; }
+        lasso_count=LASSO_POINTS/2;
+    }
+    lassox[lasso_count]=x; lassoy[lasso_count++]=y;
+    int x0=x,x1=x,y0=y,y1=y;
+    for (int i=0;i<lasso_count;i++) { x0=imin(x0,lassox[i]); x1=imax(x1,lassox[i]); y0=imin(y0,lassoy[i]); y1=imax(y1,lassoy[i]); }
+    selx=x0; sely=y0; selw=x1-x0+1; selh=y1-y0+1;
+}
+static void lasso_finish(void)
+{
+    if (lasso_count<3) { sel_on=0; lasso_count=0; return; }
+    if (!img_alloc(&selection_mask,selw,selh)) { no_memory(); sel_on=0; lasso_count=0; return; }
+    memset(selection_mask.pixels,0,(size_t)selw*selh);
+    int selected=0;
+    for (int y=0;y<selh;y++) {
+        int cuts[LASSO_POINTS],count=0,scan=2*(sely+y)+1;
+        for (int i=0,j=lasso_count-1;i<lasso_count;j=i++) {
+            int ya=2*lassoy[i],yb=2*lassoy[j];
+            if ((ya>scan)==(yb>scan))continue;
+            int cut=2*lassox[i]+(scan-ya)*(lassox[j]-lassox[i])/(lassoy[j]-lassoy[i]);
+            int at=count++;
+            while (at && cuts[at-1]>cut) { cuts[at]=cuts[at-1]; at--; }
+            cuts[at]=cut;
+        }
+        for (int i=0;i+1<count;i+=2) {
+            int left=imax(0,cuts[i]/2-selx),right=imin(selw,cuts[i+1]/2-selx);
+            if (right>left) { memset(rowp(&selection_mask,y)+left,1,(size_t)(right-left)); selected=1; }
+        }
+    }
+    lasso_count=0;
+    if (!selected) { img_free(&selection_mask); sel_on=0; }
+}
 static u8 hole_c;
 static void mark(int x0, int x1, int y)
 {
@@ -634,16 +676,19 @@ static void float_render(void)
     int y, x, x0, x1, cy;
     fptr s, d;
     restore_all();
-    if (hole) fill_rect(holex, holey, holex + holew - 1, holey + holeh - 1, hole_c);
+    if (hole) {
+        if (!selection_mask.pixels) fill_rect(holex, holey, holex + holew - 1, holey + holeh - 1, hole_c);
+        else for (y=0;y<holeh;y++) for (x=0;x<holew;x++)
+            if (selection_mask.pixels[y*holew+x])plot(holex+x,holey+y,hole_c);
+    }
     for (y = 0; y < flt.h; y++) {
         cy = sely + y;
         if (cy < 0 || cy >= cv.h) continue;
         x0 = imax(0, -selx); x1 = imin(flt.w, cv.w - selx);
         if (x0 >= x1 || !touch(cy)) continue;
-        if (opaque) memcpy(rowp(&cv, cy) + selx + x0, rowp(&flt, y) + x0, (size_t)(x1 - x0));
-        else {
+        {
             s = rowp(&flt, y); d = rowp(&cv, cy);
-            for (x = x0; x < x1; x++) if (s[x] != bg) d[selx + x] = s[x];
+            for (x = x0; x < x1; x++) if (s[x] != MASKED_PIXEL && (opaque || s[x] != bg)) d[selx + x] = s[x];
         }
         mark(selx + x0, selx + x1 - 1, cy);
     }
@@ -657,6 +702,8 @@ static int lift(int copy)
     if (!alloc_retry(&flt, selw, selh)) { no_memory(); return 0; }
     for (y = 0; y < selh; y++)
         memcpy(rowp(&flt, y), rowp(&cv, sely + y) + selx, (size_t)selw);
+    if (selection_mask.pixels) for (y=0;y<selh;y++) for (int x=0;x<selw;x++)
+        if (!selection_mask.pixels[y*selw+x])rowp(&flt,y)[x]=MASKED_PIXEL;
     begin_op(1);
     final_render = float_render;
     floating = 1;
@@ -673,6 +720,7 @@ static void drop_selection(void)
         floating = 0;
         }
     sel_on = 0;
+    img_free(&selection_mask); lasso_count=0;
 }
 /* Copy the selection (or the floating pixels) to the clipboard. */
 static int copy_selection(void)
@@ -685,6 +733,8 @@ static int copy_selection(void)
     if (!alloc_retry(&clip, selw, selh)) { no_memory(); return 0; }
     for (y = 0; y < selh; y++)
         memcpy(rowp(&clip, y), rowp(src, y0 + y) + x0, (size_t)selw);
+    if (!floating && selection_mask.pixels) for (y=0;y<selh;y++) for (int x=0;x<selw;x++)
+        if (!selection_mask.pixels[y*selw+x])rowp(&clip,y)[x]=MASKED_PIXEL;
     return 1;
 }
 static void clear_selection(void)
@@ -699,10 +749,13 @@ static void clear_selection(void)
         commit_op();
     } else {
         begin_op(0);
-        fill_rect(selx, sely, selx + selw - 1, sely + selh - 1, bg);
+        if (!selection_mask.pixels) fill_rect(selx, sely, selx + selw - 1, sely + selh - 1, bg);
+        else for (int y=0;y<selh;y++) for (int x=0;x<selw;x++)
+            if (selection_mask.pixels[y*selw+x])plot(selx+x,sely+y,bg);
         commit_op();
     }
     sel_on = 0;
+    img_free(&selection_mask); lasso_count=0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1174,11 +1227,12 @@ static void undo(int redo)
         npt = 0; curve_stage = 0;
         sel_on = 0;
         cancel_op();
+        img_free(&selection_mask); lasso_count=0;
         dmg_all();
         return;
     }
     if (!undo_kind || undone != redo) return;
-    sel_on = 0;
+    sel_on = 0; img_free(&selection_mask); lasso_count=0;
     if (undo_kind == U_ROWS) swap_rows();
     else { struct paint_image t = old; old = cv; cv = t; clamp_scroll(); }
     undone = !redo;
@@ -1294,7 +1348,11 @@ static void finish_pending(void)
 }
 
 static int inside_sel(int x, int y)
-{ return sel_on && x >= selx && x < selx + selw && y >= sely && y < sely + selh; }
+{
+    if (!sel_on || x<selx || x>=selx+selw || y<sely || y>=sely+selh)return 0;
+    if (floating)return rowp(&flt,y-sely)[x-selx]!=MASKED_PIXEL;
+    return !selection_mask.pixels || rowp(&selection_mask,y-sely)[x-selx];
+}
 static void tool_down(int x, int y, int btn)
 {
     u8 c;
@@ -1314,6 +1372,7 @@ static void tool_down(int x, int y, int btn)
             x = imax(0, imin(x, cv.w - 1)); y = imax(0, imin(y, cv.h - 1));
             ax = x; ay = y;
             sel_on = 1; selx = x; sely = y; selw = selh = 1;
+            if (free_select)lasso_point(x,y);
             drag_mode = DM_NEWSEL;
         }
         break;
@@ -1407,8 +1466,11 @@ static void tool_move(int x, int y)
     case DM_NEWSEL:
         sel_damage();
         x = imax(0, imin(x, cv.w - 1)); y = imax(0, imin(y, cv.h - 1));
-        selx = imin(ax, x); sely = imin(ay, y);
-        selw = iabs(x - ax) + 1; selh = iabs(y - ay) + 1;
+        if (free_select)lasso_point(x,y);
+        else {
+            selx = imin(ax, x); sely = imin(ay, y);
+            selw = iabs(x - ax) + 1; selh = iabs(y - ay) + 1;
+        }
         sel_damage();
         break;
     case DM_MOVE:
@@ -1436,7 +1498,8 @@ static void tool_up(int x, int y)
     case DM_FREE: commit_op(); pen_replace = -1;  break;
     case DM_SHAPE: commit_op();  break;
     case DM_NEWSEL:
-        if (selw < 2 && selh < 2) sel_on = 0;
+        if (free_select)lasso_finish();
+        else if (selw < 2 && selh < 2) sel_on = 0;
         break;
     case DM_MOVE:
 
@@ -1485,7 +1548,8 @@ static void update_menus(void)
 {
     flag(&edit_items[0], DU_ITEM_DISABLED, !(op_open || (undo_kind && !undone)));
     flag(&edit_items[1], DU_ITEM_DISABLED, !(undo_kind && undone && !op_open));
-    for (int i = 3; i <= 6; i++) flag(&edit_items[i], DU_ITEM_DISABLED, i == 5 ? !clip.pixels : !sel_on);
+    for (int i = 3; i <= 6; i++) flag(&edit_items[i], DU_ITEM_DISABLED,
+        i == 5 ? (text_on ? !du_clipboard_get()[0] : !clip.pixels) : (text_on ? !du_ta_has_selection(&text_edit) : !sel_on));
     for (int i = 0; i < 5; i++) context_items[i].flags = edit_items[i + 3].flags;
     flag(&view_items[0], DU_ITEM_CHECKED, show_tools); flag(&view_items[1], DU_ITEM_CHECKED, show_colors);
     flag(&view_items[2], DU_ITEM_CHECKED, show_status);
@@ -1505,7 +1569,17 @@ static void layout(void)
     vx = (show_tools ? TB_W : 0) + 1; vy = top + 1;
     vw = imax(8, W - 16 - vx); vh = imax(8, bottom - 16 - vy);
     clamp_scroll();
-    du_get(ui, P_CANVAS)->box = (struct du_rect){vx, vy, vw, vh};
+    struct du_widget *canvas=du_get(ui,P_CANVAS);
+    canvas->box = (struct du_rect){vx, vy, vw, vh};
+    static const unsigned cursors[NTOOLS] = {
+        DESK_CURSOR_CROSSHAIR, DESK_CURSOR_ERASER, DESK_CURSOR_FILL, DESK_CURSOR_PICK,
+        DESK_CURSOR_ZOOM, DESK_CURSOR_PENCIL, DESK_CURSOR_BRUSH, DESK_CURSOR_PRECISION,
+        DESK_CURSOR_TEXT, DESK_CURSOR_CROSSHAIR, DESK_CURSOR_CROSSHAIR, DESK_CURSOR_CROSSHAIR,
+        DESK_CURSOR_CROSSHAIR, DESK_CURSOR_CROSSHAIR, DESK_CURSOR_CROSSHAIR
+    };
+    canvas->cursor_shape=cursors[tool];
+    canvas->cursor_box=(struct du_rect){vx+4,vy+4,imax(0,imin(cv.w-scx,(vw-4)/zoom))*zoom,
+        imax(0,imin(cv.h-scy,(vh-4)/zoom))*zoom};
     struct du_widget *hs = du_get(ui, P_HSCROLL), *vs = du_get(ui, P_VSCROLL);
     hs->box = (struct du_rect){vx, vy + vh, vw, 16}; hs->vertical = 0;
     hs->total = cv.w; hs->page = page_w(); hs->value = scx;
@@ -1515,7 +1589,8 @@ static void layout(void)
     st->box = (struct du_rect){0, sby, W, SB_H}; st->hidden = !show_status;
     st->panels[0] = imax(1, W - 212); st->panels[1] = 104;
     char hint[100], position[32] = "", size[40];
-    snprintf(hint, sizeof(hint), "%s", status[0] ? status : tool_hints[tool]);
+    snprintf(hint, sizeof(hint), "%s", status[0] ? status : tool==T_SELECT && free_select ?
+             "Drag to select a free-form area; drag inside it to move (Ctrl: copy)." : tool_hints[tool]);
     if (ptr_x >= 0) snprintf(position, sizeof(position), "%d, %d", ptr_x, ptr_y);
     snprintf(size, sizeof(size), "%d x %d", sel_on ? selw : cv.w, sel_on ? selh : cv.h);
     snprintf(st->text, sizeof(st->text), "%s\t%s\t%s", hint, position, size);
@@ -1618,7 +1693,17 @@ static void paint_options(void)
             for (k = 0; k < 12; k++) ui_rect(ox + 24 + dots[k * 2] * r / 4, oy + i * 25 + 12 + dots[k * 2 + 1] * r / 4, 1, 1, on ? C_PAPER : C_INK);
         }
         break;
-    case T_SELECT: case T_TEXT:
+    case T_SELECT:
+        for (i=0;i<2;i++) {
+            on=free_select==i; opt_row(i,18,on);
+            ui_text(ox+3,oy+i*18+4,i?"Free":"Rect",on?C_PAPER:C_INK);
+        }
+        for (i=0;i<2;i++) {
+            on=opaque==!i; if(on)ui_rect(ox,oy+36+i*20,OPT_W-4,20,C_TITLE);
+            ui_text(ox+3,oy+40+i*20,i?"Clear":"Opaque",on?C_PAPER:C_INK);
+        }
+        break;
+    case T_TEXT:
         for (i = 0; i < 2; i++) {
             on = opaque == !i;
             opt_row(i, 38, on);
@@ -1656,6 +1741,83 @@ static void marquee(int x, int y, int w, int h)
 {
     struct du_rect r = {x,y,w,h}; du_outline(&ui->canvas, r, DU_WINDOW); du_dotted(&ui->canvas, r);
 }
+static int selection_member(int x,int y)
+{
+    if(x<0 || y<0 || x>=selw || y>=selh)return 0;
+    return floating?rowp(&flt,y)[x]!=MASKED_PIXEL:selection_mask.pixels?rowp(&selection_mask,y)[x]!=0:1;
+}
+static void selection_outline(void)
+{
+    if(!sel_on)return;
+    if(lasso_count) {
+        for(int i=1;i<lasso_count;i++) {
+            int x=i2sx(lassox[i-1]),y=i2sy(lassoy[i-1]),xx=i2sx(lassox[i]),yy=i2sy(lassoy[i]);
+            int dx=iabs(xx-x),sx=x<xx?1:-1,dy=-iabs(yy-y),sy=y<yy?1:-1,err=dx+dy;
+            for(;;) {
+                ui_rect(x,y,1,1,(x+y)&1?DU_INK:DU_WINDOW);
+                if(x==xx && y==yy)break;
+                int e=2*err; if(e>=dy) { err+=dy; x+=sx; } if(e<=dx) { err+=dx; y+=sy; }
+            }
+        }
+        return;
+    }
+    if(!selection_mask.pixels) { marquee(i2sx(selx)-1,i2sy(sely)-1,selw*zoom+2,selh*zoom+2); return; }
+    for(int y=imax(0,scy-sely);y<imin(selh,scy-sely+(vh-4)/zoom);y++)
+        for(int x=imax(0,scx-selx);x<imin(selw,scx-selx+(vw-4)/zoom);x++) {
+            if(!selection_member(x,y))continue;
+            int sx=i2sx(selx+x),sy=i2sy(sely+y); uint32_t ink=(x+y)&1?DU_INK:DU_WINDOW;
+            if(!selection_member(x-1,y))ui_rect(sx,sy,1,zoom,ink);
+            if(!selection_member(x+1,y))ui_rect(sx+zoom-1,sy,1,zoom,ink);
+            if(!selection_member(x,y-1))ui_rect(sx,sy,zoom,1,ink);
+            if(!selection_member(x,y+1))ui_rect(sx,sy+zoom-1,zoom,1,ink);
+        }
+}
+static int footprint_member(int kind,int size,int x,int y)
+{
+    int h=size/2;
+    if (kind==PEN_SLASH) {
+        int i=h-y;
+        return i>=0 && i<size && x>=-h+i && x<=-h+i+1;
+    }
+    if (kind==PEN_BACK) {
+        int i=y+h;
+        return i>=0 && i<size && x>=-h+i && x<=-h+i+1;
+    }
+    if (x < -h || y < -h || x >= size-h || y >= size-h) return 0;
+    if (kind!=PEN_ROUND) return 1;
+    int xx=2*(x+h)-(size-1), yy=2*(y+h)-(size-1);
+    return xx*xx+yy*yy<=size*size+size/2;
+}
+static void footprint(void)
+{
+    struct du_widget *w=du_get(ui,P_CANVAS);
+    if (!ui->focused_window || ui->dialog.kind || ui->menu>=0 || ui->popup ||
+        !du_contains(w->cursor_box,ui->mouse_x,ui->mouse_y)) return;
+    if (tool!=T_BRUSH && tool!=T_ERASER && tool!=T_AIR) return;
+    int cx,cy; to_img(ui->mouse_x,ui->mouse_y,&cx,&cy);
+    int size=tool==T_ERASER?eraser_px[eraser_size]:brush_px[brush_size];
+    int kind=tool==T_ERASER?PEN_SQUARE:brush_kind;
+    if (size==2 && kind==PEN_ROUND)kind=PEN_SQUARE;
+    int radius=4+air_size*4,extent=tool==T_AIR?radius+1:size+1;
+    struct du_canvas *c=&ui->canvas; struct du_rect saved=c->clip;
+    c->clip=du_intersection(saved,w->cursor_box);
+    for (int y=-extent; y<=extent; y++) for (int x=-extent; x<=extent; x++) {
+        int inside=tool==T_AIR?x*x+y*y<=radius*radius:footprint_member(kind,size,x,y);
+        if (!inside)continue;
+        static const int dx[4]={-1,1,0,0},dy[4]={0,0,-1,1};
+        int border[4];
+        for (int edge=0; edge<4; edge++) {
+            int nx=x+dx[edge],ny=y+dy[edge];
+            border[edge]=!(tool==T_AIR?nx*nx+ny*ny<=radius*radius:footprint_member(kind,size,nx,ny));
+        }
+        for(int yy=0;yy<zoom;yy++)for(int xx=0;xx<zoom;xx++)
+            if((border[0] && !xx) || (border[1] && xx==zoom-1) || (border[2] && !yy) || (border[3] && yy==zoom-1)) {
+                int sx=i2sx(cx+x)+xx,sy=i2sy(cy+y)+yy;
+                if(du_contains(c->clip,sx,sy))c->pixels[(size_t)sy*c->width+sx]^=0xffffffu;
+            }
+    }
+    c->clip=saved;
+}
 static void render(struct du_ui *u, void *arg)
 {
     (void)arg; layout(); struct du_canvas *c = &u->canvas; struct du_rect saved = c->clip;
@@ -1671,7 +1833,7 @@ static void render(struct du_ui *u, void *arg)
         for (int x = 1; x < cols; x++) ui_rect(vx + 4 + x * zoom, vy + 4, 1, rows * zoom, DU_SHADOW);
         for (int y = 1; y < rows; y++) ui_rect(vx + 4, vy + 4 + y * zoom, cols * zoom, 1, DU_SHADOW);
     }
-    if (sel_on) marquee(i2sx(selx) - 1, i2sy(sely) - 1, selw * zoom + 2, selh * zoom + 2);
+    selection_outline();
     if (text_on) {
         int w,h,last,cx,cy; text_extent(&w,&h,&last);
         marquee(i2sx(tx) - 2, i2sy(ty) - 2, imax(w,8) * zoom + 4, h * zoom + 4);
@@ -1694,9 +1856,12 @@ static void render(struct du_ui *u, void *arg)
             }
             if (text[i] == '\n') { px = tx; py += 16 * text_scale; } else px += cell * text_scale;
         }
-        text_position((int)text_edit.cursor,&cx,&cy);
-        ui_rect(i2sx(cx), i2sy(cy), imax(1,zoom), 16 * text_scale * zoom, DU_INK);
+        if (!du_ta_has_selection(&text_edit) && u->focused_window && !u->dialog.kind && du_focused(u)==P_CANVAS) {
+            text_position((int)text_edit.cursor,&cx,&cy);
+            ui_rect(i2sx(cx), i2sy(cy), imax(1,zoom), 16 * text_scale * zoom, DU_INK);
+        }
     }
+    footprint();
     c->clip = saved;
     du_outline(c, (struct du_rect){vx - 1,vy - 1,vw + 17,vh + 17}, DU_SHADOW);
     if (show_tools) {
@@ -1946,7 +2111,7 @@ void paint_command(int id)
     case M_CLEARIMG: finish_pending(); drop_selection(); begin_op(0); fill_rect(0,0,cv.w-1,cv.h-1,bg); commit_op(); break;
     case M_OPAQUE: opaque=!opaque; if (floating) float_render(); if (text_on) text_render(); break;
     case M_HELP:
-        message("Choose a tool; its options appear below the tool box.\nLeft: foreground. Right: background. Palette: left/right click.\nSelect: drag a rectangle; drag inside to move (Ctrl: copy).\nRight-click a selection for the edit menu. Arrows move it.\nText: click, type, click outside to place. Esc cancels.\nCurve: draw a line, then drag twice to bend it.\nPolygon: drag first side, click corners, double-click to close.\nRight eraser: erase only the foreground colour.\nCtrl+Z Undo, Ctrl+Y Repeat, Ctrl+X/C/V Cut/Copy/Paste.\nCtrl+A Select All, Del Clear, Ctrl+I Invert, Ctrl+R Rotate.\nCtrl+E Attributes, Ctrl+T/L Tool/Colour Box, Ctrl+G Grid.\nCtrl+PgDn/PgUp Zoom. Arrows scroll; PgUp/PgDn page."); break;
+        message("Choose a tool; its options appear below the tool box.\nLeft: foreground. Right: background. Palette: left/right click.\nSelect: choose Rect or Free, then drag the selection.\nDrag inside to move (Ctrl: copy). Arrows move it.\nRight-click a selection for the edit menu.\nText: click, type, click outside to place. Esc cancels.\nCurve: draw a line, then drag twice to bend it.\nPolygon: drag first side, click corners, double-click to close.\nRight eraser: erase only the foreground colour.\nCtrl+Z Undo, Ctrl+Y Repeat, Ctrl+X/C/V Cut/Copy/Paste.\nCtrl+A Select All, Del Clear, Ctrl+I Invert, Ctrl+R Rotate.\nCtrl+E Attributes, Ctrl+T/L Tool/Colour Box, Ctrl+G Grid.\nCtrl+PgDn/PgUp Zoom. Arrows scroll; PgUp/PgDn page."); break;
     case M_ABOUT:
         du_message(ui,999,"About CiukPaint","CiukPaint\nClassic computing, one woof at a time.\nOriginal CiukiOS bitmap editor, native desktop edition.\nBMP (1/4/8/24/32-bit) and PNG import.\nOriginal 8-bit BMP, 24-bit BMP and PNG save.\nOne undo/redo level. Maximum 2048 x 1200 pixels.",DU_DLG_ICON_INFO,NULL,0,0,0);
         du_dialog_icon(ui,du_icon_argb(DU_ICON_CIUKI,32)); break;
@@ -1966,7 +2131,11 @@ static void option_click(int sx, int sy)
     case T_ZOOM: if (dy/15<5) set_zoom(zooms[dy/15],scx+page_w()/2,scy+page_h()/2); break;
     case T_BRUSH: if (dy/19<4) { brush_kind=brush_kinds[dy/19]; brush_size=imin(2,dx/16); } break;
     case T_AIR: if (dy/25<3) air_size=dy/25; break;
-    case T_SELECT: case T_TEXT: opaque=dy<38; if (floating) float_render(); if (text_on) text_render(); break;
+    case T_SELECT:
+        if (dy<36) { drop_selection(); free_select=dy>=18; }
+        else { opaque=dy<56; if (floating)float_render(); }
+        break;
+    case T_TEXT: opaque=dy<38; if (floating) float_render(); if (text_on) text_render(); break;
     default: return;
     }
 }
@@ -1984,6 +2153,7 @@ static void cancel_pointer(void)
         else if (drag_mode!=DM_MOVE && drag_mode!=DM_NEWSEL) cancel_op();
         if (drag_mode==DM_CURVE) curve_stage=0;
         if (drag_mode==DM_POLY) npt=0;
+        if (drag_mode==DM_NEWSEL) { sel_on=0; lasso_count=0; img_free(&selection_mask); }
         drag=0; drag_mode=DM_NONE; pen_replace=-1;
     }
     text_drag=0; du_timer_stop(ui,T_AIR);
@@ -2056,16 +2226,15 @@ static void event(struct du_ui *u, const struct du_event *e, void *arg)
         status[0]=0;
         if (text_on && btn==1 && text_contains(x,y)) {
             size_t at=(size_t)text_at(x,y);
-            if (text_edit.click_ns && u->now-text_edit.click_ns<DU_TA_DOUBLE_NS &&
-                iabs(x-text_edit.click_x)<=3 && iabs(y-text_edit.click_y)<=3) du_ta_select_word(&text_edit,at);
-            else { if (!(u->modifiers & DU_SHIFT)) text_edit.anchor=at; text_edit.cursor=at; }
-            text_edit.click_ns=u->now; text_edit.click_x=x; text_edit.click_y=y; text_drag=1; return;
+            du_select_click(&text_edit.selection,text,at,(u->modifiers&DU_SHIFT)!=0,
+                            u->now,e->x,e->y,&text_edit.anchor,&text_edit.cursor);
+            text_drag=1; layout(); return;
         }
         if (btn==2 && (tool==T_SELECT || inside_sel(x,y)) && !text_on) { context_menu(e->x,e->y); return; }
         tool_down(x,y,btn);
         if (drag && tool==T_AIR) du_timer_start(u,T_AIR,55000000ull,1);
     } else if (text_drag) {
-        text_edit.cursor=(size_t)text_at(x,y);
+        du_select_drag(&text_edit.selection,text,(size_t)text_at(x,y),&text_edit.anchor,&text_edit.cursor);
         if (e->index==DU_POINTER_UP) text_drag=0;
     } else if (e->index==DU_POINTER_MOVE) { if (drag) tool_move(x,y); }
     else if (e->index==DU_POINTER_UP && drag==btn) { tool_up(x,y); du_timer_stop(u,T_AIR); }
@@ -2083,7 +2252,7 @@ int paint_attach(struct du_ui *u)
     pending=closing=text_drag=drag=drag_mode=curve_stage=npt=0;
     save_format=PAINT_BMP8; status[0]=0; seed=12345;
     memset(slot_of,0,sizeof(slot_of)); nslots=op_open=undo_kind=undone=dirty=0;
-    sel_on=floating=text_on=0; pen_replace=-1;
+    sel_on=floating=text_on=free_select=lasso_count=0; pen_replace=-1;
     load_palette(); choose_swatches(); font_load();
     if (du_ta_init(&text_edit,TEXT_MAX)) { ui=NULL; return -ENOMEM; }
     text=text_edit.text;
@@ -2107,7 +2276,7 @@ void paint_detach(void)
 {
     if (!ui) return;
     cancel_pointer(); du_dialog_close(ui); du_menu_close(ui);
-    img_free(&cv); img_free(&old); pool_free(); img_free(&flt); img_free(&clip); du_ta_free(&text_edit);
+    img_free(&cv); img_free(&old); pool_free(); img_free(&flt); img_free(&clip); img_free(&selection_mask); du_ta_free(&text_edit);
     ui->event=NULL; ui->paint=NULL; ui->layout=NULL; ui->menus=NULL; ui->menu_count=ui->count=0;
     ui=NULL; quit_cb=NULL; title_cb=NULL; callback_host=NULL; text=NULL;
 }
@@ -2137,6 +2306,7 @@ void paint_snapshot(struct paint_state *s)
     *s=(struct paint_state){.width=cv.w,.height=cv.h,.tool=tool,.zoom=zoom,.scroll_x=scx,.scroll_y=scy,.dirty=dirty,
         .can_undo=op_open || (undo_kind && !undone),.can_redo=undo_kind && undone && !op_open,
         .selection=sel_on,.floating=floating,.text=text_on,.operation=op_open,.selection_x=selx,.selection_y=sely,
+        .free_select=free_select,.text_cursor=text_edit.cursor,.text_anchor=text_edit.anchor,.text_bytes=text_edit.len,
         .selection_w=selw,.selection_h=selh,.foreground=fg,.background=bg,
         .view={vx,vy,vw,vh},.options={optx,opty,OPT_W,OPT_H},.colors={0,cby,W,CB_H}};
 }

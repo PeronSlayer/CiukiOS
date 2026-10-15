@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "rows.h"
+#include "../../assets/cursors/paint.h"
 /* libdeskui also links this unit for glyphs/frames without the desktop server. */
 extern void desk_gfx_complete(struct desktop *,int,int,uint64_t,uint64_t) __attribute__((weak));
 /* The host benchmark supplies this macro; native builds contain no timers. */
@@ -568,11 +569,12 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
     desk_paint_fill(&p,bar.x,bar.y+1,bar.w,1,t->hilite);
     if (desk_shell_overlay) desk_shell_overlay(d,clip);
 }
-/* Arrow pointer, 11x17: '#' outline, 'o' fill. */
-static const char *const arrow[17] = {
-    "#..........", "##.........", "#o#........", "#oo#.......", "#ooo#......", "#oooo#.....",
-    "#ooooo#....", "#oooooo#...", "#ooooooo#..", "#oooooooo#.", "#ooooo#####", "#oo#oo#....",
-    "#o#.#oo#...", "##..#oo#...", "#....#oo#..", ".....#oo#..", "......##..."};
+static struct desk_box pointer_box(const struct desktop *d)
+{
+    struct desk_tool_cursor r=desk_tool_cursor(d->cursor_shape);
+    return (struct desk_box){d->mouse_x-r.hot_x,d->mouse_y-r.hot_y,
+        d->cursor_shape==DESK_CURSOR_ARROW?11:32,d->cursor_shape==DESK_CURSOR_ARROW?17:32};
+}
 /* Exact horizontal opaque-region sweep. At most N+1 spans survive N
  * occluders on a row; geometry boundaries join rows into bands. No region
  * fragmentation can force painting beneath an opaque window. */
@@ -670,17 +672,13 @@ static void scene(struct desktop *d, struct desk_box clip)
 }
 static void cursor(struct desktop *d, struct desk_box clip)
 {
-    struct desk_box b;
-    if (d->hw_cursor || !desk_intersect((struct desk_box){d->mouse_x,d->mouse_y,11,17},clip,&b)) return;
-    uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
-    int stride=(int)d->width;
-    for (int y=0; y<b.h; y++) {
-        uint32_t *dst=first_dst+(size_t)y*stride;
-        const char *src=arrow[b.y+y-d->mouse_y]+b.x-d->mouse_x;
-        for (int x=0; x<b.w; x++) {
-            char k=src[x];
-            if (k!='.') dst[x]=k=='#' ? 0x101010u : 0xffffffu;
-        }
+    struct desk_box b,box=pointer_box(d);
+    if (d->hw_cursor || !desk_intersect(box,clip,&b)) return;
+    struct desk_tool_cursor r=desk_tool_cursor(d->cursor_shape);
+    for (int y=b.y; y<b.y+b.h; ++y) for (int x=b.x; x<b.x+b.w; ++x) {
+        uint32_t bit=0x80000000u>>(x-box.x);
+        if (r.mask[y-box.y]&bit)
+            d->pixels[(size_t)y*d->width+x]=(r.image[y-box.y]&bit)?0xffffffu:0x101010u;
     }
 }
 /* Reference/capture renderer: the runtime keeps this arrow out of the scene. */
@@ -710,18 +708,16 @@ static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
 void desk_accel_reset(struct desktop *d, uint32_t generation)
 {
     d->scanout_valid=0; d->move_damage.count=0;
-    d->hw_cursor=0; d->cursor_dirty=1; d->copy_pending=0;
+    d->hw_cursor=0; d->cursor_dirty=1; d->copy_pending=0; d->cursor_loaded=DESK_CURSOR_COUNT;
     d->accel_generation=generation;
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
     if (d->accel_caps&2u) {
         q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
-        for (unsigned y=0; y<17; y++) for (unsigned x=0; x<11; x++) {
-            if (arrow[y][x]!='.') q.cursor_mask[y]|=0x80000000u>>x;
-            if (arrow[y][x]=='o') q.cursor_image[y]|=0x80000000u>>x;
-        }
-        if (!accel_call(d,&q)) d->hw_cursor=1;
+        struct desk_tool_cursor r=desk_tool_cursor(d->cursor_shape);
+        memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
+        if (!accel_call(d,&q)) { d->hw_cursor=1; d->cursor_loaded=d->cursor_shape; }
     }
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
 }
@@ -1003,7 +999,7 @@ int desk_redraw(struct desktop *d)
     if (d->cursor_valid) {
         struct desk_box b=d->cursor_box;
         for (int y=0;y<b.h;y++)
-            memcpy(d->pixels+(size_t)(b.y+y)*d->width+b.x,d->cursor_under+y*11,(size_t)b.w*4);
+            memcpy(d->pixels+(size_t)(b.y+y)*d->width+b.x,d->cursor_under+y*32,(size_t)b.w*4);
         if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     }
     struct ciuki_rect copy=d->copy_rect;
@@ -1023,10 +1019,10 @@ int desk_redraw(struct desktop *d)
     render_rows(d,(struct desk_box){0});
     d->frame_valid=1;
     struct desk_box b;
-    if (!d->hw_cursor && desk_intersect((struct desk_box){d->mouse_x,d->mouse_y,11,17},
+    if (!d->hw_cursor && desk_intersect(pointer_box(d),
                        (struct desk_box){0,0,(int)d->width,(int)d->height},&b)) {
         for (int y=0;y<b.h;y++)
-            memcpy(d->cursor_under+y*11,d->pixels+(size_t)(b.y+y)*d->width+b.x,(size_t)b.w*4);
+            memcpy(d->cursor_under+y*32,d->pixels+(size_t)(b.y+y)*d->width+b.x,(size_t)b.w*4);
         d->cursor_box=b; d->cursor_valid=1; DESK_PROFILE("cursor", cursor(d,b));
         if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     } else d->cursor_valid=0;
@@ -1060,9 +1056,17 @@ int desk_redraw(struct desktop *d)
         int caps=accel_call(d,&q); d->accel_caps=caps>0 ? (uint32_t)caps : 0;
         if (!(d->accel_caps&2u)) { d->hw_cursor=0; d->cursor_dirty=1; complete=0; }
     }
+    if (d->hw_cursor && d->cursor_dirty && complete && d->cursor_loaded!=d->cursor_shape) {
+        struct desk_tool_cursor r=desk_tool_cursor(d->cursor_shape);
+        struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
+        memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
+        if (accel_call(d,&q)) { d->hw_cursor=0; complete=0; }
+        else d->cursor_loaded=d->cursor_shape;
+    }
     if (d->hw_cursor && d->cursor_dirty && complete) {
+        struct desk_box box=pointer_box(d);
         struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_MOVE,
-            .rect={0,0,d->mouse_x,d->mouse_y,0,0}};
+            .rect={0,0,box.x,box.y,0,0}};
         int error=accel_call(d,&q); q.operation=CIUKI_ACCEL_CURSOR_SHOW; q.colour=1;
         if (!error) error=accel_call(d,&q);
         if (error) { d->hw_cursor=0; complete=0; }

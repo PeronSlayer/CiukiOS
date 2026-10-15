@@ -244,6 +244,11 @@ int du_window_turn(struct du_window *w, uint64_t now)
         return w->closed ? 0 : 1;
     }
     du_tick(w->ui, now);
+    unsigned cursor = du_cursor_at(w->ui);
+    if (w->configured && cursor != w->cursor_sent && w->count < 16) {
+        struct ciuki_message m; desk_message(&m, DESK_SET_CURSOR, 8); desk_put32(m.data + 4, cursor);
+        if (!queue(w, &m)) w->cursor_sent = cursor;
+    }
     /* ui-look: follow the shell's theme setting (read at once, then a stat every 2 s). */
     if (desk_theme_poll(DESK_SETTINGS_PATH, now)) w->ui->dirty = 1;
     if (w->configured && !w->swap_sent && !w->present_pending && w->ui->dirty) { du_render(w->ui); du_window_present(w); }

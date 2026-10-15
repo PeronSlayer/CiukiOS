@@ -13,6 +13,16 @@
 #define DESK_RESIZE_MINOR 1u       /* v2.1: header byte 2; v1/v2.0 remain unchanged */
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
+#define DESK_CURSOR_API 1u
+enum desk_cursor_shape {
+    DESK_CURSOR_ARROW, DESK_CURSOR_BUSY, DESK_CURSOR_ARROW_BUSY,
+    DESK_CURSOR_TEXT, DESK_CURSOR_FORBIDDEN, DESK_CURSOR_RESIZE_EW,
+    DESK_CURSOR_RESIZE_NS, DESK_CURSOR_RESIZE_NWSE, DESK_CURSOR_RESIZE_NESW,
+    DESK_CURSOR_MOVE, DESK_CURSOR_HAND, DESK_CURSOR_CROSSHAIR,
+    DESK_CURSOR_PRECISION,
+    DESK_CURSOR_PENCIL, DESK_CURSOR_BRUSH, DESK_CURSOR_FILL, DESK_CURSOR_PICK,
+    DESK_CURSOR_ZOOM, DESK_CURSOR_ERASER, DESK_CURSOR_COUNT
+};
 #define DESK_TITLE_MAX 63u
 #define DESK_ARG_MAX 160u   /* LAUNCH argument: 12 + name + 4 + argument always fits one message */
 enum desk_opcode {
@@ -43,7 +53,8 @@ enum desk_opcode {
      * No client coordinates, display grants or hardware commands. */
     DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT,
     DESK_GFX_FRAME, DESK_GFX_PRESENTED, /* f2-59: bounded scene region and completion */
-    DESK_DOS_FULLSCREEN /* desktop to DOS client, no payload */
+    DESK_DOS_FULLSCREEN /* desktop to DOS client, no payload */,
+    DESK_SET_CURSOR /* v2 client to desktop: uint32 shape, own client area only */
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */

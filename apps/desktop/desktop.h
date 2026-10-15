@@ -62,6 +62,7 @@ struct desk_gfx_stats {
     uint64_t convert_ns,copy_ns,slot_ns;
 };
 struct desk_client {
+    unsigned cursor;
     int channel, surface, hello, window, unresponsive, ping_pending, resync_pending;
     int configure_pending, focus_pending, close_pending;
     int commit_pending, resizable, zoomed;
@@ -145,8 +146,9 @@ struct desktop {
     int render_cache_prepared;
     int frame_valid, scanout_valid;
     struct desk_damage move_damage;
-    uint32_t cursor_under[11*17]; struct desk_box cursor_box;
+    uint32_t cursor_under[32*32]; struct desk_box cursor_box;
     int cursor_valid, cursor_dirty;
+    unsigned cursor_shape, cursor_loaded;
     unsigned lfb_bytes_per_pixel;
     uint64_t next_frame_ns;
     struct desk_gfx_stats gfx_sample; /* most recently completed demo frame */
@@ -292,6 +294,7 @@ int desk_drain_input(struct desktop *, int (*read_events)(int, struct ciuki_inpu
 void desk_composite(struct desktop *, struct desk_box);
 void desk_accel_reset(struct desktop *, uint32_t generation);
 void desk_cursor_motion(struct desktop *);
+void desk_cursor_update(struct desktop *);
 void desk_text(struct desktop *, struct desk_box, int32_t, int32_t,
                const char *, int, uint32_t);
 int desk_redraw(struct desktop *);

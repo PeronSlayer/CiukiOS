@@ -1169,11 +1169,13 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     du_add(u, DU_SEPARATOR, W_BAND3, zero, "");
     du_add(u, DU_HEADER, W_PLACES_HEADER, zero, "Places");
     struct du_widget *places = du_add(u, DU_TREE, W_PLACES, zero, "");
+    places->selection_external = 1;
     places->focus_rect = 1;
     du_add(u, DU_HEADER, W_FOLDERS_HEADER, zero, "Folders");
-    du_add(u, DU_TREE, W_TREE, zero, "");
+    du_add(u, DU_TREE, W_TREE, zero, "")->selection_external = 1;
     du_add(u, DU_SPLITTER, W_SPLIT, zero, "");
     struct du_widget *list = du_add(u, DU_LISTVIEW, W_LIST, zero, "");
+    list->selection_external = 1;
     list->view = DU_DETAILS; list->inactive_selection = 1;
     du_add(u, DU_STATUS, W_STATUS, zero, "");
     struct du_widget *rename = du_add(u, DU_EDIT, W_RENAME, zero, "");

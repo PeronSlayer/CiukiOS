@@ -27,6 +27,14 @@ void rt_client_tests(void)
 {
     struct du_window w; struct du_ui u;
     open_window(&w,&u);
+    u.mouse_x=15; u.mouse_y=40;
+    assert(du_window_turn(&w,2)==1);
+    struct ciuki_message cursor_request;
+    assert(rt_pop(&cursor_request) && cursor_request.data[1]==DESK_SET_CURSOR && desk_get32(cursor_request.data+4)==DESK_CURSOR_TEXT);
+    assert(du_window_turn(&w,3)==1 && !rt_pop(&cursor_request));
+    u.mouse_y=10; rt_block=1; assert(du_window_turn(&w,4)==1 && w.count==1);
+    rt_block=0; assert(du_window_turn(&w,5)==1 && rt_pop(&cursor_request));
+    assert(cursor_request.data[1]==DESK_SET_CURSOR && desk_get32(cursor_request.data+4)==DESK_CURSOR_ARROW);
     uint32_t *old=w.pixels; int oldfd=w.surface;
     rt_block=1; configured(500,350,1,0); assert(du_window_turn(&w,2)==1);
     assert(w.replacement && !w.swap_sent && rt_surfaces()==2 && rt_mappings()==2);

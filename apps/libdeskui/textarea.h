@@ -45,7 +45,8 @@ struct du_textarea {
     char *undo; size_t undo_len, undo_cursor, undo_anchor;
     int undo_valid, undo_kind; size_t edit_cursor;
     /* pointer */
-    int drag, grab; uint64_t click_ns; int click_x, click_y, clicks;
+    int drag, grab;
+    struct du_selection selection;
     /* Optional source-editor presentation. Byte offsets refer to text; the
      * callback is never applied to selected text. Zero preserves plain text. */
     int line_numbers;

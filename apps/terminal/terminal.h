@@ -38,7 +38,8 @@ struct terminal {
     struct lua_State *lua;
     char cwd[FM_PATH], input[DU_TEXT_MAX], draft[DU_TEXT_MAX];
     char prompt_text[2 * DU_TEXT_MAX + 8], scratch[4][FM_PATH];
-    size_t cursor;
+    size_t cursor, anchor;
+    struct du_selection text_selection;
     char *history[TERM_HISTORY]; unsigned history_count, history_at;
     char *lines[TERM_SCROLLBACK]; unsigned first, count;
     char pending[TERM_LINE + 1]; unsigned used;
@@ -46,7 +47,7 @@ struct terminal {
     int follow, busy, interrupted, lua_mode, quit, history_error;
     char *chunk; size_t chunk_length;
     char *capture; size_t captured; int capture_error;
-    int selecting; size_t selection_a, selection_b;
+    int selecting, output_focus; size_t selection_a, selection_b;
     unsigned pending_power;
     struct du_menu_item menu_items[3]; struct du_menu menu;
 };

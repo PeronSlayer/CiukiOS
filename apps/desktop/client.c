@@ -12,6 +12,7 @@ int desk_ignore_sigpipe(void)
 void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32_t h)
 {
     memset(d, 0, sizeof(*d));
+    d->cursor_loaded = DESK_CURSOR_COUNT;
     d->ops = *ops; d->width = w; d->height = h;
     d->display = d->input = d->output = d->focus = d->drag = d->about = d->authority_fd = d->mixer_fd = -1;
     d->action = -1;
@@ -362,7 +363,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         (!c->hello && p.opcode != DESK_HELLO) ||
         (c->hello && p.opcode == DESK_HELLO) ||
         (p.opcode == DESK_CREATE_WINDOW && c->window) ||
-        ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE || p.opcode == DESK_SET_TITLE) && !c->window) ||
+        ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE || p.opcode == DESK_SET_TITLE || p.opcode == DESK_SET_CURSOR) && !c->window) ||
         ((p.opcode == DESK_DAMAGE || p.opcode==DESK_GFX_FRAME) && swap && (!c->resizable || swap > c->resize_serial ||
             swap <= c->applied_serial || s.width < c->min_width || s.height < c->min_height ||
             s.width > c->max_width || s.height > c->max_height ||
@@ -541,6 +542,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             d->mouse_x=x; d->mouse_y=y;
         }
         break;
+    case DESK_SET_CURSOR:
+        c->cursor = p.flags; desk_cursor_update(d); break;
     case DESK_SET_TITLE:
         if (strcmp(c->title, p.title)) {
             memcpy(c->title, p.title, sizeof(c->title));
@@ -696,6 +699,7 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
         }
     }
     if (d->shell) desk_close_timeouts(d);
+    desk_cursor_update(d);
 }
 
 /* A bounded /Programs entry parser, independent of directory enumeration order.

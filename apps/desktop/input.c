@@ -135,7 +135,19 @@ static int32_t axis(int32_t old, int32_t delta, uint32_t limit)
     if (n >= limit) return (int32_t)limit - 1;
     return (int32_t)n;
 }
-void desk_input(struct desktop *d, const struct ciuki_input_event *in)
+void desk_cursor_update(struct desktop *d)
+{
+    unsigned shape = DESK_CURSOR_ARROW;
+    if (d->drag < 0 && !d->power.state && (!d->shell ||
+        (!d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.notification.active))) {
+        int i = desk_hit(d,d->mouse_x,d->mouse_y);
+        if (i >= 0 && !d->clients[i].internal && !d->clients[i].collapsed &&
+            desk_contains(desk_content(&d->clients[i]),d->mouse_x,d->mouse_y)) shape = d->clients[i].cursor;
+    }
+    if (shape >= DESK_CURSOR_COUNT) shape = DESK_CURSOR_ARROW;
+    if (d->cursor_shape != shape) { d->cursor_shape = shape; d->cursor_dirty = 1; }
+}
+static void input(struct desktop *d, const struct ciuki_input_event *in)
 {
     /* Preserve the timestamp of a deferred menu action across the remaining
      * input batch. Immediate icon/menu actions consume it in launch_program. */
@@ -268,7 +280,7 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
                 }
                 if (d->mouse_y < c->frame.y + DESK_TITLE) {
                     /* Shell: a double-click on the title bar rolls the window
-                     * up to its title (Mac OS 8/9 windowshade) or back down. */
+                     * up to its title or back down. */
                     int32_t dx = d->mouse_x - d->title_click_x, dy = d->mouse_y - d->title_click_y;
                     if (d->shell && d->title_click_window == i && e.monotonic_ns >= d->title_click_ns &&
                         e.monotonic_ns - d->title_click_ns < 500000000ull && dx <= 4 && dx >= -4 && dy <= 4 && dy >= -4) {
@@ -296,3 +308,5 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
     default: break;
     }
 }
+void desk_input(struct desktop *d, const struct ciuki_input_event *in)
+{ input(d,in); desk_cursor_update(d); }

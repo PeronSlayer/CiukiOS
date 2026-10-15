@@ -293,7 +293,8 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
         struct du_rect r = cell(w, &l, i);
         if (r.y + r.h <= l.area.y || r.y >= l.area.y + l.area.h || r.x + r.w <= l.area.x || r.x >= l.area.x + l.area.w) continue;
         const struct du_item *it = &w->items[i];
-        int sel = it->selected, act = i == w->active;
+        int act = i == w->active;
+        int sel = it->selected || (!w->selection_external && w->selection_active && act);
         enum du_icon_mode mode = it->ghost ? DU_ICON_GHOST : sel && focused && window ? DU_ICON_SELECTED : DU_ICON_NORMAL;
         const char *name = it->text[0] ? it->text[0] : "";
         if (w->view == DU_ICONS) {
@@ -375,7 +376,7 @@ void du_draw_tree(struct du_canvas *c, struct du_widget *w, int focused, int win
             du_hline(c, cx - 2, cy, 5, DU_INK);
             if (!it->expanded) du_vline(c, cx, cy - 2, 5, DU_INK);
         }
-        int sel = it->selected;
+        int sel = it->selected || (!w->selection_external && w->selection_active && i == w->active);
         du_icon_blit(c, cx + 8, r.y + (DU_ROW - 16) / 2, it->icon16, 16, sel && focused && window ? DU_ICON_SELECTED : DU_ICON_NORMAL);
         struct du_rect lab = label_rect(w, &l, i);
         draw_label(c, lab, it->text[0] ? it->text[0] : "", l.area.x + l.area.w - lab.x - 4, sel, i == w->active, focused, window, 1);
@@ -388,6 +389,7 @@ void du_draw_tree(struct du_canvas *c, struct du_widget *w, int focused, int win
 /* ---- input ---- */
 static void select_event(struct du_ui *u, struct du_widget *w, int index, int keyboard, unsigned key)
 {
+    w->selection_active = index >= 0;
     du_emit(u, (struct du_event){.type = DU_EV_SELECT, .id = w->id, .index = index, .keyboard = (unsigned)keyboard, .key = key});
 }
 

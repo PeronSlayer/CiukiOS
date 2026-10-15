@@ -56,6 +56,7 @@ def inputs():
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
                  "assets/sounds/kenney-interface/upstream.zip"))
     files.append(ROOT / "assets/brand/ciuki-logo.png")
+    files.append(ROOT / "assets/cursors/paint.h")
     files.append(ROOT / "assets/fonts/LICENSES.TXT")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
     files.extend(ROOT / "assets/icons" / name for name in ICON_NOTICES.values())

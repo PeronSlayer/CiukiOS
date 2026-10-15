@@ -2,12 +2,14 @@
  * SPDX-License-Identifier: MIT */
 #include "../../../apps/paint/paint.h"
 #include "../../../apps/desktop/catalog.h"
+#include "../../../assets/cursors/paint.h"
 #include "acc_test.h"
 #include "../../../third_party/stb/stb_image_write.h"
 #include "../../../third_party/stb/stb_image.h"
 #include <errno.h>
 static struct du_ui ui;
 static uint32_t pixels[PAINT_W*PAINT_H+1];
+static int include_cursor;
 static struct paint_state state(void) { struct paint_state s; paint_snapshot(&s); return s; }
 static void button(int n,int down)
 { struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=n,.value=down}; du_input(&ui,&e); }
@@ -40,6 +42,14 @@ static void render_write(void *f,void *data,int n) { assert(fwrite(data,1,(size_
 static void render(const char *folder,const char *name)
 {
     du_render(&ui); assert(pixels[PAINT_W*PAINT_H]==0xdeadbeefu);
+    if(include_cursor) {
+        struct desk_tool_cursor r=desk_tool_cursor(du_cursor_at(&ui));
+        for(int y=0;y<32;y++)for(int x=0;x<32;x++) {
+            int xx=ui.mouse_x-r.hot_x+x,yy=ui.mouse_y-r.hot_y+y; uint32_t bit=0x80000000u>>x;
+            if(xx>=0 && yy>=0 && xx<ui.canvas.width && yy<ui.canvas.height && (r.mask[y]&bit))
+                ui.canvas.pixels[(size_t)yy*ui.canvas.width+xx]=(r.image[y]&bit)?0xffffffu:0x101010u;
+        }
+    }
     char p[1100]; snprintf(p,sizeof(p),"%s/%s.png",folder,name);
     size_t n=(size_t)ui.canvas.width*(size_t)ui.canvas.height;
     uint8_t *data=malloc(n*3); assert(data);
@@ -50,6 +60,105 @@ static void render(const char *folder,const char *name)
 }
 static void write_raw(const char *path,const void *data,size_t n)
 { FILE *f=fopen(path,"wb"); assert(f && fwrite(data,1,n,f)==n && !fclose(f)); }
+static void lasso(void)
+{
+    at_click_widget(&ui,P_TOOL+T_SELECT); opt(1,20); assert(state().free_select);
+    image_move(20,20); button(1,1); image_move(70,20); image_move(20,70); image_move(20,20); button(1,0);
+    assert(state().selection && du_cursor_at(&ui)==DESK_CURSOR_CROSSHAIR);
+}
+static void freeform_and_text(const char *folder)
+{
+    paint_command(M_Z1); paint_command(M_CLEARIMG); foreground(2);
+    uint8_t red=state().foreground,bg=state().background;
+    at_click_widget(&ui,P_TOOL+T_RECT); opt(1,51); stroke(T_RECT,20,20,70,70,1);
+    lasso(); render(folder,"paint-freeform-selection");
+    paint_command(M_COPY); paint_command(M_CLEARSEL);
+    assert(paint_pixel(25,25)==bg && paint_pixel(65,65)==red);
+    undo(); assert(paint_pixel(25,25)==red);
+    lasso(); image_move(25,25); button(1,1); image_move(35,35); button(1,0);
+    assert(state().floating && paint_pixel(25,25)==bg && paint_pixel(35,35)==red && paint_pixel(65,65)==red);
+    render(folder,"paint-freeform-move"); undo(); assert(paint_pixel(25,25)==red && !state().selection);
+    paint_command(M_CLEARIMG); paint_command(M_PASTE);
+    assert(paint_pixel(5,5)==red && paint_pixel(45,45)==bg);
+    transform_choice(3); at_tap(&ui,DU_KEY_ESC); undo();
+    lasso(); image_move(80,80); button(1,1); image_move(100,100);
+    struct ciuki_input_event sync={.type=CIUKI_INPUT_RESYNC}; du_input(&ui,&sync); assert(!state().selection);
+    at_click_widget(&ui,P_TOOL+T_TEXT); image_click(10,90,1);
+    du_clipboard_set("alpha beta\nline"); at_chord(&ui,DU_KEY_LCTRL,0x2f); assert(state().text_bytes==15);
+    at_chord(&ui,DU_KEY_LCTRL,0x1e); paint_command(M_COPY); assert(!strcmp(du_clipboard_get(),"alpha beta\nline"));
+    paint_command(M_CUT); assert(!state().text_bytes); paint_command(M_PASTE); assert(state().text_bytes==15);
+    ui.now+=1000000000ull; image_click(12,92,1); ui.now+=100000000ull; image_click(12,92,1);
+    assert(state().text_anchor==0 && state().text_cursor==5);
+    ui.now+=100000000ull; image_click(12,92,1); assert(state().text_anchor==0 && state().text_cursor==11);
+    render(folder,"paint-text-selection");
+    at_tap(&ui,0x2c); assert(state().text_bytes==5); at_tap(&ui,DU_KEY_ESC);
+    puts("paint selection: PASS free-form mask, copy, clear, move, undo, transparent paste/rotate, capture cancellation, text clipboard and word/line selection");
+}
+static void cursors(const char *folder)
+{
+    static const unsigned expected[NTOOLS]={DESK_CURSOR_CROSSHAIR,DESK_CURSOR_ERASER,DESK_CURSOR_FILL,
+        DESK_CURSOR_PICK,DESK_CURSOR_ZOOM,DESK_CURSOR_PENCIL,DESK_CURSOR_BRUSH,DESK_CURSOR_PRECISION,
+        DESK_CURSOR_TEXT,DESK_CURSOR_CROSSHAIR,DESK_CURSOR_CROSSHAIR,DESK_CURSOR_CROSSHAIR,
+        DESK_CURSOR_CROSSHAIR,DESK_CURSOR_CROSSHAIR,DESK_CURSOR_CROSSHAIR};
+    paint_command(M_Z1); include_cursor=1;
+    for(int t=0;t<NTOOLS;t++) {
+        at_click_widget(&ui,P_TOOL+t); image_move(40,40); assert(du_cursor_at(&ui)==expected[t]);
+        char name[64]; snprintf(name,sizeof(name),"paint-cursor-%02d",t); render(folder,name);
+        at_move(&ui,10,15); assert(du_cursor_at(&ui)==DESK_CURSOR_ARROW);
+    }
+    at_click_widget(&ui,P_TOOL+T_PENCIL); image_move(40,40); button(1,1);
+    at_move(&ui,10,15); assert(du_cursor_at(&ui)==DESK_CURSOR_ARROW); button(1,0);
+    for(int z=1;z<=8;z*=2) {
+        paint_command(z==1?M_Z1:z==2?M_Z2:z==4?M_Z4:M_Z8);
+        for(int t=T_ERASER;t<=T_BRUSH;t+=T_BRUSH-T_ERASER) {
+            at_click_widget(&ui,P_TOOL+t); image_move(40,40);
+            uint8_t before[200*150]; struct paint_state s=state();
+            assert(s.width==200 && s.height==150);
+            for(int y=0;y<s.height;y++)for(int x=0;x<s.width;x++)before[y*s.width+x]=paint_pixel(x,y);
+            char name[64]; snprintf(name,sizeof(name),"paint-footprint-%d-%dx",t,z); render(folder,name);
+            for(int y=0;y<s.height;y++)for(int x=0;x<s.width;x++)assert(before[y*s.width+x]==paint_pixel(x,y));
+            assert(s.dirty==state().dirty && s.can_undo==state().can_undo);
+        }
+    }
+    paint_command(M_Z1); image_move(40,40); paint_command(M_ATTR);
+    assert(du_cursor_at(&ui)!=DESK_CURSOR_BRUSH); dialog_button(1);
+    include_cursor=0;
+    puts("paint cursors: PASS every tool, arrow outside image including capture, modal override, exact raster hotspots, footprint leaves image and history unchanged at 1/2/4/8x");
+}
+static void footprint_matches_stamp(void)
+{
+    uint32_t *preview=malloc(sizeof(pixels)),*base=malloc(sizeof(pixels)); assert(preview && base); include_cursor=0;
+    foreground(2); uint8_t bg=state().background;
+    const int zooms[]={1,4,8};
+    for(unsigned z=0;z<3;z++)for(int option=0;option<16;option++) {
+        paint_command(zooms[z]==1?M_Z1:zooms[z]==4?M_Z4:M_Z8); at_tap(&ui,DU_KEY_HOME);
+        paint_command(M_CLEARIMG);
+        int eraser=option>=12; uint8_t under=bg;
+        if(eraser) { at_click_widget(&ui,P_TOOL+T_FILL); image_click(0,0,1); under=state().foreground; }
+        at_click_widget(&ui,P_TOOL+(eraser?T_ERASER:T_BRUSH));
+        if(eraser)opt(1,(option-12)*19+1); else opt((option%3)*16+1,(option/3)*19+1);
+        du_render(&ui); memcpy(base,pixels,sizeof(pixels));
+        image_move(40,40); du_render(&ui); memcpy(preview,pixels,sizeof(pixels));
+        button(1,1); button(1,0); struct paint_state s=state();
+        for(int y=30;y<51;y++)for(int x=30;x<51;x++) {
+            int member=paint_pixel(x,y)!=under;
+            int edge[4]={paint_pixel(x-1,y)==under,paint_pixel(x+1,y)==under,paint_pixel(x,y-1)==under,paint_pixel(x,y+1)==under};
+            int sx=s.view.x+4+(x-s.scroll_x)*s.zoom,sy=s.view.y+4+(y-s.scroll_y)*s.zoom;
+            for(int yy=0;yy<s.zoom;yy++)for(int xx=0;xx<s.zoom;xx++) {
+                if(!du_contains(du_get(&ui,P_CANVAS)->cursor_box,sx+xx,sy+yy))continue;
+                int selected=member && ((edge[0] && !xx) || (edge[1] && xx==s.zoom-1) || (edge[2] && !yy) || (edge[3] && yy==s.zoom-1));
+                unsigned at=(unsigned)((sy+yy)*PAINT_W+sx+xx);
+                uint32_t expected=base[at]^(selected?0xffffffu:0);
+                if(preview[at]!=expected) {
+                    fprintf(stderr,"footprint option=%d zoom=%d image=%d,%d sub=%d,%d member=%d got=%06x expected=%06x\n",
+                            option,s.zoom,x,y,xx,yy,member,preview[at],expected); abort();
+                }
+            }
+        }
+    }
+    free(preview); free(base);
+    puts("paint footprint: PASS preview boundary equals actual stamped pixels for all 12 brushes and four eraser sizes at 1/4/8x");
+}
 static void tools(void)
 {
     attributes(96,72); foreground(2); uint8_t red=state().foreground, white=paint_pixel(0,0);
@@ -278,5 +387,5 @@ int main(int argc,char **argv)
     render(argv[2],"paint-resized"); du_resize(&ui,pixels,PAINT_W,PAINT_H); free(large);
     paint_command(M_HELP); render(argv[2],"paint-help"); dialog_button(0);
     paint_command(M_ABOUT); render(argv[2],"paint-about"); dialog_button(0);
-    paint_detach(); assert(!ui.count); puts("paint: PASS"); return 0;
+    cursors(argv[2]); footprint_matches_stamp(); freeform_and_text(argv[2]); paint_detach(); assert(!ui.count); puts("paint: PASS"); return 0;
 }

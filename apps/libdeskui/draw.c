@@ -219,7 +219,7 @@ const char *du_theme_name(void) { return desk_theme->name; }
 
 void du_dotted(struct du_canvas *c, struct du_rect r)
 {
-    /* Windows draws focus as an inverting dotted frame; invert explicitly. */
+    /* Invert the pixels of the dotted focus frame. */
     struct du_rect v = visible(c, r);
     for (int y = v.y; y < v.y + v.h; y++) for (int x = v.x; x < v.x + v.w; x++) {
         int edge = y == r.y || y == r.y + r.h - 1 || x == r.x || x == r.x + r.w - 1;
@@ -448,4 +448,62 @@ void du_progress_paint(struct du_canvas *c, struct du_rect b, int value, int tot
         int bw = filled - x < 8 ? filled - x : 8;
         du_fill(c, (struct du_rect){b.x + 2 + x, b.y + 2, bw, b.h - 4}, DU_SELECT);
     }
+}
+static int selection_class(unsigned char ch)
+{
+    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') return 0;
+    return ch >= 128 || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+           (ch >= '0' && ch <= '9') || ch == '_' ? 1 : 2;
+}
+
+void du_text_unit(const char *text, size_t at, unsigned granularity, size_t *lo, size_t *hi)
+{
+    size_t len = strlen(text);
+    if (at > len) at = len;
+    while (at && at < len && ((unsigned char)text[at] & 0xc0) == 0x80) at--;
+    *lo = *hi = at;
+    if (granularity <= 1 || !len) return;
+    if (granularity == 3) {
+        while (*lo && text[*lo - 1] != '\n') --*lo;
+        while (*hi < len && text[*hi] != '\n') ++*hi;
+        if (*hi < len) ++*hi;
+        return;
+    }
+    if (at == len || text[at] == '\n') {
+        if (at && text[at-1] != '\n') at = du_utf8_prev(text, at);
+        else { *lo = at; *hi = at < len ? at + 1 : at; return; }
+    }
+    *lo = at; *hi = du_utf8_next(text, at);
+    int cls = selection_class((unsigned char)text[at]);
+    while (*lo && text[*lo - 1] != '\n') {
+        size_t prev = du_utf8_prev(text, *lo);
+        if (selection_class((unsigned char)text[prev]) != cls) break;
+        *lo = prev;
+    }
+    while (*hi < len && text[*hi] != '\n' && selection_class((unsigned char)text[*hi]) == cls)
+        *hi = du_utf8_next(text, *hi);
+}
+
+void du_select_click(struct du_selection *s, const char *text, size_t at, int extend,
+                     uint64_t ns, int x, int y, size_t *anchor, size_t *cursor)
+{
+    int near = x - s->x <= 4 && s->x - x <= 4 && y - s->y <= 4 && s->y - y <= 4;
+    s->clicks = !extend && s->ns && ns >= s->ns && ns - s->ns <= 500000000ull && near && s->clicks < 3 ? s->clicks + 1 : 1;
+    s->ns = ns ? ns : 1; s->x = x; s->y = y;
+    du_text_unit(text, at, s->clicks, &s->lo, &s->hi);
+    if (!extend) *anchor = s->lo;
+    *cursor = s->hi;
+}
+
+void du_select_drag(const struct du_selection *s, const char *text, size_t at, size_t *anchor, size_t *cursor)
+{
+    size_t lo, hi, start, end, ignored;
+    /* Input can edit the buffer while the pointer is captured. Saved unit
+     * boundaries must still lie in the current buffer. */
+    du_text_unit(text, s->lo, 1, &start, &ignored);
+    du_text_unit(text, s->hi, 1, &end, &ignored);
+    du_text_unit(text, at, s->clicks, &lo, &hi);
+    if (s->clicks <= 1) *cursor = lo;
+    else if (at < start) { *anchor = end; *cursor = lo; }
+    else { *anchor = start; *cursor = hi > end ? hi : end; }
 }

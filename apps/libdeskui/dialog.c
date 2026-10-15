@@ -377,8 +377,9 @@ void du_dialog_key(struct du_ui *u, unsigned code)
         }
         u->dirty = 1; return;
     }
-    if (f && f->kind == DU_EDIT) { int handled = 0; DIALOG_CALL(handled = du_edit_key(u, f, code)); if (handled) return; }
-    if (f && f->kind == DU_LISTVIEW) { int handled = 0; DIALOG_CALL(handled = du_list_key(u, f, code)); if (handled) return; }
+    if (f && (f->kind == DU_EDIT || f->kind == DU_TEXTAREA || f->kind == DU_LISTVIEW || f->kind == DU_TREE)) {
+        int handled = 0; DIALOG_CALL(handled = du_widget_key(u, f, code)); if (handled) return;
+    }
     if (f && (f->kind == DU_CHECKBOX || f->kind == DU_RADIO)) {
         int handled = 0; DIALOG_CALL(handled = du_widget_key(u, f, code)); if (handled) return;
     }

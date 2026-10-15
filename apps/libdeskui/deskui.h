@@ -13,7 +13,7 @@
 
 /* Colours, fonts and styles come from the current theme (desk_theme,
  * apps/desktop/theme.h): Ciuki Blue (default), Platinum or Classic 98.
- * The names keep their Windows 98 roles; they are not constants. */
+ * These roles are evaluated from the theme; they are not constants. */
 #define DU_FACE       (desk_theme->face)
 #define DU_LIGHT      (desk_theme->light)
 #define DU_HILITE     (desk_theme->hilite)
@@ -68,8 +68,19 @@ enum {
 struct du_ui;
 struct du_rect { int x, y, w, h; };
 struct du_canvas { uint32_t *pixels; int width, height; struct du_rect clip; };
+struct du_selection {
+    uint64_t ns;
+    int x, y;
+    unsigned clicks;
+    size_t lo, hi;
+};
+/* UTF-8 byte boundaries; granularity 1 = position, 2 = word, 3 = logical line. */
+void du_text_unit(const char *, size_t at, unsigned granularity, size_t *lo, size_t *hi);
+void du_select_click(struct du_selection *, const char *, size_t at, int extend,
+                     uint64_t ns, int x, int y, size_t *anchor, size_t *cursor);
+void du_select_drag(const struct du_selection *, const char *, size_t at, size_t *anchor, size_t *cursor);
 
-/* Bevel styles (Windows 98 classic edges). */
+/* Theme bevel styles. */
 enum du_edge { DU_RAISED, DU_SUNKEN, DU_PRESSED, DU_RAISED_THIN, DU_SUNKEN_THIN, DU_ETCHED, DU_BUTTON_EDGE };
 /* Icon blending modes. */
 enum du_icon_mode { DU_ICON_NORMAL, DU_ICON_SELECTED, DU_ICON_GHOST, DU_ICON_DISABLED };
@@ -196,6 +207,7 @@ struct du_widget {
     uint8_t hidden, disabled, pressed, hot, def, vertical;
     char text[DU_TEXT_MAX];
     size_t cursor, anchor, offset;          /* edit (bytes; offset in cells) */
+    struct du_selection selection;
     const uint32_t *icon; int icon_size;    /* buttons, edit prefix icon */
     int accepts_tab;                        /* DU_CANVAS: deliver Tab as DU_EV_KEY */
     int dropdown;                           /* toolbutton split arrow width */
@@ -205,6 +217,7 @@ struct du_widget {
     struct du_column columns[DU_COLUMNS];
     unsigned column_count;
     int sort, descending, focus_rect, inactive_selection;
+    int selection_external, selection_active; /* lists: controller-owned multi-selection, or toolkit active item */
     int scroll, hscroll;                    /* first row/column or pixel offset */
     int value, total, page;                 /* scrollbar, progress, splitter */
     int panels[4];                          /* status panel widths; 0 = rest */
@@ -212,6 +225,8 @@ struct du_widget {
     const uint8_t *samples;                 /* graph: 0..100, oldest first; total = capacity */
     unsigned sample_count;
     void *data;                             /* f2-32: DU_TEXTAREA state */
+    unsigned cursor_shape;
+    struct du_rect cursor_box;              /* optional client-coordinate subregion */
 };
 
 #define DU_ANCHOR_LEFT   1u
@@ -290,6 +305,7 @@ struct du_ui {
     struct du_dialog dialog;
     struct du_timer timers[DU_TIMERS];
     int mouse_x, mouse_y, focused_window;
+    unsigned cursor;
     unsigned modifiers, buttons, caps;
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
@@ -309,6 +325,8 @@ void du_resize(struct du_ui *, uint32_t *pixels, int width, int height);
 struct du_widget *du_add(struct du_ui *, enum du_kind, int id, struct du_rect, const char *text);
 struct du_widget *du_get(struct du_ui *, int id);
 int du_hit(const struct du_ui *, int x, int y);
+unsigned du_cursor_at(const struct du_ui *);
+void du_cursor(struct du_ui *, unsigned shape);
 void du_focus(struct du_ui *, int id);
 int du_focused(const struct du_ui *);
 void du_set_text(struct du_widget *, const char *);
@@ -351,18 +369,22 @@ void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);
 struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
 
-/* Timers (monotonic nanoseconds) and the per-process text clipboard. */
+/* Timers (monotonic nanoseconds) and the shared text clipboard. */
 int du_timer_start(struct du_ui *, int id, uint64_t interval_ns, int repeat);
 void du_timer_stop(struct du_ui *, int id);
 void du_tick(struct du_ui *, uint64_t now);
 uint64_t du_next_deadline(const struct du_ui *);
 void du_clipboard_set(const char *);
 const char *du_clipboard_get(void);
+#define DU_CLIPBOARD_MAX (1024u * 1024u)
+int du_clipboard_set_n(const char *, size_t); /* failure leaves the previous copy intact */
+int du_clipboard_path(const char *); /* optional host/provider path, NULL restores the default */
 
 /* Desktop window glue: handshake, surface, back buffer, damage, events. */
 struct du_window {
     int channel, surface, configured, closing, closed, error;
     int present_pending; /* optional completion-paced client freezes surface writes */
+    unsigned cursor_sent;
     int manual_damage; /* application combines ordinary damage with its frame request */
     uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;

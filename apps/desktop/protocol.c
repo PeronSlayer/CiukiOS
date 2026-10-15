@@ -206,6 +206,11 @@ int desk_parse(const struct ciuki_message *m, int client,
         }
         break;
     }
+    case DESK_SET_CURSOR:
+        if (!client || m->data[0] != DESK_SHELL_VERSION || m->length != 8) return 0;
+        p->flags = desk_get32(m->data + 4);
+        if (p->flags >= DESK_CURSOR_COUNT) return 0;
+        n = 8; break;
     case DESK_SET_TITLE: {
         if (!client || m->data[0] != DESK_SHELL_VERSION || m->length < 9) return 0;
         unsigned t = desk_get32(m->data + 4);

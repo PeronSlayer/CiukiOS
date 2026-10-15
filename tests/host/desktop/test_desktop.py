@@ -31,18 +31,18 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-63: re-recorded for the pinned FreeType UI atlases (build/host/f2-63 before/after).
 # 2026-10-15 (main after f2-63 + f2-64): the three dialogs frames re-recorded on the combined tree (f2-64 message boxes in FreeType), reviewed against the 9a05ab9f renders.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "051208920bbeee92fa5c1d63a0a53bff263199903efa855577877ff37212914c",
-    "ciuki-blue-dialogs.ppm": "787b500fad66a0ed3b67877677ed941bcbea42cbd9acaa495359db32f6a67600",
-    "ciuki-blue-tray-disabled.ppm": "d18ab5f67988c1b23a7eee76d60f92b67fdba013686f5a567809129dcb1702c5",
-    "ciuki-blue-tray-media.ppm": "d6627793607cdd2370e208cfbb9dcd044189a27ac53e682483e8aa05b2ad1c23",
-    "classic-98-desktop.ppm": "f64f4d3a17d1db6823ffbb35bedbef26dfa2a4f050806912a509fab9b9aebe33",
-    "classic-98-dialogs.ppm": "628552715b1f0641933fd3589bd2bafcbd73ec4a7b0c858d2a0f8579d51a52d6",
-    "classic-98-tray-disabled.ppm": "b03c20ccd2061ada5855ca5f31bbd625ec4dfebba5799b2b938894017f4f3630",
-    "classic-98-tray-media.ppm": "74b0062575ff96d6748001b9ff43e1046025e2fffefe2eda2c030e4d90c47d7b",
-    "platinum-desktop.ppm": "62e179ec4af38dc1011bb000404b74c1d7a27159973af0421794861fee29483c",
-    "platinum-dialogs.ppm": "703f200570cdf20347498ae22c9e74a48353716833252116d80943b17242468a",
-    "platinum-tray-disabled.ppm": "c7fe5bd15325b8b242d9f19dc048f2813a6fcf036349a8700829570926936ce5",
-    "platinum-tray-media.ppm": "0196e226c14beadc791c1c0d74c28021da984773dab0a745def180b91f271e2c"
+    'ciuki-blue-desktop.ppm': '8ce0aaf3b602edb820afe32d9be2bd7b936ce1743310c094be73bd4c5ea967e1',
+    'ciuki-blue-dialogs.ppm': '3df21539caefd3d47846ffed5c260e5ccc0e3ab62c21a9e5ff15e5847b37b0b9',
+    'ciuki-blue-tray-disabled.ppm': '206dc200f87259fde036000b84e6e344aaa8ba858982c10484b6853f39e8dab0',
+    'ciuki-blue-tray-media.ppm': '04346bc90d96665d086109b8adab65da3786c227bbeaeffccc656142a44fd0e8',
+    'classic-98-desktop.ppm': 'fce0355c986af8643d26ca0369fa4a4cb1c2fc907b353007465ad766d8122b87',
+    'classic-98-dialogs.ppm': 'd98ff98cd8e2c4226c9268bf3dd505837e93810fb16f449e553f3448630e7fed',
+    'classic-98-tray-disabled.ppm': '04479a5dfd23674e9533da50cf517e033734885c90f0c8e61bf4cf2716b6604a',
+    'classic-98-tray-media.ppm': '2a57afcbac81780f6167b5cab7a4203d446930f4d55f7db255104ace2b326243',
+    'platinum-desktop.ppm': 'a0268a549609eb7c53680d0abcba746f9355625ff1d438cbf3b0e78e244ea67e',
+    'platinum-dialogs.ppm': 'b58db25780697935490ab333174424060b9c769f3259af73257f5333191c3fa1',
+    'platinum-tray-disabled.ppm': '0bb48838c5582ed899e60104c044c3d83d9337b69f90bb22e058e58f9bf38a6a',
+    'platinum-tray-media.ppm': 'bc4f344a1ff8ff6d9a0453411f674a3fa93a47051b84a0b6f12e7bf4bd1e3d59',
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -579,7 +579,7 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(r["sha256"], metadata["wallpaper_cache"]["files"][Path(r["path"]).name]["sha256"])
             else:
                 self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
-        # Microsoft's ME wallpapers (third_party/win_bg, local only) never enter the image.
+        # Private wallpapers (third_party/win_bg, local only) never enter the image.
         self.assertFalse(any("win_bg" in str(v) or Path(k).suffix.lower() == ".bmp" for k, v in sources.items()))
         print("PASS desktop/demo/Files ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
 
