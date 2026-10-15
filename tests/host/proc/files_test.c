@@ -683,6 +683,26 @@ static void test_media_node(void)
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(s),0));CHECK(!ua_read(client->memory,&s,USER,sizeof(s)));
     CHECK(s.removable_mask==((1u<<4)|(1u<<3))&&s.generation[4]==123&&!s.generation[2]);
     CHECK(s.type[4]==CIUKI_MEDIA_USB && s.type[3]==CIUKI_MEDIA_OPTICAL && s.generation[3]==321);
+    /* One copied list per physical device, duplicate descriptors only once. */
+    int held=file_open(client,"/media-busy.bin",O_CREAT|O_RDWR,0600); CHECK(held>=0);
+    int duplicate=file_dup(client,held,0,false,0); CHECK(duplicate>=0);
+    struct px_node *held_node=file_fd(client,held)->node;
+    struct fat_volume *saved_volume=held_node->volume;
+    struct vfs *saved_vfs=space->vfs;
+    held_node->volume=&media_observation.volumes[5].fat; space->vfs=&media_observation.vfs;
+    media_observation.volumes[5]=(struct storage_volume){.present=true,.removable=true,.part={.parent=&b}};
+    struct ciuki_media_blockers blockers={.version=CIUKI_MEDIA_VERSION,.size=sizeof(blockers),.drive=4,.generation=123};
+    CHECK(!ua_write(client->memory,USER,&blockers,sizeof(blockers)));
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_BLOCKERS,USER,sizeof(blockers),0));
+    CHECK(!ua_read(client->memory,&blockers,USER,sizeof(blockers)));
+    CHECK(blockers.count==1 && blockers.programs[0].pid==client->pid && !strcmp(blockers.programs[0].name,client->name));
+    blockers.generation++; CHECK(!ua_write(client->memory,USER,&blockers,sizeof(blockers)));
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_BLOCKERS,USER,sizeof(blockers),0)==-EIO);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_BLOCKERS,USER,sizeof(blockers)-1,0)==-EINVAL);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_BLOCKERS,UINT32_MAX,sizeof(blockers),0)==-EFAULT);
+    held_node->volume=saved_volume; space->vfs=saved_vfs;
+    CHECK(!file_close(client,held) && !file_close(client,duplicate));
+    CHECK(!remove_path_native("/media-busy.bin",false)); media_observation.volumes[5].present=false;
     struct ciuki_media_state_v1 old={.version=1,.size=sizeof(old)};
     CHECK(!ua_write(client->memory,USER,&old,sizeof(old)));
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_STATE,USER,sizeof(old),0));

@@ -673,8 +673,10 @@ class Actions:
                 for batch in action['batches']:
                     if not 1<=batch.get('pause_ms',0)<=100:raise res.Refusal('input pacing must be 1..100 ms')
             elif action['type']=='media':
-                if action.get('device')!='ciuki-optical' or action.get('operation') not in ('eject','change'):
-                    raise res.Refusal('invalid optical media action')
+                optical=action.get('device')=='ciuki-optical' and action.get('operation') in ('eject','change')
+                usb=action.get('device')=='ciuki-usb-storage' and action.get('operation')=='detach'
+                if not (optical or usb):
+                    raise res.Refusal('invalid removable media action')
                 if action['operation']=='change' and not re.fullmatch(r'fixture-[0-9]+\.iso',action.get('target','')):
                     raise res.Refusal('media change requires a generated optical fixture')
             elif action.get('mode') not in ('guest-termination',):
@@ -769,7 +771,9 @@ class Actions:
             # backend is addressed by id; 'eject' then 'blockdev-change-medium'.
             # The -drive id names the block backend; QMP addresses it with the
             # (deprecated but retained) 'device' member, not the frontend 'id'.
-            if action['operation']=='change':
+            if action['operation']=='detach':
+                command='device_del'; args={'id':action['device']}
+            elif action['operation']=='change':
                 command='blockdev-change-medium'
                 args={'device':action['device'],'filename':action['target'],'format':'raw','read-only-mode':'read-only'}
             else:
@@ -1606,7 +1610,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         # backend keep this fixture independent of optical/IDE ordinals.
         args+=['-device','piix3-usb-uhci,id=ciuki-storage-usb',
                '-drive',f'file=fixture-{index}.img,format=raw,if=none,id=ciuki-usb,cache='+cache,
-               '-device','usb-storage,bus=ciuki-storage-usb.0,drive=ciuki-usb']
+               '-device','usb-storage,id=ciuki-usb-storage,bus=ciuki-storage-usb.0,drive=ciuki-usb']
     for index,fixture in enumerate(case.get('fixtures',[])):
         if fixture.get('generator')=='xorriso':
             # Secondary slave (IDE index 3) as an explicit ide-cd frontend. A

@@ -1,6 +1,7 @@
 /* Final visible frames from production desktop, software and accelerated.
  * SPDX-License-Identifier: MIT */
 #include "fake.h"
+#include "../../../apps/libdeskui/deskui.h"
 #include "../../../assets/cursors/cursors.h"
 #include <assert.h>
 #include <errno.h>
@@ -8,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 static struct desktop d;
+static unsigned shell_paints;
+void desk_test_profile(const char *name) { if (!strcmp(name,"bars_menus")) shell_paints++; }
+
 static uint32_t *scanout;
 static unsigned caps, copies, window_copies, fills, uploads, cursor_moves;
 static uint64_t uploaded_pixels;
@@ -169,6 +173,51 @@ static void scenario(unsigned available)
     for (unsigned p=0;p<5*width;p++) pixels[p]=(p*1483u)&0xffffff;
     dirty_client(i);redraw();
     if (available&2u) assert(window_copies==before_copies+1);
+    /* F2-74: disjoint client writes, scrolls and moves keep their shortcuts.
+     * Both copy endpoints, shadows and the entry sweep remain protected. */
+    desk_shell_enable(&d);
+    desk_shell_notify(&d,"Removable media","E: is ready to use.",DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
+    struct desk_box sweep=desk_shell_notification_bounds(&d);
+    assert(d.sh.notification.slide==20);
+    redraw();
+    d.now_ns+=200000000ull; desk_shell_tick(&d); redraw();
+    struct desk_box settled=desk_shell_notification_bounds(&d);
+    assert(!memcmp(&sweep,&settled,sizeof(sweep)));
+    struct desk_box content=desk_content(&d.clients[i]);
+    shell_paints=0;
+    desk_composite(&d,(struct desk_box){content.x+2,content.y+2,20,10});
+    assert(!shell_paints); /* precise client-only painter is still selected */
+    before_copies=window_copies;
+    memmove(pixels+5*width,pixels,(height-5)*width*4);
+    for (unsigned p=0;p<5*width;p++) pixels[p]=(p*3871u)&0xffffff;
+    dirty_client(i);redraw();
+    if (available&2u) assert(window_copies==before_copies+1);
+    before_copies=window_copies;
+    desk_move(&d,i,120,110);assert(d.copy_pending);redraw();
+    if (available&2u) assert(window_copies==before_copies+1);
+    /* Only the destination intersects. Then only the source intersects. */
+    desk_move(&d,i,settled.x+10,settled.y+10);assert(!d.copy_pending);redraw();
+    shell_paints=0;
+    content=desk_content(&d.clients[i]);
+    desk_composite(&d,(struct desk_box){content.x+2,content.y+2,20,10});
+    assert(shell_paints);
+    before_copies=window_copies;
+    memmove(pixels+5*width,pixels,(height-5)*width*4);
+    for (unsigned p=0;p<5*width;p++) pixels[p]=(p*5939u)&0xffffff;
+    dirty_client(i);redraw();assert(window_copies==before_copies);
+    desk_move(&d,i,120,110);assert(!d.copy_pending);redraw();
+    /* A frame whose rightmost client column touches only the left shadow. */
+    int shadow_x=settled.x-(int)width-DESK_BORDER;
+    desk_move(&d,i,shadow_x,settled.y);assert(!d.copy_pending);redraw();
+    desk_move(&d,i,120,110);assert(!d.copy_pending);redraw();
+    /* The lower, clipped entry sweep is protected too. */
+    assert(desk_notification_intersects(&d,(struct desk_box){settled.x,settled.y+settled.h-1,1,1}));
+    assert(!desk_notification_intersects(&d,(struct desk_box){settled.x-1,settled.y,1,1}));
+    /* Coalescing a safe move must check the retained original source. */
+    desk_move(&d,i,125,115);assert(d.copy_pending);
+    desk_move(&d,i,130,120);assert(d.copy_pending);redraw();
+    desk_shell_key(&d,DU_KEY_ESC,1);redraw();
+    d.shell=0;desk_damage_add(&d.damage,(struct desk_box){0,0,640,480},640,480);redraw();
     int j=window_new(11,21,130,90,130,110);redraw();
     before_copies=window_copies;desk_move(&d,i,140,120);redraw();assert(window_copies==before_copies);
     desk_drop_client(&d,j);redraw();
@@ -224,5 +273,6 @@ int main(void)
     dirty_client(i);redraw();assert(copies>0);
     for(int k=0;k<DESK_CLIENTS;k++)desk_drop_client(&d,k);
     desk_render_release(&d);free(d.pixels);free(scanout);assert(!fake_live());
+    puts("PASS localized notification protection: client-only painter, disjoint scroll/move COPY, source/destination overlap, shadow and entry sweep");
     puts("desktop acceleration/fallback visible-frame equivalence, Paint cursor shapes/hotspots/clipping and late-ready rectangles: PASS");return 0;
 }

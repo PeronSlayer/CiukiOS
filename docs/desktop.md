@@ -1534,3 +1534,11 @@ worker checkpoint for a second state-transfer round trip. The desktop's runtime
 requires changing full-screen demo frames and exact equality of both entire return screendumps, with no masks or ignored
 pixels, as well as mode and cleanup records. This row has not been run by the
 implementation agent; standard VGA, Cirrus and the T23 remain lead validation.
+
+F2-74 fixes removable-media notification repainting over client windows and
+adds explicit close dismissal. The tray's removable-media icon accepts either
+mouse button; its menu and Files show the volume name with the drive letter.
+Busy removal queries `MEDIA_GET_BLOCKERS` and shows program names and PIDs.
+Safe USB removal retains an absent-volume result so the later unplug does not
+warn again. See [the implementation and validation record](validation/f2-74-removable-media.md)
+for the additive query, replay captures and pending guest/hardware qualification.

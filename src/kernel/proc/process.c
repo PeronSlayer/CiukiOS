@@ -24,6 +24,12 @@ struct process *proc_find(uint32_t pid)
     return 0;
 }
 
+struct process *proc_at_slot(unsigned slot)
+{
+    struct process *p=slot<CIUKI_PROCESS_MAX ? processes[slot] : 0;
+    return p && p->published ? p : 0;
+}
+
 struct process *proc_current(void)
 {
     struct proc_thread *t = proc_thread_for(g_current);

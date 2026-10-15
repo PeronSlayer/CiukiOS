@@ -1,3 +1,4 @@
+#include "../desktop/media_notice.h"
 /* SPDX-License-Identifier: MIT
  * Files controller: layout, menus, panes, selection, operations and jobs. */
 #include "app.h"
@@ -374,6 +375,45 @@ static int media_drive(const char *path)
     if (!path || strncmp(path,"/mnt/",5) || path[5]<'d' || path[5]>'z' || (path[6] && path[6]!='/')) return -1;
     return path[5]-'a';
 }
+/* Content reads are restricted to arrival/generation or label-source changes.
+ * Failures keep the previous successful cache and are retried by media ticks. */
+static int labels_refresh(struct files_app *a)
+{
+    int changed=0;
+    for (unsigned d=3;d<26;d++) {
+        struct files_drive_label *label=&a->drive_labels[d];
+        if (!(a->media.removable_mask & (1u<<d))) {
+            changed|=label->valid; memset(label,0,sizeof(*label)); continue;
+        }
+        struct files_label_key key={0};
+        if (a->media_label_key && a->media_label_key(d,&key)) continue;
+        int same=label->valid && label->generation==a->media.generation[d] &&
+            !strcmp(label->key.volume,key.volume) && label->key.size==key.size &&
+            label->key.ino==key.ino && label->key.modified==key.modified && label->key.inf_status==key.inf_status;
+        if (same || !a->media_label) continue;
+        char text[33]={0};
+        if (a->media_label(d,text)) continue;
+        text[32]=0;
+        memcpy(label->text,text,sizeof(text)); label->key=key;
+        label->generation=a->media.generation[d]; label->valid=1; changed=1;
+    }
+    return changed;
+}
+static const char *drive_label(const struct files_app *a,int drive)
+{
+    if (drive<3 || drive>=26 || !(a->media.removable_mask & (1u<<drive)) ||
+        !a->drive_labels[drive].valid || a->drive_labels[drive].generation!=a->media.generation[drive]) return "";
+    return a->drive_labels[drive].text;
+}
+static const char *removal_label(struct files_app *a,int drive)
+{
+    if (drive<3) return "Safely &remove";
+    const char *name=drive_label(a,drive);
+    snprintf(a->removal_label,sizeof(a->removal_label),"%s %.32s%s%c:",
+        drive>=3 && a->media.type[drive]==CIUKI_MEDIA_OPTICAL ? "&Eject disc" : "Safely &remove",
+        name,name[0] ? " - " : "",drive>=3 ? 'A'+drive : '?');
+    return a->removal_label;
+}
 static int removal_target(struct files_app *a)
 {
     char path[FM_PATH];
@@ -412,8 +452,7 @@ void files_update(struct files_app *a)
         const char *drive_icon=optical ? "place:optical" : removable ? "place:removable" : "place:volume";
         char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
-        char volume_label[33]={0};
-        if (computer && a->media_label && e->name[0]>='D' && e->name[0]<='Z') a->media_label((unsigned)(e->name[0]-'A'),volume_label);
+        const char *volume_label=drive_label(a,drive);
         if (volume_label[0]) snprintf(t->label,sizeof(t->label),"%s (%s)",volume_label,e->name);
         a->rows[i] = (struct du_item){{volume_label[0] ? t->label : e->name, t->size, t->type, t->modified},
                                       computer ? named(drive_icon, 16) : icon16(e), computer ? named(drive_icon, 32) : icon32(e),
@@ -448,7 +487,7 @@ void files_update(struct files_app *a)
     int target=removal_target(a);
     set_flag(a->file_items, 11, C_SAFE_REMOVE, DU_ITEM_DISABLED, target<3);
     for (unsigned i=0;i<11;i++) if (a->file_items[i].id==C_SAFE_REMOVE)
-        a->file_items[i].label=target>=3 && a->media.type[target]==CIUKI_MEDIA_OPTICAL ? "&Eject disc" : "Safely &remove";
+        a->file_items[i].label=removal_label(a,target);
     set_flag(a->file_items, 11, C_OPEN, DU_ITEM_DISABLED, !selected);
     set_flag(a->file_items, 11, C_OPEN_NOTE, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_DELETE, DU_ITEM_DISABLED, computer || !selected);
@@ -843,7 +882,7 @@ static void context(struct files_app *a, const struct du_event *e)
         enum fm_kind kind = fm_kind(it);
         popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
         int target=removal_target(a);
-        if (target>=3) popup_add(a, a->media.type[target]==CIUKI_MEDIA_OPTICAL ? "&Eject disc" : "Safely &remove", C_SAFE_REMOVE, 0);
+        if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
         if (kind != FM_KIND_FOLDER) popup_add(a, "Open with &CiukNote", C_OPEN_NOTE, 0);
         if (n == 1 && m->path[0] && (kind == FM_KIND_FOLDER || kind == FM_KIND_AUDIO))
             popup_add(a, "Play in &Music Player", C_MUSIC, 0);
@@ -880,7 +919,7 @@ static void context(struct files_app *a, const struct du_event *e)
         if (!fm_same_path(path, a->model.path)) files_navigate(a, path);
         popup_add(a, "&Open", C_TREE_OPEN, DU_ITEM_DEFAULT);
         int target=removal_target(a);
-        if (target>=3) popup_add(a, a->media.type[target]==CIUKI_MEDIA_OPTICAL ? "&Eject disc" : "Safely &remove", C_SAFE_REMOVE, 0);
+        if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "P&roperties", C_PROPERTIES, 0);
         fm_select_none(&a->model); files_update(a);
@@ -926,7 +965,13 @@ static void command(struct files_app *a, int id)
         if (d<3) break;
         int optical=a->media.type[d]==CIUKI_MEDIA_OPTICAL;
         int r=a->media_remove((unsigned)d,a->media.generation[d]);
-        if (r) error_box(a,"Safely remove",r==-EBUSY ? "Close files on this drive and try again:" : "The drive could not be safely removed:",r);
+        if (r==-EBUSY) {
+            struct ciuki_media_blockers b; char text[1024];
+            int have=a->media_blockers && !a->media_blockers((unsigned)d,a->media.generation[d],&b);
+            desk_media_blocker_text(text,sizeof(text),have ? &b : NULL,desk_media_dialog_body(a->width,a->height));
+            static const char *const buttons[]={"&OK"};
+            du_message(a->ui,D_INFO,"Drive is in use",text,DU_DLG_ICON_WARNING,buttons,1,0,0);
+        } else if (r) error_box(a,"Safely remove","The drive could not be safely removed:",r);
         else { files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
         break;
     }
@@ -958,6 +1003,8 @@ static void command(struct files_app *a, int id)
     case C_SORT_NAME: case C_SORT_SIZE: case C_SORT_TYPE: case C_SORT_MODIFIED:
         fm_sort(m, (unsigned)(id - C_SORT_NAME), 0); files_update(a); break;
     case C_REFRESH: {
+        for (unsigned d=3;d<26;d++) a->drive_labels[d].valid=0;
+        labels_refresh(a);
         int r = fm_refresh(m);
         if (r) error_box(a, "Files", "Cannot refresh the folder:", r);
         places_build(a); files_layout(a); a->tree_dirty = 1; a->note[0] = 0; files_update(a); break;
@@ -1076,14 +1123,17 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         if (e->id == T_JOB) job_tick(a);
         else if (e->id == T_MEDIA && a->media_read && !a->job_active && a->rename_index<0 && !du_dialog_id(a->ui)) {
             struct ciuki_media_state state={0};
-            if (!a->media_read(&state) && memcmp(&state,&a->media,sizeof(state))) {
+            if (!a->media_read(&state)) {
                 int drive=media_drive(a->model.path);
-                int expired=drive>=3 && a->media.generation[drive] &&
-                    a->media.generation[drive]!=state.generation[drive];
-                a->media=state; a->tree_dirty=1;
-                if (expired)
-                    files_navigate(a,FM_COMPUTER);
-                else { fm_refresh(&a->model); files_update(a); }
+                int expired=drive>=3 && (a->media.removable_mask & (1u<<drive)) &&
+                    (!(state.removable_mask & (1u<<drive)) || a->media.generation[drive]!=state.generation[drive]);
+                int changed=memcmp(&state,&a->media,sizeof(state))!=0;
+                a->media=state;
+                int labels_changed=labels_refresh(a);
+                if (changed) a->tree_dirty=1;
+                if (expired) files_navigate(a,FM_COMPUTER);
+                else if (changed) { fm_refresh(&a->model); files_update(a); }
+                else if (labels_changed) files_update(a);
             }
         }
         break;
@@ -1144,6 +1194,7 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->rename_index = -1; a->split = a->width >= 700 ? 180 : 150;
     fm_init(&a->model, fs);
     if (a->media_read && a->media_read(&a->media)) memset(&a->media,0,sizeof(a->media));
+    labels_refresh(a);
     a->tree = calloc(FILES_TREE, sizeof(*a->tree));
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;

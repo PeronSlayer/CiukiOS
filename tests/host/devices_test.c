@@ -204,6 +204,13 @@ int main(void)
     assert(device(0x60000)->bus_type == CIUKI_BUS_USB && device(0x60000)->vendor == 0x1234 && device(0x60000)->generation == 42);
     usb_context.devices[0].quarantined = true; usb_context.devices[0].reason = "hid_stall";
     devices_snapshot(&snapshot); assert(device(0x60000)->state == CIUKI_DEVICE_QUARANTINED && !strcmp(device(0x60000)->reason, "hid_stall"));
+    usb_context.devices[0].quarantined=false;
+    usb_context.devices[0].storage.bound=true; usb_context.devices[0].storage.ejected=true;
+    usb_context.devices[0].reason="safely_removed";
+    devices_snapshot(&snapshot);
+    assert(device(0x60000)->class_id==CIUKI_DEVICE_DISK && device(0x60000)->state==CIUKI_DEVICE_ABSENT);
+    assert(!strcmp(device(0x60000)->driver,"usb-storage") && !strcmp(device(0x60000)->reason,"safely_removed"));
+    assert(usb_context.devices[0].present && usb_context.devices[0].configured);
     usb_hosts = 0; pci[0].class_code = 2; pci[0].subclass = 0; /* pci[0] is the NIC again for the later catalogue checks */
     pci[2]=(struct pci_func){.vendor=0x1274,.device=0x5000,.class_code=4,.subclass=1,.dev=5,.irq_line=11,.irq_pin=1,.bar={0xd001}};
     npci=3; audio.backend_pci=pci[2]; audio.backend_name="es137x"; audio.backend_touched=true; audio.ready=true;

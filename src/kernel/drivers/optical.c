@@ -77,8 +77,13 @@ int optical_eject(struct storage *s, unsigned drive, uint32_t generation)
                 s->vfs.nodes[i].generation == s->vfs.generation[drive]) e = -FS_EBUSY;
         if (px_ro_busy && px_ro_busy(&s->vfs, ro)) e = -FS_EBUSY;
         if (!e) {
-            e = atapi_eject(d);
-            if (!e) vfs_ro_expire_locked(&s->vfs, drive);
+            e = vfs_detach_locked(&s->vfs, drive);
+            if (!e) {
+                e = atapi_eject(d);
+                /* A failed eject leaves the disc unmounted. Let readiness
+                 * publish it again on the next service turn. */
+                s->optical_bindings[slot].attempted_generation = 0;
+            }
         }
         klog("[optical] media slot=%u stage=eject drive=%c generation=%u result=%d",
              slot, 'A' + drive, generation, e);

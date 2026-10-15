@@ -5,6 +5,90 @@
   "host_tests": true,
   "cases": [
     {
+      "id": "safe-remove-usb-qemu-t23",
+      "probe": "media-remove",
+      "profile": "qemu-t23",
+      "selector": "f4:media-remove run={run_id}",
+      "timeout": 90,
+      "fixtures": [
+        {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1,
+          "transport": "usb"
+        }
+      ],
+      "actions": [
+        {
+          "type": "media",
+          "after": {
+            "event": "ARM",
+            "action": "usb_detach"
+          },
+          "operation": "detach",
+          "device": "ciuki-usb-storage"
+        }
+      ],
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "busy"
+            },
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": -16
+              },
+              "unchanged": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "safe_remove"
+            },
+            "fields": {
+              "result": {
+                "encoding": "signed",
+                "eq": 0
+              },
+              "absent": {
+                "eq": 1
+              },
+              "released": {
+                "eq": 1
+              },
+              "enumerated": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "detach"
+            },
+            "fields": {
+              "absent": {
+                "eq": 1
+              },
+              "safe": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      }
+    },
+    {
       "id": "optical-l1-qemu-t23",
       "probe": "optical",
       "profile": "qemu-t23",
@@ -206,6 +290,7 @@
               }
             }
           },
+          {"where": {"event": "DATA", "case": "safe_remove"}, "fields": {"busy": {"encoding": "signed", "eq": -16}, "result": {"encoding": "signed", "eq": 0}, "letter_absent": {"eq": 1}}, "exact_count": 1},
           {
             "where": {
               "event": "DATA",
@@ -518,6 +603,7 @@
               }
             }
           },
+          {"where": {"event": "DATA", "case": "safe_remove"}, "fields": {"busy": {"encoding": "signed", "eq": -16}, "result": {"encoding": "signed", "eq": 0}, "letter_absent": {"eq": 1}}, "exact_count": 1},
           {
             "where": {
               "event": "DATA",
@@ -830,6 +916,7 @@
               }
             }
           },
+          {"where": {"event": "DATA", "case": "safe_remove"}, "fields": {"busy": {"encoding": "signed", "eq": -16}, "result": {"encoding": "signed", "eq": 0}, "letter_absent": {"eq": 1}}, "exact_count": 1},
           {
             "where": {
               "event": "DATA",
@@ -1177,6 +1264,7 @@
               }
             }
           },
+          {"where": {"event": "DATA", "case": "safe_remove"}, "fields": {"busy": {"encoding": "signed", "eq": -16}, "result": {"encoding": "signed", "eq": 0}, "letter_absent": {"eq": 1}}, "exact_count": 1},
           {
             "where": {
               "event": "DATA",
@@ -1489,6 +1577,7 @@
               }
             }
           },
+          {"where": {"event": "DATA", "case": "safe_remove"}, "fields": {"busy": {"encoding": "signed", "eq": -16}, "result": {"encoding": "signed", "eq": 0}, "letter_absent": {"eq": 1}}, "exact_count": 1},
           {
             "where": {
               "event": "DATA",
@@ -1801,6 +1890,7 @@
               }
             }
           },
+          {"where": {"event": "DATA", "case": "safe_remove"}, "fields": {"busy": {"encoding": "signed", "eq": -16}, "result": {"encoding": "signed", "eq": 0}, "letter_absent": {"eq": 1}}, "exact_count": 1},
           {
             "where": {
               "event": "DATA",

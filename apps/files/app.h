@@ -15,6 +15,19 @@ struct files_row { char label[80], size[32], type[40], modified[24]; };
 struct files_place { char name[64], path[FM_PATH]; };
 struct files_node { char name[FM_NAME], path[FM_PATH]; unsigned depth; uint8_t expanded, children; };
 
+/* Cheap label sources observed on media ticks, never selection/layout. */
+struct files_label_key {
+    char volume[33];
+    uint64_t size, ino;
+    int64_t modified;
+    int inf_status;
+};
+struct files_drive_label {
+    uint32_t generation;
+    int valid;
+    char text[33];
+    struct files_label_key key;
+};
 struct files_app {
     struct du_ui *ui;
     struct fm_model model;
@@ -37,9 +50,13 @@ struct files_app {
     int (*portrait)(uint32_t *pixels256);
     void (*drop)(struct files_app *, int x, int y, int copy);
     struct ciuki_media_state media;
+    struct files_drive_label drive_labels[26];
     int (*media_label)(unsigned drive, char out[33]);
+    int (*media_label_key)(unsigned drive, struct files_label_key *);
     int (*media_read)(struct ciuki_media_state *);
     int (*media_remove)(unsigned drive, uint32_t generation);
+    int (*media_blockers)(unsigned drive, uint32_t generation, struct ciuki_media_blockers *);
+    char removal_label[96];
     void *user;
 };
 

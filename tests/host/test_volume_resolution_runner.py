@@ -26,7 +26,7 @@ class VolumeResolutionRunnerTests(unittest.TestCase):
             self.assertEqual(runner.fixture_usb_disks(case),[1])
             profile=runner.load(ROOT/'tests/profiles/qemu-t23.json')
             args,_=runner.qemu_args('qemu-system-i386',profile,case,'12345678',Path('system.qcow2'),Path('bios.bin'))
-            self.assertIn('usb-storage,bus=ciuki-storage-usb.0,drive=ciuki-usb',args)
+            self.assertIn('usb-storage,id=ciuki-usb-storage,bus=ciuki-storage-usb.0,drive=ciuki-usb',args)
             self.assertIn('ide-cd,drive=ciuki-optical,bus=ide.1,unit=1',args)
             drives=[args[i+1] for i,a in enumerate(args) if a=='-drive']
             self.assertTrue(any('fixture-1.img' in s and 'if=none' in s for s in drives))

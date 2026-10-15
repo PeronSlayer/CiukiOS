@@ -381,6 +381,10 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
         cache_invalidate(&s->cache,&v->io,true); s->vfs.drive_flags[d]=0;
         v->fat.mounted=false; v->present=false;
     }
+    if (!surprise) for (unsigned d=4;d<26;d++) {
+        struct storage_volume *v=&s->volumes[d];
+        if (v->removable && v->part.parent==dev) v->safely_removed=true;
+    }
     return 0;
 }
 int storage_remove_removable(struct storage *s, struct blkdev *dev, bool surprise)

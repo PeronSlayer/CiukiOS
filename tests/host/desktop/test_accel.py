@@ -23,6 +23,7 @@ class AccelerationTests(unittest.TestCase):
                    ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c", "autoplay_content.c", "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
         sources += [ROOT / "apps/libdeskui/draw.c", ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/accel_test.c"]
         subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+                        "-include", str(ROOT / "tests/host/desktop/paint_probe.h"),
                         "-I", str(ROOT / "src/kernel/include"), "-I", str(ROOT / "apps/desktop"),
                         *map(str, sources), "-o", str(out / "desktop_accel_test")], check=True)
         subprocess.run([str(out / "desktop_accel_test")], check=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})

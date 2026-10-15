@@ -2,6 +2,7 @@
  * one task file with its real production ATA peer, never a second owner. */
 struct packet_fake {
     struct fake disk;
+    void (*eject_check)(void);
     uint8_t status, reason, command, bytes[4096], cdb[16], sense_key, asc, ascq;
     unsigned phase_bytes, remaining, pos, packet_words, packet_length, packets, polls;
     unsigned phases[4], phase_index, phase_count;
@@ -68,6 +69,7 @@ static void packet_out16(void *ctx, uint16_t port, uint16_t value)
     fs_wr16(f->cdb+f->packet_words*2,value);
     if (++f->packet_words!=f->packet_length/2) return;
     f->packets++; f->phase_index=0; f->pos=0;
+    if (f->cdb[0]==0x1b && f->cdb[4]==2 && f->eject_check) f->eject_check();
     if (f->cdb[0]==0 && (f->attentions || f->no_medium || f->needs_start)) {
         f->sense_key=f->attentions ? 6 : 2; f->asc=f->attentions ? 0x29 : 0x3a;
         f->ascq=0;
@@ -193,6 +195,11 @@ static void test_packets(void)
 }
 static struct storage optical_store;
 static struct vfs_table optical_handles;
+static void check_eject_unmounted(void)
+{
+    for (unsigned slot=0;slot<STORAGE_DISKS;slot++) CHECK(!optical_store.optical[slot].mounted);
+    for (unsigned drive=3;drive<26;drive++) CHECK(!optical_store.vfs.ro_volumes[drive]);
+}
 static void test_optical_lifecycle(void)
 {
     FILE *image=fopen("build/host/optical/fixture-0.iso","rb");
@@ -240,7 +247,9 @@ static void test_optical_lifecycle(void)
         CHECK(vfs_drive_present(&optical_store.vfs,3));
         CHECK(vfs_read(&optical_handles,h,bytes,1,&count)==-FS_EIO && !count);
         CHECK(!vfs_close(&optical_handles,h));
+        f.eject_check=check_eject_unmounted;
         CHECK(!optical_eject(&optical_store,3,d->block.media_generation) && !vfs_drive_present(&optical_store.vfs,3));
+        f.eject_check=0;
         struct fs_ro_volume occupied={.mounted=true,.cache=&optical_store.cache};
         optical_store.vfs.ro_volumes[3]=&occupied;
         f.no_medium=false; optical_service(&optical_store,4000);

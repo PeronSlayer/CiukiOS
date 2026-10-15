@@ -122,6 +122,24 @@ static int media_label(unsigned drive,char out[33])
     else memcpy(out,v.label,33);
     return 0;
 }
+/* No root listing/content read on unchanged media polls. Native lookup is
+ * case insensitive on the supported FAT/optical volumes, as is ap_drive_label. */
+static int media_label_key(unsigned drive,struct files_label_key *key)
+{
+    *key=(struct files_label_key){0};
+    struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=drive};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int result=ciuki_devctl(fd,MEDIA_GET_VOLUME,&v,sizeof(v)); close(fd);
+    if (result || !v.flags) return -1;
+    memcpy(key->volume,v.label,33); key->volume[32]=0;
+    const struct fm_vfs *fs=fm_native_vfs();
+    char path[32]; snprintf(path,sizeof(path),"/mnt/%c/autorun.inf",'a'+drive);
+    struct fm_meta meta={0};
+    key->inf_status=fs->stat_path(fs->ctx,path,&meta);
+    if (key->inf_status && key->inf_status!=-ENOENT) return key->inf_status;
+    if (!key->inf_status) { key->size=meta.size; key->ino=meta.ino; key->modified=meta.modified; }
+    return 0;
+}
 static int media_read(struct ciuki_media_state *s)
 {
     *s=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*s)};
@@ -133,6 +151,12 @@ static int media_remove(unsigned d,uint32_t generation)
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),d,generation};
     int e=ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r)) ? -errno : 0; close(fd); return e;
+}
+static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_blockers *b)
+{
+    *b=(struct ciuki_media_blockers){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*b),.drive=drive,.generation=generation};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,MEDIA_GET_BLOCKERS,b,sizeof(*b)) ? -errno : 0; close(fd); return e;
 }
 int main(int argc, char **argv)
 {
@@ -164,7 +188,7 @@ int main(int argc, char **argv)
     }
     struct files_app *a = &m->app;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->close = close_window; a->portrait = portrait;
-    a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove;
+    a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }

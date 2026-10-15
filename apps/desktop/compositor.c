@@ -22,6 +22,13 @@ extern void desk_shell_overlay(struct desktop *, struct desk_box) __attribute__(
 extern void desk_internal_paint(struct desktop *, int, struct desk_box, struct desk_box) __attribute__((weak));
 extern const uint32_t *desk_shell_window_icon(struct desktop *, int, int) __attribute__((weak));
 #include "catalog.h"
+extern struct desk_box desk_shell_notification_bounds(const struct desktop *) __attribute__((weak));
+int desk_notification_intersects(const struct desktop *d, struct desk_box box)
+{
+    struct desk_box ignored;
+    return d->sh.notification.active && desk_shell_notification_bounds &&
+        desk_intersect(box,desk_shell_notification_bounds(d),&ignored);
+}
 int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out)
 {
     int64_t x = a.x > b.x ? a.x : b.x, y = a.y > b.y ? a.y : b.y;
@@ -644,7 +651,7 @@ static void scene(struct desktop *d, struct desk_box clip)
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
     /* A client-only update writes its opaque backing store directly. Higher
      * windows' shadows and shell overlays still need the ordinary painter. */
-    if (!d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !d->sh.switcher &&
+    if (!d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_notification_intersects(d,clip) && !d->sh.switcher &&
         clip.y>=DESK_BAR && (!d->shell || clip.y+clip.h<=(int)d->height-DESK_BAR)) {
         for (int i=0;i<DESK_CLIENTS;i++) {
             struct desk_client *c=&d->clients[i];
@@ -802,7 +809,7 @@ static int scroll_plan(struct desktop *d, struct ciuki_rect *out)
         for (unsigned j=0; j<DESK_CLIENTS; j++) if (j!=i && d->clients[j].window && !d->clients[j].minimized &&
             d->clients[j].order>c->order && desk_intersect(desk_outer(&d->clients[j]),b,&ignored)) visible=0;
         for (unsigned j=0; j<d->damage.count; j++) if (desk_intersect(d->damage.boxes[j],b,&ignored)) damaged=1;
-        if (!visible || !damaged) continue;
+        if (!visible || !damaged || desk_notification_intersects(d,b)) continue;
         for (int delta=1; delta<=64 && delta<b.h/2; delta++) for (int dir=-1; dir<=1; dir+=2) {
             int sy=dir<0 ? delta : 0, dy=dir<0 ? 0 : delta, same=1, changed=0;
             const uint32_t *a=c->pixels+(uint32_t)dy*c->info.width;

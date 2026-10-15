@@ -131,6 +131,8 @@ int desk_internal_open(struct desktop *, int kind);
 void desk_shell_message(struct desktop *, const char *title, const char *text, int error);
 void desk_shell_message_class(struct desktop *, const char *title, const char *text, int icon);
 void desk_shell_notify(struct desktop *, const char *title, const char *text, int icon, int action);
+struct desk_box desk_shell_notification_bounds(const struct desktop *);
+int desk_notification_intersects(const struct desktop *, struct desk_box);
 void desk_shell_notify_error(struct desktop *, const char *title, int error);
 void desk_shell_media_labels(struct desktop *, const struct ciuki_media_volume volumes[26]);
 void desk_menu_open(struct desktop *, int kind, int32_t x, int32_t y);
