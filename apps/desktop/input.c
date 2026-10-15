@@ -173,6 +173,10 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
          * next mode change (display_fullscreen_begin: awaiting_frame). */
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
         d->cursor_dirty = 1;
+        /* With a 2D engine the compositor presents damage as row spans and
+         * engine copies while the scanout is trusted; the kernel's full-frame
+         * check needs one whole-screen present, so distrust the scanout. */
+        d->scanout_valid = 0;
         release(d, &e); d->drag = -1;
         if (d->shell) {
             const int modifiers[]={0x38,0x138,0x1D,0x11D,0x2A,0x36};
