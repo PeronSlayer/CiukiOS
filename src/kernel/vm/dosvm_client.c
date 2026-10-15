@@ -9,6 +9,7 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
+extern int display_worker_start(void) __attribute__((weak));
 
 struct binding {
     struct dosvm_key key;
@@ -178,6 +179,10 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if (g->width != CIUKI_DOSVM_WIDTH || g->height != CIUKI_DOSVM_HEIGHT ||
             g->format != CIUKI_SURFACE_XRGB8888 || g->stride != CIUKI_DOSVM_WIDTH * 4) { e = -EINVAL; goto out; }
         if (owns_vm(p->pid)) { e = -EBUSY; goto out; }
+        /* f3-21: Alt+Enter only queues a request; the display worker polls
+         * it. Without a prior mode switch nothing else would (QEMU case
+         * vm-fullscreen-qemu-t23 was refused only at cleanup, -EPERM). */
+        if (display_worker_start && (e = display_worker_start())) goto out;
         unsigned reservation = 0;
         while (reservation < DOSVM_LIMIT && creating[reservation]) reservation++;
         if (reservation == DOSVM_LIMIT) { e = -ENOSPC; goto out; }

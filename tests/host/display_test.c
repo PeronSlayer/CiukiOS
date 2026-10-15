@@ -92,8 +92,9 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d
 void kwait_wake_all(struct kwait *q) { (void)q; }
 bool deadline_passed(uint64_t d) { return g_ticks - d < (UINT64_C(1) << 63); }
 void task_sleep_ms(uint32_t ms) { (void)ms; assert(0); }
-struct task *task_create_kernel(const char *n, void (*fn)(void *), void *a, enum task_prio p) { assert(!strcmp(n, "display-watchdog") && fn && !a && p == P_NORMAL); return &timer; }
-void task_start(struct task *t) { assert(t == &timer); }
+static unsigned workers_created, workers_started;
+struct task *task_create_kernel(const char *n, void (*fn)(void *), void *a, enum task_prio p) { assert(!strcmp(n, "display-watchdog") && fn && !a && p == P_NORMAL); workers_created++; return &timer; }
+void task_start(struct task *t) { assert(t == &timer); workers_started++; }
 struct process *proc_current(void) { return current; }
 struct process *proc_find(uint32_t pid) { return pid==desktop.pid ? &desktop : 0; }
 int grants_display_suspend(bool on) { if (on && (busy || suspended)) return -EBUSY; suspended=on; return 0; }
@@ -241,8 +242,20 @@ static void fullscreen_tests(void)
     fixture(); busy=true; assert(display_fullscreen_begin(3)==-EBUSY && !suspended);
     puts("PASS full-screen lease: accelerator stop, grant suspend, LFB revoke, firmware save, restore/remap/repaint, rollback and failed restore");
 }
+/* f3-21: the worker that polls queued DOS full-screen requests must exist
+ * before any mode switch (a window VM start calls it); one worker only. */
+static void worker_tests(void)
+{
+    fixture(); workers_created = workers_started = 0;
+    assert(!display_worker_start() && workers_created == 1 && workers_started == 1);
+    assert(!display_worker_start() && workers_created == 1);
+    assert(!display_fullscreen_begin(0x13) && workers_created == 1);
+    assert(!display_fullscreen_end());
+    puts("PASS display worker: started once before any mode switch, reused by full-screen entry");
+}
 int main(void)
 {
+    worker_tests();
     fullscreen_tests(); query_tests(); switch_tests(); watchdog_tests(); free(aperture); free(window);
     puts("display host tests: PASS"); return 0;
 }
