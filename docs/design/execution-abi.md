@@ -1578,3 +1578,22 @@ resynchronizes desktop input; Alt+Tab additionally supplies a balanced desktop
 switch chord. Re-focusing or requesting full screen resumes a paused session.
 The dated F3-20 amendment in `device-firmware-ownership.md` defines the precise
 VGA/firmware authority and the hardware state readback limits.
+## f5-03a — Win32 kernel transport freeze (2026-10-14)
+
+The additive Win32 family is global call **96**, `CIUKI_SYS_W32`; native
+0–5/16–77 retain their numbers and all existing ELF semantics; the number is
+declared in a separate `enum ciuki_w32_syscall`, so `enum ciuki_syscall` is unchanged. 78–95 remain
+unassigned here for F6. `EBX=record`, `ECX=exact size`, other argument registers
+zero. The 16-byte version/size/operation/reserved header and fixed records in
+`abi.h` are frozen by the dated f5-03a amendment of
+[the personality contract](win32-personality-contract.md#f5-03a--kernel-record-freeze-and-research-2026-10-14).
+Malformed transport uses -errno; authorized operations return NTSTATUS.
+Core rows require Win32 personality; native service/display authority must be
+assigned explicitly by later amendments. Fixed diagnostic size is 240 bytes;
+i386 CONTEXT is 716 bytes, EXCEPTION_RECORD 80 bytes, x87 save area 112 bytes.
+Win32 FS is GDT slot 9/selector 0x4B/base TEB/limit 8191. Native GS slot 7,
+DOS LDT slot 8 and all previous selectors remain unchanged. SSE is enabled
+only for Win32 with CPU FXSR+SSE; native ELF still observes #UD. Lazy state
+transitions temporarily enable OSFXSR for XMM preservation. No native signal
+record is extended. See the contract amendment for rounding, errors, safe
+context restoration, loader handoff and emergency exception-stack semantics.

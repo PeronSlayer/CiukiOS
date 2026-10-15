@@ -435,7 +435,8 @@ static int probe_protection(void)
     uint16_t ldtr;
     __asm__ volatile("sldt %0" : "=m"(ldtr));
     bool ldt_idle = ldtr == 0 && !(ldt_slot[5] & 0x80);
-    bool tls_valid = ldt_idle && gdtr.limit == (ARCH_LDT_GDT_INDEX + 1) * 8 - 1 &&
+    const uint8_t *w32_fs_slot = (const uint8_t *)(uintptr_t)(gdtr.base + CIUKI_W32_FS_INDEX * 8);
+    bool tls_valid = ldt_idle && !(w32_fs_slot[5] & 0x80) && gdtr.limit == (CIUKI_W32_FS_INDEX + 1) * 8 - 1 &&
                      ((uint32_t)tls[0] | ((uint32_t)tls[1] << 8)) == CIUKI_TLS_SIZE - 1 &&
                      (tls[5] & 0xfe) == 0xf2 && tls[6] == 0x40 && tls_base == 0;
     rec_emit("protection", "DATA", "case=tls_descriptor selector=%u base=%08x limit=%u valid=%u",
@@ -1090,6 +1091,7 @@ void probes_main(void *arg)
         .f0 = probes, .f0_count = ARRAY_SIZE(probes),
         .f1 = __f1probes_start, .f1_count = (unsigned)(__f1probes_end - __f1probes_start),
         .f4 = __f4probes_start, .f4_count = (unsigned)(__f4probes_end - __f4probes_start),
+        .f5 = __f5probes_start, .f5_count = (unsigned)(__f5probes_end - __f5probes_start),
         .f6 = __f6probes_start, .f6_count = (unsigned)(__f6probes_end - __f6probes_start),
         .f2 = __f2probes_start, .f2_count = (unsigned)(__f2probes_end - __f2probes_start),
         .f3 = __f3probes_start, .f3_count = (unsigned)(__f3probes_end - __f3probes_start),

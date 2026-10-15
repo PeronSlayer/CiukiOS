@@ -11,9 +11,10 @@ F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
 F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-audio-state', 'dpmi',
              'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio')  # F4 probes run by selector only; not in the sweep yet
+F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory')
 F6_PROBES = ('net-arp',)  # explicit selector; no F6 hardware sweep yet
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
-SELECTOR_RE = r'f([012346]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
+SELECTOR_RE = r'f([0123456]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV'
 E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
@@ -61,7 +62,7 @@ def selector(request, source='menu', validated_fw_cfg=False):
     match = re.fullmatch(SELECTOR_RE, request)
     if not match:
         raise ValueError('invalid selector grammar or probe')
-    names = {0:F0_PROBES, 1:F1_PROBES, 2:F2_PROBES, 3:F3_PROBES, 4:F4_PROBES, 6:F6_PROBES}[int(match[1])]
+    names = {0:F0_PROBES, 1:F1_PROBES, 2:F2_PROBES, 3:F3_PROBES, 4:F4_PROBES, 5:F5_PROBES, 6:F6_PROBES}[int(match[1])]
     if match[2] not in (*names, *(('all', 'core') if match[1] in ('0', '1') else ())):
         raise ValueError('invalid selector grammar or probe')
     forced = bool(match[4]); safe = bool(match[5])

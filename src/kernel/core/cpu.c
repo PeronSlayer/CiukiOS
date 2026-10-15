@@ -24,4 +24,9 @@ void cpu_detect(void)
     g_cpu_pge = d & (1u << 13);
     g_cpu_fxsr = d & (1u << 24);
     g_cpu_sse = g_cpu_fxsr && (d & (1u << 25));
+    /* No fast syscall ABI. Intel SDM SYSENTER: a zero CS MSR raises #GP.
+     * Early P6 models can advertise SEP without usable SYSENTER/MSRs. */
+    unsigned family = (a >> 8) & 15, model = (a >> 4) & 15;
+    if ((d & (1u << 11)) && !(family == 6 && model < 3))
+        __asm__ volatile("wrmsr" :: "c"(0x174u), "a"(0u), "d"(0u) : "memory");
 }

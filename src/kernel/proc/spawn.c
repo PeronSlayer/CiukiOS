@@ -170,9 +170,13 @@ int proc_stack_build(struct uaddr *u, const struct proc_strings *s,
     return 0;
 }
 
+extern bool w32_is_pe(const struct ciuki_file *) __attribute__((weak));
+extern int w32_spawn(struct process *, const struct ciuki_file *, const struct proc_strings *, uint64_t) __attribute__((weak));
+
 static int prepare_image(struct process *p, const struct ciuki_file *file,
                           const struct proc_strings *strings, uint64_t mask)
 {
+    if (w32_is_pe && w32_is_pe(file)) return w32_spawn ? w32_spawn(p, file, strings, mask) : -ENOSYS;
     struct elf_image image;
     int err = elf_validate(file, &image);
     if (err)

@@ -38,6 +38,12 @@ def expressions(header: str) -> dict[str, str]:
         raise ValueError("missing syscall enum")
     for name in re.findall(r"\b(CIUKI_SYS_\w+)\s*=", enum[1]):
         result[f"constant.{name}"] = name
+    # f5-03a: the additive Win32 family is a separate enum (native list frozen).
+    w32 = re.search(r"enum ciuki_w32_syscall\s*\{(.*?)\};", header, re.S)
+    if not w32:
+        raise ValueError("missing Win32 syscall enum")
+    for name in re.findall(r"\b(CIUKI_SYS_\w+)\s*=", w32[1]):
+        result[f"constant.{name}"] = name
     for name in re.findall(r"^typedef\s+[^;]+\s+(ciuki_\w+)\s*;", header, re.M):
         result[f"sizeof.{name}"] = f"sizeof({name})"
     # Public records close in column zero; an anonymous union may contain

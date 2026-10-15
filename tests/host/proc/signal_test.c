@@ -18,7 +18,7 @@
 #define CR4_OSFXSR (1u << 9)
 #define CR4_OSXMMEXCPT (1u << 10)
 static uint32_t fake_cr0, fake_cr4;
-bool g_cpu_fxsr;
+bool g_cpu_fxsr, g_cpu_sse;
 static uint8_t hardware_fp[512];
 static unsigned hardware_saves, hardware_restores;
 static uint32_t read_cr0(void) { return fake_cr0; }

@@ -6,6 +6,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/signal.h>
+#include <ciuki/win32.h>
 
 void fpu_fxsave(void *p);
 void fpu_fxrstor(const void *p);
@@ -16,9 +17,32 @@ void fpu_reset_state(int sse);
 uint32_t g_fpu_policy = 1;
 static struct task *owner;
 static uint8_t init_image[512] __attribute__((aligned(16)));
+static uint8_t w32_init_image[512] __attribute__((aligned(16)));
+static uint32_t mxcsr_mask = 0xffbf;
+static uint32_t policy_cr4(const struct task *t)
+{
+    return t && t->win32 && g_cpu_fxsr && g_cpu_sse ? CR4_OSFXSR | CR4_OSXMMEXCPT : 0;
+}
+static const uint8_t *initial(const struct task *t) { return t && t->win32 ? w32_init_image : init_image; }
 
-static void save_to(uint8_t *a) { if (g_cpu_fxsr) fpu_fxsave(a); else fpu_fnsave(a); }
-static void restore_from(const uint8_t *a) { if (g_cpu_fxsr) fpu_fxrstor(a); else fpu_frstor(a); }
+static void save_to(uint8_t *a)
+{
+    if (g_cpu_fxsr) {
+        uint32_t cr4 = read_cr4();
+        write_cr4(cr4 | CR4_OSFXSR);
+        fpu_fxsave(a);
+        write_cr4(cr4);
+    } else fpu_fnsave(a);
+}
+static void restore_from(const uint8_t *a)
+{
+    if (g_cpu_fxsr) {
+        uint32_t cr4 = read_cr4();
+        write_cr4(cr4 | CR4_OSFXSR);
+        fpu_fxrstor(a);
+        write_cr4(cr4);
+    } else fpu_frstor(a);
+}
 
 void fpu_init(void)
 {
@@ -26,8 +50,8 @@ void fpu_init(void)
     cr0 &= ~(CR0_EM | CR0_TS);
     cr0 |= CR0_MP | CR0_NE | (1u << 18); /* CR0.AM: #AC only with CPL3/AC */
     write_cr0(cr0);
-    /* F0 policy: SSE stays disabled for ring 3 (CR4.OSFXSR clear); FXSAVE
-     * still saves the x87 state when FXSR exists. */
+    /* Native policy: SSE disabled. Saves temporarily enable OSFXSR so an
+     * outgoing Win32 lazy owner always retains its XMM/MXCSR state. */
     write_cr4(read_cr4() & ~(CR4_OSFXSR | CR4_OSXMMEXCPT));
     fpu_reset_state(0);
     save_to(init_image);                  /* FNSAVE also re-initialises */
@@ -46,12 +70,20 @@ void fpu_init(void)
         *(uint32_t *)(init_image + 4) = 0;
         *(uint32_t *)(init_image + 8) = 0xFFFF;
     }
+    if (g_cpu_fxsr) {
+        memcpy(&mxcsr_mask, init_image + 28, 4);
+        if (!mxcsr_mask) mxcsr_mask = 0xffbf;
+    }
+    memcpy(w32_init_image, init_image, sizeof(init_image));
+    *(uint16_t *)w32_init_image = 0x027f;
     owner = 0;
     write_cr0(read_cr0() | CR0_TS);
 }
 
 void fpu_task_switch(struct task *next)
 {
+    uint32_t cr4 = read_cr4(), want = (cr4 & ~(CR4_OSFXSR | CR4_OSXMMEXCPT)) | policy_cr4(next);
+    if (want != cr4) write_cr4(want); /* serializing: only on a personality change */
     if (next == owner)
         clts();
     else
@@ -70,7 +102,7 @@ void fpu_handle_nm(void)
     }
     if (!cur->fpu_area)
         panic("#NM in a task without an FPU area (%s)", cur->name);
-    restore_from(cur->fpu_valid ? cur->fpu_area : init_image);
+    restore_from(cur->fpu_valid ? cur->fpu_area : initial(cur));
     owner = cur;
 }
 
@@ -165,7 +197,7 @@ void fpu_signal_export(struct task *t, uint8_t *image)
         owner = 0;
     }
     write_cr0(read_cr0() | CR0_TS);
-    fpu_signal_to_fnsave(image, t->fpu_valid ? t->fpu_area : init_image, g_cpu_fxsr);
+    fpu_signal_to_fnsave(image, t->fpu_valid ? t->fpu_area : initial(t), g_cpu_fxsr);
     irq_restore(flags);
 }
 
@@ -173,7 +205,7 @@ void fpu_signal_reset(struct task *t)
 {
     uint32_t flags = irq_save();
     fpu_task_release(t);
-    memcpy(t->fpu_area, init_image, sizeof(init_image));
+    memcpy(t->fpu_area, initial(t), sizeof(init_image));
     t->fpu_valid = true;
     irq_restore(flags);
 }
@@ -184,5 +216,46 @@ void fpu_signal_import(struct task *t, const uint8_t *image)
     fpu_task_release(t);              /* discard the handler's hardware state */
     fpu_signal_from_fnsave(t->fpu_area, image, g_cpu_fxsr);
     t->fpu_valid = true;              /* #NM will perform the hardware restore */
+    irq_restore(flags);
+}
+
+uint32_t fpu_mxcsr_mask(void) { return mxcsr_mask; }
+void fpu_w32_export(struct task *t, struct ciuki_w32_context *c)
+{
+    uint8_t legacy[108];
+    fpu_signal_export(t, legacy); /* saves/detaches the actual lazy owner */
+    memset(&c->floating, 0, sizeof(c->floating));
+    c->floating.control = fp_u16(legacy);
+    c->floating.status = fp_u16(legacy + 4);
+    c->floating.tag = fp_u16(legacy + 8);
+    memcpy(&c->floating.error_offset, legacy + 12, 4);
+    c->floating.error_selector = fp_u16(legacy + 16) | (uint32_t)fp_u16(legacy + 18) << 16;
+    memcpy(&c->floating.data_offset, legacy + 20, 4);
+    c->floating.data_selector = fp_u16(legacy + 24);
+    memcpy(c->floating.registers, legacy + 28, 80);
+    if (g_cpu_fxsr) {
+        c->flags |= W32_CONTEXT_EXTENDED;
+        memcpy(c->extended, t->fpu_valid ? t->fpu_area : initial(t), 512);
+    }
+}
+void fpu_w32_import(struct task *t, const struct ciuki_w32_context *c)
+{
+    uint8_t legacy[108] = {0};
+    uint32_t flags = irq_save();
+    fpu_task_release(t);
+    if (g_cpu_fxsr && (c->flags & W32_CONTEXT_EXTENDED)) memcpy(t->fpu_area, c->extended, 512);
+    else {
+        fp_put16(legacy, (uint16_t)c->floating.control);
+        fp_put16(legacy + 4, (uint16_t)c->floating.status);
+        fp_put16(legacy + 8, (uint16_t)c->floating.tag);
+        memcpy(legacy + 12, &c->floating.error_offset, 4);
+        memcpy(legacy + 16, &c->floating.error_selector, 4);
+        memcpy(legacy + 20, &c->floating.data_offset, 4);
+        fp_put16(legacy + 24, (uint16_t)c->floating.data_selector);
+        memcpy(legacy + 28, c->floating.registers, 80);
+        sigframe_fp_sanitize(legacy);
+        fpu_signal_from_fnsave(t->fpu_area, legacy, g_cpu_fxsr);
+    }
+    t->fpu_valid = true;
     irq_restore(flags);
 }

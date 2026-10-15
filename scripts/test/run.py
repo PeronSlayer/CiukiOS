@@ -2423,7 +2423,7 @@ def main(argv=None):
                 for result in summary: print(result['outcome'].upper()+': '+result['case']+' — '+result['reason'],flush=True)
                 return 0 if complete and all(r['outcome']=='pass' for r in summary) else 1
             host_evidence=None
-            if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-','f3-','f4-','f6-')):
+            if suite.get('host_tests') or options.suite in ('all','f2-all') or options.suite.startswith(('f1-','f2-','f3-','f4-','f5-','f6-')):
                 started=time.monotonic()
                 checked=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests/host','-v'],cwd=ROOT,capture_output=True,timeout=2400,  # host discovery: 530 tests take about 15 min alone (2026-10-14), more under load
                                        env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
@@ -2446,7 +2446,7 @@ def main(argv=None):
                 if not all(c.isalnum() or c in '-_' for c in name):raise res.Refusal('invalid profile name')
                 profile=load(ROOT/'tests/profiles'/f'{name}.json')
                 if profile['machine']!=toolchain['qemu_machine']:raise res.Refusal('profile machine does not match pinned toolchain')
-                if case.get('selector','').startswith(('f1:','f2:','f3:','f4:','f6:')) and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1/F2/F3/F4/F6 evidence requires pinned icount profile')
+                if case.get('selector','').startswith(('f1:','f2:','f3:','f4:','f5:','f6:')) and profile.get('icount')!='shift=1,sleep=on':raise res.Refusal('F1/F2/F3/F4/F5/F6 evidence requires pinned icount profile')
                 if options.suite!='f0-smoke' and profile['accelerator']!='tcg' and not case.get('_smoke'):raise res.Refusal('CPU correctness evidence requires TCG')
                 result,directory=run_case(ROOT,options.suite,case,profile,image,executable,firmware,keep=options.keep)
                 if host_evidence is not None:

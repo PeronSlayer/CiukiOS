@@ -302,7 +302,7 @@ void proc_signal_return_to_user(struct trap_frame *tf)
     uint32_t signo = proc_signal_next(t, &from_process);
     if (!signo)
         return;
-    if (signo == SIGKILL || t->process->actions[signo].handler == SIG_DFL)
+    if (signo == SIGKILL || t->process->personality == PROC_WIN32 || t->process->actions[signo].handler == SIG_DFL)
         proc_signal_die(t, signo);
     struct ciuki_siginfo info = { .signo = (int32_t)signo,
         .sender_pid = (int32_t)(from_process ? process_senders(t->process)[signo] : thread_senders(t)[signo]) };

@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "host_tests": true,
+  "cases": [
+    {
+      "id": "w32-exceptions-qemu-t23",
+      "probe": "w32-exceptions",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-exceptions run={run_id}",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "personality"
+            },
+            "fields": {
+              "fs": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 65536
+              },
+              "errors": {
+                "eq": 0
+              },
+              "sse": {
+                "eq": 1
+              },
+              "threads": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "exceptions"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "faults": {
+                "ge": 10
+              },
+              "done": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "native_sse"
+            },
+            "fields": {
+              "vector": {
+                "eq": 6
+              },
+              "status": {
+                "eq": 4
+              },
+              "ud": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "teardown"
+            },
+            "fields": {
+              "clean": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "w32-memory-qemu-t23",
+      "probe": "w32-memory",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-memory run={run_id}",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "personality"
+            },
+            "fields": {
+              "fs": {
+                "encoding": "hex",
+                "width": 8,
+                "ge": 65536
+              },
+              "errors": {
+                "eq": 0
+              },
+              "sse": {
+                "eq": 1
+              },
+              "threads": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              },
+              "stack": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "native_sse"
+            },
+            "fields": {
+              "vector": {
+                "eq": 6
+              },
+              "status": {
+                "eq": 4
+              },
+              "ud": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "teardown"
+            },
+            "fields": {
+              "clean": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

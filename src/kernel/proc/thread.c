@@ -5,6 +5,9 @@
 #include <ciuki/process.h>
 #include <ciuki/signal.h>
 
+extern int w32_thread_init(struct proc_thread *, bool) __attribute__((weak));
+extern void w32_thread_cleanup(struct proc_thread *) __attribute__((weak));
+
 static struct proc_thread *threads[CIUKI_THREAD_MAX];
 static uint32_t next_tid = 1;
 
@@ -110,13 +113,17 @@ int proc_thread_prepare(struct process *p, uint32_t entry, uint32_t argument,
     t->process = p;
     t->mask = mask;
     t->detached = !!(flags & CIUKI_THREAD_DETACHED);
-    t->stack_bytes = stack_bytes ? stack_bytes : CIUKI_THREAD_STACK_DEFAULT;
+    t->stack_bytes = p->personality == PROC_WIN32 ? stack_bytes :
+        (stack_bytes ? stack_bytes : CIUKI_THREAD_STACK_DEFAULT);
+    if (p->personality == PROC_WIN32 && (flags & W32_THREAD_RESERVATION)) {
+        t->w32_reserve = stack_bytes; t->stack_bytes = p->w32_stack_commit;
+    }
     threads[slot] = t;
     p->threads++;
     p->live_threads++;
-    int err = allocate_stack(t, main);
-    if (!err)
-        err = allocate_tls(t);
+    int err = p->personality == PROC_WIN32 ?
+        (w32_thread_init ? w32_thread_init(t, main) : -ENOSYS) : allocate_stack(t, main);
+    if (!err && p->personality != PROC_WIN32) err = allocate_tls(t);
     uint32_t esp = t->stack_base + t->stack_bytes - 2 * sizeof(uint32_t);
     if (!err && !main) {
         uint32_t frame[2] = { trampoline, argument };
@@ -142,6 +149,7 @@ void proc_thread_discard(struct proc_thread *t)
         task_kill(t->task, 0);
     }
     proc_thread_cleanup(t);
+    if (w32_thread_cleanup) w32_thread_cleanup(t);
     for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++)
         if (threads[i] && threads[i]->joiner == t)
             threads[i]->joiner = 0;
@@ -172,6 +180,7 @@ void proc_thread_collect(struct proc_thread *t)
         return;
     struct uaddr *u = t->process->memory;
     proc_thread_cleanup(t);
+    if (w32_thread_cleanup) w32_thread_cleanup(t);
     ua_unpin(u, &t->tls_pin);
     ua_cancel_pins(u, t->task);
     /* Release any join claim made by a departing thread. */

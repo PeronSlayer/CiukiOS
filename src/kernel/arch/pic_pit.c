@@ -6,6 +6,8 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
+#include <ciuki/win32.h>
+extern void w32_shared_tick(void) __attribute__((weak));
 
 static uint8_t mask_master = 0xFF, mask_slave = 0xFF;
 volatile uint64_t g_ticks;
@@ -58,6 +60,7 @@ static void timer_irq(struct trap_frame *tf)
 {
     (void)tf;
     g_ticks++;
+    if (w32_shared_tick) w32_shared_tick();
     timing_timer_irq();
     sched_tick();
 }
@@ -72,3 +75,27 @@ void pit_init(void)
 }
 
 uint32_t ticks_lo(void) { return (uint32_t)g_ticks; }
+
+static uint16_t pit_latch(void)
+{
+    outb(0x43, 0); /* channel 0 count latch, preserves mode */
+    uint16_t count = inb(0x40);
+    return count | (uint16_t)inb(0x40) << 8;
+}
+uint64_t arch_w32_counter(void)
+{
+    static uint64_t previous;
+    uint32_t flags = irq_save();
+    uint64_t ticks = g_ticks;
+    uint16_t before = pit_latch();
+    outb(0x20, 0x0a); /* master IRR, no EOI or interrupt-mask mutation */
+    bool pending = !!(inb(0x20) & 1);
+    uint16_t after = pit_latch();
+    uint64_t sample = w32_counter_sample(ticks, before, pending, after);
+    /* The PIC cannot count multiple missed periods. A long IRQ-disabled
+     * interval may lose elapsed time, but never makes QPC run backwards. */
+    if (sample < previous) sample = previous;
+    previous = sample;
+    irq_restore(flags);
+    return sample;
+}
