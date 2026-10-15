@@ -4532,6 +4532,11 @@ int21_exec_validate_mz_reloc_table:
     cmp dx, 0x1000
     jae .invalid
     mov ax, [es:0x0006]
+    ; An empty table has no records to dereference. DJGPP's Quake stub
+    ; stores comment bytes at e_lfarlc (0A0Dh); DOS ignores that field when
+    ; e_crlc is zero. Keep header and all nonempty-table bounds below.
+    test ax, ax
+    jz .valid
     cmp ax, 0x4000
     jae .invalid
     shl ax, 1
@@ -4542,6 +4547,7 @@ int21_exec_validate_mz_reloc_table:
     shl dx, cl
     cmp ax, dx
     ja .invalid
+.valid:
     clc
     ret
 .invalid:

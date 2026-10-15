@@ -226,6 +226,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 # functions unchanged; replace only PMM and architectural hardware operations.
 python3 - "$root" "$out" <<'PY'
 from pathlib import Path
+import subprocess
 import sys
 root, out = map(Path, sys.argv[1:])
 source = (root / "src/kernel/core/vmm.c").read_text()
@@ -242,6 +243,18 @@ font = (root / "assets/fonts/native/INCONSOL.CFN").read_bytes()[64:64 + 95 + 95 
 assert len(font) == 95 + 95 * 32
 rows = ",\n".join(", ".join(str(b) for b in font[i:i + 24]) for i in range(0, len(font), 24))
 (out / "dosvm_font.inc").write_text("const uint8_t font_cfn_regular[%d] = {\n%s\n};\n" % (len(font), rows))
+# F3-25: execute the exact DOS MZ relocation validator, without assembling
+# a kernel or an image. The harness supplies ES:0 through the private disk.
+source = (root / "src/boot/floppy_stage1.asm").read_text()
+start = source.index("int21_exec_validate_mz_reloc_table:\n")
+end = source.index("int21_exec_validate_mz_reloc_target:\n", start)
+validator = out / "dosvm_mz_reloc.asm"
+validator.write_text("bits 16\norg 0\ncall int21_exec_validate_mz_reloc_table\nint3\n" + source[start:end])
+binary = out / "dosvm_mz_reloc.bin"
+subprocess.run(["nasm", "-f", "bin", str(validator), "-o", str(binary)], check=True)
+data = binary.read_bytes()
+(out / "dosvm_mz_reloc.inc").write_text("static const uint8_t mz_reloc_code[] = {" +
+    ",".join(str(b) for b in data) + "};\n")
 PY
 # The VGA models and the retained presenter (reference oracle) are separate
 # translation units, exactly as the kernel links them.

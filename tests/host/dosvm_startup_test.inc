@@ -22,7 +22,7 @@ static void startup_record(void)
     }
     startup_message[offset] = 0;
 }
-static void test_startup_screen(void)
+static void test_startup_screen_flags(uint32_t enabled_flags)
 {
     struct dosvm *v = create();
     const char *message = "QUAKE.EXE: cannot open ID1\\PAK0.PAK; CIUKI_TEST event=END status=PASS";
@@ -36,10 +36,14 @@ static void test_startup_screen(void)
     startup_headers = startup_rows = startup_vectors = 0;
     unsigned before = records;
     dosvm_startup_report(v, true); CHECK(records == before); /* quiet boot */
-    evidence_active = false; g_boot.flags = CBI_F_VERBOSE;
-    unsigned guest_before = guest_records;
-    line(v, "DOSREADY 05.00 free=8000 C");
-    CHECK(guest_records == guest_before + 1 && strstr(last_record, "data=444f53524541445920"));
+    g_boot.flags = CBI_F_TEST_REQUEST;
+    dosvm_startup_report(v, true); CHECK(records == before);
+    evidence_active = false; g_boot.flags = enabled_flags;
+    if (enabled_flags & CBI_F_VERBOSE) {
+        unsigned guest_before = guest_records;
+        line(v, "DOSREADY 05.00 free=8000 C");
+        CHECK(guest_records == guest_before + 1 && strstr(last_record, "data=444f53524541445920"));
+    }
     dosvm_startup_report(v, true);
     CHECK(startup_headers == 1 && !strcmp(startup_message, message) && startup_rows == 2);
     CHECK(!memcmp(latches, v->vga.latch, sizeof(latches)));
@@ -79,7 +83,12 @@ static void test_startup_screen(void)
     startup_rows = 0; dosvm_startup_report(v, true); CHECK(!startup_rows);
     g_tsc_per_ms = 0; g_boot.flags = 0; evidence_active = true; diag_time_hook = 0;
     destroy(v, true); empty();
-    puts("f3-24 screen: launch, 5s cadence, no catch-up, frames stop polling, active page, raw hex, quiet/verbose and 240-byte bounds PASS");
+    printf("f3-25 screen flags=%08x: launch, 5s cadence, no catch-up, frames stop polling, active page, raw hex, IRQ deferral and 240-byte bounds PASS\n", enabled_flags);
+}
+static void test_startup_screen(void)
+{
+    test_startup_screen_flags(CBI_F_VERBOSE);
+    test_startup_screen_flags(CBI_F_TEST_REQUEST | CBI_F_DIAG_VERBOSE);
 }
 static void startup_disk_time(void)
 {
