@@ -123,7 +123,12 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d
     while (!(ready = cond(arg)) && !deadline_passed(d)) {
         w.task->wake_tick = d ? d : 1;
         w.task->state = T_BLOCKED;
+        /* The waiter is visible before IF opens. A wake here changes it
+         * to READY and queues it once; schedule handles that state without
+         * requeueing. Never carry the queue lock over the sleep. */
+        irq_restore(f);
         schedule();
+        f = irq_save();
     }
     w.task->wake_tick = 0;
     wait_unlink(&w);

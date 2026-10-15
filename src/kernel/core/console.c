@@ -54,6 +54,17 @@ static uint32_t committed, painted_lines;
 static unsigned painted_rows;
 static uint64_t next_paint;
 static const char *pinned_page;
+/* A service turn paints at most eight cells or one copied scanline. The
+ * presenter claim is always released before a scheduling point. */
+#define PAINT_CELLS 8u
+static struct {
+    bool active, pinned, row_ready;
+    uint8_t *mapping;
+    unsigned rows, cols, head, count, row, col, move_y, move_end, dy;
+    uint32_t target;
+    const char *page, *cursor;
+    char tail[MAX_COLS + 1], line[MAX_COLS + 1];
+} paint;
 
 
 static uint32_t line_begin_as(bool overlay)
@@ -224,6 +235,7 @@ void console_framebuffer_revoke(void)
 }
 void console_framebuffer_changed(const struct fb_device *d)
 {
+    paint.active = false;
     pitch = d->pitch; bpp = d->bpp; width = d->width; height = d->height;
     cols = width / CELL_W; if (cols > MAX_COLS) cols = MAX_COLS;
     rows = height / CELL_H; cur_col = cur_row = 0; con_kind = CON_LFB;
@@ -249,6 +261,7 @@ void console_set_color(uint32_t f, uint32_t b) { fg = f; bg = b; }
 /* Display grant hook (proc/grants.c): owned while a process holds it. */
 void console_display_owned(bool owned)
 {
+    paint.active = false;
     display_owned = owned;
     paint_valid = false;
     if (!owned)
@@ -269,12 +282,19 @@ void console_reclaim(void)
  * progress before the next character. */
 static void paint_row(unsigned row, const char *s)
 {
-    uint32_t f = line_begin();
     unsigned c = 0;
-    for (; c < cols && s[c]; c++) draw_cell(c, row, s[c]);
-    for (; c < cols; c++) draw_cell(c, row, ' ');
-    line_end(f);
-    if (!panic_drawing) kpreempt_point();
+    bool end = false;
+    while (c < cols) {
+        uint32_t f = line_begin();
+        unsigned limit = c + PAINT_CELLS;
+        if (limit > cols) limit = cols;
+        for (; c < limit; c++) {
+            if (!end && !s[c]) end = true;
+            draw_cell(c, row, end ? ' ' : s[c]);
+        }
+        line_end(f);
+        if (!panic_drawing) kpreempt_point();
+    }
 }
 
 static void repaint(void)
@@ -328,33 +348,99 @@ static void repaint(void)
     if (cpu_path_add && cpu_path_clock) cpu_path_add(CPU_CONSOLE, cpu_path_clock() - start);
 }
 
-/* Also exposed to the host row-count model. */
+static void paint_start(void)
+{
+    uint32_t f = irq_save();
+    paint.mapping = fb; paint.rows = rows; paint.cols = cols;
+    paint.target = committed; paint.head = hist_head;
+    paint.count = hist_count < rows - 1 ? hist_count : rows - 1;
+    memcpy(paint.tail, linebuf, linelen); paint.tail[linelen] = 0;
+    paint.page = paint.cursor = pinned_page; paint.pinned = pinned_page != 0;
+    repaint_pending = false;
+    irq_restore(f);
+    paint.row = paint.col = paint.move_y = paint.move_end = 0;
+    paint.row_ready = false;
+    unsigned delta = paint.target - painted_lines;
+    if (!paint.pinned && paint_valid && painted_rows == rows - 1 &&
+        paint.count == painted_rows && delta < paint.count) {
+        paint.dy = delta * CELL_H;
+        if (con_kind == CON_LFB && delta) paint.move_end = rows * CELL_H - paint.dy;
+        else if (con_kind == CON_TEXT && delta) {
+            uint16_t *vga = P2V(0xB8000);
+            memmove(vga, vga + delta * cols, (rows - delta) * cols * 2);
+        }
+        paint.row = paint.count - delta;
+    } else if (!paint.pinned && paint_valid && !delta) paint.row = paint.count;
+    paint.active = true;
+}
+
+/* Resumable repaint: bounded work even when no other task requests a turn.
+ * The history tail is snapshotted once; new lines request the next frame. */
 void console_service(void)
 {
-    if (!repaint_pending || display_owned || quiet || g_ticks < next_paint) return;
-    next_paint = g_ticks + 100;
-    if (pinned_page) {
-        const char *s=pinned_page;
-        repaint_pending=false;
-        for (unsigned r=0;r<rows;r++) {
-            uint32_t flags=line_begin_as(true);
-            unsigned c=0;
-            for (;c<cols && *s && *s!='\n';c++) draw_cell(c,r,*s++);
-            for (;c<cols;c++) draw_cell(c,r,' ');
-            if (*s=='\n') s++;
-            line_end(flags);
-            if (!panic_drawing) kpreempt_point();
-        }
-        return;
+    if (display_owned || quiet || !rows || !cols) return;
+    if (!paint.active) {
+        if (!repaint_pending || g_ticks < next_paint) return;
+        paint_start();
+        next_paint = g_ticks + 100;
     }
-    repaint();
+    if (fb != paint.mapping || rows != paint.rows || cols != paint.cols || pinned_page != paint.page) {
+        paint.active = false; paint_valid = false; repaint_pending = true; return;
+    }
+    uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
+    if (paint.move_y < paint.move_end) {
+        uint32_t f = line_begin();
+        bool drew = draw_enabled;
+        if (drew) memmove(fb + paint.move_y * pitch, fb + (paint.move_y + paint.dy) * pitch,
+                          cols * CELL_W * (bpp / 8));
+        line_end(f);
+        if (drew) paint.move_y++;
+    } else {
+        if (!paint.row_ready) {
+            if (paint.pinned) {
+                unsigned c = 0;
+                while (c < cols && *paint.cursor && *paint.cursor != '\n') paint.line[c++] = *paint.cursor++;
+                paint.line[c] = 0;
+                if (*paint.cursor == '\n') paint.cursor++;
+            } else {
+                uint32_t f = irq_save();
+                if (paint.row < paint.count)
+                    memcpy(paint.line, hist[(paint.head + HIST_LINES - paint.count + paint.row) % HIST_LINES], sizeof(paint.line));
+                else if (paint.row == paint.count) memcpy(paint.line, paint.tail, sizeof(paint.line));
+                else paint.line[0] = 0;
+                irq_restore(f);
+            }
+            unsigned end = (unsigned)strlen(paint.line);
+            if (end > cols) end = cols;
+            memset(paint.line + end, ' ', cols - end); paint.line[cols] = 0;
+            paint.row_ready = true;
+        }
+        uint32_t f = line_begin_as(paint.pinned);
+        bool drew = draw_enabled;
+        if (drew) {
+            unsigned limit = paint.col + PAINT_CELLS;
+            if (limit > cols) limit = cols;
+            for (; paint.col < limit; paint.col++) draw_cell(paint.col, paint.row, paint.line[paint.col]);
+        }
+        line_end(f);
+        if (drew && paint.col == cols) {
+            paint.col = 0; paint.row++; paint.row_ready = false;
+            if (paint.row == rows) {
+                paint.active = false;
+                painted_lines = paint.target; painted_rows = paint.count;
+                paint_valid = !paint.pinned;
+            }
+        }
+    }
+    if (cpu_path_add && cpu_path_clock) cpu_path_add(CPU_CONSOLE, cpu_path_clock() - start);
+    if (!panic_drawing) kpreempt_point();
 }
 void console_pin_page(const char *text)
-{ pinned_page=text; paint_valid=false; repaint_pending=true; }
+{ paint.active=false; pinned_page=text; paint_valid=false; repaint_pending=true; }
 static void console_worker(void *arg)
 {
     (void)arg;
-    for (;;) { console_service(); task_sleep_ms(100); }
+    for (;;) { console_service(); task_sleep_ms(paint.active ? 1 : 100); }
 }
 void console_worker_init(void)
 {
@@ -391,13 +477,16 @@ void console_write(const char *s, size_t n)
             commit_line(); cur_col = 0;
             if (cur_row < rows - 1) cur_row++;
             if (s[i] == '\n') i++;
-        } else while (i < n && cur_col < cols && s[i] != '\n') {
-            char ch = s[i++];
-            if (ch == '\r') continue;
-            if (linelen < MAX_COLS) linebuf[linelen++] = ch;
-            cur_col++;
+        } else {
+            unsigned bytes = 0;
+            while (i < n && cur_col < cols && s[i] != '\n' && bytes++ < 64) {
+                char ch = s[i++];
+                if (ch == '\r') continue;
+                if (linelen < MAX_COLS) linebuf[linelen++] = ch;
+                cur_col++;
+            }
         }
-        repaint_pending = true;
+        if (!pinned_page) repaint_pending = true;
         irq_restore(flags);
     }
     if (panic_drawing) { paint_valid = false; repaint(); }

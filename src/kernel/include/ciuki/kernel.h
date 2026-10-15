@@ -70,7 +70,7 @@ void console_init_text(void);
 bool console_init_lfb(void);
 void console_write(const char *s, size_t n);
 void console_worker_init(void);
-void console_service(void);               /* one coalesced repaint if due */
+void console_service(void);               /* one bounded step of a coalesced repaint */
 void console_set_color(uint32_t fg, uint32_t bg);
 void console_display_owned(bool owned);   /* display grant held: no console pixels */
 void console_reclaim(void);               /* panic: the console draws again */

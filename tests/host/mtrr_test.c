@@ -71,6 +71,7 @@ void klog(const char *fmt, ...)
 }
 void panic(const char *fmt, ...) { (void)fmt; abort(); }
 
+#undef irq_save
 #define irq_save host_irq_save
 #define irq_restore host_irq_restore
 #define cpuid host_cpuid

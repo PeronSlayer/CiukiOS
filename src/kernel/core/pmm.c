@@ -116,26 +116,20 @@ void pmm_init(void)
 uint32_t pmm_alloc_zone(int zone)
 {
     static const uint32_t lo[3] = { 0, 256, 4096 }, hi[3] = { 256, 4096, PMM_MAX_PAGES };
-    if (zone == ZONE_LOW || !zone_free[zone])
-        return 0;
-    uint32_t f = irq_save();
-    for (uint32_t pass = 0; pass < 2; pass++) {
+    if (zone < ZONE_DMA || zone > ZONE_NORMAL || !zone_free[zone]) return 0;
+    for (unsigned pass = 0; pass < 2; pass++) {
         uint32_t start = pass ? lo[zone] : hint[zone];
-        for (uint32_t pfn = start; pfn < hi[zone]; pfn++) {
-            if ((pfn & 31) == 0 && bitmap[pfn >> 5] == 0xFFFFFFFFu) {
-                pfn += 31;
-                continue;
+        for (uint32_t pfn = start; pfn < hi[zone];) {
+            uint32_t f = irq_save();
+            uint32_t end = (pfn + 32) & ~31u;
+            if (end > hi[zone]) end = hi[zone];
+            for (; pfn < end; pfn++) if (!used(pfn)) {
+                set_used(pfn); zone_free[zone]--; hint[zone] = pfn + 1;
+                irq_restore(f); return pfn << 12;
             }
-            if (!used(pfn)) {
-                set_used(pfn);
-                zone_free[zone]--;
-                hint[zone] = pfn + 1;
-                irq_restore(f);
-                return pfn << 12;
-            }
+            irq_restore(f);
         }
     }
-    irq_restore(f);
     return 0;
 }
 
@@ -149,55 +143,51 @@ uint32_t pmm_alloc(void)
  * zone first, then DMA; never LOW. The run is freed page by page with
  * pmm_free(). Returns the physical base or 0; the page allocator hint is
  * untouched, so ordinary single-page allocation behavior does not change. */
+/* Tentative pages are owned by this invocation before IF reopens. IRQ
+ * allocators cannot take them. On fragmentation roll back only our prefix,
+ * in bounded chunks too; never scan/reserve a whole zone with IF clear. */
+static uint32_t alloc_run(int zone, uint32_t pages, uint32_t alignment)
+{
+    uint32_t low = zone == ZONE_DMA ? 256 : 4096;
+    uint32_t high = zone == ZONE_DMA ? 4096 : PMM_MAX_PAGES;
+    if (pages > high - low || zone_free[zone] < pages) return 0;
+    uint32_t start = (low + alignment - 1) & ~(alignment - 1);
+    while (start <= high - pages) {
+        uint32_t have = 0;
+        bool blocked = false;
+        while (have < pages && !blocked) {
+            uint32_t f = irq_save();
+            uint32_t end = pages - have > 32 ? have + 32 : pages;
+            for (; have < end; have++) {
+                if (used(start + have)) { blocked = true; break; }
+                set_used(start + have); zone_free[zone]--;
+            }
+            irq_restore(f);
+        }
+        if (!blocked) return start << 12;
+        uint32_t next = (start + have + alignment) & ~(alignment - 1);
+        for (uint32_t i = 0; i < have;) {
+            uint32_t f = irq_save();
+            uint32_t end = have - i > 32 ? i + 32 : have;
+            for (; i < end; i++) { set_free(start + i); zone_free[zone]++; }
+            irq_restore(f);
+        }
+        start = next;
+    }
+    return 0;
+}
+
 uint32_t pmm_alloc_contig(uint32_t pages)
 {
-    static const uint32_t lo[3] = { 0, 256, 4096 }, hi[3] = { 256, 4096, PMM_MAX_PAGES };
-    if (!pages)
-        return 0;
-    uint32_t f = irq_save();
-    for (int zone = ZONE_NORMAL; zone >= ZONE_DMA; zone--) {
-        if (zone_free[zone] < pages)
-            continue;
-        uint32_t run = 0;
-        for (uint32_t pfn = lo[zone]; pfn < hi[zone]; pfn++) {
-            if ((pfn & 31) == 0 && bitmap[pfn >> 5] == 0xFFFFFFFFu) {
-                pfn += 31;
-                run = 0;
-                continue;
-            }
-            if (used(pfn)) {
-                run = 0;
-                continue;
-            }
-            if (++run == pages) {
-                uint32_t start = pfn + 1 - pages;
-                for (uint32_t i = start; i <= pfn; i++)
-                    set_used(i);
-                zone_free[zone] -= pages;
-                irq_restore(f);
-                return start << 12;
-            }
-        }
-    }
-    irq_restore(f);
-    return 0;
+    if (!pages) return 0;
+    uint32_t p = alloc_run(ZONE_NORMAL, pages, 1);
+    return p ? p : alloc_run(ZONE_DMA, pages, 1);
 }
 
 uint32_t pmm_alloc_dma_run(uint32_t pages, uint32_t alignment)
 {
     if (!pages || pages > 3840 || !alignment || alignment > 4096 || (alignment & (alignment - 1))) return 0;
-    uint32_t flags = irq_save();
-    if (zone_free[ZONE_DMA] >= pages) {
-        for (uint32_t start = (256u + alignment - 1) & ~(alignment - 1); start <= 4096u - pages; start += alignment) {
-            uint32_t i;
-            for (i = 0; i < pages && !used(start + i); i++);
-            if (i != pages) continue;
-            for (i = 0; i < pages; i++) set_used(start + i);
-            zone_free[ZONE_DMA] -= pages;
-            irq_restore(flags); return start << 12;
-        }
-    }
-    irq_restore(flags); return 0;
+    return alloc_run(ZONE_DMA, pages, alignment);
 }
 
 void pmm_free(uint32_t phys)

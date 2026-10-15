@@ -161,6 +161,9 @@ void task_reap(struct task *t)
 }
 void task_exit(int reason) { task_kill(g_current,reason); longjmp(worker_return,1); }
 void schedule(void) { native_progress++; g_need_resched = false; if (schedule_hook) schedule_hook(); }
+void kpreempt_point(void) { if ((cpu_flags & V86_IF) && g_need_resched) schedule(); }
+void crit_begin(void) { }
+void crit_end(void) { }
 void task_sleep_ms(uint32_t ms)
 {
     CHECK(cpu_flags & V86_IF); g_ticks += ms; dosvm_tick(); native_progress++;

@@ -30,13 +30,19 @@ static bool refill(unsigned c)
     uint32_t p = pmm_alloc();
     if (!p)
         return false;
-    pool_pages++;
     uint8_t *page = P2V(p);
     unsigned sz = class_size(c);
+    void *first = 0, *last = 0;
     for (unsigned off = 0; off + sz <= PAGE_SIZE; off += sz) {
-        *(void **)(page + off) = freelist[c];
-        freelist[c] = page + off;
+        if (!last) last = page + off;
+        *(void **)(page + off) = first;
+        first = page + off;
     }
+    uint32_t f = irq_save();
+    pool_pages++;
+    *(void **)last = freelist[c];
+    freelist[c] = first;
+    irq_restore(f);
     return true;
 }
 
@@ -49,9 +55,10 @@ void *kmalloc(size_t size)
     if (c == NCLASS)
         return 0;
     uint32_t f = irq_save();
-    if (!freelist[c] && !refill(c)) {
+    if (!freelist[c]) {
         irq_restore(f);
-        return 0;
+        if (!refill(c)) return 0;
+        f = irq_save();
     }
     struct hdr *h = freelist[c];
     freelist[c] = *(void **)h;

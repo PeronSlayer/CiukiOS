@@ -91,14 +91,17 @@ static inline uint64_t read_tsc_serialized(void)
 void crit_begin(void);
 void crit_end(void);
 void crit_label(const char *section) __attribute__((weak));
-static inline uint32_t irq_save(void)
+static inline uint32_t irq_save_at(const char *section)
 {
     uint32_t f = read_eflags();
     cli();
-    if (f & 0x200)
+    if (f & 0x200) {
         crit_begin();
+        if (crit_label) crit_label(section);
+    }
     return f;
 }
+#define irq_save() irq_save_at(__func__)
 static inline void irq_restore(uint32_t f)
 {
     if (f & 0x200) {

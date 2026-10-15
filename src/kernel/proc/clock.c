@@ -126,7 +126,9 @@ int file_nanosleep(uint32_t request_va, uint32_t remaining_va)
         }
         g_current->wake_tick = deadline;
         g_current->state = T_BLOCKED;
+        irq_restore(flags);
         schedule();
+        flags = irq_save();
     }
     g_current->wake_tick = 0;
     irq_restore(flags);
