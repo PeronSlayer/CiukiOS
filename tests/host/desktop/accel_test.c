@@ -1,6 +1,7 @@
 /* Final visible frames from production desktop, software and accelerated.
  * SPDX-License-Identifier: MIT */
 #include "fake.h"
+#include "../../../assets/cursors/cursors.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -119,7 +120,12 @@ static void scenario(unsigned available)
     if (available&2u) {
         assert(cursor_uploads==0 && cursor_moves>=2);
         assert(!d.frame_stats.presents && !d.frame_stats.lfb_bytes && !d.frame_stats.damage_px);
-    } else assert(d.frame_stats.damage_px<=374);
+    } else {
+        /* Software motion restores the old footprint and uploads the new
+         * one; the selected theme supplies the arrow's occupied bounds. */
+        const struct desk_cursor_raster *arrow=&desk_cursors[DESK_CURSOR_ARROW];
+        assert(d.frame_stats.damage_px<=2ull*arrow->width*arrow->height);
+    }
     /* Every shape and hot spot must match software, including clipping at
      * all four screen corners and restoring the previous larger footprint. */
     for (unsigned shape=0;shape<DESK_CURSOR_COUNT;shape++) for (unsigned corner=0;corner<4;corner++) {

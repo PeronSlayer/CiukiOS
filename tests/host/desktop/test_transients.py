@@ -11,13 +11,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 # 2026-10-15 (main after f2-63 + f2-64): re-recorded on the combined tree (FreeType text), reviewed against the 9a05ab9f renders.
 # F2-67: fixed-size captions omit the maximize button; paired task-tip PNGs await lead review.
-GOLDENS = {'balloon': '4db4166909a0b1042ebbd860892a6fc5e39f22f8dc8ada77ce17171a929b2998',
+# F2-72: only balloon, notification and tooltip include the changed DMZ-White overlay.
+GOLDENS = {'balloon': '174154fe46feb726e28108835c0e66ae6bc896b6007d92888502c30acfad50c8',
  'error': '310f334a2b31f450caf39691beba785a2fc3b989d24731bcca509449bcdc6d5a',
  'info': '50e827a231ec558500bc59905d529a42ecaca3851d9a7a2c7ec06c0b9a203c53',
  'loading': 'c675bfec0dd20df260c2137464b819e2faaa8624138f6d4ca823bad8eb937af1',
- 'notification': '56778009ed9a4259eab689163ddde2679880ba7d6ac4812e18af3c83a6e0a702',
+ 'notification': 'e1e1e2f589cea7ce0c723ab9f3e4d90ffffb2300cd9c73cf7c870f1c05acfa48',
  'question': 'a1ed1a8b878ff15b9f6a251573a41d6f268d33e137d42ceeaea7e4df665c3c06',
- 'tooltip': 'df824cb2998e9c2fb263a620afb2aca9c8b7ee8dd79b3df24a97c5a65b2a8d61',
+ 'tooltip': '1e17b39735a0a17c5a3c479e534355895f425bd0b1a1ebd725e6b751dd9dc405',
  'tooltip-media': 'd23c96aacda7662b3b7b0730eaf08c4a76b7f507688841fed1cc102003c9a7cf',
  'tooltip-network': 'd8952ce42edcdcda9dea4e651fa0959896883bb0f7785c757670be900294878f',
  'tooltip-task': '10829c97cb36660639828ccf63f627ffb046b3df1d1dca8f5f3f9fe43ebec650',

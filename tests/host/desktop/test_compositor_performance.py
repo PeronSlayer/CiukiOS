@@ -24,10 +24,11 @@ THEMES = ("Platinum", "Ciuki Blue", "Classic 98")
 # F2-62: Blue polish; explicitly selected Platinum/Classic 98 are unchanged.
 # F2-63: re-recorded for the pinned FreeType UI atlases (before/after PNGs in build/host/f2-63).
 # F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
+# F2-72: re-recorded with --benchmark --frames 2 for the DMZ-White cursor overlay.
 GOLDENS = {
-    "Platinum": "578e051ed8f4936febca37dba2bb10d166f31b87baac2a08328d0ceab75d3d42",
-    "Ciuki Blue": "45e055cdc9f9f3feb42632bb7766e7b4cb9c2a2f9d98f444f319d8424d0797b6",
-    "Classic 98": "b080759e39a12091d846e68bce75509ddf571d54300ad325c1569adffc5c8cf8",
+    "Platinum": "fec49fcf160a9302c5d58aa741e121d2dc8edb2e22c4f6568a316aeff84904a2",
+    "Ciuki Blue": "b691cf28a5a8332ea0cfecded9dac04ef2691ace1b408a4be96a64c0ded5bb22",
+    "Classic 98": "e0c9340926c65568ee215c8573f5404919c7cba8b427a688b49e43411017ebe9",
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",
