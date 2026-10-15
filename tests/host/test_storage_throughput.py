@@ -22,6 +22,8 @@ class StorageTaskTests(unittest.TestCase):
         prefix = r'''
 #include <ciuki/storage.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/blackbox.h>
+#pragma weak blackbox_flush /* as in mount.c: absent on the host, so the timer skips it */
 #include <assert.h>
 #include <setjmp.h>
 static struct storage s;

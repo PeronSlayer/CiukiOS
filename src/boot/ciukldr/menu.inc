@@ -646,7 +646,7 @@ source_cfg db 'L:SELECT_SOURCE=cfg',13,10,0
 safe_confirmation db 'Safe mode selected; P for a probe, or wait',13,10,0
 safe_selected db 'L:SAFE=1',13,10,0
 menu_text db 'SELECT_READY',13,10
-    db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware check / P Probe (3 s)',13,10,0
+    db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware / P Probe (3 s)',13,10,0
 probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0
 menu_hint db 'Press S for safe mode, L for serial log, H for Hardware check'
 menu_hint_end:

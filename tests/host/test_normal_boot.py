@@ -28,7 +28,7 @@ from test_runner import FakeHost
 GOOD_SERIAL = [
     'L:CPU signature=00000673 family=00000006 model=00000007 stepping=00000003\r',
     'SELECT_READY\r',
-    'CiukiOS 0.9.0 pre-alpha: N Normal / S Safe mode / L Serial log / P Probe (3 s)\r',
+    'CiukiOS 0.9.0 pre-alpha: N Normal / S Safe / L Log / H Hardware / P Probe (3 s)\r',
     'L:SELECT_SOURCE=menu\r',
     'L:VBE_SKIP\r',
     'Ciuki VMM F0 build f5242070d0b4 - CiukiOS',
