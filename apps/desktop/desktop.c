@@ -81,8 +81,32 @@ static int gate_error(const char *path, int error, unsigned generation)
     fprintf(stderr,"desktop: gate failure path=%s error=%d generation=%u\n",path,error,generation);
     return 1;
 }
+/* F12 shell replay: QMP supplies relative mouse input, not window targets.
+ * After the 100 fault windows the cascade need not put the menu demo under
+ * the script's old (60,80) title / (332,142) close positions. Resolve those
+ * two scenario targets from the live frame at the press, then let the real
+ * input path perform the drag, close and reap. This never changes a window's
+ * geometry/focus or qualifies a stage by itself. Ordinary input is unchanged. */
+static void gate_shell_pointer(struct desktop *d, const struct ciuki_input_event *event)
+{
+    if (!d->shell_test || (d->shell_stage!=3 && d->shell_stage!=4) || d->drag>=0 ||
+        event->type!=CIUKI_INPUT_BUTTON || event->code!=CIUKI_BUTTON_LEFT || event->value!=1) return;
+    for (int i=0; i<DESK_CLIENTS; i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (!c->window || c->pid!=d->shell_pid) continue;
+        struct desk_box target=d->shell_stage==3 ?
+            (struct desk_box){c->frame.x,c->frame.y,c->frame.w,DESK_TITLE} : desk_close_box(c);
+        struct ciuki_input_event motion=*event;
+        motion.type=CIUKI_INPUT_MOTION; motion.code=0;
+        motion.value=target.x+target.w/2-d->mouse_x;
+        motion.value2=target.y+target.h/2-d->mouse_y;
+        desk_input(d,&motion);
+        break;
+    }
+}
 static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
 {
+    gate_shell_pointer(d,event);
     desk_input(d,event);
     /* f2-30 shell: the A edges count whenever they follow F12; gate_report publishes them only at stage 6
      * (launch, drag, close, reap). Their arrival is not ordered after the close click: the last shell step

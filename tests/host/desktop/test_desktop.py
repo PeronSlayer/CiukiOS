@@ -669,6 +669,7 @@ class AppCaseReplayTests(unittest.TestCase):
                  ("tasks_main", os_calls + ["-Dmain=tasks_main"], ROOT / "apps/tasks/tasks.c"),
                  ("tasks_model", posix, ROOT / "apps/tasks/model.c"), ("tasks_view", posix, ROOT / "apps/tasks/view.c"),
                  ("demo", os_calls + ["-Dmain=demo_main"], ROOT / "apps/demo/demo.c"),
+                 ("survivor_demo", os_calls + ["-Dmain=survivor_demo_main"], ROOT / "apps/demo/demo.c"),
                  ("fake_vfs", posix, host / "fake_vfs.c"),
                  ("harness", ["-D_DEFAULT_SOURCE"], host / "app_replay.c")]
         def compile_unit(unit):
@@ -756,10 +757,16 @@ class AppCaseReplayTests(unittest.TestCase):
         reaped (stage 6), then the final a press and release. The reap completes without input, so the desktop
         must report it on its own: otherwise the probe keeps the keys=0 of the last input's report."""
         for model, out in self.check("desktop-shell-qemu-t23", "shell", 0, TASKS_WINDOW_S, SHELL_MODELS):
+            # f2-69: the guest creates/drops all 100 victims before ARM. Its
+            # menu demo opens at (110,142), so the unchanged (60,80) title
+            # press misses it without the scenario's live geometry targeting.
+            self.assertIn("HISTORY windows=100 cascade=101 focus=0", out["text"], model)
+            self.assertEqual(out["DESKTOP"]["shell_stage"], "6", model)
             self.assertEqual(out["DESKTOP"]["notice"], '"shell stage 6 programs %d"' % (len(self.programs) - 1), model)
             self.assertEqual(int(out["PROBE"]["keys"]), 4, model)
             # The demo was reaped with status 0 (not terminated by the close timeout).
             self.assertRegex(out["text"], r"(?m)^PROC pid=105 ppid=3 name=demo state=0 status=0$", model)
+            self.assertRegex(out["text"], r"(?m)^PROC pid=4 ppid=3 name=demo state=1 status=0$", model)
             # f2-65: once the case has settled the desktop presents only what changed (the clock at most).
             # Before, the interaction stage presented a complete frame on every loop: 47 per second with
             # the declared desktop, about 500 per second with the 1 ms one.
@@ -777,7 +784,9 @@ class AppCaseReplayTests(unittest.TestCase):
                   "usb-late-start": ["--usb-poll-ms", "10", *REPLAY_MODELS["late-start"]]}
         for case_id in ("usb-input-uhci", "usb-input-ohci"):
             for model, out in self.check(case_id, "shell", 0, TASKS_WINDOW_S, models):
+                self.assertIn("HISTORY windows=100 cascade=101 focus=0", out["text"], model)
                 self.assertEqual(out["DESKTOP"]["shell_stage"], "6", model)
+                self.assertRegex(out["text"], r"(?m)^PROC pid=4 ppid=3 name=demo state=1 status=0$", model)
                 self.assertEqual(out["PROBE"]["keys"], "4", model)
                 self.assertEqual(out["USB"]["read_keys"], "4")
                 self.assertEqual(out["USB"]["pending_mouse"], "0")

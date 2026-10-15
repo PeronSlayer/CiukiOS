@@ -78,6 +78,7 @@ int files_main(int, char **);
 int ciuknote_main(int, char **);
 int tasks_main(int, char **);
 int demo_main(int, char **);
+int survivor_demo_main(int, char **);
 extern struct desktop *replay_desktop;
 void replay_gate_counts(unsigned out[3]);
 
@@ -398,6 +399,9 @@ ciuki_pid_t ciuki_spawn(const char *path, char *const argv[], char *const env[],
     }
     int argn = 0; while (argv && argv[argn]) argn++;
     int survivor = !strcmp(path, "/Programs/demo") && argn == 4 && !strcmp(argv[3], "--test=crash-isolation");
+    /* Separate objects preserve the processes' separate static protocol
+     * versions (v1 survivor, v2 launched demo) inside this threaded replay. */
+    if (survivor) entry = survivor_demo_main;
     struct proc *p = proc_create(path + sizeof("/Programs/") - 1, entry, argv, env, cur->pid, flags & CIUKI_SPAWN_NEW_GROUP ? 0 : cur->pgid,
                                  cur->pid == desktop_pid && !survivor ? app_cost_ns : 2 * MS, survivor ? 0 : start_delay_ns);
     if (!p) return -1;
@@ -548,6 +552,47 @@ int rp_close(int fd)
     return 0;
 }
 int rp_munmap(void *p, size_t n) { (void)p; (void)n; return 0; }
+/* The shell's post-fault geometry includes 100 accepted victim windows.
+ * Exercise their production protocol/lifecycle rather than seeding cascade:
+ * the earlier PID-only skip concealed f2-67's changed window positions. Fault
+ * execution and ledger isolation remain the kernel/QEMU tests' responsibility. */
+static void shell_window_history(struct proc *desktop)
+{
+    assert(!cur && replay_desktop);
+    cur = desktop;
+    struct desktop *d = replay_desktop;
+    for (unsigned cycle = 0; cycle < 100; cycle++) {
+        int pair[2]; assert(!ciuki_channel_pair(pair));
+        int slot = desk_add_client(d, pair[0]); assert(slot >= 0);
+        struct ciuki_message m;
+        desk_message(&m, DESK_HELLO, 4); m.sender_pid = 5 + cycle;
+        desk_receive(d, slot, &m);
+        int surface = ciuki_surface_create(240, 160, CIUKI_SURFACE_XRGB8888);
+        assert(surface >= 0);
+        const char *title = gate_faults[cycle % 5];
+        unsigned length = (unsigned)strlen(title);
+        desk_message(&m, DESK_CREATE_WINDOW, 16 + length); m.sender_pid = 5 + cycle;
+        desk_put32(m.data + 4, 240); desk_put32(m.data + 8, 160); desk_put32(m.data + 12, length);
+        memcpy(m.data + 16, title, length); m.fd_count = 1; m.fds[0] = surface;
+        desk_receive(d, slot, &m);
+        assert(d->clients[slot].window);
+        desk_drop_client(d, slot);
+        assert(!rp_close(pair[1]));
+        /* In the guest these cycles are separated by survivor turns. Deliver
+         * its focus changes now, so the condensed history cannot overflow a
+         * queue and accidentally turn this into a client-exit regression. */
+        for (int i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].pid == (uint32_t)survivor_pid) {
+            desk_flush(d, i);
+            struct obj *o = fd_obj(cur, d->clients[i].channel);
+            assert(o && o->kind == K_CHANNEL);
+            cur = NULL;
+            while (o->chan->count[1 - o->side]) run(proc_find(survivor_pid));
+            cur = desktop;
+        }
+    }
+    printf("HISTORY windows=100 cascade=%u focus=%d\n", d->cascade, d->focus);
+    cur = NULL;
+}
 static _Alignas(4096) uint8_t control_page[4096];
 void *rp_mmap(void *addr, size_t n, int prot, int flags, int fd, off_t off)
 {
@@ -980,6 +1025,7 @@ int main(int argc, char **argv)
     while (vnow < limit_ns) {
         /* Controller: survivor ready -> GATE_INTERACT -> its report -> 20 ms -> ARM. */
         if (stage == 0 && probe.reports && probe.survivor_ready) {
+            if (!strcmp(case_name, "shell")) shell_window_history(desktop);
             control->generation = 501; control->command = GATE_INTERACT; stage = 1;
         } else if (stage == 1 && probe.generation == 501 && !control->command) {
             if (usb_poll_ns) usb_due = vnow + usb_poll_ns;
