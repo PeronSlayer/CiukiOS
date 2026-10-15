@@ -229,3 +229,5 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f0-30-kernel-latency-audit-on-hardware](f0-30-kernel-latency-audit-on-hardware.md) | F0 | gpt-6.1-sol / xhigh | launched 2026-10-15 night (deep diagnosis mandate; evidence of image a395ffa8) |
 | [f2-73-wallpaper-never-shown-on-hardware](f2-73-wallpaper-never-shown-on-hardware.md) | F2+ | gpt-6.1-sol / xhigh | launched 2026-10-15 night (deep diagnosis mandate; evidence of image a395ffa8) |
 | [f3-31-dos-vm-performance-on-hardware](f3-31-dos-vm-performance-on-hardware.md) | F3 | gpt-6-astra / xhigh | launched 2026-10-15 night (deep diagnosis mandate; evidence of image a395ffa8) |
+| [f1-70-usb-stick-mount-enomem-and-mount-repair-time](f1-70-usb-stick-mount-enomem-and-mount-repair-time.md) | F1 | gpt-6.1-sol / xhigh | launched 2026-10-15 night (second pass over the a395ffa8 logs) |
+| [f3-32-native-supersavage-mode-switch-for-dos-fullscreen](f3-32-native-supersavage-mode-switch-for-dos-fullscreen.md) | F3 | gpt-6.1-sol / xhigh | launched 2026-10-15 night (second pass over the a395ffa8 logs) |
