@@ -43,10 +43,11 @@ class DeviceTests(unittest.TestCase):
             sources = ['tests/host/desktop/device_manager_test.c', 'apps/control/app.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
                        *(f'apps/desktop/{n}.c' for n in ('settings', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
                        *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'textarea', 'icons', 'icon_map'))]
+            ft = load('devices_freetype', ROOT / 'sdk/freetype/build.py'); library = ft.host()  # f2-63: libfont needs FreeType
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-D_POSIX_C_SOURCE=200809L', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
                             *icons.defines(), '-I', str(ROOT / 'src/kernel/include'), '-I', str(ROOT / 'apps/control'),
-                            '-idirafter', str(ROOT / 'sdk/sysroot-overlay/include'), '-pthread', *(str(ROOT / s) for s in sources), '-lm', '-o', str(binary)], check=True, env=env)
+                            '-idirafter', str(ROOT / 'sdk/sysroot-overlay/include'), *ft.includes(), '-pthread', *(str(ROOT / s) for s in sources), str(library), '-lm', '-o', str(binary)], check=True, env=env)
             portrait = icons.portrait()
             frames = folder / 'frames'; frames.mkdir()
             r = subprocess.run([binary, portrait, frames, ROOT / 'assets/fonts/liberation'], env=env, capture_output=True, text=True)
