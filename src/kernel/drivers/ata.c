@@ -7,6 +7,7 @@
  * polling uses Alternate Status. No legacy VM/PIC implementation is copied.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/hardware_check.h>
 #include <ciuki/cpu.h>
 #include <ciuki/arch.h>
 #include <ciuki/task.h>
@@ -79,7 +80,9 @@ static void device_control(struct ata_channel *c, uint8_t v)
     c->ops->out8(c->port_ctx, c->control, v);
 }
 static uint64_t now(struct ata_channel *c) { return c->ops->now_ms(c->port_ctx); }
-static bool expired(struct ata_channel *c, uint64_t d) { return now(c) - d < (1ull << 63); }
+static bool expired(struct ata_channel *c, uint64_t d) {
+    return (hardware_check_io_cancelled && hardware_check_io_cancelled()) || now(c) - d < (1ull << 63);
+}
 static int pace(struct ata_channel *c)
 {
     /* 9.5/9.6: >=400 ns after Command, >=one PIO cycle after a data
@@ -221,6 +224,8 @@ static bool irq_ready(void *arg)
 
 static int wait_irq(struct ata_device *d, uint32_t *sequence, uint64_t start, uint64_t deadline)
 {
+    uint64_t check = hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
+    if (check && check < deadline) deadline = check;
     struct ata_channel *c = d->channel;
     struct irq_wait w = { c, *sequence, c->request_generation };
     if (expired(c, deadline) || !kwait_wait_until(&c->wait, irq_ready, &w,
@@ -955,6 +960,7 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
 
 static int ata_transfer(struct blkdev *b, uint64_t lba, uint32_t n, void *buf, bool write)
 {
+    if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
     int e = blkdev_range(b, lba, n);
     size_t bytes = (size_t)n * BLKDEV_SECTOR_SIZE;
     if (e || !buf || bytes / BLKDEV_SECTOR_SIZE != n)
@@ -993,6 +999,7 @@ static int ata_write(struct blkdev *b, uint64_t lba, uint32_t n, const void *buf
 }
 static int ata_flush(struct blkdev *b)
 {
+    if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
     struct ata_device *d = b->ctx;
     struct ata_channel *c = d->channel;
     kmutex_lock(&c->mutex);

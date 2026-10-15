@@ -53,6 +53,7 @@ static bool panic_drawing, paint_valid;
 static uint32_t committed, painted_lines;
 static unsigned painted_rows;
 static uint64_t next_paint;
+static const char *pinned_page;
 
 
 static uint32_t line_begin_as(bool overlay)
@@ -258,6 +259,7 @@ void console_display_owned(bool owned)
  * also on a quiet boot. */
 void console_reclaim(void)
 {
+    pinned_page=0;
     quiet = false;
     panic_drawing = true;
     console_display_owned(false);
@@ -331,8 +333,24 @@ void console_service(void)
 {
     if (!repaint_pending || display_owned || quiet || g_ticks < next_paint) return;
     next_paint = g_ticks + 100;
+    if (pinned_page) {
+        const char *s=pinned_page;
+        repaint_pending=false;
+        for (unsigned r=0;r<rows;r++) {
+            uint32_t flags=line_begin_as(true);
+            unsigned c=0;
+            for (;c<cols && *s && *s!='\n';c++) draw_cell(c,r,*s++);
+            for (;c<cols;c++) draw_cell(c,r,' ');
+            if (*s=='\n') s++;
+            line_end(flags);
+            if (!panic_drawing) kpreempt_point();
+        }
+        return;
+    }
     repaint();
 }
+void console_pin_page(const char *text)
+{ pinned_page=text; paint_valid=false; repaint_pending=true; }
 static void console_worker(void *arg)
 {
     (void)arg;

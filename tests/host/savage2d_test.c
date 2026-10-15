@@ -53,7 +53,14 @@ static void *binding_reserve(uint32_t capacity)
 #define inb test_inb
 #define outb test_outb
 #define vmm_reserve_mmio binding_reserve
+#include "../../src/kernel/fs/vfs.h"
+static void *sweep_alloc(size_t n) { return calloc(1,n); }
+static void sweep_free(void *p,size_t n) { (void)n; free(p); }
+#define fs_contig_alloc sweep_alloc
+#define fs_contig_free sweep_free
 #include "../../src/kernel/drivers/savage2d.c"
+#undef fs_contig_alloc
+#undef fs_contig_free
 #undef registry_claim
 #undef registry_get
 #undef registry_activate
@@ -100,6 +107,14 @@ static char disk_marker[64], cache_marker[64];
 static unsigned disk_size, cache_size, marker_commits;
 static bool marker_exists, table_open, marker_open, marker_error, clear_error;
 static unsigned marker_fault;
+static bool registry_setting_present;
+static int32_t registry_setting;
+bool kernel_registry_int(struct vfs *v,const char *key,const char *name,int32_t *out)
+{
+    CHECK(v==&settings_vfs && !strcmp(key,"System\\Display\\Savage") && !strcmp(name,"EngineConfig"));
+    if (!registry_setting_present) return false;
+    *out=registry_setting; return true;
+}
 static uint32_t marker_cost_us;
 static void marker_delay(void);
 int vfs_table_init(struct vfs *v, struct vfs_table *t, unsigned drive)
@@ -1651,6 +1666,19 @@ int main(void)
     gbd_idle_and_async_regressions();
     queued_gbd_depth();
     shared_enable_and_failure_readbacks();
+    for (int32_t id=-1;id<=96;id++) {
+        registry_setting_present=true; registry_setting=id; load_config(&settings_vfs);
+        CHECK(selected_config==(id<0 || id>=96 ? 0u : (unsigned)id));
+    }
+    registry_setting_present=false; load_config(&settings_vfs); CHECK(!selected_config);
+    boot_fixture_accel(false); g_boot.flags|=CBI_F_HW_CHECK;
+    bool retained=false;
+    CHECK(!savage2d_check_begin(&settings_vfs,&retained) && !retained && disk_size==14);
+    unsigned commits=marker_commits;
+    CHECK(!savage2d_check_begin(&settings_vfs,&retained) && retained && marker_commits==commits && disk_size==14);
+    engine.quarantined=true; CHECK(savage2d_check_begin(&settings_vfs,&retained)==-EIO);
+    finish();
+    puts("Savage hardware selection: all registry IDs/defaults, durable retained marker, no in-session quarantine bypass PASS");
     printf("savage2d register/presenter model: %s (%u failures)\n",failures ? "FAIL" : "PASS",failures);
     return failures ? 1 : 0;
 }

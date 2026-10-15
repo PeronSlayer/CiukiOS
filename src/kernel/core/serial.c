@@ -18,6 +18,8 @@ static unsigned uart_timeouts;
 #define UART_LOG_BYTES 65536u
 #define UART_RECORD_BYTES (2u * SERIAL_RECORD_MAX)
 static char uart_log[UART_LOG_BYTES];
+static uint8_t uart_ends[UART_LOG_BYTES / 8u];
+static uint64_t uart_accepted, uart_sent;
 static unsigned uart_head, uart_used, uart_dropped;
 static bool uart_buffering, uart_drop_notice, uart_panic_mode;
 static unsigned uart_fifo_bytes = 1;
@@ -27,6 +29,8 @@ void serial_init(uint16_t base, uint16_t divisor)
     uart_ok = false;
     uart_base = base;
     uart_head = uart_used = uart_dropped = 0;
+    memset(uart_ends, 0, sizeof(uart_ends));
+    uart_accepted = uart_sent = 0;
     uart_buffering = uart_drop_notice = uart_panic_mode = false;
     uart_fifo_bytes = 1;
     uart_timeouts = 0;
@@ -83,6 +87,8 @@ static void serial_notice(void)
         memcpy(uart_log, notice, n);
         uart_head = 0;
         uart_used = n;
+        uart_ends[(n - 1) / 8] |= (uint8_t)(1u << ((n - 1) % 8));
+        uart_accepted++;
         uart_drop_notice = false;
     }
 }
@@ -97,6 +103,11 @@ static bool serial_burst(void)
     unsigned count = uart_used < uart_fifo_bytes ? uart_used : uart_fifo_bytes;
     for (unsigned i = 0; i < count; i++) {
         outb(uart_base, (uint8_t)uart_log[uart_head]);
+        uint8_t bit = (uint8_t)(1u << (uart_head % 8));
+        if (uart_ends[uart_head / 8] & bit) {
+            uart_ends[uart_head / 8] &= (uint8_t)~bit;
+            uart_sent++;
+        }
         uart_head = (uart_head + 1) % UART_LOG_BYTES;
         uart_used--;
     }
@@ -132,7 +143,7 @@ static void serial_drain(void)
     }
 }
 
-void serial_write(const char *s, size_t n)
+uint64_t serial_write_ticket(const char *s, size_t n)
 {
     /* Count/expand outside the IRQ lock. Current record producers are
      * bounded; an oversized caller is dropped before inspecting its bytes. */
@@ -143,25 +154,33 @@ void serial_write(const char *s, size_t n)
     if ((flags & 0x200) && crit_label) crit_label("serial_queue");
     if (!uart_ok || !n) {
         irq_restore(flags);
-        return;
+        return 0;
     }
     /* Append a whole record under one lock, including CRLF expansion.
      * Physical IF clear also describes ordinary IRQ/critical-section logs:
      * playback must queue those without waiting for the UART. */
+    uint64_t ticket=0;
     if (n > SERIAL_RECORD_MAX || bytes > UART_RECORD_BYTES || bytes > UART_LOG_BYTES - uart_used) {
         uart_dropped++;
         uart_drop_notice = true;
-    } else for (size_t i = 0; i < n; i++) {
+    } else {
+      ticket=++uart_accepted;
+      for (size_t i = 0; i < n; i++) {
         if (s[i] == '\n') {
             uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = '\r';
             uart_used++;
         }
         uart_log[(uart_head + uart_used) % UART_LOG_BYTES] = s[i];
         uart_used++;
+      }
+      unsigned end = (uart_head + uart_used - 1) % UART_LOG_BYTES;
+      uart_ends[end / 8] |= (uint8_t)(1u << (end % 8));
     }
     irq_restore(flags);
     if (uart_panic_mode) serial_drain();
+    return ticket;
 }
+void serial_write(const char *s,size_t n) { (void)serial_write_ticket(s,n); }
 void serial_buffered(bool enabled)
 {
     uint32_t flags = irq_save(); uart_buffering = enabled; irq_restore(flags);
@@ -194,6 +213,12 @@ uint32_t serial_dropped(void)
     uint32_t f = irq_save(), n = uart_dropped;
     irq_restore(f);
     return n;
+}
+void serial_snapshot(struct serial_stats *out)
+{
+    uint32_t f = irq_save();
+    *out = (struct serial_stats){uart_accepted, uart_sent, uart_used, uart_dropped, uart_ok};
+    irq_restore(f);
 }
 
 static void serial_writer(void *arg)

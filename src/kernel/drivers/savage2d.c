@@ -10,6 +10,7 @@
 #include <ciuki/savage2d.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
+#include <ciuki/registry_value.h>
 #include "../fs/vfs.h"
 #define RECT 0x48000000u
 #define XP 0x01000000u
@@ -30,6 +31,7 @@
 #define BCI_GBD_HIGH 0xe1u
 #define GBD_CONTROLS 9u
 #define GBD_READ_MASK 0x13ff1ffdu
+static unsigned selected_config;
 static bool initializing, probing;
 static void init_record(const char *, uint32_t, unsigned, uint32_t, uint32_t);
 static void init_failure_readback(struct savage2d *);
@@ -366,8 +368,18 @@ static bool mode_supported(const struct fb_device *d)
         d->pitch/(d->bpp/8)<=4095 && d->pitch>=d->width*(d->bpp/8) &&
         (uint64_t)d->pitch*d->height<=d->size;
 }
-int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
-                   bool supersavage, uint8_t *cursor, uint32_t cursor_offset)
+bool savage2d_config(unsigned id, const struct fb_device *d, struct savage_config *out)
+{
+    if (!out || id >= SAVAGE_CONFIGS || !mode_supported(d)) return false;
+    uint8_t depths[] = {d->bpp == 16 ? 1 : 3, 0, d->bpp == 16 ? 3 : 1};
+    out->depth = depths[(id / 8) % 3];
+    unsigned stride = id & 4 ? d->pitch / 8 : d->pitch / (d->bpp / 8);
+    out->descriptor = ((uint32_t)d->bpp << 16) | stride | 1u |
+        (id & 1 ? 0 : 8u) | (id & 2 ? 0 : 0x10000000u) | ((id / 24) << 24);
+    return true;
+}
+static int start_config(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
+                   bool supersavage, uint8_t *cursor, uint32_t cursor_offset, unsigned config)
 {
     if (s->quarantined) return -EIO;
     if (!io || !io->read32 || !io->write32 || !io->read16 || !io->write16 ||
@@ -376,7 +388,9 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
         (cursor && (cursor_offset & 4095u))) return -EINVAL;
     s->io = *io; s->width = d->width; s->height = d->height; s->offset = 0;
     s->supersavage = supersavage; s->cursor = cursor; s->cursor_offset = cursor_offset;
-    s->descriptor = 0x10000000u | ((uint32_t)d->bpp << 16) | (d->pitch / (d->bpp / 8));
+    struct savage_config cfg;
+    if (!savage2d_config(config, d, &cfg)) return -EINVAL;
+    s->descriptor = cfg.descriptor & ~9u; /* retain the existing diagnostic representation */
     s->ops = (struct accel_ops){s, sync_engine, copy_rect, fill_rect, pattern_rect,
         cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready};
     s->reason = 0; s->idle_mask = s->idle_value = s->status = 0; s->status_logged = false;
@@ -467,11 +481,11 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     if (supersavage) init_write(s, 0x816c, 0x10000000u | GBD_CONTROLS, true);
     /* RE046-B CR50.5:4 selects engine pixel length independently of the
      * descriptor. Firmware may leave its VGA (8-bpp) value after VBE. */
-    uint8_t cr50 = (s->saved50 & ~0x30u) | (d->bpp == 16 ? 0x10u : 0x30u) | 0xc1u;
+    uint8_t cr50 = (s->saved50 & ~0x30u) | (cfg.depth << 4) | 0xc1u;
     if ((init_cr_write(s, 0x50, cr50) & 0xf1u) != (cr50 & 0xf1u))
         return fail(s, "depth_readback_failed");
     init_write(s, 0x8168, 0, true);
-    uint32_t gbd = s->descriptor | GBD_CONTROLS;
+    uint32_t gbd = cfg.descriptor;
     uint32_t check = init_write(s, 0x816c, gbd, true);
     uint8_t cr40 = port_cr_read(s, 0x40);
     klog("[accel] savage descriptor wrote=%08x read=%08x mask=%08x cr40=%02x", gbd, check, GBD_READ_MASK, cr40);
@@ -498,6 +512,9 @@ int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct 
     s->active = true;
     return 0;
 }
+int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
+                   bool supersavage, uint8_t *cursor, uint32_t cursor_offset)
+{ return start_config(s, io, d, supersavage, cursor, cursor_offset, 0); }
 
 static struct savage2d engine;
 static volatile uint8_t *registers;
@@ -823,6 +840,16 @@ static int attempt_marker(struct vfs *vfs, bool clear, bool *previous)
     klog("[accel] savage phase=marker_%s us=%llu error=%d", clear ? "clear" : "write", hw_now(0) - start, err);
     return err;
 }
+int savage2d_check_begin(struct vfs *vfs, bool *retained)
+{
+    if (!(g_boot.flags & CBI_F_HW_CHECK) || !retained) return -EPERM;
+    if (engine.quarantined || engine.active) return -EIO;
+    *retained=false;
+    /* H is an explicit diagnostic with a disjoint VRAM target. A previous
+     * boot's durable marker already provides fail-closed persistence; keep
+     * it intact. Never lift an in-session quarantine or clear this marker. */
+    return attempt_marker(vfs,false,retained);
+}
 static const struct accel_ops *decline(const char *reason)
 {
     klog("[accel] savage quarantined reason=%s us=%llu reset_us=%llu poll_us=%llu trace_us=%llu status=%08x status_valid=%u",
@@ -859,6 +886,14 @@ bool savage2d_eligible(const struct fb_device *d)
     if (reason) decline(reason);
     return !reason;
 }
+static void load_config(struct vfs *vfs)
+{
+    int32_t setting=0;
+    selected_config=0;
+    if (kernel_registry_int && kernel_registry_int(vfs,"System\\Display\\Savage","EngineConfig",&setting) &&
+        setting>=0 && setting<(int32_t)SAVAGE_CONFIGS) selected_config=(unsigned)setting;
+    klog("[accel] savage EngineConfig=%u",selected_config);
+}
 static const struct accel_ops *init_with_io(const struct fb_device *d, struct vfs *vfs,
                                           const struct savage_io *io)
 {
@@ -870,6 +905,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
     const struct pci_func *gpu;
     const char *reason = eligibility(d, &gpu);
     if (reason) return decline(reason);
+    if (vfs) load_config(vfs);
     /* With a VFS the marker is handled here (host harness); the kernel caller
      * passes NULL and persists/clears it outside the presenter mutex
      * (savage2d_attempt_begin/end): file I/O takes the ATA channel mutex and
@@ -928,7 +964,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
     uint8_t *cursor = cursor_mapping && cursor_phys >= d->phys + d->size ? cursor_mapping : 0;
     klog("[accel] savage mapped mmio=%p cursor=%p", (void *)registers, (void *)cursor);
     initializing = true;
-    int err = savage2d_start(&engine, io, d, gpu->device != 0x8a22, cursor, cursor_phys - d->phys);
+    int err = start_config(&engine, io, d, gpu->device != 0x8a22, cursor, cursor_phys - d->phys, selected_config);
     if (!err) err = bci_test(&engine, d);
     else klog("[accel] savage bci_test result=skipped reason=%s", engine.reason ? engine.reason : "init_failed");
     initializing = false;
@@ -963,6 +999,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
 /* Kernel callers: marker file I/O outside any presenter lock. */
 int savage2d_attempt_begin(struct vfs *vfs)
 {
+    load_config(vfs);
     activation_now = hw_now; activation_ctx = 0; activation_start = hw_now(0);
     trace_us = 0; attempt_in_progress = true;
     if (engine.quarantined || attempt_blocked) { attempt_in_progress = false; return -1; }
@@ -1014,4 +1051,178 @@ const struct accel_ops *savage2d_init(const struct fb_device *d, struct vfs *vfs
     const struct savage_io io = {0, hw_read, hw_write, hw_now, hw_delay,
         hw_drain, hw_fault, hw_read8, hw_write8, hw_port_read, hw_port_write, hw_read16, hw_write16};
     return init_with_io(d, vfs, &io);
+}
+
+/* The sweep owns a disjoint VRAM reservation. A wrong stride/depth/tile may
+ * damage only that reservation; never run experimental packets on scanout. */
+int savage2d_sweep_model(struct savage2d *s, const struct savage_io *io,
+    const struct fb_device *d, bool supersavage, uint8_t *scratch, uint32_t offset,
+    uint64_t deadline_us, savage_sweep_line line, void *ctx, struct savage_sweep_result *out)
+{
+    *out = (struct savage_sweep_result){.first = -1, .restored = true};
+    if (!io || !io->read_port || !io->write_port || !io->read16 || !io->write16 ||
+        !io->read32 || !io->write32 || !io->now_us || !io->delay_us || !io->drain ||
+        !mode_supported(d) || !scratch || (offset & 2047u) || offset > UINT32_MAX-SAVAGE_SWEEP_BYTES)
+        return out->error = -EINVAL;
+    uint8_t *saved = fs_contig_alloc(SAVAGE_SWEEP_BYTES);
+    if (!saved) return out->error = -ENOMEM;
+    out->restored=false;
+    struct savage2d access = {.io = *io};
+    uint8_t cr_index = io->read_port(io->ctx, 0x3d4), sr_index = io->read_port(io->ctx, 0x3c4);
+    uint8_t vga = io->read_port(io->ctx, 0x3c3), misc = io->read_port(io->ctx, 0x3cc);
+    uint8_t cr38 = port_cr_read(&access, 0x38), cr39 = port_cr_read(&access, 0x39);
+    port_cr_write(&access, 0x38, 0x48); port_cr_write(&access, 0x39, 0xa0);
+    io->write_port(io->ctx, 0x3c4, 8); uint8_t sr08 = io->read_port(io->ctx, 0x3c5);
+    io->write_port(io->ctx, 0x3c5, 6);
+    uint8_t sr26=0;
+    if (supersavage) {
+        io->write_port(io->ctx, 0x3c4, 0x26); sr26 = io->read_port(io->ctx, 0x3c5);
+        io->write_port(io->ctx, 0x3c5, 0x40);
+    }
+    const uint8_t crs[] = {0x31,0x40,0x45,0x50,0x55,0x66};
+    uint8_t cr_saved[ARRAY_SIZE(crs)];
+    for (unsigned i=0;i<ARRAY_SIZE(crs);i++) cr_saved[i]=port_cr_read(&access,crs[i]);
+    port_cr_write(&access,0x40,cr_saved[1]|1u);
+    port_cr_write(&access,0x31,0x0c); /* packed halfword snapshot access, saved above */
+    const uint32_t regs[] = {0x8120,0x8124,0x8128,0x812c,0x8168,0x816c,0x48c0c,0x48c10,0x48c18};
+    uint32_t values[ARRAY_SIZE(regs)];
+    bool captured=false;
+    access.status_ready=true;
+    if (wait_idle(&access)) { out->error=-EIO; goto vga_restore; }
+    for (unsigned i=0;i<ARRAY_SIZE(regs);i++)
+        values[i]=regs[i]<0x8500 ? read_2d(&access,regs[i]) : io->read32(io->ctx,regs[i]);
+    uint16_t mix_bg=io->read16(io->ctx,0x8134), mix_fg=io->read16(io->ctx,0x8136);
+    io->drain(io->ctx); memcpy(saved,scratch,SAVAGE_SWEEP_BYTES); captured=true;
+    memset(s,0,sizeof(*s));
+    out->error=savage2d_start(s,io,d,supersavage,0,0);
+    if (out->error) goto engine_restore;
+    uint16_t immediate_mix=io->read16(io->ctx,0x8136);
+    s->offset=offset;
+    for (unsigned id=0;id<SAVAGE_CONFIGS;id++) {
+        if (io->now_us(io->ctx)>=deadline_us) { out->error=-110; break; }
+        struct savage_config cfg;
+        savage2d_config(id,d,&cfg);
+        port_cr_write(s,0x50,(s->saved50&~0x30u)|(cfg.depth<<4)|0xc1u);
+        io->write32(io->ctx,0x8168,offset); io->write32(io->ctx,0x816c,cfg.descriptor);
+        uint32_t packet[]={BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_LOW,offset,
+            BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_HIGH,cfg.descriptor,
+            BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_LOW,offset,
+            BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_HIGH,cfg.descriptor};
+        int e=send_bci(s,packet,ARRAY_SIZE(packet));
+        uint32_t got=0, want=d->bpp==16 ? 0x41b6u : 0x008641b6u;
+        /* Nonzero X/Y discriminate stride/tiling as well as colour depth.
+         * For every matrix member the greatest possible destination touched
+         * by this one pixel fits inside the 256 KiB saved reservation. */
+        unsigned pos=17*d->pitch+31*(d->bpp/8);
+        for (unsigned j=0;j<4;j++) scratch[pos+j]=0x5a;
+        io->drain(io->ctx);
+        struct fb_rect r={31,17,1,1};
+        if (!e) e=fill_rect(s,&r,want);
+        if (!e) for (unsigned j=0;j<d->bpp/8;j++) got|=(uint32_t)scratch[pos+j]<<(8*j);
+        out->tried++;
+        bool exact=!e && got==want;
+        if (exact) { out->passed++; if (out->first<0) out->first=(int)id; }
+        char msg[208];
+        ksnprintf(msg,sizeof(msg),"Savage bpp=%u config=%u bit3=%u BW_DISABLE=%u stride=%s CR50=%u tile=%u wrote=%08x read=%08x idle=%u %s",
+            d->bpp,id,!(id&1),!(id&2),id&4 ? "qwords" : "pixels",cfg.depth,id/24,want,got,s->cpu_safe,
+            e ? "ERROR" : exact ? "PASS" : "FAIL");
+        if (line) line(ctx,msg);
+        if (!id && !e && line) {
+            ksnprintf(msg,sizeof(msg),"Savage registers: MM8136 wrote=0007 immediate=%04x post_command=%04x CR45=%02x defined_mask=15",
+                immediate_mix,io->read16(io->ctx,0x8136),port_cr_read(s,0x45));
+            line(ctx,msg);
+        }
+        if (e) { out->error=e; break; } /* no reset/retry of an uncertain writer */
+    }
+engine_restore:
+    if ((s->cpu_safe || (!s->submitted && access.cpu_safe)) && captured) {
+        /* Restore the BCI's descriptor latch as well as its MMIO mirror. */
+        uint32_t packet[]={BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_LOW,values[4],
+            BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_HIGH,values[5]};
+        int e=s->submitted && !s->quarantined ? send_bci(s,packet,ARRAY_SIZE(packet)) : 0;
+        if (!e) {
+            for (unsigned i=0;i<ARRAY_SIZE(regs);i++) io->write32(io->ctx,regs[i],values[i]);
+            io->write16(io->ctx,0x8134,mix_bg); io->write16(io->ctx,0x8136,mix_fg);
+            memcpy(scratch,saved,SAVAGE_SWEEP_BYTES); io->drain(io->ctx);
+            out->restored=true;
+        } else out->error=e;
+    }
+vga_restore:
+    /* An uncertain writer retains its leases and the durable attempt marker.
+     * Restoring register configuration underneath it would conceal a hang. */
+    if (!captured || out->restored) {
+        for (unsigned i=0;i<ARRAY_SIZE(crs);i++) port_cr_write(&access,crs[i],cr_saved[i]);
+        if (supersavage) { io->write_port(io->ctx,0x3c4,0x26); io->write_port(io->ctx,0x3c5,sr26); }
+        io->write_port(io->ctx,0x3c4,8); io->write_port(io->ctx,0x3c5,sr08);
+        port_cr_write(&access,0x39,cr39); port_cr_write(&access,0x38,cr38);
+        io->write_port(io->ctx,0x3c2,misc); io->write_port(io->ctx,0x3c3,vga);
+        io->write_port(io->ctx,0x3d4,cr_index); io->write_port(io->ctx,0x3c4,sr_index);
+    }
+    fs_contig_free(saved,SAVAGE_SWEEP_BYTES);
+    return out->error;
+}
+
+static bool sweep_idle_proof(int handle,gen_t generation)
+{ (void)handle; (void)generation; return true; } /* called only after model restored */
+int savage2d_hardware_sweep(uint64_t deadline_ms, savage_sweep_line line, void *ctx,
+    struct savage_sweep_result *out)
+{
+    *out=(struct savage_sweep_result){.first=-1,.restored=true};
+    if (!(g_boot.flags&CBI_F_HW_CHECK)) return out->error=-EPERM;
+    const struct fb_device *d=fbdev_get(); const struct pci_func *gpu=0;
+    if (eligibility(d,&gpu)) return out->error=-ENODEV;
+    uint32_t vram=g_boot.display.tag==CBI_DISPLAY_TAG ? g_boot.display.vram_bytes : 0;
+    if (d->size>UINT32_MAX-(PAGE_SIZE-1u)) return out->error=-ENOSPC;
+    uint32_t offset=PAGE_ALIGN_UP(d->size); /* tile and mapping alignment */
+    if (d->pitch>8192 || vram>32*1024*1024u || offset>vram || SAVAGE_SWEEP_BYTES>vram-offset ||
+        d->phys>UINT32_MAX-offset-SAVAGE_SWEEP_BYTES || !safe_extent(d->phys+offset,SAVAGE_SWEEP_BYTES))
+        return out->error=-ENOSPC;
+    int claims[3]={-1,-1,-1}; gen_t generations[3]={0};
+    uint32_t base=gpu->bar[0]&~15u;
+    claims[0]=registry_claim(RES_PORT,0x3b0,0x3e0,"savage-check-vga",false);
+    if (claims[0]>=0) claims[1]=registry_claim(RES_MMIO,base,base+SAVAGE_MMIO_BYTES,"savage-check",false);
+    if (claims[1]>=0) claims[2]=registry_claim(RES_MMIO,d->phys+offset,d->phys+offset+SAVAGE_SWEEP_BYTES,"savage-check-vram",false);
+    int e=0; bool safe=true;
+    for (unsigned i=0;i<3;i++) if (claims[i]>=0) {
+        generations[i]=registry_get(claims[i])->generation;
+        if (registry_activate(claims[i],generations[i])) { e=-EIO; out->restored=false; }
+    } else e=-EBUSY;
+    static void *mmio_window,*scratch_window;
+    uint8_t *scratch=0;
+    if (!e) {
+        if (!mmio_window) mmio_window=vmm_reserve_mmio(SAVAGE_MMIO_BYTES);
+        if (!scratch_window) scratch_window=vmm_reserve_mmio(SAVAGE_SWEEP_BYTES);
+        registers=mmio_window ? vmm_replace_mmio(mmio_window,SAVAGE_MMIO_BYTES,base,SAVAGE_MMIO_BYTES) : 0;
+        scratch=scratch_window ? vmm_replace_mmio(scratch_window,SAVAGE_SWEEP_BYTES,d->phys+offset,SAVAGE_SWEEP_BYTES) : 0;
+        if (!registers || !scratch) e=-ENOMEM;
+    }
+    if (!e) {
+        const struct savage_io io={0,hw_read,hw_write,hw_now,hw_delay,hw_drain,0,
+            hw_read8,hw_write8,hw_port_read,hw_port_write,hw_read16,hw_write16};
+        struct savage2d test={0};
+        uint64_t now=deadline_after_ms(0);
+        uint64_t limit=hw_now(0)+(deadline_ms>now ? deadline_ms-now : 0)*1000u;
+        e=savage2d_sweep_model(&test,&io,d,gpu->device!=0x8a22,scratch,offset,limit,line,ctx,out);
+        safe=out->restored;
+    }
+    if (safe) {
+        if (scratch) vmm_revoke_mmio(scratch,SAVAGE_SWEEP_BYTES);
+        if (registers) vmm_revoke_mmio((void *)registers,SAVAGE_MMIO_BYTES);
+        registers=0;
+    }
+    for (unsigned i=0;i<3;i++) if (claims[i]>=0) {
+        if (!safe) registry_quarantine(claims[i],generations[i]);
+        else {
+            int released=registry_quiesce(claims[i],generations[i],sweep_idle_proof);
+            if (!released) released=registry_release(claims[i],generations[i]);
+            if (released) {
+                registry_quarantine(claims[i],generations[i]); out->restored=false;
+                if (!e) e=released;
+            }
+        }
+    }
+    if (!safe) {
+        engine.quarantined=true; engine.active=false; engine.reason="check_writer_unsafe";
+    }
+    out->error=e; return e;
 }

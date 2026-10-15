@@ -5,6 +5,7 @@
 #undef FD_TABLE_STACK_TEST
 #include <stdarg.h>
 #include <ciuki/ac97.h>
+#include <ciuki/registry_value.h>
 #include <ciuki/timing.h>
 static bool vm_active_hook;
 struct ciuki_boot_info g_boot;
@@ -1200,6 +1201,12 @@ static void test_registry_master(void)
     CHECK(fd>=0);CHECK(!file_close(client,fd));audio_settings_load(&vfs);CHECK(audio.master.left==25&&audio.master.right==75);
     CHECK(!remove_path_native("/System/Registry/System.reg.txn",false));
     audio_settings_load(&vfs);CHECK(audio.master.left==20&&audio.master.right==20);
+    registry_fixture("[System\\Display\\Savage]\nEngineConfig=73\n");
+    int32_t config=0;
+    CHECK(kernel_registry_int(&vfs,"System\\Display\\Savage","EngineConfig",&config) && config==73);
+    CHECK(!kernel_registry_int(&vfs,"System\\Display\\Savage","Missing",&config));
+    CHECK(heap_blocks==before);
+    puts("boot registry: shared production parser reads Savage EngineConfig integer, missing values release all storage PASS");
     CHECK(!remove_path_native("/System/Registry/System.reg",false));
     audio_settings_load(0);CHECK(audio.master.left==20&&audio.master.right==20&&!audio.master.mute);
     puts("audio registry: whole production grammar, case-folded packed master, precedence, malformed root/value and pending journal fallback PASS");

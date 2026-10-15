@@ -1063,6 +1063,12 @@ void probes_main(void *arg)
 {
     (void)arg;
     kwork_init();                        /* device worker, before any driver IRQ producer */
+    if (g_boot.flags & CBI_F_HW_CHECK) {
+        extern void hardware_check_run(void);
+        drivers_init();
+        hardware_check_run();
+        for (;;) task_sleep_ms(1000);
+    }
     if (!(g_boot.flags & CBI_F_TEST_REQUEST)) {
         if (console_quiet()) {
             struct task *watchdog = task_create_kernel("quiet-watchdog", quiet_watchdog, 0, P_INTERACTIVE);

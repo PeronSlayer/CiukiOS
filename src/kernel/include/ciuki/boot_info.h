@@ -33,14 +33,15 @@
 /* High-volume device/VM diagnostics, independent of the screen-log choice.
  * Accepted fw_cfg test selectors enable this bit. Hardware defaults to off. */
 #define CBI_F_DIAG_VERBOSE     (1u << 12)
-#define CBI_F_DEFINED_MASK     0x00001FFFu
+#define CBI_F_HW_CHECK         (1u << 13)
+#define CBI_F_DEFINED_MASK     0x00003FFFu
 
 /* A normal boot keeps the screen quiet until the desktop takes it: no test
  * request, no safe mode, no L choice and a linear framebuffer. Every other
  * boot draws the kernel log on screen as before. */
 static inline int cbi_quiet_console(uint32_t flags)
 {
-    return !(flags & (CBI_F_TEST_REQUEST | CBI_F_SAFE_MODE | CBI_F_VERBOSE | CBI_F_TEXT_MODE));
+    return !(flags & (CBI_F_TEST_REQUEST | CBI_F_SAFE_MODE | CBI_F_VERBOSE | CBI_F_TEXT_MODE | CBI_F_HW_CHECK));
 }
 
 #define CBI_A20_ALREADY_ON     1u

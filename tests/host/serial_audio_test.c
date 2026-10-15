@@ -487,6 +487,17 @@ int main(void)
 {
     caller_burst_tests(false); caller_burst_tests(true);
     line_rate_tests();
+    reset_uart(true); ready=false;
+    uint64_t first=serial_write_ticket("first complete record\n",22);
+    serial_write("interleaved device\n",19);
+    uint64_t last=serial_write_ticket("last complete record\n",21);
+    struct serial_stats snapshot; serial_snapshot(&snapshot);
+    CHECK(first==1 && last==3 && snapshot.accepted==3 && !snapshot.sent);
+    tick(); serial_snapshot(&snapshot); CHECK(!snapshot.sent); /* partial FIFO record */
+    drain_uart(); serial_snapshot(&snapshot);
+    CHECK(snapshot.sent==3 && !snapshot.queued && !snapshot.dropped);
+    CHECK(!serial_write_ticket("x",SERIAL_RECORD_MAX+1u));
+    puts("serial tickets: partial FIFO records, interleaved producer watermark and whole refusal PASS");
     for (unsigned kind = 0; kind < 2; kind++) {
         preemption_tests(kind);
         basic_tests(kind);

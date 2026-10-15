@@ -7,6 +7,10 @@ mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
 python3 "$root/tests/host/record_scope_test.py"
+python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
+python3 -B -m unittest discover -s "$root/tests/host" -p test_boot_modes.py
+python3 -B -m unittest discover -s "$root/tests/host" -p test_loader_menu.py
+python3 -B "$root/tests/host/test_display_modes.py" DisplayTests.test_kernel_switch
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
     -Wl,--gc-sections -fsanitize=address,undefined -I "$root/src/kernel/include" \
     "$root/tests/host/record_runtime_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/record_runtime_test"
@@ -214,7 +218,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 
 # f1-26: the same renderer plus a bounded register model of Savage commands.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/savage2d_test.c" -o "$out/savage2d_test"
+    -I "$root/src/kernel/include" "$root/tests/host/savage2d_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/savage2d_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/savage2d_test"
 
 # F1 V86 decoder, device models, worker aborts and firmware event adapter.

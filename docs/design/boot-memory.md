@@ -414,3 +414,17 @@ private copy and copies only the declared validated size, so a v1 allocation
 never requires extension bytes. Unknown versions/tags/sizes are refused.
 OEM strings and the bounded mode inventory are copied values, never live
 firmware pointers. This amendment supersedes the earlier version-1-only check.
+
+## f0-26: explicit hardware check selection
+
+Flag bit 13 (`CBI_F_HW_CHECK`) selects the H boot-menu diagnostic page.
+The defined mask is `0x00003FFF`; structure version, size and offsets stay
+unchanged. H cancels a configured probe selector, preserves positive safe-mode
+sources, enables the text console and enters the bounded hardware checks
+instead of the desktop. See [hardware-check.md](hardware-check.md).
+
+The 512-byte ELF segment bounce buffer moves to loader BSS after the existing
+selector scratch. Each read initializes `copy_count` bytes before the copy
+loop consumes exactly those bytes. The loader stays 48 sectors with either
+the default or release version string; its page-rounded reservation is
+unchanged. The menu model and both assembled extents are host-tested.
