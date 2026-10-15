@@ -323,6 +323,14 @@ the default (owner decision 2026-10-12). At 1024 x 768 the 4:3 scene scales by
 the bottom of the work area, nothing at the sides. The Control Panel lists
 them with any PNG/JPEG/BMP files the owner copies there; "Ciuki portrait" is
 the approved portrait on the desktop colour.
+
+The wallpaper worker reads matching raw frames from `/System/cache/wallpaper`
+and keeps a bounded cache of prepared frames, decoded source and placement
+layer in memory. Runtime requests never write raw disk frames or their LRU
+journal: FAT's full-file COW on each short write can otherwise delay publication
+and block the shell's directory reads. Cache generation remains available to
+explicit synchronous tooling. See [F2-73 publication validation](validation/f2-73-wallpaper-publication.md).
+
 **The Windows ME bitmaps of the 0.8 line (`third_party/win_bg`, local and
 git-ignored, Microsoft copyright) are never added to the repository or to the
 image;** the desktop only shows them if the owner copies them into

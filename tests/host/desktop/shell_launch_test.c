@@ -68,6 +68,25 @@ static int footprint_master_save(const char *,unsigned,unsigned,unsigned);
 #ifdef DESK_FOOTPRINT_TEST
 static const char *sequence_settings_path;
 static unsigned sequence_main_reads;
+static const char *boot_cache_directory;
+#include "../../../apps/desktop/sound_runtime.h"
+static void boot_wall_stage(const char *);
+static const struct fm_vfs *boot_native_vfs(void);
+static int boot_cfg_writer_start(struct cfg_writer *w,const char *path,const char *temporary)
+{
+    return cfg_writer_start(w,boot_cache_directory ? sequence_settings_path : path,
+                            boot_cache_directory ? NULL : temporary);
+}
+#include "../../../apps/desktop/wallpaper_io.h"
+static int boot_wall_worker_start(struct desk_wall_worker *w,const char *dir,void (*stage)(const char *))
+{ return desk_wall_worker_start(w,boot_cache_directory ? boot_cache_directory : dir,
+                               boot_cache_directory ? boot_wall_stage : stage); }
+static void boot_sound_init(struct desktop *d)
+{ if (!boot_cache_directory) desk_sound_init(d); }
+#define cfg_writer_start boot_cfg_writer_start
+#define desk_wall_worker_start boot_wall_worker_start
+#define fm_native_vfs boot_native_vfs
+#define desk_sound_init boot_sound_init
 static FILE *sequence_fopen(const char *path,const char *mode)
 {
     if (sequence_settings_path && !strcmp(path,CFG_FILE)) {
@@ -82,6 +101,10 @@ static FILE *sequence_fopen(const char *path,const char *mode)
 #undef write
 #ifdef DESK_FOOTPRINT_TEST
 #undef fopen
+#undef cfg_writer_start
+#undef desk_wall_worker_start
+#undef fm_native_vfs
+#undef desk_sound_init
 #undef master_preference_save
 static unsigned footprint_master_saves;
 int ciuki_devices(struct ciuki_devices_info *info)
@@ -858,10 +881,12 @@ static void test_network_service(void)
 #include "memory_footprint_test.h"
 #include "theme_wallpaper_sequence_test.h"
 #include "theme_wallpaper_performance_test.h"
+#include "wallpaper_boot_test.h"
 #endif
 int main(int argc,char **argv)
 {
 #ifdef DESK_FOOTPRINT_TEST
+    if (argc==3 && !strcmp(argv[1],"--wallpaper-boot")) { test_wallpaper_boot(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--theme-wallpaper")) { test_theme_wallpaper(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--theme-wallpaper-performance")) { test_theme_wallpaper_performance(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(argv[2]); return 0; }

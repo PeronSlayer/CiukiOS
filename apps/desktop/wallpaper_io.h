@@ -28,11 +28,14 @@ struct desk_wall_worker {
     void (*stage)(const char *);
     struct desk_wall_memory *memory; /* worker-only, bounded reusable frames/source */
     uint64_t prepare_ns; /* completed request, published with ready under lock */
+    const char *activity; /* atomic diagnostic: literal name of the current operation */
 };
 void desk_wall_cache_name(char out[DESK_WALL_NAME_MAX], const struct desk_wall_request *,
                           uint64_t size, int64_t mtime);
 int desk_wall_prepare(const struct desk_wall_request *, const char *cache_dir,
                       uint32_t **pixels, int *hit, void (*stage)(const char *));
+/* Runtime reads disk seeds but never persists frames/journals: native FAT
+ * full-file COW on short writes can hold the shared filesystem for seconds. */
 int desk_wall_worker_start(struct desk_wall_worker *, const char *, void (*stage)(const char *));
 unsigned desk_wall_worker_submit(struct desk_wall_worker *, const struct desk_wall_request *);
 /* submit returns 0 on contention: retain the latest request and retry next turn. */

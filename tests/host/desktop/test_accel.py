@@ -12,6 +12,7 @@ class AccelerationTests(unittest.TestCase):
         out.mkdir(parents=True, exist_ok=True)
         flags = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined"]
         subprocess.run([*flags, "-I", str(ROOT / "src/kernel/include"), str(ROOT / "tests/host/savage2d_test.c"),
+                        str(ROOT / "src/kernel/lib/fmt.c"),
                         "-o", str(out / "savage2d_test")], check=True)
         subprocess.run([str(out / "savage2d_test")], check=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
 
