@@ -2,6 +2,7 @@
 """Sequential native CiukPaint harness; no guest, full image or variants."""
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -37,10 +38,12 @@ class PaintTests(unittest.TestCase):
             result = subprocess.run([str(binary), str(one), str(renders)], capture_output=True, text=True, env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("paint: PASS", result.stdout)
+            print(result.stdout.strip())
             first = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in renders.glob("paint-*.png")}
             for p in renders.glob("paint-*.png"):
                 capture(p.stem, p.read_bytes())
-            self.assertEqual(len(first), 7)
+            self.assertEqual(len(first), 7 + 15 + 8 + 3)
+            self.assertEqual(first, json.loads((ROOT / "tests/host/desktop/paint-goldens.json").read_text()))
             result = subprocess.run([str(binary), str(two), str(renders)], capture_output=True, text=True, env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("paint: PASS", result.stdout)

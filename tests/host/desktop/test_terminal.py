@@ -41,10 +41,23 @@ class TerminalTests(unittest.TestCase):
             subprocess.run([*flags, *(str(s) for s in sources), '-lm', '-o', str(binary)], check=True, env=env)
             frame = temp / "terminal.xrgb"
             env["CIUKI_TERMINAL_FRAME"] = str(frame)
+            env["CIUKI_TERMINAL_SELECTION"] = str(temp / "selection")
             result = subprocess.run([str(binary)], env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('terminal: PASS', result.stdout)
+            print(result.stdout.strip())
             capture("terminal", frame.read_bytes(), 80 * 7 + 24, 25 * 16 + 8)
+            selections = {}
+            for selected in sorted(temp.glob("selection-*.xrgb")):
+                pixels = selected.read_bytes()
+                selections[selected.stem] = hashlib.sha256(pixels).hexdigest()
+                capture("terminal-" + selected.stem, pixels, 80 * 7 + 24, 25 * 16 + 8)
+            review = ROOT / "build/host/f2-68"
+            review.mkdir(parents=True, exist_ok=True)
+            (review / "terminal-selection-goldens.json").write_text(json.dumps(selections, indent=2, sort_keys=True) + "\n")
+            pins = ROOT / "tests/host/desktop/terminal-selection-goldens.json"
+            self.assertTrue(pins.exists(), json.dumps(selections, indent=2))
+            self.assertEqual(selections, json.loads(pins.read_text()))
 
     def test_registration(self):
         for path in ('apps/build_apps.py', 'scripts/build_image.py'):

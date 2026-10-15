@@ -31,19 +31,20 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-63: re-recorded for the pinned FreeType UI atlases (build/host/f2-63 before/after).
 # 2026-10-15 (main after f2-63 + f2-64): the three dialogs frames re-recorded on the combined tree (f2-64 message boxes in FreeType), reviewed against the 9a05ab9f renders.
 # F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
+# F2-67 + F2-68: caption changes and selection rendering combined; shared frames re-recorded.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "cf4cb307519c8cae4f7c784d16bf7dddfffe91c9b569334f304fd4432b9f4331",
-    "ciuki-blue-dialogs.ppm": "314c6548da64ae315968503202f26731541f5a53b21b872deb0d85f86e259df7",
-    "ciuki-blue-tray-disabled.ppm": "eeb8e2638cb34329098a9201f1d20fa9c17e72414d2a4e9aa433ad2c56721ba2",
-    "ciuki-blue-tray-media.ppm": "aad2dc667688e49ddc38c43a092a467cb5e8b9b3b0d0f5cc5d1854d15910fd62",
-    "classic-98-desktop.ppm": "c06eb3295a93ca49a3e01f5de4c4309cb975cea431122b63b379c9853e94f441",
-    "classic-98-dialogs.ppm": "90d922061c851e4bcaa60ec5b6ff5d688ed3ff5829bd701b8cd11a7c946d6a57",
-    "classic-98-tray-disabled.ppm": "78bd186f6975cc96cbd1e3cee7dc03dc03ecb3e9b8d10f32ee361ccf87e54818",
-    "classic-98-tray-media.ppm": "0921d14e8ce31989031c097c2a5338757b7c17f81507620f4a10aeaee0154bb4",
-    "platinum-desktop.ppm": "4c5a0582df22b4bd56b7c0eb29b030dda947ddb4e872ec7c5a491f69869ee48d",
-    "platinum-dialogs.ppm": "52cf5c113f53429e69b558c83f6f9126f28dd616c50c9416890dee7327b9a072",
-    "platinum-tray-disabled.ppm": "0a7083aa850c0ca9ffa55230d89af17c1a9d17d53a0b81b6dd98937c6f8e85a6",
-    "platinum-tray-media.ppm": "a6b0bf80b9a544ce2fbed55d1aac67d5c43a9a75bff1170192da7b05dfa04dd6"
+    "ciuki-blue-desktop.ppm": "3a5aabcc97e43791efb91ebd7b73b0211dd7fcc1c7311ade16f0ba1e569d7bb3",
+    "ciuki-blue-dialogs.ppm": "cc8833fb853e16b7317f361a57e3a3033ae81838242981947bcbdad2601ebe7c",
+    "ciuki-blue-tray-disabled.ppm": "c0f0c792f567ad6e18f58f793fac348ecfa4146f2bc79e7d3a349283251a3b92",
+    "ciuki-blue-tray-media.ppm": "fa2946ccec5931a733ba786238865a16e15c7901ca5ac18b4062237c6a05cc4d",
+    "classic-98-desktop.ppm": "ba55e764dd814fb8c0c13857d07c275ccfba1138f43a3b18d4094c79c5839bec",
+    "classic-98-dialogs.ppm": "3cc7e57e2282d7dd0647d944507c1f0c3b0444c50b841aaaafd6485ccba7cc33",
+    "classic-98-tray-disabled.ppm": "f6eeb9c579fff43c8630926bb29a22a78c0707af2beb9a41b266a39a564bcf7a",
+    "classic-98-tray-media.ppm": "459dc2f0b2ec7dbb6c501ab843d0bcba1b7c4fa46ecb21b92337eb51e6ba5572",
+    "platinum-desktop.ppm": "68b285a9193d9c502b3c415d066bb7098f4166fddfe5b090c3ae7b4fa59a09bc",
+    "platinum-dialogs.ppm": "965500e713b474ab8f1a75050130a7f4e93c970a2f4102da2b40588659ff2741",
+    "platinum-tray-disabled.ppm": "6f0d53ad285a1d71dd515bc2e75721ec49761b26a4d8237be2f94ac5e5589b94",
+    "platinum-tray-media.ppm": "43d2f94481304dd805bbcce86fcb5db9dd5120093d1de7844a2e98126764680c"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -580,7 +581,7 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(r["sha256"], metadata["wallpaper_cache"]["files"][Path(r["path"]).name]["sha256"])
             else:
                 self.assertEqual(r["sha256"], m["files"][Path(r["path"]).name])
-        # Microsoft's ME wallpapers (third_party/win_bg, local only) never enter the image.
+        # Private wallpapers (third_party/win_bg, local only) never enter the image.
         self.assertFalse(any("win_bg" in str(v) or Path(k).suffix.lower() == ".bmp" for k, v in sources.items()))
         print("PASS desktop/demo/Files ELF, SDK/source/output provenance, payload size/SHA-256 inventory")
 
@@ -837,6 +838,15 @@ class AppCaseReplayTests(unittest.TestCase):
             path, data = out["file"]
             self.assertEqual(path, "/system/tests/note.txt")
             self.assertEqual(hashlib.sha256(bytes.fromhex(data)).hexdigest(), case["checks"]["files"][0]["sha256"])
+
+
+def load_tests(loader, tests, pattern):
+    # Discovery finds these sibling modules itself. Explicit desktop runs include
+    # both refinement groups once, without duplicating them during discovery.
+    if pattern is None:
+        for name in ("test_interaction", "test_text_selection"):
+            tests.addTests(loader.loadTestsFromModule(load(name, ROOT / "tests/host/desktop" / (name + ".py"))))
+    return tests
 
 
 if __name__ == "__main__":

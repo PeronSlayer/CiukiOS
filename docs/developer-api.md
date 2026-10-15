@@ -2505,7 +2505,9 @@ enum desk_cursor_shape {
     DESK_CURSOR_TEXT, DESK_CURSOR_FORBIDDEN, DESK_CURSOR_RESIZE_EW,
     DESK_CURSOR_RESIZE_NS, DESK_CURSOR_RESIZE_NWSE, DESK_CURSOR_RESIZE_NESW,
     DESK_CURSOR_MOVE, DESK_CURSOR_HAND, DESK_CURSOR_CROSSHAIR,
-    DESK_CURSOR_PRECISION, DESK_CURSOR_COUNT
+    DESK_CURSOR_PRECISION,
+    DESK_CURSOR_PENCIL, DESK_CURSOR_BRUSH, DESK_CURSOR_FILL, DESK_CURSOR_PICK,
+    DESK_CURSOR_ZOOM, DESK_CURSOR_ERASER, DESK_CURSOR_COUNT
 };
 #define DESK_TITLE_MAX 63u
 #define DESK_ARG_MAX 160u
@@ -3259,6 +3261,21 @@ enum {
 struct du_ui;
 struct du_rect { int x, y, w, h; };
 struct du_canvas { uint32_t *pixels; int width, height; struct du_rect clip; };
+struct du_selection {
+    uint64_t ns;
+    int x, y;
+    unsigned clicks;
+    size_t lo, hi;
+};
+```
+
+UTF-8 byte boundaries; granularity 1 = position, 2 = word, 3 = logical line.
+
+```c
+void du_text_unit(const char *, size_t at, unsigned granularity, size_t *lo, size_t *hi);
+void du_select_click(struct du_selection *, const char *, size_t at, int extend,
+                     uint64_t ns, int x, int y, size_t *anchor, size_t *cursor);
+void du_select_drag(const struct du_selection *, const char *, size_t at, size_t *anchor, size_t *cursor);
 ```
 
 Bevel styles for raised and recessed controls.
@@ -3504,7 +3521,8 @@ uint8_t hidden, disabled, pressed, hot, def, vertical;
 edit (bytes; offset in cells)
 
 ```c
-const uint32_t *icon; int icon_size;
+struct du_selection selection;
+    const uint32_t *icon; int icon_size;
 ```
 
 buttons, edit prefix icon
@@ -3533,7 +3551,13 @@ unsigned count, active;
     struct du_column columns[DU_COLUMNS];
     unsigned column_count;
     int sort, descending, focus_rect, inactive_selection;
-    int scroll, hscroll;
+    int selection_external, selection_active;
+```
+
+lists: controller-owned multi-selection, or toolkit active item
+
+```c
+int scroll, hscroll;
 ```
 
 first row/column or pixel offset
@@ -3574,6 +3598,12 @@ unsigned pointer_cursor;
 ```
 
 application cursor for this widget; arrow is automatic
+
+```c
+struct du_rect cursor_box;
+```
+
+optional client-coordinate subregion
 
 ```c
 };
@@ -3711,14 +3741,14 @@ void du_resize(struct du_ui *, uint32_t *pixels, int width, int height);
 struct du_widget *du_add(struct du_ui *, enum du_kind, int id, struct du_rect, const char *text);
 struct du_widget *du_get(struct du_ui *, int id);
 int du_hit(const struct du_ui *, int x, int y);
+unsigned du_cursor_at(const struct du_ui *);
+void du_cursor(struct du_ui *, unsigned shape);
 void du_focus(struct du_ui *, int id);
 int du_focused(const struct du_ui *);
 void du_set_text(struct du_widget *, const char *);
 void du_render(struct du_ui *);
 void du_input(struct du_ui *, const struct ciuki_input_event *);
 void du_window_focus(struct du_ui *, int focused);
-unsigned du_cursor_at(const struct du_ui *);
-void du_cursor(struct du_ui *, unsigned shape);
 void du_release(struct du_ui *);
 unsigned du_key_char(const struct du_ui *, unsigned code);
 void du_post(struct du_ui *, enum du_event_type, int id, int index);
@@ -3767,7 +3797,7 @@ int du_dialog_id(const struct du_ui *);
 struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
 ```
 
-Timers (monotonic nanoseconds) and the per-process text clipboard.
+Timers (monotonic nanoseconds) and the shared text clipboard.
 
 ```c
 int du_timer_start(struct du_ui *, int id, uint64_t interval_ns, int repeat);
@@ -3776,7 +3806,17 @@ void du_tick(struct du_ui *, uint64_t now);
 uint64_t du_next_deadline(const struct du_ui *);
 void du_clipboard_set(const char *);
 const char *du_clipboard_get(void);
+#define DU_CLIPBOARD_MAX (1024u * 1024u)
+int du_clipboard_set_n(const char *, size_t);
 ```
+
+failure leaves the previous copy intact
+
+```c
+int du_clipboard_path(const char *);
+```
+
+optional host/provider path, NULL restores the default
 
 Desktop window glue: handshake, surface, back buffer, damage, events.
 
@@ -3955,7 +3995,8 @@ char *undo; size_t undo_len, undo_cursor, undo_anchor;
 pointer
 
 ```c
-int drag, grab; uint64_t click_ns; int click_x, click_y, clicks;
+int drag, grab;
+    struct du_selection selection;
 ```
 
 Optional source-editor presentation. Byte offsets refer to text; the

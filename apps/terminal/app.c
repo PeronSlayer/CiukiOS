@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "terminal.h"
+#include "../libdeskui/internal.h"
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -116,7 +117,7 @@ void term_submit(struct terminal *t)
     if(t->busy)return;
     char line[DU_TEXT_MAX], *p=t->prompt_text; strcpy(line,t->input); prompt(t,p,sizeof(t->prompt_text));
     if(t->used)term_write(t,"\n"); term_write(t,p); term_write(t,"\n");
-    t->input[0]=0; t->cursor=0; t->follow=1; t->selection_a=t->selection_b=0;
+    t->input[0]=0; t->cursor=t->anchor=0; t->follow=1; t->selection_a=t->selection_b=0; t->output_focus=0;
     remember(t,line); t->history_at=t->history_count; t->draft[0]=0;
     t->history_error=term_history_save(t);
     if(t->history_error)term_printf(t,"History: %s (error %d)\n",strerror(-t->history_error),-t->history_error);
@@ -161,20 +162,39 @@ void term_complete(struct terminal *t)
     if(t->input[t->cursor]=='"' && n && replacement[n-1]=='"') { t->cursor++; tail--; }
     if(start+n+tail>=sizeof(t->input))return;
     memmove(t->input+start+n,t->input+t->cursor,tail+1); memcpy(t->input+start,replacement,n); t->cursor=start+n;
-    t->follow=1; update(t);
+    t->anchor=t->cursor; t->selection_a=t->selection_b=0; t->output_focus=0; t->follow=1; update(t);
+}
+static void view_row(struct terminal *t,unsigned row,char *out,size_t size)
+{
+    unsigned rows=term_visual_rows(t);
+    if(row<rows) { term_row(t,row,out,size); return; }
+    prompt(t,t->prompt_text,sizeof(t->prompt_text));
+    size_t at=(size_t)(row-rows)*t->columns,n=strlen(t->prompt_text);
+    if(at>=n) { out[0]=0; return; }
+    n-=at; if(n>t->columns)n=t->columns; if(n>=size)n=size-1;
+    memcpy(out,t->prompt_text+at,n); out[n]=0;
+}
+static size_t input_start(struct terminal *t)
+{
+    prompt(t,t->prompt_text,sizeof(t->prompt_text));
+    return (size_t)term_visual_rows(t)*t->columns+strlen(t->prompt_text)-strlen(t->input);
 }
 static void copy_selection(struct terminal *t)
 {
+    if(t->cursor!=t->anchor) {
+        size_t a=t->cursor<t->anchor?t->cursor:t->anchor,b=t->cursor>t->anchor?t->cursor:t->anchor;
+        du_clipboard_set_n(t->input+a,b-a); return;
+    }
     size_t a=t->selection_a,b=t->selection_b; if(a>b) { size_t x=a; a=b; b=x; }
-    unsigned rows=term_visual_rows(t); if(a==b || a/t->columns>=rows)return;
+    unsigned rows=total(t); if(a==b || a/t->columns>=rows)return;
     if(b>(size_t)rows*t->columns)b=(size_t)rows*t->columns;
     char *s=malloc(b-a+rows+1); if(!s)return; size_t used=0;
     for(unsigned row=(unsigned)(a/t->columns);row<rows && (size_t)row*t->columns<b;row++) {
-        char text[TERM_LINE+1]; term_row(t,row,text,sizeof(text)); size_t n=strlen(text);
+        char text[TERM_LINE+1]; view_row(t,row,text,sizeof(text)); size_t n=strlen(text);
         size_t left=row==a/t->columns ? a%t->columns : 0, right=b/t->columns==row ? b%t->columns : t->columns;
         if(right>n)right=n;
         if(left<right) { memcpy(s+used,text+left,right-left); used+=right-left; }
-        if((size_t)(row+1)*t->columns<b)s[used++]='\n';
+        if((size_t)(row+1)*t->columns<=b && row+1<rows)s[used++]='\n';
     }
     s[used]=0; du_clipboard_set(s); free(s);
 }
@@ -185,7 +205,7 @@ static void layout(struct du_ui *u,void *ctx)
     s->box=(struct du_rect){u->canvas.width-18,4,14,u->canvas.height-8};
     t->columns=(unsigned)(g->box.w/TERM_CELL_W); if(!t->columns)t->columns=1;
     t->rows=(unsigned)(g->box.h/TERM_CELL_H); if(!t->rows)t->rows=1;
-    t->selection_a=t->selection_b=0; update(t);
+    t->selection_a=t->selection_b=0; t->selecting=0; t->text_selection.ns=0; update(t);
 }
 static void paint(struct du_ui *u,void *ctx)
 {
@@ -198,20 +218,24 @@ static void paint(struct du_ui *u,void *ctx)
         else { size_t start=(size_t)(row-output)*t->columns; size_t n=strlen(p); if(start>=n)text[0]=0;
             else { n-=start; if(n>t->columns)n=t->columns; if(n>TERM_LINE)n=TERM_LINE; memcpy(text,p+start,n); text[n]=0; } }
         for(unsigned x=0;text[x] && x<t->columns;x++) {
-            size_t cell=(size_t)row*t->columns+x; int selected=row<output && cell>=a && cell<b;
+            size_t cell=(size_t)row*t->columns+x, start=(size_t)output*t->columns+strlen(p)-strlen(t->input);
+            size_t lo=t->anchor<t->cursor?t->anchor:t->cursor,hi=t->anchor>t->cursor?t->anchor:t->cursor;
+            int selected=(cell>=a && cell<b) || (cell>=start+lo && cell<start+hi);
             if(selected)du_fill(&c,(struct du_rect){box.x+(int)x*TERM_CELL_W,box.y+(int)y*TERM_CELL_H,TERM_CELL_W,TERM_CELL_H},DU_SELECT);
             char letter[]={text[x],0}; du_text_font(&c,DESK_FONT_MONO,box.x+(int)x*TERM_CELL_W,box.y+(int)y*TERM_CELL_H+2,letter,selected ? DU_SELECT_INK : 0xe8f0e8);
         }
     }
-    if(!t->busy && t->follow) {
+    if(!t->busy && t->follow && t->anchor==t->cursor && a==b) {
         size_t at=strlen(p)-strlen(t->input)+t->cursor; unsigned row=output+(unsigned)(at/t->columns);
         if(row>=t->top && row-t->top<t->rows)du_fill(&c,(struct du_rect){box.x+(int)(at%t->columns)*TERM_CELL_W,box.y+(int)(row-t->top)*TERM_CELL_H+13,TERM_CELL_W,2},0xe8f0e8);
     }
 }
 static void insert(struct terminal *t,unsigned ch)
 {
-    size_t n=strlen(t->input); if(ch<32 || ch>=127 || n+1>=sizeof(t->input))return;
-    memmove(t->input+t->cursor+1,t->input+t->cursor,n-t->cursor+1); t->input[t->cursor++]=(char)ch;
+    size_t n=strlen(t->input),a=t->anchor<t->cursor?t->anchor:t->cursor,b=t->anchor>t->cursor?t->anchor:t->cursor;
+    if(ch<32 || ch>=127 || n-(b-a)+1>=sizeof(t->input))return;
+    memmove(t->input+a+1,t->input+b,n-b+1); t->input[a]=(char)ch; t->anchor=t->cursor=a+1;
+    t->selection_a=t->selection_b=0; t->output_focus=0;
 }
 void term_event(struct du_ui *u,const struct du_event *e,void *ctx)
 {
@@ -229,37 +253,88 @@ void term_event(struct du_ui *u,const struct du_event *e,void *ctx)
         struct du_rect b=du_get(u,GRID)->box; int x=(e->x-b.x)/TERM_CELL_W,y=(e->y-b.y)/TERM_CELL_H;
         if(x<0)x=0; if(y<0)y=0; if((unsigned)x>t->columns)x=(int)t->columns; if((unsigned)y>=t->rows)y=(int)t->rows-1;
         size_t at=(size_t)(t->top+(unsigned)y)*t->columns+(unsigned)x;
-        if(e->index==DU_POINTER_DOWN && e->key==1) { t->selecting=1; t->selection_a=t->selection_b=at; }
-        else if(e->index==DU_POINTER_MOVE && t->selecting)t->selection_b=at;
-        else if(e->index==DU_POINTER_UP || e->index==DU_POINTER_CANCEL)t->selecting=0;
+        size_t start=input_start(t),limit=start+strlen(t->input);
+        if(e->index==DU_POINTER_DOWN && e->key==1) {
+            t->selecting=at>=start && !t->busy?2:1;
+            t->output_focus=t->selecting==1;
+            if(t->selecting==2) {
+                t->selection_a=t->selection_b=0;
+                du_select_click(&t->text_selection,t->input,at>limit?strlen(t->input):at-start,
+                                (e->modifiers&DU_SHIFT)!=0,u->now,e->x,e->y,&t->anchor,&t->cursor);
+            } else {
+                t->anchor=t->cursor;
+                char row[TERM_LINE+1]; unsigned index=(unsigned)(at/t->columns); view_row(t,index,row,sizeof(row));
+                size_t lo=0,hi=0;
+                du_select_click(&t->text_selection,row,at%t->columns,0,u->now,e->x,e->y,&lo,&hi);
+                size_t base=(size_t)index*t->columns;
+                if(t->text_selection.clicks==3)hi=t->columns;
+                t->text_selection.lo=base+lo; t->text_selection.hi=base+hi;
+                if(!(e->modifiers&DU_SHIFT))t->selection_a=base+lo;
+                t->selection_b=base+hi;
+            }
+        } else if((e->index==DU_POINTER_MOVE || e->index==DU_POINTER_UP) && t->selecting) {
+            if(t->selecting==2)du_select_drag(&t->text_selection,t->input,at<start?0:at>limit?strlen(t->input):at-start,&t->anchor,&t->cursor);
+            else {
+                char row[TERM_LINE+1]; unsigned index=(unsigned)(at/t->columns); view_row(t,index,row,sizeof(row));
+                size_t lo,hi; du_text_unit(row,at%t->columns,t->text_selection.clicks,&lo,&hi);
+                size_t base=(size_t)index*t->columns;
+                if(t->text_selection.clicks==3)hi=t->columns;
+                if(t->text_selection.clicks<=1)t->selection_b=base+lo;
+                else if(at<t->text_selection.lo) { t->selection_a=t->text_selection.hi; t->selection_b=base+lo; }
+                else { t->selection_a=t->text_selection.lo; t->selection_b=base+hi; }
+            }
+        }
+        if(e->index==DU_POINTER_UP || e->index==DU_POINTER_CANCEL)t->selecting=0;
         u->dirty=1; return;
     }
     if(e->type!=DU_EV_KEY)return;
+    t->text_selection.ns=0;
+    if(t->output_focus && (e->modifiers&DU_SHIFT) &&
+       (e->key==DU_KEY_LEFT || e->key==DU_KEY_RIGHT || e->key==DU_KEY_UP || e->key==DU_KEY_DOWN || e->key==DU_KEY_HOME || e->key==DU_KEY_END)) {
+        size_t at=t->selection_b,last=(size_t)total(t)*t->columns;
+        if(e->key==DU_KEY_LEFT) { if(at)at--; }
+        else if(e->key==DU_KEY_RIGHT) { if(at<last)at++; }
+        else if(e->key==DU_KEY_UP)at=at>t->columns?at-t->columns:0;
+        else if(e->key==DU_KEY_DOWN)at=at+t->columns<last?at+t->columns:last;
+        else if(e->key==DU_KEY_HOME)at-=at%t->columns;
+        else { char row[TERM_LINE+1]; view_row(t,(unsigned)(at/t->columns),row,sizeof(row)); at=at/t->columns*t->columns+strlen(row); }
+        t->selection_b=at; unsigned row=(unsigned)(at/t->columns);
+        if(row<t->top)t->top=row; else if(row>=t->top+t->rows)t->top=row-t->rows+1;
+        t->follow=0; update(t); return;
+    }
     if(e->modifiers & DU_CTRL) {
         if(e->key==0x2e) { if(t->busy)t->interrupted=1; else copy_selection(t); }
-        else if(!t->busy && e->key==0x2f) { for(const char *s=du_clipboard_get();s && *s;s++)insert(t,(unsigned char)*s); t->follow=1; update(t); }
+        else if(t->output_focus && e->key==0x1e) { t->selection_a=0; t->selection_b=(size_t)total(t)*t->columns; u->dirty=1; }
+        else if(t->output_focus && e->key==0x2d)copy_selection(t);
+        else if(!t->busy && (e->key==0x1e || e->key==0x2d || e->key==0x2f)) {
+            struct du_widget edit={.kind=DU_EDIT,.id=GRID,.cursor=t->cursor,.anchor=t->anchor};
+            strcpy(edit.text,t->input); du_edit_key(u,&edit,e->key);
+            strcpy(t->input,edit.text); t->cursor=edit.cursor; t->anchor=edit.anchor;
+            t->selection_a=t->selection_b=0; t->output_focus=0; t->follow=1; update(t);
+        }
         return;
     }
     if(t->busy)return;
+    if(t->output_focus && (e->key==DU_KEY_DELETE || e->key==DU_KEY_BACKSPACE))return;
     if(e->key==DU_KEY_ENTER) { term_submit(t); return; }
     if(e->key==DU_KEY_TAB) { term_complete(t); return; }
     if(e->key==DU_KEY_PGUP || e->key==DU_KEY_PGDN) {
         if(e->key==DU_KEY_PGUP)t->top=t->top>t->rows ? t->top-t->rows : 0; else t->top+=t->rows;
         t->follow=0; update(t); return;
     }
-    if(e->key==DU_KEY_UP || e->key==DU_KEY_DOWN) {
+    if((e->key==DU_KEY_UP || e->key==DU_KEY_DOWN) && !(e->modifiers&DU_SHIFT)) {
         if(t->history_at==t->history_count)strcpy(t->draft,t->input);
         if(e->key==DU_KEY_UP && t->history_at)t->history_at--; else if(e->key==DU_KEY_DOWN && t->history_at<t->history_count)t->history_at++;
-        strcpy(t->input,t->history_at<t->history_count ? t->history[t->history_at] : t->draft); t->cursor=strlen(t->input);
+        strcpy(t->input,t->history_at<t->history_count ? t->history[t->history_at] : t->draft); t->anchor=t->cursor=strlen(t->input);
     }
-    else if(e->key==DU_KEY_LEFT) { if(t->cursor)t->cursor--; }
-    else if(e->key==DU_KEY_RIGHT) { if(t->cursor<strlen(t->input))t->cursor++; }
-    else if(e->key==DU_KEY_HOME)t->cursor=0;
-    else if(e->key==DU_KEY_END)t->cursor=strlen(t->input);
-    else if(e->key==DU_KEY_BACKSPACE) { if(t->cursor) { memmove(t->input+t->cursor-1,t->input+t->cursor,strlen(t->input+t->cursor)+1); t->cursor--; } }
-    else if(e->key==DU_KEY_DELETE) { if(t->input[t->cursor])memmove(t->input+t->cursor,t->input+t->cursor+1,strlen(t->input+t->cursor)); }
-    else if(e->key==DU_KEY_ESC) { t->input[0]=0; t->cursor=0; }
-    else insert(t,e->ch);
+    else if(e->key==DU_KEY_ESC) { t->input[0]=0; t->anchor=t->cursor=0; }
+    else if(e->ch)insert(t,e->ch);
+    else {
+        struct du_widget edit={.kind=DU_EDIT,.id=GRID,.cursor=t->cursor,.anchor=t->anchor};
+        strcpy(edit.text,t->input); du_edit_key(u,&edit,e->key);
+        strcpy(t->input,edit.text); t->cursor=edit.cursor; t->anchor=edit.anchor;
+    }
+    t->selection_a=t->selection_b=0; t->output_focus=0;
     t->follow=1; update(t);
 }
 int term_attach(struct terminal *t,struct du_ui *u,const struct term_host *h)

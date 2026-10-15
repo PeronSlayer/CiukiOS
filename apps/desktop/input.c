@@ -141,11 +141,14 @@ unsigned desk_resize_hit(const struct desk_client *c, int32_t x, int32_t y)
 void desk_cursor_update(struct desktop *d)
 {
     unsigned shape=DESK_CURSOR_ARROW, edges=0;
-    if (d->drag>=0) {
+    if (d->power.state) {
+        /* The power dialog owns pointer feedback while it blocks clients. */
+    } else if (d->drag>=0) {
         shape=DESK_CURSOR_MOVE; edges=d->resize_edges;
     } else if (d->routed_buttons && d->focus>=0) {
         shape=d->clients[d->focus].cursor;
-    } else if (!d->sh.levels && !d->sh.switcher && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open) {
+    } else if (!d->sh.levels && !d->sh.switcher && !d->sh.volume_open && !d->sh.network_open &&
+               !d->sh.media_open && !d->sh.notification.active) {
         int i=desk_hit(d,d->mouse_x,d->mouse_y);
         if (i>=0 && d->mouse_y>=DESK_BAR && (!d->shell || d->mouse_y<(int)d->height-DESK_BAR)) {
             struct desk_client *c=&d->clients[i];
@@ -173,6 +176,7 @@ void desk_cursor_update(struct desktop *d)
         else shape=edges==(DESK_EDGE_LEFT|DESK_EDGE_TOP) || edges==(DESK_EDGE_RIGHT|DESK_EDGE_BOTTOM) ?
             DESK_CURSOR_RESIZE_NWSE : DESK_CURSOR_RESIZE_NESW;
     }
+    if (shape>=DESK_CURSOR_COUNT) shape=DESK_CURSOR_ARROW;
     if (d->cursor_shape!=shape) { d->cursor_shape=shape; d->cursor_dirty=1; }
 }
 void desk_geometry_begin(struct desktop *d, int i, int size)

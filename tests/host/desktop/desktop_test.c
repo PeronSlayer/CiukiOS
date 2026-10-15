@@ -90,6 +90,39 @@ static void test_protocol(void)
 }
 static int covers(struct desk_box b,int x,int y)
 { return x>=b.x && y>=b.y && x<b.x+b.w && y<b.y+b.h; }
+static void test_cursor_requests(void)
+{
+    struct ciuki_message m,bad; struct desk_packet p;
+    for(unsigned shape=0;shape<DESK_CURSOR_COUNT;shape++) {
+        request(&m,DESK_SET_CURSOR,8); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+4,shape);
+        assert(desk_parse(&m,1,NULL,&p) && p.flags==shape); assert(!desk_parse(&m,0,NULL,&p));
+        bad=m; bad.data[0]=DESK_VERSION; assert(!desk_parse(&bad,1,NULL,&p));
+        bad=m; bad.length=9; assert(!desk_parse(&bad,1,NULL,&p));
+        bad=m; bad.fd_count=1; bad.fds[0]=10; assert(!desk_parse(&bad,1,NULL,&p));
+    }
+    desk_put32(m.data+4,DESK_CURSOR_COUNT); assert(!desk_parse(&m,1,NULL,&p));
+    setup(640,480); int indices[2];
+    for(int k=0;k<2;k++) {
+        fake_channel(10+k); indices[k]=desk_add_client(&d,10+k); assert(indices[k]>=0);
+        request(&m,DESK_HELLO,4); m.data[0]=DESK_SHELL_VERSION; desk_receive(&d,indices[k],&m);
+        fake_surface(20+k,120,80,0x123456); create_message(&m,20+k,120,80); m.data[0]=DESK_SHELL_VERSION;
+        desk_receive(&d,indices[k],&m); assert(d.clients[indices[k]].window);
+    }
+    int i=indices[0],j=indices[1];
+    desk_move(&d,i,30,60); desk_move(&d,j,300,60);
+    struct desk_box box=desk_content(&d.clients[i]); d.mouse_x=box.x+20; d.mouse_y=box.y+20;
+    request(&m,DESK_SET_CURSOR,8); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+4,DESK_CURSOR_BRUSH);
+    desk_receive(&d,i,&m); assert(d.cursor_shape==DESK_CURSOR_BRUSH && d.clients[j].cursor==DESK_CURSOR_ARROW);
+    d.power.state=1; desk_cursor_update(&d); assert(d.cursor_shape==DESK_CURSOR_ARROW);
+    d.power.state=0; desk_cursor_update(&d); assert(d.cursor_shape==DESK_CURSOR_BRUSH);
+    d.sh.notification.active=1; desk_cursor_update(&d); assert(d.cursor_shape==DESK_CURSOR_ARROW);
+    d.sh.notification.active=0; desk_cursor_update(&d); assert(d.cursor_shape==DESK_CURSOR_BRUSH);
+    box=desk_content(&d.clients[j]); d.mouse_x=box.x+20; d.mouse_y=box.y+20; desk_cursor_update(&d);
+    assert(d.cursor_shape==DESK_CURSOR_ARROW);
+    d.mouse_x=d.clients[i].frame.x+40; d.mouse_y=d.clients[i].frame.y+5; desk_cursor_update(&d); assert(d.cursor_shape==DESK_CURSOR_ARROW);
+    m.sender_pid=43; desk_receive(&d,i,&m); assert(!d.clients[i].window && d.clients[j].window);
+    cleanup(); puts("PASS cursor requests: v2 bounds/direction/length/fds, sending window only, power/notification override, inactive peers and chrome unchanged, sender rejection");
+}
 static void test_titles(void)
 {
     struct ciuki_message m, bad; struct desk_packet p;
@@ -782,7 +815,7 @@ static void test_dos_fullscreen_restore_frame(void)
 }
 int main(void)
 {
-    test_protocol(); test_titles(); test_resize_protocol(); test_damage();
+    test_protocol(); test_titles(); test_cursor_requests(); test_resize_protocol(); test_damage();
     test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
     test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();

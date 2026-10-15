@@ -19,6 +19,8 @@ enum { P_CANVAS = 100, P_HSCROLL, P_VSCROLL, P_STATUS, P_TOOL = 200, P_SWATCH = 
 struct paint_state {
     int width, height, tool, zoom, scroll_x, scroll_y, dirty, can_undo, can_redo;
     int selection, floating, text, operation, selection_x, selection_y, selection_w, selection_h;
+    int free_select;
+    size_t text_cursor, text_anchor, text_bytes;
     uint8_t foreground, background;
     struct du_rect view, options, colors;
 };

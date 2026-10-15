@@ -146,6 +146,17 @@ static void scenario(unsigned available)
     memmove(pixels,pixels+7*width,(height-7)*width*4);
     for (unsigned p=(height-7)*width;p<height*width;p++) pixels[p]=(p*7631u)&0xffffff;
     dirty_client(i);redraw();
+    /* Application requests change the actual cursor in both presenters.
+     * Compare every Paint shape after rapid switches and screen clipping. */
+    for(unsigned shape=DESK_CURSOR_TEXT;shape<DESK_CURSOR_COUNT;shape++) {
+        d.clients[i].cursor=shape;
+        struct desk_box content=desk_content(&d.clients[i]);
+        d.mouse_x=content.x+12; d.mouse_y=content.y+12;
+        desk_cursor_update(&d); assert(d.cursor_shape==shape); redraw();
+        d.mouse_x=0; d.mouse_y=0; d.cursor_shape=shape; d.cursor_dirty=1; redraw();
+        d.mouse_x=(int)d.width-1; d.mouse_y=(int)d.height-1; d.cursor_dirty=1; redraw();
+    }
+    d.clients[i].cursor=DESK_CURSOR_ARROW; desk_cursor_update(&d); redraw();
     if (available&2u) assert(window_copies==before_copies+1);
     before_copies=window_copies;
     memmove(pixels+5*width,pixels,(height-5)*width*4);
@@ -207,5 +218,5 @@ int main(void)
     dirty_client(i);redraw();assert(copies>0);
     for(int k=0;k<DESK_CLIENTS;k++)desk_drop_client(&d,k);
     desk_render_release(&d);free(d.pixels);free(scanout);assert(!fake_live());
-    puts("desktop acceleration/fallback visible-frame equivalence and late-ready rectangles: PASS");return 0;
+    puts("desktop acceleration/fallback visible-frame equivalence, Paint cursor shapes/hotspots/clipping and late-ready rectangles: PASS");return 0;
 }

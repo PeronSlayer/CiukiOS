@@ -32,7 +32,6 @@ struct cn_app {
     /* document */
     struct du_textarea ta;
     char path[CN_PATH]; int named, crlf;
-    char clip[CN_LIMIT + 1]; size_t clip_len; char mirror[DU_TEXT_MAX];
     /* view and command state */
     int show_status, find_mode, match_case, find_up;
     char note[96], filter[64];

@@ -213,6 +213,7 @@ int du_ta_set_text(struct du_textarea *ta, const char *s, size_t n)
     memcpy(ta->text, s, n); ta->text[n] = 0; ta->len = n; ta->lf = (unsigned)count_lf(s, n);
     ta->cursor = ta->anchor = 0; ta->top = ta->left = 0; ta->undo_valid = 0; ta->undo_kind = DU_TA_EDIT_OTHER;
     ta->modified = 0; ta->limit_hit = 0; ta->vl_dirty = 1; ta->want_valid = 0; ta->affinity = 0; ta->edit_cursor = 0;
+    memset(&ta->selection, 0, sizeof(ta->selection)); ta->drag = DU_TA_DRAG_NONE;
     return 0;
 }
 int du_ta_insert(struct du_textarea *ta, const char *s, size_t n, enum du_ta_edit kind)
@@ -256,16 +257,7 @@ void du_ta_select_all(struct du_textarea *ta) { du_ta_select(ta, 0, ta->len); }
 void du_ta_select_word(struct du_textarea *ta, size_t at)
 {
     break_group(ta);
-    at = snap(ta, at);
-    if (!ta->len) return;
-    if (at >= ta->len || ta->text[at] == '\n') {
-        if (!at || ta->text[prev_of(ta, at)] == '\n') return;
-        at = prev_of(ta, at);
-    }
-    int cls = cclass((unsigned char)ta->text[at]);
-    size_t a = at, b = next_of(ta, at);
-    while (a > 0) { size_t p = prev_of(ta, a); if (ta->text[p] == '\n' || cclass((unsigned char)ta->text[p]) != cls) break; a = p; }
-    while (b < ta->len && ta->text[b] != '\n' && cclass((unsigned char)ta->text[b]) == cls) b = next_of(ta, b);
+    size_t a, b; du_text_unit(ta->text, at, 2, &a, &b);
     ta->anchor = a; ta->cursor = b; ta->want_valid = 0; ta->affinity = 0; du_ta_reveal(ta);
 }
 void du_ta_move(struct du_textarea *ta, enum du_ta_motion m, int extend)
@@ -430,6 +422,14 @@ size_t du_ta_hit(struct du_textarea *ta, struct du_rect box, int x, int y)
     int col = cx < 0 ? 0 : cx / DU_TA_CELL_W;
     return offset_at(ta, (unsigned)vi, (unsigned)col + ta->left);
 }
+static void reveal_pointer(struct du_textarea *ta)
+{
+    size_t cursor=ta->cursor;
+    /* A line includes its newline. Keep its last selected character visible
+     * instead of scrolling a one-row view to the next, unselected line. */
+    if(ta->selection.clicks>1 && ta->cursor>ta->anchor)ta->cursor=prev_of(ta,ta->cursor);
+    du_ta_reveal(ta); ta->cursor=cursor;
+}
 int du_ta_mouse_down(struct du_textarea *ta, struct du_rect box, int x, int y, unsigned modifiers, uint64_t ns)
 {
     struct geo g; geometry(ta, box, &g);
@@ -446,16 +446,10 @@ int du_ta_mouse_down(struct du_textarea *ta, struct du_rect box, int x, int y, u
     }
     if (!du_contains(g.text, x, y)) return 0;
     size_t off = du_ta_hit(ta, box, x, y);
-    int dx = x > ta->click_x ? x - ta->click_x : ta->click_x - x, dy = y > ta->click_y ? y - ta->click_y : ta->click_y - y;
-    if (ta->click_ns && ns > ta->click_ns && ns - ta->click_ns <= DU_TA_DOUBLE_NS && dx <= 4 && dy <= 4) {
-        du_ta_select_word(ta, off); ta->click_ns = 0; ta->drag = DU_TA_DRAG_NONE;
-        return 1;
-    }
-    ta->click_ns = ns ? ns : 1; ta->click_x = x; ta->click_y = y;
     break_group(ta);
-    ta->cursor = off; if (!(modifiers & DU_SHIFT)) ta->anchor = off;
+    du_select_click(&ta->selection, ta->text, off, (modifiers & DU_SHIFT) != 0, ns, x, y, &ta->anchor, &ta->cursor);
     ta->want_valid = 0; ta->affinity = 0; ta->drag = DU_TA_DRAG_SELECT;
-    du_ta_reveal(ta);
+    reveal_pointer(ta);
     return 1;
 }
 int du_ta_mouse_move(struct du_textarea *ta, struct du_rect box, int x, int y)
@@ -465,8 +459,9 @@ int du_ta_mouse_move(struct du_textarea *ta, struct du_rect box, int x, int y)
     if (ta->drag == DU_TA_DRAG_VTHUMB) { struct du_sb v = vscroll(ta, &g); ta->top = (unsigned)du_sb_drag(&v, x, y, ta->grab); return 1; }
     if (ta->drag == DU_TA_DRAG_HTHUMB) { struct du_sb h = hscroll(ta, &g); ta->left = (unsigned)du_sb_drag(&h, x, y, ta->grab); return 1; }
     break_group(ta);
-    ta->cursor = du_ta_hit(ta, box, x, y); ta->want_valid = 0; ta->affinity = 0;
-    du_ta_reveal(ta);
+    du_select_drag(&ta->selection, ta->text, du_ta_hit(ta, box, x, y), &ta->anchor, &ta->cursor);
+    ta->want_valid = 0; ta->affinity = 0;
+    reveal_pointer(ta);
     return 1;
 }
 void du_ta_mouse_up(struct du_textarea *ta) { ta->drag = DU_TA_DRAG_NONE; }
@@ -479,6 +474,20 @@ int du_ta_key(struct du_textarea *ta, unsigned code, unsigned modifiers)
 {
     int shift = (modifiers & DU_SHIFT) != 0, ctrl = (modifiers & DU_CTRL) != 0;
     if (modifiers & DU_ALT) return 0;
+    ta->selection.ns = 0;
+    if (ctrl) {
+        if (code == 0x1e) { du_ta_select_all(ta); return 1; }
+        if (code == 0x2e || code == 0x2d) {
+            size_t a, b; du_ta_selection(ta, &a, &b);
+            if (a != b && !du_clipboard_set_n(ta->text + a, b - a) && code == 0x2d)
+                du_ta_delete_selection(ta);
+            return 1;
+        }
+        if (code == 0x2f) {
+            const char *s = du_clipboard_get();
+            du_ta_insert(ta, s, strlen(s), DU_TA_EDIT_OTHER); return 1;
+        }
+    }
     switch (code) {
     case DU_KEY_LEFT: du_ta_move(ta, ctrl ? DU_TA_WORD_LEFT : DU_TA_LEFT, shift); return 1;
     case DU_KEY_RIGHT: du_ta_move(ta, ctrl ? DU_TA_WORD_RIGHT : DU_TA_RIGHT, shift); return 1;
@@ -498,6 +507,7 @@ int du_ta_key(struct du_textarea *ta, unsigned code, unsigned modifiers)
 int du_ta_text(struct du_textarea *ta, unsigned ch)
 {
     if (ch < 32 || ch == 127 || ch > 0x10ffffu) return 0;
+    ta->selection.ns = 0;
     char s[4]; size_t n;
     if (ch < 0x80) { s[0] = (char)ch; n = 1; }
     else if (ch < 0x800) { s[0] = (char)(0xc0 | (ch >> 6)); s[1] = (char)(0x80 | (ch & 63)); n = 2; }
@@ -572,7 +582,7 @@ void du_ta_draw(struct du_canvas *c, struct du_rect box, struct du_textarea *ta,
         if (end < ta->len && ta->text[end] == '\n' && a <= end && b > end && col >= ta->left && col < ta->left + ta->cols)
             du_fill(c, (struct du_rect){ox + ((int)col - (int)ta->left) * DU_TA_CELL_W, y, DU_TA_CELL_W, DU_TA_CELL_H}, sel_bg);
     }
-    if (focused) {
+    if (focused && a == b) {
         unsigned vi, col; locate(ta, ta->cursor, ta->affinity, &vi, &col);
         if (vi >= ta->top && vi < ta->top + ta->rows && col >= ta->left && col <= ta->left + ta->cols)
             du_vline(c, ox + ((int)col - (int)ta->left) * DU_TA_CELL_W - 1, oy + (int)(vi - ta->top) * DU_TA_CELL_H + 1, DU_TA_CELL_H - 2, DU_INK);

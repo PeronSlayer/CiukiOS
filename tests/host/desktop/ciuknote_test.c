@@ -254,7 +254,7 @@ static void test_clipboard_and_undo(void)
     press(0x153); assert(has_text("wo three"));
     /* The clipboard holds a whole document, not the 1 KiB edit-box mirror. */
     char big[4000]; memset(big, 'x', sizeof(big) - 1); big[sizeof(big) - 1] = 0;
-    reset(0); fresh_text(big); CTRL(0x1e); CTRL(0x2e); assert(strlen(du_clipboard_get()) == DU_TEXT_MAX - 1);
+    reset(0); fresh_text(big); CTRL(0x1e); CTRL(0x2e); assert(strlen(du_clipboard_get()) == sizeof(big) - 1);
     press(0x14f); CTRL(0x2f); assert(app.ta.len == 2 * (sizeof(big) - 1));
     /* A string copied in an edit box wins over the document clipboard. */
     du_clipboard_set("from-elsewhere"); CTRL(0x2f); assert(app.ta.len == 2 * (sizeof(big) - 1) + 14);
@@ -629,8 +629,9 @@ static void test_mouse_text(void)
     assert(!strcmp(status_pos(), "Ln 3, Col 6"));
     mono_ns += 2000000000ull; click(cell_x(5), cell_y(0)); mono_ns += 100000000ull; click(cell_x(5), cell_y(0));
     { size_t a, b; du_ta_selection(&app.ta, &a, &b); assert(a == 4 && b == 7); }                                       /* double-click: "two" */
-    mono_ns += 100000000ull; click(cell_x(5), cell_y(0)); assert(!du_ta_has_selection(&app.ta));                         /* the third click is single */
-    click_button(2, cell_x(8), cell_y(1)); assert(app.ta.cursor == 5 && ui.popup);                                      /* right click keeps the caret */
+    mono_ns += 100000000ull; click(cell_x(5), cell_y(0));
+    { size_t a,b; du_ta_selection(&app.ta,&a,&b); assert(a==0 && b==14); } /* third click selects the line */
+    click_button(2, cell_x(8), cell_y(1)); assert(app.ta.cursor == 14 && ui.popup); /* right click preserves selection */
     ESC;
     /* The scroll bars: 40 lines scroll vertically; the arrow and the track move the view. */
     char many[800]; many[0] = 0; for (int i = 0; i < 40; i++) strcat(many, "line number\n");

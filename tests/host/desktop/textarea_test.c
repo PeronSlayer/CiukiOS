@@ -250,11 +250,11 @@ static void test_pointer(void)
     assert(du_ta_mouse_down(&ta, BOX, 5, 7, 0, 2000000000ull)); du_ta_mouse_up(&ta); at(0);
     assert(du_ta_mouse_down(&ta, BOX, px(2), py(1), DU_SHIFT, 3000000000ull)); sel(0, 6); assert(ta.cursor == 6 && ta.anchor == 0);
     du_ta_mouse_up(&ta);
-    /* Double-click selects the word; a third click is single again. */
+    /* Double-click selects a word; triple-click selects its logical line. */
     load("abc def ghi", DU_TA_LIMIT); du_ta_fit(&ta, BOX);
     assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 1000000000ull)); du_ta_mouse_up(&ta); assert(ta.cursor == 5);
     assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 1300000000ull)); sel(4, 7); du_ta_mouse_up(&ta);
-    assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 1400000000ull)); at(5); du_ta_mouse_up(&ta);
+    assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 1400000000ull)); sel(0,11); du_ta_mouse_up(&ta);
     /* A slow or distant second click is a plain click. */
     assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 3000000000ull)); du_ta_mouse_up(&ta); at(5);
     assert(du_ta_mouse_down(&ta, BOX, px(5), py(0), 0, 3600000000ull)); du_ta_mouse_up(&ta); at(5);

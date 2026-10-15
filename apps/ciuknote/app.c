@@ -102,7 +102,7 @@ static void shrink32(const uint32_t *src, uint32_t *dst)
 
 /* ---- menus and status ---------------------------------------------------- */
 
-static int paste_available(const struct cn_app *a) { return a->clip_len || du_clipboard_get()[0]; }
+static int paste_available(const struct cn_app *a) { (void)a; return du_clipboard_get()[0]; }
 static void set_flag(struct du_menu_item *item, unsigned flag, int on) { if (on) item->flags |= flag; else item->flags &= ~flag; }
 
 void cn_refresh(struct cn_app *a)
@@ -245,21 +245,14 @@ static void command_save(struct cn_app *a)
     if (r) failure(a, "The file could not be saved:", document_name(a), r);
     cn_refresh(a);
 }
-static void copy_selection(struct cn_app *a)
+static int copy_selection(struct cn_app *a)
 {
     size_t s, e; du_ta_selection(&a->ta, &s, &e);
-    size_t n = e - s, m = 0;
-    memcpy(a->clip, a->ta.text + s, n); a->clip[n] = 0; a->clip_len = n;
-    /* Edit boxes are single-line: mirror the first line, within their size, on a character boundary. */
-    while (m < n && m < DU_TEXT_MAX - 1 && a->clip[m] != '\n') m++;
-    while (m > 0 && m < n && ((unsigned char)a->clip[m] & 0xc0) == 0x80) m--;
-    memcpy(a->mirror, a->clip, m); a->mirror[m] = 0;
-    du_clipboard_set(a->mirror);
+    return du_clipboard_set_n(a->ta.text + s, e - s);
 }
 static void paste(struct cn_app *a)
 {
-    const char *external = du_clipboard_get(), *source = external; size_t n = strlen(external);
-    if (a->clip_len && !strcmp(external, a->mirror)) { source = a->clip; n = a->clip_len; }
+    const char *source = du_clipboard_get(); size_t n = strlen(source);
     if (n) du_ta_insert(&a->ta, source, n, DU_TA_EDIT_OTHER);
 }
 static void insert_time(struct cn_app *a)
@@ -436,7 +429,7 @@ static void menu_command(struct cn_app *a, int id)
     case M_SAVEAS: file_dialog(a, 1, ""); break;
     case M_EXIT: guard(a, CN_AFTER_EXIT); break;
     case M_UNDO: du_ta_undo(&a->ta); after_edit(a); break;
-    case M_CUT: if (du_ta_has_selection(&a->ta)) { copy_selection(a); du_ta_delete_selection(&a->ta); } after_edit(a); break;
+    case M_CUT: if (du_ta_has_selection(&a->ta) && !copy_selection(a)) du_ta_delete_selection(&a->ta); after_edit(a); break;
     case M_COPY: if (du_ta_has_selection(&a->ta)) copy_selection(a); break;
     case M_PASTE: paste(a); after_edit(a); break;
     case M_DELETE: du_ta_delete_selection(&a->ta); after_edit(a); break;

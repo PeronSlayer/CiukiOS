@@ -12,6 +12,7 @@ int desk_ignore_sigpipe(void)
 void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32_t h)
 {
     memset(d, 0, sizeof(*d));
+    d->cursor_loaded = DESK_CURSOR_COUNT;
     d->ops = *ops; d->width = w; d->height = h;
     d->display = d->input = d->output = d->focus = d->drag = d->about = d->authority_fd = d->mixer_fd = -1;
     d->action = -1;

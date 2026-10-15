@@ -6,6 +6,12 @@
 static struct terminal app;
 static struct du_ui ui;
 static uint32_t pixels[TERM_WIDTH*TERM_HEIGHT], resized[800*600];
+static void selection_frame(const char *name)
+{
+    const char *prefix=getenv("CIUKI_TERMINAL_SELECTION"); if(!prefix)return;
+    char path[1200]; snprintf(path,sizeof(path),"%s-%s.xrgb",prefix,name); du_render(&ui);
+    FILE *f=fopen(path,"wb"); assert(f && fwrite(pixels,4,TERM_WIDTH*TERM_HEIGHT,f)==TERM_WIDTH*TERM_HEIGHT && !fclose(f));
+}
 static int device_error, cancel_after, pumps, launches, kills, powers, exits;
 static char launched[64], argument[FM_PATH];
 static uint32_t killed, powered;
@@ -120,6 +126,27 @@ static void lua_and_ui(void)
     at_move(&ui,4+9*TERM_CELL_W,5); e.value=0; du_input(&ui,&e); at_chord(&ui,DU_KEY_LCTRL,0x2e); assert(!strcmp(du_clipboard_get(),"selection"));
     du_clipboard_set("ECHO pasted"); at_chord(&ui,DU_KEY_LCTRL,0x2f); assert(!strcmp(app.input,"ECHO pasted"));
     at_tap(&ui,DU_KEY_ENTER); assert(output_has("pasted"));
+    /* Command editing uses the same selection and clipboard rules as fields. */
+    du_clipboard_set("alpha beta"); at_chord(&ui,DU_KEY_LCTRL,0x2f);
+    at_chord(&ui,DU_KEY_LSHIFT,DU_KEY_HOME); assert(app.anchor==10 && app.cursor==0);
+    selection_frame("command");
+    at_chord(&ui,DU_KEY_LCTRL,0x2e); assert(!strcmp(du_clipboard_get(),"alpha beta"));
+    at_tap(&ui,0x2c); assert(!strcmp(app.input,"z") && app.anchor==app.cursor);
+    at_chord(&ui,DU_KEY_LCTRL,0x1e); at_chord(&ui,DU_KEY_LCTRL,0x2d); assert(!app.input[0]);
+    at_chord(&ui,DU_KEY_LCTRL,0x2f); assert(!strcmp(app.input,"z")); at_tap(&ui,DU_KEY_ESC);
+    term_execute(&app,"CLS"); term_write(&app,"alpha beta\n"); app.top=0; app.follow=0;
+    ui.now+=1000000000ull; at_click(&ui,4+7*TERM_CELL_W,5);
+    ui.now+=100000000ull; at_click(&ui,4+7*TERM_CELL_W,5);
+    assert(app.selection_a==6 && app.selection_b==10);
+    selection_frame("word");
+    ui.now+=100000000ull; at_click(&ui,4+7*TERM_CELL_W,5);
+    assert(app.selection_a==0 && app.selection_b==app.columns);
+    selection_frame("line");
+    at_chord(&ui,DU_KEY_LCTRL,0x2d); assert(output_has("alpha beta") && !strcmp(du_clipboard_get(),"alpha beta\n"));
+    at_tap(&ui,DU_KEY_DELETE); assert(output_has("alpha beta"));
+    at_chord(&ui,DU_KEY_LSHIFT,DU_KEY_UP); assert(app.selection_b==0);
+    app.selection_a=app.selection_b=0; app.output_focus=0; app.follow=1;
+    puts("terminal selection: PASS command Shift/Home/End, select-all, cut/copy/paste, replacement; output word/line clicks, keyboard extension and read-only cut/delete");
     for(unsigned i=0;i<1100;i++)term_printf(&app,"row %u\n",i);
     assert(app.count==TERM_SCROLLBACK); char row[TERM_LINE+1]; term_row(&app,0,row,sizeof(row)); assert(!strcmp(row,"row 100"));
     unsigned old_top=app.top; at_tap(&ui,DU_KEY_PGUP); assert(app.top<old_top && !app.follow); at_tap(&ui,DU_KEY_PGDN);
@@ -147,7 +174,7 @@ int main(void)
     /* Deterministic review scene: the production fixed-cell painter, accents,
      * descenders, cursor and selection. Independent of previous command output. */
     term_execute(&app,"CLS"); term_write(&app,"CiukiOS Terminal\nClassic computing, one woof at a time.\nAVATAR To Wa 0123456789 gjpqy\n");
-    strcpy(app.input,"ECHO hello"); app.cursor=strlen(app.input); du_render(&ui);
+    strcpy(app.input,"ECHO hello"); app.anchor=app.cursor=strlen(app.input); du_render(&ui);
     const char *frame=getenv("CIUKI_TERMINAL_FRAME");
     if(frame) { FILE *f=fopen(frame,"wb"); assert(f); assert(fwrite(pixels,sizeof(*pixels),TERM_WIDTH*TERM_HEIGHT,f)==TERM_WIDTH*TERM_HEIGHT); assert(!fclose(f)); }
     term_detach(&app); fake_assert_clean(); du_release(&ui);

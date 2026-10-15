@@ -4,10 +4,82 @@
 #include "textarea.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef __linux__
+/* Host ABI headers also name the native sysconf selectors. */
+#undef _SC_ARG_MAX
+#undef _SC_OPEN_MAX
+#undef _SC_PAGESIZE
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#endif
+#include <unistd.h>
 
-static char clipboard[DU_TEXT_MAX];
-void du_clipboard_set(const char *s) { snprintf(clipboard, sizeof(clipboard), "%s", s ? s : ""); }
-const char *du_clipboard_get(void) { return clipboard; }
+static char *clipboard;
+static char clipboard_path[DU_TEXT_MAX] = "/system/settings/text.clip";
+static unsigned clipboard_serial;
+int du_clipboard_path(const char *path)
+{
+    if (!path) path = "/system/settings/text.clip";
+    if (strlen(path) + 40 >= sizeof(clipboard_path)) return -1;
+    strcpy(clipboard_path, path); free(clipboard); clipboard = NULL;
+    return 0;
+}
+int du_clipboard_set_n(const char *s, size_t n)
+{
+    if ((!s && n) || n > DU_CLIPBOARD_MAX || (n && memchr(s, 0, n))) return -1;
+    char *next = malloc(n + 1);
+    if (!next) return -1;
+    if (n) memcpy(next, s, n);
+    next[n] = 0;
+    /* As with the file clipboard, publish a complete replacement. Keep a
+     * local copy when storage is unavailable, including read-only sessions. */
+    char temp[DU_TEXT_MAX + 40];
+    int fd = -1;
+    for (unsigned i = 0; i < 32; ++i) {
+        snprintf(temp, sizeof(temp), "%s.%lu-%u.tmp", clipboard_path, (unsigned long)getpid(), ++clipboard_serial);
+        fd = open(temp, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (fd >= 0 || errno != EEXIST) break;
+    }
+    struct stat previous;
+    if (fd < 0 && !stat(clipboard_path, &previous)) { free(next); return -1; }
+    if (fd >= 0) {
+        size_t used = 0; int failed = 0;
+        while (used < n) {
+            ssize_t written = write(fd, next + used, n - used);
+            if (written < 0 && errno == EINTR) continue;
+            if (written <= 0) { failed = 1; break; }
+            used += (size_t)written;
+        }
+        if (!failed && fsync(fd)) failed = 1;
+        if (close(fd)) failed = 1;
+        if (!failed && rename(temp, clipboard_path)) failed = 1;
+        if (failed) { unlink(temp); free(next); return -1; }
+    }
+    free(clipboard); clipboard = next;
+    return 0;
+}
+void du_clipboard_set(const char *s) { (void)du_clipboard_set_n(s, s ? strlen(s) : 0); }
+const char *du_clipboard_get(void)
+{
+    FILE *f = fopen(clipboard_path, "rb");
+    if (f) {
+        char *next = NULL; long size = -1;
+        if (!fseek(f, 0, SEEK_END)) size = ftell(f);
+        if (size >= 0 && (unsigned long)size <= DU_CLIPBOARD_MAX && !fseek(f, 0, SEEK_SET)) {
+            next = malloc((size_t)size + 1);
+            if (next && (fread(next, 1, (size_t)size, f) != (size_t)size || ferror(f) || memchr(next, 0, (size_t)size))) {
+                free(next); next = NULL;
+            }
+        }
+        if (fclose(f)) { free(next); next = NULL; }
+        if (next) { next[size] = 0; free(clipboard); clipboard = next; }
+    }
+    return clipboard ? clipboard : "";
+}
 
 void du_emit(struct du_ui *u, struct du_event e)
 {
@@ -87,6 +159,7 @@ void du_set_text(struct du_widget *w, const char *s)
 {
     snprintf(w->text, sizeof(w->text), "%s", s ? s : "");
     w->cursor = w->anchor = strlen(w->text); w->offset = 0;
+    memset(&w->selection, 0, sizeof(w->selection));
 }
 
 int du_focusable(const struct du_widget *w)
@@ -105,37 +178,38 @@ int du_hit(const struct du_ui *u, int x, int y)
     return -1;
 }
 void du_cursor(struct du_ui *u, unsigned shape)
-{ if (shape<DESK_CURSOR_COUNT) u->cursor=shape; }
+{ if (shape < DESK_CURSOR_COUNT) u->cursor = shape; }
 static unsigned widget_cursor(const struct du_widget *w, const struct du_ui *u)
 {
     if (w->disabled) return DESK_CURSOR_FORBIDDEN;
-    if (w->pointer_cursor && w->pointer_cursor<DESK_CURSOR_COUNT) return w->pointer_cursor;
-    if (w->kind==DU_EDIT) return DESK_CURSOR_TEXT;
-    if (w->kind==DU_TEXTAREA && w->data) {
-        const struct du_textarea *ta=w->data;
-        if (ta->drag==DU_TA_DRAG_SELECT) return DESK_CURSOR_TEXT;
-        if (ta->drag==DU_TA_DRAG_VTHUMB || ta->drag==DU_TA_DRAG_HTHUMB) return DESK_CURSOR_ARROW;
-        struct du_rect text=w->box; text.w-=DU_TA_BAR;
-        if (!ta->wrap) text.h-=DU_TA_BAR;
-        return du_contains(text,u->mouse_x,u->mouse_y) ? DESK_CURSOR_TEXT : DESK_CURSOR_ARROW;
+    if (w->pointer_cursor && w->pointer_cursor < DESK_CURSOR_COUNT)
+        return !w->cursor_box.w || du_contains(w->cursor_box, u->mouse_x, u->mouse_y) ? w->pointer_cursor : DESK_CURSOR_ARROW;
+    if (w->kind == DU_EDIT) return DESK_CURSOR_TEXT;
+    if (w->kind == DU_TEXTAREA && w->data) {
+        const struct du_textarea *ta = w->data;
+        if (ta->drag == DU_TA_DRAG_SELECT) return DESK_CURSOR_TEXT;
+        if (ta->drag != DU_TA_DRAG_NONE) return DESK_CURSOR_ARROW;
+        struct du_rect text = w->box; text.x += 2; text.y += 2; text.w -= DU_TA_BAR + 4;
+        text.h -= 4 + (ta->wrap ? 0 : DU_TA_BAR);
+        if (ta->line_numbers) { text.x += 42; text.w -= 42; }
+        return du_contains(text, u->mouse_x, u->mouse_y) ? DESK_CURSOR_TEXT : DESK_CURSOR_ARROW;
     }
-    if (w->kind==DU_SPLITTER) return w->vertical ? DESK_CURSOR_RESIZE_EW : DESK_CURSOR_RESIZE_NS;
+    if (w->kind == DU_SPLITTER) return w->vertical ? DESK_CURSOR_RESIZE_EW : DESK_CURSOR_RESIZE_NS;
     return u->cursor;
 }
 unsigned du_cursor_at(const struct du_ui *u)
 {
-    if (!du_contains((struct du_rect){0,0,u->canvas.width,u->canvas.height},u->mouse_x,u->mouse_y) && u->capture<0)
-        return DESK_CURSOR_ARROW;
+    if (!du_contains((struct du_rect){0,0,u->canvas.width,u->canvas.height},u->mouse_x,u->mouse_y) && u->capture < 0) return DESK_CURSOR_ARROW;
     if (u->dialog.kind) {
-        const struct du_dialog *d=&u->dialog;
+        const struct du_dialog *d = &u->dialog;
         if (d->dragging) return DESK_CURSOR_MOVE;
-        for (unsigned n=d->count;n>0;n--) if (!d->items[n-1].hidden && du_contains(d->items[n-1].box,u->mouse_x,u->mouse_y))
-            return widget_cursor(&d->items[n-1],u);
+        for (unsigned n = d->count; n > 0; --n)
+            if (!d->items[n-1].hidden && du_contains(d->items[n-1].box,u->mouse_x,u->mouse_y)) return widget_cursor(&d->items[n-1],u);
         return du_contains(d->box,u->mouse_x,u->mouse_y) ? DESK_CURSOR_ARROW : DESK_CURSOR_FORBIDDEN;
     }
-    if (u->menu>=0 || u->popup) return DESK_CURSOR_ARROW;
-    int i=u->capture>=0 ? u->capture : du_hit(u,u->mouse_x,u->mouse_y);
-    return i>=0 && (unsigned)i<u->count ? widget_cursor(&u->widgets[i],u) : u->cursor;
+    if (u->menu >= 0 || u->popup) return DESK_CURSOR_ARROW;
+    int i = u->capture >= 0 ? u->capture : du_hit(u,u->mouse_x,u->mouse_y);
+    return i >= 0 && (unsigned)i < u->count ? widget_cursor(&u->widgets[i],u) : u->cursor;
 }
 
 void du_focus(struct du_ui *u, int id)
@@ -158,7 +232,15 @@ void du_release(struct du_ui *u)
         if (w->kind == DU_CANVAS) du_post(u, DU_EV_POINTER, w->id, DU_POINTER_CANCEL);
         w->pressed = 0; w->drag = 0;
     }
-    for (unsigned i = 0; i < u->dialog.count; i++) { u->dialog.items[i].pressed = 0; u->dialog.items[i].drag = 0; }
+    for (unsigned i = 0; i < u->count; i++) {
+        struct du_widget *w = &u->widgets[i];
+        w->selection.ns = 0;
+        if (w->kind == DU_TEXTAREA && w->data) { du_ta_mouse_up(w->data); ((struct du_textarea *)w->data)->selection.ns = 0; }
+    }
+    for (unsigned i = 0; i < u->dialog.count; i++) {
+        struct du_widget *w = &u->dialog.items[i]; w->pressed = 0; w->drag = 0; w->selection.ns = 0;
+        if (w->kind == DU_TEXTAREA && w->data) du_ta_mouse_up(w->data);
+    }
     u->dialog.dragging = 0;
     u->capture = -1; u->dirty = 1;
 }
@@ -259,6 +341,8 @@ void du_edit_press(struct du_widget *w, int x, int extend)
 
 int du_edit_key(struct du_ui *u, struct du_widget *w, unsigned code)
 {
+    if (w->disabled) return 0;
+    w->selection.ns = 0;
     size_t len = strlen(w->text);
     int shift = (u->modifiers & DU_SHIFT) != 0, ctrl = (u->modifiers & DU_CTRL) != 0;
     unsigned ch = du_key_char(u, code);
@@ -268,16 +352,15 @@ int du_edit_key(struct du_ui *u, struct du_widget *w, unsigned code)
         size_t a = sel_lo(w), b = sel_hi(w);
         if (b > a) {
             char copy[DU_TEXT_MAX]; memcpy(copy, w->text + a, b - a); copy[b - a] = 0;
-            du_clipboard_set(copy);
-            if (code == 0x2d) du_edit_insert(w, "");
+            if (!du_clipboard_set_n(copy, b - a) && code == 0x2d) du_edit_insert(w, "");
         }
     } else if (ctrl && code == 0x2f) du_edit_insert(w, du_clipboard_get());
     else if (code == DU_KEY_LEFT || code == DU_KEY_RIGHT) {
         if (!shift && w->cursor != w->anchor) w->cursor = code == DU_KEY_LEFT ? sel_lo(w) : sel_hi(w);
         else w->cursor = code == DU_KEY_LEFT ? du_utf8_prev(w->text, w->cursor) : du_utf8_next(w->text, w->cursor);
         if (!shift) w->anchor = w->cursor;
-    } else if (code == DU_KEY_HOME || code == DU_KEY_END) {
-        w->cursor = code == DU_KEY_HOME ? 0 : len;
+    } else if (code == DU_KEY_HOME || code == DU_KEY_END || code == DU_KEY_UP || code == DU_KEY_DOWN) {
+        w->cursor = code == DU_KEY_HOME || code == DU_KEY_UP ? 0 : len;
         if (!shift) w->anchor = w->cursor;
     } else if (code == DU_KEY_BACKSPACE || code == DU_KEY_DELETE) {
         if (w->cursor == w->anchor)
@@ -332,7 +415,7 @@ void du_draw_edit(struct du_canvas *c, struct du_widget *w, int focused)
             c->clip = keep;
         }
     }
-    if (focused) du_vline(c, x + desk_text_measure_n(font, w->text + start, cursor_chars - w->offset) - 1, y - 3, DU_GLYPH_H + 6, DU_INK);
+    if (focused && w->cursor == w->anchor) du_vline(c, x + desk_text_measure_n(font, w->text + start, cursor_chars - w->offset) - 1, y - 3, DU_GLYPH_H + 6, DU_INK);
     c->clip = old;
 }
 
@@ -782,6 +865,7 @@ static void toggle(struct du_ui *u, struct du_widget *w)
 
 int du_widget_key(struct du_ui *u, struct du_widget *w, unsigned code)
 {
+    if (w->disabled) return 0;
     switch (w->kind) {
     case DU_EDIT: return du_edit_key(u, w, code);
     case DU_LISTVIEW: case DU_TREE: return du_list_key(u, w, code);
@@ -826,10 +910,11 @@ int du_widget_press(struct du_ui *u, struct du_widget *w, int button, int x, int
         return 1;
     case DU_EDIT:
         if (button == 1) {
-            uint64_t now = u->now;
-            if (u->last_click_widget == w->id && now - u->last_click_ns < DU_DOUBLE_CLICK_NS) { w->anchor = 0; w->cursor = strlen(w->text); }
-            else { du_edit_press(w, x, (u->modifiers & DU_SHIFT) != 0); w->drag = 1; }
-            u->last_click_widget = w->id; u->last_click_ns = now;
+            size_t anchor = w->anchor;
+            du_edit_press(w, x, 1);
+            du_select_click(&w->selection, w->text, w->cursor, (u->modifiers & DU_SHIFT) != 0,
+                            u->now, x, y, &anchor, &w->cursor);
+            w->anchor = anchor; w->drag = 1; u->dirty = 1;
         } else if (button == 2) du_emit(u, (struct du_event){.type = DU_EV_CONTEXT, .id = w->id, .index = -1, .x = x, .y = y});
         return 1;
     case DU_TEXTAREA:
@@ -866,7 +951,11 @@ void du_widget_motion(struct du_ui *u, struct du_widget *w, int x, int y)
         if (hot != w->hot) { w->hot = (uint8_t)hot; u->dirty = 1; }
         break;
     }
-    case DU_EDIT: if (w->drag) { du_edit_press(w, x, 1); u->dirty = 1; } break;
+    case DU_EDIT: if (w->drag) {
+        du_edit_press(w, x, 1);
+        du_select_drag(&w->selection, w->text, w->cursor, &w->anchor, &w->cursor);
+        u->dirty = 1;
+    } break;
     case DU_TEXTAREA: if (w->data && du_ta_mouse_move(w->data, w->box, x, y)) du_post(u, DU_EV_CHANGE, w->id, 0); break;
     case DU_LISTVIEW: case DU_TREE: du_list_motion(u, w, x, y); break;
     case DU_SCROLLBAR:
@@ -939,8 +1028,10 @@ static void key_down(struct du_ui *u, unsigned code)
         }
     }
     struct du_widget *f = u->focus >= 0 && (unsigned)u->focus < u->count ? &u->widgets[u->focus] : NULL;
-    if (f && f->hidden) f = NULL;
+    if (f && (f->hidden || f->disabled)) f = NULL;
     if (f && f->kind == DU_EDIT && du_edit_key(u, f, code)) return;
+    if (f && f->kind == DU_TEXTAREA && f->data && ((struct du_textarea *)f->data)->readonly &&
+        du_widget_key(u, f, code)) return;
     if (du_menu_accelerator(u, code)) return;
     /* f2-33: Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PgDn/PgUp cycle the first visible tab control. */
     if ((u->modifiers & DU_CTRL) && !(u->modifiers & DU_ALT) && (code == DU_KEY_TAB || code == DU_KEY_PGUP || code == DU_KEY_PGDN))

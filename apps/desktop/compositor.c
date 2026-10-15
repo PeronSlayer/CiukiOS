@@ -7,6 +7,7 @@
 #include <string.h>
 #include "rows.h"
 #include "../../assets/cursors/cursors.h"
+#include "../../assets/cursors/paint.h"
 /* libdeskui also links this unit for glyphs/frames without the desktop server. */
 extern void desk_gfx_complete(struct desktop *,int,int,uint64_t,uint64_t) __attribute__((weak));
 /* The host benchmark supplies this macro; native builds contain no timers. */
@@ -574,13 +575,23 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
     desk_paint_fill(&p,bar.x,bar.y+1,bar.w,1,t->hilite);
     if (desk_shell_overlay) desk_shell_overlay(d,clip);
 }
-_Static_assert(sizeof(desk_cursors)/sizeof(desk_cursors[0])==DESK_CURSOR_COUNT,"cursor inventory");
-static const struct desk_cursor_raster *cursor_raster(const struct desktop *d)
-{ return &desk_cursors[d->cursor_shape<DESK_CURSOR_COUNT ? d->cursor_shape : DESK_CURSOR_ARROW]; }
+_Static_assert(sizeof(desk_cursors)/sizeof(desk_cursors[0])==DESK_CURSOR_PRECISION+1,"generic cursor inventory");
+_Static_assert(DESK_CURSOR_ERASER+1==DESK_CURSOR_COUNT,"paint cursor inventory");
+static struct desk_cursor_raster cursor_raster(const struct desktop *d)
+{
+    unsigned shape=d->cursor_shape;
+    if (shape<=DESK_CURSOR_PRECISION) return desk_cursors[shape];
+    if (shape>=DESK_CURSOR_COUNT) return desk_cursors[DESK_CURSOR_ARROW];
+    struct desk_tool_cursor tool=desk_tool_cursor(shape);
+    struct desk_cursor_raster raster={(unsigned)tool.hot_x,(unsigned)tool.hot_y,32,32,{0},{0}};
+    memcpy(raster.mask,tool.mask,sizeof(raster.mask));
+    memcpy(raster.image,tool.image,sizeof(raster.image));
+    return raster;
+}
 static struct desk_box pointer_box(const struct desktop *d)
 {
-    const struct desk_cursor_raster *r=cursor_raster(d);
-    return (struct desk_box){d->mouse_x-(int)r->hot_x,d->mouse_y-(int)r->hot_y,(int)r->width,(int)r->height};
+    struct desk_cursor_raster r=cursor_raster(d);
+    return (struct desk_box){d->mouse_x-(int)r.hot_x,d->mouse_y-(int)r.hot_y,(int)r.width,(int)r.height};
 }
 /* Exact horizontal opaque-region sweep. At most N+1 spans survive N
  * occluders on a row; geometry boundaries join rows into bands. No region
@@ -692,7 +703,7 @@ static void cursor(struct desktop *d, struct desk_box clip)
 {
     struct desk_box b;
     struct desk_box box=pointer_box(d);
-    const struct desk_cursor_raster *r=cursor_raster(d);
+    struct desk_cursor_raster r=cursor_raster(d);
     if (d->hw_cursor || !desk_intersect(box,clip,&b)) return;
     uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
     int stride=(int)d->width;
@@ -701,7 +712,7 @@ static void cursor(struct desktop *d, struct desk_box clip)
         for (int x=0; x<b.w; x++) {
             uint32_t bit=0x80000000u>>(b.x+x-box.x);
             unsigned row=(unsigned)(b.y+y-box.y);
-            if (r->mask[row]&bit) dst[x]=r->image[row]&bit ? 0xffffffu : 0x101010u;
+            if (r.mask[row]&bit) dst[x]=r.image[row]&bit ? 0xffffffu : 0x101010u;
         }
     }
 }
@@ -740,8 +751,8 @@ void desk_accel_reset(struct desktop *d, uint32_t generation)
     d->cursor_loaded=DESK_CURSOR_COUNT;
     if (d->accel_caps&2u) {
         q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
-        const struct desk_cursor_raster *r=cursor_raster(d);
-        memcpy(q.cursor_mask,r->mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r->image,sizeof(q.cursor_image));
+        struct desk_cursor_raster r=cursor_raster(d);
+        memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
         if (!accel_call(d,&q)) { d->hw_cursor=1; d->cursor_loaded=d->cursor_shape; }
     }
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
@@ -1084,8 +1095,8 @@ int desk_redraw(struct desktop *d)
     if (d->hw_cursor && d->cursor_dirty && complete) {
         if (d->cursor_loaded!=d->cursor_shape) {
             struct ciuki_accel_request q={.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
-            const struct desk_cursor_raster *r=cursor_raster(d);
-            memcpy(q.cursor_mask,r->mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r->image,sizeof(q.cursor_image));
+            struct desk_cursor_raster r=cursor_raster(d);
+            memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
             if (accel_call(d,&q)) { d->hw_cursor=0; complete=0; }
             else d->cursor_loaded=d->cursor_shape;
         }
