@@ -199,7 +199,7 @@ version is rejected; a later version is a new layout with its own size.
 | `0x000` | `magic` | u32 | `0x31494243` (`"CBI1"`) |
 | `0x004` | `version` | u16 | `1` |
 | `0x006` | `size` | u16 | `0x10F0` |
-| `0x008` | `flags` | u32 | bit 0 safe mode; 1 serial log selected; 2 EDID valid; 3 VBE controller info valid; 4 text mode (no LFB); 5 SMBIOS reports QEMU; 6 test request present; 7 input policy forced by validated QEMU fw_cfg `platform=e500` (requires bits 5 and 6, `input_policy = 1` and the matching selector; zero otherwise); bits 8–10 A20 method (1 already on, 2 `INT 15h`, 3 keyboard controller, 4 port `92h`); 11 boot log on screen (menu `L`, amendment 2026-10-12) |
+| `0x008` | `flags` | u32 | bit 0 safe mode; 1 serial log selected; 2 EDID valid; 3 VBE controller info valid; 4 text mode (no LFB); 5 SMBIOS reports QEMU; 6 test request present; 7 input policy forced by validated QEMU fw_cfg `platform=e500` (requires bits 5 and 6, `input_policy = 1` and the matching selector; zero otherwise); bits 8–10 A20 method (1 already on, 2 `INT 15h`, 3 keyboard controller, 4 port `92h`); 11 boot log on screen (menu `L`, amendment 2026-10-12); 12 high-volume device/VM diagnostics (accepted fw_cfg selector, amendment 2026-10-15) |
 | `0x00C` | `boot_drive` | u8 | BIOS drive number |
 | `0x00D` | `memmap_source` | u8 | `1` = E820 (the only accepted value) |
 | `0x00E` | `input_policy` | u8 | `0` native i8042, `1` firmware-first |
@@ -393,6 +393,16 @@ values, and any later change to a target needs a measurement on QEMU at
   the display, and draws the history on a panic, double fault, desktop
   failure or a 120 s watchdog. See `docs/boot.md`.
 
+
+### Amendment 2026-10-15: diagnostic verbosity
+
+Bit 12 (`CBI_F_DIAG_VERBOSE`) selects UHCI schedule dumps, HID poll/pipe
+traces, VM performance samples and recurring accelerator summaries. An accepted
+fw_cfg test selector sets it. Ordinary hardware boots, BOOT.CFG selectors and
+the screen-log `L` choice leave it clear. `CBI_F_DEFINED_MASK` is now
+`0x00001FFF`; the handoff version, size and offsets remain unchanged. Existing
+selector strings and suite predicates remain valid. See
+[F0-22 research and validation](../validation/f0-22-hardware-log-cost-and-timer-gaps.md).
 
 ### f1-23 amendment: bootinfo version 2 display extension
 

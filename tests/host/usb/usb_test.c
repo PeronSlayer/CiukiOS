@@ -731,6 +731,12 @@ static void basic(bool ohci,bool hub)
 }
 static void uhci_schedule_regression(void)
 {
+    const uint32_t quiet_flags[] = {0, CBI_F_VERBOSE, CBI_F_TEST_REQUEST};
+    for (unsigned i=0;i<ARRAY_SIZE(quiet_flags);i++) {
+        setup(false,false);g_boot.flags=quiet_flags[i];assert(!attach());model_step();
+        assert(!schedule_entries && !schedule_qhs && !hid_polls[1] && !hid_pipes[1]);
+        usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
+    }
     setup(false,false);assert(!attach());
     for(unsigned frame=0;frame<1024;frame++) assert(((uint32_t *)m.dma)[frame]==0x101202);
     uint32_t link=((uint32_t *)m.dma)[0];
@@ -744,7 +750,7 @@ static void uhci_schedule_regression(void)
     assert(control[1]==1 && control[0]==(m.host.dma_phys+USB_UHCI_BULK_QH+2));
     volatile uint32_t *bulk=uhci_dma(&m,control[0]&~15u,8);assert(bulk[0]==1 && bulk[1]==1);
     model_step();assert(m.host.device_count==2 && !schedule_entries && !schedule_qhs);
-    g_boot.flags=CBI_F_VERBOSE;m.host.next_scan=m.now;model_step();
+    g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;m.host.next_scan=m.now;model_step();
     assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==2 && !schedule_invalid);
     assert(m.host.schedule_dumped);model_step();assert(schedule_entries==4 && schedule_qhs==66);
     /* Inject a missing interrupt-tail -> control edge. This reproduces the
@@ -779,8 +785,8 @@ static void uhci_schedule_regression(void)
     ((uint32_t *)m.dma)[0]=m.host.dma_phys+USB_HID_BASE+2;m.host.schedule_dumped=false;
     bulk[0]=m.host.dma_phys+USB_HID_BASE+2;usb_uhci_dump_schedule(&m.host);assert(schedule_invalid==2);bulk[0]=1;
     usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
-    setup(true,false);g_boot.flags=CBI_F_VERBOSE;assert(!attach());model_step();assert(!schedule_entries && !schedule_qhs);
-    setup(false,false);g_boot.flags=CBI_F_TEST_REQUEST;assert(!attach());model_step();
+    setup(true,false);g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;assert(!attach());model_step();assert(!schedule_entries && !schedule_qhs);
+    setup(false,false);g_boot.flags=CBI_F_TEST_REQUEST | CBI_F_DIAG_VERBOSE;assert(!attach());model_step();
     assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==2);
     usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
     puts("PASS USB UHCI periodic/control/bulk reachability, missing-tail fault reproduces NAK EAGAIN/addr0 timeout, restored ACK/input, once-only bounded verbose/test dump");
@@ -882,7 +888,7 @@ static void delayed_frame_hid(bool ohci)
     m.dev[2]=(struct peripheral){.kind=MOUSE,.present=true};
     m.hub_status[0]|=1;m.hub_change[0]=1;
     if(ohci)m.regs[0x58/4]=1;
-    g_boot.flags=CBI_F_VERBOSE;
+    g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;
     assert(!attach());model_step();
     struct usb_device *kbd=&m.host.devices[0],*mouse=&m.host.devices[2];
     assert(kbd->hid[0].active && mouse->parent==2 && mouse->hid[0].active);
@@ -899,7 +905,7 @@ static void delayed_frame_hid(bool ohci)
     assert(kbd->hid[0].toggle==1 && mouse->hid[0].toggle==1 && m.host.ready);
     memset(m.dev[0].report,0,8);m.dev[0].report_len=8;
     memset(m.dev[2].report,0,8);m.dev[2].report_len=4;
-    g_boot.flags=CBI_F_TEST_REQUEST; /* Test boots enable the same diagnostics. */
+    g_boot.flags=CBI_F_TEST_REQUEST | CBI_F_DIAG_VERBOSE; /* Accepted fw_cfg selector. */
     m.now+=20;model_step();
     assert(!held[0x58] && !buttons[0] && !kbd->hid[0].toggle && !mouse->hid[0].toggle);
     assert(f12_up_records==1);
@@ -1225,7 +1231,7 @@ static void hid_recovery(bool ohci)
 }
 static void persistent_nak(bool ohci)
 {
-    setup(ohci,false);g_boot.flags=CBI_F_VERBOSE;assert(!attach());model_step();
+    setup(ohci,false);g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;assert(!attach());model_step();
     struct usb_device *d=&m.host.devices[0];struct usb_hid *p=&d->hid[0];
     assert(p->pipe_state==1);
     uint32_t original[4];memcpy(original,m.dma+USB_HID_BASE+16,sizeof(original));
@@ -1243,7 +1249,7 @@ static void persistent_nak(bool ohci)
 static void ohci_batches(void)
 {
     for(unsigned slow=0;slow<2;slow++) {
-        setup(true,false);g_boot.flags=CBI_F_TEST_REQUEST;assert(!attach());model_step();
+        setup(true,false);g_boot.flags=CBI_F_TEST_REQUEST | CBI_F_DIAG_VERBOSE;assert(!attach());model_step();
         assert(!m.host.quarantined && m.dev[0].reset_series==1 && m.dev[1].reset_series==1);
         assert(!(m.regs[0x54/4]&0x1f0000)); /* independent CSC/PRSC acknowledged */
         if(slow) {m.frame_ms=4;m.sleep_gap=9;}

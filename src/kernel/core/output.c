@@ -117,7 +117,7 @@ void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
 
 void rec_diag(const char *probe, const char *fmt, ...)
 {
-    if (!(g_boot.flags & CBI_F_VERBOSE) || (run_selected && !run_begun)) return;
+    if (!(g_boot.flags & (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE)) || (run_selected && !run_begun)) return;
     char extra[240];
     va_list ap;
     va_start(ap, fmt);
@@ -125,7 +125,8 @@ void rec_diag(const char *probe, const char *fmt, ...)
     va_end(ap);
     /* The VM heartbeat is a recurring runtime snapshot, even when queued
      * and later emitted with fmt="%s". Evidence rec_emit stays protected. */
-    bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1);
+    bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1) ||
+                    !strncmp(extra, "group=vm_perf_", sizeof("group=vm_perf_") - 1);
     emit_line(probe, "DATA", extra, true, periodic);
 }
 

@@ -273,7 +273,7 @@ static void logging_backpressure(const char *path,unsigned kind)
     assert(hid_polls && hid_naks && hid_reports && strstr(records,"hid poll addr=1"));
     if(kind==1) {
         static const char bytes[1024]={0};
-        for(unsigned i=0;i<9;i++)bootlog_capture_ring(bytes,sizeof(bytes));
+        for(unsigned i=0;i<BOOTLOG_RAM/sizeof(bytes)+1;i++)bootlog_capture_ring(bytes,sizeof(bytes));
     }
     if(kind==2)fail_log_commit();
     if(kind==4)assert(!bootlog_shutdown());
@@ -291,9 +291,14 @@ static void logging_backpressure(const char *path,unsigned kind)
     assert(!strstr(records,"[usb-storage] quarantine") && hid_polls>polls && hid_reports>reports_before);
     assert(strstr(records,kind==2 ? "stage_record addr=2 stage=max_lun record=lost result=-5" :
                                  "stage_record addr=2 stage=max_lun record=lost result=-11"));
-    if(kind==1)assert(strstr(records,"ring_queued=8192 ring_capacity=8192"));
+    if(kind==1) {
+        char occupancy[96];
+        snprintf(occupancy,sizeof(occupancy),"ring_queued=%u ring_capacity=%u",BOOTLOG_RAM,BOOTLOG_RAM);
+        assert(strstr(records,occupancy));
+    }
     if(kind==3)assert(strstr(records,"stage_record addr=2 stage=mount record=lost result=-5"));
-    assert(strstr(records,"ring_queued=") && strstr(records,"ring_capacity=8192") && strstr(records,"boot_queued="));
+    char capacity[32];snprintf(capacity,sizeof(capacity),"ring_capacity=%u",BOOTLOG_RAM);
+    assert(strstr(records,"ring_queued=") && strstr(records,capacity) && strstr(records,"boot_queued="));
     writer_paused=false;sleep_hook=NULL;
     struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,4));
     int fd=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
@@ -302,6 +307,9 @@ static void logging_backpressure(const char *path,unsigned kind)
     assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
     if(kind<2) {
         struct bootlog_stats stats;
+        /* Request the final captured watermark before checking disk records;
+         * an ordinary drain can be deferred by f0-22's one-second cadence. */
+        int e=bootlog_try_sync();assert(!e || e==-FS_EAGAIN);
         do {assert(!bootlog_drain());bootlog_snapshot(&stats);}while(stats.queued);
         check_disk_record("[usb-storage] stage=inquiry addr=2\n");
         check_disk_record("[usb-storage] stage=mount addr=2 elapsed_ms=");

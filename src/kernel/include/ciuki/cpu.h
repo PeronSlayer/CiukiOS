@@ -90,6 +90,7 @@ static inline uint64_t read_tsc_serialized(void)
  * timed for the F0 latency evidence (core/timing.c). */
 void crit_begin(void);
 void crit_end(void);
+void crit_label(const char *section) __attribute__((weak));
 static inline uint32_t irq_save(void)
 {
     uint32_t f = read_eflags();

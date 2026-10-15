@@ -1030,7 +1030,7 @@ static void activation_timing(void)
 static void initial_idle_diagnostics(void)
 {
     for (unsigned variant=0;variant<9;variant++) {
-        boot_fixture_accel(false); m.exact_clock=true;
+        boot_fixture_accel(false); g_boot.flags |= CBI_F_DIAG_VERBOSE; m.exact_clock=true;
         if (!variant) binding_gpu.device=0x8a22; /* unchanged Savage4 fake */
         else m.status_value=0xfffe0000; /* idle plus ignored SuperSavage bits */
         if (variant==2) {
@@ -1423,7 +1423,7 @@ static void gbd_idle_and_async_regressions(void)
      * permits plain software; a failed proof remains a cached refusal even
      * if the hardware later reports idle. */
     for (unsigned recovered=0;recovered<2;recovered++) {
-        boot_fixture_accel(false); m.exact_clock=true; m.fail_after_submit=true;
+        boot_fixture_accel(false); g_boot.flags |= CBI_F_DIAG_VERBOSE; m.exact_clock=true; m.fail_after_submit=true;
         m.recover_on_final=recovered;
         fbdev_accel_schedule(&settings_vfs); run_accel_init();
         CHECK(engine.quarantined && engine.cpu_safe==!!recovered && engine.final_idle_checked);

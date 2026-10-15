@@ -456,6 +456,7 @@ fwcfg_request:
     call selector_validate
     jc .warning
     call selector_accept
+    or byte [B(flags)+1], CBI_F_DIAG_VERBOSE >> 8
 .done:
     ret
 .warning:

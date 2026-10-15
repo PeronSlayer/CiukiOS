@@ -190,22 +190,8 @@ static void cpu_emit(void)
         charge(g_current, now);
     }
     memcpy(counts, classes, sizeof(counts));
-    for (struct task *t = sched_tasks(); t; t = t->all_next) {
-        uint64_t d = t->run_cycles - t->window_base;
-        if (t->prio != P_IDLE) for (unsigned i = 0; i < ARRAY_SIZE(top); i++) {
-            if (d <= top[i].cycles) continue;
-            for (unsigned j = ARRAY_SIZE(top) - 1; j > i; j--) top[j] = top[j - 1];
-            uint64_t k = t->kernel_ticks - t->kernel_base, u = t->user_ticks - t->user_base;
-            top[i] = (struct top){ .id = t->id, .cycles = d,
-                .kernel_ticks = k, .user_ticks = u, .stretch = t->max_stretch };
-            name_copy(top[i].name, t->name); top[i].name[8] = 0;
-            break;
-        }
-        t->window_base = t->run_cycles; t->kernel_base = t->kernel_ticks; t->user_base = t->user_ticks;
-        t->max_stretch = 0; t->stretch_eip = 0;
-        if (t->stretch_start) t->stretch_start = now;
-        t->stretch_sampled = false; t->active_stretch_eip = 0;
-    }
+    struct task *task_list = sched_tasks();
+    if (crit_label) crit_label("cpu_window");
     uint64_t irq_time = irq_cycles, exited_time = exited_cycles;
     uint64_t stretch_time = stretch_max, latency_time = resched_max;
     uint32_t sw = switches, ov = overruns, boosts = g_starvation_boosts - boost_base;
@@ -224,6 +210,30 @@ static void cpu_emit(void)
     name_copy(resched_name, "none");
     boost_base = g_starvation_boosts; forced = threshold = false;
     irq_restore(f);
+    /* No scheduling point in this traversal: kernel task-list lifetime is
+     * stable until we yield. IRQs may update counters, so snapshot/reset one
+     * task at a time and sort only after restoring IF. */
+    for (struct task *t = task_list; t; t = t->all_next) {
+        f = irq_save();
+        if (crit_label) crit_label("cpu_task");
+        uint64_t d = t->run_cycles - t->window_base;
+        struct top sample = { .id = t->id, .cycles = d,
+            .kernel_ticks = t->kernel_ticks - t->kernel_base,
+            .user_ticks = t->user_ticks - t->user_base, .stretch = t->max_stretch };
+        name_copy(sample.name, t->name); sample.name[8] = 0;
+        bool is_idle = t->prio == P_IDLE;
+        t->window_base = t->run_cycles; t->kernel_base = t->kernel_ticks; t->user_base = t->user_ticks;
+        t->max_stretch = 0; t->stretch_eip = 0;
+        if (t->stretch_start) t->stretch_start = now;
+        t->stretch_sampled = false; t->active_stretch_eip = 0;
+        irq_restore(f);
+        if (!is_idle) for (unsigned i = 0; i < ARRAY_SIZE(top); i++) {
+            if (d <= top[i].cycles) continue;
+            for (unsigned j = ARRAY_SIZE(top) - 1; j > i; j--) top[j] = top[j - 1];
+            top[i] = sample;
+            break;
+        }
+    }
     if (!emit) return;
     struct timing_stats timing; timing_snapshot(&timing);
     struct bootlog_stats log; bootlog_snapshot(&log);
@@ -251,8 +261,12 @@ static void cpu_emit(void)
     klog_periodic("[cpu] top=%s", line);
     klog_periodic("[kernel] stretch_max_ms=%u task=%s#%u eip=%08x resched_lat_max_ms=%u resched_task=%s irqoff_max_us=%u timer_gaps=%u/%u",
         stretch, name, sid, site, latency, late, timing.critical_us, timing.gaps_software, timing.gaps_unclassified);
+    klog_periodic("[kernel] irqoff_section=%s site=%08x violations=%u",
+        timing.critical_section ? timing.critical_section : "none", timing.critical_site, timing.budget_violations);
     klog_periodic("[kernel] long_paths serial_spin_ms=0 serial_drop=%u console_repaint_ms=%u bootlog_drain_ms=%u bootlog_queued=%u elf_load_ms=%u zero_pages_ms=%u work_max_us=%llu",
         serial_dropped(), ms(path[CPU_CONSOLE]), ms(path[CPU_BOOTLOG]), log.queued, ms(path[CPU_ELF]), ms(path[CPU_ZERO]), work.max_run_us);
+    klog_periodic("[kernel] bootlog writes=%llu bytes=%llu metadata=%llu rotations=%u dropped=%u",
+        log.writes, log.bytes_written, log.metadata_writes, log.rotations, log.dropped);
     for (unsigned i = 0; i < event_count; i++)
         klog_periodic("[sched] device_overrun task=%s#%u count=%u", events[i].name, events[i].id, events[i].count);
     if (lost) klog_periodic("[sched] device_overrun lost=%u", lost);

@@ -63,7 +63,7 @@ static void dump_preempt(struct usb_host *h)
 void usb_uhci_dump_schedule(struct usb_host *h)
 {
     if (h->pci.prog_if || !h->ready || h->schedule_dumped ||
-        !(g_boot.flags & (CBI_F_VERBOSE | CBI_F_TEST_REQUEST))) return;
+        !(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
     h->schedule_dumped = true;
     usb_barrier();
     for (unsigned frame = 0; frame < 4; frame++) {

@@ -4,7 +4,7 @@
  * monitor's wall time as VM CPU time. SPDX-License-Identifier: GPL-2.0-only */
 uint64_t dosvm_perf_clock(void)
 {
-    return (g_boot.flags & CBI_F_VERBOSE) && g_tsc_per_ms ? read_tsc_serialized() : 0;
+    return (g_boot.flags & CBI_F_DIAG_VERBOSE) && g_tsc_per_ms ? read_tsc_serialized() : 0;
 }
 static void perf_phase(struct dosvm *v, unsigned phase)
 {
@@ -32,7 +32,7 @@ static uint64_t perf_us(uint64_t cycles)
 static void perf_exit_end(struct dosvm *v)
 {
     perf_phase(v, 2);
-    if (g_boot.flags & CBI_F_VERBOSE) {
+    if (g_boot.flags & CBI_F_DIAG_VERBOSE) {
         v->perf.cost_count[v->perf.cause]++;
         v->perf.cost_cycles[v->perf.cause] += v->perf.trap_cycles;
         if (v->perf.cause == DOSVM_COST_VGA_IO) {
@@ -53,7 +53,7 @@ static unsigned perf_sample_slot(unsigned n)
 
 void dosvm_perf_report(struct dosvm *v)
 {
-    if (!(g_boot.flags & CBI_F_VERBOSE) || !g_tsc_per_ms ||
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE) || !g_tsc_per_ms ||
         g_ticks - v->perf.report_tick < 1000) return;
     unsigned old_phase = v->perf.phase;
     /* STATUS runs on the native owner: never restart a suspended VM clock. */
@@ -131,12 +131,13 @@ void dosvm_perf_report(struct dosvm *v)
 
 void dosvm_perf_dump(struct dosvm *v)
 {
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
     static const char *const names[DOSVM_COST_COUNT] = {
         "rm_int", "rm_iret", "rm_flags", "pm_int", "pm_flags", "switch",
         "vga_io", "vga_pf", "pit_pic", "kbd", "io", "db", "timer", "other",
         "rm_pushf", "rm_popf", "rm_cli", "rm_sti", "rm_hlt", "pm_hlt"
     };
-    if (g_boot.flags & CBI_F_VERBOSE) {
+    if (g_boot.flags & CBI_F_DIAG_VERBOSE) {
         static const char hex[] = "0123456789abcdef";
         for (unsigned offset = 0; offset < v->boot_log_count; offset += 48) {
             char data[97];

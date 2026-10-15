@@ -18,30 +18,37 @@ int device_open(enum px_kind kind, uint32_t flags)
     }
     return 0;
 }
-static void stream_bytes(const char *text, size_t bytes)
-{
-    serial_write(text, bytes);
-    bootlog_capture(text, bytes);
-}
 int device_write(const void *buffer, uint32_t bytes)
 {
     const char *text = buffer;
     /* The producer only queues/captures bytes. Bound its copy and envelope
      * work; a UART readiness wait belongs only to the writer/panic path. */
     if (bytes > 1024) bytes = 1024;
-    if (cpu_stall_record) cpu_stall_record(text, bytes);
+    if (!bytes) return 0;
     static const char prefix[] = "[console] ";
-    unsigned start = 0;
-    stream_bytes(prefix, sizeof(prefix) - 1);
-    for (unsigned i = 0; i < bytes; i++) if (text[i] == '\n' || text[i] == '\r') {
-        stream_bytes(text + start, i + 1 - start);
-        start = i + 1;
-        if (start < bytes) stream_bytes(prefix, sizeof(prefix) - 1);
+    /* Include every prefix and the terminator in ONE queue publication.
+     * A timer or another task may run between calls to serial_write. */
+    char record[2048];
+    size_t at = sizeof(prefix) - 1;
+    memcpy(record, prefix, at);
+    unsigned consumed = 0;
+    while (consumed < bytes && at + 2 <= sizeof(record)) {
+        char c = text[consumed++];
+        record[at++] = c;
+        if ((c == '\n' || c == '\r') && consumed < bytes) {
+            /* A short write bounds stack and IRQ-off queue work even for
+             * 1024 consecutive line endings. Reserve the final newline. */
+            if (at + sizeof(prefix) + 1 > sizeof(record)) break;
+            memcpy(record + at, prefix, sizeof(prefix) - 1);
+            at += sizeof(prefix) - 1;
+        }
     }
-    if (start < bytes) stream_bytes(text + start, bytes - start);
     /* Terminate the envelope as well, preventing a partial user line from
      * swallowing the next trusted record. Payload bytes are captured raw. */
-    if (bytes && text[bytes - 1] != '\n') stream_bytes("\n", 1);
-    console_write(text, bytes);
-    return (int)bytes;
+    if (text[consumed - 1] != '\n') record[at++] = '\n';
+    if (cpu_stall_record) cpu_stall_record(text, consumed);
+    serial_write(record, at);
+    bootlog_capture(record, at);
+    console_write(text, consumed);
+    return (int)consumed;
 }

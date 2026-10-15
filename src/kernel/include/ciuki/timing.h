@@ -14,11 +14,14 @@ struct timing_stats {
     uint32_t budget_violations;
     uint32_t gaps_software, gaps_unclassified;
     uint64_t pit_irqs;
+    uint32_t critical_site;
+    const char *critical_section; /* static label, otherwise "irq_save" */
 };
 
 extern uint64_t g_tsc_per_ms;
 void crit_begin(void);
 void crit_end(void);
+void crit_label(const char *section) __attribute__((weak));
 void timing_timer_irq(void);
 void timing_calibrate(void);
 void timing_reset(void);

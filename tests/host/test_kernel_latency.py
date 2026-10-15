@@ -1,5 +1,6 @@
 """Replay production latency policy with deterministic time, never QEMU."""
 import os
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -10,6 +11,41 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class KernelLatencyTests(unittest.TestCase):
+    def test_critical_section_attribution(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='timing-', dir=out) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'src/kernel/core/timing.c').read_text()
+            begin = source.index('static inline uint64_t rdtsc(void)')
+            end = source.index('\nvoid crit_begin(void)', begin)
+            # Replace only the CPU instruction boundary; retain all policy.
+            (temp / 'latency_timing.inc').write_text(source[:begin] + source[end:])
+            binary = temp / 'timing'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
+                            '-I', str(temp), str(ROOT / 'tests/host/kernel_timing_test.c'),
+                            '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
+    def test_diagnostics_are_separate_from_screen_logging(self):
+        menu = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
+        platform = (ROOT / 'src/boot/ciukldr/platform.inc').read_text()
+        accept = platform.split('mov byte [selector_fw], 1', 1)[1]
+        self.assertIn('call selector_accept\n    or byte [B(flags)+1], CBI_F_DIAG_VERBOSE >> 8', accept)
+        self.assertNotIn('CBI_F_DIAG_VERBOSE', menu)
+        screen = menu.split('.log:', 1)[1].split('.probe:', 1)[0]
+        self.assertNotIn('CBI_F_DIAG_VERBOSE', screen)
+        for path in ('usb/uhci.c', 'usb/usb_hid.c', 'vm/dosvm_perf.inc', 'drivers/savage2d.c'):
+            self.assertIn('CBI_F_DIAG_VERBOSE', (ROOT / 'src/kernel' / path).read_text(), path)
+        for suite in ('f0-smoke', 'f1-usb', 'f4-audio', 'f3-vm'):
+            cases = json.loads((ROOT / 'tests/suites' / (suite + '.json')).read_text())['cases']
+            for case in cases:
+                # All probe cases use fw_cfg unless explicitly cfg-driven;
+                # normal boot intentionally has no diagnostic selector.
+                if case.get('kind') != 'normal-boot':
+                    self.assertEqual(case.get('selector_source', 'fw_cfg'), 'fw_cfg', case['id'])
+
     def test_scheduler_and_sampler(self):
         out = ROOT / 'build/host'
         out.mkdir(parents=True, exist_ok=True)

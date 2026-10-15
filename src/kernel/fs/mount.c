@@ -582,21 +582,18 @@ int storage_sync(void)
 }
 #ifndef FS_HOST
 static bool initialized;
-static uint64_t next_log_drain;
 static void storage_timer(void *arg)
 {
     struct storage *s = arg;
     while (!s->stopped) {
-        task_sleep_ms(1);
-        struct bootlog_stats log;
-        bootlog_snapshot(&log);
+        task_sleep_ms(10);
         uint64_t now=fs_now_ms();
-        bool log_due=log.active && log.queued && now>=next_log_drain;
+        bool log_due=bootlog_due((uint32_t)now);
         bool due = cache_writeback_due(&s->cache, now) || log_due;
         if (due && !s->stopped) {
             /* Disk waits/writeback run on this P_DEVICE task, never on the
              * shared bounded work queue. fs_service/ATA yield within work. */
-            if (log_due) { bootlog_drain(); next_log_drain=fs_now_ms()+250; }
+            if (log_due) bootlog_drain();
             storage_writeback(s, fs_now_ms());
         }
     }
