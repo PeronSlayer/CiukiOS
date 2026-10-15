@@ -19,6 +19,8 @@ struct fat_entry {
     uint32_t parent, index, first, size, lfn_index;
     uint8_t lfn_count, attr;
     struct fat_times times;
+    /* Caller-serialized write cursor; not encoded on disk. Reset on COW. */
+    uint32_t write_cluster, write_index;
 };
 struct fat_volume {
     struct block_cache *cache; struct blkdev *dev;

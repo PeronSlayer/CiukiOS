@@ -19,7 +19,7 @@ static struct file_fault_disk {
     struct blkdev dev;
     struct { uint64_t lba; uint8_t bytes[512]; } sectors[32];
     unsigned used, failures;
-    uint32_t first_before;
+    uint32_t size_before;
     bool armed;
 } fault_disk;
 static struct block_cache fault_cache;
@@ -53,9 +53,9 @@ static int fault_write(struct blkdev *dev, uint64_t lba, uint32_t count, const v
 {
     int err = blkdev_range(dev, lba, count);
     if (err) return err;
-    /* FAT replace publishes this entry only after update's durable barrier.
-     * The next callback is the first issued write in its retirement suffix. */
-    if (fault_disk.armed && fault_node.entry.first != fault_disk.first_before) {
+    /* In-place append publishes size after the data/chain/directory barriers.
+     * The next issued write updates the advisory FSInfo hint. */
+    if (fault_disk.armed && fault_node.entry.size != fault_disk.size_before) {
         fault_disk.armed = false; fault_disk.failures++;
         dev->quarantined = true;
         return -FS_EIO;
@@ -103,16 +103,16 @@ bool f2_files_post_commit_fault(void)
     uint32_t old_first = fault_node.entry.first;
     if (!err && done != 3) err = -EIO;
     if (!err) {
-        fault_disk.first_before = old_first;
+        fault_disk.size_before = fault_node.entry.size;
         fault_disk.armed = true;
-        err = file_io_locked(&d, "new", 3, true, true, 0, &done);
+        err = file_io_locked(&d, "new", 3, true, true, 512, &done);
     }
     int sync = file_sync_locked(&d), again = file_sync_locked(&d);
     bool pass = err == -EIO && done == 3 && fault_disk.failures == 1 &&
-        fault_node.entry.first != old_first && d.position == 3 && fault_volume.readonly &&
+        fault_node.entry.first == old_first && fault_node.entry.size == 515 && d.position == 3 && fault_volume.readonly &&
         sync == -EIO && again == -EIO && fault_disk.dev.quarantined;
     rec_emit("fd-table", "DATA", "case=post-commit-fault owner=synthetic_block issued_errors=%u count=%u error=%d fsync=%d sticky=%d committed=%u quarantined=%u",
-             fault_disk.failures, (unsigned)done, err, sync, again, fault_node.entry.first != old_first, fault_disk.dev.quarantined);
+             fault_disk.failures, (unsigned)done, err, sync, again, fault_node.entry.size == 515, fault_disk.dev.quarantined);
     /* Destroy discards only this disposable device's dirty/error state. */
     vfs_destroy(&fault_vfs); cache_destroy(&fault_cache);
     return pass;

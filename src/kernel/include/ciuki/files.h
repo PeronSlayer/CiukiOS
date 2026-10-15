@@ -95,7 +95,8 @@ bool file_syscall(struct trap_frame *tf); /* true only for rows 29..51 */
  * VFS uses weak imports so its standalone harness retains no proc dependency. */
 int px_legacy_share(struct vfs *, struct fat_volume *, const struct fat_entry *, unsigned, unsigned);
 bool px_legacy_busy(struct vfs *, struct fat_volume *, const struct fat_entry *);
-void px_legacy_changed(struct vfs *, struct fat_volume *, const struct fat_entry *, const struct fat_entry *);
+/* Confirmed bytes require ctime notification even when FAT metadata is equal. */
+void px_legacy_changed(struct vfs *, struct fat_volume *, const struct fat_entry *, const struct fat_entry *, bool committed_write);
 int px_legacy_closed(struct vfs *, struct vfs_node *);
 bool px_volume_busy(struct vfs *, struct fat_volume *);
 void px_volume_detached(struct vfs *, unsigned drive);

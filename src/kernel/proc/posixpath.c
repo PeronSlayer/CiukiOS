@@ -683,7 +683,7 @@ bool px_legacy_busy(struct vfs *v, struct fat_volume *vol, const struct fat_entr
     }
     return false;
 }
-void px_legacy_changed(struct vfs *v, struct fat_volume *vol, const struct fat_entry *old, const struct fat_entry *entry)
+void px_legacy_changed(struct vfs *v, struct fat_volume *vol, const struct fat_entry *old, const struct fat_entry *entry, bool committed_write)
 {
     struct px_namespace *s = space_find(v); if (!s) return;
     struct px_node *n = node_find(s, vol, old);
@@ -691,7 +691,7 @@ void px_legacy_changed(struct vfs *v, struct fat_volume *vol, const struct fat_e
         for (struct px_node *candidate = s->nodes; candidate; candidate = candidate->next)
             if (candidate->legacy && entry == &candidate->legacy->entry) { n = candidate; break; }
     if (!n) return;
-    if (entry && !memcmp(old, entry, sizeof(*entry))) return;
+    if (!committed_write && entry && !memcmp(old, entry, sizeof(*entry))) return;
     if (!entry) n->linked = false;
     else {
         n->entry = *entry;

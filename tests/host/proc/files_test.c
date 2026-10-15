@@ -405,6 +405,63 @@ static void test_lifetime_and_legacy(void)
     puts("files inheritance/share: shared cwd/offsets, legacy/native share conflicts and metadata, readonly refusal PASS");
 }
 
+static bool overwrite_calendar(uint16_t *date, uint16_t *time, uint8_t *tenths)
+{
+    *date = (46u << 9) | (10u << 5) | 16;
+    *time = 0; *tenths = 0;
+    return true;
+}
+
+static void test_overwrite_ctime(void)
+{
+    struct vfs_table table; CHECK(!vfs_table_init(&vfs, &table, 2));
+    for (unsigned fallback = 0; fallback < 2; fallback++) {
+        fs_set_calendar_clock(fallback ? 0 : overwrite_calendar);
+        file_clock_init(42, false, false, 0, 0, 0, 0);
+        int fd = file_open(client, "/ctime.bin", O_CREAT | O_EXCL | O_RDWR, 0666); CHECK(fd >= 0);
+        CHECK(io(fd, "a", 1, true, true, 0) == 1);
+        int old = vfs_open(&table, "C:/ctime.bin", VFS_READ | VFS_WRITE, VFS_DENY_NONE, 0); CHECK(old >= 0);
+        struct px_node *node = file_fd(client, fd)->node;
+        struct fat_entry entry = node->entry;
+        struct ciuki_stat before, after;
+        CHECK(!px_stat_locked(node, &before));
+        for (unsigned legacy = 0; legacy < 2; legacy++) {
+            for (unsigned repeat = 0; repeat < 2; repeat++) {
+                /* The valid sample remains in one packed FAT interval. The
+                 * fallback also stays fixed when more than two seconds pass. */
+                g_ticks += fallback ? 2100 : 100;
+                char byte = (char)('b' + legacy * 2 + repeat);
+                if (legacy) {
+                    uint64_t position; size_t done;
+                    CHECK(!vfs_seek(&table, old, 0, VFS_SEEK_SET, &position) && !position);
+                    CHECK(!vfs_write(&table, old, &byte, 1, &done) && done == 1);
+                } else CHECK(io(fd, &byte, 1, true, true, 0) == 1);
+                CHECK(!memcmp(&entry, &node->entry, sizeof(entry)));
+                CHECK(!memcmp(&entry, &table.handles[old]->node->entry, sizeof(entry)));
+                CHECK(!px_stat_locked(node, &after));
+                struct ciuki_timespec now; CHECK(!file_clock_now(CLOCK_REALTIME, client, &now));
+                CHECK(after.st_ctim.tv_sec == now.tv_sec && after.st_ctim.tv_nsec == now.tv_nsec);
+                CHECK(after.st_ctim.tv_sec > before.st_ctim.tv_sec ||
+                      (after.st_ctim.tv_sec == before.st_ctim.tv_sec && after.st_ctim.tv_nsec > before.st_ctim.tv_nsec));
+                CHECK(after.st_mtim.tv_sec == before.st_mtim.tv_sec && after.st_mtim.tv_nsec == before.st_mtim.tv_nsec);
+                char readback; CHECK(io(fd, &readback, 1, false, true, 0) == 1 && readback == byte);
+                before = after;
+            }
+            g_ticks += 100;
+            if (legacy) {
+                size_t done = 1; CHECK(!vfs_write(&table, old, "", 0, &done) && !done);
+            } else CHECK(!io(fd, "", 0, true, true, 0));
+            CHECK(!px_stat_locked(node, &after));
+            CHECK(after.st_ctim.tv_sec == before.st_ctim.tv_sec && after.st_ctim.tv_nsec == before.st_ctim.tv_nsec);
+        }
+        CHECK(!vfs_close(&table, old) && !file_close(client, fd));
+        CHECK(!remove_path_native("/ctime.bin", false));
+    }
+    fs_set_calendar_clock(0);
+    vfs_table_destroy(&table);
+    puts("files overwrite ctime: native+legacy repeated writes, unchanged FAT entry, advancing clock, fixed/fallback timestamps, zero-length no-ops PASS");
+}
+
 struct append_test { struct file_description *description; char byte; };
 static void *append_worker(void *arg)
 {
@@ -458,7 +515,7 @@ static void test_write_failures(const char *path)
             CHECK(file_fd(client,fd)->position==3 && volumes[0].readonly);
         } else if (which==1) {
             disk[0].fail_write=volumes[0].fsinfo;
-            CHECK(io(fd,"new",3,true,true,0)==3); /* owning entry committed */
+            CHECK(io(fd,"new",3,true,true,volumes[0].spc*512)==3); /* allocation/owning entry committed */
             CHECK(volumes[0].readonly && file_sync_locked(file_fd(client,fd))==-EIO);
         } else {
             CHECK(!remove_path_native("/fault.bin",false)); disk[0].fail_flush=true;
@@ -636,14 +693,34 @@ static void test_launch_throughput(void)
     CHECK(fs_host_contig_live==live);
     fs_host_contig_fail=1;
     CHECK(call(CIUKI_SYS_PREAD,fd,user,BLKDEV_READ_BYTES,0,0)==-ENOMEM && fs_host_contig_live==live);
-    /* Read enlargement does not enlarge the syscall write commit boundary. */
+    /* Writes use the same bounded run, and return short before another run. */
     CHECK(!ua_write(client->memory,user,payload,BLKDEV_READ_BYTES));
-    CHECK(call(CIUKI_SYS_PWRITE,fd,user,BLKDEV_READ_BYTES,0,0)==PAGE_SIZE);
+    unsigned writes=disk[0].writes;
+    fs_host_contig_fail=1;
+    CHECK(call(CIUKI_SYS_PWRITE,fd,user,BLKDEV_READ_BYTES,0,0)==-ENOMEM);
+    CHECK(fs_host_contig_live==live && disk[0].writes==writes);
+    /* The full request crosses UINT32_MAX even though its first run fits. */
+    CHECK(call(CIUKI_SYS_PWRITE,fd,user,BLKDEV_READ_BYTES+1,UINT32_MAX-BLKDEV_READ_BYTES,0)==-EFBIG);
+    CHECK(disk[0].writes==writes);
+    uint64_t saved=file_fd(client,fd)->position;
+    CHECK(call(CIUKI_SYS_PWRITE,fd,user,BLKDEV_READ_BYTES+1,0,0)==BLKDEV_READ_BYTES);
+    CHECK(file_fd(client,fd)->position==saved && fs_host_contig_live==live);
+    CHECK(fs_lock_try_take(&vfs.lock));fs_lock_drop(&vfs.lock);
+    /* A directory poll can complete between the caller's bounded runs. */
+    int directory=file_open(client,"/",O_DIRECTORY,0);CHECK(directory>=0);
+    CHECK(call(CIUKI_SYS_GETDENTS,directory,user+BLKDEV_READ_BYTES,sizeof(struct ciuki_dirent),0,0)>0);
+    CHECK(!file_close(client,directory));
+    int append=file_open(client,"/launch-throughput.bin",O_WRONLY|O_APPEND,0);CHECK(append>=0);
+    CHECK(call(CIUKI_SYS_WRITE,append,user,BLKDEV_READ_BYTES+1,0,0)==BLKDEV_READ_BYTES);
+    CHECK(file_fd(client,append)->position==bytes+BLKDEV_READ_BYTES);
+    CHECK(call(CIUKI_SYS_PWRITE,append,user,1,3,0)==1 && file_fd(client,append)->position==bytes+BLKDEV_READ_BYTES);
+    CHECK(io(fd,readback,BLKDEV_READ_BYTES,false,true,bytes)==BLKDEV_READ_BYTES && !memcmp(readback,payload,BLKDEV_READ_BYTES));
+    CHECK(!file_close(client,append));
     CHECK(!ua_munmap(client->memory,user,2*BLKDEV_READ_BYTES));
     client->launch=(struct proc_launch){0}; files_launch_verbose=false;
     CHECK(!file_close(client,fd) && !remove_path_native("/launch-throughput.bin",false));
     free(payload); free(readback);
-    puts("PASS native 64 KiB syscall/snapshot bytes, temporary buffer rollback, original page-sized writes");
+    puts("PASS native 64 KiB read/write syscall/snapshot bytes, short run boundary, temporary buffer rollback");
 }
 
 /* Native devctl copies/dispatch use a bounded observation backend; the
@@ -787,7 +864,7 @@ int main(int argc, char **argv)
     CHECK(!files_attach(&vfs,&space));
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
-    test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
+    test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;

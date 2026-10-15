@@ -22,6 +22,11 @@ static int interrupted_work(struct storage *s,unsigned phase)
     if (phase==4) return vfs_log_rotate(&table,BOOTLOG_PATH,BOOTLOG_PREVIOUS,BOOTLOG_OLDEST,BOOTLOG_LIMIT);
     int h=vfs_open(&table,"C:/SYSTEM/SETTINGS.CFG",VFS_READ|VFS_WRITE,0,0);
     if (h<0) return h;
+    if (phase>=6) {
+        uint64_t position;
+        e=vfs_seek(&table,h,phase==6 ? 0 : 2001,phase==6 ? VFS_SEEK_END : VFS_SEEK_SET,&position);
+        if (e) return e;
+    }
     char settings[1537];memset(settings,'N',sizeof(settings));
     e=vfs_write(&table,h,settings,sizeof(settings),&done);
     int close=vfs_close(&table,h);return e ? e : close;
@@ -34,7 +39,7 @@ static void seed(unsigned phase)
     if (phase) {
         OK(bootlog_activate(&s->vfs,true,s->sequence));
         bootlog_capture("published boot\n",15);OK(bootlog_sync(log_no_cancel,log_storage_turn,NULL));
-        if (phase==4 || phase==5) OK(bootlog_shutdown());
+        if (phase>=4) OK(bootlog_shutdown());
     }
     /* Freeze the durable fixture and restore it with sector undo per trial.
      * No image copies and no build-time kernel variants. */
@@ -76,19 +81,38 @@ static void verify_reboot(void)
 }
 static void all_cuts(void)
 {
-    for (unsigned phase=0;phase<6;phase++) {
+    for (unsigned phase=0;phase<8;phase++) {
         seed(phase);
-        struct storage *s=resume(phase);unsigned base=media[0].events;
-        OK(interrupted_work(s,phase));unsigned events=media[0].events-base;CHECK(events);
-        discard(s);fake_reset(&media[0]);
-        for (unsigned cut=1;cut<=events;cut++) {
-            s=resume(phase);base=media[0].events;media[0].cut_at=base+cut;
-            int e=interrupted_work(s,phase);
-            CHECK(e<0 && media[0].cut);discard(s);
-            verify_reboot();fake_reset(&media[0]);
+        for (unsigned mode=0;mode<(phase>=5 ? 4u : 1u);mode++) {
+            media[0].reorder=mode!=0;media[0].cut_mode=mode ? mode-1 : 0;
+            struct storage *s=resume(phase);unsigned base=media[0].events;
+            OK(interrupted_work(s,phase));unsigned events=media[0].events-base;CHECK(events);
+            discard(s);fake_reset(&media[0]);
+            for (unsigned cut=1;cut<=events;cut++) {
+                s=resume(phase);base=media[0].events;media[0].cut_at=base+cut;
+                int e=interrupted_work(s,phase);
+                CHECK(e<0 && media[0].cut);discard(s);
+                if (phase>=5) {
+                    struct storage *check=start();struct fat_entry file;
+                    OK(vfs_stat(&table,"C:/SYSTEM/SETTINGS.CFG",&file));
+                    unsigned length=phase==5 ? 1537 : phase==6 ? 1550 : 3538;
+                    CHECK(file.size==13 || file.size==length);
+                    if (file.size==length) {
+                        char text[3538];size_t done;
+                        OK(fat_read(&check->volumes[2].fat,&file,0,text,file.size,&done));CHECK(done==file.size);
+                        unsigned begin=phase==5 ? 0 : phase==6 ? 13 : 2001;
+                        if (phase>=6) CHECK(!memcmp(text,"old settings\n",13));
+                        for (unsigned i=13;i<begin;i++) CHECK(!text[i]);
+                        for (unsigned i=begin;i<length;i++) CHECK(text[i]=='N');
+                    }
+                    stop(check,false);bootlog_reset();
+                }
+                verify_reboot();fake_reset(&media[0]);
+            }
+            printf("PASS power cuts phase=%u mode=%u device_events=%u: RO reads, bounded repair, all files, settings, DOS games/base/overlay, log rotation, two clean FAT scans\n",phase,mode,events);
+            fflush(stdout);
         }
-        printf("PASS power cuts phase=%u device_events=%u: RO reads, bounded repair, all files, settings, DOS games/base/overlay, log rotation, two clean FAT scans\n",phase,events);
-        fflush(stdout);
+        media[0].reorder=false;
         /* Rebuild the logical baseline for the next phase, without retaining
          * a second image. Existing seed paths are removed by reset below. */
         struct storage *cleanup=start();OK(storage_enable_write(cleanup,2));
@@ -105,7 +129,19 @@ static void repair_cuts(void) {
     OK(bootlog_activate(&s->vfs,true,s->sequence));bootlog_capture("repair boot\n",12);
     OK(bootlog_sync(log_no_cancel,log_storage_turn,NULL));
     struct fat_volume geometry=s->volumes[2].fat;
+    int h=vfs_open(&table,"C:/SYSTEM/TAIL.CFG",VFS_WRITE|VFS_CREATE,0,0);CHECK(h>=0);
+    size_t done;OK(vfs_write(&table,h,"old settings\n",13,&done));
+    char appended[1537];memset(appended,'A',sizeof(appended));
+    OK(vfs_write(&table,h,appended,sizeof(appended),&done));OK(vfs_close(&table,h));
+    struct fat_entry tail;OK(vfs_stat(&table,"C:/SYSTEM/TAIL.CFG",&tail));
+    geometry.next_free=s->volumes[2].fat.next_free;
     discard(s);
+    /* An ordinary append with durable new allocation and only one live FAT
+     * mirror updated, before the new directory length was published. */
+    uint32_t sec=geometry.data_sector+(tail.parent-2)*geometry.spc+tail.index/16;
+    uint8_t raw[512];OK(fake_raw_read(&media[0],sec,raw));
+    fs_wr32(raw+(tail.index%16)*32+28,13);OK(fake_raw_write(&media[0],sec,raw));
+    patch_entry(&media[0],&geometry,1,tail.first,0x0fffffff);
     /* Add an unowned allocation in one FAT copy only, as at a COW cut. */
     patch_entry(&media[0],&geometry,1,geometry.next_free,0x0fffffff);
     media[0].undo_count=0;
@@ -118,11 +154,11 @@ static void repair_cuts(void) {
             CHECK(storage_enable_write(s,2)==-FS_EIO && media[0].cut);
             discard(s);verify_reboot();fake_reset(&media[0]);
         }
-        printf("PASS repeated repair cuts mode=%u device_events=%u: log-tail detach, divergent orphan reclaim, flags/hints/barriers, subsequent writable boot\n",mode,events);fflush(stdout);
+        printf("PASS repeated repair cuts mode=%u device_events=%u: ordinary append/log-tail detach, divergent orphan reclaim, flags/hints/barriers, subsequent writable boot\n",mode,events);fflush(stdout);
     }
     media[0].reorder=false;
     s=start();OK(storage_enable_write(s,2));
-    const char *paths[]={BOOTLOG_PATH,BOOTLOG_PREVIOUS,BOOTLOG_OLDEST,DOSVM_BUNDLED_BASE};
+    const char *paths[]={BOOTLOG_PATH,BOOTLOG_PREVIOUS,BOOTLOG_OLDEST,DOSVM_BUNDLED_BASE,"C:/SYSTEM/TAIL.CFG"};
     for (unsigned i=0;i<sizeof(paths)/sizeof(paths[0]);i++) { int e=vfs_delete(&table,paths[i]);CHECK(!e || e==-FS_ENOENT); }
     OK(vfs_rmdir(&table,"C:/SYSTEM/DOS"));OK(vfs_rmdir(&table,"C:/GAMES"));
     stop(s,true);bootlog_reset();media[0].undo_count=0;

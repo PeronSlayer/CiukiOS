@@ -10,6 +10,7 @@ struct media {
     uint32_t total, fat, data, clusters, far;
     unsigned spc, reads, max_read, writes, flushes, saved;
     bool dirty, diff, cross, cycle, orphan, bad, fail_read, cross_high, live_diff;
+    bool excess, eof_diff, eof_reverse, empty_file, tail_diff, far_tail;
     struct { uint64_t lba;uint8_t bytes[512]; } changes[64];
 };
 static char memory_record[256];
@@ -39,6 +40,8 @@ static int read_blocks(struct blkdev *d,uint64_t lba,uint32_t n,void *out) {
         } else if (sec==m->data) {
             uint32_t first=m->cross_high ? m->far : 3;
             memcpy(b,"FIRST   BIN",11);b[11]=FAT_ATTR_ARCHIVE;fs_wr16(b+26,(uint16_t)first);fs_wr16(b+20,(uint16_t)(first>>16));fs_wr32(b+28,512);
+            if (m->empty_file) fs_wr32(b+28,0);
+            if (m->live_diff) fs_wr32(b+28,m->spc*512+512);
             if (m->cross || m->cross_high) {
                 memcpy(b+32,"SECOND  BIN",11);b[43]=FAT_ATTR_ARCHIVE;fs_wr16(b+58,(uint16_t)first);
                 fs_wr16(b+52,(uint16_t)(first>>16));fs_wr32(b+60,512);
@@ -52,7 +55,17 @@ static int read_blocks(struct blkdev *d,uint64_t lba,uint32_t n,void *out) {
         if (m->orphan || (m->diff && f==1)) put_fat(m,buf,lba,n,f,m->far,EOC);
         if (m->bad) put_fat(m,buf,lba,n,f,m->far,0x0ffffff7);
         if (m->cross_high) put_fat(m,buf,lba,n,f,m->far,EOC);
-        if (m->live_diff && f==1) put_fat(m,buf,lba,n,f,3,4);
+        /* This refusal fixture must differ BEFORE published EOF. An EOF
+         * EOC/link difference is recoverable after the f0-32 merge. */
+        if (m->live_diff) {
+            put_fat(m,buf,lba,n,f,3,f ? EOC : 4);put_fat(m,buf,lba,n,f,4,EOC);
+        }
+        if (m->excess) {
+            uint32_t tail=m->far_tail ? m->far : 4;
+            bool detached=m->eof_diff && (m->eof_reverse ? f==0 : f==1);
+            put_fat(m,buf,lba,n,f,3,detached ? EOC : tail);
+            put_fat(m,buf,lba,n,f,tail,m->tail_diff && f==1 ? 5 : EOC);
+        }
     }
     for (unsigned j=0;j<m->saved;j++) if (m->changes[j].lba>=lba && m->changes[j].lba-lba<n)
         memcpy(buf+(m->changes[j].lba-lba)*512,m->changes[j].bytes,512);
@@ -139,7 +152,44 @@ static void integrity(void) {
     }
     puts("PASS F1-70 integrity: cross-link/cycle/live-copy disagreement refuse writes, RO file remains readable, high unowned copy difference repaired, bad cluster preserved, read failure not retried");
 }
+static void tail_recovery(void) {
+    for (unsigned mode=0;mode<6;mode++) {
+        struct media m;struct block_cache cache;struct fat_volume v;
+        init(&m,4,8);m.dirty=m.excess=true;
+        m.eof_diff=mode==1 || mode==2;m.eof_reverse=mode==2;
+        m.empty_file=mode==3;m.orphan=mode==4;m.tail_diff=m.far_tail=mode==5;
+        assert(!cache_init(&cache,16384));
+        if (mode>=4) fs_host_page_fail=1;
+        assert(!fat_prepare(&v,&cache,&m.dev,0,m.dev.capacity));
+        assert(v.scan_complete && !m.writes && !m.flushes);
+        if (mode>=4) assert(v.scan_passes>1 && v.scan_available_bytes==4096);
+        if (mode==5) {
+            assert(v.ro_reasons&FAT_RO_COPIES);
+            assert(fat_enable_write(&v)==-FS_EROFS && !m.writes && !m.flushes);
+            uint32_t link;assert(!fat_get_cluster(&v,3,&link) && link==m.far);
+            readable(&v);
+        } else {
+            assert((v.ro_reasons&FAT_RO_DIRTY) && !(v.ro_reasons&FAT_RO_COPIES));
+            if (mode==4) fs_host_page_fail=1;
+            assert(!fat_enable_write(&v) && !v.readonly);
+            assert(v.repaired_copies==(unsigned)(mode==1 || mode==2));
+            assert(v.free_clusters==v.clusters-(mode==3 ? 1 : 2));
+            struct fat_entry file;assert(!fat_lookup(&v,2,"FIRST.BIN",&file));
+            assert(file.size==(mode==3 ? 0 : 512) && file.first==(mode==3 ? 0 : 3));
+            for (unsigned f=0;f<2;f++) {
+                uint8_t raw[512];assert(!read_blocks(&m.dev,32+(uint64_t)f*m.fat,1,raw));
+                assert((fs_rd32(raw+12)&EOC)==(mode==3 ? 0 : EOC));
+                assert(!(fs_rd32(raw+16)&EOC));
+            }
+            if (mode!=3) readable(&v);
+            assert(!fat_scan(&v) && !v.lost_clusters && !(v.ro_reasons&(FAT_RO_COPIES|FAT_RO_CORRUPT)));
+            assert(!fat_unmount(&v));
+        }
+        cache_destroy(&cache);assert(!cache.workspace_in_use && !fs_host_contig_live);
+    }
+    puts("PASS F0-32/F1-70 merge tails: ordinary/zero-size excess, EOF disagreement in both mirror directions, 4 KiB multipass repair, late-pass excess-tail disagreement refuses all writes");
+}
 int main(void) {
     layout(4,64,false);layout(4,8,true);layout(32,8,true);layout(32,1,true);
-    fallback();integrity();return 0;
+    fallback();integrity();tail_recovery();return 0;
 }

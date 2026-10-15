@@ -59,10 +59,10 @@ static void ordering(struct fake *f, unsigned begin) {
         if (event->kind=='B') { fence=true; continue; }
         uint64_t lba=event->lba; unsigned nextphase;
         if (lba>=vol.reserved && lba<vol.reserved+vol.fats*vol.fat_sectors) {
-            nextphase=1; copies|=1u<<((lba-vol.reserved)/vol.fat_sectors);
+            nextphase=2; copies|=1u<<((lba-vol.reserved)/vol.fat_sectors);
         } else if (lba>=rootsec && lba<rootsec+rootsectors) nextphase=3;
         else if (vol.type==32 && lba==vol.fsinfo) nextphase=4;
-        else nextphase=2;
+        else nextphase=1;
         CHECK(nextphase>=phase);
         if (nextphase!=phase) CHECK(fence);
         phase=nextphase; fence=false;
