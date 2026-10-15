@@ -185,7 +185,7 @@ static void cpu_emit(void)
     uint32_t f = irq_save();
     uint64_t now = stamp(), total = now - window_start;
     if (!total) { irq_restore(f); return; }
-    bool emit = forced || threshold || (g_boot.flags & (CBI_F_VERBOSE | CBI_F_TEST_REQUEST));
+    bool emit = forced || threshold || (g_boot.flags & (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE | CBI_F_TEST_REQUEST));
     if (g_current) {
         charge(g_current, now);
     }
@@ -261,8 +261,9 @@ static void cpu_emit(void)
     klog_periodic("[cpu] top=%s", line);
     klog_periodic("[kernel] stretch_max_ms=%u task=%s#%u eip=%08x resched_lat_max_ms=%u resched_task=%s irqoff_max_us=%u timer_gaps=%u/%u",
         stretch, name, sid, site, latency, late, timing.critical_us, timing.gaps_software, timing.gaps_unclassified);
-    klog_periodic("[kernel] irqoff_section=%s site=%08x violations=%u",
-        timing.critical_section ? timing.critical_section : "none", timing.critical_site, timing.budget_violations);
+    klog_periodic("[kernel] irqoff_section=%s site=%08x irqoff_max_us=%u violations=%u",
+        timing.critical_section ? timing.critical_section : "none", timing.critical_site,
+        timing.critical_us, timing.budget_violations);
     klog_periodic("[kernel] long_paths serial_spin_ms=0 serial_drop=%u console_repaint_ms=%u bootlog_drain_ms=%u bootlog_queued=%u elf_load_ms=%u zero_pages_ms=%u work_max_us=%llu",
         serial_dropped(), ms(path[CPU_CONSOLE]), ms(path[CPU_BOOTLOG]), log.queued, ms(path[CPU_ELF]), ms(path[CPU_ZERO]), work.max_run_us);
     klog_periodic("[kernel] bootlog writes=%llu bytes=%llu metadata=%llu rotations=%u dropped=%u",

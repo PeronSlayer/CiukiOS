@@ -8,6 +8,7 @@
 #include <ciuki/task.h>
 #include <ciuki/probe.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/timing.h>
 
 static char run_id[9] = "00000000";
 static uint32_t seq, premature_records;
@@ -23,9 +24,8 @@ void kputs_raw(const char *s)
     console_write(s, n);
 }
 
-/* Format each record before handing it to the serial queue. Playback logs
- * never poll the UART, including callers in IRQ/critical sections; ordinary
- * synchronous drains release IF between readiness checks. */
+/* Format each record before handing it to the serial queue. Normal logs
+ * never poll the UART, including callers in IRQ/critical sections. */
 static void log_line(const char *fmt, va_list ap, bool periodic)
 {
     char buf[256];
@@ -61,20 +61,17 @@ void rec_set_run(const char *run8)
     run_begun = false;
 }
 
-static uint32_t next_seq(void)
-{
-    uint32_t f = irq_save();
-    uint32_t s = ++seq;
-    irq_restore(f);
-    return s;
-}
-
 /* A record above 240 bytes is never truncated silently: an ERROR record
  * replaces it so the evidence fails loudly. */
-static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only)
+static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only, bool evidence)
 {
     char buf[256];
-    uint32_t s = next_seq();
+    /* Reserve room before assigning a sequence: a quota wait can dispatch
+     * another evidence producer. Formatting/publication is bounded to this
+     * buffer and atomic against IRQ producers. Console work follows IF restore. */
+    uint32_t flags = evidence && serial_evidence_begin ? serial_evidence_begin(sizeof(buf)) : irq_save();
+    if ((flags & 0x200) && crit_label) crit_label("record_publish");
+    uint32_t s = ++seq;
     int n = ksnprintf(buf, sizeof(buf), "CIUKI_TEST v=1 run=%s seq=%06u probe=%s event=%s%s%s",
                       run_id, s, probe, event, extra && *extra ? " " : "", extra ? extra : "");
     if (n > 240)
@@ -86,10 +83,9 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
         if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
         else bootlog_capture(buf, (size_t)n + 1);
     }
-    if (!disk_only) {
-        serial_write(buf, (size_t)n + 1);
-        console_write(buf, (size_t)n + 1);
-    }
+    if (!disk_only) serial_write(buf, (size_t)n + 1);
+    irq_restore(flags);
+    if (!disk_only) console_write(buf, (size_t)n + 1);
 }
 
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
@@ -111,12 +107,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         kvsnprintf(extra, sizeof(extra), fmt, ap);
         va_end(ap);
     }
-    emit_line(probe, event, extra, true, false, false);
+    emit_line(probe, event, extra, true, false, false, true);
 }
 
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
 {
-    emit_line(probe, event, extra, false, false, false);
+    emit_line(probe, event, extra, false, false, false, false);
 }
 
 void rec_diag(const char *probe, const char *fmt, ...)
@@ -131,7 +127,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
      * and later emitted with fmt="%s". Evidence rec_emit stays protected. */
     bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1) ||
                     !strncmp(extra, "group=vm_perf_", sizeof("group=vm_perf_") - 1);
-    emit_line(probe, "DATA", extra, true, periodic, false);
+    emit_line(probe, "DATA", extra, true, periodic, false, false);
 }
 
 void rec_diag_disk(const char *probe, const char *fmt, ...)
@@ -144,7 +140,7 @@ void rec_diag_disk(const char *probe, const char *fmt, ...)
     va_start(ap,fmt);
     kvsnprintf(extra,sizeof(extra),fmt,ap);
     va_end(ap);
-    emit_line(probe,"DATA",extra,true,true,true);
+    emit_line(probe,"DATA",extra,true,true,true,false);
 }
 
 static volatile int in_panic;

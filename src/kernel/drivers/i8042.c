@@ -520,6 +520,7 @@ static void capture(struct controller *c, uint8_t status, uint8_t b)
 static bool capture_one(struct controller *c, bool discard)
 {
     uint32_t f = irq_save();
+    if ((f & 0x200) && crit_label) crit_label("i8042_sample");
     uint8_t status = read_port(c, STATUS_PORT);
     bool have = status & OBF;
     if (have) {
@@ -898,6 +899,7 @@ static bool claims_active(struct controller *c)
 static void input_irq(struct trap_frame *tf)
 {
     (void)tf;
+    if (crit_label) crit_label("i8042_irq");
     if (native.accepting && !native.stats.quarantined && claims_active(&native))
         capture_one(&native, false);    /* exactly one byte; dispatcher owns EOI */
 }

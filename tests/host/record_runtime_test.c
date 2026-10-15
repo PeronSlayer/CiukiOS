@@ -17,7 +17,9 @@ static char output[8192];
 static unsigned ordinary_writes,console_writes,ring_captures;
 static void append_output(const char *s,size_t n)
 {
-    if (!(cpu_flags & 0x200) || strlen(output) + n >= sizeof(output)) abort();
+    /* The serial queue accepts IRQ/atomic publications too; only the
+     * separate UART consumer requires ordinary task context. */
+    if (strlen(output) + n >= sizeof(output)) abort();
     size_t at = strlen(output); memcpy(output + at, s, n); output[at + n] = 0;
 }
 void serial_write(const char *s,size_t n) { ordinary_writes++;append_output(s,n); }
