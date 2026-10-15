@@ -4,8 +4,11 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 static struct desktop d;
+static int mode_set(struct desktop *desktop,uint16_t mode)
+{ assert(desktop==&d); desktop->display_mode=desktop->display_pending=mode; return 0; }
 int main(void)
 {
     fake_reset(); desk_init(&d, &fake_ops, 1024, 768); desk_shell_enable(&d);
@@ -44,6 +47,11 @@ int main(void)
     assert(!desk_display_frame_commit(&d,-1) && d.sh.cfg.display_mode == 0x118);
     assert(desk_display_frame_commit(&d,0) && !d.display_pending && d.sh.cfg.display_mode == 0x111);
     assert(!desk_display_frame_commit(&d,0));
+    d.display_reply_mode=0x118; d.display_reply_preview=1; d.display_mode=d.display_pending=0x118;
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PREVIEW_FRAME && d.sh.cfg.display_mode==0x111);
+    assert(!d.display_pending); d.display_reply_mode=0; d.display_reply_preview=0;
+    d.display_mode=d.display_pending=0x118;
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PERSIST_FRAME && d.sh.cfg.display_mode==0x118);
     puts("PASS display persistence: failed allocation/partial/failed frame retains saved id; successful confirmed frame commits once");
     struct ciuki_settings s, after; cfg_defaults(&s); s.display_mode = 0x118;
     char text[CFG_TEXT_MAX]; size_t n = cfg_format(&s,text,sizeof(text));
@@ -60,7 +68,25 @@ int main(void)
     assert(desk_parse(&m,1,NULL,&p) && p.values[0] == 0x111);
     desk_put32(m.data+16,1); assert(!desk_parse(&m,1,NULL,&p));
     desk_put32(m.data+16,0); desk_put32(m.data+12,65536); assert(!desk_parse(&m,1,NULL,&p));
+    desk_put32(m.data+8,DESK_SETTINGS_DISPLAY_PREVIEW);desk_put32(m.data+12,0x111);
+    assert(desk_parse(&m,1,NULL,&p) && p.request==DESK_SETTINGS_DISPLAY_PREVIEW);
+    desk_put32(m.data+16,1);assert(!desk_parse(&m,1,NULL,&p));
     puts("PASS display IPC: Control Panel settings relay, bounded uint16 id and reserved values");
+    /* Native request admission, completed frame classification and reply. */
+    c->program=DESK_APP_CONTROL; c->pid=7; c->tx_count=0; d.display_set=mode_set;
+    desk_message(&m,DESK_SETTINGS,24);m.data[0]=DESK_SHELL_VERSION;m.data[2]=(uint8_t)c->minor;m.sender_pid=7;
+    desk_put32(m.data+4,42);desk_put32(m.data+8,DESK_SETTINGS_DISPLAY_PREVIEW);desk_put32(m.data+12,0x111);
+    desk_receive(&d,0,&m);assert(d.display_reply_preview && d.display_reply_mode==0x111 && !c->tx_count);
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PREVIEW_FRAME && d.sh.cfg.display_mode==0x118);
+    desk_display_reply(&d,0);assert(!d.display_reply_preview && !d.display_reply_mode && c->tx_count==1);
+    assert(desk_parse(&c->tx[c->tx_head],0,NULL,&p) && p.serial==42 && !p.result);c->tx_count=0;
+    desk_put32(m.data+4,43);desk_put32(m.data+8,DESK_SETTINGS_DISPLAY);desk_put32(m.data+12,0x118);
+    desk_receive(&d,0,&m);assert(!d.display_reply_preview && d.display_reply_mode==0x118);
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PERSIST_FRAME);desk_display_reply(&d,0);c->tx_count=0;
+    c->program=0;desk_put32(m.data+8,DESK_SETTINGS_DISPLAY_PREVIEW);
+    desk_receive(&d,0,&m);assert(c->tx_count==1 && !d.display_pending);
+    assert(desk_parse(&c->tx[c->tx_head],0,NULL,&p) && p.result==-EPERM);
+    puts("PASS display preview ownership: admitted Control Panel request, deferred reply, no automatic preference save, legacy durable frame, ordinary-client refusal");
     desk_drop_client(&d,0); free(d.pixels); free(d.sh.wall);
     assert(!fake_live()); return 0;
 }

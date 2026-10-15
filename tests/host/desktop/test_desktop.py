@@ -108,6 +108,19 @@ def write_png(path, width, height, rgb):
                            chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
+def control_frame(test, name, pixels, width, height):
+    """Pinned production applet frames; PNGs are review copies."""
+    path=ROOT / "tests/host/desktop/control-goldens.json"
+    expected=json.loads(path.read_text()) if path.exists() else {}
+    digest=hashlib.sha256(pixels).hexdigest()
+    if os.environ.get("CIUKI_RECORD_CONTROL_GOLDENS") == "1":
+        expected[name]=digest
+        path.write_text(json.dumps(expected,indent=2,sort_keys=True)+"\n")
+    else:
+        test.assertEqual(digest,expected.get(name),name)
+    capture(name,pixels,width,height)
+
+
 class DesktopTests(unittest.TestCase):
     def test_shell_suite_uses_existing_runner(self):
         path = str(ROOT / "scripts/test")
@@ -375,13 +388,14 @@ class DesktopTests(unittest.TestCase):
             renders = folder / "renders"
             renders.mkdir()
             result = subprocess.run([str(binary), str(folder / "portrait.xrgb"), str(ROOT / "assets/wallpapers/ciuki"), str(renders)],
-                                    check=True, env=env, capture_output=True, text=True)
+                                    check=False, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertIn("PASS control display", result.stdout)
             names = sorted(p.stem for p in renders.glob("*.xrgb"))
             self.assertEqual(names, ["control-display-classic-fill", "control-display-fill", "control-display-fit"])
             for name in names:
                 width, height = map(int, (renders / f"{name}.size").read_text().split())
-                capture(name, (renders / f"{name}.xrgb").read_bytes(), width, height)
+                control_frame(self,name,(renders / f"{name}.xrgb").read_bytes(),width,height)
             frames = os.environ.get("CIUKI_WALL_FRAMES")
             if frames:
                 Path(frames).mkdir(parents=True, exist_ok=True)
@@ -412,8 +426,12 @@ class DesktopTests(unittest.TestCase):
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
             renders = folder / "renders"; renders.mkdir()
             result = subprocess.run([str(binary), str(renders), str(folder / "portrait.xrgb")],
-                                    check=True, env=env, capture_output=True, text=True)
+                                    check=False, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertIn("PASS control display modes", result.stdout)
+            for raw in renders.glob("*.xrgb"):
+                width,height=map(int,raw.with_suffix(".size").read_text().split())
+                control_frame(self,raw.stem,raw.read_bytes(),width,height)
             frames = os.environ.get("CIUKI_WALL_FRAMES")
             if frames:
                 Path(frames).mkdir(parents=True, exist_ok=True)

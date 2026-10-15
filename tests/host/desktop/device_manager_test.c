@@ -3,6 +3,7 @@
 #include "control.h"
 #include "acc_test.h"
 #include "device_fixture.h"
+#include "display_fixture.h"
 static struct cp_app app;
 static struct du_ui ui;
 static uint32_t pixels[CP_WIDTH * CP_HEIGHT], portrait[256 * 256];
@@ -15,6 +16,24 @@ static int hwid_lookup(void *ctx, unsigned vendor, unsigned device, char *out, s
 { (void)ctx; hwid_queries++; return cp_hwid_lookup_json("{\"8086:2415\": \"Pack AC97 device\"}", vendor, device, out, size); }
 static int usb_hwid_lookup(void *ctx, unsigned vendor, unsigned device, char *out, size_t size)
 { (void)ctx; return cp_hwid_lookup_json("{\"1234:0001\": \"USB Pack Keyboard\"}", vendor, device, out, size); }
+static int display(void *ctx,struct ciuki_display_info *out) { (void)ctx; display_fixture(out); return 0; }
+static int engine(void *ctx,struct ciuki_accel_info *out)
+{ (void)ctx; *out=(struct ciuki_accel_info){.driver=CIUKI_ACCEL_DRIVER_SAVAGE,.capabilities=3}; return 0; }
+static int network(void *ctx,struct ciuki_net_state *out)
+{ (void)ctx; *out=(struct ciuki_net_state){.version=CIUKI_NET_VERSION,.size=sizeof(*out),.present=1,.link=CIUKI_NET_LINK_UP}; return 0; }
+static int mixer(void *ctx,int *volume,int *muted) { (void)ctx; *volume=70; *muted=0; return 0; }
+static int log_error;
+static int log_read(void *ctx,uint32_t offset,char *out,size_t cap,size_t *length,uint32_t *total)
+{
+    (void)ctx; if (log_error) return -ENOENT;
+    static const char line[]="Ciuki boot log: device ready\n";
+    *total=320u*1024; *length=offset<*total ? *total-offset : 0;
+    if (*length>cap) *length=cap;
+    for (size_t k=0;k<*length;k++) out[k]=line[(offset+k)%(sizeof(line)-1)];
+    return 0;
+}
+static int action(void *ctx) { (void)ctx; return 0; }
+static int autoplay(void *ctx,struct ap_preference *out,unsigned capacity) { (void)ctx; (void)out; (void)capacity; return 0; }
 static char boot[128] = "safe=0 serial=1 video=1024x768 input=firmware\n";
 static int settings_load(void *c, char *s, size_t cap, size_t *n)
 { (void)c; const char text[] = "version=1\nwallpaper=none\n"; assert(cap >= sizeof(text)); memcpy(s, text, sizeof(text)); *n = sizeof(text) - 1; return 0; }
@@ -67,23 +86,36 @@ int main(int argc, char **argv)
     char hwid[65];
     assert(!cp_hwid_lookup_json("{\"8086:2485\": \"INF Audio Name\"}", 0x8086, 0x2485, hwid, sizeof(hwid)) && !strcmp(hwid, "INF Audio Name"));
     assert(cp_hwid_lookup_json("{}", 0x8086, 0x2485, hwid, sizeof(hwid)));
-    app.host = (struct cp_host){.load = settings_load, .devices = devices, .hwid_name = hwid_lookup, .usb_hwid_name = usb_hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
+    app.host = (struct cp_host){.load = settings_load, .devices = devices, .display=display, .engine=engine, .network=network, .mixer=mixer, .power=action, .log_read=log_read, .autoplay_list=autoplay, .hwid_name = hwid_lookup, .usb_hwid_name = usb_hwid_lookup, .boot_load = boot_load, .boot_save = boot_save,
         .portrait = portrait, .screen_w = 1024, .screen_h = 768, .mem_total_k = 512 * 1024, .mem_free_k = 480 * 1024,
         .version = "0.9.0 pre-alpha", .build = "host-preview", .machine = "i686", .processes = 6, .fonts_path = argv[3]};
     du_init(&ui, pixels, CP_WIDTH, CP_HEIGHT); ui.focused_window = 1;
     assert(!cp_attach(&app, &ui, CP_HOME));
-    assert(app.page == CP_HOME && kind(DU_LISTVIEW)->view == DU_ICONS && kind(DU_LISTVIEW)->count == CP_PAGES);
-    for (unsigned k = 0; k < CP_PAGES; k++) assert(app.applet_items[k].icon16 && app.applet_items[k].icon32);
-    render(renders, "control-folder");
-    static const char *const page_files[] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay"};
-    _Static_assert(sizeof(page_files) / sizeof(page_files[0]) == CP_PAGES, "every Control Panel page needs a capture");
-    for (int k = 0; k < CP_PAGES; k++) {
-        du_focus(&ui, kind(DU_LISTVIEW)->id); at_tap(&ui, DU_KEY_HOME);
-        for (int right = 0; right < k; right++) at_tap(&ui, DU_KEY_RIGHT);
-        at_tap(&ui, DU_KEY_ENTER); assert(app.page == k);
-        char name[64]; snprintf(name, sizeof(name), "control-%s", page_files[k]); render(renders, name);
-        assert(ui.count <= DU_WIDGETS);
-        click("Control Panel"); assert(app.page == CP_HOME);
+    assert(app.page==CP_HOME && kind(DU_TREE)->count==CP_CATEGORIES);
+    render(renders,"control-folder");
+    unsigned seen[CP_PAGES]={0}, count=0;
+    static const char *const page_files[]={"display","mouse","keyboard","sounds","datetime","system","devices","drivers","network","power","adapter","fonts","autoplay"};
+    for (int cat=0;cat<CP_CATEGORIES;cat++) {
+        du_focus(&ui,CP_CATEGORY); at_tap(&ui,DU_KEY_HOME);
+        for (int k=0;k<cat;k++) at_tap(&ui,DU_KEY_DOWN);
+        assert(app.category==cat);
+        char category_name[64]; snprintf(category_name,sizeof(category_name),"control-category-%d",cat); render(renders,category_name);
+        unsigned n=kind(DU_LISTVIEW)->count;
+        for (unsigned row=0;row<n;row++) {
+            int page=app.applet_pages[row]; assert(!seen[page]++); count++;
+            assert(app.applet_items[row].icon16);
+            du_focus(&ui,kind(DU_LISTVIEW)->id); at_tap(&ui,DU_KEY_HOME);
+            for (unsigned k=0;k<row;k++) at_tap(&ui,DU_KEY_DOWN);
+            at_tap(&ui,DU_KEY_ENTER); assert(app.page==page);
+            char name[64]; snprintf(name,sizeof(name),"control-%s",page_files[page]); render(renders,name);
+            assert(ui.count<DU_WIDGETS); click("Control Panel"); assert(app.page==CP_HOME);
+        }
+    }
+    assert(count==CP_APPLETS && !seen[CP_ADAPTER] && !seen[CP_FONTS] && !seen[CP_DEVICES] && !seen[CP_DRIVERS]);
+    const int inspectors[]={CP_DEVICES,CP_DRIVERS,CP_ADAPTER,CP_FONTS};
+    for (unsigned k=0;k<4;k++) {
+        cp_open(&app,inspectors[k]); char name[64]; snprintf(name,sizeof(name),"control-%s",page_files[inspectors[k]]); render(renders,name);
+        click("Control Panel");
     }
     cp_open(&app, CP_DEVICES);
     assert(app.tree_count == 19 && !strcmp(app.tree_items[0].text[0], "Computer"));
@@ -131,7 +163,7 @@ int main(int argc, char **argv)
     assert(find(DU_LABEL, "Uptime: 0 days, 02:02:03"));
     monotonic_ns += 5000000000ull; cp_tick(&app);
     assert(find(DU_LABEL, "Uptime: 0 days, 02:02:08"));
-    tab(1); render(renders, "system-hardware"); assert(find(DU_LABEL, "Sound: 1 listed, 0 ready"));
+    tab(1); render(renders, "system-hardware"); assert(app.page==CP_DEVICES && kind(DU_TREE) && app.tree_count==19);
     tab(2); render(renders, "system-advanced"); assert(kind(DU_CHECKBOX)->value == 1);
     at_click_widget(&ui, kind(DU_CHECKBOX)->id); assert(app.serial_next == 0);
     /* A different writer updated the boot file while the page was open. */
@@ -141,7 +173,14 @@ int main(int argc, char **argv)
     fail_save = 1; click("Apply to BOOT.CFG"); assert(find(DU_LABEL, "BOOT.CFG could not be saved."));
     strcpy(boot, "serial=0 serial=1"); tab(2); assert(!kind(DU_CHECKBOX)->value);
     strcpy(boot, "safe=0"); tab(2); assert(kind(DU_CHECKBOX)->value);
+    assert(app.log.readonly && app.log.len==CP_LOG_BYTES && app.log_total==320u*1024 && !app.log_offset);
+    at_click_widget(&ui,CP_LOG_NEXT); assert(app.log_offset==CP_LOG_BYTES);
+    at_click_widget(&ui,CP_LOG_PREV); assert(!app.log_offset);
+    du_focus(&ui,CP_LOG_VIEW); size_t length=app.log.len;
+    at_tap(&ui,0x1e); assert(app.log.len==length && !app.log.modified);
+    log_error=1; at_click_widget(&ui,CP_OPEN_LOG); assert(!app.log.len && strstr(app.log_status,"No such file"));
+    log_error=0; at_click_widget(&ui,CP_OPEN_LOG); assert(app.log.len==CP_LOG_BYTES);
     assert(loads >= 3); cp_detach(&app);
-    puts("PASS device manager: twelve applets, keyboard navigation, bounded class tree, refresh, Properties, drivers/leases, system and preserving BOOT.CFG edits");
+    puts("PASS device manager: nine categorized applets, keyboard navigation, bounded class tree, refresh, Properties, drivers/leases, system and preserving BOOT.CFG edits");
     return 0;
 }

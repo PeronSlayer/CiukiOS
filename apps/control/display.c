@@ -44,7 +44,7 @@ void cp_settings_message(struct ciuki_message *m, uint32_t serial, unsigned requ
     if (request == DESK_SETTINGS_MASTER) {
         desk_put32(m->data + 12, (uint32_t)value); desk_put32(m->data + 16, (uint32_t)value);
         desk_put32(m->data + 20, (uint32_t)(flag != 0));
-    } else if (request == DESK_SETTINGS_DISPLAY || request == DESK_SETTINGS_SOUND_TEST)
+    } else if (request == DESK_SETTINGS_DISPLAY || request == DESK_SETTINGS_DISPLAY_PREVIEW || request == DESK_SETTINGS_SOUND_TEST)
         desk_put32(m->data + 12, (uint32_t)value);
 }
 
@@ -116,6 +116,16 @@ static void info_lines(struct cp_app *a)
     }
     strcpy(a->adapter_lines[9], "Monitor: Plug and Play Monitor (no EDID yet)");
 }
+void cp_engine_refresh(struct cp_app *a)
+{
+    struct ciuki_accel_info engine={0};
+    if (!a->host.engine || a->host.engine(a->host.ctx,&engine))
+        snprintf(a->engine_line,sizeof(a->engine_line),"Savage engine: status unavailable");
+    else snprintf(a->engine_line,sizeof(a->engine_line),"Savage engine: %s; capabilities 0x%X",
+        engine.driver != CIUKI_ACCEL_DRIVER_SAVAGE ? "not present" : engine.quarantined ? "quarantined" :
+        engine.capabilities ? "available" : "software rendering",engine.capabilities);
+    label(a,974,a->engine_line);
+}
 int cp_display_refresh(struct cp_app *a)
 {
     struct ciuki_display_info d = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(d)};
@@ -142,7 +152,9 @@ int cp_display_refresh(struct cp_app *a)
         }
         depths_build(a, d.bpp); a->preview_valid = 0;
     } else memset(&a->display, 0, sizeof(a->display));
+    cp_engine_refresh(a);
     info_lines(a);
+    label(a,972,a->adapter_lines[4]); label(a,973,a->adapter_lines[2]);
     cp_display_sync(a);
     return a->display_ok ? 0 : -1;
 }
@@ -155,7 +167,10 @@ void cp_display_sync(struct cp_app *a)
     for (unsigned i = 0; i < a->area_count; i++) a->area_items[i].selected = i == a->area;
     for (unsigned i = 0; i < a->depth_count; i++) a->depth_items[i].selected = i == a->depth;
     w = du_get(a->ui, CP_APPLY);
-    if (w) w->disabled = a->mode_state || !active_mode(a) || !selected_mode(a) || selected_mode(a) == active_mode(a);
+    if (w) w->disabled = a->mode_state || a->display_write ||
+        (!a->display_dirty && (!active_mode(a) || !selected_mode(a) || selected_mode(a)==active_mode(a)));
+    w=du_get(a->ui,CP_OK); if (w) w->disabled=a->mode_state || a->display_write;
+    w=du_get(a->ui,CP_DISPLAY_TABS_ID); if (w) w->disabled=a->mode_state || a->display_write;
     w = du_get(a->ui, CP_REFRESH); if (w) w->disabled = a->mode_state != CP_MODE_IDLE;
     label(a, CP_MODE_NOTE, !a->display_ok ? "Unavailable." : !active_mode(a) ? "No safe restore." : "15s to confirm.");
 }
@@ -164,7 +179,7 @@ void cp_adapter_paint(struct cp_app *a, struct du_canvas *c)
     for (unsigned i = 0; i < 10; i++) du_text_fit(c, 24, 48 + (int)i * 26, c->width - 48, a->adapter_lines[i], DU_INK);
 }
 static int request(struct cp_app *a, uint16_t id)
-{ return a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_DISPLAY, id, 0) : -1; }
+{ return a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_DISPLAY_PREVIEW, id, 0) : -1; }
 static void finish(struct cp_app *a, const char *status)
 {
     a->mode_state = CP_MODE_IDLE;
@@ -173,13 +188,23 @@ static void finish(struct cp_app *a, const char *status)
     if (du_dialog_id(a->ui) == CP_CONFIRM) du_dialog_close(a->ui);
     cp_display_refresh(a); label(a, 3, status);
 }
+static void restore_failed(struct cp_app *a, const char *status)
+{
+    a->display_accept=0;
+    if (a->display_leaving) {
+        a->display_preview=1; a->display_leaving=0;
+        a->close_pending=a->navigation_pending=0;
+    }
+    finish(a,status);
+}
 void cp_display_cancel(struct cp_app *a)
 {
     if (a->mode_state == CP_MODE_IDLE || a->mode_state == CP_MODE_REVERT) return;
     if (du_dialog_id(a->ui) == CP_CONFIRM) du_dialog_close(a->ui);
     a->mode_state = CP_MODE_REVERT; a->mode_deadline = a->ui->now + CONFIRM_TIME;
     a->mode_retry=0;
-    if (request(a, a->previous_mode)) { finish(a, "The previous mode could not be requested."); return; }
+    a->display_accept=0;
+    if (request(a, a->previous_mode)) { restore_failed(a, "The previous mode could not be requested. Try Cancel again."); return; }
     label(a, 3, "Restoring the previous display mode..."); cp_display_sync(a);
 }
 static void countdown(struct cp_app *a)
@@ -196,12 +221,12 @@ void cp_display_result(struct cp_app *a, int result)
     }
     if (a->mode_state == CP_MODE_REVERT) {
         if (result || cp_display_refresh(a) || active_mode(a) != a->previous_mode)
-            finish(a, "The previous display mode could not be restored.");
+            restore_failed(a, "The previous display mode could not be restored. Try Cancel again.");
         else finish(a, "The previous display mode was restored.");
         return;
     }
     if (a->mode_state != CP_MODE_WAIT) return;
-    if (result) { finish(a, "The desktop refused the display mode."); return; }
+    if (result) { a->display_accept=0; finish(a, "The desktop refused the display mode."); return; }
     if (cp_display_refresh(a) || active_mode(a) != a->pending_mode) { cp_display_cancel(a); return; }
     a->mode_state = CP_MODE_CONFIRM; a->mode_deadline = a->ui->now + CONFIRM_TIME;
     static const char *const buttons[] = {"Keep", "Revert"};
@@ -212,27 +237,21 @@ void cp_display_saved(struct cp_app *a, int error)
 {
     if (a->mode_state!=CP_MODE_SAVE) return;
     if (error) {
+        a->display_accept=0;
         char text[256]; if (error<0) error=-error;
         snprintf(text,sizeof(text),"Restoring the previous mode: %s (%d)",strerror(error),error);
         cp_display_cancel(a); label(a,3,text);
     } else {
         finish(a,"Display settings saved.");
+        if (a->display_accept) cp_display_accept(a);
         if (!a->host.apply || a->host.apply(a->host.ctx,DESK_SETTINGS_RELOAD,0,0))
             label(a,3,"Saved. Desktop reload could not be requested.");
     }
 }
 static int persist(struct cp_app *a)
 {
-    /* Match the panel's other settings writes: bounded static scratch keeps
-     * the i686 client stack below the SDK's 4 KiB frame warning threshold. */
-    static struct ciuki_settings cfg; cfg_defaults(&cfg);
-    static char buffer[CFG_TEXT_MAX]; size_t n = 0;
-    if (a->host.load && !a->host.load(a->host.ctx, buffer, sizeof(buffer), &n)) cfg_parse(&cfg, buffer, n);
-    cfg.display_mode = a->pending_mode;
-    n = cfg_format(&cfg, buffer, sizeof(buffer));
-    if (!n || !a->host.save || a->host.save(a->host.ctx, buffer, n)) return -1;
-    a->cfg.display_mode = cfg.display_mode;
-    return 0;
+    a->cfg.display_mode = a->pending_mode;
+    return cp_display_store(a);
 }
 int cp_display_event(struct cp_app *a, const struct du_event *e)
 {
@@ -241,25 +260,26 @@ int cp_display_event(struct cp_app *a, const struct du_event *e)
         if (a->mode_retry && a->ui->now>=a->mode_retry_ns && a->ui->now<a->mode_deadline) {
             a->mode_retry=0;
             if (request(a,a->mode_state==CP_MODE_REVERT ? a->previous_mode : a->pending_mode))
-                finish(a,"The display retry could not be requested.");
+                restore_failed(a,"The display retry could not be requested.");
             return 1;
         }
         if (a->mode_state && a->ui->now >= a->mode_deadline) {
-            if (a->mode_state == CP_MODE_REVERT) finish(a, "No reply while restoring the display mode.");
+            if (a->mode_state == CP_MODE_REVERT) restore_failed(a, "No reply while restoring the display mode. Try Cancel again.");
             else cp_display_cancel(a);
         } else if (a->mode_state == CP_MODE_CONFIRM) countdown(a);
         return 1;
     }
     if (e->id == CP_CONFIRM && e->type == DU_EV_DIALOG) {
         if (a->mode_state != CP_MODE_CONFIRM) return 1;
-        if (e->index || a->ui->now >= a->mode_deadline) cp_display_cancel(a);
+        if (e->index || a->ui->now >= a->mode_deadline) { a->display_accept=0; cp_display_cancel(a); }
         else if (cp_display_refresh(a) || active_mode(a) != a->pending_mode || persist(a)) {
-            cp_display_cancel(a); label(a, 3, "Settings could not be saved; restoring the previous mode.");
+            a->display_accept=0; cp_display_cancel(a); label(a, 3, "Settings could not be saved; restoring the previous mode.");
         } else if (a->host.save_async) {
             a->mode_state=CP_MODE_SAVE;
             label(a,3,"Saving display settings..."); cp_display_sync(a);
         } else {
             finish(a, "Display settings saved.");
+            if (a->display_accept) cp_display_accept(a);
             if (!a->host.apply || a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0)) label(a, 3, "Saved. Desktop reload could not be requested.");
         }
         return 1;
@@ -276,17 +296,22 @@ int cp_display_event(struct cp_app *a, const struct du_event *e)
         a->depth = (unsigned)e->index; cp_display_sync(a); return 1;
     }
     if (e->id == CP_APPLY && e->type == DU_EV_ACTIVATE) {
+        if (a->display_write) return 1;
         a->pending_mode = selected_mode(a);
+        if (!active_mode(a) || !a->pending_mode || a->pending_mode==active_mode(a)) {
+            if (a->display_dirty && cp_display_store(a)) a->display_accept=0;
+            cp_display_sync(a); return 1;
+        }
         cp_display_refresh(a); /* capture the actual previous mode at Apply, not at panel creation */
         a->previous_mode = active_mode(a);
         int listed = 0;
         for (unsigned i = 0; i < a->display.mode_count; i++)
             if (eligible(&a->display.modes[i]) && a->display.modes[i].id == a->pending_mode) listed = 1;
-        if (!listed) { label(a, 3, "The selected display mode is no longer available."); return 1; }
+        if (!listed) { a->display_accept=0; label(a, 3, "The selected display mode is no longer available."); return 1; }
         if (!a->pending_mode || !a->previous_mode || a->pending_mode == a->previous_mode) return 1;
         a->mode_state = CP_MODE_WAIT; a->mode_deadline = a->ui->now + CONFIRM_TIME;
         if (du_timer_start(a->ui, CP_MODE_TIMER, SECOND, 1) || request(a, a->pending_mode)) {
-            finish(a, "The display mode could not be requested."); return 1;
+            a->display_accept=0; finish(a, "The display mode could not be requested."); return 1;
         }
         label(a, 3, "Applying the display mode..."); cp_display_sync(a); return 1;
     }

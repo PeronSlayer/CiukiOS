@@ -277,7 +277,11 @@ static const char *client_icon(const struct desktop *d, int i)
     if (c->program == DESK_APP_TERMINAL) return "utilities-terminal";
     if (c->program == DESK_APP_FILES) return "system-file-manager";
     if (c->program == DESK_APP_NOTE) return "accessories-text-editor";
-    if (c->program == DESK_APP_CONTROL) return "preferences-desktop";
+    if (c->program == DESK_APP_CONTROL) {
+        if (!strcmp(c->title,"Display Properties")) return cp_applets[0].icon;
+        for (unsigned k=0;k<CP_APPLETS;k++) if (!strcmp(c->title,cp_applets[k].label)) return cp_applets[k].icon;
+        return "preferences-desktop";
+    }
     if (c->taskman) return "utilities-system-monitor";
     for (unsigned k = 0; k < DESK_CATALOG_COUNT; k++)   /* accessories: the launcher's Tango name by window title */
         if (strstr(c->title, desk_catalog[k].label)) return desk_catalog[k].tango;
@@ -297,7 +301,7 @@ static void item(struct sh_menu *m, const char *label, const char *icon, int act
     it->icon = icon; it->action = (uint8_t)action; it->arg = (int16_t)arg; it->flags = (uint8_t)flags;
 }
 static void separator(struct sh_menu *m) { item(m, "", NULL, SH_ACT_NONE, 0, SH_ITEM_SEPARATOR); }
-static const char *const panel_names[] = {"", "display", "mouse", "keyboard", "sounds", "datetime", "system"};
+
 /* Only projected Desktop entries may receive filesystem operations. */
 static int icon_is_entry(const struct desktop *d, int index)
 {
@@ -372,12 +376,8 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         unsigned off = program_index(d, "control") < 0 ? SH_ITEM_DISABLED : 0;
         item(m, "Control Panel", "preferences-desktop", SH_ACT_CONTROL, 0, off);
         separator(m);
-        item(m, "Display", "preferences-desktop-wallpaper", SH_ACT_CONTROL, 1, off);
-        item(m, "Mouse", "input-mouse", SH_ACT_CONTROL, 2, off);
-        item(m, "Keyboard", "input-keyboard", SH_ACT_CONTROL, 3, off);
-        item(m, "Sounds", "audio-card", SH_ACT_CONTROL, 4, off);
-        item(m, "Date & Time", "office-calendar", SH_ACT_CONTROL, 5, off);
-        item(m, "System", "ciuki-computer", SH_ACT_CONTROL, 6, off);
+        for (int k=0;k<CP_CATEGORIES;k++)
+            item(m,cp_categories[k].label,cp_categories[k].icon,SH_ACT_SUBMENU,SH_MENU_SETTINGS_CATEGORY+k,off);
         separator(m);
         item(m, "Task Manager", "utilities-system-monitor", SH_ACT_TASKMAN, 0, program_index(d, "tasks") < 0 ? SH_ITEM_DISABLED : 0);
         break;
@@ -389,8 +389,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         break;
     case SH_MENU_NEW:
         item(m,"Folder","folder-new",SH_ACT_FILE,DF_FOLDER,0);
-        item(m,"Text Document","text-x-generic",SH_ACT_FILE,DF_TEXT,0);
-        item(m,"Bitmap Image","applications-graphics",SH_ACT_FILE,DF_BITMAP,0);
+        item(m,"Text file","text-x-generic",SH_ACT_FILE,DF_TEXT,0);
         break;
     case SH_MENU_OPEN_WITH:
         if (icon_is_entry(d, d->sh.menu_owner)) {
@@ -401,14 +400,21 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         break;
     case SH_MENU_DESKTOP:
-        item(m,"New", "document-new", SH_ACT_SUBMENU, SH_MENU_NEW, d->sh.folder ? 0 : SH_ITEM_DISABLED);
-        item(m,"Paste", "edit-paste", SH_ACT_FILE, DF_PASTE, d->sh.folder ? 0 : SH_ITEM_DISABLED);
+        item(m,"Arrange icons",NULL,SH_ACT_ARRANGE,0,0);
+        item(m,"Line up",NULL,SH_ACT_ARRANGE,1,0);
+        item(m,"Refresh","view-refresh",SH_ACT_REFRESH,0,0);
+        item(m,"New","document-new",SH_ACT_SUBMENU,SH_MENU_NEW,d->sh.folder ? 0 : SH_ITEM_DISABLED);
+        item(m,"Paste","edit-paste",SH_ACT_FILE,DF_PASTE,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         separator(m);
-        item(m, "Arrange Icons", NULL, SH_ACT_ARRANGE, 0, 0);
-        item(m, "Refresh", "view-refresh", SH_ACT_REFRESH, 0, 0);
-        separator(m);
-        item(m, "Display Settings...", "preferences-desktop-wallpaper", SH_ACT_CONTROL, 1, program_index(d, "control") < 0 ? SH_ITEM_DISABLED : 0);
-        item(m, "Properties", "document-properties", SH_ACT_CONTROL, 1, program_index(d, "control") < 0 ? SH_ITEM_DISABLED : 0);
+        item(m,"Properties","document-properties",SH_ACT_CONTROL,CP_DISPLAY+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
+        break;
+    case SH_MENU_TRAY_SETTINGS:
+        for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].page==d->sh.menu_owner) {
+            const struct cp_applet *a=&cp_applets[k];
+            item(m,cp_categories[a->category].label,cp_categories[a->category].icon,SH_ACT_NONE,0,SH_ITEM_DISABLED);
+            separator(m);
+            item(m,a->label,a->icon,SH_ACT_CONTROL,a->page+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
+        }
         break;
     case SH_MENU_ICON:
         item(m, "Open", NULL, SH_ACT_ICON_OPEN, d->sh.menu_owner, SH_ITEM_DEFAULT);
@@ -438,7 +444,11 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Close    Alt+F4", "process-stop", SH_ACT_TASK_CLOSE, owner, minimized ? 0 : SH_ITEM_DEFAULT);
         break;
     }
-    default: break;
+    default:
+        if (kind>=SH_MENU_SETTINGS_CATEGORY && kind<=SH_MENU_SETTINGS_LAST)
+            for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].category==kind-SH_MENU_SETTINGS_CATEGORY)
+                item(m,cp_applets[k].label,cp_applets[k].icon,SH_ACT_CONTROL,cp_applets[k].page+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
+        break;
     }
 }
 static int32_t item_y(const struct sh_menu *m, int index)
@@ -576,7 +586,9 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_CONTROL:
         if (it->arg <= 0) launch_named(d, "control", NULL);
-        else { snprintf(argument, sizeof(argument), "--panel=%s", panel_names[it->arg]); launch_named(d, "control", argument); }
+        else for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].page==it->arg-1) {
+            snprintf(argument,sizeof(argument),"--panel=%s",cp_applets[k].name); launch_named(d,"control",argument); break;
+        }
         break;
     case SH_ACT_TASKMAN: launch_named(d, "tasks", NULL); break;
     case SH_ACT_GAME: launch_game(d, it->arg); break;
@@ -587,7 +599,30 @@ static void act(struct desktop *d, const struct sh_item *it)
             "Arrows            Move in menus and icons\nEsc               Close a menu", 0);
         break;
     case SH_ACT_ARRANGE: {
-        cfg_icons_arrange(&d->sh.cfg); d->sh.want_save=1;
+        if (!it->arg) cfg_icons_arrange(&d->sh.cfg);
+        else {
+            uint8_t occupied[512]={0};
+            int cw=d->sh.icon_count ? d->sh.icons[0].box.w : 96;
+            int ch=d->sh.icon_count ? d->sh.icons[0].box.h : 94;
+            int columns=((int)d->width-8)/cw,rows=((int)d->height-2*DESK_BAR-14)/ch;
+            if (columns<1) columns=1;
+            if (rows<1) rows=1;
+            int cells=columns*rows;
+            if (cells>4096) cells=4096;
+            for (int k=0;k<d->sh.icon_count && k<cells;k++) {
+                struct desk_box b=d->sh.icons[k].box;
+                int col=(b.x-8+cw/2)/cw,row=(b.y-DESK_BAR-10+ch/2)/ch;
+                if (col<0) col=0;
+                if (row<0) row=0;
+                if (col>=columns) col=columns-1;
+                if (row>=rows) row=rows-1;
+                int slot=(col*rows+row)%cells;
+                while (occupied[slot/8] & (1u<<(slot%8))) slot=(slot+1)%cells;
+                occupied[slot/8]|=1u<<(slot%8);
+                cfg_icon_move(&d->sh.cfg,icon_position_name(d,k),8+(slot/rows)*cw,DESK_BAR+10+(slot%rows)*ch);
+            }
+        }
+        d->sh.want_save=1;
         d->sh.icon_selected = -1;
         desk_shell_apply(d);
         break;
@@ -2024,6 +2059,19 @@ int desk_shell_button(struct desktop *d, int button, int down)
         int start = d->sh.menus[0].kind == SH_MENU_START;
         desk_menu_close(d);
         if (start && desk_contains(start_button(d), x, y)) return 1;
+    }
+    if (button==CIUKI_BUTTON_RIGHT) {
+        int page=desk_contains(volume_icon_box(d),x,y) ? CP_SOUNDS :
+            desk_contains(network_icon_box(d),x,y) ? CP_NETWORK :
+            desk_contains(media_icon_box(d),x,y) ? CP_AUTOPLAY :
+            desk_contains(desk_shell_clock_box(d),x,y) ? CP_DATETIME : CP_HOME;
+        if (page!=CP_HOME) {
+            if (d->sh.volume_open) damage(d,outer(volume_popup(d)));
+            if (d->sh.network_open) damage(d,outer(network_popup(d)));
+            if (d->sh.media_open) damage(d,outer(media_popup(d)));
+            d->sh.volume_open=d->sh.network_open=d->sh.media_open=0;
+            d->sh.menu_owner=page; desk_menu_open(d,SH_MENU_TRAY_SETTINGS,x,y); return 1;
+        }
     }
     if (d->sh.media_open) {
         struct desk_box p=media_popup(d);

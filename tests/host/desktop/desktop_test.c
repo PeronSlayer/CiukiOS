@@ -644,6 +644,14 @@ static void test_graphics_service(void)
     d.clients[i].minimized=0;d.focus=-1;desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EBUSY);
     d.focus=i;d.power.state=DESK_POWER_CLOSING;desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EBUSY);
     d.power.state=0;d.clients[i].gfxdemo=0;desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EPERM);
+    /* Control Panel can read the same engine snapshot but cannot benchmark. */
+    d.clients[i].program=DESK_APP_CONTROL;
+    desk_receive(&d,i,&m);p=graphics_reply(i);assert(p.result==-EPERM);
+    request(&m,DESK_GFX_QUERY,8);m.data[0]=2;desk_put32(m.data+4,19);
+    desk_receive(&d,i,&m);p=graphics_reply(i);
+    assert(p.opcode==DESK_GFX_INFO && p.serial==19 && p.accelerator.quarantined==1);
+    d.clients[i].program=0;
+    request(&m,DESK_GFX_BENCH,12);m.data[0]=2;
     struct desk_packet parsed;desk_put32(m.data+8,6);assert(!desk_parse(&m,1,NULL,&parsed));
     desk_put32(m.data+8,2);m.data[0]=1;assert(!desk_parse(&m,1,NULL,&parsed));
     cleanup();puts("PASS graphics service: launch authorization, 64-bit kernel counters, rate limit, focus/minimize/shutdown, protocol bounds");
@@ -758,6 +766,12 @@ static void test_terminal(void)
     d.clients[i].program=0; strcpy(d.clients[i].title,"Terminal");
     request(&m,DESK_LAUNCH,20); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+8,8); memcpy(m.data+12,"ciuknote",8);
     desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM);
+    /* Power opens the shared confirmation; an untrusted client is refused. */
+    request(&m,DESK_SETTINGS,24);m.data[0]=DESK_SHELL_VERSION;desk_put32(m.data+8,DESK_SETTINGS_OPEN_POWER);
+    d.clients[i].program=0;desk_receive(&d,i,&m);assert(terminal_result(i)==-EPERM);
+    d.clients[i].program=DESK_APP_CONTROL;desk_receive(&d,i,&m);assert(!terminal_result(i));
+    int dialog=d.focus;assert(dialog>=0 && d.clients[dialog].internal==DESK_INTERNAL_SHUTDOWN && !d.sh.want_power);
+    desk_request_close(&d,dialog);
     d.clients[i].program=DESK_APP_TERMINAL; d.terminate=terminal_kill; d.self_pid=77;
     request(&m,DESK_END_TASK,16); m.data[0]=DESK_SHELL_VERSION; desk_put32(m.data+12,1);
     desk_receive(&d,i,&m); assert(terminal_result(i)==-EPERM && !terminal_kill_pid);

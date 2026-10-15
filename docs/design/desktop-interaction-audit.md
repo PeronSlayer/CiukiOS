@@ -23,7 +23,7 @@ does not give their relative imports a package. Their separate package-form
 run is recorded in `build/codex/f2-67-before-package-tests.log`. Subsequent
 full runs use `-s tests/host/desktop -t tests/host`.
 
-## Windows and shell
+## Window management and shell
 
 | Interaction or control | Initial behaviour and evidence | Status |
 | --- | --- | --- |
@@ -363,3 +363,127 @@ Power-dialog and notification cursor overrides from F2-68 remain in the
 combined router. F2-67 continues to own resize/move and captured client
 feedback. The protocol/request harness checks that Power and notification
 states suppress a stored Paint cursor and restore it after dismissal.
+
+## F2-75: settings inventory and category tree
+
+The audit precedes implementation. `apps/control/app.c` exposes thirteen
+ungrouped launchers. Display combines theme, wallpaper, placement, background
+colour, icon visibility, resolution and depth. Adapter shows display details
+separately. Fonts previews installed faces in a separate launcher. Mouse
+controls pointer and double-click speed; Keyboard selects the layout. Sounds
+controls master volume, mute, event scheme, event volume, preview and an audio
+hardware test. Date and Time shows UTC and controls clock formatting. System
+contains version, processor, memory, uptime, a hardware count and serial boot
+logging. Device Manager inspects devices/resources; Drivers inspects drivers
+and leases. Network is an unavailable-settings notice; Power explains shutdown
+and unavailable standby. AutoPlay manages remembered media choices. The
+separate Adapter, Fonts, Device Manager and Drivers launchers scatter settings
+which belong to Display or System. Network and Power must explain the actual
+available actions and limitations without presenting inactive settings.
+
+The desktop background menu initially contains New (Folder, Text Document,
+Bitmap Image), Paste, a separator, Arrange Icons, Refresh, a separator,
+Display Settings and Properties. New and Paste route to desktop file commands;
+Arrange resets positions; Refresh reloads the folder. Both display entries
+launch `control --panel=display`. Line up is missing. Start Settings contains
+only six applet shortcuts and Task Manager. Tray secondary clicks have no
+settings menu. These entry points do not share a category model.
+
+The following tree assigns each user setting to exactly one applet. Internal
+tabs and inspectors are parts of that applet, never additional launchers.
+Status shown in the tray is a shortcut to its owning applet.
+
+| Category | Applet | Owned settings and information |
+| --- | --- | --- |
+| Appearance | Display | Background: picture, placement, desktop colour, icon visibility. Appearance: theme palette and font roles, installed font preview. Settings: resolution, depth, adapter and read-only Savage engine state. No screen saver exists. |
+| Sound | Sounds and Audio | Master volume/mute, system event scheme and volume, preview, audio hardware test. |
+| Input | Keyboard | Keyboard layout. |
+| Input | Mouse | Pointer speed and double-click interval. |
+| Time | Date and Time | UTC status, 12/24-hour clock and seconds. Clock adjustment is unavailable. |
+| Connections | Network | Adapter/link status; address configuration remains unavailable. |
+| Power and devices | Power | Safe shutdown/restart entry point and current power-saving limitations. |
+| Power and devices | Storage and removable devices | Removable-media choices and storage inventory. |
+| System | System | Version, CPU, memory, uptime, Hardware check/device resources, drivers/leases, logs and next-boot serial logging. |
+
+Keep this order, names and icons in a shared catalog used by Control Panel,
+Start Settings and tray context menus. The panel uses a category tree beside
+the selected category's applets. The existing theme supplies colour, type,
+spacing, focus and button rendering. Display uses one tab sheet and uniform
+OK, Cancel and Apply actions from every entry point. Apply previews; Cancel,
+Escape, navigation away and caption close restore the entry values. OK keeps
+the changes. Mode confirmation retains the bounded timer and safe rollback.
+
+Before implementation, checked the upstream [tab container](https://docs.gtk.org/gtk4/class.Notebook.html),
+[tree navigation](https://docs.gtk.org/gtk4/class.TreeView.html) and
+[dialog response model](https://docs.gtk.org/gtk4/class.Dialog.html). The local
+toolkit already provides focusable trees, lists, tabs and dialog responses;
+reuse these primitives and keep the controller's draft, applied preview and
+accepted values distinct. Merge only Display-owned keys when previewing or
+reverting, preserving other settings and unknown keys. Remember panel size
+in a separate small file so closing the panel cannot overwrite display edits.
+
+Read-only physical logs for image `a395ffa8` report wallpaper/settings worker
+stalls. They establish existing latency, not validation of these changes.
+Retain deferred image decode and asynchronous settings writes. Host renders
+and tests are the implementation evidence; the lead validates the integrated
+image and the owner evaluates the T23.
+
+
+The implemented home view contains seven categories and nine applets. Adapter
+and Fonts selectors remain accepted as compatibility aliases for Display's
+Settings and Appearance tabs. Device and driver inspectors share System's
+General, Hardware check, Logs and Drivers tab sheet. They have no separate
+home or Start launchers. The Power action opens the shell's existing shutdown
+confirmation. Logs reads `/system/logs/BOOT.LOG` in bounded 8 KiB pages, with Previous, Next
+and Refresh controls and a read-only text area for scrolling and copying.
+
+Display retains an entry snapshot through every Apply, including successive
+confirmed mode previews. Cancel restores the entry display keys and mode while
+preserving independently edited settings. A pending save defers close or
+navigation. A failed restore leaves the dialog open for retry. OK closes after
+durable completion. The appearance selector changes the theme's existing
+palette and UI font roles; the installed-font list remains a read-only preview.
+The shell supplies its existing engine snapshot to Control Panel through the
+read-only graphics query. Benchmark authority remains unchanged. The Power
+confirmation is request 7 of the existing settings message, with all value
+fields zero, declared in the shared private settings catalog.
+
+Panel size uses `/system/settings/control.size`; bounds are checked before
+opening, and successful size writes replace a small temporary file. Panel,
+Start and tray labels/icons come from `apps/desktop/settings_catalog.h`.
+Line up snaps icons into distinct available grid cells, while Arrange resets
+saved positions. The background menu contains Arrange icons, Line up, Refresh,
+New (Folder, Text file), Paste, a separator and Properties, in that order.
+
+Host review copies for every applet, category and Display tab are under
+`build/host/f2-75/`. Their raw-frame SHA-256 pins are in
+`tests/host/desktop/control-goldens.json`. Separate render names distinguish
+fixtures with different engine snapshots. The implementation report records
+commands, results and the remaining integrated-image and physical checks.
+
+
+The kernel's `bootlog.h` fixes the current log at `C:/SYSTEM/LOGS/BOOT.LOG`
+and limits each file to 320 KiB. This exceeds CiukNote's 61,440-byte document
+limit, so the System applet reads the file itself rather than launching an
+editor. The [positioned-read specification](https://sourceware.org/glibc/manual/latest/html_node/I_002fO-Primitives.html)
+was checked against the SDK's `pread`: keep one read-only descriptor for each
+bounded snapshot, retry interruptions and handle short reads, truncation and
+missing files. Pages follow file byte order, including the kernel's protected
+prefix and circular suffix. The view never writes log data.
+
+
+A completed Control Panel preview must not race a second settings writer.
+Private settings request 8 uses the existing bounded mode-id payload and
+Control Panel authorization, but classifies its completed frame as a preview.
+It leaves the desktop's saved mode preference unchanged and skips the ordinary
+automatic mode save. Request 3 retains its existing durable-frame behaviour.
+Control Panel persists only after confirmation. Cancel first completes its
+settings rollback and queues reload, then requests the original mode through
+the same preview path. Host checks distinguish both frame classes and verify
+that a pending durable rollback cannot start a mode restore early.
+
+
+The display regression harness also exposed a maximized-window relayout using
+its old origin when applying the new screen limits. Reset that origin to the
+new work area before sizing; the host test checks the 1024 by 768 to 640 by
+480 and return path, alongside preview and durable frame classification.

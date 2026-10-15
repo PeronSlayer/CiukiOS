@@ -684,8 +684,8 @@ static void display_poll(struct desktop *d)
     d->display_counter = counter;
     d->display_mode = mode;
     d->lfb_bytes_per_pixel=(info.bpp+7)/8;
-    /* Includes rollback: save that confirmed frame's mode, never the failed
-     * candidate. The existing cfg retains its previous id until then. */
+    /* Includes rollback. The frame classifier preserves preferences for a
+     * Control Panel preview; ordinary completed mode changes remain durable. */
     d->display_pending = mode;
 }
 static void display_start(struct desktop *d)
@@ -1461,9 +1461,10 @@ int main(int argc, char **argv)
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
-        if (desk_display_frame_commit(d, redraw)) {
+        int mode_frame=desk_display_frame_commit(d,redraw);
+        if (mode_frame) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);
-            if (d->shell && !d->sh.gate && settings_save(d))
+            if (mode_frame==DESK_DISPLAY_PERSIST_FRAME && d->shell && !d->sh.gate && settings_save(d))
                 snprintf(d->notice, sizeof(d->notice), "Display applied; settings not saved");
         }
         if (!gate) performance_sample(d,monotonic());

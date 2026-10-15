@@ -17,7 +17,7 @@ int main(int argc, char **argv)
         struct du_event ev = {.type = DU_EV_SELECT, .id = CP_FONT_LIST, .index = (int)i}; ui.event(&ui, &ev, ui.user);
         du_render(&ui); assert(a.font_selected == i && a.font_face);
         unsigned aa = 0;
-        for (int y = 264; y < 283; y++) for (int x = 32; x < CP_WIDTH - 32; x++) {
+        for (int y = 272; y < 289; y++) for (int x = 32; x < CP_WIDTH - 32; x++) {
             uint32_t p = pixels[y * CP_WIDTH + x] & 0xffffff;
             if (p != DU_WINDOW && p != DU_INK) aa++;
         }
