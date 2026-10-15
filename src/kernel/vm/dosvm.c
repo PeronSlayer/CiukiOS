@@ -809,6 +809,7 @@ bool dosvm_trap(struct trap_frame *tf)
         else kwait_wait_until(&v->wake, wake_condition, v, deadline_after_ms(10));
         dosvm_pic_stall(v, f);
         dosvm_heartbeat(v, f); /* a guest HLT with IF clear also needs samples */
+        dosvm_startup_report(v, false);
         if (!dosvm_in_irq(v)) dosvm_audio_log(v);
     }
     dosvm_fullscreen_checkpoint(v);
@@ -835,6 +836,7 @@ bool dosvm_trap(struct trap_frame *tf)
     if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
     if (v->frame_pm != pm) v->perf.cause = DOSVM_COST_SWITCH;
     perf_exit_end(v);
+    dosvm_startup_report(v, false);
     dosvm_perf_report(v);
     perf_phase(v, 1);
     cli();
@@ -843,7 +845,7 @@ bool dosvm_trap(struct trap_frame *tf)
     return true;
 }
 
-static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
+static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
     if (idle_safe(v)) {
@@ -874,16 +876,30 @@ static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
     uint16_t saved;
     if (dosvm_read(v, linear, &saved, 2)) return -EFAULT;
     f->tf.eflags = (f->tf.eflags & ~(V86_CF | V86_ZF)) | (saved & (V86_CF | V86_ZF));
+    uint16_t ax = f->tf.eax;
+    uint64_t begin = perf_monitor_stamp(v);
     int e = dosvm_bios(v, f, service);
+    perf_vector_end(v, 1, service, ax, begin);
     if (e) return e;
     saved = (saved & ~(V86_CF | V86_ZF)) | (f->tf.eflags & (V86_CF | V86_ZF));
     return dosvm_write(v, linear, &saved, 2);
+}
+
+static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
+{
+    struct dosvm *v = arg;
+    uint16_t ax = f->tf.eax;
+    uint64_t begin = perf_monitor_stamp(v);
+    int e = interrupt_dispatch(arg, f, vector);
+    perf_vector_end(v, 0, vector, ax, begin);
+    return e;
 }
 
 static void worker(void *arg)
 {
     struct dosvm *v = arg;
     write_cr3(v->as.pd_phys);
+    dosvm_startup_report(v, true);
     /* f3-04: a mode switch leaves the trap stack and re-enters here with
      * the new frame; only a stopping VM ends the loop. */
     for (;;) {
@@ -893,6 +909,7 @@ static void worker(void *arg)
         if (v->info.state == DOSVM_STOPPING) break;
     }
     v->continuation = 0;
+    dosvm_startup_report(v, true); /* retain a short-lived startup failure */
     if (v->dpmi.active) {
         arch_ldt_load(0, 0);
         arch_debug_load((const uint32_t[4]){0}, 0);

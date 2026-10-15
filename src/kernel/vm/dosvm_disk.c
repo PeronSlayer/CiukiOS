@@ -118,16 +118,20 @@ static void disk_gate_take(struct dosvm *v)
     }
 }
 static void disk_gate_drop(struct dosvm *v) { v->disk_busy = false; kwait_wake_all(&v->disk_wait); }
-static int sector_io(struct dosvm *v, int handle, uint32_t offset, void *data, bool write)
+static int backing_io(struct dosvm *v, int handle, uint32_t offset, void *data, unsigned bytes, bool write)
 {
     uint64_t position;
     size_t done = 0;
     int e = vfs_seek(&v->disk_table, handle, offset, VFS_SEEK_SET, &position);
     if (e) return e;
     if (position != offset) return -V86_EIO;
-    e = write ? vfs_write(&v->disk_table, handle, data, 512, &done) :
-                vfs_read(&v->disk_table, handle, data, 512, &done);
-    return e ? e : done == 512 ? 0 : -V86_EIO;
+    if (!write) {
+        v->perf.disk_reads++; v->perf.disk_bytes += bytes;
+        if (bytes > v->perf.disk_max) v->perf.disk_max = bytes;
+    }
+    e = write ? vfs_write(&v->disk_table, handle, data, bytes, &done) :
+                vfs_read(&v->disk_table, handle, data, bytes, &done);
+    return e ? e : done == bytes ? 0 : -V86_EIO;
 }
 
 static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
@@ -135,10 +139,32 @@ static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
     if (!v->base_open || !v->overlay_open || lba >= DOSVM_SECTORS) return -EINVAL;
     for (unsigned i = 0; i < v->sector_count; i++)
         if (v->sectors[i].lba == lba)
-            return sector_io(v, v->overlay, v->sectors[i].offset, sector, false);
+            return backing_io(v, v->overlay, v->sectors[i].offset, sector, 512, false);
     /* Past the end of a cut base image: the free FAT16 area, all zeros. */
     if (lba >= v->base_sectors) { memset(sector, 0, 512); return 0; }
-    return sector_io(v, v->base, lba * 512u, sector, false);
+    /* Each fat_read restarts the outer image's chain walk. Retain adjacent
+     * sectors and a separate metadata window; validation: f3-24-quake-start. */
+    for (unsigned i = 0; i < ARRAY_SIZE(v->read_cache); i++) {
+        if (lba >= v->read_cache[i].lba && lba - v->read_cache[i].lba < v->read_cache[i].count) {
+            memcpy(sector, v->read_cache[i].bytes + (lba - v->read_cache[i].lba) * 512u, 512);
+            v->read_recent = i; v->perf.disk_hits++;
+            return 0;
+        }
+    }
+    unsigned slot = v->read_recent ^ 1u;
+    uint32_t start = lba & ~(DOSVM_READ_SECTORS - 1u);
+    unsigned count = v->base_sectors - start;
+    if (count > DOSVM_READ_SECTORS) count = DOSVM_READ_SECTORS;
+    v->read_cache[slot].count = 0; /* a partial/failed read never becomes valid */
+    int e = backing_io(v, v->base, start * 512u, v->read_cache[slot].bytes, count * 512u, false);
+    if (e) {
+        /* Read-ahead may encounter an error outside the requested sector. */
+        return backing_io(v, v->base, lba * 512u, sector, 512, false);
+    }
+    v->read_cache[slot].lba = start; v->read_cache[slot].count = count;
+    v->read_recent = slot;
+    memcpy(sector, v->read_cache[slot].bytes + (lba - start) * 512u, 512);
+    return 0;
 }
 
 static int disk_write_locked(struct dosvm *v, uint32_t lba, const void *sector)
@@ -151,7 +177,7 @@ static int disk_write_locked(struct dosvm *v, uint32_t lba, const void *sector)
     /* A failed issued write may have changed private data; report its loss
      * even when no new sector can be published into the index. */
     v->info.dirty = true;
-    int e = sector_io(v, v->overlay, offset, (void *)sector, true);
+    int e = backing_io(v, v->overlay, offset, (void *)sector, 512, true);
     if (e) return e;
     if (i == v->sector_count) {
         v->sectors[i].lba = lba;
@@ -202,6 +228,7 @@ int dosvm_disk_close(struct dosvm *v, bool forced)
         v->table_ready = false;
     }
     v->sector_count = 0;
+    for (unsigned i = 0; i < ARRAY_SIZE(v->read_cache); i++) v->read_cache[i].count = 0;
     disk_gate_drop(v);
     return error;
 }

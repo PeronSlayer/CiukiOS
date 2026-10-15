@@ -63,6 +63,12 @@ struct dosvm_perf_sample {
     uint32_t port_count[DOSVM_VGA_REGS], port_exits[DOSVM_VGA_REGS];
     uint64_t port_us[DOSVM_VGA_REGS], port_exit_us[DOSVM_VGA_REGS];
 };
+struct dosvm_vector_cost {
+    uint64_t cycles, max_cycles;
+    uint32_t count;
+    uint16_t ax;
+};
+#define DOSVM_READ_SECTORS 128u
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -109,6 +115,12 @@ struct dosvm {
     struct vfs_table disk_table;
     int base, overlay;
     uint32_t base_sectors;   /* sectors the base image holds; zeros after them */
+    /* Immutable base only. Two windows retain metadata alongside file data. */
+    struct {
+        uint32_t lba, count;
+        uint8_t bytes[DOSVM_READ_SECTORS * 512u];
+    } read_cache[2];
+    unsigned read_recent;
     char overlay_path[48];
     struct { uint32_t lba, offset; } sectors[DOSVM_OVERLAY_SECTORS];
     unsigned sector_count;
@@ -166,7 +178,16 @@ struct dosvm {
         uint32_t sample_count;
         uint32_t last_idle_blocks, last_idle_count[DOSVM_IDLE_REASONS];
         struct dosvm_perf_sample sample[16]; /* first four + latest twelve intervals */
+        struct dosvm_vector_cost vector[2][256]; /* dispatch, synthetic BIOS */
+        uint64_t disk_bytes;
+        uint32_t disk_reads, disk_max, disk_hits;
     } perf;
+    struct {
+        uint64_t tick;
+        uint32_t number;
+        bool started, busy;
+        uint16_t text[80 * 25];
+    } startup;
     /* Owner-armed command launch. The prompt never arms this gate. */
     bool launch_armed, launch_enter_consumed, launch_exec, launch_ready, launch_failed;
     uint16_t launch_cs, launch_ss, launch_sp;
@@ -237,6 +258,7 @@ int dosvm_io_burst(struct dosvm *, struct v86_frame *);
 uint64_t dosvm_perf_clock(void);
 void dosvm_perf_report(struct dosvm *);
 void dosvm_perf_dump(struct dosvm *);
+void dosvm_startup_report(struct dosvm *, bool force);
 struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);

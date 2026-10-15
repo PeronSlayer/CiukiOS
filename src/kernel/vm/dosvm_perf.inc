@@ -29,6 +29,79 @@ static void perf_switch(struct dosvm *next)
 }
 static uint64_t perf_us(uint64_t cycles)
 { return g_tsc_per_ms ? cycles * 1000u / g_tsc_per_ms : 0; }
+static uint64_t perf_monitor_stamp(struct dosvm *v)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE) || !g_tsc_per_ms) return 0;
+    if (perf_current == v) perf_phase(v, v->perf.phase);
+    return v->perf.monitor_cycles;
+}
+static void perf_vector_end(struct dosvm *v, unsigned path, uint8_t vector, uint16_t ax, uint64_t begin)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    uint64_t cycles = perf_monitor_stamp(v) - begin;
+    struct dosvm_vector_cost *c = &v->perf.vector[path][vector];
+    c->count++; c->cycles += cycles;
+    if (cycles >= c->max_cycles) { c->max_cycles = cycles; c->ax = ax; }
+}
+
+/* Live startup evidence is emitted at safe boundaries, never per interrupt.
+ * Snapshot before printing; the native owner can run while the VM sleeps.
+ * 40 raw characters per record leave space for full-width IDs/counters. */
+void dosvm_startup_report(struct dosvm *v, bool force)
+{
+    if (!(g_boot.flags & CBI_F_VERBOSE) || v->startup.busy ||
+        (dosvm_in_irq(v) && v->info.state < DOSVM_STOPPING) ||
+        (!force && (!v->startup.started || v->video_frames || g_ticks - v->startup.tick < 5000))) return;
+    v->startup.busy = v->startup.started = true;
+    v->startup.tick = g_ticks;
+    uint32_t number = ++v->startup.number;
+    uint8_t bda[64] = {0};
+    int error = dosvm_read(v, 0x449, bda, sizeof(bda));
+    unsigned mode = bda[0], cols = bda[1] | (bda[2] << 8), rows = bda[0x3B] + 1u;
+    unsigned page = bda[5] | (bda[6] << 8);
+    bool text = !error && (mode <= 3 || mode == 7) && cols && cols <= 80 && rows <= 25;
+    if (text) error = dosvm_read(v, (mode == 7 ? 0xB0000 : 0xB8000) + page,
+                                 v->startup.text, cols * rows * 2u);
+    uint64_t begin = dosvm_perf_clock();
+    rec_diag(dosvm_probe(v), "group=guest vm=%u gen=%u src=screen n=%u mode=%u cols=%u rows=%u error=%d",
+             v->info.key.id, v->info.key.generation, number, mode, cols, rows, error);
+    if (text && !error) for (unsigned row = 0; row < rows; row++) {
+        unsigned length = cols;
+        while (length && ((v->startup.text[row * cols + length - 1] & 255) == ' ' ||
+                         !(v->startup.text[row * cols + length - 1] & 255))) length--;
+        unsigned parts = (length + 39) / 40;
+        for (unsigned part = 0; part < parts; part++) {
+            char data[81];
+            unsigned bytes = length - part * 40;
+            if (bytes > 40) bytes = 40;
+            for (unsigned i = 0; i < bytes; i++) {
+                uint8_t ch = v->startup.text[row * cols + part * 40 + i];
+                data[i * 2] = "0123456789abcdef"[ch >> 4];
+                data[i * 2 + 1] = "0123456789abcdef"[ch & 15];
+            }
+            data[bytes * 2] = 0;
+            rec_diag(dosvm_probe(v), "group=guest vm=%u gen=%u src=screen n=%u row=%u part=%u parts=%u data=%s",
+                     v->info.key.id, v->info.key.generation, number, row, part + 1, parts, data);
+        }
+        if (g_need_resched) schedule();
+    }
+    for (unsigned path = 0; path < 2; path++) for (unsigned vector = 0; vector < 256; vector++) {
+        /* Copy each counter while the native owner may preempt the worker. */
+        uint32_t flags = irq_save();
+        struct dosvm_vector_cost c = v->perf.vector[path][vector];
+        irq_restore(flags);
+        if (!c.count) continue;
+        rec_diag(dosvm_probe(v), "group=vm_perf_v vm=%u gen=%u n=%u path=%s v=%02x calls=%u us=%llu max_us=%llu ax=%04x",
+                 v->info.key.id, v->info.key.generation, number, path ? "bios" : "int", vector,
+                 c.count, perf_us(c.cycles), perf_us(c.max_cycles), c.ax);
+        if (g_need_resched) schedule();
+    }
+    rec_diag(dosvm_probe(v), "group=vm_perf_disk vm=%u gen=%u n=%u reads=%u bytes=%llu max=%u hits=%u",
+             v->info.key.id, v->info.key.generation, number, v->perf.disk_reads, v->perf.disk_bytes, v->perf.disk_max, v->perf.disk_hits);
+    v->perf.log_cycles += dosvm_perf_clock() - begin;
+    v->startup.tick = g_ticks; /* slow output never creates a catch-up burst */
+    v->startup.busy = false;
+}
 static void perf_exit_end(struct dosvm *v)
 {
     perf_phase(v, 2);
