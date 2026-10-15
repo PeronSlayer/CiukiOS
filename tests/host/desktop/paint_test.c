@@ -7,6 +7,7 @@
 #include "../../../third_party/stb/stb_image_write.h"
 #include "../../../third_party/stb/stb_image.h"
 #include <errno.h>
+#include <sys/stat.h>
 static struct du_ui ui;
 static uint32_t pixels[PAINT_W*PAINT_H+1];
 static int include_cursor;
@@ -57,6 +58,24 @@ static void render(const char *folder,const char *name)
     FILE *f=fopen(p,"wb"); assert(f);
     assert(stbi_write_png_to_func(render_write,f,ui.canvas.width,ui.canvas.height,3,data,ui.canvas.width*3));
     assert(!fclose(f)); free(data);
+}
+static void stroke_continuity(void)
+{
+    const char *folder="build/host/f2-71";
+    assert(!mkdir(folder,0755) || errno==EEXIST);
+    paint_command(M_Z1); attributes(96,72); paint_command(M_CLEARIMG); foreground(2);
+    render(folder,"before");
+    at_click_widget(&ui,P_TOOL+T_PENCIL); image_move(3,3); button(1,1); image_move(82,61); button(1,0);
+    int x=3,y=3,dx=79,dy=-58,sx=1,sy=1,err=dx+dy;
+    for (;;) {
+        assert(paint_pixel(x,y)==state().foreground);
+        if (x==82 && y==61) break;
+        int e2=2*err;
+        if (e2>=dy) { err+=dy; x+=sx; }
+        if (e2<=dx) { err+=dx; y+=sy; }
+    }
+    render(folder,"after");
+    puts("paint stroke continuity: PASS fast diagonal pencil segment has no gaps");
 }
 static void write_raw(const char *path,const void *data,size_t n)
 { FILE *f=fopen(path,"wb"); assert(f && fwrite(data,1,n,f)==n && !fclose(f)); }
@@ -369,6 +388,7 @@ int main(int argc,char **argv)
 {
     assert(argc==3); pixels[PAINT_W*PAINT_H]=0xdeadbeefu;
     du_init(&ui,pixels,PAINT_W,PAINT_H); assert(!paint_attach(&ui));
+    stroke_continuity();
     render(argv[2],"paint-initial"); tools(); render(argv[2],"paint-tools");
     selection_and_text(); render(argv[2],"paint-zoom-grid"); codecs(argv[1]); files(argv[1]);
     paint_command(M_Z1); attributes(200,150); paint_command(M_CLEARIMG);
