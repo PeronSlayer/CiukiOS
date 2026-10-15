@@ -25,7 +25,7 @@ struct audio_state audio;
 unsigned fs_host_contig_fail,fs_host_contig_live;
 static struct usb_host host;
 static bool has_host, live_prompt, event_sent, retained, swept, winner;
-static unsigned attach_ms, prompt_ms, sweep_calls, mode_calls, restores, clears;
+static unsigned scan_ms, attach_ms, prompt_ms, sweep_calls, mode_calls, restores, clears;
 static int scenario;
 static struct fb_device fb;
 static struct storage disk;
@@ -57,6 +57,7 @@ uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
 void task_sleep_ms(uint32_t ms)
 {
     g_ticks+=ms;
+    if (has_host && scan_ms && g_ticks>=scan_ms) host.scanned=true;
     if (has_host && attach_ms && g_ticks>=attach_ms) {
         host.device_count=1;
         struct usb_device *d=&host.devices[0];
@@ -123,9 +124,9 @@ int display_check_end(void)
 }
 static void fixture(void)
 {
-    g_ticks=0; host=(struct usb_host){0}; audio=(struct audio_state){0};
+    g_ticks=0; host=(struct usb_host){.ready=true,.scanned=true}; audio=(struct audio_state){0};
     has_host=live_prompt=event_sent=retained=swept=winner=false;
-    attach_ms=prompt_ms=sweep_calls=mode_calls=restores=clears=line_count=0; scenario=0;
+    scan_ms=attach_ms=prompt_ms=sweep_calls=mode_calls=restores=clears=line_count=0; scenario=0;
     complete=tone_checked=false; summary_bytes=0; collecting_summary=false;
     fb=(struct fb_device){.present=true,.mode_id=0x118,.width=1024,.height=768,.bpp=32,.pitch=4096,.phys=0xe8000000};
     g_boot.display.mode_count=1;
@@ -134,7 +135,7 @@ static void fixture(void)
 int main(void)
 {
     struct hw_check_result out;
-    fixture(); has_host=true; attach_ms=3500;
+    fixture(); has_host=true; host.scanned=false; scan_ms=3000; attach_ms=3500;
     input_window(true,15000,&out);
     assert(out.status==HW_PASS && prompt_ms==3500 && g_ticks==8500);
     assert(strstr(out.detail,"events=1") && strstr(out.detail,"enumeration_ms=3500"));
@@ -149,7 +150,20 @@ int main(void)
     fixture(); has_host=true; attach_ms=3500;
     input_window(true,9000,&out);
     assert(out.status==HW_SKIP && g_ticks==2000 && !live_prompt);
+    fixture(); has_host=true; host.scanned=false;
+    input_window(true,15000,&out);
+    assert(out.status==HW_FAIL && g_ticks==8000 && !live_prompt && strstr(out.detail,"reason=scan_pending"));
+    fixture(); has_host=true; host.ready=false; host.reason="resource_conflict";
+    input_window(true,15000,&out);
+    assert(out.status==HW_FAIL && !g_ticks && !live_prompt && strstr(out.detail,"reason=resource_conflict"));
+    fixture(); has_host=true; host.scanned=false; scan_ms=7000; attach_ms=7500;
+    input_window(true,15000,&out);
+    assert(out.status==HW_PASS && prompt_ms==7500 && g_ticks==12500);
+    fixture(); has_host=true; host.scanned=false; g_ticks=100;
+    input_window(true,7095,&out);
+    assert(out.status==HW_FAIL && g_ticks==100 && !live_prompt && strstr(out.detail,"reason=scan_pending"));
     puts("PASS f1-69 USB mouse: delayed attach then full 5 s events, absent waits 8 s, no host skips, inactive fails, short budget bounded");
+    puts("PASS merged USB mouse: shared first-scan wait, pending/conflicted hosts fail, late first scan preserves live window, expired reserve issues no sleep");
     for (int s=0;s<=6;s++) {
         fixture(); scenario=s; retained=s==1;
         savage_check(15000,&out);

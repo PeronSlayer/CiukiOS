@@ -49,56 +49,11 @@ static void page_line(void *ctx,const char *line)
     }
     /* klog captures this exact prefixed line once through output.c. */
 }
-static void usb_storage_check(uint64_t until,struct hw_check_result *out)
-{
-    if (!usb_count()) {
-        out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"USB host absent"); return;
-    }
-    uint64_t start=check_now(0), wait= start+8000;
-    if (wait>until-2000) wait=until-2000;
-    struct storage *s=storage_get(); struct storage_volume *vol=0;
-    unsigned present=0, quarantined=0, binding=0;
-    do {
-        present=quarantined=binding=0;
-        for (unsigned i=0;i<usb_count();i++) {
-            const struct usb_host *h=usb_get(i);
-            for (unsigned j=0;j<h->device_count;j++) {
-                const struct usb_device *d=&h->devices[j];
-                if (!d->present || (!d->storage.bound && d->class_code!=8)) continue;
-                present++; quarantined+=d->quarantined||d->storage.block.quarantined;
-                binding+=d->storage.binding;
-            }
-        }
-        if (s && s->ready) {
-            fs_lock_take(&s->vfs.lock);
-            for (unsigned i=4;i<26;i++) if (s->volumes[i].present && s->volumes[i].removable &&
-                s->volumes[i].fat.mounted && !s->volumes[i].io.quarantined) { vol=&s->volumes[i]; break; }
-            fs_lock_drop(&s->vfs.lock);
-        }
-        if (vol || (present && quarantined==present)) break;
-        task_sleep_ms(10);
-    } while (check_now(0)<wait);
-    if (!vol) {
-        out->status=present ? HW_FAIL : HW_SKIP;
-        ksnprintf(out->detail,sizeof(out->detail),"enumerated=%u mounted=0 binding=%u quarantined=%u",present,binding,quarantined);
-        return;
-    }
-    uint8_t *buf=fs_contig_alloc(BLKDEV_READ_BYTES);
-    uint32_t bytes=0, hash=2166136261u; int e=buf ? 0 : -ENOMEM;
-    while (!e && bytes<1024u*1024u) {
-        if (check_now(0)>=until-1000) { e=-ETIMEDOUT; break; }
-        e=vol->io.read(&vol->io,bytes/512,BLKDEV_READ_SECTORS,buf);
-        if (!e) { hash=fnv1a32(buf,BLKDEV_READ_BYTES,hash); bytes+=BLKDEV_READ_BYTES; }
-    }
-    fs_contig_free(buf,BLKDEV_READ_BYTES);
-    out->status=e ? HW_FAIL : HW_PASS;
-    ksnprintf(out->detail,sizeof(out->detail),"drive=%c mounted=1 bytes=%u ms=%llu hash=%08x error=%d",
-        'A'+vol->drive,bytes,check_now(0)-start,hash,e);
-}
 static bool usb_mouse_ready(void)
 {
     for (unsigned i=0;i<usb_count();i++) {
         const struct usb_host *h=usb_get(i);
+        if (!h || !h->ready || h->quarantined) continue;
         for (unsigned j=0;j<h->device_count;j++) {
             const struct usb_device *d=&h->devices[j];
             if (!d->present || d->quarantined) continue;
@@ -118,12 +73,19 @@ static void input_window(bool mouse,uint64_t until,struct hw_check_result *out)
         uint64_t budget=until>7000 ? until-7000 : 0;
         if (wait>budget) wait=budget;
         page_line(0,"Waiting for USB mouse enumeration (up to 8 s)");
-        while (!usb_mouse_ready() && check_now(0)<wait) task_sleep_ms(10);
+        if (!hardware_check_usb_wait_first_scan(wait,out,check_now)) return;
+        while (!usb_mouse_ready()) {
+            uint64_t tick=check_now(0);
+            if (tick>=wait) break;
+            uint64_t left=wait-tick;
+            task_sleep_ms(left<10 ? (uint32_t)left : 10);
+        }
     }
     uint64_t enumerated=check_now(0)-start;
     unsigned interfaces=0, bad=0;
     if (mouse) for (unsigned i=0;i<usb_count();i++) {
         const struct usb_host *h=usb_get(i);
+        if (!h || !h->ready || h->quarantined) continue;
         for (unsigned j=0;j<h->device_count;j++) {
             const struct usb_device *d=&h->devices[j];
             if (!d->present) continue;
@@ -317,7 +279,7 @@ static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_re
     switch (item) {
     case 0: hardware_check_ata(storage_get(),out); break;
     case 1: hardware_check_repair(storage_get(),out); break;
-    case 2: usb_storage_check(until,out); break;
+    case 2: hardware_check_usb_storage(until,out,check_now); break;
     case 3: input_window(true,until,out); break;
     case 4: input_window(false,until,out); break;
     case 5: timer_check(out); break;

@@ -575,6 +575,10 @@ static void prepare_validation(const char *path)
             unsigned total=fs_rd32(m.image+32), clusters=(total-reserved-2*sectors)/m.image[13];
             m.image[(reserved+sectors)*512+(clusters+2)*4]^=0xa5;
         }
+        /* Agreeing clean copies take the F1-70 fast path. These repair
+         * fixtures model interrupted allocation, with the dirty flag set. */
+        if(kind<2) for(unsigned copy=0;copy<2;copy++)
+            fs_wr32(m.image+(reserved+copy*sectors)*512+4,0x07ffffff);
         attach();usb_storage_service(&m.h);
         if(kind<2) {
             struct storage_volume *v=&storage_get()->volumes[4];
@@ -599,44 +603,48 @@ static void delay_after_publication(const char *line,size_t n)
 }
 static void fat32_budget(const char *path)
 {
+    for(unsigned gib=4;gib<=32;gib*=8) {
     setup(path,true);use_uhci();
     size_t mapped=m.bytes;
-    memset(m.image,0,2*1024*1024);
+    unsigned total=gib*2097152u,fat_sectors=gib*256u,data_start=32+2*fat_sectors;
+    memset(m.image,0,(data_start+128)*512);
     uint8_t *b=m.image;
     b[0]=0xeb;b[1]=0x58;b[2]=0x90;fs_wr16(b+11,512);b[13]=64;
     fs_wr16(b+14,32);b[16]=2;b[21]=0xf8;
-    fs_wr32(b+32,8388608);fs_wr32(b+36,1024);fs_wr32(b+44,2);
+    fs_wr32(b+32,total);fs_wr32(b+36,fat_sectors);fs_wr32(b+44,2);
     fs_wr16(b+48,1);fs_wr16(b+50,6);fs_wr16(b+510,0xaa55);
     memcpy(b+6*512,b,512);
     fs_wr32(b+512,0x41615252);fs_wr32(b+512+484,0x61417272);fs_wr32(b+512+508,0xaa550000);
     fs_wr32(b+512+488,UINT32_MAX);fs_wr32(b+512+492,UINT32_MAX);
     for(unsigned copy=0;copy<2;copy++) {
-        uint8_t *fat=b+(32+copy*1024)*512;
+        uint8_t *fat=b+(32+copy*fat_sectors)*512;
         fs_wr32(fat,0x0ffffff8);fs_wr32(fat+4,0x0fffffff);
         fs_wr32(fat+8,0x0fffffff);fs_wr32(fat+12,0x0fffffff);
     }
-    uint8_t *root=b+2080*512;memcpy(root,"SHORT   BIN",11);root[11]=FAT_ATTR_ARCHIVE;
+    uint8_t *root=b+data_start*512;memcpy(root,"SHORT   BIN",11);root[11]=FAT_ATTR_ARCHIVE;
     fs_wr16(root+26,3);fs_wr32(root+28,512);memset(root+64*512,0x5a,512);
-    m.bytes=UINT64_C(4)*1024*1024*1024;
-    m.mbr[450]=0x0c;fs_wr32(m.mbr+458,8388608);
+    m.bytes=(uint64_t)gib*1024*1024*1024;
+    m.mbr[450]=0x0c;fs_wr32(m.mbr+458,total);
     uint64_t begin=m.now;
     mount_device();
     uint64_t bind_ms=m.now-begin;
     struct usb_storage *s=&device()->storage;
-    assert(bind_ms<5000 && s->published && !block()->quarantined && !storage_get()->volumes[4].fat.readonly);
-    assert(s->bind_read_max==128 && s->bind_read_requests<64 && s->bind_read_sectors<4096);
+    assert(bind_ms<(gib==4 ? 5000u : USB_BIND_TIMEOUT_MS) && s->published && !block()->quarantined && !storage_get()->volumes[4].fat.readonly);
+    assert(s->bind_read_max==128 && s->bind_read_requests<gib*16 && s->bind_read_sectors<gib*1024);
     struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,4));
     int fd=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
     uint8_t data[512];size_t got;assert(!vfs_read(&table,fd,data,sizeof(data),&got) && got==512);
     for(unsigned i=0;i<512;i++)assert(data[i]==0x5a);
     assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
-    printf("PASS F1-66 4 GiB FAT32, 32 KiB clusters: bind_ms=%llu requests=%u sectors=%u max_sectors=%u poll_frames=%u retire_frames=%u, E: read/write gate retained\n",
-           (unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->bind_poll_frames,s->bind_retire_frames);
+    printf("PASS F1-70 %u GiB FAT32, 32 KiB clusters: bind_ms=%llu requests=%u sectors=%u max_sectors=%u poll_frames=%u retire_frames=%u, E: read/write gate retained\n",
+           gib,(unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->bind_poll_frames,s->bind_retire_frames);
     m.bytes=mapped;cleanup();
+    }
     setup(path,true);use_uhci();budget_log_delay=true;log_hook=delay_after_publication;
     mount_device();log_hook=NULL;
     assert(!budget_log_delay && device()->storage.published && !device()->storage.binding && !block()->quarantined);
     assert(strstr(records,"published=1 overrun=1") && !strstr(records,"quarantine"));
+    uint8_t data[512];
     assert(!block()->read(block(),m.offset,1,data));cleanup();
     puts("PASS F1-66 post-publication log delay exceeds 20 s: overrun recorded, volume retained and readable, no deadline quarantine");
 }

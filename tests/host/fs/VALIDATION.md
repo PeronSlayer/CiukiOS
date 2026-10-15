@@ -34,8 +34,9 @@ Read the three named contracts, every `src/kernel/include/ciuki/*.h`,
 and task/IRQ primitives. `kmalloc` has seven size classes and an eight-byte
 header: requests above 2,040 bytes fail. Consequently the cache pool uses
 `pmm_alloc`/`P2V`/`pmm_free`, not a large `kmalloc`. Small portability allocations
-retain the heap limit. Cache pages and scan scratch are allocated at init; I/O,
-mount scanning, namespace operations and handles allocate nothing afterward.
+retain the heap limit. Cache pages and its fallback scan scratch are allocated
+at init. F1-70 adds temporary bounded mount windows and normal-pool ownership
+bitmap pages; namespace operations retain their existing allocation rules.
 Caller-owned VFS/table/volume objects must have persistent storage, not live on
 an 8 KiB kernel stack. Kernel compilation also emits `.su` stack-use records;
 large alias-collision scratch is in the volume, and directory ancestry is
@@ -64,15 +65,19 @@ fixed 2026-10-10 clock. Explicit VFS timestamp get/set remains available.
   caching does not. A quarantined device receives no new request from cache.
 - One default 8 MiB pool includes sector buffers, LRU/hash metadata and mount
   scan workspace (1/16 of the pool, up to 1 MiB). The cache is configurable from
-  8 KiB to 32 MiB; insufficient scan workspace returns `ENOMEM`. Device error
+  8 KiB to 32 MiB. F1-70 ownership uses one bit per cluster in up to 1 MiB of
+  normal-pool pages; allocation failure uses this workspace in passes. Device error
   records remain sticky until an explicit new-media invalidation. Failed dirty
   blocks are not reused; they do not prevent other devices using other blocks.
   `cache_writeback_tick` is the five-second writer-thread integration hook.
 - The ownership scan counts free clusters itself and never trusts FSInfo.
   It detects short/looping/cross-linked owned chains, scans directories without
-  recursion, and mounts lost-allocation volumes read-only. Dirty/error flags
-  remain read-only even if a scan finds no live-chain corruption; repair/check
-  approval is deliberately a host operation in F1.
+  recursion. F0-25 upgrades dirty/lost-allocation volumes after the completed
+  ownership proof; F1-70 bounds subsequent passes by the measured allocation
+  extent and coalesces reclamation by sector. Agreeing, clean/error-free copies
+  permit the F1-70 clean-mount fast path; explicit `fat_scan` still checks
+  ownership. See `docs/validation/f1-70-fat-mount-budget.md` for memory/timing
+  policy, fallback evidence and hardware qualification limits.
 - File changes use replacement chains. All new FAT copies are durable before
   data; data before the owning short entry; old chains are released only after
   its durable switch; FSInfo is last. This also safely handles packed FAT12

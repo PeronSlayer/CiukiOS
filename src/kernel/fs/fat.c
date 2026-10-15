@@ -49,10 +49,18 @@ struct fat_prepare_cache {
 };
 static uint32_t used_fat_sectors(struct fat_volume *v)
 { return (uint32_t)(((uint64_t)(v->clusters+2)*v->type+4095)/4096); }
-static int prepare_read(struct fat_volume *v, uint64_t s, void *b)
+static struct fat_prepare_cache *alloc_windows(struct fat_volume *v) {
+    struct fat_prepare_cache *p=fs_contig_alloc(sizeof(*p));
+    if (!p) {
+        v->diagnostic="FAT read windows unavailable";
+        if (klog) klog("[storage] mount_memory kind=windows needed_bytes=%u available_bytes=0 error=%d",
+            (unsigned)((sizeof(*p)+4095)&~4095u),-FS_ENOMEM);
+    }
+    return p;
+}
+static int window_sector(struct fat_volume *v, uint64_t s, const uint8_t **out)
 {
     struct fat_prepare_cache *p=v->prepare_cache;
-    if (!p) return v->dev->read(v->dev,v->start+s,1,b);
     unsigned slot=2, count=1;
     uint64_t base=s;
     if (v->type && s>=v->reserved && s<v->reserved+(uint64_t)v->fats*v->fat_sectors) {
@@ -67,18 +75,25 @@ static int prepare_read(struct fat_volume *v, uint64_t s, void *b)
     }
     if (s<p->start[slot] || s-p->start[slot]>=p->count[slot]) {
         p->count[slot]=0;
-        int e=v->dev->read(v->dev,v->start+base,count,p->data[slot]);
+        if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
+        if (file_read_cancelled && file_read_cancelled()) return -4;
+        int e=v->preparing ? v->dev->read(v->dev,v->start+base,count,p->data[slot]) :
+            cache_read_run(v->cache,v->dev,v->start+base,count,p->data[slot]);
         if (e) return e;
         p->start[slot]=base; p->count[slot]=count;
     }
-    memcpy(b,p->data[slot]+(size_t)(s-p->start[slot])*512,512);
+    *out=p->data[slot]+(size_t)(s-p->start[slot])*512;
     return 0;
 }
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
     if (file_read_cancelled && file_read_cancelled()) return -4; /* EINTR, before issuance */
     if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
-    int e=v->preparing ? prepare_read(v,s,b) : cache_read(v->cache,v->dev,v->start+s,b);
+    int e;
+    if (v->prepare_cache) {
+        const uint8_t *p;
+        e=window_sector(v,s,&p); if (!e) memcpy(b,p,512);
+    } else e=v->preparing ? v->dev->read(v->dev,v->start+s,1,b) : cache_read(v->cache,v->dev,v->start+s,b);
     if (e && (e==-FS_EQUARANTINED || v->dev->quarantined)) {
         v->ro_reasons|=FAT_RO_WRITE_ERROR;
         fat_revoke_write(v,"device_quarantined",0);
@@ -120,12 +135,29 @@ static int fat_bytes(struct fat_volume *v, unsigned copy, uint32_t off, uint8_t 
     }
     return 0;
 }
-int fat_get_cluster(struct fat_volume *v, uint32_t c, uint32_t *out) {
-    if (c>=v->clusters+2) return corrupt(v,"fat_bounds",c);
-    uint8_t b[4]; int e=fat_bytes(v,v->active_fat,offset(v,c),b,v->type==32 ? 4 : 2,false); if (e) return e;
-    uint32_t x=v->type==32 ? fs_rd32(b) : fs_rd16(b);
+/* Decode within resident 64 KiB runs. The census and ownership walk do not
+ * copy a sector or acquire the shared cache mutex for each FAT entry. FAT12
+ * entries spanning sectors retain the byte decoder. */
+static int get_copy(struct fat_volume *v, unsigned copy, uint32_t c, uint32_t *out) {
+    uint32_t off=offset(v,c), x;
+    if (v->prepare_cache && (v->type!=12 || off%512!=511)) {
+        const uint8_t *p;struct fat_prepare_cache *w=v->prepare_cache;
+        uint64_t sector=v->reserved+(uint64_t)copy*v->fat_sectors+off/512;
+        if (sector>=w->start[copy] && sector-w->start[copy]<w->count[copy])
+            p=w->data[copy]+(size_t)(sector-w->start[copy])*512;
+        else { int e=window_sector(v,sector,&p);if (e) return e; }
+        x=v->type==32 ? fs_rd32(p+off%512) : fs_rd16(p+off%512);
+    } else {
+        uint8_t b[4]; int e=fat_bytes(v,copy,off,b,v->type==32 ? 4 : 2,false);
+        if (e) return e;
+        x=v->type==32 ? fs_rd32(b) : fs_rd16(b);
+    }
     if (v->type==12 && (c&1)) x>>=4;
     *out=x&mask(v); return 0;
+}
+int fat_get_cluster(struct fat_volume *v, uint32_t c, uint32_t *out) {
+    if (c>=v->clusters+2) return corrupt(v,"fat_bounds",c);
+    return get_copy(v,v->active_fat,c,out);
 }
 static int set_cluster(struct fat_volume *v, uint32_t c, uint32_t value) {
     uint8_t b[4]; unsigned n=v->type==32 ? 4 : 2;
@@ -729,41 +761,78 @@ int fat_set_metadata(struct fat_volume *v, struct fat_entry *file, uint8_t attr,
     struct fat_entry changed=*file; changed.attr=attr; if (times) changed.times=*times;
     e=update(v,&changed); if (!e) *file=changed; return e;
 }
-static uint8_t *scan_byte(struct fat_volume *v, uint32_t c) { return cache_workspace_byte(v->cache,c); }
-static int scan_chain(struct fat_volume *v, uint32_t first, uint32_t size, bool dir) {
+/* One ownership bit per cluster, at most 1 MiB of ordinary PMM pages.
+ * A failed allocation falls back to the existing reserved cache workspace;
+ * every pass revisits all chains, so cross-links spanning passes remain
+ * detectable. No reclamation is issued until ALL validation passes finish. */
+#define SCAN_PAGES 256u
+/* Enough frames for every path representable by the public path contract
+ * (one-character components plus separators), including the root frame. */
+#define SCAN_DEPTH ((FS_PATH_CHARS+1u)/2u+1u)
+struct fat_scan_state {
+    void *pages[SCAN_PAGES];
+    uint32_t page_count, begin, end, log_eof[3];
+    bool workspace;
+};
+static bool scan_owned(struct fat_volume *v, struct fat_scan_state *s, uint32_t c, bool set) {
+    if (c<s->begin || c>=s->end) return false;
+    uint32_t off=(c-s->begin)/8;
+    uint8_t *b=s->workspace ? cache_workspace_byte(v->cache,off) :
+        (uint8_t *)s->pages[off/4096]+off%4096;
+    uint8_t bit=(uint8_t)(1u<<(c%8)); bool old=(*b&bit)!=0;
+    if (set) *b|=bit;
+    return old;
+}
+static void scan_release(struct fat_volume *v, struct fat_scan_state *s) {
+    if (s->workspace) cache_workspace_end(v->cache);
+    for (unsigned i=0;i<s->page_count;i++) fs_page_free(s->pages[i]);
+}
+static int scan_memory(struct fat_volume *v, struct fat_scan_state *s) {
+    v->scan_needed_bytes=(v->scan_extent+7)/8;
+    uint32_t pages=(v->scan_needed_bytes+4095)/4096;
+    if (pages>SCAN_PAGES) pages=SCAN_PAGES;
+    for (;s->page_count<pages;s->page_count++) {
+        s->pages[s->page_count]=fs_normal_page_alloc();
+        if (!s->pages[s->page_count]) break;
+    }
+    if (s->page_count==pages) { v->scan_available_bytes=pages*4096; return 0; }
+    for (unsigned i=0;i<s->page_count;i++) fs_page_free(s->pages[i]);
+    s->page_count=0;
+    v->scan_available_bytes=v->cache->workspace_pages*4096;
+    int e=cache_workspace_begin(v->cache,v->scan_available_bytes);
+    if (!e && v->scan_available_bytes) s->workspace=true;
+    else { if (!e) cache_workspace_end(v->cache); v->scan_available_bytes=0; }
+    if (klog) klog("[storage] scan_memory needed_bytes=%u available_bytes=%u budget_bytes=%u fallback=passes error=%d",
+        v->scan_needed_bytes,v->scan_available_bytes,SCAN_PAGES*4096,s->workspace ? 0 : e ? e : -FS_ENOMEM);
+    if (!s->workspace) { v->diagnostic="ownership bitmap unavailable"; return e ? e : -FS_ENOMEM; }
+    return 0;
+}
+static void scan_reset(struct fat_volume *v, struct fat_scan_state *s, uint32_t begin) {
+    s->begin=begin;
+    uint32_t count=v->scan_available_bytes*8;
+    s->end=v->scan_extent-begin<count ? v->scan_extent : begin+count;
+    uint32_t pages=((s->end-begin+7)/8+4095)/4096;
+    for (unsigned i=0;i<pages;i++) {
+        void *p=s->workspace ? v->cache->workspace[i] : s->pages[i];
+        memset(p,0,4096);
+    }
+    memset(s->log_eof,0,sizeof(s->log_eof));
+}
+static int scan_chain(struct fat_volume *v, struct fat_scan_state *s, uint32_t first, uint32_t size, bool dir) {
     if (!first) return size || dir ? corrupt(v,"missing_chain",first) : 0;
-    uint32_t c=first, length=0;
-    for (;length<v->clusters;length++) {
-        if (!valid(v,c) || (*scan_byte(v,c)&1)) return corrupt(v,"chain_owner",c);
-        *scan_byte(v,c)|=1;
+    uint32_t c=first, anchor=first, power=1, distance=0;
+    for (uint32_t length=0;length<v->clusters;length++) {
+        if (!(length&127)) fs_service();
+        if (!valid(v,c) || scan_owned(v,s,c,true)) return corrupt(v,"chain_owner",c);
         uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
-        if (eoc(v,n)) {
-            if ((uint64_t)(length+1)*v->spc*512<size) return corrupt(v,"short_chain",c);
-            if (dir) *scan_byte(v,first)|=2;
-            return 0;
-        }
+        if (eoc(v,n)) return (uint64_t)(length+1)*v->spc*512<size ? corrupt(v,"short_chain",c) : 0;
         if (!valid(v,n)) return corrupt(v,"chain_link",n);
+        /* Brent cycle detection also bounds a cycle outside this pass. */
+        if (n==anchor) return corrupt(v,"chain_cycle",n);
+        if (++distance==power) { anchor=n;distance=0;power*=2; }
         c=n;
     }
     return corrupt(v,"chain_cycle",c);
-}
-static int scan_dir(struct fat_volume *v, uint32_t dir) {
-    uint32_t i=0; struct fat_entry file; int e;
-    while (!(e=fat_next(v,dir,&i,&file))) {
-        if (path_equal(file.alias,".") || path_equal(file.alias,"..")) continue;
-        context(v,file.name);
-        if (file.attr&0xc0) return corrupt(v,"directory_attributes",file.first);
-        if ((e=scan_chain(v,file.first,file.size,(file.attr&FAT_ATTR_DIR)!=0))) return e;
-        if (!(file.attr&FAT_ATTR_DIR) && file.size &&
-            (path_equal(file.alias,"BOOT.LOG") || path_equal(file.alias,"BOOT1.LOG") || path_equal(file.alias,"BOOT2.LOG"))) {
-            if (v->log_directory==dir) {
-                uint32_t last;
-                if ((e=chain_at(v,file.first,(file.size-1)/((uint32_t)v->spc*512),&last))) return e;
-                *scan_byte(v,last)|=16;
-            }
-        }
-    }
-    return e==-FS_ENOENT ? 0 : e;
 }
 static void find_logs(struct fat_volume *v) {
     struct fat_entry entry;
@@ -773,111 +842,163 @@ static void find_logs(struct fat_volume *v) {
     e=fat_lookup(v,entry.first,"LOGS",&entry);
     if (!e && (entry.attr&FAT_ATTR_DIR)) v->log_directory=entry.first;
 }
-static int scan_volume(struct fat_volume *v, bool repair) {
+static int scan_tree(struct fat_volume *v, struct fat_scan_state *s) {
+    struct { uint32_t dir, cursor; } stack[SCAN_DEPTH];
+    unsigned depth=1; int e;
+    stack[0].dir=v->type==32 ? v->root : 0;stack[0].cursor=0;
+    if (v->type==32 && (e=scan_chain(v,s,v->root,0,true))) return e;
+    while (depth) {
+        fs_service();
+        struct fat_entry file;
+        uint32_t dir=stack[depth-1].dir;
+        e=fat_next(v,dir,&stack[depth-1].cursor,&file);
+        if (e==-FS_ENOENT) { depth--;continue; }
+        if (e) return e;
+        if (path_equal(file.alias,".") || path_equal(file.alias,"..")) continue;
+        context(v,file.name);
+        if (file.attr&0xc0) return corrupt(v,"directory_attributes",file.first);
+        if ((e=scan_chain(v,s,file.first,file.size,(file.attr&FAT_ATTR_DIR)!=0))) return e;
+        if (file.attr&FAT_ATTR_DIR) {
+            if (depth==SCAN_DEPTH) return corrupt(v,"directory_depth_limit",file.first);
+            stack[depth].dir=file.first;stack[depth++].cursor=0;
+        } else if (file.size && dir==v->log_directory) {
+            const char *names[]={"BOOT.LOG","BOOT1.LOG","BOOT2.LOG"};
+            for (unsigned i=0;i<3;i++) if (path_equal(file.alias,names[i]))
+                if ((e=chain_at(v,file.first,(file.size-1)/((uint32_t)v->spc*512),&s->log_eof[i]))) return e;
+        }
+    }
+    return 0;
+}
+static int scan_pair(struct fat_volume *v, uint32_t c, uint32_t *a, uint32_t *b) {
+    int e=get_copy(v,v->active_fat,c,a); if (e) return e;
+    *b=*a;
+    if (v->fats==2 && !(v->ro_reasons&FAT_RO_ACTIVE_ONLY)) return get_copy(v,1,c,b);
+    return 0;
+}
+static bool log_detach(struct fat_volume *v, struct fat_scan_state *s, uint32_t c, uint32_t a, uint32_t b) {
+    for (unsigned i=0;i<3;i++) if (s->log_eof[i]==c)
+        return (eoc(v,a) && (eoc(v,b)||valid(v,b))) || (eoc(v,b) && valid(v,a));
+    return false;
+}
+static int scan_census(struct fat_volume *v, bool repair, bool *agree) {
+    /* After the read-only proof, only the log EOF detach can change this
+     * unpublished/read-only volume. Its allocation never extends the FAT. */
+    uint32_t end=repair ? v->scan_extent : v->clusters+2;
+    v->free_clusters=v->clusters-(end-2);v->next_free=end<v->clusters+2 ? end : 2;
+    if (!repair) v->scan_extent=2;
+    for (uint32_t c=0;c<end;c++) {
+        if (!(c&127)) fs_service();
+        uint32_t a,b;int e=scan_pair(v,c,&a,&b); if (e) return e;
+        if (c==1 && cleanbit(v)) {
+            if (!(b&cleanbit(v))) v->ro_reasons|=FAT_RO_DIRTY;
+            if (!(b&errorbit(v))) v->ro_reasons|=FAT_RO_IO_FLAG;
+            a|=cleanbit(v)|errorbit(v);b|=cleanbit(v)|errorbit(v);
+        }
+        if (a!=b) { *agree=false; if (c<2) v->ro_reasons|=FAT_RO_COPIES; }
+        if (c<2) continue;
+        if (a || b) { if (!repair) v->scan_extent=c+1; }
+        if (!a && !b) { if (!v->free_clusters || c<v->next_free) v->next_free=c;v->free_clusters++; }
+        /* Obvious malformed links are cheap to reject even on clean media. */
+        if (a && !eoc(v,a) && a!=mask(v)-8 && (!valid(v,a) || a==c)) *agree=false;
+    }
+    return 0;
+}
+static int scan_check(struct fat_volume *v, struct fat_scan_state *s) {
+    for (uint32_t c=s->begin<2 ? 2 : s->begin;c<s->end;c++) {
+        if (!(c&127)) fs_service();
+        uint32_t a,b;int e=scan_pair(v,c,&a,&b); if (e) return e;
+        bool owned=scan_owned(v,s,c,false), diff=a!=b;
+        if (owned && diff && !log_detach(v,s,c,a,b)) {
+            v->ro_reasons|=FAT_RO_COPIES;fat_revoke_write(v,"fat_copies",c);
+        }
+        if (!owned && (a || diff) && (a!=mask(v)-8 || diff)) v->lost_clusters++;
+    }
+    return 0;
+}
+static uint32_t repair_value(struct fat_volume *v, struct fat_scan_state *s, uint32_t c, uint32_t a, uint32_t b) {
+    if (scan_owned(v,s,c,false)) return a!=b && log_detach(v,s,c,a,b) ? mask(v) : a;
+    return a==mask(v)-8 || b==mask(v)-8 ? mask(v)-8 : 0;
+}
+static int scan_reclaim(struct fat_volume *v, struct fat_scan_state *s) {
+    /* FAT12's packed entries overlap; its small volumes retain the existing
+     * preserving writer. FAT16/32 coalesce all changes in each FAT sector. */
+    uint8_t a[512],b[512];uint32_t sector=UINT32_MAX;bool dirty_a=false,dirty_b=false;
+    for (uint32_t c=s->begin<2 ? 2 : s->begin;c<=s->end;c++) {
+        uint32_t sec=c==s->end ? UINT32_MAX : offset(v,c)/512;
+        if (sector!=sec && sector!=UINT32_MAX) {
+            int e=0;
+            if (dirty_a) e=writesec(v,v->reserved+sector,a);
+            if (!e && dirty_b) e=writesec(v,v->reserved+v->fat_sectors+sector,b);
+            if (e) return e;
+            dirty_a=dirty_b=false;
+        }
+        if (c==s->end) break;
+        if (!(c&127)) fs_service();
+        uint32_t av,bv;int e=scan_pair(v,c,&av,&bv); if (e) return e;
+        uint32_t n=repair_value(v,s,c,av,bv);
+        if (v->type!=12 && sector!=sec) {
+            if ((e=readsec(v,v->reserved+sec,a))) return e;
+            if (v->fats==2 && (e=readsec(v,v->reserved+v->fat_sectors+sec,b))) return e;
+            sector=sec;
+        }
+        if (av==n && bv==n) continue;
+        bool owned=scan_owned(v,s,c,false);
+        if (!owned && n==0) {
+            v->repaired_lost++;
+            if (av || bv) { v->free_clusters++;if (c<v->next_free) v->next_free=c; }
+        }
+        if (av!=bv) v->repaired_copies++;
+        if (v->type==12) { if ((e=set_cluster(v,c,n))) return e;continue; }
+        unsigned off=offset(v,c)%512;
+        if (v->type==32) {
+            if (av!=n) { fs_wr32(a+off,(fs_rd32(a+off)&0xf0000000)|n);dirty_a=true; }
+            if (v->fats==2 && bv!=n) { fs_wr32(b+off,(fs_rd32(b+off)&0xf0000000)|n);dirty_b=true; }
+        } else {
+            if (av!=n) { fs_wr16(a+off,(uint16_t)n);dirty_a=true; }
+            if (v->fats==2 && bv!=n) { fs_wr16(b+off,(uint16_t)n);dirty_b=true; }
+        }
+    }
+    return 0;
+}
+static int scan_volume(struct fat_volume *v, bool repair, bool explicit_check) {
+    v->scan_complete=false;v->scan_fast=false;v->scan_passes=0;
+    v->ro_reasons&=~(FAT_RO_LOST|FAT_RO_COPIES);v->lost_clusters=0;
+    bool agree=true;int e=scan_census(v,repair,&agree);if (e) return e;
+    if (!repair && !explicit_check && cleanbit(v) && agree &&
+        !(v->ro_reasons&(FAT_RO_DIRTY|FAT_RO_IO_FLAG|FAT_RO_CORRUPT|FAT_RO_ACTIVE_ONLY))) {
+        v->scan_fast=true;v->scan_complete=true;return 0;
+    }
     find_logs(v);
-    int e=cache_workspace_begin(v->cache,v->clusters+2); if (e) { v->diagnostic="cache scan workspace too small"; return e; }
-    v->scan_complete=false;
-    v->ro_reasons&=~(FAT_RO_LOST|FAT_RO_COPIES);
-    v->lost_clusters=0; v->free_clusters=0; v->next_free=2;
-    /* Compare decoded entries only in differing sectors. Padding, FAT32's
-     * reserved nibble and FAT[1] advisory flags are not ownership conflicts. */
-    if (v->fats==2 && !(v->ro_reasons&FAT_RO_ACTIVE_ONLY)) {
-        uint8_t a[512],b[512];
-        for (uint32_t s=0;s<used_fat_sectors(v);s++) {
-            if ((e=readsec(v,v->reserved+s,a)) ||
-                (e=readsec(v,v->reserved+v->fat_sectors+s,b))) goto out;
-            if (!memcmp(a,b,512)) continue;
-            uint32_t lo=(uint32_t)((uint64_t)s*4096/v->type);
-            uint32_t hi=(uint32_t)(((uint64_t)(s+1)*4096+v->type-1)/v->type);
-            if (hi>v->clusters+2) hi=v->clusters+2;
-            for (uint32_t c=lo;c<hi;c++) {
-                uint8_t x[4],y[4]; unsigned n=v->type==32 ? 4 : 2;
-                if ((e=fat_bytes(v,0,offset(v,c),x,n,false)) ||
-                    (e=fat_bytes(v,1,offset(v,c),y,n,false))) goto out;
-                uint32_t av=n==4 ? fs_rd32(x) : fs_rd16(x), bv=n==4 ? fs_rd32(y) : fs_rd16(y);
-                if (v->type==12 && (c&1)) { av>>=4;bv>>=4; }
-                av&=mask(v);bv&=mask(v);
-                if (c==1 && cleanbit(v)) {
-                    if (!(bv&cleanbit(v))) v->ro_reasons|=FAT_RO_DIRTY;
-                    if (!(bv&errorbit(v))) v->ro_reasons|=FAT_RO_IO_FLAG;
-                    av|=cleanbit(v)|errorbit(v);bv|=cleanbit(v)|errorbit(v);
-                }
-                if (av!=bv) {
-                    *scan_byte(v,c)|=8;
-                    if (c<2) v->ro_reasons|=FAT_RO_COPIES;
-                }
-            }
-        }
-    }
-    context(v,0);
-    if (v->type==32) e=scan_chain(v,v->root,0,true); else e=scan_dir(v,0);
-    if (e) goto out;
-    bool more=true;
-    while (more) {
-        more=false;
-        for (uint32_t c=2;c<v->clusters+2;c++) {
-            if (!(c&127)) fs_service();
-            if ((*scan_byte(v,c)&6)==2) {
-                *scan_byte(v,c)|=4; more=true; if ((e=scan_dir(v,c))) goto out;
-            }
-        }
-    }
-    for (uint32_t c=2;c<v->clusters+2;c++) {
-        uint32_t val; if ((e=fat_get_cluster(v,c,&val))) goto out;
-        /* A log EOF can have EOC in one copy and its formerly reserved
-         * tail in the other after an interrupted tail detach. */
-        bool log_eof=false;
-        if ((*scan_byte(v,c)&25)==25) {
-            uint8_t raw[4];unsigned n=v->type==32 ? 4 : 2;
-            if ((e=fat_bytes(v,1,offset(v,c),raw,n,false))) goto out;
-            uint32_t other=n==4 ? fs_rd32(raw) : fs_rd16(raw);
-            if (v->type==12 && (c&1)) other>>=4;
-            other&=mask(v);
-            log_eof=(eoc(v,val) && valid(v,other)) || (valid(v,val) && eoc(v,other)) || (eoc(v,val) && eoc(v,other));
-        }
-        if ((*scan_byte(v,c)&9)==9 && !log_eof) {
-            v->ro_reasons|=FAT_RO_COPIES; fat_revoke_write(v,"fat_copies",c);
-        }
-        if (!val && !(*scan_byte(v,c)&8)) { if (!v->free_clusters) v->next_free=c; v->free_clusters++; }
-        else if ((val!=mask(v)-8 || (*scan_byte(v,c)&8)) && !(*scan_byte(v,c)&1)) { v->lost_clusters++; }
+    struct fat_scan_state s={0};
+    if ((e=scan_memory(v,&s))) return e;
+    for (uint32_t begin=0;begin<v->scan_extent;begin=s.end) {
+        scan_reset(v,&s,begin);v->scan_passes++;
+        if ((e=scan_tree(v,&s)) || (e=scan_check(v,&s))) goto out;
     }
     if (v->lost_clusters) v->ro_reasons|=FAT_RO_LOST;
     v->scan_complete=true;
     if (repair && !(v->ro_reasons&(FAT_RO_COPIES|FAT_RO_CORRUPT))) {
-        for (uint32_t c=2;c<v->clusters+2;c++) {
-            if (!(c&127)) fs_service();
-            if (*scan_byte(v,c)&1) {
-                if ((*scan_byte(v,c)&24)==24) {
-                    if ((e=set_cluster(v,c,mask(v)))) goto out;
-                    v->repaired_copies++;
-                }
-                continue;
-            }
-            uint32_t val; if ((e=fat_get_cluster(v,c,&val))) goto out;
-            if ((!val || val==mask(v)-8) && !(*scan_byte(v,c)&8)) continue;
-            if (*scan_byte(v,c)&8) {
-                uint8_t raw[4];unsigned n=v->type==32 ? 4 : 2;
-                if ((e=fat_bytes(v,1,offset(v,c),raw,n,false))) goto out;
-                uint32_t other=n==4 ? fs_rd32(raw) : fs_rd16(raw);
-                if (v->type==12 && (c&1)) other>>=4;
-                if (val==mask(v)-8 || (other&mask(v))==mask(v)-8) {
-                    /* A bad-media marker in either copy is not lost space. */
-                    if ((e=set_cluster(v,c,mask(v)-8))) goto out;
-                    v->repaired_copies++;continue;
-                }
-            }
-            if ((e=set_cluster(v,c,0))) goto out;
-            v->repaired_lost++; if (*scan_byte(v,c)&8) v->repaired_copies++;
-            if (c<v->next_free) v->next_free=c;
-            v->free_clusters++;
+        if (v->scan_passes==1) e=scan_reclaim(v,&s);
+        else for (uint32_t begin=0;!e && begin<v->scan_extent;begin=s.end) {
+            scan_reset(v,&s,begin);
+            if (!(e=scan_tree(v,&s))) e=scan_reclaim(v,&s);
         }
-        if ((e=barrier(v)) || (e=hints(v))) goto out;
+        if (e || (e=barrier(v)) || (e=hints(v))) goto out;
         v->lost_clusters=0;v->ro_reasons&=~FAT_RO_LOST;
     }
 out:
-    cache_workspace_end(v->cache); return e;
+    scan_release(v,&s);return e;
 }
-int fat_scan(struct fat_volume *v) { return scan_volume(v,false); }
+/* Explicit diagnostics always check ownership, including clean volumes. */
+int fat_scan(struct fat_volume *v) {
+    struct fat_prepare_cache *p=0;
+    if (!v->prepare_cache) {
+        p=alloc_windows(v);if (!p) return -FS_ENOMEM;v->prepare_cache=p;
+    }
+    int e=scan_volume(v,false,true);
+    if (p) { v->prepare_cache=0;fs_contig_free(p,sizeof(*p)); }
+    return e;
+}
 static int reject(struct fat_volume *v, const char *why) { v->diagnostic=why; v->mounted=false; return -FS_EINVAL; }
 static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr, bool preparing, struct fat_prepare_cache *private) {
     memset(v,0,sizeof(*v)); v->cache=cache; v->dev=dev; v->start=start; v->sectors=sectors;
@@ -928,7 +1049,7 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
     if (!wr) v->ro_reasons|=FAT_RO_REQUEST;
     if (!blkdev_durable(dev)) v->ro_reasons|=FAT_RO_DURABILITY;
     v->readonly=v->ro_reasons!=0; v->mounted=true;
-    e=fat_scan(v);
+    e=scan_volume(v,false,false);
     if (e && e!=-FS_EUCLEAN) { v->mounted=false; return e; }
     if (v->ro_reasons) v->readonly=true;
     if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG)) {
@@ -938,16 +1059,22 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
     if (!v->readonly || (wr && !(v->ro_reasons&~(FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG)))) return fat_enable_write(v);
     return 0;
 }
-int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr) {
-    return mount_volume(v,cache,dev,start,sectors,wr,false,0);
-}
-int fat_prepare(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors) {
-    struct fat_prepare_cache *private=fs_contig_alloc(sizeof(*private));
+static int mount_with_windows(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev,
+                              uint64_t start, uint64_t sectors, bool wr, bool preparing) {
+    uint32_t began=fs_now_ms();memset(v,0,sizeof(*v));
+    struct fat_prepare_cache *private=alloc_windows(v);
     if (!private) return -FS_ENOMEM;
-    int e=mount_volume(v,cache,dev,start,sectors,false,true,private);
+    int e=mount_volume(v,cache,dev,start,sectors,wr,preparing,private);
     v->prepare_cache=0;
     fs_contig_free(private,sizeof(*private));
+    v->mount_ms=fs_now_ms()-began;
     return e;
+}
+int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr) {
+    return mount_with_windows(v,cache,dev,start,sectors,wr,false);
+}
+int fat_prepare(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors) {
+    return mount_with_windows(v,cache,dev,start,sectors,false,true);
 }
 static int repair_volume(struct fat_volume *v) {
     struct fat_entry file;int e;
@@ -964,14 +1091,18 @@ static int repair_volume(struct fat_volume *v) {
                     (e=fat_get_cluster(v,last,&tail))) return e;
                 if (eoc(v,tail)) continue;
             } else if (!tail) continue;
-            /* The scan proved sole ownership of the entire tail. */
-            if ((e=fat_publish_reserved(v,&file,true))) return e;
+            /* The initial proof established sole ownership. Detach the tail
+             * durably, then reclaim it together with orphans by FAT sector.
+             * A cut at either barrier leaves a restartable lost chain. */
+            if (!file.size) file.first=0;
+            if ((e=update(v,&file))) return e;
+            if (last && ((e=set_cluster(v,last,mask(v))) || (e=barrier(v)))) return e;
             v->repaired_logs++;
         }
     }
-    return scan_volume(v,true);
+    return scan_volume(v,true,false);
 }
-int fat_enable_write(struct fat_volume *v) {
+static int enable_write(struct fat_volume *v) {
     if (!v || !v->mounted) return -FS_EINVAL;
     context(v,0);
     int e=v->preparing ? (v->dev->quarantined ? -FS_EIO : 0) : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
@@ -986,22 +1117,10 @@ int fat_enable_write(struct fat_volume *v) {
          * re-enters this same bounded scan; no repair requires a clean flag. */
         if ((e=set_clean(v,false))) return e;
         v->readonly=false;
-        /* Prepared removable mounts have not joined the shared cache yet.
-         * Retain the same bounded FAT read windows during their repair;
-         * otherwise a second scan would issue one transport read per entry. */
-        struct fat_prepare_cache *private=0;
-        if (v->preparing && !v->prepare_cache) {
-            private=fs_contig_alloc(sizeof(*private));
-            if (!private) { v->readonly=true;return -FS_ENOMEM; }
-            v->prepare_cache=private;
-        }
         e=repair_volume(v);
-        if (private) { v->prepare_cache=0;fs_contig_free(private,sizeof(*private)); }
         if (e) { v->readonly=true;return e; }
         if ((e=set_clean(v,true))) return e;
         v->ro_reasons&=~(FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG); v->dirty_recovered=true;
-        if (klog) klog("[storage] repaired logs=%u lost=%u copies=%u dirty=cleared",
-            v->repaired_logs,v->repaired_lost,v->repaired_copies);
     }
     /* A permitted durability/dirty upgrade starts a new writable session;
      * its later first failure must not inherit the former closed gate. */
@@ -1010,6 +1129,21 @@ int fat_enable_write(struct fat_volume *v) {
     if ((e=set_clean(v,false))) return e;
     v->diagnostic=v->dirty_recovered ? "dirty_recovered" : "read gate passed; writable";
     return 0;
+}
+int fat_enable_write(struct fat_volume *v) {
+    if (!v || !v->mounted) return -FS_EINVAL;
+    if (!v->readonly && v->writable_session) return 0;
+    uint32_t began=fs_now_ms();struct fat_prepare_cache *p=0;
+    bool recover=(v->ro_reasons&(FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG))!=0;
+    if (!v->prepare_cache) {
+        p=alloc_windows(v);if (!p) return -FS_ENOMEM;v->prepare_cache=p;
+    }
+    int e=enable_write(v);
+    if (p) { v->prepare_cache=0;fs_contig_free(p,sizeof(*p)); }
+    v->repair_ms=fs_now_ms()-began;
+    if (klog && recover) klog("[storage] repaired logs=%u lost=%u copies=%u dirty=%s elapsed_ms=%u mount_ms=%u error=%d",
+        v->repaired_logs,v->repaired_lost,v->repaired_copies,e ? "retained" : "cleared",v->repair_ms,v->mount_ms,e);
+    return e;
 }
 int fat_commit(struct fat_volume *v) {
     if (!v->mounted) return -FS_EINVAL;
