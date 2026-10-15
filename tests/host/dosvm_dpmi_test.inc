@@ -265,11 +265,23 @@ static void test_dpmi_ldt(void)
     cur.tf.ebx = sel; cur.tf.ecx = 0x20F2; int31(v, 0x0009); CHECK(cf());   /* reserved bit 5 of CH */
     cur.tf.ebx = sel; cur.tf.ecx = 0x0070; int31(v, 0x0009); CHECK(!cf() && dpmi_seg(v, sel, &s) && !s.present); /* absent: anything */
     cur.tf.ebx = sel; cur.tf.ecx = 0x00FA; int31(v, 0x0009); CHECK(!cf());
-    /* 000Ah data alias of a code descriptor; 000Ah of data fails. */
+    /* 000Ah accepts both code and data (the published 0.9 restriction was
+     * corrected). Each alias is an independent, client-owned descriptor. */
     cur.tf.ebx = sel; int31(v, 0x000A); CHECK(!cf());
     uint16_t alias = r16(cur.tf.eax);
     CHECK(dpmi_seg(v, alias, &s) && !s.code && s.writable && s.base == 0x00123456 && s.limit == 0xFFFF);
-    cur.tf.ebx = alias; int31(v, 0x000A); CHECK(cf());
+    cur.tf.ebx = alias; int31(v, 0x000A); CHECK(!cf());
+    uint16_t data_alias = r16(cur.tf.eax);
+    CHECK(data_alias != alias && d->kind[data_alias >> 3] == DPMI_CLIENT &&
+          d->owner[data_alias >> 3] == dpmi_id(v));
+    CHECK(dpmi_seg(v, data_alias, &s) && !s.code && s.writable && s.base == 0x00123456 && s.limit == 0xFFFF);
+    cur.tf.ebx = alias; cur.tf.ecx = 0; cur.tf.edx = 0xABCD; int31(v, 0x0007); CHECK(!cf());
+    CHECK(dpmi_seg(v, data_alias, &s) && s.base == 0x00123456 && s.limit == 0xFFFF);
+    cur.tf.ebx = alias; cur.tf.ecx = 0x0012; cur.tf.edx = 0x3456; int31(v, 0x0007); CHECK(!cf());
+    cur.tf.ebx = data_alias; int31(v, 0x0001); CHECK(!cf());
+    cur.tf.ebx = data_alias; int31(v, 0x000A); CHECK(cf()); /* released */
+    cur.tf.ebx = 0; int31(v, 0x000A); CHECK(cf());         /* null */
+    cur.tf.ebx = 0x20; int31(v, 0x000A); CHECK(cf());      /* GDT */
     /* 000Bh/000Ch round trip; invalid buffer and invalid descriptors fail. */
     cur.tf.ebx = alias; cur.tf.es = cur.tf.ds; cur.tf.edi = 0x100; int31(v, 0x000B); CHECK(!cf());
     uint32_t e[2]; CHECK(!dosvm_read(v, buf, e, 8) && e[0] == d->ldt[alias >> 3][0] && e[1] == d->ldt[alias >> 3][1]);

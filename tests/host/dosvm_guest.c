@@ -361,6 +361,7 @@ static void ring_dump(void)
     }
 }
 static bool frame_pm(void);
+#include "dosvm_guest_exec.inc"
 static void trace_trap(const struct gcpu_event *ev)
 {
     if (trace < 0) trace = getenv("GUEST_TRACE") != 0;
@@ -492,6 +493,7 @@ static int run(uint64_t budget, bool (*done)(void))
         instructions += ev.executed;
         budget = ev.executed >= budget ? 0 : budget - ev.executed;
         if (rc != GCPU_BUDGET) {
+            quake_exec_trap(&ev);
             trace_trap(&ev);
             bool was_pm = frame_pm();
             /* DR6 is sticky until arch_debug_take clears it. Disabled
@@ -518,6 +520,14 @@ static int run(uint64_t budget, bool (*done)(void))
                 debug_dr6 |= bits;
             }
             deliver(ev.vector, ev.err, ev.cr2);
+            if (quake_exec_mode && quake_alias_calls && !quake_alias_returned &&
+                frame_pm() && cpu.tf.cs == quake_alias_cs && cpu.tf.eip == quake_alias_ip &&
+                !(cpu.tf.eflags & V86_CF)) {
+                struct dpmi_seg source, alias;
+                CHECK(dpmi_seg(gv, cpu.tf.ds, &source) && dpmi_seg(gv, cpu.tf.eax, &alias));
+                CHECK(!alias.code && alias.writable && alias.base == source.base && alias.limit == source.limit);
+                quake_alias_returned = true;
+            }
             if (trace && was_pm != frame_pm())
                 printf("    trace switch -> %s %04x:%08x ss:sp=%04x:%08x depth=%u\n", frame_pm() ? "PM" : "V86",
                        cpu.tf.cs & 0xFFFF, cpu.tf.eip, cpu.tf.user_ss & 0xFFFF, cpu.tf.user_esp, gv->dpmi.depth);
@@ -819,13 +829,14 @@ int main(int argc, char **argv)
         bool rc = !strncmp(argv[i], "rc:", 3);
         bool video = !strncmp(argv[i], "video:", 6);
         bool menu = !strncmp(argv[i], "menu:", 5);
+        quake_exec_mode = !strncmp(argv[i], "quake:", 6);
         if (!strncmp(argv[i], "keys:", 5)) {
             CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
             printf("run %s through window keys (expect VMVIDEO stage 1, then stages 2-6)\n", argv[i] + 5);
             if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
             continue;
         }
-        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : video ? argv[i] + 6 : menu ? argv[i] + 5 : argv[i];
+        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : video || menu || quake_exec_mode ? argv[i] + 6 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
         dosvm_expect(gv, argv[i + 1]);
@@ -834,7 +845,17 @@ int main(int argc, char **argv)
         type(command);
         /* GUEST_BUDGET (instructions per command): long workloads (f3-06 DOOM). */
         const char *budget = getenv("GUEST_BUDGET");
-        r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull, fault ? 0 : video || menu ? video_started : verdict);
+        r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull,
+                fault ? 0 : quake_exec_mode ? quake_exec_done : video || menu ? video_started : verdict);
+        if (quake_exec_mode) {
+            bool pass = r == 1 && quake_alias_returned && quake_alias_calls == 1 &&
+                gv->dpmi.active && !gv->info.verdict_done && !gv->dpmi.stats.terminations && !gv->dpmi.stats.faults;
+            printf("f3-28 Quake CRT data alias: %s (EXEC=%u reopened=%u aliases=%u active=%u entries=%u terminations=%u verdict=%s)\n",
+                   pass ? "PASS" : "FAIL", quake_exec_checked, quake_reopened, quake_alias_calls,
+                   gv->dpmi.active, gv->dpmi.stats.entries, gv->dpmi.stats.terminations, gv->info.verdict_detail);
+            if (!pass) { failures++; screen(); }
+            break;
+        }
         if (video || menu) {
             printf("video startup replay: %s (%llu instructions, %llu ms, PM timer IRQs=%u)\n",
                    r == 1 ? "PASS" : "FAIL", (unsigned long long)(instructions - start),
