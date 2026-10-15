@@ -8,6 +8,7 @@ int display_set(struct process *, uint16_t mode);
 uint32_t display_change_counter(void);
 void display_frame_complete(uint32_t generation);
 void display_watchdog_poll(void);
+int display_worker_start(void);
 int display_fullscreen_begin(uint8_t mode);
 int display_fullscreen_end(void);
 bool display_fullscreen_active(void);

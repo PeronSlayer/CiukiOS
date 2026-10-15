@@ -108,6 +108,17 @@ static void watchdog_main(void *arg)
     (void)arg;
     for (;;) { task_sleep_ms(100); display_watchdog_poll(); }
 }
+/* f3-21: the worker also services queued DOS full-screen requests
+ * (dosvm_fullscreen_poll); the input filter cannot create it from IRQ
+ * context, so window VM creation starts it in thread context. Idempotent. */
+int display_worker_start(void)
+{
+    if (watchdog) return 0;
+    watchdog = task_create_kernel("display-watchdog", watchdog_main, 0, P_NORMAL);
+    if (!watchdog) return -ENOMEM;
+    task_start(watchdog);
+    return 0;
+}
 
 int display_set(struct process *p, uint16_t id)
 {
@@ -120,11 +131,7 @@ int display_set(struct process *p, uint16_t id)
     if (!fbdev_get()->present) return refuse(id, -ENODEV);
     if (!listed(fbdev_get()->mode_id)) return refuse(id, -EOPNOTSUPP); /* cannot promise restore */
     if (id == fbdev_get()->mode_id) return refuse(id, 0);
-    if (!watchdog) {
-        watchdog = task_create_kernel("display-watchdog", watchdog_main, 0, P_NORMAL);
-        if (!watchdog) return refuse(id, -ENOMEM);
-        task_start(watchdog);
-    }
+    if (display_worker_start()) return refuse(id, -ENOMEM);
     switching = true;
     previous = *fbdev_get();
     int e = biosvm_video_prepare();
@@ -171,11 +178,7 @@ int display_fullscreen_begin(uint8_t mode)
     if (!desktop || desktop->state>=PROC_STOPPING || !grants_display_owner(desktop)) return -EPERM;
     if (switching || fullscreen_display || awaiting_frame || grants_display_busy()) return -EBUSY;
     if (!fbdev_get()->present || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
-    if (!watchdog) {
-        watchdog=task_create_kernel("display-watchdog",watchdog_main,0,P_NORMAL);
-        if (!watchdog) return -ENOMEM;
-        task_start(watchdog);
-    }
+    if (display_worker_start()) return -ENOMEM;
     switching=true;
     previous=*fbdev_get();
     int e=biosvm_video_prepare();
