@@ -1,0 +1,1 @@
+Hackneyed X11 cursor theme, Copyright Richard Ferreira. MIT license; retain the copyright and permission notice in copies or substantial portions.
