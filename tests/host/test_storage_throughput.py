@@ -25,28 +25,28 @@ class StorageTaskTests(unittest.TestCase):
 #include <assert.h>
 #include <setjmp.h>
 static struct storage s;
-static uint64_t next_log_drain;
-static unsigned steps, drains, writebacks, snapshots;
+static uint32_t last_log;
+static unsigned steps, drains, writebacks, due_checks;
 static uint32_t clock_ms;
 static bool written;
 static jmp_buf exited;
 static uint32_t fixture_now(void) { return clock_ms; }
 #define fs_now_ms fixture_now
 static void task_sleep_ms(uint32_t ms) {
-    const uint32_t times[]={1,100,351,5000,5101};
-    assert(ms==1 && steps<5);
+    const uint32_t times[]={10,100,1010,5000,5100};
+    assert(ms==10 && steps<5);
     clock_ms=times[steps++];
     if (steps==5) s.stopped=true;
 }
 static void task_exit(int status) { assert(status==0); longjmp(exited,1); }
-void bootlog_snapshot(struct bootlog_stats *out) {
-    snapshots++;
-    *out=(struct bootlog_stats){.active=true,.queued=100};
+bool bootlog_due(uint32_t now) {
+    due_checks++;
+    return !last_log || (uint32_t)(now-last_log)>=BOOTLOG_DRAIN_MS;
 }
 int bootlog_drain(void) {
     assert(!s.stopped);
-    assert(clock_ms==1 || clock_ms==351 || clock_ms==5000);
-    drains++; clock_ms+=50; /* sleeping transfer, no shared work callback */
+    assert(clock_ms==10 || clock_ms==1010 || clock_ms==5000);
+    drains++; last_log=clock_ms; clock_ms+=50; /* sleeping transfer, no shared work callback */
     return 0;
 }
 bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
@@ -55,7 +55,7 @@ bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
 }
 int storage_writeback(struct storage *arg, uint32_t now) {
     assert(arg==&s && !s.stopped);
-    assert(now==51 || now==401 || now==5050);
+    assert(now==60 || now==1060 || now==5050);
     writebacks++;
     if (now>=5000) written=true;
     return 0;
@@ -64,8 +64,8 @@ int storage_writeback(struct storage *arg, uint32_t now) {
         suffix = r'''
 int main(void) {
     if (!setjmp(exited)) storage_timer(&s);
-    assert(steps==5 && snapshots==5 && drains==3 && writebacks==3 && written);
-    assert(next_log_drain==5300);
+    assert(steps==5 && due_checks==5 && drains==3 && writebacks==3 && written);
+    assert(last_log==5000);
     return 0;
 }
 '''

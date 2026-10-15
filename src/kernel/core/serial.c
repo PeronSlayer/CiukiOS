@@ -5,6 +5,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
+#include <ciuki/timing.h>
 
 #define UART_POLL_LIMIT 20000u   /* per readiness wait, panic only */
 #define UART_DEAD_LIMIT 8u       /* consecutive timeouts before disabling */
@@ -132,14 +133,17 @@ static void serial_drain(void)
 
 void serial_write(const char *s, size_t n)
 {
+    /* Count/expand outside the IRQ lock. Current record producers are
+     * bounded; an oversized caller is dropped before inspecting its bytes. */
+    size_t bytes = n;
+    if (n <= UART_LOG_BYTES)
+        for (size_t i = 0; i < n; i++) if (s[i] == '\n') bytes++;
     uint32_t flags = irq_save();
+    if ((flags & 0x200) && crit_label) crit_label("serial_queue");
     if (!uart_ok || !n) {
         irq_restore(flags);
         return;
     }
-    size_t bytes = n;
-    if (n <= UART_LOG_BYTES)
-        for (size_t i = 0; i < n; i++) if (s[i] == '\n') bytes++;
     /* Append a whole record under one lock, including CRLF expansion.
      * Physical IF clear also describes ordinary IRQ/critical-section logs:
      * playback must queue those without waiting for the UART. */

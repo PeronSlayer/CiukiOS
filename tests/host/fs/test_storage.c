@@ -281,6 +281,35 @@ static void dirty_recovery_tests(void) {
         printf("PASS FAT%u dirty recovery: RO-first/gate, clean scan, lost/divergence/error refusal, reserved bits, per-copy W/P/B, six recovery cuts\n",g.type);
     }
 }
+static bool log_no_cancel(void *arg) { (void)arg; return false; }
+static void log_storage_turn(void *arg) { (void)arg; OK(bootlog_drain()); }
+static void reserved_log_io(void) {
+    struct storage *s=start(); OK(storage_enable_write(s,2));
+    OK(bootlog_activate(&s->vfs,true,s->sequence));
+    int h=vfs_open(&table,BOOTLOG_PATH,VFS_READ,VFS_DENY_NONE,0); CHECK(h>=0);
+    struct vfs_node *node=table.handles[h]->node;
+    struct fat_volume *v=node->volume;
+    CHECK(node->log_capacity==BOOTLOG_LIMIT);
+    uint32_t first=node->entry.first, free_before=v->free_clusters;
+    uint32_t dir_sector=v->data_sector+(node->entry.parent-2)*v->spc+(node->entry.index/16)%v->spc;
+    unsigned events=media[0].events, writes=media[0].writes;
+    bootlog_capture("reserved log data\n",18); OK(bootlog_drain());
+    CHECK(media[0].writes-writes==BOOTLOG_BATCH/512);
+    CHECK(v->free_clusters==free_before && node->entry.first==first && node->entry.size==18);
+    for(unsigned i=events;i<media[0].events;i++) if(media[0].trace[i].kind=='W') {
+        CHECK(media[0].trace[i].lba>=v->data_sector);
+        CHECK(media[0].trace[i].lba!=dir_sector);
+    }
+    unsigned calls=media[0].writes;
+    OK(bootlog_drain()); CHECK(media[0].writes==calls);
+    OK(vfs_close(&table,h)); OK(bootlog_shutdown()); stop(s,true);
+    for(unsigned i=0;i<2;i++) {
+        struct scan_result scan=independent_scan(media[0].fd,i);
+        CHECK(!scan.dirty && !scan.divergent && !scan.lost && !scan.crosslinks && !scan.corrupt);
+    }
+    reset();
+    puts("PASS reserved log: exactly 64 data sectors/drain, zero FAT/directory writes, stable chain/free space, rate limit, clean final scans");
+}
 static void log_tests(void) {
     struct storage *s=start(); struct bootlog_stats st;
     bootlog_capture("activation before mount\n",24); bootlog_snapshot(&st); CHECK(!st.writes && !st.storage_calls && st.queued==24);
@@ -289,9 +318,9 @@ static void log_tests(void) {
     CHECK(BOOTLOG_LIMIT==1048576 && BOOTLOG_PROTECTED==131072 && !strcmp(BOOTLOG_PATH,"C:/SYSTEM/LOGS/BOOT.LOG"));
     char text[4096]; memset(text,'a',sizeof(text));
     bootlog_capture_ring(text,sizeof(text));
-    OK(bootlog_drain());
-    OK(bootlog_drain());
-    bootlog_capture("later boot\n",11); OK(bootlog_drain());
+    OK(bootlog_sync(log_no_cancel,log_storage_turn,NULL));
+    OK(bootlog_sync(log_no_cancel,log_storage_turn,NULL));
+    bootlog_capture("later boot\n",11); OK(bootlog_sync(log_no_cancel,log_storage_turn,NULL));
     bootlog_snapshot(&st); CHECK(st.active && st.size==BOOTLOG_PROTECTED+sizeof(text) && st.boot_size==35 && !st.rotations && st.first_write_sequence>st.qualification_sequence);
     int h=vfs_open(&table,BOOTLOG_PATH,VFS_READ,VFS_DENY_NONE,0); CHECK(h>=0);
     char prefix[64]; size_t got; uint64_t at;
@@ -312,7 +341,7 @@ static void log_tests(void) {
     stop(s,true); reset();
     /* Bounded RAM capture and unavailable path never call a filesystem. */
     for(unsigned i=0;i<BOOTLOG_PROTECTED/sizeof(text);i++) bootlog_capture(text,sizeof(text));
-    for(unsigned i=0;i<5;i++) bootlog_capture_ring(text,sizeof(text));
+    for(unsigned i=0;i<BOOTLOG_RAM/sizeof(text)+3;i++) bootlog_capture_ring(text,sizeof(text));
     bootlog_snapshot(&st); CHECK(st.boot_queued==BOOTLOG_PROTECTED && st.ring_queued==BOOTLOG_RAM && st.queued==BOOTLOG_PROTECTED+BOOTLOG_RAM && st.dropped==3*sizeof(text) && !st.storage_calls);
     OK(bootlog_shutdown()); bootlog_reset();
     printf("PASS boot log: SYSTEM/LOGS after gate, protected prefix/backfill/zero padding, runtime ring, bounded RAM, durable reopen/fresh qualified boot\n");
@@ -489,7 +518,7 @@ static void probe_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); log_tests(); failure_tests(); cfg_tests(); sweep_write_tests(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); cfg_tests(); sweep_write_tests(); probe_tests(); mount_probe_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;

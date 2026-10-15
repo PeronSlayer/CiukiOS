@@ -262,7 +262,7 @@ int vfs_open(struct vfs_table *t, const char *path, unsigned flags, enum vfs_sha
         if (!node) { e=-FS_EMFILE; goto out; }
     }
     if (create) { if (attr&FAT_ATTR_DIR) { e=-FS_EISDIR; goto out; } if ((e=fat_create(vol,r.parent,r.name,attr,&ent))) goto out; }
-    if (!node->refs) { node->volume=vol; node->entry=ent; }
+    if (!node->refs) { node->volume=vol; node->entry=ent; node->log_capacity=0; }
     if (flags&VFS_TRUNCATE) {
         struct fat_entry before=node->entry;
         e=fat_truncate(vol,&node->entry,0);
@@ -299,6 +299,7 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
     fs_lock_take(&t->vfs->lock); struct vfs_description *d=get(t,h); int e;
     if (!d) e=-FS_EBADF; else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=-FS_EROFS; }
     else if (!(d->access&VFS_WRITE)) e=-FS_EACCES;
+    else if (d->node->log_capacity) e=-FS_EBUSY;
     else {
         struct fat_entry before=d->node->entry;
         e=fat_write(d->node->volume,&d->node->entry,d->position,buf,n,done); d->position+=*done;
@@ -324,6 +325,7 @@ int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
     fs_lock_take(&t->vfs->lock); struct vfs_description *d=get(t,h);
     int e=!d ? -FS_EBADF : d->node->ro ? ro_handle(t->vfs,d->node) : !(d->access&VFS_WRITE) ? -FS_EACCES : 0;
     if (d && d->node->ro && !e) e=-FS_EROFS;
+    if (d && d->node->log_capacity && !e) e=-FS_EBUSY;
     if (!e) {
         struct fat_entry before=d->node->entry;
         e=fat_truncate(d->node->volume,&d->node->entry,size);
@@ -334,6 +336,55 @@ int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
 int vfs_commit(struct vfs_table *t, int h) {
     fs_lock_take(&t->vfs->lock); struct vfs_description *d=get(t,h);
     int e=!d ? -FS_EBADF : d->node->ro ? ro_handle(t->vfs,d->node) : fat_commit(d->node->volume); fs_lock_drop(&t->vfs->lock); return e;
+}
+static int log_handle(struct vfs_table *t, int h, struct vfs_description **out) {
+    struct vfs_description *d=get(t,h); *out=d;
+    if (!d) return -FS_EBADF;
+    if (d->node->ro) return -FS_EROFS;
+    if (!(d->access&VFS_WRITE) || !(d->deny&VFS_DENY_WRITE)) return -FS_EACCES;
+    return 0;
+}
+int vfs_log_reserve(struct vfs_table *t, int h, uint32_t capacity) {
+    fs_lock_take(&t->vfs->lock);
+    struct vfs_description *d; int e=log_handle(t,h,&d);
+    if (!e && (!capacity || (capacity&511) || d->node->log_capacity)) e=-FS_EINVAL;
+    if (!e) {
+        struct fat_entry before=d->node->entry;
+        e=fat_truncate(d->node->volume,&d->node->entry,0);
+        if (!e) e=fat_truncate(d->node->volume,&d->node->entry,capacity);
+        if (!e) {
+            d->node->log_capacity=capacity; d->node->entry.size=0; d->position=0;
+            e=fat_publish_reserved(d->node->volume,&d->node->entry,false);
+        }
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+    }
+    fs_lock_drop(&t->vfs->lock); return e;
+}
+int vfs_log_write(struct vfs_table *t, int h, const void *buf, size_t n, uint32_t size, size_t *done) {
+    if (!done) return -FS_EINVAL; *done=0;
+    fs_lock_take(&t->vfs->lock);
+    struct vfs_description *d; int e=log_handle(t,h,&d);
+    if (!e && (!d->node->log_capacity || size>d->node->log_capacity)) e=-FS_EINVAL;
+    if (!e) {
+        struct fat_entry before=d->node->entry;
+        e=fat_write_reserved(d->node->volume,&d->node->entry,d->node->log_capacity,d->position,buf,n,done);
+        d->position+=*done;
+        if (!e) d->node->entry.size=size;
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+    }
+    fs_lock_drop(&t->vfs->lock); return e;
+}
+int vfs_log_publish(struct vfs_table *t, int h, bool finish) {
+    fs_lock_take(&t->vfs->lock);
+    struct vfs_description *d; int e=log_handle(t,h,&d);
+    if (!e && !d->node->log_capacity) e=-FS_EINVAL;
+    if (!e) {
+        struct fat_entry before=d->node->entry;
+        e=fat_publish_reserved(d->node->volume,&d->node->entry,finish);
+        if (!e && finish) d->node->log_capacity=0;
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry);
+    }
+    fs_lock_drop(&t->vfs->lock); return e;
 }
 int vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *out) {
     if (ro_target(t,path)) {

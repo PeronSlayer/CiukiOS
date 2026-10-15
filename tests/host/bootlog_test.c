@@ -6,13 +6,17 @@
 #include <ciuki/bootlog.h>
 #include "../../src/kernel/fs/vfs.h"
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL bootlog %d: %s\n", __LINE__, #c); exit(1); } } while (0)
+static uint32_t model_now;
+static uint32_t model_now_ms(void) { return model_now; }
+#define fs_now_ms model_now_ms
 #include "../../src/kernel/core/bootlog.c"
 
 static struct vfs fs;
 static struct fat_volume volume;
 static unsigned char disk[BOOTLOG_LIMIT];
 static uint32_t disk_size, disk_position;
-static unsigned calls, turns, commits, truncations;
+static unsigned calls, turns, commits, truncations, publications;
+static uint32_t published_size;
 static int fail_seek, fail_write, fail_truncate,fail_commit;
 static bool short_write;
 static bool sync_waiting, storage_turn, service_sync,produce_during_sync;
@@ -33,15 +37,32 @@ int vfs_seek(struct vfs_table *t, int h, int64_t offset, enum vfs_whence whence,
 { (void)t; storage_call(); CHECK(h == 1 && whence == VFS_SEEK_SET && offset >= 0 && offset <= BOOTLOG_LIMIT); if (fail_seek) return -FS_EIO; *at = disk_position = (uint32_t)offset; return 0; }
 int vfs_truncate(struct vfs_table *t, int h, uint64_t size)
 { (void)t; storage_call(); CHECK(h == 1 && (size == 0 || size == BOOTLOG_PROTECTED)); if (fail_truncate) return -FS_EIO; if (size > disk_size) memset(disk + disk_size, 0, (size_t)size - disk_size); disk_size = (uint32_t)size; truncations++; return 0; }
-int vfs_write(struct vfs_table *t, int h, const void *data, size_t size, size_t *done)
+int vfs_log_write(struct vfs_table *t, int h, const void *data, size_t size, uint32_t logical_size, size_t *done)
 {
-    (void)t; storage_call(); CHECK(h == 1 && size && size <= 4096 && disk_position + size <= BOOTLOG_LIMIT);
+    (void)t; storage_call(); CHECK(h == 1 && size && size == BOOTLOG_BATCH && disk_position + size <= BOOTLOG_LIMIT);
     *done = 0; if (fail_write) return -FS_EIO;
     if (short_write) size--;
     if (disk_position > disk_size) memset(disk + disk_size, 0, disk_position - disk_size);
     memcpy(disk + disk_position, data, size); disk_position += (uint32_t)size;
-    if (disk_position > disk_size) disk_size = disk_position;
+    disk_size = logical_size;
     *done = size; return 0;
+}
+int vfs_log_reserve(struct vfs_table *t, int h, uint32_t capacity)
+{
+    (void)t; storage_call(); CHECK(h == 1 && capacity == BOOTLOG_LIMIT);
+    if (fail_truncate) return -FS_EIO;
+    memset(disk, 0, sizeof(disk)); disk_size = disk_position = published_size = 0;
+    truncations++; return 0;
+}
+int vfs_read(struct vfs_table *t, int h, void *data, size_t size, size_t *done)
+{
+    (void)t; storage_call(); CHECK(h == 1 && disk_position + size <= disk_size);
+    memcpy(data, disk + disk_position, size); disk_position += (uint32_t)size; *done = size; return 0;
+}
+int vfs_log_publish(struct vfs_table *t, int h, bool finish)
+{
+    (void)t; (void)finish; storage_call(); CHECK(h == 1);
+    publications++; published_size = disk_size; return fail_commit ? -FS_EIO : 0;
 }
 int vfs_commit(struct vfs_table *t, int h) { (void)t; storage_call(); CHECK(h == 1); commits++; return fail_commit ? -FS_EIO : 0; }
 int vfs_close(struct vfs_table *t, int h) { (void)t; storage_call(); CHECK(h == 1); return 0; }
@@ -50,6 +71,7 @@ static void drain(void)
 {
     while (snapshot().queued) {
         uint64_t writes = snapshot().writes;
+        model_now += BOOTLOG_DRAIN_MS;
         CHECK(!bootlog_drain()); CHECK(snapshot().writes == writes + 1);
         turns++;
     }
@@ -58,7 +80,7 @@ static void reset_model(void)
 {
     bootlog_reset(); memset(&fs, 0, sizeof(fs)); memset(&volume, 0, sizeof(volume));
     fs.volumes[2] = &volume;
-    calls = turns = commits = truncations = disk_position = 0;
+    calls = turns = commits = truncations = disk_position = publications = model_now = 0;
     fail_seek = fail_write = fail_truncate = fail_commit = 0; short_write = false;
     sync_waiting=storage_turn=service_sync=produce_during_sync=false;
 }
@@ -67,7 +89,7 @@ static void retention(void)
     reset_model(); disk_size = 9; memcpy(disk, "OLD BOOT\n", 9);
     static char text[4096]; memset(text, 'B', sizeof(text));
     /* Periodic traffic may wrap in RAM before mount; boot bytes survive. */
-    for (unsigned i = 0; i < 5; i++) bootlog_capture_ring(text, sizeof(text));
+    for (unsigned i = 0; i < BOOTLOG_RAM / sizeof(text) + 3; i++) bootlog_capture_ring(text, sizeof(text));
     bootlog_capture("FIRST BOOT\n", 11);
     CHECK(!calls && snapshot().boot_queued == 11 && snapshot().ring_queued == BOOTLOG_RAM);
     CHECK(snapshot().dropped == 3 * sizeof(text));
@@ -87,7 +109,7 @@ static void retention(void)
     CHECK(snapshot().boot_size == BOOTLOG_PROTECTED && !memcmp(disk, "FIRST BOOT\n", 11));
     /* Reach the exact 1 MiB boundary, wrap twice, and verify the prefix. */
     memset(text, 'R', sizeof(text));
-    for (unsigned i = 2; i < BOOTLOG_RING / sizeof(text); i++) { bootlog_capture_ring(text, sizeof(text)); drain(); }
+    for (unsigned i = BOOTLOG_RAM / sizeof(text); i < BOOTLOG_RING / sizeof(text); i++) { bootlog_capture_ring(text, sizeof(text)); drain(); }
     CHECK(snapshot().size == BOOTLOG_LIMIT && !snapshot().rotations);
     for (unsigned wrap = 1; wrap <= 2; wrap++) {
         bootlog_capture("NEW RUNTIME\n", 12); drain();
@@ -167,9 +189,9 @@ static void sync_bounds(void)
 {
     reset_model();CHECK(!bootlog_activate(&fs,true,1));
     static char bytes[8192];memset(bytes,'Z',sizeof(bytes));bootlog_capture(bytes,sizeof(bytes));
-    service_sync=true;sync_pauses=0;CHECK(!sync_records() && sync_pauses==2 && commits==1);
+    service_sync=true;sync_pauses=0;CHECK(!sync_records() && sync_pauses==1 && commits==1);
     /* Already-written bytes still need a commit and a visible storage turn. */
-    bootlog_capture("written",7);CHECK(!bootlog_drain());
+    bootlog_capture("written",7);model_now += BOOTLOG_DRAIN_MS; CHECK(!bootlog_drain());
     CHECK(!snapshot().queued);sync_pauses=0;CHECK(!sync_records() && sync_pauses==1 && commits==2);
     bootlog_capture("next",4);service_sync=false;sync_pauses=0;
     unsigned before=calls;
@@ -179,7 +201,7 @@ static void sync_bounds(void)
     bootlog_capture("bad commit",10);fail_commit=1;sync_pauses=0;
     CHECK(sync_records()==-FS_EIO && sync_pauses==1 && snapshot().error==-FS_EIO);
     CHECK(bootlog_shutdown()==-FS_EIO);
-    puts("bootlog: bounded 4KiB turns, commit-only watermark, independent deadline, recoverable wait timeout and sticky commit error PASS");
+    puts("bootlog: aligned 32KiB turns, commit-only watermark, independent deadline, recoverable wait timeout and sticky commit error PASS");
     reset_model();CHECK(!bootlog_activate(&fs,true,1));bootlog_capture("stage",5);
     service_sync=produce_during_sync=true;sync_pauses=0;
     CHECK(!sync_records() && sync_pauses==1 && commits==1 && snapshot().ring_queued==4096);
@@ -191,7 +213,7 @@ static void overlap_storage(void *ctx)
 {
     (void)ctx;overlap_turns++;storage_turn=true;
     CHECK(!bootlog_drain());storage_turn=false;
-    if (overlap_turns<=2) CHECK(commits==overlap_turns && snapshot().queued);
+    CHECK(commits==overlap_turns);
 }
 static void second_waiter(void *ctx)
 {
@@ -210,9 +232,38 @@ static void overlapping_watermarks(void)
     reset_model();CHECK(!bootlog_activate(&fs,true,1));bootlog_capture("first",5);
     overlap_turns=0;sync_waiting=true;
     CHECK(!bootlog_sync(never_cancel,first_waiter,NULL));sync_waiting=false;
-    CHECK(commits==3 && overlap_turns==6 && !snapshot().queued);
+    CHECK(commits==3 && overlap_turns==3 && !snapshot().queued);
     for(unsigned i=0;i<SYNC_WAITERS;i++)CHECK(!sync_waiters[i]);
     CHECK(!bootlog_shutdown());
-    puts("bootlog: three overlapping bind watermarks commit at 4KiB/8KiB/final; later binders cannot extend earlier waits PASS");
+    puts("bootlog: three overlapping bind watermarks commit at each captured byte target; later binders cannot extend earlier waits PASS");
 }
-int main(void) { retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks(); return 0; }
+static void batching_and_cadence(void)
+{
+    reset_model(); CHECK(!bootlog_activate(&fs, true, 1));
+    bootlog_capture("first\n", 6); CHECK(bootlog_due(model_now)); CHECK(!bootlog_drain());
+    CHECK(snapshot().writes == 1 && snapshot().bytes_written == BOOTLOG_BATCH);
+    CHECK(!publications && !published_size && truncations == 1);
+    bootlog_capture("second\n", 7);
+    model_now = 999; unsigned before = calls;
+    CHECK(!bootlog_due(model_now) && !bootlog_drain() && calls == before);
+    model_now = 1000; CHECK(bootlog_due(model_now) && !bootlog_drain());
+    CHECK(snapshot().writes == 2 && !publications && truncations == 1);
+    CHECK(!memcmp(disk, "first\nsecond\n", 13) && disk[13] == 0);
+    model_now = 4999; CHECK(!bootlog_due(model_now));
+    model_now = 5000; CHECK(bootlog_due(model_now) && !bootlog_drain());
+    CHECK(publications == 1 && published_size == 13 && snapshot().writes == 2);
+    static char flood[BOOTLOG_HIGH_WATER]; memset(flood, 'H', sizeof(flood));
+    bootlog_capture_ring(flood, sizeof(flood));
+    CHECK(bootlog_due(model_now) && !bootlog_drain()); /* high water bypasses rate */
+    CHECK(snapshot().ring_queued == sizeof(flood) - BOOTLOG_BATCH && publications == 1);
+    CHECK(!bootlog_shutdown() && published_size == snapshot().size);
+    CHECK(snapshot().bytes_written == snapshot().writes * BOOTLOG_BATCH);
+    CHECK(truncations == 1);
+    reset_model(); model_now = UINT32_MAX - 500;
+    CHECK(!bootlog_activate(&fs, true, 2)); bootlog_capture("a", 1); CHECK(!bootlog_drain());
+    bootlog_capture("b", 1); model_now = 498; CHECK(!bootlog_due(model_now));
+    model_now = 499; CHECK(bootlog_due(model_now) && !bootlog_drain());
+    CHECK(!bootlog_shutdown());
+    puts("bootlog: 32KiB physical blocks, one-second rate/high water, five-second metadata, shutdown EOF and clock wrap PASS");
+}
+int main(void) { retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();batching_and_cadence(); return 0; }

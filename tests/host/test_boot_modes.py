@@ -149,7 +149,7 @@ int main(void)
     bad += !!cbi_quiet_console(CBI_F_SAFE_MODE);
     bad += !!cbi_quiet_console(CBI_F_VERBOSE);
     bad += !!cbi_quiet_console(CBI_F_TEXT_MODE);
-    bad += CBI_F_VERBOSE != 0x800u || CBI_F_DEFINED_MASK != 0xFFFu;
+    bad += CBI_F_VERBOSE != 0x800u || CBI_F_DIAG_VERBOSE != 0x1000u || CBI_F_DEFINED_MASK != 0x1FFFu;
     printf("quiet predicate: %u failures\n", bad);
     return bad != 0;
 }

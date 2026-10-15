@@ -30,7 +30,10 @@
 #define CBI_F_A20_MASK         (7u << CBI_F_A20_SHIFT)
 /* Boot log on screen: menu L key (amendment 2026-10-12, docs/boot.md). */
 #define CBI_F_VERBOSE          (1u << 11)
-#define CBI_F_DEFINED_MASK     0x00000FFFu
+/* High-volume device/VM diagnostics, independent of the screen-log choice.
+ * Accepted fw_cfg test selectors enable this bit. Hardware defaults to off. */
+#define CBI_F_DIAG_VERBOSE     (1u << 12)
+#define CBI_F_DEFINED_MASK     0x00001FFFu
 
 /* A normal boot keeps the screen quiet until the desktop takes it: no test
  * request, no safe mode, no L choice and a linear framebuffer. Every other

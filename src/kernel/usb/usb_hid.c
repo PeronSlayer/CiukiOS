@@ -72,7 +72,7 @@ static void report_record(struct usb_device *d, struct usb_hid *h,
 }
 static void poll_record(struct usb_device *d, struct usb_hid *h, int result)
 {
-    if (!trace_enabled() || (result == -USB_EAGAIN && h->poll_records >= USB_HID_TRACE_LIMIT)) return;
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE) || (result == -USB_EAGAIN && h->poll_records >= USB_HID_TRACE_LIMIT)) return;
     if (h->poll_records < USB_HID_TRACE_LIMIT) h->poll_records++;
     const struct usb_packet_trace *t=&h->trace;
     /* This snapshot precedes LED/hub control or quarantine reusing DMA.

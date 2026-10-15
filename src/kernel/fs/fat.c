@@ -474,6 +474,52 @@ int fat_truncate(struct fat_volume *v, struct fat_entry *file, uint64_t size) {
     if (size==file->size) return 0;
     return replace(v,file,(uint32_t)size,0,0,0);
 }
+int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint32_t capacity,
+                       uint64_t pos, const void *data, size_t size, size_t *done) {
+    *done=0; int e=writable(v); if (e) return e;
+    if (file->attr&(FAT_ATTR_RO|FAT_ATTR_DIR)) return -FS_EACCES;
+    if ((!data && size) || pos>capacity || size>capacity-pos || (pos&511) || (size&511)) return -FS_EINVAL;
+    if (!size) return 0;
+    uint32_t cb=(uint32_t)v->spc*512, c;
+    if ((e=chain_at(v,file->first,(uint32_t)pos/cb,&c))) return e;
+    unsigned off=(uint32_t)pos%cb;
+    while (*done<size) {
+        if ((e=writesec(v,cluster_sector(v,c)+off/512,(const uint8_t *)data+*done))) return e;
+        *done+=512; off+=512;
+        if (off==cb && *done<size) {
+            uint32_t next; if ((e=fat_get_cluster(v,c,&next))) return e;
+            if (!valid(v,next)) return corrupt(v);
+            c=next; off=0;
+        }
+    }
+    /* Only data durability here. FAT, FSInfo and directory sectors are not
+     * dirtied. All storage waits occur with IF enabled. */
+    return barrier(v);
+}
+int fat_publish_reserved(struct fat_volume *v, struct fat_entry *file, bool finish) {
+    int e=writable(v); if (e) return e;
+    if ((e=barrier(v))) return e;
+    uint8_t tenths;
+    fs_timestamp(&file->times.write_date,&file->times.write_time,&tenths);
+    file->attr|=FAT_ATTR_ARCHIVE;
+    if (!finish) return update(v,file);
+    uint32_t tail=file->first, last=0;
+    if (file->size) {
+        uint32_t cb=(uint32_t)v->spc*512;
+        if ((e=chain_at(v,file->first,(file->size-1)/cb,&last))) return e;
+        if ((e=fat_get_cluster(v,last,&tail))) return e;
+        if (eoc(v,tail)) tail=0;
+        else if (!valid(v,tail)) return corrupt(v);
+    } else file->first=0;
+    /* Publish the smaller length before unlinking the reserved tail. A
+     * crash between these barriers leaves owned excess, never a short chain. */
+    if ((e=update(v,file))) return e;
+    if (last && tail) {
+        if ((e=set_cluster(v,last,mask(v))) || (e=barrier(v))) return e;
+    }
+    if (tail && (e=release_chain(v,tail))) return e;
+    return tail ? hints(v) : 0;
+}
 int fat_remove(struct fat_volume *v, struct fat_entry *file, bool directory) {
     int e=writable(v); if (e) return e;
     if (!!(file->attr&FAT_ATTR_DIR)!=directory) return directory ? -FS_ENOTDIR : -FS_EISDIR;

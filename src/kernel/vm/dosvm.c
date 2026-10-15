@@ -716,7 +716,7 @@ bool dosvm_trap(struct trap_frame *tf)
         else if (tf->vector == 13) {
             uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
             uint64_t flags_insn[4] = {0}, hlts = 0;
-            if (g_boot.flags & CBI_F_VERBOSE) {
+            if (g_boot.flags & CBI_F_DIAG_VERBOSE) {
                 for (unsigned i = 0; i < 4; i++) flags_insn[i] = v->monitor.stats.insn[V86_PUSHF + i];
                 hlts = v->monitor.stats.insn[V86_HLT];
             }
@@ -725,7 +725,7 @@ bool dosvm_trap(struct trap_frame *tf)
             e = v86_emulate(&v->monitor, f);
             if (v->monitor.stats.insn[V86_INT] != ints) v->perf.cause = DOSVM_COST_RM_INT;
             if (v->monitor.stats.insn[V86_IRET] != irets) v->perf.cause = DOSVM_COST_RM_IRET;
-            if (g_boot.flags & CBI_F_VERBOSE) {
+            if (g_boot.flags & CBI_F_DIAG_VERBOSE) {
                 for (unsigned i = 0; i < 4; i++) if (v->monitor.stats.insn[V86_PUSHF + i] != flags_insn[i])
                     v->perf.cause = DOSVM_COST_RM_PUSHF + i;
                 if (v->monitor.stats.insn[V86_HLT] != hlts) v->perf.cause = DOSVM_COST_RM_HLT;

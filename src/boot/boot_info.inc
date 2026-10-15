@@ -21,6 +21,7 @@
 %define CBI_F_INPUT_FORCED    (1 << 7)
 %define CBI_F_A20_SHIFT       8
 %define CBI_F_VERBOSE         (1 << 11) ; boot log on screen (menu L)
+%define CBI_F_DIAG_VERBOSE    (1 << 12) ; high-volume diagnostics, fw_cfg probes
 %define CBI_A20_ALREADY_ON    1
 %define CBI_A20_INT15         2
 %define CBI_A20_KBC           3

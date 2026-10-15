@@ -41,7 +41,12 @@ static uint8_t pic_isr(uint16_t cmd)
 
 static void handle_irq(struct trap_frame *tf)
 {
+    static const char *const sections[16] = {
+        "irq0", "irq1", "irq2", "irq3", "irq4", "irq5", "irq6", "irq7",
+        "irq8", "irq9", "irq10", "irq11", "irq12", "irq13", "irq14", "irq15"
+    };
     unsigned irq = tf->vector - 0x20;
+    if (crit_label) crit_label(sections[irq]);
     if (irq == 7 && !(pic_isr(0x20) & 0x80)) {
         g_spurious_irq7++;              /* spurious: no handler, no EOI */
         return;

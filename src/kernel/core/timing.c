@@ -15,6 +15,8 @@ static uint32_t budget_violations;
 static uint64_t last_timer_tsc;
 static uint32_t gaps_software, gaps_unclassified;
 static uint64_t pit_irqs;
+static uint32_t crit_site, crit_max_site;
+static const char *crit_section = "irq_save", *crit_max_section = "none";
 
 static inline uint64_t rdtsc(void)
 {
@@ -25,9 +27,13 @@ static inline uint64_t rdtsc(void)
 
 void crit_begin(void)
 {
-    if (g_cpu_tsc)
+    if (g_cpu_tsc) {
         crit_start = rdtsc();
+        crit_site = (uint32_t)(uintptr_t)__builtin_return_address(0);
+        crit_section = "irq_save";
+    }
 }
+void crit_label(const char *section) { if (crit_start) crit_section=section; }
 
 void crit_end(void)
 {
@@ -35,8 +41,11 @@ void crit_end(void)
         return;
     uint64_t d = rdtsc() - crit_start;
     crit_start = 0;
-    if (d > crit_max_cycles)
+    if (d > crit_max_cycles) {
         crit_max_cycles = d;
+        crit_max_site = crit_site;
+        crit_max_section = crit_section;
+    }
     if (d > crit_window_max)
         crit_window_max = d;
     if (g_tsc_per_ms && d * 1000 > g_tsc_per_ms * CRIT_BUDGET_US)
@@ -81,6 +90,8 @@ void timing_reset(void)
 {
     uint32_t f = irq_save();
     crit_max_cycles = 0;
+    crit_max_site = 0; crit_max_section = "none";
+    crit_window_max = last_timer_tsc = 0;
     budget_violations = 0;
     gaps_software = gaps_unclassified = 0;
     pit_irqs = 0;
@@ -89,11 +100,15 @@ void timing_reset(void)
 
 void timing_snapshot(struct timing_stats *s)
 {
-    s->tsc_khz = (uint32_t)g_tsc_per_ms;
-    s->critical_us = g_tsc_per_ms ? (uint32_t)(crit_max_cycles * 1000 / g_tsc_per_ms) : 0;
-    s->critical_ns = g_tsc_per_ms ? (uint32_t)(crit_max_cycles * 1000000 / g_tsc_per_ms) : 0;
+    uint32_t f=irq_save();
+    uint64_t per_ms=g_tsc_per_ms, maximum=crit_max_cycles;
     s->budget_violations = budget_violations;
     s->gaps_software = gaps_software;
     s->gaps_unclassified = gaps_unclassified;
     s->pit_irqs = pit_irqs;
+    s->critical_site = crit_max_site; s->critical_section = crit_max_section;
+    irq_restore(f);
+    s->tsc_khz = (uint32_t)per_ms;
+    s->critical_us = per_ms ? (uint32_t)(maximum * 1000 / per_ms) : 0;
+    s->critical_ns = per_ms ? (uint32_t)(maximum * 1000000 / per_ms) : 0;
 }

@@ -52,6 +52,11 @@ int fat_create(struct fat_volume *, uint32_t directory, const char *, uint8_t at
 int fat_read(struct fat_volume *, const struct fat_entry *, uint64_t position, void *, size_t, size_t *done);
 int fat_write(struct fat_volume *, struct fat_entry *, uint64_t position, const void *, size_t, size_t *done);
 int fat_truncate(struct fat_volume *, struct fat_entry *, uint64_t size);
+/* Reserved boot-log chain only: data writes do not allocate or publish
+ * metadata. Caller owns the chain and bounds writes by its reservation. */
+int fat_write_reserved(struct fat_volume *, const struct fat_entry *, uint32_t capacity,
+                       uint64_t position, const void *, size_t, size_t *done);
+int fat_publish_reserved(struct fat_volume *, struct fat_entry *, bool finish);
 int fat_remove(struct fat_volume *, struct fat_entry *, bool directory);
 int fat_rename(struct fat_volume *, struct fat_entry *, uint32_t new_parent, const char *new_name);
 int fat_set_metadata(struct fat_volume *, struct fat_entry *, uint8_t attr, const struct fat_times *);

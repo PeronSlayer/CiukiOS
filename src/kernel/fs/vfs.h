@@ -18,7 +18,8 @@
 enum vfs_share { VFS_DENY_NONE=0, VFS_DENY_READ=1, VFS_DENY_WRITE=2, VFS_DENY_ALL=3 };
 enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
 struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs;
-    struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation; };
+    struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation;
+    uint32_t log_capacity; };
 struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny; };
 struct vfs_table;
 struct vfs {
@@ -70,6 +71,11 @@ int vfs_write(struct vfs_table *, int, const void *, size_t, size_t *done);
 int vfs_seek(struct vfs_table *, int, int64_t offset, enum vfs_whence, uint64_t *position);
 int vfs_truncate(struct vfs_table *, int, uint64_t size);
 int vfs_commit(struct vfs_table *, int);
+/* Internal, exclusive boot-log sink. Reserve once; write aligned data in
+ * place; publish logical EOF periodically; finish releases unused clusters. */
+int vfs_log_reserve(struct vfs_table *, int, uint32_t capacity);
+int vfs_log_write(struct vfs_table *, int, const void *, size_t, uint32_t logical_size, size_t *done);
+int vfs_log_publish(struct vfs_table *, int, bool finish);
 int vfs_stat(struct vfs_table *, const char *, struct fat_entry *);
 int vfs_attrib(struct vfs_table *, const char *, uint8_t attr);
 int vfs_times(struct vfs_table *, const char *, const struct fat_times *);

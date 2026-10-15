@@ -81,6 +81,9 @@ static void test_speed_accounting(void)
     struct dosvm *v = create();
     v->info.dos_ready = false; /* first interval includes DOS startup */
     g_boot.flags = CBI_F_VERBOSE; g_tsc_per_ms = 1000; fake_tsc = 1000;
+    g_ticks += 1000; dosvm_perf_report(v);
+    CHECK(!dosvm_perf_clock() && !v->perf.sample_count); /* L does not enable performance records */
+    g_ticks -= 1000; g_boot.flags |= CBI_F_DIAG_VERBOSE;
     dosvm_task_switch(v->task);
     fake_tsc = 2000; perf_phase(v, 2);
     v->perf.trap_active = true; v->perf.trap_cycles = 0; v->perf.cause = DOSVM_COST_VGA_IO;

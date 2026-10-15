@@ -576,7 +576,7 @@ static int hw_delay(void *ctx, uint32_t us)
 static void hw_drain(void *ctx) { (void)ctx; framebuffer_write_drain(); }
 static void record(void)
 {
-    if (probing || !(g_boot.flags & CBI_F_VERBOSE)) return;
+    if (probing || !(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
     klog("[accel] driver=savage ops=%llu idle_waits=%llu fallbacks=%llu quarantined=%u status=%08x status_valid=%u",
         engine.operations, engine.idle_waits, engine.fallbacks, engine.quarantined, engine.status, engine.status_logged);
 }
