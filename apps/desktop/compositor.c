@@ -412,6 +412,7 @@ static void frame_border(struct desktop *d, struct desk_paint *p, int index, str
         !strcmp(c->title,title) && !!c->style.icon==!!s->icon &&
         (!s->icon || !memcmp(c->icon,s->icon,sizeof(c->icon)));
     if (!same) {
+        d->chrome_rebuilds++;
         c->w=f.w; c->h=f.h; c->theme=desk_theme; c->style=*s;
         snprintf(c->title,sizeof(c->title),"%s",title);
         if (s->icon) memcpy(c->icon,s->icon,sizeof(c->icon));

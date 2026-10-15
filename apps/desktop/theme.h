@@ -40,6 +40,7 @@ void desk_paint_shadow(struct desk_paint *, int x, int y, int w, int h, int size
 /* Draws at the pen (x, baseline); returns the advance. */
 int desk_paint_text(struct desk_paint *, int font, int x, int baseline, const char *utf8, uint32_t colour);
 int desk_paint_text_n(struct desk_paint *, int font, int x, int baseline, const char *utf8, size_t chars, uint32_t colour);
+int desk_paint_text_n_aa(struct desk_paint *, int, int, int, const char *, size_t, uint32_t, int aa);
 /* Title-bar and control ornaments drawn in the current theme. */
 void desk_paint_pinstripes(struct desk_paint *, int x, int y, int w, int h, uint32_t light, uint32_t dark);
 void desk_paint_raised(struct desk_paint *, int x, int y, int w, int h, int pressed, int hot);

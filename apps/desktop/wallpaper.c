@@ -85,7 +85,7 @@ void desk_builtin_paint(const char *id, uint32_t *out, uint32_t width, uint32_t 
     }
 }
 
-static uint32_t over(uint32_t argb, uint32_t back)
+uint32_t desk_wallpaper_over(uint32_t argb, uint32_t back)
 {
     unsigned a = argb >> 24;
     if (a == 255) return argb & 0xffffffu;
@@ -118,7 +118,7 @@ static struct sample_axis sample_axis(uint64_t position, uint32_t source, uint32
     return a;
 }
 static void resample(const struct desk_image *s, uint32_t *dst, uint32_t tw, uint32_t th, uint32_t cx, uint32_t cy,
-                     uint32_t w, uint32_t h, uint32_t stride, uint32_t colour)
+                     uint32_t w, uint32_t h, uint32_t stride, uint32_t colour, int layer)
 {
     if (!tw || !th || !s->width || !s->height) return;
     int up=tw>=s->width && th>=s->height;
@@ -154,19 +154,20 @@ static void resample(const struct desk_image *s, uint32_t *dst, uint32_t tw, uin
                     }
                 if (n) for (unsigned k=0;k<4;k++) px|=((sum[k]+n/2)/n)<<(k*8);
             }
-            dst[(size_t)y*stride+x]=over(px,colour)|(px&0xff000000u);
+            dst[(size_t)y*stride+x]=layer ? px : desk_wallpaper_over(px,colour)|(px&0xff000000u);
         }
     }
     free(columns);
 }
 
-void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, uint32_t h, int mode, uint32_t colour)
+static void image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, uint32_t h, int mode, uint32_t colour, int layer)
 {
     for (size_t i = 0; i < (size_t)w * h; i++) dst[i] = colour;
     if (!src || !src->pixels || !src->width || !src->height || !w || !h) return;
     if (mode == CFG_WALL_TILE) {
         for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++)
-            dst[(size_t)y * w + x] = over(src->pixels[(size_t)(y % src->height) * src->width + x % src->width], colour);
+            dst[(size_t)y * w + x] = layer ? src->pixels[(size_t)(y % src->height) * src->width + x % src->width] :
+                desk_wallpaper_over(src->pixels[(size_t)(y % src->height) * src->width + x % src->width], colour);
         return;
     }
     if (mode == CFG_WALL_CENTER) {
@@ -174,7 +175,8 @@ void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, u
         for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
             int32_t sx = (int32_t)x - ox, sy = (int32_t)y - oy;
             if (sx >= 0 && sy >= 0 && sx < (int32_t)src->width && sy < (int32_t)src->height)
-                dst[(size_t)y * w + x] = over(src->pixels[(size_t)sy * src->width + (uint32_t)sx], colour);
+                dst[(size_t)y * w + x] = layer ? src->pixels[(size_t)sy * src->width + (uint32_t)sx] :
+                    desk_wallpaper_over(src->pixels[(size_t)sy * src->width + (uint32_t)sx], colour);
         }
         return;
     }
@@ -186,8 +188,8 @@ void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, u
         else tw = (uint32_t)((uint64_t)src->width * h / src->height);
         if (th < h) th = h;
         if (tw < w) tw = w;
-        resample(src, dst, tw, th, (tw - w) / 2, (th - h) / 2, w, h, w, colour);
-        for (size_t i = 0; i < (size_t)w * h; i++) dst[i] &= 0xffffffu;
+        resample(src, dst, tw, th, (tw - w) / 2, (th - h) / 2, w, h, w, colour, layer);
+        if (!layer) for (size_t i = 0; i < (size_t)w * h; i++) dst[i] &= 0xffffffu;
         return;
     }
     uint32_t tw = w, th = h, ox = 0, oy = 0;
@@ -198,22 +200,33 @@ void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, u
         if (!th) th = 1;
         ox = (w - tw) / 2; oy = (h - th) / 2;
     }
-    resample(src, dst + (size_t)oy * w + ox, tw, th, 0, 0, tw, th, w, colour);
-    for (uint32_t y = oy; y < oy + th; y++) for (uint32_t x = ox; x < ox + tw; x++) dst[(size_t)y * w + x] &= 0xffffffu;
+    resample(src, dst + (size_t)oy * w + ox, tw, th, 0, 0, tw, th, w, colour, layer);
+    if (!layer) for (uint32_t y = oy; y < oy + th; y++) for (uint32_t x = ox; x < ox + tw; x++) dst[(size_t)y * w + x] &= 0xffffffu;
 }
+void desk_image_scale(const struct desk_image *src,uint32_t *dst,uint32_t w,uint32_t h,int mode,uint32_t colour)
+{ image_scale(src,dst,w,h,mode,colour,0); }
+void desk_image_scale_layer(const struct desk_image *src,uint32_t *dst,uint32_t w,uint32_t h,int mode)
+{ image_scale(src,dst,w,h,mode,0,1); }
 
-static void caption(uint32_t *out, uint32_t width, uint32_t height, int32_t y0)
+static void caption(uint32_t *out, uint32_t width, uint32_t height, int32_t y0, int font, uint32_t colour, int aa)
 {
     /* "CiukiOS" under the portrait in the theme's large face and desktop
      * label colour, where the plain compositor puts it (compositor.c portrait). */
     struct desk_paint p = {out, (int)width, (int)height, 0, 0, (int)width, (int)height};
-    int font = desk_theme->font_large, w = desk_text_measure(font, "CiukiOS");
-    desk_paint_text(&p, font, ((int32_t)width - w) / 2, y0 + 256 + 28, "CiukiOS", desk_theme->desktop_label);
+    int w = desk_text_measure(font, "CiukiOS");
+    desk_paint_text_n_aa(&p, font, ((int32_t)width - w) / 2, y0 + 256 + 28, "CiukiOS", (size_t)-1, colour, aa);
 }
 
 int desk_wallpaper_render(uint32_t *out, uint32_t width, uint32_t height, uint32_t top, uint32_t bottom,
                           const char *spec, int mode, uint32_t colour,
                           const struct desk_image *image, const uint32_t *portrait)
+{
+    return desk_wallpaper_render_styled(out,width,height,top,bottom,spec,mode,colour,image,portrait,
+                                       desk_theme->font_large,desk_theme->desktop_label,desk_theme->text_aa);
+}
+int desk_wallpaper_render_styled(uint32_t *out, uint32_t width, uint32_t height, uint32_t top, uint32_t bottom,
+                          const char *spec, int mode, uint32_t colour,
+                          const struct desk_image *image, const uint32_t *portrait, int font, uint32_t label, int aa)
 {
     colour &= 0xffffffu;
     for (size_t i = 0; i < (size_t)width * height; i++) out[i] = colour;
@@ -233,7 +246,7 @@ int desk_wallpaper_render(uint32_t *out, uint32_t width, uint32_t height, uint32
                 out[(size_t)(y0 + y) * width + (uint32_t)(x0 + x)] = p == 0x375564u ? colour : p;
             }
         }
-        caption(out, width, height, y0);
+        caption(out, width, height, y0, font, label, aa);
         return 0;
     }
     uint32_t area_h = height > top + bottom ? height - top - bottom : height;

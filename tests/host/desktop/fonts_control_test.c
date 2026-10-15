@@ -32,6 +32,13 @@ int main(int argc, char **argv)
     uint64_t misses = stats.misses;
     ui.dirty = 1; du_render(&ui);
     assert(!ciuki_font_cache_info(a.font_face, &stats) && stats.misses == misses && stats.hits > 0);
+    struct ciuki_font_face *face=a.font_face;
+    const char *theme=du_theme_name();
+    for (int i=0;i<desk_theme_count();i++) {
+        assert(!du_theme_use(&ui,desk_theme_at(i)->name)); du_render(&ui);
+        assert(a.font_face==face && !ciuki_font_cache_info(face,&stats) && stats.misses==misses);
+    }
+    assert(!du_theme_use(&ui,theme)); du_render(&ui);
     FILE *f = fopen(argv[2], "wb"); assert(f && fwrite(pixels, sizeof(*pixels), CP_WIDTH * CP_HEIGHT, f) == CP_WIDTH * CP_HEIGHT); fclose(f);
     cp_open(&a, CP_HOME); assert(!a.font_face && !a.font_count);
     cp_open(&a, CP_FONTS); assert(a.font_face && a.font_count == 12);

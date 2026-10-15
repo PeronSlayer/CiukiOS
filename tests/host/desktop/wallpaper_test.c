@@ -97,10 +97,31 @@ static void settings(void)
     printf("settings: wallpaper_mode center/stretch/tile/fit/fill = 0..4, default Ciuk2 fill, round trip\n");
 }
 
+static void check_layer(void)
+{
+    struct desk_image src=card(17,11);
+    for (unsigned i=0;i<17*11;i++) src.pixels[i]=(src.pixels[i]&0xffffffu)|((i*37u&255u)<<24);
+    const unsigned sizes[][2]={{9,7},{40,30},{17,11}};
+    for (unsigned n=0;n<3;n++) for (int mode=0;mode<CFG_WALL_MODES;mode++) {
+        unsigned w=sizes[n][0],h=sizes[n][1];
+        uint32_t *layer=buffer(w*h),*expected=buffer(w*h);
+        desk_image_scale_layer(&src,layer,w,h,mode);
+        for (unsigned colour=0;colour<3;colour++) {
+            uint32_t background=colour==0 ? COLOUR : colour==1 ? 0xffffff : 0;
+            desk_image_scale(&src,expected,w,h,mode,background);
+            for (unsigned i=0;i<w*h;i++) assert(desk_wallpaper_over(layer[i],background)==expected[i]);
+        }
+        free(layer); free(expected);
+    }
+    desk_image_free(&src);
+    puts("PASS colour-independent layer: transparent pixels, all five modes, up/down/same size, three colours");
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 1 || argc == 2);
     settings();
+    check_layer();
     /* The Ciuki scenes' 4:3 size in the 1024x704 work area of 1024x768:
      * scale 1024/1448 (768 rows), 32 rows cropped at the top and the bottom. */
     struct desk_image scene = card(1448, 1086);

@@ -702,15 +702,20 @@ static void wallpaper_load(struct desktop *d)
     wallpaper_request.top=wallpaper_request.bottom=DESK_BAR;
     wallpaper_request.mode=d->sh.cfg.wallpaper_mode;
     wallpaper_request.colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
-    d->sh.wallpaper_pending=wallpaper_request.path[0]=='/' && !wallpaper_worker_failed;
+    wallpaper_request.portrait=d->portrait;
+    wallpaper_request.caption_font=desk_theme->font_large;
+    wallpaper_request.caption_colour=desk_theme->desktop_label;
+    wallpaper_request.caption_aa=desk_theme->text_aa;
+    d->sh.wallpaper_pending=1;
     /* Keep the last complete image visible while its replacement is prepared.
      * In particular a theme colour change must not erase the photograph. */
     if (d->sh.wallpaper_pending && d->sh.wall && d->sh.wall_w==d->width && d->sh.wall_h==d->height) {
-        d->sh.wall_valid=1; d->sh.background_valid=0;
+        d->sh.wall_valid=1;
     } else {
         d->sh.wall_valid=0; desk_shell_wallpaper_update(d);
     }
     d->sh.image_failed=0;
+    if (wallpaper_worker_failed) { d->sh.wallpaper_pending=0; d->sh.image_failed=1; return; }
     /* The thread may exist before the first frame; decoding never starts before it. */
     wallpaper_serial=0;
     if (wallpaper_worker_started && __atomic_load_n(&startup_us[3],__ATOMIC_ACQUIRE))
@@ -722,10 +727,12 @@ static void wallpaper_update(struct desktop *d)
     if (d->sh.gate) { desk_shell_wallpaper_update(d); return; }
     uint32_t colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
     if (strcmp(wallpaper_request.path,d->sh.cfg.wallpaper) || wallpaper_request.width!=d->width ||
-        wallpaper_request.height!=d->height || wallpaper_request.mode!=d->sh.cfg.wallpaper_mode || wallpaper_request.colour!=colour) {
+        wallpaper_request.height!=d->height || wallpaper_request.mode!=d->sh.cfg.wallpaper_mode || wallpaper_request.colour!=colour ||
+        (!strcmp(wallpaper_request.path,"ciuki") && (wallpaper_request.caption_font!=desk_theme->font_large ||
+            wallpaper_request.caption_colour!=desk_theme->desktop_label || wallpaper_request.caption_aa!=desk_theme->text_aa))) {
         wallpaper_load(d); return;
     }
-    if (!d->sh.wall_valid && wallpaper_request.path[0]=='/' && d->sh.wall &&
+    if (!d->sh.wall_valid && d->sh.wall &&
         d->sh.wall_w==d->width && d->sh.wall_h==d->height) {
         /* A theme/icon-only invalidation retains the already rendered frame. */
         d->sh.wall_valid=1; d->sh.background_valid=0;
@@ -762,11 +769,20 @@ static void wallpaper_poll(struct desktop *d)
     if (!wallpaper_worker_started || !desk_wall_worker_take(&wallpaper_worker,wallpaper_serial,&pixels,&error,&hit)) return;
     (void)hit;
     d->sh.wallpaper_pending=0; d->sh.image_failed=error!=0;
+    int changed=1;
     if (!error) {
+        /* Colour-only changes to an opaque photograph often produce the
+         * identical work area. Chrome has already repainted for the theme;
+         * do not upload that same photograph a second time. */
+        if (d->sh.wall && d->sh.wall_w==d->width && d->sh.wall_h==d->height && d->height>2*DESK_BAR)
+            changed=memcmp(d->sh.wall+(size_t)DESK_BAR*d->width,pixels+(size_t)DESK_BAR*d->width,
+                           (size_t)d->width*(d->height-2*DESK_BAR)*4)!=0;
         free(d->sh.wall); d->sh.wall=pixels; d->sh.wall_w=d->width; d->sh.wall_h=d->height;
-        d->sh.wall_valid=1; d->sh.background_valid=0; startup_stage("wallpaper_applied");
+        d->sh.wall_valid=1;
+        if (changed) d->sh.background_valid=0;
+        startup_stage("wallpaper_applied");
     } else desk_shell_notify_error(d,"Wallpaper cannot be shown",error);
-    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+    if (changed) desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
 }
 static void network_read(struct desktop *d)
 {
@@ -1058,7 +1074,11 @@ static void shell_service(struct desktop *d)
             int visual=image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
                        old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
             if (visual) {
-                sh->icon_count=0; desk_shell_apply(d);
+                /* A wallpaper-only request leaves the retained desktop
+                 * untouched until its complete replacement is ready. */
+                if (strcmp(old_theme,sh->cfg.theme) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
+                    sh->icon_count=0; desk_shell_apply(d);
+                }
                 if (image_changed) wallpaper_load(d); else wallpaper_update(d);
             }
             desk_shell_tray_damage(d,old_tray_width);
