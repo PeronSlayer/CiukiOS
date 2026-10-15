@@ -46,7 +46,15 @@ enum dosvm_perf_cause {
     DOSVM_COST_KBD, DOSVM_COST_IO, DOSVM_COST_DB, DOSVM_COST_TIMER,
     DOSVM_COST_OTHER, DOSVM_COST_RM_PUSHF, DOSVM_COST_RM_POPF,
     DOSVM_COST_RM_CLI, DOSVM_COST_RM_STI, DOSVM_COST_RM_HLT,
-    DOSVM_COST_PM_HLT, DOSVM_COST_COUNT
+    DOSVM_COST_PM_HLT, DOSVM_COST_DPMI, DOSVM_COST_HOST_IRQ, DOSVM_COST_COUNT
+};
+#define DOSVM_PERF_INTERVAL 5000u
+#define DOSVM_PERF_TOP 5u
+#define DOSVM_PERF_PORTS 256u
+struct dosvm_hot_cost {
+    uint64_t cycles;
+    uint32_t count;
+    uint16_t id;
 };
 enum dosvm_vga_reg { DOSVM_VGA_SR_INDEX, DOSVM_VGA_SR_MASK, DOSVM_VGA_SR_OTHER,
     DOSVM_VGA_GC_INDEX, DOSVM_VGA_GC_READ, DOSVM_VGA_GC_MODE, DOSVM_VGA_GC_OTHER,
@@ -62,6 +70,26 @@ struct dosvm_perf_sample {
     uint64_t remap_us;
     uint32_t port_count[DOSVM_VGA_REGS], port_exits[DOSVM_VGA_REGS];
     uint64_t port_us[DOSVM_VGA_REGS], port_exit_us[DOSVM_VGA_REGS];
+    struct dosvm_hot_cost top_port[DOSVM_PERF_TOP], top_vector[DOSVM_PERF_TOP];
+    uint32_t port_overflow, ticks;
+    uint64_t timer_us, audio_us;
+};
+/* Raw cumulative scalars captured with the interval tables detached. Only
+ * the reporter reads this bank; producers use the other bank after IF restore. */
+struct dosvm_perf_raw {
+    uint32_t ms, frames, starts, harvests, direct_pages, trapped_bytes, converted_bytes, rows;
+    uint32_t port_remaps, burst_insn, latch_read_windows, batched, port_overflow, ticks;
+    uint32_t exits[6], irqs[16], cost_count[DOSVM_COST_COUNT];
+    uint32_t port_count[DOSVM_VGA_REGS], port_exits[DOSVM_VGA_REGS];
+    uint32_t idle_blocks, idle_count[DOSVM_IDLE_REASONS];
+    uint64_t guest_cycles, monitor_cycles, present_cycles, harvest_cycles, log_cycles, edges;
+    uint64_t remap_cycles, timer_cycles, audio_cycles, insn[V86_INSNS];
+    uint64_t cost_cycles[DOSVM_COST_COUNT];
+    uint64_t port_cycles[DOSVM_VGA_REGS], port_exit_cycles[DOSVM_VGA_REGS];
+};
+struct dosvm_perf_interval {
+    struct dosvm_perf_raw raw;
+    struct dosvm_hot_cost ports[DOSVM_PERF_PORTS], vectors[3][256];
 };
 struct dosvm_vector_cost {
     uint64_t cycles, max_cycles;
@@ -169,6 +197,12 @@ struct dosvm {
         bool trap_active;
         unsigned cause;
         uint64_t trap_cycles, cost_cycles[DOSVM_COST_COUNT], last_cost_cycles[DOSVM_COST_COUNT];
+        bool io_valid, reporting;
+        uint16_t io_port;
+        struct dosvm_perf_interval interval[2]; /* preallocated producer/reporter banks */
+        unsigned active_interval;
+        uint32_t port_overflow, ticks, last_ticks;
+        uint64_t timer_cycles, audio_cycles, last_timer, last_audio;
         uint32_t cost_count[DOSVM_COST_COUNT], last_cost_count[DOSVM_COST_COUNT];
         uint32_t batched, last_batched;
         uint32_t last_frames, last_starts, last_harvests, last_pages, last_trapped, last_converted, last_rows;
@@ -178,7 +212,7 @@ struct dosvm {
         uint32_t sample_count;
         uint32_t last_idle_blocks, last_idle_count[DOSVM_IDLE_REASONS];
         struct dosvm_perf_sample sample[16]; /* first four + latest twelve intervals */
-        struct dosvm_vector_cost vector[2][256]; /* dispatch, synthetic BIOS */
+        struct dosvm_vector_cost vector[3][256]; /* RM dispatch, synthetic BIOS, PM INT */
         uint64_t disk_bytes;
         uint32_t disk_reads, disk_max, disk_hits;
     } perf;
@@ -196,7 +230,7 @@ struct dosvm {
     char boot_log[2048], console_line[81];
     unsigned console_length;
     cvga_geometry video_geometry;
-    bool video_modex;
+    bool video_modex, video_chain4;
     uint16_t video_row_base[DOSVM_VIDEO_HEIGHT];
     uint8_t video_row_pan[DOSVM_VIDEO_HEIGHT];
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
@@ -256,6 +290,7 @@ uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);
 const struct task *dosvm_task_focus(void);
 int dosvm_io_burst(struct dosvm *, struct v86_frame *);
 uint64_t dosvm_perf_clock(void);
+uint64_t dosvm_perf_task_clock(void);
 void dosvm_perf_report(struct dosvm *);
 void dosvm_perf_dump(struct dosvm *);
 void dosvm_startup_report(struct dosvm *, bool force);

@@ -39,12 +39,12 @@ void cvp_init(cvp_state *s)
     zero(s, sizeof(*s));
 }
 
-void cvp_modex_row32(const cvga_state *v, unsigned base, unsigned pan,
+static void indexed_row32(const cvga_state *v, unsigned step, unsigned base, unsigned pan,
                      unsigned width, unsigned scale, const uint32_t lut[256], uint32_t *dest)
 {
     unsigned x = 0;
     while (x < width) {
-        unsigned dot = x + pan, at = (base + dot / 4) & 0xffffu;
+        unsigned dot = x + pan, at = (base + (dot / 4) * step) & 0xffffu;
         unsigned plane = dot & 3, count = 4 - plane;
         if (count > width - x) count = width - x;
         for (unsigned p = plane; p < plane + count; p++) {
@@ -55,6 +55,14 @@ void cvp_modex_row32(const cvga_state *v, unsigned base, unsigned pan,
         x += count;
     }
 }
+
+void cvp_modex_row32(const cvga_state *v, unsigned base, unsigned pan,
+                     unsigned width, unsigned scale, const uint32_t lut[256], uint32_t *dest)
+{ indexed_row32(v, 1, base, pan, width, scale, lut, dest); }
+
+void cvp_chain4_row32(const cvga_state *v, unsigned base, unsigned pan,
+                      unsigned width, unsigned scale, const uint32_t lut[256], uint32_t *dest)
+{ indexed_row32(v, 4, base, pan, width, scale, lut, dest); }
 
 static void set_pending(cvp_state *s, unsigned row)
 {

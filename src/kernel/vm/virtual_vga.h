@@ -160,6 +160,9 @@ int CVGA_CALL cvga_row_reads_dirty(const cvga_state *v, unsigned y,
                                    const uint8_t dirty[4][CVGA_DIRTY_BYTES]);
 /* Byte-addressed, unchained indexed scanout only. Uses the generic row
  * setup for split/preset/pan; caller caches the resulting row addresses. */
+int cvga_chain4_row(const cvga_state *v, unsigned y, unsigned *base, unsigned *pan);
+int cvga_chain4_dirty(unsigned base, unsigned pan, unsigned width,
+                      const uint8_t dirty[4][CVGA_DIRTY_BYTES]);
 int cvga_modex_row(const cvga_state *, unsigned y, unsigned *base, unsigned *pan);
 int cvga_modex_dirty(unsigned base, unsigned pan, unsigned width,
                      const uint8_t dirty[4][CVGA_DIRTY_BYTES]);

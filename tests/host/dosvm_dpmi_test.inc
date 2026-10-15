@@ -379,8 +379,12 @@ static void test_dpmi_interrupts_translation(void)
     CHECK(d->rstack_top == DPMI_RSTACK_BYTES && v->monitor.vif);
     /* INT 80h from a client is the guest's vector 80h, never a syscall. */
     cur.tf.ebx = 0x80; cur.tf.ecx = code; cur.tf.edx = 0x540; int31(v, 0x0205);
+    unsigned calls80 = v->perf.interval[v->perf.active_interval].vectors[2][0x80].count;
+    unsigned ints80 = v->perf.cost_count[DOSVM_COST_PM_INT];
     before = cur; cur.tf.eip += 2; step(v, 0x80, 0);
     CHECK(in_pm() && cur.tf.eip == 0x540 && cur.tf.user_esp == before.tf.user_esp - 6);
+    CHECK(v->perf.interval[v->perf.active_interval].vectors[2][0x80].count == calls80 + 1 &&
+          v->perf.cost_count[DOSVM_COST_PM_INT] == ints80 + 1);
     pm_iret(v);
     /* 0300h: IVT[BL] with the structure's registers and CX stack words. */
     pm_push(v, 0xBEEF); pm_push(v, 0xCAFE);

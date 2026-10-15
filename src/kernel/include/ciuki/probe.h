@@ -36,8 +36,10 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...);
 /* Bounded runtime diagnostics, DATA framing; boot menu L only. Unlike
  * evidence, these also work without a selected/begun test run. */
 void rec_diag(const char *probe, const char *fmt, ...);
-/* Diagnostic RAM ring only: no console or UART cost on the guest path. */
+/* Diagnostic RAM rings (boot log and black box): no console or UART cost. */
 void rec_diag_disk(const char *probe, const char *fmt, ...);
+/* Boot-log runtime RAM ring only; exclude periodic bulk data from black box. */
+void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...);
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra);
 
 void probe_user_report(struct task *t, const char *msg, uint32_t len);

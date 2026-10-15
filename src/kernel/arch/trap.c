@@ -11,6 +11,7 @@
 #include <ciuki/biosvm.h>
 #include <ciuki/cpustat.h>
 extern bool dosvm_trap(struct trap_frame *) __attribute__((weak));
+extern void dosvm_perf_enter(void) __attribute__((weak));
 extern bool dosvm_client(const struct task *) __attribute__((weak));
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
@@ -93,6 +94,7 @@ void trap_dispatch(struct trap_frame *tf)
      * Dispatch/EOI physical IRQs exactly once before firmware reflection.
      * Non-V86 frames retain the original F0 path below. */
     if (tf->eflags & V86_VM) {
+        if (dosvm_perf_enter) dosvm_perf_enter();
         if (tf->vector >= 0x20 && tf->vector < 0x30) {
             crit_begin();
             if (crit_label) crit_label(tf->vector == 0x20 ? "irq_timer" : "irq_dispatch");
@@ -111,6 +113,7 @@ void trap_dispatch(struct trap_frame *tf)
      * INT 80h included, belongs to the VM monitor and never reaches the
      * native syscall or signal paths (dos-dpmi-contract.md, execution-abi.md). */
     if (from_user && dosvm_client && dosvm_client(g_current)) {
+        if (dosvm_perf_enter) dosvm_perf_enter();
         if (tf->vector >= 0x20 && tf->vector < 0x30) {
             crit_begin();
             if (crit_label) crit_label(tf->vector == 0x20 ? "irq_timer" : "irq_dispatch");

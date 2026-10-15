@@ -457,6 +457,10 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
 {
     struct dosvm *v = arg;
     if (v->info.state >= DOSVM_STOPPING) return -V86_EIO;
+    /* Attribute a batched exit to its first port. No extra clock per OUT. */
+    if (v->perf.trap_active && !v->perf.io_valid) {
+        v->perf.io_port = port; v->perf.io_valid = true;
+    }
     if (port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1) {
         v->perf.cause = DOSVM_COST_PIT_PIC;
         if (width != 1) return -V86_EPERM;

@@ -36,7 +36,7 @@ ALLOWED = {
     'drivers/i8042_probe.c',
 }
 TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.S)
-CALL = re.compile(r'\b(?:rec_emit(?:_panicsafe)?|rec_diag(?:_disk)?)\s*\(')
+CALL = re.compile(r'\b(?:rec_emit(?:_panicsafe)?|rec_diag(?:_disk(?:_bootlog)?)?)\s*\(')
 
 
 def calls(source):
@@ -52,6 +52,7 @@ assert list(calls('/* rec_emit(p, e, 0); */ "rec_emit(p, e, 0)";')) == []
 assert list(calls('void rec_emit(const char *p);\nrec_emit\n(p,e,0);')) == [2]
 assert list(calls('rec_emit_panicsafe(p, e, 0);')) == [1]
 assert list(calls('rec_diag_disk(p, "group=vm_perf_live");')) == [1]
+assert list(calls('rec_diag_disk_bootlog(p, "group=vm_perf_cpu");')) == [1]
 root = Path(__file__).resolve().parents[2] / 'src/kernel'
 violations = []
 for path in sorted(root.rglob('*')):

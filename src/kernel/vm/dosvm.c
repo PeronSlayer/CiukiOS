@@ -7,6 +7,7 @@
 #include <ciuki/input.h>
 #include <ciuki/abi.h>
 #include <ciuki/timing.h>
+#include <ciuki/cpustat.h>
 #include "dosvm_internal.h"
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
@@ -672,6 +673,14 @@ int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
  * emulation, dispatch and mode switches use; it goes back to the stack when
  * the mode is unchanged, otherwise the worker re-enters with the new frame
  * (a PM trap_frame and a V86 frame differ in size on the same TSS stack). */
+/* The physical IRQ handler runs before dosvm_trap. End guest time at its
+ * entry so DMA/PIT/device work is not billed as native guest execution. */
+void dosvm_perf_enter(void)
+{
+    struct dosvm *v = owner(g_current);
+    if (v && v->continuation && v->perf.phase == 1) perf_phase(v, 2);
+}
+
 bool dosvm_trap(struct trap_frame *tf)
 {
     struct dosvm *v = owner(g_current);
@@ -679,9 +688,10 @@ bool dosvm_trap(struct trap_frame *tf)
     crit_begin();
     if (crit_label) crit_label("dosvm_entry");
     bool pm = !(tf->eflags & V86_VM);
-    perf_phase(v, 2);
-    v->perf.trap_active = true; v->perf.trap_cycles = 0;
-    v->perf.cause = tf->vector == 1 ? DOSVM_COST_DB : tf->vector == 0x20 ? DOSVM_COST_TIMER : DOSVM_COST_OTHER;
+    if (v->perf.phase != 2) perf_phase(v, 2);
+    v->perf.trap_active = true; v->perf.trap_cycles = 0; v->perf.io_valid = false;
+    v->perf.cause = tf->vector == 1 ? DOSVM_COST_DB : tf->vector == 0x20 ? DOSVM_COST_TIMER :
+        tf->vector > 0x20 && tf->vector < 0x30 ? DOSVM_COST_HOST_IRQ : DOSVM_COST_OTHER;
     unsigned cause = tf->vector == 13 ? 0 : tf->vector == 14 ? 1 : tf->vector == 1 ? 2 : tf->vector == 0x20 ? 3 : 4;
     v->perf.exits[cause]++;
     if (pm) v->perf.exits[5]++;
@@ -706,7 +716,17 @@ bool dosvm_trap(struct trap_frame *tf)
         if (pm) {
             bool eligible = idle_safe(v);
             unsigned depth = v->dpmi.depth;
+            bool soft = tf->vector == 0x80 || (tf->vector == 13 && (tf->err & 3) == 2);
+            uint8_t vector = tf->vector == 0x80 ? 0x80 : (uint8_t)(tf->err >> 3);
+            if (tf->vector == 0x80) v->perf.cause = DOSVM_COST_PM_INT;
+            uint16_t ax = f->tf.eax;
+            uint64_t begin = soft ? perf_monitor_stamp(v) : 0;
             e = dpmi_pm_trap(v, f, cr2, dr6);
+            if (soft) {
+                perf_vector_end(v, 2, vector, ax, begin);
+                if (vector == 0x31 && v->perf.cause == DOSVM_COST_PM_INT)
+                    v->perf.cause = DOSVM_COST_DPMI;
+            }
             /* Default PM INTs reflect straight to the IVT, without passing
              * interrupt_service. Observe the committed reflection record;
              * keep the f3-15 decoder/dispatch and its frames unchanged. */
@@ -722,7 +742,7 @@ bool dosvm_trap(struct trap_frame *tf)
         else if (tf->vector == 13) {
             uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
             uint64_t flags_insn[4] = {0}, hlts = 0;
-            if (g_boot.flags & CBI_F_DIAG_VERBOSE) {
+            {
                 for (unsigned i = 0; i < 4; i++) flags_insn[i] = v->monitor.stats.insn[V86_PUSHF + i];
                 hlts = v->monitor.stats.insn[V86_HLT];
             }
@@ -731,7 +751,7 @@ bool dosvm_trap(struct trap_frame *tf)
             e = v86_emulate(&v->monitor, f);
             if (v->monitor.stats.insn[V86_INT] != ints) v->perf.cause = DOSVM_COST_RM_INT;
             if (v->monitor.stats.insn[V86_IRET] != irets) v->perf.cause = DOSVM_COST_RM_IRET;
-            if (g_boot.flags & CBI_F_DIAG_VERBOSE) {
+            {
                 for (unsigned i = 0; i < 4; i++) if (v->monitor.stats.insn[V86_PUSHF + i] != flags_insn[i])
                     v->perf.cause = DOSVM_COST_RM_PUSHF + i;
                 if (v->monitor.stats.insn[V86_HLT] != hlts) v->perf.cause = DOSVM_COST_RM_HLT;
@@ -1147,8 +1167,14 @@ void dosvm_tick(void)
         uint64_t elapsed = g_ticks - v->ticks;
         v->ticks = g_ticks;
         v->clock_ms += elapsed;
+        uint64_t begin = dosvm_perf_clock();
         dosvm_pit_advance(v, elapsed);
+        uint64_t audio = dosvm_perf_clock();
         dosvm_audio_advance(v, elapsed);
+        uint64_t end = dosvm_perf_clock();
+        v->perf.ticks++;
+        v->perf.audio_cycles += end - audio;
+        v->perf.timer_cycles += end - begin;
         if (audio_vm_kick && (v->audio.q.seg_count || v->audio.q.event_count)) audio_vm_kick();
     }
 }

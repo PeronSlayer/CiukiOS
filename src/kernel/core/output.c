@@ -74,7 +74,7 @@ void rec_set_run(const char *run8)
 
 /* A record above 240 bytes is never truncated silently: an ERROR record
  * replaces it so the evidence fails loudly. */
-static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only, bool evidence)
+static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only, bool evidence, bool capture_blackbox)
 {
     char buf[256];
     /* Reserve room before assigning a sequence: a queue wait can dispatch
@@ -100,7 +100,7 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
     /* The RAM recorder owns a separate <=256-byte publication. Do not
      * extend the serial/sequence critical section or tie capture to UART
      * admission: whole-record serial drops still reach the black box. */
-    if (blackbox_capture) blackbox_capture(buf,(size_t)n+1);
+    if (capture_blackbox && blackbox_capture) blackbox_capture(buf,(size_t)n+1);
     if (!disk_only) console_write(buf, (size_t)n + 1);
 }
 
@@ -123,12 +123,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         kvsnprintf(extra, sizeof(extra), fmt, ap);
         va_end(ap);
     }
-    emit_line(probe, event, extra, true, false, false, true);
+    emit_line(probe, event, extra, true, false, false, true, true);
 }
 
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
 {
-    emit_line(probe, event, extra, false, false, false, false);
+    emit_line(probe, event, extra, false, false, false, false, true);
 }
 
 void rec_diag(const char *probe, const char *fmt, ...)
@@ -143,20 +143,31 @@ void rec_diag(const char *probe, const char *fmt, ...)
      * and later emitted with fmt="%s". Evidence rec_emit stays protected. */
     bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1) ||
                     !strncmp(extra, "group=vm_perf_", sizeof("group=vm_perf_") - 1);
-    emit_line(probe, "DATA", extra, true, periodic, false, !periodic);
+    emit_line(probe, "DATA", extra, true, periodic, false, !periodic, true);
+}
+
+static void diag_disk(const char *probe, const char *fmt, va_list ap, bool capture_blackbox)
+{
+    /* Always capture low-rate summaries in RAM, including quiet hardware
+     * boots. No UART/console/VFS wait. Preserve selected-run BEGIN ordering. */
+    if (run_selected && !run_begun) return;
+    char extra[240];
+    kvsnprintf(extra,sizeof(extra),fmt,ap);
+    emit_line(probe,"DATA",extra,true,true,true,false,capture_blackbox);
 }
 
 void rec_diag_disk(const char *probe, const char *fmt, ...)
 {
-    /* Selected evidence keeps its existing serial sequence and deferred dump.
-     * The screen-log diagnostic menu enables this on an ordinary boot. */
-    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE) || run_selected) return;
-    char extra[240];
     va_list ap;
-    va_start(ap,fmt);
-    kvsnprintf(extra,sizeof(extra),fmt,ap);
-    va_end(ap);
-    emit_line(probe,"DATA",extra,true,true,true,false);
+    va_start(ap,fmt); diag_disk(probe,fmt,ap,true); va_end(ap);
+}
+
+void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...)
+{
+    /* High-volume performance families must not evict pending fault/event
+     * evidence from the separate persistent black-box queue. */
+    va_list ap;
+    va_start(ap,fmt); diag_disk(probe,fmt,ap,false); va_end(ap);
 }
 
 static volatile int in_panic;

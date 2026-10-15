@@ -320,14 +320,14 @@ static void (*diag_time_hook)(void);
 static bool evidence_active = true;
 bool rec_active(void) { return evidence_active; }
 static unsigned disk_records;
-void rec_diag_disk(const char *probe,const char *fmt,...)
+void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
 {
-    if (!(g_boot.flags&CBI_F_DIAG_VERBOSE)) return;
     char extra[240],wire[256]; va_list ap; va_start(ap,fmt);
     int n=vsnprintf(extra,sizeof(extra),fmt,ap); va_end(ap);
     CHECK(n>=0 && n<(int)sizeof(extra));
     n=snprintf(wire,sizeof(wire),"CIUKI_TEST v=1 run=00000000 seq=999999 probe=%s event=DATA %s",probe,extra);
     CHECK(n>0 && n<=240); disk_records++;
+    if ((unsigned)n > max_record) max_record = n;
 }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {

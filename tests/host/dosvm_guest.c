@@ -37,6 +37,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+#include <stdbool.h>
+#include <time.h>
 #include <unistd.h>
 #undef _SC_PAGESIZE
 #undef _SC_OPEN_MAX
@@ -47,10 +49,18 @@
 #undef WEXITSTATUS
 #undef WIFSIGNALED
 #undef WTERMSIG
+#undef CLOCKS_PER_SEC
 #include <ciuki/abi.h>
 #define CIUKI_CPU_H
 uint64_t g_tsc_per_ms;
-static uint64_t read_tsc_serialized(void) { return 0; } /* instruction-clock host replay */
+static bool guest_perf;
+static uint64_t read_tsc_serialized(void)
+{
+    if (!guest_perf) return 0;
+    struct timespec t;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t)) abort();
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
 #include <ciuki/kernel.h>
 #include <ciuki/task.h>
 #include <ciuki/input.h>
@@ -249,7 +259,14 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     printf("  record %s %s %s\n", probe, event, extra);
 }
 bool rec_active(void) { return true; } /* host replay owns its record scope */
-void rec_diag_disk(const char *probe,const char *fmt,...) { (void)probe;(void)fmt; }
+void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...)
+{
+    if (!guest_perf) return;
+    char extra[240]; va_list ap; va_start(ap, fmt);
+    int n = vsnprintf(extra, sizeof(extra), fmt, ap); va_end(ap);
+    CHECK(n >= 0 && n < (int)sizeof(extra));
+    printf("  perf %s %s\n", probe, extra);
+}
 void rec_diag(const char *probe, const char *fmt, ...)
 {
     if (!(g_boot.flags & CBI_F_VERBOSE)) return;
@@ -465,8 +482,11 @@ static bool video_started(void)
         video.starts >= 2 && gv->dpmi.stats.irqs_pm - startup_irqs >= 10;
 }
 /* Run until done() or the VM stops or the instruction budget runs out. */
+static int perf_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
+{ (void)arg; (void)y; (void)pixels; (void)bytes; return 0; }
 static int run(uint64_t budget, bool (*done)(void))
 {
+    if (guest_perf) { dosvm_task_switch(gv->task); perf_phase(gv, 1); }
     while (budget && !stopped()) {
         if (done && done()) return 1;
         if (waiting_input) return 2;
@@ -535,12 +555,19 @@ static int run(uint64_t budget, bool (*done)(void))
                 printf("    trace switch -> %s %04x:%08x ss:sp=%04x:%08x depth=%u\n", frame_pm() ? "PM" : "V86",
                        cpu.tf.cs & 0xFFFF, cpu.tf.eip, cpu.tf.user_ss & 0xFFFF, cpu.tf.user_esp, gv->dpmi.depth);
         }
-        if (stopped()) break;
+        if (stopped() || unexpected) break;
         if (ev.executed >= slice_left && !(rc == GCPU_BUDGET && ev.ss_shadow)) {
             slice_left = guest_slice;
             g_ticks++;
+            if (guest_perf) perf_phase(gv, 2);
             dosvm_tick();
             deliver(0x20, 0, 0);        /* the host's 1 kHz timer IRQ: a delivery point */
+            if (guest_perf && !(g_ticks % 16)) {
+                dosvm_task_switch(&caller);
+                struct ciuki_rect damage;
+                dosvm_vga_present(gv, perf_row, 0, g_ticks, &damage);
+                dosvm_task_switch(gv->task);
+            }
         } else if (ev.executed < slice_left) slice_left -= ev.executed ? ev.executed : (rc == GCPU_BUDGET ? 1 : 0);
         else slice_left = 1;            /* MOV SS shadow: the timer waits one instruction */
     }
@@ -795,6 +822,11 @@ int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: %s DOSBOOT.IMG|CIUKIGAM.IMG [COMMAND NAME]...\n", argv[0]); return 2; }
     setvbuf(stdout, 0, _IOLBF, 0);
+    guest_perf = getenv("GUEST_PERF") != 0;
+    if (guest_perf) {
+        g_tsc_per_ms = 1000000;
+        puts("host perf: CPU=thread nanoseconds, interval ms=instruction-clock; guest includes emulation, paging/IRQ transport are fakes; NOT hardware share/FPS");
+    }
     const char *baud = getenv("GUEST_UART_BAUD");
     if (baud) {
         char *end;
@@ -839,7 +871,7 @@ int main(int argc, char **argv)
             if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
             continue;
         }
-        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : video || menu || quake_exec_mode ? argv[i] + 6 : argv[i];
+        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : menu ? argv[i] + 5 : video || quake_exec_mode ? argv[i] + 6 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
         dosvm_expect(gv, argv[i + 1]);
@@ -897,6 +929,13 @@ int main(int argc, char **argv)
         r = run(400000000ull, 0);
         stats("after-exit");
         if (r != 2 || gv->dpmi.active) { failures++; screen(); break; }
+    }
+    if (guest_perf) {
+        perf_phase(gv, 0);
+        printf("host totals: guest_emulator_us=%llu monitor_us=%llu present_us=%llu harvest_us=%llu audio_us=%llu\n",
+               (unsigned long long)perf_us(gv->perf.guest_cycles), (unsigned long long)perf_us(gv->perf.monitor_cycles),
+               (unsigned long long)perf_us(gv->perf.present_cycles), (unsigned long long)perf_us(gv->perf.harvest_cycles),
+               (unsigned long long)perf_us(gv->perf.audio_cycles));
     }
     if (getenv("GUEST_IRQ0_RESTORE") && restore_edges != 1) {
         printf("restore edge: FAIL (requested PM boundary was not reached)\n");

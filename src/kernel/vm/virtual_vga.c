@@ -115,7 +115,23 @@ void cvga_store_plane(cvga_state *v, unsigned plane, unsigned at, uint8_t value)
 void cvga_store_chain4_span(cvga_state *v, unsigned at, const uint8_t *bytes, unsigned count)
 {
     if (at >= CVGA_PLANE_SIZE || count > CVGA_PLANE_SIZE - at) return;
-    for (unsigned i = 0; i < count; i++, at++) store_plane(v, at & 3, at & ~3u, bytes[i]);
+    /* One dirty-bit update per plane/granule, not per changed pixel. Keep
+     * sparse damage exact and leave the unused plane bytes/latches intact. */
+    while (count && (at & 7)) {
+        store_plane(v, at & 3, at & ~3u, *bytes++); at++; count--;
+    }
+    while (count >= 8) {
+        unsigned granule = at / CVGA_DIRTY_GRANULE;
+        for (unsigned p = 0; p < 4; p++) {
+            uint8_t *d = &v->plane[p][at];
+            if (d[0] != bytes[p] || d[4] != bytes[p + 4]) {
+                d[0] = bytes[p]; d[4] = bytes[p + 4];
+                v->dirty[p][granule >> 3] |= (uint8_t)(1u << (granule & 7));
+            }
+        }
+        at += 8; bytes += 8; count -= 8;
+    }
+    while (count--) { store_plane(v, at & 3, at & ~3u, *bytes++); at++; }
     ++v->changes;
 }
 
@@ -637,6 +653,33 @@ int cvga_modex_row(const cvga_state *v, unsigned y, unsigned *base, unsigned *pa
         !(v->crtc[23] & 0x40) || !setup_row(v, y, &r) || r.g.text || r.shift < 2) return 0;
     *base = r.base & 0xffffu; *pan = r.pan;
     return 1;
+}
+
+int cvga_chain4_row(const cvga_state *v, unsigned y, unsigned *base, unsigned *pan)
+{
+    row_setup r;
+    if ((v->seq[4] & 0x0e) != 0x0e || !(v->crtc[20] & 0x40) ||
+        !setup_row(v, y, &r) || r.g.text || r.shift < 2) return 0;
+    *base = scan_address(v, r.base); *pan = r.pan;
+    return 1;
+}
+
+int cvga_chain4_dirty(unsigned base, unsigned pan, unsigned width,
+                      const uint8_t dirty[4][CVGA_DIRTY_BYTES])
+{
+    if (!width) return 0;
+    unsigned first = (base + (pan / 4) * 4) & 0xffffu;
+    unsigned count = (width - 1 + pan) / 4 - pan / 4 + 1;
+    while (count) {
+        unsigned g = first / CVGA_DIRTY_GRANULE;
+        uint8_t bits = dirty[0][g >> 3] | dirty[1][g >> 3] |
+                       dirty[2][g >> 3] | dirty[3][g >> 3];
+        if (bits & (1u << (g & 7))) return 1;
+        unsigned n = (CVGA_DIRTY_GRANULE - first % CVGA_DIRTY_GRANULE + 3) / 4;
+        if (n > count) n = count;
+        count -= n; first = (first + n * 4) & 0xffffu;
+    }
+    return 0;
 }
 
 int cvga_modex_dirty(unsigned base, unsigned pan, unsigned width,
