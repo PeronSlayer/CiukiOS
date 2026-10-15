@@ -42,10 +42,14 @@ The ordered checks are:
    maximum interrupts-off duration and the recorded section/address. Two ticks
    of boundary quantisation are allowed; the existing 250 us critical-section
    budget applies. An uncalibrated independent clock skips rather than passing.
-7. A 100-record UART burst. A byte-ring end bitmap counts records only when
-   their final byte enters the UART. The result distinguishes accepted,
-   transmitted, dropped and queued data. This observes local UART submission,
-   not reception by a remote serial logger.
+7. A 100-record UART burst through the normal quota-controlled queue. Each
+   accepted publication receives a ticket; the persistent record descriptor
+   advances the sent watermark only when its final byte enters the UART.
+   Refusals return ticket zero and increment the whole-record drop counter.
+   The result distinguishes accepted, transmitted, dropped and queued data;
+   quota exhaustion can make this check FAIL. The page never drains the UART:
+   the log-writer remains the sole normal consumer, with panic takeover only.
+   This observes local UART submission, not reception by a remote serial logger.
 8. The Savage matrix below, including a display-service switch to the listed
    1024x768x16 mode and restoration/verification of the original mode.
 9. Codec diagnostics and the existing integer one-second tone through a
@@ -58,6 +62,25 @@ neither its raw-ring implementation nor its image allocation. The page reports
 that sink as unavailable when the hook is absent. f0-26 must not invent an
 unallocated raw extent; the lead must connect/verify that hook when integrating
 f0-25. There is no claim of black-box durability from this worktree alone.
+
+## Serial merge decision (f0-24/f0-26, 2026-10-15)
+
+The [TI PC16550D datasheet](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/PC16550D.pdf),
+section 8.6.3 (printed p. 22), distinguishes THRE (holding FIFO empty) from
+TEMT (FIFO and shift register empty). The
+[TI TL16C550D datasheet](https://www.ti.com/lit/ds/symlink/tl16c550d.pdf),
+Line Status Register (printed p. 37), confirms those semantics and the
+16-byte FIFO. Rechecked online against `serial.c`: retain f0-24's FIFO probe,
+record-limited refills, readiness reads with IF set, one `serial_tx_byte`
+lock per output byte and 75% line-rate quota per 1000 ticks. Add f0-26's
+accepted/sent counters to those same descriptors, including drop notices in
+both counters so later tickets stay aligned. No bitmap or second consumer is
+needed. A sent ticket means final-byte UART submission, not TEMT or remote
+receipt. At 38400 baud the 2816-byte data allowance admits 85 of the page's
+33-byte expanded records in an otherwise empty quota window; remaining
+publications drop whole. Interleaved producers and prior admissions can lower
+that count. Console, disk and optional black-box capture still receive every
+page record independently of UART acceptance.
 
 ## Savage matrix and production setting
 
