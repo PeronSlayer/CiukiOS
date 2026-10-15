@@ -1,7 +1,7 @@
 # TinyGL for native CiukiOS programs
 
 CiukiOS uses TinyGL by Fabrice Bellard, Gek (DMHSW), and C-Chads.
-The retained [licence](../../licenses/TinyGL-LICENSE.txt) requires this
+The retained [licence](../../sdk/libgl/LICENSE-TinyGL.txt) requires this
 acknowledgment in the product and documentation. The SDK installs that notice
 in `licenses/`; the image ships it in `/system/licenses`. Graphics Demo also
 displays the acknowledgment. TinyGL is a software OpenGL subset, with no full

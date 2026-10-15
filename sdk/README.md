@@ -37,5 +37,5 @@ and audio settings remain owned by their existing persistence code.
 F7-01 installs `libgl.a`, `<GL/gl.h>` and `<ciuki/gl.h>` for the TinyGL
 software subset. Link with `-lgl`. CiukiOS uses TinyGL by Fabrice Bellard,
 Gek (DMHSW), and C-Chads; its acknowledgment licence is installed under
-`licenses/TinyGL-LICENSE.txt`. See [libgl](libgl/README.md) for ownership,
+`sdk/libgl/LICENSE-TinyGL.txt`. See [libgl](libgl/README.md) for ownership,
 supported calls and limitations.

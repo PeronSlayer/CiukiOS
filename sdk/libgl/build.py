@@ -27,7 +27,7 @@ def recipe():
               for p in sorted((HERE / "vendor").rglob("*")) if p.is_file()}
     if actual != expected:
         raise ValueError("changed/unrecorded TinyGL source; update reviewed port hashes")
-    if digest(ROOT / "licenses/TinyGL-LICENSE.txt") != expected["LICENSE"]:
+    if digest(ROOT / "sdk/libgl/LICENSE-TinyGL.txt") != expected["LICENSE"]:
         raise ValueError("TinyGL licence differs from retained upstream notice")
     return {"upstream": upstream, "port": port, "sources": SOURCES,
             "adapter": {str(p.relative_to(HERE)): digest(p) for p in
@@ -47,7 +47,7 @@ def install_headers(destination):
 def notices(destination):
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "licenses/TinyGL-LICENSE.txt", destination / "TinyGL-LICENSE.txt")
+    shutil.copy2(ROOT / "sdk/libgl/LICENSE-TinyGL.txt", destination / "TinyGL-LICENSE.txt")
     (destination / "TinyGL-NOTICE.txt").write_text(
         "CiukiOS uses TinyGL by Fabrice Bellard, Gek (DMHSW), and C-Chads.\n"
         "Software OpenGL subset; see TinyGL-LICENSE.txt.\n")
