@@ -2,6 +2,7 @@
  * independent desktop-frame watchdog. See docs/design/f1-acceptance.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/cpu.h>
 #include <ciuki/display.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/registry.h>
@@ -17,6 +18,10 @@ static struct fb_device previous;
 static struct task *watchdog;
 static bool check_display;
 static struct fb_device check_previous;
+static bool check_sweeping;
+static uint64_t check_deadline;
+static int check_result;
+#define CHECK_MODE_MS 5000u
 
 static bool checkpoint_cancel(void *arg) { (void)arg; return false; }
 static void checkpoint_pause(void *arg) { (void)arg; task_sleep_ms(1); }
@@ -104,36 +109,102 @@ static int restore(void)
     log_mode(previous.mode_id, e);
     return e;
 }
+static int check_restore(void)
+{
+    struct fb_device restored;
+    int e = apply(check_previous.mode_id, &restored);
+    if (!e && (restored.width != check_previous.width || restored.height != check_previous.height ||
+        restored.pitch != check_previous.pitch || restored.bpp != check_previous.bpp ||
+        restored.phys != check_previous.phys)) e = -EIO;
+    if (!e) changed();
+    if (e) check_result = e;
+    klog("[display] check_step=restored mode=%u error=%d",check_previous.mode_id,e);
+    return e;
+}
 int display_check_begin(uint16_t id)
 {
     if (!(g_boot.flags & CBI_F_HW_CHECK) || grants_display_pid()) return -EPERM;
     if (check_display || switching || fullscreen_display || awaiting_frame) return -EBUSY;
     if (!listed(id) || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
+    if (!fbdev_get()->present) return -ENODEV;
+    if (display_worker_start()) return -ENOMEM;
     check_previous = *fbdev_get();
+    check_result = 0;
     int e = biosvm_video_prepare();
     if (e) return e;
     e = fbdev_change_begin();
     if (e) return e;
+    switching = true;
+    check_display = true; /* includes restoration of a failed mode set */
+    check_deadline = deadline_after_ms(CHECK_MODE_MS);
+    klog("[display] check_step=mode-set mode=%u",id);
     struct fb_device next;
     e = apply(id, &next);
-    check_display = true; /* includes restoration of a failed mode set */
+    if (e) {
+        /* The old mapping is already revoked: ending this transaction and
+         * starting another would fail fbdev_change_begin's live() gate. */
+        check_result=e;
+        klog("[display] check_step=rollback mode=%u error=%d",check_previous.mode_id,e);
+        (void)check_restore();
+        check_display=false;
+    }
     fbdev_change_end();
-    if (e) { display_check_end(); return e; }
+    switching = false;
+    klog("[display] check_step=mode-set-done mode=%u error=%d",id,e);
+    if (e) return e;
+    if (deadline_passed(check_deadline)) {
+        check_result = -ETIMEDOUT;
+        display_check_end();
+        return check_result;
+    }
     changed(); return 0;
+}
+int display_check_sweep_begin(void)
+{
+    display_watchdog_poll();
+    uint32_t flags=irq_save();
+    int e=0;
+    if (!check_display) e=check_result ? check_result : -EINVAL;
+    else if (switching || check_sweeping) e=-EBUSY;
+    else if (deadline_passed(check_deadline)) e=-ETIMEDOUT;
+    else check_sweeping = true;
+    irq_restore(flags);
+    return e;
+}
+void display_check_sweep_end(bool restored)
+{
+    uint32_t flags=irq_save();
+    check_sweeping = false;
+    if (!restored) {
+        /* The sweep retains quarantined VGA/engine leases. Firmware must
+         * never run underneath an unproven writer, even on watchdog expiry. */
+        check_result = -EIO;
+        check_display = false;
+    }
+    irq_restore(flags);
+    if (!restored) klog("[display] check_step=restore-refused reason=unsafe-writer");
+    else display_watchdog_poll();
 }
 int display_check_end(void)
 {
-    if (!check_display) return 0;
+    uint32_t flags=irq_save();
+    if (!check_display || switching || check_sweeping) {
+        int e=check_display ? -EBUSY : check_result;
+        irq_restore(flags); return e;
+    }
+    switching = true;
+    irq_restore(flags);
+    klog("[display] check_step=restore mode=%u",check_previous.mode_id);
     int e = fbdev_change_begin();
-    if (e) return e;
-    struct fb_device restored;
-    e = apply(check_previous.mode_id, &restored);
-    if (!e && (restored.width != check_previous.width || restored.height != check_previous.height ||
-        restored.pitch != check_previous.pitch || restored.bpp != check_previous.bpp ||
-        restored.phys != check_previous.phys)) e = -EIO;
-    fbdev_change_end();
-    if (!e) { check_display = false; changed(); }
-    return e;
+    if (!e) {
+        e = check_restore();
+        fbdev_change_end();
+    }
+    /* One bounded restoration attempt. A failed firmware backend may be
+     * quarantined; the watchdog must not retry it every 100 ms. */
+    check_display = false; switching = false;
+    if (e) check_result = e;
+    return check_result;
 }
 
 void display_frame_complete(uint32_t generation)
@@ -146,6 +217,13 @@ void display_watchdog_poll(void)
 {
     if (dosvm_fullscreen_poll) dosvm_fullscreen_poll();
     if (fullscreen_display) return;
+    if (check_display) {
+        if (deadline_passed(check_deadline)) {
+            check_result = -ETIMEDOUT;
+            if (!switching && !check_sweeping) (void)display_check_end();
+        }
+        return;
+    }
     if (!awaiting_frame || switching || !deadline_passed(frame_deadline) || grants_display_busy()) return;
     switching = true;
     awaiting_frame = false;
@@ -176,7 +254,7 @@ int display_set(struct process *p, uint16_t id)
     if (!m) return refuse(id, -EINVAL);
     /* Window DOS VMs currently have private surfaces, never physical grants.
      * A competing/foreign display owner or an in-flight frame prevents entry. */
-    if (switching || fullscreen_display || awaiting_frame || grants_display_busy()) return refuse(id, -EBUSY);
+    if (switching || fullscreen_display || check_display || awaiting_frame || grants_display_busy()) return refuse(id, -EBUSY);
     if (!fbdev_get()->present) return refuse(id, -ENODEV);
     if (!listed(fbdev_get()->mode_id)) return refuse(id, -EOPNOTSUPP); /* cannot promise restore */
     if (id == fbdev_get()->mode_id) return refuse(id, 0);

@@ -29,6 +29,15 @@ for commands and evidence, within the page's 15-second item budget. A cutoff
 retains completed/passed/skipped/timeout counts and the first exact match;
 exceeding the item deadline no longer overwrites those measurements.
 
+The f1-69 merge retains this five-second sweep budget and the per-candidate
+durability sequence. The first exact winner is marked `first_exact=1` in
+its existing result checkpoint, including the complete descriptor; it does
+not generate a duplicate candidate record. Setup evidence uses the same
+chip default as setup itself (1 on SuperSavage, 0 on Savage4). The
+original-depth summary retains the counters before any firmware request.
+The f1-69 winner/restoration gate and eight-second reserve below still
+apply: an errored or truncated first sweep does not start a depth switch.
+
 The serial result includes `resent`, a local repeated-byte submission audit;
 PASS requires zero. A detected repeated logical position disables the sink
 before another port write. Physical FIFOs use TEMT to observe level zero
@@ -72,8 +81,12 @@ The ordered checks are:
    read 1 MiB through its real block interface and report time and a digest.
    Absent media skip; present but quarantined/unmounted media fail. No USB
    recovery bypass, reset or write is performed.
-4. Retained HID report layout (protocol, report ID, button count, axis/wheel
-   bit positions), then decoded mouse events for five seconds.
+4. Wait up to eight seconds for the ordinary USB owner to attach an active
+   mouse, reserving five seconds for live input and two for publication.
+   Report retained HID layout (protocol, report ID, button count, axis/wheel
+   bit positions), enumeration time, then decoded events for five seconds.
+   No controller skips immediately; a controller with no mouse skips only
+   after the wait. An enumerated inactive/quarantined mouse fails.
 5. Five seconds of PS/2 key transitions and EC volume changes, restoring a
    changed mixer master afterwards. Each input window shows its first 96
    events and reports both the total and displayed count plus queue loss.
@@ -175,8 +188,9 @@ There are 96 configurations per depth. For ID 0..95:
 
 `System\Display\Savage`, integer value `EngineConfig`, selects that ID on
 the next production activation, without rebuilding. Missing, malformed,
-transaction-pending and out-of-range settings retain ID 0 (the current
-configuration). The sweep does not persist its winner or silently downgrade
+transaction-pending and out-of-range settings use ID 1 on SuperSavage and
+ID 0 on Savage4 ([f1-69 evidence](savage-2d.md#f1-69-select-the-measured-supersavage-configuration)).
+The sweep does not persist its winner or silently downgrade
 the desktop depth. The normal durable attempt marker and full marker test
 still gate production activation. H can run with a retained previous-boot
 marker, preserving it; a current-boot quarantine still refuses entry.
@@ -187,6 +201,46 @@ The page reports failure and retains quarantine/attempt evidence. Exact
 restoration is required for PASS; it cannot be promised after hardware stops
 responding. A BIOS mode-set failure likewise remains a failure rather than
 proof of restoration. Hardware and QEMU qualification belong to the lead.
+
+### f1-69: page aftermath and bounded display checks
+
+The a395ffa8 capture stops at 32-bpp candidate 71, without a 16-bpp or mode
+checkpoint; it does not establish which instruction stopped progressing.
+The code nevertheless had two defects: `display_check_begin` never started
+or armed the display watchdog, and failed mode setup ended the framebuffer
+transaction before attempting rollback. Revocation makes `fbdev.live()`
+false, so a second `fbdev_change_begin` rejects that rollback. Restore within
+the existing transaction on a failed mode set. A successful temporary mode
+now starts the existing worker and has a five-second watchdog. Restoration
+verifies the original geometry, pitch, depth and physical base; a failed
+restore is terminal, with no repeated firmware calls from the watchdog.
+
+The service's VBE set/query calls already have a cumulative two-second
+budget. [VBE 3.0](https://www.phatcode.net/downloads.php?id=221&action=get&file=vbe30.pdf),
+functions 4F01/4F02/4F03, defines the mode-info, mode-set and current-mode
+checks used by that service. Keep those calls and existing permissions;
+do not invent a native panel restore sequence. A disabled firmware backend
+or a stalled bus cannot promise a restored visible display.
+
+Publish the first exact winner while sweeping and the original-depth
+summary before requesting 16 bpp. Without a winner, restored engine leases,
+or eight seconds remaining, omit the depth switch and report failure.
+The register/firmware-boundary host tests cover 1024x768x16 with verified
+return to the original 32-bpp mode, failed mode setup, watchdog expiry,
+late sweep admission and failed restoration. During the temporary-mode
+sweep, pin it against watchdog restoration until its VGA/VRAM leases are
+restored/released. Expiry is retained as a failure; safe completion permits
+rollback. An uncertain writer permanently refuses firmware rollback and
+retains quarantine and the attempt marker. The page still reports the
+failure, reaches audio, and publishes its final results. After a watchdog
+rollback, a late caller cannot begin the 16-bpp sweep.
+
+The original 3-second sweep deadline includes diagnostic output, so a
+partial matrix can time out with an already-recorded winner. This is a
+failure, not a completed sweep; it cannot authorize the next depth. Stage
+records now distinguish engine restore, mode set, 16-bpp sweep and desktop
+restore. The next hardware capture must locate any remaining stall using
+those records; host tests cannot establish panel visibility.
 
 The FAT32 dirty-bit/ownership decision follows the repository's existing
 implementation and [Microsoft FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf),

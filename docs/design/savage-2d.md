@@ -4,6 +4,70 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f1-69: select the measured SuperSavage configuration
+
+Research rechecked online and against the seven local references on
+2026-10-15. This supersedes f1-67's SuperSavage bit-3 experiment. The
+read-only `a395ffa8/disk-BOOT2.LOG` records 72 candidates at 32 bpp:
+23 exact matches and 49 failures. Configuration 0 returns `b6b6b6b6` for
+`008641b6`; configuration 1 returns the exact colour, as do 2, 3 and 8.
+Every recorded qword-stride candidate leaves `5a5a5a5a` untouched. There
+is no 16-bpp result or mode-switch checkpoint in that capture. Kernel
+records continue afterwards; the file cannot identify the stalled operation.
+
+The supplied vendor pack was read at its original location in the main
+checkout, without copying proprietary files into this worktree:
+
+- `Driver/D/A0400/SSAV1014.INF`, version 06.13.10.1290 (IBM), selects
+  `5333:8c2e`, subsystem `01fc1014`, and identifies IXC SDRAM.
+- `Driver/D/A0500/ssav1179.inf`, version 06.13.10.1270 (Toshiba), selects
+  the same chip, subsystem `00011179`, also IXC SDRAM.
+
+Neither INF installs tiling, block-write or memory-type registry values.
+Both set `UseAGPDMA=1`; that Windows preference does not authorize DMA here.
+ASCII/UTF-16LE strings in each accompanying `S3SSAVM.SYS`/`S3SSAV.DLL`
+expose `Ses_BCI`, the PM display-driver PDB path, and (IBM only) `BCIOnly`,
+but no tiling/block-write/memory-type setting that explains this interaction.
+
+[X.Org's PM initializer](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c)
+clears bit 3 for SuperSavage, uses pixel stride and disables block writes
+because the required SGRAM type cannot be determined. Its local
+`savage_bci.h` explicitly assigns `BCI_ENABLE_TWISTER=0` to SuperSavage;
+`savage_driver.h` and `savage_regs.h` confirm the descriptor and selector
+layout. Online retrieval of these three headers failed; they were checked
+locally. [Linux's initializer](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c)
+sets bit 3 across several chip families. Neither explains why its combination
+with BW_DISABLE fails on this T23. Record that interaction as measured,
+without inventing a silicon mechanism or enabling block writes on SDRAM.
+
+Decision: default to configuration 1 on SuperSavage, retaining configuration
+0 on Savage4. At 1024x768x32 this is descriptor `10200401`, CR50 depth `11`,
+linear, pixel stride, BW_DISABLE set. The engine preamble, direct GBD and
+both queued E0/E1 pairs use the same selected controls. Keep the complete
+descriptor in the driver model. Missing/invalid registry values use the
+chip default; explicit `EngineConfig=0..95` still overrides it. The exact
+saved-pixel test, durable marker, idle proof and quarantine still gate caps.
+
+The host model encodes the measured bit-3/BW_DISABLE failure independently
+of readable depth. It checks default/configuration 1 success, configuration
+0 low-byte repetition, complete saved-pixel restoration and failed-attempt
+retention. Existing renderer tests exercise fills, overlap copies, patterns,
+hardware cursor and present paths with the same production descriptor.
+Diagnostic `[accel]` records now report `ops_per_s` over `window_ms` at
+one-second intervals, alongside cumulative operations and fault counters.
+Operations include drawing and cursor activity; firmware/setup packets do
+not count. L enables these periodic diagnostics.
+
+The H page now records its first winner immediately and its original-depth
+summary before any firmware call. Engine restoration, mode set and mode
+restoration have explicit stage records. A 16-bpp sweep requires an exact
+original-depth winner, successful restoration and sufficient remaining item
+budget. See [the hardware-check contract](hardware-check.md) for watchdog
+and enumeration changes and their evidence boundary. Host success is not
+a new T23 qualification: the lead must verify boot `bci_test result=ok`,
+nonzero caps, correct cursor/presentation, per-second engine use and a
+complete H page on the resulting image.
+
 ## f1-67: shared descriptor enable and failure readback
 
 Research rechecked on 2026-10-15 against the seven local reference files in

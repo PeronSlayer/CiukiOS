@@ -31,7 +31,6 @@
 #define BCI_REGISTER_COUNT_ONE 0x00010000u
 #define BCI_GBD_LOW 0xe0u
 #define BCI_GBD_HIGH 0xe1u
-#define GBD_CONTROLS 9u
 #define GBD_READ_MASK 0x13ff1ffdu
 static unsigned selected_config;
 static bool initializing, probing;
@@ -416,7 +415,7 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     s->supersavage = supersavage; s->cursor = cursor; s->cursor_offset = cursor_offset;
     struct savage_config cfg;
     if (!savage2d_config(config, d, &cfg)) return -EINVAL;
-    s->descriptor = cfg.descriptor & ~9u; /* retain the existing diagnostic representation */
+    s->descriptor = cfg.descriptor;
     s->ops = (struct accel_ops){s, sync_engine, copy_rect, fill_rect, pattern_rect,
         cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready};
     s->reason = 0; s->idle_mask = s->idle_value = s->status = 0; s->status_logged = false;
@@ -486,9 +485,9 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     uint32_t enabled = (s->saved_bci & 0x3ff0u) | 8u;
     uint32_t control = init_write(s, BCI_CONTROL, enabled, false);
     if (control == UINT32_MAX || (control & 0x0fu) != 8u) return fail(s, "bci_enable_failed");
-    /* Retain the engine-only preamble, using the fbdev reference's shared
-     * bit-3 enable for this SuperSavage experiment (f1-67). */
-    if (supersavage) init_write(s, 0x816c, 0x10000000u | GBD_CONTROLS, true);
+    /* X.Org's PM preamble, with the selected controls in both transports.
+     * T23 sweep: bit 3 + BW_DISABLE replicates the low colour byte. */
+    if (supersavage) init_write(s, 0x816c, 0x10000000u | (cfg.descriptor & 9u), true);
     /* RE046-B CR50.5:4 selects engine pixel length independently of the
      * descriptor. Firmware may leave its VGA (8-bpp) value after VBE. */
     uint8_t cr50 = (s->saved50 & ~0x30u) | (cfg.depth << 4) | 0xc1u;
@@ -524,7 +523,7 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
 }
 int savage2d_start(struct savage2d *s, const struct savage_io *io, const struct fb_device *d,
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset)
-{ return start_config(s, io, d, supersavage, cursor, cursor_offset, 0); }
+{ return start_config(s, io, d, supersavage, cursor, cursor_offset, supersavage ? 1 : 0); }
 
 static struct savage2d engine;
 static volatile uint8_t *registers;
@@ -533,7 +532,7 @@ static gen_t reg_generation, cursor_generation, port_generation;
 static uint32_t cursor_phys;
 static uint8_t *cursor_mapping;
 static void *register_window, *cursor_window;
-static uint64_t last_log;
+static uint64_t last_log, recorded_ops;
 /* Bounded diagnostics, emitted once per activation without a verbosity gate. */
 #define INIT_RECORDS 40u
 static struct {
@@ -681,8 +680,12 @@ static void hw_drain(void *ctx) { (void)ctx; framebuffer_write_drain(); }
 static void record(void)
 {
     if (probing || !(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
-    klog("[accel] driver=savage ops=%llu idle_waits=%llu fallbacks=%llu quarantined=%u status=%08x status_valid=%u",
-        engine.operations, engine.idle_waits, engine.fallbacks, engine.quarantined, engine.status, engine.status_logged);
+    uint64_t elapsed = g_ticks - last_log;
+    uint64_t delta = engine.operations >= recorded_ops ? engine.operations - recorded_ops : 0;
+    uint64_t rate = elapsed ? delta * 1000 / elapsed : 0;
+    klog("[accel] driver=savage ops=%llu ops_per_s=%llu window_ms=%llu idle_waits=%llu fallbacks=%llu quarantined=%u status=%08x status_valid=%u",
+        engine.operations, rate, elapsed, engine.idle_waits, engine.fallbacks, engine.quarantined, engine.status, engine.status_logged);
+    last_log = g_ticks; recorded_ops = engine.operations;
 }
 const struct accel_ops *savage2d_fallback_ops(void)
 {
@@ -734,7 +737,7 @@ static int bci_test(struct savage2d *s, const struct fb_device *d)
     return err;
 }
 void savage2d_record(void)
-{ if (!initializing && reg_claim >= 0 && g_ticks - last_log >= 2000) { last_log = g_ticks; record(); } }
+{ if (!initializing && reg_claim >= 0 && g_ticks - last_log >= 1000) record(); }
 /* Caller holds the fbdev presenter mutex; this never reads hardware. */
 void savage2d_snapshot(struct ciuki_accel_info *out)
 {
@@ -900,6 +903,10 @@ static void load_config(struct vfs *vfs)
 {
     int32_t setting=0;
     selected_config=0;
+    for (unsigned i=0;i<pci_count();i++) {
+        const struct pci_func *gpu=pci_get(i);
+        if (savage2d_supported(gpu) && gpu->device!=0x8a22) selected_config=1;
+    }
     if (kernel_registry_int && kernel_registry_int(vfs,"System\\Display\\Savage","EngineConfig",&setting) &&
         setting>=0 && setting<(int32_t)SAVAGE_CONFIGS) selected_config=(unsigned)setting;
     klog("[accel] savage EngineConfig=%u",selected_config);
@@ -1189,8 +1196,9 @@ int savage2d_sweep_model(struct savage2d *s, const struct savage_io *io,
     uint16_t mix_bg=io->read16(io->ctx,0x8134), mix_fg=io->read16(io->ctx,0x8136);
     io->drain(io->ctx); memcpy(saved,scratch,SAVAGE_SWEEP_BYTES); captured=true;
     memset(s,0,sizeof(*s));
-    struct savage_config setup; savage2d_config(0,d,&setup);
-    out->error=sweep_record(line,checkpoint,ctx,d,0,&setup,"result=begin phase=setup");
+    unsigned setup_id=supersavage ? 1u : 0u;
+    struct savage_config setup; savage2d_config(setup_id,d,&setup);
+    out->error=sweep_record(line,checkpoint,ctx,d,setup_id,&setup,"result=begin phase=setup");
     if (!out->error && io->now_us(io->ctx)>=deadline_us) out->error=-ETIMEDOUT;
     if (!out->error) out->error=savage2d_start(s,io,d,supersavage,0,0);
     if (out->error) goto engine_restore;
@@ -1235,9 +1243,12 @@ int savage2d_sweep_model(struct savage2d *s, const struct savage_io *io,
         if (!e) e=sweep_send(s,fill,ARRAY_SIZE(fill),until);
         if (!e) for (unsigned j=0;j<d->bpp/8;j++) got|=(uint32_t)scratch[pos+j]<<(8*j);
         bool exact=!e && got==want;
-        if (exact) { out->passed++; if (out->first<0) out->first=(int)id; }
-        ksnprintf(result,sizeof(result),"result=%s wrote=%08x read=%08x idle=%u",
-            e ? e==-ETIMEDOUT ? "timeout" : "error" : exact ? "pass" : "fail",want,got,s->cpu_safe);
+        bool winner=exact && out->first<0;
+        if (exact) { out->passed++; if (winner) out->first=(int)id; }
+        /* The first exact winner shares the durable result checkpoint;
+         * do not duplicate the candidate record in another logging path. */
+        ksnprintf(result,sizeof(result),"result=%s wrote=%08x read=%08x idle=%u first_exact=%u",
+            e ? e==-ETIMEDOUT ? "timeout" : "error" : exact ? "pass" : "fail",want,got,s->cpu_safe,winner);
         if (!e) {
             out->completed++;
             int saved_result=sweep_record(line,checkpoint,ctx,d,id,&cfg,result);
@@ -1267,6 +1278,7 @@ candidate_done:
         }
     }
 engine_restore:
+    if (line) line(ctx,"Savage stage=engine-restore");
     if ((s->cpu_safe || (!s->submitted && access.cpu_safe)) && captured) {
         /* Restore the BCI's descriptor latch as well as its MMIO mirror. */
         uint32_t packet[]={BCI_SET_REGISTER|BCI_REGISTER_COUNT_ONE|BCI_GBD_LOW,values[4],
@@ -1302,6 +1314,12 @@ vga_restore:
         io->write_port(io->ctx,0x3d4,cr_index); io->write_port(io->ctx,0x3c4,sr_index);
     }
     fs_contig_free(saved,SAVAGE_SWEEP_BYTES);
+    if (line) {
+        char msg[128];
+        ksnprintf(msg,sizeof(msg),"Savage stage=engine-restored restored=%u tried=%u passed=%u first=%d error=%d",
+            out->restored,out->tried,out->passed,out->first,out->error);
+        line(ctx,msg);
+    }
     return out->error;
 }
 
