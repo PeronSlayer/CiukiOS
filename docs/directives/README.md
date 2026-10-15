@@ -199,7 +199,7 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f0-22-hardware-log-cost-and-timer-gaps](f0-22-hardware-log-cost-and-timer-gaps.md) | F0 | gpt-6.1-sol / xhigh | launched 2026-10-15 (T23 analysis of image a738204a) |
 | [f1-64-usb-storage-stage-log-failed](f1-64-usb-storage-stage-log-failed.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-15 (bind stages no longer wait for boot-log durability; lost record instead of a device fault; T23 replay test); T23 verification pending |
 | [f1-65-savage-bci-fill-depth](f1-65-savage-bci-fill-depth.md) | F1 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-15 (descriptor sent through BCI set-register packets; host model reproduces the 8-bpp replication); T23 verification pending |
-| [f3-23-doom-pic-stall-on-hardware](f3-23-doom-pic-stall-on-hardware.md) | F3 | gpt-6.1-sol / xhigh | launched 2026-10-15 (T23 analysis of image a738204a) |
+| [f3-23-doom-pic-stall-on-hardware](f3-23-doom-pic-stall-on-hardware.md) | F3 | gpt-6.1-sol / xhigh | delivered and merged 2026-10-15 (nested PM IRQ/exception frames stay on the handler's current locked stack per DPMI 4.3; SB16 unserviced-line record); QEMU doom cases and T23 pending |
 | [f3-24-quake-start-on-hardware](f3-24-quake-start-on-hardware.md) | F3 | gpt-6.1-sol / xhigh | launched 2026-10-15 (T23 analysis of image a738204a) |
 | [f4-29-thinkpad-volume-five-percent-steps](f4-29-thinkpad-volume-five-percent-steps.md) | F4 | gpt-6-luna / medium | launched 2026-10-15 (T23 analysis of image a738204a) |
 | [f2-67-window-resize-cursors-multiwindow](f2-67-window-resize-cursors-multiwindow.md) | F2+ | gpt-6.1-sol / xhigh | launched 2026-10-15 (T23 analysis of image a738204a) |
