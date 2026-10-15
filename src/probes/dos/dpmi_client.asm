@@ -230,7 +230,10 @@ start:
     mov bx, ax
     OK 0001h
     mov bx, ds
-    REFUSE 000Ah                  ; not a code segment
+    OK 000Ah                      ; data source accepted (DPMI 0.9 erratum)
+    mov bx, ax
+    OK 0001h
+    REFUSE 000Ah                  ; released selector remains invalid
     mov bx, [sel_a]               ; 000Bh/000Ch round trip with a new limit
     mov edi, desc_buf
     OK 000Bh

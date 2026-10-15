@@ -245,7 +245,10 @@ int dpmi_ldt_service(struct dosvm *v, struct v86_frame *f, unsigned ax)
     }
     case 0x000A: {
         struct dpmi_seg s;
-        if (ldt_allocated(v, bx) < 0 || !dpmi_seg(v, bx, &s) || !s.code) return 1;
+        /* The published 0.9 code-only restriction was an erratum: 000Ah
+         * accepts data selectors too (DJGPP's CRT aliases DS at startup).
+         * See docs/validation/2026-10-15-f3-28-quake-start.md. */
+        if (ldt_allocated(v, bx) < 0 || !dpmi_seg(v, bx, &s)) return 1;
         uint32_t *src = d->ldt[bx >> 3];
         if ((i = dpmi_alloc_ldt(v, 1, DPMI_CLIENT, (uint8_t)dpmi_id(v))) < 0) return 1;
         d->ldt[i][0] = src[0];
