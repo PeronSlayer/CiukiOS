@@ -2499,6 +2499,14 @@ v2.1: header byte 2; v1/v2.0 remain unchanged
 ```c
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
+#define DESK_CURSOR_API 1u
+enum desk_cursor_shape {
+    DESK_CURSOR_ARROW, DESK_CURSOR_BUSY, DESK_CURSOR_ARROW_BUSY,
+    DESK_CURSOR_TEXT, DESK_CURSOR_FORBIDDEN, DESK_CURSOR_RESIZE_EW,
+    DESK_CURSOR_RESIZE_NS, DESK_CURSOR_RESIZE_NWSE, DESK_CURSOR_RESIZE_NESW,
+    DESK_CURSOR_MOVE, DESK_CURSOR_HAND, DESK_CURSOR_CROSSHAIR,
+    DESK_CURSOR_PRECISION, DESK_CURSOR_COUNT
+};
 #define DESK_TITLE_MAX 63u
 #define DESK_ARG_MAX 160u
 ```
@@ -2584,6 +2592,13 @@ DESK_DOS_FULLSCREEN
 ```
 
 desktop to DOS client, no payload
+
+```c
+,
+    DESK_SET_CURSOR
+```
+
+v2 client to desktop: uint32 shape, own client area only
 
 ```c
 };
@@ -3167,7 +3182,7 @@ function of the widget state: equal state gives equal pixels.
 
 Colours, fonts and styles come from the current theme (desk_theme,
 apps/desktop/theme.h): Ciuki Blue (default), Platinum or Classic 98.
-The names keep their Windows 98 roles; they are not constants.
+These names describe control roles; they are not constants.
 
 ```c
 #define DU_FACE       (desk_theme->face)
@@ -3246,7 +3261,7 @@ struct du_rect { int x, y, w, h; };
 struct du_canvas { uint32_t *pixels; int width, height; struct du_rect clip; };
 ```
 
-Bevel styles (Windows 98 classic edges).
+Bevel styles for raised and recessed controls.
 
 ```c
 enum du_edge { DU_RAISED, DU_SUNKEN, DU_PRESSED, DU_RAISED_THIN, DU_SUNKEN_THIN, DU_ETCHED, DU_BUTTON_EDGE };
@@ -3555,6 +3570,12 @@ unsigned sample_count;
 f2-32: DU_TEXTAREA state
 
 ```c
+unsigned pointer_cursor;
+```
+
+application cursor for this widget; arrow is automatic
+
+```c
 };
 
 #define DU_ANCHOR_LEFT   1u
@@ -3658,7 +3679,13 @@ struct du_ui {
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
     int dirty;
-    void (*event)(struct du_ui *, const struct du_event *, void *);
+    unsigned cursor;
+```
+
+application default, used outside text/splitter controls
+
+```c
+void (*event)(struct du_ui *, const struct du_event *, void *);
     void *user;
 ```
 
@@ -3690,6 +3717,8 @@ void du_set_text(struct du_widget *, const char *);
 void du_render(struct du_ui *);
 void du_input(struct du_ui *, const struct ciuki_input_event *);
 void du_window_focus(struct du_ui *, int focused);
+unsigned du_cursor_at(const struct du_ui *);
+void du_cursor(struct du_ui *, unsigned shape);
 void du_release(struct du_ui *);
 unsigned du_key_char(const struct du_ui *, unsigned code);
 void du_post(struct du_ui *, enum du_event_type, int id, int index);
@@ -3776,6 +3805,7 @@ previous surface until CONFIGURE(COMMITTED) confirms the swap.
 
 ```c
 int old_surface, replacement, swap_sent, resizable;
+    unsigned cursor_sent;
     struct ciuki_surface_info old_info;
     uint32_t *old_pixels, *old_back;
     uint32_t configure_serial, request_serial, request_width, request_height, last_serial;
