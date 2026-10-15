@@ -27,13 +27,39 @@ int main(void)
     assert(!desk_shell_wallpaper_update(&d) && d.sh.wall_w == 640 && d.sh.wall_h == 480);
     assert(d.sh.icons[0].box.y >= DESK_BAR);
     free(d.pixels); d.pixels = calloc(1024*768,4); assert(d.pixels);
-    c->zoomed = 1;
+    struct desk_box restore = c->frame;
+    /* Preserve a nonzero old origin: relayout must fit the new size at the
+     * maximized origin before applying the available-space limits. */
+    c->zoomed = 1; c->restore = restore;
+    assert(c->zoomed && !memcmp(&c->restore,&restore,sizeof(restore)));
+    assert(!desk_resize_hit(c,c->frame.x,c->frame.y));
+    desk_geometry_begin(&d,0,1);
+    assert(!d.keyboard_geometry && d.drag == -1);
     desk_display_relayout(&d, 1024, 768);
     assert(c->frame.x == 0 && c->frame.y == DESK_BAR && c->frame.w == 1024 && c->frame.h == 768-2*DESK_BAR);
     desk_flush(&d,0);
     assert(fake_sent > old_sent && !d.sh.wall_valid);
     assert(!desk_shell_wallpaper_update(&d) && d.sh.wall_w == 1024 && d.sh.wall_h == 768);
     for (int i = 0; i < d.sh.icon_count; i++) assert(d.sh.icons[i].box.y + d.sh.icons[i].box.h <= 768 - DESK_BAR);
+    /* A depth-only change still configures the client; a smaller mode refits
+     * the maximized frame without replacing its saved normal geometry. */
+    uint32_t serial = c->resize_serial;
+    old_sent = fake_sent;
+    desk_display_relayout(&d,1024,768);
+    assert(c->zoomed && c->resize_serial != serial);
+    assert(c->frame.x == 0 && c->frame.y == DESK_BAR && c->frame.w == 1024 && c->frame.h == 768-2*DESK_BAR);
+    desk_flush(&d,0);
+    assert(fake_sent > old_sent && fake_messages[fake_sent-1].data[1] == DESK_CONFIGURE);
+    assert(desk_get32(fake_messages[fake_sent-1].data+12) == c->resize_serial);
+    free(d.pixels); d.pixels = calloc(640*480,4); assert(d.pixels);
+    desk_display_relayout(&d,640,480);
+    assert(c->zoomed && c->frame.x == 0 && c->frame.y == DESK_BAR && c->frame.w == 640 && c->frame.h == 480-2*DESK_BAR);
+    assert(!memcmp(&c->restore,&restore,sizeof(restore)));
+    desk_flush(&d,0);
+    desk_zoom(&d,0);
+    assert(!c->zoomed && !memcmp(&c->frame,&restore,sizeof(restore)));
+    desk_flush(&d,0);
+    puts("PASS display maximized: grow/shrink refit, depth-only CONFIGURE, saved restore geometry, mouse/keyboard resize blocked");
     puts("PASS display compositor: 1024x768 -> 640x480 -> 1024x768, clamped windows/pointer, CONFIGURE, bars/icons/wallpaper");
     d.sh.cfg.display_mode = 0x118; d.display_mode = 0x118; d.display_pending = 0x111;
     d.damage.count = 0;

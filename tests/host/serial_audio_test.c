@@ -141,12 +141,13 @@ void pic_unmask(unsigned irq) { CHECK(irq<16);masked[irq]=false;unmasks++; }
 static void tick(void);
 static unsigned evidence_sleeps, evidence_wakes;
 static void (*evidence_wait_hook)(void);
-void task_start(struct task *t) { CHECK(t->state==T_BLOCKED);t->state=T_READY;evidence_wakes++; }
+void task_start(struct task *t) { CHECK(!(flags&0x200) && t->state==T_BLOCKED);t->state=T_READY;evidence_wakes++; }
 void schedule(void)
 {
-    CHECK(!(flags&0x200) && g_current && g_current->state==T_BLOCKED);
+    /* f0-30: waits publish the waiter and restore IF before entering schedule. */
+    CHECK((flags&0x200) && g_current &&
+          (g_current->state==T_BLOCKED || g_current->state==T_READY));
     struct task *waiter=g_current;evidence_sleeps++;
-    irq_restore(0x200);
     if (evidence_wait_hook) {
         void (*hook)(void)=evidence_wait_hook;evidence_wait_hook=NULL;
         struct task other={.state=T_RUNNING};g_current=&other;hook();g_current=waiter;
@@ -156,7 +157,8 @@ void schedule(void)
         CHECK(n<2000);tick();
         if (g_ticks>=waiter->wake_tick && waiter->wake_tick) waiter->state=T_READY;
     }
-    CHECK(irq_save()&0x200);waiter->state=T_RUNNING;
+    /* The caller reacquires its queue lock after schedule returns. */
+    CHECK(flags==0x200 && waiter->state==T_READY);waiter->state=T_RUNNING;
 }
 #include "../../src/kernel/core/sync.c"
 #include "../../src/kernel/core/serial.c"

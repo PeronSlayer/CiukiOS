@@ -269,6 +269,9 @@ void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
         if (c->collapsed && c->resizable) desk_collapse(d, i);
         if (c->resizable && !c->internal) {
             struct desk_box f = c->frame;
+            /* Size against the new work area, not the old window position:
+             * desk_resize clamps sizes using the requested origin. */
+            if (c->zoomed) { f.x = 0; f.y = DESK_BAR; }
             if (c->zoomed || f.w > (int32_t)width) f.w = (int32_t)width;
             if (c->zoomed || f.h > work) f.h = work;
             uint32_t serial = c->resize_serial;
