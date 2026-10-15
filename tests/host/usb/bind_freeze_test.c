@@ -84,6 +84,10 @@ static void activate_log(void)
 }
 static void check_disk_record(const char *needle)
 {
+    /* The normal writer, rather than binding, owns eventual durability. */
+    struct bootlog_stats pending;
+    assert(bootlog_try_sync()>=-FS_EAGAIN);
+    do { assert(!bootlog_drain()); bootlog_snapshot(&pending); } while (pending.queued);
     struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,2));
     int fd=vfs_open(&table,BOOTLOG_PATH,VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
     char bytes[4096];size_t n,keep=0;bool found=false;
@@ -125,6 +129,14 @@ static void scenario(const char *path,unsigned kind)
     int e=usb_storage_attach(device());
     if(!e) {usb_storage_service(&m.h);e=block()->quarantined ? -FS_EIO : 0;}
     sleep_hook=NULL;
+    if ((kind==5 || kind==7) && !e) {
+        assert(!e && device()->storage.published && storage_get()->vfs.volumes[4]);
+        assert(m.now-begin<(kind==7 ? 5000u : USB_BIND_TIMEOUT_MS) && !block()->quarantined);
+        assert(!bootlog_shutdown());log_hook=NULL;bootlog_reset();cleanup();
+        puts("PASS F1-66 cached FAT preparation completes within 5 s with free shared mutexes");
+        return;
+    }
+    if(!e || m.now-begin>USB_BIND_TIMEOUT_MS)fprintf(stderr,"bind fault kind=%u result=%d elapsed=%llu\n",kind,e,(unsigned long long)(m.now-begin));
     assert(e && m.now-begin<=USB_BIND_TIMEOUT_MS);
     assert(block()->quarantined && device()->quarantined && !device()->storage.online);
     assert(m.h.ready && !m.h.quarantined && !device()->storage.bind_reserved);
@@ -279,6 +291,7 @@ static void logging_backpressure(const char *path,unsigned kind)
     if(kind==4)assert(!bootlog_shutdown());
     /* The real logger has pending bytes and cannot commit for over 2 seconds.
      * Previously max_lun quarantined here with -EAGAIN and no submitted TD. */
+    struct bootlog_stats before_log;bootlog_snapshot(&before_log);
     uint64_t begin=m.now;unsigned polls=hid_polls,reports_before=hid_reports;
     assert(!usb_storage_attach(device()));
     uint64_t attach_ms=m.now-begin;
@@ -289,16 +302,9 @@ static void logging_backpressure(const char *path,unsigned kind)
     assert(device()->storage.published && storage_get()->vfs.volumes[4]);
     assert(!device()->quarantined && !block()->quarantined && !m.h.quarantined && !m.h.busy);
     assert(!strstr(records,"[usb-storage] quarantine") && hid_polls>polls && hid_reports>reports_before);
-    assert(strstr(records,kind==2 ? "stage_record addr=2 stage=max_lun record=lost result=-5" :
-                                 "stage_record addr=2 stage=max_lun record=lost result=-11"));
-    if(kind==1) {
-        char occupancy[96];
-        snprintf(occupancy,sizeof(occupancy),"ring_queued=%u ring_capacity=%u",BOOTLOG_RAM,BOOTLOG_RAM);
-        assert(strstr(records,occupancy));
-    }
-    if(kind==3)assert(strstr(records,"stage_record addr=2 stage=mount record=lost result=-5"));
-    char capacity[32];snprintf(capacity,sizeof(capacity),"ring_capacity=%u",BOOTLOG_RAM);
-    assert(strstr(records,"ring_queued=") && strstr(records,capacity) && strstr(records,"boot_queued="));
+    assert(!strstr(records,"stage_record"));
+    struct bootlog_stats after_log;bootlog_snapshot(&after_log);
+    if(kind!=3)assert(after_log.storage_calls==before_log.storage_calls);
     writer_paused=false;sleep_hook=NULL;
     struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,4));
     int fd=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
@@ -319,7 +325,7 @@ static void logging_backpressure(const char *path,unsigned kind)
     hid_poll_hook=NULL;private_transaction_hook=NULL;
     m.image=original;m.bytes=original_bytes;cleanup();
     const char *names[]={"paused","ring_full","failed_before_probe","failed_at_mount","inactive"};
-    printf("PASS F1-64 HID addr=1 then storage addr=2 on one UHCI, logger=%s, inquiry/mount/read, lost record occupancy; attach_ms=%llu HID polls=%u NAKs=%u reports=%u\n",
+    printf("PASS F1-64 HID addr=1 then storage addr=2 on one UHCI, logger=%s, inquiry/mount/read, asynchronous stage records; attach_ms=%llu HID polls=%u NAKs=%u reports=%u\n",
            names[kind],(unsigned long long)attach_ms,hid_polls,hid_naks,hid_reports);
 }
 int main(int argc,char **argv)

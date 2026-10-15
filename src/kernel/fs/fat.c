@@ -9,10 +9,42 @@ static uint32_t errorbit(struct fat_volume *v) { return cleanbit(v)>>1; }
 static bool valid(struct fat_volume *v, uint32_t c) { return c>=2 && c<v->clusters+2; }
 static bool eoc(struct fat_volume *v, uint32_t c) { return c>=(mask(v)-7); }
 static int corrupt(struct fat_volume *v) { v->readonly=true; v->ro_reasons|=FAT_RO_CORRUPT; v->diagnostic="chain/directory corruption"; return -FS_EUCLEAN; }
+struct fat_prepare_cache {
+    uint64_t start[3];
+    unsigned count[3];
+    uint8_t data[3][BLKDEV_READ_BYTES];
+};
+static uint32_t used_fat_sectors(struct fat_volume *v)
+{ return (uint32_t)(((uint64_t)(v->clusters+2)*v->type+4095)/4096); }
+static int prepare_read(struct fat_volume *v, uint64_t s, void *b)
+{
+    struct fat_prepare_cache *p=v->prepare_cache;
+    if (!p) return v->dev->read(v->dev,v->start+s,1,b);
+    unsigned slot=2, count=1;
+    uint64_t base=s;
+    if (v->type && s>=v->reserved && s<v->reserved+(uint64_t)v->fats*v->fat_sectors) {
+        slot=(unsigned)((s-v->reserved)/v->fat_sectors);
+        uint64_t first=v->reserved+(uint64_t)slot*v->fat_sectors;
+        uint64_t end=first+used_fat_sectors(v);
+        if (s<end) {
+            base=first+((s-first)/BLKDEV_READ_SECTORS)*BLKDEV_READ_SECTORS;
+            count=(unsigned)(end-base);
+            if (count>BLKDEV_READ_SECTORS) count=BLKDEV_READ_SECTORS;
+        }
+    }
+    if (s<p->start[slot] || s-p->start[slot]>=p->count[slot]) {
+        p->count[slot]=0;
+        int e=v->dev->read(v->dev,v->start+base,count,p->data[slot]);
+        if (e) return e;
+        p->start[slot]=base; p->count[slot]=count;
+    }
+    memcpy(b,p->data[slot]+(size_t)(s-p->start[slot])*512,512);
+    return 0;
+}
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     if (file_read_cancelled && file_read_cancelled()) return -4; /* EINTR, before issuance */
     if (s>=v->sectors) return corrupt(v);
-    int e=v->preparing ? v->dev->read(v->dev,v->start+s,1,b) : cache_read(v->cache,v->dev,v->start+s,b);
+    int e=v->preparing ? prepare_read(v,s,b) : cache_read(v->cache,v->dev,v->start+s,b);
     return e ? (e==-FS_EQUARANTINED ? -FS_EIO : e) : 0;
 }
 static int write_error(struct fat_volume *v, int e) {
@@ -27,6 +59,9 @@ static int writable(struct fat_volume *v) {
 }
 static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     if (s>=v->sectors) return corrupt(v);
+    if (v->prepare_cache) for (unsigned i=0;i<3;i++)
+        if (s>=v->prepare_cache->start[i] && s-v->prepare_cache->start[i]<v->prepare_cache->count[i])
+            v->prepare_cache->count[i]=0;
     return write_error(v,v->preparing ? v->dev->write(v->dev,v->start+s,1,b) : cache_write(v->cache,v->dev,v->start+s,b));
 }
 static int barrier(struct fat_volume *v) {
@@ -676,9 +711,9 @@ out:
     cache_workspace_end(v->cache); return e;
 }
 static int reject(struct fat_volume *v, const char *why) { v->diagnostic=why; v->mounted=false; return -FS_EINVAL; }
-static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr, bool preparing) {
+static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr, bool preparing, struct fat_prepare_cache *private) {
     memset(v,0,sizeof(*v)); v->cache=cache; v->dev=dev; v->start=start; v->sectors=sectors;
-    v->preparing=preparing;
+    v->preparing=preparing; v->prepare_cache=private;
     if (!dev || dev->sector_size!=512 || !sectors || start>=dev->capacity || sectors>dev->capacity-start) return reject(v,"device/partition bounds");
     uint8_t b[512], other[512]; int e=readsec(v,0,b); if (e) return e;
     if (fs_rd16(b+510)!=0xaa55 || fs_rd16(b+11)!=512 || (b[0]!=0xe9 && !(b[0]==0xeb && b[2]==0x90))) return reject(v,"BPB signature/sector size/jump");
@@ -722,9 +757,14 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
     if (zero!=((mask(v)&~255u)|v->media) || (v->type==12 ? !eoc(v,one) : (one|(cleanbit(v)|errorbit(v)))!=mask(v))) return reject(v,"FAT reserved entries/media/flags");
     if (cleanbit(v) && !(one&cleanbit(v))) v->ro_reasons|=FAT_RO_DIRTY;
     if (errorbit(v) && !(one&errorbit(v))) v->ro_reasons|=FAT_RO_IO_FLAG;
-    for (uint32_t s=0;s<v->fat_sectors && v->fats==2;s++) {
+    for (uint32_t s=0;s<used_fat_sectors(v) && v->fats==2;s++) {
         if ((e=readsec(v,v->reserved+s,b)) || (e=readsec(v,v->reserved+v->fat_sectors+s,other))) return e;
-        if (memcmp(b,other,512)) v->ro_reasons|=FAT_RO_COPIES;
+        uint64_t left=(uint64_t)(v->clusters+2)*v->type-(uint64_t)s*4096;
+        unsigned bits=left<4096 ? (unsigned)left : 4096;
+        /* The bytes/nibble beyond the final cluster entry are padding, not
+         * allocation metadata (FAT specification 4.4). */
+        if (memcmp(b,other,bits/8) || ((bits&7) && ((b[bits/8]^other[bits/8])&((1u<<(bits&7))-1))))
+            v->ro_reasons|=FAT_RO_COPIES;
     }
     if (!wr) v->ro_reasons|=FAT_RO_REQUEST;
     if (!blkdev_durable(dev)) v->ro_reasons|=FAT_RO_DURABILITY;
@@ -737,10 +777,15 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
     return 0;
 }
 int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr) {
-    return mount_volume(v,cache,dev,start,sectors,wr,false);
+    return mount_volume(v,cache,dev,start,sectors,wr,false,0);
 }
 int fat_prepare(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors) {
-    return mount_volume(v,cache,dev,start,sectors,false,true);
+    struct fat_prepare_cache *private=fs_contig_alloc(sizeof(*private));
+    if (!private) return -FS_ENOMEM;
+    int e=mount_volume(v,cache,dev,start,sectors,false,true,private);
+    v->prepare_cache=0;
+    fs_contig_free(private,sizeof(*private));
+    return e;
 }
 int fat_enable_write(struct fat_volume *v) {
     if (!v || !v->mounted) return -FS_EINVAL;

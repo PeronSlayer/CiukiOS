@@ -82,16 +82,17 @@ static volatile uint32_t *uhci_dma(void *c,uint32_t address,unsigned bytes)
 static bool uhci_transaction(void *c,uint32_t address,uint32_t qh,volatile uint32_t *td)
 {
     (void)c;
-    if(address!=m.h.dma_phys+USB_TD) {
+    if(address!=m.h.dma_phys+USB_TD && !(address>=m.h.dma_phys+USB_BULK_TD && address<m.h.dma_phys+USB_BULK_TD+USB_BULK_BATCH*16)) {
         assert(private_transaction_hook);return private_transaction_hook(address,qh,td);
     }
     assert(qh==m.h.dma_phys+(((td[2]>>15)&15) ? USB_UHCI_BULK_QH:USB_UHCI_CONTROL_QH));
     unsigned other=((td[2]>>15)&15) ? USB_UHCI_CONTROL_QH:USB_UHCI_BULK_QH;
     assert(uhci_dma(NULL,m.h.dma_phys+other,8)[1]&1); /* shared TD has one owner */
-    assert(td[0]==1 && td[3]==m.h.dma_phys+USB_BUFFER);
+    assert(address==m.h.dma_phys+USB_TD ? td[0]==1 && td[3]==m.h.dma_phys+USB_BUFFER :
+           td[3]==m.h.dma_phys+USB_BULK_BUFFER+(address-m.h.dma_phys-USB_BULK_TD)*4);
     unsigned n=(((td[2]>>21)&0x7ff)+1)&0x7ff;
     assert(n<=64 && ((td[2]>>8)&127)==device()->address);
-    int got=packet(device(),(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,m.dma+USB_BUFFER,n,false);
+    int got=packet(device(),(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,m.dma+(td[3]-m.h.dma_phys),n,false);
     if(got==-USB_EAGAIN) {
         td[1]|=1u<<19;m.naks++;
         if(m.late_ack) {m.latched=true;m.latched_qh=qh;}
@@ -284,7 +285,7 @@ static void use_uhci(void)
     for(unsigned i=0;i<1024;i++) ((uint32_t *)m.dma)[i]=(m.h.dma_phys+USB_ED)|2;
 }
 static void cleanup(void)
-{storage_destroy(storage_get());fs_lock_destroy(&m.h.transfer_lock);assert(!munmap(m.image,m.bytes));if(m.second_image)assert(!munmap(m.second_image,m.bytes));}
+{storage_destroy(storage_get());assert(!fs_host_contig_live);fs_lock_destroy(&m.h.transfer_lock);assert(!munmap(m.image,m.bytes));if(m.second_image)assert(!munmap(m.second_image,m.bytes));}
 static void attach(void)
 {assert(!usb_storage_attach(device()));}
 static void mount_device(void) {attach();usb_storage_service(&m.h);assert(storage_get()->vfs.volumes[4]);}
@@ -560,11 +561,89 @@ static void readiness_bounds(const char *path)
     }
     puts("PASS F1-62 readiness: initialization-required fails immediately, UNIT ATTENTION limited to three probes, frozen clock has finite polling");
 }
+static void prepare_validation(const char *path)
+{
+    for(unsigned kind=0;kind<4;kind++) {
+        setup(path,true);use_uhci();
+        unsigned reserved=fs_rd16(m.image+14), sectors=fs_rd32(m.image+36);
+        if(kind==0) {
+            fs_wr32(m.image+(reserved+sectors)*512+127*4,0x0fffffff);
+        } else if(kind==1) {
+            for(unsigned copy=0;copy<2;copy++)fs_wr32(m.image+(reserved+copy*sectors)*512+127*4,0x0fffffff);
+        } else if(kind==2)fs_host_contig_fail=1;
+        else {
+            unsigned total=fs_rd32(m.image+32), clusters=(total-reserved-2*sectors)/m.image[13];
+            m.image[(reserved+sectors)*512+(clusters+2)*4]^=0xa5;
+        }
+        attach();usb_storage_service(&m.h);
+        if(kind<2) {
+            struct storage_volume *v=&storage_get()->volumes[4];
+            assert(device()->storage.published && v->fat.readonly && !m.writes);
+            assert(v->fat.ro_reasons&(kind ? FAT_RO_LOST : FAT_RO_COPIES));
+            assert(!v->fat.prepare_cache);
+        } else if(kind==2)assert(!device()->storage.published && block()->quarantined && !m.writes);
+        else assert(device()->storage.published && !storage_get()->volumes[4].fat.readonly);
+        cleanup();
+    }
+    puts("PASS F1-66 private mount windows retain copy/lost-cluster write refusal, fail closed on allocation failure and release all pages");
+}
+static bool budget_log_delay;
+static void delay_after_publication(const char *line,size_t n)
+{
+    (void)n;
+    if(budget_log_delay && strstr(line,"[usb-storage] volume drive=E")) {
+        assert(device()->storage.published && !device()->storage.binding);
+        budget_log_delay=false;m.now+=USB_BIND_TIMEOUT_MS;
+    }
+}
+static void fat32_budget(const char *path)
+{
+    setup(path,true);use_uhci();
+    size_t mapped=m.bytes;
+    memset(m.image,0,2*1024*1024);
+    uint8_t *b=m.image;
+    b[0]=0xeb;b[1]=0x58;b[2]=0x90;fs_wr16(b+11,512);b[13]=64;
+    fs_wr16(b+14,32);b[16]=2;b[21]=0xf8;
+    fs_wr32(b+32,8388608);fs_wr32(b+36,1024);fs_wr32(b+44,2);
+    fs_wr16(b+48,1);fs_wr16(b+50,6);fs_wr16(b+510,0xaa55);
+    memcpy(b+6*512,b,512);
+    fs_wr32(b+512,0x41615252);fs_wr32(b+512+484,0x61417272);fs_wr32(b+512+508,0xaa550000);
+    fs_wr32(b+512+488,UINT32_MAX);fs_wr32(b+512+492,UINT32_MAX);
+    for(unsigned copy=0;copy<2;copy++) {
+        uint8_t *fat=b+(32+copy*1024)*512;
+        fs_wr32(fat,0x0ffffff8);fs_wr32(fat+4,0x0fffffff);
+        fs_wr32(fat+8,0x0fffffff);fs_wr32(fat+12,0x0fffffff);
+    }
+    uint8_t *root=b+2080*512;memcpy(root,"SHORT   BIN",11);root[11]=FAT_ATTR_ARCHIVE;
+    fs_wr16(root+26,3);fs_wr32(root+28,512);memset(root+64*512,0x5a,512);
+    m.bytes=UINT64_C(4)*1024*1024*1024;
+    m.mbr[450]=0x0c;fs_wr32(m.mbr+458,8388608);
+    uint64_t begin=m.now;
+    mount_device();
+    uint64_t bind_ms=m.now-begin;
+    struct usb_storage *s=&device()->storage;
+    assert(bind_ms<5000 && s->published && !block()->quarantined && !storage_get()->volumes[4].fat.readonly);
+    assert(s->bind_read_max==128 && s->bind_read_requests<64 && s->bind_read_sectors<4096);
+    struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,4));
+    int fd=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
+    uint8_t data[512];size_t got;assert(!vfs_read(&table,fd,data,sizeof(data),&got) && got==512);
+    for(unsigned i=0;i<512;i++)assert(data[i]==0x5a);
+    assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
+    printf("PASS F1-66 4 GiB FAT32, 32 KiB clusters: bind_ms=%llu requests=%u sectors=%u max_sectors=%u poll_frames=%u retire_frames=%u, E: read/write gate retained\n",
+           (unsigned long long)bind_ms,s->bind_read_requests,s->bind_read_sectors,s->bind_read_max,s->bind_poll_frames,s->bind_retire_frames);
+    m.bytes=mapped;cleanup();
+    setup(path,true);use_uhci();budget_log_delay=true;log_hook=delay_after_publication;
+    mount_device();log_hook=NULL;
+    assert(!budget_log_delay && device()->storage.published && !device()->storage.binding && !block()->quarantined);
+    assert(strstr(records,"published=1 overrun=1") && !strstr(records,"quarantine"));
+    assert(!block()->read(block(),m.offset,1,data));cleanup();
+    puts("PASS F1-66 post-publication log delay exceeds 20 s: overrun recorded, volume retained and readable, no deadline quarantine");
+}
 int main(int argc,char **argv)
 {
     assert(argc==4);
     if(getenv("USB_TEST_F1_60_MOUNT_ONLY")) {failed_mount(argv[2]);return 0;}
-    failed_mount(argv[2]);
+    prepare_validation(argv[3]);fat32_budget(argv[3]);failed_mount(argv[2]);
     if(getenv("USB_TEST_F1_47_ONLY")) {uhci_transport(argv[2]);return 0;}
     uhci_transport(argv[2]);attach_tolerance(argv[2]);readiness_bounds(argv[2]);
     io_mount(argv[1],false,12);io_mount(argv[2],true,16);io_mount(argv[3],true,32);

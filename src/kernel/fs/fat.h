@@ -30,6 +30,7 @@ struct fat_volume {
     uint16_t fsinfo, backup; uint8_t type, spc, fats, media, active_fat;
     bool mounted, readonly, writable_session, dirty_recovered;
     bool preparing; /* unpublished mount: complete direct I/O, no cache mutex */
+    struct fat_prepare_cache *prepare_cache; /* private, freed before publication */
     const char *diagnostic;
     /* Read observations, possibly repeated by lookups; never on-disk counts. */
     uint32_t lfn_orphans, lfn_bad_checksum, lfn_invalid;

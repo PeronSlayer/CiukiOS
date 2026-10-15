@@ -3,11 +3,6 @@
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
 #include <ciuki/storage.h>
-#include <ciuki/bootlog.h>
-/* Standalone controller fixtures need no disk sink. */
-#pragma weak bootlog_sync
-#pragma weak bootlog_try_sync
-#pragma weak bootlog_snapshot
 
 static uint32_t be32(const uint8_t *p)
 { return (uint32_t)p[0]<<24 | (uint32_t)p[1]<<16 | (uint32_t)p[2]<<8 | p[3]; }
@@ -41,6 +36,11 @@ static void bulk_packet_record(struct usb_device *d)
     struct usb_storage_trace *t=&d->storage.trace;
     if (t->packet_count<USB_BULK_TRACE_LIMIT) t->packets[t->packet_count]=d->packet_trace;
     t->packet_count++;
+    if (d->storage.binding) {
+        d->storage.bind_packets++;
+        d->storage.bind_poll_frames+=d->packet_trace.poll_frames;
+        d->storage.bind_retire_frames+=d->packet_trace.frames-d->packet_trace.poll_frames;
+    }
 }
 static int bulk_result(struct usb_device *d, int result, const char *stop)
 {
@@ -67,6 +67,12 @@ int usb_bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned
     uint64_t end=bulk_end(d);
     t->packet_count=0; t->packet_index=0; t->packet_offset=0;
     t->bulk_started_ms=d->host->io.now(d->host->io.cookie); t->bulk_deadline=end;
+    if (bytes>512 && d->host->ops->bulk) {
+        s->bulk_deadline=end;
+        int e=d->host->ops->bulk(d,in,data,bytes,actual);
+        s->bulk_deadline=0;
+        return bulk_result(d,e,e ? "packet" : *actual<bytes ? "short" : "complete");
+    }
     while (*actual<bytes) {
         unsigned n=bytes-*actual; if (n>packet) n=packet;
         t->packet_index=t->packet_count; t->packet_offset=*actual;
@@ -325,6 +331,10 @@ static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, b
         if (e && s->published && !b->quarantined) e=fault(d,"readiness_failed",false);
     }
     if (!e) {
+        if (!write && s->binding) {
+            s->bind_read_requests++; s->bind_read_sectors+=count;
+            if (count>s->bind_read_max) s->bind_read_max=count;
+        }
         uint8_t cdb[10]={0}; cdb[0]=write ? 0x2a : 0x28;
         put32(cdb+2,(uint32_t)lba); cdb[7]=(uint8_t)(count>>8); cdb[8]=(uint8_t)count;
         e=command(d,cdb,10,!write,buf,count*512u);
@@ -344,21 +354,6 @@ static bool bind_cancel(void *ctx)
 }
 static void bind_pause(void *ctx)
 { struct usb_device *d=ctx; d->host->io.sleep(d->host->io.cookie,1); }
-static bool bind_log_cancel(void *ctx)
-{ struct usb_device *d=ctx; return usb_expired(d->host,d->storage.bind_deadline); }
-static void bind_stage_log(struct usb_device *d, bool wait)
-{
-    int e=wait ? (bootlog_sync ? bootlog_sync(bind_log_cancel,bind_pause,d) : 0) :
-                 (bootlog_try_sync ? bootlog_try_sync() : 0);
-    if (!e) return;
-    struct bootlog_stats log={0};
-    if (bootlog_snapshot) bootlog_snapshot(&log);
-    /* Lost means durability is unconfirmed; a later writer turn may retain
-     * the record. Neither a log timeout nor a failed sink is a device fault. */
-    klog("[usb-storage] stage_record addr=%u stage=%s record=lost result=%d ring_queued=%u ring_capacity=%u boot_queued=%u queued=%u dropped=%u",
-         d->address,d->storage.bind_stage ? d->storage.bind_stage : "none",e,
-         log.ring_queued,BOOTLOG_RAM,log.boot_queued,log.queued,log.dropped);
-}
 static void bind_stage_finish(struct usb_device *d, int result)
 {
     struct usb_storage *s=&d->storage;
@@ -366,7 +361,6 @@ static void bind_stage_finish(struct usb_device *d, int result)
     klog("[usb-storage] stage=%s addr=%u elapsed_ms=%llu result=%d",s->bind_stage,d->address,
          d->host->io.now(d->host->io.cookie)-s->bind_stage_started_ms,result);
     s->bind_stage_active=false;
-    bind_stage_log(d,false);
 }
 static void bind_stage_begin(struct usb_device *d, const char *name)
 {
@@ -375,7 +369,6 @@ static void bind_stage_begin(struct usb_device *d, const char *name)
     s->bind_stage=name; s->bind_stage_started_ms=d->host->io.now(d->host->io.cookie);
     s->bind_stage_active=true;
     klog("[usb-storage] stage=%s addr=%u",name,d->address);
-    bind_stage_log(d,false);
 }
 /* Each stage enters without a reservation and leaves owning one. The caller
  * checks the return and owns nothing on failure. No log/VFS -> host cycle. */
@@ -481,7 +474,6 @@ int usb_storage_attach(struct usb_device *d)
     if (e) {
         s->block.quarantined=true; s->online=false; d->quarantined=true;
         s->binding=false;
-        bind_stage_log(d,true);
     }
     return e;
 }
@@ -500,7 +492,6 @@ void usb_storage_service(struct usb_host *h)
             bind_stage_begin(d,"mount");
             int e=fault(d,"mount_unavailable",false);
             bind_stage_finish(d,e);d->quarantined=true;s->binding=false;
-            bind_stage_log(d,true);
         }
         return;
     }
@@ -522,12 +513,29 @@ void usb_storage_service(struct usb_host *h)
             if (e) {
                 (void)fault(d,bind_cancel(d) ? "bind_deadline" : "mount_failed",false);
                 d->quarantined=true;
-            } else s->published=true;
+            } else {
+                s->published=true;
+                /* Publication is the commit point. Diagnostic output may
+                 * exceed the budget but cannot revoke a completed mount. */
+                s->binding=false;
+                for (unsigned drive=4;drive<26;drive++) {
+                    struct storage_volume *v=&store->volumes[drive];
+                    if (!v->present || !v->removable || v->part.parent!=&s->block) continue;
+                    klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d",
+                         'A'+drive,v->partition,v->fat.type,v->fat.readonly ? "ro" : "rw",
+                         !!(v->fat.ro_reasons & FAT_RO_DIRTY),v->error);
+                }
+            }
             bind_stage_finish(d,e);
             s->binding=false;
             /* Retain the attempt, including refusal; no recovery loop. */
             klog("[usb-storage] mount addr=%u result=%d",d->address,e);
-            bind_stage_log(d,true);
+            uint64_t elapsed=h->io.now(h->io.cookie)-s->bind_started_ms;
+            klog("[usb-storage] bind addr=%u elapsed_ms=%llu result=%d published=%u overrun=%u reads=%u sectors=%u max_sectors=%u",
+                 d->address,elapsed,e,s->published,elapsed>USB_BIND_TIMEOUT_MS,
+                 s->bind_read_requests,s->bind_read_sectors,s->bind_read_max);
+            klog("[usb-storage] cadence addr=%u packets=%u poll_frames=%u retire_frames=%u batch=%u",
+                 d->address,s->bind_packets,s->bind_poll_frames,s->bind_retire_frames,h->ops->bulk ? USB_BULK_BATCH : 1);
         }
     }
 }

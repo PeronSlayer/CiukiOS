@@ -78,7 +78,7 @@ class QMP:
             elif kind=='rel':
                 valid=data.get('axis') in ('x','y') and type(data.get('value')) is int and abs(data['value'])<=32767
             elif kind=='btn':
-                valid=data.get('button') in ('left','middle','right') and type(data.get('down')) is bool
+                valid=data.get('button') in ('left','middle','right','wheel-up','wheel-down') and type(data.get('down')) is bool
             else:valid=False
             if not valid:raise ValueError('invalid input-send-event batch')
         return self.command('input-send-event',{'events':events})
