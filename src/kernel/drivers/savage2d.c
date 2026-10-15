@@ -552,7 +552,7 @@ static void init_failure_readback(struct savage2d *s)
         bool latest = true;
         for (unsigned j = i + 1; j < init_count; j++)
             if (init_records[i].reg == init_records[j].reg &&
-                !strcmp(init_records[i].bank, init_records[j].bank)) latest = false;
+                !strncmp(init_records[i].bank, init_records[j].bank, 8)) latest = false;
         if (!latest) continue;
         uint32_t reg = init_records[i].reg, value;
         switch (init_records[i].bank[0]) {
