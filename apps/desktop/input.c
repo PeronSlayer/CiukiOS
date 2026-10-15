@@ -165,6 +165,14 @@ void desk_input(struct desktop *d, const struct ciuki_input_event *in)
     }
     switch (e.type) {
     case CIUKI_INPUT_RESYNC:
+        /* The input stream was cut: keys are released below, and the screen may
+         * have been owned by someone else meanwhile (a DOS full-screen session
+         * restores the desktop mode and sends exactly this event). Since f2-65
+         * the desktop presents only on damage, so repaint everything: the
+         * display waits for a full frame after a restore before it allows the
+         * next mode change (display_fullscreen_begin: awaiting_frame). */
+        desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height);
+        d->cursor_dirty = 1;
         release(d, &e); d->drag = -1;
         if (d->shell) {
             const int modifiers[]={0x38,0x138,0x1D,0x11D,0x2A,0x36};
