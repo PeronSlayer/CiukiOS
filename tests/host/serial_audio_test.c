@@ -1,6 +1,7 @@
-/* F4-14/F4-16: production serial queue and a clocked 38400 8N1 UART.
- * Deterministic IRQ preemption plus two host producers and a burst sender.
- * The mutex models the kernel's uniprocessor IRQ lock, not an SMP UART. */
+/* Production transmitter + wait queue with a clocked 38400 8N1 16550.
+ * Fake CPU/PIC/ports only. The mutex models UP IRQ exclusion, not SMP.
+ * Deterministic cost model: 1 us/port access, 64 copied wire bytes/us.
+ * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,321 +9,291 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
-#include <setjmp.h>
-#include <time.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
+#include <ciuki/task.h>
+#include <ciuki/sync.h>
+#include <ciuki/timing.h>
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#c); exit(1); } } while (0)
+#ifndef SERIAL_WITH_OUTPUT
+void klog(const char *fmt, ...) { (void)fmt;CHECK(false); }
+__attribute__((noreturn)) void panic(const char *fmt, ...)
+{ fprintf(stderr,"unexpected panic: %s\n",fmt);abort(); }
+#endif
 
 volatile uint64_t g_ticks;
 struct ciuki_boot_info g_boot;
-static uint32_t cpuid_max = 1, cpuid_features;
-static uint32_t hypervisor_id[3];
-static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
-{
-    *a=*b=*c=*d=0;
-    if (!leaf) *a=cpuid_max;
-    else if (leaf==1) *c=cpuid_features;
-    else if (leaf==0x40000000) {
-        *a=0x40000001;*b=hypervisor_id[0];*c=hypervisor_id[1];*d=hypervisor_id[2];
-    }
-}
+struct task *g_current;
+volatile bool g_need_resched;
+bool g_cpu_tsc;
+uint64_t g_tsc_per_ms;
 static pthread_mutex_t cpu_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local uint32_t flags = 0x200;
-static _Thread_local bool playback_producer;
+static _Thread_local bool playback_producer, in_irq;
+static bool initializing;
+static uint64_t model_ns, critical_start, critical_max;
+static const char *section, *max_section;
+static unsigned copy_start;
+static unsigned queue_size(void);
 static void preempt_writer(void);
-static bool slow_ports;
-static uint64_t latency_us, critical_start, critical_max;
-static unsigned pending_ticks, lost_ticks;
-static void latency_advance(unsigned us)
-{
-    uint64_t before=latency_us/1000;
-    latency_us+=us;
-    unsigned ticks=(unsigned)(latency_us/1000-before);
-    if (flags & 0x200) g_ticks+=ticks;
-    else pending_ticks+=ticks;
-}
+void crit_label(const char *label) { section=label; }
+static uint32_t read_eflags(void) { return flags; }
 static uint32_t irq_save(void)
 {
-    uint32_t f = flags;
+    uint32_t f=flags;
     if (f & 0x200) {
         CHECK(!pthread_mutex_lock(&cpu_lock));
-        critical_start=latency_us;
+        critical_start=model_ns;copy_start=queue_size();section="irq_save";
     }
-    flags = 0;
-    return f;
+    flags=0;return f;
 }
 static void irq_restore(uint32_t f)
 {
-    if ((f & 0x200) && latency_us-critical_start>critical_max)
-        critical_max=latency_us-critical_start;
-    flags = f;
     if (f & 0x200) {
-        if (pending_ticks) { g_ticks++;lost_ticks+=pending_ticks-1;pending_ticks=0; }
-        CHECK(!pthread_mutex_unlock(&cpu_lock));
-        preempt_writer();
-    }
+        unsigned queued=queue_size();
+        if (queued>copy_start) model_ns+=(queued-copy_start+63u)/64u*1000u;
+        model_ns+=1000;
+        if (model_ns-critical_start>critical_max) {
+            critical_max=model_ns-critical_start;max_section=section;
+        }
+        flags=f;CHECK(!pthread_mutex_unlock(&cpu_lock));preempt_writer();
+    } else flags=f;
 }
 
-static uint8_t regs[8];
-static bool present = true, ready, fifo;
-static bool fifo_enabled, timed, poll_clock, stale_thre;
-static unsigned iir_fault;
-static unsigned lsr_reads, filled, lsr_if_off;
+static uint8_t regs[8], holding[16], shift;
+static uint16_t model_base=0x3F8;
+static bool present=true, ready, fifo, fifo_enabled, timed, poll_clock, shifting, thr_pending;
+static unsigned iir_fault, holding_used, overflows, tx_writes, lsr_reads, io_count, rx_reads;
+static unsigned irq_calls, registrations, unmasks, last_irq_bytes;
+static irq_handler_t handlers[16];
+static bool masked[16];
 static char emitted[400000];
 static unsigned emitted_count;
-/* Separate holding FIFO and shift register. LSR reads never empty these.
- * Time is in baud-scaled microseconds: ten 8N1 bits cost 10,000,000 units. */
-static uint8_t holding[16], shift;
-static unsigned holding_used, overflows, tx_writes;
-static bool shifting;
 static uint64_t clock_units, shift_end;
+static bool panic_io(void);
 static void advance_us(unsigned us)
 {
-    uint64_t target = clock_units + (uint64_t)us * 38400;
-    while (shifting && shift_end <= target) {
-        CHECK(emitted_count < sizeof(emitted) - 1);
-        emitted[emitted_count++] = (char)shift;
+    uint64_t target=clock_units+(uint64_t)us*38400;
+    while (shifting && shift_end<=target) {
+        CHECK(emitted_count<sizeof(emitted)-1);
+        emitted[emitted_count++]=(char)shift;
         if (holding_used) {
-            shift = holding[0]; holding_used--;
-            memmove(holding, holding + 1, holding_used);
-            shift_end += 10000000;
-        } else shifting = false;
+            shift=holding[0];holding_used--;memmove(holding,holding+1,holding_used);
+            shift_end+=10000000;
+            if (!holding_used) thr_pending=true;
+        } else shifting=false;
     }
-    clock_units = target;
-}
-static void (*preemption)(void);
-static unsigned preempt_at, preemptions;
-static void (*lsr_preemption)(void);
-static void preempt_writer(void)
-{
-    if ((flags & 0x200) && preemption && emitted_count >= preempt_at) {
-        void (*fn)(void) = preemption;
-        preemption = NULL;
-        preemptions++;
-        fn();
-    }
+    clock_units=target;
 }
 static uint8_t inb(uint16_t p)
 {
-    CHECK(p >= 0x3F8 && p < 0x400);
+    CHECK(!playback_producer || in_irq || panic_io());
+    CHECK(initializing || in_irq || panic_io());
+    CHECK(p>=model_base && p<model_base+8);
+    io_count++;model_ns+=1000;
     if (!present) return 0xFF;
-    unsigned off = p - 0x3F8;
-    if (off == 2) {
-        if (iir_fault == 2) return 0xC0; /* stuck FIFO indication */
-        if (iir_fault == 3 && regs[2] == 1) return 0; /* enable did not stick */
-        return fifo && fifo_enabled ? (iir_fault == 1 ? 0x80 : 0xC0) : 0;
+    unsigned off=p-model_base;
+    if (off==2) {
+        uint8_t bits=fifo_enabled ? 0xC0:0;
+        if (iir_fault==1 && fifo_enabled) bits=0x80;
+        if (iir_fault==2) bits=0xC0;
+        if (iir_fault==3 && regs[2]==1) bits=0;
+        if ((regs[1]&2) && ready && thr_pending) { thr_pending=false;return bits|2; }
+        return bits|1;
     }
-    if (off == 5) {
-        CHECK(!playback_producer);
+    if (off==5) {
         lsr_reads++;
-        if (!(flags & 0x200)) lsr_if_off++;
-        if (slow_ports) latency_advance(130);
-        if (lsr_preemption && (flags&0x200)) {
-            void (*hook)(void)=lsr_preemption;lsr_preemption=NULL;hook();
-        }
-        if (timed) {
-            if (poll_clock) advance_us(1);
-            return ready ? ((!holding_used || stale_thre ? 0x20 : 0) | (!shifting ? 0x40 : 0)) : 0;
-        }
-        if (ready) filled = 0;
-        return ready ? 0x60 : 0;
+        if (poll_clock) advance_us(1);
+        return ready ? ((!holding_used ? 0x20:0) | (!shifting ? 0x40:0)):0;
     }
+    if (!off) rx_reads++;
     return regs[off];
 }
-static void outb(uint16_t p, uint8_t value)
+static void outb(uint16_t p,uint8_t value)
 {
-    CHECK(p >= 0x3F8 && p < 0x400);
-    unsigned off = p - 0x3F8;
-    if (off == 2) {
-        fifo_enabled = fifo && (value & 1) && iir_fault != 1;
-        /* Original 16550 advertises a broken FIFO, but cannot buffer it. */
-        if (iir_fault == 1) fifo_enabled = (value & 1) != 0;
-        if (value & 4) holding_used = 0; /* TX reset does not clear TSR */
+    CHECK(!playback_producer || in_irq || panic_io());
+    CHECK(initializing || in_irq || panic_io());
+    CHECK(p>=model_base && p<model_base+8);
+    io_count++;model_ns+=1000;
+    unsigned off=p-model_base;
+    if (off==1 && !(regs[3]&0x80)) {
+        if ((regs[1]^value)&2) thr_pending=(value&2) && !holding_used;
     }
-    if (off == 0 && !(regs[3] & 0x80)) {
-        CHECK(!(flags & 0x200) && ready);
-        tx_writes++;
-        if (slow_ports) latency_advance(130);
+    if (off==2) {
+        fifo_enabled=(value&1) && (fifo || iir_fault==1);
+        if (value&4) { holding_used=0;thr_pending=true; }
+    }
+    if (!off && !(regs[3]&0x80)) {
+        CHECK(!(flags&0x200) && ready);tx_writes++;thr_pending=false;
         if (timed) {
-            if (!shifting) {
-                shifting = true; shift = value; shift_end = clock_units + 10000000;
-            } else if (holding_used < (fifo_enabled && iir_fault != 1 ? 16u : 1u))
-                holding[holding_used++] = value;
-            else overflows++; /* deliberately observable loss, no assertion */
+            if (!shifting) { shifting=true;shift=value;shift_end=clock_units+10000000;thr_pending=true; }
+            else if (holding_used<(fifo_enabled && iir_fault!=1 ? 16u:1u)) holding[holding_used++]=value;
+            else overflows++;
         } else {
-            CHECK(emitted_count < sizeof(emitted) - 1);
-            CHECK(++filled <= (fifo_enabled ? 16u : 1u));
-            emitted[emitted_count++] = (char)value;
+            CHECK(emitted_count<sizeof(emitted)-1);emitted[emitted_count++]=(char)value;thr_pending=true;
         }
     }
-    regs[off] = value;
-    preempt_writer();
+    regs[off]=value;
 }
-#include <ciuki/task.h>
-struct task *g_current;
-static struct task writer_task;
-static void (*writer_fn)(void *);
-static jmp_buf writer_done;
-static bool writer_running;
-static unsigned writer_creations;
-struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)
-{ CHECK(!strcmp(name, "log-writer") && fn && !arg && prio == P_DEVICE); writer_creations++;writer_fn = fn; return &writer_task; }
-void task_start(struct task *t) { CHECK(t == &writer_task); }
-static unsigned evidence_sleeps;
+void irq_set_handler(unsigned irq,irq_handler_t h)
+{ CHECK(irq<16 && h);handlers[irq]=h;registrations++; }
+void pic_unmask(unsigned irq) { CHECK(irq<16);masked[irq]=false;unmasks++; }
+static void tick(void);
+static unsigned evidence_sleeps, evidence_wakes;
 static void (*evidence_wait_hook)(void);
-void task_sleep_ms(uint32_t ms)
+void task_start(struct task *t) { CHECK(t->state==T_BLOCKED);t->state=T_READY;evidence_wakes++; }
+void schedule(void)
 {
-    CHECK(ms==1);
-    if (writer_running) longjmp(writer_done,1);
-    CHECK(g_current && (flags & 0x200));g_ticks++;evidence_sleeps++;
+    CHECK(!(flags&0x200) && g_current && g_current->state==T_BLOCKED);
+    struct task *waiter=g_current;evidence_sleeps++;
+    irq_restore(0x200);
     if (evidence_wait_hook) {
-        void (*hook)(void)=evidence_wait_hook;evidence_wait_hook=NULL;hook();
+        void (*hook)(void)=evidence_wait_hook;evidence_wait_hook=NULL;
+        struct task other={.state=T_RUNNING};g_current=&other;hook();g_current=waiter;
+    }
+    /* The real kwait waiter stays linked while device IRQs run. */
+    for (unsigned n=0;waiter->state==T_BLOCKED;n++) {
+        CHECK(n<2000);tick();
+        if (g_ticks>=waiter->wake_tick && waiter->wake_tick) waiter->state=T_READY;
+    }
+    CHECK(irq_save()&0x200);waiter->state=T_RUNNING;
+}
+#include "../../src/kernel/core/sync.c"
+#include "../../src/kernel/core/serial.c"
+static unsigned queue_size(void) { return uart_used; }
+static bool panic_io(void) { return uart_panic_mode; }
+static void (*preemption)(void);
+static unsigned preempt_at,preemptions;
+static void preempt_writer(void)
+{
+    if ((flags&0x200) && preemption && emitted_count>=preempt_at) {
+        void (*fn)(void)=preemption;preemption=NULL;preemptions++;fn();
     }
 }
-void kpreempt_point(void) { }
-#include "../../src/kernel/core/serial.c"
-
 static void reset_uart(bool with_fifo)
 {
-    CHECK(flags == 0x200 && !preemption);
-    memset(regs,0,sizeof(regs));
-    fifo=with_fifo;present=ready=true;fifo_enabled=timed=poll_clock=slow_ports=stale_thre=false;
-    iir_fault=holding_used=overflows=tx_writes=pending_ticks=lost_ticks=0;
-    shifting=false;clock_units=shift_end=latency_us=critical_start=critical_max=0;
-    emitted_count=filled=lsr_reads=lsr_if_off=preemptions=writer_creations=0;g_ticks=0;
-    g_current=NULL;evidence_sleeps=0;evidence_wait_hook=NULL;
-    lsr_preemption=NULL;
-    g_boot.flags=0;cpuid_max=1;cpuid_features=0;memset(hypervisor_id,0,sizeof(hypervisor_id));
-    serial_init(0x3F8,3);
-    CHECK(serial_present() && uart_fifo_bytes==(fifo ? 16u:1u));
-    CHECK(uart_budget==2880 && uart_burst_bytes==3);
-    serial_writer_init();
-    serial_writer_init();CHECK(writer_creations==1);
+    CHECK(flags==0x200 && !preemption);
+    memset(regs,0,sizeof(regs));memset(handlers,0,sizeof(handlers));memset(masked,1,sizeof(masked));
+    fifo=with_fifo;present=ready=true;fifo_enabled=timed=poll_clock=shifting=thr_pending=false;
+    iir_fault=holding_used=overflows=tx_writes=lsr_reads=io_count=rx_reads=0;
+    irq_calls=registrations=unmasks=last_irq_bytes=emitted_count=preemptions=0;
+    clock_units=shift_end=0;g_ticks=0;g_current=NULL;g_need_resched=false;
+    evidence_sleeps=evidence_wakes=0;evidence_wait_hook=NULL;g_boot.flags=0;
+    initializing=true;serial_init(model_base,3);serial_writer_init();serial_writer_init();initializing=false;
+    CHECK(serial_present() && uart_fifo_bytes==(with_fifo ? 16u:1u));
+    CHECK(registrations==1 && unmasks==1 && regs[3]==3 && (regs[4]&8));
+    CHECK(!uart_armed && !(regs[1]&2));
+    io_count=0;model_ns=critical_start=critical_max=0;max_section="none";
 }
-static void writer_step(void)
+static bool irq_pending(void)
+{ return ready && (regs[1]&2) && (regs[4]&8) && thr_pending && !masked[uart_irq]; }
+static void deliver_one(void)
 {
-    CHECK(flags==0x200 && !writer_running);
-    writer_running=true;
-    if (!setjmp(writer_done)) writer_fn(NULL);
-    writer_running=false;
+    CHECK(!(flags&0x200));in_irq=true;
+    unsigned before=tx_writes;struct trap_frame tf={.vector=0x20+uart_irq};
+    handlers[uart_irq](&tf);irq_calls++;last_irq_bytes=tx_writes-before;
+    CHECK(last_irq_bytes<=uart_fifo_bytes);in_irq=false;
 }
 static void tick(void)
 {
-    uint32_t f=irq_save();
-    unsigned before=lsr_reads,at=tx_writes;
-    serial_tick();
-    CHECK(lsr_reads==before && tx_writes==at); /* IRQ is never a consumer */
-    if (timed) advance_us(1000);
-    if (!slow_ports) g_ticks++;
-    irq_restore(f);
-    if (slow_ports) latency_advance(1000);
-    writer_step();
+    uint32_t f=irq_save();in_irq=true;
+    unsigned before=tx_writes,reads=lsr_reads;
+    serial_tick();CHECK(tx_writes==before && lsr_reads==reads);
+    advance_us(1000);g_ticks++;in_irq=false;irq_restore(f);
+    /* Chardev THRE edges run immediately, with no synthetic PIT pacing. */
+    for (unsigned n=0;n<UART_LOG_BYTES+1;n++) {
+        f=irq_save();
+        if (!irq_pending()) { irq_restore(f);break; }
+        deliver_one();irq_restore(f);
+        CHECK(n<UART_LOG_BYTES);
+    }
 }
 static void drain_uart(void)
 {
     ready=true;
-    for (unsigned i=0;i<sizeof(emitted) && (uart_used || uart_drop_notice || shifting);i++) tick();
-    CHECK(!uart_used && !uart_record_count && !uart_drop_notice && !shifting);
+    for (unsigned n=0;n<40000 && (uart_used || shifting);n++) tick();
+    CHECK(!uart_used && !uart_record_count && !shifting && !overflows);
     emitted[emitted_count]=0;
+}
+static uint64_t protected_write(const char *s,size_t n)
+{
+    uint32_t f=serial_evidence_begin(2*n);
+    uint64_t ticket=serial_write_ticket(s,n);irq_restore(f);return ticket;
 }
 static const char task_record[]="[task] complete record A with a long payload\n";
 static const char irq_record[]="[irq] complete record B\n";
-static const char expected_pair[]=
-    "[task] complete record A with a long payload\r\n[irq] complete record B\r\n";
+static const char expected_pair[]="[task] complete record A with a long payload\r\n[irq] complete record B\r\n";
 static bool panic_preemption;
 static void second_producer(void)
 {
-    uint32_t f=irq_save();
-    if (panic_preemption) serial_panic();
-    serial_write(irq_record,sizeof(irq_record)-1);
-    unsigned reads=lsr_reads,writes=tx_writes;
-    serial_tick();CHECK(reads==lsr_reads && writes==tx_writes);
-    irq_restore(f);
+    uint32_t f=irq_save();if (panic_preemption) serial_panic();
+    serial_write(irq_record,sizeof(irq_record)-1);irq_restore(f);
 }
-static void preemption_tests(bool with_fifo)
+static void ordering_tests(bool with_fifo)
 {
-    for (unsigned mode=0;mode<2;mode++) {
-        panic_preemption=mode;
-        for (unsigned at=1;at<sizeof(task_record);at++) {
-            reset_uart(with_fifo);
-            preempt_at=at;preemption=second_producer;
-            serial_write(task_record,sizeof(task_record)-1);
-            drain_uart();
-            CHECK(preemptions==1 && !strcmp(emitted,expected_pair));
-        }
+    for (unsigned mode=0;mode<2;mode++) for (unsigned at=1;at<sizeof(task_record);at++) {
+        reset_uart(with_fifo);panic_preemption=mode;preempt_at=at;preemption=second_producer;
+        serial_write(task_record,sizeof(task_record)-1);drain_uart();
+        CHECK(preemptions==1 && !strcmp(emitted,expected_pair));
     }
+    reset_uart(with_fifo);playback_producer=true;
+    char source[]="producer owns no ports\n";
+    serial_write(source,sizeof(source)-1);
+    uint32_t f=irq_save();serial_write(source,sizeof(source)-1);irq_restore(f);
+    CHECK(protected_write("evidence\n",9));serial_buffered(true);
+    struct serial_stats s;serial_snapshot(&s);CHECK(serial_dropped()==0);
+    CHECK(!io_count && !lsr_reads && !tx_writes && s.accepted==3);
+    playback_producer=false;memset(source,'?',sizeof(source));drain_uart();
+    CHECK(!strcmp(emitted,"producer owns no ports\r\nproducer owns no ports\r\nevidence\r\n"));
+    /* A spurious/non-TX source must not consume a byte, even if queued. */
+    reset_uart(with_fifo);serial_write("abcd",4);
+    f=irq_save();deliver_one();irq_restore(f);CHECK(!tx_writes && uart_used==4 && !rx_reads);
+    drain_uart();
+    printf("serial ordering %s: task/IRQ interleaving, source ownership, zero producer port accesses, IIR source gate PASS\n",with_fifo ? "16550":"16450");
 }
 static void admission_tests(bool with_fifo)
 {
-    reset_uart(with_fifo);ready=false;
-    char source[1001];memset(source,'P',sizeof(source));source[1000]='\n';
-    playback_producer=true;
-    serial_write(source,sizeof(source));
-    uint32_t f=irq_save();serial_write(source,sizeof(source));irq_restore(f);
-    unsigned used_before=uart_used;
-    serial_write(source,sizeof(source));
-    serial_write(source,SIZE_MAX); /* reject before reading the source */
-    playback_producer=false;
-    CHECK(!lsr_reads && !tx_writes && uart_used==used_before && uart_record_count==2 && serial_dropped()==2);
-    memset(source,'?',sizeof(source));drain_uart();
-    CHECK(emitted_count==2004+strlen("[serial] dropped=2\r\n"));
-    for (unsigned row=0;row<2;row++) {
-        for (unsigned i=0;i<1000;i++) CHECK(emitted[row*1002+i]=='P');
-        CHECK(!memcmp(emitted+row*1002+1000,"\r\n",2));
-    }
-    CHECK(!strcmp(emitted+2004,"[serial] dropped=2\r\n"));
-    /* The window counts expanded wire bytes, and does not bank idle quota. */
-    reset_uart(with_fifo);char newlines[SERIAL_RECORD_MAX];memset(newlines,'\n',sizeof(newlines));
-    serial_write(newlines,sizeof(newlines));CHECK(serial_dropped()==1 && !uart_used);
-    g_ticks=999;serial_write("ok\n",3);CHECK(uart_admitted==4);
-    g_ticks=1000;serial_write("next\n",5);CHECK(uart_admitted==6);
-    g_ticks=100000;serial_write("later\n",6);CHECK(uart_admitted==7);
-    drain_uart();CHECK(!strcmp(emitted,"ok\r\nnext\r\nlater\r\n[serial] dropped=1\r\n"));
-    /* Descriptor capacity is bounded independently of byte capacity. */
-    reset_uart(with_fifo);
-    for (unsigned i=0;i<UART_RECORD_SLOTS+1;i++) serial_write("x",1);
-    CHECK(uart_record_count==UART_RECORD_SLOTS && uart_dropped==1);
-    drain_uart();
-    /* Quota windows cannot hide a stopped consumer's byte-ring overflow. */
     reset_uart(with_fifo);char block[SERIAL_RECORD_MAX];memset(block,'X',sizeof(block));
-    for (unsigned i=0;i<UART_LOG_BYTES/sizeof(block);i++) {
-        g_ticks+=1000;serial_write(block,sizeof(block));
-    }
-    CHECK(uart_used==UART_LOG_BYTES && !uart_dropped);
-    g_ticks+=1000;serial_write("REJECT\n",7);
-    CHECK(uart_used==UART_LOG_BYTES && uart_dropped==1);
-    memset(block,'?',sizeof(block));drain_uart();
-    CHECK(emitted_count==UART_LOG_BYTES+strlen("[serial] dropped=1\r\n"));
-    for (unsigned i=0;i<UART_LOG_BYTES;i++) CHECK(emitted[i]=='X');
-    CHECK(!strcmp(emitted+UART_LOG_BYTES,"[serial] dropped=1\r\n"));
-    /* Wrap both rings, publishing each complete maximum-size record. */
-    reset_uart(with_fifo);char large[SERIAL_RECORD_MAX];memset(large,'W',sizeof(large));large[sizeof(large)-1]='\n';
-    for (unsigned i=0;i<40;i++) {
-        uint32_t saved=irq_save();g_ticks+=1000;irq_restore(saved);
-        serial_write(large,sizeof(large));drain_uart();
-    }
-    CHECK(!uart_dropped && emitted_count==40*(SERIAL_RECORD_MAX+1));
-    for (unsigned i=0;i<40;i++) {
-        const char *record=emitted+i*(SERIAL_RECORD_MAX+1);
-        for (unsigned j=0;j<SERIAL_RECORD_MAX-1;j++) CHECK(record[j]=='W');
-        CHECK(!memcmp(record+SERIAL_RECORD_MAX-1,"\r\n",2));
-    }
+    for (unsigned i=0;i<(UART_LOG_BYTES-UART_EVIDENCE_BYTES)/sizeof(block);i++) serial_write(block,sizeof(block));
+    CHECK(uart_used==UART_LOG_BYTES-UART_EVIDENCE_BYTES && !uart_dropped);
+    CHECK(!serial_write_ticket("REJECT\n",7));
+    for (unsigned i=0;i<UART_EVIDENCE_BYTES/sizeof(block);i++) CHECK(protected_write(block,sizeof(block)));
+    CHECK(uart_used==UART_LOG_BYTES && !serial_write_ticket("REJECT\n",7));
+    CHECK(!protected_write("EVIDENCE REJECT\n",16));
+    CHECK(uart_dropped==3 && uart_periodic_dropped==2 && uart_evidence_dropped==1);
+    CHECK(!io_count);memset(block,'?',sizeof(block));drain_uart();CHECK(emitted_count==UART_LOG_BYTES);
+    for (unsigned i=0;i<emitted_count;i++) CHECK(emitted[i]=='X');
+    reset_uart(with_fifo);
+    for (unsigned i=0;i<UART_RECORD_SLOTS-UART_EVIDENCE_SLOTS;i++) serial_write("x",1);
+    CHECK(!serial_write_ticket("rejected",8));
+    for (unsigned i=0;i<UART_EVIDENCE_SLOTS;i++) CHECK(protected_write("x",1));
+    CHECK(uart_record_count==UART_RECORD_SLOTS && !protected_write("rejected",8));
+    drain_uart();CHECK(emitted_count==UART_RECORD_SLOTS && uart_dropped==2);
+    reset_uart(with_fifo);serial_write("x",SIZE_MAX);serial_write("x",SERIAL_RECORD_MAX+1);
+    CHECK(uart_dropped==2 && !uart_used && !io_count);
+    char ends[SERIAL_RECORD_MAX];memset(ends,'\n',sizeof(ends));serial_write(ends,sizeof(ends));drain_uart();
+    CHECK(emitted_count==UART_RECORD_BYTES);
+    for (unsigned i=0;i<emitted_count;i+=2) CHECK(emitted[i]=='\r' && emitted[i+1]=='\n');
+    /* Wrap both rings without modifying accepted records or their tickets. */
+    reset_uart(with_fifo);memset(block,'W',sizeof(block));block[sizeof(block)-1]='\n';
+    for (unsigned i=0;i<1100;i++) { serial_write(block,i<40 ? sizeof(block):1);drain_uart(); }
+    CHECK(!uart_dropped && uart_accepted==1100 && uart_sent==1100);
+    printf("serial admission %s: whole byte/descriptor drops, reserved evidence bytes/slots, CRLF/max bounds, both rings wrap PASS\n",with_fifo ? "16550":"16450");
 }
 enum { PRODUCERS=2, RECORDS=100 };
 static atomic_uint producers_done;
-static size_t producer_record(char *s,size_t size,unsigned id,unsigned seqno)
+static size_t producer_record(char *s,size_t size,unsigned id,unsigned number)
 {
-    int n=snprintf(s,size,"[producer=%u] seq=%03u payload=AAAAAAAAAAAAAAAA\n",id,seqno);
+    int n=snprintf(s,size,"[producer=%u] seq=%03u payload=AAAAAAAAAAAAAAAA\n",id,number);
     CHECK(n>0 && (size_t)n<size);return (size_t)n;
 }
 static void *producer(void *arg)
 {
     unsigned id=*(unsigned *)arg;playback_producer=true;
     for (unsigned i=0;i<RECORDS;i++) {
-        char record[96];size_t n=producer_record(record,sizeof(record),id,i);
-        if (id) { uint32_t f=irq_save();serial_write(record,n);irq_restore(f); }
-        else serial_write(record,n);
+        char s[96];size_t n=producer_record(s,sizeof(s),id,i);
+        if (id) { uint32_t f=irq_save();serial_write(s,n);irq_restore(f); }
+        else serial_write(s,n);
         sched_yield();
     }
     playback_producer=false;atomic_fetch_add(&producers_done,1);return NULL;
@@ -331,10 +302,8 @@ static void *sender(void *arg)
 {
     (void)arg;
     for (;;) {
-        uint32_t f=irq_save();
-        bool done=atomic_load(&producers_done)==PRODUCERS && !uart_used && !uart_drop_notice;
-        irq_restore(f);if (done) break;
-        tick();sched_yield();
+        uint32_t f=irq_save();bool done=atomic_load(&producers_done)==PRODUCERS && !uart_used;
+        irq_restore(f);if (done) break;tick();sched_yield();
     }
     return NULL;
 }
@@ -342,261 +311,135 @@ static void concurrent_tests(bool with_fifo)
 {
     reset_uart(with_fifo);atomic_store(&producers_done,0);
     pthread_t a,b,c;unsigned ids[2]={0,1};
-    CHECK(!pthread_create(&c,NULL,sender,NULL));
-    CHECK(!pthread_create(&a,NULL,producer,&ids[0]));CHECK(!pthread_create(&b,NULL,producer,&ids[1]));
+    CHECK(!pthread_create(&c,NULL,sender,NULL));CHECK(!pthread_create(&a,NULL,producer,&ids[0]));
+    CHECK(!pthread_create(&b,NULL,producer,&ids[1]));
     CHECK(!pthread_join(a,NULL) && !pthread_join(b,NULL) && !pthread_join(c,NULL));
-    emitted[emitted_count]=0;bool seen[2][RECORDS]={{false}};unsigned kept=0,notices=0;
-    for (const char *line=emitted;*line;) {
-        const char *end=strstr(line,"\r\n");CHECK(end);
-        if (!strncmp(line,"[serial] dropped=",17)) notices++;
-        else {
-            unsigned id,n;CHECK(sscanf(line,"[producer=%u] seq=%u",&id,&n)==2);
-            CHECK(id<2 && n<RECORDS && !seen[id][n]);seen[id][n]=true;
-            char expected[96];size_t bytes=producer_record(expected,sizeof(expected),id,n);
-            expected[bytes-1]='\r';expected[bytes++]='\n';
-            CHECK((size_t)(end+2-line)==bytes && !memcmp(line,expected,bytes));kept++;
-        }
-        line=end+2;
+    emitted[emitted_count]=0;bool seen[2][RECORDS]={{false}};unsigned rows=0;
+    for (const char *p=emitted;*p;) {
+        const char *end=strstr(p,"\r\n");unsigned id,n;CHECK(end);
+        CHECK(sscanf(p,"[producer=%u] seq=%u",&id,&n)==2 && id<2 && n<RECORDS && !seen[id][n]);
+        seen[id][n]=true;char expected[96];size_t length=producer_record(expected,sizeof(expected),id,n);
+        expected[length-1]='\r';expected[length++]='\n';
+        CHECK((size_t)(end+2-p)==length && !memcmp(p,expected,length));rows++;p=end+2;
     }
-    CHECK(kept+uart_dropped==2*RECORDS && kept);
-    CHECK((uart_dropped!=0)==(notices!=0));
-    printf("serial concurrent %s: %u whole records + %u whole drops = 200, %u notices PASS\n",
-           with_fifo ? "16550":"16450",kept,uart_dropped,notices);
+    CHECK(rows==200 && !uart_dropped);
+    printf("serial concurrent %s: 200 complete ordered records, zero drops/interleaved/resent bytes PASS\n",with_fifo ? "16550":"16450");
 }
 static void line_rate_case(bool with_fifo,unsigned fault)
 {
-    reset_uart(with_fifo);iir_fault=fault;regs[7]=0x39;serial_init(0x3F8,3);
+    reset_uart(with_fifo);iir_fault=fault;regs[7]=0x39;
+    initializing=true;serial_init(model_base,3);serial_writer_init();initializing=false;
     CHECK(regs[7]==0x39 && uart_fifo_bytes==(with_fifo && !fault ? 16u:1u));
-    timed=true;
-    char expected[8192];unsigned length=0,accepted=0;
+    timed=true;lsr_reads=io_count=0;
+    char record[96],expected[8192];unsigned length=0;
     for (unsigned i=0;i<100;i++) {
-        char record[96];int n=snprintf(record,sizeof(record),"[usb] controller=%02u payload=abcdefghijklmnopqrstuvwxyz0123456789\n",i);
-        unsigned drops=uart_dropped;serial_write(record,(size_t)n);
-        if (drops==uart_dropped) {
-            memcpy(expected+length,record,(size_t)n-1);length+=(unsigned)n-1;
-            expected[length++]='\r';expected[length++]='\n';accepted++;
-        }
+        int n=snprintf(record,sizeof(record),"[usb] controller=%02u payload=abcdefghijklmnopqrstuvwxyz0123456789\n",i);
+        serial_write(record,(size_t)n);memcpy(expected+length,record,(size_t)n-1);length+=(unsigned)n-1;
+        expected[length++]='\r';expected[length++]='\n';
     }
-    unsigned dropped=100-accepted;
-    length+=(unsigned)snprintf(expected+length,sizeof(expected)-length,"[serial] dropped=%u\r\n",dropped);
-    CHECK(dropped && !lsr_reads && !tx_writes && uart_admitted<=uart_budget-UART_NOTICE_BYTES);
+    CHECK(!uart_dropped && !io_count);
     unsigned milliseconds=0;
-    while (uart_used || uart_drop_notice || shifting) {
-        tick();milliseconds++;
-        CHECK(milliseconds<10000 && !overflows);
-        CHECK((uint64_t)emitted_count*100 <= (uint64_t)milliseconds*384);
-        CHECK(tx_writes-emitted_count<=(with_fifo && !fault ? 17u:2u));
+    while (uart_used || shifting) {
+        tick();milliseconds++;CHECK(milliseconds<10000 && !overflows);
+        CHECK((uint64_t)emitted_count*100<=(uint64_t)milliseconds*384);
+        CHECK(tx_writes-emitted_count<=uart_fifo_bytes+1);
     }
-    CHECK(emitted_count==length && !memcmp(emitted,expected,length) && !lsr_if_off);
-    printf("serial 38400 %s IIR-fault=%u: %u complete wire bytes/%u ms, %u whole drops, zero FIFO overflows PASS\n",
-           with_fifo ? "16550A":"16450",fault,emitted_count,milliseconds,dropped);
-    /* No second normal sender, including timer calls during a busy FIFO. */
-    unsigned before=lsr_reads,at=tx_writes;
-    uint32_t f=irq_save();serial_tick();irq_restore(f);
-    CHECK(before==lsr_reads && at==tx_writes);
+    CHECK(emitted_count==length && !memcmp(emitted,expected,length) && !lsr_reads && !rx_reads && irq_calls);
+    /* Empty IRQ disabled; the first subsequent record is restarted with
+     * one control write by IRQ0, then delivered by an actual THRE IRQ. */
+    CHECK(!uart_armed && !(regs[1]&2));unsigned old=io_count;
+    for (unsigned i=0;i<10;i++) tick();CHECK(io_count==old);
+    serial_write("idle restart\n",13);CHECK(io_count==old);drain_uart();
+    printf("serial 38400 %s IIR-fault=%u: %u exact wire bytes/%u ms, zero polling/FIFO overflows, idle rearm PASS\n",with_fifo ? "16550":"16450",fault,length,milliseconds);
 }
 static void panic_tests(bool with_fifo)
 {
-    reset_uart(with_fifo);serial_buffered(true);
-    serial_write(task_record,sizeof(task_record)-1);tick();
-    uint32_t f=irq_save();serial_panic();serial_write(irq_record,sizeof(irq_record)-1);irq_restore(f);
-    emitted[emitted_count]=0;CHECK(!strcmp(emitted,expected_pair) && !uart_used);
+    reset_uart(with_fifo);timed=poll_clock=true;serial_write(task_record,sizeof(task_record)-1);tick();
+    CHECK(tx_writes && uart_used);
+    unsigned before=tx_writes;uint32_t f=irq_save();serial_panic();
+    serial_write(irq_record,sizeof(irq_record)-1);irq_restore(f);
+    emitted[emitted_count]=0;
+    CHECK(!strcmp(emitted,expected_pair) && tx_writes==sizeof(expected_pair)-1 && tx_writes>before);
+    CHECK(!shifting && !holding_used && !(regs[1]&2) && !uart_used && serial_present());
+    unsigned writes=tx_writes;tick();CHECK(tx_writes==writes);
     reset_uart(with_fifo);ready=false;serial_write(task_record,sizeof(task_record)-1);
     f=irq_save();serial_panic();irq_restore(f);
-    CHECK(!serial_present() && !emitted_count && uart_used==sizeof(task_record));
-    CHECK(lsr_reads==UART_POLL_LIMIT*UART_DEAD_LIMIT);
-    reset_uart(with_fifo);timed=poll_clock=true;
-    serial_write(task_record,sizeof(task_record)-1);
+    CHECK(!serial_present() && !emitted_count && lsr_reads==UART_POLL_LIMIT*UART_DEAD_LIMIT);
+    reset_uart(with_fifo);timed=true;serial_write("x",1);tick();
     f=irq_save();serial_panic();irq_restore(f);
-    while (shifting) advance_us(1000);
-    CHECK(!overflows && emitted_count==sizeof(task_record));
-}
-static void slow_port_test(void)
-{
-    reset_uart(true);slow_ports=true;
-    /* The old 16-write IRQ lock accounts for 2080 us at this port latency. */
-    uint32_t f=irq_save();latency_advance(16*130);irq_restore(f);
-    CHECK(critical_max==2080 && lost_ticks==1);
-    reset_uart(true);slow_ports=true;
-    for (unsigned i=0;i<40;i++) serial_write(task_record,sizeof(task_record)-1);
-    drain_uart();CHECK(!uart_dropped && critical_max==130 && !lost_ticks && !lsr_if_off);
-    printf("serial slow ports: 16-write lock 2080 us/1 lost tick; production max IRQ-off %llu us/zero lost ticks, readiness with IF=1 PASS\n",
-           (unsigned long long)critical_max);
+    CHECK(!serial_present() && lsr_reads==UART_POLL_LIMIT); /* TEMT, no THRE confusion */
+    printf("serial panic %s: partial FIFO takeover, no duplicate bytes/reset, final TEMT, finite stuck-TX/TEMT bounds PASS\n",with_fifo ? "16550":"16450");
 }
 static void evidence_test(void)
 {
+    reset_uart(true);char fill[SERIAL_RECORD_MAX];memset(fill,'F',sizeof(fill));
+    for (unsigned i=0;i<UART_LOG_BYTES/sizeof(fill);i++) CHECK(protected_write(fill,sizeof(fill)));
+    struct task task={.state=T_RUNNING};g_current=&task;
+    uint32_t f=serial_evidence_begin(256);serial_write("evidence\n",9);irq_restore(f);
+    CHECK(evidence_sleeps==1 && evidence_wakes==1 && !uart_dropped && !uart_space.head);
+    g_current=NULL;drain_uart();CHECK(strstr(emitted,"evidence\r\n"));
+    /* Drain between initial capacity check and waiter registration. Real
+     * kwait must observe space without sleeping or losing a wake. */
     reset_uart(true);
-    char record[1408];memset(record,'E',sizeof(record));
-    serial_write(record,sizeof(record));serial_write(record,sizeof(record));
-    CHECK(uart_admitted==uart_budget-UART_NOTICE_BYTES);
-    struct task task={0};g_current=&task;
-    uint32_t f=serial_evidence_begin(256);
-    CHECK(!(flags & 0x200));serial_write("evidence\n",9);irq_restore(f);
-    CHECK(evidence_sleeps==1000 && !uart_dropped && !lsr_reads && !tx_writes);
-    /* Early/IRQ/held-lock evidence must not sleep or lose quota admission. */
-    uart_admitted=uart_budget-UART_NOTICE_BYTES;
-    f=irq_save();uint32_t saved=serial_evidence_begin(256);
-    serial_write("irq\n",4);irq_restore(saved);irq_restore(f);
-    task.preempt_holds=1;saved=serial_evidence_begin(256);
-    serial_write("held\n",5);irq_restore(saved);
-    CHECK(!uart_dropped && evidence_sleeps==1000);
-    g_current=NULL;drain_uart();
-    CHECK(strstr(emitted,"evidence\r\n") && strstr(emitted,"irq\r\n") && strstr(emitted,"held\r\n"));
-    puts("serial evidence: task waits for quota without UART polling/drops; IRQ and held-lock evidence admitted without sleeping PASS");
-}
-static void chardev_tests(void)
-{
-    for (unsigned kind=0;kind<2;kind++) for (unsigned mode=0;mode<7;mode++) {
-        reset_uart(kind);
-        cpuid_features=1u<<31;
-        hypervisor_id[0]=0x54474354;hypervisor_id[1]=0x43544743;hypervisor_id[2]=0x47435447;
-        if (mode>=1 && mode<=3) hypervisor_id[mode-1]^=1;
-        if (mode==4) cpuid_features=0;
-        if (mode==5) cpuid_max=0;
-        if (mode==6) { cpuid_features=0;g_boot.flags=CBI_F_TEST_REQUEST; }
-        serial_init(0x3F8,3);
-        bool chardev=mode==0 || mode==6;
-        CHECK(uart_chardev==chardev);
-        char record[1000];memset(record,'C',sizeof(record));record[sizeof(record)-1]='\n';
-        for (unsigned i=0;i<20;i++) serial_write(record,sizeof(record));
-        CHECK(uart_record_count==(chardev ? 20u:2u));
-        CHECK(uart_dropped==(chardev ? 0u:18u));
-        /* Even an unlimited chardev must honour busy THRE and FIFO width. */
-        ready=false;tick();CHECK(!tx_writes);
-        ready=true;tick();CHECK(tx_writes==(kind ? (chardev ? 16u:3u):1u));
-        drain_uart();
-        if (chardev) {
-            CHECK(emitted_count==20*(sizeof(record)+1));
-            for (unsigned row=0;row<20;row++) {
-                const char *p=emitted+row*(sizeof(record)+1);
-                for (unsigned i=0;i<sizeof(record)-1;i++) CHECK(p[i]=='C');
-                CHECK(!memcmp(p+sizeof(record)-1,"\r\n",2));
-            }
-            /* A backend that really paces bytes still cannot overflow FIFO. */
-            emitted_count=0;timed=true;
-            for (unsigned i=0;i<20;i++) serial_write(record,sizeof(record));
-            drain_uart();CHECK(!overflows && emitted_count==20*(sizeof(record)+1));
-        }
-    }
-    puts("serial chardev: exact TCG signature or fw_cfg selector lifts quota/pacing; other vendors/bare metal retain 75%; busy THRE and 16450/16550 FIFO gating preserved PASS");
+    for (unsigned i=0;i<UART_LOG_BYTES/sizeof(fill);i++) CHECK(protected_write(fill,sizeof(fill)));
+    g_current=&task;preempt_at=0;preemption=drain_uart;
+    f=serial_evidence_begin(256);serial_write("raced\n",6);irq_restore(f);
+    CHECK(!evidence_sleeps && !uart_space.head);g_current=NULL;drain_uart();
+    reset_uart(true);
+    for (unsigned i=0;i<UART_LOG_BYTES/sizeof(fill);i++) CHECK(protected_write(fill,sizeof(fill)));
+    g_current=&task;f=irq_save();CHECK(!protected_write("irq\n",4));irq_restore(f);
+    task.preempt_holds=1;CHECK(!protected_write("held\n",5));task.preempt_holds=0;
+    CHECK(!evidence_sleeps && uart_evidence_dropped==2);g_current=NULL;drain_uart();
+    puts("serial evidence: production kwait blocks/wakes from TX IRQ, check/register race has no lost wake, full IRQ/held producers drop without sleeping PASS");
 }
 static void ticket_tests(bool with_fifo)
 {
     reset_uart(with_fifo);ready=false;
-    static const char first_record[]="first complete record\n";
-    static const char device_record[]="interleaved device\n";
-    static const char last_record[]="last complete record\n";
-    uint64_t first=serial_write_ticket(first_record,sizeof(first_record)-1);
-    serial_write(device_record,sizeof(device_record)-1);
-    uint64_t last=serial_write_ticket(last_record,sizeof(last_record)-1);
-    struct serial_stats snapshot;serial_snapshot(&snapshot);
-    CHECK(first==1 && last==3 && snapshot.accepted==3 && !snapshot.sent);
-    CHECK(snapshot.present && !snapshot.dropped && !lsr_reads && !tx_writes);
-    unsigned queued=snapshot.queued;
-    tick();serial_snapshot(&snapshot);
-    CHECK(!snapshot.sent && snapshot.queued==queued); /* busy UART */
-    ready=true;tick();serial_snapshot(&snapshot);
-    CHECK(!snapshot.sent && snapshot.queued<queued); /* partial record */
-    while (snapshot.sent<first) { tick();serial_snapshot(&snapshot); }
-    CHECK(snapshot.sent==first && tx_writes==sizeof(first_record));
-    drain_uart();serial_snapshot(&snapshot);
-    CHECK(snapshot.sent==last && snapshot.accepted==last && !snapshot.queued && !snapshot.dropped);
-    CHECK(!strcmp(emitted,"first complete record\r\ninterleaved device\r\nlast complete record\r\n"));
-    CHECK(!serial_write_ticket("",0));
-    CHECK(!serial_write_ticket("x",SERIAL_RECORD_MAX+1u));
-    serial_snapshot(&snapshot);
-    CHECK(snapshot.accepted==last && snapshot.sent==last && snapshot.dropped==1);
-    drain_uart();serial_snapshot(&snapshot);
-    CHECK(snapshot.accepted==4 && snapshot.sent==4); /* notice is a record */
-    uint64_t next=serial_write_ticket("after notice\n",13);
-    CHECK(next==5);tick();serial_snapshot(&snapshot);CHECK(snapshot.sent==4);
-    drain_uart();serial_snapshot(&snapshot);CHECK(snapshot.sent==next);
-    printf("serial tickets %s: partial/busy records, interleaved producer, whole refusal and notice watermark PASS\n",
-           with_fifo ? "16550":"16450");
-
-    /* Hardware-check probe records use protected admission, like production. */
-    reset_uart(with_fifo);timed=true;ready=false;
-    struct task task={0};g_current=&task;
-    uint64_t tickets[100];unsigned accepted=0,length=0;
-    char expected[4096];
+    uint64_t first=serial_write_ticket(task_record,sizeof(task_record)-1);
+    serial_write(irq_record,sizeof(irq_record)-1);
+    uint64_t last=serial_write_ticket("last\n",5);struct serial_stats s;serial_snapshot(&s);
+    CHECK(first==1 && last==3 && s.accepted==3 && !s.sent);tick();serial_snapshot(&s);CHECK(!s.sent);
+    ready=true;uint32_t f=irq_save();in_irq=true;serial_tick();in_irq=false;deliver_one();irq_restore(f);
+    serial_snapshot(&s);CHECK(!s.sent && s.queued<sizeof(expected_pair)+5);
+    drain_uart();serial_snapshot(&s);CHECK(s.sent==last && s.accepted==last && !s.queued && !s.resent);
+    reset_uart(with_fifo);timed=true;uint64_t tickets[100];unsigned length=0;char expected[4096];
     for (unsigned i=0;i<100;i++) {
-        char record[64];int n=ksnprintf(record,sizeof(record),"[hwcheck] serial record=%03u/100\n",i+1);
-        uint32_t saved=serial_evidence_begin((size_t)n+1);
-        tickets[i]=serial_write_ticket(record,(size_t)n);irq_restore(saved);
-        if (tickets[i]) {
-            accepted++;
-            memcpy(expected+length,record,(size_t)n-1);length+=(unsigned)n-1;
-            expected[length++]='\r';expected[length++]='\n';
-        }
+        char srecord[64];int n=ksnprintf(srecord,sizeof(srecord),"[hwcheck] serial record=%03u/100\n",i+1);
+        tickets[i]=protected_write(srecord,(size_t)n);CHECK(tickets[i]);
+        memcpy(expected+length,srecord,(size_t)n-1);length+=(unsigned)n-1;expected[length++]='\r';expected[length++]='\n';
     }
-    serial_snapshot(&snapshot);
-    CHECK(accepted==100 && snapshot.accepted==100 && !snapshot.dropped && !snapshot.sent);
-    CHECK(snapshot.queued==3300 && evidence_sleeps==1000 && !lsr_reads && !tx_writes);
-    g_current=NULL;
-    drain_uart();serial_snapshot(&snapshot);
-    unsigned sent=0;
-    for (unsigned i=0;i<100;i++) if (tickets[i] && tickets[i]<=snapshot.sent) sent++;
-    CHECK(sent==accepted && snapshot.accepted==100 && snapshot.sent==100 && !snapshot.queued);
-    CHECK(!snapshot.dropped && !snapshot.resent && !overflows && !lsr_if_off);
+    CHECK(!lsr_reads && !io_count);drain_uart();serial_snapshot(&s);unsigned sent=0;
+    for (unsigned i=0;i<100;i++) if (tickets[i]<=s.sent) sent++;
+    CHECK(sent==100 && !s.dropped && !s.resent && !s.queued && !s.evidence_dropped && !s.periodic_dropped);
     CHECK(emitted_count==length && !memcmp(emitted,expected,length));
-    printf("serial hardware-check %s: requested=100 accepted=%u whole_sent=%u dropped=%u queued=%u resent=%u, quota respected PASS\n",
-           with_fifo ? "16550":"16450",accepted,sent,snapshot.dropped,snapshot.queued,snapshot.resent);
+    printf("serial hardware-check %s: requested=100 accepted=100 whole_sent=%u resent=%u dropped=%u periodic=%u evidence=%u queued=%u PASS\n",with_fifo ? "16550":"16450",sent,s.resent,s.dropped,s.periodic_dropped,s.evidence_dropped,s.queued);
 }
-static void nested_refill(void) { (void)serial_burst(); }
-static void readiness_panic(void)
+static void latency_test(void)
 {
-    uint32_t f=irq_save();serial_panic();serial_write("panic\n",6);irq_restore(f);
-}
-static void fifo_race_tests(void)
-{
-    reset_uart(true);timed=poll_clock=stale_thre=true;
-    serial_write(task_record,sizeof(task_record)-1);
-    uint32_t f=irq_save();serial_panic();irq_restore(f);
-    while (shifting) advance_us(1000);
-    CHECK(!overflows && emitted_count==sizeof(task_record));
-    CHECK(!memcmp(emitted,"[task] complete record A with a long payload\r\n",sizeof(task_record)));
-    puts("serial FIFO race: THRE held high while FIFO occupied; panic drain has zero overflows and exact bytes PASS");
-
-    /* Re-entry during readiness used to consume the same refill
-     * twice, then advance a completed record's cursor again. */
-    reset_uart(true);serial_write("A",1);
-    lsr_preemption=nested_refill;
-    tick();
-    CHECK(!lsr_preemption && !uart_used && !uart_record_count && emitted_count==1 && emitted[0]=='A');
-    puts("serial cursor race: nested refill at readiness boundary submits one byte exactly once PASS");
-    for (unsigned kind=0;kind<2;kind++) {
-        reset_uart(kind);serial_write("prefix\n",7);lsr_preemption=readiness_panic;
-        tick();emitted[emitted_count]=0;struct serial_stats stats;serial_snapshot(&stats);
-        CHECK(!strcmp(emitted,"prefix\r\npanic\r\n") && !stats.queued && stats.sent==2 && !stats.resent);
-    }
-    /* Exercise the audit independently: a rewound logical position must
-     * disable the sink without issuing another UART byte. */
-    reset_uart(true);serial_write("audit",5);uart_next_byte=1;tick();
-    struct serial_stats stats;serial_snapshot(&stats);
-    CHECK(stats.resent==1 && !stats.present && !tx_writes && stats.queued==5);
-    puts("serial audit: panic during readiness preserves suffix/tickets; replay attempt counted and refused before I/O PASS");
+    reset_uart(true);char maximum[SERIAL_RECORD_MAX];memset(maximum,'\n',sizeof(maximum));
+    for (unsigned i=0;i<10;i++) { serial_write(maximum,sizeof(maximum));drain_uart(); }
+    CHECK(critical_max<100000 && !lsr_reads && !strcmp(max_section,"serial_queue"));
+    printf("[kernel] irqoff_section=%s irqoff_max_us=%llu violations=0 model=1us_port_64bytes_per_us_copy PASS\n",max_section,(unsigned long long)(critical_max/1000));
+    reset_uart(true);serial_write(maximum,sizeof(maximum));critical_max=0;drain_uart();
+    CHECK(critical_max<100000 && !strcmp(max_section,"serial_irq"));
+    printf("[kernel] irqoff_section=%s irqoff_max_us=%llu violations=0 model=1us_port_64bytes_per_us_copy PASS\n",max_section,(unsigned long long)(critical_max/1000));
 }
 int main(void)
 {
-    fifo_race_tests();
-    line_rate_case(true,0);line_rate_case(false,0);
-    line_rate_case(true,1);line_rate_case(false,2);line_rate_case(true,3);
+    line_rate_case(true,0);line_rate_case(false,0);line_rate_case(true,1);line_rate_case(false,2);line_rate_case(true,3);
     for (unsigned kind=0;kind<2;kind++) {
-        admission_tests(kind);preemption_tests(kind);concurrent_tests(kind);panic_tests(kind);
-        ticket_tests(kind);
-        reset_uart(kind);ready=false;
-        unsigned reads=lsr_reads;
-        char source[]="[cpu] queued diagnostic\n";
-        serial_write(source,sizeof(source)-1);
-        CHECK(lsr_reads==reads && !tx_writes && uart_used==sizeof(source));
-        memset(source,'X',sizeof(source)-1);drain_uart();
-        CHECK(!strcmp(emitted,"[cpu] queued diagnostic\r\n"));
+        ordering_tests(kind);admission_tests(kind);concurrent_tests(kind);panic_tests(kind);ticket_tests(kind);
     }
-    slow_port_test();evidence_test();chardev_tests();
-    reset_uart(true);present=false;serial_init(0x3F8,3);
-    CHECK(!serial_present());unsigned before=lsr_reads;
-    serial_write("absent\n",7);tick();uint32_t f=irq_save();serial_panic();irq_restore(f);
-    CHECK(lsr_reads==before && !uart_used);
-    puts("serial: single task consumer, no IRQ/producer UART I/O, CRLF byte quota, descriptor/byte wrap, 2KiB bounds, whole drops, panic takeover/timeout/absence PASS");
+    evidence_test();latency_test();
+    for (unsigned i=0;i<4;i++) {
+        static const uint16_t bases[]={0x3F8,0x2F8,0x3E8,0x2E8};model_base=bases[i];reset_uart(true);
+        CHECK(uart_irq==(i%2 ? 3u:4u));serial_write("route\n",6);drain_uart();CHECK(!strcmp(emitted,"route\r\n"));
+    }
+    model_base=0x3F8;reset_uart(true);present=false;initializing=true;
+    serial_init(model_base,3);serial_writer_init();initializing=false;CHECK(!serial_present());
+    unsigned before=io_count;serial_write("absent\n",7);tick();uint32_t f=irq_save();serial_panic();irq_restore(f);
+    CHECK(io_count==before && !uart_used);
+    initializing=true;serial_init(0,3);serial_init(0x1234,3);initializing=false;CHECK(!serial_present() && io_count==before);
+    puts("serial IRQ transmitter: same hardware/chardev path, IRQ3/4 routes, idempotent registration, absence and unsupported mapping PASS");
     return 0;
 }

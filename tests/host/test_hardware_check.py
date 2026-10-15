@@ -6,6 +6,23 @@ import tempfile
 import unittest
 ROOT = Path(__file__).resolve().parents[2]
 class HardwareCheckTests(unittest.TestCase):
+    def test_serial_transmit_page(self):
+        folder = ROOT / 'build/host'
+        folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='serial-page-', dir=folder) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'src/kernel/core/hardware_check.c').read_text()
+            begin = source.index('static void serial_check(')
+            end = source.index('\nstatic void savage_check(', begin)
+            (temp / 'serial_page.inc').write_text(source[begin:end])
+            binary = temp / 'serial-page'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-pthread',
+                            '-I', str(ROOT / 'src/kernel/include'), '-I', str(temp),
+                            str(ROOT / 'tests/host/serial_page_test.c'),
+                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS':'detect_leaks=0'})
+
     def test_page_and_crash_volume(self):
         folder = ROOT / 'build/host'
         folder.mkdir(parents=True, exist_ok=True)

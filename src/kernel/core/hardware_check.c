@@ -186,10 +186,7 @@ static void timer_check(struct hw_check_result *out)
 static void serial_check(uint64_t until,struct hw_check_result *out)
 {
     struct serial_stats a,b; serial_snapshot(&a);
-    if (!a.present) {
-        out->status=a.resent ? HW_FAIL : HW_SKIP;
-        ksnprintf(out->detail,sizeof(out->detail),"UART absent/disabled resent=%u",a.resent); return;
-    }
+    if (!a.present) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"UART absent"); return; }
     /* Wait for older records first; no forced UART mode or busy drain. */
     while (a.queued && check_now(0)<until-12000) { task_sleep_ms(1); serial_snapshot(&a); }
     uint64_t tickets[100]; unsigned accepted=0; uint64_t target=0;
@@ -208,9 +205,10 @@ static void serial_check(uint64_t until,struct hw_check_result *out)
     while (b.sent<target && check_now(0)<until-500) { task_sleep_ms(1); serial_snapshot(&b); }
     unsigned sent=0;
     for (unsigned i=0;i<100;i++) if (tickets[i] && tickets[i]<=b.sent) sent++;
-    out->status=sent==100 && b.dropped==a.dropped && !b.resent && accepted==100 ? HW_PASS : HW_FAIL;
-    ksnprintf(out->detail,sizeof(out->detail),"requested=100 accepted=%u whole_sent=%u dropped=%u queued=%u resent=%u",
-        accepted,sent,b.dropped-a.dropped,b.queued,b.resent);
+    out->status=sent==100 && b.evidence_dropped==a.evidence_dropped && accepted==100 && b.resent==a.resent ? HW_PASS : HW_FAIL;
+    ksnprintf(out->detail,sizeof(out->detail),"requested=100 accepted=%u whole_sent=%u resent=%u dropped=%u periodic=%u evidence=%u queued=%u",
+        accepted,sent,b.resent-a.resent,b.dropped-a.dropped,
+        b.periodic_dropped-a.periodic_dropped,b.evidence_dropped-a.evidence_dropped,b.queued);
 }
 static void savage_check(uint64_t until,struct hw_check_result *out)
 {

@@ -42,25 +42,30 @@ bool serial_present(void);
 /* One queue publication; includes console prefixes and final newline.
  * CRLF expansion needs at most twice this many bytes in the byte ring. */
 #define SERIAL_RECORD_MAX 2048u
-void serial_write(const char *s, size_t n); /* whole drop on overflow/oversize/rate */
-/* Same queue/quota; zero refused, sent >= ticket means final byte submitted. */
+void serial_write(const char *s, size_t n); /* whole drop at diagnostic capacity/oversize */
+/* Zero refused; sent >= ticket means final byte submitted to the UART. */
 uint64_t serial_write_ticket(const char *s, size_t n);
 /* Wait for this many wire bytes only in preemptible task context. Returns
  * saved EFLAGS with IF clear: caller restores after formatting/publication,
  * so evidence sequence allocation happens AFTER any wait. Protects the next
- * publication from quota drops in early/atomic context too (queue bounds still
- * apply). Publish exactly once before restoring IF. Weak for fixtures. */
+ * publication with reserved evidence capacity in early/atomic context too
+ * (queue bounds still apply). Publish exactly once before restoring IF.
+ * Weak for fixtures. */
 uint32_t serial_evidence_begin(size_t wire_bytes) __attribute__((weak));
 void serial_buffered(bool enabled);       /* compatibility: all normal logs queue */
-void serial_writer_init(void);            /* scheduler init, once */
+void serial_writer_init(void);            /* scheduler startup: register/unmask TX IRQ once */
 uint32_t serial_dropped(void);
-/* Counters include drop notices; queued counts expanded wire bytes. */
-/* resent counts repeated logical-byte submission attempts, refused before
- * I/O. Zero audits the local writer; it cannot measure remote duplication. */
-struct serial_stats { uint64_t accepted, sent; uint32_t queued, dropped; bool present; uint32_t resent; };
+/* Queued counts expanded wire bytes; resent counts software retries, never
+ * remote delivery. Unprotected publications use the periodic/diagnostic share. */
+struct serial_stats {
+    uint64_t accepted, sent;
+    uint32_t queued, dropped;
+    bool present;
+    uint32_t periodic_dropped, evidence_dropped, resent;
+};
 void serial_snapshot(struct serial_stats *);
 void serial_panic(void);                  /* IF clear: drain, then synchronous records */
-void serial_tick(void);                   /* compatibility: IRQs never drain */
+void serial_tick(void);                   /* IRQ0 idle rearm; UART IRQ alone drains */
 void console_init_text(void);
 bool console_init_lfb(void);
 void console_write(const char *s, size_t n);

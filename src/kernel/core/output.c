@@ -29,7 +29,7 @@ void kputs_raw(const char *s)
     console_write(s, n);
 }
 
-/* Only periodic diagnostics may lose admission to the line-rate quota.
+/* Periodic diagnostics leave queue capacity reserved for evidence.
  * Boot/event logs wait in task context; IRQ/early publications never sleep
  * or poll the UART. Console work follows the bounded serial publication. */
 static void log_line(const char *fmt, va_list ap, bool periodic)
@@ -77,7 +77,7 @@ void rec_set_run(const char *run8)
 static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only, bool evidence)
 {
     char buf[256];
-    /* Reserve room before assigning a sequence: a quota wait can dispatch
+    /* Reserve room before assigning a sequence: a queue wait can dispatch
      * another evidence producer. Formatting/publication is bounded to this
      * buffer and atomic against IRQ producers. Console work follows IF restore. */
     uint32_t flags = evidence && serial_evidence_begin ? serial_evidence_begin(2 * sizeof(buf)) : irq_save();
