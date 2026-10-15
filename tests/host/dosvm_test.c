@@ -221,6 +221,8 @@ static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open; ui
 static unsigned handles, tables, scratch, disk_reads, disk_writes, commits, deletes;
 static unsigned io_calls, io_fail_at;
 static bool short_read, short_write, fail_delete, fail_commit, fail_close, bad_signature;
+static bool fail_read_ahead;
+static void (*disk_read_hook)(void);
 static bool io_fails(void) { return ++io_calls == io_fail_at; }
 static unsigned file_slot(struct vfs_table *table) { for (unsigned i=0;i<DOSVM_LIMIT;i++) if (files[i].table==table) return i; CHECK(false); return 0; }
 static void disk_owned(struct vfs_table *table)
@@ -281,9 +283,13 @@ int vfs_seek(struct vfs_table *table, int handle, int64_t offset, enum vfs_whenc
 { unsigned i=file_slot(table); disk_owned(table); CHECK(handle>=0 && handle<=1 && whence==VFS_SEEK_SET && offset>=0); if (io_fails()) return -V86_EIO; files[i].pos[handle]=offset; *position=offset; return 0; }
 int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size_t *done)
 {
-    unsigned i=file_slot(table); disk_owned(table); CHECK(bytes==512); disk_reads++; if (io_fails()) return -V86_EIO;
+    unsigned i=file_slot(table); disk_owned(table);
+    CHECK(bytes && !(bytes % 512) && bytes <= DOSVM_READ_SECTORS * 512u && (!handle || bytes == 512));
+    disk_reads++;
+    if (disk_read_hook) disk_read_hook();
+    if (io_fails() || (fail_read_ahead && bytes > 512)) return -V86_EIO;
     *done=short_read ? 511 : bytes;
-    if (!handle) { CHECK(files[i].pos[0]+bytes<=files[i].base_bytes); memset(data,(files[i].pos[0]/512)%251,bytes); if (!files[i].pos[0]) { ((uint8_t *)data)[0]=0xEE; ((uint8_t *)data)[510]=bad_signature ? 0 : 0x55; ((uint8_t *)data)[511]=0xAA; } }
+    if (!handle) { CHECK(files[i].pos[0]+bytes<=files[i].base_bytes); for (size_t at=0;at<bytes;at+=512) memset((uint8_t *)data+at,(files[i].pos[0]/512+at/512)%251,512); if (!files[i].pos[0]) { ((uint8_t *)data)[0]=0xEE; ((uint8_t *)data)[510]=bad_signature ? 0 : 0x55; ((uint8_t *)data)[511]=0xAA; } }
     else { CHECK(fseek(files[i].cow,(long)files[i].pos[1],SEEK_SET)==0); CHECK(fread(data,1,*done,files[i].cow)==*done); }
     return 0;
 }
@@ -388,7 +394,7 @@ static void test_memory_disk(void)
     memset(bytes,0x42,512); CHECK(dosvm_disk_write(a,77,bytes)==0 && a->sector_count==1);
     short_write=true; CHECK(dosvm_disk_write(a,78,bytes)<0 && a->sector_count==1); short_write=false;
     CHECK(dosvm_disk_read(a,78,got)==0 && got[0]==78);
-    short_read=true; CHECK(dosvm_disk_read(a,0,got)<0); short_read=false;
+    short_read=true; CHECK(dosvm_disk_read(a,128,got)<0); short_read=false;
     CHECK(dosvm_disk_write(a,DOSVM_SECTORS,bytes)==-EINVAL);
     for (unsigned i=0;i<DOSVM_OVERLAY_SECTORS;i++) if (i!=77) CHECK(dosvm_disk_write(a,i,bytes)==0);
     unsigned issued=disk_writes; CHECK(dosvm_disk_write(a,1024,bytes)==-ENOSPC && disk_writes==issued);
@@ -406,7 +412,8 @@ static void test_bios_bounds(void)
     f=disk_frame(0x0201); f.es=0xF000; CHECK(!dosvm_bios(v,&f,0x13) && (f.tf.eflags&V86_CF) && disk_reads==reads);
     f=disk_frame(0x0300); CHECK(!dosvm_bios(v,&f,0x13) && (f.tf.eflags&V86_CF) && disk_writes==writes);
     uint8_t dap[16]={16,0,2,0,0xFF,0x0F,0,0x10,0xFE,0xFF,3,0,0,0,0,0};
-    CHECK(dosvm_write(v,0x20000,dap,16)==0); f=disk_frame(0x4200); CHECK(!dosvm_bios(v,&f,0x13) && !(f.tf.eflags&V86_CF) && disk_reads==reads+2);
+    CHECK(dosvm_write(v,0x20000,dap,16)==0); f=disk_frame(0x4200); CHECK(!dosvm_bios(v,&f,0x13) && !(f.tf.eflags&V86_CF) && disk_reads==reads+1);
+    CHECK(!dosvm_read(v,0x10FFF,data,1024) && data[0]==(DOSVM_SECTORS-2)%251 && data[512]==(DOSVM_SECTORS-1)%251);
     reads=disk_reads; dap[2]=3; CHECK(dosvm_write(v,0x20000,dap,16)==0); f=disk_frame(0x4200); CHECK(!dosvm_bios(v,&f,0x13) && (f.tf.eflags&V86_CF) && disk_reads==reads);
     CHECK(dosvm_read(v,0x20000,data,16)==0 && data[2]==3);
     dap[2]=1; dap[12]=1; CHECK(dosvm_write(v,0x20000,dap,16)==0); f=disk_frame(0x4300); CHECK(!dosvm_bios(v,&f,0x13) && (f.tf.eflags&V86_CF) && disk_writes==writes);
@@ -617,6 +624,7 @@ static void test_memory_services(void)
 #include "dosvm_cost_test.inc"
 #include "dosvm_idle_test.inc"
 #include "dosvm_fullscreen_test.inc"
+#include "dosvm_startup_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -634,6 +642,7 @@ int main(void)
     test_idle();
     test_fullscreen_transport();
     test_fullscreen_service();
+    test_startup();
     CHECK(guest_enters==3 && deletes>1); free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

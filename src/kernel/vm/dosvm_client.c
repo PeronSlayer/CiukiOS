@@ -249,6 +249,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             if (v->launch_failed || c.state == CIUKI_DOSVM_STOPPED)
                 memcpy(c.name, v->console_line, sizeof(c.name) - 1);
             video_mode(v, &c);
+            dosvm_startup_report(v, false);
             dosvm_perf_report(v);
         } else if (!dosvm_valid(key)) e = -ESRCH;
         else if (op == CIUKI_DOSVM_FULLSCREEN) {
@@ -266,6 +267,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             else {
                 v->launch_armed = true;
                 v->video_presented = false;
+                dosvm_startup_report(v, true);
             }
         } else if (op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS) {
             if (v->idle.sleeping) dosvm_idle_wake(v);
