@@ -48,7 +48,7 @@ advance stay under the same short IRQ lock. TCG/test chardevs retain THRE,
 their verified FIFO limit and the existing admission exemption. The audit
 does not measure remote receipt or duplication at the receiver.
 
-Select **H Hardware check** during the loader's three-second menu. This sets
+Select **H Hardware** during the loader's three-second menu (the hint line reads "H for Hardware check"). This sets
 CBI flag bit 13, enables the text console on the existing framebuffer, and
 runs the diagnostic task after ordinary drivers initialise. It does not start
 the desktop or schedule production acceleration. N/L/P boots are unchanged.
