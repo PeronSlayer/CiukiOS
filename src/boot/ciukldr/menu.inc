@@ -571,9 +571,10 @@ boot_menu:
     mov byte [selector_source], 0
     ret
 .log:
-    ; L also shows the boot log on screen (CBI_F_VERBOSE, bit 11).
+    ; L shows the screen log and enables one-boot runtime cost diagnostics.
     xor dword [B(flags)], CBI_F_SERIAL_LOG
     or byte [B(flags)+1], CBI_F_VERBOSE >> 8
+    or byte [B(flags)+1], CBI_F_DIAG_VERBOSE >> 8
     mov byte [screen_quiet], 0
     jmp .deadline
 .probe:

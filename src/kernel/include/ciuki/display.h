@@ -12,6 +12,8 @@ int display_worker_start(void);
 int display_fullscreen_begin(uint8_t mode);
 int display_fullscreen_end(void);
 bool display_fullscreen_active(void);
+/* Thread context; commits the preceding transaction records on hardware. */
+int display_fullscreen_checkpoint(const char *step, int result);
 int grants_display_suspend(bool suspended);
 uint32_t grants_display_pid(void);
 bool grants_display_owner(const struct process *);

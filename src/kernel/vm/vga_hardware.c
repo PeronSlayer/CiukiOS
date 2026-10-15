@@ -90,3 +90,30 @@ void vga_hardware_load(const cvga_state *v, const struct vga_hardware_bus *b)
     }
     registers(v,b,0); indexes(v,b);
 }
+
+unsigned vga_hardware_verify(const cvga_state *v, const struct vga_hardware_bus *b)
+{
+    static const uint8_t sr_mask[]={3,0x3D,15,0x3F,14};
+    static const uint8_t gr_mask[]={15,15,15,31,3,0x7B,15,15,255};
+    unsigned bad=0;
+    if (((hw_rd(b,0x3CC)^v->misc)&0xEF) || (hw_rd(b,0x3C3)&1)!=(v->enable&1)) bad|=1;
+    for (unsigned i=0;i<5;i++) {
+        hw_wr(b,0x3C4,i);
+        if ((hw_rd(b,0x3C5)^v->seq[i])&sr_mask[i]) bad|=2;
+    }
+    for (unsigned i=0;i<9;i++) {
+        hw_wr(b,0x3CE,i);
+        if ((hw_rd(b,0x3CF)^v->gc[i])&gr_mask[i]) bad|=4;
+    }
+    uint16_t c=crport(v);
+    for (unsigned i=0;i<25;i++) {
+        hw_wr(b,c,i);
+        if (hw_rd(b,c+1)!=v->crtc[i]) bad|=8;
+    }
+    for (unsigned i=0;i<21;i++) {
+        hw_rd(b,c+6); hw_wr(b,0x3C0,i);
+        if (hw_rd(b,0x3C1)!=v->attr[i]) bad|=16;
+    }
+    indexes(v,b);
+    return bad;
+}

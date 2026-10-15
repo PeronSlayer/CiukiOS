@@ -200,6 +200,18 @@ void dosvm_perf_report(struct dosvm *v)
     v->perf.last_guest = v->perf.guest_cycles; v->perf.last_monitor = v->perf.monitor_cycles;
     v->perf.last_present = v->perf.present_cycles; v->perf.last_log = v->perf.log_cycles;
     v->perf.last_harvest = v->perf.harvest_cycles;
+    /* Preserve each interval before a hardware lock/power cycle can destroy
+     * the in-memory history. Formatting and RAM capture only; no polled UART
+     * and no VFS or disk wait on the VM thread. Detailed dump is unchanged. */
+    unsigned n=v->perf.sample_count,id=v->info.key.id;
+    rec_diag_disk(dosvm_probe(v),"group=vm_perf_live vm=%u n=%u ms=%u frames=%u guest_us=%llu monitor_us=%llu",
+        id,n,s->ms,s->frames,s->guest_us,s->monitor_us);
+    rec_diag_disk(dosvm_probe(v),"group=vm_perf_live_vga vm=%u n=%u ports=%u port_us=%llu remaps=%u remap_us=%llu",
+        id,n,s->cost_count[DOSVM_COST_VGA_IO],s->cost_us[DOSVM_COST_VGA_IO],s->port_remaps,s->remap_us);
+    rec_diag_disk(dosvm_probe(v),"group=vm_perf_live_present vm=%u n=%u present_us=%llu harvest_us=%llu rows=%u",
+        id,n,s->present_us,s->harvest_us,s->rows);
+    rec_diag_disk(dosvm_probe(v),"group=vm_perf_live_irq vm=%u n=%u timer=%u sound=%u gp=%u pf=%u db=%u idle=%u",
+        id,n,s->irqs[0],s->irqs[7],s->exits[0],s->exits[1],s->exits[2],s->idle_blocks);
 #undef DELTA
 }
 

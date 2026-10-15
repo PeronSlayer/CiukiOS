@@ -82,7 +82,9 @@ static void test_speed_accounting(void)
     v->info.dos_ready = false; /* first interval includes DOS startup */
     g_boot.flags = CBI_F_VERBOSE; g_tsc_per_ms = 1000; fake_tsc = 1000;
     unsigned quiet_records = records;
+    unsigned disk_before=disk_records;
     g_ticks += 1000; dosvm_perf_report(v);
+    CHECK(disk_records==disk_before);
     dosvm_perf_dump(v);
     CHECK(dosvm_perf_clock() == fake_tsc && !v->perf.sample_count && records == quiet_records);
     /* L enables startup vector timing, but not detailed performance records. */
@@ -102,6 +104,7 @@ static void test_speed_accounting(void)
     v->monitor.stats.delivered[0] = 140; v->monitor.stats.insn[V86_OUT] = 200;
     v->idle.blocks = 5; v->idle.count[DOSVM_IDLE_28] = 3; v->idle.count[DOSVM_IDLE_16] = 2;
     g_ticks += 1000; dosvm_perf_report(v);
+    CHECK(disk_records==disk_before+4);
     CHECK(v->perf.sample_count == 1 && records == records_before);
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&

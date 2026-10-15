@@ -38,6 +38,14 @@ static uint16_t video_fail_ax, video_current_mode;
 static uint16_t video_calls[16];
 static unsigned video_call_count;
 static unsigned video_state_blocks=16;
+static unsigned video_checkpoints;
+static int video_checkpoint_error;
+int display_fullscreen_checkpoint(const char *step,int result)
+{
+    (void)result;
+    CHECK(step && (flags&V86_IF)); video_checkpoints++;
+    return video_checkpoint_error;
+}
 static uint16_t video_saved_mode;
 static bool worker_until_idle;
 static jmp_buf worker_idle_env;
@@ -1349,6 +1357,7 @@ static void test_video_calls(void)
         CHECK(!video_io(0, 0x1CE, 2, true, &value));
         value = 0; CHECK(!video_io(0, 0x1CE, 2, false, &value) && value == 0x1234);
         CHECK(video_io(0, 0xCF8, 4, true, &value) == -ENOSYS);
+        CHECK(logged("fullscreen_port_fault port=0cf8 width=4 write=1"));
         if (native) CHECK(video_io(0, 0x60, 1, false, &value) == -V86_EPERM);
         video_active = false;
         execution_fault = 2;
@@ -1382,13 +1391,23 @@ static void test_fullscreen_calls(void)
     pci[0]=(struct pci_func){.vendor=0x1234,.device=0x1111,.class_code=3}; npci=1;
     video_rom=true; ivt(0x10,0xF000,0x700); ram[0xF0700]=0xCF;
     CHECK(!biosvm_video_prepare()); video_current_mode=0x118;
+    video_checkpoint_error=-EIO;
+    CHECK(biosvm_video_fullscreen_begin(0x13)==-EIO && !video_claimed && !video_call_count);
+    video_checkpoint_error=0;
+    unsigned checkpoints=video_checkpoints;
     CHECK(!biosvm_video_fullscreen_begin(0x13));
+    CHECK(video_checkpoints>checkpoints);
     CHECK(fullscreen_video && fullscreen_bytes==1024 && video_claimed && video_lease_count==3);
     CHECK(!video_active && !firmware.io && !vm_memory(0,0xA0000,1,false));
     CHECK(video_current_mode==0x13 && video_call_count==4);
     uint8_t info[256];
     CHECK(biosvm_video_switch(0x111,info)==-EBUSY);
+    video_checkpoint_error=-EIO; /* recovery continues despite a failed log sink */
+    g_boot.flags&=~CBI_F_SMBIOS_QEMU;
     CHECK(!biosvm_video_fullscreen_end(0x118,info));
+    CHECK(logged("step=fullscreen regs=in int=10 eax=00004f04"));
+    g_boot.flags|=CBI_F_SMBIOS_QEMU;
+    video_checkpoint_error=0;
     CHECK(video_current_mode==0x118 && !fullscreen_video && !video_claimed && !video_lease_count);
     CHECK(video_call_count==7 && video_calls[3]==0x0F00 && video_calls[4]==0x4F04 && video_calls[5]==0x4F03 && video_calls[6]==0x4F01);
     video_state_blocks=33; video_call_count=0;

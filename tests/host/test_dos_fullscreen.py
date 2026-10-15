@@ -10,6 +10,14 @@ import run as runner
 from evidence import EvidenceError
 
 class FullscreenEvidenceTests(unittest.TestCase):
+    def test_tcg_launch_margin(self):
+        cases=runner.load(ROOT/'tests/suites/f3-vm.json')['cases']
+        for name in ('vm-fullscreen-qemu-t23','vm-fullscreen-cirrus-qemu-t23'):
+            self.assertEqual(next(c for c in cases if c['id']==name)['timeout'],600)
+        source=(ROOT/'src/kernel/probes/f3_probes_video.c').read_text().split('static int probe_f3_vm_fullscreen(void)',1)[1]
+        self.assertIn('until=deadline_after_ms(300000)',source)
+        self.assertIn('"case=launch ms=%llu",g_ticks-launch_started',source)
+
     def test_exact_screen_equality(self):
         parent=ROOT/'build/host'; parent.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as folder:

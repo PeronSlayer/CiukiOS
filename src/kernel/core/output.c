@@ -70,7 +70,7 @@ static uint32_t next_seq(void)
 
 /* A record above 240 bytes is never truncated silently: an ERROR record
  * replaces it so the evidence fails loudly. */
-static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic)
+static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only)
 {
     char buf[256];
     uint32_t s = next_seq();
@@ -85,7 +85,7 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
         if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
         else bootlog_capture(buf, (size_t)n + 1);
     }
-    kputs_raw(buf);
+    if (!disk_only) kputs_raw(buf);
 }
 
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
@@ -107,12 +107,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         kvsnprintf(extra, sizeof(extra), fmt, ap);
         va_end(ap);
     }
-    emit_line(probe, event, extra, true, false);
+    emit_line(probe, event, extra, true, false, false);
 }
 
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
 {
-    emit_line(probe, event, extra, false, false);
+    emit_line(probe, event, extra, false, false, false);
 }
 
 void rec_diag(const char *probe, const char *fmt, ...)
@@ -127,7 +127,20 @@ void rec_diag(const char *probe, const char *fmt, ...)
      * and later emitted with fmt="%s". Evidence rec_emit stays protected. */
     bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1) ||
                     !strncmp(extra, "group=vm_perf_", sizeof("group=vm_perf_") - 1);
-    emit_line(probe, "DATA", extra, true, periodic);
+    emit_line(probe, "DATA", extra, true, periodic, false);
+}
+
+void rec_diag_disk(const char *probe, const char *fmt, ...)
+{
+    /* Selected evidence keeps its existing serial sequence and deferred dump.
+     * The screen-log diagnostic menu enables this on an ordinary boot. */
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE) || run_selected) return;
+    char extra[240];
+    va_list ap;
+    va_start(ap,fmt);
+    kvsnprintf(extra,sizeof(extra),fmt,ap);
+    va_end(ap);
+    emit_line(probe,"DATA",extra,true,true,true);
 }
 
 static volatile int in_panic;

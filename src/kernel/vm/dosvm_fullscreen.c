@@ -14,6 +14,8 @@ static unsigned desktop_pending,desktop_next;
 static struct dosvm_key fullscreen_request;
 static uint32_t fullscreen_ptes[32];
 static void *fullscreen_mapping;
+static uint64_t fullscreen_frame_deadline;
+static bool fullscreen_frame_seen;
 static uint8_t fs_in(void *arg, uint16_t p) { (void)arg; return inb(p); }
 static void fs_out(void *arg, uint16_t p, uint8_t v) { (void)arg; outb(p,v); }
 static uint8_t fs_read(void *arg, unsigned a) { return ((volatile uint8_t *)arg)[a]; }
@@ -114,22 +116,45 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     if (dosvm_read(v,0x449,&mode,1) || !cvga_find_mode(mode)) return -EOPNOTSUPP;
     fullscreen_busy=true;
     v->fullscreen_error=0;
-    int e=park(v);
+    /* Persistence sleeps: pin the VM before the first record can yield. */
+    v->fullscreen_hold=true;
+    klog("[dosvm] fullscreen_request vm=%u generation=%u mode=%u",key.id,key.generation,mode);
+    int e=display_fullscreen_checkpoint("vm-park",0);
+    if (e) goto resume;
+    e=park(v);
     if (e) goto done;
     if (!dosvm_valid(key)) { e=-ESRCH; goto resume; }
+    if ((e=display_fullscreen_checkpoint("vga-save",0))) goto resume;
     dosvm_vga_sync(v,true);
     for (unsigned i=0;i<32;i++) as_lookup(&v->as,0xA0000+i*PAGE_SIZE,&fullscreen_ptes[i]);
     if (!fullscreen_mapping) fullscreen_mapping=vmm_map_mmio(0xA0000,0x20000,true);
     if (!fullscreen_mapping) { e=-ENOMEM; goto resume; }
     hardware=(struct vga_hardware_bus){fullscreen_mapping,fs_in,fs_out,fs_read,fs_write};
     if ((e=display_fullscreen_begin(mode))) goto resume;
+    if ((e=display_fullscreen_checkpoint("vga-load",0))) goto rollback;
     vga_hardware_load(&v->vga,&hardware);
+    unsigned bad=vga_hardware_verify(&v->vga,&hardware);
+    if (bad) {
+        klog("[dosvm] fullscreen_transport_fault vm=%u registers=%x",key.id,bad);
+        display_fullscreen_checkpoint("vga-readback",-EIO);
+        e=-EIO; goto rollback;
+    }
     if (!dosvm_valid(key) || !same_key(key,dosvm_focused_key())) { e=-EINTR; goto rollback; }
+    if ((e=display_fullscreen_checkpoint("guest-grant",0))) goto rollback;
     if ((e=map_aperture(v,true))) { map_aperture(v,false); goto rollback; }
     dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0);
     fullscreen_owner=v; v->fullscreen=true;
     fullscreen_background=false;
     v->fullscreen_progress=g_ticks; v->fullscreen_ip=UINT32_MAX;
+    fullscreen_frame_seen=mode<=3; /* a static text prompt need not store again */
+    /* Arm before resuming: the native worker observes hardware PTE D bits,
+     * independent of guest instruction progress and idle hints. */
+    e=display_fullscreen_checkpoint("watchdog-armed",0);
+    if (e) {
+        fullscreen_owner=0; v->fullscreen=false; map_aperture(v,false);
+        goto rollback;
+    }
+    fullscreen_frame_deadline=deadline_after_ms(5000);
     klog("[dosvm] fullscreen=1 vm=%u generation=%u mode=%u",key.id,key.generation,mode);
     goto resume;
 rollback:
@@ -147,12 +172,14 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     if (fullscreen_busy) return -EBUSY;
     fullscreen_busy=true;
     struct dosvm *v=fullscreen_owner;
+    display_fullscreen_checkpoint("guest-revoke",0);
     int e=park(v);
     if (e) { fullscreen_busy=false; return e; }
     uint32_t flags=irq_save();
     arch_vga_io(false); v->fullscreen=false;
     e=map_aperture(v,false);
     irq_restore(flags);
+    display_fullscreen_checkpoint("vga-capture",0);
     vga_hardware_capture(&v->vga,&hardware);
     v->video_presented=false; v->video_lut_valid=false; v->video_read_window=false;
     dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0); v->pointer_known=false;
@@ -186,18 +213,44 @@ void dosvm_fullscreen_progress(struct dosvm *v, uint32_t cs, uint32_t ip)
 }
 void dosvm_fullscreen_poll(void)
 {
-    if (fullscreen_busy) return;
-    if (fullscreen_owner) {
-        struct dosvm *v=fullscreen_owner;
-        struct process *p=proc_find(v->owner_pid);
-        struct process *desktop=proc_find(grants_display_pid());
+    uint32_t flags=irq_save();
+    if (fullscreen_busy) { irq_restore(flags); return; }
+    struct dosvm *v=fullscreen_owner;
+    if (v) fullscreen_busy=true; /* checkpoint waits must pin the owner */
+    irq_restore(flags);
+    if (v) {
+        if (!fullscreen_frame_seen && v->as.pd_phys) {
+            uint32_t *pd=P2V(v->as.pd_phys);
+            if (pd[0]&PTE_P) {
+                volatile uint32_t *pt=P2V(pd[0]&~0xFFFu);
+                for (unsigned i=0xA0;i<0xC0;i++)
+                    if (pt[i]&0x40u) fullscreen_frame_seen=true;
+            }
+            if (fullscreen_frame_seen) {
+                klog("[dosvm] fullscreen_first_frame vm=%u generation=%u tick=%llu source=aperture-write",
+                    v->info.key.id,v->info.key.generation,g_ticks);
+                display_fullscreen_checkpoint("first-guest-frame",0);
+            }
+        }
         bool idle=v->fullscreen_suspended || v->idle.sleeping ||
             (v->idle.seen && g_ticks-v->idle.last_tick<1000) ||
             (v->monitor.state==V86_HALTED && v->monitor.vif);
+        bool frame_timeout=!fullscreen_frame_seen && deadline_passed(fullscreen_frame_deadline);
+        bool progress_timeout=!idle && g_ticks-v->fullscreen_progress>=15000;
+        struct process *p=proc_find(v->owner_pid);
+        struct process *desktop=proc_find(grants_display_pid());
         if (fullscreen_return || !dosvm_valid(v->info.key) || !p || p->state>=PROC_STOPPING ||
             !desktop || desktop->state>=PROC_STOPPING || !same_key(v->info.key,dosvm_focused_key()) ||
-            !v->task || !task_alive(v->task) || (!idle && g_ticks-v->fullscreen_progress>=15000))
-            dosvm_fullscreen_leave(v->info.key,fullscreen_background);
+            !v->task || !task_alive(v->task) || frame_timeout || progress_timeout) {
+            const char *reason=fullscreen_return ? "return-or-fault" : frame_timeout ? "first-frame-timeout" :
+                progress_timeout ? "guest-progress-timeout" : "owner-lost";
+            klog("[dosvm] fullscreen_watchdog vm=%u generation=%u reason=%s",v->info.key.id,v->info.key.generation,reason);
+            display_fullscreen_checkpoint("watchdog-return",0);
+            if (frame_timeout || progress_timeout) v->fullscreen_error=-ETIMEDOUT;
+            struct dosvm_key key=v->info.key;
+            fullscreen_busy=false;
+            dosvm_fullscreen_leave(key,fullscreen_background);
+        } else fullscreen_busy=false;
     } else if (fullscreen_request.id) {
         struct dosvm_key key=fullscreen_request;
         fullscreen_request=(struct dosvm_key){0};

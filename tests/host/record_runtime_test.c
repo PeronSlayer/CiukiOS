@@ -31,6 +31,14 @@ void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n;ring_captu
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); return 1; } } while (0)
 int main(void)
 {
+    unsigned initial_ring=ring_captures;
+    rec_diag_disk("vm-window","group=vm_perf_live ms=1000"); CHECK(ring_captures==initial_ring);
+    g_boot.flags=CBI_F_VERBOSE;
+    rec_diag_disk("vm-window","group=vm_perf_live ms=1000"); CHECK(ring_captures==initial_ring);
+    g_boot.flags=CBI_F_DIAG_VERBOSE;
+    rec_diag_disk("vm-window","group=vm_perf_live ms=1000");
+    CHECK(ring_captures==initial_ring+1 && !ordinary_writes && !console_writes && !output[0]);
+    g_boot.flags=0;
     CHECK(!rec_active());
     /* Runtime callers omit evidence during both quiet and L normal boots. */
     if (rec_active()) rec_emit("vm-window", "DATA", "group=admission");
@@ -39,6 +47,9 @@ int main(void)
     rec_diag("vm-window", "group=vm_heartbeat pm=1 vif=0");
     CHECK(strstr(output, "run=00000000") && strstr(output, "group=vm_heartbeat") && !rec_premature_records());
     rec_set_run("12345678");
+    g_boot.flags=CBI_F_DIAG_VERBOSE;
+    unsigned selected_ring=ring_captures;
+    rec_diag_disk("vm-window","group=vm_perf_live ms=1000");CHECK(ring_captures==selected_ring);
     CHECK(!rec_active());
     output[0] = 0; rec_diag("vm-window", "group=early"); CHECK(!output[0]);
     /* A mistaken evidence producer is still rejected and counted. */
