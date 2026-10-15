@@ -10,7 +10,12 @@ struct desk_wall_request {
     char path[CFG_PATH_MAX];
     uint32_t width, height, top, bottom, colour;
     int mode;
+    const uint32_t *portrait; /* immutable approved asset, valid until worker_stop */
+    int caption_font;
+    uint32_t caption_colour;
+    int caption_aa;
 };
+struct desk_wall_memory;
 /* Single worker, one latest pending request and one owned completed frame.
  * Neither disk I/O nor rendering holds lock. UI polling uses trylock. */
 struct desk_wall_worker {
@@ -21,6 +26,8 @@ struct desk_wall_worker {
     uint32_t *pixels;
     const char *cache_dir;
     void (*stage)(const char *);
+    struct desk_wall_memory *memory; /* worker-only, bounded reusable frames/source */
+    uint64_t prepare_ns; /* completed request, published with ready under lock */
 };
 void desk_wall_cache_name(char out[DESK_WALL_NAME_MAX], const struct desk_wall_request *,
                           uint64_t size, int64_t mtime);

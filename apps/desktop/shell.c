@@ -2573,7 +2573,10 @@ int desk_shell_wallpaper_update(struct desktop *d)
         d->sh.wall_w = d->sh.wall ? d->width : 0; d->sh.wall_h = d->sh.wall ? d->height : 0;
         if (!d->sh.wall) { d->sh.wall_valid = 0; return -1; }
     }
-    int r = desk_wallpaper_render(d->sh.wall, d->width, d->height, DESK_BAR, DESK_BAR, d->sh.cfg.wallpaper,
+    /* Initial/resize placeholder only. The worker paints every selected
+     * wallpaper, including procedural ones, before one complete publication. */
+    int r = desk_wallpaper_render(d->sh.wall, d->width, d->height, DESK_BAR, DESK_BAR,
+                                  d->sh.wallpaper_pending ? "none" : d->sh.cfg.wallpaper,
                                   d->sh.cfg.wallpaper_mode, desktop_colour(d), &d->sh.image, d->portrait);
     d->sh.wall_valid = 1;
     d->sh.background_valid=0;

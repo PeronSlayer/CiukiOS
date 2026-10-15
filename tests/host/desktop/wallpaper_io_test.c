@@ -39,11 +39,12 @@ int __wrap_mkdir(const char *path, mode_t mode)
 }
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed=PTHREAD_COND_INITIALIZER;
-static int entered, released, decoded;
+static int entered, released, decoded, scaled;
 static void slow_stage(const char *name)
 {
     pthread_mutex_lock(&lock);
     if (!strcmp(name,"wallpaper_decoded")) decoded++;
+    if (!strcmp(name,"wallpaper_scaled")) scaled++;
     if (!strcmp(name,"wallpaper_file_read") && !entered) {
         entered=1; pthread_cond_signal(&changed);
         while (!released) pthread_cond_wait(&changed,&lock);
@@ -158,7 +159,29 @@ int main(int argc, char **argv)
         ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
         if (!ready) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
     }
-    assert(ready && !error && pixels && !hit && decoded==2); free(pixels);
+    assert(ready && !error && pixels && !hit && decoded==1); free(pixels);
+    /* A colour change blends the retained ARGB layer; a repeated request
+     * transfers a private copy of the memory frame without decoding/scaling. */
+    assert(scaled==2);
+    for (unsigned repeat=0;repeat<2;repeat++) {
+        if (!repeat) r.colour++;
+        latest=desk_wall_worker_submit(&w,&r); ready=0;
+        for (unsigned i=0;i<10000 && !ready;i++) {
+            ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
+            if (!ready) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+        }
+        assert(ready && !error && pixels && hit==(int)repeat && decoded==1 && scaled==2);
+        uint32_t *expected; int disk_hit;
+        assert(!desk_wall_prepare(&r,NULL,&expected,&disk_hit,NULL));
+        assert(!memcmp(pixels,expected,(size_t)r.width*r.height*4)); free(expected); free(pixels);
+    }
+    stamp(r.path,s.st_mtime+4);
+    latest=desk_wall_worker_submit(&w,&r); ready=0;
+    for (unsigned i=0;i<10000 && !ready;i++) {
+        ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
+        if (!ready) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+    }
+    assert(ready && !error && !hit && pixels && decoded==2 && scaled==3); free(pixels);
     strcpy(r.path,"/nonexistent-ciuki-wallpaper.png"); latest=desk_wall_worker_submit(&w,&r); ready=0;
     for (unsigned i=0;i<10000 && !ready;i++) {
         ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
@@ -166,6 +189,6 @@ int main(int argc, char **argv)
     }
     assert(ready && error==ENOENT && !pixels); desk_wall_worker_stop(&w);
     assert(read_calls>100 && write_calls>100);
-    puts("PASS wallpaper worker: slow read/decode leaves mailbox free; latest request wins; errors; native I/O bounds, short transfers/EINTR; cache key, truncation, mtime, settings, three-frame LRU and read-only/missing-directory fallback");
+    puts("PASS wallpaper worker: slow read/decode leaves mailbox free; latest request wins; errors; native I/O bounds, short transfers/EINTR; cache key, truncation, mtime, settings, three-frame LRU and read-only/missing-directory fallback; memory frame/source/layer reuse and source invalidation");
     return 0;
 }

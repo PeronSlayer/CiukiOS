@@ -156,6 +156,7 @@ struct desktop {
     struct desk_dirty_runs *rows; uint32_t row_height;
     struct desk_render_cache *render_cache;
     int render_cache_prepared;
+    uint64_t chrome_rebuilds;
     int frame_valid, scanout_valid;
     struct desk_damage move_damage;
     uint32_t cursor_under[32*32]; struct desk_box cursor_box;

@@ -24,7 +24,14 @@ void desk_image_free(struct desk_image *);
 int desk_wallpaper_render(uint32_t *out, uint32_t width, uint32_t height, uint32_t top, uint32_t bottom,
                           const char *spec, int mode, uint32_t colour,
                           const struct desk_image *image, const uint32_t *portrait);
+/* Worker variant: caption style is a request snapshot, never a global theme read. */
+int desk_wallpaper_render_styled(uint32_t *, uint32_t, uint32_t, uint32_t, uint32_t,
+                                const char *, int, uint32_t, const struct desk_image *,
+                                const uint32_t *, int caption_font, uint32_t caption_colour, int caption_aa);
 /* Scales an ARGB image into a w*h ARGB box with the given mode, for previews. */
 void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, uint32_t h, int mode, uint32_t colour);
+/* Colour-independent ARGB layer; uncovered pixels are transparent. */
+void desk_image_scale_layer(const struct desk_image *, uint32_t *, uint32_t, uint32_t, int);
+uint32_t desk_wallpaper_over(uint32_t argb, uint32_t background);
 void desk_builtin_paint(const char *id, uint32_t *out, uint32_t width, uint32_t height, uint32_t stride);
 #endif

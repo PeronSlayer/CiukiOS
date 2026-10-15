@@ -857,11 +857,13 @@ static void test_network_service(void)
 #ifdef DESK_FOOTPRINT_TEST
 #include "memory_footprint_test.h"
 #include "theme_wallpaper_sequence_test.h"
+#include "theme_wallpaper_performance_test.h"
 #endif
 int main(int argc,char **argv)
 {
 #ifdef DESK_FOOTPRINT_TEST
     if (argc==3 && !strcmp(argv[1],"--theme-wallpaper")) { test_theme_wallpaper(argv[2]); return 0; }
+    if (argc==3 && !strcmp(argv[1],"--theme-wallpaper-performance")) { test_theme_wallpaper_performance(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(argv[2]); return 0; }
 #else
     (void)argc; (void)argv;

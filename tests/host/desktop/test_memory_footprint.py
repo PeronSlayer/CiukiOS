@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from .test_desktop import ROOT, SHELL_SOURCES
 
 
@@ -81,7 +82,20 @@ class MemoryFootprintTests(unittest.TestCase):
                 subprocess.run([*common, *flags, "-c", str(source), "-o", str(target)], check=True, env=env)
                 objects.append(str(target))
             binary = folder / "footprint"
-            subprocess.run(["clang", "-fsanitize=address,undefined", "-Wl,--gc-sections", *objects, "-pthread", "-o", str(binary)], check=True, env=env)
+            subprocess.run(["clang", "-fsanitize=address,undefined", "-Wl,--gc-sections",
+                            "-Wl,--wrap=desk_wallpaper_render", *objects, "-pthread", "-o", str(binary)], check=True, env=env)
+            review = ROOT / "build/host/f2-70"
+            review.mkdir(parents=True, exist_ok=True)
+            performance = subprocess.run([str(binary), "--theme-wallpaper-performance", str(folder)],
+                                         capture_output=True, text=True,
+                                         env={**env, "CIUKI_F270_FRAMES": str(review)}, timeout=25)
+            print(performance.stdout, end="", flush=True)
+            self.assertEqual(performance.returncode, 0, performance.stdout + performance.stderr)
+            from .test_desktop import capture
+            with patch.dict(os.environ, CIUKI_FONT_REVIEW=str(review)):
+                for frame in review.glob("*.xrgb"):
+                    capture(frame.stem, frame.read_bytes(), 1024, 768)
+                    frame.unlink()
             sequence = subprocess.run([str(binary), "--theme-wallpaper", str(folder)], capture_output=True, text=True, env=env, timeout=25)
             self.assertEqual(sequence.returncode, 0, sequence.stdout + sequence.stderr)
             print(sequence.stdout, end="")

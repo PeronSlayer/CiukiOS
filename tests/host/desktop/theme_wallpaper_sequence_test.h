@@ -8,7 +8,8 @@ static int sequence_wall_hold, sequence_wall_entered;
 static void sequence_wall_stage(const char *name)
 {
     startup_stage(name);
-    if (strcmp(name,"wallpaper_scaled")) return;
+    if (strcmp(name,"wallpaper_scaled") && strcmp(name,"wallpaper_cache_read") &&
+        strcmp(name,"wallpaper_memory_read") && strcmp(name,"wallpaper_layer_reused")) return;
     pthread_mutex_lock(&sequence_lock); sequence_wall_entered=1;
     pthread_cond_signal(&sequence_changed);
     while (sequence_wall_hold) pthread_cond_wait(&sequence_changed,&sequence_lock);

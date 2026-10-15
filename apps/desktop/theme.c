@@ -245,8 +245,12 @@ void desk_paint_shadow(struct desk_paint *p, int x, int y, int w, int h, int siz
 
 int desk_paint_text_n(struct desk_paint *p, int font, int x, int baseline, const char *s, size_t chars, uint32_t colour)
 {
+    return desk_paint_text_n_aa(p,font,x,baseline,s,chars,colour,desk_theme->text_aa);
+}
+int desk_paint_text_n_aa(struct desk_paint *p, int font, int x, int baseline, const char *s, size_t chars, uint32_t colour, int aa)
+{
     const struct desk_font *f = desk_font(font);
-    int start = x, aa = desk_theme->text_aa;
+    int start = x;
     for (size_t n = 0; *s && n < chars; n++) {
         size_t used; unsigned c = desk_utf8_decode(s, &used);
         s += used;
