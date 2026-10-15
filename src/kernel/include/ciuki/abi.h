@@ -643,8 +643,24 @@ _Static_assert(sizeof(struct ciuki_net_state) == 96, "network state ABI");
 #define CIUKI_MEDIA_NONE 0u
 #define CIUKI_MEDIA_USB 1u
 #define CIUKI_MEDIA_OPTICAL 2u
+/* Retained successful USB removal: absent from removable_mask, same generation. */
+#define CIUKI_MEDIA_SAFE_REMOVED 3u
 #define MEDIA_GET_STATE 0x4d01u
 #define MEDIA_SAFE_REMOVE 0x4d02u
+#define MEDIA_GET_BLOCKERS 0x4d04u
+struct ciuki_media_program {
+    uint32_t pid;
+    char name[32];
+};
+struct ciuki_media_blockers {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t count;
+    struct ciuki_media_program programs[64];
+};
+_Static_assert(sizeof(struct ciuki_media_blockers)==2324, "media blockers ABI");
 struct ciuki_media_state_v1 {
     uint32_t version;
     uint32_t size;

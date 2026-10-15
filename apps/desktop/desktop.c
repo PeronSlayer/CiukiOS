@@ -3,6 +3,7 @@
 #include "../gfxdemo/benchmark.h"
 #include "sound_runtime.h"
 #include "sound_storage.h"
+#include "media_notice.h"
 #include "settings_io.h"
 #include "wallpaper_io.h"
 #ifdef __i386__
@@ -829,10 +830,12 @@ static int media_read(struct desktop *d)
 {
     struct ciuki_media_state s={.version=CIUKI_MEDIA_VERSION,.size=sizeof(s)};
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC);
+    int observed=0;
     if (fd>=0) {
-        if (ciuki_devctl(fd,MEDIA_GET_STATE,&s,sizeof(s))) s.removable_mask=0;
+        observed=!ciuki_devctl(fd,MEDIA_GET_STATE,&s,sizeof(s));
         close(fd);
     }
+    if (!observed) return 0; /* An unavailable observer is not a physical unplug. */
     desk_shell_media_update(d,&s);
     /* A failed observation preserves prior state, never fabricates an eject. */
     static struct ciuki_media_volume volumes[26];
@@ -856,10 +859,20 @@ static void media_remove(struct desktop *d)
     int optical=r.drive<26 && d->sh.media.type[r.drive]==CIUKI_MEDIA_OPTICAL;
     d->sh.want_remove=0;
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC), e=fd<0 ? errno : 0;
-    if (fd>=0) { if (ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r))) e=errno; close(fd); }
-    if (e) desk_shell_notify_error(d,e==EBUSY ? "Close files on this drive and try again" : "Media removal failed",e);
-    else desk_shell_notify(d,"Removable media",optical ? "The disc has been ejected." : "It is safe to unplug the USB device.",DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
+    struct ciuki_media_blockers blockers={.version=CIUKI_MEDIA_VERSION,.size=sizeof(blockers),.drive=r.drive,.generation=r.generation};
+    char reason[320]; desk_media_blocker_text(reason,sizeof(reason),NULL,desk_media_notice_body(d->width,d->height));
+    if (fd>=0) {
+        if (ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r))) e=errno;
+        if (e==EBUSY && !ciuki_devctl(fd,MEDIA_GET_BLOCKERS,&blockers,sizeof(blockers)))
+            desk_media_blocker_text(reason,sizeof(reason),&blockers,desk_media_notice_body(d->width,d->height));
+        close(fd);
+    }
+    d->now_ns=monotonic();
     media_read(d);
+    d->now_ns=monotonic();
+    if (e==EBUSY) desk_shell_notify(d,"Drive is in use",reason,DU_DLG_ICON_WARNING,SH_NOTIFY_DETAILS);
+    else if (e) desk_shell_notify_error(d,"Media removal failed",e);
+    else desk_shell_notify(d,"Removable media",optical ? "The disc has been ejected." : "It is safe to unplug the USB device.",DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
 }
 static void mixer_read(struct desktop *d)
 {

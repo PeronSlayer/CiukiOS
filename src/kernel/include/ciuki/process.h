@@ -73,6 +73,8 @@ struct proc_ledger { uint32_t processes, threads, zombies, handles, extents, bac
 void proc_init(void);
 struct process *proc_supervisor(void);
 struct process *proc_find(uint32_t pid);
+/* Retained published slot; no waits between lookup and use. */
+struct process *proc_at_slot(unsigned slot);
 struct proc_thread *proc_thread_for(const struct task *task);
 struct proc_thread *proc_thread_find(struct process *p, uint32_t tid);
 struct proc_thread *proc_thread_slot(unsigned slot);

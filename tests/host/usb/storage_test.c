@@ -318,6 +318,13 @@ static void io_mount(const char *path,bool partitioned,unsigned bits)
     uint32_t gen=block()->media_generation;
     assert(usb_storage_eject(s,4,gen+1)==-FS_EIO && s->vfs.volumes[4]);
     assert(!usb_storage_eject(s,4,gen));assert(!s->vfs.volumes[4] && clean_flag() && device()->storage.ejected);
+    assert(!device()->storage.published && !device()->storage.online && !device()->storage.binding);
+    assert(s->volumes[4].safely_removed && device()->present && device()->configured);
+    unsigned commands_after=m.commands;
+    usb_storage_service(&m.h); assert(m.commands==commands_after && !s->vfs.volumes[4]);
+    m.connected=false; device()->present=false; usb_storage_detach(device());
+    usb_storage_service(&m.h);
+    assert(s->volumes[4].safely_removed && m.commands==commands_after);
     unsigned commands=m.commands;assert(block()->read(block(),0,1,readback)<0 && m.commands==commands);
     vfs_table_destroy(t);free(t);cleanup();
     printf("PASS USB FAT%u %s: read/copy/write/flush, E:, busy/stale eject, clean detach, disabled I/O\n",bits,partitioned?"MBR":"whole-disk");

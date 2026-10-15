@@ -791,14 +791,18 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
         if (removed) desk_sound(d,SOUND_DEVICE_DISCONNECT);
         if (added) desk_sound(d,SOUND_DEVICE_CONNECT);
         if (added || removed) {
-            char text[160]=""; size_t n=0;
+            char text[320]=""; size_t n=0; int unsafe=0;
             for (unsigned i=3;i<26;i++) if ((added|removed)&(1u<<i)) {
-                int wrote=snprintf(text+n,sizeof(text)-n,"%s%c: %s",n ? "\n" : "",'A'+i,
-                                   added&(1u<<i) ? "Media connected" : "Media removed");
+                int optical=(added&(1u<<i) ? state->type[i] : d->sh.media.type[i])==CIUKI_MEDIA_OPTICAL;
+                int safe=state->type[i]==CIUKI_MEDIA_SAFE_REMOVED && state->generation[i]==d->sh.media.generation[i];
+                if (!(added&(1u<<i)) && !optical && !safe) unsafe=1;
+                const char *event=added&(1u<<i) ? (optical ? "Disc inserted" : "Media connected") :
+                    optical ? "Disc ejected" : safe ? "Safe to unplug the USB device" : "Removed without safe removal";
+                int wrote=snprintf(text+n,sizeof(text)-n,"%s%c: %s",n ? "\n" : "",'A'+i,event);
                 if (wrote<0 || (size_t)wrote>=sizeof(text)-n) break;
                 n+=(size_t)wrote;
             }
-            desk_shell_notify(d,"Removable media",text,DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
+            desk_shell_notify(d,"Removable media",text,unsafe ? DU_DLG_ICON_WARNING : DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
         }
     }
     for (unsigned i=3;i<26;i++) if (!(state->removable_mask&(1u<<i)) ||
@@ -833,8 +837,9 @@ static void draw_media(struct desktop *d,struct desk_box clip)
     du_text(&c,p.x+8,p.y+6,"Removable media",SH_INK);
     for (unsigned row=0;row<media_rows(d);row++) {
         unsigned drive=media_at(d,row); if (drive>=26) break;
-        char label[48]; snprintf(label,sizeof(label),"%s %c:",d->sh.media.type[drive]==CIUKI_MEDIA_OPTICAL ? "Eject disc" : "Safely remove",'A'+drive);
-        du_text(&c,p.x+10,p.y+28+(int)row*22,label,SH_INK);
+        char label[96]; snprintf(label,sizeof(label),"%s %s%s%c:",d->sh.media.type[drive]==CIUKI_MEDIA_OPTICAL ? "Eject disc" : "Safely remove",
+            d->sh.media_labels[drive],d->sh.media_labels[drive][0] ? " - " : "",'A'+drive);
+        du_text_fit(&c,p.x+10,p.y+28+(int)row*22,p.w-20,label,SH_INK);
     }
 }
 static struct desk_box network_popup(const struct desktop *d)
@@ -1071,8 +1076,8 @@ static void draw_tooltip(struct desktop *d, struct desk_box clip)
 static struct desk_box notification_box(const struct desktop *d)
 {
     int w=(int)d->width-16; if (w>336) w=336;
-    int lines=du_text_wrap(NULL,(struct du_rect){0,0,w-64,0},d->sh.notification.text,0);
-    int h=lines*line_h()+58; if (h<102) h=102;
+    int lines=du_text_wrap(NULL,(struct du_rect){0,0,w-68,0},d->sh.notification.text,0);
+    int h=lines*line_h()+64; if (h<102) h=102;
     if (h>(int)d->height-2*DESK_BAR-20) h=(int)d->height-2*DESK_BAR-20;
     struct desk_box b=tray_popup(d,clock_box(d),w,h+10);
     b.h=h; b.y+=d->sh.notification.slide;
@@ -1084,12 +1089,24 @@ static struct desk_box notification_outer(const struct desktop *d)
 }
 static struct du_rect notification_area(const struct desktop *d)
 { return (struct du_rect){0,DESK_BAR,(int)d->width,tray_box(d).y-SH_TRAY_GAP-DESK_BAR}; }
+/* Include the whole entry sweep, balloon tail and theme shadow. The painter
+ * clips this overlay above the tray; the exclusion must use the same clip. */
+struct desk_box desk_shell_notification_bounds(const struct desktop *d)
+{
+    if (!d->shell || !d->sh.notification.active) return (struct desk_box){0};
+    struct desk_box b=notification_outer(d), clipped;
+    b.y-=d->sh.notification.slide; b.h+=20;
+    struct du_rect area=notification_area(d);
+    if (!desk_intersect(b,(struct desk_box){area.x,area.y,area.w,area.h},&clipped)) return (struct desk_box){0};
+    return clipped;
+}
+
 void desk_shell_notify(struct desktop *d,const char *title,const char *text,int icon,int action)
 {
     if (!d->shell) return;
     struct sh_notification *n=&d->sh.notification;
     int attention=icon==DU_DLG_ICON_WARNING || icon==DU_DLG_ICON_ERROR;
-    if (n->active && n->balloon && !attention && d->now_ns<n->expires) return;
+    if (n->active && n->balloon && !attention && action!=SH_NOTIFY_MEDIA && d->now_ns<n->expires) return;
     int repeat=n->active && n->action==SH_NOTIFY_VOLUME && action==SH_NOTIFY_VOLUME;
     if (n->active) damage(d,notification_outer(d));
     n->slide=repeat ? n->slide : 20;
@@ -1120,8 +1137,12 @@ static void draw_notification(struct desktop *d,struct desk_box clip)
     desk_paint_hgradient(&p,b.x+2,b.y+2,b.w-4,3,desk_theme->title[0],desk_theme->title[1]);
     du_icon_blit(&c,b.x+12,b.y+16,desk_shell_icon(du_message_icon_name(n->icon),32),32,DU_ICON_NORMAL);
     struct du_rect old=c.clip;
-    c.clip=du_intersection(old,(struct du_rect){b.x+54,b.y+14,b.w-68,20});
+    c.clip=du_intersection(old,(struct du_rect){b.x+54,b.y+14,b.w-90,20});
     bold(&c,b.x+54,b.y+16,n->title,DU_INK); c.clip=old;
+    for (int i=0;i<7;i++) {
+        du_fill(&c,(struct du_rect){b.x+b.w-21+i,b.y+18+i,1,1},DU_INK);
+        du_fill(&c,(struct du_rect){b.x+b.w-15-i,b.y+18+i,1,1},DU_INK);
+    }
     du_text_wrap(&c,(struct du_rect){b.x+54,b.y+36,b.w-68,b.h-60},n->text,DU_INK);
     du_text(&c,b.x+54,b.y+b.h-20,"Click to open",DU_GRAY);
     if (n->balloon) {
@@ -2061,7 +2082,10 @@ int desk_shell_button(struct desktop *d, int button, int down)
     if (d->sh.notification.active && du_contains(notification_area(d),x,y) && desk_contains(notification_box(d),x,y)) {
         if (button==CIUKI_BUTTON_LEFT) {
             struct sh_notification *n=&d->sh.notification;
+            struct desk_box b=notification_box(d);
+            int close=desk_contains((struct desk_box){b.x+b.w-26,b.y+12,18,18},x,y);
             damage(d,notification_outer(d)); n->active=0;
+            if (close) return 1;
             if (n->action==SH_NOTIFY_NETWORK) { d->sh.network_open=1; damage(d,outer(network_popup(d))); }
             else if (n->action==SH_NOTIFY_VOLUME) { d->sh.volume_open=1; damage(d,outer(volume_popup(d))); }
             else if (n->action==SH_NOTIFY_MEDIA && d->sh.media.removable_mask) { d->sh.media_open=1; damage(d,outer(media_popup(d))); }
@@ -2078,7 +2102,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
         return 1;
     }
     if (desk_contains(bar, x, y)) {
-        if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y) && button==CIUKI_BUTTON_LEFT) {
+        if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
             d->sh.media_open=1; d->sh.want_reload|=32;
             damage(d,outer(media_popup(d))); return 1;
         }

@@ -174,6 +174,9 @@ int shell_fcntl(int fd, int command, ...)
     if (fail_mapping) { errno=EBADF; return -1; }
     return 0;
 }
+static int media_available, media_error, media_query_error;
+static struct ciuki_media_state media_fixture;
+#define MEDIA_FD 1002
 static int network_available, network_error;
 static unsigned network_opens, network_closes, network_queries;
 static struct ciuki_net_state network_fixture;
@@ -185,6 +188,7 @@ static unsigned mixer_queries,mixer_sets;
 #define NETWORK_FD 1000
 int shell_open(const char *path, int flags, ...)
 {
+    if (media_available && !strcmp(path,"/dev/media")) return MEDIA_FD;
     if (!strcmp(path, "/dev/net")) {
         assert(flags == (O_RDONLY | O_CLOEXEC)); network_opens++;
         if (network_available) return NETWORK_FD;
@@ -197,7 +201,7 @@ int shell_open(const char *path, int flags, ...)
     return open(path, flags);
 }
 int shell_close(int fd)
-{ if (fd == NETWORK_FD) { network_closes++; return 0; } return fake_ops.close(fd); }
+{ if (fd == MEDIA_FD) return 0; if (fd == NETWORK_FD) { network_closes++; return 0; } return fake_ops.close(fd); }
 static int shell_regular_fd=-1, shell_directory_fd=-1;
 int shell_fstat(int fd, struct stat *st)
 {
@@ -262,6 +266,22 @@ static int fake_record_count;
 /* Desktop shell services with explicit device boundaries. */
 int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
 {
+    if (fd==MEDIA_FD) {
+        if (op==MEDIA_GET_STATE) {
+            assert(size==sizeof(media_fixture));
+            if (media_query_error) { errno=EIO;return -1; }
+            memcpy(record,&media_fixture,size);return 0;
+        }
+        if (op==MEDIA_GET_VOLUME) { assert(size==sizeof(struct ciuki_media_volume));return 0; }
+        if (op==MEDIA_GET_BLOCKERS) {
+            struct ciuki_media_blockers *b=record;assert(size==sizeof(*b));
+            b->count=1;b->programs[0].pid=42;strcpy(b->programs[0].name,"ciuknote");return 0;
+        }
+        assert(op==MEDIA_SAFE_REMOVE && size==sizeof(struct ciuki_media_remove));
+        model_us+=10000000; /* a real eject may take ten seconds */
+        if (media_error) { errno=media_error;return -1; }
+        media_fixture.removable_mask=0;media_fixture.type[4]=CIUKI_MEDIA_SAFE_REMOVED;return 0;
+    }
 #ifdef DESK_FOOTPRINT_TEST
     if (fd==MIXER_FD) {
         assert(size==sizeof(mixer_fixture));
@@ -851,6 +871,26 @@ static void test_wallpaper_startup(void)
     puts("PASS startup: first solid frame before worker, Start input/reaction under 50 ms while loader held, pointer ownership, theme retention, colour/geometry invalidation");
 }
 
+static void test_media_removal_service(void)
+{
+    static struct desktop d;
+    fake_reset();desk_init(&d,&fake_ops,640,480);desk_shell_enable(&d);
+    timing_model=1;model_us=1000000;media_available=1;media_error=EBUSY;
+    media_fixture=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_fixture),.removable_mask=1u<<4};
+    media_fixture.type[4]=CIUKI_MEDIA_USB;media_fixture.generation[4]=77;
+    media_read(&d);media_query_error=1;
+    assert(!media_read(&d) && d.sh.media.removable_mask==(1u<<4));
+    media_query_error=0;d.sh.want_remove=4;d.sh.remove_generation=77;media_remove(&d);
+    assert(d.sh.media.removable_mask && strstr(d.sh.notification.text,"ciuknote (42)"));
+    assert(d.sh.notification.expires==monotonic()+8000000000ull);
+    media_error=0;d.sh.want_remove=4;media_remove(&d);
+    assert(!d.sh.media.removable_mask && strstr(d.sh.notification.text,"safe to unplug"));
+    assert(!d.sh.notification.balloon && d.sh.notification.started==monotonic());
+    desk_shell_tick(&d);assert(d.sh.notification.active);
+    media_read(&d);assert(strstr(d.sh.notification.text,"safe to unplug"));
+    media_available=0;timing_model=0;desk_render_release(&d);fake_reset();
+    puts("PASS media service: busy program names, refresh-before-success, ten-second eject starts a fresh eight-second notification, later detach preserves success");
+}
 static void test_network_service(void)
 {
     struct desktop d; fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
@@ -894,6 +934,7 @@ int main(int argc,char **argv)
     (void)argc; (void)argv;
 #endif
     test_network_service();
+    test_media_removal_service();
     test_music_mixer();
     struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);

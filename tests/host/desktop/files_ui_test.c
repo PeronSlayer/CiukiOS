@@ -3,6 +3,7 @@
  * Replays the files-qemu-t23 script in client coordinates, checks the
  * checkpoints and filesystem outcome, and writes deterministic frames. */
 #include "fake_vfs.h"
+#include "../../../apps/desktop/media_notice.h"
 #include "../../../apps/files/app.h"
 #include <assert.h>
 #include <stdio.h>
@@ -101,13 +102,18 @@ static int remove_media(unsigned d,uint32_t gen)
 {
     assert((d==4 && gen==77) || (d==3 && gen==88)); removal_calls++;
     if (removal_error) return removal_error;
-    fake_nodes[fake_lookup(d==3 ? "/mnt/d" : "/mnt/e")].live=0; media_state.removable_mask=0; memset(media_state.generation,0,sizeof(media_state.generation)); return 0;
+    fake_nodes[fake_lookup(d==3 ? "/mnt/d" : "/mnt/e")].live=0; media_state.removable_mask &= ~(1u<<d); media_state.type[d]=d==3 ? 0 : CIUKI_MEDIA_SAFE_REMOVED; return 0;
+}
+static int blockers(unsigned drive,uint32_t generation,struct ciuki_media_blockers *b)
+{
+    assert(drive==4 && generation==77);
+    *b=(struct ciuki_media_blockers){.count=2,.programs={{42,"ciuknote"},{43,"terminal"}}}; return 0;
 }
 static void removable_ui_tests(void)
 {
     fake_image_tree(); fake_create("/mnt/e",FM_DIR);
     memset(&app,0,sizeof(app));du_init(&ui,pixels,WIDTH,HEIGHT);
-    app.media_read=read_media;app.media_remove=remove_media;
+    app.media_read=read_media;app.media_remove=remove_media;app.media_blockers=blockers;
     media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state),.removable_mask=1u<<4};media_state.generation[4]=77;media_state.type[4]=CIUKI_MEDIA_USB;
     assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
     int row=list_find("E:");assert(row>=0);fm_select(&app.model,(unsigned)row,0);files_update(&app);
@@ -116,11 +122,12 @@ static void removable_ui_tests(void)
     int action=0;for(unsigned i=0;i<app.popup_count;i++)if(app.popup[i].label && strstr(app.popup[i].label,"Safely"))action=app.popup[i].id;
     assert(action);du_popup(&ui,NULL,0,0,0,0);
     removal_error=-EBUSY;activate(action);assert(removal_calls==1 && ui.dialog.kind && media_state.removable_mask);
+    assert(strstr(ui.dialog.text,"ciuknote (42)") && strstr(ui.dialog.text,"terminal (43)"));
     key(DU_KEY_ENTER);removal_error=0;activate(action);
     assert(removal_calls==2 && !app.model.path[0] && list_find("E:")<0 && strstr(app.note,"safe to unplug"));
     files_destroy(&app);fake_assert_clean();
     fake_image_tree(); memset(&app,0,sizeof(app));du_init(&ui,pixels,WIDTH,HEIGHT);
-    app.media_read=read_media;app.media_remove=remove_media;
+    app.media_read=read_media;app.media_remove=remove_media;app.media_blockers=blockers;
     media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state)};
     assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
     assert(list_find("D:")<0); fake_create("/mnt/d",FM_DIR);
@@ -140,6 +147,113 @@ static void removable_ui_tests(void)
     files_destroy(&app);fake_assert_clean();
     puts("PASS Files removable Computer view: E: Tango icon/type, context action, busy error, generation, safe detach and refresh");
     puts("PASS Files optical Computer view: runtime insertion/removal, D: CD-ROM icon/type, expired folder returns to Computer, reinsertion and eject text");
+}
+static void external_removal_tests(void)
+{
+    /* Same generation after safe removal: a tray action and a separate Files
+     * controller must both expire a browser inside a nested directory. */
+    for (int other_files=0;other_files<2;other_files++) {
+        fake_image_tree();fake_create("/mnt/e",FM_DIR);fake_create("/mnt/e/sub",FM_DIR);fake_file("/mnt/e/sub/stale.txt",3,0);
+        memset(&app,0,sizeof(app));du_init(&ui,pixels,WIDTH,HEIGHT);
+        app.media_read=read_media;
+        media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state),.removable_mask=1u<<4};
+        media_state.generation[4]=77;media_state.type[4]=CIUKI_MEDIA_USB;
+        assert(!files_setup(&app,&ui,&fake_vfs,"/mnt/e/sub"));
+        assert(list_find("stale.txt")>=0);
+        if (other_files) {
+            struct files_app *other=calloc(1,sizeof(*other));struct du_ui *other_ui=calloc(1,sizeof(*other_ui));assert(other && other_ui);
+            du_init(other_ui,pixels,WIDTH,HEIGHT);other->media_read=read_media;other->media_remove=remove_media;
+            assert(!files_setup(other,other_ui,&fake_vfs,"/mnt/e"));
+            int action=0;
+            for (unsigned i=0;i<other->menus[0].count;i++)
+                if (strstr(other->file_items[i].label ? other->file_items[i].label : "","Safely")) action=other->file_items[i].id;
+            assert(action);
+            struct du_event remove={.type=DU_EV_ACTIVATE,.id=action};files_event(other_ui,&remove,other);
+            assert(!other->model.path[0]);files_destroy(other);free(other_ui);free(other);
+        } else {
+            /* Tray/kernel observation: absent mask with retained success gen. */
+            assert(!remove_media(4,77));
+        }
+        assert(media_state.generation[4]==77 && !(media_state.removable_mask & (1u<<4)));
+        /* The old directory can even still be in a caller's namespace cache. */
+        struct du_event poll={.type=DU_EV_TICK,.id=2};files_event(&ui,&poll,&app);
+        assert(!app.model.path[0] && list_find("stale.txt")<0 && list_find("E:")<0);
+        files_event(&ui,&poll,&app);assert(!app.model.path[0] && list_find("stale.txt")<0);
+        files_destroy(&app);fake_assert_clean();
+    }
+    puts("PASS Files external removal: tray and second Files instance, retained generation, nested stale listing cleared to Computer");
+}
+static unsigned label_calls[26], key_calls[26];
+static struct files_label_key label_keys[26];
+static int label_error;
+static int label_source(unsigned d,struct files_label_key *key)
+{ key_calls[d]++;*key=label_keys[d];return label_error; }
+static int label_read(unsigned d,char out[33])
+{ label_calls[d]++;snprintf(out,33,"Drive %u label %lld",d,(long long)label_keys[d].modified);return 0; }
+static void label_cache_tests(void)
+{
+    fake_image_tree();fake_create("/mnt/e",FM_DIR);fake_create("/mnt/f",FM_DIR);
+    memset(&app,0,sizeof(app));du_init(&ui,pixels,WIDTH,HEIGHT);
+    memset(label_calls,0,sizeof(label_calls));memset(key_calls,0,sizeof(key_calls));memset(label_keys,0,sizeof(label_keys));
+    app.media_read=read_media;app.media_remove=remove_media;app.media_label=label_read;app.media_label_key=label_source;
+    media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state),.removable_mask=(1u<<4)|(1u<<5)};
+    media_state.generation[4]=77;media_state.generation[5]=78;media_state.type[4]=media_state.type[5]=CIUKI_MEDIA_USB;
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    assert(label_calls[4]==1 && label_calls[5]==1);
+    int row=list_find("E:");assert(row>=0 && strstr(app.rows[row].text[0],"Drive 4 label 0"));
+    fm_select(&app.model,(unsigned)row,0);
+    for (unsigned i=0;i<8;i++) { files_update(&app);files_layout(&app); }
+    assert(label_calls[4]==1 && label_calls[5]==1 && key_calls[4]==1 && key_calls[5]==1);
+    assert(strstr(app.removal_label,"Drive 4 label 0"));
+    assert(!files_navigate(&app,"/mnt/e"));
+    for (unsigned i=0;i<8;i++) files_update(&app);
+    assert(label_calls[4]==1 && key_calls[4]==1);
+    struct du_event poll={.type=DU_EV_TICK,.id=2};
+    for (unsigned i=0;i<4;i++) files_event(&ui,&poll,&app);
+    assert(label_calls[4]==1 && label_calls[5]==1); /* metadata only */
+    label_keys[4].modified=1;files_event(&ui,&poll,&app);
+    assert(label_calls[4]==2 && label_calls[5]==1 && strstr(app.removal_label,"Drive 4 label 1"));
+    strcpy(label_keys[5].volume,"New volume label");files_event(&ui,&poll,&app);
+    assert(label_calls[4]==2 && label_calls[5]==2);
+    label_error=-EIO;label_keys[4].modified=2;files_event(&ui,&poll,&app);
+    assert(label_calls[4]==2 && strstr(app.removal_label,"Drive 4 label 1"));
+    label_error=0;files_event(&ui,&poll,&app);assert(label_calls[4]==3);
+    media_state.generation[4]++;files_event(&ui,&poll,&app);
+    assert(label_calls[4]==4 && label_calls[5]==2 && !app.model.path[0]);
+    media_state.removable_mask &= ~(1u<<4);files_event(&ui,&poll,&app);
+    assert(!app.drive_labels[4].valid && label_calls[4]==4);
+    media_state.removable_mask |= 1u<<4;files_event(&ui,&poll,&app);
+    assert(label_calls[4]==5 && label_calls[5]==2);
+    key(DU_KEY_F5);assert(label_calls[4]==6 && label_calls[5]==3);
+    files_destroy(&app);fake_assert_clean();
+    puts("PASS Files labels: cached UI/selection/layout, unchanged polls, per-drive generation, volume/AUTORUN metadata changes, retry, absence/reinsert and F5");
+}
+static void blocker_dialog_tests(void)
+{
+    for (unsigned theme=0;theme<3;theme++) for (int small=0;small<2;small++) for (int long_names=0;long_names<2;long_names++) {
+        desk_theme_use(desk_theme_at(theme)->name);
+        int width=small ? 620 : WIDTH, height=small ? 380 : HEIGHT;
+        du_init(&ui,pixels,width,height);
+        struct ciuki_media_blockers b={.count=long_names ? 64 : 30};
+        for (unsigned i=0;i<b.count;i++) {
+            b.programs[i].pid=i+1;
+            snprintf(b.programs[i].name,sizeof(b.programs[i].name),long_names ? "WWWWWWWWWWWWWWWWWWWWWWWWWWW%02u" : "p%u",i);
+        }
+        char text[1024];struct du_rect budget=desk_media_dialog_body(width,height);
+        desk_media_blocker_text(text,sizeof(text),&b,budget);
+        assert(desk_media_text_fits(text,budget));
+        const char *tail=strstr(text,"\n... and ");assert(tail);
+        unsigned shown=0,remaining=0;
+        for (const char *s=text;*s;s++) if (*s=='(') shown++;
+        assert(sscanf(tail,"\n... and %u more programs.",&remaining)==1 && shown+remaining==b.count && shown);
+        du_message(&ui,204,"Drive is in use",text,DU_DLG_ICON_WARNING,NULL,0,0,0);
+        struct du_dialog *dialog=&ui.dialog;
+        struct du_rect actual={0,0,dialog->box.w-78,dialog->items[0].box.y-18-(dialog->box.y+DESK_FRAME_TITLE+16)};
+        assert(desk_media_text_fits(dialog->text,actual));
+        assert(!strcmp(dialog->text,text));du_render(&ui);du_dialog_close(&ui);
+    }
+    desk_theme_use("platinum");
+    puts("PASS Files blocker dialog rows: many short/long wrapped names, complete visible remainder, three themes, 620x380 and 760x520");
 }
 static void computer_ui_tests(void)
 {
@@ -427,6 +541,9 @@ int main(int argc, char **argv)
     fake_assert_clean();
     computer_ui_tests();
     removable_ui_tests();
+    external_removal_tests();
+    label_cache_tests();
+    blocker_dialog_tests();
     /* Default associations run through the actual Files controller. */
     fake_image_tree(); fake_file("/Programs/paint",100,1); fake_file("/Programs/viewer",100,1); fake_file("/Programs/music",100,1);
     fake_file("/Documents/Test.BMP",100,1); fake_file("/Documents/Other.PNG",100,1); fake_file("/Documents/Photo.jpg",100,1);

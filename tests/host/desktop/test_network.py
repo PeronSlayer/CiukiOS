@@ -38,7 +38,7 @@ class NetworkTrayTests(unittest.TestCase):
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             *assets.defines(),
                             "-fsanitize=address,undefined", "-Wl,--wrap=du_text",
-                            *(["-Wl,--wrap=du_text_wrap"] if kind=="network" else []),
+                            *(["-Wl,--wrap=du_text_wrap"] if kind=="network" else ["-Wl,--wrap=du_text_fit"] if kind=="media" else []),
                             "-I", str(ROOT / "src/kernel/include"), "-I", str(ROOT / "apps/desktop"),
                             *map(str, sources), "-o", str(binary)], check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)

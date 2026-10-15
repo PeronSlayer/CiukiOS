@@ -20,7 +20,7 @@ struct storage_volume {
     struct fat_volume fat;
     unsigned disk, partition, drive;
     int error;
-    bool present, read_gate, removable;
+    bool present, read_gate, removable, safely_removed;
     uint32_t read_sequence, write_sequence;
     uint64_t reads, writes, flushes, refused, writes_before_gate;
     /* Selected crash probe only; notification after synchronous completion.

@@ -11,6 +11,9 @@ static void sound(struct desktop *desk,unsigned e) { (void)desk;assert(e<SOUND_E
 void __real_du_text(struct du_canvas *,int,int,const char *,uint32_t);
 void __wrap_du_text(struct du_canvas *c,int x,int y,const char *s,uint32_t col)
 {if(!strncmp(s,"Safely remove ",14))rows++;__real_du_text(c,x,y,s,col);}
+void __real_du_text_fit(struct du_canvas *,int,int,int,const char *,uint32_t);
+void __wrap_du_text_fit(struct du_canvas *c,int x,int y,int w,const char *s,uint32_t col)
+{if(!strncmp(s,"Safely remove ",14))rows++;__real_du_text_fit(c,x,y,w,s,col);}
 static const uint32_t *store(const char *name,unsigned size)
 {if(!strcmp(name,"drive-removable-media")){assert(size==16 || size==22 || size==32 || size==48);if(size==16)icon_calls++;}return du_icon_argb(name,size);}
 static void click(int x,int y)

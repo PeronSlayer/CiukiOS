@@ -176,10 +176,11 @@ static void usb_devices(struct ciuki_devices_info *out)
                 if (u->hid[j].protocol == 1) { class_id = CIUKI_DEVICE_KEYBOARD; name = "USB HID keyboard"; break; }
                 class_id = CIUKI_DEVICE_MOUSE; name = "USB HID mouse";
             }
+            if (u->storage.bound) { class_id=CIUKI_DEVICE_DISK; name="USB mass storage"; }
             struct ciuki_device_record *d = append(out, 0x60000 + i * USB_DEVICE_MAX + k,
-                class_id, CIUKI_BUS_USB, name, "usb-host",
+                class_id, CIUKI_BUS_USB, name, u->storage.bound ? "usb-storage" : "usb-host",
                 u->quarantined || h->quarantined ? CIUKI_DEVICE_QUARANTINED :
-                u->present && u->configured ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT, u->reason);
+                u->present && u->configured && !u->storage.ejected ? CIUKI_DEVICE_READY : CIUKI_DEVICE_ABSENT, u->reason);
             if (!d) continue;
             d->bus = i; d->slot = u->address; d->function = u->port;
             d->subclass = u->parent; d->prog_if = u->low_speed;
@@ -352,7 +353,8 @@ void devices_snapshot(struct ciuki_devices_info *out)
             if (!disk) continue;
             d = append(out, 0x40100 + c * 2 + unit, disk->atapi ? CIUKI_DEVICE_CDROM : CIUKI_DEVICE_DISK,
                 CIUKI_BUS_LEGACY, disk->model, "ata-pio", disk->block.quarantined || disk->channel->quiescing ?
-                CIUKI_DEVICE_QUARANTINED : CIUKI_DEVICE_READY, "Identified ATA/ATAPI unit.");
+                CIUKI_DEVICE_QUARANTINED : CIUKI_DEVICE_READY, disk->atapi ?
+                disk->media==ATAPI_NO_MEDIUM ? "no_medium_or_ejected" : disk->media==ATAPI_READY ? "media_ready" : "media_unavailable" : "Identified ATA/ATAPI unit.");
             if (d) { d->slot = c; d->function = unit; d->generation = disk->generation; }
             activation(d, "ata"); owner_resources(d, owner);
         }

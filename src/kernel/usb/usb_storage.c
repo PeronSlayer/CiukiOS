@@ -546,7 +546,7 @@ void usb_storage_service(struct usb_host *h)
 }
 int usb_storage_eject(struct storage *store, unsigned drive, uint32_t generation)
 {
-    if (!store || !store->ready || drive<4 || drive>=26) return -FS_EINVAL;
+    if (!store || !store->ready || store->stopped || drive<4 || drive>=26 || !generation) return -FS_EINVAL;
     fs_lock_take(&store->vfs.lock);
     struct storage_volume *v=&store->volumes[drive];
     int e=-FS_ENOENT;
@@ -559,6 +559,7 @@ int usb_storage_eject(struct storage *store, unsigned drive, uint32_t generation
                 struct usb_device *d=b->ctx;
                 usb_host_take(d->host);
                 d->storage.ejected=true; d->storage.online=false;
+                d->storage.published=false; d->storage.binding=false;
                 b->quarantined=true; d->reason="safely_removed";
                 usb_host_drop(d->host);
                 klog("[usb-storage] safely_removed addr=%u drive=%c generation=%u",
@@ -566,5 +567,7 @@ int usb_storage_eject(struct storage *store, unsigned drive, uint32_t generation
             }
         }
     }
+    klog("[usb-storage] removal drive=%c generation=%u result=%d reason=%s",
+         'A'+drive,generation,e,!e ? "safely_removed" : e==-FS_EBUSY ? "open_files" : "removal_failed");
     fs_lock_drop(&store->vfs.lock); return e;
 }

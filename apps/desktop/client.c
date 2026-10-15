@@ -330,6 +330,12 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
         !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.switcher && !d->sh.tooltip && !d->power.state && !d->animation.active &&
         !c->internal && !c->collapsed && !c->minimized && c->order>0;
     struct desk_box next = {x,y,frame.w,frame.h}, ignored;
+    struct desk_box source=continuing ?
+        (struct desk_box){d->copy_rect.src_x,d->copy_rect.src_y,(int)d->copy_rect.width,(int)d->copy_rect.height} :
+        (struct desk_box){frame.x,frame.y+desk_theme->radius,frame.w,frame.h-desk_theme->radius};
+    struct desk_box destination={x,y+desk_theme->radius,frame.w,frame.h-desk_theme->radius};
+    if (desk_notification_intersects(d,source) || desk_notification_intersects(d,destination)) copy=0;
+
     if (frame.x < 0 || frame.y < 0 || frame.x+frame.w > (int32_t)d->width ||
         frame.y+frame.h > (int32_t)d->height) copy=0;
     for (int j=0; j<DESK_CLIENTS && copy; j++) {

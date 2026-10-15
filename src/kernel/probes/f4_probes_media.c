@@ -140,6 +140,19 @@ static int probe_optical(void)
             if (native>=0) { fs_lock_take(&s->vfs.lock); old_native=file_io_locked(file_fd(proc_supervisor(),native),data,1,false,false,0,&n); fs_lock_drop(&s->vfs.lock); }
             rec_emit("optical","DATA","case=reinsert drive=%c generation=%u old=%d native_old=%d result=%d",'A'+new_drive,d->block.media_generation,old,old_native,e);
             pass &= !e && old==-FS_EIO && old_native==-EIO && peer_read(peer,hash,true);
+            /* Keep the surprise-removal checks above, then exercise the
+             * explicit action against this newly mounted generation. */
+            if (pass) {
+                char previous=first_file[0];first_file[0]=(char)('A'+new_drive);
+                int opened=vfs_open(&optical_table,first_file,VFS_READ,VFS_DENY_NONE,0);
+                first_file[0]=previous;
+                int busy=opened<0 ? opened : optical_eject(s,new_drive,d->block.media_generation);
+                if (opened>=0) vfs_close(&optical_table,opened);
+                int removed=optical_eject(s,new_drive,d->block.media_generation);
+                bool absent=!vfs_drive_present(&s->vfs,new_drive);
+                rec_emit("optical","DATA","case=safe_remove busy=%d result=%d letter_absent=%u",busy,removed,absent);
+                pass &= busy==-FS_EBUSY && !removed && absent;
+            }
         }
     }
     if (stale>=0) vfs_close(&optical_table,stale);
@@ -322,3 +335,61 @@ static int probe_ntfs_ro(void)
     rec_emit("ntfs-ro","END","status=%s",pass ? "PASS" : "FAIL"); return pass ? 0 : 1;
 }
 CIUKI_F4_PROBE("ntfs-ro",probe_ntfs_ro);
+
+/* F2-74: the same generation-qualified storage removal used by /dev/media.
+ * Uses only the runner's expendable USB fixture, never the boot volume. */
+#include <ciuki/usb.h>
+static struct vfs_table removal_table;
+static int probe_media_remove(void)
+{
+    rec_emit("media-remove","BEGIN",0);
+    struct storage *s=storage_get(); unsigned drive=26;
+    uint64_t deadline=deadline_after_ms(20000);
+    while (deadline_after_ms(0)<deadline && drive==26) {
+        fs_lock_take(&s->vfs.lock);
+        for (unsigned d=4;d<26;d++) if (s->volumes[d].present && s->volumes[d].removable &&
+            s->vfs.volumes[d]==&s->volumes[d].fat) { drive=d; break; }
+        fs_lock_drop(&s->vfs.lock);
+        if (drive==26) task_sleep_ms(100);
+    }
+    bool pass=drive<26;
+    int held=-1,e=-FS_ENOENT,busy=-FS_ENOENT;
+    struct usb_device *device=0;
+    if (pass) {
+        struct storage_volume *v=&s->volumes[drive];
+        struct blkdev *block=v->part.parent; device=block->ctx;
+        uint32_t generation=block->media_generation;
+        e=vfs_table_init(&s->vfs,&removal_table,2);pass=!e && !v->fat.readonly;
+        char path[]="E:/SAFE.TXT";path[0]=(char)('A'+drive);
+        if (pass) { held=vfs_open(&removal_table,path,VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0);pass=held>=0; }
+        size_t written=0;
+        if (pass) { e=vfs_write(&removal_table,held,"Ciuki safe removal\n",19,&written);pass=!e && written==19; }
+        if (pass) {
+            uint64_t writes=v->writes,flushes=v->flushes;
+            busy=usb_storage_eject(s,drive,generation);
+            bool unchanged=v->writes==writes && v->flushes==flushes && v->present;
+            rec_emit("media-remove","DATA","case=busy result=%d unchanged=%u",busy,unchanged);
+            pass=busy==-FS_EBUSY && unchanged;
+        }
+        if (held>=0) { e=vfs_close(&removal_table,held);held=-1;pass &= !e; }
+        if (pass) {
+            e=usb_storage_eject(s,drive,generation);
+            bool absent=!vfs_drive_present(&s->vfs,drive);
+            bool released=device->storage.ejected && !device->storage.online && !device->storage.published;
+            rec_emit("media-remove","DATA","case=safe_remove result=%d absent=%u released=%u enumerated=%u",
+                     e,absent,released,device->present && device->configured);
+            pass=!e && absent && released && device->present && device->configured;
+        }
+        if (pass) {
+            rec_emit("media-remove","ARM","action=usb_detach");
+            deadline=deadline_after_ms(10000);
+            while (device->present && deadline_after_ms(0)<deadline) task_sleep_ms(100);
+            rec_emit("media-remove","DATA","case=detach absent=%u safe=%u",!device->present,v->safely_removed);
+            pass=!device->present && v->safely_removed;
+        }
+    }
+    if (held>=0) vfs_close(&removal_table,held);
+    if (removal_table.vfs) vfs_table_destroy(&removal_table);
+    rec_emit("media-remove","END","status=%s",pass ? "PASS" : "FAIL");return pass ? 0 : 1;
+}
+CIUKI_F4_PROBE("media-remove",probe_media_remove);
