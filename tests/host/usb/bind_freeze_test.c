@@ -13,10 +13,12 @@ volatile uint64_t g_ticks;
 
 static struct task desktop_task, writer_task, other_usb_task;
 static unsigned desktop_turns, writer_turns, other_turns, durable_flushes;
+static bool fixed_flush_error;
 static uint64_t hold_until;
 static bool desktop_holding;
 static bool other_reserving;
 static uint64_t reservation_until;
+static bool writer_paused;
 static struct blkdev fixed;
 static uint8_t *fixed_image, fixed_mbr[512];
 static unsigned fixed_offset;
@@ -34,7 +36,7 @@ static int fixed_read(struct blkdev *b,uint64_t lba,uint32_t n,void *p)
 {return fixed_io(b,lba,n,p,false);}
 static int fixed_write(struct blkdev *b,uint64_t lba,uint32_t n,const void *p)
 {return fixed_io(b,lba,n,(void *)p,true);}
-static int fixed_flush(struct blkdev *b) {(void)b;durable_flushes++;return 0;}
+static int fixed_flush(struct blkdev *b) {(void)b;durable_flushes++;return fixed_flush_error ? -FS_EIO : 0;}
 static void replay(void)
 {
     /* usb_sleep must release its short DMA mutex even when the general slot
@@ -57,7 +59,7 @@ static void replay(void)
             }
         } else if(t==&writer_task) {
             writer_turns++;
-            if(!desktop_holding) {int e=bootlog_drain();assert(!e || e==-FS_EBUSY);}
+            if(!desktop_holding && !writer_paused) {int e=bootlog_drain();assert(!e || e==-FS_EBUSY);}
         } else {
             assert(t==&other_usb_task);other_turns++;
             if(other_reserving && m.now>=reservation_until) {m.h.busy=false;other_reserving=false;}
@@ -158,10 +160,8 @@ static uint64_t stage_elapsed(const char *name)
     assert(!strncmp(end," result=0\n",10));
     check_disk_record(needle);return elapsed;
 }
-static void successful_bind(const char *path,bool slow)
+static void small_stick(void)
 {
-    setup(path,true);activate_log();use_uhci();
-    uint8_t *original=m.image;size_t original_bytes=m.bytes;
     static uint8_t stick[64*512];memset(stick,0,sizeof(stick));
     stick[0]=0xeb;stick[1]=0x3c;stick[2]=0x90;
     fs_wr16(stick+11,512);stick[13]=1;fs_wr16(stick+14,1);stick[16]=2;
@@ -172,6 +172,12 @@ static void successful_bind(const char *path,bool slow)
     memcpy(stick+3*512,"SHORT   BIN",11);stick[3*512+11]=FAT_ATTR_ARCHIVE;
     fs_wr16(stick+3*512+26,2);fs_wr32(stick+3*512+28,512);memset(stick+4*512,0x5a,512);
     m.image=stick;m.bytes=sizeof(stick);m.mbr[450]=1;fs_wr32(m.mbr+458,64);
+}
+static void successful_bind(const char *path,bool slow)
+{
+    setup(path,true);activate_log();use_uhci();
+    uint8_t *original=m.image;size_t original_bytes=m.bytes;
+    small_stick();
     if(slow) {m.ready_at=m.now+4000;m.flush_delay=2000;m.first_read_delay=2000;}
     desktop_holding=false;desktop_turns=writer_turns=other_turns=0;sleep_hook=replay;
     assert(!usb_storage_attach(device()));usb_storage_service(&m.h);sleep_hook=NULL;
@@ -206,9 +212,112 @@ static void successful_bind(const char *path,bool slow)
            slow,(unsigned long long)ready_ms,(unsigned long long)flush_ms,(unsigned long long)mount_ms,
            (unsigned long long)m.now,desktop_turns,writer_turns,other_turns);
 }
+static unsigned hid_polls,hid_naks,hid_reports;
+static bool receiver_transaction(uint32_t address,uint32_t qh,volatile uint32_t *td)
+{
+    assert(qh==m.h.dma_phys+USB_HID_BASE || qh==m.h.dma_phys+USB_HID_BASE+USB_HID_STRIDE);
+    assert(address==qh+16 && ((td[2]>>8)&127)==1 && (td[2]&255)==USB_PID_IN);
+    /* Idle receiver polls NAK, with occasional reports to exercise retirement. */
+    if(m.now%40) {td[1]|=1u<<19;hid_naks++;return false;}
+    unsigned buffer=td[3]-m.h.dma_phys;assert(buffer<=USB_DMA_BYTES-8);
+    memset(m.dma+buffer,0,8);
+    td[1]&=~(0xffu<<16|0x7ffu);td[1]|=7;
+    return true;
+}
+static void receiver_poll(struct usb_device *d,struct usb_hid *p)
+{
+    if(d->address!=1 || !p->endpoint)return;
+    uint8_t report[8];hid_polls++;
+    int e=usb_interrupt(d,p,report,sizeof(report));
+    if(e>=0) {assert(e==8);p->toggle^=1;hid_reports++;}
+    else assert(e==-USB_EAGAIN);
+    if(p->trace.valid && p->poll_records<20) {
+        p->poll_records++;
+        klog("[usb] hid poll addr=1 interface=%u ep=%u interval=%u toggle=%u maxlen=8 result=%d controller=usb-2807 root=1 parent=0",
+             p->interface,p->endpoint,p->interval,p->toggle,e);
+    }
+}
+static void fail_log_commit(void)
+{
+    assert(bootlog_try_sync()==-FS_EAGAIN);
+    fixed_flush_error=true;assert(bootlog_drain()==-FS_EIO);fixed_flush_error=false;
+    struct bootlog_stats stats;bootlog_snapshot(&stats);
+    assert(stats.error==-FS_EIO && !stats.active);
+}
+static void logging_backpressure(const char *path,unsigned kind)
+{
+    setup(path,true);activate_log();use_uhci();
+    uint8_t *original=m.image;size_t original_bytes=m.bytes;
+    small_stick();
+    /* Address 1 occupies root port 1 before address 2 starts on port 2. */
+    m.h.devices[1]=m.h.devices[0];m.storage_slot=1;
+    device()->address=2;device()->root_port=device()->port=1;
+    m.h.devices[0]=(struct usb_device){.host=&m.h,.present=true,.configured=true,.address=1};
+    struct usb_device *receiver=&m.h.devices[0];
+    receiver->hid[0]=(struct usb_hid){.active=true,.protocol=1,.endpoint=1,.packet=8,.interval=8};
+    receiver->hid[1]=(struct usb_hid){.active=true,.protocol=2,.interface=1,.endpoint=2,.packet=8,.interval=2};
+    m.h.device_count=2;m.h.ports=2;
+    for(unsigned i=0;i<2;i++) {
+        uint32_t *qh=(uint32_t *)(m.dma+USB_HID_BASE+i*USB_HID_STRIDE);
+        qh[0]=(m.h.dma_phys+(i ? USB_UHCI_CONTROL_QH : USB_HID_BASE+USB_HID_STRIDE))|2;qh[1]=1;
+    }
+    for(unsigned i=0;i<1024;i++)((uint32_t *)m.dma)[i]=(m.h.dma_phys+USB_HID_BASE)|2;
+    hid_polls=hid_naks=hid_reports=0;hid_poll_hook=receiver_poll;private_transaction_hook=receiver_transaction;
+    desktop_task=(struct task){.prio=P_NORMAL};writer_task=(struct task){.prio=P_DEVICE};
+    other_usb_task=(struct task){.prio=P_DEVICE};
+    desktop_turns=writer_turns=other_turns=0;desktop_holding=other_reserving=false;
+    writer_paused=true;sleep_hook=replay;
+    for(unsigned i=0;i<300;i++) {
+        usb_host_take(&m.h);usb_hid_service(&m.h);usb_sleep(&m.h,1);usb_host_drop(&m.h);
+    }
+    assert(hid_polls && hid_naks && hid_reports && strstr(records,"hid poll addr=1"));
+    if(kind==1) {
+        static const char bytes[1024]={0};
+        for(unsigned i=0;i<9;i++)bootlog_capture_ring(bytes,sizeof(bytes));
+    }
+    if(kind==2)fail_log_commit();
+    if(kind==4)assert(!bootlog_shutdown());
+    /* The real logger has pending bytes and cannot commit for over 2 seconds.
+     * Previously max_lun quarantined here with -EAGAIN and no submitted TD. */
+    uint64_t begin=m.now;unsigned polls=hid_polls,reports_before=hid_reports;
+    assert(!usb_storage_attach(device()));
+    uint64_t attach_ms=m.now-begin;
+    assert(attach_ms<BOOTLOG_SYNC_TIMEOUT_MS && m.inquiries==1);
+    assert(strstr(records,"[usb-storage] stage=inquiry addr=2\n"));
+    if(kind==3)fail_log_commit(); /* logger fails only after transport probing */
+    usb_storage_service(&m.h);
+    assert(device()->storage.published && storage_get()->vfs.volumes[4]);
+    assert(!device()->quarantined && !block()->quarantined && !m.h.quarantined && !m.h.busy);
+    assert(!strstr(records,"[usb-storage] quarantine") && hid_polls>polls && hid_reports>reports_before);
+    assert(strstr(records,kind==2 ? "stage_record addr=2 stage=max_lun record=lost result=-5" :
+                                 "stage_record addr=2 stage=max_lun record=lost result=-11"));
+    if(kind==1)assert(strstr(records,"ring_queued=8192 ring_capacity=8192"));
+    if(kind==3)assert(strstr(records,"stage_record addr=2 stage=mount record=lost result=-5"));
+    assert(strstr(records,"ring_queued=") && strstr(records,"ring_capacity=8192") && strstr(records,"boot_queued="));
+    writer_paused=false;sleep_hook=NULL;
+    struct vfs_table table;assert(!vfs_table_init(&storage_get()->vfs,&table,4));
+    int fd=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);assert(fd>=0);
+    uint8_t data[512];size_t got;assert(!vfs_read(&table,fd,data,sizeof(data),&got) && got==sizeof(data));
+    for(unsigned i=0;i<sizeof(data);i++)assert(data[i]==0x5a);
+    assert(!vfs_close(&table,fd));vfs_table_destroy(&table);
+    if(kind<2) {
+        struct bootlog_stats stats;
+        do {assert(!bootlog_drain());bootlog_snapshot(&stats);}while(stats.queued);
+        check_disk_record("[usb-storage] stage=inquiry addr=2\n");
+        check_disk_record("[usb-storage] stage=mount addr=2 elapsed_ms=");
+    }
+    assert(!usb_storage_eject(storage_get(),4,block()->media_generation));
+    assert(bootlog_shutdown()==(kind==2 || kind==3 ? -FS_EIO : 0));log_hook=NULL;bootlog_reset();
+    hid_poll_hook=NULL;private_transaction_hook=NULL;
+    m.image=original;m.bytes=original_bytes;cleanup();
+    const char *names[]={"paused","ring_full","failed_before_probe","failed_at_mount","inactive"};
+    printf("PASS F1-64 HID addr=1 then storage addr=2 on one UHCI, logger=%s, inquiry/mount/read, lost record occupancy; attach_ms=%llu HID polls=%u NAKs=%u reports=%u\n",
+           names[kind],(unsigned long long)attach_ms,hid_polls,hid_naks,hid_reports);
+}
 int main(int argc,char **argv)
 {
     assert(argc==4);
+    for(unsigned kind=0;kind<5;kind++)logging_backpressure(argv[2],kind);
     for(unsigned kind=0;kind<11;kind++)scenario(argv[2],kind);
     successful_bind(argv[2],false);successful_bind(argv[2],true);
     puts("PASS F1-59 hostile bind, VFS client/disk writer, scheduler queues and durable stage records");
