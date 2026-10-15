@@ -391,7 +391,10 @@ static void test_second_admission(enum second_kind kind)
     CHECK(second_attach(&h, &d) == -19 && !h.nic_writes && !config_writes && !page_count);
     for (unsigned fail = 1; fail <= 3; fail++) {
         second_setup(&h, &d, kind); claim_fail = fail;
-        CHECK(second_attach(&h, &d) == -16 && !h.nic_writes && !config_writes && !page_count);
+        if(fail==2) {
+            CHECK(!second_attach(&h,&d) && d.running && !d.irq_attached && !d.quarantined);
+            CHECK(!netif_stop(&d) && !page_count);
+        } else CHECK(second_attach(&h, &d) == -16 && !h.nic_writes && !config_writes && !page_count);
     }
     second_setup(&h, &d, kind); allocation_fail = 1;
     CHECK(second_attach(&h, &d) == -ENOMEM && !h.nic_writes && !config_writes && !page_count);
@@ -407,7 +410,8 @@ static void test_second_admission(enum second_kind kind)
     second_setup(&h, &d, kind); g_boot.flags = 0;
     CHECK(!second_attach(&h, &d) && !d.irq_attached); CHECK(!netif_stop(&d));
     second_setup(&h, &d, kind); irq_add_fail = 1;
-    CHECK(second_attach(&h, &d) && d.quarantined && page_count == NIC_DMA_PAGES && !releases);
+    CHECK(!second_attach(&h, &d) && d.running && !d.quarantined && !d.irq_attached);
+    CHECK(!netif_stop(&d) && !page_count);
 }
 static void test_second_variants(void)
 {

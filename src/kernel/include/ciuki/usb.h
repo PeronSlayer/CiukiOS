@@ -189,6 +189,10 @@ struct usb_host {
     unsigned root_status[USB_PORT_MAX]; /* last observed normalized state */
     struct usb_port_log root_log[USB_PORT_MAX];
     bool attempted, ready, quarantined, touched, owned, busy;
+    bool irq_attached, irq_pending;
+    uint32_t irq_status; /* fatal causes retained after device-local W1C */
+    uint64_t interrupts;
+    struct kwait changed;
     bool scanned, schedule_dumped;
     unsigned scan_count;
     uint64_t next_scan, scan_window;
@@ -236,6 +240,7 @@ void usb_detach(struct usb_device *, const char *);
 /* One owner thread calls attach/control/step. Caller supplies pinned, aligned
  * contiguous DMA pages; attachment takes their registry lease before DMA. */
 int usb_attach(struct usb_host *, const struct pci_func *, const struct usb_io *, uint8_t *, uint32_t);
+bool usb_host_irq(struct usb_host *);
 int usb_control(struct usb_device *, uint8_t type, uint8_t request, uint16_t value,
                 uint16_t index, void *, unsigned length);
 int usb_enumerate(struct usb_host *, unsigned root, unsigned parent, unsigned port, bool low);
@@ -245,6 +250,7 @@ void usb_host_take(struct usb_host *); /* reserves serialized general/BOT slot *
 bool usb_host_take_until(struct usb_host *, uint64_t deadline);
 void usb_host_drop(struct usb_host *);
 void usb_sleep(struct usb_host *, unsigned); /* caller's reservation survives */
+void usb_poll_pause(struct usb_host *, unsigned); /* bounded retry backoff; may finish early */
 void usb_hid_service(struct usb_host *); /* mutex held, no general transfers */
 void usb_uhci_dump_schedule(struct usb_host *); /* once, after enumeration; mutex held */
 int usb_hub_attach(struct usb_device *);

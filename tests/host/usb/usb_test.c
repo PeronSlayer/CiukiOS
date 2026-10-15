@@ -33,6 +33,17 @@ static unsigned root_quarantine_records,hub_quarantine_records;
 static unsigned hid_reports[128],hid_polls[128],hid_pipes[128],usb_key_records,f12_down_records,f12_up_records;
 static int hid_poll_result;
 static unsigned schedule_entries,schedule_qhs,schedule_tds,schedule_invalid;
+static bool route_ready;
+static int irq_add_error, irq_claim_error;
+static unsigned irq_added, irq_removed, irq_wakes;
+static bool irq_model_attached, irq_masked;
+static unsigned irq_mode_records, poll_mode_records;
+bool pci_irq_routed(const struct pci_func *p) { (void)p; return route_ready; }
+int irq_chain_add(unsigned irq,irq_chain_handler_t handler,const char *owner)
+{ assert(irq==11 && handler && owner);irq_added++;if(!irq_add_error)irq_model_attached=true;return irq_add_error; }
+int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
+{ assert(irq==11 && handler && owner && irq_model_attached);irq_removed++;irq_model_attached=false;return 0; }
+void kwait_wake_all(struct kwait *q) { assert(q);irq_wakes++; }
 static unsigned port_actions,recovery_records,descriptor_records;
 #ifndef USB_LATENCY_QUEUE
 void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }
@@ -47,13 +58,19 @@ gen_t gen_alloc(void) { return ++generation; }
 int registry_claim(enum res_type t,uint32_t s,uint32_t e,const char *o,bool share)
 {
     assert(s<e && lease_count<64); claims++;
+    if(t==RES_IRQ && irq_claim_error)return irq_claim_error;
     leases[lease_count]=(struct resource){t,s,e,o,++generation,RS_CLAIMED,share};
     return (int)lease_count++;
 }
 const struct resource *registry_get(unsigned i) { return i<lease_count ? &leases[i] : NULL; }
 int registry_activate(int h,gen_t g) { assert(leases[h].generation==g); leases[h].state=RS_ACTIVE; return 0; }
 bool registry_valid(int h,gen_t g) { return leases[h].generation==g && leases[h].state==RS_ACTIVE; }
-int registry_quarantine(int h,gen_t g) { assert(leases[h].generation==g); leases[h].state=RS_QUARANTINED; return 0; }
+int registry_quarantine(int h,gen_t g)
+{
+    assert(leases[h].generation==g); leases[h].state=RS_QUARANTINED;
+    if(leases[h].type==RES_IRQ && irq_model_attached)irq_masked=true;
+    return 0;
+}
 static void (*record_hook)(const char *);
 void klog_periodic(const char *s, ...) __attribute__((alias("klog")));
 void klog(const char *s,...)
@@ -61,6 +78,10 @@ void klog(const char *s,...)
     char record[256];va_list ap;va_start(ap,s);int len=kvsnprintf(record,sizeof(record),s,ap);va_end(ap);
     assert(len>=0 && len<=254);
     if(record_hook)record_hook(record);
+    if(strstr(record,"[usb] controller=")) {
+        if(strstr(record,"mode=irq reason=ready_irq"))irq_mode_records++;
+        if(strstr(record,"mode=poll reason=ready_polling"))poll_mode_records++;
+    }
     if(strstr(record,"[usb] port_action")) {
         assert(strstr(record,"before=") && strstr(record,"write=") && strstr(record,"status=") && strstr(record,"count="));
         port_actions++;
@@ -183,6 +204,7 @@ struct model {
     uint64_t reset_at[2], recovery_at[2];
     unsigned root_resets[2], root_enables[2], root_acks[2], hub_acks[USB_PORT_MAX];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
+    bool fatal_reassert, gate_stuck, source_stuck, run_stuck, halt_stuck, bme_stuck;
     bool bulk_test, receiver_reports, report_stall;
     bool late_hid;
     unsigned latched_td,latched_ed,late_hid_acks;
@@ -362,14 +384,20 @@ static uint32_t read_reg(void *arg,unsigned off,unsigned width)
     unsigned frame=(unsigned)(m->now/(m->frame_ms ? m->frame_ms:1));
     if(m->ohci && off==0x3c)return m->freeze ? 0:frame&0xffff;
     if(!m->ohci && off==6)return m->freeze ? 0:frame&0x7ff;
-    if(!m->ohci && off==2)return (m->regs[0]>>16)|((m->regs[0]&1)?0:0x20)|(m->host_error?8:0);
+    if(!m->ohci && off==2)return (m->regs[0]>>16)|((m->regs[0]&1) || m->halt_stuck ? 0:0x20)|(m->host_error?8:0);
     if(m->ohci && off==0x0c && m->host_error)return 0x10;
     return m->regs[off/4] >> (8*(off&3));
 }
 static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
 {
     struct model *m=arg;writes++;
-    if(!m->ohci && off==2) {m->regs[0]&=~(value<<16);return;}
+    if(!m->ohci && off==2) {
+        m->regs[0]&=~(value<<16);
+        if(m->fatal_reassert)m->regs[0]|=0x10u<<16;
+        return;
+    }
+    if(!m->ohci && ((off==4 && !value && m->source_stuck) ||
+                   (off==0 && !value && m->run_stuck)))return;
     if(!m->ohci && off==0 && (value&2) && !m->reset_stuck) {
         /* QEMU uhci_reset(): stopped, empty schedule, attached devices
          * reappear with CCS/CSC, but PE stays clear until software sets it. */
@@ -383,6 +411,8 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
     }
     if(m->ohci) {
         if(off==0x0c){m->regs[off/4]&=~value;return;}
+        if(off==0x10){m->regs[off/4]|=value;return;}
+        if(off==0x14){m->regs[0x10/4]&=~value;return;}
         if(off>=0x54 && off<0x5c) {
             unsigned p=(off-0x54)/4;
             if(value==0x10){m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->root_resets[p]++;m->reset_at[p]=m->now;
@@ -422,7 +452,8 @@ static void config_write(void *arg,unsigned off,uint32_t value,unsigned width)
 {
     struct model *m=arg;writes++;
     assert(off!=4 || width==2); /* PCI W1C status is never echoed. */
-    if(off==0xc0){m->config[off/4]&=0x5040;return;}
+    if(off==0xc0){m->config[off/4]=(m->config[off/4]&(m->gate_stuck ? 0x7040:0x5040))|(value&0x20bf);return;}
+    if(off==4 && m->bme_stuck && !(value&4))value|=m->config[off/4]&4;
     m->config[off/4]=value;
     if(off==4 && (value&4)) {
         assert(m->host.dma && leases[m->host.claims[2]].state==RS_ACTIVE);
@@ -658,6 +689,8 @@ static struct usb_io io(struct model *m)
 static void setup(bool ohci,bool hub)
 {
     memset(&m,0,sizeof(m));memset(&g_boot,0,sizeof(g_boot));lease_count=0;
+    route_ready=false;irq_add_error=irq_claim_error=0;irq_added=irq_removed=irq_wakes=0;
+    irq_model_attached=irq_masked=false;irq_mode_records=poll_mode_records=0;
     connect_records=disconnect_records=reset_records=enable_records=0;
     descriptor_starts=descriptor_results=descriptor_failures=0;
     first_scans=cadence_records=retired_packets=service_entries=service_queues=0;
@@ -753,10 +786,10 @@ static void uhci_schedule_regression(void)
     assert(link==(m.host.dma_phys+USB_UHCI_CONTROL_QH+2));
     volatile uint32_t *control=uhci_dma(&m,link&~15u,8);
     assert(control[1]==1 && control[0]==(m.host.dma_phys+USB_UHCI_BULK_QH+2));
-    volatile uint32_t *bulk=uhci_dma(&m,control[0]&~15u,8);assert(bulk[0]==1 && bulk[1]==1);
+    volatile uint32_t *bulk=uhci_dma(&m,control[0]&~15u,8);assert(bulk[0]==m.host.dma_phys+USB_TAIL && bulk[1]==1);
     model_step();assert(m.host.device_count==2 && !schedule_entries && !schedule_qhs);
     g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;m.host.next_scan=m.now;model_step();
-    assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==2 && !schedule_invalid);
+    assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==3 && !schedule_invalid);
     assert(m.host.schedule_dumped);model_step();assert(schedule_entries==4 && schedule_qhs==66);
     /* Inject a missing interrupt-tail -> control edge. This reproduces the
      * observable EAGAIN/addr0 timeout combination, but is NOT the F1-52
@@ -792,7 +825,7 @@ static void uhci_schedule_regression(void)
     usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
     setup(true,false);g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;assert(!attach());model_step();assert(!schedule_entries && !schedule_qhs);
     setup(false,false);g_boot.flags=CBI_F_TEST_REQUEST | CBI_F_DIAG_VERBOSE;assert(!attach());model_step();
-    assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==2);
+    assert(schedule_entries==4 && schedule_qhs==66 && schedule_tds==3);
     usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
     puts("PASS USB UHCI periodic/control/bulk reachability, missing-tail fault reproduces NAK EAGAIN/addr0 timeout, restored ACK/input, once-only bounded verbose/test dump");
 }
@@ -1397,6 +1430,43 @@ static void chained_bulk(void)
     }
     puts("PASS F1-66 UHCI 64 KiB chained IN, bounded retirement, short IN/ZLP stops before CSW, pending eighth packet and aggregate deadline, STALL and ACK-only toggles");
 }
+static void shared_irq(bool ohci)
+{
+    setup(ohci,false);route_ready=true;assert(!attach());
+    assert(m.host.ready && m.host.irq_attached && irq_added==1);
+    assert(irq_mode_records==1 && !poll_mode_records);
+    if(!ohci)assert((m.config[0xc0/4]&0x20bf)==0x2000); /* native PIRQ gate, SMI disabled */
+    assert(m.host.claims[1]>=0 && leases[m.host.claims[1]].shareable);
+    unsigned off=ohci ? 0x0c : 2, width=ohci ? 4 : 2;
+    if(!ohci) {
+        volatile uint32_t *tail=(volatile uint32_t *)(m.dma+USB_TAIL);
+        assert(tail[0]==1 && tail[1]==(1u<<24));
+        sleep_ms(&m,1);assert(read_reg(&m,off,width)&1); /* idle frame, no transaction */
+    }
+    write_reg(&m,off,ohci ? 0x7f : 0x1f,width);
+    unsigned w=writes;assert(!usb_host_irq(&m.host) && writes==w && !irq_wakes);
+    if(ohci)m.regs[off/4]|=4;
+    else m.regs[0]|=1u<<16;
+    assert(usb_host_irq(&m.host) && m.host.interrupts==1 && m.host.irq_pending && irq_wakes==2);
+    assert(!(read_reg(&m,off,width)&(ohci ? 4u : 1u)));
+    assert(!usb_host_irq(&m.host));
+    /* W1C in IRQ must not hide a fatal cause from the worker. */
+    if(ohci)m.regs[off/4]|=0x10;
+    else m.regs[0]|=8u<<16;
+    assert(usb_host_irq(&m.host) && m.host.irq_status==(ohci ? 0x10u : 8u) && !m.host.quarantined);
+    usb_step(&m.host);
+    assert(m.host.quarantined && !m.host.irq_attached && irq_removed==1);
+    for(unsigned failure=0;failure<3;failure++) {
+        setup(ohci,false);route_ready=true;
+        if(failure==0)route_ready=false;
+        else if(failure==1)irq_claim_error=-EINVAL;
+        else irq_add_error=-EINVAL;
+        assert(!attach() && m.host.ready && !m.host.irq_attached && !m.host.quarantined);
+        assert(!strcmp(m.host.reason,"ready_polling"));
+        assert(poll_mode_records==1 && !irq_mode_records);
+    }
+    printf("PASS USB %s shared IRQ own-status/W1C, frame notification, deferred fatal, route/claim/attach refusal mode=poll reason=ready_polling\n",ohci ? "OHCI":"UHCI");
+}
 int main(void)
 {
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
@@ -1418,5 +1488,6 @@ int main(void)
     policy();ehci();basic(false,false);basic(true,false);basic(false,true);basic(true,true);errors(false);errors(true);hotplug(false);hotplug(true);qemu_hub(false);qemu_hub(true);
     delayed_frame_hid(false);delayed_frame_hid(true);late_hid(false);late_hid(true);
     port_flood(false);port_flood(true);
+    shared_irq(false);shared_irq(true);
     puts("PASS usb host suite (production UHCI/OHCI/core/hub/HID, ASan+UBSan)");return 0;
 }

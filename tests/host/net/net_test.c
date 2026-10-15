@@ -21,16 +21,19 @@ static uint64_t cycles;
 static void (*sleep_hook)(void);
 static bool sleep_hook_active;
 static uint8_t memory[128 * PAGE_SIZE] __attribute__((aligned(PAGE_SIZE)));
+static uint8_t route_bios[0x10000];
 static bool allocated[128];
 #define HOST_PHYS 0x1000000u
 #define V2P(p) ((uint32_t)((uint8_t *)(p) - memory) + HOST_PHYS)
-#define P2V(p) ((void *)(memory + ((p) - HOST_PHYS)))
+#define P2V(p) ((void *)((p) == 0xf0000 ? route_bios : memory + ((p) - HOST_PHYS)))
 static uint32_t irq_save(void) { uint32_t f = host_flags; host_flags &= ~0x200u; return f; }
 static void irq_restore(uint32_t f) { host_flags = f; }
-static uint8_t inb(uint16_t p) { (void)p; return 0; }
-static uint32_t inl(uint16_t p) { (void)p; return 0; }
+static uint32_t route_read(uint16_t p, unsigned width);
+static void route_write(uint16_t p, uint32_t value);
+static uint8_t inb(uint16_t p) { return route_read(p, 1); }
+static uint32_t inl(uint16_t p) { return route_read(p, 4); }
 static void outb(uint16_t p, uint8_t v) { (void)p; (void)v; }
-static void outl(uint16_t p, uint32_t v) { (void)p; (void)v; }
+static void outl(uint16_t p, uint32_t v) { route_write(p, v); }
 struct ciuki_boot_info g_boot;
 volatile uint64_t g_ticks;
 uint64_t g_tsc_per_ms = 1000;
@@ -85,7 +88,7 @@ bool registry_valid(int h, gen_t gen)
 int registry_claim(enum res_type type, uint32_t start, uint32_t end, const char *owner, bool share)
 {
     CHECK(start < end && owner);
-    if (claim_fail && resource_count + 1 == (unsigned)claim_fail) return -16;
+    if (claim_fail && resource_count + 1 == (unsigned)claim_fail) { claim_fail=0; return -16; }
     for (unsigned i = 0; i < resource_count; i++) {
         struct resource *r = &resources[i];
         if (r->state != RS_RELEASED && r->type == type && start < r->end && end > r->start && !(share && r->shareable)) return -16;
@@ -114,6 +117,7 @@ unsigned pci_count(void) { return 2; }
 const struct pci_func *pci_get(unsigned n) { return n < 2 ? &functions[n] : 0; }
 
 #include "../../../src/kernel/drivers/net.c"
+#include "../../../src/kernel/core/pci_irq.c"
 #include "../../../src/kernel/drivers/net_rtl8139.c"
 #include "../../../src/kernel/drivers/net_e100.c"
 #include "../../../src/kernel/drivers/net_ne2000.c"
@@ -313,6 +317,9 @@ static void model_write(void *arg, uint16_t port, uint32_t value, unsigned width
     model_put(h->reg + reg, value, width);
 }
 static uint64_t model_now(void *arg) { (void)arg; return g_ticks; }
+static struct model *route_model;
+static uint32_t route_read(uint16_t p, unsigned width) { return model_read(route_model, p, width); }
+static void route_write(uint16_t p, uint32_t value) { model_write(route_model, p, value, 4); }
 static void model_sleep(void *arg, uint32_t ms) { (void)arg; task_sleep_ms(ms); }
 static int model_delay(void *arg, uint32_t us) { (void)arg; CHECK(host_flags & 0x200); cycles += us; return 0; }
 static void model_setup(struct model *h, struct netif *d, enum model_kind kind)
@@ -320,6 +327,7 @@ static void model_setup(struct model *h, struct netif *d, enum model_kind kind)
     /* Simulate an independent cold boot between fixtures, including cases
      * that retain quarantined pages. No live context gets reset in production. */
     memset(h, 0, sizeof(*h)); memset(d, 0, sizeof(*d)); memset(resources, 0, sizeof(resources));
+    route_model = h; memset(route_bios, 0, sizeof(route_bios));
     memset(allocated, 0, sizeof(allocated)); memset(memory, 0, sizeof(memory));
     resource_count = page_count = releases = quarantines = config_writes = irq_adds = irq_removes = 0;
     claim_fail = allocation_fail = irq_add_fail = release_fail = 0;
@@ -471,7 +479,8 @@ static void test_admission(enum model_kind kind)
     else h.reg[0] = 0x22;
     CHECK(model_attach(&h, &d) == -16 && !h.writes && !config_writes);
     model_setup(&h, &d, kind); claim_fail = 2;
-    CHECK(model_attach(&h, &d) == -16 && !h.writes && !config_writes && !page_count && releases == 1);
+    CHECK(!model_attach(&h, &d) && d.running && !d.irq_attached && !irq_adds);
+    CHECK(!netif_stop(&d) && !page_count);
     if (kind != M_NE) {
         model_setup(&h, &d, kind); allocation_fail = 1;
         CHECK(model_attach(&h, &d) == -ENOMEM && releases == 2 && !h.writes);
@@ -481,8 +490,16 @@ static void test_admission(enum model_kind kind)
     model_setup(&h, &d, kind); g_boot.flags = 0; functions[1].bus = 1;
     CHECK(!model_attach(&h, &d) && !d.irq_attached && !irq_adds);
     CHECK(!netif_stop(&d));
+    model_setup(&h, &d, kind); g_boot.flags=0; functions[1].bus=2;
+    functions[0].device=0x248c;
+    memcpy(route_bios,"$PIR",4);route_bios[5]=1;route_bios[6]=48;route_bios[9]=8;
+    route_bios[32]=2;route_bios[33]=3*8;route_bios[34]=0x60;route_bios[36]=8;
+    for(unsigned i=0;i<48;i++)if(i!=31)route_bios[31]-=route_bios[i];
+    CHECK(!model_attach(&h,&d) && d.irq_attached && irq_adds==1);
+    CHECK(!netif_stop(&d));
     model_setup(&h, &d, kind); irq_add_fail = 1;
-    CHECK(model_attach(&h, &d) && d.quarantined && !releases);
+    CHECK(!model_attach(&h, &d) && d.running && !d.quarantined && !d.irq_attached);
+    CHECK(!netif_stop(&d) && !page_count);
     model_setup(&h, &d, kind); h.reset_stuck = true;
     if (kind == M_RTL) CHECK(model_attach(&h, &d) == -110 && sleeps <= 100);
     else if (kind == M_NE) { h.reg[7] = 0; CHECK(model_attach(&h, &d) == -110 && sleeps <= 100); }

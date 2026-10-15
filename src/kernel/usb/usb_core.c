@@ -9,6 +9,9 @@
 #endif
 static struct usb_host hosts[USB_HOST_MAX];
 static unsigned host_count;
+static struct usb_host *irq_hosts[USB_HOST_MAX];
+static struct kwait input_changed;
+static bool input_pending;
 bool usb_input_ready(void)
 {
     struct input_devices devices;
@@ -18,9 +21,42 @@ bool usb_input_ready(void)
 unsigned usb_count(void) { return host_count; }
 const struct usb_host *usb_get(unsigned i) { return i < host_count ? &hosts[i] : 0; }
 uint32_t usb_read(struct usb_host *h, unsigned at, unsigned width)
-{ return h->io.read(h->io.cookie, at, width); }
+{
+    uint32_t v = h->io.read(h->io.cookie, at, width);
+    if (at == (h->pci.prog_if ? 0x0cu : 2u)) v |= h->irq_status;
+    return v;
+}
 void usb_write(struct usb_host *h, unsigned at, uint32_t v, unsigned width)
 { h->io.write(h->io.cookie, at, v, width); }
+bool usb_host_irq(struct usb_host *h)
+{
+    /* A retained fatal cause is worker state, not proof that the hardware
+     * stopped asserting. Even quarantined hosts keep servicing their source
+     * until isolation permits callback removal. */
+    if (!h || !h->irq_attached) return false;
+    bool uhci = h->pci.prog_if == 0;
+    unsigned off = uhci ? 2 : 0x0c, width = uhci ? 2 : 4;
+    unsigned status = h->io.read(h->io.cookie, off, width);
+    unsigned causes = status & (uhci ? 0x1fu : 0x16u);
+    if (!causes) return false;
+    if (status == (uhci ? 0xffffu : UINT32_MAX) || (causes & (uhci ? 0x18u : 0x10u))) {
+        h->irq_status |= status == (uhci ? 0xffffu : UINT32_MAX) ? 0x10 :
+                         causes & (uhci ? 0x18u : 0x10u);
+        usb_write(h, uhci ? 4 : 0x14, uhci ? 0 : UINT32_MAX, width);
+    }
+    if (status != (uhci ? 0xffffu : UINT32_MAX)) usb_write(h, off, causes, width);
+    h->interrupts++; h->irq_pending = input_pending = true;
+    kwait_wake_all(&h->changed); kwait_wake_all(&input_changed);
+    return true;
+}
+static bool usb_irq(unsigned irq, const char *owner)
+{
+    for (unsigned i = 0; i < USB_HOST_MAX; i++) {
+        struct usb_host *h = irq_hosts[i];
+        if (h && h->pci.irq_line == irq && !strncmp(h->owner, owner, sizeof(h->owner))) return usb_host_irq(h);
+    }
+    return false;
+}
 bool usb_port_has_live_child(struct usb_host *h, unsigned port)
 {
     if (!h->root_child[port]) return false;
@@ -61,7 +97,9 @@ bool usb_expired(struct usb_host *h, uint64_t deadline)
 void usb_hid_service(struct usb_host *h)
 {
     if (!h->ready || h->quarantined) return;
-    if (h->pci.prog_if == 0x10 && (usb_read(h, 0x0c, 4) & 2)) {
+    if (h->irq_status) { usb_host_quarantine(h, "interrupt_host_error"); return; }
+    if (h->pci.prog_if == 0x10 && ((usb_read(h, 0x0c, 4) & 2) ||
+        (h->irq_attached && *(volatile uint32_t *)(h->dma + 0x84)))) {
         /* All TDs stay pinned. DI=0 writes back each frame's done chain;
          * acknowledge it without walking/reusing another pipe's TD. */
         *(volatile uint32_t *)(h->dma + 0x84) = 0;
@@ -99,10 +137,11 @@ bool usb_host_take_until(struct usb_host *h, uint64_t deadline)
     }
     return false;
 }
-void usb_sleep(struct usb_host *h, unsigned ms)
+void usb_poll_pause(struct usb_host *h, unsigned ms)
 {
     /* A reservation protects the general TD/BOT sequence, not the mutex.
-     * Interrupt slots can progress during reset, retirement and bulk NAKs. */
+     * This bounded retry backoff may finish early on notifications, including
+     * with a broken clock. It must not be used for mandatory USB delays. */
     while (ms--) {
         bool reserved = h->busy;
         if (reserved) fs_lock_drop(&h->transfer_lock);
@@ -112,6 +151,13 @@ void usb_sleep(struct usb_host *h, unsigned ms)
             usb_hid_service(h);
         }
     }
+}
+void usb_sleep(struct usb_host *h, unsigned ms)
+{
+    /* Reset, recovery and debounce consume elapsed time, never wake counts.
+     * Interrupt slots still progress with the short DMA mutex released. */
+    uint64_t end = h->io.now(h->io.cookie) + ms;
+    while (!usb_expired(h, end)) usb_poll_pause(h, 1);
 }
 int usb_wait_register(struct usb_host *h, unsigned at, unsigned width, uint32_t mask, uint32_t want, unsigned ms)
 {
@@ -166,15 +212,46 @@ void usb_host_quarantine(struct usb_host *h, const char *reason)
 {
     if (h->quarantined) return;
     h->quarantined = true; h->ready = false; h->reason = reason;
+    bool isolated = !h->irq_attached;
     if (h->owned) {
-        if (h->pci.prog_if == 0) { usb_write(h, 4, 0, 2); usb_write(h, 0, 0, 2); usb_write(h, 2, 0x1f, 2); }
-        else if (h->pci.prog_if == 0x10) { usb_write(h, 0x14, UINT32_MAX, 4); usb_write(h, 4, 0, 4); usb_write(h, 0x0c, 0x7f, 4); }
+        if (h->pci.prog_if == 0) {
+            /* HSE/HCPE bypass USBINTR. Disable ICH's USBPIRQEN too, with
+             * every SMI/trap enable off; never echo RO/W1C legacy bits. */
+            h->io.config_write(h->io.cookie, 0xc0, 0x8f00, 2);
+            usb_write(h, 4, 0, 2); usb_write(h, 0, 0, 2); usb_write(h, 2, 0x1f, 2);
+        } else if (h->pci.prog_if == 0x10) {
+            usb_write(h, 0x14, UINT32_MAX, 4); usb_write(h, 4, 0, 4); usb_write(h, 0x0c, 0x7f, 4);
+        }
         /* Do not restore firmware DMA on an uncertain failure. */
         h->io.config_write(h->io.cookie, 4, (h->pci.command | (h->pci.prog_if ? 2 : 1)) & ~4u, 2);
+        if (h->irq_attached) {
+            unsigned command = h->io.config_read(h->io.cookie, 4, 2);
+            if (h->pci.prog_if == 0) {
+                unsigned legacy = h->io.config_read(h->io.cookie, 0xc0, 2);
+                unsigned intr = h->io.read(h->io.cookie, 4, 2);
+                unsigned run = h->io.read(h->io.cookie, 0, 2);
+                /* Read raw status: irq_status deliberately retains faults. */
+                unsigned status = h->io.read(h->io.cookie, 2, 2);
+                isolated = !(command & 4) && !(legacy & 0x20bf) &&
+                           !(intr & 15) && !(run & 1) && (status & 0x3f) == 0x20;
+            } else if (h->pci.prog_if == 0x10) {
+                unsigned intr = h->io.read(h->io.cookie, 0x10, 4);
+                unsigned control = h->io.read(h->io.cookie, 4, 4);
+                unsigned status = h->io.read(h->io.cookie, 0x0c, 4);
+                isolated = !(command & 4) && !(intr & 0x8000007f) &&
+                           !(control & 0xc0) && !(status & 0x7f);
+            }
+        }
+    }
+    if (h->irq_attached && isolated && !irq_chain_remove(h->pci.irq_line, usb_irq, h->owner)) {
+        h->irq_attached = false;
+        for (unsigned i = 0; i < USB_HOST_MAX; i++) if (irq_hosts[i] == h) irq_hosts[i] = 0;
     }
     for (unsigned i = 0; i < h->device_count; i++) usb_detach(&h->devices[i], "controller_quarantined");
+    /* A failed isolation/removal keeps the IRQ lease attached. Quarantining
+     * that lease masks the chain and prevents even queued rearm. */
     for (unsigned i = 0; i < 3; i++) if (h->claims[i] >= 0) registry_quarantine(h->claims[i], h->claim_gen[i]);
-    klog("[usb] quarantine controller=%s reason=%s", h->owner, reason);
+    klog("[usb] quarantine controller=%s reason=%s irq_isolated=%u", h->owner, reason, isolated);
 }
 static int claim(struct usb_host *h, unsigned slot, enum res_type type, uint32_t start, uint32_t end, bool share)
 {
@@ -265,8 +342,8 @@ int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io
     if (!h->generation) return -ENOSPC;
     ksnprintf(h->owner, sizeof(h->owner), "usb-%u", h->generation);
     int err = claim(h, 0, uhci ? RES_PORT : RES_MMIO, h->base, h->base + bytes, false);
-    if (!err && p->irq_pin && p->irq_line >= 3 && p->irq_line < 16 && p->irq_line != 8 && p->irq_line != 13)
-        err = claim(h, 1, RES_IRQ, p->irq_line, p->irq_line + 1u, true);
+    bool intx = h->ops && pci_irq_routed(p);
+    if (!err && intx && claim(h, 1, RES_IRQ, p->irq_line, p->irq_line + 1u, true)) intx = false;
     if (!err && h->ops) err = claim(h, 2, RES_MMIO, phys, phys + USB_DMA_BYTES, false);
     if (err) {
         /* No controller write occurred. Retain partial leases in quarantine;
@@ -282,9 +359,28 @@ int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io
     if ((cmd & 7) != ((p->command | (uhci ? 1 : 2)) & 7u)) err = -USB_EIO;
     if (!err) err = h->ops ? h->ops->start(h) : ehci_route(h);
     if (err) { usb_host_quarantine(h, "activation_or_handoff"); return err; }
-    h->ready = h->ops != 0; if (h->ready) h->reason = "ready_polling";
-    klog("[usb] controller=%s ports=%u pci=%02x:%02x.%u mode=poll reason=%s",
-         uhci ? "uhci" : p->prog_if == 0x10 ? "ohci" : "ehci-companion", h->ports, p->bus, p->dev, p->fn, h->reason);
+    h->ready = h->ops != 0;
+    if (intx) for (unsigned i = 0; i < USB_HOST_MAX; i++) if (!irq_hosts[i]) {
+        irq_hosts[i] = h;
+        err = irq_chain_add(p->irq_line, usb_irq, h->owner);
+        if (!err) {
+            h->irq_attached = true;
+            if (uhci) {
+                /* ICH USB_LEGKEY bit 13 gates native PCI interrupts too.
+                 * Keep every SMI/trap enable clear (ICH3 §11.1.16). */
+                h->io.config_write(h->io.cookie, 0xc0, 0x2000, 2);
+                if ((h->io.config_read(h->io.cookie, 0xc0, 2) & 0x20bf) != 0x2000) {
+                    usb_host_quarantine(h, "irq_gate_failed"); return -USB_EIO;
+                }
+            }
+            usb_write(h, uhci ? 4 : 0x10, uhci ? 0x0d : 0x80000016u, uhci ? 2 : 4);
+        } else irq_hosts[i] = 0;
+        break;
+    }
+    if (h->ready) h->reason = h->irq_attached ? "ready_irq" : "ready_polling";
+    klog("[usb] controller=%s ports=%u pci=%02x:%02x.%u mode=%s reason=%s",
+         uhci ? "uhci" : p->prog_if == 0x10 ? "ohci" : "ehci-companion", h->ports, p->bus, p->dev, p->fn,
+         h->irq_attached ? "irq" : "poll", h->reason);
     return 0;
 }
 static int packet(struct usb_device *d, unsigned pid, unsigned toggle, void *data, unsigned len)
@@ -613,31 +709,46 @@ static void cfg_write(void *arg, unsigned at, uint32_t v, unsigned width)
     if (width == 2) cpu_outw(0xcfc + (at & 2), (uint16_t)v); else outl(0xcfc, v); irq_restore(f);
 }
 static uint64_t native_now(void *arg) { (void)arg; uint32_t f = irq_save(); uint64_t v = g_ticks; irq_restore(f); return v; }
-static void native_sleep(void *arg, unsigned ms) { (void)arg; task_sleep_ms(ms); }
+static bool host_pending(void *arg) { return ((struct usb_host *)arg)->irq_pending; }
+static bool hid_pending(void *arg) { (void)arg; return input_pending; }
+static void native_sleep(void *arg, unsigned ms)
+{
+    struct usb_host *h = arg;
+    if (!h->irq_attached) { task_sleep_ms(ms); return; }
+    uint64_t end = deadline_after_ms(ms);
+    do {
+        uint32_t f = irq_save(); h->irq_pending = false; irq_restore(f);
+        kwait_wait_until(&h->changed, host_pending, h, end);
+    } while (!usb_expired(h, end));
+}
 static void service(void *arg)
 {
     struct usb_host *h = arg;
     klog("[usb] worker service=started tick=%llu controllers=%u controller=%s", native_now(0), host_count, h->owner);
     for (;;) {
         if (!h->ready || h->quarantined) { task_sleep_ms(1000); continue; }
+        uint32_t f = irq_save(); h->irq_pending = false; irq_restore(f);
         usb_step(h);
         uint64_t now = native_now(0);
         uint64_t due = h->next_scan;
         /* Control/BOT sleeps retain their per-host reservation. The separate
          * HID task services completed reports at 1 ms, independently. */
-        task_sleep_ms(due > now && due - now <= 250 ? (uint32_t)(due - now) : 1);
+        unsigned ms = due > now && due - now <= 250 ? (uint32_t)(due - now) : 1;
+        if (h->irq_attached) kwait_wait_until(&h->changed, host_pending, h, deadline_after_ms(ms));
+        else task_sleep_ms(ms);
     }
 }
 static void input_service(void *arg)
 {
     (void)arg;
     for (;;) {
+        uint32_t f = irq_save(); input_pending = false; irq_restore(f);
         for (unsigned i = 0; i < host_count; i++) {
             fs_lock_take(&hosts[i].transfer_lock);
             usb_hid_service(&hosts[i]);
             fs_lock_drop(&hosts[i].transfer_lock);
         }
-        task_sleep_ms(1);
+        kwait_wait_until(&input_changed, hid_pending, 0, deadline_after_ms(1));
     }
 }
 static void start_services(void)

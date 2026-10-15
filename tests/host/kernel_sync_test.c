@@ -558,6 +558,57 @@ static int irq_claim(unsigned irq, const char *owner)
     CHECK(registry_activate(h, registry_get((unsigned)h)->generation) == 0);
     return h;
 }
+static unsigned shared_status[3], shared_acks[3], shared_calls[3];
+static bool assert_during_handler;
+static bool three_devices(unsigned irq, const char *owner)
+{
+    unsigned i = (unsigned)(owner[0] - '0');
+    CHECK(i < 3 && masked[irq]);
+    shared_calls[i]++;
+    unsigned status = shared_status[i];
+    if (status) { shared_acks[i] |= status; shared_status[i] &= ~status; }
+    if (i == 2 && assert_during_handler) { shared_status[0] |= 8; assert_during_handler = false; }
+    return status != 0;
+}
+static void test_three_shared_devices(void)
+{
+    static const char *const owners[] = {"0-audio", "1-usb", "2-net"};
+    int handles[3]; unsigned before = eois;
+    for (unsigned i = 0; i < 3; i++) {
+        handles[i] = irq_claim(7, owners[i]);
+        CHECK(!irq_chain_add(7, three_devices, owners[i]));
+    }
+    for (unsigned i = 0; i < 3; i++) {
+        shared_status[i] = 1u << i;
+        fake_irq(7); drain_work();
+        CHECK(shared_acks[i] == (1u << i) && eois == before + i + 1);
+    }
+    shared_status[2] = 4; assert_during_handler = true;
+    fake_irq(7); drain_work();
+    CHECK(shared_status[0] == 8 && !masked[7]); /* asserted after its handler */
+    fake_irq(7); drain_work();
+    CHECK(!shared_status[0] && shared_acks[0] == 9 && eois == before + 5);
+    for (unsigned i = 0; i < 3; i++) CHECK(shared_calls[i] == 5);
+    /* Failed device has stopped its source; detach during pending rearm. */
+    fake_irq(7);
+    CHECK(!irq_chain_remove(7, three_devices, owners[1]));
+    release_active(handles[1]);
+    drain_work(); CHECK(!masked[7]);
+    shared_status[0] = shared_status[2] = 16;
+    fake_irq(7); drain_work();
+    CHECK(shared_calls[1] == 6 && shared_calls[0] == 7 && shared_calls[2] == 7);
+    struct irq_chain_stats s;
+    CHECK(irq_chain_snapshot(7, &s) && s.participants == 2 && s.handled == 6 && s.unclaimed == 1);
+    CHECK(registry_get((unsigned)handles[1])->state == RS_RELEASED);
+    irq_chain_spurious(7); irq_chain_spurious(15);
+    CHECK(irq_chain_snapshot(7, &s) && s.spurious == 1 && eois == before + 7);
+    CHECK(irq_chain_snapshot(15, &s) && s.spurious == 1);
+    for (unsigned i = 0; i < 3; i += 2) {
+        CHECK(!irq_chain_remove(7, three_devices, owners[i])); release_active(handles[i]);
+    }
+    CHECK(masked[7]);
+    puts("shared INTx: three devices, interleaved/late assertion, one EOI per pass, failed device release preserves peers PASS");
+}
 
 static void test_irq_chain(void)
 {
@@ -712,6 +763,7 @@ int main(void)
     test_sync();
     test_work();
     test_irq_chain();
+    test_three_shared_devices();
     test_registry_probe();
     test_fs_wait_lock();
     test_work_report_bound();

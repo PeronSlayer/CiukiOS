@@ -156,6 +156,16 @@ class USBRunnerTests(unittest.TestCase):
         expanded=runner.load_suite('f1-usb')['cases']
         self.assertEqual([c['id'] for c in expanded],[c['id'] for c in smoke+suite['cases']])
 
+    def test_qualified_usb_cases_require_irq_admission(self):
+        suite=runner.load(ROOT/'tests/suites/f1-usb.json')
+        for case in suite['cases']:
+            controller=case['usb'][0]['controller']
+            pattern=case['expected']['serial_patterns'][0]
+            record=f'[usb] controller={controller} ports=2 pci=00:03.0'
+            with self.subTest(case=case['id']):
+                self.assertRegex(record+' mode=irq reason=ready_irq',pattern)
+                self.assertNotRegex(record+' mode=poll reason=ready_polling',pattern)
+
     def test_wheel_case_requires_both_signed_driver_and_desktop_records(self):
         case=next(c for c in runner.load(ROOT/'tests/suites/f1-usb.json')['cases'] if c['id']=='usb-wheel-uhci')
         wheel=case['actions'][0]['batches'][:4]
@@ -190,7 +200,7 @@ class USBRunnerTests(unittest.TestCase):
         self.assertIn('usb-kbd,bus=usb0.0',args);self.assertIn('usb-mouse,bus=usb0.0',args)
 
     def usb_lines(self,controller):
-        return [f'[usb] controller={controller} ports=2 pci=00:04.0 mode=poll reason=ready_polling',
+        return [f'[usb] controller={controller} ports=2 pci=00:04.0 mode=irq reason=ready_irq',
                 '[usb] device addr=1 vid:pid=0627:0001 class=00 speed=full',
                 '[usb] device addr=2 vid:pid=0627:0002 class=00 speed=full',
                 '[usb] hid keyboard attached addr=1 interface=0 wheel=0',

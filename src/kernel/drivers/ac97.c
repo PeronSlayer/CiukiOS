@@ -553,6 +553,7 @@ static int controller_activate(struct ac97_device *d)
     if (!err) {
         transport_publish(d);
         stage_next(d, "pci_master");
+        d->dma_enabled = true;
         config_command(p, p->command | 5);
         if ((config_read(p, 4) & 0xffff) != (p->command | 5u)) err = -EIO;
     }
@@ -644,10 +645,45 @@ static bool ac97_irq(unsigned irq, const char *owner)
 }
 static bool idle_proof(int handle, gen_t generation)
 { (void)handle; (void)generation; return !ac97.running && !ac97.irq_attached && !ac97.quarantine; }
+static bool failed_codec_stop(struct ac97_device *d)
+{
+    /* Codec access and DMA are independent. Before our first BME publication,
+     * stop/mask every channel without CAS, codec restore, reset or new DMA.
+     * A failed runtime DMA proof still retains the existing quarantine. */
+    if (!d->touched || d->dma_enabled || d->running || !d->failure.stage ||
+        strncmp(d->failure.stage, "codec_", 6)) return false;
+    unsigned channels = d->nvidia ? 4 : 3;
+    uint16_t stopped = (d->command | 1u) & ~4u;
+    audio_pci_write(&d->io, &d->pci, 4, stopped, 2);
+    if ((audio_pci_read(&d->io, &d->pci, 4) & 0xffff) != stopped) return false;
+    for (unsigned i = 0; i < channels; i++) wr(d, (i == 3 ? 0x70 : i * 0x10) + 0xb, 0, 1);
+    uint64_t deadline = d->io.now(d->io.cookie) + 500;
+    for (;;) {
+        bool idle = true;
+        for (unsigned i = 0; i < channels; i++) {
+            unsigned off = i == 3 ? 0x70 : i * 0x10;
+            unsigned cr = rd(d, off + 0xb, 1), sr = rd(d, off + 6, 2);
+            if (cr != 0 || sr == 0xffff || !(sr & AC97_DCH)) idle = false;
+            else wr(d, off + 6, sr & 0x1c, 2);
+        }
+        if (idle) break;
+        if (expired(d, deadline)) return false;
+        d->io.sleep(d->io.cookie, 1);
+    }
+    uint16_t disabled = d->command & ~5u;
+    audio_pci_write(&d->io, &d->pci, 4, disabled, 2);
+    if ((audio_pci_read(&d->io, &d->pci, 4) & 0xffff) != disabled) return false;
+    d->touched = d->codec_changed = d->quarantine = false;
+    return true;
+}
 void ac97_shutdown(void)
 {
     struct ac97_device *d = &ac97;
     d->ready = false;
+    bool codec_failure = d->touched && !d->dma_enabled && !d->running && d->failure.stage &&
+                         !strncmp(d->failure.stage, "codec_", 6);
+    bool codec_stopped = codec_failure && failed_codec_stop(d);
+    if (codec_failure && !codec_stopped) d->quarantine = true;
     bool unsafe = d->quarantine;
     if (d->touched) {
         /* A prior quarantine permits RUN clear, never reset/republication. */
@@ -689,6 +725,8 @@ void ac97_shutdown(void)
         for (unsigned i = 0; i < 8; i++) if (d->payload_pages[i]) {
             pmm_free(d->payload_pages[i]); audio.commitment_pages--; d->payload_pages[i] = 0;
         }
+        if (codec_stopped) klog("[audio] cleanup reason=%s access=%s controller=disabled leases=released",
+            d->failure.stage, d->codec_error ? d->codec_error : "ok");
     } else { audio.quarantined = true; audio.reason = "stop_unproved"; }
 }
 int ac97_init(void)

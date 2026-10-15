@@ -46,9 +46,9 @@ int usb_interrupt(struct usb_device *d, struct usb_hid *p, void *data, unsigned 
         if (uhci) {
             /* T=1,Vf=0 terminates this private queue, not the frame. The
              * controller resumes at the QH horizontal link (UHCI 3.4).
-             * IOC remains clear: this controller uses polling, USBINTR=0. */
+             * IOC requests device completion only on an attached IRQ line. */
             td[0] = 1;
-            td[1] = (1u << 23) | (3u << 27) | (d->low_speed ? 1u << 26 : 0) | 0x7ff;
+            td[1] = (1u << 23) | (h->irq_attached ? 1u << 24 : 0) | (3u << 27) | (d->low_speed ? 1u << 26 : 0) | 0x7ff;
             td[2] = USB_PID_IN | (uint32_t)d->address << 8 | (unsigned)p->endpoint << 15 |
                     (unsigned)p->toggle << 19 | (length - 1) << 21;
             td[3] = h->dma_phys + buffer;

@@ -40,6 +40,9 @@ void klog(const char *fmt,...)
 void usb_hid_poll(struct usb_device *d,struct usb_hid *h) { if(hid_poll_hook)hid_poll_hook(d,h); }
 void usb_hid_release(struct usb_device *d,struct usb_hid *h) { (void)d;(void)h; }
 int registry_quarantine(int h,gen_t g) { (void)h;(void)g;assert(!"unexpected host quarantine");return 0; }
+int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
+{ (void)irq;(void)handler;(void)owner;assert(!"no IRQ was attached");return -EINVAL; }
+void kwait_wake_all(struct kwait *q) { (void)q;assert(!"no IRQ was attached"); }
 const struct usb_hc_ops usb_ohci_ops={0};
 static struct model {
     struct usb_host h;

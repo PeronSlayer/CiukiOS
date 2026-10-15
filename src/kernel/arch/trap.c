@@ -10,6 +10,7 @@
 #include <ciuki/signal.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/cpustat.h>
+#include <ciuki/registry.h>
 extern bool dosvm_trap(struct trap_frame *) __attribute__((weak));
 extern void dosvm_perf_enter(void) __attribute__((weak));
 extern bool dosvm_client(const struct task *) __attribute__((weak));
@@ -50,10 +51,12 @@ static void handle_irq(struct trap_frame *tf)
     if (crit_label) crit_label(sections[irq]);
     if (irq == 7 && !(pic_isr(0x20) & 0x80)) {
         g_spurious_irq7++;              /* spurious: no handler, no EOI */
+        irq_chain_spurious(7);
         return;
     }
     if (irq == 15 && !(pic_isr(0xA0) & 0x80)) {
         g_spurious_irq15++;
+        irq_chain_spurious(15);
         outb(0x20, 0x62);               /* acknowledge the master cascade only */
         return;
     }
