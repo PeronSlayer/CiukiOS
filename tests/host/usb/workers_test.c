@@ -12,10 +12,11 @@
 #include <ciuki/task.h>
 volatile uint64_t g_ticks;
 static struct usb_host hosts[USB_HOST_MAX];
-static unsigned host_count=2, created, started, scans, polls, gap_max;
+static unsigned host_count=2, created, started, scans, polls, gap_max, host_turns;
 static unsigned current_worker;
 static uint64_t last_poll;
 static struct { struct task task; void (*fn)(void *); void *arg; uint64_t due; } workers[3];
+static struct kwait *waiting[3];
 static jmp_buf turn_done[3];
 static bool slow_binding;
 static uint32_t irq_save(void) { return 0x200; }
@@ -32,6 +33,13 @@ struct task *task_create_kernel(const char *n,void (*fn)(void *),void *arg,enum 
 }
 void task_start(struct task *t) { assert(t->state==T_BLOCKED);t->state=T_READY;started++; }
 void task_sleep_ms(uint32_t ms) { workers[current_worker].due=g_ticks+ms;longjmp(turn_done[current_worker],1); }
+uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
+bool kwait_wait_until(struct kwait *q,kwait_cond_fn condition,void *arg,uint64_t deadline)
+{ waiting[current_worker]=q;if(!condition(arg))task_sleep_ms((uint32_t)(deadline-g_ticks));return true; }
+static bool host_pending(void *arg) { return ((struct usb_host *)arg)->irq_pending; }
+static bool input_pending;
+static struct kwait input_changed;
+static bool hid_pending(void *arg) { (void)arg;return input_pending; }
 void usb_host_quarantine(struct usb_host *h,const char *why) { (void)h;(void)why;assert(0); }
 void usb_hid_service(struct usb_host *h)
 {
@@ -50,10 +58,16 @@ void usb_step(struct usb_host *h)
 {
     if(h==&hosts[0]) {
         assert(slow_binding);
+        host_turns++;
         if(g_ticks>=h->next_scan) { scans++;h->next_scan=g_ticks+250; }
     } else {
         assert(h==&hosts[1]);h->busy=true;slow_binding=true;
         for(unsigned i=0;i<500;i++) {
+            if(hosts[0].irq_attached) {
+                hosts[0].irq_pending=input_pending=true;
+                for(unsigned n=0;n<3;n++) if(waiting[n]==&hosts[0].changed || waiting[n]==&input_changed)
+                    workers[n].due=g_ticks;
+            }
             dispatch(0);dispatch(2);g_ticks++;
         }
         slow_binding=false;h->busy=false;
@@ -68,6 +82,12 @@ int main(void)
     start_services();assert(created==3 && started==3);
     dispatch(1);
     assert(scans==2 && polls==500 && gap_max==1 && g_ticks==500);
+    assert(host_turns==2);
+    memset(workers,0,sizeof(workers));memset(waiting,0,sizeof(waiting));
+    created=started=scans=polls=gap_max=host_turns=0;g_ticks=last_poll=0;
+    hosts[0].next_scan=hosts[1].next_scan=0;hosts[0].irq_attached=true;
+    start_services();dispatch(1);
+    assert(scans==2 && polls==500 && gap_max==1 && host_turns==500 && g_ticks==500);
     for(unsigned i=0;i<host_count;i++) fs_lock_destroy(&hosts[i].transfer_lock);
-    puts("USB workers: real per-controller tasks, 500 ms bind on host 1, host 0 scans 4/s and HID cadence 1 ms PASS");
+    puts("USB workers: real tasks, 500 ms bind on host 1; host 0 polling/IRQ, 4/s root scans, 1 ms IRQ and HID cadence PASS");
 }

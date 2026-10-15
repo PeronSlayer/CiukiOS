@@ -17,6 +17,9 @@ static void *input_arg;
 static unsigned created, started, allocations;
 static bool create_failed, input_create_failed, dispatched, input_dispatched, no_pci;
 static uint64_t input_stop_at;
+static bool phased_replay;
+static uint64_t phase_us, phase_fixed_deadline;
+static unsigned phase_frames, phase_ticks, phase_waits;
 static uint32_t config_address, flags=0x200;
 static jmp_buf service_done;
 volatile uint64_t g_ticks;
@@ -83,13 +86,117 @@ void task_sleep_ms(uint32_t ms)
     if(dispatched && !usb_get(0)->busy && m.now>=2100) longjmp(service_done,1);
     sleep_ms(&m,ms);g_ticks=m.now;
 }
+uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
+static void phase_event(void)
+{
+    /* PIT and USB are independent clocks: PIT at n ms, USB at n+0.5 ms.
+     * This runs events inside the actual native sleep, without scheduling
+     * the clocks together or rounding each USB notification up to a tick. */
+    uint64_t pit=(g_ticks+1)*1000, frame=phase_us/1000*1000+500;
+    if(frame<=phase_us)frame+=1000;
+    assert(!pthread_mutex_trylock(&m.host.transfer_lock));
+    fs_lock_drop(&m.host.transfer_lock);
+    if(frame<pit) {
+        phase_us=frame;phase_frames++;
+        m.regs[0]|=1u<<16;assert(usb_host_irq(&m.host));
+    } else {
+        phase_us=pit;phase_ticks++;m.now=++g_ticks;
+    }
+}
+bool kwait_wait_until(struct kwait *q,kwait_cond_fn condition,void *arg,uint64_t deadline)
+{
+    if(phased_replay) {
+        assert(q==&m.host.changed && arg==&m.host);
+        if(phase_fixed_deadline)assert(deadline==phase_fixed_deadline);
+        phase_waits++;
+        while(!condition(arg) && g_ticks<deadline)phase_event();
+        return condition(arg);
+    }
+    (void)q;
+    if(!condition(arg))task_sleep_ms((uint32_t)(deadline-g_ticks));
+    return condition(arg);
+}
 
 #undef CIUKI_USB_HOST
 #include "../../../src/kernel/usb/usb_core.c"
 
+static void phase_early_sleep(void *arg,unsigned ms)
+{ assert(arg==&m && ms==1);phase_event(); }
+static void phase_native_sleep(void *arg,unsigned ms)
+{ assert(arg==&m);native_sleep(&m.host,ms); }
+static void phased_delays(void)
+{
+    route_ready=true;assert(!attach());phased_replay=true;
+    g_ticks=m.now=phase_us=0;phase_fixed_deadline=50;
+    native_sleep(&m.host,50);
+    assert(phase_us==50000 && phase_ticks==50 && phase_frames==50 && phase_waits==51);
+    phase_fixed_deadline=0;
+    usb_host_take(&m.host);
+    /* Also replay an I/O backend that returns at every PIT/USB event:
+     * usb_sleep itself must count elapsed time, never wakeup iterations. */
+    m.host.io.sleep=phase_early_sleep;
+    uint64_t pause_begin=phase_us;
+    usb_poll_pause(&m.host,50);
+    assert(phase_us-pause_begin==25000); /* only optional retry backoff may end early */
+    const unsigned delays[]={50,2,100}; /* reset, address recovery, debounce */
+    for(unsigned i=0;i<sizeof(delays)/sizeof(delays[0]);i++) {
+        uint64_t begin=phase_us;
+        unsigned frames=phase_frames,ticks=phase_ticks;
+        usb_sleep(&m.host,delays[i]);
+        assert(phase_us-begin==(uint64_t)delays[i]*1000);
+        assert(phase_frames-frames==delays[i] && phase_ticks-ticks==delays[i]);
+    }
+    m.host.io.sleep=phase_native_sleep;
+    uint64_t begin=phase_us;
+    assert(!m.host.ops->port_reset(&m.host,0));
+    assert(phase_us-begin==61000 && m.root_resets[0]==1 && m.root_enables[0]==1);
+    assert(m.recovery_at[0]-m.reset_at[0]==50);
+    usb_host_drop(&m.host);
+    puts("PASS USB phased delays: PIT n ms, USB n+0.5 ms; native 50 ms deadline survives 50 IRQ wakes; reset/address/debounce 50/2/100 ms; production root reset 61 ms; optional retry backoff separate");
+}
+static void fatal_isolation(const char *mode)
+{
+    route_ready=true;assert(!attach());
+    bool relatched=!strcmp(mode,"fatal-relatched");
+    m.host_error=!strcmp(mode,"fatal-persistent");
+    m.fatal_reassert=!strcmp(mode,"fatal-reasserted");
+    m.gate_stuck=!strcmp(mode,"fatal-gate-stuck");
+    m.source_stuck=!strcmp(mode,"fatal-source-stuck");
+    m.run_stuck=!strcmp(mode,"fatal-run-stuck");
+    m.halt_stuck=!strcmp(mode,"fatal-halt-stuck");
+    m.bme_stuck=!strcmp(mode,"fatal-bme-stuck");
+    /* First HSE is latched by the worker; USBINTR is then zero. A later
+     * HCPE or persistent HSE must still be acknowledged on the shared line. */
+    m.regs[0]|=8u<<16;
+    assert(usb_host_irq(&m.host) && (m.host.irq_status&8));
+    if(!m.source_stuck)assert(!(read_reg(&m,4,2)&15));
+    for(unsigned i=0;i<3;i++) {
+        m.regs[0]|=0x10u<<16;
+        unsigned before=writes;
+        assert(usb_host_irq(&m.host) && writes>before && m.host.irq_status==0x18);
+    }
+    usb_step(&m.host);
+    assert(m.host.quarantined && !m.host.ready);
+    if(relatched) {
+        assert(!m.host.irq_attached && irq_removed==1 && !irq_masked);
+        assert(!(config_read(&m,0xc0,2)&0x20bf) && !(read_reg(&m,2,2)&0x1f));
+    } else {
+        assert(m.host.irq_attached && !irq_removed && irq_masked);
+        assert(leases[m.host.claims[1]].state==RS_QUARANTINED);
+        /* Even an unexpected dispatch after quarantine cannot abandon an
+         * unacknowledged source. The production registry keeps IRQ11 masked. */
+        m.regs[0]|=8u<<16;
+        unsigned before=writes;
+        assert(usb_host_irq(&m.host) && writes>before);
+    }
+    printf("PASS USB fatal isolation %s: repeated HSE/HCPE acknowledged after fatal snapshot; %s\n",
+           mode,relatched ? "gate/source/status/BME verified before detach":"failed readback retains callback and quarantines masked IRQ11");
+}
 int main(int argc,char **argv)
 {
     assert(argc==2);setup(false,false);
+    if(!strcmp(argv[1],"phased-delays")) {phased_delays();return 0;}
+    if(!strncmp(argv[1],"fatal-",6)) {fatal_isolation(argv[1]);return 0;}
     bool empty=!strcmp(argv[1],"empty");
     if(empty) m.dev[0].present=m.dev[1].present=false;
     create_failed=!strcmp(argv[1],"create-failed");

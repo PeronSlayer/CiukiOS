@@ -577,3 +577,10 @@ bool irq_chain_snapshot(unsigned irq, struct irq_chain_stats *out)
     irq_restore(f);
     return true;
 }
+void irq_chain_spurious(unsigned irq)
+{
+    if (irq >= 16) return;
+    uint32_t f = irq_save();
+    chains[irq].stats.spurious++;
+    irq_restore(f);
+}

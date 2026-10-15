@@ -50,6 +50,7 @@ struct ac97_device {
     struct ac97_failure failure;
     struct ac97_cursor cursor;
     bool ready, running, stopping, quarantine, irq_attached, touched;
+    bool dma_enabled; /* once PCI BME publication has been attempted */
     bool sis, nvidia, sis_gate_changed;
     uint16_t saved_sis_gate;
     bool observed_halt, codec_changed, software_master, beep_present, cirrus_spdif;

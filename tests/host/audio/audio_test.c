@@ -972,6 +972,43 @@ static void test_shutdown(void)
     memset(&ac97,0,sizeof(ac97));
     puts("audio shutdown: preactivation claims released; unproved stop retains all nine DMA pages/claims; no quarantine reset PASS");
 }
+static void test_codec_failure_release(void)
+{
+    for (unsigned fault = 0; fault < 3; fault++) {
+        unsigned before = pages_used;
+        ich3_setup(); hw.post_delay = 200; /* reset write holds CAS beyond 100 ms */
+        CHECK(controller_activate(&ac97) == -ETIMEDOUT);
+        CHECK(!ac97.dma_enabled && !hw.starts && ac97.failure.stage &&
+              !strcmp(ac97.failure.stage,"codec_reset") && !strcmp(ac97.codec_error,"cas_timeout"));
+        ac97.activation_deadline=0;
+        resource_releases=resource_quarantines=irq_removals=0;
+        for (unsigned i=0;i<12;i++) {
+            ac97.claims[i]=(int)i;ac97.claim_generation[i]=100+i;
+            audio_resources[i]=(struct resource){.type=i==2 ? RES_IRQ : RES_MMIO,
+                .start=i==2 ? 11u : i*4096u,.end=i==2 ? 12u : (i+1)*4096u,
+                .shareable=i==2,.generation=100+i,.state=RS_ACTIVE};
+        }
+        ac97.bdl_phys=pmm_alloc();ac97.bdl=P2V(ac97.bdl_phys);
+        for(unsigned i=0;i<8;i++)ac97.payload_pages[i]=pmm_alloc();
+        audio.commitment_pages=9;audio.quarantined=false;audio.reason="codec_reset";
+        unsigned resets=hw.resets, reads=hw.codec_reads;
+        if(fault==1)hw.input_sr=0; /* another channel cannot prove stop */
+        if(fault==2)ac97.dma_enabled=true; /* later DMA fault cannot use this rollback */
+        ac97_shutdown();
+        CHECK(hw.resets==resets && hw.codec_reads==reads && !hw.starts && !irq_removals);
+        if(!fault) {
+            CHECK(resource_releases==12 && !resource_quarantines && !ac97.quarantine && !audio.quarantined);
+            CHECK(pages_used==before && !audio.commitment_pages && !(hw.pci_command&5));
+            CHECK(!strcmp(audio.reason,"codec_reset") && strstr(audio_log,"leases=released"));
+        } else {
+            CHECK(resource_quarantines==12 && !resource_releases && ac97.quarantine && pages_used==before+9);
+            pmm_free(ac97.bdl_phys);for(unsigned i=0;i<8;i++)pmm_free(ac97.payload_pages[i]);
+            audio.commitment_pages=0;audio.quarantined=false;
+        }
+    }
+    memset(&ac97,0,sizeof(ac97));
+    puts("audio codec failure: pre-DMA CAS timeout releases IRQ/controller/pages; unproved input or prior BME retains quarantine PASS");
+}
 /* f4-05 hooks (weak in audio_dev.c; the VM sources are not linked here). */
 static bool vm_attached_hook, vm_nonzero_hook;
 bool audio_vm_active(void) { return vm_active_hook; }
@@ -1221,7 +1258,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

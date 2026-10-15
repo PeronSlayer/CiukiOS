@@ -28,7 +28,11 @@ static int start(struct usb_host *h)
     volatile uint32_t *control = words(h, USB_UHCI_CONTROL_QH);
     volatile uint32_t *bulk = words(h, USB_UHCI_BULK_QH);
     control[0] = (h->dma_phys + USB_UHCI_BULK_QH) | 2; control[1] = 1;
-    bulk[0] = bulk[1] = 1;
+    /* An inactive IOC TD is visited once at every frame's schedule tail;
+     * it generates no transaction, including while other queues NAK. */
+    bulk[0] = h->dma_phys + USB_TAIL; bulk[1] = 1;
+    words(h, USB_TAIL)[0] = 1;
+    words(h, USB_TAIL)[1] = 1u << 24;
     for (unsigned i = 0; i < USB_DEVICE_MAX * USB_HID_MAX; i++) {
         volatile uint32_t *pipe = words(h, USB_HID_BASE + i * USB_HID_STRIDE);
         pipe[0] = i + 1 < USB_DEVICE_MAX * USB_HID_MAX ?
@@ -75,10 +79,17 @@ void usb_uhci_dump_schedule(struct usb_host *h)
      * including empty QHs; printing only active pipes could hide a broken link.
      * Validate DMA bounds before dereferencing even a diagnostic pointer. */
     uint32_t link = words(h, 0)[0];
-    for (unsigned n = 0; n < USB_DEVICE_MAX * USB_HID_MAX + 2; n++) {
+    for (unsigned n = 0; n < USB_DEVICE_MAX * USB_HID_MAX + 3; n++) {
         dump_preempt(h);
         if (link & 1) return;
         uint32_t address = link & ~15u;
+        if (!(link & 14) && address == h->dma_phys + USB_TAIL) {
+            volatile uint32_t *td = words(h, USB_TAIL);
+            klog("[usb] schedule frame=0 td=%08x link=%08x status=%08x token=%08x buffer=%08x controller=%s",
+                 address, td[0], td[1], td[2], td[3], h->owner);
+            link = td[0];
+            continue;
+        }
         if ((link & 15) != 2 || address < h->dma_phys + USB_ED ||
             address > h->dma_phys + USB_DMA_BYTES - 16) {
             klog("[usb] schedule frame=0 invalid_link=%08x controller=%s", link, h->owner);
@@ -175,9 +186,9 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
     unsigned queue = endpoint && !periodic ? USB_UHCI_BULK_QH : USB_UHCI_CONTROL_QH;
     volatile uint32_t *td = words(h, USB_TD), *qh = words(h, queue);
     /* One-element breadth-first queue: T=1,Vf=0 returns to the QH's
-     * horizontal link after an ACK. IOC=0 because completion is polled. */
+     * horizontal link after an ACK. IRQ mode also requests completion. */
     td[0] = 1;
-    td[1] = (1u << 23) | (3u << 27) | (d->low_speed ? 1u << 26 : 0) | 0x7ff;
+    td[1] = (1u << 23) | (h->irq_attached ? 1u << 24 : 0) | (3u << 27) | (d->low_speed ? 1u << 26 : 0) | 0x7ff;
     td[2] = pid | (uint32_t)d->address << 8 | endpoint << 15 | toggle << 19 |
             ((length ? length - 1 : 0x7ffu) << 21);
     td[3] = h->dma_phys + USB_BUFFER;
@@ -284,7 +295,7 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
             unsigned n=bytes-offset; if (n>mps) n=mps;
             volatile uint32_t *td=words(h,USB_BULK_TD+i*16);
             td[0]=i+1<count ? (h->dma_phys+USB_BULK_TD+(i+1)*16)|4 : 1;
-            td[1]=(1u<<23)|(3u<<27)|(in ? 1u<<29 : 0)|0x7ff;
+            td[1]=(1u<<23)|(h->irq_attached ? 1u<<24 : 0)|(3u<<27)|(in ? 1u<<29 : 0)|0x7ff;
             td[2]=(in ? USB_PID_IN : USB_PID_OUT)|(unsigned)d->address<<8|ep<<15|
                   (*toggle^(i&1))<<19|(n-1)<<21;
             td[3]=h->dma_phys+USB_BULK_BUFFER+i*64;

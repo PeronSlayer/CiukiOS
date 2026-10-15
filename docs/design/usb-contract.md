@@ -1,5 +1,26 @@
 # F1 USB host, boot HID and mass storage contract
 
+F1-71 amends the polling-only execution rules below: a qualified firmware
+PIRQ/ELCR route uses the registry's shared INTx chain. See
+[F1-71 research and validation](../validation/f1-71-shared-pci-interrupts.md).
+UHCI enables the native PCI gate with SMI/traps disabled and uses a pinned
+inactive IOC schedule tail for 1 ms notifications; OHCI uses SOF/WDH/UE.
+Handlers acknowledge only their own controller status and wake the existing
+workers. Fatal status survives W1C until thread cleanup. Root/hub scans keep
+their bounded 250 ms cadence; frame notifications independently wake host and
+HID service, including during bulk waits and two-frame retirement. Unqualified
+routes, exclusive-line conflicts and chain-attachment refusal retain polling.
+Controller faults detach a stopped/masked source before quarantining its
+claims, preserving healthy shared peers when detachment succeeds. HSE/HCPE
+remain serviceable after the first fatal snapshot: USBINTR alone does not mask
+them. Detachment requires raw source/status, native gate and PCI BME readback
+proof. Failed isolation retains the attached IRQ claim in quarantine, masking
+the shared line and preventing queued rearm. Mandatory reset, recovery and
+debounce sleeps use absolute elapsed-time deadlines preserved across IRQ
+wakeups. Separate worker/HID notification waits and optional TUR retry backoff
+may finish early. The TUR backoff retains its finite polling bound even when
+the clock freezes; it cannot be used for reset/recovery/debounce.
+
 Written for directive `f1-42`, 2026-10-13. Lead cross-review and QEMU/hardware
 qualification remain required before integration; host fixtures are not boot evidence.
 

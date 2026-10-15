@@ -433,7 +433,9 @@ static int probe_storage(struct usb_device *d)
         uint64_t now=d->host->io.now(d->host->io.cookie);
         int64_t left=(int64_t)(s->bind_deadline-USB_BIND_FINISH_MS-now);
         if (left<=0) return fault(d,"bind_deadline",false);
-        usb_sleep(d->host,left<100u ? (unsigned)left : 100u);
+        /* TUR retries have no mandatory minimum spacing. Keep their backoff
+         * bounded even when the clock freezes; polls above bound the retry. */
+        usb_poll_pause(d->host,left<100u ? (unsigned)left : 100u);
     }
     if (e) return fault(d,"not_ready",false);
     if (bind_stage(d,"capacity")) return -FS_EIO;

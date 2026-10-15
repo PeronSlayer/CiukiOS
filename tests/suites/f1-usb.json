@@ -232,7 +232,7 @@
           }
         ],
         "serial_patterns": [
-          "^\\[usb\\] controller=uhci ports=\\d+ pci=\\S+ mode=poll reason=ready_polling\\r?$",
+          "^\\[usb\\] controller=uhci ports=\\d+ pci=\\S+ mode=irq reason=ready_irq\\r?$",
           "^\\[usb\\] device addr=1 vid:pid=[0-9a-f]{4}:[0-9a-f]{4} class=[0-9a-f]{2} speed=(?:low|full)\\r?$",
           "^\\[usb\\] device addr=2 vid:pid=[0-9a-f]{4}:[0-9a-f]{4} class=[0-9a-f]{2} speed=(?:low|full)\\r?$",
           "^\\[usb\\] hid keyboard attached addr=\\d+ interface=\\d+ wheel=\\d+\\r?$",
@@ -1157,7 +1157,7 @@
           }
         ],
         "serial_patterns": [
-          "^\\[usb\\] controller=ohci ports=\\d+ pci=\\S+ mode=poll reason=ready_polling\\r?$",
+          "^\\[usb\\] controller=ohci ports=\\d+ pci=\\S+ mode=irq reason=ready_irq\\r?$",
           "^\\[usb\\] device addr=1 vid:pid=[0-9a-f]{4}:[0-9a-f]{4} class=[0-9a-f]{2} speed=(?:low|full)\\r?$",
           "^\\[usb\\] device addr=2 vid:pid=[0-9a-f]{4}:[0-9a-f]{4} class=[0-9a-f]{2} speed=(?:low|full)\\r?$",
           "^\\[usb\\] hid keyboard attached addr=\\d+ interface=\\d+ wheel=\\d+\\r?$",
@@ -2082,7 +2082,7 @@
           }
         ],
         "serial_patterns": [
-          "^\\[usb\\] controller=uhci ports=\\d+ pci=\\S+ mode=poll reason=ready_polling\\r?$",
+          "^\\[usb\\] controller=uhci ports=\\d+ pci=\\S+ mode=irq reason=ready_irq\\r?$",
           "^\\[usb\\] device addr=1 vid:pid=[0-9a-f]{4}:[0-9a-f]{4} class=[0-9a-f]{2} speed=(?:low|full)\\r?$",
           "^\\[usb\\] device addr=2 vid:pid=[0-9a-f]{4}:[0-9a-f]{4} class=[0-9a-f]{2} speed=(?:low|full)\\r?$",
           "^\\[usb\\] hid keyboard attached addr=\\d+ interface=\\d+ wheel=\\d+\\r?$",

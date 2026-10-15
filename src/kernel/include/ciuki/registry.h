@@ -46,6 +46,9 @@ unsigned registry_count(void);
 const struct resource *registry_get(unsigned i);
 unsigned pci_count(void);
 const struct pci_func *pci_get(unsigned i);
+/* Read-only firmware route qualification (PIRQ plus ELCR); never steers an
+ * interrupt or assumes that Interrupt Line alone proves level routing. */
+bool pci_irq_routed(const struct pci_func *function);
 
 /* Counts are cumulative except live (includes discovery, reservations and
  * quarantine). registry_count remains the occupied slot high-water mark;
@@ -73,7 +76,7 @@ void registry_snapshot(struct registry_stats *out);
 #define IRQ_CHAIN_STUCK_PASSES 1000u
 typedef bool (*irq_chain_handler_t)(unsigned irq, const char *owner);
 struct irq_chain_stats {
-    uint64_t passes, handled, unclaimed, budget_violations;
+    uint64_t passes, handled, unclaimed, spurious, budget_violations;
     uint64_t max_service_us;
     unsigned participants, consecutive_unclaimed, quarantines;
     bool quarantined, deferred;
@@ -95,5 +98,6 @@ struct irq_chain_stats {
 int irq_chain_add(unsigned irq, irq_chain_handler_t handler, const char *owner);
 int irq_chain_remove(unsigned irq, irq_chain_handler_t handler, const char *owner);
 bool irq_chain_snapshot(unsigned irq, struct irq_chain_stats *out);
+void irq_chain_spurious(unsigned irq);
 
 #endif

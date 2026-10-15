@@ -99,6 +99,7 @@ static void fixture_seed(void) { }
 #define irq_chain_add fixture_irq_chain_add
 #define irq_chain_remove fixture_irq_chain_remove
 #define irq_chain_snapshot fixture_irq_chain_snapshot
+#define irq_chain_spurious fixture_irq_chain_spurious
 #define outb fixture_outb
 #define outl fixture_outl
 #define inl fixture_inl
@@ -156,6 +157,7 @@ static void fixture_seed(void) { }
 #undef irq_chain_add
 #undef irq_chain_remove
 #undef irq_chain_snapshot
+#undef irq_chain_spurious
 #undef outb
 #undef outl
 #undef inl

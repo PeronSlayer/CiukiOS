@@ -73,7 +73,7 @@ static void record(struct netif *d)
     char mac[18]; net_mac_text(d->address, mac);
     klog("[net] driver=%s mac=%s link=%s irq=%u mode=%s state=%s reason=%s",
          d->driver->name, mac, net_link_text(d->link), d->pci.irq_line,
-         d->irq_attached ? "intx" : "poll", d->quarantined ? "quarantined" :
+         d->irq_attached ? "irq" : "poll", d->quarantined ? "quarantined" :
          d->running ? "running" : "stopped", d->reason);
 }
 static uint32_t pci_read_config(struct netif *d, const struct pci_func *p, unsigned reg)
@@ -113,21 +113,7 @@ static bool power_d0(struct netif *d)
 }
 static bool routed(struct netif *d)
 {
-    const struct pci_func *p = &d->pci;
-    /* Only the already-qualified QEMU PIIX root slots. Notebook routing is
-     * not inferred from Interrupt Line: use masked, documented polling. */
-    if (!(g_boot.flags & CBI_F_SMBIOS_QEMU) || (p->command & 0x400) || p->bus || !p->irq_pin || p->irq_pin > 4 ||
-        (p->irq_line != 5 && p->irq_line != 9 && p->irq_line != 10 && p->irq_line != 11)) return false;
-    for (unsigned i = 0; i < pci_count(); i++) {
-        const struct pci_func *b = pci_get(i);
-        if (b->vendor != 0x8086 || b->bus || b->class_code != 6 || b->subclass != 1 ||
-            (b->device != 0x7000 && b->device != 0x7110)) continue;
-        unsigned pirq = (p->dev + p->irq_pin - 2) & 3;
-        unsigned route = (pci_read_config(d, b, 0x60) >> (pirq * 8)) & 0xff;
-        unsigned elcr = d->io.read(d->io.cookie, 0x4d0 + p->irq_line / 8, 1);
-        return !(route & 0x80) && (route & 15) == p->irq_line && (elcr & (1u << (p->irq_line % 8)));
-    }
-    return false;
+    return pci_irq_routed(&d->pci);
 }
 static bool irq_handler(unsigned irq, const char *owner)
 {
@@ -263,7 +249,10 @@ int netif_attach(struct netif *d, const struct pci_func *p, const struct net_io 
     for (unsigned i = 0; i < 2; i++) {
         if (i == 1 && !intx) continue;
         d->claims[i] = registry_claim(types[i], starts[i], ends[i], d->owner, i == 1);
-        if (d->claims[i] < 0) { err = d->claims[i]; d->claims[i] = -1; break; }
+        if (d->claims[i] < 0) {
+            if (i == 1) { d->claims[i] = -1; intx = false; d->reason = "irq_unavailable"; continue; }
+            err = d->claims[i]; d->claims[i] = -1; break;
+        }
         d->claim_generation[i] = registry_get(d->claims[i])->generation;
     }
     if (!err && mmio) {
@@ -300,8 +289,12 @@ int netif_attach(struct netif *d, const struct pci_func *p, const struct net_io 
         if (!err) err = d->driver->start(d);
         if (!err) {
             d->ready = d->running = true;
-            if (intx) { err = irq_chain_add(p->irq_line, irq_handler, d->owner); d->irq_attached = !err; }
-            if (!err) d->driver->irq_enable(d, d->irq_attached);
+            if (intx) {
+                int irq_err = irq_chain_add(p->irq_line, irq_handler, d->owner);
+                d->irq_attached = !irq_err;
+                if (irq_err) d->reason = "irq_unavailable";
+            }
+            d->driver->irq_enable(d, d->irq_attached);
         }
     }
     if (err) {

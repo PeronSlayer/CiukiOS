@@ -102,6 +102,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/pci_irq_test.c" -o "$out/pci_irq_test"
+"$out/pci_irq_test"
 
 # f1-18/f1-19 do not authorize edits to i8042_test.c. Adapt its old adapter-only
 # fakes in build/host, preserving every input/probe count assertion. Its
