@@ -102,6 +102,38 @@ static int default_exception(struct dosvm *v, struct v86_frame *f, unsigned n)
     return -EFAULT;
 }
 
+/* DPMI stacks: a handler's private locked stack remains current on nested
+ * PM entries. Switching back to hstack would overwrite registers pushed
+ * there before the client switched away (DOOM's LSS ESP,[EDX+8]).
+ * Research: docs/validation/2026-10-15-f3-23-pm-irq-stack.md. */
+static int handler_frame(struct dosvm *v, const struct v86_frame *f,
+                         struct v86_frame *n, const uint32_t *frame, unsigned words)
+{
+    struct dpmi *d = &v->dpmi;
+    bool nested = false;
+    /* The newest record is this entry, not an enclosing handler. A child's
+     * application stack must not inherit the parent's locked-stack scope. */
+    for (unsigned i = 0; v->frame_pm && i + 1 < d->depth; i++) {
+        const struct dpmi_record *r = &d->rec[i];
+        if (r->client == d->clients && (r->kind == DPMI_REC_PMINT ||
+            r->kind == DPMI_REC_EXCEPTION || r->kind == DPMI_REC_CALLBACK)) nested = true;
+    }
+    uint16_t ss = nested ? (uint16_t)f->tf.user_ss : DPMI_HOST_SS;
+    struct dpmi_seg seg;
+    if (!dpmi_seg(v, ss, &seg) || (ss & 3) != 3 || seg.dpl != 3) return -EFAULT;
+    uint32_t top = nested ? (seg.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp) : d->lock_top;
+    unsigned w = dpmi_width(v), bytes = words * w;
+    if (top < bytes || (ss == DPMI_HOST_SS && top - bytes < DPMI_HSTACK_RESERVE)) return -ENOSPC;
+    uint32_t esp = top - bytes, lin;
+    if (!dpmi_ptr(v, ss, esp, bytes, true, &lin)) return -EFAULT;
+    for (unsigned i = 0; i < words; i++)
+        if (dosvm_write(v, lin + i * w, &frame[i], w)) return -EFAULT;
+    n->tf.user_ss = ss;
+    n->tf.user_esp = nested && !seg.big ? (f->tf.user_esp & 0xFFFF0000u) | esp : esp;
+    if (ss == DPMI_HOST_SS) d->lock_top = esp & ~3u;
+    return 0;
+}
+
 int dpmi_exception(struct dosvm *v, struct v86_frame *f, unsigned n, uint32_t error)
 {
     struct dpmi *d = &v->dpmi;
@@ -112,19 +144,13 @@ int dpmi_exception(struct dosvm *v, struct v86_frame *f, unsigned n, uint32_t er
     if (!dpmi_handler_live(v, h)) { d->stats.stale++; return -EFAULT; }
     struct dpmi_record *r;
     if (dpmi_push_record(v, f, DPMI_REC_EXCEPTION, &r)) return -ENOSPC;
-    unsigned w = dpmi_width(v);
-    if (d->lock_top < 8 * w + DPMI_HSTACK_RESERVE) { dpmi_unwind(v, d->depth - 1); return -ENOSPC; }
-    uint32_t esp = d->lock_top - 8 * w;
     uint32_t frame[8] = {DPMI_PM_EXCRET, DPMI_HOST_CS, error, f->tf.eip, (uint16_t)f->tf.cs,
                          pm_image(v, f->tf.eflags), f->tf.user_esp, (uint16_t)f->tf.user_ss};
-    for (unsigned i = 0; i < 8; i++)
-        if (dosvm_write(v, d->hstack.base + esp + i * w, &frame[i], w)) { dpmi_unwind(v, d->depth - 1); return -EFAULT; }
-    r->vector = (uint8_t)n;
-    r->arg[0] = esp;
-    d->lock_top = esp;
     struct v86_frame n2 = *f;
-    n2.tf.user_ss = DPMI_HOST_SS;
-    n2.tf.user_esp = esp;
+    int e = handler_frame(v, f, &n2, frame, ARRAY_SIZE(frame));
+    if (e) { dpmi_unwind(v, d->depth - 1); return e; }
+    r->vector = (uint8_t)n;
+    r->arg[0] = n2.tf.user_esp;
     n2.tf.cs = h.sel;
     n2.tf.eip = h.off;
     n2.tf.eflags = (f->tf.eflags & 0x0CD5u & ~V86_TF) | V86_IF | 2u;
@@ -212,22 +238,16 @@ int dpmi_enter_pm_handler(struct dosvm *v, struct v86_frame *f, uint8_t vector, 
     if (dpmi_push_record(v, f, DPMI_REC_PMINT, &r)) return -ENOSPC;
     r->vector = vector;
     r->flags = flags;
-    unsigned w = dpmi_width(v);
-    if (d->lock_top < 3 * w + DPMI_HSTACK_RESERVE) { dpmi_unwind(v, d->depth - 1); return -ENOSPC; }
-    uint32_t esp = d->lock_top - 3 * w;
     uint32_t frame[3] = {(flags & DPMI_RF_HWINT) ? DPMI_PM_IRQRET : DPMI_PM_SOFTRET, DPMI_HOST_CS,
                          (f->tf.eflags & 0x0CD5u) | (v->monitor.vif ? V86_IF : 0) | 2u};
-    for (unsigned i = 0; i < 3; i++)
-        if (dosvm_write(v, d->hstack.base + esp + i * w, &frame[i], w)) { dpmi_unwind(v, d->depth - 1); return -EFAULT; }
-    r->arg[0] = esp + 3 * w;
-    d->lock_top = esp;
     struct v86_frame n;
     if (v->frame_pm) n = *f;
     else { memset(&n, 0, sizeof(n)); dpmi_gprs(&n, f); }
+    int e = handler_frame(v, f, &n, frame, ARRAY_SIZE(frame));
+    if (e) { dpmi_unwind(v, d->depth - 1); return e; }
+    r->arg[0] = n.tf.user_esp + 3 * dpmi_width(v);
     n.tf.cs = h.sel;
     n.tf.eip = h.off;
-    n.tf.user_ss = DPMI_HOST_SS;
-    n.tf.user_esp = esp;
     n.tf.eflags = (f->tf.eflags & 0x0CD5u & ~V86_TF) | V86_IF | 2u;
     dpmi_set_pm(v, true);
     *f = n;

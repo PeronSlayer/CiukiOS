@@ -45,6 +45,23 @@ static void test_device_pic(void)
     device_out(v,0x20,0x0B); CHECK(device_in(v,0x20)==2);
     device_out(v,0x21,2); device_out(v,0x20,0x68); /* special mask */
     CHECK(dosvm_irq_raise(dosvm_key(v),4) && v86_irq_pending(&v->monitor)==4);
+    /* f3-23 physical snapshot: timer may nest sound, but no further request
+     * can pass ISR0. Normal EOI clears priority order, specific EOI names
+     * the bit, and only programmed auto-EOI avoids service altogether. */
+    for (unsigned mode=0;mode<3;mode++) {
+        device_pic_reset(v,mode==2?3:1); device_out(v,0x21,0x78);
+        CHECK(dosvm_irq_raise(dosvm_key(v),7) && dosvm_pic_ack(&v->monitor)==15);
+        CHECK(dosvm_irq_raise(dosvm_key(v),0) && dosvm_pic_ack(&v->monitor)==8);
+        v86_irq_raise(&v->monitor,0); v86_irq_raise(&v->monitor,1); v86_irq_raise(&v->monitor,7);
+        CHECK(v->monitor.pic[0].irr==0x83 && v->monitor.pic[0].isr==(mode==2?0:0x81));
+        if (mode<2) {
+            CHECK(v86_irq_pending(&v->monitor)<0);
+            device_out(v,0x20,mode?0x67:0x20);
+            CHECK(v->monitor.pic[0].isr==(mode?1:0x80));
+            if (mode) { CHECK(v86_irq_pending(&v->monitor)<0); device_out(v,0x20,0x60); }
+        }
+        CHECK(v86_irq_pending(&v->monitor)==0 && dosvm_pic_ack(&v->monitor)==8);
+    }
     destroy(v,true); destroy(other,true); empty();
 }
 static void test_device_pit(void)

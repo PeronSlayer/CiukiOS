@@ -69,6 +69,8 @@ struct dosvm_sb16 {
     uint32_t dma_wait_frames, unsupported, adpcm_blocks, restarts, resets;
     uint32_t max_service, max_lag, direct_dac, midi_bytes;
     uint64_t dropped_frames;
+    uint64_t irq_tick;                  /* first edge, not the latest DMA boundary */
+    bool irq_reported;
 };
 
 struct dosvm_opl_timer {
@@ -113,6 +115,13 @@ struct dosvm_audio {
         bool attachment, environment, summary_pending;
         int attach_error;
         uint64_t next_log, next_summary, last_summary, published, next_level;
+        struct {
+            uint64_t age;
+            uint16_t isr, irr, imr;
+            uint8_t irq;
+            bool pending;
+        } irq_wait;
+        uint8_t irq_wait_records;
     } diag;
 };
 

@@ -330,9 +330,189 @@ static void test_if_trace_barriers(void)
     }
     puts("f3-15 trace barriers: PUSHFD/prefixed save, SS load/shadow, INT/far transfer, client TF/watchpoint preserved PASS");
 }
+/* Hardware snapshot replay. CPU frames model the extender's LSS to a
+ * private stack; actual trapped OUTs and all IRQ transactions are production
+ * code. This reproduces the register state, not the T23 instruction schedule. */
+static void test_irq_private_stack(void)
+{
+    for (unsigned bits = 0; bits < 2; bits++) for (unsigned big = 0; big < 2; big++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, bits != 0);
+        unsigned w = dpmi_width(v);
+        uint16_t code = (uint16_t)cur.tf.cs;
+        v->dpmi.vec[15] = (struct dpmi_vec){.sel=code, .off=0x700};
+        v->dpmi.vec[8] = (struct dpmi_vec){.sel=code, .off=0x720};
+        device_out(v, 0x21, 0x78);
+        CHECK(dosvm_irq_raise(v->info.key, 7)); step(v, 0x20, 0);
+        CHECK(v->dpmi.depth == 1 && v->monitor.pic[0].isr == 0x80);
+        /* The outer wrapper saves an EOI value before LSS. The former
+         * host-stack cursor still points ABOVE this live saved register. */
+        pm_push(v, 0x20);
+        uint32_t saved_sp = cur.tf.user_esp, saved_top = v->dpmi.lock_top;
+        uint8_t saved[32], actual[32];
+        uint32_t host = v->dpmi.hstack.base + saved_sp - 24;
+        CHECK(!dosvm_read(v, host, saved, sizeof(saved)));
+        client_desc(v, 902, 0x30000, 0x1FFFF, 0xF2, big ? 0x40 : 0);
+        uint16_t private_ss = DPMI_SEL(902);
+        cur.tf.user_ss = private_ss; cur.tf.user_esp = big ? 0x18000 : 0xABCD8000;
+        uint32_t private_sp = cur.tf.user_esp;
+        op1(v, 0xFB); cur.tf.eip++; /* STI and its successor retire on the private stack */
+        CHECK(dosvm_irq_raise(v->info.key, 0)); step(v, 0x20, 0);
+        CHECK(dosvm_irq_raise(v->info.key, 0) && dosvm_irq_raise(v->info.key, 1) &&
+              dosvm_irq_raise(v->info.key, 7));
+        CHECK(v->monitor.pic[0].isr == 0x81 && v->monitor.pic[0].irr == 0x83 &&
+              v->monitor.pic[0].imr == 0x78 && v86_irq_pending(&v->monitor) < 0);
+        printf("f3-23 nested snapshot: client=%u stack=%u isr=%02x irr=%02x imr=%02x depth=%u\n",
+               bits ? 32 : 16, big ? 32 : 16, v->monitor.pic[0].isr,
+               v->monitor.pic[0].irr, v->monitor.pic[0].imr, v->dpmi.depth);
+        CHECK(!dosvm_read(v, host, actual, sizeof(actual)));
+        CHECK(!memcmp(saved, actual, sizeof(saved)));
+        CHECK(cur.tf.user_ss == private_ss && cur.tf.user_esp == private_sp - 3 * w &&
+              v->dpmi.lock_top == saved_top && !(cur.tf.eflags & V86_TF) && !v->monitor.vif);
+        /* Keep pending requests latched while checking both complete
+         * returns. PIC masking changes eligibility, never the saved frames. */
+        device_out(v, 0x21, 0xFF);
+        const uint8_t eoi[] = {0xE6, 0x20}; cur.tf.eax = 0x20;
+        exec(v, eoi, sizeof(eoi), 13, 0);
+        CHECK(v->monitor.pic[0].isr == 0x80);
+        pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+        CHECK(v->dpmi.depth == 1 && cur.tf.user_ss == private_ss && cur.tf.user_esp == private_sp);
+        /* LSS back, POP the saved command and execute the outer EOI. */
+        cur.tf.user_ss = DPMI_HOST_SS; cur.tf.user_esp = saved_sp;
+        cur.tf.eax = pm_pop(v); CHECK(cur.tf.eax == 0x20);
+        exec(v, eoi, sizeof(eoi), 13, 0);
+        pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+        CHECK(!v->dpmi.depth && !v->monitor.pic[0].isr && v->monitor.pic[0].irr == 0x83);
+        device_out(v, 0x21, 0x78); step(v, 0x20, 0);
+        CHECK(cur.tf.eip == 0x720 && v->dpmi.depth == 1 &&
+              v->monitor.stats.delivered[0] == 2 && v->monitor.stats.delivered[7] == 1);
+        destroy(v, true); empty();
+    }
+    puts("f3-23 nested PM IRQ: 16/32-bit clients and stacks, suspended host bytes intact, ISR=81 IRR=83, guest EOIs and pending timer delivered PASS");
+}
+
+static void test_irq_private_stack_rejection(void)
+{
+    for (unsigned failure = 0; failure < 4; failure++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
+        uint16_t code = (uint16_t)cur.tf.cs;
+        v->dpmi.vec[15] = (struct dpmi_vec){.sel=code, .off=0x700};
+        v->dpmi.vec[8] = (struct dpmi_vec){.sel=code, .off=0x720};
+        device_out(v, 0x21, 0x78);
+        CHECK(dosvm_irq_raise(v->info.key, 7)); step(v, 0x20, 0);
+        client_desc(v, 902, 0x30000, 0xFFFF, failure == 2 ? 0x72 : 0xF2, 0x40);
+        cur.tf.user_ss = DPMI_SEL(902); cur.tf.user_esp = failure == 0 ? 8 : failure == 1 ? 0x10020 : 0x1008;
+        /* A frame straddling a writable/read-only page must fail before
+         * touching even its first writable byte. */
+        uint32_t phys = 0, old_flags = 0;
+        if (failure == 3) {
+            phys = as_lookup(&v->as, 0x31000, &old_flags);
+            CHECK(phys && !as_map(&v->as, 0x31000, phys, PTE_U));
+        }
+        uint8_t old[16], actual[16];
+        CHECK(!dosvm_read(v, 0x30FF0, old, sizeof(old)));
+        v->monitor.vif = true;
+        CHECK(dosvm_irq_raise(v->info.key, 0));
+        struct v86_frame before = cur;
+        uint32_t lock = v->dpmi.lock_top, delivered = v->monitor.stats.delivered[0];
+        CHECK(dpmi_deliver(v, &cur) < 0 && !memcmp(&cur, &before, sizeof(cur)) &&
+              v->monitor.pic[0].isr == 0x80 && (v->monitor.pic[0].irr & 1) &&
+              v->monitor.stats.delivered[0] == delivered && v->dpmi.depth == 1 &&
+              v->dpmi.lock_top == lock && v->monitor.vif);
+        CHECK(!dosvm_read(v, 0x30FF0, actual, sizeof(actual)) && !memcmp(old, actual, sizeof(old)));
+        if (failure == 3) CHECK(!as_map(&v->as, 0x31000, phys, old_flags));
+        destroy(v, true); empty();
+    }
+    puts("f3-23 nested frame rejection: short/out-of-limit/non-present/read-only private stacks leave guest bytes, frame, PIC and delivery unchanged PASS");
+}
+
+static void test_irq_private_exception(void)
+{
+    for (unsigned bits = 0; bits < 2; bits++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, bits != 0);
+        uint16_t code = (uint16_t)cur.tf.cs;
+        v->dpmi.vec[15] = (struct dpmi_vec){.sel=code, .off=0x700};
+        v->dpmi.exc[0] = (struct dpmi_vec){.sel=code, .off=0x720};
+        device_out(v, 0x21, 0x78);
+        CHECK(dosvm_irq_raise(v->info.key, 7)); step(v, 0x20, 0);
+        pm_push(v, 0x20); uint32_t host_sp = cur.tf.user_esp;
+        client_desc(v, 902, 0x30000, 0xFFFF, 0xF2, 0x40);
+        cur.tf.user_ss = DPMI_SEL(902); cur.tf.user_esp = 0x800;
+        uint32_t pc = cur.tf.eip; step(v, 0, 0);
+        CHECK(cur.tf.user_ss == DPMI_SEL(902) && cur.tf.user_esp == 0x800 - 8 * dpmi_width(v) &&
+              cur.tf.eip == 0x720 && v->dpmi.depth == 2);
+        pm_retf(v); at_stub(v, DPMI_PM_EXCRET);
+        CHECK(cur.tf.eip == pc && cur.tf.user_ss == DPMI_SEL(902) && cur.tf.user_esp == 0x800 &&
+              v->dpmi.depth == 1 && v->monitor.pic[0].isr == 0x80);
+        cur.tf.user_ss = DPMI_HOST_SS; cur.tf.user_esp = host_sp;
+        CHECK(pm_pop(v) == 0x20);
+        destroy(v, true); empty();
+    }
+    puts("f3-23 nested exception: 16/32-bit private IRQ stacks, exception frame and far return, outer saved register intact PASS");
+}
+
+static void test_sb_irq_wait_record(void)
+{
+    struct dosvm *v = audio_vm_create();
+    g_boot.flags = CBI_F_VERBOSE; dsp_reset(v);
+    dma8(v, 1, 0x30000, 255, true);
+    dsp(v, 0x41); dsp(v, 0x2B); dsp(v, 0x11); /* 11025 Hz, C6 auto-init */
+    dsp(v, 0xC6); dsp(v, 0); dsp(v, 63); dsp(v, 0);
+    while (!v->audio.sb.causes) ms(1);
+    uint64_t edge = v->audio.sb.irq_tick;
+    CHECK(dosvm_pic_ack(&v->monitor) == 15);
+    device_out(v, 0x21, 0x78); v86_irq_raise(&v->monitor, 0);
+    CHECK(dosvm_pic_ack(&v->monitor) == 8);
+    v86_irq_raise(&v->monitor, 0); v86_irq_raise(&v->monitor, 1); v86_irq_raise(&v->monitor, 7);
+    unsigned logs = vm_audio_logs;
+    ms(500); CHECK(g_ticks - edge == 500 && !v->audio.diag.irq_wait.pending);
+    ms(1); CHECK(vm_audio_logs == logs && v->audio.diag.irq_wait.pending &&
+                 v->audio.diag.irq_wait.age == 501 && v->audio.diag.irq_wait_records == 1);
+    /* Output is deferred through a complete guest IRQ chain. The coherent
+     * snapshot survives EOI/ack and queue saturation before it is drained. */
+    v->dpmi.depth = 1; v->dpmi.rec[0].flags = DPMI_RF_HWINT;
+    dosvm_audio_log(v); CHECK(vm_audio_logs == logs);
+    device_out(v, 0x20, 0x60); device_out(v, 0x20, 0x67);
+    a_in(v, SB + 0xE);
+    v->dpmi.depth = 0;
+    dosvm_audio_log(v);
+    CHECK(vm_audio_logs == logs + 1 && strstr(last_vm_audio_log, "irq_wait ms=501 irq=7") &&
+          strstr(last_vm_audio_log, "isr=0081 irr=0083 imr=ff78"));
+    ms(510); dosvm_audio_log(v); /* next unacknowledged edge is a new episode */
+    CHECK(v->audio.diag.irq_wait_records == 2);
+    unsigned count = v->audio.diag.irq_wait_records;
+    ms(1000); dosvm_audio_log(v); CHECK(v->audio.diag.irq_wait_records == count);
+    /* Unsigned age works across clock wrap; quiet boots keep device state
+     * and acquire a snapshot when verbose evidence is enabled later. */
+    dsp_reset(v); g_boot.flags = 0; uint64_t tick = g_ticks;
+    g_ticks = UINT64_MAX - 250; sb_cause(v, 1); ms(501);
+    CHECK(!v->audio.diag.irq_wait.pending);
+    g_boot.flags = CBI_F_VERBOSE; ms(1);
+    CHECK(v->audio.diag.irq_wait.pending && v->audio.diag.irq_wait.age == 502);
+    v->audio.diag.next_log = g_ticks; dosvm_audio_log(v);
+    CHECK(strstr(last_vm_audio_log, "irq_wait ms=502 irq=7"));
+    /* Full-width values fit the existing short audio record envelope. */
+    uint32_t id = v->info.key.id, generation = v->info.key.generation;
+    v->info.key.id = v->info.key.generation = UINT32_MAX;
+    v->audio.diag.irq_wait.pending = true; v->audio.diag.irq_wait.age = UINT64_MAX;
+    v->audio.diag.irq_wait.irq = 15; v->audio.diag.next_log = g_ticks;
+    dosvm_audio_log(v);
+    CHECK(strstr(last_vm_audio_log, "ms=18446744073709551615 irq=15"));
+    v->info.key.id = id; v->info.key.generation = generation;
+    for (unsigned i = v->audio.diag.irq_wait_records; i < 18; i++) {
+        a_in(v, SB + 0xE); sb_cause(v, 1); ms(501);
+        v->audio.diag.next_log = g_ticks; dosvm_audio_log(v);
+    }
+    CHECK(v->audio.diag.irq_wait_records == 16 && !v->audio.diag.irq_wait.pending);
+    g_ticks = tick; g_boot.flags = 0;
+    destroy(v, true); empty();
+    puts("f3-23 SB IRQ wait: first edge across late C6 blocks, >500ms once, coherent ISR/IRR/IMR, IRQ deferral, ack/new episode, quiet boot and tick wrap PASS");
+}
+
 static void test_irq_stall(void)
 {
     test_irq_restore_delivery(); test_irq_frame_commit(); test_irq_stall_diagnostics(); test_irq_real_tf();
     test_irq_trace_latency(); test_irq_target_diagnostics();
     test_if_stall_watchdog(); test_if_trace_barriers();
+    test_irq_private_stack(); test_irq_private_stack_rejection(); test_irq_private_exception();
+    test_sb_irq_wait_record();
 }
