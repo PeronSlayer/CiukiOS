@@ -261,6 +261,10 @@ void klog(const char *f,...) {(void)f;}
         result=subprocess.run([str(binary)],capture_output=True,text=True,env=env,timeout=10)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('five fault kinds',result.stdout)
+        for value in (-1,1):
+            line=f'[desktop] usb wheel value={value}'
+            self.assertIn(line,result.stderr)
+            print(line)
         self.assertIn('production channel_pair/fcntl/proc_spawn',result.stdout)
         for shifted in (False,True):
             layout_env=dict(env)

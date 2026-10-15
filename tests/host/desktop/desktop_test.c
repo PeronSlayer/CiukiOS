@@ -7,6 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#undef _SC_ARG_MAX
+#undef _SC_OPEN_MAX
+#undef _SC_PAGESIZE
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#include <unistd.h>
 static struct desktop d;
 static void request(struct ciuki_message *m, unsigned op, unsigned n)
 { desk_message(m,op,n); m->sender_pid=42; }
@@ -373,7 +379,7 @@ static void test_input(void)
     event(CIUKI_INPUT_BUTTON,1,0,0); assert(d.drag==-1);
     pointer(INT_MAX,INT_MAX); assert(d.mouse_x==639 && d.mouse_y==479);
     event(CIUKI_INPUT_MOTION,0,INT_MIN,INT_MIN); assert(!d.mouse_x && !d.mouse_y);
-    struct desk_box close=desk_close_box(&d.clients[a]); pointer(close.x+1,close.y+1);
+    struct desk_box close_box=desk_close_box(&d.clients[a]); pointer(close_box.x+1,close_box.y+1);
     event(CIUKI_INPUT_BUTTON,1,1,0); assert(!d.clients[a].window && d.focus==b);
     int wheel_x=d.mouse_x, wheel_y=d.mouse_y;
     event(CIUKI_INPUT_WHEEL,0,-1,0);
@@ -384,6 +390,49 @@ static void test_input(void)
     struct desk_packet wheel_packet;
     desk_event_message(&wheel_message,DESK_MOTION,&wheel_event);
     assert(desk_parse(&wheel_message,0,NULL,&wheel_packet) && wheel_packet.event.type==CIUKI_INPUT_WHEEL && wheel_packet.event.value==-1);
+    /* Common consumer, without gate_input: actual routed message and an
+     * immediate, bounded console record even with buffered stdout. */
+    int capture[2]; assert(!pipe(capture));
+    int saved=dup(STDERR_FILENO); assert(saved>=0 && dup2(capture[1],STDERR_FILENO)>=0);
+    close(capture[1]); fake_sent=0;
+    for (unsigned i=0;i<20;i++) {
+        struct ciuki_input_event wheel={.type=CIUKI_INPUT_WHEEL,.value=i&1 ? 1:-1,.source=3};
+        desk_input(&d,&wheel); flush_all();
+        assert(fake_sent==i+1 && fake_destinations[i]==12);
+        assert(desk_parse(&fake_messages[i],0,NULL,&wheel_packet));
+        assert(wheel_packet.opcode==DESK_MOTION && wheel_packet.event.type==CIUKI_INPUT_WHEEL &&
+               wheel_packet.event.value==wheel.value && wheel_packet.event.source==3);
+    }
+    assert(dup2(saved,STDERR_FILENO)>=0); close(saved);
+    char records[1024]; ssize_t bytes=read(capture[0],records,sizeof(records)-1); assert(bytes>0); close(capture[0]);
+    records[bytes]=0; unsigned lines=0; for (char *s=records;*s;s++) if (*s=='\n') lines++;
+    assert(lines==16 && d.usb_wheel_records==16 && strstr(records,"[desktop] usb wheel value=-1\n") && strstr(records,"[desktop] usb wheel value=1\n"));
+    assert(d.mouse_x==wheel_x && d.mouse_y==wheel_y);
+    puts("PASS F1-68 desktop wheel routing and immediate bounded consumption records on the common input path");
+    struct desk_box body=desk_content(&d.clients[b]); pointer(body.x+4,body.y+4); flush_all();
+    for (int button=CIUKI_BUTTON_RIGHT;button<=CIUKI_BUTTON_MIDDLE;button++) {
+        fake_sent=0;
+        struct ciuki_input_event edge={.type=CIUKI_INPUT_BUTTON,.code=button,.value=1,.source=3};
+        desk_input(&d,&edge); edge.value=0; desk_input(&d,&edge); flush_all();
+        assert(fake_sent==3);
+        for (unsigned j=1;j<3;j++) {
+            assert(desk_parse(&fake_messages[j],0,NULL,&wheel_packet));
+            assert(wheel_packet.opcode==DESK_BUTTON && wheel_packet.event.code==button &&
+                   wheel_packet.event.value==(j==1) && wheel_packet.event.source==3);
+        }
+    }
+    /* Relative wheel detents cannot be replaced by an absolute pointer
+     * update when the client FIFO is full. Use the existing RESYNC policy. */
+    fake_block=1;
+    wheel_event.source=3; desk_event_message(&wheel_message,DESK_MOTION,&wheel_event);
+    for (unsigned j=0;j<DESK_TX_MAX;j++) desk_queue(&d,b,&wheel_message);
+    struct ciuki_input_event motion_event={.type=CIUKI_INPUT_MOTION,.value=99};
+    struct ciuki_message motion_message; desk_event_message(&motion_message,DESK_MOTION,&motion_event);
+    desk_queue(&d,b,&motion_message);
+    struct desk_client *backlog=&d.clients[b];
+    assert(backlog->resync_pending && desk_get32(backlog->tx[(backlog->tx_head+backlog->tx_count-1)%DESK_TX_MAX].data+16)==CIUKI_INPUT_WHEEL);
+    fake_block=0; flush_all(); flush_all();
+    puts("PASS F1-68 USB right/middle desktop edges and wheel preservation under pointer backpressure");
     cleanup(); event(CIUKI_INPUT_KEY,0x1e,1,0); assert(!d.keys[0x1e]);
     event(CIUKI_INPUT_RESYNC,0,0,0); pointer(5,5); event(CIUKI_INPUT_BUTTON,1,1,0);
     puts("PASS focus/input: set-1 A/E0/Pause, TEXT, routing, RESYNC releases, drag/close, empty desktop");

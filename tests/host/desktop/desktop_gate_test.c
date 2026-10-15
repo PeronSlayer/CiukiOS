@@ -301,7 +301,11 @@ int ciuki_input_read(int fd,struct ciuki_input_event *events,uint32_t capacity)
         events[1]=(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=0x1e,.value=0};
         events[2]=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=-20,.value2=20};
         events[3]=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
-        events[4]=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=0};return 5;
+        events[4]=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=0};
+        struct input_event wheel={.type=INPUT_REL,.code=INPUT_WHEEL,.value=-1,.source=INPUT_USB,.generation=23};
+        desktop_spawn_host_input(&wheel,&events[5]);
+        wheel.value=1; desktop_spawn_host_input(&wheel,&events[6]);
+        return 7;
     }
     errno=EAGAIN;return -1;
 }

@@ -407,6 +407,14 @@ void du_ta_fit(struct du_textarea *ta, struct du_rect box)
 }
 static struct du_sb vscroll(struct du_textarea *ta, const struct geo *g)
 { layout(ta); return (struct du_sb){g->vbar, 1, (int)ta->top, (int)ta->vl_count, (int)ta->rows}; }
+int du_ta_wheel(struct du_textarea *ta, struct du_rect box, int detents)
+{
+    du_ta_fit(ta,box);
+    unsigned next=(unsigned)du_wheel_value((int)ta->top,detents,(int)ta->vl_count,(int)ta->rows);
+    int changed=next!=ta->top;
+    ta->top=next;
+    return changed;
+}
 static struct du_sb hscroll(const struct du_textarea *ta, const struct geo *g)
 { return (struct du_sb){g->hbar, 0, (int)ta->left, (int)ta->maxcol + 1, (int)ta->cols}; }
 

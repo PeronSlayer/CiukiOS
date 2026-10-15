@@ -2,6 +2,13 @@
 #include "desktop.h"
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
+#undef _SC_ARG_MAX
+#undef _SC_OPEN_MAX
+#undef _SC_PAGESIZE
+#undef _SC_THREAD_KEYS_MAX
+#undef _SC_THREAD_STACK_MIN
+#include <unistd.h>
 int desk_drain_input(struct desktop *d, int (*read_events)(int, struct ciuki_input_event *, uint32_t))
 {
     uint64_t begin=d->time_ns ? d->time_ns() : d->now_ns;
@@ -312,6 +319,14 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
     case CIUKI_INPUT_TEXT: route(d, d->focus, DESK_KEY, &e); break;
     case CIUKI_INPUT_WHEEL:
         route(d, d->focus, DESK_MOTION, &e);
+        if (e.source==3 && e.value && d->usb_wheel_records<16) {
+            char record[64];
+            int n=snprintf(record,sizeof(record),"[desktop] usb wheel value=%d\n",e.value);
+            d->usb_wheel_records++;
+            /* One console publication, including on ordinary boots. No
+             * stdio buffering/flush can hold back the consumption record. */
+            if (n>0 && n<(int)sizeof(record)) (void)write(STDERR_FILENO,record,(size_t)n);
+        }
         break;
     case CIUKI_INPUT_MOTION:
         d->cursor_dirty=1;

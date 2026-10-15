@@ -43,9 +43,13 @@
 #define USB_MOUSE_REPORTS 8u
 struct usb_mouse_field { uint16_t bit; uint8_t size; };
 struct usb_mouse_report {
-    struct usb_mouse_field x, y, wheel, buttons[3];
+    struct usb_mouse_field x, y, wheel, pan, buttons[3];
     uint16_t bits;
     uint8_t id, button_count;
+};
+struct usb_mouse_input {
+    int32_t x, y, wheel, pan;
+    uint8_t buttons; /* public left/right/middle bitmap */
 };
 #define USB_PID_SETUP 0x2du
 #define USB_PID_IN 0x69u
@@ -262,6 +266,8 @@ int usb_storage_eject(struct storage *, unsigned drive, uint32_t generation);
 void usb_storage_service(struct usb_host *); /* host lock NOT held */
 bool usb_mouse_wheel_layout(const uint8_t *, unsigned);
 bool usb_mouse_parse(struct usb_hid *, const uint8_t *, unsigned);
+/* 1 mouse report, 0 unrelated ID, negative malformed report. No state/log I/O. */
+int usb_mouse_decode(const struct usb_hid *, const uint8_t *, unsigned, struct usb_mouse_input *);
 void usb_init(void);
 bool usb_input_ready(void);
 unsigned usb_count(void);

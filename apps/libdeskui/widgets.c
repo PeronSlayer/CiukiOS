@@ -519,6 +519,13 @@ int du_sb_clamp(int value, int total, int page)
     return value < 0 ? 0 : value > max ? max : value;
 }
 
+int du_wheel_value(int value, int detents, int total, int page)
+{
+    int max=total>page ? total-page : 0;
+    int64_t next=(int64_t)value-(int64_t)detents*3;
+    return next<0 ? 0 : next>max ? max : (int)next;
+}
+
 static void sb_parts(const struct du_sb *s, int *start, int *track, int *thumb, int *at)
 {
     int length = s->vertical ? s->box.h : s->box.w, arrow = s->vertical ? s->box.w : s->box.h;
@@ -863,6 +870,27 @@ static void toggle(struct du_ui *u, struct du_widget *w)
     du_post(u, DU_EV_CHANGE, w->id, w->value);
 }
 
+int du_widget_wheel(struct du_ui *u, struct du_widget *w, int detents)
+{
+    if (w->disabled || w->hidden || !detents) return 0;
+    int changed=0;
+    switch (w->kind) {
+    case DU_LISTVIEW: case DU_TREE: changed=du_list_wheel(w,detents); break;
+    case DU_TEXTAREA:
+        if (w->data) changed=du_ta_wheel(w->data,w->box,detents);
+        break;
+    case DU_SCROLLBAR: {
+        int next=du_wheel_value(w->value,detents,w->total,w->page);
+        changed=next!=w->value; w->value=next;
+        if (changed) du_post(u,DU_EV_CHANGE,w->id,w->value);
+        break;
+    }
+    default: break;
+    }
+    if (changed) u->dirty=1;
+    return changed;
+}
+
 int du_widget_key(struct du_ui *u, struct du_widget *w, unsigned code)
 {
     if (w->disabled) return 0;
@@ -1080,6 +1108,13 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
         return;
     }
     if (e->type == CIUKI_INPUT_TEXT) return; /* text derives from KEY events plus Shift/Caps */
+    if (e->type == CIUKI_INPUT_WHEEL) {
+        if (u->dialog.kind) { du_dialog_wheel(u,e->value); return; }
+        if (u->menu>=0 || u->popup || u->capture>=0) return;
+        int hit=du_hit(u,u->mouse_x,u->mouse_y);
+        if (hit>=0) du_widget_wheel(u,&u->widgets[hit],e->value);
+        return;
+    }
     if (e->type == CIUKI_INPUT_MOTION) {
         u->mouse_x = e->value; u->mouse_y = e->value2;
         if (u->dialog.kind) { du_dialog_motion(u); return; }

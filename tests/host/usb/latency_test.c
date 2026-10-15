@@ -12,6 +12,7 @@ struct sample { uint64_t available, ack, delivered; };
 static struct sample samples[2][REPORTS];
 static unsigned produced, consumed[2], peripheral_index[2], device_index[2];
 static uint64_t next_report;
+static unsigned report_period;
 static unsigned latency_prefix[128],latency_windows[128],recorded_bound;
 static void record(const char *line)
 {
@@ -38,7 +39,7 @@ static void inject(struct model *model)
         else { p->report[0]=(produced&1) ? 0:1;p->report[1]=1;p->report[2]=2;p->report_len=4; }
         samples[i][produced].available=model->now;
     }
-    produced++;next_report+=40;
+    produced++;next_report+=report_period;
 }
 static void ack(struct model *model,struct peripheral *p)
 {
@@ -63,8 +64,9 @@ static void drain(void)
         s->delivered=event.tick;
     }
 }
-static void fixture(bool ohci,unsigned frame_ms,unsigned gap,unsigned phase,bool scan)
+static void fixture(bool ohci,unsigned frame_ms,unsigned gap,unsigned phase,bool scan,unsigned period)
 {
+    report_period=period;
     setup(ohci,scan);assert(!attach());usb_step(&m.host);
     peripheral_index[0]=scan ? 2:0;peripheral_index[1]=scan ? 3:1;
     device_index[0]=scan ? 1:0;device_index[1]=scan ? 2:1;
@@ -131,9 +133,9 @@ static void fixture(bool ohci,unsigned frame_ms,unsigned gap,unsigned phase,bool
         }
     }
     struct input_stats stats;input_snapshot(&stats);assert(!stats.overflow);
-    printf("PASS USB latency %s %s phase=%u frame_ms=%u dispatch_ms=%u reports=%u arrival_max_ms=%u ack_max_ms=%u logged_bound_max_ms=%u\n",
+    printf("PASS USB latency %s %s phase=%u frame_ms=%u dispatch_ms=%u period_ms=%u reports=%u arrival_max_ms=%u ack_max_ms=%u logged_bound_max_ms=%u\n",
            ohci ? "OHCI":"UHCI",scan ? "scan/reset":"bulk NAK",phase,frame_ms,gap+1,
-           2*REPORTS,arrival_max,ack_max,recorded_bound);
+           period,2*REPORTS,arrival_max,ack_max,recorded_bound);
     assert(recorded_bound>=ack_max);
     /* Stop pinned slots and release merged state before the next model. */
     for (unsigned i=0;i<m.host.device_count;i++) usb_detach(&m.host.devices[i],"fixture_end");
@@ -142,9 +144,12 @@ static void fixture(bool ohci,unsigned frame_ms,unsigned gap,unsigned phase,bool
 int main(void)
 {
     for (unsigned hc=0;hc<2;hc++) {
-        for (unsigned phase=0;phase<10;phase++) fixture(hc,1,0,phase,false);
-        fixture(hc,4,0,3,false);fixture(hc,1,9,3,false);fixture(hc,4,9,3,false);
-        fixture(hc,1,0,3,true);
+        for (unsigned phase=0;phase<10;phase++) fixture(hc,1,0,phase,false,40);
+        fixture(hc,4,0,3,false,40);fixture(hc,1,9,3,false,40);fixture(hc,4,9,3,false,40);
+        fixture(hc,1,0,3,true,40);
+        /* F1-68: sustained reports at the actual 10 ms endpoint interval,
+         * under BOT NAKs, rather than sparse isolated pointer samples. */
+        fixture(hc,1,0,0,false,10);
     }
     puts("PASS USB latency through production merged queue, concurrent bulk, scan/reset, independent frame clock and delayed dispatch");
     return 0;

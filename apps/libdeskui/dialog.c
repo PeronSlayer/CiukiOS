@@ -365,6 +365,18 @@ static void process(struct du_ui *u)
 
 static int focusable(const struct du_widget *w) { return du_focusable(w) || (w->kind == DU_BUTTON && !w->disabled); }
 
+void du_dialog_wheel(struct du_ui *u, int detents)
+{
+    struct du_dialog *d=&u->dialog;
+    if (d->dragging || d->capture>=0 || !du_contains(d->box,u->mouse_x,u->mouse_y)) return;
+    for (unsigned i=d->count;i>0;i--) {
+        struct du_widget *w=&d->items[i-1];
+        if (w->hidden || !du_contains(w->box,u->mouse_x,u->mouse_y)) continue;
+        DIALOG_CALL(du_widget_wheel(u,w,detents));
+        return;
+    }
+}
+
 void du_dialog_key(struct du_ui *u, unsigned code)
 {
     struct du_dialog *d = &u->dialog;
