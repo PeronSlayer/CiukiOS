@@ -14,6 +14,7 @@ int fake_closed_peer;
 struct ciuki_message fake_messages[2048];
 int fake_destinations[2048];
 struct ciuki_rect fake_rects[64];
+int fake_present_surfaces[64];
 void fake_reset(void)
 {
     for (int i=0; i<128; i++) { assert(!fds[i].live && !fds[i].mapped); free(fds[i].pixels); }
@@ -73,8 +74,8 @@ static int close_fd(int fd)
 }
 static int present(int display, int surface, const struct ciuki_rect *r)
 {
-    (void)display; (void)surface;
+    (void)display;
     if (fake_fail_present) { errno=EINTR; return -1; }
-    assert(fake_presents<64); fake_rects[fake_presents++]=*r; return 0;
+    assert(fake_presents<64); fake_present_surfaces[fake_presents]=surface; fake_rects[fake_presents++]=*r; return 0;
 }
 const struct desk_ops fake_ops={send,info,map,unmap,close_fd,present};

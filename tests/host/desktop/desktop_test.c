@@ -738,12 +738,54 @@ static void test_dos_fullscreen_menu(void)
     fake_block=0; cleanup();
     puts("PASS DOS full-screen menu: launch-bound command, preserved window/taskbar, direction validation, modifier resync");
 }
+/* f2-66: leaving a DOS full-screen session restores the desktop mode and sends exactly one RESYNC
+ * (src/kernel/vm/dosvm_fullscreen.c dosvm_fullscreen_desktop_event). The display then refuses the next
+ * mode change (awaiting_frame, -EBUSY) until a present whose surface and rectangle cover the whole display
+ * (src/kernel/proc/grants.c full_frame). The desktop renders only when damaged (desk_frame_due), so the
+ * resync must damage everything: on image 94542c30 nothing was presented and the second entry of
+ * vm-fullscreen-qemu-t23 was refused reason=busy awaiting_frame=1. */
+static int full_frame_presents(void)
+{
+    int full=0;
+    for (unsigned i=0;i<fake_presents;i++) {
+        const struct ciuki_rect *r=&fake_rects[i];
+        full+=fake_present_surfaces[i]==d.output && !r->src_x && !r->src_y && !r->dst_x && !r->dst_y &&
+              r->width==d.width && r->height==d.height;
+    }
+    return full;
+}
+static void test_dos_fullscreen_restore_frame(void)
+{
+    const uint64_t later=UINT64_MAX/2;   /* past any frame deadline: only damage decides */
+    setup(1024,768); desk_shell_enable(&d);
+    uint32_t *pixels=calloc((size_t)1024*768,4); assert(pixels); d.pixels=pixels;   /* the output surface's mapping */
+    int a=client(10,11,640,480,0x123456); d.clients[a].dosbox=1;
+    assert(d.focus==a); flush_all();
+    assert(!desk_redraw(&d)); fake_presents=0;
+    /* Settled (f2-65): no damage, no frame due, nothing presented; a key for the DOS window changes no pixel. */
+    assert(!desk_frame_due(&d,later) && !desk_redraw(&d) && fake_presents==0);
+    event(CIUKI_INPUT_KEY,0x1e,1,0); event(CIUKI_INPUT_KEY,0x1e,0,0); flush_all();
+    assert(!desk_frame_due(&d,later) && !desk_redraw(&d) && fake_presents==0);
+    /* The restore's resync: the next frame is due and is one complete frame of the output surface. */
+    event(CIUKI_INPUT_RESYNC,0,0,0); flush_all();
+    if (!desk_frame_due(&d,later)) {
+        fprintf(stderr,"resync: no frame due (damage=%u present_damage=%u cursor_dirty=%d)\n",
+                d.damage.count,d.present_damage.count,d.cursor_dirty);
+        assert(!"a resync must make a frame due");
+    }
+    assert(!desk_redraw(&d) && fake_presents==1 && full_frame_presents()==1);
+    /* Then settled again. */
+    fake_presents=0;
+    assert(!desk_frame_due(&d,later) && !desk_redraw(&d) && fake_presents==0);
+    cleanup(); free(pixels);
+    puts("PASS DOS full-screen restore: settled desktop presents nothing, RESYNC presents one full frame");
+}
 int main(void)
 {
     test_protocol(); test_titles(); test_resize_protocol(); test_damage();
     test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
     test_graphics_service(); test_menu(); test_ide_launch(); test_terminal();
-    test_volume_steps(); test_dos_fullscreen_menu();
+    test_volume_steps(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
     fake_reset(); puts("PASS desktop host model (guest qualification not_run)"); return 0;
 }
