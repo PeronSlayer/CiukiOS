@@ -23,10 +23,11 @@ ROOT = Path(__file__).resolve().parents[3]
 THEMES = ("Platinum", "Ciuki Blue", "Classic 98")
 # F2-62: Blue polish; explicitly selected Platinum/Classic 98 are unchanged.
 # F2-63: re-recorded for the pinned FreeType UI atlases (before/after PNGs in build/host/f2-63).
+# F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
 GOLDENS = {
-    "Platinum": "5363a73fca2de8261d54e3603335cdd165bf504c75ba62c68ed274d326a7f863",
-    "Ciuki Blue": "bd9be47269f09e18c1a81cb8bc42c05a02dc29d7afab4401837ae5d9c7ebe2ab",
-    "Classic 98": "f4bebf26919094d90b1a759e5f3f5161fe948c9d67d63bd0329d65d68a2d124c",
+    "Platinum": "578e051ed8f4936febca37dba2bb10d166f31b87baac2a08328d0ceab75d3d42",
+    "Ciuki Blue": "45e055cdc9f9f3feb42632bb7766e7b4cb9c2a2f9d98f444f319d8424d0797b6",
+    "Classic 98": "b080759e39a12091d846e68bce75509ddf571d54300ad325c1569adffc5c8cf8",
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",

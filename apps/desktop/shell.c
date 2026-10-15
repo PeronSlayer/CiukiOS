@@ -425,8 +425,13 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         break;
     case SH_MENU_TASK: {
         int owner = d->sh.menu_owner, minimized = owner >= 0 && owner < DESK_CLIENTS && d->clients[owner].minimized;
-        item(m, "Restore", NULL, SH_ACT_TASK_RESTORE, owner, minimized ? SH_ITEM_DEFAULT : SH_ITEM_DISABLED);
-        item(m, "Minimize", NULL, SH_ACT_TASK_MINIMIZE, owner, minimized ? SH_ITEM_DISABLED : 0);
+        struct desk_client *c=owner>=0 && owner<DESK_CLIENTS ? &d->clients[owner] : NULL;
+        int blocked=!c || desk_modal_target(d,owner)!=owner;
+        item(m, "Restore", NULL, SH_ACT_TASK_RESTORE, owner, !blocked && c && (minimized || c->zoomed) ? SH_ITEM_DEFAULT : SH_ITEM_DISABLED);
+        item(m, "Move", NULL, SH_ACT_TASK_MOVE, owner, blocked || minimized || (c && c->zoomed) ? SH_ITEM_DISABLED : 0);
+        item(m, "Size", NULL, SH_ACT_TASK_SIZE, owner, blocked || minimized || !c || !c->resizable || c->zoomed ? SH_ITEM_DISABLED : 0);
+        item(m, "Minimize", NULL, SH_ACT_TASK_MINIMIZE, owner, blocked || minimized || (c && c->owner_id) ? SH_ITEM_DISABLED : 0);
+        item(m, "Maximize", NULL, SH_ACT_TASK_MAXIMIZE, owner, blocked || !c || !c->resizable || c->zoomed ? SH_ITEM_DISABLED : 0);
         if (owner>=0 && owner<DESK_CLIENTS && d->clients[owner].dosbox)
             item(m,"Full screen    Alt+Enter",NULL,SH_ACT_DOS_FULLSCREEN,owner,0);
         separator(m);
@@ -612,7 +617,21 @@ static void act(struct desktop *d, const struct sh_item *it)
             desk_shell_message(d, "Properties", text, 0);
         }
         break;
-    case SH_ACT_TASK_RESTORE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
+    case SH_ACT_TASK_RESTORE:
+        if (it->arg>=0 && it->arg<DESK_CLIENTS) {
+            if (d->clients[it->arg].minimized) desk_minimize(d,it->arg);
+            else if (d->clients[it->arg].zoomed) desk_zoom(d,it->arg);
+            desk_focus(d,it->arg);
+        }
+        break;
+    case SH_ACT_TASK_MOVE: desk_geometry_begin(d,it->arg,0); break;
+    case SH_ACT_TASK_SIZE: desk_geometry_begin(d,it->arg,1); break;
+    case SH_ACT_TASK_MAXIMIZE:
+        if (it->arg>=0 && it->arg<DESK_CLIENTS) {
+            if (d->clients[it->arg].minimized) desk_minimize(d,it->arg);
+            desk_focus(d,it->arg); desk_zoom(d,it->arg);
+        }
+        break;
     case SH_ACT_TASK_MINIMIZE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && !d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
     case SH_ACT_TASK_CLOSE: desk_request_close(d, it->arg); break;
     case SH_ACT_DOS_FULLSCREEN:
@@ -1323,6 +1342,23 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
         if (selected && d->focus < 0 && !d->sh.levels) du_dotted(&c, (struct du_rect){sel.x + 2, sel.y + 2, sel.w - 4, sel.h - 4});
     }
 }
+unsigned desk_shell_cursor(const struct desktop *d)
+{
+    int i=desk_hit(d,d->mouse_x,d->mouse_y);
+    if (i>=0 && d->clients[i].internal==DESK_INTERNAL_RUN) {
+        struct desk_box b=desk_content(&d->clients[i]);
+        if (desk_contains((struct desk_box){b.x+56,b.y+52,b.w-68,22},d->mouse_x,d->mouse_y)) return DESK_CURSOR_TEXT;
+    }
+    if (i<0 && d->focus<0 && d->sh.cfg.desktop_icons && d->sh.folder && d->sh.folder->editing>=0) {
+        int k=d->sh.folder->editing+3;
+        if (k<d->sh.icon_count) {
+            struct desk_box b=d->sh.icons[k].box;
+            b.x+=2; b.y+=LABEL_TOP; b.w=ICON_CELL_W-4; b.h=24;
+            if (desk_contains(b,d->mouse_x,d->mouse_y)) return DESK_CURSOR_TEXT;
+        }
+    }
+    return DESK_CURSOR_ARROW;
+}
 
 /* ---- Alt+Tab switcher -------------------------------------------------- */
 static struct desk_box switcher_box(const struct desktop *d)
@@ -1575,6 +1611,8 @@ static int internal_find(const struct desktop *d, int kind)
 }
 int desk_internal_open(struct desktop *d, int kind)
 {
+    uint32_t owner=kind==DESK_INTERNAL_MESSAGE && d->focus>=0 ?
+        (d->clients[d->focus].internal==DESK_INTERNAL_MESSAGE ? d->clients[d->focus].owner_id : d->clients[d->focus].window_id) : 0;
     int i = internal_find(d, kind);
     if (i >= 0 && kind != DESK_INTERNAL_MESSAGE) {
         if (d->clients[i].minimized) desk_minimize(d, i); else desk_focus(d, i);
@@ -1587,6 +1625,7 @@ int desk_internal_open(struct desktop *d, int kind)
     uint32_t w, h;
     internal_size(d, kind, &w, &h);
     c->internal = kind; c->window = 1;
+    c->owner_id=owner;
     if (kind != DESK_INTERNAL_MESSAGE && kind != DESK_INTERNAL_POWER)
         desk_sound(d,kind == DESK_INTERNAL_SHUTDOWN ? SOUND_QUESTION : SOUND_WINDOW_OPEN);
     if (!++d->next_window_id) ++d->next_window_id;
@@ -1601,6 +1640,10 @@ int desk_internal_open(struct desktop *d, int kind)
     int32_t x = ((int32_t)d->width - c->frame.w) / 2, y = DESK_BAR + 20;
     if (kind == DESK_INTERNAL_RUN) { x = 8; y = DESK_BAR + 8; }   /* under the Ciuki button and its menu */
     else if (kind != DESK_INTERNAL_ABOUT) y = ((int32_t)d->height - c->frame.h) / 2 - 20;
+    if (owner) for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].window_id==owner) {
+        struct desk_box f=d->clients[k].frame;
+        x=f.x+(f.w-c->frame.w)/2; y=f.y+(f.h-c->frame.h)/2;
+    }
     desk_move(d, i, x, y);
     if (d->sh.levels) desk_menu_close(d);
     desk_focus(d, i);
@@ -2323,6 +2366,15 @@ int desk_shell_key(struct desktop *d, int code, int value)
     }
     if (value) d->sh.logo_down = 0;
     if (d->sh.modifiers & DU_ALT) {
+        if (code==DU_KEY_SPACE) {
+            if (value==1 && d->focus>=0) {
+                int i=desk_modal_target(d,d->focus);
+                d->sh.menu_owner=i;
+                desk_menu_open(d,SH_MENU_TASK,d->clients[i].frame.x,d->clients[i].frame.y+DESK_TITLE);
+                d->sh.menus[0].hot=0;
+            }
+            d->sh.alt_used=1; return 1;
+        }
         if (code == DU_KEY_TAB) {
             if (value) { if (!d->sh.switcher) switcher_start(d, (d->sh.modifiers & DU_SHIFT) != 0); else switcher_step(d, (d->sh.modifiers & DU_SHIFT) != 0); }
             d->sh.alt_used = 1;
@@ -2337,11 +2389,40 @@ int desk_shell_key(struct desktop *d, int code, int value)
             d->sh.alt_used = 1;
             return 1;
         }
-        if (code == DU_KEY_ESC && d->sh.switcher) { if (value) switcher_finish(d, 0); d->sh.alt_used = 1; return 1; }
+        if (code == DU_KEY_ESC) {
+            if (value==1) {
+                if (d->sh.switcher) switcher_finish(d,0);
+                else {
+                    int next=-1;
+                    uint64_t below=d->focus>=0 ? d->clients[d->focus].order : UINT64_MAX;
+                    for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && !d->clients[i].minimized &&
+                        desk_modal_target(d,i)==i && d->clients[i].order<below &&
+                        (next<0 || d->clients[i].order>d->clients[next].order)) next=i;
+                    if (next<0) next=desk_next_window(d,d->focus,0,NULL);
+                    if (next>=0) {
+                        /* Keep every order positive and unique: the scene
+                         * painter traverses strictly increasing orders. */
+                        int old=d->focus, owner=-1;
+                        if (old>=0 && d->clients[old].owner_id) for (int i=0;i<DESK_CLIENTS;i++)
+                            if (d->clients[i].window && d->clients[i].window_id==d->clients[old].owner_id) owner=i;
+                        unsigned shift=owner>=0 ? 2u : 1u;
+                        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window) d->clients[i].order+=shift;
+                        d->order+=shift;
+                        if (owner>=0) { d->clients[owner].order=1; damage(d,desk_outer(&d->clients[owner])); }
+                        if (old>=0) {
+                            d->clients[old].order=shift;
+                            damage(d,desk_outer(&d->clients[old]));
+                        }
+                        desk_focus(d,next);
+                    }
+                }
+            }
+            d->sh.alt_used = 1; return 1;
+        }
         if (value && !d->sh.alt_routed) { desk_route_key(d, d->sh.alt_code, 1); d->sh.alt_routed = 1; }
-        if (!value && d->sh.alt_used && (code == DU_KEY_TAB || code == DU_KEY_F4)) return 1;
+        if (!value && d->sh.alt_used && (code == DU_KEY_TAB || code == DU_KEY_F4 || code==DU_KEY_SPACE || code==DU_KEY_ESC)) return 1;
     }
-    if (!value && (code == DU_KEY_TAB || code == DU_KEY_F4) && d->sh.alt_used) return 1;
+    if (!value && (code == DU_KEY_TAB || code == DU_KEY_F4 || code==DU_KEY_SPACE || code==DU_KEY_ESC) && d->sh.alt_used) return 1;
     if ((d->sh.modifiers & DU_CTRL) && code == DU_KEY_ESC) { if (value == 1) toggle_start(d); return 1; }
     if (d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;

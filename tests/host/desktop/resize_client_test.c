@@ -47,6 +47,15 @@ void rt_client_tests(void)
     configured(700,460,3,1); assert(du_window_turn(&w,7)==1); drain();
     assert(!w.replacement && rt_surfaces()==1 && rt_mappings()==1 && rt_handles()==1);
     du_window_destroy(&w); assert(!rt_surfaces());
+    /* Cursor requests use the production FIFO and suppress unchanged shapes. */
+    open_window(&w,&u); u.mouse_x=300; u.mouse_y=200;
+    for (unsigned shape=1;shape<DESK_CURSOR_COUNT;shape++) {
+        du_cursor(&u,shape); assert(du_window_turn(&w,shape+20)==1);
+        assert(rt_pop(&m) && m.data[1]==DESK_SET_CURSOR && desk_get32(m.data+4)==shape);
+        struct desk_packet p; assert(desk_parse(&m,1,NULL,&p) && p.flags==shape && !m.fd_count);
+        assert(!rt_pop(&m)); assert(du_window_turn(&w,shape+40)==1 && !rt_pop(&m));
+    }
+    du_window_destroy(&w); assert(!rt_surfaces());
     /* Same-turn proposals allocate only the newest; disconnect cleans pending state. */
     open_window(&w,&u); rt_block=1;
     configured(500,350,1,0);configured(650,420,2,0);assert(du_window_turn(&w,2)==1);
@@ -60,5 +69,5 @@ void rt_client_tests(void)
         du_window_destroy(&w);assert(!rt_surfaces());
     }
     rt_reset();
-    puts("PASS deskui resize transport: supersession, backpressure, in-flight serials, read-only transfers, EOF/failure cleanup, bounded surfaces");
+    puts("PASS deskui resize transport: supersession, backpressure, in-flight serials, read-only transfers, EOF/failure cleanup, bounded surfaces, cursor FIFO and unchanged-shape suppression");
 }

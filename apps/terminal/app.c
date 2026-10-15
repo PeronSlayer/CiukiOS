@@ -266,7 +266,7 @@ int term_attach(struct terminal *t,struct du_ui *u,const struct term_host *h)
 {
     memset(t,0,sizeof(*t)); t->host=*h; t->ui=u; strcpy(t->cwd,"/Documents"); t->columns=80; t->rows=25; t->follow=1;
     u->event=term_event; u->paint=paint; u->layout=layout; u->user=t;
-    struct du_widget *g=du_add(u,DU_CANVAS,GRID,(struct du_rect){0},""); if(!g)return -ENOMEM; g->accepts_tab=1;
+    struct du_widget *g=du_add(u,DU_CANVAS,GRID,(struct du_rect){0},""); if(!g)return -ENOMEM; g->accepts_tab=1; g->pointer_cursor=DESK_CURSOR_TEXT;
     struct du_widget *s=du_add(u,DU_SCROLLBAR,SCROLL,(struct du_rect){0},""); if(!s)return -ENOMEM; s->vertical=1;
     /* Keep the grid at 80x25: actions are available from the context menu. */
     t->menu_items[0]=(struct du_menu_item){"&Copy",COPY,0,0,0};

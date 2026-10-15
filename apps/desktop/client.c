@@ -18,6 +18,7 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
     d->mouse_x = (int32_t)w / 2; d->mouse_y = (int32_t)h / 2;
     d->clock_second = UINT64_MAX;
     d->title_click_window = -1;
+    d->cursor_loaded=DESK_CURSOR_COUNT;
     for (unsigned i = 0; i < DESK_CLIENTS; i++)
         d->clients[i].channel = d->clients[i].surface = -1;
     desk_damage_add(&d->damage, (struct desk_box){0, 0, (int32_t)w, (int32_t)h}, w, h);
@@ -37,8 +38,11 @@ void desk_drop_client(struct desktop *d, int i)
 {
     struct desk_client *c = &d->clients[i];
     if (c->channel < 0 && !c->internal) return;
+    uint32_t pid=c->pid, owner=c->owner_id, id=c->window_id;
+    char application[sizeof(c->application)]; memcpy(application,c->application,sizeof(application));
+    int was_focused=d->focus==i;
     if (d->focus == i) desk_focus(d, -1);
-    if (d->drag == i) d->drag = -1;
+    if (d->drag == i) { d->drag = -1; d->resize_edges=0; d->keyboard_geometry=0; }
     if (c->window) desk_sound(d,SOUND_WINDOW_CLOSE);
     if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
     if (c->pixels && !c->internal) d->ops.unmap((void *)c->pixels, c->info.allocation_bytes);
@@ -48,13 +52,15 @@ void desk_drop_client(struct desktop *d, int i)
     if (c->internal) desk_internal_closed(d, i);
     memset(c, 0, sizeof(*c));
     c->channel = c->surface = -1;
-    if (d->focus < 0) {
-        int next = -1;
-        for (int j = 0; j < DESK_CLIENTS; j++) if (d->clients[j].window && !d->clients[j].minimized &&
-            (next < 0 || d->clients[j].order > d->clients[next].order)) next = j;
+    for (int j=0;j<DESK_CLIENTS;j++) if (d->clients[j].owner_id==id) d->clients[j].owner_id=0;
+    if (was_focused || d->focus < 0) {
+        int next=desk_next_window(d,i,pid,application);
+        for (int j=0;j<DESK_CLIENTS;j++) if (owner && d->clients[j].window_id==owner &&
+            d->clients[j].window && !d->clients[j].minimized) next=j;
         desk_focus(d, next);
     }
     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
+    desk_cursor_update(d);
 }
 void desk_queue(struct desktop *d, int i, const struct ciuki_message *m)
 {
@@ -155,11 +161,24 @@ void desk_resize(struct desktop *d, int i, struct desk_box f)
     if (i < 0 || i >= DESK_CLIENTS) return;
     struct desk_client *c = &d->clients[i];
     if (!c->window || !c->resizable || c->collapsed || c->internal) return;
-    int32_t w = size_limit(f.w - 2 * DESK_BORDER, c->min_width, c->max_width, c->step_width);
-    int32_t h = size_limit(f.h - DESK_TITLE - DESK_BORDER, c->min_height, c->max_height, c->step_height);
+    int left=d->drag==i && (d->resize_edges&DESK_EDGE_LEFT);
+    int top=d->drag==i && (d->resize_edges&DESK_EDGE_TOP);
+    int right=c->frame.x+c->frame.w, bottom=c->frame.y+c->frame.h;
+    int work_bottom=(int)d->height-(d->shell ? DESK_BAR : 0);
+    if (f.x<0 && !left) f.x=0;
+    if (f.y<DESK_BAR && !top) f.y=DESK_BAR;
+    int available_w=(left ? right : (int)d->width-f.x)-2*DESK_BORDER;
+    int available_h=(top ? bottom-DESK_BAR : work_bottom-f.y)-DESK_TITLE-DESK_BORDER;
+    uint32_t max_w=c->max_width, max_h=c->max_height;
+    /* A client minimum can exceed a newly selected display. Honour that
+     * minimum and keep its title reachable rather than sending invalid sizes. */
+    if (available_w>=(int)c->min_width && available_w<(int)max_w) max_w=(unsigned)available_w;
+    if (available_h>=(int)c->min_height && available_h<(int)max_h) max_h=(unsigned)available_h;
+    int32_t w = size_limit(f.w - 2 * DESK_BORDER, c->min_width, max_w, c->step_width);
+    int32_t h = size_limit(f.h - DESK_TITLE - DESK_BORDER, c->min_height, max_h, c->step_height);
     /* The opposite edge stays put when tracking a left/top edge. */
-    if (d->drag == i && (d->resize_edges & DESK_EDGE_LEFT)) f.x += f.w - w - 2 * DESK_BORDER;
-    if (d->drag == i && (d->resize_edges & DESK_EDGE_TOP)) f.y += f.h - h - DESK_TITLE - DESK_BORDER;
+    if (left) f.x=right-w-2*DESK_BORDER;
+    if (top) f.y=bottom-h-DESK_TITLE-DESK_BORDER;
     f.w = w + 2 * DESK_BORDER; f.h = h + DESK_TITLE + DESK_BORDER;
     if (f.x < 0) f.x = 0;
     if (f.y < DESK_BAR) f.y = DESK_BAR;
@@ -169,6 +188,34 @@ void desk_resize(struct desktop *d, int i, struct desk_box f)
     if (!++c->resize_serial) ++c->resize_serial;
     configure(d, i, 0);
     desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
+}
+static void animation_damage(struct desktop *d, struct desk_box b)
+{
+    struct desk_box edges[4]={{b.x,b.y,b.w,3},{b.x,b.y+b.h-3,b.w,3},
+        {b.x,b.y+3,3,b.h-6},{b.x+b.w-3,b.y+3,3,b.h-6}};
+    for (unsigned k=0;k<4;k++) desk_damage_add(&d->damage,edges[k],d->width,d->height);
+}
+void desk_animate(struct desktop *d, struct desk_box from, struct desk_box to)
+{
+    if (!d->shell || !d->now_ns || from.w<=0 || to.w<=0) return;
+    if (d->animation.active) animation_damage(d,d->animation.box);
+    d->animation.from=from; d->animation.to=to; d->animation.box=from;
+    d->animation.started=d->now_ns; d->animation.step=0; d->animation.active=1;
+    animation_damage(d,from);
+}
+void desk_animation_tick(struct desktop *d)
+{
+    if (!d->animation.active) return;
+    uint64_t age=d->now_ns>=d->animation.started ? d->now_ns-d->animation.started : 0;
+    unsigned step=age>=150000000ull ? 6 : (unsigned)(age/25000000ull);
+    if (step==d->animation.step) return;
+    animation_damage(d,d->animation.box);
+    d->animation.step=step;
+    if (step==6) { d->animation.active=0; return; }
+    struct desk_box a=d->animation.from, b=d->animation.to;
+    d->animation.box=(struct desk_box){a.x+(b.x-a.x)*(int)step/6,a.y+(b.y-a.y)*(int)step/6,
+        a.w+(b.w-a.w)*(int)step/6,a.h+(b.h-a.h)*(int)step/6};
+    animation_damage(d,d->animation.box);
 }
 /* Only a successfully presented frame in the requested/confirmed mode may
  * replace the saved preference. Failed reallocations still have the old id. */
@@ -236,7 +283,7 @@ void desk_zoom(struct desktop *d, int i)
 {
     if (i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return;
     struct desk_client *c = &d->clients[i];
-    if (!c->resizable || c->internal) return;
+    if (!c->resizable || c->internal || desk_modal_target(d,i)!=i) return;
     if (c->collapsed) desk_collapse(d, i);
     struct desk_box f;
     if (c->zoomed) f = c->restore;
@@ -244,7 +291,9 @@ void desk_zoom(struct desktop *d, int i)
         c->restore = c->frame;
         f = (struct desk_box){0, DESK_BAR, (int32_t)d->width, (int32_t)d->height - DESK_BAR - (d->shell ? DESK_BAR : 0)};
     }
+    struct desk_box old=c->frame;
     c->zoomed = !c->zoomed; desk_resize(d, i, f);
+    desk_animate(d,old,c->frame);
 }
 void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
 {
@@ -264,7 +313,7 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
     int continuing=d->copy_pending && d->copy_client==i &&
         d->copy_rect.width==(uint32_t)frame.w && d->copy_rect.height==(uint32_t)(frame.h-desk_theme->radius);
     int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && !d->damage.count)) && !d->menu_open && !d->sh.levels &&
-        !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.switcher && !d->sh.tooltip && !d->power.state &&
+        !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.switcher && !d->sh.tooltip && !d->power.state && !d->animation.active &&
         !c->internal && !c->collapsed && !c->minimized && c->order>0;
     struct desk_box next = {x,y,frame.w,frame.h}, ignored;
     if (frame.x < 0 || frame.y < 0 || frame.x+frame.w > (int32_t)d->width ||
@@ -362,7 +411,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         (!c->hello && p.opcode != DESK_HELLO) ||
         (c->hello && p.opcode == DESK_HELLO) ||
         (p.opcode == DESK_CREATE_WINDOW && c->window) ||
-        ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE || p.opcode == DESK_SET_TITLE) && !c->window) ||
+        ((p.opcode == DESK_DAMAGE || p.opcode == DESK_MOVE || p.opcode == DESK_CLOSE || p.opcode == DESK_SET_TITLE || p.opcode==DESK_SET_CURSOR) && !c->window) ||
         ((p.opcode == DESK_DAMAGE || p.opcode==DESK_GFX_FRAME) && swap && (!c->resizable || swap > c->resize_serial ||
             swap <= c->applied_serial || s.width < c->min_width || s.height < c->min_height ||
             s.width > c->max_width || s.height > c->max_height ||
@@ -498,7 +547,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         c->window_id = d->next_window_id;
         memcpy(c->title, p.title, sizeof(c->title));
         c->frame = desk_frame(s.width, s.height, 0, DESK_BAR);
-        desk_move(d, i, 20 + i * 18, DESK_BAR + 20 + i * 18);
+        unsigned slot=d->cascade++%8;
+        desk_move(d, i, 20 + (int)slot * 18, DESK_BAR + 20 + (int)slot * 18);
         desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
         configure(d, i, 1);
         if (c->awaiting_frame && d->launch_mark) d->launch_mark(CIUKI_LAUNCH_CONFIGURE,c->pid,0);
@@ -541,6 +591,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             d->mouse_x=x; d->mouse_y=y;
         }
         break;
+    case DESK_SET_CURSOR:
+        c->cursor=p.flags; desk_cursor_update(d); break;
     case DESK_SET_TITLE:
         if (strcmp(c->title, p.title)) {
             memcpy(c->title, p.title, sizeof(c->title));
@@ -696,6 +748,7 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
         }
     }
     if (d->shell) desk_close_timeouts(d);
+    desk_animation_tick(d); desk_cursor_update(d);
 }
 
 /* A bounded /Programs entry parser, independent of directory enumeration order.
@@ -745,24 +798,29 @@ void desk_minimize(struct desktop *d, int i)
 {
     if (!d->shell || i<0 || i>=DESK_CLIENTS || !d->clients[i].window) return;
     struct desk_client *c = &d->clients[i];
+    int modal=desk_modal_target(d,i);
+    if (modal!=i) { desk_focus(d,modal); return; }
+    if (c->owner_id) return;
+    struct desk_box from=c->minimized ? desk_task_button(d,i) : c->frame;
     desk_sound(d,c->minimized ? SOUND_RESTORE : SOUND_MINIMISE);
     if (c->minimized) { c->minimized=0; desk_focus(d,i); }
     else {
         c->minimized=1;
         if (d->drag==i) d->drag=-1;
         if (d->focus==i) {
-            int next=-1;
-            for (int j=0; j<DESK_CLIENTS; j++) if (d->clients[j].window && !d->clients[j].minimized &&
-                (next<0 || d->clients[j].order>d->clients[next].order)) next=j;
+            int next=desk_next_window(d,i,c->pid,c->application);
             desk_focus(d,next);
         }
     }
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
+    desk_animate(d,from,c->minimized ? desk_task_button(d,i) : c->frame);
+    desk_cursor_update(d);
 }
 void desk_request_close(struct desktop *d, int i)
 {
     if (i<0 || i>=DESK_CLIENTS || !d->clients[i].window) return;
+    i=desk_modal_target(d,i);
     struct desk_client *c=&d->clients[i];
     if (c->internal) { desk_drop_client(d,i); return; }
     if (c->closing) return;

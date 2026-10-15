@@ -10,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 # 2026-10-15 (main after f2-63 + f2-64): re-recorded on the combined tree (FreeType text), reviewed against the 9a05ab9f renders.
+# F2-67: fixed-size captions omit the maximize button; paired task-tip PNGs await lead review.
 GOLDENS = {'balloon': '4db4166909a0b1042ebbd860892a6fc5e39f22f8dc8ada77ce17171a929b2998',
  'error': '310f334a2b31f450caf39691beba785a2fc3b989d24731bcca509449bcdc6d5a',
  'info': '50e827a231ec558500bc59905d529a42ecaca3851d9a7a2c7ec06c0b9a203c53',
@@ -19,7 +20,7 @@ GOLDENS = {'balloon': '4db4166909a0b1042ebbd860892a6fc5e39f22f8dc8ada77ce17171a9
  'tooltip': 'df824cb2998e9c2fb263a620afb2aca9c8b7ee8dd79b3df24a97c5a65b2a8d61',
  'tooltip-media': 'd23c96aacda7662b3b7b0730eaf08c4a76b7f507688841fed1cc102003c9a7cf',
  'tooltip-network': 'd8952ce42edcdcda9dea4e651fa0959896883bb0f7785c757670be900294878f',
- 'tooltip-task': '0e5dbe0d7229ed371bb504f95416e579a2ea8470b24d65d7167d589e586e140a',
+ 'tooltip-task': '10829c97cb36660639828ccf63f627ffb046b3df1d1dca8f5f3f9fe43ebec650',
  'tooltip-volume': '7e86b53274a00d2ed44a871fc397508f5aefdb04ba645857093901c23a52df44',
  'warning': '43a94b327cd5807be7f35b7c2aad42f07341c63d8208f757cf6b3000c4951177'}
 

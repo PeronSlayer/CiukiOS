@@ -418,6 +418,9 @@ static unsigned glyph_alpha(int kind, int i, int j)
         return d == 0 ? 255 : d == 1 ? 132 : 0;
     }
     case DESK_GLYPH_MINIMIZE: return j >= 5 ? 255 : 0;
+    case DESK_GLYPH_RESTORE:
+        return ((i>=2 && (j==0 || j==1 || (j<=4 && i==6))) ||
+            (j>=2 && i<=4 && (i==0 || i==4 || j==2 || j==3 || j==6))) ? 255 : 0;
     case DESK_GLYPH_COLLAPSE: return j >= 1 && j <= 4 && (i - 3 <= j - 1 && 3 - i <= j - 1) ? 255 : 0;   /* roll up */
     case DESK_GLYPH_EXPAND: return j >= 2 && j <= 5 && (i - 3 <= 5 - j && 3 - i <= 5 - j) ? 255 : 0;     /* roll down */
     default: return i == 0 || j == 0 || i == 6 || j == 6 || j == 1 ? 255 : 0;                               /* zoom */
@@ -445,7 +448,7 @@ void desk_paint_title_button(struct desk_paint *p, int x, int y, int w, int h, i
     const struct desk_theme *t = desk_theme;
     if (w <= 0 || h <= 0) return;
     if (t->control_style == DESK_CONTROLS_CLASSIC) {
-        /* Windows-class caption button: 16x14, raised, sunken while held. */
+        /* Caption button: 16x14, raised, sunken while held. */
         int bw = w < 16 ? w : 16, bh = h < 14 ? h : 14;
         int bx = x + (w - bw) / 2, by = y + (h - bh + 1) / 2;
         desk_paint_raised(p, bx, by, bw, bh, pressed, 0);
@@ -456,6 +459,7 @@ void desk_paint_title_button(struct desk_paint *p, int x, int y, int w, int h, i
                 desk_paint_fill(p, ox + i, oy + i, 2, 1, ink); desk_paint_fill(p, ox + 6 - i, oy + i, 2, 1, ink);
             }
         } else if (kind == DESK_GLYPH_MINIMIZE) desk_paint_fill(p, ox + 1, oy + 5, 6, 2, ink);
+        else if (kind==DESK_GLYPH_RESTORE) glyph(p,ox,oy,kind,ink,255);
         else if (kind == DESK_GLYPH_COLLAPSE || kind == DESK_GLYPH_EXPAND) {
             int up = kind == DESK_GLYPH_COLLAPSE;
             for (int i = 0; i < 4; i++) desk_paint_fill(p, ox + 4 - i, oy + (up ? 1 + i : 4 - i), 1 + 2 * i, 1, ink);
@@ -679,7 +683,7 @@ static void paint_frame(struct desk_paint *p, int x, int y, int w, int h, const 
     for (int k = 0; k < 3; k++) {
         if (boxes[k][2] <= 0) continue;
         int kind = order[k] == DESK_TB_CLOSE ? DESK_GLYPH_CLOSE : order[k] == DESK_TB_MINIMIZE ? DESK_GLYPH_MINIMIZE :
-                   s->collapsed ? DESK_GLYPH_EXPAND : DESK_GLYPH_COLLAPSE;
+                   s->collapsed ? DESK_GLYPH_EXPAND : s->maximized ? DESK_GLYPH_RESTORE : DESK_GLYPH_ZOOM;
         desk_paint_title_button(&f.p, boxes[k][0], boxes[k][1], boxes[k][2], boxes[k][3], kind, active,
                                 s->hot == order[k], s->pressed == order[k]);
     }

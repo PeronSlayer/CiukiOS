@@ -886,6 +886,7 @@ int main(int argc,char **argv)
     assert(desk_shell_click(&d) && d.menu_open && d.shell_stage==1);
     int pid=launch_program(&d,&program);
     assert(pid==100 && d.clients[0].pid==100 && d.children[0].pid==100 && fake_live()==1);
+    assert(!strcmp(d.clients[0].application,"demo"));
     d.shell_pid=(unsigned)pid; d.shell_stage=2;
     message(&d,0,DESK_HELLO,4);
     fake_surface(22,240,160,0xabcdef);
