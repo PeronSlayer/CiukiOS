@@ -12,6 +12,7 @@
 #include <ciuki/process.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/dosvm.h>
+extern int32_t w32_syscall(struct trap_frame *) __attribute__((weak));
 extern int32_t display_syscall(struct trap_frame *) __attribute__((weak));
 extern int32_t power_syscall(uint32_t action) __attribute__((weak));
 extern int32_t dosvm_client_syscall(struct trap_frame *) __attribute__((weak));
@@ -123,6 +124,10 @@ void syscall_dispatch(struct trap_frame *tf)
         break;
     case 5:
         r = sys_probe_query(tf->ebx, tf->ecx);
+        break;
+    case CIUKI_SYS_W32:
+        if (w32_syscall) { w32_syscall(tf); return; }
+        r = -ENOSYS;
         break;
     case CIUKI_SYS_DOSVM:
         /* Weak like dosvm_trap: host harnesses link syscall.c without the VM. */

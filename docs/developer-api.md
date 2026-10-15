@@ -512,6 +512,13 @@ enum ciuki_syscall {
 };
 ```
 
+f5-03a: additive Win32 family, outside the native numbering (78-95 stay
+free for F6). Only Win32-personality processes may use it.
+
+```c
+enum ciuki_w32_syscall { CIUKI_SYS_W32 = 96 };
+```
+
 f2-39: diagnostic markers, no copied wire record. See execution-abi.md.
 
 ```c
@@ -2106,14 +2113,278 @@ These describe target C objects, rather than the host's wire-record view.
 
 
 
+#if !defined(_WIN32)
 
 
+#endif
 #endif
 ```
 
 F2-41 inventory layout: target and host agree at pack(4).
 
+f5-03a: frozen i386 Win32 records (2026-10-14).
+
 ```c
+#define CIUKI_W32_VERSION 0x1u
+#define CIUKI_W32_FS_INDEX 0x9u
+#define CIUKI_W32_FS_SELECTOR 0x4Bu
+#define CIUKI_W32_TEB_SIZE 0x2000u
+#define CIUKI_W32_LOW 0x10000u
+#define CIUKI_W32_APP_LIMIT 0x70000000u
+#define CIUKI_W32_BUILTIN_LIMIT 0x7FFE0000u
+#define CIUKI_W32_SHARED 0x7FFE0000u
+#define CIUKI_W32_GATE 0x7FFE0100u
+#define CIUKI_W32_LIMIT 0x80000000u
+#define CIUKI_W32_GRANULARITY 0x10000u
+#define W32_IDENTITY 0x1u
+#define W32_COUNTER 0x2u
+#define W32_VM_ALLOC 0x3u
+#define W32_VM_FREE 0x4u
+#define W32_VM_PROTECT 0x5u
+#define W32_VM_QUERY 0x6u
+#define W32_DISPATCHER 0x7u
+#define W32_CONTINUE 0x8u
+#define W32_RAISE 0x9u
+#define W32_THREAD 0xAu
+#define W32_DIAGNOSTIC 0xBu
+#define W32_MEM_COMMIT 0x1000u
+#define W32_MEM_RESERVE 0x2000u
+#define W32_MEM_DECOMMIT 0x4000u
+#define W32_MEM_RELEASE 0x8000u
+#define W32_MEM_FREE 0x10000u
+#define W32_MEM_PRIVATE 0x20000u
+#define W32_MEM_MAPPED 0x40000u
+#define W32_MEM_IMAGE 0x1000000u
+#define W32_MEM_TOP_DOWN 0x100000u
+#define W32_PAGE_NOACCESS 0x1u
+#define W32_PAGE_READONLY 0x2u
+#define W32_PAGE_READWRITE 0x4u
+#define W32_PAGE_WRITECOPY 0x8u
+#define W32_PAGE_EXECUTE 0x10u
+#define W32_PAGE_EXECUTE_READ 0x20u
+#define W32_PAGE_EXECUTE_READWRITE 0x40u
+#define W32_PAGE_EXECUTE_WRITECOPY 0x80u
+#define W32_PAGE_GUARD 0x100u
+#define W32_PAGE_NOCACHE 0x200u
+#define W32_STATUS_SUCCESS 0x0u
+#define W32_STATUS_UNSUCCESSFUL 0xC0000001u
+#define W32_STATUS_NOT_IMPLEMENTED 0xC0000002u
+#define W32_STATUS_ACCESS_VIOLATION 0xC0000005u
+#define W32_STATUS_INVALID_PARAMETER 0xC000000Du
+#define W32_STATUS_NO_MEMORY 0xC0000017u
+#define W32_STATUS_CONFLICTING_ADDRESSES 0xC0000018u
+#define W32_STATUS_ACCESS_DENIED 0xC0000022u
+#define W32_STATUS_OBJECT_NAME_NOT_FOUND 0xC0000034u
+#define W32_STATUS_INVALID_IMAGE_FORMAT 0xC000007Bu
+#define W32_STATUS_DEVICE_BUSY 0x80000011u
+#define W32_EXCEPTION_GUARD 0x80000001u
+#define W32_EXCEPTION_ALIGNMENT 0x80000002u
+#define W32_EXCEPTION_BREAKPOINT 0x80000003u
+#define W32_EXCEPTION_SINGLE_STEP 0x80000004u
+#define W32_EXCEPTION_ILLEGAL 0xC000001Du
+#define W32_EXCEPTION_BOUNDS 0xC000008Cu
+#define W32_EXCEPTION_DIVIDE 0xC0000094u
+#define W32_EXCEPTION_OVERFLOW 0xC0000095u
+#define W32_EXCEPTION_PRIVILEGED 0xC0000096u
+#define W32_EXCEPTION_STACK 0xC00000FDu
+#define W32_EXCEPTION_NONCONTINUABLE 0xC0000025u
+#define W32_EXCEPTION_SSE 0xC00002B4u
+#define W32_CONTEXT_FULL 0x10007u
+#define W32_CONTEXT_FLOAT 0x10008u
+#define W32_CONTEXT_EXTENDED 0x10020u
+#define W32_THREAD_RESERVATION 0x10000u
+#define W32_PIT_HZ 0x1234DEu
+#define W32_PIT_DIVISOR 0x4A9u
+
+struct ciuki_w32_header {
+    uint32_t version;
+    uint32_t size;
+    uint32_t operation;
+    uint32_t reserved;
+};
+
+
+struct ciuki_w32_memory_info {
+    uint32_t base;
+    uint32_t allocation_base;
+    uint32_t allocation_protect;
+    uint32_t region_size;
+    uint32_t state;
+    uint32_t protect;
+    uint32_t type;
+};
+
+
+struct ciuki_w32_vm {
+    struct ciuki_w32_header header;
+    uint32_t address;
+    uint32_t bytes;
+    uint32_t flags;
+    uint32_t protect;
+    uint32_t old_protect;
+    uint32_t reserved;
+};
+
+
+struct ciuki_w32_query {
+    struct ciuki_w32_header header;
+    uint32_t address;
+    struct ciuki_w32_memory_info info;
+};
+
+
+struct ciuki_w32_identity {
+    struct ciuki_w32_header header;
+    uint32_t major;
+    uint32_t minor;
+    uint32_t build;
+    uint32_t platform;
+    uint32_t get_version;
+    uint32_t directx;
+    uint32_t cpu_features;
+    char csd[16];
+};
+
+
+struct ciuki_w32_counter {
+    struct ciuki_w32_header header;
+    uint32_t value_lo;
+    uint32_t value_hi;
+    uint32_t frequency_lo;
+    uint32_t frequency_hi;
+};
+
+
+struct ciuki_w32_dispatcher {
+    struct ciuki_w32_header header;
+    uint32_t entry;
+    uint32_t reserved;
+};
+
+
+struct ciuki_w32_continue {
+    struct ciuki_w32_header header;
+    uint32_t context;
+    uint32_t reserved;
+};
+
+
+struct ciuki_w32_raise {
+    struct ciuki_w32_header header;
+    uint32_t exception;
+    uint32_t context;
+};
+
+
+struct ciuki_w32_thread {
+    struct ciuki_w32_header header;
+    uint32_t entry;
+    uint32_t argument;
+    uint32_t trampoline;
+    uint32_t stack_bytes;
+    uint32_t flags;
+    uint32_t tid;
+};
+
+
+struct ciuki_w32_diagnostic {
+    struct ciuki_w32_header header;
+    uint32_t kind;
+    uint32_t pid;
+    uint32_t tid;
+    uint32_t status;
+    uint8_t payload[208];
+};
+
+
+struct ciuki_w32_exception {
+    uint32_t code;
+    uint32_t flags;
+    uint32_t chain;
+    uint32_t address;
+    uint32_t count;
+    uint32_t information[15];
+};
+
+
+struct ciuki_w32_float {
+    uint32_t control;
+    uint32_t status;
+    uint32_t tag;
+    uint32_t error_offset;
+    uint32_t error_selector;
+    uint32_t data_offset;
+    uint32_t data_selector;
+    uint8_t registers[80];
+    uint32_t cr0_npx;
+};
+
+
+struct ciuki_w32_context {
+    uint32_t flags;
+    uint32_t debug[6];
+    struct ciuki_w32_float floating;
+    uint32_t gs;
+    uint32_t fs;
+    uint32_t es;
+    uint32_t ds;
+    uint32_t edi;
+    uint32_t esi;
+    uint32_t ebx;
+    uint32_t edx;
+    uint32_t ecx;
+    uint32_t eax;
+    uint32_t ebp;
+    uint32_t eip;
+    uint32_t cs;
+    uint32_t eflags;
+    uint32_t esp;
+    uint32_t ss;
+    uint8_t extended[512];
+};
+
+
+struct ciuki_w32_teb {
+    uint32_t exception_list;
+    uint32_t stack_base;
+    uint32_t stack_limit;
+    uint32_t subsystem_tib;
+    uint32_t fiber;
+    uint32_t arbitrary;
+    uint32_t self;
+    uint32_t environment;
+    uint32_t pid;
+    uint32_t tid;
+    uint32_t rpc;
+    uint32_t static_tls;
+    uint32_t peb;
+    uint32_t last_error;
+    uint8_t private1[3544];
+    uint32_t tls_slots[64];
+    uint8_t private2[4336];
+};
+
+
+struct ciuki_w32_parameters {
+    uint32_t version;
+    uint32_t size;
+    uint32_t image_path;
+    uint32_t command_line;
+    uint32_t directory;
+    uint32_t environment;
+};
+
+
+struct ciuki_w32_shared {
+    uint32_t sequence;
+    uint32_t tick;
+    uint32_t interrupt_lo;
+    uint32_t interrupt_hi;
+    uint32_t system_lo;
+    uint32_t system_hi;
+};
+
+
 #endif
 ```
 

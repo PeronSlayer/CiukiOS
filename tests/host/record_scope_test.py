@@ -20,6 +20,7 @@ ALLOWED = {
     'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
     'probes/f4_probes_audio.c', # f4-01 native audio controller
+    'probes/f5_probes_core.c', # f5-03 personality mechanism controller
     'probes/f6_probes_net.c', # f6-01 bounded ARP controller
     'probes/f4_probes_vm_audio.c', # f4-05 DOS VM audio output controller (f4:vm-audio)
     'probes/f3_probes_vm.c',

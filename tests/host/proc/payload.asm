@@ -119,7 +119,13 @@ entry:
     je mapping_fault
     cmp byte [esi], 's'
     je spawn_child
+    cmp byte [esi], 'x'
+    je sse_fault
     jmp done
+sse_fault:
+    ; f5-03: native ELF keeps CR4.OSFXSR clear, so SSE raises #UD.
+    xorps xmm0, xmm0
+    jmp bad_exit
 fault:
     mov dword [0], 1
     jmp bad_exit

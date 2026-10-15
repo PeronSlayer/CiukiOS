@@ -5,7 +5,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/mm.h>
 
-enum ua_kind { UA_ANON, UA_IMAGE, UA_HEAP, UA_STACK, UA_GUARD, UA_TLS, UA_SHARED };
+enum ua_kind { UA_ANON, UA_IMAGE, UA_HEAP, UA_STACK, UA_GUARD, UA_TLS, UA_SHARED, UA_W32 };
 /* Shared backing callbacks never block; every split extent owns one ref.
  * ua_map_shared is supplied by the uaddr integration patch (f2-05).
  * A weak import lets the lead build before installing that out-of-scope hook;
@@ -20,6 +20,8 @@ struct ua_extent {
     uint32_t base, end, prot, maximum, owner;
     uint64_t generation;
     bool preparing; /* reserved range, backing not yet published */
+    uint32_t w32_allocation, w32_allocation_protect, w32_protect, w32_state, w32_type;
+    bool w32_locked;
     enum ua_kind kind;
     struct ua_extent *next;
     struct ua_shared shared;
@@ -36,7 +38,12 @@ struct uaddr {
     struct ua_pin *pins;
     uint32_t heap_base, brk, extents, arena_extents, backing;
     void *identity;
+    bool win32;
 };
+/* Internal Win32 transactions: page-aligned ranges, one allocation. */
+int ua_w32_change(struct uaddr *u, uint32_t base, uint32_t bytes,
+                  uint32_t operation, uint32_t protect, uint32_t native, bool internal);
+int ua_w32_release(struct uaddr *u, uint32_t base, bool internal);
 int ua_init(struct uaddr *u, void *identity);
 void ua_destroy(struct uaddr *u);
 int ua_protection(uint32_t prot);

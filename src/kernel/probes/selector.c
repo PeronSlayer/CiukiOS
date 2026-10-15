@@ -44,7 +44,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         *selection = parsed;
         return true;
     }
-    if (len < 3 || len > 64 || s[0] != 'f' || s[1] < '0' || (s[1] > '4' && s[1] != '6') || s[2] != ':')
+    if (len < 3 || len > 64 || s[0] != 'f' || s[1] < '0' || s[1] > '6' || s[2] != ':')
         return false;
     for (unsigned j = 0; j < len; j++)
         if ((uint8_t)s[j] < 32 || (uint8_t)s[j] > 126)
@@ -71,9 +71,10 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices", "vm-video", "vm-window", "vm-audio-state", "dpmi",
                                             "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake" };
     static const char *const f4_names[] = { "optical", "audio-native", "ntfs-ro", "vm-audio" };
+    static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory" };
     static const char *const f6_names[] = { "net-arp" };
-    const char *const *names = parsed.phase == 6 ? f6_names : parsed.phase == 4 ? f4_names : parsed.phase == 3 ? f3_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
-    unsigned count = parsed.phase == 6 ? ARRAY_SIZE(f6_names) : parsed.phase == 4 ? ARRAY_SIZE(f4_names) : parsed.phase == 3 ? ARRAY_SIZE(f3_names) : parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
+    const char *const *names = parsed.phase == 5 ? f5_names : parsed.phase == 6 ? f6_names : parsed.phase == 4 ? f4_names : parsed.phase == 3 ? f3_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
+    unsigned count = parsed.phase == 5 ? ARRAY_SIZE(f5_names) : parsed.phase == 6 ? ARRAY_SIZE(f6_names) : parsed.phase == 4 ? ARRAY_SIZE(f4_names) : parsed.phase == 3 ? ARRAY_SIZE(f3_names) : parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
     bool known = false;
     for (unsigned n = 0; n < count; n++)
         if (!strncmp(parsed.probe, names[n], sizeof(parsed.probe)))
@@ -241,9 +242,9 @@ void probes_dispatch(const struct probe_selection *selection,
     const char *probe = selection->probe;
     bool all = !strncmp(probe, "all", 4);
     bool core = !strncmp(probe, "core", 5);
-    if (selection->phase == 4 || selection->phase == 6) {
-        const struct probe_def *table = selection->phase == 6 ? tables->f6 : tables->f4;
-        unsigned count = selection->phase == 6 ? tables->f6_count : tables->f4_count;
+    if (selection->phase == 4 || selection->phase == 5 || selection->phase == 6) {
+        const struct probe_def *table = selection->phase == 5 ? tables->f5 : selection->phase == 6 ? tables->f6 : tables->f4;
+        unsigned count = selection->phase == 5 ? tables->f5_count : selection->phase == 6 ? tables->f6_count : tables->f4_count;
         for (unsigned i=0; i<count; i++) if (!strncmp(probe,table[i].name,sizeof(selection->probe))) { table[i].fn(); return; }
         rec_emit(probe,"BEGIN",0); rec_emit(probe,"END","status=FAIL reason=missing_probe"); return;
     }

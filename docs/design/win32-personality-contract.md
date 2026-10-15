@@ -2341,3 +2341,184 @@ Decisions for implementation:
 - **Wine reuse (Q2, conditional):** if f5-14A shows the dependency closure costs more than it yields, CiukiOS writes more DLLs itself (LGPL-2.1-or-later) and Wine reuse is limited to autonomous modules (codecs, comctl32, shell parts).
 - **Acceptance titles:** freely distributable demos and shareware live on a separate optional games disk image for the tests, never in the system image.
 - **DOS full screen (F3, new):** the Windows 98 two-mode model is approved (f3-20): full-screen DOS sessions on the real VGA hardware under a released display lease, exact windowed emulation for desktop use.
+
+## f5-03a — Kernel record freeze and research (2026-10-14)
+
+This additive amendment takes precedence over C02/C05/C07 and the original
+stack-exhaustion termination paragraph. Native ELF syscall numbers, selectors,
+FNSAVE signal records and SSE refusal remain unchanged.
+
+Research compared `proc/uaddr.c`, `proc/spawn.c`, `arch/desc.c`, `core/fpu.c`
+and `arch/pic_pit.c` with the following primary sources:
+
+- [Microsoft, 1999-02-17](https://news.microsoft.com/source/1999/02/17/microsoft-products-speed-along-with-new-intel-pentium-iii-processor/)
+  confirms native Windows 98 support for Pentium III Streaming SIMD Extensions.
+  This establishes OS support; the exact retail CR4 value still needs a lead
+  hardware observation. Win32 enables OSFXSR/OSXMMEXCPT only with FXSR **and** SSE.
+- [VirtualAlloc](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc),
+  [VirtualFree](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualfree),
+  [VirtualProtect](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualprotect),
+  [guard pages](https://learn.microsoft.com/en-us/windows/win32/memory/creating-guard-pages):
+  reserve addresses round down to 64 KiB, affected spans round up to pages;
+  commitment is idempotent; release requires the allocation base and size zero;
+  decommit size zero at the allocation base affects the whole allocation.
+  Protection is atomic, requires committed pages in one allocation and reports
+  the old first-page protection. Guard is one-shot and incompatible with NOACCESS.
+  Ciuki charges physical backing eagerly, including committed NOACCESS pages.
+- [Microsoft PE specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format)
+  and f5-02 `scripts/win32/census.py`: structural recognition accepts i386 PE32,
+  GUI/CUI, up to 96 sections/16 directories, zero virtual sizes and low alignment;
+  rejects virtual overlap and checks certificate metadata as file offsets.
+  Beyond-EOF raw tails are zero-filled only within the validated image span,
+  matching the fixture parser. Imports/relocations/TLS belong to f5-05, not spawn.
+- [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html):
+  temporarily enable OSFXSR during FX saves/restores of lazy owners, preserve TS
+  and the current personality policy, align buffers to 16 bytes, sanitize MXCSR
+  with the hardware mask (zero mask means 0xFFBF), and clear reserved image bytes.
+- [Wine 10.0 i386 fault dispatcher](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/unix/signal_i386.c)
+  and [i386 public layouts](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/include/winnt.h):
+  #DE maps to integer divide by zero, including quotient overflow; #OF maps to
+  integer overflow, #BR to array bounds. #BP's record address is EIP-1 while its
+  resume context retains post-INT3 EIP. These are upstream-reference decisions,
+  pending period Windows comparison, not claimed Windows 98 measurements.
+
+### Numbering, layouts, transport and authority
+
+`CIUKI_SYS_W32 = 96` is the single global interrupt-0x80 number. Existing
+0–5/16–77 remain assigned as before; 78–95 are left for the networking
+renumbering. EBX points to an in/out record, ECX is its exact byte size;
+EDX/ESI/EDI/EBP must be zero. `ciuki_w32_header` is four little-endian u32
+words: version=1, size, operation, reserved=0. No pointer-sized host types,
+implicit u64 alignment or variable trailing records cross the boundary.
+Every record and pointed-to context is copied once before effects. The record
+is pinned writable through copy-out. Bad transport returns native -errno;
+a well-formed authorized operation returns NTSTATUS in EAX (including success
+zero). Public DLL wrappers map status to Win32 error and update TEB LastError
+only on public API failure; the kernel never overwrites LastError on success.
+
+Operations 1–11 are IDENTITY, COUNTER, VM_ALLOC, VM_FREE, VM_PROTECT,
+VM_QUERY, DISPATCHER, CONTINUE, RAISE, THREAD, DIAGNOSTIC. Their exact fixed
+layouts are in `abi.h`: identity 60, counter 32, VM 40, query 48, dispatcher
+24, continue/raise 24, thread 40, diagnostic 240 bytes. CONTINUE/RAISE carry
+pointers to the 716-byte i386 CONTEXT and 80-byte EXCEPTION_RECORD; the x87
+FLOATING_SAVE_AREA is 112 bytes (108-byte save plus Cr0NpxState). Diagnostic
+records contain header, kind/PID/TID/status and 208 bounded payload bytes.
+Unused words must be zero on input. Unknown version/size/operation/flags and
+reserved words fail before any effect. The common shared-page gate is
+`int 0x80; ret` at 0x7FFE0100. No code-origin test is an authority grant.
+
+All these core operations require a live Win32 process. Native desktop and
+w32srv gain **no** memory/continue/thread privileges through them. Future object
+operations start at 0x100, service operations at 0x200 and display leases at
+0x300; each later directive must freeze its own capability-checked authority
+rows (C02), without granting blanket access based on PID or executable EIP.
+Native callers currently receive -EPERM; unimplemented rows return -ENOSYS.
+
+Status mapping at the native boundary: EFAULT -> ACCESS_VIOLATION/error 998;
+ENOMEM/EAGAIN -> NO_MEMORY/error 8; EACCES/EPERM -> ACCESS_DENIED/error 5;
+EINVAL -> INVALID_PARAMETER/error 87; address overlap/unreserved range ->
+CONFLICTING_ADDRESSES/error 487; ENOEXEC -> INVALID_IMAGE_FORMAT/error 193;
+ENOENT -> OBJECT_NAME_NOT_FOUND/error 2; EBUSY -> DEVICE_BUSY/error 170;
+ENOSYS -> NOT_IMPLEMENTED/error 120. Other native errors -> UNSUCCESSFUL/31.
+
+### Initial process and processor boundary
+
+Spawn validates the EXE and reserves its preferred image range before any
+stack/TEB allocation. The builtin loader `/System/Win32/ntdll.dll` must exist,
+validate as a DLL in the builtin arena and have an executable entry; otherwise
+spawn rolls back with no published process. The kernel seeds image bytes and
+protections, but import binding, application DLL relocation, PEB loader lists,
+TLS callbacks and Win32 CRT startup remain f5-05. A loader receives the PEB
+pointer on its initial stack. Kernel-owned PEB fields: ImageBaseAddress at 8,
+ProcessParameters at 0x10 and version at 0xA4/0xA8/0xAC/0xB0. The parameter
+handoff is a versioned Ciuki record of image-path, one verbatim command-line
+string, current-directory and environment addresses; f5-05 converts it into
+its complete RTL process-parameters/loader-list layout. Native spawn argv[0]
+is the path, argv[1] is the verbatim command line (or empty); additional argv
+items are rejected for PE rather than silently re-quoted. Environment strings
+are copied into a double-NUL terminated block.
+
+Thread stack defaults come from the EXE, reserve rounded to 64 KiB, commit to
+pages plus a moving guard. CreateThread size means commitment unless flag
+0x10000 requests reservation sizing. Kernel-owned TEB/PEB/shared-page/emergency
+allocations cannot be released by public VM operations. Every thread has two
+committed emergency pages, used when its normal dispatcher frame cannot fit;
+recursive emergency delivery terminates with STACK_OVERFLOW. CONTINUE requires
+an outstanding exception, exact selectors, safe flags and readable executable
+EIP/writable ESP, and rejects continuation of noncontinuable exceptions.
+User-mode SEH traversal/unwind remains f5-05. Initial x87 FCW is 0x027F,
+MXCSR 0x1F80, XMM zero. Native templates keep FCW 0x037F. Debug registers are
+not writable through CONTEXT; DPMI watchpoints retain their existing path.
+
+The performance counter counts PIT oscillator cycles (1193182 Hz), combining
+IRQ epochs, a channel-0 latch, pending IRQ0 and rollover correction under an
+IRQ-disabled snapshot. It does not depend on TSC frequency. Shared time uses
+a sequence word and split u64 words to avoid torn i386 reads; updated each PIT
+IRQ. Identity is 4.10.2222/platform 1, GetVersion high bit set, CSD `" A "`,
+DirectX installation identity 7.0a; component capabilities remain separate.
+
+### f5-03 implementation clarifications (2026-10-14)
+
+[Intel SYSENTER](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2b-manual.pdf)
+raises #GP when IA32_SYSENTER_CS is zero, rather than necessarily #UD. The
+kernel keeps that MSR zero on SEP-capable CPUs (excluding early family-6
+models below 3); Win32 recognizes the faulting 0F 34 instruction and reports
+ILLEGAL_INSTRUCTION, while an INT 2E privilege fault remains ACCESS_VIOLATION.
+This prevents an unsupported fast gate from entering an uninitialized kernel
+address. No SYSENTER gate is installed.
+
+Public Win32 entry points use i386 stdcall (callee stack cleanup), except
+cdecl/varargs and explicitly adapted thiscall imports. Callbacks follow their
+public convention. EBX/ESI/EDI/EBP are nonvolatile; DF is clear at DLL entry.
+BOOL/HRESULT/HANDLE/LONG/pointers are 32 bits, WCHAR is 16 bits, structures use
+Windows header packing (normally 8); the kernel transport above is deliberately
+all 32-bit words with 4-byte alignment. EDX:EAX carries 64-bit integer returns.
+The kernel does not claim a complete public GDI/COM or loader-list header in
+f5-03; those remain their owning directives. Native scalar assertions continue
+to require the ELF compiler's 12-byte long double; Win32 MSVC has 8-byte long
+double and is checked independently without changing native records.
+
+A PIT/PIC snapshot corrects at most one pending IRQ/rollover. The PIC cannot
+recover several periods lost while IRQs remain disabled, so QPC clamps a
+backwards sample and may undercount such an interval. This is a measurement
+limit for the lead's IRQ-latency/T23 gate, not a calibrated TSC fallback.
+Shared user pages have identical initial data and private backing in f5-03;
+coherent common backing/image section sharing is the f5-04 section-object
+integration, while each page is refreshed through the IRQ publication hook.
+
+### f5-03 host validation and probe completion (2026-10-15)
+
+The production mechanisms pass the sequential kernel host suite. The new
+host fixture checks eager commitment/NOACCESS/W+X, allocation failures, pins,
+region queries, one-shot guards, exact TEB fields, missing-loader rollback,
+nested delivery/continue, emergency delivery, invalid continuation isolating a
+native peer, and lazy FPU transitions in non-FXSR, FXSR-only and SSE modes.
+The production PE structural validator agrees with every generated f5-02
+fixture at the structural-header boundary; import/resource/TLS walker failures
+remain user-loader work. Frozen layouts also compile for i686 ELF and both
+pinned i386 COFF targets; stdcall export decoration is checked independently.
+
+`f5-core`, `w32-exceptions` and `w32-memory` selectors have boot-loader, kernel,
+linker and runner registration. `tests/suites/f5-core.json` provides the two
+requested T23 cases. The test-only builtin loader executes the unchanged
+f5-02 `seh-nested` image, then probes privileged/#BP/#DE/#PF/SYSENTER/INT2E,
+#DB, x87 and SSE faults, guard removal, decommit/recommit zeroing, release,
+stack growth/overflow recovery and FS/XMM state across a second Win32 thread.
+No guest result is claimed here. Stack-overflow exceptions always use the
+private emergency stack, even if the lowest committed normal page could fit a
+frame. Stack reservations are bounded by the application address space;
+commitment remains limited by actual PMM availability, without a new arbitrary
+physical-memory cap. Shared system-time arithmetic saturates on FILETIME
+conversion overflow. Guest gates and T23 measurements remain lead work.
+
+Header placement: `CIUKI_SYS_W32 = 96` is declared in its own
+`enum ciuki_w32_syscall` after the native `enum ciuki_syscall`, which keeps
+its frozen 0–77 member list byte-for-byte. Each `f5-core`, `w32-exceptions`
+and `w32-memory` run also spawns the native F2 payload in mode `x`
+(`xorps xmm0, xmm0`) while the Win32 fixture is still live; the case passes
+only if that ELF dies with vector 6/SIGILL (`case=native_sse ud=1`), i.e. the
+CR4.OSFXSR policy follows the dispatched task's personality. The new selector
+names exceeded the fixed 24576-byte loader image by 28 bytes; the 65-byte
+`selector_buffer` moves to loader BSS (beyond the fixed image, inside
+`loader_end`), the same hunk f3-20 carries, since both input paths write
+every byte before validation.

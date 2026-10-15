@@ -15,6 +15,7 @@ extern bool dosvm_client(const struct task *) __attribute__((weak));
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 
+extern bool w32_fault(struct trap_frame *, uint32_t) __attribute__((weak));
 struct expected_fault g_expect;
 volatile uint32_t g_spurious_irq7, g_spurious_irq15;
 static irq_handler_t irq_handlers[16];
@@ -142,7 +143,7 @@ void trap_dispatch(struct trap_frame *tf)
         if (proc_thread_for(g_current)) {
             uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
             sti();
-            proc_signal_fault(tf, cr2);
+            if (!w32_fault || !w32_fault(tf, cr2)) proc_signal_fault(tf, cr2);
             cli();
             cpu_user_return();
             return;

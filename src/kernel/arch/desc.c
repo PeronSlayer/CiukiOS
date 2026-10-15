@@ -13,7 +13,8 @@ struct gdt_entry { uint16_t lim0, base0; uint8_t base1, access, gran, base2; } _
 struct idt_entry { uint16_t off0, sel; uint8_t zero, type; uint16_t off1; } __attribute__((packed));
 struct dtr { uint16_t limit; uint32_t base; } __attribute__((packed));
 
-static struct gdt_entry gdt[ARCH_LDT_GDT_INDEX + 1];
+static struct gdt_entry gdt[CIUKI_W32_FS_INDEX + 1];
+_Static_assert(CIUKI_W32_FS_INDEX == ARCH_LDT_GDT_INDEX + 1, "FS follows LDT");
 _Static_assert(ARCH_LDT_GDT_INDEX == CIUKI_TLS_GDT_INDEX + 1, "LDT slot follows TLS");
 static struct idt_entry idt[256];
 struct tss g_tss;
@@ -145,6 +146,16 @@ void arch_tls_switch(uint32_t base, bool native)
     set_gdt(CIUKI_TLS_GDT_INDEX, base, CIUKI_TLS_SIZE - 1, 0xF2, 0x40);
     uint16_t selector = native ? CIUKI_TLS_SELECTOR : SEL_KDATA;
     __asm__ volatile("mov %0, %%gs" :: "r"(selector) : "memory");
+}
+
+void arch_w32_fs_switch(uint32_t base)
+{
+    if (base) arch_w32_fs_encode((uint8_t *)&gdt[CIUKI_W32_FS_INDEX], base);
+    /* Load the flat selector before revoking the idle descriptor. Reload on
+     * every switch even when selector 4B stays the same (hidden segment cache). */
+    uint16_t selector = base ? CIUKI_W32_FS_SELECTOR : SEL_KDATA;
+    __asm__ volatile("mov %0, %%fs" :: "r"(selector) : "memory");
+    if (!base) memset(&gdt[CIUKI_W32_FS_INDEX], 0, sizeof(gdt[0]));
 }
 
 void df_tss_init(uint32_t cr3)

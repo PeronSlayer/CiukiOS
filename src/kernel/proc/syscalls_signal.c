@@ -66,6 +66,9 @@ bool proc_signal_syscall(struct trap_frame *tf)
     struct process *p = proc_current();
     if (!p)
         return false;
+    if (p->personality == PROC_WIN32 && (tf->eax == CIUKI_SYS_SIGACTION || tf->eax == CIUKI_SYS_SIGRETURN)) {
+        tf->eax = (uint32_t)-EPERM; return true;
+    }
     int32_t result;
     switch (tf->eax) {
     case CIUKI_SYS_SIGACTION: result = proc_sigaction(tf->ebx, tf->ecx, tf->edx); break;

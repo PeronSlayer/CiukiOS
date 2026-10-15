@@ -486,3 +486,6 @@ clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -I 
     "$root/tests/host/opl3_ref_test.cpp" "$out/dbopl/dbopl.o" "$out/dbopl/opl3_port.o" -o "$out/opl3_ref_test"
 "$out/opl3_ref_test"
 python3 "$root/tests/host/test_opl3_tables.py"
+
+# F5 personality mechanisms, fixture parity and core selector wiring.
+python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_core.py

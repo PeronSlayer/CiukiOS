@@ -152,7 +152,7 @@ struct ua_extent *ua_find(const struct uaddr *u, uint32_t va)
 
 static bool arena(const struct ua_extent *e)
 {
-    return e->base >= CIUKI_MMAP_BASE && e->end <= CIUKI_MMAP_LIMIT;
+    return e->kind != UA_W32 && e->base >= CIUKI_MMAP_BASE && e->end <= CIUKI_MMAP_LIMIT;
 }
 
 static bool vacant(const struct uaddr *u, uint32_t base, uint32_t end)
@@ -167,12 +167,13 @@ int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
               uint32_t maximum, enum ua_kind kind, uint32_t owner)
 {
     uint32_t end;
-    int err = ua_protection(prot);
+    int err = u->win32 && !(prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ? 0 : ua_protection(prot);
     if (err)
         return err;
-    if (!span(base, bytes, &end) || base < CIUKI_IMAGE_BASE || !vacant(u, base, end))
+    if (!span(base, bytes, &end) || base < (u->win32 ? CIUKI_W32_LOW : CIUKI_IMAGE_BASE) ||
+        (u->win32 && end > CIUKI_W32_SHARED + PAGE_SIZE) || !vacant(u, base, end))
         return -EINVAL;
-    bool in_arena = base >= CIUKI_MMAP_BASE && end <= CIUKI_MMAP_LIMIT;
+    bool in_arena = kind != UA_W32 && base >= CIUKI_MMAP_BASE && end <= CIUKI_MMAP_LIMIT;
     if ((in_arena && u->arena_extents == CIUKI_MAPPING_MAX) || next_generation == UINT64_MAX)
         return -ENOMEM;
     struct ua_extent *e = kzalloc(sizeof(*e));
@@ -216,6 +217,7 @@ static uint32_t first_fit(const struct uaddr *u, uint32_t bytes)
 
 int32_t ua_mmap(struct uaddr *u, const struct ciuki_mmap_args *a)
 {
+    if (u->win32) return -EPERM;
     uint32_t known = MAP_PRIVATE | MAP_SHARED | MAP_FIXED | MAP_ANONYMOUS;
     if (a->size != sizeof(*a) || (a->flags & ~known) || !a->length ||
         a->length > UINT32_MAX - (PAGE_SIZE - 1) ||
@@ -342,7 +344,7 @@ int ua_mprotect(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot)
     uint32_t end;
     if (!span(base, bytes, &end) || base < CIUKI_IMAGE_BASE)
         return -EINVAL;
-    int err = ua_protection(prot);
+    int err = u->win32 && !(prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) ? 0 : ua_protection(prot);
     if (err)
         return err;
     if (pinned(u, base, end) || end > CIUKI_MAIN_STACK_RESERVATION_BASE)
@@ -386,7 +388,7 @@ bool ua_range(const struct uaddr *u, uint32_t va, uint32_t bytes, uint32_t prot)
 {
     if (!bytes)
         return true;
-    if (va < CIUKI_IMAGE_BASE || va >= CIUKI_MAIN_STACK_LIMIT ||
+    if (va < (u->win32 ? CIUKI_W32_LOW : CIUKI_IMAGE_BASE) || va >= CIUKI_MAIN_STACK_LIMIT ||
         bytes > CIUKI_MAIN_STACK_LIMIT - va)
         return false;
     uint32_t end = va + bytes;
@@ -433,7 +435,7 @@ void ua_cancel_pins(struct uaddr *u, const struct task *task)
 
 static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t bytes, bool write)
 {
-    if (va < CIUKI_IMAGE_BASE || va >= CIUKI_MAIN_STACK_LIMIT ||
+    if (va < (u->win32 ? CIUKI_W32_LOW : CIUKI_IMAGE_BASE) || va >= CIUKI_MAIN_STACK_LIMIT ||
         bytes > CIUKI_MAIN_STACK_LIMIT - va)
         return -EFAULT;
     uint8_t *b = buffer;
@@ -478,6 +480,7 @@ static void zero_range(struct uaddr *u, uint32_t base, uint32_t end)
 
 int32_t ua_brk(struct uaddr *u, uint32_t end)
 {
+    if (u->win32) return -EPERM;
     if (!end)
         return (int32_t)u->brk;
     if (end < u->heap_base || end >= CIUKI_HEAP_LIMIT)
@@ -536,7 +539,7 @@ void ua_destroy(struct uaddr *u)
         panic("uaddr: destroy with live pins");
     if (read_cr3() == u->as.pd_phys)
         panic("uaddr: destroy active process");
-    remove_range(u, CIUKI_IMAGE_BASE, CIUKI_MAIN_STACK_LIMIT);
+    remove_range(u, u->win32 ? CIUKI_W32_LOW : CIUKI_IMAGE_BASE, CIUKI_MAIN_STACK_LIMIT);
     as_destroy(&u->as);
 }
 
@@ -583,4 +586,82 @@ int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
     protect_pages(u, base, base + bytes, prot);
     e->prot = prot;
     return (int32_t)base;
+}
+
+/* The Win32 layer owns allocation identity; this backend reuses the native
+ * eager page accounting and rollback. No metadata/backing is published until
+ * every allocation succeeds. Existing PTE_NEW bits are cleared at publication. */
+static void w32_coalesce(struct uaddr *u)
+{
+    for (struct ua_extent *e = u->head; e && e->next;) {
+        struct ua_extent *n = e->next;
+        if (e->kind == UA_W32 && n->kind == UA_W32 && e->end == n->base &&
+            e->w32_allocation == n->w32_allocation && e->w32_state == n->w32_state &&
+            e->w32_protect == n->w32_protect && e->owner == n->owner &&
+            e->w32_locked == n->w32_locked && e->w32_type == n->w32_type &&
+            e->generation == n->generation) {
+            e->end = n->end; e->next = n->next; u->extents--; kfree(n);
+        } else e = n;
+    }
+}
+
+int ua_w32_change(struct uaddr *u, uint32_t base, uint32_t bytes,
+                  uint32_t operation, uint32_t protect, uint32_t native, bool internal)
+{
+    uint32_t end;
+    if (!u->win32 || !span(base, bytes, &end) || end > CIUKI_W32_SHARED + PAGE_SIZE)
+        return -EINVAL;
+    if (pinned(u, base, end)) return -EBUSY;
+    struct ua_extent *first = ua_find(u, base), *last = ua_find(u, end - 1);
+    if (!first || first->kind != UA_W32) return -EEXIST;
+    for (uint32_t va = base; va < end;) {
+        struct ua_extent *e = ua_find(u, va);
+        if (!e || e->kind != UA_W32 || e->w32_allocation != first->w32_allocation)
+            return -EEXIST;
+        if (e->w32_locked && !internal) return -EACCES;
+        if (operation == W32_VM_PROTECT && e->w32_state != W32_MEM_COMMIT)
+            return -EEXIST;
+        va = e->end < end ? e->end : end;
+    }
+    struct ua_extent *l, *r;
+    int err = prepare_split(u, base, end, false, &l, &r);
+    if (err) return err;
+    struct ua_pin transaction = { .base = first->base, .end = last->end,
+        .mutation = true, .next = u->pins };
+    u->pins = &transaction;
+    if (operation == W32_VM_ALLOC) err = reserve_pages(u, base, end);
+    ua_unpin(u, &transaction);
+    if (err) { kfree(l); kfree(r); return err; }
+    split(u, base, l); split(u, end, r);
+    for (struct ua_extent *e = u->head; e; e = e->next) {
+        if (e->base < base || e->end > end) continue;
+        if (operation == W32_VM_FREE) {
+            ww_cancel(u->identity, e->generation, e->base, e->end);
+            free_pages(u, e->base, e->end, false);
+            e->w32_state = W32_MEM_RESERVE; e->w32_protect = 0; e->prot = 0;
+        } else if (operation == W32_VM_PROTECT || e->w32_state != W32_MEM_COMMIT) {
+            protect_pages(u, e->base, e->end, native);
+            e->w32_state = W32_MEM_COMMIT; e->w32_protect = protect; e->prot = native;
+        } else {
+            /* Commit of an already committed page preserves its protection. */
+            protect_pages(u, e->base, e->end, e->prot);
+        }
+    }
+    w32_coalesce(u);
+    return 0;
+}
+
+int ua_w32_release(struct uaddr *u, uint32_t base, bool internal)
+{
+    struct ua_extent *e = ua_find(u, base);
+    if (!e || e->kind != UA_W32 || e->w32_allocation != base || e->base != base)
+        return -EEXIST;
+    uint32_t end = base;
+    for (struct ua_extent *it = e; it && it->w32_allocation == base; it = it->next) {
+        if (!internal && (it->w32_locked || it->w32_type != W32_MEM_PRIVATE)) return -EACCES;
+        end = it->end;
+    }
+    if (pinned(u, base, end)) return -EBUSY;
+    remove_range(u, base, end);
+    return 0;
 }

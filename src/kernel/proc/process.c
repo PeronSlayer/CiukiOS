@@ -470,10 +470,12 @@ int proc_waitpid(int32_t pid, uint32_t status_va, uint32_t options)
     return err;
 }
 
+extern void arch_w32_fs_switch(uint32_t base) __attribute__((weak));
 void proc_task_switch(struct task *next)
 {
     struct proc_thread *t = proc_thread_for(next);
-    arch_tls_switch(t ? t->tls : 0, t != 0);
+    arch_tls_switch(t ? t->tls : 0, t && t->process->personality == PROC_NATIVE);
+    if (arch_w32_fs_switch) arch_w32_fs_switch(t ? t->teb : 0);
 }
 
 static void supervisor_main(void *arg)
@@ -505,4 +507,14 @@ void proc_init(void)
     if (!supervisor_task)
         panic("proc: cannot create PID 1 supervisor");
     task_start(supervisor_task);
+}
+
+extern void w32_shared_update(struct process *) __attribute__((weak));
+void w32_shared_tick(void)
+{
+    if (!w32_shared_update) return;
+    for (unsigned i = 1; i < CIUKI_PROCESS_MAX; i++) {
+        struct process *p = processes[i];
+        if (p && p->state == PROC_LIVE && p->personality == PROC_WIN32) w32_shared_update(p);
+    }
 }

@@ -48,6 +48,10 @@ SECTIONS
         KEEP(*(.f4probes))
         __f4probes_end = .;
         . = ALIGN(4);
+        __f5probes_start = .;
+        KEEP(*(.f5probes))
+        __f5probes_end = .;
+        . = ALIGN(4);
         __f6probes_start = .;
         KEEP(*(.f6probes))
         __f6probes_end = .;

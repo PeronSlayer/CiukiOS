@@ -42,8 +42,13 @@ selector_validate:
     jmp .prefix
 .try_f4:
     cmp byte [si+1], '4'
-    jne .try_f6
+    jne .try_f5
     mov bx, f4_probe_names
+    jmp .prefix
+.try_f5:
+    cmp byte [si+1], '5'
+    jne .try_f6
+    mov bx, f5_probe_names
     jmp .prefix
 .try_f6:
     cmp byte [si+1], '6'
@@ -709,4 +714,5 @@ menu_tick dd 0
 menu_polls dd 0
 
 f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,0
+f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,0
 f6_probe_names db 'net-arp',0,0

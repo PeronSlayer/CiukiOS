@@ -24,8 +24,12 @@ struct proc_launch {
     uint32_t volume_max, disk_max, image_max, page_faults;
     bool active, configured, damaged, finished;
 };
+enum proc_personality { PROC_NATIVE, PROC_WIN32 };
+struct w32_delivery;
 struct process {
     uint32_t pid, ppid, pgid, slot;
+    enum proc_personality personality;
+    uint32_t w32_image, w32_peb, w32_dispatcher, w32_stack_reserve, w32_stack_commit;
     enum proc_state state;
     int32_t status, raw_exit;
     uint32_t fault_vector, fault_error, fault_eip, fault_address;
@@ -49,6 +53,8 @@ struct process {
 };
 struct proc_thread {
     uint32_t tid, slot, value, tls, stack_base, stack_bytes;
+    uint32_t teb, emergency, stack_limit, stack_guard, w32_reserve;
+    struct w32_delivery *w32_delivery;
     struct process *process;
     struct process *launch_loading; /* provisional child for this thread's spawn I/O */
     struct task *task;

@@ -275,6 +275,10 @@ int32_t proc_syscall(struct trap_frame *tf)
     struct process *p = proc_current();
     if (!p)
         return -ENOSYS;                 /* F0 tasks retain their frozen interface */
+    if (p->personality == PROC_WIN32 &&
+        (tf->eax == CIUKI_SYS_MMAP || tf->eax == CIUKI_SYS_BRK ||
+         tf->eax == CIUKI_SYS_MUNMAP || tf->eax == CIUKI_SYS_MPROTECT ||
+         tf->eax == CIUKI_SYS_TLS_SET || tf->eax == CIUKI_SYS_THREAD_CREATE)) return -EPERM;
     switch (tf->eax) {
     case CIUKI_SYS_LAUNCH_MARK:
         if (tf->edi || tf->ebp) return -EINVAL;

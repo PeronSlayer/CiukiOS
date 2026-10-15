@@ -250,8 +250,10 @@ struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp)
     t->as = p->memory->as;           /* borrowed directory, never destroyed by task */
     struct trap_frame tf;
     memset(&tf, 0, sizeof(tf));
-    tf.gs = CIUKI_TLS_SELECTOR;
-    tf.fs = tf.es = tf.ds = SEL_UDATA;
+    t->win32 = p->personality == PROC_WIN32;
+    tf.gs = t->win32 ? SEL_UDATA : CIUKI_TLS_SELECTOR;
+    tf.fs = t->win32 ? CIUKI_W32_FS_SELECTOR : SEL_UDATA;
+    tf.es = tf.ds = SEL_UDATA;
     tf.eip = entry;
     tf.cs = SEL_UCODE;
     tf.eflags = CIUKI_INITIAL_EFLAGS;

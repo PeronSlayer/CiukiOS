@@ -41,6 +41,7 @@ struct task {
     uint8_t *fpu_area;             /* 16-byte aligned, 512 bytes */
     void *fpu_alloc;
     bool fpu_valid;
+    bool win32;
     int exit_code;
     uint32_t fault_vector, fault_err, fault_eip, fault_cr2;
     uint64_t wake_tick;

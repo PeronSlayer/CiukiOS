@@ -33,6 +33,15 @@ void df_tss_init(uint32_t cr3);
  * VM-local watchpoints, loaded only while that VM's worker runs. */
 #define ARCH_LDT_GDT_INDEX 8
 #define SEL_LDT 0x40
+void arch_w32_fs_switch(uint32_t base);
+/* Byte-granular DPL3 data segment, preserving the exact 8 KiB TEB limit. */
+static inline void arch_w32_fs_encode(uint8_t out[8], uint32_t base)
+{
+    out[0] = 0xff; out[1] = 0x1f;
+    out[2] = (uint8_t)base; out[3] = (uint8_t)(base >> 8);
+    out[4] = (uint8_t)(base >> 16); out[5] = 0xf2;
+    out[6] = 0x40; out[7] = (uint8_t)(base >> 24);
+}
 void arch_ldt_load(const void *base, unsigned entries);
 void arch_debug_load(const uint32_t address[4], uint32_t dr7);
 uint32_t arch_debug_take(void);          /* DR6, then cleared */
