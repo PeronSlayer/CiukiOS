@@ -426,12 +426,81 @@ static void evidence_test(void)
     CHECK(strstr(emitted,"evidence\r\n") && !strstr(emitted,"irq\r\n") && !strstr(emitted,"held\r\n"));
     puts("serial evidence: task waits for quota without UART polling/drops; IRQ and held-lock evidence drops whole without sleeping PASS");
 }
+static void ticket_tests(bool with_fifo)
+{
+    reset_uart(with_fifo);ready=false;
+    static const char first_record[]="first complete record\n";
+    static const char device_record[]="interleaved device\n";
+    static const char last_record[]="last complete record\n";
+    uint64_t first=serial_write_ticket(first_record,sizeof(first_record)-1);
+    serial_write(device_record,sizeof(device_record)-1);
+    uint64_t last=serial_write_ticket(last_record,sizeof(last_record)-1);
+    struct serial_stats snapshot;serial_snapshot(&snapshot);
+    CHECK(first==1 && last==3 && snapshot.accepted==3 && !snapshot.sent);
+    CHECK(snapshot.present && !snapshot.dropped && !lsr_reads && !tx_writes);
+    unsigned queued=snapshot.queued;
+    tick();serial_snapshot(&snapshot);
+    CHECK(!snapshot.sent && snapshot.queued==queued); /* busy UART */
+    ready=true;tick();serial_snapshot(&snapshot);
+    CHECK(!snapshot.sent && snapshot.queued<queued); /* partial record */
+    while (snapshot.sent<first) { tick();serial_snapshot(&snapshot); }
+    CHECK(snapshot.sent==first && tx_writes==sizeof(first_record));
+    drain_uart();serial_snapshot(&snapshot);
+    CHECK(snapshot.sent==last && snapshot.accepted==last && !snapshot.queued && !snapshot.dropped);
+    CHECK(!strcmp(emitted,"first complete record\r\ninterleaved device\r\nlast complete record\r\n"));
+    CHECK(!serial_write_ticket("",0));
+    CHECK(!serial_write_ticket("x",SERIAL_RECORD_MAX+1u));
+    serial_snapshot(&snapshot);
+    CHECK(snapshot.accepted==last && snapshot.sent==last && snapshot.dropped==1);
+    drain_uart();serial_snapshot(&snapshot);
+    CHECK(snapshot.accepted==4 && snapshot.sent==4); /* notice is a record */
+    uint64_t next=serial_write_ticket("after notice\n",13);
+    CHECK(next==5);tick();serial_snapshot(&snapshot);CHECK(snapshot.sent==4);
+    drain_uart();serial_snapshot(&snapshot);CHECK(snapshot.sent==next);
+    printf("serial tickets %s: partial/busy records, interleaved producer, whole refusal and notice watermark PASS\n",
+           with_fifo ? "16550":"16450");
+
+    /* The actual page format exceeds the empty 38400-baud quota window.
+     * Refused records have no ticket and never appear as sent page records. */
+    reset_uart(with_fifo);timed=true;ready=false;
+    uint64_t tickets[100];unsigned accepted=0,length=0;
+    char expected[4096];
+    for (unsigned i=0;i<100;i++) {
+        char record[64];int n=ksnprintf(record,sizeof(record),"[hwcheck] serial record=%03u/100\n",i+1);
+        tickets[i]=serial_write_ticket(record,(size_t)n);
+        if (tickets[i]) {
+            accepted++;
+            memcpy(expected+length,record,(size_t)n-1);length+=(unsigned)n-1;
+            expected[length++]='\r';expected[length++]='\n';
+        }
+    }
+    serial_snapshot(&snapshot);
+    CHECK(accepted==85 && snapshot.accepted==85 && snapshot.dropped==15 && !snapshot.sent);
+    CHECK(snapshot.queued==2805 && uart_admitted==2805 && !lsr_reads && !tx_writes);
+    length+=(unsigned)snprintf(expected+length,sizeof(expected)-length,"[serial] dropped=15\r\n");
+    drain_uart();serial_snapshot(&snapshot);
+    unsigned sent=0;
+    for (unsigned i=0;i<100;i++) if (tickets[i] && tickets[i]<=snapshot.sent) sent++;
+    CHECK(sent==accepted && snapshot.accepted==86 && snapshot.sent==86 && !snapshot.queued);
+    CHECK(snapshot.dropped==15 && !overflows && !lsr_if_off);
+    CHECK(emitted_count==length && !memcmp(emitted,expected,length));
+    printf("serial hardware-check %s: requested=100 accepted=%u whole_sent=%u dropped=%u queued=%u, quota respected PASS\n",
+           with_fifo ? "16550":"16450",accepted,sent,snapshot.dropped,snapshot.queued);
+}
 int main(void)
 {
     line_rate_case(true,0);line_rate_case(false,0);
     line_rate_case(true,1);line_rate_case(false,2);line_rate_case(true,3);
     for (unsigned kind=0;kind<2;kind++) {
         admission_tests(kind);preemption_tests(kind);concurrent_tests(kind);panic_tests(kind);
+        ticket_tests(kind);
+        reset_uart(kind);ready=false;
+        unsigned reads=lsr_reads;
+        char source[]="[cpu] queued diagnostic\n";
+        serial_write(source,sizeof(source)-1);
+        CHECK(lsr_reads==reads && !tx_writes && uart_used==sizeof(source));
+        memset(source,'X',sizeof(source)-1);drain_uart();
+        CHECK(!strcmp(emitted,"[cpu] queued diagnostic\r\n"));
     }
     slow_port_test();evidence_test();
     reset_uart(true);present=false;serial_init(0x3F8,3);

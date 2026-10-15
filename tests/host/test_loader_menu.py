@@ -143,6 +143,18 @@ class LoaderMenuTests(unittest.TestCase):
         self.assertTrue(menu.safe)
         self.assertNotIn('L:SAFE=1', menu.output)
 
+    def test_hardware_check_replaces_cfg_preserves_safe_and_fw_priority(self):
+        for key in ('h','H'):
+            menu=BootMenu(safe=True,request='f0:core run=12345678')
+            menu.poll(1,key)
+            self.assertEqual(menu.state,'done')
+            self.assertTrue(menu.hardware_check and menu.verbose and menu.safe)
+            self.assertIsNone(menu.request)
+            self.assertFalse(menu.screen_quiet)
+        menu=BootMenu(request='f0:core run=12345678',source='fw_cfg')
+        menu.poll(1,'H')
+        self.assertFalse(menu.hardware_check)
+
     def test_production_safe_stage_returns_through_full_deadline_restart(self):
         source = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
         menu = source.split('boot_menu:', 1)[1].split('source_menu db', 1)[0]

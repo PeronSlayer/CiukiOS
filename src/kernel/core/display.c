@@ -15,6 +15,8 @@ static uint32_t changes;
 static uint64_t frame_deadline;
 static struct fb_device previous;
 static struct task *watchdog;
+static bool check_display;
+static struct fb_device check_previous;
 
 static bool checkpoint_cancel(void *arg) { (void)arg; return false; }
 static void checkpoint_pause(void *arg) { (void)arg; task_sleep_ms(1); }
@@ -100,6 +102,37 @@ static int restore(void)
     int e = apply(previous.mode_id, &restored);
     if (!e) changed();
     log_mode(previous.mode_id, e);
+    return e;
+}
+int display_check_begin(uint16_t id)
+{
+    if (!(g_boot.flags & CBI_F_HW_CHECK) || grants_display_pid()) return -EPERM;
+    if (check_display || switching || fullscreen_display || awaiting_frame) return -EBUSY;
+    if (!listed(id) || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
+    check_previous = *fbdev_get();
+    int e = biosvm_video_prepare();
+    if (e) return e;
+    e = fbdev_change_begin();
+    if (e) return e;
+    struct fb_device next;
+    e = apply(id, &next);
+    check_display = true; /* includes restoration of a failed mode set */
+    fbdev_change_end();
+    if (e) { display_check_end(); return e; }
+    changed(); return 0;
+}
+int display_check_end(void)
+{
+    if (!check_display) return 0;
+    int e = fbdev_change_begin();
+    if (e) return e;
+    struct fb_device restored;
+    e = apply(check_previous.mode_id, &restored);
+    if (!e && (restored.width != check_previous.width || restored.height != check_previous.height ||
+        restored.pitch != check_previous.pitch || restored.bpp != check_previous.bpp ||
+        restored.phys != check_previous.phys)) e = -EIO;
+    fbdev_change_end();
+    if (!e) { check_display = false; changed(); }
     return e;
 }
 

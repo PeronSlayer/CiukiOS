@@ -1,6 +1,7 @@
 /* On-disk rules researched in fatgen103; see tests/host/fs/VALIDATION.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "fat.h"
+#include <ciuki/hardware_check.h>
 #include "../include/ciuki/fat_native.h"
 bool fat_native_ready(void) { return true; }
 static uint32_t mask(struct fat_volume *v) { return v->type==12 ? 0xfff : v->type==16 ? 0xffff : 0xfffffff; }
@@ -71,6 +72,7 @@ static int prepare_read(struct fat_volume *v, uint64_t s, void *b)
     return 0;
 }
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
+    if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
     if (file_read_cancelled && file_read_cancelled()) return -4; /* EINTR, before issuance */
     if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
     int e=v->preparing ? prepare_read(v,s,b) : cache_read(v->cache,v->dev,v->start+s,b);

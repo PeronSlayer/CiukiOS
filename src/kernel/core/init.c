@@ -150,5 +150,6 @@ void drivers_init(void)
     if (net_init) net_init();
     if (usb_init) usb_init();
     if (native_files) klog("[files] initialization failed: %d", native_files);
-    if (fbdev_accel_schedule) fbdev_accel_schedule(&storage_get()->vfs);
+    if (fbdev_accel_schedule && !(g_boot.flags & CBI_F_HW_CHECK))
+        fbdev_accel_schedule(&storage_get()->vfs);
 }

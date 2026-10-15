@@ -48,9 +48,24 @@ struct vfs;
 int savage2d_attempt_begin(struct vfs *);
 int savage2d_attempt_end(struct vfs *);
 int savage2d_attempt_failed(struct vfs *);
+int savage2d_check_begin(struct vfs *, bool *retained_marker);
 void savage2d_quarantine(const char *reason);
 /* Final idle proof once; return a rejecting guard only for an unsafe writer. */
 const struct accel_ops *savage2d_fallback_ops(void);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset);
+#define SAVAGE_CONFIGS 96u
+#define SAVAGE_SWEEP_BYTES (256u * 1024u)
+struct savage_config { uint32_t descriptor; uint8_t depth; };
+bool savage2d_config(unsigned, const struct fb_device *, struct savage_config *);
+struct savage_sweep_result {
+    unsigned tried, passed;
+    int first, error;
+    bool restored;
+};
+typedef void (*savage_sweep_line)(void *, const char *);
+int savage2d_sweep_model(struct savage2d *, const struct savage_io *, const struct fb_device *,
+    bool supersavage, uint8_t *scratch, uint32_t offset, uint64_t deadline_us,
+    savage_sweep_line, void *, struct savage_sweep_result *);
+int savage2d_hardware_sweep(uint64_t deadline_ms, savage_sweep_line, void *, struct savage_sweep_result *);
 #endif

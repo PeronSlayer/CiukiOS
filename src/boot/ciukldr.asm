@@ -95,7 +95,6 @@ sector times 512 db 0
 cluster times 4096 db 0
 elf_header times 52 db 0
 ph_table times MAX_PH*32 db 0
-cfg_buffer times 512 db 0
 fw_file times 64 db 0
 mode_buffer times 256 db 0
 mode_list times 512 dw 0
@@ -142,4 +141,7 @@ mode_scores resw 512
 ; before selector_validate/accept read it. Keep this scratch out of the fixed
 ; 48-sector image so another runtime selector needs no larger boot extent.
 selector_buffer resb 65
+; ELF segment bounce buffer: file_read initializes exactly copy_count bytes
+; before the copy loop consumes them. Keep scratch out of the 48-sector file.
+cfg_buffer resb 512
 loader_bss_end:

@@ -43,6 +43,8 @@ bool serial_present(void);
  * CRLF expansion needs at most twice this many bytes in the byte ring. */
 #define SERIAL_RECORD_MAX 2048u
 void serial_write(const char *s, size_t n); /* whole drop on overflow/oversize/rate */
+/* Same queue/quota; zero refused, sent >= ticket means final byte submitted. */
+uint64_t serial_write_ticket(const char *s, size_t n);
 /* Wait for this many wire bytes only in preemptible task context. Returns
  * saved EFLAGS with IF clear: caller restores after formatting/publication,
  * so evidence sequence allocation happens AFTER any wait. Weak for fixtures. */
@@ -50,6 +52,9 @@ uint32_t serial_evidence_begin(size_t wire_bytes) __attribute__((weak));
 void serial_buffered(bool enabled);       /* compatibility: all normal logs queue */
 void serial_writer_init(void);            /* scheduler init, once */
 uint32_t serial_dropped(void);
+/* Counters include drop notices; queued counts expanded wire bytes. */
+struct serial_stats { uint64_t accepted, sent; uint32_t queued, dropped; bool present; };
+void serial_snapshot(struct serial_stats *);
 void serial_panic(void);                  /* IF clear: drain, then synchronous records */
 void serial_tick(void);                   /* compatibility: IRQs never drain */
 void console_init_text(void);
@@ -63,6 +68,7 @@ void console_reclaim(void);               /* panic: the console draws again */
 void console_set_quiet(bool on);          /* quiet boot: history and serial only */
 bool console_quiet(void);
 void console_wake(void);                  /* quiet boot failure: draw from history */
+void console_pin_page(const char *);      /* pinned text until panic/reboot; caller retains storage */
 void klog(const char *fmt, ...);          /* serial + screen, plain log line */
 void klog_periodic(const char *fmt, ...); /* same sinks, disk runtime ring only */
 void kputs_raw(const char *s);            /* panic-safe output */

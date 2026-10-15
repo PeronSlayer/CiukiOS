@@ -1,6 +1,7 @@
 /* USB MSC 1.0 BOT, transparent SCSI LUN zero. No issued write is retried.
  * See docs/design/usb-contract.md. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/hardware_check.h>
 #include <ciuki/usb.h>
 #include <ciuki/storage.h>
 
@@ -29,6 +30,8 @@ static uint64_t bulk_end(struct usb_device *d)
         (s->binding ? USB_BIND_BULK_MS : USB_BULK_TIMEOUT_MS);
     if (s->binding && (int64_t)(end-(s->bind_deadline-USB_BIND_FINISH_MS))>0)
         end=s->bind_deadline-USB_BIND_FINISH_MS;
+    uint64_t check=hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
+    if (check && check<end) end=check;
     return end;
 }
 static void bulk_packet_record(struct usb_device *d)
@@ -297,6 +300,8 @@ static int flush_locked(struct usb_device *d)
 { uint8_t cdb[10]={0x35}; return command(d,cdb,10,false,0,0); }
 static bool block_take(struct usb_device *d)
 {
+    uint64_t check=hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
+    if (check) return usb_host_take_until(d->host,check);
     if (!d->storage.binding) { usb_host_take(d->host); return true; }
     return usb_host_take_until(d->host,d->storage.bind_deadline-USB_BIND_FINISH_MS);
 }

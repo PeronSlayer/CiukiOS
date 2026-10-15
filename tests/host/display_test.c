@@ -29,7 +29,7 @@ static unsigned log_syncs;
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
 int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
 { assert(cancel && pause && !cancel(arg)); log_syncs++; return log_sync_error; }
-static bool owner = true, busy, fail_firmware, fail_restore, bad_info, fail_window;
+static bool owner = true, busy, fail_firmware, fail_restore, bad_info, fail_window, check_boot;
 static uint8_t *aperture, *window;
 static uint32_t window_size;
 static uint16_t called[16];
@@ -117,7 +117,7 @@ int biosvm_video_fullscreen_end(uint16_t mode,uint8_t info[256]) {
 uint32_t supervisor_desktop_pid(void) { return 2; }
 bool grants_display_owner(const struct process *p) { return owner && p == &desktop; }
 bool grants_display_busy(void) { return busy; }
-uint32_t grants_display_pid(void) { return desktop.pid; }
+uint32_t grants_display_pid(void) { return check_boot ? 0 : desktop.pid; }
 static const struct pci_func gpu = {.vendor = 0x5333, .device = 0x8C2E, .class_code = 3};
 static const struct pci_func standard_gpu = {.vendor=0x1234,.device=0x1111,.class_code=3};
 unsigned pci_count(void) { return 1; }
@@ -145,7 +145,7 @@ static void fixture(void)
     free(aperture); free(window); aperture = window = 0;
     fullscreen_display=suspended=fs_begin_failure=fs_end_failure=false;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
-    initialized = changing = switching = awaiting_frame = false;
+    initialized = changing = switching = awaiting_frame = check_display = check_boot = false;
     acceleration=0; accel_ports_owned=false; accel_stops=0;
     change_window = 0; change_capacity = changes = drawing = 0; watchdog = 0;
     resource_count = generation = 1; sequence_count = switches = copies = frames = 0;
@@ -277,6 +277,15 @@ static void worker_tests(void)
 }
 int main(void)
 {
+    fixture(); assert(display_check_begin(0x111)==-EPERM && !switches);
+    g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
+    assert(!display_check_begin(0x111) && fbdev_get()->bpp==16);
+    assert(!display_check_end() && fbdev_get()->mode_id==0x118 && fbdev_get()->bpp==32);
+    assert(!check_display && !switching && !awaiting_frame);
+    fixture(); g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
+    fail_firmware=fail_restore=true;
+    assert(display_check_begin(0x111)==-EIO && check_display && !fbdev_get()->present);
+    puts("PASS hardware display check: H-only access, no owner, 16bpp switch and verified original mode restore");
     worker_tests();
     fullscreen_tests(); query_tests(); switch_tests(); watchdog_tests(); free(aperture); free(window);
     puts("display host tests: PASS"); return 0;

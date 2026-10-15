@@ -413,9 +413,10 @@ static int16_t boot_sample(unsigned frame)
     return sample;
 }
 static struct audio_frame boot_pcm[AUDIO_QUANTUM];
-static void audio_boot_tone(void)
+int audio_check_tone(uint32_t *frames)
 {
-    if (!audio_boot_tone_enabled(g_boot.flags) || !audio.ready) return;
+    if (frames) *frames = 0;
+    if (!audio.ready) return -ENODEV;
     /* The boot tone uses the same configured master as every UI sound. */
     int err = 0;
     struct audio_stream *s = 0;
@@ -445,6 +446,13 @@ static void audio_boot_tone(void)
     if (s) audio_stream_close(s);
     playback_log(err != 0);
     klog("[audio] boot_tone=1khz frames=%u result=%d restore=0", sent, err);
+    if (frames) *frames = sent;
+    return err;
+}
+static void audio_boot_tone(void)
+{
+    if (audio_boot_tone_enabled(g_boot.flags) && !(g_boot.flags & CBI_F_HW_CHECK))
+        (void)audio_check_tone(0);
 }
 static void audio_init_log(int err)
 {

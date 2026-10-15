@@ -80,6 +80,7 @@ void audio_master_refresh(void); /* EC worker: apply without storage I/O */
 void audio_settings_load(struct vfs *);
 bool audio_registry_load(struct vfs *, struct ciuki_mixer_master *);
 void audio_diagnostics(struct ciuki_audio_diagnostics *);
+int audio_check_tone(uint32_t *frames);
 static inline bool audio_boot_tone_enabled(uint32_t flags)
 {
     return (flags & CBI_F_VERBOSE) && !(flags & (CBI_F_SAFE_MODE | CBI_F_TEST_REQUEST));

@@ -97,10 +97,10 @@ static long long parser_signed(const char *s, char **end, int base)
 #define snprintf ksnprintf
 #include "../../../sdk/libreg/registry.c"
 
-bool audio_registry_load(struct vfs *v, struct ciuki_mixer_master *m)
+bool kernel_registry_int(struct vfs *v, const char *key_name, const char *value_name, int32_t *out)
 {
     static struct vfs_table table;
-    if (!v || !v->volumes[2] || vfs_table_init(v, &table, 2)) return false;
+    if (!v || !key_name || !value_name || !out || !v->volumes[2] || vfs_table_init(v, &table, 2)) return false;
     /* Do not read the canonical root in the middle of recovery. AUDIO.CFG
      * remains the durable fallback until libreg can recover the root. */
     int fd = vfs_open(&table, "C:\\System\\Registry\\System.reg.txn", VFS_READ, VFS_DENY_NONE, 0);
@@ -116,15 +116,19 @@ bool audio_registry_load(struct vfs *v, struct ciuki_mixer_master *m)
     if (text && !vfs_read(&table, fd, text, capacity, &n) && n < capacity)
         tree = reg_parse("System", text, n);
     if (tree) {
-        struct rk *key = reg_key(tree, CIUKI_MASTER_KEY);
-        struct rv *value = key ? value_find(key, CIUKI_MASTER_VALUE) : 0;
-        unsigned l, r, mute;
-        if (value && value->type == REG_INT32 && ciuki_master_unpack(*(int32_t *)value->data, &l, &r, &mute)) {
-            m->left = l; m->right = r; m->mute = mute;
-            m->save_state = CIUKI_MIXER_SAVED; m->save_error = 0; ok = true;
-        }
+        struct rk *key = reg_key(tree, key_name);
+        struct rv *value = key ? value_find(key, value_name) : 0;
+        if (value && value->type == REG_INT32) { *out = *(int32_t *)value->data; ok = true; }
     }
     reg_tree_free(tree); parser_free(text);
     if (fd >= 0) vfs_close(&table, fd);
     vfs_table_destroy(&table); return ok;
+}
+bool audio_registry_load(struct vfs *v, struct ciuki_mixer_master *m)
+{
+    int32_t packed; unsigned l, r, mute;
+    if (!kernel_registry_int(v, CIUKI_MASTER_KEY, CIUKI_MASTER_VALUE, &packed) ||
+        !ciuki_master_unpack(packed, &l, &r, &mute)) return false;
+    m->left = l; m->right = r; m->mute = mute;
+    m->save_state = CIUKI_MIXER_SAVED; m->save_error = 0; return true;
 }

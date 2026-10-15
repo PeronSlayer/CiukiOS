@@ -665,3 +665,13 @@ in bounds; fills/patterns clip. Rectangle operations work in software on
 other cards. Unsupported cursor operations return EOPNOTSUPP so the desktop
 keeps its software pointer. Releasing the last grant hides a native cursor.
 Existing syscall numbers and wire records are unchanged.
+
+## f0-26: bounded configuration sweep
+
+[The hardware-check contract](hardware-check.md) records the reference
+comparison, interpretation of MM8136/CR45, complete 96-case matrix per depth,
+off-screen save/restore, runtime `EngineConfig` registry selection and the
+host evidence boundary. H may use a retained earlier-boot attempt marker as
+its durable guard, preserving that marker even on a passing diagnostic. It
+never lifts a current-boot quarantine. Production activation continues to
+require its ordinary attempt-marker gate and exact marker readback.

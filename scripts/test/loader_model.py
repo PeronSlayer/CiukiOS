@@ -87,14 +87,14 @@ class BootMenu:
     loader does. Configured requests are already validated by the cfg parser;
     validated fw_cfg bypasses the menu. No firmware or disk access occurs here.
     `output` is the serial copy; `screen_quiet` models the quiet normal boot
-    (docs/boot.md): only MENU_HINT on screen until S, L or P is pressed.
+    (docs/boot.md): only MENU_HINT on screen until S, L, H or P is pressed.
     """
     DAY_TICKS = 0x1800b0
     MENU_TICKS = 55
     ENTRY_TICKS = 548
     POLL_LIMIT = 0x2000000
     SAFE_CONFIRMATION = 'Safe mode selected; P for a probe, or wait'
-    MENU_HINT = 'Press S for safe mode, L for serial log'
+    MENU_HINT = 'Press S for safe mode, L for serial log, H for Hardware check'
 
     def __init__(self, tick=0, safe=False, serial=True, request=None, source='cfg'):
         self.safe = safe
@@ -106,6 +106,7 @@ class BootMenu:
         self.output = []
         self.state = 'menu'
         self.verbose = False
+        self.hardware_check = False
         self.screen_quiet = False
         if request is not None and source == 'fw_cfg':
             selected = selector(request, source, validated_fw_cfg=True)
@@ -154,6 +155,12 @@ class BootMenu:
                     self.screen_quiet = False
                     self.state = 'entry'
                     self._restart(tick, self.ENTRY_TICKS)
+                    return
+                if key == 'h':
+                    self._cancel_cfg()
+                    self.hardware_check = self.verbose = True
+                    self.screen_quiet = False
+                    self._finish()
                     return
                 if key == 'l':
                     self.serial = not self.serial

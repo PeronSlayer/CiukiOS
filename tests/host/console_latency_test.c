@@ -53,7 +53,12 @@ int main(void)
     console_display_owned(true);old=claims;
     console_write("owned\n",6);g_ticks=300;console_service();CHECK(claims==old);
     console_display_owned(false);take_display=true;console_service();CHECK(claims==old+1 && display_owned);
-    old=claims;console_reclaim();console_write("panic\n",6);CHECK(claims==old+rows);
+    take_display=false;console_display_owned(false);g_ticks=400;
+    console_pin_page("Hardware check complete\nPASS timer\n");
+    console_service();CHECK(pinned_page && !repaint_pending);
+    console_write("background log\n",15);g_ticks=500;console_service();
+    CHECK(pinned_page && !repaint_pending); /* background records do not displace results */
+    old=claims;console_reclaim();console_write("panic\n",6);CHECK(claims==old+rows && !pinned_page);
     CHECK(flags==0x200);
     puts("console latency: deferred/coalesced 10 Hz rows, scroll moves + new rows only, IF enabled, grant mid-paint and panic PASS");
 }
