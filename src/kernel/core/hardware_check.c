@@ -95,8 +95,32 @@ static void usb_storage_check(uint64_t until,struct hw_check_result *out)
     ksnprintf(out->detail,sizeof(out->detail),"drive=%c mounted=1 bytes=%u ms=%llu hash=%08x error=%d",
         'A'+vol->drive,bytes,check_now(0)-start,hash,e);
 }
-static void input_window(bool mouse,struct hw_check_result *out)
+static bool usb_mouse_ready(void)
 {
+    for (unsigned i=0;i<usb_count();i++) {
+        const struct usb_host *h=usb_get(i);
+        for (unsigned j=0;j<h->device_count;j++) {
+            const struct usb_device *d=&h->devices[j];
+            if (!d->present || d->quarantined) continue;
+            for (unsigned k=0;k<USB_HID_MAX;k++)
+                if (d->hid[k].protocol==2 && d->hid[k].endpoint && d->hid[k].active) return true;
+        }
+    }
+    return false;
+}
+static void input_window(bool mouse,uint64_t until,struct hw_check_result *out)
+{
+    uint64_t start=check_now(0);
+    if (mouse && usb_count()) {
+        /* The ordinary USB owner may still be enumerating the receiver.
+         * Leave five seconds for live events and two for reporting/cleanup. */
+        uint64_t wait=start+8000;
+        uint64_t budget=until>7000 ? until-7000 : 0;
+        if (wait>budget) wait=budget;
+        page_line(0,"Waiting for USB mouse enumeration (up to 8 s)");
+        while (!usb_mouse_ready() && check_now(0)<wait) task_sleep_ms(10);
+    }
+    uint64_t enumerated=check_now(0)-start;
     unsigned interfaces=0, bad=0;
     if (mouse) for (unsigned i=0;i<usb_count();i++) {
         const struct usb_host *h=usb_get(i);
@@ -125,7 +149,7 @@ static void input_window(bool mouse,struct hw_check_result *out)
     }
     struct i8042_stats ps2; i8042_snapshot(&ps2);
     if ((mouse && !interfaces) || (!mouse && !ps2.active && !audio.master_in_hardware)) {
-        out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"device absent"); return;
+        out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"device absent enumeration_ms=%llu",enumerated); return;
     }
     struct input_event stale;
     for (unsigned i=0;i<INPUT_CAPACITY && input_read(&stale);i++) {} /* live window starts with an empty queue */
@@ -133,6 +157,7 @@ static void input_window(bool mouse,struct hw_check_result *out)
     struct input_stats before,after; input_snapshot(&before);
     struct ciuki_mixer_master master=audio.master, last=master;
     uint64_t end=check_now(0)+5000;
+    if (end>until-500) end=until-500;
     unsigned events=0, volume=0, displayed=0;
     while (check_now(0)<end) {
         struct input_event e;
@@ -163,9 +188,9 @@ static void input_window(bool mouse,struct hw_check_result *out)
     }
     input_snapshot(&after);
     int restore=!mouse && volume ? audio_master_set(&master) : 0;
-    out->status=bad || restore || after.overflow!=before.overflow ? HW_FAIL : HW_PASS;
-    ksnprintf(out->detail,sizeof(out->detail),"ready=%u events=%u shown=%u EC=%u changes=%u lost=%llu restore=%d",
-        mouse ? interfaces : ps2.active,events,displayed,audio.master_in_hardware,volume,after.overflow-before.overflow,restore);
+    out->status=bad || restore || end<start+enumerated+5000 || after.overflow!=before.overflow ? HW_FAIL : HW_PASS;
+    ksnprintf(out->detail,sizeof(out->detail),"ready=%u enumeration_ms=%llu events=%u shown=%u EC=%u changes=%u lost=%llu restore=%d",
+        mouse ? interfaces : ps2.active,enumerated,events,displayed,audio.master_in_hardware,volume,after.overflow-before.overflow,restore);
 }
 static void timer_check(struct hw_check_result *out)
 {
@@ -223,18 +248,32 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
     page_line(0,"CR45 c0: reserved bits; cursor enable is bit 0. MM8136 07->00: unresolved; test pixels.");
     struct savage_sweep_result a,b={.first=-1};
     int e=savage2d_hardware_sweep(deadline_after_ms(3000),page_line,0,&a);
-    bool restored=a.restored, changed=false; int mode_error=0;
-    if (!e && a.restored && check_now(0)<until-8000) {
+    char stage[144];
+    ksnprintf(stage,sizeof(stage),"Savage original-depth result: bpp=%u first=%d passed=%u/%u restored=%u error=%d",
+        original.bpp,a.first,a.passed,a.tried,a.restored,e);
+    page_line(0,stage); /* publish before making any firmware request */
+    bool restored=a.restored, changed=false, sweep_started=false; int mode_error=0;
+    if (!e && a.restored && a.first>=0 && check_now(0)<until-8000) {
         uint16_t mode=0;
         for (unsigned i=0;i<g_boot.display.mode_count && i<CBI_DISPLAY_MAX;i++) {
             const struct ciuki_boot_display_mode *m=&g_boot.display.modes[i];
             if (m->width==1024 && m->height==768 && m->bpp==16 && m->linear) { mode=m->id; break; }
         }
         if (mode && mode!=original.mode_id) {
+            page_line(0,"Savage stage=16bpp-mode-set (display watchdog armed)");
             mode_error=display_check_begin(mode); changed=!mode_error;
-            if (changed) e=savage2d_hardware_sweep(deadline_after_ms(3000),page_line,0,&b);
+            if (changed) {
+                e=display_check_sweep_begin();
+                if (!e) {
+                    sweep_started=true;
+                    page_line(0,"Savage stage=16bpp-sweep");
+                    e=savage2d_hardware_sweep(deadline_after_ms(3000),page_line,0,&b);
+                    display_check_sweep_end(b.restored);
+                }
+            }
             int restore=0;
-            if (changed) restore=b.restored ? display_check_end() : -EIO;
+            page_line(0,"Savage stage=desktop-restore");
+            if (changed) restore=(!sweep_started || b.restored) ? display_check_end() : -EIO;
             else {
                 /* begin already attempted rollback on a failed mode set.
                  * Do not retry a firmware backend that may be quarantined. */
@@ -243,10 +282,11 @@ static void savage_check(uint64_t until,struct hw_check_result *out)
                     now->bpp!=original.bpp || now->phys!=original.phys) restore=-EIO;
             }
             if (restore) mode_error=restore;
-            restored=restored && (!changed || b.restored) && !restore;
+            restored=restored && (!sweep_started || b.restored) && !restore;
         } else if (original.bpp==16) b=a;
         else mode_error=-EOPNOTSUPP;
-    } else mode_error=-ETIMEDOUT;
+    } else mode_error=a.first<0 ? -EIO : -ETIMEDOUT;
+    page_line(0,restored ? "Savage stage=desktop-restored" : "Savage stage=desktop-restore-failed");
     if (restored && !retained_marker) { int clear=savage2d_attempt_end(&storage->vfs); if (clear && !e) e=clear; }
     out->status=!e && !mode_error && a.passed && b.passed && restored ? HW_PASS : HW_FAIL;
     char first_a[12],first_b[12];
@@ -276,8 +316,8 @@ static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_re
     case 0: hardware_check_ata(storage_get(),out); break;
     case 1: hardware_check_repair(storage_get(),out); break;
     case 2: usb_storage_check(until,out); break;
-    case 3: input_window(true,out); break;
-    case 4: input_window(false,out); break;
+    case 3: input_window(true,until,out); break;
+    case 4: input_window(false,until,out); break;
     case 5: timer_check(out); break;
     case 6: serial_check(until,out); break;
     case 7: savage_check(until,out); break;

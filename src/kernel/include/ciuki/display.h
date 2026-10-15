@@ -15,6 +15,10 @@ bool display_fullscreen_active(void);
 /* Boot check only, no grants/desktop; end verifies the original VBE mode. */
 int display_check_begin(uint16_t mode);
 int display_check_end(void);
+/* Pin the temporary mode while the offscreen engine owns VGA/VRAM leases.
+ * A deadline requests rollback; only a restored/idle sweep may permit it. */
+int display_check_sweep_begin(void);
+void display_check_sweep_end(bool restored);
 /* Thread context; commits the preceding transaction records on hardware. */
 int display_fullscreen_checkpoint(const char *step, int result);
 int grants_display_suspend(bool suspended);

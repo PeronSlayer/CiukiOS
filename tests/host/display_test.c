@@ -11,6 +11,9 @@
 #include <ciuki/biosvm.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/cpu.h>
+#define irq_save() 0x200u
+#define irq_restore(flags) ((void)(flags))
 
 struct ciuki_boot_info g_boot;
 struct task *g_current;
@@ -41,9 +44,9 @@ static void wr32(uint8_t *p, uint32_t v) { for (unsigned i = 0; i < 4; i++) p[i]
 static void mode_info(uint16_t id, uint8_t m[256])
 {
     memset(m, 0, 256); wr16(m, 0x91); m[24] = 1; m[27] = 6;
-    uint16_t w = id == 0x118 ? 1024 : 640, h = id == 0x118 ? 768 : 480;
+    uint16_t w = id == 0x118 || id == 0x117 ? 1024 : 640, h = id == 0x118 || id == 0x117 ? 768 : 480;
     m[25] = id == 0x118 ? 32 : 16;
-    wr16(m + 18, w); wr16(m + 20, h); wr16(m + 50, w * (m[25] / 8) + 16);
+    wr16(m + 18, w); wr16(m + 20, h); wr16(m + 50, w * (m[25] / 8) + (id==0x117 ? 0 : 16));
     wr32(m + 40, id == 0x118 ? 0xE0000000 : 0xE1000003);
     if (m[25] == 32) { m[54] = m[56] = m[58] = m[60] = 8; m[55] = 16; m[57] = 8; m[61] = 24; }
     else { m[54] = 5; m[55] = 11; m[56] = 6; m[57] = 5; m[58] = 5; }
@@ -145,7 +148,8 @@ static void fixture(void)
     free(aperture); free(window); aperture = window = 0;
     fullscreen_display=suspended=fs_begin_failure=fs_end_failure=false;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
-    initialized = changing = switching = awaiting_frame = check_display = check_boot = false;
+    initialized = changing = switching = awaiting_frame = check_display = check_boot = check_sweeping = false;
+    check_result=0; check_deadline=0;
     acceleration=0; accel_ports_owned=false; accel_stops=0;
     change_window = 0; change_capacity = changes = drawing = 0; watchdog = 0;
     resource_count = generation = 1; sequence_count = switches = copies = frames = 0;
@@ -280,11 +284,49 @@ int main(void)
     fixture(); assert(display_check_begin(0x111)==-EPERM && !switches);
     g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
     assert(!display_check_begin(0x111) && fbdev_get()->bpp==16);
+    assert(watchdog && check_display && !switching);
     assert(!display_check_end() && fbdev_get()->mode_id==0x118 && fbdev_get()->bpp==32);
     assert(!check_display && !switching && !awaiting_frame);
     fixture(); g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
+    g_boot.display.mode_count=3;
+    g_boot.display.modes[2]=(struct ciuki_boot_display_mode){0x117,1024,768,16,2048,1,0};
+    assert(!display_check_begin(0x117) && !display_check_sweep_begin());
+    assert(fbdev_get()->width==1024 && fbdev_get()->height==768 && fbdev_get()->pitch==2048 && fbdev_get()->bpp==16);
+    display_check_sweep_end(true);
+    assert(!display_check_end() && fbdev_get()->mode_id==0x118 && fbdev_get()->pitch==4112 && fbdev_get()->bpp==32);
+    fixture(); g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
+    fail_firmware=true;
+    assert(display_check_begin(0x111)==-EIO && !check_display && fbdev_get()->present && switches==2);
+    assert(fbdev_get()->mode_id==0x118 && !changing && !switching);
+    fixture(); g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
     fail_firmware=fail_restore=true;
-    assert(display_check_begin(0x111)==-EIO && check_display && !fbdev_get()->present);
+    assert(display_check_begin(0x111)==-EIO && !check_display && !fbdev_get()->present);
+    unsigned attempts=switches;
+    g_ticks+=10000; display_watchdog_poll(); assert(switches==attempts);
+    fixture(); g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
+    assert(!display_check_begin(0x111));
+    g_ticks+=CHECK_MODE_MS-1; display_watchdog_poll(); assert(switches==1);
+    g_ticks++; display_watchdog_poll();
+    assert(switches==2 && !check_display && fbdev_get()->mode_id==0x118);
+    assert(display_check_end()==-ETIMEDOUT && display_check_sweep_begin()==-ETIMEDOUT);
+    display_watchdog_poll(); assert(switches==2);
+    fixture(); g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
+    assert(!display_check_begin(0x111) && !display_check_sweep_begin());
+    g_ticks+=CHECK_MODE_MS; display_watchdog_poll();
+    assert(switches==1 && check_sweeping && display_check_end()==-EBUSY);
+    display_check_sweep_end(true);
+    assert(switches==2 && !check_display && fbdev_get()->mode_id==0x118);
+    assert(display_check_end()==-ETIMEDOUT);
+    fixture(); g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
+    assert(!display_check_begin(0x111) && !display_check_sweep_begin());
+    display_check_sweep_end(false); g_ticks+=CHECK_MODE_MS;
+    display_watchdog_poll(); assert(switches==1 && display_check_end()==-EIO);
+    fixture(); g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
+    assert(!display_check_begin(0x111)); fail_restore=true;
+    g_ticks+=CHECK_MODE_MS; display_watchdog_poll(); attempts=switches;
+    assert(!check_display && display_check_end()==-EIO);
+    g_ticks+=CHECK_MODE_MS; display_watchdog_poll(); assert(switches==attempts);
+    puts("PASS f1-69 display check watchdog: independent restore, late sweep refusal, lease pin, unsafe writer refusal, failed restore not retried");
     puts("PASS hardware display check: H-only access, no owner, 16bpp switch and verified original mode restore");
     worker_tests();
     fullscreen_tests(); query_tests(); switch_tests(); watchdog_tests(); free(aperture); free(window);

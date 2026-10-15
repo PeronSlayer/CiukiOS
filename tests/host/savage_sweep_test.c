@@ -57,7 +57,7 @@ static void wr(void *ctx,uint32_t r,uint32_t v)
         assert(pos+4<SAVAGE_SWEEP_BYTES);
         unsigned depth=c->cr[0x50]&0x30;
         unsigned lane=depth==0x10 ? 2 : depth==0x30 ? 4 : 1;
-        if (!(gbd&8) || !(gbd&0x10000000)) lane=1;
+        if ((gbd&0x10000008u)==0x10000008u) lane=1; /* measured T23 config 0 */
         for (unsigned i=0;i<bytes;i++) c->scratch[pos+i]=(uint8_t)(c->packet[1]>>(8*(i%lane)));
     }
 }
@@ -79,8 +79,8 @@ static int delay(void *ctx,uint32_t us) { ((struct chip *)ctx)->us+=us; return 0
 static void drain(void *ctx) { (void)ctx; }
 static void line(void *ctx,const char *s) {
     struct chip *c=ctx;
-    if (strstr(s,"config=")) c->lines++;
-    else assert(strstr(s,"MM8136 wrote=0007"));
+    if (!strncmp(s,"Savage bpp=",11)) c->lines++;
+    else assert(strstr(s,"MM8136 wrote=0007") || strstr(s,"first exact configuration") || strstr(s,"stage=engine-restore"));
 }
 int main(void)
 {
@@ -107,7 +107,7 @@ int main(void)
             assert(chip.reg[0x816c/4]==0x10200409 && chip.reg[0x8168/4]==0);
             for (unsigned i=0;i<sizeof(chip.scratch);i++) assert(chip.scratch[i]==0xa7);
             if (!variant) {
-                assert(!e && result.tried==SAVAGE_CONFIGS && chip.lines==SAVAGE_CONFIGS && result.first==0 && result.passed>0);
+                assert(!e && result.tried==SAVAGE_CONFIGS && chip.lines==SAVAGE_CONFIGS && result.first==1 && result.passed>0);
                 printf("PASS Savage %ubpp matrix: tried=%u passed=%u first=%d VGA/engine/VRAM restored\n",depth,result.tried,result.passed,result.first);
             } else assert(e && !result.tried);
         }
