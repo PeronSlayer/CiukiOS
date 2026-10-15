@@ -493,6 +493,17 @@ static void spray(int x, int y, u8 c)
         plot(x + dx, y + dy, c);
     }
 }
+static void spray_line(int x0,int y0,int x1,int y1,u8 c)
+{
+    int dx=iabs(x1-x0),dy=iabs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx-dy;
+    for (;;) {
+        spray(x0,y0,c);
+        if (x0==x1 && y0==y1) break;
+        int e2=2*err;
+        if (e2>-dy) { err-=dy; x0+=sx; }
+        if (e2<dx) { err+=dx; y0+=sy; }
+    }
+}
 
 /* Original CFN glyphs, scale 1..4, regular/bold and opaque/transparent. */
 #define TEXT_MAX 200
@@ -635,6 +646,17 @@ static void lasso_point(int x,int y)
     int x0=x,x1=x,y0=y,y1=y;
     for (int i=0;i<lasso_count;i++) { x0=imin(x0,lassox[i]); x1=imax(x1,lassox[i]); y0=imin(y0,lassoy[i]); y1=imax(y1,lassoy[i]); }
     selx=x0; sely=y0; selw=x1-x0+1; selh=y1-y0+1;
+}
+static void lasso_segment(int x0,int y0,int x1,int y1)
+{
+    int dx=iabs(x1-x0),dy=iabs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx-dy;
+    for (;;) {
+        lasso_point(x0,y0);
+        if (x0==x1 && y0==y1) break;
+        int e2=2*err;
+        if (e2>-dy) { err-=dy; x0+=sx; }
+        if (e2<dx) { err+=dx; y0+=sy; }
+    }
 }
 static void lasso_finish(void)
 {
@@ -1458,7 +1480,7 @@ static void tool_move(int x, int y)
     switch (drag_mode) {
     case DM_FREE:
         set_tool_pen();
-        if (tool == T_AIR) spray(x, y, c1);
+        if (tool == T_AIR) spray_line(lx,ly,x,y,c1);
         else line(lx, ly, x, y, tool == T_ERASER ? bg : c1);
         lx = x; ly = y;
         break;
@@ -1466,7 +1488,7 @@ static void tool_move(int x, int y)
     case DM_NEWSEL:
         sel_damage();
         x = imax(0, imin(x, cv.w - 1)); y = imax(0, imin(y, cv.h - 1));
-        if (free_select)lasso_point(x,y);
+        if (free_select) { lasso_segment(lx,ly,x,y); lx=x; ly=y; }
         else {
             selx = imin(ax, x); sely = imin(ay, y);
             selw = iabs(x - ax) + 1; selh = iabs(y - ay) + 1;

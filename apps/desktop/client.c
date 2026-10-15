@@ -80,6 +80,17 @@ void desk_queue(struct desktop *d, int i, const struct ciuki_message *m)
         }
     }
     if (c->tx_count == DESK_TX_MAX) {
+        /* A full client FIFO means this peer is behind. Keep the newest
+         * absolute pointer position in a trailing motion run; while there is
+         * room, every motion remains a distinct FIFO message. */
+        if (m->data[1] == DESK_MOTION && c->tx_count) {
+            unsigned last=(c->tx_head+c->tx_count-1)%DESK_TX_MAX;
+            struct ciuki_message *q=&c->tx[last];
+            if (q->data[1] == DESK_MOTION) {
+                *q=*m; q->data[0]=(uint8_t)c->version; q->data[2]=(uint8_t)c->minor;
+                return;
+            }
+        }
         /* A stalled peer cannot block the compositor. Repair its input state
          * once its bounded queue drains. Keep the window and backing alive. */
         c->resync_pending = 1;
