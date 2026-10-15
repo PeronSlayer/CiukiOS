@@ -29,8 +29,9 @@ void kputs_raw(const char *s)
     console_write(s, n);
 }
 
-/* Format each record before handing it to the serial queue. Normal logs
- * never poll the UART, including callers in IRQ/critical sections. */
+/* Only periodic diagnostics may lose admission to the line-rate quota.
+ * Boot/event logs wait in task context; IRQ/early publications never sleep
+ * or poll the UART. Console work follows the bounded serial publication. */
 static void log_line(const char *fmt, va_list ap, bool periodic)
 {
     char buf[256];
@@ -42,7 +43,11 @@ static void log_line(const char *fmt, va_list ap, bool periodic)
     if (blackbox_capture) blackbox_capture(buf,(size_t)n+1);
     if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
     else bootlog_capture(buf, (size_t)n + 1);
+    size_t wire_bytes = (size_t)n + 1;
+    for (int i = 0; i <= n; i++) if (buf[i] == '\n') wire_bytes++;
+    uint32_t flags = !periodic && serial_evidence_begin ? serial_evidence_begin(wire_bytes) : irq_save();
     serial_write(buf, (size_t)n + 1);
+    irq_restore(flags);
     console_write(buf, (size_t)n + 1);
 }
 
@@ -75,7 +80,7 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
     /* Reserve room before assigning a sequence: a quota wait can dispatch
      * another evidence producer. Formatting/publication is bounded to this
      * buffer and atomic against IRQ producers. Console work follows IF restore. */
-    uint32_t flags = evidence && serial_evidence_begin ? serial_evidence_begin(sizeof(buf)) : irq_save();
+    uint32_t flags = evidence && serial_evidence_begin ? serial_evidence_begin(2 * sizeof(buf)) : irq_save();
     if ((flags & 0x200) && crit_label) crit_label("record_publish");
     uint32_t s = ++seq;
     int n = ksnprintf(buf, sizeof(buf), "CIUKI_TEST v=1 run=%s seq=%06u probe=%s event=%s%s%s",
@@ -138,7 +143,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
      * and later emitted with fmt="%s". Evidence rec_emit stays protected. */
     bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1) ||
                     !strncmp(extra, "group=vm_perf_", sizeof("group=vm_perf_") - 1);
-    emit_line(probe, "DATA", extra, true, periodic, false, false);
+    emit_line(probe, "DATA", extra, true, periodic, false, !periodic);
 }
 
 void rec_diag_disk(const char *probe, const char *fmt, ...)

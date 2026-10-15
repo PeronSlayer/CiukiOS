@@ -47,7 +47,9 @@ void serial_write(const char *s, size_t n); /* whole drop on overflow/oversize/r
 uint64_t serial_write_ticket(const char *s, size_t n);
 /* Wait for this many wire bytes only in preemptible task context. Returns
  * saved EFLAGS with IF clear: caller restores after formatting/publication,
- * so evidence sequence allocation happens AFTER any wait. Weak for fixtures. */
+ * so evidence sequence allocation happens AFTER any wait. Protects the next
+ * publication from quota drops in early/atomic context too (queue bounds still
+ * apply). Publish exactly once before restoring IF. Weak for fixtures. */
 uint32_t serial_evidence_begin(size_t wire_bytes) __attribute__((weak));
 void serial_buffered(bool enabled);       /* compatibility: all normal logs queue */
 void serial_writer_init(void);            /* scheduler init, once */
