@@ -9,7 +9,7 @@ static uint32_t faults, errors;
 static volatile uint32_t resume_ip, expected_status, escape_esp, escape_ebp;
 volatile uint32_t CoreRelease;
 #define release_gate CoreRelease
-struct core_result { uint32_t magic, done, errors, faults, memory, fs, sse, stack, threads; };
+struct core_result { uint32_t magic, done, errors, faults, memory, fs, sse, stack, threads, sse_fault, tcg_fallback; };
 struct core_result CoreResult;
 #define result CoreResult
 static void clear(void *p,uint32_t bytes) { uint8_t *b=p; while(bytes--) *b++=0; }
@@ -131,6 +131,19 @@ void entry(uint32_t peb)
             expected_status=W32_EXCEPTION_SSE;
             __asm__ volatile("movl $1f,%0; ldmxcsr %1; movss %2,%%xmm0; divss %3,%%xmm0; 1:":
                              "=m"(resume_ip):"m"(mxcsr),"m"(one),"m"(zero):"memory");
+            if(!resume_ip) result.sse_fault=1; /* the dispatcher consumed the resume address: #XM was delivered */
+            else {
+                /* No #XM. Intel SDM Vol. 3A 6.15 requires vector 19 here (CR4.OSXMMEXCPT=1, ZE unmasked).
+                 * QEMU TCG never raises it: it has no vector-19 exception and only records MXCSR flags
+                 * (docs/validation/2026-10-09-f0/README.md). Accept that omission only for the exact TCG
+                 * signature; on hardware or an unidentified emulator the missing fault is an error. */
+                resume_ip=0;
+                uint32_t ha,hb,hc,hd;__asm__ volatile("cpuid":"=a"(ha),"=b"(hb),"=c"(hc),"=d"(hd):"a"(1),"c"(0));
+                uint32_t hypervisor=(hc>>31)&1u;
+                __asm__ volatile("cpuid":"=a"(ha),"=b"(hb),"=c"(hc),"=d"(hd):"a"(0x40000000),"c"(0));
+                if(hypervisor&&ha>=0x40000001u&&hb==0x54474354u&&hc==0x43544743u&&hd==0x47435447u) result.tcg_fallback=1;
+                else errors++;
+            }
         }
     }
     if(mode[0]!='e') {

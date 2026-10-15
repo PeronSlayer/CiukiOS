@@ -416,3 +416,41 @@ image before accepting the hardware result.
   SHA-256 between identical builds).
 - The loader's A20 keyboard-controller path, CHS fallback, BIOS menu and
   text-mode fallback were not exercised beyond `-vga none`.
+
+## QEMU TCG deviation: SIMD floating-point exceptions (#XM) are not raised (f5-03)
+
+Run `493441d2` on image `35b9e5e4…` (main `70e124e7`, QEMU 11.1.1 TCG,
+`qemu-t23`): `w32-exceptions-qemu-t23` recorded
+`case=exceptions faults=9 done=1 errors=0` against the suite's `faults ge 10`.
+The fixture `tests/host/win32/fixtures/core_loader.c` raises ten faults in
+exceptions mode: the nested-SEH image's #UD, then #GP (`hlt`), #BP, #UD
+(`sysenter`), `int 0x2e`, #DE, #PF, #DB (TF), #MF (`fdivs` by zero with ZE
+unmasked, forced by `fwait`) and #XM (`divss` by zero with MXCSR ZM clear).
+Every delivered fault matched its expected status (`errors=0`); the one that
+never arrived is #XM.
+
+[Intel SDM Vol. 3A](https://cdrdv2-public.intel.com/835754/253668-sdm-vol-3a.pdf),
+section 6.15 "Interrupt 19—SIMD Floating-Point Exception (#XM)": with
+CR4.OSXMMEXCPT set, an unmasked SSE exception raises vector 19 at the
+faulting instruction (with it clear, #UD). QEMU's i386 target has no
+exception constant for vector 19:
+[`target/i386/cpu.h` (v11.1.0)](https://github.com/qemu/qemu/blob/v11.1.0/target/i386/cpu.h)
+defines `EXCP00_DIVZ` … `EXCP12_MCHK` and nothing above 18, and the TCG SSE
+status path in
+[`target/i386/tcg/fpu_helper.c`](https://github.com/qemu/qemu/blob/v11.1.0/target/i386/tcg/fpu_helper.c)
+(`update_mxcsr_status`, `update_mxcsr_from_sse_status`, `helper_ldmxcsr`)
+only copies softfloat flags into MXCSR. Unlike the x87 path
+(`fpu_set_exception` → `fpu_raise_exception` → `EXCP10_COPR`) it never
+calls `raise_exception`: the divide completes, the flag is set, no trap.
+
+The fixture follows the f2-14 rule. It attempts the real #XM first; only if
+the dispatcher did not consume the resume address, CPUID.1:ECX[31] is set and
+leaf `0x40000000` returns the exact `TCGTCGTCGTCG` signature with a maximum
+leaf of at least `0x40000001`, does it accept the known omission and record
+`tcg_fallback=1`. On hardware or an unidentified emulator the missing fault
+increments `errors`. The probe record is
+`case=exceptions faults=… sse_fault=… tcg_fallback=… hardware_required_vector=19`;
+the suite predicate is `faults ge 9` with `errors eq 0`. TCG PASS is
+therefore not evidence of #XM delivery: real #XM remains a hardware
+qualification requirement for F5.
+

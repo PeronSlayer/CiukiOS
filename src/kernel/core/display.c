@@ -168,9 +168,24 @@ bool display_fullscreen_active(void) { return fullscreen_display; }
 int display_fullscreen_begin(uint8_t mode)
 {
     struct process *desktop=proc_find(grants_display_pid());
-    if (!desktop || desktop->state>=PROC_STOPPING || !grants_display_owner(desktop)) return -EPERM;
-    if (switching || fullscreen_display || awaiting_frame || grants_display_busy()) return -EBUSY;
-    if (!fbdev_get()->present || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
+    const char *why=0;
+    if (!desktop) why="no-display-owner";
+    else if (desktop->state>=PROC_STOPPING) why="desktop-stopping";
+    else if (!grants_display_owner(desktop)) why="owner-without-writable-display";
+    if (why) {
+        klog("[display] fullscreen_refused reason=%s owner_pid=%u mode=%u",why,grants_display_pid(),mode);
+        return -EPERM;
+    }
+    if (switching || fullscreen_display || awaiting_frame || grants_display_busy()) {
+        klog("[display] fullscreen_refused reason=busy switching=%u active=%u awaiting_frame=%u presenting=%u",
+            (unsigned)switching,(unsigned)fullscreen_display,(unsigned)awaiting_frame,(unsigned)grants_display_busy());
+        return -EBUSY;
+    }
+    if (!fbdev_get()->present || !listed(fbdev_get()->mode_id)) {
+        klog("[display] fullscreen_refused reason=unsupported present=%u mode_id=%u",
+            (unsigned)fbdev_get()->present,(unsigned)fbdev_get()->mode_id);
+        return -EOPNOTSUPP;
+    }
     if (!watchdog) {
         watchdog=task_create_kernel("display-watchdog",watchdog_main,0,P_NORMAL);
         if (!watchdog) return -ENOMEM;

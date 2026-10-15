@@ -100,6 +100,12 @@ class KernelCoreTests(unittest.TestCase):
             self.assertEqual(selected['probe'],case['probe'])
             native=[x for x in case['expected']['predicates'] if x['where'].get('case')=='native_sse']
             self.assertEqual(native[0]['fields'],{'vector':{'eq':6},'status':{'eq':4},'ud':{'eq':1}})
+        # QEMU TCG never raises #XM (vector 19): nine faults are the TCG floor and the fixture
+        # records tcg_fallback=1 for the exact TCG signature; off TCG a missing #XM is an error.
+        exceptions=[x for x in suite['cases'][0]['expected']['predicates'] if x['where'].get('case')=='exceptions']
+        self.assertEqual(exceptions[0]['fields']['faults'],{'ge':9})
+        self.assertEqual(exceptions[0]['fields']['errors'],{'eq':0})
+        self.assertIn('tcg_fallback',(ROOT/'tests/host/win32/fixtures/core_loader.c').read_text())
         payload=(ROOT/'tests/host/proc/payload.asm').read_text()
         self.assertIn("je sse_fault",payload)
         self.assertIn('core_spawn(parent,&native_image,"x",&native)',

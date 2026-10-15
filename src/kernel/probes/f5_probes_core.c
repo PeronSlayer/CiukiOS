@@ -14,7 +14,7 @@ __asm__(".pushsection .rodata.w32_fixture,\"a\"\n.balign 4\n"
         "w32_loader_end:\n.popsection\n");
 extern const uint8_t w32_fixture_start[], w32_fixture_end[], w32_loader_start[], w32_loader_end[];
 extern const uint8_t f2_payload_start[], f2_payload_end[];
-struct core_result { uint32_t magic, done, errors, faults, memory, fs, sse, stack, threads; };
+struct core_result { uint32_t magic, done, errors, faults, memory, fs, sse, stack, threads, sse_fault, tcg_fallback; };
 struct probe_image { const uint8_t *data; uint32_t bytes; };
 static int core_read(void *cookie, uint32_t off, void *dst, uint32_t bytes)
 {
@@ -66,7 +66,7 @@ static int run_core(const char *name, const char *mode)
          r.faults>=(mode[0]=='e'?5u:mode[0]=='m'?3u:7u) && (mode[0]=='e'||(r.memory&&r.stack)) &&
          r.sse==(uint32_t)(g_cpu_fxsr&&g_cpu_sse) && r.threads==r.sse;
     rec_emit(name,"DATA","case=personality pid=%u fs=%08x errors=%u sse=%u threads=%u",pid,r.fs,r.errors,r.sse,r.threads);
-    rec_emit(name,"DATA","case=exceptions faults=%u done=%u errors=%u",r.faults,r.done,r.errors);
+    rec_emit(name,"DATA","case=exceptions faults=%u done=%u errors=%u sse_fault=%u tcg_fallback=%u hardware_required_vector=19",r.faults,r.done,r.errors,r.sse_fault,r.tcg_fallback);
     rec_emit(name,"DATA","case=memory checked=%u errors=%u stack=%u",r.memory,r.errors,r.stack);
     /* While the Win32 process is still live, a native ELF must still get #UD
      * for SSE: CR4.OSFXSR follows the personality of the dispatched task. */
