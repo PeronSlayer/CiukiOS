@@ -192,8 +192,24 @@ static void test_boot_reservations(void)
         }
     }
     CHECK(input_ports == 2 && framebuffers == 1);
+    const uint16_t bases[] = { 0x3F8, 0x2F8, 0x3E8, 0x2E8 };
+    for (unsigned b = 0; b < ARRAY_SIZE(bases); b++) {
+        g_boot.uart_base = bases[b];
+        registry_init();
+        unsigned irq = b % 2 ? 3 : 4, found = 0;
+        for (unsigned i = 0; i < registry_count(); i++) {
+            const struct resource *r = registry_get(i);
+            if (r->type == RES_IRQ && r->start == irq && !strcmp(r->owner, "uart")) {
+                CHECK(!r->shareable && r->end == irq + 1);
+                found++;
+            }
+        }
+        CHECK(found == 1);
+        CHECK(registry_claim(RES_IRQ, irq, irq + 1, "pci-intx-fixture", true) < 0);
+    }
     memset(&g_boot, 0, sizeof(g_boot));
     printf("boot reservations: PASS (input/framebuffer firmware leases transfer with fresh generations)\n");
+    puts("UART reservations: PASS (COM1/3 IRQ4, COM2/4 IRQ3, exclusive claims reject PCI INTx overlap)");
 }
 
 static void test_registry(void)

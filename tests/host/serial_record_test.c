@@ -1,6 +1,7 @@
 /* Real formatted records and user envelopes share the production UART queue.
- * Reuse the IRQ/FIFO model, including its concurrent burst sender. */
+ * Reuse the IRQ/FIFO model, including its concurrent interrupt sender. */
 #define FS_HOST
+#define SERIAL_WITH_OUTPUT
 #define main serial_fixture_main
 #include "serial_audio_test.c"
 #undef main
@@ -8,6 +9,8 @@ static void cli(void) { flags=0; }
 static void hlt(void) { abort(); }
 static uint32_t read_cr2(void) { return 0; }
 void console_write(const char *s, size_t n) { (void)s; (void)n; }
+void console_reclaim(void) { CHECK(false); }
+void console_set_color(uint32_t fg,uint32_t bg) { (void)fg;(void)bg;CHECK(false); }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n; }
 #include "../../src/kernel/core/output.c"
@@ -34,10 +37,6 @@ static void *record_emitter(void *arg)
     unsigned id=*(unsigned *)arg;
     playback_producer=true;
     for (unsigned i=0;i<100;i++) {
-        /* Isolate byte integrity from admission: each bounded producer
-         * starts a fresh virtual quota window; the clocked burst fixture
-         * separately checks the unmodified production rate policy. */
-        uint32_t f=irq_save();g_ticks+=1000;irq_restore(f);
         if (id) rec_emit("runner","DATA","case=concurrent n=%u payload=BBBBBBBBBBBBBBBB",i);
         else if (console_emitter) {
             char s[80]; int n=snprintf(s,sizeof(s),"emitter n=%u payload=AAAAAAAAAAAAAAAA",i);
@@ -101,21 +100,32 @@ static void maximum_records(void)
         reset_uart(kind);serial_write(record,SERIAL_RECORD_MAX+1u);
         CHECK(uart_dropped==1 && !uart_used); /* reject before inspecting input */
     }
-    puts("serial bounds: two task/IRQ producers, 240/2048-byte records, source ownership, 16450/16550, panic order and oversize/rate whole drops PASS");
+    puts("serial bounds: two task/IRQ producers, 240/2048-byte records, source ownership, 16450/16550, panic order and oversize whole drops PASS");
 }
 static void other_evidence_task(void)
 {
-    rec_emit("runner","DATA","case=quota task=other");
+    rec_emit("runner","DATA","case=queue task=other");
+}
+static void fill_queue(bool evidence)
+{
+    char fill[SERIAL_RECORD_MAX];memset(fill,'Q',sizeof(fill));
+    while (uart_used<UART_LOG_BYTES-UART_EVIDENCE_BYTES) {
+        unsigned n=UART_LOG_BYTES-UART_EVIDENCE_BYTES-uart_used;
+        serial_write(fill,n<sizeof(fill) ? n:sizeof(fill));
+    }
+    if (evidence)
+        while (uart_used<UART_LOG_BYTES) {
+            unsigned n=UART_LOG_BYTES-uart_used;
+            CHECK(protected_write(fill,n<sizeof(fill) ? n:sizeof(fill)));
+        }
 }
 static void saturated_producers(void)
 {
-    for (unsigned producer=0;producer<4;producer++) {
+    for (unsigned producer=0;producer<4;producer++) for (unsigned full=0;full<2;full++) {
         reset_uart(true);g_boot.flags=CBI_F_VERBOSE;
-        rec_set_run("abcdef12");rec_emit("runner","BEGIN",NULL);drain_uart();
-        emitted_count=0;g_ticks+=1000;
-        char fill[1408];memset(fill,'Q',sizeof(fill));
-        serial_write(fill,sizeof(fill));serial_write(fill,sizeof(fill));
-        struct task task={0};g_current=&task;
+        rec_set_run("abcdef12");rec_emit("runner","BEGIN",NULL);drain_uart();emitted_count=0;
+        fill_queue(full);
+        struct task task={.state=T_RUNNING};g_current=&task;
         klog_periodic("[cpu] periodic must drop");
         rec_diag("runner","group=vm_heartbeat periodic=drop");
         CHECK(uart_dropped==2 && !evidence_sleeps);
@@ -123,41 +133,34 @@ static void saturated_producers(void)
         if (producer==1) klog("[supervisor] desktop pid=12 pgid=12");
         if (producer==2) rec_emit("runner","DATA","case=protected_evidence");
         if (producer==3) rec_diag("runner","case=protected_probe");
-        CHECK(evidence_sleeps==1000 && uart_dropped==2 && flags==0x200);
+        CHECK(evidence_sleeps==full && uart_dropped==2 && flags==0x200);
         g_current=NULL;drain_uart();
-        CHECK(!strstr(emitted,"periodic") && strstr(emitted,"[serial] dropped=2\r\n"));
+        CHECK(!strstr(emitted,"periodic"));
         const char *expected[]={"[supervisor] bootstrap: spawning /Programs/desktop\r\n",
             "[supervisor] desktop pid=12 pgid=12\r\n","case=protected_evidence\r\n","case=protected_probe\r\n"};
         CHECK(strstr(emitted,expected[producer]));
     }
-    /* Before scheduling starts, boot logs cannot wait for a quota window. */
-    reset_uart(true);uart_admitted=uart_budget;
-    klog("Ciuki VMM F0 build early - CiukiOS");
-    CHECK(!uart_dropped && !evidence_sleeps);
-    klog_periodic("[cpu] early periodic must drop");
-    CHECK(uart_dropped==1);drain_uart();
+    reset_uart(true);fill_queue(false);
+    klog("Ciuki VMM F0 build early - CiukiOS");CHECK(!uart_dropped && !evidence_sleeps);
+    klog_periodic("[cpu] early periodic must drop");CHECK(uart_dropped==1);drain_uart();
     CHECK(strstr(emitted,"Ciuki VMM F0 build early - CiukiOS\r\n") && !strstr(emitted,"periodic"));
-    puts("serial saturated producers: both desktop boot milestones, CIUKI_TEST evidence and probe DATA delivered after quota wait; only periodic records dropped/count=2; early boot protected PASS");
+    puts("serial saturated output: boot milestones/evidence/probe DATA use reserved capacity or IRQ-woken wait queue; only periodic records dropped; early boot protected PASS");
 }
 static void evidence_sequence(void)
 {
     reset_uart(true);rec_set_run("abcdef12");rec_emit("runner","BEGIN",NULL);drain_uart();
-    emitted_count=0;g_ticks+=1000;
-    char fill[1407];memset(fill,'Q',sizeof(fill));fill[sizeof(fill)-1]='\n';
-    serial_write(fill,sizeof(fill));serial_write(fill,sizeof(fill));
-    CHECK(uart_admitted==uart_budget-UART_NOTICE_BYTES);
-    uint32_t before=seq;
-    struct task task={0};g_current=&task;
+    emitted_count=0;fill_queue(true);uint32_t before=seq;
+    struct task task={.state=T_RUNNING};g_current=&task;
     evidence_wait_hook=other_evidence_task;
-    rec_emit("runner","DATA","case=quota task=first");
-    CHECK(evidence_sleeps==1000 && !uart_dropped && seq==before+2);
+    rec_emit("runner","DATA","case=queue task=first");
+    CHECK(evidence_sleeps==2 && !uart_dropped && seq==before+2);
     g_current=NULL;drain_uart();
     char other[160],first_record[160];
-    snprintf(other,sizeof(other),"CIUKI_TEST v=1 run=abcdef12 seq=%06u probe=runner event=DATA case=quota task=other\r\n",before+1);
-    snprintf(first_record,sizeof(first_record),"CIUKI_TEST v=1 run=abcdef12 seq=%06u probe=runner event=DATA case=quota task=first\r\n",before+2);
+    snprintf(other,sizeof(other),"CIUKI_TEST v=1 run=abcdef12 seq=%06u probe=runner event=DATA case=queue task=other\r\n",before+1);
+    snprintf(first_record,sizeof(first_record),"CIUKI_TEST v=1 run=abcdef12 seq=%06u probe=runner event=DATA case=queue task=first\r\n",before+2);
     const char *a=strstr(emitted,other),*b=strstr(emitted,first_record);
     CHECK(a && b && a<b);
-    puts("serial evidence: quota wait dispatches another producer before sequence allocation; wire sequence stays increasing with zero drops PASS");
+    puts("serial evidence: queue wait dispatches another producer before sequence allocation; wire sequence stays increasing with zero drops PASS");
 }
 static void blackbox_publication(void)
 {
@@ -172,7 +175,7 @@ static void blackbox_publication(void)
     CHECK(captured_records==5 && strstr(captured_record,"case=disk_only\n"));
     /* Protected IRQ evidence survives saturated admission; the independent
      * black-box path still receives both it and a dropped periodic record. */
-    uart_admitted=uart_budget;uint32_t f=irq_save();capture_flags=0;
+    fill_queue(false);uint32_t f=irq_save();capture_flags=0;
     unsigned dropped=uart_dropped;
     rec_set_run("abcdef12");rec_emit("runner","BEGIN","case=irq_protected");
     CHECK(uart_dropped==dropped && captured_records==6 && strstr(captured_record,"case=irq_protected\n"));
@@ -235,7 +238,7 @@ int main(void)
         g_ticks+=1000;
     }
     drain_uart(); CHECK(!uart_dropped);
-    puts("serial records: concurrent klog/rec_emit and console/rec_emit, 16450/16550, 200 whole records per case, zero drops/interleaved bytes with paced admission PASS");
+    puts("serial records: concurrent klog/rec_emit and console/rec_emit, 16450/16550, 200 whole records per case, zero drops/interleaved bytes with IRQ transmission PASS");
     puts("serial envelopes: 1024 line endings use bounded short writes with complete prefixes/terminators PASS");
     return 0;
 }

@@ -330,6 +330,11 @@ __attribute__((no_stack_protector)) void registry_init(void)
     registry_claim(RES_DMA, 4, 5, "dma-cascade", false);
     if (g_boot.uart_base)
         registry_claim(RES_PORT, g_boot.uart_base, g_boot.uart_base + 8, "uart", false);
+    /* UART has an exclusive legacy IRQ handler; PCI INTx must not replace it. */
+    if (g_boot.uart_base == 0x3F8 || g_boot.uart_base == 0x3E8)
+        registry_claim(RES_IRQ, 4, 5, "uart", false);
+    else if (g_boot.uart_base == 0x2F8 || g_boot.uart_base == 0x2E8)
+        registry_claim(RES_IRQ, 3, 4, "uart", false);
     if (g_boot.fb_phys && !(g_boot.flags & CBI_F_TEXT_MODE))
         claim(RES_MMIO, g_boot.fb_phys, g_boot.fb_phys + g_boot.fb_pitch * g_boot.fb_height,
               "boot-framebuffer", false, RS_FIRMWARE);

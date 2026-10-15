@@ -8,6 +8,7 @@
 #include <ciuki/timing.h>
 #include <ciuki/win32.h>
 extern void w32_shared_tick(void) __attribute__((weak));
+extern void serial_tick(void) __attribute__((weak));
 
 static uint8_t mask_master = 0xFF, mask_slave = 0xFF;
 volatile uint64_t g_ticks;
@@ -60,6 +61,7 @@ static void timer_irq(struct trap_frame *tf)
 {
     (void)tf;
     g_ticks++;
+    if (serial_tick) serial_tick();  /* idle TX rearm only; no polling or FIFO writes */
     if (w32_shared_tick) w32_shared_tick();
     timing_timer_irq();
     sched_tick();
