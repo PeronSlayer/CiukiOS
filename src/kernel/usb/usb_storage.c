@@ -6,6 +6,8 @@
 #include <ciuki/bootlog.h>
 /* Standalone controller fixtures need no disk sink. */
 #pragma weak bootlog_sync
+#pragma weak bootlog_try_sync
+#pragma weak bootlog_snapshot
 
 static uint32_t be32(const uint8_t *p)
 { return (uint32_t)p[0]<<24 | (uint32_t)p[1]<<16 | (uint32_t)p[2]<<8 | p[3]; }
@@ -344,6 +346,19 @@ static void bind_pause(void *ctx)
 { struct usb_device *d=ctx; d->host->io.sleep(d->host->io.cookie,1); }
 static bool bind_log_cancel(void *ctx)
 { struct usb_device *d=ctx; return usb_expired(d->host,d->storage.bind_deadline); }
+static void bind_stage_log(struct usb_device *d, bool wait)
+{
+    int e=wait ? (bootlog_sync ? bootlog_sync(bind_log_cancel,bind_pause,d) : 0) :
+                 (bootlog_try_sync ? bootlog_try_sync() : 0);
+    if (!e) return;
+    struct bootlog_stats log={0};
+    if (bootlog_snapshot) bootlog_snapshot(&log);
+    /* Lost means durability is unconfirmed; a later writer turn may retain
+     * the record. Neither a log timeout nor a failed sink is a device fault. */
+    klog("[usb-storage] stage_record addr=%u stage=%s record=lost result=%d ring_queued=%u ring_capacity=%u boot_queued=%u queued=%u dropped=%u",
+         d->address,d->storage.bind_stage ? d->storage.bind_stage : "none",e,
+         log.ring_queued,BOOTLOG_RAM,log.boot_queued,log.queued,log.dropped);
+}
 static void bind_stage_finish(struct usb_device *d, int result)
 {
     struct usb_storage *s=&d->storage;
@@ -351,6 +366,7 @@ static void bind_stage_finish(struct usb_device *d, int result)
     klog("[usb-storage] stage=%s addr=%u elapsed_ms=%llu result=%d",s->bind_stage,d->address,
          d->host->io.now(d->host->io.cookie)-s->bind_stage_started_ms,result);
     s->bind_stage_active=false;
+    bind_stage_log(d,false);
 }
 static void bind_stage_begin(struct usb_device *d, const char *name)
 {
@@ -359,6 +375,7 @@ static void bind_stage_begin(struct usb_device *d, const char *name)
     s->bind_stage=name; s->bind_stage_started_ms=d->host->io.now(d->host->io.cookie);
     s->bind_stage_active=true;
     klog("[usb-storage] stage=%s addr=%u",name,d->address);
+    bind_stage_log(d,false);
 }
 /* Each stage enters without a reservation and leaves owning one. The caller
  * checks the return and owns nothing on failure. No log/VFS -> host cycle. */
@@ -367,10 +384,9 @@ static int bind_stage(struct usb_device *d, const char *name)
     struct usb_host *h=d->host;
     if (d->storage.bind_reserved) { usb_host_drop(h); d->storage.bind_reserved=false; } /* only the current attach owner calls here */
     bind_stage_begin(d,name);
-    int e=bootlog_sync ? bootlog_sync(bind_cancel,bind_pause,d) : 0;
-    if (e || bind_cancel(d) || !usb_host_take_until(h,d->storage.bind_deadline-USB_BIND_FINISH_MS)) {
-        d->storage.trace.result=e ? e : -USB_ETIMEDOUT;
-        return fault(d,bind_cancel(d) || !e ? "bind_deadline" : "stage_log_failed",false);
+    if (bind_cancel(d) || !usb_host_take_until(h,d->storage.bind_deadline-USB_BIND_FINISH_MS)) {
+        d->storage.trace.result=-USB_ETIMEDOUT;
+        return fault(d,"bind_deadline",false);
     }
     d->storage.bind_reserved=true; return 0;
 }
@@ -465,7 +481,7 @@ int usb_storage_attach(struct usb_device *d)
     if (e) {
         s->block.quarantined=true; s->online=false; d->quarantined=true;
         s->binding=false;
-        if (bootlog_sync) (void)bootlog_sync(bind_log_cancel,bind_pause,d);
+        bind_stage_log(d,true);
     }
     return e;
 }
@@ -484,7 +500,7 @@ void usb_storage_service(struct usb_host *h)
             bind_stage_begin(d,"mount");
             int e=fault(d,"mount_unavailable",false);
             bind_stage_finish(d,e);d->quarantined=true;s->binding=false;
-            if (bootlog_sync) (void)bootlog_sync(bind_log_cancel,bind_pause,d);
+            bind_stage_log(d,true);
         }
         return;
     }
@@ -501,10 +517,8 @@ void usb_storage_service(struct usb_host *h)
             klog("[usb-storage] detached addr=%u reason=%s",d->address,d->reason);
         } else if (s->online && !s->published && !s->ejected) {
             bind_stage_begin(d,"mount");
-            int e=bootlog_sync ? bootlog_sync(bind_cancel,bind_pause,d) : 0;
-            if (!e && !bind_cancel(d))
-                e=storage_add_removable_bounded(store,&s->block,bind_cancel,bind_pause,d);
-            else e=-FS_EIO;
+            int e=bind_cancel(d) ? -FS_EIO :
+                storage_add_removable_bounded(store,&s->block,bind_cancel,bind_pause,d);
             if (e) {
                 (void)fault(d,bind_cancel(d) ? "bind_deadline" : "mount_failed",false);
                 d->quarantined=true;
@@ -513,7 +527,7 @@ void usb_storage_service(struct usb_host *h)
             s->binding=false;
             /* Retain the attempt, including refusal; no recovery loop. */
             klog("[usb-storage] mount addr=%u result=%d",d->address,e);
-            if (bootlog_sync) (void)bootlog_sync(bind_log_cancel,bind_pause,d);
+            bind_stage_log(d,true);
         }
     }
 }

@@ -179,6 +179,18 @@ int bootlog_drain(void)
 #endif
     return e;
 }
+int bootlog_try_sync(void)
+{
+    uint32_t f=lock_ram();
+    int result=stats.error;
+    if (!result && !stats.active) result=-FS_EAGAIN;
+    if (!result && sync_done<stats.captured) {
+        if (stats.captured>sync_target) sync_target=stats.captured;
+        sync_next_commit();
+        result=-FS_EAGAIN;
+    }
+    unlock_ram(f); return result;
+}
 int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *ctx)
 {
     if (!cancel || !pause) return -FS_EINVAL;

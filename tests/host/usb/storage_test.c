@@ -21,6 +21,8 @@ static char records[512*1024]; /* retain the bounded becoming-ready replay */
 static size_t records_at;
 static void (*log_hook)(const char *, size_t);
 static void (*sleep_hook)(void);
+static void (*hid_poll_hook)(struct usb_device *,struct usb_hid *);
+static bool (*private_transaction_hook)(uint32_t,uint32_t,volatile uint32_t *);
 void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
 void klog(const char *fmt,...)
 {
@@ -35,7 +37,7 @@ void klog(const char *fmt,...)
 }
 /* usb_attach is intentionally not used by this packet-level peripheral model;
  * the register/DMA engines have their own production suite. */
-void usb_hid_poll(struct usb_device *d,struct usb_hid *h) { (void)d;(void)h; }
+void usb_hid_poll(struct usb_device *d,struct usb_hid *h) { if(hid_poll_hook)hid_poll_hook(d,h); }
 void usb_hid_release(struct usb_device *d,struct usb_hid *h) { (void)d;(void)h; }
 int registry_quarantine(int h,gen_t g) { (void)h;(void)g;assert(!"unexpected host quarantine");return 0; }
 const struct usb_hc_ops usb_ohci_ops={0};
@@ -44,6 +46,7 @@ static struct model {
     _Alignas(4096) uint8_t dma[USB_DMA_BYTES];
     uint8_t *image, *second_image;
     unsigned second;
+    unsigned storage_slot;
     size_t bytes;
     uint8_t setup[8], cbw[31], response[36], sense[18], mbr[512];
     unsigned cbw_at, at, remaining, total, offset, status, in_toggle, out_toggle;
@@ -67,6 +70,7 @@ static struct model {
     uint32_t latched_qh, hc_status;
 } m;
 static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
+static struct usb_device *device(void);
 static uint32_t be32(const uint8_t *b) {return (uint32_t)b[0]<<24|(uint32_t)b[1]<<16|(uint32_t)b[2]<<8|b[3];}
 static void put32(uint8_t *b,uint32_t v) {b[0]=v>>24;b[1]=v>>16;b[2]=v>>8;b[3]=v;}
 static uint64_t now(void *c) { (void)c; return m.frozen_clock ? 0 : m.now; }
@@ -77,14 +81,17 @@ static volatile uint32_t *uhci_dma(void *c,uint32_t address,unsigned bytes)
 }
 static bool uhci_transaction(void *c,uint32_t address,uint32_t qh,volatile uint32_t *td)
 {
-    (void)c;assert(address==m.h.dma_phys+USB_TD);
+    (void)c;
+    if(address!=m.h.dma_phys+USB_TD) {
+        assert(private_transaction_hook);return private_transaction_hook(address,qh,td);
+    }
     assert(qh==m.h.dma_phys+(((td[2]>>15)&15) ? USB_UHCI_BULK_QH:USB_UHCI_CONTROL_QH));
     unsigned other=((td[2]>>15)&15) ? USB_UHCI_CONTROL_QH:USB_UHCI_BULK_QH;
     assert(uhci_dma(NULL,m.h.dma_phys+other,8)[1]&1); /* shared TD has one owner */
     assert(td[0]==1 && td[3]==m.h.dma_phys+USB_BUFFER);
     unsigned n=(((td[2]>>21)&0x7ff)+1)&0x7ff;
-    assert(n<=64 && ((td[2]>>8)&127)==1);
-    int got=packet(&m.h.devices[0],(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,m.dma+USB_BUFFER,n,false);
+    assert(n<=64 && ((td[2]>>8)&127)==device()->address);
+    int got=packet(device(),(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,m.dma+USB_BUFFER,n,false);
     if(got==-USB_EAGAIN) {
         td[1]|=1u<<19;m.naks++;
         if(m.late_ack) {m.latched=true;m.latched_qh=qh;}
@@ -122,13 +129,13 @@ static uint32_t read_reg(void *c,unsigned off,unsigned width)
     if(off==0) return 0xc1;
     if(off==2) return m.hc_status;
     if(off==6) return (unsigned)(m.now+m.frame_offset)&0x7ff;
-    if(off==0x10) return m.connected ? 0x85 : 0x80;
+    if(off==0x10 || off==0x12) return m.connected ? 0x85 : 0x80;
     assert(!"unexpected UHCI register");return 0;
 }
 static void write_reg(void *c,unsigned off,uint32_t value,unsigned width)
 { (void)c;(void)off;(void)value;(void)width;assert(!"unexpected UHCI register write"); }
 static unsigned port_status(struct usb_host *h,unsigned p)
-{ (void)h; assert(p==0); return m.connected ? 3 : 0; }
+{ (void)h; assert(p==device()->root_port); return m.connected ? 3 : 0; }
 static void failed(unsigned key,unsigned asc)
 {
     memset(m.sense,0,sizeof(m.sense)); m.sense[0]=0x70; m.sense[2]=(uint8_t)key;
@@ -251,7 +258,7 @@ static int packet(struct usb_device *d,unsigned ep,unsigned pid,unsigned toggle,
     *expected^=1;return (int)n;
 }
 static const struct usb_hc_ops ops={.port_status=port_status,.packet=packet};
-static struct usb_device *device(void) {return &m.h.devices[0];}
+static struct usb_device *device(void) {return &m.h.devices[m.storage_slot];}
 static struct blkdev *block(void) {return &device()->storage.block;}
 static void setup(const char *path,bool partitioned)
 {

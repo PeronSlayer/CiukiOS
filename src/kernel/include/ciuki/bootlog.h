@@ -30,6 +30,10 @@ int bootlog_drain(void); /* storage task: one 4 KiB batch, then a requested comm
  * byte watermark from the storage task and wait with cancellation/deadline;
  * the caller never performs disk I/O. queued includes a pending commit token. */
 int bootlog_sync(bool (*cancel)(void *), void (*pause)(void *), void *);
+/* Request the current watermark without waiting or doing VFS work. Returns
+ * -EAGAIN while durability is unconfirmed (also when no sink is active).
+ * A pending request still receives an eventual storage-task commit. */
+int bootlog_try_sync(void);
 int bootlog_shutdown(void);
 void bootlog_snapshot(struct bootlog_stats *);
 void bootlog_reset(void); /* quiescent, detached only; host reboot fixture */

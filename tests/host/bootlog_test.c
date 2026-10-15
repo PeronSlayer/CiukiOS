@@ -197,6 +197,7 @@ static void second_waiter(void *ctx)
 {
     (void)ctx;static char newest[20000];memset(newest,'C',sizeof(newest));
     bootlog_capture(newest,sizeof(newest));
+    CHECK(bootlog_try_sync()==-FS_EAGAIN); /* cannot displace older waiters */
     CHECK(!bootlog_sync(never_cancel,overlap_storage,NULL));
 }
 static void first_waiter(void *ctx)
@@ -215,4 +216,23 @@ static void overlapping_watermarks(void)
     CHECK(!bootlog_shutdown());
     puts("bootlog: three overlapping bind watermarks commit at 4KiB/8KiB/final; later binders cannot extend earlier waits PASS");
 }
-int main(void) { retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks(); return 0; }
+static void nonblocking_records(void)
+{
+    reset_model();bootlog_capture("stage",5);
+    CHECK(bootlog_try_sync()==-FS_EAGAIN && !calls);
+    CHECK(!bootlog_activate(&fs,true,1));unsigned before=calls;
+    CHECK(bootlog_try_sync()==-FS_EAGAIN && calls==before && !commits);
+    CHECK(!bootlog_drain() && commits==1 && !snapshot().queued);
+    before=calls;CHECK(!bootlog_try_sync() && calls==before);
+    /* A watermark with no queued bytes still schedules a commit-only turn. */
+    bootlog_capture("written",7);CHECK(!bootlog_drain());
+    CHECK(!snapshot().queued);before=calls;
+    CHECK(bootlog_try_sync()==-FS_EAGAIN && snapshot().queued==1 && calls==before);
+    CHECK(!bootlog_drain() && commits==2 && !bootlog_try_sync());
+    bootlog_capture("bad sink",8);CHECK(bootlog_try_sync()==-FS_EAGAIN);
+    fail_commit=1;CHECK(bootlog_drain()==-FS_EIO);before=calls;
+    CHECK(bootlog_try_sync()==-FS_EIO && calls==before);
+    CHECK(bootlog_shutdown()==-FS_EIO);
+    puts("bootlog: nonblocking stage watermark, no producer I/O, commit-only turn, inactive/failed sink status PASS");
+}
+int main(void) { retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records(); return 0; }
