@@ -2,6 +2,8 @@
 #include "gfxdemo.h"
 #include "../desktop/rows.h"
 #include "../accessories/acc.h"
+#include "fps.h"
+#include <ciuki/gl.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -22,7 +24,52 @@ struct runtime {
     uint64_t next_slot;
     uint64_t submitted_ns,submitted_render_ns,submitted_copy_ns;
     uint32_t timing_serial;
+    unsigned benchmark_seconds,benchmark_page;
+    int benchmark_started,benchmark_done,benchmark_error;
+    struct gfx_fps fps;
 };
+static int arguments(int argc,char **argv,int *channel,int *test,unsigned *seconds,unsigned *page)
+{
+    char *filtered[16];int count=1;filtered[0]=argv[0];*seconds=0;*page=1;
+    int have_scene=0;
+    for (int i=1;i<argc;i++) {
+        if (!strcmp(argv[i],"--benchmark")) {
+            if (*seconds || ++i>=argc) return 2;
+            char *end;long n=strtol(argv[i],&end,10);
+            if (!argv[i][0] || *end || n<1 || n>60) return 2;
+            *seconds=(unsigned)n;
+        } else if (!strcmp(argv[i],"--scene")) {
+            if (have_scene || ++i>=argc) return 2;
+            if (!strcmp(argv[i],"cube")) *page=1;
+            else if (!strcmp(argv[i],"tiles")) *page=2;
+            else return 2;
+            have_scene=1;
+        } else {
+            if (count==16) return 2;
+            filtered[count++]=argv[i];
+        }
+    }
+    const char *path;
+    int error=acc_args(count,filtered,"gfxdemo",channel,test,&path);
+    return error || path ? 2 : 0;
+}
+static void benchmark_tick(struct runtime *r,uint64_t now)
+{
+    if (!r->benchmark_seconds || r->benchmark_done) return;
+    if (!r->benchmark_started) {
+        gfx_fps_start(&r->fps,now,r->benchmark_seconds);r->benchmark_started=1;
+    }
+    if (now<r->fps.end) return;
+    uint64_t elapsed=r->fps.end-r->fps.begin;
+    uint64_t fps100=r->fps.frames*100000000000ull/elapsed;
+    uint64_t p95=gfx_fps_p95(&r->fps);
+    printf("[gfxdemo] benchmark seconds=%u scene=%s source=%ux%u frames=%llu average_fps=%llu.%02llu frame_us=%llu p95_us=%llu status=%s\n",
+        r->benchmark_seconds,r->app.page==1 ? "cube" : "tiles",r->app.scene.width,r->app.scene.height,
+        (unsigned long long)r->fps.frames,(unsigned long long)(fps100/100),(unsigned long long)(fps100%100),
+        (unsigned long long)(r->fps.frames ? elapsed/r->fps.frames/1000 : 0),
+        (unsigned long long)(p95/1000),r->fps.overflow ? "overflow" : r->fps.frames ? "ok" : "no_frames");
+    fflush(stdout);r->benchmark_done=1;r->benchmark_error=r->fps.overflow || !r->fps.frames;
+}
 static int request(void *ctx,unsigned op,unsigned index)
 {
     struct runtime *r=ctx; struct ciuki_message m;
@@ -46,7 +93,10 @@ static void message(struct du_window *w,const struct desk_packet *p,void *ctx)
         r->app.convert_ns=p->convert_ns;r->app.copy_ns=p->copy_ns;
         r->app.slot_ns=p->slot_ns;r->app.refresh_ns=p->refresh_ns;r->app.have_timing=1;
         r->timing_serial=p->serial;
-        if (!p->result && r->scene_active) gfx_presented(&r->app,p->completed_ns);
+        if (!p->result && r->scene_active) {
+            gfx_presented(&r->app,p->completed_ns);
+            if (r->benchmark_started) gfx_fps_frame(&r->fps,p->completed_ns);
+        }
         if (p->result && p->result!=-EAGAIN) { r->window.error=-p->result; r->window.closed=1; }
         if (p->result) {
             r->app.scene_ready=0;r->app.animation_due=0;r->app.next_ns=p->next_frame_ns;
@@ -65,6 +115,12 @@ static void idle(void *ctx)
 {
     struct runtime *r=ctx;uint64_t now=du_now();
     if (!r->window.configured || r->window.closing) return;
+    if (r->benchmark_seconds && (r->app.page!=r->benchmark_page || r->app.paused || r->app.gouraud)) {
+        fprintf(stderr,"gfxdemo: benchmark interrupted by a scene/pause/shading change\n");
+        r->benchmark_error=1;r->benchmark_done=1;return;
+    }
+    benchmark_tick(r,now);
+    if (r->benchmark_done) return;
     gfx_advance(&r->app,now);
     /* Rendering touches only the private scene. Toolkit repaint/replacement
      * stays completion-gated; it supersedes any prepared successor. */
@@ -76,6 +132,15 @@ static void idle(void *ctx)
         if (r->window.present_pending) r->app.elapsed_ns+=GFX_FRAME_NS;
         gfx_prepare_scene(&r->app,r->window.pixels,r->window.info.width);
         r->app.elapsed_ns=phase;
+    }
+    if (r->app.scene.error) {
+        fprintf(stderr,"gfxdemo: TinyGL render error %d\n",r->app.scene.error);
+        r->window.error=EIO;r->window.closed=1;return;
+    }
+    if (r->benchmark_seconds && r->app.scene_ready &&
+        (r->app.scene.width!=640 || r->app.scene.height!=480)) {
+        fprintf(stderr,"gfxdemo: benchmark requires a 640x480 scene (client at least 672x644)\n");
+        r->benchmark_error=1;r->benchmark_done=1;return;
     }
     if (!r->window.present_pending && !r->window.swap_sent && !r->ui.dirty && r->window.count<16) {
         if (r->app.scene_ready) {
@@ -132,8 +197,8 @@ static void idle(void *ctx)
 }
 int main(int argc,char **argv)
 {
-    int channel,test;const char *path;
-    int e=acc_args(argc,argv,"gfxdemo",&channel,&test,&path); if (e || path) return 2;
+    int channel,test;unsigned seconds,page;
+    if (arguments(argc,argv,&channel,&test,&seconds,&page)) return 2;
     if (signal(SIGPIPE,SIG_IGN)==SIG_ERR) return 1;
     struct runtime *r=calloc(1,sizeof(*r)); if (!r) return 1;
     /* Exact approved runtime conversion shared with Desktop and Setup. */
@@ -144,11 +209,19 @@ int main(int argc,char **argv)
         if (fclose(f)) valid=0;
         if (!valid) { free(r->portrait);r->portrait=NULL; }
     }
+    if (seconds && !r->portrait) {
+        fprintf(stderr,"gfxdemo: benchmark requires the approved Ciuki portrait payload\n");
+        free(r);return 1;
+    }
     int width,height;acc_window_size(760,660,&width,&height);
     if (du_window_open_resizable(&r->window,&r->ui,channel,width,height,"Graphics Demo",560,360)) {
         fprintf(stderr,"gfxdemo: desktop connection failed: %s\n",strerror(errno)); free(r->portrait);free(r);return 1;
     }
     gfx_attach(&r->app,&r->ui,r->portrait);
+    r->app.page=page;du_get(&r->ui,GFX_TABS)->active=page;
+    du_get(&r->ui,GFX_RUN)->hidden=1;du_get(&r->ui,GFX_SHADE)->hidden=page!=1;
+    r->benchmark_seconds=seconds;r->benchmark_page=page;
+    printf("[gfxdemo] renderer=TinyGL authors=Fabrice_Bellard,Gek_DMHSW,C-Chads\n");fflush(stdout);
     r->app.time_ns=du_now;
     r->app.request=request;r->app.request_ctx=r;
     r->window.message=message;r->window.user=r;
@@ -158,6 +231,7 @@ int main(int argc,char **argv)
     int result;
     while ((result=du_window_turn(&r->window,du_now()))>0) {
         idle(r);
+        if (r->benchmark_done || r->window.closed) break;
         uint64_t now=du_now();
         /* NANOSLEEP rounds UP to milliseconds. Never request a fractional
          * sleep that would cross the desktop's upcoming nominal slot. */
@@ -166,5 +240,7 @@ int main(int argc,char **argv)
         if (wait) nanosleep(&pause,NULL);
         else (void)ciuki_syscall(CIUKI_SYS_YIELD,0,0,0,0,0,0);
     }
-    du_window_destroy(&r->window);free(r->portrait);free(r);return result<0 ? 1 : 0;
+    int failed=result<0 || r->window.error || r->benchmark_error ||
+        (r->benchmark_seconds && !r->benchmark_done);
+    du_window_destroy(&r->window);ciuki_gl_close();free(r->portrait);free(r);return failed ? 1 : 0;
 }

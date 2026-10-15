@@ -102,9 +102,35 @@ static void packets(void)
     assert(!desk_parse(&m,1,&info,&p));desk_put32(m.data+56,0);assert(!desk_parse(&m,0,NULL,&p));
     puts("PASS frame protocol bounds, directions, replacement attachments and disable");
 }
+static void telemetry(void)
+{
+    int channel,test;unsigned seconds,page;
+    char *argv[]={"gfxdemo","--channel-fd=7","--benchmark","10","--scene","tiles","--test=gfxdemo"};
+    assert(!arguments(7,argv,&channel,&test,&seconds,&page));
+    assert(channel==7 && test && seconds==10 && page==2);
+    char *bad[]={"gfxdemo","--benchmark","0"};assert(arguments(3,bad,&channel,&test,&seconds,&page)==2);
+    bad[2]="61";assert(arguments(3,bad,&channel,&test,&seconds,&page)==2);
+    bad[2]="10x";assert(arguments(3,bad,&channel,&test,&seconds,&page)==2);
+    assert(arguments(2,bad,&channel,&test,&seconds,&page)==2);
+    struct runtime *r=calloc(1,sizeof(*r));assert(r);
+    r->benchmark_seconds=10;r->app.page=1;r->app.scene.width=640;r->app.scene.height=480;
+    benchmark_tick(r,1000000000ull);
+    for (unsigned i=1;i<=500;i++) gfx_fps_frame(&r->fps,1000000000ull+i*20000000ull);
+    benchmark_tick(r,10999999999ull);assert(!r->benchmark_done);
+    benchmark_tick(r,11000000000ull);assert(r->benchmark_done && !r->benchmark_error);
+    assert(r->fps.frames==500 && gfx_fps_p95(&r->fps)==20000000ull);
+    gfx_fps_start(&r->fps,1000000000ull,10);r->benchmark_done=0;
+    benchmark_tick(r,11000000000ull);assert(r->benchmark_done && r->benchmark_error);
+    r->app.ui=&r->ui;gfx_advance(&r->app,1000000000ull);
+    for (unsigned i=1;i<=60;i++) gfx_presented(&r->app,1000000000ull+i*GFX_FRAME_NS);
+    gfx_advance(&r->app,2000000020ull);assert(r->app.fps10==600 && r->app.total_frames==60);
+    gfx_advance(&r->app,3000000020ull);assert(!r->app.fps10 && !r->app.ms1000);
+    free(r);
+    puts("PASS timed benchmark arguments, exact deadline, completed-frame average/p95 and no-frame failure");
+}
 int main(void)
 {
-    scaling();packets();rt_reset();
+    scaling();packets();telemetry();rt_reset();
     d=calloc(1,sizeof(*d));struct runtime *r=calloc(1,sizeof(*r));scanout=calloc(1024*768,4);assert(d&&r&&scanout);
     desk_init(d,&rt_ops,1024,768);d->pixels=calloc(1024*768,4);assert(d->pixels);
     d->ops.present=output;d->time_ns=server_now;d->hw_cursor=1;d->now_ns=test_now;d->mouse_x=d->mouse_y=0;
@@ -120,13 +146,13 @@ int main(void)
      * including when the clock has not ticked since submission. */
     demo_idle(r);assert(r->window.present_pending && r->app.scene_ready && !r->app.frames);
     assert(!memcmp(frozen,r->window.pixels,r->window.info.width*r->window.info.height*4));
-    uint32_t *prepared=malloc(320*240*4);assert(prepared);memcpy(prepared,r->app.scene.pixels,320*240*4);
+    uint32_t *prepared=malloc(640*480*4);assert(prepared);memcpy(prepared,r->app.scene.pixels,640*480*4);
     int different=0;
-    for (unsigned y=0;y<240;y++) if (memcmp(prepared+y*320,
-        frozen+(size_t)(r->app.viewport.y+(int)y)*760+r->app.viewport.x,320*4)) different=1;
+    for (unsigned y=0;y<480;y++) if (memcmp(prepared+y*640,
+        frozen+(size_t)(r->app.viewport.y+(int)y)*760+r->app.viewport.x,640*4)) different=1;
     assert(different);
     test_now+=1000000;demo_idle(r);assert(r->app.scene_ready);
-    assert(!memcmp(prepared,r->app.scene.pixels,320*240*4));free(prepared);
+    assert(!memcmp(prepared,r->app.scene.pixels,640*480*4));free(prepared);
     r->ui.dirty=1;fail_upload=1;assert(desk_redraw(d)<0);drain(client);
     test_now+=20000000;assert(du_window_turn(&r->window,test_now)>0);demo_idle(r);
     assert(!memcmp(frozen,r->window.pixels,r->window.info.width*r->window.info.height*4));assert(!r->app.frames);
@@ -157,11 +183,11 @@ int main(void)
     assert(!desk_redraw(d));verify_scene(r,client);drain(client);assert(du_window_turn(&r->window,test_now)>0);
     assert(r->app.scene.width==261 && r->app.scene.height==196);
     /* Pause suppresses animation; hidden completion never changes FPS. */
-    uint64_t frames=r->app.frames;r->app.paused=1;r->app.animation_due=0;r->app.scene_ready=0;
-    test_now+=GFX_FRAME_NS;demo_idle(r);assert(!r->window.present_pending && r->app.frames==frames);
+    uint64_t frames=r->app.total_frames;r->app.paused=1;r->app.animation_due=0;r->app.scene_ready=0;
+    test_now+=GFX_FRAME_NS;demo_idle(r);assert(!r->window.present_pending && r->app.total_frames==frames);
     r->app.paused=0;test_now+=GFX_FRAME_NS;demo_idle(r);assert(r->window.present_pending);
     d->clients[client].minimized=1;drain(client);assert(du_window_turn(&r->window,test_now)>0 && !r->window.present_pending);
-    assert(r->app.frames==frames);d->clients[client].minimized=0;
+    assert(r->app.total_frames==frames);d->clients[client].minimized=0;
     /* Switching back restores the full-resolution ordinary client surface. */
     r->app.page=0;r->ui.dirty=1;assert(du_window_turn(&r->window,test_now)>0);demo_idle(r);drain(client);
     test_now=d->next_frame_ns;assert(!desk_redraw(d));drain(client);assert(du_window_turn(&r->window,test_now)>0);
@@ -187,7 +213,7 @@ int main(void)
     assert(upload_count && !d->stats.overruns);free(frozen);
     desk_drop_client(d,client);du_window_destroy(&r->window);desk_render_release(d);rt_close(3);
     assert(!rt_handles() && !rt_mappings() && !rt_surfaces());rt_reset();
-    free(d->pixels);free(d);free(r);free(scanout);
+    ciuki_gl_close();free(d->pixels);free(d);free(r);free(scanout);
     puts("PASS actual runtime completion FPS, frozen source, upload retry, resize commit, native scene, pause, hidden frames, backpressure, disable, no leaks/overruns");
     return 0;
 }

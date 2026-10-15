@@ -34,7 +34,7 @@ def run(sanitize=False, reference=None, runtime=False, pipeline_reference=False)
             source_root.mkdir()
             archive = subprocess.run(["git", "archive", "--format=tar", reference,
                                       "apps/desktop", "apps/gfxdemo", "apps/accessories", "apps/libdeskui",
-                                      "apps/files", "apps/dosbox", "tests/host/desktop", "tests/host/fbdev_test.c",
+                                      "apps/files", "apps/dosbox", "assets/cursors", "tests/host/desktop", "tests/host/fbdev_test.c",
                                       "src/kernel/drivers/fbdev.c", "src/kernel/drivers/fbdev_probe.c"], cwd=ROOT, capture_output=True, check=True).stdout
             with tarfile.open(fileobj=io.BytesIO(archive)) as files:
                 files.extractall(source_root, filter="data")
@@ -53,20 +53,27 @@ def run(sanitize=False, reference=None, runtime=False, pipeline_reference=False)
             sources[-1] = "tests/host/desktop/gfxdemo_frame_test.c"
         if not runtime:
             sources.append("tests/host/desktop/gfxdemo_upload.c")
+        gl = load("gfx_performance_gl", ROOT / "sdk/libgl/build.py")
+        library = gl.host(sanitize=sanitize)
         binary = folder / "gfx-budget"
         flags = (["-O1", "-g", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined"] if sanitize else
                  ["-O2", "-fno-strict-aliasing", "-fno-builtin", "-mno-sse", "-mno-sse2", "-mno-mmx"])
         objects = []
         for i, source in enumerate(sources):
             obj = folder / f"{i}.o"
-            subprocess.run(["clang", "-std=c17", *flags, "-Wall", "-Wextra", "-Werror",
+            compile_flags = flags
+            if source.endswith("scene.c") and "#include <GL/gl.h>" in (source_root / source).read_text():
+                # Host GL needs the host floating-point calling convention;
+                # archived integer scenes retain their original scalar flags.
+                compile_flags = [f for f in flags if f not in ("-mno-sse", "-mno-sse2", "-mno-mmx")]
+            subprocess.run(["clang", "-std=c17", *compile_flags, "-Wall", "-Wextra", "-Werror",
                             "-Wno-unused-function", *(["-D_POSIX_C_SOURCE=200809L"] if source.endswith(("resize_client.c", "gfxdemo_frame_test.c")) else []),
                             *(["-DGFX_PIPELINE_REFERENCE" if pipeline_reference else "-DGFX_REFERENCE"] if reference else []),
-                            "-I", str(source_root / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            *gl.includes(), "-I", str(source_root / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
                             "-I", str(source_root / "apps/libdeskui"), "-I", str(include.parent),
                             "-c", str(source_root / source), "-o", str(obj)], check=True)
             objects.append(str(obj))
-        subprocess.run(["clang", *flags, *objects, "-o", str(binary)], check=True)
+        subprocess.run(["clang", *flags, *objects, str(library), "-lm", "-o", str(binary)], check=True)
         portrait, store = bench.assets()
         result = subprocess.run([str(binary), *([] if runtime else [str(portrait), str(store), "Platinum"])], capture_output=True, text=True,
                                 env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
@@ -78,6 +85,9 @@ class GraphicsPerformanceTests(unittest.TestCase):
     def test_runtime_completion_resize_and_bounds(self):
         output = run(sanitize=True, runtime=True)
         self.assertIn("PASS actual runtime completion FPS", output)
+        self.assertIn("[gfxdemo] fps=60.0 frame_us=16666 scene=cube", output)
+        self.assertIn("[gfxdemo] fps=0.0 frame_us=0 scene=cube", output)
+        self.assertIn("average_fps=50.00 frame_us=20000 p95_us=20000 status=ok", output)
         print(output)
 
     def test_frame_pipeline_scanout(self):

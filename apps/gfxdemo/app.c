@@ -42,7 +42,8 @@ static void event(struct du_ui *u,const struct du_event *e,void *ctx)
 void gfx_attach(struct gfx_app *a,struct du_ui *u,const uint32_t *portrait)
 {
     memset(a,0,sizeof(*a)); a->ui=u; a->portrait=portrait;
-    a->tabs[0].text[0]="2D benchmark"; a->tabs[1].text[0]="Software 3D"; a->tabs[2].text[0]="Bouncing sprites";
+    a->native_resolution=1;
+    a->tabs[0].text[0]="2D benchmark"; a->tabs[1].text[0]="OpenGL cube"; a->tabs[2].text[0]="OpenGL tiles";
     struct du_widget *tabs=du_add(u,DU_TABS,GFX_TABS,(struct du_rect){0},"");
     tabs->items=a->tabs; tabs->count=3;
     du_add(u,DU_BUTTON,GFX_RUN,(struct du_rect){0},"Run benchmark");
@@ -54,9 +55,25 @@ void gfx_attach(struct gfx_app *a,struct du_ui *u,const uint32_t *portrait)
 void gfx_advance(struct gfx_app *a,uint64_t now)
 {
     if (!a->last_ns) { a->last_ns=now; a->sample_begin=now; a->next_ns=now; }
+    if (a->stats_page!=a->page || a->stats_paused!=a->paused) {
+        a->stats_page=a->page;a->stats_paused=a->paused;
+        a->frames=0;a->sample_begin=now;a->fps10=0;a->ms1000=0;
+    }
     if (now<a->last_ns) return;
     if (!a->paused) a->elapsed_ns+=now-a->last_ns;
     a->last_ns=now;
+    /* Publish even while paused/hidden: missing presents must not leave a
+     * stale positive rate on screen. Completion timestamps count frames. */
+    if (a->page && now>a->sample_begin && now-a->sample_begin>=1000000000ull) {
+        uint64_t elapsed=now-a->sample_begin;
+        a->fps10=(a->frames*10000000000ull+elapsed/2)/elapsed;
+        a->ms1000=a->frames ? elapsed/a->frames/1000 : 0;
+        printf("[gfxdemo] fps=%llu.%llu frame_us=%llu scene=%s frames=%llu source=%ux%u\n",
+            (unsigned long long)(a->fps10/10),(unsigned long long)(a->fps10%10),
+            (unsigned long long)a->ms1000,a->page==1 ? "cube" : "tiles",
+            (unsigned long long)a->total_frames,a->scene.width,a->scene.height);
+        fflush(stdout);a->frames=0;a->sample_begin=now;a->ui->dirty=1;
+    }
     if (now<a->next_ns) return;
     a->next_ns+=((now-a->next_ns)/GFX_FRAME_NS+1)*GFX_FRAME_NS;
     if (a->page && !a->paused) a->animation_due=1;
@@ -66,12 +83,7 @@ void gfx_presented(struct gfx_app *a,uint64_t now)
 {
     if (!a->sample_begin) a->sample_begin=now;
     a->frames++;
-    if (now>a->sample_begin && now-a->sample_begin>=1000000000ull) {
-        uint64_t elapsed=now-a->sample_begin;
-        a->fps10=(a->frames*10000000000ull+elapsed/2)/elapsed;
-        a->ms1000=elapsed/a->frames/1000;
-        a->frames=0; a->sample_begin=now; a->ui->dirty=1;
-    }
+    a->total_frames++;
 }
 void gfx_receive(struct gfx_app *a,const struct desk_packet *p)
 {
@@ -140,8 +152,11 @@ static void scene_layout(struct gfx_app *a)
         if (ratio>=2) { w=GFX_W*ratio; h=GFX_H*ratio; }
     }
     a->viewport=(struct du_rect){(c->width-w)/2,66,w,h};
-    a->scene.width=native ? (unsigned)w : GFX_W;
-    a->scene.height=native ? (unsigned)h : GFX_H;
+    a->scene.width=(native || a->native_resolution) ? (unsigned)w : GFX_W;
+    a->scene.height=(native || a->native_resolution) ? (unsigned)h : GFX_H;
+    if (a->scene.width>GFX_MAX_W || a->scene.height>GFX_MAX_H) {
+        a->scene.width=GFX_MAX_W;a->scene.height=GFX_MAX_H;
+    }
 }
 void gfx_update_scene(struct gfx_app *a)
 {
@@ -213,7 +228,7 @@ void gfx_store_scene(struct gfx_app *a)
 void gfx_paint(struct du_ui *u,void *ctx)
 {
     struct gfx_app *a=ctx; struct du_canvas *c=&u->canvas; char text[160];
-    snprintf(text,sizeof(text),"%llu.%llu FPS  %llu.%03llu ms/frame",(unsigned long long)(a->fps10/10),
+    snprintf(text,sizeof(text),"Frame %llu  %llu.%llu FPS  %llu.%03llu ms/frame",(unsigned long long)a->total_frames,(unsigned long long)(a->fps10/10),
         (unsigned long long)(a->fps10%10),(unsigned long long)(a->ms1000/1000),(unsigned long long)(a->ms1000%1000));
     du_text_fit(c,240,42,c->width-256,text,DU_INK);
     if (!a->page) { benchmark(a,c); a->viewport=(struct du_rect){0}; a->scene_ready=1; }
@@ -228,8 +243,8 @@ void gfx_paint(struct du_ui *u,void *ctx)
             if (a->have_timing) snprintf(text,sizeof(text),"%dx%d / %ux%u: render %llu submit %llu wait %llu us",
                 c->width,c->height,a->scene.width,a->scene.height,
                 (unsigned long long)(a->render_ns/1000),(unsigned long long)(a->submit_ns/1000),(unsigned long long)(a->wait_ns/1000));
-            else snprintf(text,sizeof(text),"%s",a->page==1 ? "CPU rasterizer, z-buffer, Ciuki texture. 3D hardware: F7." :
-                "16 Ciuki sprites; elapsed-time motion, 60 Hz display pacing.");
+            else snprintf(text,sizeof(text),"%s",a->page==1 ? "TinyGL CPU renderer, depth buffer, lit Ciuki texture." :
+                "16 OpenGL Ciuki tiles; elapsed-time motion, 60 Hz display pacing.");
             label(c,16,c->height-90,text,DU_GRAY);
         }
     }
@@ -251,7 +266,7 @@ void gfx_paint(struct du_ui *u,void *ctx)
         (unsigned long long)(a->render_ns/1000),(unsigned long long)(a->submit_ns/1000),(unsigned long long)(a->wait_ns/1000),
         (unsigned long long)(a->convert_ns/1000),(unsigned long long)(a->copy_ns/1000),(unsigned long long)(a->slot_ns/1000));
     label(c,12,c->height-(compact ? 18 : 45),text,DU_INK);
-    if (!compact) label(c,12,c->height-24,!a->portrait ? "Ciuki texture unavailable: install the approved portrait payload." :
-        (a->accelerator.capabilities&1) && !a->info_error ? "Presentation: CPU upload + available 2D row copies; FPS counts completed presents." :
-        "Presentation: CPU upload; FPS counts completed presents.",DU_GRAY);
+    if (!compact) label(c,12,c->height-24,a->scene.error ? "TinyGL rendering failed; see the application log." :
+        !a->portrait ? "Ciuki texture unavailable: install the approved portrait payload." :
+        "TinyGL by Fabrice Bellard, Gek (DMHSW), and C-Chads. FPS counts presents.",DU_GRAY);
 }

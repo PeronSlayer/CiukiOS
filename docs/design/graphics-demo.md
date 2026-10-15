@@ -1,5 +1,14 @@
 # Graphics Demo (f2-52)
 
+F7-01 amendment (2026-10-15): the scene implementation and default source
+resolution described below are superseded by
+[Software OpenGL](opengl-software.md). The cube and tiles now use the SDK
+TinyGL subset and render at 640x480 in the default 760x660 client. The existing
+frame ownership, graphics messages, 2D benchmark and 60 Hz presentation slots
+remain in use. FPS counts completed presents, with a cumulative on-screen
+frame counter, a periodic log and a fixed-duration benchmark. Earlier sections
+remain the record of the previous renderer.
+
 Research checked 2026-10-13 against the upstream
 [X.Org Savage XAA source](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_xaa.c)
 (solid fills, screen copies, screen-origin MSB-first monochrome patterns and

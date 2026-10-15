@@ -179,11 +179,11 @@ def build():
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
-                          *(["-lm"] if name in ACCESSORIES else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
+                          *(["-lm"] if name in ACCESSORIES else []), *(["-lgl"] if name == "gfxdemo" else []), *(["-lfont"] if name == "control" else []), *(["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
-    # Audit integer drawing separately, including the fixed-point demo rasterizer.
-    for source in ("apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/gfxdemo/app.c", "apps/gfxdemo/scene.c"):
+    # Toolkit/compositor remain integer-only; TinyGL's scene uses the SDK x87 ABI.
+    for source in ("apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/gfxdemo/app.c"):
         obj = temp / f"{Path(source).stem}.audit.o"
         subprocess.run([str(SDK / "bin/ciuki-cc"), *CFLAGS, "-c", str(ROOT / source),
                         "-o", str(obj)], check=True, env=env)
@@ -200,7 +200,7 @@ def build():
          "inputs": expected, "commands": commands, "elf": evidence,
          "files": {name: digest(OUT / name) for name in (*sources, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES)},
          "portrait": portrait_record(c), "icons": icon_record(icons), "integer_compositor_audit": "PASS",
-         "integer_graphics_demo_audit": "PASS",
+         "graphics_demo_audit": "SDK x87; no SSE/MMX",
          "build_seconds": round(time.monotonic()-start, 3), "guest_qualification": "not_run"}
     (OUT / "manifest.json").write_text(json.dumps(m, indent=2, sort_keys=True)+"\n")
     for obj in objects:

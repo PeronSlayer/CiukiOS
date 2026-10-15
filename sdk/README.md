@@ -33,3 +33,9 @@ The F2-47 SDK also installs `libreg.a` and `<ciuki/registry.h>`. Link with
 for UTF-8 text storage, generations, recovery and the one-writer-per-root rule.
 Hardware is an inventory snapshot and is always read-only. Existing desktop
 and audio settings remain owned by their existing persistence code.
+
+F7-01 installs `libgl.a`, `<GL/gl.h>` and `<ciuki/gl.h>` for the TinyGL
+software subset. Link with `-lgl`. CiukiOS uses TinyGL by Fabrice Bellard,
+Gek (DMHSW), and C-Chads; its acknowledgment licence is installed under
+`licenses/TinyGL-LICENSE.txt`. See [libgl](libgl/README.md) for ownership,
+supported calls and limitations.
