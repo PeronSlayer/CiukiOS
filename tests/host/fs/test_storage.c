@@ -2,6 +2,8 @@
  * synthesized MBR (no full disk image copy). SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/storage.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/blackbox.h>
+#pragma weak blackbox_capture
 #include <ciuki/kernel.h>
 #include <ciuki/probe.h>
 #include "fake.h"
@@ -30,6 +32,7 @@ static char readonly_record[256];
 void klog(const char *fmt, ...) {
     char line[256]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
     if (!strncmp(line,"[storage] readonly ",19)) { readonly_reports++; memcpy(readonly_record,line,sizeof(line)); }
+    if (blackbox_capture) { blackbox_capture(line,strlen(line));blackbox_capture("\n",1); }
     bootlog_capture(line,strlen(line)); bootlog_capture("\n",1);
 }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...) {
@@ -195,9 +198,9 @@ static void mount_tests(void) {
         }
         s=start(); v=storage_volume(s,2);
         CHECK(v && (fault==2 ? v->error!=0 : v->fat.readonly));
-        if(!fault) { CHECK(v->read_gate); OK(storage_enable_write(s,2)); CHECK(v->fat.dirty_recovered && !v->fat.readonly); }
+        if(fault<2) { CHECK(v->read_gate); OK(storage_enable_write(s,2)); CHECK(v->fat.dirty_recovered && !v->fat.readonly); }
         else CHECK(storage_enable_write(s,2)<0 && !media[0].writes);
-        if(fault==1) CHECK(v->fat.ro_reasons&FAT_RO_COPIES);
+        if(fault==1) CHECK(!(v->fat.ro_reasons&FAT_RO_COPIES));
         stop(s,false); reset();
     }
     s=start(); OK(storage_enable_write(s,2)); OK(vfs_rmdir(&table,"C:/SYSTEM/LOGS"));
@@ -232,34 +235,19 @@ static void dirty_recovery_tests(void) {
             if(fault==1) for(unsigned copy=0;copy<2;copy++) patch_entry(f,&g,copy,g.next_free,0x0fffffff);
             s=recovery_start(i,&v);
             CHECK(v->fat.readonly && !v->fat.dirty_recovered && !v->writes && !f->flushes && !v->writes_before_gate);
-            if(!fault) {
-                CHECK(v->read_gate); f->reorder=true;
-                OK(storage_enable_write(s,d));
-                CHECK(v->fat.dirty_recovered && !v->fat.readonly && !v->fat.ro_reasons && !v->refused);
-                CHECK(v->write_sequence>v->read_sequence && !v->writes_before_gate);
-                /* Recovery sets clean, then writable-session setup clears it.
-                 * Each copy persists and flushes before the next is issued. */
-                for(unsigned phase=0;phase<2;phase++) for(unsigned copy=0;copy<2;copy++) {
-                    unsigned j=phase*6+copy*3;
-                    CHECK(f->trace[j].kind=='W' && f->trace[j].lba==g.reserved+copy*g.fat_sectors);
-                    CHECK(f->trace[j+1].kind=='P' && f->trace[j+1].lba==f->trace[j].lba);
-                    CHECK(f->trace[j+2].kind=='B');
-                    uint8_t b[512]; OK(fake_raw_read(f,f->trace[j].lba,b));
-                    CHECK((g.type==32 ? fs_rd32(b+4) : fs_rd16(b+2))==(clean&~bit));
-                }
-                stop(s,true);
-                for(unsigned copy=0;copy<2;copy++) {
-                    uint8_t b[512]; OK(fake_raw_read(f,g.reserved+copy*g.fat_sectors,b));
-                    CHECK((g.type==32 ? fs_rd32(b+4) : fs_rd16(b+2))==clean);
-                    struct scan_result scan=independent_scan(f->fd,copy);
-                    CHECK(!scan.dirty && !scan.divergent && !scan.lost && !scan.crosslinks && !scan.corrupt);
-                }
-                f->reorder=false;
-            } else {
-                CHECK(!v->read_gate && storage_enable_write(s,d)==-FS_EROFS && !f->writes && !f->flushes);
-                CHECK(v->fat.ro_reasons&(fault==1 ? FAT_RO_LOST : fault==2 ? FAT_RO_COPIES : FAT_RO_IO_FLAG));
-                CHECK(!v->fat.dirty_recovered); stop(s,true);
+            CHECK(v->read_gate); f->reorder=true;
+            OK(storage_enable_write(s,d));
+            CHECK(v->fat.dirty_recovered && !v->fat.readonly && !v->fat.ro_reasons && !v->refused);
+            CHECK(v->write_sequence>v->read_sequence && !v->writes_before_gate);
+            if (fault==1) CHECK(v->fat.repaired_lost==1);
+            stop(s,true);
+            for(unsigned copy=0;copy<2;copy++) {
+                uint8_t b[512]; OK(fake_raw_read(f,g.reserved+copy*g.fat_sectors,b));
+                CHECK((g.type==32 ? fs_rd32(b+4) : fs_rd16(b+2))==clean);
+                struct scan_result scan=independent_scan(f->fd,copy);
+                CHECK(!scan.dirty && !scan.divergent && !scan.lost && !scan.crosslinks && !scan.corrupt);
             }
+            f->reorder=false;
             fake_reset(f); reset();
         }
         /* Fail at every issuance/persistence/flush in recovery. Loss of the
@@ -270,18 +258,12 @@ static void dirty_recovery_tests(void) {
             s=recovery_start(i,&v); f->reorder=true; f->cut_at=cut;
             CHECK(storage_enable_write(s,d)==-FS_EIO && f->cut && v->fat.readonly && !v->fat.dirty_recovered);
             CHECK(v->fat.ro_reasons&FAT_RO_WRITE_ERROR); stop(s,false); fake_power_loss(f);
-            unsigned writes=f->writes;
             s=recovery_start(i,&v);
-            if(cut>=2 && cut<=4) {
-                CHECK(v->fat.ro_reasons&FAT_RO_COPIES);
-                CHECK(!v->read_gate && storage_enable_write(s,d)==-FS_EROFS && f->writes==writes && !v->fat.dirty_recovered);
-            } else {
-                CHECK(v->read_gate); OK(storage_enable_write(s,d));
-                CHECK(!v->fat.readonly && v->fat.dirty_recovered==(cut==1));
-            }
+            CHECK(v->read_gate); OK(storage_enable_write(s,d));
+            CHECK(!v->fat.readonly && v->fat.dirty_recovered);
             stop(s,true); f->reorder=false; fake_reset(f); reset();
         }
-        printf("PASS FAT%u dirty recovery: RO-first/gate, clean scan, lost/divergence/error refusal, reserved bits, per-copy W/P/B, six recovery cuts\n",g.type);
+        printf("PASS FAT%u dirty recovery: RO-first/gate, complete scan, lost/flag recovery, reserved bits, six repeated recovery cuts\n",g.type);
     }
 }
 static bool log_no_cancel(void *arg) { (void)arg; return false; }

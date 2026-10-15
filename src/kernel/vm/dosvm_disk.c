@@ -99,6 +99,9 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
               v->info.key.generation);
     v->overlay = vfs_open(&v->disk_table, v->overlay_path,
         VFS_READ | VFS_WRITE | VFS_CREATE | VFS_EXCLUSIVE, VFS_DENY_ALL, 0);
+    /* A metadata write gate must not hide readable game sectors. A caller
+     * may open a read-only DOS disk; guest writes report write protection. */
+    if (v->overlay == -FS_EROFS) return 0;
     if (v->overlay < 0) return v->overlay;
     v->overlay_open = v->overlay_created = true;
     return 0;
@@ -136,7 +139,7 @@ static int backing_io(struct dosvm *v, int handle, uint32_t offset, void *data, 
 
 static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
 {
-    if (!v->base_open || !v->overlay_open || lba >= DOSVM_SECTORS) return -EINVAL;
+    if (!v->base_open || lba >= DOSVM_SECTORS) return -EINVAL;
     for (unsigned i = 0; i < v->sector_count; i++)
         if (v->sectors[i].lba == lba)
             return backing_io(v, v->overlay, v->sectors[i].offset, sector, 512, false);
@@ -169,7 +172,8 @@ static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
 
 static int disk_write_locked(struct dosvm *v, uint32_t lba, const void *sector)
 {
-    if (!v->base_open || !v->overlay_open || lba >= DOSVM_SECTORS) return -EINVAL;
+    if (!v->base_open || lba >= DOSVM_SECTORS) return -EINVAL;
+    if (!v->overlay_open) return -FS_EROFS;
     unsigned i;
     for (i = 0; i < v->sector_count; i++) if (v->sectors[i].lba == lba) break;
     if (i == DOSVM_OVERLAY_SECTORS) return -ENOSPC;

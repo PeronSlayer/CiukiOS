@@ -374,11 +374,11 @@ static void readonly(const char *path)
     setup(path,false);unsigned reserved=fs_rd16(m.image+14),fats=m.image[16],fsz=fs_rd16(m.image+22);
     assert(fsz);
     for(unsigned i=0;i<fats;i++) {uint8_t *flag=m.image+(reserved+i*fsz)*512+2;fs_wr16(flag,fs_rd16(flag)&~0x8000u);}
-    mount_device();assert(storage_get()->volumes[4].fat.readonly && !m.writes);
-    assert(storage_enable_write(storage_get(),4)==-FS_EROFS && !m.writes);cleanup();
+    mount_device();assert(!storage_get()->volumes[4].fat.readonly && m.writes);
+    assert(!storage_enable_write(storage_get(),4));cleanup();
     setup(path,false);m.sector_size=4096;assert(usb_storage_attach(device())<0);
     assert(!device()->storage.online && !m.writes);cleanup();
-    puts("PASS USB write admission: unsupported flush, protected/dirty FAT without writes/recovery, non-512 sectors rejected");
+    puts("PASS USB write admission: unsupported flush, protected FAT without writes, dirty FAT repaired, non-512 sectors rejected");
 }
 static void uhci_transport(const char *path)
 {
@@ -578,14 +578,15 @@ static void prepare_validation(const char *path)
         attach();usb_storage_service(&m.h);
         if(kind<2) {
             struct storage_volume *v=&storage_get()->volumes[4];
-            assert(device()->storage.published && v->fat.readonly && !m.writes);
-            assert(v->fat.ro_reasons&(kind ? FAT_RO_LOST : FAT_RO_COPIES));
+            assert(device()->storage.published && !v->fat.readonly && m.writes);
+            assert(!v->fat.ro_reasons && v->fat.repaired_lost==1);
+            if (!kind) assert(v->fat.repaired_copies==1);
             assert(!v->fat.prepare_cache);
         } else if(kind==2)assert(!device()->storage.published && block()->quarantined && !m.writes);
         else assert(device()->storage.published && !storage_get()->volumes[4].fat.readonly);
         cleanup();
     }
-    puts("PASS F1-66 private mount windows retain copy/lost-cluster write refusal, fail closed on allocation failure and release all pages");
+    puts("PASS F1-66 private mount windows repair unowned copy/lost-cluster allocation, fail closed on allocation failure and release all pages");
 }
 static bool budget_log_delay;
 static void delay_after_publication(const char *line,size_t n)

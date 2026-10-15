@@ -2,6 +2,8 @@
  * Deliberately no output calls: a disk failure must never recurse into logs.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/bootlog.h>
+#include <ciuki/blackbox.h>
+#pragma weak blackbox_replay
 #include "../fs/vfs.h"
 #ifndef FS_HOST
 #include <ciuki/cpustat.h>
@@ -11,6 +13,8 @@ static struct bootlog_stats stats;
 static struct vfs_table table;
 static char boot[BOOTLOG_PROTECTED], ram[BOOTLOG_RAM], batch[BOOTLOG_BATCH];
 static unsigned boot_used, boot_sent, head, used;
+static const char *history;
+static unsigned history_size,history_sent,boot_capacity=BOOTLOG_PROTECTED;
 static uint32_t ring_position = BOOTLOG_PROTECTED;
 static int handle = -1;
 static bool draining, attached, disabled;
@@ -50,7 +54,7 @@ static void capture(const char *s, size_t n, bool periodic)
         uint32_t flags = lock_ram();
         if (disabled) { unlock_ram(flags); return; }
         for (size_t i = 0; i < take; i++) {
-            if (!periodic && boot_used < BOOTLOG_PROTECTED)
+            if (!periodic && boot_used < boot_capacity)
                 boot[boot_used++] = s[i];
             else {
                 if (used == BOOTLOG_RAM) { head = (head + 1) % BOOTLOG_RAM; used--; stats.dropped++; ring_retired++; }
@@ -92,6 +96,23 @@ int bootlog_activate(struct vfs *vfs, bool qualified, uint32_t sequence)
     e = vfs_log_reserve(&table, handle, BOOTLOG_LIMIT);
     if (e) return failed(e);
     last_metadata = fs_now_ms();
+    /* Replay is immutable until storage teardown. Keep it as a separate
+     * prefix stream so activation never moves 128KiB with interrupts off. */
+    if (blackbox_replay) {
+        size_t length;history=blackbox_replay(&length);
+        if (length>BOOTLOG_PROTECTED/2) {
+            size_t drop=length-BOOTLOG_PROTECTED/2;
+            while (drop<length && history[drop-1]!='\n') drop++;
+            history+=drop;length-=drop;
+        }
+        uint32_t f=lock_ram();
+        history_size=(unsigned)length;boot_capacity=BOOTLOG_PROTECTED-history_size;
+        if (boot_used>boot_capacity) {
+            unsigned lost=boot_used-boot_capacity;
+            boot_used=boot_capacity;stats.dropped+=lost;ring_retired+=lost;
+        }
+        stats.captured+=length;unlock_ram(f);
+    }
     stats.size = 0; stats.active = true;
     return 0;
 }
@@ -103,9 +124,9 @@ static int drain_owned(void)
      * Preserve the preceding bytes in a partly written block, then zero its
      * suffix. The published logical length excludes all padding. */
     uint32_t flags = lock_ram();
-    bool prefix = boot_sent < boot_used;
-    uint32_t position = prefix ? boot_sent : ring_position;
-    uint64_t retired = boot_sent + ring_retired;
+    bool prefix = history_sent<history_size || boot_sent < boot_used;
+    uint32_t position = prefix ? history_sent+boot_sent : ring_position;
+    uint64_t retired = history_sent + boot_sent + ring_retired;
     uint64_t target = sync_commit_target;
     unlock_ram(flags);
     bool rotate = !prefix && position == BOOTLOG_LIMIT;
@@ -130,12 +151,14 @@ static int drain_owned(void)
     unsigned n = 0;
     while (n < limit) {
         flags = lock_ram();
-        unsigned pending = prefix ? boot_used - boot_sent : used;
+        bool replaying=prefix && history_sent<history_size;
+        unsigned pending = prefix ? (replaying ? history_size-history_sent : boot_used - boot_sent) : used;
         unsigned take = pending < 128 ? pending : 128;
         if (take > limit - n) take = limit - n;
         for (unsigned i = 0; i < take; i++)
-            batch[offset + n++] = prefix ? boot[boot_sent + i] : ram[(head + i) % BOOTLOG_RAM];
-        if (prefix) boot_sent += take;
+            batch[offset + n++] = prefix ? (replaying ? history[history_sent+i] : boot[boot_sent + i]) : ram[(head + i) % BOOTLOG_RAM];
+        if (replaying) history_sent+=take;
+        else if (prefix) boot_sent += take;
         else { head = (head + take) % BOOTLOG_RAM; used -= take; ring_retired += take; }
         unlock_ram(flags);
         if (!take) break;
@@ -175,7 +198,7 @@ static void drop_drain(void)
 bool bootlog_due(uint32_t now)
 {
     uint32_t f = lock_ram();
-    uint32_t pending = boot_used - boot_sent + used;
+    uint32_t pending = history_size-history_sent + boot_used - boot_sent + used;
     bool due = stats.active && (stopping || sync_target > sync_done ||
         (pending && (!drain_started || pending >= BOOTLOG_HIGH_WATER ||
                      (uint32_t)(now - last_drain) >= BOOTLOG_DRAIN_MS)) ||
@@ -205,7 +228,7 @@ int bootlog_drain(void)
     int e=drain_owned();
     last_drain = fs_now_ms(); drain_started = true;
     uint32_t f=lock_ram();
-    uint64_t retired=boot_sent+ring_retired;
+    uint64_t retired=history_sent+boot_sent+ring_retired;
     bool commit=!e && stats.active && sync_commit_target && retired>=sync_commit_target;
     unlock_ram(f);
     bool publish = !e && stats.active && metadata_dirty &&
@@ -287,7 +310,7 @@ int bootlog_shutdown(void)
     int result = stats.error;
     for (;;) {
         uint32_t f = lock_ram();
-        bool pending = stats.active && (used || boot_sent < boot_used);
+        bool pending = stats.active && (used || history_sent<history_size || boot_sent < boot_used);
         if (!pending) disabled = true;
         unlock_ram(f);
         if (!pending) break;
@@ -316,7 +339,7 @@ void bootlog_snapshot(struct bootlog_stats *out)
 {
     if (!out) return;
     uint32_t f = lock_ram(); *out = stats;
-    out->boot_queued = boot_used - boot_sent; out->ring_queued = used;
+    out->boot_queued = history_size-history_sent+boot_used - boot_sent; out->ring_queued = used;
     out->queued = out->boot_queued + used;
     /* mount.c's existing storage task polls active && queued. A request to
      * commit bytes already drained must still cause one storage turn. */
@@ -327,6 +350,7 @@ void bootlog_reset(void)
 {
     if (attached || draining) return;
     memset(&stats, 0, sizeof(stats)); head = used = boot_used = boot_sent = 0;
+    history=0;history_size=history_sent=0;boot_capacity=BOOTLOG_PROTECTED;
     ring_position = BOOTLOG_PROTECTED; handle = -1; disabled = false;
     stopping=metadata_dirty=drain_started=false; last_drain=last_metadata=0;
     ring_retired=sync_target=sync_done=sync_commit_target=0;

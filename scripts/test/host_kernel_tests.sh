@@ -22,6 +22,10 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthrea
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \
     "$root/tests/host/bootlog_test.c" -o "$out/bootlog_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \
+    "$root/tests/host/blackbox_test.c" -o "$out/blackbox_test"
+"$out/blackbox_test"
 "$out/bootlog_test"
 python3 "$root/tests/host/test_system_stalls.py"
 python3 "$root/tests/host/fbdev_fixture_size_test.py"
@@ -456,12 +460,12 @@ storage_sources=(
     "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c"
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c"
     "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c"
-    "$root/src/kernel/fs/mount.c" "$root/src/kernel/core/bootlog.c"
+    "$root/src/kernel/fs/mount.c" "$root/src/kernel/core/bootlog.c" "$root/src/kernel/core/blackbox.c"
     "$root/src/kernel/drivers/blkpart.c" "$root/src/kernel/probes/fat_probes.c"
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c"
     "$root/tests/host/fs/fake.c" "$root/tests/host/fs/scan.c"
 )
-for storage_test in test_storage_namespace test_storage test_log_recovery; do
+for storage_test in test_storage_namespace test_storage test_log_recovery test_powercuts; do
     clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \
         -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \

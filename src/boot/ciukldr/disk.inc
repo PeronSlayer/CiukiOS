@@ -1,3 +1,5 @@
+; Canonical system FAT32 layout; checked against the image builder on host.
+%define CIUKI_FAT_RESERVED_SECTORS 160
 ; Read-only BIOS sector access. EAX=LBA, ES:BX=512-byte destination.
 disk_read:
     pushad
@@ -97,7 +99,7 @@ fat_mount:
     jne fat_error
     cmp byte [sector+13], 8
     jne fat_error
-    cmp word [sector+14], 32
+    cmp word [sector+14], CIUKI_FAT_RESERVED_SECTORS
     jne fat_error
     cmp byte [sector+16], 2
     jne fat_error
@@ -130,7 +132,7 @@ fat_mount:
     mov [fat_sectors], eax
     add eax, eax
     jc fat_error
-    add eax, 32
+    add eax, CIUKI_FAT_RESERVED_SECTORS
     jc fat_error
     cmp eax, [volume_sectors]
     jae fat_error
@@ -151,7 +153,7 @@ fat_mount:
     add eax, [B(partition_lba)]
     mov [data_lba], eax
     mov eax, [B(partition_lba)]
-    add eax, 32
+    add eax, CIUKI_FAT_RESERVED_SECTORS
     mov [fat_lba], eax
     mov eax, [sector+44]
     mov [root_cluster], eax

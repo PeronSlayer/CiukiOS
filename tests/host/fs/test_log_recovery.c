@@ -146,12 +146,12 @@ static void reservation_cases(void)
     OK(vfs_log_reserve(&table,h,BOOTLOG_LIMIT));
     OK(vfs_close(&table,h));stop(s,false);fake_power_loss(&media[0]);bootlog_reset();
     s=start();OK(storage_enable_write(s,2));
-    struct fat_entry before,after;OK(vfs_stat(&table,BOOTLOG_PATH,&before));CHECK(!before.size && before.first);
+    struct fat_entry before,after;OK(vfs_stat(&table,BOOTLOG_PATH,&before));CHECK(!before.size && !before.first); /* mount upgrade reclaimed the crash tail */
     uint32_t free=s->volumes[2].fat.free_clusters;
     h=vfs_open(&table,BOOTLOG_PATH,VFS_WRITE,VFS_DENY_WRITE,0);CHECK(h>=0);
     OK(vfs_truncate(&table,h,0));OK(vfs_close(&table,h));
     OK(vfs_stat(&table,BOOTLOG_PATH,&after));CHECK(!after.size && !after.first);
-    CHECK(s->volumes[2].fat.free_clusters==free+BOOTLOG_LIMIT/(s->volumes[2].fat.spc*512));
+    CHECK(s->volumes[2].fat.free_clusters==free);
     /* Transition from the previous 1MiB reservation, without file COW. */
     h=vfs_open(&table,BOOTLOG_PATH,VFS_READ|VFS_WRITE,VFS_DENY_WRITE,0);CHECK(h>=0);
     OK(vfs_truncate(&table,h,BOOTLOG_BUDGET));OK(vfs_close(&table,h));
@@ -194,7 +194,10 @@ static void diagnostic_cases(void)
     stop(s,false);reset();
     puts("PASS readonly cause: one reason/file/cluster record, first cause retained after repeated failures, live UI snapshot and writes refused");
 }
-int main(int argc,char **argv)
+#ifndef LOG_RECOVERY_MAIN
+#define LOG_RECOVERY_MAIN main
+#endif
+int LOG_RECOVERY_MAIN(int argc,char **argv)
 {
     CHECK(argc==4);for (unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
     baseline();recovery_cases();rotation_cases();reservation_cases();diagnostic_cases();

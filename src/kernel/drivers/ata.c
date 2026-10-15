@@ -24,6 +24,7 @@
 #define ATA_IDENTIFY 0xecu
 
 static struct ata_channel channels[ATA_CHANNELS];
+static int ata_emergency_write(struct blkdev *,uint64_t,const void *);
 static bool initialized;
 static const char *const owners[ATA_CHANNELS] = { "ata0", "ata1" };
 void proc_launch_dma_read(uint32_t bytes, uint64_t ms, bool bounce);
@@ -657,6 +658,7 @@ static int identify(struct ata_device *d)
     d->block.write_cache_state = cache;
     d->block.read = ata_read;
     d->block.write = ata_write;
+    d->block.emergency_write=ata_emergency_write;
     d->block.flush = supported_valid && ((w83 & (1u << 12)) || d->flush_ext) ? ata_flush : 0;
     /* 8.15.22/28: word 47 advertises support independently of word 59's
      * bit 8, which validates only the current (possibly disabled) setting. */
@@ -1017,6 +1019,61 @@ static int ata_flush(struct blkdev *b)
         d->elapsed_ms = now(c) - start;
     }
     kmutex_unlock(&c->mutex);
+    return e;
+}
+
+/* Emergency recorder: no mutex, scheduler, DMA, logging or command replay.
+ * Panic holds IF clear. Refuse a channel whose former owner/phase is unknown.
+ * A finite port-poll budget also works when timer interrupts have stopped. */
+static int emergency_poll(struct ata_channel *c, uint8_t required) {
+    for (unsigned i=0;i<200000;i++) {
+        uint8_t status=alternate(c);
+        if (!(status&ATA_BSY)) {
+            if (!status || status==0xff || (status&(ATA_ERR|ATA_DF))) return -FS_EIO;
+            if ((status&ATA_DRDY) && (status&ATA_DRQ)==required) return 0;
+        }
+    }
+    return -FS_EIO;
+}
+static int ata_emergency_write(struct blkdev *b,uint64_t lba,const void *data) {
+    struct ata_device *d=b->ctx;struct ata_channel *c=d->channel;
+    if ((read_eflags()&0x200) || !data || blkdev_range(b,lba,1) || !d->identified || d->atapi ||
+        c->stopped || c->quiescing || c->active || c->mutex.owner || c->dma.armed)
+        return -FS_EBUSY;
+    if (c->dma.ops && ((c->dma.ops->in8(c->dma.ctx,c->dma.base)&1) ||
+        (c->dma.ops->in8(c->dma.ctx,c->dma.base+2)&ATA_BM_ACTIVE))) return -FS_EBUSY;
+    uint8_t status=alternate(c);
+    /* Discovery can leave an absent slave selected (status zero). An idle
+     * channel may select the known target; a busy/data/fault phase may not. */
+    if (status==0xff || (status&(ATA_BSY|ATA_DRQ|ATA_DF))) return -FS_EBUSY;
+    uint8_t control=c->control_shadow;
+    device_control(c,control|ATA_NIEN);
+    reg_write(c,6,(uint8_t)(0xe0|(d->unit<<4)|(d->lba48 ? 0 : (lba>>24)&15)));
+    for (unsigned i=0;i<4;i++) (void)alternate(c);
+    int e=emergency_poll(c,0);
+    if (!e) {
+        if (d->lba48) {
+            reg_write(c,1,0);reg_write(c,2,0);reg_write(c,3,(uint8_t)(lba>>24));
+            reg_write(c,4,(uint8_t)(lba>>32));reg_write(c,5,(uint8_t)(lba>>40));
+        }
+        reg_write(c,1,0);reg_write(c,2,1);reg_write(c,3,(uint8_t)lba);
+        reg_write(c,4,(uint8_t)(lba>>8));reg_write(c,5,(uint8_t)(lba>>16));
+        reg_write(c,7,d->lba48 ? 0x34 : 0x30);
+        for (unsigned i=0;i<4;i++) (void)alternate(c);
+        e=emergency_poll(c,ATA_DRQ);
+        if (!e) {
+            for (unsigned i=0;i<256;i++) c->ops->out16(c->port_ctx,c->base,fs_rd16((const uint8_t *)data+i*2));
+            for (unsigned i=0;i<4;i++) (void)alternate(c);
+            e=emergency_poll(c,0);
+        }
+        if (!e && b->write_cache_state!=BLKDEV_CACHE_DISABLED) {
+            reg_write(c,7,d->flush_ext ? 0xea : 0xe7);
+            for (unsigned i=0;i<4;i++) (void)alternate(c);
+            e=emergency_poll(c,0);
+        }
+    }
+    /* An uncertain command is terminal here. Panic will halt immediately. */
+    (void)reg_read(c,7);device_control(c,control);
     return e;
 }
 

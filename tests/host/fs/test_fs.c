@@ -181,9 +181,13 @@ static void crash_tests(struct fake *f) {
             if (s.crosslinks || second.crosslinks || s.corrupt || second.corrupt) fprintf(stderr,"crash details mode=%u cut=%u/%u cross=%u/%u corrupt=%u/%u\n",mode,cut,events,s.crosslinks,second.crosslinks,s.corrupt,second.corrupt);
             CHECK(!s.crosslinks && !second.crosslinks && !s.corrupt && !second.corrupt);
             OK(cache_init(&cache,2*1024*1024)); OK(fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true));
-            if (s.divergent || s.lost) CHECK(vol.readonly);
-            else if (s.dirty) CHECK(!vol.readonly && vol.dirty_recovered);
-            if (s.divergent) { CHECK(vol.ro_reasons&FAT_RO_COPIES); divergent++; }
+            if (vol.readonly) CHECK(vol.ro_reasons&(FAT_RO_COPIES|FAT_RO_CORRUPT));
+            else {
+                struct scan_result repaired=independent_scan(f->fd,0);
+                CHECK(!repaired.lost && !repaired.divergent && !repaired.corrupt && !repaired.crosslinks);
+                if (s.dirty) CHECK(vol.dirty_recovered);
+            }
+            if (s.divergent) divergent++;
             if (s.dirty) dirty++; if (s.lost) lost++;
             cache_destroy(&cache); fake_reset(f); trials++;
         }
@@ -238,8 +242,7 @@ static void fault_tests(struct fake *f) {
         for (unsigned flag=0;flag<2;flag++) {
             unsigned m=bits==16 ? 0xffffu : 0xfffffffu, bit=bits==16 ? 0x8000u : 0x8000000u; if (flag) bit>>=1;
             for (unsigned copy=0;copy<2;copy++) patch_fat(f,&geometry,copy,1,m&~bit);
-            if(flag) assert_ro(f,FAT_RO_IO_FLAG);
-            else { mounted(f,true); CHECK(!vol.readonly && vol.dirty_recovered); unmounted(); }
+            mounted(f,true); CHECK(!vol.readonly && vol.dirty_recovered); unmounted();
             fake_reset(f);
         }
     }
@@ -248,7 +251,7 @@ static void fault_tests(struct fake *f) {
     assert_ro(f,FAT_RO_CORRUPT); fake_reset(f);
     /* Simulated torn FAT sector: persist an arbitrary prefix and lose power. */
     uint64_t sec=geometry.reserved; OK(fake_raw_read(f,sec,b)); b[20]^=0x33; f->torn_lba=sec; f->torn_bytes=23;
-    CHECK(f->dev.write(&f->dev,sec,1,b)==-FS_EIO); fake_power_loss(f); f->writes=0; assert_ro(f,FAT_RO_COPIES); fake_reset(f);
+    CHECK(f->dev.write(&f->dev,sec,1,b)==-FS_EIO); fake_power_loss(f); f->writes=0; assert_ro(f,FAT_RO_COPIES|FAT_RO_CORRUPT); fake_reset(f);
     /* Bad and orphan LFNs must fall back to the unmodified short alias. */
     uint32_t rootsec=geometry.type==32 ? geometry.data_sector+(geometry.root-2)*geometry.spc : geometry.root_sector;
     OK(fake_raw_read(f,rootsec,b)); CHECK(b[11]==15); b[13]^=1; OK(fake_raw_write(f,rootsec,b));

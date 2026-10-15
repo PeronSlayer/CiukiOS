@@ -827,11 +827,33 @@ static void test_storage_cache_faults(void)
 }
 #include "atapi_test.inc"
 #include "ata_dma_test.inc"
+static void test_emergency_recorder(void)
+{
+    for (unsigned ext=0;ext<2;ext++) {
+        struct fake f;struct blkdev *d=qualify(&f,!!ext);
+        uint64_t lba=ext ? 0x123456789ull : 8192;uint8_t data[512];fill(data,lba,1);
+        unsigned commands=f.commands,before_yields=yields,before_waits=schedules;
+        flags=0;CHECK(d->emergency_write && !d->emergency_write(d,lba,data));
+        CHECK(f.commands==commands+2 && f.data_writes==256 && !flags);
+        CHECK(yields==before_yields && schedules==before_waits && !f.channel.active && !f.channel.mutex.owner);
+        unsigned writes=f.writes;
+        f.channel.active=&f.channel.devices[0];CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
+        f.channel.active=0;f.channel.mutex.owner=&actor;CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
+        f.channel.mutex.owner=0;f.channel.stopped=true;CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
+        f.channel.stopped=false;f.status=0x80;CHECK(d->emergency_write(d,lba,data)==-FS_EBUSY);
+        CHECK(f.writes==writes);
+        f.status=0x40;f.fault=BUSY;commands=f.commands;
+        CHECK(d->emergency_write(d,lba,data)==-FS_EIO && f.commands==commands+1);
+        CHECK(yields==before_yields && schedules==before_waits);
+        flags=0x200;
+    }
+    puts("PASS ATA emergency recorder: LBA28/LBA48 PIO + FLUSH, no scheduler/locks, busy/owned/quarantined refusal, finite stalled-command polls/no replay");
+}
 int main(void)
 {
     test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle();
-    test_dma();
+    test_dma(); test_emergency_recorder();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
     return failures ? 1 : 0;

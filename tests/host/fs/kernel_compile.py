@@ -29,7 +29,7 @@ flags=[literal(n) for n in flag_list.elts]
 out=root/'build/host/fs/kernel'
 out.mkdir(exist_ok=True)
 sources=sorted((root/'src/kernel/fs').glob('*.c'))
-sources += [root/'src/kernel/core/bootlog.c', root/'src/kernel/probes/fat_probes.c']
+sources += [root/'src/kernel/core/bootlog.c', root/'src/kernel/core/blackbox.c', root/'src/kernel/probes/fat_probes.c']
 # f1-39: compile the native string-I/O boundary and enlarged file-read path
 # with the real target flags, including the unchanged 4096-byte frame guard.
 sources += [root/'src/kernel/drivers/ata.c', root/'src/kernel/drivers/ata_dma.c', root/'src/kernel/drivers/ata_probe.c',

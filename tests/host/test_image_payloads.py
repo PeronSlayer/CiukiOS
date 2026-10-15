@@ -35,6 +35,44 @@ class ImagePayloadTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.work = Path(self.temp.name)
 
+    @unittest.skipUnless(shutil.which("mkfs.fat") and shutil.which("fsck.fat"), "requires FAT tools")
+    def test_raw_blackbox_reservation(self):
+        import re
+        loader = (ROOT / "src/boot/ciukldr/disk.inc").read_text()
+        reserved = int(re.search(r"%define CIUKI_FAT_RESERVED_SECTORS (\d+)", loader)[1])
+        self.assertEqual(reserved, image.FAT_RESERVED)
+        self.assertIn("cmp word [sector+14], CIUKI_FAT_RESERVED_SECTORS", loader)
+        self.assertEqual(loader.count("add eax, CIUKI_FAT_RESERVED_SECTORS"), 2)
+        if shutil.which("nasm"):
+            binary = self.work / "loader.bin"
+            subprocess.run(["nasm", "-f", "bin", "-I", str(ROOT) + "/",
+                            str(ROOT / "src/boot/ciukldr.asm"), "-o", str(binary)], check=True, cwd=ROOT)
+            prepared = image.prepare_loader(binary.read_bytes())
+            self.assertEqual(prepared[:4], b"CLDR")
+            self.assertEqual(len(prepared) % 512, 0)
+        volume = self.work / "raw.fat"
+        with volume.open("wb") as stream:
+            stream.truncate(40 * 1024 * 1024)
+        subprocess.run(["mkfs.fat", "--invariant", "-a", "-F", "32", "-s", "1",
+                        "-R", str(image.FAT_RESERVED), "-b", "6", str(volume)], check=True)
+        with volume.open("rb") as stream:
+            before = stream.read(image.FAT_RESERVED * 512)
+        image.initialize_blackbox(volume)
+        with volume.open("rb") as stream:
+            after = stream.read(image.FAT_RESERVED * 512)
+        import struct, zlib
+        self.assertEqual(before[:8*512], after[:8*512])
+        self.assertEqual(before[9*512:32*512], after[9*512:32*512])
+        desc = after[8*512:9*512]
+        self.assertEqual(struct.unpack_from("<4sIII", desc), (b"CBB1", 1, 32, 128))
+        self.assertEqual(struct.unpack_from("<I", desc, 508)[0], zlib.crc32(desc[:508]))
+        self.assertEqual(after[32*512:], bytes(65536))
+        subprocess.run(["fsck.fat", "-n", str(volume)], check=True)
+        with volume.open("r+b") as stream:
+            stream.seek(14); stream.write(struct.pack("<H", 32))
+        with self.assertRaisesRegex(ValueError, "blackbox reserved geometry"):
+            image.initialize_blackbox(volume)
+
     def test_registry_seed_and_payload_readback(self):
         with patch.object(image, "git_identity", return_value=("abc123", "clean")):
             sources, directories = image.registry_payloads(self.work / "registry")

@@ -36,7 +36,7 @@ def main():
     for bits, mib, spc in [(12,12,8),(16,16,2),(32,40,1)]:
         path = OUT/f'fat{bits}.img'
         with path.open('wb') as f: f.truncate(mib*1024*1024)
-        output=run('mkfs.fat','--invariant','-F',str(bits),'-S','512','-s',str(spc),'-f','2','-i','00C1A001',str(path))
+        output=run('mkfs.fat','--invariant','-F',str(bits),'-S','512','-s',str(spc),'-f','2','-R',str(160 if bits == 32 else 32),'-i','00C1A001',str(path))
         run('mcopy','-m','-i',str(path),str(OUT/'seed.bin'),'::/Seed data with spaces.bin')
         run('mcopy','-m','-i',str(path),str(OUT/'seed.bin'),'::/SHORT.BIN')
         run('mcopy','-m','-i',str(path),str(OUT/'seed.bin'),'::/café.txt')

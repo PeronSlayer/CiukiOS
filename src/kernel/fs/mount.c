@@ -5,6 +5,13 @@
 #include <ciuki/storage.h>
 #include <ciuki/kernel.h>
 #include <ciuki/bootlog.h>
+#include <ciuki/blackbox.h>
+#pragma weak blackbox_bind
+#pragma weak blackbox_flush
+#pragma weak blackbox_checkpoint
+#pragma weak blackbox_reset
+#pragma weak blackbox_capture
+#pragma weak blackbox_serial_replay
 #include <ciuki/init.h>
 #include <ciuki/vfs_hooks.h>
 #include <ciuki/reboot.h>
@@ -211,6 +218,9 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         }
         if (!superfloppy && !fat_partition(part->type)) continue;
         bool boot = !disk && !part->logical && part->start == boot_start && part->count == boot_count;
+        /* Raw replay precedes FAT scanning and every writable activation. */
+        if (boot && s==&system_storage && blackbox_bind)
+            blackbox_bind(dev,part->start,part->count,blackbox_serial_replay);
         unsigned d = boot ? 2 : s->next_drive++;
         if (d >= 26) return s->disk_errors[disk] = -FS_ENOSPC;
         struct storage_volume *v = &s->volumes[d];
@@ -223,7 +233,7 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         e = fat_mount(&v->fat, &s->cache, &v->io, 0, part->count, false);
         v->writes_before_gate = v->writes;
         if (!e) {
-            v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY));
+            v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY | FAT_RO_LOST | FAT_RO_IO_FLAG));
             if (v->read_gate) v->read_sequence = ++s->sequence;
             e = vfs_attach(&s->vfs, d, &v->fat);
         }
@@ -286,9 +296,9 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
         v->writes_before_gate=v->writes;
         if (!r && (s->stopped || dev->quarantined || (cancel && cancel(ctx)))) r=-FS_EIO;
         if (!r) {
-            v->read_gate=!(v->fat.ro_reasons & ~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY));
+            v->read_gate=!(v->fat.ro_reasons & ~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG));
             if (v->read_gate) v->read_sequence=++s->sequence;
-            if (!s->writer_error && v->read_gate && !(v->fat.ro_reasons & FAT_RO_DIRTY)) {
+            if (!s->writer_error && v->read_gate) {
                 int w=fat_enable_write(&v->fat);
                 if (!w) v->write_sequence=++s->sequence;
                 if (w && w!=-FS_EROFS) r=w;
@@ -435,7 +445,6 @@ int storage_enable_write(struct storage *s, unsigned d)
     if (!v || s->stopped) return -FS_ENOENT;
     if (s->writer_error) return s->writer_error;
     if (v->error) return v->error;
-    if (v->removable && (v->fat.ro_reasons & FAT_RO_DIRTY)) return -FS_EROFS;
     if (!v->read_gate || v->writes_before_gate) { v->refused++; return -FS_EROFS; }
     fs_lock_take(&s->vfs.lock);
     refresh_volume(v);
@@ -500,6 +509,7 @@ int storage_shutdown(struct storage *s)
 }
 void storage_destroy(struct storage *s)
 {
+    if (s==&system_storage && blackbox_reset) blackbox_reset();
     if (!s || !s->ready) return;
     for (unsigned i=0; i<STORAGE_DISKS; i++) if (s->optical[i].mounted) fs_ro_unmount(&s->optical[i]);
     for (unsigned i=0; i<STORAGE_NTFS; i++) if (s->ntfs[i].ro.mounted) fs_ro_unmount(&s->ntfs[i].ro);
@@ -597,23 +607,36 @@ bool storage_probe_readonly(const char *selector, unsigned length)
 }
 int storage_sync(void)
 {
-    int e = bootlog_shutdown();
+    static const char marker[]="[storage] shutdown requested\n";
+    if (blackbox_capture) blackbox_capture(marker,sizeof(marker)-1);
+    int e=blackbox_checkpoint ? blackbox_checkpoint() : 0;
+    if (e) return e;
+    e = bootlog_shutdown();
     if (e) { system_storage.stopped = true; return e; }
-    return storage_shutdown(&system_storage);
+    e=storage_shutdown(&system_storage);
+    if (!e) {
+        static const char complete[]="[storage] shutdown complete\n";
+        if (blackbox_capture) blackbox_capture(complete,sizeof(complete)-1);
+        if (blackbox_checkpoint) e=blackbox_checkpoint();
+    }
+    return e;
 }
 #ifndef FS_HOST
 static bool initialized;
 static void storage_timer(void *arg)
 {
     struct storage *s = arg;
+    uint32_t last_raw=0;
     while (!s->stopped) {
         task_sleep_ms(10);
         uint64_t now=fs_now_ms();
         bool log_due=bootlog_due((uint32_t)now);
-        bool due = cache_writeback_due(&s->cache, now) || log_due;
+        bool due = cache_writeback_due(&s->cache, now) || log_due || (uint32_t)(now-last_raw)>=1000;
         if (due && !s->stopped) {
             /* Disk waits/writeback run on this P_DEVICE task, never on the
              * shared bounded work queue. fs_service/ATA yield within work. */
+            if (blackbox_flush) blackbox_flush();
+            last_raw=(uint32_t)now;
             if (log_due) bootlog_drain();
             storage_writeback(s, fs_now_ms());
         }
