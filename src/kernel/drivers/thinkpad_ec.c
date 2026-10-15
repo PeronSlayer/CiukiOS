@@ -192,9 +192,15 @@ static int ec_read(struct thinkpad_ec *e, uint8_t *status, struct ec_budget *b)
     if (!err && (*status & 15) > 14) err = -EIO;
     return err;
 }
-static void ec_master(uint8_t status, struct ciuki_mixer_master *m)
+static void ec_master(uint8_t status, uint8_t previous, struct ciuki_mixer_master *m)
 {
-    m->left = m->right = ((status & 15u) * 100u + 7u) / 14u;
+    unsigned old = previous & 15u, level = status & 15u;
+    unsigned up = (level + 15u - old) % 15u;
+    int step = up == 1 ? 1 : up == 14 ? -1 : 0;
+    unsigned master = (m->left + m->right) / 2u;
+    if (step > 0) master = master > 95 ? 100 : master + 5;
+    if (step < 0) master = master < 5 ? 0 : master - 5;
+    m->left = m->right = master;
     m->mute = !!(status & 0x40);
 }
 static void ec_log(uint8_t status)
@@ -203,14 +209,14 @@ static int ec_set(struct thinkpad_ec *e, struct ciuki_mixer_master *m, struct ec
 {
     uint8_t status = 0;
     int err = ec_read(e, &status, b);
-    unsigned level = (((m->left + m->right) / 2) * 14u + 50u) / 100u;
-    uint8_t desired = (status & ~EC_MASK) | level | (m->mute ? 0x40 : 0);
+    uint8_t desired = (status & ~0x40u) | (m->mute ? 0x40 : 0);
     if (!err && desired != status) err = ec_transfer(e, true, &desired, b);
     if (!err) err = ec_read(e, &status, b); /* prove the write; never invent state */
     if (!err && (status & EC_MASK) != (desired & EC_MASK)) err = -EIO;
     if (!err) {
         if ((e->status & EC_MASK) != (status & EC_MASK)) ec_log(status);
-        e->status = status; ec_master(status, m);
+        e->status = status;
+        m->mute = !!(status & 0x40);
     }
     return err;
 }
@@ -273,9 +279,10 @@ int thinkpad_ec_volume_poll(struct thinkpad_ec *e, struct ciuki_mixer_master *m)
     ec_result(e, err);
     if (err) return err;
     if (disabled) klog("[ec] thinkpad resumed");
-    if (recovering) return 1;
+    if (recovering) return 0;
     if ((status & EC_MASK) == (e->status & EC_MASK)) return 0;
-    e->status = status; ec_master(status, m); ec_log(status); return 1;
+    uint8_t previous = e->status;
+    e->status = status; ec_master(status, previous, m); ec_log(status); return 1;
 }
 
 #ifndef THINKPAD_EC_HOST

@@ -149,11 +149,11 @@ static void test_thinkpad_ec_init(void)
         else thinkpad_ec_init();
         CHECK(ec_record_count>=4 && strstr(ec_records[1],"[smbios] version=") && strstr(ec_records[2],"[smbios] bios vendor="));
         if(!scenario) {
-            CHECK(hec.active && audio.master_in_hardware && audio.master.left==21 && ehw.volume_writes==1);
+            CHECK(hec.active && audio.master_in_hardware && audio.master.left==20 && ehw.volume_writes==0);
             CHECK(second_claim_next==2 && audio_resources[0].state==RS_ACTIVE && audio_resources[1].state==RS_ACTIVE);
             char record[128];snprintf(record,sizeof(record),"[smbios] entry=ok address=000f0000 table=000e0000 bytes=%zu",n);
             ec_expect_record(0,record);
-            ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=3 mute=0");
+            ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=7 mute=0");
         } else {
             const char *reason=scenario==1?"safe_mode":(scenario==2 || scenario==9)?"qemu":scenario==3?"not_ibm":(scenario==8 || scenario>=10)?"ec_handshake_failed":"no_smbios";
             char expected[80];snprintf(expected,sizeof(expected),"[ec] thinkpad gate=%s",reason);
@@ -186,12 +186,26 @@ static void test_thinkpad_ec_records(void)
     struct ciuki_mixer_master m={.left=20,.right=20};
     memset(&ehw,0,sizeof(ehw));ehw.reg=0xa7;struct thinkpad_ec_io io=ec_mock_io();
     CHECK(thinkpad_ec_gate(&s,0));ec_expect_record(3,"[ec] thinkpad hint=1");
-    CHECK(!thinkpad_ec_probe(&hec,&io,true,&m) && hec.active && m.left==21);
-    CHECK(ehw.register_reads>=4 && ehw.volume_writes==1 && ehw.reg==0xa3);
-    ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=3 mute=0");
+    CHECK(!thinkpad_ec_probe(&hec,&io,true,&m) && hec.active && m.left==20);
+    CHECK(ehw.register_reads>=4 && ehw.volume_writes==0 && ehw.reg==0xa7);
+    ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=7 mute=0");
     ehw.reg=0xe8;ehw.tick=hec.next_poll;
-    CHECK(thinkpad_ec_volume_poll(&hec,&m)==1 && m.left==57 && m.mute);
+    CHECK(thinkpad_ec_volume_poll(&hec,&m)==1 && m.left==25 && m.mute);
     ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=8 mute=1");
+    /* EC level is an edge source. Wraps count as one key press and master
+     * changes stay in five point increments at both ends of the range. */
+    ehw.reg=0xe9; ehw.tick=hec.next_poll;
+    CHECK(thinkpad_ec_volume_poll(&hec,&m)==1 && m.left==30);
+    ehw.reg=0xee; ehw.tick=hec.next_poll;
+    CHECK(thinkpad_ec_volume_poll(&hec,&m)==1 && m.left==30);
+    ehw.reg=0xe0; ehw.tick=hec.next_poll;
+    CHECK(thinkpad_ec_volume_poll(&hec,&m)==1 && m.left==35);
+    ehw.reg=0xee; ehw.tick=hec.next_poll;
+    CHECK(thinkpad_ec_volume_poll(&hec,&m)==1 && m.left==30);
+    m.left=m.right=100; ehw.reg=0xe0; ehw.tick=hec.next_poll;
+    CHECK(thinkpad_ec_volume_poll(&hec,&m)==1 && m.left==100);
+    m.left=m.right=0; ehw.reg=0xee; ehw.tick=hec.next_poll;
+    CHECK(thinkpad_ec_volume_poll(&hec,&m)==1 && m.left==0);
     /* Both flags exclude a recognized IBM system before any port access. */
     for(unsigned i=0;i<2;i++) {
         memset(&ehw,0,sizeof(ehw));ec_capture_begin();
@@ -310,10 +324,10 @@ static void test_thinkpad_ec_reserved_table(void)
         if(success) {
             ec_expect_record(1,"[smbios] version=2.31 vendor=\"IBM\" product=\"26475FU\" version=\"Not Available\" type1=1");
             ec_expect_record(2,"[smbios] bios vendor=\"IBM\" version=\"1AET64WW (1.20 )\" type0=1");
-            CHECK(audio.master.left==21 && ehw.volume_writes==1 && second_claim_next==2);
-            ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=3 mute=0");
+            CHECK(audio.master.left==20 && ehw.volume_writes==0 && second_claim_next==2);
+            ec_expect_record(ec_record_count-1,"[ec] thinkpad volume=7 mute=0");
             ehw.reg=0xe8;ehw.tick=hec.next_poll;g_ticks=ehw.tick;
-            CHECK(thinkpad_ec_master_poll(&audio.master)==1 && audio.master.left==57 && audio.master.mute);
+            CHECK(thinkpad_ec_master_poll(&audio.master)==1 && audio.master.left==25 && audio.master.mute);
         } else {
             ec_expect_record(ec_record_count-1,"[ec] thinkpad gate=no_smbios");
             CHECK(!ehw.reads && !ehw.writes && !second_claim_next);
@@ -360,7 +374,7 @@ static void test_thinkpad_ec_tolerance(void)
     audio.ready=true;audio.master_in_codec=true;audio.master_in_hardware=true;audio.master=m;
     uint32_t seq=saved_sequence;
     m=(struct ciuki_mixer_master){.version=1,.size=32,.left=35,.right=35};
-    CHECK(!audio_master_set(&m) && m.left==36 && m.save_state==CIUKI_MIXER_SAVED);
+    CHECK(!audio_master_set(&m) && m.left==35 && m.save_state==CIUKI_MIXER_SAVED);
     CHECK(saved_sequence==seq+1 && !hw.codec[2/2] && hec.available);
     CHECK(!ec_records_containing("timeout") && !ec_records_containing("disabled"));
 
@@ -392,8 +406,8 @@ static void test_thinkpad_ec_tolerance(void)
     ehw.stuck_ibf=false;ehw.reg=0xe1;ehw.tick=hec.next_poll;seq=saved_sequence;
     audio_master_refresh();
     CHECK(hec.active && hec.available && !hec.failures && audio.master_in_hardware);
-    CHECK(audio.master.left==50 && audio.master.right==50 && !audio.master.mute && ehw.reg==0xa7);
-    CHECK(!hw.codec[2/2] && saved_sequence==seq && ec_records_containing("resumed")==1);
+    CHECK(audio.master.left==25 && audio.master.right==75 && !audio.master.mute && ehw.reg==0xa1);
+    CHECK(saved_sequence==seq && ec_records_containing("resumed")==1);
 
     /* A lone timeout must recover at 250 ms with an offline software master. */
     ac97.software_master=true;audio.master_in_codec=false;
@@ -413,7 +427,8 @@ static void test_thinkpad_ec_tolerance(void)
     m.mute=1;m.save_state=0;m.save_error=0;CHECK(!audio_master_set(&m));
     audio_stream_close(stream);
     ehw.stuck_ibf=false;ehw.tick=hec.next_poll;audio_master_refresh();
-    CHECK(hec.available && hec.active && !hec.failures && audio.master_in_hardware && (ehw.reg&EC_MASK)==0x4b);
+    CHECK(hec.available && hec.active && !hec.failures && audio.master_in_hardware &&
+          audio.master.left==80 && audio.master.right==80 && audio.master.mute && (ehw.reg&EC_MASK)==0x41);
 
     /* Late output belongs to the old read and is drained before recovery. */
     ehw.stuck_obf=true;ehw.tick=hec.next_poll;audio_master_refresh();
@@ -463,25 +478,27 @@ static void test_thinkpad_ec(void)
     struct ciuki_mixer_master m={.version=1,.size=32,.left=20,.right=20};
     memset(&ehw,0,sizeof(ehw));ehw.reg=0xa7;struct thinkpad_ec_io io=ec_mock_io();
     CHECK(thinkpad_ec_probe(&hec,&io,false,&m)==-ENODEV && !ehw.reads && !ehw.writes);
-    CHECK(!thinkpad_ec_probe(&hec,&io,true,&m)&&hec.active&&m.left==21&&m.right==21&&!m.mute&&ehw.reg==0xa3);
+    CHECK(!thinkpad_ec_probe(&hec,&io,true,&m)&&hec.active&&m.left==20&&m.right==20&&!m.mute&&ehw.reg==0xa7);
     unsigned reads=ehw.reads;CHECK(!thinkpad_ec_volume_poll(&hec,&m)&&ehw.reads==reads);
-    for(unsigned level=0;level<=14;level++) {
+    for(unsigned i=1;i<=15;i++) {
+        unsigned level=(7+i)%15;
         ehw.reg=0xa0|level;ehw.tick=hec.next_poll;
-        int changed=thinkpad_ec_volume_poll(&hec,&m);CHECK(changed>=0&&m.left==(level*100+7)/14&&m.right==m.left&&!m.mute);
+        int changed=thinkpad_ec_volume_poll(&hec,&m);
+        CHECK(changed==1&&m.left==20u+i*5u&&m.right==m.left&&!m.mute);
     }
-    ehw.reg=0xe8;ehw.tick=hec.next_poll;CHECK(thinkpad_ec_volume_poll(&hec,&m)==1&&m.left==57&&m.mute);
-    ehw.reg=0xa8;ehw.tick=hec.next_poll;CHECK(thinkpad_ec_volume_poll(&hec,&m)==1&&!m.mute); /* firmware up/down unmutes */
+    ehw.reg=0xe7;ehw.tick=hec.next_poll;CHECK(thinkpad_ec_volume_poll(&hec,&m)==1&&m.left==95&&m.mute);
+    ehw.reg=0xa7;ehw.tick=hec.next_poll;CHECK(thinkpad_ec_volume_poll(&hec,&m)==1&&!m.mute);
     hardware_setup(&ac97);ac97.software_master=false;audio.ready=true;audio.master_in_hardware=true;
     audio.master=m;ehw.reg=0xa7;ehw.tick=hec.next_poll;audio_master_refresh();
-    CHECK(audio.master.left==50&&!audio.master.mute&&!hw.codec[2/2]&&!hw.codec[4/2]);
+    CHECK(audio.master.left==95&&!audio.master.mute);
     m=(struct ciuki_mixer_master){.version=1,.size=32,.left=20,.right=20};
-    CHECK(!audio_master_set(&m)&&m.left==21&&ehw.reg==0xa3&&!hw.codec[2/2]);
-    /* EC observations do not write settings or block the refill worker on disk. */
+    CHECK(!audio_master_set(&m)&&m.left==20&&ehw.reg==0xa7);
+    /* EC observations save the new master preference through the normal path. */
     uint32_t sequence=saved_sequence;ehw.reg=0xe4;ehw.tick=hec.next_poll;audio_master_refresh();
-    CHECK(audio.master.left==29&&audio.master.mute&&audio.master.save_state==CIUKI_MIXER_UNSAVED&&saved_sequence==sequence&&hw.codec[2/2]==0x8000);
+    CHECK(audio.master.left==20&&audio.master.mute&&audio.master.save_state==CIUKI_MIXER_UNSAVED&&saved_sequence==sequence&&hw.codec[2/2]==0x8000);
     audio.master_in_hardware=false;audio.ready=false;
     for(unsigned fault=0;fault<5;fault++) {
-        memset(&ehw,0,sizeof(ehw));ehw.reg=7;m=(struct ciuki_mixer_master){.left=20,.right=20};
+        memset(&ehw,0,sizeof(ehw));ehw.reg=7;m=(struct ciuki_mixer_master){.left=20,.right=20,.mute=fault==3};
         ehw.absent=fault==0;ehw.stuck_ibf=fault==1;ehw.stuck_obf=fault==2;ehw.reject_write=fault==3;
         if(fault==4){ehw.stuck_ibf=true;ehw.frozen_clock=true;}
         io=ec_mock_io();CHECK(thinkpad_ec_probe(&hec,&io,true,&m)<0&&!hec.active&&ehw.tick<=EC_TIMEOUT_MS&&ehw.pauses<=EC_TIMEOUT_MS);
