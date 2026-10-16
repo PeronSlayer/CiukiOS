@@ -190,14 +190,14 @@ static int fault(struct usb_device *d, const char *reason, bool reset)
     s->block.quarantined=true; s->online=false;
     d->reason=reason;
     if (reset && live(d) && (!s->binding || !usb_expired(d->host,s->bind_deadline-USB_PERIODIC_WATCHDOG_MS))) {
-        /* BOT 5.3.4 ordering. Recovery restores framing only; it never
-         * authorizes a second CBW or reuse of an uncertain writable mount. */
+        /* Terminal BOT 5.3.4 recovery restores framing only. This path
+         * never authorizes another CBW or revives the quarantined device. */
         (void)reset_recovery(d);
     }
     return -FS_EIO;
 }
-enum bot_policy { BOT_STRICT, BOT_FIRST_INQUIRY, BOT_OPTIONAL_MODE };
-enum { BOT_RETRY_INQUIRY=2, BOT_MODE_UNAVAILABLE=3 };
+enum bot_policy { BOT_STRICT, BOT_FIRST_INQUIRY, BOT_OPTIONAL_MODE, BOT_READ_RETRY };
+enum { BOT_RETRY_INQUIRY=2, BOT_MODE_UNAVAILABLE=3, BOT_RETRY_READ=4 };
 static int transport_fault(struct usb_device *d, const char *reason, enum bot_policy policy)
 {
     struct usb_storage *s=&d->storage;
@@ -207,6 +207,14 @@ static int transport_fault(struct usb_device *d, const char *reason, enum bot_po
     bool retry=policy==BOT_FIRST_INQUIRY &&
         (t->result==-USB_ETIMEDOUT || t->result==-USB_EPIPE);
     bool skip=policy==BOT_OPTIONAL_MODE && t->result==-USB_EPIPE;
+    bool read_retry=policy==BOT_READ_RETRY &&
+        (t->result==0 || t->result==-USB_ETIMEDOUT || t->result==-USB_EPIPE);
+    if (read_retry && !s->block.quarantined && !t->packet.retired && live(d) &&
+        (!s->binding || !usb_expired(d->host,s->bind_deadline-USB_BIND_FINISH_MS))) {
+        first_fault(d,reason);
+        if (!reset_recovery(d) && live(d)) return BOT_RETRY_READ;
+        return fault(d,"reset_recovery",false);
+    }
     if ((retry || skip) && !s->published && !s->online && !s->block.quarantined &&
         !t->packet.retired && live(d)) {
         first_fault(d,reason);
@@ -215,8 +223,8 @@ static int transport_fault(struct usb_device *d, const char *reason, enum bot_po
     }
     return fault(d,reason,true);
 }
-/* 0 passed, 1 SCSI command failed, negative transport failure; the two
- * positive policy outcomes are confined to unpublished attach commands. */
+/* 0 passed, 1 SCSI command failed, negative transport failure. Positive
+ * policy outcomes request a bounded read retry or attach-only tolerance. */
 static int bot(struct usb_device *d, const uint8_t *cdb, unsigned clen, bool in,
                void *data, unsigned bytes, unsigned *transferred, enum bot_policy policy)
 {
@@ -237,7 +245,11 @@ static int bot(struct usb_device *d, const uint8_t *cdb, unsigned clen, bool in,
             first_fault(d,"data_stall");
             trace_record(d,"stall","data");
             e=clear_halt(d,in);
-            if (e) { s->trace.result=e; return fault(d,"data_clear_halt",true); }
+            if (e) {
+                s->trace.result=e;
+                return policy==BOT_READ_RETRY ? transport_fault(d,"data_clear_halt",policy) :
+                    fault(d,"data_clear_halt",true);
+            }
         } else if (e) return transport_fault(d,"data_transfer",policy);
     }
     e=transfer(d,"csw",true,csw,sizeof(csw),&n);
@@ -255,17 +267,21 @@ static int bot(struct usb_device *d, const uint8_t *cdb, unsigned clen, bool in,
     if (e || n!=sizeof(csw) || fs_rd32(csw)!=0x53425355 ||
         fs_rd32(csw+4)!=s->tag || csw[12]>2 || fs_rd32(csw+8)>bytes)
         return transport_fault(d,"invalid_csw",policy);
-    if (csw[12]==2) return fault(d,"phase_error",true);
+    if (csw[12]==2) return transport_fault(d,"phase_error",policy);
     if (transferred) *transferred=got;
     if (policy==BOT_OPTIONAL_MODE && s->trace.data_stalled) return BOT_MODE_UNAVAILABLE;
     if (csw[12]==1) return 1;
-    if ((transferred ? got+fs_rd32(csw+8)!=bytes : got!=bytes || fs_rd32(csw+8))) return fault(d,"short_command",true);
+    if ((transferred ? got+fs_rd32(csw+8)!=bytes : got!=bytes || fs_rd32(csw+8))) return transport_fault(d,"short_command",policy);
     return 0;
 }
 static int command_policy(struct usb_device *d, const uint8_t *cdb, unsigned len,
                           bool in, void *data, unsigned bytes, unsigned *transferred, enum bot_policy policy)
 {
     int e=bot(d,cdb,len,in,data,bytes,transferred,policy);
+    if (e==BOT_RETRY_READ) {
+        klog("[usb-storage] retry addr=%u cmd=%02x attempt=2",d->address,cdb[0]);
+        e=bot(d,cdb,len,in,data,bytes,transferred,BOT_STRICT);
+    }
     if (e!=1) return e;
     struct usb_storage_trace failed=d->storage.trace;
     trace_record(d,"command_failed","csw_status");
@@ -290,7 +306,8 @@ static int command_policy(struct usb_device *d, const uint8_t *cdb, unsigned len
 }
 static int command_result(struct usb_device *d, const uint8_t *cdb, unsigned len,
                           bool in, void *data, unsigned bytes, unsigned *transferred)
-{ return command_policy(d,cdb,len,in,data,bytes,transferred,BOT_STRICT); }
+{ return command_policy(d,cdb,len,in,data,bytes,transferred,
+    in && cdb[0]==0x28 ? BOT_READ_RETRY : BOT_STRICT); }
 static int command(struct usb_device *d, const uint8_t *cdb, unsigned len,
                    bool in, void *data, unsigned bytes)
 { return command_result(d,cdb,len,in,data,bytes,0); }
@@ -531,6 +548,8 @@ void usb_storage_service(struct usb_host *h)
                     klog("[usb-storage] volume drive=%c part=%u fat=%u mode=%s dirty=%u error=%d mount_ms=%u repair_ms=%u clusters=%u spc=%u",
                          'A'+drive,v->partition,v->fat.type,v->fat.readonly ? "ro" : "rw",
                          !!(v->fat.ro_reasons & FAT_RO_DIRTY),v->error,v->fat.mount_ms,v->fat.repair_ms,v->fat.clusters,v->fat.spc);
+                    klog("[usb-storage] scan drive=%c state=%s elapsed_ms=%u",'A'+drive,
+                         v->fat.scan_complete ? "complete" : v->fat.scan_deferred ? "deferred" : "incomplete",v->fat.scan_ms);
                 }
             }
             bind_stage_finish(d,e);

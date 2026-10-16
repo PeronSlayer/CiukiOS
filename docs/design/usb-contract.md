@@ -1,5 +1,41 @@
 # F1 USB host, boot HID and mass storage contract
 
+## F1-74: bulk completion snapshot and removable publication (2026-10-16)
+
+Research before implementation: [UHCI 1.1 §§3.2/3.4/4.1](https://mirrors.telepoint.bg/pub/NetBSD/misc/blymn/uhci11d.pdf)
+defines independently updated TD status, ACK/NAK, IOC and SPD (short IN
+leaves the QH element unchanged). [BOT 1.0 §§5.3/6.3–6.7](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf)
+defines data before CSW, one clear-IN/CSW retry on status STALL, and reset,
+clear-IN, clear-OUT recovery. Notifications are wakeups, never DMA retirement.
+
+Repository comparison: the complete T23 e8dfd0cd trace reports tag 207's
+READ(10) data timeout at 64576/65536 bytes, with `csw_available=0` because
+CSW was never attempted. `retired=0` means successful retirement. In UHCI's
+batch poll the prefix walker could observe an active TD, then a separate
+Active-bit test could observe its completion and prematurely unlink the
+unfinished suffix. This interleaving is legal independently of interrupt
+delivery. Use the same TD status snapshot for both prefix progress and the
+stop decision; only an observed short/error or complete batch ends polling.
+Keep two-frame retirement before copying, toggle accounting or CSW submission.
+The host fixture must inject completion between those observations through
+the production F1-72 IRQ notification path; this reproduces the software
+failure mechanism, not proof of the precise T23 bus event.
+
+A READ(10) transport fault with proven retirement and a live controller may
+perform BOT reset recovery and replay the whole command once with a fresh tag.
+The retry retains the aggregate bind and diagnostic deadlines; each replayed
+stage keeps its existing bound. Failed recovery, repeated
+failure, disconnect, host/DMA errors and uncertain retirement quarantine.
+Writes and flushes are never replayed. Existing data/status STALL handling
+precedes reset recovery, and command-failed sense/media-change handling remains.
+
+Removable FAT volumes publish read-only after bounded metadata reads; no
+census or ownership traversal runs during attach. The explicit write-upgrade
+path completes ownership validation before any dirty flag or repair write.
+Fixed disks keep their policy. USB volume and hardware-check records report
+mount time, ownership scan state and scan time separately. See the F1-74
+amendment in [VFS/storage](vfs-storage-contract.md).
+
 ## F1-72: completion interrupts and shared-line EOI (2026-10-16)
 
 This amendment supersedes F1-71's frame notifications below. The UHCI

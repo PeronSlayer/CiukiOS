@@ -314,11 +314,12 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
             unsigned next=usb_read(h,6,2)&0x7ff;
             frames+=(next-frame)&0x7ff; frame=next;
             usb_barrier();
-            unsigned completed=progress;
+            unsigned completed=progress, stopped=1u<<23;
             while (completed<count) {
                 volatile uint32_t *td=words(h,USB_BULK_TD+completed*16);
                 unsigned expected=(((td[2]>>21)&0x7ff)+1)&0x7ff;
-                if (bulk_status(td[1],expected)!=(int)expected) break;
+                stopped=td[1];
+                if (bulk_status(stopped,expected)!=(int)expected) break;
                 completed++;
             }
             if (completed>progress && s->binding) {
@@ -332,7 +333,11 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
             if (!d->present || d->quarantined ||
                 (port&(USB_PORT_CONNECTED|USB_PORT_ENABLED|USB_PORT_CHANGED|USB_PORT_OVERCURRENT))!=
                 (USB_PORT_CONNECTED|USB_PORT_ENABLED)) { failure=-USB_EIO; break; }
-            if (progress==count || !(words(h,USB_BULK_TD+progress*16)[1]&(1u<<23))) break;
+            /* The HC can finish the current TD (and notify us) between the
+             * prefix walk and this decision. Re-reading Active here could
+             * mistake a full ACK for a short/error and unlink the unfinished
+             * suffix. Decide using the exact snapshot that stopped the walk. */
+            if (progress==count || !(stopped&(1u<<23))) break;
             if (usb_expired(h,s->bulk_deadline)) break;
             usb_sleep(h,1);
         }

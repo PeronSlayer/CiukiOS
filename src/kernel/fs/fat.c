@@ -1144,11 +1144,14 @@ out:
 }
 /* Explicit diagnostics always check ownership, including clean volumes. */
 int fat_scan(struct fat_volume *v) {
+    uint32_t began=fs_now_ms();
     struct fat_prepare_cache *p=0;
     if (!v->prepare_cache) {
         p=alloc_windows(v);if (!p) return -FS_ENOMEM;v->prepare_cache=p;
     }
     int e=scan_volume(v,false,true);
+    v->scan_ms=fs_now_ms()-began;
+    if (!e) v->scan_deferred=false;
     if (p) { v->prepare_cache=0;fs_contig_free(p,sizeof(*p)); }
     return e;
 }
@@ -1189,20 +1192,34 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
         } else if (flags&15) return reject(v,"mirrored FAT active bits");
         if ((e=readsec(v,v->fsinfo,other))) return e;
         if (fs_rd32(other)!=0x41615252 || fs_rd32(other+484)!=0x61417272 || fs_rd32(other+508)!=0xaa550000) return reject(v,"FSInfo signatures");
+        uint32_t free=fs_rd32(other+488), next=fs_rd32(other+492);
+        v->free_clusters=free<=v->clusters ? free : 0;
+        v->next_free=valid(v,next) ? next : 2;
         if (v->backup && v->backup!=0xffff) {
             if ((e=readsec(v,v->backup,other))) return e;
             if (memcmp(b+11,other+11,79) || fs_rd16(other+510)!=0xaa55) v->ro_reasons|=FAT_RO_CORRUPT;
         }
     }
-    uint32_t zero,one;
-    if ((e=fat_get_cluster(v,0,&zero)) || (e=fat_get_cluster(v,1,&one))) return e;
-    if (zero!=((mask(v)&~255u)|v->media) || (v->type==12 ? !eoc(v,one) : (one|(cleanbit(v)|errorbit(v)))!=mask(v))) return reject(v,"FAT reserved entries/media/flags");
-    if (cleanbit(v) && !(one&cleanbit(v))) v->ro_reasons|=FAT_RO_DIRTY;
-    if (errorbit(v) && !(one&errorbit(v))) v->ro_reasons|=FAT_RO_IO_FLAG;
+    uint32_t zero=0,one=0;
+    for (unsigned copy=0;copy<(preparing && !private ? v->fats : 1u);copy++) {
+        uint32_t z,o;
+        unsigned f=preparing && !private ? copy : v->active_fat;
+        if ((e=get_copy(v,f,0,&z)) || (e=get_copy(v,f,1,&o))) return e;
+        if (z!=((mask(v)&~255u)|v->media) || (v->type==12 ? !eoc(v,o) : (o|(cleanbit(v)|errorbit(v)))!=mask(v))) return reject(v,"FAT reserved entries/media/flags");
+        if (copy && (z!=zero || o!=one)) v->ro_reasons|=FAT_RO_COPIES;
+        zero=z;one=o;
+        if (cleanbit(v) && !(one&cleanbit(v))) v->ro_reasons|=FAT_RO_DIRTY;
+        if (errorbit(v) && !(one&errorbit(v))) v->ro_reasons|=FAT_RO_IO_FLAG;
+    }
     if (!wr) v->ro_reasons|=FAT_RO_REQUEST;
     if (!blkdev_durable(dev)) v->ro_reasons|=FAT_RO_DURABILITY;
     v->readonly=v->ro_reasons!=0; v->mounted=true;
-    e=scan_volume(v,false,false);
+    /* Only the removable header path has no windows. No full FAT read or
+     * ownership proof is needed to publish a deliberately read-only drive. */
+    v->scan_deferred=preparing && !private;
+    uint32_t scan_begin=fs_now_ms();
+    e=v->scan_deferred ? 0 : scan_volume(v,false,false);
+    if (!v->scan_deferred) v->scan_ms=fs_now_ms()-scan_begin;
     if (e && e!=-FS_EUCLEAN) { v->mounted=false; return e; }
     if (v->ro_reasons) v->readonly=true;
     if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG)) {
@@ -1229,6 +1246,12 @@ int fat_mount(struct fat_volume *v, struct block_cache *cache, struct blkdev *de
 int fat_prepare(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors) {
     return mount_with_windows(v,cache,dev,start,sectors,false,true);
 }
+int fat_prepare_removable(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors) {
+    uint32_t began=fs_now_ms();
+    int e=mount_volume(v,cache,dev,start,sectors,false,true,0);
+    v->mount_ms=fs_now_ms()-began;
+    return e;
+}
 static int repair_volume(struct fat_volume *v) {
     return scan_volume(v,true,false);
 }
@@ -1239,6 +1262,12 @@ static int enable_write(struct fat_volume *v) {
     if (!v->readonly && v->writable_session) return 0;
     if (!blkdev_durable(v->dev)) {
         v->ro_reasons|=FAT_RO_DURABILITY;fat_revoke_write(v,"durability",0);return -FS_EROFS;
+    }
+    if (v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG)) return -FS_EROFS;
+    if (v->scan_deferred) {
+        /* Full ownership even on clean media. No dirty flag/repair write
+         * may precede this read-only proof; FSInfo is advisory only. */
+        if ((e=fat_scan(v))) return e;
     }
     if (!v->scan_complete || v->ro_reasons&~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG)) return -FS_EROFS;
     bool recover=(v->ro_reasons&(FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG))!=0;

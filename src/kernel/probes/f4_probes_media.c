@@ -359,7 +359,11 @@ static int probe_media_remove(void)
         struct storage_volume *v=&s->volumes[drive];
         struct blkdev *block=v->part.parent; device=block->ctx;
         uint32_t generation=block->media_generation;
-        e=vfs_table_init(&s->vfs,&removal_table,2);pass=!e && !v->fat.readonly;
+        /* Removable publication is read-only; this write/removal probe
+         * explicitly requests the normal ownership-checked upgrade. */
+        e=storage_enable_write(s,drive);
+        if (!e) e=vfs_table_init(&s->vfs,&removal_table,2);
+        pass=!e && !v->fat.readonly;
         char path[]="E:/SAFE.TXT";path[0]=(char)('A'+drive);
         if (pass) { held=vfs_open(&removal_table,path,VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0);pass=held>=0; }
         size_t written=0;

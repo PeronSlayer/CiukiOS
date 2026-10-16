@@ -255,6 +255,38 @@ tails detach durably before sector-coalesced orphan reclamation. Allocation
 refusals record required/available workspace bytes, and recovery records
 include elapsed time. See [research and qualification](../validation/f1-70-fat-mount-budget.md).
 
+### F1-74 removable read-only mount and deferred ownership (2026-10-16)
+
+This supersedes attach-time scanning and automatic writable activation for
+removable FAT only. Research checked before implementation:
+[Microsoft FAT specification §§4.2/4.3/5](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+defines clean/error flags and FSInfo signatures, unknown free-count sentinel
+and range-checked advisory hints; [Linux v6.12 FAT mount](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/fat/inode.c)
+reads FSInfo and reserved metadata without an ownership walk. Hints cannot
+prove sole ownership or authorize allocation.
+
+Repository comparison: `storage_add_removable_bounded()` used `fat_prepare()`
+with FAT read-ahead windows, a complete census, then automatic write upgrade.
+For the T23's 1,953,289-cluster FAT this consumed 12,293 sectors before the
+failed read. Introduce a separate removable preparation path: validate BPB,
+backup BPB, FSInfo and reserved entries/flags of each FAT using single-sector
+reads, retain dirty/copy/error reasons and publish read-only with scan deferred.
+Use an in-range FSInfo free count for advisory free-space reporting; unknown
+or invalid hints report zero until validation, with next-free defaulting to 2.
+No FAT windows, ownership bitmap, writes or flushes are needed for publication.
+
+The existing explicit `storage_enable_write()` upgrade (including the f0-25
+hardware workflow) runs the F1-70 bounded-memory checker with full ownership
+validation even for clean removable media before any metadata write. It
+recomputes free space, detects crosslinks, loops and FAT disagreements, and
+applies the existing repair/durability gates. Failure leaves read-only access;
+unavailable durability does not trigger a needless full scan. Scan time and
+completion state are separate from mount time. Fixed volume mounts and the
+existing full-scan `fat_prepare()` interface keep their policy.
+The safe-remove write probe explicitly requests that same writable upgrade
+before creating its test file, so read-only publication is not mistaken for
+a failed durability gate.
+
 ## Filesystem driver rules
 
 - FAT12/16/32 share one driver. FAT12/16 keep a fixed root directory; FAT32

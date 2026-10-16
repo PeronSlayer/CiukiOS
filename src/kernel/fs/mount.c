@@ -291,18 +291,13 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
         if (!r) {
             v->io=(struct blkdev){.read=volume_read,.write=volume_write,.capacity=p->count,.sector_size=512,.ctx=v};
             refresh_volume(v);
-            r=fat_prepare(&v->fat,&s->cache,&v->io,0,p->count);
+            r=fat_prepare_removable(&v->fat,&s->cache,&v->io,0,p->count);
         }
         v->writes_before_gate=v->writes;
         if (!r && (s->stopped || dev->quarantined || (cancel && cancel(ctx)))) r=-FS_EIO;
         if (!r) {
             v->read_gate=!(v->fat.ro_reasons & ~(FAT_RO_REQUEST|FAT_RO_DURABILITY|FAT_RO_DIRTY|FAT_RO_LOST|FAT_RO_IO_FLAG));
             if (v->read_gate) v->read_sequence=++s->sequence;
-            if (!s->writer_error && v->read_gate) {
-                int w=fat_enable_write(&v->fat);
-                if (!w) v->write_sequence=++s->sequence;
-                if (w && w!=-FS_EROFS) r=w;
-            }
         }
         /* No parser I/O remains: publish using the one shared cache. Failure
          * leaves an unpublished retained record, never an uncertain mount. */

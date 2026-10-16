@@ -11,6 +11,7 @@ struct media {
     unsigned spc, reads, max_read, writes, flushes, saved;
     bool dirty, diff, cross, cycle, orphan, bad, fail_read, cross_high, live_diff;
     bool excess, eof_diff, eof_reverse, empty_file, tail_diff, far_tail;
+    bool invalid_hints;
     struct { uint64_t lba;uint8_t bytes[512]; } changes[64];
 };
 static char memory_record[256];
@@ -36,7 +37,8 @@ static int read_blocks(struct blkdev *d,uint64_t lba,uint32_t n,void *out) {
         } else if (sec==1) {
             fs_wr32(b,0x41615252);fs_wr32(b+484,0x61417272);fs_wr32(b+508,0xaa550000);
             /* Deliberately false hints: no used-extent/free-count authority. */
-            fs_wr32(b+488,0);fs_wr32(b+492,2);
+            fs_wr32(b+488,m->invalid_hints ? UINT32_MAX : 0);
+            fs_wr32(b+492,m->invalid_hints ? UINT32_MAX : 2);
         } else if (sec==m->data) {
             uint32_t first=m->cross_high ? m->far : 3;
             memcpy(b,"FIRST   BIN",11);b[11]=FAT_ATTR_ARCHIVE;fs_wr16(b+26,(uint16_t)first);fs_wr16(b+20,(uint16_t)(first>>16));fs_wr32(b+28,512);
@@ -189,7 +191,47 @@ static void tail_recovery(void) {
     }
     puts("PASS F0-32/F1-70 merge tails: ordinary/zero-size excess, EOF disagreement in both mirror directions, 4 KiB multipass repair, late-pass excess-tail disagreement refuses all writes");
 }
+static void removable(void) {
+    for(unsigned mode=0;mode<10;mode++) {
+        struct media m;struct block_cache cache;struct fat_volume v;
+        init(&m,4,8);
+        if(mode==1 || mode==8) m.dirty=m.orphan=true;
+        if(mode==2) m.cross=true; /* clean flag cannot certify ownership */
+        if(mode==3) m.cycle=true;
+        if(mode==4) m.dirty=m.live_diff=true;
+        if(mode==5) m.dev.flush=NULL;
+        if(mode==9) m.invalid_hints=true;
+        assert(!cache_init(&cache,16384));
+        fs_host_contig_fail=1; /* publication needs neither windows nor bitmap */
+        assert(!fat_prepare_removable(&v,&cache,&m.dev,0,m.dev.capacity));
+        fs_host_contig_fail=0;
+        assert(v.mounted && v.readonly && v.scan_deferred && !v.scan_complete && !v.scan_passes);
+        assert(m.reads==7 && m.max_read==1 && !m.writes && !m.flushes && !v.prepare_cache);
+        assert(!v.free_clusters && v.next_free==2); /* zero/unknown hints are advisory */
+        v.preparing=false; /* production publication switches to the shared cache */
+        if(mode==6) fs_host_contig_fail=1;
+        if(mode==7) m.fail_read=true;
+        if(mode==8) fs_host_page_fail=1;
+        int e=fat_enable_write(&v);
+        if(mode==2 || mode==3 || mode==4 || mode==5 || mode==6 || mode==7) {
+            assert(e<0 && v.readonly && !m.writes && !m.flushes);
+            if(mode==2 || mode==3) assert(v.ro_reasons&FAT_RO_CORRUPT);
+            if(mode==4) assert(v.ro_reasons&FAT_RO_COPIES);
+            if(mode==5 || mode==6) assert(m.reads==7);
+        } else {
+            assert(!e && !v.readonly && v.scan_complete && !v.scan_deferred && !v.scan_fast);
+            assert(m.reads>7 && m.max_read==128 && v.free_clusters==v.clusters-2);
+            if(mode==1 || mode==8) assert(v.dirty_recovered && v.repaired_lost==1);
+            if(mode==8) assert(strstr(memory_record,"available_bytes=4096") && strstr(memory_record,"fallback=passes"));
+            readable(&v);assert(!fat_unmount(&v));
+        }
+        fs_host_contig_fail=fs_host_page_fail=0;
+        cache_destroy(&cache);assert(!fs_host_contig_live && !cache.workspace_in_use);
+    }
+    puts("PASS F1-74 removable FAT: 7 single-sector reads, zero allocations/writes/flushes at mount; explicit full ownership upgrade, stale/unknown hints, dirty repair, clean crosslink/cycle and mirror refusal, durability/memory/I/O failure, bounded multipass fallback");
+}
 int main(void) {
+    removable();
     layout(4,64,false);layout(4,8,true);layout(32,8,true);layout(32,1,true);
     fallback();integrity();tail_recovery();return 0;
 }
